@@ -1,0 +1,30 @@
+{
+    "name": "USugar.Editor",
+    "rootNamespace": "",
+    "references": [
+        "UdonSharp.Editor",
+        "UdonSharp.Runtime",
+        "VRC.Udon",
+        "VRC.Udon.Editor"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": true,
+    "precompiledReferences": [
+        "Microsoft.CodeAnalysis.dll",
+        "Microsoft.CodeAnalysis.CSharp.dll",
+        "System.Collections.Immutable.dll",
+        "VRC.Udon.Common.dll",
+        "VRC.Udon.Graph.dll",
+        "0Harmony.dll",
+        "VRCSDK3.dll",
+        "VRCSDKBase.dll"
+    ],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

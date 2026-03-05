@@ -1,0 +1,230 @@
+using System;
+using Xunit;
+
+namespace USugar.Tests;
+
+public class VariableTableTests
+{
+    [Fact]
+    public void DeclareField_UsesRawName()
+    {
+        var vt = new VariableTable();
+        var id = vt.DeclareField("seatIndex", "SystemInt32");
+        Assert.Equal("seatIndex", id);
+    }
+
+    [Fact]
+    public void DeclareLocal_UsesLclPrefix()
+    {
+        var vt = new VariableTable();
+        var id = vt.DeclareLocal("x", "SystemInt32");
+        Assert.Equal("__lcl_x_SystemInt32_0", id);
+    }
+
+    [Fact]
+    public void DeclareLocal_DuplicateName_Increments()
+    {
+        var vt = new VariableTable();
+        var id1 = vt.DeclareLocal("x", "SystemInt32");
+        var id2 = vt.DeclareLocal("x", "SystemInt32");
+        Assert.Equal("__lcl_x_SystemInt32_0", id1);
+        Assert.Equal("__lcl_x_SystemInt32_1", id2);
+    }
+
+    [Fact]
+    public void DeclareTemp_UsesIntnlPrefix()
+    {
+        var vt = new VariableTable();
+        var id = vt.DeclareTemp("SystemBoolean");
+        Assert.Equal("__intnl_SystemBoolean_0", id);
+    }
+
+    [Fact]
+    public void DeclareConst_UsesConstPrefix()
+    {
+        var vt = new VariableTable();
+        var id = vt.DeclareConst("SystemInt32", "42");
+        Assert.Equal("__const_SystemInt32_0", id);
+    }
+
+    [Fact]
+    public void DeclareConst_SameValue_Reuses()
+    {
+        var vt = new VariableTable();
+        var id1 = vt.DeclareConst("SystemInt32", "42");
+        var id2 = vt.DeclareConst("SystemInt32", "42");
+        Assert.Equal(id1, id2);
+    }
+
+    [Fact]
+    public void ReflectionVars_AlwaysPresent()
+    {
+        var vt = new VariableTable();
+        var entries = vt.GetAllEntries();
+        Assert.Contains(entries, e => e.Id == "__refl_typeid");
+        Assert.Contains(entries, e => e.Id == "__refl_typename");
+        Assert.Contains(entries, e => e.Id == "__intnl_returnJump_SystemUInt32_0");
+    }
+
+    [Fact]
+    public void LookupLocal_ReturnsId()
+    {
+        var vt = new VariableTable();
+        vt.DeclareLocal("x", "SystemInt32");
+        Assert.Equal("__lcl_x_SystemInt32_0", vt.Lookup("x"));
+    }
+
+    [Fact]
+    public void Scope_PushPop_HidesLocal()
+    {
+        var vt = new VariableTable();
+        vt.DeclareLocal("x", "SystemInt32");
+        vt.PushScope();
+        vt.DeclareLocal("x", "SystemInt32");
+        Assert.Equal("__lcl_x_SystemInt32_1", vt.Lookup("x"));
+        vt.PopScope();
+        Assert.Equal("__lcl_x_SystemInt32_0", vt.Lookup("x"));
+    }
+
+    [Fact]
+    public void DeclareConst_StoresTypedConstValue_Int()
+    {
+        var vt = new VariableTable();
+        vt.DeclareConst("SystemInt32", "42");
+        var consts = vt.GetConstEntries();
+        Assert.Single(consts);
+        Assert.Equal(42, consts[0].ConstValue);
+    }
+
+    [Fact]
+    public void DeclareConst_StoresTypedConstValue_Bool()
+    {
+        var vt = new VariableTable();
+        vt.DeclareConst("SystemBoolean", "True");
+        var consts = vt.GetConstEntries();
+        Assert.Single(consts);
+        Assert.Equal(true, consts[0].ConstValue);
+    }
+
+    [Fact]
+    public void DeclareConst_StoresTypedConstValue_Float()
+    {
+        var vt = new VariableTable();
+        vt.DeclareConst("SystemSingle", "3.14");
+        var consts = vt.GetConstEntries();
+        Assert.Single(consts);
+        Assert.IsType<float>(consts[0].ConstValue);
+    }
+
+    [Fact]
+    public void DeclareConst_StoresTypedConstValue_String()
+    {
+        var vt = new VariableTable();
+        vt.DeclareConst("SystemString", "hello");
+        var consts = vt.GetConstEntries();
+        Assert.Single(consts);
+        Assert.Equal("hello", consts[0].ConstValue);
+    }
+
+    [Fact]
+    public void DeclareConst_NullValue_NoConstEntry()
+    {
+        var vt = new VariableTable();
+        vt.DeclareConst("SystemInt32", "null");
+        var consts = vt.GetConstEntries();
+        Assert.Empty(consts);
+    }
+
+    [Fact]
+    public void DeclareConst_Dedup_ReturnsSameId()
+    {
+        var vt = new VariableTable();
+        var id1 = vt.DeclareConst("SystemInt32", "42");
+        var id2 = vt.DeclareConst("SystemInt32", "42");
+        Assert.Equal(id1, id2);
+        Assert.Single(vt.GetConstEntries());
+    }
+
+    [Fact]
+    public void DeclareConst_UnknownEnumType_FallsBackToInt()
+    {
+        var vt = new VariableTable();
+        vt.DeclareConst("VRCSDK3DataTokenType", "8");
+        var consts = vt.GetConstEntries();
+        Assert.Single(consts);
+        Assert.Equal(8, consts[0].ConstValue);
+    }
+
+    [Fact]
+    public void DeclareConst_UnknownEnumType_NonNumeric_ReturnsNull()
+    {
+        var vt = new VariableTable();
+        vt.DeclareConst("SomeCustomType", "notANumber");
+        var consts = vt.GetConstEntries();
+        Assert.Empty(consts);
+    }
+
+    [Fact]
+    public void ReturnJump_HasDefaultValue_0xFFFFFFFF()
+    {
+        var vt = new VariableTable();
+        var entries = vt.GetAllEntries();
+        var retJump = entries.Find(e => e.Id == "__intnl_returnJump_SystemUInt32_0");
+        Assert.Equal("0xFFFFFFFF", retJump.DefaultValue);
+    }
+
+    [Fact]
+    public void DeclareVar_Duplicate_SameType_IsIdempotent()
+    {
+        var vt = new VariableTable();
+        var id1 = vt.DeclareVar("myVar", "SystemInt32");
+        var id2 = vt.DeclareVar("myVar", "SystemInt32");
+        Assert.Equal(id1, id2);
+        Assert.Equal(4, vt.GetAllEntries().Count);
+    }
+
+    [Fact]
+    public void DeclareVar_Duplicate_DifferentType_Throws()
+    {
+        var vt = new VariableTable();
+        vt.DeclareVar("myVar", "SystemInt32");
+        Assert.Throws<InvalidOperationException>(
+            () => vt.DeclareVar("myVar", "SystemString"));
+    }
+
+    [Fact]
+    public void DeclareField_Duplicate_SameType_IsIdempotent()
+    {
+        var vt = new VariableTable();
+        vt.DeclareField("field", "SystemInt32");
+        vt.DeclareField("field", "SystemInt32");
+        Assert.Equal(4, vt.GetAllEntries().Count);
+    }
+
+    [Fact]
+    public void DeclareField_Duplicate_DifferentType_Throws()
+    {
+        var vt = new VariableTable();
+        vt.DeclareField("field", "SystemInt32");
+        Assert.Throws<InvalidOperationException>(
+            () => vt.DeclareField("field", "SystemString"));
+    }
+
+    [Fact]
+    public void TryDeclareVar_Duplicate_SameType_ReturnsFalse()
+    {
+        var vt = new VariableTable();
+        Assert.True(vt.TryDeclareVar("v", "SystemInt32"));
+        Assert.False(vt.TryDeclareVar("v", "SystemInt32"));
+        Assert.Equal(4, vt.GetAllEntries().Count);
+    }
+
+    [Fact]
+    public void TryDeclareVar_Duplicate_DifferentType_Throws()
+    {
+        var vt = new VariableTable();
+        vt.TryDeclareVar("v", "SystemInt32");
+        Assert.Throws<InvalidOperationException>(
+            () => vt.TryDeclareVar("v", "SystemString"));
+    }
+}
