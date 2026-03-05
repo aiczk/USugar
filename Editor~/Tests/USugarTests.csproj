@@ -1,0 +1,40 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../../Editor/NameAllocator.cs" />
+    <Compile Include="../../Editor/LayoutPlanner.cs" />
+    <Compile Include="../../Editor/UasmModule.cs" />
+    <Compile Include="../../Editor/ControlFlowGraph.cs" />
+    <Compile Include="../../Editor/VariableTable.cs" />
+    <Compile Include="../../Editor/ExternResolver.cs" />
+    <Compile Include="../../Editor/Emit/EmitContext.cs" />
+    <Compile Include="../../Editor/Emit/IOperationHandler.cs" />
+    <Compile Include="../../Editor/Emit/IExpressionHandler.cs" />
+    <Compile Include="../../Editor/Emit/HandlerBase.cs" />
+    <Compile Include="../../Editor/Emit/Handlers/StatementHandler.cs" />
+    <Compile Include="../../Editor/Emit/Handlers/LoopHandler.cs" />
+    <Compile Include="../../Editor/Emit/Handlers/ExpressionHandler.cs" />
+    <Compile Include="../../Editor/Emit/Handlers/AssignmentHandler.cs" />
+    <Compile Include="../../Editor/Emit/Handlers/OperatorHandler.cs" />
+    <Compile Include="../../Editor/Emit/Handlers/InvocationHandler.cs" />
+    <Compile Include="../../Editor/Emit/Handlers/InvocationHandler.Extern.cs" />
+    <Compile Include="../../Editor/Emit/Handlers/InvocationHandler.Members.cs" />
+    <Compile Include="../../Editor/Emit/Handlers/ArrayHandler.cs" />
+    <Compile Include="../../Editor/Emit/Handlers/NullableHandler.cs" />
+    <Compile Include="../../Editor/UasmEmitter.cs" />
+    <Compile Include="../../Editor/USugarCompilerHelper.cs" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.3.0" />
+    <PackageReference Include="xunit" Version="2.7.0" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.5.6" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.9.0" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="Fixtures/**" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>
