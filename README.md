@@ -78,6 +78,13 @@ Download the latest `.unitypackage` from [Releases](https://github.com/aiczk/USu
 
 _VPM listing coming soon._
 
+## Usage
+
+1. In the Unity menu bar, enable **USugar > Override Compiler**.
+2. Run **USugar > Compile > USugar** to recompile all scripts.
+
+That's it. Your existing UdonSharp scripts will be compiled through USugar instead of the standard compiler. To switch back, disable **Override Compiler** and run **USugar > Compile > UdonSharp**.
+
 ## Limitations
 
 - Error messages are not helpful yet. If compilation fails, you get a stack trace instead of a source location.
