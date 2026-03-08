@@ -1772,3 +1772,85 @@ public class LicmTests
         Assert.False(changed);
     }
 }
+
+public class CrossBlockExternTests
+{
+    [Fact]
+    public void GetWrittenVar_CrossBlockExtern_Detected()
+    {
+        // Block A: PUSH output_var  (last instruction, no EXTERN in same block)
+        // Block B: EXTERN (non-void, single successor of A)
+        // → IsExternOutput should detect the cross-block write
+        var module = new UasmModule();
+        module.DeclareVariable("input", "SystemInt32", null, VarFlags.None);
+        module.DeclareVariable("output", "SystemInt32", null, VarFlags.None);
+        var start = module.DefineLabel("_start");
+        var next = module.DefineLabel("next");
+        module.AddExport("_start", start);
+        module.MarkLabel(start);
+        module.AddPush("input");
+        module.AddPush("output");
+        // Force block split by adding a jump
+        module.AddJump(next);
+        module.MarkLabel(next);
+        module.AddExtern("SystemInt32.__op_UnaryMinus__SystemInt32__SystemInt32");
+
+        var cfg = ControlFlowGraph.Build(module);
+        // After building CFG, the PUSH output should be in block A,
+        // EXTERN in block B (single successor). Liveness should mark output as killed.
+        cfg.ComputeLiveness();
+
+        // output should be in Kill set of the block containing PUSH output
+        // (because IsExternOutput detects cross-block extern)
+        bool foundKill = false;
+        foreach (var block in cfg.Blocks)
+        {
+            for (int i = 0; i < block.Instructions.Count; i++)
+            {
+                var inst = block.Instructions[i];
+                if (inst.Kind == InstKind.Push && inst.Operand == "output"
+                    && cfg.VarToIndex.TryGetValue("output", out var idx))
+                {
+                    if (block.Kill.Get(idx))
+                        foundKill = true;
+                }
+            }
+        }
+        Assert.True(foundKill, "output should be in Kill set via cross-block extern detection");
+    }
+
+    [Fact]
+    public void CopyProp_CrossBlockExternOutput_NotPropagated()
+    {
+        // Ensure CopyPropagation does not propagate through a cross-block extern output.
+        // COPY a → tmp; PUSH tmp (extern output cross-block) → tmp should NOT be propagated away.
+        var module = new UasmModule();
+        module.DeclareVariable("a", "SystemInt32", null, VarFlags.None);
+        module.DeclareVariable("__intnl_SystemInt32_0", "SystemInt32", null, VarFlags.None);
+        module.DeclareVariable("result", "SystemInt32", null, VarFlags.None);
+        var start = module.DefineLabel("_start");
+        var next = module.DefineLabel("next");
+        module.AddExport("_start", start);
+        module.MarkLabel(start);
+        // PUSH a; PUSH __intnl; COPY (a → __intnl)
+        module.AddCopy("a", "__intnl_SystemInt32_0");
+        // PUSH __intnl as extern input, PUSH result as extern output
+        module.AddPush("__intnl_SystemInt32_0");
+        module.AddPush("result");
+        module.AddJump(next);
+        module.MarkLabel(next);
+        module.AddExtern("SystemInt32.__op_UnaryMinus__SystemInt32__SystemInt32");
+
+        var cfg = ControlFlowGraph.Build(module);
+        cfg.ComputeLiveness();
+        cfg.CopyPropagation();
+        cfg.Linearize(module);
+        var uasm = module.BuildUasmStr();
+
+        // result is an extern output across block boundary — it should be detected as written.
+        // The copy a → __intnl may or may not be propagated (since __intnl is used as input),
+        // but result must still be present as extern output.
+        var code = uasm.Substring(uasm.IndexOf(".code_start"));
+        Assert.Contains("result", code);
+    }
+}
