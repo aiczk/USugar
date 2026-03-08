@@ -238,7 +238,13 @@ public class UasmModule
         if (OptLevel >= 3) cfg.ComputeDominators();     // NEW
         if (OptLevel >= 3) cfg.GlobalValueNumbering();  // NEW
         if (OptLevel >= 4) cfg.LoopInvariantCodeMotion(this); // NEW
-        if (OptLevel >= 3) cfg.ComputeLiveness();              // refresh after GVN/LICM
+        if (OptLevel >= 3)
+        {
+            cfg.ComputeLiveness();              // refresh after GVN/LICM
+            cfg.CopyPropagation();              // propagate copies introduced by GVN
+            cfg.ComputeLiveness();              // refresh for DSE
+            cfg.DeadStoreElimination();         // remove stores made dead by propagation
+        }
         cfg.ReduceVariables();
         cfg.Linearize(this);
         RemoveUnusedVariables();
