@@ -132,13 +132,15 @@ public class LoopHandler : HandlerBase, IOperationHandler
         _breakLabels.Push(loopEnd);
         _continueLabels.Push(continueLabel);
 
-        _module.MarkLabel(loopStart);
-
-        // Condition: idx < arr.Length
+        // Hoist array length before loop (loop-invariant)
         var lenId = _vars.DeclareTemp("SystemInt32");
         _module.AddPush(collId);
         _module.AddPush(lenId);
         AddExternChecked("SystemArray.__get_Length__SystemInt32");
+
+        _module.MarkLabel(loopStart);
+
+        // Condition: idx < arr.Length (lenId already computed above)
 
         var condId = _vars.DeclareTemp("SystemBoolean");
         _module.AddPush(idxId);
@@ -203,13 +205,26 @@ public class LoopHandler : HandlerBase, IOperationHandler
 
                 if (clause is ISingleValueCaseClauseOperation singleValue)
                 {
-                    var caseValueId = VisitExpression(singleValue.Value);
-                    caseValueId = EmitEnumToUnderlying(caseValueId, op.Value.Type);
-                    var condId = _vars.DeclareTemp("SystemBoolean");
-                    // Enum comparison → use underlying type (Udon has no enum-typed operators)
+                    string caseValueId;
                     var eqType = valueType;
-                    if (op.Value.Type is INamedTypeSymbol named && named.TypeKind == TypeKind.Enum)
-                        eqType = GetUdonType(named.EnumUnderlyingType);
+                    // Enum case values are compile-time constants: declare underlying
+                    // value directly instead of emitting a SystemConvert extern at runtime.
+                    if (op.Value.Type is INamedTypeSymbol named && named.TypeKind == TypeKind.Enum
+                        && singleValue.Value.ConstantValue.HasValue)
+                    {
+                        var underlyingUdon = GetUdonType(named.EnumUnderlyingType);
+                        eqType = underlyingUdon;
+                        caseValueId = _vars.DeclareConst(underlyingUdon,
+                            ToInvariantString(singleValue.Value.ConstantValue.Value));
+                    }
+                    else
+                    {
+                        caseValueId = VisitExpression(singleValue.Value);
+                        caseValueId = EmitEnumToUnderlying(caseValueId, op.Value.Type);
+                        if (op.Value.Type is INamedTypeSymbol n2 && n2.TypeKind == TypeKind.Enum)
+                            eqType = GetUdonType(n2.EnumUnderlyingType);
+                    }
+                    var condId = _vars.DeclareTemp("SystemBoolean");
                     var eqSig = ExternResolver.BuildMethodSignature(
                         eqType, "__op_Equality", new[] { eqType, eqType }, "SystemBoolean");
                     _module.AddPush(convertedValueId);

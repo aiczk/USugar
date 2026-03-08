@@ -2622,6 +2622,23 @@ public class FEArrayTest : UdonSharpBehaviour {
     }
 
     [Fact]
+    public void ForEachArray_LengthHoistedBeforeLoop()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public class FEHoistTest : UdonSharpBehaviour {
+    int[] _items; int _sum;
+    void Start() { foreach (var x in _items) _sum += x; }
+}
+");
+        // Array.Length should be called exactly once (hoisted before the loop),
+        // not on every iteration.
+        var lines = uasm.Split('\n');
+        var lenCount = lines.Count(l => l.Contains("__get_Length__SystemInt32"));
+        Assert.Equal(1, lenCount);
+    }
+
+    [Fact]
     public void NestedForLoops_IndependentCounters()
     {
         var uasm = TestHelper.CompileToUasm(@"
@@ -2990,6 +3007,34 @@ public class EnumSwitchTest : UdonSharpBehaviour {
 
         // Verify enum-to-underlying conversion is applied
         Assert.Contains("SystemConvert.__ToInt32__SystemObject__SystemInt32", uasm);
+    }
+
+    [Fact]
+    public void SwitchStatement_EnumCaseValues_NoRuntimeConvert()
+    {
+        // Enum case values in switch statements should be compile-time constants,
+        // not runtime SystemConvert calls. Only the switch value itself needs conversion.
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+using UnityEngine;
+public enum Mode { A, B, C }
+public class EnumSwStmtTest : UdonSharpBehaviour {
+    Mode _mode;
+    int _r;
+    void Start() {
+        switch (_mode) {
+            case Mode.A: _r = 1; break;
+            case Mode.B: _r = 2; break;
+            case Mode.C: _r = 3; break;
+        }
+    }
+}", "EnumSwStmtTest");
+        // Should have exactly 1 SystemConvert (for the switch value, not the case constants)
+        var convertCount = uasm.Split('\n')
+            .Count(l => l.Contains("SystemConvert.__ToInt32__SystemObject__SystemInt32"));
+        Assert.Equal(1, convertCount);
+        // Case constants should be direct const declarations
+        Assert.Contains("op_Equality", uasm);
     }
 
     [Fact]
