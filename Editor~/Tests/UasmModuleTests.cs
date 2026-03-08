@@ -708,4 +708,14 @@ public class ConstPoolTests
         var id2 = mod.CreateConstVariable("SystemInt64", 42);
         Assert.NotEqual(id1, id2);
     }
+
+    [Fact]
+    public void DeclareVariable_PopulatesConstCache_ForCreateConstVariable()
+    {
+        // M-1: DeclareVariable with constValue should be found by CreateConstVariable
+        var mod = new UasmModule();
+        mod.DeclareVariable("__const_SystemInt32_0", "SystemInt32", null, VarFlags.None, constValue: 42);
+        var id = mod.CreateConstVariable("SystemInt32", 42);
+        Assert.Equal("__const_SystemInt32_0", id);
+    }
 }
