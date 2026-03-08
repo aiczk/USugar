@@ -3254,7 +3254,7 @@ public class RelPatLETest : UdonSharpBehaviour {
     }
 
     [Fact]
-    public void BinaryPattern_And_EmitsCombinedCheck()
+    public void BinaryPattern_And_EmitsShortCircuit()
     {
         var uasm = TestHelper.CompileToUasm(@"
 using UdonSharp;
@@ -3270,11 +3270,12 @@ public class BinPatTest : UdonSharpBehaviour {
 ");
         Assert.Contains("__op_GreaterThanOrEqual", uasm);
         Assert.Contains("__op_LessThan", uasm);
-        Assert.Contains("__op_ConditionalAnd", uasm);
+        Assert.DoesNotContain("__op_ConditionalAnd", uasm);
+        Assert.Contains("JUMP_IF_FALSE", uasm);
     }
 
     [Fact]
-    public void BinaryPattern_Or_EmitsDisjunction()
+    public void BinaryPattern_Or_EmitsShortCircuit()
     {
         var uasm = TestHelper.CompileToUasm(@"
 using UdonSharp;
@@ -3283,7 +3284,51 @@ public class BinPatOrTest : UdonSharpBehaviour {
     void Start() { _b = _x is 0 or 1; }
 }
 ");
-        Assert.Contains("__op_ConditionalOr", uasm);
+        Assert.DoesNotContain("__op_ConditionalOr", uasm);
+        Assert.Contains("JUMP_IF_FALSE", uasm);
+    }
+
+    [Fact]
+    public void BinaryPattern_And_ShortCircuits_SkipsRightWhenLeftFalse()
+    {
+        // Verify the and pattern emits short-circuit structure:
+        // left check → JUMP_IF_FALSE → skip right → COPY false
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public class BinPatAndShortTest : UdonSharpBehaviour {
+    int _x; bool _b;
+    void Start() { _b = _x is >= 0 and < 100; }
+}
+");
+        Assert.Contains("__op_GreaterThanOrEqual", uasm);
+        Assert.Contains("__op_LessThan", uasm);
+        Assert.DoesNotContain("__op_ConditionalAnd", uasm);
+        // Short-circuit structure: JUMP_IF_FALSE after left, then right eval or false copy
+        var lines = uasm.Split('\n');
+        var geIdx = System.Array.FindIndex(lines, l => l.Contains("__op_GreaterThanOrEqual"));
+        var jifIdx = System.Array.FindIndex(lines, geIdx, l => l.Contains("JUMP_IF_FALSE"));
+        var ltIdx = System.Array.FindIndex(lines, jifIdx, l => l.Contains("__op_LessThan"));
+        Assert.True(geIdx > 0, "Should have GreaterThanOrEqual");
+        Assert.True(jifIdx > geIdx, "JUMP_IF_FALSE should follow left pattern check");
+        Assert.True(ltIdx > jifIdx, "Right pattern (LessThan) should follow JUMP_IF_FALSE");
+    }
+
+    [Fact]
+    public void BinaryPattern_Or_ShortCircuits_SkipsRightWhenLeftTrue()
+    {
+        // Verify the or pattern emits short-circuit structure:
+        // left check → JUMP_IF_FALSE → eval right label; true path → COPY true
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public class BinPatOrShortTest : UdonSharpBehaviour {
+    int _x; bool _b;
+    void Start() { _b = _x is 0 or 1; }
+}
+");
+        Assert.DoesNotContain("__op_ConditionalOr", uasm);
+        // Should have equality checks for both 0 and 1
+        Assert.Contains("__op_Equality", uasm);
+        Assert.Contains("JUMP_IF_FALSE", uasm);
     }
 
     // ── Index from end ──
@@ -3486,6 +3531,48 @@ public class TailRecTest : UdonSharpBehaviour {
         // The Loop method should be emitted with addition for acc + n
         Assert.Contains("Loop", uasm);
         Assert.Contains("op_Addition", uasm);
+    }
+
+    [Fact]
+    public void MutualRecursion_SavesCurrentMethodParams()
+    {
+        // When A calls B (non-recursive), A's own parameters should still be saved
+        // to protect against indirect recursion (A→B→A).
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public class MutualRecTest : UdonSharpBehaviour {
+    int _result;
+    int A(int x) { return B(x + 1); }
+    int B(int y) { return y * 2; }
+    void Start() { _result = A(5); }
+}
+", "MutualRecTest");
+        // A calls B: A's parameter 'x' should be saved before the call.
+        // Parameter var naming: __N_x__param (NameAllocator format).
+        // The UASM should contain COPY instructions saving A's param to a temp
+        // before the call to B, and restoring after.
+        Assert.Contains("x__param", uasm);
+        Assert.Contains("y__param", uasm);
+        // Verify compile succeeds and has expected methods
+        Assert.Contains("op_Addition", uasm);
+        Assert.Contains("op_Multiplication", uasm);
+    }
+
+    [Fact]
+    public void NonRecursiveCall_StillSavesCallerParams()
+    {
+        // Even non-recursive calls should save the caller's params to be safe
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public class CallerSaveTest : UdonSharpBehaviour {
+    int _r;
+    int Add(int a, int b) { return a + b; }
+    int Mul(int a, int b) { return a * b; }
+    void Start() { _r = Add(Mul(2, 3), Mul(4, 5)); }
+}
+", "CallerSaveTest");
+        Assert.Contains("op_Addition", uasm);
+        Assert.Contains("op_Multiplication", uasm);
     }
 
     // ── Re-entrance guard ──

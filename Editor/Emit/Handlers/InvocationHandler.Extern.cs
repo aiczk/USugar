@@ -638,18 +638,21 @@ public partial class InvocationHandler
         var idx = _methodIndices[target];
         var paramIds = _methodParamVarIds[target];
 
-        // Self-recursive call: save current parameter values before overwriting
-        bool isSelfRecursive = _currentMethod != null
-            && SymbolEqualityComparer.Default.Equals(target, _currentMethod);
-        string[] savedParams = null;
-        if (isSelfRecursive && paramIds.Length > 0)
+        // Save current method's parameter values before any user method call.
+        // This protects against mutual recursion (A→B→A) corrupting A's params,
+        // not just self-recursion. Overhead is 2N COPY per call (N = param count).
+        string[] savedCurrentParams = null;
+        string[] currentParamIds = null;
+        if (_currentMethod != null
+            && _methodParamVarIds.TryGetValue(_currentMethod, out currentParamIds)
+            && currentParamIds.Length > 0)
         {
-            savedParams = new string[paramIds.Length];
-            for (int i = 0; i < paramIds.Length; i++)
+            savedCurrentParams = new string[currentParamIds.Length];
+            for (int i = 0; i < currentParamIds.Length; i++)
             {
-                var paramType = _vars.GetDeclaredType(paramIds[i]);
-                savedParams[i] = _vars.DeclareTemp(paramType);
-                _module.AddCopy(paramIds[i], savedParams[i]);
+                var paramType = _vars.GetDeclaredType(currentParamIds[i]);
+                savedCurrentParams[i] = _vars.DeclareTemp(paramType);
+                _module.AddCopy(currentParamIds[i], savedCurrentParams[i]);
             }
         }
 
@@ -679,11 +682,11 @@ public partial class InvocationHandler
         _ctx.TargetHint = savedHint;
         var result = EmitCallByLabel(target, targetLabel);
 
-        // Self-recursive call: restore parameter values after return
-        if (isSelfRecursive && savedParams != null)
+        // Restore current method's parameter values after return
+        if (savedCurrentParams != null)
         {
-            for (int i = 0; i < paramIds.Length; i++)
-                _module.AddCopy(savedParams[i], paramIds[i]);
+            for (int i = 0; i < currentParamIds.Length; i++)
+                _module.AddCopy(savedCurrentParams[i], currentParamIds[i]);
         }
 
         // Copy-out for ref/out params

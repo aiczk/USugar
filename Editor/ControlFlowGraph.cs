@@ -558,8 +558,25 @@ public class ControlFlowGraph
             var kind = block.Instructions[j].Kind;
             if (kind == InstKind.Extern)
                 return !InstInfo.IsVoidExtern(block.Instructions[j].Operand);
+            // Skip block-terminating jumps — they don't consume stack entries
+            if (kind == InstKind.Jump || kind == InstKind.JumpIfFalse || kind == InstKind.JumpIndirect)
+                continue;
             if (InstInfo.Size[kind] > 0)
                 return false;
+        }
+        // Cross-block: single successor only (safe — multiple successors
+        // means diverging control flow, so the PUSH is unlikely an extern output)
+        if (block.Successors.Count == 1 && block.Successors[0].Instructions.Count > 0)
+        {
+            var succ = block.Successors[0];
+            for (int j = 0; j < succ.Instructions.Count; j++)
+            {
+                var kind = succ.Instructions[j].Kind;
+                if (kind == InstKind.Extern)
+                    return !InstInfo.IsVoidExtern(succ.Instructions[j].Operand);
+                if (InstInfo.Size[kind] > 0)
+                    return false;
+            }
         }
         return false;
     }

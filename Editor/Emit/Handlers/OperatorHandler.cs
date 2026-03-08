@@ -293,16 +293,41 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
             }
             case IBinaryPatternOperation binPat:
             {
-                var leftId = EmitPatternCheckImpl(valueId, valueType, binPat.LeftPattern);
-                var rightId = EmitPatternCheckImpl(valueId, valueType, binPat.RightPattern);
                 var resultId = _vars.DeclareTemp("SystemBoolean");
-                _module.AddPush(leftId);
-                _module.AddPush(rightId);
-                _module.AddPush(resultId);
-                var opName = binPat.OperatorKind == BinaryOperatorKind.And
-                    ? "SystemBoolean.__op_ConditionalAnd__SystemBoolean_SystemBoolean__SystemBoolean"
-                    : "SystemBoolean.__op_ConditionalOr__SystemBoolean_SystemBoolean__SystemBoolean";
-                AddExternChecked(opName);
+                if (binPat.OperatorKind == BinaryOperatorKind.And)
+                {
+                    // and pattern: short-circuit — skip right if left is false
+                    var falseConst = _vars.DeclareConst("SystemBoolean", "False");
+                    var shortLabel = _module.DefineLabel("__patand_short");
+                    var endLabel = _module.DefineLabel("__patand_end");
+
+                    var leftId = EmitPatternCheckImpl(valueId, valueType, binPat.LeftPattern);
+                    _module.AddPush(leftId);
+                    _module.AddJumpIfFalse(shortLabel);
+                    var rightId = EmitPatternCheckImpl(valueId, valueType, binPat.RightPattern);
+                    _module.AddCopy(rightId, resultId);
+                    _module.AddJump(endLabel);
+                    _module.MarkLabel(shortLabel);
+                    _module.AddCopy(falseConst, resultId);
+                    _module.MarkLabel(endLabel);
+                }
+                else
+                {
+                    // or pattern: short-circuit — skip right if left is true
+                    var trueConst = _vars.DeclareConst("SystemBoolean", "True");
+                    var evalRightLabel = _module.DefineLabel("__pator_right");
+                    var endLabel = _module.DefineLabel("__pator_end");
+
+                    var leftId = EmitPatternCheckImpl(valueId, valueType, binPat.LeftPattern);
+                    _module.AddPush(leftId);
+                    _module.AddJumpIfFalse(evalRightLabel);
+                    _module.AddCopy(trueConst, resultId);
+                    _module.AddJump(endLabel);
+                    _module.MarkLabel(evalRightLabel);
+                    var rightId = EmitPatternCheckImpl(valueId, valueType, binPat.RightPattern);
+                    _module.AddCopy(rightId, resultId);
+                    _module.MarkLabel(endLabel);
+                }
                 return resultId;
             }
 
