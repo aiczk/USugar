@@ -591,6 +591,22 @@ public class ControlFlowGraph
         return false;
     }
 
+    Dictionary<string, int> ComputeWriteCounts()
+    {
+        var counts = new Dictionary<string, int>();
+        foreach (var block in Blocks)
+            for (int i = 0; i < block.Instructions.Count; i++)
+            {
+                var w = GetWrittenVar(block, i);
+                if (w != null)
+                {
+                    counts.TryGetValue(w, out var c);
+                    counts[w] = c + 1;
+                }
+            }
+        return counts;
+    }
+
     public bool CopyPropagation()
     {
         bool anyChanged = false;
@@ -598,6 +614,7 @@ public class ControlFlowGraph
         do
         {
             changed = false;
+            var writeCounts = ComputeWriteCounts();
             foreach (var block in Blocks)
             {
                 for (int i = 0; i + 2 < block.Instructions.Count; i++)
@@ -611,7 +628,7 @@ public class ControlFlowGraph
                     if (src == null || dst == null) continue;
                     if (!dst.StartsWith("__intnl_") || dst == "__intnl_returnJump_SystemUInt32_0") continue;
 
-                    if (!CanPropagate(src, dst)) continue;
+                    if (!CanPropagate(src, dst, writeCounts)) continue;
 
                     ReplaceReads(dst, src);
                     block.Instructions.RemoveRange(i, 3);
@@ -624,7 +641,7 @@ public class ControlFlowGraph
         return anyChanged;
     }
 
-    bool CanPropagate(string src, string dst)
+    bool CanPropagate(string src, string dst, Dictionary<string, int> writeCounts)
     {
         // Type safety: reject propagation across different UdonTypes
         if (_varTypes.TryGetValue(src, out var srcType)
@@ -638,22 +655,14 @@ public class ControlFlowGraph
         }
 
         // dst must have exactly one write across all blocks
-        int writeCount = 0;
-        foreach (var block in Blocks)
-            for (int i = 0; i < block.Instructions.Count; i++)
-                if (GetWrittenVar(block, i) == dst)
-                    writeCount++;
-        if (writeCount != 1) return false;
+        writeCounts.TryGetValue(dst, out var dstWrites);
+        if (dstWrites != 1) return false;
 
         if (src.StartsWith("__const_")) return true;
 
         // src must not be written anywhere
-        foreach (var block in Blocks)
-            for (int i = 0; i < block.Instructions.Count; i++)
-                if (GetWrittenVar(block, i) == src)
-                    return false;
-
-        return true;
+        writeCounts.TryGetValue(src, out var srcWrites);
+        return srcWrites == 0;
     }
 
     void ReplaceReads(string oldVar, string newVar)
@@ -1256,17 +1265,7 @@ public class ControlFlowGraph
         if (_idom == null) ComputeDominators();
 
         // Precompute: which variables are safe for GVN (consts or single-write)
-        var writeCount = new Dictionary<string, int>();
-        foreach (var block in Blocks)
-            for (int i = 0; i < block.Instructions.Count; i++)
-            {
-                var w = GetWrittenVar(block, i);
-                if (w != null)
-                {
-                    writeCount.TryGetValue(w, out var c);
-                    writeCount[w] = c + 1;
-                }
-            }
+        var writeCount = ComputeWriteCounts();
 
         bool IsSafeInput(string v) =>
             v != null && (v.StartsWith("__const_") || (writeCount.TryGetValue(v, out var c) && c == 1));

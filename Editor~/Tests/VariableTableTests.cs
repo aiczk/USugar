@@ -227,4 +227,24 @@ public class VariableTableTests
         Assert.Throws<InvalidOperationException>(
             () => vt.TryDeclareVar("v", "SystemString"));
     }
+
+    [Fact]
+    public void DeclareStructConst_SameValue_Reuses()
+    {
+        var vt = new VariableTable();
+        // Use a simple struct-like value that implements Equals correctly
+        var val = (1.0f, 2.0f, 3.0f);
+        var id1 = vt.DeclareStructConst("UnityEngineVector3", val);
+        var id2 = vt.DeclareStructConst("UnityEngineVector3", val);
+        Assert.Equal(id1, id2);
+    }
+
+    [Fact]
+    public void DeclareStructConst_DifferentValue_ReturnsDifferentId()
+    {
+        var vt = new VariableTable();
+        var id1 = vt.DeclareStructConst("UnityEngineVector3", (1.0f, 2.0f, 3.0f));
+        var id2 = vt.DeclareStructConst("UnityEngineVector3", (4.0f, 5.0f, 6.0f));
+        Assert.NotEqual(id1, id2);
+    }
 }

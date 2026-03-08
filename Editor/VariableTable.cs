@@ -17,6 +17,7 @@ public class VariableTable
     readonly Dictionary<string, int> _counters = new();
     readonly Dictionary<string, string> _constPool = new();
     readonly Dictionary<string, string> _declaredTypes = new(); // id → udonType
+    readonly Dictionary<(string, object), string> _structConstPool = new(); // (udonType, value) → id
     readonly Dictionary<string, string> _thisVars = new(); // udonType → id
     readonly Stack<Dictionary<string, string>> _scopeStack = new();
     Dictionary<string, string> _currentScope = new();
@@ -223,11 +224,14 @@ public class VariableTable
 
     public string DeclareStructConst(string udonType, object value)
     {
+        var key = (udonType, value);
+        if (_structConstPool.TryGetValue(key, out var existing)) return existing;
         var idx = NextIndex($"const_{udonType}");
         var id = $"__const_{udonType}_{idx}";
         _entries.Add(new VarTableEntry { Id = id, UdonType = udonType, DefaultValue = null, Flags = VarFlags.None, ConstValue = value });
         _declaredIds.Add(id);
         _declaredTypes[id] = udonType;
+        _structConstPool[key] = id;
         return id;
     }
 

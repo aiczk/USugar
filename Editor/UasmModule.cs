@@ -78,6 +78,10 @@ public class UasmModule
     public void DeclareVariable(string id, string udonType, string defaultValue, VarFlags flags, string syncMode = null, object constValue = null)
     {
         _vars.Add(new VarEntry { Id = id, UdonType = udonType, DefaultValue = defaultValue, Flags = flags, SyncMode = syncMode, ConstValue = constValue });
+        // Populate const cache so CreateConstVariable can find existing constants
+        // from VariableTable, preventing duplicate variables for the same value.
+        if (constValue != null && id.StartsWith("__const_"))
+            _constCache.TryAdd((udonType, constValue), id);
     }
 
     public int DefineLabel(string name)

@@ -362,11 +362,28 @@ public partial class InvocationHandler
         {
             var clrType = ResolveClrType(udonType);
             if (clrType == null) return null;
-            var ctorArgs = args.Select(a => Convert.ChangeType(
-                a.Value.ConstantValue.Value, typeof(float))).ToArray();
-            var ctorArgTypes = ctorArgs.Select(a => a.GetType()).ToArray();
-            var ctor = clrType.GetConstructor(ctorArgTypes);
-            return ctor?.Invoke(ctorArgs);
+            var argValues = args.Select(a => a.Value.ConstantValue.Value).ToArray();
+
+            // Try direct match with Roslyn constant types
+            var argTypes = argValues.Select(v => v?.GetType() ?? typeof(object)).ToArray();
+            var ctor = clrType.GetConstructor(argTypes);
+            if (ctor != null) return ctor.Invoke(argValues);
+
+            // Fallback: convert to actual constructor parameter types
+            foreach (var c in clrType.GetConstructors())
+            {
+                var ps = c.GetParameters();
+                if (ps.Length != argValues.Length) continue;
+                try
+                {
+                    var converted = new object[argValues.Length];
+                    for (int i = 0; i < argValues.Length; i++)
+                        converted[i] = Convert.ChangeType(argValues[i], ps[i].ParameterType);
+                    return c.Invoke(converted);
+                }
+                catch { }
+            }
+            return null;
         }
         catch { return null; }
     }
