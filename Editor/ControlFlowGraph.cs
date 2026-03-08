@@ -98,6 +98,7 @@ public class ControlFlowGraph
     public BasicBlock Exit;
     public Dictionary<string, int> VarToIndex = new();
     public string[] IndexToVar;
+    Dictionary<int, BasicBlock> _blockById = new();
     int _varCount;
     Dictionary<string, string> _varTypes = new();
     Dictionary<string, object> _constValues = new();
@@ -231,10 +232,18 @@ public class ControlFlowGraph
         }
 
         cfg.Entry = cfg.Blocks[0];
+        cfg.RebuildBlockIndex();
         cfg.BuildVarIndex(insts);
         cfg._varTypes = module.GetVariableTypes();
         cfg._constValues = module.GetConstValues();
         return cfg;
+    }
+
+    void RebuildBlockIndex()
+    {
+        _blockById.Clear();
+        foreach (var b in Blocks)
+            _blockById[b.Id] = b;
     }
 
     static void AddEdge(BasicBlock from, BasicBlock to)
@@ -261,6 +270,7 @@ public class ControlFlowGraph
             changed |= MergeBlocks();
             changed |= RemoveUnreachableBlocks();
         } while (changed);
+        RebuildBlockIndex();
     }
 
     bool ThreadJumps()
@@ -605,11 +615,10 @@ public class ControlFlowGraph
 
                     ReplaceReads(dst, src);
                     block.Instructions.RemoveRange(i, 3);
+                    i--; // re-examine at same position after removal
                     changed = true;
                     anyChanged = true;
-                    break;
                 }
-                if (changed) break;
             }
         } while (changed);
         return anyChanged;
@@ -1269,7 +1278,7 @@ public class ControlFlowGraph
         void DfsGvn(int blockId)
         {
             var added = new List<ValueKey>();
-            var block = Blocks.Find(b => b.Id == blockId);
+            var block = _blockById.GetValueOrDefault(blockId);
             if (block == null) { ProcessChildren(); return; }
 
             for (int i = 0; i < block.Instructions.Count; i++)
@@ -1392,7 +1401,7 @@ public class ControlFlowGraph
                 while (worklist.Count > 0)
                 {
                     var n = worklist.Pop();
-                    var nb = Blocks.Find(b => b.Id == n);
+                    var nb = _blockById.GetValueOrDefault(n);
                     if (nb == null) continue;
                     foreach (var pred in nb.Predecessors)
                     {
@@ -1487,7 +1496,7 @@ public class ControlFlowGraph
             var writtenInLoop = new HashSet<string>();
             foreach (var blockId in loop.Body)
             {
-                var block = Blocks.Find(b => b.Id == blockId);
+                var block = _blockById.GetValueOrDefault(blockId);
                 if (block == null) continue;
                 for (int i = 0; i < block.Instructions.Count; i++)
                 {
@@ -1501,7 +1510,7 @@ public class ControlFlowGraph
 
             foreach (var blockId in loop.Body.ToList())
             {
-                var block = Blocks.Find(b => b.Id == blockId);
+                var block = _blockById.GetValueOrDefault(blockId);
                 if (block == null) continue;
 
                 for (int i = 0; i < block.Instructions.Count; i++)
@@ -1548,7 +1557,7 @@ public class ControlFlowGraph
                     int outputWriteCount = 0;
                     foreach (var bid in loop.Body)
                     {
-                        var b2 = Blocks.Find(b => b.Id == bid);
+                        var b2 = _blockById.GetValueOrDefault(bid);
                         if (b2 == null) continue;
                         for (int j = 0; j < b2.Instructions.Count; j++)
                             if (GetWrittenVar(b2, j) == outputVar)
