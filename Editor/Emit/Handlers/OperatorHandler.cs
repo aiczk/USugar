@@ -86,7 +86,9 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
     string VisitConditionalAnd(IBinaryOperation op)
     {
         // a && b → eval a; if false → result=false; else eval b → result=b
-        var resultId = _vars.DeclareTemp("SystemBoolean");
+        // Consume TargetHint to write directly into the caller's destination variable,
+        // avoiding an extra COPY when the result is assigned (e.g., `bool x = a && b;`).
+        var resultId = ConsumeTargetHintOrTemp("SystemBoolean");
         var falseConst = _vars.DeclareConst("SystemBoolean", "False");
         var endLabel = _module.DefineLabel("__and_end");
         var shortLabel = _module.DefineLabel("__and_short");
@@ -109,7 +111,8 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
     string VisitConditionalOr(IBinaryOperation op)
     {
         // a || b → eval a; if true → result=true; else eval b → result=b
-        var resultId = _vars.DeclareTemp("SystemBoolean");
+        // Consume TargetHint to write directly into the caller's destination variable.
+        var resultId = ConsumeTargetHintOrTemp("SystemBoolean");
         var trueConst = _vars.DeclareConst("SystemBoolean", "True");
         var endLabel = _module.DefineLabel("__or_end");
         var evalRightLabel = _module.DefineLabel("__or_right");
