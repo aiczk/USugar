@@ -8,6 +8,9 @@
     <Compile Include="../../Editor/NameAllocator.cs" />
     <Compile Include="../../Editor/LayoutPlanner.cs" />
     <Compile Include="../../Editor/UasmModule.cs" />
+    <Compile Include="../../Editor/BitSet.cs" />
+    <Compile Include="../../Editor/BasicBlock.cs" />
+    <Compile Include="../../Editor/PureExternTable.cs" />
     <Compile Include="../../Editor/ControlFlowGraph.cs" />
     <Compile Include="../../Editor/VariableTable.cs" />
     <Compile Include="../../Editor/ExternResolver.cs" />

@@ -26,18 +26,18 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
     public string Handle(IOperation expression) => expression switch
     {
         ILiteralOperation op => VisitLiteral(op),
-        ILocalReferenceOperation localRef => _vars.Lookup(localRef.Local.Name) ?? (_localVarIds.TryGetValue(localRef.Local, out var capturedId) 
+        ILocalReferenceOperation localRef => _ctx.Vars.Lookup(localRef.Local.Name) ?? (_ctx.LocalVarIds.TryGetValue(localRef.Local, out var capturedId) 
                                                  ? capturedId
-                                                 : throw new InvalidOperationException($"Cannot resolve local variable '{localRef.Local.Name}' in method '{_currentMethod?.Name ?? "(none)"}'.")),
+                                                 : throw new InvalidOperationException($"Cannot resolve local variable '{localRef.Local.Name}' in method '{_ctx.CurrentMethod?.Name ?? "(none)"}'.")),
         IFieldReferenceOperation op => VisitFieldReference(op),
         IParameterReferenceOperation paramRef => GetParamVarId(paramRef.Parameter),
-        IInstanceReferenceOperation => _vars.DeclareThisOnce(GetUdonType(_classSymbol)),
+        IInstanceReferenceOperation => _ctx.Vars.DeclareThisOnce(GetUdonType(_ctx.ClassSymbol)),
         IConversionOperation op => VisitConversion(op),
         IDefaultValueOperation op => VisitDefaultValue(op),
-        ITypeOfOperation typeOf => _vars.DeclareConst("SystemType", GetUdonType(typeOf.TypeOperand)),
-        INameOfOperation nameOf => _vars.DeclareConst("SystemString", nameOf.ConstantValue.Value.ToString()),
+        ITypeOfOperation typeOf => _ctx.Vars.DeclareConst("SystemType", GetUdonType(typeOf.TypeOperand)),
+        INameOfOperation nameOf => _ctx.Vars.DeclareConst("SystemString", nameOf.ConstantValue.Value.ToString()),
         IDeclarationExpressionOperation op => VisitDeclarationExpression(op),
-        IDiscardOperation discard => _vars.DeclareTemp(GetUdonType(discard.Type)),
+        IDiscardOperation discard => _ctx.Vars.DeclareTemp(GetUdonType(discard.Type)),
         IDelegateCreationOperation op => VisitDelegateCreation(op),
         _ => throw new NotSupportedException(expression.GetType().Name),
     };
@@ -48,10 +48,10 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
     {
         // null literal has no type
         if (lit.Type == null)
-            return _vars.DeclareConst("SystemObject", "null");
+            return _ctx.Vars.DeclareConst("SystemObject", "null");
         var udonType = GetUdonType(lit.Type);
         var value = lit.ConstantValue.HasValue ? ToInvariantString(lit.ConstantValue.Value) : "null";
-        return _vars.DeclareConst(udonType, value);
+        return _ctx.Vars.DeclareConst(udonType, value);
     }
 
     // ── Field Reference ──
@@ -62,7 +62,7 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
         {
             var constType = GetUdonType(fieldRef.Field.Type);
             var constVal = ToInvariantString(fieldRef.Field.ConstantValue);
-            return _vars.DeclareConst(constType, constVal);
+            return _ctx.Vars.DeclareConst(constType, constVal);
         }
         if (fieldRef.Field.IsStatic)
         {
@@ -73,7 +73,7 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
             var fldType = GetUdonType(fieldRef.Field.Type);
             var tempId = ConsumeTargetHintOrTemp(fldType);
             var containingType = GetUdonType(fieldRef.Field.ContainingType);
-            _module.AddPush(tempId);
+            _ctx.Module.AddPush(tempId);
             AddExternChecked(ExternResolver.BuildPropertyGetSignature(containingType, fieldRef.Field.Name, fldType));
             return tempId;
         }
@@ -89,10 +89,10 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
             var instanceId = VisitExpression(fieldRef.Instance);
             _ctx.TargetHint = savedHint;
             var tempId = ConsumeTargetHintOrTemp(fldType);
-            var nameConst = _vars.DeclareConst("SystemString", fieldRef.Field.Name);
-            _module.AddPush(instanceId);
-            _module.AddPush(nameConst);
-            _module.AddPush(tempId);
+            var nameConst = _ctx.Vars.DeclareConst("SystemString", fieldRef.Field.Name);
+            _ctx.Module.AddPush(instanceId);
+            _ctx.Module.AddPush(nameConst);
+            _ctx.Module.AddPush(tempId);
             AddExternChecked("VRCUdonCommonInterfacesIUdonEventReceiver.__GetProgramVariable__SystemString__SystemObject");
             return tempId;
         }
@@ -105,8 +105,8 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
             var instanceId = VisitExpression(fieldRef.Instance);
             _ctx.TargetHint = savedHint;
             var tempId = ConsumeTargetHintOrTemp(fldType);
-            _module.AddPush(instanceId);
-            _module.AddPush(tempId);
+            _ctx.Module.AddPush(instanceId);
+            _ctx.Module.AddPush(tempId);
             AddExternChecked(ExternResolver.BuildPropertyGetSignature(containingType, fieldRef.Field.Name, fldType));
             return tempId;
         }
@@ -138,17 +138,17 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
                     if (!isDecimal && conv.Operand.Type.SpecialType == SpecialType.System_Single)
                     {
                         // float → double promotion
-                        var promotedId = _vars.DeclareTemp("SystemDouble");
-                        _module.AddPush(srcId);
-                        _module.AddPush(promotedId);
+                        var promotedId = _ctx.Vars.DeclareTemp("SystemDouble");
+                        _ctx.Module.AddPush(srcId);
+                        _ctx.Module.AddPush(promotedId);
                         AddExternChecked("SystemConvert.__ToDouble__SystemSingle__SystemDouble");
                         srcId = promotedId;
                     }
 
                     // Math.Truncate(double) or Math.Truncate(decimal)
-                    var truncId = _vars.DeclareTemp(truncType);
-                    _module.AddPush(srcId);
-                    _module.AddPush(truncId);
+                    var truncId = _ctx.Vars.DeclareTemp(truncType);
+                    _ctx.Module.AddPush(srcId);
+                    _ctx.Module.AddPush(truncId);
                     AddExternChecked($"SystemMath.__Truncate__{truncType}__{truncType}");
                     srcId = truncId;
 
@@ -156,8 +156,8 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
                     var dstType = GetUdonType(conv.Type);
                     _ctx.TargetHint = savedHint;
                     var resultId = ConsumeTargetHintOrTemp(dstType);
-                    _module.AddPush(srcId);
-                    _module.AddPush(resultId);
+                    _ctx.Module.AddPush(srcId);
+                    _ctx.Module.AddPush(resultId);
                     AddExternChecked($"SystemConvert.__{methodName}__{truncType}__{dstType}");
                     return resultId;
                 }
@@ -167,8 +167,8 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
                 var dstType2 = GetUdonType(conv.Type);
                 _ctx.TargetHint = savedHint;
                 var resultId2 = ConsumeTargetHintOrTemp(dstType2);
-                _module.AddPush(srcId);
-                _module.AddPush(resultId2);
+                _ctx.Module.AddPush(srcId);
+                _ctx.Module.AddPush(resultId2);
                 AddExternChecked($"SystemConvert.__{methodName}__{srcType}__{dstType2}");
                 return resultId2;
             }
@@ -180,8 +180,8 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
             var dstType = GetUdonType(conv.Type);
             _ctx.TargetHint = savedHint;
             var resultId = ConsumeTargetHintOrTemp(dstType);
-            _module.AddPush(srcId);
-            _module.AddPush(resultId);
+            _ctx.Module.AddPush(srcId);
+            _ctx.Module.AddPush(resultId);
             AddExternChecked(ExternResolver.ResolveConversionExtern(
                 conv.OperatorMethod, ResolveType(conv.Operand.Type), ResolveType(conv.Type)));
             return resultId;
@@ -210,23 +210,23 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
                          : conv.Operand.ConstantValue.HasValue ? conv.Operand.ConstantValue
                          : default;
             if (constVal.HasValue)
-                return _vars.DeclareConst(dstType, constVal.Value?.ToString() ?? "null");
+                return _ctx.Vars.DeclareConst(dstType, constVal.Value?.ToString() ?? "null");
 
             // Runtime int→enum: use object[] array lookup to preserve type tags
             if (conv.Type.TypeKind == TypeKind.Enum && conv.Type is INamedTypeSymbol enumTarget)
             {
                 var arrId = GetOrCreateEnumArray(enumTarget);
-                var resultId = _vars.DeclareTemp("SystemObject");
-                _module.AddPush(arrId);
-                _module.AddPush(srcId);
-                _module.AddPush(resultId);
+                var resultId = _ctx.Vars.DeclareTemp("SystemObject");
+                _ctx.Module.AddPush(arrId);
+                _ctx.Module.AddPush(srcId);
+                _ctx.Module.AddPush(resultId);
                 AddExternChecked("SystemObjectArray.__Get__SystemInt32__SystemObject");
                 return resultId;
             }
 
             // enum→int: COPY is safe (same underlying type)
-            var copyResult = _vars.DeclareTemp(dstType);
-            _module.AddCopy(srcId, copyResult);
+            var copyResult = _ctx.Vars.DeclareTemp(dstType);
+            _ctx.Module.AddCopy(srcId, copyResult);
             return copyResult;
         }
 
@@ -241,7 +241,7 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
     {
         var dvType = GetUdonType(defaultVal.Type);
         if (!defaultVal.Type.IsValueType) 
-            return _vars.DeclareConst(dvType, "null");
+            return _ctx.Vars.DeclareConst(dvType, "null");
         
         var defVal = defaultVal.Type.SpecialType switch
         {
@@ -255,7 +255,7 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
             SpecialType.System_Char => "0",
             _ => "null", // struct types (Vector3, etc.) — assembler uses default
         };
-        return _vars.DeclareConst(dvType, defVal);
+        return _ctx.Vars.DeclareConst(dvType, defVal);
     }
 
     // ── Declaration Expression ──
@@ -266,8 +266,8 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
             return VisitExpression(declExpr.Expression);
         
         var udonType = GetUdonType(localRef2.Type);
-        var localId = _vars.DeclareLocal(localRef2.Local.Name, udonType);
-        _localVarIds[localRef2.Local] = localId;
+        var localId = _ctx.Vars.DeclareLocal(localRef2.Local.Name, udonType);
+        _ctx.LocalVarIds[localRef2.Local] = localId;
         return localId;
     }
 
@@ -280,12 +280,12 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
             case IAnonymousFunctionOperation lambda:
             {
                 var hoisted = HoistLambdaToMethod(lambda);
-                return _vars.DeclareConst("SystemUInt32",
-                    _methodLabels[hoisted].ToString());
+                return _ctx.Vars.DeclareConst("SystemUInt32",
+                    _ctx.MethodLabels[hoisted].ToString());
             }
             case IMethodReferenceOperation methodRef
-                when _methodLabels.TryGetValue(methodRef.Method, out var label):
-                return _vars.DeclareConst("SystemUInt32", label.ToString());
+                when _ctx.MethodLabels.TryGetValue(methodRef.Method, out var label):
+                return _ctx.Vars.DeclareConst("SystemUInt32", label.ToString());
             default:
                 throw new NotSupportedException($"Unsupported delegate target: {op.Target.GetType().Name}");
         }

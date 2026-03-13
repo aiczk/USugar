@@ -25,7 +25,7 @@ public partial class InvocationHandler
         if (!target.IsStatic)
         {
             if (op.Instance is IInstanceReferenceOperation)
-                instanceId = _vars.DeclareThisOnce(GetUdonType(target.ContainingType));
+                instanceId = _ctx.Vars.DeclareThisOnce(GetUdonType(target.ContainingType));
             else if (op.Instance != null)
                 instanceId = VisitExpression(op.Instance);
         }
@@ -36,9 +36,9 @@ public partial class InvocationHandler
 
         // Now emit all PUSHes contiguously
         if (instanceId != null)
-            _module.AddPush(instanceId);
+            _ctx.Module.AddPush(instanceId);
         foreach (var argId in argIds)
-            _module.AddPush(argId);
+            _ctx.Module.AddPush(argId);
 
         // Restore hint and consume for result
         _ctx.TargetHint = savedHint;
@@ -47,7 +47,7 @@ public partial class InvocationHandler
         {
             var returnType = GetUdonType(target.ReturnType);
             resultId = ConsumeTargetHintOrTemp(returnType);
-            _module.AddPush(resultId);
+            _ctx.Module.AddPush(resultId);
         }
 
         // Extern signature
@@ -76,7 +76,7 @@ public partial class InvocationHandler
         // Evaluate instance and arguments first (avoid interleaved PUSH/EXTERN)
         string instanceId = null;
         if (op.Instance is IInstanceReferenceOperation)
-            instanceId = _vars.DeclareThisOnce("UnityEngineTransform");
+            instanceId = _ctx.Vars.DeclareThisOnce("UnityEngineTransform");
         else if (op.Instance != null)
             instanceId = VisitExpression(op.Instance);
 
@@ -91,11 +91,11 @@ public partial class InvocationHandler
 
         // Push instance
         if (instanceId != null)
-            _module.AddPush(instanceId);
+            _ctx.Module.AddPush(instanceId);
 
         // Push explicit arguments FIRST, then SystemType (matches UdonSharp push order for __T externs)
         foreach (var argId in argIds)
-            _module.AddPush(argId);
+            _ctx.Module.AddPush(argId);
 
         // Push typeof(T) as SystemType constant (after explicit args).
         // IUdonEventReceiver → VRCUdonUdonBehaviour: the Udon type registry doesn't have
@@ -104,8 +104,8 @@ public partial class InvocationHandler
         // ExternResolver can't handle this because it operates on extern signatures, not type tokens.
         var typeArgName = GetUdonType(target.TypeArguments[0]);
         var typeConstValue = typeArgName == "VRCUdonCommonInterfacesIUdonEventReceiver" ? "VRCUdonUdonBehaviour" : typeArgName;
-        var typeConstId = _vars.DeclareConst("SystemType", typeConstValue);
-        _module.AddPush(typeConstId);
+        var typeConstId = _ctx.Vars.DeclareConst("SystemType", typeConstValue);
+        _ctx.Module.AddPush(typeConstId);
 
         // Result type — typed as T for __T externs
         var isPlural = target.Name.StartsWith("GetComponents");
@@ -118,7 +118,7 @@ public partial class InvocationHandler
         // Restore hint and consume for result
         _ctx.TargetHint = savedHint;
         var resultId = ConsumeTargetHintOrTemp(tempType);
-        _module.AddPush(resultId);
+        _ctx.Module.AddPush(resultId);
 
         // Build extern name with __T form
         const string containingType = "UnityEngineComponent";
@@ -148,7 +148,7 @@ public partial class InvocationHandler
         // Evaluate instance
         string instanceId = null;
         if (op.Instance is IInstanceReferenceOperation)
-            instanceId = _vars.DeclareThisOnce("UnityEngineTransform");
+            instanceId = _ctx.Vars.DeclareThisOnce("UnityEngineTransform");
         else if (op.Instance != null)
             instanceId = VisitExpression(op.Instance);
 
@@ -165,27 +165,27 @@ public partial class InvocationHandler
 
         // Push instance + typeof(UdonBehaviour) + optional args
         if (instanceId != null)
-            _module.AddPush(instanceId);
-        var udonBehaviourType = _vars.DeclareConst("SystemType", "VRCUdonUdonBehaviour");
-        _module.AddPush(udonBehaviourType);
+            _ctx.Module.AddPush(instanceId);
+        var udonBehaviourType = _ctx.Vars.DeclareConst("SystemType", "VRCUdonUdonBehaviour");
+        _ctx.Module.AddPush(udonBehaviourType);
         foreach (var argId in argIds)
-            _module.AddPush(argId);
+            _ctx.Module.AddPush(argId);
 
         // Call GetComponents → ComponentArray
-        var allComponents = _vars.DeclareTemp("UnityEngineComponentArray");
-        _module.AddPush(allComponents);
+        var allComponents = _ctx.Vars.DeclareTemp("UnityEngineComponentArray");
+        _ctx.Module.AddPush(allComponents);
         AddExternChecked(fetchExtern);
 
         // Compute target type ID at compile time
         var targetTypeName = target.TypeArguments[0].ToDisplayString();
         long targetTypeId = UasmEmitter.ComputeTypeId(targetTypeName);
-        var targetIdConst = _vars.DeclareConst("SystemInt64", targetTypeId.ToString());
+        var targetIdConst = _ctx.Vars.DeclareConst("SystemInt64", targetTypeId.ToString());
 
         // Inheritance: if derived USB types exist, use __refl_typeids + Array.IndexOf
         bool useTypeIds = HasInheritedUsbTypes(target.TypeArguments[0]);
         var reflKeyConst = useTypeIds
-            ? _vars.DeclareConst("SystemString", "__refl_typeids")
-            : _vars.DeclareConst("SystemString", "__refl_typeid");
+            ? _ctx.Vars.DeclareConst("SystemString", "__refl_typeids")
+            : _ctx.Vars.DeclareConst("SystemString", "__refl_typeid");
 
         return isSingular ? EmitShimSingular(allComponents, targetIdConst, reflKeyConst, useTypeIds) : EmitShimPlural(allComponents, targetIdConst, reflKeyConst, useTypeIds);
     }
@@ -202,16 +202,16 @@ public partial class InvocationHandler
         var instanceUdon = GetUdonType(instanceOp.Type);
         if (instanceUdon != "UnityEngineGameObject")
             return instanceId;
-        var transformId = _vars.DeclareTemp("UnityEngineTransform");
-        _module.AddPush(instanceId);
-        _module.AddPush(transformId);
+        var transformId = _ctx.Vars.DeclareTemp("UnityEngineTransform");
+        _ctx.Module.AddPush(instanceId);
+        _ctx.Module.AddPush(transformId);
         AddExternChecked("UnityEngineGameObject.__get_transform__UnityEngineTransform");
         return transformId;
     }
 
     bool HasInheritedUsbTypes(ITypeSymbol targetType)
     {
-        foreach (var kvp in _planner.AllLayouts)
+        foreach (var kvp in _ctx.Planner.AllLayouts)
         {
             var typeSymbol = kvp.Key;
             if (SymbolEqualityComparer.Default.Equals(typeSymbol, targetType))
@@ -246,61 +246,61 @@ public partial class InvocationHandler
     string EmitShimSingular(string allComponents, string targetIdConst, string reflKeyConst, bool useTypeIds)
     {
         // Get array length
-        var lenId = _vars.DeclareTemp("SystemInt32");
-        _module.AddPush(allComponents);
-        _module.AddPush(lenId);
+        var lenId = _ctx.Vars.DeclareTemp("SystemInt32");
+        _ctx.Module.AddPush(allComponents);
+        _ctx.Module.AddPush(lenId);
         AddExternChecked("UnityEngineComponentArray.__get_Length__SystemInt32");
 
         // Loop index
-        var idxId = _vars.DeclareTemp("SystemInt32");
-        var zeroConst = _vars.DeclareConst("SystemInt32", "0");
-        _module.AddCopy(zeroConst, idxId);
+        var idxId = _ctx.Vars.DeclareTemp("SystemInt32");
+        var zeroConst = _ctx.Vars.DeclareConst("SystemInt32", "0");
+        _ctx.Module.AddCopy(zeroConst, idxId);
 
         // Result (null initially)
-        var resultId = _vars.DeclareTemp("VRCUdonCommonInterfacesIUdonEventReceiver");
+        var resultId = _ctx.Vars.DeclareTemp("VRCUdonCommonInterfacesIUdonEventReceiver");
 
-        var loopLabel = _module.DefineLabel("__gc_shim_loop");
-        var nextLabel = _module.DefineLabel("__gc_shim_next");
-        var endLabel = _module.DefineLabel("__gc_shim_end");
+        var loopLabel = _ctx.Module.DefineLabel("__gc_shim_loop");
+        var nextLabel = _ctx.Module.DefineLabel("__gc_shim_next");
+        var endLabel = _ctx.Module.DefineLabel("__gc_shim_end");
 
-        _module.MarkLabel(loopLabel);
+        _ctx.Module.MarkLabel(loopLabel);
 
         // if (idx >= len) → end
-        var condId = _vars.DeclareTemp("SystemBoolean");
-        _module.AddPush(idxId);
-        _module.AddPush(lenId);
-        _module.AddPush(condId);
+        var condId = _ctx.Vars.DeclareTemp("SystemBoolean");
+        _ctx.Module.AddPush(idxId);
+        _ctx.Module.AddPush(lenId);
+        _ctx.Module.AddPush(condId);
         AddExternChecked("SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean");
-        _module.AddPush(condId);
-        _module.AddJumpIfFalse(endLabel);
+        _ctx.Module.AddPush(condId);
+        _ctx.Module.AddJumpIfFalse(endLabel);
 
         // element = allComponents[idx]
-        var elementId = _vars.DeclareTemp("UnityEngineComponent");
-        _module.AddPush(allComponents);
-        _module.AddPush(idxId);
-        _module.AddPush(elementId);
+        var elementId = _ctx.Vars.DeclareTemp("UnityEngineComponent");
+        _ctx.Module.AddPush(allComponents);
+        _ctx.Module.AddPush(idxId);
+        _ctx.Module.AddPush(elementId);
         AddExternChecked("UnityEngineComponentArray.__Get__SystemInt32__UnityEngineComponent");
 
         // Cast Component → IUdonEventReceiver (COPY to differently-typed temp)
-        var behaviourId = _vars.DeclareTemp("VRCUdonCommonInterfacesIUdonEventReceiver");
-        _module.AddCopy(elementId, behaviourId);
+        var behaviourId = _ctx.Vars.DeclareTemp("VRCUdonCommonInterfacesIUdonEventReceiver");
+        _ctx.Module.AddCopy(elementId, behaviourId);
 
         // idValue = behaviour.GetProgramVariable("__refl_typeid" or "__refl_typeids")
-        var idValueId = _vars.DeclareTemp("SystemObject");
-        _module.AddPush(behaviourId);
-        _module.AddPush(reflKeyConst);
-        _module.AddPush(idValueId);
+        var idValueId = _ctx.Vars.DeclareTemp("SystemObject");
+        _ctx.Module.AddPush(behaviourId);
+        _ctx.Module.AddPush(reflKeyConst);
+        _ctx.Module.AddPush(idValueId);
         AddExternChecked("VRCUdonCommonInterfacesIUdonEventReceiver.__GetProgramVariable__SystemString__SystemObject");
 
         // Null check: if (idValue == null) → next
-        var nullConst = _vars.DeclareConst("SystemObject", "null");
-        var notNullId = _vars.DeclareTemp("SystemBoolean");
-        _module.AddPush(idValueId);
-        _module.AddPush(nullConst);
-        _module.AddPush(notNullId);
+        var nullConst = _ctx.Vars.DeclareConst("SystemObject", "null");
+        var notNullId = _ctx.Vars.DeclareTemp("SystemBoolean");
+        _ctx.Module.AddPush(idValueId);
+        _ctx.Module.AddPush(nullConst);
+        _ctx.Module.AddPush(notNullId);
         AddExternChecked("SystemObject.__op_Inequality__SystemObject_SystemObject__SystemBoolean");
-        _module.AddPush(notNullId);
-        _module.AddJumpIfFalse(nextLabel);
+        _ctx.Module.AddPush(notNullId);
+        _ctx.Module.AddJumpIfFalse(nextLabel);
 
         if (useTypeIds)
         {
@@ -309,144 +309,144 @@ public partial class InvocationHandler
         else
         {
             // typeId = Convert.ToInt64(idValue)
-            var typeIdId = _vars.DeclareTemp("SystemInt64");
-            _module.AddPush(idValueId);
-            _module.AddPush(typeIdId);
+            var typeIdId = _ctx.Vars.DeclareTemp("SystemInt64");
+            _ctx.Module.AddPush(idValueId);
+            _ctx.Module.AddPush(typeIdId);
             AddExternChecked("SystemConvert.__ToInt64__SystemObject__SystemInt64");
 
             // if (typeId != targetId) → next
-            var matchId = _vars.DeclareTemp("SystemBoolean");
-            _module.AddPush(typeIdId);
-            _module.AddPush(targetIdConst);
-            _module.AddPush(matchId);
+            var matchId = _ctx.Vars.DeclareTemp("SystemBoolean");
+            _ctx.Module.AddPush(typeIdId);
+            _ctx.Module.AddPush(targetIdConst);
+            _ctx.Module.AddPush(matchId);
             AddExternChecked("SystemInt64.__op_Equality__SystemInt64_SystemInt64__SystemBoolean");
-            _module.AddPush(matchId);
-            _module.AddJumpIfFalse(nextLabel);
+            _ctx.Module.AddPush(matchId);
+            _ctx.Module.AddJumpIfFalse(nextLabel);
         }
 
         // Match! result = behaviour
-        _module.AddCopy(behaviourId, resultId);
-        _module.AddJump(endLabel);
+        _ctx.Module.AddCopy(behaviourId, resultId);
+        _ctx.Module.AddJump(endLabel);
 
         // next: idx++
-        _module.MarkLabel(nextLabel);
-        var oneConst = _vars.DeclareConst("SystemInt32", "1");
-        var nextIdxId = _vars.DeclareTemp("SystemInt32");
-        _module.AddPush(idxId);
-        _module.AddPush(oneConst);
-        _module.AddPush(nextIdxId);
+        _ctx.Module.MarkLabel(nextLabel);
+        var oneConst = _ctx.Vars.DeclareConst("SystemInt32", "1");
+        var nextIdxId = _ctx.Vars.DeclareTemp("SystemInt32");
+        _ctx.Module.AddPush(idxId);
+        _ctx.Module.AddPush(oneConst);
+        _ctx.Module.AddPush(nextIdxId);
         AddExternChecked("SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32");
-        _module.AddCopy(nextIdxId, idxId);
-        _module.AddJump(loopLabel);
+        _ctx.Module.AddCopy(nextIdxId, idxId);
+        _ctx.Module.AddJump(loopLabel);
 
-        _module.MarkLabel(endLabel);
+        _ctx.Module.MarkLabel(endLabel);
         return resultId;
     }
 
     string EmitShimPlural(string allComponents, string targetIdConst, string reflKeyConst, bool useTypeIds)
     {
         // Get array length
-        var lenId = _vars.DeclareTemp("SystemInt32");
-        _module.AddPush(allComponents);
-        _module.AddPush(lenId);
+        var lenId = _ctx.Vars.DeclareTemp("SystemInt32");
+        _ctx.Module.AddPush(allComponents);
+        _ctx.Module.AddPush(lenId);
         AddExternChecked("UnityEngineComponentArray.__get_Length__SystemInt32");
 
-        var zeroConst = _vars.DeclareConst("SystemInt32", "0");
-        var oneConst = _vars.DeclareConst("SystemInt32", "1");
+        var zeroConst = _ctx.Vars.DeclareConst("SystemInt32", "0");
+        var oneConst = _ctx.Vars.DeclareConst("SystemInt32", "1");
 
         // === Pass 1: Count matches ===
-        var countId = _vars.DeclareTemp("SystemInt32");
-        _module.AddCopy(zeroConst, countId);
-        var idx1Id = _vars.DeclareTemp("SystemInt32");
-        _module.AddCopy(zeroConst, idx1Id);
+        var countId = _ctx.Vars.DeclareTemp("SystemInt32");
+        _ctx.Module.AddCopy(zeroConst, countId);
+        var idx1Id = _ctx.Vars.DeclareTemp("SystemInt32");
+        _ctx.Module.AddCopy(zeroConst, idx1Id);
 
-        var count_loop = _module.DefineLabel("__gc_count_loop");
-        var count_next = _module.DefineLabel("__gc_count_next");
-        var count_end = _module.DefineLabel("__gc_count_end");
-        _module.MarkLabel(count_loop);
+        var count_loop = _ctx.Module.DefineLabel("__gc_count_loop");
+        var count_next = _ctx.Module.DefineLabel("__gc_count_next");
+        var count_end = _ctx.Module.DefineLabel("__gc_count_end");
+        _ctx.Module.MarkLabel(count_loop);
 
         // if (idx >= len) → count_end
-        var cond1 = _vars.DeclareTemp("SystemBoolean");
-        _module.AddPush(idx1Id);
-        _module.AddPush(lenId);
-        _module.AddPush(cond1);
+        var cond1 = _ctx.Vars.DeclareTemp("SystemBoolean");
+        _ctx.Module.AddPush(idx1Id);
+        _ctx.Module.AddPush(lenId);
+        _ctx.Module.AddPush(cond1);
         AddExternChecked("SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean");
-        _module.AddPush(cond1);
-        _module.AddJumpIfFalse(count_end);
+        _ctx.Module.AddPush(cond1);
+        _ctx.Module.AddJumpIfFalse(count_end);
 
         EmitShimTypeCheck(allComponents, idx1Id, reflKeyConst, targetIdConst, count_next, useTypeIds);
 
         // countId++
-        var newCount = _vars.DeclareTemp("SystemInt32");
-        _module.AddPush(countId);
-        _module.AddPush(oneConst);
-        _module.AddPush(newCount);
+        var newCount = _ctx.Vars.DeclareTemp("SystemInt32");
+        _ctx.Module.AddPush(countId);
+        _ctx.Module.AddPush(oneConst);
+        _ctx.Module.AddPush(newCount);
         AddExternChecked("SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32");
-        _module.AddCopy(newCount, countId);
+        _ctx.Module.AddCopy(newCount, countId);
 
         // count_next: idx1++
-        _module.MarkLabel(count_next);
-        var nextIdx1 = _vars.DeclareTemp("SystemInt32");
-        _module.AddPush(idx1Id);
-        _module.AddPush(oneConst);
-        _module.AddPush(nextIdx1);
+        _ctx.Module.MarkLabel(count_next);
+        var nextIdx1 = _ctx.Vars.DeclareTemp("SystemInt32");
+        _ctx.Module.AddPush(idx1Id);
+        _ctx.Module.AddPush(oneConst);
+        _ctx.Module.AddPush(nextIdx1);
         AddExternChecked("SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32");
-        _module.AddCopy(nextIdx1, idx1Id);
-        _module.AddJump(count_loop);
-        _module.MarkLabel(count_end);
+        _ctx.Module.AddCopy(nextIdx1, idx1Id);
+        _ctx.Module.AddJump(count_loop);
+        _ctx.Module.MarkLabel(count_end);
 
         // === Allocate result array ===
-        var resultId = _vars.DeclareTemp("UnityEngineComponentArray");
-        _module.AddPush(countId);
-        _module.AddPush(resultId);
+        var resultId = _ctx.Vars.DeclareTemp("UnityEngineComponentArray");
+        _ctx.Module.AddPush(countId);
+        _ctx.Module.AddPush(resultId);
         AddExternChecked("UnityEngineComponentArray.__ctor__SystemInt32__UnityEngineComponentArray");
 
         // === Pass 2: Fill result array ===
-        var idx2Id = _vars.DeclareTemp("SystemInt32");
-        _module.AddCopy(zeroConst, idx2Id);
-        var writeIdx = _vars.DeclareTemp("SystemInt32");
-        _module.AddCopy(zeroConst, writeIdx);
+        var idx2Id = _ctx.Vars.DeclareTemp("SystemInt32");
+        _ctx.Module.AddCopy(zeroConst, idx2Id);
+        var writeIdx = _ctx.Vars.DeclareTemp("SystemInt32");
+        _ctx.Module.AddCopy(zeroConst, writeIdx);
 
-        var fill_loop = _module.DefineLabel("__gc_fill_loop");
-        var fill_next = _module.DefineLabel("__gc_fill_next");
-        var fill_end = _module.DefineLabel("__gc_fill_end");
-        _module.MarkLabel(fill_loop);
+        var fill_loop = _ctx.Module.DefineLabel("__gc_fill_loop");
+        var fill_next = _ctx.Module.DefineLabel("__gc_fill_next");
+        var fill_end = _ctx.Module.DefineLabel("__gc_fill_end");
+        _ctx.Module.MarkLabel(fill_loop);
 
         // if (idx >= len) → fill_end
-        var cond2 = _vars.DeclareTemp("SystemBoolean");
-        _module.AddPush(idx2Id);
-        _module.AddPush(lenId);
-        _module.AddPush(cond2);
+        var cond2 = _ctx.Vars.DeclareTemp("SystemBoolean");
+        _ctx.Module.AddPush(idx2Id);
+        _ctx.Module.AddPush(lenId);
+        _ctx.Module.AddPush(cond2);
         AddExternChecked("SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean");
-        _module.AddPush(cond2);
-        _module.AddJumpIfFalse(fill_end);
+        _ctx.Module.AddPush(cond2);
+        _ctx.Module.AddJumpIfFalse(fill_end);
 
         var matchBeh = EmitShimTypeCheck(allComponents, idx2Id, reflKeyConst, targetIdConst, fill_next, useTypeIds);
 
         // result[writeIdx] = element
-        _module.AddPush(resultId);
-        _module.AddPush(writeIdx);
-        _module.AddPush(matchBeh);
+        _ctx.Module.AddPush(resultId);
+        _ctx.Module.AddPush(writeIdx);
+        _ctx.Module.AddPush(matchBeh);
         AddExternChecked("UnityEngineComponentArray.__Set__SystemInt32_UnityEngineComponent__SystemVoid");
 
         // writeIdx++
-        var newWrite = _vars.DeclareTemp("SystemInt32");
-        _module.AddPush(writeIdx);
-        _module.AddPush(oneConst);
-        _module.AddPush(newWrite);
+        var newWrite = _ctx.Vars.DeclareTemp("SystemInt32");
+        _ctx.Module.AddPush(writeIdx);
+        _ctx.Module.AddPush(oneConst);
+        _ctx.Module.AddPush(newWrite);
         AddExternChecked("SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32");
-        _module.AddCopy(newWrite, writeIdx);
+        _ctx.Module.AddCopy(newWrite, writeIdx);
 
         // fill_next: idx2++
-        _module.MarkLabel(fill_next);
-        var nextIdx2 = _vars.DeclareTemp("SystemInt32");
-        _module.AddPush(idx2Id);
-        _module.AddPush(oneConst);
-        _module.AddPush(nextIdx2);
+        _ctx.Module.MarkLabel(fill_next);
+        var nextIdx2 = _ctx.Vars.DeclareTemp("SystemInt32");
+        _ctx.Module.AddPush(idx2Id);
+        _ctx.Module.AddPush(oneConst);
+        _ctx.Module.AddPush(nextIdx2);
         AddExternChecked("SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32");
-        _module.AddCopy(nextIdx2, idx2Id);
-        _module.AddJump(fill_loop);
-        _module.MarkLabel(fill_end);
+        _ctx.Module.AddCopy(nextIdx2, idx2Id);
+        _ctx.Module.AddJump(fill_loop);
+        _ctx.Module.MarkLabel(fill_end);
 
         return resultId;
     }
@@ -455,32 +455,32 @@ public partial class InvocationHandler
     string EmitShimTypeCheck(string allComponents, string idxId, string reflKeyConst, string targetIdConst, int nextLabel, bool useTypeIds)
     {
         // element = allComponents[idx]
-        var elementId = _vars.DeclareTemp("UnityEngineComponent");
-        _module.AddPush(allComponents);
-        _module.AddPush(idxId);
-        _module.AddPush(elementId);
+        var elementId = _ctx.Vars.DeclareTemp("UnityEngineComponent");
+        _ctx.Module.AddPush(allComponents);
+        _ctx.Module.AddPush(idxId);
+        _ctx.Module.AddPush(elementId);
         AddExternChecked("UnityEngineComponentArray.__Get__SystemInt32__UnityEngineComponent");
 
         // Cast Component → IUdonEventReceiver
-        var behaviourId = _vars.DeclareTemp("VRCUdonCommonInterfacesIUdonEventReceiver");
-        _module.AddCopy(elementId, behaviourId);
+        var behaviourId = _ctx.Vars.DeclareTemp("VRCUdonCommonInterfacesIUdonEventReceiver");
+        _ctx.Module.AddCopy(elementId, behaviourId);
 
         // idValue = behaviour.GetProgramVariable("__refl_typeid" or "__refl_typeids")
-        var idValueId = _vars.DeclareTemp("SystemObject");
-        _module.AddPush(behaviourId);
-        _module.AddPush(reflKeyConst);
-        _module.AddPush(idValueId);
+        var idValueId = _ctx.Vars.DeclareTemp("SystemObject");
+        _ctx.Module.AddPush(behaviourId);
+        _ctx.Module.AddPush(reflKeyConst);
+        _ctx.Module.AddPush(idValueId);
         AddExternChecked("VRCUdonCommonInterfacesIUdonEventReceiver.__GetProgramVariable__SystemString__SystemObject");
 
         // Null check
-        var nullConst = _vars.DeclareTemp("SystemObject");
-        var notNullId = _vars.DeclareTemp("SystemBoolean");
-        _module.AddPush(idValueId);
-        _module.AddPush(nullConst);
-        _module.AddPush(notNullId);
+        var nullConst = _ctx.Vars.DeclareTemp("SystemObject");
+        var notNullId = _ctx.Vars.DeclareTemp("SystemBoolean");
+        _ctx.Module.AddPush(idValueId);
+        _ctx.Module.AddPush(nullConst);
+        _ctx.Module.AddPush(notNullId);
         AddExternChecked("SystemObject.__op_Inequality__SystemObject_SystemObject__SystemBoolean");
-        _module.AddPush(notNullId);
-        _module.AddJumpIfFalse(nextLabel);
+        _ctx.Module.AddPush(notNullId);
+        _ctx.Module.AddJumpIfFalse(nextLabel);
 
         if (useTypeIds)
         {
@@ -489,19 +489,19 @@ public partial class InvocationHandler
         else
         {
             // typeId = Convert.ToInt64(idValue)
-            var typeIdId = _vars.DeclareTemp("SystemInt64");
-            _module.AddPush(idValueId);
-            _module.AddPush(typeIdId);
+            var typeIdId = _ctx.Vars.DeclareTemp("SystemInt64");
+            _ctx.Module.AddPush(idValueId);
+            _ctx.Module.AddPush(typeIdId);
             AddExternChecked("SystemConvert.__ToInt64__SystemObject__SystemInt64");
 
             // if (typeId != targetId) → next
-            var matchId = _vars.DeclareTemp("SystemBoolean");
-            _module.AddPush(typeIdId);
-            _module.AddPush(targetIdConst);
-            _module.AddPush(matchId);
+            var matchId = _ctx.Vars.DeclareTemp("SystemBoolean");
+            _ctx.Module.AddPush(typeIdId);
+            _ctx.Module.AddPush(targetIdConst);
+            _ctx.Module.AddPush(matchId);
             AddExternChecked("SystemInt64.__op_Equality__SystemInt64_SystemInt64__SystemBoolean");
-            _module.AddPush(matchId);
-            _module.AddJumpIfFalse(nextLabel);
+            _ctx.Module.AddPush(matchId);
+            _ctx.Module.AddJumpIfFalse(nextLabel);
         }
 
         return behaviourId;
@@ -511,23 +511,23 @@ public partial class InvocationHandler
     void EmitTypeIdsArrayCheck(string idValueId, string targetIdConst, int nextLabel)
     {
         // Box Int64 → Object for Array.IndexOf(Array, Object)
-        var targetIdObj = _vars.DeclareTemp("SystemObject");
-        _module.AddCopy(targetIdConst, targetIdObj);
+        var targetIdObj = _ctx.Vars.DeclareTemp("SystemObject");
+        _ctx.Module.AddCopy(targetIdConst, targetIdObj);
 
-        var indexResult = _vars.DeclareTemp("SystemInt32");
-        _module.AddPush(idValueId);    // __refl_typeids as Object (actually Int64[])
-        _module.AddPush(targetIdObj);
-        _module.AddPush(indexResult);
+        var indexResult = _ctx.Vars.DeclareTemp("SystemInt32");
+        _ctx.Module.AddPush(idValueId);    // __refl_typeids as Object (actually Int64[])
+        _ctx.Module.AddPush(targetIdObj);
+        _ctx.Module.AddPush(indexResult);
         AddExternChecked("SystemArray.__IndexOf__SystemArray_SystemObject__SystemInt32");
 
-        var negOneConst = _vars.DeclareConst("SystemInt32", "-1");
-        var foundId = _vars.DeclareTemp("SystemBoolean");
-        _module.AddPush(indexResult);
-        _module.AddPush(negOneConst);
-        _module.AddPush(foundId);
+        var negOneConst = _ctx.Vars.DeclareConst("SystemInt32", "-1");
+        var foundId = _ctx.Vars.DeclareTemp("SystemBoolean");
+        _ctx.Module.AddPush(indexResult);
+        _ctx.Module.AddPush(negOneConst);
+        _ctx.Module.AddPush(foundId);
         AddExternChecked("SystemInt32.__op_Inequality__SystemInt32_SystemInt32__SystemBoolean");
-        _module.AddPush(foundId);
-        _module.AddJumpIfFalse(nextLabel);
+        _ctx.Module.AddPush(foundId);
+        _ctx.Module.AddJumpIfFalse(nextLabel);
     }
 
     // ── Interface Call ──
@@ -539,7 +539,7 @@ public partial class InvocationHandler
         MethodLayout ifaceMl = null;
         if (ifaceType != null)
         {
-            var ifaceLayout = _planner.GetLayout(ifaceType);
+            var ifaceLayout = _ctx.Planner.GetLayout(ifaceType);
             ifaceLayout.Methods.TryGetValue(target, out ifaceMl);
         }
         if (ifaceMl == null)
@@ -553,30 +553,30 @@ public partial class InvocationHandler
         {
             var argId = VisitExpression(op.Arguments[i].Value);
             var paramName = ifaceMl.ParamIds[i];
-            var paramNameConst = _vars.DeclareConst("SystemString", paramName);
-            _module.AddPush(instanceId);
-            _module.AddPush(paramNameConst);
-            _module.AddPush(argId);
+            var paramNameConst = _ctx.Vars.DeclareConst("SystemString", paramName);
+            _ctx.Module.AddPush(instanceId);
+            _ctx.Module.AddPush(paramNameConst);
+            _ctx.Module.AddPush(argId);
             AddExternChecked("VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid");
         }
 
         // SendCustomEvent with interface export name
         var exportName = ifaceMl.ExportName;
-        var eventNameConst = _vars.DeclareConst("SystemString", exportName);
-        _module.AddPush(instanceId);
-        _module.AddPush(eventNameConst);
+        var eventNameConst = _ctx.Vars.DeclareConst("SystemString", exportName);
+        _ctx.Module.AddPush(instanceId);
+        _ctx.Module.AddPush(eventNameConst);
         AddExternChecked("VRCUdonCommonInterfacesIUdonEventReceiver.__SendCustomEvent__SystemString__SystemVoid");
 
         // GetProgramVariable for return value
         if (!target.ReturnsVoid)
         {
             var retName = ifaceMl.ReturnId;
-            var retNameConst = _vars.DeclareConst("SystemString", retName);
+            var retNameConst = _ctx.Vars.DeclareConst("SystemString", retName);
             var returnType = GetUdonType(target.ReturnType);
-            var resultId = _vars.DeclareTemp(returnType);
-            _module.AddPush(instanceId);
-            _module.AddPush(retNameConst);
-            _module.AddPush(resultId);
+            var resultId = _ctx.Vars.DeclareTemp(returnType);
+            _ctx.Module.AddPush(instanceId);
+            _ctx.Module.AddPush(retNameConst);
+            _ctx.Module.AddPush(resultId);
             AddExternChecked("VRCUdonCommonInterfacesIUdonEventReceiver.__GetProgramVariable__SystemString__SystemObject");
             return resultId;
         }
@@ -595,30 +595,30 @@ public partial class InvocationHandler
         for (int i = 0; i < op.Arguments.Length; i++)
         {
             var argId = VisitExpression(op.Arguments[i].Value);
-            var paramNameConst = _vars.DeclareConst("SystemString", paramIds[i]);
+            var paramNameConst = _ctx.Vars.DeclareConst("SystemString", paramIds[i]);
 
-            _module.AddPush(instanceId);
-            _module.AddPush(paramNameConst);
-            _module.AddPush(argId);
+            _ctx.Module.AddPush(instanceId);
+            _ctx.Module.AddPush(paramNameConst);
+            _ctx.Module.AddPush(argId);
             AddExternChecked("VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid");
         }
 
         // SendCustomEvent
-        var eventNameConst = _vars.DeclareConst("SystemString", exportName);
-        _module.AddPush(instanceId);
-        _module.AddPush(eventNameConst);
+        var eventNameConst = _ctx.Vars.DeclareConst("SystemString", exportName);
+        _ctx.Module.AddPush(instanceId);
+        _ctx.Module.AddPush(eventNameConst);
         AddExternChecked("VRCUdonCommonInterfacesIUdonEventReceiver.__SendCustomEvent__SystemString__SystemVoid");
 
         // GetProgramVariable for return value
         if (!target.ReturnsVoid && retId != null)
         {
-            var retNameConst = _vars.DeclareConst("SystemString", retId);
+            var retNameConst = _ctx.Vars.DeclareConst("SystemString", retId);
             var returnType = GetUdonType(target.ReturnType);
-            var resultId = _vars.DeclareTemp(returnType);
+            var resultId = _ctx.Vars.DeclareTemp(returnType);
 
-            _module.AddPush(instanceId);
-            _module.AddPush(retNameConst);
-            _module.AddPush(resultId);
+            _ctx.Module.AddPush(instanceId);
+            _ctx.Module.AddPush(retNameConst);
+            _ctx.Module.AddPush(resultId);
             AddExternChecked("VRCUdonCommonInterfacesIUdonEventReceiver.__GetProgramVariable__SystemString__SystemObject");
 
             return resultId;
@@ -635,24 +635,24 @@ public partial class InvocationHandler
         var savedHint = _ctx.TargetHint;
         _ctx.TargetHint = null;
 
-        var idx = _methodIndices[target];
-        var paramIds = _methodParamVarIds[target];
+        var idx = _ctx.MethodIndices[target];
+        var paramIds = _ctx.MethodParamVarIds[target];
 
         // Save current method's parameter values before any user method call.
         // This protects against mutual recursion (A→B→A) corrupting A's params,
         // not just self-recursion. Overhead is 2N COPY per call (N = param count).
         string[] savedCurrentParams = null;
         string[] currentParamIds = null;
-        if (_currentMethod != null
-            && _methodParamVarIds.TryGetValue(_currentMethod, out currentParamIds)
+        if (_ctx.CurrentMethod != null
+            && _ctx.MethodParamVarIds.TryGetValue(_ctx.CurrentMethod, out currentParamIds)
             && currentParamIds.Length > 0)
         {
             savedCurrentParams = new string[currentParamIds.Length];
             for (int i = 0; i < currentParamIds.Length; i++)
             {
-                var paramType = _vars.GetDeclaredType(currentParamIds[i]);
-                savedCurrentParams[i] = _vars.DeclareTemp(paramType);
-                _module.AddCopy(currentParamIds[i], savedCurrentParams[i]);
+                var paramType = _ctx.Vars.GetDeclaredType(currentParamIds[i]);
+                savedCurrentParams[i] = _ctx.Vars.DeclareTemp(paramType);
+                _ctx.Module.AddCopy(currentParamIds[i], savedCurrentParams[i]);
             }
         }
 
@@ -663,18 +663,18 @@ public partial class InvocationHandler
             var argOp = op.Arguments[i].Value;
 
             // Delegate parameter with lambda arg: hoist with convention vars
-            if (_delegateParamConventions.TryGetValue((idx, param.Ordinal), out var convention)
+            if (_ctx.DelegateParamConventions.TryGetValue((idx, param.Ordinal), out var convention)
                 && UnwrapLambdaFromArg(argOp, out var lambda))
             {
                 HoistLambdaForDelegateParam(lambda, convention);
-                var labelConst = _vars.DeclareConst("SystemUInt32",
-                    _methodLabels[lambda.Symbol].ToString());
-                _module.AddCopy(labelConst, paramIds[i]);
+                var labelConst = _ctx.Vars.DeclareConst("SystemUInt32",
+                    _ctx.MethodLabels[lambda.Symbol].ToString());
+                _ctx.Module.AddCopy(labelConst, paramIds[i]);
             }
             else
             {
                 var argId = VisitExpression(argOp);
-                _module.AddCopy(argId, paramIds[i]);
+                _ctx.Module.AddCopy(argId, paramIds[i]);
             }
         }
 
@@ -686,7 +686,7 @@ public partial class InvocationHandler
         if (savedCurrentParams != null)
         {
             for (int i = 0; i < currentParamIds.Length; i++)
-                _module.AddCopy(savedCurrentParams[i], currentParamIds[i]);
+                _ctx.Module.AddCopy(savedCurrentParams[i], currentParamIds[i]);
         }
 
         // Copy-out for ref/out params
@@ -703,73 +703,6 @@ public partial class InvocationHandler
         return result;
     }
 
-    // ── Ref/Out copy-back helper ──
-
-    void AssignToTarget(IOperation target, string valueId)
-    {
-        switch (target)
-        {
-            case IDeclarationExpressionOperation declExpr:
-                // var x in deconstruction — declares a new local
-                if (declExpr.Expression is ILocalReferenceOperation localRef)
-                {
-                    var udonType = GetUdonType(localRef.Type);
-                    var localId = _vars.DeclareLocal(localRef.Local.Name, udonType);
-                    _localVarIds[localRef.Local] = localId;
-                    _module.AddCopy(valueId, localId);
-                }
-                break;
-
-            case ILocalReferenceOperation existingLocal:
-                var existingId = _vars.Lookup(existingLocal.Local.Name)
-                    ?? (_localVarIds.TryGetValue(existingLocal.Local, out var cap) ? cap : null);
-                if (existingId == null)
-                {
-                    // New local from tuple deconstruction (var (a, b) pattern)
-                    var udonType = GetUdonType(existingLocal.Type);
-                    existingId = _vars.DeclareLocal(existingLocal.Local.Name, udonType);
-                    _localVarIds[existingLocal.Local] = existingId;
-                }
-                _module.AddCopy(valueId, existingId);
-                break;
-
-            case IFieldReferenceOperation fieldRef when fieldRef.Instance is IInstanceReferenceOperation:
-                _module.AddCopy(valueId, fieldRef.Field.Name);
-                break;
-
-            case IArrayElementReferenceOperation arrayElem:
-                var arrayId = VisitExpression(arrayElem.ArrayReference);
-                var indexId = VisitExpression(arrayElem.Indices[0]);
-                var arrSymbol = arrayElem.ArrayReference.Type as IArrayTypeSymbol;
-                var arrayType = GetArrayType(arrSymbol);
-                var elementType = GetArrayElemType(arrSymbol);
-                _module.AddPush(arrayId);
-                _module.AddPush(indexId);
-                _module.AddPush(valueId);
-                AddExternChecked($"{arrayType}.__Set__SystemInt32_{elementType}__SystemVoid");
-                break;
-
-            case IFieldReferenceOperation fieldRef
-                when fieldRef.Instance != null
-                && !(fieldRef.Instance is IInstanceReferenceOperation)
-                && ExternResolver.IsUdonSharpBehaviour(fieldRef.Field.ContainingType):
-                var instanceId = VisitExpression(fieldRef.Instance);
-                var nameConst = _vars.DeclareConst("SystemString", fieldRef.Field.Name);
-                _module.AddPush(instanceId);
-                _module.AddPush(nameConst);
-                _module.AddPush(valueId);
-                AddExternChecked("VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid");
-                break;
-
-            case IDiscardOperation:
-                break; // _ = expr → discard
-
-            default:
-                throw new System.NotSupportedException(
-                    $"Unsupported deconstruction target element: {target.GetType().Name}");
-        }
-    }
-
     // ── Extern Signature Helpers ──
 
     string BuildExternCallSignature(IMethodSymbol method, ITypeSymbol instanceType = null)
@@ -779,9 +712,9 @@ public partial class InvocationHandler
         // Interface method on a type parameter: use the concrete type as containing type
         // e.g., IComparable<T>.CompareTo(T) with T=int → SystemInt32.__CompareTo__SystemInt32__SystemInt32
         if (containingTypeSym.TypeKind == TypeKind.Interface && instanceType != null
-            && _typeParamMap != null
+            && _ctx.TypeParamMap != null
             && instanceType is ITypeParameterSymbol tp
-            && _typeParamMap.TryGetValue(tp, out var concreteType))
+            && _ctx.TypeParamMap.TryGetValue(tp, out var concreteType))
             containingTypeSym = concreteType;
 
         var containingType = GetUdonType(containingTypeSym);

@@ -81,7 +81,16 @@ public class UasmModule
         // Populate const cache so CreateConstVariable can find existing constants
         // from VariableTable, preventing duplicate variables for the same value.
         if (constValue != null && id.StartsWith("__const_"))
+        {
             _constCache.TryAdd((udonType, constValue), id);
+            // Keep _constCounters in sync so CreateConstVariable won't generate conflicting IDs
+            var prefix = $"__const_{udonType}_";
+            if (id.StartsWith(prefix) && int.TryParse(id.Substring(prefix.Length), out var parsedIdx))
+            {
+                _constCounters.TryGetValue(udonType, out var cur);
+                if (parsedIdx >= cur) _constCounters[udonType] = parsedIdx + 1;
+            }
+        }
     }
 
     public int DefineLabel(string name)
@@ -321,6 +330,7 @@ public class UasmModule
     }
 
     readonly Dictionary<(string type, object val), string> _constCache = new();
+    readonly Dictionary<string, int> _constCounters = new();
 
     public string CreateConstVariable(string udonType, object value)
     {
@@ -328,10 +338,8 @@ public class UasmModule
         if (_constCache.TryGetValue(key, out var existing))
             return existing;
 
-        // Count existing consts of this type to generate unique index
-        int idx = 0;
-        foreach (var v in _vars)
-            if (v.Id.StartsWith($"__const_{udonType}_")) idx++;
+        _constCounters.TryGetValue(udonType, out var idx);
+        _constCounters[udonType] = idx + 1;
 
         var id = $"__const_{udonType}_{idx}";
         _vars.Add(new VarEntry { Id = id, UdonType = udonType, ConstValue = value });
