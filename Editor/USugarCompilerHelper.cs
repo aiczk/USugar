@@ -19,6 +19,19 @@ public static class USugarCompilerHelper
         return root.Name is "UnityEngine" or "VRC" or "TMPro" or "System" or "UdonSharp";
     }
 
+    /// <summary>
+    /// Like IsFrameworkNamespace but excludes UdonSharp — types in UdonSharp.* that are not
+    /// UdonSharpBehaviour may be user-defined helper classes with generic methods to inline.
+    /// </summary>
+    public static bool IsExternNamespace(INamespaceSymbol ns)
+    {
+        if (ns == null || ns.IsGlobalNamespace) return false;
+        var root = ns;
+        while (root.ContainingNamespace is { IsGlobalNamespace: false })
+            root = root.ContainingNamespace;
+        return root.Name is "UnityEngine" or "VRC" or "TMPro" or "System";
+    }
+
     public static int GetBehaviourSyncMode(INamedTypeSymbol type)
     {
         var current = type;

@@ -275,8 +275,11 @@ static class USugarCompilationOrchestrator
             }
 
             sw.Stop();
-            SessionState.SetString(FingerprintKey, fingerprint);
-            SessionState.SetBool(AppliedKey, applyToAssets || lastApplied);
+            if (failures == 0)
+            {
+                SessionState.SetString(FingerprintKey, fingerprint);
+                SessionState.SetBool(AppliedKey, applyToAssets || lastApplied);
+            }
             LastCompileHadErrors = failures > 0;
             var msg = failures > 0
                 ? $"Compile of {count} script{(count != 1 ? "s" : "")} finished in {sw.Elapsed:mm\\:ss\\.fff} ({failures} failed)"

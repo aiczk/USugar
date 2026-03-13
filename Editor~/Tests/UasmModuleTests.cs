@@ -718,4 +718,57 @@ public class ConstPoolTests
         var id = mod.CreateConstVariable("SystemInt32", 42);
         Assert.Equal("__const_SystemInt32_0", id);
     }
+
+    [Fact]
+    public void DeclareVariable_SyncsConstCounter_NoIdCollision()
+    {
+        // After DeclareVariable with __const_ prefix, CreateConstVariable must not
+        // generate a conflicting ID (regression test for O(1) counter change)
+        var mod = new UasmModule();
+        mod.DeclareVariable("__const_SystemInt32_0", "SystemInt32", null, VarFlags.None, constValue: 0);
+        mod.DeclareVariable("__const_SystemInt32_1", "SystemInt32", null, VarFlags.None, constValue: 1);
+        var id = mod.CreateConstVariable("SystemInt32", 99);
+        Assert.Equal("__const_SystemInt32_2", id);
+    }
+
+    [Fact]
+    public void CreateConstVariable_CounterIsOOneNotLinearScan()
+    {
+        // Verify sequential IDs are generated correctly without linear scan
+        var mod = new UasmModule();
+        var id0 = mod.CreateConstVariable("SystemSingle", 0.0f);
+        var id1 = mod.CreateConstVariable("SystemSingle", 1.0f);
+        var id2 = mod.CreateConstVariable("SystemSingle", 2.0f);
+        Assert.Equal("__const_SystemSingle_0", id0);
+        Assert.Equal("__const_SystemSingle_1", id1);
+        Assert.Equal("__const_SystemSingle_2", id2);
+    }
+
+    [Fact]
+    public void DeclareVariable_NonSequentialIndex_CounterSyncsToMax()
+    {
+        // If external declarations skip indices (e.g., 0, 5), counter must advance past max
+        var mod = new UasmModule();
+        mod.DeclareVariable("__const_SystemInt32_0", "SystemInt32", null, VarFlags.None, constValue: 10);
+        mod.DeclareVariable("__const_SystemInt32_5", "SystemInt32", null, VarFlags.None, constValue: 50);
+        var id = mod.CreateConstVariable("SystemInt32", 99);
+        Assert.Equal("__const_SystemInt32_6", id);
+    }
+
+    [Fact]
+    public void MixedDeclareAndCreate_NoDuplicates()
+    {
+        // Simulate VariableTable → DeclareVariable → CreateConstVariable flow
+        var mod = new UasmModule();
+        // VariableTable declares consts first (via FlushVariablesToModule)
+        mod.DeclareVariable("__const_SystemBoolean_0", "SystemBoolean", null, VarFlags.None, constValue: true);
+        mod.DeclareVariable("__const_SystemBoolean_1", "SystemBoolean", null, VarFlags.None, constValue: false);
+        // Optimizer creates new consts via CreateConstVariable
+        var id = mod.CreateConstVariable("SystemBoolean", true);
+        // Should return cached value from DeclareVariable, not create new
+        Assert.Equal("__const_SystemBoolean_0", id);
+        // New value should get next index
+        var id2 = mod.CreateConstVariable("SystemBoolean", (object)42);
+        Assert.Equal("__const_SystemBoolean_2", id2);
+    }
 }

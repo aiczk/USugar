@@ -205,4 +205,33 @@ public class EmitContext
     {
         Module.AddExtern(ResolveExtern(externSig));
     }
+
+    // ── Classification helpers (shared between UasmEmitter and handlers) ──
+
+    public bool IsForeignStatic(IMethodSymbol method)
+    {
+        var resolved = method.ReducedFrom ?? method;
+        if (!resolved.IsStatic) return false;
+        if (resolved.ContainingType.DeclaringSyntaxReferences.Length == 0) return false;
+        if (ExternResolver.IsUdonSharpBehaviour(resolved.ContainingType)) return false;
+        if (SymbolEqualityComparer.Default.Equals(resolved.ContainingType, ClassSymbol)) return false;
+        if (USugarCompilerHelper.IsExternNamespace(resolved.ContainingType.ContainingNamespace)) return false;
+        return true;
+    }
+
+    public bool IsBaseInstanceMethod(IMethodSymbol method)
+    {
+        if (method.IsStatic) return false;
+        if (method.ContainingType.DeclaringSyntaxReferences.Length == 0) return false;
+        if (SymbolEqualityComparer.Default.Equals(method.ContainingType, ClassSymbol)) return false;
+        if (USugarCompilerHelper.IsFrameworkNamespace(method.ContainingType.ContainingNamespace)) return false;
+        if (method.ContainingType.Name == "UdonSharpBehaviour") return false;
+        var bt = ClassSymbol.BaseType;
+        while (bt != null)
+        {
+            if (SymbolEqualityComparer.Default.Equals(bt, method.ContainingType)) return true;
+            bt = bt.BaseType;
+        }
+        return false;
+    }
 }

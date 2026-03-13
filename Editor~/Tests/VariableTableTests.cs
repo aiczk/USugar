@@ -247,4 +247,57 @@ public class VariableTableTests
         var id2 = vt.DeclareStructConst("UnityEngineVector3", (4.0f, 5.0f, 6.0f));
         Assert.NotEqual(id1, id2);
     }
+
+    // ── ParseConstValue coverage (via DeclareConst) ──
+
+    [Theory]
+    [InlineData("SystemUInt32", "0xFF", (uint)0xFF)]
+    [InlineData("SystemUInt32", "42", (uint)42)]
+    [InlineData("SystemInt64", "9999999999", 9999999999L)]
+    [InlineData("SystemDouble", "2.718", 2.718)]
+    [InlineData("SystemByte", "255", (byte)255)]
+    [InlineData("SystemChar", "A", 'A')]
+    [InlineData("SystemSByte", "-1", (sbyte)-1)]
+    [InlineData("SystemInt16", "-32000", (short)-32000)]
+    [InlineData("SystemUInt16", "65000", (ushort)65000)]
+    [InlineData("SystemUInt64", "18446744073709551615", ulong.MaxValue)]
+    public void DeclareConst_ParsesVariousTypes(string udonType, string value, object expected)
+    {
+        var vt = new VariableTable();
+        vt.DeclareConst(udonType, value);
+        var consts = vt.GetConstEntries();
+        Assert.Single(consts);
+        Assert.Equal(expected, consts[0].ConstValue);
+    }
+
+    [Fact]
+    public void DeclareConst_SystemType_StoresStringValue()
+    {
+        var vt = new VariableTable();
+        vt.DeclareConst("SystemType", "UnityEngineVector3");
+        var consts = vt.GetConstEntries();
+        Assert.Single(consts);
+        Assert.Equal("UnityEngineVector3", consts[0].ConstValue);
+    }
+
+    [Fact]
+    public void DeclareConst_HexInt32()
+    {
+        var vt = new VariableTable();
+        vt.DeclareConst("SystemInt32", "0xFFFFFFFF");
+        var consts = vt.GetConstEntries();
+        Assert.Single(consts);
+        Assert.Equal(-1, consts[0].ConstValue);
+    }
+
+    [Fact]
+    public void DeclareConst_SharedCounter_WithStructConst()
+    {
+        // DeclareConst and DeclareStructConst share the same counter namespace
+        var vt = new VariableTable();
+        var id1 = vt.DeclareConst("SystemInt32", "1");
+        var id2 = vt.DeclareStructConst("SystemInt32", 999);
+        Assert.Equal("__const_SystemInt32_0", id1);
+        Assert.Equal("__const_SystemInt32_1", id2);
+    }
 }

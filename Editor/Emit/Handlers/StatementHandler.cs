@@ -40,10 +40,10 @@ public class StatementHandler : HandlerBase, IOperationHandler
             case IBranchOperation op: VisitBranch(op); break;
             case ILocalFunctionOperation op: RegisterLocalFunction(op.Symbol); break;
             case ILabeledOperation labeled:
-                if (_gotoLabels.TryGetValue(labeled.Label, out var gotoLbl))
+                if (_ctx.GotoLabels.TryGetValue(labeled.Label, out var gotoLbl))
                 {
-                    _module.AddLabel(gotoLbl);
-                    _module.MarkLabel(gotoLbl);
+                    _ctx.Module.AddLabel(gotoLbl);
+                    _ctx.Module.MarkLabel(gotoLbl);
                 }
                 if (labeled.Operation != null)
                     VisitOperation(labeled.Operation);
@@ -55,8 +55,8 @@ public class StatementHandler : HandlerBase, IOperationHandler
                     VisitVariableDeclaration(decl);
                     foreach (var declarator in decl.Declarators)
                     {
-                        var localId = _localVarIds.TryGetValue(declarator.Symbol, out var lid) ? lid : declarator.Symbol.Name;
-                        _usingDisposableStack.Peek().Add((localId, declarator.Symbol.Type));
+                        var localId = _ctx.LocalVarIds.TryGetValue(declarator.Symbol, out var lid) ? lid : declarator.Symbol.Name;
+                        _ctx.UsingDisposableStack.Peek().Add((localId, declarator.Symbol.Type));
                     }
                 }
                 break;
@@ -66,14 +66,14 @@ public class StatementHandler : HandlerBase, IOperationHandler
 
     void HandleBlock(IBlockOperation block)
     {
-        _usingDisposableStack.Push(new List<(string, ITypeSymbol)>());
+        _ctx.UsingDisposableStack.Push(new List<(string, ITypeSymbol)>());
         foreach (var stmt in block.Operations)
             VisitOperation(stmt);
-        var disposables = _usingDisposableStack.Pop();
+        var disposables = _ctx.UsingDisposableStack.Pop();
         for (int i = disposables.Count - 1; i >= 0; i--)
         {
             var (varId, type) = disposables[i];
-            _module.AddPush(varId);
+            _ctx.Module.AddPush(varId);
             AddExternChecked($"{GetUdonType(type)}.__Dispose__SystemVoid");
         }
     }
@@ -84,53 +84,53 @@ public class StatementHandler : HandlerBase, IOperationHandler
         if (op.Condition is IUnaryOperation { OperatorKind: UnaryOperatorKind.Not } unary)
         {
             var condId = VisitExpression(unary.Operand);
-            var endLabel = _module.DefineLabel("__if_end");
-            _module.AddPush(condId);
+            var endLabel = _ctx.Module.DefineLabel("__if_end");
+            _ctx.Module.AddPush(condId);
 
             if (op.WhenFalse != null)
             {
                 // if (!c) A else B → push(c), JumpIfFalse → A branch, fall through → B branch
-                var thenLabel = _module.DefineLabel("__if_neg_then");
-                _module.AddJumpIfFalse(thenLabel);
+                var thenLabel = _ctx.Module.DefineLabel("__if_neg_then");
+                _ctx.Module.AddJumpIfFalse(thenLabel);
                 VisitOperation(op.WhenFalse);
-                _module.AddJump(endLabel);
-                _module.MarkLabel(thenLabel);
+                _ctx.Module.AddJump(endLabel);
+                _ctx.Module.MarkLabel(thenLabel);
                 VisitOperation(op.WhenTrue);
             }
             else
             {
                 // if (!c) A → push(c), JumpIfFalse(body), JUMP(end), body: A
                 // c=true → doesn't jump → JUMP(end) skips body. c=false → jumps to body.
-                var bodyLabel = _module.DefineLabel("__if_neg_body");
-                _module.AddJumpIfFalse(bodyLabel);
-                _module.AddJump(endLabel);
-                _module.MarkLabel(bodyLabel);
+                var bodyLabel = _ctx.Module.DefineLabel("__if_neg_body");
+                _ctx.Module.AddJumpIfFalse(bodyLabel);
+                _ctx.Module.AddJump(endLabel);
+                _ctx.Module.MarkLabel(bodyLabel);
                 VisitOperation(op.WhenTrue);
             }
-            _module.MarkLabel(endLabel);
+            _ctx.Module.MarkLabel(endLabel);
             return;
         }
 
         var condId2 = VisitExpression(op.Condition);
-        var endLabel2 = _module.DefineLabel("__if_end");
+        var endLabel2 = _ctx.Module.DefineLabel("__if_end");
 
-        _module.AddPush(condId2);
+        _ctx.Module.AddPush(condId2);
 
         if (op.WhenFalse != null)
         {
-            var elseLabel = _module.DefineLabel("__if_else");
-            _module.AddJumpIfFalse(elseLabel);
+            var elseLabel = _ctx.Module.DefineLabel("__if_else");
+            _ctx.Module.AddJumpIfFalse(elseLabel);
             VisitOperation(op.WhenTrue);
-            _module.AddJump(endLabel2);
-            _module.MarkLabel(elseLabel);
+            _ctx.Module.AddJump(endLabel2);
+            _ctx.Module.MarkLabel(elseLabel);
             VisitOperation(op.WhenFalse);
-            _module.MarkLabel(endLabel2);
+            _ctx.Module.MarkLabel(endLabel2);
         }
         else
         {
-            _module.AddJumpIfFalse(endLabel2);
+            _ctx.Module.AddJumpIfFalse(endLabel2);
             VisitOperation(op.WhenTrue);
-            _module.MarkLabel(endLabel2);
+            _ctx.Module.MarkLabel(endLabel2);
         }
     }
 
@@ -138,34 +138,34 @@ public class StatementHandler : HandlerBase, IOperationHandler
     {
         // Tail call optimization: return self(args) → overwrite params + JUMP
         if (op.ReturnedValue is IInvocationOperation tailCall
-            && _currentMethod != null
-            && SymbolEqualityComparer.Default.Equals(tailCall.TargetMethod, _currentMethod))
+            && _ctx.CurrentMethod != null
+            && SymbolEqualityComparer.Default.Equals(tailCall.TargetMethod, _ctx.CurrentMethod))
         {
             EmitTailCall(tailCall);
             return;
         }
 
-        if (op.ReturnedValue != null && _currentMethod != null && _methodRetVars.TryGetValue(_currentMethod, out var retVarId))
+        if (op.ReturnedValue != null && _ctx.CurrentMethod != null && _ctx.MethodRetVars.TryGetValue(_ctx.CurrentMethod, out var retVarId))
         {
             _ctx.TargetHint = retVarId;
             var srcId = VisitExpression(op.ReturnedValue);
             _ctx.TargetHint = null;
             if (srcId != retVarId)
-                _module.AddCopy(srcId, retVarId);
+                _ctx.Module.AddCopy(srcId, retVarId);
 
             // VRChat reads OnOwnershipRequest's return value from __returnValue (bool)
-            if (_currentMethod.Name == "OnOwnershipRequest")
+            if (_ctx.CurrentMethod.Name == "OnOwnershipRequest")
             {
-                _vars.TryDeclareVar("__returnValue", "SystemBoolean");
-                _module.AddCopy(retVarId, "__returnValue");
+                _ctx.Vars.TryDeclareVar("__returnValue", "SystemBoolean");
+                _ctx.Module.AddCopy(retVarId, "__returnValue");
             }
         }
-        _module.AddReturn("__intnl_returnJump_SystemUInt32_0");
+        _ctx.Module.AddReturn("__intnl_returnJump_SystemUInt32_0");
     }
 
     void EmitTailCall(IInvocationOperation tailCall)
     {
-        var paramIds = _methodParamVarIds[_currentMethod];
+        var paramIds = _ctx.MethodParamVarIds[_ctx.CurrentMethod];
 
         // Evaluate args into temps first (avoid overwriting params before they're read)
         var argTemps = new string[tailCall.Arguments.Length];
@@ -174,22 +174,22 @@ public class StatementHandler : HandlerBase, IOperationHandler
 
         // Overwrite param vars with new values
         for (int i = 0; i < tailCall.Arguments.Length; i++)
-            _module.AddCopy(argTemps[i], paramIds[i]);
+            _ctx.Module.AddCopy(argTemps[i], paramIds[i]);
 
         // Jump back to method body (skip re-entrance preamble)
-        int jumpTarget = _methodBodyLabels.TryGetValue(_currentMethod, out var bodyLabel)
-            ? bodyLabel : _methodLabels[_currentMethod];
-        _module.AddJump(jumpTarget);
+        int jumpTarget = _ctx.MethodBodyLabels.TryGetValue(_ctx.CurrentMethod, out var bodyLabel)
+            ? bodyLabel : _ctx.MethodLabels[_ctx.CurrentMethod];
+        _ctx.Module.AddJump(jumpTarget);
     }
 
     void VisitBranch(IBranchOperation op)
     {
-        if (op.BranchKind == BranchKind.Break && _breakLabels.Count > 0)
-            _module.AddJump(_breakLabels.Peek());
-        else if (op.BranchKind == BranchKind.Continue && _continueLabels.Count > 0)
-            _module.AddJump(_continueLabels.Peek());
-        else if (op.BranchKind == BranchKind.GoTo && _gotoLabels.TryGetValue(op.Target, out var targetLbl))
-            _module.AddJump(targetLbl);
+        if (op.BranchKind == BranchKind.Break && _ctx.BreakLabels.Count > 0)
+            _ctx.Module.AddJump(_ctx.BreakLabels.Peek());
+        else if (op.BranchKind == BranchKind.Continue && _ctx.ContinueLabels.Count > 0)
+            _ctx.Module.AddJump(_ctx.ContinueLabels.Peek());
+        else if (op.BranchKind == BranchKind.GoTo && _ctx.GotoLabels.TryGetValue(op.Target, out var targetLbl))
+            _ctx.Module.AddJump(targetLbl);
         else
             throw new System.InvalidOperationException(
                 $"Unresolved branch: {op.BranchKind}"
@@ -202,8 +202,8 @@ public class StatementHandler : HandlerBase, IOperationHandler
         if (op == null) return;
         if (op is ILabeledOperation labeled)
         {
-            var label = _module.DefineLabel($"__goto_{labeled.Label.Name}");
-            _gotoLabels[labeled.Label] = label;
+            var label = _ctx.Module.DefineLabel($"__goto_{labeled.Label.Name}");
+            _ctx.GotoLabels[labeled.Label] = label;
         }
         foreach (var child in op.Children)
             PreScanGotoLabels(child);
@@ -220,7 +220,7 @@ public class StatementHandler : HandlerBase, IOperationHandler
                 VisitVariableDeclaration(decl);
                 foreach (var declarator in decl.Declarators)
                 {
-                    var localId = _localVarIds.TryGetValue(declarator.Symbol, out var id) ? id : declarator.Symbol.Name;
+                    var localId = _ctx.LocalVarIds.TryGetValue(declarator.Symbol, out var id) ? id : declarator.Symbol.Name;
                     disposableVars.Add((localId, declarator.Symbol.Type));
                 }
             }
@@ -239,7 +239,7 @@ public class StatementHandler : HandlerBase, IOperationHandler
         {
             var (varId, type) = disposableVars[i];
             var udonType = GetUdonType(type);
-            _module.AddPush(varId);
+            _ctx.Module.AddPush(varId);
             AddExternChecked($"{udonType}.__Dispose__SystemVoid");
         }
     }
@@ -253,8 +253,8 @@ public class StatementHandler : HandlerBase, IOperationHandler
             var udonType = local.Type.TypeKind == TypeKind.Delegate
                 ? "SystemUInt32"
                 : GetUdonType(local.Type);
-            var id = _vars.DeclareLocal(local.Name, udonType);
-            _localVarIds[local] = id;
+            var id = _ctx.Vars.DeclareLocal(local.Name, udonType);
+            _ctx.LocalVarIds[local] = id;
 
             var init = declarator.Initializer;
             if (init != null)
@@ -264,14 +264,14 @@ public class StatementHandler : HandlerBase, IOperationHandler
                     && delegateInit.Target is IAnonymousFunctionOperation lambdaInit)
                 {
                     var hoisted = HoistLambdaToMethod(lambdaInit);
-                    _delegateVarMap[local] = hoisted;
+                    _ctx.DelegateVarMap[local] = hoisted;
                 }
 
                 _ctx.TargetHint = id;
                 var srcId = VisitExpression(init.Value);
                 _ctx.TargetHint = null;
                 if (srcId != id) // hint was not consumed
-                    _module.AddCopy(srcId, id);
+                    _ctx.Module.AddCopy(srcId, id);
             }
         }
     }

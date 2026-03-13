@@ -27,40 +27,40 @@ public class LoopHandler : HandlerBase, IOperationHandler
 
     void VisitWhileLoop(IWhileLoopOperation op)
     {
-        var loopStart = _module.DefineLabel("__while_start");
-        var loopEnd = _module.DefineLabel("__while_end");
+        var loopStart = _ctx.Module.DefineLabel("__while_start");
+        var loopEnd = _ctx.Module.DefineLabel("__while_end");
 
         if (op.ConditionIsTop)
         {
-            _breakLabels.Push(loopEnd);
-            _continueLabels.Push(loopStart);
+            _ctx.BreakLabels.Push(loopEnd);
+            _ctx.ContinueLabels.Push(loopStart);
 
-            _module.MarkLabel(loopStart);
+            _ctx.Module.MarkLabel(loopStart);
             var condId = VisitExpression(op.Condition);
-            _module.AddPush(condId);
-            _module.AddJumpIfFalse(loopEnd);
+            _ctx.Module.AddPush(condId);
+            _ctx.Module.AddJumpIfFalse(loopEnd);
             VisitOperation(op.Body);
-            _module.AddJump(loopStart);
+            _ctx.Module.AddJump(loopStart);
         }
         else
         {
             // do-while: body first, then condition
-            var condLabel = _module.DefineLabel("__dowhile_cond");
-            _breakLabels.Push(loopEnd);
-            _continueLabels.Push(condLabel);
+            var condLabel = _ctx.Module.DefineLabel("__dowhile_cond");
+            _ctx.BreakLabels.Push(loopEnd);
+            _ctx.ContinueLabels.Push(condLabel);
 
-            _module.MarkLabel(loopStart);
+            _ctx.Module.MarkLabel(loopStart);
             VisitOperation(op.Body);
-            _module.MarkLabel(condLabel);
+            _ctx.Module.MarkLabel(condLabel);
             var condId = VisitExpression(op.Condition);
-            _module.AddPush(condId);
-            _module.AddJumpIfFalse(loopEnd);
-            _module.AddJump(loopStart);
+            _ctx.Module.AddPush(condId);
+            _ctx.Module.AddJumpIfFalse(loopEnd);
+            _ctx.Module.AddJump(loopStart);
         }
 
-        _module.MarkLabel(loopEnd);
-        _breakLabels.Pop();
-        _continueLabels.Pop();
+        _ctx.Module.MarkLabel(loopEnd);
+        _ctx.BreakLabels.Pop();
+        _ctx.ContinueLabels.Pop();
     }
 
     void VisitForLoop(IForLoopOperation op)
@@ -68,33 +68,33 @@ public class LoopHandler : HandlerBase, IOperationHandler
         foreach (var init in op.Before)
             VisitOperation(init);
 
-        var loopStart = _module.DefineLabel("__for_start");
-        var loopEnd = _module.DefineLabel("__for_end");
-        var continueLabel = _module.DefineLabel("__for_continue");
+        var loopStart = _ctx.Module.DefineLabel("__for_start");
+        var loopEnd = _ctx.Module.DefineLabel("__for_end");
+        var continueLabel = _ctx.Module.DefineLabel("__for_continue");
 
-        _breakLabels.Push(loopEnd);
-        _continueLabels.Push(continueLabel);
+        _ctx.BreakLabels.Push(loopEnd);
+        _ctx.ContinueLabels.Push(continueLabel);
 
-        _module.MarkLabel(loopStart);
+        _ctx.Module.MarkLabel(loopStart);
 
         if (op.Condition != null)
         {
             var condId = VisitExpression(op.Condition);
-            _module.AddPush(condId);
-            _module.AddJumpIfFalse(loopEnd);
+            _ctx.Module.AddPush(condId);
+            _ctx.Module.AddJumpIfFalse(loopEnd);
         }
 
         VisitOperation(op.Body);
 
-        _module.MarkLabel(continueLabel);
+        _ctx.Module.MarkLabel(continueLabel);
         foreach (var atBottom in op.AtLoopBottom)
             VisitOperation(atBottom);
 
-        _module.AddJump(loopStart);
-        _module.MarkLabel(loopEnd);
+        _ctx.Module.AddJump(loopStart);
+        _ctx.Module.MarkLabel(loopEnd);
 
-        _breakLabels.Pop();
-        _continueLabels.Pop();
+        _ctx.BreakLabels.Pop();
+        _ctx.ContinueLabels.Pop();
     }
 
     void VisitForEachLoop(IForEachLoopOperation op)
@@ -116,76 +116,76 @@ public class LoopHandler : HandlerBase, IOperationHandler
         // Declare loop variable
         var loopLocal = op.Locals.FirstOrDefault()
             ?? throw new System.InvalidOperationException("foreach has no loop variable");
-        _vars.PushScope();
-        var loopVarId = _vars.DeclareLocal(loopLocal.Name, elemType);
-        _localVarIds[loopLocal] = loopVarId;
+        _ctx.Vars.PushScope();
+        var loopVarId = _ctx.Vars.DeclareLocal(loopLocal.Name, elemType);
+        _ctx.LocalVarIds[loopLocal] = loopVarId;
 
         // Index variable
-        var idxId = _vars.DeclareTemp("SystemInt32");
-        var zeroConst = _vars.DeclareConst("SystemInt32", "0");
-        _module.AddCopy(zeroConst, idxId);
+        var idxId = _ctx.Vars.DeclareTemp("SystemInt32");
+        var zeroConst = _ctx.Vars.DeclareConst("SystemInt32", "0");
+        _ctx.Module.AddCopy(zeroConst, idxId);
 
-        var loopStart = _module.DefineLabel("__foreach_start");
-        var loopEnd = _module.DefineLabel("__foreach_end");
-        var continueLabel = _module.DefineLabel("__foreach_continue");
+        var loopStart = _ctx.Module.DefineLabel("__foreach_start");
+        var loopEnd = _ctx.Module.DefineLabel("__foreach_end");
+        var continueLabel = _ctx.Module.DefineLabel("__foreach_continue");
 
-        _breakLabels.Push(loopEnd);
-        _continueLabels.Push(continueLabel);
+        _ctx.BreakLabels.Push(loopEnd);
+        _ctx.ContinueLabels.Push(continueLabel);
 
         // Hoist array length before loop (loop-invariant)
-        var lenId = _vars.DeclareTemp("SystemInt32");
-        _module.AddPush(collId);
-        _module.AddPush(lenId);
+        var lenId = _ctx.Vars.DeclareTemp("SystemInt32");
+        _ctx.Module.AddPush(collId);
+        _ctx.Module.AddPush(lenId);
         AddExternChecked("SystemArray.__get_Length__SystemInt32");
 
-        _module.MarkLabel(loopStart);
+        _ctx.Module.MarkLabel(loopStart);
 
         // Condition: idx < arr.Length (lenId already computed above)
 
-        var condId = _vars.DeclareTemp("SystemBoolean");
-        _module.AddPush(idxId);
-        _module.AddPush(lenId);
-        _module.AddPush(condId);
+        var condId = _ctx.Vars.DeclareTemp("SystemBoolean");
+        _ctx.Module.AddPush(idxId);
+        _ctx.Module.AddPush(lenId);
+        _ctx.Module.AddPush(condId);
         AddExternChecked("SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean");
-        _module.AddPush(condId);
-        _module.AddJumpIfFalse(loopEnd);
+        _ctx.Module.AddPush(condId);
+        _ctx.Module.AddJumpIfFalse(loopEnd);
 
         // Element: loopVar = arr[idx] (write directly to loop variable)
-        _module.AddPush(collId);
-        _module.AddPush(idxId);
-        _module.AddPush(loopVarId);
+        _ctx.Module.AddPush(collId);
+        _ctx.Module.AddPush(idxId);
+        _ctx.Module.AddPush(loopVarId);
         AddExternChecked($"{arrayType}.__Get__SystemInt32__{elemAccessorType}");
 
         // Body
         VisitOperation(op.Body);
 
         // Increment (Udon VM reads all PUSH inputs before writing output, so direct write-back is safe)
-        _module.MarkLabel(continueLabel);
-        var oneConst = _vars.DeclareConst("SystemInt32", "1");
-        _module.AddPush(idxId);
-        _module.AddPush(oneConst);
-        _module.AddPush(idxId);
+        _ctx.Module.MarkLabel(continueLabel);
+        var oneConst = _ctx.Vars.DeclareConst("SystemInt32", "1");
+        _ctx.Module.AddPush(idxId);
+        _ctx.Module.AddPush(oneConst);
+        _ctx.Module.AddPush(idxId);
         AddExternChecked("SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32");
 
-        _module.AddJump(loopStart);
-        _module.MarkLabel(loopEnd);
+        _ctx.Module.AddJump(loopStart);
+        _ctx.Module.MarkLabel(loopEnd);
 
-        _breakLabels.Pop();
-        _continueLabels.Pop();
-        _vars.PopScope();
+        _ctx.BreakLabels.Pop();
+        _ctx.ContinueLabels.Pop();
+        _ctx.Vars.PopScope();
     }
 
     void VisitSwitch(ISwitchOperation op)
     {
         var valueId = VisitExpression(op.Value);
         var valueType = GetUdonType(op.Value.Type);
-        var endLabel = _module.DefineLabel("__switch_end");
+        var endLabel = _ctx.Module.DefineLabel("__switch_end");
 
-        _breakLabels.Push(endLabel);
+        _ctx.BreakLabels.Push(endLabel);
 
         var bodyLabels = new int[op.Cases.Length];
         for (int i = 0; i < op.Cases.Length; i++)
-            bodyLabels[i] = _module.DefineLabel($"__case_body_{i}");
+            bodyLabels[i] = _ctx.Module.DefineLabel($"__case_body_{i}");
 
         int defaultIndex = -1;
 
@@ -214,7 +214,7 @@ public class LoopHandler : HandlerBase, IOperationHandler
                     {
                         var underlyingUdon = GetUdonType(named.EnumUnderlyingType);
                         eqType = underlyingUdon;
-                        caseValueId = _vars.DeclareConst(underlyingUdon,
+                        caseValueId = _ctx.Vars.DeclareConst(underlyingUdon,
                             ToInvariantString(singleValue.Value.ConstantValue.Value));
                     }
                     else
@@ -224,50 +224,50 @@ public class LoopHandler : HandlerBase, IOperationHandler
                         if (op.Value.Type is INamedTypeSymbol n2 && n2.TypeKind == TypeKind.Enum)
                             eqType = GetUdonType(n2.EnumUnderlyingType);
                     }
-                    var condId = _vars.DeclareTemp("SystemBoolean");
+                    var condId = _ctx.Vars.DeclareTemp("SystemBoolean");
                     var eqSig = ExternResolver.BuildMethodSignature(
                         eqType, "__op_Equality", new[] { eqType, eqType }, "SystemBoolean");
-                    _module.AddPush(convertedValueId);
-                    _module.AddPush(caseValueId);
-                    _module.AddPush(condId);
+                    _ctx.Module.AddPush(convertedValueId);
+                    _ctx.Module.AddPush(caseValueId);
+                    _ctx.Module.AddPush(condId);
                     AddExternChecked(eqSig);
-                    _module.AddPush(condId);
+                    _ctx.Module.AddPush(condId);
 
-                    var skipLabel = _module.DefineLabel($"__case_skip_{i}");
-                    _module.AddJumpIfFalse(skipLabel);
-                    _module.AddJump(bodyLabels[i]);
-                    _module.MarkLabel(skipLabel);
+                    var skipLabel = _ctx.Module.DefineLabel($"__case_skip_{i}");
+                    _ctx.Module.AddJumpIfFalse(skipLabel);
+                    _ctx.Module.AddJump(bodyLabels[i]);
+                    _ctx.Module.MarkLabel(skipLabel);
                 }
                 else if (clause is IPatternCaseClauseOperation patternCase)
                 {
                     var checkId = EmitPatternCheck(valueId, op.Value.Type, patternCase.Pattern);
-                    _module.AddPush(checkId);
-                    var skipLabel = _module.DefineLabel($"__case_skip_{i}");
-                    _module.AddJumpIfFalse(skipLabel);
+                    _ctx.Module.AddPush(checkId);
+                    var skipLabel = _ctx.Module.DefineLabel($"__case_skip_{i}");
+                    _ctx.Module.AddJumpIfFalse(skipLabel);
                     if (patternCase.Guard != null)
                     {
                         var guardId = VisitExpression(patternCase.Guard);
-                        _module.AddPush(guardId);
-                        _module.AddJumpIfFalse(skipLabel);
+                        _ctx.Module.AddPush(guardId);
+                        _ctx.Module.AddJumpIfFalse(skipLabel);
                     }
-                    _module.AddJump(bodyLabels[i]);
-                    _module.MarkLabel(skipLabel);
+                    _ctx.Module.AddJump(bodyLabels[i]);
+                    _ctx.Module.MarkLabel(skipLabel);
                 }
             }
         }
 
         // After all comparisons: jump to default or end
-        _module.AddJump(defaultIndex >= 0 ? bodyLabels[defaultIndex] : endLabel);
+        _ctx.Module.AddJump(defaultIndex >= 0 ? bodyLabels[defaultIndex] : endLabel);
 
         // Phase 2: emit case bodies
         for (int i = 0; i < op.Cases.Length; i++)
         {
-            _module.MarkLabel(bodyLabels[i]);
+            _ctx.Module.MarkLabel(bodyLabels[i]);
             foreach (var stmt in op.Cases[i].Body)
                 VisitOperation(stmt);
         }
 
-        _module.MarkLabel(endLabel);
-        _breakLabels.Pop();
+        _ctx.Module.MarkLabel(endLabel);
+        _ctx.BreakLabels.Pop();
     }
 }

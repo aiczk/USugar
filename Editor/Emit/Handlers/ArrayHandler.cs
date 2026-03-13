@@ -26,8 +26,8 @@ public class ArrayHandler : HandlerBase, IExpressionHandler
         var sizeId = VisitExpression(op.DimensionSizes[0]);
         _ctx.TargetHint = savedHint;
         var resultId = ConsumeTargetHintOrTemp(arrayType);
-        _module.AddPush(sizeId);
-        _module.AddPush(resultId);
+        _ctx.Module.AddPush(sizeId);
+        _ctx.Module.AddPush(resultId);
         AddExternChecked($"{arrayType}.__ctor__SystemInt32__{arrayType}");
 
         if (op.Initializer == null) 
@@ -36,10 +36,10 @@ public class ArrayHandler : HandlerBase, IExpressionHandler
         for (int i = 0; i < op.Initializer.ElementValues.Length; i++)
         {
             var valId = VisitExpression(op.Initializer.ElementValues[i]);
-            var idxConst = _vars.DeclareConst("SystemInt32", i.ToString());
-            _module.AddPush(resultId);
-            _module.AddPush(idxConst);
-            _module.AddPush(valId);
+            var idxConst = _ctx.Vars.DeclareConst("SystemInt32", i.ToString());
+            _ctx.Module.AddPush(resultId);
+            _ctx.Module.AddPush(idxConst);
+            _ctx.Module.AddPush(valId);
             AddExternChecked($"{arrayType}.__Set__SystemInt32_{elementType}__SystemVoid");
         }
 
@@ -70,24 +70,24 @@ public class ArrayHandler : HandlerBase, IExpressionHandler
 
         _ctx.TargetHint = savedHint;
         var resultId = ConsumeTargetHintOrTemp(GetUdonType(op.Type));
-        _module.AddPush(arrayId);
-        _module.AddPush(indexId);
-        _module.AddPush(resultId);
+        _ctx.Module.AddPush(arrayId);
+        _ctx.Module.AddPush(indexId);
+        _ctx.Module.AddPush(resultId);
         AddExternChecked($"{arrayType}.__Get__SystemInt32__{elementType}");
         return resultId;
     }
 
     string EmitIndexFromEnd(string arrayId, string arrayType, IOperation operand)
     {
-        var lenId = _vars.DeclareTemp("SystemInt32");
-        _module.AddPush(arrayId);
-        _module.AddPush(lenId);
+        var lenId = _ctx.Vars.DeclareTemp("SystemInt32");
+        _ctx.Module.AddPush(arrayId);
+        _ctx.Module.AddPush(lenId);
         AddExternChecked($"{arrayType}.__get_Length__SystemInt32");
         var nId = VisitExpression(operand);
-        var resultId = _vars.DeclareTemp("SystemInt32");
-        _module.AddPush(lenId);
-        _module.AddPush(nId);
-        _module.AddPush(resultId);
+        var resultId = _ctx.Vars.DeclareTemp("SystemInt32");
+        _ctx.Module.AddPush(lenId);
+        _ctx.Module.AddPush(nId);
+        _ctx.Module.AddPush(resultId);
         AddExternChecked("SystemInt32.__op_Subtraction__SystemInt32_SystemInt32__SystemInt32");
         return resultId;
     }
@@ -95,7 +95,7 @@ public class ArrayHandler : HandlerBase, IExpressionHandler
     string ResolveRangeOperand(IOperation operand, string arrayId, string arrayType, bool isEnd)
     {
         if (operand == null)
-            return isEnd ? EmitArrayLength(arrayId, arrayType) : _vars.DeclareConst("SystemInt32", "0");
+            return isEnd ? EmitArrayLength(arrayId, arrayType) : _ctx.Vars.DeclareConst("SystemInt32", "0");
         // Unwrap conversion (int → System.Index)
         var inner = operand;
         while (inner is IConversionOperation conv) inner = conv.Operand;
@@ -107,9 +107,9 @@ public class ArrayHandler : HandlerBase, IExpressionHandler
 
     string EmitArrayLength(string arrayId, string arrayType)
     {
-        var lenId = _vars.DeclareTemp("SystemInt32");
-        _module.AddPush(arrayId);
-        _module.AddPush(lenId);
+        var lenId = _ctx.Vars.DeclareTemp("SystemInt32");
+        _ctx.Module.AddPush(arrayId);
+        _ctx.Module.AddPush(lenId);
         AddExternChecked($"{arrayType}.__get_Length__SystemInt32");
         return lenId;
     }
@@ -127,65 +127,65 @@ public class ArrayHandler : HandlerBase, IExpressionHandler
         var endId = ResolveRangeOperand(rangeOp.RightOperand, arrayId, arrayType, true);
 
         // len = end - start
-        var lenId = _vars.DeclareTemp("SystemInt32");
-        _module.AddPush(endId);
-        _module.AddPush(startId);
-        _module.AddPush(lenId);
+        var lenId = _ctx.Vars.DeclareTemp("SystemInt32");
+        _ctx.Module.AddPush(endId);
+        _ctx.Module.AddPush(startId);
+        _ctx.Module.AddPush(lenId);
         AddExternChecked("SystemInt32.__op_Subtraction__SystemInt32_SystemInt32__SystemInt32");
 
         // result = new T[len]
-        var resultId = _vars.DeclareTemp(udonArrType);
-        _module.AddPush(lenId);
-        _module.AddPush(resultId);
+        var resultId = _ctx.Vars.DeclareTemp(udonArrType);
+        _ctx.Module.AddPush(lenId);
+        _ctx.Module.AddPush(resultId);
         AddExternChecked($"{udonArrType}.__ctor__SystemInt32__{udonArrType}");
 
         // for (i = 0; i < len; i++) result[i] = arr[start + i]
-        var iId = _vars.DeclareTemp("SystemInt32");
-        var zeroConst = _vars.DeclareConst("SystemInt32", "0");
-        _module.AddCopy(zeroConst, iId);
-        var loopLabel = _module.DefineLabel("__range_loop");
-        var endLabel = _module.DefineLabel("__range_end");
-        _module.MarkLabel(loopLabel);
+        var iId = _ctx.Vars.DeclareTemp("SystemInt32");
+        var zeroConst = _ctx.Vars.DeclareConst("SystemInt32", "0");
+        _ctx.Module.AddCopy(zeroConst, iId);
+        var loopLabel = _ctx.Module.DefineLabel("__range_loop");
+        var endLabel = _ctx.Module.DefineLabel("__range_end");
+        _ctx.Module.MarkLabel(loopLabel);
 
         // i < len
-        var condId = _vars.DeclareTemp("SystemBoolean");
-        _module.AddPush(iId);
-        _module.AddPush(lenId);
-        _module.AddPush(condId);
+        var condId = _ctx.Vars.DeclareTemp("SystemBoolean");
+        _ctx.Module.AddPush(iId);
+        _ctx.Module.AddPush(lenId);
+        _ctx.Module.AddPush(condId);
         AddExternChecked("SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean");
-        _module.AddPush(condId);
-        _module.AddJumpIfFalse(endLabel);
+        _ctx.Module.AddPush(condId);
+        _ctx.Module.AddJumpIfFalse(endLabel);
 
         // srcIdx = start + i
-        var srcIdxId = _vars.DeclareTemp("SystemInt32");
-        _module.AddPush(startId);
-        _module.AddPush(iId);
-        _module.AddPush(srcIdxId);
+        var srcIdxId = _ctx.Vars.DeclareTemp("SystemInt32");
+        _ctx.Module.AddPush(startId);
+        _ctx.Module.AddPush(iId);
+        _ctx.Module.AddPush(srcIdxId);
         AddExternChecked("SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32");
 
         // val = arr[srcIdx]
-        var valId = _vars.DeclareTemp(udonElemType);
-        _module.AddPush(arrayId);
-        _module.AddPush(srcIdxId);
-        _module.AddPush(valId);
+        var valId = _ctx.Vars.DeclareTemp(udonElemType);
+        _ctx.Module.AddPush(arrayId);
+        _ctx.Module.AddPush(srcIdxId);
+        _ctx.Module.AddPush(valId);
         AddExternChecked($"{arrayType}.__Get__SystemInt32__{elementType}");
 
         // result[i] = val
-        _module.AddPush(resultId);
-        _module.AddPush(iId);
-        _module.AddPush(valId);
+        _ctx.Module.AddPush(resultId);
+        _ctx.Module.AddPush(iId);
+        _ctx.Module.AddPush(valId);
         AddExternChecked($"{arrayType}.__Set__SystemInt32_{elementType}__SystemVoid");
 
         // i++
-        var oneConst = _vars.DeclareConst("SystemInt32", "1");
-        var nextId = _vars.DeclareTemp("SystemInt32");
-        _module.AddPush(iId);
-        _module.AddPush(oneConst);
-        _module.AddPush(nextId);
+        var oneConst = _ctx.Vars.DeclareConst("SystemInt32", "1");
+        var nextId = _ctx.Vars.DeclareTemp("SystemInt32");
+        _ctx.Module.AddPush(iId);
+        _ctx.Module.AddPush(oneConst);
+        _ctx.Module.AddPush(nextId);
         AddExternChecked("SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32");
-        _module.AddCopy(nextId, iId);
-        _module.AddJump(loopLabel);
-        _module.MarkLabel(endLabel);
+        _ctx.Module.AddCopy(nextId, iId);
+        _ctx.Module.AddJump(loopLabel);
+        _ctx.Module.MarkLabel(endLabel);
 
         return resultId;
     }

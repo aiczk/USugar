@@ -11,38 +11,6 @@ public abstract class HandlerBase
 
     protected HandlerBase(EmitContext ctx) => _ctx = ctx;
 
-    // ── Property shims (same names as UasmEmitter fields for zero-change method migration) ──
-    protected Compilation _compilation => _ctx.Compilation;
-    protected INamedTypeSymbol _classSymbol => _ctx.ClassSymbol;
-    protected UasmModule _module => _ctx.Module;
-    protected VariableTable _vars => _ctx.Vars;
-    protected LayoutPlanner _planner => _ctx.Planner;
-    protected Dictionary<IMethodSymbol, int> _methodLabels => _ctx.MethodLabels;
-    protected Dictionary<IMethodSymbol, int> _methodIndices => _ctx.MethodIndices;
-    protected Dictionary<IMethodSymbol, string> _methodVarPrefix => _ctx.MethodVarPrefix;
-    protected Dictionary<IMethodSymbol, string> _methodRetVars => _ctx.MethodRetVars;
-    protected Dictionary<IMethodSymbol, string> _methodRetTypes => _ctx.MethodRetTypes;
-    protected Dictionary<IMethodSymbol, string[]> _methodParamVarIds => _ctx.MethodParamVarIds;
-    protected IMethodSymbol _currentMethod { get => _ctx.CurrentMethod; set => _ctx.CurrentMethod = value; }
-    protected int _nextMethodIndex { get => _ctx.NextMethodIndex; set => _ctx.NextMethodIndex = value; }
-    protected List<(IMethodSymbol symbol, int label)> _pendingLocalFunctions => _ctx.PendingLocalFunctions;
-    protected Dictionary<ILocalSymbol, IMethodSymbol> _delegateVarMap => _ctx.DelegateVarMap;
-    protected List<IMethodSymbol> _pendingGenericSpecs => _ctx.PendingGenericSpecs;
-    protected Dictionary<ITypeParameterSymbol, ITypeSymbol> _typeParamMap { get => _ctx.TypeParamMap; set => _ctx.TypeParamMap = value; }
-    protected Dictionary<(int methodIdx, int paramOrdinal), DelegateConvention> _delegateParamConventions => _ctx.DelegateParamConventions;
-    protected Dictionary<IMethodSymbol, DelegateConvention> _lambdaConventionOverrides => _ctx.LambdaConventionOverrides;
-    protected Dictionary<IMethodSymbol, int> _methodBodyLabels => _ctx.MethodBodyLabels;
-    protected Dictionary<ILocalSymbol, string> _localVarIds => _ctx.LocalVarIds;
-    protected List<(string fieldId, IOperation initOp, ITypeSymbol fieldType)> _fieldInitOps => _ctx.FieldInitOps;
-    protected Dictionary<string, string> _fieldChangeCallbacks => _ctx.FieldChangeCallbacks;
-    protected Dictionary<ITypeSymbol, string> _enumArrayVars => _ctx.EnumArrayVars;
-    protected Stack<string> _conditionalAccessTargets => _ctx.ConditionalAccessTargets;
-    protected Stack<int> _breakLabels => _ctx.BreakLabels;
-    protected Stack<int> _continueLabels => _ctx.ContinueLabels;
-    protected Dictionary<ILabelSymbol, int> _gotoLabels => _ctx.GotoLabels;
-    protected Stack<List<(string varId, ITypeSymbol type)>> _usingDisposableStack => _ctx.UsingDisposableStack;
-    protected List<EmitDiagnostic> _diagnostics => _ctx.Diagnostics;
-
     // ── Dispatch (recursive descent into other handlers via UasmEmitter facade) ──
     protected void VisitOperation(IOperation op) => _ctx.VisitOperation(op);
     protected string VisitExpression(IOperation op) => _ctx.VisitExpression(op);
@@ -88,34 +56,34 @@ public abstract class HandlerBase
         if (hint != null)
         {
             _ctx.TargetHint = null;
-            if (_vars.GetDeclaredType(hint) == udonType)
+            if (_ctx.Vars.GetDeclaredType(hint) == udonType)
                 return hint;
         }
-        return _vars.DeclareTemp(udonType);
+        return _ctx.Vars.DeclareTemp(udonType);
     }
 
     // ── Shared helpers (used by multiple handlers) ──
 
     protected string GetParamVarId(IParameterSymbol param)
     {
-        if (_currentMethod != null
-            && _lambdaConventionOverrides.TryGetValue(_currentMethod, out var conv)
+        if (_ctx.CurrentMethod != null
+            && _ctx.LambdaConventionOverrides.TryGetValue(_ctx.CurrentMethod, out var conv)
             && param.Ordinal < conv.ArgVarIds.Length)
             return conv.ArgVarIds[param.Ordinal];
         if (param.ContainingSymbol is IMethodSymbol method
-            && _methodParamVarIds.TryGetValue(method, out var paramIds)
+            && _ctx.MethodParamVarIds.TryGetValue(method, out var paramIds)
             && param.Ordinal < paramIds.Length)
             return paramIds[param.Ordinal];
-        if (_currentMethod != null && param.ContainingSymbol is IMethodSymbol paramMethod
-            && _currentMethod.IsGenericMethod && !_currentMethod.IsDefinition
-            && SymbolEqualityComparer.Default.Equals(paramMethod, _currentMethod.OriginalDefinition)
-            && _methodParamVarIds.TryGetValue(_currentMethod, out var specParamIds)
+        if (_ctx.CurrentMethod != null && param.ContainingSymbol is IMethodSymbol paramMethod
+            && _ctx.CurrentMethod.IsGenericMethod && !_ctx.CurrentMethod.IsDefinition
+            && SymbolEqualityComparer.Default.Equals(paramMethod, _ctx.CurrentMethod.OriginalDefinition)
+            && _ctx.MethodParamVarIds.TryGetValue(_ctx.CurrentMethod, out var specParamIds)
             && param.Ordinal < specParamIds.Length)
             return specParamIds[param.Ordinal];
-        return _vars.Lookup(param.Name)
+        return _ctx.Vars.Lookup(param.Name)
             ?? throw new System.InvalidOperationException(
                 $"Cannot resolve parameter '{param.Name}' (ordinal {param.Ordinal}) "
-              + $"in method '{_currentMethod?.Name ?? "(none)"}'. "
+              + $"in method '{_ctx.CurrentMethod?.Name ?? "(none)"}'. "
               + "Not found in lambda overrides, method params, or variable table.");
     }
 
@@ -127,16 +95,16 @@ public abstract class HandlerBase
         var convertMethod = ExternResolver.GetConvertMethodName(underlyingType);
         if (convertMethod == null) return operandId;
         var underlyingUdon = GetUdonType(underlyingType);
-        var convertedId = _vars.DeclareTemp(underlyingUdon);
-        _module.AddPush(operandId);
-        _module.AddPush(convertedId);
+        var convertedId = _ctx.Vars.DeclareTemp(underlyingUdon);
+        _ctx.Module.AddPush(operandId);
+        _ctx.Module.AddPush(convertedId);
         AddExternChecked($"SystemConvert.__{convertMethod}__SystemObject__{underlyingUdon}");
         return convertedId;
     }
 
     protected string GetOrCreateEnumArray(INamedTypeSymbol enumType)
     {
-        if (_enumArrayVars.TryGetValue(enumType, out var existing))
+        if (_ctx.EnumArrayVars.TryGetValue(enumType, out var existing))
             return existing;
 
         var members = enumType.GetMembers()
@@ -183,9 +151,233 @@ public abstract class HandlerBase
 
         var enumFullName = enumType.ToDisplayString().Replace('.', '_');
         var arrayId = $"__enumArr_{enumFullName}";
-        _vars.DeclareEnumArray(arrayId, enumArr);
-        _enumArrayVars[enumType] = arrayId;
+        _ctx.Vars.DeclareEnumArray(arrayId, enumArr);
+        _ctx.EnumArrayVars[enumType] = arrayId;
         return arrayId;
+    }
+
+    // ── LValue Capture ──
+    // Evaluates and caches sub-expressions of an l-value (array ref, index, instance)
+    // to avoid re-evaluating side-effecting expressions during write-back.
+
+    protected struct LValueCapture
+    {
+        public string ValueId;       // The evaluated l-value variable ID
+        public string ArrayId;       // Cached array reference (for array elements)
+        public string IndexId;       // Cached index (for array elements)
+        public string InstanceId;    // Cached instance (for cross-behaviour fields/properties)
+    }
+
+    protected LValueCapture CaptureLValue(IOperation target)
+    {
+        switch (target)
+        {
+            case IArrayElementReferenceOperation arrayElem:
+            {
+                var arrayId = VisitExpression(arrayElem.ArrayReference);
+                var indexId = VisitExpression(arrayElem.Indices[0]);
+                var arrSymbol = arrayElem.ArrayReference.Type as IArrayTypeSymbol;
+                var arrayType = GetArrayType(arrSymbol);
+                var elemAccessorType = GetArrayElemType(arrSymbol);
+
+                var valId = _ctx.Vars.DeclareTemp(GetUdonType(arrayElem.Type));
+                _ctx.Module.AddPush(arrayId);
+                _ctx.Module.AddPush(indexId);
+                _ctx.Module.AddPush(valId);
+                AddExternChecked($"{arrayType}.__Get__SystemInt32__{elemAccessorType}");
+                return new LValueCapture { ValueId = valId, ArrayId = arrayId, IndexId = indexId };
+            }
+            case IFieldReferenceOperation { Instance: not null and not IInstanceReferenceOperation } fieldRef
+                when ExternResolver.IsUdonSharpBehaviour(fieldRef.Field.ContainingType):
+            {
+                var instanceId = VisitExpression(fieldRef.Instance);
+                var fldType = GetUdonType(fieldRef.Field.Type);
+                var valId = _ctx.Vars.DeclareTemp(fldType);
+                var nameConst = _ctx.Vars.DeclareConst("SystemString", fieldRef.Field.Name);
+                _ctx.Module.AddPush(instanceId);
+                _ctx.Module.AddPush(nameConst);
+                _ctx.Module.AddPush(valId);
+                AddExternChecked("VRCUdonCommonInterfacesIUdonEventReceiver.__GetProgramVariable__SystemString__SystemObject");
+                return new LValueCapture { ValueId = valId, InstanceId = instanceId };
+            }
+            default:
+                return new LValueCapture { ValueId = VisitExpression(target) };
+        }
+    }
+
+    // ── EmitWriteBack ──
+    // Write back a computed value to non-trivial l-value targets (array elements, properties).
+
+    protected void EmitWriteBack(IOperation target, string valueId, LValueCapture lv = default)
+    {
+        switch (target)
+        {
+            case IArrayElementReferenceOperation arrayElem:
+            {
+                var arrayId = lv.ArrayId ?? VisitExpression(arrayElem.ArrayReference);
+                var indexId = lv.IndexId ?? VisitExpression(arrayElem.Indices[0]);
+                var arrSymbol = arrayElem.ArrayReference.Type as IArrayTypeSymbol;
+                var arrayType = GetArrayType(arrSymbol);
+                var elementType = GetArrayElemType(arrSymbol);
+                _ctx.Module.AddPush(arrayId);
+                _ctx.Module.AddPush(indexId);
+                _ctx.Module.AddPush(valueId);
+                AddExternChecked($"{arrayType}.__Set__SystemInt32_{elementType}__SystemVoid");
+                break;
+            }
+            case IFieldReferenceOperation { Instance: not null and not IInstanceReferenceOperation } fieldRef
+                when ExternResolver.IsUdonSharpBehaviour(fieldRef.Field.ContainingType):
+            {
+                var instanceId = lv.InstanceId ?? VisitExpression(fieldRef.Instance);
+                var nameConst = _ctx.Vars.DeclareConst("SystemString", fieldRef.Field.Name);
+                _ctx.Module.AddPush(instanceId);
+                _ctx.Module.AddPush(nameConst);
+                _ctx.Module.AddPush(valueId);
+                AddExternChecked("VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid");
+                break;
+            }
+            case IPropertyReferenceOperation { Instance: IInstanceReferenceOperation, Property: { GetMethod: { IsImplicitlyDeclared: true } } } propRef when ExternResolver.IsUdonSharpBehaviour(propRef.Property.ContainingType):
+                return;
+            case IPropertyReferenceOperation { Instance: IInstanceReferenceOperation, Property: { SetMethod: not null } } propRef when _ctx.MethodLabels.TryGetValue(propRef.Property.SetMethod, out var setterLabel):
+                _ctx.Module.AddCopy(valueId, GetParamVarId(propRef.Property.SetMethod.Parameters[0]));
+                EmitCallByLabel(propRef.Property.SetMethod, setterLabel);
+                return;
+            case IPropertyReferenceOperation propRef when ExternResolver.IsUdonSharpBehaviour(propRef.Property.ContainingType) && propRef.Instance is not IInstanceReferenceOperation:
+            {
+                var instanceId = VisitExpression(propRef.Instance);
+                var isAutoSet = propRef.Property.SetMethod?.IsImplicitlyDeclared == true;
+                if (isAutoSet || propRef.Property.SetMethod == null)
+                {
+                    var nameConst = _ctx.Vars.DeclareConst("SystemString", propRef.Property.Name);
+                    _ctx.Module.AddPush(instanceId);
+                    _ctx.Module.AddPush(nameConst);
+                    _ctx.Module.AddPush(valueId);
+                    AddExternChecked("VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid");
+                }
+                else
+                {
+                    var (exportName, setParamIds, _) = GetCalleeLayout(propRef.Property.SetMethod);
+                    var paramNameConst = _ctx.Vars.DeclareConst("SystemString", setParamIds[0]);
+                    _ctx.Module.AddPush(instanceId);
+                    _ctx.Module.AddPush(paramNameConst);
+                    _ctx.Module.AddPush(valueId);
+                    AddExternChecked("VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid");
+                    var eventConst = _ctx.Vars.DeclareConst("SystemString", exportName);
+                    _ctx.Module.AddPush(instanceId);
+                    _ctx.Module.AddPush(eventConst);
+                    AddExternChecked("VRCUdonCommonInterfacesIUdonEventReceiver.__SendCustomEvent__SystemString__SystemVoid");
+                }
+                return;
+            }
+            case IPropertyReferenceOperation propRef:
+            {
+                var containingType = GetUdonType(propRef.Property.ContainingType);
+                if (containingType is "UnityEngineBehaviour" or "UnityEngineMonoBehaviour")
+                    containingType = propRef.Instance is IInstanceReferenceOperation
+                        ? GetUdonType(_ctx.ClassSymbol)
+                        : GetUdonType(propRef.Instance.Type);
+
+                string wbInstanceId;
+                if (propRef.Instance is IInstanceReferenceOperation)
+                    wbInstanceId = _ctx.Vars.DeclareThisOnce(containingType);
+                else if (propRef.Instance != null)
+                    wbInstanceId = VisitExpression(propRef.Instance);
+                else
+                {
+                    var valueType = GetUdonType(propRef.Property.Type);
+                    _ctx.Module.AddPush(valueId);
+                    AddExternChecked(ExternResolver.BuildPropertySetSignature(containingType, propRef.Property.Name, valueType));
+                    return;
+                }
+
+                var propValueType = GetUdonType(propRef.Property.Type);
+                if (propRef.Property.IsIndexer)
+                {
+                    _ctx.Module.AddPush(wbInstanceId);
+                    var indexTypes = new System.Collections.Generic.List<string>();
+                    foreach (var arg in propRef.Arguments)
+                    {
+                        _ctx.Module.AddPush(VisitExpression(arg.Value));
+                        indexTypes.Add(GetUdonType(arg.Value.Type));
+                    }
+                    _ctx.Module.AddPush(valueId);
+                    var indexParamStr = string.Join("_", indexTypes);
+                    AddExternChecked($"{containingType}.__set_Item__{indexParamStr}_{propValueType}__SystemVoid");
+                }
+                else
+                {
+                    _ctx.Module.AddPush(wbInstanceId);
+                    _ctx.Module.AddPush(valueId);
+                    AddExternChecked(ExternResolver.BuildPropertySetSignature(containingType, propRef.Property.Name, propValueType));
+                }
+                break;
+            }
+        }
+    }
+
+    // ── AssignToTarget (shared: deconstruction, ref/out copy-back) ──
+
+    protected void AssignToTarget(IOperation target, string valueId)
+    {
+        switch (target)
+        {
+            case IDeclarationExpressionOperation declExpr:
+                if (declExpr.Expression is ILocalReferenceOperation localRef)
+                {
+                    var udonType = GetUdonType(localRef.Type);
+                    var localId = _ctx.Vars.DeclareLocal(localRef.Local.Name, udonType);
+                    _ctx.LocalVarIds[localRef.Local] = localId;
+                    _ctx.Module.AddCopy(valueId, localId);
+                }
+                break;
+
+            case ILocalReferenceOperation existingLocal:
+                var existingId = _ctx.Vars.Lookup(existingLocal.Local.Name)
+                    ?? _ctx.LocalVarIds.GetValueOrDefault(existingLocal.Local);
+                if (existingId == null)
+                {
+                    var udonType = GetUdonType(existingLocal.Type);
+                    existingId = _ctx.Vars.DeclareLocal(existingLocal.Local.Name, udonType);
+                    _ctx.LocalVarIds[existingLocal.Local] = existingId;
+                }
+                _ctx.Module.AddCopy(valueId, existingId);
+                break;
+
+            case IFieldReferenceOperation fieldRef when fieldRef.Instance is IInstanceReferenceOperation:
+                _ctx.Module.AddCopy(valueId, fieldRef.Field.Name);
+                break;
+
+            case IArrayElementReferenceOperation arrayElem:
+                var arrayId = VisitExpression(arrayElem.ArrayReference);
+                var indexId = VisitExpression(arrayElem.Indices[0]);
+                var arrSymbol = arrayElem.ArrayReference.Type as IArrayTypeSymbol;
+                var arrayType = GetArrayType(arrSymbol);
+                var elementType = GetArrayElemType(arrSymbol);
+                _ctx.Module.AddPush(arrayId);
+                _ctx.Module.AddPush(indexId);
+                _ctx.Module.AddPush(valueId);
+                AddExternChecked($"{arrayType}.__Set__SystemInt32_{elementType}__SystemVoid");
+                break;
+
+            case IFieldReferenceOperation fieldRef
+                when fieldRef.Instance != null
+                && fieldRef.Instance is not IInstanceReferenceOperation
+                && ExternResolver.IsUdonSharpBehaviour(fieldRef.Field.ContainingType):
+                var instanceId = VisitExpression(fieldRef.Instance);
+                var nameConst = _ctx.Vars.DeclareConst("SystemString", fieldRef.Field.Name);
+                _ctx.Module.AddPush(instanceId);
+                _ctx.Module.AddPush(nameConst);
+                _ctx.Module.AddPush(valueId);
+                AddExternChecked("VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid");
+                break;
+
+            case IDiscardOperation:
+                break;
+
+            default:
+                throw new System.NotSupportedException(
+                    $"Unsupported deconstruction target element: {target.GetType().Name}");
+        }
     }
 
     // ── EmitMemberSet (shared by AssignmentHandler and InvocationHandler.Members) ──
@@ -199,8 +391,8 @@ public abstract class HandlerBase
                 var containingType = GetUdonType(fieldRef.Field.ContainingType);
                 var valueType = GetUdonType(fieldRef.Field.Type);
                 var sig = ExternResolver.BuildFieldSetSignature(containingType, fieldRef.Field.Name, valueType);
-                _module.AddPush(instanceId);
-                _module.AddPush(valueId);
+                _ctx.Module.AddPush(instanceId);
+                _ctx.Module.AddPush(valueId);
                 AddExternChecked(sig);
                 break;
             }
@@ -210,28 +402,28 @@ public abstract class HandlerBase
                 var valueType = GetUdonType(propRef.Property.Type);
                 if (propRef.Property.IsIndexer)
                 {
-                    _module.AddPush(instanceId);
+                    _ctx.Module.AddPush(instanceId);
                     var indexTypes = new List<string>();
                     foreach (var arg in propRef.Arguments)
                     {
-                        _module.AddPush(VisitExpression(arg.Value));
+                        _ctx.Module.AddPush(VisitExpression(arg.Value));
                         indexTypes.Add(GetUdonType(arg.Value.Type));
                     }
-                    _module.AddPush(valueId);
+                    _ctx.Module.AddPush(valueId);
                     var indexParamStr = string.Join("_", indexTypes);
                     AddExternChecked($"{containingType}.__set_Item__{indexParamStr}_{valueType}__SystemVoid");
                 }
                 else
                 {
-                    _module.AddPush(instanceId);
-                    _module.AddPush(valueId);
+                    _ctx.Module.AddPush(instanceId);
+                    _ctx.Module.AddPush(valueId);
                     AddExternChecked(ExternResolver.BuildPropertySetSignature(containingType, propRef.Property.Name, valueType));
                 }
                 break;
             }
             case IFieldReferenceOperation fieldRef2:
                 // Non-struct field assignment (class fields via SetProgramVariable or direct)
-                _module.AddCopy(valueId, fieldRef2.Field.Name);
+                _ctx.Module.AddCopy(valueId, fieldRef2.Field.Name);
                 break;
         }
     }
@@ -240,15 +432,15 @@ public abstract class HandlerBase
 
     protected void RegisterLocalFunction(IMethodSymbol localFunc)
     {
-        if (_methodLabels.ContainsKey(localFunc)) return;
+        if (_ctx.MethodLabels.ContainsKey(localFunc)) return;
         _ctx.RegisterMethod(localFunc);
-        _pendingLocalFunctions.Add((localFunc, _methodLabels[localFunc]));
+        _ctx.PendingLocalFunctions.Add((localFunc, _ctx.MethodLabels[localFunc]));
     }
 
     protected IMethodSymbol HoistLambdaToMethod(IAnonymousFunctionOperation lambda)
     {
         var symbol = lambda.Symbol;
-        if (_methodLabels.ContainsKey(symbol)) return symbol;
+        if (_ctx.MethodLabels.ContainsKey(symbol)) return symbol;
         RegisterLocalFunction(symbol);
         return symbol;
     }
@@ -258,37 +450,37 @@ public abstract class HandlerBase
     protected (string exportName, string[] paramIds, string retId) GetCalleeLayout(IMethodSymbol target)
     {
         // For methods in the current class, use stored layout
-        if (_methodParamVarIds.TryGetValue(target, out var localParamIds))
+        if (_ctx.MethodParamVarIds.TryGetValue(target, out var localParamIds))
         {
-            var exportName = _methodVarPrefix[target];
-            _methodRetVars.TryGetValue(target, out var retId);
+            var exportName = _ctx.MethodVarPrefix[target];
+            _ctx.MethodRetVars.TryGetValue(target, out var retId);
             return (exportName, localParamIds, retId);
         }
 
         // For foreign methods, delegate to LayoutPlanner
-        var ml = _planner.GetCalleeLayout(target);
+        var ml = _ctx.Planner.GetCalleeLayout(target);
         return (ml.ExportName, ml.ParamIds.ToArray(), ml.ReturnId);
     }
 
     protected string EmitCallByLabel(IMethodSymbol target, int targetLabel)
     {
         // Use body label to skip sentinel push on internal calls (matches UdonSharp's MethodLabel)
-        int jumpTarget = _methodBodyLabels.TryGetValue(target, out var bodyLabel) ? bodyLabel : targetLabel;
+        int jumpTarget = _ctx.MethodBodyLabels.TryGetValue(target, out var bodyLabel) ? bodyLabel : targetLabel;
 
         // Stack-based return address: push return addr onto VM stack, callee's RET pops it
-        var returnLabel = _module.DefineLabel("__call_return");
-        _module.AddPushLabel(returnLabel);
-        _module.AddJump(jumpTarget);
-        _module.MarkLabel(returnLabel);
+        var returnLabel = _ctx.Module.DefineLabel("__call_return");
+        _ctx.Module.AddPushLabel(returnLabel);
+        _ctx.Module.AddJump(jumpTarget);
+        _ctx.Module.MarkLabel(returnLabel);
 
         // COW: copy return value to prevent overwrite by subsequent calls
         // If TargetHint is set, copy directly to that target (avoids extra temp)
-        if (_methodRetVars.TryGetValue(target, out var retVarId))
+        if (_ctx.MethodRetVars.TryGetValue(target, out var retVarId))
         {
-            if (_methodRetTypes.TryGetValue(target, out var retType))
+            if (_ctx.MethodRetTypes.TryGetValue(target, out var retType))
             {
                 var cowDst = ConsumeTargetHintOrTemp(retType);
-                _module.AddCopy(retVarId, cowDst);
+                _ctx.Module.AddCopy(retVarId, cowDst);
                 return cowDst;
             }
             return retVarId;
