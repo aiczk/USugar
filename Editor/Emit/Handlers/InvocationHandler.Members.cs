@@ -272,9 +272,9 @@ public partial class InvocationHandler
         if (op.Arguments.Length == 0 && op.Type.IsValueType)
         {
             // Struct with initializer but no ctor args: need a mutable temp
-            var resultField = _ctx.DeclareTemp(resultType);
-            EmitStoreField(resultField, Const(null, resultType));
-            resultVal = LoadField(resultField, resultType);
+            var resultSlot = _ctx.AllocTemp(resultType);
+            EmitAssign(resultSlot, Const(null, resultType));
+            resultVal = SlotRef(resultSlot);
         }
         else
         {
