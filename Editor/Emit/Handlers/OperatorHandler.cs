@@ -15,7 +15,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
             or IIsPatternOperation
             or ISwitchExpressionOperation;
 
-    public string Handle(IOperation expression) => expression switch
+    public HExpr Handle(IOperation expression) => expression switch
     {
         IBinaryOperation op => VisitBinary(op),
         IUnaryOperation op => VisitUnary(op),
@@ -28,7 +28,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
 
     // ── Binary ──
 
-    string VisitBinary(IBinaryOperation op)
+    HExpr VisitBinary(IBinaryOperation op)
     {
         // Short-circuit evaluation for && and ||
         if (op.OperatorKind == BinaryOperatorKind.ConditionalAnd)
@@ -38,23 +38,19 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
 
         // Constant folding: compile-time evaluable binary expressions
         if (op.ConstantValue.HasValue)
-            return _ctx.Vars.DeclareConst(GetUdonType(op.Type), ToInvariantString(op.ConstantValue.Value));
+        {
+            var constType = GetUdonType(op.Type);
+            return Const(EmitContext.ParseConstValue(constType, ToInvariantString(op.ConstantValue.Value)), constType);
+        }
 
-        // Save and clear hint to prevent premature consumption by sub-expressions
-        var savedHint = _ctx.TargetHint;
-        _ctx.TargetHint = null;
-
-        var leftId = VisitExpression(op.LeftOperand);
-        var rightId = VisitExpression(op.RightOperand);
+        var leftVal = VisitExpression(op.LeftOperand);
+        var rightVal = VisitExpression(op.RightOperand);
 
         // Enum operands → convert to underlying type before comparison
-        // (Udon VM has no enum-typed operators; pure compiler uses SystemConvert)
-        leftId = EmitEnumToUnderlying(leftId, op.LeftOperand.Type);
-        rightId = EmitEnumToUnderlying(rightId, op.RightOperand.Type);
+        leftVal = EmitEnumToUnderlying(leftVal, op.LeftOperand.Type);
+        rightVal = EmitEnumToUnderlying(rightVal, op.RightOperand.Type);
 
-        _ctx.TargetHint = savedHint;
         var resultType = GetUdonType(op.Type);
-        var tempId = ConsumeTargetHintOrTemp(resultType);
         var sig = ExternResolver.ResolveBinaryExtern(
             op.OperatorKind, op.OperatorMethod,
             ResolveType(op.LeftOperand.Type), ResolveType(op.RightOperand.Type), ResolveType(op.Type));
@@ -65,76 +61,37 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
             && (op.OperatorKind == BinaryOperatorKind.Equals
                 || op.OperatorKind == BinaryOperatorKind.NotEquals))
         {
-            var objLeft = _ctx.Vars.DeclareTemp("UnityEngineObject");
-            _ctx.Module.AddCopy(leftId, objLeft);
-            var objRight = _ctx.Vars.DeclareTemp("UnityEngineObject");
-            _ctx.Module.AddCopy(rightId, objRight);
-            _ctx.Module.AddPush(objLeft);
-            _ctx.Module.AddPush(objRight);
+            var objLeftField = _ctx.DeclareTemp("UnityEngineObject");
+            EmitStoreField(objLeftField, leftVal);
+            var objRightField = _ctx.DeclareTemp("UnityEngineObject");
+            EmitStoreField(objRightField, rightVal);
+            var objLeftVal = LoadField(objLeftField, "UnityEngineObject");
+            var objRightVal = LoadField(objRightField, "UnityEngineObject");
+            return ExternCall(sig, new List<HExpr> { objLeftVal, objRightVal }, resultType);
         }
-        else
-        {
-            _ctx.Module.AddPush(leftId);
-            _ctx.Module.AddPush(rightId);
-        }
-        _ctx.Module.AddPush(tempId);
-        AddExternChecked(sig);
 
-        return tempId;
+        return ExternCall(sig, new List<HExpr> { leftVal, rightVal }, resultType);
     }
 
-    string VisitConditionalAnd(IBinaryOperation op)
+    HExpr VisitConditionalAnd(IBinaryOperation op)
     {
-        // a && b → eval a; if false → result=false; else eval b → result=b
-        // Consume TargetHint to write directly into the caller's destination variable,
-        // avoiding an extra COPY when the result is assigned (e.g., `bool x = a && b;`).
-        var resultId = ConsumeTargetHintOrTemp("SystemBoolean");
-        var falseConst = _ctx.Vars.DeclareConst("SystemBoolean", "False");
-        var endLabel = _ctx.Module.DefineLabel("__and_end");
-        var shortLabel = _ctx.Module.DefineLabel("__and_short");
-
-        var leftId = VisitExpression(op.LeftOperand);
-        _ctx.Module.AddPush(leftId);
-        _ctx.Module.AddJumpIfFalse(shortLabel);
-        // left is true → evaluate right
-        var rightId = VisitExpression(op.RightOperand);
-        _ctx.Module.AddCopy(rightId, resultId);
-        _ctx.Module.AddJump(endLabel);
-        // left is false → result = false
-        _ctx.Module.MarkLabel(shortLabel);
-        _ctx.Module.AddCopy(falseConst, resultId);
-        _ctx.Module.MarkLabel(endLabel);
-
-        return resultId;
+        // a && b → Select(a, b, false)
+        var leftVal = VisitExpression(op.LeftOperand);
+        var rightVal = VisitExpression(op.RightOperand);
+        return Select(leftVal, rightVal, Const(false, "SystemBoolean"), "SystemBoolean");
     }
 
-    string VisitConditionalOr(IBinaryOperation op)
+    HExpr VisitConditionalOr(IBinaryOperation op)
     {
-        // a || b → eval a; if true → result=true; else eval b → result=b
-        // Consume TargetHint to write directly into the caller's destination variable.
-        var resultId = ConsumeTargetHintOrTemp("SystemBoolean");
-        var trueConst = _ctx.Vars.DeclareConst("SystemBoolean", "True");
-        var endLabel = _ctx.Module.DefineLabel("__or_end");
-        var evalRightLabel = _ctx.Module.DefineLabel("__or_right");
-
-        var leftId = VisitExpression(op.LeftOperand);
-        _ctx.Module.AddPush(leftId);
-        _ctx.Module.AddJumpIfFalse(evalRightLabel);
-        // left is true → result = true
-        _ctx.Module.AddCopy(trueConst, resultId);
-        _ctx.Module.AddJump(endLabel);
-        // left is false → evaluate right
-        _ctx.Module.MarkLabel(evalRightLabel);
-        var rightId = VisitExpression(op.RightOperand);
-        _ctx.Module.AddCopy(rightId, resultId);
-        _ctx.Module.MarkLabel(endLabel);
-
-        return resultId;
+        // a || b → Select(a, true, b)
+        var leftVal = VisitExpression(op.LeftOperand);
+        var rightVal = VisitExpression(op.RightOperand);
+        return Select(leftVal, Const(true, "SystemBoolean"), rightVal, "SystemBoolean");
     }
 
     // ── Unary ──
 
-    string VisitUnary(IUnaryOperation op)
+    HExpr VisitUnary(IUnaryOperation op)
     {
         // Bitwise NOT (~): Udon VM has no unary complement extern → synthesize as XOR with all-bits-set
         if (op.OperatorKind == UnaryOperatorKind.BitwiseNegation)
@@ -142,14 +99,13 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
 
         // Constant folding: compile-time evaluable unary expressions (e.g., -5)
         if (op.ConstantValue.HasValue)
-            return _ctx.Vars.DeclareConst(GetUdonType(op.Type), ToInvariantString(op.ConstantValue.Value));
+        {
+            var constType = GetUdonType(op.Type);
+            return Const(EmitContext.ParseConstValue(constType, ToInvariantString(op.ConstantValue.Value)), constType);
+        }
 
-        var savedHint = _ctx.TargetHint;
-        _ctx.TargetHint = null;
-        var operandId = VisitExpression(op.Operand);
-        _ctx.TargetHint = savedHint;
+        var operandVal = VisitExpression(op.Operand);
         var resultType = GetUdonType(op.Type);
-        var tempId = ConsumeTargetHintOrTemp(resultType);
 
         string sig;
         if (op.OperatorMethod != null && !ExternResolver.IsNumericType(op.Operand.Type))
@@ -157,130 +113,113 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
         else
             sig = BuildBuiltinUnarySignature(op);
 
-        _ctx.Module.AddPush(operandId);
-        _ctx.Module.AddPush(tempId);
-        AddExternChecked(sig);
-
-        return tempId;
+        return ExternCall(sig, new List<HExpr> { operandVal }, resultType);
     }
 
-    string VisitBitwiseNot(IUnaryOperation op)
+    HExpr VisitBitwiseNot(IUnaryOperation op)
     {
-        var operandId = VisitExpression(op.Operand);
+        var operandVal = VisitExpression(op.Operand);
         var operandType = GetUdonType(op.Operand.Type);
         var resultType = GetUdonType(op.Type);
-        var resultId = _ctx.Vars.DeclareTemp(resultType);
 
         // ~x ≡ x ^ allBits  (signed: -1 = all bits set, unsigned: MaxValue)
-        var allBitsValue = op.Operand.Type.SpecialType switch
+        object allBitsValue = op.Operand.Type.SpecialType switch
         {
             SpecialType.System_Int32 or SpecialType.System_Int16
-                or SpecialType.System_Int64 or SpecialType.System_SByte => "-1",
-            SpecialType.System_UInt32 => uint.MaxValue.ToString(),
-            SpecialType.System_UInt64 => ulong.MaxValue.ToString(),
-            SpecialType.System_UInt16 => ushort.MaxValue.ToString(),
-            SpecialType.System_Byte => byte.MaxValue.ToString(),
+                or SpecialType.System_Int64 or SpecialType.System_SByte => EmitContext.ParseConstValue(operandType, "-1"),
+            SpecialType.System_UInt32 => uint.MaxValue,
+            SpecialType.System_UInt64 => ulong.MaxValue,
+            SpecialType.System_UInt16 => ushort.MaxValue,
+            SpecialType.System_Byte => byte.MaxValue,
             _ => throw new System.NotSupportedException(
                 $"Bitwise NOT (~) is not supported on type {operandType}")
         };
-        var allBitsId = _ctx.Vars.DeclareConst(operandType, allBitsValue);
+        var allBitsConst = Const(allBitsValue, operandType);
 
-        _ctx.Module.AddPush(operandId);
-        _ctx.Module.AddPush(allBitsId);
-        _ctx.Module.AddPush(resultId);
-        AddExternChecked(ExternResolver.ResolveBinaryExtern(
-            BinaryOperatorKind.ExclusiveOr, null,
-            ResolveType(op.Operand.Type), ResolveType(op.Operand.Type), ResolveType(op.Type)));
-
-        return resultId;
+        return ExternCall(
+            ExternResolver.ResolveBinaryExtern(
+                BinaryOperatorKind.ExclusiveOr, null,
+                ResolveType(op.Operand.Type), ResolveType(op.Operand.Type), ResolveType(op.Type)),
+            new List<HExpr> { operandVal, allBitsConst },
+            resultType);
     }
 
     // ── Is-type / Is-pattern ──
 
-    string VisitIsType(IIsTypeOperation op)
+    HExpr VisitIsType(IIsTypeOperation op)
     {
-        var valueId = VisitExpression(op.ValueOperand);
-        var typeConstId = _ctx.Vars.DeclareConst("SystemType",
-            GetUdonType(op.TypeOperand));
-        var resultId = _ctx.Vars.DeclareTemp("SystemBoolean");
-        _ctx.Module.AddPush(typeConstId);
-        _ctx.Module.AddPush(valueId);
-        _ctx.Module.AddPush(resultId);
-        AddExternChecked("SystemType.__IsInstanceOfType__SystemObject__SystemBoolean");
-        return resultId;
+        var valueVal = VisitExpression(op.ValueOperand);
+        var typeConst = Const(GetUdonType(op.TypeOperand), "SystemType");
+        return ExternCall(
+            "SystemType.__IsInstanceOfType__SystemObject__SystemBoolean",
+            new List<HExpr> { typeConst, valueVal },
+            "SystemBoolean");
     }
 
-    string VisitIsPattern(IIsPatternOperation op)
+    HExpr VisitIsPattern(IIsPatternOperation op)
     {
-        var valueId = VisitExpression(op.Value);
-        return EmitPatternCheckImpl(valueId, op.Value.Type, op.Pattern);
+        var valueVal = VisitExpression(op.Value);
+        return EmitPatternCheckImpl(valueVal, op.Value.Type, op.Pattern);
     }
 
     // ── Pattern matching (public — called from LoopHandler via EmitContext dispatch) ──
 
-    public string EmitPatternCheckImpl(string valueId, ITypeSymbol valueType, IPatternOperation pattern)
+    public HExpr EmitPatternCheckImpl(HExpr valueVal, ITypeSymbol valueType, IPatternOperation pattern)
     {
         switch (pattern)
         {
             case IConstantPatternOperation constPat:
             {
-                var constId = VisitExpression(constPat.Value);
+                var constVal = VisitExpression(constPat.Value);
                 var eqType = GetUdonType(valueType);
                 // Enum comparison → convert operands and use underlying type
-                var convertedValueId = EmitEnumToUnderlying(valueId, valueType);
-                constId = EmitEnumToUnderlying(constId, valueType);
+                var convertedValueVal = EmitEnumToUnderlying(valueVal, valueType);
+                constVal = EmitEnumToUnderlying(constVal, valueType);
                 if (valueType is INamedTypeSymbol named && named.TypeKind == TypeKind.Enum)
                     eqType = GetUdonType(named.EnumUnderlyingType);
-                var resultId = _ctx.Vars.DeclareTemp("SystemBoolean");
-                _ctx.Module.AddPush(convertedValueId);
-                _ctx.Module.AddPush(constId);
-                _ctx.Module.AddPush(resultId);
                 // null comparisons use SystemObject equality
                 var cmpType = constPat.Value.ConstantValue is { HasValue: true, Value: null }
                     ? "SystemObject" : eqType;
-                AddExternChecked(ExternResolver.BuildMethodSignature(
-                    cmpType, "__op_Equality", new[] { cmpType, cmpType }, "SystemBoolean"));
-                return resultId;
+                return ExternCall(
+                    ExternResolver.BuildMethodSignature(
+                        cmpType, "__op_Equality", new[] { cmpType, cmpType }, "SystemBoolean"),
+                    new List<HExpr> { convertedValueVal, constVal },
+                    "SystemBoolean");
             }
             case INegatedPatternOperation negated:
             {
-                var innerId = EmitPatternCheckImpl(valueId, valueType, negated.Pattern);
-                var negId = _ctx.Vars.DeclareTemp("SystemBoolean");
-                _ctx.Module.AddPush(innerId);
-                _ctx.Module.AddPush(negId);
-                AddExternChecked("SystemBoolean.__op_UnaryNegation__SystemBoolean__SystemBoolean");
-                return negId;
+                var innerVal = EmitPatternCheckImpl(valueVal, valueType, negated.Pattern);
+                return ExternCall(
+                    "SystemBoolean.__op_UnaryNegation__SystemBoolean__SystemBoolean",
+                    new List<HExpr> { innerVal },
+                    "SystemBoolean");
             }
             case ITypePatternOperation typePat:
-                return EmitTypeCheck(valueId, typePat.MatchedType);
+                return EmitTypeCheck(valueVal, typePat.MatchedType);
 
             case IDeclarationPatternOperation declPat:
             {
-                var checkId = EmitTypeCheck(valueId, declPat.MatchedType);
+                var checkVal = EmitTypeCheck(valueVal, declPat.MatchedType);
                 if (declPat.DeclaredSymbol is ILocalSymbol local)
                 {
                     var localType = GetUdonType(local.Type);
-                    var localId = _ctx.Vars.DeclareLocal(local.Name, localType);
+                    var localId = _ctx.DeclareLocal(local.Name, localType);
+                    _localVarIds[local] = localId;
                     // Only assign when type check succeeds — avoid invalid type COPY on mismatch
-                    var skipLabel = _ctx.Module.DefineLabel("__declpat_skip");
-                    _ctx.Module.AddPush(checkId);
-                    _ctx.Module.AddJumpIfFalse(skipLabel);
-                    _ctx.Module.AddCopy(valueId, localId);
-                    _ctx.Module.MarkLabel(skipLabel);
+                    _builder.EmitIf(checkVal, b =>
+                    {
+                        EmitStoreField(localId, valueVal);
+                    });
                 }
-                return checkId;
+                return checkVal;
             }
             case IDiscardPatternOperation:
-                return _ctx.Vars.DeclareConst("SystemBoolean", "True");
+                return Const(true, "SystemBoolean");
 
             case IRelationalPatternOperation relPat:
             {
-                var constId = VisitExpression(relPat.Value);
+                var constVal = VisitExpression(relPat.Value);
                 var valType = GetUdonType(valueType);
-                var resultId = _ctx.Vars.DeclareTemp("SystemBoolean");
-                _ctx.Module.AddPush(valueId);
-                _ctx.Module.AddPush(constId);
-                _ctx.Module.AddPush(resultId);
                 var opName = relPat.OperatorKind switch
                 {
                     BinaryOperatorKind.LessThan => "__op_LessThan",
@@ -290,48 +229,20 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
                     _ => throw new System.NotSupportedException(
                         $"Unsupported relational operator: {relPat.OperatorKind}")
                 };
-                AddExternChecked(ExternResolver.BuildMethodSignature(
-                    valType, opName, new[] { valType, valType }, "SystemBoolean"));
-                return resultId;
+                return ExternCall(
+                    ExternResolver.BuildMethodSignature(
+                        valType, opName, new[] { valType, valType }, "SystemBoolean"),
+                    new List<HExpr> { valueVal, constVal },
+                    "SystemBoolean");
             }
             case IBinaryPatternOperation binPat:
             {
-                var resultId = _ctx.Vars.DeclareTemp("SystemBoolean");
-                if (binPat.OperatorKind == BinaryOperatorKind.And)
-                {
-                    // and pattern: short-circuit — skip right if left is false
-                    var falseConst = _ctx.Vars.DeclareConst("SystemBoolean", "False");
-                    var shortLabel = _ctx.Module.DefineLabel("__patand_short");
-                    var endLabel = _ctx.Module.DefineLabel("__patand_end");
-
-                    var leftId = EmitPatternCheckImpl(valueId, valueType, binPat.LeftPattern);
-                    _ctx.Module.AddPush(leftId);
-                    _ctx.Module.AddJumpIfFalse(shortLabel);
-                    var rightId = EmitPatternCheckImpl(valueId, valueType, binPat.RightPattern);
-                    _ctx.Module.AddCopy(rightId, resultId);
-                    _ctx.Module.AddJump(endLabel);
-                    _ctx.Module.MarkLabel(shortLabel);
-                    _ctx.Module.AddCopy(falseConst, resultId);
-                    _ctx.Module.MarkLabel(endLabel);
-                }
-                else
-                {
-                    // or pattern: short-circuit — skip right if left is true
-                    var trueConst = _ctx.Vars.DeclareConst("SystemBoolean", "True");
-                    var evalRightLabel = _ctx.Module.DefineLabel("__pator_right");
-                    var endLabel = _ctx.Module.DefineLabel("__pator_end");
-
-                    var leftId = EmitPatternCheckImpl(valueId, valueType, binPat.LeftPattern);
-                    _ctx.Module.AddPush(leftId);
-                    _ctx.Module.AddJumpIfFalse(evalRightLabel);
-                    _ctx.Module.AddCopy(trueConst, resultId);
-                    _ctx.Module.AddJump(endLabel);
-                    _ctx.Module.MarkLabel(evalRightLabel);
-                    var rightId = EmitPatternCheckImpl(valueId, valueType, binPat.RightPattern);
-                    _ctx.Module.AddCopy(rightId, resultId);
-                    _ctx.Module.MarkLabel(endLabel);
-                }
-                return resultId;
+                var leftVal = EmitPatternCheckImpl(valueVal, valueType, binPat.LeftPattern);
+                var rightVal = EmitPatternCheckImpl(valueVal, valueType, binPat.RightPattern);
+                var opName = binPat.OperatorKind == BinaryOperatorKind.And
+                    ? "SystemBoolean.__op_ConditionalAnd__SystemBoolean_SystemBoolean__SystemBoolean"
+                    : "SystemBoolean.__op_ConditionalOr__SystemBoolean_SystemBoolean__SystemBoolean";
+                return ExternCall(opName, new List<HExpr> { leftVal, rightVal }, "SystemBoolean");
             }
 
             default:
@@ -339,82 +250,74 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
         }
     }
 
-    string EmitTypeCheck(string valueId, ITypeSymbol targetType)
+    HExpr EmitTypeCheck(HExpr valueVal, ITypeSymbol targetType)
     {
-        var typeConstId = _ctx.Vars.DeclareConst("SystemType",
-            GetUdonType(targetType));
-        var resultId = _ctx.Vars.DeclareTemp("SystemBoolean");
-        _ctx.Module.AddPush(typeConstId);
-        _ctx.Module.AddPush(valueId);
-        _ctx.Module.AddPush(resultId);
-        AddExternChecked("SystemType.__IsInstanceOfType__SystemObject__SystemBoolean");
-        return resultId;
+        var typeConst = Const(GetUdonType(targetType), "SystemType");
+        return ExternCall(
+            "SystemType.__IsInstanceOfType__SystemObject__SystemBoolean",
+            new List<HExpr> { typeConst, valueVal },
+            "SystemBoolean");
     }
 
     // ── Switch expression ──
 
-    string VisitSwitchExpression(ISwitchExpressionOperation op)
+    HExpr VisitSwitchExpression(ISwitchExpressionOperation op)
     {
         var resultType = GetUdonType(op.Type);
-        var resultId = _ctx.Vars.DeclareTemp(resultType);
+        var resultField = _ctx.DeclareTemp(resultType);
         // Initialize result to default in case no arm matches (non-exhaustive)
-        var defaultConst = _ctx.Vars.DeclareConst(resultType, GetDefaultConstValue(resultType));
-        _ctx.Module.AddCopy(defaultConst, resultId);
-        var valueId = VisitExpression(op.Value);
-        var endLabel = _ctx.Module.DefineLabel("__switchexpr_end");
+        EmitStoreField(resultField, Const(
+            EmitContext.ParseConstValue(resultType, GetDefaultConstValue(resultType)), resultType));
+        var valueVal = VisitExpression(op.Value);
 
         foreach (var arm in op.Arms)
         {
-            var nextArmLabel = _ctx.Module.DefineLabel("__switchexpr_next");
-
-            if (arm.Pattern is not IDiscardPatternOperation)
+            if (arm.Pattern is IDiscardPatternOperation)
             {
-                var checkId = EmitPatternCheckImpl(valueId, op.Value.Type, arm.Pattern);
-                _ctx.Module.AddPush(checkId);
-                _ctx.Module.AddJumpIfFalse(nextArmLabel);
+                // Default arm — always matches
+                var armVal = VisitExpression(arm.Value);
+                EmitStoreField(resultField, armVal);
+            }
+            else
+            {
+                var checkVal = EmitPatternCheckImpl(valueVal, op.Value.Type, arm.Pattern);
 
                 if (arm.Guard != null)
                 {
-                    var guardId = VisitExpression(arm.Guard);
-                    _ctx.Module.AddPush(guardId);
-                    _ctx.Module.AddJumpIfFalse(nextArmLabel);
+                    // Pattern match + guard: both must be true
+                    _builder.EmitIf(checkVal, b =>
+                    {
+                        var guardVal = VisitExpression(arm.Guard);
+                        _builder.EmitIf(guardVal, b2 =>
+                        {
+                            var armVal = VisitExpression(arm.Value);
+                            EmitStoreField(resultField, armVal);
+                        });
+                    });
+                }
+                else
+                {
+                    _builder.EmitIf(checkVal, b =>
+                    {
+                        var armVal = VisitExpression(arm.Value);
+                        EmitStoreField(resultField, armVal);
+                    });
                 }
             }
-
-            var armValueId = VisitExpression(arm.Value);
-            _ctx.Module.AddCopy(armValueId, resultId);
-            _ctx.Module.AddJump(endLabel);
-            _ctx.Module.MarkLabel(nextArmLabel);
         }
 
-        _ctx.Module.MarkLabel(endLabel);
-        return resultId;
+        return LoadField(resultField, resultType);
     }
 
     // ── Conditional (ternary) expression ──
 
-    string VisitConditionalExpression(IConditionalOperation op)
+    HExpr VisitConditionalExpression(IConditionalOperation op)
     {
+        var condVal = VisitExpression(op.Condition);
+        var trueVal = VisitExpression(op.WhenTrue);
+        var falseVal = VisitExpression(op.WhenFalse);
         var resultType = GetUdonType(op.Type);
-        var resultId = _ctx.Vars.DeclareTemp(resultType);
-
-        var condId = VisitExpression(op.Condition);
-        var elseLabel = _ctx.Module.DefineLabel("__ternary_else");
-        var endLabel = _ctx.Module.DefineLabel("__ternary_end");
-
-        _ctx.Module.AddPush(condId);
-        _ctx.Module.AddJumpIfFalse(elseLabel);
-
-        var trueId = VisitExpression(op.WhenTrue);
-        _ctx.Module.AddCopy(trueId, resultId);
-        _ctx.Module.AddJump(endLabel);
-
-        _ctx.Module.MarkLabel(elseLabel);
-        var falseId = VisitExpression(op.WhenFalse);
-        _ctx.Module.AddCopy(falseId, resultId);
-
-        _ctx.Module.MarkLabel(endLabel);
-        return resultId;
+        return Select(condVal, trueVal, falseVal, resultType);
     }
 
     // ── Extern signature helpers ──

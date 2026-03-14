@@ -13,7 +13,7 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
             or IPropertyReferenceOperation
             or IInterpolatedStringOperation;
 
-    public string Handle(IOperation expression) => expression switch
+    public HExpr Handle(IOperation expression) => expression switch
     {
         IInvocationOperation op => VisitInvocation(op),
         IObjectCreationOperation op => VisitObjectCreation(op),
@@ -24,26 +24,26 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
 
     // ── VisitInvocation ──
 
-    string VisitInvocation(IInvocationOperation op)
+    HExpr VisitInvocation(IInvocationOperation op)
     {
         var target = op.TargetMethod;
 
         // Resolve type parameters in generic method type arguments (e.g., Min<T> → Min<int>)
-        if (target.IsGenericMethod && _ctx.TypeParamMap != null)
+        if (target.IsGenericMethod && _typeParamMap != null)
         {
             var needsSub = false;
             foreach (var ta in target.TypeArguments)
             {
-                if (ta is not ITypeParameterSymbol tp || !_ctx.TypeParamMap.ContainsKey(tp)) 
+                if (ta is not ITypeParameterSymbol tp || !_typeParamMap.ContainsKey(tp))
                     continue;
-                
+
                 needsSub = true;
                 break;
             }
 
             if (needsSub)
             {
-                var newTypeArgs = target.TypeArguments.Select(ta => ta is ITypeParameterSymbol tp2 && _ctx.TypeParamMap.TryGetValue(tp2, out var sub) ? sub : ta).ToArray();
+                var newTypeArgs = target.TypeArguments.Select(ta => ta is ITypeParameterSymbol tp2 && _typeParamMap.TryGetValue(tp2, out var sub) ? sub : ta).ToArray();
                 target = target.OriginalDefinition.Construct(newTypeArgs);
             }
         }
@@ -55,70 +55,62 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
                 return VisitDelegateInvocation(op);
             // Local function call
             case MethodKind.LocalFunction
-                when _ctx.MethodLabels.TryGetValue(target, out var localLabel):
-                return EmitUserMethodCall(op, target, localLabel);
+                when _methodFunctions.ContainsKey(target):
+                return EmitUserMethodCall(op, target);
         }
 
         // User-defined generic method → monomorphize
-        if (target.IsGenericMethod && SymbolEqualityComparer.Default.Equals(target.OriginalDefinition.ContainingType, _ctx.ClassSymbol))
+        if (target.IsGenericMethod && SymbolEqualityComparer.Default.Equals(target.OriginalDefinition.ContainingType, _classSymbol))
         {
             RegisterGenericSpecialization(target);
-            var specLabel = _ctx.MethodLabels[target];
-            return EmitUserMethodCall(op, target, specLabel);
+            return EmitUserMethodCall(op, target);
         }
 
         // User-defined method in the same class
-        if (SymbolEqualityComparer.Default.Equals(target.ContainingType, _ctx.ClassSymbol) && _ctx.MethodLabels.TryGetValue(target, out var targetLabel))
+        if (SymbolEqualityComparer.Default.Equals(target.ContainingType, _classSymbol) && _methodFunctions.ContainsKey(target))
         {
-            return EmitUserMethodCall(op, target, targetLabel);
+            return EmitUserMethodCall(op, target);
         }
 
         // Base class instance method (emitted locally)
-        if (_ctx.MethodLabels.TryGetValue(target, out var baseLabel) && IsBaseInstanceMethod(target))
-            return EmitUserMethodCall(op, target, baseLabel);
+        if (_methodFunctions.ContainsKey(target) && IsBaseInstanceMethod(target))
+            return EmitUserMethodCall(op, target);
 
-        // Generic foreign static method → monomorphize and emit as JUMP call
+        // Generic foreign static method → monomorphize and emit as internal call
         if (target.IsGenericMethod && IsForeignStatic(target))
         {
             var constructed = target.ReducedFrom != null
                 ? target.ReducedFrom.OriginalDefinition.Construct(target.TypeArguments.ToArray())
                 : target.OriginalDefinition.Construct(target.TypeArguments.ToArray());
             RegisterGenericSpecialization(constructed);
-            var specLabel = _ctx.MethodLabels[constructed];
-            var specParamIds = _ctx.MethodParamVarIds[constructed];
-            var savedCurrentParams = SaveMethodParameterState(_ctx.CurrentMethod);
-            var paramOffset = 0;
+            var args = new List<HExpr>();
             if (target.ReducedFrom != null && op.Instance != null)
             {
-                CopyArgumentToMethodParameter(constructed, 0, op.Instance, specParamIds[0]);
-                paramOffset = 1;
+                args.Add(VisitExpression(op.Instance));
             }
             for (var i = 0; i < op.Arguments.Length; i++)
-                CopyArgumentToMethodParameter(constructed, i + paramOffset, op.Arguments[i].Value, specParamIds[i + paramOffset]);
-            var result = EmitCallByLabel(constructed, specLabel);
-            RestoreMethodParameterState(savedCurrentParams);
-            return result;
+            {
+                args.Add(VisitExpression(op.Arguments[i].Value));
+            }
+            return EmitCallToMethod(constructed, args);
         }
 
-        // Foreign static method → inlined as JUMP call (resolve extension method original form)
+        // Foreign static method → inlined as internal call (resolve extension method original form)
         {
             var original = target.ReducedFrom ?? target;
-            if (IsForeignStatic(target) && _ctx.MethodLabels.TryGetValue(original, out var foreignLabel))
+            if (IsForeignStatic(target) && _methodFunctions.ContainsKey(original))
             {
-                var origParamIds = _ctx.MethodParamVarIds[original];
-                var savedCurrentParams = SaveMethodParameterState(_ctx.CurrentMethod);
-                var paramOffset = 0;
+                var args = new List<HExpr>();
                 // Extension method: instance is the first (this) parameter
                 if (target.ReducedFrom != null && op.Instance != null)
                 {
-                    CopyArgumentToMethodParameter(original, 0, op.Instance, origParamIds[0]);
-                    paramOffset = 1;
+                    args.Add(VisitExpression(op.Instance));
                 }
                 for (var i = 0; i < op.Arguments.Length; i++)
-                    CopyArgumentToMethodParameter(original, i + paramOffset, op.Arguments[i].Value, origParamIds[i + paramOffset]);
-                var result = EmitCallByLabel(original, foreignLabel);
-                RestoreMethodParameterState(savedCurrentParams);
-                return result;
+                {
+                    args.Add(VisitExpression(op.Arguments[i].Value));
+                }
+                return EmitCallToMethod(original, args);
             }
         }
 
@@ -151,46 +143,60 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
 
     // ── Delegate Invocation ──
 
-    string VisitDelegateInvocation(IInvocationOperation op)
+    HExpr VisitDelegateInvocation(IInvocationOperation op)
     {
         // Delegate parameter invocation via JUMP_INDIRECT
         if (op.Instance is IParameterReferenceOperation paramRef2
-            && _ctx.CurrentMethod != null
-            && _ctx.MethodIndices.TryGetValue(_ctx.CurrentMethod, out var currentIdx)
-            && _ctx.DelegateParamConventions.TryGetValue((currentIdx, paramRef2.Parameter.Ordinal), out var convention))
+            && _currentMethod != null
+            && _methodIndices.TryGetValue(_currentMethod, out var currentIdx)
+            && _delegateParamConventions.TryGetValue((currentIdx, paramRef2.Parameter.Ordinal), out var convention))
         {
-            // Copy args to convention vars
+            // Collect args as HExprs
+            var args = new List<HExpr>();
             for (int i = 0; i < op.Arguments.Length; i++)
+                args.Add(VisitExpression(op.Arguments[i].Value));
+
+            // Store args to convention fields
+            for (int i = 0; i < args.Count && i < convention.ArgVarIds.Length; i++)
+                EmitStoreField(convention.ArgVarIds[i], args[i]);
+
+            // Get the method pointer (param var holding the lambda's address)
+            var methodPtr = LoadParam(paramRef2.Parameter);
+
+            // Determine return type
+            string retType = convention.RetVarId != null
+                ? _ctx.GetFieldType(convention.RetVarId)
+                : null;
+
+            // Emit indirect call through delegate
+            // In HIR, indirect calls are represented as InternalCall("__indirect", [methodPtr], retType)
+            // The ABI lowering pass will expand this to JUMP_INDIRECT with convention fields.
+            var callRetType = retType ?? "SystemVoid";
+            var indirectCall = InternalCall("__indirect", new List<HExpr> { methodPtr }, callRetType);
+
+            if (retType != null)
             {
-                var argId = VisitExpression(op.Arguments[i].Value);
-                _ctx.Module.AddCopy(argId, convention.ArgVarIds[i]);
+                // Side-effect: the call itself
+                EmitExprStmt(indirectCall);
+                // Read back the return value from the convention return field
+                return LoadField(convention.RetVarId, retType);
             }
-
-            // Get the label var (param var holding the lambda's address)
-            var labelVarId = GetParamVarId(paramRef2.Parameter);
-
-            // Stack-based: push return addr onto VM stack, JUMP_INDIRECT to delegate
-            var returnLabel = _ctx.Module.DefineLabel("__dlg_return");
-            _ctx.Module.AddPushLabel(returnLabel);
-            _ctx.Module.AddJumpIndirect(labelVarId);
-            _ctx.Module.MarkLabel(returnLabel);
-
-            return convention.RetVarId;
+            else
+            {
+                EmitExprStmt(indirectCall);
+                return null;
+            }
         }
 
         // op.Instance is the delegate local reference (e.g., 'a' in a())
         if (op.Instance is ILocalReferenceOperation localRef
-            && _ctx.DelegateVarMap.TryGetValue(localRef.Local, out var targetMethod))
+            && _delegateVarMap.TryGetValue(localRef.Local, out var targetMethod))
         {
-            var label = _ctx.MethodLabels[targetMethod];
-            var targetParamIds = _ctx.MethodParamVarIds[targetMethod];
-
+            var args = new List<HExpr>();
             for (int i = 0; i < op.Arguments.Length; i++)
-            {
-                var argId = VisitExpression(op.Arguments[i].Value);
-                _ctx.Module.AddCopy(argId, targetParamIds[i]);
-            }
-            return EmitCallByLabel(targetMethod, label);
+                args.Add(VisitExpression(op.Arguments[i].Value));
+
+            return EmitCallToMethod(targetMethod, args);
         }
         throw new System.NotSupportedException("Cannot resolve delegate target");
     }
@@ -199,70 +205,40 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
 
     void RegisterGenericSpecialization(IMethodSymbol constructed)
     {
-        if (_ctx.MethodLabels.ContainsKey(constructed)) return;
+        if (_methodFunctions.ContainsKey(constructed)) return;
 
-        var idx = _ctx.NextMethodIndex++;
-        _ctx.MethodIndices[constructed] = idx;
-        _ctx.MethodVarPrefix[constructed] = idx.ToString();
+        var idx = _nextMethodIndex++;
+        _methodIndices[constructed] = idx;
+        _methodVarPrefix[constructed] = idx.ToString();
 
         var typeArgPart = string.Join("_", constructed.TypeArguments.Select(ExternResolver.GetUdonTypeName));
         var name = $"__{idx}_{SanitizeId(constructed.Name)}_{typeArgPart}";
-        var label = _ctx.Module.DefineLabel(name);
-        _ctx.MethodLabels[constructed] = label;
+        var func = _hirModule.AddFunction(name);
+        _methodFunctions[constructed] = func;
 
         var gsParamIds = new string[constructed.Parameters.Length];
         for (int pi = 0; pi < constructed.Parameters.Length; pi++)
         {
             var param = constructed.Parameters[pi];
-            if (param.Type.IsTupleType && param.Type is INamedTypeSymbol tupleParamType)
-            {
-                var elements = tupleParamType.TupleElements;
-                var tupleParamIds = new string[elements.Length];
-                for (int ei = 0; ei < elements.Length; ei++)
-                {
-                    var elemType = GetUdonType(elements[ei].Type);
-                    var tupleParamId = $"__{idx}_{param.Name}__param_{ei}";
-                    _ctx.Vars.DeclareVar(tupleParamId, elemType);
-                    tupleParamIds[ei] = tupleParamId;
-                }
-                _ctx.MethodTupleParamVarIds[(constructed, pi)] = tupleParamIds;
-                continue;
-            }
-
             var isDelegateParam = param.Type is INamedTypeSymbol nt2 && nt2.DelegateInvokeMethod != null;
             var udonType = isDelegateParam ? "SystemUInt32" : GetUdonType(param.Type);
             var paramId = $"__{idx}_{param.Name}__param";
-            _ctx.Vars.DeclareVar(paramId, udonType);
+            _ctx.DeclareVar(paramId, udonType);
             gsParamIds[pi] = paramId;
         }
-        _ctx.MethodParamVarIds[constructed] = gsParamIds;
+        _methodParamVarIds[constructed] = gsParamIds;
 
         if (!constructed.ReturnsVoid)
         {
-            if (constructed.ReturnType.IsTupleType && constructed.ReturnType is INamedTypeSymbol tupleType)
-            {
-                var elements = tupleType.TupleElements;
-                var tupleRetIds = new string[elements.Length];
-                for (int ei = 0; ei < elements.Length; ei++)
-                {
-                    var elemType = GetUdonType(elements[ei].Type);
-                    var retId = $"__{idx}_{SanitizeId(constructed.Name)}__ret_{ei}";
-                    _ctx.Vars.DeclareVar(retId, elemType);
-                    tupleRetIds[ei] = retId;
-                }
-                _ctx.MethodTupleRetVars[constructed] = tupleRetIds;
-            }
-            else
-            {
-                var retType = GetUdonType(constructed.ReturnType);
-                var retId = $"__{idx}_{SanitizeId(constructed.Name)}__ret";
-                _ctx.Vars.DeclareVar(retId, retType);
-                _ctx.MethodRetVars[constructed] = retId;
-                _ctx.MethodRetTypes[constructed] = retType;
-            }
+            var retType = GetUdonType(constructed.ReturnType);
+            var retId = $"__{idx}_{SanitizeId(constructed.Name)}__ret";
+            _ctx.DeclareVar(retId, retType);
+            func.ReturnType = retType;
+            _methodRetVars[constructed] = retId;
+            _methodRetTypes[constructed] = retType;
         }
 
-        _ctx.PendingGenericSpecs.Add(constructed);
+        _pendingGenericSpecs.Add(constructed);
         DeclareDelegateConventionVars(constructed, idx);
     }
 
@@ -278,15 +254,15 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
             for (int j = 0; j < invoke.Parameters.Length; j++)
             {
                 var argType = GetUdonType(invoke.Parameters[j].Type);
-                argVarIds[j] = _ctx.Vars.DeclareVar($"__dlg_{idx}_{param.Name}_a{j}", argType);
+                argVarIds[j] = _ctx.DeclareVar($"__dlg_{idx}_{param.Name}_a{j}", argType);
             }
             string retVarId = null;
             if (!invoke.ReturnsVoid)
             {
                 var retType = GetUdonType(invoke.ReturnType);
-                retVarId = _ctx.Vars.DeclareVar($"__dlg_{idx}_{param.Name}_ret", retType);
+                retVarId = _ctx.DeclareVar($"__dlg_{idx}_{param.Name}_ret", retType);
             }
-            _ctx.DelegateParamConventions[(idx, param.Ordinal)] = new DelegateConvention
+            _delegateParamConventions[(idx, param.Ordinal)] = new DelegateConvention
             {
                 ArgVarIds = argVarIds, RetVarId = retVarId
             };
@@ -306,7 +282,7 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
                 return true;
             }
 
-            if (op is not IConversionOperation conv) 
+            if (op is not IConversionOperation conv)
                 return false;
             op = conv.Operand;
         }
@@ -315,33 +291,59 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
     void HoistLambdaForDelegateParam(IAnonymousFunctionOperation lambda, DelegateConvention convention)
     {
         var symbol = lambda.Symbol;
-        if (_ctx.MethodLabels.ContainsKey(symbol)) return;
+        if (_methodFunctions.ContainsKey(symbol)) return;
 
-        var idx = _ctx.NextMethodIndex++;
-        _ctx.MethodIndices[symbol] = idx;
-        _ctx.MethodVarPrefix[symbol] = idx.ToString();
-        var label = _ctx.Module.DefineLabel($"__{idx}_lambda");
-        _ctx.MethodLabels[symbol] = label;
+        var idx = _nextMethodIndex++;
+        _methodIndices[symbol] = idx;
+        _methodVarPrefix[symbol] = idx.ToString();
+        var func = _hirModule.AddFunction($"__{idx}_lambda");
+        _methodFunctions[symbol] = func;
 
         // Convention vars are used instead of standard param/ret vars.
         // Store convention arg var IDs as param IDs for consistency.
-        _ctx.MethodParamVarIds[symbol] = convention.ArgVarIds ?? System.Array.Empty<string>();
+        _methodParamVarIds[symbol] = convention.ArgVarIds ?? System.Array.Empty<string>();
 
         // Override: use convention vars instead of standard param/ret vars
-        _ctx.LambdaConventionOverrides[symbol] = convention;
+        _lambdaConventionOverrides[symbol] = convention;
         if (convention.RetVarId != null)
         {
-            _ctx.MethodRetVars[symbol] = convention.RetVarId;
-            _ctx.MethodRetTypes[symbol] = _ctx.Vars.GetDeclaredType(convention.RetVarId);
+            _methodRetVars[symbol] = convention.RetVarId;
+            _methodRetTypes[symbol] = _ctx.GetFieldType(convention.RetVarId);
         }
 
-        _ctx.PendingLocalFunctions.Add((symbol, label));
+        _pendingLocalFunctions.Add((symbol, func));
     }
 
     // ── Classification helpers ──
 
-    bool IsForeignStatic(IMethodSymbol method) => _ctx.IsForeignStatic(method);
-    bool IsBaseInstanceMethod(IMethodSymbol method) => _ctx.IsBaseInstanceMethod(method);
+    bool IsForeignStatic(IMethodSymbol method)
+    {
+        // Extension methods: ReducedFrom holds the original static definition
+        var resolved = method.ReducedFrom ?? method;
+        if (!resolved.IsStatic) return false;
+        if (resolved.ContainingType.DeclaringSyntaxReferences.Length == 0) return false;
+        if (ExternResolver.IsUdonSharpBehaviour(resolved.ContainingType)) return false;
+        if (SymbolEqualityComparer.Default.Equals(resolved.ContainingType, _classSymbol)) return false;
+        if (IsExternNamespace(resolved.ContainingType.ContainingNamespace)) return false;
+        return true;
+    }
+
+    bool IsBaseInstanceMethod(IMethodSymbol method)
+    {
+        if (method.IsStatic) return false;
+        if (method.ContainingType.DeclaringSyntaxReferences.Length == 0) return false;
+        if (SymbolEqualityComparer.Default.Equals(method.ContainingType, _classSymbol)) return false;
+        if (USugarCompilerHelper.IsFrameworkNamespace(method.ContainingType.ContainingNamespace)) return false;
+        if (method.ContainingType.Name == "UdonSharpBehaviour") return false;
+        // Check ancestor chain
+        var bt = _classSymbol.BaseType;
+        while (bt != null)
+        {
+            if (SymbolEqualityComparer.Default.Equals(bt, method.ContainingType)) return true;
+            bt = bt.BaseType;
+        }
+        return false;
+    }
 
     bool IsResolvedConcreteNonBehaviour(ITypeSymbol type)
     {
@@ -349,11 +351,11 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
         {
             case null:
             // Type parameter: resolve via TypeParamMap
-            case ITypeParameterSymbol when _ctx.TypeParamMap == null:
+            case ITypeParameterSymbol when _typeParamMap == null:
                 return false;
             case ITypeParameterSymbol tp:
             {
-                if (!_ctx.TypeParamMap.TryGetValue(tp, out var concrete)) return false;
+                if (!_typeParamMap.TryGetValue(tp, out var concrete)) return false;
                 return !ExternResolver.IsUdonSharpBehaviour(concrete);
             }
         }
@@ -363,4 +365,16 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
         return !ExternResolver.IsUdonSharpBehaviour(type);
     }
 
+    /// <summary>
+    /// Like IsFrameworkNamespace but excludes UdonSharp — types in UdonSharp.* that are not
+    /// UdonSharpBehaviour may be user-defined helper classes with generic methods to inline.
+    /// </summary>
+    static bool IsExternNamespace(INamespaceSymbol ns)
+    {
+        if (ns == null || ns.IsGlobalNamespace) return false;
+        var root = ns;
+        while (root.ContainingNamespace is { IsGlobalNamespace: false })
+            root = root.ContainingNamespace;
+        return root.Name is "UnityEngine" or "VRC" or "TMPro" or "System";
+    }
 }

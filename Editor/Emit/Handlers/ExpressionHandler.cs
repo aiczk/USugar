@@ -1,7 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Globalization;
-using System.Linq;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.Operations;
 
@@ -23,60 +21,48 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
             or IDiscardOperation
             or IDelegateCreationOperation;
 
-    public string Handle(IOperation expression) => expression switch
+    public HExpr Handle(IOperation expression) => expression switch
     {
         ILiteralOperation op => VisitLiteral(op),
-        ILocalReferenceOperation localRef => VisitLocalReference(localRef),
+        ILocalReferenceOperation localRef => _localVarIds.TryGetValue(localRef.Local, out var capturedId)
+                                                 ? LoadField(capturedId, GetUdonType(localRef.Type))
+                                                 : throw new InvalidOperationException($"Cannot resolve local variable '{localRef.Local.Name}' in method '{_currentMethod?.Name ?? "(none)"}'."),
         IFieldReferenceOperation op => VisitFieldReference(op),
-        IParameterReferenceOperation paramRef => GetParamVarId(paramRef.Parameter),
-        IInstanceReferenceOperation => _ctx.Vars.DeclareThisOnce(GetUdonType(_ctx.ClassSymbol)),
+        IParameterReferenceOperation paramRef => LoadParam(paramRef.Parameter),
+        IInstanceReferenceOperation => LoadField(_ctx.DeclareThisOnce(GetUdonType(_classSymbol)), GetUdonType(_classSymbol)),
         IConversionOperation op => VisitConversion(op),
         IDefaultValueOperation op => VisitDefaultValue(op),
-        ITypeOfOperation typeOf => _ctx.Vars.DeclareConst("SystemType", GetUdonType(typeOf.TypeOperand)),
-        INameOfOperation nameOf => _ctx.Vars.DeclareConst("SystemString", nameOf.ConstantValue.Value.ToString()),
+        ITypeOfOperation typeOf => Const(GetUdonType(typeOf.TypeOperand), "SystemType"),
+        INameOfOperation nameOf => Const(nameOf.ConstantValue.Value.ToString(), "SystemString"),
         IDeclarationExpressionOperation op => VisitDeclarationExpression(op),
-        IDiscardOperation discard => _ctx.Vars.DeclareTemp(GetUdonType(discard.Type)),
+        IDiscardOperation discard => LoadField(_ctx.DeclareTemp(GetUdonType(discard.Type)), GetUdonType(discard.Type)),
         IDelegateCreationOperation op => VisitDelegateCreation(op),
         _ => throw new NotSupportedException(expression.GetType().Name),
     };
 
     // ── Literal ──
 
-    string VisitLocalReference(ILocalReferenceOperation localRef)
-    {
-        if (_ctx.TupleLocalVarIds.ContainsKey(localRef.Local))
-            throw new NotSupportedException(
-                $"Tuple local '{localRef.Local.Name}' cannot be used as a scalar expression. Deconstruct it or access one of its elements.");
-
-        return _ctx.Vars.Lookup(localRef.Local.Name)
-            ?? (_ctx.LocalVarIds.TryGetValue(localRef.Local, out var capturedId)
-                ? capturedId
-                : throw new InvalidOperationException(
-                    $"Cannot resolve local variable '{localRef.Local.Name}' in method '{_ctx.CurrentMethod?.Name ?? "(none)"}'."));
-    }
-
-    string VisitLiteral(ILiteralOperation lit)
+    HExpr VisitLiteral(ILiteralOperation lit)
     {
         // null literal has no type
         if (lit.Type == null)
-            return _ctx.Vars.DeclareConst("SystemObject", "null");
+            return Const(null, "SystemObject");
         var udonType = GetUdonType(lit.Type);
-        var value = lit.ConstantValue.HasValue ? ToInvariantString(lit.ConstantValue.Value) : "null";
-        return _ctx.Vars.DeclareConst(udonType, value);
+        if (!lit.ConstantValue.HasValue)
+            return Const(null, udonType);
+        var value = lit.ConstantValue.Value;
+        return Const(value, udonType);
     }
 
     // ── Field Reference ──
 
-    string VisitFieldReference(IFieldReferenceOperation fieldRef)
+    HExpr VisitFieldReference(IFieldReferenceOperation fieldRef)
     {
-        if (TryResolveTupleElementReference(fieldRef, out var tupleElementId))
-            return tupleElementId;
-
         if (fieldRef.Field.HasConstantValue)
         {
             var constType = GetUdonType(fieldRef.Field.Type);
-            var constVal = ToInvariantString(fieldRef.Field.ConstantValue);
-            return _ctx.Vars.DeclareConst(constType, constVal);
+            var constVal = fieldRef.Field.ConstantValue;
+            return Const(constVal, constType);
         }
         if (fieldRef.Field.IsStatic)
         {
@@ -85,54 +71,43 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
                 throw new NotSupportedException("Static fields are not supported on UdonSharpBehaviour types. " + $"Use 'const' for compile-time constants or convert '{fieldRef.Field.Name}' to an instance field.");
             // Unity/System static field → extern getter
             var fldType = GetUdonType(fieldRef.Field.Type);
-            var tempId = ConsumeTargetHintOrTemp(fldType);
             var containingType = GetUdonType(fieldRef.Field.ContainingType);
-            _ctx.Module.AddPush(tempId);
-            AddExternChecked(ExternResolver.BuildPropertyGetSignature(containingType, fieldRef.Field.Name, fldType));
-            return tempId;
+            return ExternCall(
+                ExternResolver.BuildPropertyGetSignature(containingType, fieldRef.Field.Name, fldType),
+                new List<HExpr>(),
+                fldType);
         }
-        // this.field → direct variable name
+        // this.field → direct variable name → LoadField
         if (fieldRef.Instance is IInstanceReferenceOperation)
-            return fieldRef.Field.Name;
+            return LoadField(fieldRef.Field.Name, GetUdonType(fieldRef.Field.Type));
         // cross-behaviour field → GetProgramVariable
         if (ExternResolver.IsUdonSharpBehaviour(fieldRef.Field.ContainingType))
         {
             var fldType = GetUdonType(fieldRef.Field.Type);
-            var savedHint = _ctx.TargetHint;
-            _ctx.TargetHint = null;
-            var instanceId = VisitExpression(fieldRef.Instance);
-            _ctx.TargetHint = savedHint;
-            var tempId = ConsumeTargetHintOrTemp(fldType);
-            var nameConst = _ctx.Vars.DeclareConst("SystemString", fieldRef.Field.Name);
-            _ctx.Module.AddPush(instanceId);
-            _ctx.Module.AddPush(nameConst);
-            _ctx.Module.AddPush(tempId);
-            AddExternChecked("VRCUdonCommonInterfacesIUdonEventReceiver.__GetProgramVariable__SystemString__SystemObject");
-            return tempId;
+            var instanceVal = VisitExpression(fieldRef.Instance);
+            var nameConst = Const(fieldRef.Field.Name, "SystemString");
+            return ExternCall(
+                "VRCUdonCommonInterfacesIUdonEventReceiver.__GetProgramVariable__SystemString__SystemObject",
+                new List<HExpr> { instanceVal, nameConst },
+                "SystemObject");
         }
         // other.field → extern getter (same pattern as VisitPropertyReference)
         {
             var fldType = GetUdonType(fieldRef.Field.Type);
             var containingType = GetUdonType(fieldRef.Field.ContainingType);
-            var savedHint = _ctx.TargetHint;
-            _ctx.TargetHint = null;
-            var instanceId = VisitExpression(fieldRef.Instance);
-            _ctx.TargetHint = savedHint;
-            var tempId = ConsumeTargetHintOrTemp(fldType);
-            _ctx.Module.AddPush(instanceId);
-            _ctx.Module.AddPush(tempId);
-            AddExternChecked(ExternResolver.BuildPropertyGetSignature(containingType, fieldRef.Field.Name, fldType));
-            return tempId;
+            var instanceVal = VisitExpression(fieldRef.Instance);
+            return ExternCall(
+                ExternResolver.BuildPropertyGetSignature(containingType, fieldRef.Field.Name, fldType),
+                new List<HExpr> { instanceVal },
+                fldType);
         }
     }
 
     // ── Conversion ──
 
-    string VisitConversion(IConversionOperation conv)
+    HExpr VisitConversion(IConversionOperation conv)
     {
-        var savedHint = _ctx.TargetHint;
-        _ctx.TargetHint = null;
-        var srcId = VisitExpression(conv.Operand);
+        var srcVal = VisitExpression(conv.Operand);
 
         // Numeric conversions (int→float, etc.) via System.Convert
         if (conv.Operand.Type != null && conv.Type != null
@@ -152,39 +127,33 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
                     if (!isDecimal && conv.Operand.Type.SpecialType == SpecialType.System_Single)
                     {
                         // float → double promotion
-                        var promotedId = _ctx.Vars.DeclareTemp("SystemDouble");
-                        _ctx.Module.AddPush(srcId);
-                        _ctx.Module.AddPush(promotedId);
-                        AddExternChecked("SystemConvert.__ToDouble__SystemSingle__SystemDouble");
-                        srcId = promotedId;
+                        srcVal = ExternCall(
+                            "SystemConvert.__ToDouble__SystemSingle__SystemDouble",
+                            new List<HExpr> { srcVal },
+                            "SystemDouble");
                     }
 
                     // Math.Truncate(double) or Math.Truncate(decimal)
-                    var truncId = _ctx.Vars.DeclareTemp(truncType);
-                    _ctx.Module.AddPush(srcId);
-                    _ctx.Module.AddPush(truncId);
-                    AddExternChecked($"SystemMath.__Truncate__{truncType}__{truncType}");
-                    srcId = truncId;
+                    srcVal = ExternCall(
+                        $"SystemMath.__Truncate__{truncType}__{truncType}",
+                        new List<HExpr> { srcVal },
+                        truncType);
 
                     // Convert truncated value → target integer type
                     var dstType = GetUdonType(conv.Type);
-                    _ctx.TargetHint = savedHint;
-                    var resultId = ConsumeTargetHintOrTemp(dstType);
-                    _ctx.Module.AddPush(srcId);
-                    _ctx.Module.AddPush(resultId);
-                    AddExternChecked($"SystemConvert.__{methodName}__{truncType}__{dstType}");
-                    return resultId;
+                    return ExternCall(
+                        $"SystemConvert.__{methodName}__{truncType}__{dstType}",
+                        new List<HExpr> { srcVal },
+                        dstType);
                 }
 
                 // Non-truncation numeric conversions (existing code)
                 var srcType = GetUdonType(conv.Operand.Type);
                 var dstType2 = GetUdonType(conv.Type);
-                _ctx.TargetHint = savedHint;
-                var resultId2 = ConsumeTargetHintOrTemp(dstType2);
-                _ctx.Module.AddPush(srcId);
-                _ctx.Module.AddPush(resultId2);
-                AddExternChecked($"SystemConvert.__{methodName}__{srcType}__{dstType2}");
-                return resultId2;
+                return ExternCall(
+                    $"SystemConvert.__{methodName}__{srcType}__{dstType2}",
+                    new List<HExpr> { srcVal },
+                    dstType2);
             }
         }
 
@@ -192,30 +161,16 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
         if (conv.OperatorMethod != null && conv.Operand.Type != null && conv.Type != null && !SymbolEqualityComparer.Default.Equals(conv.Operand.Type, conv.Type))
         {
             var dstType = GetUdonType(conv.Type);
-            _ctx.TargetHint = savedHint;
-            var resultId = ConsumeTargetHintOrTemp(dstType);
-            _ctx.Module.AddPush(srcId);
-            _ctx.Module.AddPush(resultId);
-            AddExternChecked(ExternResolver.ResolveConversionExtern(
-                conv.OperatorMethod, ResolveType(conv.Operand.Type), ResolveType(conv.Type)));
-            return resultId;
+            return ExternCall(
+                ExternResolver.ResolveConversionExtern(
+                    conv.OperatorMethod, ResolveType(conv.Operand.Type), ResolveType(conv.Type)),
+                new List<HExpr> { srcVal },
+                dstType);
         }
 
         // Enum ↔ underlying type conversions (int→enum, enum→int)
-        //
-        // Udon VM heap slots carry a type tag alongside the value. COPY transfers
-        // the raw bytes but also overwrites the destination's type tag with the source's.
-        // For int→enum, this means the destination slot becomes tagged as "int" even
-        // though the program expects "enum". Later operations that inspect the type tag
-        // (e.g., serialization, SendCustomEvent argument checks) will fail.
-        //
-        // Workarounds:
-        //   - Constants: declare a const with the correct enum type directly (no COPY needed).
-        //   - Runtime: use an object[] pre-filled with enum values and index into it.
-        //     The array elements already have the correct type tag.
-        //   - enum→int: safe with COPY (int is the target, tag mismatch is harmless).
         if (conv.Operand.Type != null && conv.Type != null
-                                      && !SymbolEqualityComparer.Default.Equals(conv.Operand.Type, conv.Type) 
+                                      && !SymbolEqualityComparer.Default.Equals(conv.Operand.Type, conv.Type)
                                       && (conv.Operand.Type.TypeKind == TypeKind.Enum || conv.Type.TypeKind == TypeKind.Enum))
         {
             var dstType = GetUdonType(conv.Type);
@@ -224,82 +179,82 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
                          : conv.Operand.ConstantValue.HasValue ? conv.Operand.ConstantValue
                          : default;
             if (constVal.HasValue)
-                return _ctx.Vars.DeclareConst(dstType, constVal.Value?.ToString() ?? "null");
+                return Const(constVal.Value, dstType);
 
             // Runtime int→enum: use object[] array lookup to preserve type tags
             if (conv.Type.TypeKind == TypeKind.Enum && conv.Type is INamedTypeSymbol enumTarget)
             {
                 var arrId = GetOrCreateEnumArray(enumTarget);
-                var resultId = _ctx.Vars.DeclareTemp("SystemObject");
-                _ctx.Module.AddPush(arrId);
-                _ctx.Module.AddPush(srcId);
-                _ctx.Module.AddPush(resultId);
-                AddExternChecked("SystemObjectArray.__Get__SystemInt32__SystemObject");
-                return resultId;
+                return ExternCall(
+                    "SystemObjectArray.__Get__SystemInt32__SystemObject",
+                    new List<HExpr> { LoadField(arrId, "SystemObjectArray"), srcVal },
+                    "SystemObject");
             }
 
-            // enum→int: COPY is safe (same underlying type)
-            var copyResult = _ctx.Vars.DeclareTemp(dstType);
-            _ctx.Module.AddCopy(srcId, copyResult);
-            return copyResult;
+            // enum→int: store/load through a temp field to re-type
+            var tmpField = _ctx.DeclareTemp(dstType);
+            EmitStoreField(tmpField, srcVal);
+            return LoadField(tmpField, dstType);
         }
 
-        // Identity conversion: restore hint for caller to consume
-        _ctx.TargetHint = savedHint;
-        return srcId;
+        // Identity conversion: pass through
+        return srcVal;
     }
 
     // ── Default Value ──
 
-    string VisitDefaultValue(IDefaultValueOperation defaultVal)
+    HExpr VisitDefaultValue(IDefaultValueOperation defaultVal)
     {
         var dvType = GetUdonType(defaultVal.Type);
-        if (!defaultVal.Type.IsValueType) 
-            return _ctx.Vars.DeclareConst(dvType, "null");
-        
+        if (!defaultVal.Type.IsValueType)
+            return Const(null, dvType);
+
         var defVal = defaultVal.Type.SpecialType switch
         {
-            SpecialType.System_Boolean => "False",
-            SpecialType.System_Int32 or SpecialType.System_Byte
-                or SpecialType.System_SByte or SpecialType.System_Int16
-                or SpecialType.System_UInt16 or SpecialType.System_UInt32
-                or SpecialType.System_Int64 or SpecialType.System_UInt64 => "0",
-            SpecialType.System_Single => "0",
-            SpecialType.System_Double => "0",
-            SpecialType.System_Char => "0",
-            _ => "null", // struct types (Vector3, etc.) — assembler uses default
+            SpecialType.System_Boolean => (object)false,
+            SpecialType.System_Int32 => (object)0,
+            SpecialType.System_Byte => (object)(byte)0,
+            SpecialType.System_SByte => (object)(sbyte)0,
+            SpecialType.System_Int16 => (object)(short)0,
+            SpecialType.System_UInt16 => (object)(ushort)0,
+            SpecialType.System_UInt32 => (object)0u,
+            SpecialType.System_Int64 => (object)0L,
+            SpecialType.System_UInt64 => (object)0UL,
+            SpecialType.System_Single => (object)0f,
+            SpecialType.System_Double => (object)0d,
+            SpecialType.System_Char => (object)'\0',
+            _ => null, // struct types (Vector3, etc.) — assembler uses default
         };
-        return _ctx.Vars.DeclareConst(dvType, defVal);
+        return Const(defVal, dvType);
     }
 
     // ── Declaration Expression ──
 
-    string VisitDeclarationExpression(IDeclarationExpressionOperation declExpr)
+    HExpr VisitDeclarationExpression(IDeclarationExpressionOperation declExpr)
     {
-        if (declExpr.Expression is not ILocalReferenceOperation localRef2) 
+        if (declExpr.Expression is not ILocalReferenceOperation localRef2)
             return VisitExpression(declExpr.Expression);
-        
+
         var udonType = GetUdonType(localRef2.Type);
-        var localId = _ctx.Vars.DeclareLocal(localRef2.Local.Name, udonType);
-        _ctx.LocalVarIds[localRef2.Local] = localId;
-        return localId;
+        var localId = _ctx.DeclareLocal(localRef2.Local.Name, udonType);
+        _localVarIds[localRef2.Local] = localId;
+        return LoadField(localId, udonType);
     }
 
     // ── Delegate Creation ──
 
-    string VisitDelegateCreation(IDelegateCreationOperation op)
+    HExpr VisitDelegateCreation(IDelegateCreationOperation op)
     {
         switch (op.Target)
         {
             case IAnonymousFunctionOperation lambda:
             {
                 var hoisted = HoistLambdaToMethod(lambda);
-                return _ctx.Vars.DeclareConst("SystemUInt32",
-                    _ctx.MethodLabels[hoisted].ToString());
+                return FuncRef(_methodFunctions[hoisted].Name);
             }
             case IMethodReferenceOperation methodRef
-                when _ctx.MethodLabels.TryGetValue(methodRef.Method, out var label):
-                return _ctx.Vars.DeclareConst("SystemUInt32", label.ToString());
+                when _methodFunctions.TryGetValue(methodRef.Method, out var func):
+                return FuncRef(func.Name);
             default:
                 throw new NotSupportedException($"Unsupported delegate target: {op.Target.GetType().Name}");
         }
