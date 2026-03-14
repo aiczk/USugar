@@ -5,36 +5,36 @@
     <IsPackable>false</IsPackable>
   </PropertyGroup>
   <ItemGroup>
-    <Compile Include="../../Editor/NameAllocator.cs" />
-    <Compile Include="../../Editor/LayoutPlanner.cs" />
+    <Compile Include="../../Editor/Compiler/NameAllocator.cs" />
+    <Compile Include="../../Editor/Compiler/LayoutPlanner.cs" />
 
-    <Compile Include="../../Editor/ExternResolver.cs" />
-    <Compile Include="../../Editor/Emit/EmitContext.cs" />
-    <Compile Include="../../Editor/Emit/IOperationHandler.cs" />
-    <Compile Include="../../Editor/Emit/IExpressionHandler.cs" />
-    <Compile Include="../../Editor/Emit/HandlerBase.cs" />
-    <Compile Include="../../Editor/Emit/Handlers/StatementHandler.cs" />
-    <Compile Include="../../Editor/Emit/Handlers/LoopHandler.cs" />
-    <Compile Include="../../Editor/Emit/Handlers/ExpressionHandler.cs" />
-    <Compile Include="../../Editor/Emit/Handlers/AssignmentHandler.cs" />
-    <Compile Include="../../Editor/Emit/Handlers/OperatorHandler.cs" />
-    <Compile Include="../../Editor/Emit/Handlers/InvocationHandler.cs" />
-    <Compile Include="../../Editor/Emit/Handlers/InvocationHandler.Extern.cs" />
-    <Compile Include="../../Editor/Emit/Handlers/InvocationHandler.Members.cs" />
-    <Compile Include="../../Editor/Emit/Handlers/ArrayHandler.cs" />
-    <Compile Include="../../Editor/Emit/Handlers/NullableHandler.cs" />
-    <Compile Include="../../Editor/UasmEmitter.cs" />
-    <Compile Include="../../Editor/USugarCompilerHelper.cs" />
-    <Compile Include="../../Editor/IR/SharedTypes.cs" />
-    <Compile Include="../../Editor/IR/IrPipeline.cs" />
-    <Compile Include="../../Editor/IR/HirTypes.cs" />
-    <Compile Include="../../Editor/IR/HirBuilder.cs" />
-    <Compile Include="../../Editor/IR/HirVerifier.cs" />
-    <Compile Include="../../Editor/IR/LirTypes.cs" />
-    <Compile Include="../../Editor/IR/HirToLir.cs" />
-    <Compile Include="../../Editor/IR/LirToUasm.cs" />
-    <Compile Include="../../Editor/IR/HirOptimizer.cs" />
-    <Compile Include="../../Editor/IR/LirOptimizer.cs" />
+    <Compile Include="../../Editor/Compiler/ExternResolver.cs" />
+    <Compile Include="../../Editor/Compiler/Emit/EmitContext.cs" />
+    <Compile Include="../../Editor/Compiler/Emit/IOperationHandler.cs" />
+    <Compile Include="../../Editor/Compiler/Emit/IExpressionHandler.cs" />
+    <Compile Include="../../Editor/Compiler/Emit/HandlerBase.cs" />
+    <Compile Include="../../Editor/Compiler/Emit/Handlers/StatementHandler.cs" />
+    <Compile Include="../../Editor/Compiler/Emit/Handlers/LoopHandler.cs" />
+    <Compile Include="../../Editor/Compiler/Emit/Handlers/ExpressionHandler.cs" />
+    <Compile Include="../../Editor/Compiler/Emit/Handlers/AssignmentHandler.cs" />
+    <Compile Include="../../Editor/Compiler/Emit/Handlers/OperatorHandler.cs" />
+    <Compile Include="../../Editor/Compiler/Emit/Handlers/InvocationHandler.cs" />
+    <Compile Include="../../Editor/Compiler/Emit/Handlers/InvocationHandler.Extern.cs" />
+    <Compile Include="../../Editor/Compiler/Emit/Handlers/InvocationHandler.Members.cs" />
+    <Compile Include="../../Editor/Compiler/Emit/Handlers/ArrayHandler.cs" />
+    <Compile Include="../../Editor/Compiler/Emit/Handlers/NullableHandler.cs" />
+    <Compile Include="../../Editor/Compiler/UasmEmitter.cs" />
+    <Compile Include="../../Editor/Compiler/USugarCompilerHelper.cs" />
+    <Compile Include="../../Editor/Compiler/IR/SharedTypes.cs" />
+    <Compile Include="../../Editor/Compiler/IR/IrPipeline.cs" />
+    <Compile Include="../../Editor/Compiler/IR/HirTypes.cs" />
+    <Compile Include="../../Editor/Compiler/IR/HirBuilder.cs" />
+    <Compile Include="../../Editor/Compiler/IR/HirVerifier.cs" />
+    <Compile Include="../../Editor/Compiler/IR/LirTypes.cs" />
+    <Compile Include="../../Editor/Compiler/IR/HirToLir.cs" />
+    <Compile Include="../../Editor/Compiler/IR/LirToUasm.cs" />
+    <Compile Include="../../Editor/Compiler/IR/HirOptimizer.cs" />
+    <Compile Include="../../Editor/Compiler/IR/LirOptimizer.cs" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.3.0" />
