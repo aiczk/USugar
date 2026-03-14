@@ -34,6 +34,7 @@
     <Compile Include="../../Editor/IR/HirToLir.cs" />
     <Compile Include="../../Editor/IR/LirToUasm.cs" />
     <Compile Include="../../Editor/IR/HirOptimizer.cs" />
+    <Compile Include="../../Editor/IR/LirOptimizer.cs" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.3.0" />

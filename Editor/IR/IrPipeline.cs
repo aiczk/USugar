@@ -33,6 +33,11 @@ public static class IrPipeline
         if (DumpEnabled)
             DumpToFile(className, "2_lir.txt", lirModule.Dump());
 
+        LirOptimizer.SimplifyCFG(lirModule);
+
+        if (DumpEnabled)
+            DumpToFile(className, "2b_lir_optimized.txt", lirModule.Dump());
+
         var result = LirToUasm.Generate(lirModule);
 
         if (DumpEnabled)
