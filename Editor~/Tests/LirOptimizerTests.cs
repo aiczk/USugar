@@ -312,9 +312,10 @@ public class LirOptimizerTests
     }
 
     [Fact]
-    public void DCE_ExternUnusedDest_NulledButKept()
+    public void DCE_ExternUnusedDest_KeptWithDest()
     {
-        // slot0 = extern "Foo"() — slot0 never read → dest nulled, call kept
+        // slot0 = extern "Foo"() — slot0 never read but dest kept
+        // (Udon VM requires return slot PUSH even if unused)
         var func = MakeFunc();
         var bb0 = func.NewBlock();
         bb0.Insts.Add(new LCallExtern(0, "Foo__SystemInt32", new List<LOperand>(), "SystemInt32"));
@@ -325,8 +326,7 @@ public class LirOptimizerTests
 
         Assert.Single(bb0.Insts);
         var call = Assert.IsType<LCallExtern>(bb0.Insts[0]);
-        Assert.Null(call.DestSlot);
-        Assert.Equal("Foo__SystemInt32", call.Sig);
+        Assert.Equal(0, call.DestSlot); // dest preserved for stack balance
     }
 
     // ========================================================================

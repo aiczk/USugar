@@ -255,14 +255,9 @@ public static class LirOptimizer
                             block.Insts.RemoveAt(i);
                             changed = true;
                             break;
-                        case LCallExtern ce when ce.DestSlot.HasValue && !usedSlots.Contains(ce.DestSlot.Value):
-                            block.Insts[i] = new LCallExtern(null, ce.Sig, ce.Args, ce.RetType, ce.IsPure);
-                            changed = true;
-                            break;
-                        case LCallInternal ci when ci.DestSlot.HasValue && !usedSlots.Contains(ci.DestSlot.Value):
-                            block.Insts[i] = new LCallInternal(null, ci.FuncName, ci.Args, ci.RetType);
-                            changed = true;
-                            break;
+                        // Don't null out destSlot for extern/internal calls:
+                        // Udon VM requires the return value slot to be PUSHed even
+                        // if the result is unused. Removing it breaks stack balance.
                     }
                 }
             }
