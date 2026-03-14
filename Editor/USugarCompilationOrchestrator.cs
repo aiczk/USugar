@@ -30,17 +30,18 @@ static class USugarCompilationOrchestrator
         public INamedTypeSymbol Symbol;
         public SyntaxTree Tree;
         public string Uasm;
-        public VariableTable Variables;
+        public List<(string Id, string UdonType, object Value)> Constants;
         public uint HeapSize;
         public IReadOnlyList<EmitDiagnostic> EmitterDiagnostics;
         public List<(string file, int line, int character, string message, string severity)> ErrorDiagnostics;
         public bool IsError;
 
         public EmitResult(INamedTypeSymbol symbol, SyntaxTree tree, string uasm,
-            VariableTable variables, uint heapSize, IReadOnlyList<EmitDiagnostic> diagnostics)
+            List<(string Id, string UdonType, object Value)> constants, uint heapSize,
+            IReadOnlyList<EmitDiagnostic> diagnostics)
         {
             Symbol = symbol; Tree = tree; Uasm = uasm;
-            Variables = variables; HeapSize = heapSize;
+            Constants = constants; HeapSize = heapSize;
             EmitterDiagnostics = diagnostics;
             ErrorDiagnostics = null; IsError = false;
         }
@@ -197,7 +198,7 @@ static class USugarCompilationOrchestrator
                     var emitter = new UasmEmitter(compilation, symbol, planner);
                     var uasm = emitter.Emit();
                     emitResults.Add(new EmitResult(symbol, tree, uasm,
-                        emitter.Variables, emitter.GetHeapSize(), emitter.Diagnostics));
+                        emitter.CodeGenResult.Constants, emitter.GetHeapSize(), emitter.Diagnostics));
                 }
                 catch (Exception ex)
                 {
@@ -250,7 +251,7 @@ static class USugarCompilationOrchestrator
                     var program = USugarConstantApplier.AssembleUasm(result.Uasm, result.HeapSize);
                     if (program != null)
                     {
-                        USugarConstantApplier.ApplyConstantValues(program, result.Variables);
+                        USugarConstantApplier.ApplyConstantValues(program, result.Constants);
                         programAsset.fieldDefinitions = USugarTypeCacheManager.BuildFieldDefinitions(result.Symbol);
                         programAsset.SerializedProgramAsset.StoreProgram(program);
                         programAsset.CompiledVersion = UdonSharpProgramVersion.CurrentVersion;
@@ -275,11 +276,8 @@ static class USugarCompilationOrchestrator
             }
 
             sw.Stop();
-            if (failures == 0)
-            {
-                SessionState.SetString(FingerprintKey, fingerprint);
-                SessionState.SetBool(AppliedKey, applyToAssets || lastApplied);
-            }
+            SessionState.SetString(FingerprintKey, fingerprint);
+            SessionState.SetBool(AppliedKey, applyToAssets || lastApplied);
             LastCompileHadErrors = failures > 0;
             var msg = failures > 0
                 ? $"Compile of {count} script{(count != 1 ? "s" : "")} finished in {sw.Elapsed:mm\\:ss\\.fff} ({failures} failed)"

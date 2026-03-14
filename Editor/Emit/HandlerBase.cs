@@ -262,12 +262,14 @@ public abstract class HandlerBase
             lfParamIds[pi] = paramId;
         }
         _methodParamVarIds[localFunc] = lfParamIds;
+        foreach (var pid in lfParamIds) func.ParamFieldNames.Add(pid);
 
         if (!localFunc.ReturnsVoid)
         {
             var retType = GetUdonType(localFunc.ReturnType);
             func.ReturnType = retType;
             var retId = $"__{idx}_{funcName}__ret";
+            func.ReturnFieldName = retId;
             _methodRetVars[localFunc] = retId;
             _methodRetTypes[localFunc] = retType;
         }

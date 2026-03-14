@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
@@ -14,33 +13,34 @@ using UnityEngine;
 /// </summary>
 static class USugarTypeCacheManager
 {
-    // Cached reverse lookup: SanitizeTypeName(FullName) → CLR Type (built once per domain, thread-safe)
-    static readonly Lazy<ConcurrentDictionary<string, Type>> _udonTypeCache = new(() =>
-    {
-        var cache = new ConcurrentDictionary<string, Type>();
-        foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
-        {
-            if (asm.IsDynamic) continue;
-            try
-            {
-                foreach (var type in asm.GetExportedTypes())
-                {
-                    if (type.FullName == null) continue;
-                    cache.TryAdd(ExternResolver.SanitizeTypeName(type.FullName), type);
-                }
-            }
-            catch { }
-        }
-        return cache;
-    });
+    // Cached reverse lookup: SanitizeTypeName(FullName) → CLR Type (built once per domain)
+    static Dictionary<string, Type> _udonTypeCache;
     // Cached CLR type lookups (persists across compiles, assemblies don't change in-session)
-    static readonly ConcurrentDictionary<string, Type> _clrTypeCache = new();
+    static readonly Dictionary<string, Type> _clrTypeCache = new();
 
     // ── Udon type resolution ──
 
     internal static Type ResolveUdonType(string udonTypeName)
     {
-        if (_udonTypeCache.Value.TryGetValue(udonTypeName, out var t))
+        if (_udonTypeCache == null)
+        {
+            _udonTypeCache = new Dictionary<string, Type>();
+            foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
+            {
+                if (asm.IsDynamic) continue;
+                try
+                {
+                    foreach (var type in asm.GetExportedTypes())
+                    {
+                        if (type.FullName == null) continue;
+                        var key = ExternResolver.SanitizeTypeName(type.FullName);
+                        _udonTypeCache.TryAdd(key, type);
+                    }
+                }
+                catch { }
+            }
+        }
+        if (_udonTypeCache.TryGetValue(udonTypeName, out var t))
             return t;
 
         // Array types are constructed types not returned by GetExportedTypes().
@@ -51,7 +51,7 @@ static class USugarTypeCacheManager
             if (elemType != null)
             {
                 var arrayType = elemType.MakeArrayType();
-                _udonTypeCache.Value.TryAdd(udonTypeName, arrayType);
+                _udonTypeCache[udonTypeName] = arrayType;
                 return arrayType;
             }
         }

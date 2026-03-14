@@ -8,24 +8,14 @@ public class MethodLayout
     public string ExportName { get; }
     public string BodyLabel { get; }
     public IReadOnlyList<string> ParamIds { get; }
-    public IReadOnlyList<IReadOnlyList<string>> TupleParamIds { get; } // null entries for scalar params
     public string ReturnId { get; }
-    public IReadOnlyList<string> TupleReturnIds { get; } // null for non-tuple returns
 
-    public MethodLayout(
-        string exportName,
-        string bodyLabel,
-        IReadOnlyList<string> paramIds,
-        string returnId,
-        IReadOnlyList<IReadOnlyList<string>> tupleParamIds = null,
-        IReadOnlyList<string> tupleReturnIds = null)
+    public MethodLayout(string exportName, string bodyLabel, IReadOnlyList<string> paramIds, string returnId)
     {
         ExportName = exportName;
         BodyLabel = bodyLabel;
         ParamIds = paramIds;
-        TupleParamIds = tupleParamIds;
         ReturnId = returnId;
-        TupleReturnIds = tupleReturnIds;
     }
 }
  
@@ -73,79 +63,102 @@ public class LayoutPlanner
     readonly Dictionary<INamedTypeSymbol, TypeLayout> _cache = new(SymbolEqualityComparer.Default);
     bool _frozen;
 
-    // C# method name → Udon export name. Must match the Udon runtime's event dispatch table.
     public static readonly Dictionary<string, string> UdonEventNames = new()
     {
+        // Lifecycle
         ["Start"] = "_start", ["Update"] = "_update", ["LateUpdate"] = "_lateUpdate",
         ["PostLateUpdate"] = "_postLateUpdate",
         ["FixedUpdate"] = "_fixedUpdate", ["OnEnable"] = "_onEnable", ["OnDisable"] = "_onDisable",
         ["OnDestroy"] = "_onDestroy",
+        // Player
         ["OnPlayerJoined"] = "_onPlayerJoined", ["OnPlayerLeft"] = "_onPlayerLeft",
         ["OnPlayerRespawn"] = "_onPlayerRespawn", ["OnPlayerRestored"] = "_onPlayerRestored",
         ["OnPlayerSuspendChanged"] = "_onPlayerSuspendChanged",
+        // Player trigger
         ["OnPlayerTriggerEnter"] = "_onPlayerTriggerEnter",
         ["OnPlayerTriggerExit"] = "_onPlayerTriggerExit",
         ["OnPlayerTriggerStay"] = "_onPlayerTriggerStay",
+        // Player collision
         ["OnPlayerCollisionEnter"] = "_onPlayerCollisionEnter",
         ["OnPlayerCollisionExit"] = "_onPlayerCollisionExit",
         ["OnPlayerCollisionStay"] = "_onPlayerCollisionStay",
+        // Player particle
         ["OnPlayerParticleCollision"] = "_onPlayerParticleCollision",
         ["OnControllerColliderHitPlayer"] = "_onControllerColliderHitPlayer",
+        // Avatar
         ["OnAvatarChanged"] = "_onAvatarChanged",
         ["OnAvatarEyeHeightChanged"] = "_onAvatarEyeHeightChanged",
         ["OnMasterTransferred"] = "_onMasterTransferred",
+        // Serialization
         ["OnDeserialization"] = "_onDeserialization",
         ["OnPreSerialization"] = "_onPreSerialization",
         ["OnPostSerialization"] = "_onPostSerialization",
+        // Interaction / Pickup
         ["Interact"] = "_interact", ["OnPickup"] = "_onPickup", ["OnDrop"] = "_onDrop",
         ["OnPickupUseDown"] = "_onPickupUseDown", ["OnPickupUseUp"] = "_onPickupUseUp",
         ["OnOwnershipTransferred"] = "_onOwnershipTransferred",
         ["OnOwnershipRequest"] = "_onOwnershipRequest",
+        // Station
         ["OnStationEntered"] = "_onStationEntered", ["OnStationExited"] = "_onStationExited",
+        // Video
         ["OnVideoError"] = "_onVideoError", ["OnVideoReady"] = "_onVideoReady",
         ["OnVideoStart"] = "_onVideoStart", ["OnVideoPlay"] = "_onVideoPlay",
         ["OnVideoPause"] = "_onVideoPause", ["OnVideoEnd"] = "_onVideoEnd",
         ["OnVideoLoop"] = "_onVideoLoop",
+        // Network download
         ["OnStringLoadSuccess"] = "_onStringLoadSuccess", ["OnStringLoadError"] = "_onStringLoadError",
         ["OnImageLoadSuccess"] = "_onImageLoadSuccess", ["OnImageLoadError"] = "_onImageLoadError",
+        // Input
         ["InputJump"] = "_inputJump", ["InputUse"] = "_inputUse",
         ["InputGrab"] = "_inputGrab", ["InputDrop"] = "_inputDrop",
         ["InputMoveHorizontal"] = "_inputMoveHorizontal", ["InputMoveVertical"] = "_inputMoveVertical",
         ["InputLookHorizontal"] = "_inputLookHorizontal", ["InputLookVertical"] = "_inputLookVertical",
         ["OnInputMethodChanged"] = "_onInputMethodChanged",
         ["OnLanguageChanged"] = "_onLanguageChanged",
+        // Collision / Trigger (non-player)
         ["OnTriggerEnter"] = "_onTriggerEnter", ["OnTriggerExit"] = "_onTriggerExit",
         ["OnTriggerStay"] = "_onTriggerStay",
         ["OnCollisionEnter"] = "_onCollisionEnter", ["OnCollisionExit"] = "_onCollisionExit",
         ["OnCollisionStay"] = "_onCollisionStay",
+        // Drone
         ["OnDroneTriggerEnter"] = "_onDroneTriggerEnter",
         ["OnDroneTriggerExit"] = "_onDroneTriggerExit",
         ["OnDroneTriggerStay"] = "_onDroneTriggerStay",
+        // Rendering
         ["OnPostRender"] = "_onPostRender", ["OnPreRender"] = "_onPreRender",
         ["OnWillRenderObject"] = "_onWillRenderObject",
         ["OnBecameVisible"] = "_onBecameVisible", ["OnBecameInvisible"] = "_onBecameInvisible",
         ["OnVRCCameraSettingsChanged"] = "_onVRCCameraSettingsChanged",
         ["OnVRCQualitySettingsChanged"] = "_onVRCQualitySettingsChanged",
         ["OnScreenUpdate"] = "_onScreenUpdate",
+        // Animation
         ["OnAnimatorIK"] = "_onAnimatorIK", ["OnAnimatorMove"] = "_onAnimatorMove",
+        // Particle
         ["OnParticleCollision"] = "_onParticleCollision",
+        // GPU readback
         ["OnAsyncGpuReadbackComplete"] = "_onAsyncGpuReadbackComplete",
+        // MIDI
         ["MidiNoteOn"] = "_midiNoteOn", ["MidiNoteOff"] = "_midiNoteOff",
         ["MidiControlChange"] = "_midiControlChange",
+        // PhysBone / Contact
         ["OnPhysBoneGrabbed"] = "_onPhysBoneGrabbed",
         ["OnPhysBoneReleased"] = "_onPhysBoneReleased",
         ["OnPhysBonePosed"] = "_onPhysBonePosed",
         ["OnPhysBoneUnPosed"] = "_onPhysBoneUnPosed",
         ["OnContactEnter"] = "_onContactEnter",
         ["OnContactExit"] = "_onContactExit",
+        // Spawn
         ["OnSpawn"] = "_onSpawn",
+        // VRC Plus
         ["OnVRCPlusMassGift"] = "_onVRCPlusMassGift",
+        // Persistence
         ["OnPersistenceUsageUpdated"] = "_onPersistenceUsageUpdated",
         ["OnPlayerDataUpdated"] = "_onPlayerDataUpdated",
         ["OnPlayerDataStorageExceeded"] = "_onPlayerDataStorageExceeded",
         ["OnPlayerDataStorageWarning"] = "_onPlayerDataStorageWarning",
         ["OnPlayerObjectStorageExceeded"] = "_onPlayerObjectStorageExceeded",
         ["OnPlayerObjectStorageWarning"] = "_onPlayerObjectStorageWarning",
+        // Creator Economy
         ["OnPurchaseConfirmed"] = "_onPurchaseConfirmed",
         ["OnPurchaseConfirmedMultiple"] = "_onPurchaseConfirmedMultiple",
         ["OnPurchaseExpired"] = "_onPurchaseExpired",
@@ -390,24 +403,11 @@ public class LayoutPlanner
 
             // Compute param IDs
             var paramIds = new string[method.Parameters.Length];
-            var tupleParamIds = new IReadOnlyList<string>[method.Parameters.Length];
             if (isUdonEvent && UdonEventParamNames.TryGetValue(method.Name, out var fixedNames))
             {
                 // Event parameters: use fixed names, don't consume NameAllocator counter
                 for (int i = 0; i < method.Parameters.Length; i++)
                 {
-                    if (method.Parameters[i].Type.IsTupleType && method.Parameters[i].Type is INamedTypeSymbol tupleParamType)
-                    {
-                        var ids = new string[tupleParamType.TupleElements.Length];
-                        for (int ei = 0; ei < tupleParamType.TupleElements.Length; ei++)
-                        {
-                            var elemKey = method.Parameters[i].Name + $"__param_{ei}";
-                            ids[ei] = NameAllocator.FormatId(elemKey, alloc.Allocate(elemKey));
-                        }
-                        tupleParamIds[i] = ids;
-                        continue;
-                    }
-
                     if (i < fixedNames.Length)
                         paramIds[i] = fixedNames[i];
                     else
@@ -423,48 +423,21 @@ public class LayoutPlanner
                 // Regular parameters: go through NameAllocator
                 for (int i = 0; i < method.Parameters.Length; i++)
                 {
-                    if (method.Parameters[i].Type.IsTupleType && method.Parameters[i].Type is INamedTypeSymbol tupleParamType)
-                    {
-                        var ids = new string[tupleParamType.TupleElements.Length];
-                        for (int ei = 0; ei < tupleParamType.TupleElements.Length; ei++)
-                        {
-                            var elemKey = method.Parameters[i].Name + $"__param_{ei}";
-                            ids[ei] = NameAllocator.FormatId(elemKey, alloc.Allocate(elemKey));
-                        }
-                        tupleParamIds[i] = ids;
-                        continue;
-                    }
-
                     var key = method.Parameters[i].Name + "__param";
                     paramIds[i] = NameAllocator.FormatId(key, alloc.Allocate(key));
                 }
             }
 
-            // Compute return ID(s): tuple returns get per-element IDs
+            // Compute return ID: always for non-void methods (matches pure compiler)
             string returnId = null;
-            IReadOnlyList<string> tupleReturnIds = null;
             if (!method.ReturnsVoid)
             {
-                if (method.ReturnType.IsTupleType && method.ReturnType is INamedTypeSymbol tupleType)
-                {
-                    var elements = tupleType.TupleElements;
-                    var ids = new string[elements.Length];
-                    for (int i = 0; i < elements.Length; i++)
-                    {
-                        var retKey = exportName + $"__ret_{i}";
-                        ids[i] = NameAllocator.FormatId(retKey, alloc.Allocate(retKey));
-                    }
-                    tupleReturnIds = ids;
-                }
-                else
-                {
-                    var retKey = exportName + "__ret";
-                    returnId = NameAllocator.FormatId(retKey, alloc.Allocate(retKey));
-                }
+                var retKey = exportName + "__ret";
+                returnId = NameAllocator.FormatId(retKey, alloc.Allocate(retKey));
             }
 
             var bodyLabel = exportName + "__body";
-            methods[method] = new MethodLayout(exportName, bodyLabel, paramIds, returnId, tupleParamIds, tupleReturnIds);
+            methods[method] = new MethodLayout(exportName, bodyLabel, paramIds, returnId);
         }
 
         // Inherit non-overridden methods from user-defined base classes.
@@ -527,48 +500,20 @@ public class LayoutPlanner
                 : safeName;
 
             var paramIds = new string[method.Parameters.Length];
-            var tupleParamIds = new IReadOnlyList<string>[method.Parameters.Length];
             for (int i = 0; i < method.Parameters.Length; i++)
             {
-                if (method.Parameters[i].Type.IsTupleType && method.Parameters[i].Type is INamedTypeSymbol tupleParamType)
-                {
-                    var ids = new string[tupleParamType.TupleElements.Length];
-                    for (int ei = 0; ei < tupleParamType.TupleElements.Length; ei++)
-                    {
-                        var elemKey = method.Parameters[i].Name + $"__param_{ei}";
-                        ids[ei] = NameAllocator.FormatId(elemKey, alloc.Allocate(elemKey));
-                    }
-                    tupleParamIds[i] = ids;
-                    continue;
-                }
-
                 var key = method.Parameters[i].Name + "__param";
                 paramIds[i] = NameAllocator.FormatId(key, alloc.Allocate(key));
             }
 
             string returnId = null;
-            IReadOnlyList<string> tupleReturnIds = null;
             if (!method.ReturnsVoid)
             {
-                if (method.ReturnType.IsTupleType && method.ReturnType is INamedTypeSymbol tupleType)
-                {
-                    var elements = tupleType.TupleElements;
-                    var ids = new string[elements.Length];
-                    for (int i = 0; i < elements.Length; i++)
-                    {
-                        var retKey = exportName + $"__ret_{i}";
-                        ids[i] = NameAllocator.FormatId(retKey, alloc.Allocate(retKey));
-                    }
-                    tupleReturnIds = ids;
-                }
-                else
-                {
-                    var retKey = exportName + "__ret";
-                    returnId = NameAllocator.FormatId(retKey, alloc.Allocate(retKey));
-                }
+                var retKey = exportName + "__ret";
+                returnId = NameAllocator.FormatId(retKey, alloc.Allocate(retKey));
             }
 
-            methods[method] = new MethodLayout(exportName, exportName + "__body", paramIds, returnId, tupleParamIds, tupleReturnIds);
+            methods[method] = new MethodLayout(exportName, exportName + "__body", paramIds, returnId);
         }
 
         return new TypeLayout(methods, new Dictionary<IFieldSymbol, FieldLayout>(SymbolEqualityComparer.Default));

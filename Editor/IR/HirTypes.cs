@@ -386,6 +386,10 @@ public sealed class HFunction
     public readonly HBlock Body = new();
     public readonly List<SlotDecl> Slots = new();
     public string ReturnType; // null for void
+    /// <summary>UASM field names for parameters (set by emitter). Used for internal call ABI.</summary>
+    public readonly List<string> ParamFieldNames = new();
+    /// <summary>UASM field name for the return value (set by emitter). Null for void.</summary>
+    public string ReturnFieldName;
 
     public HFunction(string name, string exportName = null)
     {
