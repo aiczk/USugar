@@ -26,12 +26,24 @@ public partial class InvocationHandler
                 instanceVal = VisitExpression(op.Instance);
         }
 
-        // For out/ref params: pass the original variable's LoadField directly.
+        // For out/ref params: pass the field's heap address directly via HFieldAddr.
         // Udon VM extern writes to the pushed address, so the original variable
         // is updated in-place. No copy-back needed.
         var argVals = new List<HExpr>();
         for (int i = 0; i < op.Arguments.Length; i++)
+        {
+            var param = target.Parameters[i];
+            if (param.RefKind == RefKind.Out || param.RefKind == RefKind.Ref)
+            {
+                var fieldName = ResolveOutRefFieldName(op.Arguments[i].Value);
+                if (fieldName != null)
+                {
+                    argVals.Add(FieldAddr(fieldName, GetUdonType(param.Type)));
+                    continue;
+                }
+            }
             argVals.Add(VisitExpression(op.Arguments[i].Value));
+        }
 
         // Build args list for extern call
         var externArgs = new List<HExpr>();
@@ -669,6 +681,37 @@ public partial class InvocationHandler
             default:
                 throw new System.NotSupportedException(
                     $"Unsupported deconstruction target element: {target.GetType().Name}");
+        }
+    }
+
+    // ── Out/Ref Field Resolution ──
+
+    /// <summary>
+    /// Resolve the UASM field name for an out/ref argument target.
+    /// Returns null if the target cannot be resolved to a direct field reference.
+    /// </summary>
+    string ResolveOutRefFieldName(IOperation op)
+    {
+        while (op is IConversionOperation conv) op = conv.Operand;
+        switch (op)
+        {
+            case ILocalReferenceOperation localRef:
+                return _localVarIds.TryGetValue(localRef.Local, out var id) ? id : null;
+            case IFieldReferenceOperation { Instance: IInstanceReferenceOperation } fieldRef:
+                return fieldRef.Field.Name;
+            case IParameterReferenceOperation paramRef:
+                return GetParamVarId(paramRef.Parameter);
+            case IDeclarationExpressionOperation declExpr:
+                if (declExpr.Expression is ILocalReferenceOperation declLocal)
+                {
+                    var type = GetUdonType(declLocal.Type);
+                    var localId = _ctx.DeclareLocal(declLocal.Local.Name, type);
+                    _localVarIds[declLocal.Local] = localId;
+                    return localId;
+                }
+                return null;
+            default:
+                return null;
         }
     }
 

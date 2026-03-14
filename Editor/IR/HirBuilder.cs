@@ -246,6 +246,9 @@ public sealed class HirBuilder
     /// <summary>Create a field load expression.</summary>
     public HLoadField LoadField(string fieldName, string type) => new(fieldName, type);
 
+    /// <summary>Create a field address reference (for extern out/ref).</summary>
+    public HFieldAddr FieldAddr(string fieldName, string type) => new(fieldName, type);
+
     /// <summary>Create an extern call expression.</summary>
     public HExternCall ExternCall(string sig, List<HExpr> args, string retType, bool isPure = false)
         => new(sig, args, retType, isPure);
