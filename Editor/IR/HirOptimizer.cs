@@ -240,6 +240,189 @@ public static class HirOptimizer
     }
 
     // ========================================================================
+    // Copy Propagation
+    // ========================================================================
+
+    /// <summary>
+    /// Propagates constant values stored to single-write compiler-generated temp fields.
+    /// Only propagates HConst values to avoid correctness issues with intervening writes.
+    /// </summary>
+    public static void CopyPropagation(HModule module)
+    {
+        foreach (var func in module.Functions)
+            PropagateInFunction(func);
+    }
+
+    static void PropagateInFunction(HFunction func)
+    {
+        // Phase 1: Count writes per field across the entire function
+        var writeCounts = new Dictionary<string, int>();
+        CountWrites(func.Body, writeCounts);
+
+        // Phase 2: Collect candidates — single-write temp fields with constant values
+        var candidates = new Dictionary<string, HConst>();
+        CollectCandidates(func.Body, writeCounts, candidates);
+
+        if (candidates.Count == 0) return;
+
+        // Phase 3: Replace HLoadField references with the constant value
+        ReplaceInBlock(func.Body, candidates);
+    }
+
+    static bool IsTempField(string fieldName) =>
+        fieldName.StartsWith("__lcl_tmp_") ||
+        fieldName.StartsWith("__lcl_sc_") ||
+        fieldName.StartsWith("__lcl_ternary_");
+
+    static void CountWrites(HBlock block, Dictionary<string, int> writeCounts)
+    {
+        foreach (var stmt in block.Stmts)
+            CountWritesStmt(stmt, writeCounts);
+    }
+
+    static void CountWritesStmt(HStmt stmt, Dictionary<string, int> writeCounts)
+    {
+        switch (stmt)
+        {
+            case HStoreField sf:
+                writeCounts[sf.FieldName] = writeCounts.TryGetValue(sf.FieldName, out var c) ? c + 1 : 1;
+                break;
+            case HIf hif:
+                CountWrites(hif.Then, writeCounts);
+                CountWrites(hif.Else, writeCounts);
+                break;
+            case HWhile hw:
+                CountWrites(hw.CondBlock, writeCounts);
+                CountWrites(hw.Body, writeCounts);
+                break;
+            case HFor hf:
+                CountWrites(hf.Init, writeCounts);
+                CountWrites(hf.CondBlock, writeCounts);
+                CountWrites(hf.Update, writeCounts);
+                CountWrites(hf.Body, writeCounts);
+                break;
+            case HBlock blk:
+                CountWrites(blk, writeCounts);
+                break;
+        }
+    }
+
+    static void CollectCandidates(HBlock block, Dictionary<string, int> writeCounts, Dictionary<string, HConst> candidates)
+    {
+        foreach (var stmt in block.Stmts)
+            CollectCandidatesStmt(stmt, writeCounts, candidates);
+    }
+
+    static void CollectCandidatesStmt(HStmt stmt, Dictionary<string, int> writeCounts, Dictionary<string, HConst> candidates)
+    {
+        switch (stmt)
+        {
+            case HStoreField sf:
+                if (writeCounts.TryGetValue(sf.FieldName, out var wc) && wc == 1
+                    && IsTempField(sf.FieldName) && sf.Value is HConst constVal)
+                {
+                    candidates[sf.FieldName] = constVal;
+                }
+                break;
+            case HIf hif:
+                CollectCandidates(hif.Then, writeCounts, candidates);
+                CollectCandidates(hif.Else, writeCounts, candidates);
+                break;
+            case HWhile hw:
+                CollectCandidates(hw.CondBlock, writeCounts, candidates);
+                CollectCandidates(hw.Body, writeCounts, candidates);
+                break;
+            case HFor hf:
+                CollectCandidates(hf.Init, writeCounts, candidates);
+                CollectCandidates(hf.CondBlock, writeCounts, candidates);
+                CollectCandidates(hf.Update, writeCounts, candidates);
+                CollectCandidates(hf.Body, writeCounts, candidates);
+                break;
+            case HBlock blk:
+                CollectCandidates(blk, writeCounts, candidates);
+                break;
+        }
+    }
+
+    static void ReplaceInBlock(HBlock block, Dictionary<string, HConst> candidates)
+    {
+        for (int i = 0; i < block.Stmts.Count; i++)
+            block.Stmts[i] = ReplaceInStmt(block.Stmts[i], candidates);
+    }
+
+    static HStmt ReplaceInStmt(HStmt stmt, Dictionary<string, HConst> candidates)
+    {
+        switch (stmt)
+        {
+            case HAssign a:
+                return new HAssign(a.DestSlot, ReplaceInExpr(a.Value, candidates));
+
+            case HStoreField sf:
+                return new HStoreField(sf.FieldName, ReplaceInExpr(sf.Value, candidates));
+
+            case HIf hif:
+                ReplaceInBlock(hif.Then, candidates);
+                ReplaceInBlock(hif.Else, candidates);
+                return new HIf(ReplaceInExpr(hif.Cond, candidates), hif.Then, hif.Else);
+
+            case HWhile hw:
+                ReplaceInBlock(hw.CondBlock, candidates);
+                ReplaceInBlock(hw.Body, candidates);
+                return new HWhile(ReplaceInExpr(hw.Cond, candidates), hw.Body, hw.IsDoWhile, hw.CondBlock);
+
+            case HFor hf:
+                ReplaceInBlock(hf.Init, candidates);
+                ReplaceInBlock(hf.CondBlock, candidates);
+                ReplaceInBlock(hf.Update, candidates);
+                ReplaceInBlock(hf.Body, candidates);
+                return new HFor(hf.Init, hf.Cond != null ? ReplaceInExpr(hf.Cond, candidates) : null, hf.Update, hf.Body, hf.CondBlock);
+
+            case HReturn hr:
+                return hr.Value != null ? new HReturn(ReplaceInExpr(hr.Value, candidates)) : hr;
+
+            case HExprStmt es:
+                return new HExprStmt(ReplaceInExpr(es.Expr, candidates));
+
+            case HBlock blk:
+                ReplaceInBlock(blk, candidates);
+                return blk;
+
+            default:
+                return stmt;
+        }
+    }
+
+    static HExpr ReplaceInExpr(HExpr expr, Dictionary<string, HConst> candidates)
+    {
+        switch (expr)
+        {
+            case HLoadField lf:
+                return candidates.TryGetValue(lf.FieldName, out var replacement) ? replacement : expr;
+
+            case HExternCall call:
+                return new HExternCall(call.Sig, call.Args.Select(a => ReplaceInExpr(a, candidates)).ToList(), call.Type, call.IsPure);
+
+            case HSelect sel:
+                return new HSelect(ReplaceInExpr(sel.Cond, candidates), ReplaceInExpr(sel.TrueVal, candidates), ReplaceInExpr(sel.FalseVal, candidates), sel.Type);
+
+            case HInternalCall ic:
+                return new HInternalCall(ic.FuncName, ic.Args.Select(a => ReplaceInExpr(a, candidates)).ToList(), ic.Type);
+
+            case HCrossBehaviourCall cb:
+                return new HCrossBehaviourCall(
+                    ReplaceInExpr(cb.Instance, candidates), cb.EventName,
+                    cb.Params.Select(p => (p.ParamName, ReplaceInExpr(p.Value, candidates))).ToList(),
+                    cb.ReturnVarName, cb.Type);
+
+            // HConst, HSlotRef, HFieldAddr, HFuncRef — no replacement needed
+            // Note: HFieldAddr is intentionally NOT replaced — it represents an address for out/ref,
+            // not a value load. Replacing it with a constant would be semantically wrong.
+            default:
+                return expr;
+        }
+    }
+
+    // ========================================================================
     // Fold Table
     // ========================================================================
 
