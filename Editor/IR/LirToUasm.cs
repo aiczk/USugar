@@ -80,7 +80,7 @@ public static class LirToUasm
         struct VarDecl
         {
             public string Id, UdonType, DefaultValue;
-            public VarFlags Flags;
+            public FieldFlags Flags;
             public string SyncMode;
             public object ConstValue;
         }
@@ -95,7 +95,7 @@ public static class LirToUasm
         public CodeGenResult Run()
         {
             // Phase 1: Infrastructure variable
-            DeclareVar("__intnl_returnJump_SystemUInt32_0", "SystemUInt32", "0xFFFFFFFF", VarFlags.None);
+            DeclareVar("__intnl_returnJump_SystemUInt32_0", "SystemUInt32", "0xFFFFFFFF", FieldFlags.None);
 
             // Phase 2: Field declarations
             foreach (var field in _module.Fields)
@@ -116,14 +116,14 @@ public static class LirToUasm
             foreach (var (varName, labelName) in _retaddrConsts)
             {
                 var addr = _labelAddrs[labelName];
-                DeclareVar(varName, "SystemUInt32", null, VarFlags.None, constValue: addr);
+                DeclareVar(varName, "SystemUInt32", null, FieldFlags.None, constValue: addr);
             }
 
             // Phase 6b: Resolve funcref constants
             foreach (var (varName, labelName) in _funcRefConsts)
             {
                 var addr = _labelAddrs[labelName];
-                DeclareVar(varName, "SystemUInt32", null, VarFlags.None, constValue: addr);
+                DeclareVar(varName, "SystemUInt32", null, FieldFlags.None, constValue: addr);
             }
 
             // Phase 7: Build output
@@ -157,9 +157,9 @@ public static class LirToUasm
 
         void DeclareField(FieldDecl field)
         {
-            var flags = VarFlags.None;
-            if ((field.Flags & FieldFlags.Export) != 0) flags |= VarFlags.Export;
-            if ((field.Flags & FieldFlags.Sync) != 0) flags |= VarFlags.Sync;
+            var flags = FieldFlags.None;
+            if ((field.Flags & FieldFlags.Export) != 0) flags |= FieldFlags.Export;
+            if ((field.Flags & FieldFlags.Sync) != 0) flags |= FieldFlags.Sync;
 
             string dataDefault = null;
             object constValue = field.DefaultValue;
@@ -172,7 +172,7 @@ public static class LirToUasm
             DeclareVar(field.Name, field.Type, dataDefault, flags, field.SyncMode, constValue);
         }
 
-        void DeclareVar(string id, string udonType, string defaultValue, VarFlags flags,
+        void DeclareVar(string id, string udonType, string defaultValue, FieldFlags flags,
             string syncMode = null, object constValue = null)
         {
             if (_declaredVarTypes.TryGetValue(id, out var existingType))
@@ -211,7 +211,7 @@ public static class LirToUasm
             else
             {
                 id = $"__intnl_{slot.Type}_{_intnlIdx++}";
-                DeclareVar(id, slot.Type, null, VarFlags.None);
+                DeclareVar(id, slot.Type, null, FieldFlags.None);
             }
 
             _slotVars[key] = id;
@@ -240,7 +240,7 @@ public static class LirToUasm
                 return existing;
             var id = $"__const_{c.Type}_{_constIdx++}";
             _constPool[key] = id;
-            DeclareVar(id, c.Type, null, VarFlags.None, constValue: c.Value);
+            DeclareVar(id, c.Type, null, FieldFlags.None, constValue: c.Value);
             return id;
         }
 
@@ -304,7 +304,7 @@ public static class LirToUasm
 
             // Declare return field variable if needed (may not be in module Fields)
             if (func.ReturnFieldName != null && func.ReturnType != null)
-                DeclareVar(func.ReturnFieldName, func.ReturnType, null, VarFlags.None);
+                DeclareVar(func.ReturnFieldName, func.ReturnType, null, FieldFlags.None);
         }
 
         // ── Block linearization (RPO) ──
@@ -394,7 +394,7 @@ public static class LirToUasm
                 // Sentinel: push 0xFFFFFFFF onto stack. The callee's RET will POP
                 // this into returnJump, causing JUMP_INDIRECT to halt (address > program size).
                 var sentinelVar = "__const_SystemUInt32_sentinel";
-                DeclareVar(sentinelVar, "SystemUInt32", null, VarFlags.None, constValue: 0xFFFFFFFF);
+                DeclareVar(sentinelVar, "SystemUInt32", null, FieldFlags.None, constValue: 0xFFFFFFFF);
                 AddPush(sentinelVar);
                 AddLabel($"{func.Name}__body");
             }
@@ -514,7 +514,7 @@ public static class LirToUasm
 
             // Copy method pointer to a temp to keep stack balanced
             var tempVar = $"__intnl_dlgptr_SystemUInt32_{_intnlIdx++}";
-            DeclareVar(tempVar, "SystemUInt32", null, VarFlags.None);
+            DeclareVar(tempVar, "SystemUInt32", null, FieldFlags.None);
             AddCopyPair(ptrVar, tempVar);
 
             // Push return address and jump indirect
@@ -559,11 +559,14 @@ public static class LirToUasm
 
             if (nextBlock != null && branch.TrueBlockId == nextBlock.Id)
             {
-                // Fall through to true, jump to false
+                // True falls through — emit JUMP_IF_FALSE to false block only.
                 AddJumpIfFalse(_blockLabels[(funcIdx, branch.FalseBlockId)]);
             }
             else
             {
+                // False-fallthrough optimization is not possible: Udon VM only provides
+                // JUMP_IF_FALSE (no JUMP_IF_TRUE), so even when false == nextBlock we
+                // still need both JUMP_IF_FALSE + JUMP to reach the true block.
                 AddJumpIfFalse(_blockLabels[(funcIdx, branch.FalseBlockId)]);
                 AddJump(_blockLabels[(funcIdx, branch.TrueBlockId)]);
             }
@@ -716,11 +719,11 @@ public static class LirToUasm
             sb.Append(".data_start\n");
 
             foreach (var v in _vars)
-                if ((v.Flags & VarFlags.Export) != 0)
+                if ((v.Flags & FieldFlags.Export) != 0)
                     sb.Append($"    .export {v.Id}\n");
 
             foreach (var v in _vars)
-                if ((v.Flags & VarFlags.Sync) != 0)
+                if ((v.Flags & FieldFlags.Sync) != 0)
                     sb.Append($"    .sync {v.Id}, {v.SyncMode ?? "none"}\n");
 
             foreach (var v in _vars)

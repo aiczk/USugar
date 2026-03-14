@@ -84,8 +84,8 @@ public abstract class HandlerBase
     protected HFieldAddr FieldAddr(string fieldName, string type) => _builder.FieldAddr(fieldName, type);
 
     /// <summary>Create an extern call expression.</summary>
-    protected HExternCall ExternCall(string sig, List<HExpr> args, string retType, bool isPure = false)
-        => _builder.ExternCall(ResolveExtern(sig), args, retType, isPure);
+    protected HExternCall ExternCall(string sig, List<HExpr> args, string retType)
+        => _builder.ExternCall(ResolveExtern(sig), args, retType);
 
     /// <summary>Emit a void extern call as a statement.</summary>
     protected void EmitExternVoid(string sig, List<HExpr> args)

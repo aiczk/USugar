@@ -5,17 +5,16 @@
 /// </summary>
 public static class IrPipeline
 {
-    /// <summary>Enable IR dump output to Temp/USugar/{className}/.</summary>
-    public static bool DumpEnabled;
-
     /// <summary>
     /// Generate UASM from an HModule via the HIR → LIR → UASM pipeline.
     /// </summary>
-    public static CodeGenResult GenerateUasmFromHir(HModule hirModule)
+    /// <param name="hirModule">The HIR module to compile.</param>
+    /// <param name="dumpEnabled">When true, write IR dump files to Temp/USugar/{className}/.</param>
+    public static CodeGenResult GenerateUasmFromHir(HModule hirModule, bool dumpEnabled = false)
     {
         var className = hirModule.ClassName ?? "unknown";
 
-        if (DumpEnabled)
+        if (dumpEnabled)
             DumpToFile(className, "1_hir.txt", hirModule.Dump());
 
         HirVerifier.Verify(hirModule);
@@ -25,12 +24,12 @@ public static class IrPipeline
         HirOptimizer.DeadCodeElimination(hirModule);
         HirOptimizer.CopyPropagation(hirModule);
 
-        if (DumpEnabled)
+        if (dumpEnabled)
             DumpToFile(className, "1b_hir_optimized.txt", hirModule.Dump());
 
         var lirModule = HirToLir.Lower(hirModule);
 
-        if (DumpEnabled)
+        if (dumpEnabled)
             DumpToFile(className, "2_lir.txt", lirModule.Dump());
 
         LirOptimizer.SimplifyCFG(lirModule);
@@ -39,12 +38,12 @@ public static class IrPipeline
         LirOptimizer.SimplifyCFG(lirModule); // cleanup after DCE
         LirOptimizer.CoalesceSlots(lirModule);
 
-        if (DumpEnabled)
+        if (dumpEnabled)
             DumpToFile(className, "2b_lir_optimized.txt", lirModule.Dump());
 
         var result = LirToUasm.Generate(lirModule);
 
-        if (DumpEnabled)
+        if (dumpEnabled)
         {
             DumpToFile(className, "3_uasm.txt", result.Uasm);
             if (result.AnnotatedUasm != null)

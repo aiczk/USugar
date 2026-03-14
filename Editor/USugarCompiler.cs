@@ -57,9 +57,7 @@ public static class USugarCompiler
     [MenuItem("USugar/Compile/USugar (with IR dump)")]
     public static void CompileWithDump()
     {
-        IrPipeline.DumpEnabled = true;
-        try { USugarCompilationOrchestrator.CompileInternal(applyToAssets: true, force: true); }
-        finally { IrPipeline.DumpEnabled = false; }
+        USugarCompilationOrchestrator.CompileInternal(applyToAssets: true, force: true, dumpEnabled: true);
         USugarLog.Info("IR dumps written to Temp/USugar/");
     }
 

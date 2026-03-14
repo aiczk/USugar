@@ -171,10 +171,10 @@ public class WithFields : UdonSharp.UdonSharpBehaviour {
         var syncedField = sym.GetMembers("syncedVal")[0] as IFieldSymbol;
 
         Assert.True(layout.Fields.ContainsKey(scoreField));
-        Assert.True(layout.Fields[scoreField].Flags.HasFlag(VarFlags.Export));
+        Assert.True(layout.Fields[scoreField].Flags.HasFlag(FieldFlags.Export));
 
         Assert.True(layout.Fields.ContainsKey(syncedField));
-        Assert.True(layout.Fields[syncedField].Flags.HasFlag(VarFlags.Sync));
+        Assert.True(layout.Fields[syncedField].Flags.HasFlag(FieldFlags.Sync));
     }
 
     [Fact]

@@ -366,7 +366,7 @@ public static class HirToLir
                 if (ec.Type != "SystemVoid")
                     dest = ctx.AllocScratch(ec.Type);
 
-                ctx.Current.Insts.Add(new LCallExtern(dest, ec.Sig, args, ec.Type, ec.IsPure));
+                ctx.Current.Insts.Add(new LCallExtern(dest, ec.Sig, args, ec.Type));
                 return dest.HasValue ? new LSlotRef(dest.Value, ec.Type) : new LConst(null, "SystemVoid");
             }
 
@@ -477,9 +477,9 @@ public static class HirToLir
             };
             foreach (var p in hfunc.ParamFieldNames)
                 LFunc.ParamFieldNames.Add(p);
-            // Copy all existing slots.
+            // Copy all existing slots (create new instances to avoid sharing references).
             foreach (var slot in hfunc.Slots)
-                LFunc.Slots.Add(slot);
+                LFunc.Slots.Add(new SlotDecl(slot.Id, slot.Type, slot.Class, slot.FixedName));
         }
 
         public int AllocScratch(string type)
