@@ -73,18 +73,148 @@ public abstract class HandlerBase
         if (param.ContainingSymbol is IMethodSymbol method
             && _ctx.MethodParamVarIds.TryGetValue(method, out var paramIds)
             && param.Ordinal < paramIds.Length)
-            return paramIds[param.Ordinal];
+        {
+            var paramId = paramIds[param.Ordinal];
+            if (paramId != null)
+                return paramId;
+        }
         if (_ctx.CurrentMethod != null && param.ContainingSymbol is IMethodSymbol paramMethod
             && _ctx.CurrentMethod.IsGenericMethod && !_ctx.CurrentMethod.IsDefinition
             && SymbolEqualityComparer.Default.Equals(paramMethod, _ctx.CurrentMethod.OriginalDefinition)
             && _ctx.MethodParamVarIds.TryGetValue(_ctx.CurrentMethod, out var specParamIds)
             && param.Ordinal < specParamIds.Length)
-            return specParamIds[param.Ordinal];
+        {
+            var paramId = specParamIds[param.Ordinal];
+            if (paramId != null)
+                return paramId;
+        }
+        if (TryGetParamTupleVarIds(param, out _))
+            throw new System.NotSupportedException(
+                $"Tuple parameter '{param.Name}' cannot be used as a scalar expression. Deconstruct it or access one of its elements.");
         return _ctx.Vars.Lookup(param.Name)
             ?? throw new System.InvalidOperationException(
                 $"Cannot resolve parameter '{param.Name}' (ordinal {param.Ordinal}) "
               + $"in method '{_ctx.CurrentMethod?.Name ?? "(none)"}'. "
               + "Not found in lambda overrides, method params, or variable table.");
+    }
+
+    protected bool TryGetMethodTupleParamVarIds(IMethodSymbol method, int ordinal, out string[] tupleIds)
+        => _ctx.MethodTupleParamVarIds.TryGetValue((method, ordinal), out tupleIds);
+
+    protected bool TryGetParamTupleVarIds(IParameterSymbol param, out string[] tupleIds)
+    {
+        if (param.ContainingSymbol is IMethodSymbol method
+            && TryGetMethodTupleParamVarIds(method, param.Ordinal, out tupleIds))
+            return true;
+
+        if (_ctx.CurrentMethod != null && param.ContainingSymbol is IMethodSymbol paramMethod
+            && _ctx.CurrentMethod.IsGenericMethod && !_ctx.CurrentMethod.IsDefinition
+            && SymbolEqualityComparer.Default.Equals(paramMethod, _ctx.CurrentMethod.OriginalDefinition)
+            && TryGetMethodTupleParamVarIds(_ctx.CurrentMethod, param.Ordinal, out tupleIds))
+            return true;
+
+        tupleIds = null;
+        return false;
+    }
+
+    protected bool TryGetTupleTargetVarIds(IOperation target, out string[] tupleIds)
+    {
+        switch (target)
+        {
+            case ILocalReferenceOperation localRef when _ctx.TupleLocalVarIds.TryGetValue(localRef.Local, out tupleIds):
+                return true;
+            case IParameterReferenceOperation paramRef when TryGetParamTupleVarIds(paramRef.Parameter, out tupleIds):
+                return true;
+            default:
+                tupleIds = null;
+                return false;
+        }
+    }
+
+    protected bool TryResolveTupleValue(IOperation op, out string[] tupleVarIds)
+    {
+        while (op is IConversionOperation conv && conv.Type?.IsTupleType == true)
+            op = conv.Operand;
+
+        switch (op)
+        {
+            case ITupleOperation tuple:
+                tupleVarIds = new string[tuple.Elements.Length];
+                for (int i = 0; i < tuple.Elements.Length; i++)
+                    tupleVarIds[i] = VisitExpression(tuple.Elements[i]);
+                return true;
+
+            case ILocalReferenceOperation localRef when _ctx.TupleLocalVarIds.TryGetValue(localRef.Local, out var localIds):
+                tupleVarIds = localIds;
+                return true;
+
+            case IParameterReferenceOperation paramRef when TryGetParamTupleVarIds(paramRef.Parameter, out var paramIds):
+                tupleVarIds = paramIds;
+                return true;
+
+            default:
+                _ctx.LastTupleCallRetVars = null;
+                VisitExpression(op);
+                if (_ctx.LastTupleCallRetVars != null)
+                {
+                    tupleVarIds = _ctx.LastTupleCallRetVars;
+                    return true;
+                }
+                tupleVarIds = null;
+                return false;
+        }
+    }
+
+    protected void CopyTupleValueToSlots(IOperation value, IReadOnlyList<string> dstSlots, string context)
+    {
+        if (!TryResolveTupleValue(value, out var srcSlots))
+            throw new System.NotSupportedException($"Unsupported tuple value for {context}: {value.GetType().Name}");
+
+        if (srcSlots.Length != dstSlots.Count)
+            throw new System.InvalidOperationException(
+                $"Tuple arity mismatch for {context}: destination expects {dstSlots.Count} values but source produced {srcSlots.Length}.");
+
+        for (int i = 0; i < dstSlots.Count; i++)
+            if (srcSlots[i] != dstSlots[i])
+                _ctx.Module.AddCopy(srcSlots[i], dstSlots[i]);
+    }
+
+    protected bool TryResolveTupleElementReference(IFieldReferenceOperation fieldRef, out string valueId)
+    {
+        valueId = null;
+        var tupleType = fieldRef.Instance?.Type as INamedTypeSymbol ?? fieldRef.Field.ContainingType as INamedTypeSymbol;
+        if (fieldRef.Instance == null
+            || tupleType == null
+            || !tupleType.IsTupleType
+            || !TryResolveTupleValue(fieldRef.Instance, out var tupleIds))
+            return false;
+
+        var ordinal = GetTupleElementIndex(fieldRef.Field, tupleType);
+        if (ordinal < 0 || ordinal >= tupleIds.Length)
+            return false;
+
+        valueId = tupleIds[ordinal];
+        return true;
+    }
+
+    static int GetTupleElementIndex(IFieldSymbol field, INamedTypeSymbol tupleType)
+    {
+        for (int i = 0; i < tupleType.TupleElements.Length; i++)
+        {
+            var tupleField = tupleType.TupleElements[i];
+            if (SymbolEqualityComparer.Default.Equals(tupleField, field)
+                || SymbolEqualityComparer.Default.Equals(tupleField.CorrespondingTupleField, field)
+                || SymbolEqualityComparer.Default.Equals(field.CorrespondingTupleField, tupleField))
+                return i;
+            if (tupleField.Name == field.Name)
+                return i;
+        }
+
+        if (field.Name.StartsWith("Item", StringComparison.Ordinal)
+            && int.TryParse(field.Name.Substring("Item".Length), out var itemIndex))
+            return itemIndex - 1;
+
+        return -1;
     }
 
     protected string EmitEnumToUnderlying(string operandId, ITypeSymbol type)
@@ -472,6 +602,21 @@ public abstract class HandlerBase
         _ctx.Module.AddPushLabel(returnLabel);
         _ctx.Module.AddJump(jumpTarget);
         _ctx.Module.MarkLabel(returnLabel);
+
+        // Tuple return: COW-copy canonical ret vars to fresh temps
+        if (_ctx.MethodTupleRetVars.TryGetValue(target, out var tupleRetVars))
+        {
+            var cowTemps = new string[tupleRetVars.Length];
+            for (int i = 0; i < tupleRetVars.Length; i++)
+            {
+                var elemType = _ctx.Vars.GetDeclaredType(tupleRetVars[i]);
+                cowTemps[i] = _ctx.Vars.DeclareTemp(elemType);
+                _ctx.Module.AddCopy(tupleRetVars[i], cowTemps[i]);
+            }
+            // Store COW temps for caller to read (canonical vars stay immutable)
+            _ctx.LastTupleCallRetVars = cowTemps;
+            return null;
+        }
 
         // COW: copy return value to prevent overwrite by subsequent calls
         // If TargetHint is set, copy directly to that target (avoids extra temp)

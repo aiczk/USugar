@@ -384,6 +384,20 @@ public class UasmEmitter
             for (int i = 0; i < method.Parameters.Length; i++)
             {
                 var param = method.Parameters[i];
+                if (ml.TupleParamIds != null && i < ml.TupleParamIds.Count && ml.TupleParamIds[i] != null)
+                {
+                    var tupleType = (INamedTypeSymbol)param.Type;
+                    var tupleParamIds = new string[ml.TupleParamIds[i].Count];
+                    for (int ei = 0; ei < ml.TupleParamIds[i].Count; ei++)
+                    {
+                        var elemType = GetUdonType(tupleType.TupleElements[ei].Type);
+                        _ctx.Vars.DeclareVar(ml.TupleParamIds[i][ei], elemType);
+                        tupleParamIds[ei] = ml.TupleParamIds[i][ei];
+                    }
+                    _ctx.MethodTupleParamVarIds[(method, i)] = tupleParamIds;
+                    continue;
+                }
+
                 var isDelegateParam = param.Type is INamedTypeSymbol nt && nt.DelegateInvokeMethod != null;
                 var udonType = isDelegateParam ? "SystemUInt32" : GetUdonType(param.Type);
                 _ctx.Vars.DeclareVar(ml.ParamIds[i], udonType);
@@ -391,13 +405,28 @@ public class UasmEmitter
             }
             _ctx.MethodParamVarIds[method] = paramVarIds;
 
-            // Declare return var
-            if (!method.ReturnsVoid && ml.ReturnId != null)
+            // Declare return var(s)
+            if (!method.ReturnsVoid)
             {
-                var retType = GetUdonType(method.ReturnType);
-                _ctx.Vars.DeclareVar(ml.ReturnId, retType);
-                _ctx.MethodRetVars[method] = ml.ReturnId;
-                _ctx.MethodRetTypes[method] = retType;
+                if (ml.TupleReturnIds != null)
+                {
+                    var tupleType = (INamedTypeSymbol)method.ReturnType;
+                    var tupleRetIds = new string[ml.TupleReturnIds.Count];
+                    for (int i = 0; i < ml.TupleReturnIds.Count; i++)
+                    {
+                        var elemType = GetUdonType(tupleType.TupleElements[i].Type);
+                        _ctx.Vars.DeclareVar(ml.TupleReturnIds[i], elemType);
+                        tupleRetIds[i] = ml.TupleReturnIds[i];
+                    }
+                    _ctx.MethodTupleRetVars[method] = tupleRetIds;
+                }
+                else if (ml.ReturnId != null)
+                {
+                    var retType = GetUdonType(method.ReturnType);
+                    _ctx.Vars.DeclareVar(ml.ReturnId, retType);
+                    _ctx.MethodRetVars[method] = ml.ReturnId;
+                    _ctx.MethodRetTypes[method] = retType;
+                }
             }
 
             // Declare convention variables for delegate parameters
@@ -489,6 +518,12 @@ public class UasmEmitter
         var bridges = _ctx.Planner.ComputeBridges(_ctx.ClassSymbol);
         foreach (var (ifaceMethod, ifaceMl, classMl) in bridges)
         {
+            if (ifaceMethod.Parameters.Any(p => p.Type.IsTupleType))
+                throw new System.NotSupportedException(
+                    $"Tuple parameters on interface method '{ifaceMethod.ContainingType.Name}.{ifaceMethod.Name}' are not supported in interface bridges.");
+            if (ifaceMethod.ReturnType.IsTupleType)
+                throw new System.NotSupportedException(
+                    $"Tuple return from interface method '{ifaceMethod.ContainingType.Name}.{ifaceMethod.Name}' is not supported in interface bridges.");
             // Declare interface param/return variables (idempotent — may already exist
             // if another class method uses the same counter-based name)
             for (int i = 0; i < ifaceMethod.Parameters.Length; i++)

@@ -145,6 +145,14 @@ public class StatementHandler : HandlerBase, IOperationHandler
             return;
         }
 
+        if (op.ReturnedValue != null && _ctx.CurrentMethod != null
+            && _ctx.MethodTupleRetVars.TryGetValue(_ctx.CurrentMethod, out var tupleRetVars))
+        {
+            CopyTupleValueToSlots(op.ReturnedValue, tupleRetVars, $"return from '{_ctx.CurrentMethod.Name}'");
+            _ctx.Module.AddReturn("__intnl_returnJump_SystemUInt32_0");
+            return;
+        }
+
         if (op.ReturnedValue != null && _ctx.CurrentMethod != null && _ctx.MethodRetVars.TryGetValue(_ctx.CurrentMethod, out var retVarId))
         {
             _ctx.TargetHint = retVarId;
@@ -169,12 +177,43 @@ public class StatementHandler : HandlerBase, IOperationHandler
 
         // Evaluate args into temps first (avoid overwriting params before they're read)
         var argTemps = new string[tailCall.Arguments.Length];
+        var tupleArgTemps = new string[tailCall.Arguments.Length][];
         for (int i = 0; i < tailCall.Arguments.Length; i++)
-            argTemps[i] = VisitExpression(tailCall.Arguments[i].Value);
+        {
+            if (TryGetMethodTupleParamVarIds(_ctx.CurrentMethod, i, out var tupleParamIds))
+            {
+                if (!TryResolveTupleValue(tailCall.Arguments[i].Value, out var srcTupleIds))
+                    throw new System.NotSupportedException(
+                        $"Unsupported tuple tail-call argument for parameter '{_ctx.CurrentMethod.Parameters[i].Name}'.");
+
+                var tempTuple = new string[tupleParamIds.Length];
+                for (int ei = 0; ei < tupleParamIds.Length; ei++)
+                {
+                    var elemType = _ctx.Vars.GetDeclaredType(tupleParamIds[ei]);
+                    tempTuple[ei] = _ctx.Vars.DeclareTemp(elemType);
+                    _ctx.Module.AddCopy(srcTupleIds[ei], tempTuple[ei]);
+                }
+                tupleArgTemps[i] = tempTuple;
+            }
+            else
+            {
+                argTemps[i] = VisitExpression(tailCall.Arguments[i].Value);
+            }
+        }
 
         // Overwrite param vars with new values
         for (int i = 0; i < tailCall.Arguments.Length; i++)
-            _ctx.Module.AddCopy(argTemps[i], paramIds[i]);
+        {
+            if (TryGetMethodTupleParamVarIds(_ctx.CurrentMethod, i, out var tupleParamIds))
+            {
+                for (int ei = 0; ei < tupleParamIds.Length; ei++)
+                    _ctx.Module.AddCopy(tupleArgTemps[i][ei], tupleParamIds[ei]);
+            }
+            else
+            {
+                _ctx.Module.AddCopy(argTemps[i], paramIds[i]);
+            }
+        }
 
         // Jump back to method body (skip re-entrance preamble)
         int jumpTarget = _ctx.MethodBodyLabels.TryGetValue(_ctx.CurrentMethod, out var bodyLabel)
@@ -249,6 +288,22 @@ public class StatementHandler : HandlerBase, IOperationHandler
         foreach (var declarator in decl.Declarators)
         {
             var local = declarator.Symbol;
+            if (local.Type.IsTupleType && local.Type is INamedTypeSymbol tupleType)
+            {
+                var tupleLocalIds = new string[tupleType.TupleElements.Length];
+                for (int ei = 0; ei < tupleType.TupleElements.Length; ei++)
+                {
+                    var elemType = GetUdonType(tupleType.TupleElements[ei].Type);
+                    tupleLocalIds[ei] = _ctx.Vars.DeclareLocal($"{local.Name}__item{ei}", elemType);
+                }
+                _ctx.TupleLocalVarIds[local] = tupleLocalIds;
+
+                var initTuple = declarator.Initializer;
+                if (initTuple != null)
+                    CopyTupleValueToSlots(initTuple.Value, tupleLocalIds, $"initializer for tuple local '{local.Name}'");
+                continue;
+            }
+
             // Delegate-typed locals → SystemUInt32 (holds label address; Udon has no delegate types)
             var udonType = local.Type.TypeKind == TypeKind.Delegate
                 ? "SystemUInt32"

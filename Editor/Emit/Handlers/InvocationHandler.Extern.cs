@@ -534,6 +534,15 @@ public partial class InvocationHandler
 
     string EmitInterfaceCall(IInvocationOperation op, IMethodSymbol target)
     {
+        if (target.Parameters.Any(p => p.Type.IsTupleType))
+            throw new System.NotSupportedException(
+                $"Tuple parameters on interface method '{target.ContainingType.Name}.{target.Name}' are not supported. "
+                + "Tuple parameters are only supported for same-class method calls.");
+        if (target.ReturnType.IsTupleType)
+            throw new System.NotSupportedException(
+                $"Tuple return from interface method '{target.ContainingType.Name}.{target.Name}' is not supported. "
+                + "Tuple returns are only supported for same-class method calls.");
+
         // Use LayoutPlanner to get the interface's canonical naming
         var ifaceType = target.ContainingType as INamedTypeSymbol;
         MethodLayout ifaceMl = null;
@@ -588,6 +597,15 @@ public partial class InvocationHandler
 
     string EmitCrossClassCall(IInvocationOperation op, IMethodSymbol target)
     {
+        if (target.Parameters.Any(p => p.Type.IsTupleType))
+            throw new System.NotSupportedException(
+                $"Tuple parameters on cross-behaviour method '{target.ContainingType.Name}.{target.Name}' are not supported. "
+                + "Tuple parameters are only supported for same-class method calls.");
+        if (target.ReturnType.IsTupleType)
+            throw new System.NotSupportedException(
+                $"Tuple return from cross-behaviour method '{target.ContainingType.Name}.{target.Name}' is not supported. "
+                + "Tuple returns are only supported for same-class method calls.");
+
         var (exportName, paramIds, retId) = GetCalleeLayout(target);
         var instanceId = VisitExpression(op.Instance);
 
@@ -629,6 +647,59 @@ public partial class InvocationHandler
 
     // ── User Method Call ──
 
+    List<(string current, string saved)> SaveMethodParameterState(IMethodSymbol method)
+    {
+        var savedSlots = new List<(string current, string saved)>();
+        if (method == null)
+            return savedSlots;
+
+        if (_ctx.MethodParamVarIds.TryGetValue(method, out var currentParamIds))
+        {
+            for (int i = 0; i < currentParamIds.Length; i++)
+            {
+                if (currentParamIds[i] == null) continue;
+                var paramType = _ctx.Vars.GetDeclaredType(currentParamIds[i]);
+                var savedId = _ctx.Vars.DeclareTemp(paramType);
+                _ctx.Module.AddCopy(currentParamIds[i], savedId);
+                savedSlots.Add((currentParamIds[i], savedId));
+            }
+        }
+
+        for (int i = 0; i < method.Parameters.Length; i++)
+        {
+            if (!TryGetMethodTupleParamVarIds(method, i, out var tupleParamIds))
+                continue;
+
+            for (int ei = 0; ei < tupleParamIds.Length; ei++)
+            {
+                var paramType = _ctx.Vars.GetDeclaredType(tupleParamIds[ei]);
+                var savedId = _ctx.Vars.DeclareTemp(paramType);
+                _ctx.Module.AddCopy(tupleParamIds[ei], savedId);
+                savedSlots.Add((tupleParamIds[ei], savedId));
+            }
+        }
+
+        return savedSlots;
+    }
+
+    void RestoreMethodParameterState(List<(string current, string saved)> savedSlots)
+    {
+        foreach (var (current, saved) in savedSlots)
+            _ctx.Module.AddCopy(saved, current);
+    }
+
+    void CopyArgumentToMethodParameter(IMethodSymbol target, int ordinal, IOperation argOp, string scalarParamId)
+    {
+        if (TryGetMethodTupleParamVarIds(target, ordinal, out var tupleParamIds))
+        {
+            CopyTupleValueToSlots(argOp, tupleParamIds, $"argument for parameter '{target.Parameters[ordinal].Name}'");
+            return;
+        }
+
+        var argId = VisitExpression(argOp);
+        _ctx.Module.AddCopy(argId, scalarParamId);
+    }
+
     string EmitUserMethodCall(IInvocationOperation op, IMethodSymbol target, int targetLabel)
     {
         // Save hint and clear it while evaluating sub-expressions
@@ -641,20 +712,7 @@ public partial class InvocationHandler
         // Save current method's parameter values before any user method call.
         // This protects against mutual recursion (A→B→A) corrupting A's params,
         // not just self-recursion. Overhead is 2N COPY per call (N = param count).
-        string[] savedCurrentParams = null;
-        string[] currentParamIds = null;
-        if (_ctx.CurrentMethod != null
-            && _ctx.MethodParamVarIds.TryGetValue(_ctx.CurrentMethod, out currentParamIds)
-            && currentParamIds.Length > 0)
-        {
-            savedCurrentParams = new string[currentParamIds.Length];
-            for (int i = 0; i < currentParamIds.Length; i++)
-            {
-                var paramType = _ctx.Vars.GetDeclaredType(currentParamIds[i]);
-                savedCurrentParams[i] = _ctx.Vars.DeclareTemp(paramType);
-                _ctx.Module.AddCopy(currentParamIds[i], savedCurrentParams[i]);
-            }
-        }
+        var savedCurrentParams = SaveMethodParameterState(_ctx.CurrentMethod);
 
         // Copy arguments to param vars
         for (int i = 0; i < op.Arguments.Length; i++)
@@ -673,8 +731,7 @@ public partial class InvocationHandler
             }
             else
             {
-                var argId = VisitExpression(argOp);
-                _ctx.Module.AddCopy(argId, paramIds[i]);
+                CopyArgumentToMethodParameter(target, i, argOp, paramIds[i]);
             }
         }
 
@@ -683,11 +740,7 @@ public partial class InvocationHandler
         var result = EmitCallByLabel(target, targetLabel);
 
         // Restore current method's parameter values after return
-        if (savedCurrentParams != null)
-        {
-            for (int i = 0; i < currentParamIds.Length; i++)
-                _ctx.Module.AddCopy(savedCurrentParams[i], currentParamIds[i]);
-        }
+        RestoreMethodParameterState(savedCurrentParams);
 
         // Copy-out for ref/out params
         for (int i = 0; i < op.Arguments.Length; i++)
@@ -696,7 +749,22 @@ public partial class InvocationHandler
             if (param.RefKind == RefKind.Out || param.RefKind == RefKind.Ref)
             {
                 var argTarget = op.Arguments[i].Value;
-                AssignToTarget(argTarget, paramIds[i]);
+                if (TryGetMethodTupleParamVarIds(target, i, out var tupleParamIds))
+                {
+                    if (!TryGetTupleTargetVarIds(argTarget, out var tupleTargetIds))
+                        throw new System.NotSupportedException(
+                            $"Unsupported ref/out tuple target for parameter '{param.Name}': {argTarget.GetType().Name}");
+
+                    if (tupleTargetIds.Length != tupleParamIds.Length)
+                        throw new System.InvalidOperationException(
+                            $"Tuple arity mismatch in ref/out copy-back for parameter '{param.Name}'.");
+
+                    for (int ei = 0; ei < tupleParamIds.Length; ei++)
+                        if (tupleParamIds[ei] != tupleTargetIds[ei])
+                            _ctx.Module.AddCopy(tupleParamIds[ei], tupleTargetIds[ei]);
+                }
+                else
+                    AssignToTarget(argTarget, paramIds[i]);
             }
         }
 

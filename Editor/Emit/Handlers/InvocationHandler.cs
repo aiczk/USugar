@@ -86,19 +86,18 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
             RegisterGenericSpecialization(constructed);
             var specLabel = _ctx.MethodLabels[constructed];
             var specParamIds = _ctx.MethodParamVarIds[constructed];
+            var savedCurrentParams = SaveMethodParameterState(_ctx.CurrentMethod);
             var paramOffset = 0;
             if (target.ReducedFrom != null && op.Instance != null)
             {
-                var instanceId = VisitExpression(op.Instance);
-                _ctx.Module.AddCopy(instanceId, specParamIds[0]);
+                CopyArgumentToMethodParameter(constructed, 0, op.Instance, specParamIds[0]);
                 paramOffset = 1;
             }
             for (var i = 0; i < op.Arguments.Length; i++)
-            {
-                var argId = VisitExpression(op.Arguments[i].Value);
-                _ctx.Module.AddCopy(argId, specParamIds[i + paramOffset]);
-            }
-            return EmitCallByLabel(constructed, specLabel);
+                CopyArgumentToMethodParameter(constructed, i + paramOffset, op.Arguments[i].Value, specParamIds[i + paramOffset]);
+            var result = EmitCallByLabel(constructed, specLabel);
+            RestoreMethodParameterState(savedCurrentParams);
+            return result;
         }
 
         // Foreign static method → inlined as JUMP call (resolve extension method original form)
@@ -107,20 +106,19 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
             if (IsForeignStatic(target) && _ctx.MethodLabels.TryGetValue(original, out var foreignLabel))
             {
                 var origParamIds = _ctx.MethodParamVarIds[original];
+                var savedCurrentParams = SaveMethodParameterState(_ctx.CurrentMethod);
                 var paramOffset = 0;
                 // Extension method: instance is the first (this) parameter
                 if (target.ReducedFrom != null && op.Instance != null)
                 {
-                    var instanceId = VisitExpression(op.Instance);
-                    _ctx.Module.AddCopy(instanceId, origParamIds[0]);
+                    CopyArgumentToMethodParameter(original, 0, op.Instance, origParamIds[0]);
                     paramOffset = 1;
                 }
                 for (var i = 0; i < op.Arguments.Length; i++)
-                {
-                    var argId = VisitExpression(op.Arguments[i].Value);
-                    _ctx.Module.AddCopy(argId, origParamIds[i + paramOffset]);
-                }
-                return EmitCallByLabel(original, foreignLabel);
+                    CopyArgumentToMethodParameter(original, i + paramOffset, op.Arguments[i].Value, origParamIds[i + paramOffset]);
+                var result = EmitCallByLabel(original, foreignLabel);
+                RestoreMethodParameterState(savedCurrentParams);
+                return result;
             }
         }
 
@@ -216,6 +214,21 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
         for (int pi = 0; pi < constructed.Parameters.Length; pi++)
         {
             var param = constructed.Parameters[pi];
+            if (param.Type.IsTupleType && param.Type is INamedTypeSymbol tupleParamType)
+            {
+                var elements = tupleParamType.TupleElements;
+                var tupleParamIds = new string[elements.Length];
+                for (int ei = 0; ei < elements.Length; ei++)
+                {
+                    var elemType = GetUdonType(elements[ei].Type);
+                    var tupleParamId = $"__{idx}_{param.Name}__param_{ei}";
+                    _ctx.Vars.DeclareVar(tupleParamId, elemType);
+                    tupleParamIds[ei] = tupleParamId;
+                }
+                _ctx.MethodTupleParamVarIds[(constructed, pi)] = tupleParamIds;
+                continue;
+            }
+
             var isDelegateParam = param.Type is INamedTypeSymbol nt2 && nt2.DelegateInvokeMethod != null;
             var udonType = isDelegateParam ? "SystemUInt32" : GetUdonType(param.Type);
             var paramId = $"__{idx}_{param.Name}__param";
@@ -226,11 +239,27 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
 
         if (!constructed.ReturnsVoid)
         {
-            var retType = GetUdonType(constructed.ReturnType);
-            var retId = $"__{idx}_{SanitizeId(constructed.Name)}__ret";
-            _ctx.Vars.DeclareVar(retId, retType);
-            _ctx.MethodRetVars[constructed] = retId;
-            _ctx.MethodRetTypes[constructed] = retType;
+            if (constructed.ReturnType.IsTupleType && constructed.ReturnType is INamedTypeSymbol tupleType)
+            {
+                var elements = tupleType.TupleElements;
+                var tupleRetIds = new string[elements.Length];
+                for (int ei = 0; ei < elements.Length; ei++)
+                {
+                    var elemType = GetUdonType(elements[ei].Type);
+                    var retId = $"__{idx}_{SanitizeId(constructed.Name)}__ret_{ei}";
+                    _ctx.Vars.DeclareVar(retId, elemType);
+                    tupleRetIds[ei] = retId;
+                }
+                _ctx.MethodTupleRetVars[constructed] = tupleRetIds;
+            }
+            else
+            {
+                var retType = GetUdonType(constructed.ReturnType);
+                var retId = $"__{idx}_{SanitizeId(constructed.Name)}__ret";
+                _ctx.Vars.DeclareVar(retId, retType);
+                _ctx.MethodRetVars[constructed] = retId;
+                _ctx.MethodRetTypes[constructed] = retType;
+            }
         }
 
         _ctx.PendingGenericSpecs.Add(constructed);
