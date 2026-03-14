@@ -75,30 +75,20 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
 
     HExpr VisitConditionalAnd(IBinaryOperation op)
     {
-        // a && b → short-circuit: if (a) result = b; else result = false;
+        // a && b → Select(a, b, false). Short-circuit is realized at LIR level:
+        // HirToLir lowers HSelect to branch → only evaluates b if a is true.
         var leftVal = VisitExpression(op.LeftOperand);
-        var resultField = _ctx.DeclareLocal("sc", "SystemBoolean");
-        EmitStoreField(resultField, Const(false, "SystemBoolean"));
-        _builder.EmitIf(leftVal, _ =>
-        {
-            var rightVal = VisitExpression(op.RightOperand);
-            EmitStoreField(resultField, rightVal);
-        });
-        return LoadField(resultField, "SystemBoolean");
+        var rightVal = VisitExpression(op.RightOperand);
+        return Select(leftVal, rightVal, Const(false, "SystemBoolean"), "SystemBoolean");
     }
 
     HExpr VisitConditionalOr(IBinaryOperation op)
     {
-        // a || b → short-circuit: if (a) result = true; else result = b;
+        // a || b → Select(a, true, b). Short-circuit is realized at LIR level:
+        // HirToLir lowers HSelect to branch → only evaluates b if a is false.
         var leftVal = VisitExpression(op.LeftOperand);
-        var resultField = _ctx.DeclareLocal("sc", "SystemBoolean");
-        EmitStoreField(resultField, Const(true, "SystemBoolean"));
-        _builder.EmitIf(leftVal, null, _ =>
-        {
-            var rightVal = VisitExpression(op.RightOperand);
-            EmitStoreField(resultField, rightVal);
-        });
-        return LoadField(resultField, "SystemBoolean");
+        var rightVal = VisitExpression(op.RightOperand);
+        return Select(leftVal, Const(true, "SystemBoolean"), rightVal, "SystemBoolean");
     }
 
     // ── Unary ──
@@ -349,13 +339,12 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
 
     HExpr VisitConditionalExpression(IConditionalOperation op)
     {
+        // cond ? a : b → Select(cond, a, b). Short-circuit at LIR level.
         var condVal = VisitExpression(op.Condition);
+        var trueVal = VisitExpression(op.WhenTrue);
+        var falseVal = VisitExpression(op.WhenFalse);
         var resultType = GetUdonType(op.Type);
-        var resultField = _ctx.DeclareLocal("ternary", resultType);
-        _builder.EmitIf(condVal,
-            _ => EmitStoreField(resultField, VisitExpression(op.WhenTrue)),
-            _ => EmitStoreField(resultField, VisitExpression(op.WhenFalse)));
-        return LoadField(resultField, resultType);
+        return Select(condVal, trueVal, falseVal, resultType);
     }
 
     // ── Extern signature helpers ──
