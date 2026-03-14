@@ -140,6 +140,109 @@ public static class HirOptimizer
         }
     }
 
+    // ========================================================================
+    // Dead Code Elimination
+    // ========================================================================
+
+    public static void DeadCodeElimination(HModule module)
+    {
+        foreach (var func in module.Functions)
+            EliminateDeadCode(func.Body);
+    }
+
+    static void EliminateDeadCode(HBlock block)
+    {
+        // Recursively process nested structures first (bottom-up)
+        for (int i = 0; i < block.Stmts.Count; i++)
+        {
+            switch (block.Stmts[i])
+            {
+                case HIf hif:
+                    EliminateDeadCode(hif.Then);
+                    EliminateDeadCode(hif.Else);
+                    // Remove empty HIf where both branches are empty and condition is pure
+                    if (hif.Then.Stmts.Count == 0 && hif.Else.Stmts.Count == 0 && IsPureExpr(hif.Cond))
+                    {
+                        block.Stmts.RemoveAt(i);
+                        i--;
+                    }
+                    break;
+
+                case HWhile hw:
+                    EliminateDeadCode(hw.CondBlock);
+                    EliminateDeadCode(hw.Body);
+                    // Remove empty loop with pure condition (not do-while, since body runs at least once)
+                    if (!hw.IsDoWhile && hw.Body.Stmts.Count == 0 && hw.CondBlock.Stmts.Count == 0 && IsPureExpr(hw.Cond))
+                    {
+                        block.Stmts.RemoveAt(i);
+                        i--;
+                    }
+                    break;
+
+                case HFor hf:
+                    EliminateDeadCode(hf.Init);
+                    EliminateDeadCode(hf.CondBlock);
+                    EliminateDeadCode(hf.Update);
+                    EliminateDeadCode(hf.Body);
+                    // Remove empty for loop with pure condition and no init/update side effects
+                    if (hf.Body.Stmts.Count == 0 && hf.Init.Stmts.Count == 0
+                        && hf.Update.Stmts.Count == 0 && hf.CondBlock.Stmts.Count == 0
+                        && (hf.Cond == null || IsPureExpr(hf.Cond)))
+                    {
+                        block.Stmts.RemoveAt(i);
+                        i--;
+                    }
+                    break;
+
+                case HBlock nested:
+                    EliminateDeadCode(nested);
+                    // Remove empty nested blocks
+                    if (nested.Stmts.Count == 0)
+                    {
+                        block.Stmts.RemoveAt(i);
+                        i--;
+                    }
+                    break;
+            }
+        }
+
+        // Remove unreachable statements after terminators.
+        // A label restores reachability (it is a jump target), so only remove
+        // non-label statements between a terminator and the next label.
+        for (int i = 0; i < block.Stmts.Count; i++)
+        {
+            if (block.Stmts[i] is HReturn or HBreak or HContinue or HGoto)
+            {
+                int j = i + 1;
+                while (j < block.Stmts.Count && block.Stmts[j] is not HLabelStmt)
+                    block.Stmts.RemoveAt(j);
+                // After hitting a label (or end of block), reachability is restored.
+                // Continue scanning for the next terminator from the label onward.
+            }
+        }
+    }
+
+    static bool IsPureExpr(HExpr expr)
+    {
+        return expr switch
+        {
+            HConst => true,
+            HSlotRef => true,
+            HLoadField => true,
+            HFieldAddr => true,
+            HFuncRef => true,
+            HExternCall => false,
+            HInternalCall => false,
+            HCrossBehaviourCall => false,
+            HSelect sel => IsPureExpr(sel.Cond) && IsPureExpr(sel.TrueVal) && IsPureExpr(sel.FalseVal),
+            _ => false,
+        };
+    }
+
+    // ========================================================================
+    // Fold Table
+    // ========================================================================
+
     static Dictionary<string, Func<List<HConst>, object>> BuildFoldTable()
     {
         var t = new Dictionary<string, Func<List<HConst>, object>>();
