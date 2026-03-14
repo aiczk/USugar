@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Text;
 
 // ============================================================================
@@ -361,6 +362,30 @@ public sealed class HSelect : HExpr
     }
 
     public override string ToString() => $"select({Cond}, {TrueVal}, {FalseVal}):{Type}";
+}
+
+/// <summary>Cross-behaviour method call via SendCustomEvent protocol.
+/// Encapsulates param setup + SendCustomEvent + return value retrieval as a single expression.
+/// Prevents side-effect leakage when used inside HSelect (short-circuit evaluation).</summary>
+public sealed class HCrossBehaviourCall : HExpr
+{
+    public readonly HExpr Instance;
+    public readonly string EventName;
+    public readonly List<(string ParamName, HExpr Value)> Params;  // SetProgramVariable pairs
+    public readonly string ReturnVarName;  // null for void calls
+
+    public HCrossBehaviourCall(HExpr instance, string eventName,
+        List<(string, HExpr)> parameters, string returnVarName, string retType)
+        : base(retType)
+    {
+        Instance = instance ?? throw new ArgumentNullException(nameof(instance));
+        EventName = eventName ?? throw new ArgumentNullException(nameof(eventName));
+        Params = parameters ?? new();
+        ReturnVarName = returnVarName;
+    }
+
+    public override string ToString() =>
+        $"cross_call {Instance}.{EventName}({string.Join(", ", Params.Select(p => p.ParamName))}):{Type}";
 }
 
 /// <summary>Reference to a function entry point (for delegate/JUMP_INDIRECT).</summary>
