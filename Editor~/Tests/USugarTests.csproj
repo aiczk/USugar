@@ -25,14 +25,7 @@
     <Compile Include="../../Editor/Emit/Handlers/NullableHandler.cs" />
     <Compile Include="../../Editor/UasmEmitter.cs" />
     <Compile Include="../../Editor/USugarCompilerHelper.cs" />
-    <Compile Include="../../Editor/IR/IrTypes.cs" />
-    <Compile Include="../../Editor/IR/IrBuilder.cs" />
-    <Compile Include="../../Editor/IR/CodeGen.cs" />
-    <Compile Include="../../Editor/IR/Mem2Reg.cs" />
-    <Compile Include="../../Editor/IR/IrOptimizer.cs" />
-    <Compile Include="../../Editor/IR/PhiElimination.cs" />
-    <Compile Include="../../Editor/IR/RegisterAllocator.cs" />
-
+    <Compile Include="../../Editor/IR/SharedTypes.cs" />
     <Compile Include="../../Editor/IR/IrPipeline.cs" />
     <Compile Include="../../Editor/IR/HirTypes.cs" />
     <Compile Include="../../Editor/IR/HirBuilder.cs" />
