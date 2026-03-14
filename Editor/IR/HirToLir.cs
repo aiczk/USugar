@@ -339,11 +339,9 @@ public static class HirToLir
                 return new LFuncRef(f.FuncName);
 
             case HLoadField lf:
-            {
-                var dest = ctx.AllocScratch(lf.Type);
-                ctx.Current.Insts.Add(new LLoadField(dest, lf.FieldName, lf.Type));
-                return new LSlotRef(dest, lf.Type);
-            }
+                // Return a direct field reference. UASM PUSH uses the heap address,
+                // so extern can read/write the field in-place (critical for out/ref params).
+                return new LFieldRef(lf.FieldName, lf.Type);
 
             case HExternCall ec:
             {

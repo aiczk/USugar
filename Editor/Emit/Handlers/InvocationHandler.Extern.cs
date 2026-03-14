@@ -26,6 +26,9 @@ public partial class InvocationHandler
                 instanceVal = VisitExpression(op.Instance);
         }
 
+        // For out/ref params: pass the original variable's LoadField directly.
+        // Udon VM extern writes to the pushed address, so the original variable
+        // is updated in-place. No copy-back needed.
         var argVals = new List<HExpr>();
         for (int i = 0; i < op.Arguments.Length; i++)
             argVals.Add(VisitExpression(op.Arguments[i].Value));
