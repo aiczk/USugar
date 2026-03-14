@@ -44,8 +44,53 @@ public static class HirVerifier
             if (expected == actual) return;
             // SystemObject is compatible with any type (Udon VM boxing/unboxing)
             if (expected == "SystemObject" || actual == "SystemObject") return;
+            // Reference types are compatible via COPY in Udon VM (no type enforcement)
+            if (IsReferenceUdonType(expected) && IsReferenceUdonType(actual)) return;
+            // Nullable<T> erased to T in Udon VM — SystemNullableX ↔ X are compatible
+            if (expected.StartsWith("SystemNullable") && expected.Substring("SystemNullable".Length) == actual) return;
+            if (actual.StartsWith("SystemNullable") && actual.Substring("SystemNullable".Length) == expected) return;
             throw new VerificationException(
                 $"Type mismatch in {context}: expected '{expected}', got '{actual}' (function '{Func.Name}')");
+        }
+
+        /// <summary>Type check for HAssign — more relaxed because Udon VM stores enums as Int32.</summary>
+        public void AssertAssignType(string slotType, string valueType, string context)
+        {
+            if (slotType == valueType) return;
+            if (slotType == "SystemObject" || valueType == "SystemObject") return;
+            if (IsReferenceUdonType(slotType) && IsReferenceUdonType(valueType)) return;
+            // Nullable<T> erased to T in Udon VM
+            if (slotType.StartsWith("SystemNullable") && slotType.Substring("SystemNullable".Length) == valueType) return;
+            if (valueType.StartsWith("SystemNullable") && valueType.Substring("SystemNullable".Length) == slotType) return;
+            // Enum types use Int32 underlying type in Udon VM
+            if (slotType == "SystemInt32" || valueType == "SystemInt32") return;
+            throw new VerificationException(
+                $"Type mismatch in {context}: expected '{slotType}', got '{valueType}' (function '{Func.Name}')");
+        }
+
+        /// <summary>
+        /// Heuristic: a Udon type name that does NOT end with known value-type suffixes
+        /// and is not a known primitive is treated as a reference type.
+        /// Udon VM COPY on reference types just copies heap addresses; no type tag enforcement.
+        /// </summary>
+        static bool IsReferenceUdonType(string udonType)
+        {
+            return udonType switch
+            {
+                "SystemBoolean" or "SystemByte" or "SystemSByte"
+                    or "SystemInt16" or "SystemUInt16"
+                    or "SystemInt32" or "SystemUInt32"
+                    or "SystemInt64" or "SystemUInt64"
+                    or "SystemSingle" or "SystemDouble" or "SystemDecimal"
+                    or "SystemChar" => false,
+                _ when udonType.StartsWith("UnityEngineVector")
+                    || udonType.StartsWith("UnityEngineQuaternion")
+                    || udonType.StartsWith("UnityEngineColor")
+                    || udonType.StartsWith("UnityEngineMatrix")
+                    || udonType.StartsWith("UnityEngineRect")
+                    || udonType.StartsWith("UnityEngineRay") => false,
+                _ => true,
+            };
         }
     }
 
@@ -64,7 +109,7 @@ public static class HirVerifier
                 VerifyExpr(assign.Value, ctx);
                 // Type check: assigned value must match slot type
                 var slotType = ctx.Func.Slots[assign.DestSlot].Type;
-                ctx.AssertType(slotType, assign.Value.Type, $"HAssign to slot{assign.DestSlot}");
+                ctx.AssertAssignType(slotType, assign.Value.Type, $"HAssign to slot{assign.DestSlot}");
                 break;
 
             case HStoreField store:

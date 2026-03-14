@@ -169,10 +169,10 @@ public partial class InvocationHandler
         fetchArgs.Add(udonBehaviourType);
         fetchArgs.AddRange(argVals);
 
-        // Call GetComponents → ComponentArray (store to field so it's evaluated once)
-        var allComponentsField = _ctx.DeclareTemp("UnityEngineComponentArray");
-        EmitStoreField(allComponentsField, ExternCall(fetchExtern, fetchArgs, "UnityEngineComponentArray"));
-        var allComponents = LoadField(allComponentsField, "UnityEngineComponentArray");
+        // Call GetComponents → ComponentArray (store to slot so it's evaluated once)
+        var allComponentsSlot = _ctx.AllocTemp("UnityEngineComponentArray");
+        EmitAssign(allComponentsSlot, ExternCall(fetchExtern, fetchArgs, "UnityEngineComponentArray"));
+        var allComponents = SlotRef(allComponentsSlot);
 
         // Compute target type ID at compile time
         var targetTypeName = target.TypeArguments[0].ToDisplayString();
@@ -244,32 +244,31 @@ public partial class InvocationHandler
 
     HExpr EmitShimSingular(HExpr allComponents, HExpr targetIdConst, HExpr reflKeyConst, bool useTypeIds)
     {
-        // Get array length (store to field so it's not re-evaluated each iteration)
-        var lenField = _ctx.DeclareTemp("SystemInt32");
-        EmitStoreField(lenField, ExternCall(
+        // Get array length (store to slot so it's not re-evaluated each iteration)
+        var lenSlot = _ctx.AllocTemp("SystemInt32");
+        EmitAssign(lenSlot, ExternCall(
             "UnityEngineComponentArray.__get_Length__SystemInt32",
             new List<HExpr> { allComponents }, "SystemInt32"));
 
         // Loop index (mutable across control flow)
-        var idxField = _ctx.DeclareTemp("SystemInt32");
-        EmitStoreField(idxField, Const(0, "SystemInt32"));
+        var idxSlot = _ctx.AllocTemp("SystemInt32");
+        EmitAssign(idxSlot, Const(0, "SystemInt32"));
 
-        // Result field (null initially — returns null if no match found)
-        var resultField = _ctx.DeclareTemp("VRCUdonCommonInterfacesIUdonEventReceiver");
+        // Result slot (null initially — returns null if no match found)
+        var resultSlot = _ctx.AllocTemp("VRCUdonCommonInterfacesIUdonEventReceiver");
 
         // while (idx < len)
         _builder.EmitWhile(
             ExternCall(
                 "SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean",
-                new List<HExpr> { LoadField(idxField, "SystemInt32"), LoadField(lenField, "SystemInt32") },
+                new List<HExpr> { SlotRef(idxSlot), SlotRef(lenSlot) },
                 "SystemBoolean"),
             b =>
             {
                 // element = allComponents[idx]
-                var curIdx = LoadField(idxField, "SystemInt32");
                 var elementVal = ExternCall(
                     "UnityEngineComponentArray.__Get__SystemInt32__UnityEngineComponent",
-                    new List<HExpr> { allComponents, curIdx },
+                    new List<HExpr> { allComponents, SlotRef(idxSlot) },
                     "UnityEngineComponent");
 
                 // idValue = behaviour.GetProgramVariable("__refl_typeid" or "__refl_typeids")
@@ -293,29 +292,28 @@ public partial class InvocationHandler
                     _builder.EmitIf(matchVal, matchB =>
                     {
                         // Match! result = element, break out of loop
-                        EmitStoreField(resultField, elementVal);
+                        EmitAssign(resultSlot, elementVal);
                         _builder.EmitBreak();
                     });
                 });
 
                 // idx++
                 var oneConst = Const(1, "SystemInt32");
-                var curIdx2 = LoadField(idxField, "SystemInt32");
                 var nextIdxVal = ExternCall(
                     "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32",
-                    new List<HExpr> { curIdx2, oneConst },
+                    new List<HExpr> { SlotRef(idxSlot), oneConst },
                     "SystemInt32");
-                EmitStoreField(idxField, nextIdxVal);
+                EmitAssign(idxSlot, nextIdxVal);
             });
 
-        return LoadField(resultField, "VRCUdonCommonInterfacesIUdonEventReceiver");
+        return SlotRef(resultSlot);
     }
 
     HExpr EmitShimPlural(HExpr allComponents, HExpr targetIdConst, HExpr reflKeyConst, bool useTypeIds)
     {
-        // Get array length (store to field so it's not re-evaluated each iteration)
-        var lenField = _ctx.DeclareTemp("SystemInt32");
-        EmitStoreField(lenField, ExternCall(
+        // Get array length (store to slot so it's not re-evaluated each iteration)
+        var lenSlot = _ctx.AllocTemp("SystemInt32");
+        EmitAssign(lenSlot, ExternCall(
             "UnityEngineComponentArray.__get_Length__SystemInt32",
             new List<HExpr> { allComponents }, "SystemInt32"));
 
@@ -323,66 +321,62 @@ public partial class InvocationHandler
         var oneConst = Const(1, "SystemInt32");
 
         // === Pass 1: Count matches ===
-        var countField = _ctx.DeclareTemp("SystemInt32");
-        EmitStoreField(countField, zeroConst);
-        var idx1Field = _ctx.DeclareTemp("SystemInt32");
-        EmitStoreField(idx1Field, zeroConst);
+        var countSlot = _ctx.AllocTemp("SystemInt32");
+        EmitAssign(countSlot, zeroConst);
+        var idx1Slot = _ctx.AllocTemp("SystemInt32");
+        EmitAssign(idx1Slot, zeroConst);
 
         // while (idx1 < len)
         _builder.EmitWhile(
             ExternCall(
                 "SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean",
-                new List<HExpr> { LoadField(idx1Field, "SystemInt32"), LoadField(lenField, "SystemInt32") },
+                new List<HExpr> { SlotRef(idx1Slot), SlotRef(lenSlot) },
                 "SystemBoolean"),
             b =>
             {
-                EmitShimTypeCheckBody(allComponents, idx1Field, reflKeyConst, targetIdConst, useTypeIds,
+                EmitShimTypeCheckBody(allComponents, idx1Slot, reflKeyConst, targetIdConst, useTypeIds,
                     matchAction: () =>
                     {
                         // count++
-                        var curCount = LoadField(countField, "SystemInt32");
                         var newCountVal = ExternCall(
                             "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32",
-                            new List<HExpr> { curCount, oneConst },
+                            new List<HExpr> { SlotRef(countSlot), oneConst },
                             "SystemInt32");
-                        EmitStoreField(countField, newCountVal);
+                        EmitAssign(countSlot, newCountVal);
                     });
 
                 // idx1++
-                var curIdx1 = LoadField(idx1Field, "SystemInt32");
                 var nextIdx1Val = ExternCall(
                     "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32",
-                    new List<HExpr> { curIdx1, oneConst },
+                    new List<HExpr> { SlotRef(idx1Slot), oneConst },
                     "SystemInt32");
-                EmitStoreField(idx1Field, nextIdx1Val);
+                EmitAssign(idx1Slot, nextIdx1Val);
             });
 
         // === Allocate result array ===
-        var countVal = LoadField(countField, "SystemInt32");
         var resultArr = ExternCall(
             "UnityEngineComponentArray.__ctor__SystemInt32__UnityEngineComponentArray",
-            new List<HExpr> { countVal },
+            new List<HExpr> { SlotRef(countSlot) },
             "UnityEngineComponentArray");
 
         // === Pass 2: Fill result array ===
-        var idx2Field = _ctx.DeclareTemp("SystemInt32");
-        EmitStoreField(idx2Field, zeroConst);
-        var writeIdxField = _ctx.DeclareTemp("SystemInt32");
-        EmitStoreField(writeIdxField, zeroConst);
+        var idx2Slot = _ctx.AllocTemp("SystemInt32");
+        EmitAssign(idx2Slot, zeroConst);
+        var writeIdxSlot = _ctx.AllocTemp("SystemInt32");
+        EmitAssign(writeIdxSlot, zeroConst);
 
         // while (idx2 < len)
         _builder.EmitWhile(
             ExternCall(
                 "SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean",
-                new List<HExpr> { LoadField(idx2Field, "SystemInt32"), LoadField(lenField, "SystemInt32") },
+                new List<HExpr> { SlotRef(idx2Slot), SlotRef(lenSlot) },
                 "SystemBoolean"),
             b =>
             {
                 // element = allComponents[idx2]
-                var curIdx2Loop = LoadField(idx2Field, "SystemInt32");
                 var elementVal = ExternCall(
                     "UnityEngineComponentArray.__Get__SystemInt32__UnityEngineComponent",
-                    new List<HExpr> { allComponents, curIdx2Loop },
+                    new List<HExpr> { allComponents, SlotRef(idx2Slot) },
                     "UnityEngineComponent");
 
                 // Type check
@@ -404,27 +398,24 @@ public partial class InvocationHandler
                     _builder.EmitIf(matchVal, matchB =>
                     {
                         // result[writeIdx] = element
-                        var curWriteIdx = LoadField(writeIdxField, "SystemInt32");
                         EmitExternVoid("UnityEngineComponentArray.__Set__SystemInt32_UnityEngineComponent__SystemVoid",
-                            new List<HExpr> { resultArr, curWriteIdx, elementVal });
+                            new List<HExpr> { resultArr, SlotRef(writeIdxSlot), elementVal });
 
                         // writeIdx++
-                        var curWriteIdx2 = LoadField(writeIdxField, "SystemInt32");
                         var newWriteVal = ExternCall(
                             "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32",
-                            new List<HExpr> { curWriteIdx2, oneConst },
+                            new List<HExpr> { SlotRef(writeIdxSlot), oneConst },
                             "SystemInt32");
-                        EmitStoreField(writeIdxField, newWriteVal);
+                        EmitAssign(writeIdxSlot, newWriteVal);
                     });
                 });
 
                 // idx2++
-                var curIdx2 = LoadField(idx2Field, "SystemInt32");
                 var nextIdx2Val = ExternCall(
                     "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32",
-                    new List<HExpr> { curIdx2, oneConst },
+                    new List<HExpr> { SlotRef(idx2Slot), oneConst },
                     "SystemInt32");
-                EmitStoreField(idx2Field, nextIdx2Val);
+                EmitAssign(idx2Slot, nextIdx2Val);
             });
 
         return resultArr;
@@ -470,14 +461,13 @@ public partial class InvocationHandler
     /// Emit the type-check body for shim loops (pass 1 count).
     /// Calls matchAction if the element's type ID matches.
     /// </summary>
-    void EmitShimTypeCheckBody(HExpr allComponents, string idxField, HExpr reflKeyConst,
+    void EmitShimTypeCheckBody(HExpr allComponents, int idxSlot, HExpr reflKeyConst,
         HExpr targetIdConst, bool useTypeIds, System.Action matchAction)
     {
         // element = allComponents[idx]
-        var idxVal = LoadField(idxField, "SystemInt32");
         var elementVal = ExternCall(
             "UnityEngineComponentArray.__Get__SystemInt32__UnityEngineComponent",
-            new List<HExpr> { allComponents, idxVal },
+            new List<HExpr> { allComponents, SlotRef(idxSlot) },
             "UnityEngineComponent");
 
         // idValue = behaviour.GetProgramVariable(reflKey)
@@ -559,16 +549,16 @@ public partial class InvocationHandler
         // Self-recursive call: save current parameter values before overwriting
         bool isSelfRecursive = _currentMethod != null
             && SymbolEqualityComparer.Default.Equals(target, _currentMethod);
-        string[] savedParamFields = null;
+        int[] savedParamSlots = null;
         if (isSelfRecursive && paramIds.Length > 0)
         {
-            savedParamFields = new string[paramIds.Length];
+            savedParamSlots = new int[paramIds.Length];
             for (int i = 0; i < paramIds.Length; i++)
             {
                 var paramType = _ctx.GetFieldType(paramIds[i]);
-                var savedField = _ctx.DeclareTemp(paramType);
-                EmitStoreField(savedField, LoadField(paramIds[i], paramType));
-                savedParamFields[i] = savedField;
+                var savedSlot = _ctx.AllocTemp(paramType);
+                EmitAssign(savedSlot, LoadField(paramIds[i], paramType));
+                savedParamSlots[i] = savedSlot;
             }
         }
 
@@ -596,12 +586,12 @@ public partial class InvocationHandler
         var result = EmitCallToMethod(target, args);
 
         // Self-recursive call: restore parameter values after return
-        if (isSelfRecursive && savedParamFields != null)
+        if (isSelfRecursive && savedParamSlots != null)
         {
             for (int i = 0; i < paramIds.Length; i++)
             {
                 var paramType = _ctx.GetFieldType(paramIds[i]);
-                EmitStoreField(paramIds[i], LoadField(savedParamFields[i], paramType));
+                EmitStoreField(paramIds[i], SlotRef(savedParamSlots[i]));
             }
         }
 

@@ -94,9 +94,9 @@ public class LoopHandler : HandlerBase, IOperationHandler
 
         var collVal = VisitExpression(collectionOp);
 
-        // Store collection in a temp field so it can be re-read in condition/body
-        var collField = _ctx.DeclareTemp(arrayType);
-        EmitStoreField(collField, collVal);
+        // Store collection in a scratch slot so it can be re-read in condition/body
+        var collSlot = _ctx.AllocTemp(arrayType);
+        EmitAssign(collSlot, collVal);
 
         // Declare loop variable
         var loopLocal = op.Locals.FirstOrDefault()
@@ -105,14 +105,14 @@ public class LoopHandler : HandlerBase, IOperationHandler
         _localVarIds[loopLocal] = loopVarId;
 
         // Index variable
-        var idxField = _ctx.DeclareTemp("SystemInt32");
+        var idxSlot = _ctx.AllocTemp("SystemInt32");
 
         // Condition: idx < arr.Length
         var condExpr = ExternCall(
             "SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean",
-            new List<HExpr> { LoadField(idxField, "SystemInt32"),
+            new List<HExpr> { SlotRef(idxSlot),
                               ExternCall("SystemArray.__get_Length__SystemInt32",
-                                         new List<HExpr> { LoadField(collField, arrayType) },
+                                         new List<HExpr> { SlotRef(collSlot) },
                                          "SystemInt32") },
             "SystemBoolean");
 
@@ -120,7 +120,7 @@ public class LoopHandler : HandlerBase, IOperationHandler
             _ =>
             {
                 // Init: idx = 0
-                EmitStoreField(idxField, Const(0, "SystemInt32"));
+                EmitAssign(idxSlot, Const(0, "SystemInt32"));
             },
             condExpr,
             _ =>
@@ -128,16 +128,16 @@ public class LoopHandler : HandlerBase, IOperationHandler
                 // Update: idx++
                 var nextIdx = ExternCall(
                     "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32",
-                    new List<HExpr> { LoadField(idxField, "SystemInt32"), Const(1, "SystemInt32") },
+                    new List<HExpr> { SlotRef(idxSlot), Const(1, "SystemInt32") },
                     "SystemInt32");
-                EmitStoreField(idxField, nextIdx);
+                EmitAssign(idxSlot, nextIdx);
             },
             _ =>
             {
                 // Body: loopVar = arr[idx]; <body>
                 var elemVal = ExternCall(
                     $"{arrayType}.__Get__SystemInt32__{elemAccessorType}",
-                    new List<HExpr> { LoadField(collField, arrayType), LoadField(idxField, "SystemInt32") },
+                    new List<HExpr> { SlotRef(collSlot), SlotRef(idxSlot) },
                     elemType);
                 EmitStoreField(loopVarId, elemVal);
 
@@ -157,23 +157,24 @@ public class LoopHandler : HandlerBase, IOperationHandler
         // Pre-convert enum switch value once (Udon VM has no enum-typed operators)
         var convertedValueVal = EmitEnumToUnderlying(valueVal, op.Value.Type);
 
-        // Store converted value in a temp so it can be re-read for each comparison
-        string convertedField = null;
+        // Store converted value in a scratch slot so it can be re-read for each comparison
+        int convertedSlot = -1;
+        string convertedSlotType = null;
         if (op.Cases.Length > 1)
         {
-            var convertedType = valueType;
+            convertedSlotType = valueType;
             if (op.Value.Type is INamedTypeSymbol namedEnum && namedEnum.TypeKind == TypeKind.Enum)
-                convertedType = GetUdonType(namedEnum.EnumUnderlyingType);
-            convertedField = _ctx.DeclareTemp(convertedType);
-            EmitStoreField(convertedField, convertedValueVal);
+                convertedSlotType = GetUdonType(namedEnum.EnumUnderlyingType);
+            convertedSlot = _ctx.AllocTemp(convertedSlotType);
+            EmitAssign(convertedSlot, convertedValueVal);
         }
 
         // Also store the original value for pattern matching
-        string origValueField = null;
+        int origValueSlot = -1;
         if (op.Cases.Any(c => c.Clauses.Any(cl => cl is IPatternCaseClauseOperation)))
         {
-            origValueField = _ctx.DeclareTemp(valueType);
-            EmitStoreField(origValueField, valueVal);
+            origValueSlot = _ctx.AllocTemp(valueType);
+            EmitAssign(origValueSlot, valueVal);
         }
 
         // Find default case index
@@ -183,14 +184,14 @@ public class LoopHandler : HandlerBase, IOperationHandler
                 defaultIndex = i;
 
         // Lower switch to if/else chain
-        EmitSwitchCases(op, convertedField, convertedValueVal, origValueField, valueVal, valueType, defaultIndex, 0);
+        EmitSwitchCases(op, convertedSlot, convertedSlotType, convertedValueVal, origValueSlot, valueVal, valueType, defaultIndex, 0);
 
         _builder.EmitLabel(endLabel);
         SwitchBreakLabels.Pop();
     }
 
-    void EmitSwitchCases(ISwitchOperation op, string convertedField, HExpr convertedValueVal,
-        string origValueField, HExpr origValueVal, string valueType, int defaultIndex, int startIdx)
+    void EmitSwitchCases(ISwitchOperation op, int convertedSlot, string convertedSlotType, HExpr convertedValueVal,
+        int origValueSlot, HExpr origValueVal, string valueType, int defaultIndex, int startIdx)
     {
         // Find the next non-default case starting from startIdx
         int caseIdx = -1;
@@ -230,12 +231,12 @@ public class LoopHandler : HandlerBase, IOperationHandler
                 var eqSig = ExternResolver.BuildMethodSignature(
                     eqType, "__op_Equality", new[] { eqType, eqType }, "SystemBoolean");
 
-                var lhs = convertedField != null ? LoadField(convertedField, eqType) : convertedValueVal;
+                var lhs = convertedSlot >= 0 ? SlotRef(convertedSlot) : convertedValueVal;
                 clauseCond = ExternCall(eqSig, new List<HExpr> { lhs, caseValueVal }, "SystemBoolean");
             }
             else if (clause is IPatternCaseClauseOperation patternCase)
             {
-                var patValue = origValueField != null ? LoadField(origValueField, valueType) : origValueVal;
+                var patValue = origValueSlot >= 0 ? SlotRef(origValueSlot) : origValueVal;
                 clauseCond = EmitPatternCheck(patValue, op.Value.Type, patternCase.Pattern);
 
                 if (patternCase.Guard != null)
@@ -264,14 +265,14 @@ public class LoopHandler : HandlerBase, IOperationHandler
         {
             _builder.EmitIf(caseCond,
                 _ => EmitCaseBody(caseSection),
-                _ => EmitSwitchCases(op, convertedField, convertedValueVal,
-                                     origValueField, origValueVal, valueType, defaultIndex, caseIdx + 1));
+                _ => EmitSwitchCases(op, convertedSlot, convertedSlotType, convertedValueVal,
+                                     origValueSlot, origValueVal, valueType, defaultIndex, caseIdx + 1));
         }
         else
         {
             // Case with only default clause — treated as else (handled by fallthrough)
-            EmitSwitchCases(op, convertedField, convertedValueVal,
-                            origValueField, origValueVal, valueType, defaultIndex, caseIdx + 1);
+            EmitSwitchCases(op, convertedSlot, convertedSlotType, convertedValueVal,
+                            origValueSlot, origValueVal, valueType, defaultIndex, caseIdx + 1);
         }
     }
 

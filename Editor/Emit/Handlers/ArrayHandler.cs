@@ -26,19 +26,18 @@ public class ArrayHandler : HandlerBase, IExpressionHandler
         if (op.Initializer == null)
             return resultVal;
 
-        // Store array in a temp field so initializer element sets reference the same array
-        var arrField = _ctx.DeclareTemp(arrayType);
-        EmitStoreField(arrField, resultVal);
+        // Store array in a scratch slot so initializer element sets reference the same array
+        var arrSlot = _ctx.AllocTemp(arrayType);
+        EmitAssign(arrSlot, resultVal);
 
         for (int i = 0; i < op.Initializer.ElementValues.Length; i++)
         {
             var valVal = VisitExpression(op.Initializer.ElementValues[i]);
             var idxConst = Const(i, "SystemInt32");
-            var arrRef = LoadField(arrField, arrayType);
-            EmitExternVoid($"{arrayType}.__Set__SystemInt32_{elementType}__SystemVoid", new List<HExpr> { arrRef, idxConst, valVal });
+            EmitExternVoid($"{arrayType}.__Set__SystemInt32_{elementType}__SystemVoid", new List<HExpr> { SlotRef(arrSlot), idxConst, valVal });
         }
 
-        return LoadField(arrField, arrayType);
+        return SlotRef(arrSlot);
     }
 
     HExpr VisitArrayElementReference(IArrayElementReferenceOperation op)
@@ -100,63 +99,61 @@ public class ArrayHandler : HandlerBase, IExpressionHandler
         var udonElemType = GetUdonType(arrSymbol.ElementType);
         var udonArrType = GetUdonType(arrayRef.Type);
 
-        // Store array in temp to avoid re-evaluation
-        var arrField = _ctx.DeclareTemp(udonArrType);
-        EmitStoreField(arrField, arrayVal);
+        // Store array in scratch slot to avoid re-evaluation
+        var arrSlot = _ctx.AllocTemp(udonArrType);
+        EmitAssign(arrSlot, arrayVal);
 
-        var arrRef = LoadField(arrField, udonArrType);
-        var startVal = ResolveRangeOperand(arrRef, arrayType, rangeOp.LeftOperand, false);
-        var startField = _ctx.DeclareTemp("SystemInt32");
-        EmitStoreField(startField, startVal);
+        var startVal = ResolveRangeOperand(SlotRef(arrSlot), arrayType, rangeOp.LeftOperand, false);
+        var startSlot = _ctx.AllocTemp("SystemInt32");
+        EmitAssign(startSlot, startVal);
 
-        arrRef = LoadField(arrField, udonArrType);
-        var endVal = ResolveRangeOperand(arrRef, arrayType, rangeOp.RightOperand, true);
+        var endVal = ResolveRangeOperand(SlotRef(arrSlot), arrayType, rangeOp.RightOperand, true);
 
         // len = end - start
         var lenVal = ExternCall("SystemInt32.__op_Subtraction__SystemInt32_SystemInt32__SystemInt32",
-            new List<HExpr> { endVal, LoadField(startField, "SystemInt32") }, "SystemInt32");
-        var lenField = _ctx.DeclareTemp("SystemInt32");
-        EmitStoreField(lenField, lenVal);
+            new List<HExpr> { endVal, SlotRef(startSlot) }, "SystemInt32");
+        var lenSlot = _ctx.AllocTemp("SystemInt32");
+        EmitAssign(lenSlot, lenVal);
 
         // result = new T[len]
         var resultVal = ExternCall($"{udonArrType}.__ctor__SystemInt32__{udonArrType}",
-            new List<HExpr> { LoadField(lenField, "SystemInt32") }, udonArrType);
-        var resultField = _ctx.DeclareTemp(udonArrType);
-        EmitStoreField(resultField, resultVal);
+            new List<HExpr> { SlotRef(lenSlot) }, udonArrType);
+        var resultSlot = _ctx.AllocTemp(udonArrType);
+        EmitAssign(resultSlot, resultVal);
 
         // for (i = 0; i < len; i++) result[i] = arr[start + i]
-        var iField = _ctx.DeclareTemp("SystemInt32");
+        var iSlot = _ctx.AllocTemp("SystemInt32");
 
         _builder.EmitFor(
             // init: i = 0
-            b => { EmitStoreField(iField, Const(0, "SystemInt32")); },
+            b => { EmitAssign(iSlot, Const(0, "SystemInt32")); },
             // cond: i < len
             ExternCall("SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean",
-                new List<HExpr> { LoadField(iField, "SystemInt32"), LoadField(lenField, "SystemInt32") }, "SystemBoolean"),
+                new List<HExpr> { SlotRef(iSlot), SlotRef(lenSlot) }, "SystemBoolean"),
             // update: i++
             b =>
             {
                 var nextVal = ExternCall("SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32",
-                    new List<HExpr> { LoadField(iField, "SystemInt32"), Const(1, "SystemInt32") }, "SystemInt32");
-                EmitStoreField(iField, nextVal);
+                    new List<HExpr> { SlotRef(iSlot), Const(1, "SystemInt32") }, "SystemInt32");
+                EmitAssign(iSlot, nextVal);
             },
             // body
             b =>
             {
                 // srcIdx = start + i
                 var srcIdxVal = ExternCall("SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32",
-                    new List<HExpr> { LoadField(startField, "SystemInt32"), LoadField(iField, "SystemInt32") }, "SystemInt32");
+                    new List<HExpr> { SlotRef(startSlot), SlotRef(iSlot) }, "SystemInt32");
 
                 // val = arr[srcIdx]
                 var valVal = ExternCall($"{arrayType}.__Get__SystemInt32__{elementType}",
-                    new List<HExpr> { LoadField(arrField, udonArrType), srcIdxVal }, udonElemType);
+                    new List<HExpr> { SlotRef(arrSlot), srcIdxVal }, udonElemType);
 
                 // result[i] = val
                 EmitExternVoid($"{arrayType}.__Set__SystemInt32_{elementType}__SystemVoid",
-                    new List<HExpr> { LoadField(resultField, udonArrType), LoadField(iField, "SystemInt32"), valVal });
+                    new List<HExpr> { SlotRef(resultSlot), SlotRef(iSlot), valVal });
             }
         );
 
-        return LoadField(resultField, udonArrType);
+        return SlotRef(resultSlot);
     }
 }

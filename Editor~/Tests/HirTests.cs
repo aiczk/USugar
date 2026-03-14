@@ -485,9 +485,9 @@ public class HirTests
         var module = new HModule();
         var builder = new HirBuilder(module);
         builder.BeginFunction("test");
-        var slot = builder.AllocFrame("SystemInt32");
-        // Assign a boolean to an int slot
-        builder.EmitAssign(slot, builder.Const(true, "SystemBoolean"));
+        var slot = builder.AllocFrame("SystemSingle");
+        // Assign a string to a float slot — genuinely incompatible types
+        builder.EmitAssign(slot, builder.Const("hello", "SystemString"));
 
         Assert.Throws<VerificationException>(() => HirVerifier.Verify(module));
     }
@@ -536,7 +536,7 @@ public class HirTests
     {
         var module = new HModule();
         var func = module.AddFunction("test");
-        func.ReturnType = "SystemInt32";
+        func.ReturnType = "SystemSingle";
         func.Body.Stmts.Add(new HReturn(new HConst("hello", "SystemString")));
 
         Assert.Throws<VerificationException>(() => HirVerifier.Verify(module));

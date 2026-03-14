@@ -145,8 +145,8 @@ public class AssignmentHandler : HandlerBase, IOperationHandler, IExpressionHand
             var sig = ExternResolver.BuildFieldSetSignature(containingType, fieldTarget.Field.Name, valueType);
             EmitExternVoid(sig, new List<HExpr> { instanceVal, srcVal });
             // COW dirty: struct field setter → copy back to force heap update
-            var cowField = _ctx.DeclareTemp(containingType);
-            EmitStoreField(cowField, instanceVal);
+            var cowSlot = _ctx.AllocTemp(containingType);
+            EmitAssign(cowSlot, instanceVal);
             return srcVal;
         }
 
@@ -237,8 +237,8 @@ public class AssignmentHandler : HandlerBase, IOperationHandler, IExpressionHand
             if (!propRef.Property.ContainingType.IsValueType)
                 return srcVal;
 
-            var cowField = _ctx.DeclareTemp(containingType);
-            EmitStoreField(cowField, instanceVal);
+            var cowSlot = _ctx.AllocTemp(containingType);
+            EmitAssign(cowSlot, instanceVal);
             return srcVal;
         }
 
@@ -337,10 +337,10 @@ public class AssignmentHandler : HandlerBase, IOperationHandler, IExpressionHand
                              && op.Parent is not IForLoopOperation;
             if (op.Parent == null || resultUsed)
             {
-                // Save current value by storing to a temp field and loading it back
-                var savedField = _ctx.DeclareTemp(udonType);
-                EmitStoreField(savedField, targetVal);
-                savedVal = LoadField(savedField, udonType);
+                // Save current value to a scratch slot
+                var savedSlot = _ctx.AllocTemp(udonType);
+                EmitAssign(savedSlot, targetVal);
+                savedVal = SlotRef(savedSlot);
             }
         }
 
@@ -518,8 +518,8 @@ public class AssignmentHandler : HandlerBase, IOperationHandler, IExpressionHand
                 // COW dirty: struct property setter → copy back to force heap update
                 if (propRef.Property.ContainingType.IsValueType)
                 {
-                    var cowField = _ctx.DeclareTemp(containingType);
-                    EmitStoreField(cowField, wbInstanceVal);
+                    var cowSlot = _ctx.AllocTemp(containingType);
+                    EmitAssign(cowSlot, wbInstanceVal);
                 }
 
                 break;

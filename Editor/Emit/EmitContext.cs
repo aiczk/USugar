@@ -206,11 +206,8 @@ public class EmitContext
     /// <summary>Check if a field name has been declared.</summary>
     public bool IsFieldDeclared(string name) => _declaredFieldNames.Contains(name);
 
-    /// <summary>Declare a temporary variable field.</summary>
-    public string DeclareTemp(string type)
-    {
-        return DeclareLocal("tmp", type);
-    }
+    /// <summary>Allocate a Scratch slot for a temporary value (slot-based, coalesced by register allocator).</summary>
+    public int AllocTemp(string type) => Builder.AllocScratch(type);
 
     /// <summary>Declare a struct constant field with deduplication (e.g., Vector3.zero).</summary>
     public string DeclareStructConst(string type, object value)

@@ -25,14 +25,14 @@ public class NullableHandler : HandlerBase, IExpressionHandler
     {
         bool isVoid = op.Type == null || op.Type.SpecialType == SpecialType.System_Void;
 
-        string resultField = null;
+        int resultSlot = -1;
         string resultType = null;
         if (!isVoid)
         {
             resultType = GetUdonType(op.Type);
-            resultField = _ctx.DeclareTemp(resultType);
+            resultSlot = _ctx.AllocTemp(resultType);
             var defaultConst = Const(null, resultType);
-            EmitStoreField(resultField, defaultConst);
+            EmitAssign(resultSlot, defaultConst);
         }
 
         var targetVal = VisitExpression(op.Operation);
@@ -53,19 +53,19 @@ public class NullableHandler : HandlerBase, IExpressionHandler
             _conditionalAccessTargets.Pop();
 
             if (!isVoid && accessVal != null)
-                EmitStoreField(resultField, accessVal);
+                EmitAssign(resultSlot, accessVal);
         });
 
-        return resultField != null ? LoadField(resultField, resultType) : null;
+        return resultSlot >= 0 ? SlotRef(resultSlot) : null;
     }
 
     HExpr VisitCoalesce(ICoalesceOperation op)
     {
         // a ?? b → var r = a; if (r == null) r = b;
         var resultType = GetUdonType(op.Type);
-        var resultField = _ctx.DeclareTemp(resultType);
+        var resultSlot = _ctx.AllocTemp(resultType);
         var leftVal = VisitExpression(op.Value);
-        EmitStoreField(resultField, leftVal);
+        EmitAssign(resultSlot, leftVal);
 
         var nullConst = Const(null, "SystemObject");
 
@@ -79,10 +79,10 @@ public class NullableHandler : HandlerBase, IExpressionHandler
         {
             // left IS null → use right
             var rightVal = VisitExpression(op.WhenNull);
-            EmitStoreField(resultField, rightVal);
+            EmitAssign(resultSlot, rightVal);
         });
 
-        return LoadField(resultField, resultType);
+        return SlotRef(resultSlot);
     }
 
     HExpr VisitCoalesceAssignment(ICoalesceAssignmentOperation op)
@@ -90,7 +90,7 @@ public class NullableHandler : HandlerBase, IExpressionHandler
         // x ??= expr → if (x == null) x = expr; return x
         // Capture lvalue sub-expressions once to avoid double evaluation
         HExpr targetVal;
-        string targetField = null;
+        int targetSlot;
         HExpr cachedArrayVal = null, cachedIndexVal = null, cachedInstanceVal = null;
 
         if (op.Target is IArrayElementReferenceOperation arrayElemTarget)
@@ -101,12 +101,12 @@ public class NullableHandler : HandlerBase, IExpressionHandler
             var arrType = GetArrayType(arrSym);
             var elemType = GetArrayElemType(arrSym);
             var targetType = GetUdonType(arrayElemTarget.Type);
-            targetField = _ctx.DeclareTemp(targetType);
+            targetSlot = _ctx.AllocTemp(targetType);
             targetVal = ExternCall(
                 $"{arrType}.__Get__SystemInt32__{elemType}",
                 new List<HExpr> { cachedArrayVal, cachedIndexVal },
                 elemType);
-            EmitStoreField(targetField, targetVal);
+            EmitAssign(targetSlot, targetVal);
         }
         else if (op.Target is IPropertyReferenceOperation propTarget)
         {
@@ -119,15 +119,15 @@ public class NullableHandler : HandlerBase, IExpressionHandler
                 cachedInstanceVal = VisitExpression(propTarget.Instance);
             targetVal = VisitExpression(op.Target);
             var targetType = GetUdonType(op.Target.Type);
-            targetField = _ctx.DeclareTemp(targetType);
-            EmitStoreField(targetField, targetVal);
+            targetSlot = _ctx.AllocTemp(targetType);
+            EmitAssign(targetSlot, targetVal);
         }
         else
         {
             targetVal = VisitExpression(op.Target);
             var targetType = GetUdonType(op.Target.Type);
-            targetField = _ctx.DeclareTemp(targetType);
-            EmitStoreField(targetField, targetVal);
+            targetSlot = _ctx.AllocTemp(targetType);
+            EmitAssign(targetSlot, targetVal);
         }
 
         var nullConst = Const(null, "SystemObject");
@@ -135,19 +135,19 @@ public class NullableHandler : HandlerBase, IExpressionHandler
         // condVal = (target == null); if true → assign
         var condVal = ExternCall(
             "SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean",
-            new List<HExpr> { LoadField(targetField, GetUdonType(op.Target.Type)), nullConst },
+            new List<HExpr> { SlotRef(targetSlot), nullConst },
             "SystemBoolean");
 
         // Capture values for use inside the closure
         var capturedArrayVal = cachedArrayVal;
         var capturedIndexVal = cachedIndexVal;
         var capturedInstanceVal = cachedInstanceVal;
-        var capturedTargetField = targetField;
+        var capturedTargetSlot = targetSlot;
 
         _builder.EmitIf(condVal, b =>
         {
             var rightVal = VisitExpression(op.Value);
-            EmitStoreField(capturedTargetField, rightVal);
+            EmitAssign(capturedTargetSlot, rightVal);
 
             // Write-back for non-local targets using cached sub-expressions
             if (op.Target is IArrayElementReferenceOperation arrayElem)
@@ -170,6 +170,6 @@ public class NullableHandler : HandlerBase, IExpressionHandler
             }
         });
 
-        return LoadField(targetField, GetUdonType(op.Target.Type));
+        return SlotRef(targetSlot);
     }
 }

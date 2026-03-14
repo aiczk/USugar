@@ -61,13 +61,11 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
             && (op.OperatorKind == BinaryOperatorKind.Equals
                 || op.OperatorKind == BinaryOperatorKind.NotEquals))
         {
-            var objLeftField = _ctx.DeclareTemp("UnityEngineObject");
-            EmitStoreField(objLeftField, leftVal);
-            var objRightField = _ctx.DeclareTemp("UnityEngineObject");
-            EmitStoreField(objRightField, rightVal);
-            var objLeftVal = LoadField(objLeftField, "UnityEngineObject");
-            var objRightVal = LoadField(objRightField, "UnityEngineObject");
-            return ExternCall(sig, new List<HExpr> { objLeftVal, objRightVal }, resultType);
+            var objLeftSlot = _ctx.AllocTemp("UnityEngineObject");
+            EmitAssign(objLeftSlot, leftVal);
+            var objRightSlot = _ctx.AllocTemp("UnityEngineObject");
+            EmitAssign(objRightSlot, rightVal);
+            return ExternCall(sig, new List<HExpr> { SlotRef(objLeftSlot), SlotRef(objRightSlot) }, resultType);
         }
 
         return ExternCall(sig, new List<HExpr> { leftVal, rightVal }, resultType);
@@ -80,28 +78,28 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
         // enum conversions, UnityEngineObject casts). Those statements must live inside
         // the conditional branch so they don't execute unconditionally.
         var leftVal = VisitExpression(op.LeftOperand);
-        var resultField = _ctx.DeclareTemp("SystemBoolean");
-        EmitStoreField(resultField, Const(false, "SystemBoolean"));
+        var resultSlot = _ctx.AllocTemp("SystemBoolean");
+        EmitAssign(resultSlot, Const(false, "SystemBoolean"));
         _builder.EmitIf(leftVal, _ =>
         {
             var rightVal = VisitExpression(op.RightOperand);
-            EmitStoreField(resultField, rightVal);
+            EmitAssign(resultSlot, rightVal);
         });
-        return LoadField(resultField, "SystemBoolean");
+        return SlotRef(resultSlot);
     }
 
     HExpr VisitConditionalOr(IBinaryOperation op)
     {
         // a || b: evaluate b only when a is false (short-circuit).
         var leftVal = VisitExpression(op.LeftOperand);
-        var resultField = _ctx.DeclareTemp("SystemBoolean");
-        EmitStoreField(resultField, Const(true, "SystemBoolean"));
+        var resultSlot = _ctx.AllocTemp("SystemBoolean");
+        EmitAssign(resultSlot, Const(true, "SystemBoolean"));
         _builder.EmitIf(leftVal, null, _ =>
         {
             var rightVal = VisitExpression(op.RightOperand);
-            EmitStoreField(resultField, rightVal);
+            EmitAssign(resultSlot, rightVal);
         });
-        return LoadField(resultField, "SystemBoolean");
+        return SlotRef(resultSlot);
     }
 
     // ── Unary ──
@@ -279,9 +277,9 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
     HExpr VisitSwitchExpression(ISwitchExpressionOperation op)
     {
         var resultType = GetUdonType(op.Type);
-        var resultField = _ctx.DeclareTemp(resultType);
+        var resultSlot = _ctx.AllocTemp(resultType);
         // Initialize result to default in case no arm matches (non-exhaustive)
-        EmitStoreField(resultField, Const(
+        EmitAssign(resultSlot, Const(
             EmitContext.ParseConstValue(resultType, GetDefaultConstValue(resultType)), resultType));
         var valueVal = VisitExpression(op.Value);
 
@@ -306,7 +304,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
             tail = _ =>
             {
                 var armVal = VisitExpression(defArm.Value);
-                EmitStoreField(resultField, armVal);
+                EmitAssign(resultSlot, armVal);
             };
         }
 
@@ -327,7 +325,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
                         _builder.EmitIf(guardVal, ___ =>
                         {
                             var armVal = VisitExpression(arm.Value);
-                            EmitStoreField(resultField, armVal);
+                            EmitAssign(resultSlot, armVal);
                         }, elseBranch);
                     }, elseBranch);
                 }
@@ -336,7 +334,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
                     _builder.EmitIf(checkVal, __ =>
                     {
                         var armVal = VisitExpression(arm.Value);
-                        EmitStoreField(resultField, armVal);
+                        EmitAssign(resultSlot, armVal);
                     }, elseBranch);
                 }
             };
@@ -345,7 +343,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
         // Emit the chain
         tail?.Invoke(null);
 
-        return LoadField(resultField, resultType);
+        return SlotRef(resultSlot);
     }
 
     // ── Conditional (ternary) expression ──
@@ -355,11 +353,11 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
         // cond ? a : b: evaluate branches only on the taken path.
         var condVal = VisitExpression(op.Condition);
         var resultType = GetUdonType(op.Type);
-        var resultField = _ctx.DeclareTemp(resultType);
+        var resultSlot = _ctx.AllocTemp(resultType);
         _builder.EmitIf(condVal,
-            _ => EmitStoreField(resultField, VisitExpression(op.WhenTrue)),
-            _ => EmitStoreField(resultField, VisitExpression(op.WhenFalse)));
-        return LoadField(resultField, resultType);
+            _ => EmitAssign(resultSlot, VisitExpression(op.WhenTrue)),
+            _ => EmitAssign(resultSlot, VisitExpression(op.WhenFalse)));
+        return SlotRef(resultSlot);
     }
 
     // ── Extern signature helpers ──
