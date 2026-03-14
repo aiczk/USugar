@@ -26,9 +26,7 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
     public string Handle(IOperation expression) => expression switch
     {
         ILiteralOperation op => VisitLiteral(op),
-        ILocalReferenceOperation localRef => _ctx.Vars.Lookup(localRef.Local.Name) ?? (_ctx.LocalVarIds.TryGetValue(localRef.Local, out var capturedId) 
-                                                 ? capturedId
-                                                 : throw new InvalidOperationException($"Cannot resolve local variable '{localRef.Local.Name}' in method '{_ctx.CurrentMethod?.Name ?? "(none)"}'.")),
+        ILocalReferenceOperation localRef => VisitLocalReference(localRef),
         IFieldReferenceOperation op => VisitFieldReference(op),
         IParameterReferenceOperation paramRef => GetParamVarId(paramRef.Parameter),
         IInstanceReferenceOperation => _ctx.Vars.DeclareThisOnce(GetUdonType(_ctx.ClassSymbol)),
@@ -44,6 +42,19 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
 
     // ── Literal ──
 
+    string VisitLocalReference(ILocalReferenceOperation localRef)
+    {
+        if (_ctx.TupleLocalVarIds.ContainsKey(localRef.Local))
+            throw new NotSupportedException(
+                $"Tuple local '{localRef.Local.Name}' cannot be used as a scalar expression. Deconstruct it or access one of its elements.");
+
+        return _ctx.Vars.Lookup(localRef.Local.Name)
+            ?? (_ctx.LocalVarIds.TryGetValue(localRef.Local, out var capturedId)
+                ? capturedId
+                : throw new InvalidOperationException(
+                    $"Cannot resolve local variable '{localRef.Local.Name}' in method '{_ctx.CurrentMethod?.Name ?? "(none)"}'."));
+    }
+
     string VisitLiteral(ILiteralOperation lit)
     {
         // null literal has no type
@@ -58,6 +69,9 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
 
     string VisitFieldReference(IFieldReferenceOperation fieldRef)
     {
+        if (TryResolveTupleElementReference(fieldRef, out var tupleElementId))
+            return tupleElementId;
+
         if (fieldRef.Field.HasConstantValue)
         {
             var constType = GetUdonType(fieldRef.Field.Type);

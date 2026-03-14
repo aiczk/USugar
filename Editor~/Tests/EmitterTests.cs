@@ -3268,6 +3268,208 @@ public class DiscardTest : UdonSharpBehaviour {
     }
 
     [Fact]
+    public void TupleReturn_FromMethod_CompilesSuccessfully()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+using UnityEngine;
+public class TupleReturnTest : UdonSharpBehaviour {
+    private (int sum, int count) GetTuple()
+    {
+        return (100, 5);
+    }
+    void Start()
+    {
+        var (x, y) = GetTuple();
+        Debug.Log(x + "" "" + y);
+    }
+}
+");
+        Assert.NotNull(uasm);
+        Assert.DoesNotContain("ValueTuple", uasm);
+    }
+
+    [Fact]
+    public void TupleReturn_WithDiscard_CompilesSuccessfully()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public class TupleDiscardTest : UdonSharpBehaviour {
+    (int, int) GetPair() { return (1, 2); }
+    void Start() {
+        var (_, y) = GetPair();
+        int z = y + 1;
+    }
+}
+");
+        Assert.DoesNotContain("ValueTuple", uasm);
+        Assert.Contains("op_Addition", uasm);
+    }
+
+    [Fact]
+    public void TupleReturn_ThreeElements_CompilesSuccessfully()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public class Tuple3Test : UdonSharpBehaviour {
+    (int, float, bool) GetTriple() { return (1, 2.5f, true); }
+    void Start() {
+        var (a, b, c) = GetTriple();
+    }
+}
+");
+        Assert.DoesNotContain("ValueTuple", uasm);
+    }
+
+    [Fact]
+    public void TupleReturn_WithExpressions_CompilesSuccessfully()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public class TupleExprTest : UdonSharpBehaviour {
+    int _x; int _y;
+    (int, int) Add(int a, int b) { return (a + b, a - b); }
+    void Start() {
+        var (sum, diff) = Add(_x, _y);
+    }
+}
+");
+        Assert.DoesNotContain("ValueTuple", uasm);
+        Assert.Contains("op_Addition", uasm);
+        Assert.Contains("op_Subtraction", uasm);
+    }
+
+    [Fact]
+    public void TupleReturn_MultipleCallsSameMethod_COWProtectsValues()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public class TupleCowTest : UdonSharpBehaviour {
+    int _a; int _b; int _c; int _d;
+    (int, int) GetPair(int x) { return (x, x + 1); }
+    void Start() {
+        var (a, b) = GetPair(1);
+        var (c, d) = GetPair(2);
+        _a = a; _b = b; _c = c; _d = d;
+    }
+}
+");
+        Assert.DoesNotContain("ValueTuple", uasm);
+        // Should have two separate call sequences with distinct COW temps
+        Assert.Contains("op_Addition", uasm);
+    }
+
+    [Fact]
+    public void TupleReturn_GenericMethod_CompilesSuccessfully()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public class GenericTupleTest : UdonSharpBehaviour {
+    (T, T) Dup<T>(T val) { return (val, val); }
+    void Start() {
+        var (a, b) = Dup(42);
+        var (c, d) = Dup(3.14f);
+    }
+}
+");
+        Assert.DoesNotContain("ValueTuple", uasm);
+    }
+
+    [Fact]
+    public void TupleReturn_ForwardedMethodCall_CompilesSuccessfully()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public class TupleForwardTest : UdonSharpBehaviour {
+    (int, int) GetPair() { return (1, 2); }
+    (int, int) Forward() { return GetPair(); }
+    void Start() {
+        var (a, b) = Forward();
+    }
+}
+");
+        Assert.DoesNotContain("ValueTuple", uasm);
+    }
+
+    [Fact]
+    public void TupleReturn_GenericForwardedMethodCall_CompilesSuccessfully()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public class GenericTupleForwardTest : UdonSharpBehaviour {
+    (T, T) Dup<T>(T val) { return (val, val); }
+    (T, T) Forward<T>(T val) { return Dup(val); }
+    void Start() {
+        var (a, b) = Forward(42);
+        var (c, d) = Forward(3.14f);
+    }
+}
+");
+        Assert.DoesNotContain("ValueTuple", uasm);
+    }
+
+    [Fact]
+    public void TupleLocal_ReassignmentAndReturn_CompilesSuccessfully()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public class TupleLocalFlowTest : UdonSharpBehaviour {
+    (int, int) GetPair(int x) { return (x, x + 1); }
+    (int, int) Compute() {
+        var pair = GetPair(1);
+        pair = GetPair(2);
+        return pair;
+    }
+    void Start() {
+        var (a, b) = Compute();
+        int sum = a + b;
+    }
+}
+");
+        Assert.DoesNotContain("ValueTuple", uasm);
+        Assert.Contains("op_Addition", uasm);
+    }
+
+    [Fact]
+    public void TupleParameter_CanBeReturnedAndDeconstructed()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public class TupleParamFlowTest : UdonSharpBehaviour {
+    (int, int) Id((int left, int right) pair) {
+        var (a, b) = pair;
+        return pair;
+    }
+    void Start() {
+        var pair = (3, 4);
+        var (x, y) = Id(pair);
+    }
+}
+");
+        Assert.DoesNotContain("ValueTuple", uasm);
+    }
+
+    [Fact]
+    public void TupleElementAccess_LocalAndParameter_CompilesSuccessfully()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public class TupleElementAccessTest : UdonSharpBehaviour {
+    int Sum((int left, int right) pair) {
+        return pair.left + pair.Item2;
+    }
+    void Start() {
+        var pair = (left: 1, right: 2);
+        int localSum = pair.Item1 + pair.right;
+        int paramSum = Sum(pair);
+    }
+}
+");
+        Assert.DoesNotContain("ValueTuple", uasm);
+        Assert.Contains("op_Addition", uasm);
+    }
+
+    [Fact]
     public void RelationalPattern_GreaterThan_EmitsComparison()
     {
         var uasm = TestHelper.CompileToUasm(@"

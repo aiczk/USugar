@@ -48,13 +48,16 @@ public class AssignmentHandler : HandlerBase, IOperationHandler, IExpressionHand
             throw new System.NotSupportedException(
                 $"Deconstruction target must be a tuple, got {target.GetType().Name} ({target.Kind})");
 
-        if (op.Value is ITupleOperation valueTuple)
+        if (TryResolveTupleValue(op.Value, out var tupleSourceIds))
         {
-            // (a, b) = (expr1, expr2) → element-wise assignment
+            if (tupleSourceIds.Length != targetTuple.Elements.Length)
+                throw new System.InvalidOperationException(
+                    $"Tuple arity mismatch in deconstruction: target expects {targetTuple.Elements.Length} values but source produced {tupleSourceIds.Length}.");
+
             for (int i = 0; i < targetTuple.Elements.Length; i++)
             {
-                var valueId = VisitExpression(valueTuple.Elements[i]);
-                AssignToTarget(targetTuple.Elements[i], valueId);
+                if (targetTuple.Elements[i] is IDiscardOperation) continue;
+                AssignToTarget(targetTuple.Elements[i], tupleSourceIds[i]);
             }
         }
         else
@@ -64,10 +67,17 @@ public class AssignmentHandler : HandlerBase, IOperationHandler, IExpressionHand
         }
     }
 
+
     // ── VisitAssignment ──
 
     string VisitAssignment(ISimpleAssignmentOperation assign)
     {
+        if (TryGetTupleTargetVarIds(assign.Target, out var tupleTargetIds))
+        {
+            CopyTupleValueToSlots(assign.Value, tupleTargetIds, $"assignment to tuple target '{assign.Target.Kind}'");
+            return tupleTargetIds[0];
+        }
+
         if (assign.Target is IArrayElementReferenceOperation arrayElem)
         {
             var arrayId = VisitExpression(arrayElem.ArrayReference);

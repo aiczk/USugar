@@ -8,14 +8,24 @@ public class MethodLayout
     public string ExportName { get; }
     public string BodyLabel { get; }
     public IReadOnlyList<string> ParamIds { get; }
+    public IReadOnlyList<IReadOnlyList<string>> TupleParamIds { get; } // null entries for scalar params
     public string ReturnId { get; }
+    public IReadOnlyList<string> TupleReturnIds { get; } // null for non-tuple returns
 
-    public MethodLayout(string exportName, string bodyLabel, IReadOnlyList<string> paramIds, string returnId)
+    public MethodLayout(
+        string exportName,
+        string bodyLabel,
+        IReadOnlyList<string> paramIds,
+        string returnId,
+        IReadOnlyList<IReadOnlyList<string>> tupleParamIds = null,
+        IReadOnlyList<string> tupleReturnIds = null)
     {
         ExportName = exportName;
         BodyLabel = bodyLabel;
         ParamIds = paramIds;
+        TupleParamIds = tupleParamIds;
         ReturnId = returnId;
+        TupleReturnIds = tupleReturnIds;
     }
 }
  
@@ -380,11 +390,24 @@ public class LayoutPlanner
 
             // Compute param IDs
             var paramIds = new string[method.Parameters.Length];
+            var tupleParamIds = new IReadOnlyList<string>[method.Parameters.Length];
             if (isUdonEvent && UdonEventParamNames.TryGetValue(method.Name, out var fixedNames))
             {
                 // Event parameters: use fixed names, don't consume NameAllocator counter
                 for (int i = 0; i < method.Parameters.Length; i++)
                 {
+                    if (method.Parameters[i].Type.IsTupleType && method.Parameters[i].Type is INamedTypeSymbol tupleParamType)
+                    {
+                        var ids = new string[tupleParamType.TupleElements.Length];
+                        for (int ei = 0; ei < tupleParamType.TupleElements.Length; ei++)
+                        {
+                            var elemKey = method.Parameters[i].Name + $"__param_{ei}";
+                            ids[ei] = NameAllocator.FormatId(elemKey, alloc.Allocate(elemKey));
+                        }
+                        tupleParamIds[i] = ids;
+                        continue;
+                    }
+
                     if (i < fixedNames.Length)
                         paramIds[i] = fixedNames[i];
                     else
@@ -400,21 +423,48 @@ public class LayoutPlanner
                 // Regular parameters: go through NameAllocator
                 for (int i = 0; i < method.Parameters.Length; i++)
                 {
+                    if (method.Parameters[i].Type.IsTupleType && method.Parameters[i].Type is INamedTypeSymbol tupleParamType)
+                    {
+                        var ids = new string[tupleParamType.TupleElements.Length];
+                        for (int ei = 0; ei < tupleParamType.TupleElements.Length; ei++)
+                        {
+                            var elemKey = method.Parameters[i].Name + $"__param_{ei}";
+                            ids[ei] = NameAllocator.FormatId(elemKey, alloc.Allocate(elemKey));
+                        }
+                        tupleParamIds[i] = ids;
+                        continue;
+                    }
+
                     var key = method.Parameters[i].Name + "__param";
                     paramIds[i] = NameAllocator.FormatId(key, alloc.Allocate(key));
                 }
             }
 
-            // Compute return ID: always for non-void methods (matches pure compiler)
+            // Compute return ID(s): tuple returns get per-element IDs
             string returnId = null;
+            IReadOnlyList<string> tupleReturnIds = null;
             if (!method.ReturnsVoid)
             {
-                var retKey = exportName + "__ret";
-                returnId = NameAllocator.FormatId(retKey, alloc.Allocate(retKey));
+                if (method.ReturnType.IsTupleType && method.ReturnType is INamedTypeSymbol tupleType)
+                {
+                    var elements = tupleType.TupleElements;
+                    var ids = new string[elements.Length];
+                    for (int i = 0; i < elements.Length; i++)
+                    {
+                        var retKey = exportName + $"__ret_{i}";
+                        ids[i] = NameAllocator.FormatId(retKey, alloc.Allocate(retKey));
+                    }
+                    tupleReturnIds = ids;
+                }
+                else
+                {
+                    var retKey = exportName + "__ret";
+                    returnId = NameAllocator.FormatId(retKey, alloc.Allocate(retKey));
+                }
             }
 
             var bodyLabel = exportName + "__body";
-            methods[method] = new MethodLayout(exportName, bodyLabel, paramIds, returnId);
+            methods[method] = new MethodLayout(exportName, bodyLabel, paramIds, returnId, tupleParamIds, tupleReturnIds);
         }
 
         // Inherit non-overridden methods from user-defined base classes.
@@ -477,20 +527,48 @@ public class LayoutPlanner
                 : safeName;
 
             var paramIds = new string[method.Parameters.Length];
+            var tupleParamIds = new IReadOnlyList<string>[method.Parameters.Length];
             for (int i = 0; i < method.Parameters.Length; i++)
             {
+                if (method.Parameters[i].Type.IsTupleType && method.Parameters[i].Type is INamedTypeSymbol tupleParamType)
+                {
+                    var ids = new string[tupleParamType.TupleElements.Length];
+                    for (int ei = 0; ei < tupleParamType.TupleElements.Length; ei++)
+                    {
+                        var elemKey = method.Parameters[i].Name + $"__param_{ei}";
+                        ids[ei] = NameAllocator.FormatId(elemKey, alloc.Allocate(elemKey));
+                    }
+                    tupleParamIds[i] = ids;
+                    continue;
+                }
+
                 var key = method.Parameters[i].Name + "__param";
                 paramIds[i] = NameAllocator.FormatId(key, alloc.Allocate(key));
             }
 
             string returnId = null;
+            IReadOnlyList<string> tupleReturnIds = null;
             if (!method.ReturnsVoid)
             {
-                var retKey = exportName + "__ret";
-                returnId = NameAllocator.FormatId(retKey, alloc.Allocate(retKey));
+                if (method.ReturnType.IsTupleType && method.ReturnType is INamedTypeSymbol tupleType)
+                {
+                    var elements = tupleType.TupleElements;
+                    var ids = new string[elements.Length];
+                    for (int i = 0; i < elements.Length; i++)
+                    {
+                        var retKey = exportName + $"__ret_{i}";
+                        ids[i] = NameAllocator.FormatId(retKey, alloc.Allocate(retKey));
+                    }
+                    tupleReturnIds = ids;
+                }
+                else
+                {
+                    var retKey = exportName + "__ret";
+                    returnId = NameAllocator.FormatId(retKey, alloc.Allocate(retKey));
+                }
             }
 
-            methods[method] = new MethodLayout(exportName, exportName + "__body", paramIds, returnId);
+            methods[method] = new MethodLayout(exportName, exportName + "__body", paramIds, returnId, tupleParamIds, tupleReturnIds);
         }
 
         return new TypeLayout(methods, new Dictionary<IFieldSymbol, FieldLayout>(SymbolEqualityComparer.Default));

@@ -18,6 +18,17 @@ public struct EmitDiagnostic
     public int Character;
 }
 
+sealed class SymbolMethodOrdinalComparer : IEqualityComparer<(IMethodSymbol method, int ordinal)>
+{
+    public static readonly SymbolMethodOrdinalComparer Instance = new();
+
+    public bool Equals((IMethodSymbol method, int ordinal) x, (IMethodSymbol method, int ordinal) y)
+        => SymbolEqualityComparer.Default.Equals(x.method, y.method) && x.ordinal == y.ordinal;
+
+    public int GetHashCode((IMethodSymbol method, int ordinal) obj)
+        => HashCode.Combine(SymbolEqualityComparer.Default.GetHashCode(obj.method), obj.ordinal);
+}
+
 public class EmitContext
 {
     // Core dependencies
@@ -33,13 +44,20 @@ public class EmitContext
     //   MethodVarPrefix:   method → index string (prefix for param/ret variable IDs)
     //   MethodRetVars:     method → return variable ID (null for void)
     //   MethodRetTypes:    method → return Udon type name
-    //   MethodParamVarIds: method → ordered array of parameter variable IDs
+    //   MethodParamVarIds: method → ordered array of scalar parameter variable IDs (null for tuple params)
+    //   MethodTupleParamVarIds: (method, ordinal) → tuple element variable IDs for tuple parameters
     public readonly Dictionary<IMethodSymbol, int> MethodLabels = new(SymbolEqualityComparer.Default);
     public readonly Dictionary<IMethodSymbol, int> MethodIndices = new(SymbolEqualityComparer.Default);
     public readonly Dictionary<IMethodSymbol, string> MethodVarPrefix = new(SymbolEqualityComparer.Default);
     public readonly Dictionary<IMethodSymbol, string> MethodRetVars = new(SymbolEqualityComparer.Default);
     public readonly Dictionary<IMethodSymbol, string> MethodRetTypes = new(SymbolEqualityComparer.Default);
     public readonly Dictionary<IMethodSymbol, string[]> MethodParamVarIds = new(SymbolEqualityComparer.Default);
+    public readonly Dictionary<(IMethodSymbol method, int ordinal), string[]> MethodTupleParamVarIds
+        = new(SymbolMethodOrdinalComparer.Instance);
+    public readonly Dictionary<IMethodSymbol, string[]> MethodTupleRetVars = new(SymbolEqualityComparer.Default);
+    public readonly Dictionary<ILocalSymbol, string[]> TupleLocalVarIds = new(SymbolEqualityComparer.Default);
+    // Per-call-site tuple source vars for the most recent tuple-valued expression.
+    public string[] LastTupleCallRetVars;
     public IMethodSymbol CurrentMethod;
     public int NextMethodIndex;
     public readonly List<(IMethodSymbol symbol, int label)> PendingLocalFunctions = new();
@@ -150,6 +168,21 @@ public class EmitContext
         for (int pi = 0; pi < method.Parameters.Length; pi++)
         {
             var param = method.Parameters[pi];
+            if (param.Type.IsTupleType && param.Type is INamedTypeSymbol tupleParamType)
+            {
+                var elements = tupleParamType.TupleElements;
+                var tupleParamIds = new string[elements.Length];
+                for (int ei = 0; ei < elements.Length; ei++)
+                {
+                    var elemType = ExternResolver.GetUdonTypeName(elements[ei].Type, TypeParamMap);
+                    var tupleParamId = $"__{idx}_{param.Name}__param_{ei}";
+                    Vars.DeclareVar(tupleParamId, elemType);
+                    tupleParamIds[ei] = tupleParamId;
+                }
+                MethodTupleParamVarIds[(method, pi)] = tupleParamIds;
+                continue;
+            }
+
             var isDlg = param.Type is INamedTypeSymbol nt && nt.DelegateInvokeMethod != null;
             var udonType = isDlg ? "SystemUInt32" : ExternResolver.GetUdonTypeName(param.Type, TypeParamMap);
             var paramId = $"__{idx}_{param.Name}__param";
@@ -160,11 +193,27 @@ public class EmitContext
 
         if (!method.ReturnsVoid)
         {
-            var retType = ExternResolver.GetUdonTypeName(method.ReturnType, TypeParamMap);
-            var retId = $"__{idx}_{name}__ret";
-            Vars.DeclareVar(retId, retType);
-            MethodRetVars[method] = retId;
-            MethodRetTypes[method] = retType;
+            if (method.ReturnType.IsTupleType && method.ReturnType is INamedTypeSymbol tupleType)
+            {
+                var elements = tupleType.TupleElements;
+                var tupleRetIds = new string[elements.Length];
+                for (int i = 0; i < elements.Length; i++)
+                {
+                    var elemType = ExternResolver.GetUdonTypeName(elements[i].Type, TypeParamMap);
+                    var retId = $"__{idx}_{name}__ret_{i}";
+                    Vars.DeclareVar(retId, elemType);
+                    tupleRetIds[i] = retId;
+                }
+                MethodTupleRetVars[method] = tupleRetIds;
+            }
+            else
+            {
+                var retType = ExternResolver.GetUdonTypeName(method.ReturnType, TypeParamMap);
+                var retId = $"__{idx}_{name}__ret";
+                Vars.DeclareVar(retId, retType);
+                MethodRetVars[method] = retId;
+                MethodRetTypes[method] = retType;
+            }
         }
 
         return idx;
