@@ -2,7 +2,7 @@
 
 An alternative UdonSharp compiler that handles C# features the standard compiler rejects.
 
-> **Status: Experimental.** This works on my projects, but it might not work on yours. Expect rough edges, missing error messages, and breaking changes. If something breaks, [open an issue](https://github.com/aiczk/USugar/issues).
+> **Status: Experimental.** This works on my projects, but it might not work on yours. Expect rough edges and breaking changes. If something breaks, [open an issue](https://github.com/aiczk/USugar/issues).
 
 ## What this gets you
 
@@ -37,8 +37,9 @@ string grade = score switch
 var pos = target?.position ?? Vector3.zero;
 _cache ??= "initialized";
 
-// Tuple deconstruction
-var (x, y) = (10, 20);
+// Tuple types
+(int sum, int count) GetStats() => (100, 5);
+var (x, y) = GetStats();
 
 // ref / out parameters
 void Swap(ref int a, ref int b)
@@ -61,10 +62,15 @@ None of this requires SDK modifications. USugar hooks into the existing UdonShar
 ## How it works
 
 ```
-C# source → Roslyn IOperation tree → SSA IR → optimize → register allocate → UASM
+C# source → Roslyn IOperation tree → HIR → optimize → LIR → optimize → UASM
 ```
 
-The compiler builds an intermediate representation, runs optimization passes (copy propagation, dead code elimination, constant folding, GVN), then emits Udon assembly. Tail-recursive calls are automatically converted to loops.
+The compiler uses a two-layer intermediate representation:
+
+- **HIR (High-level IR)**: Structured control flow (if/while/for as nodes). Optimization passes run constant folding, dead code elimination, and copy propagation on the expression tree.
+- **LIR (Low-level IR)**: Flat CFG with basic blocks. Further optimized with CFG simplification, copy propagation, dead code elimination, and slot coalescing (variable count reduction).
+
+Tail-recursive calls are automatically converted to loops. Compile errors include source file location for clickable Unity Console output.
 
 ## Requirements
 
@@ -85,10 +91,16 @@ _VPM listing coming soon._
 
 That's it. Your existing UdonSharp scripts will be compiled through USugar instead of the standard compiler. To switch back, disable **Override Compiler** and run **USugar > Compile > UdonSharp**.
 
+### Debugging
+
+Enable **USugar > Debug > Dump IR** to include IR output on every compile. Dumps are written to `Library/USugarCache/{ClassName}/`:
+- `1_hir.txt` / `1b_hir_optimized.txt` — HIR before/after optimization
+- `2_lir.txt` / `2b_lir_optimized.txt` — LIR before/after optimization
+- `3_uasm.txt` / `3_uasm_annotated.txt` — UASM output (annotated version has PC addresses)
+
 ## Limitations
 
-- Error messages are not helpful yet. If compilation fails, you get a stack trace instead of a source location.
-- No try/catch/finally — Udon VM has no exception support, and USugar doesn't pretend otherwise.
+- No try/catch/finally — Udon VM has no exception support.
 - Delegate variables work within a single UdonSharpBehaviour. Cross-behaviour delegate calls are not supported.
 - Not tested against every UdonSharp-compatible C# pattern. If you find something that compiles with UdonSharp but fails with USugar, that's a bug.
 

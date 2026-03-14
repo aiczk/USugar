@@ -30,17 +30,18 @@ static class USugarCompilationOrchestrator
         public INamedTypeSymbol Symbol;
         public SyntaxTree Tree;
         public string Uasm;
-        public VariableTable Variables;
+        public List<(string Id, string UdonType, object Value)> Constants;
         public uint HeapSize;
         public IReadOnlyList<EmitDiagnostic> EmitterDiagnostics;
         public List<(string file, int line, int character, string message, string severity)> ErrorDiagnostics;
         public bool IsError;
 
         public EmitResult(INamedTypeSymbol symbol, SyntaxTree tree, string uasm,
-            VariableTable variables, uint heapSize, IReadOnlyList<EmitDiagnostic> diagnostics)
+            List<(string Id, string UdonType, object Value)> constants, uint heapSize,
+            IReadOnlyList<EmitDiagnostic> diagnostics)
         {
             Symbol = symbol; Tree = tree; Uasm = uasm;
-            Variables = variables; HeapSize = heapSize;
+            Constants = constants; HeapSize = heapSize;
             EmitterDiagnostics = diagnostics;
             ErrorDiagnostics = null; IsError = false;
         }
@@ -91,7 +92,7 @@ static class USugarCompilationOrchestrator
         }
     }
 
-    internal static void CompileInternal(bool applyToAssets, bool force = false)
+    internal static void CompileInternal(bool applyToAssets, bool force = false, bool dumpEnabled = false)
     {
         var sw = System.Diagnostics.Stopwatch.StartNew();
         var collectedDiagnostics = new List<(string file, int line, int character, string message, string severity)>();
@@ -194,25 +195,33 @@ static class USugarCompilationOrchestrator
                         return;
                     }
 
-                    var emitter = new UasmEmitter(compilation, symbol, planner);
+                    var emitter = new UasmEmitter(compilation, symbol, planner) { DumpEnabled = dumpEnabled };
                     var uasm = emitter.Emit();
                     emitResults.Add(new EmitResult(symbol, tree, uasm,
-                        emitter.Variables, emitter.GetHeapSize(), emitter.Diagnostics));
+                        emitter.CodeGenResult.Constants, emitter.GetHeapSize(), emitter.Diagnostics));
                 }
                 catch (Exception ex)
                 {
                     var inner = ex is TargetInvocationException tie
                         && tie.InnerException != null ? tie.InnerException : ex;
-                    emitResults.Add(EmitResult.Error(symbol, tree, "", 0, 0,
-                        $"Failed to compile {symbol.Name}: {inner.Message}\n{inner.StackTrace}"));
+                    // Use class name + declaration position for error location
+                    var className = symbol.Name;
+                    var line = 0;
+                    var character = 0;
+                    var syntaxRef = symbol.DeclaringSyntaxReferences.FirstOrDefault();
+                    if (syntaxRef != null)
+                    {
+                        var span = syntaxRef.SyntaxTree.GetLineSpan(syntaxRef.Span);
+                        line = span.StartLinePosition.Line + 1;
+                        character = span.StartLinePosition.Character + 1;
+                    }
+                    emitResults.Add(EmitResult.Error(symbol, tree, className, line, character,
+                        $"Failed to compile {symbol.Name}: {inner.Message}"));
                 }
             });
 
             // ── Phase 3: Serial apply ──
             int count = 0, failures = 0;
-            var outputDir = "Library/USugarCache/UASM";
-            Directory.CreateDirectory(outputDir);
-
             foreach (var result in emitResults)
             {
                 if (result.IsError)
@@ -227,10 +236,13 @@ static class USugarCompilationOrchestrator
                 }
                 count++;
 
+                // UASM output goes to same directory as IR dumps
                 var ns = result.Symbol.ContainingNamespace?.IsGlobalNamespace == false
                     ? result.Symbol.ContainingNamespace.ToDisplayString() + "." : "";
-                var outputPath = Path.Combine(outputDir, $"{ns}{result.Symbol.Name}.uasm");
-                File.WriteAllText(outputPath, result.Uasm);
+                var className = $"{ns}{result.Symbol.Name}";
+                var classDir = Path.Combine("Library", "USugarCache", className);
+                Directory.CreateDirectory(classDir);
+                File.WriteAllText(Path.Combine(classDir, "uasm.txt"), result.Uasm);
 
                 // Merge emitter diagnostics
                 foreach (var d in result.EmitterDiagnostics)
@@ -250,7 +262,7 @@ static class USugarCompilationOrchestrator
                     var program = USugarConstantApplier.AssembleUasm(result.Uasm, result.HeapSize);
                     if (program != null)
                     {
-                        USugarConstantApplier.ApplyConstantValues(program, result.Variables);
+                        USugarConstantApplier.ApplyConstantValues(program, result.Constants);
                         programAsset.fieldDefinitions = USugarTypeCacheManager.BuildFieldDefinitions(result.Symbol);
                         programAsset.SerializedProgramAsset.StoreProgram(program);
                         programAsset.CompiledVersion = UdonSharpProgramVersion.CurrentVersion;
@@ -275,11 +287,8 @@ static class USugarCompilationOrchestrator
             }
 
             sw.Stop();
-            if (failures == 0)
-            {
-                SessionState.SetString(FingerprintKey, fingerprint);
-                SessionState.SetBool(AppliedKey, applyToAssets || lastApplied);
-            }
+            SessionState.SetString(FingerprintKey, fingerprint);
+            SessionState.SetBool(AppliedKey, applyToAssets || lastApplied);
             LastCompileHadErrors = failures > 0;
             var msg = failures > 0
                 ? $"Compile of {count} script{(count != 1 ? "s" : "")} finished in {sw.Elapsed:mm\\:ss\\.fff} ({failures} failed)"

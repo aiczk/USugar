@@ -26,12 +26,13 @@ static class USugarConstantApplier
         }
     }
 
-    internal static void ApplyConstantValues(IUdonProgram program, VariableTable vars)
+    internal static void ApplyConstantValues(IUdonProgram program,
+        System.Collections.Generic.List<(string Id, string UdonType, object Value)> constants)
     {
-        foreach (var entry in vars.GetConstEntries())
+        foreach (var (id, udonType, constValue) in constants)
         {
-            var addr = program.SymbolTable.GetAddressFromSymbol(entry.Id);
-            if (entry.UdonType == "SystemType" && entry.ConstValue is string udonTypeName)
+            var addr = program.SymbolTable.GetAddressFromSymbol(id);
+            if (udonType == "SystemType" && constValue is string udonTypeName)
             {
                 var clrType = USugarTypeCacheManager.ResolveUdonType(udonTypeName);
                 if (clrType != null)
@@ -41,9 +42,9 @@ static class USugarConstantApplier
             }
             else
             {
-                var value = entry.ConstValue;
+                var value = constValue;
                 var valueType = value.GetType();
-                var clrType = USugarTypeCacheManager.ResolveUdonType(entry.UdonType);
+                var clrType = USugarTypeCacheManager.ResolveUdonType(udonType);
                 if (clrType != null && clrType != valueType)
                 {
                     try
@@ -57,7 +58,7 @@ static class USugarConstantApplier
                     catch (Exception ex)
                     {
                         Debug.LogWarning(
-                            $"[USugar] Constant conversion failed for '{entry.Id}': "
+                            $"[USugar] Constant conversion failed for '{id}': "
                           + $"cannot convert {valueType.Name} to {clrType.Name}. {ex.Message}");
                     }
                 }
