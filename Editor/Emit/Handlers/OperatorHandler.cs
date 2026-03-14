@@ -75,18 +75,30 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
 
     HExpr VisitConditionalAnd(IBinaryOperation op)
     {
-        // a && b → Select(a, b, false)
+        // a && b → short-circuit: if (a) result = b; else result = false;
         var leftVal = VisitExpression(op.LeftOperand);
-        var rightVal = VisitExpression(op.RightOperand);
-        return Select(leftVal, rightVal, Const(false, "SystemBoolean"), "SystemBoolean");
+        var resultField = _ctx.DeclareLocal("sc", "SystemBoolean");
+        EmitStoreField(resultField, Const(false, "SystemBoolean"));
+        _builder.EmitIf(leftVal, _ =>
+        {
+            var rightVal = VisitExpression(op.RightOperand);
+            EmitStoreField(resultField, rightVal);
+        });
+        return LoadField(resultField, "SystemBoolean");
     }
 
     HExpr VisitConditionalOr(IBinaryOperation op)
     {
-        // a || b → Select(a, true, b)
+        // a || b → short-circuit: if (a) result = true; else result = b;
         var leftVal = VisitExpression(op.LeftOperand);
-        var rightVal = VisitExpression(op.RightOperand);
-        return Select(leftVal, Const(true, "SystemBoolean"), rightVal, "SystemBoolean");
+        var resultField = _ctx.DeclareLocal("sc", "SystemBoolean");
+        EmitStoreField(resultField, Const(true, "SystemBoolean"));
+        _builder.EmitIf(leftVal, null, _ =>
+        {
+            var rightVal = VisitExpression(op.RightOperand);
+            EmitStoreField(resultField, rightVal);
+        });
+        return LoadField(resultField, "SystemBoolean");
     }
 
     // ── Unary ──
@@ -270,41 +282,65 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
             EmitContext.ParseConstValue(resultType, GetDefaultConstValue(resultType)), resultType));
         var valueVal = VisitExpression(op.Value);
 
+        // Separate default arm from pattern arms to build proper if/else-if/else chain
+        var patternArms = new List<ISwitchExpressionArmOperation>();
+        ISwitchExpressionArmOperation defaultArm = null;
         foreach (var arm in op.Arms)
         {
             if (arm.Pattern is IDiscardPatternOperation)
-            {
-                // Default arm — always matches
-                var armVal = VisitExpression(arm.Value);
-                EmitStoreField(resultField, armVal);
-            }
+                defaultArm = arm;
             else
+                patternArms.Add(arm);
+        }
+
+        // Build nested if/else-if/else chain from inside out (reverse order)
+        // Each level: if (check) { result = armVal } else { <next level> }
+        // The innermost else is the default arm (if any).
+        System.Action<HirBuilder> tail = null;
+        if (defaultArm != null)
+        {
+            var defArm = defaultArm;
+            tail = _ =>
+            {
+                var armVal = VisitExpression(defArm.Value);
+                EmitStoreField(resultField, armVal);
+            };
+        }
+
+        for (int i = patternArms.Count - 1; i >= 0; i--)
+        {
+            var arm = patternArms[i];
+            var elseBranch = tail;
+            tail = _ =>
             {
                 var checkVal = EmitPatternCheckImpl(valueVal, op.Value.Type, arm.Pattern);
 
                 if (arm.Guard != null)
                 {
-                    // Pattern match + guard: both must be true
-                    _builder.EmitIf(checkVal, b =>
+                    // Pattern match + guard: combine with &&
+                    _builder.EmitIf(checkVal, __ =>
                     {
                         var guardVal = VisitExpression(arm.Guard);
-                        _builder.EmitIf(guardVal, b2 =>
+                        _builder.EmitIf(guardVal, ___ =>
                         {
                             var armVal = VisitExpression(arm.Value);
                             EmitStoreField(resultField, armVal);
-                        });
-                    });
+                        }, elseBranch);
+                    }, elseBranch);
                 }
                 else
                 {
-                    _builder.EmitIf(checkVal, b =>
+                    _builder.EmitIf(checkVal, __ =>
                     {
                         var armVal = VisitExpression(arm.Value);
                         EmitStoreField(resultField, armVal);
-                    });
+                    }, elseBranch);
                 }
-            }
+            };
         }
+
+        // Emit the chain
+        tail?.Invoke(null);
 
         return LoadField(resultField, resultType);
     }
@@ -314,10 +350,12 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
     HExpr VisitConditionalExpression(IConditionalOperation op)
     {
         var condVal = VisitExpression(op.Condition);
-        var trueVal = VisitExpression(op.WhenTrue);
-        var falseVal = VisitExpression(op.WhenFalse);
         var resultType = GetUdonType(op.Type);
-        return Select(condVal, trueVal, falseVal, resultType);
+        var resultField = _ctx.DeclareLocal("ternary", resultType);
+        _builder.EmitIf(condVal,
+            _ => EmitStoreField(resultField, VisitExpression(op.WhenTrue)),
+            _ => EmitStoreField(resultField, VisitExpression(op.WhenFalse)));
+        return LoadField(resultField, resultType);
     }
 
     // ── Extern signature helpers ──

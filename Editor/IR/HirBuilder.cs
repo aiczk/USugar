@@ -123,9 +123,12 @@ public sealed class HirBuilder
         var thenBlock = new HBlock();
         var elseBlock = new HBlock();
 
-        _stmtStack.Push(thenBlock.Stmts);
-        thenBuilder(this);
-        _stmtStack.Pop();
+        if (thenBuilder != null)
+        {
+            _stmtStack.Push(thenBlock.Stmts);
+            thenBuilder(this);
+            _stmtStack.Pop();
+        }
 
         if (elseBuilder != null)
         {
