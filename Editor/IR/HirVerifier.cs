@@ -172,6 +172,12 @@ public static class HirVerifier
                 // (e.g., RenderTexture vs Texture). Udon VM handles implicit conversion.
                 break;
 
+            case HCrossBehaviourCall cc:
+                VerifyExpr(cc.Instance, ctx);
+                foreach (var (_, value) in cc.Params)
+                    VerifyExpr(value, ctx);
+                break;
+
             case HFuncRef:
                 break;
 

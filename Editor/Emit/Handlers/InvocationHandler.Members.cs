@@ -87,20 +87,11 @@ public partial class InvocationHandler
             }
             else
             {
-                // Non-auto property: call getter via SendCustomEvent, then read return value
+                // Non-auto property: use HCrossBehaviourCall to keep SendCustomEvent
+                // inside the expression tree (prevents side-effect leakage in HSelect)
                 var (getExportName, _, getRetId) = GetCalleeLayout(op.Property.GetMethod);
-
-                // SendCustomEvent to invoke getter
-                var eventConst = Const(getExportName, "SystemString");
-                EmitExternVoid("VRCUdonCommonInterfacesIUdonEventReceiver.__SendCustomEvent__SystemString__SystemVoid",
-                    new List<HExpr> { instanceVal, eventConst });
-
-                // GetProgramVariable for return value
-                var retNameConst = Const(getRetId, "SystemString");
-                return ExternCall(
-                    "VRCUdonCommonInterfacesIUdonEventReceiver.__GetProgramVariable__SystemString__SystemObject",
-                    new List<HExpr> { instanceVal, retNameConst },
-                    returnType);
+                return new HCrossBehaviourCall(instanceVal, getExportName,
+                    new List<(string, HExpr)>(), getRetId, returnType);
             }
         }
 

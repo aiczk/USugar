@@ -371,12 +371,49 @@ public static class HirToLir
                 return dest.HasValue ? new LSlotRef(dest.Value, ic.Type) : new LConst(null, "SystemVoid");
             }
 
+            case HCrossBehaviourCall cc:
+                return LowerCrossBehaviourCall(cc, ctx);
+
             case HSelect sel:
                 return LowerSelect(sel, ctx);
 
             default:
                 throw new InvalidOperationException($"Unknown HExpr type: {expr.GetType().Name}");
         }
+    }
+
+    static LOperand LowerCrossBehaviourCall(HCrossBehaviourCall cc, LowerCtx ctx)
+    {
+        var inst = LowerExpr(cc.Instance, ctx);
+
+        // SetProgramVariable for each param
+        foreach (var (paramName, value) in cc.Params)
+        {
+            var paramVal = LowerExpr(value, ctx);
+            var paramNameOp = LowerExpr(new HConst(paramName, "SystemString"), ctx);
+            ctx.Current.Insts.Add(new LCallExtern(null,
+                "VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid",
+                new List<LOperand> { inst, paramNameOp, paramVal }, "SystemVoid"));
+        }
+
+        // SendCustomEvent
+        var eventNameOp = LowerExpr(new HConst(cc.EventName, "SystemString"), ctx);
+        ctx.Current.Insts.Add(new LCallExtern(null,
+            "VRCUdonCommonInterfacesIUdonEventReceiver.__SendCustomEvent__SystemString__SystemVoid",
+            new List<LOperand> { inst, eventNameOp }, "SystemVoid"));
+
+        // GetProgramVariable for return
+        if (cc.ReturnVarName != null && cc.Type != "SystemVoid")
+        {
+            var retNameOp = LowerExpr(new HConst(cc.ReturnVarName, "SystemString"), ctx);
+            var dest = ctx.AllocScratch(cc.Type);
+            ctx.Current.Insts.Add(new LCallExtern(dest,
+                "VRCUdonCommonInterfacesIUdonEventReceiver.__GetProgramVariable__SystemString__SystemObject",
+                new List<LOperand> { inst, retNameOp }, cc.Type));
+            return new LSlotRef(dest, cc.Type);
+        }
+
+        return new LConst(null, "SystemVoid");
     }
 
     static LOperand LowerSelect(HSelect sel, LowerCtx ctx)

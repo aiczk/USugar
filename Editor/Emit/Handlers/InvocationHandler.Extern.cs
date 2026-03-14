@@ -510,35 +510,14 @@ public partial class InvocationHandler
 
         var instanceVal = VisitExpression(op.Instance);
 
-        // SetProgramVariable for each argument
+        // Build param pairs for HCrossBehaviourCall
+        var paramPairs = new List<(string, HExpr)>();
         for (int i = 0; i < op.Arguments.Length; i++)
-        {
-            var argVal = VisitExpression(op.Arguments[i].Value);
-            var paramName = ifaceMl.ParamIds[i];
-            var paramNameConst = Const(paramName, "SystemString");
-            EmitExternVoid("VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid",
-                new List<HExpr> { instanceVal, paramNameConst, argVal });
-        }
+            paramPairs.Add((ifaceMl.ParamIds[i], VisitExpression(op.Arguments[i].Value)));
 
-        // SendCustomEvent with interface export name
-        var exportName = ifaceMl.ExportName;
-        var eventNameConst = Const(exportName, "SystemString");
-        EmitExternVoid("VRCUdonCommonInterfacesIUdonEventReceiver.__SendCustomEvent__SystemString__SystemVoid",
-            new List<HExpr> { instanceVal, eventNameConst });
-
-        // GetProgramVariable for return value
-        if (!target.ReturnsVoid)
-        {
-            var retName = ifaceMl.ReturnId;
-            var retNameConst = Const(retName, "SystemString");
-            var returnType = GetUdonType(target.ReturnType);
-            return ExternCall(
-                "VRCUdonCommonInterfacesIUdonEventReceiver.__GetProgramVariable__SystemString__SystemObject",
-                new List<HExpr> { instanceVal, retNameConst },
-                returnType);
-        }
-
-        return null;
+        var returnType = target.ReturnsVoid ? "SystemVoid" : GetUdonType(target.ReturnType);
+        return new HCrossBehaviourCall(instanceVal, ifaceMl.ExportName, paramPairs,
+            target.ReturnsVoid ? null : ifaceMl.ReturnId, returnType);
     }
 
     // ── Cross-Class Call ──
@@ -548,32 +527,14 @@ public partial class InvocationHandler
         var (exportName, paramIds, retId) = GetCalleeLayout(target);
         var instanceVal = VisitExpression(op.Instance);
 
-        // SetProgramVariable for each argument
+        // Build param pairs for HCrossBehaviourCall
+        var paramPairs = new List<(string, HExpr)>();
         for (int i = 0; i < op.Arguments.Length; i++)
-        {
-            var argVal = VisitExpression(op.Arguments[i].Value);
-            var paramNameConst = Const(paramIds[i], "SystemString");
-            EmitExternVoid("VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid",
-                new List<HExpr> { instanceVal, paramNameConst, argVal });
-        }
+            paramPairs.Add((paramIds[i], VisitExpression(op.Arguments[i].Value)));
 
-        // SendCustomEvent
-        var eventNameConst = Const(exportName, "SystemString");
-        EmitExternVoid("VRCUdonCommonInterfacesIUdonEventReceiver.__SendCustomEvent__SystemString__SystemVoid",
-            new List<HExpr> { instanceVal, eventNameConst });
-
-        // GetProgramVariable for return value
-        if (!target.ReturnsVoid && retId != null)
-        {
-            var retNameConst = Const(retId, "SystemString");
-            var returnType = GetUdonType(target.ReturnType);
-            return ExternCall(
-                "VRCUdonCommonInterfacesIUdonEventReceiver.__GetProgramVariable__SystemString__SystemObject",
-                new List<HExpr> { instanceVal, retNameConst },
-                returnType);
-        }
-
-        return null;
+        var returnType = target.ReturnsVoid ? "SystemVoid" : GetUdonType(target.ReturnType);
+        return new HCrossBehaviourCall(instanceVal, exportName, paramPairs,
+            target.ReturnsVoid ? null : retId, returnType);
     }
 
     // ── User Method Call ──
