@@ -170,6 +170,32 @@ public sealed class HirBuilder
         Emit(new HFor(init, cond, update, body));
     }
 
+    /// <summary>Build a for loop with lazy condition (evaluated after init).</summary>
+    public void EmitFor(Action<HirBuilder> initBuilder, Func<HExpr> condFactory,
+        Action<HirBuilder> updateBuilder, Action<HirBuilder> bodyBuilder)
+    {
+        var init = new HBlock();
+        var update = new HBlock();
+        var body = new HBlock();
+
+        _stmtStack.Push(init.Stmts);
+        initBuilder(this);
+        _stmtStack.Pop();
+
+        // Evaluate condition AFTER init so declared locals are registered
+        var cond = condFactory();
+
+        _stmtStack.Push(update.Stmts);
+        updateBuilder(this);
+        _stmtStack.Pop();
+
+        _stmtStack.Push(body.Stmts);
+        bodyBuilder(this);
+        _stmtStack.Pop();
+
+        Emit(new HFor(init, cond, update, body));
+    }
+
     /// <summary>Push a new nested scope for manual block construction.</summary>
     public HBlock BeginBlock()
     {
