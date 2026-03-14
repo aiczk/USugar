@@ -37,6 +37,7 @@ public static class IrPipeline
         LirOptimizer.CopyPropagation(lirModule);
         LirOptimizer.DeadCodeElimination(lirModule);
         LirOptimizer.SimplifyCFG(lirModule); // cleanup after DCE
+        LirOptimizer.CoalesceSlots(lirModule);
 
         if (DumpEnabled)
             DumpToFile(className, "2b_lir_optimized.txt", lirModule.Dump());
