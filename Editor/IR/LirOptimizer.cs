@@ -578,6 +578,49 @@ public static class LirOptimizer
             pos++;
         }
 
+        // Extend liveness for loop back-edges.
+        // A back-edge is B→H where H has a lower RPO position than B.
+        // Any slot alive at the loop header must stay alive through the entire loop body.
+        var blockStartPos = new Dictionary<int, int>();
+        var blockEndPos = new Dictionary<int, int>();
+
+        int p = 0;
+        foreach (var block in rpo)
+        {
+            blockStartPos[block.Id] = p;
+            p += block.Insts.Count + 1; // +1 for terminator
+            blockEndPos[block.Id] = p - 1;
+        }
+
+        var rpoIndex = new Dictionary<int, int>();
+        for (int i = 0; i < rpo.Count; i++)
+            rpoIndex[rpo[i].Id] = i;
+
+        foreach (var block in rpo)
+        {
+            if (block.Term == null) continue;
+            foreach (var succId in GetSuccessors(block.Term))
+            {
+                if (!rpoIndex.ContainsKey(succId)) continue;
+                if (rpoIndex[succId] <= rpoIndex[block.Id]) // back-edge
+                {
+                    int headerStart = blockStartPos[succId];
+                    int loopEnd = blockEndPos[block.Id];
+
+                    foreach (var slotId in written.Keys.ToList())
+                    {
+                        int def = written.TryGetValue(slotId, out var d) ? d : int.MaxValue;
+                        int last = lastUsed.TryGetValue(slotId, out var u) ? u : -1;
+
+                        if (def <= headerStart && last >= headerStart && last < loopEnd)
+                        {
+                            lastUsed[slotId] = loopEnd;
+                        }
+                    }
+                }
+            }
+        }
+
         return (written, lastUsed);
     }
 

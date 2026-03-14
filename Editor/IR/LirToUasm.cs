@@ -299,9 +299,8 @@ public static class LirToUasm
                 _blockLabels[(funcIdx, block.Id)] = labelName;
             }
 
-            // Pre-allocate slot variables (ensures all are declared before code gen)
-            for (int si = 0; si < func.Slots.Count; si++)
-                GetSlotVar(funcIdx, si, func);
+            // Slot variables are declared lazily by GetSlotVar on first use.
+            // This avoids declaring UASM variables for slots coalesced away by the register allocator.
 
             // Declare return field variable if needed (may not be in module Fields)
             if (func.ReturnFieldName != null && func.ReturnType != null)
