@@ -145,12 +145,15 @@ public sealed class HIf : HStmt
 /// <summary>Structured while/do-while loop.</summary>
 public sealed class HWhile : HStmt
 {
+    /// <summary>Statements executed each iteration before evaluating Cond (e.g. short-circuit setup).</summary>
+    public readonly HBlock CondBlock;
     public readonly HExpr Cond;
     public readonly HBlock Body;
     public readonly bool IsDoWhile;
 
-    public HWhile(HExpr cond, HBlock body, bool isDoWhile = false)
+    public HWhile(HExpr cond, HBlock body, bool isDoWhile = false, HBlock condBlock = null)
     {
+        CondBlock = condBlock ?? new HBlock();
         Cond = cond ?? throw new ArgumentNullException(nameof(cond));
         Body = body ?? new HBlock();
         IsDoWhile = isDoWhile;
@@ -168,13 +171,16 @@ public sealed class HWhile : HStmt
 public sealed class HFor : HStmt
 {
     public readonly HBlock Init;
+    /// <summary>Statements executed each iteration before evaluating Cond (e.g. short-circuit setup).</summary>
+    public readonly HBlock CondBlock;
     public readonly HExpr Cond; // null = infinite loop
     public readonly HBlock Update;
     public readonly HBlock Body;
 
-    public HFor(HBlock init, HExpr cond, HBlock update, HBlock body)
+    public HFor(HBlock init, HExpr cond, HBlock update, HBlock body, HBlock condBlock = null)
     {
         Init = init ?? new HBlock();
+        CondBlock = condBlock ?? new HBlock();
         Cond = cond;
         Update = update ?? new HBlock();
         Body = body ?? new HBlock();

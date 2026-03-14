@@ -30,9 +30,23 @@ public class StatementHandler : HandlerBase, IOperationHandler
                 break;
             case IExpressionStatementOperation exprStmt:
             {
-                var expr = VisitExpression(exprStmt.Operation);
-                if (expr != null)
-                    EmitExprStmt(expr);
+                var innerOp = exprStmt.Operation;
+                // Assignment/increment handlers already emit their side effects during VisitExpression.
+                // Only emit as ExprStmt if the expression is purely for its side effects (method call, etc.)
+                if (innerOp is ISimpleAssignmentOperation
+                    or ICompoundAssignmentOperation
+                    or IIncrementOrDecrementOperation
+                    or ICoalesceAssignmentOperation
+                    or IDeconstructionAssignmentOperation)
+                {
+                    VisitExpression(innerOp);
+                }
+                else
+                {
+                    var expr = VisitExpression(innerOp);
+                    if (expr != null)
+                        EmitExprStmt(expr);
+                }
                 break;
             }
             case IVariableDeclarationGroupOperation declGroup:
