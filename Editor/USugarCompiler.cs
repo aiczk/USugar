@@ -52,13 +52,24 @@ public static class USugarCompiler
         return true;
     }
     [MenuItem("USugar/Compile/USugar")]
-    public static void CompileAndApply() => USugarCompilationOrchestrator.CompileInternal(applyToAssets: true, force: true);
+    public static void CompileAndApply() => USugarCompilationOrchestrator.CompileInternal(applyToAssets: true, force: true, dumpEnabled: DumpIREnabled);
 
-    [MenuItem("USugar/Compile/USugar (with IR dump)")]
-    public static void CompileWithDump()
+    static bool DumpIREnabled
     {
-        USugarCompilationOrchestrator.CompileInternal(applyToAssets: true, force: true, dumpEnabled: true);
-        USugarLog.Info("IR dumps written to Temp/USugar/");
+        get => UnityEditor.EditorPrefs.GetBool("USugar_DumpIR", false);
+        set => UnityEditor.EditorPrefs.SetBool("USugar_DumpIR", value);
+    }
+
+    const string DumpIRMenuPath = "USugar/Dump IR";
+
+    [MenuItem(DumpIRMenuPath)]
+    static void ToggleDumpIR() => DumpIREnabled = !DumpIREnabled;
+
+    [MenuItem(DumpIRMenuPath, true)]
+    static bool ToggleDumpIRValidate()
+    {
+        Menu.SetChecked(DumpIRMenuPath, DumpIREnabled);
+        return true;
     }
 
     [MenuItem("USugar/Compile/UdonSharp")]
