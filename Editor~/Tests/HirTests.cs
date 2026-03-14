@@ -110,4 +110,102 @@ public class HirTests
         Assert.Contains("[Scratch]", scratch.ToString());
         Assert.DoesNotContain("\"", scratch.ToString());
     }
+
+    // ── HirBuilder tests ──
+
+    [Fact]
+    public void HirBuilder_EmitAssign_AddsToCurrentBlock()
+    {
+        var module = new HModule();
+        var builder = new HirBuilder(module);
+        var func = builder.BeginFunction("test");
+        var slot = builder.AllocFrame("SystemInt32");
+        builder.EmitAssign(slot, builder.Const(42, "SystemInt32"));
+        builder.EmitReturn();
+
+        Assert.Equal(2, func.Body.Stmts.Count);
+        Assert.IsType<HAssign>(func.Body.Stmts[0]);
+        Assert.IsType<HReturn>(func.Body.Stmts[1]);
+    }
+
+    [Fact]
+    public void HirBuilder_EmitIf_CreatesStructuredControl()
+    {
+        var module = new HModule();
+        var builder = new HirBuilder(module);
+        var func = builder.BeginFunction("test");
+        var condSlot = builder.AllocScratch("SystemBoolean");
+
+        builder.EmitIf(
+            builder.SlotRef(condSlot),
+            b => b.EmitAssign(condSlot, b.Const(true, "SystemBoolean")),
+            b => b.EmitAssign(condSlot, b.Const(false, "SystemBoolean"))
+        );
+
+        Assert.Single(func.Body.Stmts);
+        var ifStmt = Assert.IsType<HIf>(func.Body.Stmts[0]);
+        Assert.Single(ifStmt.Then.Stmts);
+        Assert.Single(ifStmt.Else.Stmts);
+    }
+
+    [Fact]
+    public void HirBuilder_EmitFor_CreatesForLoop()
+    {
+        var module = new HModule();
+        var builder = new HirBuilder(module);
+        var func = builder.BeginFunction("test");
+        var i = builder.AllocFrame("SystemInt32");
+
+        var cond = builder.ExternCall(
+            "SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean",
+            new List<HExpr> { builder.SlotRef(i), builder.Const(10, "SystemInt32") },
+            "SystemBoolean");
+
+        builder.EmitFor(
+            b => b.EmitAssign(i, b.Const(0, "SystemInt32")),
+            cond,
+            b => b.EmitAssign(i, b.ExternCall(
+                "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32",
+                new List<HExpr> { b.SlotRef(i), b.Const(1, "SystemInt32") },
+                "SystemInt32")),
+            b => b.EmitExprStmt(b.ExternCall(
+                "UnityEngineDebug.__Log__SystemObject__SystemVoid",
+                new List<HExpr> { b.SlotRef(i) }, "SystemVoid"))
+        );
+
+        Assert.Single(func.Body.Stmts);
+        var forStmt = Assert.IsType<HFor>(func.Body.Stmts[0]);
+        Assert.Single(forStmt.Init.Stmts);
+        Assert.Single(forStmt.Update.Stmts);
+        Assert.Single(forStmt.Body.Stmts);
+    }
+
+    [Fact]
+    public void HirBuilder_ConstDedup_ReturnsSameInstance()
+    {
+        var module = new HModule();
+        var builder = new HirBuilder(module);
+        builder.BeginFunction("test");
+
+        var c1 = builder.Const(42, "SystemInt32");
+        var c2 = builder.Const(42, "SystemInt32");
+        var c3 = builder.Const(43, "SystemInt32");
+
+        Assert.Same(c1, c2);
+        Assert.NotSame(c1, c3);
+    }
+
+    [Fact]
+    public void HirBuilder_SlotRef_ReturnsCorrectType()
+    {
+        var module = new HModule();
+        var builder = new HirBuilder(module);
+        builder.BeginFunction("test");
+
+        var slot = builder.AllocPinned("SystemString", "myField");
+        var slotRef = builder.SlotRef(slot);
+
+        Assert.Equal("SystemString", slotRef.Type);
+        Assert.Equal(slot, slotRef.SlotId);
+    }
 }
