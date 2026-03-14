@@ -22,6 +22,7 @@ public static class IrPipeline
 
         // HIR optimization
         HirOptimizer.ConstantFold(hirModule);
+        HirOptimizer.DeadCodeElimination(hirModule);
 
         if (DumpEnabled)
             DumpToFile(className, "1b_hir_optimized.txt", hirModule.Dump());
