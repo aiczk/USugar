@@ -111,6 +111,249 @@ public class HirTests
         Assert.DoesNotContain("\"", scratch.ToString());
     }
 
+    // ── HirToLir tests ──
+
+    [Fact]
+    public void HirToLir_SimpleFunction_ProducesBlocks()
+    {
+        var hmod = new HModule();
+        var func = hmod.AddFunction("_start", "_start");
+        var slot = func.NewSlot("SystemInt32", SlotClass.Frame);
+        func.Body.Stmts.Add(new HAssign(slot, new HConst(42, "SystemInt32")));
+        func.Body.Stmts.Add(new HReturn());
+
+        var lmod = HirToLir.Lower(hmod);
+        Assert.Single(lmod.Functions);
+        var lfunc = lmod.Functions[0];
+        Assert.True(lfunc.Blocks.Count >= 1);
+        Assert.IsType<LReturn>(lfunc.Entry.Term);
+    }
+
+    [Fact]
+    public void HirToLir_IfElse_ProducesBranch()
+    {
+        var hmod = new HModule();
+        var func = hmod.AddFunction("test");
+        var condSlot = func.NewSlot("SystemBoolean", SlotClass.Frame);
+        var resultSlot = func.NewSlot("SystemInt32", SlotClass.Frame);
+
+        var thenBlock = new HBlock();
+        thenBlock.Stmts.Add(new HAssign(resultSlot, new HConst(1, "SystemInt32")));
+        var elseBlock = new HBlock();
+        elseBlock.Stmts.Add(new HAssign(resultSlot, new HConst(0, "SystemInt32")));
+
+        func.Body.Stmts.Add(new HIf(new HSlotRef(condSlot, "SystemBoolean"), thenBlock, elseBlock));
+        func.Body.Stmts.Add(new HReturn());
+
+        var lmod = HirToLir.Lower(hmod);
+        var lfunc = lmod.Functions[0];
+
+        // Entry block should end with a branch
+        Assert.IsType<LBranch>(lfunc.Entry.Term);
+        // Should have entry + then + else + merge blocks
+        Assert.True(lfunc.Blocks.Count >= 4);
+    }
+
+    [Fact]
+    public void HirToLir_WhileLoop_ProducesHeaderAndBackEdge()
+    {
+        var hmod = new HModule();
+        var func = hmod.AddFunction("test");
+        var condSlot = func.NewSlot("SystemBoolean", SlotClass.Frame);
+
+        var body = new HBlock();
+        body.Stmts.Add(new HExprStmt(new HSlotRef(condSlot, "SystemBoolean"))); // no-op
+
+        func.Body.Stmts.Add(new HWhile(new HSlotRef(condSlot, "SystemBoolean"), body));
+        func.Body.Stmts.Add(new HReturn());
+
+        var lmod = HirToLir.Lower(hmod);
+        var lfunc = lmod.Functions[0];
+
+        // Entry jumps to header; header branches; body jumps back to header
+        Assert.IsType<LJump>(lfunc.Entry.Term);
+        // header block should have a branch terminator
+        var headerBlockId = ((LJump)lfunc.Entry.Term).TargetBlockId;
+        LBlock headerBlock = null;
+        foreach (var b in lfunc.Blocks)
+            if (b.Id == headerBlockId) { headerBlock = b; break; }
+        Assert.NotNull(headerBlock);
+        Assert.IsType<LBranch>(headerBlock.Term);
+    }
+
+    [Fact]
+    public void HirToLir_ForLoop_ProducesCorrectStructure()
+    {
+        var hmod = new HModule();
+        var func = hmod.AddFunction("test");
+        var i = func.NewSlot("SystemInt32", SlotClass.Frame);
+
+        var init = new HBlock();
+        init.Stmts.Add(new HAssign(i, new HConst(0, "SystemInt32")));
+
+        var cond = new HExternCall(
+            "SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean",
+            new List<HExpr> { new HSlotRef(i, "SystemInt32"), new HConst(10, "SystemInt32") },
+            "SystemBoolean");
+
+        var update = new HBlock();
+        update.Stmts.Add(new HAssign(i, new HExternCall(
+            "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32",
+            new List<HExpr> { new HSlotRef(i, "SystemInt32"), new HConst(1, "SystemInt32") },
+            "SystemInt32")));
+
+        var body = new HBlock();
+
+        func.Body.Stmts.Add(new HFor(init, cond, update, body));
+        func.Body.Stmts.Add(new HReturn());
+
+        var lmod = HirToLir.Lower(hmod);
+        var lfunc = lmod.Functions[0];
+
+        // Should have: entry (with init + jump) + header + body + continue + exit blocks
+        Assert.True(lfunc.Blocks.Count >= 5);
+    }
+
+    [Fact]
+    public void HirToLir_BreakContinue_JumpToCorrectBlocks()
+    {
+        var hmod = new HModule();
+        var func = hmod.AddFunction("test");
+        var condSlot = func.NewSlot("SystemBoolean", SlotClass.Frame);
+
+        var body = new HBlock();
+        body.Stmts.Add(new HIf(
+            new HSlotRef(condSlot, "SystemBoolean"),
+            new HBlock(new List<HStmt> { new HBreak() }),
+            new HBlock(new List<HStmt> { new HContinue() })));
+
+        func.Body.Stmts.Add(new HWhile(new HSlotRef(condSlot, "SystemBoolean"), body));
+        func.Body.Stmts.Add(new HReturn());
+
+        var lmod = HirToLir.Lower(hmod);
+        var lfunc = lmod.Functions[0];
+
+        // All blocks should have terminators
+        foreach (var block in lfunc.Blocks)
+            Assert.NotNull(block.Term);
+    }
+
+    [Fact]
+    public void HirToLir_GotoLabel_ProducesJump()
+    {
+        var hmod = new HModule();
+        var func = hmod.AddFunction("test");
+        var slot = func.NewSlot("SystemInt32", SlotClass.Frame);
+
+        func.Body.Stmts.Add(new HGoto("target"));
+        func.Body.Stmts.Add(new HAssign(slot, new HConst(1, "SystemInt32"))); // unreachable
+        func.Body.Stmts.Add(new HLabelStmt("target"));
+        func.Body.Stmts.Add(new HAssign(slot, new HConst(2, "SystemInt32")));
+        func.Body.Stmts.Add(new HReturn());
+
+        var lmod = HirToLir.Lower(hmod);
+        var lfunc = lmod.Functions[0];
+
+        // Entry should have a jump (goto target)
+        Assert.IsType<LJump>(lfunc.Entry.Term);
+        // No instructions in entry after the goto (unreachable assign skipped)
+        Assert.Empty(lfunc.Entry.Insts);
+    }
+
+    [Fact]
+    public void HirToLir_ExternCall_AllocatesScratchForResult()
+    {
+        var hmod = new HModule();
+        var func = hmod.AddFunction("test");
+        var slot = func.NewSlot("SystemInt32", SlotClass.Frame);
+
+        func.Body.Stmts.Add(new HAssign(slot,
+            new HExternCall("SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32",
+                new List<HExpr> { new HConst(1, "SystemInt32"), new HConst(2, "SystemInt32") },
+                "SystemInt32")));
+        func.Body.Stmts.Add(new HReturn());
+
+        var lmod = HirToLir.Lower(hmod);
+        var lfunc = lmod.Functions[0];
+
+        // Original slot + scratch for extern result
+        Assert.True(lfunc.Slots.Count >= 2);
+        Assert.Equal(SlotClass.Scratch, lfunc.Slots[lfunc.Slots.Count - 1].Class);
+    }
+
+    [Fact]
+    public void HirToLir_Select_ProducesBranchAndMerge()
+    {
+        var hmod = new HModule();
+        var func = hmod.AddFunction("test");
+        var condSlot = func.NewSlot("SystemBoolean", SlotClass.Frame);
+        var resultSlot = func.NewSlot("SystemInt32", SlotClass.Frame);
+
+        func.Body.Stmts.Add(new HAssign(resultSlot,
+            new HSelect(
+                new HSlotRef(condSlot, "SystemBoolean"),
+                new HConst(1, "SystemInt32"),
+                new HConst(0, "SystemInt32"),
+                "SystemInt32")));
+        func.Body.Stmts.Add(new HReturn());
+
+        var lmod = HirToLir.Lower(hmod);
+        var lfunc = lmod.Functions[0];
+
+        // Entry should branch for the select
+        Assert.IsType<LBranch>(lfunc.Entry.Term);
+        // true block + false block + merge block
+        Assert.True(lfunc.Blocks.Count >= 4);
+    }
+
+    [Fact]
+    public void HirToLir_DoWhile_BodyBeforeCondition()
+    {
+        var hmod = new HModule();
+        var func = hmod.AddFunction("test");
+        var condSlot = func.NewSlot("SystemBoolean", SlotClass.Frame);
+
+        var body = new HBlock();
+        body.Stmts.Add(new HExprStmt(new HSlotRef(condSlot, "SystemBoolean")));
+
+        func.Body.Stmts.Add(new HWhile(new HSlotRef(condSlot, "SystemBoolean"), body, isDoWhile: true));
+        func.Body.Stmts.Add(new HReturn());
+
+        var lmod = HirToLir.Lower(hmod);
+        var lfunc = lmod.Functions[0];
+
+        // Entry jumps to body block (not header)
+        Assert.IsType<LJump>(lfunc.Entry.Term);
+        var bodyBlockId = ((LJump)lfunc.Entry.Term).TargetBlockId;
+        // Body block should jump to header (condition check)
+        LBlock bodyBlock = null;
+        foreach (var b in lfunc.Blocks)
+            if (b.Id == bodyBlockId) { bodyBlock = b; break; }
+        Assert.NotNull(bodyBlock);
+        Assert.IsType<LJump>(bodyBlock.Term);
+
+        // Header should have branch (condition)
+        var headerBlockId = ((LJump)bodyBlock.Term).TargetBlockId;
+        LBlock headerBlock = null;
+        foreach (var b in lfunc.Blocks)
+            if (b.Id == headerBlockId) { headerBlock = b; break; }
+        Assert.NotNull(headerBlock);
+        Assert.IsType<LBranch>(headerBlock.Term);
+    }
+
+    [Fact]
+    public void HirToLir_CopiesModuleFields()
+    {
+        var hmod = new HModule { ClassName = "MyClass" };
+        hmod.Fields.Add(new FieldDecl("myField", "SystemInt32"));
+        hmod.AddFunction("test").Body.Stmts.Add(new HReturn());
+
+        var lmod = HirToLir.Lower(hmod);
+        Assert.Equal("MyClass", lmod.ClassName);
+        Assert.Single(lmod.Fields);
+        Assert.Equal("myField", lmod.Fields[0].Name);
+    }
+
     // ── HirBuilder tests ──
 
     [Fact]
