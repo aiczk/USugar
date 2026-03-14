@@ -1,10 +1,19 @@
+using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.Operations;
 
 public class LoopHandler : HandlerBase, IOperationHandler
 {
+    // Thread-safe switch break label stack (emit runs in parallel per-behaviour).
+    // StatementHandler reads this to distinguish switch breaks from loop breaks.
+    [ThreadStatic] static Stack<string> s_switchBreakLabels;
+    internal static Stack<string> SwitchBreakLabels => s_switchBreakLabels ??= new();
+
+    static int s_switchLabelCounter;
+
     public LoopHandler(EmitContext ctx) : base(ctx) { }
 
     public bool CanHandle(IOperation operation)
@@ -27,74 +36,50 @@ public class LoopHandler : HandlerBase, IOperationHandler
 
     void VisitWhileLoop(IWhileLoopOperation op)
     {
-        var loopStart = _ctx.Module.DefineLabel("__while_start");
-        var loopEnd = _ctx.Module.DefineLabel("__while_end");
+        var condExpr = VisitExpression(op.Condition);
 
         if (op.ConditionIsTop)
         {
-            _ctx.BreakLabels.Push(loopEnd);
-            _ctx.ContinueLabels.Push(loopStart);
-
-            _ctx.Module.MarkLabel(loopStart);
-            var condId = VisitExpression(op.Condition);
-            _ctx.Module.AddPush(condId);
-            _ctx.Module.AddJumpIfFalse(loopEnd);
-            VisitOperation(op.Body);
-            _ctx.Module.AddJump(loopStart);
+            // while (cond) { body }
+            _builder.EmitWhile(condExpr, _ =>
+            {
+                VisitOperation(op.Body);
+            });
         }
         else
         {
-            // do-while: body first, then condition
-            var condLabel = _ctx.Module.DefineLabel("__dowhile_cond");
-            _ctx.BreakLabels.Push(loopEnd);
-            _ctx.ContinueLabels.Push(condLabel);
-
-            _ctx.Module.MarkLabel(loopStart);
-            VisitOperation(op.Body);
-            _ctx.Module.MarkLabel(condLabel);
-            var condId = VisitExpression(op.Condition);
-            _ctx.Module.AddPush(condId);
-            _ctx.Module.AddJumpIfFalse(loopEnd);
-            _ctx.Module.AddJump(loopStart);
+            // do { body } while (cond)
+            _builder.EmitWhile(condExpr, _ =>
+            {
+                VisitOperation(op.Body);
+            }, isDoWhile: true);
         }
-
-        _ctx.Module.MarkLabel(loopEnd);
-        _ctx.BreakLabels.Pop();
-        _ctx.ContinueLabels.Pop();
     }
 
     void VisitForLoop(IForLoopOperation op)
     {
-        foreach (var init in op.Before)
-            VisitOperation(init);
+        // Evaluate condition expression (may be null for infinite loops)
+        HExpr condExpr = op.Condition != null ? VisitExpression(op.Condition) : null;
 
-        var loopStart = _ctx.Module.DefineLabel("__for_start");
-        var loopEnd = _ctx.Module.DefineLabel("__for_end");
-        var continueLabel = _ctx.Module.DefineLabel("__for_continue");
-
-        _ctx.BreakLabels.Push(loopEnd);
-        _ctx.ContinueLabels.Push(continueLabel);
-
-        _ctx.Module.MarkLabel(loopStart);
-
-        if (op.Condition != null)
-        {
-            var condId = VisitExpression(op.Condition);
-            _ctx.Module.AddPush(condId);
-            _ctx.Module.AddJumpIfFalse(loopEnd);
-        }
-
-        VisitOperation(op.Body);
-
-        _ctx.Module.MarkLabel(continueLabel);
-        foreach (var atBottom in op.AtLoopBottom)
-            VisitOperation(atBottom);
-
-        _ctx.Module.AddJump(loopStart);
-        _ctx.Module.MarkLabel(loopEnd);
-
-        _ctx.BreakLabels.Pop();
-        _ctx.ContinueLabels.Pop();
+        _builder.EmitFor(
+            _ =>
+            {
+                // Init
+                foreach (var init in op.Before)
+                    VisitOperation(init);
+            },
+            condExpr,
+            _ =>
+            {
+                // Update
+                foreach (var atBottom in op.AtLoopBottom)
+                    VisitOperation(atBottom);
+            },
+            _ =>
+            {
+                // Body
+                VisitOperation(op.Body);
+            });
     }
 
     void VisitForEachLoop(IForEachLoopOperation op)
@@ -111,163 +96,192 @@ public class LoopHandler : HandlerBase, IOperationHandler
         var arrayType = GetArrayType(arrayTypeSymbol);
         var elemAccessorType = GetArrayElemType(arrayTypeSymbol);
 
-        var collId = VisitExpression(collectionOp);
+        var collVal = VisitExpression(collectionOp);
+
+        // Store collection in a temp field so it can be re-read in condition/body
+        var collField = _ctx.DeclareTemp(arrayType);
+        EmitStoreField(collField, collVal);
 
         // Declare loop variable
         var loopLocal = op.Locals.FirstOrDefault()
             ?? throw new System.InvalidOperationException("foreach has no loop variable");
-        _ctx.Vars.PushScope();
-        var loopVarId = _ctx.Vars.DeclareLocal(loopLocal.Name, elemType);
-        _ctx.LocalVarIds[loopLocal] = loopVarId;
+        var loopVarId = _ctx.DeclareLocal(loopLocal.Name, elemType);
+        _localVarIds[loopLocal] = loopVarId;
 
         // Index variable
-        var idxId = _ctx.Vars.DeclareTemp("SystemInt32");
-        var zeroConst = _ctx.Vars.DeclareConst("SystemInt32", "0");
-        _ctx.Module.AddCopy(zeroConst, idxId);
+        var idxField = _ctx.DeclareTemp("SystemInt32");
 
-        var loopStart = _ctx.Module.DefineLabel("__foreach_start");
-        var loopEnd = _ctx.Module.DefineLabel("__foreach_end");
-        var continueLabel = _ctx.Module.DefineLabel("__foreach_continue");
+        // Condition: idx < arr.Length
+        var condExpr = ExternCall(
+            "SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean",
+            new List<HExpr> { LoadField(idxField, "SystemInt32"),
+                              ExternCall("SystemArray.__get_Length__SystemInt32",
+                                         new List<HExpr> { LoadField(collField, arrayType) },
+                                         "SystemInt32") },
+            "SystemBoolean");
 
-        _ctx.BreakLabels.Push(loopEnd);
-        _ctx.ContinueLabels.Push(continueLabel);
+        _builder.EmitFor(
+            _ =>
+            {
+                // Init: idx = 0
+                EmitStoreField(idxField, Const(0, "SystemInt32"));
+            },
+            condExpr,
+            _ =>
+            {
+                // Update: idx++
+                var nextIdx = ExternCall(
+                    "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32",
+                    new List<HExpr> { LoadField(idxField, "SystemInt32"), Const(1, "SystemInt32") },
+                    "SystemInt32");
+                EmitStoreField(idxField, nextIdx);
+            },
+            _ =>
+            {
+                // Body: loopVar = arr[idx]; <body>
+                var elemVal = ExternCall(
+                    $"{arrayType}.__Get__SystemInt32__{elemAccessorType}",
+                    new List<HExpr> { LoadField(collField, arrayType), LoadField(idxField, "SystemInt32") },
+                    elemType);
+                EmitStoreField(loopVarId, elemVal);
 
-        // Hoist array length before loop (loop-invariant)
-        var lenId = _ctx.Vars.DeclareTemp("SystemInt32");
-        _ctx.Module.AddPush(collId);
-        _ctx.Module.AddPush(lenId);
-        AddExternChecked("SystemArray.__get_Length__SystemInt32");
-
-        _ctx.Module.MarkLabel(loopStart);
-
-        // Condition: idx < arr.Length (lenId already computed above)
-
-        var condId = _ctx.Vars.DeclareTemp("SystemBoolean");
-        _ctx.Module.AddPush(idxId);
-        _ctx.Module.AddPush(lenId);
-        _ctx.Module.AddPush(condId);
-        AddExternChecked("SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean");
-        _ctx.Module.AddPush(condId);
-        _ctx.Module.AddJumpIfFalse(loopEnd);
-
-        // Element: loopVar = arr[idx] (write directly to loop variable)
-        _ctx.Module.AddPush(collId);
-        _ctx.Module.AddPush(idxId);
-        _ctx.Module.AddPush(loopVarId);
-        AddExternChecked($"{arrayType}.__Get__SystemInt32__{elemAccessorType}");
-
-        // Body
-        VisitOperation(op.Body);
-
-        // Increment (Udon VM reads all PUSH inputs before writing output, so direct write-back is safe)
-        _ctx.Module.MarkLabel(continueLabel);
-        var oneConst = _ctx.Vars.DeclareConst("SystemInt32", "1");
-        _ctx.Module.AddPush(idxId);
-        _ctx.Module.AddPush(oneConst);
-        _ctx.Module.AddPush(idxId);
-        AddExternChecked("SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32");
-
-        _ctx.Module.AddJump(loopStart);
-        _ctx.Module.MarkLabel(loopEnd);
-
-        _ctx.BreakLabels.Pop();
-        _ctx.ContinueLabels.Pop();
-        _ctx.Vars.PopScope();
+                VisitOperation(op.Body);
+            });
     }
 
     void VisitSwitch(ISwitchOperation op)
     {
-        var valueId = VisitExpression(op.Value);
+        var valueVal = VisitExpression(op.Value);
         var valueType = GetUdonType(op.Value.Type);
-        var endLabel = _ctx.Module.DefineLabel("__switch_end");
 
-        _ctx.BreakLabels.Push(endLabel);
-
-        var bodyLabels = new int[op.Cases.Length];
-        for (int i = 0; i < op.Cases.Length; i++)
-            bodyLabels[i] = _ctx.Module.DefineLabel($"__case_body_{i}");
-
-        int defaultIndex = -1;
+        // Generate a unique end label for this switch
+        var endLabel = $"__switchEnd_{Interlocked.Increment(ref s_switchLabelCounter)}";
+        SwitchBreakLabels.Push(endLabel);
 
         // Pre-convert enum switch value once (Udon VM has no enum-typed operators)
-        var convertedValueId = EmitEnumToUnderlying(valueId, op.Value.Type);
+        var convertedValueVal = EmitEnumToUnderlying(valueVal, op.Value.Type);
 
-        // Phase 1: emit comparisons → jump to body
-        for (int i = 0; i < op.Cases.Length; i++)
+        // Store converted value in a temp so it can be re-read for each comparison
+        string convertedField = null;
+        if (op.Cases.Length > 1)
         {
-            foreach (var clause in op.Cases[i].Clauses)
+            var convertedType = valueType;
+            if (op.Value.Type is INamedTypeSymbol namedEnum && namedEnum.TypeKind == TypeKind.Enum)
+                convertedType = GetUdonType(namedEnum.EnumUnderlyingType);
+            convertedField = _ctx.DeclareTemp(convertedType);
+            EmitStoreField(convertedField, convertedValueVal);
+        }
+
+        // Also store the original value for pattern matching
+        string origValueField = null;
+        if (op.Cases.Any(c => c.Clauses.Any(cl => cl is IPatternCaseClauseOperation)))
+        {
+            origValueField = _ctx.DeclareTemp(valueType);
+            EmitStoreField(origValueField, valueVal);
+        }
+
+        // Find default case index
+        int defaultIndex = -1;
+        for (int i = 0; i < op.Cases.Length; i++)
+            if (op.Cases[i].Clauses.Any(c => c is IDefaultCaseClauseOperation))
+                defaultIndex = i;
+
+        // Lower switch to if/else chain
+        EmitSwitchCases(op, convertedField, convertedValueVal, origValueField, valueVal, valueType, defaultIndex, 0);
+
+        _builder.EmitLabel(endLabel);
+        SwitchBreakLabels.Pop();
+    }
+
+    void EmitSwitchCases(ISwitchOperation op, string convertedField, HExpr convertedValueVal,
+        string origValueField, HExpr origValueVal, string valueType, int defaultIndex, int startIdx)
+    {
+        // Find the next non-default case starting from startIdx
+        int caseIdx = -1;
+        for (int i = startIdx; i < op.Cases.Length; i++)
+        {
+            if (i == defaultIndex && op.Cases[i].Clauses.All(c => c is IDefaultCaseClauseOperation))
+                continue; // Skip pure default cases; handle at the end
+            caseIdx = i;
+            break;
+        }
+
+        if (caseIdx < 0)
+        {
+            // No more non-default cases; emit default body if present
+            if (defaultIndex >= 0)
+                EmitCaseBody(op.Cases[defaultIndex]);
+            return;
+        }
+
+        // Build condition: OR of all clauses for this case
+        HExpr caseCond = null;
+        var caseSection = op.Cases[caseIdx];
+        foreach (var clause in caseSection.Clauses)
+        {
+            if (clause is IDefaultCaseClauseOperation)
+                continue;
+
+            HExpr clauseCond = null;
+            if (clause is ISingleValueCaseClauseOperation singleValue)
             {
-                if (clause is IDefaultCaseClauseOperation)
-                {
-                    defaultIndex = i;
-                    continue;
-                }
+                var caseValueVal = VisitExpression(singleValue.Value);
+                caseValueVal = EmitEnumToUnderlying(caseValueVal, op.Value.Type);
 
-                if (clause is ISingleValueCaseClauseOperation singleValue)
-                {
-                    string caseValueId;
-                    var eqType = valueType;
-                    // Enum case values are compile-time constants: declare underlying
-                    // value directly instead of emitting a SystemConvert extern at runtime.
-                    if (op.Value.Type is INamedTypeSymbol named && named.TypeKind == TypeKind.Enum
-                        && singleValue.Value.ConstantValue.HasValue)
-                    {
-                        var underlyingUdon = GetUdonType(named.EnumUnderlyingType);
-                        eqType = underlyingUdon;
-                        caseValueId = _ctx.Vars.DeclareConst(underlyingUdon,
-                            ToInvariantString(singleValue.Value.ConstantValue.Value));
-                    }
-                    else
-                    {
-                        caseValueId = VisitExpression(singleValue.Value);
-                        caseValueId = EmitEnumToUnderlying(caseValueId, op.Value.Type);
-                        if (op.Value.Type is INamedTypeSymbol n2 && n2.TypeKind == TypeKind.Enum)
-                            eqType = GetUdonType(n2.EnumUnderlyingType);
-                    }
-                    var condId = _ctx.Vars.DeclareTemp("SystemBoolean");
-                    var eqSig = ExternResolver.BuildMethodSignature(
-                        eqType, "__op_Equality", new[] { eqType, eqType }, "SystemBoolean");
-                    _ctx.Module.AddPush(convertedValueId);
-                    _ctx.Module.AddPush(caseValueId);
-                    _ctx.Module.AddPush(condId);
-                    AddExternChecked(eqSig);
-                    _ctx.Module.AddPush(condId);
+                var eqType = valueType;
+                if (op.Value.Type is INamedTypeSymbol named && named.TypeKind == TypeKind.Enum)
+                    eqType = GetUdonType(named.EnumUnderlyingType);
+                var eqSig = ExternResolver.BuildMethodSignature(
+                    eqType, "__op_Equality", new[] { eqType, eqType }, "SystemBoolean");
 
-                    var skipLabel = _ctx.Module.DefineLabel($"__case_skip_{i}");
-                    _ctx.Module.AddJumpIfFalse(skipLabel);
-                    _ctx.Module.AddJump(bodyLabels[i]);
-                    _ctx.Module.MarkLabel(skipLabel);
-                }
-                else if (clause is IPatternCaseClauseOperation patternCase)
+                var lhs = convertedField != null ? LoadField(convertedField, eqType) : convertedValueVal;
+                clauseCond = ExternCall(eqSig, new List<HExpr> { lhs, caseValueVal }, "SystemBoolean");
+            }
+            else if (clause is IPatternCaseClauseOperation patternCase)
+            {
+                var patValue = origValueField != null ? LoadField(origValueField, valueType) : origValueVal;
+                clauseCond = EmitPatternCheck(patValue, op.Value.Type, patternCase.Pattern);
+
+                if (patternCase.Guard != null)
                 {
-                    var checkId = EmitPatternCheck(valueId, op.Value.Type, patternCase.Pattern);
-                    _ctx.Module.AddPush(checkId);
-                    var skipLabel = _ctx.Module.DefineLabel($"__case_skip_{i}");
-                    _ctx.Module.AddJumpIfFalse(skipLabel);
-                    if (patternCase.Guard != null)
-                    {
-                        var guardId = VisitExpression(patternCase.Guard);
-                        _ctx.Module.AddPush(guardId);
-                        _ctx.Module.AddJumpIfFalse(skipLabel);
-                    }
-                    _ctx.Module.AddJump(bodyLabels[i]);
-                    _ctx.Module.MarkLabel(skipLabel);
+                    var guardVal = VisitExpression(patternCase.Guard);
+                    // Both pattern and guard must pass: clauseCond && guardVal
+                    clauseCond = ExternCall(
+                        "SystemBoolean.__op_ConditionalAnd__SystemBoolean_SystemBoolean__SystemBoolean",
+                        new List<HExpr> { clauseCond, guardVal },
+                        "SystemBoolean");
                 }
+            }
+
+            if (clauseCond != null)
+            {
+                caseCond = caseCond == null
+                    ? clauseCond
+                    : ExternCall(
+                        "SystemBoolean.__op_ConditionalOr__SystemBoolean_SystemBoolean__SystemBoolean",
+                        new List<HExpr> { caseCond, clauseCond },
+                        "SystemBoolean");
             }
         }
 
-        // After all comparisons: jump to default or end
-        _ctx.Module.AddJump(defaultIndex >= 0 ? bodyLabels[defaultIndex] : endLabel);
-
-        // Phase 2: emit case bodies
-        for (int i = 0; i < op.Cases.Length; i++)
+        if (caseCond != null)
         {
-            _ctx.Module.MarkLabel(bodyLabels[i]);
-            foreach (var stmt in op.Cases[i].Body)
-                VisitOperation(stmt);
+            _builder.EmitIf(caseCond,
+                _ => EmitCaseBody(caseSection),
+                _ => EmitSwitchCases(op, convertedField, convertedValueVal,
+                                     origValueField, origValueVal, valueType, defaultIndex, caseIdx + 1));
         }
+        else
+        {
+            // Case with only default clause — treated as else (handled by fallthrough)
+            EmitSwitchCases(op, convertedField, convertedValueVal,
+                            origValueField, origValueVal, valueType, defaultIndex, caseIdx + 1);
+        }
+    }
 
-        _ctx.Module.MarkLabel(endLabel);
-        _ctx.BreakLabels.Pop();
+    void EmitCaseBody(ISwitchCaseOperation caseSection)
+    {
+        foreach (var stmt in caseSection.Body)
+            VisitOperation(stmt);
     }
 }

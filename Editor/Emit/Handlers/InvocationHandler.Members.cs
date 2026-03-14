@@ -10,7 +10,7 @@ public partial class InvocationHandler
 {
     // ── Property Reference ──
 
-    string VisitPropertyReference(IPropertyReferenceOperation op)
+    HExpr VisitPropertyReference(IPropertyReferenceOperation op)
     {
         // Indexer access: Type.__get_Item__IndexTypes__ReturnType
         if (op.Property.IsIndexer)
@@ -19,41 +19,40 @@ public partial class InvocationHandler
         // this.gameObject / this.transform → __this_* variable (Udon VM resolves via "this" default)
         if (op.Instance is IInstanceReferenceOperation)
         {
-            // User-defined property getter → JUMP call
+            // User-defined property getter → internal call
             if (op.Property.GetMethod != null
-                && _ctx.MethodLabels.TryGetValue(op.Property.GetMethod, out var getterLabel))
-                return EmitCallByLabel(op.Property.GetMethod, getterLabel);
+                && _methodFunctions.TryGetValue(op.Property.GetMethod, out var getterFunc))
+                return EmitCallToMethod(op.Property.GetMethod, new List<HExpr>());
 
             // Auto-property on this class → direct variable access
             if (op.Property.GetMethod?.IsImplicitlyDeclared == true
                 && ExternResolver.IsUdonSharpBehaviour(op.Property.ContainingType))
-                return op.Property.Name;
+                return LoadField(op.Property.Name, GetUdonType(op.Property.Type));
 
             var propName = op.Property.Name;
             if (propName == "gameObject" || propName == "transform")
             {
                 var propType = GetUdonType(op.Property.Type);
-                return _ctx.Vars.DeclareThisOnce(propType);
+                return LoadField(_ctx.DeclareThisOnce(propType), propType);
             }
             // Other this.property → extern getter with this instance
-            var thisType = GetUdonType(_ctx.ClassSymbol);
-            var thisId = _ctx.Vars.DeclareThisOnce(thisType);
+            var thisType = GetUdonType(_classSymbol);
+            var thisVal = LoadField(_ctx.DeclareThisOnce(thisType), thisType);
             var cType = GetUdonType(op.Property.ContainingType);
             // Behaviour/MonoBehaviour have no Udon externs; use the class's Udon type instead
             if (cType is "UnityEngineBehaviour" or "UnityEngineMonoBehaviour")
-                cType = GetUdonType(_ctx.ClassSymbol);
+                cType = GetUdonType(_classSymbol);
             var rType = GetUdonType(op.Property.Type);
-            var tid = ConsumeTargetHintOrTemp(rType);
-            _ctx.Module.AddPush(thisId);
-            _ctx.Module.AddPush(tid);
-            AddExternChecked(ExternResolver.BuildPropertyGetSignature(cType, propName, rType));
-            return tid;
+            return ExternCall(
+                ExternResolver.BuildPropertyGetSignature(cType, propName, rType),
+                new List<HExpr> { thisVal },
+                rType);
         }
 
         var containingType = GetUdonType(op.Property.ContainingType);
         var returnType = GetUdonType(op.Property.Type);
 
-        // Static property: no instance push
+        // Static property: no instance
         if (op.Instance == null)
         {
             // Constant folding: static properties on foldable struct types (e.g., Vector3.zero)
@@ -61,35 +60,30 @@ public partial class InvocationHandler
             {
                 var value = TryGetStaticPropertyValue(containingType, op.Property.Name);
                 if (value != null)
-                    return _ctx.Vars.DeclareStructConst(returnType, value);
+                    return LoadField(_ctx.DeclareStructConst(returnType, value), returnType);
             }
 
-            var tempId = ConsumeTargetHintOrTemp(returnType);
-            _ctx.Module.AddPush(tempId);
-            AddExternChecked(ExternResolver.BuildPropertyGetSignature(containingType, op.Property.Name, returnType));
-            return tempId;
+            return ExternCall(
+                ExternResolver.BuildPropertyGetSignature(containingType, op.Property.Name, returnType),
+                new List<HExpr>(),
+                returnType);
         }
 
         // Cross-behaviour property get
         if (op.Instance != null && ExternResolver.IsUdonSharpBehaviour(op.Property.ContainingType)
             && !(op.Instance is IInstanceReferenceOperation))
         {
-            var savedHint2 = _ctx.TargetHint;
-            _ctx.TargetHint = null;
-            var instanceId2 = VisitExpression(op.Instance);
-            _ctx.TargetHint = savedHint2;
+            var instanceVal = VisitExpression(op.Instance);
             var isAuto = op.Property.GetMethod?.IsImplicitlyDeclared == true;
 
             if (isAuto)
             {
                 // Auto-property: direct GetProgramVariable("PropertyName")
-                var nameConst = _ctx.Vars.DeclareConst("SystemString", op.Property.Name);
-                var tempId = ConsumeTargetHintOrTemp(returnType);
-                _ctx.Module.AddPush(instanceId2);
-                _ctx.Module.AddPush(nameConst);
-                _ctx.Module.AddPush(tempId);
-                AddExternChecked("VRCUdonCommonInterfacesIUdonEventReceiver.__GetProgramVariable__SystemString__SystemObject");
-                return tempId;
+                var nameConst = Const(op.Property.Name, "SystemString");
+                return ExternCall(
+                    "VRCUdonCommonInterfacesIUdonEventReceiver.__GetProgramVariable__SystemString__SystemObject",
+                    new List<HExpr> { instanceVal, nameConst },
+                    returnType);
             }
             else
             {
@@ -97,27 +91,21 @@ public partial class InvocationHandler
                 var (getExportName, _, getRetId) = GetCalleeLayout(op.Property.GetMethod);
 
                 // SendCustomEvent to invoke getter
-                var eventConst = _ctx.Vars.DeclareConst("SystemString", getExportName);
-                _ctx.Module.AddPush(instanceId2);
-                _ctx.Module.AddPush(eventConst);
-                AddExternChecked("VRCUdonCommonInterfacesIUdonEventReceiver.__SendCustomEvent__SystemString__SystemVoid");
+                var eventConst = Const(getExportName, "SystemString");
+                EmitExternVoid("VRCUdonCommonInterfacesIUdonEventReceiver.__SendCustomEvent__SystemString__SystemVoid",
+                    new List<HExpr> { instanceVal, eventConst });
 
                 // GetProgramVariable for return value
-                var retNameConst = _ctx.Vars.DeclareConst("SystemString", getRetId);
-                var tempId = ConsumeTargetHintOrTemp(returnType);
-                _ctx.Module.AddPush(instanceId2);
-                _ctx.Module.AddPush(retNameConst);
-                _ctx.Module.AddPush(tempId);
-                AddExternChecked("VRCUdonCommonInterfacesIUdonEventReceiver.__GetProgramVariable__SystemString__SystemObject");
-                return tempId;
+                var retNameConst = Const(getRetId, "SystemString");
+                return ExternCall(
+                    "VRCUdonCommonInterfacesIUdonEventReceiver.__GetProgramVariable__SystemString__SystemObject",
+                    new List<HExpr> { instanceVal, retNameConst },
+                    returnType);
             }
         }
 
         // Other instance.property → extern getter
-        var savedHint = _ctx.TargetHint;
-        _ctx.TargetHint = null;
-        var instanceId = VisitExpression(op.Instance);
-        _ctx.TargetHint = savedHint;
+        var instVal = VisitExpression(op.Instance);
         // Array .Length → use SystemArray (not the concrete array type) to match UdonSharp
         if (op.Instance.Type is IArrayTypeSymbol && op.Property.Name != "Length")
             containingType = GetUdonType((IArrayTypeSymbol)op.Instance.Type);
@@ -125,16 +113,12 @@ public partial class InvocationHandler
         if (containingType is "UnityEngineBehaviour" or "UnityEngineMonoBehaviour")
             containingType = GetUdonType(op.Instance.Type);
         var sig = ExternResolver.BuildPropertyGetSignature(containingType, op.Property.Name, returnType);
-        var resultId = ConsumeTargetHintOrTemp(returnType);
-        _ctx.Module.AddPush(instanceId);
-        _ctx.Module.AddPush(resultId);
-        AddExternChecked(sig);
-        return resultId;
+        return ExternCall(sig, new List<HExpr> { instVal }, returnType);
     }
 
     // ── Indexer Get ──
 
-    string VisitIndexerGet(IPropertyReferenceOperation op)
+    HExpr VisitIndexerGet(IPropertyReferenceOperation op)
     {
         var cType = GetUdonType(op.Property.ContainingType);
         var rType = GetUdonType(op.Property.Type);
@@ -143,50 +127,48 @@ public partial class InvocationHandler
         // Udon VM has no string indexer; mirror UdonSharp's BoundStringAccessExpression
         if (cType == "SystemString")
         {
-            string inst = op.Instance is IInstanceReferenceOperation
-                ? _ctx.Vars.DeclareThisOnce(GetUdonType(_ctx.ClassSymbol))
+            HExpr inst = op.Instance is IInstanceReferenceOperation
+                ? LoadField(_ctx.DeclareThisOnce(GetUdonType(_classSymbol)), GetUdonType(_classSymbol))
                 : VisitExpression(op.Instance);
-            var indexId = VisitExpression(op.Arguments[0].Value);
-            var oneId = _ctx.Vars.DeclareConst("SystemInt32", "1");
-            var charArr = _ctx.Vars.DeclareTemp("SystemCharArray");
-            _ctx.Module.AddPush(inst);
-            _ctx.Module.AddPush(indexId);
-            _ctx.Module.AddPush(oneId);
-            _ctx.Module.AddPush(charArr);
-            AddExternChecked("SystemString.__ToCharArray__SystemInt32_SystemInt32__SystemCharArray");
-            var zeroId = _ctx.Vars.DeclareConst("SystemInt32", "0");
-            var result = _ctx.Vars.DeclareTemp("SystemChar");
-            _ctx.Module.AddPush(charArr);
-            _ctx.Module.AddPush(zeroId);
-            _ctx.Module.AddPush(result);
-            AddExternChecked("SystemCharArray.__Get__SystemInt32__SystemChar");
-            return result;
+            var indexVal = VisitExpression(op.Arguments[0].Value);
+            var oneConst = Const(1, "SystemInt32");
+            var charArr = ExternCall(
+                "SystemString.__ToCharArray__SystemInt32_SystemInt32__SystemCharArray",
+                new List<HExpr> { inst, indexVal, oneConst },
+                "SystemCharArray");
+            var zeroConst = Const(0, "SystemInt32");
+            return ExternCall(
+                "SystemCharArray.__Get__SystemInt32__SystemChar",
+                new List<HExpr> { charArr, zeroConst },
+                "SystemChar");
         }
 
-        var resultId = _ctx.Vars.DeclareTemp(rType);
-        string instId;
+        HExpr instVal;
         if (op.Instance is IInstanceReferenceOperation)
-            instId = _ctx.Vars.DeclareThisOnce(GetUdonType(_ctx.ClassSymbol));
+            instVal = LoadField(_ctx.DeclareThisOnce(GetUdonType(_classSymbol)), GetUdonType(_classSymbol));
         else
-            instId = VisitExpression(op.Instance);
-        _ctx.Module.AddPush(instId);
+            instVal = VisitExpression(op.Instance);
+
+        var externArgs = new List<HExpr>();
+        externArgs.Add(instVal);
         var idxTypes = new List<string>();
         foreach (var arg in op.Arguments)
         {
-            _ctx.Module.AddPush(VisitExpression(arg.Value));
+            externArgs.Add(VisitExpression(arg.Value));
             idxTypes.Add(GetUdonType(arg.Value.Type));
         }
-        _ctx.Module.AddPush(resultId);
-        AddExternChecked($"{cType}.__get_Item__{string.Join("_", idxTypes)}__{rType}");
-        return resultId;
+        return ExternCall(
+            $"{cType}.__get_Item__{string.Join("_", idxTypes)}__{rType}",
+            externArgs,
+            rType);
     }
 
     // ── Interpolated String ──
 
-    string VisitInterpolatedString(IInterpolatedStringOperation op)
+    HExpr VisitInterpolatedString(IInterpolatedStringOperation op)
     {
         var formatParts = new List<string>();
-        var argIds = new List<string>();
+        var argVals = new List<HExpr>();
         int argIndex = 0;
 
         foreach (var part in op.Parts)
@@ -221,54 +203,51 @@ public partial class InvocationHandler
                     }
                     placeholder.Append('}');
                     formatParts.Add(placeholder.ToString());
-                    argIds.Add(VisitExpression(interpolation.Expression));
+                    argVals.Add(VisitExpression(interpolation.Expression));
                     argIndex++;
                     break;
             }
         }
 
         var formatStr = string.Join("", formatParts);
-        var formatConstId = _ctx.Vars.DeclareConst("SystemString", formatStr);
-        var resultId = _ctx.Vars.DeclareTemp("SystemString");
+        var formatConst = Const(formatStr, "SystemString");
 
-        if (argIds.Count == 0)
+        if (argVals.Count == 0)
         {
             // No interpolation: just return the literal
-            return formatConstId;
+            return formatConst;
         }
 
-        if (argIds.Count <= 3)
+        if (argVals.Count <= 3)
         {
-            _ctx.Module.AddPush(formatConstId);
-            foreach (var argId in argIds)
-                _ctx.Module.AddPush(argId);
-            _ctx.Module.AddPush(resultId);
-            var argTypes = string.Join("_", argIds.Select(_ => "SystemObject"));
-            AddExternChecked($"SystemString.__Format__SystemString_{argTypes}__SystemString");
+            var externArgs = new List<HExpr>();
+            externArgs.Add(formatConst);
+            externArgs.AddRange(argVals);
+            var argTypes = string.Join("_", argVals.Select(_ => "SystemObject"));
+            return ExternCall(
+                $"SystemString.__Format__SystemString_{argTypes}__SystemString",
+                externArgs,
+                "SystemString");
         }
         else
         {
             // 4+ args: pack into SystemObjectArray, use Format(string, object[])
-            var sizeConst = _ctx.Vars.DeclareConst("SystemInt32", argIds.Count.ToString());
-            var arrId = _ctx.Vars.DeclareTemp("SystemObjectArray");
-            _ctx.Module.AddPush(sizeConst);
-            _ctx.Module.AddPush(arrId);
-            AddExternChecked("SystemObjectArray.__ctor__SystemInt32__SystemObjectArray");
-            for (int i = 0; i < argIds.Count; i++)
+            var sizeConst = Const(argVals.Count, "SystemInt32");
+            var arrVal = ExternCall(
+                "SystemObjectArray.__ctor__SystemInt32__SystemObjectArray",
+                new List<HExpr> { sizeConst },
+                "SystemObjectArray");
+            for (int i = 0; i < argVals.Count; i++)
             {
-                var idxConst = _ctx.Vars.DeclareConst("SystemInt32", i.ToString());
-                _ctx.Module.AddPush(arrId);
-                _ctx.Module.AddPush(idxConst);
-                _ctx.Module.AddPush(argIds[i]);
-                AddExternChecked("SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid");
+                var idxConst = Const(i, "SystemInt32");
+                EmitExternVoid("SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid",
+                    new List<HExpr> { arrVal, idxConst, argVals[i] });
             }
-            _ctx.Module.AddPush(formatConstId);
-            _ctx.Module.AddPush(arrId);
-            _ctx.Module.AddPush(resultId);
-            AddExternChecked("SystemString.__Format__SystemString_SystemObjectArray__SystemString");
+            return ExternCall(
+                "SystemString.__Format__SystemString_SystemObjectArray__SystemString",
+                new List<HExpr> { formatConst, arrVal },
+                "SystemString");
         }
-
-        return resultId;
     }
 
     // ── Object Creation ──
@@ -280,13 +259,13 @@ public partial class InvocationHandler
         "UnityEngineMatrix4x4", "UnityEngineRect",
     };
 
-    string VisitObjectCreation(IObjectCreationOperation op)
+    HExpr VisitObjectCreation(IObjectCreationOperation op)
     {
         var resultType = GetUdonType(op.Type);
 
         // Parameterless struct ctor → default initialization (no extern needed)
         if (op.Arguments.Length == 0 && op.Type.IsValueType && op.Initializer == null)
-            return _ctx.Vars.DeclareConst(resultType, "null");
+            return Const(null, resultType);
 
         // Constant folding: struct ctor with all-constant args
         if (op.Type.IsValueType && op.Initializer == null && op.Arguments.Length > 0
@@ -295,30 +274,29 @@ public partial class InvocationHandler
         {
             var value = TryConstructAtCompileTime(resultType, op.Arguments);
             if (value != null)
-                return _ctx.Vars.DeclareStructConst(resultType, value);
+                return LoadField(_ctx.DeclareStructConst(resultType, value), resultType);
         }
 
-        string resultId;
+        HExpr resultVal;
         if (op.Arguments.Length == 0 && op.Type.IsValueType)
         {
             // Struct with initializer but no ctor args: need a mutable temp
-            resultId = _ctx.Vars.DeclareTemp(resultType);
-            var defaultVal = _ctx.Vars.DeclareConst(resultType, "null");
-            _ctx.Module.AddCopy(defaultVal, resultId);
+            var resultField = _ctx.DeclareTemp(resultType);
+            EmitStoreField(resultField, Const(null, resultType));
+            resultVal = LoadField(resultField, resultType);
         }
         else
         {
-            resultId = _ctx.Vars.DeclareTemp(resultType);
-            // Evaluate all args first, then PUSH contiguously (avoid interleaving)
-            var argIds = new string[op.Arguments.Length];
+            // Evaluate all args first
+            var argVals = new List<HExpr>();
             for (int i = 0; i < op.Arguments.Length; i++)
-                argIds[i] = VisitExpression(op.Arguments[i].Value);
-            foreach (var argId in argIds)
-                _ctx.Module.AddPush(argId);
-            _ctx.Module.AddPush(resultId);
+                argVals.Add(VisitExpression(op.Arguments[i].Value));
             var paramTypes = op.Arguments.Select(a => GetUdonType(a.Value.Type)).ToArray();
             var paramPart = string.Join("_", paramTypes);
-            AddExternChecked($"{resultType}.__ctor__{paramPart}__{resultType}");
+            resultVal = ExternCall(
+                $"{resultType}.__ctor__{paramPart}__{resultType}",
+                argVals,
+                resultType);
         }
 
         // Object initializer: new T { Prop = val, ... }
@@ -327,12 +305,53 @@ public partial class InvocationHandler
             foreach (var init in op.Initializer.Initializers)
             {
                 if (init is not ISimpleAssignmentOperation assign) continue;
-                var valueId = VisitExpression(assign.Value);
-                EmitMemberSet(resultId, assign.Target, valueId);
+                var valueVal = VisitExpression(assign.Value);
+                EmitMemberSet(resultVal, assign.Target, valueVal);
             }
         }
 
-        return resultId;
+        return resultVal;
+    }
+
+    void EmitMemberSet(HExpr instanceVal, IOperation target, HExpr valueVal)
+    {
+        if (target is IFieldReferenceOperation fieldRef && fieldRef.Field.ContainingType.IsValueType)
+        {
+            var containingType = GetUdonType(fieldRef.Field.ContainingType);
+            var valueType = GetUdonType(fieldRef.Field.Type);
+            var sig = ExternResolver.BuildFieldSetSignature(containingType, fieldRef.Field.Name, valueType);
+            EmitExternVoid(sig, new List<HExpr> { instanceVal, valueVal });
+        }
+        else if (target is IPropertyReferenceOperation propRef)
+        {
+            var containingType = GetUdonType(propRef.Property.ContainingType);
+            var valueType = GetUdonType(propRef.Property.Type);
+            if (propRef.Property.IsIndexer)
+            {
+                var externArgs = new List<HExpr>();
+                externArgs.Add(instanceVal);
+                var indexTypes = new List<string>();
+                foreach (var arg in propRef.Arguments)
+                {
+                    externArgs.Add(VisitExpression(arg.Value));
+                    indexTypes.Add(GetUdonType(arg.Value.Type));
+                }
+                externArgs.Add(valueVal);
+                var indexParamStr = string.Join("_", indexTypes);
+                EmitExternVoid($"{containingType}.__set_Item__{indexParamStr}_{valueType}__SystemVoid",
+                    externArgs);
+            }
+            else
+            {
+                EmitExternVoid(ExternResolver.BuildPropertySetSignature(containingType, propRef.Property.Name, valueType),
+                    new List<HExpr> { instanceVal, valueVal });
+            }
+        }
+        else if (target is IFieldReferenceOperation fieldRef2)
+        {
+            // Non-struct field assignment (class fields via SetProgramVariable or direct)
+            EmitStoreField(fieldRef2.Field.Name, valueVal);
+        }
     }
 
     // ── Constant Folding Helpers ──
@@ -362,28 +381,11 @@ public partial class InvocationHandler
         {
             var clrType = ResolveClrType(udonType);
             if (clrType == null) return null;
-            var argValues = args.Select(a => a.Value.ConstantValue.Value).ToArray();
-
-            // Try direct match with Roslyn constant types
-            var argTypes = argValues.Select(v => v?.GetType() ?? typeof(object)).ToArray();
-            var ctor = clrType.GetConstructor(argTypes);
-            if (ctor != null) return ctor.Invoke(argValues);
-
-            // Fallback: convert to actual constructor parameter types
-            foreach (var c in clrType.GetConstructors())
-            {
-                var ps = c.GetParameters();
-                if (ps.Length != argValues.Length) continue;
-                try
-                {
-                    var converted = new object[argValues.Length];
-                    for (int i = 0; i < argValues.Length; i++)
-                        converted[i] = Convert.ChangeType(argValues[i], ps[i].ParameterType);
-                    return c.Invoke(converted);
-                }
-                catch { }
-            }
-            return null;
+            var ctorArgs = args.Select(a => Convert.ChangeType(
+                a.Value.ConstantValue.Value, typeof(float))).ToArray();
+            var ctorArgTypes = ctorArgs.Select(a => a.GetType()).ToArray();
+            var ctor = clrType.GetConstructor(ctorArgTypes);
+            return ctor?.Invoke(ctorArgs);
         }
         catch { return null; }
     }

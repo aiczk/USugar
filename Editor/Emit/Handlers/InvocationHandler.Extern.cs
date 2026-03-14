@@ -7,7 +7,7 @@ public partial class InvocationHandler
 {
     // ── Extern Method Call ──
 
-    string EmitExternMethodCall(IInvocationOperation op, IMethodSymbol target)
+    HExpr EmitExternMethodCall(IInvocationOperation op, IMethodSymbol target)
     {
         // Generic GetComponent<T>() / GetComponentInChildren<T>() / GetComponentsInChildren<T>() etc.
         // Udon VM uses non-generic form with typeof(T) parameter.
@@ -17,49 +17,43 @@ public partial class InvocationHandler
             return EmitGetComponentGeneric(op, target);
         }
 
-        // Save hint and clear it while evaluating sub-expressions
-        var savedHint = _ctx.TargetHint;
-        _ctx.TargetHint = null;
-
-        string instanceId = null;
+        HExpr instanceVal = null;
         if (!target.IsStatic)
         {
             if (op.Instance is IInstanceReferenceOperation)
-                instanceId = _ctx.Vars.DeclareThisOnce(GetUdonType(target.ContainingType));
+                instanceVal = LoadField(_ctx.DeclareThisOnce(GetUdonType(target.ContainingType)), GetUdonType(target.ContainingType));
             else if (op.Instance != null)
-                instanceId = VisitExpression(op.Instance);
+                instanceVal = VisitExpression(op.Instance);
         }
 
-        var argIds = new string[op.Arguments.Length];
+        var argVals = new List<HExpr>();
         for (int i = 0; i < op.Arguments.Length; i++)
-            argIds[i] = VisitExpression(op.Arguments[i].Value);
+            argVals.Add(VisitExpression(op.Arguments[i].Value));
 
-        // Now emit all PUSHes contiguously
-        if (instanceId != null)
-            _ctx.Module.AddPush(instanceId);
-        foreach (var argId in argIds)
-            _ctx.Module.AddPush(argId);
-
-        // Restore hint and consume for result
-        _ctx.TargetHint = savedHint;
-        string resultId = null;
-        if (!target.ReturnsVoid)
-        {
-            var returnType = GetUdonType(target.ReturnType);
-            resultId = ConsumeTargetHintOrTemp(returnType);
-            _ctx.Module.AddPush(resultId);
-        }
+        // Build args list for extern call
+        var externArgs = new List<HExpr>();
+        if (instanceVal != null)
+            externArgs.Add(instanceVal);
+        externArgs.AddRange(argVals);
 
         // Extern signature
         var sig = BuildExternCallSignature(target, op.Instance?.Type);
-        AddExternChecked(sig);
 
-        return resultId;
+        if (!target.ReturnsVoid)
+        {
+            var returnType = GetUdonType(target.ReturnType);
+            return ExternCall(sig, externArgs, returnType);
+        }
+        else
+        {
+            EmitExternVoid(sig, externArgs);
+            return null;
+        }
     }
 
     // ── GetComponent<T> ──
 
-    string EmitGetComponentGeneric(IInvocationOperation op, IMethodSymbol target)
+    HExpr EmitGetComponentGeneric(IInvocationOperation op, IMethodSymbol target)
     {
         var typeArg = target.TypeArguments[0];
         return ExternResolver.IsUdonSharpBehaviour(typeArg) ? EmitGetComponentShim(op, target) : EmitGetComponentExtern(op, target);
@@ -67,45 +61,37 @@ public partial class InvocationHandler
 
     // Existing logic for Unity Component types (Transform, Collider, etc.)
     // Uses the __T / __TArray generic extern form (matches UdonSharp behavior).
-    string EmitGetComponentExtern(IInvocationOperation op, IMethodSymbol target)
+    HExpr EmitGetComponentExtern(IInvocationOperation op, IMethodSymbol target)
     {
-        // Save hint and clear it while evaluating sub-expressions
-        var savedHint = _ctx.TargetHint;
-        _ctx.TargetHint = null;
-
-        // Evaluate instance and arguments first (avoid interleaved PUSH/EXTERN)
-        string instanceId = null;
+        // Evaluate instance and arguments first
+        HExpr instanceVal = null;
         if (op.Instance is IInstanceReferenceOperation)
-            instanceId = _ctx.Vars.DeclareThisOnce("UnityEngineTransform");
+            instanceVal = LoadField(_ctx.DeclareThisOnce("UnityEngineTransform"), "UnityEngineTransform");
         else if (op.Instance != null)
-            instanceId = VisitExpression(op.Instance);
+            instanceVal = VisitExpression(op.Instance);
 
         // Evaluate explicit arguments (e.g., GetComponentInChildren<T>(bool includeInactive))
-        var argIds = new string[op.Arguments.Length];
+        var argVals = new List<HExpr>();
         for (int i = 0; i < op.Arguments.Length; i++)
-            argIds[i] = VisitExpression(op.Arguments[i].Value);
+            argVals.Add(VisitExpression(op.Arguments[i].Value));
 
         // __T externs use UnityEngineComponent as containing type.
         // If instance is a GameObject (not a Component), get .transform first.
-        instanceId = EnsureComponentInstance(op.Instance, instanceId);
+        instanceVal = EnsureComponentInstance(op.Instance, instanceVal);
 
-        // Push instance
-        if (instanceId != null)
-            _ctx.Module.AddPush(instanceId);
+        // Build extern args: instance + explicit args + typeof(T)
+        var externArgs = new List<HExpr>();
+        if (instanceVal != null)
+            externArgs.Add(instanceVal);
 
         // Push explicit arguments FIRST, then SystemType (matches UdonSharp push order for __T externs)
-        foreach (var argId in argIds)
-            _ctx.Module.AddPush(argId);
+        externArgs.AddRange(argVals);
 
-        // Push typeof(T) as SystemType constant (after explicit args).
-        // IUdonEventReceiver → VRCUdonUdonBehaviour: the Udon type registry doesn't have
-        // IUdonEventReceiver as a SystemType constant. UdonBehaviour implements the interface,
-        // so using VRCUdonUdonBehaviour as the type token gives the same GetComponent result.
-        // ExternResolver can't handle this because it operates on extern signatures, not type tokens.
+        // typeof(T) as SystemType constant (after explicit args)
         var typeArgName = GetUdonType(target.TypeArguments[0]);
         var typeConstValue = typeArgName == "VRCUdonCommonInterfacesIUdonEventReceiver" ? "VRCUdonUdonBehaviour" : typeArgName;
-        var typeConstId = _ctx.Vars.DeclareConst("SystemType", typeConstValue);
-        _ctx.Module.AddPush(typeConstId);
+        var typeConst = Const(typeConstValue, "SystemType");
+        externArgs.Add(typeConst);
 
         // Result type — typed as T for __T externs
         var isPlural = target.Name.StartsWith("GetComponents");
@@ -115,79 +101,78 @@ public partial class InvocationHandler
             tempType = "UnityEngineComponentArray";
         else
             tempType = isPlural ? $"{typeArgUdon}Array" : typeArgUdon;
-        // Restore hint and consume for result
-        _ctx.TargetHint = savedHint;
-        var resultId = ConsumeTargetHintOrTemp(tempType);
-        _ctx.Module.AddPush(resultId);
 
         // Build extern name with __T form
         const string containingType = "UnityEngineComponent";
         var methodName = target.Name;
         var retPlaceholder = isPlural ? "__TArray" : "__T";
         var explicitParams = target.OriginalDefinition.Parameters;
+        string externSig;
         if (explicitParams.Length > 0)
         {
             var paramStr = string.Join("_", explicitParams.Select(p => GetUdonType(p.Type)));
-            AddExternChecked($"{containingType}.__{methodName}__{paramStr}{retPlaceholder}");
+            externSig = $"{containingType}.__{methodName}__{paramStr}{retPlaceholder}";
         }
         else
         {
-            AddExternChecked($"{containingType}.__{methodName}{retPlaceholder}");
+            externSig = $"{containingType}.__{methodName}{retPlaceholder}";
         }
 
-        return resultId;
+        return ExternCall(externSig, externArgs, tempType);
     }
 
     // ── GetComponent<T> USB Shim ──
     // Inline shim for USB-derived types: GetComponents(typeof(UdonBehaviour)) + __refl_typeid filter
 
-    string EmitGetComponentShim(IInvocationOperation op, IMethodSymbol target)
+    HExpr EmitGetComponentShim(IInvocationOperation op, IMethodSymbol target)
     {
         var isSingular = !target.Name.StartsWith("GetComponents");
 
         // Evaluate instance
-        string instanceId = null;
+        HExpr instanceVal = null;
         if (op.Instance is IInstanceReferenceOperation)
-            instanceId = _ctx.Vars.DeclareThisOnce("UnityEngineTransform");
+            instanceVal = LoadField(_ctx.DeclareThisOnce("UnityEngineTransform"), "UnityEngineTransform");
         else if (op.Instance != null)
-            instanceId = VisitExpression(op.Instance);
+            instanceVal = VisitExpression(op.Instance);
 
         // Evaluate explicit arguments (bool includeInactive)
-        var argIds = new string[op.Arguments.Length];
+        var argVals = new List<HExpr>();
         for (int i = 0; i < op.Arguments.Length; i++)
-            argIds[i] = VisitExpression(op.Arguments[i].Value);
+            argVals.Add(VisitExpression(op.Arguments[i].Value));
 
         // If instance is a GameObject, get .transform for Component-typed extern
-        instanceId = EnsureComponentInstance(op.Instance, instanceId);
+        instanceVal = EnsureComponentInstance(op.Instance, instanceVal);
 
         // Determine which non-generic GetComponents extern to call
         var fetchExtern = ResolveShimFetchExtern(target.Name, op.Arguments.Length > 0);
 
-        // Push instance + typeof(UdonBehaviour) + optional args
-        if (instanceId != null)
-            _ctx.Module.AddPush(instanceId);
-        var udonBehaviourType = _ctx.Vars.DeclareConst("SystemType", "VRCUdonUdonBehaviour");
-        _ctx.Module.AddPush(udonBehaviourType);
-        foreach (var argId in argIds)
-            _ctx.Module.AddPush(argId);
+        // Build args: instance + typeof(UdonBehaviour) + optional args
+        var fetchArgs = new List<HExpr>();
+        if (instanceVal != null)
+            fetchArgs.Add(instanceVal);
+        var udonBehaviourType = Const("VRCUdonUdonBehaviour", "SystemType");
+        fetchArgs.Add(udonBehaviourType);
+        fetchArgs.AddRange(argVals);
 
-        // Call GetComponents → ComponentArray
-        var allComponents = _ctx.Vars.DeclareTemp("UnityEngineComponentArray");
-        _ctx.Module.AddPush(allComponents);
-        AddExternChecked(fetchExtern);
+        // Call GetComponents → ComponentArray (store to field so it's evaluated once)
+        var allComponentsField = _ctx.DeclareTemp("UnityEngineComponentArray");
+        EmitStoreField(allComponentsField, ExternCall(fetchExtern, fetchArgs, "UnityEngineComponentArray"));
+        var allComponents = LoadField(allComponentsField, "UnityEngineComponentArray");
 
         // Compute target type ID at compile time
         var targetTypeName = target.TypeArguments[0].ToDisplayString();
         long targetTypeId = UasmEmitter.ComputeTypeId(targetTypeName);
-        var targetIdConst = _ctx.Vars.DeclareConst("SystemInt64", targetTypeId.ToString());
+        var targetIdConst = Const(targetTypeId, "SystemInt64");
 
         // Inheritance: if derived USB types exist, use __refl_typeids + Array.IndexOf
         bool useTypeIds = HasInheritedUsbTypes(target.TypeArguments[0]);
         var reflKeyConst = useTypeIds
-            ? _ctx.Vars.DeclareConst("SystemString", "__refl_typeids")
-            : _ctx.Vars.DeclareConst("SystemString", "__refl_typeid");
+            ? Const("__refl_typeids", "SystemString")
+            : Const("__refl_typeid", "SystemString");
 
-        return isSingular ? EmitShimSingular(allComponents, targetIdConst, reflKeyConst, useTypeIds) : EmitShimPlural(allComponents, targetIdConst, reflKeyConst, useTypeIds);
+        return isSingular
+            ? EmitShimSingular(allComponents, targetIdConst, reflKeyConst, useTypeIds)
+            : EmitShimPlural(allComponents, targetIdConst, reflKeyConst, useTypeIds);
     }
 
     /// <summary>
@@ -195,23 +180,22 @@ public partial class InvocationHandler
     /// GetComponent __T externs and shim GetComponents externs use UnityEngineComponent
     /// as containing type, which requires the instance to be Component-typed in the heap.
     /// </summary>
-    string EnsureComponentInstance(IOperation instanceOp, string instanceId)
+    HExpr EnsureComponentInstance(IOperation instanceOp, HExpr instanceVal)
     {
-        if (instanceId == null || instanceOp == null)
-            return instanceId;
+        if (instanceVal == null || instanceOp == null)
+            return instanceVal;
         var instanceUdon = GetUdonType(instanceOp.Type);
         if (instanceUdon != "UnityEngineGameObject")
-            return instanceId;
-        var transformId = _ctx.Vars.DeclareTemp("UnityEngineTransform");
-        _ctx.Module.AddPush(instanceId);
-        _ctx.Module.AddPush(transformId);
-        AddExternChecked("UnityEngineGameObject.__get_transform__UnityEngineTransform");
-        return transformId;
+            return instanceVal;
+        return ExternCall(
+            "UnityEngineGameObject.__get_transform__UnityEngineTransform",
+            new List<HExpr> { instanceVal },
+            "UnityEngineTransform");
     }
 
     bool HasInheritedUsbTypes(ITypeSymbol targetType)
     {
-        foreach (var kvp in _ctx.Planner.AllLayouts)
+        foreach (var kvp in _planner.AllLayouts)
         {
             var typeSymbol = kvp.Key;
             if (SymbolEqualityComparer.Default.Equals(typeSymbol, targetType))
@@ -243,351 +227,312 @@ public partial class InvocationHandler
         return $"UnityEngineComponent.__{baseName}__SystemType__UnityEngineComponentArray";
     }
 
-    string EmitShimSingular(string allComponents, string targetIdConst, string reflKeyConst, bool useTypeIds)
+    HExpr EmitShimSingular(HExpr allComponents, HExpr targetIdConst, HExpr reflKeyConst, bool useTypeIds)
     {
-        // Get array length
-        var lenId = _ctx.Vars.DeclareTemp("SystemInt32");
-        _ctx.Module.AddPush(allComponents);
-        _ctx.Module.AddPush(lenId);
-        AddExternChecked("UnityEngineComponentArray.__get_Length__SystemInt32");
+        // Get array length (store to field so it's not re-evaluated each iteration)
+        var lenField = _ctx.DeclareTemp("SystemInt32");
+        EmitStoreField(lenField, ExternCall(
+            "UnityEngineComponentArray.__get_Length__SystemInt32",
+            new List<HExpr> { allComponents }, "SystemInt32"));
 
-        // Loop index
-        var idxId = _ctx.Vars.DeclareTemp("SystemInt32");
-        var zeroConst = _ctx.Vars.DeclareConst("SystemInt32", "0");
-        _ctx.Module.AddCopy(zeroConst, idxId);
+        // Loop index (mutable across control flow)
+        var idxField = _ctx.DeclareTemp("SystemInt32");
+        EmitStoreField(idxField, Const(0, "SystemInt32"));
 
-        // Result (null initially)
-        var resultId = _ctx.Vars.DeclareTemp("VRCUdonCommonInterfacesIUdonEventReceiver");
+        // Result field (null initially — returns null if no match found)
+        var resultField = _ctx.DeclareTemp("VRCUdonCommonInterfacesIUdonEventReceiver");
 
-        var loopLabel = _ctx.Module.DefineLabel("__gc_shim_loop");
-        var nextLabel = _ctx.Module.DefineLabel("__gc_shim_next");
-        var endLabel = _ctx.Module.DefineLabel("__gc_shim_end");
+        // while (idx < len)
+        _builder.EmitWhile(
+            ExternCall(
+                "SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean",
+                new List<HExpr> { LoadField(idxField, "SystemInt32"), LoadField(lenField, "SystemInt32") },
+                "SystemBoolean"),
+            b =>
+            {
+                // element = allComponents[idx]
+                var curIdx = LoadField(idxField, "SystemInt32");
+                var elementVal = ExternCall(
+                    "UnityEngineComponentArray.__Get__SystemInt32__UnityEngineComponent",
+                    new List<HExpr> { allComponents, curIdx },
+                    "UnityEngineComponent");
 
-        _ctx.Module.MarkLabel(loopLabel);
+                // idValue = behaviour.GetProgramVariable("__refl_typeid" or "__refl_typeids")
+                var idValueVal = ExternCall(
+                    "VRCUdonCommonInterfacesIUdonEventReceiver.__GetProgramVariable__SystemString__SystemObject",
+                    new List<HExpr> { elementVal, reflKeyConst },
+                    "SystemObject");
 
-        // if (idx >= len) → end
-        var condId = _ctx.Vars.DeclareTemp("SystemBoolean");
-        _ctx.Module.AddPush(idxId);
-        _ctx.Module.AddPush(lenId);
-        _ctx.Module.AddPush(condId);
-        AddExternChecked("SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean");
-        _ctx.Module.AddPush(condId);
-        _ctx.Module.AddJumpIfFalse(endLabel);
+                // Null check: if (idValue != null)
+                var nullConst = Const(null, "SystemObject");
+                var notNullVal = ExternCall(
+                    "SystemObject.__op_Inequality__SystemObject_SystemObject__SystemBoolean",
+                    new List<HExpr> { idValueVal, nullConst },
+                    "SystemBoolean");
 
-        // element = allComponents[idx]
-        var elementId = _ctx.Vars.DeclareTemp("UnityEngineComponent");
-        _ctx.Module.AddPush(allComponents);
-        _ctx.Module.AddPush(idxId);
-        _ctx.Module.AddPush(elementId);
-        AddExternChecked("UnityEngineComponentArray.__Get__SystemInt32__UnityEngineComponent");
+                _builder.EmitIf(notNullVal, thenB =>
+                {
+                    // Type check
+                    var matchVal = EmitShimTypeMatchExpr(idValueVal, targetIdConst, useTypeIds);
 
-        // Cast Component → IUdonEventReceiver (COPY to differently-typed temp)
-        var behaviourId = _ctx.Vars.DeclareTemp("VRCUdonCommonInterfacesIUdonEventReceiver");
-        _ctx.Module.AddCopy(elementId, behaviourId);
+                    _builder.EmitIf(matchVal, matchB =>
+                    {
+                        // Match! result = element, break out of loop
+                        EmitStoreField(resultField, elementVal);
+                        _builder.EmitBreak();
+                    });
+                });
 
-        // idValue = behaviour.GetProgramVariable("__refl_typeid" or "__refl_typeids")
-        var idValueId = _ctx.Vars.DeclareTemp("SystemObject");
-        _ctx.Module.AddPush(behaviourId);
-        _ctx.Module.AddPush(reflKeyConst);
-        _ctx.Module.AddPush(idValueId);
-        AddExternChecked("VRCUdonCommonInterfacesIUdonEventReceiver.__GetProgramVariable__SystemString__SystemObject");
+                // idx++
+                var oneConst = Const(1, "SystemInt32");
+                var curIdx2 = LoadField(idxField, "SystemInt32");
+                var nextIdxVal = ExternCall(
+                    "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32",
+                    new List<HExpr> { curIdx2, oneConst },
+                    "SystemInt32");
+                EmitStoreField(idxField, nextIdxVal);
+            });
 
-        // Null check: if (idValue == null) → next
-        var nullConst = _ctx.Vars.DeclareConst("SystemObject", "null");
-        var notNullId = _ctx.Vars.DeclareTemp("SystemBoolean");
-        _ctx.Module.AddPush(idValueId);
-        _ctx.Module.AddPush(nullConst);
-        _ctx.Module.AddPush(notNullId);
-        AddExternChecked("SystemObject.__op_Inequality__SystemObject_SystemObject__SystemBoolean");
-        _ctx.Module.AddPush(notNullId);
-        _ctx.Module.AddJumpIfFalse(nextLabel);
-
-        if (useTypeIds)
-        {
-            EmitTypeIdsArrayCheck(idValueId, targetIdConst, nextLabel);
-        }
-        else
-        {
-            // typeId = Convert.ToInt64(idValue)
-            var typeIdId = _ctx.Vars.DeclareTemp("SystemInt64");
-            _ctx.Module.AddPush(idValueId);
-            _ctx.Module.AddPush(typeIdId);
-            AddExternChecked("SystemConvert.__ToInt64__SystemObject__SystemInt64");
-
-            // if (typeId != targetId) → next
-            var matchId = _ctx.Vars.DeclareTemp("SystemBoolean");
-            _ctx.Module.AddPush(typeIdId);
-            _ctx.Module.AddPush(targetIdConst);
-            _ctx.Module.AddPush(matchId);
-            AddExternChecked("SystemInt64.__op_Equality__SystemInt64_SystemInt64__SystemBoolean");
-            _ctx.Module.AddPush(matchId);
-            _ctx.Module.AddJumpIfFalse(nextLabel);
-        }
-
-        // Match! result = behaviour
-        _ctx.Module.AddCopy(behaviourId, resultId);
-        _ctx.Module.AddJump(endLabel);
-
-        // next: idx++
-        _ctx.Module.MarkLabel(nextLabel);
-        var oneConst = _ctx.Vars.DeclareConst("SystemInt32", "1");
-        var nextIdxId = _ctx.Vars.DeclareTemp("SystemInt32");
-        _ctx.Module.AddPush(idxId);
-        _ctx.Module.AddPush(oneConst);
-        _ctx.Module.AddPush(nextIdxId);
-        AddExternChecked("SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32");
-        _ctx.Module.AddCopy(nextIdxId, idxId);
-        _ctx.Module.AddJump(loopLabel);
-
-        _ctx.Module.MarkLabel(endLabel);
-        return resultId;
+        return LoadField(resultField, "VRCUdonCommonInterfacesIUdonEventReceiver");
     }
 
-    string EmitShimPlural(string allComponents, string targetIdConst, string reflKeyConst, bool useTypeIds)
+    HExpr EmitShimPlural(HExpr allComponents, HExpr targetIdConst, HExpr reflKeyConst, bool useTypeIds)
     {
-        // Get array length
-        var lenId = _ctx.Vars.DeclareTemp("SystemInt32");
-        _ctx.Module.AddPush(allComponents);
-        _ctx.Module.AddPush(lenId);
-        AddExternChecked("UnityEngineComponentArray.__get_Length__SystemInt32");
+        // Get array length (store to field so it's not re-evaluated each iteration)
+        var lenField = _ctx.DeclareTemp("SystemInt32");
+        EmitStoreField(lenField, ExternCall(
+            "UnityEngineComponentArray.__get_Length__SystemInt32",
+            new List<HExpr> { allComponents }, "SystemInt32"));
 
-        var zeroConst = _ctx.Vars.DeclareConst("SystemInt32", "0");
-        var oneConst = _ctx.Vars.DeclareConst("SystemInt32", "1");
+        var zeroConst = Const(0, "SystemInt32");
+        var oneConst = Const(1, "SystemInt32");
 
         // === Pass 1: Count matches ===
-        var countId = _ctx.Vars.DeclareTemp("SystemInt32");
-        _ctx.Module.AddCopy(zeroConst, countId);
-        var idx1Id = _ctx.Vars.DeclareTemp("SystemInt32");
-        _ctx.Module.AddCopy(zeroConst, idx1Id);
+        var countField = _ctx.DeclareTemp("SystemInt32");
+        EmitStoreField(countField, zeroConst);
+        var idx1Field = _ctx.DeclareTemp("SystemInt32");
+        EmitStoreField(idx1Field, zeroConst);
 
-        var count_loop = _ctx.Module.DefineLabel("__gc_count_loop");
-        var count_next = _ctx.Module.DefineLabel("__gc_count_next");
-        var count_end = _ctx.Module.DefineLabel("__gc_count_end");
-        _ctx.Module.MarkLabel(count_loop);
+        // while (idx1 < len)
+        _builder.EmitWhile(
+            ExternCall(
+                "SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean",
+                new List<HExpr> { LoadField(idx1Field, "SystemInt32"), LoadField(lenField, "SystemInt32") },
+                "SystemBoolean"),
+            b =>
+            {
+                EmitShimTypeCheckBody(allComponents, idx1Field, reflKeyConst, targetIdConst, useTypeIds,
+                    matchAction: () =>
+                    {
+                        // count++
+                        var curCount = LoadField(countField, "SystemInt32");
+                        var newCountVal = ExternCall(
+                            "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32",
+                            new List<HExpr> { curCount, oneConst },
+                            "SystemInt32");
+                        EmitStoreField(countField, newCountVal);
+                    });
 
-        // if (idx >= len) → count_end
-        var cond1 = _ctx.Vars.DeclareTemp("SystemBoolean");
-        _ctx.Module.AddPush(idx1Id);
-        _ctx.Module.AddPush(lenId);
-        _ctx.Module.AddPush(cond1);
-        AddExternChecked("SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean");
-        _ctx.Module.AddPush(cond1);
-        _ctx.Module.AddJumpIfFalse(count_end);
-
-        EmitShimTypeCheck(allComponents, idx1Id, reflKeyConst, targetIdConst, count_next, useTypeIds);
-
-        // countId++
-        var newCount = _ctx.Vars.DeclareTemp("SystemInt32");
-        _ctx.Module.AddPush(countId);
-        _ctx.Module.AddPush(oneConst);
-        _ctx.Module.AddPush(newCount);
-        AddExternChecked("SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32");
-        _ctx.Module.AddCopy(newCount, countId);
-
-        // count_next: idx1++
-        _ctx.Module.MarkLabel(count_next);
-        var nextIdx1 = _ctx.Vars.DeclareTemp("SystemInt32");
-        _ctx.Module.AddPush(idx1Id);
-        _ctx.Module.AddPush(oneConst);
-        _ctx.Module.AddPush(nextIdx1);
-        AddExternChecked("SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32");
-        _ctx.Module.AddCopy(nextIdx1, idx1Id);
-        _ctx.Module.AddJump(count_loop);
-        _ctx.Module.MarkLabel(count_end);
+                // idx1++
+                var curIdx1 = LoadField(idx1Field, "SystemInt32");
+                var nextIdx1Val = ExternCall(
+                    "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32",
+                    new List<HExpr> { curIdx1, oneConst },
+                    "SystemInt32");
+                EmitStoreField(idx1Field, nextIdx1Val);
+            });
 
         // === Allocate result array ===
-        var resultId = _ctx.Vars.DeclareTemp("UnityEngineComponentArray");
-        _ctx.Module.AddPush(countId);
-        _ctx.Module.AddPush(resultId);
-        AddExternChecked("UnityEngineComponentArray.__ctor__SystemInt32__UnityEngineComponentArray");
+        var countVal = LoadField(countField, "SystemInt32");
+        var resultArr = ExternCall(
+            "UnityEngineComponentArray.__ctor__SystemInt32__UnityEngineComponentArray",
+            new List<HExpr> { countVal },
+            "UnityEngineComponentArray");
 
         // === Pass 2: Fill result array ===
-        var idx2Id = _ctx.Vars.DeclareTemp("SystemInt32");
-        _ctx.Module.AddCopy(zeroConst, idx2Id);
-        var writeIdx = _ctx.Vars.DeclareTemp("SystemInt32");
-        _ctx.Module.AddCopy(zeroConst, writeIdx);
+        var idx2Field = _ctx.DeclareTemp("SystemInt32");
+        EmitStoreField(idx2Field, zeroConst);
+        var writeIdxField = _ctx.DeclareTemp("SystemInt32");
+        EmitStoreField(writeIdxField, zeroConst);
 
-        var fill_loop = _ctx.Module.DefineLabel("__gc_fill_loop");
-        var fill_next = _ctx.Module.DefineLabel("__gc_fill_next");
-        var fill_end = _ctx.Module.DefineLabel("__gc_fill_end");
-        _ctx.Module.MarkLabel(fill_loop);
+        // while (idx2 < len)
+        _builder.EmitWhile(
+            ExternCall(
+                "SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean",
+                new List<HExpr> { LoadField(idx2Field, "SystemInt32"), LoadField(lenField, "SystemInt32") },
+                "SystemBoolean"),
+            b =>
+            {
+                // element = allComponents[idx2]
+                var curIdx2Loop = LoadField(idx2Field, "SystemInt32");
+                var elementVal = ExternCall(
+                    "UnityEngineComponentArray.__Get__SystemInt32__UnityEngineComponent",
+                    new List<HExpr> { allComponents, curIdx2Loop },
+                    "UnityEngineComponent");
 
-        // if (idx >= len) → fill_end
-        var cond2 = _ctx.Vars.DeclareTemp("SystemBoolean");
-        _ctx.Module.AddPush(idx2Id);
-        _ctx.Module.AddPush(lenId);
-        _ctx.Module.AddPush(cond2);
-        AddExternChecked("SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean");
-        _ctx.Module.AddPush(cond2);
-        _ctx.Module.AddJumpIfFalse(fill_end);
+                // Type check
+                var idValueVal = ExternCall(
+                    "VRCUdonCommonInterfacesIUdonEventReceiver.__GetProgramVariable__SystemString__SystemObject",
+                    new List<HExpr> { elementVal, reflKeyConst },
+                    "SystemObject");
 
-        var matchBeh = EmitShimTypeCheck(allComponents, idx2Id, reflKeyConst, targetIdConst, fill_next, useTypeIds);
+                var nullConst = Const(null, "SystemObject");
+                var notNullVal = ExternCall(
+                    "SystemObject.__op_Inequality__SystemObject_SystemObject__SystemBoolean",
+                    new List<HExpr> { idValueVal, nullConst },
+                    "SystemBoolean");
 
-        // result[writeIdx] = element
-        _ctx.Module.AddPush(resultId);
-        _ctx.Module.AddPush(writeIdx);
-        _ctx.Module.AddPush(matchBeh);
-        AddExternChecked("UnityEngineComponentArray.__Set__SystemInt32_UnityEngineComponent__SystemVoid");
+                _builder.EmitIf(notNullVal, thenB =>
+                {
+                    var matchVal = EmitShimTypeMatchExpr(idValueVal, targetIdConst, useTypeIds);
 
-        // writeIdx++
-        var newWrite = _ctx.Vars.DeclareTemp("SystemInt32");
-        _ctx.Module.AddPush(writeIdx);
-        _ctx.Module.AddPush(oneConst);
-        _ctx.Module.AddPush(newWrite);
-        AddExternChecked("SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32");
-        _ctx.Module.AddCopy(newWrite, writeIdx);
+                    _builder.EmitIf(matchVal, matchB =>
+                    {
+                        // result[writeIdx] = element
+                        var curWriteIdx = LoadField(writeIdxField, "SystemInt32");
+                        EmitExternVoid("UnityEngineComponentArray.__Set__SystemInt32_UnityEngineComponent__SystemVoid",
+                            new List<HExpr> { resultArr, curWriteIdx, elementVal });
 
-        // fill_next: idx2++
-        _ctx.Module.MarkLabel(fill_next);
-        var nextIdx2 = _ctx.Vars.DeclareTemp("SystemInt32");
-        _ctx.Module.AddPush(idx2Id);
-        _ctx.Module.AddPush(oneConst);
-        _ctx.Module.AddPush(nextIdx2);
-        AddExternChecked("SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32");
-        _ctx.Module.AddCopy(nextIdx2, idx2Id);
-        _ctx.Module.AddJump(fill_loop);
-        _ctx.Module.MarkLabel(fill_end);
+                        // writeIdx++
+                        var curWriteIdx2 = LoadField(writeIdxField, "SystemInt32");
+                        var newWriteVal = ExternCall(
+                            "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32",
+                            new List<HExpr> { curWriteIdx2, oneConst },
+                            "SystemInt32");
+                        EmitStoreField(writeIdxField, newWriteVal);
+                    });
+                });
 
-        return resultId;
+                // idx2++
+                var curIdx2 = LoadField(idx2Field, "SystemInt32");
+                var nextIdx2Val = ExternCall(
+                    "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32",
+                    new List<HExpr> { curIdx2, oneConst },
+                    "SystemInt32");
+                EmitStoreField(idx2Field, nextIdx2Val);
+            });
+
+        return resultArr;
     }
 
-    // Shared type-check logic for shim loops. Returns the behaviourId for matched element.
-    string EmitShimTypeCheck(string allComponents, string idxId, string reflKeyConst, string targetIdConst, int nextLabel, bool useTypeIds)
+    /// <summary>
+    /// Returns an HExpr that evaluates to true if the idValue matches the targetId.
+    /// Handles both single-id and array-of-ids cases.
+    /// </summary>
+    HExpr EmitShimTypeMatchExpr(HExpr idValueVal, HExpr targetIdConst, bool useTypeIds)
     {
-        // element = allComponents[idx]
-        var elementId = _ctx.Vars.DeclareTemp("UnityEngineComponent");
-        _ctx.Module.AddPush(allComponents);
-        _ctx.Module.AddPush(idxId);
-        _ctx.Module.AddPush(elementId);
-        AddExternChecked("UnityEngineComponentArray.__Get__SystemInt32__UnityEngineComponent");
-
-        // Cast Component → IUdonEventReceiver
-        var behaviourId = _ctx.Vars.DeclareTemp("VRCUdonCommonInterfacesIUdonEventReceiver");
-        _ctx.Module.AddCopy(elementId, behaviourId);
-
-        // idValue = behaviour.GetProgramVariable("__refl_typeid" or "__refl_typeids")
-        var idValueId = _ctx.Vars.DeclareTemp("SystemObject");
-        _ctx.Module.AddPush(behaviourId);
-        _ctx.Module.AddPush(reflKeyConst);
-        _ctx.Module.AddPush(idValueId);
-        AddExternChecked("VRCUdonCommonInterfacesIUdonEventReceiver.__GetProgramVariable__SystemString__SystemObject");
-
-        // Null check
-        var nullConst = _ctx.Vars.DeclareTemp("SystemObject");
-        var notNullId = _ctx.Vars.DeclareTemp("SystemBoolean");
-        _ctx.Module.AddPush(idValueId);
-        _ctx.Module.AddPush(nullConst);
-        _ctx.Module.AddPush(notNullId);
-        AddExternChecked("SystemObject.__op_Inequality__SystemObject_SystemObject__SystemBoolean");
-        _ctx.Module.AddPush(notNullId);
-        _ctx.Module.AddJumpIfFalse(nextLabel);
-
         if (useTypeIds)
         {
-            EmitTypeIdsArrayCheck(idValueId, targetIdConst, nextLabel);
+            // Array.IndexOf(__refl_typeids, targetId) != -1
+            var indexResult = ExternCall(
+                "SystemArray.__IndexOf__SystemArray_SystemObject__SystemInt32",
+                new List<HExpr> { idValueVal, targetIdConst },
+                "SystemInt32");
+
+            var negOneConst = Const(-1, "SystemInt32");
+            return ExternCall(
+                "SystemInt32.__op_Inequality__SystemInt32_SystemInt32__SystemBoolean",
+                new List<HExpr> { indexResult, negOneConst },
+                "SystemBoolean");
         }
         else
         {
             // typeId = Convert.ToInt64(idValue)
-            var typeIdId = _ctx.Vars.DeclareTemp("SystemInt64");
-            _ctx.Module.AddPush(idValueId);
-            _ctx.Module.AddPush(typeIdId);
-            AddExternChecked("SystemConvert.__ToInt64__SystemObject__SystemInt64");
+            var typeIdVal = ExternCall(
+                "SystemConvert.__ToInt64__SystemObject__SystemInt64",
+                new List<HExpr> { idValueVal },
+                "SystemInt64");
 
-            // if (typeId != targetId) → next
-            var matchId = _ctx.Vars.DeclareTemp("SystemBoolean");
-            _ctx.Module.AddPush(typeIdId);
-            _ctx.Module.AddPush(targetIdConst);
-            _ctx.Module.AddPush(matchId);
-            AddExternChecked("SystemInt64.__op_Equality__SystemInt64_SystemInt64__SystemBoolean");
-            _ctx.Module.AddPush(matchId);
-            _ctx.Module.AddJumpIfFalse(nextLabel);
+            // typeId == targetId
+            return ExternCall(
+                "SystemInt64.__op_Equality__SystemInt64_SystemInt64__SystemBoolean",
+                new List<HExpr> { typeIdVal, targetIdConst },
+                "SystemBoolean");
         }
-
-        return behaviourId;
     }
 
-    // Array.IndexOf(__refl_typeids, targetId) != -1
-    void EmitTypeIdsArrayCheck(string idValueId, string targetIdConst, int nextLabel)
+    /// <summary>
+    /// Emit the type-check body for shim loops (pass 1 count).
+    /// Calls matchAction if the element's type ID matches.
+    /// </summary>
+    void EmitShimTypeCheckBody(HExpr allComponents, string idxField, HExpr reflKeyConst,
+        HExpr targetIdConst, bool useTypeIds, System.Action matchAction)
     {
-        // Box Int64 → Object for Array.IndexOf(Array, Object)
-        var targetIdObj = _ctx.Vars.DeclareTemp("SystemObject");
-        _ctx.Module.AddCopy(targetIdConst, targetIdObj);
+        // element = allComponents[idx]
+        var idxVal = LoadField(idxField, "SystemInt32");
+        var elementVal = ExternCall(
+            "UnityEngineComponentArray.__Get__SystemInt32__UnityEngineComponent",
+            new List<HExpr> { allComponents, idxVal },
+            "UnityEngineComponent");
 
-        var indexResult = _ctx.Vars.DeclareTemp("SystemInt32");
-        _ctx.Module.AddPush(idValueId);    // __refl_typeids as Object (actually Int64[])
-        _ctx.Module.AddPush(targetIdObj);
-        _ctx.Module.AddPush(indexResult);
-        AddExternChecked("SystemArray.__IndexOf__SystemArray_SystemObject__SystemInt32");
+        // idValue = behaviour.GetProgramVariable(reflKey)
+        var idValueVal = ExternCall(
+            "VRCUdonCommonInterfacesIUdonEventReceiver.__GetProgramVariable__SystemString__SystemObject",
+            new List<HExpr> { elementVal, reflKeyConst },
+            "SystemObject");
 
-        var negOneConst = _ctx.Vars.DeclareConst("SystemInt32", "-1");
-        var foundId = _ctx.Vars.DeclareTemp("SystemBoolean");
-        _ctx.Module.AddPush(indexResult);
-        _ctx.Module.AddPush(negOneConst);
-        _ctx.Module.AddPush(foundId);
-        AddExternChecked("SystemInt32.__op_Inequality__SystemInt32_SystemInt32__SystemBoolean");
-        _ctx.Module.AddPush(foundId);
-        _ctx.Module.AddJumpIfFalse(nextLabel);
+        // Null check
+        var nullConst = Const(null, "SystemObject");
+        var notNullVal = ExternCall(
+            "SystemObject.__op_Inequality__SystemObject_SystemObject__SystemBoolean",
+            new List<HExpr> { idValueVal, nullConst },
+            "SystemBoolean");
+
+        _builder.EmitIf(notNullVal, thenB =>
+        {
+            var matchVal = EmitShimTypeMatchExpr(idValueVal, targetIdConst, useTypeIds);
+
+            _builder.EmitIf(matchVal, matchB =>
+            {
+                matchAction();
+            });
+        });
     }
 
     // ── Interface Call ──
 
-    string EmitInterfaceCall(IInvocationOperation op, IMethodSymbol target)
+    HExpr EmitInterfaceCall(IInvocationOperation op, IMethodSymbol target)
     {
-        if (target.Parameters.Any(p => p.Type.IsTupleType))
-            throw new System.NotSupportedException(
-                $"Tuple parameters on interface method '{target.ContainingType.Name}.{target.Name}' are not supported. "
-                + "Tuple parameters are only supported for same-class method calls.");
-        if (target.ReturnType.IsTupleType)
-            throw new System.NotSupportedException(
-                $"Tuple return from interface method '{target.ContainingType.Name}.{target.Name}' is not supported. "
-                + "Tuple returns are only supported for same-class method calls.");
-
         // Use LayoutPlanner to get the interface's canonical naming
         var ifaceType = target.ContainingType as INamedTypeSymbol;
         MethodLayout ifaceMl = null;
         if (ifaceType != null)
         {
-            var ifaceLayout = _ctx.Planner.GetLayout(ifaceType);
+            var ifaceLayout = _planner.GetLayout(ifaceType);
             ifaceLayout.Methods.TryGetValue(target, out ifaceMl);
         }
         if (ifaceMl == null)
             throw new System.InvalidOperationException(
                 $"Cannot resolve interface method layout for '{target.ContainingType?.Name ?? "(unknown)"}.{target.Name}'.");
 
-        var instanceId = VisitExpression(op.Instance);
+        var instanceVal = VisitExpression(op.Instance);
 
         // SetProgramVariable for each argument
         for (int i = 0; i < op.Arguments.Length; i++)
         {
-            var argId = VisitExpression(op.Arguments[i].Value);
+            var argVal = VisitExpression(op.Arguments[i].Value);
             var paramName = ifaceMl.ParamIds[i];
-            var paramNameConst = _ctx.Vars.DeclareConst("SystemString", paramName);
-            _ctx.Module.AddPush(instanceId);
-            _ctx.Module.AddPush(paramNameConst);
-            _ctx.Module.AddPush(argId);
-            AddExternChecked("VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid");
+            var paramNameConst = Const(paramName, "SystemString");
+            EmitExternVoid("VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid",
+                new List<HExpr> { instanceVal, paramNameConst, argVal });
         }
 
         // SendCustomEvent with interface export name
         var exportName = ifaceMl.ExportName;
-        var eventNameConst = _ctx.Vars.DeclareConst("SystemString", exportName);
-        _ctx.Module.AddPush(instanceId);
-        _ctx.Module.AddPush(eventNameConst);
-        AddExternChecked("VRCUdonCommonInterfacesIUdonEventReceiver.__SendCustomEvent__SystemString__SystemVoid");
+        var eventNameConst = Const(exportName, "SystemString");
+        EmitExternVoid("VRCUdonCommonInterfacesIUdonEventReceiver.__SendCustomEvent__SystemString__SystemVoid",
+            new List<HExpr> { instanceVal, eventNameConst });
 
         // GetProgramVariable for return value
         if (!target.ReturnsVoid)
         {
             var retName = ifaceMl.ReturnId;
-            var retNameConst = _ctx.Vars.DeclareConst("SystemString", retName);
+            var retNameConst = Const(retName, "SystemString");
             var returnType = GetUdonType(target.ReturnType);
-            var resultId = _ctx.Vars.DeclareTemp(returnType);
-            _ctx.Module.AddPush(instanceId);
-            _ctx.Module.AddPush(retNameConst);
-            _ctx.Module.AddPush(resultId);
-            AddExternChecked("VRCUdonCommonInterfacesIUdonEventReceiver.__GetProgramVariable__SystemString__SystemObject");
-            return resultId;
+            return ExternCall(
+                "VRCUdonCommonInterfacesIUdonEventReceiver.__GetProgramVariable__SystemString__SystemObject",
+                new List<HExpr> { instanceVal, retNameConst },
+                returnType);
         }
 
         return null;
@@ -595,51 +540,34 @@ public partial class InvocationHandler
 
     // ── Cross-Class Call ──
 
-    string EmitCrossClassCall(IInvocationOperation op, IMethodSymbol target)
+    HExpr EmitCrossClassCall(IInvocationOperation op, IMethodSymbol target)
     {
-        if (target.Parameters.Any(p => p.Type.IsTupleType))
-            throw new System.NotSupportedException(
-                $"Tuple parameters on cross-behaviour method '{target.ContainingType.Name}.{target.Name}' are not supported. "
-                + "Tuple parameters are only supported for same-class method calls.");
-        if (target.ReturnType.IsTupleType)
-            throw new System.NotSupportedException(
-                $"Tuple return from cross-behaviour method '{target.ContainingType.Name}.{target.Name}' is not supported. "
-                + "Tuple returns are only supported for same-class method calls.");
-
         var (exportName, paramIds, retId) = GetCalleeLayout(target);
-        var instanceId = VisitExpression(op.Instance);
+        var instanceVal = VisitExpression(op.Instance);
 
         // SetProgramVariable for each argument
         for (int i = 0; i < op.Arguments.Length; i++)
         {
-            var argId = VisitExpression(op.Arguments[i].Value);
-            var paramNameConst = _ctx.Vars.DeclareConst("SystemString", paramIds[i]);
-
-            _ctx.Module.AddPush(instanceId);
-            _ctx.Module.AddPush(paramNameConst);
-            _ctx.Module.AddPush(argId);
-            AddExternChecked("VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid");
+            var argVal = VisitExpression(op.Arguments[i].Value);
+            var paramNameConst = Const(paramIds[i], "SystemString");
+            EmitExternVoid("VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid",
+                new List<HExpr> { instanceVal, paramNameConst, argVal });
         }
 
         // SendCustomEvent
-        var eventNameConst = _ctx.Vars.DeclareConst("SystemString", exportName);
-        _ctx.Module.AddPush(instanceId);
-        _ctx.Module.AddPush(eventNameConst);
-        AddExternChecked("VRCUdonCommonInterfacesIUdonEventReceiver.__SendCustomEvent__SystemString__SystemVoid");
+        var eventNameConst = Const(exportName, "SystemString");
+        EmitExternVoid("VRCUdonCommonInterfacesIUdonEventReceiver.__SendCustomEvent__SystemString__SystemVoid",
+            new List<HExpr> { instanceVal, eventNameConst });
 
         // GetProgramVariable for return value
         if (!target.ReturnsVoid && retId != null)
         {
-            var retNameConst = _ctx.Vars.DeclareConst("SystemString", retId);
+            var retNameConst = Const(retId, "SystemString");
             var returnType = GetUdonType(target.ReturnType);
-            var resultId = _ctx.Vars.DeclareTemp(returnType);
-
-            _ctx.Module.AddPush(instanceId);
-            _ctx.Module.AddPush(retNameConst);
-            _ctx.Module.AddPush(resultId);
-            AddExternChecked("VRCUdonCommonInterfacesIUdonEventReceiver.__GetProgramVariable__SystemString__SystemObject");
-
-            return resultId;
+            return ExternCall(
+                "VRCUdonCommonInterfacesIUdonEventReceiver.__GetProgramVariable__SystemString__SystemObject",
+                new List<HExpr> { instanceVal, retNameConst },
+                returnType);
         }
 
         return null;
@@ -647,100 +575,54 @@ public partial class InvocationHandler
 
     // ── User Method Call ──
 
-    List<(string current, string saved)> SaveMethodParameterState(IMethodSymbol method)
+    HExpr EmitUserMethodCall(IInvocationOperation op, IMethodSymbol target)
     {
-        var savedSlots = new List<(string current, string saved)>();
-        if (method == null)
-            return savedSlots;
+        var idx = _methodIndices[target];
+        var paramIds = _methodParamVarIds[target];
 
-        if (_ctx.MethodParamVarIds.TryGetValue(method, out var currentParamIds))
+        // Self-recursive call: save current parameter values before overwriting
+        bool isSelfRecursive = _currentMethod != null
+            && SymbolEqualityComparer.Default.Equals(target, _currentMethod);
+        HExpr[] savedParams = null;
+        if (isSelfRecursive && paramIds.Length > 0)
         {
-            for (int i = 0; i < currentParamIds.Length; i++)
+            savedParams = new HExpr[paramIds.Length];
+            for (int i = 0; i < paramIds.Length; i++)
             {
-                if (currentParamIds[i] == null) continue;
-                var paramType = _ctx.Vars.GetDeclaredType(currentParamIds[i]);
-                var savedId = _ctx.Vars.DeclareTemp(paramType);
-                _ctx.Module.AddCopy(currentParamIds[i], savedId);
-                savedSlots.Add((currentParamIds[i], savedId));
+                var paramType = _ctx.GetFieldType(paramIds[i]);
+                savedParams[i] = LoadField(paramIds[i], paramType);
             }
         }
 
-        for (int i = 0; i < method.Parameters.Length; i++)
-        {
-            if (!TryGetMethodTupleParamVarIds(method, i, out var tupleParamIds))
-                continue;
-
-            for (int ei = 0; ei < tupleParamIds.Length; ei++)
-            {
-                var paramType = _ctx.Vars.GetDeclaredType(tupleParamIds[ei]);
-                var savedId = _ctx.Vars.DeclareTemp(paramType);
-                _ctx.Module.AddCopy(tupleParamIds[ei], savedId);
-                savedSlots.Add((tupleParamIds[ei], savedId));
-            }
-        }
-
-        return savedSlots;
-    }
-
-    void RestoreMethodParameterState(List<(string current, string saved)> savedSlots)
-    {
-        foreach (var (current, saved) in savedSlots)
-            _ctx.Module.AddCopy(saved, current);
-    }
-
-    void CopyArgumentToMethodParameter(IMethodSymbol target, int ordinal, IOperation argOp, string scalarParamId)
-    {
-        if (TryGetMethodTupleParamVarIds(target, ordinal, out var tupleParamIds))
-        {
-            CopyTupleValueToSlots(argOp, tupleParamIds, $"argument for parameter '{target.Parameters[ordinal].Name}'");
-            return;
-        }
-
-        var argId = VisitExpression(argOp);
-        _ctx.Module.AddCopy(argId, scalarParamId);
-    }
-
-    string EmitUserMethodCall(IInvocationOperation op, IMethodSymbol target, int targetLabel)
-    {
-        // Save hint and clear it while evaluating sub-expressions
-        var savedHint = _ctx.TargetHint;
-        _ctx.TargetHint = null;
-
-        var idx = _ctx.MethodIndices[target];
-        var paramIds = _ctx.MethodParamVarIds[target];
-
-        // Save current method's parameter values before any user method call.
-        // This protects against mutual recursion (A→B→A) corrupting A's params,
-        // not just self-recursion. Overhead is 2N COPY per call (N = param count).
-        var savedCurrentParams = SaveMethodParameterState(_ctx.CurrentMethod);
-
-        // Copy arguments to param vars
+        // Build args list
+        var args = new List<HExpr>();
         for (int i = 0; i < op.Arguments.Length; i++)
         {
             var param = target.Parameters[i];
             var argOp = op.Arguments[i].Value;
 
             // Delegate parameter with lambda arg: hoist with convention vars
-            if (_ctx.DelegateParamConventions.TryGetValue((idx, param.Ordinal), out var convention)
+            if (_delegateParamConventions.TryGetValue((idx, param.Ordinal), out var convention)
                 && UnwrapLambdaFromArg(argOp, out var lambda))
             {
                 HoistLambdaForDelegateParam(lambda, convention);
-                var labelConst = _ctx.Vars.DeclareConst("SystemUInt32",
-                    _ctx.MethodLabels[lambda.Symbol].ToString());
-                _ctx.Module.AddCopy(labelConst, paramIds[i]);
+                // Use FuncRef to pass the function's entry address
+                args.Add(FuncRef(_methodFunctions[lambda.Symbol].Name));
             }
             else
             {
-                CopyArgumentToMethodParameter(target, i, argOp, paramIds[i]);
+                args.Add(VisitExpression(argOp));
             }
         }
 
-        // Restore hint so EmitCallByLabel can consume it for the return value
-        _ctx.TargetHint = savedHint;
-        var result = EmitCallByLabel(target, targetLabel);
+        var result = EmitCallToMethod(target, args);
 
-        // Restore current method's parameter values after return
-        RestoreMethodParameterState(savedCurrentParams);
+        // Self-recursive call: restore parameter values after return
+        if (isSelfRecursive && savedParams != null)
+        {
+            for (int i = 0; i < paramIds.Length; i++)
+                EmitStoreField(paramIds[i], savedParams[i]);
+        }
 
         // Copy-out for ref/out params
         for (int i = 0; i < op.Arguments.Length; i++)
@@ -749,26 +631,76 @@ public partial class InvocationHandler
             if (param.RefKind == RefKind.Out || param.RefKind == RefKind.Ref)
             {
                 var argTarget = op.Arguments[i].Value;
-                if (TryGetMethodTupleParamVarIds(target, i, out var tupleParamIds))
-                {
-                    if (!TryGetTupleTargetVarIds(argTarget, out var tupleTargetIds))
-                        throw new System.NotSupportedException(
-                            $"Unsupported ref/out tuple target for parameter '{param.Name}': {argTarget.GetType().Name}");
-
-                    if (tupleTargetIds.Length != tupleParamIds.Length)
-                        throw new System.InvalidOperationException(
-                            $"Tuple arity mismatch in ref/out copy-back for parameter '{param.Name}'.");
-
-                    for (int ei = 0; ei < tupleParamIds.Length; ei++)
-                        if (tupleParamIds[ei] != tupleTargetIds[ei])
-                            _ctx.Module.AddCopy(tupleParamIds[ei], tupleTargetIds[ei]);
-                }
-                else
-                    AssignToTarget(argTarget, paramIds[i]);
+                // Read back the param field value after call
+                var paramType = _ctx.GetFieldType(paramIds[i]);
+                var paramVal = LoadField(paramIds[i], paramType);
+                AssignToTarget(argTarget, paramVal);
             }
         }
 
         return result;
+    }
+
+    // ── Ref/Out copy-back helper ──
+
+    void AssignToTarget(IOperation target, HExpr value)
+    {
+        switch (target)
+        {
+            case IDeclarationExpressionOperation declExpr:
+                // var x in deconstruction — declares a new local
+                if (declExpr.Expression is ILocalReferenceOperation localRef)
+                {
+                    var udonType = GetUdonType(localRef.Type);
+                    var localId = _ctx.DeclareLocal(localRef.Local.Name, udonType);
+                    _localVarIds[localRef.Local] = localId;
+                    EmitStoreField(localId, value);
+                }
+                break;
+
+            case ILocalReferenceOperation existingLocal:
+                string existingId = _localVarIds.TryGetValue(existingLocal.Local, out var cap) ? cap : null;
+                if (existingId == null)
+                {
+                    // New local from tuple deconstruction (var (a, b) pattern)
+                    var udonType = GetUdonType(existingLocal.Type);
+                    existingId = _ctx.DeclareLocal(existingLocal.Local.Name, udonType);
+                    _localVarIds[existingLocal.Local] = existingId;
+                }
+                EmitStoreField(existingId, value);
+                break;
+
+            case IFieldReferenceOperation fieldRef when fieldRef.Instance is IInstanceReferenceOperation:
+                EmitStoreField(fieldRef.Field.Name, value);
+                break;
+
+            case IArrayElementReferenceOperation arrayElem:
+                var arrayVal = VisitExpression(arrayElem.ArrayReference);
+                var indexVal = VisitExpression(arrayElem.Indices[0]);
+                var arrSymbol = arrayElem.ArrayReference.Type as IArrayTypeSymbol;
+                var arrayType = GetArrayType(arrSymbol);
+                var elementType = GetArrayElemType(arrSymbol);
+                EmitExternVoid($"{arrayType}.__Set__SystemInt32_{elementType}__SystemVoid",
+                    new List<HExpr> { arrayVal, indexVal, value });
+                break;
+
+            case IFieldReferenceOperation fieldRef
+                when fieldRef.Instance != null
+                && !(fieldRef.Instance is IInstanceReferenceOperation)
+                && ExternResolver.IsUdonSharpBehaviour(fieldRef.Field.ContainingType):
+                var instanceVal = VisitExpression(fieldRef.Instance);
+                var nameConst = Const(fieldRef.Field.Name, "SystemString");
+                EmitExternVoid("VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid",
+                    new List<HExpr> { instanceVal, nameConst, value });
+                break;
+
+            case IDiscardOperation:
+                break; // _ = expr → discard
+
+            default:
+                throw new System.NotSupportedException(
+                    $"Unsupported deconstruction target element: {target.GetType().Name}");
+        }
     }
 
     // ── Extern Signature Helpers ──
@@ -780,9 +712,9 @@ public partial class InvocationHandler
         // Interface method on a type parameter: use the concrete type as containing type
         // e.g., IComparable<T>.CompareTo(T) with T=int → SystemInt32.__CompareTo__SystemInt32__SystemInt32
         if (containingTypeSym.TypeKind == TypeKind.Interface && instanceType != null
-            && _ctx.TypeParamMap != null
+            && _typeParamMap != null
             && instanceType is ITypeParameterSymbol tp
-            && _ctx.TypeParamMap.TryGetValue(tp, out var concreteType))
+            && _typeParamMap.TryGetValue(tp, out var concreteType))
             containingTypeSym = concreteType;
 
         var containingType = GetUdonType(containingTypeSym);
