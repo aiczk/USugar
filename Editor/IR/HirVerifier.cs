@@ -153,6 +153,7 @@ public static class HirVerifier
                 break;
 
             case HLoadField:
+            case HFieldAddr:
                 break; // field existence checked at a higher level
 
             case HExternCall call:

@@ -80,6 +80,9 @@ public abstract class HandlerBase
     /// <summary>Create a field load expression.</summary>
     protected HLoadField LoadField(string fieldName, string type) => _builder.LoadField(fieldName, type);
 
+    /// <summary>Create a field address reference (for extern out/ref).</summary>
+    protected HFieldAddr FieldAddr(string fieldName, string type) => _builder.FieldAddr(fieldName, type);
+
     /// <summary>Create an extern call expression.</summary>
     protected HExternCall ExternCall(string sig, List<HExpr> args, string retType, bool isPure = false)
         => _builder.ExternCall(ResolveExtern(sig), args, retType, isPure);
