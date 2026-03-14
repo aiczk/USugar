@@ -501,9 +501,8 @@ public class RemapTest : UdonSharpBehaviour {
 }
 ");
         Assert.Contains("VRCUdonCommonInterfacesIUdonEventReceiver.__RequestSerialization__SystemVoid", uasm);
-        // IR compiler uses VRCUdonUdonBehaviour for __this_ and a separate IUdonEventReceiver temp
+        // HIR/LIR pipeline uses __this_ directly (no intermediate temp for IUdonEventReceiver)
         Assert.Contains("__this_VRCUdonUdonBehaviour_0: %VRCUdonUdonBehaviour, this", uasm);
-        Assert.Contains("__intnl_VRCUdonCommonInterfacesIUdonEventReceiver_0", uasm);
     }
 
     // ── Task 20: switch statement ──
