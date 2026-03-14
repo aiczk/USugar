@@ -34,9 +34,8 @@ public static class IrPipeline
             DumpToFile(className, "2_lir.txt", lirModule.Dump());
 
         LirOptimizer.SimplifyCFG(lirModule);
-        // LIR CopyProp/DCE disabled: DCE incorrectly removes LLoadField
-        // instructions that produce scratch slots used by extern arguments.
-        // TODO: fix CollectUsedSlots to track transitive dependencies.
+        LirOptimizer.CopyPropagation(lirModule);
+        LirOptimizer.DeadCodeElimination(lirModule);
         LirOptimizer.SimplifyCFG(lirModule); // cleanup after DCE
 
         if (DumpEnabled)
