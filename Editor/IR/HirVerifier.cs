@@ -79,6 +79,7 @@ public static class HirVerifier
                 break;
 
             case HWhile whileStmt:
+                VerifyBlock(whileStmt.CondBlock, ctx);
                 VerifyExpr(whileStmt.Cond, ctx);
                 ctx.AssertType("SystemBoolean", whileStmt.Cond.Type, "HWhile condition");
                 ctx.LoopDepth++;
@@ -88,6 +89,7 @@ public static class HirVerifier
 
             case HFor forStmt:
                 VerifyBlock(forStmt.Init, ctx);
+                VerifyBlock(forStmt.CondBlock, ctx);
                 if (forStmt.Cond != null)
                 {
                     VerifyExpr(forStmt.Cond, ctx);
