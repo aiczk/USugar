@@ -19,6 +19,13 @@ public static class IrPipeline
             DumpToFile(className, "1_hir.txt", hirModule.Dump());
 
         HirVerifier.Verify(hirModule);
+
+        // HIR optimization
+        HirOptimizer.ConstantFold(hirModule);
+
+        if (DumpEnabled)
+            DumpToFile(className, "1b_hir_optimized.txt", hirModule.Dump());
+
         var lirModule = HirToLir.Lower(hirModule);
 
         if (DumpEnabled)
