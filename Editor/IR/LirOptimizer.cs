@@ -221,6 +221,219 @@ public static class LirOptimizer
     }
 
     // ========================================================================
+    // Dead Code Elimination
+    // ========================================================================
+
+    public static void DeadCodeElimination(LModule module)
+    {
+        foreach (var func in module.Functions)
+            DCEFunc(func);
+    }
+
+    static void DCEFunc(LFunction func)
+    {
+        if (func.Blocks.Count == 0) return;
+
+        bool changed = true;
+        while (changed)
+        {
+            changed = false;
+            var usedSlots = CollectUsedSlots(func);
+
+            foreach (var block in func.Blocks)
+            {
+                for (int i = block.Insts.Count - 1; i >= 0; i--)
+                {
+                    var inst = block.Insts[i];
+                    switch (inst)
+                    {
+                        case LMove m when !usedSlots.Contains(m.DestSlot):
+                            block.Insts.RemoveAt(i);
+                            changed = true;
+                            break;
+                        case LLoadField lf when !usedSlots.Contains(lf.DestSlot):
+                            block.Insts.RemoveAt(i);
+                            changed = true;
+                            break;
+                        case LCallExtern ce when ce.DestSlot.HasValue && !usedSlots.Contains(ce.DestSlot.Value):
+                            block.Insts[i] = new LCallExtern(null, ce.Sig, ce.Args, ce.RetType, ce.IsPure);
+                            changed = true;
+                            break;
+                        case LCallInternal ci when ci.DestSlot.HasValue && !usedSlots.Contains(ci.DestSlot.Value):
+                            block.Insts[i] = new LCallInternal(null, ci.FuncName, ci.Args, ci.RetType);
+                            changed = true;
+                            break;
+                    }
+                }
+            }
+        }
+    }
+
+    /// <summary>Collect all slot IDs that are read (used as operands) anywhere in the function.</summary>
+    static HashSet<int> CollectUsedSlots(LFunction func)
+    {
+        var used = new HashSet<int>();
+
+        void AddOperand(LOperand op)
+        {
+            if (op is LSlotRef sr) used.Add(sr.SlotId);
+        }
+
+        foreach (var block in func.Blocks)
+        {
+            foreach (var inst in block.Insts)
+            {
+                switch (inst)
+                {
+                    case LMove m:
+                        AddOperand(m.Src);
+                        break;
+                    case LStoreField sf:
+                        AddOperand(sf.Value);
+                        break;
+                    case LCallExtern ce:
+                        foreach (var arg in ce.Args) AddOperand(arg);
+                        break;
+                    case LCallInternal ci:
+                        foreach (var arg in ci.Args) AddOperand(arg);
+                        break;
+                    case LLoadField:
+                        break;
+                }
+            }
+
+            switch (block.Term)
+            {
+                case LBranch br:
+                    AddOperand(br.Cond);
+                    break;
+                case LReturn ret:
+                    if (ret.Value != null) AddOperand(ret.Value);
+                    break;
+            }
+        }
+
+        return used;
+    }
+
+    // ========================================================================
+    // Copy Propagation (constants only)
+    // ========================================================================
+
+    public static void CopyPropagation(LModule module)
+    {
+        foreach (var func in module.Functions)
+            CopyPropFunc(func);
+    }
+
+    static void CopyPropFunc(LFunction func)
+    {
+        if (func.Blocks.Count == 0) return;
+
+        // Count writes per slot
+        var writeCounts = new Dictionary<int, int>();
+        foreach (var block in func.Blocks)
+        {
+            foreach (var inst in block.Insts)
+            {
+                int? dest = inst switch
+                {
+                    LMove m => m.DestSlot,
+                    LLoadField lf => lf.DestSlot,
+                    LCallExtern ce => ce.DestSlot,
+                    LCallInternal ci => ci.DestSlot,
+                    _ => null,
+                };
+                if (dest.HasValue)
+                {
+                    writeCounts.TryGetValue(dest.Value, out var c);
+                    writeCounts[dest.Value] = c + 1;
+                }
+            }
+        }
+
+        // Find single-write LMove with LConst source
+        var constMap = new Dictionary<int, LConst>();
+        foreach (var block in func.Blocks)
+        {
+            foreach (var inst in block.Insts)
+            {
+                if (inst is LMove m && m.Src is LConst lc
+                    && writeCounts.TryGetValue(m.DestSlot, out var wc) && wc == 1)
+                {
+                    constMap[m.DestSlot] = lc;
+                }
+            }
+        }
+
+        if (constMap.Count == 0) return;
+
+        // Replace uses
+        LOperand Subst(LOperand op) =>
+            op is LSlotRef sr && constMap.TryGetValue(sr.SlotId, out var replacement)
+                ? replacement
+                : op;
+
+        foreach (var block in func.Blocks)
+        {
+            for (int i = 0; i < block.Insts.Count; i++)
+            {
+                switch (block.Insts[i])
+                {
+                    case LMove m:
+                        var newSrc = Subst(m.Src);
+                        if (newSrc != m.Src)
+                            block.Insts[i] = new LMove(m.DestSlot, newSrc, m.Type);
+                        break;
+                    case LStoreField sf:
+                        var newVal = Subst(sf.Value);
+                        if (newVal != sf.Value)
+                            block.Insts[i] = new LStoreField(sf.FieldName, newVal);
+                        break;
+                    case LCallExtern ce:
+                        var ceArgs = SubstArgs(ce.Args, Subst);
+                        if (ceArgs != null)
+                            block.Insts[i] = new LCallExtern(ce.DestSlot, ce.Sig, ceArgs, ce.RetType, ce.IsPure);
+                        break;
+                    case LCallInternal ci:
+                        var ciArgs = SubstArgs(ci.Args, Subst);
+                        if (ciArgs != null)
+                            block.Insts[i] = new LCallInternal(ci.DestSlot, ci.FuncName, ciArgs, ci.RetType);
+                        break;
+                }
+            }
+
+            switch (block.Term)
+            {
+                case LBranch br:
+                    var newCond = Subst(br.Cond);
+                    if (newCond != br.Cond)
+                        block.Term = new LBranch(newCond, br.TrueBlockId, br.FalseBlockId);
+                    break;
+                case LReturn ret when ret.Value != null:
+                    var newRet = Subst(ret.Value);
+                    if (newRet != ret.Value)
+                        block.Term = new LReturn(newRet);
+                    break;
+            }
+        }
+    }
+
+    /// <summary>Substitute operands in argument list. Returns null if no changes.</summary>
+    static List<LOperand> SubstArgs(List<LOperand> args, Func<LOperand, LOperand> subst)
+    {
+        bool any = false;
+        var result = new List<LOperand>(args.Count);
+        foreach (var arg in args)
+        {
+            var newArg = subst(arg);
+            if (newArg != arg) any = true;
+            result.Add(newArg);
+        }
+        return any ? result : null;
+    }
+
+    // ========================================================================
     // Helpers
     // ========================================================================
 

@@ -258,4 +258,129 @@ public class LirOptimizerTests
         Assert.IsType<LJump>(func.Blocks[0].Term);
         Assert.Equal(bb0.Id, ((LJump)func.Blocks[0].Term).TargetBlockId);
     }
+
+    // ========================================================================
+    // DeadCodeElimination
+    // ========================================================================
+
+    [Fact]
+    public void DCE_UnusedMove_Removed()
+    {
+        // slot0 = const(42) — never read → removed
+        var func = MakeFunc();
+        var bb0 = func.NewBlock();
+        bb0.Insts.Add(new LMove(0, new LConst(42, "SystemInt32"), "SystemInt32"));
+        bb0.Term = new LReturn();
+
+        var module = MakeModule(func);
+        LirOptimizer.DeadCodeElimination(module);
+
+        Assert.Empty(bb0.Insts);
+    }
+
+    [Fact]
+    public void DCE_UnusedLoadField_Removed()
+    {
+        // slot0 = load [myField] — never read → removed
+        var func = MakeFunc();
+        var bb0 = func.NewBlock();
+        bb0.Insts.Add(new LLoadField(0, "myField", "SystemInt32"));
+        bb0.Term = new LReturn();
+
+        var module = MakeModule(func);
+        LirOptimizer.DeadCodeElimination(module);
+
+        Assert.Empty(bb0.Insts);
+    }
+
+    [Fact]
+    public void DCE_UsedMove_Kept()
+    {
+        // slot0 = const(true), branch on slot0 → kept
+        var func = MakeFunc();
+        var bb0 = func.NewBlock();
+        var bb1 = func.NewBlock();
+        bb0.Insts.Add(new LMove(0, new LConst(true, "SystemBoolean"), "SystemBoolean"));
+        bb0.Term = new LBranch(new LSlotRef(0, "SystemBoolean"), bb1.Id, bb1.Id);
+        bb1.Term = new LReturn();
+
+        var module = MakeModule(func);
+        LirOptimizer.DeadCodeElimination(module);
+
+        Assert.Single(bb0.Insts);
+        Assert.IsType<LMove>(bb0.Insts[0]);
+    }
+
+    [Fact]
+    public void DCE_ExternUnusedDest_NulledButKept()
+    {
+        // slot0 = extern "Foo"() — slot0 never read → dest nulled, call kept
+        var func = MakeFunc();
+        var bb0 = func.NewBlock();
+        bb0.Insts.Add(new LCallExtern(0, "Foo__SystemInt32", new List<LOperand>(), "SystemInt32"));
+        bb0.Term = new LReturn();
+
+        var module = MakeModule(func);
+        LirOptimizer.DeadCodeElimination(module);
+
+        Assert.Single(bb0.Insts);
+        var call = Assert.IsType<LCallExtern>(bb0.Insts[0]);
+        Assert.Null(call.DestSlot);
+        Assert.Equal("Foo__SystemInt32", call.Sig);
+    }
+
+    // ========================================================================
+    // CopyPropagation
+    // ========================================================================
+
+    [Fact]
+    public void CopyProp_ConstMove_Propagated()
+    {
+        // slot0 = const(42), return slot0 → return const(42)
+        var func = MakeFunc();
+        var bb0 = func.NewBlock();
+        bb0.Insts.Add(new LMove(0, new LConst(42, "SystemInt32"), "SystemInt32"));
+        bb0.Term = new LReturn(new LSlotRef(0, "SystemInt32"));
+
+        var module = MakeModule(func);
+        LirOptimizer.CopyPropagation(module);
+
+        var ret = Assert.IsType<LReturn>(bb0.Term);
+        var c = Assert.IsType<LConst>(ret.Value);
+        Assert.Equal(42, c.Value);
+    }
+
+    [Fact]
+    public void CopyProp_MultipleWrites_NotPropagated()
+    {
+        // slot0 = const(1), slot0 = const(2), return slot0 → NOT propagated
+        var func = MakeFunc();
+        var bb0 = func.NewBlock();
+        bb0.Insts.Add(new LMove(0, new LConst(1, "SystemInt32"), "SystemInt32"));
+        bb0.Insts.Add(new LMove(0, new LConst(2, "SystemInt32"), "SystemInt32"));
+        bb0.Term = new LReturn(new LSlotRef(0, "SystemInt32"));
+
+        var module = MakeModule(func);
+        LirOptimizer.CopyPropagation(module);
+
+        var ret = Assert.IsType<LReturn>(bb0.Term);
+        Assert.IsType<LSlotRef>(ret.Value); // not propagated
+    }
+
+    [Fact]
+    public void CopyProp_NonConst_NotPropagated()
+    {
+        // slot0 = slot1, return slot0 → NOT propagated (conservative: only const)
+        var func = MakeFunc();
+        var bb0 = func.NewBlock();
+        bb0.Insts.Add(new LMove(0, new LSlotRef(1, "SystemInt32"), "SystemInt32"));
+        bb0.Term = new LReturn(new LSlotRef(0, "SystemInt32"));
+
+        var module = MakeModule(func);
+        LirOptimizer.CopyPropagation(module);
+
+        var ret = Assert.IsType<LReturn>(bb0.Term);
+        var sr = Assert.IsType<LSlotRef>(ret.Value);
+        Assert.Equal(0, sr.SlotId); // not propagated
+    }
 }
