@@ -7,12 +7,7 @@
   <ItemGroup>
     <Compile Include="../../Editor/NameAllocator.cs" />
     <Compile Include="../../Editor/LayoutPlanner.cs" />
-    <Compile Include="../../Editor/UasmModule.cs" />
-    <Compile Include="../../Editor/BitSet.cs" />
-    <Compile Include="../../Editor/BasicBlock.cs" />
-    <Compile Include="../../Editor/PureExternTable.cs" />
-    <Compile Include="../../Editor/ControlFlowGraph.cs" />
-    <Compile Include="../../Editor/VariableTable.cs" />
+
     <Compile Include="../../Editor/ExternResolver.cs" />
     <Compile Include="../../Editor/Emit/EmitContext.cs" />
     <Compile Include="../../Editor/Emit/IOperationHandler.cs" />
@@ -30,6 +25,16 @@
     <Compile Include="../../Editor/Emit/Handlers/NullableHandler.cs" />
     <Compile Include="../../Editor/UasmEmitter.cs" />
     <Compile Include="../../Editor/USugarCompilerHelper.cs" />
+    <Compile Include="../../Editor/IR/IrTypes.cs" />
+    <Compile Include="../../Editor/IR/IrBuilder.cs" />
+    <Compile Include="../../Editor/IR/CodeGen.cs" />
+    <Compile Include="../../Editor/IR/Mem2Reg.cs" />
+    <Compile Include="../../Editor/IR/IrOptimizer.cs" />
+    <Compile Include="../../Editor/IR/PhiElimination.cs" />
+    <Compile Include="../../Editor/IR/RegisterAllocator.cs" />
+
+    <Compile Include="../../Editor/IR/IrPipeline.cs" />
+    <Compile Include="../../Editor/IR/HirTypes.cs" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.3.0" />
