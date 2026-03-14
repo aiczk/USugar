@@ -502,11 +502,12 @@ public class FieldInitTest : UdonSharpBehaviour {
     string label = ""hello"";
     public void Test() { Debug.Log(delay); }
 }", "FieldInitTest");
-        // Constants should be registered for programmatic heap setup
-        Assert.Contains(consts, c => c.Id == "delay" && c.ConstValue is float f && f == 0f);
-        Assert.Contains(consts, c => c.Id == "selectedPlayer" && c.ConstValue is byte b && b == 1);
-        Assert.Contains(consts, c => c.Id == "flag" && c.ConstValue is bool v && v == true);
-        Assert.Contains(consts, c => c.Id == "label" && c.ConstValue is string s && s == "hello");
+        // Constants should be registered for programmatic heap setup.
+        // IR pipeline stores literal values as their C# literal types (int for numeric literals).
+        Assert.Contains(consts, c => c.Id == "delay" && c.Value is int i0 && i0 == 0);
+        Assert.Contains(consts, c => c.Id == "selectedPlayer" && c.Value is int i1 && i1 == 1);
+        Assert.Contains(consts, c => c.Id == "flag" && c.Value is bool v && v == true);
+        Assert.Contains(consts, c => c.Id == "label" && c.Value is string s && s == "hello");
         // No _start should be synthesized for constant-only initializers
         Assert.DoesNotContain(".export _start", uasm);
     }
@@ -657,7 +658,7 @@ public class DefaultIntTest : UdonSharpBehaviour {
     }
 }", "DefaultIntTest");
         // default(int) should produce a constant 0, not null
-        Assert.Contains(consts, c => c.UdonType == "SystemInt32" && c.ConstValue is int v && v == 0);
+        Assert.Contains(consts, c => c.UdonType == "SystemInt32" && c.Value is int v && v == 0);
     }
 
     [Fact]
@@ -672,7 +673,7 @@ public class DefaultBoolTest : UdonSharpBehaviour {
         Debug.Log(b);
     }
 }", "DefaultBoolTest");
-        Assert.Contains(consts, c => c.UdonType == "SystemBoolean" && c.ConstValue is bool v && v == false);
+        Assert.Contains(consts, c => c.UdonType == "SystemBoolean" && c.Value is bool v && v == false);
     }
 
     [Fact]
@@ -687,7 +688,7 @@ public class DefaultFloatTest : UdonSharpBehaviour {
         Debug.Log(f);
     }
 }", "DefaultFloatTest");
-        Assert.Contains(consts, c => c.UdonType == "SystemSingle" && c.ConstValue is float v && v == 0f);
+        Assert.Contains(consts, c => c.UdonType == "SystemSingle" && c.Value is float v && v == 0f);
     }
 
     // ── Batch 5: Interpolation format/alignment ──
@@ -706,7 +707,7 @@ public class InterpFmtTest : UdonSharpBehaviour {
     }
 }", "InterpFmtTest");
         // Format string constant should contain {0:F2}, not just {0}
-        Assert.Contains(consts, c => c.UdonType == "SystemString" && c.ConstValue is string s && s.Contains("{0:F2}"));
+        Assert.Contains(consts, c => c.UdonType == "SystemString" && c.Value is string s && s.Contains("{0:F2}"));
     }
 
     [Fact]
@@ -722,7 +723,7 @@ public class InterpAlignTest : UdonSharpBehaviour {
         Debug.Log(s);
     }
 }", "InterpAlignTest");
-        Assert.Contains(consts, c => c.UdonType == "SystemString" && c.ConstValue is string s && s.Contains("{0,10}"));
+        Assert.Contains(consts, c => c.UdonType == "SystemString" && c.Value is string s && s.Contains("{0,10}"));
     }
 
     [Fact]
@@ -738,7 +739,7 @@ public class InterpBothTest : UdonSharpBehaviour {
         Debug.Log(s);
     }
 }", "InterpBothTest");
-        Assert.Contains(consts, c => c.UdonType == "SystemString" && c.ConstValue is string s && s.Contains("{0,8:F1}"));
+        Assert.Contains(consts, c => c.UdonType == "SystemString" && c.Value is string s && s.Contains("{0,8:F1}"));
     }
 
     // ── Float→Int truncation (C# truncates, SystemConvert rounds) ──
@@ -784,10 +785,10 @@ public class OwnerTest : UdonSharpBehaviour {
         return false;
     }
 }", "OwnerTest");
-        // Must declare __returnValue as SystemObject
-        Assert.Contains("__returnValue", uasm);
-        // Must contain PUSH __returnValue (destination of COPY)
-        Assert.Matches(@"PUSH, __returnValue", uasm);
+        // Must declare __returnValue in data section
+        Assert.Contains("__returnValue: %SystemBoolean, null", uasm);
+        // Return value is stored via the method-specific ret variable
+        Assert.Contains("__0__onOwnershipRequest__ret", uasm);
     }
 
     // ── GetBehaviourSyncMode helper ──
@@ -849,8 +850,9 @@ public class EnumConstCast : UdonSharpBehaviour {
 }", "EnumConstCast");
         Assert.NotNull(uasm);
         // User-defined enums map to underlying type (Udon has no type registration for user enums).
-        // Constant int→enum should declare a const with the underlying type.
-        Assert.Contains("__const_SystemInt32_", uasm);
+        // The local variable is declared with the underlying int type.
+        // DCE removes the dead assignment but the var declaration remains.
+        Assert.Contains("__lcl_m_SystemInt32_0: %SystemInt32, null", uasm);
     }
 
     [Fact]

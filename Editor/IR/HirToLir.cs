@@ -409,7 +409,13 @@ public static class HirToLir
 
         public LowerCtx(HFunction hfunc)
         {
-            LFunc = new LFunction(hfunc.Name, hfunc.ExportName) { ReturnType = hfunc.ReturnType };
+            LFunc = new LFunction(hfunc.Name, hfunc.ExportName)
+            {
+                ReturnType = hfunc.ReturnType,
+                ReturnFieldName = hfunc.ReturnFieldName,
+            };
+            foreach (var p in hfunc.ParamFieldNames)
+                LFunc.ParamFieldNames.Add(p);
             // Copy all existing slots.
             foreach (var slot in hfunc.Slots)
                 LFunc.Slots.Add(slot);

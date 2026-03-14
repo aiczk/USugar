@@ -227,6 +227,7 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
             gsParamIds[pi] = paramId;
         }
         _methodParamVarIds[constructed] = gsParamIds;
+        foreach (var pid in gsParamIds) func.ParamFieldNames.Add(pid);
 
         if (!constructed.ReturnsVoid)
         {
@@ -234,6 +235,7 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
             var retId = $"__{idx}_{SanitizeId(constructed.Name)}__ret";
             _ctx.DeclareVar(retId, retType);
             func.ReturnType = retType;
+            func.ReturnFieldName = retId;
             _methodRetVars[constructed] = retId;
             _methodRetTypes[constructed] = retType;
         }

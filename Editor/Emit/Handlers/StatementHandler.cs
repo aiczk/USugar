@@ -29,8 +29,12 @@ public class StatementHandler : HandlerBase, IOperationHandler
                 _ctx.VisitOperation(deconExpr);
                 break;
             case IExpressionStatementOperation exprStmt:
-                VisitExpression(exprStmt.Operation);
+            {
+                var expr = VisitExpression(exprStmt.Operation);
+                if (expr != null)
+                    EmitExprStmt(expr);
                 break;
+            }
             case IVariableDeclarationGroupOperation declGroup:
                 foreach (var decl in declGroup.Declarations)
                     VisitVariableDeclaration(decl);

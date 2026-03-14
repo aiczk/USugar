@@ -105,8 +105,9 @@ public class UasmEmitter
         SetReflectionValues();
         EmitMethods();
         OnIrPass?.Invoke("after-emit", _hirModule);
-        // TODO: HIR→UASM pipeline not yet implemented. Phase 4-6 required.
-        throw new NotImplementedException("HIR→UASM pipeline not yet implemented. Phase 4-6 required.");
+        var result = IrPipeline.GenerateUasmFromHir(_hirModule);
+        _codeGenResult = result;
+        return result.Uasm;
     }
 
     public uint GetHeapSize() => _codeGenResult.HeapSize;
@@ -410,12 +411,14 @@ public class UasmEmitter
                 paramVarIds[i] = ml.ParamIds[i];
             }
             _methodParamVarIds[method] = paramVarIds;
+            foreach (var pid in paramVarIds) func.ParamFieldNames.Add(pid);
 
             // Declare return var
             if (!method.ReturnsVoid && ml.ReturnId != null)
             {
                 var retType = GetUdonType(method.ReturnType);
                 func.ReturnType = retType;
+                func.ReturnFieldName = ml.ReturnId;
                 _methodRetVars[method] = ml.ReturnId;
                 _methodRetTypes[method] = retType;
             }
@@ -445,12 +448,14 @@ public class UasmEmitter
                 fmParamIds[pi] = paramId;
             }
             _methodParamVarIds[fm] = fmParamIds;
+            foreach (var pid in fmParamIds) func.ParamFieldNames.Add(pid);
 
             if (!fm.ReturnsVoid)
             {
                 var retType = GetUdonType(fm.ReturnType);
                 var retId = $"__{idx}_{SanitizeId(fm.Name)}__ret";
                 func.ReturnType = retType;
+                func.ReturnFieldName = retId;
                 _methodRetVars[fm] = retId;
                 _methodRetTypes[fm] = retType;
             }
@@ -481,12 +486,14 @@ public class UasmEmitter
                 bmParamIds[pi] = paramId;
             }
             _methodParamVarIds[bm] = bmParamIds;
+            foreach (var pid in bmParamIds) func.ParamFieldNames.Add(pid);
 
             if (!bm.ReturnsVoid)
             {
                 var retType = GetUdonType(bm.ReturnType);
                 var retId = $"__{idx}_{SanitizeId(bm.Name)}__ret";
                 func.ReturnType = retType;
+                func.ReturnFieldName = retId;
                 _methodRetVars[bm] = retId;
                 _methodRetTypes[bm] = retType;
             }

@@ -260,6 +260,10 @@ public sealed class LFunction
     public readonly List<LBlock> Blocks = new();
     public readonly List<SlotDecl> Slots = new(); // shared with HIR
     public string ReturnType;
+    /// <summary>UASM field names for parameters. Used for internal call ABI.</summary>
+    public readonly List<string> ParamFieldNames = new();
+    /// <summary>UASM field name for the return value. Null for void.</summary>
+    public string ReturnFieldName;
     int _nextBlockId;
 
     public LFunction(string name, string exportName = null)

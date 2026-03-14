@@ -488,7 +488,7 @@ namespace TestStubs
         return uasm;
     }
 
-    public static (string uasm, List<VarTableEntry> consts) CompileWithConsts(string source, string className)
+    public static (string uasm, List<(string Id, string UdonType, object Value)> consts) CompileWithConsts(string source, string className)
     {
         var trees = new Microsoft.CodeAnalysis.SyntaxTree[]
         {
@@ -514,6 +514,6 @@ namespace TestStubs
         var uasm = emitter.Emit();
         UasmValidator.Validate(uasm);
         UasmValidator.ValidateHeapConsistency(uasm, emitter.GetHeapSize());
-        return (uasm, emitter.Variables.GetConstEntries());
+        return (uasm, emitter.CodeGenResult.Constants);
     }
 }
