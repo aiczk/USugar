@@ -11,7 +11,6 @@ public class UasmEmitter
     readonly IOperationHandler[] _stmtHandlers;
     readonly IExpressionHandler[] _exprHandlers;
 
-    /// <summary>When true, write IR dump files during code generation.</summary>
     public bool DumpEnabled;
 
     // Property shims → EmitContext

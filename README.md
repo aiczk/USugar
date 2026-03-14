@@ -93,7 +93,10 @@ That's it. Your existing UdonSharp scripts will be compiled through USugar inste
 
 ### Debugging
 
-- **USugar > Compile > USugar (with IR dump)** — Outputs HIR, LIR, and UASM (with PC annotations) to `Temp/USugar/{ClassName}/` for each compiled class.
+Enable **USugar > Debug > Dump IR** to include IR output on every compile. Dumps are written to `Library/USugarCache/{ClassName}/`:
+- `1_hir.txt` / `1b_hir_optimized.txt` — HIR before/after optimization
+- `2_lir.txt` / `2b_lir_optimized.txt` — LIR before/after optimization
+- `3_uasm.txt` / `3_uasm_annotated.txt` — UASM output (annotated version has PC addresses)
 
 ## Limitations
 

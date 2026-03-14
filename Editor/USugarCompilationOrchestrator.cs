@@ -222,9 +222,6 @@ static class USugarCompilationOrchestrator
 
             // ── Phase 3: Serial apply ──
             int count = 0, failures = 0;
-            var outputDir = "Library/USugarCache/UASM";
-            Directory.CreateDirectory(outputDir);
-
             foreach (var result in emitResults)
             {
                 if (result.IsError)
@@ -239,10 +236,13 @@ static class USugarCompilationOrchestrator
                 }
                 count++;
 
+                // UASM output goes to same directory as IR dumps
                 var ns = result.Symbol.ContainingNamespace?.IsGlobalNamespace == false
                     ? result.Symbol.ContainingNamespace.ToDisplayString() + "." : "";
-                var outputPath = Path.Combine(outputDir, $"{ns}{result.Symbol.Name}.uasm");
-                File.WriteAllText(outputPath, result.Uasm);
+                var className = $"{ns}{result.Symbol.Name}";
+                var classDir = Path.Combine("Library", "USugarCache", className);
+                Directory.CreateDirectory(classDir);
+                File.WriteAllText(Path.Combine(classDir, "uasm.txt"), result.Uasm);
 
                 // Merge emitter diagnostics
                 foreach (var d in result.EmitterDiagnostics)

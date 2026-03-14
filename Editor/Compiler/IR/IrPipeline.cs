@@ -8,8 +8,6 @@ public static class IrPipeline
     /// <summary>
     /// Generate UASM from an HModule via the HIR → LIR → UASM pipeline.
     /// </summary>
-    /// <param name="hirModule">The HIR module to compile.</param>
-    /// <param name="dumpEnabled">When true, write IR dump files to Temp/USugar/{className}/.</param>
     public static CodeGenResult GenerateUasmFromHir(HModule hirModule, bool dumpEnabled = false)
     {
         var className = hirModule.ClassName ?? "unknown";
@@ -57,7 +55,7 @@ public static class IrPipeline
     {
         try
         {
-            var dir = System.IO.Path.Combine("Temp", "USugar", SanitizeName(className));
+            var dir = System.IO.Path.Combine("Library", "USugarCache", SanitizeName(className));
             System.IO.Directory.CreateDirectory(dir);
             System.IO.File.WriteAllText(System.IO.Path.Combine(dir, fileName), content);
         }
