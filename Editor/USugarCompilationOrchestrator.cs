@@ -204,8 +204,19 @@ static class USugarCompilationOrchestrator
                 {
                     var inner = ex is TargetInvocationException tie
                         && tie.InnerException != null ? tie.InnerException : ex;
-                    emitResults.Add(EmitResult.Error(symbol, tree, "", 0, 0,
-                        $"Failed to compile {symbol.Name}: {inner.Message}\n{inner.StackTrace}"));
+                    // Use class name + declaration position for error location
+                    var className = symbol.Name;
+                    var line = 0;
+                    var character = 0;
+                    var syntaxRef = symbol.DeclaringSyntaxReferences.FirstOrDefault();
+                    if (syntaxRef != null)
+                    {
+                        var span = syntaxRef.SyntaxTree.GetLineSpan(syntaxRef.Span);
+                        line = span.StartLinePosition.Line + 1;
+                        character = span.StartLinePosition.Character + 1;
+                    }
+                    emitResults.Add(EmitResult.Error(symbol, tree, className, line, character,
+                        $"Failed to compile {symbol.Name}: {inner.Message}"));
                 }
             });
 
