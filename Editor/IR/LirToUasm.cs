@@ -384,8 +384,11 @@ public static class LirToUasm
             {
                 AddExport(func.ExportName);
                 AddLabel(_blockLabels[(funcIdx, func.Entry.Id)]);
-                // Sentinel: halt marker for return to Udon VM
-                AddPush("__intnl_returnJump_SystemUInt32_0");
+                // Sentinel: push 0xFFFFFFFF onto stack. The callee's RET will POP
+                // this into returnJump, causing JUMP_INDIRECT to halt (address > program size).
+                var sentinelVar = "__const_SystemUInt32_sentinel";
+                DeclareVar(sentinelVar, "SystemUInt32", null, VarFlags.None, constValue: 0xFFFFFFFF);
+                AddPush(sentinelVar);
                 AddLabel($"{func.Name}__body");
             }
             else
@@ -478,6 +481,7 @@ public static class LirToUasm
             _retaddrIdx++;
             _retaddrConsts.Add((retaddrVar, retLabel));
 
+            // Push return address onto stack (callee's RET will POP it)
             AddPush(retaddrVar);
 
             var targetFuncIdx = FindFuncIndex(target);
@@ -563,6 +567,8 @@ public static class LirToUasm
             if (ret.Value != null && func.ReturnFieldName != null)
                 AddCopyPair(ResolveOperand(ret.Value, funcIdx, func), func.ReturnFieldName);
 
+            // Stack-based return protocol: POP return address from stack into returnJump, then jump.
+            // The caller (or sentinel preamble) pushed the return address onto the stack.
             AddPush("__intnl_returnJump_SystemUInt32_0");
             AddCopy();
             AddJumpIndirect("__intnl_returnJump_SystemUInt32_0");
