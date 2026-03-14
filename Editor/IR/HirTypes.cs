@@ -313,6 +313,19 @@ public sealed class HLoadField : HExpr
     public override string ToString() => $"load [{FieldName}]:{Type}";
 }
 
+/// <summary>Reference to a field's heap address (for extern out/ref parameters).
+/// Unlike HLoadField which reads the value, HFieldAddr provides the address
+/// so that extern can write directly to the field.</summary>
+public sealed class HFieldAddr : HExpr
+{
+    public readonly string FieldName;
+
+    public HFieldAddr(string fieldName, string type) : base(type)
+        => FieldName = fieldName ?? throw new ArgumentNullException(nameof(fieldName));
+
+    public override string ToString() => $"addr [{FieldName}]:{Type}";
+}
+
 /// <summary>Call an extern (Udon VM native) function.</summary>
 public sealed class HExternCall : HExpr
 {
