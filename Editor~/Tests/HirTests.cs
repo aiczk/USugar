@@ -208,4 +208,94 @@ public class HirTests
         Assert.Equal("SystemString", slotRef.Type);
         Assert.Equal(slot, slotRef.SlotId);
     }
+
+    // ── HirVerifier tests ──
+
+    [Fact]
+    public void Verifier_ValidFunction_Passes()
+    {
+        var module = new HModule();
+        var builder = new HirBuilder(module);
+        var func = builder.BeginFunction("test");
+        func.ReturnType = "SystemInt32";
+
+        var slot = builder.AllocFrame("SystemInt32");
+        builder.EmitAssign(slot, builder.Const(42, "SystemInt32"));
+        builder.EmitReturn(builder.SlotRef(slot));
+
+        HirVerifier.Verify(module); // should not throw
+    }
+
+    [Fact]
+    public void Verifier_UndeclaredSlot_Throws()
+    {
+        var module = new HModule();
+        var func = module.AddFunction("test");
+        func.Body.Stmts.Add(new HAssign(99, new HConst(0, "SystemInt32")));
+
+        Assert.Throws<VerificationException>(() => HirVerifier.Verify(module));
+    }
+
+    [Fact]
+    public void Verifier_TypeMismatch_Throws()
+    {
+        var module = new HModule();
+        var builder = new HirBuilder(module);
+        builder.BeginFunction("test");
+        var slot = builder.AllocFrame("SystemInt32");
+        // Assign a boolean to an int slot
+        builder.EmitAssign(slot, builder.Const(true, "SystemBoolean"));
+
+        Assert.Throws<VerificationException>(() => HirVerifier.Verify(module));
+    }
+
+    [Fact]
+    public void Verifier_IfCondNotBoolean_Throws()
+    {
+        var module = new HModule();
+        var func = module.AddFunction("test");
+        func.NewSlot("SystemInt32", SlotClass.Frame);
+        // if (intValue) — condition must be boolean
+        func.Body.Stmts.Add(new HIf(
+            new HSlotRef(0, "SystemInt32"),
+            new HBlock(),
+            new HBlock()));
+
+        Assert.Throws<VerificationException>(() => HirVerifier.Verify(module));
+    }
+
+    [Fact]
+    public void Verifier_BreakOutsideLoop_Throws()
+    {
+        var module = new HModule();
+        var func = module.AddFunction("test");
+        func.Body.Stmts.Add(new HBreak());
+
+        Assert.Throws<VerificationException>(() => HirVerifier.Verify(module));
+    }
+
+    [Fact]
+    public void Verifier_BreakInsideLoop_Passes()
+    {
+        var module = new HModule();
+        var func = module.AddFunction("test");
+        func.NewSlot("SystemBoolean", SlotClass.Scratch);
+
+        var body = new HBlock();
+        body.Stmts.Add(new HBreak());
+        func.Body.Stmts.Add(new HWhile(new HSlotRef(0, "SystemBoolean"), body));
+
+        HirVerifier.Verify(module); // should not throw
+    }
+
+    [Fact]
+    public void Verifier_ReturnTypeMismatch_Throws()
+    {
+        var module = new HModule();
+        var func = module.AddFunction("test");
+        func.ReturnType = "SystemInt32";
+        func.Body.Stmts.Add(new HReturn(new HConst("hello", "SystemString")));
+
+        Assert.Throws<VerificationException>(() => HirVerifier.Verify(module));
+    }
 }
