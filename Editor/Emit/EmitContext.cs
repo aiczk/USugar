@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.Operations;
 
@@ -18,118 +19,73 @@ public struct EmitDiagnostic
     public int Character;
 }
 
-sealed class SymbolMethodOrdinalComparer : IEqualityComparer<(IMethodSymbol method, int ordinal)>
-{
-    public static readonly SymbolMethodOrdinalComparer Instance = new();
-
-    public bool Equals((IMethodSymbol method, int ordinal) x, (IMethodSymbol method, int ordinal) y)
-        => SymbolEqualityComparer.Default.Equals(x.method, y.method) && x.ordinal == y.ordinal;
-
-    public int GetHashCode((IMethodSymbol method, int ordinal) obj)
-        => HashCode.Combine(SymbolEqualityComparer.Default.GetHashCode(obj.method), obj.ordinal);
-}
-
 public class EmitContext
 {
     // Core dependencies
     public readonly Compilation Compilation;
     public readonly INamedTypeSymbol ClassSymbol;
-    public readonly UasmModule Module;
-    public readonly VariableTable Vars;
+    public readonly HModule HirModule;
+    public readonly HirBuilder Builder;
     public readonly LayoutPlanner Planner;
 
-    // Method bookkeeping — populated by RegisterMethod():
-    //   MethodLabels:      method → UASM label index (entry point for JUMP)
-    //   MethodIndices:     method → sequential index (used in variable naming: __{idx}_{name})
-    //   MethodVarPrefix:   method → index string (prefix for param/ret variable IDs)
-    //   MethodRetVars:     method → return variable ID (null for void)
-    //   MethodRetTypes:    method → return Udon type name
-    //   MethodParamVarIds: method → ordered array of scalar parameter variable IDs (null for tuple params)
-    //   MethodTupleParamVarIds: (method, ordinal) → tuple element variable IDs for tuple parameters
-    public readonly Dictionary<IMethodSymbol, int> MethodLabels = new(SymbolEqualityComparer.Default);
+    // Method bookkeeping
+    public readonly Dictionary<IMethodSymbol, HFunction> MethodFunctions = new(SymbolEqualityComparer.Default);
     public readonly Dictionary<IMethodSymbol, int> MethodIndices = new(SymbolEqualityComparer.Default);
     public readonly Dictionary<IMethodSymbol, string> MethodVarPrefix = new(SymbolEqualityComparer.Default);
     public readonly Dictionary<IMethodSymbol, string> MethodRetVars = new(SymbolEqualityComparer.Default);
     public readonly Dictionary<IMethodSymbol, string> MethodRetTypes = new(SymbolEqualityComparer.Default);
     public readonly Dictionary<IMethodSymbol, string[]> MethodParamVarIds = new(SymbolEqualityComparer.Default);
-    public readonly Dictionary<(IMethodSymbol method, int ordinal), string[]> MethodTupleParamVarIds
-        = new(SymbolMethodOrdinalComparer.Instance);
-    public readonly Dictionary<IMethodSymbol, string[]> MethodTupleRetVars = new(SymbolEqualityComparer.Default);
-    public readonly Dictionary<ILocalSymbol, string[]> TupleLocalVarIds = new(SymbolEqualityComparer.Default);
-    // Per-call-site tuple source vars for the most recent tuple-valued expression.
-    public string[] LastTupleCallRetVars;
     public IMethodSymbol CurrentMethod;
     public int NextMethodIndex;
-    public readonly List<(IMethodSymbol symbol, int label)> PendingLocalFunctions = new();
+    public readonly List<(IMethodSymbol symbol, HFunction func)> PendingLocalFunctions = new();
     public readonly Dictionary<ILocalSymbol, IMethodSymbol> DelegateVarMap = new(SymbolEqualityComparer.Default);
 
-    // Generic monomorphization: pending specialized method bodies to emit
+    // Generic monomorphization
     public readonly List<IMethodSymbol> PendingGenericSpecs = new();
-
-    // Type parameter substitution map for generic monomorphization (instance-scoped for thread safety)
     public Dictionary<ITypeParameterSymbol, ITypeSymbol> TypeParamMap;
 
-    // Delegate calling convention:
-    //   DelegateParamConventions: (methodIdx, paramOrdinal) → shared arg/ret variable IDs.
-    //     Used when a method accepts a delegate parameter — caller writes args here, callee reads them.
-    //   LambdaConventionOverrides: lambda method → convention to use instead of normal param vars.
-    //     Set when a lambda is passed as an argument, so the lambda body reads from the shared vars.
+    // Delegate parameter convention variables
     public readonly Dictionary<(int methodIdx, int paramOrdinal), DelegateConvention> DelegateParamConventions = new();
     public readonly Dictionary<IMethodSymbol, DelegateConvention> LambdaConventionOverrides = new(SymbolEqualityComparer.Default);
 
-    // Body labels for exported methods (skip re-entrance preamble on internal JUMP calls)
-    public readonly Dictionary<IMethodSymbol, int> MethodBodyLabels = new(SymbolEqualityComparer.Default);
-
-    // Persistent local symbol → variable ID mapping (survives scope pop, for capture resolution)
+    // Persistent local symbol → field name mapping (survives scope pop, for capture resolution)
     public readonly Dictionary<ILocalSymbol, string> LocalVarIds = new(SymbolEqualityComparer.Default);
 
     // Field initializers to emit at _start
-    public readonly List<(string fieldId, IOperation initOp, ITypeSymbol fieldType)> FieldInitOps = new();
+    public readonly List<(string fieldName, IOperation initOp, ITypeSymbol fieldType)> FieldInitOps = new();
 
     // FieldChangeCallback: fieldName → propertyName
     public readonly Dictionary<string, string> FieldChangeCallbacks = new();
 
-    // Enum array lookup: enum type → object[] variable ID for int→enum runtime conversions
+    // Enum array lookup: enum type → field name for int→enum runtime conversions
     public readonly Dictionary<ITypeSymbol, string> EnumArrayVars = new(SymbolEqualityComparer.Default);
 
     // Conditional access target stack (for ?. operator)
-    public readonly Stack<string> ConditionalAccessTargets = new();
+    public readonly Stack<HExpr> ConditionalAccessTargets = new();
 
-    // Loop break/continue label stacks
-    public readonly Stack<int> BreakLabels = new();
-    public readonly Stack<int> ContinueLabels = new();
-
-    // goto label mapping (per method, cleared on each EmitMethod)
-    public readonly Dictionary<ILabelSymbol, int> GotoLabels = new(SymbolEqualityComparer.Default);
-
-    // using declaration Dispose tracking (per block scope)
-    public readonly Stack<List<(string varId, ITypeSymbol type)>> UsingDisposableStack = new();
-
-
-    // Target hint for direct assignment optimization: when an extern result
-    // is assigned to a simple variable, the extern can write directly to it.
-    public string TargetHint;
+    // using declaration Dispose tracking
+    public readonly Stack<List<(HExpr val, ITypeSymbol type)>> UsingDisposableStack = new();
 
     // Diagnostics collected during emission
     public readonly List<EmitDiagnostic> Diagnostics = new();
     public readonly HashSet<string> ReportedExterns = new();
 
-    // Dispatch delegates (initialized by UasmEmitter via InitializeDispatchers)
+    // Dispatch delegates (HIR-based)
     Action<IOperation> _visitOperation;
-    Func<IOperation, string> _visitExpression;
-    Func<string, ITypeSymbol, IPatternOperation, string> _emitPatternCheck;
+    Func<IOperation, HExpr> _visitExpression;
+    Func<HExpr, ITypeSymbol, IPatternOperation, HExpr> _emitPatternCheck;
 
     public Action<IOperation> VisitOperation => _visitOperation
         ?? throw new InvalidOperationException("EmitContext dispatchers not initialized. Call InitializeDispatchers first.");
-    public Func<IOperation, string> VisitExpression => _visitExpression
+    public Func<IOperation, HExpr> VisitExpression => _visitExpression
         ?? throw new InvalidOperationException("EmitContext dispatchers not initialized. Call InitializeDispatchers first.");
-    public Func<string, ITypeSymbol, IPatternOperation, string> EmitPatternCheck => _emitPatternCheck
+    public Func<HExpr, ITypeSymbol, IPatternOperation, HExpr> EmitPatternCheck => _emitPatternCheck
         ?? throw new InvalidOperationException("EmitContext dispatchers not initialized. Call InitializeDispatchers first.");
 
     public void InitializeDispatchers(
         Action<IOperation> visitOp,
-        Func<IOperation, string> visitExpr,
-        Func<string, ITypeSymbol, IPatternOperation, string> emitPattern)
+        Func<IOperation, HExpr> visitExpr,
+        Func<HExpr, ITypeSymbol, IPatternOperation, HExpr> emitPattern)
     {
         _visitOperation = visitOp ?? throw new ArgumentNullException(nameof(visitOp));
         _visitExpression = visitExpr ?? throw new ArgumentNullException(nameof(visitExpr));
@@ -140,147 +96,166 @@ public class EmitContext
     {
         Compilation = compilation;
         ClassSymbol = classSymbol;
-        Module = new UasmModule();
-        Vars = new VariableTable();
+        HirModule = new HModule { ClassName = classSymbol.ToDisplayString() };
+        Builder = new HirBuilder(HirModule);
         Planner = planner;
     }
 
-    // ── Method Registration ──
+    // ══════════════════════════════════════════════════════════════════
+    // Variable naming utilities (replaces VariableTable)
+    // ══════════════════════════════════════════════════════════════════
 
-    /// <summary>
-    /// Registers a method (local function, foreign static, or base instance) with label, params, and return var.
-    /// Returns the assigned method index. Idempotent — returns existing index if already registered.
-    /// </summary>
-    public int RegisterMethod(IMethodSymbol method, string nameHint = null)
+    readonly Dictionary<string, int> _counters = new();
+    readonly HashSet<string> _declaredFieldNames = new();
+    readonly Dictionary<string, string> _thisVars = new();
+    readonly Dictionary<string, string> _structConstIds = new();
+
+    int NextIndex(string key)
     {
-        if (MethodLabels.ContainsKey(method))
-            return MethodIndices[method];
-
-        var idx = NextMethodIndex++;
-        MethodIndices[method] = idx;
-        MethodVarPrefix[method] = idx.ToString();
-        var name = nameHint ?? method.Name.Replace('.', '_');
-        if (string.IsNullOrEmpty(name)) name = "lambda";
-        var label = Module.DefineLabel($"__{idx}_{name}");
-        MethodLabels[method] = label;
-
-        var paramIds = new string[method.Parameters.Length];
-        for (int pi = 0; pi < method.Parameters.Length; pi++)
-        {
-            var param = method.Parameters[pi];
-            if (param.Type.IsTupleType && param.Type is INamedTypeSymbol tupleParamType)
-            {
-                var elements = tupleParamType.TupleElements;
-                var tupleParamIds = new string[elements.Length];
-                for (int ei = 0; ei < elements.Length; ei++)
-                {
-                    var elemType = ExternResolver.GetUdonTypeName(elements[ei].Type, TypeParamMap);
-                    var tupleParamId = $"__{idx}_{param.Name}__param_{ei}";
-                    Vars.DeclareVar(tupleParamId, elemType);
-                    tupleParamIds[ei] = tupleParamId;
-                }
-                MethodTupleParamVarIds[(method, pi)] = tupleParamIds;
-                continue;
-            }
-
-            var isDlg = param.Type is INamedTypeSymbol nt && nt.DelegateInvokeMethod != null;
-            var udonType = isDlg ? "SystemUInt32" : ExternResolver.GetUdonTypeName(param.Type, TypeParamMap);
-            var paramId = $"__{idx}_{param.Name}__param";
-            Vars.DeclareVar(paramId, udonType);
-            paramIds[pi] = paramId;
-        }
-        MethodParamVarIds[method] = paramIds;
-
-        if (!method.ReturnsVoid)
-        {
-            if (method.ReturnType.IsTupleType && method.ReturnType is INamedTypeSymbol tupleType)
-            {
-                var elements = tupleType.TupleElements;
-                var tupleRetIds = new string[elements.Length];
-                for (int i = 0; i < elements.Length; i++)
-                {
-                    var elemType = ExternResolver.GetUdonTypeName(elements[i].Type, TypeParamMap);
-                    var retId = $"__{idx}_{name}__ret_{i}";
-                    Vars.DeclareVar(retId, elemType);
-                    tupleRetIds[i] = retId;
-                }
-                MethodTupleRetVars[method] = tupleRetIds;
-            }
-            else
-            {
-                var retType = ExternResolver.GetUdonTypeName(method.ReturnType, TypeParamMap);
-                var retId = $"__{idx}_{name}__ret";
-                Vars.DeclareVar(retId, retType);
-                MethodRetVars[method] = retId;
-                MethodRetTypes[method] = retType;
-            }
-        }
-
-        return idx;
+        _counters.TryGetValue(key, out var n);
+        _counters[key] = n + 1;
+        return n;
     }
 
-    // ── Extern Resolution ──
-
-    // Known base type chains for extern fallback resolution.
-    // When a specific type's extern isn't registered, try its base types.
-    static readonly string[] FallbackBaseTypes = new[]
+    /// <summary>Declare a field in HirModule. Idempotent — returns existing name if already declared.</summary>
+    public string DeclareField(string name, string type, FieldFlags flags = FieldFlags.None,
+        object defaultValue = null, string syncMode = null)
     {
-        "UnityEngineComponent", "UnityEngineBehaviour",
-        "UnityEngineMonoBehaviour", "UnityEngineObject",
-    };
-
-    public static string ResolveExtern(string externSig)
-    {
-        if (ExternResolver.IsExternValid == null || ExternResolver.IsExternValid(externSig))
-            return externSig;
-
-        var dotIdx = externSig.IndexOf(".__");
-        if (dotIdx < 0) return externSig;
-        var containingType = externSig.Substring(0, dotIdx);
-        var rest = externSig.Substring(dotIdx);
-
-        foreach (var baseType in FallbackBaseTypes)
-        {
-            if (baseType == containingType) continue;
-            var alt = baseType + rest;
-            if (ExternResolver.IsExternValid(alt))
-                return alt;
-        }
-
-        return externSig;
+        if (_declaredFieldNames.Contains(name)) return name;
+        var field = new FieldDecl(name, type) { Flags = flags, DefaultValue = defaultValue, SyncMode = syncMode };
+        HirModule.Fields.Add(field);
+        _declaredFieldNames.Add(name);
+        return name;
     }
 
-    public void AddExternChecked(string externSig)
+    /// <summary>Declare a named variable field. Idempotent.</summary>
+    public string DeclareVar(string id, string type)
     {
-        Module.AddExtern(ResolveExtern(externSig));
+        if (_declaredFieldNames.Contains(id)) return id;
+        HirModule.Fields.Add(new FieldDecl(id, type));
+        _declaredFieldNames.Add(id);
+        return id;
     }
 
-    // ── Classification helpers (shared between UasmEmitter and handlers) ──
-
-    public bool IsForeignStatic(IMethodSymbol method)
+    /// <summary>Try to declare a variable. Returns true if newly declared.</summary>
+    public bool TryDeclareVar(string id, string type)
     {
-        var resolved = method.ReducedFrom ?? method;
-        if (!resolved.IsStatic) return false;
-        if (resolved.ContainingType.DeclaringSyntaxReferences.Length == 0) return false;
-        if (ExternResolver.IsUdonSharpBehaviour(resolved.ContainingType)) return false;
-        if (SymbolEqualityComparer.Default.Equals(resolved.ContainingType, ClassSymbol)) return false;
-        if (USugarCompilerHelper.IsExternNamespace(resolved.ContainingType.ContainingNamespace)) return false;
+        if (_declaredFieldNames.Contains(id)) return false;
+        HirModule.Fields.Add(new FieldDecl(id, type));
+        _declaredFieldNames.Add(id);
         return true;
     }
 
-    public bool IsBaseInstanceMethod(IMethodSymbol method)
+    /// <summary>Declare a local variable with unique field name.</summary>
+    public string DeclareLocal(string name, string type)
     {
-        if (method.IsStatic) return false;
-        if (method.ContainingType.DeclaringSyntaxReferences.Length == 0) return false;
-        if (SymbolEqualityComparer.Default.Equals(method.ContainingType, ClassSymbol)) return false;
-        if (USugarCompilerHelper.IsFrameworkNamespace(method.ContainingType.ContainingNamespace)) return false;
-        if (method.ContainingType.Name == "UdonSharpBehaviour") return false;
-        var bt = ClassSymbol.BaseType;
-        while (bt != null)
+        var idx = NextIndex($"lcl_{name}_{type}");
+        var id = $"__lcl_{name}_{type}_{idx}";
+        HirModule.Fields.Add(new FieldDecl(id, type));
+        _declaredFieldNames.Add(id);
+        return id;
+    }
+
+    /// <summary>Declare a "this" reference field with type remapping for Udon heap.</summary>
+    public string DeclareThis(string udonType)
+    {
+        var heapType = SupportedThisTypes.Contains(udonType) ? udonType : "VRCUdonUdonBehaviour";
+        var idx = NextIndex($"this_{heapType}");
+        var id = $"__this_{heapType}_{idx}";
+        HirModule.Fields.Add(new FieldDecl(id, heapType) { DefaultValue = "this" });
+        _declaredFieldNames.Add(id);
+        return id;
+    }
+
+    /// <summary>Declare or reuse a "this" reference for the given type.</summary>
+    public string DeclareThisOnce(string udonType)
+    {
+        if (_thisVars.TryGetValue(udonType, out var existing)) return existing;
+        var id = DeclareThis(udonType);
+        _thisVars[udonType] = id;
+        return id;
+    }
+
+    static readonly HashSet<string> SupportedThisTypes = new()
+    {
+        "UnityEngineGameObject", "UnityEngineTransform", "VRCUdonUdonBehaviour",
+    };
+
+    /// <summary>Declare an enum array field with const value.</summary>
+    public string DeclareEnumArray(string id, object[] values)
+    {
+        if (_declaredFieldNames.Contains(id)) return id;
+        HirModule.Fields.Add(new FieldDecl(id, "SystemObjectArray") { DefaultValue = values });
+        _declaredFieldNames.Add(id);
+        return id;
+    }
+
+    /// <summary>Declare reflection type IDs array.</summary>
+    public void DeclareReflTypeIds(long[] typeIds)
+    {
+        DeclareField("__refl_typeids", "SystemInt64Array", defaultValue: typeIds);
+    }
+
+    /// <summary>Set const value on an existing field.</summary>
+    public void SetFieldConstValue(string name, object value)
+    {
+        var field = HirModule.Fields.FirstOrDefault(f => f.Name == name);
+        if (field != null) field.DefaultValue = value;
+    }
+
+    /// <summary>Check if a field name has been declared.</summary>
+    public bool IsFieldDeclared(string name) => _declaredFieldNames.Contains(name);
+
+    /// <summary>Declare a temporary variable field.</summary>
+    public string DeclareTemp(string type)
+    {
+        return DeclareLocal("tmp", type);
+    }
+
+    /// <summary>Declare a struct constant field with deduplication (e.g., Vector3.zero).</summary>
+    public string DeclareStructConst(string type, object value)
+    {
+        var key = $"{type}_{value}";
+        if (_structConstIds.TryGetValue(key, out var existing)) return existing;
+        var idx = NextIndex($"structconst_{type}");
+        var id = $"__const_{type}_{idx}";
+        HirModule.Fields.Add(new FieldDecl(id, type) { DefaultValue = value });
+        _declaredFieldNames.Add(id);
+        _structConstIds[key] = id;
+        return id;
+    }
+
+    /// <summary>Get the Udon type of a declared field by its ID.</summary>
+    public string GetFieldType(string id)
+    {
+        return HirModule.Fields.FirstOrDefault(f => f.Name == id)?.Type;
+    }
+
+    // ── Constant parsing (moved from VariableTable) ──
+
+    /// <summary>Parse a string constant value to a typed CLR object.</summary>
+    public static object ParseConstValue(string udonType, string value)
+    {
+        if (value == "null") return null;
+        return udonType switch
         {
-            if (SymbolEqualityComparer.Default.Equals(bt, method.ContainingType)) return true;
-            bt = bt.BaseType;
-        }
-        return false;
+            "SystemInt32" => value.StartsWith("0x") ? Convert.ToInt32(value, 16) : int.Parse(value),
+            "SystemUInt32" => value.StartsWith("0x") ? Convert.ToUInt32(value, 16) : uint.Parse(value),
+            "SystemInt64" => long.Parse(value),
+            "SystemUInt64" => ulong.Parse(value),
+            "SystemInt16" => short.Parse(value),
+            "SystemUInt16" => ushort.Parse(value),
+            "SystemSByte" => sbyte.Parse(value),
+            "SystemSingle" => float.Parse(value, System.Globalization.CultureInfo.InvariantCulture),
+            "SystemDouble" => double.Parse(value, System.Globalization.CultureInfo.InvariantCulture),
+            "SystemBoolean" => bool.Parse(value),
+            "SystemString" => value,
+            "SystemByte" => byte.Parse(value),
+            "SystemChar" => value[0],
+            "SystemType" => value, // Udon type name, resolved to CLR Type at apply time
+            _ => long.TryParse(value, out var longVal)
+                ? (longVal is >= int.MinValue and <= int.MaxValue ? (object)(int)longVal : longVal)
+                : ulong.TryParse(value, out var ulongVal) ? (object)ulongVal : null,
+        };
     }
 }
