@@ -704,6 +704,10 @@ public class UasmEmitter
 
             var bodyOp = model.GetOperation(syntax);
             PreScanGotoLabels(bodyOp);
+
+            // Emit tail-call optimization label at function entry (jump target for TCO goto)
+            _builder.EmitLabel($"__tco_{func.Name}");
+
             if (bodyOp is IMethodBodyOperation methodBody)
             {
                 if (methodBody.BlockBody != null)

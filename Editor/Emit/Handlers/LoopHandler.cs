@@ -58,17 +58,15 @@ public class LoopHandler : HandlerBase, IOperationHandler
 
     void VisitForLoop(IForLoopOperation op)
     {
-        // Evaluate condition expression (may be null for infinite loops)
-        HExpr condExpr = op.Condition != null ? VisitExpression(op.Condition) : null;
-
         _builder.EmitFor(
             _ =>
             {
-                // Init
+                // Init: variable declarations register locals in _localVarIds
                 foreach (var init in op.Before)
                     VisitOperation(init);
             },
-            condExpr,
+            // Lazy condition: evaluated AFTER init so loop vars (e.g. 'i') are registered
+            () => op.Condition != null ? VisitExpression(op.Condition) : null,
             _ =>
             {
                 // Update

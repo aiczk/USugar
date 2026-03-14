@@ -240,6 +240,7 @@ public sealed class LBlock
     public readonly int Id;
     public readonly List<LInst> Insts = new();
     public LTerminator Term; // set during lowering
+    public string Hint; // Optional label name hint for codegen
 
     public LBlock(int id) => Id = id;
 

@@ -277,6 +277,8 @@ public static class LirToUasm
                 string labelName;
                 if (block == func.Entry)
                     labelName = func.ExportName ?? $"__{func.Name}";
+                else if (block.Hint != null)
+                    labelName = block.Hint;
                 else
                     labelName = $"__{func.Name}_bb{block.Id}";
                 _blockLabels[(funcIdx, block.Id)] = labelName;

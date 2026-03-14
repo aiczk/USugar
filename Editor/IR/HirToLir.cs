@@ -49,7 +49,11 @@ public static class HirToLir
         {
             case HLabelStmt lbl:
                 if (!ctx.LabelBlocks.ContainsKey(lbl.Label))
-                    ctx.LabelBlocks[lbl.Label] = ctx.LFunc.NewBlock();
+                {
+                    var labelBlock = ctx.LFunc.NewBlock();
+                    labelBlock.Hint = $"__goto_{lbl.Label}";
+                    ctx.LabelBlocks[lbl.Label] = labelBlock;
+                }
                 break;
             case HBlock blk:
                 PreScanLabels(blk, ctx);
@@ -76,9 +80,18 @@ public static class HirToLir
         foreach (var stmt in block.Stmts)
         {
             // If current block already has a terminator (e.g. from break/continue/return/goto),
-            // remaining statements in this block are unreachable. Stop lowering them.
+            // skip unreachable statements — UNLESS the next statement is a label (valid jump target).
             if (ctx.Current.Term != null)
-                break;
+            {
+                if (stmt is HLabelStmt)
+                {
+                    // Label starts a new reachable block; fall through to LowerStmt.
+                }
+                else
+                {
+                    continue;
+                }
+            }
 
             LowerStmt(stmt, ctx);
         }
