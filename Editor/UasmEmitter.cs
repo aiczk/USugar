@@ -5,29 +5,42 @@ using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.Operations;
 
-// Entry point for C# → UASM compilation of a single UdonSharpBehaviour class.
-//
-// Emit pipeline:
-//   1. EmitFields()       — declare exported/synced/private fields as UASM variables
-//   2. EmitMethods()      — register all methods (Udon events, user methods, inherited)
-//   3. EmitMethod()       — per method: walk IOperation tree via handler dispatch
-//   4. EmitFieldInits()   — emit _start preamble for field initializers
-//
-// Handler dispatch: each IOperation is routed to the first handler that claims it
-// (_stmtHandlers for statements, _exprHandlers for expressions). Handlers call back
-// into VisitOperation/VisitExpression for recursive descent.
 public class UasmEmitter
 {
     readonly EmitContext _ctx;
     readonly IOperationHandler[] _stmtHandlers;
     readonly IExpressionHandler[] _exprHandlers;
 
+    // Property shims → EmitContext
+    Compilation _compilation => _ctx.Compilation;
+    INamedTypeSymbol _classSymbol => _ctx.ClassSymbol;
+    HModule _hirModule => _ctx.HirModule;
+    HirBuilder _builder => _ctx.Builder;
+    LayoutPlanner _planner => _ctx.Planner;
+    Dictionary<IMethodSymbol, HFunction> _methodFunctions => _ctx.MethodFunctions;
+    Dictionary<IMethodSymbol, int> _methodIndices => _ctx.MethodIndices;
+    Dictionary<IMethodSymbol, string> _methodVarPrefix => _ctx.MethodVarPrefix;
+    Dictionary<IMethodSymbol, string> _methodRetVars => _ctx.MethodRetVars;
+    Dictionary<IMethodSymbol, string> _methodRetTypes => _ctx.MethodRetTypes;
+    Dictionary<IMethodSymbol, string[]> _methodParamVarIds => _ctx.MethodParamVarIds;
+    IMethodSymbol _currentMethod { get => _ctx.CurrentMethod; set => _ctx.CurrentMethod = value; }
+    int _nextMethodIndex { get => _ctx.NextMethodIndex; set => _ctx.NextMethodIndex = value; }
+    List<(IMethodSymbol symbol, HFunction func)> _pendingLocalFunctions => _ctx.PendingLocalFunctions;
+    List<IMethodSymbol> _pendingGenericSpecs => _ctx.PendingGenericSpecs;
+    Dictionary<ITypeParameterSymbol, ITypeSymbol> _typeParamMap { get => _ctx.TypeParamMap; set => _ctx.TypeParamMap = value; }
+    Dictionary<(int methodIdx, int paramOrdinal), DelegateConvention> _delegateParamConventions => _ctx.DelegateParamConventions;
     HashSet<IMethodSymbol> _inheritedMethods = new(SymbolEqualityComparer.Default);
+    List<(string fieldName, IOperation initOp, ITypeSymbol fieldType)> _fieldInitOps => _ctx.FieldInitOps;
+    Dictionary<string, string> _fieldChangeCallbacks => _ctx.FieldChangeCallbacks;
+    List<EmitDiagnostic> _diagnostics => _ctx.Diagnostics;
 
+    CodeGenResult _codeGenResult;
 
-    public IReadOnlyList<EmitDiagnostic> Diagnostics => _ctx.Diagnostics;
+    public IReadOnlyList<EmitDiagnostic> Diagnostics => _diagnostics;
+    public CodeGenResult CodeGenResult => _codeGenResult;
 
     static Dictionary<string, string> UdonEventNames => LayoutPlanner.UdonEventNames;
+
     public UasmEmitter(Compilation compilation, INamedTypeSymbol classSymbol, LayoutPlanner planner = null)
     {
         _ctx = new EmitContext(compilation, classSymbol, planner ?? new LayoutPlanner(compilation));
@@ -51,9 +64,8 @@ public class UasmEmitter
         _ctx.InitializeDispatchers(VisitOperation, VisitExpression, operatorHandler.EmitPatternCheckImpl);
     }
 
-    // Type name resolution helper: delegates to ExternResolver with the current instance's type param map.
-    // Safe to call when _ctx.TypeParamMap is null (falls through to non-map overload).
-    string GetUdonType(ITypeSymbol type) => ExternResolver.GetUdonTypeName(type, _ctx.TypeParamMap);
+    // Type name resolution helper
+    string GetUdonType(ITypeSymbol type) => ExternResolver.GetUdonTypeName(type, _typeParamMap);
     string GetArrayType(IArrayTypeSymbol arrType) => GetUdonType(arrType);
     string GetArrayElemType(IArrayTypeSymbol arrType)
     {
@@ -61,33 +73,54 @@ public class UasmEmitter
         return t.Substring(0, t.Length - "Array".Length);
     }
 
-    void AddExternChecked(string externSig, IOperation sourceOp = null)
+    // ── HirBuilder bridge helpers (old IrBuilder API → HirBuilder) ──
+
+    HExpr BridgeLoad(string fieldName, string type) => _builder.LoadField(fieldName, type);
+    void BridgeStore(string fieldName, HExpr value) => _builder.EmitStoreField(fieldName, value);
+    HExpr BridgeCallExtern(string retType, string sig, HExpr[] args)
+        => _builder.ExternCall(sig, new List<HExpr>(args), retType);
+    void BridgeCallExternVoid(string sig, HExpr[] args)
+        => _builder.EmitExternVoid(sig, new List<HExpr>(args));
+    HExpr BridgeCallInternal(HFunction func, HExpr[] args)
     {
-        _ctx.AddExternChecked(externSig);
+        var retType = func.ReturnType ?? "SystemVoid";
+        var call = _builder.InternalCall(func.Name, new List<HExpr>(args), retType);
+        if (retType == "SystemVoid") { _builder.EmitExprStmt(call); return null; }
+        return call;
     }
+    HExpr BridgeConstInt(int value) => _builder.Const(value, "SystemInt32");
+
+    // ── Emit ──
+
+    /// <summary>Access to the HIR module for debugging and testing.</summary>
+    public HModule HirModule => _hirModule;
+
+    /// <summary>Called after handler emission, before optimization. Set for IR debugging.</summary>
+    public Action<string, HModule> OnIrPass;
 
     public string Emit()
     {
-        _ctx.Module.SetHeader($"Generated by USugar");
         EnsurePlannerReady();
         EmitFields();
         SetReflectionValues();
         EmitMethods();
-        FlushVariablesToModule();
-        _ctx.Module.Optimize();
-        SyncOptimizerConsts();
-        return _ctx.Module.BuildUasmStr();
+        OnIrPass?.Invoke("after-emit", _hirModule);
+        // TODO: HIR→UASM pipeline not yet implemented. Phase 4-6 required.
+        throw new NotImplementedException("HIR→UASM pipeline not yet implemented. Phase 4-6 required.");
     }
+
+    public uint GetHeapSize() => _codeGenResult.HeapSize;
 
     void SetReflectionValues()
     {
-        var typeName = _ctx.ClassSymbol.ToDisplayString();
+        var typeName = _classSymbol.ToDisplayString();
         long typeId = ComputeTypeId(typeName);
-        _ctx.Vars.SetReflectionValues(typeId, typeName);
+        _ctx.DeclareField("__refl_typeid", "SystemInt64", defaultValue: typeId);
+        _ctx.DeclareField("__refl_typename", "SystemString", defaultValue: typeName);
 
-        var ancestorIds = CollectAncestorTypeIds(_ctx.ClassSymbol);
+        var ancestorIds = CollectAncestorTypeIds(_classSymbol);
         if (ancestorIds.Length > 1)
-            _ctx.Vars.DeclareReflTypeIds(ancestorIds);
+            _ctx.DeclareReflTypeIds(ancestorIds);
     }
 
     static long[] CollectAncestorTypeIds(INamedTypeSymbol type)
@@ -109,101 +142,88 @@ public class UasmEmitter
         return System.BitConverter.ToInt64(hash, 0);
     }
 
-    /// <summary>
-    /// Ensures the LayoutPlanner has planned all UdonSharpBehaviour types
-    /// and is frozen before the emit phase begins. When using the orchestrator,
-    /// this is already done; for standalone usage (tests), it auto-plans.
-    /// </summary>
     void EnsurePlannerReady()
     {
-        if (_ctx.Planner.IsFrozen) return;
-        // Plan all UdonSharpBehaviour types and user-defined interfaces in the compilation
-        foreach (var tree in _ctx.Compilation.SyntaxTrees)
+        if (_planner.IsFrozen) return;
+        foreach (var tree in _compilation.SyntaxTrees)
         {
-            var model = _ctx.Compilation.GetSemanticModel(tree);
+            var model = _compilation.GetSemanticModel(tree);
             var root = tree.GetRoot();
             foreach (var classDecl in root.DescendantNodes()
                 .OfType<ClassDeclarationSyntax>())
             {
                 var symbol = model.GetDeclaredSymbol(classDecl) as INamedTypeSymbol;
                 if (symbol == null || !ExternResolver.IsUdonSharpBehaviour(symbol)) continue;
-                _ctx.Planner.Plan(symbol);
+                _planner.Plan(symbol);
                 foreach (var iface in symbol.AllInterfaces)
-                    _ctx.Planner.Plan(iface);
+                    _planner.Plan(iface);
             }
             foreach (var ifaceDecl in root.DescendantNodes()
-                .OfType<Microsoft.CodeAnalysis.CSharp.Syntax.InterfaceDeclarationSyntax>())
+                .OfType<InterfaceDeclarationSyntax>())
             {
                 var ifaceSymbol = model.GetDeclaredSymbol(ifaceDecl) as INamedTypeSymbol;
                 if (ifaceSymbol != null)
-                    _ctx.Planner.Plan(ifaceSymbol);
+                    _planner.Plan(ifaceSymbol);
             }
         }
-        _ctx.Planner.Freeze();
+        _planner.Freeze();
     }
 
-    public uint GetHeapSize() => _ctx.Module.GetHeapSize();
-
-    public VariableTable Variables => _ctx.Vars;
+    // ── EmitFields ──
 
     void EmitFields()
     {
-        foreach (var member in _ctx.ClassSymbol.GetMembers().OfType<IFieldSymbol>())
+        foreach (var member in _classSymbol.GetMembers().OfType<IFieldSymbol>())
         {
             if (member.IsStatic || member.IsImplicitlyDeclared) continue;
             var udonType = GetUdonType(member.Type);
-            var flags = VarFlags.None;
+            var flags = FieldFlags.None;
             if (member.DeclaredAccessibility == Accessibility.Public
                 || member.GetAttributes().Any(a => a.AttributeClass?.Name is "SerializeField" or "SerializeFieldAttribute"))
-                flags |= VarFlags.Export;
+                flags |= FieldFlags.Export;
             string syncMode = null;
             var syncAttr = member.GetAttributes()
                 .FirstOrDefault(a => a.AttributeClass?.Name == "UdonSyncedAttribute");
             if (syncAttr != null)
             {
-                flags |= VarFlags.Sync;
+                flags |= FieldFlags.Sync;
                 if (syncAttr.ConstructorArguments.Length > 0 && syncAttr.ConstructorArguments[0].Value is int modeVal)
                     syncMode = modeVal switch { 2 => "linear", 3 => "smooth", _ => "none" };
                 else
                     syncMode = "none";
 
-                // Validate syncable type (enums use their underlying int type)
                 var syncCheckType = (member.Type is INamedTypeSymbol nt && nt.TypeKind == TypeKind.Enum)
                     ? GetUdonType(nt.EnumUnderlyingType)
                     : udonType;
                 if (!ExternResolver.IsSyncableType(syncCheckType))
-                    throw new System.NotSupportedException(
+                    throw new NotSupportedException(
                         $"Cannot sync field '{member.Name}': type '{member.Type}' is not supported by Udon sync");
             }
 
-            // Try to resolve constant field initializers into data section defaults
-            // (avoids runtime init code in _start, which runs AFTER _onEnable)
-            string constDefault = null;
-            object heapValue = null;
+            // Try to resolve constant field initializers as CLR objects
+            object constValue = null;
             var syntaxRef = member.DeclaringSyntaxReferences.FirstOrDefault();
             if (syntaxRef?.GetSyntax() is VariableDeclaratorSyntax { Initializer: not null } declarator)
             {
-                var model = _ctx.Compilation.GetSemanticModel(declarator.SyntaxTree);
+                var model = _compilation.GetSemanticModel(declarator.SyntaxTree);
                 var initOp = model.GetOperation(declarator.Initializer.Value);
                 if (initOp != null)
                 {
                     var constVal = initOp.ConstantValue;
                     if (constVal.HasValue && constVal.Value != null)
                     {
-                        // Constant value — set directly in data section
-                        constDefault = FormatConstForDataSection(udonType, constVal.Value, member.Type);
+                        // Store CLR object directly; CodeGen + ApplyConstantValues handles application
+                        constValue = constVal.Value;
                     }
-                    if (constDefault == null)
+                    if (constValue == null)
                     {
-                        heapValue = TryEvaluateFieldInitForHeap(initOp, member.Type);
-                        if (heapValue == null)
-                            _ctx.FieldInitOps.Add((member.Name, initOp, member.Type));
+                        constValue = TryEvaluateFieldInitForHeap(initOp, member.Type);
+                        if (constValue == null)
+                            _fieldInitOps.Add((member.Name, initOp, member.Type));
                     }
                 }
             }
-            _ctx.Vars.DeclareField(member.Name, udonType, flags, constDefault, syncMode);
-            if (heapValue != null)
-                _ctx.Vars.SetConstValue(member.Name, heapValue);
+            _ctx.DeclareField(member.Name, udonType, flags, constValue, syncMode);
 
             // Detect [FieldChangeCallback("PropertyName")]
             var fcbAttr = member.GetAttributes()
@@ -211,35 +231,31 @@ public class UasmEmitter
             if (fcbAttr != null && fcbAttr.ConstructorArguments.Length > 0
                 && fcbAttr.ConstructorArguments[0].Value is string propName)
             {
-                _ctx.FieldChangeCallbacks[member.Name] = propName;
-                // Declare _old_ variable (same type) for storing previous value
-                _ctx.Vars.DeclareField($"__old_{member.Name}", udonType);
+                _fieldChangeCallbacks[member.Name] = propName;
+                _ctx.DeclareField($"__old_{member.Name}", udonType);
             }
         }
 
-        // Properties → declare as heap variables.
-        // Auto-properties use this as primary storage.
-        // Non-auto public properties also need a heap var for cross-behaviour
-        // GetProgramVariable access (UdonSharp compatibility).
-        foreach (var prop in _ctx.ClassSymbol.GetMembers().OfType<IPropertySymbol>())
+        // Properties → declare as heap variables
+        foreach (var prop in _classSymbol.GetMembers().OfType<IPropertySymbol>())
         {
             if (prop.IsStatic || prop.IsImplicitlyDeclared) continue;
             var isAuto = prop.GetMethod?.IsImplicitlyDeclared == true || prop.SetMethod?.IsImplicitlyDeclared == true;
             if (!isAuto && prop.DeclaredAccessibility != Accessibility.Public) continue;
             var udonType = GetUdonType(prop.Type);
-            var flags = VarFlags.None;
-            if (prop.DeclaredAccessibility == Accessibility.Public) flags |= VarFlags.Export;
-            _ctx.Vars.DeclareField(prop.Name, udonType, flags);
+            var flags = FieldFlags.None;
+            if (prop.DeclaredAccessibility == Accessibility.Public) flags |= FieldFlags.Export;
+            _ctx.DeclareField(prop.Name, udonType, flags);
         }
 
         // Collect declared member names to skip overridden/shadowed members in base classes
         var declaredMemberNames = new HashSet<string>(
-            _ctx.ClassSymbol.GetMembers()
+            _classSymbol.GetMembers()
                 .Where(m => m is IFieldSymbol or IPropertySymbol && !m.IsStatic && !m.IsImplicitlyDeclared)
                 .Select(m => m.Name));
 
         // Inherited fields and properties from user-defined base classes
-        var baseType = _ctx.ClassSymbol.BaseType;
+        var baseType = _classSymbol.BaseType;
         while (baseType != null)
         {
             if (USugarCompilerHelper.IsFrameworkNamespace(baseType.ContainingNamespace) || baseType.Name == "UdonSharpBehaviour") break;
@@ -248,36 +264,39 @@ public class UasmEmitter
                 if (member.IsStatic || member.IsImplicitlyDeclared) continue;
                 if (declaredMemberNames.Contains(member.Name)) continue;
                 var udonType = GetUdonType(member.Type);
-                string constDefault = null;
+                object constValue = null;
                 var syntaxRef2 = member.DeclaringSyntaxReferences.FirstOrDefault();
                 if (syntaxRef2?.GetSyntax() is VariableDeclaratorSyntax { Initializer: not null } decl)
                 {
-                    var model = _ctx.Compilation.GetSemanticModel(decl.SyntaxTree);
+                    var model = _compilation.GetSemanticModel(decl.SyntaxTree);
                     var initOp = model.GetOperation(decl.Initializer.Value);
                     if (initOp != null)
                     {
                         var constVal = initOp.ConstantValue;
                         if (constVal.HasValue && constVal.Value != null)
-                            constDefault = FormatConstForDataSection(udonType, constVal.Value, member.Type);
-                        if (constDefault == null)
-                            _ctx.FieldInitOps.Add((member.Name, initOp, member.Type));
+                            constValue = constVal.Value;
+                        if (constValue == null)
+                        {
+                            constValue = TryEvaluateFieldInitForHeap(initOp, member.Type);
+                            if (constValue == null)
+                                _fieldInitOps.Add((member.Name, initOp, member.Type));
+                        }
                     }
                 }
                 declaredMemberNames.Add(member.Name);
-                var baseFlags = VarFlags.None;
+                var baseFlags = FieldFlags.None;
                 if (member.DeclaredAccessibility == Accessibility.Public
                     || member.GetAttributes().Any(a => a.AttributeClass?.Name is "SerializeField" or "SerializeFieldAttribute"))
-                    baseFlags |= VarFlags.Export;
-                _ctx.Vars.DeclareField(member.Name, udonType, baseFlags, constDefault);
+                    baseFlags |= FieldFlags.Export;
+                _ctx.DeclareField(member.Name, udonType, baseFlags, constValue);
 
-                // Inherit FieldChangeCallback from base class fields
                 var baseFcbAttr = member.GetAttributes()
                     .FirstOrDefault(a => a.AttributeClass?.Name == "FieldChangeCallbackAttribute");
                 if (baseFcbAttr != null && baseFcbAttr.ConstructorArguments.Length > 0
                     && baseFcbAttr.ConstructorArguments[0].Value is string basePropName)
                 {
-                    _ctx.FieldChangeCallbacks[member.Name] = basePropName;
-                    _ctx.Vars.DeclareField($"__old_{member.Name}", udonType);
+                    _fieldChangeCallbacks[member.Name] = basePropName;
+                    _ctx.DeclareField($"__old_{member.Name}", udonType);
                 }
             }
             foreach (var prop in baseType.GetMembers().OfType<IPropertySymbol>())
@@ -287,18 +306,20 @@ public class UasmEmitter
                 var isAuto = prop.GetMethod?.IsImplicitlyDeclared == true || prop.SetMethod?.IsImplicitlyDeclared == true;
                 if (!isAuto && prop.DeclaredAccessibility != Accessibility.Public) continue;
                 var udonType = GetUdonType(prop.Type);
-                var flags = VarFlags.None;
-                if (prop.DeclaredAccessibility == Accessibility.Public) flags |= VarFlags.Export;
+                var flags = FieldFlags.None;
+                if (prop.DeclaredAccessibility == Accessibility.Public) flags |= FieldFlags.Export;
                 declaredMemberNames.Add(prop.Name);
-                _ctx.Vars.DeclareField(prop.Name, udonType, flags);
+                _ctx.DeclareField(prop.Name, udonType, flags);
             }
             baseType = baseType.BaseType;
         }
     }
 
+    // ── EmitMethods ──
+
     void EmitMethods()
     {
-        var directMethods = _ctx.ClassSymbol.GetMembers().OfType<IMethodSymbol>()
+        var directMethods = _classSymbol.GetMembers().OfType<IMethodSymbol>()
             .Where(m => (m.MethodKind == MethodKind.Ordinary
                       || m.MethodKind == MethodKind.ExplicitInterfaceImplementation
                       || m.MethodKind == MethodKind.PropertyGet
@@ -306,9 +327,7 @@ public class UasmEmitter
                      && !m.IsImplicitlyDeclared)
             .ToArray();
 
-        // Collect inherited methods from user-defined base classes that are not overridden.
-        // In Udon VM each class compiles to a standalone program, so inherited methods
-        // must be emitted as part of the derived class's program.
+        // Collect inherited methods from user-defined base classes
         var overriddenMethods = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
         foreach (var m in directMethods)
         {
@@ -320,7 +339,7 @@ public class UasmEmitter
             }
         }
         var inheritedMethodsList = new List<IMethodSymbol>();
-        var inheritBase = _ctx.ClassSymbol.BaseType;
+        var inheritBase = _classSymbol.BaseType;
         while (inheritBase != null && inheritBase.Name != "UdonSharpBehaviour")
         {
             if (!inheritBase.DeclaringSyntaxReferences.IsEmpty)
@@ -340,123 +359,138 @@ public class UasmEmitter
         _inheritedMethods = new HashSet<IMethodSymbol>(inheritedMethodsList, SymbolEqualityComparer.Default);
         var methods = directMethods.Concat(inheritedMethodsList).ToArray();
 
-        // Get LayoutPlanner's pre-computed naming for public methods and Udon events
-        var typeLayout = _ctx.Planner.GetLayout(_ctx.ClassSymbol);
+        var typeLayout = _planner.GetLayout(_classSymbol);
 
-        // First pass: assign labels, params, return vars (skip generic definitions)
-        _ctx.NextMethodIndex = 0;
+        // First pass: create IrFunctions, assign params, return vars (skip generic definitions)
+        _nextMethodIndex = 0;
         foreach (var method in methods)
         {
-            // Generic method definitions are not emitted directly;
-            // concrete specializations are generated on demand at call sites.
             if (method.IsGenericMethod) continue;
 
-            var idx = _ctx.NextMethodIndex++;
-            _ctx.MethodIndices[method] = idx;
+            var idx = _nextMethodIndex++;
+            _methodIndices[method] = idx;
 
-            // All methods (including overrides) are in typeLayout.Methods.
-            // Override methods already have baseMl assigned by LayoutPlanner.
             var ml = typeLayout.Methods[method];
             var exportName = ml.ExportName;
-            var label = _ctx.Module.DefineLabel(exportName);
-            _ctx.MethodLabels[method] = label;
+            _methodVarPrefix[method] = exportName;
 
-            // Pre-define body label for exported methods so internal calls can
-            // skip the re-entrance preamble regardless of emit order.
-            // Property setters with FieldChangeCallback are also exported (even if private).
-            bool hasVarChangeCallback = method.MethodKind == MethodKind.PropertySet
-                && method.AssociatedSymbol is IPropertySymbol setProp
-                && _ctx.FieldChangeCallbacks.ContainsValue(setProp.Name);
-            bool willExport = ((method.MethodKind == MethodKind.Ordinary
+            // Determine if this method should be exported
+            bool isOwnOrInherited = SymbolEqualityComparer.Default.Equals(method.ContainingType, _classSymbol)
+                || _inheritedMethods.Contains(method);
+
+            string fcbFieldName = null;
+            if (method.MethodKind == MethodKind.PropertySet
+                && method.AssociatedSymbol is IPropertySymbol setProp)
+            {
+                foreach (var kvp in _fieldChangeCallbacks)
+                    if (kvp.Value == setProp.Name) { fcbFieldName = kvp.Key; break; }
+            }
+
+            bool shouldExport = !method.IsGenericMethod
+                && isOwnOrInherited
+                && (method.MethodKind == MethodKind.Ordinary
                     || method.MethodKind == MethodKind.PropertyGet
                     || method.MethodKind == MethodKind.PropertySet)
                 && (method.DeclaredAccessibility == Accessibility.Public
-                    || UdonEventNames.ContainsKey(method.Name)))
-                || method.MethodKind == MethodKind.ExplicitInterfaceImplementation
-                || hasVarChangeCallback;
-            if (willExport)
-                _ctx.MethodBodyLabels[method] = _ctx.Module.DefineLabel(ml.BodyLabel);
+                    || UdonEventNames.ContainsKey(method.Name)
+                    || fcbFieldName != null);
 
-            _ctx.MethodVarPrefix[method] = exportName;
+            // Create HFunction with or without ExportName
+            var func = _hirModule.AddFunction(exportName, shouldExport ? exportName : null);
+            _methodFunctions[method] = func;
 
             // Declare params using LayoutPlanner IDs
             var paramVarIds = new string[method.Parameters.Length];
             for (int i = 0; i < method.Parameters.Length; i++)
             {
                 var param = method.Parameters[i];
-                if (ml.TupleParamIds != null && i < ml.TupleParamIds.Count && ml.TupleParamIds[i] != null)
-                {
-                    var tupleType = (INamedTypeSymbol)param.Type;
-                    var tupleParamIds = new string[ml.TupleParamIds[i].Count];
-                    for (int ei = 0; ei < ml.TupleParamIds[i].Count; ei++)
-                    {
-                        var elemType = GetUdonType(tupleType.TupleElements[ei].Type);
-                        _ctx.Vars.DeclareVar(ml.TupleParamIds[i][ei], elemType);
-                        tupleParamIds[ei] = ml.TupleParamIds[i][ei];
-                    }
-                    _ctx.MethodTupleParamVarIds[(method, i)] = tupleParamIds;
-                    continue;
-                }
-
                 var isDelegateParam = param.Type is INamedTypeSymbol nt && nt.DelegateInvokeMethod != null;
                 var udonType = isDelegateParam ? "SystemUInt32" : GetUdonType(param.Type);
-                _ctx.Vars.DeclareVar(ml.ParamIds[i], udonType);
+                _ctx.DeclareVar(ml.ParamIds[i], udonType);
                 paramVarIds[i] = ml.ParamIds[i];
             }
-            _ctx.MethodParamVarIds[method] = paramVarIds;
+            _methodParamVarIds[method] = paramVarIds;
 
-            // Declare return var(s)
-            if (!method.ReturnsVoid)
+            // Declare return var
+            if (!method.ReturnsVoid && ml.ReturnId != null)
             {
-                if (ml.TupleReturnIds != null)
-                {
-                    var tupleType = (INamedTypeSymbol)method.ReturnType;
-                    var tupleRetIds = new string[ml.TupleReturnIds.Count];
-                    for (int i = 0; i < ml.TupleReturnIds.Count; i++)
-                    {
-                        var elemType = GetUdonType(tupleType.TupleElements[i].Type);
-                        _ctx.Vars.DeclareVar(ml.TupleReturnIds[i], elemType);
-                        tupleRetIds[i] = ml.TupleReturnIds[i];
-                    }
-                    _ctx.MethodTupleRetVars[method] = tupleRetIds;
-                }
-                else if (ml.ReturnId != null)
-                {
-                    var retType = GetUdonType(method.ReturnType);
-                    _ctx.Vars.DeclareVar(ml.ReturnId, retType);
-                    _ctx.MethodRetVars[method] = ml.ReturnId;
-                    _ctx.MethodRetTypes[method] = retType;
-                }
+                var retType = GetUdonType(method.ReturnType);
+                func.ReturnType = retType;
+                _methodRetVars[method] = ml.ReturnId;
+                _methodRetTypes[method] = retType;
             }
 
-            // Declare convention variables for delegate parameters
             DeclareDelegateConventionVars(method, idx);
         }
 
-        // Collect foreign static methods referenced by this class
+        // Collect foreign static methods
         var foreignStatics = CollectForeignStaticMethods(methods);
         foreach (var fm in foreignStatics)
-            _ctx.RegisterMethod(fm, SanitizeId(fm.Name));
+        {
+            var idx = _nextMethodIndex++;
+            _methodIndices[fm] = idx;
+            _methodVarPrefix[fm] = idx.ToString();
+            var funcName = $"__{idx}_{SanitizeId(fm.Name)}";
+            var func = _hirModule.AddFunction(funcName);
+            _methodFunctions[fm] = func;
 
-        // Collect base class instance methods referenced by this class.
-        // Exclude methods already in the methods array (inherited methods are already there).
+            var fmParamIds = new string[fm.Parameters.Length];
+            for (int pi = 0; pi < fm.Parameters.Length; pi++)
+            {
+                var param = fm.Parameters[pi];
+                var isDelegateParam = param.Type is INamedTypeSymbol nt3 && nt3.DelegateInvokeMethod != null;
+                var udonType = isDelegateParam ? "SystemUInt32" : GetUdonType(param.Type);
+                var paramId = $"__{idx}_{param.Name}__param";
+                _ctx.DeclareVar(paramId, udonType);
+                fmParamIds[pi] = paramId;
+            }
+            _methodParamVarIds[fm] = fmParamIds;
+
+            if (!fm.ReturnsVoid)
+            {
+                var retType = GetUdonType(fm.ReturnType);
+                var retId = $"__{idx}_{SanitizeId(fm.Name)}__ret";
+                func.ReturnType = retType;
+                _methodRetVars[fm] = retId;
+                _methodRetTypes[fm] = retType;
+            }
+        }
+
+        // Collect base class instance methods
         var methodSet = new HashSet<IMethodSymbol>(methods, SymbolEqualityComparer.Default);
         var baseInstanceMethods = CollectBaseInstanceMethods(methods)
             .Where(bm => !methodSet.Contains(bm))
             .ToArray();
         foreach (var bm in baseInstanceMethods)
-            _ctx.RegisterMethod(bm, SanitizeId(bm.Name));
+        {
+            var idx = _nextMethodIndex++;
+            _methodIndices[bm] = idx;
+            _methodVarPrefix[bm] = idx.ToString();
+            var funcName = $"__{idx}_{SanitizeId(bm.Name)}";
+            var func = _hirModule.AddFunction(funcName);
+            _methodFunctions[bm] = func;
 
-        // Ensure retaddr const exists
-        _ctx.Vars.DeclareConst("SystemUInt32", "0xFFFFFFFF");
-
-        // Pre-scan for non-tail self-recursive calls to declare ret addr stack before _start emission
-        foreach (var method in methods)
-            if (HasNonTailSelfRecursiveCall(method))
+            var bmParamIds = new string[bm.Parameters.Length];
+            for (int pi = 0; pi < bm.Parameters.Length; pi++)
             {
-                EnsureRetAddrStack();
-                break;
+                var param = bm.Parameters[pi];
+                var isDelegateParam = param.Type is INamedTypeSymbol nt4 && nt4.DelegateInvokeMethod != null;
+                var udonType = isDelegateParam ? "SystemUInt32" : GetUdonType(param.Type);
+                var paramId = $"__{idx}_{param.Name}__param";
+                _ctx.DeclareVar(paramId, udonType);
+                bmParamIds[pi] = paramId;
             }
+            _methodParamVarIds[bm] = bmParamIds;
+
+            if (!bm.ReturnsVoid)
+            {
+                var retType = GetUdonType(bm.ReturnType);
+                var retId = $"__{idx}_{SanitizeId(bm.Name)}__ret";
+                func.ReturnType = retType;
+                _methodRetVars[bm] = retId;
+                _methodRetTypes[bm] = retType;
+            }
+        }
 
         // Second pass: emit bodies (skip generic definitions)
         foreach (var method in methods)
@@ -473,131 +507,95 @@ public class UasmEmitter
         foreach (var bm in baseInstanceMethods)
             EmitMethod(bm);
 
-        // Emit interface bridge exports (when interface and class layouts differ)
+        // Emit interface bridge exports
         EmitInterfaceBridges();
 
         // Emit pending local functions and generic specializations (may chain)
-        while (_ctx.PendingLocalFunctions.Count > 0 || _ctx.PendingGenericSpecs.Count > 0)
+        while (_pendingLocalFunctions.Count > 0 || _pendingGenericSpecs.Count > 0)
         {
-            if (_ctx.PendingLocalFunctions.Count > 0)
+            if (_pendingLocalFunctions.Count > 0)
             {
-                var batch = _ctx.PendingLocalFunctions.ToList();
-                _ctx.PendingLocalFunctions.Clear();
+                var batch = _pendingLocalFunctions.ToList();
+                _pendingLocalFunctions.Clear();
                 foreach (var (sym, _) in batch)
                     EmitMethod(sym);
             }
-            if (_ctx.PendingGenericSpecs.Count > 0)
+            if (_pendingGenericSpecs.Count > 0)
             {
-                var batch = _ctx.PendingGenericSpecs.ToList();
-                _ctx.PendingGenericSpecs.Clear();
+                var batch = _pendingGenericSpecs.ToList();
+                _pendingGenericSpecs.Clear();
                 foreach (var spec in batch)
                     EmitMethod(spec);
             }
         }
 
-        // Synthesize _start if there are field initializers or ret addr stack but no user-defined Start()
-        if ((_ctx.FieldInitOps.Count > 0 || _ctx.FieldChangeCallbacks.Count > 0) && !methods.Any(m => UdonEventNames.TryGetValue(m.Name, out var en) && en == "_start"))
+        // Synthesize _start if there are field initializers or FCB fields but no user-defined Start()
+        if ((_fieldInitOps.Count > 0 || _fieldChangeCallbacks.Count > 0)
+            && !methods.Any(m => UdonEventNames.TryGetValue(m.Name, out var en) && en == "_start"))
         {
-            var label = _ctx.Module.DefineLabel("_start");
-            _ctx.Module.AddExport("_start", label);
-            _ctx.Module.MarkLabel(label);
-            var sentinel = _ctx.Vars.DeclareConst("SystemUInt32", "0xFFFFFFFF");
-            _ctx.Module.AddPush(sentinel);
-            // Body label separates sentinel push from method body (matches EmitMethod pattern).
-            // Without this, the sentinel PUSH bleeds into the first COPY's push count.
-            var startBodyLabel = _ctx.Module.DefineLabel("_start__body");
-            _ctx.Module.AddLabel(startBodyLabel);
-            _ctx.Module.MarkLabel(startBodyLabel);
+            var startFunc = _hirModule.AddFunction("_start", "_start");
+            _builder.SetFunction(startFunc);
             EmitFieldInitializers();
-            _ctx.Module.AddReturn("__intnl_returnJump_SystemUInt32_0");
+            _builder.EmitReturn();
         }
     }
 
+    // ── Interface Bridges ──
+
     void EmitInterfaceBridges()
     {
-        var bridges = _ctx.Planner.ComputeBridges(_ctx.ClassSymbol);
+        var bridges = _planner.ComputeBridges(_classSymbol);
         foreach (var (ifaceMethod, ifaceMl, classMl) in bridges)
         {
-            if (ifaceMethod.Parameters.Any(p => p.Type.IsTupleType))
-                throw new System.NotSupportedException(
-                    $"Tuple parameters on interface method '{ifaceMethod.ContainingType.Name}.{ifaceMethod.Name}' are not supported in interface bridges.");
-            if (ifaceMethod.ReturnType.IsTupleType)
-                throw new System.NotSupportedException(
-                    $"Tuple return from interface method '{ifaceMethod.ContainingType.Name}.{ifaceMethod.Name}' is not supported in interface bridges.");
-            // Declare interface param/return variables (idempotent — may already exist
-            // if another class method uses the same counter-based name)
+            // Declare interface param/return variables
             for (int i = 0; i < ifaceMethod.Parameters.Length; i++)
             {
                 if (ifaceMl.ParamIds[i] != classMl.ParamIds[i])
                 {
                     var udonType = GetUdonType(ifaceMethod.Parameters[i].Type);
-                    _ctx.Vars.TryDeclareVar(ifaceMl.ParamIds[i], udonType);
+                    _ctx.TryDeclareVar(ifaceMl.ParamIds[i], udonType);
                 }
             }
             if (ifaceMl.ReturnId != null && ifaceMl.ReturnId != classMl.ReturnId)
             {
                 var retType = GetUdonType(ifaceMethod.ReturnType);
-                _ctx.Vars.TryDeclareVar(ifaceMl.ReturnId, retType);
+                _ctx.TryDeclareVar(ifaceMl.ReturnId, retType);
             }
 
-            // Export the interface name → bridge trampoline
-            var bridgeLabel = _ctx.Module.DefineLabel(ifaceMl.ExportName);
-            _ctx.Module.AddExport(ifaceMl.ExportName, bridgeLabel);
-            _ctx.Module.MarkLabel(bridgeLabel);
+            // Create bridge function with unique name (avoid __body label collision with class method)
+            var bridgeFunc = _hirModule.AddFunction($"__bridge_{ifaceMl.ExportName}", ifaceMl.ExportName);
+            _builder.SetFunction(bridgeFunc);
 
-            var sentinel = _ctx.Vars.DeclareConst("SystemUInt32", "0xFFFFFFFF");
+            // Find class implementation
+            var implMethod = _classSymbol.FindImplementationForInterfaceMember(ifaceMethod) as IMethodSymbol;
+            if (implMethod == null || !_methodFunctions.TryGetValue(implMethod, out var classFunc))
+                throw new InvalidOperationException(
+                    $"Interface bridge for '{ifaceMl.ExportName}': "
+                  + $"no function found for implementation of '{ifaceMethod.Name}'.");
 
-            // Copy interface params → class params (only if names differ)
+            // Load interface params
+            var args = new List<HExpr>();
             for (int i = 0; i < ifaceMethod.Parameters.Length; i++)
             {
-                if (ifaceMl.ParamIds[i] != classMl.ParamIds[i])
-                    _ctx.Module.AddCopy(ifaceMl.ParamIds[i], classMl.ParamIds[i]);
+                var paramType = GetUdonType(ifaceMethod.Parameters[i].Type);
+                args.Add(BridgeLoad(ifaceMl.ParamIds[i], paramType));
             }
 
-            // Call class body via returnJump so control returns here after body executes
-            if (_ctx.MethodBodyLabels.TryGetValue(
-                    _ctx.ClassSymbol.FindImplementationForInterfaceMember(ifaceMethod) as IMethodSymbol,
-                    out var bodyLabel))
+            // Call class implementation
+            var result = BridgeCallInternal(classFunc, args.ToArray());
+
+            // Copy return value to interface return field if needed
+            if (result != null && ifaceMl.ReturnId != null
+                && classMl.ReturnId != null && ifaceMl.ReturnId != classMl.ReturnId)
             {
-                bool needsReturnCopy = ifaceMl.ReturnId != null && classMl.ReturnId != null
-                    && ifaceMl.ReturnId != classMl.ReturnId;
-
-                if (needsReturnCopy)
-                {
-                    // Stack-based protocol: push sentinel (for bridge's own return),
-                    // then push continuation label (for body method's return)
-                    _ctx.Module.AddPush(sentinel);
-                    var bridgeContinuation = _ctx.Module.DefineLabel($"__bridge_continue_{ifaceMl.ExportName}");
-                    _ctx.Module.AddPushLabel(bridgeContinuation);
-                    _ctx.Module.AddJump(bodyLabel);
-                    _ctx.Module.MarkLabel(bridgeContinuation);
-
-                    // Copy class return → interface return
-                    _ctx.Module.AddCopy(classMl.ReturnId, ifaceMl.ReturnId);
-
-                    // Return (consumes sentinel from stack → halts)
-                    _ctx.Module.AddReturn("__intnl_returnJump_SystemUInt32_0");
-                }
-                else
-                {
-                    // No return copy needed — push sentinel and jump to body directly.
-                    // Body's RET consumes sentinel from stack → halts.
-                    _ctx.Module.AddPush(sentinel);
-                    _ctx.Module.AddJump(bodyLabel);
-                }
+                BridgeStore(ifaceMl.ReturnId, result);
             }
-            else
-            {
-                throw new System.InvalidOperationException(
-                    $"Interface bridge for '{ifaceMl.ExportName}': "
-                  + $"no body label found for implementation of '{ifaceMethod.Name}'.");
-            }
+
+            _builder.EmitReturn();
         }
     }
 
-    // Explicit interface implementations produce names with dots
-    // (e.g. "Namespace.IFoo.get_Bar") which are invalid in UASM identifiers.
-    static string SanitizeId(string name) => name.Replace('.', '_');
+    // ── Delegate convention vars ──
 
     void DeclareDelegateConventionVars(IMethodSymbol method, int idx)
     {
@@ -611,98 +609,70 @@ public class UasmEmitter
             for (int j = 0; j < invoke.Parameters.Length; j++)
             {
                 var argType = GetUdonType(invoke.Parameters[j].Type);
-                argVarIds[j] = _ctx.Vars.DeclareVar($"__dlg_{idx}_{param.Name}_a{j}", argType);
+                argVarIds[j] = _ctx.DeclareVar($"__dlg_{idx}_{param.Name}_a{j}", argType);
             }
             string retVarId = null;
             if (!invoke.ReturnsVoid)
             {
                 var retType = GetUdonType(invoke.ReturnType);
-                retVarId = _ctx.Vars.DeclareVar($"__dlg_{idx}_{param.Name}_ret", retType);
+                retVarId = _ctx.DeclareVar($"__dlg_{idx}_{param.Name}_ret", retType);
             }
-            _ctx.DelegateParamConventions[(idx, param.Ordinal)] = new DelegateConvention
+            _delegateParamConventions[(idx, param.Ordinal)] = new DelegateConvention
             {
                 ArgVarIds = argVarIds, RetVarId = retVarId
             };
         }
     }
 
+    static string SanitizeId(string name) => name.Replace('.', '_');
+
+    // ── EmitMethod ──
+
     void EmitMethod(IMethodSymbol method)
     {
-        _ctx.CurrentMethod = method;
-        var label = _ctx.MethodLabels[method];
-        var exportName = _ctx.MethodVarPrefix[method]; // stored from first pass (matches label name)
-        var idx = _ctx.MethodIndices[method];
+        _currentMethod = method;
+        var func = _methodFunctions[method];
+        var idx = _methodIndices[method];
 
-        // Generic specializations are internal-only (never exported)
         bool isGenericSpec = method.IsGenericMethod && !method.IsDefinition;
 
         // FieldChangeCallback: check if this setter has an associated callback field
         string fcbFieldName = null;
+        string fcbFieldType = null;
         if (method.MethodKind == MethodKind.PropertySet
             && method.AssociatedSymbol is IPropertySymbol setterProp)
         {
-            foreach (var kvp in _ctx.FieldChangeCallbacks)
-                if (kvp.Value == setterProp.Name) { fcbFieldName = kvp.Key; break; }
+            foreach (var kvp in _fieldChangeCallbacks)
+                if (kvp.Value == setterProp.Name)
+                {
+                    fcbFieldName = kvp.Key;
+                    fcbFieldType = GetUdonType(setterProp.Type);
+                    break;
+                }
         }
 
-        bool isOwnOrInherited = SymbolEqualityComparer.Default.Equals(method.ContainingType, _ctx.ClassSymbol)
-            || _inheritedMethods.Contains(method);
-        bool shouldExport = !isGenericSpec
-            && isOwnOrInherited
-            && (method.MethodKind == MethodKind.Ordinary
-                || method.MethodKind == MethodKind.PropertyGet
-                || method.MethodKind == MethodKind.PropertySet)
-            && (method.DeclaredAccessibility == Accessibility.Public
-                || UdonEventNames.ContainsKey(method.Name)
-                || fcbFieldName != null);
-        if (shouldExport)
+        // FCB: Create separate _onVarChange_ function
+        if (fcbFieldName != null)
         {
-            // FieldChangeCallback preamble: emit _onVarChange_ export before setter export
-            if (fcbFieldName != null)
-            {
-                var varChangeExportName = $"_onVarChange_{fcbFieldName}";
-                var varChangeLabel = _ctx.Module.DefineLabel(varChangeExportName);
-                _ctx.Module.AddExport(varChangeExportName, varChangeLabel);
-                _ctx.Module.MarkLabel(varChangeLabel);
+            var varChangeName = $"_onVarChange_{fcbFieldName}";
+            var varChangeFunc = _hirModule.AddFunction(varChangeName, varChangeName);
+            _builder.SetFunction(varChangeFunc);
 
-                // Preamble: swap new/old values
-                // 1. field → value param (new value to setter parameter)
-                var paramId = _ctx.MethodParamVarIds[method][0];
-                _ctx.Module.AddCopy(fcbFieldName, paramId);
-                // 2. _old_ → field (restore field to old value)
-                _ctx.Module.AddCopy($"__old_{fcbFieldName}", fcbFieldName);
-                // Fall through to setter body
-            }
+            // Preamble: read new value from field, restore old value to field
+            var newVal = BridgeLoad(fcbFieldName, fcbFieldType);
+            var oldVal = BridgeLoad($"__old_{fcbFieldName}", fcbFieldType);
+            BridgeStore(fcbFieldName, oldVal);
 
-            _ctx.Module.AddExport(exportName, label);
-            _ctx.Module.MarkLabel(label);
-
-            // Stack-based sentinel: push 0xFFFFFFFF onto VM stack so RET (PUSH+COPY+JUMP_INDIRECT)
-            // consumes it and halts cleanly when called externally (matches UdonSharp protocol).
-            var sentinel = _ctx.Vars.DeclareConst("SystemUInt32", "0xFFFFFFFF");
-            _ctx.Module.AddPush(sentinel);
-
-            // Body label (pre-defined in first pass): internal JUMP calls skip the preamble
-            var bodyLabel = _ctx.MethodBodyLabels[method];
-            _ctx.Module.AddLabel(bodyLabel);
-            _ctx.Module.MarkLabel(bodyLabel);
-        }
-        else if (_ctx.MethodBodyLabels.TryGetValue(method, out var bodyLbl))
-        {
-            // Explicit interface impl: only mark body label (bridge handles export)
-            _ctx.Module.AddLabel(bodyLbl);
-            _ctx.Module.MarkLabel(bodyLbl);
-        }
-        else
-        {
-            _ctx.Module.AddLabel(label);
-            _ctx.Module.MarkLabel(label);
+            // Call setter with new value
+            BridgeCallInternal(func, new HExpr[] { newVal });
+            _builder.EmitReturn();
         }
 
-        // Scope for method locals
-        _ctx.Vars.PushScope();
+        // Switch to the method's function for body emission
+        _builder.SetFunction(func);
 
         // Emit field initializers at the start of _start
+        var exportName = _methodVarPrefix[method];
         if (exportName == "_start")
             EmitFieldInitializers();
 
@@ -713,20 +683,19 @@ public class UasmEmitter
             var map = new Dictionary<ITypeParameterSymbol, ITypeSymbol>(SymbolEqualityComparer.Default);
             for (int i = 0; i < orig.TypeParameters.Length; i++)
                 map[orig.TypeParameters[i]] = method.TypeArguments[i];
-            _ctx.TypeParamMap = map;
+            _typeParamMap = map;
         }
 
-        // Get method body IOperation (from OriginalDefinition for generic specializations)
+        // Get method body IOperation
         var bodySource = isGenericSpec ? method.OriginalDefinition : method;
         var syntaxRef = bodySource.DeclaringSyntaxReferences.FirstOrDefault();
         if (syntaxRef != null)
         {
             var syntax = syntaxRef.GetSyntax();
             var tree = syntax.SyntaxTree;
-            var model = _ctx.Compilation.GetSemanticModel(tree);
+            var model = _compilation.GetSemanticModel(tree);
 
             var bodyOp = model.GetOperation(syntax);
-            _ctx.GotoLabels.Clear();
             PreScanGotoLabels(bodyOp);
             if (bodyOp is IMethodBodyOperation methodBody)
             {
@@ -744,10 +713,10 @@ public class UasmEmitter
             {
                 if (anonFunc.Body is IBlockOperation anonBlock)
                     VisitOperation(anonBlock);
-                else if (anonFunc.Body != null && _ctx.MethodRetVars.TryGetValue(method, out var lambdaRetId))
+                else if (anonFunc.Body != null && _methodRetVars.TryGetValue(method, out var lambdaRetId))
                 {
-                    var resultId = VisitExpression(anonFunc.Body);
-                    _ctx.Module.AddCopy(resultId, lambdaRetId);
+                    var resultVal = VisitExpression(anonFunc.Body);
+                    BridgeStore(lambdaRetId, resultVal);
                 }
             }
             else if (bodyOp is IBlockOperation block)
@@ -757,10 +726,10 @@ public class UasmEmitter
                      && propDecl.ExpressionBody != null)
             {
                 var exprOp = model.GetOperation(propDecl.ExpressionBody.Expression);
-                if (exprOp != null && _ctx.MethodRetVars.TryGetValue(method, out var retId))
+                if (exprOp != null && _methodRetVars.TryGetValue(method, out var retId))
                 {
-                    var resultId = VisitExpression(exprOp);
-                    _ctx.Module.AddCopy(resultId, retId);
+                    var resultVal = VisitExpression(exprOp);
+                    BridgeStore(retId, resultVal);
                 }
             }
             // Block-bodied property accessor: int X { get { return expr; } }
@@ -779,24 +748,27 @@ public class UasmEmitter
             }
         }
 
-        _ctx.Vars.PopScope();
-
         // FieldChangeCallback epilogue: update _old_ to current value
         if (fcbFieldName != null)
-            _ctx.Module.AddCopy(fcbFieldName, $"__old_{fcbFieldName}");
+        {
+            var curVal = BridgeLoad(fcbFieldName, fcbFieldType);
+            BridgeStore($"__old_{fcbFieldName}", curVal);
+        }
 
         // Clear type param map after generic specialization emission
         if (isGenericSpec)
-            _ctx.TypeParamMap = null;
+            _typeParamMap = null;
 
         // Method epilogue: return
-        _ctx.Module.AddReturn("__intnl_returnJump_SystemUInt32_0");
-        _ctx.CurrentMethod = null;
+        _builder.EmitReturn();
+        _currentMethod = null;
     }
+
+    // ── Field Initializers ──
 
     void EmitFieldInitializers()
     {
-        foreach (var (fieldId, initOp, fieldType) in _ctx.FieldInitOps)
+        foreach (var (fieldId, initOp, fieldType) in _fieldInitOps)
         {
             try
             {
@@ -806,27 +778,26 @@ public class UasmEmitter
                     var arrTypeSym = (IArrayTypeSymbol)fieldType;
                     var arrayType = GetUdonType(arrTypeSym);
                     var elementType = GetArrayElemType(arrTypeSym);
-                    var sizeConst = _ctx.Vars.DeclareConst("SystemInt32", arrayInit.ElementValues.Length.ToString());
-                    _ctx.Module.AddPush(sizeConst);
-                    _ctx.Module.AddPush(fieldId);
-                    AddExternChecked($"{arrayType}.__ctor__SystemInt32__{arrayType}");
+                    var sizeConst = BridgeConstInt(arrayInit.ElementValues.Length);
+                    var arrVal = BridgeCallExtern(arrayType,
+                        $"{arrayType}.__ctor__SystemInt32__{arrayType}",
+                        new HExpr[] { sizeConst });
+                    BridgeStore(fieldId, arrVal);
                     for (int i = 0; i < arrayInit.ElementValues.Length; i++)
                     {
-                        var valId = VisitExpression(arrayInit.ElementValues[i]);
-                        var idxConst = _ctx.Vars.DeclareConst("SystemInt32", i.ToString());
-                        _ctx.Module.AddPush(fieldId);
-                        _ctx.Module.AddPush(idxConst);
-                        _ctx.Module.AddPush(valId);
-                        AddExternChecked($"{arrayType}.__Set__SystemInt32_{elementType}__SystemVoid");
+                        var elemVal = VisitExpression(arrayInit.ElementValues[i]);
+                        var idxConst = BridgeConstInt(i);
+                        var arrLoad = BridgeLoad(fieldId, arrayType);
+                        BridgeCallExternVoid(
+                            $"{arrayType}.__Set__SystemInt32_{elementType}__SystemVoid",
+                            new HExpr[] { arrLoad, idxConst, elemVal });
                     }
                     continue;
                 }
 
-                var valueId = VisitExpression(initOp);
+                var valueVal = VisitExpression(initOp);
 
-                // Udon COPY overwrites destination type tag with source type.
-                // When initOp type differs from field type (e.g. int literal 0 → float field),
-                // emit numeric conversion instead of raw COPY to prevent type-tag corruption.
+                // Type conversion for numeric type mismatch (e.g. int literal 0 → float field)
                 if (initOp.Type != null && fieldType != null
                     && !SymbolEqualityComparer.Default.Equals(initOp.Type, fieldType)
                     && ExternResolver.IsNumericType(initOp.Type)
@@ -837,21 +808,20 @@ public class UasmEmitter
                     {
                         var srcType = GetUdonType(initOp.Type);
                         var dstType = GetUdonType(fieldType);
-                        var convertedId = _ctx.Vars.DeclareTemp(dstType);
-                        _ctx.Module.AddPush(valueId);
-                        _ctx.Module.AddPush(convertedId);
-                        AddExternChecked($"SystemConvert.__{methodName}__{srcType}__{dstType}");
-                        _ctx.Module.AddCopy(convertedId, fieldId);
+                        var converted = BridgeCallExtern(dstType,
+                            $"SystemConvert.__{methodName}__{srcType}__{dstType}",
+                            new HExpr[] { valueVal });
+                        BridgeStore(fieldId, converted);
                         continue;
                     }
                 }
 
-                _ctx.Module.AddCopy(valueId, fieldId);
+                BridgeStore(fieldId, valueVal);
             }
-            catch (System.NotSupportedException ex)
+            catch (NotSupportedException ex)
             {
                 var loc = initOp.Syntax?.GetLocation()?.GetLineSpan();
-                _ctx.Diagnostics.Add(new EmitDiagnostic
+                _diagnostics.Add(new EmitDiagnostic
                 {
                     Severity = "Warning",
                     Message = $"Field '{fieldId}' initializer not supported, will be default(T) at runtime: {ex.Message}",
@@ -863,8 +833,15 @@ public class UasmEmitter
         }
 
         // Initialize _old_ variables for FieldChangeCallback fields
-        foreach (var kvp in _ctx.FieldChangeCallbacks)
-            _ctx.Module.AddCopy(kvp.Key, $"__old_{kvp.Key}");
+        foreach (var kvp in _fieldChangeCallbacks)
+        {
+            var fcbType = _ctx.GetFieldType(kvp.Key);
+            if (fcbType != null)
+            {
+                var fieldVal = BridgeLoad(kvp.Key, fcbType);
+                BridgeStore($"__old_{kvp.Key}", fieldVal);
+            }
+        }
     }
 
     // ── IOperation visitor (facade — delegates to handlers) ──
@@ -873,36 +850,24 @@ public class UasmEmitter
     {
         foreach (var h in _stmtHandlers)
             if (h.CanHandle(op)) { h.Handle(op); return; }
-        throw new System.NotSupportedException($"Unsupported operation: {op.Kind} ({op.GetType().Name})");
+        throw new NotSupportedException($"Unsupported operation: {op.Kind} ({op.GetType().Name})");
     }
 
     void PreScanGotoLabels(IOperation op)
     {
-        if (op == null) return;
-        if (op is ILabeledOperation labeled)
-        {
-            var label = _ctx.Module.DefineLabel($"__goto_{labeled.Label.Name}");
-            _ctx.GotoLabels[labeled.Label] = label;
-        }
-        foreach (var child in op.Children)
-            PreScanGotoLabels(child);
+        // No-op: HIR uses string-based HGoto/HLabelStmt instead of IrBlock targets.
     }
 
     // ── Expression visitor (facade — delegates to handlers) ──
 
-    string VisitExpression(IOperation op)
+    HExpr VisitExpression(IOperation op)
     {
         if (op == null)
-            throw new System.NotSupportedException("VisitExpression called with null operation");
+            throw new NotSupportedException("VisitExpression called with null operation");
         foreach (var h in _exprHandlers)
             if (h.CanHandle(op)) return h.Handle(op);
-        throw new System.NotSupportedException(
+        throw new NotSupportedException(
             $"Unsupported expression: {op.Kind} ({op.GetType().Name})");
-    }
-
-    void EnsureRetAddrStack()
-    {
-        // Disabled: recursion and re-entrance stack not supported (matches UdonSharp behavior)
     }
 
     bool HasNonTailSelfRecursiveCall(IMethodSymbol method)
@@ -910,7 +875,7 @@ public class UasmEmitter
         var syntaxRef = method.DeclaringSyntaxReferences.FirstOrDefault();
         if (syntaxRef == null) return false;
         var syntax = syntaxRef.GetSyntax();
-        var model = _ctx.Compilation.GetSemanticModel(syntax.SyntaxTree);
+        var model = _compilation.GetSemanticModel(syntax.SyntaxTree);
         var bodyOp = model.GetOperation(syntax);
         return ContainsNonTailSelfCall(bodyOp, method);
     }
@@ -919,7 +884,6 @@ public class UasmEmitter
     {
         if (op == null) return false;
 
-        // return self(args) → tail call; only check args for non-tail self-calls
         if (op is IReturnOperation ret && ret.ReturnedValue is IInvocationOperation retInv
             && SymbolEqualityComparer.Default.Equals(retInv.TargetMethod, method))
         {
@@ -938,20 +902,20 @@ public class UasmEmitter
         return false;
     }
 
+    // ── Static collection helpers ──
+
     IMethodSymbol[] CollectForeignStaticMethods(IMethodSymbol[] classMethods)
     {
         var result = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
-        // Seed: walk class method bodies
         foreach (var method in classMethods)
         {
             var syntaxRef = method.DeclaringSyntaxReferences.FirstOrDefault();
             if (syntaxRef == null) continue;
             var syntax = syntaxRef.GetSyntax();
-            var model = _ctx.Compilation.GetSemanticModel(syntax.SyntaxTree);
+            var model = _compilation.GetSemanticModel(syntax.SyntaxTree);
             var bodyOp = model.GetOperation(syntax);
             CollectForeignStaticCallsInOperation(bodyOp, result);
         }
-        // Recursively walk foreign static bodies to find transitive dependencies
         var visited = new HashSet<IMethodSymbol>(result, SymbolEqualityComparer.Default);
         var queue = new Queue<IMethodSymbol>(result);
         while (queue.Count > 0)
@@ -960,9 +924,8 @@ public class UasmEmitter
             var syntaxRef = fm.DeclaringSyntaxReferences.FirstOrDefault();
             if (syntaxRef == null) continue;
             var syntax = syntaxRef.GetSyntax();
-            var model = _ctx.Compilation.GetSemanticModel(syntax.SyntaxTree);
+            var model = _compilation.GetSemanticModel(syntax.SyntaxTree);
             var bodyOp = model.GetOperation(syntax);
-            var before = result.Count;
             CollectForeignStaticCallsInOperation(bodyOp, result);
             foreach (var newMethod in result.Except(visited))
             {
@@ -976,10 +939,9 @@ public class UasmEmitter
     void CollectForeignStaticCallsInOperation(IOperation op, HashSet<IMethodSymbol> result)
     {
         if (op == null) return;
-        if (op is IInvocationOperation inv && _ctx.IsForeignStatic(inv.TargetMethod))
+        if (op is IInvocationOperation inv && IsForeignStatic(inv.TargetMethod))
         {
             var original = inv.TargetMethod.ReducedFrom ?? inv.TargetMethod;
-            // Skip generic method definitions — they are monomorphized on demand at call sites
             if (!original.IsGenericMethod)
                 result.Add(original);
         }
@@ -987,6 +949,21 @@ public class UasmEmitter
             CollectForeignStaticCallsInOperation(child, result);
     }
 
+    bool IsBaseInstanceMethod(IMethodSymbol method)
+    {
+        if (method.IsStatic) return false;
+        if (method.ContainingType.DeclaringSyntaxReferences.Length == 0) return false;
+        if (SymbolEqualityComparer.Default.Equals(method.ContainingType, _classSymbol)) return false;
+        if (USugarCompilerHelper.IsFrameworkNamespace(method.ContainingType.ContainingNamespace)) return false;
+        if (method.ContainingType.Name == "UdonSharpBehaviour") return false;
+        var bt = _classSymbol.BaseType;
+        while (bt != null)
+        {
+            if (SymbolEqualityComparer.Default.Equals(bt, method.ContainingType)) return true;
+            bt = bt.BaseType;
+        }
+        return false;
+    }
 
     IMethodSymbol[] CollectBaseInstanceMethods(IMethodSymbol[] classMethods)
     {
@@ -996,7 +973,7 @@ public class UasmEmitter
             var syntaxRef = method.DeclaringSyntaxReferences.FirstOrDefault();
             if (syntaxRef == null) continue;
             var syntax = syntaxRef.GetSyntax();
-            var model = _ctx.Compilation.GetSemanticModel(syntax.SyntaxTree);
+            var model = _compilation.GetSemanticModel(syntax.SyntaxTree);
             var bodyOp = model.GetOperation(syntax);
             CollectBaseInstanceCallsInOperation(bodyOp, result);
         }
@@ -1006,40 +983,25 @@ public class UasmEmitter
     void CollectBaseInstanceCallsInOperation(IOperation op, HashSet<IMethodSymbol> result)
     {
         if (op == null) return;
-        if (op is IInvocationOperation inv && _ctx.IsBaseInstanceMethod(inv.TargetMethod))
+        if (op is IInvocationOperation inv && IsBaseInstanceMethod(inv.TargetMethod))
             result.Add(inv.TargetMethod);
         foreach (var child in op.Children)
             CollectBaseInstanceCallsInOperation(child, result);
     }
 
-
-    // Format a compile-time constant value for the UASM data section.
-    // Returns null if the value cannot be represented as a data section default.
-    static string FormatConstForDataSection(string udonType, object value, ITypeSymbol fieldType)
+    bool IsForeignStatic(IMethodSymbol method)
     {
-        // For enum fields, use the underlying integer value
-        if (fieldType.TypeKind == TypeKind.Enum && value is System.IConvertible ic)
-            return ic.ToString(System.Globalization.CultureInfo.InvariantCulture);
-        return udonType switch
-        {
-            "SystemInt32" or "SystemInt64" or "SystemByte" or "SystemSByte"
-                or "SystemInt16" or "SystemUInt16" or "SystemUInt32" or "SystemUInt64"
-                => value.ToString(),
-            "SystemSingle" => ((System.IConvertible)value).ToSingle(System.Globalization.CultureInfo.InvariantCulture)
-                .ToString(System.Globalization.CultureInfo.InvariantCulture),
-            "SystemDouble" => ((System.IConvertible)value).ToDouble(System.Globalization.CultureInfo.InvariantCulture)
-                .ToString(System.Globalization.CultureInfo.InvariantCulture),
-            "SystemBoolean" => (bool)value ? "True" : "False",
-            "SystemString" => value.ToString(),
-            "SystemChar" => value.ToString(),
-            _ => null,
-        };
+        var resolved = method.ReducedFrom ?? method;
+        if (!resolved.IsStatic) return false;
+        if (resolved.ContainingType.DeclaringSyntaxReferences.Length == 0) return false;
+        if (ExternResolver.IsUdonSharpBehaviour(resolved.ContainingType)) return false;
+        if (SymbolEqualityComparer.Default.Equals(resolved.ContainingType, _classSymbol)) return false;
+        if (IsExternNamespace(resolved.ContainingType.ContainingNamespace)) return false;
+        return true;
     }
 
-    /// <summary>
-    /// コンパイル時に評価可能な非定数フィールド初期化子を CLR オブジェクトとして生成する。
-    /// 成功時は CLR オブジェクト（例: int[5]）を返し、評価不可の場合は null を返す。
-    /// </summary>
+    // ── Constant evaluation helpers ──
+
     object TryEvaluateFieldInitForHeap(IOperation initOp, ITypeSymbol fieldType)
     {
         if (initOp is IArrayCreationOperation arrayCreation)
@@ -1142,22 +1104,12 @@ public class UasmEmitter
         return true;
     }
 
-
-    void FlushVariablesToModule()
+    static bool IsExternNamespace(INamespaceSymbol ns)
     {
-        foreach (var entry in _ctx.Vars.GetAllEntries())
-            _ctx.Module.DeclareVariable(entry.Id, entry.UdonType, entry.DefaultValue, entry.Flags, entry.SyncMode, entry.ConstValue);
-    }
-
-    void SyncOptimizerConsts()
-    {
-        var constValues = _ctx.Module.GetConstValues();
-        var varTypes = _ctx.Module.GetVariableTypes();
-        foreach (var kv in constValues)
-        {
-            if (!varTypes.TryGetValue(kv.Key, out var type)) continue;
-            _ctx.Vars.TryDeclareVar(kv.Key, type);
-            _ctx.Vars.SetConstValue(kv.Key, kv.Value);
-        }
+        if (ns == null || ns.IsGlobalNamespace) return false;
+        var root = ns;
+        while (root.ContainingNamespace != null && !root.ContainingNamespace.IsGlobalNamespace)
+            root = root.ContainingNamespace;
+        return root.Name is "UnityEngine" or "VRC" or "TMPro" or "System";
     }
 }
