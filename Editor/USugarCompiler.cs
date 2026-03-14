@@ -54,6 +54,15 @@ public static class USugarCompiler
     [MenuItem("USugar/Compile/USugar")]
     public static void CompileAndApply() => USugarCompilationOrchestrator.CompileInternal(applyToAssets: true, force: true);
 
+    [MenuItem("USugar/Compile/USugar (with IR dump)")]
+    public static void CompileWithDump()
+    {
+        IrPipeline.DumpEnabled = true;
+        try { USugarCompilationOrchestrator.CompileInternal(applyToAssets: true, force: true); }
+        finally { IrPipeline.DumpEnabled = false; }
+        USugarLog.Info("IR dumps written to Temp/USugar/");
+    }
+
     [MenuItem("USugar/Compile/UdonSharp")]
     static void ExportReferenceUasm()
     {
