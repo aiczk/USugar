@@ -116,6 +116,7 @@ public static class LirOptimizer
         if (func.Blocks.Count <= 1) return false;
 
         var preds = ComputePredecessors(func);
+        var blockMap = BuildBlockMap(func);
         bool changed = false;
 
         // Don't remove the entry block
@@ -133,10 +134,11 @@ public static class LirOptimizer
             // Redirect all predecessors
             foreach (var predId in preds[block.Id])
             {
-                var pred = func.Blocks.First(b => b.Id == predId);
-                RedirectTerminator(pred, block.Id, target);
+                if (blockMap.TryGetValue(predId, out var pred))
+                    RedirectTerminator(pred, block.Id, target);
             }
 
+            blockMap.Remove(block.Id);
             func.Blocks.RemoveAt(i);
             changed = true;
         }
@@ -160,6 +162,7 @@ public static class LirOptimizer
         {
             merged = false;
             preds = ComputePredecessors(func);
+            var blockMap = BuildBlockMap(func);
 
             for (int i = 0; i < func.Blocks.Count; i++)
             {
@@ -174,8 +177,7 @@ public static class LirOptimizer
                     continue;
                 if (succPreds[0] != block.Id) continue;
 
-                var succ = func.Blocks.FirstOrDefault(b => b.Id == succId);
-                if (succ == null) continue;
+                if (!blockMap.TryGetValue(succId, out var succ)) continue;
 
                 // Merge: append B's instructions and terminator to A
                 block.Insts.AddRange(succ.Insts);
@@ -199,6 +201,7 @@ public static class LirOptimizer
     {
         if (func.Blocks.Count <= 1) return;
 
+        var blockMap = BuildBlockMap(func);
         var reachable = new HashSet<int>();
         var queue = new Queue<int>();
         queue.Enqueue(func.Entry.Id);
@@ -207,8 +210,7 @@ public static class LirOptimizer
         while (queue.Count > 0)
         {
             var id = queue.Dequeue();
-            var block = func.Blocks.FirstOrDefault(b => b.Id == id);
-            if (block?.Term == null) continue;
+            if (!blockMap.TryGetValue(id, out var block) || block.Term == null) continue;
 
             foreach (var succId in GetSuccessors(block.Term))
             {
@@ -388,7 +390,7 @@ public static class LirOptimizer
                     case LCallExtern ce:
                         var ceArgs = SubstArgs(ce.Args, Subst);
                         if (ceArgs != null)
-                            block.Insts[i] = new LCallExtern(ce.DestSlot, ce.Sig, ceArgs, ce.RetType, ce.IsPure);
+                            block.Insts[i] = new LCallExtern(ce.DestSlot, ce.Sig, ceArgs, ce.RetType);
                         break;
                     case LCallInternal ci:
                         var ciArgs = SubstArgs(ci.Args, Subst);
@@ -717,7 +719,7 @@ public static class LirOptimizer
         LMove m => new LMove(RemapSlotId(m.DestSlot, mapping), RemapOperand(m.Src, mapping), m.Type),
         LLoadField lf => new LLoadField(RemapSlotId(lf.DestSlot, mapping), lf.FieldName, lf.Type),
         LStoreField sf => new LStoreField(sf.FieldName, RemapOperand(sf.Value, mapping)),
-        LCallExtern ce => new LCallExtern(RemapSlotIdNullable(ce.DestSlot, mapping), ce.Sig, RemapArgs(ce.Args, mapping), ce.RetType, ce.IsPure),
+        LCallExtern ce => new LCallExtern(RemapSlotIdNullable(ce.DestSlot, mapping), ce.Sig, RemapArgs(ce.Args, mapping), ce.RetType),
         LCallInternal ci => new LCallInternal(RemapSlotIdNullable(ci.DestSlot, mapping), ci.FuncName, RemapArgs(ci.Args, mapping), ci.RetType),
         _ => inst,
     };
@@ -732,6 +734,14 @@ public static class LirOptimizer
     // ========================================================================
     // Helpers
     // ========================================================================
+
+    static Dictionary<int, LBlock> BuildBlockMap(LFunction func)
+    {
+        var map = new Dictionary<int, LBlock>(func.Blocks.Count);
+        foreach (var b in func.Blocks)
+            map[b.Id] = b;
+        return map;
+    }
 
     static Dictionary<int, List<int>> ComputePredecessors(LFunction func)
     {

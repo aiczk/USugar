@@ -24,9 +24,9 @@ public class FieldLayout
 {
     public string VarId { get; }
     public string UdonType { get; }
-    public VarFlags Flags { get; }
+    public FieldFlags Flags { get; }
 
-    public FieldLayout(string varId, string udonType, VarFlags flags)
+    public FieldLayout(string varId, string udonType, FieldFlags flags)
     {
         VarId = varId;
         UdonType = udonType;
@@ -477,9 +477,9 @@ public class LayoutPlanner
         {
             if (member.IsStatic || member.IsImplicitlyDeclared) continue;
             var udonType = ExternResolver.GetUdonTypeName(member.Type);
-            var flags = VarFlags.None;
-            if (member.DeclaredAccessibility == Accessibility.Public) flags |= VarFlags.Export;
-            if (member.GetAttributes().Any(a => a.AttributeClass?.Name == "UdonSyncedAttribute")) flags |= VarFlags.Sync;
+            var flags = FieldFlags.None;
+            if (member.DeclaredAccessibility == Accessibility.Public) flags |= FieldFlags.Export;
+            if (member.GetAttributes().Any(a => a.AttributeClass?.Name == "UdonSyncedAttribute")) flags |= FieldFlags.Sync;
             fields[member] = new FieldLayout(member.Name, udonType, flags);
         }
 

@@ -6,20 +6,13 @@ using System.Text;
 // Shared types used across HIR, LIR, and UASM generation.
 // ============================================================================
 
+/// <summary>Flags for field and variable declarations (export, sync).</summary>
 [Flags]
-public enum VarFlags
-{
-    None   = 0,
-    Export = 1 << 0,
-    Sync   = 1 << 1,
-}
-
-/// <summary>Field flags for module-level declarations.</summary>
 public enum FieldFlags
 {
     None = 0,
-    Export = 1,
-    Sync = 2,
+    Export = 1 << 0,
+    Sync = 1 << 1,
 }
 
 /// <summary>Module-level field declaration (heap variable).</summary>
