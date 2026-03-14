@@ -37,18 +37,24 @@ public class NullableHandler : HandlerBase, IExpressionHandler
 
         var targetVal = VisitExpression(op.Operation);
 
+        // Store in temp slot to avoid double evaluation of impure expressions (e.g., method calls)
+        var targetType = GetUdonType(op.Operation.Type ?? op.Type);
+        var targetSlot = _ctx.AllocTemp(targetType);
+        EmitAssign(targetSlot, targetVal);
+        var targetRef = SlotRef(targetSlot);
+
         var nullConst = Const(null, "SystemObject");
 
         // condVal = (target != null); if true → evaluate WhenNotNull, else skip
         var condVal = ExternCall(
             "SystemObject.__op_Inequality__SystemObject_SystemObject__SystemBoolean",
-            new List<HExpr> { targetVal, nullConst },
+            new List<HExpr> { targetRef, nullConst },
             "SystemBoolean");
 
         _builder.EmitIf(condVal, b =>
         {
             // target is not null → evaluate WhenNotNull with target as the instance
-            _conditionalAccessTargets.Push(targetVal);
+            _conditionalAccessTargets.Push(targetRef);
             var accessVal = VisitExpression(op.WhenNotNull);
             _conditionalAccessTargets.Pop();
 
@@ -69,10 +75,10 @@ public class NullableHandler : HandlerBase, IExpressionHandler
 
         var nullConst = Const(null, "SystemObject");
 
-        // condVal = (left == null); if true → use right
+        // Use SlotRef for null check to avoid double evaluation of impure left-hand side
         var condVal = ExternCall(
             "SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean",
-            new List<HExpr> { leftVal, nullConst },
+            new List<HExpr> { SlotRef(resultSlot), nullConst },
             "SystemBoolean");
 
         _builder.EmitIf(condVal, b =>

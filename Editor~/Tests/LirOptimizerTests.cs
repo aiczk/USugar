@@ -502,6 +502,79 @@ public class LirOptimizerTests
     }
 
     [Fact]
+    public void Coalesce_LoopBackEdge_PreventsInvalidMerge()
+    {
+        // slot0 used in loop header, slot1 used in loop body
+        // Back-edge from body to header → slot0 is live throughout body
+        // Must NOT merge slot0 and slot1
+        var func = MakeFunc();
+        func.Slots.Add(new SlotDecl(0, "SystemInt32", SlotClass.Scratch));
+        func.Slots.Add(new SlotDecl(1, "SystemInt32", SlotClass.Scratch));
+
+        var header = func.NewBlock(); // bb0
+        var body = func.NewBlock();   // bb1
+        var exit = func.NewBlock();   // bb2
+
+        // header: slot0 = condition, branch on slot0
+        header.Insts.Add(new LLoadField(0, "cond", "SystemInt32"));
+        header.Term = new LBranch(new LSlotRef(0, "SystemInt32"), body.Id, exit.Id);
+
+        // body: slot1 = 42, use slot1, jump back to header
+        body.Insts.Add(new LMove(1, new LConst(42, "SystemInt32"), "SystemInt32"));
+        body.Insts.Add(new LStoreField("result", new LSlotRef(1, "SystemInt32")));
+        body.Term = new LJump(header.Id); // back-edge
+
+        // exit: return
+        exit.Term = new LReturn();
+
+        var module = MakeModule(func);
+        LirOptimizer.CoalesceSlots(module);
+
+        // slot0 and slot1 must NOT be merged (slot0 alive through body via back-edge)
+        var bodyMove = Assert.IsType<LMove>(body.Insts[0]);
+        Assert.NotEqual(0, bodyMove.DestSlot); // slot1 must keep its own ID
+    }
+
+    [Fact]
+    public void Coalesce_LoopWithNonOverlapping_StillMerges()
+    {
+        // slot0 defined and used only in body (not in header)
+        // slot1 defined and used only after loop
+        // These should still merge even with a loop present
+        var func = MakeFunc();
+        func.Slots.Add(new SlotDecl(0, "SystemInt32", SlotClass.Scratch));
+        func.Slots.Add(new SlotDecl(1, "SystemInt32", SlotClass.Scratch));
+        func.Slots.Add(new SlotDecl(2, "SystemBoolean", SlotClass.Scratch));
+
+        var header = func.NewBlock();
+        var body = func.NewBlock();
+        var exit = func.NewBlock();
+
+        header.Insts.Add(new LLoadField(2, "flag", "SystemBoolean"));
+        header.Term = new LBranch(new LSlotRef(2, "SystemBoolean"), body.Id, exit.Id);
+
+        // body: use slot0 entirely within body
+        body.Insts.Add(new LMove(0, new LConst(10, "SystemInt32"), "SystemInt32"));
+        body.Insts.Add(new LStoreField("x", new LSlotRef(0, "SystemInt32")));
+        body.Term = new LJump(header.Id);
+
+        // exit: use slot1 entirely after loop
+        exit.Insts.Add(new LMove(1, new LConst(20, "SystemInt32"), "SystemInt32"));
+        exit.Insts.Add(new LStoreField("y", new LSlotRef(1, "SystemInt32")));
+        exit.Term = new LReturn();
+
+        var module = MakeModule(func);
+        LirOptimizer.CoalesceSlots(module);
+
+        // slot0 and slot1 CAN be merged (non-overlapping, one in body one after)
+        // RPO visits exit before body, so slot1 (exit) gets the lower def position
+        // and becomes the representative. slot0 (body) merges into slot1.
+        var bodyMove = Assert.IsType<LMove>(body.Insts[0]);
+        var exitMove = Assert.IsType<LMove>(exit.Insts[0]);
+        Assert.Equal(exitMove.DestSlot, bodyMove.DestSlot); // merged to same slot
+    }
+
+    [Fact]
     public void Coalesce_RewritesOperands()
     {
         // Verify all instruction types get operands remapped after coalescing
