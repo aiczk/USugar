@@ -27,7 +27,11 @@ public static class IrPipeline
         var result = LirToUasm.Generate(lirModule);
 
         if (DumpEnabled)
+        {
             DumpToFile(className, "3_uasm.txt", result.Uasm);
+            if (result.AnnotatedUasm != null)
+                DumpToFile(className, "3_uasm_annotated.txt", result.AnnotatedUasm);
+        }
 
         return result;
     }
