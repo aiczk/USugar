@@ -35,7 +35,7 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
         ITypeOfOperation typeOf => Const(GetUdonType(typeOf.TypeOperand), "SystemType"),
         INameOfOperation nameOf => Const(nameOf.ConstantValue.Value.ToString(), "SystemString"),
         IDeclarationExpressionOperation op => VisitDeclarationExpression(op),
-        IDiscardOperation discard => LoadField(_ctx.DeclareTemp(GetUdonType(discard.Type)), GetUdonType(discard.Type)),
+        IDiscardOperation discard => SlotRef(_ctx.AllocTemp(GetUdonType(discard.Type))),
         IDelegateCreationOperation op => VisitDelegateCreation(op),
         _ => throw new NotSupportedException(expression.GetType().Name),
     };
@@ -191,10 +191,10 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
                     "SystemObject");
             }
 
-            // enum→int: store/load through a temp field to re-type
-            var tmpField = _ctx.DeclareTemp(dstType);
-            EmitStoreField(tmpField, srcVal);
-            return LoadField(tmpField, dstType);
+            // enum→int: store/load through a scratch slot to re-type
+            var tmpSlot = _ctx.AllocTemp(dstType);
+            EmitAssign(tmpSlot, srcVal);
+            return SlotRef(tmpSlot);
         }
 
         // Identity conversion: pass through
