@@ -141,13 +141,29 @@ public sealed class HirBuilder
     }
 
     /// <summary>Build a while loop.</summary>
-    public void EmitWhile(HExpr cond, Action<HirBuilder> bodyBuilder, bool isDoWhile = false)
+    public void EmitWhile(HExpr cond, Action<HirBuilder> bodyBuilder, bool isDoWhile = false, HBlock condBlock = null)
     {
         var body = new HBlock();
         _stmtStack.Push(body.Stmts);
         bodyBuilder(this);
         _stmtStack.Pop();
-        Emit(new HWhile(cond, body, isDoWhile));
+        Emit(new HWhile(cond, body, isDoWhile, condBlock));
+    }
+
+    /// <summary>Build a while loop with lazy condition (captures side-effect statements).</summary>
+    public void EmitWhile(Func<HExpr> condFactory, Action<HirBuilder> bodyBuilder, bool isDoWhile = false)
+    {
+        var condBlock = new HBlock();
+        _stmtStack.Push(condBlock.Stmts);
+        var cond = condFactory();
+        _stmtStack.Pop();
+
+        var body = new HBlock();
+        _stmtStack.Push(body.Stmts);
+        bodyBuilder(this);
+        _stmtStack.Pop();
+
+        Emit(new HWhile(cond, body, isDoWhile, condBlock));
     }
 
     /// <summary>Build a for loop.</summary>
@@ -173,11 +189,14 @@ public sealed class HirBuilder
         Emit(new HFor(init, cond, update, body));
     }
 
-    /// <summary>Build a for loop with lazy condition (evaluated after init).</summary>
+    /// <summary>Build a for loop with lazy condition (evaluated after init).
+    /// Any HIR statements emitted by condFactory (e.g. short-circuit EmitIf)
+    /// are captured into a CondBlock that re-executes each iteration.</summary>
     public void EmitFor(Action<HirBuilder> initBuilder, Func<HExpr> condFactory,
         Action<HirBuilder> updateBuilder, Action<HirBuilder> bodyBuilder)
     {
         var init = new HBlock();
+        var condBlock = new HBlock();
         var update = new HBlock();
         var body = new HBlock();
 
@@ -185,8 +204,12 @@ public sealed class HirBuilder
         initBuilder(this);
         _stmtStack.Pop();
 
-        // Evaluate condition AFTER init so declared locals are registered
+        // Evaluate condition AFTER init so declared locals are registered.
+        // Push condBlock so any statements emitted by condFactory (e.g. short-circuit
+        // temp stores, EmitIf) land in condBlock rather than the parent scope.
+        _stmtStack.Push(condBlock.Stmts);
         var cond = condFactory();
+        _stmtStack.Pop();
 
         _stmtStack.Push(update.Stmts);
         updateBuilder(this);
@@ -196,7 +219,7 @@ public sealed class HirBuilder
         bodyBuilder(this);
         _stmtStack.Pop();
 
-        Emit(new HFor(init, cond, update, body));
+        Emit(new HFor(init, cond, update, body, condBlock));
     }
 
     /// <summary>Push a new nested scope for manual block construction.</summary>

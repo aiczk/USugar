@@ -36,12 +36,10 @@ public class LoopHandler : HandlerBase, IOperationHandler
 
     void VisitWhileLoop(IWhileLoopOperation op)
     {
-        var condExpr = VisitExpression(op.Condition);
-
         if (op.ConditionIsTop)
         {
             // while (cond) { body }
-            _builder.EmitWhile(condExpr, _ =>
+            _builder.EmitWhile(() => VisitExpression(op.Condition), _ =>
             {
                 VisitOperation(op.Body);
             });
@@ -49,7 +47,7 @@ public class LoopHandler : HandlerBase, IOperationHandler
         else
         {
             // do { body } while (cond)
-            _builder.EmitWhile(condExpr, _ =>
+            _builder.EmitWhile(() => VisitExpression(op.Condition), _ =>
             {
                 VisitOperation(op.Body);
             }, isDoWhile: true);

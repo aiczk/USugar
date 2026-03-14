@@ -63,10 +63,12 @@ public static class HirToLir
                 PreScanLabels(hif.Else, ctx);
                 break;
             case HWhile hw:
+                PreScanLabels(hw.CondBlock, ctx);
                 PreScanLabels(hw.Body, ctx);
                 break;
             case HFor hf:
                 PreScanLabels(hf.Init, ctx);
+                PreScanLabels(hf.CondBlock, ctx);
                 PreScanLabels(hf.Update, ctx);
                 PreScanLabels(hf.Body, ctx);
                 break;
@@ -220,8 +222,10 @@ public static class HirToLir
                 ctx.Current.Term = new LJump(headerBlock.Id);
             ctx.LoopStack.Pop();
 
-            // Header (condition)
+            // Header: run CondBlock (short-circuit setup) then evaluate Cond
             ctx.Current = headerBlock;
+            if (hw.CondBlock.Stmts.Count > 0)
+                LowerBlock(hw.CondBlock, ctx);
             var cond = LowerExpr(hw.Cond, ctx);
             ctx.Current.Term = new LBranch(cond, bodyBlock.Id, exitBlock.Id);
         }
@@ -230,8 +234,10 @@ public static class HirToLir
             // while: condition at top
             ctx.Current.Term = new LJump(headerBlock.Id);
 
-            // Header (condition)
+            // Header: run CondBlock (short-circuit setup) then evaluate Cond
             ctx.Current = headerBlock;
+            if (hw.CondBlock.Stmts.Count > 0)
+                LowerBlock(hw.CondBlock, ctx);
             var cond = LowerExpr(hw.Cond, ctx);
             ctx.Current.Term = new LBranch(cond, bodyBlock.Id, exitBlock.Id);
 
@@ -259,8 +265,10 @@ public static class HirToLir
 
         ctx.Current.Term = new LJump(headerBlock.Id);
 
-        // Header (condition)
+        // Header: run CondBlock (short-circuit setup) then evaluate Cond
         ctx.Current = headerBlock;
+        if (hf.CondBlock.Stmts.Count > 0)
+            LowerBlock(hf.CondBlock, ctx);
         if (hf.Cond != null)
         {
             var cond = LowerExpr(hf.Cond, ctx);
