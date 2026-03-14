@@ -56,6 +56,7 @@ public static class IrPipeline
     /// </summary>
     public static CodeGenResult GenerateUasmFromHir(HModule hirModule)
     {
+        HirVerifier.Verify(hirModule);
         var lirModule = HirToLir.Lower(hirModule);
         return LirToUasm.Generate(lirModule);
     }

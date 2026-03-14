@@ -583,14 +583,16 @@ public partial class InvocationHandler
         // Self-recursive call: save current parameter values before overwriting
         bool isSelfRecursive = _currentMethod != null
             && SymbolEqualityComparer.Default.Equals(target, _currentMethod);
-        HExpr[] savedParams = null;
+        string[] savedParamFields = null;
         if (isSelfRecursive && paramIds.Length > 0)
         {
-            savedParams = new HExpr[paramIds.Length];
+            savedParamFields = new string[paramIds.Length];
             for (int i = 0; i < paramIds.Length; i++)
             {
                 var paramType = _ctx.GetFieldType(paramIds[i]);
-                savedParams[i] = LoadField(paramIds[i], paramType);
+                var savedField = _ctx.DeclareTemp(paramType);
+                EmitStoreField(savedField, LoadField(paramIds[i], paramType));
+                savedParamFields[i] = savedField;
             }
         }
 
@@ -618,10 +620,13 @@ public partial class InvocationHandler
         var result = EmitCallToMethod(target, args);
 
         // Self-recursive call: restore parameter values after return
-        if (isSelfRecursive && savedParams != null)
+        if (isSelfRecursive && savedParamFields != null)
         {
             for (int i = 0; i < paramIds.Length; i++)
-                EmitStoreField(paramIds[i], savedParams[i]);
+            {
+                var paramType = _ctx.GetFieldType(paramIds[i]);
+                EmitStoreField(paramIds[i], LoadField(savedParamFields[i], paramType));
+            }
         }
 
         // Copy-out for ref/out params

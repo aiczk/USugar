@@ -53,7 +53,7 @@ public static class LirToUasm
     {
         readonly LModule _module;
         readonly List<VarDecl> _vars = new();
-        readonly HashSet<string> _declaredVarIds = new();
+        readonly Dictionary<string, string> _declaredVarTypes = new();  // id → udonType
         readonly HashSet<string> _externs = new();
         readonly Dictionary<string, string> _constPool = new();     // "type_value" → varId
         readonly Dictionary<string, LFunction> _funcByName = new();
@@ -167,7 +167,14 @@ public static class LirToUasm
         void DeclareVar(string id, string udonType, string defaultValue, VarFlags flags,
             string syncMode = null, object constValue = null)
         {
-            if (!_declaredVarIds.Add(id)) return;
+            if (_declaredVarTypes.TryGetValue(id, out var existingType))
+            {
+                if (existingType != udonType)
+                    throw new InvalidOperationException(
+                        $"Variable '{id}' declared with conflicting types: '{existingType}' vs '{udonType}'");
+                return;
+            }
+            _declaredVarTypes[id] = udonType;
             _vars.Add(new VarDecl
             {
                 Id = id,
