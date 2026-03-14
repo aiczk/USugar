@@ -11,6 +11,9 @@ public class UasmEmitter
     readonly IOperationHandler[] _stmtHandlers;
     readonly IExpressionHandler[] _exprHandlers;
 
+    /// <summary>When true, write IR dump files during code generation.</summary>
+    public bool DumpEnabled;
+
     // Property shims → EmitContext
     Compilation _compilation => _ctx.Compilation;
     INamedTypeSymbol _classSymbol => _ctx.ClassSymbol;
@@ -105,7 +108,7 @@ public class UasmEmitter
         SetReflectionValues();
         EmitMethods();
         OnIrPass?.Invoke("after-emit", _hirModule);
-        var result = IrPipeline.GenerateUasmFromHir(_hirModule);
+        var result = IrPipeline.GenerateUasmFromHir(_hirModule, DumpEnabled);
         _codeGenResult = result;
         return result.Uasm;
     }

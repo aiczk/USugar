@@ -92,7 +92,7 @@ static class USugarCompilationOrchestrator
         }
     }
 
-    internal static void CompileInternal(bool applyToAssets, bool force = false)
+    internal static void CompileInternal(bool applyToAssets, bool force = false, bool dumpEnabled = false)
     {
         var sw = System.Diagnostics.Stopwatch.StartNew();
         var collectedDiagnostics = new List<(string file, int line, int character, string message, string severity)>();
@@ -195,7 +195,7 @@ static class USugarCompilationOrchestrator
                         return;
                     }
 
-                    var emitter = new UasmEmitter(compilation, symbol, planner);
+                    var emitter = new UasmEmitter(compilation, symbol, planner) { DumpEnabled = dumpEnabled };
                     var uasm = emitter.Emit();
                     emitResults.Add(new EmitResult(symbol, tree, uasm,
                         emitter.CodeGenResult.Constants, emitter.GetHeapSize(), emitter.Diagnostics));

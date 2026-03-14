@@ -140,15 +140,13 @@ public sealed class LCallExtern : LInst
     public readonly string Sig;
     public readonly List<LOperand> Args;
     public readonly string RetType;
-    public readonly bool IsPure;
 
-    public LCallExtern(int? destSlot, string sig, List<LOperand> args, string retType, bool isPure = false)
+    public LCallExtern(int? destSlot, string sig, List<LOperand> args, string retType)
     {
         DestSlot = destSlot;
         Sig = sig ?? throw new ArgumentNullException(nameof(sig));
         Args = args ?? new();
         RetType = retType ?? throw new ArgumentNullException(nameof(retType));
-        IsPure = isPure;
     }
 
     public override void Dump(StringBuilder sb)

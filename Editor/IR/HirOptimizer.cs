@@ -90,7 +90,7 @@ public static class HirOptimizer
                 var foldedArgs = call.Args.Select(FoldExpr).ToList();
                 if (foldedArgs.All(a => a is HConst) && TryEval(call.Sig, foldedArgs, out var result))
                     return result;
-                return new HExternCall(call.Sig, foldedArgs, call.Type, call.IsPure);
+                return new HExternCall(call.Sig, foldedArgs, call.Type);
             }
 
             case HSelect sel:
@@ -267,6 +267,18 @@ public static class HirOptimizer
 
         // Phase 3: Replace HLoadField references with the constant value
         ReplaceInBlock(func.Body, candidates);
+
+        // Phase 4: Slot-based copy propagation
+        // If HAssign(slotId, HConst) and the slot is written exactly once,
+        // replace all HSlotRef(slotId) with the constant.
+        var slotWriteCounts = new Dictionary<int, int>();
+        CountSlotWrites(func.Body, slotWriteCounts);
+
+        var slotCandidates = new Dictionary<int, HConst>();
+        CollectSlotCandidates(func.Body, slotWriteCounts, slotCandidates);
+
+        if (slotCandidates.Count > 0)
+            ReplaceSlotRefs(func.Body, slotCandidates);
     }
 
     static bool IsTempField(string fieldName) =>
@@ -400,7 +412,7 @@ public static class HirOptimizer
                 return candidates.TryGetValue(lf.FieldName, out var replacement) ? replacement : expr;
 
             case HExternCall call:
-                return new HExternCall(call.Sig, call.Args.Select(a => ReplaceInExpr(a, candidates)).ToList(), call.Type, call.IsPure);
+                return new HExternCall(call.Sig, call.Args.Select(a => ReplaceInExpr(a, candidates)).ToList(), call.Type);
 
             case HSelect sel:
                 return new HSelect(ReplaceInExpr(sel.Cond, candidates), ReplaceInExpr(sel.TrueVal, candidates), ReplaceInExpr(sel.FalseVal, candidates), sel.Type);
@@ -417,6 +429,152 @@ public static class HirOptimizer
             // HConst, HSlotRef, HFieldAddr, HFuncRef — no replacement needed
             // Note: HFieldAddr is intentionally NOT replaced — it represents an address for out/ref,
             // not a value load. Replacing it with a constant would be semantically wrong.
+            default:
+                return expr;
+        }
+    }
+
+    // ========================================================================
+    // Slot-based Copy Propagation
+    // ========================================================================
+
+    static void CountSlotWrites(HBlock block, Dictionary<int, int> writeCounts)
+    {
+        foreach (var stmt in block.Stmts)
+            CountSlotWritesStmt(stmt, writeCounts);
+    }
+
+    static void CountSlotWritesStmt(HStmt stmt, Dictionary<int, int> writeCounts)
+    {
+        switch (stmt)
+        {
+            case HAssign a:
+                writeCounts[a.DestSlot] = writeCounts.TryGetValue(a.DestSlot, out var c) ? c + 1 : 1;
+                break;
+            case HIf hif:
+                CountSlotWrites(hif.Then, writeCounts);
+                CountSlotWrites(hif.Else, writeCounts);
+                break;
+            case HWhile hw:
+                CountSlotWrites(hw.CondBlock, writeCounts);
+                CountSlotWrites(hw.Body, writeCounts);
+                break;
+            case HFor hf:
+                CountSlotWrites(hf.Init, writeCounts);
+                CountSlotWrites(hf.CondBlock, writeCounts);
+                CountSlotWrites(hf.Update, writeCounts);
+                CountSlotWrites(hf.Body, writeCounts);
+                break;
+            case HBlock blk:
+                CountSlotWrites(blk, writeCounts);
+                break;
+        }
+    }
+
+    static void CollectSlotCandidates(HBlock block, Dictionary<int, int> writeCounts, Dictionary<int, HConst> candidates)
+    {
+        foreach (var stmt in block.Stmts)
+            CollectSlotCandidatesStmt(stmt, writeCounts, candidates);
+    }
+
+    static void CollectSlotCandidatesStmt(HStmt stmt, Dictionary<int, int> writeCounts, Dictionary<int, HConst> candidates)
+    {
+        switch (stmt)
+        {
+            case HAssign a:
+                if (writeCounts.TryGetValue(a.DestSlot, out var wc) && wc == 1 && a.Value is HConst constVal)
+                    candidates[a.DestSlot] = constVal;
+                break;
+            case HIf hif:
+                CollectSlotCandidates(hif.Then, writeCounts, candidates);
+                CollectSlotCandidates(hif.Else, writeCounts, candidates);
+                break;
+            case HWhile hw:
+                CollectSlotCandidates(hw.CondBlock, writeCounts, candidates);
+                CollectSlotCandidates(hw.Body, writeCounts, candidates);
+                break;
+            case HFor hf:
+                CollectSlotCandidates(hf.Init, writeCounts, candidates);
+                CollectSlotCandidates(hf.CondBlock, writeCounts, candidates);
+                CollectSlotCandidates(hf.Update, writeCounts, candidates);
+                CollectSlotCandidates(hf.Body, writeCounts, candidates);
+                break;
+            case HBlock blk:
+                CollectSlotCandidates(blk, writeCounts, candidates);
+                break;
+        }
+    }
+
+    static void ReplaceSlotRefs(HBlock block, Dictionary<int, HConst> candidates)
+    {
+        for (int i = 0; i < block.Stmts.Count; i++)
+            block.Stmts[i] = ReplaceSlotRefsStmt(block.Stmts[i], candidates);
+    }
+
+    static HStmt ReplaceSlotRefsStmt(HStmt stmt, Dictionary<int, HConst> candidates)
+    {
+        switch (stmt)
+        {
+            case HAssign a:
+                return new HAssign(a.DestSlot, ReplaceSlotRefsExpr(a.Value, candidates));
+
+            case HStoreField sf:
+                return new HStoreField(sf.FieldName, ReplaceSlotRefsExpr(sf.Value, candidates));
+
+            case HIf hif:
+                ReplaceSlotRefs(hif.Then, candidates);
+                ReplaceSlotRefs(hif.Else, candidates);
+                return new HIf(ReplaceSlotRefsExpr(hif.Cond, candidates), hif.Then, hif.Else);
+
+            case HWhile hw:
+                ReplaceSlotRefs(hw.CondBlock, candidates);
+                ReplaceSlotRefs(hw.Body, candidates);
+                return new HWhile(ReplaceSlotRefsExpr(hw.Cond, candidates), hw.Body, hw.IsDoWhile, hw.CondBlock);
+
+            case HFor hf:
+                ReplaceSlotRefs(hf.Init, candidates);
+                ReplaceSlotRefs(hf.CondBlock, candidates);
+                ReplaceSlotRefs(hf.Update, candidates);
+                ReplaceSlotRefs(hf.Body, candidates);
+                return new HFor(hf.Init, hf.Cond != null ? ReplaceSlotRefsExpr(hf.Cond, candidates) : null, hf.Update, hf.Body, hf.CondBlock);
+
+            case HReturn hr:
+                return hr.Value != null ? new HReturn(ReplaceSlotRefsExpr(hr.Value, candidates)) : hr;
+
+            case HExprStmt es:
+                return new HExprStmt(ReplaceSlotRefsExpr(es.Expr, candidates));
+
+            case HBlock blk:
+                ReplaceSlotRefs(blk, candidates);
+                return blk;
+
+            default:
+                return stmt;
+        }
+    }
+
+    static HExpr ReplaceSlotRefsExpr(HExpr expr, Dictionary<int, HConst> candidates)
+    {
+        switch (expr)
+        {
+            case HSlotRef sr:
+                return candidates.TryGetValue(sr.SlotId, out var replacement) ? replacement : expr;
+
+            case HExternCall call:
+                return new HExternCall(call.Sig, call.Args.Select(a => ReplaceSlotRefsExpr(a, candidates)).ToList(), call.Type);
+
+            case HSelect sel:
+                return new HSelect(ReplaceSlotRefsExpr(sel.Cond, candidates), ReplaceSlotRefsExpr(sel.TrueVal, candidates), ReplaceSlotRefsExpr(sel.FalseVal, candidates), sel.Type);
+
+            case HInternalCall ic:
+                return new HInternalCall(ic.FuncName, ic.Args.Select(a => ReplaceSlotRefsExpr(a, candidates)).ToList(), ic.Type);
+
+            case HCrossBehaviourCall cb:
+                return new HCrossBehaviourCall(
+                    ReplaceSlotRefsExpr(cb.Instance, candidates), cb.EventName,
+                    cb.Params.Select(p => (p.ParamName, ReplaceSlotRefsExpr(p.Value, candidates))).ToList(),
+                    cb.ReturnVarName, cb.Type);
+
             default:
                 return expr;
         }

@@ -17,6 +17,7 @@ public static class HirVerifier
     {
         var ctx = new VerifyContext(func);
         VerifyBlock(func.Body, ctx);
+        VerifyGotoLabels(func);
     }
 
     sealed class VerifyContext
@@ -181,6 +182,9 @@ public static class HirVerifier
 
             case HExprStmt exprStmt:
                 VerifyExpr(exprStmt.Expr, ctx);
+                // Future improvement: warn if exprStmt.Expr is pure (no side effects),
+                // as pure expression statements are dead code. Requires a warning mechanism
+                // since HirVerifier currently only throws exceptions.
                 break;
 
             case HBlock block:
@@ -189,10 +193,61 @@ public static class HirVerifier
 
             case HGoto:
             case HLabelStmt:
-                break; // label validity could be checked but is not critical
+                break; // goto/label pairing is verified by VerifyGotoLabels
 
             default:
                 throw new VerificationException($"Unknown HStmt type: {stmt.GetType().Name}");
+        }
+    }
+
+    /// <summary>Verify that every HGoto target has a corresponding HLabelStmt in the same function.</summary>
+    static void VerifyGotoLabels(HFunction func)
+    {
+        var labels = new HashSet<string>();
+        var gotos = new HashSet<string>();
+        CollectLabelsAndGotos(func.Body, labels, gotos);
+
+        foreach (var target in gotos)
+        {
+            if (!labels.Contains(target))
+                throw new VerificationException(
+                    $"HGoto targets undefined label '{target}' (function '{func.Name}')");
+        }
+    }
+
+    static void CollectLabelsAndGotos(HBlock block, HashSet<string> labels, HashSet<string> gotos)
+    {
+        foreach (var stmt in block.Stmts)
+            CollectLabelsAndGotosStmt(stmt, labels, gotos);
+    }
+
+    static void CollectLabelsAndGotosStmt(HStmt stmt, HashSet<string> labels, HashSet<string> gotos)
+    {
+        switch (stmt)
+        {
+            case HLabelStmt lbl:
+                labels.Add(lbl.Label);
+                break;
+            case HGoto gt:
+                gotos.Add(gt.Label);
+                break;
+            case HBlock blk:
+                CollectLabelsAndGotos(blk, labels, gotos);
+                break;
+            case HIf hif:
+                CollectLabelsAndGotos(hif.Then, labels, gotos);
+                CollectLabelsAndGotos(hif.Else, labels, gotos);
+                break;
+            case HWhile hw:
+                CollectLabelsAndGotos(hw.CondBlock, labels, gotos);
+                CollectLabelsAndGotos(hw.Body, labels, gotos);
+                break;
+            case HFor hf:
+                CollectLabelsAndGotos(hf.Init, labels, gotos);
+                CollectLabelsAndGotos(hf.CondBlock, labels, gotos);
+                CollectLabelsAndGotos(hf.Update, labels, gotos);
+                CollectLabelsAndGotos(hf.Body, labels, gotos);
+                break;
         }
     }
 
@@ -236,6 +291,9 @@ public static class HirVerifier
                 VerifyExpr(cc.Instance, ctx);
                 foreach (var (_, value) in cc.Params)
                     VerifyExpr(value, ctx);
+                // Note: param value type checking against the target method's parameter types
+                // is not possible here — HIR only stores param names, not the target method's
+                // type signature. Type errors will surface at runtime via Udon VM.
                 break;
 
             case HFuncRef:

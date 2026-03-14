@@ -331,13 +331,11 @@ public sealed class HExternCall : HExpr
 {
     public readonly string Sig;
     public readonly List<HExpr> Args;
-    public readonly bool IsPure;
 
-    public HExternCall(string sig, List<HExpr> args, string retType, bool isPure = false) : base(retType)
+    public HExternCall(string sig, List<HExpr> args, string retType) : base(retType)
     {
         Sig = sig ?? throw new ArgumentNullException(nameof(sig));
         Args = args ?? new();
-        IsPure = isPure;
     }
 
     public override string ToString()
