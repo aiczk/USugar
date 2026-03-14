@@ -41,9 +41,11 @@ public static class HirVerifier
 
         public void AssertType(string expected, string actual, string context)
         {
-            if (expected != actual)
-                throw new VerificationException(
-                    $"Type mismatch in {context}: expected '{expected}', got '{actual}' (function '{Func.Name}')");
+            if (expected == actual) return;
+            // SystemObject is compatible with any type (Udon VM boxing/unboxing)
+            if (expected == "SystemObject" || actual == "SystemObject") return;
+            throw new VerificationException(
+                $"Type mismatch in {context}: expected '{expected}', got '{actual}' (function '{Func.Name}')");
         }
     }
 
