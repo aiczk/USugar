@@ -1538,8 +1538,8 @@ public class PrologueTest : UdonSharpBehaviour {
         var lines = uasm.Split('\n').Select(l => l.Trim()).ToArray();
         var startIdx = Array.FindIndex(lines, l => l == "_start:");
         Assert.True(startIdx >= 0);
-        // IR pipeline uses returnJump var (init'd to 0xFFFFFFFF) as the sentinel
-        Assert.StartsWith("PUSH, __intnl_returnJump_SystemUInt32_0", lines[startIdx + 1]);
+        // Sentinel: push 0xFFFFFFFF onto stack for RET to POP
+        Assert.StartsWith("PUSH, __const_SystemUInt32_sentinel", lines[startIdx + 1]);
     }
 
     [Fact]
@@ -3513,12 +3513,9 @@ public class PreambleTest : UdonSharpBehaviour
         Assert.True(exportIdx >= 0, "Foo should be exported");
         var labelIdx = Array.FindIndex(lines, exportIdx, l => l == "Foo:");
         Assert.True(labelIdx >= 0, "Foo label should exist");
-        // IR preamble: PUSH returnJump at export label, then body label, then epilogue
-        var preamblePush = lines[labelIdx + 1];
-        Assert.Equal("PUSH, __intnl_returnJump_SystemUInt32_0", preamblePush);
-        // Body label follows
-        var bodyLabel = lines[labelIdx + 2];
-        Assert.Equal("Foo__body:", bodyLabel);
+        // Sentinel: PUSH sentinel onto stack, then body label
+        Assert.Equal("PUSH, __const_SystemUInt32_sentinel", lines[labelIdx + 1]);
+        Assert.Equal("Foo__body:", lines[labelIdx + 2]);
     }
 
     [Fact]
