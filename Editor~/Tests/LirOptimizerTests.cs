@@ -383,4 +383,174 @@ public class LirOptimizerTests
         var sr = Assert.IsType<LSlotRef>(ret.Value);
         Assert.Equal(0, sr.SlotId); // not propagated
     }
+
+    // ========================================================================
+    // Slot Coalescing
+    // ========================================================================
+
+    [Fact]
+    public void Coalesce_NonOverlapping_Merged()
+    {
+        // slot0 (Scratch, Int32): def at inst 0, used at inst 1
+        // slot1 (Scratch, Int32): def at inst 2, used at inst 3
+        // Non-overlapping → merged to same ID
+        var func = MakeFunc();
+        func.Slots.Add(new SlotDecl(0, "SystemInt32", SlotClass.Scratch));
+        func.Slots.Add(new SlotDecl(1, "SystemInt32", SlotClass.Scratch));
+
+        var bb0 = func.NewBlock();
+        bb0.Insts.Add(new LMove(0, new LConst(10, "SystemInt32"), "SystemInt32"));           // pos 0: def slot0
+        bb0.Insts.Add(new LStoreField("f1", new LSlotRef(0, "SystemInt32")));                 // pos 1: use slot0 (last use)
+        bb0.Insts.Add(new LMove(1, new LConst(20, "SystemInt32"), "SystemInt32"));            // pos 2: def slot1
+        bb0.Insts.Add(new LStoreField("f2", new LSlotRef(1, "SystemInt32")));                 // pos 3: use slot1 (last use)
+        bb0.Term = new LReturn();
+
+        var module = MakeModule(func);
+        LirOptimizer.CoalesceSlots(module);
+
+        // slot1 should be remapped to slot0 (non-overlapping, same type, same class)
+        // Check that the third instruction writes to slot0
+        var move2 = Assert.IsType<LMove>(bb0.Insts[2]);
+        Assert.Equal(0, move2.DestSlot);
+
+        // And the fourth instruction reads slot0
+        var store2 = Assert.IsType<LStoreField>(bb0.Insts[3]);
+        var sr = Assert.IsType<LSlotRef>(store2.Value);
+        Assert.Equal(0, sr.SlotId);
+
+        // Slot list retains both entries (positional indexing), but slot1 is unused
+        Assert.Equal(2, func.Slots.Count);
+    }
+
+    [Fact]
+    public void Coalesce_Overlapping_Kept()
+    {
+        // slot0 and slot1 are both live at the same time → must not merge
+        var func = MakeFunc();
+        func.Slots.Add(new SlotDecl(0, "SystemInt32", SlotClass.Scratch));
+        func.Slots.Add(new SlotDecl(1, "SystemInt32", SlotClass.Scratch));
+
+        var bb0 = func.NewBlock();
+        bb0.Insts.Add(new LMove(0, new LConst(10, "SystemInt32"), "SystemInt32"));            // pos 0: def slot0
+        bb0.Insts.Add(new LMove(1, new LConst(20, "SystemInt32"), "SystemInt32"));            // pos 1: def slot1 (slot0 still live)
+        bb0.Insts.Add(new LCallExtern(null, "Foo__SystemVoid",
+            new List<LOperand> { new LSlotRef(0, "SystemInt32"), new LSlotRef(1, "SystemInt32") },
+            "SystemVoid"));                                                                     // pos 2: use both
+        bb0.Term = new LReturn();
+
+        var module = MakeModule(func);
+        LirOptimizer.CoalesceSlots(module);
+
+        // Both slots must remain (overlapping lifetimes)
+        Assert.Equal(2, func.Slots.Count);
+
+        // Instruction operands should still reference different slots
+        var call = Assert.IsType<LCallExtern>(bb0.Insts[2]);
+        var ids = call.Args.OfType<LSlotRef>().Select(s => s.SlotId).Distinct().ToList();
+        Assert.Equal(2, ids.Count);
+    }
+
+    [Fact]
+    public void Coalesce_DifferentTypes_NotMerged()
+    {
+        // slot0 (Int32) and slot1 (Boolean): non-overlapping but different types → separate
+        var func = MakeFunc();
+        func.Slots.Add(new SlotDecl(0, "SystemInt32", SlotClass.Scratch));
+        func.Slots.Add(new SlotDecl(1, "SystemBoolean", SlotClass.Scratch));
+
+        var bb0 = func.NewBlock();
+        bb0.Insts.Add(new LMove(0, new LConst(42, "SystemInt32"), "SystemInt32"));
+        bb0.Insts.Add(new LStoreField("f1", new LSlotRef(0, "SystemInt32")));
+        bb0.Insts.Add(new LMove(1, new LConst(true, "SystemBoolean"), "SystemBoolean"));
+        bb0.Insts.Add(new LStoreField("f2", new LSlotRef(1, "SystemBoolean")));
+        bb0.Term = new LReturn();
+
+        var module = MakeModule(func);
+        LirOptimizer.CoalesceSlots(module);
+
+        // Both slots must remain (different types)
+        Assert.Equal(2, func.Slots.Count);
+    }
+
+    [Fact]
+    public void Coalesce_Pinned_NeverMerged()
+    {
+        // Two Pinned slots with non-overlapping lifetimes → never coalesced
+        var func = MakeFunc();
+        func.Slots.Add(new SlotDecl(0, "SystemInt32", SlotClass.Pinned, "__param_x"));
+        func.Slots.Add(new SlotDecl(1, "SystemInt32", SlotClass.Pinned, "__param_y"));
+
+        var bb0 = func.NewBlock();
+        bb0.Insts.Add(new LMove(0, new LConst(10, "SystemInt32"), "SystemInt32"));
+        bb0.Insts.Add(new LStoreField("f1", new LSlotRef(0, "SystemInt32")));
+        bb0.Insts.Add(new LMove(1, new LConst(20, "SystemInt32"), "SystemInt32"));
+        bb0.Insts.Add(new LStoreField("f2", new LSlotRef(1, "SystemInt32")));
+        bb0.Term = new LReturn();
+
+        var module = MakeModule(func);
+        LirOptimizer.CoalesceSlots(module);
+
+        // Both Pinned slots preserved
+        Assert.Equal(2, func.Slots.Count);
+        Assert.All(func.Slots, s => Assert.Equal(SlotClass.Pinned, s.Class));
+
+        // Operands unchanged
+        var move1 = Assert.IsType<LMove>(bb0.Insts[0]);
+        Assert.Equal(0, move1.DestSlot);
+        var move2 = Assert.IsType<LMove>(bb0.Insts[2]);
+        Assert.Equal(1, move2.DestSlot);
+    }
+
+    [Fact]
+    public void Coalesce_RewritesOperands()
+    {
+        // Verify all instruction types get operands remapped after coalescing
+        var func = MakeFunc();
+        func.Slots.Add(new SlotDecl(0, "SystemInt32", SlotClass.Scratch));
+        func.Slots.Add(new SlotDecl(1, "SystemInt32", SlotClass.Scratch));
+        func.Slots.Add(new SlotDecl(2, "SystemBoolean", SlotClass.Scratch));
+
+        var bb0 = func.NewBlock();
+        var bb1 = func.NewBlock();
+
+        // slot0: def and last use in first two instructions
+        bb0.Insts.Add(new LMove(0, new LConst(10, "SystemInt32"), "SystemInt32"));            // def slot0
+        bb0.Insts.Add(new LStoreField("f1", new LSlotRef(0, "SystemInt32")));                 // last use slot0
+
+        // slot1: def after slot0 is dead → should coalesce to slot0
+        bb0.Insts.Add(new LMove(1, new LConst(20, "SystemInt32"), "SystemInt32"));            // def slot1
+        bb0.Insts.Add(new LCallExtern(null, "Bar__SystemVoid",
+            new List<LOperand> { new LSlotRef(1, "SystemInt32") },
+            "SystemVoid"));                                                                     // use slot1 as arg
+
+        // slot2 (Boolean): used in branch
+        bb0.Insts.Add(new LMove(2, new LConst(true, "SystemBoolean"), "SystemBoolean"));
+        bb0.Term = new LBranch(new LSlotRef(2, "SystemBoolean"), bb1.Id, bb1.Id);
+
+        // slot1 also used in return value in bb1
+        bb1.Term = new LReturn(new LSlotRef(1, "SystemInt32"));
+
+        var module = MakeModule(func);
+        LirOptimizer.CoalesceSlots(module);
+
+        // slot1 should be remapped to slot0 (non-overlapping Int32 Scratch)
+        // Verify LMove dest rewritten
+        var move2 = Assert.IsType<LMove>(bb0.Insts[2]);
+        Assert.Equal(0, move2.DestSlot);
+
+        // Verify LCallExtern arg rewritten
+        var call = Assert.IsType<LCallExtern>(bb0.Insts[3]);
+        var argRef = Assert.IsType<LSlotRef>(call.Args[0]);
+        Assert.Equal(0, argRef.SlotId);
+
+        // Verify LReturn value rewritten
+        var ret = Assert.IsType<LReturn>(bb1.Term);
+        var retRef = Assert.IsType<LSlotRef>(ret.Value);
+        Assert.Equal(0, retRef.SlotId);
+
+        // Verify LBranch condition NOT rewritten (slot2 is Boolean, different type)
+        var br = Assert.IsType<LBranch>(bb0.Term);
+        var condRef = Assert.IsType<LSlotRef>(br.Cond);
+        Assert.Equal(2, condRef.SlotId);
+    }
 }
