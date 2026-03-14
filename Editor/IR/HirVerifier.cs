@@ -62,11 +62,23 @@ public static class HirVerifier
             // Nullable<T> erased to T in Udon VM
             if (slotType.StartsWith("SystemNullable") && slotType.Substring("SystemNullable".Length) == valueType) return;
             if (valueType.StartsWith("SystemNullable") && valueType.Substring("SystemNullable".Length) == slotType) return;
-            // Enum types use Int32 underlying type in Udon VM
-            if (slotType == "SystemInt32" || valueType == "SystemInt32") return;
+            // Enum types use Int32 underlying type in Udon VM.
+            // Allow Int32 ↔ non-primitive types (potential enums).
+            if (slotType == "SystemInt32" && !IsKnownNonEnumType(valueType)) return;
+            if (valueType == "SystemInt32" && !IsKnownNonEnumType(slotType)) return;
             throw new VerificationException(
                 $"Type mismatch in {context}: expected '{slotType}', got '{valueType}' (function '{Func.Name}')");
         }
+
+        /// <summary>
+        /// Known non-enum types that should NOT be allowed to interop with Int32.
+        /// Unrecognized types are assumed to be potential enums (which use Int32 underlying type).
+        /// </summary>
+        static bool IsKnownNonEnumType(string type) => type is
+            "SystemSingle" or "SystemDouble" or "SystemBoolean" or "SystemString"
+            or "SystemByte" or "SystemSByte" or "SystemInt16" or "SystemUInt16"
+            or "SystemInt64" or "SystemUInt64" or "SystemChar" or "SystemDecimal"
+            or "SystemObject" or "SystemType";
 
         /// <summary>
         /// Heuristic: a Udon type name that does NOT end with known value-type suffixes

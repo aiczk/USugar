@@ -28,8 +28,10 @@ public partial class InvocationHandler
 
         // For out/ref params: pass the field's heap address directly via HFieldAddr.
         // Udon VM extern writes to the pushed address, so the original variable
-        // is updated in-place. No copy-back needed.
+        // is updated in-place. No copy-back needed for simple field targets.
+        // For complex lvalues (array elements, cross-behaviour fields), use a temp field + copy-back.
         var argVals = new List<HExpr>();
+        var outCopyBacks = new List<(int argIdx, string tempField)>();
         for (int i = 0; i < op.Arguments.Length; i++)
         {
             var param = target.Parameters[i];
@@ -41,6 +43,14 @@ public partial class InvocationHandler
                     argVals.Add(FieldAddr(fieldName, GetUdonType(param.Type)));
                     continue;
                 }
+                // Complex lvalue: use temp field + copy-back
+                var paramType = GetUdonType(param.Type);
+                var tempField = _ctx.DeclareLocal("outref", paramType);
+                if (param.RefKind == RefKind.Ref)
+                    EmitStoreField(tempField, VisitExpression(op.Arguments[i].Value));
+                argVals.Add(FieldAddr(tempField, paramType));
+                outCopyBacks.Add((i, tempField));
+                continue;
             }
             argVals.Add(VisitExpression(op.Arguments[i].Value));
         }
@@ -54,16 +64,33 @@ public partial class InvocationHandler
         // Extern signature
         var sig = BuildExternCallSignature(target, op.Instance?.Type);
 
+        HExpr result;
         if (!target.ReturnsVoid)
         {
             var returnType = GetUdonType(target.ReturnType);
-            return ExternCall(sig, externArgs, returnType);
+            result = ExternCall(sig, externArgs, returnType);
+            // Store result before copy-back so it's not lost
+            if (outCopyBacks.Count > 0)
+            {
+                var resultSlot = _ctx.AllocTemp(returnType);
+                EmitAssign(resultSlot, result);
+                result = SlotRef(resultSlot);
+            }
         }
         else
         {
             EmitExternVoid(sig, externArgs);
-            return null;
+            result = null;
         }
+
+        // Copy-back for complex out/ref lvalues
+        foreach (var (argIdx, tempField) in outCopyBacks)
+        {
+            var paramType = GetUdonType(target.Parameters[argIdx].Type);
+            AssignToTarget(op.Arguments[argIdx].Value, LoadField(tempField, paramType));
+        }
+
+        return result;
     }
 
     // ── GetComponent<T> ──

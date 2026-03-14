@@ -541,4 +541,73 @@ public class HirTests
 
         Assert.Throws<VerificationException>(() => HirVerifier.Verify(module));
     }
+
+    [Fact]
+    public void Verifier_Int32ToEnumSlot_Passes()
+    {
+        // Enum types use Int32 underlying type — unknown types treated as potential enums
+        var module = new HModule();
+        var builder = new HirBuilder(module);
+        builder.BeginFunction("test");
+        var slot = builder.AllocFrame("MyCustomEnum");
+        builder.EmitAssign(slot, builder.Const(1, "SystemInt32"));
+
+        HirVerifier.Verify(module); // should not throw
+    }
+
+    [Fact]
+    public void Verifier_Int32ToSingle_Throws()
+    {
+        // Single ← Int32 is not valid (was previously allowed by blanket Int32 check)
+        var module = new HModule();
+        var builder = new HirBuilder(module);
+        builder.BeginFunction("test");
+        var slot = builder.AllocFrame("SystemSingle");
+        builder.EmitAssign(slot, builder.Const(1, "SystemInt32"));
+
+        Assert.Throws<VerificationException>(() => HirVerifier.Verify(module));
+    }
+
+    [Fact]
+    public void Verifier_Int32ToDouble_Throws()
+    {
+        // Double ← Int32 is not valid
+        var module = new HModule();
+        var builder = new HirBuilder(module);
+        builder.BeginFunction("test");
+        var slot = builder.AllocFrame("SystemDouble");
+        builder.EmitAssign(slot, builder.Const(1, "SystemInt32"));
+
+        Assert.Throws<VerificationException>(() => HirVerifier.Verify(module));
+    }
+
+    // ── LirToUasm tests ──
+
+    [Fact]
+    public void LirToUasm_UnusedSlot_NotDeclaredInUasm()
+    {
+        // Slot that is never referenced should not appear as a UASM variable
+        var lmod = new LModule { ClassName = "Test" };
+        var func = new LFunction("test", "_test");
+        lmod.Functions.Add(func);
+
+        // slot0 is used, slot1 is unused (coalesced away)
+        func.Slots.Add(new SlotDecl(0, "SystemInt32", SlotClass.Frame));
+        func.Slots.Add(new SlotDecl(1, "SystemString", SlotClass.Scratch));
+
+        var block = func.NewBlock();
+        // Only reference slot0
+        block.Insts.Add(new LMove(0, new LConst(42, "SystemInt32"), "SystemInt32"));
+        block.Term = new LReturn(new LSlotRef(0, "SystemInt32"));
+        func.ReturnFieldName = "__retval";
+        func.ReturnType = "SystemInt32";
+
+        var result = LirToUasm.Generate(lmod);
+        var uasm = result.Uasm;
+
+        // slot0 should be declared (it's referenced)
+        Assert.Contains("SystemInt32", uasm);
+        // slot1 (SystemString Scratch) should NOT be declared — never referenced
+        Assert.DoesNotContain("SystemString", uasm);
+    }
 }

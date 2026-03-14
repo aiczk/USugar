@@ -92,6 +92,44 @@ public class NullCoalesceAssignTest : UdonSharpBehaviour {
     }
 }", "NullCoalesceAssignTest");
 
+    [Fact]
+    public void NullConditionalAccess_MethodCall_EvaluatesOnce()
+    {
+        // GetComponent() is impure — must be evaluated only once for ?.
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+using UnityEngine;
+public class NullCondOnceTest : UdonSharpBehaviour {
+    public void Test() {
+        var name = GetComponent<Transform>()?.gameObject;
+        Debug.Log(name);
+    }
+}", "NullCondOnceTest");
+        // The GetComponent extern should appear exactly once
+        var count = uasm.Split("EXTERN, \"UnityEngineComponent.__GetComponent__T\"").Length - 1;
+        // After fix: only 1 GetComponent call (stored in temp, reused)
+        Assert.Equal(1, count);
+    }
+
+    [Fact]
+    public void NullCoalescing_MethodCall_EvaluatesOnce()
+    {
+        // Method call on left of ?? must be evaluated only once
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+using UnityEngine;
+public class NullCoalesceOnceTest : UdonSharpBehaviour {
+    public Transform fallback;
+    public void Test() {
+        var t = GetComponent<Transform>() ?? fallback;
+        Debug.Log(t);
+    }
+}", "NullCoalesceOnceTest");
+        // GetComponent should appear exactly once
+        var count = uasm.Split("EXTERN, \"UnityEngineComponent.__GetComponent__T\"").Length - 1;
+        Assert.Equal(1, count);
+    }
+
     // ── 3. params array expanded form ──
 
     [Fact]
