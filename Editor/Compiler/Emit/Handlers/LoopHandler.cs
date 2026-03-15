@@ -107,13 +107,15 @@ public class LoopHandler : HandlerBase, IOperationHandler
         // Index variable
         var idxSlot = _ctx.AllocTemp("SystemInt32");
 
-        // Condition: idx < arr.Length
+        // Cache array length before the loop
+        var lenSlot = _ctx.AllocTemp("SystemInt32");
+        EmitAssign(lenSlot, ExternCall("SystemArray.__get_Length__SystemInt32",
+            new List<HExpr> { SlotRef(collSlot) }, "SystemInt32"));
+
+        // Condition: idx < cachedLen
         var condExpr = ExternCall(
             "SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean",
-            new List<HExpr> { SlotRef(idxSlot),
-                              ExternCall("SystemArray.__get_Length__SystemInt32",
-                                         new List<HExpr> { SlotRef(collSlot) },
-                                         "SystemInt32") },
+            new List<HExpr> { SlotRef(idxSlot), SlotRef(lenSlot) },
             "SystemBoolean");
 
         _builder.EmitFor(
@@ -153,41 +155,45 @@ public class LoopHandler : HandlerBase, IOperationHandler
         // Generate a unique end label for this switch
         var endLabel = $"__switchEnd_{Interlocked.Increment(ref s_switchLabelCounter)}";
         SwitchBreakLabels.Push(endLabel);
-
-        // Pre-convert enum switch value once (Udon VM has no enum-typed operators)
-        var convertedValueVal = EmitEnumToUnderlying(valueVal, op.Value.Type);
-
-        // Store converted value in a scratch slot so it can be re-read for each comparison
-        int convertedSlot = -1;
-        string convertedSlotType = null;
-        if (op.Cases.Length > 1)
+        try
         {
-            convertedSlotType = valueType;
-            if (op.Value.Type is INamedTypeSymbol namedEnum && namedEnum.TypeKind == TypeKind.Enum)
-                convertedSlotType = GetUdonType(namedEnum.EnumUnderlyingType);
-            convertedSlot = _ctx.AllocTemp(convertedSlotType);
-            EmitAssign(convertedSlot, convertedValueVal);
-        }
+            // Pre-convert enum switch value once (Udon VM has no enum-typed operators)
+            var convertedValueVal = EmitEnumToUnderlying(valueVal, op.Value.Type);
 
-        // Also store the original value for pattern matching
-        int origValueSlot = -1;
-        if (op.Cases.Any(c => c.Clauses.Any(cl => cl is IPatternCaseClauseOperation)))
+            // Store converted value in a scratch slot so it can be re-read for each comparison
+            int convertedSlot = -1;
+            string convertedSlotType = null;
+            if (op.Cases.Length > 1)
+            {
+                convertedSlotType = valueType;
+                if (op.Value.Type is INamedTypeSymbol namedEnum && namedEnum.TypeKind == TypeKind.Enum)
+                    convertedSlotType = GetUdonType(namedEnum.EnumUnderlyingType);
+                convertedSlot = _ctx.AllocTemp(convertedSlotType);
+                EmitAssign(convertedSlot, convertedValueVal);
+            }
+
+            // Also store the original value for pattern matching
+            int origValueSlot = -1;
+            if (op.Cases.Any(c => c.Clauses.Any(cl => cl is IPatternCaseClauseOperation)))
+            {
+                origValueSlot = _ctx.AllocTemp(valueType);
+                EmitAssign(origValueSlot, valueVal);
+            }
+
+            // Find default case index
+            int defaultIndex = -1;
+            for (int i = 0; i < op.Cases.Length; i++)
+                if (op.Cases[i].Clauses.Any(c => c is IDefaultCaseClauseOperation))
+                    defaultIndex = i;
+
+            // Lower switch to if/else chain
+            EmitSwitchCases(op, convertedSlot, convertedSlotType, convertedValueVal, origValueSlot, valueVal, valueType, defaultIndex, 0);
+        }
+        finally
         {
-            origValueSlot = _ctx.AllocTemp(valueType);
-            EmitAssign(origValueSlot, valueVal);
+            SwitchBreakLabels.Pop();
         }
-
-        // Find default case index
-        int defaultIndex = -1;
-        for (int i = 0; i < op.Cases.Length; i++)
-            if (op.Cases[i].Clauses.Any(c => c is IDefaultCaseClauseOperation))
-                defaultIndex = i;
-
-        // Lower switch to if/else chain
-        EmitSwitchCases(op, convertedSlot, convertedSlotType, convertedValueVal, origValueSlot, valueVal, valueType, defaultIndex, 0);
-
         _builder.EmitLabel(endLabel);
-        SwitchBreakLabels.Pop();
     }
 
     void EmitSwitchCases(ISwitchOperation op, int convertedSlot, string convertedSlotType, HExpr convertedValueVal,

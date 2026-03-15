@@ -316,12 +316,13 @@ public static class ExternResolver
         var containingUdon = GetUdonTypeName(operatorMethod.ContainingType);
 
         // Try ContainingType first, then source type, then destination type
+        var isValid = IsExternValid;
         var seen = new HashSet<string>();
         foreach (var candidate in new[] { containingUdon, srcUdon, dstUdon })
         {
             if (!seen.Add(candidate)) continue;
             var externName = $"{candidate}.__{opName}__{srcUdon}__{dstUdon}";
-            if (IsExternValid == null || IsExternValid(externName))
+            if (isValid == null || isValid(externName))
                 return externName;
         }
 
@@ -375,13 +376,18 @@ public static class ExternResolver
             return BuildMethodSignature(containingType, methodName, paramTypes, retType);
         }
 
-        // Enum comparison → use underlying type (Udon VM has no enum-typed operators)
+        // Enum operations → use underlying type (Udon VM has no enum-typed operators)
         if (leftType?.TypeKind == TypeKind.Enum
-            && (operatorKind == BinaryOperatorKind.Equals || operatorKind == BinaryOperatorKind.NotEquals))
+            && (operatorKind == BinaryOperatorKind.Equals || operatorKind == BinaryOperatorKind.NotEquals
+                || operatorKind == BinaryOperatorKind.And || operatorKind == BinaryOperatorKind.Or
+                || operatorKind == BinaryOperatorKind.ExclusiveOr))
         {
             var underlying = GetUdonTypeName(((INamedTypeSymbol)leftType).EnumUnderlyingType);
             var opName2 = BinaryOperatorNames[operatorKind];
-            return BuildMethodSignature(underlying, $"__{opName2}", new[] { underlying, underlying }, result);
+            // Bitwise ops on enums return the enum type in C#, but Udon uses the underlying type
+            var resultUnderlying = resultType?.TypeKind == TypeKind.Enum
+                ? underlying : result;
+            return BuildMethodSignature(underlying, $"__{opName2}", new[] { underlying, underlying }, resultUnderlying);
         }
 
         // Small integer types: Udon VM has no byte/sbyte/short/ushort operators;

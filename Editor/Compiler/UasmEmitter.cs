@@ -145,9 +145,41 @@ public class UasmEmitter
         return System.BitConverter.ToInt64(hash, 0);
     }
 
+    /// <summary>
+    /// Ensure the LayoutPlanner is planned and frozen before emission begins.
+    ///
+    /// IMPORTANT: During parallel emit (Phase 2 of USugarCompilationOrchestrator),
+    /// the caller MUST pass a pre-frozen planner. This lazy path is only safe for
+    /// single-threaded use (e.g., tests, standalone compilation). If an unfrozen
+    /// planner is detected, it is planned and frozen here — but this is NOT
+    /// thread-safe if the same planner instance is shared across threads.
+    /// </summary>
     void EnsurePlannerReady()
     {
         if (_planner.IsFrozen) return;
+
+        // Defense-in-depth: detect likely parallel misuse. If we're on a thread pool
+        // thread and the planner isn't frozen, this is almost certainly a bug in the
+        // orchestrator — planning should have been done in the serial prep phase.
+        if (!System.Threading.Thread.CurrentThread.IsBackground)
+        {
+            // Main thread: safe to plan lazily (test / standalone path)
+        }
+        else
+        {
+            // Background thread: log a warning. The plan-and-freeze below is still
+            // safe IF this emitter has its own private planner (constructor default).
+            // It is NOT safe if a shared planner was passed in.
+#if UNITY_EDITOR
+            UnityEngine.Debug.LogWarning(
+#else
+            System.Diagnostics.Debug.WriteLine(
+#endif
+                "[USugar] EnsurePlannerReady called on a background thread with an unfrozen planner. "
+              + "This is safe only if the planner is private to this emitter instance. "
+              + "Callers running in parallel MUST pass a pre-frozen LayoutPlanner.");
+        }
+
         foreach (var tree in _compilation.SyntaxTrees)
         {
             var model = _compilation.GetSemanticModel(tree);
@@ -251,6 +283,11 @@ public class UasmEmitter
             _ctx.DeclareField(prop.Name, udonType, flags);
         }
 
+        // Record count of derived-class field init ops; base class init ops added below
+        // must be reordered to come first (C# spec: base → derived initializer order).
+        int derivedFieldInitCount = _fieldInitOps.Count;
+        var baseClassInitBoundaries = new List<int>(); // track boundaries per base class
+
         // Collect declared member names to skip overridden/shadowed members in base classes
         var declaredMemberNames = new HashSet<string>(
             _classSymbol.GetMembers()
@@ -262,6 +299,7 @@ public class UasmEmitter
         while (baseType != null)
         {
             if (USugarCompilerHelper.IsFrameworkNamespace(baseType.ContainingNamespace) || baseType.Name == "UdonSharpBehaviour") break;
+            baseClassInitBoundaries.Add(_fieldInitOps.Count);
             foreach (var member in baseType.GetMembers().OfType<IFieldSymbol>())
             {
                 if (member.IsStatic || member.IsImplicitlyDeclared) continue;
@@ -315,6 +353,29 @@ public class UasmEmitter
                 _ctx.DeclareField(prop.Name, udonType, flags);
             }
             baseType = baseType.BaseType;
+        }
+
+        // Reorder field init ops: base class initializers must run before derived (C# spec).
+        // Base classes were walked nearest-parent-first, so reverse class-level order
+        // while preserving field order within each class.
+        if (_fieldInitOps.Count > derivedFieldInitCount)
+        {
+            baseClassInitBoundaries.Add(_fieldInitOps.Count); // sentinel
+            var reordered = new List<(string, IOperation, ITypeSymbol)>();
+            // Reverse iterate base class groups (outermost base first)
+            for (int i = baseClassInitBoundaries.Count - 2; i >= 0; i--)
+            {
+                int start = baseClassInitBoundaries[i];
+                int end = baseClassInitBoundaries[i + 1];
+                for (int j = start; j < end; j++)
+                    reordered.Add(_fieldInitOps[j]);
+            }
+            // Append derived class init ops
+            for (int j = 0; j < derivedFieldInitCount; j++)
+                reordered.Add(_fieldInitOps[j]);
+            // Replace
+            _fieldInitOps.Clear();
+            _fieldInitOps.AddRange(reordered);
         }
     }
 
@@ -861,6 +922,8 @@ public class UasmEmitter
 
     void VisitOperation(IOperation op)
     {
+        // Unwrap parenthesized expressions in statement context
+        while (op is IParenthesizedOperation paren) op = paren.Operand;
         foreach (var h in _stmtHandlers)
             if (h.CanHandle(op)) { h.Handle(op); return; }
         throw new NotSupportedException($"Unsupported operation: {op.Kind} ({op.GetType().Name})");
@@ -877,6 +940,8 @@ public class UasmEmitter
     {
         if (op == null)
             throw new NotSupportedException("VisitExpression called with null operation");
+        // Unwrap parenthesized expressions (transparent wrapper)
+        while (op is IParenthesizedOperation paren) op = paren.Operand;
         foreach (var h in _exprHandlers)
             if (h.CanHandle(op)) return h.Handle(op);
         throw new NotSupportedException(

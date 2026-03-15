@@ -22,6 +22,26 @@ public partial class InvocationHandler
         {
             if (op.Instance is IInstanceReferenceOperation)
                 instanceVal = LoadField(_ctx.DeclareThisOnce(GetUdonType(target.ContainingType)), GetUdonType(target.ContainingType));
+            else if (op.Instance is IFieldReferenceOperation { Instance: IInstanceReferenceOperation } fieldRef
+                     && fieldRef.Field.Type.IsValueType && !fieldRef.Field.IsStatic)
+            {
+                // Value-type field on this: pass heap address directly so extern can modify in-place
+                instanceVal = FieldAddr(fieldRef.Field.Name, GetUdonType(fieldRef.Field.Type));
+            }
+            // Local variable — value type: pass heap address directly so extern can modify in-place
+            else if (op.Instance is ILocalReferenceOperation localRef
+                     && localRef.Type.IsValueType
+                     && _localVarIds.TryGetValue(localRef.Local, out var localFieldId))
+            {
+                instanceVal = FieldAddr(localFieldId, GetUdonType(localRef.Type));
+            }
+            // Parameter — value type: pass heap address directly so extern can modify in-place
+            else if (op.Instance is IParameterReferenceOperation paramRef
+                     && paramRef.Type.IsValueType)
+            {
+                var paramId = GetParamVarId(paramRef.Parameter);
+                instanceVal = FieldAddr(paramId, GetUdonType(paramRef.Type));
+            }
             else if (op.Instance != null)
                 instanceVal = VisitExpression(op.Instance);
         }
@@ -792,11 +812,15 @@ public partial class InvocationHandler
             sig = ExternResolver.BuildMethodSignature(containingType, methodName, nonGenericPts, rt);
         }
         // Other generic extern methods: try concrete types first, fall back to OriginalDefinition
-        else if (method.IsGenericMethod && ExternResolver.IsExternValid != null && !ExternResolver.IsExternValid(sig))
+        else if (method.IsGenericMethod)
         {
-            var origSig = buildSig(method.OriginalDefinition);
-            if (ExternResolver.IsExternValid(origSig))
-                sig = origSig;
+            var isValid = ExternResolver.IsExternValid;
+            if (isValid != null && !isValid(sig))
+            {
+                var origSig = buildSig(method.OriginalDefinition);
+                if (isValid(origSig))
+                    sig = origSig;
+            }
         }
 
         return sig;

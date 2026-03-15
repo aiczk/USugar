@@ -254,6 +254,28 @@ public partial class InvocationHandler
     {
         var resultType = GetUdonType(op.Type);
 
+        // UdonSharpBehaviour subclasses cannot be instantiated at runtime —
+        // Udon VM has no heap allocation for user-defined types.
+        // Emit a diagnostic error instead of generating invalid UASM.
+        if (!op.Type.IsValueType
+            && op.Type is INamedTypeSymbol namedCtor
+            && ExternResolver.IsUdonSharpBehaviour(namedCtor))
+        {
+            var loc = op.Syntax.GetLocation();
+            var lineSpan = loc.GetLineSpan();
+            _diagnostics.Add(new EmitDiagnostic
+            {
+                Severity = "Error",
+                Message = $"Cannot instantiate user-defined type '{op.Type.Name}' with 'new'. "
+                        + "Udon VM does not support runtime object allocation for user-defined types. "
+                        + "UdonSharpBehaviour instances must be placed in the scene.",
+                FilePath = lineSpan.Path,
+                Line = lineSpan.StartLinePosition.Line,
+                Character = lineSpan.StartLinePosition.Character,
+            });
+            return Const(null, resultType);
+        }
+
         // Parameterless struct ctor → default initialization (no extern needed)
         if (op.Arguments.Length == 0 && op.Type.IsValueType && op.Initializer == null)
             return Const(null, resultType);
@@ -392,4 +414,5 @@ public partial class InvocationHandler
         }
         catch { return null; }
     }
+
 }

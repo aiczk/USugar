@@ -51,7 +51,7 @@ public static class HirToLir
                 if (!ctx.LabelBlocks.ContainsKey(lbl.Label))
                 {
                     var labelBlock = ctx.LFunc.NewBlock();
-                    labelBlock.Hint = $"__goto_{lbl.Label}";
+                    labelBlock.Hint = $"__goto_{ctx.LFunc.Name}_{lbl.Label}";
                     ctx.LabelBlocks[lbl.Label] = labelBlock;
                 }
                 break;

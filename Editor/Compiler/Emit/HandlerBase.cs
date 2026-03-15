@@ -118,7 +118,8 @@ public abstract class HandlerBase
 
     static string ResolveExtern(string externSig)
     {
-        if (ExternResolver.IsExternValid == null || ExternResolver.IsExternValid(externSig))
+        var isValid = ExternResolver.IsExternValid;
+        if (isValid == null || isValid(externSig))
             return externSig;
         var dotIdx = externSig.IndexOf(".__");
         if (dotIdx < 0) return externSig;
@@ -128,7 +129,7 @@ public abstract class HandlerBase
         {
             if (baseType == containingType) continue;
             var alt = baseType + rest;
-            if (ExternResolver.IsExternValid(alt))
+            if (isValid(alt))
                 return alt;
         }
         return externSig;
@@ -281,6 +282,17 @@ public abstract class HandlerBase
         _pendingLocalFunctions.Add((localFunc, func));
     }
 
+    /// <summary>
+    /// Hoist a lambda expression to an internal method.
+    ///
+    /// KNOWN LIMITATION: Captured locals are mapped to module-level fields via
+    /// <see cref="EmitContext.LocalVarIds"/>. All lambdas share the same field for a
+    /// given local, so nested lambdas (lambda inside lambda) that capture the same
+    /// variable will alias. This is correct for sequential execution but not for
+    /// concurrent delegate storage with different capture values (e.g., loop-variable
+    /// capture where the delegate outlives the loop iteration). This is a fundamental
+    /// constraint of the Udon VM's flat heap — there are no per-invocation closures.
+    /// </summary>
     protected IMethodSymbol HoistLambdaToMethod(IAnonymousFunctionOperation lambda)
     {
         var symbol = lambda.Symbol;

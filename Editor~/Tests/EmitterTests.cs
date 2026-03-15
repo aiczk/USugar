@@ -4102,7 +4102,7 @@ public class GotoBackTest : UdonSharpBehaviour {
     }
 }
 ");
-        Assert.Contains("__goto_top:", uasm);
+        Assert.Contains("__goto__start_top:", uasm);
     }
 
     // ── using statement ──

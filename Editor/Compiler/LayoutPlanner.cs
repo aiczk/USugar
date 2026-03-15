@@ -492,7 +492,10 @@ public class LayoutPlanner
         var alloc = new NameAllocator();
 
         foreach (var method in interfaceType.GetMembers().OfType<IMethodSymbol>()
-            .Where(m => m.MethodKind == MethodKind.Ordinary && !m.IsImplicitlyDeclared))
+            .Where(m => (m.MethodKind == MethodKind.Ordinary
+                      || m.MethodKind == MethodKind.PropertyGet
+                      || m.MethodKind == MethodKind.PropertySet)
+                     && !m.IsImplicitlyDeclared))
         {
             var safeName = SanitizeId(method.Name);
             var exportName = method.Parameters.Length > 0

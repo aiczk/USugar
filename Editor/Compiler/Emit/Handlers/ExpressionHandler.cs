@@ -58,17 +58,34 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
 
     HExpr VisitFieldReference(IFieldReferenceOperation fieldRef)
     {
+        // const fields (HasConstantValue) and static readonly with compile-time constant values
         if (fieldRef.Field.HasConstantValue)
         {
             var constType = GetUdonType(fieldRef.Field.Type);
             var constVal = fieldRef.Field.ConstantValue;
             return Const(constVal, constType);
         }
+        // static readonly with constant value at operation level (Roslyn may fold these)
+        if (fieldRef.Field.IsStatic && fieldRef.Field.IsReadOnly
+            && fieldRef.ConstantValue.HasValue)
+        {
+            var constType = GetUdonType(fieldRef.Field.Type);
+            return Const(fieldRef.ConstantValue.Value, constType);
+        }
         if (fieldRef.Field.IsStatic)
         {
             // UdonSharpBehaviour static field → compile error (Udon VM has no shared static storage)
             if (ExternResolver.IsUdonSharpBehaviour(fieldRef.Field.ContainingType))
+            {
+                var qualifier = fieldRef.Field.IsReadOnly ? "'static readonly'" : "Static";
+                _diagnostics.Add(new EmitDiagnostic
+                {
+                    Severity = "Error",
+                    Message = $"{qualifier} field '{fieldRef.Field.Name}' is not supported on UdonSharpBehaviour types. " +
+                        "Udon VM has no static variable support. Use 'const' for compile-time constants or convert to an instance field."
+                });
                 throw new NotSupportedException("Static fields are not supported on UdonSharpBehaviour types. " + $"Use 'const' for compile-time constants or convert '{fieldRef.Field.Name}' to an instance field.");
+            }
             // Unity/System static field → extern getter
             var fldType = GetUdonType(fieldRef.Field.Type);
             var containingType = GetUdonType(fieldRef.Field.ContainingType);

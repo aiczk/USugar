@@ -48,7 +48,16 @@ public class EmitContext
     public readonly Dictionary<(int methodIdx, int paramOrdinal), DelegateConvention> DelegateParamConventions = new();
     public readonly Dictionary<IMethodSymbol, DelegateConvention> LambdaConventionOverrides = new(SymbolEqualityComparer.Default);
 
-    // Persistent local symbol → field name mapping (survives scope pop, for capture resolution)
+    // Persistent local symbol → field name mapping (survives scope pop, for capture resolution).
+    //
+    // KNOWN LIMITATION: All lambdas within the same UdonSharpBehaviour share this flat mapping.
+    // A captured local is hoisted to a single module-level field. This works correctly when
+    // lambdas run sequentially, but nested lambdas or multiple delegates capturing the same
+    // variable alias the same field. Because Udon delegates are JUMP addresses (not closures
+    // with independent state), "instantiating" a lambda multiple times (e.g., inside a loop)
+    // with different capture values will overwrite the shared field — only the last value
+    // survives. This is inherent to the Udon VM's flat heap model and cannot be fixed without
+    // a closure-object emulation layer.
     public readonly Dictionary<ILocalSymbol, string> LocalVarIds = new(SymbolEqualityComparer.Default);
 
     // Field initializers to emit at _start
