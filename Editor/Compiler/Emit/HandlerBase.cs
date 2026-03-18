@@ -432,6 +432,40 @@ public abstract class HandlerBase
     }
 
     /// <summary>
+    /// Store a tuple value (literal or method return) into the given expansion slots.
+    /// Shared by StatementHandler (declaration) and AssignmentHandler (reassignment).
+    /// </summary>
+    protected void StoreTupleValue(IOperation value, ReturnSlot[] expansion)
+    {
+        var unwrapped = UnwrapConversions(value);
+
+        if (unwrapped is ITupleOperation tupleLit)
+        {
+            for (int i = 0; i < tupleLit.Elements.Length && i < expansion.Length; i++)
+                EmitStoreField(expansion[i].Id, VisitExpression(tupleLit.Elements[i]));
+        }
+        else if (unwrapped is IInvocationOperation invocation)
+        {
+            var callExpr = VisitExpression(value);
+            if (callExpr != null) EmitExprStmt(callExpr);
+            var callReturns = GetCalleeReturns(invocation.TargetMethod);
+            for (int i = 0; i < expansion.Length && i < callReturns.Length; i++)
+                EmitStoreField(expansion[i].Id, LoadField(callReturns[i].Id, callReturns[i].UdonType));
+        }
+        else if (unwrapped is ILocalReferenceOperation otherLocal
+                 && _tupleLocalExpansion.TryGetValue(otherLocal.Local, out var otherExpansion))
+        {
+            for (int i = 0; i < expansion.Length && i < otherExpansion.Length; i++)
+                EmitStoreField(expansion[i].Id, LoadField(otherExpansion[i].Id, otherExpansion[i].UdonType));
+        }
+        else
+        {
+            throw new System.NotSupportedException(
+                $"Cannot assign {unwrapped.GetType().Name} to tuple local variable.");
+        }
+    }
+
+    /// <summary>
     /// Call an internal function via HirBuilder.InternalCall.
     /// Returns the result HExpr — this is an expression only, NOT emitted to the HIR.
     /// For void calls (e.g. property setters), wrap with <c>EmitExprStmt()</c> to add to the HIR.

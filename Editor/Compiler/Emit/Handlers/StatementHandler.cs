@@ -384,30 +384,7 @@ public class StatementHandler : HandlerBase, IOperationHandler
         }
 
         if (init == null) return;
-
-        var expansion = _tupleLocalExpansion[local];
-        var value = UnwrapConversions(init.Value);
-
-        if (value is ITupleOperation tupleLit)
-        {
-            // Literal: (1, "hello") → element-wise assignment
-            for (int i = 0; i < tupleLit.Elements.Length && i < expansion.Length; i++)
-                EmitStoreField(expansion[i].Id, VisitExpression(tupleLit.Elements[i]));
-        }
-        else if (value is IInvocationOperation invocation)
-        {
-            // Method call: GetTuple() → call, then read from return slots
-            var callExpr = VisitExpression(init.Value);
-            if (callExpr != null) EmitExprStmt(callExpr);
-            var callReturns = GetCalleeReturns(invocation.TargetMethod);
-            for (int i = 0; i < expansion.Length && i < callReturns.Length; i++)
-                EmitStoreField(expansion[i].Id, LoadField(callReturns[i].Id, callReturns[i].UdonType));
-        }
-        else
-        {
-            throw new System.NotSupportedException(
-                $"Cannot initialize tuple local '{local.Name}' from {value.GetType().Name}.");
-        }
+        StoreTupleValue(init.Value, _tupleLocalExpansion[local]);
     }
 
 }

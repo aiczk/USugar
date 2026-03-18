@@ -221,35 +221,11 @@ public class AssignmentHandler : HandlerBase, IOperationHandler, IExpressionHand
         // Tuple local SROA: reassignment to an expanded tuple variable
         if (assign.Target is ILocalReferenceOperation targetLocal
             && targetLocal.Type.IsTupleType
-            && targetLocal.Type is INamedTypeSymbol targetTupleType
             && _tupleLocalExpansion.TryGetValue(targetLocal.Local, out var expansion))
         {
-            var value = UnwrapConversions(assign.Value);
-
-            if (value is ITupleOperation tupleLit)
-            {
-                for (int i = 0; i < tupleLit.Elements.Length && i < expansion.Length; i++)
-                    EmitStoreField(expansion[i].Id, VisitExpression(tupleLit.Elements[i]));
-            }
-            else if (value is IInvocationOperation invocation)
-            {
-                var callExpr = VisitExpression(assign.Value);
-                if (callExpr != null) EmitExprStmt(callExpr);
-                var callReturns = GetCalleeReturns(invocation.TargetMethod);
-                for (int i = 0; i < expansion.Length && i < callReturns.Length; i++)
-                    EmitStoreField(expansion[i].Id, LoadField(callReturns[i].Id, callReturns[i].UdonType));
-            }
-            else if (value is ILocalReferenceOperation otherLocal
-                     && _tupleLocalExpansion.TryGetValue(otherLocal.Local, out var otherExpansion))
-            {
-                for (int i = 0; i < expansion.Length && i < otherExpansion.Length; i++)
-                    EmitStoreField(expansion[i].Id, LoadField(otherExpansion[i].Id, otherExpansion[i].UdonType));
-            }
-            else
-            {
-                throw new System.NotSupportedException(
-                    $"Cannot assign {value.GetType().Name} to tuple local variable '{targetLocal.Local.Name}'.");
-            }
+            StoreTupleValue(assign.Value, expansion);
+            // Return first element as expression value. Whole-value use of the tuple local
+            // is blocked by ExpressionHandler's guard, so this is only reached in void context.
             return LoadField(expansion[0].Id, expansion[0].UdonType);
         }
 
