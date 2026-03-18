@@ -22,8 +22,7 @@ public class UasmEmitter
     Dictionary<IMethodSymbol, HFunction> _methodFunctions => _ctx.MethodFunctions;
     Dictionary<IMethodSymbol, int> _methodIndices => _ctx.MethodIndices;
     Dictionary<IMethodSymbol, string> _methodVarPrefix => _ctx.MethodVarPrefix;
-    Dictionary<IMethodSymbol, string> _methodRetVars => _ctx.MethodRetVars;
-    Dictionary<IMethodSymbol, string> _methodRetTypes => _ctx.MethodRetTypes;
+    Dictionary<IMethodSymbol, ReturnSlot[]> _methodReturns => _ctx.MethodReturns;
     Dictionary<IMethodSymbol, string[]> _methodParamVarIds => _ctx.MethodParamVarIds;
     IMethodSymbol _currentMethod { get => _ctx.CurrentMethod; set => _ctx.CurrentMethod = value; }
     int _nextMethodIndex { get => _ctx.NextMethodIndex; set => _ctx.NextMethodIndex = value; }
@@ -102,6 +101,12 @@ public class UasmEmitter
 
     public string Emit()
     {
+        // Record types cannot work in Udon: no heap allocation for user types, no inheritance from UdonSharpBehaviour
+        if (_classSymbol.IsRecord)
+            throw new NotSupportedException(
+                $"Record type '{_classSymbol.Name}' is not supported in UdonSharp. " +
+                "Udon VM cannot allocate user-defined types. Use a regular class inheriting from UdonSharpBehaviour instead.");
+
         EnsurePlannerReady();
         EmitFields();
         SetReflectionValues();
@@ -235,6 +240,29 @@ public class UasmEmitter
                         $"Cannot sync field '{member.Name}': type '{member.Type}' is not supported by Udon sync");
             }
 
+            // Public delegate field → expand to 3-variable bundle (target, method, addr)
+            // Private delegate fields remain as SystemUInt32 (same-behaviour function pointers)
+            if (member.DeclaredAccessibility == Accessibility.Public
+                && member.Type is INamedTypeSymbol delegateType && delegateType.DelegateInvokeMethod != null)
+            {
+                if (delegateType.DelegateInvokeMethod.ReturnType.IsTupleType)
+                    throw new NotSupportedException($"Tuple-return delegate field '{member.Name}' is not supported.");
+
+                _ctx.DeclareField($"{member.Name}__target", "VRCUdonCommonInterfacesIUdonEventReceiver", flags);
+                _ctx.DeclareField($"{member.Name}__method", "SystemString");
+                _ctx.DeclareField($"{member.Name}__addr", "SystemUInt32");
+                _ctx.DelegateFields.Add(member.Name);
+
+                // Declare convention fields for this delegate signature
+                var (convArgs, convRet) = HandlerBase.GetConventionFieldNames(delegateType);
+                for (int ci = 0; ci < convArgs.Length; ci++)
+                    _ctx.TryDeclareVar(convArgs[ci], NormalizeDelegateParamType(delegateType.DelegateInvokeMethod.Parameters[ci].Type));
+                if (convRet != null)
+                    _ctx.TryDeclareVar(convRet, ExternResolver.GetUdonTypeName(delegateType.DelegateInvokeMethod.ReturnType));
+
+                continue; // Skip normal field declaration
+            }
+
             // Try to resolve constant field initializers as CLR objects
             object constValue = null;
             var syntaxRef = member.DeclaringSyntaxReferences.FirstOrDefault();
@@ -329,7 +357,30 @@ public class UasmEmitter
                 if (member.DeclaredAccessibility == Accessibility.Public
                     || member.GetAttributes().Any(a => a.AttributeClass?.Name is "SerializeField" or "SerializeFieldAttribute"))
                     baseFlags |= FieldFlags.Export;
-                _ctx.DeclareField(member.Name, udonType, baseFlags, constValue);
+
+                // Public delegate field from base class → expand to 3-variable bundle
+                if (member.DeclaredAccessibility == Accessibility.Public
+                    && member.Type is INamedTypeSymbol baseDelegateType && baseDelegateType.DelegateInvokeMethod != null)
+                {
+                    if (baseDelegateType.DelegateInvokeMethod.ReturnType.IsTupleType)
+                        throw new NotSupportedException($"Tuple-return delegate field '{member.Name}' is not supported.");
+
+                    _ctx.DeclareField($"{member.Name}__target", "VRCUdonCommonInterfacesIUdonEventReceiver", baseFlags);
+                    _ctx.DeclareField($"{member.Name}__method", "SystemString");
+                    _ctx.DeclareField($"{member.Name}__addr", "SystemUInt32");
+                    _ctx.DelegateFields.Add(member.Name);
+
+                    // Declare convention fields for this delegate signature
+                    var (baseConvArgs, baseConvRet) = HandlerBase.GetConventionFieldNames(baseDelegateType);
+                    for (int ci = 0; ci < baseConvArgs.Length; ci++)
+                        _ctx.TryDeclareVar(baseConvArgs[ci], NormalizeDelegateParamType(baseDelegateType.DelegateInvokeMethod.Parameters[ci].Type));
+                    if (baseConvRet != null)
+                        _ctx.TryDeclareVar(baseConvRet, ExternResolver.GetUdonTypeName(baseDelegateType.DelegateInvokeMethod.ReturnType));
+                }
+                else
+                {
+                    _ctx.DeclareField(member.Name, udonType, baseFlags, constValue);
+                }
 
                 var baseFcbAttr = member.GetAttributes()
                     .FirstOrDefault(a => a.AttributeClass?.Name == "FieldChangeCallbackAttribute");
@@ -476,14 +527,21 @@ public class UasmEmitter
             _methodParamVarIds[method] = paramVarIds;
             foreach (var pid in paramVarIds) func.ParamFieldNames.Add(pid);
 
-            // Declare return var
-            if (!method.ReturnsVoid && ml.ReturnId != null)
+            // Declare return var(s) from unified Returns
+            if (ml.Returns.Count > 0)
             {
-                var retType = GetUdonType(method.ReturnType);
-                func.ReturnType = retType;
-                func.ReturnFieldName = ml.ReturnId;
-                _methodRetVars[method] = ml.ReturnId;
-                _methodRetTypes[method] = retType;
+                foreach (var ret in ml.Returns)
+                    _ctx.DeclareVar(ret.Id, ret.UdonType);
+
+                if (ml.Returns.Count == 1)
+                    func.ReturnType = ml.Returns[0].UdonType;
+                else
+                    func.ReturnType = "SystemVoid"; // tuple: no single return value
+
+                foreach (var ret in ml.Returns)
+                    func.ReturnSlots.Add(ret);
+
+                _methodReturns[method] = ml.Returns.ToArray();
             }
 
             DeclareDelegateConventionVars(method, idx);
@@ -518,9 +576,8 @@ public class UasmEmitter
                 var retType = GetUdonType(fm.ReturnType);
                 var retId = $"__{idx}_{SanitizeId(fm.Name)}__ret";
                 func.ReturnType = retType;
-                func.ReturnFieldName = retId;
-                _methodRetVars[fm] = retId;
-                _methodRetTypes[fm] = retType;
+                func.ReturnSlots.Add(new ReturnSlot(retId, retType));
+                _methodReturns[fm] = new[] { new ReturnSlot(retId, retType) };
             }
         }
 
@@ -556,9 +613,8 @@ public class UasmEmitter
                 var retType = GetUdonType(bm.ReturnType);
                 var retId = $"__{idx}_{SanitizeId(bm.Name)}__ret";
                 func.ReturnType = retType;
-                func.ReturnFieldName = retId;
-                _methodRetVars[bm] = retId;
-                _methodRetTypes[bm] = retType;
+                func.ReturnSlots.Add(new ReturnSlot(retId, retType));
+                _methodReturns[bm] = new[] { new ReturnSlot(retId, retType) };
             }
         }
 
@@ -580,6 +636,9 @@ public class UasmEmitter
         // Emit interface bridge exports
         EmitInterfaceBridges();
 
+        // Emit delegate bridge exports
+        EmitDelegateBridges();
+
         // Emit pending local functions and generic specializations (may chain)
         while (_pendingLocalFunctions.Count > 0 || _pendingGenericSpecs.Count > 0)
         {
@@ -598,6 +657,9 @@ public class UasmEmitter
                     EmitMethod(spec);
             }
         }
+
+        // Emit pending delegate bridges for hoisted lambdas/local functions
+        EmitPendingDelegateBridges();
 
         // Synthesize _start if there are field initializers or FCB fields but no user-defined Start()
         if ((_fieldInitOps.Count > 0 || _fieldChangeCallbacks.Count > 0)
@@ -665,6 +727,129 @@ public class UasmEmitter
         }
     }
 
+    // ── Delegate Bridge Exports ──
+
+    void EmitDelegateBridges()
+    {
+        var classLayout = _planner.GetLayout(_classSymbol);
+        foreach (var (method, bridge) in classLayout.DelegateBridges)
+        {
+            if (!_methodFunctions.TryGetValue(method, out var realFunc)) continue;
+            // Skip methods with tuple returns (not supported as delegate targets)
+            if (!method.ReturnsVoid && method.ReturnType.IsTupleType) continue;
+            var ml = bridge.RealMethodLayout;
+
+            // Build canonical convention key using shared helper
+            var sigPart = BuildBridgeSigPart(method);
+
+            // Declare convention fields (if not already declared)
+            for (int i = 0; i < method.Parameters.Length; i++)
+            {
+                var argType = NormalizeDelegateParamType(method.Parameters[i].Type);
+                _ctx.TryDeclareVar($"__dlgc_{sigPart}__a{i}", argType);
+            }
+            if (!method.ReturnsVoid)
+            {
+                var retType = ExternResolver.GetUdonTypeName(method.ReturnType);
+                _ctx.TryDeclareVar($"__dlgc_{sigPart}__ret", retType);
+            }
+
+            // Build bridge function
+            var bridgeFunc = _hirModule.AddFunction(bridge.BridgeExportName, bridge.BridgeExportName);
+
+            var prevFunc = _builder.CurrentFunction;
+            _builder.SetFunction(bridgeFunc);
+
+            // Copy convention fields → real param fields, then call real method
+            var callArgs = new List<HExpr>();
+            for (int i = 0; i < method.Parameters.Length; i++)
+            {
+                var argType = NormalizeDelegateParamType(method.Parameters[i].Type);
+                var convName = $"__dlgc_{sigPart}__a{i}";
+                callArgs.Add(BridgeLoad(convName, argType));
+            }
+
+            var retTypeStr = method.ReturnsVoid ? "SystemVoid" : ExternResolver.GetUdonTypeName(method.ReturnType);
+            var callResult = _builder.InternalCall(realFunc.Name, callArgs, retTypeStr);
+
+            if (!method.ReturnsVoid)
+            {
+                var convRet = $"__dlgc_{sigPart}__ret";
+                BridgeStore(convRet, callResult);
+            }
+            else
+            {
+                _builder.EmitExprStmt(callResult);
+            }
+
+            _builder.EmitReturn();
+
+            if (prevFunc != null)
+                _builder.SetFunction(prevFunc);
+        }
+    }
+
+    // ── Pending Delegate Bridges (for hoisted lambdas/local functions) ──
+
+    void EmitPendingDelegateBridges()
+    {
+        var emitted = new HashSet<string>();
+        foreach (var (method, bridgeExportName, resolvedMap) in _ctx.PendingDelegateBridges)
+        {
+            if (!emitted.Add(bridgeExportName)) continue;
+            if (!_methodFunctions.TryGetValue(method, out var realFunc)) continue;
+            if (!method.ReturnsVoid && method.ReturnType.IsTupleType) continue;
+
+            // Use the saved type param snapshot instead of _typeParamMap (which may be cleared)
+            var sigPart = BuildBridgeSigPart(method, resolvedMap);
+
+            // Declare convention fields (if not already declared)
+            for (int i = 0; i < method.Parameters.Length; i++)
+            {
+                var argType = NormalizeDelegateParamType(method.Parameters[i].Type, resolvedMap);
+                _ctx.TryDeclareVar($"__dlgc_{sigPart}__a{i}", argType);
+            }
+            if (!method.ReturnsVoid)
+            {
+                var retType = ExternResolver.GetUdonTypeName(method.ReturnType, resolvedMap);
+                _ctx.TryDeclareVar($"__dlgc_{sigPart}__ret", retType);
+            }
+
+            // Build bridge function
+            var bridgeFunc = _hirModule.AddFunction(bridgeExportName, bridgeExportName);
+
+            var prevFunc = _builder.CurrentFunction;
+            _builder.SetFunction(bridgeFunc);
+
+            // Copy convention fields → real param fields, then call real method
+            var callArgs = new List<HExpr>();
+            for (int i = 0; i < method.Parameters.Length; i++)
+            {
+                var argType = NormalizeDelegateParamType(method.Parameters[i].Type, resolvedMap);
+                var convName = $"__dlgc_{sigPart}__a{i}";
+                callArgs.Add(BridgeLoad(convName, argType));
+            }
+
+            var retTypeStr = method.ReturnsVoid ? "SystemVoid" : ExternResolver.GetUdonTypeName(method.ReturnType, resolvedMap);
+            var callResult = _builder.InternalCall(realFunc.Name, callArgs, retTypeStr);
+
+            if (!method.ReturnsVoid)
+            {
+                var convRet = $"__dlgc_{sigPart}__ret";
+                BridgeStore(convRet, callResult);
+            }
+            else
+            {
+                _builder.EmitExprStmt(callResult);
+            }
+
+            _builder.EmitReturn();
+
+            if (prevFunc != null)
+                _builder.SetFunction(prevFunc);
+        }
+    }
+
     // ── Delegate convention vars ──
 
     void DeclareDelegateConventionVars(IMethodSymbol method, int idx)
@@ -695,6 +880,29 @@ public class UasmEmitter
     }
 
     static string SanitizeId(string name) => name.Replace('.', '_');
+
+    /// <summary>Normalize param type: delegate-typed params become SystemUInt32 (JUMP addresses).</summary>
+    static string NormalizeDelegateParamType(ITypeSymbol type, Dictionary<ITypeParameterSymbol, ITypeSymbol> typeParamMap = null)
+    {
+        if (type is INamedTypeSymbol nt && nt.DelegateInvokeMethod != null)
+            return "SystemUInt32";
+        return ExternResolver.GetUdonTypeName(type, typeParamMap);
+    }
+
+    /// <summary>Build canonical convention sig part for a bridge method, matching HandlerBase.BuildConventionSigPart.</summary>
+    static string BuildBridgeSigPart(IMethodSymbol method, Dictionary<ITypeParameterSymbol, ITypeSymbol> typeParamMap = null)
+    {
+        var paramParts = method.Parameters.Select(p =>
+        {
+            if (p.Type is INamedTypeSymbol nt && nt.DelegateInvokeMethod != null)
+                return "SystemUInt32";
+            return ExternResolver.GetUdonTypeName(p.Type, typeParamMap);
+        });
+        var retPart = method.ReturnsVoid ? "Void" : ExternResolver.GetUdonTypeName(method.ReturnType, typeParamMap);
+        var paramStr = string.Join("_", paramParts);
+        if (paramStr == "") paramStr = "Void";
+        return $"{paramStr}__{retPart}";
+    }
 
     // ── EmitMethod ──
 
@@ -787,10 +995,10 @@ public class UasmEmitter
             {
                 if (anonFunc.Body is IBlockOperation anonBlock)
                     VisitOperation(anonBlock);
-                else if (anonFunc.Body != null && _methodRetVars.TryGetValue(method, out var lambdaRetId))
+                else if (anonFunc.Body != null && _methodReturns.TryGetValue(method, out var lambdaRets) && lambdaRets.Length == 1)
                 {
                     var resultVal = VisitExpression(anonFunc.Body);
-                    BridgeStore(lambdaRetId, resultVal);
+                    BridgeStore(lambdaRets[0].Id, resultVal);
                 }
             }
             else if (bodyOp is IBlockOperation block)
@@ -800,25 +1008,44 @@ public class UasmEmitter
                      && propDecl.ExpressionBody != null)
             {
                 var exprOp = model.GetOperation(propDecl.ExpressionBody.Expression);
-                if (exprOp != null && _methodRetVars.TryGetValue(method, out var retId))
+                if (exprOp != null && _methodReturns.TryGetValue(method, out var propRets) && propRets.Length == 1)
                 {
                     var resultVal = VisitExpression(exprOp);
-                    BridgeStore(retId, resultVal);
+                    BridgeStore(propRets[0].Id, resultVal);
                 }
             }
             // Block-bodied property accessor: int X { get { return expr; } }
             else if (syntax is AccessorDeclarationSyntax accessorDecl)
             {
-                var accessorOp = model.GetOperation(accessorDecl);
-                if (accessorOp is IMethodBodyOperation accessorBody)
+                if (accessorDecl.Body == null && accessorDecl.ExpressionBody == null
+                    && method.AssociatedSymbol is IPropertySymbol autoProp)
                 {
-                    if (accessorBody.BlockBody != null)
-                        VisitOperation(accessorBody.BlockBody);
-                    else if (accessorBody.ExpressionBody != null)
-                        VisitOperation(accessorBody.ExpressionBody);
+                    // Auto-property accessor: synthesize body (get → load field, set → store field)
+                    var propType = GetUdonType(autoProp.Type);
+                    if (method.MethodKind == MethodKind.PropertyGet
+                        && _methodReturns.TryGetValue(method, out var autoRets) && autoRets.Length == 1)
+                    {
+                        BridgeStore(autoRets[0].Id, BridgeLoad(autoProp.Name, propType));
+                    }
+                    else if (method.MethodKind == MethodKind.PropertySet
+                        && _methodParamVarIds.TryGetValue(method, out var paramIds) && paramIds.Length > 0)
+                    {
+                        BridgeStore(autoProp.Name, BridgeLoad(paramIds[0], propType));
+                    }
                 }
-                else if (accessorOp is IBlockOperation accessorBlock)
-                    VisitOperation(accessorBlock);
+                else
+                {
+                    var accessorOp = model.GetOperation(accessorDecl);
+                    if (accessorOp is IMethodBodyOperation accessorBody)
+                    {
+                        if (accessorBody.BlockBody != null)
+                            VisitOperation(accessorBody.BlockBody);
+                        else if (accessorBody.ExpressionBody != null)
+                            VisitOperation(accessorBody.ExpressionBody);
+                    }
+                    else if (accessorOp is IBlockOperation accessorBlock)
+                        VisitOperation(accessorBlock);
+                }
             }
         }
 

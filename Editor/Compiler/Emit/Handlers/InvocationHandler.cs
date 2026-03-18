@@ -56,6 +56,12 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
             // Local function call
             case MethodKind.LocalFunction
                 when _methodFunctions.ContainsKey(target):
+                if (_currentMethod != null
+                    && SymbolEqualityComparer.Default.Equals(target, _currentMethod))
+                    throw new System.NotSupportedException(
+                        $"Recursive local function '{target.Name}' is not supported. " +
+                        "Udon VM's flat heap shares parameter variables across call frames. " +
+                        "Use a loop instead of recursion.");
                 return EmitUserMethodCall(op, target);
         }
 
@@ -145,6 +151,23 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
 
     HExpr VisitDelegateInvocation(IInvocationOperation op)
     {
+        // ── Delegate FIELD invocation via conditional access (?.Invoke()) ──
+        if (op.Instance is IConditionalAccessInstanceOperation
+            && _conditionalAccessDelegateFieldNames.Count > 0)
+        {
+            return EmitDelegateFieldInvocation(op, _conditionalAccessDelegateFieldNames.Peek(),
+                op.TargetMethod.ContainingType as INamedTypeSymbol);
+        }
+
+        // ── Delegate FIELD invocation ──
+        if (op.Instance is IFieldReferenceOperation { Instance: IInstanceReferenceOperation } fieldRef
+            && fieldRef.Field.Type is INamedTypeSymbol dlgFieldType
+            && dlgFieldType.DelegateInvokeMethod != null
+            && _delegateFields.Contains(fieldRef.Field.Name))
+        {
+            return EmitDelegateFieldInvocation(op, fieldRef.Field.Name, dlgFieldType);
+        }
+
         // Delegate parameter invocation via JUMP_INDIRECT
         if (op.Instance is IParameterReferenceOperation paramRef2
             && _currentMethod != null
@@ -201,6 +224,94 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
         throw new System.NotSupportedException("Cannot resolve delegate target");
     }
 
+    /// <summary>
+    /// Emit delegate field invocation logic (self-path via JUMP_INDIRECT, cross-path via SendCustomEvent).
+    /// Shared by direct invocation (_callback.Invoke()) and conditional access (_callback?.Invoke()).
+    /// </summary>
+    HExpr EmitDelegateFieldInvocation(IInvocationOperation op, string fieldName, INamedTypeSymbol delegateType)
+    {
+        var invoke = delegateType.DelegateInvokeMethod;
+        var (convArgs, convRet) = GetConventionFieldNames(delegateType);
+
+        string retType = null;
+        if (!invoke.ReturnsVoid)
+            retType = GetUdonType(invoke.ReturnType);
+
+        // 1. Evaluate all args ONCE (before branching to avoid double-evaluation)
+        var argExprs = new List<HExpr>();
+        for (int i = 0; i < op.Arguments.Length; i++)
+            argExprs.Add(VisitExpression(op.Arguments[i].Value));
+
+        // 2. Write args to LOCAL convention fields
+        for (int i = 0; i < argExprs.Count && i < convArgs.Length; i++)
+            EmitStoreField(convArgs[i], argExprs[i]);
+
+        // Load bundle fields
+        var target = LoadField($"{fieldName}__target", "VRCUdonCommonInterfacesIUdonEventReceiver");
+        var addr = LoadField($"{fieldName}__addr", "SystemUInt32");
+        var thisRef = LoadField(_ctx.DeclareThisOnce(GetUdonType(_classSymbol)), GetUdonType(_classSymbol));
+
+        // 3. Condition: target == this && addr != 0
+        var isSelf = ExternCall(
+            "UnityEngineObject.__op_Equality__UnityEngineObject_UnityEngineObject__SystemBoolean",
+            new List<HExpr> { target, thisRef }, "SystemBoolean");
+        var hasAddr = ExternCall(
+            "SystemUInt32.__op_Inequality__SystemUInt32_SystemUInt32__SystemBoolean",
+            new List<HExpr> { addr, Const(0u, "SystemUInt32") }, "SystemBoolean");
+        var selfFast = ExternCall(
+            "SystemBoolean.__op_LogicalAnd__SystemBoolean_SystemBoolean__SystemBoolean",
+            new List<HExpr> { isSelf, hasAddr }, "SystemBoolean");
+
+        // For Func<T>: temp to receive result from both paths
+        string resultVar = null;
+        if (retType != null)
+            resultVar = _ctx.DeclareLocal("__dlg_ret", retType);
+
+        // 4-5. Branch: self (JUMP_INDIRECT) vs cross (SendCustomEvent)
+        _builder.EmitIf(selfFast,
+            // ── Self path: JUMP_INDIRECT (convention fields already written locally) ──
+            _ =>
+            {
+                var indirectResult = InternalCall("__indirect", new List<HExpr> { addr }, retType ?? "SystemVoid");
+                EmitExprStmt(indirectResult);
+                if (retType != null)
+                {
+                    // Read return from convention ret field
+                    EmitStoreField(resultVar, LoadField(convRet, retType));
+                }
+            },
+            // ── Cross path: SetProgramVariable + SendCustomEvent ──
+            _ =>
+            {
+                // Write convention fields on target via SetProgramVariable
+                for (int i = 0; i < convArgs.Length; i++)
+                {
+                    var argType = GetUdonType(invoke.Parameters[i].Type);
+                    EmitExternVoid(
+                        "VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid",
+                        new List<HExpr> { target, Const(convArgs[i], "SystemString"), LoadField(convArgs[i], argType) });
+                }
+                // SendCustomEvent with dynamic method name
+                var method = LoadField($"{fieldName}__method", "SystemString");
+                EmitExternVoid(
+                    "VRCUdonCommonInterfacesIUdonEventReceiver.__SendCustomEvent__SystemString__SystemVoid",
+                    new List<HExpr> { target, method });
+                // GetProgramVariable for return (Func only)
+                if (retType != null)
+                {
+                    var retVal = ExternCall(
+                        "VRCUdonCommonInterfacesIUdonEventReceiver.__GetProgramVariable__SystemString__SystemObject",
+                        new List<HExpr> { target, Const(convRet, "SystemString") }, "SystemObject");
+                    EmitStoreField(resultVar, retVal);
+                }
+            }
+        );
+
+        if (retType != null)
+            return LoadField(resultVar, retType);
+        return null;
+    }
+
     // ── Generic Monomorphization ──
 
     void RegisterGenericSpecialization(IMethodSymbol constructed)
@@ -235,9 +346,8 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
             var retId = $"__{idx}_{SanitizeId(constructed.Name)}__ret";
             _ctx.DeclareVar(retId, retType);
             func.ReturnType = retType;
-            func.ReturnFieldName = retId;
-            _methodRetVars[constructed] = retId;
-            _methodRetTypes[constructed] = retType;
+            func.ReturnSlots.Add(new ReturnSlot(retId, retType));
+            _methodReturns[constructed] = new[] { new ReturnSlot(retId, retType) };
         }
 
         _pendingGenericSpecs.Add(constructed);
@@ -309,8 +419,7 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
         _lambdaConventionOverrides[symbol] = convention;
         if (convention.RetVarId != null)
         {
-            _methodRetVars[symbol] = convention.RetVarId;
-            _methodRetTypes[symbol] = _ctx.GetFieldType(convention.RetVarId);
+            _methodReturns[symbol] = new[] { new ReturnSlot(convention.RetVarId, _ctx.GetFieldType(convention.RetVarId)) };
         }
 
         _pendingLocalFunctions.Add((symbol, func));

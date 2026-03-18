@@ -599,7 +599,7 @@ public class HirTests
         // Only reference slot0
         block.Insts.Add(new LMove(0, new LConst(42, "SystemInt32"), "SystemInt32"));
         block.Term = new LReturn(new LSlotRef(0, "SystemInt32"));
-        func.ReturnFieldName = "__retval";
+        func.ReturnSlots.Add(new ReturnSlot("__retval", "SystemInt32"));
         func.ReturnType = "SystemInt32";
 
         var result = LirToUasm.Generate(lmod);

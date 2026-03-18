@@ -20,8 +20,7 @@ public abstract class HandlerBase
     protected Dictionary<IMethodSymbol, HFunction> _methodFunctions => _ctx.MethodFunctions;
     protected Dictionary<IMethodSymbol, int> _methodIndices => _ctx.MethodIndices;
     protected Dictionary<IMethodSymbol, string> _methodVarPrefix => _ctx.MethodVarPrefix;
-    protected Dictionary<IMethodSymbol, string> _methodRetVars => _ctx.MethodRetVars;
-    protected Dictionary<IMethodSymbol, string> _methodRetTypes => _ctx.MethodRetTypes;
+    protected Dictionary<IMethodSymbol, ReturnSlot[]> _methodReturns => _ctx.MethodReturns;
     protected Dictionary<IMethodSymbol, string[]> _methodParamVarIds => _ctx.MethodParamVarIds;
     protected IMethodSymbol _currentMethod { get => _ctx.CurrentMethod; set => _ctx.CurrentMethod = value; }
     protected int _nextMethodIndex { get => _ctx.NextMethodIndex; set => _ctx.NextMethodIndex = value; }
@@ -36,7 +35,9 @@ public abstract class HandlerBase
     protected Dictionary<string, string> _fieldChangeCallbacks => _ctx.FieldChangeCallbacks;
     protected Dictionary<ITypeSymbol, string> _enumArrayVars => _ctx.EnumArrayVars;
     protected Stack<HExpr> _conditionalAccessTargets => _ctx.ConditionalAccessTargets;
+    protected Stack<string> _conditionalAccessDelegateFieldNames => _ctx.ConditionalAccessDelegateFieldNames;
     protected Stack<List<(HExpr val, ITypeSymbol type)>> _usingDisposableStack => _ctx.UsingDisposableStack;
+    protected HashSet<string> _delegateFields => _ctx.DelegateFields;
     protected List<EmitDiagnostic> _diagnostics => _ctx.Diagnostics;
 
     // ── Dispatch (recursive descent into other handlers via UasmEmitter facade) ──
@@ -199,6 +200,7 @@ public abstract class HandlerBase
         long maxVal = 0;
         foreach (var m in members)
         {
+            if (m.ConstantValue == null) continue;
             var val = Convert.ToInt64(m.ConstantValue);
             if (val < 0)
                 throw new NotSupportedException(
@@ -273,9 +275,8 @@ public abstract class HandlerBase
             var retType = GetUdonType(localFunc.ReturnType);
             func.ReturnType = retType;
             var retId = $"__{idx}_{funcName}__ret";
-            func.ReturnFieldName = retId;
-            _methodRetVars[localFunc] = retId;
-            _methodRetTypes[localFunc] = retType;
+            func.ReturnSlots.Add(new ReturnSlot(retId, retType));
+            _methodReturns[localFunc] = new[] { new ReturnSlot(retId, retType) };
         }
 
         _methodFunctions[localFunc] = func;
@@ -301,6 +302,103 @@ public abstract class HandlerBase
         return symbol;
     }
 
+    // ── Delegate convention helpers ──
+
+    /// <summary>Compute signature-based convention field names for a delegate type.</summary>
+    internal static (string[] argNames, string retName) GetConventionFieldNames(INamedTypeSymbol delegateType)
+    {
+        var invoke = delegateType.DelegateInvokeMethod;
+        var sigPart = BuildConventionSigPart(invoke);
+
+        var argNames = new string[invoke.Parameters.Length];
+        for (int i = 0; i < invoke.Parameters.Length; i++)
+            argNames[i] = $"__dlgc_{sigPart}__a{i}";
+
+        string retName = null;
+        if (!invoke.ReturnsVoid)
+            retName = $"__dlgc_{sigPart}__ret";
+
+        return (argNames, retName);
+    }
+
+    /// <summary>Build the canonical convention signature key for a delegate invoke method.</summary>
+    internal static string BuildConventionSigPart(IMethodSymbol invoke)
+    {
+        // Normalize delegate-typed params to SystemUInt32 (JUMP addresses)
+        var paramParts = invoke.Parameters.Select(p =>
+        {
+            if (p.Type is INamedTypeSymbol nt && nt.DelegateInvokeMethod != null)
+                return "SystemUInt32";
+            return ExternResolver.GetUdonTypeName(p.Type);
+        });
+
+        // Include return type to avoid Func<int> vs Func<bool> collision
+        var retPart = invoke.ReturnsVoid ? "Void" : ExternResolver.GetUdonTypeName(invoke.ReturnType);
+        var paramStr = string.Join("_", paramParts);
+        if (paramStr == "") paramStr = "Void";
+        return $"{paramStr}__{retPart}";
+    }
+
+    /// <summary>Check if a lambda captures variables from outer scope.</summary>
+    protected static bool HasCaptures(IAnonymousFunctionOperation lambda)
+    {
+        var lambdaParams = new HashSet<ISymbol>(lambda.Symbol.Parameters, SymbolEqualityComparer.Default);
+        foreach (var desc in lambda.Body.DescendantsAndSelf())
+        {
+            if (desc is ILocalReferenceOperation localRef && !lambdaParams.Contains(localRef.Local))
+                return true;
+            if (desc is IParameterReferenceOperation paramRef && !lambdaParams.Contains(paramRef.Parameter))
+                return true;
+        }
+        return false;
+    }
+
+    // ── Delegate bridge resolution ──
+
+    /// <summary>Resolve delegate creation to bridge name, FuncRef, and target instance.</summary>
+    protected (string bridgeName, HExpr funcRef, HExpr targetInstance) ResolveDelegateBridge(IDelegateCreationOperation op)
+    {
+        IMethodSymbol targetMethod = null;
+        HExpr targetInstance = null;
+        switch (op.Target)
+        {
+            case IAnonymousFunctionOperation lambda:
+                targetMethod = HoistLambdaToMethod(lambda);
+                break;
+            case IMethodReferenceOperation methodRef:
+                targetMethod = methodRef.Method;
+                if (methodRef.Instance != null && methodRef.Instance is not IInstanceReferenceOperation)
+                    targetInstance = VisitExpression(methodRef.Instance);
+                break;
+        }
+        if (targetMethod == null)
+            throw new System.NotSupportedException($"Unsupported delegate target: {op.Target.GetType().Name}");
+
+        // For hoisted lambdas/local functions, create a pending bridge dynamically
+        // since they aren't part of the TypeLayout's pre-computed bridges.
+        string bridgeExportName;
+        if (targetMethod.MethodKind == MethodKind.LambdaMethod || targetMethod.MethodKind == MethodKind.LocalFunction)
+        {
+            if (!_methodVarPrefix.TryGetValue(targetMethod, out var irName))
+                throw new System.InvalidOperationException($"Lambda/local function '{targetMethod.Name}' not registered.");
+            bridgeExportName = $"__dlg_{irName}";
+            // Snapshot current type parameter map — bridge emission happens after generic method
+            // emit completes and TypeParamMap is cleared, so we must capture resolved types now.
+            var typeParamSnapshot = _ctx.TypeParamMap != null
+                ? new Dictionary<ITypeParameterSymbol, ITypeSymbol>(_ctx.TypeParamMap, SymbolEqualityComparer.Default)
+                : null;
+            _ctx.PendingDelegateBridges.Add((targetMethod, bridgeExportName, typeParamSnapshot));
+        }
+        else
+        {
+            var bridge = _planner.GetDelegateBridgeLayout(targetMethod);
+            bridgeExportName = bridge.BridgeExportName;
+        }
+
+        var funcRef = FuncRef(bridgeExportName);
+        return (bridgeExportName, funcRef, targetInstance);
+    }
+
     // ── Call helpers ──
 
     protected (string exportName, string[] paramIds, string retId) GetCalleeLayout(IMethodSymbol target)
@@ -308,16 +406,28 @@ public abstract class HandlerBase
         if (_methodParamVarIds.TryGetValue(target, out var localParamIds))
         {
             var exportName = _methodVarPrefix[target];
-            _methodRetVars.TryGetValue(target, out var retId);
+            string retId = null;
+            if (_methodReturns.TryGetValue(target, out var rets) && rets.Length == 1)
+                retId = rets[0].Id;
             return (exportName, localParamIds, retId);
         }
         var ml = _planner.GetCalleeLayout(target);
         return (ml.ExportName, ml.ParamIds.ToArray(), ml.ReturnId);
     }
 
+    /// <summary>Get return slots for a callee method.</summary>
+    protected ReturnSlot[] GetCalleeReturns(IMethodSymbol target)
+    {
+        if (_methodReturns.TryGetValue(target, out var slots))
+            return slots;
+        var ml = _planner.GetCalleeLayout(target);
+        return ml.Returns.ToArray();
+    }
+
     /// <summary>
     /// Call an internal function via HirBuilder.InternalCall.
-    /// Returns the result HExpr (or null for void functions).
+    /// Returns the result HExpr — this is an expression only, NOT emitted to the HIR.
+    /// For void calls (e.g. property setters), wrap with <c>EmitExprStmt()</c> to add to the HIR.
     /// </summary>
     protected HExpr EmitCallToMethod(IMethodSymbol target, List<HExpr> args)
     {

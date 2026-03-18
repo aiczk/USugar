@@ -32,8 +32,8 @@ public class EmitContext
     public readonly Dictionary<IMethodSymbol, HFunction> MethodFunctions = new(SymbolEqualityComparer.Default);
     public readonly Dictionary<IMethodSymbol, int> MethodIndices = new(SymbolEqualityComparer.Default);
     public readonly Dictionary<IMethodSymbol, string> MethodVarPrefix = new(SymbolEqualityComparer.Default);
-    public readonly Dictionary<IMethodSymbol, string> MethodRetVars = new(SymbolEqualityComparer.Default);
-    public readonly Dictionary<IMethodSymbol, string> MethodRetTypes = new(SymbolEqualityComparer.Default);
+    /// <summary>Per-method return slots. Empty array for void. Length 1 for scalar. Length N for tuple.</summary>
+    public readonly Dictionary<IMethodSymbol, ReturnSlot[]> MethodReturns = new(SymbolEqualityComparer.Default);
     public readonly Dictionary<IMethodSymbol, string[]> MethodParamVarIds = new(SymbolEqualityComparer.Default);
     public IMethodSymbol CurrentMethod;
     public int NextMethodIndex;
@@ -72,8 +72,22 @@ public class EmitContext
     // Conditional access target stack (for ?. operator)
     public readonly Stack<HExpr> ConditionalAccessTargets = new();
 
+    // Delegate field name stack for conditional access (?.Invoke())
+    // When non-empty, the top value is the delegate field name being conditionally accessed.
+    public readonly Stack<string> ConditionalAccessDelegateFieldNames = new();
+
     // using declaration Dispose tracking
     public readonly Stack<List<(HExpr val, ITypeSymbol type)>> UsingDisposableStack = new();
+
+    /// <summary>Stack of using-stack depths at loop/switch entry points.
+    /// Used to limit Dispose emission for break/continue to scopes inside the loop.</summary>
+    public readonly Stack<int> LoopUsingDepthStack = new();
+
+    // Delegate fields: tracks which user fields are delegate-typed and were expanded to bundles
+    public readonly HashSet<string> DelegateFields = new();
+
+    // Pending delegate bridges for dynamically hoisted lambdas/local functions
+    public readonly List<(IMethodSymbol method, string bridgeExportName, Dictionary<ITypeParameterSymbol, ITypeSymbol> resolvedTypeParamMap)> PendingDelegateBridges = new();
 
     // Diagnostics collected during emission
     public readonly List<EmitDiagnostic> Diagnostics = new();

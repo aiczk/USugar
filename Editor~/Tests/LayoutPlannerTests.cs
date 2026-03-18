@@ -53,7 +53,7 @@ public class Simple : UdonSharp.UdonSharpBehaviour {
         var method = sym.GetMembers("DoThing")[0] as IMethodSymbol;
         Assert.True(layout.Methods.TryGetValue(method, out var ml));
         Assert.Equal("DoThing", ml.ExportName);
-        Assert.Null(ml.ReturnId);
+        Assert.Empty(ml.Returns);
         Assert.Empty(ml.ParamIds);
     }
 
@@ -86,7 +86,8 @@ public class WithReturn : UdonSharp.UdonSharpBehaviour {
         var method = sym.GetMembers("GetValue")[0] as IMethodSymbol;
         Assert.True(layout.Methods.TryGetValue(method, out var ml));
         Assert.Equal("GetValue", ml.ExportName);
-        Assert.Equal("__0_GetValue__ret", ml.ReturnId);
+        Assert.Single(ml.Returns);
+        Assert.Equal("__0_GetValue__ret", ml.Returns[0].Id);
     }
 
     [Fact]
@@ -214,8 +215,8 @@ public class WithPrivateReturn : UdonSharp.UdonSharpBehaviour {
         var planner = new LayoutPlanner(comp);
         var layout = planner.Plan(sym);
         var method = sym.GetMembers("GetSecret")[0] as IMethodSymbol;
-        Assert.NotNull(layout.Methods[method].ReturnId);
-        Assert.Equal("__0_GetSecret__ret", layout.Methods[method].ReturnId);
+        Assert.Single(layout.Methods[method].Returns);
+        Assert.Equal("__0_GetSecret__ret", layout.Methods[method].Returns[0].Id);
     }
 
     [Fact]
@@ -317,9 +318,9 @@ public class WithCounters : UdonSharp.UdonSharpBehaviour {
             foreach (var pid in ml.ParamIds)
                 Assert.Contains($"{pid}:", uasm);
 
-            // Verify return ID exists
-            if (ml.ReturnId != null)
-                Assert.Contains($"{ml.ReturnId}:", uasm);
+            // Verify return IDs exist
+            foreach (var ret in ml.Returns)
+                Assert.Contains($"{ret.Id}:", uasm);
         }
     }
 

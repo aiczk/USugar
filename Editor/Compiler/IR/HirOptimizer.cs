@@ -111,7 +111,7 @@ public static class HirOptimizer
             {
                 var foldedInstance = FoldExpr(cb.Instance);
                 var foldedParams = cb.Params.Select(p => (p.ParamName, FoldExpr(p.Value))).ToList();
-                return new HCrossBehaviourCall(foldedInstance, cb.EventName, foldedParams, cb.ReturnVarName, cb.Type);
+                return new HCrossBehaviourCall(foldedInstance, cb.EventName, foldedParams, cb.Returns, cb.Type);
             }
 
             // HConst, HSlotRef, HLoadField, HFieldAddr, HFuncRef — leaves, nothing to fold
@@ -424,7 +424,7 @@ public static class HirOptimizer
                 return new HCrossBehaviourCall(
                     ReplaceInExpr(cb.Instance, candidates), cb.EventName,
                     cb.Params.Select(p => (p.ParamName, ReplaceInExpr(p.Value, candidates))).ToList(),
-                    cb.ReturnVarName, cb.Type);
+                    cb.Returns, cb.Type);
 
             // HConst, HSlotRef, HFieldAddr, HFuncRef — no replacement needed
             // Note: HFieldAddr is intentionally NOT replaced — it represents an address for out/ref,
@@ -573,7 +573,7 @@ public static class HirOptimizer
                 return new HCrossBehaviourCall(
                     ReplaceSlotRefsExpr(cb.Instance, candidates), cb.EventName,
                     cb.Params.Select(p => (p.ParamName, ReplaceSlotRefsExpr(p.Value, candidates))).ToList(),
-                    cb.ReturnVarName, cb.Type);
+                    cb.Returns, cb.Type);
 
             default:
                 return expr;

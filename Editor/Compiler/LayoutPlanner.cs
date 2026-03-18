@@ -1,6 +1,10 @@
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using Microsoft.CodeAnalysis;
+
+/// <summary>A single return value slot: UASM variable ID + Udon type name.</summary>
+public record ReturnSlot(string Id, string UdonType);
 
 /// <summary>Immutable layout for a single method's UASM naming.</summary>
 public class MethodLayout
@@ -8,15 +12,22 @@ public class MethodLayout
     public string ExportName { get; }
     public string BodyLabel { get; }
     public IReadOnlyList<string> ParamIds { get; }
-    public string ReturnId { get; }
+    /// <summary>Return slots: empty for void, 1 element for scalar, N for tuple.</summary>
+    public IReadOnlyList<ReturnSlot> Returns { get; }
 
-    public MethodLayout(string exportName, string bodyLabel, IReadOnlyList<string> paramIds, string returnId)
+    public MethodLayout(string exportName, string bodyLabel, IReadOnlyList<string> paramIds,
+        IReadOnlyList<ReturnSlot> returns)
     {
         ExportName = exportName;
         BodyLabel = bodyLabel;
         ParamIds = paramIds;
-        ReturnId = returnId;
+        Returns = returns ?? Array.Empty<ReturnSlot>();
     }
+
+    // ── Convenience accessors (eases migration of downstream consumers) ──
+
+    /// <summary>Single return ID (N=1 only). Null for void or tuple.</summary>
+    public string ReturnId => Returns.Count == 1 ? Returns[0].Id : null;
 }
  
 /// <summary>Immutable layout for a single field's UASM naming.</summary>
@@ -34,21 +45,38 @@ public class FieldLayout
     }
 }
 
+/// <summary>Bridge export layout for a method used as a delegate target.</summary>
+public class DelegateBridgeLayout
+{
+    public string BridgeExportName { get; }
+    public MethodLayout RealMethodLayout { get; }
+
+    public DelegateBridgeLayout(string bridgeExportName, MethodLayout realMethodLayout)
+    {
+        BridgeExportName = bridgeExportName;
+        RealMethodLayout = realMethodLayout;
+    }
+}
+
 /// <summary>Immutable layout for a type's complete UASM variable naming.</summary>
 public class TypeLayout
 {
     public IReadOnlyDictionary<IMethodSymbol, MethodLayout> Methods { get; }
     public IReadOnlyDictionary<IFieldSymbol, FieldLayout> Fields { get; }
     public IReadOnlyDictionary<string, int> SymbolCounters { get; }
+    public IReadOnlyDictionary<IMethodSymbol, DelegateBridgeLayout> DelegateBridges { get; }
 
     public TypeLayout(
         Dictionary<IMethodSymbol, MethodLayout> methods,
         Dictionary<IFieldSymbol, FieldLayout> fields,
-        IReadOnlyDictionary<string, int> symbolCounters = null)
+        IReadOnlyDictionary<string, int> symbolCounters = null,
+        Dictionary<IMethodSymbol, DelegateBridgeLayout> delegateBridges = null)
     {
         Methods = methods;
         Fields = fields;
         SymbolCounters = symbolCounters ?? new Dictionary<string, int>();
+        DelegateBridges = delegateBridges
+            ?? new Dictionary<IMethodSymbol, DelegateBridgeLayout>(SymbolEqualityComparer.Default);
     }
 }
 
@@ -357,7 +385,7 @@ public class LayoutPlanner
                       || m.MethodKind == MethodKind.ExplicitInterfaceImplementation
                       || m.MethodKind == MethodKind.PropertyGet
                       || m.MethodKind == MethodKind.PropertySet)
-                     && !m.IsImplicitlyDeclared)
+                     && m.DeclaringSyntaxReferences.Length > 0)
             .ToArray();
 
         foreach (var method in memberMethods)
@@ -428,16 +456,30 @@ public class LayoutPlanner
                 }
             }
 
-            // Compute return ID: always for non-void methods (matches pure compiler)
-            string returnId = null;
+            // Compute return slots: unified for scalar and tuple returns
+            var returns = new List<ReturnSlot>();
             if (!method.ReturnsVoid)
             {
-                var retKey = exportName + "__ret";
-                returnId = NameAllocator.FormatId(retKey, alloc.Allocate(retKey));
+                if (method.ReturnType.IsTupleType && method.ReturnType is INamedTypeSymbol tupleType)
+                {
+                    var elements = tupleType.TupleElements;
+                    for (int ei = 0; ei < elements.Length; ei++)
+                    {
+                        var retKey = $"{exportName}__ret_{ei}";
+                        var id = NameAllocator.FormatId(retKey, alloc.Allocate(retKey));
+                        returns.Add(new ReturnSlot(id, ExternResolver.GetUdonTypeName(elements[ei].Type)));
+                    }
+                }
+                else
+                {
+                    var retKey = exportName + "__ret";
+                    var id = NameAllocator.FormatId(retKey, alloc.Allocate(retKey));
+                    returns.Add(new ReturnSlot(id, ExternResolver.GetUdonTypeName(method.ReturnType)));
+                }
             }
 
             var bodyLabel = exportName + "__body";
-            methods[method] = new MethodLayout(exportName, bodyLabel, paramIds, returnId);
+            methods[method] = new MethodLayout(exportName, bodyLabel, paramIds, returns);
         }
 
         // Inherit non-overridden methods from user-defined base classes.
@@ -463,7 +505,7 @@ public class LayoutPlanner
                     .Where(m => (m.MethodKind == MethodKind.Ordinary
                               || m.MethodKind == MethodKind.PropertyGet
                               || m.MethodKind == MethodKind.PropertySet)
-                             && !m.IsImplicitlyDeclared && !m.IsGenericMethod && !m.IsAbstract))
+                             && m.DeclaringSyntaxReferences.Length > 0 && !m.IsGenericMethod && !m.IsAbstract))
                 {
                     if (!overriddenMethods.Contains(bm) && baseLayout.Methods.TryGetValue(bm, out var baseMl))
                         methods.TryAdd(bm, baseMl);
@@ -473,7 +515,8 @@ public class LayoutPlanner
         }
 
         // Compute field layouts
-        foreach (var member in type.GetMembers().OfType<IFieldSymbol>())
+        foreach (var member in type.GetMembers().OfType<IFieldSymbol>()
+            .Where(f => SymbolEqualityComparer.Default.Equals(f.ContainingType, type)))
         {
             if (member.IsStatic || member.IsImplicitlyDeclared) continue;
             var udonType = ExternResolver.GetUdonTypeName(member.Type);
@@ -483,7 +526,17 @@ public class LayoutPlanner
             fields[member] = new FieldLayout(member.Name, udonType, flags);
         }
 
-        return new TypeLayout(methods, fields, alloc.GetCounters());
+        // Generate delegate bridge layouts for all non-generic, non-event user methods
+        var delegateBridges = new Dictionary<IMethodSymbol, DelegateBridgeLayout>(SymbolEqualityComparer.Default);
+        foreach (var (method, ml) in methods)
+        {
+            if (method.IsGenericMethod) continue;
+            if (UdonEventNames.ContainsKey(method.Name)) continue;
+            if (ml.Returns.Count > 1) continue;
+            delegateBridges[method] = new DelegateBridgeLayout($"__dlg_{ml.ExportName}", ml);
+        }
+
+        return new TypeLayout(methods, fields, alloc.GetCounters(), delegateBridges);
     }
 
     TypeLayout PlanInterface(INamedTypeSymbol interfaceType)
@@ -495,7 +548,7 @@ public class LayoutPlanner
             .Where(m => (m.MethodKind == MethodKind.Ordinary
                       || m.MethodKind == MethodKind.PropertyGet
                       || m.MethodKind == MethodKind.PropertySet)
-                     && !m.IsImplicitlyDeclared))
+                     && m.DeclaringSyntaxReferences.Length > 0))
         {
             var safeName = SanitizeId(method.Name);
             var exportName = method.Parameters.Length > 0
@@ -509,14 +562,28 @@ public class LayoutPlanner
                 paramIds[i] = NameAllocator.FormatId(key, alloc.Allocate(key));
             }
 
-            string returnId = null;
+            var returns = new List<ReturnSlot>();
             if (!method.ReturnsVoid)
             {
-                var retKey = exportName + "__ret";
-                returnId = NameAllocator.FormatId(retKey, alloc.Allocate(retKey));
+                if (method.ReturnType.IsTupleType && method.ReturnType is INamedTypeSymbol tupleType)
+                {
+                    var elements = tupleType.TupleElements;
+                    for (int ei = 0; ei < elements.Length; ei++)
+                    {
+                        var retKey = $"{exportName}__ret_{ei}";
+                        var id = NameAllocator.FormatId(retKey, alloc.Allocate(retKey));
+                        returns.Add(new ReturnSlot(id, ExternResolver.GetUdonTypeName(elements[ei].Type)));
+                    }
+                }
+                else
+                {
+                    var retKey = exportName + "__ret";
+                    var id = NameAllocator.FormatId(retKey, alloc.Allocate(retKey));
+                    returns.Add(new ReturnSlot(id, ExternResolver.GetUdonTypeName(method.ReturnType)));
+                }
             }
 
-            methods[method] = new MethodLayout(exportName, exportName + "__body", paramIds, returnId);
+            methods[method] = new MethodLayout(exportName, exportName + "__body", paramIds, returns);
         }
 
         return new TypeLayout(methods, new Dictionary<IFieldSymbol, FieldLayout>(SymbolEqualityComparer.Default));
@@ -558,6 +625,21 @@ public class LayoutPlanner
         }
 
         return bridges;
+    }
+
+    /// <summary>Get bridge layout for any method, including on foreign types.</summary>
+    public DelegateBridgeLayout GetDelegateBridgeLayout(IMethodSymbol method)
+    {
+        var m = method;
+        while (m.IsOverride && m.OverriddenMethod != null)
+        {
+            var ct = m.OverriddenMethod.ContainingType;
+            if (ct.Name == "UdonSharpBehaviour" || ct.DeclaringSyntaxReferences.IsEmpty) break;
+            m = m.OverriddenMethod;
+        }
+        var layout = Plan(m.ContainingType);
+        if (layout.DelegateBridges.TryGetValue(m, out var bridge)) return bridge;
+        throw new System.InvalidOperationException($"No delegate bridge for '{method.Name}' on '{method.ContainingType.Name}'");
     }
 
     /// <summary>

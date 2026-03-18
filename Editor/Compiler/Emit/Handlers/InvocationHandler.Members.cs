@@ -24,9 +24,10 @@ public partial class InvocationHandler
                 && _methodFunctions.TryGetValue(op.Property.GetMethod, out var getterFunc))
                 return EmitCallToMethod(op.Property.GetMethod, new List<HExpr>());
 
-            // Auto-property on this class → direct variable access
-            if (op.Property.GetMethod?.IsImplicitlyDeclared == true
-                && ExternResolver.IsUdonSharpBehaviour(op.Property.ContainingType))
+            // Auto-property on this class → direct variable access (user-defined classes only)
+            if (op.Property.GetMethod?.DeclaringSyntaxReferences.IsEmpty == true
+                && ExternResolver.IsUdonSharpBehaviour(op.Property.ContainingType)
+                && op.Property.ContainingType.Name != "UdonSharpBehaviour")
                 return LoadField(op.Property.Name, GetUdonType(op.Property.Type));
 
             var propName = op.Property.Name;
@@ -74,7 +75,7 @@ public partial class InvocationHandler
             && !(op.Instance is IInstanceReferenceOperation))
         {
             var instanceVal = VisitExpression(op.Instance);
-            var isAuto = op.Property.GetMethod?.IsImplicitlyDeclared == true;
+            var isAuto = op.Property.GetMethod?.DeclaringSyntaxReferences.IsEmpty == true;
 
             if (isAuto)
             {
@@ -90,8 +91,11 @@ public partial class InvocationHandler
                 // Non-auto property: use HCrossBehaviourCall to keep SendCustomEvent
                 // inside the expression tree (prevents side-effect leakage in HSelect)
                 var (getExportName, _, getRetId) = GetCalleeLayout(op.Property.GetMethod);
+                var getReturns = getRetId != null
+                    ? new[] { new ReturnSlot(getRetId, returnType) }
+                    : System.Array.Empty<ReturnSlot>();
                 return new HCrossBehaviourCall(instanceVal, getExportName,
-                    new List<(string, HExpr)>(), getRetId, returnType);
+                    new List<(string, HExpr)>(), getReturns, returnType);
             }
         }
 

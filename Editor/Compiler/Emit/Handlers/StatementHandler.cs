@@ -142,23 +142,54 @@ public class StatementHandler : HandlerBase, IOperationHandler
             return;
         }
 
-        if (op.ReturnedValue != null && _currentMethod != null && _methodRetVars.TryGetValue(_currentMethod, out _))
+        if (op.ReturnedValue != null && _currentMethod != null
+            && _methodReturns.TryGetValue(_currentMethod, out var retSlots) && retSlots.Length > 0)
         {
-            var srcVal = VisitExpression(op.ReturnedValue);
-
-            // VRChat reads OnOwnershipRequest's return value from __returnValue (bool)
-            if (_currentMethod.Name == "OnOwnershipRequest")
+            if (retSlots.Length > 1)
             {
-                _ctx.TryDeclareVar("__returnValue", "SystemBoolean");
-                EmitStoreField("__returnValue", srcVal);
+                // Multi-return (tuple): store each element in its return slot
+                var tupleOp = UnwrapConversions(op.ReturnedValue);
+                if (tupleOp is ITupleOperation tuple)
+                {
+                    for (int i = 0; i < tuple.Elements.Length && i < retSlots.Length; i++)
+                    {
+                        var elemVal = VisitExpression(tuple.Elements[i]);
+                        EmitStoreField(retSlots[i].Id, elemVal);
+                    }
+                }
+                else
+                {
+                    throw new System.NotSupportedException(
+                        $"Tuple-returning method must return a tuple literal, got {op.ReturnedValue.GetType().Name}");
+                }
+                EmitPendingDispose();
+                EmitReturn();
             }
-
-            EmitReturn(srcVal);
+            else
+            {
+                // Single return
+                var srcVal = VisitExpression(op.ReturnedValue);
+                if (_currentMethod.Name == "OnOwnershipRequest")
+                {
+                    _ctx.TryDeclareVar("__returnValue", "SystemBoolean");
+                    EmitStoreField("__returnValue", srcVal);
+                }
+                EmitPendingDispose();
+                EmitReturn(srcVal);
+            }
+            return;
         }
         else
         {
+            EmitPendingDispose();
             EmitReturn();
         }
+    }
+
+    static IOperation UnwrapConversions(IOperation op)
+    {
+        while (op is IConversionOperation conv) op = conv.Operand;
+        return op;
     }
 
     void EmitTailCall(IInvocationOperation tailCall)
@@ -183,6 +214,7 @@ public class StatementHandler : HandlerBase, IOperationHandler
     {
         if (op.BranchKind == BranchKind.Break)
         {
+            EmitPendingDisposeForBreakContinue();
             // Switch breaks use goto to end label; loop breaks use structured HBreak
             if (LoopHandler.SwitchBreakLabels.Count > 0)
                 _builder.EmitGoto(LoopHandler.SwitchBreakLabels.Peek());
@@ -191,6 +223,7 @@ public class StatementHandler : HandlerBase, IOperationHandler
         }
         else if (op.BranchKind == BranchKind.Continue)
         {
+            EmitPendingDisposeForBreakContinue();
             _builder.EmitContinue();
         }
         else if (op.BranchKind == BranchKind.GoTo)
@@ -203,6 +236,50 @@ public class StatementHandler : HandlerBase, IOperationHandler
                 $"Unresolved branch: {op.BranchKind}"
               + (op.BranchKind == BranchKind.GoTo ? $" to '{op.Target?.Name}'" : "")
               + ". No matching label on the stack.");
+        }
+    }
+
+    /// <summary>
+    /// Emit Dispose() for all active using disposables (innermost scope first).
+    /// Called before return to ensure all scopes are cleaned up.
+    /// </summary>
+    void EmitPendingDispose()
+    {
+        foreach (var scope in _usingDisposableStack)
+        {
+            for (int i = scope.Count - 1; i >= 0; i--)
+            {
+                var (val, type) = scope[i];
+                var disposeType = GetUdonType(type);
+                EmitExternVoid($"{disposeType}.__Dispose__SystemVoid", new List<HExpr> { val });
+            }
+        }
+    }
+
+    /// <summary>
+    /// Emit Dispose() only for using scopes inside the current loop/switch.
+    /// Called before break/continue to clean up scopes that will be exited.
+    /// </summary>
+    void EmitPendingDisposeForBreakContinue()
+    {
+        var loopDepth = _ctx.LoopUsingDepthStack.Count > 0
+            ? _ctx.LoopUsingDepthStack.Peek()
+            : 0;
+        var currentDepth = _usingDisposableStack.Count;
+        var scopesToDispose = currentDepth - loopDepth;
+        if (scopesToDispose <= 0) return;
+
+        int count = 0;
+        foreach (var scope in _usingDisposableStack)
+        {
+            if (count >= scopesToDispose) break;
+            for (int i = scope.Count - 1; i >= 0; i--)
+            {
+                var (val, type) = scope[i];
+                var disposeType = GetUdonType(type);
+                EmitExternVoid($"{disposeType}.__Dispose__SystemVoid", new List<HExpr> { val });
+            }
+            count++;
         }
     }
 
@@ -235,8 +312,13 @@ public class StatementHandler : HandlerBase, IOperationHandler
             disposableVars.Add((resourceVal, op.Resources.Type));
         }
 
+        // Push onto using stack so early exit (return/break/continue) can emit Dispose
+        _usingDisposableStack.Push(disposableVars);
+
         if (op.Body != null)
             VisitOperation(op.Body);
+
+        _usingDisposableStack.Pop();
 
         // Emit Dispose() in reverse declaration order (no try/finally in Udon)
         for (int i = disposableVars.Count - 1; i >= 0; i--)

@@ -415,15 +415,28 @@ public static class HirToLir
             "VRCUdonCommonInterfacesIUdonEventReceiver.__SendCustomEvent__SystemString__SystemVoid",
             new List<LOperand> { inst, eventNameOp }, "SystemVoid"));
 
-        // GetProgramVariable for return
-        if (cc.ReturnVarName != null && cc.Type != "SystemVoid")
+        // GetProgramVariable for return(s)
+        if (cc.Returns.Count == 1)
         {
-            var retNameOp = LowerExpr(new HConst(cc.ReturnVarName, "SystemString"), ctx);
+            var ret = cc.Returns[0];
+            var retNameOp = LowerExpr(new HConst(ret.Id, "SystemString"), ctx);
             var dest = ctx.AllocScratch(cc.Type);
             ctx.Current.Insts.Add(new LCallExtern(dest,
                 "VRCUdonCommonInterfacesIUdonEventReceiver.__GetProgramVariable__SystemString__SystemObject",
                 new List<LOperand> { inst, retNameOp }, cc.Type));
             return new LSlotRef(dest, cc.Type);
+        }
+
+        if (cc.Returns.Count > 1)
+        {
+            foreach (var ret in cc.Returns)
+            {
+                var retNameOp = LowerExpr(new HConst(ret.Id, "SystemString"), ctx);
+                var dest = ctx.AllocScratch("SystemObject");
+                ctx.Current.Insts.Add(new LCallExtern(dest,
+                    "VRCUdonCommonInterfacesIUdonEventReceiver.__GetProgramVariable__SystemString__SystemObject",
+                    new List<LOperand> { inst, retNameOp }, "SystemObject"));
+            }
         }
 
         return new LConst(null, "SystemVoid");
@@ -473,8 +486,9 @@ public static class HirToLir
             LFunc = new LFunction(hfunc.Name, hfunc.ExportName)
             {
                 ReturnType = hfunc.ReturnType,
-                ReturnFieldName = hfunc.ReturnFieldName,
             };
+            foreach (var ret in hfunc.ReturnSlots)
+                LFunc.ReturnSlots.Add(ret);
             foreach (var p in hfunc.ParamFieldNames)
                 LFunc.ParamFieldNames.Add(p);
             // Copy all existing slots (create new instances to avoid sharing references).

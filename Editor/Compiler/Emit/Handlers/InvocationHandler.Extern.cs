@@ -564,9 +564,14 @@ public partial class InvocationHandler
         for (int i = 0; i < op.Arguments.Length; i++)
             paramPairs.Add((ifaceMl.ParamIds[i], VisitExpression(op.Arguments[i].Value)));
 
+        // Build returns
+        var ifaceReturns = ifaceMl.Returns.ToArray();
+        if (ifaceReturns.Length > 1)
+            return new HCrossBehaviourCall(instanceVal, ifaceMl.ExportName, paramPairs, ifaceReturns, "SystemVoid");
+
         var returnType = target.ReturnsVoid ? "SystemVoid" : GetUdonType(target.ReturnType);
         return new HCrossBehaviourCall(instanceVal, ifaceMl.ExportName, paramPairs,
-            target.ReturnsVoid ? null : ifaceMl.ReturnId, returnType);
+            target.ReturnsVoid ? System.Array.Empty<ReturnSlot>() : ifaceReturns, returnType);
     }
 
     // ── Cross-Class Call ──
@@ -581,9 +586,14 @@ public partial class InvocationHandler
         for (int i = 0; i < op.Arguments.Length; i++)
             paramPairs.Add((paramIds[i], VisitExpression(op.Arguments[i].Value)));
 
+        // Build returns
+        var callReturns = GetCalleeReturns(target);
+        if (callReturns.Length > 1)
+            return new HCrossBehaviourCall(instanceVal, exportName, paramPairs, callReturns, "SystemVoid");
+
         var returnType = target.ReturnsVoid ? "SystemVoid" : GetUdonType(target.ReturnType);
         return new HCrossBehaviourCall(instanceVal, exportName, paramPairs,
-            target.ReturnsVoid ? null : retId, returnType);
+            target.ReturnsVoid ? System.Array.Empty<ReturnSlot>() : callReturns, returnType);
     }
 
     // ── User Method Call ──

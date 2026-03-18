@@ -261,8 +261,10 @@ public sealed class LFunction
     public string ReturnType;
     /// <summary>UASM field names for parameters. Used for internal call ABI.</summary>
     public readonly List<string> ParamFieldNames = new();
-    /// <summary>UASM field name for the return value. Null for void.</summary>
-    public string ReturnFieldName;
+    /// <summary>Return value slots. Empty for void, 1 for scalar, N for tuple.</summary>
+    public readonly List<ReturnSlot> ReturnSlots = new();
+    /// <summary>UASM field name for the return value (N=1 only). Null for void or tuple.</summary>
+    public string ReturnFieldName => ReturnSlots.Count == 1 ? ReturnSlots[0].Id : null;
     int _nextBlockId;
 
     public LFunction(string name, string exportName = null)

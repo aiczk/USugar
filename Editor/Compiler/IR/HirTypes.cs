@@ -389,16 +389,17 @@ public sealed class HCrossBehaviourCall : HExpr
     public readonly HExpr Instance;
     public readonly string EventName;
     public readonly List<(string ParamName, HExpr Value)> Params;  // SetProgramVariable pairs
-    public readonly string ReturnVarName;  // null for void calls
+    /// <summary>Return slots for cross-behaviour call. Empty for void.</summary>
+    public readonly IReadOnlyList<ReturnSlot> Returns;
 
     public HCrossBehaviourCall(HExpr instance, string eventName,
-        List<(string, HExpr)> parameters, string returnVarName, string retType)
+        List<(string, HExpr)> parameters, IReadOnlyList<ReturnSlot> returns, string retType)
         : base(retType)
     {
         Instance = instance ?? throw new ArgumentNullException(nameof(instance));
         EventName = eventName ?? throw new ArgumentNullException(nameof(eventName));
         Params = parameters ?? new();
-        ReturnVarName = returnVarName;
+        Returns = returns ?? Array.Empty<ReturnSlot>();
     }
 
     public override string ToString() =>
@@ -430,8 +431,8 @@ public sealed class HFunction
     public string ReturnType; // null for void
     /// <summary>UASM field names for parameters (set by emitter). Used for internal call ABI.</summary>
     public readonly List<string> ParamFieldNames = new();
-    /// <summary>UASM field name for the return value (set by emitter). Null for void.</summary>
-    public string ReturnFieldName;
+    /// <summary>UASM return slots. Empty for void, 1 for scalar, N for tuple.</summary>
+    public readonly List<ReturnSlot> ReturnSlots = new();
 
     public HFunction(string name, string exportName = null)
     {

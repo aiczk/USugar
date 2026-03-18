@@ -302,9 +302,9 @@ public static class LirToUasm
             // Slot variables are declared lazily by GetSlotVar on first use.
             // This avoids declaring UASM variables for slots coalesced away by the register allocator.
 
-            // Declare return field variable if needed (may not be in module Fields)
-            if (func.ReturnFieldName != null && func.ReturnType != null)
-                DeclareVar(func.ReturnFieldName, func.ReturnType, null, FieldFlags.None);
+            // Declare return field variable(s) if needed (may not be in module Fields)
+            foreach (var ret in func.ReturnSlots)
+                DeclareVar(ret.Id, ret.UdonType, null, FieldFlags.None);
         }
 
         // ── Block linearization (RPO) ──

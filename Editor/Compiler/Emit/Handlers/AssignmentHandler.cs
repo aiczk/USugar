@@ -59,8 +59,115 @@ public class AssignmentHandler : HandlerBase, IOperationHandler, IExpressionHand
         }
         else
         {
+            // Method call returning tuple: call the method, then read back per-element return fields
+            var callValue = op.Value;
+            while (callValue is IConversionOperation conv2) callValue = conv2.Operand;
+
+            if (callValue is not IInvocationOperation invocation)
+                throw new System.NotSupportedException(
+                    $"Unsupported tuple deconstruction value: {op.Value.GetType().Name}");
+
+            var callTarget = invocation.TargetMethod;
+            var isCrossBehaviour = ExternResolver.IsUdonSharpBehaviour(callTarget.ContainingType)
+                && invocation.Instance is not IInstanceReferenceOperation
+                && callTarget.ContainingType.Name != "UdonSharpBehaviour";
+            var isInterface = callTarget.ContainingType.TypeKind == TypeKind.Interface;
+
+            if (isCrossBehaviour || isInterface)
+            {
+                // Cross-behaviour or interface tuple call:
+                // Emit the protocol manually and read back each element via GetProgramVariable
+                EmitCrossBehaviourTupleDeconstruction(invocation, callTarget, targetTuple, isCrossBehaviour);
+            }
+            else
+            {
+                // Same-class call: invoke method, then read from per-element return fields
+                var callExpr = VisitExpression(op.Value);
+                if (callExpr != null)
+                    EmitExprStmt(callExpr);
+
+                ReturnSlot[] callReturns = null;
+                if (_methodReturns.TryGetValue(callTarget, out var localReturns))
+                    callReturns = localReturns;
+                else if (callTarget.ReturnType.IsTupleType)
+                    callReturns = GetCalleeReturns(callTarget);
+
+                if (callReturns == null || callReturns.Length == 0)
+                    throw new System.NotSupportedException(
+                        $"Cannot deconstruct return of '{callTarget.Name}': no return layout found.");
+
+                for (int i = 0; i < targetTuple.Elements.Length && i < callReturns.Length; i++)
+                {
+                    var elemVal = LoadField(callReturns[i].Id, callReturns[i].UdonType);
+                    AssignToTarget(targetTuple.Elements[i], elemVal);
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Handle tuple deconstruction from a cross-behaviour or interface method call.
+    /// Emits SetProgramVariable for params, SendCustomEvent, then GetProgramVariable for each element.
+    /// </summary>
+    void EmitCrossBehaviourTupleDeconstruction(IInvocationOperation invocation, IMethodSymbol callTarget,
+        ITupleOperation targetTuple, bool isCrossBehaviour)
+    {
+        // Get layout for the target method
+        ReturnSlot[] callReturns;
+        string exportName;
+        string[] paramIds;
+
+        if (isCrossBehaviour)
+        {
+            var (exp, pids, _) = GetCalleeLayout(callTarget);
+            exportName = exp;
+            paramIds = pids;
+            callReturns = GetCalleeReturns(callTarget);
+        }
+        else
+        {
+            // Interface call
+            var ifaceType = callTarget.ContainingType as INamedTypeSymbol;
+            var ifaceLayout = _planner.GetLayout(ifaceType);
+            if (!ifaceLayout.Methods.TryGetValue(callTarget, out var ifaceMl))
+                throw new System.InvalidOperationException(
+                    $"Cannot resolve interface method layout for '{callTarget.ContainingType?.Name}.{callTarget.Name}'.");
+            exportName = ifaceMl.ExportName;
+            paramIds = ifaceMl.ParamIds.ToArray();
+            callReturns = ifaceMl.Returns.ToArray();
+        }
+
+        if (callReturns == null || callReturns.Length == 0)
             throw new System.NotSupportedException(
-                $"Unsupported tuple deconstruction value: {op.Value.GetType().Name}");
+                $"Cannot deconstruct tuple return of cross-behaviour method '{callTarget.Name}': no tuple return layout found.");
+
+        var instanceVal = VisitExpression(invocation.Instance);
+
+        // SetProgramVariable for each param
+        for (int i = 0; i < invocation.Arguments.Length; i++)
+        {
+            var argVal = VisitExpression(invocation.Arguments[i].Value);
+            var nameConst = Const(paramIds[i], "SystemString");
+            EmitExternVoid(
+                "VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid",
+                new List<HExpr> { instanceVal, nameConst, argVal });
+        }
+
+        // SendCustomEvent
+        var eventConst = Const(exportName, "SystemString");
+        EmitExternVoid(
+            "VRCUdonCommonInterfacesIUdonEventReceiver.__SendCustomEvent__SystemString__SystemVoid",
+            new List<HExpr> { instanceVal, eventConst });
+
+        // GetProgramVariable for each tuple element and assign to target
+        for (int i = 0; i < targetTuple.Elements.Length && i < callReturns.Length; i++)
+        {
+            var retNameConst = Const(callReturns[i].Id, "SystemString");
+            var elemVal = ExternCall(
+                "VRCUdonCommonInterfacesIUdonEventReceiver.__GetProgramVariable__SystemString__SystemObject",
+                new List<HExpr> { instanceVal, retNameConst },
+                callReturns[i].UdonType);
+            AssignToTarget(targetTuple.Elements[i], elemVal);
         }
     }
 
@@ -123,13 +230,95 @@ public class AssignmentHandler : HandlerBase, IOperationHandler, IExpressionHand
             return srcVal;
         }
 
+        // Self-delegate field assignment: _callback = MyMethod / _callback = () => { } / _callback = null
+        if (assign.Target is IFieldReferenceOperation { Instance: IInstanceReferenceOperation } selfDlg
+            && selfDlg.Field.Type is INamedTypeSymbol selfDlgType
+            && selfDlgType.DelegateInvokeMethod != null
+            && _delegateFields.Contains(selfDlg.Field.Name))
+        {
+            var fieldName = selfDlg.Field.Name;
+
+            // null assignment
+            if (assign.Value.ConstantValue is { HasValue: true, Value: null })
+            {
+                EmitStoreField($"{fieldName}__target", Const(null, "SystemObject"));
+                EmitStoreField($"{fieldName}__method", Const(null, "SystemString"));
+                EmitStoreField($"{fieldName}__addr", Const(0u, "SystemUInt32"));
+                return Const(null, "SystemObject");
+            }
+
+            IDelegateCreationOperation dc = assign.Value as IDelegateCreationOperation;
+            if (dc == null && assign.Value is IConversionOperation convSelf && convSelf.Operand is IDelegateCreationOperation dc1)
+                dc = dc1;
+
+            if (dc != null)
+            {
+                var (bridgeName, funcRef, thirdParty) = ResolveDelegateBridge(dc);
+                var thisRef = LoadField(_ctx.DeclareThisOnce(GetUdonType(_classSymbol)), GetUdonType(_classSymbol));
+                var target = thirdParty ?? thisRef;
+                var addr = thirdParty != null ? (HExpr)Const(0u, "SystemUInt32") : funcRef;
+
+                if (dc.Target is IAnonymousFunctionOperation lambda && HasCaptures(lambda))
+                    _diagnostics.Add(new EmitDiagnostic { Severity = "Warning",
+                        Message = $"Capturing lambda assigned to delegate field '{fieldName}'. " +
+                            "Captured variables are shared — reassignment overwrites previous captures." });
+
+                EmitStoreField($"{fieldName}__target", target);
+                EmitStoreField($"{fieldName}__method", Const(bridgeName, "SystemString"));
+                EmitStoreField($"{fieldName}__addr", addr);
+                return target;
+            }
+
+            throw new System.NotSupportedException($"Delegate field '{fieldName}' can only be assigned a method group, lambda, or null.");
+        }
+
         // cross-behaviour field write → SetProgramVariable
         if (assign.Target is IFieldReferenceOperation { Instance: not null and not IInstanceReferenceOperation } ubTarget && ExternResolver.IsUdonSharpBehaviour(ubTarget.Field.ContainingType))
         {
+            // Cross-behaviour delegate field → SetProgramVariable for bundle
+            if (ubTarget.Field.Type is INamedTypeSymbol dlgType && dlgType.DelegateInvokeMethod != null)
+            {
+                if (dlgType.DelegateInvokeMethod.ReturnType.IsTupleType)
+                    throw new System.NotSupportedException($"Tuple-return delegate field '{ubTarget.Field.Name}' is not supported.");
+
+                var instanceVal = VisitExpression(ubTarget.Instance);
+                var fn = ubTarget.Field.Name;
+
+                // null assignment
+                if (assign.Value.ConstantValue is { HasValue: true, Value: null })
+                {
+                    foreach (var (suffix, val) in new[] { ("__target", (HExpr)Const(null, "SystemObject")), ("__method", Const(null, "SystemString")), ("__addr", Const(0u, "SystemUInt32")) })
+                        EmitExternVoid("VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid",
+                            new List<HExpr> { instanceVal, Const($"{fn}{suffix}", "SystemString"), val });
+                    return Const(null, "SystemObject");
+                }
+
+                IDelegateCreationOperation dc = assign.Value as IDelegateCreationOperation;
+                if (dc == null && assign.Value is IConversionOperation convCross && convCross.Operand is IDelegateCreationOperation dc2)
+                    dc = dc2;
+
+                if (dc != null)
+                {
+                    var (bridgeName, _, thirdParty) = ResolveDelegateBridge(dc);
+                    var thisRef = LoadField(_ctx.DeclareThisOnce(GetUdonType(_classSymbol)), GetUdonType(_classSymbol));
+                    var delegateTarget = thirdParty ?? thisRef;
+
+                    EmitExternVoid("VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid",
+                        new List<HExpr> { instanceVal, Const($"{fn}__target", "SystemString"), delegateTarget });
+                    EmitExternVoid("VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid",
+                        new List<HExpr> { instanceVal, Const($"{fn}__method", "SystemString"), Const(bridgeName, "SystemString") });
+                    EmitExternVoid("VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid",
+                        new List<HExpr> { instanceVal, Const($"{fn}__addr", "SystemString"), Const(0u, "SystemUInt32") });
+                    return delegateTarget;
+                }
+
+                throw new System.NotSupportedException($"Delegate field '{fn}' can only be assigned a method group, lambda, or null.");
+            }
+
             var srcVal = VisitExpression(assign.Value);
-            var instanceVal = VisitExpression(ubTarget.Instance);
+            var instanceVal2 = VisitExpression(ubTarget.Instance);
             var nameConst = Const(ubTarget.Field.Name, "SystemString");
-            EmitExternVoid("VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid", new List<HExpr> { instanceVal, nameConst, srcVal });
+            EmitExternVoid("VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid", new List<HExpr> { instanceVal2, nameConst, srcVal });
             return srcVal;
         }
 
@@ -193,18 +382,23 @@ public class AssignmentHandler : HandlerBase, IOperationHandler, IExpressionHand
                 case IInstanceReferenceOperation
                     when propRef.Property.SetMethod != null && _methodFunctions.TryGetValue(propRef.Property.SetMethod, out _):
                     // User-defined property setter on this → internal call
-                    EmitCallToMethod(propRef.Property.SetMethod, new List<HExpr> { srcVal });
+                    EmitExprStmt(EmitCallToMethod(propRef.Property.SetMethod, new List<HExpr> { srcVal }));
                     break;
                 case IInstanceReferenceOperation
-                    when propRef.Property.SetMethod?.IsImplicitlyDeclared == true && ExternResolver.IsUdonSharpBehaviour(propRef.Property.ContainingType):
-                    // Auto-property set on this → direct variable assignment
+                    when propRef.Property.SetMethod?.DeclaringSyntaxReferences.IsEmpty == true
+                         && ExternResolver.IsUdonSharpBehaviour(propRef.Property.ContainingType)
+                         && propRef.Property.ContainingType.Name != "UdonSharpBehaviour":
+                    // Auto-property set on this → direct variable assignment (user-defined classes only)
                     EmitStoreField(propRef.Property.Name, srcVal);
                     break;
                 default:
                 {
                     if (ExternResolver.IsUdonSharpBehaviour(propRef.Property.ContainingType) && propRef.Instance is not IInstanceReferenceOperation)
                     {
-                        var isAutoSet = propRef.Property.SetMethod?.IsImplicitlyDeclared == true;
+                        if (propRef.Property.Type is INamedTypeSymbol dlgPropType && dlgPropType.DelegateInvokeMethod != null)
+                            throw new System.NotSupportedException("Delegate properties are not supported in v2.1. Use delegate fields instead.");
+
+                        var isAutoSet = propRef.Property.SetMethod?.DeclaringSyntaxReferences.IsEmpty == true;
                         if (isAutoSet || propRef.Property.SetMethod == null)
                         {
                             // Auto-property or read-only: direct SetProgramVariable("PropertyName")
@@ -289,6 +483,11 @@ public class AssignmentHandler : HandlerBase, IOperationHandler, IExpressionHand
 
     HExpr VisitCompoundAssignment(ICompoundAssignmentOperation op)
     {
+        // Block += / -= on delegate fields — Udon VM does not support Delegate.Combine/Remove
+        if (op.Target is IFieldReferenceOperation fr
+            && fr.Field.Type is INamedTypeSymbol nt && nt.DelegateInvokeMethod != null)
+            throw new System.NotSupportedException("Multicast delegates (+=/-=) are not supported. Udon VM does not support Delegate.Combine/Remove.");
+
         // Capture lvalue sub-expressions once to avoid double evaluation
         var lv = CaptureLValue(op.Target);
         var leftVal = lv.Value;
@@ -355,6 +554,15 @@ public class AssignmentHandler : HandlerBase, IOperationHandler, IExpressionHand
         // Narrow back to original type if promoted
         if (opType != udonType)
             resultVal = ExternCall(ExternResolver.BuildConvertSignature(opType, udonType), new List<HExpr> { resultVal }, udonType);
+
+        // Materialize resultVal to a temp slot before write-back to avoid
+        // the extern call being emitted twice (once for store, once for return value).
+        if (!op.IsPostfix)
+        {
+            var tempSlot = _ctx.AllocTemp(udonType);
+            EmitAssign(tempSlot, resultVal);
+            resultVal = SlotRef(tempSlot);
+        }
 
         EmitWriteBack(op.Target, resultVal, lv);
 
@@ -448,18 +656,18 @@ public class AssignmentHandler : HandlerBase, IOperationHandler, IExpressionHand
                 EmitExternVoid("VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid", new List<HExpr> { instanceVal, nameConst, valueVal });
                 break;
             }
-            // Auto-property on this → backing field already handled by write-back to field
-            case IPropertyReferenceOperation { Instance: IInstanceReferenceOperation, Property: { GetMethod: { IsImplicitlyDeclared: true } } } propRef when ExternResolver.IsUdonSharpBehaviour(propRef.Property.ContainingType):
+            // Auto-property on this → backing field already handled by write-back to field (user-defined classes only)
+            case IPropertyReferenceOperation { Instance: IInstanceReferenceOperation } propRef when propRef.Property.GetMethod?.DeclaringSyntaxReferences.IsEmpty == true && ExternResolver.IsUdonSharpBehaviour(propRef.Property.ContainingType) && propRef.Property.ContainingType.Name != "UdonSharpBehaviour":
                 return;
             // User-defined property on this → call setter
             case IPropertyReferenceOperation { Instance: IInstanceReferenceOperation, Property: { SetMethod: not null } } propRef when _methodFunctions.TryGetValue(propRef.Property.SetMethod, out _):
-                EmitCallToMethod(propRef.Property.SetMethod, new List<HExpr> { valueVal });
+                EmitExprStmt(EmitCallToMethod(propRef.Property.SetMethod, new List<HExpr> { valueVal }));
                 return;
             // Cross-behaviour UdonSharpBehaviour property → SetProgramVariable / SendCustomEvent
             case IPropertyReferenceOperation propRef when ExternResolver.IsUdonSharpBehaviour(propRef.Property.ContainingType) && propRef.Instance is not IInstanceReferenceOperation:
             {
                 var instanceVal = VisitExpression(propRef.Instance);
-                var isAutoSet = propRef.Property.SetMethod?.IsImplicitlyDeclared == true;
+                var isAutoSet = propRef.Property.SetMethod?.DeclaringSyntaxReferences.IsEmpty == true;
                 if (isAutoSet || propRef.Property.SetMethod == null)
                 {
                     var nameConst = Const(propRef.Property.Name, "SystemString");
