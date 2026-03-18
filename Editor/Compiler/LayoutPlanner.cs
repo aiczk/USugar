@@ -456,27 +456,7 @@ public class LayoutPlanner
                 }
             }
 
-            // Compute return slots: unified for scalar and tuple returns
-            var returns = new List<ReturnSlot>();
-            if (!method.ReturnsVoid)
-            {
-                if (method.ReturnType.IsTupleType && method.ReturnType is INamedTypeSymbol tupleType)
-                {
-                    var elements = tupleType.TupleElements;
-                    for (int ei = 0; ei < elements.Length; ei++)
-                    {
-                        var retKey = $"{exportName}__ret_{ei}";
-                        var id = NameAllocator.FormatId(retKey, alloc.Allocate(retKey));
-                        returns.Add(new ReturnSlot(id, ExternResolver.GetUdonTypeName(elements[ei].Type)));
-                    }
-                }
-                else
-                {
-                    var retKey = exportName + "__ret";
-                    var id = NameAllocator.FormatId(retKey, alloc.Allocate(retKey));
-                    returns.Add(new ReturnSlot(id, ExternResolver.GetUdonTypeName(method.ReturnType)));
-                }
-            }
+            var returns = BuildReturnSlots(method, exportName, alloc);
 
             var bodyLabel = exportName + "__body";
             methods[method] = new MethodLayout(exportName, bodyLabel, paramIds, returns);
@@ -562,26 +542,7 @@ public class LayoutPlanner
                 paramIds[i] = NameAllocator.FormatId(key, alloc.Allocate(key));
             }
 
-            var returns = new List<ReturnSlot>();
-            if (!method.ReturnsVoid)
-            {
-                if (method.ReturnType.IsTupleType && method.ReturnType is INamedTypeSymbol tupleType)
-                {
-                    var elements = tupleType.TupleElements;
-                    for (int ei = 0; ei < elements.Length; ei++)
-                    {
-                        var retKey = $"{exportName}__ret_{ei}";
-                        var id = NameAllocator.FormatId(retKey, alloc.Allocate(retKey));
-                        returns.Add(new ReturnSlot(id, ExternResolver.GetUdonTypeName(elements[ei].Type)));
-                    }
-                }
-                else
-                {
-                    var retKey = exportName + "__ret";
-                    var id = NameAllocator.FormatId(retKey, alloc.Allocate(retKey));
-                    returns.Add(new ReturnSlot(id, ExternResolver.GetUdonTypeName(method.ReturnType)));
-                }
-            }
+            var returns = BuildReturnSlots(method, exportName, alloc);
 
             methods[method] = new MethodLayout(exportName, exportName + "__body", paramIds, returns);
         }
@@ -617,6 +578,9 @@ public class LayoutPlanner
                         if (ifaceMl.ParamIds[i] != classMl.ParamIds[i]) { needsBridge = true; break; }
                     }
                 }
+                // ReturnId is null for tuple returns (N>1). Tuple-returning interface methods
+                // are dispatched via EmitInterfaceCall → HCrossBehaviourCall, not through bridges,
+                // so comparing only N=1 scalar returns here is intentional.
                 if (!needsBridge && ifaceMl.ReturnId != classMl.ReturnId)
                     needsBridge = true;
                 if (needsBridge)
@@ -625,6 +589,30 @@ public class LayoutPlanner
         }
 
         return bridges;
+    }
+
+    static List<ReturnSlot> BuildReturnSlots(IMethodSymbol method, string exportName, NameAllocator alloc)
+    {
+        var returns = new List<ReturnSlot>();
+        if (method.ReturnsVoid) return returns;
+
+        if (method.ReturnType.IsTupleType && method.ReturnType is INamedTypeSymbol tupleType)
+        {
+            var elements = tupleType.TupleElements;
+            for (int ei = 0; ei < elements.Length; ei++)
+            {
+                var retKey = $"{exportName}__ret_{ei}";
+                var id = NameAllocator.FormatId(retKey, alloc.Allocate(retKey));
+                returns.Add(new ReturnSlot(id, ExternResolver.GetUdonTypeName(elements[ei].Type)));
+            }
+        }
+        else
+        {
+            var retKey = exportName + "__ret";
+            var id = NameAllocator.FormatId(retKey, alloc.Allocate(retKey));
+            returns.Add(new ReturnSlot(id, ExternResolver.GetUdonTypeName(method.ReturnType)));
+        }
+        return returns;
     }
 
     /// <summary>Get bridge layout for any method, including on foreign types.</summary>
