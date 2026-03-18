@@ -466,8 +466,11 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
     {
         var leftTarget = LoadField($"{leftField}__target", "VRCUdonCommonInterfacesIUdonEventReceiver");
         var rightTarget = LoadField($"{rightField}__target", "VRCUdonCommonInterfacesIUdonEventReceiver");
+        // __addr is intentionally excluded: it is derived from __method and only used
+        // for same-behaviour JUMP_INDIRECT optimization. Including it would cause
+        // false negatives when two delegates point to the same method.
         var targetEq = ExternCall(
-            "UnityEngineObject.__op_Equality__UnityEngineObject_UnityEngineObject__SystemBoolean",
+            "SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean",
             new List<HExpr> { leftTarget, rightTarget }, "SystemBoolean");
 
         var leftMethod = LoadField($"{leftField}__method", "SystemString");

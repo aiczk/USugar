@@ -303,7 +303,7 @@ public class UasmEmitter
         foreach (var prop in _classSymbol.GetMembers().OfType<IPropertySymbol>())
         {
             if (prop.IsStatic || prop.IsImplicitlyDeclared) continue;
-            var isAuto = prop.GetMethod?.IsImplicitlyDeclared == true || prop.SetMethod?.IsImplicitlyDeclared == true;
+            var isAuto = prop.GetMethod?.DeclaringSyntaxReferences.IsEmpty == true || prop.SetMethod?.DeclaringSyntaxReferences.IsEmpty == true;
             if (!isAuto && prop.DeclaredAccessibility != Accessibility.Public) continue;
             var udonType = GetUdonType(prop.Type);
             var flags = FieldFlags.None;
@@ -395,7 +395,7 @@ public class UasmEmitter
             {
                 if (prop.IsStatic || prop.IsImplicitlyDeclared) continue;
                 if (declaredMemberNames.Contains(prop.Name)) continue;
-                var isAuto = prop.GetMethod?.IsImplicitlyDeclared == true || prop.SetMethod?.IsImplicitlyDeclared == true;
+                var isAuto = prop.GetMethod?.DeclaringSyntaxReferences.IsEmpty == true || prop.SetMethod?.DeclaringSyntaxReferences.IsEmpty == true;
                 if (!isAuto && prop.DeclaredAccessibility != Accessibility.Public) continue;
                 var udonType = GetUdonType(prop.Type);
                 var flags = FieldFlags.None;

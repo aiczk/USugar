@@ -41,9 +41,17 @@ public class LoopHandler : HandlerBase, IOperationHandler
             // while (cond) { body }
             _builder.EmitWhile(() => VisitExpression(op.Condition), _ =>
             {
-                _ctx.LoopUsingDepthStack.Push(_usingDisposableStack.Count);
-                VisitOperation(op.Body);
-                _ctx.LoopUsingDepthStack.Pop();
+                SwitchBreakLabels.Push(null); // sentinel: loop break should not target switch
+                try
+                {
+                    _ctx.LoopUsingDepthStack.Push(_usingDisposableStack.Count);
+                    VisitOperation(op.Body);
+                    _ctx.LoopUsingDepthStack.Pop();
+                }
+                finally
+                {
+                    SwitchBreakLabels.Pop();
+                }
             });
         }
         else
@@ -51,9 +59,17 @@ public class LoopHandler : HandlerBase, IOperationHandler
             // do { body } while (cond)
             _builder.EmitWhile(() => VisitExpression(op.Condition), _ =>
             {
-                _ctx.LoopUsingDepthStack.Push(_usingDisposableStack.Count);
-                VisitOperation(op.Body);
-                _ctx.LoopUsingDepthStack.Pop();
+                SwitchBreakLabels.Push(null); // sentinel: loop break should not target switch
+                try
+                {
+                    _ctx.LoopUsingDepthStack.Push(_usingDisposableStack.Count);
+                    VisitOperation(op.Body);
+                    _ctx.LoopUsingDepthStack.Pop();
+                }
+                finally
+                {
+                    SwitchBreakLabels.Pop();
+                }
             }, isDoWhile: true);
         }
     }
@@ -78,9 +94,17 @@ public class LoopHandler : HandlerBase, IOperationHandler
             _ =>
             {
                 // Body
-                _ctx.LoopUsingDepthStack.Push(_usingDisposableStack.Count);
-                VisitOperation(op.Body);
-                _ctx.LoopUsingDepthStack.Pop();
+                SwitchBreakLabels.Push(null); // sentinel: loop break should not target switch
+                try
+                {
+                    _ctx.LoopUsingDepthStack.Push(_usingDisposableStack.Count);
+                    VisitOperation(op.Body);
+                    _ctx.LoopUsingDepthStack.Pop();
+                }
+                finally
+                {
+                    SwitchBreakLabels.Pop();
+                }
             });
     }
 
@@ -149,9 +173,17 @@ public class LoopHandler : HandlerBase, IOperationHandler
                     elemType);
                 EmitStoreField(loopVarId, elemVal);
 
-                _ctx.LoopUsingDepthStack.Push(_usingDisposableStack.Count);
-                VisitOperation(op.Body);
-                _ctx.LoopUsingDepthStack.Pop();
+                SwitchBreakLabels.Push(null); // sentinel: loop break should not target switch
+                try
+                {
+                    _ctx.LoopUsingDepthStack.Push(_usingDisposableStack.Count);
+                    VisitOperation(op.Body);
+                    _ctx.LoopUsingDepthStack.Pop();
+                }
+                finally
+                {
+                    SwitchBreakLabels.Pop();
+                }
             });
     }
 

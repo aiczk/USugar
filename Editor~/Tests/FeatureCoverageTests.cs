@@ -1211,6 +1211,32 @@ public class SwitchWithDefaultTest : UdonSharpBehaviour {
         Assert.DoesNotContain(emitter.Diagnostics, d => d.Severity == "Warning");
     }
 
+    // ── Switch-internal loop break (B-R2) ──
+
+    [Fact]
+    public void Switch_InternalLoopBreak_BreaksLoop_NotSwitch()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+[UdonBehaviourSyncMode(BehaviourSyncMode.None)]
+public class SwitchLoopBreak : UdonSharpBehaviour {
+    int _x;
+    void Start() {
+        int mode = 1;
+        switch (mode) {
+            case 1:
+                for (int i = 0; i < 10; i++) {
+                    if (i == 5) break; // should break the for loop, not the switch
+                    _x = i;
+                }
+                break;
+        }
+    }
+}", "SwitchLoopBreak");
+        // Should compile without errors and contain loop structure
+        Assert.DoesNotContain("ValueTuple", uasm);
+    }
+
     // ── init property (C# 9.0) ──
 
     [Fact]

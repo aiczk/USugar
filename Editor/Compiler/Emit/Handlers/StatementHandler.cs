@@ -216,7 +216,7 @@ public class StatementHandler : HandlerBase, IOperationHandler
         {
             EmitPendingDisposeForBreakContinue();
             // Switch breaks use goto to end label; loop breaks use structured HBreak
-            if (LoopHandler.SwitchBreakLabels.Count > 0)
+            if (LoopHandler.SwitchBreakLabels.Count > 0 && LoopHandler.SwitchBreakLabels.Peek() != null)
                 _builder.EmitGoto(LoopHandler.SwitchBreakLabels.Peek());
             else
                 _builder.EmitBreak();
