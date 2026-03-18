@@ -1175,4 +1175,412 @@ public class EnumSpecialTypeTest : UdonSharpBehaviour {
 }", "EnumSpecialTypeTest");
         Assert.NotNull(uasm);
     }
+
+    // ── Switch expression exhaustiveness warning ──
+
+    [Fact]
+    public void SwitchExpression_WithoutDefaultArm_EmitsWarning()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public class SwitchNoDefaultTest : UdonSharpBehaviour {
+    string Describe(int n) => n switch {
+        1 => ""one"",
+        2 => ""two"",
+    };
+    void Start() { }
+}", "SwitchNoDefaultTest", out var emitter);
+        Assert.NotNull(uasm);
+        Assert.Contains(emitter.Diagnostics, d =>
+            d.Severity == "Warning" && d.Message.Contains("default"));
+    }
+
+    [Fact]
+    public void SwitchExpression_WithDefaultArm_NoWarning()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public class SwitchWithDefaultTest : UdonSharpBehaviour {
+    string Describe(int n) => n switch {
+        1 => ""one"",
+        _ => ""other"",
+    };
+    void Start() { }
+}", "SwitchWithDefaultTest", out var emitter);
+        Assert.NotNull(uasm);
+        Assert.DoesNotContain(emitter.Diagnostics, d => d.Severity == "Warning");
+    }
+
+    // ── init property (C# 9.0) ──
+
+    [Fact]
+    public void InitProperty_CompilesSuccessfully()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public class InitTest : UdonSharpBehaviour {
+    public int Value { get; init; }
+    void Start() { }
+}", "InitTest");
+        Assert.Contains("Value", uasm);
+    }
+
+    // ── Cross-behaviour delegate diagnostic ──
+
+    [Fact]
+    public void CrossBehaviourDelegateField_CompilesSuccessfully()
+    {
+        var uasm = TestHelper.CompileToUasm(new[] { @"
+using UdonSharp;
+using System;
+public class DelegateTarget : UdonSharpBehaviour {
+    public Action callback;
+    public void InvokeCallback() { if (callback != null) callback(); }
+}", @"
+using UdonSharp;
+using System;
+public class DelegateCaller : UdonSharpBehaviour {
+    public DelegateTarget target;
+    void Start() {
+        target.callback = () => { };
+    }
+}" }, "DelegateCaller");
+        // Cross-behaviour delegate assignment emits 3x SetProgramVariable for the bundle
+        Assert.Contains("SetProgramVariable", uasm);
+    }
+
+    [Fact]
+    public void SameBehaviourDelegateField_CompilesFine()
+    {
+        // Delegate on 'this' should still work
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public class SelfDelegateTest : UdonSharpBehaviour {
+    Action _callback;
+    void Start() {
+        _callback = () => { };
+    }
+}", "SelfDelegateTest");
+        Assert.NotNull(uasm);
+    }
+
+    // ── Record type diagnostic ──
+
+    [Fact]
+    public void RecordClass_ThrowsNotSupported()
+    {
+        var ex = Assert.ThrowsAny<Exception>(() => TestHelper.CompileToUasm(@"
+public record class MyRecord(int Value);
+public class Dummy : UdonSharp.UdonSharpBehaviour { void Start() { } }
+", "MyRecord"));
+        Assert.Contains("Record type", ex.Message);
+        Assert.Contains("not supported", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void RecordStruct_ThrowsNotSupported()
+    {
+        var ex = Assert.ThrowsAny<Exception>(() => TestHelper.CompileToUasm(@"
+public record struct Point(int X, int Y);
+public class Dummy : UdonSharp.UdonSharpBehaviour { void Start() { } }
+", "Point"));
+        Assert.Contains("Record type", ex.Message);
+    }
+
+    // ── Cross-behaviour delegate: self-assign + invoke ──
+    // Note: delegate bundle (3-var expansion) requires public fields.
+    // Private delegate fields remain as SystemUInt32 function pointers.
+
+    [Fact]
+    public void DelegateField_SelfAssignAndInvoke_Compiles()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public class SelfDlgInvoke : UdonSharpBehaviour {
+    public Action callback;
+    void Start() {
+        callback = MyMethod;
+        callback.Invoke();
+    }
+    void MyMethod() { }
+}", "SelfDlgInvoke");
+        Assert.Contains("callback__target", uasm);
+        Assert.Contains("callback__method", uasm);
+        Assert.Contains("callback__addr", uasm);
+        Assert.Contains("JUMP_INDIRECT", uasm);
+        Assert.Contains("__dlg_MyMethod", uasm);
+    }
+
+    // ── Cross-behaviour delegate: cross-assign ──
+
+    [Fact]
+    public void DelegateField_CrossAssign_EmitsSetProgramVariable()
+    {
+        var uasm = TestHelper.CompileToUasm(new[] { @"
+using UdonSharp;
+using System;
+public class Receiver2 : UdonSharpBehaviour {
+    public Action<int> onScore;
+}", @"
+using UdonSharp;
+using System;
+public class Sender2 : UdonSharpBehaviour {
+    public Receiver2 receiver;
+    public void HandleScore(int score) { }
+    void Start() { receiver.onScore = HandleScore; }
+}" }, "Sender2");
+        Assert.Contains("SetProgramVariable", uasm);
+    }
+
+    // ── Third-party method assignment ──
+
+    [Fact]
+    public void DelegateField_ThirdPartyAssign_Compiles()
+    {
+        var uasm = TestHelper.CompileToUasm(new[] { @"
+using UdonSharp;
+using System;
+public class Receiver3 : UdonSharpBehaviour {
+    public Action onEvent;
+}", @"
+using UdonSharp;
+using System;
+public class Worker3 : UdonSharpBehaviour {
+    public void DoWork() { }
+}", @"
+using UdonSharp;
+using System;
+public class Orchestrator3 : UdonSharpBehaviour {
+    public Receiver3 receiver;
+    public Worker3 worker;
+    void Start() { receiver.onEvent = worker.DoWork; }
+}" }, "Orchestrator3");
+        Assert.Contains("SetProgramVariable", uasm);
+    }
+
+    // ── Action with args ──
+
+    [Fact]
+    public void DelegateField_ActionWithArgs_ConventionFields()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public class ArgDlgTest : UdonSharpBehaviour {
+    public Action<int, string> handler;
+    void Start() {
+        handler = Process;
+        handler.Invoke(42, ""hello"");
+    }
+    void Process(int a, string b) { }
+}", "ArgDlgTest");
+        Assert.Contains("__dlgc_SystemInt32_SystemString__Void__a0", uasm);
+        Assert.Contains("__dlgc_SystemInt32_SystemString__Void__a1", uasm);
+    }
+
+    // ── Func with return value ──
+
+    [Fact]
+    public void DelegateField_FuncWithReturn_ConventionRetField()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public class FuncDlgTest : UdonSharpBehaviour {
+    public Func<int, bool> predicate;
+    void Start() {
+        predicate = Check;
+        bool result = predicate.Invoke(42);
+    }
+    bool Check(int val) { return val > 0; }
+}", "FuncDlgTest");
+        Assert.Contains("__dlgc_SystemInt32__SystemBoolean__a0", uasm);
+        Assert.Contains("__dlgc_SystemInt32__SystemBoolean__ret", uasm);
+    }
+
+    // ── Null assignment ──
+
+    [Fact]
+    public void DelegateField_NullAssignment_Compiles()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public class NullDlg : UdonSharpBehaviour {
+    public Action callback;
+    void Start() { callback = null; }
+}", "NullDlg");
+        Assert.Contains("callback__target", uasm);
+    }
+
+    // ── Null check ──
+
+    [Fact]
+    public void DelegateField_NullCheck_ChecksTarget()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public class NullCheckDlg : UdonSharpBehaviour {
+    public Action callback;
+    void Start() { if (callback != null) { } }
+}", "NullCheckDlg");
+        Assert.Contains("callback__target", uasm);
+        Assert.Contains("op_Inequality", uasm);
+    }
+
+    // ── ?.Invoke() ──
+
+    [Fact]
+    public void DelegateField_NullSafeInvoke_Compiles()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public class NullSafeDlg : UdonSharpBehaviour {
+    public Action callback;
+    void Start() {
+        callback = MyMethod;
+        callback?.Invoke();
+    }
+    void MyMethod() { }
+}", "NullSafeDlg");
+        Assert.Contains("callback__target", uasm);
+    }
+
+    // ── Delegate comparison ──
+
+    [Fact]
+    public void DelegateField_Comparison_ComparesTargetAndMethod()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public class DlgCmp : UdonSharpBehaviour {
+    public Action a;
+    public Action b;
+    void Start() {
+        a = Foo;
+        b = Bar;
+        bool eq = a == b;
+    }
+    void Foo() { }
+    void Bar() { }
+}", "DlgCmp");
+        Assert.Contains("a__target", uasm);
+        Assert.Contains("b__target", uasm);
+        Assert.Contains("a__method", uasm);
+        Assert.Contains("b__method", uasm);
+        Assert.Contains("op_Equality", uasm);
+    }
+
+    // ── += throws ──
+
+    [Fact]
+    public void DelegateField_PlusEquals_ThrowsNotSupported()
+    {
+        var ex = Assert.ThrowsAny<Exception>(() => TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public class DlgPlusEq : UdonSharpBehaviour {
+    public Action callback;
+    void Start() { callback += () => { }; }
+}", "DlgPlusEq"));
+        Assert.Contains("Multicast", ex.Message);
+    }
+
+    // ── Delegate property throws ──
+
+    [Fact]
+    public void DelegateProperty_CrossBehaviour_ThrowsNotSupported()
+    {
+        var ex = Assert.ThrowsAny<Exception>(() => TestHelper.CompileToUasm(new[] { @"
+using UdonSharp;
+using System;
+public class PropTarget : UdonSharpBehaviour {
+    public Action Callback { get; set; }
+}", @"
+using UdonSharp;
+using System;
+public class PropCaller : UdonSharpBehaviour {
+    public PropTarget target;
+    void Start() { target.Callback = () => { }; }
+}" }, "PropCaller"));
+        Assert.Contains("not supported", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    // ── Tuple-return delegate throws ──
+
+    [Fact]
+    public void DelegateField_TupleReturn_ThrowsNotSupported()
+    {
+        var ex = Assert.ThrowsAny<Exception>(() => TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public class TupleDlg : UdonSharpBehaviour {
+    public Func<(int, int)> getter;
+    void Start() { }
+}", "TupleDlg"));
+        Assert.Contains("Tuple", ex.Message);
+    }
+
+    // ── Tuple local SROA edge cases ──
+
+    [Fact]
+    public void TupleLocal_WholeValueUse_ThrowsNotSupported()
+    {
+        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
+using UdonSharp;
+[UdonBehaviourSyncMode(BehaviourSyncMode.None)]
+public class TupleWholeTest : UdonSharpBehaviour {
+    (int, int) GetPair() { return (1, 2); }
+    void Foo(object o) {}
+    void Start() {
+        var t = GetPair();
+        Foo(t);
+    }
+}"));
+        Assert.Contains("cannot be used as a whole value", ex.Message);
+    }
+
+    [Fact]
+    public void TupleLocal_CrossBehaviour_AccessElements()
+    {
+        var uasm = TestHelper.CompileToUasm(new[] { @"
+using UdonSharp;
+[UdonBehaviourSyncMode(BehaviourSyncMode.None)]
+public class TupleSrc2 : UdonSharpBehaviour {
+    public (int, int) GetPair() { return (1, 2); }
+}", @"
+using UdonSharp;
+[UdonBehaviourSyncMode(BehaviourSyncMode.None)]
+public class TupleDst2 : UdonSharpBehaviour {
+    public TupleSrc2 src;
+    int _x;
+    void Start() {
+        var (a, b) = src.GetPair();
+        _x = a + b;
+    }
+}" }, "TupleDst2");
+        Assert.Contains("GetProgramVariable", uasm);
+        Assert.DoesNotContain("ValueTuple", uasm);
+    }
+
+    [Fact]
+    public void TupleLocal_NestedTuple_ThrowsNotSupported()
+    {
+        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
+using UdonSharp;
+[UdonBehaviourSyncMode(BehaviourSyncMode.None)]
+public class NestedTupleTest : UdonSharpBehaviour {
+    ((int, int), string) GetNested() { return ((1, 2), ""x""); }
+    void Start() {
+        var t = GetNested();
+    }
+}"));
+        // Guard fires in LayoutPlanner (method return type scan) or StatementHandler (local decl)
+        Assert.Contains("Nested tuple", ex.Message);
+    }
 }

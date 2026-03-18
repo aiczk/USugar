@@ -599,6 +599,14 @@ public class LayoutPlanner
         if (method.ReturnType.IsTupleType && method.ReturnType is INamedTypeSymbol tupleType)
         {
             var elements = tupleType.TupleElements;
+            // Nested tuples are not supported: Udon VM has no ValueTuple type
+            for (int ei = 0; ei < elements.Length; ei++)
+            {
+                if (elements[ei].Type.IsTupleType)
+                    throw new NotSupportedException(
+                        $"Nested tuple return type in method '{method.Name}' is not supported. " +
+                        "Udon VM does not have ValueTuple type support.");
+            }
             for (int ei = 0; ei < elements.Length; ei++)
             {
                 var retKey = $"{exportName}__ret_{ei}";

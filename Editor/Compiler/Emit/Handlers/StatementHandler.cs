@@ -373,6 +373,16 @@ public class StatementHandler : HandlerBase, IOperationHandler
         if (!_tupleLocalExpansion.ContainsKey(local))
         {
             var elements = tupleType.TupleElements;
+
+            // Check for nested tuples (not supported - Udon VM has no ValueTuple)
+            for (int i = 0; i < elements.Length; i++)
+            {
+                if (elements[i].Type.IsTupleType)
+                    throw new System.NotSupportedException(
+                        $"Nested tuple type in local variable '{local.Name}' is not supported. " +
+                        "Udon VM does not have ValueTuple type support.");
+            }
+
             var slots = new ReturnSlot[elements.Length];
             for (int i = 0; i < elements.Length; i++)
             {
