@@ -60,6 +60,9 @@ public class EmitContext
     // a closure-object emulation layer.
     public readonly Dictionary<ILocalSymbol, string> LocalVarIds = new(SymbolEqualityComparer.Default);
 
+    /// <summary>Tuple local variable → per-element expanded slots (SROA).</summary>
+    public readonly Dictionary<ILocalSymbol, ReturnSlot[]> TupleLocalExpansion = new(SymbolEqualityComparer.Default);
+
     // Field initializers to emit at _start
     public readonly List<(string fieldName, IOperation initOp, ITypeSymbol fieldType)> FieldInitOps = new();
 

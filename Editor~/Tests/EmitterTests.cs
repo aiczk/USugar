@@ -5154,4 +5154,244 @@ public class ConstFoldSyncTest : UdonSharpBehaviour {
         Assert.Contains(constEntries, e => e.Value is int v && v == 7);
     }
 
+    // ── F3: using early return Dispose ──
+
+    [Fact]
+    public void Using_EarlyReturn_EmitsDispose()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+using TestStubs;
+[UdonBehaviourSyncMode(BehaviourSyncMode.None)]
+public class UsingReturnTest : UdonSharpBehaviour {
+    void Start() {
+        using (var r = new DisposableResource()) {
+            if (r.Value == 0) return;
+        }
+    }
+}");
+        // Dispose should appear at least twice (early return + normal exit)
+        var disposeCount = System.Text.RegularExpressions.Regex.Matches(uasm, "__Dispose").Count;
+        Assert.True(disposeCount >= 2, $"Expected at least 2 Dispose calls, got {disposeCount}. UASM:\n{uasm}");
+    }
+
+    [Fact]
+    public void Using_BreakInLoop_EmitsDispose()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+using TestStubs;
+[UdonBehaviourSyncMode(BehaviourSyncMode.None)]
+public class UsingBreakTest : UdonSharpBehaviour {
+    void Start() {
+        for (int i = 0; i < 10; i++) {
+            using (var r = new DisposableResource()) {
+                if (r.Value == 0) break;
+            }
+        }
+    }
+}");
+        var disposeCount = System.Text.RegularExpressions.Regex.Matches(uasm, "__Dispose").Count;
+        Assert.True(disposeCount >= 2, $"Expected at least 2 Dispose calls, got {disposeCount}. UASM:\n{uasm}");
+    }
+
+    [Fact]
+    public void Using_ContinueInLoop_EmitsDispose()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+using TestStubs;
+[UdonBehaviourSyncMode(BehaviourSyncMode.None)]
+public class UsingContinueTest : UdonSharpBehaviour {
+    void Start() {
+        for (int i = 0; i < 10; i++) {
+            using (var r = new DisposableResource()) {
+                if (r.Value == 0) continue;
+            }
+        }
+    }
+}");
+        var disposeCount = System.Text.RegularExpressions.Regex.Matches(uasm, "__Dispose").Count;
+        Assert.True(disposeCount >= 2, $"Expected at least 2 Dispose calls, got {disposeCount}. UASM:\n{uasm}");
+    }
+
+    [Fact]
+    public void UsingDeclaration_EarlyReturn_EmitsDispose()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+using TestStubs;
+[UdonBehaviourSyncMode(BehaviourSyncMode.None)]
+public class UsingDeclReturnTest : UdonSharpBehaviour {
+    void Start() {
+        using var r = new DisposableResource();
+        if (r.Value == 0) return;
+    }
+}");
+        var disposeCount = System.Text.RegularExpressions.Regex.Matches(uasm, "__Dispose").Count;
+        Assert.True(disposeCount >= 2, $"Expected at least 2 Dispose calls, got {disposeCount}. UASM:\n{uasm}");
+    }
+
+    [Fact]
+    public void Using_Nested_EarlyReturn_DisposesAll()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+using TestStubs;
+[UdonBehaviourSyncMode(BehaviourSyncMode.None)]
+public class UsingNestedReturnTest : UdonSharpBehaviour {
+    void Start() {
+        using (var a = new DisposableResource()) {
+            using (var b = new DisposableResource()) {
+                if (a.Value == 0) return;
+            }
+        }
+    }
+}");
+        // Early return disposes both b and a, plus normal exits dispose b and a
+        var disposeCount = System.Text.RegularExpressions.Regex.Matches(uasm, "__Dispose").Count;
+        Assert.True(disposeCount >= 4, $"Expected at least 4 Dispose calls, got {disposeCount}. UASM:\n{uasm}");
+    }
+
+    // ── F6: same-class tuple return ──
+
+    [Fact]
+    public void TupleReturn_SameClass_EmitsPerElementReturn()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+[UdonBehaviourSyncMode(BehaviourSyncMode.None)]
+public class TupleReturnTest : UdonSharpBehaviour {
+    int _a; int _b;
+    (int, int) GetPair() { return (10, 20); }
+    void Start() {
+        var (a, b) = GetPair();
+        _a = a;
+        _b = b;
+    }
+}");
+        // Should contain return field references for tuple elements
+        Assert.Contains("__ret_0", uasm);
+        Assert.Contains("__ret_1", uasm);
+        Assert.DoesNotContain("ValueTuple", uasm);
+    }
+
+    [Fact]
+    public void TupleReturn_CrossBehaviour_EmitsGetProgramVariable()
+    {
+        var source = @"
+using UdonSharp;
+[UdonBehaviourSyncMode(BehaviourSyncMode.None)]
+public class TupleProvider : UdonSharpBehaviour {
+    public (int, int) GetPair() { return (1, 2); }
+}
+[UdonBehaviourSyncMode(BehaviourSyncMode.None)]
+public class TupleCaller : UdonSharpBehaviour {
+    public TupleProvider provider;
+    int _a; int _b;
+    void Start() {
+        var (a, b) = provider.GetPair();
+        _a = a;
+        _b = b;
+    }
+}";
+        var uasm = TestHelper.CompileToUasm(source, "TupleCaller");
+        // Cross-behaviour tuple should use GetProgramVariable for each element
+        var getPVCount = System.Text.RegularExpressions.Regex.Matches(uasm, "GetProgramVariable").Count;
+        Assert.True(getPVCount >= 2, $"Expected at least 2 GetProgramVariable calls, got {getPVCount}");
+        Assert.Contains("SendCustomEvent", uasm);
+    }
+
+    // ── Tuple Local SROA Tests ──
+
+    [Fact]
+    public void TupleLocal_AssignFromMethod_AccessElements()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+[UdonBehaviourSyncMode(BehaviourSyncMode.None)]
+public class TupleLocalTest : UdonSharpBehaviour {
+    int _x; string _y;
+    (int, string) GetPair() { return (42, ""hello""); }
+    void Start() {
+        var result = GetPair();
+        _x = result.Item1;
+        _y = result.Item2;
+    }
+}");
+        Assert.Contains("__ret_0", uasm);
+        Assert.Contains("__ret_1", uasm);
+        Assert.DoesNotContain("ValueTuple", uasm);
+    }
+
+    [Fact]
+    public void TupleLocal_LiteralAssignment_ExpandsToElements()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+[UdonBehaviourSyncMode(BehaviourSyncMode.None)]
+public class TupleLitTest : UdonSharpBehaviour {
+    int _x;
+    void Start() {
+        (int, string) t = (10, ""hi"");
+        _x = t.Item1;
+    }
+}");
+        Assert.DoesNotContain("ValueTuple", uasm);
+    }
+
+    [Fact]
+    public void TupleLocal_ReturnFromLocal_EmitsPerElement()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+[UdonBehaviourSyncMode(BehaviourSyncMode.None)]
+public class TupleRetLocal : UdonSharpBehaviour {
+    (int, int) GetPair() {
+        var t = (1, 2);
+        return t;
+    }
+    void Start() { var (a, b) = GetPair(); }
+}");
+        Assert.Contains("__ret_0", uasm);
+        Assert.Contains("__ret_1", uasm);
+        Assert.DoesNotContain("ValueTuple", uasm);
+    }
+
+    [Fact]
+    public void TupleLocal_NamedElements_AccessByName()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+[UdonBehaviourSyncMode(BehaviourSyncMode.None)]
+public class NamedTupleTest : UdonSharpBehaviour {
+    int _x;
+    (int count, string label) GetInfo() { return (5, ""test""); }
+    void Start() {
+        var info = GetInfo();
+        _x = info.count;
+    }
+}");
+        Assert.DoesNotContain("ValueTuple", uasm);
+    }
+
+    [Fact]
+    public void TupleLocal_Reassignment_UpdatesElements()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+[UdonBehaviourSyncMode(BehaviourSyncMode.None)]
+public class TupleReassignTest : UdonSharpBehaviour {
+    int _x;
+    (int, int) GetA() { return (1, 2); }
+    (int, int) GetB() { return (3, 4); }
+    void Start() {
+        var t = GetA();
+        t = GetB();
+        _x = t.Item1;
+    }
+}");
+        Assert.DoesNotContain("ValueTuple", uasm);
+    }
+
 }

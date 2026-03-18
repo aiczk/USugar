@@ -31,6 +31,7 @@ public abstract class HandlerBase
     protected Dictionary<(int methodIdx, int paramOrdinal), DelegateConvention> _delegateParamConventions => _ctx.DelegateParamConventions;
     protected Dictionary<IMethodSymbol, DelegateConvention> _lambdaConventionOverrides => _ctx.LambdaConventionOverrides;
     protected Dictionary<ILocalSymbol, string> _localVarIds => _ctx.LocalVarIds;
+    protected Dictionary<ILocalSymbol, ReturnSlot[]> _tupleLocalExpansion => _ctx.TupleLocalExpansion;
     protected List<(string fieldName, IOperation initOp, ITypeSymbol fieldType)> _fieldInitOps => _ctx.FieldInitOps;
     protected Dictionary<string, string> _fieldChangeCallbacks => _ctx.FieldChangeCallbacks;
     protected Dictionary<ITypeSymbol, string> _enumArrayVars => _ctx.EnumArrayVars;
@@ -134,6 +135,12 @@ public abstract class HandlerBase
                 return alt;
         }
         return externSig;
+    }
+
+    protected static IOperation UnwrapConversions(IOperation op)
+    {
+        while (op is IConversionOperation conv) op = conv.Operand;
+        return op;
     }
 
     protected static string SanitizeId(string name) => name.Replace('.', '_');

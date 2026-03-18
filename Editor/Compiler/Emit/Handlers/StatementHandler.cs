@@ -157,10 +157,16 @@ public class StatementHandler : HandlerBase, IOperationHandler
                         EmitStoreField(retSlots[i].Id, elemVal);
                     }
                 }
+                else if (tupleOp is ILocalReferenceOperation localRef
+                         && _tupleLocalExpansion.TryGetValue(localRef.Local, out var expanded))
+                {
+                    for (int i = 0; i < expanded.Length && i < retSlots.Length; i++)
+                        EmitStoreField(retSlots[i].Id, LoadField(expanded[i].Id, expanded[i].UdonType));
+                }
                 else
                 {
                     throw new System.NotSupportedException(
-                        $"Tuple-returning method must return a tuple literal, got {op.ReturnedValue.GetType().Name}");
+                        $"Tuple-returning method must return a tuple literal or tuple local, got {op.ReturnedValue.GetType().Name}");
                 }
                 EmitPendingDispose();
                 EmitReturn();
@@ -184,12 +190,6 @@ public class StatementHandler : HandlerBase, IOperationHandler
             EmitPendingDispose();
             EmitReturn();
         }
-    }
-
-    static IOperation UnwrapConversions(IOperation op)
-    {
-        while (op is IConversionOperation conv) op = conv.Operand;
-        return op;
     }
 
     void EmitTailCall(IInvocationOperation tailCall)
@@ -334,6 +334,14 @@ public class StatementHandler : HandlerBase, IOperationHandler
         foreach (var declarator in decl.Declarators)
         {
             var local = declarator.Symbol;
+
+            // Tuple-typed local → SROA: expand into per-element scalar variables
+            if (local.Type.IsTupleType && local.Type is INamedTypeSymbol tupleType)
+            {
+                VisitTupleLocalDeclaration(local, tupleType, declarator.Initializer);
+                continue;
+            }
+
             // Delegate-typed locals → SystemUInt32 (holds label address; Udon has no delegate types)
             var udonType = local.Type.TypeKind == TypeKind.Delegate
                 ? "SystemUInt32"
@@ -355,6 +363,50 @@ public class StatementHandler : HandlerBase, IOperationHandler
                 var srcVal = VisitExpression(init.Value);
                 EmitStoreField(id, srcVal);
             }
+        }
+    }
+
+    void VisitTupleLocalDeclaration(ILocalSymbol local, INamedTypeSymbol tupleType,
+        IVariableInitializerOperation init)
+    {
+        // Register expansion slots for this tuple local
+        if (!_tupleLocalExpansion.ContainsKey(local))
+        {
+            var elements = tupleType.TupleElements;
+            var slots = new ReturnSlot[elements.Length];
+            for (int i = 0; i < elements.Length; i++)
+            {
+                var udonType = GetUdonType(elements[i].Type);
+                var localId = _ctx.DeclareLocal($"{local.Name}__elem{i}", udonType);
+                slots[i] = new ReturnSlot(localId, udonType);
+            }
+            _tupleLocalExpansion[local] = slots;
+        }
+
+        if (init == null) return;
+
+        var expansion = _tupleLocalExpansion[local];
+        var value = UnwrapConversions(init.Value);
+
+        if (value is ITupleOperation tupleLit)
+        {
+            // Literal: (1, "hello") → element-wise assignment
+            for (int i = 0; i < tupleLit.Elements.Length && i < expansion.Length; i++)
+                EmitStoreField(expansion[i].Id, VisitExpression(tupleLit.Elements[i]));
+        }
+        else if (value is IInvocationOperation invocation)
+        {
+            // Method call: GetTuple() → call, then read from return slots
+            var callExpr = VisitExpression(init.Value);
+            if (callExpr != null) EmitExprStmt(callExpr);
+            var callReturns = GetCalleeReturns(invocation.TargetMethod);
+            for (int i = 0; i < expansion.Length && i < callReturns.Length; i++)
+                EmitStoreField(expansion[i].Id, LoadField(callReturns[i].Id, callReturns[i].UdonType));
+        }
+        else
+        {
+            throw new System.NotSupportedException(
+                $"Cannot initialize tuple local '{local.Name}' from {value.GetType().Name}.");
         }
     }
 

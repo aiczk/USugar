@@ -24,7 +24,11 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
     public HExpr Handle(IOperation expression) => expression switch
     {
         ILiteralOperation op => VisitLiteral(op),
-        ILocalReferenceOperation localRef => _localVarIds.TryGetValue(localRef.Local, out var capturedId)
+        ILocalReferenceOperation localRef => _tupleLocalExpansion.ContainsKey(localRef.Local)
+                                                 ? throw new NotSupportedException(
+                                                     $"Tuple local variable '{localRef.Local.Name}' cannot be used as a whole value. " +
+                                                     "Access individual elements (.Item1, .Item2) or use deconstruction.")
+                                                 : _localVarIds.TryGetValue(localRef.Local, out var capturedId)
                                                  ? LoadField(capturedId, GetUdonType(localRef.Type))
                                                  : throw new InvalidOperationException($"Cannot resolve local variable '{localRef.Local.Name}' in method '{_currentMethod?.Name ?? "(none)"}'."),
         IFieldReferenceOperation op => VisitFieldReference(op),
@@ -94,6 +98,48 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
                 new List<HExpr>(),
                 fldType);
         }
+        // Delegate field read as value is not supported — the original field has been expanded
+        // to a __target/__method/__addr bundle. Only invocation, null-check, ?.Invoke(), and
+        // comparison are supported (handled by their respective handlers before reaching here).
+        if (fieldRef.Instance is IInstanceReferenceOperation
+            && fieldRef.Field.Type is INamedTypeSymbol dlgType
+            && dlgType.DelegateInvokeMethod != null
+            && _delegateFields.Contains(fieldRef.Field.Name))
+        {
+            throw new NotSupportedException(
+                $"Delegate field '{fieldRef.Field.Name}' cannot be used as a value (e.g., in variable assignment, parameter passing, or return). " +
+                "Only direct invocation (_callback()), null check (_callback != null), ?.Invoke(), and comparison (_a == _b) are supported.");
+        }
+
+        // Tuple local element access: result.Item1 → expanded variable
+        if (fieldRef.Instance is ILocalReferenceOperation localRef2
+            && _tupleLocalExpansion.TryGetValue(localRef2.Local, out var tupleSlots))
+        {
+            var tupleType = localRef2.Type as INamedTypeSymbol;
+            int elemIndex = -1;
+            if (tupleType?.IsTupleType == true)
+            {
+                var elements = tupleType.TupleElements;
+                for (int i = 0; i < elements.Length; i++)
+                {
+                    if (SymbolEqualityComparer.Default.Equals(elements[i], fieldRef.Field)
+                        || (elements[i].CorrespondingTupleField != null
+                            && SymbolEqualityComparer.Default.Equals(elements[i].CorrespondingTupleField, fieldRef.Field))
+                        || (fieldRef.Field.CorrespondingTupleField != null
+                            && SymbolEqualityComparer.Default.Equals(fieldRef.Field.CorrespondingTupleField, elements[i])))
+                    {
+                        elemIndex = i;
+                        break;
+                    }
+                }
+            }
+            if (elemIndex >= 0 && elemIndex < tupleSlots.Length)
+                return LoadField(tupleSlots[elemIndex].Id, tupleSlots[elemIndex].UdonType);
+
+            throw new System.NotSupportedException(
+                $"Cannot access '{fieldRef.Field.Name}' on tuple local '{localRef2.Local.Name}'.");
+        }
+
         // this.field → direct variable name → LoadField
         if (fieldRef.Instance is IInstanceReferenceOperation)
             return LoadField(fieldRef.Field.Name, GetUdonType(fieldRef.Field.Type));
