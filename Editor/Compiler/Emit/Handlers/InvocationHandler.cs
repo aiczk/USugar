@@ -153,9 +153,10 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
     {
         // ── Delegate FIELD invocation via conditional access (?.Invoke()) ──
         if (op.Instance is IConditionalAccessInstanceOperation
-            && _conditionalAccessDelegateFieldNames.Count > 0)
+            && _conditionalAccessStack.Count > 0
+            && _conditionalAccessStack.Peek().DelegateFieldName != null)
         {
-            return EmitDelegateFieldInvocation(op, _conditionalAccessDelegateFieldNames.Peek(),
+            return EmitDelegateFieldInvocation(op, _conditionalAccessStack.Peek().DelegateFieldName,
                 op.TargetMethod.ContainingType as INamedTypeSymbol);
         }
 

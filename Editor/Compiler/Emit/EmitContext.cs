@@ -72,12 +72,9 @@ public class EmitContext
     // Enum array lookup: enum type → field name for int→enum runtime conversions
     public readonly Dictionary<ITypeSymbol, string> EnumArrayVars = new(SymbolEqualityComparer.Default);
 
-    // Conditional access target stack (for ?. operator)
-    public readonly Stack<HExpr> ConditionalAccessTargets = new();
-
-    // Delegate field name stack for conditional access (?.Invoke())
-    // When non-empty, the top value is the delegate field name being conditionally accessed.
-    public readonly Stack<string> ConditionalAccessDelegateFieldNames = new();
+    // Conditional access stack (for ?. operator)
+    // Target is the evaluated instance; DelegateFieldName is non-null for delegate ?.Invoke().
+    public readonly Stack<(HExpr Target, string DelegateFieldName)> ConditionalAccessStack = new();
 
     // using declaration Dispose tracking
     public readonly Stack<List<(HExpr val, ITypeSymbol type)>> UsingDisposableStack = new();

@@ -35,8 +35,7 @@ public abstract class HandlerBase
     protected List<(string fieldName, IOperation initOp, ITypeSymbol fieldType)> _fieldInitOps => _ctx.FieldInitOps;
     protected Dictionary<string, string> _fieldChangeCallbacks => _ctx.FieldChangeCallbacks;
     protected Dictionary<ITypeSymbol, string> _enumArrayVars => _ctx.EnumArrayVars;
-    protected Stack<HExpr> _conditionalAccessTargets => _ctx.ConditionalAccessTargets;
-    protected Stack<string> _conditionalAccessDelegateFieldNames => _ctx.ConditionalAccessDelegateFieldNames;
+    protected Stack<(HExpr Target, string DelegateFieldName)> _conditionalAccessStack => _ctx.ConditionalAccessStack;
     protected Stack<List<(HExpr val, ITypeSymbol type)>> _usingDisposableStack => _ctx.UsingDisposableStack;
     protected HashSet<string> _delegateFields => _ctx.DelegateFields;
     protected List<EmitDiagnostic> _diagnostics => _ctx.Diagnostics;

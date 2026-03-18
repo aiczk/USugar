@@ -408,7 +408,7 @@ namespace TestStubs
         var root = trees[1].GetRoot();
         var classDecl = root.DescendantNodes()
             .OfType<Microsoft.CodeAnalysis.CSharp.Syntax.TypeDeclarationSyntax>()
-            .First(c => c.Identifier.Text == className);
+            .First(c => c.Identifier.Text == className && c is not Microsoft.CodeAnalysis.CSharp.Syntax.InterfaceDeclarationSyntax);
         var classSymbol = model.GetDeclaredSymbol(classDecl) as INamedTypeSymbol;
 
         var emitter = new UasmEmitter(compilation, classSymbol);
@@ -437,7 +437,7 @@ namespace TestStubs
         var root = trees[1].GetRoot();
         var classDecl = root.DescendantNodes()
             .OfType<Microsoft.CodeAnalysis.CSharp.Syntax.TypeDeclarationSyntax>()
-            .First(c => c.Identifier.Text == className);
+            .First(c => c.Identifier.Text == className && c is not Microsoft.CodeAnalysis.CSharp.Syntax.InterfaceDeclarationSyntax);
         var classSymbol = model.GetDeclaredSymbol(classDecl) as INamedTypeSymbol;
 
         var emitter = new UasmEmitter(compilation, classSymbol);
@@ -469,7 +469,7 @@ namespace TestStubs
             var root = trees[i].GetRoot();
             classDecl = root.DescendantNodes()
                 .OfType<Microsoft.CodeAnalysis.CSharp.Syntax.TypeDeclarationSyntax>()
-                .FirstOrDefault(c => c.Identifier.Text == className);
+                .FirstOrDefault(c => c.Identifier.Text == className && c is not Microsoft.CodeAnalysis.CSharp.Syntax.InterfaceDeclarationSyntax);
             if (classDecl != null)
             {
                 model = compilation.GetSemanticModel(trees[i]);
@@ -507,7 +507,7 @@ namespace TestStubs
         var root = trees[1].GetRoot();
         var classDecl = root.DescendantNodes()
             .OfType<Microsoft.CodeAnalysis.CSharp.Syntax.TypeDeclarationSyntax>()
-            .First(c => c.Identifier.Text == className);
+            .First(c => c.Identifier.Text == className && c is not Microsoft.CodeAnalysis.CSharp.Syntax.InterfaceDeclarationSyntax);
         var classSymbol = model.GetDeclaredSymbol(classDecl) as INamedTypeSymbol;
 
         var emitter = new UasmEmitter(compilation, classSymbol);

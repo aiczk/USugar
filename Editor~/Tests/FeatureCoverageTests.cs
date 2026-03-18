@@ -1176,10 +1176,10 @@ public class EnumSpecialTypeTest : UdonSharpBehaviour {
         Assert.NotNull(uasm);
     }
 
-    // ── Switch expression exhaustiveness warning ──
+    // ── Switch expression without default arm (no false-positive warning) ──
 
     [Fact]
-    public void SwitchExpression_WithoutDefaultArm_EmitsWarning()
+    public void SwitchExpression_WithoutDefaultArm_NoWarning()
     {
         var uasm = TestHelper.CompileToUasm(@"
 using UdonSharp;
@@ -1191,7 +1191,8 @@ public class SwitchNoDefaultTest : UdonSharpBehaviour {
     void Start() { }
 }", "SwitchNoDefaultTest", out var emitter);
         Assert.NotNull(uasm);
-        Assert.Contains(emitter.Diagnostics, d =>
+        // Roslyn CS8509 covers exhaustiveness; USugar should not emit redundant warnings
+        Assert.DoesNotContain(emitter.Diagnostics, d =>
             d.Severity == "Warning" && d.Message.Contains("default"));
     }
 

@@ -360,19 +360,6 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
             };
         }
 
-        // Warn if no default/discard arm — switch expression may not be exhaustive
-        if (defaultArm == null)
-        {
-            _diagnostics.Add(new EmitDiagnostic
-            {
-                Severity = "Warning",
-                Message = "Switch expression may not handle all input values. Consider adding a default '_' arm.",
-                FilePath = op.Syntax?.SyntaxTree?.FilePath ?? "",
-                Line = op.Syntax?.GetLocation().GetLineSpan().StartLinePosition.Line + 1 ?? 0,
-                Character = op.Syntax?.GetLocation().GetLineSpan().StartLinePosition.Character + 1 ?? 0,
-            });
-        }
-
         // Emit the chain
         tail?.Invoke(null);
 

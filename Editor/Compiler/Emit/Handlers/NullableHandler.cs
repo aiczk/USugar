@@ -16,7 +16,7 @@ public class NullableHandler : HandlerBase, IExpressionHandler
     {
         IConditionalAccessOperation op => VisitConditionalAccess(op),
         ICoalesceOperation op => VisitCoalesce(op),
-        IConditionalAccessInstanceOperation => _conditionalAccessTargets.Peek(),
+        IConditionalAccessInstanceOperation => _conditionalAccessStack.Peek().Target,
         ICoalesceAssignmentOperation op => VisitCoalesceAssignment(op),
         _ => throw new System.NotSupportedException(expression.GetType().Name),
     };
@@ -76,9 +76,7 @@ public class NullableHandler : HandlerBase, IExpressionHandler
         _builder.EmitIf(condVal, b =>
         {
             // target is not null → evaluate WhenNotNull with target as the instance
-            _conditionalAccessTargets.Push(targetRef);
-            if (delegateFieldName != null)
-                _conditionalAccessDelegateFieldNames.Push(delegateFieldName);
+            _conditionalAccessStack.Push((targetRef, delegateFieldName));
             try
             {
                 var accessVal = VisitExpression(op.WhenNotNull);
@@ -88,9 +86,7 @@ public class NullableHandler : HandlerBase, IExpressionHandler
             }
             finally
             {
-                if (delegateFieldName != null)
-                    _conditionalAccessDelegateFieldNames.Pop();
-                _conditionalAccessTargets.Pop();
+                _conditionalAccessStack.Pop();
             }
         });
 
