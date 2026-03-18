@@ -41,7 +41,9 @@ public class LoopHandler : HandlerBase, IOperationHandler
             // while (cond) { body }
             _builder.EmitWhile(() => VisitExpression(op.Condition), _ =>
             {
+                _ctx.LoopUsingDepthStack.Push(_usingDisposableStack.Count);
                 VisitOperation(op.Body);
+                _ctx.LoopUsingDepthStack.Pop();
             });
         }
         else
@@ -49,7 +51,9 @@ public class LoopHandler : HandlerBase, IOperationHandler
             // do { body } while (cond)
             _builder.EmitWhile(() => VisitExpression(op.Condition), _ =>
             {
+                _ctx.LoopUsingDepthStack.Push(_usingDisposableStack.Count);
                 VisitOperation(op.Body);
+                _ctx.LoopUsingDepthStack.Pop();
             }, isDoWhile: true);
         }
     }
@@ -74,7 +78,9 @@ public class LoopHandler : HandlerBase, IOperationHandler
             _ =>
             {
                 // Body
+                _ctx.LoopUsingDepthStack.Push(_usingDisposableStack.Count);
                 VisitOperation(op.Body);
+                _ctx.LoopUsingDepthStack.Pop();
             });
     }
 
@@ -143,7 +149,9 @@ public class LoopHandler : HandlerBase, IOperationHandler
                     elemType);
                 EmitStoreField(loopVarId, elemVal);
 
+                _ctx.LoopUsingDepthStack.Push(_usingDisposableStack.Count);
                 VisitOperation(op.Body);
+                _ctx.LoopUsingDepthStack.Pop();
             });
     }
 
@@ -155,6 +163,7 @@ public class LoopHandler : HandlerBase, IOperationHandler
         // Generate a unique end label for this switch
         var endLabel = $"__switchEnd_{Interlocked.Increment(ref s_switchLabelCounter)}";
         SwitchBreakLabels.Push(endLabel);
+        _ctx.LoopUsingDepthStack.Push(_usingDisposableStack.Count);
         try
         {
             // Pre-convert enum switch value once (Udon VM has no enum-typed operators)
@@ -191,6 +200,7 @@ public class LoopHandler : HandlerBase, IOperationHandler
         }
         finally
         {
+            _ctx.LoopUsingDepthStack.Pop();
             SwitchBreakLabels.Pop();
         }
         _builder.EmitLabel(endLabel);

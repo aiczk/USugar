@@ -35,10 +35,32 @@ public class NullableHandler : HandlerBase, IExpressionHandler
             EmitAssign(resultSlot, defaultConst);
         }
 
-        var targetVal = VisitExpression(op.Operation);
+        // Detect delegate field conditional access (e.g., _callback?.Invoke(42))
+        // The original field variable doesn't exist — it's been expanded to __target/__method/__addr.
+        string delegateFieldName = null;
+        if (op.Operation is IFieldReferenceOperation fieldRef
+            && fieldRef.Field.Type is INamedTypeSymbol dlgType
+            && dlgType.DelegateInvokeMethod != null
+            && _delegateFields.Contains(fieldRef.Field.Name))
+        {
+            delegateFieldName = fieldRef.Field.Name;
+        }
+
+        HExpr targetVal;
+        string targetType;
+        if (delegateFieldName != null)
+        {
+            // Load __target as the null-check proxy for the delegate bundle
+            targetType = "VRCUdonCommonInterfacesIUdonEventReceiver";
+            targetVal = LoadField($"{delegateFieldName}__target", targetType);
+        }
+        else
+        {
+            targetVal = VisitExpression(op.Operation);
+            targetType = GetUdonType(op.Operation.Type ?? op.Type);
+        }
 
         // Store in temp slot to avoid double evaluation of impure expressions (e.g., method calls)
-        var targetType = GetUdonType(op.Operation.Type ?? op.Type);
         var targetSlot = _ctx.AllocTemp(targetType);
         EmitAssign(targetSlot, targetVal);
         var targetRef = SlotRef(targetSlot);
@@ -55,11 +77,21 @@ public class NullableHandler : HandlerBase, IExpressionHandler
         {
             // target is not null → evaluate WhenNotNull with target as the instance
             _conditionalAccessTargets.Push(targetRef);
-            var accessVal = VisitExpression(op.WhenNotNull);
-            _conditionalAccessTargets.Pop();
+            if (delegateFieldName != null)
+                _conditionalAccessDelegateFieldNames.Push(delegateFieldName);
+            try
+            {
+                var accessVal = VisitExpression(op.WhenNotNull);
 
-            if (!isVoid && accessVal != null)
-                EmitAssign(resultSlot, accessVal);
+                if (!isVoid && accessVal != null)
+                    EmitAssign(resultSlot, accessVal);
+            }
+            finally
+            {
+                if (delegateFieldName != null)
+                    _conditionalAccessDelegateFieldNames.Pop();
+                _conditionalAccessTargets.Pop();
+            }
         });
 
         return resultSlot >= 0 ? SlotRef(resultSlot) : null;

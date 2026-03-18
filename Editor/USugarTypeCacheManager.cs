@@ -118,6 +118,8 @@ static class USugarTypeCacheManager
         foreach (var member in symbol.GetMembers().OfType<IFieldSymbol>())
         {
             if (member.IsStatic || member.IsImplicitlyDeclared || member.IsConst) continue;
+            // Skip delegate fields — USugar decomposes them into __target/__method/__addr triples
+            if (member.Type is INamedTypeSymbol delegateType && delegateType.DelegateInvokeMethod != null) continue;
 
             var userType = ResolveClrType(member.Type);
             var systemType = ResolveUdonType(ExternResolver.GetUdonTypeName(member.Type));
@@ -136,8 +138,8 @@ static class USugarTypeCacheManager
         foreach (var prop in symbol.GetMembers().OfType<IPropertySymbol>())
         {
             if (prop.IsStatic || prop.IsImplicitlyDeclared) continue;
-            var isAuto = prop.GetMethod?.IsImplicitlyDeclared == true
-                || prop.SetMethod?.IsImplicitlyDeclared == true;
+            var isAuto = prop.GetMethod?.DeclaringSyntaxReferences.IsEmpty == true
+                || prop.SetMethod?.DeclaringSyntaxReferences.IsEmpty == true;
             if (!isAuto && prop.DeclaredAccessibility != Accessibility.Public) continue;
 
             var userType = ResolveClrType(prop.Type);
@@ -179,8 +181,8 @@ static class USugarTypeCacheManager
             {
                 if (prop.IsStatic || prop.IsImplicitlyDeclared) continue;
                 if (!declaredNames.Add(prop.Name)) continue;
-                var isAuto = prop.GetMethod?.IsImplicitlyDeclared == true
-                    || prop.SetMethod?.IsImplicitlyDeclared == true;
+                var isAuto = prop.GetMethod?.DeclaringSyntaxReferences.IsEmpty == true
+                    || prop.SetMethod?.DeclaringSyntaxReferences.IsEmpty == true;
                 if (!isAuto && prop.DeclaredAccessibility != Accessibility.Public) continue;
                 var userType = ResolveClrType(prop.Type);
                 var systemType = ResolveUdonType(ExternResolver.GetUdonTypeName(prop.Type));
@@ -222,6 +224,8 @@ static class USugarTypeCacheManager
                 BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance))
             {
                 if (field.IsStatic || defs.ContainsKey(field.Name)) continue;
+                // Skip delegate fields — USugar decomposes them into __target/__method/__addr triples
+                if (typeof(Delegate).IsAssignableFrom(field.FieldType)) continue;
 
                 var userType = field.FieldType;
                 var systemType = ResolveUdonStorageType(userType);

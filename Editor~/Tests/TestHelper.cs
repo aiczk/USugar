@@ -378,8 +378,8 @@ namespace TestStubs
         var model = compilation.GetSemanticModel(trees[1]);
         var root = trees[1].GetRoot();
         var classDecl = root.DescendantNodes()
-            .OfType<Microsoft.CodeAnalysis.CSharp.Syntax.ClassDeclarationSyntax>()
-            .First();
+            .OfType<Microsoft.CodeAnalysis.CSharp.Syntax.TypeDeclarationSyntax>()
+            .First(c => c is not Microsoft.CodeAnalysis.CSharp.Syntax.InterfaceDeclarationSyntax);
         var classSymbol = model.GetDeclaredSymbol(classDecl) as INamedTypeSymbol;
 
         var emitter = new UasmEmitter(compilation, classSymbol);
@@ -407,7 +407,7 @@ namespace TestStubs
         var model = compilation.GetSemanticModel(trees[1]);
         var root = trees[1].GetRoot();
         var classDecl = root.DescendantNodes()
-            .OfType<Microsoft.CodeAnalysis.CSharp.Syntax.ClassDeclarationSyntax>()
+            .OfType<Microsoft.CodeAnalysis.CSharp.Syntax.TypeDeclarationSyntax>()
             .First(c => c.Identifier.Text == className);
         var classSymbol = model.GetDeclaredSymbol(classDecl) as INamedTypeSymbol;
 
@@ -436,7 +436,7 @@ namespace TestStubs
         var model = compilation.GetSemanticModel(trees[1]);
         var root = trees[1].GetRoot();
         var classDecl = root.DescendantNodes()
-            .OfType<Microsoft.CodeAnalysis.CSharp.Syntax.ClassDeclarationSyntax>()
+            .OfType<Microsoft.CodeAnalysis.CSharp.Syntax.TypeDeclarationSyntax>()
             .First(c => c.Identifier.Text == className);
         var classSymbol = model.GetDeclaredSymbol(classDecl) as INamedTypeSymbol;
 
@@ -462,13 +462,13 @@ namespace TestStubs
             throw new System.Exception("Compilation errors:\n" + string.Join("\n", diags.Select(d => d.ToString())));
 
         // Search all source trees (skip stubs tree at index 0)
-        Microsoft.CodeAnalysis.CSharp.Syntax.ClassDeclarationSyntax classDecl = null;
+        Microsoft.CodeAnalysis.CSharp.Syntax.TypeDeclarationSyntax classDecl = null;
         SemanticModel model = null;
         for (int i = 1; i < trees.Count; i++)
         {
             var root = trees[i].GetRoot();
             classDecl = root.DescendantNodes()
-                .OfType<Microsoft.CodeAnalysis.CSharp.Syntax.ClassDeclarationSyntax>()
+                .OfType<Microsoft.CodeAnalysis.CSharp.Syntax.TypeDeclarationSyntax>()
                 .FirstOrDefault(c => c.Identifier.Text == className);
             if (classDecl != null)
             {
@@ -506,7 +506,7 @@ namespace TestStubs
         var model = compilation.GetSemanticModel(trees[1]);
         var root = trees[1].GetRoot();
         var classDecl = root.DescendantNodes()
-            .OfType<Microsoft.CodeAnalysis.CSharp.Syntax.ClassDeclarationSyntax>()
+            .OfType<Microsoft.CodeAnalysis.CSharp.Syntax.TypeDeclarationSyntax>()
             .First(c => c.Identifier.Text == className);
         var classSymbol = model.GetDeclaredSymbol(classDecl) as INamedTypeSymbol;
 

@@ -36,6 +36,26 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
         if (op.OperatorKind == BinaryOperatorKind.ConditionalOr)
             return VisitConditionalOr(op);
 
+        // ── Delegate field null check / comparison ──
+        if (op.OperatorKind is BinaryOperatorKind.Equals or BinaryOperatorKind.NotEquals)
+        {
+            var leftField = TryGetDelegateFieldName(op.LeftOperand);
+            var rightField = TryGetDelegateFieldName(op.RightOperand);
+            bool leftIsNull = IsNullLiteral(op.LeftOperand);
+            bool rightIsNull = IsNullLiteral(op.RightOperand);
+            bool isNotEquals = op.OperatorKind == BinaryOperatorKind.NotEquals;
+
+            // delegate == null / delegate != null
+            if (leftField != null && rightIsNull)
+                return CompareDelegateToNull($"{leftField}__target", isNotEquals);
+            if (rightField != null && leftIsNull)
+                return CompareDelegateToNull($"{rightField}__target", isNotEquals);
+
+            // delegate == delegate
+            if (leftField != null && rightField != null)
+                return CompareDelegates(leftField, rightField, isNotEquals);
+        }
+
         // Constant folding: compile-time evaluable binary expressions
         if (op.ConstantValue.HasValue)
         {
@@ -340,6 +360,19 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
             };
         }
 
+        // Warn if no default/discard arm — switch expression may not be exhaustive
+        if (defaultArm == null)
+        {
+            _diagnostics.Add(new EmitDiagnostic
+            {
+                Severity = "Warning",
+                Message = "Switch expression may not handle all input values. Consider adding a default '_' arm.",
+                FilePath = op.Syntax?.SyntaxTree?.FilePath ?? "",
+                Line = op.Syntax?.GetLocation().GetLineSpan().StartLinePosition.Line + 1 ?? 0,
+                Character = op.Syntax?.GetLocation().GetLineSpan().StartLinePosition.Character + 1 ?? 0,
+            });
+        }
+
         // Emit the chain
         tail?.Invoke(null);
 
@@ -397,4 +430,61 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
         "SystemSingle" or "SystemDouble" or "SystemDecimal" => "0",
         _ => "0"
     };
+
+    // ── Delegate comparison helpers ──
+
+    /// <summary>Try to extract delegate field name from an operation, unwrapping conversions.</summary>
+    string TryGetDelegateFieldName(IOperation op)
+    {
+        var unwrapped = op;
+        while (unwrapped is IConversionOperation conv) unwrapped = conv.Operand;
+        if (unwrapped is IFieldReferenceOperation { Instance: IInstanceReferenceOperation } fr
+            && fr.Field.Type is INamedTypeSymbol nt && nt.DelegateInvokeMethod != null
+            && _delegateFields.Contains(fr.Field.Name))
+            return fr.Field.Name;
+        return null;
+    }
+
+    bool IsNullLiteral(IOperation op)
+    {
+        var unwrapped = op;
+        while (unwrapped is IConversionOperation conv) unwrapped = conv.Operand;
+        return unwrapped is ILiteralOperation { ConstantValue: { HasValue: true, Value: null } };
+    }
+
+    HExpr CompareDelegateToNull(string targetFieldName, bool isNotEquals)
+    {
+        var targetVal = LoadField(targetFieldName, "VRCUdonCommonInterfacesIUdonEventReceiver");
+        var nullVal = Const(null, "SystemObject");
+        var sig = isNotEquals
+            ? "SystemObject.__op_Inequality__SystemObject_SystemObject__SystemBoolean"
+            : "SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean";
+        return ExternCall(sig, new List<HExpr> { targetVal, nullVal }, "SystemBoolean");
+    }
+
+    HExpr CompareDelegates(string leftField, string rightField, bool isNotEquals)
+    {
+        var leftTarget = LoadField($"{leftField}__target", "VRCUdonCommonInterfacesIUdonEventReceiver");
+        var rightTarget = LoadField($"{rightField}__target", "VRCUdonCommonInterfacesIUdonEventReceiver");
+        var targetEq = ExternCall(
+            "UnityEngineObject.__op_Equality__UnityEngineObject_UnityEngineObject__SystemBoolean",
+            new List<HExpr> { leftTarget, rightTarget }, "SystemBoolean");
+
+        var leftMethod = LoadField($"{leftField}__method", "SystemString");
+        var rightMethod = LoadField($"{rightField}__method", "SystemString");
+        var methodEq = ExternCall(
+            "SystemString.__op_Equality__SystemString_SystemString__SystemBoolean",
+            new List<HExpr> { leftMethod, rightMethod }, "SystemBoolean");
+
+        var result = ExternCall(
+            "SystemBoolean.__op_LogicalAnd__SystemBoolean_SystemBoolean__SystemBoolean",
+            new List<HExpr> { targetEq, methodEq }, "SystemBoolean");
+
+        if (isNotEquals)
+            result = ExternCall(
+                "SystemBoolean.__op_LogicalNegation__SystemBoolean__SystemBoolean",
+                new List<HExpr> { result }, "SystemBoolean");
+
+        return result;
+    }
 }
