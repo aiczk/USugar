@@ -26,11 +26,16 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
     {
         ILiteralOperation op => VisitLiteral(op),
         ILocalReferenceOperation localRef => _localBindings.TryGetValue(localRef.Local, out var localBinding)
-                                                 ? LoadField(localBinding.Id, EmitContext.IsAggregateType(localRef.Type)
-                                                     ? "SystemObjectArray" : GetUdonType(localRef.Type))
+                                                 ? EmitContext.IsAggregateType(localRef.Type)
+                                                     ? ExternCall("SystemObjectArray.__Clone__SystemObject",
+                                                         new List<HExpr> { LoadField(localBinding.Id, "SystemObjectArray") }, "SystemObject")
+                                                     : LoadField(localBinding.Id, GetUdonType(localRef.Type))
                                                  : throw new InvalidOperationException($"Cannot resolve local variable '{localRef.Local.Name}' in method '{_currentMethod?.Name ?? "(none)"}'."),
         IFieldReferenceOperation op => VisitFieldReference(op),
-        IParameterReferenceOperation paramRef => LoadParam(paramRef.Parameter),
+        IParameterReferenceOperation paramRef => EmitContext.IsAggregateType(paramRef.Type)
+                                                     ? ExternCall("SystemObjectArray.__Clone__SystemObject",
+                                                         new List<HExpr> { LoadParam(paramRef.Parameter) }, "SystemObject")
+                                                     : LoadParam(paramRef.Parameter),
         IInstanceReferenceOperation => LoadField(_ctx.DeclareThisOnce(GetUdonType(_classSymbol)), GetUdonType(_classSymbol)),
         IConversionOperation op => VisitConversion(op),
         IDefaultValueOperation op => VisitDefaultValue(op),
@@ -119,7 +124,7 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
             var layout = _ctx.GetAggregateLayout(aggContaining);
             if (layout.TryGetIndex(fieldRef.Field, out var elemIndex))
             {
-                var arrExpr = VisitExpression(fieldRef.Instance);
+                var arrExpr = LoadInstanceRaw(fieldRef.Instance);
                 return ExternCall("SystemObjectArray.__Get__SystemInt32__SystemObject",
                     new List<HExpr> { arrExpr, Const(elemIndex, "SystemInt32") }, "SystemObject");
             }

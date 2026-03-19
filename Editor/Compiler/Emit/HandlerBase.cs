@@ -190,6 +190,26 @@ public abstract class HandlerBase
     }
 
 
+    // ── Aggregate Instance Load (no Clone) ──
+
+    /// <summary>
+    /// Load an aggregate instance reference WITHOUT cloning. Used for field access/write
+    /// where we need the original object[], not a copy.
+    /// VisitExpression() clones aggregate locals/params by default for value semantics,
+    /// but field access operates on the original array.
+    /// </summary>
+    protected HExpr LoadInstanceRaw(IOperation instance)
+    {
+        return instance switch
+        {
+            ILocalReferenceOperation lr when _localBindings.TryGetValue(lr.Local, out var b)
+                => LoadField(b.Id, EmitContext.IsAggregateType(lr.Type) ? "SystemObjectArray" : GetUdonType(lr.Type)),
+            IParameterReferenceOperation pr
+                => LoadParam(pr.Parameter),
+            _ => VisitExpression(instance), // method return, field on this, etc. — fresh or already raw
+        };
+    }
+
     // ── L-Value Assignment ──
 
     /// <summary>

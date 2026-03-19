@@ -220,7 +220,7 @@ public class AssignmentHandler : HandlerBase, IOperationHandler, IExpressionHand
             if (layout.TryGetIndex(aggFieldRef.Field, out var fieldIndex))
             {
                 var srcVal = VisitExpression(assign.Value);
-                var arrExpr = VisitExpression(aggFieldRef.Instance);
+                var arrExpr = LoadInstanceRaw(aggFieldRef.Instance);
                 EmitExternVoid("SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid",
                     new List<HExpr> { arrExpr, Const(fieldIndex, "SystemInt32"), srcVal });
                 return srcVal;
@@ -473,6 +473,7 @@ public class AssignmentHandler : HandlerBase, IOperationHandler, IExpressionHand
         }
 
         // Fallback: local variable or this.field
+        // VisitExpression clones aggregate locals/params automatically (Clone-on-read).
         var srcFallback = VisitExpression(assign.Value);
         var targetFieldName = GetAssignTargetFieldName(assign.Target);
         EmitStoreField(targetFieldName, srcFallback);
@@ -608,6 +609,22 @@ public class AssignmentHandler : HandlerBase, IOperationHandler, IExpressionHand
     {
         switch (target)
         {
+            case IFieldReferenceOperation aggFieldRef
+                when aggFieldRef.Instance != null
+                && aggFieldRef.Instance.Type is INamedTypeSymbol aggCapType
+                && EmitContext.IsAggregateType(aggCapType):
+            {
+                var layout = _ctx.GetAggregateLayout(aggCapType);
+                if (layout.TryGetIndex(aggFieldRef.Field, out var elemIdx))
+                {
+                    var arrVal = LoadInstanceRaw(aggFieldRef.Instance);
+                    var idxVal = Const(elemIdx, "SystemInt32");
+                    var currentVal = ExternCall("SystemObjectArray.__Get__SystemInt32__SystemObject",
+                        new List<HExpr> { arrVal, idxVal }, "SystemObject");
+                    return new LValueCapture { Value = currentVal, ArrayVal = arrVal, IndexVal = idxVal };
+                }
+                goto default;
+            }
             case IArrayElementReferenceOperation arrayElem:
             {
                 var arrayVal = VisitExpression(arrayElem.ArrayReference);
@@ -659,6 +676,21 @@ public class AssignmentHandler : HandlerBase, IOperationHandler, IExpressionHand
     {
         switch (target)
         {
+            case IFieldReferenceOperation aggFieldRef
+                when aggFieldRef.Instance != null
+                && aggFieldRef.Instance.Type is INamedTypeSymbol aggWbType
+                && EmitContext.IsAggregateType(aggWbType):
+            {
+                var layout = _ctx.GetAggregateLayout(aggWbType);
+                if (layout.TryGetIndex(aggFieldRef.Field, out var elemIdx))
+                {
+                    var arrVal = lv.ArrayVal ?? VisitExpression(aggFieldRef.Instance);
+                    EmitExternVoid("SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid",
+                        new List<HExpr> { arrVal, Const(elemIdx, "SystemInt32"), valueVal });
+                    return;
+                }
+                break;
+            }
             case IArrayElementReferenceOperation arrayElem:
             {
                 // Use captured array/index if available (avoid double evaluation)

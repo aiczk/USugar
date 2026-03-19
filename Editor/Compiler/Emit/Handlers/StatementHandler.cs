@@ -414,11 +414,8 @@ public class StatementHandler : HandlerBase, IOperationHandler
         else
         {
             // Method return, other local, etc.
+            // VisitExpression clones aggregate locals/params automatically (Clone-on-read).
             var srcVal = VisitExpression(init.Value);
-            // Clone for value semantics when copying from existing aggregate (local, param, field).
-            // Fresh constructions (invocations returning new arrays) get a harmless extra clone.
-            srcVal = ExternCall("SystemObjectArray.__Clone__SystemObject",
-                new List<HExpr> { srcVal }, "SystemObject");
             EmitStoreField(localId, srcVal);
         }
     }

@@ -560,6 +560,7 @@ public partial class InvocationHandler
         var instanceVal = VisitExpression(op.Instance);
 
         // Build param pairs for HCrossBehaviourCall
+        // VisitExpression clones aggregate locals/params automatically (Clone-on-read).
         var paramPairs = new List<(string, HExpr)>();
         for (int i = 0; i < op.Arguments.Length; i++)
             paramPairs.Add((ifaceMl.ParamIds[i], VisitExpression(op.Arguments[i].Value)));
@@ -636,6 +637,7 @@ public partial class InvocationHandler
             }
             else
             {
+                // VisitExpression clones aggregate locals/params automatically (Clone-on-read).
                 args.Add(VisitExpression(argOp));
             }
         }
