@@ -47,9 +47,9 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
 
             // delegate == null / delegate != null
             if (leftField != null && rightIsNull)
-                return CompareDelegateToNull($"{leftField}__target", isNotEquals);
+                return CompareDelegateToNull(new DelegateBundle(leftField).Target, isNotEquals);
             if (rightField != null && leftIsNull)
-                return CompareDelegateToNull($"{rightField}__target", isNotEquals);
+                return CompareDelegateToNull(new DelegateBundle(rightField).Target, isNotEquals);
 
             // delegate == delegate
             if (leftField != null && rightField != null)
@@ -237,7 +237,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
                 {
                     var localType = GetUdonType(local.Type);
                     var localId = _ctx.DeclareLocal(local.Name, localType);
-                    _localVarIds[local] = localId;
+                    _localBindings[local] = EmitContext.LocalBinding.Scalar(localId);
                     // Only assign when type check succeeds — avoid invalid type COPY on mismatch
                     _builder.EmitIf(checkVal, b =>
                     {
@@ -451,17 +451,19 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
 
     HExpr CompareDelegates(string leftField, string rightField, bool isNotEquals)
     {
-        var leftTarget = LoadField($"{leftField}__target", "VRCUdonCommonInterfacesIUdonEventReceiver");
-        var rightTarget = LoadField($"{rightField}__target", "VRCUdonCommonInterfacesIUdonEventReceiver");
-        // __addr is intentionally excluded: it is derived from __method and only used
+        var leftBundle = new DelegateBundle(leftField);
+        var rightBundle = new DelegateBundle(rightField);
+        var leftTarget = LoadField(leftBundle.Target, "VRCUdonCommonInterfacesIUdonEventReceiver");
+        var rightTarget = LoadField(rightBundle.Target, "VRCUdonCommonInterfacesIUdonEventReceiver");
+        // Addr is intentionally excluded: it is derived from Method and only used
         // for same-behaviour JUMP_INDIRECT optimization. Including it would cause
         // false negatives when two delegates point to the same method.
         var targetEq = ExternCall(
             "SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean",
             new List<HExpr> { leftTarget, rightTarget }, "SystemBoolean");
 
-        var leftMethod = LoadField($"{leftField}__method", "SystemString");
-        var rightMethod = LoadField($"{rightField}__method", "SystemString");
+        var leftMethod = LoadField(leftBundle.Method, "SystemString");
+        var rightMethod = LoadField(rightBundle.Method, "SystemString");
         var methodEq = ExternCall(
             "SystemString.__op_Equality__SystemString_SystemString__SystemBoolean",
             new List<HExpr> { leftMethod, rightMethod }, "SystemBoolean");

@@ -4,21 +4,6 @@ using System.Linq;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.Operations;
 
-public struct DelegateConvention
-{
-    public string[] ArgVarIds;
-    public string RetVarId; // null for void delegates
-}
-
-public struct EmitDiagnostic
-{
-    public string Severity; // "Warning" or "Error"
-    public string Message;
-    public string FilePath;
-    public int Line;
-    public int Character;
-}
-
 public class EmitContext
 {
     // Core dependencies
@@ -30,8 +15,22 @@ public class EmitContext
 
     // Method bookkeeping
     public readonly Dictionary<IMethodSymbol, HFunction> MethodFunctions = new(SymbolEqualityComparer.Default);
-    public readonly Dictionary<IMethodSymbol, int> MethodIndices = new(SymbolEqualityComparer.Default);
-    public readonly Dictionary<IMethodSymbol, string> MethodVarPrefix = new(SymbolEqualityComparer.Default);
+    public readonly struct MethodSlot
+    {
+        public readonly int Index;
+        public readonly string VarPrefix;
+        public MethodSlot(int index, string varPrefix) { Index = index; VarPrefix = varPrefix; }
+    }
+
+    public readonly Dictionary<IMethodSymbol, MethodSlot> MethodSlots = new(SymbolEqualityComparer.Default);
+
+    public MethodSlot RegisterMethod(IMethodSymbol method, Func<int, string> prefixFactory)
+    {
+        var idx = NextMethodIndex++;
+        var slot = new MethodSlot(idx, prefixFactory(idx));
+        MethodSlots[method] = slot;
+        return slot;
+    }
     /// <summary>Per-method return slots. Empty array for void. Length 1 for scalar. Length N for tuple.</summary>
     public readonly Dictionary<IMethodSymbol, ReturnSlot[]> MethodReturns = new(SymbolEqualityComparer.Default);
     public readonly Dictionary<IMethodSymbol, string[]> MethodParamVarIds = new(SymbolEqualityComparer.Default);
@@ -58,10 +57,19 @@ public class EmitContext
     // with different capture values will overwrite the shared field — only the last value
     // survives. This is inherent to the Udon VM's flat heap model and cannot be fixed without
     // a closure-object emulation layer.
-    public readonly Dictionary<ILocalSymbol, string> LocalVarIds = new(SymbolEqualityComparer.Default);
+    public readonly struct LocalBinding
+    {
+        public readonly string ScalarId;
+        public readonly string[] TupleIds;
+        public bool IsTuple => TupleIds != null;
 
-    /// <summary>Tuple local variable → per-element expanded slots (SROA).</summary>
-    public readonly Dictionary<ILocalSymbol, ReturnSlot[]> TupleLocalExpansion = new(SymbolEqualityComparer.Default);
+        LocalBinding(string scalarId, string[] tupleIds) { ScalarId = scalarId; TupleIds = tupleIds; }
+
+        public static LocalBinding Scalar(string id) => new(id, null);
+        public static LocalBinding Tuple(string[] ids) => new(null, ids);
+    }
+
+    public readonly Dictionary<ILocalSymbol, LocalBinding> LocalBindings = new(SymbolEqualityComparer.Default);
 
     // Field initializers to emit at _start
     public readonly List<(string fieldName, IOperation initOp, ITypeSymbol fieldType)> FieldInitOps = new();
@@ -70,7 +78,14 @@ public class EmitContext
     public readonly Dictionary<string, string> FieldChangeCallbacks = new();
 
     // Enum array lookup: enum type → field name for int→enum runtime conversions
-    public readonly Dictionary<ITypeSymbol, string> EnumArrayVars = new(SymbolEqualityComparer.Default);
+    public readonly struct EnumArrayInfo
+    {
+        public readonly string ArrayId;
+        public readonly long MinOffset;
+        public EnumArrayInfo(string arrayId, long minOffset) { ArrayId = arrayId; MinOffset = minOffset; }
+    }
+
+    public readonly Dictionary<ITypeSymbol, EnumArrayInfo> EnumArrayVars = new(SymbolEqualityComparer.Default);
 
     // Conditional access stack (for ?. operator)
     // Target is the evaluated instance; DelegateFieldName is non-null for delegate ?.Invoke().
@@ -211,6 +226,63 @@ public class EmitContext
         HirModule.Fields.Add(new FieldDecl(id, "SystemObjectArray") { DefaultValue = values });
         _declaredFieldNames.Add(id);
         return id;
+    }
+
+    /// <summary>Get or create a lookup array for int→enum runtime conversions. Cached per enum type.</summary>
+    public EnumArrayInfo GetOrCreateEnumArray(INamedTypeSymbol enumType)
+    {
+        if (EnumArrayVars.TryGetValue(enumType, out var existing))
+            return existing;
+
+        var members = enumType.GetMembers()
+            .OfType<IFieldSymbol>()
+            .Where(f => f.HasConstantValue && f.IsConst)
+            .ToList();
+
+        long minVal = 0, maxVal = 0;
+        bool first = true;
+        foreach (var m in members)
+        {
+            if (m.ConstantValue == null) continue;
+            var val = Convert.ToInt64(m.ConstantValue);
+            if (first) { minVal = val; maxVal = val; first = false; }
+            else { if (val < minVal) minVal = val; if (val > maxVal) maxVal = val; }
+        }
+
+        long range = maxVal - minVal + 1;
+        if (range > 65536)
+            throw new NotSupportedException(
+                $"Cannot cast integer to enum {enumType.Name}: value range {minVal}..{maxVal} ({range}) exceeds 65536 limit");
+
+        int msb = 0;
+        long tmp = range - 1;
+        while (tmp > 0) { tmp >>= 1; msb++; }
+        int arraySize = Math.Max(1 << msb, 1);
+
+        var underlyingType = enumType.EnumUnderlyingType;
+        var clrType = underlyingType?.SpecialType switch
+        {
+            SpecialType.System_Byte => typeof(byte),
+            SpecialType.System_SByte => typeof(sbyte),
+            SpecialType.System_Int16 => typeof(short),
+            SpecialType.System_UInt16 => typeof(ushort),
+            SpecialType.System_Int32 => typeof(int),
+            SpecialType.System_UInt32 => typeof(uint),
+            SpecialType.System_Int64 => typeof(long),
+            SpecialType.System_UInt64 => typeof(ulong),
+            _ => typeof(int),
+        };
+
+        var enumArr = new object[arraySize];
+        for (int i = 0; i < arraySize; i++)
+            enumArr[i] = Convert.ChangeType(i + minVal, clrType);
+
+        var enumFullName = enumType.ToDisplayString().Replace('.', '_');
+        var arrayId = $"__enumArr_{enumFullName}";
+        DeclareEnumArray(arrayId, enumArr);
+        var info = new EnumArrayInfo(arrayId, minVal);
+        EnumArrayVars[enumType] = info;
+        return info;
     }
 
     /// <summary>Declare reflection type IDs array.</summary>

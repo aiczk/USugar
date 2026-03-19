@@ -31,9 +31,9 @@ public partial class InvocationHandler
             // Local variable — value type: pass heap address directly so extern can modify in-place
             else if (op.Instance is ILocalReferenceOperation localRef
                      && localRef.Type.IsValueType
-                     && _localVarIds.TryGetValue(localRef.Local, out var localFieldId))
+                     && _localBindings.TryGetValue(localRef.Local, out var localBind) && !localBind.IsTuple)
             {
-                instanceVal = FieldAddr(localFieldId, GetUdonType(localRef.Type));
+                instanceVal = FieldAddr(localBind.ScalarId, GetUdonType(localRef.Type));
             }
             // Parameter — value type: pass heap address directly so extern can modify in-place
             else if (op.Instance is IParameterReferenceOperation paramRef
@@ -600,7 +600,7 @@ public partial class InvocationHandler
 
     HExpr EmitUserMethodCall(IInvocationOperation op, IMethodSymbol target)
     {
-        var idx = _methodIndices[target];
+        var idx = _methodSlots[target].Index;
         var paramIds = _methodParamVarIds[target];
 
         // Self-recursive call: save current parameter values before overwriting
@@ -675,33 +675,6 @@ public partial class InvocationHandler
     {
         switch (target)
         {
-            case IDeclarationExpressionOperation declExpr:
-                // var x in deconstruction — declares a new local
-                if (declExpr.Expression is ILocalReferenceOperation localRef)
-                {
-                    var udonType = GetUdonType(localRef.Type);
-                    var localId = _ctx.DeclareLocal(localRef.Local.Name, udonType);
-                    _localVarIds[localRef.Local] = localId;
-                    EmitStoreField(localId, value);
-                }
-                break;
-
-            case ILocalReferenceOperation existingLocal:
-                string existingId = _localVarIds.TryGetValue(existingLocal.Local, out var cap) ? cap : null;
-                if (existingId == null)
-                {
-                    // New local from tuple deconstruction (var (a, b) pattern)
-                    var udonType = GetUdonType(existingLocal.Type);
-                    existingId = _ctx.DeclareLocal(existingLocal.Local.Name, udonType);
-                    _localVarIds[existingLocal.Local] = existingId;
-                }
-                EmitStoreField(existingId, value);
-                break;
-
-            case IFieldReferenceOperation fieldRef when fieldRef.Instance is IInstanceReferenceOperation:
-                EmitStoreField(fieldRef.Field.Name, value);
-                break;
-
             case IArrayElementReferenceOperation arrayElem:
                 var arrayVal = VisitExpression(arrayElem.ArrayReference);
                 var indexVal = VisitExpression(arrayElem.Indices[0]);
@@ -714,7 +687,7 @@ public partial class InvocationHandler
 
             case IFieldReferenceOperation fieldRef
                 when fieldRef.Instance != null
-                && !(fieldRef.Instance is IInstanceReferenceOperation)
+                && fieldRef.Instance is not IInstanceReferenceOperation
                 && ExternResolver.IsUdonSharpBehaviour(fieldRef.Field.ContainingType):
                 var instanceVal = VisitExpression(fieldRef.Instance);
                 var nameConst = Const(fieldRef.Field.Name, "SystemString");
@@ -722,12 +695,9 @@ public partial class InvocationHandler
                     new List<HExpr> { instanceVal, nameConst, value });
                 break;
 
-            case IDiscardOperation:
-                break; // _ = expr → discard
-
             default:
-                throw new System.NotSupportedException(
-                    $"Unsupported deconstruction target element: {target.GetType().Name}");
+                AssignToLValue(target, value);
+                break;
         }
     }
 
@@ -743,7 +713,7 @@ public partial class InvocationHandler
         switch (op)
         {
             case ILocalReferenceOperation localRef:
-                return _localVarIds.TryGetValue(localRef.Local, out var id) ? id : null;
+                return _localBindings.TryGetValue(localRef.Local, out var rb) && !rb.IsTuple ? rb.ScalarId : null;
             case IFieldReferenceOperation { Instance: IInstanceReferenceOperation } fieldRef:
                 return fieldRef.Field.Name;
             case IParameterReferenceOperation paramRef:
@@ -753,7 +723,7 @@ public partial class InvocationHandler
                 {
                     var type = GetUdonType(declLocal.Type);
                     var localId = _ctx.DeclareLocal(declLocal.Local.Name, type);
-                    _localVarIds[declLocal.Local] = localId;
+                    _localBindings[declLocal.Local] = EmitContext.LocalBinding.Scalar(localId);
                     return localId;
                 }
                 return null;

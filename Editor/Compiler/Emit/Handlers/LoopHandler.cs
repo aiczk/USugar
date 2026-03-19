@@ -79,7 +79,7 @@ public class LoopHandler : HandlerBase, IOperationHandler
         _builder.EmitFor(
             _ =>
             {
-                // Init: variable declarations register locals in _localVarIds
+                // Init: variable declarations register locals in _localBindings
                 foreach (var init in op.Before)
                     VisitOperation(init);
             },
@@ -132,7 +132,7 @@ public class LoopHandler : HandlerBase, IOperationHandler
         var loopLocal = op.Locals.FirstOrDefault()
             ?? throw new System.InvalidOperationException("foreach has no loop variable");
         var loopVarId = _ctx.DeclareLocal(loopLocal.Name, elemType);
-        _localVarIds[loopLocal] = loopVarId;
+        _localBindings[loopLocal] = EmitContext.LocalBinding.Scalar(loopVarId);
 
         // Index variable
         var idxSlot = _ctx.AllocTemp("SystemInt32");

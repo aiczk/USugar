@@ -172,8 +172,8 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
         // Delegate parameter invocation via JUMP_INDIRECT
         if (op.Instance is IParameterReferenceOperation paramRef2
             && _currentMethod != null
-            && _methodIndices.TryGetValue(_currentMethod, out var currentIdx)
-            && _delegateParamConventions.TryGetValue((currentIdx, paramRef2.Parameter.Ordinal), out var convention))
+            && _methodSlots.TryGetValue(_currentMethod, out var currentSlot)
+            && _delegateParamConventions.TryGetValue((currentSlot.Index, paramRef2.Parameter.Ordinal), out var convention))
         {
             // Collect args as HExprs
             var args = new List<HExpr>();
@@ -248,8 +248,9 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
             EmitStoreField(convArgs[i], argExprs[i]);
 
         // Load bundle fields
-        var target = LoadField($"{fieldName}__target", "VRCUdonCommonInterfacesIUdonEventReceiver");
-        var addr = LoadField($"{fieldName}__addr", "SystemUInt32");
+        var bundle = new DelegateBundle(fieldName);
+        var target = LoadField(bundle.Target, "VRCUdonCommonInterfacesIUdonEventReceiver");
+        var addr = LoadField(bundle.Addr, "SystemUInt32");
         var thisRef = LoadField(_ctx.DeclareThisOnce(GetUdonType(_classSymbol)), GetUdonType(_classSymbol));
 
         // 3. Condition: target == this && addr != 0
@@ -293,7 +294,7 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
                         new List<HExpr> { target, Const(convArgs[i], "SystemString"), LoadField(convArgs[i], argType) });
                 }
                 // SendCustomEvent with dynamic method name
-                var method = LoadField($"{fieldName}__method", "SystemString");
+                var method = LoadField(bundle.Method, "SystemString");
                 EmitExternVoid(
                     "VRCUdonCommonInterfacesIUdonEventReceiver.__SendCustomEvent__SystemString__SystemVoid",
                     new List<HExpr> { target, method });
@@ -319,9 +320,8 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
     {
         if (_methodFunctions.ContainsKey(constructed)) return;
 
-        var idx = _nextMethodIndex++;
-        _methodIndices[constructed] = idx;
-        _methodVarPrefix[constructed] = idx.ToString();
+        var slot = _ctx.RegisterMethod(constructed, i => i.ToString());
+        var idx = slot.Index;
 
         var typeArgPart = string.Join("_", constructed.TypeArguments.Select(ExternResolver.GetUdonTypeName));
         var name = $"__{idx}_{SanitizeId(constructed.Name)}_{typeArgPart}";
@@ -406,9 +406,8 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
         var symbol = lambda.Symbol;
         if (_methodFunctions.ContainsKey(symbol)) return;
 
-        var idx = _nextMethodIndex++;
-        _methodIndices[symbol] = idx;
-        _methodVarPrefix[symbol] = idx.ToString();
+        var slot = _ctx.RegisterMethod(symbol, i => i.ToString());
+        var idx = slot.Index;
         var func = _hirModule.AddFunction($"__{idx}_lambda");
         _methodFunctions[symbol] = func;
 

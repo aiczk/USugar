@@ -69,7 +69,7 @@ public class StatementHandler : HandlerBase, IOperationHandler
                     VisitVariableDeclaration(decl);
                     foreach (var declarator in decl.Declarators)
                     {
-                        var localId = _localVarIds.TryGetValue(declarator.Symbol, out var lid) ? lid : declarator.Symbol.Name;
+                        var localId = _localBindings.TryGetValue(declarator.Symbol, out var ub) && !ub.IsTuple ? ub.ScalarId : declarator.Symbol.Name;
                         var localType = GetUdonType(declarator.Symbol.Type);
                         _usingDisposableStack.Peek().Add((LoadField(localId, localType), declarator.Symbol.Type));
                     }
@@ -158,10 +158,13 @@ public class StatementHandler : HandlerBase, IOperationHandler
                     }
                 }
                 else if (tupleOp is ILocalReferenceOperation localRef
-                         && _tupleLocalExpansion.TryGetValue(localRef.Local, out var expanded))
+                         && _localBindings.TryGetValue(localRef.Local, out var retBinding) && retBinding.IsTuple
+                         && localRef.Type is INamedTypeSymbol retTupleType)
                 {
-                    for (int i = 0; i < expanded.Length && i < retSlots.Length; i++)
-                        EmitStoreField(retSlots[i].Id, LoadField(expanded[i].Id, expanded[i].UdonType));
+                    var expandedIds = retBinding.TupleIds;
+                    var retElements = retTupleType.TupleElements;
+                    for (int i = 0; i < expandedIds.Length && i < retSlots.Length; i++)
+                        EmitStoreField(retSlots[i].Id, LoadField(expandedIds[i], GetUdonType(retElements[i].Type)));
                 }
                 else
                 {
@@ -300,7 +303,7 @@ public class StatementHandler : HandlerBase, IOperationHandler
                 VisitVariableDeclaration(decl);
                 foreach (var declarator in decl.Declarators)
                 {
-                    var localId = _localVarIds.TryGetValue(declarator.Symbol, out var id) ? id : declarator.Symbol.Name;
+                    var localId = _localBindings.TryGetValue(declarator.Symbol, out var ub2) && !ub2.IsTuple ? ub2.ScalarId : declarator.Symbol.Name;
                     var localType = GetUdonType(declarator.Symbol.Type);
                     disposableVars.Add((LoadField(localId, localType), declarator.Symbol.Type));
                 }
@@ -347,7 +350,7 @@ public class StatementHandler : HandlerBase, IOperationHandler
                 ? "SystemUInt32"
                 : GetUdonType(local.Type);
             var id = _ctx.DeclareLocal(local.Name, udonType);
-            _localVarIds[local] = id;
+            _localBindings[local] = EmitContext.LocalBinding.Scalar(id);
 
             var init = declarator.Initializer;
             if (init != null)
@@ -369,8 +372,8 @@ public class StatementHandler : HandlerBase, IOperationHandler
     void VisitTupleLocalDeclaration(ILocalSymbol local, INamedTypeSymbol tupleType,
         IVariableInitializerOperation init)
     {
-        // Register expansion slots for this tuple local
-        if (!_tupleLocalExpansion.ContainsKey(local))
+        // Register per-element field IDs for this tuple local (synthetic field pattern)
+        if (!_localBindings.TryGetValue(local, out var existingTuple) || !existingTuple.IsTuple)
         {
             var elements = tupleType.TupleElements;
 
@@ -383,18 +386,43 @@ public class StatementHandler : HandlerBase, IOperationHandler
                         "Udon VM does not have ValueTuple type support.");
             }
 
-            var slots = new ReturnSlot[elements.Length];
+            var ids = new string[elements.Length];
             for (int i = 0; i < elements.Length; i++)
-            {
-                var udonType = GetUdonType(elements[i].Type);
-                var localId = _ctx.DeclareLocal($"{local.Name}__elem{i}", udonType);
-                slots[i] = new ReturnSlot(localId, udonType);
-            }
-            _tupleLocalExpansion[local] = slots;
+                ids[i] = _ctx.DeclareLocal($"{local.Name}__{i}", GetUdonType(elements[i].Type));
+            _localBindings[local] = EmitContext.LocalBinding.Tuple(ids);
         }
 
         if (init == null) return;
-        StoreTupleValue(init.Value, _tupleLocalExpansion[local]);
+        var ids2 = _localBindings[local].TupleIds;
+        var value = UnwrapConversions(init.Value);
+
+        if (value is ITupleOperation tupleLit)
+        {
+            for (int i = 0; i < tupleLit.Elements.Length && i < ids2.Length; i++)
+                EmitStoreField(ids2[i], VisitExpression(tupleLit.Elements[i]));
+        }
+        else if (value is IInvocationOperation invocation)
+        {
+            var callExpr = VisitExpression(init.Value);
+            if (callExpr != null) EmitExprStmt(callExpr);
+            var callReturns = GetCalleeReturns(invocation.TargetMethod);
+            for (int i = 0; i < ids2.Length && i < callReturns.Length; i++)
+                EmitStoreField(ids2[i], LoadField(callReturns[i].Id, callReturns[i].UdonType));
+        }
+        else if (value is ILocalReferenceOperation otherLocal
+                 && _localBindings.TryGetValue(otherLocal.Local, out var otherBinding) && otherBinding.IsTuple)
+        {
+            var otherIds = otherBinding.TupleIds;
+            var otherType = (INamedTypeSymbol)otherLocal.Type;
+            var otherElements = otherType.TupleElements;
+            for (int i = 0; i < ids2.Length && i < otherIds.Length; i++)
+                EmitStoreField(ids2[i], LoadField(otherIds[i], GetUdonType(otherElements[i].Type)));
+        }
+        else
+        {
+            throw new System.NotSupportedException(
+                $"Cannot initialize tuple local '{local.Name}' from {value.GetType().Name}.");
+        }
     }
 
 }

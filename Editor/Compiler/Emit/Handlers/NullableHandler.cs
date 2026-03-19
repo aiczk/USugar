@@ -36,7 +36,7 @@ public class NullableHandler : HandlerBase, IExpressionHandler
         }
 
         // Detect delegate field conditional access (e.g., _callback?.Invoke(42))
-        // The original field variable doesn't exist — it's been expanded to __target/__method/__addr.
+        // The original field variable doesn't exist — it's been expanded to a DelegateBundle.
         string delegateFieldName = null;
         if (op.Operation is IFieldReferenceOperation fieldRef
             && fieldRef.Field.Type is INamedTypeSymbol dlgType
@@ -50,9 +50,9 @@ public class NullableHandler : HandlerBase, IExpressionHandler
         string targetType;
         if (delegateFieldName != null)
         {
-            // Load __target as the null-check proxy for the delegate bundle
+            // Load Target as the null-check proxy for the delegate bundle
             targetType = "VRCUdonCommonInterfacesIUdonEventReceiver";
-            targetVal = LoadField($"{delegateFieldName}__target", targetType);
+            targetVal = LoadField(new DelegateBundle(delegateFieldName).Target, targetType);
         }
         else
         {
@@ -201,6 +201,15 @@ public class NullableHandler : HandlerBase, IExpressionHandler
                     EmitExternVoid(sig, new List<HExpr> { capturedInstanceVal, rightVal });
                 else
                     EmitExternVoid(sig, new List<HExpr> { rightVal });
+            }
+            else if (op.Target is ILocalReferenceOperation localTarget
+                     && _localBindings.TryGetValue(localTarget.Local, out var lb) && !lb.IsTuple)
+            {
+                EmitStoreField(lb.ScalarId, rightVal);
+            }
+            else if (op.Target is IFieldReferenceOperation { Instance: IInstanceReferenceOperation } fieldTarget)
+            {
+                EmitStoreField(fieldTarget.Field.Name, rightVal);
             }
         });
 

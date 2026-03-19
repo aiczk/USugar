@@ -54,7 +54,7 @@ public class AssignmentHandler : HandlerBase, IOperationHandler, IExpressionHand
             for (int i = 0; i < targetTuple.Elements.Length; i++)
             {
                 var valueVal = VisitExpression(valueTuple.Elements[i]);
-                AssignToTarget(targetTuple.Elements[i], valueVal);
+                AssignToLValue(targetTuple.Elements[i], valueVal);
             }
         }
         else
@@ -99,7 +99,7 @@ public class AssignmentHandler : HandlerBase, IOperationHandler, IExpressionHand
                 for (int i = 0; i < targetTuple.Elements.Length && i < callReturns.Length; i++)
                 {
                     var elemVal = LoadField(callReturns[i].Id, callReturns[i].UdonType);
-                    AssignToTarget(targetTuple.Elements[i], elemVal);
+                    AssignToLValue(targetTuple.Elements[i], elemVal);
                 }
             }
         }
@@ -167,50 +167,7 @@ public class AssignmentHandler : HandlerBase, IOperationHandler, IExpressionHand
                 "VRCUdonCommonInterfacesIUdonEventReceiver.__GetProgramVariable__SystemString__SystemObject",
                 new List<HExpr> { instanceVal, retNameConst },
                 callReturns[i].UdonType);
-            AssignToTarget(targetTuple.Elements[i], elemVal);
-        }
-    }
-
-    void AssignToTarget(IOperation target, HExpr valueVal)
-    {
-        switch (target)
-        {
-            case IDeclarationExpressionOperation declExpr:
-                // var x in deconstruction — declares a new local
-                if (declExpr.Expression is ILocalReferenceOperation localRef)
-                {
-                    var udonType = GetUdonType(localRef.Type);
-                    var localId = _ctx.DeclareLocal(localRef.Local.Name, udonType);
-                    _localVarIds[localRef.Local] = localId;
-                    EmitStoreField(localId, valueVal);
-                }
-                break;
-
-            case ILocalReferenceOperation existingLocal:
-                if (!_localVarIds.TryGetValue(existingLocal.Local, out var existingId))
-                {
-                    // New local from tuple deconstruction (var (a, b) pattern)
-                    var udonType = GetUdonType(existingLocal.Type);
-                    existingId = _ctx.DeclareLocal(existingLocal.Local.Name, udonType);
-                    _localVarIds[existingLocal.Local] = existingId;
-                }
-                EmitStoreField(existingId, valueVal);
-                break;
-
-            case IFieldReferenceOperation { Instance: IInstanceReferenceOperation } fieldRef:
-                EmitStoreField(fieldRef.Field.Name, valueVal);
-                break;
-
-            case IParameterReferenceOperation paramRef:
-                EmitStoreField(GetParamVarId(paramRef.Parameter), valueVal);
-                break;
-
-            case IDiscardOperation:
-                break; // _ = expr → discard
-
-            default:
-                throw new System.NotSupportedException(
-                    $"Unsupported deconstruction target element: {target.GetType().Name}");
+            AssignToLValue(targetTuple.Elements[i], elemVal);
         }
     }
 
@@ -218,15 +175,42 @@ public class AssignmentHandler : HandlerBase, IOperationHandler, IExpressionHand
 
     HExpr VisitAssignment(ISimpleAssignmentOperation assign)
     {
-        // Tuple local SROA: reassignment to an expanded tuple variable
+        // Tuple local reassignment: store into per-element synthetic fields
         if (assign.Target is ILocalReferenceOperation targetLocal
             && targetLocal.Type.IsTupleType
-            && _tupleLocalExpansion.TryGetValue(targetLocal.Local, out var expansion))
+            && _localBindings.TryGetValue(targetLocal.Local, out var targetBinding) && targetBinding.IsTuple)
         {
-            StoreTupleValue(assign.Value, expansion);
-            // Return first element as expression value. Whole-value use of the tuple local
-            // is blocked by ExpressionHandler's guard, so this is only reached in void context.
-            return LoadField(expansion[0].Id, expansion[0].UdonType);
+            var ids = targetBinding.TupleIds;
+            var value = UnwrapConversions(assign.Value);
+            var tupleType = (INamedTypeSymbol)targetLocal.Type;
+            var elements = tupleType.TupleElements;
+
+            if (value is ITupleOperation tupleLit)
+            {
+                for (int i = 0; i < tupleLit.Elements.Length && i < ids.Length; i++)
+                    EmitStoreField(ids[i], VisitExpression(tupleLit.Elements[i]));
+            }
+            else if (value is IInvocationOperation invocation)
+            {
+                var callExpr = VisitExpression(assign.Value);
+                if (callExpr != null) EmitExprStmt(callExpr);
+                var callReturns = GetCalleeReturns(invocation.TargetMethod);
+                for (int i = 0; i < ids.Length && i < callReturns.Length; i++)
+                    EmitStoreField(ids[i], LoadField(callReturns[i].Id, callReturns[i].UdonType));
+            }
+            else if (value is ILocalReferenceOperation otherLocal
+                     && _localBindings.TryGetValue(otherLocal.Local, out var otherBinding) && otherBinding.IsTuple)
+            {
+                var otherIds = otherBinding.TupleIds;
+                for (int i = 0; i < ids.Length && i < otherIds.Length; i++)
+                    EmitStoreField(ids[i], LoadField(otherIds[i], GetUdonType(elements[i].Type)));
+            }
+            else
+            {
+                throw new System.NotSupportedException(
+                    $"Cannot assign {value.GetType().Name} to tuple local '{targetLocal.Local.Name}'.");
+            }
+            return LoadField(ids[0], GetUdonType(elements[0].Type));
         }
 
         if (assign.Target is IArrayElementReferenceOperation arrayElem)
@@ -249,13 +233,26 @@ public class AssignmentHandler : HandlerBase, IOperationHandler, IExpressionHand
         {
             var fieldName = selfDlg.Field.Name;
 
+            var bundle = new DelegateBundle(fieldName);
+
             // null assignment
             if (assign.Value.ConstantValue is { HasValue: true, Value: null })
             {
-                EmitStoreField($"{fieldName}__target", Const(null, "SystemObject"));
-                EmitStoreField($"{fieldName}__method", Const(null, "SystemString"));
-                EmitStoreField($"{fieldName}__addr", Const(0u, "SystemUInt32"));
+                EmitStoreField(bundle.Target, Const(null, "SystemObject"));
+                EmitStoreField(bundle.Method, Const(null, "SystemString"));
+                EmitStoreField(bundle.Addr, Const(0u, "SystemUInt32"));
                 return Const(null, "SystemObject");
+            }
+
+            // delegate field copy: _a = _b
+            if (assign.Value is IFieldReferenceOperation { Instance: IInstanceReferenceOperation } rhsDlg
+                && _delegateFields.Contains(rhsDlg.Field.Name))
+            {
+                var srcBundle = new DelegateBundle(rhsDlg.Field.Name);
+                EmitStoreField(bundle.Target, LoadField(srcBundle.Target, "VRCUdonCommonInterfacesIUdonEventReceiver"));
+                EmitStoreField(bundle.Method, LoadField(srcBundle.Method, "SystemString"));
+                EmitStoreField(bundle.Addr, LoadField(srcBundle.Addr, "SystemUInt32"));
+                return LoadField(bundle.Target, "VRCUdonCommonInterfacesIUdonEventReceiver");
             }
 
             IDelegateCreationOperation dc = assign.Value as IDelegateCreationOperation;
@@ -274,9 +271,9 @@ public class AssignmentHandler : HandlerBase, IOperationHandler, IExpressionHand
                         Message = $"Capturing lambda assigned to delegate field '{fieldName}'. " +
                             "Captured variables are shared — reassignment overwrites previous captures." });
 
-                EmitStoreField($"{fieldName}__target", target);
-                EmitStoreField($"{fieldName}__method", Const(bridgeName, "SystemString"));
-                EmitStoreField($"{fieldName}__addr", addr);
+                EmitStoreField(bundle.Target, target);
+                EmitStoreField(bundle.Method, Const(bridgeName, "SystemString"));
+                EmitStoreField(bundle.Addr, addr);
                 return target;
             }
 
@@ -294,13 +291,14 @@ public class AssignmentHandler : HandlerBase, IOperationHandler, IExpressionHand
 
                 var instanceVal = VisitExpression(ubTarget.Instance);
                 var fn = ubTarget.Field.Name;
+                var bundle2 = new DelegateBundle(fn);
 
                 // null assignment
                 if (assign.Value.ConstantValue is { HasValue: true, Value: null })
                 {
-                    foreach (var (suffix, val) in new[] { ("__target", (HExpr)Const(null, "SystemObject")), ("__method", Const(null, "SystemString")), ("__addr", Const(0u, "SystemUInt32")) })
+                    foreach (var (field, val) in new[] { (bundle2.Target, (HExpr)Const(null, "SystemObject")), (bundle2.Method, Const(null, "SystemString")), (bundle2.Addr, Const(0u, "SystemUInt32")) })
                         EmitExternVoid("VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid",
-                            new List<HExpr> { instanceVal, Const($"{fn}{suffix}", "SystemString"), val });
+                            new List<HExpr> { instanceVal, Const(field, "SystemString"), val });
                     return Const(null, "SystemObject");
                 }
 
@@ -315,11 +313,11 @@ public class AssignmentHandler : HandlerBase, IOperationHandler, IExpressionHand
                     var delegateTarget = thirdParty ?? thisRef;
 
                     EmitExternVoid("VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid",
-                        new List<HExpr> { instanceVal, Const($"{fn}__target", "SystemString"), delegateTarget });
+                        new List<HExpr> { instanceVal, Const(bundle2.Target, "SystemString"), delegateTarget });
                     EmitExternVoid("VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid",
-                        new List<HExpr> { instanceVal, Const($"{fn}__method", "SystemString"), Const(bridgeName, "SystemString") });
+                        new List<HExpr> { instanceVal, Const(bundle2.Method, "SystemString"), Const(bridgeName, "SystemString") });
                     EmitExternVoid("VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid",
-                        new List<HExpr> { instanceVal, Const($"{fn}__addr", "SystemString"), Const(0u, "SystemUInt32") });
+                        new List<HExpr> { instanceVal, Const(bundle2.Addr, "SystemString"), Const(0u, "SystemUInt32") });
                     return delegateTarget;
                 }
 
@@ -476,8 +474,8 @@ public class AssignmentHandler : HandlerBase, IOperationHandler, IExpressionHand
         switch (target)
         {
             case ILocalReferenceOperation localRef:
-                if (_localVarIds.TryGetValue(localRef.Local, out var localId))
-                    return localId;
+                if (_localBindings.TryGetValue(localRef.Local, out var lb) && !lb.IsTuple)
+                    return lb.ScalarId;
                 throw new System.InvalidOperationException(
                     $"Cannot resolve local variable '{localRef.Local.Name}' for assignment.");
             case IFieldReferenceOperation { Instance: IInstanceReferenceOperation } fieldRef:

@@ -24,12 +24,12 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
     public HExpr Handle(IOperation expression) => expression switch
     {
         ILiteralOperation op => VisitLiteral(op),
-        ILocalReferenceOperation localRef => _tupleLocalExpansion.ContainsKey(localRef.Local)
-                                                 ? throw new NotSupportedException(
-                                                     $"Tuple local variable '{localRef.Local.Name}' cannot be used as a whole value. " +
-                                                     "Access individual elements (.Item1, .Item2) or use deconstruction.")
-                                                 : _localVarIds.TryGetValue(localRef.Local, out var capturedId)
-                                                 ? LoadField(capturedId, GetUdonType(localRef.Type))
+        ILocalReferenceOperation localRef => _localBindings.TryGetValue(localRef.Local, out var localBinding)
+                                                 ? localBinding.IsTuple
+                                                     ? throw new NotSupportedException(
+                                                         $"Tuple local variable '{localRef.Local.Name}' cannot be used as a whole value. " +
+                                                         "Access individual elements (.Item1, .Item2) or use deconstruction.")
+                                                     : LoadField(localBinding.ScalarId, GetUdonType(localRef.Type))
                                                  : throw new InvalidOperationException($"Cannot resolve local variable '{localRef.Local.Name}' in method '{_currentMethod?.Name ?? "(none)"}'."),
         IFieldReferenceOperation op => VisitFieldReference(op),
         IParameterReferenceOperation paramRef => LoadParam(paramRef.Parameter),
@@ -99,7 +99,7 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
                 fldType);
         }
         // Delegate field read as value is not supported — the original field has been expanded
-        // to a __target/__method/__addr bundle. Only invocation, null-check, ?.Invoke(), and
+        // to a DelegateBundle (Target/Method/Addr). Only invocation, null-check, ?.Invoke(), and
         // comparison are supported (handled by their respective handlers before reaching here).
         if (fieldRef.Instance is IInstanceReferenceOperation
             && fieldRef.Field.Type is INamedTypeSymbol dlgType
@@ -113,8 +113,9 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
 
         // Tuple local element access: result.Item1 → expanded variable
         if (fieldRef.Instance is ILocalReferenceOperation localRef2
-            && _tupleLocalExpansion.TryGetValue(localRef2.Local, out var tupleSlots))
+            && _localBindings.TryGetValue(localRef2.Local, out var tupleBinding) && tupleBinding.IsTuple)
         {
+            var tupleIds = tupleBinding.TupleIds;
             var tupleType = localRef2.Type as INamedTypeSymbol;
             int elemIndex = -1;
             if (tupleType?.IsTupleType == true)
@@ -133,8 +134,11 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
                     }
                 }
             }
-            if (elemIndex >= 0 && elemIndex < tupleSlots.Length)
-                return LoadField(tupleSlots[elemIndex].Id, tupleSlots[elemIndex].UdonType);
+            if (elemIndex >= 0 && elemIndex < tupleIds.Length)
+            {
+                var elemType = GetUdonType(tupleType.TupleElements[elemIndex].Type);
+                return LoadField(tupleIds[elemIndex], elemType);
+            }
 
             throw new System.NotSupportedException(
                 $"Cannot access '{fieldRef.Field.Name}' on tuple local '{localRef2.Local.Name}'.");
@@ -247,10 +251,14 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
             // Runtime int→enum: use object[] array lookup to preserve type tags
             if (conv.Type.TypeKind == TypeKind.Enum && conv.Type is INamedTypeSymbol enumTarget)
             {
-                var arrId = GetOrCreateEnumArray(enumTarget);
+                var info = _ctx.GetOrCreateEnumArray(enumTarget);
+                var indexVal = info.MinOffset == 0
+                    ? srcVal
+                    : ExternCall("SystemInt32.__op_Subtraction__SystemInt32_SystemInt32__SystemInt32",
+                        new List<HExpr> { srcVal, Const((int)info.MinOffset, "SystemInt32") }, "SystemInt32");
                 return ExternCall(
                     "SystemObjectArray.__Get__SystemInt32__SystemObject",
-                    new List<HExpr> { LoadField(arrId, "SystemObjectArray"), srcVal },
+                    new List<HExpr> { LoadField(info.ArrayId, "SystemObjectArray"), indexVal },
                     "SystemObject");
             }
 
@@ -300,7 +308,7 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
 
         var udonType = GetUdonType(localRef2.Type);
         var localId = _ctx.DeclareLocal(localRef2.Local.Name, udonType);
-        _localVarIds[localRef2.Local] = localId;
+        _localBindings[localRef2.Local] = EmitContext.LocalBinding.Scalar(localId);
         return LoadField(localId, udonType);
     }
 

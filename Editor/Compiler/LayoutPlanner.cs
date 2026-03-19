@@ -4,7 +4,12 @@ using System.Linq;
 using Microsoft.CodeAnalysis;
 
 /// <summary>A single return value slot: UASM variable ID + Udon type name.</summary>
-public record ReturnSlot(string Id, string UdonType);
+public sealed class ReturnSlot
+{
+    public readonly string Id;
+    public readonly string UdonType;
+    public ReturnSlot(string id, string udonType) { Id = id; UdonType = udonType; }
+}
 
 /// <summary>Immutable layout for a single method's UASM naming.</summary>
 public class MethodLayout

@@ -20,12 +20,10 @@ public class UasmEmitter
     HirBuilder _builder => _ctx.Builder;
     LayoutPlanner _planner => _ctx.Planner;
     Dictionary<IMethodSymbol, HFunction> _methodFunctions => _ctx.MethodFunctions;
-    Dictionary<IMethodSymbol, int> _methodIndices => _ctx.MethodIndices;
-    Dictionary<IMethodSymbol, string> _methodVarPrefix => _ctx.MethodVarPrefix;
+    Dictionary<IMethodSymbol, EmitContext.MethodSlot> _methodSlots => _ctx.MethodSlots;
     Dictionary<IMethodSymbol, ReturnSlot[]> _methodReturns => _ctx.MethodReturns;
     Dictionary<IMethodSymbol, string[]> _methodParamVarIds => _ctx.MethodParamVarIds;
     IMethodSymbol _currentMethod { get => _ctx.CurrentMethod; set => _ctx.CurrentMethod = value; }
-    int _nextMethodIndex { get => _ctx.NextMethodIndex; set => _ctx.NextMethodIndex = value; }
     List<(IMethodSymbol symbol, HFunction func)> _pendingLocalFunctions => _ctx.PendingLocalFunctions;
     List<IMethodSymbol> _pendingGenericSpecs => _ctx.PendingGenericSpecs;
     Dictionary<ITypeParameterSymbol, ITypeSymbol> _typeParamMap { get => _ctx.TypeParamMap; set => _ctx.TypeParamMap = value; }
@@ -248,9 +246,10 @@ public class UasmEmitter
                 if (delegateType.DelegateInvokeMethod.ReturnType.IsTupleType)
                     throw new NotSupportedException($"Tuple-return delegate field '{member.Name}' is not supported.");
 
-                _ctx.DeclareField($"{member.Name}__target", "VRCUdonCommonInterfacesIUdonEventReceiver", flags);
-                _ctx.DeclareField($"{member.Name}__method", "SystemString");
-                _ctx.DeclareField($"{member.Name}__addr", "SystemUInt32");
+                var bundle = new DelegateBundle(member.Name);
+                _ctx.DeclareField(bundle.Target, "VRCUdonCommonInterfacesIUdonEventReceiver", flags);
+                _ctx.DeclareField(bundle.Method, "SystemString");
+                _ctx.DeclareField(bundle.Addr, "SystemUInt32");
                 _ctx.DelegateFields.Add(member.Name);
 
                 // Declare convention fields for this delegate signature
@@ -365,9 +364,10 @@ public class UasmEmitter
                     if (baseDelegateType.DelegateInvokeMethod.ReturnType.IsTupleType)
                         throw new NotSupportedException($"Tuple-return delegate field '{member.Name}' is not supported.");
 
-                    _ctx.DeclareField($"{member.Name}__target", "VRCUdonCommonInterfacesIUdonEventReceiver", baseFlags);
-                    _ctx.DeclareField($"{member.Name}__method", "SystemString");
-                    _ctx.DeclareField($"{member.Name}__addr", "SystemUInt32");
+                    var bundle = new DelegateBundle(member.Name);
+                    _ctx.DeclareField(bundle.Target, "VRCUdonCommonInterfacesIUdonEventReceiver", baseFlags);
+                    _ctx.DeclareField(bundle.Method, "SystemString");
+                    _ctx.DeclareField(bundle.Addr, "SystemUInt32");
                     _ctx.DelegateFields.Add(member.Name);
 
                     // Declare convention fields for this delegate signature
@@ -477,17 +477,15 @@ public class UasmEmitter
         var typeLayout = _planner.GetLayout(_classSymbol);
 
         // First pass: create IrFunctions, assign params, return vars (skip generic definitions)
-        _nextMethodIndex = 0;
+        _ctx.NextMethodIndex = 0;
         foreach (var method in methods)
         {
             if (method.IsGenericMethod) continue;
 
-            var idx = _nextMethodIndex++;
-            _methodIndices[method] = idx;
-
             var ml = typeLayout.Methods[method];
             var exportName = ml.ExportName;
-            _methodVarPrefix[method] = exportName;
+            var slot = _ctx.RegisterMethod(method, _ => exportName);
+            var idx = slot.Index;
 
             // Determine if this method should be exported
             bool isOwnOrInherited = SymbolEqualityComparer.Default.Equals(method.ContainingType, _classSymbol)
@@ -551,9 +549,8 @@ public class UasmEmitter
         var foreignStatics = CollectForeignStaticMethods(methods);
         foreach (var fm in foreignStatics)
         {
-            var idx = _nextMethodIndex++;
-            _methodIndices[fm] = idx;
-            _methodVarPrefix[fm] = idx.ToString();
+            var slot = _ctx.RegisterMethod(fm, i => i.ToString());
+            var idx = slot.Index;
             var funcName = $"__{idx}_{SanitizeId(fm.Name)}";
             var func = _hirModule.AddFunction(funcName);
             _methodFunctions[fm] = func;
@@ -588,9 +585,8 @@ public class UasmEmitter
             .ToArray();
         foreach (var bm in baseInstanceMethods)
         {
-            var idx = _nextMethodIndex++;
-            _methodIndices[bm] = idx;
-            _methodVarPrefix[bm] = idx.ToString();
+            var slot = _ctx.RegisterMethod(bm, i => i.ToString());
+            var idx = slot.Index;
             var funcName = $"__{idx}_{SanitizeId(bm.Name)}";
             var func = _hirModule.AddFunction(funcName);
             _methodFunctions[bm] = func;
@@ -910,7 +906,7 @@ public class UasmEmitter
     {
         _currentMethod = method;
         var func = _methodFunctions[method];
-        var idx = _methodIndices[method];
+        var idx = _methodSlots[method].Index;
 
         bool isGenericSpec = method.IsGenericMethod && !method.IsDefinition;
 
@@ -950,7 +946,7 @@ public class UasmEmitter
         _builder.SetFunction(func);
 
         // Emit field initializers at the start of _start
-        var exportName = _methodVarPrefix[method];
+        var exportName = _methodSlots[method].VarPrefix;
         if (exportName == "_start")
             EmitFieldInitializers();
 

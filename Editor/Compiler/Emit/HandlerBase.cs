@@ -18,23 +18,19 @@ public abstract class HandlerBase
     protected HirBuilder _builder => _ctx.Builder;
     protected LayoutPlanner _planner => _ctx.Planner;
     protected Dictionary<IMethodSymbol, HFunction> _methodFunctions => _ctx.MethodFunctions;
-    protected Dictionary<IMethodSymbol, int> _methodIndices => _ctx.MethodIndices;
-    protected Dictionary<IMethodSymbol, string> _methodVarPrefix => _ctx.MethodVarPrefix;
+    protected Dictionary<IMethodSymbol, EmitContext.MethodSlot> _methodSlots => _ctx.MethodSlots;
     protected Dictionary<IMethodSymbol, ReturnSlot[]> _methodReturns => _ctx.MethodReturns;
     protected Dictionary<IMethodSymbol, string[]> _methodParamVarIds => _ctx.MethodParamVarIds;
     protected IMethodSymbol _currentMethod { get => _ctx.CurrentMethod; set => _ctx.CurrentMethod = value; }
-    protected int _nextMethodIndex { get => _ctx.NextMethodIndex; set => _ctx.NextMethodIndex = value; }
     protected List<(IMethodSymbol symbol, HFunction func)> _pendingLocalFunctions => _ctx.PendingLocalFunctions;
     protected Dictionary<ILocalSymbol, IMethodSymbol> _delegateVarMap => _ctx.DelegateVarMap;
     protected List<IMethodSymbol> _pendingGenericSpecs => _ctx.PendingGenericSpecs;
     protected Dictionary<ITypeParameterSymbol, ITypeSymbol> _typeParamMap { get => _ctx.TypeParamMap; set => _ctx.TypeParamMap = value; }
     protected Dictionary<(int methodIdx, int paramOrdinal), DelegateConvention> _delegateParamConventions => _ctx.DelegateParamConventions;
     protected Dictionary<IMethodSymbol, DelegateConvention> _lambdaConventionOverrides => _ctx.LambdaConventionOverrides;
-    protected Dictionary<ILocalSymbol, string> _localVarIds => _ctx.LocalVarIds;
-    protected Dictionary<ILocalSymbol, ReturnSlot[]> _tupleLocalExpansion => _ctx.TupleLocalExpansion;
+    protected Dictionary<ILocalSymbol, EmitContext.LocalBinding> _localBindings => _ctx.LocalBindings;
     protected List<(string fieldName, IOperation initOp, ITypeSymbol fieldType)> _fieldInitOps => _ctx.FieldInitOps;
     protected Dictionary<string, string> _fieldChangeCallbacks => _ctx.FieldChangeCallbacks;
-    protected Dictionary<ITypeSymbol, string> _enumArrayVars => _ctx.EnumArrayVars;
     protected Stack<(HExpr Target, string DelegateFieldName)> _conditionalAccessStack => _ctx.ConditionalAccessStack;
     protected Stack<List<(HExpr val, ITypeSymbol type)>> _usingDisposableStack => _ctx.UsingDisposableStack;
     protected HashSet<string> _delegateFields => _ctx.DelegateFields;
@@ -193,59 +189,60 @@ public abstract class HandlerBase
             underlyingUdon);
     }
 
-    protected string GetOrCreateEnumArray(INamedTypeSymbol enumType)
+
+    // ── L-Value Assignment ──
+
+    /// <summary>
+    /// Assign a value to a common l-value target (declaration, local, this-field, parameter, discard).
+    /// Callers with specialized targets (array elements, cross-behaviour fields) should handle those
+    /// first, then delegate to this method for the common cases.
+    /// </summary>
+    protected void AssignToLValue(IOperation target, HExpr value)
     {
-        if (_enumArrayVars.TryGetValue(enumType, out var existing))
-            return existing;
-
-        var members = enumType.GetMembers()
-            .OfType<IFieldSymbol>()
-            .Where(f => f.HasConstantValue && f.IsConst)
-            .ToList();
-
-        long maxVal = 0;
-        foreach (var m in members)
+        switch (target)
         {
-            if (m.ConstantValue == null) continue;
-            var val = Convert.ToInt64(m.ConstantValue);
-            if (val < 0)
-                throw new NotSupportedException(
-                    $"Cannot cast integer to enum {enumType.Name}: negative value {val} is not supported");
-            if (val > maxVal) maxVal = val;
+            case IDeclarationExpressionOperation declExpr:
+                if (declExpr.Expression is ILocalReferenceOperation localRef)
+                {
+                    var udonType = GetUdonType(localRef.Type);
+                    var localId = _ctx.DeclareLocal(localRef.Local.Name, udonType);
+                    _localBindings[localRef.Local] = EmitContext.LocalBinding.Scalar(localId);
+                    EmitStoreField(localId, value);
+                }
+                break;
+
+            case ILocalReferenceOperation existingLocal:
+                if (_localBindings.TryGetValue(existingLocal.Local, out var existingBinding))
+                {
+                    if (existingBinding.IsTuple)
+                        throw new NotSupportedException(
+                            $"Cannot assign to tuple local '{existingLocal.Local.Name}' as a whole value.");
+                    EmitStoreField(existingBinding.ScalarId, value);
+                }
+                else
+                {
+                    var udonType = GetUdonType(existingLocal.Type);
+                    var newId = _ctx.DeclareLocal(existingLocal.Local.Name, udonType);
+                    _localBindings[existingLocal.Local] = EmitContext.LocalBinding.Scalar(newId);
+                    EmitStoreField(newId, value);
+                }
+                break;
+
+            case IFieldReferenceOperation { Instance: IInstanceReferenceOperation } fieldRef:
+                EmitStoreField(fieldRef.Field.Name, value);
+                break;
+
+            case IParameterReferenceOperation paramRef:
+                EmitStoreField(GetParamVarId(paramRef.Parameter), value);
+                break;
+
+            case IDiscardOperation:
+                break;
+
+            default:
+                throw new System.NotSupportedException(
+                    $"Unsupported l-value target: {target.GetType().Name}");
         }
-
-        if (maxVal > 2048)
-            throw new NotSupportedException(
-                $"Cannot cast integer to enum {enumType.Name}: max value {maxVal} exceeds 2048 limit");
-
-        int msb = 0;
-        long tmp = maxVal;
-        while (tmp > 0) { tmp >>= 1; msb++; }
-        int arraySize = Math.Max(1 << msb, 1);
-
-        var underlyingType = enumType.EnumUnderlyingType;
-        var clrType = underlyingType?.SpecialType switch
-        {
-            SpecialType.System_Byte => typeof(byte),
-            SpecialType.System_SByte => typeof(sbyte),
-            SpecialType.System_Int16 => typeof(short),
-            SpecialType.System_UInt16 => typeof(ushort),
-            SpecialType.System_Int32 => typeof(int),
-            SpecialType.System_UInt32 => typeof(uint),
-            SpecialType.System_Int64 => typeof(long),
-            SpecialType.System_UInt64 => typeof(ulong),
-            _ => typeof(int),
-        };
-
-        var enumArr = new object[arraySize];
-        for (int i = 0; i < arraySize; i++)
-            enumArr[i] = Convert.ChangeType(i, clrType);
-
-        var enumFullName = enumType.ToDisplayString().Replace('.', '_');
-        var arrayId = $"__enumArr_{enumFullName}";
-        _ctx.DeclareEnumArray(arrayId, enumArr);
-        _enumArrayVars[enumType] = arrayId;
-        return arrayId;
     }
 
     // ── Lambda / Local Function Helpers ──
@@ -253,11 +250,10 @@ public abstract class HandlerBase
     protected void RegisterLocalFunction(IMethodSymbol localFunc)
     {
         if (_methodFunctions.ContainsKey(localFunc)) return;
-        var idx = _nextMethodIndex++;
-        _methodIndices[localFunc] = idx;
         var funcName = string.IsNullOrEmpty(localFunc.Name) ? "lambda" : localFunc.Name;
-        var irName = $"__{idx}_{funcName}";
-        _methodVarPrefix[localFunc] = irName;
+        var slot = _ctx.RegisterMethod(localFunc, i => $"__{i}_{funcName}");
+        var idx = slot.Index;
+        var irName = slot.VarPrefix;
 
         // Create HFunction (internal, no export)
         var func = _hirModule.AddFunction(irName);
@@ -293,7 +289,7 @@ public abstract class HandlerBase
     /// Hoist a lambda expression to an internal method.
     ///
     /// KNOWN LIMITATION: Captured locals are mapped to module-level fields via
-    /// <see cref="EmitContext.LocalVarIds"/>. All lambdas share the same field for a
+    /// <see cref="EmitContext.LocalBindings"/>. All lambdas share the same field for a
     /// given local, so nested lambdas (lambda inside lambda) that capture the same
     /// variable will alias. This is correct for sequential execution but not for
     /// concurrent delegate storage with different capture values (e.g., loop-variable
@@ -385,9 +381,9 @@ public abstract class HandlerBase
         string bridgeExportName;
         if (targetMethod.MethodKind == MethodKind.LambdaMethod || targetMethod.MethodKind == MethodKind.LocalFunction)
         {
-            if (!_methodVarPrefix.TryGetValue(targetMethod, out var irName))
+            if (!_methodSlots.TryGetValue(targetMethod, out var targetSlot))
                 throw new System.InvalidOperationException($"Lambda/local function '{targetMethod.Name}' not registered.");
-            bridgeExportName = $"__dlg_{irName}";
+            bridgeExportName = $"__dlg_{targetSlot.VarPrefix}";
             // Snapshot current type parameter map — bridge emission happens after generic method
             // emit completes and TypeParamMap is cleared, so we must capture resolved types now.
             var typeParamSnapshot = _ctx.TypeParamMap != null
@@ -411,7 +407,7 @@ public abstract class HandlerBase
     {
         if (_methodParamVarIds.TryGetValue(target, out var localParamIds))
         {
-            var exportName = _methodVarPrefix[target];
+            var exportName = _methodSlots[target].VarPrefix;
             string retId = null;
             if (_methodReturns.TryGetValue(target, out var rets) && rets.Length == 1)
                 retId = rets[0].Id;
@@ -430,39 +426,6 @@ public abstract class HandlerBase
         return ml.Returns.ToArray();
     }
 
-    /// <summary>
-    /// Store a tuple value (literal or method return) into the given expansion slots.
-    /// Shared by StatementHandler (declaration) and AssignmentHandler (reassignment).
-    /// </summary>
-    protected void StoreTupleValue(IOperation value, ReturnSlot[] expansion)
-    {
-        var unwrapped = UnwrapConversions(value);
-
-        if (unwrapped is ITupleOperation tupleLit)
-        {
-            for (int i = 0; i < tupleLit.Elements.Length && i < expansion.Length; i++)
-                EmitStoreField(expansion[i].Id, VisitExpression(tupleLit.Elements[i]));
-        }
-        else if (unwrapped is IInvocationOperation invocation)
-        {
-            var callExpr = VisitExpression(value);
-            if (callExpr != null) EmitExprStmt(callExpr);
-            var callReturns = GetCalleeReturns(invocation.TargetMethod);
-            for (int i = 0; i < expansion.Length && i < callReturns.Length; i++)
-                EmitStoreField(expansion[i].Id, LoadField(callReturns[i].Id, callReturns[i].UdonType));
-        }
-        else if (unwrapped is ILocalReferenceOperation otherLocal
-                 && _tupleLocalExpansion.TryGetValue(otherLocal.Local, out var otherExpansion))
-        {
-            for (int i = 0; i < expansion.Length && i < otherExpansion.Length; i++)
-                EmitStoreField(expansion[i].Id, LoadField(otherExpansion[i].Id, otherExpansion[i].UdonType));
-        }
-        else
-        {
-            throw new System.NotSupportedException(
-                $"Cannot assign {unwrapped.GetType().Name} to tuple local variable.");
-        }
-    }
 
     /// <summary>
     /// Call an internal function via HirBuilder.InternalCall.
