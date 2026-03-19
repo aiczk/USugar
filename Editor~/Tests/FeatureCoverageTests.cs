@@ -1556,9 +1556,10 @@ public class TupleDlg : UdonSharpBehaviour {
     // ── Tuple local SROA edge cases ──
 
     [Fact]
-    public void TupleLocal_WholeValueUse_ThrowsNotSupported()
+    public void TupleLocal_WholeValueUse_CompilesSuccessfully()
     {
-        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
+        // Whole-value tuple use is now supported with object[] representation
+        var uasm = TestHelper.CompileToUasm(@"
 using UdonSharp;
 [UdonBehaviourSyncMode(BehaviourSyncMode.None)]
 public class TupleWholeTest : UdonSharpBehaviour {
@@ -1568,8 +1569,9 @@ public class TupleWholeTest : UdonSharpBehaviour {
         var t = GetPair();
         Foo(t);
     }
-}"));
-        Assert.Contains("cannot be used as a whole value", ex.Message);
+}");
+        Assert.Contains("SystemObjectArray", uasm);
+        Assert.DoesNotContain("ValueTuple", uasm);
     }
 
     [Fact]
@@ -1596,9 +1598,10 @@ public class TupleDst2 : UdonSharpBehaviour {
     }
 
     [Fact]
-    public void TupleLocal_NestedTuple_ThrowsNotSupported()
+    public void TupleLocal_NestedTuple_CompilesSuccessfully()
     {
-        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
+        // Nested tuples now work with object[] representation
+        var uasm = TestHelper.CompileToUasm(@"
 using UdonSharp;
 [UdonBehaviourSyncMode(BehaviourSyncMode.None)]
 public class NestedTupleTest : UdonSharpBehaviour {
@@ -1606,8 +1609,62 @@ public class NestedTupleTest : UdonSharpBehaviour {
     void Start() {
         var t = GetNested();
     }
-}"));
-        // Guard fires in LayoutPlanner (method return type scan) or StatementHandler (local decl)
-        Assert.Contains("Nested tuple", ex.Message);
+}");
+        Assert.Contains("SystemObjectArray", uasm);
+        Assert.DoesNotContain("ValueTuple", uasm);
+    }
+
+    // ── object[] aggregate emulation: feature smoke tests ──
+
+    [Fact]
+    public void TupleLocal_PassThroughMethod_Compiles()
+    {
+        // Tuple constructed, returned from method, and deconstructed at call site
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+[UdonBehaviourSyncMode(BehaviourSyncMode.None)]
+public class TuplePassTest : UdonSharpBehaviour {
+    int _v;
+    (int, string) Identity() { return (1, ""a""); }
+    void Start() {
+        var (x, y) = Identity();
+        _v = x;
+    }
+}");
+        Assert.Contains("SystemObjectArray", uasm);
+        Assert.DoesNotContain("ValueTuple", uasm);
+    }
+
+    [Fact]
+    public void TupleLocal_ReturnFromExpression_Compiles()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+[UdonBehaviourSyncMode(BehaviourSyncMode.None)]
+public class TupleExprRetTest : UdonSharpBehaviour {
+    (int, string) Get() { return (1, ""a""); }
+    void Start() { var t = Get(); var x = t.Item1; }
+}");
+        Assert.Contains("SystemObjectArray", uasm);
+        Assert.DoesNotContain("ValueTuple", uasm);
+    }
+
+    [Fact]
+    public void Struct_ObjectInitializerAndFieldAccess_Compiles()
+    {
+        // Verify struct with object initializer and field read compiles via object[]
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+using UnityEngine;
+[UdonBehaviourSyncMode(BehaviourSyncMode.None)]
+public class StructDeclTest : UdonSharpBehaviour {
+    float _v;
+    void Start() {
+        var c = new Color { r = 0.5f, g = 1.0f };
+        _v = c.r + c.g;
+    }
+}");
+        Assert.Contains("SystemObjectArray", uasm);
+        Assert.Contains("op_Addition", uasm);
     }
 }

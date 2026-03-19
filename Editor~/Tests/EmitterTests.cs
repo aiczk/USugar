@@ -836,7 +836,10 @@ public class DefTest : UdonSharpBehaviour {
     void Start() { var v = new Vector3(); }
 }
 ");
-        Assert.DoesNotContain("__ctor__", uasm);
+        // Struct is now object[], so SystemObjectArray.__ctor__ is expected
+        Assert.Contains("SystemObjectArray.__ctor__", uasm);
+        // No Vector3-specific parameterless ctor extern
+        Assert.DoesNotContain("UnityEngineVector3.__ctor__", uasm);
     }
 
     [Fact]
@@ -2028,7 +2031,8 @@ public class SfaTest : UdonSharpBehaviour {
     }
 }
 ");
-        Assert.Contains("__get_x__", uasm);
+        // Struct field access via object[] indexing, not __get_x__ extern
+        Assert.Contains("SystemObjectArray.__Get__SystemInt32__SystemObject", uasm);
         Assert.DoesNotContain("PUSH, x\n", uasm);
     }
 
@@ -4002,7 +4006,10 @@ public class ObjInitDefaultTest : UdonSharpBehaviour
     }
 }
 ");
-        Assert.DoesNotContain("__ctor__", uasm);
+        // Struct is now object[], so SystemObjectArray.__ctor__ is present
+        Assert.Contains("SystemObjectArray.__ctor__", uasm);
+        // No Color-specific ctor
+        Assert.DoesNotContain("UnityEngineColor.__ctor__", uasm);
         Assert.Contains("__set_r", uasm);
     }
 
@@ -5270,9 +5277,10 @@ public class TupleReturnTest : UdonSharpBehaviour {
         _b = b;
     }
 }");
-        // Should contain return field references for tuple elements
-        Assert.Contains("__ret_0", uasm);
-        Assert.Contains("__ret_1", uasm);
+        // Single SystemObjectArray return slot for tuple
+        Assert.Contains("__0_GetPair__ret", uasm);
+        Assert.Contains("SystemObjectArray", uasm);
+        Assert.Contains("SystemObjectArray.__Get__SystemInt32__SystemObject", uasm);
         Assert.DoesNotContain("ValueTuple", uasm);
     }
 
@@ -5296,10 +5304,10 @@ public class TupleCaller : UdonSharpBehaviour {
     }
 }";
         var uasm = TestHelper.CompileToUasm(source, "TupleCaller");
-        // Cross-behaviour tuple should use GetProgramVariable for each element
-        var getPVCount = System.Text.RegularExpressions.Regex.Matches(uasm, "GetProgramVariable").Count;
-        Assert.True(getPVCount >= 2, $"Expected at least 2 GetProgramVariable calls, got {getPVCount}");
+        // Cross-behaviour tuple: single GetProgramVariable for SystemObjectArray return, then __Get__ indexing
+        Assert.Contains("GetProgramVariable", uasm);
         Assert.Contains("SendCustomEvent", uasm);
+        Assert.Contains("SystemObjectArray.__Get__SystemInt32__SystemObject", uasm);
     }
 
     // ── Tuple Local SROA Tests ──
@@ -5319,8 +5327,9 @@ public class TupleLocalTest : UdonSharpBehaviour {
         _y = result.Item2;
     }
 }");
-        Assert.Contains("__ret_0", uasm);
-        Assert.Contains("__ret_1", uasm);
+        // Single SystemObjectArray return slot; element access via __Get__
+        Assert.Contains("__0_GetPair__ret", uasm);
+        Assert.Contains("SystemObjectArray.__Get__SystemInt32__SystemObject", uasm);
         Assert.DoesNotContain("ValueTuple", uasm);
     }
 
@@ -5353,8 +5362,9 @@ public class TupleRetLocal : UdonSharpBehaviour {
     }
     void Start() { var (a, b) = GetPair(); }
 }");
-        Assert.Contains("__ret_0", uasm);
-        Assert.Contains("__ret_1", uasm);
+        // Single SystemObjectArray return slot; deconstruction via __Get__
+        Assert.Contains("__0_GetPair__ret", uasm);
+        Assert.Contains("SystemObjectArray.__Get__SystemInt32__SystemObject", uasm);
         Assert.DoesNotContain("ValueTuple", uasm);
     }
 
@@ -5392,6 +5402,119 @@ public class TupleReassignTest : UdonSharpBehaviour {
     }
 }");
         Assert.DoesNotContain("ValueTuple", uasm);
+    }
+
+    // ── object[] aggregate emulation ──
+
+    [Fact]
+    public void TupleLocal_WholeValueCopy_EmitsClone()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+[UdonBehaviourSyncMode(BehaviourSyncMode.None)]
+public class TupleCopyTest : UdonSharpBehaviour {
+    int _v;
+    void Start() {
+        var a = (1, 2);
+        var b = a;
+        _v = b.Item1;
+    }
+}");
+        Assert.Contains("SystemObjectArray.__Clone__SystemObject", uasm);
+        Assert.DoesNotContain("ValueTuple", uasm);
+    }
+
+    [Fact]
+    public void TupleLocal_NestedTuple_Compiles()
+    {
+        // Nested tuple construction and return via method; verifies object[] nesting
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+[UdonBehaviourSyncMode(BehaviourSyncMode.None)]
+public class NestedTupleEmitTest : UdonSharpBehaviour {
+    ((int, int), string) MakeNested() { return ((1, 2), ""hello""); }
+    void Start() {
+        var t = MakeNested();
+    }
+}");
+        // Outer tuple and inner tuple both use SystemObjectArray
+        Assert.Contains("SystemObjectArray", uasm);
+        // Construction requires __ctor__ and __Set__ for both levels
+        Assert.Contains("SystemObjectArray.__ctor__", uasm);
+        Assert.Contains("SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid", uasm);
+        Assert.DoesNotContain("ValueTuple", uasm);
+    }
+
+    [Fact]
+    public void TupleLocal_ObjectArrayCtor_EmitsCtorAndSet()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+[UdonBehaviourSyncMode(BehaviourSyncMode.None)]
+public class TupleCtorTest : UdonSharpBehaviour {
+    int _v;
+    void Start() {
+        var t = (42, ""hi"");
+        _v = t.Item1;
+    }
+}");
+        Assert.Contains("SystemObjectArray.__ctor__", uasm);
+        Assert.Contains("SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid", uasm);
+        Assert.DoesNotContain("ValueTuple", uasm);
+    }
+
+    [Fact]
+    public void AggregateReturn_SingleSlot_EmitsSystemObjectArray()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+[UdonBehaviourSyncMode(BehaviourSyncMode.None)]
+public class AggRetTest : UdonSharpBehaviour {
+    (int, string) GetPair() { return (1, ""a""); }
+    void Start() { var (x, y) = GetPair(); }
+}");
+        // Single return slot typed as SystemObjectArray
+        Assert.Contains("__0_GetPair__ret", uasm);
+        Assert.Contains("SystemObjectArray", uasm);
+        // Should not have multiple per-element return slots
+        Assert.DoesNotContain("__1_GetPair__ret", uasm);
+    }
+
+    [Fact]
+    public void Struct_FieldAccess_EmitsObjectArrayGet()
+    {
+        // Struct field read via local goes through object[] __Get__
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+using UnityEngine;
+[UdonBehaviourSyncMode(BehaviourSyncMode.None)]
+public class StructAccessTest : UdonSharpBehaviour {
+    float _v;
+    void Start() {
+        var v = new Vector3();
+        _v = v.x;
+    }
+}");
+        Assert.Contains("SystemObjectArray.__Get__SystemInt32__SystemObject", uasm);
+        Assert.Contains("SystemObjectArray.__ctor__", uasm);
+    }
+
+    [Fact]
+    public void Struct_DefaultValue_EmitsObjectArrayCtor()
+    {
+        // Default struct value creates an object[] via __ctor__
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+using UnityEngine;
+[UdonBehaviourSyncMode(BehaviourSyncMode.None)]
+public class StructDefaultTest : UdonSharpBehaviour {
+    float _v;
+    void Start() {
+        Vector3 v = default;
+        _v = v.x;
+    }
+}");
+        Assert.Contains("SystemObjectArray.__ctor__", uasm);
     }
 
 }

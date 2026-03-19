@@ -237,7 +237,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
                 {
                     var localType = GetUdonType(local.Type);
                     var localId = _ctx.DeclareLocal(local.Name, localType);
-                    _localBindings[local] = EmitContext.LocalBinding.Scalar(localId);
+                    _localBindings[local] = new EmitContext.LocalBinding(localId);
                     // Only assign when type check succeeds — avoid invalid type COPY on mismatch
                     _builder.EmitIf(checkVal, b =>
                     {

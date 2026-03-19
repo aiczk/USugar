@@ -81,7 +81,7 @@ public class AssignmentHandler : HandlerBase, IOperationHandler, IExpressionHand
             }
             else
             {
-                // Same-class call: invoke method, then read from per-element return fields
+                // Same-class call: invoke method, then read from return slot
                 var callExpr = VisitExpression(op.Value);
                 if (callExpr != null)
                     EmitExprStmt(callExpr);
@@ -89,17 +89,32 @@ public class AssignmentHandler : HandlerBase, IOperationHandler, IExpressionHand
                 ReturnSlot[] callReturns = null;
                 if (_methodReturns.TryGetValue(callTarget, out var localReturns))
                     callReturns = localReturns;
-                else if (callTarget.ReturnType.IsTupleType)
+                else if (callTarget.ReturnType.IsTupleType || EmitContext.IsAggregateType(callTarget.ReturnType))
                     callReturns = GetCalleeReturns(callTarget);
 
                 if (callReturns == null || callReturns.Length == 0)
                     throw new System.NotSupportedException(
                         $"Cannot deconstruct return of '{callTarget.Name}': no return layout found.");
 
-                for (int i = 0; i < targetTuple.Elements.Length && i < callReturns.Length; i++)
+                // Single SystemObjectArray return slot: load the array, then index into it
+                if (callReturns.Length == 1 && callReturns[0].UdonType == "SystemObjectArray")
                 {
-                    var elemVal = LoadField(callReturns[i].Id, callReturns[i].UdonType);
-                    AssignToLValue(targetTuple.Elements[i], elemVal);
+                    var arrExpr = LoadField(callReturns[0].Id, "SystemObjectArray");
+                    for (int i = 0; i < targetTuple.Elements.Length; i++)
+                    {
+                        var elemVal = ExternCall("SystemObjectArray.__Get__SystemInt32__SystemObject",
+                            new List<HExpr> { arrExpr, Const(i, "SystemInt32") }, "SystemObject");
+                        AssignToLValue(targetTuple.Elements[i], elemVal);
+                    }
+                }
+                else
+                {
+                    // Legacy per-element return slots (non-aggregate types)
+                    for (int i = 0; i < targetTuple.Elements.Length && i < callReturns.Length; i++)
+                    {
+                        var elemVal = LoadField(callReturns[i].Id, callReturns[i].UdonType);
+                        AssignToLValue(targetTuple.Elements[i], elemVal);
+                    }
                 }
             }
         }
@@ -159,15 +174,34 @@ public class AssignmentHandler : HandlerBase, IOperationHandler, IExpressionHand
             "VRCUdonCommonInterfacesIUdonEventReceiver.__SendCustomEvent__SystemString__SystemVoid",
             new List<HExpr> { instanceVal, eventConst });
 
-        // GetProgramVariable for each tuple element and assign to target
-        for (int i = 0; i < targetTuple.Elements.Length && i < callReturns.Length; i++)
+        // GetProgramVariable for return value and deconstruct
+        if (callReturns.Length == 1 && callReturns[0].UdonType == "SystemObjectArray")
         {
-            var retNameConst = Const(callReturns[i].Id, "SystemString");
-            var elemVal = ExternCall(
+            // Single SystemObjectArray return: get the array, then index into it
+            var retNameConst = Const(callReturns[0].Id, "SystemString");
+            var arrVal = ExternCall(
                 "VRCUdonCommonInterfacesIUdonEventReceiver.__GetProgramVariable__SystemString__SystemObject",
                 new List<HExpr> { instanceVal, retNameConst },
-                callReturns[i].UdonType);
-            AssignToLValue(targetTuple.Elements[i], elemVal);
+                "SystemObjectArray");
+            for (int i = 0; i < targetTuple.Elements.Length; i++)
+            {
+                var elemVal = ExternCall("SystemObjectArray.__Get__SystemInt32__SystemObject",
+                    new List<HExpr> { arrVal, Const(i, "SystemInt32") }, "SystemObject");
+                AssignToLValue(targetTuple.Elements[i], elemVal);
+            }
+        }
+        else
+        {
+            // Legacy per-element return slots
+            for (int i = 0; i < targetTuple.Elements.Length && i < callReturns.Length; i++)
+            {
+                var retNameConst = Const(callReturns[i].Id, "SystemString");
+                var elemVal = ExternCall(
+                    "VRCUdonCommonInterfacesIUdonEventReceiver.__GetProgramVariable__SystemString__SystemObject",
+                    new List<HExpr> { instanceVal, retNameConst },
+                    callReturns[i].UdonType);
+                AssignToLValue(targetTuple.Elements[i], elemVal);
+            }
         }
     }
 
@@ -175,42 +209,22 @@ public class AssignmentHandler : HandlerBase, IOperationHandler, IExpressionHand
 
     HExpr VisitAssignment(ISimpleAssignmentOperation assign)
     {
-        // Tuple local reassignment: store into per-element synthetic fields
-        if (assign.Target is ILocalReferenceOperation targetLocal
-            && targetLocal.Type.IsTupleType
-            && _localBindings.TryGetValue(targetLocal.Local, out var targetBinding) && targetBinding.IsTuple)
+        // Aggregate field write: point.x = 5, result.Item1 = 42, pair.Item1 = 10
+        // Triggered by the containing type being aggregate, regardless of instance kind
+        if (assign.Target is IFieldReferenceOperation aggFieldRef
+            && aggFieldRef.Instance != null
+            && aggFieldRef.Instance.Type is INamedTypeSymbol aggContaining
+            && EmitContext.IsAggregateType(aggContaining))
         {
-            var ids = targetBinding.TupleIds;
-            var value = UnwrapConversions(assign.Value);
-            var tupleType = (INamedTypeSymbol)targetLocal.Type;
-            var elements = tupleType.TupleElements;
-
-            if (value is ITupleOperation tupleLit)
+            var layout = _ctx.GetAggregateLayout(aggContaining);
+            if (layout.TryGetIndex(aggFieldRef.Field, out var fieldIndex))
             {
-                for (int i = 0; i < tupleLit.Elements.Length && i < ids.Length; i++)
-                    EmitStoreField(ids[i], VisitExpression(tupleLit.Elements[i]));
+                var srcVal = VisitExpression(assign.Value);
+                var arrExpr = VisitExpression(aggFieldRef.Instance);
+                EmitExternVoid("SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid",
+                    new List<HExpr> { arrExpr, Const(fieldIndex, "SystemInt32"), srcVal });
+                return srcVal;
             }
-            else if (value is IInvocationOperation invocation)
-            {
-                var callExpr = VisitExpression(assign.Value);
-                if (callExpr != null) EmitExprStmt(callExpr);
-                var callReturns = GetCalleeReturns(invocation.TargetMethod);
-                for (int i = 0; i < ids.Length && i < callReturns.Length; i++)
-                    EmitStoreField(ids[i], LoadField(callReturns[i].Id, callReturns[i].UdonType));
-            }
-            else if (value is ILocalReferenceOperation otherLocal
-                     && _localBindings.TryGetValue(otherLocal.Local, out var otherBinding) && otherBinding.IsTuple)
-            {
-                var otherIds = otherBinding.TupleIds;
-                for (int i = 0; i < ids.Length && i < otherIds.Length; i++)
-                    EmitStoreField(ids[i], LoadField(otherIds[i], GetUdonType(elements[i].Type)));
-            }
-            else
-            {
-                throw new System.NotSupportedException(
-                    $"Cannot assign {value.GetType().Name} to tuple local '{targetLocal.Local.Name}'.");
-            }
-            return LoadField(ids[0], GetUdonType(elements[0].Type));
         }
 
         if (assign.Target is IArrayElementReferenceOperation arrayElem)
@@ -474,8 +488,8 @@ public class AssignmentHandler : HandlerBase, IOperationHandler, IExpressionHand
         switch (target)
         {
             case ILocalReferenceOperation localRef:
-                if (_localBindings.TryGetValue(localRef.Local, out var lb) && !lb.IsTuple)
-                    return lb.ScalarId;
+                if (_localBindings.TryGetValue(localRef.Local, out var lb))
+                    return lb.Id;
                 throw new System.InvalidOperationException(
                     $"Cannot resolve local variable '{localRef.Local.Name}' for assignment.");
             case IFieldReferenceOperation { Instance: IInstanceReferenceOperation } fieldRef:

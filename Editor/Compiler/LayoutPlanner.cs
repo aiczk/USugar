@@ -601,30 +601,14 @@ public class LayoutPlanner
         var returns = new List<ReturnSlot>();
         if (method.ReturnsVoid) return returns;
 
-        if (method.ReturnType.IsTupleType && method.ReturnType is INamedTypeSymbol tupleType)
-        {
-            var elements = tupleType.TupleElements;
-            // Nested tuples are not supported: Udon VM has no ValueTuple type
-            for (int ei = 0; ei < elements.Length; ei++)
-            {
-                if (elements[ei].Type.IsTupleType)
-                    throw new NotSupportedException(
-                        $"Nested tuple return type in method '{method.Name}' is not supported. " +
-                        "Udon VM does not have ValueTuple type support.");
-            }
-            for (int ei = 0; ei < elements.Length; ei++)
-            {
-                var retKey = $"{exportName}__ret_{ei}";
-                var id = NameAllocator.FormatId(retKey, alloc.Allocate(retKey));
-                returns.Add(new ReturnSlot(id, ExternResolver.GetUdonTypeName(elements[ei].Type)));
-            }
-        }
+        var retKey = exportName + "__ret";
+        var id = NameAllocator.FormatId(retKey, alloc.Allocate(retKey));
+
+        if (EmitContext.IsAggregateType(method.ReturnType))
+            returns.Add(new ReturnSlot(id, "SystemObjectArray"));
         else
-        {
-            var retKey = exportName + "__ret";
-            var id = NameAllocator.FormatId(retKey, alloc.Allocate(retKey));
             returns.Add(new ReturnSlot(id, ExternResolver.GetUdonTypeName(method.ReturnType)));
-        }
+
         return returns;
     }
 

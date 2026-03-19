@@ -4,6 +4,76 @@ using System.Linq;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.Operations;
 
+public class AggregateLayout
+{
+    public readonly struct FieldInfo
+    {
+        public readonly string Name;
+        public readonly int Index;
+        public readonly ITypeSymbol Type;
+        public FieldInfo(string name, int index, ITypeSymbol type)
+        { Name = name; Index = index; Type = type; }
+    }
+
+    public readonly IReadOnlyList<FieldInfo> Fields;
+    readonly Dictionary<string, int> _nameToIndex;
+
+    public int Count => Fields.Count;
+
+    public bool TryGetIndex(string fieldName, out int index)
+        => _nameToIndex.TryGetValue(fieldName, out index);
+
+    public bool TryGetIndex(IFieldSymbol field, out int index)
+    {
+        if (_nameToIndex.TryGetValue(field.Name, out index)) return true;
+        if (field.CorrespondingTupleField != null
+            && _nameToIndex.TryGetValue(field.CorrespondingTupleField.Name, out index)) return true;
+        // Reverse: check if any layout field's CorrespondingTupleField matches
+        return false;
+    }
+
+    AggregateLayout(IReadOnlyList<FieldInfo> fields, Dictionary<string, int> nameToIndex)
+    { Fields = fields; _nameToIndex = nameToIndex; }
+
+    public static AggregateLayout Build(INamedTypeSymbol type)
+    {
+        var fields = new List<FieldInfo>();
+        var nameToIndex = new Dictionary<string, int>();
+
+        if (type.IsTupleType)
+        {
+            var elements = type.TupleElements;
+            for (int i = 0; i < elements.Length; i++)
+            {
+                var name = elements[i].Name;
+                fields.Add(new FieldInfo(name, i, elements[i].Type));
+                nameToIndex[name] = i;
+                var itemName = $"Item{i + 1}";
+                if (name != itemName) nameToIndex[itemName] = i;
+                // Also map CorrespondingTupleField name if different
+                if (elements[i].CorrespondingTupleField != null)
+                {
+                    var corrName = elements[i].CorrespondingTupleField.Name;
+                    if (!nameToIndex.ContainsKey(corrName)) nameToIndex[corrName] = i;
+                }
+            }
+        }
+        else
+        {
+            int idx = 0;
+            foreach (var member in type.GetMembers().OfType<IFieldSymbol>())
+            {
+                if (member.IsStatic || member.IsImplicitlyDeclared) continue;
+                fields.Add(new FieldInfo(member.Name, idx, member.Type));
+                nameToIndex[member.Name] = idx;
+                idx++;
+            }
+        }
+
+        return new AggregateLayout(fields.AsReadOnly(), nameToIndex);
+    }
+}
+
 public class EmitContext
 {
     // Core dependencies
@@ -59,17 +129,34 @@ public class EmitContext
     // a closure-object emulation layer.
     public readonly struct LocalBinding
     {
-        public readonly string ScalarId;
-        public readonly string[] TupleIds;
-        public bool IsTuple => TupleIds != null;
-
-        LocalBinding(string scalarId, string[] tupleIds) { ScalarId = scalarId; TupleIds = tupleIds; }
-
-        public static LocalBinding Scalar(string id) => new(id, null);
-        public static LocalBinding Tuple(string[] ids) => new(null, ids);
+        public readonly string Id;
+        public LocalBinding(string id) { Id = id; }
     }
 
     public readonly Dictionary<ILocalSymbol, LocalBinding> LocalBindings = new(SymbolEqualityComparer.Default);
+
+    // Aggregate type support
+    public static bool IsAggregateType(ITypeSymbol type)
+    {
+        if (type == null) return false;
+        if (type.IsTupleType) return true;
+        if (type.TypeKind == TypeKind.Struct
+            && type is INamedTypeSymbol named
+            && named.DeclaringSyntaxReferences.Length > 0
+            && named.SpecialType == SpecialType.None)
+            return true;
+        return false;
+    }
+
+    readonly Dictionary<ITypeSymbol, AggregateLayout> _aggregateLayoutCache = new(SymbolEqualityComparer.Default);
+
+    public AggregateLayout GetAggregateLayout(INamedTypeSymbol type)
+    {
+        if (_aggregateLayoutCache.TryGetValue(type, out var cached)) return cached;
+        var layout = AggregateLayout.Build(type);
+        _aggregateLayoutCache[type] = layout;
+        return layout;
+    }
 
     // Field initializers to emit at _start
     public readonly List<(string fieldName, IOperation initOp, ITypeSymbol fieldType)> FieldInitOps = new();

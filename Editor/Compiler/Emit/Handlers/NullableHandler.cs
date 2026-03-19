@@ -203,9 +203,9 @@ public class NullableHandler : HandlerBase, IExpressionHandler
                     EmitExternVoid(sig, new List<HExpr> { rightVal });
             }
             else if (op.Target is ILocalReferenceOperation localTarget
-                     && _localBindings.TryGetValue(localTarget.Local, out var lb) && !lb.IsTuple)
+                     && _localBindings.TryGetValue(localTarget.Local, out var lb))
             {
-                EmitStoreField(lb.ScalarId, rightVal);
+                EmitStoreField(lb.Id, rightVal);
             }
             else if (op.Target is IFieldReferenceOperation { Instance: IInstanceReferenceOperation } fieldTarget)
             {

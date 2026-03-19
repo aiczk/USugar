@@ -101,6 +101,10 @@ public static class ExternResolver
             && type.ContainingNamespace?.ToDisplayString() is not ("System" or "System.Collections" or "System.Collections.Generic"))
             return "VRCUdonCommonInterfacesIUdonEventReceiver";
 
+        // Aggregate types (tuples, user-defined structs) → SystemObjectArray (object[] emulation)
+        if (EmitContext.IsAggregateType(type))
+            return "SystemObjectArray";
+
         // User-defined enums → underlying type (Udon has no type registration for user enums).
         // SDK enums (no syntax references) are registered in Udon's type system and keep their name.
         if (type.TypeKind == TypeKind.Enum && type is INamedTypeSymbol enumType

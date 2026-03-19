@@ -206,7 +206,7 @@ public abstract class HandlerBase
                 {
                     var udonType = GetUdonType(localRef.Type);
                     var localId = _ctx.DeclareLocal(localRef.Local.Name, udonType);
-                    _localBindings[localRef.Local] = EmitContext.LocalBinding.Scalar(localId);
+                    _localBindings[localRef.Local] = new EmitContext.LocalBinding(localId);
                     EmitStoreField(localId, value);
                 }
                 break;
@@ -214,16 +214,13 @@ public abstract class HandlerBase
             case ILocalReferenceOperation existingLocal:
                 if (_localBindings.TryGetValue(existingLocal.Local, out var existingBinding))
                 {
-                    if (existingBinding.IsTuple)
-                        throw new NotSupportedException(
-                            $"Cannot assign to tuple local '{existingLocal.Local.Name}' as a whole value.");
-                    EmitStoreField(existingBinding.ScalarId, value);
+                    EmitStoreField(existingBinding.Id, value);
                 }
                 else
                 {
                     var udonType = GetUdonType(existingLocal.Type);
                     var newId = _ctx.DeclareLocal(existingLocal.Local.Name, udonType);
-                    _localBindings[existingLocal.Local] = EmitContext.LocalBinding.Scalar(newId);
+                    _localBindings[existingLocal.Local] = new EmitContext.LocalBinding(newId);
                     EmitStoreField(newId, value);
                 }
                 break;

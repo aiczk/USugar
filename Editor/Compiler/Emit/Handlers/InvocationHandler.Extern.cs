@@ -31,9 +31,9 @@ public partial class InvocationHandler
             // Local variable — value type: pass heap address directly so extern can modify in-place
             else if (op.Instance is ILocalReferenceOperation localRef
                      && localRef.Type.IsValueType
-                     && _localBindings.TryGetValue(localRef.Local, out var localBind) && !localBind.IsTuple)
+                     && _localBindings.TryGetValue(localRef.Local, out var localBind))
             {
-                instanceVal = FieldAddr(localBind.ScalarId, GetUdonType(localRef.Type));
+                instanceVal = FieldAddr(localBind.Id, GetUdonType(localRef.Type));
             }
             // Parameter — value type: pass heap address directly so extern can modify in-place
             else if (op.Instance is IParameterReferenceOperation paramRef
@@ -713,7 +713,7 @@ public partial class InvocationHandler
         switch (op)
         {
             case ILocalReferenceOperation localRef:
-                return _localBindings.TryGetValue(localRef.Local, out var rb) && !rb.IsTuple ? rb.ScalarId : null;
+                return _localBindings.TryGetValue(localRef.Local, out var rb) ? rb.Id : null;
             case IFieldReferenceOperation { Instance: IInstanceReferenceOperation } fieldRef:
                 return fieldRef.Field.Name;
             case IParameterReferenceOperation paramRef:
@@ -723,7 +723,7 @@ public partial class InvocationHandler
                 {
                     var type = GetUdonType(declLocal.Type);
                     var localId = _ctx.DeclareLocal(declLocal.Local.Name, type);
-                    _localBindings[declLocal.Local] = EmitContext.LocalBinding.Scalar(localId);
+                    _localBindings[declLocal.Local] = new EmitContext.LocalBinding(localId);
                     return localId;
                 }
                 return null;

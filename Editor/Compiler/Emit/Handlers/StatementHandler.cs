@@ -69,7 +69,7 @@ public class StatementHandler : HandlerBase, IOperationHandler
                     VisitVariableDeclaration(decl);
                     foreach (var declarator in decl.Declarators)
                     {
-                        var localId = _localBindings.TryGetValue(declarator.Symbol, out var ub) && !ub.IsTuple ? ub.ScalarId : declarator.Symbol.Name;
+                        var localId = _localBindings.TryGetValue(declarator.Symbol, out var ub) ? ub.Id : declarator.Symbol.Name;
                         var localType = GetUdonType(declarator.Symbol.Type);
                         _usingDisposableStack.Peek().Add((LoadField(localId, localType), declarator.Symbol.Type));
                     }
@@ -145,47 +145,15 @@ public class StatementHandler : HandlerBase, IOperationHandler
         if (op.ReturnedValue != null && _currentMethod != null
             && _methodReturns.TryGetValue(_currentMethod, out var retSlots) && retSlots.Length > 0)
         {
-            if (retSlots.Length > 1)
+            // All returns are single-value (aggregates are SystemObjectArray)
+            var srcVal = VisitExpression(op.ReturnedValue);
+            if (_currentMethod.Name == "OnOwnershipRequest")
             {
-                // Multi-return (tuple): store each element in its return slot
-                var tupleOp = UnwrapConversions(op.ReturnedValue);
-                if (tupleOp is ITupleOperation tuple)
-                {
-                    for (int i = 0; i < tuple.Elements.Length && i < retSlots.Length; i++)
-                    {
-                        var elemVal = VisitExpression(tuple.Elements[i]);
-                        EmitStoreField(retSlots[i].Id, elemVal);
-                    }
-                }
-                else if (tupleOp is ILocalReferenceOperation localRef
-                         && _localBindings.TryGetValue(localRef.Local, out var retBinding) && retBinding.IsTuple
-                         && localRef.Type is INamedTypeSymbol retTupleType)
-                {
-                    var expandedIds = retBinding.TupleIds;
-                    var retElements = retTupleType.TupleElements;
-                    for (int i = 0; i < expandedIds.Length && i < retSlots.Length; i++)
-                        EmitStoreField(retSlots[i].Id, LoadField(expandedIds[i], GetUdonType(retElements[i].Type)));
-                }
-                else
-                {
-                    throw new System.NotSupportedException(
-                        $"Tuple-returning method must return a tuple literal or tuple local, got {op.ReturnedValue.GetType().Name}");
-                }
-                EmitPendingDispose();
-                EmitReturn();
+                _ctx.TryDeclareVar("__returnValue", "SystemBoolean");
+                EmitStoreField("__returnValue", srcVal);
             }
-            else
-            {
-                // Single return
-                var srcVal = VisitExpression(op.ReturnedValue);
-                if (_currentMethod.Name == "OnOwnershipRequest")
-                {
-                    _ctx.TryDeclareVar("__returnValue", "SystemBoolean");
-                    EmitStoreField("__returnValue", srcVal);
-                }
-                EmitPendingDispose();
-                EmitReturn(srcVal);
-            }
+            EmitPendingDispose();
+            EmitReturn(srcVal);
             return;
         }
         else
@@ -303,7 +271,7 @@ public class StatementHandler : HandlerBase, IOperationHandler
                 VisitVariableDeclaration(decl);
                 foreach (var declarator in decl.Declarators)
                 {
-                    var localId = _localBindings.TryGetValue(declarator.Symbol, out var ub2) && !ub2.IsTuple ? ub2.ScalarId : declarator.Symbol.Name;
+                    var localId = _localBindings.TryGetValue(declarator.Symbol, out var ub2) ? ub2.Id : declarator.Symbol.Name;
                     var localType = GetUdonType(declarator.Symbol.Type);
                     disposableVars.Add((LoadField(localId, localType), declarator.Symbol.Type));
                 }
@@ -338,10 +306,10 @@ public class StatementHandler : HandlerBase, IOperationHandler
         {
             var local = declarator.Symbol;
 
-            // Tuple-typed local → SROA: expand into per-element scalar variables
-            if (local.Type.IsTupleType && local.Type is INamedTypeSymbol tupleType)
+            // Aggregate-typed local (tuple / user-defined struct) → object[] emulation
+            if (local.Type is INamedTypeSymbol namedType && EmitContext.IsAggregateType(namedType))
             {
-                VisitTupleLocalDeclaration(local, tupleType, declarator.Initializer);
+                VisitAggregateLocalDeclaration(local, namedType, declarator.Initializer);
                 continue;
             }
 
@@ -350,7 +318,7 @@ public class StatementHandler : HandlerBase, IOperationHandler
                 ? "SystemUInt32"
                 : GetUdonType(local.Type);
             var id = _ctx.DeclareLocal(local.Name, udonType);
-            _localBindings[local] = EmitContext.LocalBinding.Scalar(id);
+            _localBindings[local] = new EmitContext.LocalBinding(id);
 
             var init = declarator.Initializer;
             if (init != null)
@@ -369,59 +337,89 @@ public class StatementHandler : HandlerBase, IOperationHandler
         }
     }
 
-    void VisitTupleLocalDeclaration(ILocalSymbol local, INamedTypeSymbol tupleType,
+    void VisitAggregateLocalDeclaration(ILocalSymbol local, INamedTypeSymbol aggregateType,
         IVariableInitializerOperation init)
     {
-        // Register per-element field IDs for this tuple local (synthetic field pattern)
-        if (!_localBindings.TryGetValue(local, out var existingTuple) || !existingTuple.IsTuple)
+        var layout = _ctx.GetAggregateLayout(aggregateType);
+
+        // Declare as SystemObjectArray
+        if (!_localBindings.ContainsKey(local))
         {
-            var elements = tupleType.TupleElements;
+            var id = _ctx.DeclareLocal(local.Name, "SystemObjectArray");
+            _localBindings[local] = new EmitContext.LocalBinding(id);
 
-            // Check for nested tuples (not supported - Udon VM has no ValueTuple)
-            for (int i = 0; i < elements.Length; i++)
-            {
-                if (elements[i].Type.IsTupleType)
-                    throw new System.NotSupportedException(
-                        $"Nested tuple type in local variable '{local.Name}' is not supported. " +
-                        "Udon VM does not have ValueTuple type support.");
-            }
-
-            var ids = new string[elements.Length];
-            for (int i = 0; i < elements.Length; i++)
-                ids[i] = _ctx.DeclareLocal($"{local.Name}__{i}", GetUdonType(elements[i].Type));
-            _localBindings[local] = EmitContext.LocalBinding.Tuple(ids);
+            // Create object[] of correct size
+            var arrExpr = ExternCall("SystemObjectArray.__ctor__SystemInt32__SystemObjectArray",
+                new List<HExpr> { Const(layout.Count, "SystemInt32") }, "SystemObjectArray");
+            EmitStoreField(id, arrExpr);
         }
 
         if (init == null) return;
-        var ids2 = _localBindings[local].TupleIds;
+        var localId = _localBindings[local].Id;
         var value = UnwrapConversions(init.Value);
 
         if (value is ITupleOperation tupleLit)
         {
-            for (int i = 0; i < tupleLit.Elements.Length && i < ids2.Length; i++)
-                EmitStoreField(ids2[i], VisitExpression(tupleLit.Elements[i]));
+            // Tuple literal: set each element via __Set__
+            for (int i = 0; i < tupleLit.Elements.Length && i < layout.Count; i++)
+                EmitExternVoid("SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid",
+                    new List<HExpr> { LoadField(localId, "SystemObjectArray"), Const(i, "SystemInt32"),
+                        VisitExpression(tupleLit.Elements[i]) });
         }
-        else if (value is IInvocationOperation invocation)
+        else if (value is IObjectCreationOperation objCreate && objCreate.Initializer != null)
         {
-            var callExpr = VisitExpression(init.Value);
-            if (callExpr != null) EmitExprStmt(callExpr);
-            var callReturns = GetCalleeReturns(invocation.TargetMethod);
-            for (int i = 0; i < ids2.Length && i < callReturns.Length; i++)
-                EmitStoreField(ids2[i], LoadField(callReturns[i].Id, callReturns[i].UdonType));
+            // Struct object initializer: new Point { x = 1, y = 2 }
+            // Process each initializer as a direct __Set__ on the array
+            foreach (var initOp in objCreate.Initializer.Initializers)
+            {
+                if (initOp is ISimpleAssignmentOperation memberAssign
+                    && memberAssign.Target is IFieldReferenceOperation memberField
+                    && layout.TryGetIndex(memberField.Field, out var memberIndex))
+                {
+                    var memberVal = VisitExpression(memberAssign.Value);
+                    EmitExternVoid("SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid",
+                        new List<HExpr> { LoadField(localId, "SystemObjectArray"), Const(memberIndex, "SystemInt32"), memberVal });
+                }
+            }
         }
-        else if (value is ILocalReferenceOperation otherLocal
-                 && _localBindings.TryGetValue(otherLocal.Local, out var otherBinding) && otherBinding.IsTuple)
+        else if (value is IDefaultValueOperation)
         {
-            var otherIds = otherBinding.TupleIds;
-            var otherType = (INamedTypeSymbol)otherLocal.Type;
-            var otherElements = otherType.TupleElements;
-            for (int i = 0; i < ids2.Length && i < otherIds.Length; i++)
-                EmitStoreField(ids2[i], LoadField(otherIds[i], GetUdonType(otherElements[i].Type)));
+            // default(T): initialize each element to its type's default value.
+            // object[] elements are null by default, but value-type fields need 0/false/etc.
+            for (int i = 0; i < layout.Count; i++)
+            {
+                var fieldType = layout.Fields[i].Type;
+                object defVal = fieldType.SpecialType switch
+                {
+                    SpecialType.System_Boolean => (object)false,
+                    SpecialType.System_Int32 => (object)0,
+                    SpecialType.System_Single => (object)0f,
+                    SpecialType.System_Double => (object)0d,
+                    SpecialType.System_Int64 => (object)0L,
+                    SpecialType.System_Byte => (object)(byte)0,
+                    SpecialType.System_UInt32 => (object)0u,
+                    SpecialType.System_UInt64 => (object)0UL,
+                    SpecialType.System_Int16 => (object)(short)0,
+                    SpecialType.System_UInt16 => (object)(ushort)0,
+                    SpecialType.System_Char => (object)'\0',
+                    SpecialType.System_SByte => (object)(sbyte)0,
+                    _ => null, // reference types default to null
+                };
+                if (defVal != null)
+                    EmitExternVoid("SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid",
+                        new List<HExpr> { LoadField(localId, "SystemObjectArray"), Const(i, "SystemInt32"),
+                            Const(defVal, GetUdonType(fieldType)) });
+            }
         }
         else
         {
-            throw new System.NotSupportedException(
-                $"Cannot initialize tuple local '{local.Name}' from {value.GetType().Name}.");
+            // Method return, other local, etc.
+            var srcVal = VisitExpression(init.Value);
+            // Clone for value semantics when copying from existing aggregate (local, param, field).
+            // Fresh constructions (invocations returning new arrays) get a harmless extra clone.
+            srcVal = ExternCall("SystemObjectArray.__Clone__SystemObject",
+                new List<HExpr> { srcVal }, "SystemObject");
+            EmitStoreField(localId, srcVal);
         }
     }
 

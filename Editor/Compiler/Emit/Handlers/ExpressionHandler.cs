@@ -19,17 +19,15 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
             or INameOfOperation
             or IDeclarationExpressionOperation
             or IDiscardOperation
-            or IDelegateCreationOperation;
+            or IDelegateCreationOperation
+            or ITupleOperation;
 
     public HExpr Handle(IOperation expression) => expression switch
     {
         ILiteralOperation op => VisitLiteral(op),
         ILocalReferenceOperation localRef => _localBindings.TryGetValue(localRef.Local, out var localBinding)
-                                                 ? localBinding.IsTuple
-                                                     ? throw new NotSupportedException(
-                                                         $"Tuple local variable '{localRef.Local.Name}' cannot be used as a whole value. " +
-                                                         "Access individual elements (.Item1, .Item2) or use deconstruction.")
-                                                     : LoadField(localBinding.ScalarId, GetUdonType(localRef.Type))
+                                                 ? LoadField(localBinding.Id, EmitContext.IsAggregateType(localRef.Type)
+                                                     ? "SystemObjectArray" : GetUdonType(localRef.Type))
                                                  : throw new InvalidOperationException($"Cannot resolve local variable '{localRef.Local.Name}' in method '{_currentMethod?.Name ?? "(none)"}'."),
         IFieldReferenceOperation op => VisitFieldReference(op),
         IParameterReferenceOperation paramRef => LoadParam(paramRef.Parameter),
@@ -41,6 +39,7 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
         IDeclarationExpressionOperation op => VisitDeclarationExpression(op),
         IDiscardOperation discard => SlotRef(_ctx.AllocTemp(GetUdonType(discard.Type))),
         IDelegateCreationOperation op => VisitDelegateCreation(op),
+        ITupleOperation op => VisitTupleLiteral(op),
         _ => throw new NotSupportedException(expression.GetType().Name),
     };
 
@@ -111,37 +110,21 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
                 "Only direct invocation (_callback()), null check (_callback != null), ?.Invoke(), and comparison (_a == _b) are supported.");
         }
 
-        // Tuple local element access: result.Item1 → expanded variable
-        if (fieldRef.Instance is ILocalReferenceOperation localRef2
-            && _localBindings.TryGetValue(localRef2.Local, out var tupleBinding) && tupleBinding.IsTuple)
+        // Aggregate field access: result.Item1, point.x, pair.Item1 → object[] indexing
+        // Triggered by the containing type being aggregate, regardless of instance kind
+        if (fieldRef.Instance != null
+            && fieldRef.Instance.Type is INamedTypeSymbol aggContaining
+            && EmitContext.IsAggregateType(aggContaining))
         {
-            var tupleIds = tupleBinding.TupleIds;
-            var tupleType = localRef2.Type as INamedTypeSymbol;
-            int elemIndex = -1;
-            if (tupleType?.IsTupleType == true)
+            var layout = _ctx.GetAggregateLayout(aggContaining);
+            if (layout.TryGetIndex(fieldRef.Field, out var elemIndex))
             {
-                var elements = tupleType.TupleElements;
-                for (int i = 0; i < elements.Length; i++)
-                {
-                    if (SymbolEqualityComparer.Default.Equals(elements[i], fieldRef.Field)
-                        || (elements[i].CorrespondingTupleField != null
-                            && SymbolEqualityComparer.Default.Equals(elements[i].CorrespondingTupleField, fieldRef.Field))
-                        || (fieldRef.Field.CorrespondingTupleField != null
-                            && SymbolEqualityComparer.Default.Equals(fieldRef.Field.CorrespondingTupleField, elements[i])))
-                    {
-                        elemIndex = i;
-                        break;
-                    }
-                }
+                var arrExpr = VisitExpression(fieldRef.Instance);
+                return ExternCall("SystemObjectArray.__Get__SystemInt32__SystemObject",
+                    new List<HExpr> { arrExpr, Const(elemIndex, "SystemInt32") }, "SystemObject");
             }
-            if (elemIndex >= 0 && elemIndex < tupleIds.Length)
-            {
-                var elemType = GetUdonType(tupleType.TupleElements[elemIndex].Type);
-                return LoadField(tupleIds[elemIndex], elemType);
-            }
-
             throw new System.NotSupportedException(
-                $"Cannot access '{fieldRef.Field.Name}' on tuple local '{localRef2.Local.Name}'.");
+                $"Cannot access '{fieldRef.Field.Name}' on aggregate type '{aggContaining.Name}'.");
         }
 
         // this.field → direct variable name → LoadField
@@ -276,6 +259,14 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
 
     HExpr VisitDefaultValue(IDefaultValueOperation defaultVal)
     {
+        // Aggregate default: create empty object[] of correct size
+        if (defaultVal.Type is INamedTypeSymbol aggDef && EmitContext.IsAggregateType(aggDef))
+        {
+            var layout = _ctx.GetAggregateLayout(aggDef);
+            return ExternCall("SystemObjectArray.__ctor__SystemInt32__SystemObjectArray",
+                new List<HExpr> { Const(layout.Count, "SystemInt32") }, "SystemObjectArray");
+        }
+
         var dvType = GetUdonType(defaultVal.Type);
         if (!defaultVal.Type.IsValueType)
             return Const(null, dvType);
@@ -308,7 +299,7 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
 
         var udonType = GetUdonType(localRef2.Type);
         var localId = _ctx.DeclareLocal(localRef2.Local.Name, udonType);
-        _localBindings[localRef2.Local] = EmitContext.LocalBinding.Scalar(localId);
+        _localBindings[localRef2.Local] = new EmitContext.LocalBinding(localId);
         return LoadField(localId, udonType);
     }
 
@@ -329,6 +320,27 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
             default:
                 throw new NotSupportedException($"Unsupported delegate target: {op.Target.GetType().Name}");
         }
+    }
+
+    // ── Tuple Literal ──
+
+    HExpr VisitTupleLiteral(ITupleOperation op)
+    {
+        // Create object[] and set each element
+        var count = op.Elements.Length;
+        var arrExpr = ExternCall("SystemObjectArray.__ctor__SystemInt32__SystemObjectArray",
+            new List<HExpr> { Const(count, "SystemInt32") }, "SystemObjectArray");
+        var tmpSlot = _ctx.AllocTemp("SystemObjectArray");
+        EmitAssign(tmpSlot, arrExpr);
+
+        for (int i = 0; i < count; i++)
+        {
+            var elemVal = VisitExpression(op.Elements[i]);
+            EmitExternVoid("SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid",
+                new List<HExpr> { SlotRef(tmpSlot), Const(i, "SystemInt32"), elemVal });
+        }
+
+        return SlotRef(tmpSlot);
     }
 
 }
