@@ -366,22 +366,6 @@ public class StatementHandler : HandlerBase, IOperationHandler
                     new List<HExpr> { LoadField(localId, "SystemObjectArray"), Const(i, "SystemInt32"),
                         VisitExpression(tupleLit.Elements[i]) });
         }
-        else if (value is IObjectCreationOperation objCreate && objCreate.Initializer != null)
-        {
-            // Struct object initializer: new Point { x = 1, y = 2 }
-            // Process each initializer as a direct __Set__ on the array
-            foreach (var initOp in objCreate.Initializer.Initializers)
-            {
-                if (initOp is ISimpleAssignmentOperation memberAssign
-                    && memberAssign.Target is IFieldReferenceOperation memberField
-                    && layout.TryGetIndex(memberField.Field, out var memberIndex))
-                {
-                    var memberVal = VisitExpression(memberAssign.Value);
-                    EmitExternVoid("SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid",
-                        new List<HExpr> { LoadField(localId, "SystemObjectArray"), Const(memberIndex, "SystemInt32"), memberVal });
-                }
-            }
-        }
         else if (value is IDefaultValueOperation)
         {
             // default(T): initialize each element to its type's default value.
