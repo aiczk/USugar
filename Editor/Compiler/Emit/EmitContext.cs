@@ -37,36 +37,26 @@ public class AggregateLayout
 
     public static AggregateLayout Build(INamedTypeSymbol type)
     {
+        if (!type.IsTupleType)
+            throw new InvalidOperationException(
+                $"AggregateLayout.Build called on non-tuple type '{type.Name}'");
+
         var fields = new List<FieldInfo>();
         var nameToIndex = new Dictionary<string, int>();
 
-        if (type.IsTupleType)
+        var elements = type.TupleElements;
+        for (int i = 0; i < elements.Length; i++)
         {
-            var elements = type.TupleElements;
-            for (int i = 0; i < elements.Length; i++)
+            var name = elements[i].Name;
+            fields.Add(new FieldInfo(name, i, elements[i].Type));
+            nameToIndex[name] = i;
+            var itemName = $"Item{i + 1}";
+            if (name != itemName) nameToIndex[itemName] = i;
+            // Also map CorrespondingTupleField name if different
+            if (elements[i].CorrespondingTupleField != null)
             {
-                var name = elements[i].Name;
-                fields.Add(new FieldInfo(name, i, elements[i].Type));
-                nameToIndex[name] = i;
-                var itemName = $"Item{i + 1}";
-                if (name != itemName) nameToIndex[itemName] = i;
-                // Also map CorrespondingTupleField name if different
-                if (elements[i].CorrespondingTupleField != null)
-                {
-                    var corrName = elements[i].CorrespondingTupleField.Name;
-                    if (!nameToIndex.ContainsKey(corrName)) nameToIndex[corrName] = i;
-                }
-            }
-        }
-        else
-        {
-            int idx = 0;
-            foreach (var member in type.GetMembers().OfType<IFieldSymbol>())
-            {
-                if (member.IsStatic || member.IsImplicitlyDeclared) continue;
-                fields.Add(new FieldInfo(member.Name, idx, member.Type));
-                nameToIndex[member.Name] = idx;
-                idx++;
+                var corrName = elements[i].CorrespondingTupleField.Name;
+                if (!nameToIndex.ContainsKey(corrName)) nameToIndex[corrName] = i;
             }
         }
 
@@ -139,13 +129,7 @@ public class EmitContext
     public static bool IsAggregateType(ITypeSymbol type)
     {
         if (type == null) return false;
-        if (type.IsTupleType) return true;
-        if (type.TypeKind == TypeKind.Struct
-            && type is INamedTypeSymbol named
-            && named.DeclaringSyntaxReferences.Length > 0
-            && named.SpecialType == SpecialType.None)
-            return true;
-        return false;
+        return type.IsTupleType;
     }
 
     readonly Dictionary<ITypeSymbol, AggregateLayout> _aggregateLayoutCache = new(SymbolEqualityComparer.Default);
