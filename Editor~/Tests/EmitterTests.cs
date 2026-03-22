@@ -5514,4 +5514,61 @@ public class StructDefaultTest : UdonSharpBehaviour {
         Assert.Contains("SystemObjectArray.__ctor__", uasm);
     }
 
+    // ── Tuple equality ──
+
+    [Fact]
+    public void TupleEquality_EmitsFieldwiseComparison()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+[UdonBehaviourSyncMode(BehaviourSyncMode.None)]
+public class TupleEqTest : UdonSharpBehaviour {
+    bool _r;
+    void Start() {
+        var a = (1, 2f);
+        var b = (1, 2f);
+        _r = a == b;
+    }
+}");
+        Assert.DoesNotContain("SystemObjectArray.__op_Equality__", uasm);
+        Assert.Contains("SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean", uasm);
+        Assert.Contains("__op_LogicalAnd__", uasm);
+    }
+
+    [Fact]
+    public void TupleInequality_EmitsNegatedFieldwiseComparison()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+[UdonBehaviourSyncMode(BehaviourSyncMode.None)]
+public class TupleNeqTest : UdonSharpBehaviour {
+    bool _r;
+    void Start() {
+        var a = (1, ""hello"");
+        var b = (2, ""world"");
+        _r = a != b;
+    }
+}");
+        Assert.DoesNotContain("SystemObjectArray.__op_Inequality__", uasm);
+        Assert.Contains("SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean", uasm);
+        Assert.Contains("__op_UnaryNegation__", uasm);
+    }
+
+    [Fact]
+    public void TupleEquality_NestedTuple_ThrowsNotSupported()
+    {
+        var ex = Assert.ThrowsAny<System.Exception>(() => TestHelper.CompileToUasm(@"
+using UdonSharp;
+[UdonBehaviourSyncMode(BehaviourSyncMode.None)]
+public class NestedTupleEqTest : UdonSharpBehaviour {
+    bool _r;
+    void Start() {
+        var a = (1, (2, 3));
+        var b = (1, (2, 3));
+        _r = a == b;
+    }
+}"));
+        Assert.Contains("nested tuple", ex.Message, System.StringComparison.OrdinalIgnoreCase);
+    }
+
 }

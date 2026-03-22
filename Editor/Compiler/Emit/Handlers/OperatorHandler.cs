@@ -13,10 +13,12 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
             or IConditionalOperation
             or IIsTypeOperation
             or IIsPatternOperation
-            or ISwitchExpressionOperation;
+            or ISwitchExpressionOperation
+            or ITupleBinaryOperation;
 
     public HExpr Handle(IOperation expression) => expression switch
     {
+        ITupleBinaryOperation op => VisitTupleBinary(op),
         IBinaryOperation op => VisitBinary(op),
         IUnaryOperation op => VisitUnary(op),
         IConditionalOperation op => VisitConditionalExpression(op),
@@ -54,6 +56,14 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
             // delegate == delegate
             if (leftField != null && rightField != null)
                 return CompareDelegates(leftField, rightField, isNotEquals);
+        }
+
+        // ── Aggregate (tuple) structural equality ──
+        if (op.OperatorKind is BinaryOperatorKind.Equals or BinaryOperatorKind.NotEquals
+            && EmitContext.IsAggregateType(op.LeftOperand.Type)
+            && op.LeftOperand.Type is INamedTypeSymbol aggType)
+        {
+            return EmitAggregateEquality(op, aggType);
         }
 
         // Constant folding: compile-time evaluable binary expressions
@@ -418,6 +428,106 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
         _ => "0"
     };
 
+    // ── Tuple binary (== / !=) ──
+
+    HExpr VisitTupleBinary(ITupleBinaryOperation op)
+    {
+        if (op.LeftOperand.Type is not INamedTypeSymbol aggType || !aggType.IsTupleType)
+            throw new System.NotSupportedException(
+                $"Tuple binary operation on non-tuple type: {op.LeftOperand.Type}");
+
+        var layout = _ctx.GetAggregateLayout(aggType);
+        bool isNotEquals = op.OperatorKind == BinaryOperatorKind.NotEquals;
+
+        // Guard: nested tuples are not supported for equality
+        for (int i = 0; i < layout.Count; i++)
+        {
+            if (layout.Fields[i].Type.IsTupleType)
+                throw new System.NotSupportedException(
+                    $"Equality comparison on nested tuple type is not supported. "
+                    + $"Field '{layout.Fields[i].Name}' at index {i} is a tuple.");
+        }
+
+        var leftVal = VisitExpression(op.LeftOperand);
+        var rightVal = VisitExpression(op.RightOperand);
+
+        var leftSlot = _ctx.AllocTemp("SystemObjectArray");
+        EmitAssign(leftSlot, leftVal);
+        var rightSlot = _ctx.AllocTemp("SystemObjectArray");
+        EmitAssign(rightSlot, rightVal);
+
+        HExpr result = Const(true, "SystemBoolean");
+        for (int i = 0; i < layout.Count; i++)
+        {
+            var leftElem = ExternCall("SystemObjectArray.__Get__SystemInt32__SystemObject",
+                new List<HExpr> { SlotRef(leftSlot), Const(i, "SystemInt32") }, "SystemObject");
+            var rightElem = ExternCall("SystemObjectArray.__Get__SystemInt32__SystemObject",
+                new List<HExpr> { SlotRef(rightSlot), Const(i, "SystemInt32") }, "SystemObject");
+            var elemEq = ExternCall(
+                "SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean",
+                new List<HExpr> { leftElem, rightElem }, "SystemBoolean");
+
+            result = ExternCall(
+                "SystemBoolean.__op_LogicalAnd__SystemBoolean_SystemBoolean__SystemBoolean",
+                new List<HExpr> { result, elemEq }, "SystemBoolean");
+        }
+
+        if (isNotEquals)
+            result = ExternCall("SystemBoolean.__op_UnaryNegation__SystemBoolean__SystemBoolean",
+                new List<HExpr> { result }, "SystemBoolean");
+
+        return result;
+    }
+
+    // ── Aggregate (tuple) equality (via IBinaryOperation — fallback) ──
+
+    HExpr EmitAggregateEquality(IBinaryOperation op, INamedTypeSymbol aggType)
+    {
+        var layout = _ctx.GetAggregateLayout(aggType);
+
+        // Guard: nested tuples are not supported for equality
+        for (int i = 0; i < layout.Count; i++)
+        {
+            if (layout.Fields[i].Type.IsTupleType)
+                throw new System.NotSupportedException(
+                    $"Equality comparison on nested tuple type is not supported. "
+                    + $"Field '{layout.Fields[i].Name}' at index {i} is a tuple.");
+        }
+
+        var leftVal = VisitExpression(op.LeftOperand);
+        var rightVal = VisitExpression(op.RightOperand);
+
+        // Store to temps so we can index multiple times without re-cloning
+        var leftSlot = _ctx.AllocTemp("SystemObjectArray");
+        EmitAssign(leftSlot, leftVal);
+        var rightSlot = _ctx.AllocTemp("SystemObjectArray");
+        EmitAssign(rightSlot, rightVal);
+
+        // Use SystemObject equality for all elements — elements extracted from object[]
+        // have SystemObject type tag; using type-specific equality would cause mismatch.
+        HExpr result = Const(true, "SystemBoolean");
+        for (int i = 0; i < layout.Count; i++)
+        {
+            var leftElem = ExternCall("SystemObjectArray.__Get__SystemInt32__SystemObject",
+                new List<HExpr> { SlotRef(leftSlot), Const(i, "SystemInt32") }, "SystemObject");
+            var rightElem = ExternCall("SystemObjectArray.__Get__SystemInt32__SystemObject",
+                new List<HExpr> { SlotRef(rightSlot), Const(i, "SystemInt32") }, "SystemObject");
+            var elemEq = ExternCall(
+                "SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean",
+                new List<HExpr> { leftElem, rightElem }, "SystemBoolean");
+
+            result = ExternCall(
+                "SystemBoolean.__op_LogicalAnd__SystemBoolean_SystemBoolean__SystemBoolean",
+                new List<HExpr> { result, elemEq }, "SystemBoolean");
+        }
+
+        if (op.OperatorKind == BinaryOperatorKind.NotEquals)
+            result = ExternCall("SystemBoolean.__op_UnaryNegation__SystemBoolean__SystemBoolean",
+                new List<HExpr> { result }, "SystemBoolean");
+
+        return result;
+    }
+
     // ── Delegate comparison helpers ──
 
     /// <summary>Try to extract delegate field name from an operation, unwrapping conversions.</summary>
@@ -474,7 +584,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
 
         if (isNotEquals)
             result = ExternCall(
-                "SystemBoolean.__op_LogicalNegation__SystemBoolean__SystemBoolean",
+                "SystemBoolean.__op_UnaryNegation__SystemBoolean__SystemBoolean",
                 new List<HExpr> { result }, "SystemBoolean");
 
         return result;
