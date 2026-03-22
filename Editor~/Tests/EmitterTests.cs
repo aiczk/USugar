@@ -5571,4 +5571,58 @@ public class NestedTupleEqTest : UdonSharpBehaviour {
         Assert.Contains("nested tuple", ex.Message, System.StringComparison.OrdinalIgnoreCase);
     }
 
+    // ── Tuple array ──
+
+    [Fact]
+    public void TupleArray_FieldDeclared_AsSystemObjectArrayArray()
+    {
+        // (int,string)[] field resolves to SystemObjectArrayArray in UASM.
+        // Full compilation skipped: SystemObjectArrayArray may not have Udon externs.
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+[UdonBehaviourSyncMode(BehaviourSyncMode.None)]
+public class TupleArrTypeTest : UdonSharpBehaviour {
+    (int, string)[] _arr;
+    void Start() { }
+}");
+        Assert.Contains("SystemObjectArrayArray", uasm);
+    }
+
+    // ── Cross-behaviour tuple ──
+
+    [Fact]
+    public void CrossBehaviour_TupleFieldRead_EmitsGetProgramVariable()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+[UdonBehaviourSyncMode(BehaviourSyncMode.None)]
+public class CrossTupleReadTest : UdonSharpBehaviour {
+    public (int, string) data;
+    int _v;
+    void Start() {
+        CrossTupleReadTest other = null;
+        var t = other.data;
+        _v = t.Item1;
+    }
+}");
+        Assert.Contains("GetProgramVariable", uasm);
+        Assert.Contains("SystemObjectArray.__Get__SystemInt32__SystemObject", uasm);
+    }
+
+    [Fact]
+    public void CrossBehaviour_TupleFieldWrite_EmitsSetProgramVariable()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+[UdonBehaviourSyncMode(BehaviourSyncMode.None)]
+public class CrossTupleWriteTest : UdonSharpBehaviour {
+    public (int, string) data;
+    void Start() {
+        CrossTupleWriteTest other = null;
+        other.data = (1, ""hello"");
+    }
+}");
+        Assert.Contains("SetProgramVariable", uasm);
+    }
+
 }
