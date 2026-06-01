@@ -38,6 +38,16 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
         if (op.OperatorKind == BinaryOperatorKind.ConditionalOr)
             return VisitConditionalOr(op);
 
+        // ── User-defined struct operator: v1 + v2 → static operator method call ──
+        if (op.OperatorMethod is { MethodKind: MethodKind.UserDefinedOperator } binOpM
+            && binOpM.ContainingType is INamedTypeSymbol binOpCt && EmitContext.IsUserStruct(binOpCt)
+            && _methodFunctions.ContainsKey(binOpM.OriginalDefinition))
+        {
+            var lhs = VisitExpression(op.LeftOperand);
+            var rhs = VisitExpression(op.RightOperand);
+            return EmitCallToMethod(binOpM.OriginalDefinition, new List<CValue> { lhs, rhs });
+        }
+
         // ── Delegate field null check / comparison ──
         if (op.OperatorKind is BinaryOperatorKind.Equals or BinaryOperatorKind.NotEquals)
         {
@@ -153,6 +163,15 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
         // Bitwise NOT (~): Udon VM has no unary complement extern → synthesize as XOR with all-bits-set
         if (op.OperatorKind == UnaryOperatorKind.BitwiseNegation)
             return VisitBitwiseNot(op);
+
+        // ── User-defined struct operator: -v → static operator method call ──
+        if (op.OperatorMethod is { MethodKind: MethodKind.UserDefinedOperator } unOpM
+            && unOpM.ContainingType is INamedTypeSymbol unOpCt && EmitContext.IsUserStruct(unOpCt)
+            && _methodFunctions.ContainsKey(unOpM.OriginalDefinition))
+        {
+            var operand = VisitExpression(op.Operand);
+            return EmitCallToMethod(unOpM.OriginalDefinition, new List<CValue> { operand });
+        }
 
         // Constant folding: compile-time evaluable unary expressions (e.g., -5)
         if (op.ConstantValue.HasValue)

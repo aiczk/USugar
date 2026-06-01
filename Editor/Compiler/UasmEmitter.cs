@@ -620,10 +620,14 @@ public class UasmEmitter
             var func = _module.AddFunction(funcName);
             _methodFunctions[sm] = func;
 
-            // param0 = receiver object[]; passed (not cloned) so in-place mutation reflects back to the caller's local.
-            var receiverId = $"__{idx}_this__param";
-            _ctx.DeclareVar(receiverId, "SystemObjectArray");
-            func.ParamFieldNames.Add(receiverId);
+            // param0 = receiver object[] for instance methods/ctors (passed uncloned so in-place mutation
+            // reflects back to the caller's local). Static operator methods have no receiver.
+            if (!sm.IsStatic)
+            {
+                var receiverId = $"__{idx}_this__param";
+                _ctx.DeclareVar(receiverId, "SystemObjectArray");
+                func.ParamFieldNames.Add(receiverId);
+            }
 
             var smParamIds = new string[sm.Parameters.Length];
             for (int pi = 0; pi < sm.Parameters.Length; pi++)
@@ -1372,6 +1376,11 @@ public class UasmEmitter
             && tm.MethodKind == MethodKind.Ordinary && !tm.IsImplicitlyDeclared
             && tm.ContainingType is INamedTypeSymbol it && EmitContext.IsUserStruct(it))
             result.Add(tm.OriginalDefinition);
+        // User-struct operator: v1 + v2, -v (static operator methods).
+        var opMethod = (op as IBinaryOperation)?.OperatorMethod ?? (op as IUnaryOperation)?.OperatorMethod;
+        if (opMethod is { MethodKind: MethodKind.UserDefinedOperator }
+            && opMethod.ContainingType is INamedTypeSymbol ot && EmitContext.IsUserStruct(ot))
+            result.Add(opMethod.OriginalDefinition);
         foreach (var child in op.Children)
             CollectStructMethodsInOperation(child, result);
     }
