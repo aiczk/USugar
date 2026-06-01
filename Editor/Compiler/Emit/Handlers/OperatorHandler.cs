@@ -251,6 +251,11 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
             return Const(EmitContext.ParseConstValue(constType, ToInvariantString(op.ConstantValue.Value)), constType);
         }
 
+        // Lifted unary on Nullable<T> (null propagation): null stays null, else apply the op to the unwrapped
+        // value. The non-lifted path below would build an invalid extern on the Nullable operand type.
+        if (op.IsLifted && EmitContext.IsNullableT(op.Type, out var unaryResU))
+            return EmitLiftedUnary(op, unaryResU);
+
         var operandVal = VisitExpression(op.Operand);
         var resultType = GetUdonType(op.Type);
 
@@ -261,6 +266,35 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
             sig = BuildBuiltinUnarySignature(op);
 
         return ExternCall(sig, new List<CValue> { operandVal }, resultType);
+    }
+
+    // Lifted unary minus / logical-not on Nullable<T>: null-preserving. A small-int operand is promoted to
+    // the (int) result underlying for the SystemInt32 op; int/long/float/bool pass through. The unwrapped
+    // result is re-boxed into the SystemObject nullable slot. (Lifted bitwise ~ is not covered here.)
+    CValue EmitLiftedUnary(IUnaryOperation op, ITypeSymbol resUnderlying)
+    {
+        EmitContext.IsNullableT(op.Operand.Type, out var opUnderlying);
+        var resU = GetUdonType(resUnderlying);
+        var opName = op.OperatorKind switch
+        {
+            UnaryOperatorKind.Not => "op_UnaryNegation",
+            UnaryOperatorKind.Minus => resU == "SystemDecimal" ? "op_UnaryNegation" : "op_UnaryMinus",
+            _ => throw new System.NotSupportedException($"Unsupported lifted unary operator: {op.OperatorKind}")
+        };
+
+        var nSlot = _ctx.AllocTemp("SystemObject");
+        EmitAssign(nSlot, VisitExpression(op.Operand));
+        var resSlot = _ctx.AllocTemp("SystemObject");
+        EmitAssign(resSlot, Const(null, "SystemObject"));
+        _builder.EmitIf(EmitNullableHasValue(SlotRef(nSlot)), _ =>
+        {
+            var v = PromoteBoxedToInt32(SlotRef(nSlot), opUnderlying, out var _eff);
+            var computed = ExternCall(
+                ExternResolver.BuildMethodSignature(resU, $"__{opName}", new[] { resU }, resU),
+                new List<CValue> { v }, resU);
+            EmitAssign(resSlot, computed); // re-box into the nullable's SystemObject slot
+        });
+        return SlotRef(resSlot);
     }
 
     CValue VisitBitwiseNot(IUnaryOperation op)

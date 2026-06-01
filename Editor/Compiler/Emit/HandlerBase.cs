@@ -276,7 +276,7 @@ public abstract class HandlerBase
     /// often a boxed plain int (e.g. <c>byte? x = 5</c> keeps the int literal un-narrowed), which a strict
     /// typed fetch rejects with InvalidCast. Convert.ToInt32(object) tolerates any boxed numeric. Pass-through
     /// for non-small types.</summary>
-    CValue PromoteBoxedToInt32(CValue boxed, ITypeSymbol underlying, out ITypeSymbol effectiveType)
+    protected CValue PromoteBoxedToInt32(CValue boxed, ITypeSymbol underlying, out ITypeSymbol effectiveType)
     {
         if (SmallIntOrChar(GetUdonType(underlying)))
         {
