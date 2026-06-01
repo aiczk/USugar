@@ -21,12 +21,28 @@ public abstract class AssignmentHandlerBase : HandlerBase
         public CValue ArrayVal;      // Cached array reference (for array elements)
         public CValue IndexVal;      // Cached index (for array elements)
         public CValue InstanceVal;   // Cached instance (for cross-behaviour fields/properties)
+        public List<CValue> IndexArgs; // Cached index args (for user indexers — avoid re-evaluating side effects)
     }
 
     protected LValueCapture CaptureLValue(IOperation target)
     {
         switch (target)
         {
+            // User-defined indexer on this: cache the (possibly side-effecting) index args ONCE, so a
+            // compound assignment (`this[Idx()] += x`) does not evaluate the index twice.
+            case IPropertyReferenceOperation { Instance: IInstanceReferenceOperation, Property: { IsIndexer: true } } idxRef
+                when idxRef.Property.GetMethod != null && _methodFunctions.ContainsKey(idxRef.Property.GetMethod):
+            {
+                var cachedArgs = new List<CValue>();
+                foreach (var arg in idxRef.Arguments)
+                {
+                    var t = _ctx.AllocTemp(GetUdonType(arg.Value.Type));
+                    EmitAssign(t, VisitExpression(arg.Value));
+                    cachedArgs.Add(SlotRef(t));
+                }
+                var currentVal = EmitCallToMethod(idxRef.Property.GetMethod, new List<CValue>(cachedArgs));
+                return new LValueCapture { Value = currentVal, IndexArgs = cachedArgs };
+            }
             case IFieldReferenceOperation aggFieldRef
                 when aggFieldRef.Instance != null
                 && aggFieldRef.Instance.Type is INamedTypeSymbol aggCapType
@@ -132,11 +148,13 @@ public abstract class AssignmentHandlerBase : HandlerBase
             // Auto-property on this → backing field already handled by write-back to field (user-defined classes only)
             case IPropertyReferenceOperation { Instance: IInstanceReferenceOperation } propRef when propRef.Property.GetMethod?.DeclaringSyntaxReferences.IsEmpty == true && ExternResolver.IsUdonSharpBehaviour(propRef.Property.ContainingType) && propRef.Property.ContainingType.Name != "UdonSharpBehaviour":
                 return;
-            // User-defined indexer on this → call setter with the index args followed by the value
+            // User-defined indexer on this → call setter with the index args followed by the value. Reuse
+            // the index args cached by CaptureLValue (compound assignment) to avoid re-evaluating them.
             case IPropertyReferenceOperation { Instance: IInstanceReferenceOperation, Property: { IsIndexer: true, SetMethod: not null } } idxRef when _methodFunctions.TryGetValue(idxRef.Property.SetMethod, out _):
             {
-                var setterArgs = new List<CValue>();
-                foreach (var arg in idxRef.Arguments) setterArgs.Add(VisitExpression(arg.Value));
+                var setterArgs = lv.IndexArgs != null ? new List<CValue>(lv.IndexArgs) : new List<CValue>();
+                if (lv.IndexArgs == null)
+                    foreach (var arg in idxRef.Arguments) setterArgs.Add(VisitExpression(arg.Value));
                 setterArgs.Add(valueVal);
                 EmitExprStmt(EmitCallToMethod(idxRef.Property.SetMethod, setterArgs));
                 return;
