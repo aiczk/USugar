@@ -6,28 +6,23 @@
 public static class IrPipeline
 {
     /// <summary>
-    /// Generate UASM from an HModule via the HIR → LIR → UASM pipeline.
+    /// Generate UASM from a Core IR module: CoreVerify → CoreOptimizer → CoreFlatten → LIR → UASM.
+    /// Handlers build Core directly; HIR is no longer on the live path. The LIR backend is retained
+    /// until Phase 4. Structured (HIR) dumps are omitted until the Core IR gains Dump().
     /// </summary>
-    public static CodeGenResult GenerateUasmFromHir(HModule hirModule, bool dumpEnabled = false)
+    public static CodeGenResult GenerateUasmFromCore(CModule coreModule, bool dumpEnabled = false)
     {
-        var className = hirModule.ClassName ?? "unknown";
+        var className = coreModule.ClassName ?? "unknown";
 
-        if (dumpEnabled)
-            DumpToFile(className, "1_hir.txt", hirModule.Dump());
+        CoreVerify.Verify(coreModule);
 
-        HirVerifier.Verify(hirModule);
+        // Core structured optimization
+        CoreOptimizer.ConstantFold(coreModule);
+        CoreOptimizer.DeadCodeElimination(coreModule);
+        CoreOptimizer.CopyPropagation(coreModule);
 
-        // HIR optimization
-        HirOptimizer.ConstantFold(hirModule);
-        HirOptimizer.DeadCodeElimination(hirModule);
-        HirOptimizer.CopyPropagation(hirModule);
-
-        if (dumpEnabled)
-            DumpToFile(className, "1b_hir_optimized.txt", hirModule.Dump());
-
-        // Migration (live path): CoreFlatten replaces HirToLir via the unified Core IR.
-        // Byte-identical to HirToLir (snapshot oracle guards this); handlers still build HIR.
-        var lirModule = CorePipeline.FlattenViaCoreIR(hirModule);
+        // Flatten each function, then bridge the flat Core to LIR for the (retained) backend.
+        var lirModule = CorePipeline.FlattenCoreToLir(coreModule);
 
         if (dumpEnabled)
             DumpToFile(className, "2_lir.txt", lirModule.Dump());

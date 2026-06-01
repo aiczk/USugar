@@ -115,8 +115,8 @@ public class UasmEmitter
         EmitMethods();
         DetectLambdaCaptureAliasing();
         OnIrPass?.Invoke("after-emit", _hirModule);
-        // Handlers now build Core IR; bridge to HModule for the (unchanged) verify/optimize/flatten pipeline.
-        var result = IrPipeline.GenerateUasmFromHir(CorePipeline.ToHModule(_hirModule), DumpEnabled);
+        // Handlers build Core IR; the pipeline (verify/optimize/flatten) runs on Core directly.
+        var result = IrPipeline.GenerateUasmFromCore(_hirModule, DumpEnabled);
         _codeGenResult = result;
         return result.Uasm;
     }

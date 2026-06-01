@@ -21,6 +21,18 @@ public static class CorePipeline
         return ToLModule(core);
     }
 
+    /// <summary>Flatten an already-built (handler-emitted, optimized) CModule to an LModule:
+    /// CoreFlatten each function + FlatVerify, then bridge the flat Core to LIR for the backend.</summary>
+    public static LModule FlattenCoreToLir(CModule core)
+    {
+        foreach (var cf in core.Functions)
+        {
+            CoreFlatten.Lower(cf);
+            FlatVerify.Verify(cf);
+        }
+        return ToLModule(core);
+    }
+
     static CModule FromHModule(HModule hir)
     {
         var cm = new CModule { ClassName = hir.ClassName };
