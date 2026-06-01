@@ -149,67 +149,17 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
         return ExternCall(sig, new List<CValue> { leftVal, rightVal }, resultType);
     }
 
-    // Lifted binary operator on Nullable<T> (null propagation). Arithmetic yields T? (null if either
-    // operand is null); relational (<,>,<=,>=) yields bool (false if either null); equality yields bool
-    // (both-null is equal). Operands are materialised as boxed objects; the underlying op transparently
-    // unboxes them.
+    // Lifted binary operator on Nullable<T> (null propagation) — see HandlerBase.EmitLiftedBinaryCore.
     CValue EmitLiftedBinary(IBinaryOperation op)
     {
         var leftNullable = EmitContext.IsNullableT(op.LeftOperand.Type, out var lu);
         var rightNullable = EmitContext.IsNullableT(op.RightOperand.Type, out var ru);
-        var ltUnderlying = leftNullable ? lu : op.LeftOperand.Type;
-        var rtUnderlying = rightNullable ? ru : op.RightOperand.Type;
-        var resultNullable = EmitContext.IsNullableT(op.Type, out var resU);
-        var valueResultType = GetUdonType(resultNullable ? resU : op.Type);
-
-        var aSlot = _ctx.AllocTemp("SystemObject"); EmitAssign(aSlot, VisitExpression(op.LeftOperand));
-        var bSlot = _ctx.AllocTemp("SystemObject"); EmitAssign(bSlot, VisitExpression(op.RightOperand));
-
-        CValue IsNullV(int slot) => ExternCall(
-            "SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean",
-            new List<CValue> { SlotRef(slot), Const(null, "SystemObject") }, "SystemBoolean");
-
-        void IfBothPresent(System.Action<CoreBuilder> body)
-        {
-            System.Action<CoreBuilder> inner = rightNullable
-                ? _ => _builder.EmitIf(EmitNullableHasValue(SlotRef(bSlot)), body)
-                : body;
-            if (leftNullable) _builder.EmitIf(EmitNullableHasValue(SlotRef(aSlot)), inner);
-            else inner(_builder);
-        }
-
-        CValue ValueOp(BinaryOperatorKind kind) => ExternCall(
-            ExternResolver.ResolveBinaryExtern(kind, op.OperatorMethod,
-                ResolveType(ltUnderlying), ResolveType(rtUnderlying), ResolveType(resultNullable ? resU : op.Type)),
-            new List<CValue> { SlotRef(aSlot), SlotRef(bSlot) }, valueResultType);
-
-        if (resultNullable) // arithmetic → T? : null unless both present
-        {
-            var rSlot = _ctx.AllocTemp("SystemObject");
-            EmitAssign(rSlot, Const(null, "SystemObject"));
-            IfBothPresent(_ => EmitAssign(rSlot, ValueOp(op.OperatorKind)));
-            return SlotRef(rSlot);
-        }
-
-        if (op.OperatorKind is BinaryOperatorKind.Equals or BinaryOperatorKind.NotEquals)
-        {
-            var eqSlot = _ctx.AllocTemp("SystemBoolean");
-            EmitAssign(eqSlot, Const(false, "SystemBoolean"));
-            if (leftNullable && rightNullable) // both null → equal
-                _builder.EmitIf(IsNullV(aSlot), _ => _builder.EmitIf(IsNullV(bSlot),
-                    __ => EmitAssign(eqSlot, Const(true, "SystemBoolean"))));
-            IfBothPresent(_ => EmitAssign(eqSlot, ValueOp(BinaryOperatorKind.Equals)));
-            if (op.OperatorKind == BinaryOperatorKind.NotEquals)
-                return ExternCall("SystemBoolean.__op_UnaryNegation__SystemBoolean__SystemBoolean",
-                    new List<CValue> { SlotRef(eqSlot) }, "SystemBoolean");
-            return SlotRef(eqSlot);
-        }
-
-        // relational → bool : false unless both present
-        var relSlot = _ctx.AllocTemp("SystemBoolean");
-        EmitAssign(relSlot, Const(false, "SystemBoolean"));
-        IfBothPresent(_ => EmitAssign(relSlot, ValueOp(op.OperatorKind)));
-        return SlotRef(relSlot);
+        var leftVal = VisitExpression(op.LeftOperand);
+        var rightVal = VisitExpression(op.RightOperand);
+        return EmitLiftedBinaryCore(
+            leftVal, leftNullable, leftNullable ? lu : op.LeftOperand.Type,
+            rightVal, rightNullable, rightNullable ? ru : op.RightOperand.Type,
+            op.OperatorKind, op.OperatorMethod, op.Type);
     }
 
     CValue VisitConditionalAnd(IBinaryOperation op)

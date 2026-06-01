@@ -173,6 +173,63 @@ public abstract class HandlerBase
     protected CValue EmitValueTypeDefault(string udonType)
         => Const(EmitContext.ParseConstValue(udonType, udonType == "SystemBoolean" ? "False" : "0"), udonType);
 
+    /// <summary>Lifted binary operator on Nullable&lt;T&gt; (null propagation), from already-evaluated operand
+    /// values. Arithmetic yields T? (null unless both present); relational yields bool (false if either null);
+    /// equality yields bool (both-null is equal). Shared by <c>OperatorHandler</c> and compound assignment.</summary>
+    protected CValue EmitLiftedBinaryCore(
+        CValue leftVal, bool leftNullable, ITypeSymbol ltUnderlying,
+        CValue rightVal, bool rightNullable, ITypeSymbol rtUnderlying,
+        Microsoft.CodeAnalysis.Operations.BinaryOperatorKind kind, IMethodSymbol operatorMethod, ITypeSymbol resultType)
+    {
+        var resultNullable = EmitContext.IsNullableT(resultType, out var resU);
+        var valueResultType = GetUdonType(resultNullable ? resU : resultType);
+
+        var aSlot = _ctx.AllocTemp("SystemObject"); EmitAssign(aSlot, leftVal);
+        var bSlot = _ctx.AllocTemp("SystemObject"); EmitAssign(bSlot, rightVal);
+
+        CValue IsNullV(int slot) => ExternCall("SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean",
+            new List<CValue> { SlotRef(slot), Const(null, "SystemObject") }, "SystemBoolean");
+
+        void IfBothPresent(Action<CoreBuilder> body)
+        {
+            Action<CoreBuilder> inner = rightNullable
+                ? _ => _builder.EmitIf(EmitNullableHasValue(SlotRef(bSlot)), body) : body;
+            if (leftNullable) _builder.EmitIf(EmitNullableHasValue(SlotRef(aSlot)), inner);
+            else inner(_builder);
+        }
+
+        CValue ValueOp(Microsoft.CodeAnalysis.Operations.BinaryOperatorKind k) => ExternCall(
+            ExternResolver.ResolveBinaryExtern(k, operatorMethod, ResolveType(ltUnderlying), ResolveType(rtUnderlying),
+                ResolveType(resultNullable ? resU : resultType)),
+            new List<CValue> { SlotRef(aSlot), SlotRef(bSlot) }, valueResultType);
+
+        if (resultNullable) // arithmetic → T? : null unless both present
+        {
+            var rSlot = _ctx.AllocTemp("SystemObject");
+            EmitAssign(rSlot, Const(null, "SystemObject"));
+            IfBothPresent(_ => EmitAssign(rSlot, ValueOp(kind)));
+            return SlotRef(rSlot);
+        }
+        if (kind is Microsoft.CodeAnalysis.Operations.BinaryOperatorKind.Equals
+            or Microsoft.CodeAnalysis.Operations.BinaryOperatorKind.NotEquals)
+        {
+            var eqSlot = _ctx.AllocTemp("SystemBoolean");
+            EmitAssign(eqSlot, Const(false, "SystemBoolean"));
+            if (leftNullable && rightNullable) // both null → equal
+                _builder.EmitIf(IsNullV(aSlot), _ => _builder.EmitIf(IsNullV(bSlot),
+                    __ => EmitAssign(eqSlot, Const(true, "SystemBoolean"))));
+            IfBothPresent(_ => EmitAssign(eqSlot, ValueOp(Microsoft.CodeAnalysis.Operations.BinaryOperatorKind.Equals)));
+            if (kind == Microsoft.CodeAnalysis.Operations.BinaryOperatorKind.NotEquals)
+                return ExternCall("SystemBoolean.__op_UnaryNegation__SystemBoolean__SystemBoolean",
+                    new List<CValue> { SlotRef(eqSlot) }, "SystemBoolean");
+            return SlotRef(eqSlot);
+        }
+        var relSlot = _ctx.AllocTemp("SystemBoolean"); // relational → bool : false unless both present
+        EmitAssign(relSlot, Const(false, "SystemBoolean"));
+        IfBothPresent(_ => EmitAssign(relSlot, ValueOp(kind)));
+        return SlotRef(relSlot);
+    }
+
     // ── Extern resolution ──
 
     static readonly string[] FallbackBaseTypes = new[]

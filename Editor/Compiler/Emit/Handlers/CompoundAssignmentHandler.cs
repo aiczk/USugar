@@ -27,6 +27,19 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
         var lv = CaptureLValue(op.Target);
         var leftVal = lv.Value;
         var rightVal = VisitExpression(op.Value);
+
+        // Nullable (lifted) compound assignment: x += v  →  x = lifted(x, v) (null-propagating).
+        if (EmitContext.IsNullableT(op.Target.Type, out var tUnderlying))
+        {
+            var rNullable = EmitContext.IsNullableT(op.Value.Type, out var vUnderlying);
+            var lifted = EmitLiftedBinaryCore(
+                leftVal, true, tUnderlying,
+                rightVal, rNullable, rNullable ? vUnderlying : op.Value.Type,
+                op.OperatorKind, op.OperatorMethod, op.Type);
+            EmitWriteBack(op.Target, lifted, lv);
+            return lifted;
+        }
+
         var resultType = GetUdonType(op.Type);
 
         // Promote small integers for the operation temp.
@@ -74,6 +87,26 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
         // Capture lvalue sub-expressions once to avoid double evaluation
         var lv = CaptureLValue(op.Target);
         var targetVal = lv.Value;
+
+        // Nullable (lifted) increment/decrement: x++  →  x = lifted(x, 1) (null-propagating).
+        if (EmitContext.IsNullableT(op.Type, out var incUnderlying))
+        {
+            CValue saved = null;
+            if (op.IsPostfix)
+            {
+                var s = _ctx.AllocTemp("SystemObject");
+                EmitAssign(s, targetVal);
+                saved = SlotRef(s);
+            }
+            var kind = op.Kind == OperationKind.Increment ? BinaryOperatorKind.Add : BinaryOperatorKind.Subtract;
+            var lifted = EmitLiftedBinaryCore(
+                targetVal, true, incUnderlying,
+                Const(1, GetUdonType(incUnderlying)), false, incUnderlying,
+                kind, null, op.Type);
+            EmitWriteBack(op.Target, lifted, lv);
+            return op.IsPostfix && saved != null ? saved : lifted;
+        }
+
         var udonType = GetUdonType(op.Type);
 
         // Promote small integers: Udon VM has no byte/sbyte/short/ushort operators
