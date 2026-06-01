@@ -523,53 +523,78 @@ public abstract class HandlerBase
         return InternalCall(func.Name, args, retType);
     }
 
-    // Live values that must survive a recursive re-entry of the current method: its parameters, the
-    // struct receiver (if any), and all in-scope locals. Over-approximation is safe — an extra
-    // save/restore of a dead variable is inert.
-    List<(string id, string type)> CollectRecursionSpillVars()
+    // One frame value to spill across a recursive call — either a named heap field (param / receiver /
+    // local) or an IR slot (any scratch/frame temp: array temps, foreach loop-control, and crucially the
+    // result temp of an EARLIER recursive call in the same expression).
+    readonly struct SpillEntry
     {
-        var vars = new List<(string, string)>();
+        public readonly int Slot;       // >= 0 for a slot entry
+        public readonly string FieldId; // non-null for a field entry
+        public readonly string Type;
+        SpillEntry(int slot, string fieldId, string type) { Slot = slot; FieldId = fieldId; Type = type; }
+        public static SpillEntry Field(string id, string type) => new SpillEntry(-1, id, type);
+        public static SpillEntry SlotOf(int slot, string type) => new SpillEntry(slot, null, type);
+        public bool IsSlot => FieldId == null;
+    }
+
+    // Every frame value that must survive a recursive re-entry of the current method: its parameters, the
+    // struct receiver, all in-scope locals (named heap fields), AND every IR slot allocated so far in the
+    // current function (scratch/frame temps). The slot snapshot is the key fix — Udon's flat heap shares a
+    // function's scratch variables across all its activations, so an unnamed temp holding a value across a
+    // sibling recursive call (e.g. the first `Fib(n-1)` result while `Fib(n-2)` runs, or a foreach's index)
+    // is clobbered unless spilled. Captured BEFORE this call's own result temp is allocated, so that temp is
+    // excluded. Over-approximation (spilling a dead temp) is inert.
+    List<SpillEntry> CollectRecursionSpillVars()
+    {
+        var entries = new List<SpillEntry>();
         var seen = new HashSet<string>();
-        void Add(string id)
+        void AddField(string id)
         {
             if (id == null || !seen.Add(id)) return;
             var t = _ctx.GetFieldType(id);
-            if (t != null) vars.Add((id, t));
+            if (t != null) entries.Add(SpillEntry.Field(id, t));
         }
         if (_currentMethod != null && _methodParamVarIds.TryGetValue(_currentMethod, out var pids))
-            foreach (var pid in pids) Add(pid);
-        Add(_ctx.CurrentStructReceiverParamId);
-        foreach (var b in _localBindings.Values) Add(b.Id);
-        return vars;
+            foreach (var pid in pids) AddField(pid);
+        AddField(_ctx.CurrentStructReceiverParamId);
+        foreach (var b in _localBindings.Values) AddField(b.Id);
+
+        var slots = _builder.CurrentFunction.Slots;
+        for (int i = 0; i < slots.Count; i++)
+            if (slots[i].Class != SlotClass.Pinned) // Pinned = special infrastructure, not frame-local computation
+                entries.Add(SpillEntry.SlotOf(slots[i].Id, slots[i].Type));
+        return entries;
     }
 
-    void EmitRecursionSpill(List<(string id, string type)> vars)
+    void EmitRecursionSpill(List<SpillEntry> entries)
     {
-        foreach (var (id, type) in vars)
+        foreach (var e in entries)
         {
             // __recurStack[__recurSp] = v   (boxed into the object[] element)
             EmitExternVoid("SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid", new List<CValue>
             {
                 LoadField(EmitContext.RecurStackId, "SystemObjectArray"),
                 LoadField(EmitContext.RecurSpId, "SystemInt32"),
-                LoadField(id, type),
+                e.IsSlot ? (CValue)SlotRef(e.Slot) : LoadField(e.FieldId, e.Type),
             });
             EmitRecurSpDelta(1);
         }
     }
 
-    void EmitRecursionReload(List<(string id, string type)> vars)
+    void EmitRecursionReload(List<SpillEntry> entries)
     {
         // Pop in reverse (LIFO).
-        for (int i = vars.Count - 1; i >= 0; i--)
+        for (int i = entries.Count - 1; i >= 0; i--)
         {
             EmitRecurSpDelta(-1);
             // v = __recurStack[__recurSp]   (boxed value; Udon unboxes transparently on typed use)
-            EmitStoreField(vars[i].id, ExternCall("SystemObjectArray.__Get__SystemInt32__SystemObject", new List<CValue>
+            var get = ExternCall("SystemObjectArray.__Get__SystemInt32__SystemObject", new List<CValue>
             {
                 LoadField(EmitContext.RecurStackId, "SystemObjectArray"),
                 LoadField(EmitContext.RecurSpId, "SystemInt32"),
-            }, "SystemObject"));
+            }, "SystemObject");
+            if (entries[i].IsSlot) EmitAssign(entries[i].Slot, get);
+            else EmitStoreField(entries[i].FieldId, get);
         }
     }
 
