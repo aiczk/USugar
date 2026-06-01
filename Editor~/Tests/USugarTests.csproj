@@ -48,6 +48,7 @@
     <Compile Include="../../Editor/Compiler/IR/CNodeBridge.cs" />
     <Compile Include="../../Editor/Compiler/IR/CoreFlatten.cs" />
     <Compile Include="../../Editor/Compiler/IR/CoreFlattenBridge.cs" />
+    <Compile Include="../../Editor/Compiler/IR/FlatVerify.cs" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.3.0" />

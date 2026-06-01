@@ -40,6 +40,7 @@ public class CoreFlattenTests
         foreach (var s in hf.Slots) cf.Slots.Add(new SlotDecl(s.Id, s.Type, s.Class, s.FixedName));
         cf.Body = (CBlock)CNodeBridge.FromHStmt(hf.Body);
         CoreFlatten.Lower(cf);
+        FlatVerify.Verify(cf); // the flattened output must also satisfy the flat post-conditions
         return CoreFlattenBridge.ToLFunction(cf);
     }
 
