@@ -557,7 +557,16 @@ public abstract class HandlerBase
         if (_currentMethod != null && _methodParamVarIds.TryGetValue(_currentMethod, out var pids))
             foreach (var pid in pids) AddField(pid);
         AddField(_ctx.CurrentStructReceiverParamId);
-        foreach (var b in _localBindings.Values) AddField(b.Id);
+        // For a local function, only its OWN locals are frame-local and need spilling. Locals captured from
+        // an enclosing scope are shared by reference (C# closure semantics) — the same flat-heap sharing the
+        // recursion otherwise corrupts is here the CORRECT behaviour, so they must NOT be saved/restored.
+        bool isLocalFunc = _currentMethod != null && _currentMethod.MethodKind == MethodKind.LocalFunction;
+        foreach (var kv in _localBindings)
+        {
+            if (isLocalFunc && !SymbolEqualityComparer.Default.Equals(kv.Key.ContainingSymbol, _currentMethod))
+                continue;
+            AddField(kv.Value.Id);
+        }
 
         var slots = _builder.CurrentFunction.Slots;
         for (int i = 0; i < slots.Count; i++)

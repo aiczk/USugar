@@ -1270,12 +1270,26 @@ public class UasmEmitter
     // flat heap shares param/local slots across frames). Includes direct self-recursion (self-loops).
     void BuildRecursionInfo()
     {
-        var internalMethods = _methodFunctions.Keys
+        var roots = _methodFunctions.Keys
             .Select(m => m.OriginalDefinition)
             .Where(m => m.DeclaringSyntaxReferences.Length > 0)
             .Distinct(SymbolEqualityComparer.Default)
             .Cast<IMethodSymbol>()
-            .ToArray();
+            .ToList();
+
+        // Local functions are registered lazily during emission (after this pass), so discover them now by
+        // walking the bodies — otherwise a recursive local function would not be detected and would corrupt
+        // the flat heap. Transitive: a local function may contain nested local functions.
+        var localFuncs = new List<IMethodSymbol>();
+        foreach (var m in roots)
+        {
+            var sr = m.DeclaringSyntaxReferences.FirstOrDefault();
+            if (sr != null)
+                CollectLocalFunctions(_compilation.GetSemanticModel(sr.SyntaxTree).GetOperation(sr.GetSyntax()), localFuncs);
+        }
+
+        var internalMethods = roots.Concat(localFuncs)
+            .Distinct(SymbolEqualityComparer.Default).Cast<IMethodSymbol>().ToArray();
         var methodSet = new HashSet<IMethodSymbol>(internalMethods, SymbolEqualityComparer.Default);
 
         var bodies = new Dictionary<IMethodSymbol, IOperation>(SymbolEqualityComparer.Default);
@@ -1286,7 +1300,9 @@ public class UasmEmitter
             var syntaxRef = m.DeclaringSyntaxReferences.FirstOrDefault();
             if (syntaxRef != null)
             {
-                var body = _compilation.GetSemanticModel(syntaxRef.SyntaxTree).GetOperation(syntaxRef.GetSyntax());
+                var op = _compilation.GetSemanticModel(syntaxRef.SyntaxTree).GetOperation(syntaxRef.GetSyntax());
+                // A local function's analysable body is the block inside its ILocalFunctionOperation.
+                var body = (op as ILocalFunctionOperation)?.Body ?? op;
                 bodies[m] = body;
                 CollectInternalCallees(body, methodSet, callees);
             }
@@ -1332,7 +1348,10 @@ public class UasmEmitter
         }
         if (IsInternalCallTo(op, callee, out _)) return true; // call not in tail position
         foreach (var child in op.Children)
+        {
+            if (child is ILocalFunctionOperation) continue; // analysed as its own node
             if (HasNonTailCallTo(child, callee)) return true;
+        }
         return false;
     }
 
@@ -1349,7 +1368,19 @@ public class UasmEmitter
         return false;
     }
 
+    // Collect every local function declared anywhere in an operation tree (transitive: nested too).
+    static void CollectLocalFunctions(IOperation op, List<IMethodSymbol> result)
+    {
+        if (op == null) return;
+        if (op is ILocalFunctionOperation lf && lf.Symbol != null)
+            result.Add(lf.Symbol.OriginalDefinition);
+        foreach (var child in op.Children)
+            CollectLocalFunctions(child, result);
+    }
+
     // Collect call targets that resolve to a registered internal method (same program, JUMP-based).
+    // Nested local functions are skipped — each is analysed as its own graph node, so their internal
+    // calls are not attributed to the enclosing method.
     static void CollectInternalCallees(IOperation op, HashSet<IMethodSymbol> internalMethods, HashSet<IMethodSymbol> result)
     {
         if (op == null) return;
@@ -1367,7 +1398,10 @@ public class UasmEmitter
         if (opMethod != null && internalMethods.Contains(opMethod.OriginalDefinition))
             result.Add(opMethod.OriginalDefinition);
         foreach (var child in op.Children)
+        {
+            if (child is ILocalFunctionOperation) continue; // analysed as its own node
             CollectInternalCallees(child, internalMethods, result);
+        }
     }
 
     // Tarjan's strongly-connected-components algorithm (iterative, to avoid deep recursion on large graphs).

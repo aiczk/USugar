@@ -3496,6 +3496,25 @@ public class TailRecTest : UdonSharpBehaviour {
         Assert.DoesNotContain("__recurStack", uasm);
     }
 
+    [Fact]
+    public void RecursiveLocalFunction_SpillsToRecursionStack()
+    {
+        // Recursive local functions are supported via the software stack (previously a hard error). The
+        // local function is discovered before recursion analysis and its own params/locals are spilled.
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public class RecLocalFuncTest : UdonSharpBehaviour {
+    int _result;
+    void Start() {
+        int Fact(int n) { if (n <= 1) return 1; return n * Fact(n - 1); }
+        _result = Fact(5);
+    }
+}
+", "RecLocalFuncTest");
+        Assert.Contains("__recurStack", uasm);
+        Assert.Contains("__recurSp", uasm);
+    }
+
     // ── Re-entrance guard ──
 
     [Fact]

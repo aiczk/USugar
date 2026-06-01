@@ -53,15 +53,10 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
             // Delegate invocation: a() where a is Action/Func
             case MethodKind.DelegateInvoke:
                 return VisitDelegateInvocation(op);
-            // Local function call
+            // Local function call. Recursion (including captured-by-reference outer locals, which stay
+            // shared per C# closure semantics) is handled by EmitCallToMethod's software-stack spill/reload.
             case MethodKind.LocalFunction
                 when _methodFunctions.ContainsKey(target):
-                if (_currentMethod != null
-                    && SymbolEqualityComparer.Default.Equals(target, _currentMethod))
-                    throw new System.NotSupportedException(
-                        $"Recursive local function '{target.Name}' is not supported. " +
-                        "Udon VM's flat heap shares parameter variables across call frames. " +
-                        "Use a loop instead of recursion.");
                 return EmitUserMethodCall(op, target);
         }
 
