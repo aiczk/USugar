@@ -25,7 +25,9 @@ public static class IrPipeline
         if (dumpEnabled)
             DumpToFile(className, "1b_hir_optimized.txt", hirModule.Dump());
 
-        var lirModule = HirToLir.Lower(hirModule);
+        // Migration (live path): CoreFlatten replaces HirToLir via the unified Core IR.
+        // Byte-identical to HirToLir (snapshot oracle guards this); handlers still build HIR.
+        var lirModule = CorePipeline.FlattenViaCoreIR(hirModule);
 
         if (dumpEnabled)
             DumpToFile(className, "2_lir.txt", lirModule.Dump());
