@@ -325,7 +325,7 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
 
         var typeArgPart = string.Join("_", constructed.TypeArguments.Select(ExternResolver.GetUdonTypeName));
         var name = $"__{idx}_{SanitizeId(constructed.Name)}_{typeArgPart}";
-        var func = _hirModule.AddFunction(name);
+        var func = _module.AddFunction(name);
         _methodFunctions[constructed] = func;
 
         var gsParamIds = new string[constructed.Parameters.Length];
@@ -408,7 +408,7 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
 
         var slot = _ctx.RegisterMethod(symbol, i => i.ToString());
         var idx = slot.Index;
-        var func = _hirModule.AddFunction($"__{idx}_lambda");
+        var func = _module.AddFunction($"__{idx}_lambda");
         _methodFunctions[symbol] = func;
 
         // Convention vars are used instead of standard param/ret vars.

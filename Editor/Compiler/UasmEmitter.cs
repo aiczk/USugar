@@ -16,7 +16,7 @@ public class UasmEmitter
     // Property shims → EmitContext
     Compilation _compilation => _ctx.Compilation;
     INamedTypeSymbol _classSymbol => _ctx.ClassSymbol;
-    CModule _hirModule => _ctx.HirModule;
+    CModule _module => _ctx.Module;
     CoreBuilder _builder => _ctx.Builder;
     LayoutPlanner _planner => _ctx.Planner;
     Dictionary<IMethodSymbol, CFunction> _methodFunctions => _ctx.MethodFunctions;
@@ -96,7 +96,7 @@ public class UasmEmitter
     // ── Emit ──
 
     /// <summary>Access to the HIR module for debugging and testing.</summary>
-    public CModule HirModule => _hirModule;
+    public CModule Module => _module;
 
     /// <summary>Called after handler emission, before optimization. Set for IR debugging.</summary>
     public Action<string, CModule> OnIrPass;
@@ -114,9 +114,9 @@ public class UasmEmitter
         SetReflectionValues();
         EmitMethods();
         DetectLambdaCaptureAliasing();
-        OnIrPass?.Invoke("after-emit", _hirModule);
+        OnIrPass?.Invoke("after-emit", _module);
         // Handlers build Core IR; the pipeline (verify/optimize/flatten) runs on Core directly.
-        var result = IrPipeline.GenerateUasmFromCore(_hirModule, DumpEnabled);
+        var result = IrPipeline.GenerateUasmFromCore(_module, DumpEnabled);
         _codeGenResult = result;
         return result.Uasm;
     }
@@ -538,7 +538,7 @@ public class UasmEmitter
                     || fcbFieldName != null);
 
             // Create CFunction with or without ExportName
-            var func = _hirModule.AddFunction(exportName, shouldExport ? exportName : null);
+            var func = _module.AddFunction(exportName, shouldExport ? exportName : null);
             _methodFunctions[method] = func;
 
             // Declare params using LayoutPlanner IDs
@@ -581,7 +581,7 @@ public class UasmEmitter
             var slot = _ctx.RegisterMethod(fm, i => i.ToString());
             var idx = slot.Index;
             var funcName = $"__{idx}_{SanitizeId(fm.Name)}";
-            var func = _hirModule.AddFunction(funcName);
+            var func = _module.AddFunction(funcName);
             _methodFunctions[fm] = func;
 
             var fmParamIds = new string[fm.Parameters.Length];
@@ -617,7 +617,7 @@ public class UasmEmitter
             var slot = _ctx.RegisterMethod(bm, i => i.ToString());
             var idx = slot.Index;
             var funcName = $"__{idx}_{SanitizeId(bm.Name)}";
-            var func = _hirModule.AddFunction(funcName);
+            var func = _module.AddFunction(funcName);
             _methodFunctions[bm] = func;
 
             var bmParamIds = new string[bm.Parameters.Length];
@@ -690,7 +690,7 @@ public class UasmEmitter
         if ((_fieldInitOps.Count > 0 || _fieldChangeCallbacks.Count > 0)
             && !methods.Any(m => UdonEventNames.TryGetValue(m.Name, out var en) && en == "_start"))
         {
-            var startFunc = _hirModule.AddFunction("_start", "_start");
+            var startFunc = _module.AddFunction("_start", "_start");
             _builder.SetFunction(startFunc);
             EmitFieldInitializers();
             _builder.EmitReturn();
@@ -720,7 +720,7 @@ public class UasmEmitter
             }
 
             // Create bridge function with unique name (avoid __body label collision with class method)
-            var bridgeFunc = _hirModule.AddFunction($"__bridge_{ifaceMl.ExportName}", ifaceMl.ExportName);
+            var bridgeFunc = _module.AddFunction($"__bridge_{ifaceMl.ExportName}", ifaceMl.ExportName);
             _builder.SetFunction(bridgeFunc);
 
             // Find class implementation
@@ -780,7 +780,7 @@ public class UasmEmitter
             }
 
             // Build bridge function
-            var bridgeFunc = _hirModule.AddFunction(bridge.BridgeExportName, bridge.BridgeExportName);
+            var bridgeFunc = _module.AddFunction(bridge.BridgeExportName, bridge.BridgeExportName);
 
             var prevFunc = _builder.CurrentFunction;
             _builder.SetFunction(bridgeFunc);
@@ -841,7 +841,7 @@ public class UasmEmitter
             }
 
             // Build bridge function
-            var bridgeFunc = _hirModule.AddFunction(bridgeExportName, bridgeExportName);
+            var bridgeFunc = _module.AddFunction(bridgeExportName, bridgeExportName);
 
             var prevFunc = _builder.CurrentFunction;
             _builder.SetFunction(bridgeFunc);
@@ -958,7 +958,7 @@ public class UasmEmitter
         if (fcbFieldName != null)
         {
             var varChangeName = $"_onVarChange_{fcbFieldName}";
-            var varChangeFunc = _hirModule.AddFunction(varChangeName, varChangeName);
+            var varChangeFunc = _module.AddFunction(varChangeName, varChangeName);
             _builder.SetFunction(varChangeFunc);
 
             // Preamble: read new value from field, restore old value to field

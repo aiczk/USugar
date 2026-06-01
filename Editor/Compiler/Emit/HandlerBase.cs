@@ -14,7 +14,7 @@ public abstract class HandlerBase
     // ── Property shims to EmitContext ──
     protected Compilation _compilation => _ctx.Compilation;
     protected INamedTypeSymbol _classSymbol => _ctx.ClassSymbol;
-    protected CModule _hirModule => _ctx.HirModule;
+    protected CModule _module => _ctx.Module;
     protected CoreBuilder _builder => _ctx.Builder;
     protected LayoutPlanner _planner => _ctx.Planner;
     protected Dictionary<IMethodSymbol, CFunction> _methodFunctions => _ctx.MethodFunctions;
@@ -273,7 +273,7 @@ public abstract class HandlerBase
         var irName = slot.VarPrefix;
 
         // Create CFunction (internal, no export)
-        var func = _hirModule.AddFunction(irName);
+        var func = _module.AddFunction(irName);
 
         // Declare params as fields (HIR uses field-based parameter passing)
         var lfParamIds = new string[localFunc.Parameters.Length];

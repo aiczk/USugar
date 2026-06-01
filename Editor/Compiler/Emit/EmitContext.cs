@@ -69,7 +69,7 @@ public class EmitContext
     // Core dependencies
     public readonly Compilation Compilation;
     public readonly INamedTypeSymbol ClassSymbol;
-    public readonly CModule HirModule;
+    public readonly CModule Module;
     public readonly CoreBuilder Builder;
     public readonly LayoutPlanner Planner;
 
@@ -245,8 +245,8 @@ public class EmitContext
     {
         Compilation = compilation;
         ClassSymbol = classSymbol;
-        HirModule = new CModule { ClassName = classSymbol.ToDisplayString() };
-        Builder = new CoreBuilder(HirModule);
+        Module = new CModule { ClassName = classSymbol.ToDisplayString() };
+        Builder = new CoreBuilder(Module);
         Planner = planner;
         CaptureAnalyzer = new LambdaCaptureAnalyzer(compilation);
     }
@@ -267,13 +267,13 @@ public class EmitContext
         return n;
     }
 
-    /// <summary>Declare a field in HirModule. Idempotent — returns existing name if already declared.</summary>
+    /// <summary>Declare a field in Module. Idempotent — returns existing name if already declared.</summary>
     public string DeclareField(string name, string type, FieldFlags flags = FieldFlags.None,
         object defaultValue = null, string syncMode = null)
     {
         if (_declaredFieldNames.Contains(name)) return name;
         var field = new FieldDecl(name, type) { Flags = flags, DefaultValue = defaultValue, SyncMode = syncMode };
-        HirModule.Fields.Add(field);
+        Module.Fields.Add(field);
         _declaredFieldNames.Add(name);
         return name;
     }
@@ -282,7 +282,7 @@ public class EmitContext
     public string DeclareVar(string id, string type)
     {
         if (_declaredFieldNames.Contains(id)) return id;
-        HirModule.Fields.Add(new FieldDecl(id, type));
+        Module.Fields.Add(new FieldDecl(id, type));
         _declaredFieldNames.Add(id);
         return id;
     }
@@ -291,7 +291,7 @@ public class EmitContext
     public bool TryDeclareVar(string id, string type)
     {
         if (_declaredFieldNames.Contains(id)) return false;
-        HirModule.Fields.Add(new FieldDecl(id, type));
+        Module.Fields.Add(new FieldDecl(id, type));
         _declaredFieldNames.Add(id);
         return true;
     }
@@ -301,7 +301,7 @@ public class EmitContext
     {
         var idx = NextIndex($"lcl_{name}_{type}");
         var id = $"__lcl_{name}_{type}_{idx}";
-        HirModule.Fields.Add(new FieldDecl(id, type));
+        Module.Fields.Add(new FieldDecl(id, type));
         _declaredFieldNames.Add(id);
         return id;
     }
@@ -312,7 +312,7 @@ public class EmitContext
         var heapType = SupportedThisTypes.Contains(udonType) ? udonType : "VRCUdonUdonBehaviour";
         var idx = NextIndex($"this_{heapType}");
         var id = $"__this_{heapType}_{idx}";
-        HirModule.Fields.Add(new FieldDecl(id, heapType) { DefaultValue = "this" });
+        Module.Fields.Add(new FieldDecl(id, heapType) { DefaultValue = "this" });
         _declaredFieldNames.Add(id);
         return id;
     }
@@ -335,7 +335,7 @@ public class EmitContext
     public string DeclareEnumArray(string id, object[] values)
     {
         if (_declaredFieldNames.Contains(id)) return id;
-        HirModule.Fields.Add(new FieldDecl(id, "SystemObjectArray") { DefaultValue = values });
+        Module.Fields.Add(new FieldDecl(id, "SystemObjectArray") { DefaultValue = values });
         _declaredFieldNames.Add(id);
         return id;
     }
@@ -406,7 +406,7 @@ public class EmitContext
     /// <summary>Set const value on an existing field.</summary>
     public void SetFieldConstValue(string name, object value)
     {
-        var field = HirModule.Fields.FirstOrDefault(f => f.Name == name);
+        var field = Module.Fields.FirstOrDefault(f => f.Name == name);
         if (field != null) field.DefaultValue = value;
     }
 
@@ -423,7 +423,7 @@ public class EmitContext
         if (_structConstIds.TryGetValue(key, out var existing)) return existing;
         var idx = NextIndex($"structconst_{type}");
         var id = $"__const_{type}_{idx}";
-        HirModule.Fields.Add(new FieldDecl(id, type) { DefaultValue = value });
+        Module.Fields.Add(new FieldDecl(id, type) { DefaultValue = value });
         _declaredFieldNames.Add(id);
         _structConstIds[key] = id;
         return id;
@@ -432,7 +432,7 @@ public class EmitContext
     /// <summary>Get the Udon type of a declared field by its ID.</summary>
     public string GetFieldType(string id)
     {
-        return HirModule.Fields.FirstOrDefault(f => f.Name == id)?.Type;
+        return Module.Fields.FirstOrDefault(f => f.Name == id)?.Type;
     }
 
     // ── Constant parsing (moved from VariableTable) ──
