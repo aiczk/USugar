@@ -464,7 +464,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
             var rightElem = ExternCall("SystemObjectArray.__Get__SystemInt32__SystemObject",
                 new List<CValue> { SlotRef(rightSlot), Const(i, "SystemInt32") }, "SystemObject");
             var elemEq = ExternCall(
-                "SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean",
+                "SystemObject.__Equals__SystemObject_SystemObject__SystemBoolean",
                 new List<CValue> { leftElem, rightElem }, "SystemBoolean");
 
             result = ExternCall(
@@ -503,8 +503,9 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
         var rightSlot = _ctx.AllocTemp("SystemObjectArray");
         EmitAssign(rightSlot, rightVal);
 
-        // Use SystemObject equality for all elements — elements extracted from object[]
-        // have SystemObject type tag; using type-specific equality would cause mismatch.
+        // Compare boxed elements by VALUE via SystemObject.__Equals (object.Equals), NOT
+        // __op_Equality which is REFERENCE equality — distinct boxes of equal values would
+        // otherwise always compare unequal. (Caveat: float NaN compares equal under object.Equals.)
         CValue result = Const(true, "SystemBoolean");
         for (int i = 0; i < layout.Count; i++)
         {
@@ -513,7 +514,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
             var rightElem = ExternCall("SystemObjectArray.__Get__SystemInt32__SystemObject",
                 new List<CValue> { SlotRef(rightSlot), Const(i, "SystemInt32") }, "SystemObject");
             var elemEq = ExternCall(
-                "SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean",
+                "SystemObject.__Equals__SystemObject_SystemObject__SystemBoolean",
                 new List<CValue> { leftElem, rightElem }, "SystemBoolean");
 
             result = ExternCall(

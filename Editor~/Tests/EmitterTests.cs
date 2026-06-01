@@ -5531,7 +5531,8 @@ public class TupleEqTest : UdonSharpBehaviour {
     }
 }");
         Assert.DoesNotContain("SystemObjectArray.__op_Equality__", uasm);
-        Assert.Contains("SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean", uasm);
+        // value equality (object.Equals), NOT __op_Equality (reference equality — would be wrong for boxed elements)
+        Assert.Contains("SystemObject.__Equals__SystemObject_SystemObject__SystemBoolean", uasm);
         Assert.Contains("__op_LogicalAnd__", uasm);
     }
 
@@ -5550,7 +5551,8 @@ public class TupleNeqTest : UdonSharpBehaviour {
     }
 }");
         Assert.DoesNotContain("SystemObjectArray.__op_Inequality__", uasm);
-        Assert.Contains("SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean", uasm);
+        // value equality (object.Equals), NOT __op_Equality (reference equality — would be wrong for boxed elements)
+        Assert.Contains("SystemObject.__Equals__SystemObject_SystemObject__SystemBoolean", uasm);
         Assert.Contains("__op_UnaryNegation__", uasm);
     }
 
