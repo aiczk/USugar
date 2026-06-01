@@ -137,6 +137,21 @@ public class EmitContext
            && RecursiveCallees.TryGetValue(caller, out var callees)
            && callees.Contains(callee.OriginalDefinition);
 
+    /// <summary>A hoisted internal function (local function or lambda) — these re-enter shared flat-heap slots.</summary>
+    public static bool IsHoistedFunction(IMethodSymbol m)
+        => m != null && m.MethodKind is MethodKind.LocalFunction or MethodKind.LambdaMethod or MethodKind.AnonymousFunction;
+
+    /// <summary>Record a recursion-cycle edge at emit time (used for mutual lambda recursion, which the
+    /// pre-emit SCC pass cannot see because lambdas hoist during emission).</summary>
+    public void MarkRecursiveEdge(IMethodSymbol caller, IMethodSymbol callee)
+    {
+        var key = caller.OriginalDefinition;
+        RecursiveCallees ??= new Dictionary<IMethodSymbol, HashSet<IMethodSymbol>>(SymbolEqualityComparer.Default);
+        if (!RecursiveCallees.TryGetValue(key, out var set))
+            RecursiveCallees[key] = set = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
+        set.Add(callee.OriginalDefinition);
+    }
+
     /// <summary>True if <paramref name="t"/> is <c>Nullable&lt;T&gt;</c>; yields the underlying T.
     /// Nullable is emulated as a boxed object (null | boxed T) — see ExternResolver type mapping.</summary>
     public static bool IsNullableT(ITypeSymbol t, out ITypeSymbol underlying)

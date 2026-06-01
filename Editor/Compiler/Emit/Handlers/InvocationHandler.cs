@@ -245,6 +245,14 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
         if (op.Instance is ILocalReferenceOperation localRef
             && _delegateVarMap.TryGetValue(localRef.Local, out var targetMethod))
         {
+            // Mutual recursion between two local-variable lambdas (f calls g, g calls f) is invisible to the
+            // pre-emit SCC analysis (lambdas hoist during emit). When one hoisted function calls a DIFFERENT
+            // hoisted lambda through a delegate variable, conservatively mark it a recursion edge so the
+            // frame is spilled. (Self-recursion is handled tail-aware by MarkLambdaSelfRecursion.)
+            if (_currentMethod != null && IsHoistedFunction(_currentMethod) && IsHoistedFunction(targetMethod)
+                && !SymbolEqualityComparer.Default.Equals(targetMethod.OriginalDefinition, _currentMethod.OriginalDefinition))
+                MarkRecursiveEdge(_currentMethod, targetMethod);
+
             var args = new List<CValue>();
             for (int i = 0; i < op.Arguments.Length; i++)
                 args.Add(VisitExpression(op.Arguments[i].Value));

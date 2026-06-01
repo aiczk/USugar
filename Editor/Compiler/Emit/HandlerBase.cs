@@ -36,6 +36,8 @@ public abstract class HandlerBase
     protected HashSet<string> _delegateFields => _ctx.DelegateFields;
     protected List<EmitDiagnostic> _diagnostics => _ctx.Diagnostics;
     protected bool IsRecursiveEdge(IMethodSymbol caller, IMethodSymbol callee) => _ctx.IsRecursiveEdge(caller, callee);
+    protected static bool IsHoistedFunction(IMethodSymbol m) => EmitContext.IsHoistedFunction(m);
+    protected void MarkRecursiveEdge(IMethodSymbol caller, IMethodSymbol callee) => _ctx.MarkRecursiveEdge(caller, callee);
 
     // ── Dispatch (recursive descent into other handlers via UasmEmitter facade) ──
     protected void VisitOperation(IOperation op) => _ctx.VisitOperation(op);
