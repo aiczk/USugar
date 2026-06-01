@@ -59,6 +59,9 @@ public static class ExternResolver
         {
             if (arrayType.ElementType is IArrayTypeSymbol)
                 return "SystemObjectArray";
+            // struct[] / tuple[] → object[] of boxed object[] elements (no SystemObjectArrayArray in Udon).
+            if (EmitContext.IsAggregateType(arrayType.ElementType))
+                return "SystemObjectArray";
             var elemTypeName = GetUdonTypeName(arrayType.ElementType, typeParamMap);
             if (elemTypeName == "VRCUdonCommonInterfacesIUdonEventReceiver")
                 return "UnityEngineComponentArray";
@@ -83,6 +86,11 @@ public static class ExternResolver
         if (type is IArrayTypeSymbol arrayType)
         {
             if (arrayType.ElementType is IArrayTypeSymbol)
+                return "SystemObjectArray";
+            // struct[] / tuple[] → object[] whose elements are the boxed per-element object[]. Udon has no
+            // SystemObjectArrayArray (object[][]) externs, so a nested-array element type cannot be used;
+            // a plain object[] holds the object[] elements as boxed objects.
+            if (EmitContext.IsAggregateType(arrayType.ElementType))
                 return "SystemObjectArray";
             // All types that resolve to IUdonEventReceiver use ComponentArray at runtime:
             // UdonSharpBehaviour[], derived[], UdonBehaviour[], user-interface[]

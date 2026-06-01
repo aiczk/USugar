@@ -20,21 +20,37 @@ public class ArrayHandler : HandlerBase, IExpressionHandler
     {
         var arrayType = GetUdonType(op.Type);
         var elementType = GetArrayElemType((IArrayTypeSymbol)op.Type);
-        var sizeVal = VisitExpression(op.DimensionSizes[0]);
-        var resultVal = ExternCall($"{arrayType}.__ctor__SystemInt32__{arrayType}", new List<CValue> { sizeVal }, arrayType);
+        var elemSym = ((IArrayTypeSymbol)op.Type).ElementType;
+        bool aggElem = elemSym is INamedTypeSymbol && EmitContext.IsAggregateType(elemSym);
 
-        if (op.Initializer == null)
-            return resultVal;
-
-        // Store array in a scratch slot so initializer element sets reference the same array
+        var sizeSlot = _ctx.AllocTemp("SystemInt32");
+        EmitAssign(sizeSlot, VisitExpression(op.DimensionSizes[0]));
         var arrSlot = _ctx.AllocTemp(arrayType);
-        EmitAssign(arrSlot, resultVal);
+        EmitAssign(arrSlot, ExternCall($"{arrayType}.__ctor__SystemInt32__{arrayType}",
+            new List<CValue> { SlotRef(sizeSlot) }, arrayType));
 
-        for (int i = 0; i < op.Initializer.ElementValues.Length; i++)
+        if (op.Initializer != null)
         {
-            var valVal = VisitExpression(op.Initializer.ElementValues[i]);
-            var idxConst = Const(i, "SystemInt32");
-            EmitExternVoid($"{arrayType}.__Set__SystemInt32_{elementType}__SystemVoid", new List<CValue> { SlotRef(arrSlot), idxConst, valVal });
+            for (int i = 0; i < op.Initializer.ElementValues.Length; i++)
+                EmitExternVoid($"{arrayType}.__Set__SystemInt32_{elementType}__SystemVoid",
+                    new List<CValue> { SlotRef(arrSlot), Const(i, "SystemInt32"), VisitExpression(op.Initializer.ElementValues[i]) });
+        }
+        else if (aggElem)
+        {
+            // struct[]/tuple[]: C# zero-init means each element is a fresh default struct (not a null slot),
+            // so `arr[i].field = x` works on a freshly allocated array. Fill via a runtime loop.
+            var iSlot = _ctx.AllocTemp("SystemInt32");
+            EmitAssign(iSlot, Const(0, "SystemInt32"));
+            _builder.EmitWhile(
+                () => ExternCall("SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean",
+                    new List<CValue> { SlotRef(iSlot), SlotRef(sizeSlot) }, "SystemBoolean"),
+                _ =>
+                {
+                    EmitExternVoid($"{arrayType}.__Set__SystemInt32_{elementType}__SystemVoid",
+                        new List<CValue> { SlotRef(arrSlot), SlotRef(iSlot), EmitNewAggregate((INamedTypeSymbol)elemSym) });
+                    EmitAssign(iSlot, ExternCall("SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32",
+                        new List<CValue> { SlotRef(iSlot), Const(1, "SystemInt32") }, "SystemInt32"));
+                });
         }
 
         return SlotRef(arrSlot);
@@ -60,7 +76,10 @@ public class ArrayHandler : HandlerBase, IExpressionHandler
             : VisitExpression(index);
 
         var resultVal = ExternCall($"{arrayType}.__Get__SystemInt32__{elementType}", new List<CValue> { arrayVal, indexVal }, GetUdonType(op.Type));
-        return resultVal;
+        // A struct/tuple element read AS A VALUE is copied (value semantics). Receiver access (arr[i].x =)
+        // goes through LoadInstanceRaw → ReadArrayElementRaw, which does NOT clone.
+        return op.Type is INamedTypeSymbol elemAggT && EmitContext.IsAggregateType(elemAggT)
+            ? EmitDeepCloneAggregate(resultVal, elemAggT) : resultVal;
     }
 
     CValue EmitIndexFromEnd(CValue arrayVal, string arrayType, IOperation operand)

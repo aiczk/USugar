@@ -5761,10 +5761,10 @@ public class NestedTupleEqTest : UdonSharpBehaviour {
     // ── Tuple array ──
 
     [Fact]
-    public void TupleArray_FieldDeclared_AsSystemObjectArrayArray()
+    public void TupleArray_FieldDeclared_AsSystemObjectArray()
     {
-        // (int,string)[] field resolves to SystemObjectArrayArray in UASM.
-        // Full compilation skipped: SystemObjectArrayArray may not have Udon externs.
+        // A struct/tuple array resolves to SystemObjectArray (object[] of boxed object[] elements), NOT
+        // SystemObjectArrayArray (object[][]), which Udon has no externs for.
         var uasm = TestHelper.CompileToUasm(@"
 using UdonSharp;
 [UdonBehaviourSyncMode(BehaviourSyncMode.None)]
@@ -5772,7 +5772,7 @@ public class TupleArrTypeTest : UdonSharpBehaviour {
     (int, string)[] _arr;
     void Start() { }
 }");
-        Assert.Contains("SystemObjectArrayArray", uasm);
+        Assert.DoesNotContain("SystemObjectArrayArray", uasm);
     }
 
     // ── Cross-behaviour tuple ──

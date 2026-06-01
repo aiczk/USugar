@@ -430,8 +430,27 @@ public abstract class HandlerBase
             // the access/mutation has to hit the live storage. (Value reads clone in VisitFieldReference.)
             IFieldReferenceOperation fr when EmitContext.IsAggregateType(fr.Type)
                 => ReadAggregateFieldRaw(fr),
+            // Aggregate array element as a RECEIVER (`arr[i].x = …`) likewise hits live storage, no clone.
+            IArrayElementReferenceOperation ae when EmitContext.IsAggregateType(ae.Type)
+                => ReadArrayElementRaw(ae),
             _ => VisitExpression(instance), // method return, field on this, etc. — fresh or already raw
         };
+    }
+
+    /// <summary>Read an aggregate array element as the raw stored object[] (no clone), for receiver access.</summary>
+    protected CValue ReadArrayElementRaw(IArrayElementReferenceOperation ae)
+    {
+        var arrayVal = VisitExpression(ae.ArrayReference);
+        var arrSym = ae.ArrayReference.Type as IArrayTypeSymbol;
+        var arrType = GetArrayType(arrSym);
+        var elemType = GetArrayElemType(arrSym);
+        var idx = ae.Indices[0];
+        CValue idxVal = idx is IUnaryOperation { Type.Name: "Index" } fromEnd
+            ? ExternCall("SystemInt32.__op_Subtraction__SystemInt32_SystemInt32__SystemInt32", new List<CValue>
+                { ExternCall($"{arrType}.__get_Length__SystemInt32", new List<CValue> { arrayVal }, "SystemInt32"),
+                  VisitExpression(fromEnd.Operand) }, "SystemInt32")
+            : VisitExpression(idx);
+        return ExternCall($"{arrType}.__Get__SystemInt32__{elemType}", new List<CValue> { arrayVal, idxVal }, "SystemObject");
     }
 
     /// <summary>Read an aggregate-typed field as the raw stored object[] (no clone): a nested element via
