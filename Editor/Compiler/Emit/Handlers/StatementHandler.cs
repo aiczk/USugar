@@ -167,14 +167,22 @@ public class StatementHandler : HandlerBase, IOperationHandler
     {
         var paramIds = _methodParamVarIds[_currentMethod];
 
-        // Evaluate args into HExprs first (avoid overwriting params before they're read)
-        var argVals = new CValue[tailCall.Arguments.Length];
+        // Snapshot every arg into a temp BEFORE overwriting any param. VisitExpression returns a lazy expr
+        // that reads its operand slots when lowered, not a materialized value — so storing param i first
+        // would corrupt a later arg that reads param i (e.g. `return Count(n-1, acc+n)` must use the OLD n
+        // for `acc+n`). EmitAssign forces evaluation now, against the pre-overwrite param values.
+        var argSlots = new int[tailCall.Arguments.Length];
         for (int i = 0; i < tailCall.Arguments.Length; i++)
-            argVals[i] = VisitExpression(tailCall.Arguments[i].Value);
+        {
+            var argVal = VisitExpression(tailCall.Arguments[i].Value);
+            var slot = _ctx.AllocTemp(GetUdonType(tailCall.Arguments[i].Value.Type));
+            EmitAssign(slot, argVal);
+            argSlots[i] = slot;
+        }
 
-        // Overwrite param vars with new values
+        // Overwrite param vars from the snapshots
         for (int i = 0; i < tailCall.Arguments.Length; i++)
-            EmitStoreField(paramIds[i], argVals[i]);
+            EmitStoreField(paramIds[i], SlotRef(argSlots[i]));
 
         // Jump back to method entry via goto label
         var func = _methodFunctions[_currentMethod];
