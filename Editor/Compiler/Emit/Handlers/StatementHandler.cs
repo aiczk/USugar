@@ -416,51 +416,9 @@ public class StatementHandler : HandlerBase, IOperationHandler
         }
     }
 
-    /// <summary>Set each value-type element of an object[]-emulated aggregate to its type default
-    /// (object[] slots are null by default, but struct value fields must be 0/false/etc.). A nested
-    /// aggregate field is recursively allocated + default-initialized rather than left null.</summary>
+    /// <summary>Default-initialize an object[]-emulated aggregate local (delegates to the shared
+    /// recursive HandlerBase helper).</summary>
     void DefaultInitAggregate(string localId, AggregateLayout layout)
-        => DefaultInitAggregateArray(LoadField(localId, "SystemObjectArray"), layout);
-
-    void DefaultInitAggregateArray(CValue arrayVal, AggregateLayout layout)
-    {
-        var slot = _ctx.AllocTemp("SystemObjectArray");
-        EmitAssign(slot, arrayVal);
-        for (int i = 0; i < layout.Count; i++)
-        {
-            var fieldType = layout.Fields[i].Type;
-            if (fieldType is INamedTypeSymbol nested && EmitContext.IsAggregateType(nested))
-            {
-                // Nested aggregate → allocate a sub-array and recursively default-init it.
-                var nl = _ctx.GetAggregateLayout(nested);
-                var subSlot = _ctx.AllocTemp("SystemObjectArray");
-                EmitAssign(subSlot, ExternCall("SystemObjectArray.__ctor__SystemInt32__SystemObjectArray",
-                    new List<CValue> { Const(nl.Count, "SystemInt32") }, "SystemObjectArray"));
-                EmitExternVoid("SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid",
-                    new List<CValue> { SlotRef(slot), Const(i, "SystemInt32"), SlotRef(subSlot) });
-                DefaultInitAggregateArray(SlotRef(subSlot), nl);
-                continue;
-            }
-            object defVal = fieldType.SpecialType switch
-            {
-                SpecialType.System_Boolean => (object)false,
-                SpecialType.System_Int32 => (object)0,
-                SpecialType.System_Single => (object)0f,
-                SpecialType.System_Double => (object)0d,
-                SpecialType.System_Int64 => (object)0L,
-                SpecialType.System_Byte => (object)(byte)0,
-                SpecialType.System_UInt32 => (object)0u,
-                SpecialType.System_UInt64 => (object)0UL,
-                SpecialType.System_Int16 => (object)(short)0,
-                SpecialType.System_UInt16 => (object)(ushort)0,
-                SpecialType.System_Char => (object)'\0',
-                SpecialType.System_SByte => (object)(sbyte)0,
-                _ => null, // reference types default to null
-            };
-            if (defVal != null)
-                EmitExternVoid("SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid",
-                    new List<CValue> { SlotRef(slot), Const(i, "SystemInt32"), Const(defVal, GetUdonType(fieldType)) });
-        }
-    }
+        => EmitDefaultInitAggregate(LoadField(localId, "SystemObjectArray"), layout);
 
 }

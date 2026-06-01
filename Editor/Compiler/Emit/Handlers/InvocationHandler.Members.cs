@@ -307,9 +307,13 @@ public partial class InvocationHandler
             return Const(null, resultType);
         }
 
-        // Parameterless struct ctor → default initialization (no extern needed)
+        // Parameterless struct ctor. A user struct used AS A VALUE (e.g. `_field = new V()`, `Foo(new V())`)
+        // must allocate + default-init a fresh object[]; the local-declaration path already does this, but
+        // other contexts reach here. SDK value types fall through to the null placeholder.
         if (op.Arguments.Length == 0 && op.Type.IsValueType && op.Initializer == null)
-            return Const(null, resultType);
+            return op.Type is INamedTypeSymbol structTy && EmitContext.IsAggregateType(structTy)
+                ? EmitNewAggregate(structTy)
+                : Const(null, resultType);
 
         // Constant folding: struct ctor with all-constant args
         if (op.Type.IsValueType && op.Initializer == null && op.Arguments.Length > 0

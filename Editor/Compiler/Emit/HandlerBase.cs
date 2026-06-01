@@ -196,6 +196,60 @@ public abstract class HandlerBase
         return SlotRef(dstSlot);
     }
 
+    /// <summary>Allocate a fresh object[]-backed aggregate (struct/tuple) and default-initialize it as a
+    /// VALUE (e.g. `new V()` used as an expression). Nested aggregate fields are recursively allocated.</summary>
+    protected CValue EmitNewAggregate(INamedTypeSymbol aggType)
+    {
+        var layout = _ctx.GetAggregateLayout(aggType);
+        var slot = _ctx.AllocTemp("SystemObjectArray");
+        EmitAssign(slot, ExternCall("SystemObjectArray.__ctor__SystemInt32__SystemObjectArray",
+            new List<CValue> { Const(layout.Count, "SystemInt32") }, "SystemObjectArray"));
+        EmitDefaultInitAggregate(SlotRef(slot), layout);
+        return SlotRef(slot);
+    }
+
+    /// <summary>Set each value-type element of an object[]-emulated aggregate to its type default; a nested
+    /// aggregate field is recursively allocated + default-initialized rather than left null.</summary>
+    protected void EmitDefaultInitAggregate(CValue arrayVal, AggregateLayout layout)
+    {
+        var slot = _ctx.AllocTemp("SystemObjectArray");
+        EmitAssign(slot, arrayVal);
+        for (int i = 0; i < layout.Count; i++)
+        {
+            var fieldType = layout.Fields[i].Type;
+            if (fieldType is INamedTypeSymbol nested && EmitContext.IsAggregateType(nested))
+            {
+                var nl = _ctx.GetAggregateLayout(nested);
+                var subSlot = _ctx.AllocTemp("SystemObjectArray");
+                EmitAssign(subSlot, ExternCall("SystemObjectArray.__ctor__SystemInt32__SystemObjectArray",
+                    new List<CValue> { Const(nl.Count, "SystemInt32") }, "SystemObjectArray"));
+                EmitExternVoid("SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid",
+                    new List<CValue> { SlotRef(slot), Const(i, "SystemInt32"), SlotRef(subSlot) });
+                EmitDefaultInitAggregate(SlotRef(subSlot), nl);
+                continue;
+            }
+            object defVal = fieldType.SpecialType switch
+            {
+                SpecialType.System_Boolean => (object)false,
+                SpecialType.System_Int32 => (object)0,
+                SpecialType.System_Single => (object)0f,
+                SpecialType.System_Double => (object)0d,
+                SpecialType.System_Int64 => (object)0L,
+                SpecialType.System_Byte => (object)(byte)0,
+                SpecialType.System_UInt32 => (object)0u,
+                SpecialType.System_UInt64 => (object)0UL,
+                SpecialType.System_Int16 => (object)(short)0,
+                SpecialType.System_UInt16 => (object)(ushort)0,
+                SpecialType.System_Char => (object)'\0',
+                SpecialType.System_SByte => (object)(sbyte)0,
+                _ => null, // reference types default to null
+            };
+            if (defVal != null)
+                EmitExternVoid("SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid",
+                    new List<CValue> { SlotRef(slot), Const(i, "SystemInt32"), Const(defVal, GetUdonType(fieldType)) });
+        }
+    }
+
     /// <summary>Unwrap a field or auto-property member access into (instance, member name) for
     /// aggregate (struct/tuple) object[] element resolution.</summary>
     protected static bool TryGetAggregateMemberTarget(IOperation target, out IOperation instance, out string memberName)
