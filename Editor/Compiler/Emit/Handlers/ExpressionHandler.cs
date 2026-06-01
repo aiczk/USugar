@@ -190,6 +190,29 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
     {
         var srcVal = VisitExpression(conv.Operand);
 
+        // Lifted numeric Nullable<T> conversion (e.g. char?→int? inserted by Roslyn around small-int nullable
+        // arithmetic, or an explicit (int?)byteNullable). Both sides are Nullable<numeric>. The plain
+        // identity passthrough below would feed a boxed small-int to a SystemInt32 extern → InvalidCast, so
+        // materialize a null-preserving Convert.To{Dst}(object): null stays null, otherwise re-box the
+        // converted underlying. To{Dst}(SystemObject) tolerates either storage tag (the source nullable may
+        // hold a boxed small-int or, for un-narrowed literals, a boxed int).
+        if (EmitContext.IsNullableT(conv.Operand.Type, out var liftedSrcU)
+            && EmitContext.IsNullableT(conv.Type, out var liftedDstU)
+            && ExternResolver.IsNumericType(liftedSrcU) && ExternResolver.IsNumericType(liftedDstU)
+            && !SymbolEqualityComparer.Default.Equals(liftedSrcU, liftedDstU)
+            && ExternResolver.GetConvertMethodName(liftedDstU) is { } liftedDstMethod)
+        {
+            var dstU = GetUdonType(liftedDstU);
+            var srcSlot = _ctx.AllocTemp("SystemObject");
+            EmitAssign(srcSlot, srcVal);
+            var resSlot = _ctx.AllocTemp("SystemObject");
+            EmitAssign(resSlot, Const(null, "SystemObject"));
+            _builder.EmitIf(EmitNullableHasValue(SlotRef(srcSlot)), _ =>
+                EmitAssign(resSlot, ExternCall($"SystemConvert.__{liftedDstMethod}__SystemObject__{dstU}",
+                    new List<CValue> { SlotRef(srcSlot) }, dstU)));
+            return SlotRef(resSlot);
+        }
+
         // Numeric conversions (int→float, etc.) via System.Convert
         if (conv.Operand.Type != null && conv.Type != null
             && ExternResolver.IsNumericType(conv.Operand.Type)

@@ -267,6 +267,26 @@ public abstract class HandlerBase
         }
     }
 
+    static bool SmallIntOrChar(string udonType)
+        => udonType is "SystemByte" or "SystemSByte" or "SystemInt16" or "SystemUInt16" or "SystemChar";
+
+    /// <summary>Promote a boxed small-int/char operand to int32 (Udon has no operators on those types and a
+    /// boxed small-int does not coerce to int for a SystemInt32 extern). Routes through ToInt32(SystemObject)
+    /// rather than the type-strict ToInt32(SystemByte/SystemChar/…): a nullable small-int's stored value is
+    /// often a boxed plain int (e.g. <c>byte? x = 5</c> keeps the int literal un-narrowed), which a strict
+    /// typed fetch rejects with InvalidCast. Convert.ToInt32(object) tolerates any boxed numeric. Pass-through
+    /// for non-small types.</summary>
+    CValue PromoteBoxedToInt32(CValue boxed, ITypeSymbol underlying, out ITypeSymbol effectiveType)
+    {
+        if (SmallIntOrChar(GetUdonType(underlying)))
+        {
+            effectiveType = _compilation.GetSpecialType(SpecialType.System_Int32);
+            return ExternCall("SystemConvert.__ToInt32__SystemObject__SystemInt32", new List<CValue> { boxed }, "SystemInt32");
+        }
+        effectiveType = underlying;
+        return boxed;
+    }
+
     /// <summary>Lifted binary operator on Nullable&lt;T&gt; (null propagation), from already-evaluated operand
     /// values. Arithmetic yields T? (null unless both present); relational yields bool (false if either null);
     /// equality yields bool (both-null is equal). Shared by <c>OperatorHandler</c> and compound assignment.</summary>
@@ -292,10 +312,22 @@ public abstract class HandlerBase
             else inner(_builder);
         }
 
-        CValue ValueOp(Microsoft.CodeAnalysis.Operations.BinaryOperatorKind k) => ExternCall(
-            ExternResolver.ResolveBinaryExtern(k, operatorMethod, ResolveType(ltUnderlying), ResolveType(rtUnderlying),
-                ResolveType(resultNullable ? resU : resultType)),
-            new List<CValue> { SlotRef(aSlot), SlotRef(bSlot) }, valueResultType);
+        // Small-int/char underlying: Udon has no byte/short/char operators, so promote the (boxed) operands
+        // to int32 — the boxed small-int does not implicitly coerce to int for the SystemInt32 extern — then
+        // narrow an arithmetic result back. (int/float/etc. underlyings pass through unchanged.)
+        CValue ValueOp(Microsoft.CodeAnalysis.Operations.BinaryOperatorKind k)
+        {
+            var resUnder = resultNullable ? resU : resultType;
+            var aV = PromoteBoxedToInt32(SlotRef(aSlot), ltUnderlying, out var ltEff);
+            var bV = PromoteBoxedToInt32(SlotRef(bSlot), rtUnderlying, out var rtEff);
+            bool resPromotes = SmallIntOrChar(GetUdonType(resUnder));
+            var resEff = resPromotes ? _compilation.GetSpecialType(SpecialType.System_Int32) : resUnder;
+            var raw = ExternCall(
+                ExternResolver.ResolveBinaryExtern(k, operatorMethod, ResolveType(ltEff), ResolveType(rtEff), ResolveType(resEff)),
+                new List<CValue> { aV, bV }, GetUdonType(resEff));
+            return resPromotes && GetUdonType(resUnder) != "SystemInt32"
+                ? EmitNarrowingConvert(raw, "SystemInt32", GetUdonType(resUnder)) : raw;
+        }
 
         if (resultNullable) // arithmetic → T? : null unless both present
         {
