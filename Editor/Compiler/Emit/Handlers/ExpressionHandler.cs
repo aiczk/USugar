@@ -76,11 +76,17 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
             return Const(constVal, constType);
         }
         // static readonly with constant value at operation level (Roslyn may fold these)
+        // static readonly field with a compile-time-constant initializer → fold to the value. A `static
+        // readonly` field has no ConstantValue of its own (only `const` does), so evaluate the initializer
+        // expression. Each program gets its own copy, which is observationally identical to a true shared
+        // static because the value is immutable — so no singleton/shared storage is needed.
         if (fieldRef.Field.IsStatic && fieldRef.Field.IsReadOnly
-            && fieldRef.ConstantValue.HasValue)
+            && (fieldRef.ConstantValue.HasValue || TryGetConstInitializer(fieldRef.Field, out _)))
         {
             var constType = GetUdonType(fieldRef.Field.Type);
-            return Const(fieldRef.ConstantValue.Value, constType);
+            var value = fieldRef.ConstantValue.HasValue ? fieldRef.ConstantValue.Value
+                : (TryGetConstInitializer(fieldRef.Field, out var v) ? v : null);
+            return Const(value, constType);
         }
         if (fieldRef.Field.IsStatic)
         {
@@ -161,6 +167,21 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
     }
 
     // ── Conversion ──
+
+    // Evaluate a field's initializer to a compile-time constant (primitives/enums). Used to fold a
+    // `static readonly` field, whose own ConstantValue is unset, when its initializer is constant.
+    bool TryGetConstInitializer(IFieldSymbol field, out object value)
+    {
+        value = null;
+        var refs = field.DeclaringSyntaxReferences;
+        if (refs.Length > 0 && refs[0].GetSyntax()
+            is Microsoft.CodeAnalysis.CSharp.Syntax.VariableDeclaratorSyntax { Initializer: { } init })
+        {
+            var cv = _compilation.GetSemanticModel(init.SyntaxTree).GetConstantValue(init.Value);
+            if (cv.HasValue) { value = cv.Value; return true; }
+        }
+        return false;
+    }
 
     CValue VisitConversion(IConversionOperation conv)
     {
