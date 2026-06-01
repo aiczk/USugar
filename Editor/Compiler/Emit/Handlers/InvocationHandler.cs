@@ -65,6 +65,12 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
                 return EmitUserMethodCall(op, target);
         }
 
+        // User-struct instance method: v.Method(...) — receiver object[] passed as synthetic param0.
+        if (!target.IsStatic && target.MethodKind == MethodKind.Ordinary
+            && target.ContainingType is INamedTypeSymbol structRecv && EmitContext.IsUserStruct(structRecv)
+            && _methodFunctions.ContainsKey(target.OriginalDefinition))
+            return EmitStructInstanceCall(op, target.OriginalDefinition);
+
         // User-defined generic method → monomorphize
         if (target.IsGenericMethod && SymbolEqualityComparer.Default.Equals(target.OriginalDefinition.ContainingType, _classSymbol))
         {
@@ -145,6 +151,23 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
 
         // Extern method call
         return EmitExternMethodCall(op, target);
+    }
+
+    // User-struct instance method call: receiver object[] passed (uncloned) as synthetic param0
+    // so `this`-field mutations reflect back to the caller's local (value-type by-ref `this` semantics).
+    CValue EmitStructInstanceCall(IInvocationOperation op, IMethodSymbol target)
+    {
+        // Direct self-recursion: receiver + flat-heap params are shared across frames → corruption.
+        if (_currentMethod != null
+            && SymbolEqualityComparer.Default.Equals(target, _currentMethod.OriginalDefinition))
+            throw new System.NotSupportedException(
+                $"Recursive struct method '{target.Name}' is not supported. " +
+                "Udon VM's flat heap shares the receiver and parameter variables across call frames.");
+
+        var args = new List<CValue> { LoadInstanceRaw(op.Instance) };
+        for (var i = 0; i < op.Arguments.Length; i++)
+            args.Add(VisitExpression(op.Arguments[i].Value));
+        return EmitCallToMethod(target, args);
     }
 
     // ── Delegate Invocation ──

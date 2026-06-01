@@ -607,30 +607,43 @@ public class UasmEmitter
             }
         }
 
-        // Register user-struct constructors (object[]-emulated; synthetic receiver = param0).
-        var structCtors = CollectStructConstructors(methods);
-        foreach (var ctor in structCtors)
+        // Register user-struct constructors + instance methods (object[]-emulated; synthetic receiver = param0).
+        var structMethods = CollectStructMethods(methods);
+        foreach (var sm in structMethods)
         {
-            var slot = _ctx.RegisterMethod(ctor, i => i.ToString());
+            var slot = _ctx.RegisterMethod(sm, i => i.ToString());
             var idx = slot.Index;
-            var func = _module.AddFunction($"__{idx}_{SanitizeId(ctor.ContainingType.Name)}__ctor");
-            _methodFunctions[ctor] = func;
+            var isCtor = sm.MethodKind == MethodKind.Constructor;
+            var funcName = isCtor
+                ? $"__{idx}_{SanitizeId(sm.ContainingType.Name)}__ctor"
+                : $"__{idx}_{SanitizeId(sm.Name)}";
+            var func = _module.AddFunction(funcName);
+            _methodFunctions[sm] = func;
 
-            // param0 = receiver object[]; the ctor mutates it in place (void).
+            // param0 = receiver object[]; passed (not cloned) so in-place mutation reflects back to the caller's local.
             var receiverId = $"__{idx}_this__param";
             _ctx.DeclareVar(receiverId, "SystemObjectArray");
             func.ParamFieldNames.Add(receiverId);
 
-            var ctorParamIds = new string[ctor.Parameters.Length];
-            for (int pi = 0; pi < ctor.Parameters.Length; pi++)
+            var smParamIds = new string[sm.Parameters.Length];
+            for (int pi = 0; pi < sm.Parameters.Length; pi++)
             {
-                var p = ctor.Parameters[pi];
+                var p = sm.Parameters[pi];
                 var pid = $"__{idx}_{p.Name}__param";
                 _ctx.DeclareVar(pid, GetUdonType(p.Type));
-                ctorParamIds[pi] = pid;
+                smParamIds[pi] = pid;
                 func.ParamFieldNames.Add(pid);
             }
-            _methodParamVarIds[ctor] = ctorParamIds; // Ordinal-indexed; receiver tracked separately
+            _methodParamVarIds[sm] = smParamIds; // Ordinal-indexed; receiver tracked separately
+
+            if (!sm.ReturnsVoid) // ctors are void (mutate in place); instance methods may return
+            {
+                var retType = GetUdonType(sm.ReturnType);
+                var retId = $"__{idx}_{SanitizeId(sm.Name)}__ret";
+                func.ReturnType = retType;
+                func.ReturnSlots.Add(new ReturnSlot(retId, retType));
+                _methodReturns[sm] = new[] { new ReturnSlot(retId, retType) };
+            }
         }
 
         // Collect base class instance methods
@@ -680,9 +693,9 @@ public class UasmEmitter
         foreach (var fm in foreignStatics)
             EmitMethod(fm);
 
-        // Emit user-struct constructor bodies
-        foreach (var ctor in structCtors)
-            EmitMethod(ctor);
+        // Emit user-struct constructor + instance method bodies
+        foreach (var sm in structMethods)
+            EmitMethod(sm);
 
         // Emit base class instance method bodies
         foreach (var bm in baseInstanceMethods)
@@ -1321,8 +1334,8 @@ public class UasmEmitter
             CollectForeignStaticCallsInOperation(child, result);
     }
 
-    // User-struct parameterized constructors reachable from the class's methods (transitive).
-    IMethodSymbol[] CollectStructConstructors(IMethodSymbol[] classMethods)
+    // User-struct parameterized constructors + instance methods reachable from the class (transitive).
+    IMethodSymbol[] CollectStructMethods(IMethodSymbol[] classMethods)
     {
         var result = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
         foreach (var method in classMethods)
@@ -1330,31 +1343,37 @@ public class UasmEmitter
             var syntaxRef = method.DeclaringSyntaxReferences.FirstOrDefault();
             if (syntaxRef == null) continue;
             var syntax = syntaxRef.GetSyntax();
-            CollectStructCtorsInOperation(_compilation.GetSemanticModel(syntax.SyntaxTree).GetOperation(syntax), result);
+            CollectStructMethodsInOperation(_compilation.GetSemanticModel(syntax.SyntaxTree).GetOperation(syntax), result);
         }
         var visited = new HashSet<IMethodSymbol>(result, SymbolEqualityComparer.Default);
         var queue = new Queue<IMethodSymbol>(result);
         while (queue.Count > 0)
         {
-            var ctor = queue.Dequeue();
-            var syntaxRef = ctor.DeclaringSyntaxReferences.FirstOrDefault();
+            var sm = queue.Dequeue();
+            var syntaxRef = sm.DeclaringSyntaxReferences.FirstOrDefault();
             if (syntaxRef == null) continue;
             var syntax = syntaxRef.GetSyntax();
-            CollectStructCtorsInOperation(_compilation.GetSemanticModel(syntax.SyntaxTree).GetOperation(syntax), result);
+            CollectStructMethodsInOperation(_compilation.GetSemanticModel(syntax.SyntaxTree).GetOperation(syntax), result);
             foreach (var nc in result.Except(visited)) { visited.Add(nc); queue.Enqueue(nc); }
         }
         return result.ToArray();
     }
 
-    void CollectStructCtorsInOperation(IOperation op, HashSet<IMethodSymbol> result)
+    void CollectStructMethodsInOperation(IOperation op, HashSet<IMethodSymbol> result)
     {
         if (op == null) return;
+        // Parameterized user-struct constructor: new V(...).
         if (op is IObjectCreationOperation oc && oc.Constructor != null
             && oc.Type is INamedTypeSymbol nt && EmitContext.IsUserStruct(nt)
             && oc.Arguments.Length > 0 && !oc.Constructor.IsImplicitlyDeclared)
             result.Add(oc.Constructor);
+        // User-struct instance method: v.Method(...).
+        if (op is IInvocationOperation inv && inv.TargetMethod is { IsStatic: false } tm
+            && tm.MethodKind == MethodKind.Ordinary && !tm.IsImplicitlyDeclared
+            && tm.ContainingType is INamedTypeSymbol it && EmitContext.IsUserStruct(it))
+            result.Add(tm.OriginalDefinition);
         foreach (var child in op.Children)
-            CollectStructCtorsInOperation(child, result);
+            CollectStructMethodsInOperation(child, result);
     }
 
     bool IsBaseInstanceMethod(IMethodSymbol method)
