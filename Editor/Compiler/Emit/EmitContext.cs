@@ -130,6 +130,19 @@ public class EmitContext
            && RecursiveCallees.TryGetValue(caller, out var callees)
            && callees.Contains(callee.OriginalDefinition);
 
+    /// <summary>True if <paramref name="t"/> is <c>Nullable&lt;T&gt;</c>; yields the underlying T.
+    /// Nullable is emulated as a boxed object (null | boxed T) — see ExternResolver type mapping.</summary>
+    public static bool IsNullableT(ITypeSymbol t, out ITypeSymbol underlying)
+    {
+        if (t is INamedTypeSymbol n && n.OriginalDefinition.SpecialType == SpecialType.System_Nullable_T)
+        {
+            underlying = n.TypeArguments[0];
+            return true;
+        }
+        underlying = null;
+        return false;
+    }
+
     // ── Tail-call analysis (shared by named-method and recursive-lambda recursion detection) ──
     // A self-recursive call only needs spilling when it is NOT in tail position: a tail call reads nothing
     // of its frame afterwards, so the flat-heap clobber is harmless and deep tail recursion must not spill.

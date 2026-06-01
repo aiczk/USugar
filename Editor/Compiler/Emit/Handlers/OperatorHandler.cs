@@ -68,6 +68,23 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
                 return CompareDelegates(leftField, rightField, isNotEquals);
         }
 
+        // ── Nullable (boxed object) compared to null literal → object reference null check ──
+        if (op.OperatorKind is BinaryOperatorKind.Equals or BinaryOperatorKind.NotEquals)
+        {
+            bool leftNullable = EmitContext.IsNullableT(op.LeftOperand.Type, out _);
+            bool rightNullable = EmitContext.IsNullableT(op.RightOperand.Type, out _);
+            bool leftNull = IsNullLiteral(op.LeftOperand);
+            bool rightNull = IsNullLiteral(op.RightOperand);
+            if ((leftNullable && rightNull) || (rightNullable && leftNull))
+            {
+                var nv = VisitExpression(leftNullable ? op.LeftOperand : op.RightOperand);
+                if (op.OperatorKind == BinaryOperatorKind.NotEquals)
+                    return EmitNullableHasValue(nv); // != null  ⇔  HasValue
+                return ExternCall("SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean",
+                    new List<CValue> { nv, Const(null, "SystemObject") }, "SystemBoolean");
+            }
+        }
+
         // ── Aggregate (tuple) structural equality ──
         if (op.OperatorKind is BinaryOperatorKind.Equals or BinaryOperatorKind.NotEquals
             && EmitContext.IsAggregateType(op.LeftOperand.Type)

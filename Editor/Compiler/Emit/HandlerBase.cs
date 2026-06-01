@@ -157,6 +157,18 @@ public abstract class HandlerBase
     /// <summary>Emit an expression as a statement (side-effecting calls).</summary>
     protected void EmitExprStmt(CValue expr) => _builder.EmitExprStmt(expr);
 
+    // ── Nullable<T> (boxed-object emulation) helpers ──
+
+    /// <summary>HasValue: the boxed nullable object is non-null. Returns SystemBoolean.
+    /// <paramref name="nullableVal"/> must be pure or pre-materialised (it is read once).</summary>
+    protected CValue EmitNullableHasValue(CValue nullableVal)
+    {
+        var isNull = ExternCall("SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean",
+            new List<CValue> { nullableVal, Const(null, "SystemObject") }, "SystemBoolean");
+        return ExternCall("SystemBoolean.__op_UnaryNegation__SystemBoolean__SystemBoolean",
+            new List<CValue> { isNull }, "SystemBoolean");
+    }
+
     // ── Extern resolution ──
 
     static readonly string[] FallbackBaseTypes = new[]

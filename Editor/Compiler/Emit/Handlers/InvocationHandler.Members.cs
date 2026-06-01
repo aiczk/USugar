@@ -16,6 +16,15 @@ public partial class InvocationHandler
         if (op.Property.IsIndexer)
             return VisitIndexerGet(op);
 
+        // Nullable<T> (boxed-object emulation): HasValue → null check; Value → the boxed value itself
+        // (Udon unboxes transparently when the result is used as the underlying type).
+        if (op.Instance != null && EmitContext.IsNullableT(op.Property.ContainingType, out _))
+        {
+            var nv = VisitExpression(op.Instance);
+            if (op.Property.Name == "HasValue") return EmitNullableHasValue(nv);
+            if (op.Property.Name == "Value") return nv;
+        }
+
         // this.gameObject / this.transform → __this_* variable (Udon VM resolves via "this" default)
         if (op.Instance is IInstanceReferenceOperation)
         {

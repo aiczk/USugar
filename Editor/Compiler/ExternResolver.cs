@@ -101,6 +101,12 @@ public static class ExternResolver
             && type.ContainingNamespace?.ToDisplayString() is not ("System" or "System.Collections" or "System.Collections.Generic"))
             return "VRCUdonCommonInterfacesIUdonEventReceiver";
 
+        // Nullable<T> → SystemObject: Udon has no Nullable type, so a nullable value is emulated as a
+        // boxed object that is either null or holds the (boxed) underlying value. HasValue is a null check,
+        // Value is the unboxed object. Lifted operators propagate null explicitly.
+        if (type is INamedTypeSymbol nullable && nullable.OriginalDefinition.SpecialType == SpecialType.System_Nullable_T)
+            return "SystemObject";
+
         // Aggregate types (tuples, user-defined structs) → SystemObjectArray (object[] emulation)
         if (EmitContext.IsAggregateType(type))
             return "SystemObjectArray";
