@@ -392,14 +392,18 @@ public class StatementHandler : HandlerBase, IOperationHandler
             {
                 foreach (var member in oc.Initializer.Initializers)
                 {
-                    if (member is ISimpleAssignmentOperation sa
-                        && sa.Target is IFieldReferenceOperation fr
-                        && layout.TryGetIndex(fr.Field, out var idx))
+                    if (member is not ISimpleAssignmentOperation sa) continue;
+                    // Field or auto-property (incl. init) target → object[] element by member name.
+                    var memberName = sa.Target switch
                     {
+                        IFieldReferenceOperation fr => fr.Field.Name,
+                        IPropertyReferenceOperation pr => pr.Property.Name,
+                        _ => null,
+                    };
+                    if (memberName != null && layout.TryGetIndex(memberName, out var idx))
                         EmitExternVoid("SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid",
                             new List<CValue> { LoadField(localId, "SystemObjectArray"),
                                 Const(idx, "SystemInt32"), VisitExpression(sa.Value) });
-                    }
                 }
             }
         }

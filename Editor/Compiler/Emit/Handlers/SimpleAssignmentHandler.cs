@@ -17,22 +17,17 @@ public class SimpleAssignmentHandler : AssignmentHandlerBase, IExpressionHandler
 
     CValue VisitAssignment(ISimpleAssignmentOperation assign)
     {
-        // Aggregate field write: point.x = 5, result.Item1 = 42, pair.Item1 = 10
-        // Triggered by the containing type being aggregate, regardless of instance kind
-        if (assign.Target is IFieldReferenceOperation aggFieldRef
-            && aggFieldRef.Instance != null
-            && aggFieldRef.Instance.Type is INamedTypeSymbol aggContaining
-            && EmitContext.IsAggregateType(aggContaining))
+        // Aggregate field/auto-property write: point.x = 5, result.Item1 = 42, v.X = 7 (struct auto-property).
+        // Triggered by the containing type being aggregate, regardless of instance kind.
+        if (TryGetAggregateMemberTarget(assign.Target, out var aggInstance, out var aggMemberName)
+            && aggInstance.Type is INamedTypeSymbol aggContaining && EmitContext.IsAggregateType(aggContaining)
+            && _ctx.GetAggregateLayout(aggContaining).TryGetIndex(aggMemberName, out var fieldIndex))
         {
-            var layout = _ctx.GetAggregateLayout(aggContaining);
-            if (layout.TryGetIndex(aggFieldRef.Field, out var fieldIndex))
-            {
-                var srcVal = VisitExpression(assign.Value);
-                var arrExpr = LoadInstanceRaw(aggFieldRef.Instance);
-                EmitExternVoid("SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid",
-                    new List<CValue> { arrExpr, Const(fieldIndex, "SystemInt32"), srcVal });
-                return srcVal;
-            }
+            var srcVal = VisitExpression(assign.Value);
+            var arrExpr = LoadInstanceRaw(aggInstance);
+            EmitExternVoid("SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid",
+                new List<CValue> { arrExpr, Const(fieldIndex, "SystemInt32"), srcVal });
+            return srcVal;
         }
 
         if (assign.Target is IArrayElementReferenceOperation arrayElem)

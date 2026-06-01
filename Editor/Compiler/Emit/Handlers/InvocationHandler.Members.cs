@@ -25,6 +25,15 @@ public partial class InvocationHandler
             if (op.Property.Name == "Value") return nv;
         }
 
+        // Auto-property on an aggregate (struct/tuple) → object[] element (the backing field's slot).
+        if (op.Instance != null && op.Instance.Type is INamedTypeSymbol aggProp && EmitContext.IsAggregateType(aggProp)
+            && _ctx.GetAggregateLayout(aggProp).TryGetIndex(op.Property.Name, out var aggPropIdx))
+        {
+            var arrExpr = LoadInstanceRaw(op.Instance);
+            return ExternCall("SystemObjectArray.__Get__SystemInt32__SystemObject",
+                new List<CValue> { arrExpr, Const(aggPropIdx, "SystemInt32") }, "SystemObject");
+        }
+
         // this.gameObject / this.transform → __this_* variable (Udon VM resolves via "this" default)
         if (op.Instance is IInstanceReferenceOperation)
         {

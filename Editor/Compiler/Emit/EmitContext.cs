@@ -59,15 +59,22 @@ public class AggregateLayout
         }
         else if (type.TypeKind == TypeKind.Struct)
         {
-            // User struct → instance fields mapped to indices in declaration order.
+            // User struct → instance fields mapped to indices in declaration order. Auto-property backing
+            // fields are implicitly declared but carry the property as AssociatedSymbol; map them by the
+            // property name so `get`/`set`/`init` resolve to the same object[] element.
             int i = 0;
             foreach (var member in type.GetMembers())
             {
-                if (member is IFieldSymbol { IsStatic: false, IsConst: false, IsImplicitlyDeclared: false } f)
+                if (member is not IFieldSymbol { IsStatic: false, IsConst: false } f) continue;
+                if (!f.IsImplicitlyDeclared)
                 {
                     fields.Add(new FieldInfo(f.Name, i, f.Type));
-                    nameToIndex[f.Name] = i;
-                    i++;
+                    nameToIndex[f.Name] = i++;
+                }
+                else if (f.AssociatedSymbol is IPropertySymbol prop)
+                {
+                    fields.Add(new FieldInfo(prop.Name, i, f.Type));
+                    nameToIndex[prop.Name] = i++;
                 }
             }
         }

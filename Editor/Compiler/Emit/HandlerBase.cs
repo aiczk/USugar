@@ -173,6 +173,21 @@ public abstract class HandlerBase
     protected CValue EmitValueTypeDefault(string udonType)
         => Const(EmitContext.ParseConstValue(udonType, udonType == "SystemBoolean" ? "False" : "0"), udonType);
 
+    /// <summary>Unwrap a field or auto-property member access into (instance, member name) for
+    /// aggregate (struct/tuple) object[] element resolution.</summary>
+    protected static bool TryGetAggregateMemberTarget(IOperation target, out IOperation instance, out string memberName)
+    {
+        switch (target)
+        {
+            case IFieldReferenceOperation { Instance: not null } fr:
+                instance = fr.Instance; memberName = fr.Field.Name; return true;
+            case IPropertyReferenceOperation { Instance: not null } pr:
+                instance = pr.Instance; memberName = pr.Property.Name; return true;
+            default:
+                instance = null; memberName = null; return false;
+        }
+    }
+
     /// <summary>Lifted binary operator on Nullable&lt;T&gt; (null propagation), from already-evaluated operand
     /// values. Arithmetic yields T? (null unless both present); relational yields bool (false if either null);
     /// equality yields bool (both-null is equal). Shared by <c>OperatorHandler</c> and compound assignment.</summary>
