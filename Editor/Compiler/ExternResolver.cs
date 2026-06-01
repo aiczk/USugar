@@ -394,11 +394,15 @@ public static class ExternResolver
             return BuildMethodSignature(containingType, methodName, paramTypes, retType);
         }
 
-        // Enum operations → use underlying type (Udon VM has no enum-typed operators)
+        // Enum operations → use underlying type (Udon VM has no enum-typed operators). Covers equality,
+        // bitwise (&/|/^) AND relational (< > <= >=) — SDK enums keep their type name otherwise, so
+        // `KeyCode.A < KeyCode.B` would emit a nonexistent UnityEngineKeyCode.__op_LessThan extern.
         if (leftType?.TypeKind == TypeKind.Enum
             && (operatorKind == BinaryOperatorKind.Equals || operatorKind == BinaryOperatorKind.NotEquals
                 || operatorKind == BinaryOperatorKind.And || operatorKind == BinaryOperatorKind.Or
-                || operatorKind == BinaryOperatorKind.ExclusiveOr))
+                || operatorKind == BinaryOperatorKind.ExclusiveOr
+                || operatorKind == BinaryOperatorKind.LessThan || operatorKind == BinaryOperatorKind.GreaterThan
+                || operatorKind == BinaryOperatorKind.LessThanOrEqual || operatorKind == BinaryOperatorKind.GreaterThanOrEqual))
         {
             var underlying = GetUdonTypeName(((INamedTypeSymbol)leftType).EnumUnderlyingType);
             var opName2 = BinaryOperatorNames[operatorKind];
