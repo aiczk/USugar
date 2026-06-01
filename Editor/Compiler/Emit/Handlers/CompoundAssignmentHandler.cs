@@ -50,9 +50,9 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
             ResolveType(op.Target.Type), ResolveType(op.Value.Type), ResolveType(op.Type));
         CValue resultVal = ExternCall(sig, new List<CValue> { leftVal, rightVal }, opResultType);
 
-        // Narrow back to original type if promoted
+        // Narrow back to original type if promoted (C#-unchecked wrap, not checked Convert)
         if (opResultType != resultType)
-            resultVal = ExternCall(ExternResolver.BuildConvertSignature(opResultType, resultType), new List<CValue> { resultVal }, resultType);
+            resultVal = EmitNarrowingConvert(resultVal, opResultType, resultType);
 
         EmitWriteBack(op.Target, resultVal, lv);
         return resultVal;
@@ -110,9 +110,9 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
 
         CValue resultVal = ExternCall(sig, new List<CValue> { targetVal, oneConst }, opType);
 
-        // Narrow back to original type if promoted
+        // Narrow back to original type if promoted (C#-unchecked wrap, not checked Convert)
         if (opType != udonType)
-            resultVal = ExternCall(ExternResolver.BuildConvertSignature(opType, udonType), new List<CValue> { resultVal }, udonType);
+            resultVal = EmitNarrowingConvert(resultVal, opType, udonType);
 
         // Materialize resultVal to a temp slot before write-back to avoid
         // the extern call being emitted twice (once for store, once for return value).

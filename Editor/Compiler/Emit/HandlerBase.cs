@@ -84,6 +84,57 @@ public abstract class HandlerBase
     protected CExternCall ExternCall(string sig, List<CValue> args, string retType)
         => _builder.ExternCall(ResolveExtern(sig), args, retType);
 
+    /// <summary>
+    /// Integer narrowing conversion matching C# *unchecked* semantics (wrap). Udon's
+    /// SystemConvert.ToX is CHECKED and throws on overflow, so an int narrowed to a small integer
+    /// is masked (and sign-extended for signed targets) before the final convert, which is then
+    /// always in range. Any other conversion falls back to the plain convert extern.
+    /// </summary>
+    protected CValue EmitNarrowingConvert(CValue value, string fromUdonType, string toUdonType)
+    {
+        // Udon has no bitwise-AND extern, so wrap unsigned targets with modulo and signed targets
+        // with a shift-left / arithmetic-shift-right truncation. After wrapping, the value is in
+        // range, so the final SystemConvert.ToX cannot overflow.
+        if (fromUdonType == "SystemInt32")
+        {
+            switch (toUdonType)
+            {
+                case "SystemByte":   return ConvertInRange(ModWrap(value, 256), toUdonType);
+                case "SystemChar":
+                case "SystemUInt16": return ConvertInRange(ModWrap(value, 65536), toUdonType);
+                case "SystemSByte":  return ConvertInRange(ShiftTruncate(value, 24), toUdonType);
+                case "SystemInt16":  return ConvertInRange(ShiftTruncate(value, 16), toUdonType);
+            }
+        }
+        return ExternCall(ExternResolver.BuildConvertSignature(fromUdonType, toUdonType),
+            new List<CValue> { value }, toUdonType);
+    }
+
+    CValue ConvertInRange(CValue inRangeInt, string toUdonType)
+        => ExternCall(ExternResolver.BuildConvertSignature("SystemInt32", toUdonType),
+            new List<CValue> { inRangeInt }, toUdonType);
+
+    // ((x % mod) + mod) % mod  →  [0, mod)  : C# unsigned narrowing wrap
+    CValue ModWrap(CValue x, int mod)
+    {
+        var add = ExternCall("SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32",
+            new List<CValue> { Rem(x, mod), Const(mod, "SystemInt32") }, "SystemInt32");
+        return Rem(add, mod);
+    }
+
+    CValue Rem(CValue x, int mod)
+        => ExternCall("SystemInt32.__op_Remainder__SystemInt32_SystemInt32__SystemInt32",
+            new List<CValue> { x, Const(mod, "SystemInt32") }, "SystemInt32");
+
+    // (x << s) >> s  →  signed (32-s)-bit truncation with sign extension
+    CValue ShiftTruncate(CValue x, int shift)
+    {
+        var left = ExternCall("SystemInt32.__op_LeftShift__SystemInt32_SystemInt32__SystemInt32",
+            new List<CValue> { x, Const(shift, "SystemInt32") }, "SystemInt32");
+        return ExternCall("SystemInt32.__op_RightShift__SystemInt32_SystemInt32__SystemInt32",
+            new List<CValue> { left, Const(shift, "SystemInt32") }, "SystemInt32");
+    }
+
     /// <summary>Emit a void extern call as a statement.</summary>
     protected void EmitExternVoid(string sig, List<CValue> args)
         => _builder.EmitExternVoid(ResolveExtern(sig), args);

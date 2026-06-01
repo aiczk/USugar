@@ -5575,6 +5575,23 @@ public class CharIncTest : UdonSharpBehaviour {
     }
 
     [Fact]
+    public void ByteNarrowing_UsesUncheckedWrap_NotCheckedConvert()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+[UdonBehaviourSyncMode(BehaviourSyncMode.None)]
+public class ByteWrapTest : UdonSharpBehaviour {
+    int _x; byte _b;
+    void Start() { _x = 300; _b = (byte)_x; }
+}");
+        // C#-unchecked narrowing wraps ((byte)300 == 44); Udon's SystemConvert.ToByte is CHECKED and
+        // throws. Since Udon has no bitwise-AND extern, the wrap is a modulo sequence — the presence
+        // of op_Remainder guards against regressing to a bare checked ToByte.
+        Assert.Contains("SystemInt32.__op_Remainder", uasm);
+        Assert.Contains("SystemConvert.__ToByte__SystemInt32__SystemByte", uasm);
+    }
+
+    [Fact]
     public void TupleEquality_NestedTuple_ThrowsNotSupported()
     {
         var ex = Assert.ThrowsAny<System.Exception>(() => TestHelper.CompileToUasm(@"

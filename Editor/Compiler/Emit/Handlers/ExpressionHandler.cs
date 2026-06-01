@@ -202,13 +202,11 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
                         dstType);
                 }
 
-                // Non-truncation numeric conversions (existing code)
+                // Non-truncation numeric conversions. Integer→small-int narrowing uses C#-unchecked
+                // wrap (EmitNarrowingConvert); widening/other falls back to the plain convert extern.
                 var srcType = GetUdonType(conv.Operand.Type);
                 var dstType2 = GetUdonType(conv.Type);
-                return ExternCall(
-                    $"SystemConvert.__{methodName}__{srcType}__{dstType2}",
-                    new List<CValue> { srcVal },
-                    dstType2);
+                return EmitNarrowingConvert(srcVal, srcType, dstType2);
             }
         }
 
