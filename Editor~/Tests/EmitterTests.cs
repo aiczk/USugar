@@ -5721,9 +5721,10 @@ public class PropPatTest : UdonSharpBehaviour {
     }
 
     [Fact]
-    public void TupleEquality_NestedTuple_ThrowsNotSupported()
+    public void TupleEquality_NestedTuple_RecursesStructurally()
     {
-        var ex = Assert.ThrowsAny<System.Exception>(() => TestHelper.CompileToUasm(@"
+        // Nested tuple equality recurses field-by-field into the nested tuple (previously rejected).
+        var uasm = TestHelper.CompileToUasm(@"
 using UdonSharp;
 [UdonBehaviourSyncMode(BehaviourSyncMode.None)]
 public class NestedTupleEqTest : UdonSharpBehaviour {
@@ -5733,8 +5734,9 @@ public class NestedTupleEqTest : UdonSharpBehaviour {
         var b = (1, (2, 3));
         _r = a == b;
     }
-}"));
-        Assert.Contains("nested tuple", ex.Message, System.StringComparison.OrdinalIgnoreCase);
+}", "NestedTupleEqTest");
+        Assert.Contains("SystemObject.__Equals", uasm);
+        Assert.Contains("SystemBoolean.__op_LogicalAnd", uasm);
     }
 
     // ── Tuple array ──

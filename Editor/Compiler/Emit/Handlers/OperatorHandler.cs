@@ -620,77 +620,37 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
         if (op.LeftOperand.Type is not INamedTypeSymbol aggType || !aggType.IsTupleType)
             throw new System.NotSupportedException(
                 $"Tuple binary operation on non-tuple type: {op.LeftOperand.Type}");
-
-        var layout = _ctx.GetAggregateLayout(aggType);
-        bool isNotEquals = op.OperatorKind == BinaryOperatorKind.NotEquals;
-
-        // Guard: nested tuples are not supported for equality
-        for (int i = 0; i < layout.Count; i++)
-        {
-            if (layout.Fields[i].Type.IsTupleType)
-                throw new System.NotSupportedException(
-                    $"Equality comparison on nested tuple type is not supported. "
-                    + $"Field '{layout.Fields[i].Name}' at index {i} is a tuple.");
-        }
-
-        var leftVal = VisitExpression(op.LeftOperand);
-        var rightVal = VisitExpression(op.RightOperand);
-
-        var leftSlot = _ctx.AllocTemp("SystemObjectArray");
-        EmitAssign(leftSlot, leftVal);
-        var rightSlot = _ctx.AllocTemp("SystemObjectArray");
-        EmitAssign(rightSlot, rightVal);
-
-        CValue result = Const(true, "SystemBoolean");
-        for (int i = 0; i < layout.Count; i++)
-        {
-            var leftElem = ExternCall("SystemObjectArray.__Get__SystemInt32__SystemObject",
-                new List<CValue> { SlotRef(leftSlot), Const(i, "SystemInt32") }, "SystemObject");
-            var rightElem = ExternCall("SystemObjectArray.__Get__SystemInt32__SystemObject",
-                new List<CValue> { SlotRef(rightSlot), Const(i, "SystemInt32") }, "SystemObject");
-            var elemEq = ExternCall(
-                "SystemObject.__Equals__SystemObject_SystemObject__SystemBoolean",
-                new List<CValue> { leftElem, rightElem }, "SystemBoolean");
-
-            result = ExternCall(
-                "SystemBoolean.__op_LogicalAnd__SystemBoolean_SystemBoolean__SystemBoolean",
-                new List<CValue> { result, elemEq }, "SystemBoolean");
-        }
-
-        if (isNotEquals)
-            result = ExternCall("SystemBoolean.__op_UnaryNegation__SystemBoolean__SystemBoolean",
-                new List<CValue> { result }, "SystemBoolean");
-
-        return result;
+        return EmitTupleStructuralEquality(
+            VisitExpression(op.LeftOperand), VisitExpression(op.RightOperand), aggType,
+            op.OperatorKind == BinaryOperatorKind.NotEquals);
     }
 
     // ── Aggregate (tuple) equality (via IBinaryOperation — fallback) ──
 
     CValue EmitAggregateEquality(IBinaryOperation op, INamedTypeSymbol aggType)
+        => EmitTupleStructuralEquality(
+            VisitExpression(op.LeftOperand), VisitExpression(op.RightOperand), aggType,
+            op.OperatorKind == BinaryOperatorKind.NotEquals);
+
+    CValue EmitTupleStructuralEquality(CValue leftArr, CValue rightArr, INamedTypeSymbol aggType, bool isNotEquals)
+    {
+        var result = EmitAggregateElementsEqual(leftArr, rightArr, aggType);
+        if (isNotEquals)
+            result = ExternCall("SystemBoolean.__op_UnaryNegation__SystemBoolean__SystemBoolean",
+                new List<CValue> { result }, "SystemBoolean");
+        return result;
+    }
+
+    // Field-by-field structural equality of two object[]-backed tuples. A nested-tuple element recurses
+    // (boxed object.Equals would otherwise do REFERENCE equality on the nested object[] and never match);
+    // a scalar element uses SystemObject.__Equals (object.Equals = VALUE equality, NOT __op_Equality which
+    // is reference equality). Caveat: float NaN compares equal under object.Equals.
+    CValue EmitAggregateElementsEqual(CValue leftArr, CValue rightArr, INamedTypeSymbol aggType)
     {
         var layout = _ctx.GetAggregateLayout(aggType);
+        var leftSlot = _ctx.AllocTemp("SystemObjectArray"); EmitAssign(leftSlot, leftArr);
+        var rightSlot = _ctx.AllocTemp("SystemObjectArray"); EmitAssign(rightSlot, rightArr);
 
-        // Guard: nested tuples are not supported for equality
-        for (int i = 0; i < layout.Count; i++)
-        {
-            if (layout.Fields[i].Type.IsTupleType)
-                throw new System.NotSupportedException(
-                    $"Equality comparison on nested tuple type is not supported. "
-                    + $"Field '{layout.Fields[i].Name}' at index {i} is a tuple.");
-        }
-
-        var leftVal = VisitExpression(op.LeftOperand);
-        var rightVal = VisitExpression(op.RightOperand);
-
-        // Store to temps so we can index multiple times without re-cloning
-        var leftSlot = _ctx.AllocTemp("SystemObjectArray");
-        EmitAssign(leftSlot, leftVal);
-        var rightSlot = _ctx.AllocTemp("SystemObjectArray");
-        EmitAssign(rightSlot, rightVal);
-
-        // Compare boxed elements by VALUE via SystemObject.__Equals (object.Equals), NOT
-        // __op_Equality which is REFERENCE equality — distinct boxes of equal values would
-        // otherwise always compare unequal. (Caveat: float NaN compares equal under object.Equals.)
         CValue result = Const(true, "SystemBoolean");
         for (int i = 0; i < layout.Count; i++)
         {
@@ -698,19 +658,15 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
                 new List<CValue> { SlotRef(leftSlot), Const(i, "SystemInt32") }, "SystemObject");
             var rightElem = ExternCall("SystemObjectArray.__Get__SystemInt32__SystemObject",
                 new List<CValue> { SlotRef(rightSlot), Const(i, "SystemInt32") }, "SystemObject");
-            var elemEq = ExternCall(
-                "SystemObject.__Equals__SystemObject_SystemObject__SystemBoolean",
-                new List<CValue> { leftElem, rightElem }, "SystemBoolean");
 
-            result = ExternCall(
-                "SystemBoolean.__op_LogicalAnd__SystemBoolean_SystemBoolean__SystemBoolean",
+            CValue elemEq = layout.Fields[i].Type is INamedTypeSymbol nested && nested.IsTupleType
+                ? EmitAggregateElementsEqual(leftElem, rightElem, nested) // nested tuple → recurse
+                : ExternCall("SystemObject.__Equals__SystemObject_SystemObject__SystemBoolean",
+                    new List<CValue> { leftElem, rightElem }, "SystemBoolean");
+
+            result = ExternCall("SystemBoolean.__op_LogicalAnd__SystemBoolean_SystemBoolean__SystemBoolean",
                 new List<CValue> { result, elemEq }, "SystemBoolean");
         }
-
-        if (op.OperatorKind == BinaryOperatorKind.NotEquals)
-            result = ExternCall("SystemBoolean.__op_UnaryNegation__SystemBoolean__SystemBoolean",
-                new List<CValue> { result }, "SystemBoolean");
-
         return result;
     }
 
