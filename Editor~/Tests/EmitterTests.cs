@@ -3558,6 +3558,22 @@ public class StructPropTest : UdonSharpBehaviour {
     }
 
     [Fact]
+    public void UserIndexer_GetSet_CompilesWithoutExtern()
+    {
+        // A user-defined indexer routes to internal getter/setter calls, not a nonexistent __set_Item extern.
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public class IndexerTest : UdonSharpBehaviour {
+    int[] _b;
+    int _r;
+    public int this[int i] { get => _b[i]; set => _b[i] = value; }
+    void Start() { _b = new int[2]; this[0] = 5; _r = this[0]; }
+}", "IndexerTest");
+        Assert.NotNull(uasm);
+        Assert.DoesNotContain("IUdonEventReceiver.__set_Item", uasm);
+    }
+
+    [Fact]
     public void RecursiveLambda_Local_SpillsToRecursionStack()
     {
         // A self-recursive lambda assigned to a local delegate var (the standard recursive-lambda idiom)
