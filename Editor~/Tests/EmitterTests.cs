@@ -3417,27 +3417,29 @@ public class TransitiveTest : UdonSharpBehaviour {
     }
 
     [Fact]
-    public void SelfRecursion_UsesFlatRegister()
+    public void NonTailRecursion_SpillsToRecursionStack()
     {
-        // Recursion support is disabled (matches UdonSharp behavior).
-        // Self-recursive calls use flat register save/restore like any other call.
+        // Non-tail recursion (n * Factorial(n-1) reads n after the call) must spill the caller's live
+        // values to the heap-backed software stack, because Udon's flat heap shares param/local slots
+        // across call frames. Verified to produce correct runtime values via the local UasmEval harness.
         var uasm = TestHelper.CompileToUasm(@"
 using UdonSharp;
 public class RecursionTest : UdonSharpBehaviour {
-    int _count;
-    void Recurse(int depth) {
-        if (depth <= 0) { _count++; return; }
-        Recurse(depth - 1);
+    int _result;
+    int Factorial(int n) {
+        if (n <= 1) return 1;
+        return n * Factorial(n - 1);
     }
-    void Start() { Recurse(3); }
+    void Start() { _result = Factorial(5); }
 }
 ", "RecursionTest");
-        Assert.DoesNotContain("__retAddrStack", uasm);
-        Assert.DoesNotContain("__retAddrSp", uasm);
+        Assert.Contains("__recurStack", uasm);
+        Assert.Contains("__recurSp", uasm);
+        Assert.Contains("op_Multiplication", uasm);
     }
 
     [Fact]
-    public void NonRecursiveCall_UsesFlatRegister()
+    public void NonRecursiveCall_NoRecursionStack()
     {
         var uasm = TestHelper.CompileToUasm(@"
 using UdonSharp;
@@ -3446,16 +3448,15 @@ public class NonRecursiveTest : UdonSharpBehaviour {
     void Start() { int r = Helper(5); }
 }
 ", "NonRecursiveTest");
-        // Non-recursive call should NOT use stack
-        Assert.DoesNotContain("__retAddrStack", uasm);
-        Assert.DoesNotContain("__retAddrSp", uasm);
+        // A non-recursive call has no flat-heap clobber risk, so no spill stack is emitted.
+        Assert.DoesNotContain("__recurStack", uasm);
+        Assert.DoesNotContain("__recurSp", uasm);
     }
 
     [Fact]
-    public void RecursiveCall_WithLocalVariables_UsesFlatRegister()
+    public void RecursiveCall_WithLocalVariables_SpillsToRecursionStack()
     {
-        // Recursion support is disabled (matches UdonSharp behavior).
-        // Even recursive calls with local variables use flat register save/restore.
+        // The local `r` is live across the recursive call and is spilled with the param.
         var uasm = TestHelper.CompileToUasm(@"
 using UdonSharp;
 public class RecLocalVarTest : UdonSharpBehaviour {
@@ -3468,16 +3469,16 @@ public class RecLocalVarTest : UdonSharpBehaviour {
     void Start() { _result = Factorial(5); }
 }
 ", "RecLocalVarTest");
-        Assert.DoesNotContain("__retAddrStack", uasm);
-        Assert.DoesNotContain("__retAddrSp", uasm);
+        Assert.Contains("__recurStack", uasm);
+        Assert.Contains("__recurSp", uasm);
         Assert.Contains("op_Multiplication", uasm);
     }
 
     [Fact]
-    public void TailRecursion_CompilesSuccessfully()
+    public void TailRecursion_NotSpilled()
     {
-        // Tail-recursive calls compile without retAddrStack when the result
-        // is directly returned (no post-call local variable usage)
+        // A tail self-call (`return Loop(...)`) reads nothing of its frame after the call, so it is NOT
+        // spilled — keeping deep tail recursion from exhausting the bounded software stack.
         var uasm = TestHelper.CompileToUasm(@"
 using UdonSharp;
 public class TailRecTest : UdonSharpBehaviour {
@@ -3490,9 +3491,9 @@ public class TailRecTest : UdonSharpBehaviour {
 }
 ", "TailRecTest");
         Assert.NotNull(uasm);
-        // The Loop method should be emitted with addition for acc + n
         Assert.Contains("Loop", uasm);
         Assert.Contains("op_Addition", uasm);
+        Assert.DoesNotContain("__recurStack", uasm);
     }
 
     // ── Re-entrance guard ──
