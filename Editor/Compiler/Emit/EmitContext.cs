@@ -109,14 +109,13 @@ public class EmitContext
 
     // Persistent local symbol → field name mapping (survives scope pop, for capture resolution).
     //
-    // KNOWN LIMITATION: All lambdas within the same UdonSharpBehaviour share this flat mapping.
-    // A captured local is hoisted to a single module-level field. This works correctly when
-    // lambdas run sequentially, but nested lambdas or multiple delegates capturing the same
-    // variable alias the same field. Because Udon delegates are JUMP addresses (not closures
-    // with independent state), "instantiating" a lambda multiple times (e.g., inside a loop)
-    // with different capture values will overwrite the shared field — only the last value
-    // survives. This is inherent to the Udon VM's flat heap model and cannot be fixed without
-    // a closure-object emulation layer.
+    // KNOWN LIMITATION (v2.2): All lambdas within the same UdonSharpBehaviour share this flat
+    // mapping. A captured local is hoisted to a single module-level field. When two distinct
+    // lambdas / delegate fields capture the SAME local, they alias — reassigning one delegate
+    // overwrites the other's captured value. v2.2 detects this structurally via
+    // LambdaCaptureAnalyzer + AllLambdaCaptures aggregation and raises an emit-time Error
+    // (was a Warning in v2.1). Full cure requires a closure-object emulation layer
+    // (long-term Phase F); see docs/known-bugs.md.
     public readonly struct LocalBinding
     {
         public readonly string Id;
@@ -124,6 +123,39 @@ public class EmitContext
     }
 
     public readonly Dictionary<ILocalSymbol, LocalBinding> LocalBindings = new(SymbolEqualityComparer.Default);
+
+    // Lambda capture analysis (replaces HandlerBase.HasCaptures pre-v2.2).
+    // See LambdaCaptureAnalyzer for rationale on manual walker vs Roslyn AnalyzeDataFlow.
+    public readonly LambdaCaptureAnalyzer CaptureAnalyzer;
+
+    // Aliasing detection: per captured symbol, list of lambdas (delegate creations) that captured it.
+    // Populated by SimpleAssignmentHandler when a lambda is assigned to a delegate field.
+    // UasmEmitter inspects this after emit and raises an Error if any captured symbol has > 1 lambda.
+    public readonly Dictionary<ISymbol, List<IAnonymousFunctionOperation>> AllLambdaCaptures
+        = new(SymbolEqualityComparer.Default);
+
+    /// <summary>
+    /// Record that <paramref name="lambda"/> was assigned to a delegate field (or otherwise
+    /// stored long-lived). Each captured symbol is appended to AllLambdaCaptures so post-emit
+    /// aliasing detection can flag multiple lambdas sharing the same captured local.
+    /// </summary>
+    public void RecordLambdaCaptures(IAnonymousFunctionOperation lambda)
+    {
+        var captures = CaptureAnalyzer.GetCaptures(lambda);
+        foreach (var sym in captures)
+        {
+            // 'this' is always the same instance — captures of `this` (or instance-method receiver)
+            // never alias in the problematic sense. Skip to avoid false positives when multiple
+            // lambdas merely access this.field.
+            if (sym is IParameterSymbol p && p.IsThis) continue;
+            if (!AllLambdaCaptures.TryGetValue(sym, out var list))
+            {
+                list = new List<IAnonymousFunctionOperation>();
+                AllLambdaCaptures[sym] = list;
+            }
+            if (!list.Contains(lambda)) list.Add(lambda);
+        }
+    }
 
     // Aggregate type support
     public static bool IsAggregateType(ITypeSymbol type)
@@ -169,6 +201,14 @@ public class EmitContext
     /// Used to limit Dispose emission for break/continue to scopes inside the loop.</summary>
     public readonly Stack<int> LoopUsingDepthStack = new();
 
+    // Switch break label stack — top is non-null inside switch body, null sentinel inside loop body.
+    // StatementHandler.VisitBranch reads top to distinguish switch breaks (goto end label) from loop breaks (HBreak).
+    public readonly Stack<string> SwitchBreakLabels = new();
+
+    int _switchLabelCounter;
+    /// <summary>Generate a unique end label for a switch statement (per EmitContext = per class).</summary>
+    public string NextSwitchEndLabel() => $"__switchEnd_{++_switchLabelCounter}";
+
     // Delegate fields: tracks which user fields are delegate-typed and were expanded to bundles
     public readonly HashSet<string> DelegateFields = new();
 
@@ -208,6 +248,7 @@ public class EmitContext
         HirModule = new HModule { ClassName = classSymbol.ToDisplayString() };
         Builder = new HirBuilder(HirModule);
         Planner = planner;
+        CaptureAnalyzer = new LambdaCaptureAnalyzer(compilation);
     }
 
     // ══════════════════════════════════════════════════════════════════

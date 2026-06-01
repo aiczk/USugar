@@ -1,26 +1,16 @@
-using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Threading;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.Operations;
 
 public class LoopHandler : HandlerBase, IOperationHandler
 {
-    // Thread-safe switch break label stack (emit runs in parallel per-behaviour).
-    // StatementHandler reads this to distinguish switch breaks from loop breaks.
-    [ThreadStatic] static Stack<string> s_switchBreakLabels;
-    internal static Stack<string> SwitchBreakLabels => s_switchBreakLabels ??= new();
-
-    static int s_switchLabelCounter;
-
     public LoopHandler(EmitContext ctx) : base(ctx) { }
 
     public bool CanHandle(IOperation operation)
         => operation is IWhileLoopOperation
             or IForLoopOperation
-            or IForEachLoopOperation
-            or ISwitchOperation;
+            or IForEachLoopOperation;
 
     public void Handle(IOperation operation)
     {
@@ -29,7 +19,6 @@ public class LoopHandler : HandlerBase, IOperationHandler
             case IWhileLoopOperation op: VisitWhileLoop(op); break;
             case IForLoopOperation op: VisitForLoop(op); break;
             case IForEachLoopOperation op: VisitForEachLoop(op); break;
-            case ISwitchOperation op: VisitSwitch(op); break;
             default: throw new System.NotSupportedException(operation.GetType().Name);
         }
     }
@@ -41,7 +30,7 @@ public class LoopHandler : HandlerBase, IOperationHandler
             // while (cond) { body }
             _builder.EmitWhile(() => VisitExpression(op.Condition), _ =>
             {
-                SwitchBreakLabels.Push(null); // sentinel: loop break should not target switch
+                _ctx.SwitchBreakLabels.Push(null); // sentinel: loop break should not target switch
                 try
                 {
                     _ctx.LoopUsingDepthStack.Push(_usingDisposableStack.Count);
@@ -50,7 +39,7 @@ public class LoopHandler : HandlerBase, IOperationHandler
                 }
                 finally
                 {
-                    SwitchBreakLabels.Pop();
+                    _ctx.SwitchBreakLabels.Pop();
                 }
             });
         }
@@ -59,7 +48,7 @@ public class LoopHandler : HandlerBase, IOperationHandler
             // do { body } while (cond)
             _builder.EmitWhile(() => VisitExpression(op.Condition), _ =>
             {
-                SwitchBreakLabels.Push(null); // sentinel: loop break should not target switch
+                _ctx.SwitchBreakLabels.Push(null); // sentinel: loop break should not target switch
                 try
                 {
                     _ctx.LoopUsingDepthStack.Push(_usingDisposableStack.Count);
@@ -68,7 +57,7 @@ public class LoopHandler : HandlerBase, IOperationHandler
                 }
                 finally
                 {
-                    SwitchBreakLabels.Pop();
+                    _ctx.SwitchBreakLabels.Pop();
                 }
             }, isDoWhile: true);
         }
@@ -94,7 +83,7 @@ public class LoopHandler : HandlerBase, IOperationHandler
             _ =>
             {
                 // Body
-                SwitchBreakLabels.Push(null); // sentinel: loop break should not target switch
+                _ctx.SwitchBreakLabels.Push(null); // sentinel: loop break should not target switch
                 try
                 {
                     _ctx.LoopUsingDepthStack.Push(_usingDisposableStack.Count);
@@ -103,7 +92,7 @@ public class LoopHandler : HandlerBase, IOperationHandler
                 }
                 finally
                 {
-                    SwitchBreakLabels.Pop();
+                    _ctx.SwitchBreakLabels.Pop();
                 }
             });
     }
@@ -173,7 +162,7 @@ public class LoopHandler : HandlerBase, IOperationHandler
                     elemType);
                 EmitStoreField(loopVarId, elemVal);
 
-                SwitchBreakLabels.Push(null); // sentinel: loop break should not target switch
+                _ctx.SwitchBreakLabels.Push(null); // sentinel: loop break should not target switch
                 try
                 {
                     _ctx.LoopUsingDepthStack.Push(_usingDisposableStack.Count);
@@ -182,151 +171,9 @@ public class LoopHandler : HandlerBase, IOperationHandler
                 }
                 finally
                 {
-                    SwitchBreakLabels.Pop();
+                    _ctx.SwitchBreakLabels.Pop();
                 }
             });
     }
 
-    void VisitSwitch(ISwitchOperation op)
-    {
-        var valueVal = VisitExpression(op.Value);
-        var valueType = GetUdonType(op.Value.Type);
-
-        // Generate a unique end label for this switch
-        var endLabel = $"__switchEnd_{Interlocked.Increment(ref s_switchLabelCounter)}";
-        SwitchBreakLabels.Push(endLabel);
-        _ctx.LoopUsingDepthStack.Push(_usingDisposableStack.Count);
-        try
-        {
-            // Pre-convert enum switch value once (Udon VM has no enum-typed operators)
-            var convertedValueVal = EmitEnumToUnderlying(valueVal, op.Value.Type);
-
-            // Store converted value in a scratch slot so it can be re-read for each comparison
-            int convertedSlot = -1;
-            string convertedSlotType = null;
-            if (op.Cases.Length > 1)
-            {
-                convertedSlotType = valueType;
-                if (op.Value.Type is INamedTypeSymbol namedEnum && namedEnum.TypeKind == TypeKind.Enum)
-                    convertedSlotType = GetUdonType(namedEnum.EnumUnderlyingType);
-                convertedSlot = _ctx.AllocTemp(convertedSlotType);
-                EmitAssign(convertedSlot, convertedValueVal);
-            }
-
-            // Also store the original value for pattern matching
-            int origValueSlot = -1;
-            if (op.Cases.Any(c => c.Clauses.Any(cl => cl is IPatternCaseClauseOperation)))
-            {
-                origValueSlot = _ctx.AllocTemp(valueType);
-                EmitAssign(origValueSlot, valueVal);
-            }
-
-            // Find default case index
-            int defaultIndex = -1;
-            for (int i = 0; i < op.Cases.Length; i++)
-                if (op.Cases[i].Clauses.Any(c => c is IDefaultCaseClauseOperation))
-                    defaultIndex = i;
-
-            // Lower switch to if/else chain
-            EmitSwitchCases(op, convertedSlot, convertedSlotType, convertedValueVal, origValueSlot, valueVal, valueType, defaultIndex, 0);
-        }
-        finally
-        {
-            _ctx.LoopUsingDepthStack.Pop();
-            SwitchBreakLabels.Pop();
-        }
-        _builder.EmitLabel(endLabel);
-    }
-
-    void EmitSwitchCases(ISwitchOperation op, int convertedSlot, string convertedSlotType, HExpr convertedValueVal,
-        int origValueSlot, HExpr origValueVal, string valueType, int defaultIndex, int startIdx)
-    {
-        // Find the next non-default case starting from startIdx
-        int caseIdx = -1;
-        for (int i = startIdx; i < op.Cases.Length; i++)
-        {
-            if (i == defaultIndex && op.Cases[i].Clauses.All(c => c is IDefaultCaseClauseOperation))
-                continue; // Skip pure default cases; handle at the end
-            caseIdx = i;
-            break;
-        }
-
-        if (caseIdx < 0)
-        {
-            // No more non-default cases; emit default body if present
-            if (defaultIndex >= 0)
-                EmitCaseBody(op.Cases[defaultIndex]);
-            return;
-        }
-
-        // Build condition: OR of all clauses for this case
-        HExpr caseCond = null;
-        var caseSection = op.Cases[caseIdx];
-        foreach (var clause in caseSection.Clauses)
-        {
-            if (clause is IDefaultCaseClauseOperation)
-                continue;
-
-            HExpr clauseCond = null;
-            if (clause is ISingleValueCaseClauseOperation singleValue)
-            {
-                var caseValueVal = VisitExpression(singleValue.Value);
-                caseValueVal = EmitEnumToUnderlying(caseValueVal, op.Value.Type);
-
-                var eqType = valueType;
-                if (op.Value.Type is INamedTypeSymbol named && named.TypeKind == TypeKind.Enum)
-                    eqType = GetUdonType(named.EnumUnderlyingType);
-                var eqSig = ExternResolver.BuildMethodSignature(
-                    eqType, "__op_Equality", new[] { eqType, eqType }, "SystemBoolean");
-
-                var lhs = convertedSlot >= 0 ? SlotRef(convertedSlot) : convertedValueVal;
-                clauseCond = ExternCall(eqSig, new List<HExpr> { lhs, caseValueVal }, "SystemBoolean");
-            }
-            else if (clause is IPatternCaseClauseOperation patternCase)
-            {
-                var patValue = origValueSlot >= 0 ? SlotRef(origValueSlot) : origValueVal;
-                clauseCond = EmitPatternCheck(patValue, op.Value.Type, patternCase.Pattern);
-
-                if (patternCase.Guard != null)
-                {
-                    var guardVal = VisitExpression(patternCase.Guard);
-                    // Both pattern and guard must pass: clauseCond && guardVal
-                    clauseCond = ExternCall(
-                        "SystemBoolean.__op_ConditionalAnd__SystemBoolean_SystemBoolean__SystemBoolean",
-                        new List<HExpr> { clauseCond, guardVal },
-                        "SystemBoolean");
-                }
-            }
-
-            if (clauseCond != null)
-            {
-                caseCond = caseCond == null
-                    ? clauseCond
-                    : ExternCall(
-                        "SystemBoolean.__op_ConditionalOr__SystemBoolean_SystemBoolean__SystemBoolean",
-                        new List<HExpr> { caseCond, clauseCond },
-                        "SystemBoolean");
-            }
-        }
-
-        if (caseCond != null)
-        {
-            _builder.EmitIf(caseCond,
-                _ => EmitCaseBody(caseSection),
-                _ => EmitSwitchCases(op, convertedSlot, convertedSlotType, convertedValueVal,
-                                     origValueSlot, origValueVal, valueType, defaultIndex, caseIdx + 1));
-        }
-        else
-        {
-            // Case with only default clause — treated as else (handled by fallthrough)
-            EmitSwitchCases(op, convertedSlot, convertedSlotType, convertedValueVal,
-                            origValueSlot, origValueVal, valueType, defaultIndex, caseIdx + 1);
-        }
-    }
-
-    void EmitCaseBody(ISwitchCaseOperation caseSection)
-    {
-        foreach (var stmt in caseSection.Body)
-            VisitOperation(stmt);
-    }
 }

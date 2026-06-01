@@ -1,0 +1,126 @@
+using System.Collections.Generic;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.Operations;
+
+/// <summary>Handles `a += b`, `a -= b`, `a++`, `++a`, etc.</summary>
+public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandler
+{
+    public CompoundAssignmentHandler(EmitContext ctx) : base(ctx) { }
+
+    public bool CanHandle(IOperation op) => op is ICompoundAssignmentOperation or IIncrementOrDecrementOperation;
+
+    public HExpr Handle(IOperation op) => op switch
+    {
+        ICompoundAssignmentOperation compound => VisitCompoundAssignment(compound),
+        IIncrementOrDecrementOperation incDec => VisitIncrementDecrement(incDec),
+        _ => throw new System.NotSupportedException(op.GetType().Name),
+    };
+
+    HExpr VisitCompoundAssignment(ICompoundAssignmentOperation op)
+    {
+        // Block += / -= on delegate fields — Udon VM does not support Delegate.Combine/Remove
+        if (op.Target is IFieldReferenceOperation fr
+            && fr.Field.Type is INamedTypeSymbol nt && nt.DelegateInvokeMethod != null)
+            throw new System.NotSupportedException("Multicast delegates (+=/-=) are not supported. Udon VM does not support Delegate.Combine/Remove.");
+
+        // Capture lvalue sub-expressions once to avoid double evaluation
+        var lv = CaptureLValue(op.Target);
+        var leftVal = lv.Value;
+        var rightVal = VisitExpression(op.Value);
+        var resultType = GetUdonType(op.Type);
+
+        // Promote small integers for the operation temp.
+        // Udon VM has no byte/sbyte/short/ushort operators — operations go through int.
+        var opResultType = resultType;
+        if (IsSmallInteger(resultType))
+            opResultType = "SystemInt32";
+
+        // Explicit operand promotion: byte slot pushed to int extern requires ToInt32 conversion
+        // (matches ExpressionHandler.VisitConversion behaviour for byte+byte). Without this we
+        // rely on Udon VM's implicit boxed-value coercion, which is fragile across SDK updates.
+        var leftType = GetUdonType(op.Target.Type);
+        if (IsSmallInteger(leftType))
+            leftVal = PromoteToInt32(leftVal, leftType);
+        var rightType = GetUdonType(op.Value.Type);
+        if (IsSmallInteger(rightType))
+            rightVal = PromoteToInt32(rightVal, rightType);
+
+        var sig = ExternResolver.ResolveBinaryExtern(
+            op.OperatorKind, op.OperatorMethod,
+            ResolveType(op.Target.Type), ResolveType(op.Value.Type), ResolveType(op.Type));
+        HExpr resultVal = ExternCall(sig, new List<HExpr> { leftVal, rightVal }, opResultType);
+
+        // Narrow back to original type if promoted
+        if (opResultType != resultType)
+            resultVal = ExternCall(ExternResolver.BuildConvertSignature(opResultType, resultType), new List<HExpr> { resultVal }, resultType);
+
+        EmitWriteBack(op.Target, resultVal, lv);
+        return resultVal;
+    }
+
+    static bool IsSmallInteger(string udonType)
+        => udonType is "SystemByte" or "SystemSByte" or "SystemInt16" or "SystemUInt16";
+
+    HExpr PromoteToInt32(HExpr value, string srcUdonType)
+        => ExternCall($"SystemConvert.__ToInt32__{srcUdonType}__SystemInt32",
+            new List<HExpr> { value }, "SystemInt32");
+
+    HExpr VisitIncrementDecrement(IIncrementOrDecrementOperation op)
+    {
+        // Capture lvalue sub-expressions once to avoid double evaluation
+        var lv = CaptureLValue(op.Target);
+        var targetVal = lv.Value;
+        var udonType = GetUdonType(op.Type);
+
+        // Promote small integers: Udon VM has no byte/sbyte/short/ushort operators
+        var opType = udonType;
+        if (IsSmallInteger(opType))
+            opType = "SystemInt32";
+
+        var oneConst = Const(1, opType);
+
+        // For postfix, save old value before modifying target (only if result is used).
+        // Save the un-promoted value so postfix returns the original byte (not the int promotion).
+        HExpr savedVal = null;
+        if (op.IsPostfix)
+        {
+            var resultUsed = op.Parent is not IExpressionStatementOperation
+                             && op.Parent is not IForLoopOperation;
+            if (op.Parent == null || resultUsed)
+            {
+                var savedSlot = _ctx.AllocTemp(udonType);
+                EmitAssign(savedSlot, targetVal);
+                savedVal = SlotRef(savedSlot);
+            }
+        }
+
+        // Explicit operand promotion to match the int extern signature.
+        if (IsSmallInteger(udonType))
+            targetVal = PromoteToInt32(targetVal, udonType);
+
+        var isIncrement = op.Kind == OperationKind.Increment;
+        var externName = isIncrement ? "op_Addition" : "op_Subtraction";
+        var sig = ExternResolver.BuildMethodSignature(
+            opType, ExternResolver.GetOperatorExternName(externName),
+            new[] { opType, opType }, opType);
+
+        HExpr resultVal = ExternCall(sig, new List<HExpr> { targetVal, oneConst }, opType);
+
+        // Narrow back to original type if promoted
+        if (opType != udonType)
+            resultVal = ExternCall(ExternResolver.BuildConvertSignature(opType, udonType), new List<HExpr> { resultVal }, udonType);
+
+        // Materialize resultVal to a temp slot before write-back to avoid
+        // the extern call being emitted twice (once for store, once for return value).
+        if (!op.IsPostfix)
+        {
+            var tempSlot = _ctx.AllocTemp(udonType);
+            EmitAssign(tempSlot, resultVal);
+            resultVal = SlotRef(tempSlot);
+        }
+
+        EmitWriteBack(op.Target, resultVal, lv);
+
+        return op.IsPostfix ? savedVal : resultVal;
+    }
+}

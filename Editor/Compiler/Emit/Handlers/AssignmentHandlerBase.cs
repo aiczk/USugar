@@ -1,0 +1,251 @@
+using System.Collections.Generic;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.Operations;
+
+/// <summary>
+/// Common lvalue handling shared by SimpleAssignmentHandler / CompoundAssignmentHandler /
+/// DeconstructionAssignmentHandler. Provides LValueCapture, write-back, and target field
+/// name resolution.
+/// </summary>
+public abstract class AssignmentHandlerBase : HandlerBase
+{
+    protected AssignmentHandlerBase(EmitContext ctx) : base(ctx) { }
+
+    // ── LValue Capture ──
+    // Evaluates and caches sub-expressions of an l-value (array ref, index, instance)
+    // to avoid re-evaluating side-effecting expressions during write-back.
+
+    protected struct LValueCapture
+    {
+        public HExpr Value;         // The evaluated l-value value
+        public HExpr ArrayVal;      // Cached array reference (for array elements)
+        public HExpr IndexVal;      // Cached index (for array elements)
+        public HExpr InstanceVal;   // Cached instance (for cross-behaviour fields/properties)
+    }
+
+    protected LValueCapture CaptureLValue(IOperation target)
+    {
+        switch (target)
+        {
+            case IFieldReferenceOperation aggFieldRef
+                when aggFieldRef.Instance != null
+                && aggFieldRef.Instance.Type is INamedTypeSymbol aggCapType
+                && EmitContext.IsAggregateType(aggCapType):
+            {
+                var layout = _ctx.GetAggregateLayout(aggCapType);
+                if (layout.TryGetIndex(aggFieldRef.Field, out var elemIdx))
+                {
+                    var arrVal = LoadInstanceRaw(aggFieldRef.Instance);
+                    var idxVal = Const(elemIdx, "SystemInt32");
+                    var currentVal = ExternCall("SystemObjectArray.__Get__SystemInt32__SystemObject",
+                        new List<HExpr> { arrVal, idxVal }, "SystemObject");
+                    return new LValueCapture { Value = currentVal, ArrayVal = arrVal, IndexVal = idxVal };
+                }
+                goto default;
+            }
+            case IArrayElementReferenceOperation arrayElem:
+            {
+                var arrayVal = VisitExpression(arrayElem.ArrayReference);
+                var indexVal = VisitExpression(arrayElem.Indices[0]);
+                var arrSymbol = arrayElem.ArrayReference.Type as IArrayTypeSymbol;
+                var arrayType = GetArrayType(arrSymbol);
+                var elemAccessorType = GetArrayElemType(arrSymbol);
+
+                // Read current value: arr[idx]
+                var valResult = ExternCall(
+                    $"{arrayType}.__Get__SystemInt32__{elemAccessorType}",
+                    new List<HExpr> { arrayVal, indexVal },
+                    GetUdonType(arrayElem.Type));
+                return new LValueCapture { Value = valResult, ArrayVal = arrayVal, IndexVal = indexVal };
+            }
+            case IFieldReferenceOperation { Instance: not null and not IInstanceReferenceOperation } fieldRef
+                when ExternResolver.IsUdonSharpBehaviour(fieldRef.Field.ContainingType):
+            {
+                var instanceVal = VisitExpression(fieldRef.Instance);
+                // Read via GetProgramVariable
+                var nameConst = Const(fieldRef.Field.Name, "SystemString");
+                var valResult = ExternCall(
+                    "VRCUdonCommonInterfacesIUdonEventReceiver.__GetProgramVariable__SystemString__SystemObject",
+                    new List<HExpr> { instanceVal, nameConst },
+                    "SystemObject");
+                return new LValueCapture { Value = valResult, InstanceVal = instanceVal };
+            }
+            case IFieldReferenceOperation { Instance: not null and not IInstanceReferenceOperation } fieldRef2
+                when fieldRef2.Field.ContainingType.IsValueType:
+            {
+                var instanceVal = VisitExpression(fieldRef2.Instance);
+                var containingType = GetUdonType(fieldRef2.Field.ContainingType);
+                var valueType = GetUdonType(fieldRef2.Field.Type);
+                var sig = ExternResolver.BuildPropertyGetSignature(containingType, fieldRef2.Field.Name, valueType);
+                var valResult = ExternCall(sig, new List<HExpr> { instanceVal }, valueType);
+                return new LValueCapture { Value = valResult, InstanceVal = instanceVal };
+            }
+            default:
+                // Simple l-value (local, field on this): just evaluate normally
+                return new LValueCapture { Value = VisitExpression(target) };
+        }
+    }
+
+    // ── EmitWriteBack ──
+    // Write back a computed value to non-trivial l-value targets (array elements, properties).
+    // For local/field variables, also writes back via EmitStoreField.
+
+    protected void EmitWriteBack(IOperation target, HExpr valueVal, LValueCapture lv = default)
+    {
+        switch (target)
+        {
+            case IFieldReferenceOperation aggFieldRef
+                when aggFieldRef.Instance != null
+                && aggFieldRef.Instance.Type is INamedTypeSymbol aggWbType
+                && EmitContext.IsAggregateType(aggWbType):
+            {
+                var layout = _ctx.GetAggregateLayout(aggWbType);
+                if (layout.TryGetIndex(aggFieldRef.Field, out var elemIdx))
+                {
+                    var arrVal = lv.ArrayVal ?? VisitExpression(aggFieldRef.Instance);
+                    EmitExternVoid("SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid",
+                        new List<HExpr> { arrVal, Const(elemIdx, "SystemInt32"), valueVal });
+                    return;
+                }
+                break;
+            }
+            case IArrayElementReferenceOperation arrayElem:
+            {
+                // Use captured array/index if available (avoid double evaluation)
+                var arrayVal = lv.ArrayVal ?? VisitExpression(arrayElem.ArrayReference);
+                var indexVal = lv.IndexVal ?? VisitExpression(arrayElem.Indices[0]);
+                var arrSymbol = arrayElem.ArrayReference.Type as IArrayTypeSymbol;
+                var arrayType = GetArrayType(arrSymbol);
+                var elementType = GetArrayElemType(arrSymbol);
+                EmitExternVoid($"{arrayType}.__Set__SystemInt32_{elementType}__SystemVoid", new List<HExpr> { arrayVal, indexVal, valueVal });
+                break;
+            }
+            case IFieldReferenceOperation { Instance: not null and not IInstanceReferenceOperation } fieldRef
+                when ExternResolver.IsUdonSharpBehaviour(fieldRef.Field.ContainingType):
+            {
+                // Cross-behaviour field write-back → SetProgramVariable
+                var instanceVal = lv.InstanceVal ?? VisitExpression(fieldRef.Instance);
+                var nameConst = Const(fieldRef.Field.Name, "SystemString");
+                EmitExternVoid("VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid", new List<HExpr> { instanceVal, nameConst, valueVal });
+                break;
+            }
+            // Auto-property on this → backing field already handled by write-back to field (user-defined classes only)
+            case IPropertyReferenceOperation { Instance: IInstanceReferenceOperation } propRef when propRef.Property.GetMethod?.DeclaringSyntaxReferences.IsEmpty == true && ExternResolver.IsUdonSharpBehaviour(propRef.Property.ContainingType) && propRef.Property.ContainingType.Name != "UdonSharpBehaviour":
+                return;
+            // User-defined property on this → call setter
+            case IPropertyReferenceOperation { Instance: IInstanceReferenceOperation, Property: { SetMethod: not null } } propRef when _methodFunctions.TryGetValue(propRef.Property.SetMethod, out _):
+                EmitExprStmt(EmitCallToMethod(propRef.Property.SetMethod, new List<HExpr> { valueVal }));
+                return;
+            // Cross-behaviour UdonSharpBehaviour property → SetProgramVariable / SendCustomEvent
+            case IPropertyReferenceOperation propRef when ExternResolver.IsUdonSharpBehaviour(propRef.Property.ContainingType) && propRef.Instance is not IInstanceReferenceOperation:
+            {
+                var instanceVal = VisitExpression(propRef.Instance);
+                var isAutoSet = propRef.Property.SetMethod?.DeclaringSyntaxReferences.IsEmpty == true;
+                if (isAutoSet || propRef.Property.SetMethod == null)
+                {
+                    var nameConst = Const(propRef.Property.Name, "SystemString");
+                    EmitExternVoid("VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid", new List<HExpr> { instanceVal, nameConst, valueVal });
+                }
+                else
+                {
+                    var (exportName, setParamIds, _) = GetCalleeLayout(propRef.Property.SetMethod);
+                    var paramNameConst = Const(setParamIds[0], "SystemString");
+                    EmitExternVoid("VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid", new List<HExpr> { instanceVal, paramNameConst, valueVal });
+                    var eventConst = Const(exportName, "SystemString");
+                    EmitExternVoid("VRCUdonCommonInterfacesIUdonEventReceiver.__SendCustomEvent__SystemString__SystemVoid", new List<HExpr> { instanceVal, eventConst });
+                }
+                return;
+            }
+            // Resolve containing type and instance
+            case IPropertyReferenceOperation propRef:
+            {
+                var containingType = GetUdonType(propRef.Property.ContainingType);
+                if (containingType is "UnityEngineBehaviour" or "UnityEngineMonoBehaviour")
+                    containingType = propRef.Instance is IInstanceReferenceOperation
+                        ? GetUdonType(_classSymbol)
+                        : GetUdonType(propRef.Instance.Type);
+
+                HExpr wbInstanceVal;
+                if (propRef.Instance is IInstanceReferenceOperation)
+                    wbInstanceVal = LoadField(_ctx.DeclareThisOnce(containingType), containingType);
+                else if (propRef.Instance != null)
+                    wbInstanceVal = VisitExpression(propRef.Instance);
+                else
+                {
+                    // Static property: no instance
+                    var valueType = GetUdonType(propRef.Property.Type);
+                    EmitExternVoid(ExternResolver.BuildPropertySetSignature(containingType, propRef.Property.Name, valueType), new List<HExpr> { valueVal });
+                    return;
+                }
+
+                var propValueType = GetUdonType(propRef.Property.Type);
+                if (propRef.Property.IsIndexer)
+                {
+                    var indexArgs = new List<HExpr> { wbInstanceVal };
+                    var indexTypes = new List<string>();
+                    foreach (var arg in propRef.Arguments)
+                    {
+                        indexArgs.Add(VisitExpression(arg.Value));
+                        indexTypes.Add(GetUdonType(arg.Value.Type));
+                    }
+                    indexArgs.Add(valueVal);
+                    var indexParamStr = string.Join("_", indexTypes);
+                    EmitExternVoid($"{containingType}.__set_Item__{indexParamStr}_{propValueType}__SystemVoid", indexArgs);
+                }
+                else
+                {
+                    EmitExternVoid(ExternResolver.BuildPropertySetSignature(containingType, propRef.Property.Name, propValueType), new List<HExpr> { wbInstanceVal, valueVal });
+                }
+                // COW dirty: struct property setter → copy back to force heap update
+                if (propRef.Property.ContainingType.IsValueType)
+                {
+                    var cowSlot = _ctx.AllocTemp(containingType);
+                    EmitAssign(cowSlot, wbInstanceVal);
+                }
+
+                break;
+            }
+            case IFieldReferenceOperation { Instance: not null and not IInstanceReferenceOperation } fieldRef2
+                when fieldRef2.Field.ContainingType.IsValueType:
+            {
+                // Struct field setter (e.g., vec.y += 3f where vec is an array element)
+                var instanceVal = lv.InstanceVal ?? VisitExpression(fieldRef2.Instance);
+                var containingType = GetUdonType(fieldRef2.Field.ContainingType);
+                var valueType = GetUdonType(fieldRef2.Field.Type);
+                var sig = ExternResolver.BuildFieldSetSignature(containingType, fieldRef2.Field.Name, valueType);
+                EmitExternVoid(sig, new List<HExpr> { instanceVal, valueVal });
+                break;
+            }
+            default:
+            {
+                // Simple l-value (local, field on this): write back via EmitStoreField
+                var fieldName = GetAssignTargetFieldName(target);
+                EmitStoreField(fieldName, valueVal);
+                break;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Resolve the field name (lvalue) for a simple assignment target.
+    /// Used by the fallback paths in SimpleAssignmentHandler / CompoundAssignmentHandler.
+    /// </summary>
+    protected string GetAssignTargetFieldName(IOperation target)
+    {
+        switch (target)
+        {
+            case ILocalReferenceOperation localRef:
+                if (_localBindings.TryGetValue(localRef.Local, out var lb))
+                    return lb.Id;
+                throw new System.InvalidOperationException(
+                    $"Cannot resolve local variable '{localRef.Local.Name}' for assignment.");
+            case IFieldReferenceOperation { Instance: IInstanceReferenceOperation } fieldRef:
+                return fieldRef.Field.Name;
+            case IParameterReferenceOperation paramRef:
+                return GetParamVarId(paramRef.Parameter);
+            default:
+                throw new System.NotSupportedException(
+                    $"Unsupported simple assignment target: {target.GetType().Name}");
+        }
+    }
+}

@@ -358,20 +358,6 @@ public abstract class HandlerBase
         return $"{paramStr}__{retPart}";
     }
 
-    /// <summary>Check if a lambda captures variables from outer scope.</summary>
-    protected static bool HasCaptures(IAnonymousFunctionOperation lambda)
-    {
-        var lambdaParams = new HashSet<ISymbol>(lambda.Symbol.Parameters, SymbolEqualityComparer.Default);
-        foreach (var desc in lambda.Body.DescendantsAndSelf())
-        {
-            if (desc is ILocalReferenceOperation localRef && !lambdaParams.Contains(localRef.Local))
-                return true;
-            if (desc is IParameterReferenceOperation paramRef && !lambdaParams.Contains(paramRef.Parameter))
-                return true;
-        }
-        return false;
-    }
-
     // ── Delegate bridge resolution ──
 
     /// <summary>Resolve delegate creation to bridge name, FuncRef, and target instance.</summary>

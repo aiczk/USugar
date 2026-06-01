@@ -46,14 +46,18 @@ public class UasmEmitter
 
         var stmtHandler = new StatementHandler(_ctx);
         var loopHandler = new LoopHandler(_ctx);
-        var assignHandler = new AssignmentHandler(_ctx);
+        var switchHandler = new SwitchHandler(_ctx);
+        var deconstructHandler = new DeconstructionAssignmentHandler(_ctx);
+        var simpleAssignHandler = new SimpleAssignmentHandler(_ctx);
+        var compoundAssignHandler = new CompoundAssignmentHandler(_ctx);
         var operatorHandler = new OperatorHandler(_ctx);
 
-        _stmtHandlers = new IOperationHandler[] { stmtHandler, loopHandler, assignHandler };
+        _stmtHandlers = new IOperationHandler[] { stmtHandler, loopHandler, switchHandler, deconstructHandler };
         _exprHandlers = new IExpressionHandler[]
         {
             new ExpressionHandler(_ctx),
-            (IExpressionHandler)assignHandler,
+            simpleAssignHandler,
+            compoundAssignHandler,
             operatorHandler,
             new InvocationHandler(_ctx),
             new ArrayHandler(_ctx),
@@ -109,10 +113,34 @@ public class UasmEmitter
         EmitFields();
         SetReflectionValues();
         EmitMethods();
+        DetectLambdaCaptureAliasing();
         OnIrPass?.Invoke("after-emit", _hirModule);
         var result = IrPipeline.GenerateUasmFromHir(_hirModule, DumpEnabled);
         _codeGenResult = result;
         return result.Uasm;
+    }
+
+    /// <summary>
+    /// Post-emit aliasing check: a captured local shared by 2+ lambdas / delegate fields
+    /// aliases the same flat-heap field (Udon VM has no closure objects). Reassigning one
+    /// delegate would silently overwrite the other's capture — was a Warning in v2.1, now Error.
+    /// </summary>
+    void DetectLambdaCaptureAliasing()
+    {
+        foreach (var kv in _ctx.AllLambdaCaptures)
+        {
+            if (kv.Value.Count <= 1) continue;
+            var symbolName = kv.Key.Name;
+            _diagnostics.Add(new EmitDiagnostic
+            {
+                Severity = "Error",
+                Message =
+                    $"Captured local '{symbolName}' is shared by {kv.Value.Count} lambdas / delegate fields. " +
+                    "Udon VM has no closure objects — captured locals alias a single flat-heap field, " +
+                    "so reassigning one delegate overwrites the other's captured value. " +
+                    "Use distinct locals per lambda, or restructure to avoid simultaneous live captures.",
+            });
+        }
     }
 
     public uint GetHeapSize() => _codeGenResult.HeapSize;
