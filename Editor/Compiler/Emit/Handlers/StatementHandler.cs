@@ -370,6 +370,18 @@ public class StatementHandler : HandlerBase, IOperationHandler
         {
             DefaultInitAggregate(localId, layout);
         }
+        else if (value is IObjectCreationOperation ocCtor && ocCtor.Arguments.Length > 0
+                 && EmitContext.IsUserStruct(aggregateType) && ocCtor.Constructor != null
+                 && _methodFunctions.ContainsKey(ocCtor.Constructor))
+        {
+            // new V(args): default-init the already-allocated array, then run the registered ctor
+            // (receiver = this array, mutated in place via this.field = … in the ctor body).
+            DefaultInitAggregate(localId, layout);
+            var ctorArgs = new List<CValue> { LoadField(localId, "SystemObjectArray") };
+            foreach (var arg in ocCtor.Arguments)
+                ctorArgs.Add(VisitExpression(arg.Value));
+            EmitExprStmt(EmitCallToMethod(ocCtor.Constructor, ctorArgs));
+        }
         else if (value is IObjectCreationOperation oc && oc.Arguments.Length == 0)
         {
             // new V() / new V { field = ... }: the array is already allocated above; value-type

@@ -2016,7 +2016,7 @@ public class Caller : UdonSharpBehaviour {
         Assert.Contains("__0___0_IsSupported__ret", stringConsts);
     }
 
-    [Fact(Skip = "parameterized struct ctor deferred")]
+    [Fact]
     public void StructFieldAccess_ViaLocal_EmitsGetterExtern()
     {
         var uasm = TestHelper.CompileToUasm(@"

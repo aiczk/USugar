@@ -257,6 +257,9 @@ public abstract class HandlerBase
                 => LoadField(b.Id, EmitContext.IsAggregateType(lr.Type) ? "SystemObjectArray" : GetUdonType(lr.Type)),
             IParameterReferenceOperation pr
                 => LoadParam(pr.Parameter),
+            // Inside a struct method/ctor, `this` is the receiver object[] param, not the Behaviour.
+            IInstanceReferenceOperation when _ctx.CurrentStructReceiverParamId != null
+                => LoadField(_ctx.CurrentStructReceiverParamId, "SystemObjectArray"),
             _ => VisitExpression(instance), // method return, field on this, etc. — fresh or already raw
         };
     }

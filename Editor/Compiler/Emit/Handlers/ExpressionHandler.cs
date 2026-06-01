@@ -36,6 +36,8 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
                                                      ? ExternCall("SystemObjectArray.__Clone__SystemObject",
                                                          new List<CValue> { LoadParam(paramRef.Parameter) }, "SystemObject")
                                                      : LoadParam(paramRef.Parameter),
+        IInstanceReferenceOperation when _ctx.CurrentStructReceiverParamId != null
+            => LoadField(_ctx.CurrentStructReceiverParamId, "SystemObjectArray"),
         IInstanceReferenceOperation => LoadField(_ctx.DeclareThisOnce(GetUdonType(_classSymbol)), GetUdonType(_classSymbol)),
         IConversionOperation op => VisitConversion(op),
         IDefaultValueOperation op => VisitDefaultValue(op),

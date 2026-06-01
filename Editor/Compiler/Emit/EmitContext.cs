@@ -112,6 +112,10 @@ public class EmitContext
     public readonly Dictionary<IMethodSymbol, ReturnSlot[]> MethodReturns = new(SymbolEqualityComparer.Default);
     public readonly Dictionary<IMethodSymbol, string[]> MethodParamVarIds = new(SymbolEqualityComparer.Default);
     public IMethodSymbol CurrentMethod;
+
+    /// <summary>When emitting a user-struct method/ctor, the receiver object[] param var id; otherwise null.
+    /// Makes <c>this</c> / <c>this.field</c> resolve to the receiver array instead of the Behaviour.</summary>
+    public string CurrentStructReceiverParamId;
     public int NextMethodIndex;
     public readonly List<(IMethodSymbol symbol, CFunction func)> PendingLocalFunctions = new();
     public readonly Dictionary<ILocalSymbol, IMethodSymbol> DelegateVarMap = new(SymbolEqualityComparer.Default);
