@@ -183,6 +183,27 @@ public abstract class AssignmentHandlerBase : HandlerBase
                 }
                 return;
             }
+            // Property on an aggregate (struct) instance — e.g. compound `p.X += 1` / `p.Computed += 1`,
+            // which routes through CaptureLValue + EmitWriteBack. Auto-property → write the backing-field
+            // slot by layout index; computed (non-auto) → call the user setter with the receiver as param0.
+            case IPropertyReferenceOperation { Property.IsIndexer: false } aggPropRef
+                when aggPropRef.Instance?.Type is INamedTypeSymbol aggPropType && EmitContext.IsAggregateType(aggPropType):
+            {
+                if (_ctx.GetAggregateLayout(aggPropType).TryGetIndex(aggPropRef.Property.Name, out var propIdx))
+                {
+                    var arrVal = lv.ArrayVal ?? LoadInstanceRaw(aggPropRef.Instance);
+                    EmitExternVoid("SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid",
+                        new List<CValue> { arrVal, Const(propIdx, "SystemInt32"), valueVal });
+                    return;
+                }
+                if (aggPropRef.Property.SetMethod is { } aggSetter && _methodFunctions.ContainsKey(aggSetter.OriginalDefinition))
+                {
+                    EmitExprStmt(EmitCallToMethod(aggSetter.OriginalDefinition,
+                        new List<CValue> { LoadInstanceRaw(aggPropRef.Instance), valueVal }));
+                    return;
+                }
+                break;
+            }
             // Resolve containing type and instance
             case IPropertyReferenceOperation propRef:
             {
