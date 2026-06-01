@@ -69,12 +69,12 @@ public class EmitContext
     // Core dependencies
     public readonly Compilation Compilation;
     public readonly INamedTypeSymbol ClassSymbol;
-    public readonly HModule HirModule;
-    public readonly HirBuilder Builder;
+    public readonly CModule HirModule;
+    public readonly CoreBuilder Builder;
     public readonly LayoutPlanner Planner;
 
     // Method bookkeeping
-    public readonly Dictionary<IMethodSymbol, HFunction> MethodFunctions = new(SymbolEqualityComparer.Default);
+    public readonly Dictionary<IMethodSymbol, CFunction> MethodFunctions = new(SymbolEqualityComparer.Default);
     public readonly struct MethodSlot
     {
         public readonly int Index;
@@ -96,7 +96,7 @@ public class EmitContext
     public readonly Dictionary<IMethodSymbol, string[]> MethodParamVarIds = new(SymbolEqualityComparer.Default);
     public IMethodSymbol CurrentMethod;
     public int NextMethodIndex;
-    public readonly List<(IMethodSymbol symbol, HFunction func)> PendingLocalFunctions = new();
+    public readonly List<(IMethodSymbol symbol, CFunction func)> PendingLocalFunctions = new();
     public readonly Dictionary<ILocalSymbol, IMethodSymbol> DelegateVarMap = new(SymbolEqualityComparer.Default);
 
     // Generic monomorphization
@@ -192,17 +192,17 @@ public class EmitContext
 
     // Conditional access stack (for ?. operator)
     // Target is the evaluated instance; DelegateFieldName is non-null for delegate ?.Invoke().
-    public readonly Stack<(HExpr Target, string DelegateFieldName)> ConditionalAccessStack = new();
+    public readonly Stack<(CValue Target, string DelegateFieldName)> ConditionalAccessStack = new();
 
     // using declaration Dispose tracking
-    public readonly Stack<List<(HExpr val, ITypeSymbol type)>> UsingDisposableStack = new();
+    public readonly Stack<List<(CValue val, ITypeSymbol type)>> UsingDisposableStack = new();
 
     /// <summary>Stack of using-stack depths at loop/switch entry points.
     /// Used to limit Dispose emission for break/continue to scopes inside the loop.</summary>
     public readonly Stack<int> LoopUsingDepthStack = new();
 
     // Switch break label stack — top is non-null inside switch body, null sentinel inside loop body.
-    // StatementHandler.VisitBranch reads top to distinguish switch breaks (goto end label) from loop breaks (HBreak).
+    // StatementHandler.VisitBranch reads top to distinguish switch breaks (goto end label) from loop breaks (CBreak).
     public readonly Stack<string> SwitchBreakLabels = new();
 
     int _switchLabelCounter;
@@ -221,20 +221,20 @@ public class EmitContext
 
     // Dispatch delegates (HIR-based)
     Action<IOperation> _visitOperation;
-    Func<IOperation, HExpr> _visitExpression;
-    Func<HExpr, ITypeSymbol, IPatternOperation, HExpr> _emitPatternCheck;
+    Func<IOperation, CValue> _visitExpression;
+    Func<CValue, ITypeSymbol, IPatternOperation, CValue> _emitPatternCheck;
 
     public Action<IOperation> VisitOperation => _visitOperation
         ?? throw new InvalidOperationException("EmitContext dispatchers not initialized. Call InitializeDispatchers first.");
-    public Func<IOperation, HExpr> VisitExpression => _visitExpression
+    public Func<IOperation, CValue> VisitExpression => _visitExpression
         ?? throw new InvalidOperationException("EmitContext dispatchers not initialized. Call InitializeDispatchers first.");
-    public Func<HExpr, ITypeSymbol, IPatternOperation, HExpr> EmitPatternCheck => _emitPatternCheck
+    public Func<CValue, ITypeSymbol, IPatternOperation, CValue> EmitPatternCheck => _emitPatternCheck
         ?? throw new InvalidOperationException("EmitContext dispatchers not initialized. Call InitializeDispatchers first.");
 
     public void InitializeDispatchers(
         Action<IOperation> visitOp,
-        Func<IOperation, HExpr> visitExpr,
-        Func<HExpr, ITypeSymbol, IPatternOperation, HExpr> emitPattern)
+        Func<IOperation, CValue> visitExpr,
+        Func<CValue, ITypeSymbol, IPatternOperation, CValue> emitPattern)
     {
         _visitOperation = visitOp ?? throw new ArgumentNullException(nameof(visitOp));
         _visitExpression = visitExpr ?? throw new ArgumentNullException(nameof(visitExpr));
@@ -245,8 +245,8 @@ public class EmitContext
     {
         Compilation = compilation;
         ClassSymbol = classSymbol;
-        HirModule = new HModule { ClassName = classSymbol.ToDisplayString() };
-        Builder = new HirBuilder(HirModule);
+        HirModule = new CModule { ClassName = classSymbol.ToDisplayString() };
+        Builder = new CoreBuilder(HirModule);
         Planner = planner;
         CaptureAnalyzer = new LambdaCaptureAnalyzer(compilation);
     }

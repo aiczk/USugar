@@ -81,14 +81,14 @@ public class StatementHandler : HandlerBase, IOperationHandler
 
     void HandleBlock(IBlockOperation block)
     {
-        _usingDisposableStack.Push(new List<(HExpr, ITypeSymbol)>());
+        _usingDisposableStack.Push(new List<(CValue, ITypeSymbol)>());
         foreach (var stmt in block.Operations)
             VisitOperation(stmt);
         var disposables = _usingDisposableStack.Pop();
         for (int i = disposables.Count - 1; i >= 0; i--)
         {
             var (val, type) = disposables[i];
-            EmitExternVoid($"{GetUdonType(type)}.__Dispose__SystemVoid", new List<HExpr> { val });
+            EmitExternVoid($"{GetUdonType(type)}.__Dispose__SystemVoid", new List<CValue> { val });
         }
     }
 
@@ -168,7 +168,7 @@ public class StatementHandler : HandlerBase, IOperationHandler
         var paramIds = _methodParamVarIds[_currentMethod];
 
         // Evaluate args into HExprs first (avoid overwriting params before they're read)
-        var argVals = new HExpr[tailCall.Arguments.Length];
+        var argVals = new CValue[tailCall.Arguments.Length];
         for (int i = 0; i < tailCall.Arguments.Length; i++)
             argVals[i] = VisitExpression(tailCall.Arguments[i].Value);
 
@@ -186,7 +186,7 @@ public class StatementHandler : HandlerBase, IOperationHandler
         if (op.BranchKind == BranchKind.Break)
         {
             EmitPendingDisposeForBreakContinue();
-            // Switch breaks use goto to end label; loop breaks use structured HBreak
+            // Switch breaks use goto to end label; loop breaks use structured CBreak
             if (_ctx.SwitchBreakLabels.Count > 0 && _ctx.SwitchBreakLabels.Peek() != null)
                 _builder.EmitGoto(_ctx.SwitchBreakLabels.Peek());
             else
@@ -222,7 +222,7 @@ public class StatementHandler : HandlerBase, IOperationHandler
             {
                 var (val, type) = scope[i];
                 var disposeType = GetUdonType(type);
-                EmitExternVoid($"{disposeType}.__Dispose__SystemVoid", new List<HExpr> { val });
+                EmitExternVoid($"{disposeType}.__Dispose__SystemVoid", new List<CValue> { val });
             }
         }
     }
@@ -248,7 +248,7 @@ public class StatementHandler : HandlerBase, IOperationHandler
             {
                 var (val, type) = scope[i];
                 var disposeType = GetUdonType(type);
-                EmitExternVoid($"{disposeType}.__Dispose__SystemVoid", new List<HExpr> { val });
+                EmitExternVoid($"{disposeType}.__Dispose__SystemVoid", new List<CValue> { val });
             }
             count++;
         }
@@ -263,7 +263,7 @@ public class StatementHandler : HandlerBase, IOperationHandler
     void VisitUsing(IUsingOperation op)
     {
         // Collect declared locals (for Dispose calls after body)
-        var disposableVars = new List<(HExpr val, ITypeSymbol type)>();
+        var disposableVars = new List<(CValue val, ITypeSymbol type)>();
         if (op.Resources is IVariableDeclarationGroupOperation declGroup)
         {
             foreach (var decl in declGroup.Declarations)
@@ -296,7 +296,7 @@ public class StatementHandler : HandlerBase, IOperationHandler
         {
             var (val, type) = disposableVars[i];
             var udonType = GetUdonType(type);
-            EmitExternVoid($"{udonType}.__Dispose__SystemVoid", new List<HExpr> { val });
+            EmitExternVoid($"{udonType}.__Dispose__SystemVoid", new List<CValue> { val });
         }
     }
 
@@ -350,7 +350,7 @@ public class StatementHandler : HandlerBase, IOperationHandler
 
             // Create object[] of correct size
             var arrExpr = ExternCall("SystemObjectArray.__ctor__SystemInt32__SystemObjectArray",
-                new List<HExpr> { Const(layout.Count, "SystemInt32") }, "SystemObjectArray");
+                new List<CValue> { Const(layout.Count, "SystemInt32") }, "SystemObjectArray");
             EmitStoreField(id, arrExpr);
         }
 
@@ -363,7 +363,7 @@ public class StatementHandler : HandlerBase, IOperationHandler
             // Tuple literal: set each element via __Set__
             for (int i = 0; i < tupleLit.Elements.Length && i < layout.Count; i++)
                 EmitExternVoid("SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid",
-                    new List<HExpr> { LoadField(localId, "SystemObjectArray"), Const(i, "SystemInt32"),
+                    new List<CValue> { LoadField(localId, "SystemObjectArray"), Const(i, "SystemInt32"),
                         VisitExpression(tupleLit.Elements[i]) });
         }
         else if (value is IDefaultValueOperation)
@@ -391,7 +391,7 @@ public class StatementHandler : HandlerBase, IOperationHandler
                 };
                 if (defVal != null)
                     EmitExternVoid("SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid",
-                        new List<HExpr> { LoadField(localId, "SystemObjectArray"), Const(i, "SystemInt32"),
+                        new List<CValue> { LoadField(localId, "SystemObjectArray"), Const(i, "SystemInt32"),
                             Const(defVal, GetUdonType(fieldType)) });
             }
         }

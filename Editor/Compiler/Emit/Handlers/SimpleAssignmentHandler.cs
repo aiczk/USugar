@@ -10,12 +10,12 @@ public class SimpleAssignmentHandler : AssignmentHandlerBase, IExpressionHandler
 
     public bool CanHandle(IOperation op) => op is ISimpleAssignmentOperation;
 
-    public HExpr Handle(IOperation op)
+    public CValue Handle(IOperation op)
         => op is ISimpleAssignmentOperation assign
             ? VisitAssignment(assign)
             : throw new System.NotSupportedException(op.GetType().Name);
 
-    HExpr VisitAssignment(ISimpleAssignmentOperation assign)
+    CValue VisitAssignment(ISimpleAssignmentOperation assign)
     {
         // Aggregate field write: point.x = 5, result.Item1 = 42, pair.Item1 = 10
         // Triggered by the containing type being aggregate, regardless of instance kind
@@ -30,7 +30,7 @@ public class SimpleAssignmentHandler : AssignmentHandlerBase, IExpressionHandler
                 var srcVal = VisitExpression(assign.Value);
                 var arrExpr = LoadInstanceRaw(aggFieldRef.Instance);
                 EmitExternVoid("SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid",
-                    new List<HExpr> { arrExpr, Const(fieldIndex, "SystemInt32"), srcVal });
+                    new List<CValue> { arrExpr, Const(fieldIndex, "SystemInt32"), srcVal });
                 return srcVal;
             }
         }
@@ -43,7 +43,7 @@ public class SimpleAssignmentHandler : AssignmentHandlerBase, IExpressionHandler
             var arrSymbol = arrayElem.ArrayReference.Type as IArrayTypeSymbol;
             var arrayType = GetArrayType(arrSymbol);
             var elementType = GetArrayElemType(arrSymbol);
-            EmitExternVoid($"{arrayType}.__Set__SystemInt32_{elementType}__SystemVoid", new List<HExpr> { arrayVal, indexVal, srcVal });
+            EmitExternVoid($"{arrayType}.__Set__SystemInt32_{elementType}__SystemVoid", new List<CValue> { arrayVal, indexVal, srcVal });
             return srcVal;
         }
 
@@ -86,7 +86,7 @@ public class SimpleAssignmentHandler : AssignmentHandlerBase, IExpressionHandler
                 var (bridgeName, funcRef, thirdParty) = ResolveDelegateBridge(dc);
                 var thisRef = LoadField(_ctx.DeclareThisOnce(GetUdonType(_classSymbol)), GetUdonType(_classSymbol));
                 var target = thirdParty ?? thisRef;
-                var addr = thirdParty != null ? (HExpr)Const(0u, "SystemUInt32") : funcRef;
+                var addr = thirdParty != null ? (CValue)Const(0u, "SystemUInt32") : funcRef;
 
                 RecordIfCapturingLambda(dc);
 
@@ -115,9 +115,9 @@ public class SimpleAssignmentHandler : AssignmentHandlerBase, IExpressionHandler
                 // null assignment
                 if (assign.Value.ConstantValue is { HasValue: true, Value: null })
                 {
-                    foreach (var (field, val) in new[] { (bundle2.Target, (HExpr)Const(null, "SystemObject")), (bundle2.Method, Const(null, "SystemString")), (bundle2.Addr, Const(0u, "SystemUInt32")) })
+                    foreach (var (field, val) in new[] { (bundle2.Target, (CValue)Const(null, "SystemObject")), (bundle2.Method, Const(null, "SystemString")), (bundle2.Addr, Const(0u, "SystemUInt32")) })
                         EmitExternVoid("VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid",
-                            new List<HExpr> { instanceVal, Const(field, "SystemString"), val });
+                            new List<CValue> { instanceVal, Const(field, "SystemString"), val });
                     return Const(null, "SystemObject");
                 }
 
@@ -133,11 +133,11 @@ public class SimpleAssignmentHandler : AssignmentHandlerBase, IExpressionHandler
                     var delegateTarget = thirdParty ?? thisRef;
 
                     EmitExternVoid("VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid",
-                        new List<HExpr> { instanceVal, Const(bundle2.Target, "SystemString"), delegateTarget });
+                        new List<CValue> { instanceVal, Const(bundle2.Target, "SystemString"), delegateTarget });
                     EmitExternVoid("VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid",
-                        new List<HExpr> { instanceVal, Const(bundle2.Method, "SystemString"), Const(bridgeName, "SystemString") });
+                        new List<CValue> { instanceVal, Const(bundle2.Method, "SystemString"), Const(bridgeName, "SystemString") });
                     EmitExternVoid("VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid",
-                        new List<HExpr> { instanceVal, Const(bundle2.Addr, "SystemString"), Const(0u, "SystemUInt32") });
+                        new List<CValue> { instanceVal, Const(bundle2.Addr, "SystemString"), Const(0u, "SystemUInt32") });
                     return delegateTarget;
                 }
 
@@ -147,7 +147,7 @@ public class SimpleAssignmentHandler : AssignmentHandlerBase, IExpressionHandler
             var srcVal = VisitExpression(assign.Value);
             var instanceVal2 = VisitExpression(ubTarget.Instance);
             var nameConst = Const(ubTarget.Field.Name, "SystemString");
-            EmitExternVoid("VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid", new List<HExpr> { instanceVal2, nameConst, srcVal });
+            EmitExternVoid("VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid", new List<CValue> { instanceVal2, nameConst, srcVal });
             return srcVal;
         }
 
@@ -161,7 +161,7 @@ public class SimpleAssignmentHandler : AssignmentHandlerBase, IExpressionHandler
                 : VisitExpression(fieldTarget.Instance);
             var valueType = GetUdonType(fieldTarget.Field.Type);
             var sig = ExternResolver.BuildFieldSetSignature(containingType, fieldTarget.Field.Name, valueType);
-            EmitExternVoid(sig, new List<HExpr> { instanceVal, srcVal });
+            EmitExternVoid(sig, new List<CValue> { instanceVal, srcVal });
             // COW dirty: struct field setter → copy back to force heap update
             var cowSlot = _ctx.AllocTemp(containingType);
             EmitAssign(cowSlot, instanceVal);
@@ -177,7 +177,7 @@ public class SimpleAssignmentHandler : AssignmentHandlerBase, IExpressionHandler
             if (propRef.Instance == null)
             {
                 var staticValType = GetUdonType(propRef.Property.Type);
-                EmitExternVoid(ExternResolver.BuildPropertySetSignature(propContainingUdon, propRef.Property.Name, staticValType), new List<HExpr> { srcVal });
+                EmitExternVoid(ExternResolver.BuildPropertySetSignature(propContainingUdon, propRef.Property.Name, staticValType), new List<CValue> { srcVal });
                 return srcVal;
             }
 
@@ -195,7 +195,7 @@ public class SimpleAssignmentHandler : AssignmentHandlerBase, IExpressionHandler
             var valueType = GetUdonType(propRef.Property.Type);
             if (propRef.Property.IsIndexer)
             {
-                var indexArgs = new List<HExpr> { instanceVal };
+                var indexArgs = new List<CValue> { instanceVal };
                 var indexTypes = new List<string>();
                 foreach (var arg in propRef.Arguments)
                 {
@@ -211,7 +211,7 @@ public class SimpleAssignmentHandler : AssignmentHandlerBase, IExpressionHandler
                 case IInstanceReferenceOperation
                     when propRef.Property.SetMethod != null && _methodFunctions.TryGetValue(propRef.Property.SetMethod, out _):
                     // User-defined property setter on this → internal call
-                    EmitExprStmt(EmitCallToMethod(propRef.Property.SetMethod, new List<HExpr> { srcVal }));
+                    EmitExprStmt(EmitCallToMethod(propRef.Property.SetMethod, new List<CValue> { srcVal }));
                     break;
                 case IInstanceReferenceOperation
                     when propRef.Property.SetMethod?.DeclaringSyntaxReferences.IsEmpty == true
@@ -232,7 +232,7 @@ public class SimpleAssignmentHandler : AssignmentHandlerBase, IExpressionHandler
                         {
                             // Auto-property or read-only: direct SetProgramVariable("PropertyName")
                             var nameConst = Const(propRef.Property.Name, "SystemString");
-                            EmitExternVoid("VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid", new List<HExpr> { instanceVal, nameConst, srcVal });
+                            EmitExternVoid("VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid", new List<CValue> { instanceVal, nameConst, srcVal });
                         }
                         else
                         {
@@ -241,16 +241,16 @@ public class SimpleAssignmentHandler : AssignmentHandlerBase, IExpressionHandler
 
                             // SetProgramVariable for the value parameter
                             var paramNameConst = Const(setParamIds[0], "SystemString");
-                            EmitExternVoid("VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid", new List<HExpr> { instanceVal, paramNameConst, srcVal });
+                            EmitExternVoid("VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid", new List<CValue> { instanceVal, paramNameConst, srcVal });
 
                             // SendCustomEvent to invoke setter
                             var eventConst = Const(exportName, "SystemString");
-                            EmitExternVoid("VRCUdonCommonInterfacesIUdonEventReceiver.__SendCustomEvent__SystemString__SystemVoid", new List<HExpr> { instanceVal, eventConst });
+                            EmitExternVoid("VRCUdonCommonInterfacesIUdonEventReceiver.__SendCustomEvent__SystemString__SystemVoid", new List<CValue> { instanceVal, eventConst });
                         }
                     }
                     else
                     {
-                        EmitExternVoid(ExternResolver.BuildPropertySetSignature(containingType, propRef.Property.Name, valueType), new List<HExpr> { instanceVal, srcVal });
+                        EmitExternVoid(ExternResolver.BuildPropertySetSignature(containingType, propRef.Property.Name, valueType), new List<CValue> { instanceVal, srcVal });
                     }
 
                     break;
@@ -274,7 +274,7 @@ public class SimpleAssignmentHandler : AssignmentHandlerBase, IExpressionHandler
             var instanceVal = VisitExpression(refFieldTarget.Instance);
             var containingType = GetUdonType(refFieldTarget.Field.ContainingType);
             var valueType = GetUdonType(refFieldTarget.Field.Type);
-            EmitExternVoid(ExternResolver.BuildFieldSetSignature(containingType, refFieldTarget.Field.Name, valueType, isValueType: false), new List<HExpr> { instanceVal, srcVal });
+            EmitExternVoid(ExternResolver.BuildFieldSetSignature(containingType, refFieldTarget.Field.Name, valueType, isValueType: false), new List<CValue> { instanceVal, srcVal });
             return srcVal;
         }
 

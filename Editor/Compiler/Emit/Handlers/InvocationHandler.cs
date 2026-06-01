@@ -13,7 +13,7 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
             or IPropertyReferenceOperation
             or IInterpolatedStringOperation;
 
-    public HExpr Handle(IOperation expression) => expression switch
+    public CValue Handle(IOperation expression) => expression switch
     {
         IInvocationOperation op => VisitInvocation(op),
         IObjectCreationOperation op => VisitObjectCreation(op),
@@ -24,7 +24,7 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
 
     // ── VisitInvocation ──
 
-    HExpr VisitInvocation(IInvocationOperation op)
+    CValue VisitInvocation(IInvocationOperation op)
     {
         var target = op.TargetMethod;
 
@@ -89,7 +89,7 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
                 ? target.ReducedFrom.OriginalDefinition.Construct(target.TypeArguments.ToArray())
                 : target.OriginalDefinition.Construct(target.TypeArguments.ToArray());
             RegisterGenericSpecialization(constructed);
-            var args = new List<HExpr>();
+            var args = new List<CValue>();
             if (target.ReducedFrom != null && op.Instance != null)
             {
                 args.Add(VisitExpression(op.Instance));
@@ -106,7 +106,7 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
             var original = target.ReducedFrom ?? target;
             if (IsForeignStatic(target) && _methodFunctions.ContainsKey(original))
             {
-                var args = new List<HExpr>();
+                var args = new List<CValue>();
                 // Extension method: instance is the first (this) parameter
                 if (target.ReducedFrom != null && op.Instance != null)
                 {
@@ -149,7 +149,7 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
 
     // ── Delegate Invocation ──
 
-    HExpr VisitDelegateInvocation(IInvocationOperation op)
+    CValue VisitDelegateInvocation(IInvocationOperation op)
     {
         // ── Delegate FIELD invocation via conditional access (?.Invoke()) ──
         if (op.Instance is IConditionalAccessInstanceOperation
@@ -176,7 +176,7 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
             && _delegateParamConventions.TryGetValue((currentSlot.Index, paramRef2.Parameter.Ordinal), out var convention))
         {
             // Collect args as HExprs
-            var args = new List<HExpr>();
+            var args = new List<CValue>();
             for (int i = 0; i < op.Arguments.Length; i++)
                 args.Add(VisitExpression(op.Arguments[i].Value));
 
@@ -196,7 +196,7 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
             // In HIR, indirect calls are represented as InternalCall("__indirect", [methodPtr], retType)
             // The ABI lowering pass will expand this to JUMP_INDIRECT with convention fields.
             var callRetType = retType ?? "SystemVoid";
-            var indirectCall = InternalCall("__indirect", new List<HExpr> { methodPtr }, callRetType);
+            var indirectCall = InternalCall("__indirect", new List<CValue> { methodPtr }, callRetType);
 
             if (retType != null)
             {
@@ -216,7 +216,7 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
         if (op.Instance is ILocalReferenceOperation localRef
             && _delegateVarMap.TryGetValue(localRef.Local, out var targetMethod))
         {
-            var args = new List<HExpr>();
+            var args = new List<CValue>();
             for (int i = 0; i < op.Arguments.Length; i++)
                 args.Add(VisitExpression(op.Arguments[i].Value));
 
@@ -229,7 +229,7 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
     /// Emit delegate field invocation logic (self-path via JUMP_INDIRECT, cross-path via SendCustomEvent).
     /// Shared by direct invocation (_callback.Invoke()) and conditional access (_callback?.Invoke()).
     /// </summary>
-    HExpr EmitDelegateFieldInvocation(IInvocationOperation op, string fieldName, INamedTypeSymbol delegateType)
+    CValue EmitDelegateFieldInvocation(IInvocationOperation op, string fieldName, INamedTypeSymbol delegateType)
     {
         var invoke = delegateType.DelegateInvokeMethod;
         var (convArgs, convRet) = GetConventionFieldNames(delegateType);
@@ -239,7 +239,7 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
             retType = GetUdonType(invoke.ReturnType);
 
         // 1. Evaluate all args ONCE (before branching to avoid double-evaluation)
-        var argExprs = new List<HExpr>();
+        var argExprs = new List<CValue>();
         for (int i = 0; i < op.Arguments.Length; i++)
             argExprs.Add(VisitExpression(op.Arguments[i].Value));
 
@@ -256,13 +256,13 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
         // 3. Condition: target == this && addr != 0
         var isSelf = ExternCall(
             "UnityEngineObject.__op_Equality__UnityEngineObject_UnityEngineObject__SystemBoolean",
-            new List<HExpr> { target, thisRef }, "SystemBoolean");
+            new List<CValue> { target, thisRef }, "SystemBoolean");
         var hasAddr = ExternCall(
             "SystemUInt32.__op_Inequality__SystemUInt32_SystemUInt32__SystemBoolean",
-            new List<HExpr> { addr, Const(0u, "SystemUInt32") }, "SystemBoolean");
+            new List<CValue> { addr, Const(0u, "SystemUInt32") }, "SystemBoolean");
         var selfFast = ExternCall(
             "SystemBoolean.__op_LogicalAnd__SystemBoolean_SystemBoolean__SystemBoolean",
-            new List<HExpr> { isSelf, hasAddr }, "SystemBoolean");
+            new List<CValue> { isSelf, hasAddr }, "SystemBoolean");
 
         // For Func<T>: temp to receive result from both paths
         string resultVar = null;
@@ -274,7 +274,7 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
             // ── Self path: JUMP_INDIRECT (convention fields already written locally) ──
             _ =>
             {
-                var indirectResult = InternalCall("__indirect", new List<HExpr> { addr }, retType ?? "SystemVoid");
+                var indirectResult = InternalCall("__indirect", new List<CValue> { addr }, retType ?? "SystemVoid");
                 EmitExprStmt(indirectResult);
                 if (retType != null)
                 {
@@ -291,19 +291,19 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
                     var argType = GetUdonType(invoke.Parameters[i].Type);
                     EmitExternVoid(
                         "VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid",
-                        new List<HExpr> { target, Const(convArgs[i], "SystemString"), LoadField(convArgs[i], argType) });
+                        new List<CValue> { target, Const(convArgs[i], "SystemString"), LoadField(convArgs[i], argType) });
                 }
                 // SendCustomEvent with dynamic method name
                 var method = LoadField(bundle.Method, "SystemString");
                 EmitExternVoid(
                     "VRCUdonCommonInterfacesIUdonEventReceiver.__SendCustomEvent__SystemString__SystemVoid",
-                    new List<HExpr> { target, method });
+                    new List<CValue> { target, method });
                 // GetProgramVariable for return (Func only)
                 if (retType != null)
                 {
                     var retVal = ExternCall(
                         "VRCUdonCommonInterfacesIUdonEventReceiver.__GetProgramVariable__SystemString__SystemObject",
-                        new List<HExpr> { target, Const(convRet, "SystemString") }, "SystemObject");
+                        new List<CValue> { target, Const(convRet, "SystemString") }, "SystemObject");
                     EmitStoreField(resultVar, retVal);
                 }
             }

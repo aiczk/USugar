@@ -44,4 +44,24 @@ public static class CorePipeline
         foreach (var cf in core.Functions) lm.Functions.Add(CoreFlattenBridge.ToLFunction(cf));
         return lm;
     }
+
+    /// <summary>Bridge a structured CModule back to an HModule, so the (unchanged) HirVerifier +
+    /// HirOptimizer + flatten pipeline can consume it while handlers emit Core. Field-isomorphic;
+    /// the round-trip is removed in Phase 4 when HirVerifier/HirOptimizer move to Core.</summary>
+    public static HModule ToHModule(CModule core)
+    {
+        var hm = new HModule { ClassName = core.ClassName };
+        foreach (var f in core.Fields) hm.Fields.Add(f);
+        foreach (var cf in core.Functions)
+        {
+            var hf = hm.AddFunction(cf.Name, cf.ExportName);
+            hf.ReturnType = cf.ReturnType;
+            foreach (var p in cf.ParamFieldNames) hf.ParamFieldNames.Add(p);
+            foreach (var r in cf.ReturnSlots) hf.ReturnSlots.Add(r);
+            foreach (var s in cf.Slots) hf.Slots.Add(new SlotDecl(s.Id, s.Type, s.Class, s.FixedName));
+            var body = (HBlock)CNodeBridge.ToHStmt(cf.Body);
+            foreach (var st in body.Stmts) hf.Body.Stmts.Add(st);
+        }
+        return hm;
+    }
 }

@@ -84,7 +84,7 @@ public class DeconstructionAssignmentHandler : AssignmentHandlerBase, IOperation
                     for (int i = 0; i < targetTuple.Elements.Length; i++)
                     {
                         var elemVal = ExternCall("SystemObjectArray.__Get__SystemInt32__SystemObject",
-                            new List<HExpr> { arrExpr, Const(i, "SystemInt32") }, "SystemObject");
+                            new List<CValue> { arrExpr, Const(i, "SystemInt32") }, "SystemObject");
                         AssignToLValue(targetTuple.Elements[i], elemVal);
                     }
                 }
@@ -146,14 +146,14 @@ public class DeconstructionAssignmentHandler : AssignmentHandlerBase, IOperation
             var nameConst = Const(paramIds[i], "SystemString");
             EmitExternVoid(
                 "VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid",
-                new List<HExpr> { instanceVal, nameConst, argVal });
+                new List<CValue> { instanceVal, nameConst, argVal });
         }
 
         // SendCustomEvent
         var eventConst = Const(exportName, "SystemString");
         EmitExternVoid(
             "VRCUdonCommonInterfacesIUdonEventReceiver.__SendCustomEvent__SystemString__SystemVoid",
-            new List<HExpr> { instanceVal, eventConst });
+            new List<CValue> { instanceVal, eventConst });
 
         // GetProgramVariable for return value and deconstruct
         if (callReturns.Length == 1 && callReturns[0].UdonType == "SystemObjectArray")
@@ -162,12 +162,12 @@ public class DeconstructionAssignmentHandler : AssignmentHandlerBase, IOperation
             var retNameConst = Const(callReturns[0].Id, "SystemString");
             var arrVal = ExternCall(
                 "VRCUdonCommonInterfacesIUdonEventReceiver.__GetProgramVariable__SystemString__SystemObject",
-                new List<HExpr> { instanceVal, retNameConst },
+                new List<CValue> { instanceVal, retNameConst },
                 "SystemObjectArray");
             for (int i = 0; i < targetTuple.Elements.Length; i++)
             {
                 var elemVal = ExternCall("SystemObjectArray.__Get__SystemInt32__SystemObject",
-                    new List<HExpr> { arrVal, Const(i, "SystemInt32") }, "SystemObject");
+                    new List<CValue> { arrVal, Const(i, "SystemInt32") }, "SystemObject");
                 AssignToLValue(targetTuple.Elements[i], elemVal);
             }
         }
@@ -179,7 +179,7 @@ public class DeconstructionAssignmentHandler : AssignmentHandlerBase, IOperation
                 var retNameConst = Const(callReturns[i].Id, "SystemString");
                 var elemVal = ExternCall(
                     "VRCUdonCommonInterfacesIUdonEventReceiver.__GetProgramVariable__SystemString__SystemObject",
-                    new List<HExpr> { instanceVal, retNameConst },
+                    new List<CValue> { instanceVal, retNameConst },
                     callReturns[i].UdonType);
                 AssignToLValue(targetTuple.Elements[i], elemVal);
             }

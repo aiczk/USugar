@@ -129,12 +129,12 @@ public class LoopHandler : HandlerBase, IOperationHandler
         // Cache array length before the loop
         var lenSlot = _ctx.AllocTemp("SystemInt32");
         EmitAssign(lenSlot, ExternCall("SystemArray.__get_Length__SystemInt32",
-            new List<HExpr> { SlotRef(collSlot) }, "SystemInt32"));
+            new List<CValue> { SlotRef(collSlot) }, "SystemInt32"));
 
         // Condition: idx < cachedLen
         var condExpr = ExternCall(
             "SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean",
-            new List<HExpr> { SlotRef(idxSlot), SlotRef(lenSlot) },
+            new List<CValue> { SlotRef(idxSlot), SlotRef(lenSlot) },
             "SystemBoolean");
 
         _builder.EmitFor(
@@ -149,7 +149,7 @@ public class LoopHandler : HandlerBase, IOperationHandler
                 // Update: idx++
                 var nextIdx = ExternCall(
                     "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32",
-                    new List<HExpr> { SlotRef(idxSlot), Const(1, "SystemInt32") },
+                    new List<CValue> { SlotRef(idxSlot), Const(1, "SystemInt32") },
                     "SystemInt32");
                 EmitAssign(idxSlot, nextIdx);
             },
@@ -158,7 +158,7 @@ public class LoopHandler : HandlerBase, IOperationHandler
                 // Body: loopVar = arr[idx]; <body>
                 var elemVal = ExternCall(
                     $"{arrayType}.__Get__SystemInt32__{elemAccessorType}",
-                    new List<HExpr> { SlotRef(collSlot), SlotRef(idxSlot) },
+                    new List<CValue> { SlotRef(collSlot), SlotRef(idxSlot) },
                     elemType);
                 EmitStoreField(loopVarId, elemVal);
 

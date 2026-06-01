@@ -7,7 +7,7 @@ public partial class InvocationHandler
 {
     // ── Extern Method Call ──
 
-    HExpr EmitExternMethodCall(IInvocationOperation op, IMethodSymbol target)
+    CValue EmitExternMethodCall(IInvocationOperation op, IMethodSymbol target)
     {
         // Generic GetComponent<T>() / GetComponentInChildren<T>() / GetComponentsInChildren<T>() etc.
         // Udon VM uses non-generic form with typeof(T) parameter.
@@ -17,7 +17,7 @@ public partial class InvocationHandler
             return EmitGetComponentGeneric(op, target);
         }
 
-        HExpr instanceVal = null;
+        CValue instanceVal = null;
         if (!target.IsStatic)
         {
             if (op.Instance is IInstanceReferenceOperation)
@@ -46,11 +46,11 @@ public partial class InvocationHandler
                 instanceVal = VisitExpression(op.Instance);
         }
 
-        // For out/ref params: pass the field's heap address directly via HFieldAddr.
+        // For out/ref params: pass the field's heap address directly via CFieldRef.
         // Udon VM extern writes to the pushed address, so the original variable
         // is updated in-place. No copy-back needed for simple field targets.
         // For complex lvalues (array elements, cross-behaviour fields), use a temp field + copy-back.
-        var argVals = new List<HExpr>();
+        var argVals = new List<CValue>();
         var outCopyBacks = new List<(int argIdx, string tempField)>();
         for (int i = 0; i < op.Arguments.Length; i++)
         {
@@ -76,7 +76,7 @@ public partial class InvocationHandler
         }
 
         // Build args list for extern call
-        var externArgs = new List<HExpr>();
+        var externArgs = new List<CValue>();
         if (instanceVal != null)
             externArgs.Add(instanceVal);
         externArgs.AddRange(argVals);
@@ -84,7 +84,7 @@ public partial class InvocationHandler
         // Extern signature
         var sig = BuildExternCallSignature(target, op.Instance?.Type);
 
-        HExpr result;
+        CValue result;
         if (!target.ReturnsVoid)
         {
             var returnType = GetUdonType(target.ReturnType);
@@ -115,7 +115,7 @@ public partial class InvocationHandler
 
     // ── GetComponent<T> ──
 
-    HExpr EmitGetComponentGeneric(IInvocationOperation op, IMethodSymbol target)
+    CValue EmitGetComponentGeneric(IInvocationOperation op, IMethodSymbol target)
     {
         var typeArg = target.TypeArguments[0];
         return ExternResolver.IsUdonSharpBehaviour(typeArg) ? EmitGetComponentShim(op, target) : EmitGetComponentExtern(op, target);
@@ -123,17 +123,17 @@ public partial class InvocationHandler
 
     // Existing logic for Unity Component types (Transform, Collider, etc.)
     // Uses the __T / __TArray generic extern form (matches UdonSharp behavior).
-    HExpr EmitGetComponentExtern(IInvocationOperation op, IMethodSymbol target)
+    CValue EmitGetComponentExtern(IInvocationOperation op, IMethodSymbol target)
     {
         // Evaluate instance and arguments first
-        HExpr instanceVal = null;
+        CValue instanceVal = null;
         if (op.Instance is IInstanceReferenceOperation)
             instanceVal = LoadField(_ctx.DeclareThisOnce("UnityEngineTransform"), "UnityEngineTransform");
         else if (op.Instance != null)
             instanceVal = VisitExpression(op.Instance);
 
         // Evaluate explicit arguments (e.g., GetComponentInChildren<T>(bool includeInactive))
-        var argVals = new List<HExpr>();
+        var argVals = new List<CValue>();
         for (int i = 0; i < op.Arguments.Length; i++)
             argVals.Add(VisitExpression(op.Arguments[i].Value));
 
@@ -142,7 +142,7 @@ public partial class InvocationHandler
         instanceVal = EnsureComponentInstance(op.Instance, instanceVal);
 
         // Build extern args: instance + explicit args + typeof(T)
-        var externArgs = new List<HExpr>();
+        var externArgs = new List<CValue>();
         if (instanceVal != null)
             externArgs.Add(instanceVal);
 
@@ -186,19 +186,19 @@ public partial class InvocationHandler
     // ── GetComponent<T> USB Shim ──
     // Inline shim for USB-derived types: GetComponents(typeof(UdonBehaviour)) + __refl_typeid filter
 
-    HExpr EmitGetComponentShim(IInvocationOperation op, IMethodSymbol target)
+    CValue EmitGetComponentShim(IInvocationOperation op, IMethodSymbol target)
     {
         var isSingular = !target.Name.StartsWith("GetComponents");
 
         // Evaluate instance
-        HExpr instanceVal = null;
+        CValue instanceVal = null;
         if (op.Instance is IInstanceReferenceOperation)
             instanceVal = LoadField(_ctx.DeclareThisOnce("UnityEngineTransform"), "UnityEngineTransform");
         else if (op.Instance != null)
             instanceVal = VisitExpression(op.Instance);
 
         // Evaluate explicit arguments (bool includeInactive)
-        var argVals = new List<HExpr>();
+        var argVals = new List<CValue>();
         for (int i = 0; i < op.Arguments.Length; i++)
             argVals.Add(VisitExpression(op.Arguments[i].Value));
 
@@ -209,7 +209,7 @@ public partial class InvocationHandler
         var fetchExtern = ResolveShimFetchExtern(target.Name, op.Arguments.Length > 0);
 
         // Build args: instance + typeof(UdonBehaviour) + optional args
-        var fetchArgs = new List<HExpr>();
+        var fetchArgs = new List<CValue>();
         if (instanceVal != null)
             fetchArgs.Add(instanceVal);
         var udonBehaviourType = Const("VRCUdonUdonBehaviour", "SystemType");
@@ -242,7 +242,7 @@ public partial class InvocationHandler
     /// GetComponent __T externs and shim GetComponents externs use UnityEngineComponent
     /// as containing type, which requires the instance to be Component-typed in the heap.
     /// </summary>
-    HExpr EnsureComponentInstance(IOperation instanceOp, HExpr instanceVal)
+    CValue EnsureComponentInstance(IOperation instanceOp, CValue instanceVal)
     {
         if (instanceVal == null || instanceOp == null)
             return instanceVal;
@@ -251,7 +251,7 @@ public partial class InvocationHandler
             return instanceVal;
         return ExternCall(
             "UnityEngineGameObject.__get_transform__UnityEngineTransform",
-            new List<HExpr> { instanceVal },
+            new List<CValue> { instanceVal },
             "UnityEngineTransform");
     }
 
@@ -289,13 +289,13 @@ public partial class InvocationHandler
         return $"UnityEngineComponent.__{baseName}__SystemType__UnityEngineComponentArray";
     }
 
-    HExpr EmitShimSingular(HExpr allComponents, HExpr targetIdConst, HExpr reflKeyConst, bool useTypeIds)
+    CValue EmitShimSingular(CValue allComponents, CValue targetIdConst, CValue reflKeyConst, bool useTypeIds)
     {
         // Get array length (store to slot so it's not re-evaluated each iteration)
         var lenSlot = _ctx.AllocTemp("SystemInt32");
         EmitAssign(lenSlot, ExternCall(
             "UnityEngineComponentArray.__get_Length__SystemInt32",
-            new List<HExpr> { allComponents }, "SystemInt32"));
+            new List<CValue> { allComponents }, "SystemInt32"));
 
         // Loop index (mutable across control flow)
         var idxSlot = _ctx.AllocTemp("SystemInt32");
@@ -308,27 +308,27 @@ public partial class InvocationHandler
         _builder.EmitWhile(
             ExternCall(
                 "SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean",
-                new List<HExpr> { SlotRef(idxSlot), SlotRef(lenSlot) },
+                new List<CValue> { SlotRef(idxSlot), SlotRef(lenSlot) },
                 "SystemBoolean"),
             b =>
             {
                 // element = allComponents[idx]
                 var elementVal = ExternCall(
                     "UnityEngineComponentArray.__Get__SystemInt32__UnityEngineComponent",
-                    new List<HExpr> { allComponents, SlotRef(idxSlot) },
+                    new List<CValue> { allComponents, SlotRef(idxSlot) },
                     "UnityEngineComponent");
 
                 // idValue = behaviour.GetProgramVariable("__refl_typeid" or "__refl_typeids")
                 var idValueVal = ExternCall(
                     "VRCUdonCommonInterfacesIUdonEventReceiver.__GetProgramVariable__SystemString__SystemObject",
-                    new List<HExpr> { elementVal, reflKeyConst },
+                    new List<CValue> { elementVal, reflKeyConst },
                     "SystemObject");
 
                 // Null check: if (idValue != null)
                 var nullConst = Const(null, "SystemObject");
                 var notNullVal = ExternCall(
                     "SystemObject.__op_Inequality__SystemObject_SystemObject__SystemBoolean",
-                    new List<HExpr> { idValueVal, nullConst },
+                    new List<CValue> { idValueVal, nullConst },
                     "SystemBoolean");
 
                 _builder.EmitIf(notNullVal, thenB =>
@@ -348,7 +348,7 @@ public partial class InvocationHandler
                 var oneConst = Const(1, "SystemInt32");
                 var nextIdxVal = ExternCall(
                     "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32",
-                    new List<HExpr> { SlotRef(idxSlot), oneConst },
+                    new List<CValue> { SlotRef(idxSlot), oneConst },
                     "SystemInt32");
                 EmitAssign(idxSlot, nextIdxVal);
             });
@@ -356,13 +356,13 @@ public partial class InvocationHandler
         return SlotRef(resultSlot);
     }
 
-    HExpr EmitShimPlural(HExpr allComponents, HExpr targetIdConst, HExpr reflKeyConst, bool useTypeIds)
+    CValue EmitShimPlural(CValue allComponents, CValue targetIdConst, CValue reflKeyConst, bool useTypeIds)
     {
         // Get array length (store to slot so it's not re-evaluated each iteration)
         var lenSlot = _ctx.AllocTemp("SystemInt32");
         EmitAssign(lenSlot, ExternCall(
             "UnityEngineComponentArray.__get_Length__SystemInt32",
-            new List<HExpr> { allComponents }, "SystemInt32"));
+            new List<CValue> { allComponents }, "SystemInt32"));
 
         var zeroConst = Const(0, "SystemInt32");
         var oneConst = Const(1, "SystemInt32");
@@ -377,7 +377,7 @@ public partial class InvocationHandler
         _builder.EmitWhile(
             ExternCall(
                 "SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean",
-                new List<HExpr> { SlotRef(idx1Slot), SlotRef(lenSlot) },
+                new List<CValue> { SlotRef(idx1Slot), SlotRef(lenSlot) },
                 "SystemBoolean"),
             b =>
             {
@@ -387,7 +387,7 @@ public partial class InvocationHandler
                         // count++
                         var newCountVal = ExternCall(
                             "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32",
-                            new List<HExpr> { SlotRef(countSlot), oneConst },
+                            new List<CValue> { SlotRef(countSlot), oneConst },
                             "SystemInt32");
                         EmitAssign(countSlot, newCountVal);
                     });
@@ -395,7 +395,7 @@ public partial class InvocationHandler
                 // idx1++
                 var nextIdx1Val = ExternCall(
                     "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32",
-                    new List<HExpr> { SlotRef(idx1Slot), oneConst },
+                    new List<CValue> { SlotRef(idx1Slot), oneConst },
                     "SystemInt32");
                 EmitAssign(idx1Slot, nextIdx1Val);
             });
@@ -403,7 +403,7 @@ public partial class InvocationHandler
         // === Allocate result array ===
         var resultArr = ExternCall(
             "UnityEngineComponentArray.__ctor__SystemInt32__UnityEngineComponentArray",
-            new List<HExpr> { SlotRef(countSlot) },
+            new List<CValue> { SlotRef(countSlot) },
             "UnityEngineComponentArray");
 
         // === Pass 2: Fill result array ===
@@ -416,26 +416,26 @@ public partial class InvocationHandler
         _builder.EmitWhile(
             ExternCall(
                 "SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean",
-                new List<HExpr> { SlotRef(idx2Slot), SlotRef(lenSlot) },
+                new List<CValue> { SlotRef(idx2Slot), SlotRef(lenSlot) },
                 "SystemBoolean"),
             b =>
             {
                 // element = allComponents[idx2]
                 var elementVal = ExternCall(
                     "UnityEngineComponentArray.__Get__SystemInt32__UnityEngineComponent",
-                    new List<HExpr> { allComponents, SlotRef(idx2Slot) },
+                    new List<CValue> { allComponents, SlotRef(idx2Slot) },
                     "UnityEngineComponent");
 
                 // Type check
                 var idValueVal = ExternCall(
                     "VRCUdonCommonInterfacesIUdonEventReceiver.__GetProgramVariable__SystemString__SystemObject",
-                    new List<HExpr> { elementVal, reflKeyConst },
+                    new List<CValue> { elementVal, reflKeyConst },
                     "SystemObject");
 
                 var nullConst = Const(null, "SystemObject");
                 var notNullVal = ExternCall(
                     "SystemObject.__op_Inequality__SystemObject_SystemObject__SystemBoolean",
-                    new List<HExpr> { idValueVal, nullConst },
+                    new List<CValue> { idValueVal, nullConst },
                     "SystemBoolean");
 
                 _builder.EmitIf(notNullVal, thenB =>
@@ -446,12 +446,12 @@ public partial class InvocationHandler
                     {
                         // result[writeIdx] = element
                         EmitExternVoid("UnityEngineComponentArray.__Set__SystemInt32_UnityEngineComponent__SystemVoid",
-                            new List<HExpr> { resultArr, SlotRef(writeIdxSlot), elementVal });
+                            new List<CValue> { resultArr, SlotRef(writeIdxSlot), elementVal });
 
                         // writeIdx++
                         var newWriteVal = ExternCall(
                             "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32",
-                            new List<HExpr> { SlotRef(writeIdxSlot), oneConst },
+                            new List<CValue> { SlotRef(writeIdxSlot), oneConst },
                             "SystemInt32");
                         EmitAssign(writeIdxSlot, newWriteVal);
                     });
@@ -460,7 +460,7 @@ public partial class InvocationHandler
                 // idx2++
                 var nextIdx2Val = ExternCall(
                     "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32",
-                    new List<HExpr> { SlotRef(idx2Slot), oneConst },
+                    new List<CValue> { SlotRef(idx2Slot), oneConst },
                     "SystemInt32");
                 EmitAssign(idx2Slot, nextIdx2Val);
             });
@@ -469,23 +469,23 @@ public partial class InvocationHandler
     }
 
     /// <summary>
-    /// Returns an HExpr that evaluates to true if the idValue matches the targetId.
+    /// Returns an CValue that evaluates to true if the idValue matches the targetId.
     /// Handles both single-id and array-of-ids cases.
     /// </summary>
-    HExpr EmitShimTypeMatchExpr(HExpr idValueVal, HExpr targetIdConst, bool useTypeIds)
+    CValue EmitShimTypeMatchExpr(CValue idValueVal, CValue targetIdConst, bool useTypeIds)
     {
         if (useTypeIds)
         {
             // Array.IndexOf(__refl_typeids, targetId) != -1
             var indexResult = ExternCall(
                 "SystemArray.__IndexOf__SystemArray_SystemObject__SystemInt32",
-                new List<HExpr> { idValueVal, targetIdConst },
+                new List<CValue> { idValueVal, targetIdConst },
                 "SystemInt32");
 
             var negOneConst = Const(-1, "SystemInt32");
             return ExternCall(
                 "SystemInt32.__op_Inequality__SystemInt32_SystemInt32__SystemBoolean",
-                new List<HExpr> { indexResult, negOneConst },
+                new List<CValue> { indexResult, negOneConst },
                 "SystemBoolean");
         }
         else
@@ -493,13 +493,13 @@ public partial class InvocationHandler
             // typeId = Convert.ToInt64(idValue)
             var typeIdVal = ExternCall(
                 "SystemConvert.__ToInt64__SystemObject__SystemInt64",
-                new List<HExpr> { idValueVal },
+                new List<CValue> { idValueVal },
                 "SystemInt64");
 
             // typeId == targetId
             return ExternCall(
                 "SystemInt64.__op_Equality__SystemInt64_SystemInt64__SystemBoolean",
-                new List<HExpr> { typeIdVal, targetIdConst },
+                new List<CValue> { typeIdVal, targetIdConst },
                 "SystemBoolean");
         }
     }
@@ -508,26 +508,26 @@ public partial class InvocationHandler
     /// Emit the type-check body for shim loops (pass 1 count).
     /// Calls matchAction if the element's type ID matches.
     /// </summary>
-    void EmitShimTypeCheckBody(HExpr allComponents, int idxSlot, HExpr reflKeyConst,
-        HExpr targetIdConst, bool useTypeIds, System.Action matchAction)
+    void EmitShimTypeCheckBody(CValue allComponents, int idxSlot, CValue reflKeyConst,
+        CValue targetIdConst, bool useTypeIds, System.Action matchAction)
     {
         // element = allComponents[idx]
         var elementVal = ExternCall(
             "UnityEngineComponentArray.__Get__SystemInt32__UnityEngineComponent",
-            new List<HExpr> { allComponents, SlotRef(idxSlot) },
+            new List<CValue> { allComponents, SlotRef(idxSlot) },
             "UnityEngineComponent");
 
         // idValue = behaviour.GetProgramVariable(reflKey)
         var idValueVal = ExternCall(
             "VRCUdonCommonInterfacesIUdonEventReceiver.__GetProgramVariable__SystemString__SystemObject",
-            new List<HExpr> { elementVal, reflKeyConst },
+            new List<CValue> { elementVal, reflKeyConst },
             "SystemObject");
 
         // Null check
         var nullConst = Const(null, "SystemObject");
         var notNullVal = ExternCall(
             "SystemObject.__op_Inequality__SystemObject_SystemObject__SystemBoolean",
-            new List<HExpr> { idValueVal, nullConst },
+            new List<CValue> { idValueVal, nullConst },
             "SystemBoolean");
 
         _builder.EmitIf(notNullVal, thenB =>
@@ -543,7 +543,7 @@ public partial class InvocationHandler
 
     // ── Interface Call ──
 
-    HExpr EmitInterfaceCall(IInvocationOperation op, IMethodSymbol target)
+    CValue EmitInterfaceCall(IInvocationOperation op, IMethodSymbol target)
     {
         // Use LayoutPlanner to get the interface's canonical naming
         var ifaceType = target.ContainingType as INamedTypeSymbol;
@@ -559,47 +559,47 @@ public partial class InvocationHandler
 
         var instanceVal = VisitExpression(op.Instance);
 
-        // Build param pairs for HCrossBehaviourCall
+        // Build param pairs for CCrossCall
         // VisitExpression clones aggregate locals/params automatically (Clone-on-read).
-        var paramPairs = new List<(string, HExpr)>();
+        var paramPairs = new List<(string, CValue)>();
         for (int i = 0; i < op.Arguments.Length; i++)
             paramPairs.Add((ifaceMl.ParamIds[i], VisitExpression(op.Arguments[i].Value)));
 
         // Build returns
         var ifaceReturns = ifaceMl.Returns.ToArray();
         if (ifaceReturns.Length > 1)
-            return new HCrossBehaviourCall(instanceVal, ifaceMl.ExportName, paramPairs, ifaceReturns, "SystemVoid");
+            return new CCrossCall(instanceVal, ifaceMl.ExportName, paramPairs, ifaceReturns, "SystemVoid");
 
         var returnType = target.ReturnsVoid ? "SystemVoid" : GetUdonType(target.ReturnType);
-        return new HCrossBehaviourCall(instanceVal, ifaceMl.ExportName, paramPairs,
+        return new CCrossCall(instanceVal, ifaceMl.ExportName, paramPairs,
             target.ReturnsVoid ? System.Array.Empty<ReturnSlot>() : ifaceReturns, returnType);
     }
 
     // ── Cross-Class Call ──
 
-    HExpr EmitCrossClassCall(IInvocationOperation op, IMethodSymbol target)
+    CValue EmitCrossClassCall(IInvocationOperation op, IMethodSymbol target)
     {
         var (exportName, paramIds, retId) = GetCalleeLayout(target);
         var instanceVal = VisitExpression(op.Instance);
 
-        // Build param pairs for HCrossBehaviourCall
-        var paramPairs = new List<(string, HExpr)>();
+        // Build param pairs for CCrossCall
+        var paramPairs = new List<(string, CValue)>();
         for (int i = 0; i < op.Arguments.Length; i++)
             paramPairs.Add((paramIds[i], VisitExpression(op.Arguments[i].Value)));
 
         // Build returns
         var callReturns = GetCalleeReturns(target);
         if (callReturns.Length > 1)
-            return new HCrossBehaviourCall(instanceVal, exportName, paramPairs, callReturns, "SystemVoid");
+            return new CCrossCall(instanceVal, exportName, paramPairs, callReturns, "SystemVoid");
 
         var returnType = target.ReturnsVoid ? "SystemVoid" : GetUdonType(target.ReturnType);
-        return new HCrossBehaviourCall(instanceVal, exportName, paramPairs,
+        return new CCrossCall(instanceVal, exportName, paramPairs,
             target.ReturnsVoid ? System.Array.Empty<ReturnSlot>() : callReturns, returnType);
     }
 
     // ── User Method Call ──
 
-    HExpr EmitUserMethodCall(IInvocationOperation op, IMethodSymbol target)
+    CValue EmitUserMethodCall(IInvocationOperation op, IMethodSymbol target)
     {
         var idx = _methodSlots[target].Index;
         var paramIds = _methodParamVarIds[target];
@@ -621,7 +621,7 @@ public partial class InvocationHandler
         }
 
         // Build args list
-        var args = new List<HExpr>();
+        var args = new List<CValue>();
         for (int i = 0; i < op.Arguments.Length; i++)
         {
             var param = target.Parameters[i];
@@ -673,7 +673,7 @@ public partial class InvocationHandler
 
     // ── Ref/Out copy-back helper ──
 
-    void AssignToTarget(IOperation target, HExpr value)
+    void AssignToTarget(IOperation target, CValue value)
     {
         switch (target)
         {
@@ -684,7 +684,7 @@ public partial class InvocationHandler
                 var arrayType = GetArrayType(arrSymbol);
                 var elementType = GetArrayElemType(arrSymbol);
                 EmitExternVoid($"{arrayType}.__Set__SystemInt32_{elementType}__SystemVoid",
-                    new List<HExpr> { arrayVal, indexVal, value });
+                    new List<CValue> { arrayVal, indexVal, value });
                 break;
 
             case IFieldReferenceOperation fieldRef
@@ -694,7 +694,7 @@ public partial class InvocationHandler
                 var instanceVal = VisitExpression(fieldRef.Instance);
                 var nameConst = Const(fieldRef.Field.Name, "SystemString");
                 EmitExternVoid("VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid",
-                    new List<HExpr> { instanceVal, nameConst, value });
+                    new List<CValue> { instanceVal, nameConst, value });
                 break;
 
             default:

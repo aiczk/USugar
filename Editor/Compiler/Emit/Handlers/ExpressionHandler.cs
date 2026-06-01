@@ -22,19 +22,19 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
             or IDelegateCreationOperation
             or ITupleOperation;
 
-    public HExpr Handle(IOperation expression) => expression switch
+    public CValue Handle(IOperation expression) => expression switch
     {
         ILiteralOperation op => VisitLiteral(op),
         ILocalReferenceOperation localRef => _localBindings.TryGetValue(localRef.Local, out var localBinding)
                                                  ? EmitContext.IsAggregateType(localRef.Type)
                                                      ? ExternCall("SystemObjectArray.__Clone__SystemObject",
-                                                         new List<HExpr> { LoadField(localBinding.Id, "SystemObjectArray") }, "SystemObject")
+                                                         new List<CValue> { LoadField(localBinding.Id, "SystemObjectArray") }, "SystemObject")
                                                      : LoadField(localBinding.Id, GetUdonType(localRef.Type))
                                                  : throw new InvalidOperationException($"Cannot resolve local variable '{localRef.Local.Name}' in method '{_currentMethod?.Name ?? "(none)"}'."),
         IFieldReferenceOperation op => VisitFieldReference(op),
         IParameterReferenceOperation paramRef => EmitContext.IsAggregateType(paramRef.Type)
                                                      ? ExternCall("SystemObjectArray.__Clone__SystemObject",
-                                                         new List<HExpr> { LoadParam(paramRef.Parameter) }, "SystemObject")
+                                                         new List<CValue> { LoadParam(paramRef.Parameter) }, "SystemObject")
                                                      : LoadParam(paramRef.Parameter),
         IInstanceReferenceOperation => LoadField(_ctx.DeclareThisOnce(GetUdonType(_classSymbol)), GetUdonType(_classSymbol)),
         IConversionOperation op => VisitConversion(op),
@@ -50,7 +50,7 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
 
     // ── Literal ──
 
-    HExpr VisitLiteral(ILiteralOperation lit)
+    CValue VisitLiteral(ILiteralOperation lit)
     {
         // null literal has no type
         if (lit.Type == null)
@@ -64,7 +64,7 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
 
     // ── Field Reference ──
 
-    HExpr VisitFieldReference(IFieldReferenceOperation fieldRef)
+    CValue VisitFieldReference(IFieldReferenceOperation fieldRef)
     {
         // const fields (HasConstantValue) and static readonly with compile-time constant values
         if (fieldRef.Field.HasConstantValue)
@@ -99,7 +99,7 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
             var containingType = GetUdonType(fieldRef.Field.ContainingType);
             return ExternCall(
                 ExternResolver.BuildPropertyGetSignature(containingType, fieldRef.Field.Name, fldType),
-                new List<HExpr>(),
+                new List<CValue>(),
                 fldType);
         }
         // Delegate field read as value is not supported — the original field has been expanded
@@ -126,7 +126,7 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
             {
                 var arrExpr = LoadInstanceRaw(fieldRef.Instance);
                 return ExternCall("SystemObjectArray.__Get__SystemInt32__SystemObject",
-                    new List<HExpr> { arrExpr, Const(elemIndex, "SystemInt32") }, "SystemObject");
+                    new List<CValue> { arrExpr, Const(elemIndex, "SystemInt32") }, "SystemObject");
             }
             throw new System.NotSupportedException(
                 $"Cannot access '{fieldRef.Field.Name}' on aggregate type '{aggContaining.Name}'.");
@@ -143,7 +143,7 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
             var nameConst = Const(fieldRef.Field.Name, "SystemString");
             return ExternCall(
                 "VRCUdonCommonInterfacesIUdonEventReceiver.__GetProgramVariable__SystemString__SystemObject",
-                new List<HExpr> { instanceVal, nameConst },
+                new List<CValue> { instanceVal, nameConst },
                 "SystemObject");
         }
         // other.field → extern getter (same pattern as VisitPropertyReference)
@@ -153,14 +153,14 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
             var instanceVal = VisitExpression(fieldRef.Instance);
             return ExternCall(
                 ExternResolver.BuildPropertyGetSignature(containingType, fieldRef.Field.Name, fldType),
-                new List<HExpr> { instanceVal },
+                new List<CValue> { instanceVal },
                 fldType);
         }
     }
 
     // ── Conversion ──
 
-    HExpr VisitConversion(IConversionOperation conv)
+    CValue VisitConversion(IConversionOperation conv)
     {
         var srcVal = VisitExpression(conv.Operand);
 
@@ -184,21 +184,21 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
                         // float → double promotion
                         srcVal = ExternCall(
                             "SystemConvert.__ToDouble__SystemSingle__SystemDouble",
-                            new List<HExpr> { srcVal },
+                            new List<CValue> { srcVal },
                             "SystemDouble");
                     }
 
                     // Math.Truncate(double) or Math.Truncate(decimal)
                     srcVal = ExternCall(
                         $"SystemMath.__Truncate__{truncType}__{truncType}",
-                        new List<HExpr> { srcVal },
+                        new List<CValue> { srcVal },
                         truncType);
 
                     // Convert truncated value → target integer type
                     var dstType = GetUdonType(conv.Type);
                     return ExternCall(
                         $"SystemConvert.__{methodName}__{truncType}__{dstType}",
-                        new List<HExpr> { srcVal },
+                        new List<CValue> { srcVal },
                         dstType);
                 }
 
@@ -207,7 +207,7 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
                 var dstType2 = GetUdonType(conv.Type);
                 return ExternCall(
                     $"SystemConvert.__{methodName}__{srcType}__{dstType2}",
-                    new List<HExpr> { srcVal },
+                    new List<CValue> { srcVal },
                     dstType2);
             }
         }
@@ -219,7 +219,7 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
             return ExternCall(
                 ExternResolver.ResolveConversionExtern(
                     conv.OperatorMethod, ResolveType(conv.Operand.Type), ResolveType(conv.Type)),
-                new List<HExpr> { srcVal },
+                new List<CValue> { srcVal },
                 dstType);
         }
 
@@ -243,10 +243,10 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
                 var indexVal = info.MinOffset == 0
                     ? srcVal
                     : ExternCall("SystemInt32.__op_Subtraction__SystemInt32_SystemInt32__SystemInt32",
-                        new List<HExpr> { srcVal, Const((int)info.MinOffset, "SystemInt32") }, "SystemInt32");
+                        new List<CValue> { srcVal, Const((int)info.MinOffset, "SystemInt32") }, "SystemInt32");
                 return ExternCall(
                     "SystemObjectArray.__Get__SystemInt32__SystemObject",
-                    new List<HExpr> { LoadField(info.ArrayId, "SystemObjectArray"), indexVal },
+                    new List<CValue> { LoadField(info.ArrayId, "SystemObjectArray"), indexVal },
                     "SystemObject");
             }
 
@@ -262,14 +262,14 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
 
     // ── Default Value ──
 
-    HExpr VisitDefaultValue(IDefaultValueOperation defaultVal)
+    CValue VisitDefaultValue(IDefaultValueOperation defaultVal)
     {
         // Aggregate default: create empty object[] of correct size
         if (defaultVal.Type is INamedTypeSymbol aggDef && EmitContext.IsAggregateType(aggDef))
         {
             var layout = _ctx.GetAggregateLayout(aggDef);
             return ExternCall("SystemObjectArray.__ctor__SystemInt32__SystemObjectArray",
-                new List<HExpr> { Const(layout.Count, "SystemInt32") }, "SystemObjectArray");
+                new List<CValue> { Const(layout.Count, "SystemInt32") }, "SystemObjectArray");
         }
 
         var dvType = GetUdonType(defaultVal.Type);
@@ -297,7 +297,7 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
 
     // ── Declaration Expression ──
 
-    HExpr VisitDeclarationExpression(IDeclarationExpressionOperation declExpr)
+    CValue VisitDeclarationExpression(IDeclarationExpressionOperation declExpr)
     {
         if (declExpr.Expression is not ILocalReferenceOperation localRef2)
             return VisitExpression(declExpr.Expression);
@@ -310,7 +310,7 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
 
     // ── Delegate Creation ──
 
-    HExpr VisitDelegateCreation(IDelegateCreationOperation op)
+    CValue VisitDelegateCreation(IDelegateCreationOperation op)
     {
         switch (op.Target)
         {
@@ -329,12 +329,12 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
 
     // ── Tuple Literal ──
 
-    HExpr VisitTupleLiteral(ITupleOperation op)
+    CValue VisitTupleLiteral(ITupleOperation op)
     {
         // Create object[] and set each element
         var count = op.Elements.Length;
         var arrExpr = ExternCall("SystemObjectArray.__ctor__SystemInt32__SystemObjectArray",
-            new List<HExpr> { Const(count, "SystemInt32") }, "SystemObjectArray");
+            new List<CValue> { Const(count, "SystemInt32") }, "SystemObjectArray");
         var tmpSlot = _ctx.AllocTemp("SystemObjectArray");
         EmitAssign(tmpSlot, arrExpr);
 
@@ -342,7 +342,7 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
         {
             var elemVal = VisitExpression(op.Elements[i]);
             EmitExternVoid("SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid",
-                new List<HExpr> { SlotRef(tmpSlot), Const(i, "SystemInt32"), elemVal });
+                new List<CValue> { SlotRef(tmpSlot), Const(i, "SystemInt32"), elemVal });
         }
 
         return SlotRef(tmpSlot);

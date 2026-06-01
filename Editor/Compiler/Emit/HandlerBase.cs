@@ -14,15 +14,15 @@ public abstract class HandlerBase
     // ── Property shims to EmitContext ──
     protected Compilation _compilation => _ctx.Compilation;
     protected INamedTypeSymbol _classSymbol => _ctx.ClassSymbol;
-    protected HModule _hirModule => _ctx.HirModule;
-    protected HirBuilder _builder => _ctx.Builder;
+    protected CModule _hirModule => _ctx.HirModule;
+    protected CoreBuilder _builder => _ctx.Builder;
     protected LayoutPlanner _planner => _ctx.Planner;
-    protected Dictionary<IMethodSymbol, HFunction> _methodFunctions => _ctx.MethodFunctions;
+    protected Dictionary<IMethodSymbol, CFunction> _methodFunctions => _ctx.MethodFunctions;
     protected Dictionary<IMethodSymbol, EmitContext.MethodSlot> _methodSlots => _ctx.MethodSlots;
     protected Dictionary<IMethodSymbol, ReturnSlot[]> _methodReturns => _ctx.MethodReturns;
     protected Dictionary<IMethodSymbol, string[]> _methodParamVarIds => _ctx.MethodParamVarIds;
     protected IMethodSymbol _currentMethod { get => _ctx.CurrentMethod; set => _ctx.CurrentMethod = value; }
-    protected List<(IMethodSymbol symbol, HFunction func)> _pendingLocalFunctions => _ctx.PendingLocalFunctions;
+    protected List<(IMethodSymbol symbol, CFunction func)> _pendingLocalFunctions => _ctx.PendingLocalFunctions;
     protected Dictionary<ILocalSymbol, IMethodSymbol> _delegateVarMap => _ctx.DelegateVarMap;
     protected List<IMethodSymbol> _pendingGenericSpecs => _ctx.PendingGenericSpecs;
     protected Dictionary<ITypeParameterSymbol, ITypeSymbol> _typeParamMap { get => _ctx.TypeParamMap; set => _ctx.TypeParamMap = value; }
@@ -31,15 +31,15 @@ public abstract class HandlerBase
     protected Dictionary<ILocalSymbol, EmitContext.LocalBinding> _localBindings => _ctx.LocalBindings;
     protected List<(string fieldName, IOperation initOp, ITypeSymbol fieldType)> _fieldInitOps => _ctx.FieldInitOps;
     protected Dictionary<string, string> _fieldChangeCallbacks => _ctx.FieldChangeCallbacks;
-    protected Stack<(HExpr Target, string DelegateFieldName)> _conditionalAccessStack => _ctx.ConditionalAccessStack;
-    protected Stack<List<(HExpr val, ITypeSymbol type)>> _usingDisposableStack => _ctx.UsingDisposableStack;
+    protected Stack<(CValue Target, string DelegateFieldName)> _conditionalAccessStack => _ctx.ConditionalAccessStack;
+    protected Stack<List<(CValue val, ITypeSymbol type)>> _usingDisposableStack => _ctx.UsingDisposableStack;
     protected HashSet<string> _delegateFields => _ctx.DelegateFields;
     protected List<EmitDiagnostic> _diagnostics => _ctx.Diagnostics;
 
     // ── Dispatch (recursive descent into other handlers via UasmEmitter facade) ──
     protected void VisitOperation(IOperation op) => _ctx.VisitOperation(op);
-    protected HExpr VisitExpression(IOperation op) => _ctx.VisitExpression(op);
-    protected HExpr EmitPatternCheck(HExpr value, ITypeSymbol valueType, IPatternOperation pattern)
+    protected CValue VisitExpression(IOperation op) => _ctx.VisitExpression(op);
+    protected CValue EmitPatternCheck(CValue value, ITypeSymbol valueType, IPatternOperation pattern)
         => _ctx.EmitPatternCheck(value, valueType, pattern);
 
     // ── Type resolution ──
@@ -60,50 +60,50 @@ public abstract class HandlerBase
     // ── HIR convenience methods ──
 
     /// <summary>Emit: slot = expr</summary>
-    protected void EmitAssign(int destSlot, HExpr value) => _builder.EmitAssign(destSlot, value);
+    protected void EmitAssign(int destSlot, CValue value) => _builder.EmitAssign(destSlot, value);
 
     /// <summary>Emit: fieldName = expr</summary>
-    protected void EmitStoreField(string fieldName, HExpr value) => _builder.EmitStoreField(fieldName, value);
+    protected void EmitStoreField(string fieldName, CValue value) => _builder.EmitStoreField(fieldName, value);
 
     /// <summary>Emit: return [value]</summary>
-    protected void EmitReturn(HExpr value = null) => _builder.EmitReturn(value);
+    protected void EmitReturn(CValue value = null) => _builder.EmitReturn(value);
 
     /// <summary>Create a constant.</summary>
-    protected HConst Const(object value, string type) => _builder.Const(value, type);
+    protected CConst Const(object value, string type) => _builder.Const(value, type);
 
     /// <summary>Create a slot reference expression.</summary>
-    protected HSlotRef SlotRef(int slotId) => _builder.SlotRef(slotId);
+    protected CSlotRef SlotRef(int slotId) => _builder.SlotRef(slotId);
 
     /// <summary>Create a field load expression.</summary>
-    protected HLoadField LoadField(string fieldName, string type) => _builder.LoadField(fieldName, type);
+    protected CFieldRef LoadField(string fieldName, string type) => _builder.LoadField(fieldName, type);
 
     /// <summary>Create a field address reference (for extern out/ref).</summary>
-    protected HFieldAddr FieldAddr(string fieldName, string type) => _builder.FieldAddr(fieldName, type);
+    protected CFieldRef FieldAddr(string fieldName, string type) => _builder.FieldAddr(fieldName, type);
 
     /// <summary>Create an extern call expression.</summary>
-    protected HExternCall ExternCall(string sig, List<HExpr> args, string retType)
+    protected CExternCall ExternCall(string sig, List<CValue> args, string retType)
         => _builder.ExternCall(ResolveExtern(sig), args, retType);
 
     /// <summary>Emit a void extern call as a statement.</summary>
-    protected void EmitExternVoid(string sig, List<HExpr> args)
+    protected void EmitExternVoid(string sig, List<CValue> args)
         => _builder.EmitExternVoid(ResolveExtern(sig), args);
 
     /// <summary>Create an internal call expression.</summary>
-    protected HInternalCall InternalCall(string funcName, List<HExpr> args, string retType)
+    protected CInternalCall InternalCall(string funcName, List<CValue> args, string retType)
         => _builder.InternalCall(funcName, args, retType);
 
     /// <summary>Create a select (ternary) expression.</summary>
-    protected HSelect Select(HExpr cond, HExpr trueVal, HExpr falseVal, string type)
+    protected CSelect Select(CValue cond, CValue trueVal, CValue falseVal, string type)
         => _builder.Select(cond, trueVal, falseVal, type);
 
     /// <summary>Create a function reference (for delegate/JUMP_INDIRECT).</summary>
-    protected HFuncRef FuncRef(string funcName) => _builder.FuncRef(funcName);
+    protected CFuncRef FuncRef(string funcName) => _builder.FuncRef(funcName);
 
     /// <summary>Emit a statement.</summary>
-    protected void Emit(HStmt stmt) => _builder.Emit(stmt);
+    protected void Emit(CStmt stmt) => _builder.Emit(stmt);
 
     /// <summary>Emit an expression as a statement (side-effecting calls).</summary>
-    protected void EmitExprStmt(HExpr expr) => _builder.EmitExprStmt(expr);
+    protected void EmitExprStmt(CValue expr) => _builder.EmitExprStmt(expr);
 
     // ── Extern resolution ──
 
@@ -167,15 +167,15 @@ public abstract class HandlerBase
           + "Not found in lambda overrides, method params, or variable table.");
     }
 
-    /// <summary>Read a parameter value as an HExpr (field load).</summary>
-    protected HExpr LoadParam(IParameterSymbol param)
+    /// <summary>Read a parameter value as an CValue (field load).</summary>
+    protected CValue LoadParam(IParameterSymbol param)
     {
         var fieldName = GetParamVarId(param);
         var type = GetUdonType(param.Type);
         return LoadField(fieldName, type);
     }
 
-    protected HExpr EmitEnumToUnderlying(HExpr operand, ITypeSymbol type)
+    protected CValue EmitEnumToUnderlying(CValue operand, ITypeSymbol type)
     {
         if (type is not INamedTypeSymbol named || named.TypeKind != TypeKind.Enum)
             return operand;
@@ -185,7 +185,7 @@ public abstract class HandlerBase
         var underlyingUdon = GetUdonType(underlyingType);
         return ExternCall(
             $"SystemConvert.__{convertMethod}__SystemObject__{underlyingUdon}",
-            new List<HExpr> { operand },
+            new List<CValue> { operand },
             underlyingUdon);
     }
 
@@ -198,7 +198,7 @@ public abstract class HandlerBase
     /// VisitExpression() clones aggregate locals/params by default for value semantics,
     /// but field access operates on the original array.
     /// </summary>
-    protected HExpr LoadInstanceRaw(IOperation instance)
+    protected CValue LoadInstanceRaw(IOperation instance)
     {
         return instance switch
         {
@@ -217,7 +217,7 @@ public abstract class HandlerBase
     /// Callers with specialized targets (array elements, cross-behaviour fields) should handle those
     /// first, then delegate to this method for the common cases.
     /// </summary>
-    protected void AssignToLValue(IOperation target, HExpr value)
+    protected void AssignToLValue(IOperation target, CValue value)
     {
         switch (target)
         {
@@ -272,7 +272,7 @@ public abstract class HandlerBase
         var idx = slot.Index;
         var irName = slot.VarPrefix;
 
-        // Create HFunction (internal, no export)
+        // Create CFunction (internal, no export)
         var func = _hirModule.AddFunction(irName);
 
         // Declare params as fields (HIR uses field-based parameter passing)
@@ -361,10 +361,10 @@ public abstract class HandlerBase
     // ── Delegate bridge resolution ──
 
     /// <summary>Resolve delegate creation to bridge name, FuncRef, and target instance.</summary>
-    protected (string bridgeName, HExpr funcRef, HExpr targetInstance) ResolveDelegateBridge(IDelegateCreationOperation op)
+    protected (string bridgeName, CValue funcRef, CValue targetInstance) ResolveDelegateBridge(IDelegateCreationOperation op)
     {
         IMethodSymbol targetMethod = null;
-        HExpr targetInstance = null;
+        CValue targetInstance = null;
         switch (op.Target)
         {
             case IAnonymousFunctionOperation lambda:
@@ -431,14 +431,14 @@ public abstract class HandlerBase
 
 
     /// <summary>
-    /// Call an internal function via HirBuilder.InternalCall.
-    /// Returns the result HExpr — this is an expression only, NOT emitted to the HIR.
+    /// Call an internal function via CoreBuilder.InternalCall.
+    /// Returns the result CValue — this is an expression only, NOT emitted to the HIR.
     /// For void calls (e.g. property setters), wrap with <c>EmitExprStmt()</c> to add to the HIR.
     /// </summary>
-    protected HExpr EmitCallToMethod(IMethodSymbol target, List<HExpr> args)
+    protected CValue EmitCallToMethod(IMethodSymbol target, List<CValue> args)
     {
         if (!_methodFunctions.TryGetValue(target, out var func))
-            throw new InvalidOperationException($"No HFunction registered for method '{target.Name}'");
+            throw new InvalidOperationException($"No CFunction registered for method '{target.Name}'");
         var retType = func.ReturnType ?? "SystemVoid";
         return InternalCall(func.Name, args, retType);
     }

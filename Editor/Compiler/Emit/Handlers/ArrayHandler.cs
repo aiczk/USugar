@@ -9,19 +9,19 @@ public class ArrayHandler : HandlerBase, IExpressionHandler
     public bool CanHandle(IOperation expression)
         => expression is IArrayCreationOperation or IArrayElementReferenceOperation;
 
-    public HExpr Handle(IOperation expression) => expression switch
+    public CValue Handle(IOperation expression) => expression switch
     {
         IArrayCreationOperation op => VisitArrayCreation(op),
         IArrayElementReferenceOperation op => VisitArrayElementReference(op),
         _ => throw new System.NotSupportedException(expression.GetType().Name),
     };
 
-    HExpr VisitArrayCreation(IArrayCreationOperation op)
+    CValue VisitArrayCreation(IArrayCreationOperation op)
     {
         var arrayType = GetUdonType(op.Type);
         var elementType = GetArrayElemType((IArrayTypeSymbol)op.Type);
         var sizeVal = VisitExpression(op.DimensionSizes[0]);
-        var resultVal = ExternCall($"{arrayType}.__ctor__SystemInt32__{arrayType}", new List<HExpr> { sizeVal }, arrayType);
+        var resultVal = ExternCall($"{arrayType}.__ctor__SystemInt32__{arrayType}", new List<CValue> { sizeVal }, arrayType);
 
         if (op.Initializer == null)
             return resultVal;
@@ -34,13 +34,13 @@ public class ArrayHandler : HandlerBase, IExpressionHandler
         {
             var valVal = VisitExpression(op.Initializer.ElementValues[i]);
             var idxConst = Const(i, "SystemInt32");
-            EmitExternVoid($"{arrayType}.__Set__SystemInt32_{elementType}__SystemVoid", new List<HExpr> { SlotRef(arrSlot), idxConst, valVal });
+            EmitExternVoid($"{arrayType}.__Set__SystemInt32_{elementType}__SystemVoid", new List<CValue> { SlotRef(arrSlot), idxConst, valVal });
         }
 
         return SlotRef(arrSlot);
     }
 
-    HExpr VisitArrayElementReference(IArrayElementReferenceOperation op)
+    CValue VisitArrayElementReference(IArrayElementReferenceOperation op)
     {
         var index = op.Indices[0];
 
@@ -54,24 +54,24 @@ public class ArrayHandler : HandlerBase, IExpressionHandler
         var arrayType = GetArrayType(arrSymbol);
 
         // Index from end: arr[^1] → arr[arr.Length - 1]
-        HExpr indexVal;
+        CValue indexVal;
         indexVal = index is IUnaryOperation { Type: { Name: "Index" } } unary
             ? EmitIndexFromEnd(arrayVal, arrayType, unary.Operand)
             : VisitExpression(index);
 
-        var resultVal = ExternCall($"{arrayType}.__Get__SystemInt32__{elementType}", new List<HExpr> { arrayVal, indexVal }, GetUdonType(op.Type));
+        var resultVal = ExternCall($"{arrayType}.__Get__SystemInt32__{elementType}", new List<CValue> { arrayVal, indexVal }, GetUdonType(op.Type));
         return resultVal;
     }
 
-    HExpr EmitIndexFromEnd(HExpr arrayVal, string arrayType, IOperation operand)
+    CValue EmitIndexFromEnd(CValue arrayVal, string arrayType, IOperation operand)
     {
-        var lenVal = ExternCall($"{arrayType}.__get_Length__SystemInt32", new List<HExpr> { arrayVal }, "SystemInt32");
+        var lenVal = ExternCall($"{arrayType}.__get_Length__SystemInt32", new List<CValue> { arrayVal }, "SystemInt32");
         var nVal = VisitExpression(operand);
-        var resultVal = ExternCall("SystemInt32.__op_Subtraction__SystemInt32_SystemInt32__SystemInt32", new List<HExpr> { lenVal, nVal }, "SystemInt32");
+        var resultVal = ExternCall("SystemInt32.__op_Subtraction__SystemInt32_SystemInt32__SystemInt32", new List<CValue> { lenVal, nVal }, "SystemInt32");
         return resultVal;
     }
 
-    HExpr ResolveRangeOperand(HExpr arrayVal, string arrayType, IOperation operand, bool isEnd)
+    CValue ResolveRangeOperand(CValue arrayVal, string arrayType, IOperation operand, bool isEnd)
     {
         if (operand == null)
             return isEnd ? EmitArrayLength(arrayVal, arrayType) : Const(0, "SystemInt32");
@@ -84,13 +84,13 @@ public class ArrayHandler : HandlerBase, IExpressionHandler
         return VisitExpression(inner);
     }
 
-    HExpr EmitArrayLength(HExpr arrayVal, string arrayType)
+    CValue EmitArrayLength(CValue arrayVal, string arrayType)
     {
-        var lenVal = ExternCall($"{arrayType}.__get_Length__SystemInt32", new List<HExpr> { arrayVal }, "SystemInt32");
+        var lenVal = ExternCall($"{arrayType}.__get_Length__SystemInt32", new List<CValue> { arrayVal }, "SystemInt32");
         return lenVal;
     }
 
-    HExpr VisitRangeSlice(IOperation arrayRef, IRangeOperation rangeOp)
+    CValue VisitRangeSlice(IOperation arrayRef, IRangeOperation rangeOp)
     {
         var arrayVal = VisitExpression(arrayRef);
         var arrSymbol = arrayRef.Type as IArrayTypeSymbol;
@@ -111,13 +111,13 @@ public class ArrayHandler : HandlerBase, IExpressionHandler
 
         // len = end - start
         var lenVal = ExternCall("SystemInt32.__op_Subtraction__SystemInt32_SystemInt32__SystemInt32",
-            new List<HExpr> { endVal, SlotRef(startSlot) }, "SystemInt32");
+            new List<CValue> { endVal, SlotRef(startSlot) }, "SystemInt32");
         var lenSlot = _ctx.AllocTemp("SystemInt32");
         EmitAssign(lenSlot, lenVal);
 
         // result = new T[len]
         var resultVal = ExternCall($"{udonArrType}.__ctor__SystemInt32__{udonArrType}",
-            new List<HExpr> { SlotRef(lenSlot) }, udonArrType);
+            new List<CValue> { SlotRef(lenSlot) }, udonArrType);
         var resultSlot = _ctx.AllocTemp(udonArrType);
         EmitAssign(resultSlot, resultVal);
 
@@ -129,12 +129,12 @@ public class ArrayHandler : HandlerBase, IExpressionHandler
             b => { EmitAssign(iSlot, Const(0, "SystemInt32")); },
             // cond: i < len
             ExternCall("SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean",
-                new List<HExpr> { SlotRef(iSlot), SlotRef(lenSlot) }, "SystemBoolean"),
+                new List<CValue> { SlotRef(iSlot), SlotRef(lenSlot) }, "SystemBoolean"),
             // update: i++
             b =>
             {
                 var nextVal = ExternCall("SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32",
-                    new List<HExpr> { SlotRef(iSlot), Const(1, "SystemInt32") }, "SystemInt32");
+                    new List<CValue> { SlotRef(iSlot), Const(1, "SystemInt32") }, "SystemInt32");
                 EmitAssign(iSlot, nextVal);
             },
             // body
@@ -142,15 +142,15 @@ public class ArrayHandler : HandlerBase, IExpressionHandler
             {
                 // srcIdx = start + i
                 var srcIdxVal = ExternCall("SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32",
-                    new List<HExpr> { SlotRef(startSlot), SlotRef(iSlot) }, "SystemInt32");
+                    new List<CValue> { SlotRef(startSlot), SlotRef(iSlot) }, "SystemInt32");
 
                 // val = arr[srcIdx]
                 var valVal = ExternCall($"{arrayType}.__Get__SystemInt32__{elementType}",
-                    new List<HExpr> { SlotRef(arrSlot), srcIdxVal }, udonElemType);
+                    new List<CValue> { SlotRef(arrSlot), srcIdxVal }, udonElemType);
 
                 // result[i] = val
                 EmitExternVoid($"{arrayType}.__Set__SystemInt32_{elementType}__SystemVoid",
-                    new List<HExpr> { SlotRef(resultSlot), SlotRef(iSlot), valVal });
+                    new List<CValue> { SlotRef(resultSlot), SlotRef(iSlot), valVal });
             }
         );
 

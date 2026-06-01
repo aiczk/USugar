@@ -12,7 +12,7 @@ public class NullableHandler : HandlerBase, IExpressionHandler
             or IConditionalAccessInstanceOperation
             or ICoalesceAssignmentOperation;
 
-    public HExpr Handle(IOperation expression) => expression switch
+    public CValue Handle(IOperation expression) => expression switch
     {
         IConditionalAccessOperation op => VisitConditionalAccess(op),
         ICoalesceOperation op => VisitCoalesce(op),
@@ -21,7 +21,7 @@ public class NullableHandler : HandlerBase, IExpressionHandler
         _ => throw new System.NotSupportedException(expression.GetType().Name),
     };
 
-    HExpr VisitConditionalAccess(IConditionalAccessOperation op)
+    CValue VisitConditionalAccess(IConditionalAccessOperation op)
     {
         bool isVoid = op.Type == null || op.Type.SpecialType == SpecialType.System_Void;
 
@@ -46,7 +46,7 @@ public class NullableHandler : HandlerBase, IExpressionHandler
             delegateFieldName = fieldRef.Field.Name;
         }
 
-        HExpr targetVal;
+        CValue targetVal;
         string targetType;
         if (delegateFieldName != null)
         {
@@ -70,7 +70,7 @@ public class NullableHandler : HandlerBase, IExpressionHandler
         // condVal = (target != null); if true → evaluate WhenNotNull, else skip
         var condVal = ExternCall(
             "SystemObject.__op_Inequality__SystemObject_SystemObject__SystemBoolean",
-            new List<HExpr> { targetRef, nullConst },
+            new List<CValue> { targetRef, nullConst },
             "SystemBoolean");
 
         _builder.EmitIf(condVal, b =>
@@ -93,7 +93,7 @@ public class NullableHandler : HandlerBase, IExpressionHandler
         return resultSlot >= 0 ? SlotRef(resultSlot) : null;
     }
 
-    HExpr VisitCoalesce(ICoalesceOperation op)
+    CValue VisitCoalesce(ICoalesceOperation op)
     {
         // a ?? b → var r = a; if (r == null) r = b;
         var resultType = GetUdonType(op.Type);
@@ -106,7 +106,7 @@ public class NullableHandler : HandlerBase, IExpressionHandler
         // Use SlotRef for null check to avoid double evaluation of impure left-hand side
         var condVal = ExternCall(
             "SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean",
-            new List<HExpr> { SlotRef(resultSlot), nullConst },
+            new List<CValue> { SlotRef(resultSlot), nullConst },
             "SystemBoolean");
 
         _builder.EmitIf(condVal, b =>
@@ -119,13 +119,13 @@ public class NullableHandler : HandlerBase, IExpressionHandler
         return SlotRef(resultSlot);
     }
 
-    HExpr VisitCoalesceAssignment(ICoalesceAssignmentOperation op)
+    CValue VisitCoalesceAssignment(ICoalesceAssignmentOperation op)
     {
         // x ??= expr → if (x == null) x = expr; return x
         // Capture lvalue sub-expressions once to avoid double evaluation
-        HExpr targetVal;
+        CValue targetVal;
         int targetSlot;
-        HExpr cachedArrayVal = null, cachedIndexVal = null, cachedInstanceVal = null;
+        CValue cachedArrayVal = null, cachedIndexVal = null, cachedInstanceVal = null;
 
         if (op.Target is IArrayElementReferenceOperation arrayElemTarget)
         {
@@ -138,7 +138,7 @@ public class NullableHandler : HandlerBase, IExpressionHandler
             targetSlot = _ctx.AllocTemp(targetType);
             targetVal = ExternCall(
                 $"{arrType}.__Get__SystemInt32__{elemType}",
-                new List<HExpr> { cachedArrayVal, cachedIndexVal },
+                new List<CValue> { cachedArrayVal, cachedIndexVal },
                 elemType);
             EmitAssign(targetSlot, targetVal);
         }
@@ -169,7 +169,7 @@ public class NullableHandler : HandlerBase, IExpressionHandler
         // condVal = (target == null); if true → assign
         var condVal = ExternCall(
             "SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean",
-            new List<HExpr> { SlotRef(targetSlot), nullConst },
+            new List<CValue> { SlotRef(targetSlot), nullConst },
             "SystemBoolean");
 
         // Capture values for use inside the closure
@@ -190,7 +190,7 @@ public class NullableHandler : HandlerBase, IExpressionHandler
                 var arrayType = GetArrayType(arrSymbol);
                 var elementType = GetArrayElemType(arrSymbol);
                 EmitExternVoid($"{arrayType}.__Set__SystemInt32_{elementType}__SystemVoid",
-                    new List<HExpr> { capturedArrayVal, capturedIndexVal, rightVal });
+                    new List<CValue> { capturedArrayVal, capturedIndexVal, rightVal });
             }
             else if (op.Target is IPropertyReferenceOperation propRef && propRef.Property.SetMethod != null)
             {
@@ -198,9 +198,9 @@ public class NullableHandler : HandlerBase, IExpressionHandler
                 var valueType = GetUdonType(propRef.Property.Type);
                 var sig = $"{containingType}.__set_{propRef.Property.Name}__{valueType}__SystemVoid";
                 if (capturedInstanceVal != null)
-                    EmitExternVoid(sig, new List<HExpr> { capturedInstanceVal, rightVal });
+                    EmitExternVoid(sig, new List<CValue> { capturedInstanceVal, rightVal });
                 else
-                    EmitExternVoid(sig, new List<HExpr> { rightVal });
+                    EmitExternVoid(sig, new List<CValue> { rightVal });
             }
             else if (op.Target is ILocalReferenceOperation localTarget
                      && _localBindings.TryGetValue(localTarget.Local, out var lb))

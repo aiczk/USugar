@@ -16,15 +16,15 @@ public class UasmEmitter
     // Property shims → EmitContext
     Compilation _compilation => _ctx.Compilation;
     INamedTypeSymbol _classSymbol => _ctx.ClassSymbol;
-    HModule _hirModule => _ctx.HirModule;
-    HirBuilder _builder => _ctx.Builder;
+    CModule _hirModule => _ctx.HirModule;
+    CoreBuilder _builder => _ctx.Builder;
     LayoutPlanner _planner => _ctx.Planner;
-    Dictionary<IMethodSymbol, HFunction> _methodFunctions => _ctx.MethodFunctions;
+    Dictionary<IMethodSymbol, CFunction> _methodFunctions => _ctx.MethodFunctions;
     Dictionary<IMethodSymbol, EmitContext.MethodSlot> _methodSlots => _ctx.MethodSlots;
     Dictionary<IMethodSymbol, ReturnSlot[]> _methodReturns => _ctx.MethodReturns;
     Dictionary<IMethodSymbol, string[]> _methodParamVarIds => _ctx.MethodParamVarIds;
     IMethodSymbol _currentMethod { get => _ctx.CurrentMethod; set => _ctx.CurrentMethod = value; }
-    List<(IMethodSymbol symbol, HFunction func)> _pendingLocalFunctions => _ctx.PendingLocalFunctions;
+    List<(IMethodSymbol symbol, CFunction func)> _pendingLocalFunctions => _ctx.PendingLocalFunctions;
     List<IMethodSymbol> _pendingGenericSpecs => _ctx.PendingGenericSpecs;
     Dictionary<ITypeParameterSymbol, ITypeSymbol> _typeParamMap { get => _ctx.TypeParamMap; set => _ctx.TypeParamMap = value; }
     Dictionary<(int methodIdx, int paramOrdinal), DelegateConvention> _delegateParamConventions => _ctx.DelegateParamConventions;
@@ -76,30 +76,30 @@ public class UasmEmitter
         return t.Substring(0, t.Length - "Array".Length);
     }
 
-    // ── HirBuilder bridge helpers (old IrBuilder API → HirBuilder) ──
+    // ── CoreBuilder bridge helpers (old IrBuilder API → CoreBuilder) ──
 
-    HExpr BridgeLoad(string fieldName, string type) => _builder.LoadField(fieldName, type);
-    void BridgeStore(string fieldName, HExpr value) => _builder.EmitStoreField(fieldName, value);
-    HExpr BridgeCallExtern(string retType, string sig, HExpr[] args)
-        => _builder.ExternCall(sig, new List<HExpr>(args), retType);
-    void BridgeCallExternVoid(string sig, HExpr[] args)
-        => _builder.EmitExternVoid(sig, new List<HExpr>(args));
-    HExpr BridgeCallInternal(HFunction func, HExpr[] args)
+    CValue BridgeLoad(string fieldName, string type) => _builder.LoadField(fieldName, type);
+    void BridgeStore(string fieldName, CValue value) => _builder.EmitStoreField(fieldName, value);
+    CValue BridgeCallExtern(string retType, string sig, CValue[] args)
+        => _builder.ExternCall(sig, new List<CValue>(args), retType);
+    void BridgeCallExternVoid(string sig, CValue[] args)
+        => _builder.EmitExternVoid(sig, new List<CValue>(args));
+    CValue BridgeCallInternal(CFunction func, CValue[] args)
     {
         var retType = func.ReturnType ?? "SystemVoid";
-        var call = _builder.InternalCall(func.Name, new List<HExpr>(args), retType);
+        var call = _builder.InternalCall(func.Name, new List<CValue>(args), retType);
         if (retType == "SystemVoid") { _builder.EmitExprStmt(call); return null; }
         return call;
     }
-    HExpr BridgeConstInt(int value) => _builder.Const(value, "SystemInt32");
+    CValue BridgeConstInt(int value) => _builder.Const(value, "SystemInt32");
 
     // ── Emit ──
 
     /// <summary>Access to the HIR module for debugging and testing.</summary>
-    public HModule HirModule => _hirModule;
+    public CModule HirModule => _hirModule;
 
     /// <summary>Called after handler emission, before optimization. Set for IR debugging.</summary>
-    public Action<string, HModule> OnIrPass;
+    public Action<string, CModule> OnIrPass;
 
     public string Emit()
     {
@@ -115,7 +115,8 @@ public class UasmEmitter
         EmitMethods();
         DetectLambdaCaptureAliasing();
         OnIrPass?.Invoke("after-emit", _hirModule);
-        var result = IrPipeline.GenerateUasmFromHir(_hirModule, DumpEnabled);
+        // Handlers now build Core IR; bridge to HModule for the (unchanged) verify/optimize/flatten pipeline.
+        var result = IrPipeline.GenerateUasmFromHir(CorePipeline.ToHModule(_hirModule), DumpEnabled);
         _codeGenResult = result;
         return result.Uasm;
     }
@@ -536,7 +537,7 @@ public class UasmEmitter
                     || UdonEventNames.ContainsKey(method.Name)
                     || fcbFieldName != null);
 
-            // Create HFunction with or without ExportName
+            // Create CFunction with or without ExportName
             var func = _hirModule.AddFunction(exportName, shouldExport ? exportName : null);
             _methodFunctions[method] = func;
 
@@ -730,7 +731,7 @@ public class UasmEmitter
                   + $"no function found for implementation of '{ifaceMethod.Name}'.");
 
             // Load interface params
-            var args = new List<HExpr>();
+            var args = new List<CValue>();
             for (int i = 0; i < ifaceMethod.Parameters.Length; i++)
             {
                 var paramType = GetUdonType(ifaceMethod.Parameters[i].Type);
@@ -785,7 +786,7 @@ public class UasmEmitter
             _builder.SetFunction(bridgeFunc);
 
             // Copy convention fields → real param fields, then call real method
-            var callArgs = new List<HExpr>();
+            var callArgs = new List<CValue>();
             for (int i = 0; i < method.Parameters.Length; i++)
             {
                 var argType = NormalizeDelegateParamType(method.Parameters[i].Type);
@@ -846,7 +847,7 @@ public class UasmEmitter
             _builder.SetFunction(bridgeFunc);
 
             // Copy convention fields → real param fields, then call real method
-            var callArgs = new List<HExpr>();
+            var callArgs = new List<CValue>();
             for (int i = 0; i < method.Parameters.Length; i++)
             {
                 var argType = NormalizeDelegateParamType(method.Parameters[i].Type, resolvedMap);
@@ -966,7 +967,7 @@ public class UasmEmitter
             BridgeStore(fcbFieldName, oldVal);
 
             // Call setter with new value
-            BridgeCallInternal(func, new HExpr[] { newVal });
+            BridgeCallInternal(func, new CValue[] { newVal });
             _builder.EmitReturn();
         }
 
@@ -1106,7 +1107,7 @@ public class UasmEmitter
                     var sizeConst = BridgeConstInt(arrayInit.ElementValues.Length);
                     var arrVal = BridgeCallExtern(arrayType,
                         $"{arrayType}.__ctor__SystemInt32__{arrayType}",
-                        new HExpr[] { sizeConst });
+                        new CValue[] { sizeConst });
                     BridgeStore(fieldId, arrVal);
                     for (int i = 0; i < arrayInit.ElementValues.Length; i++)
                     {
@@ -1115,7 +1116,7 @@ public class UasmEmitter
                         var arrLoad = BridgeLoad(fieldId, arrayType);
                         BridgeCallExternVoid(
                             $"{arrayType}.__Set__SystemInt32_{elementType}__SystemVoid",
-                            new HExpr[] { arrLoad, idxConst, elemVal });
+                            new CValue[] { arrLoad, idxConst, elemVal });
                     }
                     continue;
                 }
@@ -1135,7 +1136,7 @@ public class UasmEmitter
                         var dstType = GetUdonType(fieldType);
                         var converted = BridgeCallExtern(dstType,
                             $"SystemConvert.__{methodName}__{srcType}__{dstType}",
-                            new HExpr[] { valueVal });
+                            new CValue[] { valueVal });
                         BridgeStore(fieldId, converted);
                         continue;
                     }
@@ -1182,12 +1183,12 @@ public class UasmEmitter
 
     void PreScanGotoLabels(IOperation op)
     {
-        // No-op: HIR uses string-based HGoto/HLabelStmt instead of IrBlock targets.
+        // No-op: HIR uses string-based CGoto/CLabel instead of IrBlock targets.
     }
 
     // ── Expression visitor (facade — delegates to handlers) ──
 
-    HExpr VisitExpression(IOperation op)
+    CValue VisitExpression(IOperation op)
     {
         if (op == null)
             throw new NotSupportedException("VisitExpression called with null operation");

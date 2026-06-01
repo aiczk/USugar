@@ -17,10 +17,10 @@ public abstract class AssignmentHandlerBase : HandlerBase
 
     protected struct LValueCapture
     {
-        public HExpr Value;         // The evaluated l-value value
-        public HExpr ArrayVal;      // Cached array reference (for array elements)
-        public HExpr IndexVal;      // Cached index (for array elements)
-        public HExpr InstanceVal;   // Cached instance (for cross-behaviour fields/properties)
+        public CValue Value;         // The evaluated l-value value
+        public CValue ArrayVal;      // Cached array reference (for array elements)
+        public CValue IndexVal;      // Cached index (for array elements)
+        public CValue InstanceVal;   // Cached instance (for cross-behaviour fields/properties)
     }
 
     protected LValueCapture CaptureLValue(IOperation target)
@@ -38,7 +38,7 @@ public abstract class AssignmentHandlerBase : HandlerBase
                     var arrVal = LoadInstanceRaw(aggFieldRef.Instance);
                     var idxVal = Const(elemIdx, "SystemInt32");
                     var currentVal = ExternCall("SystemObjectArray.__Get__SystemInt32__SystemObject",
-                        new List<HExpr> { arrVal, idxVal }, "SystemObject");
+                        new List<CValue> { arrVal, idxVal }, "SystemObject");
                     return new LValueCapture { Value = currentVal, ArrayVal = arrVal, IndexVal = idxVal };
                 }
                 goto default;
@@ -54,7 +54,7 @@ public abstract class AssignmentHandlerBase : HandlerBase
                 // Read current value: arr[idx]
                 var valResult = ExternCall(
                     $"{arrayType}.__Get__SystemInt32__{elemAccessorType}",
-                    new List<HExpr> { arrayVal, indexVal },
+                    new List<CValue> { arrayVal, indexVal },
                     GetUdonType(arrayElem.Type));
                 return new LValueCapture { Value = valResult, ArrayVal = arrayVal, IndexVal = indexVal };
             }
@@ -66,7 +66,7 @@ public abstract class AssignmentHandlerBase : HandlerBase
                 var nameConst = Const(fieldRef.Field.Name, "SystemString");
                 var valResult = ExternCall(
                     "VRCUdonCommonInterfacesIUdonEventReceiver.__GetProgramVariable__SystemString__SystemObject",
-                    new List<HExpr> { instanceVal, nameConst },
+                    new List<CValue> { instanceVal, nameConst },
                     "SystemObject");
                 return new LValueCapture { Value = valResult, InstanceVal = instanceVal };
             }
@@ -77,7 +77,7 @@ public abstract class AssignmentHandlerBase : HandlerBase
                 var containingType = GetUdonType(fieldRef2.Field.ContainingType);
                 var valueType = GetUdonType(fieldRef2.Field.Type);
                 var sig = ExternResolver.BuildPropertyGetSignature(containingType, fieldRef2.Field.Name, valueType);
-                var valResult = ExternCall(sig, new List<HExpr> { instanceVal }, valueType);
+                var valResult = ExternCall(sig, new List<CValue> { instanceVal }, valueType);
                 return new LValueCapture { Value = valResult, InstanceVal = instanceVal };
             }
             default:
@@ -90,7 +90,7 @@ public abstract class AssignmentHandlerBase : HandlerBase
     // Write back a computed value to non-trivial l-value targets (array elements, properties).
     // For local/field variables, also writes back via EmitStoreField.
 
-    protected void EmitWriteBack(IOperation target, HExpr valueVal, LValueCapture lv = default)
+    protected void EmitWriteBack(IOperation target, CValue valueVal, LValueCapture lv = default)
     {
         switch (target)
         {
@@ -104,7 +104,7 @@ public abstract class AssignmentHandlerBase : HandlerBase
                 {
                     var arrVal = lv.ArrayVal ?? VisitExpression(aggFieldRef.Instance);
                     EmitExternVoid("SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid",
-                        new List<HExpr> { arrVal, Const(elemIdx, "SystemInt32"), valueVal });
+                        new List<CValue> { arrVal, Const(elemIdx, "SystemInt32"), valueVal });
                     return;
                 }
                 break;
@@ -117,7 +117,7 @@ public abstract class AssignmentHandlerBase : HandlerBase
                 var arrSymbol = arrayElem.ArrayReference.Type as IArrayTypeSymbol;
                 var arrayType = GetArrayType(arrSymbol);
                 var elementType = GetArrayElemType(arrSymbol);
-                EmitExternVoid($"{arrayType}.__Set__SystemInt32_{elementType}__SystemVoid", new List<HExpr> { arrayVal, indexVal, valueVal });
+                EmitExternVoid($"{arrayType}.__Set__SystemInt32_{elementType}__SystemVoid", new List<CValue> { arrayVal, indexVal, valueVal });
                 break;
             }
             case IFieldReferenceOperation { Instance: not null and not IInstanceReferenceOperation } fieldRef
@@ -126,7 +126,7 @@ public abstract class AssignmentHandlerBase : HandlerBase
                 // Cross-behaviour field write-back → SetProgramVariable
                 var instanceVal = lv.InstanceVal ?? VisitExpression(fieldRef.Instance);
                 var nameConst = Const(fieldRef.Field.Name, "SystemString");
-                EmitExternVoid("VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid", new List<HExpr> { instanceVal, nameConst, valueVal });
+                EmitExternVoid("VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid", new List<CValue> { instanceVal, nameConst, valueVal });
                 break;
             }
             // Auto-property on this → backing field already handled by write-back to field (user-defined classes only)
@@ -134,7 +134,7 @@ public abstract class AssignmentHandlerBase : HandlerBase
                 return;
             // User-defined property on this → call setter
             case IPropertyReferenceOperation { Instance: IInstanceReferenceOperation, Property: { SetMethod: not null } } propRef when _methodFunctions.TryGetValue(propRef.Property.SetMethod, out _):
-                EmitExprStmt(EmitCallToMethod(propRef.Property.SetMethod, new List<HExpr> { valueVal }));
+                EmitExprStmt(EmitCallToMethod(propRef.Property.SetMethod, new List<CValue> { valueVal }));
                 return;
             // Cross-behaviour UdonSharpBehaviour property → SetProgramVariable / SendCustomEvent
             case IPropertyReferenceOperation propRef when ExternResolver.IsUdonSharpBehaviour(propRef.Property.ContainingType) && propRef.Instance is not IInstanceReferenceOperation:
@@ -144,15 +144,15 @@ public abstract class AssignmentHandlerBase : HandlerBase
                 if (isAutoSet || propRef.Property.SetMethod == null)
                 {
                     var nameConst = Const(propRef.Property.Name, "SystemString");
-                    EmitExternVoid("VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid", new List<HExpr> { instanceVal, nameConst, valueVal });
+                    EmitExternVoid("VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid", new List<CValue> { instanceVal, nameConst, valueVal });
                 }
                 else
                 {
                     var (exportName, setParamIds, _) = GetCalleeLayout(propRef.Property.SetMethod);
                     var paramNameConst = Const(setParamIds[0], "SystemString");
-                    EmitExternVoid("VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid", new List<HExpr> { instanceVal, paramNameConst, valueVal });
+                    EmitExternVoid("VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid", new List<CValue> { instanceVal, paramNameConst, valueVal });
                     var eventConst = Const(exportName, "SystemString");
-                    EmitExternVoid("VRCUdonCommonInterfacesIUdonEventReceiver.__SendCustomEvent__SystemString__SystemVoid", new List<HExpr> { instanceVal, eventConst });
+                    EmitExternVoid("VRCUdonCommonInterfacesIUdonEventReceiver.__SendCustomEvent__SystemString__SystemVoid", new List<CValue> { instanceVal, eventConst });
                 }
                 return;
             }
@@ -165,7 +165,7 @@ public abstract class AssignmentHandlerBase : HandlerBase
                         ? GetUdonType(_classSymbol)
                         : GetUdonType(propRef.Instance.Type);
 
-                HExpr wbInstanceVal;
+                CValue wbInstanceVal;
                 if (propRef.Instance is IInstanceReferenceOperation)
                     wbInstanceVal = LoadField(_ctx.DeclareThisOnce(containingType), containingType);
                 else if (propRef.Instance != null)
@@ -174,14 +174,14 @@ public abstract class AssignmentHandlerBase : HandlerBase
                 {
                     // Static property: no instance
                     var valueType = GetUdonType(propRef.Property.Type);
-                    EmitExternVoid(ExternResolver.BuildPropertySetSignature(containingType, propRef.Property.Name, valueType), new List<HExpr> { valueVal });
+                    EmitExternVoid(ExternResolver.BuildPropertySetSignature(containingType, propRef.Property.Name, valueType), new List<CValue> { valueVal });
                     return;
                 }
 
                 var propValueType = GetUdonType(propRef.Property.Type);
                 if (propRef.Property.IsIndexer)
                 {
-                    var indexArgs = new List<HExpr> { wbInstanceVal };
+                    var indexArgs = new List<CValue> { wbInstanceVal };
                     var indexTypes = new List<string>();
                     foreach (var arg in propRef.Arguments)
                     {
@@ -194,7 +194,7 @@ public abstract class AssignmentHandlerBase : HandlerBase
                 }
                 else
                 {
-                    EmitExternVoid(ExternResolver.BuildPropertySetSignature(containingType, propRef.Property.Name, propValueType), new List<HExpr> { wbInstanceVal, valueVal });
+                    EmitExternVoid(ExternResolver.BuildPropertySetSignature(containingType, propRef.Property.Name, propValueType), new List<CValue> { wbInstanceVal, valueVal });
                 }
                 // COW dirty: struct property setter → copy back to force heap update
                 if (propRef.Property.ContainingType.IsValueType)
@@ -213,7 +213,7 @@ public abstract class AssignmentHandlerBase : HandlerBase
                 var containingType = GetUdonType(fieldRef2.Field.ContainingType);
                 var valueType = GetUdonType(fieldRef2.Field.Type);
                 var sig = ExternResolver.BuildFieldSetSignature(containingType, fieldRef2.Field.Name, valueType);
-                EmitExternVoid(sig, new List<HExpr> { instanceVal, valueVal });
+                EmitExternVoid(sig, new List<CValue> { instanceVal, valueVal });
                 break;
             }
             default:

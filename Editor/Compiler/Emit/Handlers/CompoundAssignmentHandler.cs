@@ -9,14 +9,14 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
 
     public bool CanHandle(IOperation op) => op is ICompoundAssignmentOperation or IIncrementOrDecrementOperation;
 
-    public HExpr Handle(IOperation op) => op switch
+    public CValue Handle(IOperation op) => op switch
     {
         ICompoundAssignmentOperation compound => VisitCompoundAssignment(compound),
         IIncrementOrDecrementOperation incDec => VisitIncrementDecrement(incDec),
         _ => throw new System.NotSupportedException(op.GetType().Name),
     };
 
-    HExpr VisitCompoundAssignment(ICompoundAssignmentOperation op)
+    CValue VisitCompoundAssignment(ICompoundAssignmentOperation op)
     {
         // Block += / -= on delegate fields — Udon VM does not support Delegate.Combine/Remove
         if (op.Target is IFieldReferenceOperation fr
@@ -48,11 +48,11 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
         var sig = ExternResolver.ResolveBinaryExtern(
             op.OperatorKind, op.OperatorMethod,
             ResolveType(op.Target.Type), ResolveType(op.Value.Type), ResolveType(op.Type));
-        HExpr resultVal = ExternCall(sig, new List<HExpr> { leftVal, rightVal }, opResultType);
+        CValue resultVal = ExternCall(sig, new List<CValue> { leftVal, rightVal }, opResultType);
 
         // Narrow back to original type if promoted
         if (opResultType != resultType)
-            resultVal = ExternCall(ExternResolver.BuildConvertSignature(opResultType, resultType), new List<HExpr> { resultVal }, resultType);
+            resultVal = ExternCall(ExternResolver.BuildConvertSignature(opResultType, resultType), new List<CValue> { resultVal }, resultType);
 
         EmitWriteBack(op.Target, resultVal, lv);
         return resultVal;
@@ -61,11 +61,11 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
     static bool IsSmallInteger(string udonType)
         => udonType is "SystemByte" or "SystemSByte" or "SystemInt16" or "SystemUInt16";
 
-    HExpr PromoteToInt32(HExpr value, string srcUdonType)
+    CValue PromoteToInt32(CValue value, string srcUdonType)
         => ExternCall($"SystemConvert.__ToInt32__{srcUdonType}__SystemInt32",
-            new List<HExpr> { value }, "SystemInt32");
+            new List<CValue> { value }, "SystemInt32");
 
-    HExpr VisitIncrementDecrement(IIncrementOrDecrementOperation op)
+    CValue VisitIncrementDecrement(IIncrementOrDecrementOperation op)
     {
         // Capture lvalue sub-expressions once to avoid double evaluation
         var lv = CaptureLValue(op.Target);
@@ -81,7 +81,7 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
 
         // For postfix, save old value before modifying target (only if result is used).
         // Save the un-promoted value so postfix returns the original byte (not the int promotion).
-        HExpr savedVal = null;
+        CValue savedVal = null;
         if (op.IsPostfix)
         {
             var resultUsed = op.Parent is not IExpressionStatementOperation
@@ -104,11 +104,11 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
             opType, ExternResolver.GetOperatorExternName(externName),
             new[] { opType, opType }, opType);
 
-        HExpr resultVal = ExternCall(sig, new List<HExpr> { targetVal, oneConst }, opType);
+        CValue resultVal = ExternCall(sig, new List<CValue> { targetVal, oneConst }, opType);
 
         // Narrow back to original type if promoted
         if (opType != udonType)
-            resultVal = ExternCall(ExternResolver.BuildConvertSignature(opType, udonType), new List<HExpr> { resultVal }, udonType);
+            resultVal = ExternCall(ExternResolver.BuildConvertSignature(opType, udonType), new List<CValue> { resultVal }, udonType);
 
         // Materialize resultVal to a temp slot before write-back to avoid
         // the extern call being emitted twice (once for store, once for return value).
