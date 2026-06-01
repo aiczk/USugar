@@ -30,6 +30,19 @@ public class SimpleAssignmentHandler : AssignmentHandlerBase, IExpressionHandler
             return srcVal;
         }
 
+        // Computed (non-auto) struct property setter: p.Both = v → call the user setter with the receiver
+        // object[] as synthetic param0 (mutates this-fields through the shared backing array). Auto-properties
+        // are handled by the aggregate fast path above (their backing field is in the layout).
+        if (assign.Target is IPropertyReferenceOperation { Property: { IsIndexer: false, SetMethod: { } aggSetter } } aggSetRef
+            && aggSetRef.Instance?.Type is INamedTypeSymbol aggSetType && EmitContext.IsAggregateType(aggSetType)
+            && _methodFunctions.ContainsKey(aggSetter.OriginalDefinition))
+        {
+            var srcVal = VisitExpression(assign.Value);
+            EmitExprStmt(EmitCallToMethod(aggSetter.OriginalDefinition,
+                new List<CValue> { LoadInstanceRaw(aggSetRef.Instance), srcVal }));
+            return srcVal;
+        }
+
         if (assign.Target is IArrayElementReferenceOperation arrayElem)
         {
             var arrayVal = VisitExpression(arrayElem.ArrayReference);

@@ -1558,13 +1558,17 @@ public class UasmEmitter
             && tm.MethodKind == MethodKind.Ordinary && !tm.IsImplicitlyDeclared
             && tm.ContainingType is INamedTypeSymbol it && EmitContext.IsUserStruct(it))
             result.Add(tm.OriginalDefinition);
-        // Computed (non-auto) user-struct property getter: v.Prop. Auto-properties read their backing-field
-        // slot directly (no method), but a computed getter must be inlined as a struct instance method.
+        // Computed (non-auto) user-struct property: v.Prop (read) or v.Prop = x (write). Auto-properties use
+        // their backing-field slot directly (no method), but a computed accessor must be inlined as a struct
+        // instance method. Register both accessors (the reference alone doesn't reveal read-vs-write context).
         if (op is IPropertyReferenceOperation { Property.IsIndexer: false } pr
-            && pr.Property is { IsStatic: false, GetMethod: { } pgm }
+            && pr.Property is { IsStatic: false } prop
             && pr.Property.ContainingType is INamedTypeSymbol pit && EmitContext.IsUserStruct(pit)
-            && IsComputedProperty(pr.Property))
-            result.Add(pgm.OriginalDefinition);
+            && IsComputedProperty(prop))
+        {
+            if (prop.GetMethod != null) result.Add(prop.GetMethod.OriginalDefinition);
+            if (prop.SetMethod != null) result.Add(prop.SetMethod.OriginalDefinition);
+        }
         // User-struct operator: v1 + v2, -v (static operator methods).
         var opMethod = (op as IBinaryOperation)?.OperatorMethod ?? (op as IUnaryOperation)?.OperatorMethod;
         if (opMethod is { MethodKind: MethodKind.UserDefinedOperator }
