@@ -3516,6 +3516,33 @@ public class RecLocalFuncTest : UdonSharpBehaviour {
     }
 
     [Fact]
+    public void Nullable_HasValue_UsesObjectNullCheck()
+    {
+        // int? is emulated as a boxed SystemObject; HasValue is an object null check, not a Nullable extern.
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public class NullableHasValueTest : UdonSharpBehaviour {
+    bool _r;
+    void Start() { int? x = 5; _r = x.HasValue; }
+}", "NullableHasValueTest");
+        Assert.DoesNotContain("SystemNullable", uasm);
+        Assert.Contains("SystemObject.__op_Equality", uasm);
+    }
+
+    [Fact]
+    public void Nullable_LiftedAdd_UsesUnderlyingExtern()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public class NullableAddTest : UdonSharpBehaviour {
+    int _r;
+    void Start() { int? a = 5; int? b = 3; int? c = a + b; _r = c.GetValueOrDefault(); }
+}", "NullableAddTest");
+        Assert.DoesNotContain("SystemNullable", uasm);
+        Assert.Contains("SystemInt32.__op_Addition", uasm);
+    }
+
+    [Fact]
     public void RecursiveLambda_Local_SpillsToRecursionStack()
     {
         // A self-recursive lambda assigned to a local delegate var (the standard recursive-lambda idiom)
