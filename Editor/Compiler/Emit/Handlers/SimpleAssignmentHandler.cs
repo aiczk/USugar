@@ -168,6 +168,17 @@ public class SimpleAssignmentHandler : AssignmentHandlerBase, IExpressionHandler
             var srcVal = VisitExpression(assign.Value);
             var propContainingUdon = GetUdonType(propRef.Property.ContainingType);
 
+            // User-defined indexer on this/base → internal setter call (index args followed by the value).
+            if (propRef.Property.IsIndexer && propRef.Instance is IInstanceReferenceOperation
+                && propRef.Property.SetMethod != null && _methodFunctions.ContainsKey(propRef.Property.SetMethod))
+            {
+                var setterArgs = new List<CValue>();
+                foreach (var arg in propRef.Arguments) setterArgs.Add(VisitExpression(arg.Value));
+                setterArgs.Add(srcVal);
+                EmitExprStmt(EmitCallToMethod(propRef.Property.SetMethod, setterArgs));
+                return srcVal;
+            }
+
             // Static property setter (no instance) — e.g. Time.timeScale = 1.0f
             if (propRef.Instance == null)
             {

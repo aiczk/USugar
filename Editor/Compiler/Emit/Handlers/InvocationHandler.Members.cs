@@ -133,6 +133,15 @@ public partial class InvocationHandler
 
     CValue VisitIndexerGet(IPropertyReferenceOperation op)
     {
+        // User-defined indexer on this/base class → internal getter call (`this[i]` reads this-fields directly).
+        if (op.Instance is IInstanceReferenceOperation
+            && op.Property.GetMethod != null && _methodFunctions.ContainsKey(op.Property.GetMethod))
+        {
+            var args = new List<CValue>();
+            foreach (var arg in op.Arguments) args.Add(VisitExpression(arg.Value));
+            return EmitCallToMethod(op.Property.GetMethod, args);
+        }
+
         var cType = GetUdonType(op.Property.ContainingType);
         var rType = GetUdonType(op.Property.Type);
 

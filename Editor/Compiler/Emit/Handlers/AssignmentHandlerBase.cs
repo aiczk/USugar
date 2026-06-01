@@ -132,6 +132,15 @@ public abstract class AssignmentHandlerBase : HandlerBase
             // Auto-property on this → backing field already handled by write-back to field (user-defined classes only)
             case IPropertyReferenceOperation { Instance: IInstanceReferenceOperation } propRef when propRef.Property.GetMethod?.DeclaringSyntaxReferences.IsEmpty == true && ExternResolver.IsUdonSharpBehaviour(propRef.Property.ContainingType) && propRef.Property.ContainingType.Name != "UdonSharpBehaviour":
                 return;
+            // User-defined indexer on this → call setter with the index args followed by the value
+            case IPropertyReferenceOperation { Instance: IInstanceReferenceOperation, Property: { IsIndexer: true, SetMethod: not null } } idxRef when _methodFunctions.TryGetValue(idxRef.Property.SetMethod, out _):
+            {
+                var setterArgs = new List<CValue>();
+                foreach (var arg in idxRef.Arguments) setterArgs.Add(VisitExpression(arg.Value));
+                setterArgs.Add(valueVal);
+                EmitExprStmt(EmitCallToMethod(idxRef.Property.SetMethod, setterArgs));
+                return;
+            }
             // User-defined property on this → call setter
             case IPropertyReferenceOperation { Instance: IInstanceReferenceOperation, Property: { SetMethod: not null } } propRef when _methodFunctions.TryGetValue(propRef.Property.SetMethod, out _):
                 EmitExprStmt(EmitCallToMethod(propRef.Property.SetMethod, new List<CValue> { valueVal }));
