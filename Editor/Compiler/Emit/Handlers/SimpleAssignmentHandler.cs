@@ -293,7 +293,12 @@ public class SimpleAssignmentHandler : AssignmentHandlerBase, IExpressionHandler
         var srcFallback = VisitExpression(assign.Value);
         var targetFieldName = GetAssignTargetFieldName(assign.Target);
         EmitStoreField(targetFieldName, srcFallback);
-        return srcFallback;
+        // The assignment's VALUE is the stored value. Return a fresh read of the target rather than the
+        // RHS expression tree: re-emitting the tree (when the assignment is used as an expression, e.g.
+        // `G(n = n - 1)`) would re-evaluate it after the store already mutated its inputs. A dead read in
+        // statement form is removed by DCE.
+        var targetFieldType = _ctx.GetFieldType(targetFieldName);
+        return targetFieldType != null ? LoadField(targetFieldName, targetFieldType) : srcFallback;
     }
 
     void RecordIfCapturingLambda(IDelegateCreationOperation dc)
