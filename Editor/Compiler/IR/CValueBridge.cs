@@ -20,8 +20,10 @@ public static class CValueBridge
         HLoadField lf => new CFieldRef(lf.FieldName, lf.Type, CFieldMode.Load),
         HExternCall ec => new CExternCall(ec.Sig, ec.Args.ConvertAll(FromHExpr), ec.Type, null),
         HInternalCall ic => new CInternalCall(ic.FuncName, ic.Args.ConvertAll(FromHExpr), ic.Type, null),
-        _ => throw new ArgumentException(
-            $"HExpr has no CValue form yet (HSelect/HCrossBehaviourCall stay Core nodes): {e?.GetType().Name}"),
+        HSelect sel => new CSelect(FromHExpr(sel.Cond), FromHExpr(sel.TrueVal), FromHExpr(sel.FalseVal), sel.Type),
+        HCrossBehaviourCall cc => new CCrossCall(FromHExpr(cc.Instance), cc.EventName,
+            cc.Params.ConvertAll(p => (p.ParamName, FromHExpr(p.Value))), cc.Returns, cc.Type),
+        _ => throw new ArgumentException($"Unknown HExpr: {e?.GetType().Name}"),
     };
 
     // ── CValue -> HIR expression ──
@@ -34,6 +36,9 @@ public static class CValueBridge
         CFieldRef fr => new HLoadField(fr.FieldName, fr.Type), // Mode.Load
         CExternCall ec => new HExternCall(ec.Sig, ec.Args.ConvertAll(ToHExpr), ec.Type),
         CInternalCall ic => new HInternalCall(ic.FuncName, ic.Args.ConvertAll(ToHExpr), ic.Type),
+        CSelect sel => new HSelect(ToHExpr(sel.Cond), ToHExpr(sel.TrueVal), ToHExpr(sel.FalseVal), sel.Type),
+        CCrossCall cc => new HCrossBehaviourCall(ToHExpr(cc.Instance), cc.EventName,
+            cc.Params.ConvertAll(p => (p.ParamName, ToHExpr(p.Value))), cc.Returns, cc.Type),
         _ => throw new ArgumentException($"Unknown CValue: {v?.GetType().Name}"),
     };
 

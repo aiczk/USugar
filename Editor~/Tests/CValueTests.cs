@@ -176,4 +176,43 @@ public class CValueTests
             "SystemInt32");
         Assert.ThrowsAny<System.Exception>(() => CValueBridge.ToLCall(tree));
     }
+
+    // ── structured-only Core value nodes: select + cross-behaviour ──
+
+    [Fact]
+    public void HSelect_RoundTrips()
+    {
+        var o = new HSelect(new HSlotRef(0, "SystemBoolean"),
+            new HConst(1, "SystemInt32"), new HConst(2, "SystemInt32"), "SystemInt32");
+        var c = (CSelect)CValueBridge.FromHExpr(o);
+        var r = (HSelect)CValueBridge.ToHExpr(c);
+        Assert.Equal(o.Type, r.Type);
+        Assert.Equal(0, ((HSlotRef)r.Cond).SlotId);
+        Assert.Equal(1, ((HConst)r.TrueVal).Value);
+        Assert.Equal(2, ((HConst)r.FalseVal).Value);
+    }
+
+    [Fact]
+    public void HCrossBehaviourCall_RoundTrips_PreservesParamsAndReturns()
+    {
+        var o = new HCrossBehaviourCall(
+            new HLoadField("enemy", "VRCUdonCommonInterfacesIUdonEventReceiver"),
+            "TakeDamage",
+            new List<(string, HExpr)> { ("amount", new HConst(5, "SystemInt32")) },
+            new List<ReturnSlot> { new ReturnSlot("__ret_0", "SystemInt32") },
+            "SystemInt32");
+        var c = (CCrossCall)CValueBridge.FromHExpr(o);
+        Assert.Single(c.Params);
+        Assert.Equal("amount", c.Params[0].ParamName);
+        Assert.Single(c.Returns);
+
+        var r = (HCrossBehaviourCall)CValueBridge.ToHExpr(c);
+        Assert.Equal(o.EventName, r.EventName);
+        Assert.Equal(o.Type, r.Type);
+        Assert.Single(r.Params);
+        Assert.Equal("amount", r.Params[0].ParamName);
+        Assert.Equal(5, ((HConst)r.Params[0].Value).Value);
+        Assert.Single(r.Returns);
+        Assert.Equal("__ret_0", r.Returns[0].Id);
+    }
 }

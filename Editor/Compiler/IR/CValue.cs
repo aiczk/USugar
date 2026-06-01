@@ -113,3 +113,44 @@ public sealed class CInternalCall : CValue
         return $"{dest}call {FuncName}({string.Join(", ", Args)}):{Type}";
     }
 }
+
+/// <summary>Ternary select: cond ? trueVal : falseVal. Structured-only Core node — has no flat
+/// operand form; it is expanded to branch blocks in CoreFlatten. [= HSelect]</summary>
+public sealed class CSelect : CValue
+{
+    public readonly CValue Cond;
+    public readonly CValue TrueVal;
+    public readonly CValue FalseVal;
+
+    public CSelect(CValue cond, CValue trueVal, CValue falseVal, string type) : base(type)
+    {
+        Cond = cond ?? throw new ArgumentNullException(nameof(cond));
+        TrueVal = trueVal ?? throw new ArgumentNullException(nameof(trueVal));
+        FalseVal = falseVal ?? throw new ArgumentNullException(nameof(falseVal));
+    }
+
+    public override string ToString() => $"select({Cond}, {TrueVal}, {FalseVal}):{Type}";
+}
+
+/// <summary>Cross-behaviour call (SetProgramVariable* + SendCustomEvent + GetProgramVariable*).
+/// Stays opaque/atomic until expanded in CoreFlatten — never exposed to structured optimizers.
+/// [= HCrossBehaviourCall]</summary>
+public sealed class CCrossCall : CValue
+{
+    public readonly CValue Instance;
+    public readonly string EventName;
+    public readonly List<(string ParamName, CValue Value)> Params; // SetProgramVariable pairs
+    public readonly IReadOnlyList<ReturnSlot> Returns;             // empty for void
+
+    public CCrossCall(CValue instance, string eventName,
+        List<(string, CValue)> parameters, IReadOnlyList<ReturnSlot> returns, string retType) : base(retType)
+    {
+        Instance = instance ?? throw new ArgumentNullException(nameof(instance));
+        EventName = eventName ?? throw new ArgumentNullException(nameof(eventName));
+        Params = parameters ?? new List<(string, CValue)>();
+        Returns = returns ?? Array.Empty<ReturnSlot>();
+    }
+
+    public override string ToString() =>
+        $"cross_call {Instance}.{EventName}({string.Join(", ", Params.ConvertAll(p => p.ParamName))}):{Type}";
+}
