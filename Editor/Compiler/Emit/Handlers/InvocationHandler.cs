@@ -48,6 +48,11 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
             }
         }
 
+        // Nullable<T>.GetValueOrDefault() / GetValueOrDefault(fallback) → the value, else the fallback/default.
+        if (op.Instance != null && target.Name == "GetValueOrDefault"
+            && EmitContext.IsNullableT(target.ContainingType, out var govUnderlying))
+            return EmitNullableGetValueOrDefault(op, govUnderlying);
+
         switch (target.MethodKind)
         {
             // Delegate invocation: a() where a is Action/Func
@@ -146,6 +151,18 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
 
         // Extern method call
         return EmitExternMethodCall(op, target);
+    }
+
+    // Nullable<T>.GetValueOrDefault: HasValue ? Value : (fallback arg or default(T)).
+    CValue EmitNullableGetValueOrDefault(IInvocationOperation op, ITypeSymbol underlying)
+    {
+        var uType = GetUdonType(underlying);
+        var nvSlot = _ctx.AllocTemp("SystemObject");
+        EmitAssign(nvSlot, VisitExpression(op.Instance));
+        var resultSlot = _ctx.AllocTemp(uType);
+        EmitAssign(resultSlot, op.Arguments.Length > 0 ? VisitExpression(op.Arguments[0].Value) : EmitValueTypeDefault(uType));
+        _builder.EmitIf(EmitNullableHasValue(SlotRef(nvSlot)), _ => EmitAssign(resultSlot, SlotRef(nvSlot)));
+        return SlotRef(resultSlot);
     }
 
     // User-struct instance method call: receiver object[] passed (uncloned) as synthetic param0

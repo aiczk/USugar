@@ -169,6 +169,10 @@ public abstract class HandlerBase
             new List<CValue> { isNull }, "SystemBoolean");
     }
 
+    /// <summary>Default value for a Udon value type (0 / false). Used for `default(T)`-style fills.</summary>
+    protected CValue EmitValueTypeDefault(string udonType)
+        => Const(EmitContext.ParseConstValue(udonType, udonType == "SystemBoolean" ? "False" : "0"), udonType);
+
     // ── Extern resolution ──
 
     static readonly string[] FallbackBaseTypes = new[]
