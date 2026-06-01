@@ -25,6 +25,7 @@ public sealed class CBlock : CStmt
     public readonly List<CStmt> Stmts = new List<CStmt>();
     public CTerminator Terminator; // null in structured role; set in flat role
     public int FlatId;             // basic-block id in flat role
+    public string Hint;            // optional label-name hint for codegen (flat role)
 
     public CBlock() { }
     public CBlock(List<CStmt> stmts) => Stmts = stmts ?? new List<CStmt>();
@@ -136,6 +137,21 @@ public sealed class CExprStmt : CStmt
     public CExprStmt(CValue expr) => Expr = expr ?? throw new ArgumentNullException(nameof(expr));
 }
 
+/// <summary>Flat instruction (flat role only): load a heap field into a slot. In structured
+/// form a field read is a CFieldRef(Load) value; CoreFlatten materializes it into this. [= LLoadField]</summary>
+public sealed class CLoadField : CStmt
+{
+    public readonly int DestSlot;
+    public readonly string FieldName;
+    public readonly string Type;
+    public CLoadField(int destSlot, string fieldName, string type)
+    {
+        DestSlot = destSlot;
+        FieldName = fieldName ?? throw new ArgumentNullException(nameof(fieldName));
+        Type = type ?? throw new ArgumentNullException(nameof(type));
+    }
+}
+
 // ── Flat-block terminators (flat role only, mirror LTerminator) ──
 
 /// <summary>Base for flat basic-block terminators.</summary>
@@ -167,4 +183,28 @@ public sealed class CRet : CTerminator
 {
     public readonly CValue Value; // null for void
     public CRet(CValue value = null) => Value = value;
+}
+
+// ── Function (unified) ──
+
+/// <summary>A function in the unified Core IR. Structured <see cref="Body"/> is authoritative
+/// when Shape=Structured; <see cref="FlatBlocks"/> when Shape=Flat. CoreFlatten sets FlatBlocks,
+/// appends scratch to Slots, and sets Shape=Flat. [= HFunction + LFunction]</summary>
+public sealed class CFunction
+{
+    public readonly string Name;
+    public readonly string ExportName;
+    public CBlock Body = new CBlock();                            // structured form
+    public readonly List<CBlock> FlatBlocks = new List<CBlock>(); // flat form (post-flatten)
+    public readonly List<SlotDecl> Slots = new List<SlotDecl>();
+    public string ReturnType;
+    public readonly List<string> ParamFieldNames = new List<string>();
+    public readonly List<ReturnSlot> ReturnSlots = new List<ReturnSlot>();
+    public Shape Shape = Shape.Structured;
+
+    public CFunction(string name, string exportName = null)
+    {
+        Name = name ?? throw new ArgumentNullException(nameof(name));
+        ExportName = exportName;
+    }
 }
