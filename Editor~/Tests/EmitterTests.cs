@@ -3543,6 +3543,21 @@ public class NullableAddTest : UdonSharpBehaviour {
     }
 
     [Fact]
+    public void StructAutoProperty_ObjectInitializer_UsesArrayElement()
+    {
+        // A struct auto-property (incl. init) maps to an object[] element, like a struct field.
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public struct PropV { public int X { get; init; } }
+public class StructPropTest : UdonSharpBehaviour {
+    int _r;
+    void Start() { var v = new PropV { X = 7 }; _r = v.X; }
+}", "StructPropTest");
+        Assert.Contains("SystemObjectArray.__Set__SystemInt32_SystemObject", uasm);
+        Assert.Contains("SystemObjectArray.__Get__SystemInt32__SystemObject", uasm);
+    }
+
+    [Fact]
     public void RecursiveLambda_Local_SpillsToRecursionStack()
     {
         // A self-recursive lambda assigned to a local delegate var (the standard recursive-lambda idiom)
