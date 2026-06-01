@@ -40,6 +40,18 @@ public partial class InvocationHandler
                 ? EmitDeepCloneAggregate(getVal, propAgg) : getVal;
         }
 
+        // Computed (non-auto) property on an aggregate (struct): no backing-field slot, so inline-call the
+        // user getter with the receiver object[] as synthetic param0 (same convention as EmitStructInstanceCall).
+        // The getter only reads, so the receiver is passed uncloned.
+        if (op.Instance != null && op.Instance.Type is INamedTypeSymbol aggGet && EmitContext.IsAggregateType(aggGet)
+            && op.Property.GetMethod is { } aggGetter && _methodFunctions.ContainsKey(aggGetter.OriginalDefinition))
+        {
+            var ret = EmitCallToMethod(aggGetter.OriginalDefinition,
+                new List<CValue> { LoadInstanceRaw(op.Instance) });
+            return op.Property.Type is INamedTypeSymbol getRetAgg && EmitContext.IsAggregateType(getRetAgg)
+                ? EmitDeepCloneAggregate(ret, getRetAgg) : ret;
+        }
+
         // this.gameObject / this.transform → __this_* variable (Udon VM resolves via "this" default)
         if (op.Instance is IInstanceReferenceOperation)
         {

@@ -1533,6 +1533,12 @@ public class UasmEmitter
         return result.ToArray();
     }
 
+    // A property is auto-implemented iff the compiler synthesized a backing field associated with it.
+    // Computed (expression-bodied or block-bodied) properties have no such field and must be inlined.
+    static bool IsComputedProperty(IPropertySymbol prop)
+        => !prop.ContainingType.GetMembers().OfType<IFieldSymbol>()
+            .Any(f => SymbolEqualityComparer.Default.Equals(f.AssociatedSymbol, prop));
+
     void CollectStructMethodsInOperation(IOperation op, HashSet<IMethodSymbol> result)
     {
         if (op == null) return;
@@ -1546,6 +1552,13 @@ public class UasmEmitter
             && tm.MethodKind == MethodKind.Ordinary && !tm.IsImplicitlyDeclared
             && tm.ContainingType is INamedTypeSymbol it && EmitContext.IsUserStruct(it))
             result.Add(tm.OriginalDefinition);
+        // Computed (non-auto) user-struct property getter: v.Prop. Auto-properties read their backing-field
+        // slot directly (no method), but a computed getter must be inlined as a struct instance method.
+        if (op is IPropertyReferenceOperation { Property.IsIndexer: false } pr
+            && pr.Property is { IsStatic: false, GetMethod: { } pgm }
+            && pr.Property.ContainingType is INamedTypeSymbol pit && EmitContext.IsUserStruct(pit)
+            && IsComputedProperty(pr.Property))
+            result.Add(pgm.OriginalDefinition);
         // User-struct operator: v1 + v2, -v (static operator methods).
         var opMethod = (op as IBinaryOperation)?.OperatorMethod ?? (op as IUnaryOperation)?.OperatorMethod;
         if (opMethod is { MethodKind: MethodKind.UserDefinedOperator }
