@@ -85,6 +85,13 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
             }
         }
 
+        // ── Nullable bool & / | : C# three-valued logic (false & null = false, true | null = true) ──
+        if (op.IsLifted && (op.OperatorKind is BinaryOperatorKind.And or BinaryOperatorKind.Or)
+            && EmitContext.IsNullableT(op.Type, out var boolUnder) && boolUnder.SpecialType == SpecialType.System_Boolean)
+        {
+            return EmitLiftedBoolLogic(op);
+        }
+
         // ── Lifted operator on Nullable<T> (null propagation) ──
         if (op.IsLifted
             && (EmitContext.IsNullableT(op.LeftOperand.Type, out _) || EmitContext.IsNullableT(op.RightOperand.Type, out _)))
@@ -147,6 +154,33 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
         }
 
         return ExternCall(sig, new List<CValue> { leftVal, rightVal }, resultType);
+    }
+
+    // Nullable bool `&` / `|` with C# three-valued logic: a known false dominates `&` (false & null = false)
+    // and a known true dominates `|` (true | null = true), regardless of the other operand being null.
+    CValue EmitLiftedBoolLogic(IBinaryOperation op)
+    {
+        var aSlot = _ctx.AllocTemp("SystemObject"); EmitAssign(aSlot, VisitExpression(op.LeftOperand));
+        var bSlot = _ctx.AllocTemp("SystemObject"); EmitAssign(bSlot, VisitExpression(op.RightOperand));
+
+        void IfBool(int slot, bool wantTrue, System.Action<CoreBuilder> body)
+        {
+            CValue boolCond = wantTrue
+                ? SlotRef(slot) // boxed bool used directly (Udon unboxes for the branch test)
+                : ExternCall("SystemBoolean.__op_UnaryNegation__SystemBoolean__SystemBoolean",
+                    new List<CValue> { SlotRef(slot) }, "SystemBoolean");
+            _builder.EmitIf(EmitNullableHasValue(SlotRef(slot)), _ => _builder.EmitIf(boolCond, body));
+        }
+
+        var rSlot = _ctx.AllocTemp("SystemObject");
+        EmitAssign(rSlot, Const(null, "SystemObject"));
+        bool isAnd = op.OperatorKind == BinaryOperatorKind.And;
+        // dominating value: false for &, true for |
+        IfBool(aSlot, !isAnd, _ => EmitAssign(rSlot, Const(!isAnd, "SystemBoolean")));
+        IfBool(bSlot, !isAnd, _ => EmitAssign(rSlot, Const(!isAnd, "SystemBoolean")));
+        // both the non-dominating value (both true for &, both false for |) → the non-dominating result
+        IfBool(aSlot, isAnd, _ => IfBool(bSlot, isAnd, __ => EmitAssign(rSlot, Const(isAnd, "SystemBoolean"))));
+        return SlotRef(rSlot);
     }
 
     // Lifted binary operator on Nullable<T> (null propagation) — see HandlerBase.EmitLiftedBinaryCore.
