@@ -5624,6 +5624,21 @@ public class LongModTest : UdonSharpBehaviour {
     }
 
     [Fact]
+    public void PropertyPattern_String_EmitsGetterAndNullGuard()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+[UdonBehaviourSyncMode(BehaviourSyncMode.None)]
+public class PropPatTest : UdonSharpBehaviour {
+    string _s; bool _r;
+    void Start() { _r = _s is { Length: 5 }; }
+}");
+        // member getter + a null-inequality guard so a null receiver short-circuits to false.
+        Assert.Contains("SystemString.__get_Length__SystemInt32", uasm);
+        Assert.Contains("SystemObject.__op_Inequality__", uasm);
+    }
+
+    [Fact]
     public void TupleEquality_NestedTuple_ThrowsNotSupported()
     {
         var ex = Assert.ThrowsAny<System.Exception>(() => TestHelper.CompileToUasm(@"

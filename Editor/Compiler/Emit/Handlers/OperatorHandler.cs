@@ -338,6 +338,69 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
                 return result;
             }
 
+            case IRecursivePatternOperation rec when rec.PropertySubpatterns.Length > 0:
+            {
+                // Property pattern  x is [Type] { P: subpat, ... }
+                //   ≡  x passes the (optional) type/null guard  &&  x.P is subpat  &&  ...
+                // Member reads are emitted INSIDE the guard's then-block so a null or type-mismatched
+                // receiver short-circuits to false without dereferencing (extern AND does not short-circuit).
+                var resultSlot = _ctx.AllocTemp("SystemBoolean");
+                EmitAssign(resultSlot, Const(false, "SystemBoolean"));
+
+                CValue guard;
+                if (rec.MatchedType != null && !SymbolEqualityComparer.Default.Equals(rec.MatchedType, valueType))
+                    guard = EmitTypeCheck(valueVal, rec.MatchedType);
+                else if (!valueType.IsValueType)
+                    guard = ExternCall(
+                        "SystemObject.__op_Inequality__SystemObject_SystemObject__SystemBoolean",
+                        new List<CValue> { valueVal, Const(null, "SystemObject") }, "SystemBoolean");
+                else
+                    guard = Const(true, "SystemBoolean");
+
+                _builder.EmitIf(guard, _ =>
+                {
+                    var matchType = rec.MatchedType ?? valueType;
+                    var valSlot = _ctx.AllocTemp(GetUdonType(matchType));
+                    EmitAssign(valSlot, valueVal);
+
+                    if (rec.DeclaredSymbol is ILocalSymbol bound)
+                    {
+                        var boundId = _ctx.DeclareLocal(bound.Name, GetUdonType(bound.Type));
+                        _localBindings[bound] = new EmitContext.LocalBinding(boundId);
+                        EmitStoreField(boundId, SlotRef(valSlot));
+                    }
+
+                    CValue acc = Const(true, "SystemBoolean");
+                    foreach (var sub in rec.PropertySubpatterns)
+                    {
+                        ITypeSymbol memberType;
+                        string memberName, memberOwner;
+                        switch (sub.Member)
+                        {
+                            case IPropertyReferenceOperation pr:
+                                memberType = pr.Property.Type; memberName = pr.Property.Name;
+                                memberOwner = GetUdonType(pr.Property.ContainingType); break;
+                            case IFieldReferenceOperation fr:
+                                memberType = fr.Field.Type; memberName = fr.Field.Name;
+                                memberOwner = GetUdonType(fr.Field.ContainingType); break;
+                            default:
+                                throw new System.NotSupportedException(
+                                    $"Property pattern member '{sub.Member?.GetType().Name}' is not supported "
+                                    + "(only System/Unity properties and fields).");
+                        }
+                        var memberVal = ExternCall(
+                            ExternResolver.BuildPropertyGetSignature(memberOwner, memberName, GetUdonType(memberType)),
+                            new List<CValue> { SlotRef(valSlot) }, GetUdonType(memberType));
+                        var subResult = EmitPatternCheckImpl(memberVal, memberType, sub.Pattern);
+                        acc = ExternCall(
+                            "SystemBoolean.__op_ConditionalAnd__SystemBoolean_SystemBoolean__SystemBoolean",
+                            new List<CValue> { acc, subResult }, "SystemBoolean");
+                    }
+                    EmitAssign(resultSlot, acc);
+                });
+                return SlotRef(resultSlot);
+            }
+
             default:
                 throw new System.NotSupportedException($"Unsupported pattern: {pattern.GetType().Name}");
         }
