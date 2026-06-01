@@ -21,14 +21,14 @@ public static class FlatVerify
         var blockIds = new HashSet<int>();
         foreach (var b in f.FlatBlocks)
         {
-            if (!blockIds.Add(b.FlatId))
-                throw new InvalidOperationException($"Duplicate flat block id {b.FlatId} in {f.Name}");
+            if (!blockIds.Add(b.Id))
+                throw new InvalidOperationException($"Duplicate flat block id {b.Id} in {f.Name}");
         }
 
         foreach (var b in f.FlatBlocks)
         {
             if (b.Terminator == null)
-                throw new InvalidOperationException($"Flat block {b.FlatId} in {f.Name} has no terminator");
+                throw new InvalidOperationException($"Flat block {b.Id} in {f.Name} has no terminator");
 
             foreach (var inst in b.Stmts)
                 VerifyInstruction(inst, f.Name);

@@ -1,14 +1,16 @@
 /// <summary>
-/// HIR/LIR compilation pipeline.
+/// Core IR compilation pipeline.
 ///
-/// Pipeline: Handlers → HirBuilder → HModule → HirVerifier → HirToLir → LModule → LirToUasm → UASM
+/// Pipeline: Handlers → CoreBuilder → CModule → CoreVerify → CoreOptimizer (structured) →
+///           CoreFlatten (structured → flat) → FlatVerify → CoreFlatOptimizer → CoreToUasm → UASM
 /// </summary>
 public static class IrPipeline
 {
     /// <summary>
-    /// Generate UASM from a Core IR module: CoreVerify → CoreOptimizer → CoreFlatten → LIR → UASM.
-    /// Handlers build Core directly; HIR is no longer on the live path. The LIR backend is retained
-    /// until Phase 4. Structured (HIR) dumps are omitted until the Core IR gains Dump().
+    /// Generate UASM from a Core IR module. Handlers build the structured Core directly; the module
+    /// is verified and optimized in structured form, flattened in place by CoreFlatten (the one
+    /// structured→flat gate, asserted by FlatVerify), then run through the flat optimizer and the
+    /// Core code generator. HIR and LIR no longer exist on the live path.
     /// </summary>
     public static CodeGenResult GenerateUasmFromCore(CModule coreModule, bool dumpEnabled = false)
     {
@@ -16,27 +18,26 @@ public static class IrPipeline
 
         CoreVerify.Verify(coreModule);
 
-        // Core structured optimization
+        // Structured optimization
         CoreOptimizer.ConstantFold(coreModule);
         CoreOptimizer.DeadCodeElimination(coreModule);
         CoreOptimizer.CopyPropagation(coreModule);
 
-        // Flatten each function, then bridge the flat Core to LIR for the (retained) backend.
-        var lirModule = CorePipeline.FlattenCoreToLir(coreModule);
+        // Structured → flat (in place): CoreFlatten + FlatVerify post-condition.
+        foreach (var cf in coreModule.Functions)
+        {
+            CoreFlatten.Lower(cf);
+            FlatVerify.Verify(cf);
+        }
 
-        if (dumpEnabled)
-            DumpToFile(className, "2_lir.txt", lirModule.Dump());
+        // Flat optimization (identical pass order to the former LIR backend).
+        CoreFlatOptimizer.SimplifyCFG(coreModule);
+        CoreFlatOptimizer.CopyPropagation(coreModule);
+        CoreFlatOptimizer.DeadCodeElimination(coreModule);
+        CoreFlatOptimizer.SimplifyCFG(coreModule); // cleanup after DCE
+        CoreFlatOptimizer.CoalesceSlots(coreModule);
 
-        LirOptimizer.SimplifyCFG(lirModule);
-        LirOptimizer.CopyPropagation(lirModule);
-        LirOptimizer.DeadCodeElimination(lirModule);
-        LirOptimizer.SimplifyCFG(lirModule); // cleanup after DCE
-        LirOptimizer.CoalesceSlots(lirModule);
-
-        if (dumpEnabled)
-            DumpToFile(className, "2b_lir_optimized.txt", lirModule.Dump());
-
-        var result = LirToUasm.Generate(lirModule);
+        var result = CoreToUasm.Generate(coreModule);
 
         if (dumpEnabled)
         {

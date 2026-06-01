@@ -92,10 +92,10 @@ public class CNodeTests
         // type-level smoke for the flat role that CoreFlatten will populate
         var flat = new CBlock(new List<CStmt> { new CAssign(0, new CConst(1, "SystemInt32")) })
         {
-            FlatId = 3,
+            Id = 3,
             Terminator = new CJump(5),
         };
-        Assert.Equal(3, flat.FlatId);
+        Assert.Equal(3, flat.Id);
         Assert.Equal(5, ((CJump)flat.Terminator).TargetBlockId);
 
         var br = new CBranch(new CSlotRef(0, "SystemBoolean"), 1, 2);

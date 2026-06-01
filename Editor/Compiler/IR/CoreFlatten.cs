@@ -4,7 +4,7 @@ using System.Collections.Generic;
 // ============================================================================
 // CoreFlatten — the one structured->flat transform of the unified Core IR (Phase 2 of
 // "Core IR by absorption"). A line-for-line port of HirToLir operating on CNode/CValue,
-// producing flat CBlocks (Terminator + FlatId) and appending scratch slots in the SAME order
+// producing flat CBlocks (Terminator + Id) and appending scratch slots in the SAME order
 // as HirToLir. Mutates the CFunction in place: sets FlatBlocks, appends scratch to Slots, sets
 // Shape=Flat. Semantics (CondBlock re-eval, select dual-arm, cross-call expansion) are preserved
 // verbatim — no lowering is moved relative to HirToLir.
@@ -116,15 +116,15 @@ public static class CoreFlatten
         var elseBlock = ctx.NewBlock();
         var mergeBlock = ctx.NewBlock();
 
-        ctx.Current.Terminator = new CBranch(cond, thenBlock.FlatId, elseBlock.FlatId);
+        ctx.Current.Terminator = new CBranch(cond, thenBlock.Id, elseBlock.Id);
 
         ctx.Current = thenBlock;
         LowerBlock(cif.Then, ctx);
-        if (ctx.Current.Terminator == null) ctx.Current.Terminator = new CJump(mergeBlock.FlatId);
+        if (ctx.Current.Terminator == null) ctx.Current.Terminator = new CJump(mergeBlock.Id);
 
         ctx.Current = elseBlock;
         LowerBlock(cif.Else, ctx);
-        if (ctx.Current.Terminator == null) ctx.Current.Terminator = new CJump(mergeBlock.FlatId);
+        if (ctx.Current.Terminator == null) ctx.Current.Terminator = new CJump(mergeBlock.Id);
 
         ctx.Current = mergeBlock;
     }
@@ -137,32 +137,32 @@ public static class CoreFlatten
 
         if (cw.IsDoWhile)
         {
-            ctx.Current.Terminator = new CJump(bodyBlock.FlatId);
+            ctx.Current.Terminator = new CJump(bodyBlock.Id);
 
             ctx.LoopStack.Push((exitBlock, headerBlock));
             ctx.Current = bodyBlock;
             LowerBlock(cw.Body, ctx);
-            if (ctx.Current.Terminator == null) ctx.Current.Terminator = new CJump(headerBlock.FlatId);
+            if (ctx.Current.Terminator == null) ctx.Current.Terminator = new CJump(headerBlock.Id);
             ctx.LoopStack.Pop();
 
             ctx.Current = headerBlock;
             if (cw.CondBlock.Stmts.Count > 0) LowerBlock(cw.CondBlock, ctx);
             var cond = LowerExpr(cw.Cond, ctx);
-            ctx.Current.Terminator = new CBranch(cond, bodyBlock.FlatId, exitBlock.FlatId);
+            ctx.Current.Terminator = new CBranch(cond, bodyBlock.Id, exitBlock.Id);
         }
         else
         {
-            ctx.Current.Terminator = new CJump(headerBlock.FlatId);
+            ctx.Current.Terminator = new CJump(headerBlock.Id);
 
             ctx.Current = headerBlock;
             if (cw.CondBlock.Stmts.Count > 0) LowerBlock(cw.CondBlock, ctx);
             var cond = LowerExpr(cw.Cond, ctx);
-            ctx.Current.Terminator = new CBranch(cond, bodyBlock.FlatId, exitBlock.FlatId);
+            ctx.Current.Terminator = new CBranch(cond, bodyBlock.Id, exitBlock.Id);
 
             ctx.LoopStack.Push((exitBlock, headerBlock));
             ctx.Current = bodyBlock;
             LowerBlock(cw.Body, ctx);
-            if (ctx.Current.Terminator == null) ctx.Current.Terminator = new CJump(headerBlock.FlatId);
+            if (ctx.Current.Terminator == null) ctx.Current.Terminator = new CJump(headerBlock.Id);
             ctx.LoopStack.Pop();
         }
 
@@ -178,29 +178,29 @@ public static class CoreFlatten
         var continueBlock = ctx.NewBlock();
         var exitBlock = ctx.NewBlock();
 
-        ctx.Current.Terminator = new CJump(headerBlock.FlatId);
+        ctx.Current.Terminator = new CJump(headerBlock.Id);
 
         ctx.Current = headerBlock;
         if (cf.CondBlock.Stmts.Count > 0) LowerBlock(cf.CondBlock, ctx);
         if (cf.Cond != null)
         {
             var cond = LowerExpr(cf.Cond, ctx);
-            ctx.Current.Terminator = new CBranch(cond, bodyBlock.FlatId, exitBlock.FlatId);
+            ctx.Current.Terminator = new CBranch(cond, bodyBlock.Id, exitBlock.Id);
         }
         else
         {
-            ctx.Current.Terminator = new CJump(bodyBlock.FlatId);
+            ctx.Current.Terminator = new CJump(bodyBlock.Id);
         }
 
         ctx.LoopStack.Push((exitBlock, continueBlock));
         ctx.Current = bodyBlock;
         LowerBlock(cf.Body, ctx);
-        if (ctx.Current.Terminator == null) ctx.Current.Terminator = new CJump(continueBlock.FlatId);
+        if (ctx.Current.Terminator == null) ctx.Current.Terminator = new CJump(continueBlock.Id);
         ctx.LoopStack.Pop();
 
         ctx.Current = continueBlock;
         LowerBlock(cf.Update, ctx);
-        if (ctx.Current.Terminator == null) ctx.Current.Terminator = new CJump(headerBlock.FlatId);
+        if (ctx.Current.Terminator == null) ctx.Current.Terminator = new CJump(headerBlock.Id);
 
         ctx.Current = exitBlock;
     }
@@ -209,27 +209,27 @@ public static class CoreFlatten
     {
         if (ctx.LoopStack.Count == 0) throw new InvalidOperationException("break outside of loop");
         var (exitBlock, _) = ctx.LoopStack.Peek();
-        ctx.Current.Terminator = new CJump(exitBlock.FlatId);
+        ctx.Current.Terminator = new CJump(exitBlock.Id);
     }
 
     static void LowerContinue(Ctx ctx)
     {
         if (ctx.LoopStack.Count == 0) throw new InvalidOperationException("continue outside of loop");
         var (_, continueBlock) = ctx.LoopStack.Peek();
-        ctx.Current.Terminator = new CJump(continueBlock.FlatId);
+        ctx.Current.Terminator = new CJump(continueBlock.Id);
     }
 
     static void LowerGoto(CGoto g, Ctx ctx)
     {
         if (!ctx.LabelBlocks.TryGetValue(g.Label, out var target))
             throw new InvalidOperationException($"Unknown label: {g.Label}");
-        ctx.Current.Terminator = new CJump(target.FlatId);
+        ctx.Current.Terminator = new CJump(target.Id);
     }
 
     static void LowerLabel(CLabel lbl, Ctx ctx)
     {
         var labelBlock = ctx.LabelBlocks[lbl.Label];
-        if (ctx.Current.Terminator == null) ctx.Current.Terminator = new CJump(labelBlock.FlatId);
+        if (ctx.Current.Terminator == null) ctx.Current.Terminator = new CJump(labelBlock.Id);
         ctx.Current = labelBlock;
     }
 
@@ -333,17 +333,17 @@ public static class CoreFlatten
         var falseBlock = ctx.NewBlock();
         var mergeBlock = ctx.NewBlock();
 
-        ctx.Current.Terminator = new CBranch(cond, trueBlock.FlatId, falseBlock.FlatId);
+        ctx.Current.Terminator = new CBranch(cond, trueBlock.Id, falseBlock.Id);
 
         ctx.Current = trueBlock;
         var trueVal = LowerExpr(sel.TrueVal, ctx);
         ctx.Current.Stmts.Add(new CAssign(resultSlot, trueVal));
-        ctx.Current.Terminator = new CJump(mergeBlock.FlatId);
+        ctx.Current.Terminator = new CJump(mergeBlock.Id);
 
         ctx.Current = falseBlock;
         var falseVal = LowerExpr(sel.FalseVal, ctx);
         ctx.Current.Stmts.Add(new CAssign(resultSlot, falseVal));
-        ctx.Current.Terminator = new CJump(mergeBlock.FlatId);
+        ctx.Current.Terminator = new CJump(mergeBlock.Id);
 
         ctx.Current = mergeBlock;
         return new CSlotRef(resultSlot, sel.Type);
@@ -363,7 +363,7 @@ public static class CoreFlatten
 
         public CBlock NewBlock()
         {
-            var b = new CBlock { FlatId = _nextBlockId++ };
+            var b = new CBlock { Id = _nextBlockId++ };
             Func.FlatBlocks.Add(b);
             return b;
         }

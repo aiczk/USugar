@@ -19,7 +19,7 @@ public class FlatVerifyTests
     }
 
     static CBlock Block(int id, List<CStmt> insts, CTerminator term)
-        => new CBlock(insts) { FlatId = id, Terminator = term };
+        => new CBlock(insts) { Id = id, Terminator = term };
 
     [Fact]
     public void WellFormed_Passes()
@@ -31,7 +31,7 @@ public class FlatVerifyTests
     [Fact]
     public void MissingTerminator_Throws()
     {
-        var b = new CBlock(new List<CStmt>()) { FlatId = 0 }; // Terminator left null
+        var b = new CBlock(new List<CStmt>()) { Id = 0 }; // Terminator left null
         Assert.ThrowsAny<System.Exception>(() => FlatVerify.Verify(Flat(b)));
     }
 

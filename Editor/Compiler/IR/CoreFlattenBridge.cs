@@ -21,7 +21,7 @@ public static class CoreFlattenBridge
 
         foreach (var cb in f.FlatBlocks)
         {
-            var lb = new LBlock(cb.FlatId) { Hint = cb.Hint };
+            var lb = new LBlock(cb.Id) { Hint = cb.Hint };
             foreach (var inst in cb.Stmts) lb.Insts.Add(ToLInst(inst, f));
             lb.Term = ToLTerm(cb.Terminator);
             lf.Blocks.Add(lb);

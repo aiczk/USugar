@@ -4,7 +4,7 @@ using System.Collections.Generic;
 // ============================================================================
 // Core IR statement vocabulary (structured form) + flat-block form + Shape invariant.
 // Phase 2 of "Core IR by absorption". Structured statements mirror HStmt 1:1 over CValue;
-// the flat role (CBlock.Terminator + FlatId, CTerminator) mirrors LIR and is populated by
+// the flat role (CBlock.Terminator + Id, CTerminator) mirrors LIR and is populated by
 // CoreFlatten. The Shape enum makes the no-Phi structured-vs-flat boundary machine-checkable.
 // Global namespace, C# 9.0-compatible (Unity compiles Editor/ at C# 9.0 LCD).
 // ============================================================================
@@ -19,12 +19,12 @@ public enum Shape { Structured, Flat }
 public abstract class CStmt { }
 
 /// <summary>Sequence of statements (structured role) OR a flat basic block (flat role:
-/// Terminator + FlatId set, Stmts holds flat instructions only). Role governed by CFunction.Shape.</summary>
+/// Terminator + Id set, Stmts holds flat instructions only). Role governed by CFunction.Shape.</summary>
 public sealed class CBlock : CStmt
 {
     public readonly List<CStmt> Stmts = new List<CStmt>();
     public CTerminator Terminator; // null in structured role; set in flat role
-    public int FlatId;             // basic-block id in flat role
+    public int Id;             // basic-block id in flat role
     public string Hint;            // optional label-name hint for codegen (flat role)
 
     public CBlock() { }
@@ -215,6 +215,12 @@ public sealed class CFunction
         Slots.Add(new SlotDecl(id, type, slotClass, fixedName));
         return id;
     }
+
+    /// <summary>First flat block (flat role). [= LFunction.Entry]</summary>
+    public CBlock Entry => FlatBlocks.Count > 0 ? FlatBlocks[0] : null;
+
+    /// <summary>UASM field name for the single return value (N=1 only). [= LFunction.ReturnFieldName]</summary>
+    public string ReturnFieldName => ReturnSlots.Count == 1 ? ReturnSlots[0].Id : null;
 }
 
 /// <summary>Top-level Core IR module. [= HModule + LModule]</summary>
