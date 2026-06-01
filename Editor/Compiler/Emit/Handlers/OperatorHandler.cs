@@ -279,6 +279,22 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
 
     public CValue EmitPatternCheckImpl(CValue valueVal, ITypeSymbol valueType, IPatternOperation pattern)
     {
+        // Nullable<T> scrutinee (boxed object): `x is null` is an object null check; any other pattern
+        // requires HasValue, then matches against the unboxed underlying value (Udon unboxes transparently).
+        if (EmitContext.IsNullableT(valueType, out var patUnderlying))
+        {
+            var nSlot = _ctx.AllocTemp("SystemObject");
+            EmitAssign(nSlot, valueVal);
+            if (pattern is IConstantPatternOperation cpn && cpn.Value.ConstantValue is { HasValue: true, Value: null })
+                return ExternCall("SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean",
+                    new List<CValue> { SlotRef(nSlot), Const(null, "SystemObject") }, "SystemBoolean");
+            var matchSlot = _ctx.AllocTemp("SystemBoolean");
+            EmitAssign(matchSlot, Const(false, "SystemBoolean"));
+            _builder.EmitIf(EmitNullableHasValue(SlotRef(nSlot)), _ =>
+                EmitAssign(matchSlot, EmitPatternCheckImpl(SlotRef(nSlot), patUnderlying, pattern)));
+            return SlotRef(matchSlot);
+        }
+
         switch (pattern)
         {
             case IConstantPatternOperation constPat:
