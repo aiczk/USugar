@@ -5592,6 +5592,21 @@ public class ByteWrapTest : UdonSharpBehaviour {
     }
 
     [Fact]
+    public void PositionalPattern_Tuple_EmitsPerElementGetAndAndChain()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+[UdonBehaviourSyncMode(BehaviourSyncMode.None)]
+public class PosPatTest : UdonSharpBehaviour {
+    bool _r;
+    void Start() { var t = (1, 2); _r = t is (1, 2); }
+}");
+        // Positional pattern extracts each tuple element via __Get__ and AND-combines the sub-checks.
+        Assert.Contains("SystemObjectArray.__Get__SystemInt32__SystemObject", uasm);
+        Assert.Contains("__op_ConditionalAnd__", uasm);
+    }
+
+    [Fact]
     public void TupleEquality_NestedTuple_ThrowsNotSupported()
     {
         var ex = Assert.ThrowsAny<System.Exception>(() => TestHelper.CompileToUasm(@"

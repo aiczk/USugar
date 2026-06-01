@@ -242,17 +242,19 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
 
             case IDeclarationPatternOperation declPat:
             {
-                var checkVal = EmitTypeCheck(valueVal, declPat.MatchedType);
+                // `var x` (no explicit MatchedType / MatchesNull) matches any value — no type check.
+                var isVar = declPat.MatchedType == null || declPat.MatchesNull;
+                var checkVal = isVar ? (CValue)Const(true, "SystemBoolean") : EmitTypeCheck(valueVal, declPat.MatchedType);
                 if (declPat.DeclaredSymbol is ILocalSymbol local)
                 {
                     var localType = GetUdonType(local.Type);
                     var localId = _ctx.DeclareLocal(local.Name, localType);
                     _localBindings[local] = new EmitContext.LocalBinding(localId);
-                    // Only assign when type check succeeds — avoid invalid type COPY on mismatch
-                    _builder.EmitIf(checkVal, b =>
-                    {
-                        EmitStoreField(localId, valueVal);
-                    });
+                    if (isVar)
+                        EmitStoreField(localId, valueVal); // always matches → bind unconditionally
+                    else
+                        // Only assign when the type check succeeds — avoid invalid type COPY on mismatch
+                        _builder.EmitIf(checkVal, b => EmitStoreField(localId, valueVal));
                 }
                 return checkVal;
             }
@@ -286,6 +288,40 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
                     ? "SystemBoolean.__op_ConditionalAnd__SystemBoolean_SystemBoolean__SystemBoolean"
                     : "SystemBoolean.__op_ConditionalOr__SystemBoolean_SystemBoolean__SystemBoolean";
                 return ExternCall(opName, new List<CValue> { leftVal, rightVal }, "SystemBoolean");
+            }
+
+            case IRecursivePatternOperation rec when rec.DeconstructionSubpatterns.Length > 0:
+            {
+                // Positional/deconstruction pattern — tuple-typed only (reuse the aggregate object[]
+                // machinery; user-defined Deconstruct is out of scope).
+                if (valueType is not INamedTypeSymbol aggType || !EmitContext.IsAggregateType(valueType))
+                    throw new System.NotSupportedException(
+                        "Positional pattern is only supported on tuple types (user Deconstruct is not supported).");
+                var layout = _ctx.GetAggregateLayout(aggType);
+                if (rec.DeconstructionSubpatterns.Length != layout.Count)
+                    throw new System.NotSupportedException(
+                        $"Positional pattern element count ({rec.DeconstructionSubpatterns.Length}) "
+                        + $"does not match tuple arity ({layout.Count}).");
+
+                var aggSlot = _ctx.AllocTemp("SystemObjectArray");
+                EmitAssign(aggSlot, valueVal);
+
+                CValue result = Const(true, "SystemBoolean");
+                for (int i = 0; i < rec.DeconstructionSubpatterns.Length; i++)
+                {
+                    var elemType = layout.Fields[i].Type;
+                    var elemRaw = ExternCall("SystemObjectArray.__Get__SystemInt32__SystemObject",
+                        new List<CValue> { SlotRef(aggSlot), Const(i, "SystemInt32") }, "SystemObject");
+                    // Materialize into a typed temp (Udon COPY unboxes) so the sub-pattern compares
+                    // with the correct type tag, exactly as tuple deconstruction extracts elements.
+                    var elemSlot = _ctx.AllocTemp(GetUdonType(elemType));
+                    EmitAssign(elemSlot, elemRaw);
+                    var subResult = EmitPatternCheckImpl(SlotRef(elemSlot), elemType, rec.DeconstructionSubpatterns[i]);
+                    result = ExternCall(
+                        "SystemBoolean.__op_ConditionalAnd__SystemBoolean_SystemBoolean__SystemBoolean",
+                        new List<CValue> { result, subResult }, "SystemBoolean");
+                }
+                return result;
             }
 
             default:
