@@ -81,6 +81,20 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
         rightVal = EmitEnumToUnderlying(rightVal, op.RightOperand.Type);
 
         var resultType = GetUdonType(op.Type);
+
+        // long % long: Udon has no SystemInt64.op_Remainder extern; lower to a - (a / b) * b.
+        if (op.OperatorKind == BinaryOperatorKind.Remainder && resultType == "SystemInt64")
+        {
+            var aSlot = _ctx.AllocTemp("SystemInt64"); EmitAssign(aSlot, leftVal);
+            var bSlot = _ctx.AllocTemp("SystemInt64"); EmitAssign(bSlot, rightVal);
+            var quot = ExternCall("SystemInt64.__op_Division__SystemInt64_SystemInt64__SystemInt64",
+                new List<CValue> { SlotRef(aSlot), SlotRef(bSlot) }, "SystemInt64");
+            var prod = ExternCall("SystemInt64.__op_Multiplication__SystemInt64_SystemInt64__SystemInt64",
+                new List<CValue> { quot, SlotRef(bSlot) }, "SystemInt64");
+            return ExternCall("SystemInt64.__op_Subtraction__SystemInt64_SystemInt64__SystemInt64",
+                new List<CValue> { SlotRef(aSlot), prod }, "SystemInt64");
+        }
+
         var sig = ExternResolver.ResolveBinaryExtern(
             op.OperatorKind, op.OperatorMethod,
             ResolveType(op.LeftOperand.Type), ResolveType(op.RightOperand.Type), ResolveType(op.Type));

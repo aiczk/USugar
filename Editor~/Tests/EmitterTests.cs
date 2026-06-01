@@ -5607,6 +5607,23 @@ public class PosPatTest : UdonSharpBehaviour {
     }
 
     [Fact]
+    public void LongModulo_LoweredToSubtractDivMul_NoRemainderExtern()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+[UdonBehaviourSyncMode(BehaviourSyncMode.None)]
+public class LongModTest : UdonSharpBehaviour {
+    long _r;
+    void Start() { long a = 17; long b = 5; _r = a % b; }
+}");
+        // Udon has no SystemInt64.op_Remainder; long % is lowered to a - (a / b) * b.
+        Assert.DoesNotContain("SystemInt64.__op_Remainder", uasm);
+        Assert.Contains("SystemInt64.__op_Division__SystemInt64_SystemInt64__SystemInt64", uasm);
+        Assert.Contains("SystemInt64.__op_Multiplication__SystemInt64_SystemInt64__SystemInt64", uasm);
+        Assert.Contains("SystemInt64.__op_Subtraction__SystemInt64_SystemInt64__SystemInt64", uasm);
+    }
+
+    [Fact]
     public void TupleEquality_NestedTuple_ThrowsNotSupported()
     {
         var ex = Assert.ThrowsAny<System.Exception>(() => TestHelper.CompileToUasm(@"
