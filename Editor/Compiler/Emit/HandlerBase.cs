@@ -372,8 +372,25 @@ public abstract class HandlerBase
             // Inside a struct method/ctor, `this` is the receiver object[] param, not the Behaviour.
             IInstanceReferenceOperation when _ctx.CurrentStructReceiverParamId != null
                 => LoadField(_ctx.CurrentStructReceiverParamId, "SystemObjectArray"),
+            // Aggregate field as a RECEIVER (e.g. `o.inner.x`, `this.structField.x`) must NOT be cloned —
+            // the access/mutation has to hit the live storage. (Value reads clone in VisitFieldReference.)
+            IFieldReferenceOperation fr when EmitContext.IsAggregateType(fr.Type)
+                => ReadAggregateFieldRaw(fr),
             _ => VisitExpression(instance), // method return, field on this, etc. — fresh or already raw
         };
+    }
+
+    /// <summary>Read an aggregate-typed field as the raw stored object[] (no clone): a nested element via
+    /// __Get__, or a this.field directly. Used for receiver access; value reads add a clone on top.</summary>
+    protected CValue ReadAggregateFieldRaw(IFieldReferenceOperation fr)
+    {
+        if (fr.Instance != null && fr.Instance.Type is INamedTypeSymbol cont && EmitContext.IsAggregateType(cont)
+            && _ctx.GetAggregateLayout(cont).TryGetIndex(fr.Field, out var idx))
+            return ExternCall("SystemObjectArray.__Get__SystemInt32__SystemObject",
+                new List<CValue> { LoadInstanceRaw(fr.Instance), Const(idx, "SystemInt32") }, "SystemObject");
+        if (fr.Instance is IInstanceReferenceOperation)
+            return LoadField(fr.Field.Name, "SystemObjectArray");
+        return VisitExpression(fr); // cross-behaviour aggregate field etc. — rare
     }
 
     // ── L-Value Assignment ──

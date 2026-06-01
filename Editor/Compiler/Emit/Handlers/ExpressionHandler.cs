@@ -131,16 +131,21 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
             if (layout.TryGetIndex(fieldRef.Field, out var elemIndex))
             {
                 var arrExpr = LoadInstanceRaw(fieldRef.Instance);
-                return ExternCall("SystemObjectArray.__Get__SystemInt32__SystemObject",
+                var getVal = ExternCall("SystemObjectArray.__Get__SystemInt32__SystemObject",
                     new List<CValue> { arrExpr, Const(elemIndex, "SystemInt32") }, "SystemObject");
+                // A struct-typed element read AS A VALUE is copied (value semantics); scalar elements are immutable boxes.
+                return fieldRef.Field.Type is INamedTypeSymbol elemAgg && EmitContext.IsAggregateType(elemAgg)
+                    ? EmitDeepCloneAggregate(getVal, elemAgg) : getVal;
             }
             throw new System.NotSupportedException(
                 $"Cannot access '{fieldRef.Field.Name}' on aggregate type '{aggContaining.Name}'.");
         }
 
-        // this.field → direct variable name → LoadField
+        // this.field → direct variable name → LoadField (struct-typed field copied on value read)
         if (fieldRef.Instance is IInstanceReferenceOperation)
-            return LoadField(fieldRef.Field.Name, GetUdonType(fieldRef.Field.Type));
+            return fieldRef.Field.Type is INamedTypeSymbol thisFieldAgg && EmitContext.IsAggregateType(thisFieldAgg)
+                ? EmitDeepCloneAggregate(LoadField(fieldRef.Field.Name, "SystemObjectArray"), thisFieldAgg)
+                : LoadField(fieldRef.Field.Name, GetUdonType(fieldRef.Field.Type));
         // cross-behaviour field → GetProgramVariable
         if (ExternResolver.IsUdonSharpBehaviour(fieldRef.Field.ContainingType))
         {
