@@ -35,6 +35,7 @@ public abstract class HandlerBase
     protected Stack<List<(CValue val, ITypeSymbol type)>> _usingDisposableStack => _ctx.UsingDisposableStack;
     protected HashSet<string> _delegateFields => _ctx.DelegateFields;
     protected List<EmitDiagnostic> _diagnostics => _ctx.Diagnostics;
+    protected bool IsRecursiveEdge(IMethodSymbol caller, IMethodSymbol callee) => _ctx.IsRecursiveEdge(caller, callee);
 
     // ── Dispatch (recursive descent into other handlers via UasmEmitter facade) ──
     protected void VisitOperation(IOperation op) => _ctx.VisitOperation(op);
@@ -494,6 +495,93 @@ public abstract class HandlerBase
         if (!_methodFunctions.TryGetValue(target, out var func))
             throw new InvalidOperationException($"No CFunction registered for method '{target.Name}'");
         var retType = func.ReturnType ?? "SystemVoid";
+
+        // Recursion-cycle edge: the callee can re-enter the current method and clobber its param/local
+        // slots (Udon's flat heap shares them across frames). Spill the caller's live values onto the
+        // software stack, materialise the call so it is sequenced between spill and reload, then reload.
+        if (IsRecursiveEdge(_currentMethod, target))
+        {
+            _ctx.EnsureRecursionStack();
+            var spill = CollectRecursionSpillVars();
+            EmitRecursionSpill(spill);
+            CValue result;
+            if (retType == "SystemVoid")
+            {
+                EmitExprStmt(InternalCall(func.Name, args, retType));
+                result = null;
+            }
+            else
+            {
+                var t = _ctx.AllocTemp(retType);
+                EmitAssign(t, InternalCall(func.Name, args, retType));
+                result = SlotRef(t);
+            }
+            EmitRecursionReload(spill);
+            return result;
+        }
+
         return InternalCall(func.Name, args, retType);
+    }
+
+    // Live values that must survive a recursive re-entry of the current method: its parameters, the
+    // struct receiver (if any), and all in-scope locals. Over-approximation is safe — an extra
+    // save/restore of a dead variable is inert.
+    List<(string id, string type)> CollectRecursionSpillVars()
+    {
+        var vars = new List<(string, string)>();
+        var seen = new HashSet<string>();
+        void Add(string id)
+        {
+            if (id == null || !seen.Add(id)) return;
+            var t = _ctx.GetFieldType(id);
+            if (t != null) vars.Add((id, t));
+        }
+        if (_currentMethod != null && _methodParamVarIds.TryGetValue(_currentMethod, out var pids))
+            foreach (var pid in pids) Add(pid);
+        Add(_ctx.CurrentStructReceiverParamId);
+        foreach (var b in _localBindings.Values) Add(b.Id);
+        return vars;
+    }
+
+    void EmitRecursionSpill(List<(string id, string type)> vars)
+    {
+        foreach (var (id, type) in vars)
+        {
+            // __recurStack[__recurSp] = v   (boxed into the object[] element)
+            EmitExternVoid("SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid", new List<CValue>
+            {
+                LoadField(EmitContext.RecurStackId, "SystemObjectArray"),
+                LoadField(EmitContext.RecurSpId, "SystemInt32"),
+                LoadField(id, type),
+            });
+            EmitRecurSpDelta(1);
+        }
+    }
+
+    void EmitRecursionReload(List<(string id, string type)> vars)
+    {
+        // Pop in reverse (LIFO).
+        for (int i = vars.Count - 1; i >= 0; i--)
+        {
+            EmitRecurSpDelta(-1);
+            // v = __recurStack[__recurSp]   (boxed value; Udon unboxes transparently on typed use)
+            EmitStoreField(vars[i].id, ExternCall("SystemObjectArray.__Get__SystemInt32__SystemObject", new List<CValue>
+            {
+                LoadField(EmitContext.RecurStackId, "SystemObjectArray"),
+                LoadField(EmitContext.RecurSpId, "SystemInt32"),
+            }, "SystemObject"));
+        }
+    }
+
+    void EmitRecurSpDelta(int delta)
+    {
+        var sig = delta >= 0
+            ? "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+            : "SystemInt32.__op_Subtraction__SystemInt32_SystemInt32__SystemInt32";
+        EmitStoreField(EmitContext.RecurSpId, ExternCall(sig, new List<CValue>
+        {
+            LoadField(EmitContext.RecurSpId, "SystemInt32"),
+            Const(System.Math.Abs(delta), "SystemInt32"),
+        }, "SystemInt32"));
     }
 }

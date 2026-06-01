@@ -686,6 +686,9 @@ public class UasmEmitter
             }
         }
 
+        // Analyze the internal-call graph for recursion cycles (after all methods are registered).
+        BuildRecursionInfo();
+
         // Second pass: emit bodies (skip generic definitions)
         foreach (var method in methods)
         {
@@ -1259,36 +1262,169 @@ public class UasmEmitter
             $"Unsupported expression: {op.Kind} ({op.GetType().Name})");
     }
 
-    bool HasNonTailSelfRecursiveCall(IMethodSymbol method)
-    {
-        var syntaxRef = method.DeclaringSyntaxReferences.FirstOrDefault();
-        if (syntaxRef == null) return false;
-        var syntax = syntaxRef.GetSyntax();
-        var model = _compilation.GetSemanticModel(syntax.SyntaxTree);
-        var bodyOp = model.GetOperation(syntax);
-        return ContainsNonTailSelfCall(bodyOp, method);
-    }
+    // ── Recursion-cycle analysis ──
 
-    static bool ContainsNonTailSelfCall(IOperation op, IMethodSymbol method)
+    // Build the internal-call graph over all registered methods and mark, for each method, the callees
+    // that lie in its strongly-connected component (Tarjan). A call along such an edge can re-enter the
+    // caller, so the caller's live values must be spilled to the software stack around the call (Udon's
+    // flat heap shares param/local slots across frames). Includes direct self-recursion (self-loops).
+    void BuildRecursionInfo()
     {
-        if (op == null) return false;
+        var internalMethods = _methodFunctions.Keys
+            .Select(m => m.OriginalDefinition)
+            .Where(m => m.DeclaringSyntaxReferences.Length > 0)
+            .Distinct(SymbolEqualityComparer.Default)
+            .Cast<IMethodSymbol>()
+            .ToArray();
+        var methodSet = new HashSet<IMethodSymbol>(internalMethods, SymbolEqualityComparer.Default);
 
-        if (op is IReturnOperation ret && ret.ReturnedValue is IInvocationOperation retInv
-            && SymbolEqualityComparer.Default.Equals(retInv.TargetMethod, method))
+        var bodies = new Dictionary<IMethodSymbol, IOperation>(SymbolEqualityComparer.Default);
+        var edges = new Dictionary<IMethodSymbol, HashSet<IMethodSymbol>>(SymbolEqualityComparer.Default);
+        foreach (var m in internalMethods)
         {
-            foreach (var arg in retInv.Arguments)
-                if (ContainsNonTailSelfCall(arg, method))
-                    return true;
-            return false;
+            var callees = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
+            var syntaxRef = m.DeclaringSyntaxReferences.FirstOrDefault();
+            if (syntaxRef != null)
+            {
+                var body = _compilation.GetSemanticModel(syntaxRef.SyntaxTree).GetOperation(syntaxRef.GetSyntax());
+                bodies[m] = body;
+                CollectInternalCallees(body, methodSet, callees);
+            }
+            edges[m] = callees;
         }
 
-        if (op is IInvocationOperation inv
-            && SymbolEqualityComparer.Default.Equals(inv.TargetMethod, method))
-            return true;
+        var recursive = new Dictionary<IMethodSymbol, HashSet<IMethodSymbol>>(SymbolEqualityComparer.Default);
+        foreach (var scc in TarjanScc(internalMethods, edges))
+        {
+            var sccSet = new HashSet<IMethodSymbol>(scc, SymbolEqualityComparer.Default);
+            // Non-trivial SCC (mutual cycle) OR a single method with a self-loop (direct self-recursion).
+            bool isCycle = scc.Count > 1 || (scc.Count == 1 && edges[scc[0]].Contains(scc[0]));
+            if (!isCycle) continue;
+            foreach (var caller in scc)
+            {
+                bodies.TryGetValue(caller, out var callerBody);
+                // Only edges with a NON-tail call need spilling: a tail call (`return Callee(..)`) reads
+                // nothing after the call, so flat-heap clobbering is harmless — and spilling deep tail
+                // recursion would needlessly exhaust the stack.
+                var inScc = new HashSet<IMethodSymbol>(
+                    edges[caller].Where(c => sccSet.Contains(c) && HasNonTailCallTo(callerBody, c)),
+                    SymbolEqualityComparer.Default);
+                if (inScc.Count > 0) recursive[caller] = inScc;
+            }
+        }
+        _ctx.RecursiveCallees = recursive;
+    }
+
+    // True if the caller body contains a call to callee that is NOT in tail position (its result is used
+    // by something after the call, so the caller's live values would be clobbered by a recursive re-entry).
+    static bool HasNonTailCallTo(IOperation op, IMethodSymbol callee)
+    {
+        if (op == null) return false;
+        // `return Callee(args)` — the call itself is tail, but its argument/instance subexpressions are not.
+        if (op is IReturnOperation ret && IsInternalCallTo(ret.ReturnedValue, callee, out var tailInv))
+        {
+            var tailArgs = (tailInv as IInvocationOperation)?.Arguments
+                           ?? (tailInv as IObjectCreationOperation)?.Arguments
+                           ?? System.Collections.Immutable.ImmutableArray<IArgumentOperation>.Empty;
+            foreach (var arg in tailArgs)
+                if (HasNonTailCallTo(arg, callee)) return true;
+            return HasNonTailCallTo((tailInv as IInvocationOperation)?.Instance, callee);
+        }
+        if (IsInternalCallTo(op, callee, out _)) return true; // call not in tail position
         foreach (var child in op.Children)
-            if (ContainsNonTailSelfCall(child, method))
-                return true;
+            if (HasNonTailCallTo(child, callee)) return true;
         return false;
+    }
+
+    static bool IsInternalCallTo(IOperation op, IMethodSymbol callee, out IOperation call)
+    {
+        call = null;
+        IMethodSymbol target = op switch
+        {
+            IInvocationOperation inv => inv.TargetMethod.OriginalDefinition,
+            IObjectCreationOperation oc => oc.Constructor?.OriginalDefinition,
+            _ => null,
+        };
+        if (target != null && SymbolEqualityComparer.Default.Equals(target, callee)) { call = op; return true; }
+        return false;
+    }
+
+    // Collect call targets that resolve to a registered internal method (same program, JUMP-based).
+    static void CollectInternalCallees(IOperation op, HashSet<IMethodSymbol> internalMethods, HashSet<IMethodSymbol> result)
+    {
+        if (op == null) return;
+        if (op is IInvocationOperation inv)
+        {
+            var t = inv.TargetMethod.OriginalDefinition;
+            if (internalMethods.Contains(t)) result.Add(t);
+        }
+        if (op is IObjectCreationOperation oc && oc.Constructor != null)
+        {
+            var c = oc.Constructor.OriginalDefinition;
+            if (internalMethods.Contains(c)) result.Add(c);
+        }
+        var opMethod = (op as IBinaryOperation)?.OperatorMethod ?? (op as IUnaryOperation)?.OperatorMethod;
+        if (opMethod != null && internalMethods.Contains(opMethod.OriginalDefinition))
+            result.Add(opMethod.OriginalDefinition);
+        foreach (var child in op.Children)
+            CollectInternalCallees(child, internalMethods, result);
+    }
+
+    // Tarjan's strongly-connected-components algorithm (iterative, to avoid deep recursion on large graphs).
+    static List<List<IMethodSymbol>> TarjanScc(IMethodSymbol[] nodes, Dictionary<IMethodSymbol, HashSet<IMethodSymbol>> edges)
+    {
+        var index = new Dictionary<IMethodSymbol, int>(SymbolEqualityComparer.Default);
+        var lowlink = new Dictionary<IMethodSymbol, int>(SymbolEqualityComparer.Default);
+        var onStack = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
+        var stack = new Stack<IMethodSymbol>();
+        var sccs = new List<List<IMethodSymbol>>();
+        int counter = 0;
+
+        foreach (var start in nodes)
+        {
+            if (index.ContainsKey(start)) continue;
+            // Iterative DFS: frame = (node, enumerator over its successors)
+            var work = new Stack<(IMethodSymbol node, IEnumerator<IMethodSymbol> succ)>();
+            index[start] = lowlink[start] = counter++;
+            stack.Push(start); onStack.Add(start);
+            work.Push((start, edges[start].GetEnumerator()));
+            while (work.Count > 0)
+            {
+                var (node, succ) = work.Peek();
+                bool descended = false;
+                while (succ.MoveNext())
+                {
+                    var w = succ.Current;
+                    if (!index.ContainsKey(w))
+                    {
+                        index[w] = lowlink[w] = counter++;
+                        stack.Push(w); onStack.Add(w);
+                        work.Push((w, edges[w].GetEnumerator()));
+                        descended = true;
+                        break;
+                    }
+                    if (onStack.Contains(w))
+                        lowlink[node] = Math.Min(lowlink[node], index[w]);
+                }
+                if (descended) continue;
+                // All successors processed: node is done.
+                work.Pop();
+                if (work.Count > 0)
+                {
+                    var parent = work.Peek().node;
+                    lowlink[parent] = Math.Min(lowlink[parent], lowlink[node]);
+                }
+                if (lowlink[node] == index[node])
+                {
+                    var comp = new List<IMethodSymbol>();
+                    IMethodSymbol w;
+                    do { w = stack.Pop(); onStack.Remove(w); comp.Add(w); }
+                    while (!SymbolEqualityComparer.Default.Equals(w, node));
+                    sccs.Add(comp);
+                }
+            }
+        }
+        return sccs;
     }
 
     // ── Static collection helpers ──

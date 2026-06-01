@@ -116,6 +116,19 @@ public class EmitContext
     /// <summary>When emitting a user-struct method/ctor, the receiver object[] param var id; otherwise null.
     /// Makes <c>this</c> / <c>this.field</c> resolve to the receiver array instead of the Behaviour.</summary>
     public string CurrentStructReceiverParamId;
+
+    /// <summary>For each internal method, the set of callees that lie in the same strongly-connected
+    /// component (i.e. calls that can re-enter the caller). Calls along these edges must spill the
+    /// caller's live values to the software stack, because Udon's flat heap shares param/local slots
+    /// across call frames. Populated by <c>UasmEmitter.BuildRecursionInfo</c> before emit.</summary>
+    public Dictionary<IMethodSymbol, HashSet<IMethodSymbol>> RecursiveCallees;
+
+    /// <summary>True when a call from <paramref name="caller"/> to <paramref name="callee"/> is a
+    /// recursion-cycle edge (callee in caller's non-trivial SCC, including direct self-recursion).</summary>
+    public bool IsRecursiveEdge(IMethodSymbol caller, IMethodSymbol callee)
+        => caller != null && callee != null && RecursiveCallees != null
+           && RecursiveCallees.TryGetValue(caller, out var callees)
+           && callees.Contains(callee.OriginalDefinition);
     public int NextMethodIndex;
     public readonly List<(IMethodSymbol symbol, CFunction func)> PendingLocalFunctions = new();
     public readonly Dictionary<ILocalSymbol, IMethodSymbol> DelegateVarMap = new(SymbolEqualityComparer.Default);
@@ -380,6 +393,28 @@ public class EmitContext
         Module.Fields.Add(new FieldDecl(id, "SystemObjectArray") { DefaultValue = values });
         _declaredFieldNames.Add(id);
         return id;
+    }
+
+    // ── Software recursion stack ──
+    // Udon's flat heap shares param/local slots across call frames, so recursion-cycle calls must spill
+    // the caller's live values to a heap-backed LIFO stack (boxed object[]) and reload after the call.
+
+    public const string RecurStackId = "__recurStack";
+    public const string RecurSpId = "__recurSp";
+    /// <summary>Max boxed values held across all live recursion frames (depth × live-vars-per-frame).</summary>
+    public const int RecurStackSize = 512;
+    bool _recurStackDeclared;
+
+    /// <summary>Idempotently declare the per-program recursion stack (object[] backing + int stack pointer).
+    /// Heap default allocates the backing array and zeroes the pointer; LIFO spill/reload keeps it balanced.</summary>
+    public void EnsureRecursionStack()
+    {
+        if (_recurStackDeclared) return;
+        _recurStackDeclared = true;
+        Module.Fields.Add(new FieldDecl(RecurStackId, "SystemObjectArray") { DefaultValue = new object[RecurStackSize] });
+        _declaredFieldNames.Add(RecurStackId);
+        Module.Fields.Add(new FieldDecl(RecurSpId, "SystemInt32") { DefaultValue = 0 });
+        _declaredFieldNames.Add(RecurSpId);
     }
 
     /// <summary>Get or create a lookup array for int→enum runtime conversions. Cached per enum type.</summary>

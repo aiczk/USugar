@@ -604,21 +604,7 @@ public partial class InvocationHandler
         var idx = _methodSlots[target].Index;
         var paramIds = _methodParamVarIds[target];
 
-        // Self-recursive call: save current parameter values before overwriting
-        bool isSelfRecursive = _currentMethod != null
-            && SymbolEqualityComparer.Default.Equals(target, _currentMethod);
-        int[] savedParamSlots = null;
-        if (isSelfRecursive && paramIds.Length > 0)
-        {
-            savedParamSlots = new int[paramIds.Length];
-            for (int i = 0; i < paramIds.Length; i++)
-            {
-                var paramType = _ctx.GetFieldType(paramIds[i]);
-                var savedSlot = _ctx.AllocTemp(paramType);
-                EmitAssign(savedSlot, LoadField(paramIds[i], paramType));
-                savedParamSlots[i] = savedSlot;
-            }
-        }
+        // Recursion is handled centrally in EmitCallToMethod (software-stack spill/reload around the call).
 
         // Build args list
         var args = new List<CValue>();
@@ -643,16 +629,6 @@ public partial class InvocationHandler
         }
 
         var result = EmitCallToMethod(target, args);
-
-        // Self-recursive call: restore parameter values after return
-        if (isSelfRecursive && savedParamSlots != null)
-        {
-            for (int i = 0; i < paramIds.Length; i++)
-            {
-                var paramType = _ctx.GetFieldType(paramIds[i]);
-                EmitStoreField(paramIds[i], SlotRef(savedParamSlots[i]));
-            }
-        }
 
         // Copy-out for ref/out params
         for (int i = 0; i < op.Arguments.Length; i++)
