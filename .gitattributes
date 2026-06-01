@@ -1,0 +1,3 @@
+# Golden UASM snapshots are byte-compared against LF compiler output; force LF on
+# checkout regardless of core.autocrlf so the snapshot oracle is portable across machines/CI.
+*.uasm text eol=lf

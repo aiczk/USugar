@@ -33,7 +33,7 @@ public class GoldenSnapshotTests
         Assert.True(uasm1 == uasm2,
             $"Nondeterministic UASM for '{name}': two compiles differ. Fix determinism before snapshotting.");
 
-        var canon = UasmCanonicalizer.Canonicalize(uasm1);
+        var canon = Lf(UasmCanonicalizer.Canonicalize(uasm1));
         var path = Path.Combine(TestPaths.SnapshotDir, name + ".uasm");
 
         if (UpdateMode)
@@ -45,6 +45,10 @@ public class GoldenSnapshotTests
 
         Assert.True(File.Exists(path),
             $"Missing baseline '{path}'. Run with UPDATE_SNAPSHOTS=1 to capture.");
-        Assert.Equal(File.ReadAllText(path), canon);
+        // Normalize line endings on read too: core.autocrlf=true can check baselines out as
+        // CRLF on other machines, but the compiler emits LF — compare on a common LF footing.
+        Assert.Equal(Lf(File.ReadAllText(path)), canon);
     }
+
+    static string Lf(string s) => s.Replace("\r\n", "\n").Replace("\r", "\n");
 }
