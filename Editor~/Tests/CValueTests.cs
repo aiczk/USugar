@@ -5,13 +5,15 @@ namespace USugar.Tests;
 
 /// <summary>
 /// Phase 1 of the Core IR migration: proves the unified CValue vocabulary losslessly
-/// represents every HIR leaf expression and every LIR operand (field-for-field round-trip).
+/// represents every HIR expression and every LIR operand/call (field-for-field round-trip).
 /// This is the empirical sufficiency proof that lets handlers later emit CValue directly.
 /// CValue is additive here — the live HIR→LIR→UASM pipeline is unchanged, so the snapshot
 /// oracle stays byte-identical.
 /// </summary>
 public class CValueTests
 {
+    // ── leaves ──
+
     [Fact]
     public void HConst_RoundTrip_PreservesFields()
     {
@@ -95,16 +97,83 @@ public class CValueTests
     }
 
     [Fact]
-    public void FromHExpr_CompoundExpression_Throws()
-    {
-        var call = new HExternCall("Sig", new List<HExpr>(), "SystemVoid");
-        Assert.ThrowsAny<System.Exception>(() => CValueBridge.FromHExpr(call));
-    }
-
-    [Fact]
     public void ToLOperand_LoadFieldRef_Throws_NoLirOperandForm()
     {
         var load = new CFieldRef("x", "SystemInt32", CFieldMode.Load);
         Assert.ThrowsAny<System.Exception>(() => CValueBridge.ToLOperand(load));
+    }
+
+    // ── value-producing call ops (increment 2) ──
+
+    [Fact]
+    public void HExternCall_NestedArgs_RoundTrips()
+    {
+        var inner = new HExternCall("Inner.__op__SystemInt32__SystemInt32",
+            new List<HExpr> { new HConst(1, "SystemInt32") }, "SystemInt32");
+        var outer = new HExternCall("Outer.__op__SystemInt32_SystemInt32__SystemBoolean",
+            new List<HExpr> { inner, new HSlotRef(2, "SystemInt32") }, "SystemBoolean");
+        var r = (HExternCall)CValueBridge.ToHExpr(CValueBridge.FromHExpr(outer));
+        Assert.Equal(outer.Sig, r.Sig);
+        Assert.Equal(outer.Type, r.Type);
+        Assert.Equal(2, r.Args.Count);
+        Assert.Equal("Inner.__op__SystemInt32__SystemInt32", ((HExternCall)r.Args[0]).Sig);
+        Assert.Equal(2, ((HSlotRef)r.Args[1]).SlotId);
+    }
+
+    [Fact]
+    public void HInternalCall_RoundTrips()
+    {
+        var o = new HInternalCall("Square", new List<HExpr> { new HSlotRef(0, "SystemInt32") }, "SystemInt32");
+        var r = (HInternalCall)CValueBridge.ToHExpr(CValueBridge.FromHExpr(o));
+        Assert.Equal(o.FuncName, r.FuncName);
+        Assert.Equal(o.Type, r.Type);
+        Assert.Single(r.Args);
+    }
+
+    [Fact]
+    public void LCallExtern_WithDestSlot_RoundTrips()
+    {
+        var call = new LCallExtern(5, "Sig.__m__SystemInt32_SystemInt32__SystemInt32",
+            new List<LOperand> { new LConst(3, "SystemInt32"), new LSlotRef(1, "SystemInt32") }, "SystemInt32");
+        var r = (LCallExtern)CValueBridge.ToLCall(CValueBridge.FromLCall(call));
+        Assert.Equal(call.DestSlot, r.DestSlot);
+        Assert.Equal(call.Sig, r.Sig);
+        Assert.Equal(call.RetType, r.RetType);
+        Assert.Equal(2, r.Args.Count);
+        Assert.Equal(3, ((LConst)r.Args[0]).Value);
+    }
+
+    [Fact]
+    public void LCallInternal_VoidNoDest_RoundTrips()
+    {
+        var call = new LCallInternal(null, "DoThing", new List<LOperand>(), "SystemVoid");
+        var r = (LCallInternal)CValueBridge.ToLCall(CValueBridge.FromLCall(call));
+        Assert.Null(r.DestSlot);
+        Assert.Equal(call.FuncName, r.FuncName);
+        Assert.Equal(call.RetType, r.RetType);
+    }
+
+    [Fact]
+    public void Call_DestSlot_DistinguishesFlatFromTreeRole()
+    {
+        // flat role (from LIR): DestSlot set
+        var fromLir = (CExternCall)CValueBridge.FromLCall(
+            new LCallExtern(7, "S", new List<LOperand>(), "SystemInt32"));
+        Assert.Equal(7, fromLir.DestSlot);
+        // tree role (from HIR): DestSlot null
+        var fromHir = (CExternCall)CValueBridge.FromHExpr(
+            new HExternCall("S", new List<HExpr>(), "SystemInt32"));
+        Assert.Null(fromHir.DestSlot);
+    }
+
+    [Fact]
+    public void ToLCall_NestedCallArg_Throws_FlatRoleRequiresLeafArgs()
+    {
+        // A tree-role extern call whose arg is itself a call cannot become a flat LIR call:
+        // flat operands must be leaves (that materialization is HirToLir/Flatten's job).
+        var tree = new CExternCall("Outer",
+            new List<CValue> { new CExternCall("Inner", new List<CValue>(), "SystemInt32") },
+            "SystemInt32");
+        Assert.ThrowsAny<System.Exception>(() => CValueBridge.ToLCall(tree));
     }
 }
