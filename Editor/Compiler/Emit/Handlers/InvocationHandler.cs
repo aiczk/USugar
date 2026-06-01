@@ -157,13 +157,7 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
     // so `this`-field mutations reflect back to the caller's local (value-type by-ref `this` semantics).
     CValue EmitStructInstanceCall(IInvocationOperation op, IMethodSymbol target)
     {
-        // Direct self-recursion: receiver + flat-heap params are shared across frames → corruption.
-        if (_currentMethod != null
-            && SymbolEqualityComparer.Default.Equals(target, _currentMethod.OriginalDefinition))
-            throw new System.NotSupportedException(
-                $"Recursive struct method '{target.Name}' is not supported. " +
-                "Udon VM's flat heap shares the receiver and parameter variables across call frames.");
-
+        // Recursion (including the receiver) is handled by EmitCallToMethod's software-stack spill/reload.
         var args = new List<CValue> { LoadInstanceRaw(op.Instance) };
         for (var i = 0; i < op.Arguments.Length; i++)
             args.Add(VisitExpression(op.Arguments[i].Value));
