@@ -58,8 +58,12 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
         return resultVal;
     }
 
+    // char promotes to int for arithmetic just like byte/short: Udon has no SystemChar +/-
+    // operator returning char (its op_Addition returns SystemInt32), so we promote to int,
+    // operate, then narrow back via SystemConvert.ToChar. Excluding char emitted a non-existent
+    // SystemChar.__op_Addition__SystemChar_SystemChar__SystemChar (caught only at runtime).
     static bool IsSmallInteger(string udonType)
-        => udonType is "SystemByte" or "SystemSByte" or "SystemInt16" or "SystemUInt16";
+        => udonType is "SystemByte" or "SystemSByte" or "SystemInt16" or "SystemUInt16" or "SystemChar";
 
     CValue PromoteToInt32(CValue value, string srcUdonType)
         => ExternCall($"SystemConvert.__ToInt32__{srcUdonType}__SystemInt32",

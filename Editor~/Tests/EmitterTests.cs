@@ -5557,6 +5557,24 @@ public class TupleNeqTest : UdonSharpBehaviour {
     }
 
     [Fact]
+    public void CharIncrement_PromotesToInt_NotNonexistentCharExtern()
+    {
+        // Regression: char++ used to emit SystemChar.__op_Addition__SystemChar_SystemChar__SystemChar
+        // (no such Udon extern; only ...__SystemInt32 exists) — caught only at runtime. char must
+        // promote to int like the other small integers, operate, and narrow back via ToChar.
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+[UdonBehaviourSyncMode(BehaviourSyncMode.None)]
+public class CharIncTest : UdonSharpBehaviour {
+    char _c;
+    void Start() { _c = 'A'; _c++; }
+}");
+        Assert.DoesNotContain("SystemChar.__op_Addition", uasm);
+        Assert.Contains("SystemConvert.__ToInt32__SystemChar__SystemInt32", uasm);
+        Assert.Contains("SystemConvert.__ToChar__SystemInt32__SystemChar", uasm);
+    }
+
+    [Fact]
     public void TupleEquality_NestedTuple_ThrowsNotSupported()
     {
         var ex = Assert.ThrowsAny<System.Exception>(() => TestHelper.CompileToUasm(@"
