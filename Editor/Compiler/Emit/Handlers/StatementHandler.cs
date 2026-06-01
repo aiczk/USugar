@@ -368,31 +368,27 @@ public class StatementHandler : HandlerBase, IOperationHandler
         }
         else if (value is IDefaultValueOperation)
         {
-            // default(T): initialize each element to its type's default value.
-            // object[] elements are null by default, but value-type fields need 0/false/etc.
-            for (int i = 0; i < layout.Count; i++)
+            DefaultInitAggregate(localId, layout);
+        }
+        else if (value is IObjectCreationOperation oc && oc.Arguments.Length == 0)
+        {
+            // new V() / new V { field = ... }: the array is already allocated above; value-type
+            // fields need 0/false/etc., then apply any object-initializer assignments. (A parameterless
+            // struct ctor's VisitObjectCreation returns a null placeholder, so handle creation here.)
+            DefaultInitAggregate(localId, layout);
+            if (oc.Initializer != null)
             {
-                var fieldType = layout.Fields[i].Type;
-                object defVal = fieldType.SpecialType switch
+                foreach (var member in oc.Initializer.Initializers)
                 {
-                    SpecialType.System_Boolean => (object)false,
-                    SpecialType.System_Int32 => (object)0,
-                    SpecialType.System_Single => (object)0f,
-                    SpecialType.System_Double => (object)0d,
-                    SpecialType.System_Int64 => (object)0L,
-                    SpecialType.System_Byte => (object)(byte)0,
-                    SpecialType.System_UInt32 => (object)0u,
-                    SpecialType.System_UInt64 => (object)0UL,
-                    SpecialType.System_Int16 => (object)(short)0,
-                    SpecialType.System_UInt16 => (object)(ushort)0,
-                    SpecialType.System_Char => (object)'\0',
-                    SpecialType.System_SByte => (object)(sbyte)0,
-                    _ => null, // reference types default to null
-                };
-                if (defVal != null)
-                    EmitExternVoid("SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid",
-                        new List<CValue> { LoadField(localId, "SystemObjectArray"), Const(i, "SystemInt32"),
-                            Const(defVal, GetUdonType(fieldType)) });
+                    if (member is ISimpleAssignmentOperation sa
+                        && sa.Target is IFieldReferenceOperation fr
+                        && layout.TryGetIndex(fr.Field, out var idx))
+                    {
+                        EmitExternVoid("SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid",
+                            new List<CValue> { LoadField(localId, "SystemObjectArray"),
+                                Const(idx, "SystemInt32"), VisitExpression(sa.Value) });
+                    }
+                }
             }
         }
         else
@@ -401,6 +397,36 @@ public class StatementHandler : HandlerBase, IOperationHandler
             // VisitExpression clones aggregate locals/params automatically (Clone-on-read).
             var srcVal = VisitExpression(init.Value);
             EmitStoreField(localId, srcVal);
+        }
+    }
+
+    /// <summary>Set each value-type element of an object[]-emulated aggregate to its type default
+    /// (object[] slots are null by default, but struct value fields must be 0/false/etc.).</summary>
+    void DefaultInitAggregate(string localId, AggregateLayout layout)
+    {
+        for (int i = 0; i < layout.Count; i++)
+        {
+            var fieldType = layout.Fields[i].Type;
+            object defVal = fieldType.SpecialType switch
+            {
+                SpecialType.System_Boolean => (object)false,
+                SpecialType.System_Int32 => (object)0,
+                SpecialType.System_Single => (object)0f,
+                SpecialType.System_Double => (object)0d,
+                SpecialType.System_Int64 => (object)0L,
+                SpecialType.System_Byte => (object)(byte)0,
+                SpecialType.System_UInt32 => (object)0u,
+                SpecialType.System_UInt64 => (object)0UL,
+                SpecialType.System_Int16 => (object)(short)0,
+                SpecialType.System_UInt16 => (object)(ushort)0,
+                SpecialType.System_Char => (object)'\0',
+                SpecialType.System_SByte => (object)(sbyte)0,
+                _ => null, // reference types default to null
+            };
+            if (defVal != null)
+                EmitExternVoid("SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid",
+                    new List<CValue> { LoadField(localId, "SystemObjectArray"), Const(i, "SystemInt32"),
+                        Const(defVal, GetUdonType(fieldType)) });
         }
     }
 

@@ -37,27 +37,44 @@ public class AggregateLayout
 
     public static AggregateLayout Build(INamedTypeSymbol type)
     {
-        if (!type.IsTupleType)
-            throw new InvalidOperationException(
-                $"AggregateLayout.Build called on non-tuple type '{type.Name}'");
-
         var fields = new List<FieldInfo>();
         var nameToIndex = new Dictionary<string, int>();
 
-        var elements = type.TupleElements;
-        for (int i = 0; i < elements.Length; i++)
+        if (type.IsTupleType)
         {
-            var name = elements[i].Name;
-            fields.Add(new FieldInfo(name, i, elements[i].Type));
-            nameToIndex[name] = i;
-            var itemName = $"Item{i + 1}";
-            if (name != itemName) nameToIndex[itemName] = i;
-            // Also map CorrespondingTupleField name if different
-            if (elements[i].CorrespondingTupleField != null)
+            var elements = type.TupleElements;
+            for (int i = 0; i < elements.Length; i++)
             {
-                var corrName = elements[i].CorrespondingTupleField.Name;
-                if (!nameToIndex.ContainsKey(corrName)) nameToIndex[corrName] = i;
+                var name = elements[i].Name;
+                fields.Add(new FieldInfo(name, i, elements[i].Type));
+                nameToIndex[name] = i;
+                var itemName = $"Item{i + 1}";
+                if (name != itemName) nameToIndex[itemName] = i;
+                if (elements[i].CorrespondingTupleField != null)
+                {
+                    var corrName = elements[i].CorrespondingTupleField.Name;
+                    if (!nameToIndex.ContainsKey(corrName)) nameToIndex[corrName] = i;
+                }
             }
+        }
+        else if (type.TypeKind == TypeKind.Struct)
+        {
+            // User struct → instance fields mapped to indices in declaration order.
+            int i = 0;
+            foreach (var member in type.GetMembers())
+            {
+                if (member is IFieldSymbol { IsStatic: false, IsConst: false, IsImplicitlyDeclared: false } f)
+                {
+                    fields.Add(new FieldInfo(f.Name, i, f.Type));
+                    nameToIndex[f.Name] = i;
+                    i++;
+                }
+            }
+        }
+        else
+        {
+            throw new InvalidOperationException(
+                $"AggregateLayout.Build called on non-aggregate type '{type.Name}'");
         }
 
         return new AggregateLayout(fields.AsReadOnly(), nameToIndex);
@@ -157,11 +174,32 @@ public class EmitContext
         }
     }
 
-    // Aggregate type support
+    // Aggregate type support — tuples and user-defined structs share the object[] emulation.
     public static bool IsAggregateType(ITypeSymbol type)
     {
-        if (type == null) return false;
-        return type.IsTupleType;
+        if (type is not INamedTypeSymbol named) return false;
+        return named.IsTupleType || IsUserStruct(named);
+    }
+
+    /// <summary>Source-defined value struct (object[]-emulated). Excludes SDK/native structs
+    /// (Vector3, Color, …) — which have native Udon extern types — by namespace, since in the test
+    /// environment SDK types are source stubs (so syntax-refs alone can't tell them apart).</summary>
+    public static bool IsUserStruct(INamedTypeSymbol type)
+    {
+        if (type.TypeKind != TypeKind.Struct || type.SpecialType != SpecialType.None) return false;
+        if (type.DeclaringSyntaxReferences.Length == 0) return false; // from a referenced assembly = native
+        return !IsSdkNamespace(type.ContainingNamespace);
+    }
+
+    static bool IsSdkNamespace(INamespaceSymbol ns)
+    {
+        for (var n = ns; n != null && !n.IsGlobalNamespace; n = n.ContainingNamespace)
+        {
+            if (n.Name is "System" or "UnityEngine" or "VRC" or "Cinemachine"
+                or "TMPro" or "Unity" or "Microsoft")
+                return true;
+        }
+        return false;
     }
 
     readonly Dictionary<ITypeSymbol, AggregateLayout> _aggregateLayoutCache = new(SymbolEqualityComparer.Default);

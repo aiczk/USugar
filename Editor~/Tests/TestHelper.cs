@@ -357,6 +357,19 @@ namespace TestStubs
         public void TakeDamage(int amount) { _hp = _hp - amount; }
         public int GetHp() { return _hp; }
     }
+    public struct MyVec3
+    {
+        public float x;
+        public float y;
+        public float z;
+        public MyVec3(float x, float y, float z) { this.x = x; this.y = y; this.z = z; }
+    }
+    public struct MyColor
+    {
+        public float r;
+        public float g;
+        public float b;
+    }
 }
 ";
 

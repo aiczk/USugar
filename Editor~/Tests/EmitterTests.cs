@@ -826,7 +826,7 @@ public class XorTest : UdonSharpBehaviour {
 
     // ── Parameterless struct ctor ──
 
-    [Fact(Skip = "User-defined struct deferred")]
+    [Fact]
     public void ParameterlessStructCtor_DefaultInit_NoExtern()
     {
         var uasm = TestHelper.CompileToUasm(@"
@@ -2016,7 +2016,7 @@ public class Caller : UdonSharpBehaviour {
         Assert.Contains("__0___0_IsSupported__ret", stringConsts);
     }
 
-    [Fact(Skip = "User-defined struct deferred")]
+    [Fact(Skip = "parameterized struct ctor deferred")]
     public void StructFieldAccess_ViaLocal_EmitsGetterExtern()
     {
         var uasm = TestHelper.CompileToUasm(@"
@@ -3988,7 +3988,7 @@ public class ObjInitCtorTest : UdonSharpBehaviour
         Assert.Contains("__set_a", uasm);
     }
 
-    [Fact(Skip = "User-defined struct deferred")]
+    [Fact]
     public void ObjectInitializer_NoCtorArgs_EmitsDefaultThenSetter()
     {
         // new MyColor { r = 1f } — parameterless user-defined struct with initializer
@@ -5477,7 +5477,7 @@ public class AggRetTest : UdonSharpBehaviour {
         Assert.DoesNotContain("__1_GetPair__ret", uasm);
     }
 
-    [Fact(Skip = "User-defined struct deferred")]
+    [Fact]
     public void Struct_FieldAccess_EmitsObjectArrayGet()
     {
         // User-defined struct field read via local goes through object[] __Get__
@@ -5496,7 +5496,7 @@ public class StructAccessTest : UdonSharpBehaviour {
         Assert.Contains("SystemObjectArray.__ctor__", uasm);
     }
 
-    [Fact(Skip = "User-defined struct deferred")]
+    [Fact]
     public void Struct_DefaultValue_EmitsObjectArrayCtor()
     {
         // Default user-defined struct value creates an object[] via __ctor__

@@ -1649,7 +1649,7 @@ public class TupleExprRetTest : UdonSharpBehaviour {
         Assert.DoesNotContain("ValueTuple", uasm);
     }
 
-    [Fact(Skip = "User-defined struct deferred")]
+    [Fact]
     public void Struct_ObjectInitializerAndFieldAccess_Compiles()
     {
         // Verify user-defined struct with object initializer and field read compiles via object[]
