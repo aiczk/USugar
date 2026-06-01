@@ -18,11 +18,14 @@ public partial class InvocationHandler
 
         // Nullable<T> (boxed-object emulation): HasValue → null check; Value → the boxed value itself
         // (Udon unboxes transparently when the result is used as the underlying type).
-        if (op.Instance != null && EmitContext.IsNullableT(op.Property.ContainingType, out _))
+        if (op.Instance != null && EmitContext.IsNullableT(op.Property.ContainingType, out var nblUnder))
         {
             var nv = VisitExpression(op.Instance);
             if (op.Property.Name == "HasValue") return EmitNullableHasValue(nv);
-            if (op.Property.Name == "Value") return nv;
+            // Value of a nullable AGGREGATE (e.g. (int,int)? / V?) copies the struct out (value semantics).
+            if (op.Property.Name == "Value")
+                return nblUnder is INamedTypeSymbol nblAgg && EmitContext.IsAggregateType(nblAgg)
+                    ? EmitDeepCloneAggregate(nv, nblAgg) : nv;
         }
 
         // Auto-property on an aggregate (struct/tuple) → object[] element (the backing field's slot).
@@ -30,8 +33,11 @@ public partial class InvocationHandler
             && _ctx.GetAggregateLayout(aggProp).TryGetIndex(op.Property.Name, out var aggPropIdx))
         {
             var arrExpr = LoadInstanceRaw(op.Instance);
-            return ExternCall("SystemObjectArray.__Get__SystemInt32__SystemObject",
+            var getVal = ExternCall("SystemObjectArray.__Get__SystemInt32__SystemObject",
                 new List<CValue> { arrExpr, Const(aggPropIdx, "SystemInt32") }, "SystemObject");
+            // A struct-typed property returns a COPY (C# getters return by value; you cannot mutate through it).
+            return op.Property.Type is INamedTypeSymbol propAgg && EmitContext.IsAggregateType(propAgg)
+                ? EmitDeepCloneAggregate(getVal, propAgg) : getVal;
         }
 
         // this.gameObject / this.transform → __this_* variable (Udon VM resolves via "this" default)
