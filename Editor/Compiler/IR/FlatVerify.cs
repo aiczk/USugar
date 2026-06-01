@@ -2,9 +2,9 @@ using System;
 using System.Collections.Generic;
 
 // ============================================================================
-// FlatVerify — post-condition verifier for a flattened Core function (Phase 2 of
-// "Core IR by absorption"). Re-arms, as a checked invariant, the compile-time guarantee that
-// LIR's LOperand gave for free (operands cannot nest calls), which the unified CValue gives up.
+// FlatVerify — post-condition verifier for a flattened Core function. Re-arms, as a checked
+// invariant, the guarantee that a separate flat-operand type would give for free (operands cannot
+// nest calls) but which the unified CValue gives up.
 // Asserts: (1) every block has exactly one terminator; (2) terminator targets exist;
 // (3) flat-block instruction operands are leaves (no nested calls); (4) CFieldRef(Load) never
 // appears as a flat operand (must be materialized via CLoadField); (5) CFieldRef(Addr) appears

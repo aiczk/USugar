@@ -2,13 +2,11 @@ using System;
 using System.Collections.Generic;
 
 // ============================================================================
-// Core IR value vocabulary (Phase 1 of "Core IR by absorption").
-// One value representation that both HIR expressions and LIR operands/calls map to
-// field-for-field. Leaves (CSlotRef/CConst/CFieldRef/CFuncRef) are operand-level; the
-// value-producing ops (CExternCall/CInternalCall) may nest in args (tree role, DestSlot
-// null) or write a scratch slot (flat role, DestSlot set). See
-// docs/superpowers/specs/2026-06-01-core-ir-by-absorption-design.md §3.1.
-// Global namespace + plain sealed classes / readonly fields, matching HirTypes/LirTypes
+// Core IR value vocabulary. One value representation spanning tree-role (nested) and flat-role
+// (leaf) operands. Leaves (CSlotRef/CConst/CFieldRef/CFuncRef) are operand-level; the value-
+// producing ops (CExternCall/CInternalCall) may nest in args (tree role, DestSlot null) or write a
+// scratch slot (flat role, DestSlot set).
+// Global namespace + plain sealed classes / readonly fields
 // (must stay C# 9.0-compatible: Unity compiles Editor/ at C# 9.0 LCD).
 // ============================================================================
 
@@ -19,7 +17,7 @@ public abstract class CValue
     protected CValue(string type) => Type = type ?? throw new ArgumentNullException(nameof(type));
 }
 
-/// <summary>Reference to a virtual slot. [= HSlotRef + LSlotRef]</summary>
+/// <summary>Reference to a virtual slot.</summary>
 public sealed class CSlotRef : CValue
 {
     public readonly int SlotId;
@@ -27,7 +25,7 @@ public sealed class CSlotRef : CValue
     public override string ToString() => $"slot{SlotId}:{Type}";
 }
 
-/// <summary>Compile-time constant value. [= HConst + LConst]</summary>
+/// <summary>Compile-time constant value.</summary>
 public sealed class CConst : CValue
 {
     public readonly object Value; // null for default/null literal
@@ -45,7 +43,7 @@ public enum CFieldMode
 }
 
 /// <summary>Field reference, unifying value-load and address-ref forms via <see cref="Mode"/>.
-/// [= HLoadField/HFieldAddr + LFieldRef/LLoadField]</summary>
+///</summary>
 public sealed class CFieldRef : CValue
 {
     public readonly string FieldName;
@@ -61,7 +59,7 @@ public sealed class CFieldRef : CValue
         => $"{(Mode == CFieldMode.Addr ? "addr" : "load")} [{FieldName}]:{Type}";
 }
 
-/// <summary>Reference to a function entry point (delegate / JUMP_INDIRECT). [= HFuncRef + LFuncRef]</summary>
+/// <summary>Reference to a function entry point (delegate / JUMP_INDIRECT).</summary>
 public sealed class CFuncRef : CValue
 {
     public readonly string FuncName;
@@ -72,7 +70,7 @@ public sealed class CFuncRef : CValue
 
 /// <summary>Call an extern (Udon VM native) function. Value-producing op: may nest in args
 /// (tree role, DestSlot null) or write a scratch slot (flat role, DestSlot set).
-/// [= HExternCall + LCallExtern]</summary>
+///</summary>
 public sealed class CExternCall : CValue
 {
     public readonly string Sig;
@@ -93,7 +91,7 @@ public sealed class CExternCall : CValue
     }
 }
 
-/// <summary>Call an internal (user-defined) function. [= HInternalCall + LCallInternal]</summary>
+/// <summary>Call an internal (user-defined) function.</summary>
 public sealed class CInternalCall : CValue
 {
     public readonly string FuncName;
@@ -115,7 +113,7 @@ public sealed class CInternalCall : CValue
 }
 
 /// <summary>Ternary select: cond ? trueVal : falseVal. Structured-only Core node — has no flat
-/// operand form; it is expanded to branch blocks in CoreFlatten. [= HSelect]</summary>
+/// operand form; it is expanded to branch blocks in CoreFlatten.</summary>
 public sealed class CSelect : CValue
 {
     public readonly CValue Cond;
@@ -134,7 +132,7 @@ public sealed class CSelect : CValue
 
 /// <summary>Cross-behaviour call (SetProgramVariable* + SendCustomEvent + GetProgramVariable*).
 /// Stays opaque/atomic until expanded in CoreFlatten — never exposed to structured optimizers.
-/// [= HCrossBehaviourCall]</summary>
+///</summary>
 public sealed class CCrossCall : CValue
 {
     public readonly CValue Instance;

@@ -3,8 +3,8 @@ using System.Collections.Generic;
 using System.Linq;
 
 /// <summary>
-/// LIR-level CFG simplification.
-/// Since LIR has no Phi nodes, jump threading, block merging, and dead block
+/// Flat Core IR CFG simplification.
+/// Since the flat Core IR has no Phi nodes, jump threading, block merging, and dead block
 /// removal are purely mechanical — just update terminator target IDs.
 /// </summary>
 public static class CoreFlatOptimizer
@@ -539,7 +539,7 @@ public static class CoreFlatOptimizer
         }
 
         // Note: We do NOT remove coalesced slots from func.Slots because
-        // LirToUasm indexes into Slots by slot ID (positional). The coalesced-away
+        // CoreToUasm indexes into Slots by slot ID (positional). The coalesced-away
         // slots simply won't be referenced by any instruction and GetSlotVar will
         // never be called for them, so no UASM variable will be emitted.
     }

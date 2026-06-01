@@ -3,11 +3,9 @@ using System.Collections.Generic;
 using System.Globalization;
 
 // ============================================================================
-// CoreBuilder — the Core IR construction API. A 1:1 mirror of HirBuilder that builds the
-// unified CModule/CFunction/CStmt/CValue instead of HIR. This is the builder that emit handlers
-// will target in Phase 3 (replacing HirBuilder); same method surface, so handler call sites move
-// across by retyping HExpr->CValue / HStmt->CStmt. Manages current function, insertion point
-// (statement-list stack), slot allocation, and constant deduplication — identically to HirBuilder.
+// CoreBuilder — the Core IR construction API targeted by the emit handlers. Builds the structured
+// CModule/CFunction/CStmt/CValue tree and manages the current function, the insertion point
+// (statement-list stack), slot allocation, and constant deduplication.
 // ============================================================================
 
 public sealed class CoreBuilder

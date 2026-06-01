@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 
 /// <summary>
-/// HIR constant folding optimizer.
+/// Structured Core IR constant-folding optimizer.
 /// Replaces pure extern calls on constant arguments with computed constant results,
 /// and simplifies CSelect with constant boolean conditions.
 /// </summary>

@@ -2,12 +2,10 @@ using System;
 using System.Collections.Generic;
 
 // ============================================================================
-// CoreFlatten — the one structured->flat transform of the unified Core IR (Phase 2 of
-// "Core IR by absorption"). A line-for-line port of HirToLir operating on CNode/CValue,
-// producing flat CBlocks (Terminator + Id) and appending scratch slots in the SAME order
-// as HirToLir. Mutates the CFunction in place: sets FlatBlocks, appends scratch to Slots, sets
-// Shape=Flat. Semantics (CondBlock re-eval, select dual-arm, cross-call expansion) are preserved
-// verbatim — no lowering is moved relative to HirToLir.
+// CoreFlatten — the one structured->flat transform of the Core IR. Lowers the structured CStmt tree
+// into flat CBlocks (each with a Terminator and Id), allocating scratch slots, and mutates the
+// CFunction in place: sets FlatBlocks, appends scratch to Slots, and sets Shape=Flat. Control-flow
+// semantics (CondBlock re-evaluation, select dual-arm, cross-call expansion) are realized here.
 // ============================================================================
 
 public static class CoreFlatten

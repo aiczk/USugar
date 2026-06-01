@@ -3,9 +3,9 @@ using System.Collections.Generic;
 
 // ============================================================================
 // Core IR statement vocabulary (structured form) + flat-block form + Shape invariant.
-// Phase 2 of "Core IR by absorption". Structured statements mirror HStmt 1:1 over CValue;
-// the flat role (CBlock.Terminator + Id, CTerminator) mirrors LIR and is populated by
-// CoreFlatten. The Shape enum makes the no-Phi structured-vs-flat boundary machine-checkable.
+// Structured statements are the authored form over CValue; the flat role (CBlock.Terminator + Id,
+// CTerminator) is the lowered form populated by CoreFlatten. The Shape enum makes the no-Phi
+// structured-vs-flat boundary machine-checkable.
 // Global namespace, C# 9.0-compatible (Unity compiles Editor/ at C# 9.0 LCD).
 // ============================================================================
 
@@ -13,7 +13,7 @@ using System.Collections.Generic;
 /// Flatten is the one one-way gate that sets Flat; every pass asserts its required Shape.</summary>
 public enum Shape { Structured, Flat }
 
-// ── Structured statements (12 kinds, mirror HStmt) ──
+// ── Structured statements (12 kinds) ──
 
 /// <summary>Base for Core IR structured statements.</summary>
 public abstract class CStmt { }
@@ -31,7 +31,7 @@ public sealed class CBlock : CStmt
     public CBlock(List<CStmt> stmts) => Stmts = stmts ?? new List<CStmt>();
 }
 
-/// <summary>Assign value to a slot: slot = value. [= HAssign]</summary>
+/// <summary>Assign value to a slot: slot = value.</summary>
 public sealed class CAssign : CStmt
 {
     public readonly int DestSlot;
@@ -43,7 +43,7 @@ public sealed class CAssign : CStmt
     }
 }
 
-/// <summary>Store value to a heap field. [= HStoreField]</summary>
+/// <summary>Store value to a heap field.</summary>
 public sealed class CStoreField : CStmt
 {
     public readonly string FieldName;
@@ -55,7 +55,7 @@ public sealed class CStoreField : CStmt
     }
 }
 
-/// <summary>Structured if/else. [= HIf]</summary>
+/// <summary>Structured if/else.</summary>
 public sealed class CIf : CStmt
 {
     public readonly CValue Cond;
@@ -69,7 +69,7 @@ public sealed class CIf : CStmt
     }
 }
 
-/// <summary>Structured while / do-while. CondBlock runs each iteration before Cond. [= HWhile]</summary>
+/// <summary>Structured while / do-while. CondBlock runs each iteration before Cond.</summary>
 public sealed class CWhile : CStmt
 {
     public readonly CBlock CondBlock;
@@ -85,7 +85,7 @@ public sealed class CWhile : CStmt
     }
 }
 
-/// <summary>Structured for loop. Cond null = infinite. [= HFor]</summary>
+/// <summary>Structured for loop. Cond null = infinite.</summary>
 public sealed class CFor : CStmt
 {
     public readonly CBlock Init;
@@ -103,34 +103,34 @@ public sealed class CFor : CStmt
     }
 }
 
-/// <summary>Break the innermost loop/switch. [= HBreak]</summary>
+/// <summary>Break the innermost loop/switch.</summary>
 public sealed class CBreak : CStmt { }
 
-/// <summary>Continue the innermost loop. [= HContinue]</summary>
+/// <summary>Continue the innermost loop.</summary>
 public sealed class CContinue : CStmt { }
 
-/// <summary>Goto a named label. [= HGoto]</summary>
+/// <summary>Goto a named label.</summary>
 public sealed class CGoto : CStmt
 {
     public readonly string Label;
     public CGoto(string label) => Label = label ?? throw new ArgumentNullException(nameof(label));
 }
 
-/// <summary>Named label (goto target). [= HLabelStmt]</summary>
+/// <summary>Named label (goto target).</summary>
 public sealed class CLabel : CStmt
 {
     public readonly string Label;
     public CLabel(string label) => Label = label ?? throw new ArgumentNullException(nameof(label));
 }
 
-/// <summary>Return with optional value. [= HReturn]</summary>
+/// <summary>Return with optional value.</summary>
 public sealed class CReturn : CStmt
 {
     public readonly CValue Value; // null for void
     public CReturn(CValue value = null) => Value = value;
 }
 
-/// <summary>Expression used as a statement (side-effecting call etc.). [= HExprStmt]</summary>
+/// <summary>Expression used as a statement (side-effecting call etc.).</summary>
 public sealed class CExprStmt : CStmt
 {
     public readonly CValue Expr;
@@ -138,7 +138,7 @@ public sealed class CExprStmt : CStmt
 }
 
 /// <summary>Flat instruction (flat role only): load a heap field into a slot. In structured
-/// form a field read is a CFieldRef(Load) value; CoreFlatten materializes it into this. [= LLoadField]</summary>
+/// form a field read is a CFieldRef(Load) value; CoreFlatten materializes it into this.</summary>
 public sealed class CLoadField : CStmt
 {
     public readonly int DestSlot;
@@ -152,19 +152,19 @@ public sealed class CLoadField : CStmt
     }
 }
 
-// ── Flat-block terminators (flat role only, mirror LTerminator) ──
+// ── Flat-block terminators (flat role only) ──
 
 /// <summary>Base for flat basic-block terminators.</summary>
 public abstract class CTerminator { }
 
-/// <summary>Unconditional jump. [= LJump]</summary>
+/// <summary>Unconditional jump.</summary>
 public sealed class CJump : CTerminator
 {
     public int TargetBlockId;
     public CJump(int targetBlockId) => TargetBlockId = targetBlockId;
 }
 
-/// <summary>Conditional branch. [= LBranch]</summary>
+/// <summary>Conditional branch.</summary>
 public sealed class CBranch : CTerminator
 {
     public readonly CValue Cond;
@@ -178,7 +178,7 @@ public sealed class CBranch : CTerminator
     }
 }
 
-/// <summary>Return terminator (flat role). Distinct from the CReturn statement. [= LReturn]</summary>
+/// <summary>Return terminator (flat role). Distinct from the CReturn statement.</summary>
 public sealed class CRet : CTerminator
 {
     public readonly CValue Value; // null for void
@@ -189,7 +189,7 @@ public sealed class CRet : CTerminator
 
 /// <summary>A function in the unified Core IR. Structured <see cref="Body"/> is authoritative
 /// when Shape=Structured; <see cref="FlatBlocks"/> when Shape=Flat. CoreFlatten sets FlatBlocks,
-/// appends scratch to Slots, and sets Shape=Flat. [= HFunction + LFunction]</summary>
+/// appends scratch to Slots, and sets Shape=Flat.</summary>
 public sealed class CFunction
 {
     public readonly string Name;
@@ -219,7 +219,7 @@ public sealed class CFunction
     int _nextBlockId;
 
     /// <summary>Allocate a fresh flat block with the next sequential id and append it to
-    /// <see cref="FlatBlocks"/>. The flat-role counterpart of slot allocation. [= LFunction.NewBlock]</summary>
+    /// <see cref="FlatBlocks"/>. The flat-role counterpart of slot allocation.</summary>
     public CBlock NewBlock()
     {
         var block = new CBlock { Id = _nextBlockId++ };
@@ -227,14 +227,14 @@ public sealed class CFunction
         return block;
     }
 
-    /// <summary>First flat block (flat role). [= LFunction.Entry]</summary>
+    /// <summary>First flat block (flat role).</summary>
     public CBlock Entry => FlatBlocks.Count > 0 ? FlatBlocks[0] : null;
 
-    /// <summary>UASM field name for the single return value (N=1 only). [= LFunction.ReturnFieldName]</summary>
+    /// <summary>UASM field name for the single return value (N=1 only).</summary>
     public string ReturnFieldName => ReturnSlots.Count == 1 ? ReturnSlots[0].Id : null;
 }
 
-/// <summary>Top-level Core IR module. [= HModule + LModule]</summary>
+/// <summary>Top-level Core IR module.</summary>
 public sealed class CModule
 {
     public readonly List<CFunction> Functions = new List<CFunction>();

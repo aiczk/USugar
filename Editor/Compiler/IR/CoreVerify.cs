@@ -291,7 +291,7 @@ public static class CoreVerify
                 foreach (var (_, value) in cc.Params)
                     VerifyExpr(value, ctx);
                 // Note: param value type checking against the target method's parameter types
-                // is not possible here — HIR only stores param names, not the target method's
+                // is not possible here — the Core IR only stores param names, not the target method's
                 // type signature. Type errors will surface at runtime via Udon VM.
                 break;
 

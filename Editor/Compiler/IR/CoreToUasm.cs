@@ -4,7 +4,7 @@ using System.Globalization;
 using System.Text;
 
 /// <summary>
-/// Generates UASM assembly text from an CModule (LIR).
+/// Generates UASM assembly text from a flattened CModule.
 /// Two-pass approach:
 ///   Pass 1: Collect instructions into intermediate representation, compute label addresses.
 ///   Pass 2: Render UASM text with resolved numeric addresses.
