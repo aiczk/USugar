@@ -67,6 +67,13 @@ public static class GoldenCorpus
   public int r;
   void Start(){ int Square(int n) => n * n; r = Square(5); }
 }"),
+        // Cross-behaviour call exercises LowerCrossBehaviourCall (Set/Send/Get expansion) —
+        // the one LIVE semantic lowering embedded in HirToLir that CoreFlatten copies verbatim.
+        ("cross_behaviour_call", "CrossBehaviour",
+@"using UdonSharp; public class CrossBehaviour : UdonSharpBehaviour {
+  public TestStubs.BaseEnemy enemy; public int hp;
+  void Start(){ enemy.TakeDamage(5); hp = enemy.GetHp(); }
+}"),
         // ── high-sensitivity Phi / CondBlock shapes (spec §6 gate 3) ──
         ("do_while", "DoWhile",
 @"using UdonSharp; public class DoWhile : UdonSharpBehaviour {
