@@ -5515,7 +5515,10 @@ public class TupleCopyTest : UdonSharpBehaviour {
         _v = b.Item1;
     }
 }");
-        Assert.Contains("SystemObjectArray.__Clone__SystemObject", uasm);
+        // Whole-value copy deep-clones: a fresh array is allocated and each element copied in
+        // (replacing a shallow Array.Clone, which would alias nested aggregate elements).
+        Assert.Contains("SystemObjectArray.__ctor__SystemInt32__SystemObjectArray", uasm);
+        Assert.Contains("SystemObjectArray.__Set__SystemInt32_SystemObject", uasm);
         Assert.DoesNotContain("ValueTuple", uasm);
     }
 

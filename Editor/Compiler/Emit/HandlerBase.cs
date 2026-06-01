@@ -173,6 +173,29 @@ public abstract class HandlerBase
     protected CValue EmitValueTypeDefault(string udonType)
         => Const(EmitContext.ParseConstValue(udonType, udonType == "SystemBoolean" ? "False" : "0"), udonType);
 
+    /// <summary>Deep value-copy of an object[]-backed aggregate (struct/tuple): a fresh array with each
+    /// element copied, recursing into nested-aggregate elements. A shallow SystemObjectArray.__Clone__ would
+    /// copy the nested object[] REFERENCE, so mutating the copy's nested struct would corrupt the source.</summary>
+    protected CValue EmitDeepCloneAggregate(CValue src, INamedTypeSymbol aggType)
+    {
+        var layout = _ctx.GetAggregateLayout(aggType);
+        var srcSlot = _ctx.AllocTemp("SystemObjectArray"); EmitAssign(srcSlot, src);
+        var dstSlot = _ctx.AllocTemp("SystemObjectArray");
+        EmitAssign(dstSlot, ExternCall("SystemObjectArray.__ctor__SystemInt32__SystemObjectArray",
+            new List<CValue> { Const(layout.Count, "SystemInt32") }, "SystemObjectArray"));
+        for (int i = 0; i < layout.Count; i++)
+        {
+            var elem = ExternCall("SystemObjectArray.__Get__SystemInt32__SystemObject",
+                new List<CValue> { SlotRef(srcSlot), Const(i, "SystemInt32") }, "SystemObject");
+            CValue copy = layout.Fields[i].Type is INamedTypeSymbol nested && EmitContext.IsAggregateType(nested)
+                ? EmitDeepCloneAggregate(elem, nested) // nested aggregate → recurse
+                : elem;                                // boxed scalar → reference copy is fine (immutable box)
+            EmitExternVoid("SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid",
+                new List<CValue> { SlotRef(dstSlot), Const(i, "SystemInt32"), copy });
+        }
+        return SlotRef(dstSlot);
+    }
+
     /// <summary>Unwrap a field or auto-property member access into (instance, member name) for
     /// aggregate (struct/tuple) object[] element resolution.</summary>
     protected static bool TryGetAggregateMemberTarget(IOperation target, out IOperation instance, out string memberName)

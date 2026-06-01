@@ -417,12 +417,30 @@ public class StatementHandler : HandlerBase, IOperationHandler
     }
 
     /// <summary>Set each value-type element of an object[]-emulated aggregate to its type default
-    /// (object[] slots are null by default, but struct value fields must be 0/false/etc.).</summary>
+    /// (object[] slots are null by default, but struct value fields must be 0/false/etc.). A nested
+    /// aggregate field is recursively allocated + default-initialized rather than left null.</summary>
     void DefaultInitAggregate(string localId, AggregateLayout layout)
+        => DefaultInitAggregateArray(LoadField(localId, "SystemObjectArray"), layout);
+
+    void DefaultInitAggregateArray(CValue arrayVal, AggregateLayout layout)
     {
+        var slot = _ctx.AllocTemp("SystemObjectArray");
+        EmitAssign(slot, arrayVal);
         for (int i = 0; i < layout.Count; i++)
         {
             var fieldType = layout.Fields[i].Type;
+            if (fieldType is INamedTypeSymbol nested && EmitContext.IsAggregateType(nested))
+            {
+                // Nested aggregate → allocate a sub-array and recursively default-init it.
+                var nl = _ctx.GetAggregateLayout(nested);
+                var subSlot = _ctx.AllocTemp("SystemObjectArray");
+                EmitAssign(subSlot, ExternCall("SystemObjectArray.__ctor__SystemInt32__SystemObjectArray",
+                    new List<CValue> { Const(nl.Count, "SystemInt32") }, "SystemObjectArray"));
+                EmitExternVoid("SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid",
+                    new List<CValue> { SlotRef(slot), Const(i, "SystemInt32"), SlotRef(subSlot) });
+                DefaultInitAggregateArray(SlotRef(subSlot), nl);
+                continue;
+            }
             object defVal = fieldType.SpecialType switch
             {
                 SpecialType.System_Boolean => (object)false,
@@ -441,8 +459,7 @@ public class StatementHandler : HandlerBase, IOperationHandler
             };
             if (defVal != null)
                 EmitExternVoid("SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid",
-                    new List<CValue> { LoadField(localId, "SystemObjectArray"), Const(i, "SystemInt32"),
-                        Const(defVal, GetUdonType(fieldType)) });
+                    new List<CValue> { SlotRef(slot), Const(i, "SystemInt32"), Const(defVal, GetUdonType(fieldType)) });
         }
     }
 

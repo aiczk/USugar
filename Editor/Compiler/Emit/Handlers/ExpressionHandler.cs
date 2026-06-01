@@ -26,15 +26,13 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
     {
         ILiteralOperation op => VisitLiteral(op),
         ILocalReferenceOperation localRef => _localBindings.TryGetValue(localRef.Local, out var localBinding)
-                                                 ? EmitContext.IsAggregateType(localRef.Type)
-                                                     ? ExternCall("SystemObjectArray.__Clone__SystemObject",
-                                                         new List<CValue> { LoadField(localBinding.Id, "SystemObjectArray") }, "SystemObject")
+                                                 ? EmitContext.IsAggregateType(localRef.Type) && localRef.Type is INamedTypeSymbol laggT
+                                                     ? EmitDeepCloneAggregate(LoadField(localBinding.Id, "SystemObjectArray"), laggT)
                                                      : LoadField(localBinding.Id, GetUdonType(localRef.Type))
                                                  : throw new InvalidOperationException($"Cannot resolve local variable '{localRef.Local.Name}' in method '{_currentMethod?.Name ?? "(none)"}'."),
         IFieldReferenceOperation op => VisitFieldReference(op),
-        IParameterReferenceOperation paramRef => EmitContext.IsAggregateType(paramRef.Type)
-                                                     ? ExternCall("SystemObjectArray.__Clone__SystemObject",
-                                                         new List<CValue> { LoadParam(paramRef.Parameter) }, "SystemObject")
+        IParameterReferenceOperation paramRef => EmitContext.IsAggregateType(paramRef.Type) && paramRef.Type is INamedTypeSymbol paggT
+                                                     ? EmitDeepCloneAggregate(LoadParam(paramRef.Parameter), paggT)
                                                      : LoadParam(paramRef.Parameter),
         IInstanceReferenceOperation when _ctx.CurrentStructReceiverParamId != null
             => LoadField(_ctx.CurrentStructReceiverParamId, "SystemObjectArray"),
