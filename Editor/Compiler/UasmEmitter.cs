@@ -1270,8 +1270,14 @@ public class UasmEmitter
     // flat heap shares param/local slots across frames). Includes direct self-recursion (self-loops).
     void BuildRecursionInfo()
     {
+        // Generic method definitions are monomorphized per call-site and thus skipped in registration, so
+        // they are absent from _methodFunctions. Add them explicitly — otherwise a recursive generic method
+        // (e.g. `int Fact<T>(int n) => n * Fact<T>(n-1)`) has no graph node and its frame is never spilled.
         var roots = _methodFunctions.Keys
             .Select(m => m.OriginalDefinition)
+            .Concat(_classSymbol.GetMembers().OfType<IMethodSymbol>()
+                .Where(m => m.IsGenericMethod && m.MethodKind == MethodKind.Ordinary && !m.IsImplicitlyDeclared)
+                .Select(m => (IMethodSymbol)m.OriginalDefinition))
             .Where(m => m.DeclaringSyntaxReferences.Length > 0)
             .Distinct(SymbolEqualityComparer.Default)
             .Cast<IMethodSymbol>()

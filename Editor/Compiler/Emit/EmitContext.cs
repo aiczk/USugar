@@ -134,7 +134,10 @@ public class EmitContext
     /// recursion-cycle edge (callee in caller's non-trivial SCC, including direct self-recursion).</summary>
     public bool IsRecursiveEdge(IMethodSymbol caller, IMethodSymbol callee)
         => caller != null && callee != null && RecursiveCallees != null
-           && RecursiveCallees.TryGetValue(caller, out var callees)
+           // Reduce BOTH ends to OriginalDefinition: RecursiveCallees is keyed by definition, but a
+           // monomorphized generic specialization (e.g. Fact<int>) emits with the constructed symbol as
+           // _currentMethod/target — without this its self-edge would be missed and the frame not spilled.
+           && RecursiveCallees.TryGetValue(caller.OriginalDefinition, out var callees)
            && callees.Contains(callee.OriginalDefinition);
 
     /// <summary>A hoisted internal function (local function or lambda) — these re-enter shared flat-heap slots.</summary>
