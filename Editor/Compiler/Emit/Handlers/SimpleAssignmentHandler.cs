@@ -289,6 +289,18 @@ public class SimpleAssignmentHandler : AssignmentHandlerBase, IExpressionHandler
             RecordCapturesIfDelegateValue(assign.Value);
         }
 
+        // Delegate-local re-assignment with a lambda (e.g. `f = null; f = (n) => ... f(n-1) ...;` — the
+        // required idiom for a recursive lambda). Hoist the lambda and record the var→method binding so the
+        // delegate invocation can resolve, then mark self-recursion so EmitCallToMethod spills.
+        if (assign.Target is ILocalReferenceOperation dlgLocal
+            && dlgLocal.Local.Type.TypeKind == TypeKind.Delegate
+            && UnwrapDelegateLambda(assign.Value, out var reassignLambda))
+        {
+            var hoisted = HoistLambdaToMethod(reassignLambda);
+            _delegateVarMap[dlgLocal.Local] = hoisted;
+            MarkLambdaSelfRecursion(reassignLambda, dlgLocal.Local, hoisted);
+        }
+
         // VisitExpression clones aggregate locals/params automatically (Clone-on-read).
         var srcFallback = VisitExpression(assign.Value);
         var targetFieldName = GetAssignTargetFieldName(assign.Target);
@@ -313,5 +325,27 @@ public class SimpleAssignmentHandler : AssignmentHandlerBase, IExpressionHandler
         if (dc == null && value is IConversionOperation conv && conv.Operand is IDelegateCreationOperation dc2)
             dc = dc2;
         if (dc != null) RecordIfCapturingLambda(dc);
+    }
+
+    static bool UnwrapDelegateLambda(IOperation value, out IAnonymousFunctionOperation lambda)
+    {
+        lambda = null;
+        var dc = value as IDelegateCreationOperation
+                 ?? (value as IConversionOperation)?.Operand as IDelegateCreationOperation;
+        if (dc?.Target is IAnonymousFunctionOperation l) { lambda = l; return true; }
+        return false;
+    }
+
+    // If the lambda body has a NON-tail invocation of the delegate variable it is assigned to, it is
+    // self-recursive in a way that clobbers its flat-heap frame: record a recursion-cycle self-edge so
+    // EmitCallToMethod spills. Tail self-calls are left unmarked (no spill) so deep tail recursion is safe.
+    void MarkLambdaSelfRecursion(IAnonymousFunctionOperation lambda, ILocalSymbol selfVar, IMethodSymbol hoisted)
+    {
+        if (lambda.Body == null || !EmitContext.HasNonTailDelegateSelfCall(lambda.Body, selfVar)) return;
+        var key = hoisted.OriginalDefinition;
+        _ctx.RecursiveCallees ??= new Dictionary<IMethodSymbol, HashSet<IMethodSymbol>>(SymbolEqualityComparer.Default);
+        if (!_ctx.RecursiveCallees.TryGetValue(key, out var set))
+            _ctx.RecursiveCallees[key] = set = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
+        set.Add(key);
     }
 }

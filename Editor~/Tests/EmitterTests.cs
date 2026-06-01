@@ -3515,6 +3515,26 @@ public class RecLocalFuncTest : UdonSharpBehaviour {
         Assert.Contains("__recurSp", uasm);
     }
 
+    [Fact]
+    public void RecursiveLambda_Local_SpillsToRecursionStack()
+    {
+        // A self-recursive lambda assigned to a local delegate var (the standard recursive-lambda idiom)
+        // is hoisted, its self-invocation resolved, and its frame spilled across the non-tail call.
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public class RecLambdaTest : UdonSharpBehaviour {
+    int _result;
+    void Start() {
+        System.Func<int,int> fact = null;
+        fact = (n) => n <= 1 ? 1 : n * fact(n - 1);
+        _result = fact(5);
+    }
+}
+", "RecLambdaTest");
+        Assert.Contains("__recurStack", uasm);
+        Assert.Contains("__recurSp", uasm);
+    }
+
     // ── Re-entrance guard ──
 
     [Fact]

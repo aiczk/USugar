@@ -557,13 +557,15 @@ public abstract class HandlerBase
         if (_currentMethod != null && _methodParamVarIds.TryGetValue(_currentMethod, out var pids))
             foreach (var pid in pids) AddField(pid);
         AddField(_ctx.CurrentStructReceiverParamId);
-        // For a local function, only its OWN locals are frame-local and need spilling. Locals captured from
-        // an enclosing scope are shared by reference (C# closure semantics) — the same flat-heap sharing the
-        // recursion otherwise corrupts is here the CORRECT behaviour, so they must NOT be saved/restored.
-        bool isLocalFunc = _currentMethod != null && _currentMethod.MethodKind == MethodKind.LocalFunction;
+        // For a hoisted function (local function or lambda), only its OWN locals are frame-local and need
+        // spilling. Locals captured from an enclosing scope are shared by reference (C# closure semantics) —
+        // the same flat-heap sharing the recursion otherwise corrupts is here the CORRECT behaviour, so they
+        // must NOT be saved/restored.
+        bool isHoisted = _currentMethod != null
+            && _currentMethod.MethodKind is MethodKind.LocalFunction or MethodKind.LambdaMethod or MethodKind.AnonymousFunction;
         foreach (var kv in _localBindings)
         {
-            if (isLocalFunc && !SymbolEqualityComparer.Default.Equals(kv.Key.ContainingSymbol, _currentMethod))
+            if (isHoisted && !SymbolEqualityComparer.Default.Equals(kv.Key.ContainingSymbol, _currentMethod))
                 continue;
             AddField(kv.Value.Id);
         }

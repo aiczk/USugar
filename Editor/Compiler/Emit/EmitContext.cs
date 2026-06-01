@@ -129,6 +129,73 @@ public class EmitContext
         => caller != null && callee != null && RecursiveCallees != null
            && RecursiveCallees.TryGetValue(caller, out var callees)
            && callees.Contains(callee.OriginalDefinition);
+
+    // ── Tail-call analysis (shared by named-method and recursive-lambda recursion detection) ──
+    // A self-recursive call only needs spilling when it is NOT in tail position: a tail call reads nothing
+    // of its frame afterwards, so the flat-heap clobber is harmless and deep tail recursion must not spill.
+
+    /// <summary>Returns the call's argument list if <paramref name="op"/> is a self-recursive call to
+    /// track, else default (and false via the out usage). Lets one tail walker serve named calls and
+    /// delegate-variable invocations.</summary>
+    public delegate bool SelfCallMatcher(IOperation op, out System.Collections.Immutable.ImmutableArray<IArgumentOperation> args);
+
+    /// <summary>True if <paramref name="body"/> contains a NON-tail self-recursive call (per the matcher).
+    /// Conditional (`cond ? a : self(..)`) branches count as tail positions; the condition does not.</summary>
+    public static bool HasNonTailSelfCall(IOperation body, SelfCallMatcher isSelf)
+    {
+        if (body == null) return false;
+        if (body is IReturnOperation ret) return NonTailInTailExpr(ret.ReturnedValue, isSelf);
+        if (isSelf(body, out _)) return true; // self-call as a statement / non-tail position
+        foreach (var child in body.Children)
+        {
+            if (child is ILocalFunctionOperation || child is IAnonymousFunctionOperation) continue;
+            if (HasNonTailSelfCall(child, isSelf)) return true;
+        }
+        return false;
+    }
+
+    static bool NonTailInTailExpr(IOperation expr, SelfCallMatcher isSelf)
+    {
+        if (expr == null) return false;
+        if (isSelf(expr, out var args)) // a tail self-call; only its arguments are non-tail
+        {
+            foreach (var a in args)
+                if (AnySelfCall(a, isSelf)) return true;
+            return false;
+        }
+        if (expr is IConditionalOperation cond) // branches stay in tail position; the condition does not
+        {
+            if (AnySelfCall(cond.Condition, isSelf)) return true;
+            return NonTailInTailExpr(cond.WhenTrue, isSelf) || NonTailInTailExpr(cond.WhenFalse, isSelf);
+        }
+        return AnySelfCall(expr, isSelf); // any self-call buried in a non-tail expression
+    }
+
+    static bool AnySelfCall(IOperation op, SelfCallMatcher isSelf)
+    {
+        if (op == null) return false;
+        if (isSelf(op, out _)) return true;
+        foreach (var child in op.Children)
+        {
+            if (child is ILocalFunctionOperation || child is IAnonymousFunctionOperation) continue;
+            if (AnySelfCall(child, isSelf)) return true;
+        }
+        return false;
+    }
+
+    /// <summary>Non-tail check for a recursive lambda: matches delegate invocations on <paramref name="selfVar"/>.</summary>
+    public static bool HasNonTailDelegateSelfCall(IOperation body, ILocalSymbol selfVar)
+        => HasNonTailSelfCall(body, (IOperation op, out System.Collections.Immutable.ImmutableArray<IArgumentOperation> args) =>
+        {
+            if (op is IInvocationOperation inv && inv.Instance is ILocalReferenceOperation lr
+                && SymbolEqualityComparer.Default.Equals(lr.Local, selfVar))
+            {
+                args = inv.Arguments;
+                return true;
+            }
+            args = default;
+            return false;
+        });
     public int NextMethodIndex;
     public readonly List<(IMethodSymbol symbol, CFunction func)> PendingLocalFunctions = new();
     public readonly Dictionary<ILocalSymbol, IMethodSymbol> DelegateVarMap = new(SymbolEqualityComparer.Default);
