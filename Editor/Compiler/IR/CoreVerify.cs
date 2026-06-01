@@ -2,8 +2,8 @@ using System;
 using System.Collections.Generic;
 
 /// <summary>
-/// Verifies HIR structural invariants. Run after HIR construction and after each HIR optimization pass.
-/// Throws VerificationException on first violation found.
+/// Verifies structured Core IR invariants. Run after Core construction and after each structured
+/// optimization pass. Throws <see cref="VerificationException"/> on the first violation found.
 /// </summary>
 public static class CoreVerify
 {
@@ -302,4 +302,10 @@ public static class CoreVerify
                 throw new VerificationException($"Unknown CValue type: {expr.GetType().Name}");
         }
     }
+}
+
+/// <summary>Exception thrown when Core IR verification fails.</summary>
+public sealed class VerificationException : Exception
+{
+    public VerificationException(string message) : base(message) { }
 }

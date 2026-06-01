@@ -216,6 +216,17 @@ public sealed class CFunction
         return id;
     }
 
+    int _nextBlockId;
+
+    /// <summary>Allocate a fresh flat block with the next sequential id and append it to
+    /// <see cref="FlatBlocks"/>. The flat-role counterpart of slot allocation. [= LFunction.NewBlock]</summary>
+    public CBlock NewBlock()
+    {
+        var block = new CBlock { Id = _nextBlockId++ };
+        FlatBlocks.Add(block);
+        return block;
+    }
+
     /// <summary>First flat block (flat role). [= LFunction.Entry]</summary>
     public CBlock Entry => FlatBlocks.Count > 0 ? FlatBlocks[0] : null;
 
