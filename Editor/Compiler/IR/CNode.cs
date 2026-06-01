@@ -207,4 +207,27 @@ public sealed class CFunction
         Name = name ?? throw new ArgumentNullException(nameof(name));
         ExportName = exportName;
     }
+
+    /// <summary>Allocate a new slot and return its ID.</summary>
+    public int NewSlot(string type, SlotClass slotClass, string fixedName = null)
+    {
+        var id = Slots.Count;
+        Slots.Add(new SlotDecl(id, type, slotClass, fixedName));
+        return id;
+    }
+}
+
+/// <summary>Top-level Core IR module. [= HModule + LModule]</summary>
+public sealed class CModule
+{
+    public readonly List<CFunction> Functions = new List<CFunction>();
+    public readonly List<FieldDecl> Fields = new List<FieldDecl>();
+    public string ClassName;
+
+    public CFunction AddFunction(string name, string exportName = null)
+    {
+        var func = new CFunction(name, exportName);
+        Functions.Add(func);
+        return func;
+    }
 }
