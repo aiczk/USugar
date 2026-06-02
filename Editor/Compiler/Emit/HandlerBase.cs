@@ -479,7 +479,7 @@ public abstract class HandlerBase
         var arrType = GetArrayType(arrSym);
         var elemType = GetArrayElemType(arrSym);
         var idx = ae.Indices[0];
-        CValue idxVal = idx is IUnaryOperation { Type.Name: "Index" } fromEnd
+        CValue idxVal = idx is IUnaryOperation { Type: { Name: "Index" } } fromEnd
             ? ExternCall("SystemInt32.__op_Subtraction__SystemInt32_SystemInt32__SystemInt32", new List<CValue>
                 { ExternCall($"{arrType}.__get_Length__SystemInt32", new List<CValue> { arrayVal }, "SystemInt32"),
                   VisitExpression(fromEnd.Operand) }, "SystemInt32")

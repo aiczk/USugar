@@ -1561,7 +1561,7 @@ public class UasmEmitter
         // Computed (non-auto) user-struct property: v.Prop (read) or v.Prop = x (write). Auto-properties use
         // their backing-field slot directly (no method), but a computed accessor must be inlined as a struct
         // instance method. Register both accessors (the reference alone doesn't reveal read-vs-write context).
-        if (op is IPropertyReferenceOperation { Property.IsIndexer: false } pr
+        if (op is IPropertyReferenceOperation { Property: { IsIndexer: false } } pr
             && pr.Property is { IsStatic: false } prop
             && pr.Property.ContainingType is INamedTypeSymbol pit && EmitContext.IsUserStruct(pit)
             && IsComputedProperty(prop))

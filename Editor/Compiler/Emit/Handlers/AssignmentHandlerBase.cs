@@ -186,7 +186,7 @@ public abstract class AssignmentHandlerBase : HandlerBase
             // Property on an aggregate (struct) instance — e.g. compound `p.X += 1` / `p.Computed += 1`,
             // which routes through CaptureLValue + EmitWriteBack. Auto-property → write the backing-field
             // slot by layout index; computed (non-auto) → call the user setter with the receiver as param0.
-            case IPropertyReferenceOperation { Property.IsIndexer: false } aggPropRef
+            case IPropertyReferenceOperation { Property: { IsIndexer: false } } aggPropRef
                 when aggPropRef.Instance?.Type is INamedTypeSymbol aggPropType && EmitContext.IsAggregateType(aggPropType):
             {
                 if (_ctx.GetAggregateLayout(aggPropType).TryGetIndex(aggPropRef.Property.Name, out var propIdx))
