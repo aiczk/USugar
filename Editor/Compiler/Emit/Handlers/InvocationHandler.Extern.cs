@@ -46,6 +46,38 @@ public partial class InvocationHandler
                 instanceVal = VisitExpression(op.Instance);
         }
 
+        // Trailing `params` expansion: SOME Udon variadic externs (e.g. SendCustomNetworkEvent) take N discrete
+        // SystemObject args — one extern overload per arity — instead of a single SystemObjectArray. Others
+        // (e.g. string.Format) only expose the SystemObjectArray overload. So when Roslyn synthesised the
+        // params array from loose call args (ArgumentKind.ParamArray), expand it into boxed elements ONLY IF
+        // the per-arity expanded extern actually exists; otherwise keep the array form. (An explicitly-passed
+        // array is ArgumentKind.Explicit and is always left as the array.)
+        System.Collections.Generic.IReadOnlyList<IOperation> paramsElems = null;
+        string expandedParamsSig = null;
+        int lastParamIdx = target.Parameters.Length - 1;
+        if (lastParamIdx >= 0 && target.Parameters[lastParamIdx].IsParams
+            && op.Arguments.Length == target.Parameters.Length
+            && op.Arguments[op.Arguments.Length - 1].ArgumentKind == ArgumentKind.ParamArray)
+        {
+            var paramArg = op.Arguments[op.Arguments.Length - 1].Value;
+            while (paramArg is IConversionOperation pc) paramArg = pc.Operand;
+            if (paramArg is IArrayCreationOperation pac)
+            {
+                var elems = pac.Initializer != null
+                    ? (System.Collections.Generic.IReadOnlyList<IOperation>)pac.Initializer.ElementValues
+                    : System.Array.Empty<IOperation>();
+                var pts = new List<string>();
+                for (int i = 0; i < lastParamIdx; i++) pts.Add(GetUdonType(target.Parameters[i].Type));
+                for (int k = 0; k < elems.Count; k++) pts.Add("SystemObject");
+                var candidate = BuildExternCallSignature(target, op.Instance?.Type, pts.ToArray());
+                if (ExternResolver.IsExternValid == null || ExternResolver.IsExternValid(candidate))
+                {
+                    paramsElems = elems;
+                    expandedParamsSig = candidate;
+                }
+            }
+        }
+
         // For out/ref params: pass the field's heap address directly via CFieldRef.
         // Udon VM extern writes to the pushed address, so the original variable
         // is updated in-place. No copy-back needed for simple field targets.
@@ -55,6 +87,13 @@ public partial class InvocationHandler
         for (int i = 0; i < op.Arguments.Length; i++)
         {
             var param = target.Parameters[i];
+            if (param.IsParams && paramsElems != null)
+            {
+                // Box each variadic element as a discrete SystemObject argument.
+                foreach (var elem in paramsElems)
+                    argVals.Add(VisitExpression(elem));
+                continue;
+            }
             if (param.RefKind == RefKind.Out || param.RefKind == RefKind.Ref)
             {
                 var fieldName = ResolveOutRefFieldName(op.Arguments[i].Value);
@@ -81,8 +120,8 @@ public partial class InvocationHandler
             externArgs.Add(instanceVal);
         externArgs.AddRange(argVals);
 
-        // Extern signature
-        var sig = BuildExternCallSignature(target, op.Instance?.Type);
+        // Extern signature — the validated expanded form when trailing params were expanded, else the default.
+        var sig = expandedParamsSig ?? BuildExternCallSignature(target, op.Instance?.Type);
 
         CValue result;
         if (!target.ReturnsVoid)
@@ -725,7 +764,7 @@ public partial class InvocationHandler
 
     // ── Extern Signature Helpers ──
 
-    string BuildExternCallSignature(IMethodSymbol method, ITypeSymbol instanceType = null)
+    string BuildExternCallSignature(IMethodSymbol method, ITypeSymbol instanceType = null, string[] paramTypeOverride = null)
     {
         ITypeSymbol containingTypeSym = method.ContainingType;
 
@@ -747,7 +786,7 @@ public partial class InvocationHandler
 
         string buildSig(IMethodSymbol m)
         {
-            var pts = m.Parameters.Select(p =>
+            var pts = paramTypeOverride ?? m.Parameters.Select(p =>
             {
                 var tn = GetUdonType(p.Type);
                 if (p.RefKind == RefKind.Out || p.RefKind == RefKind.Ref)
