@@ -131,6 +131,7 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
         // Exclude methods declared on UdonSharpBehaviour itself (SendCustomEvent, SetProgramVariable, etc.)
         // — those are Udon VM interface methods that must be compiled as externs.
         if (ExternResolver.IsUdonSharpBehaviour(target.ContainingType)
+            && !target.IsStatic
             && op.Instance is not IInstanceReferenceOperation
             && target.ContainingType.Name != "UdonSharpBehaviour")
             return EmitCrossClassCall(op, target);
@@ -470,7 +471,9 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
         var resolved = method.ReducedFrom ?? method;
         if (!resolved.IsStatic) return false;
         if (resolved.ContainingType.DeclaringSyntaxReferences.Length == 0) return false;
-        if (ExternResolver.IsUdonSharpBehaviour(resolved.ContainingType)) return false;
+        // A static method has no instance, so a call to one on another user UdonSharpBehaviour subclass cannot
+        // be a cross-program SendCustomEvent — it must be inlined like any other foreign static. (The base
+        // UdonSharpBehaviour and SDK behaviours have no syntax and are already excluded above.)
         if (SymbolEqualityComparer.Default.Equals(resolved.ContainingType, _classSymbol)) return false;
         if (IsExternNamespace(resolved.ContainingType.ContainingNamespace)) return false;
         return true;

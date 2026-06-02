@@ -1236,10 +1236,12 @@ public class UasmEmitter
 
     void VisitOperation(IOperation op)
     {
+        if (op == null)
+            throw new NotSupportedException("VisitOperation called with null operation");
         // Unwrap parenthesized expressions in statement context
         while (op is IParenthesizedOperation paren) op = paren.Operand;
         foreach (var h in _stmtHandlers)
-            if (h.CanHandle(op)) { h.Handle(op); return; }
+            if (h.CanHandle(op)) { try { h.Handle(op); return; } catch (System.Exception ex) { throw TagLocation(ex, op); } }
         throw new NotSupportedException($"Unsupported operation: {op.Kind} ({op.GetType().Name})");
     }
 
@@ -1257,9 +1259,25 @@ public class UasmEmitter
         // Unwrap parenthesized expressions (transparent wrapper)
         while (op is IParenthesizedOperation paren) op = paren.Operand;
         foreach (var h in _exprHandlers)
-            if (h.CanHandle(op)) return h.Handle(op);
+            if (h.CanHandle(op)) { try { return h.Handle(op); } catch (System.Exception ex) { throw TagLocation(ex, op); } }
         throw new NotSupportedException(
             $"Unsupported expression: {op.Kind} ({op.GetType().Name})");
+    }
+
+    // Augment an emit-time exception with the source location + a snippet of the OFFENDING operation, so a
+    // failure deep in a child (e.g. "VisitExpression called with null operation") is reported at the nearest
+    // enclosing construct that has syntax, not at the context-free throw site. Tags only once (innermost frame)
+    // via Exception.Data so outer dispatch frames re-throw the located exception unchanged.
+    static System.Exception TagLocation(System.Exception ex, IOperation op)
+    {
+        if (ex.Data.Contains("usugar_located") || op?.Syntax == null) return ex;
+        var span = op.Syntax.GetLocation().GetLineSpan();
+        var where = $"{span.StartLinePosition.Line + 1},{span.StartLinePosition.Character + 1}";
+        var snippet = op.Syntax.ToString().Replace("\r", " ").Replace("\n", " ");
+        if (snippet.Length > 100) snippet = snippet.Substring(0, 100) + "…";
+        var wrapped = new NotSupportedException($"{ex.Message}  [at ({where}) {op.Kind}: `{snippet}`]", ex);
+        wrapped.Data["usugar_located"] = true;
+        return wrapped;
     }
 
     // ── Recursion-cycle analysis ──
@@ -1623,7 +1641,8 @@ public class UasmEmitter
         var resolved = method.ReducedFrom ?? method;
         if (!resolved.IsStatic) return false;
         if (resolved.ContainingType.DeclaringSyntaxReferences.Length == 0) return false;
-        if (ExternResolver.IsUdonSharpBehaviour(resolved.ContainingType)) return false;
+        // Static methods on a user UdonSharpBehaviour subclass are inlinable (no instance ⇒ no cross-program
+        // SendCustomEvent path); the syntax-less base/SDK behaviours are already excluded above.
         if (SymbolEqualityComparer.Default.Equals(resolved.ContainingType, _classSymbol)) return false;
         if (IsExternNamespace(resolved.ContainingType.ContainingNamespace)) return false;
         return true;
