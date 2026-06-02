@@ -605,6 +605,10 @@ public class UasmEmitter
                 func.ReturnSlots.Add(new ReturnSlot(retId, retType));
                 _methodReturns[fm] = new[] { new ReturnSlot(retId, retType) };
             }
+
+            // Mirror the same-class path: a foreign-static method that invokes a delegate parameter needs its
+            // convention vars declared, else VisitDelegateInvocation cannot resolve the target.
+            DeclareDelegateConventionVars(fm, idx);
         }
 
         // Register user-struct constructors + instance methods (object[]-emulated; synthetic receiver = param0).
