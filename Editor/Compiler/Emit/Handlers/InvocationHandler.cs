@@ -231,24 +231,11 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
                 ? _ctx.GetFieldType(convention.RetVarId)
                 : null;
 
-            // Emit indirect call through delegate
-            // In HIR, indirect calls are represented as InternalCall("__indirect", [methodPtr], retType)
-            // The ABI lowering pass will expand this to JUMP_INDIRECT with convention fields.
-            var callRetType = retType ?? "SystemVoid";
-            var indirectCall = InternalCall("__indirect", new List<CValue> { methodPtr }, callRetType);
-
-            if (retType != null)
-            {
-                // Side-effect: the call itself
-                EmitExprStmt(indirectCall);
-                // Read back the return value from the convention return field
-                return LoadField(convention.RetVarId, retType);
-            }
-            else
-            {
-                EmitExprStmt(indirectCall);
-                return null;
-            }
+            // Indirect call through delegate. __indirect is a VOID side-effect (the JUMP_INDIRECT): args were
+            // already stored to convention fields and the return is read from the convention ret field, not a
+            // slot — so it must NOT be materialized to a dest slot (EmitCallIndirect ignores the dest).
+            EmitInternalVoid("__indirect", new List<CValue> { methodPtr });
+            return retType != null ? LoadField(convention.RetVarId, retType) : null;
         }
 
         // op.Instance is the delegate local reference (e.g., 'a' in a())
@@ -321,8 +308,8 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
             // ── Self path: JUMP_INDIRECT (convention fields already written locally) ──
             _ =>
             {
-                var indirectResult = InternalCall("__indirect", new List<CValue> { addr }, retType ?? "SystemVoid");
-                EmitExprStmt(indirectResult);
+                // __indirect is a void side-effect (JUMP_INDIRECT); the return is read from the convention field.
+                EmitInternalVoid("__indirect", new List<CValue> { addr });
                 if (retType != null)
                 {
                     // Read return from convention ret field

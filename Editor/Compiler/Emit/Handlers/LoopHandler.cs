@@ -131,19 +131,18 @@ public class LoopHandler : HandlerBase, IOperationHandler
         EmitAssign(lenSlot, ExternCall("SystemArray.__get_Length__SystemInt32",
             new List<CValue> { SlotRef(collSlot) }, "SystemInt32"));
 
-        // Condition: idx < cachedLen
-        var condExpr = ExternCall(
-            "SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean",
-            new List<CValue> { SlotRef(idxSlot), SlotRef(lenSlot) },
-            "SystemBoolean");
-
         _builder.EmitFor(
             _ =>
             {
                 // Init: idx = 0
                 EmitAssign(idxSlot, Const(0, "SystemInt32"));
             },
-            condExpr,
+            // Condition: idx < cachedLen — built via a factory so A-normal form re-materializes it inside the
+            // loop's cond block (re-evaluated each iteration), not bound once before the loop.
+            () => ExternCall(
+                "SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean",
+                new List<CValue> { SlotRef(idxSlot), SlotRef(lenSlot) },
+                "SystemBoolean"),
             _ =>
             {
                 // Update: idx++

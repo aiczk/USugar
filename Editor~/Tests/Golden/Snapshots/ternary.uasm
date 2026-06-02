@@ -9,8 +9,10 @@
     __refl_typename: %SystemString, null
     __const_SystemUInt32_sentinel: %SystemUInt32, null
     __intnl_SystemInt32_c0: %SystemInt32, null
+    __intnl_SystemInt32_c1: %SystemInt32, null
     __const_SystemInt32_0: %SystemInt32, null
     __intnl_SystemBoolean_c0: %SystemBoolean, null
+    __intnl_SystemBoolean_c1: %SystemBoolean, null
     __const_SystemInt32_1: %SystemInt32, null
     __const_SystemInt32_2: %SystemInt32, null
 .data_end
@@ -23,17 +25,23 @@
         PUSH, __intnl_SystemInt32_c0
         COPY
         PUSH, __intnl_SystemInt32_c0
+        PUSH, __intnl_SystemInt32_c1
+        COPY
+        PUSH, __intnl_SystemInt32_c1
         PUSH, __const_SystemInt32_0
         PUSH, __intnl_SystemBoolean_c0
         EXTERN, "SystemInt32.__op_GreaterThan__SystemInt32_SystemInt32__SystemBoolean"
         PUSH, __intnl_SystemBoolean_c0
-        JUMP_IF_FALSE, 0x00000054
-        JUMP, 0x00000070
+        PUSH, __intnl_SystemBoolean_c1
+        COPY
+        PUSH, __intnl_SystemBoolean_c1
+        JUMP_IF_FALSE, 0x0000007c
+        JUMP, 0x00000098
     ___start_bb3:
         PUSH, __const_SystemInt32_1
         PUSH, __intnl_SystemInt32_c0
         COPY
-        JUMP, 0x00000084
+        JUMP, 0x000000ac
     ___start_bb2:
         PUSH, __const_SystemInt32_2
         PUSH, __intnl_SystemInt32_c0
@@ -41,6 +49,12 @@
     ___start_bb4:
         PUSH, __intnl_SystemInt32_c0
         PUSH, y
+        COPY
+        PUSH, y
+        PUSH, __intnl_SystemInt32_c0
+        COPY
+        PUSH, __intnl_SystemInt32_c0
+        PUSH, __intnl_SystemInt32_c1
         COPY
         PUSH, __intnl_returnJump_SystemUInt32_0
         COPY

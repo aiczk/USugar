@@ -32,6 +32,13 @@ public static class IrPipeline
         // and correctness risk for nothing. Value-equivalence (opt vs no-opt heap results) was verified.
         CoreFlatOptimizer.CoalesceSlots(coreModule);
 
+        // Recursion frame spill/reload: wraps each recursive call with a spill/reload of the frame fields +
+        // the slots LIVE ACROSS the call (using post-coalesce liveness — the physical slot set is small, so the
+        // software stack stays bounded). Runs after coalescing; re-verify the flat shape after the rewrite.
+        CoreFlatOptimizer.InsertRecursionSpills(coreModule);
+        foreach (var cf in coreModule.Functions)
+            FlatVerify.Verify(cf);
+
         var result = CoreToUasm.Generate(coreModule);
 
         if (dumpEnabled)

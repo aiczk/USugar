@@ -10,12 +10,14 @@
     __0_Stats__ret: %SystemObjectArray, null
     __const_SystemUInt32_sentinel: %SystemUInt32, null
     __intnl_SystemObjectArray_c0: %SystemObjectArray, null
+    __intnl_SystemObjectArray_c1: %SystemObjectArray, null
     __const_SystemInt32_0: %SystemInt32, null
     __intnl_SystemObject_c0: %SystemObject, null
+    __intnl_SystemObject_c1: %SystemObject, null
     __const_SystemInt32_1: %SystemInt32, null
     __const_SystemInt32_2: %SystemInt32, null
-    __intnl_SystemObjectArray_c1: %SystemObjectArray, null
     __intnl_SystemObjectArray_c2: %SystemObjectArray, null
+    __intnl_SystemObjectArray_c3: %SystemObjectArray, null
     __const_retaddr_SystemUInt32_0: %SystemUInt32, null
 .data_end
 .code_start
@@ -24,29 +26,38 @@
         PUSH, __const_SystemUInt32_sentinel
     _start__body:
         PUSH, __const_retaddr_SystemUInt32_0
-        JUMP, 0x000000d0
+        JUMP, 0x0000010c
     ___start__callret_0:
         PUSH, __0_Stats__ret
         PUSH, __intnl_SystemObjectArray_c0
         COPY
+        PUSH, __intnl_SystemObjectArray_c0
+        PUSH, __intnl_SystemObjectArray_c1
+        COPY
         PUSH, __0_Stats__ret
         PUSH, __intnl_SystemObjectArray_c0
         COPY
         PUSH, __intnl_SystemObjectArray_c0
+        PUSH, __intnl_SystemObjectArray_c1
+        COPY
+        PUSH, __intnl_SystemObjectArray_c1
         PUSH, __const_SystemInt32_0
         PUSH, __intnl_SystemObject_c0
         EXTERN, "SystemObjectArray.__Get__SystemInt32__SystemObject"
         PUSH, __intnl_SystemObject_c0
+        PUSH, __intnl_SystemObject_c1
+        COPY
+        PUSH, __intnl_SystemObject_c1
         PUSH, a
         COPY
-        PUSH, __0_Stats__ret
-        PUSH, __intnl_SystemObjectArray_c0
-        COPY
-        PUSH, __intnl_SystemObjectArray_c0
+        PUSH, __intnl_SystemObjectArray_c1
         PUSH, __const_SystemInt32_1
         PUSH, __intnl_SystemObject_c0
         EXTERN, "SystemObjectArray.__Get__SystemInt32__SystemObject"
         PUSH, __intnl_SystemObject_c0
+        PUSH, __intnl_SystemObject_c1
+        COPY
+        PUSH, __intnl_SystemObject_c1
         PUSH, b
         COPY
         PUSH, __intnl_returnJump_SystemUInt32_0
@@ -54,9 +65,12 @@
         JUMP_INDIRECT, __intnl_returnJump_SystemUInt32_0
     __Stats:
         PUSH, __const_SystemInt32_2
-        PUSH, __intnl_SystemObjectArray_c1
+        PUSH, __intnl_SystemObjectArray_c2
         EXTERN, "SystemObjectArray.__ctor__SystemInt32__SystemObjectArray"
-        PUSH, __intnl_SystemObjectArray_c1
+        PUSH, __intnl_SystemObjectArray_c2
+        PUSH, __intnl_SystemObjectArray_c3
+        COPY
+        PUSH, __intnl_SystemObjectArray_c3
         PUSH, __intnl_SystemObjectArray_c2
         COPY
         PUSH, __intnl_SystemObjectArray_c2

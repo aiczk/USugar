@@ -23,6 +23,200 @@ public static class CoreFlatOptimizer
             CoalesceSlotsFunc(func);
     }
 
+    // ========================================================================
+    // Recursion frame spill / reload (post-coalesce, liveness-aware)
+    // ========================================================================
+
+    // Mirror EmitContext.RecurStackId/RecurSpId as literals to avoid an IR→Emit layering dependency.
+    const string RecurStackId = "__recurStack";
+    const string RecurSpId = "__recurSp";
+
+    /// <summary>
+    /// Wrap each recursive-edge internal call with a software-stack spill/reload of the frame values it would
+    /// clobber on re-entry: the function's named frame fields (params / frame-locals / receiver, recorded at
+    /// emit time) PLUS only the scratch/frame slots LIVE ACROSS that call (computed from the post-coalesce
+    /// liveness here). Run AFTER CoalesceSlots so the slot set is the small physical set — under A-normal form
+    /// an emit-time total-spill of every (numerous) logical slot overflows the 512-entry recursion stack.
+    /// </summary>
+    public static void InsertRecursionSpills(CModule module)
+    {
+        foreach (var func in module.Functions)
+            InsertRecursionSpillsFunc(func);
+    }
+
+    static void InsertRecursionSpillsFunc(CFunction func)
+    {
+        if (func.RecursiveCalleeNames.Count == 0 || func.FlatBlocks.Count == 0) return;
+
+        // PRECISE per-instruction live-out: the slots whose value AFTER an instruction is still read before
+        // being overwritten. A single [firstDef,lastUse] interval is wrong here — CoalesceSlots reuses one
+        // physical slot for non-overlapping logical values, so its interval can span a call across which it is
+        // actually DEAD (its old value consumed, a new value written after). Live-out captures the gap.
+        var liveOut = ComputeLiveOutPerInstruction(func);
+
+        foreach (var block in func.FlatBlocks)
+        {
+            var newStmts = new List<CStmt>(block.Stmts.Count + 8);
+            foreach (var inst in block.Stmts)
+            {
+                if (IsRecursiveCall(inst, func.RecursiveCalleeNames))
+                {
+                    // Spill the slots live across the call (live-out) EXCEPT the call's own result slot — that
+                    // is written by the call (not clobbered by the recursion), so it must not be saved/restored.
+                    var dest = GetWrittenSlot(inst);
+                    var liveSlots = new List<SlotDecl>();
+                    if (liveOut.TryGetValue(inst, out var lo))
+                        foreach (var sid in lo)
+                        {
+                            if (dest.HasValue && sid == dest.Value) continue;
+                            if (sid < 0 || sid >= func.Slots.Count) continue;
+                            var slot = func.Slots[sid];
+                            if (slot.Class == SlotClass.Pinned) continue;
+                            liveSlots.Add(slot);
+                        }
+                    liveSlots.Sort((a, b) => a.Id.CompareTo(b.Id)); // deterministic spill order
+
+                    EmitSpill(func, newStmts, func.RecursionSpillFields, liveSlots);
+                    newStmts.Add(inst);
+                    EmitReload(func, newStmts, func.RecursionSpillFields, liveSlots);
+                }
+                else
+                {
+                    newStmts.Add(inst);
+                }
+            }
+            block.Stmts.Clear();
+            block.Stmts.AddRange(newStmts);
+        }
+    }
+
+    /// <summary>Per-instruction live-out (slots whose post-instruction value is read before being overwritten),
+    /// via standard backward dataflow over the flat CFG to a fixpoint.</summary>
+    static Dictionary<CStmt, HashSet<int>> ComputeLiveOutPerInstruction(CFunction func)
+    {
+        var blockLiveIn = new Dictionary<int, HashSet<int>>();
+        foreach (var b in func.FlatBlocks) blockLiveIn[b.Id] = new HashSet<int>();
+
+        HashSet<int> BlockOut(CBlock b)
+        {
+            var outSet = new HashSet<int>();
+            if (b.Terminator != null)
+            {
+                foreach (var s in GetSuccessors(b.Terminator))
+                    if (blockLiveIn.TryGetValue(s, out var li)) outSet.UnionWith(li);
+                foreach (var r in GetReadSlotsTerm(b.Terminator)) outSet.Add(r);
+            }
+            return outSet;
+        }
+
+        bool changed = true;
+        while (changed)
+        {
+            changed = false;
+            for (int bi = func.FlatBlocks.Count - 1; bi >= 0; bi--) // reverse order speeds convergence
+            {
+                var b = func.FlatBlocks[bi];
+                var live = BlockOut(b);
+                for (int i = b.Stmts.Count - 1; i >= 0; i--)
+                {
+                    var d = GetWrittenSlot(b.Stmts[i]);
+                    if (d.HasValue) live.Remove(d.Value);
+                    foreach (var r in GetReadSlotsInst(b.Stmts[i])) live.Add(r);
+                }
+                if (!blockLiveIn[b.Id].SetEquals(live)) { blockLiveIn[b.Id] = live; changed = true; }
+            }
+        }
+
+        var result = new Dictionary<CStmt, HashSet<int>>();
+        foreach (var b in func.FlatBlocks)
+        {
+            var live = BlockOut(b);
+            for (int i = b.Stmts.Count - 1; i >= 0; i--)
+            {
+                result[b.Stmts[i]] = new HashSet<int>(live); // live-out of instruction i
+                var d = GetWrittenSlot(b.Stmts[i]);
+                if (d.HasValue) live.Remove(d.Value);
+                foreach (var r in GetReadSlotsInst(b.Stmts[i])) live.Add(r);
+            }
+        }
+        return result;
+    }
+
+    static bool IsRecursiveCall(CStmt inst, HashSet<string> names) => inst switch
+    {
+        CExprStmt { Expr: CInternalCall ic } => names.Contains(ic.FuncName),
+        CAssign { Value: CInternalCall ic } => names.Contains(ic.FuncName),
+        _ => false,
+    };
+
+    // Push order: fields then slots (reload pops in reverse → LIFO balanced).
+    static void EmitSpill(CFunction func, List<CStmt> output, List<(string Name, string Type)> fields, List<SlotDecl> slots)
+    {
+        foreach (var f in fields)
+        {
+            var t = func.NewSlot(f.Type, SlotClass.Scratch);
+            output.Add(new CLoadField(t, f.Name, f.Type));
+            SpillValue(func, output, new CSlotRef(t, f.Type));
+        }
+        foreach (var slot in slots)
+            SpillValue(func, output, new CSlotRef(slot.Id, slot.Type));
+    }
+
+    static void EmitReload(CFunction func, List<CStmt> output, List<(string Name, string Type)> fields, List<SlotDecl> slots)
+    {
+        for (int i = slots.Count - 1; i >= 0; i--)
+            ReloadValue(func, output, slots[i].Id, slots[i].Type, null);
+        for (int i = fields.Count - 1; i >= 0; i--)
+            ReloadValue(func, output, -1, fields[i].Type, fields[i].Name);
+    }
+
+    static void SpillValue(CFunction func, List<CStmt> output, CValue valueLeaf)
+    {
+        // __recurStack[__recurSp] = value (Udon boxes the typed value into the object[] element); __recurSp++
+        var tStack = func.NewSlot("SystemObjectArray", SlotClass.Scratch);
+        output.Add(new CLoadField(tStack, RecurStackId, "SystemObjectArray"));
+        var tSp = func.NewSlot("SystemInt32", SlotClass.Scratch);
+        output.Add(new CLoadField(tSp, RecurSpId, "SystemInt32"));
+        output.Add(new CExprStmt(new CExternCall(
+            "SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid",
+            new List<CValue> { new CSlotRef(tStack, "SystemObjectArray"), new CSlotRef(tSp, "SystemInt32"), valueLeaf },
+            "SystemVoid")));
+        SpDelta(func, output, +1);
+    }
+
+    static void ReloadValue(CFunction func, List<CStmt> output, int slotId, string type, string fieldName)
+    {
+        // __recurSp--; value = __recurStack[__recurSp]  (Udon unboxes the object[] element on typed COPY)
+        SpDelta(func, output, -1);
+        var tStack = func.NewSlot("SystemObjectArray", SlotClass.Scratch);
+        output.Add(new CLoadField(tStack, RecurStackId, "SystemObjectArray"));
+        var tSp = func.NewSlot("SystemInt32", SlotClass.Scratch);
+        output.Add(new CLoadField(tSp, RecurSpId, "SystemInt32"));
+        var tGet = func.NewSlot("SystemObject", SlotClass.Scratch);
+        output.Add(new CExprStmt(new CExternCall(
+            "SystemObjectArray.__Get__SystemInt32__SystemObject",
+            new List<CValue> { new CSlotRef(tStack, "SystemObjectArray"), new CSlotRef(tSp, "SystemInt32") },
+            "SystemObject", tGet)));
+        if (fieldName != null)
+            output.Add(new CStoreField(fieldName, new CSlotRef(tGet, "SystemObject")));
+        else
+            output.Add(new CAssign(slotId, new CSlotRef(tGet, "SystemObject")));
+    }
+
+    static void SpDelta(CFunction func, List<CStmt> output, int delta)
+    {
+        var tSp = func.NewSlot("SystemInt32", SlotClass.Scratch);
+        output.Add(new CLoadField(tSp, RecurSpId, "SystemInt32"));
+        var tNew = func.NewSlot("SystemInt32", SlotClass.Scratch);
+        var sig = delta >= 0
+            ? "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+            : "SystemInt32.__op_Subtraction__SystemInt32_SystemInt32__SystemInt32";
+        output.Add(new CExprStmt(new CExternCall(sig,
+            new List<CValue> { new CSlotRef(tSp, "SystemInt32"), new CConst(System.Math.Abs(delta), "SystemInt32") },
+            "SystemInt32", tNew)));
+        output.Add(new CStoreField(RecurSpId, new CSlotRef(tNew, "SystemInt32")));
+    }
+
     static void CoalesceSlotsFunc(CFunction func)
     {
         if (func.FlatBlocks.Count == 0 || func.Slots.Count == 0) return;
@@ -108,11 +302,21 @@ public static class CoreFlatOptimizer
 
         if (mapping.Count == 0) return;
 
-        // Step 4: Rewrite all instructions and terminators
+        // Step 4: Rewrite all instructions and terminators. Drop self-copies (CAssign s = s) that arise when
+        // a copy's source and destination coalesce to the same physical slot — A-normal form's binding temps
+        // (t = producer; slot = t) become slot = slot once t≡slot, a no-op that must be removed.
         foreach (var block in func.FlatBlocks)
         {
-            for (int i = 0; i < block.Stmts.Count; i++)
-                block.Stmts[i] = RemapInst(block.Stmts[i], mapping);
+            var rewritten = new List<CStmt>(block.Stmts.Count);
+            foreach (var stmt in block.Stmts)
+            {
+                var r = RemapInst(stmt, mapping);
+                if (r is CAssign ca && ca.Value is CSlotRef csr && csr.SlotId == ca.DestSlot)
+                    continue; // self-copy after coalescing — drop
+                rewritten.Add(r);
+            }
+            block.Stmts.Clear();
+            block.Stmts.AddRange(rewritten);
 
             block.Terminator = RemapTerminator(block.Terminator, mapping);
         }

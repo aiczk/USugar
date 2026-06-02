@@ -202,6 +202,15 @@ public sealed class CFunction
     public readonly List<ReturnSlot> ReturnSlots = new List<ReturnSlot>();
     public Shape Shape = Shape.Structured;
 
+    // Recursion frame-stack metadata (set during emit; consumed by the post-coalesce InsertRecursionSpills
+    // pass). RecursiveCalleeNames = internal-call target names that are recursive edges FROM this function
+    // (every such call needs a spill/reload). RecursionSpillFields = the named heap fields (params / frame
+    // locals / struct receiver) that must be saved across any recursive call. The SLOTS to spill are NOT
+    // listed here — they are computed per call site from post-coalesce liveness (only slots live across the
+    // call), which is what keeps the spill bounded under A-normal form.
+    public readonly HashSet<string> RecursiveCalleeNames = new HashSet<string>();
+    public readonly List<(string Name, string Type)> RecursionSpillFields = new List<(string, string)>();
+
     public CFunction(string name, string exportName = null)
     {
         Name = name ?? throw new ArgumentNullException(nameof(name));

@@ -87,7 +87,13 @@ public sealed class CoreBuilder
     public void EmitContinue() => Emit(new CContinue());
     public void EmitGoto(string label) => Emit(new CGoto(label));
     public void EmitLabel(string label) => Emit(new CLabel(label));
-    public void EmitExprStmt(CValue expr) => Emit(new CExprStmt(expr));
+    // A-normal form: a value-producing call is materialized at construction, so a leaf or null reaching
+    // here has no remaining side effect — skip it. (Void calls return null after self-emitting.)
+    public void EmitExprStmt(CValue expr)
+    {
+        if (expr == null || expr is CLeaf) return;
+        Emit(new CExprStmt(expr));
+    }
 
     // ── Structured control flow ──
 
@@ -203,11 +209,38 @@ public sealed class CoreBuilder
     // ── Expression helpers ──
 
     public CSlotRef SlotRef(int slotId) => new CSlotRef(slotId, _currentFunc.Slots[slotId].Type);
-    public CFieldLoad LoadField(string fieldName, string type) => new CFieldLoad(fieldName, type);
     public CFieldAddr FieldAddr(string fieldName, string type) => new CFieldAddr(fieldName, type);
-    public CExternCall ExternCall(string sig, List<CValue> args, string retType) => new CExternCall(sig, args, retType);
-    public void EmitExternVoid(string sig, List<CValue> args) => EmitExprStmt(new CExternCall(sig, args, "SystemVoid"));
-    public CInternalCall InternalCall(string funcName, List<CValue> args, string retType) => new CInternalCall(funcName, args, retType);
-    public CSelect Select(CValue cond, CValue trueVal, CValue falseVal, string type) => new CSelect(cond, trueVal, falseVal, type);
     public CFuncRef FuncRef(string funcName) => new CFuncRef(funcName);
+
+    // ── Value producers (A-normal form) ──
+    // Each binds its producer to a fresh scratch slot at the current insertion point (program order)
+    // and returns that slot leaf, so a producer never nests in an operand position. Void calls have no
+    // value: they emit as a side-effecting statement and return null (callers must not use the result).
+
+    /// <summary>Bind a value-producing node to a fresh scratch slot and return the slot leaf.</summary>
+    CSlotRef Bind(CValue producer, string type)
+    {
+        var t = AllocScratch(type);
+        Emit(new CAssign(t, producer));
+        return SlotRef(t);
+    }
+
+    public CSlotRef LoadField(string fieldName, string type) => Bind(new CFieldLoad(fieldName, type), type);
+    public CSlotRef Select(CValue cond, CValue trueVal, CValue falseVal, string type)
+        => Bind(new CSelect(cond, trueVal, falseVal, type), type);
+
+    public CSlotRef ExternCall(string sig, List<CValue> args, string retType)
+    {
+        if (retType == "SystemVoid") { Emit(new CExprStmt(new CExternCall(sig, args, retType))); return null; }
+        return Bind(new CExternCall(sig, args, retType), retType);
+    }
+
+    public CSlotRef InternalCall(string funcName, List<CValue> args, string retType)
+    {
+        if (retType == "SystemVoid") { Emit(new CExprStmt(new CInternalCall(funcName, args, retType))); return null; }
+        return Bind(new CInternalCall(funcName, args, retType), retType);
+    }
+
+    public void EmitExternVoid(string sig, List<CValue> args) => Emit(new CExprStmt(new CExternCall(sig, args, "SystemVoid")));
+    public void EmitInternalVoid(string funcName, List<CValue> args) => Emit(new CExprStmt(new CInternalCall(funcName, args, "SystemVoid")));
 }

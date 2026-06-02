@@ -77,14 +77,14 @@ public abstract class HandlerBase
     /// <summary>Create a slot reference expression.</summary>
     protected CSlotRef SlotRef(int slotId) => _builder.SlotRef(slotId);
 
-    /// <summary>Create a field load expression.</summary>
-    protected CFieldLoad LoadField(string fieldName, string type) => _builder.LoadField(fieldName, type);
+    /// <summary>Read a field's value — materialized to a scratch slot (A-normal form), returns the leaf.</summary>
+    protected CSlotRef LoadField(string fieldName, string type) => _builder.LoadField(fieldName, type);
 
     /// <summary>Create a field address reference (for extern out/ref).</summary>
     protected CFieldAddr FieldAddr(string fieldName, string type) => _builder.FieldAddr(fieldName, type);
 
-    /// <summary>Create an extern call expression.</summary>
-    protected CExternCall ExternCall(string sig, List<CValue> args, string retType)
+    /// <summary>Emit an extern call, materialized to a scratch slot (returns the leaf; null for void).</summary>
+    protected CSlotRef ExternCall(string sig, List<CValue> args, string retType)
         => _builder.ExternCall(ResolveExtern(sig), args, retType);
 
     /// <summary>
@@ -232,11 +232,11 @@ public abstract class HandlerBase
         => _builder.EmitExternVoid(ResolveExtern(sig), args);
 
     /// <summary>Create an internal call expression.</summary>
-    protected CInternalCall InternalCall(string funcName, List<CValue> args, string retType)
+    protected CSlotRef InternalCall(string funcName, List<CValue> args, string retType)
         => _builder.InternalCall(funcName, args, retType);
 
     /// <summary>Create a select (ternary) expression.</summary>
-    protected CSelect Select(CValue cond, CValue trueVal, CValue falseVal, string type)
+    protected CSlotRef Select(CValue cond, CValue trueVal, CValue falseVal, string type)
         => _builder.Select(cond, trueVal, falseVal, type);
 
     /// <summary>Create a function reference (for delegate/JUMP_INDIRECT).</summary>
@@ -245,8 +245,17 @@ public abstract class HandlerBase
     /// <summary>Emit a statement.</summary>
     protected void Emit(CStmt stmt) => _builder.Emit(stmt);
 
-    /// <summary>Emit an expression as a statement (side-effecting calls).</summary>
-    protected void EmitExprStmt(CValue expr) => _builder.EmitExprStmt(expr);
+    /// <summary>Emit an expression as a statement (side-effecting call). Under A-normal form a value-producing
+    /// call is already materialized at construction, so a leaf or null reaching here has no remaining side
+    /// effect — skip it. Only an unbound producer (void call) needs emitting as a statement.</summary>
+    protected void EmitExprStmt(CValue expr)
+    {
+        if (expr == null || expr is CLeaf) return;
+        _builder.EmitExprStmt(expr);
+    }
+
+    /// <summary>Emit a void internal call as a side-effecting statement (not materialized to a slot).</summary>
+    protected void EmitInternalVoid(string funcName, List<CValue> args) => _builder.EmitInternalVoid(funcName, args);
 
     // ── Nullable<T> (boxed-object emulation) helpers ──
 
@@ -823,63 +832,43 @@ public abstract class HandlerBase
             throw new InvalidOperationException($"No CFunction registered for method '{target.Name}'");
         var retType = func.ReturnType ?? "SystemVoid";
 
-        // Recursion-cycle edge: the callee can re-enter the current method and clobber its param/local
-        // slots (Udon's flat heap shares them across frames). Spill the caller's live values onto the
-        // software stack, materialise the call so it is sequenced between spill and reload, then reload.
+        // Recursion-cycle edge: the callee can re-enter the current method and clobber its param/local fields
+        // and shared scratch slots (Udon's flat heap shares them across frames). Record the edge + the named
+        // frame fields to save; the post-coalesce InsertRecursionSpills pass wraps the call with spill/reload
+        // of those fields PLUS only the slots live across the call — bounded under A-normal form, where an
+        // emit-time total-spill of every (now numerous) scratch slot would overflow the software stack.
         if (IsRecursiveEdge(_currentMethod, target))
         {
             _ctx.EnsureRecursionStack();
-            var spill = CollectRecursionSpillVars();
-            EmitRecursionSpill(spill);
-            CValue result;
-            if (retType == "SystemVoid")
+            var cf = _builder.CurrentFunction;
+            cf.RecursiveCalleeNames.Add(func.Name);
+            // Accumulate the UNION of in-scope frame fields across every recursive call site: a later call has
+            // more locals in scope than an earlier one, and the post-pass uses a single field set for all calls.
+            // Over-spilling a not-yet-assigned local at an earlier call is inert (its garbage is saved/restored).
+            foreach (var f in CollectRecursionSpillFields())
             {
-                EmitExprStmt(InternalCall(func.Name, args, retType));
-                result = null;
+                bool seen = false;
+                foreach (var e in cf.RecursionSpillFields) if (e.Name == f.Name) { seen = true; break; }
+                if (!seen) cf.RecursionSpillFields.Add(f);
             }
-            else
-            {
-                var t = _ctx.AllocTemp(retType);
-                EmitAssign(t, InternalCall(func.Name, args, retType));
-                result = SlotRef(t);
-            }
-            EmitRecursionReload(spill);
-            return result;
         }
 
         return InternalCall(func.Name, args, retType);
     }
 
-    // One frame value to spill across a recursive call — either a named heap field (param / receiver /
-    // local) or an IR slot (any scratch/frame temp: array temps, foreach loop-control, and crucially the
-    // result temp of an EARLIER recursive call in the same expression).
-    readonly struct SpillEntry
+    // The named heap fields that must survive a recursive re-entry of the current method: its parameters,
+    // the struct receiver, and its in-scope frame locals (NOT captured locals — those are shared by reference,
+    // so the flat-heap sharing is the correct closure behaviour). The SLOTS to spill are computed per call
+    // site from post-coalesce liveness by InsertRecursionSpills, so they are not collected here.
+    List<(string Name, string Type)> CollectRecursionSpillFields()
     {
-        public readonly int Slot;       // >= 0 for a slot entry
-        public readonly string FieldId; // non-null for a field entry
-        public readonly string Type;
-        SpillEntry(int slot, string fieldId, string type) { Slot = slot; FieldId = fieldId; Type = type; }
-        public static SpillEntry Field(string id, string type) => new SpillEntry(-1, id, type);
-        public static SpillEntry SlotOf(int slot, string type) => new SpillEntry(slot, null, type);
-        public bool IsSlot => FieldId == null;
-    }
-
-    // Every frame value that must survive a recursive re-entry of the current method: its parameters, the
-    // struct receiver, all in-scope locals (named heap fields), AND every IR slot allocated so far in the
-    // current function (scratch/frame temps). The slot snapshot is the key fix — Udon's flat heap shares a
-    // function's scratch variables across all its activations, so an unnamed temp holding a value across a
-    // sibling recursive call (e.g. the first `Fib(n-1)` result while `Fib(n-2)` runs, or a foreach's index)
-    // is clobbered unless spilled. Captured BEFORE this call's own result temp is allocated, so that temp is
-    // excluded. Over-approximation (spilling a dead temp) is inert.
-    List<SpillEntry> CollectRecursionSpillVars()
-    {
-        var entries = new List<SpillEntry>();
+        var fields = new List<(string, string)>();
         var seen = new HashSet<string>();
         void AddField(string id)
         {
             if (id == null || !seen.Add(id)) return;
             var t = _ctx.GetFieldType(id);
-            if (t != null) entries.Add(SpillEntry.Field(id, t));
+            if (t != null) fields.Add((id, t));
         }
         if (_currentMethod != null && _methodParamVarIds.TryGetValue(_currentMethod, out var pids))
             foreach (var pid in pids) AddField(pid);
@@ -897,54 +886,6 @@ public abstract class HandlerBase
             AddField(kv.Value.Id);
         }
 
-        var slots = _builder.CurrentFunction.Slots;
-        for (int i = 0; i < slots.Count; i++)
-            if (slots[i].Class != SlotClass.Pinned) // Pinned = special infrastructure, not frame-local computation
-                entries.Add(SpillEntry.SlotOf(slots[i].Id, slots[i].Type));
-        return entries;
-    }
-
-    void EmitRecursionSpill(List<SpillEntry> entries)
-    {
-        foreach (var e in entries)
-        {
-            // __recurStack[__recurSp] = v   (boxed into the object[] element)
-            EmitExternVoid("SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid", new List<CValue>
-            {
-                LoadField(EmitContext.RecurStackId, "SystemObjectArray"),
-                LoadField(EmitContext.RecurSpId, "SystemInt32"),
-                e.IsSlot ? (CValue)SlotRef(e.Slot) : LoadField(e.FieldId, e.Type),
-            });
-            EmitRecurSpDelta(1);
-        }
-    }
-
-    void EmitRecursionReload(List<SpillEntry> entries)
-    {
-        // Pop in reverse (LIFO).
-        for (int i = entries.Count - 1; i >= 0; i--)
-        {
-            EmitRecurSpDelta(-1);
-            // v = __recurStack[__recurSp]   (boxed value; Udon unboxes transparently on typed use)
-            var get = ExternCall("SystemObjectArray.__Get__SystemInt32__SystemObject", new List<CValue>
-            {
-                LoadField(EmitContext.RecurStackId, "SystemObjectArray"),
-                LoadField(EmitContext.RecurSpId, "SystemInt32"),
-            }, "SystemObject");
-            if (entries[i].IsSlot) EmitAssign(entries[i].Slot, get);
-            else EmitStoreField(entries[i].FieldId, get);
-        }
-    }
-
-    void EmitRecurSpDelta(int delta)
-    {
-        var sig = delta >= 0
-            ? "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
-            : "SystemInt32.__op_Subtraction__SystemInt32_SystemInt32__SystemInt32";
-        EmitStoreField(EmitContext.RecurSpId, ExternCall(sig, new List<CValue>
-        {
-            LoadField(EmitContext.RecurSpId, "SystemInt32"),
-            Const(System.Math.Abs(delta), "SystemInt32"),
-        }, "SystemInt32"));
+        return fields;
     }
 }
