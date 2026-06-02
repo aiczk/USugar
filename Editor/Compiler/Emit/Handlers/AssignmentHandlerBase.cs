@@ -249,13 +249,6 @@ public abstract class AssignmentHandlerBase : HandlerBase
                 {
                     EmitExternVoid(ExternResolver.BuildPropertySetSignature(containingType, propRef.Property.Name, propValueType), new List<CLeaf> { wbInstanceVal, valueVal });
                 }
-                // COW dirty: struct property setter → copy back to force heap update
-                if (propRef.Property.ContainingType.IsValueType)
-                {
-                    var cowSlot = _ctx.AllocTemp(containingType);
-                    EmitAssign(cowSlot, wbInstanceVal);
-                }
-
                 break;
             }
             case IFieldReferenceOperation { Instance: not null and not IInstanceReferenceOperation } fieldRef2

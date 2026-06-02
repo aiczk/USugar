@@ -170,9 +170,6 @@ public class SimpleAssignmentHandler : AssignmentHandlerBase, IExpressionHandler
             var valueType = GetUdonType(fieldTarget.Field.Type);
             var sig = ExternResolver.BuildFieldSetSignature(containingType, fieldTarget.Field.Name, valueType);
             EmitExternVoid(sig, new List<CLeaf> { instanceVal, srcVal });
-            // COW dirty: struct field setter → copy back to force heap update
-            var cowSlot = _ctx.AllocTemp(containingType);
-            EmitAssign(cowSlot, instanceVal);
             return srcVal;
         }
 
@@ -275,12 +272,6 @@ public class SimpleAssignmentHandler : AssignmentHandlerBase, IExpressionHandler
                     break;
                 }
             }
-            // COW dirty: struct property setter → copy back to force heap update
-            if (!propRef.Property.ContainingType.IsValueType)
-                return srcVal;
-
-            var cowSlot = _ctx.AllocTemp(containingType);
-            EmitAssign(cowSlot, instanceVal);
             return srcVal;
         }
 

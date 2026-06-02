@@ -285,14 +285,15 @@ public abstract class HandlerBase
     protected CLeaf EmitDeepCloneAggregate(CLeaf src, INamedTypeSymbol aggType)
     {
         var layout = _ctx.GetAggregateLayout(aggType);
-        var srcSlot = _ctx.AllocTemp("SystemObjectArray"); EmitAssign(srcSlot, src);
+        // src is a single-assignment SystemObjectArray leaf under ANF; the loop only READS its elements
+        // (writes target the fresh dstSlot), so it is stable without a snapshot.
         var dstSlot = _ctx.AllocTemp("SystemObjectArray");
         EmitAssign(dstSlot, ExternCall("SystemObjectArray.__ctor__SystemInt32__SystemObjectArray",
             new List<CLeaf> { Const(layout.Count, "SystemInt32") }, "SystemObjectArray"));
         for (int i = 0; i < layout.Count; i++)
         {
             var elem = ExternCall("SystemObjectArray.__Get__SystemInt32__SystemObject",
-                new List<CLeaf> { SlotRef(srcSlot), Const(i, "SystemInt32") }, "SystemObject");
+                new List<CLeaf> { src, Const(i, "SystemInt32") }, "SystemObject");
             CLeaf copy = layout.Fields[i].Type is INamedTypeSymbol nested && EmitContext.IsAggregateType(nested)
                 ? EmitDeepCloneAggregate(elem, nested) // nested aggregate → recurse
                 : elem;                                // boxed scalar → reference copy is fine (immutable box)
