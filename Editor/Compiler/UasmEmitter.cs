@@ -64,7 +64,8 @@ public class UasmEmitter
             new NullableHandler(_ctx),
         };
 
-        _ctx.InitializeDispatchers(VisitOperation, VisitExpression, operatorHandler.EmitPatternCheckImpl);
+        _ctx.InitializeDispatchers(VisitOperation, VisitExpression, operatorHandler.EmitPatternCheckImpl,
+            operatorHandler.EmitNewAggregate);
     }
 
     // Type name resolution helper
@@ -315,6 +316,15 @@ public class UasmEmitter
                 }
             }
             _ctx.DeclareField(member.Name, udonType, flags, constValue, syncMode);
+
+            // Aggregate (struct/tuple) field with NO explicit initializer → C# default-initializes it to a
+            // zeroed struct. In the object[] emulation that requires a fresh default array; without it the heap
+            // var stays null and `f.x = …` faults (NRE on __Set__). Reference-type/array fields stay null (correct).
+            if (syntaxRef?.GetSyntax() is not VariableDeclaratorSyntax { Initializer: not null }
+                && member.Type is INamedTypeSymbol aggFieldType && EmitContext.IsAggregateType(aggFieldType))
+            {
+                _ctx.AggregateFieldDefaults.Add((member.Name, aggFieldType));
+            }
 
             // Detect [FieldChangeCallback("PropertyName")]
             var fcbAttr = member.GetAttributes()
@@ -740,8 +750,9 @@ public class UasmEmitter
         // Emit pending delegate bridges for hoisted lambdas/local functions
         EmitPendingDelegateBridges();
 
-        // Synthesize _start if there are field initializers or FCB fields but no user-defined Start()
-        if ((_fieldInitOps.Count > 0 || _fieldChangeCallbacks.Count > 0)
+        // Synthesize _start if there are field initializers, FCB fields, or default-init aggregate fields but
+        // no user-defined Start()
+        if ((_fieldInitOps.Count > 0 || _fieldChangeCallbacks.Count > 0 || _ctx.AggregateFieldDefaults.Count > 0)
             && !methods.Any(m => UdonEventNames.TryGetValue(m.Name, out var en) && en == "_start"))
         {
             var startFunc = _module.AddFunction("_start", "_start");
@@ -1160,6 +1171,11 @@ public class UasmEmitter
 
     void EmitFieldInitializers()
     {
+        // Default-init aggregate (struct/tuple) fields with no explicit initializer FIRST, so any explicit
+        // initializer that references one sees a non-null backing array (C# default-then-initializer order).
+        foreach (var (fieldId, aggType) in _ctx.AggregateFieldDefaults)
+            BridgeStore(fieldId, _ctx.EmitNewAggregate(aggType));
+
         foreach (var (fieldId, initOp, fieldType) in _fieldInitOps)
         {
             try

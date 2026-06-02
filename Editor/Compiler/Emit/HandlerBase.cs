@@ -305,7 +305,7 @@ public abstract class HandlerBase
 
     /// <summary>Allocate a fresh object[]-backed aggregate (struct/tuple) and default-initialize it as a
     /// VALUE (e.g. `new V()` used as an expression). Nested aggregate fields are recursively allocated.</summary>
-    protected CLeaf EmitNewAggregate(INamedTypeSymbol aggType)
+    public CLeaf EmitNewAggregate(INamedTypeSymbol aggType)
     {
         var layout = _ctx.GetAggregateLayout(aggType);
         var slot = _ctx.AllocTemp("SystemObjectArray");
