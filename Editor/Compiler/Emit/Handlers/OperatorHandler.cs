@@ -360,18 +360,26 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
             case IConstantPatternOperation constPat:
             {
                 var constVal = VisitExpression(constPat.Value);
-                var eqType = GetUdonType(valueType);
                 // Enum comparison → convert operands and use underlying type
                 var convertedValueVal = EmitEnumToUnderlying(valueVal, valueType);
                 constVal = EmitEnumToUnderlying(constVal, valueType);
-                if (valueType is INamedTypeSymbol named && named.TypeKind == TypeKind.Enum)
-                    eqType = GetUdonType(named.EnumUnderlyingType);
-                // null comparisons use SystemObject equality
-                var cmpType = constPat.Value.ConstantValue is { HasValue: true, Value: null }
-                    ? "SystemObject" : eqType;
+                var underlyingSym = valueType is INamedTypeSymbol named && named.TypeKind == TypeKind.Enum
+                    ? named.EnumUnderlyingType : valueType;
+                var eqType = GetUdonType(underlyingSym);
+                if (constPat.Value.ConstantValue is { HasValue: true, Value: null })
+                    eqType = "SystemObject"; // null comparisons use SystemObject equality
+                else if (SmallIntOrChar(eqType))
+                {
+                    // A nullable small-int/char (or small-underlying enum) scrutinee may carry a boxed plain int
+                    // rather than the strict small-int tag; promote both sides to int32 (ToInt32(SystemObject)
+                    // tolerates any boxed numeric) and compare with the int32 extern, like the binary path.
+                    convertedValueVal = PromoteBoxedToInt32(convertedValueVal, underlyingSym, out _);
+                    constVal = PromoteBoxedToInt32(constVal, underlyingSym, out _);
+                    eqType = "SystemInt32";
+                }
                 return ExternCall(
                     ExternResolver.BuildMethodSignature(
-                        cmpType, "__op_Equality", new[] { cmpType, cmpType }, "SystemBoolean"),
+                        eqType, "__op_Equality", new[] { eqType, eqType }, "SystemBoolean"),
                     new List<CValue> { convertedValueVal, constVal },
                     "SystemBoolean");
             }
@@ -410,7 +418,20 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
             case IRelationalPatternOperation relPat:
             {
                 var constVal = VisitExpression(relPat.Value);
-                var valType = GetUdonType(valueType);
+                // Enum scrutinee → compare on the underlying type (mirrors the constant-pattern arm).
+                var scrut = EmitEnumToUnderlying(valueVal, valueType);
+                constVal = EmitEnumToUnderlying(constVal, valueType);
+                var underlyingSym = valueType is INamedTypeSymbol relEnum && relEnum.TypeKind == TypeKind.Enum
+                    ? relEnum.EnumUnderlyingType : valueType;
+                var valType = GetUdonType(underlyingSym);
+                if (SmallIntOrChar(valType))
+                {
+                    // A nullable small-int/char (or small-underlying enum) scrutinee may be boxed as a plain int;
+                    // promote both sides to int32 so the strict small-int extern's box-tag fetch cannot InvalidCast.
+                    scrut = PromoteBoxedToInt32(scrut, underlyingSym, out _);
+                    constVal = PromoteBoxedToInt32(constVal, underlyingSym, out _);
+                    valType = "SystemInt32";
+                }
                 var opName = relPat.OperatorKind switch
                 {
                     BinaryOperatorKind.LessThan => "__op_LessThan",
@@ -423,7 +444,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
                 return ExternCall(
                     ExternResolver.BuildMethodSignature(
                         valType, opName, new[] { valType, valType }, "SystemBoolean"),
-                    new List<CValue> { valueVal, constVal },
+                    new List<CValue> { scrut, constVal },
                     "SystemBoolean");
             }
             case IBinaryPatternOperation binPat:

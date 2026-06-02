@@ -285,7 +285,7 @@ public abstract class HandlerBase
         }
     }
 
-    static bool SmallIntOrChar(string udonType)
+    protected static bool SmallIntOrChar(string udonType)
         => udonType is "SystemByte" or "SystemSByte" or "SystemInt16" or "SystemUInt16" or "SystemChar";
 
     /// <summary>Promote a boxed small-int/char operand to int32 (Udon has no operators on those types and a
