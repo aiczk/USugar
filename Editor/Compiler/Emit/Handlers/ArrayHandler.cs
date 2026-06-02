@@ -23,11 +23,10 @@ public class ArrayHandler : HandlerBase, IExpressionHandler
         var elemSym = ((IArrayTypeSymbol)op.Type).ElementType;
         bool aggElem = elemSym is INamedTypeSymbol && EmitContext.IsAggregateType(elemSym);
 
-        var sizeSlot = _ctx.AllocTemp("SystemInt32");
-        EmitAssign(sizeSlot, VisitExpression(op.DimensionSizes[0]));
+        var sizeVal = VisitExpression(op.DimensionSizes[0]);
         var arrSlot = _ctx.AllocTemp(arrayType);
         EmitAssign(arrSlot, ExternCall($"{arrayType}.__ctor__SystemInt32__{arrayType}",
-            new List<CLeaf> { SlotRef(sizeSlot) }, arrayType));
+            new List<CLeaf> { sizeVal }, arrayType));
 
         if (op.Initializer != null)
         {
@@ -43,7 +42,7 @@ public class ArrayHandler : HandlerBase, IExpressionHandler
             EmitAssign(iSlot, Const(0, "SystemInt32"));
             _builder.EmitWhile(
                 () => ExternCall("SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean",
-                    new List<CLeaf> { SlotRef(iSlot), SlotRef(sizeSlot) }, "SystemBoolean"),
+                    new List<CLeaf> { SlotRef(iSlot), sizeVal }, "SystemBoolean"),
                 _ =>
                 {
                     EmitExternVoid($"{arrayType}.__Set__SystemInt32_{elementType}__SystemVoid",
@@ -118,27 +117,19 @@ public class ArrayHandler : HandlerBase, IExpressionHandler
         var udonElemType = GetUdonType(arrSymbol.ElementType);
         var udonArrType = GetUdonType(arrayRef.Type);
 
-        // Store array in scratch slot to avoid re-evaluation
-        var arrSlot = _ctx.AllocTemp(udonArrType);
-        EmitAssign(arrSlot, arrayVal);
+        // arrayVal / startVal / lenVal / resultVal are already single-assignment scratch leaves under ANF,
+        // stable across the loop — no extra snapshot slot needed.
+        var startVal = ResolveRangeOperand(arrayVal, arrayType, rangeOp.LeftOperand, false);
 
-        var startVal = ResolveRangeOperand(SlotRef(arrSlot), arrayType, rangeOp.LeftOperand, false);
-        var startSlot = _ctx.AllocTemp("SystemInt32");
-        EmitAssign(startSlot, startVal);
-
-        var endVal = ResolveRangeOperand(SlotRef(arrSlot), arrayType, rangeOp.RightOperand, true);
+        var endVal = ResolveRangeOperand(arrayVal, arrayType, rangeOp.RightOperand, true);
 
         // len = end - start
         var lenVal = ExternCall("SystemInt32.__op_Subtraction__SystemInt32_SystemInt32__SystemInt32",
-            new List<CLeaf> { endVal, SlotRef(startSlot) }, "SystemInt32");
-        var lenSlot = _ctx.AllocTemp("SystemInt32");
-        EmitAssign(lenSlot, lenVal);
+            new List<CLeaf> { endVal, startVal }, "SystemInt32");
 
         // result = new T[len]
         var resultVal = ExternCall($"{udonArrType}.__ctor__SystemInt32__{udonArrType}",
-            new List<CLeaf> { SlotRef(lenSlot) }, udonArrType);
-        var resultSlot = _ctx.AllocTemp(udonArrType);
-        EmitAssign(resultSlot, resultVal);
+            new List<CLeaf> { lenVal }, udonArrType);
 
         // for (i = 0; i < len; i++) result[i] = arr[start + i]
         var iSlot = _ctx.AllocTemp("SystemInt32");
@@ -148,7 +139,7 @@ public class ArrayHandler : HandlerBase, IExpressionHandler
             b => { EmitAssign(iSlot, Const(0, "SystemInt32")); },
             // cond: i < len
             ExternCall("SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean",
-                new List<CLeaf> { SlotRef(iSlot), SlotRef(lenSlot) }, "SystemBoolean"),
+                new List<CLeaf> { SlotRef(iSlot), lenVal }, "SystemBoolean"),
             // update: i++
             b =>
             {
@@ -161,18 +152,18 @@ public class ArrayHandler : HandlerBase, IExpressionHandler
             {
                 // srcIdx = start + i
                 var srcIdxVal = ExternCall("SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32",
-                    new List<CLeaf> { SlotRef(startSlot), SlotRef(iSlot) }, "SystemInt32");
+                    new List<CLeaf> { startVal, SlotRef(iSlot) }, "SystemInt32");
 
                 // val = arr[srcIdx]
                 var valVal = ExternCall($"{arrayType}.__Get__SystemInt32__{elementType}",
-                    new List<CLeaf> { SlotRef(arrSlot), srcIdxVal }, udonElemType);
+                    new List<CLeaf> { arrayVal, srcIdxVal }, udonElemType);
 
                 // result[i] = val
                 EmitExternVoid($"{arrayType}.__Set__SystemInt32_{elementType}__SystemVoid",
-                    new List<CLeaf> { SlotRef(resultSlot), SlotRef(iSlot), valVal });
+                    new List<CLeaf> { resultVal, SlotRef(iSlot), valVal });
             }
         );
 
-        return SlotRef(resultSlot);
+        return resultVal;
     }
 }

@@ -394,17 +394,15 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
         var count = op.Elements.Length;
         var arrExpr = ExternCall("SystemObjectArray.__ctor__SystemInt32__SystemObjectArray",
             new List<CLeaf> { Const(count, "SystemInt32") }, "SystemObjectArray");
-        var tmpSlot = _ctx.AllocTemp("SystemObjectArray");
-        EmitAssign(tmpSlot, arrExpr);
 
         for (int i = 0; i < count; i++)
         {
             var elemVal = VisitExpression(op.Elements[i]);
             EmitExternVoid("SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid",
-                new List<CLeaf> { SlotRef(tmpSlot), Const(i, "SystemInt32"), elemVal });
+                new List<CLeaf> { arrExpr, Const(i, "SystemInt32"), elemVal });
         }
 
-        return SlotRef(tmpSlot);
+        return arrExpr;
     }
 
 }

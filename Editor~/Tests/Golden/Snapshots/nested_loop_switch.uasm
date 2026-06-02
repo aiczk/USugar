@@ -58,9 +58,6 @@
         PUSH, __intnl_SystemInt32_c1
         COPY
         PUSH, __intnl_SystemInt32_c1
-        PUSH, __intnl_SystemInt32_c2
-        COPY
-        PUSH, __intnl_SystemInt32_c2
         PUSH, __const_SystemInt32_0
         PUSH, __intnl_SystemBoolean_c0
         EXTERN, "SystemInt32.__op_Equality__SystemInt32_SystemInt32__SystemBoolean"
@@ -68,10 +65,10 @@
         PUSH, __intnl_SystemBoolean_c1
         COPY
         PUSH, __intnl_SystemBoolean_c1
-        JUMP_IF_FALSE, 0x00000140
-        JUMP, 0x0000027c
+        JUMP_IF_FALSE, 0x0000012c
+        JUMP, 0x00000268
     ___start_bb8:
-        PUSH, __intnl_SystemInt32_c2
+        PUSH, __intnl_SystemInt32_c1
         PUSH, __const_SystemInt32_2
         PUSH, __intnl_SystemBoolean_c0
         EXTERN, "SystemInt32.__op_Equality__SystemInt32_SystemInt32__SystemBoolean"
@@ -79,8 +76,8 @@
         PUSH, __intnl_SystemBoolean_c1
         COPY
         PUSH, __intnl_SystemBoolean_c1
-        JUMP_IF_FALSE, 0x0000018c
-        JUMP, 0x00000204
+        JUMP_IF_FALSE, 0x00000178
+        JUMP, 0x000001f0
     ___start_bb11:
         PUSH, acc
         PUSH, __intnl_SystemInt32_c1
@@ -98,7 +95,7 @@
         PUSH, __intnl_SystemInt32_c2
         PUSH, acc
         COPY
-        JUMP, 0x000002ec
+        JUMP, 0x000002d8
     ___start_bb10:
         PUSH, acc
         PUSH, __intnl_SystemInt32_c1
@@ -116,7 +113,7 @@
         PUSH, __intnl_SystemInt32_c2
         PUSH, acc
         COPY
-        JUMP, 0x000002ec
+        JUMP, 0x000002d8
     ___start_bb7:
         PUSH, acc
         PUSH, __intnl_SystemInt32_c1

@@ -127,14 +127,9 @@ public partial class InvocationHandler
         if (!target.ReturnsVoid)
         {
             var returnType = GetUdonType(target.ReturnType);
+            // result is already a single-assignment scratch leaf (ExternCall binds it under ANF); the out/ref
+            // copy-back below writes only the user's target lvalues, never this slot, so it survives unchanged.
             result = ExternCall(sig, externArgs, returnType);
-            // Store result before copy-back so it's not lost
-            if (outCopyBacks.Count > 0)
-            {
-                var resultSlot = _ctx.AllocTemp(returnType);
-                EmitAssign(resultSlot, result);
-                result = SlotRef(resultSlot);
-            }
         }
         else
         {

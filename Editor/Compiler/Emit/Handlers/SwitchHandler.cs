@@ -26,12 +26,9 @@ public class SwitchHandler : HandlerBase, IOperationHandler
     void VisitSwitch(ISwitchOperation op)
     {
         var valueType = GetUdonType(op.Value.Type);
-        // Materialize the governing value into ONE temp. VisitExpression returns a lazy node that re-executes
-        // its side effects on every lowering; a side-effecting governor (`switch(Next())`) consumed by a single
-        // multi-label arm, or by a pattern+value mix, would otherwise be evaluated more than once.
-        var valueSlot = _ctx.AllocTemp(valueType);
-        EmitAssign(valueSlot, VisitExpression(op.Value));
-        var valueVal = SlotRef(valueSlot);
+        // Under ANF VisitExpression binds a side-effecting governor (`switch(Next())`) to a fresh scratch
+        // exactly once, so the resulting leaf can be re-read across every case arm with no re-evaluation.
+        var valueVal = VisitExpression(op.Value);
 
         var endLabel = _ctx.NextSwitchEndLabel();
         _ctx.SwitchBreakLabels.Push(endLabel);

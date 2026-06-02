@@ -217,14 +217,14 @@ public abstract class HandlerBase
     /// (truncate-toward-zero division makes this exact for both signs). Shared by the binary and compound paths.</summary>
     protected CLeaf EmitInt64Remainder(CLeaf left, CLeaf right, string t)
     {
-        var aSlot = _ctx.AllocTemp(t); EmitAssign(aSlot, left);
-        var bSlot = _ctx.AllocTemp(t); EmitAssign(bSlot, right);
+        // left/right are CLeaf params — stable single-assignment leaves under ANF; the intermediate
+        // ExternCall results each bind their own fresh scratch, so neither operand is mutated here.
         var quot = ExternCall($"{t}.__op_Division__{t}_{t}__{t}",
-            new List<CLeaf> { SlotRef(aSlot), SlotRef(bSlot) }, t);
+            new List<CLeaf> { left, right }, t);
         var prod = ExternCall($"{t}.__op_Multiplication__{t}_{t}__{t}",
-            new List<CLeaf> { quot, SlotRef(bSlot) }, t);
+            new List<CLeaf> { quot, right }, t);
         return ExternCall($"{t}.__op_Subtraction__{t}_{t}__{t}",
-            new List<CLeaf> { SlotRef(aSlot), prod }, t);
+            new List<CLeaf> { left, prod }, t);
     }
 
     /// <summary>Emit a void extern call as a statement.</summary>

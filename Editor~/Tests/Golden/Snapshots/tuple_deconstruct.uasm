@@ -71,17 +71,14 @@
         PUSH, __intnl_SystemObjectArray_c3
         COPY
         PUSH, __intnl_SystemObjectArray_c3
-        PUSH, __intnl_SystemObjectArray_c2
-        COPY
-        PUSH, __intnl_SystemObjectArray_c2
         PUSH, __const_SystemInt32_0
         PUSH, __const_SystemInt32_1
         EXTERN, "SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid"
-        PUSH, __intnl_SystemObjectArray_c2
+        PUSH, __intnl_SystemObjectArray_c3
         PUSH, __const_SystemInt32_1
         PUSH, __const_SystemInt32_2
         EXTERN, "SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid"
-        PUSH, __intnl_SystemObjectArray_c2
+        PUSH, __intnl_SystemObjectArray_c3
         PUSH, __0_Stats__ret
         COPY
         PUSH, __intnl_returnJump_SystemUInt32_0

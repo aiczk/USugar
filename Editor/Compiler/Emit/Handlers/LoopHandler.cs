@@ -111,11 +111,9 @@ public class LoopHandler : HandlerBase, IOperationHandler
         var arrayType = GetArrayType(arrayTypeSymbol);
         var elemAccessorType = GetArrayElemType(arrayTypeSymbol);
 
+        // collVal is a single-assignment scratch leaf under ANF — the collection reference is loop-invariant
+        // and stable, so it can be re-read directly in the length read and the body without a snapshot slot.
         var collVal = VisitExpression(collectionOp);
-
-        // Store collection in a scratch slot so it can be re-read in condition/body
-        var collSlot = _ctx.AllocTemp(arrayType);
-        EmitAssign(collSlot, collVal);
 
         // Declare loop variable
         var loopLocal = op.Locals.FirstOrDefault()
@@ -129,7 +127,7 @@ public class LoopHandler : HandlerBase, IOperationHandler
         // Cache array length before the loop
         var lenSlot = _ctx.AllocTemp("SystemInt32");
         EmitAssign(lenSlot, ExternCall("SystemArray.__get_Length__SystemInt32",
-            new List<CLeaf> { SlotRef(collSlot) }, "SystemInt32"));
+            new List<CLeaf> { collVal }, "SystemInt32"));
 
         _builder.EmitFor(
             _ =>
@@ -157,7 +155,7 @@ public class LoopHandler : HandlerBase, IOperationHandler
                 // Body: loopVar = arr[idx]; <body>
                 CLeaf elemVal = ExternCall(
                     $"{arrayType}.__Get__SystemInt32__{elemAccessorType}",
-                    new List<CLeaf> { SlotRef(collSlot), SlotRef(idxSlot) },
+                    new List<CLeaf> { collVal, SlotRef(idxSlot) },
                     elemType);
                 // foreach yields a by-value COPY of the element. For an aggregate (struct/tuple) element the
                 // raw __Get__ returns the LIVE backing object[]; deep-clone it so mutating the loop variable
