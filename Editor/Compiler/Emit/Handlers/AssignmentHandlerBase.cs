@@ -33,13 +33,12 @@ public abstract class AssignmentHandlerBase : HandlerBase
             case IPropertyReferenceOperation { Instance: IInstanceReferenceOperation, Property: { IsIndexer: true } } idxRef
                 when idxRef.Property.GetMethod != null && _methodFunctions.ContainsKey(idxRef.Property.GetMethod):
             {
+                // Each VisitExpression(arg) is bound to a scratch leaf once under ANF — the index side effect
+                // runs exactly once and the SAME leaf is reused by the getter here and the setter in
+                // EmitWriteBack (via IndexArgs), so the cache itself is load-bearing but needs no extra copy.
                 var cachedArgs = new List<CLeaf>();
                 foreach (var arg in idxRef.Arguments)
-                {
-                    var t = _ctx.AllocTemp(GetUdonType(arg.Value.Type));
-                    EmitAssign(t, VisitExpression(arg.Value));
-                    cachedArgs.Add(SlotRef(t));
-                }
+                    cachedArgs.Add(VisitExpression(arg.Value));
                 var currentVal = EmitCallToMethod(idxRef.Property.GetMethod, new List<CLeaf>(cachedArgs));
                 return new LValueCapture { Value = currentVal, IndexArgs = cachedArgs };
             }
@@ -65,16 +64,13 @@ public abstract class AssignmentHandlerBase : HandlerBase
                 var arrayType = GetArrayType(arrSymbol);
                 var elemAccessorType = GetArrayElemType(arrSymbol);
 
-                // Materialize the array ref and index into temps ONCE. This capture is reused by EmitWriteBack
-                // (compound RMW), and lazy nodes re-emit their whole subtree per lowering with no CSE — so a
-                // side-effecting index (`arr[Next()] += v`) would otherwise run twice, with the read Get and the
-                // write Set targeting DIFFERENT elements. Mirrors the indexer-arg caching above.
-                var arrTmp = _ctx.AllocTemp(arrayType);
-                EmitAssign(arrTmp, VisitExpression(arrayElem.ArrayReference));
-                var arrayVal = SlotRef(arrTmp);
-                var idxTmp = _ctx.AllocTemp("SystemInt32");
-                EmitAssign(idxTmp, VisitExpression(arrayElem.Indices[0]));
-                var indexVal = SlotRef(idxTmp);
+                // Evaluate the array ref and index ONCE; the resulting scratch leaves are reused by
+                // EmitWriteBack (compound RMW) via ArrayVal/IndexVal so a side-effecting index (`arr[Next()]
+                // += v`) runs once with the read Get and the write Set targeting the SAME element. Under ANF
+                // VisitExpression already binds each to a single-assignment scratch, so the capture needs no
+                // extra copy slot — storing the leaves directly preserves the read↔writeback sharing.
+                var arrayVal = VisitExpression(arrayElem.ArrayReference);
+                var indexVal = VisitExpression(arrayElem.Indices[0]);
 
                 // Read current value: arr[idx]
                 var valResult = ExternCall(

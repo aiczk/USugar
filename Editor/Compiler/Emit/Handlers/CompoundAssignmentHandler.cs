@@ -99,20 +99,15 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
         // Nullable (lifted) increment/decrement: x++  →  x = lifted(x, 1) (null-propagating).
         if (EmitContext.IsNullableT(op.Type, out var incUnderlying))
         {
-            CLeaf saved = null;
-            if (op.IsPostfix)
-            {
-                var s = _ctx.AllocTemp("SystemObject");
-                EmitAssign(s, targetVal);
-                saved = SlotRef(s);
-            }
             var kind = op.Kind == OperationKind.Increment ? BinaryOperatorKind.Add : BinaryOperatorKind.Subtract;
             var lifted = EmitLiftedBinaryCore(
                 targetVal, true, incUnderlying,
                 Const(1, GetUdonType(incUnderlying)), false, incUnderlying,
                 kind, null, op.Type);
             EmitWriteBack(op.Target, lifted, lv);
-            return op.IsPostfix && saved != null ? saved : lifted;
+            // Postfix returns the OLD value: targetVal (= lv.Value) is a single-assignment scratch leaf bound
+            // before the write-back, which stores to the target's heap id and never touches this scratch.
+            return op.IsPostfix ? targetVal : lifted;
         }
 
         var udonType = GetUdonType(op.Type);
@@ -123,21 +118,6 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
             opType = "SystemInt32";
 
         var oneConst = Const(1, opType);
-
-        // For postfix, save old value before modifying target (only if result is used).
-        // Save the un-promoted value so postfix returns the original byte (not the int promotion).
-        CLeaf savedVal = null;
-        if (op.IsPostfix)
-        {
-            var resultUsed = op.Parent is not IExpressionStatementOperation
-                             && op.Parent is not IForLoopOperation;
-            if (op.Parent == null || resultUsed)
-            {
-                var savedSlot = _ctx.AllocTemp(udonType);
-                EmitAssign(savedSlot, targetVal);
-                savedVal = SlotRef(savedSlot);
-            }
-        }
 
         // Explicit operand promotion to match the int extern signature.
         if (IsSmallInteger(udonType))
@@ -155,10 +135,11 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
         if (opType != udonType)
             resultVal = EmitNarrowingConvert(resultVal, opType, udonType);
 
-        // resultVal is already a materialized (single-assignment) slot leaf under A-normal form, so it is
-        // stable across the write-back and the return — no extra snapshot needed.
         EmitWriteBack(op.Target, resultVal, lv);
 
-        return op.IsPostfix ? savedVal : resultVal;
+        // Postfix returns the OLD un-promoted value. lv.Value is the single-assignment scratch leaf bound by
+        // CaptureLValue (NOT `targetVal`, which PromoteToInt32 may have overwritten above); the write-back
+        // stores resultVal to the target's heap id and never touches that scratch, so it still holds the old value.
+        return op.IsPostfix ? lv.Value : resultVal;
     }
 }

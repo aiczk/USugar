@@ -42,18 +42,16 @@ public class DeconstructionAssignmentHandler : AssignmentHandlerBase, IOperation
 
         if (value is ITupleOperation valueTuple)
         {
-            // (a, b) = (expr1, expr2): C# evaluates the ENTIRE RHS tuple before assigning ANY target. Snapshot
-            // every RHS element into a fresh temp first (eager evaluation against pre-store values), THEN assign;
-            // otherwise a later element that reads an already-overwritten target (swap (a,b)=(b,a), rotate,
-            // Fibonacci step) reads the clobbered value. Aggregate elements are deep-cloned by clone-on-read.
+            // (a, b) = (expr1, expr2): C# evaluates the ENTIRE RHS tuple before assigning ANY target. The
+            // two-loop split is what enforces that: every RHS element is evaluated (loop 1) before any store
+            // (loop 2), so a later element reading an already-overwritten target (swap (a,b)=(b,a), rotate,
+            // Fibonacci step) still sees the pre-store value. Under ANF each VisitExpression result is already
+            // a single-assignment scratch leaf — pinned at its phase-1 read point and never clobbered by a
+            // phase-2 EmitStoreField (which targets a named heap id, not the scratch) — so no extra temp is
+            // needed. Aggregate elements are deep-cloned by clone-on-read inside VisitExpression.
             var snapshots = new List<CLeaf>(targetTuple.Elements.Length);
             for (int i = 0; i < targetTuple.Elements.Length; i++)
-            {
-                var elemVal = VisitExpression(valueTuple.Elements[i]);
-                var tmp = _ctx.AllocTemp(GetUdonType(targetTuple.Elements[i].Type));
-                EmitAssign(tmp, elemVal);
-                snapshots.Add(SlotRef(tmp));
-            }
+                snapshots.Add(VisitExpression(valueTuple.Elements[i]));
             for (int i = 0; i < targetTuple.Elements.Length; i++)
                 AssignToLValue(targetTuple.Elements[i], snapshots[i]);
         }

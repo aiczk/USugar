@@ -163,15 +163,16 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
         // zero-initialized struct, NOT null, so use EmitNewAggregate rather than the scalar value default.
         var aggType = ResolveType(underlying) as INamedTypeSymbol;
         bool aggResult = aggType != null && EmitContext.IsAggregateType(aggType);
-        var nvSlot = _ctx.AllocTemp("SystemObject");
-        EmitAssign(nvSlot, VisitExpression(op.Instance));
+        // nv is the boxed nullable (SystemObject) bound once under ANF — re-readable for the HasValue test
+        // and the present-value branch without a snapshot slot.
+        var nv = VisitExpression(op.Instance);
         var resultSlot = _ctx.AllocTemp(uType);
         var fallback = op.Arguments.Length > 0
             ? VisitExpression(op.Arguments[0].Value)
             : (aggResult ? EmitNewAggregate(aggType) : EmitValueTypeDefault(uType));
         EmitAssign(resultSlot, fallback);
-        _builder.EmitIf(EmitNullableHasValue(SlotRef(nvSlot)),
-            _ => EmitAssign(resultSlot, aggResult ? EmitDeepCloneAggregate(SlotRef(nvSlot), aggType) : SlotRef(nvSlot)));
+        _builder.EmitIf(EmitNullableHasValue(nv),
+            _ => EmitAssign(resultSlot, aggResult ? EmitDeepCloneAggregate(nv, aggType) : nv));
         return SlotRef(resultSlot);
     }
 
