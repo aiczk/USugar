@@ -88,29 +88,100 @@ public abstract class HandlerBase
         => _builder.ExternCall(ResolveExtern(sig), args, retType);
 
     /// <summary>
-    /// Integer narrowing conversion matching C# *unchecked* semantics (wrap). Udon's
-    /// SystemConvert.ToX is CHECKED and throws on overflow, so an int narrowed to a small integer
-    /// is masked (and sign-extended for signed targets) before the final convert, which is then
-    /// always in range. Any other conversion falls back to the plain convert extern.
+    /// Integer conversion matching C# *unchecked* semantics (wrap / bit-reinterpret). Udon's
+    /// SystemConvert.ToX is CHECKED and throws on overflow, so a narrowing / cross-sign integer cast is
+    /// reduced to its low 32 bits (sign-extended via a 64-bit shift) before the final in-range convert.
+    /// Lossless widenings (and non-integer conversions) use the plain convert extern directly. The 64-bit
+    /// unsigned cases require unchecked 64-bit ops Udon does not expose and fall back to the checked convert.
     /// </summary>
     protected CValue EmitNarrowingConvert(CValue value, string fromUdonType, string toUdonType)
     {
-        // Udon has no bitwise-AND extern, so wrap unsigned targets with modulo and signed targets
-        // with a shift-left / arithmetic-shift-right truncation. After wrapping, the value is in
-        // range, so the final SystemConvert.ToX cannot overflow.
-        if (fromUdonType == "SystemInt32")
+        if (fromUdonType == toUdonType)
+            return value;
+
+        // Non-integer conversions, and lossless integer widenings, never overflow → plain convert is correct.
+        if (!IsIntegerUdon(fromUdonType) || !IsIntegerUdon(toUdonType)
+            || IsLosslessIntegerWiden(fromUdonType, toUdonType)
+            || fromUdonType == "SystemUInt64" || toUdonType == "SystemUInt64")
+            return ExternCall(ExternResolver.BuildConvertSignature(fromUdonType, toUdonType),
+                new List<CValue> { value }, toUdonType);
+
+        // Reduce the source to its low 32 bits as a SIGNED int32, then wrap / reinterpret to the target width.
+        var lowSigned = LowInt32Bits(value, fromUdonType);
+        switch (toUdonType)
         {
-            switch (toUdonType)
-            {
-                case "SystemByte":   return ConvertInRange(ModWrap(value, 256), toUdonType);
-                case "SystemChar":
-                case "SystemUInt16": return ConvertInRange(ModWrap(value, 65536), toUdonType);
-                case "SystemSByte":  return ConvertInRange(ShiftTruncate(value, 24), toUdonType);
-                case "SystemInt16":  return ConvertInRange(ShiftTruncate(value, 16), toUdonType);
-            }
+            case "SystemInt32":  return lowSigned;
+            case "SystemByte":   return ConvertInRange(ModWrap(lowSigned, 256), toUdonType);
+            case "SystemChar":
+            case "SystemUInt16": return ConvertInRange(ModWrap(lowSigned, 65536), toUdonType);
+            case "SystemSByte":  return ConvertInRange(ShiftTruncate(lowSigned, 24), toUdonType);
+            case "SystemInt16":  return ConvertInRange(ShiftTruncate(lowSigned, 16), toUdonType);
+            case "SystemUInt32": return Int32BitsToUInt32(lowSigned);
         }
+        // Unreachable for the supported integer target set; safety fallback.
         return ExternCall(ExternResolver.BuildConvertSignature(fromUdonType, toUdonType),
             new List<CValue> { value }, toUdonType);
+    }
+
+    /// <summary>Low 32 bits of an integer value as a SIGNED int32 (C# unchecked reinterpret). Sources wider than
+    /// int32 are reduced by a 64-bit sign-extending shift; ≤32-bit sources widen losslessly to int64 first.</summary>
+    CValue LowInt32Bits(CValue value, string fromUdonType)
+    {
+        if (fromUdonType == "SystemInt32")
+            return value;
+        var asLong = fromUdonType == "SystemInt64"
+            ? value
+            : ExternCall(ExternResolver.BuildConvertSignature(fromUdonType, "SystemInt64"),
+                new List<CValue> { value }, "SystemInt64");
+        // (x << 32) >> 32 : arithmetic right shift sign-extends bit 31 → value in [-2^31, 2^31), safe to ToInt32.
+        var shl = ExternCall("SystemInt64.__op_LeftShift__SystemInt64_SystemInt32__SystemInt64",
+            new List<CValue> { asLong, Const(32, "SystemInt32") }, "SystemInt64");
+        var sar = ExternCall("SystemInt64.__op_RightShift__SystemInt64_SystemInt32__SystemInt64",
+            new List<CValue> { shl, Const(32, "SystemInt32") }, "SystemInt64");
+        return ExternCall("SystemConvert.__ToInt32__SystemInt64__SystemInt32",
+            new List<CValue> { sar }, "SystemInt32");
+    }
+
+    /// <summary>Reinterpret an int32 bit pattern as uint32 (C# unchecked (uint)int): negatives map to +2^32.</summary>
+    CValue Int32BitsToUInt32(CValue int32Val)
+    {
+        var asLong = ExternCall("SystemConvert.__ToInt64__SystemInt32__SystemInt64",
+            new List<CValue> { int32Val }, "SystemInt64");
+        var isNeg = ExternCall("SystemInt64.__op_LessThan__SystemInt64_SystemInt64__SystemBoolean",
+            new List<CValue> { asLong, Const(0L, "SystemInt64") }, "SystemBoolean");
+        var plus = ExternCall("SystemInt64.__op_Addition__SystemInt64_SystemInt64__SystemInt64",
+            new List<CValue> { asLong, Const(4294967296L, "SystemInt64") }, "SystemInt64");
+        var wrapped = Select(isNeg, plus, asLong, "SystemInt64");
+        return ExternCall("SystemConvert.__ToUInt32__SystemInt64__SystemUInt32",
+            new List<CValue> { wrapped }, "SystemUInt32");
+    }
+
+    static bool IsIntegerUdon(string t) => IntInfo(t).rank > 0;
+
+    static (int rank, bool signed) IntInfo(string t) => t switch
+    {
+        "SystemByte" => (8, false),
+        "SystemSByte" => (8, true),
+        "SystemInt16" => (16, true),
+        "SystemUInt16" => (16, false),
+        "SystemChar" => (16, false),
+        "SystemInt32" => (32, true),
+        "SystemUInt32" => (32, false),
+        "SystemInt64" => (64, true),
+        "SystemUInt64" => (64, false),
+        _ => (0, false),
+    };
+
+    /// <summary>True when every value of the source integer type is representable in the target (so the checked
+    /// SystemConvert never throws and yields the same result as the C# cast).</summary>
+    static bool IsLosslessIntegerWiden(string from, string to)
+    {
+        var (fr, fs) = IntInfo(from);
+        var (tr, ts) = IntInfo(to);
+        if (fr == 0 || tr == 0) return false;
+        if (fs == ts) return tr >= fr;   // same signedness → equal/wider is lossless
+        if (!fs && ts) return tr > fr;   // unsigned → signed needs a strictly wider target
+        return false;                    // signed → unsigned is never lossless (negatives)
     }
 
     CValue ConvertInRange(CValue inRangeInt, string toUdonType)

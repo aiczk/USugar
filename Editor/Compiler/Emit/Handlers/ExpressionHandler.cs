@@ -207,9 +207,22 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
             EmitAssign(srcSlot, srcVal);
             var resSlot = _ctx.AllocTemp("SystemObject");
             EmitAssign(resSlot, Const(null, "SystemObject"));
+            // C# integer narrowing is UNCHECKED (wrap); Convert.To{Small} is CHECKED and throws. For an
+            // integer→integer lifted conversion, promote the boxed source to int64 (tolerates any boxed integer
+            // tag, never overflows) and wrap/reinterpret via EmitNarrowingConvert. Float-involved conversions
+            // keep the plain null-preserving Convert.
+            bool liftedIntToInt = ExternResolver.IsIntegerType(liftedSrcU) && ExternResolver.IsIntegerType(liftedDstU);
             _builder.EmitIf(EmitNullableHasValue(SlotRef(srcSlot)), _ =>
-                EmitAssign(resSlot, ExternCall($"SystemConvert.__{liftedDstMethod}__SystemObject__{dstU}",
-                    new List<CValue> { SlotRef(srcSlot) }, dstU)));
+            {
+                CValue converted = liftedIntToInt
+                    ? EmitNarrowingConvert(
+                        ExternCall("SystemConvert.__ToInt64__SystemObject__SystemInt64",
+                            new List<CValue> { SlotRef(srcSlot) }, "SystemInt64"),
+                        "SystemInt64", dstU)
+                    : ExternCall($"SystemConvert.__{liftedDstMethod}__SystemObject__{dstU}",
+                        new List<CValue> { SlotRef(srcSlot) }, dstU);
+                EmitAssign(resSlot, converted);
+            });
             return SlotRef(resSlot);
         }
 
