@@ -50,6 +50,9 @@
         PUSH, __intnl_SystemInt32_c0
         EXTERN, "VRCUdonCommonInterfacesIUdonEventReceiver.__GetProgramVariable__SystemString__SystemObject"
         PUSH, __intnl_SystemInt32_c0
+        PUSH, __intnl_SystemInt32_c1
+        COPY
+        PUSH, __intnl_SystemInt32_c1
         PUSH, hp
         COPY
         PUSH, hp

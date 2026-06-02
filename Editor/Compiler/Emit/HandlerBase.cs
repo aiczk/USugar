@@ -235,6 +235,12 @@ public abstract class HandlerBase
     protected CSlotRef InternalCall(string funcName, List<CValue> args, string retType)
         => _builder.InternalCall(funcName, args, retType);
 
+    /// <summary>Emit a cross-behaviour call. Single-return → materialized to a scratch slot (returns the
+    /// leaf); void or multi-return → side-effecting statement (returns null).</summary>
+    protected CSlotRef CrossCall(CValue instance, string eventName,
+        List<(string, CValue)> parameters, IReadOnlyList<ReturnSlot> returns, string retType)
+        => _builder.CrossCall(instance, eventName, parameters, returns, retType);
+
     /// <summary>Create a select (ternary) expression.</summary>
     protected CSlotRef Select(CValue cond, CValue trueVal, CValue falseVal, string type)
         => _builder.Select(cond, trueVal, falseVal, type);

@@ -607,10 +607,10 @@ public partial class InvocationHandler
         // Build returns
         var ifaceReturns = ifaceMl.Returns.ToArray();
         if (ifaceReturns.Length > 1)
-            return new CCrossCall(instanceVal, ifaceMl.ExportName, paramPairs, ifaceReturns, "SystemVoid");
+            return CrossCall(instanceVal, ifaceMl.ExportName, paramPairs, ifaceReturns, "SystemVoid");
 
         var returnType = target.ReturnsVoid ? "SystemVoid" : GetUdonType(target.ReturnType);
-        return new CCrossCall(instanceVal, ifaceMl.ExportName, paramPairs,
+        return CrossCall(instanceVal, ifaceMl.ExportName, paramPairs,
             target.ReturnsVoid ? System.Array.Empty<ReturnSlot>() : ifaceReturns, returnType);
     }
 
@@ -629,10 +629,10 @@ public partial class InvocationHandler
         // Build returns
         var callReturns = GetCalleeReturns(target);
         if (callReturns.Length > 1)
-            return new CCrossCall(instanceVal, exportName, paramPairs, callReturns, "SystemVoid");
+            return CrossCall(instanceVal, exportName, paramPairs, callReturns, "SystemVoid");
 
         var returnType = target.ReturnsVoid ? "SystemVoid" : GetUdonType(target.ReturnType);
-        return new CCrossCall(instanceVal, exportName, paramPairs,
+        return CrossCall(instanceVal, exportName, paramPairs,
             target.ReturnsVoid ? System.Array.Empty<ReturnSlot>() : callReturns, returnType);
     }
 

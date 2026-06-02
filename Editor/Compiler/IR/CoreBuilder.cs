@@ -241,6 +241,20 @@ public sealed class CoreBuilder
         return Bind(new CInternalCall(funcName, args, retType), retType);
     }
 
+    /// <summary>Cross-behaviour call (SetProgramVariable* + SendCustomEvent + GetProgramVariable*).
+    /// A single-return call is a value: bind it to a fresh scratch slot (A-normal form) and return the
+    /// leaf. A void OR multi-return call (retType "SystemVoid") carries no single value — emit it as a
+    /// side-effecting statement at the current insertion point and return null. Binding at the construction
+    /// point keeps the SendCustomEvent in program order; ternary branches construct their cross-call inside
+    /// the branch block (VisitConditionalExpression uses EmitIf, not CSelect), so the bind is conditional.</summary>
+    public CSlotRef CrossCall(CValue instance, string eventName,
+        List<(string, CValue)> parameters, IReadOnlyList<ReturnSlot> returns, string retType)
+    {
+        var cc = new CCrossCall(instance, eventName, parameters, returns, retType);
+        if (retType == "SystemVoid") { Emit(new CExprStmt(cc)); return null; }
+        return Bind(cc, retType);
+    }
+
     public void EmitExternVoid(string sig, List<CValue> args) => Emit(new CExprStmt(new CExternCall(sig, args, "SystemVoid")));
     public void EmitInternalVoid(string funcName, List<CValue> args) => Emit(new CExprStmt(new CInternalCall(funcName, args, "SystemVoid")));
 }
