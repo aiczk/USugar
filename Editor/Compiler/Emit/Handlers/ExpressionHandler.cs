@@ -203,8 +203,8 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
             && ExternResolver.GetConvertMethodName(liftedDstU) is { } liftedDstMethod)
         {
             var dstU = GetUdonType(liftedDstU);
-            var srcSlot = _ctx.AllocTemp("SystemObject");
-            EmitAssign(srcSlot, srcVal);
+            // srcVal is already a single-assignment SystemObject leaf (the boxed nullable) under ANF — re-read
+            // directly for the HasValue test and the conversion. resSlot below is an accumulator (kept).
             var resSlot = _ctx.AllocTemp("SystemObject");
             EmitAssign(resSlot, Const(null, "SystemObject"));
             // C# integer narrowing is UNCHECKED (wrap); Convert.To{Small} is CHECKED and throws. For an
@@ -212,15 +212,15 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
             // tag, never overflows) and wrap/reinterpret via EmitNarrowingConvert. Float-involved conversions
             // keep the plain null-preserving Convert.
             bool liftedIntToInt = ExternResolver.IsIntegerType(liftedSrcU) && ExternResolver.IsIntegerType(liftedDstU);
-            _builder.EmitIf(EmitNullableHasValue(SlotRef(srcSlot)), _ =>
+            _builder.EmitIf(EmitNullableHasValue(srcVal), _ =>
             {
                 CValue converted = liftedIntToInt
                     ? EmitNarrowingConvert(
                         ExternCall("SystemConvert.__ToInt64__SystemObject__SystemInt64",
-                            new List<CLeaf> { SlotRef(srcSlot) }, "SystemInt64"),
+                            new List<CLeaf> { srcVal }, "SystemInt64"),
                         "SystemInt64", dstU)
                     : ExternCall($"SystemConvert.__{liftedDstMethod}__SystemObject__{dstU}",
-                        new List<CLeaf> { SlotRef(srcSlot) }, dstU);
+                        new List<CLeaf> { srcVal }, dstU);
                 EmitAssign(resSlot, converted);
             });
             return SlotRef(resSlot);

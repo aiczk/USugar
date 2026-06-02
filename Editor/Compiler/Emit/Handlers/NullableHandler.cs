@@ -46,37 +46,25 @@ public class NullableHandler : HandlerBase, IExpressionHandler
             delegateFieldName = fieldRef.Field.Name;
         }
 
-        CValue targetVal;
-        string targetType;
-        if (delegateFieldName != null)
-        {
-            // Load Target as the null-check proxy for the delegate bundle
-            targetType = "VRCUdonCommonInterfacesIUdonEventReceiver";
-            targetVal = LoadField(new DelegateBundle(delegateFieldName).Target, targetType);
-        }
-        else
-        {
-            targetVal = VisitExpression(op.Operation);
-            targetType = GetUdonType(op.Operation.Type ?? op.Type);
-        }
-
-        // Store in temp slot to avoid double evaluation of impure expressions (e.g., method calls)
-        var targetSlot = _ctx.AllocTemp(targetType);
-        EmitAssign(targetSlot, targetVal);
-        var targetRef = SlotRef(targetSlot);
+        // targetVal is a single-assignment scratch leaf under ANF (LoadField for the delegate-bundle Target,
+        // else VisitExpression for the receiver) — re-readable for the null check and as the conditional-access
+        // instance without a snapshot. The null check is type-agnostic (SystemObject), so no retype is needed.
+        CLeaf targetVal = delegateFieldName != null
+            ? LoadField(new DelegateBundle(delegateFieldName).Target, "VRCUdonCommonInterfacesIUdonEventReceiver")
+            : VisitExpression(op.Operation);
 
         var nullConst = Const(null, "SystemObject");
 
         // condVal = (target != null); if true → evaluate WhenNotNull, else skip
         var condVal = ExternCall(
             "SystemObject.__op_Inequality__SystemObject_SystemObject__SystemBoolean",
-            new List<CLeaf> { targetRef, nullConst },
+            new List<CLeaf> { targetVal, nullConst },
             "SystemBoolean");
 
         _builder.EmitIf(condVal, b =>
         {
             // target is not null → evaluate WhenNotNull with target as the instance
-            _conditionalAccessStack.Push((targetRef, delegateFieldName));
+            _conditionalAccessStack.Push((targetVal, delegateFieldName));
             try
             {
                 var accessVal = VisitExpression(op.WhenNotNull);
