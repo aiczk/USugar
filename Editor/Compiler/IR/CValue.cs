@@ -2,10 +2,10 @@ using System;
 using System.Collections.Generic;
 
 // ============================================================================
-// Core IR value vocabulary. One value representation spanning tree-role (nested) and flat-role
-// (leaf) operands. Leaves (CSlotRef/CConst/CFieldRef/CFuncRef) are operand-level; the value-
-// producing ops (CExternCall/CInternalCall) may nest in args (tree role, DestSlot null) or write a
-// scratch slot (flat role, DestSlot set).
+// Core IR value vocabulary. CLeaf (CSlotRef/CConst/CFuncRef/CFieldAddr) are the operand-safe leaves;
+// the value-producing ops (CFieldLoad/CExternCall/CInternalCall/CSelect/CCrossCall) are bound to a
+// fresh slot at construction (A-normal form), so they appear only as a CAssign RHS or a CExprStmt
+// side-effect — never nested in an operand position.
 // Global namespace + plain sealed classes / readonly fields
 // (must stay C# 9.0-compatible: Unity compiles Editor/ at C# 9.0 LCD).
 // ============================================================================
@@ -17,8 +17,17 @@ public abstract class CValue
     protected CValue(string type) => Type = type ?? throw new ArgumentNullException(nameof(type));
 }
 
-/// <summary>Reference to a virtual slot.</summary>
-public sealed class CSlotRef : CValue
+/// <summary>A value safe to use as an operand: pure, side-effect-free, order-stable (re-reading it
+/// yields the same value regardless of intervening writes). THE A-normal-form invariant: every
+/// operand position is typed <see cref="CLeaf"/>, so a value-producing op cannot nest in an operand —
+/// it must first be bound to a slot. Leaves: CSlotRef / CConst / CFuncRef / CFieldAddr.</summary>
+public abstract class CLeaf : CValue
+{
+    protected CLeaf(string type) : base(type) { }
+}
+
+/// <summary>Reference to a virtual slot. Scratch slots are single-assignment under ANF → stable leaf.</summary>
+public sealed class CSlotRef : CLeaf
 {
     public readonly int SlotId;
     public CSlotRef(int slotId, string type) : base(type) => SlotId = slotId;
@@ -26,41 +35,35 @@ public sealed class CSlotRef : CValue
 }
 
 /// <summary>Compile-time constant value.</summary>
-public sealed class CConst : CValue
+public sealed class CConst : CLeaf
 {
     public readonly object Value; // null for default/null literal
     public CConst(object value, string type) : base(type) => Value = value;
     public override string ToString() => $"const({Value ?? "null"}):{Type}";
 }
 
-/// <summary>How a field is referenced: read its value, or take its heap address.</summary>
-public enum CFieldMode
-{
-    /// <summary>Read the field's value (= HLoadField / LLoadField).</summary>
-    Load,
-    /// <summary>Heap address for extern out/ref parameters (= HFieldAddr / LFieldRef).</summary>
-    Addr,
-}
-
-/// <summary>Field reference, unifying value-load and address-ref forms via <see cref="Mode"/>.
-///</summary>
-public sealed class CFieldRef : CValue
+/// <summary>Read a heap field's value. Producer (NOT a leaf): re-reading after a write to the same
+/// field observes the new value, so under ANF it is materialized to a slot at its read point.</summary>
+public sealed class CFieldLoad : CValue
 {
     public readonly string FieldName;
-    public readonly CFieldMode Mode;
+    public CFieldLoad(string fieldName, string type) : base(type)
+        => FieldName = fieldName ?? throw new ArgumentNullException(nameof(fieldName));
+    public override string ToString() => $"load [{FieldName}]:{Type}";
+}
 
-    public CFieldRef(string fieldName, string type, CFieldMode mode) : base(type)
-    {
-        FieldName = fieldName ?? throw new ArgumentNullException(nameof(fieldName));
-        Mode = mode;
-    }
-
-    public override string ToString()
-        => $"{(Mode == CFieldMode.Addr ? "addr" : "load")} [{FieldName}]:{Type}";
+/// <summary>Heap address of a field, for extern out/ref parameters. A reference, not a value-read,
+/// so it is a leaf — it appears only in out/ref argument positions.</summary>
+public sealed class CFieldAddr : CLeaf
+{
+    public readonly string FieldName;
+    public CFieldAddr(string fieldName, string type) : base(type)
+        => FieldName = fieldName ?? throw new ArgumentNullException(nameof(fieldName));
+    public override string ToString() => $"addr [{FieldName}]:{Type}";
 }
 
 /// <summary>Reference to a function entry point (delegate / JUMP_INDIRECT).</summary>
-public sealed class CFuncRef : CValue
+public sealed class CFuncRef : CLeaf
 {
     public readonly string FuncName;
     public CFuncRef(string funcName) : base("SystemUInt32")

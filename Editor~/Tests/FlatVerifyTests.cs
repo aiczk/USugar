@@ -55,7 +55,7 @@ public class FlatVerifyTests
     public void LoadFieldRefAsOperand_Throws()
     {
         var f = Flat(Block(0,
-            new List<CStmt> { new CStoreField("x", new CFieldRef("y", "SystemInt32", CFieldMode.Load)) },
+            new List<CStmt> { new CStoreField("x", new CFieldLoad("y", "SystemInt32")) },
             new CRet()));
         Assert.ThrowsAny<System.Exception>(() => FlatVerify.Verify(f));
     }
@@ -64,7 +64,7 @@ public class FlatVerifyTests
     public void AddrFieldRef_AsAssignValue_Throws_OnlyValidAsCallArg()
     {
         var f = Flat(Block(0,
-            new List<CStmt> { new CAssign(0, new CFieldRef("y", "SystemInt32", CFieldMode.Addr)) },
+            new List<CStmt> { new CAssign(0, new CFieldAddr("y", "SystemInt32")) },
             new CRet()));
         Assert.ThrowsAny<System.Exception>(() => FlatVerify.Verify(f));
     }

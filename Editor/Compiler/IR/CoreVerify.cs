@@ -264,7 +264,8 @@ public static class CoreVerify
                 ctx.AssertType(declaredType, slotRef.Type, $"CSlotRef slot{slotRef.SlotId}");
                 break;
 
-            case CFieldRef:
+            case CFieldLoad:
+            case CFieldAddr:
                 break; // field existence checked at a higher level
 
             case CExternCall call:

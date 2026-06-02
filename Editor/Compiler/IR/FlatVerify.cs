@@ -90,14 +90,14 @@ public static class FlatVerify
             case CConst _:
             case CFuncRef _:
                 break;
-            case CFieldRef fr when fr.Mode == CFieldMode.Addr:
+            case CFieldAddr _:
                 if (!allowAddr)
                     throw new InvalidOperationException(
-                        $"{fn}: {ctx}: CFieldRef(Addr) is only valid as a direct extern/internal-call argument");
+                        $"{fn}: {ctx}: CFieldAddr is only valid as a direct extern/internal-call argument");
                 break;
-            case CFieldRef _:
+            case CFieldLoad _:
                 throw new InvalidOperationException(
-                    $"{fn}: {ctx}: CFieldRef(Load) is not a flat leaf (must be materialized via CLoadField)");
+                    $"{fn}: {ctx}: CFieldLoad is not a flat leaf (must be materialized via CLoadField)");
             default:
                 throw new InvalidOperationException(
                     $"{fn}: {ctx}: operand must be a leaf, got nested {v?.GetType().Name}");

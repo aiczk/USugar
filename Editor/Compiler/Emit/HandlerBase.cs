@@ -78,10 +78,10 @@ public abstract class HandlerBase
     protected CSlotRef SlotRef(int slotId) => _builder.SlotRef(slotId);
 
     /// <summary>Create a field load expression.</summary>
-    protected CFieldRef LoadField(string fieldName, string type) => _builder.LoadField(fieldName, type);
+    protected CFieldLoad LoadField(string fieldName, string type) => _builder.LoadField(fieldName, type);
 
     /// <summary>Create a field address reference (for extern out/ref).</summary>
-    protected CFieldRef FieldAddr(string fieldName, string type) => _builder.FieldAddr(fieldName, type);
+    protected CFieldAddr FieldAddr(string fieldName, string type) => _builder.FieldAddr(fieldName, type);
 
     /// <summary>Create an extern call expression.</summary>
     protected CExternCall ExternCall(string sig, List<CValue> args, string retType)

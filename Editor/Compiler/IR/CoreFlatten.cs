@@ -242,15 +242,15 @@ public static class CoreFlatten
             case CFuncRef _:
                 return expr;
 
-            case CFieldRef fr when fr.Mode == CFieldMode.Load:
+            case CFieldLoad fl:
             {
-                var dest = ctx.AllocScratch(fr.Type);
-                ctx.Current.Stmts.Add(new CLoadField(dest, fr.FieldName, fr.Type));
-                return new CSlotRef(dest, fr.Type);
+                var dest = ctx.AllocScratch(fl.Type);
+                ctx.Current.Stmts.Add(new CLoadField(dest, fl.FieldName, fl.Type));
+                return new CSlotRef(dest, fl.Type);
             }
 
-            case CFieldRef fr: // Addr — address operand passes through
-                return fr;
+            case CFieldAddr fa: // address operand passes through
+                return fa;
 
             case CExternCall ec:
             {

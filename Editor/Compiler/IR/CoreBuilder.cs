@@ -203,8 +203,8 @@ public sealed class CoreBuilder
     // ── Expression helpers ──
 
     public CSlotRef SlotRef(int slotId) => new CSlotRef(slotId, _currentFunc.Slots[slotId].Type);
-    public CFieldRef LoadField(string fieldName, string type) => new CFieldRef(fieldName, type, CFieldMode.Load);
-    public CFieldRef FieldAddr(string fieldName, string type) => new CFieldRef(fieldName, type, CFieldMode.Addr);
+    public CFieldLoad LoadField(string fieldName, string type) => new CFieldLoad(fieldName, type);
+    public CFieldAddr FieldAddr(string fieldName, string type) => new CFieldAddr(fieldName, type);
     public CExternCall ExternCall(string sig, List<CValue> args, string retType) => new CExternCall(sig, args, retType);
     public void EmitExternVoid(string sig, List<CValue> args) => EmitExprStmt(new CExternCall(sig, args, "SystemVoid"));
     public CInternalCall InternalCall(string funcName, List<CValue> args, string retType) => new CInternalCall(funcName, args, retType);

@@ -226,7 +226,7 @@ public static class CoreToUasm
             {
                 CSlotRef slot => GetSlotVar(funcIdx, slot.SlotId, func),
                 CConst c => GetConstVar(c),
-                CFieldRef f => f.FieldName,
+                CFieldAddr f => f.FieldName,
                 CFuncRef fr => GetFuncRefVar(fr),
                 _ => throw new InvalidOperationException($"Unknown CValue type: {op.GetType().Name}")
             };
