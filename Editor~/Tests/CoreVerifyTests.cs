@@ -137,4 +137,58 @@ public class CoreVerifyTests
 
         Assert.Throws<VerificationException>(() => CoreVerify.Verify(module));
     }
+
+    // ── Address-leaf placement (CFieldAddr is a CLeaf the TYPE allows anywhere, but it is only valid as
+    //    an extern/internal out/ref argument; CoreVerify must reject it in any value position). ──
+
+    [Fact]
+    public void Verifier_FieldAddrAsStoreValue_Throws()
+    {
+        var module = new CModule();
+        var func = module.AddFunction("test");
+        // field = &otherField  — storing a heap address as a value is invalid
+        func.Body.Stmts.Add(new CStoreField("x", new CFieldAddr("y", "SystemInt32")));
+
+        Assert.Throws<VerificationException>(() => CoreVerify.Verify(module));
+    }
+
+    [Fact]
+    public void Verifier_FieldAddrAsReturnValue_Throws()
+    {
+        var module = new CModule();
+        var func = module.AddFunction("test");
+        func.ReturnType = "SystemInt32";
+        func.Body.Stmts.Add(new CReturn(new CFieldAddr("y", "SystemInt32")));
+
+        Assert.Throws<VerificationException>(() => CoreVerify.Verify(module));
+    }
+
+    [Fact]
+    public void Verifier_FieldAddrInSelectArm_Throws()
+    {
+        var module = new CModule();
+        var builder = new CoreBuilder(module);
+        builder.BeginFunction("test");
+        var cond = builder.AllocFrame("SystemBoolean");
+        var dst = builder.AllocFrame("SystemInt32");
+        // dst = cond ? &field : 0  — an address in a value-producing select arm is invalid
+        builder.EmitAssign(dst, new CSelect(
+            builder.SlotRef(cond), new CFieldAddr("y", "SystemInt32"),
+            builder.Const(0, "SystemInt32"), "SystemInt32"));
+
+        Assert.Throws<VerificationException>(() => CoreVerify.Verify(module));
+    }
+
+    [Fact]
+    public void Verifier_FieldAddrAsExternArg_Passes()
+    {
+        var module = new CModule();
+        var func = module.AddFunction("test");
+        // SomeType.TryGet(out y) — a CFieldAddr IS valid as an out/ref extern argument
+        func.Body.Stmts.Add(new CExprStmt(new CExternCall(
+            "SomeType.__TryGet__SystemInt32Ref__SystemVoid",
+            new List<CLeaf> { new CFieldAddr("y", "SystemInt32") }, "SystemVoid")));
+
+        CoreVerify.Verify(module); // should not throw
+    }
 }

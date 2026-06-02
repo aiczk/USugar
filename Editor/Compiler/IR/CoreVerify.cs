@@ -251,7 +251,13 @@ public static class CoreVerify
         }
     }
 
-    static void VerifyExpr(CValue expr, VerifyContext ctx)
+    // <paramref name="allowAddr"/> permits a CFieldAddr (a heap address) in this position. The CLeaf TYPE
+    // proves an operand is a leaf, but cannot distinguish a value-leaf (CSlotRef/CConst/CFuncRef) from an
+    // address-leaf (CFieldAddr) — and a CFieldAddr is only meaningful as an extern/internal out/ref argument,
+    // never as an assigned value, store value, condition, return value, select arm, or cross-call operand.
+    // This mirrors FlatVerify.RequireLeaf one stage earlier, so a misplaced address fails at the structured
+    // level instead of emitting a heap address where the Udon VM expects a value.
+    static void VerifyExpr(CValue expr, VerifyContext ctx, bool allowAddr = false)
     {
         switch (expr)
         {
@@ -265,21 +271,27 @@ public static class CoreVerify
                 break;
 
             case CFieldLoad:
-            case CFieldAddr:
-                break; // field existence checked at a higher level
+                break; // producer (CAssign/CExprStmt RHS only); field existence checked at a higher level
+
+            case CFieldAddr fa:
+                if (!allowAddr)
+                    throw new VerificationException(
+                        $"CFieldAddr '[{fa.FieldName}]' (heap address) is only valid as an extern/internal " +
+                        $"out/ref argument, not as a value (function '{ctx.Func.Name}')");
+                break;
 
             case CExternCall call:
                 foreach (var arg in call.Args)
-                    VerifyExpr(arg, ctx);
+                    VerifyExpr(arg, ctx, allowAddr: true); // out/ref params take a CFieldAddr
                 break;
 
             case CInternalCall call:
                 foreach (var arg in call.Args)
-                    VerifyExpr(arg, ctx);
+                    VerifyExpr(arg, ctx, allowAddr: true);
                 break;
 
             case CSelect sel:
-                VerifyExpr(sel.Cond, ctx);
+                VerifyExpr(sel.Cond, ctx); // value operands — addresses rejected
                 ctx.AssertType("SystemBoolean", sel.Cond.Type, "CSelect condition");
                 VerifyExpr(sel.TrueVal, ctx);
                 VerifyExpr(sel.FalseVal, ctx);
@@ -288,7 +300,7 @@ public static class CoreVerify
                 break;
 
             case CCrossCall cc:
-                VerifyExpr(cc.Instance, ctx);
+                VerifyExpr(cc.Instance, ctx); // SetProgramVariable receiver/values — addresses rejected
                 foreach (var (_, value) in cc.Params)
                     VerifyExpr(value, ctx);
                 // Note: param value type checking against the target method's parameter types
