@@ -62,13 +62,15 @@ None of this requires SDK modifications. USugar hooks into the existing UdonShar
 ## How it works
 
 ```
-C# source → Roslyn IOperation tree → HIR → optimize → LIR → optimize → UASM
+C# source → Roslyn IOperation tree → Core IR → flatten → slot coalescing → UASM
 ```
 
-The compiler uses a two-layer intermediate representation:
+The compiler builds a single intermediate representation, the **Core IR** (`CModule`):
 
-- **HIR (High-level IR)**: Structured control flow (if/while/for as nodes). Optimization passes run constant folding, dead code elimination, and copy propagation on the expression tree.
-- **LIR (Low-level IR)**: Flat CFG with basic blocks. Further optimized with CFG simplification, copy propagation, dead code elimination, and slot coalescing (variable count reduction).
+- Handlers translate Roslyn `IOperation` directly into structured Core IR (control flow as nodes, slot-based values) via `CoreBuilder` — they never emit UASM themselves.
+- The module is verified, flattened in place into a flat CFG of basic blocks, verified again, and run through **slot coalescing** (merges scratch/frame variables with non-overlapping lifetimes to cut heap-variable count). `CoreToUasm` then lowers it to UASM.
+
+Slot coalescing is the only optimization pass. Udon's runtime cost is dominated by external calls, so speed-oriented passes (constant folding, dead-code elimination, copy propagation, CFG simplification) changed neither extern count nor runtime and were removed; coalescing is kept because it is slot allocation — it keeps the serialized program's variable count sane — not a speed optimization.
 
 Tail-recursive calls are automatically converted to loops. Compile errors include source file location for clickable Unity Console output.
 
@@ -93,9 +95,7 @@ That's it. Your existing UdonSharp scripts will be compiled through USugar inste
 
 ### Debugging
 
-Enable **USugar > Debug > Dump IR** to include IR output on every compile. Dumps are written to `Library/USugarCache/{ClassName}/`:
-- `1_hir.txt` / `1b_hir_optimized.txt` — HIR before/after optimization
-- `2_lir.txt` / `2b_lir_optimized.txt` — LIR before/after optimization
+Enable **USugar > Dump IR** to write UASM output on every compile to `Library/USugarCache/{ClassName}/`:
 - `3_uasm.txt` / `3_uasm_annotated.txt` — UASM output (annotated version has PC addresses)
 
 ## Limitations
