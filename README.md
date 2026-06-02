@@ -93,11 +93,6 @@ _VPM listing coming soon._
 
 That's it. Your existing UdonSharp scripts will be compiled through USugar instead of the standard compiler. To switch back, disable **Override Compiler** and run **USugar > Compile > UdonSharp**.
 
-### Debugging
-
-Enable **USugar > Dump IR** to write UASM output on every compile to `Library/USugarCache/{ClassName}/`:
-- `3_uasm.txt` / `3_uasm_annotated.txt` — UASM output (annotated version has PC addresses)
-
 ## Limitations
 
 - No try/catch/finally — Udon VM has no exception support.
