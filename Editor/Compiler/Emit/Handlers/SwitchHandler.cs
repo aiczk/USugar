@@ -38,33 +38,14 @@ public class SwitchHandler : HandlerBase, IOperationHandler
             // Pre-convert enum switch value once (Udon VM has no enum-typed operators)
             var convertedValueVal = EmitEnumToUnderlying(valueVal, op.Value.Type);
 
-            // Cache the converted value when there's more than one case so we don't re-evaluate.
-            int convertedSlot = -1;
-            string convertedSlotType = null;
-            if (op.Cases.Length > 1)
-            {
-                convertedSlotType = valueType;
-                if (op.Value.Type is INamedTypeSymbol namedEnum && namedEnum.TypeKind == TypeKind.Enum)
-                    convertedSlotType = GetUdonType(namedEnum.EnumUnderlyingType);
-                convertedSlot = _ctx.AllocTemp(convertedSlotType);
-                EmitAssign(convertedSlot, convertedValueVal);
-            }
-
-            // Pattern matching needs the original (non-converted) value.
-            int origValueSlot = -1;
-            if (op.Cases.Any(c => c.Clauses.Any(cl => cl is IPatternCaseClauseOperation)))
-            {
-                origValueSlot = _ctx.AllocTemp(valueType);
-                EmitAssign(origValueSlot, valueVal);
-            }
-
+            // convertedValueVal (enum→underlying) and valueVal are single-assignment governor leaves under
+            // ANF — stable and re-readable across every case condition without a snapshot slot.
             int defaultIndex = -1;
             for (int i = 0; i < op.Cases.Length; i++)
                 if (op.Cases[i].Clauses.Any(c => c is IDefaultCaseClauseOperation))
                     defaultIndex = i;
 
-            EmitSwitchCases(op, convertedSlot, convertedSlotType, convertedValueVal,
-                origValueSlot, valueVal, valueType, defaultIndex, 0);
+            EmitSwitchCases(op, convertedValueVal, valueVal, valueType, defaultIndex, 0);
         }
         finally
         {
@@ -74,8 +55,8 @@ public class SwitchHandler : HandlerBase, IOperationHandler
         _builder.EmitLabel(endLabel);
     }
 
-    void EmitSwitchCases(ISwitchOperation op, int convertedSlot, string convertedSlotType, CLeaf convertedValueVal,
-        int origValueSlot, CLeaf origValueVal, string valueType, int defaultIndex, int startIdx)
+    void EmitSwitchCases(ISwitchOperation op, CLeaf convertedValueVal,
+        CLeaf origValueVal, string valueType, int defaultIndex, int startIdx)
     {
         // Find the next non-default case from startIdx.
         int caseIdx = -1;
@@ -96,33 +77,30 @@ public class SwitchHandler : HandlerBase, IOperationHandler
         }
 
         var caseCond = BuildCaseCondition(op.Cases[caseIdx], op.Value.Type,
-            convertedSlot, convertedValueVal, origValueSlot, origValueVal, valueType);
+            convertedValueVal, origValueVal, valueType);
 
         if (caseCond != null)
         {
             _builder.EmitIf(caseCond,
                 _ => EmitCaseBody(op.Cases[caseIdx]),
-                _ => EmitSwitchCases(op, convertedSlot, convertedSlotType, convertedValueVal,
-                                     origValueSlot, origValueVal, valueType, defaultIndex, caseIdx + 1));
+                _ => EmitSwitchCases(op, convertedValueVal, origValueVal, valueType, defaultIndex, caseIdx + 1));
         }
         else
         {
             // Case with only default clause — fall through to next.
-            EmitSwitchCases(op, convertedSlot, convertedSlotType, convertedValueVal,
-                            origValueSlot, origValueVal, valueType, defaultIndex, caseIdx + 1);
+            EmitSwitchCases(op, convertedValueVal, origValueVal, valueType, defaultIndex, caseIdx + 1);
         }
     }
 
     CLeaf BuildCaseCondition(ISwitchCaseOperation caseSection, ITypeSymbol switchValueType,
-        int convertedSlot, CLeaf convertedValueVal,
-        int origValueSlot, CLeaf origValueVal, string valueType)
+        CLeaf convertedValueVal, CLeaf origValueVal, string valueType)
     {
         CLeaf caseCond = null;
         foreach (var clause in caseSection.Clauses)
         {
             if (clause is IDefaultCaseClauseOperation) continue;
             var clauseCond = BuildClauseCondition(clause, switchValueType,
-                convertedSlot, convertedValueVal, origValueSlot, origValueVal, valueType);
+                convertedValueVal, origValueVal, valueType);
             if (clauseCond == null) continue;
             caseCond = caseCond == null
                 ? clauseCond
@@ -135,8 +113,7 @@ public class SwitchHandler : HandlerBase, IOperationHandler
     }
 
     CLeaf BuildClauseCondition(ICaseClauseOperation clause, ITypeSymbol switchValueType,
-        int convertedSlot, CLeaf convertedValueVal,
-        int origValueSlot, CLeaf origValueVal, string valueType)
+        CLeaf convertedValueVal, CLeaf origValueVal, string valueType)
     {
         switch (clause)
         {
@@ -162,12 +139,12 @@ public class SwitchHandler : HandlerBase, IOperationHandler
                 var eqSig = ExternResolver.BuildMethodSignature(
                     eqType, "__op_Equality", new[] { eqType, eqType }, "SystemBoolean");
 
-                var lhs = convertedSlot >= 0 ? SlotRef(convertedSlot) : convertedValueVal;
+                var lhs = convertedValueVal;
                 return ExternCall(eqSig, new List<CLeaf> { lhs, caseValueVal }, "SystemBoolean");
             }
             case IPatternCaseClauseOperation patternCase:
             {
-                var patValue = origValueSlot >= 0 ? SlotRef(origValueSlot) : origValueVal;
+                var patValue = origValueVal;
                 var cond = EmitPatternCheck(patValue, switchValueType, patternCase.Pattern);
                 if (patternCase.Guard != null)
                 {
