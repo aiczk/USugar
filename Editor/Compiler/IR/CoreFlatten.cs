@@ -97,19 +97,19 @@ public static class CoreFlatten
 
     static void LowerStoreField(CStoreField sf, Ctx ctx)
     {
-        var src = LowerExpr(sf.Value, ctx);
-        ctx.Current.Stmts.Add(new CStoreField(sf.FieldName, src));
+        // sf.Value is a CLeaf (operand-leaf under ANF) — already a flat leaf, no lowering needed.
+        ctx.Current.Stmts.Add(new CStoreField(sf.FieldName, sf.Value));
     }
 
     static void LowerReturn(CReturn r, Ctx ctx)
     {
-        CLeaf val = r.Value == null ? null : LowerExpr(r.Value, ctx);
-        ctx.Current.Terminator = new CRet(val);
+        // r.Value is a CLeaf or null — already flat.
+        ctx.Current.Terminator = new CRet(r.Value);
     }
 
     static void LowerIf(CIf cif, Ctx ctx)
     {
-        var cond = LowerExpr(cif.Cond, ctx);
+        var cond = cif.Cond; // CLeaf operand — already flat
         var thenBlock = ctx.NewBlock();
         var elseBlock = ctx.NewBlock();
         var mergeBlock = ctx.NewBlock();
@@ -145,8 +145,7 @@ public static class CoreFlatten
 
             ctx.Current = headerBlock;
             if (cw.CondBlock.Stmts.Count > 0) LowerBlock(cw.CondBlock, ctx);
-            var cond = LowerExpr(cw.Cond, ctx);
-            ctx.Current.Terminator = new CBranch(cond, bodyBlock.Id, exitBlock.Id);
+            ctx.Current.Terminator = new CBranch(cw.Cond, bodyBlock.Id, exitBlock.Id);
         }
         else
         {
@@ -154,8 +153,7 @@ public static class CoreFlatten
 
             ctx.Current = headerBlock;
             if (cw.CondBlock.Stmts.Count > 0) LowerBlock(cw.CondBlock, ctx);
-            var cond = LowerExpr(cw.Cond, ctx);
-            ctx.Current.Terminator = new CBranch(cond, bodyBlock.Id, exitBlock.Id);
+            ctx.Current.Terminator = new CBranch(cw.Cond, bodyBlock.Id, exitBlock.Id);
 
             ctx.LoopStack.Push((exitBlock, headerBlock));
             ctx.Current = bodyBlock;
@@ -182,8 +180,7 @@ public static class CoreFlatten
         if (cf.CondBlock.Stmts.Count > 0) LowerBlock(cf.CondBlock, ctx);
         if (cf.Cond != null)
         {
-            var cond = LowerExpr(cf.Cond, ctx);
-            ctx.Current.Terminator = new CBranch(cond, bodyBlock.Id, exitBlock.Id);
+            ctx.Current.Terminator = new CBranch(cf.Cond, bodyBlock.Id, exitBlock.Id);
         }
         else
         {
@@ -249,19 +246,16 @@ public static class CoreFlatten
 
             case CExternCall ec:
             {
-                var args = new List<CLeaf>(ec.Args.Count);
-                foreach (var a in ec.Args) args.Add(LowerExpr(a, ctx));
+                // ec.Args are CLeaf operands (ANF) — already flat leaves, no per-arg lowering needed.
                 int? dest = ec.Type != "SystemVoid" ? ctx.AllocScratch(ec.Type) : (int?)null;
-                ctx.Current.Stmts.Add(new CExprStmt(new CExternCall(ec.Sig, args, ec.Type, dest)));
+                ctx.Current.Stmts.Add(new CExprStmt(new CExternCall(ec.Sig, new List<CLeaf>(ec.Args), ec.Type, dest)));
                 return dest.HasValue ? new CSlotRef(dest.Value, ec.Type) : new CConst(null, "SystemVoid");
             }
 
             case CInternalCall ic:
             {
-                var args = new List<CLeaf>(ic.Args.Count);
-                foreach (var a in ic.Args) args.Add(LowerExpr(a, ctx));
                 int? dest = ic.Type != "SystemVoid" ? ctx.AllocScratch(ic.Type) : (int?)null;
-                ctx.Current.Stmts.Add(new CExprStmt(new CInternalCall(ic.FuncName, args, ic.Type, dest)));
+                ctx.Current.Stmts.Add(new CExprStmt(new CInternalCall(ic.FuncName, new List<CLeaf>(ic.Args), ic.Type, dest)));
                 return dest.HasValue ? new CSlotRef(dest.Value, ic.Type) : new CConst(null, "SystemVoid");
             }
 
@@ -275,30 +269,27 @@ public static class CoreFlatten
 
     static CLeaf LowerCrossCall(CCrossCall cc, Ctx ctx)
     {
-        var inst = LowerExpr(cc.Instance, ctx);
+        // Instance, param values, and the string-constant operands are all CLeaf — already flat.
+        var inst = cc.Instance;
 
         foreach (var (paramName, value) in cc.Params)
         {
-            var paramVal = LowerExpr(value, ctx);
-            var paramNameOp = LowerExpr(new CConst(paramName, "SystemString"), ctx);
             ctx.Current.Stmts.Add(new CExprStmt(new CExternCall(
                 "VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid",
-                new List<CLeaf> { inst, paramNameOp, paramVal }, "SystemVoid", null)));
+                new List<CLeaf> { inst, new CConst(paramName, "SystemString"), value }, "SystemVoid", null)));
         }
 
-        var eventNameOp = LowerExpr(new CConst(cc.EventName, "SystemString"), ctx);
         ctx.Current.Stmts.Add(new CExprStmt(new CExternCall(
             "VRCUdonCommonInterfacesIUdonEventReceiver.__SendCustomEvent__SystemString__SystemVoid",
-            new List<CLeaf> { inst, eventNameOp }, "SystemVoid", null)));
+            new List<CLeaf> { inst, new CConst(cc.EventName, "SystemString") }, "SystemVoid", null)));
 
         if (cc.Returns.Count == 1)
         {
             var ret = cc.Returns[0];
-            var retNameOp = LowerExpr(new CConst(ret.Id, "SystemString"), ctx);
             var dest = ctx.AllocScratch(cc.Type);
             ctx.Current.Stmts.Add(new CExprStmt(new CExternCall(
                 "VRCUdonCommonInterfacesIUdonEventReceiver.__GetProgramVariable__SystemString__SystemObject",
-                new List<CLeaf> { inst, retNameOp }, cc.Type, dest)));
+                new List<CLeaf> { inst, new CConst(ret.Id, "SystemString") }, cc.Type, dest)));
             return new CSlotRef(dest, cc.Type);
         }
 
@@ -306,11 +297,10 @@ public static class CoreFlatten
         {
             foreach (var ret in cc.Returns)
             {
-                var retNameOp = LowerExpr(new CConst(ret.Id, "SystemString"), ctx);
                 var dest = ctx.AllocScratch("SystemObject");
                 ctx.Current.Stmts.Add(new CExprStmt(new CExternCall(
                     "VRCUdonCommonInterfacesIUdonEventReceiver.__GetProgramVariable__SystemString__SystemObject",
-                    new List<CLeaf> { inst, retNameOp }, "SystemObject", dest)));
+                    new List<CLeaf> { inst, new CConst(ret.Id, "SystemString") }, "SystemObject", dest)));
             }
         }
 
@@ -320,22 +310,20 @@ public static class CoreFlatten
     static CLeaf LowerSelect(CSelect sel, Ctx ctx)
     {
         var resultSlot = ctx.AllocScratch(sel.Type);
-        var cond = LowerExpr(sel.Cond, ctx);
-
+        // Cond/TrueVal/FalseVal are CLeaf operands (ANF) bound before the select — already flat. CSelect is
+        // used only for PURE branches, so eagerly assigning the pre-bound branch leaf in each arm is correct.
         var trueBlock = ctx.NewBlock();
         var falseBlock = ctx.NewBlock();
         var mergeBlock = ctx.NewBlock();
 
-        ctx.Current.Terminator = new CBranch(cond, trueBlock.Id, falseBlock.Id);
+        ctx.Current.Terminator = new CBranch(sel.Cond, trueBlock.Id, falseBlock.Id);
 
         ctx.Current = trueBlock;
-        var trueVal = LowerExpr(sel.TrueVal, ctx);
-        ctx.Current.Stmts.Add(new CAssign(resultSlot, trueVal));
+        ctx.Current.Stmts.Add(new CAssign(resultSlot, sel.TrueVal));
         ctx.Current.Terminator = new CJump(mergeBlock.Id);
 
         ctx.Current = falseBlock;
-        var falseVal = LowerExpr(sel.FalseVal, ctx);
-        ctx.Current.Stmts.Add(new CAssign(resultSlot, falseVal));
+        ctx.Current.Stmts.Add(new CAssign(resultSlot, sel.FalseVal));
         ctx.Current.Terminator = new CJump(mergeBlock.Id);
 
         ctx.Current = mergeBlock;
