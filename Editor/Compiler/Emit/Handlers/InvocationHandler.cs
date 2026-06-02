@@ -457,7 +457,13 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
         _lambdaConventionOverrides[symbol] = convention;
         if (convention.RetVarId != null)
         {
-            _methodReturns[symbol] = new[] { new ReturnSlot(convention.RetVarId, _ctx.GetFieldType(convention.RetVarId)) };
+            // Set func.ReturnType + func.ReturnSlots (not just _methodReturns) so codegen actually STORES the
+            // lambda's return value into the convention ret field. Without these the function is treated as
+            // void: the body computes the result but never writes it back, so the caller reads a stale 0.
+            var retType = _ctx.GetFieldType(convention.RetVarId);
+            func.ReturnType = retType;
+            func.ReturnSlots.Add(new ReturnSlot(convention.RetVarId, retType));
+            _methodReturns[symbol] = new[] { new ReturnSlot(convention.RetVarId, retType) };
         }
 
         _pendingLocalFunctions.Add((symbol, func));

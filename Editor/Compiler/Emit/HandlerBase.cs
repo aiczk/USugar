@@ -422,7 +422,10 @@ public abstract class HandlerBase
     protected CValue LoadParam(IParameterSymbol param)
     {
         var fieldName = GetParamVarId(param);
-        var type = GetUdonType(param.Type);
+        // A delegate-typed parameter is stored as SystemUInt32 (the JUMP address / FuncRef) — Udon has no
+        // delegate types — so it must be LOADED as SystemUInt32 too, matching its declared var type.
+        var type = param.Type is INamedTypeSymbol nt && nt.DelegateInvokeMethod != null
+            ? "SystemUInt32" : GetUdonType(param.Type);
         return LoadField(fieldName, type);
     }
 
