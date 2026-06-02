@@ -387,34 +387,8 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
         }
 
         _pendingGenericSpecs.Add(constructed);
-        DeclareDelegateConventionVars(constructed, idx);
-    }
-
-    void DeclareDelegateConventionVars(IMethodSymbol method, int idx)
-    {
-        foreach (var param in method.Parameters)
-        {
-            if (param.Type is not INamedTypeSymbol namedType || namedType.DelegateInvokeMethod == null)
-                continue;
-
-            var invoke = namedType.DelegateInvokeMethod;
-            var argVarIds = new string[invoke.Parameters.Length];
-            for (int j = 0; j < invoke.Parameters.Length; j++)
-            {
-                var argType = GetUdonType(invoke.Parameters[j].Type);
-                argVarIds[j] = _ctx.DeclareVar($"__dlg_{idx}_{param.Name}_a{j}", argType);
-            }
-            string retVarId = null;
-            if (!invoke.ReturnsVoid)
-            {
-                var retType = GetUdonType(invoke.ReturnType);
-                retVarId = _ctx.DeclareVar($"__dlg_{idx}_{param.Name}_ret", retType);
-            }
-            _delegateParamConventions[(idx, param.Ordinal)] = new DelegateConvention
-            {
-                ArgVarIds = argVarIds, RetVarId = retVarId
-            };
-        }
+        // Generic-spec path: resolve delegate param/return types through the type-param map (GetUdonType).
+        DeclareDelegateConventionVars(_ctx, constructed, idx, GetUdonType);
     }
 
     // ── Lambda / Delegate Helpers ──

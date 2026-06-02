@@ -704,6 +704,33 @@ public abstract class HandlerBase
 
     // ── Delegate convention helpers ──
 
+    /// <summary>Declare the per-call-site '__dlg_{idx}_{param}' calling-convention fields (one per delegate-typed
+    /// parameter: its args + optional return) for <paramref name="method"/>, recording them in
+    /// ctx.DelegateParamConventions keyed by (idx, paramOrdinal). Shared single definition for the generic-spec,
+    /// class-method, and foreign-static emit paths — each passes its own type resolver (the generic-spec path's
+    /// resolver applies the type-param map; the emitter path uses the plain one).</summary>
+    internal static void DeclareDelegateConventionVars(EmitContext ctx, IMethodSymbol method, int idx,
+        Func<ITypeSymbol, string> getUdonType)
+    {
+        foreach (var param in method.Parameters)
+        {
+            if (param.Type is not INamedTypeSymbol namedType || namedType.DelegateInvokeMethod == null)
+                continue;
+
+            var invoke = namedType.DelegateInvokeMethod;
+            var argVarIds = new string[invoke.Parameters.Length];
+            for (int j = 0; j < invoke.Parameters.Length; j++)
+                argVarIds[j] = ctx.DeclareVar($"__dlg_{idx}_{param.Name}_a{j}", getUdonType(invoke.Parameters[j].Type));
+            string retVarId = null;
+            if (!invoke.ReturnsVoid)
+                retVarId = ctx.DeclareVar($"__dlg_{idx}_{param.Name}_ret", getUdonType(invoke.ReturnType));
+            ctx.DelegateParamConventions[(idx, param.Ordinal)] = new DelegateConvention
+            {
+                ArgVarIds = argVarIds, RetVarId = retVarId
+            };
+        }
+    }
+
     /// <summary>Compute signature-based convention field names for a delegate type.</summary>
     internal static (string[] argNames, string retName) GetConventionFieldNames(INamedTypeSymbol delegateType)
     {

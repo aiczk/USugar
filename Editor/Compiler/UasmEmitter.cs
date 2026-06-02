@@ -581,7 +581,7 @@ public class UasmEmitter
                 _methodReturns[method] = ml.Returns.ToArray();
             }
 
-            DeclareDelegateConventionVars(method, idx);
+            HandlerBase.DeclareDelegateConventionVars(_ctx, method, idx, GetUdonType);
         }
 
         // Collect foreign static methods
@@ -618,7 +618,7 @@ public class UasmEmitter
 
             // Mirror the same-class path: a foreign-static method that invokes a delegate parameter needs its
             // convention vars declared, else VisitDelegateInvocation cannot resolve the target.
-            DeclareDelegateConventionVars(fm, idx);
+            HandlerBase.DeclareDelegateConventionVars(_ctx, fm, idx, GetUdonType);
         }
 
         // Register user-struct constructors + instance methods (object[]-emulated; synthetic receiver = param0).
@@ -941,33 +941,6 @@ public class UasmEmitter
     }
 
     // ── Delegate convention vars ──
-
-    void DeclareDelegateConventionVars(IMethodSymbol method, int idx)
-    {
-        foreach (var param in method.Parameters)
-        {
-            if (param.Type is not INamedTypeSymbol namedType || namedType.DelegateInvokeMethod == null)
-                continue;
-
-            var invoke = namedType.DelegateInvokeMethod;
-            var argVarIds = new string[invoke.Parameters.Length];
-            for (int j = 0; j < invoke.Parameters.Length; j++)
-            {
-                var argType = GetUdonType(invoke.Parameters[j].Type);
-                argVarIds[j] = _ctx.DeclareVar($"__dlg_{idx}_{param.Name}_a{j}", argType);
-            }
-            string retVarId = null;
-            if (!invoke.ReturnsVoid)
-            {
-                var retType = GetUdonType(invoke.ReturnType);
-                retVarId = _ctx.DeclareVar($"__dlg_{idx}_{param.Name}_ret", retType);
-            }
-            _delegateParamConventions[(idx, param.Ordinal)] = new DelegateConvention
-            {
-                ArgVarIds = argVarIds, RetVarId = retVarId
-            };
-        }
-    }
 
     static string SanitizeId(string name) => name.Replace('.', '_');
 
