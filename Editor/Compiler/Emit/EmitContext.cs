@@ -352,10 +352,10 @@ public class EmitContext
 
     // Conditional access stack (for ?. operator)
     // Target is the evaluated instance; DelegateFieldName is non-null for delegate ?.Invoke().
-    public readonly Stack<(CValue Target, string DelegateFieldName)> ConditionalAccessStack = new();
+    public readonly Stack<(CLeaf Target, string DelegateFieldName)> ConditionalAccessStack = new();
 
     // using declaration Dispose tracking
-    public readonly Stack<List<(CValue val, ITypeSymbol type)>> UsingDisposableStack = new();
+    public readonly Stack<List<(CLeaf val, ITypeSymbol type)>> UsingDisposableStack = new();
 
     /// <summary>Stack of using-stack depths at loop/switch entry points.
     /// Used to limit Dispose emission for break/continue to scopes inside the loop.</summary>
@@ -381,20 +381,20 @@ public class EmitContext
 
     // Dispatch delegates (HIR-based)
     Action<IOperation> _visitOperation;
-    Func<IOperation, CValue> _visitExpression;
-    Func<CValue, ITypeSymbol, IPatternOperation, CValue> _emitPatternCheck;
+    Func<IOperation, CLeaf> _visitExpression;
+    Func<CLeaf, ITypeSymbol, IPatternOperation, CLeaf> _emitPatternCheck;
 
     public Action<IOperation> VisitOperation => _visitOperation
         ?? throw new InvalidOperationException("EmitContext dispatchers not initialized. Call InitializeDispatchers first.");
-    public Func<IOperation, CValue> VisitExpression => _visitExpression
+    public Func<IOperation, CLeaf> VisitExpression => _visitExpression
         ?? throw new InvalidOperationException("EmitContext dispatchers not initialized. Call InitializeDispatchers first.");
-    public Func<CValue, ITypeSymbol, IPatternOperation, CValue> EmitPatternCheck => _emitPatternCheck
+    public Func<CLeaf, ITypeSymbol, IPatternOperation, CLeaf> EmitPatternCheck => _emitPatternCheck
         ?? throw new InvalidOperationException("EmitContext dispatchers not initialized. Call InitializeDispatchers first.");
 
     public void InitializeDispatchers(
         Action<IOperation> visitOp,
-        Func<IOperation, CValue> visitExpr,
-        Func<CValue, ITypeSymbol, IPatternOperation, CValue> emitPattern)
+        Func<IOperation, CLeaf> visitExpr,
+        Func<CLeaf, ITypeSymbol, IPatternOperation, CLeaf> emitPattern)
     {
         _visitOperation = visitOp ?? throw new ArgumentNullException(nameof(visitOp));
         _visitExpression = visitExpr ?? throw new ArgumentNullException(nameof(visitExpr));

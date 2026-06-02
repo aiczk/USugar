@@ -31,8 +31,8 @@ public abstract class HandlerBase
     protected Dictionary<ILocalSymbol, EmitContext.LocalBinding> _localBindings => _ctx.LocalBindings;
     protected List<(string fieldName, IOperation initOp, ITypeSymbol fieldType)> _fieldInitOps => _ctx.FieldInitOps;
     protected Dictionary<string, string> _fieldChangeCallbacks => _ctx.FieldChangeCallbacks;
-    protected Stack<(CValue Target, string DelegateFieldName)> _conditionalAccessStack => _ctx.ConditionalAccessStack;
-    protected Stack<List<(CValue val, ITypeSymbol type)>> _usingDisposableStack => _ctx.UsingDisposableStack;
+    protected Stack<(CLeaf Target, string DelegateFieldName)> _conditionalAccessStack => _ctx.ConditionalAccessStack;
+    protected Stack<List<(CLeaf val, ITypeSymbol type)>> _usingDisposableStack => _ctx.UsingDisposableStack;
     protected HashSet<string> _delegateFields => _ctx.DelegateFields;
     protected List<EmitDiagnostic> _diagnostics => _ctx.Diagnostics;
     protected bool IsRecursiveEdge(IMethodSymbol caller, IMethodSymbol callee) => _ctx.IsRecursiveEdge(caller, callee);
@@ -41,8 +41,8 @@ public abstract class HandlerBase
 
     // ── Dispatch (recursive descent into other handlers via UasmEmitter facade) ──
     protected void VisitOperation(IOperation op) => _ctx.VisitOperation(op);
-    protected CValue VisitExpression(IOperation op) => _ctx.VisitExpression(op);
-    protected CValue EmitPatternCheck(CValue value, ITypeSymbol valueType, IPatternOperation pattern)
+    protected CLeaf VisitExpression(IOperation op) => _ctx.VisitExpression(op);
+    protected CLeaf EmitPatternCheck(CLeaf value, ITypeSymbol valueType, IPatternOperation pattern)
         => _ctx.EmitPatternCheck(value, valueType, pattern);
 
     // ── Type resolution ──
@@ -66,10 +66,10 @@ public abstract class HandlerBase
     protected void EmitAssign(int destSlot, CValue value) => _builder.EmitAssign(destSlot, value);
 
     /// <summary>Emit: fieldName = expr</summary>
-    protected void EmitStoreField(string fieldName, CValue value) => _builder.EmitStoreField(fieldName, value);
+    protected void EmitStoreField(string fieldName, CLeaf value) => _builder.EmitStoreField(fieldName, value);
 
     /// <summary>Emit: return [value]</summary>
-    protected void EmitReturn(CValue value = null) => _builder.EmitReturn(value);
+    protected void EmitReturn(CLeaf value = null) => _builder.EmitReturn(value);
 
     /// <summary>Create a constant.</summary>
     protected CConst Const(object value, string type) => _builder.Const(value, type);
@@ -84,7 +84,7 @@ public abstract class HandlerBase
     protected CFieldAddr FieldAddr(string fieldName, string type) => _builder.FieldAddr(fieldName, type);
 
     /// <summary>Emit an extern call, materialized to a scratch slot (returns the leaf; null for void).</summary>
-    protected CSlotRef ExternCall(string sig, List<CValue> args, string retType)
+    protected CSlotRef ExternCall(string sig, List<CLeaf> args, string retType)
         => _builder.ExternCall(ResolveExtern(sig), args, retType);
 
     /// <summary>
@@ -94,7 +94,7 @@ public abstract class HandlerBase
     /// Lossless widenings (and non-integer conversions) use the plain convert extern directly. The 64-bit
     /// unsigned cases require unchecked 64-bit ops Udon does not expose and fall back to the checked convert.
     /// </summary>
-    protected CValue EmitNarrowingConvert(CValue value, string fromUdonType, string toUdonType)
+    protected CLeaf EmitNarrowingConvert(CLeaf value, string fromUdonType, string toUdonType)
     {
         if (fromUdonType == toUdonType)
             return value;
@@ -104,7 +104,7 @@ public abstract class HandlerBase
             || IsLosslessIntegerWiden(fromUdonType, toUdonType)
             || fromUdonType == "SystemUInt64" || toUdonType == "SystemUInt64")
             return ExternCall(ExternResolver.BuildConvertSignature(fromUdonType, toUdonType),
-                new List<CValue> { value }, toUdonType);
+                new List<CLeaf> { value }, toUdonType);
 
         // Reduce the source to its low 32 bits as a SIGNED int32, then wrap / reinterpret to the target width.
         var lowSigned = LowInt32Bits(value, fromUdonType);
@@ -120,40 +120,40 @@ public abstract class HandlerBase
         }
         // Unreachable for the supported integer target set; safety fallback.
         return ExternCall(ExternResolver.BuildConvertSignature(fromUdonType, toUdonType),
-            new List<CValue> { value }, toUdonType);
+            new List<CLeaf> { value }, toUdonType);
     }
 
     /// <summary>Low 32 bits of an integer value as a SIGNED int32 (C# unchecked reinterpret). Sources wider than
     /// int32 are reduced by a 64-bit sign-extending shift; ≤32-bit sources widen losslessly to int64 first.</summary>
-    CValue LowInt32Bits(CValue value, string fromUdonType)
+    CLeaf LowInt32Bits(CLeaf value, string fromUdonType)
     {
         if (fromUdonType == "SystemInt32")
             return value;
         var asLong = fromUdonType == "SystemInt64"
             ? value
             : ExternCall(ExternResolver.BuildConvertSignature(fromUdonType, "SystemInt64"),
-                new List<CValue> { value }, "SystemInt64");
+                new List<CLeaf> { value }, "SystemInt64");
         // (x << 32) >> 32 : arithmetic right shift sign-extends bit 31 → value in [-2^31, 2^31), safe to ToInt32.
         var shl = ExternCall("SystemInt64.__op_LeftShift__SystemInt64_SystemInt32__SystemInt64",
-            new List<CValue> { asLong, Const(32, "SystemInt32") }, "SystemInt64");
+            new List<CLeaf> { asLong, Const(32, "SystemInt32") }, "SystemInt64");
         var sar = ExternCall("SystemInt64.__op_RightShift__SystemInt64_SystemInt32__SystemInt64",
-            new List<CValue> { shl, Const(32, "SystemInt32") }, "SystemInt64");
+            new List<CLeaf> { shl, Const(32, "SystemInt32") }, "SystemInt64");
         return ExternCall("SystemConvert.__ToInt32__SystemInt64__SystemInt32",
-            new List<CValue> { sar }, "SystemInt32");
+            new List<CLeaf> { sar }, "SystemInt32");
     }
 
     /// <summary>Reinterpret an int32 bit pattern as uint32 (C# unchecked (uint)int): negatives map to +2^32.</summary>
-    CValue Int32BitsToUInt32(CValue int32Val)
+    CLeaf Int32BitsToUInt32(CLeaf int32Val)
     {
         var asLong = ExternCall("SystemConvert.__ToInt64__SystemInt32__SystemInt64",
-            new List<CValue> { int32Val }, "SystemInt64");
+            new List<CLeaf> { int32Val }, "SystemInt64");
         var isNeg = ExternCall("SystemInt64.__op_LessThan__SystemInt64_SystemInt64__SystemBoolean",
-            new List<CValue> { asLong, Const(0L, "SystemInt64") }, "SystemBoolean");
+            new List<CLeaf> { asLong, Const(0L, "SystemInt64") }, "SystemBoolean");
         var plus = ExternCall("SystemInt64.__op_Addition__SystemInt64_SystemInt64__SystemInt64",
-            new List<CValue> { asLong, Const(4294967296L, "SystemInt64") }, "SystemInt64");
+            new List<CLeaf> { asLong, Const(4294967296L, "SystemInt64") }, "SystemInt64");
         var wrapped = Select(isNeg, plus, asLong, "SystemInt64");
         return ExternCall("SystemConvert.__ToUInt32__SystemInt64__SystemUInt32",
-            new List<CValue> { wrapped }, "SystemUInt32");
+            new List<CLeaf> { wrapped }, "SystemUInt32");
     }
 
     static bool IsIntegerUdon(string t) => IntInfo(t).rank > 0;
@@ -184,29 +184,29 @@ public abstract class HandlerBase
         return false;                    // signed → unsigned is never lossless (negatives)
     }
 
-    CValue ConvertInRange(CValue inRangeInt, string toUdonType)
+    CLeaf ConvertInRange(CLeaf inRangeInt, string toUdonType)
         => ExternCall(ExternResolver.BuildConvertSignature("SystemInt32", toUdonType),
-            new List<CValue> { inRangeInt }, toUdonType);
+            new List<CLeaf> { inRangeInt }, toUdonType);
 
     // ((x % mod) + mod) % mod  →  [0, mod)  : C# unsigned narrowing wrap
-    CValue ModWrap(CValue x, int mod)
+    CLeaf ModWrap(CLeaf x, int mod)
     {
         var add = ExternCall("SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32",
-            new List<CValue> { Rem(x, mod), Const(mod, "SystemInt32") }, "SystemInt32");
+            new List<CLeaf> { Rem(x, mod), Const(mod, "SystemInt32") }, "SystemInt32");
         return Rem(add, mod);
     }
 
-    CValue Rem(CValue x, int mod)
+    CLeaf Rem(CLeaf x, int mod)
         => ExternCall("SystemInt32.__op_Remainder__SystemInt32_SystemInt32__SystemInt32",
-            new List<CValue> { x, Const(mod, "SystemInt32") }, "SystemInt32");
+            new List<CLeaf> { x, Const(mod, "SystemInt32") }, "SystemInt32");
 
     // (x << s) >> s  →  signed (32-s)-bit truncation with sign extension
-    CValue ShiftTruncate(CValue x, int shift)
+    CLeaf ShiftTruncate(CLeaf x, int shift)
     {
         var left = ExternCall("SystemInt32.__op_LeftShift__SystemInt32_SystemInt32__SystemInt32",
-            new List<CValue> { x, Const(shift, "SystemInt32") }, "SystemInt32");
+            new List<CLeaf> { x, Const(shift, "SystemInt32") }, "SystemInt32");
         return ExternCall("SystemInt32.__op_RightShift__SystemInt32_SystemInt32__SystemInt32",
-            new List<CValue> { left, Const(shift, "SystemInt32") }, "SystemInt32");
+            new List<CLeaf> { left, Const(shift, "SystemInt32") }, "SystemInt32");
     }
 
     /// <summary>True for the 64-bit integer Udon types whose op_Remainder extern does not exist.</summary>
@@ -215,34 +215,34 @@ public abstract class HandlerBase
     /// <summary>64-bit remainder polyfill: Udon exposes no SystemInt64/SystemUInt64 op_Remainder, so lower
     /// `a % b` to `a - (a / b) * b` using the matching signed/unsigned Division/Multiplication/Subtraction
     /// (truncate-toward-zero division makes this exact for both signs). Shared by the binary and compound paths.</summary>
-    protected CValue EmitInt64Remainder(CValue left, CValue right, string t)
+    protected CLeaf EmitInt64Remainder(CLeaf left, CLeaf right, string t)
     {
         var aSlot = _ctx.AllocTemp(t); EmitAssign(aSlot, left);
         var bSlot = _ctx.AllocTemp(t); EmitAssign(bSlot, right);
         var quot = ExternCall($"{t}.__op_Division__{t}_{t}__{t}",
-            new List<CValue> { SlotRef(aSlot), SlotRef(bSlot) }, t);
+            new List<CLeaf> { SlotRef(aSlot), SlotRef(bSlot) }, t);
         var prod = ExternCall($"{t}.__op_Multiplication__{t}_{t}__{t}",
-            new List<CValue> { quot, SlotRef(bSlot) }, t);
+            new List<CLeaf> { quot, SlotRef(bSlot) }, t);
         return ExternCall($"{t}.__op_Subtraction__{t}_{t}__{t}",
-            new List<CValue> { SlotRef(aSlot), prod }, t);
+            new List<CLeaf> { SlotRef(aSlot), prod }, t);
     }
 
     /// <summary>Emit a void extern call as a statement.</summary>
-    protected void EmitExternVoid(string sig, List<CValue> args)
+    protected void EmitExternVoid(string sig, List<CLeaf> args)
         => _builder.EmitExternVoid(ResolveExtern(sig), args);
 
     /// <summary>Create an internal call expression.</summary>
-    protected CSlotRef InternalCall(string funcName, List<CValue> args, string retType)
+    protected CSlotRef InternalCall(string funcName, List<CLeaf> args, string retType)
         => _builder.InternalCall(funcName, args, retType);
 
     /// <summary>Emit a cross-behaviour call. Single-return → materialized to a scratch slot (returns the
     /// leaf); void or multi-return → side-effecting statement (returns null).</summary>
-    protected CSlotRef CrossCall(CValue instance, string eventName,
-        List<(string, CValue)> parameters, IReadOnlyList<ReturnSlot> returns, string retType)
+    protected CSlotRef CrossCall(CLeaf instance, string eventName,
+        List<(string, CLeaf)> parameters, IReadOnlyList<ReturnSlot> returns, string retType)
         => _builder.CrossCall(instance, eventName, parameters, returns, retType);
 
     /// <summary>Create a select (ternary) expression.</summary>
-    protected CSlotRef Select(CValue cond, CValue trueVal, CValue falseVal, string type)
+    protected CSlotRef Select(CLeaf cond, CLeaf trueVal, CLeaf falseVal, string type)
         => _builder.Select(cond, trueVal, falseVal, type);
 
     /// <summary>Create a function reference (for delegate/JUMP_INDIRECT).</summary>
@@ -261,55 +261,55 @@ public abstract class HandlerBase
     }
 
     /// <summary>Emit a void internal call as a side-effecting statement (not materialized to a slot).</summary>
-    protected void EmitInternalVoid(string funcName, List<CValue> args) => _builder.EmitInternalVoid(funcName, args);
+    protected void EmitInternalVoid(string funcName, List<CLeaf> args) => _builder.EmitInternalVoid(funcName, args);
 
     // ── Nullable<T> (boxed-object emulation) helpers ──
 
     /// <summary>HasValue: the boxed nullable object is non-null. Returns SystemBoolean.
     /// <paramref name="nullableVal"/> must be pure or pre-materialised (it is read once).</summary>
-    protected CValue EmitNullableHasValue(CValue nullableVal)
+    protected CLeaf EmitNullableHasValue(CLeaf nullableVal)
     {
         var isNull = ExternCall("SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean",
-            new List<CValue> { nullableVal, Const(null, "SystemObject") }, "SystemBoolean");
+            new List<CLeaf> { nullableVal, Const(null, "SystemObject") }, "SystemBoolean");
         return ExternCall("SystemBoolean.__op_UnaryNegation__SystemBoolean__SystemBoolean",
-            new List<CValue> { isNull }, "SystemBoolean");
+            new List<CLeaf> { isNull }, "SystemBoolean");
     }
 
     /// <summary>Default value for a Udon value type (0 / false). Used for `default(T)`-style fills.</summary>
-    protected CValue EmitValueTypeDefault(string udonType)
+    protected CLeaf EmitValueTypeDefault(string udonType)
         => Const(EmitContext.ParseConstValue(udonType, udonType == "SystemBoolean" ? "False" : "0"), udonType);
 
     /// <summary>Deep value-copy of an object[]-backed aggregate (struct/tuple): a fresh array with each
     /// element copied, recursing into nested-aggregate elements. A shallow SystemObjectArray.__Clone__ would
     /// copy the nested object[] REFERENCE, so mutating the copy's nested struct would corrupt the source.</summary>
-    protected CValue EmitDeepCloneAggregate(CValue src, INamedTypeSymbol aggType)
+    protected CLeaf EmitDeepCloneAggregate(CLeaf src, INamedTypeSymbol aggType)
     {
         var layout = _ctx.GetAggregateLayout(aggType);
         var srcSlot = _ctx.AllocTemp("SystemObjectArray"); EmitAssign(srcSlot, src);
         var dstSlot = _ctx.AllocTemp("SystemObjectArray");
         EmitAssign(dstSlot, ExternCall("SystemObjectArray.__ctor__SystemInt32__SystemObjectArray",
-            new List<CValue> { Const(layout.Count, "SystemInt32") }, "SystemObjectArray"));
+            new List<CLeaf> { Const(layout.Count, "SystemInt32") }, "SystemObjectArray"));
         for (int i = 0; i < layout.Count; i++)
         {
             var elem = ExternCall("SystemObjectArray.__Get__SystemInt32__SystemObject",
-                new List<CValue> { SlotRef(srcSlot), Const(i, "SystemInt32") }, "SystemObject");
-            CValue copy = layout.Fields[i].Type is INamedTypeSymbol nested && EmitContext.IsAggregateType(nested)
+                new List<CLeaf> { SlotRef(srcSlot), Const(i, "SystemInt32") }, "SystemObject");
+            CLeaf copy = layout.Fields[i].Type is INamedTypeSymbol nested && EmitContext.IsAggregateType(nested)
                 ? EmitDeepCloneAggregate(elem, nested) // nested aggregate → recurse
                 : elem;                                // boxed scalar → reference copy is fine (immutable box)
             EmitExternVoid("SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid",
-                new List<CValue> { SlotRef(dstSlot), Const(i, "SystemInt32"), copy });
+                new List<CLeaf> { SlotRef(dstSlot), Const(i, "SystemInt32"), copy });
         }
         return SlotRef(dstSlot);
     }
 
     /// <summary>Allocate a fresh object[]-backed aggregate (struct/tuple) and default-initialize it as a
     /// VALUE (e.g. `new V()` used as an expression). Nested aggregate fields are recursively allocated.</summary>
-    protected CValue EmitNewAggregate(INamedTypeSymbol aggType)
+    protected CLeaf EmitNewAggregate(INamedTypeSymbol aggType)
     {
         var layout = _ctx.GetAggregateLayout(aggType);
         var slot = _ctx.AllocTemp("SystemObjectArray");
         EmitAssign(slot, ExternCall("SystemObjectArray.__ctor__SystemInt32__SystemObjectArray",
-            new List<CValue> { Const(layout.Count, "SystemInt32") }, "SystemObjectArray"));
+            new List<CLeaf> { Const(layout.Count, "SystemInt32") }, "SystemObjectArray"));
         EmitDefaultInitAggregate(SlotRef(slot), layout);
         return SlotRef(slot);
     }
@@ -328,9 +328,9 @@ public abstract class HandlerBase
                 var nl = _ctx.GetAggregateLayout(nested);
                 var subSlot = _ctx.AllocTemp("SystemObjectArray");
                 EmitAssign(subSlot, ExternCall("SystemObjectArray.__ctor__SystemInt32__SystemObjectArray",
-                    new List<CValue> { Const(nl.Count, "SystemInt32") }, "SystemObjectArray"));
+                    new List<CLeaf> { Const(nl.Count, "SystemInt32") }, "SystemObjectArray"));
                 EmitExternVoid("SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid",
-                    new List<CValue> { SlotRef(slot), Const(i, "SystemInt32"), SlotRef(subSlot) });
+                    new List<CLeaf> { SlotRef(slot), Const(i, "SystemInt32"), SlotRef(subSlot) });
                 EmitDefaultInitAggregate(SlotRef(subSlot), nl);
                 continue;
             }
@@ -352,7 +352,7 @@ public abstract class HandlerBase
             };
             if (defVal != null)
                 EmitExternVoid("SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid",
-                    new List<CValue> { SlotRef(slot), Const(i, "SystemInt32"), Const(defVal, GetUdonType(fieldType)) });
+                    new List<CLeaf> { SlotRef(slot), Const(i, "SystemInt32"), Const(defVal, GetUdonType(fieldType)) });
         }
     }
 
@@ -380,12 +380,12 @@ public abstract class HandlerBase
     /// often a boxed plain int (e.g. <c>byte? x = 5</c> keeps the int literal un-narrowed), which a strict
     /// typed fetch rejects with InvalidCast. Convert.ToInt32(object) tolerates any boxed numeric. Pass-through
     /// for non-small types.</summary>
-    protected CValue PromoteBoxedToInt32(CValue boxed, ITypeSymbol underlying, out ITypeSymbol effectiveType)
+    protected CLeaf PromoteBoxedToInt32(CLeaf boxed, ITypeSymbol underlying, out ITypeSymbol effectiveType)
     {
         if (SmallIntOrChar(GetUdonType(underlying)))
         {
             effectiveType = _compilation.GetSpecialType(SpecialType.System_Int32);
-            return ExternCall("SystemConvert.__ToInt32__SystemObject__SystemInt32", new List<CValue> { boxed }, "SystemInt32");
+            return ExternCall("SystemConvert.__ToInt32__SystemObject__SystemInt32", new List<CLeaf> { boxed }, "SystemInt32");
         }
         effectiveType = underlying;
         return boxed;
@@ -394,7 +394,7 @@ public abstract class HandlerBase
     /// <summary>Lifted binary operator on Nullable&lt;T&gt; (null propagation), from already-evaluated operand
     /// values. Arithmetic yields T? (null unless both present); relational yields bool (false if either null);
     /// equality yields bool (both-null is equal). Shared by <c>OperatorHandler</c> and compound assignment.</summary>
-    protected CValue EmitLiftedBinaryCore(
+    protected CLeaf EmitLiftedBinaryCore(
         CValue leftVal, bool leftNullable, ITypeSymbol ltUnderlying,
         CValue rightVal, bool rightNullable, ITypeSymbol rtUnderlying,
         Microsoft.CodeAnalysis.Operations.BinaryOperatorKind kind, IMethodSymbol operatorMethod, ITypeSymbol resultType)
@@ -405,8 +405,8 @@ public abstract class HandlerBase
         var aSlot = _ctx.AllocTemp("SystemObject"); EmitAssign(aSlot, leftVal);
         var bSlot = _ctx.AllocTemp("SystemObject"); EmitAssign(bSlot, rightVal);
 
-        CValue IsNullV(int slot) => ExternCall("SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean",
-            new List<CValue> { SlotRef(slot), Const(null, "SystemObject") }, "SystemBoolean");
+        CLeaf IsNullV(int slot) => ExternCall("SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean",
+            new List<CLeaf> { SlotRef(slot), Const(null, "SystemObject") }, "SystemBoolean");
 
         void IfBothPresent(Action<CoreBuilder> body)
         {
@@ -428,7 +428,7 @@ public abstract class HandlerBase
             var resEff = resPromotes ? _compilation.GetSpecialType(SpecialType.System_Int32) : resUnder;
             var raw = ExternCall(
                 ExternResolver.ResolveBinaryExtern(k, operatorMethod, ResolveType(ltEff), ResolveType(rtEff), ResolveType(resEff)),
-                new List<CValue> { aV, bV }, GetUdonType(resEff));
+                new List<CLeaf> { aV, bV }, GetUdonType(resEff));
             return resPromotes && GetUdonType(resUnder) != "SystemInt32"
                 ? EmitNarrowingConvert(raw, "SystemInt32", GetUdonType(resUnder)) : raw;
         }
@@ -451,7 +451,7 @@ public abstract class HandlerBase
             IfBothPresent(_ => EmitAssign(eqSlot, ValueOp(Microsoft.CodeAnalysis.Operations.BinaryOperatorKind.Equals)));
             if (kind == Microsoft.CodeAnalysis.Operations.BinaryOperatorKind.NotEquals)
                 return ExternCall("SystemBoolean.__op_UnaryNegation__SystemBoolean__SystemBoolean",
-                    new List<CValue> { SlotRef(eqSlot) }, "SystemBoolean");
+                    new List<CLeaf> { SlotRef(eqSlot) }, "SystemBoolean");
             return SlotRef(eqSlot);
         }
         var relSlot = _ctx.AllocTemp("SystemBoolean"); // relational → bool : false unless both present
@@ -522,8 +522,8 @@ public abstract class HandlerBase
           + "Not found in lambda overrides, method params, or variable table.");
     }
 
-    /// <summary>Read a parameter value as an CValue (field load).</summary>
-    protected CValue LoadParam(IParameterSymbol param)
+    /// <summary>Read a parameter value as a CLeaf (field load).</summary>
+    protected CLeaf LoadParam(IParameterSymbol param)
     {
         var fieldName = GetParamVarId(param);
         // A delegate-typed parameter is stored as SystemUInt32 (the JUMP address / FuncRef) — Udon has no
@@ -533,7 +533,7 @@ public abstract class HandlerBase
         return LoadField(fieldName, type);
     }
 
-    protected CValue EmitEnumToUnderlying(CValue operand, ITypeSymbol type)
+    protected CLeaf EmitEnumToUnderlying(CLeaf operand, ITypeSymbol type)
     {
         if (type is not INamedTypeSymbol named || named.TypeKind != TypeKind.Enum)
             return operand;
@@ -543,7 +543,7 @@ public abstract class HandlerBase
         var underlyingUdon = GetUdonType(underlyingType);
         return ExternCall(
             $"SystemConvert.__{convertMethod}__SystemObject__{underlyingUdon}",
-            new List<CValue> { operand },
+            new List<CLeaf> { operand },
             underlyingUdon);
     }
 
@@ -556,7 +556,7 @@ public abstract class HandlerBase
     /// VisitExpression() clones aggregate locals/params by default for value semantics,
     /// but field access operates on the original array.
     /// </summary>
-    protected CValue LoadInstanceRaw(IOperation instance)
+    protected CLeaf LoadInstanceRaw(IOperation instance)
     {
         return instance switch
         {
@@ -579,29 +579,29 @@ public abstract class HandlerBase
     }
 
     /// <summary>Read an aggregate array element as the raw stored object[] (no clone), for receiver access.</summary>
-    protected CValue ReadArrayElementRaw(IArrayElementReferenceOperation ae)
+    protected CLeaf ReadArrayElementRaw(IArrayElementReferenceOperation ae)
     {
         var arrayVal = VisitExpression(ae.ArrayReference);
         var arrSym = ae.ArrayReference.Type as IArrayTypeSymbol;
         var arrType = GetArrayType(arrSym);
         var elemType = GetArrayElemType(arrSym);
         var idx = ae.Indices[0];
-        CValue idxVal = idx is IUnaryOperation { Type: { Name: "Index" } } fromEnd
-            ? ExternCall("SystemInt32.__op_Subtraction__SystemInt32_SystemInt32__SystemInt32", new List<CValue>
-                { ExternCall($"{arrType}.__get_Length__SystemInt32", new List<CValue> { arrayVal }, "SystemInt32"),
+        CLeaf idxVal = idx is IUnaryOperation { Type: { Name: "Index" } } fromEnd
+            ? ExternCall("SystemInt32.__op_Subtraction__SystemInt32_SystemInt32__SystemInt32", new List<CLeaf>
+                { ExternCall($"{arrType}.__get_Length__SystemInt32", new List<CLeaf> { arrayVal }, "SystemInt32"),
                   VisitExpression(fromEnd.Operand) }, "SystemInt32")
             : VisitExpression(idx);
-        return ExternCall($"{arrType}.__Get__SystemInt32__{elemType}", new List<CValue> { arrayVal, idxVal }, "SystemObject");
+        return ExternCall($"{arrType}.__Get__SystemInt32__{elemType}", new List<CLeaf> { arrayVal, idxVal }, "SystemObject");
     }
 
     /// <summary>Read an aggregate-typed field as the raw stored object[] (no clone): a nested element via
     /// __Get__, or a this.field directly. Used for receiver access; value reads add a clone on top.</summary>
-    protected CValue ReadAggregateFieldRaw(IFieldReferenceOperation fr)
+    protected CLeaf ReadAggregateFieldRaw(IFieldReferenceOperation fr)
     {
         if (fr.Instance != null && fr.Instance.Type is INamedTypeSymbol cont && EmitContext.IsAggregateType(cont)
             && _ctx.GetAggregateLayout(cont).TryGetIndex(fr.Field, out var idx))
             return ExternCall("SystemObjectArray.__Get__SystemInt32__SystemObject",
-                new List<CValue> { LoadInstanceRaw(fr.Instance), Const(idx, "SystemInt32") }, "SystemObject");
+                new List<CLeaf> { LoadInstanceRaw(fr.Instance), Const(idx, "SystemInt32") }, "SystemObject");
         if (fr.Instance is IInstanceReferenceOperation)
             return LoadField(fr.Field.Name, "SystemObjectArray");
         return VisitExpression(fr); // cross-behaviour aggregate field etc. — rare
@@ -614,7 +614,7 @@ public abstract class HandlerBase
     /// Callers with specialized targets (array elements, cross-behaviour fields) should handle those
     /// first, then delegate to this method for the common cases.
     /// </summary>
-    protected void AssignToLValue(IOperation target, CValue value)
+    protected void AssignToLValue(IOperation target, CLeaf value)
     {
         switch (target)
         {
@@ -758,10 +758,10 @@ public abstract class HandlerBase
     // ── Delegate bridge resolution ──
 
     /// <summary>Resolve delegate creation to bridge name, FuncRef, and target instance.</summary>
-    protected (string bridgeName, CValue funcRef, CValue targetInstance) ResolveDelegateBridge(IDelegateCreationOperation op)
+    protected (string bridgeName, CLeaf funcRef, CLeaf targetInstance) ResolveDelegateBridge(IDelegateCreationOperation op)
     {
         IMethodSymbol targetMethod = null;
-        CValue targetInstance = null;
+        CLeaf targetInstance = null;
         switch (op.Target)
         {
             case IAnonymousFunctionOperation lambda:
@@ -832,7 +832,7 @@ public abstract class HandlerBase
     /// Returns the result CValue — this is an expression only, NOT emitted to the HIR.
     /// For void calls (e.g. property setters), wrap with <c>EmitExprStmt()</c> to add to the HIR.
     /// </summary>
-    protected CValue EmitCallToMethod(IMethodSymbol target, List<CValue> args)
+    protected CLeaf EmitCallToMethod(IMethodSymbol target, List<CLeaf> args)
     {
         if (!_methodFunctions.TryGetValue(target, out var func))
             throw new InvalidOperationException($"No CFunction registered for method '{target.Name}'");

@@ -77,13 +77,13 @@ public sealed class CFuncRef : CLeaf
 public sealed class CExternCall : CValue
 {
     public readonly string Sig;
-    public readonly List<CValue> Args;
+    public readonly List<CLeaf> Args;
     public readonly int? DestSlot; // null in tree role; set in flat (instruction) role
 
-    public CExternCall(string sig, List<CValue> args, string retType, int? destSlot = null) : base(retType)
+    public CExternCall(string sig, List<CLeaf> args, string retType, int? destSlot = null) : base(retType)
     {
         Sig = sig ?? throw new ArgumentNullException(nameof(sig));
-        Args = args ?? new List<CValue>();
+        Args = args ?? new List<CLeaf>();
         DestSlot = destSlot;
     }
 
@@ -98,13 +98,13 @@ public sealed class CExternCall : CValue
 public sealed class CInternalCall : CValue
 {
     public readonly string FuncName;
-    public readonly List<CValue> Args;
+    public readonly List<CLeaf> Args;
     public readonly int? DestSlot;
 
-    public CInternalCall(string funcName, List<CValue> args, string retType, int? destSlot = null) : base(retType)
+    public CInternalCall(string funcName, List<CLeaf> args, string retType, int? destSlot = null) : base(retType)
     {
         FuncName = funcName ?? throw new ArgumentNullException(nameof(funcName));
-        Args = args ?? new List<CValue>();
+        Args = args ?? new List<CLeaf>();
         DestSlot = destSlot;
     }
 
@@ -119,11 +119,11 @@ public sealed class CInternalCall : CValue
 /// operand form; it is expanded to branch blocks in CoreFlatten.</summary>
 public sealed class CSelect : CValue
 {
-    public readonly CValue Cond;
-    public readonly CValue TrueVal;
-    public readonly CValue FalseVal;
+    public readonly CLeaf Cond;
+    public readonly CLeaf TrueVal;
+    public readonly CLeaf FalseVal;
 
-    public CSelect(CValue cond, CValue trueVal, CValue falseVal, string type) : base(type)
+    public CSelect(CLeaf cond, CLeaf trueVal, CLeaf falseVal, string type) : base(type)
     {
         Cond = cond ?? throw new ArgumentNullException(nameof(cond));
         TrueVal = trueVal ?? throw new ArgumentNullException(nameof(trueVal));
@@ -138,17 +138,17 @@ public sealed class CSelect : CValue
 ///</summary>
 public sealed class CCrossCall : CValue
 {
-    public readonly CValue Instance;
+    public readonly CLeaf Instance;
     public readonly string EventName;
-    public readonly List<(string ParamName, CValue Value)> Params; // SetProgramVariable pairs
+    public readonly List<(string ParamName, CLeaf Value)> Params; // SetProgramVariable pairs
     public readonly IReadOnlyList<ReturnSlot> Returns;             // empty for void
 
-    public CCrossCall(CValue instance, string eventName,
-        List<(string, CValue)> parameters, IReadOnlyList<ReturnSlot> returns, string retType) : base(retType)
+    public CCrossCall(CLeaf instance, string eventName,
+        List<(string, CLeaf)> parameters, IReadOnlyList<ReturnSlot> returns, string retType) : base(retType)
     {
         Instance = instance ?? throw new ArgumentNullException(nameof(instance));
         EventName = eventName ?? throw new ArgumentNullException(nameof(eventName));
-        Params = parameters ?? new List<(string, CValue)>();
+        Params = parameters ?? new List<(string, CLeaf)>();
         Returns = returns ?? Array.Empty<ReturnSlot>();
     }
 

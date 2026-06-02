@@ -81,8 +81,8 @@ public sealed class CoreBuilder
     }
 
     public void EmitAssign(int destSlot, CValue value) => Emit(new CAssign(destSlot, value));
-    public void EmitStoreField(string fieldName, CValue value) => Emit(new CStoreField(fieldName, value));
-    public void EmitReturn(CValue value = null) => Emit(new CReturn(value));
+    public void EmitStoreField(string fieldName, CLeaf value) => Emit(new CStoreField(fieldName, value));
+    public void EmitReturn(CLeaf value = null) => Emit(new CReturn(value));
     public void EmitBreak() => Emit(new CBreak());
     public void EmitContinue() => Emit(new CContinue());
     public void EmitGoto(string label) => Emit(new CGoto(label));
@@ -97,7 +97,7 @@ public sealed class CoreBuilder
 
     // ── Structured control flow ──
 
-    public void EmitIf(CValue cond, Action<CoreBuilder> thenBuilder, Action<CoreBuilder> elseBuilder = null)
+    public void EmitIf(CLeaf cond, Action<CoreBuilder> thenBuilder, Action<CoreBuilder> elseBuilder = null)
     {
         var thenBlock = new CBlock();
         var elseBlock = new CBlock();
@@ -119,7 +119,7 @@ public sealed class CoreBuilder
         Emit(new CIf(cond, thenBlock, elseBlock));
     }
 
-    public void EmitWhile(CValue cond, Action<CoreBuilder> bodyBuilder, bool isDoWhile = false, CBlock condBlock = null)
+    public void EmitWhile(CLeaf cond, Action<CoreBuilder> bodyBuilder, bool isDoWhile = false, CBlock condBlock = null)
     {
         var body = new CBlock();
         _stmtStack.Push(body.Stmts);
@@ -128,7 +128,7 @@ public sealed class CoreBuilder
         Emit(new CWhile(cond, body, isDoWhile, condBlock));
     }
 
-    public void EmitWhile(Func<CValue> condFactory, Action<CoreBuilder> bodyBuilder, bool isDoWhile = false)
+    public void EmitWhile(Func<CLeaf> condFactory, Action<CoreBuilder> bodyBuilder, bool isDoWhile = false)
     {
         var condBlock = new CBlock();
         _stmtStack.Push(condBlock.Stmts);
@@ -143,7 +143,7 @@ public sealed class CoreBuilder
         Emit(new CWhile(cond, body, isDoWhile, condBlock));
     }
 
-    public void EmitFor(Action<CoreBuilder> initBuilder, CValue cond,
+    public void EmitFor(Action<CoreBuilder> initBuilder, CLeaf cond,
         Action<CoreBuilder> updateBuilder, Action<CoreBuilder> bodyBuilder)
     {
         var init = new CBlock();
@@ -165,7 +165,7 @@ public sealed class CoreBuilder
         Emit(new CFor(init, cond, update, body));
     }
 
-    public void EmitFor(Action<CoreBuilder> initBuilder, Func<CValue> condFactory,
+    public void EmitFor(Action<CoreBuilder> initBuilder, Func<CLeaf> condFactory,
         Action<CoreBuilder> updateBuilder, Action<CoreBuilder> bodyBuilder)
     {
         var init = new CBlock();
@@ -226,16 +226,16 @@ public sealed class CoreBuilder
     }
 
     public CSlotRef LoadField(string fieldName, string type) => Bind(new CFieldLoad(fieldName, type), type);
-    public CSlotRef Select(CValue cond, CValue trueVal, CValue falseVal, string type)
+    public CSlotRef Select(CLeaf cond, CLeaf trueVal, CLeaf falseVal, string type)
         => Bind(new CSelect(cond, trueVal, falseVal, type), type);
 
-    public CSlotRef ExternCall(string sig, List<CValue> args, string retType)
+    public CSlotRef ExternCall(string sig, List<CLeaf> args, string retType)
     {
         if (retType == "SystemVoid") { Emit(new CExprStmt(new CExternCall(sig, args, retType))); return null; }
         return Bind(new CExternCall(sig, args, retType), retType);
     }
 
-    public CSlotRef InternalCall(string funcName, List<CValue> args, string retType)
+    public CSlotRef InternalCall(string funcName, List<CLeaf> args, string retType)
     {
         if (retType == "SystemVoid") { Emit(new CExprStmt(new CInternalCall(funcName, args, retType))); return null; }
         return Bind(new CInternalCall(funcName, args, retType), retType);
@@ -247,14 +247,14 @@ public sealed class CoreBuilder
     /// side-effecting statement at the current insertion point and return null. Binding at the construction
     /// point keeps the SendCustomEvent in program order; ternary branches construct their cross-call inside
     /// the branch block (VisitConditionalExpression uses EmitIf, not CSelect), so the bind is conditional.</summary>
-    public CSlotRef CrossCall(CValue instance, string eventName,
-        List<(string, CValue)> parameters, IReadOnlyList<ReturnSlot> returns, string retType)
+    public CSlotRef CrossCall(CLeaf instance, string eventName,
+        List<(string, CLeaf)> parameters, IReadOnlyList<ReturnSlot> returns, string retType)
     {
         var cc = new CCrossCall(instance, eventName, parameters, returns, retType);
         if (retType == "SystemVoid") { Emit(new CExprStmt(cc)); return null; }
         return Bind(cc, retType);
     }
 
-    public void EmitExternVoid(string sig, List<CValue> args) => Emit(new CExprStmt(new CExternCall(sig, args, "SystemVoid")));
-    public void EmitInternalVoid(string funcName, List<CValue> args) => Emit(new CExprStmt(new CInternalCall(funcName, args, "SystemVoid")));
+    public void EmitExternVoid(string sig, List<CLeaf> args) => Emit(new CExprStmt(new CExternCall(sig, args, "SystemVoid")));
+    public void EmitInternalVoid(string funcName, List<CLeaf> args) => Emit(new CExprStmt(new CInternalCall(funcName, args, "SystemVoid")));
 }

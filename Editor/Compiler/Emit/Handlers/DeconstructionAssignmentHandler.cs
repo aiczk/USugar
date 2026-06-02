@@ -46,7 +46,7 @@ public class DeconstructionAssignmentHandler : AssignmentHandlerBase, IOperation
             // every RHS element into a fresh temp first (eager evaluation against pre-store values), THEN assign;
             // otherwise a later element that reads an already-overwritten target (swap (a,b)=(b,a), rotate,
             // Fibonacci step) reads the clobbered value. Aggregate elements are deep-cloned by clone-on-read.
-            var snapshots = new List<CValue>(targetTuple.Elements.Length);
+            var snapshots = new List<CLeaf>(targetTuple.Elements.Length);
             for (int i = 0; i < targetTuple.Elements.Length; i++)
             {
                 var elemVal = VisitExpression(valueTuple.Elements[i]);
@@ -103,7 +103,7 @@ public class DeconstructionAssignmentHandler : AssignmentHandlerBase, IOperation
                     for (int i = 0; i < targetTuple.Elements.Length; i++)
                     {
                         var elemVal = ExternCall("SystemObjectArray.__Get__SystemInt32__SystemObject",
-                            new List<CValue> { arrExpr, Const(i, "SystemInt32") }, "SystemObject");
+                            new List<CLeaf> { arrExpr, Const(i, "SystemInt32") }, "SystemObject");
                         AssignToLValue(targetTuple.Elements[i], elemVal);
                     }
                 }
@@ -165,14 +165,14 @@ public class DeconstructionAssignmentHandler : AssignmentHandlerBase, IOperation
             var nameConst = Const(paramIds[i], "SystemString");
             EmitExternVoid(
                 "VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid",
-                new List<CValue> { instanceVal, nameConst, argVal });
+                new List<CLeaf> { instanceVal, nameConst, argVal });
         }
 
         // SendCustomEvent
         var eventConst = Const(exportName, "SystemString");
         EmitExternVoid(
             "VRCUdonCommonInterfacesIUdonEventReceiver.__SendCustomEvent__SystemString__SystemVoid",
-            new List<CValue> { instanceVal, eventConst });
+            new List<CLeaf> { instanceVal, eventConst });
 
         // GetProgramVariable for return value and deconstruct
         if (callReturns.Length == 1 && callReturns[0].UdonType == "SystemObjectArray")
@@ -181,12 +181,12 @@ public class DeconstructionAssignmentHandler : AssignmentHandlerBase, IOperation
             var retNameConst = Const(callReturns[0].Id, "SystemString");
             var arrVal = ExternCall(
                 "VRCUdonCommonInterfacesIUdonEventReceiver.__GetProgramVariable__SystemString__SystemObject",
-                new List<CValue> { instanceVal, retNameConst },
+                new List<CLeaf> { instanceVal, retNameConst },
                 "SystemObjectArray");
             for (int i = 0; i < targetTuple.Elements.Length; i++)
             {
                 var elemVal = ExternCall("SystemObjectArray.__Get__SystemInt32__SystemObject",
-                    new List<CValue> { arrVal, Const(i, "SystemInt32") }, "SystemObject");
+                    new List<CLeaf> { arrVal, Const(i, "SystemInt32") }, "SystemObject");
                 AssignToLValue(targetTuple.Elements[i], elemVal);
             }
         }
@@ -198,7 +198,7 @@ public class DeconstructionAssignmentHandler : AssignmentHandlerBase, IOperation
                 var retNameConst = Const(callReturns[i].Id, "SystemString");
                 var elemVal = ExternCall(
                     "VRCUdonCommonInterfacesIUdonEventReceiver.__GetProgramVariable__SystemString__SystemObject",
-                    new List<CValue> { instanceVal, retNameConst },
+                    new List<CLeaf> { instanceVal, retNameConst },
                     callReturns[i].UdonType);
                 AssignToLValue(targetTuple.Elements[i], elemVal);
             }

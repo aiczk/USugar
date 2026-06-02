@@ -5,9 +5,14 @@ namespace USugar.Tests;
 
 /// <summary>
 /// Phase 2: FlatVerify negative tests — confirms the post-condition verifier rejects the
-/// structural violations that the unified CValue makes type-system-expressible (and which
-/// LIR's separate LOperand type prevented for free). The positive case (well-formed CoreFlatten
-/// output passes) is exercised inside CoreFlattenTests across all control-flow shapes.
+/// structural violations it can still be handed at runtime. With operand positions retyped to
+/// CLeaf (re-arming the guarantee LIR's separate LOperand type gave for free), a nested call in a
+/// call argument and a CFieldLoad in a CStoreField value are now compile-time-prevented — they can
+/// no longer be constructed, so their former negative tests are gone. The remaining violations
+/// (missing/dangling terminators, a CFieldAddr in a CAssign value, a structured statement leaking
+/// into a flat block, a non-flat shape) flow through CValue positions and stay runtime-checked.
+/// The positive case (well-formed CoreFlatten output passes) is exercised inside CoreFlattenTests
+/// across all control-flow shapes.
 /// </summary>
 public class FlatVerifyTests
 {
@@ -42,23 +47,9 @@ public class FlatVerifyTests
         Assert.ThrowsAny<System.Exception>(() => FlatVerify.Verify(f));
     }
 
-    [Fact]
-    public void NestedCallArg_Throws()
-    {
-        var call = new CExternCall("Outer",
-            new List<CValue> { new CExternCall("Inner", new List<CValue>(), "SystemInt32") }, "SystemVoid", null);
-        var f = Flat(Block(0, new List<CStmt> { new CExprStmt(call) }, new CRet()));
-        Assert.ThrowsAny<System.Exception>(() => FlatVerify.Verify(f));
-    }
-
-    [Fact]
-    public void LoadFieldRefAsOperand_Throws()
-    {
-        var f = Flat(Block(0,
-            new List<CStmt> { new CStoreField("x", new CFieldLoad("y", "SystemInt32")) },
-            new CRet()));
-        Assert.ThrowsAny<System.Exception>(() => FlatVerify.Verify(f));
-    }
+    // NestedCallArg and LoadFieldRefAsOperand violations are now compile-time-prevented: CExternCall.Args
+    // is List<CLeaf> and CStoreField.Value is CLeaf, so neither a nested CExternCall nor a CFieldLoad can be
+    // placed in those positions. The runtime guard in FlatVerify.RequireLeaf remains as a defensive backstop.
 
     [Fact]
     public void AddrFieldRef_AsAssignValue_Throws_OnlyValidAsCallArg()

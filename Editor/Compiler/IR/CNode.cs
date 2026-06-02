@@ -47,8 +47,8 @@ public sealed class CAssign : CStmt
 public sealed class CStoreField : CStmt
 {
     public readonly string FieldName;
-    public readonly CValue Value;
-    public CStoreField(string fieldName, CValue value)
+    public readonly CLeaf Value;
+    public CStoreField(string fieldName, CLeaf value)
     {
         FieldName = fieldName ?? throw new ArgumentNullException(nameof(fieldName));
         Value = value ?? throw new ArgumentNullException(nameof(value));
@@ -58,10 +58,10 @@ public sealed class CStoreField : CStmt
 /// <summary>Structured if/else.</summary>
 public sealed class CIf : CStmt
 {
-    public readonly CValue Cond;
+    public readonly CLeaf Cond;
     public readonly CBlock Then;
     public readonly CBlock Else;
-    public CIf(CValue cond, CBlock thenBlock, CBlock elseBlock = null)
+    public CIf(CLeaf cond, CBlock thenBlock, CBlock elseBlock = null)
     {
         Cond = cond ?? throw new ArgumentNullException(nameof(cond));
         Then = thenBlock ?? new CBlock();
@@ -73,10 +73,10 @@ public sealed class CIf : CStmt
 public sealed class CWhile : CStmt
 {
     public readonly CBlock CondBlock;
-    public readonly CValue Cond;
+    public readonly CLeaf Cond;
     public readonly CBlock Body;
     public readonly bool IsDoWhile;
-    public CWhile(CValue cond, CBlock body, bool isDoWhile = false, CBlock condBlock = null)
+    public CWhile(CLeaf cond, CBlock body, bool isDoWhile = false, CBlock condBlock = null)
     {
         CondBlock = condBlock ?? new CBlock();
         Cond = cond ?? throw new ArgumentNullException(nameof(cond));
@@ -90,10 +90,10 @@ public sealed class CFor : CStmt
 {
     public readonly CBlock Init;
     public readonly CBlock CondBlock;
-    public readonly CValue Cond; // null = infinite
+    public readonly CLeaf Cond; // null = infinite
     public readonly CBlock Update;
     public readonly CBlock Body;
-    public CFor(CBlock init, CValue cond, CBlock update, CBlock body, CBlock condBlock = null)
+    public CFor(CBlock init, CLeaf cond, CBlock update, CBlock body, CBlock condBlock = null)
     {
         Init = init ?? new CBlock();
         CondBlock = condBlock ?? new CBlock();
@@ -126,8 +126,8 @@ public sealed class CLabel : CStmt
 /// <summary>Return with optional value.</summary>
 public sealed class CReturn : CStmt
 {
-    public readonly CValue Value; // null for void
-    public CReturn(CValue value = null) => Value = value;
+    public readonly CLeaf Value; // null for void
+    public CReturn(CLeaf value = null) => Value = value;
 }
 
 /// <summary>Expression used as a statement (side-effecting call etc.).</summary>
@@ -167,10 +167,10 @@ public sealed class CJump : CTerminator
 /// <summary>Conditional branch.</summary>
 public sealed class CBranch : CTerminator
 {
-    public readonly CValue Cond;
+    public readonly CLeaf Cond;
     public int TrueBlockId;
     public int FalseBlockId;
-    public CBranch(CValue cond, int trueBlockId, int falseBlockId)
+    public CBranch(CLeaf cond, int trueBlockId, int falseBlockId)
     {
         Cond = cond ?? throw new ArgumentNullException(nameof(cond));
         TrueBlockId = trueBlockId;
@@ -181,8 +181,8 @@ public sealed class CBranch : CTerminator
 /// <summary>Return terminator (flat role). Distinct from the CReturn statement.</summary>
 public sealed class CRet : CTerminator
 {
-    public readonly CValue Value; // null for void
-    public CRet(CValue value = null) => Value = value;
+    public readonly CLeaf Value; // null for void
+    public CRet(CLeaf value = null) => Value = value;
 }
 
 // ── Function (unified) ──

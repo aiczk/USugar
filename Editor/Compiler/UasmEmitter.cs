@@ -78,20 +78,20 @@ public class UasmEmitter
 
     // ── CoreBuilder bridge helpers (old IrBuilder API → CoreBuilder) ──
 
-    CValue BridgeLoad(string fieldName, string type) => _builder.LoadField(fieldName, type);
-    void BridgeStore(string fieldName, CValue value) => _builder.EmitStoreField(fieldName, value);
-    CValue BridgeCallExtern(string retType, string sig, CValue[] args)
-        => _builder.ExternCall(sig, new List<CValue>(args), retType);
-    void BridgeCallExternVoid(string sig, CValue[] args)
-        => _builder.EmitExternVoid(sig, new List<CValue>(args));
-    CValue BridgeCallInternal(CFunction func, CValue[] args)
+    CLeaf BridgeLoad(string fieldName, string type) => _builder.LoadField(fieldName, type);
+    void BridgeStore(string fieldName, CLeaf value) => _builder.EmitStoreField(fieldName, value);
+    CLeaf BridgeCallExtern(string retType, string sig, CLeaf[] args)
+        => _builder.ExternCall(sig, new List<CLeaf>(args), retType);
+    void BridgeCallExternVoid(string sig, CLeaf[] args)
+        => _builder.EmitExternVoid(sig, new List<CLeaf>(args));
+    CLeaf BridgeCallInternal(CFunction func, CLeaf[] args)
     {
         var retType = func.ReturnType ?? "SystemVoid";
-        var call = _builder.InternalCall(func.Name, new List<CValue>(args), retType);
+        var call = _builder.InternalCall(func.Name, new List<CLeaf>(args), retType);
         if (retType == "SystemVoid") { _builder.EmitExprStmt(call); return null; }
         return call;
     }
-    CValue BridgeConstInt(int value) => _builder.Const(value, "SystemInt32");
+    CLeaf BridgeConstInt(int value) => _builder.Const(value, "SystemInt32");
 
     // ── Emit ──
 
@@ -785,7 +785,7 @@ public class UasmEmitter
                   + $"no function found for implementation of '{ifaceMethod.Name}'.");
 
             // Load interface params
-            var args = new List<CValue>();
+            var args = new List<CLeaf>();
             for (int i = 0; i < ifaceMethod.Parameters.Length; i++)
             {
                 var paramType = GetUdonType(ifaceMethod.Parameters[i].Type);
@@ -840,7 +840,7 @@ public class UasmEmitter
             _builder.SetFunction(bridgeFunc);
 
             // Copy convention fields → real param fields, then call real method
-            var callArgs = new List<CValue>();
+            var callArgs = new List<CLeaf>();
             for (int i = 0; i < method.Parameters.Length; i++)
             {
                 var argType = NormalizeDelegateParamType(method.Parameters[i].Type);
@@ -901,7 +901,7 @@ public class UasmEmitter
             _builder.SetFunction(bridgeFunc);
 
             // Copy convention fields → real param fields, then call real method
-            var callArgs = new List<CValue>();
+            var callArgs = new List<CLeaf>();
             for (int i = 0; i < method.Parameters.Length; i++)
             {
                 var argType = NormalizeDelegateParamType(method.Parameters[i].Type, resolvedMap);
@@ -1027,7 +1027,7 @@ public class UasmEmitter
             BridgeStore(fcbFieldName, oldVal);
 
             // Call setter with new value
-            BridgeCallInternal(func, new CValue[] { newVal });
+            BridgeCallInternal(func, new CLeaf[] { newVal });
             _builder.EmitReturn();
         }
 
@@ -1173,7 +1173,7 @@ public class UasmEmitter
                     var sizeConst = BridgeConstInt(arrayInit.ElementValues.Length);
                     var arrVal = BridgeCallExtern(arrayType,
                         $"{arrayType}.__ctor__SystemInt32__{arrayType}",
-                        new CValue[] { sizeConst });
+                        new CLeaf[] { sizeConst });
                     BridgeStore(fieldId, arrVal);
                     for (int i = 0; i < arrayInit.ElementValues.Length; i++)
                     {
@@ -1182,7 +1182,7 @@ public class UasmEmitter
                         var arrLoad = BridgeLoad(fieldId, arrayType);
                         BridgeCallExternVoid(
                             $"{arrayType}.__Set__SystemInt32_{elementType}__SystemVoid",
-                            new CValue[] { arrLoad, idxConst, elemVal });
+                            new CLeaf[] { arrLoad, idxConst, elemVal });
                     }
                     continue;
                 }
@@ -1202,7 +1202,7 @@ public class UasmEmitter
                         var dstType = GetUdonType(fieldType);
                         var converted = BridgeCallExtern(dstType,
                             $"SystemConvert.__{methodName}__{srcType}__{dstType}",
-                            new CValue[] { valueVal });
+                            new CLeaf[] { valueVal });
                         BridgeStore(fieldId, converted);
                         continue;
                     }
@@ -1256,7 +1256,7 @@ public class UasmEmitter
 
     // ── Expression visitor (facade — delegates to handlers) ──
 
-    CValue VisitExpression(IOperation op)
+    CLeaf VisitExpression(IOperation op)
     {
         if (op == null)
             throw new NotSupportedException("VisitExpression called with null operation");

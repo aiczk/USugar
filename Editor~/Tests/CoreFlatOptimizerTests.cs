@@ -22,7 +22,7 @@ public class CoreFlatOptimizerTests
 
     static CFunction MakeFunc(string name = "test") => new(name) { Shape = Shape.Flat };
 
-    static CExprStmt Call(int? dest, string sig, List<CValue> args, string retType) =>
+    static CExprStmt Call(int? dest, string sig, List<CLeaf> args, string retType) =>
         new(new CExternCall(sig, args, retType, dest));
 
     // ========================================================================
@@ -75,7 +75,7 @@ public class CoreFlatOptimizerTests
         bb0.Stmts.Add(new CAssign(0, new CConst(10, "SystemInt32")));            // pos 0: def slot0
         bb0.Stmts.Add(new CAssign(1, new CConst(20, "SystemInt32")));            // pos 1: def slot1 (slot0 still live)
         bb0.Stmts.Add(Call(null, "Foo__SystemVoid",
-            new List<CValue> { new CSlotRef(0, "SystemInt32"), new CSlotRef(1, "SystemInt32") },
+            new List<CLeaf> { new CSlotRef(0, "SystemInt32"), new CSlotRef(1, "SystemInt32") },
             "SystemVoid"));                                                       // pos 2: use both
         bb0.Terminator = new CRet();
 
@@ -235,7 +235,7 @@ public class CoreFlatOptimizerTests
         // slot1: def after slot0 is dead → should coalesce to slot0
         bb0.Stmts.Add(new CAssign(1, new CConst(20, "SystemInt32")));            // def slot1
         bb0.Stmts.Add(Call(null, "Bar__SystemVoid",
-            new List<CValue> { new CSlotRef(1, "SystemInt32") },
+            new List<CLeaf> { new CSlotRef(1, "SystemInt32") },
             "SystemVoid"));                                                       // use slot1 as arg
 
         // slot2 (Boolean): used in branch

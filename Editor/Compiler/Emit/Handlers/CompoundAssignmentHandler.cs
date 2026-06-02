@@ -9,14 +9,14 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
 
     public bool CanHandle(IOperation op) => op is ICompoundAssignmentOperation or IIncrementOrDecrementOperation;
 
-    public CValue Handle(IOperation op) => op switch
+    public CLeaf Handle(IOperation op) => op switch
     {
         ICompoundAssignmentOperation compound => VisitCompoundAssignment(compound),
         IIncrementOrDecrementOperation incDec => VisitIncrementDecrement(incDec),
         _ => throw new System.NotSupportedException(op.GetType().Name),
     };
 
-    CValue VisitCompoundAssignment(ICompoundAssignmentOperation op)
+    CLeaf VisitCompoundAssignment(ICompoundAssignmentOperation op)
     {
         // Block += / -= on delegate fields — Udon VM does not support Delegate.Combine/Remove
         if (op.Target is IFieldReferenceOperation fr
@@ -69,7 +69,7 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
         var sig = ExternResolver.ResolveBinaryExtern(
             op.OperatorKind, op.OperatorMethod,
             ResolveType(op.Target.Type), ResolveType(op.Value.Type), ResolveType(op.Type));
-        CValue resultVal = ExternCall(sig, new List<CValue> { leftVal, rightVal }, opResultType);
+        CLeaf resultVal = ExternCall(sig, new List<CLeaf> { leftVal, rightVal }, opResultType);
 
         // Narrow back to original type if promoted (C#-unchecked wrap, not checked Convert)
         if (opResultType != resultType)
@@ -86,11 +86,11 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
     static bool IsSmallInteger(string udonType)
         => udonType is "SystemByte" or "SystemSByte" or "SystemInt16" or "SystemUInt16" or "SystemChar";
 
-    CValue PromoteToInt32(CValue value, string srcUdonType)
+    CLeaf PromoteToInt32(CLeaf value, string srcUdonType)
         => ExternCall($"SystemConvert.__ToInt32__{srcUdonType}__SystemInt32",
-            new List<CValue> { value }, "SystemInt32");
+            new List<CLeaf> { value }, "SystemInt32");
 
-    CValue VisitIncrementDecrement(IIncrementOrDecrementOperation op)
+    CLeaf VisitIncrementDecrement(IIncrementOrDecrementOperation op)
     {
         // Capture lvalue sub-expressions once to avoid double evaluation
         var lv = CaptureLValue(op.Target);
@@ -99,7 +99,7 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
         // Nullable (lifted) increment/decrement: x++  →  x = lifted(x, 1) (null-propagating).
         if (EmitContext.IsNullableT(op.Type, out var incUnderlying))
         {
-            CValue saved = null;
+            CLeaf saved = null;
             if (op.IsPostfix)
             {
                 var s = _ctx.AllocTemp("SystemObject");
@@ -126,7 +126,7 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
 
         // For postfix, save old value before modifying target (only if result is used).
         // Save the un-promoted value so postfix returns the original byte (not the int promotion).
-        CValue savedVal = null;
+        CLeaf savedVal = null;
         if (op.IsPostfix)
         {
             var resultUsed = op.Parent is not IExpressionStatementOperation
@@ -149,7 +149,7 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
             opType, ExternResolver.GetOperatorExternName(externName),
             new[] { opType, opType }, opType);
 
-        CValue resultVal = ExternCall(sig, new List<CValue> { targetVal, oneConst }, opType);
+        CLeaf resultVal = ExternCall(sig, new List<CLeaf> { targetVal, oneConst }, opType);
 
         // Narrow back to original type if promoted (C#-unchecked wrap, not checked Convert)
         if (opType != udonType)

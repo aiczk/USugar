@@ -13,7 +13,7 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
             or IPropertyReferenceOperation
             or IInterpolatedStringOperation;
 
-    public CValue Handle(IOperation expression) => expression switch
+    public CLeaf Handle(IOperation expression) => expression switch
     {
         IInvocationOperation op => VisitInvocation(op),
         IObjectCreationOperation op => VisitObjectCreation(op),
@@ -24,7 +24,7 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
 
     // ── VisitInvocation ──
 
-    CValue VisitInvocation(IInvocationOperation op)
+    CLeaf VisitInvocation(IInvocationOperation op)
     {
         var target = op.TargetMethod;
 
@@ -95,7 +95,7 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
                 ? target.ReducedFrom.OriginalDefinition.Construct(target.TypeArguments.ToArray())
                 : target.OriginalDefinition.Construct(target.TypeArguments.ToArray());
             RegisterGenericSpecialization(constructed);
-            var args = new List<CValue>();
+            var args = new List<CLeaf>();
             if (target.ReducedFrom != null && op.Instance != null)
             {
                 args.Add(VisitExpression(op.Instance));
@@ -112,7 +112,7 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
             var original = target.ReducedFrom ?? target;
             if (IsForeignStatic(target) && _methodFunctions.ContainsKey(original))
             {
-                var args = new List<CValue>();
+                var args = new List<CLeaf>();
                 // Extension method: instance is the first (this) parameter
                 if (target.ReducedFrom != null && op.Instance != null)
                 {
@@ -155,7 +155,7 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
     }
 
     // Nullable<T>.GetValueOrDefault: HasValue ? Value : (fallback arg or default(T)).
-    CValue EmitNullableGetValueOrDefault(IInvocationOperation op, ITypeSymbol underlying)
+    CLeaf EmitNullableGetValueOrDefault(IInvocationOperation op, ITypeSymbol underlying)
     {
         var uType = GetUdonType(underlying);
         // For an aggregate (struct/tuple) underlying, the present value is a boxed object[] aliasing the
@@ -177,10 +177,10 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
 
     // User-struct instance method call: receiver object[] passed (uncloned) as synthetic param0
     // so `this`-field mutations reflect back to the caller's local (value-type by-ref `this` semantics).
-    CValue EmitStructInstanceCall(IInvocationOperation op, IMethodSymbol target)
+    CLeaf EmitStructInstanceCall(IInvocationOperation op, IMethodSymbol target)
     {
         // Recursion (including the receiver) is handled by EmitCallToMethod's software-stack spill/reload.
-        var args = new List<CValue> { LoadInstanceRaw(op.Instance) };
+        var args = new List<CLeaf> { LoadInstanceRaw(op.Instance) };
         for (var i = 0; i < op.Arguments.Length; i++)
             args.Add(VisitExpression(op.Arguments[i].Value));
         return EmitCallToMethod(target, args);
@@ -188,7 +188,7 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
 
     // ── Delegate Invocation ──
 
-    CValue VisitDelegateInvocation(IInvocationOperation op)
+    CLeaf VisitDelegateInvocation(IInvocationOperation op)
     {
         // ── Delegate FIELD invocation via conditional access (?.Invoke()) ──
         if (op.Instance is IConditionalAccessInstanceOperation
@@ -215,7 +215,7 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
             && _delegateParamConventions.TryGetValue((currentSlot.Index, paramRef2.Parameter.Ordinal), out var convention))
         {
             // Collect args as HExprs
-            var args = new List<CValue>();
+            var args = new List<CLeaf>();
             for (int i = 0; i < op.Arguments.Length; i++)
                 args.Add(VisitExpression(op.Arguments[i].Value));
 
@@ -234,7 +234,7 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
             // Indirect call through delegate. __indirect is a VOID side-effect (the JUMP_INDIRECT): args were
             // already stored to convention fields and the return is read from the convention ret field, not a
             // slot — so it must NOT be materialized to a dest slot (EmitCallIndirect ignores the dest).
-            EmitInternalVoid("__indirect", new List<CValue> { methodPtr });
+            EmitInternalVoid("__indirect", new List<CLeaf> { methodPtr });
             return retType != null ? LoadField(convention.RetVarId, retType) : null;
         }
 
@@ -250,7 +250,7 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
                 && !SymbolEqualityComparer.Default.Equals(targetMethod.OriginalDefinition, _currentMethod.OriginalDefinition))
                 MarkRecursiveEdge(_currentMethod, targetMethod);
 
-            var args = new List<CValue>();
+            var args = new List<CLeaf>();
             for (int i = 0; i < op.Arguments.Length; i++)
                 args.Add(VisitExpression(op.Arguments[i].Value));
 
@@ -263,7 +263,7 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
     /// Emit delegate field invocation logic (self-path via JUMP_INDIRECT, cross-path via SendCustomEvent).
     /// Shared by direct invocation (_callback.Invoke()) and conditional access (_callback?.Invoke()).
     /// </summary>
-    CValue EmitDelegateFieldInvocation(IInvocationOperation op, string fieldName, INamedTypeSymbol delegateType)
+    CLeaf EmitDelegateFieldInvocation(IInvocationOperation op, string fieldName, INamedTypeSymbol delegateType)
     {
         var invoke = delegateType.DelegateInvokeMethod;
         var (convArgs, convRet) = GetConventionFieldNames(delegateType);
@@ -273,7 +273,7 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
             retType = GetUdonType(invoke.ReturnType);
 
         // 1. Evaluate all args ONCE (before branching to avoid double-evaluation)
-        var argExprs = new List<CValue>();
+        var argExprs = new List<CLeaf>();
         for (int i = 0; i < op.Arguments.Length; i++)
             argExprs.Add(VisitExpression(op.Arguments[i].Value));
 
@@ -290,13 +290,13 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
         // 3. Condition: target == this && addr != 0
         var isSelf = ExternCall(
             "UnityEngineObject.__op_Equality__UnityEngineObject_UnityEngineObject__SystemBoolean",
-            new List<CValue> { target, thisRef }, "SystemBoolean");
+            new List<CLeaf> { target, thisRef }, "SystemBoolean");
         var hasAddr = ExternCall(
             "SystemUInt32.__op_Inequality__SystemUInt32_SystemUInt32__SystemBoolean",
-            new List<CValue> { addr, Const(0u, "SystemUInt32") }, "SystemBoolean");
+            new List<CLeaf> { addr, Const(0u, "SystemUInt32") }, "SystemBoolean");
         var selfFast = ExternCall(
             "SystemBoolean.__op_LogicalAnd__SystemBoolean_SystemBoolean__SystemBoolean",
-            new List<CValue> { isSelf, hasAddr }, "SystemBoolean");
+            new List<CLeaf> { isSelf, hasAddr }, "SystemBoolean");
 
         // For Func<T>: temp to receive result from both paths
         string resultVar = null;
@@ -309,7 +309,7 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
             _ =>
             {
                 // __indirect is a void side-effect (JUMP_INDIRECT); the return is read from the convention field.
-                EmitInternalVoid("__indirect", new List<CValue> { addr });
+                EmitInternalVoid("__indirect", new List<CLeaf> { addr });
                 if (retType != null)
                 {
                     // Read return from convention ret field
@@ -325,19 +325,19 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
                     var argType = GetUdonType(invoke.Parameters[i].Type);
                     EmitExternVoid(
                         "VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid",
-                        new List<CValue> { target, Const(convArgs[i], "SystemString"), LoadField(convArgs[i], argType) });
+                        new List<CLeaf> { target, Const(convArgs[i], "SystemString"), LoadField(convArgs[i], argType) });
                 }
                 // SendCustomEvent with dynamic method name
                 var method = LoadField(bundle.Method, "SystemString");
                 EmitExternVoid(
                     "VRCUdonCommonInterfacesIUdonEventReceiver.__SendCustomEvent__SystemString__SystemVoid",
-                    new List<CValue> { target, method });
+                    new List<CLeaf> { target, method });
                 // GetProgramVariable for return (Func only)
                 if (retType != null)
                 {
                     var retVal = ExternCall(
                         "VRCUdonCommonInterfacesIUdonEventReceiver.__GetProgramVariable__SystemString__SystemObject",
-                        new List<CValue> { target, Const(convRet, "SystemString") }, "SystemObject");
+                        new List<CLeaf> { target, Const(convRet, "SystemString") }, "SystemObject");
                     EmitStoreField(resultVar, retVal);
                 }
             }

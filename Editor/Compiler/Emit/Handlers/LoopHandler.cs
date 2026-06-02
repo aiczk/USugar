@@ -129,7 +129,7 @@ public class LoopHandler : HandlerBase, IOperationHandler
         // Cache array length before the loop
         var lenSlot = _ctx.AllocTemp("SystemInt32");
         EmitAssign(lenSlot, ExternCall("SystemArray.__get_Length__SystemInt32",
-            new List<CValue> { SlotRef(collSlot) }, "SystemInt32"));
+            new List<CLeaf> { SlotRef(collSlot) }, "SystemInt32"));
 
         _builder.EmitFor(
             _ =>
@@ -141,23 +141,23 @@ public class LoopHandler : HandlerBase, IOperationHandler
             // loop's cond block (re-evaluated each iteration), not bound once before the loop.
             () => ExternCall(
                 "SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean",
-                new List<CValue> { SlotRef(idxSlot), SlotRef(lenSlot) },
+                new List<CLeaf> { SlotRef(idxSlot), SlotRef(lenSlot) },
                 "SystemBoolean"),
             _ =>
             {
                 // Update: idx++
                 var nextIdx = ExternCall(
                     "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32",
-                    new List<CValue> { SlotRef(idxSlot), Const(1, "SystemInt32") },
+                    new List<CLeaf> { SlotRef(idxSlot), Const(1, "SystemInt32") },
                     "SystemInt32");
                 EmitAssign(idxSlot, nextIdx);
             },
             _ =>
             {
                 // Body: loopVar = arr[idx]; <body>
-                CValue elemVal = ExternCall(
+                CLeaf elemVal = ExternCall(
                     $"{arrayType}.__Get__SystemInt32__{elemAccessorType}",
-                    new List<CValue> { SlotRef(collSlot), SlotRef(idxSlot) },
+                    new List<CLeaf> { SlotRef(collSlot), SlotRef(idxSlot) },
                     elemType);
                 // foreach yields a by-value COPY of the element. For an aggregate (struct/tuple) element the
                 // raw __Get__ returns the LIVE backing object[]; deep-clone it so mutating the loop variable

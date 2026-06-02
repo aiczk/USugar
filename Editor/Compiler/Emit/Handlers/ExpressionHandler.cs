@@ -22,7 +22,7 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
             or IDelegateCreationOperation
             or ITupleOperation;
 
-    public CValue Handle(IOperation expression) => expression switch
+    public CLeaf Handle(IOperation expression) => expression switch
     {
         ILiteralOperation op => VisitLiteral(op),
         ILocalReferenceOperation localRef => _localBindings.TryGetValue(localRef.Local, out var localBinding)
@@ -50,7 +50,7 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
 
     // ── Literal ──
 
-    CValue VisitLiteral(ILiteralOperation lit)
+    CLeaf VisitLiteral(ILiteralOperation lit)
     {
         // null literal has no type
         if (lit.Type == null)
@@ -64,7 +64,7 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
 
     // ── Field Reference ──
 
-    CValue VisitFieldReference(IFieldReferenceOperation fieldRef)
+    CLeaf VisitFieldReference(IFieldReferenceOperation fieldRef)
     {
         // const fields (HasConstantValue) and static readonly with compile-time constant values
         if (fieldRef.Field.HasConstantValue)
@@ -105,7 +105,7 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
             var containingType = GetUdonType(fieldRef.Field.ContainingType);
             return ExternCall(
                 ExternResolver.BuildPropertyGetSignature(containingType, fieldRef.Field.Name, fldType),
-                new List<CValue>(),
+                new List<CLeaf>(),
                 fldType);
         }
         // Delegate field read as value is not supported — the original field has been expanded
@@ -132,7 +132,7 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
             {
                 var arrExpr = LoadInstanceRaw(fieldRef.Instance);
                 var getVal = ExternCall("SystemObjectArray.__Get__SystemInt32__SystemObject",
-                    new List<CValue> { arrExpr, Const(elemIndex, "SystemInt32") }, "SystemObject");
+                    new List<CLeaf> { arrExpr, Const(elemIndex, "SystemInt32") }, "SystemObject");
                 // A struct-typed element read AS A VALUE is copied (value semantics); scalar elements are immutable boxes.
                 return fieldRef.Field.Type is INamedTypeSymbol elemAgg && EmitContext.IsAggregateType(elemAgg)
                     ? EmitDeepCloneAggregate(getVal, elemAgg) : getVal;
@@ -154,7 +154,7 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
             var nameConst = Const(fieldRef.Field.Name, "SystemString");
             return ExternCall(
                 "VRCUdonCommonInterfacesIUdonEventReceiver.__GetProgramVariable__SystemString__SystemObject",
-                new List<CValue> { instanceVal, nameConst },
+                new List<CLeaf> { instanceVal, nameConst },
                 "SystemObject");
         }
         // other.field → extern getter (same pattern as VisitPropertyReference)
@@ -164,7 +164,7 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
             var instanceVal = VisitExpression(fieldRef.Instance);
             return ExternCall(
                 ExternResolver.BuildPropertyGetSignature(containingType, fieldRef.Field.Name, fldType),
-                new List<CValue> { instanceVal },
+                new List<CLeaf> { instanceVal },
                 fldType);
         }
     }
@@ -186,7 +186,7 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
         return false;
     }
 
-    CValue VisitConversion(IConversionOperation conv)
+    CLeaf VisitConversion(IConversionOperation conv)
     {
         var srcVal = VisitExpression(conv.Operand);
 
@@ -217,10 +217,10 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
                 CValue converted = liftedIntToInt
                     ? EmitNarrowingConvert(
                         ExternCall("SystemConvert.__ToInt64__SystemObject__SystemInt64",
-                            new List<CValue> { SlotRef(srcSlot) }, "SystemInt64"),
+                            new List<CLeaf> { SlotRef(srcSlot) }, "SystemInt64"),
                         "SystemInt64", dstU)
                     : ExternCall($"SystemConvert.__{liftedDstMethod}__SystemObject__{dstU}",
-                        new List<CValue> { SlotRef(srcSlot) }, dstU);
+                        new List<CLeaf> { SlotRef(srcSlot) }, dstU);
                 EmitAssign(resSlot, converted);
             });
             return SlotRef(resSlot);
@@ -246,21 +246,21 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
                         // float → double promotion
                         srcVal = ExternCall(
                             "SystemConvert.__ToDouble__SystemSingle__SystemDouble",
-                            new List<CValue> { srcVal },
+                            new List<CLeaf> { srcVal },
                             "SystemDouble");
                     }
 
                     // Math.Truncate(double) or Math.Truncate(decimal)
                     srcVal = ExternCall(
                         $"SystemMath.__Truncate__{truncType}__{truncType}",
-                        new List<CValue> { srcVal },
+                        new List<CLeaf> { srcVal },
                         truncType);
 
                     // Convert truncated value → target integer type
                     var dstType = GetUdonType(conv.Type);
                     return ExternCall(
                         $"SystemConvert.__{methodName}__{truncType}__{dstType}",
-                        new List<CValue> { srcVal },
+                        new List<CLeaf> { srcVal },
                         dstType);
                 }
 
@@ -279,7 +279,7 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
             return ExternCall(
                 ExternResolver.ResolveConversionExtern(
                     conv.OperatorMethod, ResolveType(conv.Operand.Type), ResolveType(conv.Type)),
-                new List<CValue> { srcVal },
+                new List<CLeaf> { srcVal },
                 dstType);
         }
 
@@ -303,10 +303,10 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
                 var indexVal = info.MinOffset == 0
                     ? srcVal
                     : ExternCall("SystemInt32.__op_Subtraction__SystemInt32_SystemInt32__SystemInt32",
-                        new List<CValue> { srcVal, Const((int)info.MinOffset, "SystemInt32") }, "SystemInt32");
+                        new List<CLeaf> { srcVal, Const((int)info.MinOffset, "SystemInt32") }, "SystemInt32");
                 return ExternCall(
                     "SystemObjectArray.__Get__SystemInt32__SystemObject",
-                    new List<CValue> { LoadField(info.ArrayId, "SystemObjectArray"), indexVal },
+                    new List<CLeaf> { LoadField(info.ArrayId, "SystemObjectArray"), indexVal },
                     "SystemObject");
             }
 
@@ -322,7 +322,7 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
 
     // ── Default Value ──
 
-    CValue VisitDefaultValue(IDefaultValueOperation defaultVal)
+    CLeaf VisitDefaultValue(IDefaultValueOperation defaultVal)
     {
         // Aggregate default → a ZERO-INITIALIZED object[] (fields set to their defaults), not null, so field
         // access on the default does not NRE. ResolveType is required for `default(T)` inside a generic method
@@ -356,7 +356,7 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
 
     // ── Declaration Expression ──
 
-    CValue VisitDeclarationExpression(IDeclarationExpressionOperation declExpr)
+    CLeaf VisitDeclarationExpression(IDeclarationExpressionOperation declExpr)
     {
         if (declExpr.Expression is not ILocalReferenceOperation localRef2)
             return VisitExpression(declExpr.Expression);
@@ -369,7 +369,7 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
 
     // ── Delegate Creation ──
 
-    CValue VisitDelegateCreation(IDelegateCreationOperation op)
+    CLeaf VisitDelegateCreation(IDelegateCreationOperation op)
     {
         switch (op.Target)
         {
@@ -388,12 +388,12 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
 
     // ── Tuple Literal ──
 
-    CValue VisitTupleLiteral(ITupleOperation op)
+    CLeaf VisitTupleLiteral(ITupleOperation op)
     {
         // Create object[] and set each element
         var count = op.Elements.Length;
         var arrExpr = ExternCall("SystemObjectArray.__ctor__SystemInt32__SystemObjectArray",
-            new List<CValue> { Const(count, "SystemInt32") }, "SystemObjectArray");
+            new List<CLeaf> { Const(count, "SystemInt32") }, "SystemObjectArray");
         var tmpSlot = _ctx.AllocTemp("SystemObjectArray");
         EmitAssign(tmpSlot, arrExpr);
 
@@ -401,7 +401,7 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
         {
             var elemVal = VisitExpression(op.Elements[i]);
             EmitExternVoid("SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid",
-                new List<CValue> { SlotRef(tmpSlot), Const(i, "SystemInt32"), elemVal });
+                new List<CLeaf> { SlotRef(tmpSlot), Const(i, "SystemInt32"), elemVal });
         }
 
         return SlotRef(tmpSlot);

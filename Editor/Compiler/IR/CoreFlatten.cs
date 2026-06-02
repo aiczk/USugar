@@ -103,7 +103,7 @@ public static class CoreFlatten
 
     static void LowerReturn(CReturn r, Ctx ctx)
     {
-        CValue val = r.Value == null ? null : LowerExpr(r.Value, ctx);
+        CLeaf val = r.Value == null ? null : LowerExpr(r.Value, ctx);
         ctx.Current.Terminator = new CRet(val);
     }
 
@@ -233,14 +233,12 @@ public static class CoreFlatten
 
     // ── Expression lowering (produces a flat leaf CValue; emits instructions for the rest) ──
 
-    static CValue LowerExpr(CValue expr, Ctx ctx)
+    static CLeaf LowerExpr(CValue expr, Ctx ctx)
     {
         switch (expr)
         {
-            case CConst _:
-            case CSlotRef _:
-            case CFuncRef _:
-                return expr;
+            case CLeaf leaf: // CConst / CSlotRef / CFuncRef / CFieldAddr — already a flat leaf
+                return leaf;
 
             case CFieldLoad fl:
             {
@@ -249,12 +247,9 @@ public static class CoreFlatten
                 return new CSlotRef(dest, fl.Type);
             }
 
-            case CFieldAddr fa: // address operand passes through
-                return fa;
-
             case CExternCall ec:
             {
-                var args = new List<CValue>(ec.Args.Count);
+                var args = new List<CLeaf>(ec.Args.Count);
                 foreach (var a in ec.Args) args.Add(LowerExpr(a, ctx));
                 int? dest = ec.Type != "SystemVoid" ? ctx.AllocScratch(ec.Type) : (int?)null;
                 ctx.Current.Stmts.Add(new CExprStmt(new CExternCall(ec.Sig, args, ec.Type, dest)));
@@ -263,7 +258,7 @@ public static class CoreFlatten
 
             case CInternalCall ic:
             {
-                var args = new List<CValue>(ic.Args.Count);
+                var args = new List<CLeaf>(ic.Args.Count);
                 foreach (var a in ic.Args) args.Add(LowerExpr(a, ctx));
                 int? dest = ic.Type != "SystemVoid" ? ctx.AllocScratch(ic.Type) : (int?)null;
                 ctx.Current.Stmts.Add(new CExprStmt(new CInternalCall(ic.FuncName, args, ic.Type, dest)));
@@ -278,7 +273,7 @@ public static class CoreFlatten
         }
     }
 
-    static CValue LowerCrossCall(CCrossCall cc, Ctx ctx)
+    static CLeaf LowerCrossCall(CCrossCall cc, Ctx ctx)
     {
         var inst = LowerExpr(cc.Instance, ctx);
 
@@ -288,13 +283,13 @@ public static class CoreFlatten
             var paramNameOp = LowerExpr(new CConst(paramName, "SystemString"), ctx);
             ctx.Current.Stmts.Add(new CExprStmt(new CExternCall(
                 "VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid",
-                new List<CValue> { inst, paramNameOp, paramVal }, "SystemVoid", null)));
+                new List<CLeaf> { inst, paramNameOp, paramVal }, "SystemVoid", null)));
         }
 
         var eventNameOp = LowerExpr(new CConst(cc.EventName, "SystemString"), ctx);
         ctx.Current.Stmts.Add(new CExprStmt(new CExternCall(
             "VRCUdonCommonInterfacesIUdonEventReceiver.__SendCustomEvent__SystemString__SystemVoid",
-            new List<CValue> { inst, eventNameOp }, "SystemVoid", null)));
+            new List<CLeaf> { inst, eventNameOp }, "SystemVoid", null)));
 
         if (cc.Returns.Count == 1)
         {
@@ -303,7 +298,7 @@ public static class CoreFlatten
             var dest = ctx.AllocScratch(cc.Type);
             ctx.Current.Stmts.Add(new CExprStmt(new CExternCall(
                 "VRCUdonCommonInterfacesIUdonEventReceiver.__GetProgramVariable__SystemString__SystemObject",
-                new List<CValue> { inst, retNameOp }, cc.Type, dest)));
+                new List<CLeaf> { inst, retNameOp }, cc.Type, dest)));
             return new CSlotRef(dest, cc.Type);
         }
 
@@ -315,14 +310,14 @@ public static class CoreFlatten
                 var dest = ctx.AllocScratch("SystemObject");
                 ctx.Current.Stmts.Add(new CExprStmt(new CExternCall(
                     "VRCUdonCommonInterfacesIUdonEventReceiver.__GetProgramVariable__SystemString__SystemObject",
-                    new List<CValue> { inst, retNameOp }, "SystemObject", dest)));
+                    new List<CLeaf> { inst, retNameOp }, "SystemObject", dest)));
             }
         }
 
         return new CConst(null, "SystemVoid");
     }
 
-    static CValue LowerSelect(CSelect sel, Ctx ctx)
+    static CLeaf LowerSelect(CSelect sel, Ctx ctx)
     {
         var resultSlot = ctx.AllocScratch(sel.Type);
         var cond = LowerExpr(sel.Cond, ctx);

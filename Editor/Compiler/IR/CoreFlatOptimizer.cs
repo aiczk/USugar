@@ -170,7 +170,7 @@ public static class CoreFlatOptimizer
             ReloadValue(func, output, -1, fields[i].Type, fields[i].Name);
     }
 
-    static void SpillValue(CFunction func, List<CStmt> output, CValue valueLeaf)
+    static void SpillValue(CFunction func, List<CStmt> output, CLeaf valueLeaf)
     {
         // __recurStack[__recurSp] = value (Udon boxes the typed value into the object[] element); __recurSp++
         var tStack = func.NewSlot("SystemObjectArray", SlotClass.Scratch);
@@ -179,7 +179,7 @@ public static class CoreFlatOptimizer
         output.Add(new CLoadField(tSp, RecurSpId, "SystemInt32"));
         output.Add(new CExprStmt(new CExternCall(
             "SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid",
-            new List<CValue> { new CSlotRef(tStack, "SystemObjectArray"), new CSlotRef(tSp, "SystemInt32"), valueLeaf },
+            new List<CLeaf> { new CSlotRef(tStack, "SystemObjectArray"), new CSlotRef(tSp, "SystemInt32"), valueLeaf },
             "SystemVoid")));
         SpDelta(func, output, +1);
     }
@@ -195,7 +195,7 @@ public static class CoreFlatOptimizer
         var tGet = func.NewSlot("SystemObject", SlotClass.Scratch);
         output.Add(new CExprStmt(new CExternCall(
             "SystemObjectArray.__Get__SystemInt32__SystemObject",
-            new List<CValue> { new CSlotRef(tStack, "SystemObjectArray"), new CSlotRef(tSp, "SystemInt32") },
+            new List<CLeaf> { new CSlotRef(tStack, "SystemObjectArray"), new CSlotRef(tSp, "SystemInt32") },
             "SystemObject", tGet)));
         if (fieldName != null)
             output.Add(new CStoreField(fieldName, new CSlotRef(tGet, "SystemObject")));
@@ -212,7 +212,7 @@ public static class CoreFlatOptimizer
             ? "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
             : "SystemInt32.__op_Subtraction__SystemInt32_SystemInt32__SystemInt32";
         output.Add(new CExprStmt(new CExternCall(sig,
-            new List<CValue> { new CSlotRef(tSp, "SystemInt32"), new CConst(System.Math.Abs(delta), "SystemInt32") },
+            new List<CLeaf> { new CSlotRef(tSp, "SystemInt32"), new CConst(System.Math.Abs(delta), "SystemInt32") },
             "SystemInt32", tNew)));
         output.Add(new CStoreField(RecurSpId, new CSlotRef(tNew, "SystemInt32")));
     }
@@ -483,17 +483,25 @@ public static class CoreFlatOptimizer
         return op;
     }
 
+    // Leaf-typed remap: a leaf remaps to a leaf (slot rename), preserving the CLeaf type for ANF operand positions.
+    static CLeaf RemapLeaf(CLeaf op, Dictionary<int, int> mapping)
+    {
+        if (op is CSlotRef sr && mapping.TryGetValue(sr.SlotId, out var newId) && newId != sr.SlotId)
+            return new CSlotRef(newId, sr.Type);
+        return op;
+    }
+
     static int RemapSlotId(int slotId, Dictionary<int, int> mapping)
         => mapping.TryGetValue(slotId, out var newId) ? newId : slotId;
 
     static int? RemapSlotIdNullable(int? slotId, Dictionary<int, int> mapping)
         => slotId.HasValue ? RemapSlotId(slotId.Value, mapping) : null;
 
-    static List<CValue> RemapArgs(List<CValue> args, Dictionary<int, int> mapping)
+    static List<CLeaf> RemapArgs(List<CLeaf> args, Dictionary<int, int> mapping)
     {
-        var result = new List<CValue>(args.Count);
+        var result = new List<CLeaf>(args.Count);
         foreach (var arg in args)
-            result.Add(RemapOperand(arg, mapping));
+            result.Add(RemapLeaf(arg, mapping));
         return result;
     }
 
@@ -501,7 +509,7 @@ public static class CoreFlatOptimizer
     {
         CAssign m => new CAssign(RemapSlotId(m.DestSlot, mapping), RemapOperand(m.Value, mapping)),
         CLoadField lf => new CLoadField(RemapSlotId(lf.DestSlot, mapping), lf.FieldName, lf.Type),
-        CStoreField sf => new CStoreField(sf.FieldName, RemapOperand(sf.Value, mapping)),
+        CStoreField sf => new CStoreField(sf.FieldName, RemapLeaf(sf.Value, mapping)),
         CExprStmt { Expr: CExternCall ce } => new CExprStmt(new CExternCall(ce.Sig, RemapArgs(ce.Args, mapping), ce.Type, RemapSlotIdNullable(ce.DestSlot, mapping))),
         CExprStmt { Expr: CInternalCall ci } => new CExprStmt(new CInternalCall(ci.FuncName, RemapArgs(ci.Args, mapping), ci.Type, RemapSlotIdNullable(ci.DestSlot, mapping))),
         _ => inst,
@@ -509,8 +517,8 @@ public static class CoreFlatOptimizer
 
     static CTerminator RemapTerminator(CTerminator term, Dictionary<int, int> mapping) => term switch
     {
-        CBranch br => new CBranch(RemapOperand(br.Cond, mapping), br.TrueBlockId, br.FalseBlockId),
-        CRet ret when ret.Value != null => new CRet(RemapOperand(ret.Value, mapping)),
+        CBranch br => new CBranch(RemapLeaf(br.Cond, mapping), br.TrueBlockId, br.FalseBlockId),
+        CRet ret when ret.Value != null => new CRet(RemapLeaf(ret.Value, mapping)),
         _ => term,
     };
 

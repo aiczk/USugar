@@ -81,14 +81,14 @@ public class StatementHandler : HandlerBase, IOperationHandler
 
     void HandleBlock(IBlockOperation block)
     {
-        _usingDisposableStack.Push(new List<(CValue, ITypeSymbol)>());
+        _usingDisposableStack.Push(new List<(CLeaf, ITypeSymbol)>());
         foreach (var stmt in block.Operations)
             VisitOperation(stmt);
         var disposables = _usingDisposableStack.Pop();
         for (int i = disposables.Count - 1; i >= 0; i--)
         {
             var (val, type) = disposables[i];
-            EmitExternVoid($"{GetUdonType(type)}.__Dispose__SystemVoid", new List<CValue> { val });
+            EmitExternVoid($"{GetUdonType(type)}.__Dispose__SystemVoid", new List<CLeaf> { val });
         }
     }
 
@@ -230,7 +230,7 @@ public class StatementHandler : HandlerBase, IOperationHandler
             {
                 var (val, type) = scope[i];
                 var disposeType = GetUdonType(type);
-                EmitExternVoid($"{disposeType}.__Dispose__SystemVoid", new List<CValue> { val });
+                EmitExternVoid($"{disposeType}.__Dispose__SystemVoid", new List<CLeaf> { val });
             }
         }
     }
@@ -256,7 +256,7 @@ public class StatementHandler : HandlerBase, IOperationHandler
             {
                 var (val, type) = scope[i];
                 var disposeType = GetUdonType(type);
-                EmitExternVoid($"{disposeType}.__Dispose__SystemVoid", new List<CValue> { val });
+                EmitExternVoid($"{disposeType}.__Dispose__SystemVoid", new List<CLeaf> { val });
             }
             count++;
         }
@@ -271,7 +271,7 @@ public class StatementHandler : HandlerBase, IOperationHandler
     void VisitUsing(IUsingOperation op)
     {
         // Collect declared locals (for Dispose calls after body)
-        var disposableVars = new List<(CValue val, ITypeSymbol type)>();
+        var disposableVars = new List<(CLeaf val, ITypeSymbol type)>();
         if (op.Resources is IVariableDeclarationGroupOperation declGroup)
         {
             foreach (var decl in declGroup.Declarations)
@@ -304,7 +304,7 @@ public class StatementHandler : HandlerBase, IOperationHandler
         {
             var (val, type) = disposableVars[i];
             var udonType = GetUdonType(type);
-            EmitExternVoid($"{udonType}.__Dispose__SystemVoid", new List<CValue> { val });
+            EmitExternVoid($"{udonType}.__Dispose__SystemVoid", new List<CLeaf> { val });
         }
     }
 
@@ -358,7 +358,7 @@ public class StatementHandler : HandlerBase, IOperationHandler
 
             // Create object[] of correct size
             var arrExpr = ExternCall("SystemObjectArray.__ctor__SystemInt32__SystemObjectArray",
-                new List<CValue> { Const(layout.Count, "SystemInt32") }, "SystemObjectArray");
+                new List<CLeaf> { Const(layout.Count, "SystemInt32") }, "SystemObjectArray");
             EmitStoreField(id, arrExpr);
         }
 
@@ -371,7 +371,7 @@ public class StatementHandler : HandlerBase, IOperationHandler
             // Tuple literal: set each element via __Set__
             for (int i = 0; i < tupleLit.Elements.Length && i < layout.Count; i++)
                 EmitExternVoid("SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid",
-                    new List<CValue> { LoadField(localId, "SystemObjectArray"), Const(i, "SystemInt32"),
+                    new List<CLeaf> { LoadField(localId, "SystemObjectArray"), Const(i, "SystemInt32"),
                         VisitExpression(tupleLit.Elements[i]) });
         }
         else if (value is IDefaultValueOperation)
@@ -385,7 +385,7 @@ public class StatementHandler : HandlerBase, IOperationHandler
             // new V(args): default-init the already-allocated array, then run the registered ctor
             // (receiver = this array, mutated in place via this.field = … in the ctor body).
             DefaultInitAggregate(localId, layout);
-            var ctorArgs = new List<CValue> { LoadField(localId, "SystemObjectArray") };
+            var ctorArgs = new List<CLeaf> { LoadField(localId, "SystemObjectArray") };
             foreach (var arg in ocCtor.Arguments)
                 ctorArgs.Add(VisitExpression(arg.Value));
             EmitExprStmt(EmitCallToMethod(ocCtor.Constructor, ctorArgs));
@@ -410,7 +410,7 @@ public class StatementHandler : HandlerBase, IOperationHandler
                     };
                     if (memberName != null && layout.TryGetIndex(memberName, out var idx))
                         EmitExternVoid("SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid",
-                            new List<CValue> { LoadField(localId, "SystemObjectArray"),
+                            new List<CLeaf> { LoadField(localId, "SystemObjectArray"),
                                 Const(idx, "SystemInt32"), VisitExpression(sa.Value) });
                 }
             }

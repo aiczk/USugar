@@ -16,7 +16,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
             or ISwitchExpressionOperation
             or ITupleBinaryOperation;
 
-    public CValue Handle(IOperation expression) => expression switch
+    public CLeaf Handle(IOperation expression) => expression switch
     {
         ITupleBinaryOperation op => VisitTupleBinary(op),
         IBinaryOperation op => VisitBinary(op),
@@ -30,7 +30,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
 
     // ── Binary ──
 
-    CValue VisitBinary(IBinaryOperation op)
+    CLeaf VisitBinary(IBinaryOperation op)
     {
         // Short-circuit evaluation for && and ||
         if (op.OperatorKind == BinaryOperatorKind.ConditionalAnd)
@@ -45,7 +45,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
         {
             var lhs = VisitExpression(op.LeftOperand);
             var rhs = VisitExpression(op.RightOperand);
-            return EmitCallToMethod(binOpM.OriginalDefinition, new List<CValue> { lhs, rhs });
+            return EmitCallToMethod(binOpM.OriginalDefinition, new List<CLeaf> { lhs, rhs });
         }
 
         // ── Delegate field null check / comparison ──
@@ -81,7 +81,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
                 if (op.OperatorKind == BinaryOperatorKind.NotEquals)
                     return EmitNullableHasValue(nv); // != null  ⇔  HasValue
                 return ExternCall("SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean",
-                    new List<CValue> { nv, Const(null, "SystemObject") }, "SystemBoolean");
+                    new List<CLeaf> { nv, Const(null, "SystemObject") }, "SystemBoolean");
             }
         }
 
@@ -142,25 +142,25 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
             EmitAssign(objLeftSlot, leftVal);
             var objRightSlot = _ctx.AllocTemp("UnityEngineObject");
             EmitAssign(objRightSlot, rightVal);
-            return ExternCall(sig, new List<CValue> { SlotRef(objLeftSlot), SlotRef(objRightSlot) }, resultType);
+            return ExternCall(sig, new List<CLeaf> { SlotRef(objLeftSlot), SlotRef(objRightSlot) }, resultType);
         }
 
-        return ExternCall(sig, new List<CValue> { leftVal, rightVal }, resultType);
+        return ExternCall(sig, new List<CLeaf> { leftVal, rightVal }, resultType);
     }
 
     // Nullable bool `&` / `|` with C# three-valued logic: a known false dominates `&` (false & null = false)
     // and a known true dominates `|` (true | null = true), regardless of the other operand being null.
-    CValue EmitLiftedBoolLogic(IBinaryOperation op)
+    CLeaf EmitLiftedBoolLogic(IBinaryOperation op)
     {
         var aSlot = _ctx.AllocTemp("SystemObject"); EmitAssign(aSlot, VisitExpression(op.LeftOperand));
         var bSlot = _ctx.AllocTemp("SystemObject"); EmitAssign(bSlot, VisitExpression(op.RightOperand));
 
         void IfBool(int slot, bool wantTrue, System.Action<CoreBuilder> body)
         {
-            CValue boolCond = wantTrue
+            CLeaf boolCond = wantTrue
                 ? SlotRef(slot) // boxed bool used directly (Udon unboxes for the branch test)
                 : ExternCall("SystemBoolean.__op_UnaryNegation__SystemBoolean__SystemBoolean",
-                    new List<CValue> { SlotRef(slot) }, "SystemBoolean");
+                    new List<CLeaf> { SlotRef(slot) }, "SystemBoolean");
             _builder.EmitIf(EmitNullableHasValue(SlotRef(slot)), _ => _builder.EmitIf(boolCond, body));
         }
 
@@ -176,7 +176,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
     }
 
     // Lifted binary operator on Nullable<T> (null propagation) — see HandlerBase.EmitLiftedBinaryCore.
-    CValue EmitLiftedBinary(IBinaryOperation op)
+    CLeaf EmitLiftedBinary(IBinaryOperation op)
     {
         var leftNullable = EmitContext.IsNullableT(op.LeftOperand.Type, out var lu);
         var rightNullable = EmitContext.IsNullableT(op.RightOperand.Type, out var ru);
@@ -188,7 +188,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
             op.OperatorKind, op.OperatorMethod, op.Type);
     }
 
-    CValue VisitConditionalAnd(IBinaryOperation op)
+    CLeaf VisitConditionalAnd(IBinaryOperation op)
     {
         // a && b: evaluate b only when a is true (short-circuit).
         // VisitExpression on operands may emit HIR statements (e.g. temp stores for
@@ -205,7 +205,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
         return SlotRef(resultSlot);
     }
 
-    CValue VisitConditionalOr(IBinaryOperation op)
+    CLeaf VisitConditionalOr(IBinaryOperation op)
     {
         // a || b: evaluate b only when a is false (short-circuit).
         var leftVal = VisitExpression(op.LeftOperand);
@@ -221,7 +221,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
 
     // ── Unary ──
 
-    CValue VisitUnary(IUnaryOperation op)
+    CLeaf VisitUnary(IUnaryOperation op)
     {
         // Bitwise NOT (~): Udon VM has no unary complement extern → synthesize as XOR with all-bits-set
         if (op.OperatorKind == UnaryOperatorKind.BitwiseNegation)
@@ -239,7 +239,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
             && _methodFunctions.ContainsKey(unOpM.OriginalDefinition))
         {
             var operand = VisitExpression(op.Operand);
-            return EmitCallToMethod(unOpM.OriginalDefinition, new List<CValue> { operand });
+            return EmitCallToMethod(unOpM.OriginalDefinition, new List<CLeaf> { operand });
         }
 
         // Constant folding: compile-time evaluable unary expressions (e.g., -5)
@@ -263,13 +263,13 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
         else
             sig = BuildBuiltinUnarySignature(op);
 
-        return ExternCall(sig, new List<CValue> { operandVal }, resultType);
+        return ExternCall(sig, new List<CLeaf> { operandVal }, resultType);
     }
 
     // Lifted unary minus / logical-not on Nullable<T>: null-preserving. A small-int operand is promoted to
     // the (int) result underlying for the SystemInt32 op; int/long/float/bool pass through. The unwrapped
     // result is re-boxed into the SystemObject nullable slot. (Lifted bitwise ~ is not covered here.)
-    CValue EmitLiftedUnary(IUnaryOperation op, ITypeSymbol resUnderlying)
+    CLeaf EmitLiftedUnary(IUnaryOperation op, ITypeSymbol resUnderlying)
     {
         EmitContext.IsNullableT(op.Operand.Type, out var opUnderlying);
         var resU = GetUdonType(resUnderlying);
@@ -310,13 +310,13 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
             var v = PromoteBoxedToInt32(SlotRef(nSlot), opUnderlying, out var _eff);
             var computed = ExternCall(
                 ExternResolver.BuildMethodSignature(resU, $"__{opName}", new[] { resU }, resU),
-                new List<CValue> { v }, resU);
+                new List<CLeaf> { v }, resU);
             EmitAssign(resSlot, computed); // re-box into the nullable's SystemObject slot
         });
         return SlotRef(resSlot);
     }
 
-    CValue VisitBitwiseNot(IUnaryOperation op)
+    CLeaf VisitBitwiseNot(IUnaryOperation op)
     {
         var operandVal = VisitExpression(op.Operand);
         var operandType = GetUdonType(op.Operand.Type);
@@ -340,23 +340,23 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
             ExternResolver.ResolveBinaryExtern(
                 BinaryOperatorKind.ExclusiveOr, null,
                 ResolveType(op.Operand.Type), ResolveType(op.Operand.Type), ResolveType(op.Type)),
-            new List<CValue> { operandVal, allBitsConst },
+            new List<CLeaf> { operandVal, allBitsConst },
             resultType);
     }
 
     // ── Is-type / Is-pattern ──
 
-    CValue VisitIsType(IIsTypeOperation op)
+    CLeaf VisitIsType(IIsTypeOperation op)
     {
         var valueVal = VisitExpression(op.ValueOperand);
         var typeConst = Const(GetUdonType(op.TypeOperand), "SystemType");
         return ExternCall(
             "SystemType.__IsInstanceOfType__SystemObject__SystemBoolean",
-            new List<CValue> { typeConst, valueVal },
+            new List<CLeaf> { typeConst, valueVal },
             "SystemBoolean");
     }
 
-    CValue VisitIsPattern(IIsPatternOperation op)
+    CLeaf VisitIsPattern(IIsPatternOperation op)
     {
         var valueVal = VisitExpression(op.Value);
         return EmitPatternCheckImpl(valueVal, op.Value.Type, op.Pattern);
@@ -364,7 +364,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
 
     // ── Pattern matching (public — called from LoopHandler via EmitContext dispatch) ──
 
-    public CValue EmitPatternCheckImpl(CValue valueVal, ITypeSymbol valueType, IPatternOperation pattern)
+    public CLeaf EmitPatternCheckImpl(CLeaf valueVal, ITypeSymbol valueType, IPatternOperation pattern)
     {
         // Nullable<T> scrutinee (boxed object): `x is null` is an object null check; any other pattern
         // requires HasValue, then matches against the unboxed underlying value (Udon unboxes transparently).
@@ -374,7 +374,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
             EmitAssign(nSlot, valueVal);
             if (pattern is IConstantPatternOperation cpn && cpn.Value.ConstantValue is { HasValue: true, Value: null })
                 return ExternCall("SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean",
-                    new List<CValue> { SlotRef(nSlot), Const(null, "SystemObject") }, "SystemBoolean");
+                    new List<CLeaf> { SlotRef(nSlot), Const(null, "SystemObject") }, "SystemBoolean");
             var matchSlot = _ctx.AllocTemp("SystemBoolean");
             EmitAssign(matchSlot, Const(false, "SystemBoolean"));
             _builder.EmitIf(EmitNullableHasValue(SlotRef(nSlot)), _ =>
@@ -407,7 +407,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
                 return ExternCall(
                     ExternResolver.BuildMethodSignature(
                         eqType, "__op_Equality", new[] { eqType, eqType }, "SystemBoolean"),
-                    new List<CValue> { convertedValueVal, constVal },
+                    new List<CLeaf> { convertedValueVal, constVal },
                     "SystemBoolean");
             }
             case INegatedPatternOperation negated:
@@ -415,7 +415,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
                 var innerVal = EmitPatternCheckImpl(valueVal, valueType, negated.Pattern);
                 return ExternCall(
                     "SystemBoolean.__op_UnaryNegation__SystemBoolean__SystemBoolean",
-                    new List<CValue> { innerVal },
+                    new List<CLeaf> { innerVal },
                     "SystemBoolean");
             }
             case ITypePatternOperation typePat:
@@ -425,7 +425,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
             {
                 // `var x` (no explicit MatchedType / MatchesNull) matches any value — no type check.
                 var isVar = declPat.MatchedType == null || declPat.MatchesNull;
-                var checkVal = isVar ? (CValue)Const(true, "SystemBoolean") : EmitTypeCheck(valueVal, declPat.MatchedType);
+                var checkVal = isVar ? (CLeaf)Const(true, "SystemBoolean") : EmitTypeCheck(valueVal, declPat.MatchedType);
                 if (declPat.DeclaredSymbol is ILocalSymbol local)
                 {
                     var localType = GetUdonType(local.Type);
@@ -471,7 +471,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
                 return ExternCall(
                     ExternResolver.BuildMethodSignature(
                         valType, opName, new[] { valType, valType }, "SystemBoolean"),
-                    new List<CValue> { scrut, constVal },
+                    new List<CLeaf> { scrut, constVal },
                     "SystemBoolean");
             }
             case IBinaryPatternOperation binPat:
@@ -481,7 +481,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
                 var opName = binPat.OperatorKind == BinaryOperatorKind.And
                     ? "SystemBoolean.__op_ConditionalAnd__SystemBoolean_SystemBoolean__SystemBoolean"
                     : "SystemBoolean.__op_ConditionalOr__SystemBoolean_SystemBoolean__SystemBoolean";
-                return ExternCall(opName, new List<CValue> { leftVal, rightVal }, "SystemBoolean");
+                return ExternCall(opName, new List<CLeaf> { leftVal, rightVal }, "SystemBoolean");
             }
 
             case IRecursivePatternOperation rec when rec.DeconstructionSubpatterns.Length > 0:
@@ -500,12 +500,12 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
                 var aggSlot = _ctx.AllocTemp("SystemObjectArray");
                 EmitAssign(aggSlot, valueVal);
 
-                CValue result = Const(true, "SystemBoolean");
+                CLeaf result = Const(true, "SystemBoolean");
                 for (int i = 0; i < rec.DeconstructionSubpatterns.Length; i++)
                 {
                     var elemType = layout.Fields[i].Type;
                     var elemRaw = ExternCall("SystemObjectArray.__Get__SystemInt32__SystemObject",
-                        new List<CValue> { SlotRef(aggSlot), Const(i, "SystemInt32") }, "SystemObject");
+                        new List<CLeaf> { SlotRef(aggSlot), Const(i, "SystemInt32") }, "SystemObject");
                     // Materialize into a typed temp (Udon COPY unboxes) so the sub-pattern compares
                     // with the correct type tag, exactly as tuple deconstruction extracts elements.
                     var elemSlot = _ctx.AllocTemp(GetUdonType(elemType));
@@ -513,7 +513,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
                     var subResult = EmitPatternCheckImpl(SlotRef(elemSlot), elemType, rec.DeconstructionSubpatterns[i]);
                     result = ExternCall(
                         "SystemBoolean.__op_ConditionalAnd__SystemBoolean_SystemBoolean__SystemBoolean",
-                        new List<CValue> { result, subResult }, "SystemBoolean");
+                        new List<CLeaf> { result, subResult }, "SystemBoolean");
                 }
                 return result;
             }
@@ -527,13 +527,13 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
                 var resultSlot = _ctx.AllocTemp("SystemBoolean");
                 EmitAssign(resultSlot, Const(false, "SystemBoolean"));
 
-                CValue guard;
+                CLeaf guard;
                 if (rec.MatchedType != null && !SymbolEqualityComparer.Default.Equals(rec.MatchedType, valueType))
                     guard = EmitTypeCheck(valueVal, rec.MatchedType);
                 else if (!valueType.IsValueType)
                     guard = ExternCall(
                         "SystemObject.__op_Inequality__SystemObject_SystemObject__SystemBoolean",
-                        new List<CValue> { valueVal, Const(null, "SystemObject") }, "SystemBoolean");
+                        new List<CLeaf> { valueVal, Const(null, "SystemObject") }, "SystemBoolean");
                 else
                     guard = Const(true, "SystemBoolean");
 
@@ -550,7 +550,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
                         EmitStoreField(boundId, SlotRef(valSlot));
                     }
 
-                    CValue acc = Const(true, "SystemBoolean");
+                    CLeaf acc = Const(true, "SystemBoolean");
                     // For a user struct / tuple scrutinee, members live as object[] indices — there is no Udon
                     // property getter (SystemObjectArray.__get_X does not exist) — so read via the layout __Get.
                     var aggMatchType = matchType as INamedTypeSymbol;
@@ -572,13 +572,13 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
                                     $"Property pattern member '{sub.Member?.GetType().Name}' is not supported "
                                     + "(only System/Unity properties and fields).");
                         }
-                        CValue memberVal;
+                        CLeaf memberVal;
                         if (isAgg && _ctx.GetAggregateLayout(aggMatchType).TryGetIndex(memberName, out var aggMemberIdx))
                         {
                             // Aggregate member: read the boxed object[] slot, then materialize into a typed temp
                             // (Udon COPY unboxes) so the sub-pattern compares with the correct type tag.
                             var rawMember = ExternCall("SystemObjectArray.__Get__SystemInt32__SystemObject",
-                                new List<CValue> { SlotRef(valSlot), Const(aggMemberIdx, "SystemInt32") }, "SystemObject");
+                                new List<CLeaf> { SlotRef(valSlot), Const(aggMemberIdx, "SystemInt32") }, "SystemObject");
                             var memberSlot = _ctx.AllocTemp(GetUdonType(memberType));
                             EmitAssign(memberSlot, rawMember);
                             memberVal = SlotRef(memberSlot);
@@ -587,12 +587,12 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
                         {
                             memberVal = ExternCall(
                                 ExternResolver.BuildPropertyGetSignature(memberOwner, memberName, GetUdonType(memberType)),
-                                new List<CValue> { SlotRef(valSlot) }, GetUdonType(memberType));
+                                new List<CLeaf> { SlotRef(valSlot) }, GetUdonType(memberType));
                         }
                         var subResult = EmitPatternCheckImpl(memberVal, memberType, sub.Pattern);
                         acc = ExternCall(
                             "SystemBoolean.__op_ConditionalAnd__SystemBoolean_SystemBoolean__SystemBoolean",
-                            new List<CValue> { acc, subResult }, "SystemBoolean");
+                            new List<CLeaf> { acc, subResult }, "SystemBoolean");
                     }
                     EmitAssign(resultSlot, acc);
                 });
@@ -604,18 +604,18 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
         }
     }
 
-    CValue EmitTypeCheck(CValue valueVal, ITypeSymbol targetType)
+    CLeaf EmitTypeCheck(CLeaf valueVal, ITypeSymbol targetType)
     {
         var typeConst = Const(GetUdonType(targetType), "SystemType");
         return ExternCall(
             "SystemType.__IsInstanceOfType__SystemObject__SystemBoolean",
-            new List<CValue> { typeConst, valueVal },
+            new List<CLeaf> { typeConst, valueVal },
             "SystemBoolean");
     }
 
     // ── Switch expression ──
 
-    CValue VisitSwitchExpression(ISwitchExpressionOperation op)
+    CLeaf VisitSwitchExpression(ISwitchExpressionOperation op)
     {
         var resultType = GetUdonType(op.Type);
         var resultSlot = _ctx.AllocTemp(resultType);
@@ -689,7 +689,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
 
     // ── Conditional (ternary) expression ──
 
-    CValue VisitConditionalExpression(IConditionalOperation op)
+    CLeaf VisitConditionalExpression(IConditionalOperation op)
     {
         // cond ? a : b: evaluate branches only on the taken path.
         var condVal = VisitExpression(op.Condition);
@@ -741,7 +741,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
 
     // ── Tuple binary (== / !=) ──
 
-    CValue VisitTupleBinary(ITupleBinaryOperation op)
+    CLeaf VisitTupleBinary(ITupleBinaryOperation op)
     {
         if (op.LeftOperand.Type is not INamedTypeSymbol aggType || !aggType.IsTupleType)
             throw new System.NotSupportedException(
@@ -753,17 +753,17 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
 
     // ── Aggregate (tuple) equality (via IBinaryOperation — fallback) ──
 
-    CValue EmitAggregateEquality(IBinaryOperation op, INamedTypeSymbol aggType)
+    CLeaf EmitAggregateEquality(IBinaryOperation op, INamedTypeSymbol aggType)
         => EmitTupleStructuralEquality(
             VisitExpression(op.LeftOperand), VisitExpression(op.RightOperand), aggType,
             op.OperatorKind == BinaryOperatorKind.NotEquals);
 
-    CValue EmitTupleStructuralEquality(CValue leftArr, CValue rightArr, INamedTypeSymbol aggType, bool isNotEquals)
+    CLeaf EmitTupleStructuralEquality(CValue leftArr, CValue rightArr, INamedTypeSymbol aggType, bool isNotEquals)
     {
         var result = EmitAggregateElementsEqual(leftArr, rightArr, aggType);
         if (isNotEquals)
             result = ExternCall("SystemBoolean.__op_UnaryNegation__SystemBoolean__SystemBoolean",
-                new List<CValue> { result }, "SystemBoolean");
+                new List<CLeaf> { result }, "SystemBoolean");
         return result;
     }
 
@@ -771,27 +771,27 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
     // (boxed object.Equals would otherwise do REFERENCE equality on the nested object[] and never match);
     // a scalar element uses SystemObject.__Equals (object.Equals = VALUE equality, NOT __op_Equality which
     // is reference equality). Caveat: float NaN compares equal under object.Equals.
-    CValue EmitAggregateElementsEqual(CValue leftArr, CValue rightArr, INamedTypeSymbol aggType)
+    CLeaf EmitAggregateElementsEqual(CValue leftArr, CValue rightArr, INamedTypeSymbol aggType)
     {
         var layout = _ctx.GetAggregateLayout(aggType);
         var leftSlot = _ctx.AllocTemp("SystemObjectArray"); EmitAssign(leftSlot, leftArr);
         var rightSlot = _ctx.AllocTemp("SystemObjectArray"); EmitAssign(rightSlot, rightArr);
 
-        CValue result = Const(true, "SystemBoolean");
+        CLeaf result = Const(true, "SystemBoolean");
         for (int i = 0; i < layout.Count; i++)
         {
             var leftElem = ExternCall("SystemObjectArray.__Get__SystemInt32__SystemObject",
-                new List<CValue> { SlotRef(leftSlot), Const(i, "SystemInt32") }, "SystemObject");
+                new List<CLeaf> { SlotRef(leftSlot), Const(i, "SystemInt32") }, "SystemObject");
             var rightElem = ExternCall("SystemObjectArray.__Get__SystemInt32__SystemObject",
-                new List<CValue> { SlotRef(rightSlot), Const(i, "SystemInt32") }, "SystemObject");
+                new List<CLeaf> { SlotRef(rightSlot), Const(i, "SystemInt32") }, "SystemObject");
 
-            CValue elemEq = layout.Fields[i].Type is INamedTypeSymbol nested && nested.IsTupleType
+            CLeaf elemEq = layout.Fields[i].Type is INamedTypeSymbol nested && nested.IsTupleType
                 ? EmitAggregateElementsEqual(leftElem, rightElem, nested) // nested tuple → recurse
                 : ExternCall("SystemObject.__Equals__SystemObject_SystemObject__SystemBoolean",
-                    new List<CValue> { leftElem, rightElem }, "SystemBoolean");
+                    new List<CLeaf> { leftElem, rightElem }, "SystemBoolean");
 
             result = ExternCall("SystemBoolean.__op_LogicalAnd__SystemBoolean_SystemBoolean__SystemBoolean",
-                new List<CValue> { result, elemEq }, "SystemBoolean");
+                new List<CLeaf> { result, elemEq }, "SystemBoolean");
         }
         return result;
     }
@@ -817,17 +817,17 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
         return unwrapped is ILiteralOperation { ConstantValue: { HasValue: true, Value: null } };
     }
 
-    CValue CompareDelegateToNull(string targetFieldName, bool isNotEquals)
+    CLeaf CompareDelegateToNull(string targetFieldName, bool isNotEquals)
     {
         var targetVal = LoadField(targetFieldName, "VRCUdonCommonInterfacesIUdonEventReceiver");
         var nullVal = Const(null, "SystemObject");
         var sig = isNotEquals
             ? "SystemObject.__op_Inequality__SystemObject_SystemObject__SystemBoolean"
             : "SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean";
-        return ExternCall(sig, new List<CValue> { targetVal, nullVal }, "SystemBoolean");
+        return ExternCall(sig, new List<CLeaf> { targetVal, nullVal }, "SystemBoolean");
     }
 
-    CValue CompareDelegates(string leftField, string rightField, bool isNotEquals)
+    CLeaf CompareDelegates(string leftField, string rightField, bool isNotEquals)
     {
         var leftBundle = new DelegateBundle(leftField);
         var rightBundle = new DelegateBundle(rightField);
@@ -838,22 +838,22 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
         // false negatives when two delegates point to the same method.
         var targetEq = ExternCall(
             "SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean",
-            new List<CValue> { leftTarget, rightTarget }, "SystemBoolean");
+            new List<CLeaf> { leftTarget, rightTarget }, "SystemBoolean");
 
         var leftMethod = LoadField(leftBundle.Method, "SystemString");
         var rightMethod = LoadField(rightBundle.Method, "SystemString");
         var methodEq = ExternCall(
             "SystemString.__op_Equality__SystemString_SystemString__SystemBoolean",
-            new List<CValue> { leftMethod, rightMethod }, "SystemBoolean");
+            new List<CLeaf> { leftMethod, rightMethod }, "SystemBoolean");
 
         var result = ExternCall(
             "SystemBoolean.__op_LogicalAnd__SystemBoolean_SystemBoolean__SystemBoolean",
-            new List<CValue> { targetEq, methodEq }, "SystemBoolean");
+            new List<CLeaf> { targetEq, methodEq }, "SystemBoolean");
 
         if (isNotEquals)
             result = ExternCall(
                 "SystemBoolean.__op_UnaryNegation__SystemBoolean__SystemBoolean",
-                new List<CValue> { result }, "SystemBoolean");
+                new List<CLeaf> { result }, "SystemBoolean");
 
         return result;
     }

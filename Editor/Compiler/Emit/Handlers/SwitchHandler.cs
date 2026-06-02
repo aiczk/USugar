@@ -77,8 +77,8 @@ public class SwitchHandler : HandlerBase, IOperationHandler
         _builder.EmitLabel(endLabel);
     }
 
-    void EmitSwitchCases(ISwitchOperation op, int convertedSlot, string convertedSlotType, CValue convertedValueVal,
-        int origValueSlot, CValue origValueVal, string valueType, int defaultIndex, int startIdx)
+    void EmitSwitchCases(ISwitchOperation op, int convertedSlot, string convertedSlotType, CLeaf convertedValueVal,
+        int origValueSlot, CLeaf origValueVal, string valueType, int defaultIndex, int startIdx)
     {
         // Find the next non-default case from startIdx.
         int caseIdx = -1;
@@ -116,11 +116,11 @@ public class SwitchHandler : HandlerBase, IOperationHandler
         }
     }
 
-    CValue BuildCaseCondition(ISwitchCaseOperation caseSection, ITypeSymbol switchValueType,
-        int convertedSlot, CValue convertedValueVal,
-        int origValueSlot, CValue origValueVal, string valueType)
+    CLeaf BuildCaseCondition(ISwitchCaseOperation caseSection, ITypeSymbol switchValueType,
+        int convertedSlot, CLeaf convertedValueVal,
+        int origValueSlot, CLeaf origValueVal, string valueType)
     {
-        CValue caseCond = null;
+        CLeaf caseCond = null;
         foreach (var clause in caseSection.Clauses)
         {
             if (clause is IDefaultCaseClauseOperation) continue;
@@ -131,15 +131,15 @@ public class SwitchHandler : HandlerBase, IOperationHandler
                 ? clauseCond
                 : ExternCall(
                     "SystemBoolean.__op_ConditionalOr__SystemBoolean_SystemBoolean__SystemBoolean",
-                    new List<CValue> { caseCond, clauseCond },
+                    new List<CLeaf> { caseCond, clauseCond },
                     "SystemBoolean");
         }
         return caseCond;
     }
 
-    CValue BuildClauseCondition(ICaseClauseOperation clause, ITypeSymbol switchValueType,
-        int convertedSlot, CValue convertedValueVal,
-        int origValueSlot, CValue origValueVal, string valueType)
+    CLeaf BuildClauseCondition(ICaseClauseOperation clause, ITypeSymbol switchValueType,
+        int convertedSlot, CLeaf convertedValueVal,
+        int origValueSlot, CLeaf origValueVal, string valueType)
     {
         switch (clause)
         {
@@ -149,7 +149,7 @@ public class SwitchHandler : HandlerBase, IOperationHandler
                 if (switchValueType is INamedTypeSymbol named && named.TypeKind == TypeKind.Enum)
                     eqType = GetUdonType(named.EnumUnderlyingType);
 
-                CValue caseValueVal;
+                CLeaf caseValueVal;
                 // Compile-time fold for enum / numeric constant case labels.
                 // Avoids runtime SystemConvert.__ToInt32__SystemObject__SystemInt32 per case.
                 if (singleValue.Value.ConstantValue.HasValue)
@@ -166,7 +166,7 @@ public class SwitchHandler : HandlerBase, IOperationHandler
                     eqType, "__op_Equality", new[] { eqType, eqType }, "SystemBoolean");
 
                 var lhs = convertedSlot >= 0 ? SlotRef(convertedSlot) : convertedValueVal;
-                return ExternCall(eqSig, new List<CValue> { lhs, caseValueVal }, "SystemBoolean");
+                return ExternCall(eqSig, new List<CLeaf> { lhs, caseValueVal }, "SystemBoolean");
             }
             case IPatternCaseClauseOperation patternCase:
             {
@@ -177,7 +177,7 @@ public class SwitchHandler : HandlerBase, IOperationHandler
                     var guardVal = VisitExpression(patternCase.Guard);
                     cond = ExternCall(
                         "SystemBoolean.__op_ConditionalAnd__SystemBoolean_SystemBoolean__SystemBoolean",
-                        new List<CValue> { cond, guardVal },
+                        new List<CLeaf> { cond, guardVal },
                         "SystemBoolean");
                 }
                 return cond;
