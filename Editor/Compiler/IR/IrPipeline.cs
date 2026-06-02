@@ -1,8 +1,13 @@
 /// <summary>
-/// Core IR compilation pipeline.
+/// Core IR compilation pipeline. There is ONE IR (CModule: structured, then flat); HIR/LIR no longer exist,
+/// and there is NO structured-optimization pass.
 ///
-/// Pipeline: Handlers → CoreBuilder → CModule → CoreVerify → CoreOptimizer (structured) →
-///           CoreFlatten (structured → flat) → FlatVerify → CoreFlatOptimizer → CoreToUasm → UASM
+/// Pipeline: Handlers/CoreBuilder build the structured CModule →
+///           CoreVerify →
+///           CoreFlatten (structured → flat, in place) + FlatVerify →
+///           CoalesceSlots (the sole optimizer — slot allocation) →
+///           InsertRecursionSpills + FlatVerify →
+///           CoreToUasm → UASM
 /// </summary>
 public static class IrPipeline
 {
