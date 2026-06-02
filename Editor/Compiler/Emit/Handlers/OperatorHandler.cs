@@ -225,7 +225,13 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
     {
         // Bitwise NOT (~): Udon VM has no unary complement extern → synthesize as XOR with all-bits-set
         if (op.OperatorKind == UnaryOperatorKind.BitwiseNegation)
+        {
+            // Lifted ~ on Nullable<T> null-propagates; route it through EmitLiftedUnary before the non-lifted
+            // path, whose extern would be built on the Nullable operand type (SystemObject) and throw.
+            if (op.IsLifted && EmitContext.IsNullableT(op.Type, out var bnResU))
+                return EmitLiftedUnary(op, bnResU);
             return VisitBitwiseNot(op);
+        }
 
         // ── User-defined struct operator: -v → static operator method call ──
         if (op.OperatorMethod is { MethodKind: MethodKind.UserDefinedOperator } unOpM
@@ -267,6 +273,27 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
     {
         EmitContext.IsNullableT(op.Operand.Type, out var opUnderlying);
         var resU = GetUdonType(resUnderlying);
+
+        // Lifted bitwise NOT: ~x ≡ x ^ allBits — reuse the lifted-binary machinery (promotion / narrowing /
+        // null-propagation). ~ promotes a small int to int, so allBits is built in the RESULT underlying domain.
+        if (op.OperatorKind == UnaryOperatorKind.BitwiseNegation)
+        {
+            object allBitsValue = resUnderlying.SpecialType switch
+            {
+                SpecialType.System_Int32 or SpecialType.System_Int16 or SpecialType.System_Int64
+                    or SpecialType.System_SByte => EmitContext.ParseConstValue(resU, "-1"),
+                SpecialType.System_UInt32 => uint.MaxValue,
+                SpecialType.System_UInt64 => ulong.MaxValue,
+                SpecialType.System_UInt16 => ushort.MaxValue,
+                SpecialType.System_Byte => byte.MaxValue,
+                _ => throw new System.NotSupportedException($"Lifted bitwise NOT (~) is not supported on {resU}")
+            };
+            return EmitLiftedBinaryCore(
+                VisitExpression(op.Operand), true, opUnderlying,
+                Const(allBitsValue, resU), false, resUnderlying,
+                BinaryOperatorKind.ExclusiveOr, null, op.Type);
+        }
+
         var opName = op.OperatorKind switch
         {
             UnaryOperatorKind.Not => "op_UnaryNegation",
