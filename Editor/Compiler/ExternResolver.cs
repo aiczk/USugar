@@ -68,6 +68,24 @@ public static class ExternResolver
             return RemapUdonType(elemTypeName) + "Array";
         }
 
+        // Constructed generic carrying type-param args (e.g. a delegate parameter Func<T,int> of a generic
+        // method): the no-map overload's generic branch would resolve the args WITHOUT the map, leaving a
+        // literal "T" in the name → an invalid extern type. Recurse the args WITH the map here. Nullable /
+        // aggregate / enum generics are intentionally left to the no-map overload, which ignores their type
+        // args (→ SystemObject / SystemObjectArray / underlying) and so needs no substitution.
+        if (typeParamMap != null && type is INamedTypeSymbol named && named.IsGenericType
+            && named.OriginalDefinition.SpecialType != SpecialType.System_Nullable_T
+            && type.TypeKind != TypeKind.Enum
+            && !EmitContext.IsAggregateType(type))
+        {
+            var def = named.ConstructedFrom;
+            var ns = def.ContainingNamespace?.ToDisplayString();
+            var baseName = SanitizeTypeName(string.IsNullOrEmpty(ns) ? def.Name : $"{ns}.{def.Name}");
+            foreach (var arg in named.TypeArguments)
+                baseName += GetUdonTypeName(arg, typeParamMap);
+            return RemapUdonType(baseName);
+        }
+
         return GetUdonTypeName(type);
     }
 

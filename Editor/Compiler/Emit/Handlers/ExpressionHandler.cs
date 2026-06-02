@@ -311,13 +311,12 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
 
     CValue VisitDefaultValue(IDefaultValueOperation defaultVal)
     {
-        // Aggregate default: create empty object[] of correct size
-        if (defaultVal.Type is INamedTypeSymbol aggDef && EmitContext.IsAggregateType(aggDef))
-        {
-            var layout = _ctx.GetAggregateLayout(aggDef);
-            return ExternCall("SystemObjectArray.__ctor__SystemInt32__SystemObjectArray",
-                new List<CValue> { Const(layout.Count, "SystemInt32") }, "SystemObjectArray");
-        }
+        // Aggregate default → a ZERO-INITIALIZED object[] (fields set to their defaults), not null, so field
+        // access on the default does not NRE. ResolveType is required for `default(T)` inside a generic method
+        // where T is a struct type arg: defaultVal.Type is then the open type parameter, which a directly-named
+        // INamedTypeSymbol check would miss — leaving the default as null and crashing on the first field read.
+        if (ResolveType(defaultVal.Type) is INamedTypeSymbol aggDef && EmitContext.IsAggregateType(aggDef))
+            return EmitNewAggregate(aggDef);
 
         var dvType = GetUdonType(defaultVal.Type);
         if (!defaultVal.Type.IsValueType)
