@@ -46,6 +46,7 @@ namespace UdonSharp
     public class UdonSharpBehaviour : UnityEngine.MonoBehaviour
     {
         public void RequestSerialization() { }
+        public void SendCustomNetworkEvent(VRC.Udon.Common.Interfaces.NetworkEventTarget target, string eventName, params object[] parameters) { }
         public virtual void OnPlayerJoined(VRC.SDKBase.VRCPlayerApi player) { }
         public virtual void OnPlayerLeft(VRC.SDKBase.VRCPlayerApi player) { }
         public virtual void OnDeserialization() { }
@@ -324,6 +325,8 @@ namespace VRC.Udon {
     }
 }
 namespace VRC.Udon.Common.Enums { public enum EventTiming { Update, LateUpdate } }
+namespace VRC.Udon.Common.Interfaces { public enum NetworkEventTarget { All, Owner, Others } }
+namespace VRC.SDK3.UdonNetworkCalling { public class NetworkCallableAttribute : System.Attribute { } }
 namespace VRC.SDK3.Components {
     public class VRCStation : UnityEngine.Component { }
     public class VRCObjectSync : UnityEngine.Component { }
