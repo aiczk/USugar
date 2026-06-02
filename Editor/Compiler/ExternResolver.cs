@@ -449,14 +449,32 @@ public static class ExternResolver
         return BuildMethodSignature(left, $"__{opName}", new[] { left, right }, result);
     }
 
-    static readonly HashSet<string> SmallIntTypes = new()
+    /// <summary>Integer type facts — the SINGLE SOURCE OF TRUTH for Udon integer classification: bit rank and
+    /// signedness of a Udon integer type (rank 0 = not an integer). Every integer predicate (IsSmallIntOrChar,
+    /// lossless-widen checks, etc.) derives from THIS table; do not re-list the integer type set anywhere else.</summary>
+    public static (int rank, bool signed) IntInfo(string udonType) => udonType switch
     {
-        "SystemByte", "SystemSByte", "SystemInt16", "SystemUInt16", "SystemChar",
+        "SystemByte" => (8, false),
+        "SystemSByte" => (8, true),
+        "SystemInt16" => (16, true),
+        "SystemUInt16" => (16, false),
+        "SystemChar" => (16, false),
+        "SystemInt32" => (32, true),
+        "SystemUInt32" => (32, false),
+        "SystemInt64" => (64, true),
+        "SystemUInt64" => (64, false),
+        _ => (0, false),
     };
+
+    /// <summary>True for integer/char types narrower than int32 (byte/sbyte/short/ushort/char): Udon VM has no
+    /// operators on them, so arithmetic promotes through int32 then narrows back. (E.g. Udon's SystemChar
+    /// op_Addition returns SystemInt32 — there is no SystemChar+SystemChar→SystemChar extern — so char must be
+    /// treated as a small int here.) Derived from <see cref="IntInfo"/>.</summary>
+    public static bool IsSmallIntOrChar(string udonType) => IntInfo(udonType).rank is > 0 and < 32;
 
     static void PromoteSmallInt(ref string udonType)
     {
-        if (SmallIntTypes.Contains(udonType))
+        if (IsSmallIntOrChar(udonType))
             udonType = "SystemInt32";
     }
 

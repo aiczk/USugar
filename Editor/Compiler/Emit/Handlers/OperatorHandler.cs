@@ -395,7 +395,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
                 var eqType = GetUdonType(underlyingSym);
                 if (constPat.Value.ConstantValue is { HasValue: true, Value: null })
                     eqType = "SystemObject"; // null comparisons use SystemObject equality
-                else if (SmallIntOrChar(eqType))
+                else if (ExternResolver.IsSmallIntOrChar(eqType))
                 {
                     // A nullable small-int/char (or small-underlying enum) scrutinee may carry a boxed plain int
                     // rather than the strict small-int tag; promote both sides to int32 (ToInt32(SystemObject)
@@ -451,7 +451,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
                 var underlyingSym = valueType is INamedTypeSymbol relEnum && relEnum.TypeKind == TypeKind.Enum
                     ? relEnum.EnumUnderlyingType : valueType;
                 var valType = GetUdonType(underlyingSym);
-                if (SmallIntOrChar(valType))
+                if (ExternResolver.IsSmallIntOrChar(valType))
                 {
                     // A nullable small-int/char (or small-underlying enum) scrutinee may be boxed as a plain int;
                     // promote both sides to int32 so the strict small-int extern's box-tag fetch cannot InvalidCast.

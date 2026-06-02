@@ -156,28 +156,14 @@ public abstract class HandlerBase
             new List<CLeaf> { wrapped }, "SystemUInt32");
     }
 
-    static bool IsIntegerUdon(string t) => IntInfo(t).rank > 0;
-
-    static (int rank, bool signed) IntInfo(string t) => t switch
-    {
-        "SystemByte" => (8, false),
-        "SystemSByte" => (8, true),
-        "SystemInt16" => (16, true),
-        "SystemUInt16" => (16, false),
-        "SystemChar" => (16, false),
-        "SystemInt32" => (32, true),
-        "SystemUInt32" => (32, false),
-        "SystemInt64" => (64, true),
-        "SystemUInt64" => (64, false),
-        _ => (0, false),
-    };
+    static bool IsIntegerUdon(string t) => ExternResolver.IntInfo(t).rank > 0;
 
     /// <summary>True when every value of the source integer type is representable in the target (so the checked
     /// SystemConvert never throws and yields the same result as the C# cast).</summary>
     static bool IsLosslessIntegerWiden(string from, string to)
     {
-        var (fr, fs) = IntInfo(from);
-        var (tr, ts) = IntInfo(to);
+        var (fr, fs) = ExternResolver.IntInfo(from);
+        var (tr, ts) = ExternResolver.IntInfo(to);
         if (fr == 0 || tr == 0) return false;
         if (fs == ts) return tr >= fr;   // same signedness → equal/wider is lossless
         if (!fs && ts) return tr > fr;   // unsigned → signed needs a strictly wider target
@@ -372,9 +358,6 @@ public abstract class HandlerBase
         }
     }
 
-    protected static bool SmallIntOrChar(string udonType)
-        => udonType is "SystemByte" or "SystemSByte" or "SystemInt16" or "SystemUInt16" or "SystemChar";
-
     /// <summary>Promote a boxed small-int/char operand to int32 (Udon has no operators on those types and a
     /// boxed small-int does not coerce to int for a SystemInt32 extern). Routes through ToInt32(SystemObject)
     /// rather than the type-strict ToInt32(SystemByte/SystemChar/…): a nullable small-int's stored value is
@@ -383,7 +366,7 @@ public abstract class HandlerBase
     /// for non-small types.</summary>
     protected CLeaf PromoteBoxedToInt32(CLeaf boxed, ITypeSymbol underlying, out ITypeSymbol effectiveType)
     {
-        if (SmallIntOrChar(GetUdonType(underlying)))
+        if (ExternResolver.IsSmallIntOrChar(GetUdonType(underlying)))
         {
             effectiveType = _compilation.GetSpecialType(SpecialType.System_Int32);
             return ExternCall("SystemConvert.__ToInt32__SystemObject__SystemInt32", new List<CLeaf> { boxed }, "SystemInt32");
@@ -425,7 +408,7 @@ public abstract class HandlerBase
             var resUnder = resultNullable ? resU : resultType;
             var aV = PromoteBoxedToInt32(SlotRef(aSlot), ltUnderlying, out var ltEff);
             var bV = PromoteBoxedToInt32(SlotRef(bSlot), rtUnderlying, out var rtEff);
-            bool resPromotes = SmallIntOrChar(GetUdonType(resUnder));
+            bool resPromotes = ExternResolver.IsSmallIntOrChar(GetUdonType(resUnder));
             var resEff = resPromotes ? _compilation.GetSpecialType(SpecialType.System_Int32) : resUnder;
             var raw = ExternCall(
                 ExternResolver.ResolveBinaryExtern(k, operatorMethod, ResolveType(ltEff), ResolveType(rtEff), ResolveType(resEff)),

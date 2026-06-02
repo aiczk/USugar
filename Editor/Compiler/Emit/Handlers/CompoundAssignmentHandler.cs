@@ -53,17 +53,17 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
         // Promote small integers for the operation temp.
         // Udon VM has no byte/sbyte/short/ushort operators — operations go through int.
         var opResultType = resultType;
-        if (IsSmallInteger(resultType))
+        if (ExternResolver.IsSmallIntOrChar(resultType))
             opResultType = "SystemInt32";
 
         // Explicit operand promotion: byte slot pushed to int extern requires ToInt32 conversion
         // (matches ExpressionHandler.VisitConversion behaviour for byte+byte). Without this we
         // rely on Udon VM's implicit boxed-value coercion, which is fragile across SDK updates.
         var leftType = GetUdonType(op.Target.Type);
-        if (IsSmallInteger(leftType))
+        if (ExternResolver.IsSmallIntOrChar(leftType))
             leftVal = PromoteToInt32(leftVal, leftType);
         var rightType = GetUdonType(op.Value.Type);
-        if (IsSmallInteger(rightType))
+        if (ExternResolver.IsSmallIntOrChar(rightType))
             rightVal = PromoteToInt32(rightVal, rightType);
 
         var sig = ExternResolver.ResolveBinaryExtern(
@@ -78,13 +78,6 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
         EmitWriteBack(op.Target, resultVal, lv);
         return resultVal;
     }
-
-    // char promotes to int for arithmetic just like byte/short: Udon has no SystemChar +/-
-    // operator returning char (its op_Addition returns SystemInt32), so we promote to int,
-    // operate, then narrow back via SystemConvert.ToChar. Excluding char emitted a non-existent
-    // SystemChar.__op_Addition__SystemChar_SystemChar__SystemChar (caught only at runtime).
-    static bool IsSmallInteger(string udonType)
-        => udonType is "SystemByte" or "SystemSByte" or "SystemInt16" or "SystemUInt16" or "SystemChar";
 
     CLeaf PromoteToInt32(CLeaf value, string srcUdonType)
         => ExternCall($"SystemConvert.__ToInt32__{srcUdonType}__SystemInt32",
@@ -114,13 +107,13 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
 
         // Promote small integers: Udon VM has no byte/sbyte/short/ushort operators
         var opType = udonType;
-        if (IsSmallInteger(opType))
+        if (ExternResolver.IsSmallIntOrChar(opType))
             opType = "SystemInt32";
 
         var oneConst = Const(1, opType);
 
         // Explicit operand promotion to match the int extern signature.
-        if (IsSmallInteger(udonType))
+        if (ExternResolver.IsSmallIntOrChar(udonType))
             targetVal = PromoteToInt32(targetVal, udonType);
 
         var isIncrement = op.Kind == OperationKind.Increment;
