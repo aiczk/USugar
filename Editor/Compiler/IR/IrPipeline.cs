@@ -18,11 +18,6 @@ public static class IrPipeline
 
         CoreVerify.Verify(coreModule);
 
-        // Structured optimization
-        CoreOptimizer.ConstantFold(coreModule);
-        CoreOptimizer.DeadCodeElimination(coreModule);
-        CoreOptimizer.CopyPropagation(coreModule);
-
         // Structured → flat (in place): CoreFlatten + FlatVerify post-condition.
         foreach (var cf in coreModule.Functions)
         {
@@ -30,11 +25,11 @@ public static class IrPipeline
             FlatVerify.Verify(cf);
         }
 
-        // Flat optimization (identical pass order to the former LIR backend).
-        CoreFlatOptimizer.SimplifyCFG(coreModule);
-        CoreFlatOptimizer.CopyPropagation(coreModule);
-        CoreFlatOptimizer.DeadCodeElimination(coreModule);
-        CoreFlatOptimizer.SimplifyCFG(coreModule); // cleanup after DCE
+        // Slot coalescing is the only optimization retained: measurement showed it delivers the entire
+        // heap-variable reduction (~30–100% fewer vars → smaller serialized program), while the former
+        // constant-fold / DCE / copy-propagation / CFG-simplify passes changed neither EXTERN count nor
+        // runtime cost on real (field-driven) code — Udon is EXTERN-bound, so they earned their complexity
+        // and correctness risk for nothing. Value-equivalence (opt vs no-opt heap results) was verified.
         CoreFlatOptimizer.CoalesceSlots(coreModule);
 
         var result = CoreToUasm.Generate(coreModule);

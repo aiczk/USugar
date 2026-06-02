@@ -33,7 +33,10 @@
         PUSH, __intnl_SystemBoolean_c0
         EXTERN, "SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean"
         PUSH, __intnl_SystemBoolean_c0
-        JUMP_IF_FALSE, 0x00000124
+        JUMP_IF_FALSE, 0x00000068
+        JUMP, 0x00000070
+    ___start_bb6:
+        JUMP, 0x00000134
     ___start_bb4:
         PUSH, __lcl_i_SystemInt32_0
         PUSH, __intnl_SystemInt32_c1
@@ -43,9 +46,9 @@
         PUSH, __intnl_SystemBoolean_c0
         EXTERN, "SystemInt32.__op_Equality__SystemInt32_SystemInt32__SystemBoolean"
         PUSH, __intnl_SystemBoolean_c0
-        JUMP_IF_FALSE, 0x000000ac
-        JUMP, 0x000000fc
-    ___start_bb5:
+        JUMP_IF_FALSE, 0x000000bc
+        JUMP, 0x0000010c
+    ___start_bb8:
         PUSH, __lcl_i_SystemInt32_0
         PUSH, __intnl_SystemInt32_c1
         COPY

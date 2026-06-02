@@ -34,6 +34,7 @@
         PUSH, __intnl_SystemInt32_c1
         PUSH, i
         COPY
+    ___start_bb2:
         PUSH, i
         PUSH, __intnl_SystemInt32_c1
         COPY

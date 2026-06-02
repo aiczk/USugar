@@ -53,6 +53,7 @@
         PUSH, __intnl_SystemInt32_c3
         PUSH, total
         COPY
+    ___start_bb4:
         PUSH, __lcl_i_SystemInt32_0
         PUSH, __intnl_SystemInt32_c1
         COPY

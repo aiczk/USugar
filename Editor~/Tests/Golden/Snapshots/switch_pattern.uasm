@@ -51,11 +51,12 @@
         PUSH, __const_SystemInt32_3
         PUSH, __intnl_SystemInt32_c0
         COPY
-        JUMP, 0x00000100
+        JUMP, 0x000000e4
     ___start_bb5:
         PUSH, __const_SystemInt32_4
         PUSH, __intnl_SystemInt32_c0
         COPY
+    ___start_bb7:
         JUMP, 0x00000100
     ___start_bb2:
         PUSH, __const_SystemInt32_5

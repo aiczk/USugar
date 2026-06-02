@@ -73,6 +73,7 @@
         PUSH, __intnl_SystemInt32_c4
         PUSH, sum
         COPY
+    ___start_bb4:
         PUSH, __intnl_SystemInt32_c0
         PUSH, __const_SystemInt32_1
         PUSH, __intnl_SystemInt32_c2

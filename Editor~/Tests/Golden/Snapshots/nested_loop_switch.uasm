@@ -97,7 +97,7 @@
         PUSH, __intnl_SystemInt32_c2
         PUSH, acc
         COPY
-    ___start_bb5:
+    __goto__start___switchEnd_1:
         PUSH, __lcl_i_SystemInt32_0
         PUSH, __intnl_SystemInt32_c1
         COPY
