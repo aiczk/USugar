@@ -357,6 +357,16 @@ public class LayoutPlanner
     // Explicit interface implementations produce names with dots — invalid in UASM.
     static string SanitizeId(string name) => name.Replace('.', '_');
 
+    /// <summary>True if the method carries [VRC.SDK3.UdonNetworkCalling.NetworkCallable], which makes it a
+    /// remotely-invokable entry point (kept unmangled, with network-calling metadata emitted for it).</summary>
+    public static bool IsNetworkCallable(IMethodSymbol method)
+    {
+        foreach (var attr in method.GetAttributes())
+            if (attr.AttributeClass?.Name == "NetworkCallableAttribute")
+                return true;
+        return false;
+    }
+
     TypeLayout PlanClass(INamedTypeSymbol type)
     {
         var methods = new Dictionary<IMethodSymbol, MethodLayout>(SymbolEqualityComparer.Default);
@@ -428,8 +438,12 @@ public class LayoutPlanner
             else
             {
                 var safeName = SanitizeId(method.Name);
-                // Mangle if: has parameters, OR name collides with a Udon event export name
-                exportName = (method.Parameters.Length > 0 || UdonEventExportNames.Contains(safeName))
+                // [NetworkCallable] methods must keep their unmangled name — other clients invoke them by name
+                // through SendCustomNetworkEvent, and the runtime's TryGetEntrypointHashFromName looks them up
+                // by the original method name. (Their parameters are still mangled below, like stock UdonSharp.)
+                // Otherwise mangle if: has parameters, OR name collides with a Udon event export name.
+                exportName = (!IsNetworkCallable(method)
+                              && (method.Parameters.Length > 0 || UdonEventExportNames.Contains(safeName)))
                     ? NameAllocator.FormatId(safeName, alloc.Allocate(safeName))
                     : safeName;
             }

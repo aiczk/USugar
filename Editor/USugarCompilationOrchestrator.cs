@@ -10,6 +10,7 @@ using UnityEditor;
 using UdonSharp;
 using UdonSharp.Compiler;
 using VRC.Udon.Editor;
+using VRC.SDK3.UdonNetworkCalling;
 
 /// <summary>
 /// Orchestrates the 3-phase compile pipeline: serial preparation, parallel emit, serial apply.
@@ -265,7 +266,16 @@ static class USugarCompilationOrchestrator
                     {
                         USugarConstantApplier.ApplyConstantValues(program, result.Constants);
                         programAsset.fieldDefinitions = USugarTypeCacheManager.BuildFieldDefinitions(result.Symbol);
-                        programAsset.SerializedProgramAsset.StoreProgram(program);
+                        // [NetworkCallable] entry-point metadata — required for SendCustomNetworkEvent with
+                        // parameters (the runtime looks up the event + its param types via this metadata).
+                        var netMeta = BuildNetworkCallingMetadata(result.Symbol, planner);
+                        if (netMeta.Length > 0)
+                        {
+                            programAsset.SetNetworkCallingMetadata(netMeta);
+                            programAsset.SerializedProgramAsset.StoreProgram(program, netMeta);
+                        }
+                        else
+                            programAsset.SerializedProgramAsset.StoreProgram(program);
                         programAsset.CompiledVersion = UdonSharpProgramVersion.CurrentVersion;
                         var syncMode = USugarCompilerHelper.GetBehaviourSyncMode(result.Symbol);
                         if (syncMode >= 0)
@@ -340,6 +350,35 @@ static class USugarCompilationOrchestrator
         {
             USugarLog.Warn($"Failed to push diagnostics to editor cache: {ex.Message}");
         }
+    }
+
+    // Build the [NetworkCallable] entry-point metadata for a class: for each tagged method, its (unmangled)
+    // export name + per-parameter (mangled export name, CLR type). The runtime/ClientSim uses this to resolve
+    // a SendCustomNetworkEvent-with-parameters call to the receiver method and marshal its arguments.
+    static NetworkCallingEntrypointMetadata[] BuildNetworkCallingMetadata(INamedTypeSymbol classSymbol, LayoutPlanner planner)
+    {
+        var layout = planner.GetLayout(classSymbol);
+        if (layout == null) return Array.Empty<NetworkCallingEntrypointMetadata>();
+        var list = new List<NetworkCallingEntrypointMetadata>();
+        foreach (var member in classSymbol.GetMembers())
+        {
+            if (!(member is IMethodSymbol method) || !LayoutPlanner.IsNetworkCallable(method)) continue;
+            if (!layout.Methods.TryGetValue(method, out var ml)) continue;
+
+            var attrData = method.GetAttributes()
+                .FirstOrDefault(a => a.AttributeClass?.Name == "NetworkCallableAttribute");
+            int rate = attrData != null && attrData.ConstructorArguments.Length > 0
+                       && attrData.ConstructorArguments[0].Value is int r ? r : 0;
+            var attr = new NetworkCallableAttribute(rate);
+
+            var pmeta = new NetworkCallingParameterMetadata[method.Parameters.Length];
+            for (int i = 0; i < method.Parameters.Length; i++)
+                pmeta[i] = new NetworkCallingParameterMetadata(
+                    ml.ParamIds[i], USugarTypeCacheManager.ResolveClrType(method.Parameters[i].Type));
+
+            list.Add(new NetworkCallingEntrypointMetadata(ml.ExportName, attr, pmeta));
+        }
+        return list.ToArray();
     }
 
     static void PushUasmToEditorCache(UdonSharpProgramAsset programAsset, string uasm)
