@@ -451,7 +451,7 @@ public static class ExternResolver
 
     static readonly HashSet<string> SmallIntTypes = new()
     {
-        "SystemByte", "SystemSByte", "SystemInt16", "SystemUInt16",
+        "SystemByte", "SystemSByte", "SystemInt16", "SystemUInt16", "SystemChar",
     };
 
     static void PromoteSmallInt(ref string udonType)

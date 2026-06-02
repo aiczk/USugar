@@ -42,6 +42,14 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
 
         var resultType = GetUdonType(op.Type);
 
+        // long %= / ulong %= : no Udon op_Remainder extern; polyfill a - (a/b)*b (shared with the binary path).
+        if (op.OperatorKind == BinaryOperatorKind.Remainder && Is64BitInt(resultType))
+        {
+            var rem = EmitInt64Remainder(leftVal, rightVal, resultType);
+            EmitWriteBack(op.Target, rem, lv);
+            return rem;
+        }
+
         // Promote small integers for the operation temp.
         // Udon VM has no byte/sbyte/short/ushort operators — operations go through int.
         var opResultType = resultType;

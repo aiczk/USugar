@@ -138,6 +138,24 @@ public abstract class HandlerBase
             new List<CValue> { left, Const(shift, "SystemInt32") }, "SystemInt32");
     }
 
+    /// <summary>True for the 64-bit integer Udon types whose op_Remainder extern does not exist.</summary>
+    protected static bool Is64BitInt(string udonType) => udonType is "SystemInt64" or "SystemUInt64";
+
+    /// <summary>64-bit remainder polyfill: Udon exposes no SystemInt64/SystemUInt64 op_Remainder, so lower
+    /// `a % b` to `a - (a / b) * b` using the matching signed/unsigned Division/Multiplication/Subtraction
+    /// (truncate-toward-zero division makes this exact for both signs). Shared by the binary and compound paths.</summary>
+    protected CValue EmitInt64Remainder(CValue left, CValue right, string t)
+    {
+        var aSlot = _ctx.AllocTemp(t); EmitAssign(aSlot, left);
+        var bSlot = _ctx.AllocTemp(t); EmitAssign(bSlot, right);
+        var quot = ExternCall($"{t}.__op_Division__{t}_{t}__{t}",
+            new List<CValue> { SlotRef(aSlot), SlotRef(bSlot) }, t);
+        var prod = ExternCall($"{t}.__op_Multiplication__{t}_{t}__{t}",
+            new List<CValue> { quot, SlotRef(bSlot) }, t);
+        return ExternCall($"{t}.__op_Subtraction__{t}_{t}__{t}",
+            new List<CValue> { SlotRef(aSlot), prod }, t);
+    }
+
     /// <summary>Emit a void extern call as a statement.</summary>
     protected void EmitExternVoid(string sig, List<CValue> args)
         => _builder.EmitExternVoid(ResolveExtern(sig), args);

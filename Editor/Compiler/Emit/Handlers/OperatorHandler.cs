@@ -123,18 +123,10 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
 
         var resultType = GetUdonType(op.Type);
 
-        // long % long: Udon has no SystemInt64.op_Remainder extern; lower to a - (a / b) * b.
-        if (op.OperatorKind == BinaryOperatorKind.Remainder && resultType == "SystemInt64")
-        {
-            var aSlot = _ctx.AllocTemp("SystemInt64"); EmitAssign(aSlot, leftVal);
-            var bSlot = _ctx.AllocTemp("SystemInt64"); EmitAssign(bSlot, rightVal);
-            var quot = ExternCall("SystemInt64.__op_Division__SystemInt64_SystemInt64__SystemInt64",
-                new List<CValue> { SlotRef(aSlot), SlotRef(bSlot) }, "SystemInt64");
-            var prod = ExternCall("SystemInt64.__op_Multiplication__SystemInt64_SystemInt64__SystemInt64",
-                new List<CValue> { quot, SlotRef(bSlot) }, "SystemInt64");
-            return ExternCall("SystemInt64.__op_Subtraction__SystemInt64_SystemInt64__SystemInt64",
-                new List<CValue> { SlotRef(aSlot), prod }, "SystemInt64");
-        }
+        // long % long / ulong % ulong: Udon has no SystemInt64/SystemUInt64 op_Remainder extern;
+        // lower to a - (a / b) * b via the shared polyfill.
+        if (op.OperatorKind == BinaryOperatorKind.Remainder && Is64BitInt(resultType))
+            return EmitInt64Remainder(leftVal, rightVal, resultType);
 
         var sig = ExternResolver.ResolveBinaryExtern(
             op.OperatorKind, op.OperatorMethod,
@@ -511,6 +503,10 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
                     }
 
                     CValue acc = Const(true, "SystemBoolean");
+                    // For a user struct / tuple scrutinee, members live as object[] indices — there is no Udon
+                    // property getter (SystemObjectArray.__get_X does not exist) — so read via the layout __Get.
+                    var aggMatchType = matchType as INamedTypeSymbol;
+                    bool isAgg = aggMatchType != null && EmitContext.IsAggregateType(aggMatchType);
                     foreach (var sub in rec.PropertySubpatterns)
                     {
                         ITypeSymbol memberType;
@@ -528,9 +524,23 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
                                     $"Property pattern member '{sub.Member?.GetType().Name}' is not supported "
                                     + "(only System/Unity properties and fields).");
                         }
-                        var memberVal = ExternCall(
-                            ExternResolver.BuildPropertyGetSignature(memberOwner, memberName, GetUdonType(memberType)),
-                            new List<CValue> { SlotRef(valSlot) }, GetUdonType(memberType));
+                        CValue memberVal;
+                        if (isAgg && _ctx.GetAggregateLayout(aggMatchType).TryGetIndex(memberName, out var aggMemberIdx))
+                        {
+                            // Aggregate member: read the boxed object[] slot, then materialize into a typed temp
+                            // (Udon COPY unboxes) so the sub-pattern compares with the correct type tag.
+                            var rawMember = ExternCall("SystemObjectArray.__Get__SystemInt32__SystemObject",
+                                new List<CValue> { SlotRef(valSlot), Const(aggMemberIdx, "SystemInt32") }, "SystemObject");
+                            var memberSlot = _ctx.AllocTemp(GetUdonType(memberType));
+                            EmitAssign(memberSlot, rawMember);
+                            memberVal = SlotRef(memberSlot);
+                        }
+                        else
+                        {
+                            memberVal = ExternCall(
+                                ExternResolver.BuildPropertyGetSignature(memberOwner, memberName, GetUdonType(memberType)),
+                                new List<CValue> { SlotRef(valSlot) }, GetUdonType(memberType));
+                        }
                         var subResult = EmitPatternCheckImpl(memberVal, memberType, sub.Pattern);
                         acc = ExternCall(
                             "SystemBoolean.__op_ConditionalAnd__SystemBoolean_SystemBoolean__SystemBoolean",
