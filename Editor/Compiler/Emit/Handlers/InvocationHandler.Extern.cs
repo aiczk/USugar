@@ -667,20 +667,10 @@ public partial class InvocationHandler
             }
         }
 
+        // Under A-normal form EmitCallToMethod already materialized the call (a non-void call returns a CSlotRef
+        // leaf, void returns null), so the call and its copy-in are sequenced before the copy-out below — no
+        // manual re-sequencing of a lazy call is needed.
         var result = EmitCallToMethod(target, args);
-
-        var hasRefOut = target.Parameters.Any(p => p.RefKind is RefKind.Ref or RefKind.Out);
-
-        // Sequence the call BEFORE the copy-out below. A non-recursive call returns a LAZY CInternalCall that
-        // the outer expression-statement emits only later; the copy-out (arg = param) would then run before
-        // the call (param = arg), reading uninitialised param fields and clobbering the caller's args to 0.
-        // Materialising here forces the call (and its copy-in) to be emitted first. (The recursive path in
-        // EmitCallToMethod already emits eagerly, returning null/SlotRef rather than a CInternalCall.)
-        if (hasRefOut && result is CInternalCall)
-        {
-            if (target.ReturnsVoid) { EmitExprStmt(result); result = null; }
-            else { var rt = _ctx.AllocTemp(GetUdonType(target.ReturnType)); EmitAssign(rt, result); result = SlotRef(rt); }
-        }
 
         // Copy-out for ref/out params
         for (int i = 0; i < op.Arguments.Length; i++)

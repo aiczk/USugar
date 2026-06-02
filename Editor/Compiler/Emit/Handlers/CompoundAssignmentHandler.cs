@@ -155,15 +155,8 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
         if (opType != udonType)
             resultVal = EmitNarrowingConvert(resultVal, opType, udonType);
 
-        // Materialize resultVal to a temp slot before write-back to avoid
-        // the extern call being emitted twice (once for store, once for return value).
-        if (!op.IsPostfix)
-        {
-            var tempSlot = _ctx.AllocTemp(udonType);
-            EmitAssign(tempSlot, resultVal);
-            resultVal = SlotRef(tempSlot);
-        }
-
+        // resultVal is already a materialized (single-assignment) slot leaf under A-normal form, so it is
+        // stable across the write-back and the return — no extra snapshot needed.
         EmitWriteBack(op.Target, resultVal, lv);
 
         return op.IsPostfix ? savedVal : resultVal;
