@@ -29,14 +29,33 @@ public class DeconstructionAssignmentHandler : AssignmentHandlerBase, IOperation
             throw new System.NotSupportedException(
                 $"Deconstruction target must be a tuple, got {target.GetType().Name} ({target.Kind})");
 
-        if (op.Value is ITupleOperation valueTuple)
+        // `(a,b)=(b,a)` with existing-lvalue targets wraps the RHS tuple in a tuple→tuple IConversionOperation,
+        // whereas `var (a,b)=(1,2)` is a bare tuple. Unwrap only a same-shape, same-element-type conversion (the
+        // swap/rotate/Fibonacci idiom); a genuinely narrowing/widening element conversion is left to the method
+        // path below rather than risk a silently mistyped store.
+        var value = op.Value;
+        if (value is IConversionOperation vconv && vconv.Operand is ITupleOperation innerTuple
+            && innerTuple.Elements.Length == targetTuple.Elements.Length
+            && Enumerable.Range(0, innerTuple.Elements.Length).All(
+                i => GetUdonType(innerTuple.Elements[i].Type) == GetUdonType(targetTuple.Elements[i].Type)))
+            value = innerTuple;
+
+        if (value is ITupleOperation valueTuple)
         {
-            // (a, b) = (expr1, expr2) → element-wise assignment
+            // (a, b) = (expr1, expr2): C# evaluates the ENTIRE RHS tuple before assigning ANY target. Snapshot
+            // every RHS element into a fresh temp first (eager evaluation against pre-store values), THEN assign;
+            // otherwise a later element that reads an already-overwritten target (swap (a,b)=(b,a), rotate,
+            // Fibonacci step) reads the clobbered value. Aggregate elements are deep-cloned by clone-on-read.
+            var snapshots = new List<CValue>(targetTuple.Elements.Length);
             for (int i = 0; i < targetTuple.Elements.Length; i++)
             {
-                var valueVal = VisitExpression(valueTuple.Elements[i]);
-                AssignToLValue(targetTuple.Elements[i], valueVal);
+                var elemVal = VisitExpression(valueTuple.Elements[i]);
+                var tmp = _ctx.AllocTemp(GetUdonType(targetTuple.Elements[i].Type));
+                EmitAssign(tmp, elemVal);
+                snapshots.Add(SlotRef(tmp));
             }
+            for (int i = 0; i < targetTuple.Elements.Length; i++)
+                AssignToLValue(targetTuple.Elements[i], snapshots[i]);
         }
         else
         {

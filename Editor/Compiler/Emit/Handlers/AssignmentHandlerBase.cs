@@ -61,11 +61,20 @@ public abstract class AssignmentHandlerBase : HandlerBase
             }
             case IArrayElementReferenceOperation arrayElem:
             {
-                var arrayVal = VisitExpression(arrayElem.ArrayReference);
-                var indexVal = VisitExpression(arrayElem.Indices[0]);
                 var arrSymbol = arrayElem.ArrayReference.Type as IArrayTypeSymbol;
                 var arrayType = GetArrayType(arrSymbol);
                 var elemAccessorType = GetArrayElemType(arrSymbol);
+
+                // Materialize the array ref and index into temps ONCE. This capture is reused by EmitWriteBack
+                // (compound RMW), and lazy nodes re-emit their whole subtree per lowering with no CSE — so a
+                // side-effecting index (`arr[Next()] += v`) would otherwise run twice, with the read Get and the
+                // write Set targeting DIFFERENT elements. Mirrors the indexer-arg caching above.
+                var arrTmp = _ctx.AllocTemp(arrayType);
+                EmitAssign(arrTmp, VisitExpression(arrayElem.ArrayReference));
+                var arrayVal = SlotRef(arrTmp);
+                var idxTmp = _ctx.AllocTemp("SystemInt32");
+                EmitAssign(idxTmp, VisitExpression(arrayElem.Indices[0]));
+                var indexVal = SlotRef(idxTmp);
 
                 // Read current value: arr[idx]
                 var valResult = ExternCall(

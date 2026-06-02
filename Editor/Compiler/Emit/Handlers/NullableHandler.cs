@@ -98,6 +98,12 @@ public class NullableHandler : HandlerBase, IExpressionHandler
         // a ?? b → var r = a; if (r == null) r = b;
         var resultType = GetUdonType(op.Type);
         var resultSlot = _ctx.AllocTemp(resultType);
+        // For an aggregate (struct/tuple) result both branches yield a boxed object[] that aliases the
+        // nullable's internal storage; deep-clone so the copied-out value has independent value semantics.
+        // When op.Type is the aggregate, the right side has the non-nullable aggregate type → always non-null,
+        // and the non-null left is cloned in the else branch, so EmitDeepCloneAggregate never sees null.
+        var aggType = ResolveType(op.Type) as INamedTypeSymbol;
+        bool aggResult = aggType != null && EmitContext.IsAggregateType(aggType);
         var leftVal = VisitExpression(op.Value);
         EmitAssign(resultSlot, leftVal);
 
@@ -109,12 +115,16 @@ public class NullableHandler : HandlerBase, IExpressionHandler
             new List<CValue> { SlotRef(resultSlot), nullConst },
             "SystemBoolean");
 
+        System.Action<CoreBuilder> elseB = null;
+        if (aggResult)
+            elseB = b => EmitAssign(resultSlot, EmitDeepCloneAggregate(SlotRef(resultSlot), aggType));
+
         _builder.EmitIf(condVal, b =>
         {
             // left IS null → use right
             var rightVal = VisitExpression(op.WhenNull);
-            EmitAssign(resultSlot, rightVal);
-        });
+            EmitAssign(resultSlot, aggResult ? EmitDeepCloneAggregate(rightVal, aggType) : rightVal);
+        }, elseB);
 
         return SlotRef(resultSlot);
     }

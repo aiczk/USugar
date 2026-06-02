@@ -156,10 +156,15 @@ public class LoopHandler : HandlerBase, IOperationHandler
             _ =>
             {
                 // Body: loopVar = arr[idx]; <body>
-                var elemVal = ExternCall(
+                CValue elemVal = ExternCall(
                     $"{arrayType}.__Get__SystemInt32__{elemAccessorType}",
                     new List<CValue> { SlotRef(collSlot), SlotRef(idxSlot) },
                     elemType);
+                // foreach yields a by-value COPY of the element. For an aggregate (struct/tuple) element the
+                // raw __Get__ returns the LIVE backing object[]; deep-clone it so mutating the loop variable
+                // does not write through to the array (C# value-copy semantics; mirrors VisitArrayElementReference).
+                if (arrayTypeSymbol.ElementType is INamedTypeSymbol elemAgg && EmitContext.IsAggregateType(elemAgg))
+                    elemVal = EmitDeepCloneAggregate(elemVal, elemAgg);
                 EmitStoreField(loopVarId, elemVal);
 
                 _ctx.SwitchBreakLabels.Push(null); // sentinel: loop break should not target switch

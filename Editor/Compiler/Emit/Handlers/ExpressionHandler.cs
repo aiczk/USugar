@@ -26,12 +26,12 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
     {
         ILiteralOperation op => VisitLiteral(op),
         ILocalReferenceOperation localRef => _localBindings.TryGetValue(localRef.Local, out var localBinding)
-                                                 ? EmitContext.IsAggregateType(localRef.Type) && localRef.Type is INamedTypeSymbol laggT
+                                                 ? ResolveType(localRef.Type) is INamedTypeSymbol laggT && EmitContext.IsAggregateType(laggT)
                                                      ? EmitDeepCloneAggregate(LoadField(localBinding.Id, "SystemObjectArray"), laggT)
                                                      : LoadField(localBinding.Id, GetUdonType(localRef.Type))
                                                  : throw new InvalidOperationException($"Cannot resolve local variable '{localRef.Local.Name}' in method '{_currentMethod?.Name ?? "(none)"}'."),
         IFieldReferenceOperation op => VisitFieldReference(op),
-        IParameterReferenceOperation paramRef => EmitContext.IsAggregateType(paramRef.Type) && paramRef.Type is INamedTypeSymbol paggT
+        IParameterReferenceOperation paramRef => ResolveType(paramRef.Type) is INamedTypeSymbol paggT && EmitContext.IsAggregateType(paggT)
                                                      ? EmitDeepCloneAggregate(LoadParam(paramRef.Parameter), paggT)
                                                      : LoadParam(paramRef.Parameter),
         IInstanceReferenceOperation when _ctx.CurrentStructReceiverParamId != null

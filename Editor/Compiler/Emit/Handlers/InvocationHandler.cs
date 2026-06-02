@@ -158,11 +158,20 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
     CValue EmitNullableGetValueOrDefault(IInvocationOperation op, ITypeSymbol underlying)
     {
         var uType = GetUdonType(underlying);
+        // For an aggregate (struct/tuple) underlying, the present value is a boxed object[] aliasing the
+        // nullable's storage — deep-clone it out (value semantics). default(T) for an aggregate is a fresh
+        // zero-initialized struct, NOT null, so use EmitNewAggregate rather than the scalar value default.
+        var aggType = ResolveType(underlying) as INamedTypeSymbol;
+        bool aggResult = aggType != null && EmitContext.IsAggregateType(aggType);
         var nvSlot = _ctx.AllocTemp("SystemObject");
         EmitAssign(nvSlot, VisitExpression(op.Instance));
         var resultSlot = _ctx.AllocTemp(uType);
-        EmitAssign(resultSlot, op.Arguments.Length > 0 ? VisitExpression(op.Arguments[0].Value) : EmitValueTypeDefault(uType));
-        _builder.EmitIf(EmitNullableHasValue(SlotRef(nvSlot)), _ => EmitAssign(resultSlot, SlotRef(nvSlot)));
+        var fallback = op.Arguments.Length > 0
+            ? VisitExpression(op.Arguments[0].Value)
+            : (aggResult ? EmitNewAggregate(aggType) : EmitValueTypeDefault(uType));
+        EmitAssign(resultSlot, fallback);
+        _builder.EmitIf(EmitNullableHasValue(SlotRef(nvSlot)),
+            _ => EmitAssign(resultSlot, aggResult ? EmitDeepCloneAggregate(SlotRef(nvSlot), aggType) : SlotRef(nvSlot)));
         return SlotRef(resultSlot);
     }
 
