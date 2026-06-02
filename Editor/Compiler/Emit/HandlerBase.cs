@@ -384,7 +384,6 @@ public abstract class HandlerBase
         Microsoft.CodeAnalysis.Operations.BinaryOperatorKind kind, IMethodSymbol operatorMethod, ITypeSymbol resultType)
     {
         var resultNullable = EmitContext.IsNullableT(resultType, out var resU);
-        var valueResultType = GetUdonType(resultNullable ? resU : resultType);
 
         var aSlot = _ctx.AllocTemp("SystemObject"); EmitAssign(aSlot, leftVal);
         var bSlot = _ctx.AllocTemp("SystemObject"); EmitAssign(bSlot, rightVal);

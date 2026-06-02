@@ -57,7 +57,7 @@ public partial class InvocationHandler
         {
             // User-defined property getter → internal call
             if (op.Property.GetMethod != null
-                && _methodFunctions.TryGetValue(op.Property.GetMethod, out var getterFunc))
+                && _methodFunctions.ContainsKey(op.Property.GetMethod))
                 return EmitCallToMethod(op.Property.GetMethod, new List<CLeaf>());
 
             // Auto-property on this class → direct variable access (user-defined classes only)

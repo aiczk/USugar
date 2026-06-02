@@ -827,7 +827,6 @@ public class UasmEmitter
             if (!_methodFunctions.TryGetValue(method, out var realFunc)) continue;
             // Skip methods with tuple returns (not supported as delegate targets)
             if (!method.ReturnsVoid && method.ReturnType.IsTupleType) continue;
-            var ml = bridge.RealMethodLayout;
 
             // Build canonical convention key using shared helper
             var sigPart = BuildBridgeSigPart(method);
@@ -973,7 +972,6 @@ public class UasmEmitter
     {
         _currentMethod = method;
         var func = _methodFunctions[method];
-        var idx = _methodSlots[method].Index;
 
         // Struct instance methods/ctors carry the receiver object[] as synthetic param0; make `this`
         // resolve to it for the body. Static (operator) struct methods have no receiver.

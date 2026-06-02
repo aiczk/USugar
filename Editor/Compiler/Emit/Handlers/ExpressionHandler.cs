@@ -149,7 +149,6 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
         // cross-behaviour field → GetProgramVariable
         if (ExternResolver.IsUdonSharpBehaviour(fieldRef.Field.ContainingType))
         {
-            var fldType = GetUdonType(fieldRef.Field.Type);
             var instanceVal = VisitExpression(fieldRef.Instance);
             var nameConst = Const(fieldRef.Field.Name, "SystemString");
             return ExternCall(

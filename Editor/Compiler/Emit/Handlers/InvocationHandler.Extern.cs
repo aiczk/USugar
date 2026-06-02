@@ -613,7 +613,7 @@ public partial class InvocationHandler
 
     CLeaf EmitCrossClassCall(IInvocationOperation op, IMethodSymbol target)
     {
-        var (exportName, paramIds, retId) = GetCalleeLayout(target);
+        var (exportName, paramIds, _) = GetCalleeLayout(target);
         var instanceVal = VisitExpression(op.Instance);
 
         // Build param pairs for CCrossCall

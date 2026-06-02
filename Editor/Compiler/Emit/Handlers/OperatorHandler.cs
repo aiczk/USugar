@@ -735,7 +735,6 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
     {
         "SystemBoolean" => "False",
         "SystemString" => "null",
-        "SystemSingle" or "SystemDouble" or "SystemDecimal" => "0",
         _ => "0"
     };
 
