@@ -330,6 +330,18 @@ static class USugarCompilationOrchestrator
             var diagType = USugarReflectionTargets.CompileDiagnosticType;
             if (diagType == null) return;
 
+            // Fail loud if the per-field bindings broke (e.g. an SDK rename of a CompileDiagnostic field, where
+            // the type still resolves but a FieldInfo becomes null). Otherwise the null FieldInfo would NRE
+            // inside the loop, get swallowed by the catch below as a mere Warn, and silently drop ALL inline
+            // diagnostics while the compile still appears to succeed — the documented fail-silent failure mode.
+            if (USugarReflectionTargets.DiagSeverity == null || USugarReflectionTargets.DiagFile == null
+                || USugarReflectionTargets.DiagLine == null || USugarReflectionTargets.DiagCharacter == null
+                || USugarReflectionTargets.DiagMessage == null)
+            {
+                USugarLog.Error("CompileDiagnostic field bindings did not resolve — inline editor diagnostics disabled. The UdonSharp SDK may have changed; check USugarReflectionTargets. (Console errors still report normally.)");
+                return;
+            }
+
             var arr = Array.CreateInstance(diagType, diagnostics.Count);
             for (int i = 0; i < diagnostics.Count; i++)
             {
@@ -437,7 +449,10 @@ static class USugarCompilationOrchestrator
         using var md5 = MD5.Create();
         using var ms = new MemoryStream();
         using var writer = new StreamWriter(ms);
-        foreach (var p in sourcePaths)
+        // Sort (ordinal, locale-independent) so a permuted-but-identical source set with unchanged write times
+        // hashes the same — AssetDatabase.FindAssets ordering is not contractually stable, and an unsorted hash
+        // would otherwise produce a false cache miss (redundant recompile).
+        foreach (var p in sourcePaths.OrderBy(s => s, StringComparer.Ordinal))
         {
             writer.Write(p);
             writer.Write(File.GetLastWriteTimeUtc(p).Ticks);
