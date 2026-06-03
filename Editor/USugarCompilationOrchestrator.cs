@@ -258,9 +258,18 @@ static class USugarCompilationOrchestrator
                 {
                     var programAsset = USugarTypeCacheManager.FindProgramAsset(result.Symbol.Name,
                         result.Tree.FilePath, programAssetLookup);
-                    if (programAsset == null) 
+                    if (programAsset == null)
+                    {
+                        // Emitted a behaviour but found no matching UdonSharpProgramAsset (deleted/renamed asset,
+                        // or a class<->asset name+path mismatch). The compiled UASM never reaches an asset — a real
+                        // failure, not a no-op. Surface it loudly + count it so the run is NOT marked up-to-date.
+                        var miss = $"No UdonSharpProgramAsset found for behaviour '{result.Symbol.Name}'; its compiled program was not applied. Create or relink the program asset, then recompile.";
+                        USugarLog.Error($"{result.Tree.FilePath}: {miss}");
+                        collectedDiagnostics.Add((result.Tree.FilePath, 0, 0, miss, "Error"));
+                        failures++;
                         continue;
-                    
+                    }
+
                     var program = USugarConstantApplier.AssembleUasm(result.Uasm, result.HeapSize);
                     if (program != null)
                     {
@@ -285,7 +294,9 @@ static class USugarCompilationOrchestrator
                     }
                     else
                     {
-                        USugarLog.Error($"Failed to assemble UASM for {result.Symbol.Name}");
+                        var failMsg = $"Failed to assemble UASM for {result.Symbol.Name}";
+                        USugarLog.Error(failMsg);
+                        collectedDiagnostics.Add((result.Tree.FilePath, 0, 0, failMsg, "Error"));
                         failures++;
                     }
                 }
@@ -298,9 +309,17 @@ static class USugarCompilationOrchestrator
             }
 
             sw.Stop();
-            SessionState.SetString(FingerprintKey, fingerprint);
-            SessionState.SetBool(AppliedKey, applyToAssets || lastApplied);
             LastCompileHadErrors = failures > 0;
+            // Advance the "up-to-date / applied" success state ONLY on a clean run. On ANY failure (emit error,
+            // asset-miss, or assemble failure) leave the fingerprint UNCHANGED so the next compile re-runs and
+            // re-diagnoses instead of early-returning on a falsely-cached fingerprint (which would strand a stale
+            // asset with no diagnostic, and leave LastCompileHadErrors holding this run's value unread by the
+            // skipped next compile). Mirrors stock UdonSharp's rehash-only-on-success discipline.
+            if (failures == 0)
+            {
+                SessionState.SetString(FingerprintKey, fingerprint);
+                SessionState.SetBool(AppliedKey, applyToAssets || lastApplied);
+            }
             var msg = failures > 0
                 ? $"Compile of {count} script{(count != 1 ? "s" : "")} finished in {sw.Elapsed:mm\\:ss\\.fff} ({failures} failed)"
                 : $"Compile of {count} script{(count != 1 ? "s" : "")} finished in {sw.Elapsed:mm\\:ss\\.fff}";
