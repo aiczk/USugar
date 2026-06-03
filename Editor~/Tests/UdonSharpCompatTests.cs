@@ -37,13 +37,27 @@ public class UdonSharpCompatTests
     public void Compat_ArrayTest()
         => TestHelper.CompileToUasm(ReadTestFile("Core", "ArrayTest.cs"), "ArrayTest");
 
-    // Real codegen bug (found by un-skipping): Utilities.IsValid's extern is built from the ARGUMENT type
-    // (UnityEngineObject) rather than the parameter's declared System.Object, so it emits a nonexistent
-    // __IsValid__UnityEngineObject__ extern (the real Udon node is __IsValid__SystemObject__). Fix the codegen,
-    // then re-enable.
-    [Fact(Skip = "codegen bug: Utilities.IsValid emits __IsValid__UnityEngineObject__ (arg type) instead of __IsValid__SystemObject__ (param type)")]
+    [Fact]
     public void Compat_MethodCallsTest()
         => TestHelper.CompileToUasm(ReadTestFile("Core", "MethodCallsTest.cs"), "MethodCallsTest");
+
+    [Fact]
+    public void Utilities_IsValid_ResolvesToSystemObjectExtern()
+    {
+        // Utilities.IsValid takes a UnityEngine.Object in C#, but the only Udon node is __IsValid__SystemObject__.
+        // USugar must gap-fill the reference-type param to SystemObject, not emit the nonexistent
+        // __IsValid__UnityEngineObject__ extern (which fails to assemble in VRChat).
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+using UnityEngine;
+public class IsValidExternTest : UdonSharpBehaviour {
+    public Transform target;
+    public bool ok;
+    void Start() { ok = VRC.SDKBase.Utilities.IsValid(target); }
+}", "IsValidExternTest");
+        Assert.Contains("VRCSDKBaseUtilities.__IsValid__SystemObject__SystemBoolean", uasm);
+        Assert.DoesNotContain("__IsValid__UnityEngineObject__", uasm);
+    }
 
     [Fact]
     public void Compat_PropertyTest()

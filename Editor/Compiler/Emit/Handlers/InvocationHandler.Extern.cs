@@ -829,6 +829,30 @@ public partial class InvocationHandler
                     sig = origSig;
             }
         }
+        // Non-generic extern whose built signature is invalid: some Udon nodes name a reference-type parameter
+        // as SystemObject even though the C# parameter is a more specific reference type (e.g. Utilities.IsValid
+        // takes a UnityEngine.Object, but Udon's node is __IsValid__SystemObject__). Gap-fill by retrying with
+        // reference-type (non-array) params coerced to SystemObject; adopt it only if that signature is valid, so
+        // a valid specific signature is never overridden.
+        else
+        {
+            var isValid = ExternResolver.IsExternValid;
+            if (isValid != null && paramTypeOverride == null && !isValid(sig)
+                && method.Parameters.Any(p => p.Type.IsReferenceType && p.Type.TypeKind != TypeKind.Array))
+            {
+                var coercedPts = method.Parameters.Select(p =>
+                {
+                    var tn = (p.Type.IsReferenceType && p.Type.TypeKind != TypeKind.Array)
+                        ? "SystemObject" : GetUdonType(p.Type);
+                    if (p.RefKind is RefKind.Out or RefKind.Ref) tn += "Ref";
+                    return tn;
+                }).ToArray();
+                var coercedSig = ExternResolver.BuildMethodSignature(
+                    containingType, methodName, coercedPts, GetUdonType(method.ReturnType));
+                if (isValid(coercedSig))
+                    sig = coercedSig;
+            }
+        }
 
         return sig;
     }
