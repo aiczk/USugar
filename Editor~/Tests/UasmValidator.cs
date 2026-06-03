@@ -341,6 +341,10 @@ public static class UasmValidator
 
         var returnType = afterDot.Substring(lastDunder + 2);
         int returnPush = returnType == "SystemVoid" ? 0 : 1;
+        // A generic component extern (…__T / …__TArray, e.g. GetComponentInChildren<T>(bool)) takes an extra
+        // SystemType argument (the type to fetch), so it pushes one beyond its name-encoded params — widen the
+        // upper bound to avoid a false positive (the codegen is byte-identical to stock UdonSharp here).
+        bool genericReturn = returnType is "T" or "TArray";
 
         // Find parameter section: between method name and return type
         var beforeReturn = afterDot.Substring(0, lastDunder);
@@ -355,6 +359,6 @@ public static class UasmValidator
         }
 
         var staticCount = paramCount + returnPush;
-        return (staticCount, staticCount + 1);
+        return (staticCount, staticCount + 1 + (genericReturn ? 1 : 0));
     }
 }

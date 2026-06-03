@@ -29,15 +29,19 @@ public class UdonSharpCompatTests
 
     // --- Core ---
 
-    [Fact(Skip = "Udon VM missing: long % op_Remainder")]
+    [Fact]
     public void Compat_ArithmeticTest()
         => TestHelper.CompileToUasm(ReadTestFile("Core", "ArithmeticTest.cs"), "ArithmeticTest");
 
-    [Fact(Skip = "TODO: validator push count mismatch")]
+    [Fact]
     public void Compat_ArrayTest()
         => TestHelper.CompileToUasm(ReadTestFile("Core", "ArrayTest.cs"), "ArrayTest");
 
-    [Fact(Skip = "Udon VM missing: string indexer get_Chars/get_Item")]
+    // Real codegen bug (found by un-skipping): Utilities.IsValid's extern is built from the ARGUMENT type
+    // (UnityEngineObject) rather than the parameter's declared System.Object, so it emits a nonexistent
+    // __IsValid__UnityEngineObject__ extern (the real Udon node is __IsValid__SystemObject__). Fix the codegen,
+    // then re-enable.
+    [Fact(Skip = "codegen bug: Utilities.IsValid emits __IsValid__UnityEngineObject__ (arg type) instead of __IsValid__SystemObject__ (param type)")]
     public void Compat_MethodCallsTest()
         => TestHelper.CompileToUasm(ReadTestFile("Core", "MethodCallsTest.cs"), "MethodCallsTest");
 
@@ -139,10 +143,6 @@ public class UdonSharpCompatTests
         => TestHelper.CompileToUasm(ReadTestFile("RegressionTests", "LampOrderOfOpsTests.cs"), "LampOrderOfOpsTests");
 
     // --- Bugs (Layer 2) ---
-
-    [Fact(Skip = "VM: MemberInfo.Name extern missing in Udon VM")]
-    public void Compat_AccessViaAlternateInvocee()
-        => TestHelper.CompileToUasm(ReadTestFile("BugTests", "AccessViaAlternateInvocee", "AccessViaAlternateInvocee.cs"), "AccessViaAlternateInvocee");
 
     [Fact]
     public void Compat_TestTernary()

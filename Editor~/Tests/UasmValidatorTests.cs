@@ -146,26 +146,6 @@ public class UasmValidatorTests
         Assert.Contains("JUMP_IF_FALSE expects 1 PUSH, got 0", ex.Message);
     }
 
-    [Fact(Skip = "TODO: validator now allows push before jump")]
-    public void StackBalance_JumpWithPendingPush_Throws()
-    {
-        var uasm = @".data_start
-    __refl_typeid: %SystemInt64, null
-    a: %SystemInt32, null
-.data_end
-.code_start
-    .export _start
-    _start:
-        PUSH, a
-        JUMP, 0x00000010
-    end:
-        JUMP, 0x00000010
-.code_end
-";
-        var ex = Assert.Throws<UasmValidationException>(() => UasmValidator.Validate(uasm));
-        Assert.Contains("jump with non-empty stack", ex.Message);
-    }
-
     [Fact]
     public void StackBalance_ExternConsistency_MismatchThrows()
     {
