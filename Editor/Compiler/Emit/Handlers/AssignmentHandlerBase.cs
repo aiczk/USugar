@@ -42,6 +42,21 @@ public abstract class AssignmentHandlerBase : HandlerBase
                 var currentVal = EmitCallToMethod(idxRef.Property.GetMethod, new List<CLeaf>(cachedArgs));
                 return new LValueCapture { Value = currentVal, IndexArgs = cachedArgs };
             }
+            // User-defined indexer on a user STRUCT instance (`s[i] += x`): cache the struct receiver and the
+            // (possibly side-effecting) index args ONCE, then read via the getter with the receiver as param0.
+            // The same receiver/args are reused by the setter in EmitWriteBack. Mirrors VisitIndexerGet.
+            case IPropertyReferenceOperation { Property: { IsIndexer: true } } sIdxRef
+                when sIdxRef.Instance?.Type is INamedTypeSymbol sIdxType && EmitContext.IsAggregateType(sIdxType)
+                && sIdxRef.Property.GetMethod is { } sIdxGetter && _methodFunctions.ContainsKey(sIdxGetter.OriginalDefinition):
+            {
+                var recv = LoadInstanceRaw(sIdxRef.Instance);
+                var cachedArgs = new List<CLeaf>();
+                foreach (var arg in sIdxRef.Arguments) cachedArgs.Add(VisitExpression(arg.Value));
+                var getterArgs = new List<CLeaf> { recv };
+                getterArgs.AddRange(cachedArgs);
+                var currentVal = EmitCallToMethod(sIdxGetter.OriginalDefinition, getterArgs);
+                return new LValueCapture { Value = currentVal, ArrayVal = recv, IndexArgs = cachedArgs };
+            }
             case IFieldReferenceOperation aggFieldRef
                 when aggFieldRef.Instance != null
                 && aggFieldRef.Instance.Type is INamedTypeSymbol aggCapType
@@ -208,6 +223,20 @@ public abstract class AssignmentHandlerBase : HandlerBase
                     return;
                 }
                 break;
+            }
+            // User-defined indexer on a user STRUCT instance (`s[i] = v` / `s[i] += v`) → call the setter with
+            // the struct receiver (object[]) as param0, the index args, then the value. Reuse the receiver/args
+            // cached by CaptureLValue (compound assignment); without this it falls to a bogus __set_Item extern.
+            case IPropertyReferenceOperation { Property: { IsIndexer: true, SetMethod: { } aggIdxSetter } } aggIdxRef
+                when aggIdxRef.Instance?.Type is INamedTypeSymbol aggIdxType && EmitContext.IsAggregateType(aggIdxType)
+                && _methodFunctions.ContainsKey(aggIdxSetter.OriginalDefinition):
+            {
+                var setterArgs = new List<CLeaf> { lv.ArrayVal ?? LoadInstanceRaw(aggIdxRef.Instance) };
+                if (lv.IndexArgs != null) setterArgs.AddRange(lv.IndexArgs);
+                else foreach (var arg in aggIdxRef.Arguments) setterArgs.Add(VisitExpression(arg.Value));
+                setterArgs.Add(valueVal);
+                EmitExprStmt(EmitCallToMethod(aggIdxSetter.OriginalDefinition, setterArgs));
+                return;
             }
             // Resolve containing type and instance
             case IPropertyReferenceOperation propRef:

@@ -171,6 +171,19 @@ public partial class InvocationHandler
             return EmitCallToMethod(op.Property.GetMethod, args);
         }
 
+        // User-defined indexer on a user STRUCT instance (`s[i]`) → call the getter with the struct receiver
+        // (object[]) as param0 plus the index args, like a struct computed property. Without this it falls to
+        // a bogus SystemObjectArray.__get_Item extern the validator rejects. (diff-fuzz wave 4)
+        if (op.Instance != null && op.Instance.Type is INamedTypeSymbol aggIdx && EmitContext.IsAggregateType(aggIdx)
+            && op.Property.GetMethod is { } idxGetter && _methodFunctions.ContainsKey(idxGetter.OriginalDefinition))
+        {
+            var sargs = new List<CLeaf> { LoadInstanceRaw(op.Instance) };
+            foreach (var arg in op.Arguments) sargs.Add(VisitExpression(arg.Value));
+            var ret = EmitCallToMethod(idxGetter.OriginalDefinition, sargs);
+            return op.Property.Type is INamedTypeSymbol idxRetAgg && EmitContext.IsAggregateType(idxRetAgg)
+                ? EmitDeepCloneAggregate(ret, idxRetAgg) : ret;
+        }
+
         var cType = GetUdonType(op.Property.ContainingType);
         var rType = GetUdonType(op.Property.Type);
 

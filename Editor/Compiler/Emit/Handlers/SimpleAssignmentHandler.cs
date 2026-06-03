@@ -43,6 +43,21 @@ public class SimpleAssignmentHandler : AssignmentHandlerBase, IExpressionHandler
             return srcVal;
         }
 
+        // User-defined indexer on a user STRUCT instance (`s[i] = v`) → call the setter with the struct
+        // receiver object[] as param0, the index args, then the value. Mirrors the GET routing in
+        // VisitIndexerGet; without it this falls to a bogus SystemObjectArray.__set_Item extern. (diff-fuzz wave 4)
+        if (assign.Target is IPropertyReferenceOperation { Property: { IsIndexer: true, SetMethod: { } aggIdxSetter } } aggIdxSetRef
+            && aggIdxSetRef.Instance?.Type is INamedTypeSymbol aggIdxSetType && EmitContext.IsAggregateType(aggIdxSetType)
+            && _methodFunctions.ContainsKey(aggIdxSetter.OriginalDefinition))
+        {
+            var setterArgs = new List<CLeaf> { LoadInstanceRaw(aggIdxSetRef.Instance) };
+            foreach (var arg in aggIdxSetRef.Arguments) setterArgs.Add(VisitExpression(arg.Value));
+            var srcVal = VisitExpression(assign.Value);
+            setterArgs.Add(srcVal);
+            EmitExprStmt(EmitCallToMethod(aggIdxSetter.OriginalDefinition, setterArgs));
+            return srcVal;
+        }
+
         if (assign.Target is IArrayElementReferenceOperation arrayElem)
         {
             var arrayVal = VisitExpression(arrayElem.ArrayReference);
