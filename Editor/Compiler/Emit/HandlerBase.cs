@@ -216,13 +216,16 @@ public abstract class HandlerBase
             new List<CLeaf> { left, Const(shift, "SystemInt32") }, "SystemInt32");
     }
 
-    /// <summary>True for the 64-bit integer Udon types whose op_Remainder extern does not exist.</summary>
-    protected static bool Is64BitInt(string udonType) => udonType is "SystemInt64" or "SystemUInt64";
+    /// <summary>True for the integer Udon types whose op_Remainder extern does not exist (Int64/UInt64, and
+    /// also UInt32 — Udon ships uint Division/Multiplication/Subtraction but no uint Remainder).</summary>
+    protected static bool RemainderNeedsPolyfill(string udonType)
+        => udonType is "SystemInt64" or "SystemUInt64" or "SystemUInt32";
 
-    /// <summary>64-bit remainder polyfill: Udon exposes no SystemInt64/SystemUInt64 op_Remainder, so lower
-    /// `a % b` to `a - (a / b) * b` using the matching signed/unsigned Division/Multiplication/Subtraction
-    /// (truncate-toward-zero division makes this exact for both signs). Shared by the binary and compound paths.</summary>
-    protected CLeaf EmitInt64Remainder(CLeaf left, CLeaf right, string t)
+    /// <summary>Remainder polyfill for types lacking an op_Remainder extern (see RemainderNeedsPolyfill): lower
+    /// `a % b` to `a - (a / b) * b` using the matching signed/unsigned Division/Multiplication/Subtraction.
+    /// Truncate-toward-zero (signed) / floor (unsigned) division makes this exact for every case, including
+    /// unsigned dividends above int.MaxValue. Shared by the binary and compound paths.</summary>
+    protected CLeaf EmitRemainderViaDivision(CLeaf left, CLeaf right, string t)
     {
         // left/right are CLeaf params — stable single-assignment leaves under ANF; the intermediate
         // ExternCall results each bind their own fresh scratch, so neither operand is mutated here.

@@ -123,10 +123,10 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
 
         var resultType = GetUdonType(op.Type);
 
-        // long % long / ulong % ulong: Udon has no SystemInt64/SystemUInt64 op_Remainder extern;
-        // lower to a - (a / b) * b via the shared polyfill.
-        if (op.OperatorKind == BinaryOperatorKind.Remainder && Is64BitInt(resultType))
-            return EmitInt64Remainder(leftVal, rightVal, resultType);
+        // long/ulong/uint % : Udon has no op_Remainder extern for these; lower to a - (a / b) * b via the
+        // shared polyfill (uint included — it has Division/Multiplication/Subtraction but no Remainder).
+        if (op.OperatorKind == BinaryOperatorKind.Remainder && RemainderNeedsPolyfill(resultType))
+            return EmitRemainderViaDivision(leftVal, rightVal, resultType);
 
         var sig = ExternResolver.ResolveBinaryExtern(
             op.OperatorKind, op.OperatorMethod,

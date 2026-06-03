@@ -42,10 +42,10 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
 
         var resultType = GetUdonType(op.Type);
 
-        // long %= / ulong %= : no Udon op_Remainder extern; polyfill a - (a/b)*b (shared with the binary path).
-        if (op.OperatorKind == BinaryOperatorKind.Remainder && Is64BitInt(resultType))
+        // long/ulong/uint %= : no Udon op_Remainder extern; polyfill a - (a/b)*b (shared with the binary path).
+        if (op.OperatorKind == BinaryOperatorKind.Remainder && RemainderNeedsPolyfill(resultType))
         {
-            var rem = EmitInt64Remainder(leftVal, rightVal, resultType);
+            var rem = EmitRemainderViaDivision(leftVal, rightVal, resultType);
             EmitWriteBack(op.Target, rem, lv);
             return rem;
         }
