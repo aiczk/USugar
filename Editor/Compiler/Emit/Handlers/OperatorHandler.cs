@@ -322,15 +322,30 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
         var operandType = GetUdonType(op.Operand.Type);
         var resultType = GetUdonType(op.Type);
 
-        // ~x ≡ x ^ allBits  (signed: -1 = all bits set, unsigned: MaxValue)
-        object allBitsValue = op.Operand.Type.SpecialType switch
+        // An enum operand has SpecialType None; ~ operates on (and narrows back to) the underlying type, so key
+        // off the underlying. operandType/resultType already resolve to it via GetUdonType.
+        var effSpecial = op.Operand.Type is INamedTypeSymbol enumOperand && enumOperand.TypeKind == TypeKind.Enum
+            ? enumOperand.EnumUnderlyingType.SpecialType
+            : op.Operand.Type.SpecialType;
+
+        // Udon has no byte/sbyte/short/ushort operators. C# already promotes a plain small int to int before ~
+        // (so op.Operand.Type is int there); only a small-int-BACKED ENUM reaches here as byte/short. Compute it
+        // in int32 then narrow back to the underlying: ~x ≡ (T)((int)x ^ -1).
+        if (effSpecial is SpecialType.System_Byte or SpecialType.System_SByte
+            or SpecialType.System_Int16 or SpecialType.System_UInt16)
         {
-            SpecialType.System_Int32 or SpecialType.System_Int16
-                or SpecialType.System_Int64 or SpecialType.System_SByte => EmitContext.ParseConstValue(operandType, "-1"),
+            var asInt = operandType == "SystemInt32" ? operandVal : EmitNarrowingConvert(operandVal, operandType, "SystemInt32");
+            var xored = ExternCall("SystemInt32.__op_LogicalXor__SystemInt32_SystemInt32__SystemInt32",
+                new List<CLeaf> { asInt, Const(-1, "SystemInt32") }, "SystemInt32");
+            return resultType == "SystemInt32" ? xored : EmitNarrowingConvert(xored, "SystemInt32", resultType);
+        }
+
+        // int/uint/long/ulong have native ops: ~x ≡ x ^ allBits (signed: -1 = all bits set, unsigned: MaxValue).
+        object allBitsValue = effSpecial switch
+        {
+            SpecialType.System_Int32 or SpecialType.System_Int64 => EmitContext.ParseConstValue(operandType, "-1"),
             SpecialType.System_UInt32 => uint.MaxValue,
             SpecialType.System_UInt64 => ulong.MaxValue,
-            SpecialType.System_UInt16 => ushort.MaxValue,
-            SpecialType.System_Byte => byte.MaxValue,
             _ => throw new System.NotSupportedException(
                 $"Bitwise NOT (~) is not supported on type {operandType}")
         };
