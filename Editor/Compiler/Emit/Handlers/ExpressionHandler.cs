@@ -315,10 +315,15 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
             if (conv.Type.TypeKind == TypeKind.Enum && conv.Type is INamedTypeSymbol enumTarget)
             {
                 var info = _ctx.GetOrCreateEnumArray(enumTarget);
+                // The lookup index must be SystemInt32. Casting a non-int integral to a byte/short-backed
+                // enum leaves srcVal as SystemByte/SystemInt16, which __Get__SystemInt32 then reads as the
+                // wrong heap type and faults the VM. Widen to Int32 first (Int32 sources pass through).
+                var srcUdon = GetUdonType(conv.Operand.Type);
+                var idxSrc = srcUdon == "SystemInt32" ? srcVal : EmitNarrowingConvert(srcVal, srcUdon, "SystemInt32");
                 var indexVal = info.MinOffset == 0
-                    ? srcVal
+                    ? idxSrc
                     : ExternCall("SystemInt32.__op_Subtraction__SystemInt32_SystemInt32__SystemInt32",
-                        new List<CLeaf> { srcVal, Const((int)info.MinOffset, "SystemInt32") }, "SystemInt32");
+                        new List<CLeaf> { idxSrc, Const((int)info.MinOffset, "SystemInt32") }, "SystemInt32");
                 return ExternCall(
                     "SystemObjectArray.__Get__SystemInt32__SystemObject",
                     new List<CLeaf> { LoadField(info.ArrayId, "SystemObjectArray"), indexVal },
