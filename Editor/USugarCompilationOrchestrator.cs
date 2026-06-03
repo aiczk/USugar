@@ -433,21 +433,27 @@ static class USugarCompilationOrchestrator
     {
         ClearStaticDictionary(USugarReflectionTargets.VarStorageType, "_variableTypeLookup");
 
-        if (USugarReflectionTargets.FormattersField?.GetValue(null) is System.Collections.IDictionary formatters)
+        // Fail loud if the OdinSerializer formatter-cache bindings broke (SDK rename). Without clearing them, a
+        // freshly-compiled program can be (de)serialized by a STALE formatter — a silent runtime-data hazard, far
+        // worse than a missing inspector feature — so surface it instead of no-op'ing quietly.
+        if (USugarReflectionTargets.FormattersField == null || USugarReflectionTargets.EmittedFormatterOpenType == null)
         {
-            if (USugarReflectionTargets.EmittedFormatterOpenType != null)
+            USugarLog.Error("Serialization-cache bindings (_formatters / EmittedFormatter) did not resolve — the OdinSerializer formatter cache could not be cleared after compile; serialized program data may be stale. The UdonSharp SDK may have changed; check USugarReflectionTargets.");
+            return;
+        }
+
+        if (USugarReflectionTargets.FormattersField.GetValue(null) is System.Collections.IDictionary formatters)
+        {
+            foreach (var key in formatters.Keys.Cast<Type>().ToArray())
             {
-                foreach (var key in formatters.Keys.Cast<Type>().ToArray())
+                try
                 {
-                    try
-                    {
-                        var closed = USugarReflectionTargets.EmittedFormatterOpenType.MakeGenericType(key);
-                        var manager = closed.GetNestedType("UdonSharpBehaviourFormatterManager",
-                            BindingFlags.NonPublic);
-                        ClearStaticDictionary(manager, "_heapDataLookup");
-                    }
-                    catch { }
+                    var closed = USugarReflectionTargets.EmittedFormatterOpenType.MakeGenericType(key);
+                    var manager = closed.GetNestedType("UdonSharpBehaviourFormatterManager",
+                        BindingFlags.NonPublic);
+                    ClearStaticDictionary(manager, "_heapDataLookup");
                 }
+                catch { }
             }
             formatters.Clear();
         }

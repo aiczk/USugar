@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Reflection;
 using UdonSharp;
 using UnityEngine;
@@ -56,13 +57,28 @@ static class USugarReflectionTargets
     internal static readonly Type EmittedFormatterOpenType =
         FormatterEmitterType?.GetNestedType("EmittedFormatter`1", BindingFlags.NonPublic);
 
+    // Bindings whose ABSENCE breaks correctness — either no codegen applies at all (CompilerType / AssembleMethod /
+    // UdonInterfaceType / EditorCacheType) or the OdinSerializer formatter cache cannot be cleared, risking STALE
+    // serialized program data (VarStorageType / FormatterEmitterType / FormattersField / EmittedFormatterOpenType).
+    // A null critical binding fails LOUD at domain load so an SDK rename is visible immediately, instead of silently
+    // no-op'ing the override or stranding stale serialization. The rest (diagnostics / UASM display) merely degrade
+    // the inspector and stay at Warn.
+    static readonly HashSet<string> CriticalBindings = new()
+    {
+        nameof(CompilerType), nameof(AssembleMethod), nameof(UdonInterfaceType), nameof(EditorCacheType),
+        nameof(VarStorageType), nameof(FormatterEmitterType), nameof(FormattersField), nameof(EmittedFormatterOpenType),
+    };
+
     internal static void Validate()
     {
         var fields = typeof(USugarReflectionTargets).GetFields(BindingFlags.Static | BindingFlags.NonPublic);
         foreach (var f in fields)
         {
-            if (f.GetValue(null) == null)
-                USugarLog.Warn($"Reflection target not found: {f.Name}");
+            if (f.GetValue(null) != null) continue;
+            if (CriticalBindings.Contains(f.Name))
+                USugarLog.Error($"CRITICAL reflection target not found: {f.Name} — the UdonSharp SDK may have changed. USugar codegen will not apply correctly (or serialized data may be stale); check USugarReflectionTargets.");
+            else
+                USugarLog.Warn($"Reflection target not found: {f.Name} (a display/diagnostic feature may be degraded)");
         }
     }
 
