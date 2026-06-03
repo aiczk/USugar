@@ -119,6 +119,42 @@ public class CoalesceCrossField : UdonSharpBehaviour {
   public string Name { get; set; }
   void Start(){ Name ??= ""x""; }
 }"),
+        // ── ABI-risk operand wiring (H-2/H-3): the highest-risk invented ABIs were tested only by extern
+        // EXISTENCE, which cannot catch operand miswiring (a clone that swaps indices, a spill that saves the
+        // wrong slot still emits the same extern set). These byte-exact snapshots freeze the wiring (index→element,
+        // copy-in/copy-out, spill/reload, field-by-field ==) so a silent value-corruption regression fails loudly,
+        // VM-free. Codegen is already real-world + harness validated, so these pin known-good output.
+        ("tuple_value_copy", "TupleValueCopy",
+@"using UdonSharp; public class TupleValueCopy : UdonSharpBehaviour {
+  public int outa;
+  void Start(){ (int a, int b) t = (1, 2); var u = t; u.a = 9; outa = t.a; }
+}"),
+        ("struct_value_copy", "StructValueCopy",
+@"using UdonSharp;
+public struct StructValueCopyPt { public int x; public int y; }
+public class StructValueCopy : UdonSharpBehaviour {
+  public int outx;
+  void Start(){ StructValueCopyPt a = new StructValueCopyPt(); a.x = 1; StructValueCopyPt b = a; b.x = 9; outx = a.x; }
+}"),
+        ("struct_ref_param", "StructRefParam",
+@"using UdonSharp;
+public struct StructRefBox { public int v; }
+public class StructRefParam : UdonSharpBehaviour {
+  public int outv;
+  void Start(){ StructRefBox b = new StructRefBox(); b.v = 1; Bump(ref b); outv = b.v; }
+  void Bump(ref StructRefBox x){ x.v = x.v + 1; }
+}"),
+        ("nontail_recursion", "NonTailRecursion",
+@"using UdonSharp; public class NonTailRecursion : UdonSharpBehaviour {
+  public int result;
+  void Start(){ result = Fact(5); }
+  int Fact(int n){ if (n <= 1) return 1; return n * Fact(n - 1); }
+}"),
+        ("tuple_equality", "TupleEquality",
+@"using UdonSharp; public class TupleEquality : UdonSharpBehaviour {
+  public bool eq;
+  void Start(){ (int a, int b) x = (1, 2); (int a, int b) y = (1, 2); eq = x == y; }
+}"),
     };
 
     public static (string Name, string ClassName, string Source) ByName(string name)
