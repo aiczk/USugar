@@ -487,6 +487,11 @@ static class USugarCompilationOrchestrator
             try { writer.Write(File.ReadAllText(p)); }
             catch { writer.Write(File.GetLastWriteTimeUtc(p).Ticks); } // unreadable file → fall back to mtime
         }
+        // Fold the active preprocessor defines in: a platform/SDK switch changes which #if branches compile
+        // without touching any source file, and a content-only hash would skip the needed recompile, shipping a
+        // program built against stale defines. Sorted so a benign reorder is not a false cache miss.
+        foreach (var d in BuildPreprocessorDefines().OrderBy(s => s, StringComparer.Ordinal))
+            writer.Write(d);
         writer.Flush();
         ms.Position = 0;
         var hash = md5.ComputeHash(ms);
@@ -521,10 +526,26 @@ static class USugarCompilationOrchestrator
     static MetadataReference[] _cachedMetadataRefs;
     static readonly Dictionary<string, (long ticks, SyntaxTree tree)> _treeCache = new();
 
+    // Preprocessor symbols for parsing user Udon sources. Mirrors stock UdonSharp's GetProjectDefines with
+    // editorBuild:false — the compiled Udon program runs IN-GAME, so honor the project's platform/SDK/custom
+    // scripting defines but drop UNITY_EDITOR* (editor-only branches must not leak into the shipped program).
+    // USugar's own markers are always defined. Hardcoding only the two markers (the prior behavior) silently
+    // compiled the WRONG #if branch for any platform/SDK/custom-symbol guard the user wrote.
+    static string[] BuildPreprocessorDefines()
+    {
+        var defines = new List<string>();
+        foreach (var d in UnityEditor.EditorUserBuildSettings.activeScriptCompilationDefines)
+            if (!d.StartsWith("UNITY_EDITOR"))
+                defines.Add(d);
+        defines.Add("COMPILER_UDONSHARP");
+        defines.Add("UDONSHARP");
+        return defines.ToArray();
+    }
+
     internal static CSharpCompilation BuildCompilation(List<string> sourcePaths)
     {
         var parseOptions = new CSharpParseOptions(LanguageVersion.Latest)
-            .WithPreprocessorSymbols("COMPILER_UDONSHARP", "UDONSHARP");
+            .WithPreprocessorSymbols(BuildPreprocessorDefines());
 
         var trees = new SyntaxTree[sourcePaths.Count];
         for (int i = 0; i < sourcePaths.Count; i++)
