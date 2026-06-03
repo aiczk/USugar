@@ -111,10 +111,19 @@ public abstract class HandlerBase
                 new List<CLeaf> { bytes, Const(0, "SystemInt32") }, toUdonType);
         }
 
+        // Other ulong conversions are UNCHECKED bit ops in C# but SystemConvert.To{U}Int* are CHECKED and
+        // throw (e.g. (ulong)(-1), (int)(largeUlong)). Route via int64: widen/reinterpret the source to long
+        // (sign/zero-extend) then reinterpret long→ulong above; or reinterpret ulong→long then narrow.
+        if (toUdonType == "SystemUInt64")
+            return EmitNarrowingConvert(EmitNarrowingConvert(value, fromUdonType, "SystemInt64"),
+                "SystemInt64", "SystemUInt64");
+        if (fromUdonType == "SystemUInt64")
+            return EmitNarrowingConvert(EmitNarrowingConvert(value, "SystemUInt64", "SystemInt64"),
+                "SystemInt64", toUdonType);
+
         // Non-integer conversions, and lossless integer widenings, never overflow → plain convert is correct.
         if (!IsIntegerUdon(fromUdonType) || !IsIntegerUdon(toUdonType)
-            || IsLosslessIntegerWiden(fromUdonType, toUdonType)
-            || fromUdonType == "SystemUInt64" || toUdonType == "SystemUInt64")
+            || IsLosslessIntegerWiden(fromUdonType, toUdonType))
             return ExternCall(ExternResolver.BuildConvertSignature(fromUdonType, toUdonType),
                 new List<CLeaf> { value }, toUdonType);
 
