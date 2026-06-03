@@ -122,4 +122,32 @@ public class EnumSwitchCheck : UdonSharpBehaviour {
         var objectToInt = CountOccurrences(uasm, "SystemConvert.__ToInt32__SystemObject__SystemInt32");
         Assert.Equal(1, objectToInt);
     }
+
+    [Fact]
+    public void NullableByteNarrowing_ReBoxesWithByteTag_NotIdentityPassthrough()
+    {
+        // `byte? c = (byte)(a+b)` (nullable byte operands) lowers a lifted int? -> byte conversion. The byte? must
+        // re-box a real byte (SystemConvert.__ToByte narrowing), NOT pass the boxed int through unchanged — else a
+        // later `.Value`'s strict ToInt32(SystemByte) InvalidCasts on the boxed int at runtime.
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public class NblByteNarrow : UdonSharpBehaviour {
+    public byte bf; public byte cf; public int outv;
+    void Start() { byte? a = bf; byte? b = cf; byte? c = (byte)(a + b); outv = c.Value; }
+}", "NblByteNarrow");
+        Assert.Contains("SystemConvert.__ToByte__SystemInt32__SystemByte", uasm);
+    }
+
+    [Fact]
+    public void BareToNullableByteNarrowing_EmitsNarrowing()
+    {
+        // `byte? c = (byte?)(intExpr)` (bare source, nullable dest) must narrow to byte, not box a raw int.
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public class BareNblByte : UdonSharpBehaviour {
+    public byte bf; public byte cf; public int outv;
+    void Start() { byte? c = (byte?)(bf + cf); outv = c.Value; }
+}", "BareNblByte");
+        Assert.Contains("SystemConvert.__ToByte__SystemInt32__SystemByte", uasm);
+    }
 }

@@ -195,9 +195,14 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
         // materialize a null-preserving Convert.To{Dst}(object): null stays null, otherwise re-box the
         // converted underlying. To{Dst}(SystemObject) tolerates either storage tag (the source nullable may
         // hold a boxed small-int or, for un-narrowed literals, a boxed int).
-        if (EmitContext.IsNullableT(conv.Operand.Type, out var liftedSrcU)
-            && EmitContext.IsNullableT(conv.Type, out var liftedDstU)
-            && ExternResolver.IsNumericType(liftedSrcU) && ExternResolver.IsNumericType(liftedDstU)
+        // Resolve the destination underlying: Roslyn can lower a small-int nullable narrowing as an inner
+        // `int? -> byte` conversion (nullable SOURCE, BARE byte dest) wrapped by an outer byte->byte?. Accept a
+        // bare numeric dest too, so the narrow+rebox below still runs — otherwise the boxed int falls through to
+        // the identity passthrough and a later `.Value`'s strict ToInt32(SystemByte) InvalidCasts on the boxed int.
+        var liftedDstU = EmitContext.IsNullableT(conv.Type, out var dstNblU) ? dstNblU : conv.Type;
+        if (conv.Conversion.IsNullable
+            && EmitContext.IsNullableT(conv.Operand.Type, out var liftedSrcU)
+            && ExternResolver.IsNumericType(liftedSrcU) && liftedDstU != null && ExternResolver.IsNumericType(liftedDstU)
             && !SymbolEqualityComparer.Default.Equals(liftedSrcU, liftedDstU)
             && ExternResolver.GetConvertMethodName(liftedDstU) is { } liftedDstMethod)
         {
@@ -223,6 +228,17 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
                 EmitAssign(resSlot, converted);
             });
             return SlotRef(resSlot);
+        }
+
+        // Lifted numeric conversion with a BARE source and a Nullable<numeric> dest (e.g. `(byte?)(intExpr)`):
+        // the value is always present, so narrow numerically (C#-unchecked wrap) and let it box into the
+        // nullable's SystemObject slot with the right tag, so a later `.Value`'s strict small-int extern reads it.
+        if (conv.Conversion.IsNullable
+            && conv.Operand.Type != null && ExternResolver.IsNumericType(conv.Operand.Type)
+            && EmitContext.IsNullableT(conv.Type, out var bareDstU) && ExternResolver.IsNumericType(bareDstU)
+            && !SymbolEqualityComparer.Default.Equals(conv.Operand.Type, bareDstU))
+        {
+            return EmitNarrowingConvert(srcVal, GetUdonType(conv.Operand.Type), GetUdonType(bareDstU));
         }
 
         // Numeric conversions (int→float, etc.) via System.Convert
