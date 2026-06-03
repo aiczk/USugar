@@ -3293,6 +3293,22 @@ public class BinPatOrTest : UdonSharpBehaviour {
         Assert.Contains("__op_ConditionalOr", uasm);
     }
 
+    [Fact]
+    public void BinaryPattern_AndAfterTypeNarrowing_ComparesNarrowedType()
+    {
+        // `obj is int n and > 0` on an object scrutinee must compare the narrowed int
+        // (SystemInt32.__op_GreaterThan), not the boxed object — SystemObject has no relational extern.
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public class BinPatNarrowTest : UdonSharpBehaviour {
+    public int score;
+    void Start() { object o = score; if (o is int n and > 0) UnityEngine.Debug.Log(n); }
+}
+");
+        Assert.Contains("__op_GreaterThan__SystemInt32_SystemInt32__SystemBoolean", uasm);
+        Assert.DoesNotContain("__op_GreaterThan__SystemObject", uasm);
+    }
+
     // ── Index from end ──
 
     [Fact]

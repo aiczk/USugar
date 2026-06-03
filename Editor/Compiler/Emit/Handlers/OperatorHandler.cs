@@ -476,6 +476,27 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
             }
             case IBinaryPatternOperation binPat:
             {
+                // `A and B` where A narrows the type (e.g. `obj is int n and > 0`): B's input is the type A
+                // narrowed to, and B must run ONLY when A matched — otherwise B compares/unboxes a value of the
+                // wrong type (compile-time: the scrutinee type has no relational extern, e.g. SystemObject.__op_
+                // GreaterThan; runtime: an InvalidCast). Short-circuit through the matched value re-typed to A's
+                // NarrowedType (Udon COPY unboxes). A non-narrowing `and` (e.g. `>= 0 and < 100` on int) and any
+                // `or` keep the plain extern combine — both sides are safe to evaluate on the same value.
+                if (binPat.OperatorKind == BinaryOperatorKind.And
+                    && binPat.LeftPattern.NarrowedType is { } narrowedType
+                    && !SymbolEqualityComparer.Default.Equals(narrowedType, valueType))
+                {
+                    var resultSlot = _ctx.AllocTemp("SystemBoolean");
+                    EmitAssign(resultSlot, Const(false, "SystemBoolean"));
+                    var matched = EmitPatternCheckImpl(valueVal, valueType, binPat.LeftPattern);
+                    _builder.EmitIf(matched, b =>
+                    {
+                        var nt = _ctx.AllocTemp(GetUdonType(narrowedType));
+                        EmitAssign(nt, valueVal);
+                        EmitAssign(resultSlot, EmitPatternCheckImpl(SlotRef(nt), narrowedType, binPat.RightPattern));
+                    });
+                    return SlotRef(resultSlot);
+                }
                 var leftVal = EmitPatternCheckImpl(valueVal, valueType, binPat.LeftPattern);
                 var rightVal = EmitPatternCheckImpl(valueVal, valueType, binPat.RightPattern);
                 var opName = binPat.OperatorKind == BinaryOperatorKind.And
