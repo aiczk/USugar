@@ -312,7 +312,13 @@ public class SimpleAssignmentHandler : AssignmentHandlerBase, IExpressionHandler
         // `G(n = n - 1)`) would re-evaluate it after the store already mutated its inputs. A dead read in
         // statement form is removed by DCE.
         var targetFieldType = _ctx.GetFieldType(targetFieldName);
-        return targetFieldType != null ? LoadField(targetFieldName, targetFieldType) : srcFallback;
+        if (targetFieldType == null) return srcFallback;
+        var loaded = LoadField(targetFieldName, targetFieldType);
+        // When the assignment is USED AS A VALUE (e.g. chained `z = y = x`) and the target is an aggregate,
+        // that value must be an independent COPY (struct value semantics) — otherwise z aliases y. (diff-fuzz w4)
+        return assign.Parent is not IExpressionStatementOperation
+               && assign.Target.Type is INamedTypeSymbol tAgg && EmitContext.IsAggregateType(tAgg)
+            ? EmitDeepCloneAggregate(loaded, tAgg) : loaded;
     }
 
     void RecordIfCapturingLambda(IDelegateCreationOperation dc)

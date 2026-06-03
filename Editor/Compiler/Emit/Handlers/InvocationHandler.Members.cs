@@ -55,16 +55,26 @@ public partial class InvocationHandler
         // this.gameObject / this.transform → __this_* variable (Udon VM resolves via "this" default)
         if (op.Instance is IInstanceReferenceOperation)
         {
-            // User-defined property getter → internal call
+            // User-defined property getter → internal call. A struct-typed getter result is COPIED (C#
+            // getters return by value) — otherwise `read = this.Prop` aliases the backing field. (diff-fuzz w4)
             if (op.Property.GetMethod != null
                 && _methodFunctions.ContainsKey(op.Property.GetMethod))
-                return EmitCallToMethod(op.Property.GetMethod, new List<CLeaf>());
+            {
+                var gv = EmitCallToMethod(op.Property.GetMethod, new List<CLeaf>());
+                return op.Property.Type is INamedTypeSymbol thisGetAgg && EmitContext.IsAggregateType(thisGetAgg)
+                    ? EmitDeepCloneAggregate(gv, thisGetAgg) : gv;
+            }
 
-            // Auto-property on this class → direct variable access (user-defined classes only)
+            // Auto-property on this class → direct backing-field access (user-defined classes only). A
+            // struct-typed backing field is COPIED on read (value semantics), same as a struct field.
             if (op.Property.GetMethod?.DeclaringSyntaxReferences.IsEmpty == true
                 && ExternResolver.IsUdonSharpBehaviour(op.Property.ContainingType)
                 && op.Property.ContainingType.Name != "UdonSharpBehaviour")
-                return LoadField(op.Property.Name, GetUdonType(op.Property.Type));
+            {
+                var bv = LoadField(op.Property.Name, GetUdonType(op.Property.Type));
+                return op.Property.Type is INamedTypeSymbol thisAutoAgg && EmitContext.IsAggregateType(thisAutoAgg)
+                    ? EmitDeepCloneAggregate(bv, thisAutoAgg) : bv;
+            }
 
             var propName = op.Property.Name;
             if (propName == "gameObject" || propName == "transform")
