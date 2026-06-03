@@ -922,7 +922,17 @@ public abstract class HandlerBase
             if (t != null) fields.Add((id, t));
         }
         if (_currentMethod != null && _methodParamVarIds.TryGetValue(_currentMethod, out var pids))
-            foreach (var pid in pids) AddField(pid);
+            for (int i = 0; i < pids.Length; i++)
+            {
+                // A ref/out param aliases the caller's storage and a recursive call threads that SAME storage,
+                // so its mutations must PERSIST across the call. Saving+restoring it would discard the
+                // recursive levels' writes (only the outermost would reach the caller). Value params are
+                // per-frame and must still be spilled. (diff-fuzz wave 3 #3)
+                if (i < _currentMethod.Parameters.Length
+                    && _currentMethod.Parameters[i].RefKind is RefKind.Ref or RefKind.Out)
+                    continue;
+                AddField(pids[i]);
+            }
         AddField(_ctx.CurrentStructReceiverParamId);
         // For a hoisted function (local function or lambda), only its OWN locals are frame-local and need
         // spilling. Locals captured from an enclosing scope are shared by reference (C# closure semantics) —
