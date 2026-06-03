@@ -410,6 +410,26 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
         }
     }
 
+    // Dual of UnwrapLambdaFromArg for a bare METHOD GROUP. Only matches a same-`this`/static method group
+    // (Instance null or `this`); an `obj.M` group on another instance is left to fall through (it needs the
+    // cross-Behaviour path, not this same-Behaviour adapter).
+    static bool UnwrapMethodGroupFromArg(IOperation op, out IMethodSymbol method)
+    {
+        while (true)
+        {
+            method = null;
+            if (op is IDelegateCreationOperation { Target: IMethodReferenceOperation { Instance: null or IInstanceReferenceOperation } m })
+            {
+                method = m.Method;
+                return true;
+            }
+
+            if (op is not IConversionOperation conv)
+                return false;
+            op = conv.Operand;
+        }
+    }
+
     void HoistLambdaForDelegateParam(IAnonymousFunctionOperation lambda, DelegateConvention convention)
     {
         var symbol = lambda.Symbol;

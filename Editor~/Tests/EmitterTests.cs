@@ -3811,6 +3811,26 @@ public class DlgTest : UdonSharpBehaviour
     }
 
     [Fact]
+    public void DelegateParam_MethodGroup_EmitsAdapter()
+    {
+        // A bare method group passed to a delegate parameter must be bridged through a per-call-site adapter
+        // (__dlgadapt_*) that copies the convention args into the target's real params — NOT lowered to the
+        // target's raw address (which reads its own param fields and returns a stale 0).
+        var uasm = TestHelper.CompileToUasm(@"
+using System;
+using UdonSharp;
+[UdonBehaviourSyncMode(BehaviourSyncMode.None)]
+public class DlgMgTest : UdonSharpBehaviour
+{
+    int Dbl(int x) { return x * 2; }
+    int Apply(int v, Func<int, int> f) { return f(v); }
+    void Start() { int r = Apply(21, Dbl); }
+}
+");
+        Assert.Contains("__dlgadapt", uasm);
+    }
+
+    [Fact]
     public void DelegateParam_ActionInvocation_EmitsJumpIndirect()
     {
         var uasm = TestHelper.CompileToUasm(@"

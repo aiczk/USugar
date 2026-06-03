@@ -375,6 +375,11 @@ public class EmitContext
     // Pending delegate bridges for dynamically hoisted lambdas/local functions
     public readonly List<(IMethodSymbol method, string bridgeExportName, Dictionary<ITypeParameterSymbol, ITypeSymbol> resolvedTypeParamMap)> PendingDelegateBridges = new();
 
+    // A same-class method group passed to a delegate PARAMETER needs a per-call-site adapter that copies the
+    // call-site convention vars into the target method's real param fields, calls it, and copies the return back
+    // (a raw method address would read its OWN param fields, not the convention vars, and return a stale 0).
+    public readonly List<(IMethodSymbol target, DelegateConvention convention, string adapterName)> PendingDelegateParamAdapters = new();
+
     // Diagnostics collected during emission
     public readonly List<EmitDiagnostic> Diagnostics = new();
     public readonly HashSet<string> ReportedExterns = new();

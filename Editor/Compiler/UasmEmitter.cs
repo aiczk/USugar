@@ -750,6 +750,9 @@ public class UasmEmitter
         // Emit pending delegate bridges for hoisted lambdas/local functions
         EmitPendingDelegateBridges();
 
+        // Emit per-call-site adapters for method groups passed to delegate parameters
+        EmitPendingDelegateParamAdapters();
+
         // Synthesize _start if there are field initializers, FCB fields, or default-init aggregate fields but
         // no user-defined Start()
         if ((_fieldInitOps.Count > 0 || _fieldChangeCallbacks.Count > 0 || _ctx.AggregateFieldDefaults.Count > 0)
@@ -931,6 +934,42 @@ public class UasmEmitter
             {
                 _builder.EmitExprStmt(callResult);
             }
+
+            _builder.EmitReturn();
+
+            if (prevFunc != null)
+                _builder.SetFunction(prevFunc);
+        }
+    }
+
+    // ── Pending Delegate-Param Adapters (a same-class method group passed to a delegate parameter) ──
+    // A raw method reads its OWN __param fields; the call site writes/reads the __dlg_{idx} convention vars.
+    // The adapter (FuncRef'd at the call site, JUMP_INDIRECT target) bridges the two: load the convention args,
+    // InternalCall the real method (which copies them into its real params), store its return to the convention
+    // ret var. Structurally identical to EmitPendingDelegateBridges, keyed to the call-site convention vars.
+    void EmitPendingDelegateParamAdapters()
+    {
+        var emitted = new HashSet<string>();
+        foreach (var (target, convention, adapterName) in _ctx.PendingDelegateParamAdapters)
+        {
+            if (!emitted.Add(adapterName)) continue;
+            if (!_methodFunctions.TryGetValue(target, out var realFunc)) continue;
+
+            var adapterFunc = _module.AddFunction(adapterName);
+            var prevFunc = _builder.CurrentFunction;
+            _builder.SetFunction(adapterFunc);
+
+            var callArgs = new List<CLeaf>();
+            foreach (var argId in convention.ArgVarIds ?? System.Array.Empty<string>())
+                callArgs.Add(BridgeLoad(argId, _ctx.GetFieldType(argId)));
+
+            var retTypeStr = convention.RetVarId != null ? _ctx.GetFieldType(convention.RetVarId) : "SystemVoid";
+            var callResult = _builder.InternalCall(realFunc.Name, callArgs, retTypeStr);
+
+            if (convention.RetVarId != null)
+                BridgeStore(convention.RetVarId, callResult);
+            else
+                _builder.EmitExprStmt(callResult);
 
             _builder.EmitReturn();
 

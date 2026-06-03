@@ -655,6 +655,18 @@ public partial class InvocationHandler
                 // Use FuncRef to pass the function's entry address
                 args.Add(FuncRef(_methodFunctions[lambda.Symbol].Name));
             }
+            // Delegate parameter with a same-class method-group arg: a raw method reads its OWN param fields, not
+            // the call-site convention vars, so pass a per-call-site ADAPTER (emitted later) that copies the
+            // convention args into the real method's params, calls it, and copies its return to the convention ret.
+            else if (_delegateParamConventions.TryGetValue((idx, param.Ordinal), out var mgConvention)
+                && UnwrapMethodGroupFromArg(argOp, out var mgMethod)
+                && _methodFunctions.ContainsKey(mgMethod))
+            {
+                var adapterName = $"__dlgadapt_{idx}_{param.Ordinal}_{_methodSlots[mgMethod].Index}";
+                if (_ctx.PendingDelegateParamAdapters.All(a => a.adapterName != adapterName))
+                    _ctx.PendingDelegateParamAdapters.Add((mgMethod, mgConvention, adapterName));
+                args.Add(FuncRef(adapterName));
+            }
             else
             {
                 // VisitExpression clones aggregate locals/params automatically (Clone-on-read).
