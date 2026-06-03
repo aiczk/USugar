@@ -344,6 +344,26 @@ public partial class InvocationHandler
                 return LoadField(_ctx.DeclareStructConst(resultType, value), resultType);
         }
 
+        // User struct with a user-defined ctor, used AS A VALUE (e.g. an operator body `return new V(x,y)`):
+        // allocate + default-init the object[] and run the registered ctor on it, like the local-declaration
+        // path. The extern-ctor fallback below is only for SDK value types (Vector3, …) — for a user struct it
+        // would emit a bogus SystemObjectArray.__ctor__<args>__ extern that the validator rejects. (diff-fuzz w3)
+        if (op.Type.IsValueType && op.Arguments.Length > 0
+            && op.Type is INamedTypeSymbol userStruct && EmitContext.IsUserStruct(userStruct)
+            && op.Constructor != null && _methodFunctions.ContainsKey(op.Constructor))
+        {
+            var layout = _ctx.GetAggregateLayout(userStruct);
+            var slot = _ctx.AllocTemp("SystemObjectArray");
+            EmitAssign(slot, ExternCall("SystemObjectArray.__ctor__SystemInt32__SystemObjectArray",
+                new List<CLeaf> { Const(layout.Count, "SystemInt32") }, "SystemObjectArray"));
+            EmitDefaultInitAggregate(SlotRef(slot), layout);
+            var ctorArgs = new List<CLeaf> { SlotRef(slot) };
+            foreach (var arg in op.Arguments)
+                ctorArgs.Add(VisitExpression(arg.Value));
+            EmitExprStmt(EmitCallToMethod(op.Constructor, ctorArgs));
+            return SlotRef(slot);
+        }
+
         CLeaf resultVal;
         if (op.Arguments.Length == 0 && op.Type.IsValueType)
         {
