@@ -53,6 +53,18 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
             && EmitContext.IsNullableT(target.ContainingType, out var govUnderlying))
             return EmitNullableGetValueOrDefault(op, govUnderlying);
 
+        // Virtual dispatch through `this`: a call to a virtual/override/abstract method must bind to the
+        // most-derived override in the COMPILED type, even when the call site is in an INHERITED base
+        // method whose static target is the base declaration. base.M() and calls on other objects
+        // (cross-behaviour) are excluded. Without this a base method runs the base body, not the override.
+        if ((target.IsVirtual || target.IsOverride || target.IsAbstract)
+            && target.MethodKind == MethodKind.Ordinary
+            && op.Instance is IInstanceReferenceOperation iref
+            && iref.Syntax is not Microsoft.CodeAnalysis.CSharp.Syntax.BaseExpressionSyntax
+            && ResolveMostDerivedOverride(target) is { } derivedOverride
+            && !SymbolEqualityComparer.Default.Equals(derivedOverride, target))
+            target = derivedOverride;
+
         switch (target.MethodKind)
         {
             // Delegate invocation: a() where a is Action/Func
@@ -152,6 +164,20 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
 
         // Extern method call
         return EmitExternMethodCall(op, target);
+    }
+
+    /// <summary>Most-derived override of <paramref name="baseMethod"/> reachable from the compiled type
+    /// (_classSymbol), or baseMethod itself if none — mirrors C# virtual dispatch for a `this` call whose
+    /// static target is a base declaration.</summary>
+    IMethodSymbol ResolveMostDerivedOverride(IMethodSymbol baseMethod)
+    {
+        var def = baseMethod.OriginalDefinition;
+        for (var t = _classSymbol; t != null; t = t.BaseType)
+            foreach (var m in t.GetMembers(baseMethod.Name).OfType<IMethodSymbol>())
+                for (IMethodSymbol o = m; o != null; o = o.OverriddenMethod)
+                    if (SymbolEqualityComparer.Default.Equals(o.OriginalDefinition, def))
+                        return m;
+        return baseMethod;
     }
 
     // Nullable<T>.GetValueOrDefault: HasValue ? Value : (fallback arg or default(T)).
