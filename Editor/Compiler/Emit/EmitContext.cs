@@ -254,7 +254,7 @@ public class EmitContext
     // overwrites the other's captured value. v2.2 detects this structurally via
     // LambdaCaptureAnalyzer + AllLambdaCaptures aggregation and raises an emit-time Error
     // (was a Warning in v2.1). Full cure requires a closure-object emulation layer
-    // (long-term Phase F); see docs/known-bugs.md.
+    // (long-term Phase F).
     public readonly struct LocalBinding
     {
         public readonly string Id;
