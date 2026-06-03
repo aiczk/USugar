@@ -309,7 +309,15 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
                     "SystemObject");
             }
 
-            // enum→int: store/load through a scratch slot to re-type
+            // enum→numeric: the enum value is stored as its underlying type. A same-width target (int-backed
+            // enum → int) just re-types through a scratch slot; a different-width target (byte/short-backed enum
+            // → int, or any enum → long) needs a real numeric conversion — a bare COPY into a wider slot would
+            // assign e.g. a SystemByte into a SystemInt32 variable and fail verification.
+            var underlyingUdon = conv.Operand.Type is INamedTypeSymbol srcEnum && srcEnum.TypeKind == TypeKind.Enum
+                ? GetUdonType(srcEnum.EnumUnderlyingType)
+                : GetUdonType(conv.Operand.Type);
+            if (underlyingUdon != dstType)
+                return EmitNarrowingConvert(srcVal, underlyingUdon, dstType);
             var tmpSlot = _ctx.AllocTemp(dstType);
             EmitAssign(tmpSlot, srcVal);
             return SlotRef(tmpSlot);

@@ -910,6 +910,21 @@ public class EnumToIntCast : UdonSharpBehaviour {
     }
 
     [Fact]
+    public void EnumToInt_ByteBackedEnum_WidensViaConvert()
+    {
+        // (int)byteBackedEnum must WIDEN the underlying byte to int (SystemConvert.ToInt32), not COPY a
+        // SystemByte value into a SystemInt32 slot — the bare re-type COPY fails heap verification.
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public class ByteEnumToIntCast : UdonSharpBehaviour {
+    enum St : byte { Idle, Running }
+    public int outv;
+    void Start() { St s = St.Running; outv = (int)s; }
+}", "ByteEnumToIntCast");
+        Assert.Contains("SystemConvert.__ToInt32__SystemByte__SystemInt32", uasm);
+    }
+
+    [Fact]
     public void IntToEnum_RuntimeCast_UsesEnumArray()
     {
         var uasm = TestHelper.CompileToUasm(@"
