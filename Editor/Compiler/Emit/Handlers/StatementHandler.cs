@@ -362,8 +362,16 @@ public class StatementHandler : HandlerBase, IOperationHandler
             EmitStoreField(id, arrExpr);
         }
 
-        if (init == null) return;
         var localId = _localBindings[local].Id;
+        if (init == null)
+        {
+            // No initializer (`Outer n;`): C# definite-assignment permits field writes before any read.
+            // The flat array allocated above is NOT enough for a NESTED struct — its inner struct-typed
+            // fields must be recursively allocated (exactly like default(T)/new T()), or a write to a
+            // nested field (`n.inner.x = …`) hits a null sub-array and faults the real VM. (diff-fuzz w2)
+            DefaultInitAggregate(localId, layout);
+            return;
+        }
         var value = UnwrapConversions(init.Value);
 
         if (value is ITupleOperation tupleLit)
