@@ -640,12 +640,15 @@ public partial class InvocationHandler
 
         // Recursion is handled centrally in EmitCallToMethod (software-stack spill/reload around the call).
 
-        // Build args list
-        var args = new List<CLeaf>();
+        // Build args in PARAMETER order. IInvocationOperation.Arguments can be in call-site (syntax) order for
+        // named/reordered calls, so place each argument at its parameter's ordinal rather than assuming
+        // op.Arguments[i] ↔ Parameters[i] (which mis-routed a struct arg into another param's slot). (diff-fuzz w4)
+        var argSlots = new CLeaf[target.Parameters.Length];
         for (int i = 0; i < op.Arguments.Length; i++)
         {
-            var param = target.Parameters[i];
+            var param = op.Arguments[i].Parameter ?? target.Parameters[i];
             var argOp = op.Arguments[i].Value;
+            CLeaf val;
 
             // Delegate parameter with lambda arg: hoist with convention vars
             if (_delegateParamConventions.TryGetValue((idx, param.Ordinal), out var convention)
@@ -653,7 +656,7 @@ public partial class InvocationHandler
             {
                 HoistLambdaForDelegateParam(lambda, convention);
                 // Use FuncRef to pass the function's entry address
-                args.Add(FuncRef(_methodFunctions[lambda.Symbol].Name));
+                val = FuncRef(_methodFunctions[lambda.Symbol].Name);
             }
             // Delegate parameter with a same-class method-group arg: a raw method reads its OWN param fields, not
             // the call-site convention vars, so pass a per-call-site ADAPTER (emitted later) that copies the
@@ -665,30 +668,33 @@ public partial class InvocationHandler
                 var adapterName = $"__dlgadapt_{idx}_{param.Ordinal}_{_methodSlots[mgMethod].Index}";
                 if (_ctx.PendingDelegateParamAdapters.All(a => a.adapterName != adapterName))
                     _ctx.PendingDelegateParamAdapters.Add((mgMethod, mgConvention, adapterName));
-                args.Add(FuncRef(adapterName));
+                val = FuncRef(adapterName);
             }
             else
             {
                 // VisitExpression clones aggregate locals/params automatically (Clone-on-read).
-                args.Add(VisitExpression(argOp));
+                val = VisitExpression(argOp);
             }
+            if (param.Ordinal >= 0 && param.Ordinal < argSlots.Length) argSlots[param.Ordinal] = val;
         }
+        var args = new List<CLeaf>(argSlots);
 
         // Under A-normal form EmitCallToMethod already materialized the call (a non-void call returns a CSlotRef
         // leaf, void returns null), so the call and its copy-in are sequenced before the copy-out below — no
         // manual re-sequencing of a lazy call is needed.
         var result = EmitCallToMethod(target, args);
 
-        // Copy-out for ref/out params
+        // Copy-out for ref/out params — index the param field by the argument's parameter ordinal, not its
+        // call-site position (named/reordered args), matching the by-ordinal copy-in above.
         for (int i = 0; i < op.Arguments.Length; i++)
         {
-            var param = target.Parameters[i];
+            var param = op.Arguments[i].Parameter ?? target.Parameters[i];
             if (param.RefKind == RefKind.Out || param.RefKind == RefKind.Ref)
             {
                 var argTarget = op.Arguments[i].Value;
                 // Read back the param field value after call
-                var paramType = _ctx.GetFieldType(paramIds[i]);
-                var paramVal = LoadField(paramIds[i], paramType);
+                var paramType = _ctx.GetFieldType(paramIds[param.Ordinal]);
+                var paramVal = LoadField(paramIds[param.Ordinal], paramType);
                 AssignToTarget(argTarget, paramVal);
             }
         }
