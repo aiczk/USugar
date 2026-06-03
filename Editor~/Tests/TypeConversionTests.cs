@@ -150,4 +150,19 @@ public class BareNblByte : UdonSharpBehaviour {
 }", "BareNblByte");
         Assert.Contains("SystemConvert.__ToByte__SystemInt32__SystemByte", uasm);
     }
+
+    [Fact]
+    public void LongToUlong_BitReinterprets_NotCheckedConvert()
+    {
+        // (ulong)longVal is an unchecked bit reinterpret in C#; Convert.ToUInt64 is CHECKED and throws on a
+        // negative value. USugar must round-trip the bytes via BitConverter, not emit SystemConvert.ToUInt64.
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public class LongUlongCast : UdonSharpBehaviour {
+    public long a; public int outv;
+    void Start() { ulong u = (ulong)a; outv = (int)(u & 255UL); }
+}", "LongUlongCast");
+        Assert.Contains("SystemBitConverter.__ToUInt64__SystemByteArray_SystemInt32__SystemUInt64", uasm);
+        Assert.DoesNotContain("SystemConvert.__ToUInt64__SystemInt64__SystemUInt64", uasm);
+    }
 }

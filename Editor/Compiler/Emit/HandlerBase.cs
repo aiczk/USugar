@@ -99,6 +99,18 @@ public abstract class HandlerBase
         if (fromUdonType == toUdonType)
             return value;
 
+        // long <-> ulong is a pure bit reinterpret in C# (the cast is unchecked), but Convert.To{U}Int64 is
+        // CHECKED and throws on a high-bit-set value (e.g. (ulong)(-1L)). Round-trip the 8 bytes instead.
+        if ((fromUdonType == "SystemInt64" && toUdonType == "SystemUInt64")
+            || (fromUdonType == "SystemUInt64" && toUdonType == "SystemInt64"))
+        {
+            var bytes = ExternCall($"SystemBitConverter.__GetBytes__{fromUdonType}__SystemByteArray",
+                new List<CLeaf> { value }, "SystemByteArray");
+            var toMethod = toUdonType == "SystemUInt64" ? "ToUInt64" : "ToInt64";
+            return ExternCall($"SystemBitConverter.__{toMethod}__SystemByteArray_SystemInt32__{toUdonType}",
+                new List<CLeaf> { bytes, Const(0, "SystemInt32") }, toUdonType);
+        }
+
         // Non-integer conversions, and lossless integer widenings, never overflow → plain convert is correct.
         if (!IsIntegerUdon(fromUdonType) || !IsIntegerUdon(toUdonType)
             || IsLosslessIntegerWiden(fromUdonType, toUdonType)
@@ -632,6 +644,20 @@ public abstract class HandlerBase
             case IParameterReferenceOperation paramRef:
                 EmitStoreField(GetParamVarId(paramRef.Parameter), value);
                 break;
+
+            case IArrayElementReferenceOperation arrayElem:
+            {
+                // Deconstruction into an array element: `(arr[0], arr[1]) = (...)`. The caller's two-loop split
+                // already evaluated every RHS element before any store, so the swap/rotate idiom is safe here.
+                var arrayVal = VisitExpression(arrayElem.ArrayReference);
+                var indexVal = VisitExpression(arrayElem.Indices[0]);
+                var arrSym = arrayElem.ArrayReference.Type as IArrayTypeSymbol;
+                var arrayType = GetArrayType(arrSym);
+                var elementType = GetArrayElemType(arrSym);
+                EmitExternVoid($"{arrayType}.__Set__SystemInt32_{elementType}__SystemVoid",
+                    new List<CLeaf> { arrayVal, indexVal, value });
+                break;
+            }
 
             case IDiscardOperation:
                 break;

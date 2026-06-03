@@ -3230,6 +3230,21 @@ public class DiscardTest : UdonSharpBehaviour {
     }
 
     [Fact]
+    public void TupleDeconstruction_ArrayElements_Swap_EmitsArraySet()
+    {
+        // `(arr[0], arr[1]) = (arr[1], arr[0])` deconstructs into array-element lvalues — previously threw
+        // "Unsupported l-value target: ArrayElementReferenceOperation". The two-loop split keeps the swap correct.
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public class ArrSwapTest : UdonSharpBehaviour {
+    public int[] arr;
+    void Start() { (arr[0], arr[1]) = (arr[1], arr[0]); }
+}
+");
+        Assert.Contains("SystemInt32Array.__Set__SystemInt32_SystemInt32__SystemVoid", uasm);
+    }
+
+    [Fact]
     public void RelationalPattern_GreaterThan_EmitsComparison()
     {
         var uasm = TestHelper.CompileToUasm(@"
