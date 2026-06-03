@@ -141,7 +141,7 @@ Udon's VM has no exceptions, no runtime allocation of user-defined types, and no
 - **No `record` types**, no `static` fields on a UdonSharpBehaviour (use `const` or an instance field), and no runtime `new` of a UdonSharpBehaviour.
 - **`foreach` is array-only** — `List<T>`/`IEnumerable` can't be iterated with `foreach`.
 - **No multidimensional arrays** (`int[,]`); jagged arrays (`int[][]`) are fine.
-- **Delegates** — local-variable lambdas, delegate parameters, and `public` delegate fields work *within a single behaviour*. A delegate field must be `public` to be invoked; a cross-behaviour delegate field can be assigned but not invoked; and multicast (`+=`/`-=`), delegate *properties*, and tuple-returning delegates are unsupported.
+- **Delegates** — local-variable lambdas, delegate parameters, and delegate fields (`Action`/`Func`, public or private) work *within a single behaviour*. A cross-behaviour delegate field can be assigned but not invoked; and multicast (`+=`/`-=`), delegate *properties*, tuple-returning delegates, and using a delegate field as a value (passing, returning, or storing it) are unsupported.
 
 Not tested against every UdonSharp-compatible C# pattern. If something compiles with standard UdonSharp but fails with USugar, that's a bug — [open an issue](https://github.com/aiczk/USugar/issues).
 
