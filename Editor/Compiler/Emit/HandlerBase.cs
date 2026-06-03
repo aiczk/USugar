@@ -633,6 +633,14 @@ public abstract class HandlerBase
                     _localBindings[localRef.Local] = new EmitContext.LocalBinding(localId);
                     EmitStoreField(localId, value);
                 }
+                else if (declExpr.Expression is ITupleOperation declTuple)
+                    AssignNestedTupleElements(declTuple, value);
+                break;
+
+            // A nested deconstruction target tuple, e.g. the (b,c) in `var (a, (b,c)) = …`. `value` is the
+            // object[]-emulated nested tuple; read each element and recurse (handles arbitrary nesting depth).
+            case ITupleOperation nestedTuple:
+                AssignNestedTupleElements(nestedTuple, value);
                 break;
 
             case ILocalReferenceOperation existingLocal:
@@ -689,6 +697,22 @@ public abstract class HandlerBase
             default:
                 throw new System.NotSupportedException(
                     $"Unsupported l-value target: {target.GetType().Name}");
+        }
+    }
+
+    /// <summary>Assign a nested deconstruction target tuple from its object[]-emulated value: read each element
+    /// via __Get and delegate to AssignToLValue (which recurses for deeper tuples / handles the leaf lvalues).
+    /// A struct (non-tuple aggregate) leaf is deep-cloned for value semantics; a nested tuple recurses instead.</summary>
+    void AssignNestedTupleElements(ITupleOperation tuple, CLeaf arrValue)
+    {
+        for (int i = 0; i < tuple.Elements.Length; i++)
+        {
+            var elemVal = ExternCall("SystemObjectArray.__Get__SystemInt32__SystemObject",
+                new List<CLeaf> { arrValue, Const(i, "SystemInt32") }, "SystemObject");
+            var toAssign = tuple.Elements[i].Type is INamedTypeSymbol et
+                && EmitContext.IsAggregateType(et) && !et.IsTupleType
+                ? EmitDeepCloneAggregate(elemVal, et) : elemVal;
+            AssignToLValue(tuple.Elements[i], toAssign);
         }
     }
 

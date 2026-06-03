@@ -17,7 +17,8 @@ public class StatementHandler : HandlerBase, IOperationHandler
             or ILabeledOperation
             or ILocalFunctionOperation
             or IUsingOperation
-            or IUsingDeclarationOperation;
+            or IUsingDeclarationOperation
+            or IEmptyOperation;
 
     public void Handle(IOperation operation)
     {
@@ -62,6 +63,8 @@ public class StatementHandler : HandlerBase, IOperationHandler
                 if (labeled.Operation != null)
                     VisitOperation(labeled.Operation);
                 break;
+            // An empty statement (`;`), e.g. a labeled empty target `Outer:;` used as a goto landing pad — no-op.
+            case IEmptyOperation: break;
             case IUsingOperation op: VisitUsing(op); break;
             case IUsingDeclarationOperation usingDecl:
                 foreach (var decl in usingDecl.DeclarationGroup.Declarations)
