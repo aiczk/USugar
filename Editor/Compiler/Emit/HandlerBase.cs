@@ -653,6 +653,18 @@ public abstract class HandlerBase
                 EmitStoreField(fieldRef.Field.Name, value);
                 break;
 
+            // Field on a user STRUCT instance (`p.v`) as an l-value target — e.g. `ref p.v` copy-back or
+            // `(p.v, …) = …` deconstruction. The struct is an object[]; write the field's layout slot in place
+            // (the receiver array is shared, so the mutation reflects back to the caller's local).
+            case IFieldReferenceOperation aggFieldRef
+                when aggFieldRef.Instance != null
+                && aggFieldRef.Instance.Type is INamedTypeSymbol aggFieldType
+                && EmitContext.IsAggregateType(aggFieldType)
+                && _ctx.GetAggregateLayout(aggFieldType).TryGetIndex(aggFieldRef.Field, out var aggElemIdx):
+                EmitExternVoid("SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid",
+                    new List<CLeaf> { LoadInstanceRaw(aggFieldRef.Instance), Const(aggElemIdx, "SystemInt32"), value });
+                break;
+
             case IParameterReferenceOperation paramRef:
                 EmitStoreField(GetParamVarId(paramRef.Parameter), value);
                 break;
