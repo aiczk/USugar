@@ -468,13 +468,18 @@ static class USugarCompilationOrchestrator
         using var md5 = MD5.Create();
         using var ms = new MemoryStream();
         using var writer = new StreamWriter(ms);
-        // Sort (ordinal, locale-independent) so a permuted-but-identical source set with unchanged write times
-        // hashes the same — AssetDatabase.FindAssets ordering is not contractually stable, and an unsorted hash
-        // would otherwise produce a false cache miss (redundant recompile).
+        // Sort (ordinal, locale-independent) so a permuted-but-identical source set hashes the same —
+        // AssetDatabase.FindAssets ordering is not contractually stable, and an unsorted hash would otherwise
+        // produce a false cache miss (redundant recompile).
         foreach (var p in sourcePaths.OrderBy(s => s, StringComparer.Ordinal))
         {
             writer.Write(p);
-            writer.Write(File.GetLastWriteTimeUtc(p).Ticks);
+            // Hash file CONTENT, not last-write-time. A git checkout / branch-switch / external tool can change a
+            // file's TEXT while preserving (or rolling back) its mtime; an mtime fingerprint misses that and skips
+            // a needed recompile, stranding a stale asset. Content is the only sound change signal. (SessionState
+            // survives domain reloads, so no on-disk cache is needed; an Editor restart correctly recompiles.)
+            try { writer.Write(File.ReadAllText(p)); }
+            catch { writer.Write(File.GetLastWriteTimeUtc(p).Ticks); } // unreadable file → fall back to mtime
         }
         writer.Flush();
         ms.Position = 0;
