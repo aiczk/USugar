@@ -340,16 +340,6 @@ public class EmitContext
     // FieldChangeCallback: fieldName → propertyName
     public readonly Dictionary<string, string> FieldChangeCallbacks = new();
 
-    // Enum array lookup: enum type → field name for int→enum runtime conversions
-    public readonly struct EnumArrayInfo
-    {
-        public readonly string ArrayId;
-        public readonly long MinOffset;
-        public EnumArrayInfo(string arrayId, long minOffset) { ArrayId = arrayId; MinOffset = minOffset; }
-    }
-
-    public readonly Dictionary<ITypeSymbol, EnumArrayInfo> EnumArrayVars = new(SymbolEqualityComparer.Default);
-
     // Conditional access stack (for ?. operator)
     // Target is the evaluated instance; DelegateFieldName is non-null for delegate ?.Invoke().
     public readonly Stack<(CLeaf Target, string DelegateFieldName)> ConditionalAccessStack = new();
@@ -508,15 +498,6 @@ public class EmitContext
         "UnityEngineGameObject", "UnityEngineTransform", "VRCUdonUdonBehaviour",
     };
 
-    /// <summary>Declare an enum array field with const value.</summary>
-    public string DeclareEnumArray(string id, object[] values)
-    {
-        if (_declaredFieldNames.Contains(id)) return id;
-        Module.Fields.Add(new FieldDecl(id, "SystemObjectArray") { DefaultValue = values });
-        _declaredFieldNames.Add(id);
-        return id;
-    }
-
     // ── Software recursion stack ──
     // Udon's flat heap shares param/local slots across call frames, so recursion-cycle calls must spill
     // the caller's live values to a heap-backed LIFO stack (boxed object[]) and reload after the call.
@@ -539,65 +520,6 @@ public class EmitContext
         _declaredFieldNames.Add(RecurSpId);
     }
 
-    /// <summary>Get or create a lookup array for int→enum runtime conversions. Cached per enum type.</summary>
-    public EnumArrayInfo GetOrCreateEnumArray(INamedTypeSymbol enumType)
-    {
-        if (EnumArrayVars.TryGetValue(enumType, out var existing))
-            return existing;
-
-        var members = enumType.GetMembers()
-            .OfType<IFieldSymbol>()
-            .Where(f => f.HasConstantValue && f.IsConst)
-            .ToList();
-
-        long minVal = 0, maxVal = 0;
-        bool first = true;
-        foreach (var m in members)
-        {
-            if (m.ConstantValue == null) continue;
-            var val = Convert.ToInt64(m.ConstantValue);
-            if (first) { minVal = val; maxVal = val; first = false; }
-            else { if (val < minVal) minVal = val; if (val > maxVal) maxVal = val; }
-        }
-
-        long range = maxVal - minVal + 1;
-        if (range > 65536)
-            throw new NotSupportedException(
-                $"Cannot cast integer to enum {enumType.Name}: value range {minVal}..{maxVal} ({range}) exceeds 65536 limit");
-
-        int msb = 0;
-        long tmp = range - 1;
-        while (tmp > 0) { tmp >>= 1; msb++; }
-        int arraySize = Math.Max(1 << msb, 1);
-
-        var underlyingType = enumType.EnumUnderlyingType;
-        var clrType = underlyingType?.SpecialType switch
-        {
-            SpecialType.System_Byte => typeof(byte),
-            SpecialType.System_SByte => typeof(sbyte),
-            SpecialType.System_Int16 => typeof(short),
-            SpecialType.System_UInt16 => typeof(ushort),
-            SpecialType.System_Int32 => typeof(int),
-            SpecialType.System_UInt32 => typeof(uint),
-            SpecialType.System_Int64 => typeof(long),
-            SpecialType.System_UInt64 => typeof(ulong),
-            _ => typeof(int),
-        };
-
-        var enumArr = new object[arraySize];
-        for (int i = 0; i < arraySize; i++)
-            // Only [0, range) are real enum values; the rest are power-of-2 padding never reached by a valid
-            // cast. Filling padding with i+minVal can overflow the underlying type's CHECKED ChangeType (e.g.
-            // 256 for a byte-backed enum whose max forces a 256-slot array), crashing the compile. (diff-fuzz)
-            enumArr[i] = i < range ? Convert.ChangeType(i + minVal, clrType) : null;
-
-        var enumFullName = enumType.ToDisplayString().Replace('.', '_');
-        var arrayId = $"__enumArr_{enumFullName}";
-        DeclareEnumArray(arrayId, enumArr);
-        var info = new EnumArrayInfo(arrayId, minVal);
-        EnumArrayVars[enumType] = info;
-        return info;
-    }
 
     /// <summary>Declare reflection type IDs array.</summary>
     public void DeclareReflTypeIds(long[] typeIds)

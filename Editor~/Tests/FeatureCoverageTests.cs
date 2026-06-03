@@ -925,7 +925,7 @@ public class ByteEnumToIntCast : UdonSharpBehaviour {
     }
 
     [Fact]
-    public void IntToEnum_RuntimeCast_UsesEnumArray()
+    public void IntToEnum_RuntimeCast_RetypesWithoutArrayLookup()
     {
         var uasm = TestHelper.CompileToUasm(@"
 using UdonSharp;
@@ -937,8 +937,10 @@ public class EnumRuntimeCast : UdonSharpBehaviour {
         MyMode m = (MyMode)val;
     }
 }", "EnumRuntimeCast");
-        // Runtime int→enum should use object array lookup, not COPY
-        Assert.Contains("SystemObjectArray.__Get__SystemInt32__SystemObject", uasm);
+        // An enum is STORED as its underlying type, so int→(int-backed enum) is a plain re-type. It must NOT
+        // build/index a per-enum object[] lookup array — that old mechanism faulted the VM on out-of-range
+        // casts like (MyMode)999, which are legal C# and must round-trip.
+        Assert.DoesNotContain("__enumArr_", uasm);
     }
 
     // ── UdonSynced type validation ──

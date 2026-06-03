@@ -316,34 +316,20 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
             if (constVal.HasValue)
                 return Const(constVal.Value, dstType);
 
-            // Runtime int→enum: use object[] array lookup to preserve type tags
-            if (conv.Type.TypeKind == TypeKind.Enum && conv.Type is INamedTypeSymbol enumTarget)
-            {
-                var info = _ctx.GetOrCreateEnumArray(enumTarget);
-                // The lookup index must be SystemInt32. Casting a non-int integral to a byte/short-backed
-                // enum leaves srcVal as SystemByte/SystemInt16, which __Get__SystemInt32 then reads as the
-                // wrong heap type and faults the VM. Widen to Int32 first (Int32 sources pass through).
-                var srcUdon = GetUdonType(conv.Operand.Type);
-                var idxSrc = srcUdon == "SystemInt32" ? srcVal : EmitNarrowingConvert(srcVal, srcUdon, "SystemInt32");
-                var indexVal = info.MinOffset == 0
-                    ? idxSrc
-                    : ExternCall("SystemInt32.__op_Subtraction__SystemInt32_SystemInt32__SystemInt32",
-                        new List<CLeaf> { idxSrc, Const((int)info.MinOffset, "SystemInt32") }, "SystemInt32");
-                return ExternCall(
-                    "SystemObjectArray.__Get__SystemInt32__SystemObject",
-                    new List<CLeaf> { LoadField(info.ArrayId, "SystemObjectArray"), indexVal },
-                    "SystemObject");
-            }
-
-            // enum→numeric: the enum value is stored as its underlying type. A same-width target (int-backed
-            // enum → int) just re-types through a scratch slot; a different-width target (byte/short-backed enum
-            // → int, or any enum → long) needs a real numeric conversion — a bare COPY into a wider slot would
-            // assign e.g. a SystemByte into a SystemInt32 variable and fail verification.
-            var underlyingUdon = conv.Operand.Type is INamedTypeSymbol srcEnum && srcEnum.TypeKind == TypeKind.Enum
+            // Enum ↔ underlying is a pure re-typing between each side's effective underlying udon type (an enum
+            // is STORED as its underlying type — see ExternResolver.GetUdonTypeName, so dstType for an enum
+            // target is already its underlying). The former int→enum path indexed a per-enum lookup array, but
+            // enumArr[v - min] == v — an identity over the underlying value — so it added nothing except a VM
+            // fault on out-of-range casts ((E)999 is legal C# and must round-trip). A direct convert is correct
+            // for every value: in-range, out-of-range, and byte/short/unsigned wrap. A same-width pair (int-
+            // backed enum ↔ int) re-types through a scratch slot; a different-width pair (byte/short-backed enum
+            // ↔ int, any enum ↔ long) needs a real numeric conversion (a bare COPY into a wider slot would store
+            // e.g. a SystemByte into a SystemInt32 variable and fail verification).
+            var srcUnderlying = conv.Operand.Type is INamedTypeSymbol srcEnum && srcEnum.TypeKind == TypeKind.Enum
                 ? GetUdonType(srcEnum.EnumUnderlyingType)
                 : GetUdonType(conv.Operand.Type);
-            if (underlyingUdon != dstType)
-                return EmitNarrowingConvert(srcVal, underlyingUdon, dstType);
+            if (srcUnderlying != dstType)
+                return EmitNarrowingConvert(srcVal, srcUnderlying, dstType);
             var tmpSlot = _ctx.AllocTemp(dstType);
             EmitAssign(tmpSlot, srcVal);
             return SlotRef(tmpSlot);
