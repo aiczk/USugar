@@ -215,7 +215,12 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
             // integer→integer lifted conversion, promote the boxed source to int64 (tolerates any boxed integer
             // tag, never overflows) and wrap/reinterpret via EmitNarrowingConvert. Float-involved conversions
             // keep the plain null-preserving Convert.
-            bool liftedIntToInt = ExternResolver.IsIntegerType(liftedSrcU) && ExternResolver.IsIntegerType(liftedDstU);
+            // char is integral for narrowing (EmitNarrowingConvert wraps it like C#'s unchecked cast) but
+            // ExternResolver.IsIntegerType excludes it; treat char as integral here so a lifted int?→char?
+            // narrowing WRAPS instead of taking the CHECKED Convert.ToChar branch (which throws > 65535).
+            bool liftedIntToInt =
+                (ExternResolver.IsIntegerType(liftedSrcU) || liftedSrcU.SpecialType == SpecialType.System_Char)
+                && (ExternResolver.IsIntegerType(liftedDstU) || liftedDstU.SpecialType == SpecialType.System_Char);
             _builder.EmitIf(EmitNullableHasValue(srcVal), _ =>
             {
                 CValue converted = liftedIntToInt
