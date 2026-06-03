@@ -586,7 +586,10 @@ public class EmitContext
 
         var enumArr = new object[arraySize];
         for (int i = 0; i < arraySize; i++)
-            enumArr[i] = Convert.ChangeType(i + minVal, clrType);
+            // Only [0, range) are real enum values; the rest are power-of-2 padding never reached by a valid
+            // cast. Filling padding with i+minVal can overflow the underlying type's CHECKED ChangeType (e.g.
+            // 256 for a byte-backed enum whose max forces a 256-slot array), crashing the compile. (diff-fuzz)
+            enumArr[i] = i < range ? Convert.ChangeType(i + minVal, clrType) : null;
 
         var enumFullName = enumType.ToDisplayString().Replace('.', '_');
         var arrayId = $"__enumArr_{enumFullName}";
