@@ -341,7 +341,11 @@ public class UasmEmitter
         foreach (var prop in _classSymbol.GetMembers().OfType<IPropertySymbol>())
         {
             if (prop.IsStatic || prop.IsImplicitlyDeclared) continue;
-            var isAuto = prop.GetMethod?.DeclaringSyntaxReferences.IsEmpty == true || prop.SetMethod?.DeclaringSyntaxReferences.IsEmpty == true;
+            // Auto-property iff it has a compiler-generated backing field (its accessors have empty bodies).
+            // The old DeclaringSyntaxReferences.IsEmpty check was always false for source `{ get; set; }`
+            // accessors, so a PRIVATE auto-property was never detected and its backing field went undeclared.
+            var isAuto = prop.ContainingType.GetMembers().OfType<IFieldSymbol>()
+                .Any(f => f.IsImplicitlyDeclared && SymbolEqualityComparer.Default.Equals(f.AssociatedSymbol, prop));
             if (!isAuto && prop.DeclaredAccessibility != Accessibility.Public) continue;
             var udonType = GetUdonType(prop.Type);
             var flags = FieldFlags.None;
@@ -433,7 +437,11 @@ public class UasmEmitter
             {
                 if (prop.IsStatic || prop.IsImplicitlyDeclared) continue;
                 if (declaredMemberNames.Contains(prop.Name)) continue;
-                var isAuto = prop.GetMethod?.DeclaringSyntaxReferences.IsEmpty == true || prop.SetMethod?.DeclaringSyntaxReferences.IsEmpty == true;
+                // Auto-property iff it has a compiler-generated backing field (its accessors have empty bodies).
+            // The old DeclaringSyntaxReferences.IsEmpty check was always false for source `{ get; set; }`
+            // accessors, so a PRIVATE auto-property was never detected and its backing field went undeclared.
+            var isAuto = prop.ContainingType.GetMembers().OfType<IFieldSymbol>()
+                .Any(f => f.IsImplicitlyDeclared && SymbolEqualityComparer.Default.Equals(f.AssociatedSymbol, prop));
                 if (!isAuto && prop.DeclaredAccessibility != Accessibility.Public) continue;
                 var udonType = GetUdonType(prop.Type);
                 var flags = FieldFlags.None;
