@@ -1355,6 +1355,25 @@ public class SelfDlgInvoke : UdonSharpBehaviour {
         Assert.Contains("__dlg_MyMethod", uasm);
     }
 
+    [Fact]
+    public void PrivateDelegateField_Invoke_BundleNotExported()
+    {
+        // A PRIVATE delegate field is now bundle-expanded and invokable (previously threw "Cannot resolve
+        // delegate target"). Its bundle target must NOT be exported — the only difference from a public field.
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public class PrivDlgInvoke : UdonSharpBehaviour {
+    Func<int, int> cb;
+    public int outv;
+    void Start() { cb = Dbl; outv = cb(21); }
+    int Dbl(int x) { return x * 2; }
+}", "PrivDlgInvoke");
+        Assert.Contains("cb__addr", uasm);
+        Assert.Contains("JUMP_INDIRECT", uasm);
+        Assert.DoesNotContain(".export cb__target", uasm);
+    }
+
     // ── Cross-behaviour delegate: cross-assign ──
 
     [Fact]

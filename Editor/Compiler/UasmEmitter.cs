@@ -268,10 +268,10 @@ public class UasmEmitter
                         $"Cannot sync field '{member.Name}': type '{member.Type}' is not supported by Udon sync");
             }
 
-            // Public delegate field → expand to 3-variable bundle (target, method, addr)
-            // Private delegate fields remain as SystemUInt32 (same-behaviour function pointers)
-            if (member.DeclaredAccessibility == Accessibility.Public
-                && member.Type is INamedTypeSymbol delegateType && delegateType.DelegateInvokeMethod != null)
+            // Delegate field → expand to a 3-variable bundle (target, method, addr). Private fields are bundled
+            // too (assign/invoke route on _delegateFields set-membership, not accessibility); they just inherit
+            // `flags` without the Export bit, so the bundle's target is a non-exported same-behaviour pointer.
+            if (member.Type is INamedTypeSymbol delegateType && delegateType.DelegateInvokeMethod != null)
             {
                 if (delegateType.DelegateInvokeMethod.ReturnType.IsTupleType)
                     throw new NotSupportedException($"Tuple-return delegate field '{member.Name}' is not supported.");
@@ -396,9 +396,8 @@ public class UasmEmitter
                     || member.GetAttributes().Any(a => a.AttributeClass?.Name is "SerializeField" or "SerializeFieldAttribute"))
                     baseFlags |= FieldFlags.Export;
 
-                // Public delegate field from base class → expand to 3-variable bundle
-                if (member.DeclaredAccessibility == Accessibility.Public
-                    && member.Type is INamedTypeSymbol baseDelegateType && baseDelegateType.DelegateInvokeMethod != null)
+                // Delegate field from a base class → expand to a 3-variable bundle (private bundled too; see above).
+                if (member.Type is INamedTypeSymbol baseDelegateType && baseDelegateType.DelegateInvokeMethod != null)
                 {
                     if (baseDelegateType.DelegateInvokeMethod.ReturnType.IsTupleType)
                         throw new NotSupportedException($"Tuple-return delegate field '{member.Name}' is not supported.");

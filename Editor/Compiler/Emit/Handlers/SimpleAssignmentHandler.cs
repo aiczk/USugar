@@ -288,16 +288,8 @@ public class SimpleAssignmentHandler : AssignmentHandlerBase, IExpressionHandler
             return srcVal;
         }
 
-        // Fallback: local variable or this.field.
-        // Stage A.4: catch private/this delegate field assignments here. Public delegate fields
-        // go through the self-delegate branch (with _delegateFields filter) earlier and record
-        // captures there; the fallback handles private fields stored as SystemUInt32 JUMP addresses.
-        if (assign.Target is IFieldReferenceOperation { Instance: IInstanceReferenceOperation } selfDlgFb
-            && selfDlgFb.Field.Type is INamedTypeSymbol selfDlgFbType
-            && selfDlgFbType.DelegateInvokeMethod != null)
-        {
-            RecordCapturesIfDelegateValue(assign.Value);
-        }
+        // Fallback: local variable or this.field. (Private/this delegate-field assignments no longer reach here —
+        // private fields are bundled now, so the self-delegate bundle branch above intercepts and returns first.)
 
         // Delegate-local re-assignment with a lambda (e.g. `f = null; f = (n) => ... f(n-1) ...;` — the
         // required idiom for a recursive lambda). Hoist the lambda and record the var→method binding so the
@@ -327,14 +319,6 @@ public class SimpleAssignmentHandler : AssignmentHandlerBase, IExpressionHandler
     {
         if (dc.Target is IAnonymousFunctionOperation lambda && _ctx.CaptureAnalyzer.HasCaptures(lambda))
             _ctx.RecordLambdaCaptures(lambda);
-    }
-
-    void RecordCapturesIfDelegateValue(IOperation value)
-    {
-        var dc = value as IDelegateCreationOperation;
-        if (dc == null && value is IConversionOperation conv && conv.Operand is IDelegateCreationOperation dc2)
-            dc = dc2;
-        if (dc != null) RecordIfCapturingLambda(dc);
     }
 
     static bool UnwrapDelegateLambda(IOperation value, out IAnonymousFunctionOperation lambda)
