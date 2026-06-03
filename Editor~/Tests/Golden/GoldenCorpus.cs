@@ -100,6 +100,25 @@ public static class GoldenCorpus
   public int acc;
   void Start(){ for (int i = 0; i < 5; i++) acc += (i % 2 == 0 ? 1 : -1); }
 }"),
+        // ── ??= write-back across non-this-field lvalue forms (H-1 regression lock) ──
+        // Pin the conditional store's operand wiring byte-exact: the null branch must write back through the
+        // captured lvalue (SetProgramVariable for cross-behaviour, SystemObjectArray.__Set__ at the right index
+        // for an aggregate member, the user setter for an auto-property) — not just copy into a dead scratch.
+        ("coalesce_crossfield", "CoalesceCrossField",
+@"using UdonSharp; public class CoalesceTarget : UdonSharpBehaviour { public string F; }
+public class CoalesceCrossField : UdonSharpBehaviour {
+  public CoalesceTarget other;
+  void Start(){ other.F ??= ""x""; }
+}"),
+        ("coalesce_tuplemember", "CoalesceTupleMember",
+@"using UdonSharp; public class CoalesceTupleMember : UdonSharpBehaviour {
+  void Start(){ (string a, string b) t = (null, null); t.a ??= ""x""; UnityEngine.Debug.Log(t.a); }
+}"),
+        ("coalesce_autoprop", "CoalesceAutoProp",
+@"using UdonSharp; public class CoalesceAutoProp : UdonSharpBehaviour {
+  public string Name { get; set; }
+  void Start(){ Name ??= ""x""; }
+}"),
     };
 
     public static (string Name, string ClassName, string Source) ByName(string name)
