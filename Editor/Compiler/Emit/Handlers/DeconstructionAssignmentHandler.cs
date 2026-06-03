@@ -57,9 +57,30 @@ public class DeconstructionAssignmentHandler : AssignmentHandlerBase, IOperation
         }
         else
         {
-            // Method call returning tuple: call the method, then read back per-element return fields
+            // Peel conversions to find the underlying RHS.
             var callValue = op.Value;
             while (callValue is IConversionOperation conv2) callValue = conv2.Operand;
+
+            // (a, b) = tup where the RHS is a tuple/struct-typed VALUE expression (local/parameter/field/array
+            // element), emulated as object[]. Read each element from the backing array; snapshot ALL reads
+            // before any store (value semantics + swap safety), deep-cloning aggregate elements so a later
+            // mutation of a target does not alias the source tuple.
+            if (callValue is not IInvocationOperation
+                && callValue.Type is INamedTypeSymbol valAggType && EmitContext.IsAggregateType(valAggType))
+            {
+                var arrVal = LoadInstanceRaw(callValue);
+                var snaps = new List<CLeaf>(targetTuple.Elements.Length);
+                for (int i = 0; i < targetTuple.Elements.Length; i++)
+                {
+                    var raw = ExternCall("SystemObjectArray.__Get__SystemInt32__SystemObject",
+                        new List<CLeaf> { arrVal, Const(i, "SystemInt32") }, "SystemObject");
+                    snaps.Add(targetTuple.Elements[i].Type is INamedTypeSymbol et && EmitContext.IsAggregateType(et)
+                        ? EmitDeepCloneAggregate(raw, et) : raw);
+                }
+                for (int i = 0; i < targetTuple.Elements.Length; i++)
+                    AssignToLValue(targetTuple.Elements[i], snaps[i]);
+                return;
+            }
 
             if (callValue is not IInvocationOperation invocation)
                 throw new System.NotSupportedException(
