@@ -128,6 +128,24 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
         if (op.OperatorKind == BinaryOperatorKind.Remainder && RemainderNeedsPolyfill(resultType))
             return EmitRemainderViaDivision(leftVal, rightVal, resultType);
 
+        // Udon has no byte/sbyte/short/ushort operators. C# promotes a plain small int to int before the op, but
+        // a small-int-backed ENUM keeps its underlying width (enum|enum stays enum, etc.), so the result type is
+        // small-int here only for such enums: compute in int32 and narrow back. (Comparisons yield bool, never a
+        // small int, so they skip this.)
+        if (ExternResolver.IsSmallIntOrChar(resultType))
+        {
+            var leftU = UnderlyingUdon(op.LeftOperand.Type);
+            var rightU = UnderlyingUdon(op.RightOperand.Type);
+            var li = leftU == "SystemInt32" ? leftVal : EmitNarrowingConvert(leftVal, leftU, "SystemInt32");
+            var ri = rightU == "SystemInt32" ? rightVal : EmitNarrowingConvert(rightVal, rightU, "SystemInt32");
+            var int32 = _compilation.GetSpecialType(SpecialType.System_Int32);
+            var raw = ExternCall(
+                ExternResolver.ResolveBinaryExtern(op.OperatorKind, op.OperatorMethod,
+                    ResolveType(int32), ResolveType(int32), ResolveType(int32)),
+                new List<CLeaf> { li, ri }, "SystemInt32");
+            return EmitNarrowingConvert(raw, "SystemInt32", resultType);
+        }
+
         var sig = ExternResolver.ResolveBinaryExtern(
             op.OperatorKind, op.OperatorMethod,
             ResolveType(op.LeftOperand.Type), ResolveType(op.RightOperand.Type), ResolveType(op.Type));
@@ -147,6 +165,11 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
 
         return ExternCall(sig, new List<CLeaf> { leftVal, rightVal }, resultType);
     }
+
+    // The effective Udon storage type of an operand: an enum is stored as (and operates on) its underlying type.
+    string UnderlyingUdon(ITypeSymbol t) =>
+        t is INamedTypeSymbol n && n.TypeKind == TypeKind.Enum
+            ? GetUdonType(n.EnumUnderlyingType) : GetUdonType(t);
 
     // Nullable bool `&` / `|` with C# three-valued logic: a known false dominates `&` (false & null = false)
     // and a known true dominates `|` (true | null = true), regardless of the other operand being null.
