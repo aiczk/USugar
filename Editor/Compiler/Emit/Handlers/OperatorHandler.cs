@@ -246,6 +246,18 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
 
     CLeaf VisitUnary(IUnaryOperation op)
     {
+        // ── User-defined struct operator (ANY unary kind, incl. ~): static operator method call. MUST come
+        // before the built-in ~ branch below — that branch builds an extern on the struct's SystemObjectArray
+        // type and throws "Bitwise NOT not supported on SystemObjectArray". Only fires for a user operator
+        // (a built-in lifted ~ has OperatorMethod null → falls through to the BitwiseNegation handling). ──
+        if (op.OperatorMethod is { MethodKind: MethodKind.UserDefinedOperator } unOpM
+            && unOpM.ContainingType is INamedTypeSymbol unOpCt && EmitContext.IsUserStruct(unOpCt)
+            && _methodFunctions.ContainsKey(unOpM.OriginalDefinition))
+        {
+            var operand = VisitExpression(op.Operand);
+            return EmitCallToMethod(unOpM.OriginalDefinition, new List<CLeaf> { operand });
+        }
+
         // Bitwise NOT (~): Udon VM has no unary complement extern → synthesize as XOR with all-bits-set
         if (op.OperatorKind == UnaryOperatorKind.BitwiseNegation)
         {
@@ -254,15 +266,6 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
             if (op.IsLifted && EmitContext.IsNullableT(op.Type, out var bnResU))
                 return EmitLiftedUnary(op, bnResU);
             return VisitBitwiseNot(op);
-        }
-
-        // ── User-defined struct operator: -v → static operator method call ──
-        if (op.OperatorMethod is { MethodKind: MethodKind.UserDefinedOperator } unOpM
-            && unOpM.ContainingType is INamedTypeSymbol unOpCt && EmitContext.IsUserStruct(unOpCt)
-            && _methodFunctions.ContainsKey(unOpM.OriginalDefinition))
-        {
-            var operand = VisitExpression(op.Operand);
-            return EmitCallToMethod(unOpM.OriginalDefinition, new List<CLeaf> { operand });
         }
 
         // Constant folding: compile-time evaluable unary expressions (e.g., -5)

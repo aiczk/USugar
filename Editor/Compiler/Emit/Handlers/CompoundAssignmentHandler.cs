@@ -28,6 +28,17 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
         var leftVal = lv.Value;
         var rightVal = VisitExpression(op.Value);
 
+        // User-defined struct operator (s += t uses the struct's operator +): static method call, then write
+        // back. The struct's Udon type is SystemObjectArray, so ResolveBinaryExtern would build a bogus extern.
+        if (op.OperatorMethod is { MethodKind: MethodKind.UserDefinedOperator } cuOpM
+            && cuOpM.ContainingType is INamedTypeSymbol cuOpCt && EmitContext.IsUserStruct(cuOpCt)
+            && _methodFunctions.ContainsKey(cuOpM.OriginalDefinition))
+        {
+            var res = EmitCallToMethod(cuOpM.OriginalDefinition, new List<CLeaf> { leftVal, rightVal });
+            EmitWriteBack(op.Target, res, lv);
+            return res;
+        }
+
         // Nullable (lifted) compound assignment: x += v  →  x = lifted(x, v) (null-propagating).
         if (EmitContext.IsNullableT(op.Target.Type, out var tUnderlying))
         {
@@ -88,6 +99,18 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
         // Capture lvalue sub-expressions once to avoid double evaluation
         var lv = CaptureLValue(op.Target);
         var targetVal = lv.Value;
+
+        // User-defined struct operator ++/-- (a single-operand static method returning the new struct), then
+        // write back. Postfix returns the captured OLD value; the built-in op_Addition path below would build
+        // a bogus extern on the struct's SystemObjectArray type and use the wrong (value, 1) shape.
+        if (op.OperatorMethod is { MethodKind: MethodKind.UserDefinedOperator } iuOpM
+            && iuOpM.ContainingType is INamedTypeSymbol iuOpCt && EmitContext.IsUserStruct(iuOpCt)
+            && _methodFunctions.ContainsKey(iuOpM.OriginalDefinition))
+        {
+            var res = EmitCallToMethod(iuOpM.OriginalDefinition, new List<CLeaf> { targetVal });
+            EmitWriteBack(op.Target, res, lv);
+            return op.IsPostfix ? lv.Value : res;
+        }
 
         // Nullable (lifted) increment/decrement: x++  →  x = lifted(x, 1) (null-propagating).
         if (EmitContext.IsNullableT(op.Type, out var incUnderlying))
