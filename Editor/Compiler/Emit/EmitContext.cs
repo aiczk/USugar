@@ -359,6 +359,11 @@ public class EmitContext
     /// <summary>Generate a unique end label for a switch statement (per EmitContext = per class).</summary>
     public string NextSwitchEndLabel() => $"__switchEnd_{++_switchLabelCounter}";
 
+    // goto-case / goto-default → sanitized UASM landing label, per enclosing switch (innermost on top). The
+    // Roslyn target name ("case 2:", "default") is not a valid UASM label token, so both the case-body label
+    // (SwitchHandler) and the goto (StatementHandler.VisitBranch) resolve through this shared map.
+    public readonly Stack<Dictionary<string, string>> GotoCaseLabels = new();
+
     // Delegate fields: tracks which user fields are delegate-typed and were expanded to bundles
     public readonly HashSet<string> DelegateFields = new();
 

@@ -33,6 +33,17 @@ public class SwitchHandler : HandlerBase, IOperationHandler
         var endLabel = _ctx.NextSwitchEndLabel();
         _ctx.SwitchBreakLabels.Push(endLabel);
         _ctx.LoopUsingDepthStack.Push(_usingDisposableStack.Count);
+        // Build a per-switch map: Roslyn goto-case/-default target name → sanitized UASM landing label. Only
+        // targeted cases get a label (a switch with no goto-case keeps byte-identical UASM). Sorted for
+        // determinism; labels derive from this switch's unique end-label counter.
+        var gotoTargets = new HashSet<string>();
+        CollectGotoCaseTargets(op, gotoTargets);
+        var labelMap = new Dictionary<string, string>();
+        var labelBase = endLabel.Replace("__switchEnd_", "__switchCase_");
+        int gi = 0;
+        foreach (var name in gotoTargets.OrderBy(n => n, System.StringComparer.Ordinal))
+            labelMap[name] = $"{labelBase}_{gi++}";
+        _ctx.GotoCaseLabels.Push(labelMap);
         try
         {
             // Pre-convert enum switch value once (Udon VM has no enum-typed operators)
@@ -49,10 +60,26 @@ public class SwitchHandler : HandlerBase, IOperationHandler
         }
         finally
         {
+            _ctx.GotoCaseLabels.Pop();
             _ctx.LoopUsingDepthStack.Pop();
             _ctx.SwitchBreakLabels.Pop();
         }
         _builder.EmitLabel(endLabel);
+    }
+
+    // Collect the label names of goto-case / goto-default branches inside THIS switch (a `goto case 2;` targets
+    // a label named "case 2:", `goto default;` → "default"). Does not descend into a nested switch — that
+    // switch's own VisitSwitch collects its targets. Used to decide which case bodies need a jump label.
+    static void CollectGotoCaseTargets(IOperation op, HashSet<string> into)
+    {
+        foreach (var child in op.ChildOperations)
+        {
+            if (child is ISwitchOperation) continue; // nested switch owns its own goto-case labels
+            if (child is IBranchOperation { BranchKind: BranchKind.GoTo, Target: { } t }
+                && (t.Name.StartsWith("case ") || t.Name == "default"))
+                into.Add(t.Name);
+            CollectGotoCaseTargets(child, into);
+        }
     }
 
     void EmitSwitchCases(ISwitchOperation op, CLeaf convertedValueVal,
@@ -163,6 +190,26 @@ public class SwitchHandler : HandlerBase, IOperationHandler
 
     void EmitCaseBody(ISwitchCaseOperation caseSection)
     {
+        // If a goto-case / goto-default jumps to one of this section's clauses, emit the matching (sanitized)
+        // landing label before the body; StatementHandler.VisitBranch resolves the goto through the same map.
+        // Only emitted when targeted, so a switch without goto-case is unchanged. Roslyn names the targets
+        // "case <const>:" and "default".
+        if (_ctx.GotoCaseLabels.Count > 0 && _ctx.GotoCaseLabels.Peek().Count > 0)
+        {
+            var map = _ctx.GotoCaseLabels.Peek();
+            foreach (var clause in caseSection.Clauses)
+            {
+                string roslynName = clause switch
+                {
+                    IDefaultCaseClauseOperation => "default",
+                    ISingleValueCaseClauseOperation { Value.ConstantValue: { HasValue: true, Value: { } cv } }
+                        => "case " + ToInvariantString(cv) + ":",
+                    _ => null,
+                };
+                if (roslynName != null && map.TryGetValue(roslynName, out var uasmLabel))
+                    _builder.EmitLabel(uasmLabel);
+            }
+        }
         foreach (var stmt in caseSection.Body)
             VisitOperation(stmt);
     }

@@ -210,7 +210,12 @@ public class StatementHandler : HandlerBase, IOperationHandler
         }
         else if (op.BranchKind == BranchKind.GoTo)
         {
-            _builder.EmitGoto(op.Target.Name);
+            // goto case <const>; / goto default; target a Roslyn label ("case 2:", "default") that is not a
+            // valid UASM token — the enclosing switch maps it to a sanitized landing label. A plain user goto
+            // (its label is emitted verbatim by ILabeledOperation) is not in the map and uses its own name.
+            var target = _ctx.GotoCaseLabels.Count > 0 && _ctx.GotoCaseLabels.Peek().TryGetValue(op.Target.Name, out var mapped)
+                ? mapped : op.Target.Name;
+            _builder.EmitGoto(target);
         }
         else
         {
