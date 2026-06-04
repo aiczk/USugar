@@ -221,8 +221,10 @@ public partial class InvocationHandler
             externArgs.Add(VisitExpression(arg.Value));
             idxTypes.Add(GetUdonType(arg.Value.Type));
         }
+        // Use the indexer's metadata name, not a hardcoded "Item": most indexers are "Item", but a type with
+        // [IndexerName(...)] differs (e.g. StringBuilder's indexer is "Chars" → __get_Chars__, not __get_Item__).
         return ExternCall(
-            $"{cType}.__get_Item__{string.Join("_", idxTypes)}__{rType}",
+            $"{cType}.__get_{op.Property.MetadataName}__{string.Join("_", idxTypes)}__{rType}",
             externArgs,
             rType);
     }
@@ -448,7 +450,8 @@ public partial class InvocationHandler
                 }
                 externArgs.Add(valueVal);
                 var indexParamStr = string.Join("_", indexTypes);
-                EmitExternVoid($"{containingType}.__set_Item__{indexParamStr}_{valueType}__SystemVoid",
+                // Indexer metadata name, not a hardcoded "Item" ([IndexerName] e.g. StringBuilder → "Chars").
+                EmitExternVoid($"{containingType}.__set_{propRef.Property.MetadataName}__{indexParamStr}_{valueType}__SystemVoid",
                     externArgs);
             }
             else

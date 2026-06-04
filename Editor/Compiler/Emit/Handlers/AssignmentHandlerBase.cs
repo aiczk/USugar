@@ -272,7 +272,8 @@ public abstract class AssignmentHandlerBase : HandlerBase
                     }
                     indexArgs.Add(valueVal);
                     var indexParamStr = string.Join("_", indexTypes);
-                    EmitExternVoid($"{containingType}.__set_Item__{indexParamStr}_{propValueType}__SystemVoid", indexArgs);
+                    // Indexer metadata name, not a hardcoded "Item" ([IndexerName] e.g. StringBuilder → "Chars").
+                    EmitExternVoid($"{containingType}.__set_{propRef.Property.MetadataName}__{indexParamStr}_{propValueType}__SystemVoid", indexArgs);
                 }
                 else
                 {

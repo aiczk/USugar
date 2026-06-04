@@ -235,7 +235,8 @@ public class SimpleAssignmentHandler : AssignmentHandlerBase, IExpressionHandler
                 }
                 indexArgs.Add(srcVal);
                 var indexParamStr = string.Join("_", indexTypes);
-                EmitExternVoid($"{containingType}.__set_Item__{indexParamStr}_{valueType}__SystemVoid", indexArgs);
+                // Indexer metadata name, not a hardcoded "Item" ([IndexerName] e.g. StringBuilder → "Chars").
+                EmitExternVoid($"{containingType}.__set_{propRef.Property.MetadataName}__{indexParamStr}_{valueType}__SystemVoid", indexArgs);
             }
             else switch (propRef.Instance)
             {
