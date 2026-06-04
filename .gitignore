@@ -1,3 +1,8 @@
 **/bin/
 **/obj/
 **/TestResults/
+
+# Local-only / not for distribution
+Editor~/_local_harness/
+docs/
+docs.meta
