@@ -313,6 +313,19 @@ public class EmitContext
         return !IsSdkNamespace(type.ContainingNamespace);
     }
 
+    /// <summary>The parameterless void Dispose() of a user type (public or explicit IDisposable impl),
+    /// or null. Used to route a `using` resource's implicit Dispose through a real method call rather
+    /// than a non-existent SystemObjectArray.__Dispose__ extern when the disposable is a user struct.</summary>
+    public static IMethodSymbol FindStructDisposeMethod(ITypeSymbol type)
+    {
+        foreach (var m in type.GetMembers().OfType<IMethodSymbol>())
+            if (!m.IsStatic && m.Parameters.Length == 0 && m.ReturnsVoid
+                && (m.Name == "Dispose"
+                    || m.ExplicitInterfaceImplementations.Any(e => e.Name == "Dispose")))
+                return m;
+        return null;
+    }
+
     static bool IsSdkNamespace(INamespaceSymbol ns)
     {
         for (var n = ns; n != null && !n.IsGlobalNamespace; n = n.ContainingNamespace)

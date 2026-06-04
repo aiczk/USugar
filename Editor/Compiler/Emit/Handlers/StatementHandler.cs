@@ -91,7 +91,7 @@ public class StatementHandler : HandlerBase, IOperationHandler
         for (int i = disposables.Count - 1; i >= 0; i--)
         {
             var (val, type) = disposables[i];
-            EmitExternVoid($"{GetUdonType(type)}.__Dispose__SystemVoid", new List<CLeaf> { val });
+            EmitDispose(val, type);
         }
     }
 
@@ -237,8 +237,7 @@ public class StatementHandler : HandlerBase, IOperationHandler
             for (int i = scope.Count - 1; i >= 0; i--)
             {
                 var (val, type) = scope[i];
-                var disposeType = GetUdonType(type);
-                EmitExternVoid($"{disposeType}.__Dispose__SystemVoid", new List<CLeaf> { val });
+                EmitDispose(val, type);
             }
         }
     }
@@ -263,8 +262,7 @@ public class StatementHandler : HandlerBase, IOperationHandler
             for (int i = scope.Count - 1; i >= 0; i--)
             {
                 var (val, type) = scope[i];
-                var disposeType = GetUdonType(type);
-                EmitExternVoid($"{disposeType}.__Dispose__SystemVoid", new List<CLeaf> { val });
+                EmitDispose(val, type);
             }
             count++;
         }
@@ -311,9 +309,22 @@ public class StatementHandler : HandlerBase, IOperationHandler
         for (int i = disposableVars.Count - 1; i >= 0; i--)
         {
             var (val, type) = disposableVars[i];
-            var udonType = GetUdonType(type);
-            EmitExternVoid($"{udonType}.__Dispose__SystemVoid", new List<CLeaf> { val });
+            EmitDispose(val, type);
         }
+    }
+
+    /// <summary>Emit a using resource's Dispose(). A user struct is object[]-backed, so its Udon type is
+    /// SystemObjectArray which has no Dispose extern; route through a JUMP to the struct's registered
+    /// Dispose method (collected in CollectStructMethodsInOperation). Real Udon disposables keep the extern.</summary>
+    void EmitDispose(CLeaf val, ITypeSymbol type)
+    {
+        if (type is INamedTypeSymbol nt && EmitContext.IsUserStruct(nt)
+            && EmitContext.FindStructDisposeMethod(nt) is { } dispose)
+        {
+            EmitCallToMethod(dispose, new List<CLeaf> { val });
+            return;
+        }
+        EmitExternVoid($"{GetUdonType(type)}.__Dispose__SystemVoid", new List<CLeaf> { val });
     }
 
     void VisitVariableDeclaration(IVariableDeclarationOperation decl)

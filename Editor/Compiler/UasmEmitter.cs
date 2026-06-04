@@ -1631,8 +1631,34 @@ public class UasmEmitter
         if (opMethod is { MethodKind: MethodKind.UserDefinedOperator }
             && opMethod.ContainingType is INamedTypeSymbol ot && EmitContext.IsUserStruct(ot))
             result.Add(opMethod.OriginalDefinition);
+        // `using` resource: the Dispose() is invoked IMPLICITLY (no IInvocationOperation in the tree), so
+        // collect a user-struct disposable's Dispose so it is registered as a struct method and the using
+        // lowering can JUMP to it instead of emitting a non-existent SystemObjectArray.__Dispose__ extern.
+        if (op is IUsingOperation uo) CollectUsingDispose(uo.Resources, result);
+        if (op is IUsingDeclarationOperation ud) CollectUsingDispose(ud.DeclarationGroup, result);
         foreach (var child in op.Children)
             CollectStructMethodsInOperation(child, result);
+    }
+
+    static void CollectUsingDispose(IOperation resources, HashSet<IMethodSymbol> result)
+    {
+        if (resources is IVariableDeclarationGroupOperation g)
+        {
+            foreach (var decl in g.Declarations)
+                foreach (var declarator in decl.Declarators)
+                    AddStructDispose(declarator.Symbol.Type, result);
+        }
+        else if (resources != null)
+        {
+            AddStructDispose(resources.Type, result);
+        }
+    }
+
+    static void AddStructDispose(ITypeSymbol type, HashSet<IMethodSymbol> result)
+    {
+        if (type is INamedTypeSymbol nt && EmitContext.IsUserStruct(nt)
+            && EmitContext.FindStructDisposeMethod(nt) is { } dispose)
+            result.Add(dispose.OriginalDefinition);
     }
 
     bool IsBaseInstanceMethod(IMethodSymbol method)
