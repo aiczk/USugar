@@ -137,8 +137,10 @@ public class ArrayHandler : HandlerBase, IExpressionHandler
         _builder.EmitFor(
             // init: i = 0
             b => { EmitAssign(iSlot, Const(0, "SystemInt32")); },
-            // cond: i < len
-            ExternCall("SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean",
+            // cond: i < len — MUST use the Func overload so it re-evaluates each iteration. The CLeaf overload
+            // evaluates the comparison once (before init runs, with i uninitialized), so the copy loop never
+            // iterates and the slice returns a correct-length but all-zero array.
+            () => ExternCall("SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean",
                 new List<CLeaf> { SlotRef(iSlot), lenVal }, "SystemBoolean"),
             // update: i++
             b =>

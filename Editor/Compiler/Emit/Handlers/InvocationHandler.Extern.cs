@@ -338,9 +338,10 @@ public partial class InvocationHandler
         // Result slot (null initially — returns null if no match found)
         var resultSlot = _ctx.AllocTemp("VRCUdonCommonInterfacesIUdonEventReceiver");
 
-        // while (idx < len)
+        // while (idx < len) — Func overload so the counter-dependent condition re-evaluates each iteration.
+        // The CLeaf overload evaluates it ONCE (idx still 0), so the loop never advances / never runs.
         _builder.EmitWhile(
-            ExternCall(
+            () => ExternCall(
                 "SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean",
                 new List<CLeaf> { SlotRef(idxSlot), SlotRef(lenSlot) },
                 "SystemBoolean"),
@@ -407,9 +408,9 @@ public partial class InvocationHandler
         var idx1Slot = _ctx.AllocTemp("SystemInt32");
         EmitAssign(idx1Slot, zeroConst);
 
-        // while (idx1 < len)
+        // while (idx1 < len) — Func overload (re-evaluate each iteration); CLeaf would evaluate idx1<len once.
         _builder.EmitWhile(
-            ExternCall(
+            () => ExternCall(
                 "SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean",
                 new List<CLeaf> { SlotRef(idx1Slot), SlotRef(lenSlot) },
                 "SystemBoolean"),
@@ -446,9 +447,9 @@ public partial class InvocationHandler
         var writeIdxSlot = _ctx.AllocTemp("SystemInt32");
         EmitAssign(writeIdxSlot, zeroConst);
 
-        // while (idx2 < len)
+        // while (idx2 < len) — Func overload (re-evaluate each iteration); CLeaf would evaluate idx2<len once.
         _builder.EmitWhile(
-            ExternCall(
+            () => ExternCall(
                 "SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean",
                 new List<CLeaf> { SlotRef(idx2Slot), SlotRef(lenSlot) },
                 "SystemBoolean"),
