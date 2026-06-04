@@ -146,6 +146,20 @@ public partial class InvocationHandler
             }
         }
 
+        // Interface property get → dispatch the getter through its interface bridge (SendCustomEvent),
+        // like an interface method call. Without this, GetUdonType(interface) yields IUdonEventReceiver and
+        // the fall-through emits a non-existent __get_Value extern on it.
+        if (op.Property.GetMethod is { } ifaceGetter
+            && op.Property.ContainingType.TypeKind == TypeKind.Interface
+            && op.Property.ContainingType.SpecialType == SpecialType.None
+            && !IsResolvedConcreteNonBehaviour(op.Instance.Type)
+            && _planner.GetLayout(op.Property.ContainingType).Methods.TryGetValue(ifaceGetter, out var ifaceGetterMl))
+        {
+            var ifaceInst = VisitExpression(op.Instance);
+            return CrossCall(ifaceInst, LayoutPlanner.InterfaceDispatchName(ifaceGetter, ifaceGetterMl),
+                new List<(string, CLeaf)>(), ifaceGetterMl.Returns.ToArray(), returnType);
+        }
+
         // Other instance.property → extern getter
         var instVal = VisitExpression(op.Instance);
         // Array .Length → use SystemArray (not the concrete array type) to match UdonSharp

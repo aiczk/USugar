@@ -601,11 +601,15 @@ public partial class InvocationHandler
 
         // Build returns
         var ifaceReturns = ifaceMl.Returns.ToArray();
+        // Tuple-returning interface methods dispatch directly (no bridge) under the interface's bare name.
         if (ifaceReturns.Length > 1)
             return CrossCall(instanceVal, ifaceMl.ExportName, paramPairs, ifaceReturns, "SystemVoid");
 
+        // Non-tuple: dispatch the canonical interface-qualified bridge name (matches the emitted bridge export
+        // and stays collision-free across overloads / multiple interfaces / explicit impls).
+        var dispatchName = LayoutPlanner.InterfaceDispatchName(target, ifaceMl);
         var returnType = target.ReturnsVoid ? "SystemVoid" : GetUdonType(target.ReturnType);
-        return CrossCall(instanceVal, ifaceMl.ExportName, paramPairs,
+        return CrossCall(instanceVal, dispatchName, paramPairs,
             target.ReturnsVoid ? System.Array.Empty<ReturnSlot>() : ifaceReturns, returnType);
     }
 

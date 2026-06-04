@@ -254,7 +254,21 @@ public class SimpleAssignmentHandler : AssignmentHandlerBase, IExpressionHandler
                     break;
                 default:
                 {
-                    if (ExternResolver.IsUdonSharpBehaviour(propRef.Property.ContainingType) && propRef.Instance is not IInstanceReferenceOperation)
+                    // Interface property set → dispatch the setter through its interface bridge (SetProgramVariable
+                    // the value, SendCustomEvent the setter), like an interface method call. Without this the
+                    // fall-through emits a non-existent __set_Value extern on IUdonEventReceiver.
+                    if (propRef.Property.SetMethod is { } ifaceSetter
+                        && propRef.Property.ContainingType.TypeKind == TypeKind.Interface
+                        && propRef.Property.ContainingType.SpecialType == SpecialType.None
+                        && propRef.Instance is not IInstanceReferenceOperation
+                        && _planner.GetLayout(propRef.Property.ContainingType).Methods.TryGetValue(ifaceSetter, out var ifaceSetterMl))
+                    {
+                        var paramNameConst = Const(ifaceSetterMl.ParamIds[0], "SystemString");
+                        EmitExternVoid("VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid", new List<CLeaf> { instanceVal, paramNameConst, srcVal });
+                        EmitExternVoid("VRCUdonCommonInterfacesIUdonEventReceiver.__SendCustomEvent__SystemString__SystemVoid",
+                            new List<CLeaf> { instanceVal, Const(LayoutPlanner.InterfaceDispatchName(ifaceSetter, ifaceSetterMl), "SystemString") });
+                    }
+                    else if (ExternResolver.IsUdonSharpBehaviour(propRef.Property.ContainingType) && propRef.Instance is not IInstanceReferenceOperation)
                     {
                         if (propRef.Property.Type is INamedTypeSymbol dlgPropType && dlgPropType.DelegateInvokeMethod != null)
                             throw new System.NotSupportedException("Delegate properties are not supported in v2.1. Use delegate fields instead.");

@@ -52,12 +52,19 @@ public class MyDoer : UdonSharpBehaviour, IDoer {
     public void Extra(int x) { }
     public void DoIt(int x) { }
 }", "MyDoer");
-        Assert.Contains(".export __0_DoIt", uasm);
+        Assert.Contains(".export __0_DoIt", uasm);   // the class method
         Assert.Contains(".export __0_Extra", uasm);
-        // Bridge generated: interface __0_x__param → class __1_x__param
         var lines = uasm.Split('\n');
+        // The class method exports __0_DoIt EXACTLY ONCE; the bridge takes a unique interface-qualified
+        // export (it must NOT collide with the class method's export — the collision this regression guards,
+        // which used to fail real assembly with "Entry point already exported").
         var doItExports = System.Linq.Enumerable.Count(lines, l => l.Trim() == ".export __0_DoIt");
-        Assert.Equal(2, doItExports); // method export + bridge export
+        Assert.Equal(1, doItExports);
+        Assert.Contains(lines, l => l.Trim().StartsWith(".export __iface_") && l.Contains("DoIt"));
+        // Every exported entry-point name is unique (no duplicate .export — the assembler rejects those).
+        var exportNames = System.Linq.Enumerable.ToList(System.Linq.Enumerable.Select(
+            System.Linq.Enumerable.Where(lines, l => l.Trim().StartsWith(".export ")), l => l.Trim()));
+        Assert.Equal(exportNames.Count, System.Linq.Enumerable.Count(System.Linq.Enumerable.Distinct(exportNames)));
     }
 
     [Fact]

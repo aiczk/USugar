@@ -794,8 +794,10 @@ public class UasmEmitter
                 _ctx.TryDeclareVar(ifaceMl.ReturnId, retType);
             }
 
-            // Create bridge function with unique name (avoid __body label collision with class method)
-            var bridgeFunc = _module.AddFunction($"__bridge_{ifaceMl.ExportName}", ifaceMl.ExportName);
+            // Export the bridge under the canonical interface-qualified name (unique vs class methods and
+            // other bridges); the function name carries it too so each bridge gets a distinct __body label.
+            var bridgeName = LayoutPlanner.InterfaceDispatchName(ifaceMethod, ifaceMl);
+            var bridgeFunc = _module.AddFunction($"__bridge_{bridgeName}", bridgeName);
             _builder.SetFunction(bridgeFunc);
 
             // Find class implementation

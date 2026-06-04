@@ -587,9 +587,19 @@ public class LayoutPlanner
         return new TypeLayout(methods, new Dictionary<IFieldSymbol, FieldLayout>(SymbolEqualityComparer.Default));
     }
 
+    /// <summary>Canonical, collision-free dispatch/export name for an interface method's bridge, qualified by
+    /// the interface's full name so it (a) never collides with a class-method export (__N_X), (b) keeps two
+    /// interfaces with the same method name distinct (explicit impls), and (c) lets caller and callee — even
+    /// in separate programs — derive the SAME dispatch string from the interface type alone.</summary>
+    public static string InterfaceDispatchName(IMethodSymbol ifaceMethod, MethodLayout ifaceMl)
+        => $"__iface_{SanitizeId(ifaceMethod.ContainingType.ToDisplayString())}_{ifaceMl.ExportName}";
+
     /// <summary>
-    /// Compute bridge exports needed when a class implements an interface
-    /// whose method layout doesn't match the class's own layout.
+    /// Bridge exports for every interface method a class implements (except tuple-returning ones, which are
+    /// dispatched directly via CrossCall). A bridge re-maps the canonical interface param/return names to the
+    /// class method's and JUMPs to it; it is always emitted so the canonical name is the single, unique,
+    /// cross-program-stable dispatch entry — avoiding the export-name collisions that arose when the bridge
+    /// reused the interface's bare export name (which could equal a sibling class method or another bridge).
     /// </summary>
     public List<(IMethodSymbol method, MethodLayout interfaceLayout, MethodLayout classLayout)>
         ComputeBridges(INamedTypeSymbol classType)
@@ -605,23 +615,9 @@ public class LayoutPlanner
                 var impl = classType.FindImplementationForInterfaceMember(ifaceMethod) as IMethodSymbol;
                 if (impl == null) continue;
                 if (!classLayout.Methods.TryGetValue(impl, out var classMl)) continue;
-
-                // Bridge needed when export name, param IDs, or return ID differ
-                bool needsBridge = ifaceMl.ExportName != classMl.ExportName;
-                if (!needsBridge)
-                {
-                    for (int i = 0; i < ifaceMl.ParamIds.Count && i < classMl.ParamIds.Count; i++)
-                    {
-                        if (ifaceMl.ParamIds[i] != classMl.ParamIds[i]) { needsBridge = true; break; }
-                    }
-                }
-                // ReturnId is null for tuple returns (N>1). Tuple-returning interface methods
-                // are dispatched via EmitInterfaceCall → HCrossBehaviourCall, not through bridges,
-                // so comparing only N=1 scalar returns here is intentional.
-                if (!needsBridge && ifaceMl.ReturnId != classMl.ReturnId)
-                    needsBridge = true;
-                if (needsBridge)
-                    bridges.Add((ifaceMethod, ifaceMl, classMl));
+                // Tuple returns (N>1, ReturnId null) go through CrossCall directly, not a bridge.
+                if (ifaceMl.Returns.Count > 1) continue;
+                bridges.Add((ifaceMethod, ifaceMl, classMl));
             }
         }
 
