@@ -642,6 +642,14 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
                             EmitAssign(memberSlot, rawMember);
                             memberVal = SlotRef(memberSlot);
                         }
+                        else if (isAgg && sub.Member is IPropertyReferenceOperation cpr
+                            && EmitContext.IsUserStruct(aggMatchType) && cpr.Property.GetMethod is { } cgetter)
+                        {
+                            // Computed user-struct property (no object[] storage slot): JUMP to its registered
+                            // getter with the struct as the receiver, not a non-existent SystemObjectArray.__get_X
+                            // extern. The getter is collected in CollectStructMethodsInOperation's subpattern case.
+                            memberVal = EmitCallToMethod(cgetter.OriginalDefinition, new List<CLeaf> { SlotRef(valSlot) });
+                        }
                         else
                         {
                             memberVal = ExternCall(

@@ -1626,6 +1626,14 @@ public class UasmEmitter
             if (prop.GetMethod != null) result.Add(prop.GetMethod.OriginalDefinition);
             if (prop.SetMethod != null) result.Add(prop.SetMethod.OriginalDefinition);
         }
+        // Property-pattern subpattern: `p is { Doubled: ... }` reads Doubled via an IMPLICIT getter call,
+        // not an explicit IPropertyReferenceOperation, so collect a computed user-struct property's getter
+        // here too — else the pattern lowering emits a bogus accessor extern for an unregistered getter.
+        if (op is IPropertySubpatternOperation sub && sub.Member is IPropertyReferenceOperation spr
+            && spr.Property is { IsStatic: false } sprop
+            && spr.Property.ContainingType is INamedTypeSymbol spit && EmitContext.IsUserStruct(spit)
+            && IsComputedProperty(sprop) && sprop.GetMethod != null)
+            result.Add(sprop.GetMethod.OriginalDefinition);
         // User-struct operator: v1 + v2, -v (static operator methods).
         var opMethod = (op as IBinaryOperation)?.OperatorMethod ?? (op as IUnaryOperation)?.OperatorMethod;
         if (opMethod is { MethodKind: MethodKind.UserDefinedOperator }
