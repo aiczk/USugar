@@ -57,12 +57,22 @@ public static class ExternResolver
 
         if (type is IArrayTypeSymbol arrayType)
         {
-            if (arrayType.ElementType is IArrayTypeSymbol)
+            // Substitute a type-parameter element through the map BEFORE classifying. A generic method's
+            // T[] param with T=<user struct> must be seen as struct[] (→ SystemObjectArray), like the
+            // non-generic path. Without this, the aggregate check below runs on the raw type parameter
+            // (not aggregate), then "Array" is appended to the substituted element name (already degraded
+            // to SystemObjectArray) → an invalid SystemObjectArrayArray that Udon cannot resolve.
+            var elementType = arrayType.ElementType;
+            if (elementType is ITypeParameterSymbol etp && typeParamMap != null
+                && typeParamMap.TryGetValue(etp, out var resolvedElem))
+                elementType = resolvedElem;
+
+            if (elementType is IArrayTypeSymbol)
                 return "SystemObjectArray";
             // struct[] / tuple[] → object[] of boxed object[] elements (no SystemObjectArrayArray in Udon).
-            if (EmitContext.IsAggregateType(arrayType.ElementType))
+            if (EmitContext.IsAggregateType(elementType))
                 return "SystemObjectArray";
-            var elemTypeName = GetUdonTypeName(arrayType.ElementType, typeParamMap);
+            var elemTypeName = GetUdonTypeName(elementType, typeParamMap);
             if (elemTypeName == "VRCUdonCommonInterfacesIUdonEventReceiver")
                 return "UnityEngineComponentArray";
             return RemapUdonType(elemTypeName) + "Array";
