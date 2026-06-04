@@ -1689,15 +1689,28 @@ public class UasmEmitter
     {
         var result = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
         foreach (var method in classMethods)
+            CollectBaseInstanceCallsInOperation(GetMethodBodyOperation(method), result);
+        // Transitive closure: a discovered base method's OWN body may call a further base method (a
+        // `base.M` chain across 3+ levels), and a base property accessor may reference another base member.
+        // Keep scanning newly discovered base methods' bodies until a fixpoint (else the deepest target is
+        // never registered → its call falls through to a bogus extern).
+        var queue = new Queue<IMethodSymbol>(result);
+        while (queue.Count > 0)
         {
-            var syntaxRef = method.DeclaringSyntaxReferences.FirstOrDefault();
-            if (syntaxRef == null) continue;
-            var syntax = syntaxRef.GetSyntax();
-            var model = _compilation.GetSemanticModel(syntax.SyntaxTree);
-            var bodyOp = model.GetOperation(syntax);
-            CollectBaseInstanceCallsInOperation(bodyOp, result);
+            var discovered = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
+            CollectBaseInstanceCallsInOperation(GetMethodBodyOperation(queue.Dequeue()), discovered);
+            foreach (var d in discovered)
+                if (result.Add(d)) queue.Enqueue(d);
         }
         return result.ToArray();
+    }
+
+    IOperation GetMethodBodyOperation(IMethodSymbol method)
+    {
+        var syntaxRef = method?.DeclaringSyntaxReferences.FirstOrDefault();
+        if (syntaxRef == null) return null;
+        var syntax = syntaxRef.GetSyntax();
+        return _compilation.GetSemanticModel(syntax.SyntaxTree).GetOperation(syntax);
     }
 
     void CollectBaseInstanceCallsInOperation(IOperation op, HashSet<IMethodSymbol> result)
@@ -1705,6 +1718,14 @@ public class UasmEmitter
         if (op == null) return;
         if (op is IInvocationOperation inv && IsBaseInstanceMethod(inv.TargetMethod))
             result.Add(inv.TargetMethod);
+        // base.Prop / base[i]: a property/indexer reference invokes an accessor implicitly (it is not an
+        // IInvocationOperation), so collect the base accessor too — else the read/write handler emits a
+        // bogus SystemX.__get_Prop__ extern instead of a JUMP to the registered base getter/setter.
+        if (op is IPropertyReferenceOperation pr)
+        {
+            if (pr.Property.GetMethod is { } g && IsBaseInstanceMethod(g)) result.Add(g);
+            if (pr.Property.SetMethod is { } s && IsBaseInstanceMethod(s)) result.Add(s);
+        }
         foreach (var child in op.Children)
             CollectBaseInstanceCallsInOperation(child, result);
     }

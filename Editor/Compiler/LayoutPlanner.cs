@@ -494,6 +494,11 @@ public class LayoutPlanner
                 cur = cur.OverriddenMethod;
             }
         }
+        // Export names already taken by the derived class's own methods — an inherited member that is
+        // `new`-shadowed by a derived member shares its simple name, so its base layout's export/body/ret
+        // names would collide (two distinct functions, one .export + one entry label = silent overwrite →
+        // stack-balance corruption). Re-allocate the inherited names on collision.
+        var usedExports = new HashSet<string>(methods.Values.Select(m => m.ExportName));
         var inheritBase = type.BaseType;
         while (inheritBase != null && inheritBase.Name != "UdonSharpBehaviour")
         {
@@ -506,8 +511,21 @@ public class LayoutPlanner
                               || m.MethodKind == MethodKind.PropertySet)
                              && m.DeclaringSyntaxReferences.Length > 0 && !m.IsGenericMethod && !m.IsAbstract))
                 {
-                    if (!overriddenMethods.Contains(bm) && baseLayout.Methods.TryGetValue(bm, out var baseMl))
-                        methods.TryAdd(bm, baseMl);
+                    if (overriddenMethods.Contains(bm) || !baseLayout.Methods.TryGetValue(bm, out var baseMl))
+                        continue;
+                    var ml = baseMl;
+                    if (usedExports.Contains(baseMl.ExportName))
+                    {
+                        var ue = NameAllocator.FormatId(baseMl.ExportName, alloc.Allocate(baseMl.ExportName));
+                        var newReturns = new List<ReturnSlot>();
+                        foreach (var rs in baseMl.Returns)
+                        {
+                            var rk = ue + "__ret";
+                            newReturns.Add(new ReturnSlot(NameAllocator.FormatId(rk, alloc.Allocate(rk)), rs.UdonType));
+                        }
+                        ml = new MethodLayout(ue, ue + "__body", baseMl.ParamIds, newReturns);
+                    }
+                    if (methods.TryAdd(bm, ml)) usedExports.Add(ml.ExportName);
                 }
             }
             inheritBase = inheritBase.BaseType;
