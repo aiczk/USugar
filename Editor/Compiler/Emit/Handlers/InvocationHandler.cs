@@ -138,6 +138,7 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
         // Generic foreign static method → monomorphize and emit as internal call
         if (target.IsGenericMethod && IsForeignStatic(target))
         {
+            GuardRefOutArguments(op, target); // round-8 [R6]: Q2/Q5/R4 parity
             var constructed = target.ReducedFrom != null
                 ? target.ReducedFrom.OriginalDefinition.Construct(target.TypeArguments.ToArray())
                 : target.OriginalDefinition.Construct(target.TypeArguments.ToArray());
@@ -151,7 +152,11 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
             {
                 args.Add(VisitExpression(op.Arguments[i].Value));
             }
-            return EmitCallToMethod(constructed, args);
+            var genResult = EmitCallToMethod(constructed, args);
+            // Round-8 [R6]: this arm used to drop the ref/out copy-back (DiffFuzz: ref=9 vs VM 1).
+            // Reduced-extension argument ordinals shift by 1 onto the original's params (this=0).
+            EmitRefOutCopyBack(op, constructed, target.ReducedFrom != null && op.Instance != null ? 1 : 0);
+            return genResult;
         }
 
         // Foreign static method → inlined as internal call (resolve extension method original form)
@@ -159,6 +164,7 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
             var original = target.ReducedFrom ?? target;
             if (IsForeignStatic(target) && _methodFunctions.ContainsKey(original))
             {
+                GuardRefOutArguments(op, target); // round-8 [R6]: Q2/Q5/R4 parity
                 var args = new List<CLeaf>();
                 // Extension method: instance is the first (this) parameter
                 if (target.ReducedFrom != null && op.Instance != null)
@@ -169,7 +175,10 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
                 {
                     args.Add(VisitExpression(op.Arguments[i].Value));
                 }
-                return EmitCallToMethod(original, args);
+                var fsResult = EmitCallToMethod(original, args);
+                // Round-8 [R6]: this arm used to drop the ref/out copy-back (DiffFuzz: ref=6 vs VM 1).
+                EmitRefOutCopyBack(op, original, target.ReducedFrom != null && op.Instance != null ? 1 : 0);
+                return fsResult;
             }
         }
 
@@ -241,6 +250,8 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
     // so `this`-field mutations reflect back to the caller's local (value-type by-ref `this` semantics).
     CLeaf EmitStructInstanceCall(IInvocationOperation op, IMethodSymbol target)
     {
+        GuardRefOutArguments(op, target); // round-8 [R5]: Q2/Q5/R4 parity with EmitUserMethodCall
+
         // Recursion (including the receiver) is handled by EmitCallToMethod's software-stack spill/reload.
         var recv = LoadInstanceRaw(op.Instance);
         // Round-8 [R1] (corrects the round-7 [Q4] over-clone, which was calibrated against a wrong
@@ -256,7 +267,11 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
         var args = new List<CLeaf> { recv };
         for (var i = 0; i < op.Arguments.Length; i++)
             args.Add(VisitExpression(op.Arguments[i].Value));
-        return EmitCallToMethod(target, args);
+        var result = EmitCallToMethod(target, args);
+        // Round-8 [R5]: this path used to drop the ref/out copy-back entirely (DiffFuzz: ref-arg
+        // ref=136 vs VM 106, out-arg ref=10 vs 0). Param ids are ordinal-indexed (receiver separate).
+        EmitRefOutCopyBack(op, target);
+        return result;
     }
 
     // ── Delegate Invocation (design §2.6: single unified dispatch for ALL invoke shapes) ──

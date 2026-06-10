@@ -604,6 +604,40 @@ public abstract class HandlerBase
         }
     }
 
+    /// <summary>Round-8 [R4]: the storage ROOT a ref/out argument resolves to — a local, a
+    /// parameter, or a this-field (struct member chains and array-element links walk to the root,
+    /// mirroring the [Q5] walk above). Two ref/out arguments of ONE call sharing a root are two
+    /// independent heap vars under the copy-in/copy-back convention: the callee never observes the
+    /// alias and the last copy-back silently wins (DiffFuzz: M(ref a, ref a) with x=x+1;y=y+3
+    /// ref=5 vs VM 4, local and this-field flavors). Null = cross-behaviour member / fresh value.</summary>
+    protected static ISymbol TryGetRefStorageRoot(IOperation arg)
+    {
+        var op = arg;
+        while (true)
+        {
+            switch (op)
+            {
+                case IConversionOperation c:
+                    op = c.Operand; continue;
+                case IDeclarationExpressionOperation de:
+                    op = de.Expression; continue; // out var x → the declared local
+                case ILocalReferenceOperation lr:
+                    return lr.Local;
+                case IParameterReferenceOperation pr:
+                    return pr.Parameter.OriginalDefinition;
+                case IFieldReferenceOperation { Instance: IInstanceReferenceOperation } fr when !fr.Field.IsStatic:
+                    return fr.Field.OriginalDefinition;
+                case IFieldReferenceOperation fr2 when fr2.Instance != null
+                    && fr2.Field.ContainingType?.IsValueType == true:
+                    op = fr2.Instance; continue; // struct member chain → resolve its root
+                case IArrayElementReferenceOperation ae:
+                    op = ae.ArrayReference; continue; // element storage roots at the array reference
+                default:
+                    return null;
+            }
+        }
+    }
+
     /// <summary>Round-8 [R1] (corrects the round-7 [Q4] over-clone): true when a receiver chain
     /// reaches a foreach ITERATION variable through AT LEAST ONE value-typed field link. Roslyn
     /// does NOT defensive-copy a DIRECT member invocation on the loop local (ldloca on the local;

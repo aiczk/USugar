@@ -638,10 +638,10 @@ public partial class InvocationHandler
 
     // ── User Method Call ──
 
-    CLeaf EmitUserMethodCall(IInvocationOperation op, IMethodSymbol target)
+    /// <summary>Round-7 [Q2]/[Q5] + round-8 [R4] ref/out ARGUMENT guards, shared by the user-method,
+    /// struct-instance ([R5]) and foreign-static ([R6]) call paths. Runs BEFORE argument evaluation.</summary>
+    void GuardRefOutArguments(IInvocationOperation op, IMethodSymbol target)
     {
-        var paramIds = _methodParamVarIds[target];
-
         // Round-7 follow-up [Q2]: ref/out params are deliberately EXCLUDED from the recursion spill
         // set (a recursive call THREADING ITS OWN ref/out param must keep its mutations across the
         // call — wave-3 #3, RecRefRegressionTests / struct_ref_param tier). That exclusion is only
@@ -649,6 +649,7 @@ public partial class InvocationHandler
         // one shared param heap var at copy-in and nothing restores the outer frame's value
         // (VM-proven: re-chained scalar/struct ref recursion 200 vs CLR 101). Loud per design §8-3.
         bool recursiveEdge = IsRecursiveEdge(_currentMethod, target);
+        List<ISymbol> refRoots = null;
         for (int i = 0; i < op.Arguments.Length; i++)
         {
             var p = op.Arguments[i].Parameter ?? target.Parameters[i];
@@ -681,7 +682,51 @@ public partial class InvocationHandler
                     + "field, so the callee's reads through the parameter go stale and its direct field "
                     + "writes are reverted by the copy-back. Pass a local copy, or let the callee use "
                     + "the field directly.");
+            // Round-8 [R4]: two ref/out arguments of ONE call resolving to the same storage root are
+            // two independent heap vars under copy-in/copy-back — the callee never observes the
+            // alias and the last copy-back silently wins (DiffFuzz: M(ref a, ref a) ref=5 vs VM 4,
+            // local and this-field flavors). Loud per §8-3; distinct-storage Swap stays legal.
+            var root = TryGetRefStorageRoot(a);
+            if (root != null)
+            {
+                refRoots ??= new List<ISymbol>();
+                if (refRoots.Any(r => SymbolEqualityComparer.Default.Equals(r, root)))
+                    throw new System.NotSupportedException(
+                        $"two ref/out arguments of '{target.Name}' resolve to the same storage "
+                        + $"('{root.Name}'). Each ref/out parameter is an independent heap var under "
+                        + "the copy-in/copy-back convention, so the callee never observes the alias "
+                        + "and the last copy-back silently overwrites the other's result. Pass "
+                        + "distinct variables, or pass by value.");
+                refRoots.Add(root);
+            }
         }
+    }
+
+    /// <summary>Round-8 [R5]/[R6]: by-ordinal ref/out copy-back, shared by the user-method,
+    /// struct-instance and foreign-static call paths (the latter two used to drop it entirely —
+    /// DiffFuzz: struct ref ref=136 vs VM 106 / out ref=10 vs 0; foreign static plain ref=6 vs 1,
+    /// generic ref=9 vs 1). <paramref name="ordinalOffset"/> maps reduced-extension argument
+    /// ordinals onto the original definition's params (the receiver occupies ordinal 0).</summary>
+    void EmitRefOutCopyBack(IInvocationOperation op, IMethodSymbol target, int ordinalOffset = 0)
+    {
+        for (int i = 0; i < op.Arguments.Length; i++)
+        {
+            var param = op.Arguments[i].Parameter ?? target.Parameters[i];
+            if (param.RefKind != RefKind.Out && param.RefKind != RefKind.Ref) continue;
+            // Index the param field by the argument's parameter ordinal, not its call-site position
+            // (named/reordered args), matching the by-ordinal copy-in.
+            var paramIds = _methodParamVarIds[target]; // loud (KeyNotFound) if unregistered
+            var argTarget = op.Arguments[i].Value;
+            var paramId = paramIds[param.Ordinal + ordinalOffset];
+            var paramType = _ctx.GetFieldType(paramId);
+            var paramVal = LoadField(paramId, paramType);
+            AssignToTarget(argTarget, paramVal);
+        }
+    }
+
+    CLeaf EmitUserMethodCall(IInvocationOperation op, IMethodSymbol target)
+    {
+        GuardRefOutArguments(op, target);
 
         // Recursion is handled centrally in EmitCallToMethod (software-stack spill/reload around the call).
 
@@ -709,20 +754,7 @@ public partial class InvocationHandler
         // manual re-sequencing of a lazy call is needed.
         var result = EmitCallToMethod(target, args);
 
-        // Copy-out for ref/out params — index the param field by the argument's parameter ordinal, not its
-        // call-site position (named/reordered args), matching the by-ordinal copy-in above.
-        for (int i = 0; i < op.Arguments.Length; i++)
-        {
-            var param = op.Arguments[i].Parameter ?? target.Parameters[i];
-            if (param.RefKind == RefKind.Out || param.RefKind == RefKind.Ref)
-            {
-                var argTarget = op.Arguments[i].Value;
-                // Read back the param field value after call
-                var paramType = _ctx.GetFieldType(paramIds[param.Ordinal]);
-                var paramVal = LoadField(paramIds[param.Ordinal], paramType);
-                AssignToTarget(argTarget, paramVal);
-            }
-        }
+        EmitRefOutCopyBack(op, target);
 
         return result;
     }
