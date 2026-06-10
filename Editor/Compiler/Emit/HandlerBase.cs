@@ -577,6 +577,31 @@ public abstract class HandlerBase
         };
     }
 
+    /// <summary>Round-7 follow-up [Q4]: true when a receiver chain roots at a foreach ITERATION
+    /// variable through value-typed member links only. Such a receiver is READONLY in C# — a
+    /// non-readonly struct method runs on a defensive copy — so the caller clones it. A chain that
+    /// passes through an ARRAY ELEMENT stops (arrays are reference-typed: the CLR mutates through
+    /// them even from a readonly variable, so live storage is correct there).</summary>
+    protected bool RootsAtForeachIterationVariable(IOperation instance)
+    {
+        var op = instance;
+        while (true)
+        {
+            switch (op)
+            {
+                case IConversionOperation c:
+                    op = c.Operand; continue;
+                case ILocalReferenceOperation lr:
+                    return _ctx.ForeachIterationLocals.Contains(lr.Local);
+                case IFieldReferenceOperation fr when fr.Instance != null
+                    && fr.Field.ContainingType?.IsValueType == true:
+                    op = fr.Instance; continue;
+                default:
+                    return false; // array element / param / call result / this — live or fresh storage
+            }
+        }
+    }
+
     /// <summary>Read an aggregate array element as the raw stored object[] (no clone), for receiver access.</summary>
     protected CLeaf ReadArrayElementRaw(IArrayElementReferenceOperation ae)
     {

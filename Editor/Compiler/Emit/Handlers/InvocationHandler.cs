@@ -242,7 +242,16 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
     CLeaf EmitStructInstanceCall(IInvocationOperation op, IMethodSymbol target)
     {
         // Recursion (including the receiver) is handled by EmitCallToMethod's software-stack spill/reload.
-        var args = new List<CLeaf> { LoadInstanceRaw(op.Instance) };
+        var recv = LoadInstanceRaw(op.Instance);
+        // Round-7 follow-up [Q4]: the foreach iteration variable is READONLY in C#, so a
+        // non-readonly struct method invoked on it (or on a struct member chain rooted at it)
+        // operates on a DEFENSIVE COPY — mutation is a no-op (VM-proven: loop-var reads after a
+        // mutating call 1112 vs CLR 102). Clone the receiver for the call; chains through array
+        // elements keep live storage (reference semantics, CLR-equal — the helper stops there).
+        if (!target.IsReadOnly && RootsAtForeachIterationVariable(op.Instance)
+            && op.Instance?.Type is INamedTypeSymbol recvAgg && EmitContext.IsAggregateType(recvAgg))
+            recv = EmitDeepCloneAggregate(recv, recvAgg);
+        var args = new List<CLeaf> { recv };
         for (var i = 0; i < op.Arguments.Length; i++)
             args.Add(VisitExpression(op.Arguments[i].Value));
         return EmitCallToMethod(target, args);

@@ -120,6 +120,9 @@ public class LoopHandler : HandlerBase, IOperationHandler
             ?? throw new System.InvalidOperationException("foreach has no loop variable");
         var loopVarId = _ctx.DeclareLocal(loopLocal.Name, elemType);
         _localBindings[loopLocal] = new EmitContext.LocalBinding(loopVarId);
+        // [Q4] the iteration variable is READONLY in C# — struct method receivers rooted at it get
+        // a defensive clone (EmitStructInstanceCall), matching the CLR's foreach-mutation no-op.
+        _ctx.ForeachIterationLocals.Add(loopLocal);
 
         // Index variable
         var idxSlot = _ctx.AllocTemp("SystemInt32");

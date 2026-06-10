@@ -275,6 +275,13 @@ public class EmitContext
     // drive emission order (symbol-keyed iteration order would break the 2-compile determinism gate).
     public readonly HashSet<ILocalSymbol> CapturingLambdaLocals = new(SymbolEqualityComparer.Default);
 
+    // Round-7 follow-up [Q4]: foreach ITERATION variables. C# makes them READONLY, so invoking a
+    // non-readonly struct member on one runs on a DEFENSIVE COPY (the classic foreach-struct-
+    // mutation no-op); the loop variable's object[] is live storage in the flat emulation, so the
+    // struct-instance-call receiver is CLONED when its chain roots at one of these locals
+    // (VM-proven: loop-var reads after a mutating call 1112 vs CLR 102). MEMBERSHIP-ONLY set (§1.5).
+    public readonly HashSet<ILocalSymbol> ForeachIterationLocals = new(SymbolEqualityComparer.Default);
+
     // §2.8 round-2: fields / auto-properties / struct members that receive a DIRECT capturing-lambda
     // store anywhere in this class (pre-scanned by UasmEmitter.CollectCaptureReceivingMembers over all
     // root bodies + field initializers BEFORE body emission, so the taint is emission-order-independent).
