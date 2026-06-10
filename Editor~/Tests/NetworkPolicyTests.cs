@@ -177,4 +177,120 @@ public class SyncPol6 : SyncPolBase6 {
         Assert.Contains("cb: %SystemObjectArray", uasm);
         Assert.Contains("baseCb: %SystemObjectArray", uasm);
     }
+
+    // ── [B37] base-class [UdonSynced] fields keep their .sync directive in the derived program ──
+    //
+    // Pre-fix (probed at e1a4907, evidence in the M4 pre-fix probe P2f): the base-class field walk
+    // read NO sync attributes — a [UdonSynced] int declared on a user base class compiled CLEAN in
+    // the derived program but shipped WITHOUT .sync (networking silently dead on device). The fix
+    // shares the own-class sync-attribute reader (ReadFieldSyncMode) with the base walk. The .sync
+    // directive + mode in UASM is the correct headless gate — sync RUNTIME semantics cannot run in
+    // the single-program harness; on-device confirmation is an acceptance-checklist item.
+    //
+    // The Linear-mode flavors use a test-source-local UdonSyncedAttribute stub (the emitter resolves
+    // the attribute by simple name, exactly like production against the real SDK) because the shared
+    // TestHelper stub's attribute is parameterless and TestHelper is gate code.
+
+    // Appended AFTER the behaviour source (using directives must precede namespace declarations).
+    const string ModeStub = @"
+namespace SyncStub {
+    public enum UdonSyncMode { NotSynced, None, Linear, Smooth }
+    public class UdonSyncedAttribute : System.Attribute { public UdonSyncedAttribute(UdonSyncMode mode) { } }
+}";
+
+    [Fact]
+    public void UdonSynced_IntField_OnBaseClass_EmitsSyncInDerivedProgram()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public class SyncPolBase7 : UdonSharpBehaviour {
+    [UdonSynced] public int v;
+    public int plain;
+}
+public class SyncPol7 : SyncPolBase7 {
+    public int n;
+}", "SyncPol7");
+        Assert.Contains(".sync v, none", uasm);
+        // Negative control in the SAME derived program: an unsynced base field stays unsynced.
+        Assert.DoesNotContain(".sync plain", uasm);
+        Assert.DoesNotContain(".sync n", uasm);
+    }
+
+    [Fact]
+    public void UdonSynced_LinearFloatField_OnBaseClass_EmitsSyncModeInDerivedProgram()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public class SyncPolBase8 : UdonSharpBehaviour {
+    [SyncStub.UdonSynced(SyncStub.UdonSyncMode.Linear)] public float speed;
+}
+public class SyncPol8 : SyncPolBase8 {
+    public int n;
+}" + ModeStub, "SyncPol8");
+        Assert.Contains(".sync speed, linear", uasm);
+    }
+
+    [Fact]
+    public void UdonSynced_LinearFloatField_OwnClass_EmitsSyncMode()
+    {
+        // Own-class control (green pre-fix): pins the sync-mode argument mapping AND proves the
+        // test-source-local attribute stub is resolved identically to the shared stub.
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public class SyncPol9 : UdonSharpBehaviour {
+    [SyncStub.UdonSynced(SyncStub.UdonSyncMode.Linear)] public float speed;
+}" + ModeStub, "SyncPol9");
+        Assert.Contains(".sync speed, linear", uasm);
+    }
+
+    [Fact]
+    public void UdonSynced_InvalidType_OnBaseClass_ThrowsInDerivedProgram()
+    {
+        // The shared path brings the syncable-type validation to the base walk too: pre-fix a
+        // [UdonSynced] GameObject base field compiled CLEAN in the derived program (doubly silent —
+        // no .sync AND no reject); the same field on the own class always threw.
+        var ex = Assert.ThrowsAny<System.Exception>(() => TestHelper.CompileToUasm(@"
+using UdonSharp;
+public class SyncPolBase10 : UdonSharpBehaviour {
+    [UdonSynced] public UnityEngine.GameObject go;
+}
+public class SyncPol10 : SyncPolBase10 {
+    public int n;
+}", "SyncPol10"));
+        Assert.Contains("Cannot sync field 'go'", ex.Message);
+        Assert.Contains("Udon can sync only", ex.Message);
+    }
+
+    [Fact]
+    public void FieldChangeCallback_OnBaseClassField_EmitsCallbackInDerivedProgram()
+    {
+        // B37 probe finding: FieldChangeCallback was ALREADY mirrored on the base-class walk
+        // (registration + __old_ var; the _onVarChange_ export rides the inherited setter) — no
+        // B37-style gap. Pinned so the mirror never silently regresses.
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public class FcbPolBase11 : UdonSharpBehaviour {
+    [FieldChangeCallback(""Score"")] public int score;
+    public int Score { get { return score; } set { score = value; } }
+}
+public class FcbPol11 : FcbPolBase11 {
+    public int n;
+}", "FcbPol11");
+        Assert.Contains("__old_score:", uasm);
+        Assert.Contains(".export _onVarChange_score", uasm);
+    }
+
+    [Fact]
+    public void FieldChangeCallback_OwnClassField_EmitsCallback()
+    {
+        // Own-class control for the base-path FCB pin above.
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public class FcbPol12 : UdonSharpBehaviour {
+    [FieldChangeCallback(""Score"")] public int score;
+    public int Score { get { return score; } set { score = value; } }
+}", "FcbPol12");
+        Assert.Contains("__old_score:", uasm);
+        Assert.Contains(".export _onVarChange_score", uasm);
+    }
 }

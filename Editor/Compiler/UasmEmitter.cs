@@ -271,27 +271,7 @@ public class UasmEmitter
             if (member.DeclaredAccessibility == Accessibility.Public
                 || member.GetAttributes().Any(a => a.AttributeClass?.Name is "SerializeField" or "SerializeFieldAttribute"))
                 flags |= FieldFlags.Export;
-            string syncMode = null;
-            var syncAttr = member.GetAttributes()
-                .FirstOrDefault(a => a.AttributeClass?.Name == "UdonSyncedAttribute");
-            if (syncAttr != null)
-            {
-                flags |= FieldFlags.Sync;
-                if (syncAttr.ConstructorArguments.Length > 0 && syncAttr.ConstructorArguments[0].Value is int modeVal)
-                    syncMode = modeVal switch { 2 => "linear", 3 => "smooth", _ => "none" };
-                else
-                    syncMode = "none";
-
-                var syncCheckType = (member.Type is INamedTypeSymbol nt && nt.TypeKind == TypeKind.Enum)
-                    ? GetUdonType(nt.EnumUnderlyingType)
-                    : udonType;
-                if (!ExternResolver.IsSyncableType(syncCheckType))
-                    throw new NotSupportedException(
-                        $"Cannot sync field '{member.Name}': type '{member.Type}' is not supported by "
-                        + "Udon sync. Udon can sync only bool, char, byte, sbyte, short, ushort, int, "
-                        + "uint, long, ulong, float, double, string, VRCUrl, Vector2/3/4, Quaternion, "
-                        + "Color, Color32, and arrays of these.");
-            }
+            string syncMode = ReadFieldSyncMode(member, udonType, ref flags);
 
             // Try to resolve constant field initializers as CLR objects
             object constValue = null;
@@ -428,8 +408,12 @@ public class UasmEmitter
                 if (member.DeclaredAccessibility == Accessibility.Public
                     || member.GetAttributes().Any(a => a.AttributeClass?.Name is "SerializeField" or "SerializeFieldAttribute"))
                     baseFlags |= FieldFlags.Export;
+                // B37: a [UdonSynced] field declared on a user base class must keep its .sync
+                // directive in the DERIVED program — pre-fix this walk read no sync attributes, so
+                // the field compiled clean but shipped unsynced (networking silently dead on device).
+                var baseSyncMode = ReadFieldSyncMode(member, udonType, ref baseFlags);
 
-                _ctx.DeclareField(member.Name, udonType, baseFlags, constValue);
+                _ctx.DeclareField(member.Name, udonType, baseFlags, constValue, baseSyncMode);
 
                 var baseFcbAttr = member.GetAttributes()
                     .FirstOrDefault(a => a.AttributeClass?.Name == "FieldChangeCallbackAttribute");
@@ -509,6 +493,39 @@ public class UasmEmitter
             _fieldInitOps.Clear();
             _fieldInitOps.AddRange(reordered);
         }
+    }
+
+    /// <summary>
+    /// Reads a field's [UdonSynced] attribute — the ONE knowledge source for the Sync flag, the
+    /// sync-mode string, and the syncable-type validation, shared by the own-class and base-class
+    /// field declaration paths (B37: the base walk read no sync attributes, so a [UdonSynced] field
+    /// declared on a user base class shipped in the derived program WITHOUT its .sync directive).
+    /// Sets FieldFlags.Sync and returns the UASM sync mode ("none"/"linear"/"smooth"); returns null
+    /// (flags untouched) for unsynced fields. Throws on a type Udon sync cannot carry.
+    /// </summary>
+    string ReadFieldSyncMode(IFieldSymbol member, string udonType, ref FieldFlags flags)
+    {
+        var syncAttr = member.GetAttributes()
+            .FirstOrDefault(a => a.AttributeClass?.Name == "UdonSyncedAttribute");
+        if (syncAttr == null) return null;
+
+        flags |= FieldFlags.Sync;
+        string syncMode;
+        if (syncAttr.ConstructorArguments.Length > 0 && syncAttr.ConstructorArguments[0].Value is int modeVal)
+            syncMode = modeVal switch { 2 => "linear", 3 => "smooth", _ => "none" };
+        else
+            syncMode = "none";
+
+        var syncCheckType = (member.Type is INamedTypeSymbol nt && nt.TypeKind == TypeKind.Enum)
+            ? GetUdonType(nt.EnumUnderlyingType)
+            : udonType;
+        if (!ExternResolver.IsSyncableType(syncCheckType))
+            throw new NotSupportedException(
+                $"Cannot sync field '{member.Name}': type '{member.Type}' is not supported by "
+                + "Udon sync. Udon can sync only bool, char, byte, sbyte, short, ushort, int, "
+                + "uint, long, ulong, float, double, string, VRCUrl, Vector2/3/4, Quaternion, "
+                + "Color, Color32, and arrays of these.");
+        return syncMode;
     }
 
     /// <summary>
