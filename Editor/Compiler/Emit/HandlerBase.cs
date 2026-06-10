@@ -1320,6 +1320,25 @@ public abstract class HandlerBase
     {
         if (_methodParamVarIds.TryGetValue(target, out var localParamIds))
         {
+            // Cross dispatch (SendCustomEvent) needs an EXPORTED entry point, so a locally
+            // registered NON-exported function must not shadow the planner layout: an overridden
+            // base member referenced through a base-TYPED receiver binds the BASE symbol, whose
+            // local registration is the internal base-instance COPY (`__N_get_P`, emitted for
+            // `base.X` calls only) — dispatching its never-exported name silently no-ops and the
+            // stale return var reads 0/null (VM-verified: a virtual auto-property override read
+            // through a base reference returned default). The planner normalizes the override
+            // chain to the chain-ROOT layout, which every program in the class family exports
+            // (override layouts are reused from the base), so reads/writes through ANY symbol in
+            // the chain dispatch to the ONE exported accessor over the one backing store. Symbols
+            // with no planned layout (local functions, generic specializations) keep the local
+            // registration; exported local registrations are byte-identical to their layout.
+            MethodLayout overrideMl = null;
+            if (_methodFunctions.TryGetValue(target, out var localFunc) && localFunc.ExportName == null
+                && ExternResolver.IsUdonSharpBehaviour(target.ContainingType))
+                overrideMl = _planner.TryGetCalleeLayout(target);
+            if (overrideMl != null)
+                return (overrideMl.ExportName, overrideMl.ParamIds.ToArray(), overrideMl.ReturnId);
+
             var exportName = _methodSlots[target].VarPrefix;
             string retId = null;
             if (_methodReturns.TryGetValue(target, out var rets) && rets.Length == 1)
@@ -1334,7 +1353,15 @@ public abstract class HandlerBase
     protected ReturnSlot[] GetCalleeReturns(IMethodSymbol target)
     {
         if (_methodReturns.TryGetValue(target, out var slots))
+        {
+            // Same non-exported-shadow rule as GetCalleeLayout: a base-instance copy's return var
+            // is never written by the exported override, so cross reads must use the layout id.
+            if (_methodFunctions.TryGetValue(target, out var localFunc) && localFunc.ExportName == null
+                && ExternResolver.IsUdonSharpBehaviour(target.ContainingType)
+                && _planner.TryGetCalleeLayout(target) is MethodLayout overrideMl)
+                return overrideMl.Returns.ToArray();
             return slots;
+        }
         var ml = _planner.GetCalleeLayout(target);
         return ml.Returns.ToArray();
     }

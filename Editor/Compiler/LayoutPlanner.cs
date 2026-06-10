@@ -661,6 +661,17 @@ public class LayoutPlanner
     /// </summary>
     public MethodLayout GetCalleeLayout(IMethodSymbol target)
     {
+        var ml = TryGetCalleeLayout(target);
+        if (ml != null) return ml;
+        throw new System.InvalidOperationException(
+            $"Method {target.Name} not found in layout for {target.ContainingType.Name}");
+    }
+
+    /// <summary>Non-throwing twin of <see cref="GetCalleeLayout(IMethodSymbol)"/>: null when the
+    /// (override-chain-normalized) method has no planned layout — e.g. a local function or a
+    /// monomorphized generic specialization, which exist only in per-emitter registration.</summary>
+    public MethodLayout TryGetCalleeLayout(IMethodSymbol target)
+    {
         // Normalize override chain: walk to the defining base type,
         // matching the pure compiler's GetUsbMethodLayout logic.
         var method = target;
@@ -673,10 +684,6 @@ public class LayoutPlanner
         }
 
         var layout = Plan(method.ContainingType);
-        if (layout.Methods.TryGetValue(method, out var ml))
-            return ml;
-
-        throw new System.InvalidOperationException(
-            $"Method {target.Name} not found in layout for {target.ContainingType.Name}");
+        return layout.Methods.TryGetValue(method, out var ml) ? ml : null;
     }
 }
