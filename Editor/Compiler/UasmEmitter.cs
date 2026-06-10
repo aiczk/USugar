@@ -253,6 +253,19 @@ public class UasmEmitter
         foreach (var member in _classSymbol.GetMembers().OfType<IFieldSymbol>())
         {
             if (member.IsStatic || member.IsImplicitlyDeclared) continue;
+
+            // First-class delegate field (design §2.1): ONE SystemObjectArray heap var holding the bundle
+            // reference, null-initialized in UASM data. Private fields are bundled too (assign/invoke route
+            // on _delegateFields set-membership, not accessibility). Intercepted BEFORE the generic
+            // sync/flags block (M4 [T2]) so a [UdonSynced] delegate field hits the delegate-specific
+            // reject in DeclareDelegateField — the single choke point shared with the base-class path.
+            // Flags/syncMode were never used for delegate fields, so this reorder changes no output.
+            if (member.Type is INamedTypeSymbol delegateType && delegateType.DelegateInvokeMethod != null)
+            {
+                DeclareDelegateField(member, delegateType);
+                continue; // Skip normal field declaration
+            }
+
             var udonType = GetUdonType(member.Type);
             var flags = FieldFlags.None;
             if (member.DeclaredAccessibility == Accessibility.Public
@@ -274,16 +287,10 @@ public class UasmEmitter
                     : udonType;
                 if (!ExternResolver.IsSyncableType(syncCheckType))
                     throw new NotSupportedException(
-                        $"Cannot sync field '{member.Name}': type '{member.Type}' is not supported by Udon sync");
-            }
-
-            // First-class delegate field (design §2.1): ONE SystemObjectArray heap var holding the bundle
-            // reference, null-initialized in UASM data. Private fields are bundled too (assign/invoke route
-            // on _delegateFields set-membership, not accessibility).
-            if (member.Type is INamedTypeSymbol delegateType && delegateType.DelegateInvokeMethod != null)
-            {
-                DeclareDelegateField(member, delegateType);
-                continue; // Skip normal field declaration
+                        $"Cannot sync field '{member.Name}': type '{member.Type}' is not supported by "
+                        + "Udon sync. Udon can sync only bool, char, byte, sbyte, short, ushort, int, "
+                        + "uint, long, ulong, float, double, string, VRCUrl, Vector2/3/4, Quaternion, "
+                        + "Color, Color32, and arrays of these.");
             }
 
             // Try to resolve constant field initializers as CLR objects
@@ -507,13 +514,22 @@ public class UasmEmitter
     /// <summary>
     /// First-class delegate field (design §2.1/§1.6): ONE SystemObjectArray heap var holding the bundle
     /// reference, null-initialized in UASM data. Never exported (exported/synced vars must not be retyped;
-    /// SetProgramVariable needs no export) — [UdonSynced] is rejected by the IsSyncableType check before
-    /// this runs. An initializer (e.g. `public Action cb = M;`) always becomes runtime bundle construction
+    /// SetProgramVariable needs no export) — [UdonSynced] is rejected HERE (M4 [T2], single choke point):
+    /// pre-fix the own-class path threw the generic IsSyncableType message while the base-class path
+    /// (which reads no sync attributes at all) compiled the synced delegate field CLEAN with no .sync
+    /// directive. An initializer (e.g. `public Action cb = M;`) always becomes runtime bundle construction
     /// at _start via _fieldInitOps, which also fixes the old silent drop of derived-class initializers.
     /// Shared by the derived-class and base-class field paths.
     /// </summary>
     void DeclareDelegateField(IFieldSymbol member, INamedTypeSymbol delegateType)
     {
+        // M4 [T2]: Udon sync cannot carry the object[] bundle (the on-device security filter over
+        // synced vars is the unverified design §8-7 risk) — loud on BOTH declaration paths.
+        if (member.GetAttributes().Any(a => a.AttributeClass?.Name == "UdonSyncedAttribute"))
+            throw new NotSupportedException(
+                $"[UdonSynced] delegate field '{member.Name}' cannot be synced: a delegate value is a "
+                + "runtime object[] bundle (target/method/addr), which Udon sync cannot carry. Sync "
+                + "plain data instead and re-create the delegate locally.");
         if (delegateType.DelegateInvokeMethod.ReturnType.IsTupleType)
             throw new NotSupportedException($"Tuple-return delegate field '{member.Name}' is not supported.");
         // §3.4-1: ref/out delegate signatures are rejected at the convention-var declaration side too.
