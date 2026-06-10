@@ -196,4 +196,77 @@ public class Alias6 : UdonSharp.UdonSharpBehaviour {
 }", "Alias6");
         Assert.NotNull(uasm);
     }
+
+    // ── Round-8 [R4]: two ref/out args of one call sharing a storage root ──
+
+    [Fact]
+    public void DoubleRefAlias_SameLocal_Throws()
+    {
+        // DiffFuzz: M(ref a, ref a) with x=x+1;y=y+3 → CLR 5 (true alias), VM 4 (last copy-back
+        // wins) — independent param heap vars cannot represent the alias. Loud per §8-3.
+        var ex = Assert.ThrowsAny<System.Exception>(() => TestHelper.CompileToUasm(@"
+public class DblRef1 : UdonSharp.UdonSharpBehaviour {
+    public int res;
+    void M(ref int x, ref int y) { x = x + 1; y = y + 3; }
+    void Start() { int a = 1; M(ref a, ref a); res = a; }
+}", "DblRef1"));
+        Assert.Contains("same storage", ex.Message);
+    }
+
+    [Fact]
+    public void DoubleRefAlias_SameThisField_Throws()
+    {
+        var ex = Assert.ThrowsAny<System.Exception>(() => TestHelper.CompileToUasm(@"
+public class DblRef2 : UdonSharp.UdonSharpBehaviour {
+    public int res; public int a;
+    void M(ref int x, ref int y) { x = x + 1; y = y + 3; }
+    void Start() { a = 1; M(ref a, ref a); res = a; }
+}", "DblRef2"));
+        Assert.Contains("same storage", ex.Message);
+    }
+
+    [Fact]
+    public void DoubleRefAlias_DistinctRoots_StillCompiles()
+    {
+        // The pinned Swap convention (sweep_methods #12 = 83 on the real VM) — distinct storage
+        // roots keep the copy-back convention.
+        var uasm = TestHelper.CompileToUasm(@"
+public class DblRef3 : UdonSharp.UdonSharpBehaviour {
+    public int res;
+    void Sw(ref int x, ref int y) { int t = x; x = y; y = t; }
+    void Start() { int a = 3; int b = 8; Sw(ref a, ref b); res = a * 10 + b; }
+}", "DblRef3");
+        Assert.NotNull(uasm);
+    }
+
+    // ── Round-8 [R5]/[R6]: ref/out copy-back on struct-instance and foreign-static paths ──
+
+    [Fact]
+    public void StructMethod_OutArg_CopiesBack()
+    {
+        // The callee only WRITES x (param is a COPY destination in the body), so the one place the
+        // param var appears as a COPY SOURCE is the caller-side copy-back — absent entirely pre-fix
+        // (DiffFuzz: out-arg ref=10 vs VM 0; ref-arg flavor ref=136 vs VM 106).
+        var uasm = TestHelper.CompileToUasm(@"
+public struct CbS { public int v; public void Give(out int x) { x = 10; } }
+public class CbStruct : UdonSharp.UdonSharpBehaviour {
+    public int sum;
+    void Start() { CbS s = new CbS(); int t; s.Give(out t); sum = t; }
+}", "CbStruct");
+        Assert.Matches(@"PUSH, __\d+_x__param\s*\n\s*PUSH, [^\n]+\n\s*COPY", uasm);
+    }
+
+    [Fact]
+    public void ForeignStatic_OutArg_CopiesBack()
+    {
+        // Same structural pin for the inlined foreign-static path (DiffFuzz: plain ref=6 vs VM 1,
+        // generic monomorphized ref=9 vs VM 1).
+        var uasm = TestHelper.CompileToUasm(@"
+public static class CbH { public static void Give(out int x) { x = 10; } }
+public class CbForeign : UdonSharp.UdonSharpBehaviour {
+    public int sum;
+    void Start() { int t; CbH.Give(out t); sum = t; }
+}", "CbForeign");
+        Assert.Matches(@"PUSH, __\d+_x__param\s*\n\s*PUSH, [^\n]+\n\s*COPY", uasm);
+    }
 }
