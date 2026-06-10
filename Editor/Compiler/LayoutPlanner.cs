@@ -613,6 +613,18 @@ public class LayoutPlanner
             foreach (var (ifaceMethod, ifaceMl) in ifaceLayout.Methods)
             {
                 var impl = classType.FindImplementationForInterfaceMember(ifaceMethod) as IMethodSymbol;
+                // Round-7 follow-up [Q1]: a DEFAULT interface member with no class-level implementation
+                // resolves to the interface member ITSELF here. Skipping it silently (the pre-fix
+                // behavior) ships a call site that SendCustomEvents the canonical dispatch name with no
+                // entry point in any implementer's program — a silent no-op + stale 0/null return on a
+                // real client (unbounded self-reentry in the local harness). Neither LOUD nor CORRECT
+                // (design §8-3): reject at the implementing class.
+                if (impl != null && impl.ContainingType?.TypeKind == TypeKind.Interface)
+                    throw new System.NotSupportedException(
+                        $"Interface member '{ifaceMethod.ContainingType.Name}.{ifaceMethod.Name}' has a "
+                        + $"default implementation and no implementation in '{classType.Name}'. A default "
+                        + "interface body has no dispatch entry point on the implementing program "
+                        + "(SendCustomEvent would silently no-op) — implement the member in the class.");
                 if (impl == null) continue;
                 if (!classLayout.Methods.TryGetValue(impl, out var classMl)) continue;
                 // Tuple returns (N>1, ReturnId null) go through CrossCall directly, not a bridge.

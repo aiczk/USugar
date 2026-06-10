@@ -164,4 +164,50 @@ public class ScoreCaller : UdonSharpBehaviour {
         Assert.Contains("SendCustomEvent", uasm);
         Assert.Contains("GetProgramVariable", uasm);
     }
+
+    // ── Round-7 follow-up [Q1]: default interface members (DIM) ──
+    // A DIM with no class-level implementation resolves FindImplementationForInterfaceMember to the
+    // interface member itself; the bridge was silently skipped while the call site dispatched the
+    // canonical name — a never-exported event (silent no-op + stale return on device, VM-proven).
+
+    [Fact]
+    public void Interface_DefaultMethod_NoClassImpl_Throws()
+    {
+        var ex = Assert.ThrowsAny<System.Exception>(() => TestHelper.CompileToUasm(@"
+using UdonSharp;
+public interface IDimM { int F() { return 3; } }
+public class DimNoImpl : UdonSharpBehaviour, IDimM {
+    public int sum;
+    void Start() { IDimM i = this; sum = i.F(); }
+}", "DimNoImpl"));
+        Assert.Contains("default implementation", ex.Message);
+    }
+
+    [Fact]
+    public void Interface_DefaultProperty_NoClassImpl_Throws()
+    {
+        var ex = Assert.ThrowsAny<System.Exception>(() => TestHelper.CompileToUasm(@"
+using UdonSharp;
+public interface IDimP { int Q => 4; }
+public class DimPropNoImpl : UdonSharpBehaviour, IDimP {
+    public int sum;
+    void Start() { IDimP i = this; sum = i.Q; }
+}", "DimPropNoImpl"));
+        Assert.Contains("default implementation", ex.Message);
+    }
+
+    [Fact]
+    public void Interface_DefaultMethod_WithClassImpl_ExportsBridge()
+    {
+        // A class-level implementation overrides the DIM: legal, bridge exported as usual.
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public interface IDimOk { int F() { return 3; } }
+public class DimWithImpl : UdonSharpBehaviour, IDimOk {
+    public int sum;
+    public int F() { return 7; }
+    void Start() { IDimOk i = this; sum = i.F(); }
+}", "DimWithImpl");
+        Assert.Contains(".export __iface_IDimOk_F", uasm);
+    }
 }
