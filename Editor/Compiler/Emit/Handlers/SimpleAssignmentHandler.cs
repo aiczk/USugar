@@ -158,6 +158,16 @@ public class SimpleAssignmentHandler : AssignmentHandlerBase, IExpressionHandler
             var valueType = GetUdonType(propRef.Property.Type);
             if (propRef.Property.IsIndexer)
             {
+                // Wave-9 round-2 [W6]: user indexer WRITE through a VARIABLE receiver → cross-program
+                // setter dispatch (index args + the value as the setter's LAST parameter). Pre-fix this
+                // fell to the extern arm below and emitted a nonexistent IUdonEventReceiver.__set_Item.
+                if (IsVariableReceiverBehaviourIndexer(propRef) && propRef.Property.SetMethod is { } recvIdxSetter)
+                {
+                    var orderedIdx = EvaluateIndexerArgs(propRef);
+                    orderedIdx.Add(srcVal);
+                    EmitCrossIndexerCall(recvIdxSetter, instanceVal, orderedIdx); // void: self-emitting
+                    return srcVal;
+                }
                 var indexArgs = new List<CLeaf> { instanceVal };
                 var indexTypes = new List<string>();
                 foreach (var arg in propRef.Arguments)

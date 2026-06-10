@@ -60,6 +60,18 @@ public abstract class AssignmentHandlerBase : HandlerBase
                 var currentVal = EmitCallToMethod(sIdxGetter.OriginalDefinition, getterArgs);
                 return new LValueCapture { Value = currentVal, ArrayVal = recv, IndexArgs = cachedArgs };
             }
+            // Wave-9 round-2 [W6]: user indexer COMPOUND assignment through a VARIABLE receiver
+            // (`s[i] += x` where s is an own-typed copy / base-typed ref / another behaviour): read via
+            // the cross-program getter; the receiver and the ordinal-ordered index args are cached so
+            // EmitWriteBack's setter dispatch reuses them (index side effects run exactly once).
+            case IPropertyReferenceOperation vIdxRef
+                when IsVariableReceiverBehaviourIndexer(vIdxRef) && vIdxRef.Property.GetMethod is { } vIdxGetter:
+            {
+                var recvVal = VisitExpression(vIdxRef.Instance);
+                var cachedArgs = EvaluateIndexerArgs(vIdxRef);
+                var currentVal = EmitCrossIndexerCall(vIdxGetter, recvVal, cachedArgs);
+                return new LValueCapture { Value = currentVal, InstanceVal = recvVal, IndexArgs = cachedArgs };
+            }
             case IFieldReferenceOperation aggFieldRef
                 when aggFieldRef.Instance != null
                 && aggFieldRef.Instance.Type is INamedTypeSymbol aggCapType
@@ -197,6 +209,19 @@ public abstract class AssignmentHandlerBase : HandlerBase
                 && _methodFunctions.TryGetValue(dispatchSetter, out _):
                 EmitExprStmt(EmitCallToMethod(dispatchSetter, new List<CLeaf> { valueVal }));
                 return;
+            // Wave-9 round-2 [W6]: user indexer write-back through a VARIABLE receiver → cross-program
+            // setter dispatch, reusing the receiver/index leaves cached by CaptureLValue. MUST sit
+            // before the generic cross-behaviour property arm below, which would SetProgramVariable
+            // only the setter's FIRST param (an index) and drop the value.
+            case IPropertyReferenceOperation vIdxRef
+                when IsVariableReceiverBehaviourIndexer(vIdxRef) && vIdxRef.Property.SetMethod is { } vIdxSetter:
+            {
+                var recvVal = lv.InstanceVal ?? VisitExpression(vIdxRef.Instance);
+                var ordered = lv.IndexArgs != null ? new List<CLeaf>(lv.IndexArgs) : EvaluateIndexerArgs(vIdxRef);
+                ordered.Add(valueVal);
+                EmitCrossIndexerCall(vIdxSetter, recvVal, ordered); // void: self-emitting
+                return;
+            }
             // Cross-behaviour UdonSharpBehaviour property → SetProgramVariable / SendCustomEvent
             case IPropertyReferenceOperation propRef when ExternResolver.IsUdonSharpBehaviour(propRef.Property.ContainingType) && propRef.Instance is not IInstanceReferenceOperation:
             {

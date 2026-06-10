@@ -205,6 +205,16 @@ public partial class InvocationHandler
                 ? EmitDeepCloneAggregate(ret, idxRetAgg) : ret;
         }
 
+        // Wave-9 round-2 [W6]: user indexer read through a VARIABLE receiver (own-typed copy /
+        // base-typed / another behaviour) → cross-program getter dispatch (see EmitCrossIndexerCall).
+        // Pre-fix this fell through to the extern arm below and emitted a nonexistent
+        // IUdonEventReceiver.__get_Item the validator/assembler crashes on.
+        if (IsVariableReceiverBehaviourIndexer(op) && op.Property.GetMethod is { } recvIdxGetter)
+        {
+            var recvVal = VisitExpression(op.Instance);
+            return EmitCrossIndexerCall(recvIdxGetter, recvVal, EvaluateIndexerArgs(op));
+        }
+
         var cType = GetUdonType(op.Property.ContainingType);
         var rType = GetUdonType(op.Property.Type);
 

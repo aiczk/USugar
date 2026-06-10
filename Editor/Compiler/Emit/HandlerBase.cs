@@ -1495,6 +1495,53 @@ public abstract class HandlerBase
 
     // ── Call helpers ──
 
+    /// <summary>Wave-9 round-2 [W6]: user-defined indexer accessed through a VARIABLE receiver (an
+    /// own-typed copy of this, a base-typed reference, or another behaviour). Only the literal
+    /// `this[i]` form had a dispatch path (round-7 [P1]); every variable receiver fell through to
+    /// extern resolution against the receiver's Udon-mapped type and emitted a nonexistent
+    /// `IUdonEventReceiver.__get_Item` (assembler/validator crash on legal C#). Dispatch the accessor
+    /// cross-program like a non-auto property: SetProgramVariable each index (and the value, for the
+    /// setter — its LAST parameter) + SendCustomEvent the chain-ROOT export (GetCalleeLayout
+    /// normalization), which runs the receiver program's most-derived override. A non-public accessor
+    /// has no exported entry point — loud per design §8-3 (mirrors the [J2] non-this method reject).</summary>
+    protected CLeaf EmitCrossIndexerCall(IMethodSymbol accessor, CLeaf instanceVal, List<CLeaf> orderedArgs)
+    {
+        if (accessor.DeclaredAccessibility != Accessibility.Public)
+            throw new System.NotSupportedException(
+                $"Indexer of '{accessor.ContainingType.Name}' is accessed through a variable receiver, "
+                + "which dispatches cross-program (SetProgramVariable + SendCustomEvent) and so needs a "
+                + "public accessor. Make the accessor public, or access the indexer through 'this'.");
+        var (exportName, paramIds, _) = GetCalleeLayout(accessor);
+        var pairs = new List<(string, CLeaf)>();
+        for (int i = 0; i < orderedArgs.Count && i < paramIds.Length; i++)
+            pairs.Add((paramIds[i], orderedArgs[i]));
+        var returns = accessor.ReturnsVoid ? System.Array.Empty<ReturnSlot>() : GetCalleeReturns(accessor);
+        var retType = accessor.ReturnsVoid ? "SystemVoid" : GetUdonType(accessor.ReturnType);
+        return CrossCall(instanceVal, exportName, pairs, returns, retType);
+    }
+
+    /// <summary>[W6] gate shared by the read/write/compound indexer sites: a user-behaviour indexer
+    /// reference through a non-this receiver (the struct/extern receivers keep their own arms).</summary>
+    protected static bool IsVariableReceiverBehaviourIndexer(IPropertyReferenceOperation op)
+        => op.Property.IsIndexer
+           && op.Instance != null && op.Instance is not IInstanceReferenceOperation
+           && ExternResolver.IsUdonSharpBehaviour(op.Property.ContainingType)
+           && op.Property.ContainingType.Name != "UdonSharpBehaviour";
+
+    /// <summary>[W6] index arguments evaluated in source order, slotted by parameter ordinal
+    /// (named/reordered index args bind by name, mirroring the [W1] convention).</summary>
+    protected List<CLeaf> EvaluateIndexerArgs(IPropertyReferenceOperation op)
+    {
+        var ordered = new CLeaf[op.Arguments.Length];
+        for (int i = 0; i < op.Arguments.Length; i++)
+        {
+            var p = op.Arguments[i].Parameter;
+            var ordinal = p != null && p.Ordinal >= 0 && p.Ordinal < ordered.Length ? p.Ordinal : i;
+            ordered[ordinal] = VisitExpression(op.Arguments[i].Value);
+        }
+        return new List<CLeaf>(ordered);
+    }
+
     protected (string exportName, string[] paramIds, string retId) GetCalleeLayout(IMethodSymbol target)
     {
         if (_methodParamVarIds.TryGetValue(target, out var localParamIds))
