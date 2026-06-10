@@ -140,6 +140,25 @@ public class EmitContext
            && RecursiveCallees.TryGetValue(caller.OriginalDefinition, out var callees)
            && callees.Contains(callee.OriginalDefinition);
 
+    /// <summary>Round-7 follow-up [Q5]: per internal method (keyed by OriginalDefinition), the
+    /// this-FIELDS the method touches — directly (field reference through an implicit/explicit
+    /// this/base receiver anywhere in its body) or transitively (closed over the internal call
+    /// graph, including this-property accessor edges and the synthetic dispatch edges —
+    /// conservative, §8-3). A ref/out argument rooted at a this-field hands the callee an alias
+    /// of storage it can also reach directly; the caller-side copy-in/copy-back convention
+    /// snapshots it (callee param reads go stale, callee direct field writes are reverted by the
+    /// stale copy-back — VM-proven 19 vs CLR 59). Populated by UasmEmitter.BuildRecursionInfo;
+    /// consulted by EmitUserMethodCall's ref/out-argument guard. Non-touching callees
+    /// (Inc(ref field) / Swap(ref a, ref b)) stay legal.</summary>
+    public Dictionary<IMethodSymbol, HashSet<IFieldSymbol>> ThisFieldTouches;
+
+    /// <summary>[Q5] True when <paramref name="callee"/>'s transitive touch set contains the
+    /// this-field <paramref name="field"/> (both compared by OriginalDefinition).</summary>
+    public bool CalleeTouchesThisField(IMethodSymbol callee, IFieldSymbol field)
+        => callee != null && field != null && ThisFieldTouches != null
+           && ThisFieldTouches.TryGetValue(callee.OriginalDefinition, out var set)
+           && set.Contains(field.OriginalDefinition);
+
     /// <summary>Syntax nodes of delegate-dispatch invocations that can re-enter their containing
     /// function: the containing function lies on a synthetic-edge-inclusive SCC cycle AND the dispatch
     /// is non-tail (design §4.2/§4.3). Computed by <c>UasmEmitter.BuildRecursionInfo</c>; keyed by the

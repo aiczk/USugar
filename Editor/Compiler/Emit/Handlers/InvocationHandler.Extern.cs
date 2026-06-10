@@ -648,13 +648,14 @@ public partial class InvocationHandler
         // sound for self-threading: a recursion-cycle call passing a DIFFERENT lvalue overwrites the
         // one shared param heap var at copy-in and nothing restores the outer frame's value
         // (VM-proven: re-chained scalar/struct ref recursion 200 vs CLR 101). Loud per design §8-3.
-        if (IsRecursiveEdge(_currentMethod, target))
+        bool recursiveEdge = IsRecursiveEdge(_currentMethod, target);
+        for (int i = 0; i < op.Arguments.Length; i++)
         {
-            for (int i = 0; i < op.Arguments.Length; i++)
+            var p = op.Arguments[i].Parameter ?? target.Parameters[i];
+            if (p.RefKind != RefKind.Ref && p.RefKind != RefKind.Out) continue;
+            var a = UnwrapConversions(op.Arguments[i].Value);
+            if (recursiveEdge)
             {
-                var p = op.Arguments[i].Parameter ?? target.Parameters[i];
-                if (p.RefKind != RefKind.Ref && p.RefKind != RefKind.Out) continue;
-                var a = UnwrapConversions(op.Arguments[i].Value);
                 bool selfThreaded = a is IParameterReferenceOperation apr
                     && SymbolEqualityComparer.Default.Equals(
                         apr.Parameter.OriginalDefinition, p.OriginalDefinition);
@@ -666,6 +667,20 @@ public partial class InvocationHandler
                         + "thread through), so re-chaining a different variable corrupts the outer frame. "
                         + "Thread the method's own ref/out parameter, or pass by value.");
             }
+            // Round-7 follow-up [Q5]: a ref/out argument rooted at a this-FIELD that the callee
+            // (transitively) also touches directly is an alias the copy-in/copy-back convention
+            // cannot honor — the callee's param reads see a stale snapshot and the copy-back
+            // reverts the callee's direct field writes (VM-proven 19 vs CLR 59 / 1 vs 5). Loud per
+            // §8-3. Callees that never touch the field keep the pinned convention (Inc/Swap).
+            var aliasedField = TryGetThisRootedRefStorage(a);
+            if (aliasedField != null && _ctx.CalleeTouchesThisField(target, aliasedField))
+                throw new System.NotSupportedException(
+                    $"'{p.RefKind.ToString().ToLowerInvariant()} {p.Name}' of '{target.Name}' is passed "
+                    + $"this-field '{aliasedField.Name}', which the callee (or a method it calls) also "
+                    + "touches directly. The caller-side copy-in/copy-back convention snapshots the "
+                    + "field, so the callee's reads through the parameter go stale and its direct field "
+                    + "writes are reverted by the copy-back. Pass a local copy, or let the callee use "
+                    + "the field directly.");
         }
 
         // Recursion is handled centrally in EmitCallToMethod (software-stack spill/reload around the call).

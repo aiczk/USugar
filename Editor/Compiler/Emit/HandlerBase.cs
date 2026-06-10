@@ -577,6 +577,33 @@ public abstract class HandlerBase
         };
     }
 
+    /// <summary>Round-7 follow-up [Q5]: the this-FIELD whose storage a ref/out argument aliases, or
+    /// null when the argument's storage is not on this program's heap-named fields (locals, params,
+    /// other-behaviour members, fresh values). Walks struct member chains and array-element links to
+    /// the root: `ref f`, `ref s.v` (s a this-field struct), and `ref arr[0]` (arr a this-field) all
+    /// resolve to the root field — the storage the callee can also reach directly through this.</summary>
+    protected static IFieldSymbol TryGetThisRootedRefStorage(IOperation arg)
+    {
+        var op = arg;
+        while (true)
+        {
+            switch (op)
+            {
+                case IConversionOperation c:
+                    op = c.Operand; continue;
+                case IFieldReferenceOperation { Instance: IInstanceReferenceOperation } fr when !fr.Field.IsStatic:
+                    return fr.Field.OriginalDefinition;
+                case IFieldReferenceOperation fr2 when fr2.Instance != null
+                    && fr2.Field.ContainingType?.IsValueType == true:
+                    op = fr2.Instance; continue; // struct member chain → resolve its root
+                case IArrayElementReferenceOperation ae:
+                    op = ae.ArrayReference; continue; // element storage roots at the array reference
+                default:
+                    return null; // local / param / cross-behaviour member / fresh value
+            }
+        }
+    }
+
     /// <summary>Round-7 follow-up [Q4]: true when a receiver chain roots at a foreach ITERATION
     /// variable through value-typed member links only. Such a receiver is READONLY in C# — a
     /// non-readonly struct method runs on a defensive copy — so the caller clones it. A chain that

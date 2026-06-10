@@ -1582,6 +1582,43 @@ public class UasmEmitter
                 if (edges.ContainsKey(e)) nodeEdges.Add(e);
         }
 
+        // Round-7 follow-up [Q5]: per-node this-FIELD touch sets for the ref/out-argument alias
+        // guard (see EmitContext.ThisFieldTouches). Direct touches are collected per node;
+        // this-property references add accessor edges (a callee reading a manual property whose
+        // getter touches the field is the same alias one hop deeper); the closure runs over the
+        // same `edges` graph — synthetic dispatch edges included, conservative per §8-3.
+        var thisTouches = new Dictionary<IMethodSymbol, HashSet<IFieldSymbol>>(SymbolEqualityComparer.Default);
+        var accessorEdges = new Dictionary<IMethodSymbol, HashSet<IMethodSymbol>>(SymbolEqualityComparer.Default);
+        foreach (var node in allNodes)
+        {
+            var touch = new HashSet<IFieldSymbol>(SymbolEqualityComparer.Default);
+            var acc = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
+            if (bodies.TryGetValue(node, out var touchBody) && touchBody != null)
+                CollectThisFieldTouches(touchBody, touch, acc);
+            thisTouches[node] = touch;
+            accessorEdges[node] = acc;
+        }
+        bool touchChanged = true;
+        while (touchChanged)
+        {
+            touchChanged = false;
+            foreach (var node in allNodes)
+            {
+                var mySet = thisTouches[node];
+                foreach (var callee in edges[node])
+                    if (thisTouches.TryGetValue(callee, out var calleeSet)
+                        && !ReferenceEquals(calleeSet, mySet))
+                        foreach (var f in calleeSet)
+                            if (mySet.Add(f)) touchChanged = true;
+                foreach (var callee in accessorEdges[node])
+                    if (thisTouches.TryGetValue(callee, out var accSet)
+                        && !ReferenceEquals(accSet, mySet))
+                        foreach (var f in accSet)
+                            if (mySet.Add(f)) touchChanged = true;
+            }
+        }
+        _ctx.ThisFieldTouches = thisTouches;
+
         var recursive = new Dictionary<IMethodSymbol, HashSet<IMethodSymbol>>(SymbolEqualityComparer.Default);
         var reentrantSites = new HashSet<SyntaxNode>();
         foreach (var scc in TarjanScc(allNodes, edges))
@@ -2039,6 +2076,30 @@ public class UasmEmitter
             result.Add(lf.Symbol.OriginalDefinition);
         foreach (var child in op.Children)
             CollectLocalFunctions(child, result);
+    }
+
+    // Round-7 follow-up [Q5]: direct this-FIELD touches (field reference through an implicit/
+    // explicit this/base receiver) + this-property ACCESSOR edges of one graph node. Nested local
+    // functions / lambdas are skipped like CollectInternalCallees — each is its own node, and the
+    // touch closure unions callee sets over the call graph (real + accessor + synthetic edges).
+    static void CollectThisFieldTouches(IOperation op, HashSet<IFieldSymbol> touch, HashSet<IMethodSymbol> accessorEdges)
+    {
+        if (op == null) return;
+        switch (op)
+        {
+            case IFieldReferenceOperation { Instance: IInstanceReferenceOperation } fr when !fr.Field.IsStatic:
+                touch.Add(fr.Field.OriginalDefinition);
+                break;
+            case IPropertyReferenceOperation { Instance: IInstanceReferenceOperation } pr:
+                if (pr.Property.GetMethod != null) accessorEdges.Add(pr.Property.GetMethod.OriginalDefinition);
+                if (pr.Property.SetMethod != null) accessorEdges.Add(pr.Property.SetMethod.OriginalDefinition);
+                break;
+        }
+        foreach (var child in op.Children)
+        {
+            if (child is ILocalFunctionOperation || child is IAnonymousFunctionOperation) continue; // own nodes
+            CollectThisFieldTouches(child, touch, accessorEdges);
+        }
     }
 
     // Collect call targets that resolve to a registered internal method (same program, JUMP-based).

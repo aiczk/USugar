@@ -110,4 +110,90 @@ public class RecRef4 : UdonSharp.UdonSharpBehaviour {
 }", "RecRef4");
         Assert.NotNull(uasm);
     }
+
+    // ── [Q5] ref/out arg rooted at a this-field the callee also touches ──
+    // The copy-in/copy-back convention snapshots the field: the callee's param reads go stale
+    // (VM 19 vs CLR 59) and its direct field writes are reverted by the copy-back (VM 1 vs CLR 5).
+
+    [Fact]
+    public void RefArgThisField_CalleeTouchesField_Throws()
+    {
+        var ex = Assert.ThrowsAny<System.Exception>(() => TestHelper.CompileToUasm(@"
+public class Alias1 : UdonSharp.UdonSharpBehaviour {
+    public int f; public int sum; public int res;
+    void Start() { f = 1; M(ref f); res = sum * 10 + f; }
+    public void M(ref int x) { f = 5; sum = x; x = 9; }
+}", "Alias1"));
+        Assert.Contains("this-field", ex.Message);
+    }
+
+    [Fact]
+    public void RefArgThisField_TransitiveTouch_Throws()
+    {
+        // The callee only touches f through a helper — the touch set is transitive.
+        var ex = Assert.ThrowsAny<System.Exception>(() => TestHelper.CompileToUasm(@"
+public class Alias2 : UdonSharp.UdonSharpBehaviour {
+    public int f; public int res;
+    void Start() { f = 1; M(ref f); res = f; }
+    public void M(ref int x) { H(); x = x + 1; }
+    void H() { f = 5; }
+}", "Alias2"));
+        Assert.Contains("this-field", ex.Message);
+    }
+
+    [Fact]
+    public void RefArgThisField_ViaPropertyAccessor_Throws()
+    {
+        // The callee touches f only through a manual property getter — accessor edges close it.
+        var ex = Assert.ThrowsAny<System.Exception>(() => TestHelper.CompileToUasm(@"
+public class Alias3 : UdonSharp.UdonSharpBehaviour {
+    public int f; public int res;
+    int P { get { return f; } }
+    void Start() { f = 1; M(ref f); res = f; }
+    public void M(ref int x) { x = x + P; }
+}", "Alias3"));
+        Assert.Contains("this-field", ex.Message);
+    }
+
+    [Fact]
+    public void RefArgThisField_StructMemberRoot_Throws()
+    {
+        // `ref s.v` roots at the this-field s; the callee touches s directly.
+        var ex = Assert.ThrowsAny<System.Exception>(() => TestHelper.CompileToUasm(@"
+public struct AliasS { public int v; }
+public class Alias4 : UdonSharp.UdonSharpBehaviour {
+    public AliasS s; public int res;
+    void Start() { M(ref s.v); res = s.v; }
+    public void M(ref int x) { s.v = 5; x = x + 1; }
+}", "Alias4"));
+        Assert.Contains("this-field", ex.Message);
+    }
+
+    [Fact]
+    public void RefArgThisField_CalleeUntouched_StillCompiles()
+    {
+        // The canonical supported convention (sweep_methods-pinned on the real VM): callees that
+        // never touch the field keep the copy-back convention.
+        var uasm = TestHelper.CompileToUasm(@"
+public class Alias5 : UdonSharp.UdonSharpBehaviour {
+    public int res; public int a; public int b;
+    void Inc(ref int x) { x = x + 1; }
+    void Sw(ref int x, ref int y) { int t = x; x = y; y = t; }
+    void Start() { a = 7; Inc(ref a); Sw(ref a, ref b); res = a * 10 + b; }
+}", "Alias5");
+        Assert.NotNull(uasm);
+    }
+
+    [Fact]
+    public void RefArgLocal_CalleeTouchesField_StillCompiles()
+    {
+        // A LOCAL ref arg never aliases this-storage — field-touching callees stay legal.
+        var uasm = TestHelper.CompileToUasm(@"
+public class Alias6 : UdonSharp.UdonSharpBehaviour {
+    public int f; public int res;
+    void Start() { f = 1; int v = 2; M(ref v); res = f * 10 + v; }
+    public void M(ref int x) { f = 5; x = 9; }
+}", "Alias6");
+        Assert.NotNull(uasm);
+    }
 }
