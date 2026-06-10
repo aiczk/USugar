@@ -674,6 +674,7 @@ public class UasmEmitter
         foreach (var method in methods)
         {
             EmitContext.RejectInParameters(method); // round-7 follow-up [Q3], declaration-side
+            EmitContext.RejectNetworkCallableDelegates(method); // M4 [T1], declaration-side
             if (method.IsGenericMethod) continue;
 
             var ml = typeLayout.Methods[method];

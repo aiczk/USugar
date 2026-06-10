@@ -478,6 +478,43 @@ public class EmitContext
                     + "write-back is intended.");
     }
 
+    /// <summary>M4 [T1]: a [NetworkCallable] method's parameters cross the network, but a delegate
+    /// value is a program-local object[] bundle — its target reference and funcaddr are meaningless
+    /// in any other client's program, so it can never be marshalled. Pre-fix (probed at 931a9ab)
+    /// this compiled CLEAN: the method exported unmangled with a SystemObjectArray param var, a
+    /// silent runtime miscompile. The delegate-typed RETURN flavor also compiled clean, even though
+    /// stock UdonSharp forbids ANY return type on [NetworkCallable] ("cannot have a return type") —
+    /// rejected here for the same bundle reason. Called from the class first-pass registration loop
+    /// (own + inherited behaviour methods, before the generic skip), so every compile of a class
+    /// hits it exactly once per method.</summary>
+    public static void RejectNetworkCallableDelegates(IMethodSymbol method)
+    {
+        if (!LayoutPlanner.IsNetworkCallable(method)) return;
+        foreach (var p in method.Parameters)
+            if (ContainsDelegateType(p.Type))
+                throw new System.NotSupportedException(
+                    $"[NetworkCallable] method '{method.Name}' cannot take delegate-typed parameter "
+                    + $"'{p.Name}': a delegate value is a program-local object[] bundle and cannot "
+                    + "cross a network call. Pass plain data instead and re-create the delegate "
+                    + "locally on the receiving side.");
+        if (ContainsDelegateType(method.ReturnType))
+            throw new System.NotSupportedException(
+                $"[NetworkCallable] method '{method.Name}' cannot return a delegate-typed value: "
+                + "a delegate value is a program-local object[] bundle and cannot cross a network "
+                + "call. Return plain data instead and re-create the delegate locally on the "
+                + "receiving side.");
+    }
+
+    /// <summary>Delegate proper, or an array (of arrays…) of delegates. Deliberately NOT the wider
+    /// IsDelegateCapableType (object / delegate-tuples / type params): [NetworkCallable] methods
+    /// with object params are outside this policy item and must not start rejecting.</summary>
+    static bool ContainsDelegateType(ITypeSymbol type)
+    {
+        if (type is INamedTypeSymbol n && n.DelegateInvokeMethod != null) return true;
+        if (type is IArrayTypeSymbol a) return ContainsDelegateType(a.ElementType);
+        return false;
+    }
+
     // Aggregate type support — tuples and user-defined structs share the object[] emulation.
     public static bool IsAggregateType(ITypeSymbol type)
     {
