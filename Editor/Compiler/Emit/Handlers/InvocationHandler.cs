@@ -254,14 +254,14 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
 
         // Recursion (including the receiver) is handled by EmitCallToMethod's software-stack spill/reload.
         var recv = LoadInstanceRaw(op.Instance);
-        // Round-8 [R1] (corrects the round-7 [Q4] over-clone, which was calibrated against a wrong
-        // hand-computed oracle): Roslyn defensive-copies a foreach iteration-variable receiver only
-        // when the chain passes through a value-typed FIELD link (member access on the readonly
-        // local is a value); a DIRECT non-readonly struct method on the loop local mutates the
-        // local itself (ldloca — DiffFuzz: direct ref=1112, nested s.inner.Bump() ref=102). Clone
-        // only the field-chain case; chains through array elements keep live storage (the helper
-        // stops there, reference semantics, CLR-equal).
-        if (!target.IsReadOnly && RootsAtForeachIterationVariable(op.Instance)
+        // Round-8 [R1]/[R7] (corrects the round-7 [Q4] over-clone, which was calibrated against a
+        // wrong hand-computed oracle): Roslyn defensive-copies the receiver of a non-readonly
+        // struct method when the chain is a READONLY access path — a value-typed FIELD link from a
+        // foreach iteration variable (DiffFuzz: direct ref=1112 mutates the local, nested
+        // s.inner.Bump() ref=102 copies) or a readonly FIELD link anywhere in the chain (DiffFuzz:
+        // readonly rs.Bump();rs.Bump() ref=0 vs the live-storage 20). Chains through array
+        // elements keep live storage (the helper stops there, reference semantics, CLR-equal).
+        if (!target.IsReadOnly && ReceiverNeedsDefensiveCopy(op.Instance)
             && op.Instance?.Type is INamedTypeSymbol recvAgg && EmitContext.IsAggregateType(recvAgg))
             recv = EmitDeepCloneAggregate(recv, recvAgg);
         var args = new List<CLeaf> { recv };

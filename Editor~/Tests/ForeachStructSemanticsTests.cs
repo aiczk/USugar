@@ -60,6 +60,40 @@ public class {1} : UdonSharp.UdonSharpBehaviour {{
         Assert.Equal(CountAggCtors(readonlyUasm) + 1, CountAggCtors(mutableUasm));
     }
 
+    const string FieldShape = @"
+public struct FesF {{ public int v; public {0} int Get() {{ return v; }} }}
+public class {1} : UdonSharp.UdonSharpBehaviour {{
+    public int sum;
+    {2} FesF rs;
+    void Start() {{ sum = rs.Get(); }}
+}}";
+
+    [Fact]
+    public void ReadonlyStructField_NonReadonlyMethod_ClonesReceiver()
+    {
+        // Round-8 [R7]: a readonly FIELD access is a value in C# (ldfld), so a non-readonly struct
+        // method on it runs on a defensive copy (DiffFuzz: readonly rs.Bump();rs.Bump() ref=0 vs
+        // live-storage 20). The non-readonly METHOD on the readonly FIELD must emit exactly ONE
+        // extra aggregate allocation vs its readonly-method twin.
+        var readonlyMethodUasm = TestHelper.CompileToUasm(
+            string.Format(FieldShape, "readonly", "FesRoFieldRoM", "readonly"), "FesRoFieldRoM");
+        var mutableMethodUasm = TestHelper.CompileToUasm(
+            string.Format(FieldShape, "", "FesRoFieldMutM", "readonly"), "FesRoFieldMutM");
+        Assert.Equal(CountAggCtors(readonlyMethodUasm) + 1, CountAggCtors(mutableMethodUasm));
+    }
+
+    [Fact]
+    public void NonReadonlyStructField_NoExtraClone()
+    {
+        // A non-readonly field keeps live (uncloned) receiver storage — mutations stick
+        // (DiffFuzz: non-readonly fs.Bump();fs.Bump() ref=20 == VM).
+        var readonlyMethodUasm = TestHelper.CompileToUasm(
+            string.Format(FieldShape, "readonly", "FesFieldRoM", ""), "FesFieldRoM");
+        var mutableMethodUasm = TestHelper.CompileToUasm(
+            string.Format(FieldShape, "", "FesFieldMutM", ""), "FesFieldMutM");
+        Assert.Equal(CountAggCtors(readonlyMethodUasm), CountAggCtors(mutableMethodUasm));
+    }
+
     [Fact]
     public void NonForeachReceiver_NoExtraClone()
     {

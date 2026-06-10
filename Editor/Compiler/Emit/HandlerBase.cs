@@ -638,15 +638,21 @@ public abstract class HandlerBase
         }
     }
 
-    /// <summary>Round-8 [R1] (corrects the round-7 [Q4] over-clone): true when a receiver chain
-    /// reaches a foreach ITERATION variable through AT LEAST ONE value-typed field link. Roslyn
-    /// does NOT defensive-copy a DIRECT member invocation on the loop local (ldloca on the local;
-    /// the readonly-ness only forbids assignment — DiffFuzz: direct mutating call ref=1112), but
-    /// member ACCESS on the readonly variable yields a value, so a chain through a value-typed
-    /// FIELD link operates on a defensive copy (DiffFuzz: nested s.inner.Bump() ref=102). A chain
-    /// that passes through an ARRAY ELEMENT stops (arrays are reference-typed: the CLR mutates
-    /// through them even from a readonly variable, so live storage is correct there).</summary>
-    protected bool RootsAtForeachIterationVariable(IOperation instance)
+    /// <summary>Round-8 [R1]/[R7]: true when a non-readonly struct member invocation's receiver
+    /// chain is READONLY in C# and so runs on a defensive copy the emulation must reproduce.
+    /// Two flavors (both DiffFuzz-proven):
+    /// [R1] (corrects the round-7 [Q4] over-clone) — the chain reaches a foreach ITERATION variable
+    /// through AT LEAST ONE value-typed field link. Roslyn does NOT defensive-copy a DIRECT member
+    /// invocation on the loop local (ldloca on the local; the readonly-ness only forbids assignment
+    /// — direct mutating call ref=1112), but member ACCESS on the readonly variable yields a value,
+    /// so a chain through a value-typed FIELD link operates on a copy (nested s.inner.Bump()
+    /// ref=102).
+    /// [R7] — the chain contains a READONLY field link anywhere (`readonly P9T rs; rs.Bump();`
+    /// mutated live storage: VM 20 vs CLR ref=0; nested ro.inner.Bump() VM 10 vs ref=0). Unlike the
+    /// loop local, a readonly FIELD defensive-copies even on direct invocation (ldfld is a value).
+    /// A chain that passes through an ARRAY ELEMENT stops in both flavors (arrays are
+    /// reference-typed: the CLR mutates through them even from a readonly variable).</summary>
+    protected bool ReceiverNeedsDefensiveCopy(IOperation instance)
     {
         var op = instance;
         bool sawValueFieldLink = false;
@@ -658,6 +664,8 @@ public abstract class HandlerBase
                     op = c.Operand; continue;
                 case ILocalReferenceOperation lr:
                     return sawValueFieldLink && _ctx.ForeachIterationLocals.Contains(lr.Local);
+                case IFieldReferenceOperation fr when fr.Field.IsReadOnly:
+                    return true; // [R7] readonly field link → the access chain is a value
                 case IFieldReferenceOperation fr when fr.Instance != null
                     && fr.Field.ContainingType?.IsValueType == true:
                     sawValueFieldLink = true;
