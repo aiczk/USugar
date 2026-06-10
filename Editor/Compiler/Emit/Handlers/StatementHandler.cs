@@ -136,10 +136,12 @@ public class StatementHandler : HandlerBase, IOperationHandler
 
     void VisitReturn(IReturnOperation op)
     {
-        // §2.8(b): returning a capturing lambda (or a tainted local) escapes the flat-capture model —
-        // loud compile error in Stage 1 (fcd36 stays rejected; closure environments arrive in Stage 2).
+        // §2.8(b): returning a capturing lambda (or a tainted-equivalent value) escapes the
+        // flat-capture model — loud compile error in Stage 1 (fcd36 stays rejected; closure
+        // environments arrive in Stage 2). Returning a delegate-typed PARAM stays legal
+        // (identity flow — the caller's invocation-result taint guards a laundered result).
         if (op.ReturnedValue != null)
-            GuardCaptureEscapeValue(op.ReturnedValue);
+            GuardCaptureEscapeReturn(op.ReturnedValue);
 
         // Tail call optimization: return self(args) → overwrite params + goto entry
         if (op.ReturnedValue is IInvocationOperation tailCall
@@ -360,8 +362,11 @@ public class StatementHandler : HandlerBase, IOperationHandler
 
                 // §2.8(b): a capturing lambda initializing a local TAINTS it (flow-insensitive); an
                 // object-typed local is itself an escaping store and is rejected loudly. A tainted-local
-                // read taints the new local too (F4: copies must not launder the taint).
-                if (IsDirectCapturingLambda(init.Value) || IsCaptureTaintedRead(init.Value))
+                // read taints the new local too (F4: copies must not launder the taint), as do the two
+                // laundering shapes: a tainted delegate-typed invocation result (`var t = Id(()=>v);`)
+                // and a delegate-typed param read (`var t = x;` inside the callee).
+                if (IsDirectCapturingLambda(init.Value) || IsCaptureTaintedRead(init.Value)
+                    || IsTaintedDelegateInvocationResult(init.Value) || IsDelegateParamRead(init.Value))
                 {
                     if (IsObjectish(local.Type))
                         throw new System.NotSupportedException(CaptureEscapeError);

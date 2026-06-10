@@ -826,10 +826,46 @@ public abstract class HandlerBase
         => t != null && (t.SpecialType == SpecialType.System_Object
             || (t is IArrayTypeSymbol at && at.ElementType.SpecialType == SpecialType.System_Object));
 
+    /// <summary>Conversion-stripped read of a delegate-typed PARAMETER. Such reads are
+    /// tainted-EQUIVALENT at escaping STORE targets (array element / object / field / property,
+    /// plus local-taint propagation): the callee cannot see whether its caller passed a capturing
+    /// lambda, so `void Keep(Func&lt;int&gt; x) { fs[k] = x; }` would launder the capture past every
+    /// loud reject (VM-verified silent wrong values). RETURNING a param stays legal — identity
+    /// callees (`Id(x) { return x; }`) are the method-group / capture-free flow, and the CALLER's
+    /// invocation-result taint (below) guards the laundered result. Over-rejection of method-group
+    /// setters (`SetCb(M)` → `cb = x` rejects) is accepted per design §8-3: loud beats silent-wrong.</summary>
+    protected static bool IsDelegateParamRead(IOperation value)
+    {
+        var v = value;
+        while (v is IConversionOperation conv) v = conv.Operand;
+        return v is IParameterReferenceOperation pr
+            && pr.Parameter.Type is INamedTypeSymbol nt && nt.DelegateInvokeMethod != null;
+    }
+
+    /// <summary>Caller-side §2.8(b) laundering guard: a delegate-typed invocation RESULT whose
+    /// arguments contain a capturing lambda / tainted read is itself tainted-equivalent — an
+    /// identity callee (`Func&lt;int&gt; Id(Func&lt;int&gt; x) { return x; }`) otherwise launders the capture
+    /// past both the callee's return guard (a param ref passes it) and this caller's store guard
+    /// (the tree-walk does not descend past invocations). Results that are NOT delegate-typed stay
+    /// legal: the capture is consumed by the callee (fcd37's `int Apply(Func&lt;int,int&gt; fn, int v)`).</summary>
+    protected bool IsTaintedDelegateInvocationResult(IOperation value)
+    {
+        var v = value;
+        while (v is IConversionOperation conv) v = conv.Operand;
+        if (v is not IInvocationOperation inv) return false;
+        if (inv.Type is not INamedTypeSymbol nt || nt.DelegateInvokeMethod == null) return false;
+        foreach (var arg in inv.Arguments)
+            if (arg.Value != null && ContainsCapturingLambdaOrTaintedRead(arg.Value)) return true;
+        return false;
+    }
+
     /// <summary>Tree-walk: does this operation contain a capturing lambda — or a read of a
-    /// capture-tainted local — anywhere (e.g. buried in a ternary / coalesce / switch-expression arm)?
-    /// Invocation subtrees are NOT descended into: argument-position lambdas are the callee's concern
-    /// (fcd37 stays legal; the callee's own return/store sites guard any escape).</summary>
+    /// capture-tainted local / delegate-typed param — anywhere (e.g. buried in a ternary /
+    /// coalesce / switch-expression arm)? Invocation subtrees are descended into ONLY via the
+    /// delegate-typed-result laundering rule: a non-delegate-typed call consumes any capturing
+    /// lambda in its arguments itself (fcd37 stays legal; the callee's own return/store sites
+    /// guard any escape), while a delegate-typed result carrying taint in its arguments is the
+    /// identity-callee laundering shape and stays tainted.</summary>
     protected bool ContainsCapturingLambdaOrTaintedRead(IOperation op)
     {
         switch (op)
@@ -838,8 +874,10 @@ public abstract class HandlerBase
                 return _ctx.CaptureAnalyzer.HasCaptures(l);
             case ILocalReferenceOperation lr:
                 return _ctx.CapturingLambdaLocals.Contains(lr.Local);
-            case IInvocationOperation:
-                return false;
+            case IParameterReferenceOperation pr:
+                return pr.Parameter.Type is INamedTypeSymbol pnt && pnt.DelegateInvokeMethod != null;
+            case IInvocationOperation inv:
+                return IsTaintedDelegateInvocationResult(inv);
         }
         foreach (var child in op.Children)
             if (child != null && ContainsCapturingLambdaOrTaintedRead(child)) return true;
@@ -882,24 +920,42 @@ public abstract class HandlerBase
     }
 
     /// <summary>
-    /// §2.8(b) capture-escape guard for VALUE positions (array initializer elements, return values):
-    /// a capturing lambda — or a read of a tainted local — escaping the flat-capture model is a loud
-    /// compile error in Stage 1 (capture-free lambdas and method groups are unrestricted).
+    /// §2.8(b) capture-escape guard for ARRAY-INITIALIZER elements (escaping stores): a capturing
+    /// lambda, a tainted-local read, a laundered delegate-typed invocation result, or a
+    /// delegate-typed param read escaping into the array is a loud compile error in Stage 1
+    /// (capture-free lambdas and method groups are unrestricted).
     /// </summary>
     protected void GuardCaptureEscapeValue(IOperation value)
     {
         GuardBuriedCapturingLambda(value);
-        if (IsDirectCapturingLambda(value) || IsCaptureTaintedRead(value))
+        if (IsDirectCapturingLambda(value) || IsCaptureTaintedRead(value)
+            || IsTaintedDelegateInvocationResult(value) || IsDelegateParamRead(value))
+            throw new System.NotSupportedException(CaptureEscapeError);
+    }
+
+    /// <summary>
+    /// §2.8(b) capture-escape guard for RETURN values. Differs from the array-initializer guard in
+    /// exactly one way: returning a delegate-typed PARAM stays legal (`Id(x) { return x; }` is the
+    /// supported method-group / capture-free flow; the CALLER's invocation-result taint guards a
+    /// laundered result), while a capturing lambda, a tainted-local read, or a tainted invocation
+    /// result (`return Id(x =&gt; x + a);`) is loud.
+    /// </summary>
+    protected void GuardCaptureEscapeReturn(IOperation value)
+    {
+        GuardBuriedCapturingLambda(value);
+        if (IsDirectCapturingLambda(value) || IsCaptureTaintedRead(value)
+            || IsTaintedDelegateInvocationResult(value))
             throw new System.NotSupportedException(CaptureEscapeError);
     }
 
     /// <summary>
     /// §2.8(b) capture-escape guard for STORE sites, plus flow-insensitive taint registration.
-    /// Array-element and object/object[]-typed targets reject both a direct capturing lambda and a
-    /// tainted-local read; a LOCAL target stores legally but is tainted; field/property/struct-member
-    /// targets reject tainted reads only (a direct capturing lambda into a delegate field stays legal —
-    /// the aliasing detector owns that case). Over-rejection after a method-group reassign is accepted:
-    /// loud and safe beats a silent wrong value (design §8-3).
+    /// Array-element and object/object[]-typed targets reject a direct capturing lambda and any
+    /// tainted-equivalent read (tainted local, laundered delegate-typed invocation result,
+    /// delegate-typed param); a LOCAL target stores legally but is tainted; field/property/
+    /// struct-member targets reject tainted-equivalent reads only (a direct capturing lambda into a
+    /// delegate field stays legal — the aliasing detector owns that case). Over-rejection after a
+    /// method-group reassign is accepted: loud and safe beats a silent wrong value (design §8-3).
     /// </summary>
     protected void GuardCaptureEscapeStore(IOperation target, IOperation value)
     {
@@ -908,7 +964,8 @@ public abstract class HandlerBase
         GuardBuriedCapturingLambda(value);
 
         bool direct = IsDirectCapturingLambda(value);
-        bool tainted = IsCaptureTaintedRead(value);
+        bool tainted = IsCaptureTaintedRead(value)
+            || IsTaintedDelegateInvocationResult(value) || IsDelegateParamRead(value);
         if (!direct && !tainted) return;
 
         if (target is IArrayElementReferenceOperation || IsObjectish(target.Type))

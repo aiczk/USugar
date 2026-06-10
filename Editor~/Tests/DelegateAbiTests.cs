@@ -388,6 +388,135 @@ public class RefDispatch : UdonSharpBehaviour {
         Assert.Contains("ref/out", ex.Message);
     }
 
+    // ── Invocation/param laundering (M3-review blocker): identity callees must not launder
+    //    capturing lambdas past the §2.8(b) guards ──
+
+    [Fact]
+    public void IdLaunderedCapturingLambda_ArrayStore_Throws()
+    {
+        // [A] reviewer repro: fs[i] = Id(()=>v) in a loop compiled clean and shipped VM sum=60
+        // vs CLR 30 — the delegate-typed invocation RESULT with a capturing-lambda arg is
+        // tainted-equivalent and the array store goes loud.
+        var ex = Assert.ThrowsAny<Exception>(() => TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public class IdLaunder : UdonSharpBehaviour {
+    public int sum;
+    Func<int>[] fs;
+    void Start() { fs = new Func<int>[3]; for (int i = 0; i < 3; i++) { int v = i * 10; fs[i] = Id(() => v); } sum = fs[0]() + fs[1]() + fs[2](); }
+    Func<int> Id(Func<int> x) { return x; }
+}", "IdLaunder"));
+        Assert.Contains("capture", ex.Message);
+    }
+
+    [Fact]
+    public void IdLaunderedCapturingLambda_Return_Throws()
+    {
+        // [B] reviewer repro: Mk(a){return Id(x=>x+a);} across two activations gave VM 42 vs
+        // CLR 32 — returning a tainted delegate-typed invocation result goes loud at Mk's return.
+        var ex = Assert.ThrowsAny<Exception>(() => TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public class MkLaunder : UdonSharpBehaviour {
+    public int result;
+    void Start() { var f1 = Mk(10); var f2 = Mk(20); result = f1(1) + f2(1); }
+    Func<int, int> Mk(int a) { return Id(x => x + a); }
+    Func<int, int> Id(Func<int, int> x) { return x; }
+}", "MkLaunder"));
+        Assert.Contains("capture", ex.Message);
+    }
+
+    [Fact]
+    public void IdLaunderedResult_ViaLocalCopy_ArrayStore_Throws()
+    {
+        // F4 composition: the laundered result TAINTS the receiving local, so the copy's escaping
+        // store stays loud.
+        var ex = Assert.ThrowsAny<Exception>(() => TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public class IdTaintCopy : UdonSharpBehaviour {
+    public int r;
+    Func<int>[] fs;
+    void Start() { fs = new Func<int>[1]; int v = 4; var t = Id(() => v); fs[0] = t; r = fs[0](); }
+    Func<int> Id(Func<int> x) { return x; }
+}", "IdTaintCopy"));
+        Assert.Contains("capture", ex.Message);
+    }
+
+    [Fact]
+    public void DelegateParam_StoredIntoArrayElement_Throws()
+    {
+        // [C] callee-side laundering: Keep(x){fs[k]=x;} called with ()=>v in a loop compiled clean
+        // and shipped VM sum=60 vs CLR 30 — a delegate-typed PARAM read is tainted-equivalent at
+        // escaping store targets (the callee cannot see what the caller passed).
+        var ex = Assert.ThrowsAny<Exception>(() => TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public class KeepParam : UdonSharpBehaviour {
+    public int sum;
+    int k;
+    Func<int>[] fs;
+    void Start() { fs = new Func<int>[3]; for (int i = 0; i < 3; i++) { int v = i * 10; Keep(() => v); } sum = fs[0]() + fs[1]() + fs[2](); }
+    void Keep(Func<int> x) { fs[k] = x; k = k + 1; }
+}", "KeepParam"));
+        Assert.Contains("capture", ex.Message);
+    }
+
+    [Fact]
+    public void DelegateParam_StoredIntoDelegateField_Throws()
+    {
+        // [C] field variant: SetCb(x){cb=x;} launders past RecordLongLivedLambdaStore (which
+        // records only direct lambda creations) — VM 54 vs CLR 42 across two activations.
+        // Over-rejection of SetCb(M) method-group setters is accepted per design §8-3.
+        var ex = Assert.ThrowsAny<Exception>(() => TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public class SetCbParam : UdonSharpBehaviour {
+    public int result;
+    Func<int> cb;
+    void Start() { Mk(5); var f1 = cb; Mk(9); result = f1() + cb(); }
+    void Mk(int n) { SetCb(() => n * 3); }
+    void SetCb(Func<int> x) { cb = x; }
+}", "SetCbParam"));
+        Assert.Contains("capture", ex.Message);
+    }
+
+    [Fact]
+    public void MethodGroupThroughIdentityCallee_ArrayStore_Compiles()
+    {
+        // Identity callees stay legal: returning a delegate-typed param compiles, and a
+        // method-group argument carries no captures — fs[0] = Id(M) is the supported flow
+        // (real-VM verified in the local harness laundering probes).
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public class IdMg : UdonSharpBehaviour {
+    public int result;
+    Func<int>[] fs;
+    void Start() { fs = new Func<int>[1]; fs[0] = Id(M); result = fs[0](); }
+    int M() { return 12; }
+    Func<int> Id(Func<int> x) { return x; }
+}", "IdMg");
+        Assert.NotNull(uasm);
+    }
+
+    [Fact]
+    public void CapturingLambdaArg_NonDelegateResult_Compiles()
+    {
+        // fcd37 pin: an arg-position capturing lambda whose invocation result is NOT delegate-typed
+        // is consumed by the callee — int Apply(...) stays legal.
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public class ApplyCap : UdonSharpBehaviour {
+    public int k;
+    public int result;
+    void Start() { int kk = k; result = Apply(x => x * kk, 5); }
+    int Apply(Func<int, int> fn, int v) { return fn(v); }
+}", "ApplyCap");
+        Assert.NotNull(uasm);
+    }
+
     // ── Type map + cast audit ──
 
     [Fact]
