@@ -960,7 +960,7 @@ public class UasmEmitter
     void EmitInterfaceBridges()
     {
         var bridges = _planner.ComputeBridges(_classSymbol);
-        foreach (var (ifaceMethod, ifaceMl, classMl) in bridges)
+        foreach (var (ifaceMethod, ifaceMl, implMethod, classMl) in bridges)
         {
             // Declare interface param/return variables
             for (int i = 0; i < ifaceMethod.Parameters.Length; i++)
@@ -983,8 +983,10 @@ public class UasmEmitter
             var bridgeFunc = _module.AddFunction($"__bridge_{bridgeName}", bridgeName);
             _builder.SetFunction(bridgeFunc);
 
-            // Find class implementation
-            var implMethod = _classSymbol.FindImplementationForInterfaceMember(ifaceMethod) as IMethodSymbol;
+            // Class implementation: the planner already resolved it through the override chain
+            // (wave-9 round-2 [W5] — FindImplementationForInterfaceMember returns the chain ROOT,
+            // which the [W4] folding removes from both the layout and _methodFunctions, so a
+            // re-resolution here would miss the registered chain leaf and throw).
             if (implMethod == null || !_methodFunctions.TryGetValue(implMethod, out var classFunc))
                 throw new InvalidOperationException(
                     $"Interface bridge for '{ifaceMl.ExportName}': "

@@ -618,10 +618,10 @@ public class LayoutPlanner
     /// cross-program-stable dispatch entry — avoiding the export-name collisions that arose when the bridge
     /// reused the interface's bare export name (which could equal a sibling class method or another bridge).
     /// </summary>
-    public List<(IMethodSymbol method, MethodLayout interfaceLayout, MethodLayout classLayout)>
+    public List<(IMethodSymbol method, MethodLayout interfaceLayout, IMethodSymbol implMethod, MethodLayout classLayout)>
         ComputeBridges(INamedTypeSymbol classType)
     {
-        var bridges = new List<(IMethodSymbol, MethodLayout, MethodLayout)>();
+        var bridges = new List<(IMethodSymbol, MethodLayout, IMethodSymbol, MethodLayout)>();
         var classLayout = Plan(classType);
 
         foreach (var iface in classType.AllInterfaces)
@@ -643,10 +643,28 @@ public class LayoutPlanner
                         + "interface body has no dispatch entry point on the implementing program "
                         + "(SendCustomEvent would silently no-op) — implement the member in the class.");
                 if (impl == null) continue;
-                if (!classLayout.Methods.TryGetValue(impl, out var classMl)) continue;
+                // Wave-9 round-2 [W5]: when the implicit implementation is a base-class VIRTUAL with an
+                // override anywhere in the chain, FindImplementationForInterfaceMember returns the chain
+                // ROOT — which the [W4] one-function-per-virtual-slot rule folds OUT of the layout, so the
+                // direct lookup misses and the bridge was silently skipped: the call site SendCustomEvents
+                // the canonical __iface_* name with no export anywhere (silent no-op + stale 0 on a real
+                // client; unbounded self-reentry in the harness). Resolve to the chain member that OWNS
+                // impl's virtual slot (unique by the [W4] invariant: one laid-out function per chain).
+                var implOwner = impl;
+                if (!classLayout.Methods.TryGetValue(implOwner, out var classMl))
+                {
+                    implOwner = null;
+                    foreach (var (m, ml) in classLayout.Methods)
+                    {
+                        for (var cur = m.OverriddenMethod; cur != null; cur = cur.OverriddenMethod)
+                            if (SymbolEqualityComparer.Default.Equals(cur, impl)) { implOwner = m; classMl = ml; break; }
+                        if (implOwner != null) break;
+                    }
+                    if (implOwner == null) continue; // pre-existing skip: impl genuinely absent from the layout
+                }
                 // Tuple returns (N>1, ReturnId null) go through CrossCall directly, not a bridge.
                 if (ifaceMl.Returns.Count > 1) continue;
-                bridges.Add((ifaceMethod, ifaceMl, classMl));
+                bridges.Add((ifaceMethod, ifaceMl, implOwner, classMl));
             }
         }
 
