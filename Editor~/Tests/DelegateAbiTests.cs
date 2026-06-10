@@ -1523,4 +1523,91 @@ public class CopyOk : UdonSharpBehaviour {
 }", "CopyOk");
         Assert.NotNull(uasm);
     }
+
+    // ── round-6 [J5]/[J6]/[J7]: the remaining use-before-seed copy kinds, closed by the unified
+    // pre-scan classifier (a local EVER tainted in a body is tainted at every read) ──
+
+    [Fact]
+    public void ParamCopy_UseBeforeSeed_Throws()
+    {
+        // [J5] `g = p` had no pre-scan arm: the loop back-edge read `fs[j] = g` was emitted clean
+        // lexically before the copy yet executed seeded from iteration 2 on (VM 42 vs CLR 32).
+        var ex = Assert.ThrowsAny<Exception>(() => TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public class J5Cls : UdonSharpBehaviour {
+    public int sum;
+    Func<int>[] fs; int j;
+    int M() { return 1; }
+    void Helper(Func<int> p) { Func<int> g = M; for (int i = 0; i < 2; i++) { fs[j] = g; j++; g = p; } }
+    void Start() { fs = new Func<int>[4]; j = 0; for (int k = 0; k < 2; k++) { int v = (k + 1) * 10; Helper(() => v); } sum = fs[0]() + fs[1]() + fs[2]() + fs[3](); }
+}", "J5Cls"));
+        Assert.Contains("capture", ex.Message);
+    }
+
+    [Fact]
+    public void TaintedInvocationResultCopy_UseBeforeSeed_Throws()
+    {
+        // [J6] `g = Id(t)` had no pre-scan arm: the identity-callee launder composed with the loop
+        // back edge (VM 21 vs CLR 11). The classifier adds the t→g copy edge order-independently.
+        var ex = Assert.ThrowsAny<Exception>(() => TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public class J6Cls : UdonSharpBehaviour {
+    public int sum;
+    int M() { return 1; }
+    Func<int> Id(Func<int> x) { return x; }
+    void Start() { var fs = new Func<int>[2]; Func<int> g = M; Func<int> t = M; for (int i = 0; i < 2; i++) { fs[i] = g; int v = (i + 1) * 10; t = () => v; g = Id(t); } sum = fs[0]() + fs[1](); }
+}", "J6Cls"));
+        Assert.Contains("capture", ex.Message);
+    }
+
+    [Fact]
+    public void DeconstructionCopy_UseBeforeSeed_Throws()
+    {
+        // [J7] `(g, x) = t` recorded no pre-scan edge (the [N3] guard tainted only at emission), so
+        // the back-edge read shipped (VM 21 vs CLR 11). The classifier mirrors the guard per
+        // delegate-capable LOCAL element target.
+        var ex = Assert.ThrowsAny<Exception>(() => TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public class J7Cls : UdonSharpBehaviour {
+    public int sum;
+    int M() { return 1; }
+    void Start() { var fs = new Func<int>[2]; Func<int> g = M; int x = 0; (Func<int>, int) t = (M, 0); for (int i = 0; i < 2; i++) { fs[i] = g; int v = (i + 1) * 10; t.Item1 = () => v; (g, x) = t; } sum = fs[0]() + fs[1](); }
+}", "J7Cls"));
+        Assert.Contains("capture", ex.Message);
+    }
+
+    [Fact]
+    public void ParamCopy_DispatchOnly_Compiles()
+    {
+        // [J5 precision] tainting a param copy must not break DISPATCH (reads at escape positions
+        // are guarded; invocation reads are unguarded by design).
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public class J5Ok : UdonSharpBehaviour {
+    public int sum;
+    void Helper(Func<int> p) { Func<int> g = p; sum += g(); }
+    void Start() { Helper(() => 21); Helper(() => 21); }
+}", "J5Ok");
+        Assert.NotNull(uasm);
+    }
+
+    [Fact]
+    public void StructConstrainedGenericParamCopy_Compiles()
+    {
+        // [J5 precision] a value-type-constrained T can never carry a delegate bundle, so the
+        // pre-scan param-copy arm must not taint `T result = x;` (tracked pin shape: the int
+        // instantiation returns the local legally).
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public class J5Gen : UdonSharpBehaviour {
+    public int sum;
+    T Dup<T>(T x) where T : struct { T result = x; return result; }
+    void Start() { sum = Dup<int>(21); }
+}", "J5Gen");
+        Assert.NotNull(uasm);
+    }
 }
