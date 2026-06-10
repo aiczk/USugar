@@ -233,8 +233,8 @@ public class EmitContext
         return false;
     }
 
-    /// <summary>Generalized delegate-dispatch matcher: ANY-receiver delegate Invoke (replaces the
-    /// deleted local-variable-only HasNonTailDelegateSelfCall — design §4.2/#12).</summary>
+    /// <summary>Generalized delegate-dispatch matcher: ANY-receiver delegate Invoke (design §4.2;
+    /// the pre-§4 local-variable-only matcher was removed per deletion #12).</summary>
     public static bool IsDelegateDispatch(IOperation op)
         => op is IInvocationOperation inv && inv.TargetMethod?.MethodKind == MethodKind.DelegateInvoke;
 

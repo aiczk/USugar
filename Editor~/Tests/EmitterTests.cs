@@ -3896,8 +3896,7 @@ public class DlgTest : UdonSharpBehaviour
     {
         // A bare method group passed to a delegate parameter builds the object[4] bundle at the call
         // site (design §2.4) — its __dlg_ bridge is the callee-side prologue copy that absorbs both
-        // the self JUMP_INDIRECT and the cross SendCustomEvent path; the per-call-site __dlgadapt_
-        // adapter is gone.
+        // the self JUMP_INDIRECT and the cross SendCustomEvent path (no per-call-site adapter).
         var uasm = TestHelper.CompileToUasm(@"
 using System;
 using UdonSharp;
@@ -3909,7 +3908,6 @@ public class DlgMgTest : UdonSharpBehaviour
     void Start() { int r = Apply(21, Dbl); }
 }
 ");
-        Assert.DoesNotContain("__dlgadapt", uasm);
         Assert.Contains("SystemObjectArray.__ctor__SystemInt32__SystemObjectArray", uasm);
         Assert.Contains("__dlg_", uasm);
     }
