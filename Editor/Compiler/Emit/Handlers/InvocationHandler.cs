@@ -329,9 +329,19 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
         // C# evaluation order: a plain d(args) runs the argument side effects even when d is null (the
         // NRE follows them). For ?.Invoke this whole sequence sits inside NullableHandler's non-null
         // branch, so args are correctly unevaluated on a null bundle.
-        var argExprs = new List<CLeaf>();
+        // Wave-9 round-2 [W1]: evaluate in TEXTUAL order (C# evaluation order) but slot each value at
+        // its PARAMETER's ordinal — IInvocationOperation.Arguments is in call-site order for named/
+        // reordered args, so indexing conv slots by textual position bound names positionally
+        // (s(right: k, left: 9) DiffFuzz ref=902 vs VM 209). Mirrors EmitUserMethodCall's by-ordinal
+        // slotting; the side-effect order itself was already correct (trace fields matched).
+        var argExprs = new CLeaf[invoke.Parameters.Length];
         for (int i = 0; i < op.Arguments.Length; i++)
-            argExprs.Add(VisitExpression(op.Arguments[i].Value));
+        {
+            var argParam = op.Arguments[i].Parameter;
+            var ordinal = argParam != null && argParam.Ordinal >= 0 ? argParam.Ordinal : i;
+            var val = VisitExpression(op.Arguments[i].Value);
+            if (ordinal < argExprs.Length) argExprs[ordinal] = val;
+        }
 
         // retSlot pre-initialized to default(T): every guard-failure arm falls through with it (§2.6).
         int retSlot = -1;
@@ -367,8 +377,9 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
             _builder.EmitIf(tOk, _ =>
             {
                 // Conv stores: the FINAL writes before dispatch (§3.3 clobber discipline).
-                for (int i = 0; i < argExprs.Count && i < convArgs.Length; i++)
-                    EmitStoreField(convArgs[i], argExprs[i]);
+                for (int i = 0; i < argExprs.Length && i < convArgs.Length; i++)
+                    if (argExprs[i] != null)
+                        EmitStoreField(convArgs[i], argExprs[i]);
 
                 var adr = ExternCall("SystemObjectArray.__Get__SystemInt32__SystemObject",
                     new List<CLeaf> { bundle, Const(DelegateAbi.Addr, "SystemInt32") }, "SystemUInt32");
