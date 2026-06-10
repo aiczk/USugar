@@ -349,7 +349,8 @@ public class UasmEmitter
             var udonType = GetUdonType(prop.Type);
             var flags = FieldFlags.None;
             if (prop.DeclaredAccessibility == Accessibility.Public) flags |= FieldFlags.Export;
-            _ctx.DeclareField(prop.Name, udonType, flags);
+            _ctx.DeclareField(prop.Name, udonType, flags,
+                isAuto ? ResolveAutoPropInitializer(prop.Name, prop) : null);
         }
 
         // Record count of derived-class field init ops; base class init ops added below
@@ -451,8 +452,11 @@ public class UasmEmitter
                         // [N1] name-unification overshot exactly here (`base.P=5; P=7;` → VM 77 vs
                         // CLR 57): declare a per-declaration backing var for the overridden AUTO
                         // declaration, used only by its base-instance copy accessors (base.P calls).
+                        // Round-8 [R2]: C# runs the BASE declaration's initializer into THIS backing
+                        // (the leaf's stays default — DiffFuzz: base.P*10+P ref=50).
                         if (isAuto)
-                            _ctx.DeclareField(BaseAutoPropBackingName(prop), GetUdonType(prop.Type), FieldFlags.None);
+                            _ctx.DeclareField(BaseAutoPropBackingName(prop), GetUdonType(prop.Type), FieldFlags.None,
+                                ResolveAutoPropInitializer(BaseAutoPropBackingName(prop), prop));
                         continue;
                     }
                     // A storage-BEARING base member (auto-prop) hidden without an override relation
@@ -470,7 +474,8 @@ public class UasmEmitter
                 var flags = FieldFlags.None;
                 if (prop.DeclaredAccessibility == Accessibility.Public) flags |= FieldFlags.Export;
                 declaredMemberSyms[prop.Name] = prop;
-                _ctx.DeclareField(prop.Name, udonType, flags);
+                _ctx.DeclareField(prop.Name, udonType, flags,
+                    isAuto ? ResolveAutoPropInitializer(prop.Name, prop) : null);
             }
             baseType = baseType.BaseType;
         }
@@ -571,6 +576,32 @@ public class UasmEmitter
                 if (IsOverrideChainAncestor(p, autoProp))
                     return BaseAutoPropBackingName(autoProp);
         return autoProp.Name;
+    }
+
+    /// <summary>Round-8 [R2]: auto-property initializers (IPropertyInitializerOperation) were
+    /// handled nowhere — `public int P{get;set;}=5;` compiled clean and read 0 (DiffFuzz native-CLR
+    /// oracle ref=5; overridden-base flavor base.P*10+P ref=50, the base declaration's initializer
+    /// runs into its __basebk storage). Resolve the declaration's initializer for the given backing
+    /// var: constants (and heap-evaluable values) become heap defaults exactly like field
+    /// initializers; anything else is enqueued for runtime initialization at _start (user-Start and
+    /// _start-synthesized paths both drain _fieldInitOps), behind the same base-first reordering as
+    /// fields. Binds the EqualsValueClause itself (delegate-typed initializers need the
+    /// conversion-carrying ISymbolInitializerOperation.Value, mirroring DeclareDelegateField).</summary>
+    object ResolveAutoPropInitializer(string backingVar, IPropertySymbol prop)
+    {
+        if (prop.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
+            is not PropertyDeclarationSyntax { Initializer: not null } decl)
+            return null;
+        var model = _compilation.GetSemanticModel(decl.SyntaxTree);
+        var initOp = (model.GetOperation(decl.Initializer) as ISymbolInitializerOperation)?.Value
+                     ?? model.GetOperation(decl.Initializer.Value);
+        if (initOp == null) return null;
+        var constVal = initOp.ConstantValue;
+        if (constVal.HasValue && constVal.Value != null) return constVal.Value;
+        var heapVal = TryEvaluateFieldInitForHeap(initOp, prop.Type);
+        if (heapVal != null) return heapVal;
+        _fieldInitOps.Add((backingVar, initOp, prop.Type));
+        return null;
     }
 
     static string ShadowedStorageError(ISymbol baseMember, ISymbol shadower)
