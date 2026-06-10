@@ -642,6 +642,32 @@ public partial class InvocationHandler
     {
         var paramIds = _methodParamVarIds[target];
 
+        // Round-7 follow-up [Q2]: ref/out params are deliberately EXCLUDED from the recursion spill
+        // set (a recursive call THREADING ITS OWN ref/out param must keep its mutations across the
+        // call — wave-3 #3, RecRefRegressionTests / struct_ref_param tier). That exclusion is only
+        // sound for self-threading: a recursion-cycle call passing a DIFFERENT lvalue overwrites the
+        // one shared param heap var at copy-in and nothing restores the outer frame's value
+        // (VM-proven: re-chained scalar/struct ref recursion 200 vs CLR 101). Loud per design §8-3.
+        if (IsRecursiveEdge(_currentMethod, target))
+        {
+            for (int i = 0; i < op.Arguments.Length; i++)
+            {
+                var p = op.Arguments[i].Parameter ?? target.Parameters[i];
+                if (p.RefKind != RefKind.Ref && p.RefKind != RefKind.Out) continue;
+                var a = UnwrapConversions(op.Arguments[i].Value);
+                bool selfThreaded = a is IParameterReferenceOperation apr
+                    && SymbolEqualityComparer.Default.Equals(
+                        apr.Parameter.OriginalDefinition, p.OriginalDefinition);
+                if (!selfThreaded)
+                    throw new System.NotSupportedException(
+                        $"recursive call to '{target.Name}' passes '{p.RefKind.ToString().ToLowerInvariant()} "
+                        + $"{p.Name}' an lvalue other than the same parameter. Recursive frames share one "
+                        + "heap var per parameter and ref/out params are not spilled (their mutations must "
+                        + "thread through), so re-chaining a different variable corrupts the outer frame. "
+                        + "Thread the method's own ref/out parameter, or pass by value.");
+            }
+        }
+
         // Recursion is handled centrally in EmitCallToMethod (software-stack spill/reload around the call).
 
         // Build args in PARAMETER order. IInvocationOperation.Arguments can be in call-site (syntax) order for
