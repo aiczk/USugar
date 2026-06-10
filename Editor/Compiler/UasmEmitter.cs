@@ -2163,6 +2163,9 @@ public class UasmEmitter
         {
             var tailArgs = (tailInv as IInvocationOperation)?.Arguments
                            ?? (tailInv as IObjectCreationOperation)?.Arguments
+                           // Wave-9 round-2 [W2]: `return this[..];` is a tail accessor call — only its
+                           // index arguments are non-tail positions.
+                           ?? (tailInv as IPropertyReferenceOperation)?.Arguments
                            ?? System.Collections.Immutable.ImmutableArray<IArgumentOperation>.Empty;
             foreach (var arg in tailArgs)
                 if (HasNonTailCallTo(arg, callee)) return true;
@@ -2187,6 +2190,13 @@ public class UasmEmitter
             _ => null,
         };
         if (target != null && SymbolEqualityComparer.Default.Equals(target, callee)) { call = op; return true; }
+        // Wave-9 round-2 [W2]: a this-receiver property/indexer reference is an accessor CALL —
+        // matched against either accessor (conservative: a write-position reference matching the
+        // getter only ever classifies an extra site non-tail, which over-spills, never corrupts).
+        if (op is IPropertyReferenceOperation { Instance: IInstanceReferenceOperation } pr
+            && ((pr.Property.GetMethod is { } pg && SymbolEqualityComparer.Default.Equals(pg.OriginalDefinition, callee))
+             || (pr.Property.SetMethod is { } ps && SymbolEqualityComparer.Default.Equals(ps.OriginalDefinition, callee))))
+        { call = op; return true; }
         return false;
     }
 
@@ -2239,6 +2249,21 @@ public class UasmEmitter
         {
             var c = oc.Constructor.OriginalDefinition;
             if (internalMethods.Contains(c)) result.Add(c);
+        }
+        // Wave-9 round-2 [W2]: a this-receiver property/indexer reference is a CALL to its manual
+        // accessor (this-path reads/writes direct-JUMP the registered accessor function), so it is a
+        // call-graph edge — without it, recursion threaded through any accessor was invisible to the
+        // SCC analysis and accessor frames were never spilled (VM-proven: every frame's locals
+        // clobbered to the deepest value, 5 where the CLR gives 11). Both accessors are added
+        // conservatively (read/write/compound positions all route here; an extra edge only ever
+        // over-spills, §8-3 direction). Auto accessors have no body op and thus no outgoing edges —
+        // they can never close a cycle, so the extra edges are inert for them.
+        if (op is IPropertyReferenceOperation { Instance: IInstanceReferenceOperation } pr)
+        {
+            if (pr.Property.GetMethod is { } pg && internalMethods.Contains(pg.OriginalDefinition))
+                result.Add(pg.OriginalDefinition);
+            if (pr.Property.SetMethod is { } ps && internalMethods.Contains(ps.OriginalDefinition))
+                result.Add(ps.OriginalDefinition);
         }
         var opMethod = (op as IBinaryOperation)?.OperatorMethod ?? (op as IUnaryOperation)?.OperatorMethod;
         if (opMethod != null && internalMethods.Contains(opMethod.OriginalDefinition))
