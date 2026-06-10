@@ -243,11 +243,13 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
     {
         // Recursion (including the receiver) is handled by EmitCallToMethod's software-stack spill/reload.
         var recv = LoadInstanceRaw(op.Instance);
-        // Round-7 follow-up [Q4]: the foreach iteration variable is READONLY in C#, so a
-        // non-readonly struct method invoked on it (or on a struct member chain rooted at it)
-        // operates on a DEFENSIVE COPY — mutation is a no-op (VM-proven: loop-var reads after a
-        // mutating call 1112 vs CLR 102). Clone the receiver for the call; chains through array
-        // elements keep live storage (reference semantics, CLR-equal — the helper stops there).
+        // Round-8 [R1] (corrects the round-7 [Q4] over-clone, which was calibrated against a wrong
+        // hand-computed oracle): Roslyn defensive-copies a foreach iteration-variable receiver only
+        // when the chain passes through a value-typed FIELD link (member access on the readonly
+        // local is a value); a DIRECT non-readonly struct method on the loop local mutates the
+        // local itself (ldloca — DiffFuzz: direct ref=1112, nested s.inner.Bump() ref=102). Clone
+        // only the field-chain case; chains through array elements keep live storage (the helper
+        // stops there, reference semantics, CLR-equal).
         if (!target.IsReadOnly && RootsAtForeachIterationVariable(op.Instance)
             && op.Instance?.Type is INamedTypeSymbol recvAgg && EmitContext.IsAggregateType(recvAgg))
             recv = EmitDeepCloneAggregate(recv, recvAgg);

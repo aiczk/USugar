@@ -604,14 +604,18 @@ public abstract class HandlerBase
         }
     }
 
-    /// <summary>Round-7 follow-up [Q4]: true when a receiver chain roots at a foreach ITERATION
-    /// variable through value-typed member links only. Such a receiver is READONLY in C# — a
-    /// non-readonly struct method runs on a defensive copy — so the caller clones it. A chain that
-    /// passes through an ARRAY ELEMENT stops (arrays are reference-typed: the CLR mutates through
-    /// them even from a readonly variable, so live storage is correct there).</summary>
+    /// <summary>Round-8 [R1] (corrects the round-7 [Q4] over-clone): true when a receiver chain
+    /// reaches a foreach ITERATION variable through AT LEAST ONE value-typed field link. Roslyn
+    /// does NOT defensive-copy a DIRECT member invocation on the loop local (ldloca on the local;
+    /// the readonly-ness only forbids assignment — DiffFuzz: direct mutating call ref=1112), but
+    /// member ACCESS on the readonly variable yields a value, so a chain through a value-typed
+    /// FIELD link operates on a defensive copy (DiffFuzz: nested s.inner.Bump() ref=102). A chain
+    /// that passes through an ARRAY ELEMENT stops (arrays are reference-typed: the CLR mutates
+    /// through them even from a readonly variable, so live storage is correct there).</summary>
     protected bool RootsAtForeachIterationVariable(IOperation instance)
     {
         var op = instance;
+        bool sawValueFieldLink = false;
         while (true)
         {
             switch (op)
@@ -619,9 +623,10 @@ public abstract class HandlerBase
                 case IConversionOperation c:
                     op = c.Operand; continue;
                 case ILocalReferenceOperation lr:
-                    return _ctx.ForeachIterationLocals.Contains(lr.Local);
+                    return sawValueFieldLink && _ctx.ForeachIterationLocals.Contains(lr.Local);
                 case IFieldReferenceOperation fr when fr.Instance != null
                     && fr.Field.ContainingType?.IsValueType == true:
+                    sawValueFieldLink = true;
                     op = fr.Instance; continue;
                 default:
                     return false; // array element / param / call result / this — live or fresh storage
