@@ -273,6 +273,13 @@ public class EmitContext
     public readonly Dictionary<ISymbol, List<IAnonymousFunctionOperation>> AllLambdaCaptures
         = new(SymbolEqualityComparer.Default);
 
+    // §2.8(b) capture-escape guard: locals initialized/reassigned with a CAPTURING lambda (flow-insensitive
+    // taint). Reading such a local in an escaping position (array/object store, return, field/property/
+    // struct store) is a compile error in Stage 1 — flat capture + a delegate that outlives the frame
+    // would be a compile-clean wrong value otherwise. MEMBERSHIP-ONLY set (§1.5): never enumerate it to
+    // drive emission order (symbol-keyed iteration order would break the 2-compile determinism gate).
+    public readonly HashSet<ILocalSymbol> CapturingLambdaLocals = new(SymbolEqualityComparer.Default);
+
     /// <summary>
     /// Record that <paramref name="lambda"/> was assigned to a delegate field (or otherwise
     /// stored long-lived). Each captured symbol is appended to AllLambdaCaptures so post-emit

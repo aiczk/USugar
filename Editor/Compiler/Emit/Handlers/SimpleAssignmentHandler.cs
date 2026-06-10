@@ -17,6 +17,12 @@ public class SimpleAssignmentHandler : AssignmentHandlerBase, IExpressionHandler
 
     CLeaf VisitAssignment(ISimpleAssignmentOperation assign)
     {
+        // §2.8(a): capturing lambdas stored long-lived (delegate field / auto-property / struct member,
+        // self or cross) feed the post-emit aliasing detector. §2.8(b): escaping stores (array element,
+        // object/object[] target, tainted-local read into a member) are loud compile errors in Stage 1.
+        RecordLongLivedLambdaStore(assign.Target, assign.Value);
+        GuardCaptureEscapeStore(assign.Target, assign.Value);
+
         // Aggregate field/auto-property write: point.x = 5, result.Item1 = 42, v.X = 7 (struct auto-property).
         // Triggered by the containing type being aggregate, regardless of instance kind.
         if (TryGetAggregateMemberTarget(assign.Target, out var aggInstance, out var aggMemberName)

@@ -119,6 +119,11 @@ public class NullableHandler : AssignmentHandlerBase, IExpressionHandler
 
     CLeaf VisitCoalesceAssignment(ICoalesceAssignmentOperation op)
     {
+        // §2.8: `field ??= lambda` is a long-lived store — record for the aliasing detector; escaping
+        // targets / tainted-local reads are rejected like any other store.
+        RecordLongLivedLambdaStore(op.Target, op.Value);
+        GuardCaptureEscapeStore(op.Target, op.Value);
+
         // x ??= expr  →  if (x == null) x = expr;  return x
         // Route the conditional store through the shared lvalue machinery (the same CaptureLValue/EmitWriteBack
         // that CompoundAssignmentHandler uses for its read-modify-write): CaptureLValue reads the current value

@@ -818,6 +818,95 @@ public abstract class HandlerBase
         return (argNames, retName);
     }
 
+    // ── §2.8 capture recording + capture-escape guard ──
+
+    protected const string CaptureEscapeError =
+        "Lambdas that capture local variables cannot be stored into arrays/objects or returned in v2.x Stage 1. "
+      + "Use a capture-free lambda or a method group; closure environments arrive in Stage 2.";
+
+    /// <summary>Unwrap conversions to a delegate creation whose target is a lambda; true when found.</summary>
+    protected static bool TryGetLambdaCreation(IOperation value, out IAnonymousFunctionOperation lambda)
+    {
+        lambda = null;
+        var v = value;
+        while (v is IConversionOperation conv) v = conv.Operand;
+        if (v is IDelegateCreationOperation { Target: IAnonymousFunctionOperation l }) { lambda = l; return true; }
+        return false;
+    }
+
+    /// <summary>Value is directly a capturing-lambda delegate creation (conversions unwrapped).</summary>
+    protected bool IsDirectCapturingLambda(IOperation value)
+        => TryGetLambdaCreation(value, out var l) && _ctx.CaptureAnalyzer.HasCaptures(l);
+
+    /// <summary>Value reads a local tainted by a capturing-lambda store (§2.8(b) flow-insensitive taint).</summary>
+    protected bool IsCaptureTaintedRead(IOperation value)
+    {
+        var v = value;
+        while (v is IConversionOperation conv) v = conv.Operand;
+        return v is ILocalReferenceOperation lr && _ctx.CapturingLambdaLocals.Contains(lr.Local);
+    }
+
+    /// <summary>object / object[] — storing a delegate there erases the loud delegate typing (§2.8(b)).</summary>
+    protected static bool IsObjectish(ITypeSymbol t)
+        => t != null && (t.SpecialType == SpecialType.System_Object
+            || (t is IArrayTypeSymbol at && at.ElementType.SpecialType == SpecialType.System_Object));
+
+    /// <summary>
+    /// §2.8(a): record a capturing lambda stored LONG-LIVED — a delegate field / auto-property / struct
+    /// member (self or cross) — for the post-emit aliasing detector. Delegate locals and argument-position
+    /// lambdas are intentionally NOT recorded (observationally equivalent today; fcd27/28/37 stay working).
+    /// </summary>
+    protected void RecordLongLivedLambdaStore(IOperation target, IOperation value)
+    {
+        if (target?.Type is not INamedTypeSymbol tnt || tnt.DelegateInvokeMethod == null) return;
+        if (target is not (IFieldReferenceOperation or IPropertyReferenceOperation)) return;
+        if (TryGetLambdaCreation(value, out var lambda) && _ctx.CaptureAnalyzer.HasCaptures(lambda))
+            _ctx.RecordLambdaCaptures(lambda);
+    }
+
+    /// <summary>
+    /// §2.8(b) capture-escape guard for VALUE positions (array initializer elements, return values):
+    /// a capturing lambda — or a read of a tainted local — escaping the flat-capture model is a loud
+    /// compile error in Stage 1 (capture-free lambdas and method groups are unrestricted).
+    /// </summary>
+    protected void GuardCaptureEscapeValue(IOperation value)
+    {
+        if (IsDirectCapturingLambda(value) || IsCaptureTaintedRead(value))
+            throw new System.NotSupportedException(CaptureEscapeError);
+    }
+
+    /// <summary>
+    /// §2.8(b) capture-escape guard for STORE sites, plus flow-insensitive taint registration.
+    /// Array-element and object/object[]-typed targets reject both a direct capturing lambda and a
+    /// tainted-local read; a LOCAL target stores legally but is tainted; field/property/struct-member
+    /// targets reject tainted reads only (a direct capturing lambda into a delegate field stays legal —
+    /// the aliasing detector owns that case). Over-rejection after a method-group reassign is accepted:
+    /// loud and safe beats a silent wrong value (design §8-3).
+    /// </summary>
+    protected void GuardCaptureEscapeStore(IOperation target, IOperation value)
+    {
+        bool direct = IsDirectCapturingLambda(value);
+        bool tainted = IsCaptureTaintedRead(value);
+        if (!direct && !tainted) return;
+
+        if (target is IArrayElementReferenceOperation || IsObjectish(target.Type))
+            throw new System.NotSupportedException(CaptureEscapeError);
+
+        switch (target)
+        {
+            case ILocalReferenceOperation localTarget:
+                if (direct) _ctx.CapturingLambdaLocals.Add(localTarget.Local);
+                return;
+            case IDeclarationExpressionOperation { Expression: ILocalReferenceOperation declLocal }:
+                if (direct) _ctx.CapturingLambdaLocals.Add(declLocal.Local);
+                return;
+            case IFieldReferenceOperation or IPropertyReferenceOperation when tainted:
+                throw new System.NotSupportedException(CaptureEscapeError);
+            default:
+                return;
+        }
+    }
+
     // ── Delegate bridge resolution ──
 
     /// <summary>Resolve delegate creation to bridge name, FuncRef, and target instance.</summary>

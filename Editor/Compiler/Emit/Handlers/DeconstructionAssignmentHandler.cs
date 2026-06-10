@@ -49,6 +49,13 @@ public class DeconstructionAssignmentHandler : AssignmentHandlerBase, IOperation
             // a single-assignment scratch leaf — pinned at its phase-1 read point and never clobbered by a
             // phase-2 EmitStoreField (which targets a named heap id, not the scratch) — so no extra temp is
             // needed. Aggregate elements are deep-cloned by clone-on-read inside VisitExpression.
+            // §2.8: a lambda element deconstructed into a delegate-field lvalue is a long-lived store
+            // (record for the aliasing detector); escaping element targets are guarded like plain stores.
+            for (int i = 0; i < targetTuple.Elements.Length; i++)
+            {
+                RecordLongLivedLambdaStore(targetTuple.Elements[i], valueTuple.Elements[i]);
+                GuardCaptureEscapeStore(targetTuple.Elements[i], valueTuple.Elements[i]);
+            }
             var snapshots = new List<CLeaf>(targetTuple.Elements.Length);
             for (int i = 0; i < targetTuple.Elements.Length; i++)
                 snapshots.Add(VisitExpression(valueTuple.Elements[i]));

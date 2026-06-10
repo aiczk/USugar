@@ -136,6 +136,11 @@ public class StatementHandler : HandlerBase, IOperationHandler
 
     void VisitReturn(IReturnOperation op)
     {
+        // §2.8(b): returning a capturing lambda (or a tainted local) escapes the flat-capture model —
+        // loud compile error in Stage 1 (fcd36 stays rejected; closure environments arrive in Stage 2).
+        if (op.ReturnedValue != null)
+            GuardCaptureEscapeValue(op.ReturnedValue);
+
         // Tail call optimization: return self(args) → overwrite params + goto entry
         if (op.ReturnedValue is IInvocationOperation tailCall
             && _currentMethod != null
@@ -349,6 +354,16 @@ public class StatementHandler : HandlerBase, IOperationHandler
             var init = declarator.Initializer;
             if (init != null)
             {
+                // §2.8(b): a capturing lambda initializing a local TAINTS it (flow-insensitive); an
+                // object-typed local is itself an escaping store and is rejected loudly.
+                if (IsDirectCapturingLambda(init.Value) || IsCaptureTaintedRead(init.Value))
+                {
+                    if (IsObjectish(local.Type))
+                        throw new System.NotSupportedException(CaptureEscapeError);
+                    if (IsDirectCapturingLambda(init.Value))
+                        _ctx.CapturingLambdaLocals.Add(local);
+                }
+
                 var srcVal = VisitExpression(init.Value);
                 EmitStoreField(id, srcVal);
             }
