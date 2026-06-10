@@ -3829,6 +3829,47 @@ public class GenericConstraintTest : UdonSharpBehaviour
         Assert.DoesNotContain(externs, e => e.Contains("IComparable"));
     }
 
+    [Fact]
+    public void GenericMethod_Virtual_ThisCall_KeepsTypeArguments()
+    {
+        // Round-8 [R8]: ResolveMostDerivedOverride returned the UNCONSTRUCTED member from
+        // GetMembers for a virtual generic called through this, losing the type arguments — the
+        // monomorphized body kept 'T' and the SDK assembler ICEd (TypeResolverException). The
+        // re-constructed override must emit with the concrete type (DiffFuzz ref-equal post-fix).
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public class GenericVirtualThis : UdonSharpBehaviour
+{
+    public int sum;
+    public virtual T Echo<T>(T x) { return x; }
+    void Start() { sum = Echo<int>(7) + 1; }
+}", "GenericVirtualThis");
+        Assert.Contains("%SystemInt32", uasm);
+        Assert.DoesNotContain("%T", uasm);
+    }
+
+    [Fact]
+    public void GenericMethod_VirtualOverride_InheritedBodyThisCall_BindsConstructedOverride()
+    {
+        // The this-call inside the inherited base body must dispatch the DERIVED override,
+        // constructed with the call's type arguments (harness value pin: Call() == 5).
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public class GenVirtBase : UdonSharpBehaviour
+{
+    public virtual int G<T>(T x) { return 1; }
+    public int Call() { return G<int>(2); }
+}
+public class GenVirtDerived : GenVirtBase
+{
+    public int sum;
+    public override int G<T>(T x) { return 5; }
+    void Start() { sum = Call(); }
+}", "GenVirtDerived");
+        Assert.Contains("%SystemInt32", uasm);
+        Assert.DoesNotContain("%T", uasm);
+    }
+
     // ── Delegate parameter invocation via JUMP_INDIRECT ──
 
     [Fact]

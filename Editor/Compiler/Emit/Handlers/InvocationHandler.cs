@@ -212,7 +212,10 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
 
     /// <summary>Most-derived override of <paramref name="baseMethod"/> reachable from the compiled type
     /// (_classSymbol), or baseMethod itself if none — mirrors C# virtual dispatch for a `this` call whose
-    /// static target is a base declaration.</summary>
+    /// static target is a base declaration. Round-8 [R8]: GetMembers returns the UNCONSTRUCTED member,
+    /// so a generic virtual called through this lost its type arguments and monomorphized the open
+    /// definition — the SDK assembler then ICEd with TypeResolverException 'T' (even same-class).
+    /// Re-construct the resolved member with the original call's type arguments.</summary>
     IMethodSymbol ResolveMostDerivedOverride(IMethodSymbol baseMethod)
     {
         var def = baseMethod.OriginalDefinition;
@@ -220,7 +223,9 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
             foreach (var m in t.GetMembers(baseMethod.Name).OfType<IMethodSymbol>())
                 for (IMethodSymbol o = m; o != null; o = o.OverriddenMethod)
                     if (SymbolEqualityComparer.Default.Equals(o.OriginalDefinition, def))
-                        return m;
+                        return baseMethod.IsGenericMethod && m.IsGenericMethod
+                            ? m.OriginalDefinition.Construct(baseMethod.TypeArguments.ToArray())
+                            : m;
         return baseMethod;
     }
 
