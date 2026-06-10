@@ -860,6 +860,260 @@ public class CbInvoke : UdonSharpBehaviour {
         Assert.NotNull(uasm);
     }
 
+    // ── Capture-escape laundering, round 3: containers (local functions, struct envelopes,
+    //    object initializers, foreign members) laundering the bundle past type-gated guards ──
+
+    [Fact]
+    public void CapturingLocalFunction_MethodGroupArrayStore_Throws()
+    {
+        // [A] int Get(){return v;} fs[i]=Get; — a method-group conversion of a local function is
+        // an IMethodReferenceOperation, never analyzed for captures (VM 40 vs CLR 30 pre-fix).
+        var ex = Assert.ThrowsAny<Exception>(() => TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public class LfArr : UdonSharpBehaviour {
+    public int sum;
+    Func<int>[] fs;
+    void Start() { fs = new Func<int>[2]; for (int i = 0; i < 2; i++) { int v = (i + 1) * 10; int Get() { return v; } fs[i] = Get; } sum = fs[0]() + fs[1](); }
+}", "LfArr"));
+        Assert.Contains("capture", ex.Message);
+    }
+
+    [Fact]
+    public void CapturingLocalFunction_FieldRoundTrip_Throws()
+    {
+        // [A] cb=Get;fs[i]=cb; — the recipient pre-scan must treat the capturing local-function
+        // method group as a capturing-lambda seed (VM 40 vs CLR 30 pre-fix).
+        var ex = Assert.ThrowsAny<Exception>(() => TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public class LfTrip : UdonSharpBehaviour {
+    public int sum;
+    Func<int> cb;
+    Func<int>[] fs;
+    void Start() { fs = new Func<int>[2]; for (int i = 0; i < 2; i++) { int v = (i + 1) * 10; int Get() { return v; } cb = Get; fs[i] = cb; } sum = fs[0]() + fs[1](); }
+}", "LfTrip"));
+        Assert.Contains("capture", ex.Message);
+    }
+
+    [Fact]
+    public void CapturingLocalFunction_ZeroArgReturnLaunder_Throws()
+    {
+        // [A] Func<int> MkL(){…return Get;} fs[i]=MkL(); — a zero-argument invocation result is
+        // untainted by construction (the caller-side rule sees only arguments), so the capturing
+        // method-group RETURN goes loud at the source (VM 40 vs CLR 30 pre-fix).
+        var ex = Assert.ThrowsAny<Exception>(() => TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public class LfMk : UdonSharpBehaviour {
+    public int seed;
+    public int sum;
+    Func<int>[] fs;
+    void Start() { fs = new Func<int>[2]; fs[0] = MkL(); fs[1] = MkL(); sum = fs[0]() + fs[1](); }
+    Func<int> MkL() { seed = seed + 10; int v = seed; int Get() { return v; } return Get; }
+}", "LfMk"));
+        Assert.Contains("capture", ex.Message);
+    }
+
+    [Fact]
+    public void StructLocalCapturingSeed_WholeStructArrayStore_Throws()
+    {
+        // [B] s.f=()=>v;arr[i]=s; — the member seed must taint the CONTAINER local, or the struct
+        // envelope ships the aliased bundle past every delegate-typed gate (VM 90 vs CLR 60).
+        var ex = Assert.ThrowsAny<Exception>(() => TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public struct SEnv { public Func<int> f; }
+public class SArr : UdonSharpBehaviour {
+    public int sum;
+    void Start() { SEnv[] arr = new SEnv[3]; for (int i = 0; i < 3; i++) { int v = (i + 1) * 10; SEnv s; s.f = () => v; arr[i] = s; } sum = arr[0].f() + arr[1].f() + arr[2].f(); }
+}", "SArr"));
+        Assert.Contains("capture", ex.Message);
+    }
+
+    [Fact]
+    public void StructLocalCapturingSeed_Return_Throws()
+    {
+        // [B] SEnv2 Mk(int v){SEnv2 s;s.f=()=>v;return s;} — the tainted container local is loud
+        // at the return, closing the call-boundary launder (VM 270 vs CLR 180 pre-fix).
+        var ex = Assert.ThrowsAny<Exception>(() => TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public struct SEnv2 { public Func<int> f; }
+public class SRet : UdonSharpBehaviour {
+    public int sum;
+    void Start() { SEnv2 a = Mk(30); SEnv2 b = Mk(60); SEnv2 c = Mk(90); sum = a.f() + b.f() + c.f(); }
+    SEnv2 Mk(int v) { SEnv2 s; s.f = () => v; return s; }
+}", "SRet"));
+        Assert.Contains("capture", ex.Message);
+    }
+
+    [Fact]
+    public void StructParamMemberCapturingSeed_Throws()
+    {
+        // [B] Seed(SEnv3 s,int v){s.f=()=>v;return s;} — a PARAM-rooted member seed launders out
+        // via the legal param-ref return (the caller's arg is clean, so the invocation result is
+        // untainted by construction); loud at the seed (VM 40 vs CLR 30 pre-fix).
+        var ex = Assert.ThrowsAny<Exception>(() => TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public struct SEnv3 { public Func<int> f; }
+public class SSeed : UdonSharpBehaviour {
+    public int sum;
+    void Start() { SEnv3 s0; s0.f = null; SEnv3 a = Seed(s0, 10); SEnv3 b = Seed(s0, 20); sum = a.f() + b.f(); }
+    SEnv3 Seed(SEnv3 s, int v) { s.f = () => v; return s; }
+}", "SSeed"));
+        Assert.Contains("capture", ex.Message);
+    }
+
+    [Fact]
+    public void ObjectInitializer_DelegateParamPack_Throws()
+    {
+        // [C] Mk(Func<int> x){var s=new OEnv{f=x};return s;} — both object-initializer arms used
+        // to emit a raw member __Set with no guard and no taint (VM 90 vs CLR 60 pre-fix).
+        var ex = Assert.ThrowsAny<Exception>(() => TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public struct OEnv { public Func<int> f; }
+public class OPack : UdonSharpBehaviour {
+    public int sum;
+    void Start() { OEnv[] env = new OEnv[3]; for (int i = 0; i < 3; i++) { int v = (i + 1) * 10; env[i] = Mk(() => v); } sum = env[0].f() + env[1].f() + env[2].f(); }
+    OEnv Mk(Func<int> x) { var s = new OEnv { f = x }; return s; }
+}", "OPack"));
+        Assert.Contains("capture", ex.Message);
+    }
+
+    [Fact]
+    public void ObjectInitializer_DirectCapturingLambda_Throws()
+    {
+        // [C] var s=new OEnv2{f=()=>v};arr[i]=s; — the initializer-form seed bypassed the
+        // assignment-form guard entirely (VM 90 vs CLR 60 pre-fix).
+        var ex = Assert.ThrowsAny<Exception>(() => TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public struct OEnv2 { public Func<int> f; }
+public class OInit : UdonSharpBehaviour {
+    public int sum;
+    void Start() { OEnv2[] arr = new OEnv2[3]; for (int i = 0; i < 3; i++) { int v = (i + 1) * 10; var s = new OEnv2 { f = () => v }; arr[i] = s; } sum = arr[0].f() + arr[1].f() + arr[2].f(); }
+}", "OInit"));
+        Assert.Contains("capture", ex.Message);
+    }
+
+    [Fact]
+    public void ForeignDelegateFieldRead_ArrayStore_Throws()
+    {
+        // [D] B legally seeds its OWN field with a capturing lambda; A reads other.cb into a
+        // delegate array — the recipient pre-scan is per-class, so the read is recipient-blind
+        // and conservatism is the only sound option (compile-proven vector).
+        var ex = Assert.ThrowsAny<Exception>(() => TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public class FTarget : UdonSharpBehaviour {
+    public Func<int> cb;
+    void Start() { int v = 3; cb = () => v; }
+}
+public class FReader : UdonSharpBehaviour {
+    public FTarget other;
+    public int r;
+    Func<int>[] fs;
+    void Start() { fs = new Func<int>[1]; fs[0] = other.cb; r = fs[0] != null ? 1 : 0; }
+}", "FReader"));
+        Assert.Contains("another behaviour", ex.Message);
+    }
+
+    [Fact]
+    public void ForeignDelegateFieldRead_Return_Throws()
+    {
+        // [D] Func<int> Get(){return other.cb;} — the zero-arg return launder of a foreign member
+        // (the caller-side rule cannot see it; the per-class pre-scan cannot either).
+        var ex = Assert.ThrowsAny<Exception>(() => TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public class FTarget2 : UdonSharpBehaviour {
+    public Func<int> cb;
+    void Start() { int v = 3; cb = () => v; }
+}
+public class FReturner : UdonSharpBehaviour {
+    public FTarget2 other;
+    public int r;
+    void Start() { var f = Get(); r = f != null ? 1 : 0; }
+    Func<int> Get() { return other.cb; }
+}", "FReturner"));
+        Assert.Contains("another behaviour", ex.Message);
+    }
+
+    // ── Round-3 precision pins: the legal flows the container rules must NOT break ──
+
+    [Fact]
+    public void CaptureFreeLocalFunction_MethodGroupStoreAndDispatch_Compiles()
+    {
+        // [A] precision: the widening is capture-driven, not a blanket local-function ban.
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public class LfFree : UdonSharpBehaviour {
+    public int result;
+    Func<int, int>[] fs;
+    void Start() { int Dbl(int x) { return x * 2; } fs = new Func<int, int>[1]; fs[0] = Dbl; result = fs[0](21); }
+}", "LfFree");
+        Assert.NotNull(uasm);
+    }
+
+    [Fact]
+    public void StructMemberCapturingSeed_SameScopeDispatch_Compiles()
+    {
+        // [B] precision: the container taint blocks ESCAPES only — single-activation member seed
+        // plus same-scope dispatch stays legal (real-VM-pinned in the local harness).
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public struct SDisp { public Func<int> f; }
+public class SLegal : UdonSharpBehaviour {
+    public int seed;
+    public int result;
+    void Start() { int v = seed + 5; SDisp s; s.f = () => v; result = s.f(); }
+}", "SLegal");
+        Assert.NotNull(uasm);
+    }
+
+    [Fact]
+    public void ObjectInitializer_MethodGroupSeed_Compiles()
+    {
+        // [C] precision: the per-member guard is value-driven — method-group seeds in object
+        // initializers stay storable whole and dispatchable.
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public struct OMg { public Func<int> f; }
+public class OLegal : UdonSharpBehaviour {
+    public int result;
+    void Start() { OMg[] arr = new OMg[1]; var s = new OMg { f = Eight }; arr[0] = s; result = arr[0].f(); }
+    public int Eight() { return 8; }
+}", "OLegal");
+        Assert.NotNull(uasm);
+    }
+
+    [Fact]
+    public void ForeignDelegateField_DirectInvoke_Compiles()
+    {
+        // [D] precision: the foreign-read reject is escape-position-narrowed — direct invocation
+        // (other.cb()) stays legal.
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public class FTarget3 : UdonSharpBehaviour {
+    public Func<int> cb;
+    void Start() { cb = Nine; }
+    public int Nine() { return 9; }
+}
+public class FInvoker : UdonSharpBehaviour {
+    public FTarget3 other;
+    public int r;
+    void Start() { r = other.cb(); }
+}", "FInvoker");
+        Assert.NotNull(uasm);
+    }
+
     // ── Type map + cast audit ──
 
     [Fact]

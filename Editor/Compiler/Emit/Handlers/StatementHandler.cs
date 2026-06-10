@@ -474,9 +474,17 @@ public class StatementHandler : HandlerBase, IOperationHandler
                         _ => null,
                     };
                     if (memberName != null && layout.TryGetIndex(memberName, out var idx))
+                    {
+                        // §2.8 round-3 [C]: object-initializer member stores are escaping stores
+                        // into the backing object[] — guard each value exactly like an
+                        // array-initializer element (raw __Set used to bypass the guard cluster;
+                        // VM-verified laundering). The whole-value buried-lambda walk above
+                        // already rejects most shapes; this is the per-member backstop.
+                        GuardCaptureEscapeValue(sa.Value);
                         EmitExternVoid("SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid",
                             new List<CLeaf> { LoadField(localId, "SystemObjectArray"),
                                 Const(idx, "SystemInt32"), VisitExpression(sa.Value) });
+                    }
                 }
             }
         }

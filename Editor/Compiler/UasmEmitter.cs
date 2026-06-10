@@ -1347,6 +1347,18 @@ public class UasmEmitter
             edges[m] = callees;
         }
 
+        // §2.8 round-3 [A]: compute local-function capture sets BEFORE the recipient pre-scan and any
+        // emission — a capturing local function converted to a method group is a closure exactly like
+        // a capturing lambda, so the guards (and the pre-scan below) treat it as capturing-lambda-
+        // equivalent via EmitContext.CapturingLocalFunctions (membership-only, §1.5).
+        foreach (var m in internalMethods)
+        {
+            if (m.MethodKind != MethodKind.LocalFunction) continue;
+            if (bodies.TryGetValue(m, out var lfBody) && lfBody != null
+                && LambdaCaptureAnalyzer.LocalFunctionHasCaptures(m, lfBody))
+                _ctx.CapturingLocalFunctions.Add(m);
+        }
+
         // §2.8 round-2: pre-scan every root body + field initializer for DIRECT capturing-lambda
         // stores into fields / auto-properties / struct members (simple, coalesce, and deconstruction
         // assignment shapes — the only legal ways a capturing lambda enters a member; tainted-equivalent
@@ -1476,12 +1488,26 @@ public class UasmEmitter
     {
         var v = value;
         while (v is IConversionOperation conv) v = conv.Operand;
-        if (!(v is IDelegateCreationOperation dc) || !(dc.Target is IAnonymousFunctionOperation lambda)) return;
-        if (!_ctx.CaptureAnalyzer.HasCaptures(lambda)) return;
-        switch (target)
+        if (!(v is IDelegateCreationOperation dc)) return;
+        // §2.8 round-3 [A]: a capturing LOCAL FUNCTION method group is capturing-lambda-equivalent.
+        bool capturing = dc.Target switch
         {
-            case IFieldReferenceOperation fr: _ctx.CaptureReceivingMembers.Add(fr.Field); break;
-            case IPropertyReferenceOperation pr: _ctx.CaptureReceivingMembers.Add(pr.Property); break;
+            IAnonymousFunctionOperation lambda => _ctx.CaptureAnalyzer.HasCaptures(lambda),
+            IMethodReferenceOperation mr => _ctx.IsCapturingLocalFunction(mr.Method),
+            _ => false,
+        };
+        if (!capturing) return;
+        // §2.8 round-3 [B]: record the WHOLE member chain, not just the leaf — `sField.f = () => v`
+        // makes the struct-typed class field `sField` an envelope carrying the bundle, so a whole-
+        // struct read (`arr[i] = sField`, `return sField`) must go loud exactly like the leaf read.
+        // Local/param chain roots are owned by the emit-time container taint / param-seed reject.
+        var t = target;
+        while (true)
+        {
+            if (t is IFieldReferenceOperation fr) { _ctx.CaptureReceivingMembers.Add(fr.Field); t = fr.Instance; continue; }
+            if (t is IPropertyReferenceOperation pr) { _ctx.CaptureReceivingMembers.Add(pr.Property); t = pr.Instance; continue; }
+            if (t is IConversionOperation tc) { t = tc.Operand; continue; }
+            break;
         }
     }
 

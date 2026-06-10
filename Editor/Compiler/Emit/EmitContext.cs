@@ -284,6 +284,22 @@ public class EmitContext
     // single lambda — which the 2+-lambda aliasing detector cannot see. MEMBERSHIP-ONLY set (§1.5).
     public readonly HashSet<ISymbol> CaptureReceivingMembers = new(SymbolEqualityComparer.Default);
 
+    // §2.8 round-3 [A]: local functions whose bodies capture enclosing locals/params. A method-group
+    // conversion of such a local function is a closure exactly like a capturing lambda, but it is an
+    // IMethodReferenceOperation — invisible to the lambda analyzer — so the guards consult this set
+    // to treat it as capturing-lambda-EQUIVALENT (direct stores, the recipient pre-scan, the taint
+    // walk, returns). Pre-scanned in UasmEmitter.BuildRecursionInfo from the recursion-info bodies
+    // BEFORE any emission (order-independent). MEMBERSHIP-ONLY set (§1.5).
+    public readonly HashSet<IMethodSymbol> CapturingLocalFunctions = new(SymbolEqualityComparer.Default);
+
+    /// <summary>Method symbol is a local function that captures enclosing locals/params (§2.8
+    /// round-3 [A]). Checks the original definition too: symbol identity across semantic models is
+    /// value-based for local functions (syntax + container), same mechanism the recursion graph
+    /// relies on.</summary>
+    public bool IsCapturingLocalFunction(IMethodSymbol m)
+        => m != null && m.MethodKind == MethodKind.LocalFunction
+           && (CapturingLocalFunctions.Contains(m) || CapturingLocalFunctions.Contains(m.OriginalDefinition));
+
     /// <summary>
     /// Record that <paramref name="lambda"/> was assigned to a delegate field (or otherwise
     /// stored long-lived). Each captured symbol is appended to AllLambdaCaptures so post-emit

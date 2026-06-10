@@ -809,9 +809,17 @@ public abstract class HandlerBase
         return false;
     }
 
-    /// <summary>Value is directly a capturing-lambda delegate creation (conversions unwrapped).</summary>
+    /// <summary>Value is directly a capturing-lambda delegate creation (conversions unwrapped) —
+    /// or, §2.8 round-3 [A], a method-group conversion of a CAPTURING LOCAL FUNCTION, which is the
+    /// same closure in IMethodReferenceOperation clothing (the lambda analyzer never sees it).</summary>
     protected bool IsDirectCapturingLambda(IOperation value)
-        => TryGetLambdaCreation(value, out var l) && _ctx.CaptureAnalyzer.HasCaptures(l);
+    {
+        if (TryGetLambdaCreation(value, out var l)) return _ctx.CaptureAnalyzer.HasCaptures(l);
+        var v = value;
+        while (v is IConversionOperation conv) v = conv.Operand;
+        return v is IDelegateCreationOperation { Target: IMethodReferenceOperation mr }
+            && _ctx.IsCapturingLocalFunction(mr.Method);
+    }
 
     /// <summary>Value reads a local tainted by a capturing-lambda store (§2.8(b) flow-insensitive taint).</summary>
     protected bool IsCaptureTaintedRead(IOperation value)
@@ -857,8 +865,22 @@ public abstract class HandlerBase
         {
             if (nt.DelegateInvokeMethod != null) return true;
             if (nt.IsTupleType)
+            {
                 foreach (var el in nt.TupleElements)
                     if (IsDelegateCapableType(el.Type)) return true;
+            }
+            // §2.8 round-3 [B]: a USER STRUCT with a (recursively) delegate-capable instance field
+            // is an envelope — its object[] emulation carries the bundle past every delegate-typed
+            // gate (whole-struct array stores / returns / erased args, VM-verified laundering).
+            // Auto-prop backing fields are IFieldSymbols, so fields cover all stored members.
+            // Terminates: C# forbids value-type field cycles, and array fields are not capable
+            // (array-element stores of dangerous values are loud everywhere already).
+            else if (EmitContext.IsUserStruct(nt))
+            {
+                foreach (var member in nt.GetMembers())
+                    if (member is IFieldSymbol fld && !fld.IsStatic && IsDelegateCapableType(fld.Type))
+                        return true;
+            }
         }
         return false;
     }
@@ -940,6 +962,7 @@ public abstract class HandlerBase
     protected bool IsLaunderingMemberRead(IOperation value)
     {
         if (IsCaptureReceivingMemberRead(value)) return true;
+        if (IsForeignDelegateMemberRead(value)) return true;
         var v = value;
         while (v is IConversionOperation conv) v = conv.Operand;
         ITypeSymbol memberType;
@@ -963,6 +986,49 @@ public abstract class HandlerBase
         }
         return root is IParameterReferenceOperation
             || (root is ILocalReferenceOperation rl && _ctx.CapturingLambdaLocals.Contains(rl.Local));
+    }
+
+    protected const string ForeignDelegateReadError =
+        "A delegate-typed member read from another behaviour class cannot be stored into "
+      + "arrays/objects/members/escaping locals or returned in v2.x Stage 1 — the emitting class "
+      + "cannot verify the foreign member never holds a capturing lambda (capture tracking is "
+      + "per-class). Invoke it directly (other.cb()) instead, or route the value through the "
+      + "owning class.";
+
+    /// <summary>§2.8 round-3 [D]: a delegate-capable member read whose member chain contains a
+    /// member of ANOTHER behaviour class. The recipient pre-scan is per-class, so the emitting
+    /// class can never see whether the foreign class seeded that member with a capturing lambda
+    /// (B legally seeds its own field; A reads other.cb) — conservatism is the only sound option
+    /// (§8-3). Loud at escaping stores / array initializers / returns and taints locals it is
+    /// copied into; DIRECT invocation (`other.cb()`) stays legal. Same-class cross-instance reads
+    /// are NOT foreign: the per-class pre-scan covers every store site of this class's members.</summary>
+    protected bool IsForeignDelegateMemberRead(IOperation value)
+    {
+        var v = value;
+        while (v is IConversionOperation conv) v = conv.Operand;
+        ITypeSymbol memberType;
+        switch (v)
+        {
+            case IFieldReferenceOperation fr: memberType = fr.Field.Type; break;
+            case IPropertyReferenceOperation pr: memberType = pr.Property.Type; break;
+            default: return false;
+        }
+        if (!IsNonObjectDelegateCapableType(memberType)) return false;
+        while (true)
+        {
+            if (v is IFieldReferenceOperation rf)
+            {
+                if (IsForeignClassMember(rf.Field)) return true;
+                v = rf.Instance; continue;
+            }
+            if (v is IPropertyReferenceOperation rp)
+            {
+                if (IsForeignClassMember(rp.Property)) return true;
+                v = rp.Instance; continue;
+            }
+            if (v is IConversionOperation rc) { v = rc.Operand; continue; }
+            return false;
+        }
     }
 
     /// <summary>Caller-side §2.8(b) laundering guard: a delegate-CAPABLE invocation RESULT whose
@@ -997,6 +1063,12 @@ public abstract class HandlerBase
         {
             case IAnonymousFunctionOperation l:
                 return _ctx.CaptureAnalyzer.HasCaptures(l);
+            // §2.8 round-3 [A]: a method-group reference to a CAPTURING local function is a
+            // capturing lambda in different clothing (reached as the child of a delegate creation
+            // or buried in ternary/tuple/object-initializer composites). Non-capturing method
+            // refs fall through to the children walk (their instance expression may carry taint).
+            case IMethodReferenceOperation mr when _ctx.IsCapturingLocalFunction(mr.Method):
+                return true;
             case ILocalReferenceOperation lr:
                 return _ctx.CapturingLambdaLocals.Contains(lr.Local);
             case IParameterReferenceOperation pr:
@@ -1065,6 +1137,8 @@ public abstract class HandlerBase
     protected void GuardCaptureEscapeValue(IOperation value)
     {
         GuardBuriedCapturingLambda(value);
+        if (IsForeignDelegateMemberRead(value))
+            throw new System.NotSupportedException(ForeignDelegateReadError);
         if (IsDirectCapturingLambda(value) || IsCaptureTaintedRead(value)
             || IsTaintedDelegateInvocationResult(value) || IsDelegateParamRead(value)
             || IsLaunderingMemberRead(value))
@@ -1086,6 +1160,12 @@ public abstract class HandlerBase
         if (IsDirectCapturingLambda(value) || IsCaptureTaintedRead(value)
             || IsTaintedDelegateInvocationResult(value) || IsCaptureReceivingMemberRead(value))
             throw new System.NotSupportedException(CaptureEscapeError);
+        // §2.8 round-3 [D]: returning a foreign-class delegate member launders it past the caller's
+        // store guards (the zero-arg invocation result is untainted by construction) — loud here.
+        // Param-ROOTED member reads stay legal at returns (the caller's invocation-result taint
+        // owns those), so this is a separate check, not part of IsLaunderingMemberRead's role here.
+        if (IsForeignDelegateMemberRead(value))
+            throw new System.NotSupportedException(ForeignDelegateReadError);
     }
 
     /// <summary>
@@ -1104,13 +1184,14 @@ public abstract class HandlerBase
         GuardBuriedCapturingLambda(value);
 
         bool direct = IsDirectCapturingLambda(value);
-        bool tainted = IsCaptureTaintedRead(value)
+        bool foreign = IsForeignDelegateMemberRead(value);
+        bool tainted = foreign || IsCaptureTaintedRead(value)
             || IsTaintedDelegateInvocationResult(value) || IsDelegateParamRead(value)
             || IsLaunderingMemberRead(value);
         if (!direct && !tainted) return;
 
         if (target is IArrayElementReferenceOperation || IsObjectish(target.Type))
-            throw new System.NotSupportedException(CaptureEscapeError);
+            throw new System.NotSupportedException(foreign ? ForeignDelegateReadError : CaptureEscapeError);
 
         switch (target)
         {
@@ -1124,7 +1205,7 @@ public abstract class HandlerBase
                 _ctx.CapturingLambdaLocals.Add(declLocal.Local);
                 return;
             case IFieldReferenceOperation or IPropertyReferenceOperation when tainted:
-                throw new System.NotSupportedException(CaptureEscapeError);
+                throw new System.NotSupportedException(foreign ? ForeignDelegateReadError : CaptureEscapeError);
             // §2.8 round-2 (H6): a PARAMETER store target is an unguarded escape — an out/ref param
             // write hands the capture to the caller's local with no taint mechanism (VM-verified
             // wrong values), and a by-value param assigned a capturing lambda can launder through
@@ -1132,13 +1213,40 @@ public abstract class HandlerBase
             // all RefKinds; capture-free lambda / method-group param defaulting stays legal.
             case IParameterReferenceOperation:
                 throw new System.NotSupportedException(CaptureEscapeError);
-            // §2.8 round-2: a direct capturing-lambda store into ANOTHER behaviour class's member
-            // cannot be recipient-tracked there (per-class pre-scan), so the read-back side would be
-            // silent — loud here instead. Same-class / base-class members stay legal (recorded).
-            case IFieldReferenceOperation crossF when IsForeignClassMember(crossF.Field):
-                throw new System.NotSupportedException(CaptureEscapeError);
-            case IPropertyReferenceOperation crossP when IsForeignClassMember(crossP.Property):
-                throw new System.NotSupportedException(CaptureEscapeError);
+            // §2.8 round-3 [B]: reaching here, the value is a DIRECT capturing store into a member
+            // chain (s.f = () => v, s.inner.f = () => v) — the CONTAINER is now an envelope carrying
+            // the bundle, so resolve the chain root: a LOCAL root is tainted (whole-struct copies /
+            // returns / array stores of it must go loud — VM-verified silent aliasing otherwise);
+            // a PARAM root is loud (the by-value copy launders out via the legal param-ref return,
+            // VM-verified); a chain through ANOTHER behaviour class's member is loud (per-class
+            // pre-scan cannot make that class's reads loud — round-2 armor, now chain-deep);
+            // a `this`-rooted chain stays legal — the pre-scan records every chain member.
+            case IFieldReferenceOperation or IPropertyReferenceOperation:
+            {
+                var root = target;
+                while (true)
+                {
+                    if (root is IFieldReferenceOperation rf)
+                    {
+                        if (IsForeignClassMember(rf.Field))
+                            throw new System.NotSupportedException(CaptureEscapeError);
+                        root = rf.Instance; continue;
+                    }
+                    if (root is IPropertyReferenceOperation rp)
+                    {
+                        if (IsForeignClassMember(rp.Property))
+                            throw new System.NotSupportedException(CaptureEscapeError);
+                        root = rp.Instance; continue;
+                    }
+                    if (root is IConversionOperation rc) { root = rc.Operand; continue; }
+                    break;
+                }
+                if (root is IParameterReferenceOperation)
+                    throw new System.NotSupportedException(CaptureEscapeError);
+                if (root is ILocalReferenceOperation rootLocal)
+                    _ctx.CapturingLambdaLocals.Add(rootLocal.Local);
+                return;
+            }
             default:
                 return;
         }
