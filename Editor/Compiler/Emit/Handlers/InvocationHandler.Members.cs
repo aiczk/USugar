@@ -359,8 +359,8 @@ public partial class InvocationHandler
                         + "Udon VM does not support runtime object allocation for user-defined types. "
                         + "UdonSharpBehaviour instances must be placed in the scene.",
                 FilePath = lineSpan.Path,
-                Line = lineSpan.StartLinePosition.Line,
-                Character = lineSpan.StartLinePosition.Character,
+                Line = lineSpan.StartLinePosition.Line + 1,
+                Character = lineSpan.StartLinePosition.Character + 1,
             });
             return Const(null, resultType);
         }

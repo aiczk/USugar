@@ -8,8 +8,14 @@ namespace USugar.Tests;
 /// Verifies emit-time detection of lambda capture aliasing.
 ///
 /// Pre-v2.2: silent overwrite (Warning only). v2.2: emit-time Error.
-/// Detection: AnalyzeDataFlow() per lambda body, aggregated in EmitContext.AllLambdaCaptures.
+/// Detection: manual IOperation-tree walk per lambda body (LambdaCaptureAnalyzer — Roslyn's
+/// AnalyzeDataFlow cannot scope captures per-lambda), aggregated in EmitContext.AllLambdaCaptures.
 /// Trigger: a captured local symbol shared by 2+ distinct lambdas assigned to delegate fields.
+///
+/// Enforcement lives in the orchestrator's Phase-3 gate (USugarCompilationOrchestrator): any
+/// non-Warning emitter diagnostic blocks asset apply and counts as a failure. That layer is not
+/// in the headless csproj, so these tests cover the emitter-side contract it depends on:
+/// the diagnostic exists, is Error-severity, and carries a navigable source location.
 /// </summary>
 public class LambdaAliasingTests
 {
@@ -55,6 +61,11 @@ public class TwoLambdaSameCapture : UdonSharpBehaviour {
         Assert.Single(aliasingErrors);
         Assert.Contains("'shared'", aliasingErrors[0].Message);
         Assert.Contains("flat-heap field", aliasingErrors[0].Message);
+        // Must carry a source location (the captured local's declaration) — file=""/line=0 would
+        // make the inline editor diagnostic unnavigable once the orchestrator gate surfaces it.
+        Assert.True(aliasingErrors[0].Line > 0,
+            "aliasing diagnostic should point at the captured local's declaration");
+        Assert.Contains("(lines ", aliasingErrors[0].Message);
     }
 
     [Fact]

@@ -106,6 +106,7 @@ static class USugarCompilationOrchestrator
             if (sourcePaths.Count == 0)
             {
                 USugarLog.Warn("No UdonSharpBehaviour sources found");
+                LastCompileHadErrors = false;
                 return;
             }
 
@@ -113,7 +114,15 @@ static class USugarCompilationOrchestrator
             var lastFp = SessionState.GetString(FingerprintKey, "");
             var lastApplied = SessionState.GetBool(AppliedKey, false);
             if (!force && fingerprint == lastFp && (!applyToAssets || lastApplied))
+            {
+                // The cached fingerprint only advances on a failures==0 run, so matching content is
+                // known-clean. Clear the error flag here: otherwise reverting (Ctrl+Z) to the last clean
+                // content after a failed compile would strand LastCompileHadErrors=true (this return skips
+                // the normal assignment below) and block Play/upload with no visible diagnostic — and stock
+                // UdonSharp's recovery CompileSync would early-return here again, never clearing it.
+                LastCompileHadErrors = false;
                 return;
+            }
 
             var validExterns = new HashSet<string>(
                 UdonEditorManager.Instance.GetNodeDefinitions()
@@ -246,12 +255,27 @@ static class USugarCompilationOrchestrator
                 Directory.CreateDirectory(classDir);
                 File.WriteAllText(Path.Combine(classDir, "uasm.txt"), result.Uasm);
 
-                // Merge emitter diagnostics
+                // Merge emitter diagnostics. Anything not explicitly "Warning" is treated as an error
+                // (default-deny: a typo'd severity must not silently demote to a shipped program).
+                bool hasEmitError = false;
                 foreach (var d in result.EmitterDiagnostics)
                 {
                     collectedDiagnostics.Add((d.FilePath, d.Line, d.Character, d.Message, d.Severity));
                     if (d.Severity == "Warning")
                         USugarLog.Warn($"{d.FilePath}({d.Line},{d.Character}): {d.Message}");
+                    else
+                    {
+                        USugarLog.Error($"{d.FilePath}({d.Line},{d.Character}): {d.Message}");
+                        hasEmitError = true;
+                    }
+                }
+                if (hasEmitError)
+                {
+                    // The emitted program is known-broken (e.g. aliased lambda captures, null-placeholder
+                    // 'new'). Never apply it to the asset; counting it as a failure keeps the fingerprint
+                    // from advancing and makes LastCompileHadErrors block Play/upload.
+                    failures++;
+                    continue;
                 }
 
                 if (applyToAssets)

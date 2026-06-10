@@ -125,7 +125,8 @@ public class UasmEmitter
     /// <summary>
     /// Post-emit aliasing check: a captured local shared by 2+ lambdas / delegate fields
     /// aliases the same flat-heap field (Udon VM has no closure objects). Reassigning one
-    /// delegate would silently overwrite the other's capture — was a Warning in v2.1, now Error.
+    /// delegate would silently overwrite the other's capture — an Error; the orchestrator's
+    /// Phase-3 gate (roadmap B26) blocks asset apply on it.
     /// </summary>
     void DetectLambdaCaptureAliasing()
     {
@@ -133,14 +134,22 @@ public class UasmEmitter
         {
             if (kv.Value.Count <= 1) continue;
             var symbolName = kv.Key.Name;
+            // Point the diagnostic at the captured local's declaration; list the capturing lambdas' lines.
+            var span = kv.Key.Locations.FirstOrDefault(l => l.IsInSource)?.GetLineSpan();
+            var lambdaLines = string.Join(", ", kv.Value
+                .Select(l => l.Syntax.GetLocation().GetLineSpan().StartLinePosition.Line + 1)
+                .OrderBy(n => n));
             _diagnostics.Add(new EmitDiagnostic
             {
                 Severity = "Error",
                 Message =
-                    $"Captured local '{symbolName}' is shared by {kv.Value.Count} lambdas / delegate fields. " +
+                    $"Captured local '{symbolName}' is shared by {kv.Value.Count} lambdas / delegate fields (lines {lambdaLines}). " +
                     "Udon VM has no closure objects — captured locals alias a single flat-heap field, " +
                     "so reassigning one delegate overwrites the other's captured value. " +
                     "Use distinct locals per lambda, or restructure to avoid simultaneous live captures.",
+                FilePath = span?.Path ?? "",
+                Line = (span?.StartLinePosition.Line ?? -1) + 1,
+                Character = (span?.StartLinePosition.Character ?? -1) + 1,
             });
         }
     }
