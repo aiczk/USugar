@@ -277,6 +277,17 @@ public class EmitContext
     /// Record that <paramref name="lambda"/> was assigned to a delegate field (or otherwise
     /// stored long-lived). Each captured symbol is appended to AllLambdaCaptures so post-emit
     /// aliasing detection can flag multiple lambdas sharing the same captured local.
+    ///
+    /// Recording is intentionally limited to delegate-FIELD stores. A delegate LOCAL lives only
+    /// within one method invocation, where C# shares the closure environment too, so flat-heap
+    /// aliasing is observationally equivalent there (holds under re-entrancy: the recursion spill
+    /// saves/restores captured locals of non-hoisted methods). Lambda literals passed as delegate
+    /// arguments get a fresh hoist + convention per call site; delegate locals/params as
+    /// arguments throw in InvocationHandler. Caveat: a few delegate-field write shapes
+    /// (deconstruction targets, cross-behaviour ??=, delegate auto-properties, delegate members
+    /// in user structs / object-typed fields) bypass this recording and are only stopped
+    /// downstream (CoreVerify / Udon assembler) or ship as dead, uninvokable values — promoting
+    /// those to explicit compile errors is tracked in roadmap B28.
     /// </summary>
     public void RecordLambdaCaptures(IAnonymousFunctionOperation lambda)
     {

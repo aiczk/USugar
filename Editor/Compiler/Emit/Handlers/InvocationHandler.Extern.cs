@@ -677,6 +677,14 @@ public partial class InvocationHandler
             }
             else
             {
+                // A delegate VALUE argument (local/param) has no convention rebinding: the callee reads
+                // its __dlg_* convention vars, which nothing would write — a silent miscompile where the
+                // call returns default(T). Only lambda literals and same-class method groups (both
+                // handled above) carry the convention, so reject everything else loudly.
+                if (param.Type.TypeKind == TypeKind.Delegate)
+                    throw new System.NotSupportedException(
+                        $"Cannot pass delegate value '{argOp.Syntax}' as argument '{param.Name}' of '{target.Name}'. " +
+                        "Pass a lambda literal or a method group directly at the call site.");
                 // VisitExpression clones aggregate locals/params automatically (Clone-on-read).
                 val = VisitExpression(argOp);
             }

@@ -1332,6 +1332,45 @@ public class Dummy : UdonSharp.UdonSharpBehaviour { void Start() { } }
         Assert.Contains("Record type", ex.Message);
     }
 
+    // ── Delegate value as argument: rejected ──
+    // A delegate local/param passed as an argument has no convention rebinding — the callee
+    // would read never-written __dlg_* convention vars and return default(T) (silent miscompile,
+    // found by adversarial review). Must throw, not compile.
+
+    [Fact]
+    public void DelegateLocalAsArgument_ThrowsNotSupported()
+    {
+        var ex = Assert.ThrowsAny<Exception>(() => TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public class DlgLocalArg : UdonSharpBehaviour {
+    public int result;
+    void Start() {
+        int x = 5;
+        Func<int> f = () => x;
+        Run(f);
+    }
+    void Run(Func<int> g) { result = g(); }
+}", "DlgLocalArg"));
+        Assert.Contains("delegate value", ex.Message);
+        Assert.Contains("lambda literal", ex.Message);
+    }
+
+    [Fact]
+    public void DelegateParamPassedDown_ThrowsNotSupported()
+    {
+        var ex = Assert.ThrowsAny<Exception>(() => TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public class DlgParamPassDown : UdonSharpBehaviour {
+    public int result;
+    void Start() { Outer(() => 7); }
+    void Outer(Func<int> f) { Inner(f); }
+    void Inner(Func<int> g) { result = g(); }
+}", "DlgParamPassDown"));
+        Assert.Contains("delegate value", ex.Message);
+    }
+
     // ── Cross-behaviour delegate: self-assign + invoke ──
     // Note: delegate bundle (3-var expansion) requires public fields.
     // Private delegate fields remain as SystemUInt32 function pointers.
