@@ -69,6 +69,11 @@ public static class ExternResolver
 
             if (elementType is IArrayTypeSymbol)
                 return "SystemObjectArray";
+            // Delegate-element array (Func<T>[], …) → object[] of boxed bundle references, same shape as
+            // aggregate arrays (element extern type SystemObject). MUST be an explicit case here — the
+            // element recursion would otherwise produce a bogus SystemObjectArrayArray (design §1.2).
+            if (elementType is INamedTypeSymbol elemDlg && elemDlg.DelegateInvokeMethod != null)
+                return "SystemObjectArray";
             // struct[] / tuple[] → object[] of boxed object[] elements (no SystemObjectArrayArray in Udon).
             if (EmitContext.IsAggregateType(elementType))
                 return "SystemObjectArray";
@@ -77,6 +82,12 @@ public static class ExternResolver
                 return "UnityEngineComponentArray";
             return RemapUdonType(elemTypeName) + "Array";
         }
+
+        // Delegate type → SystemObjectArray: the runtime value is a reference to the {target, method, addr,
+        // env} object[] bundle (first-class delegate ABI, design §1.2). Must precede the constructed-generic
+        // branch below, which would otherwise fabricate fake names like SystemFuncSystemInt32SystemInt32.
+        if (type is INamedTypeSymbol dlgWithMap && dlgWithMap.DelegateInvokeMethod != null)
+            return "SystemObjectArray";
 
         // Constructed generic carrying type-param args (e.g. a delegate parameter Func<T,int> of a generic
         // method): the no-map overload's generic branch would resolve the args WITHOUT the map, leaving a
@@ -115,6 +126,11 @@ public static class ExternResolver
         {
             if (arrayType.ElementType is IArrayTypeSymbol)
                 return "SystemObjectArray";
+            // Delegate-element array (Func<T>[], …) → object[] of boxed bundle references, same shape as
+            // aggregate arrays (element extern type SystemObject). MUST be an explicit case — the element
+            // recursion would otherwise produce a bogus SystemObjectArrayArray (design §1.2).
+            if (arrayType.ElementType is INamedTypeSymbol arrElemDlg && arrElemDlg.DelegateInvokeMethod != null)
+                return "SystemObjectArray";
             // struct[] / tuple[] → object[] whose elements are the boxed per-element object[]. Udon has no
             // SystemObjectArrayArray (object[][]) externs, so a nested-array element type cannot be used;
             // a plain object[] holds the object[] elements as boxed objects.
@@ -127,6 +143,12 @@ public static class ExternResolver
                 return "UnityEngineComponentArray";
             return RemapUdonType(elemTypeName) + "Array";
         }
+
+        // Delegate type → SystemObjectArray: a delegate value is a reference to the {target, method, addr,
+        // env} object[] bundle (first-class delegate ABI, design §1.2). Must precede the generic branch,
+        // which would otherwise fabricate fake names like SystemFuncSystemInt32SystemInt32 / SystemAction.
+        if (type is INamedTypeSymbol dlgNamed && dlgNamed.DelegateInvokeMethod != null)
+            return "SystemObjectArray";
 
         // UdonSharpBehaviour derivatives (not UdonSharpBehaviour itself) → IUdonEventReceiver
         if (type.Name != "UdonSharpBehaviour" && IsUdonSharpBehaviour(type))

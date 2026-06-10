@@ -311,6 +311,10 @@ public class EmitContext
     public static bool IsAggregateType(ITypeSymbol type)
     {
         if (type is not INamedTypeSymbol named) return false;
+        // Armor (design §1.2): a delegate value is an object[] BUNDLE copied by reference — it must never
+        // ride the aggregate clone-on-read machinery (a clone would break reference identity and
+        // (target, method) equality). Single choke point for every clone path.
+        if (named.TypeKind == TypeKind.Delegate) return false;
         return named.IsTupleType || IsUserStruct(named);
     }
 
