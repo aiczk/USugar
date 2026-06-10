@@ -88,6 +88,36 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
             && _methodFunctions.ContainsKey(target.OriginalDefinition))
             return EmitStructInstanceCall(op, target.OriginalDefinition);
 
+        // Receiver identity (predates fcd-stage1): an instance method of THIS class family invoked
+        // through a NON-this receiver (same-class field/local, base-typed local, cast) used to
+        // direct-JUMP the locally registered function — the receiver was NEVER read, so the call
+        // self-executed on the caller's heap (VM-verified: a NULL receiver silently returned the
+        // caller's own value where the CLR throws), and a base-TYPED receiver ran the never-exported
+        // base-instance copy (base body, or the bodiless abstract stub's stale 0/null return) instead
+        // of the override (VM 3/0 vs CLR 5). Route through the cross-behaviour path: SetProgramVariable
+        // + SendCustomEvent executes on the RECEIVER's program, and the override-chain-ROOT export name
+        // (GetCalleeLayout normalization) dispatches that program's own most-derived override — true
+        // virtual dispatch. Non-public targets have no exported entry point (SendCustomEvent would
+        // silently no-op), generic targets have no per-specialization layout, and ref/out params cannot
+        // round-trip through SetProgramVariable — all loud per design §8-3.
+        if (!target.IsStatic && target.MethodKind == MethodKind.Ordinary
+            && op.Instance != null && op.Instance is not IInstanceReferenceOperation
+            && ExternResolver.IsUdonSharpBehaviour(target.ContainingType)
+            && target.ContainingType.Name != "UdonSharpBehaviour"
+            && (SymbolEqualityComparer.Default.Equals(target.ContainingType, _classSymbol)
+                || IsBaseInstanceMethod(target)))
+        {
+            if (target.IsGenericMethod || target.Parameters.Any(p => p.RefKind != RefKind.None)
+                || (target.DeclaredAccessibility != Accessibility.Public
+                    && !LayoutPlanner.UdonEventNames.ContainsKey(target.Name)))
+                throw new System.NotSupportedException(
+                    $"Instance method '{target.Name}' of the compiled class family is called through a "
+                    + "non-this receiver, which dispatches cross-program (SetProgramVariable + "
+                    + "SendCustomEvent) and so needs a public, non-generic target without ref/out "
+                    + "parameters. Make the method public, or call it through 'this'.");
+            return EmitCrossClassCall(op, target);
+        }
+
         // User-defined generic method → monomorphize
         if (target.IsGenericMethod && SymbolEqualityComparer.Default.Equals(target.OriginalDefinition.ContainingType, _classSymbol))
         {
