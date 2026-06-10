@@ -489,7 +489,13 @@ public class UasmEmitter
             is VariableDeclaratorSyntax { Initializer: not null } dlgDeclarator)
         {
             var model = _compilation.GetSemanticModel(dlgDeclarator.SyntaxTree);
-            var initOp = model.GetOperation(dlgDeclarator.Initializer.Value);
+            // Binding the initializer VALUE syntax returns the conversion-STRIPPED inner operation
+            // (IAnonymousFunctionOperation / IMethodReferenceOperation) which no expression handler
+            // accepts — the initializer would be silently dropped to default(T). Bind the
+            // EqualsValueClause itself and take its Value: the IDelegateCreationOperation (possibly
+            // under a conversion) that VisitDelegateCreation lowers to the runtime bundle.
+            var initOp = (model.GetOperation(dlgDeclarator.Initializer) as ISymbolInitializerOperation)?.Value
+                         ?? model.GetOperation(dlgDeclarator.Initializer.Value);
             if (initOp != null)
                 _fieldInitOps.Add((member.Name, initOp, member.Type));
         }
@@ -736,6 +742,21 @@ public class UasmEmitter
         foreach (var bm in baseInstanceMethods)
             EmitMethod(bm);
 
+        // Synthesize _start if there are field initializers, FCB fields, or default-init aggregate
+        // fields but no user-defined Start(). This MUST run BEFORE the bridge emission and the
+        // pending-local-function/generic-spec drains below — mirroring the user-Start path, where
+        // EmitFieldInitializers runs during the body pass — so an initializer that hoists a lambda
+        // (delegate-field initializer) gets its CFunction body and __dlg_ bridge emitted instead of
+        // landing in never-drained pending lists (CoreToUasm 'CFuncRef references unknown function').
+        if ((_fieldInitOps.Count > 0 || _fieldChangeCallbacks.Count > 0 || _ctx.AggregateFieldDefaults.Count > 0)
+            && !methods.Any(m => UdonEventNames.TryGetValue(m.Name, out var en) && en == "_start"))
+        {
+            var startFunc = _module.AddFunction("_start", "_start");
+            _builder.SetFunction(startFunc);
+            EmitFieldInitializers();
+            _builder.EmitReturn();
+        }
+
         // Emit interface bridge exports
         EmitInterfaceBridges();
 
@@ -763,17 +784,6 @@ public class UasmEmitter
 
         // Emit pending delegate bridges for hoisted lambdas/local functions
         EmitPendingDelegateBridges();
-
-        // Synthesize _start if there are field initializers, FCB fields, or default-init aggregate fields but
-        // no user-defined Start()
-        if ((_fieldInitOps.Count > 0 || _fieldChangeCallbacks.Count > 0 || _ctx.AggregateFieldDefaults.Count > 0)
-            && !methods.Any(m => UdonEventNames.TryGetValue(m.Name, out var en) && en == "_start"))
-        {
-            var startFunc = _module.AddFunction("_start", "_start");
-            _builder.SetFunction(startFunc);
-            EmitFieldInitializers();
-            _builder.EmitReturn();
-        }
     }
 
     // ── Interface Bridges ──
@@ -844,6 +854,13 @@ public class UasmEmitter
             // Skip methods with tuple returns (not supported as delegate targets)
             if (!method.ReturnsVoid && method.ReturnType.IsTupleType) continue;
 
+            // §3.4-1 NOTE: ValidateNoRefOutParams deliberately does NOT run here. This loop emits a
+            // speculative bridge for EVERY non-event user method (planner DelegateBridges), so a throw
+            // would reject any class merely CONTAINING a ref/out method, and a skip would change the
+            // struct_ref_param byte-identity sentinel. A ref/out method's bridge is unreachable as a
+            // delegate target: ValidateDelegateBinding rejects every creation and EmitDelegateDispatch
+            // re-validates at every dispatch site, so no USugar-built bundle can ever name it.
+
             // Build canonical convention key using the unified ABI builder (design §3.2)
             var sigPart = DelegateAbi.BuildSigPart(method);
 
@@ -904,6 +921,10 @@ public class UasmEmitter
             if (!emitted.Add(bridgeExportName)) continue;
             if (!_methodFunctions.TryGetValue(method, out var realFunc)) continue;
             if (!method.ReturnsVoid && method.ReturnType.IsTupleType) continue;
+
+            // §3.4-1 conv-var declaration side check. Pending bridges are delegate-originated by
+            // construction (creation already validated), but a future registration path must stay loud.
+            DelegateAbi.ValidateNoRefOutParams(method);
 
             // Use the saved type param snapshot instead of _typeParamMap (which may be cleared)
             var sigPart = DelegateAbi.BuildSigPart(method, resolvedMap);
@@ -1190,6 +1211,10 @@ public class UasmEmitter
             }
             catch (NotSupportedException ex)
             {
+                // Loud-or-correct: a delegate field whose initializer fails to lower must BLOCK the
+                // compile — demoting to a Warning ships a silently-null bundle (compile-clean wrong
+                // value). Other field types keep the legacy Warning demotion.
+                if (_ctx.DelegateFields.Contains(fieldId)) throw;
                 var loc = initOp.Syntax?.GetLocation()?.GetLineSpan();
                 _diagnostics.Add(new EmitDiagnostic
                 {

@@ -792,6 +792,11 @@ public abstract class HandlerBase
         "Lambdas that capture local variables cannot be stored into arrays/objects or returned in v2.x Stage 1. "
       + "Use a capture-free lambda or a method group; closure environments arrive in Stage 2.";
 
+    protected const string BuriedCapturingLambdaError =
+        "A lambda that captures local variables cannot appear inside a composite expression "
+      + "(ternary / coalesce / switch arm) assigned to a delegate-typed target in v2.x Stage 1 — "
+      + "restructure: assign the lambda directly. Capture-free lambdas and method groups are unrestricted.";
+
     /// <summary>Unwrap conversions to a delegate creation whose target is a lambda; true when found.</summary>
     protected static bool TryGetLambdaCreation(IOperation value, out IAnonymousFunctionOperation lambda)
     {
@@ -819,6 +824,48 @@ public abstract class HandlerBase
         => t != null && (t.SpecialType == SpecialType.System_Object
             || (t is IArrayTypeSymbol at && at.ElementType.SpecialType == SpecialType.System_Object));
 
+    /// <summary>Tree-walk: does this operation contain a capturing lambda — or a read of a
+    /// capture-tainted local — anywhere (e.g. buried in a ternary / coalesce / switch-expression arm)?
+    /// Invocation subtrees are NOT descended into: argument-position lambdas are the callee's concern
+    /// (fcd37 stays legal; the callee's own return/store sites guard any escape).</summary>
+    protected bool ContainsCapturingLambdaOrTaintedRead(IOperation op)
+    {
+        switch (op)
+        {
+            case IAnonymousFunctionOperation l:
+                return _ctx.CaptureAnalyzer.HasCaptures(l);
+            case ILocalReferenceOperation lr:
+                return _ctx.CapturingLambdaLocals.Contains(lr.Local);
+            case IInvocationOperation:
+                return false;
+        }
+        foreach (var child in op.Children)
+            if (child != null && ContainsCapturingLambdaOrTaintedRead(child)) return true;
+        return false;
+    }
+
+    /// <summary>
+    /// Loud-or-correct backstop for NON-direct delegate RHS shapes: a capturing lambda (or tainted-local
+    /// read) buried inside a composite delegate-typed expression — ternary, coalesce, switch-expression
+    /// arm — evades both the §2.8(a) aliasing recording and the §2.8(b) taint set, so it must be a loud
+    /// compile error at delegate-typed stores and value positions. The direct creation shape and simple
+    /// reads are excluded: §2.8 recording/taint owns those (a bare tainted-local read stays legal into a
+    /// local — F4 propagates the taint — and is rejected target-sensitively at escaping stores).
+    /// Capture-free lambdas in composite shapes stay allowed (verified working on the real VM).
+    /// </summary>
+    protected void GuardBuriedCapturingLambda(IOperation value)
+    {
+        if (value?.Type is not INamedTypeSymbol nt || nt.DelegateInvokeMethod == null) return;
+        var v = value;
+        while (v is IConversionOperation conv) v = conv.Operand;
+        if (v is IDelegateCreationOperation) return;
+        if (v is ILocalReferenceOperation or IParameterReferenceOperation or IFieldReferenceOperation
+            or IPropertyReferenceOperation or IArrayElementReferenceOperation or IInvocationOperation
+            or IInstanceReferenceOperation or ILiteralOperation or IDefaultValueOperation) return;
+        if (ContainsCapturingLambdaOrTaintedRead(v))
+            throw new System.NotSupportedException(BuriedCapturingLambdaError);
+    }
+
     /// <summary>
     /// §2.8(a): record a capturing lambda stored LONG-LIVED — a delegate field / auto-property / struct
     /// member (self or cross) — for the post-emit aliasing detector. Delegate locals and argument-position
@@ -839,6 +886,7 @@ public abstract class HandlerBase
     /// </summary>
     protected void GuardCaptureEscapeValue(IOperation value)
     {
+        GuardBuriedCapturingLambda(value);
         if (IsDirectCapturingLambda(value) || IsCaptureTaintedRead(value))
             throw new System.NotSupportedException(CaptureEscapeError);
     }
@@ -853,6 +901,10 @@ public abstract class HandlerBase
     /// </summary>
     protected void GuardCaptureEscapeStore(IOperation target, IOperation value)
     {
+        // F3 backstop first: a capturing lambda buried in a non-direct RHS shape is loud regardless
+        // of target kind (the recording/taint below can only see the direct shape).
+        GuardBuriedCapturingLambda(value);
+
         bool direct = IsDirectCapturingLambda(value);
         bool tainted = IsCaptureTaintedRead(value);
         if (!direct && !tainted) return;
@@ -862,11 +914,14 @@ public abstract class HandlerBase
 
         switch (target)
         {
+            // Local targets store legally but become tainted. Taint propagates through local-to-local
+            // copies too (F4: `var g = f;` then `fs[i] = g;` must stay loud — laundering a tainted
+            // read through a copy used to drop the taint).
             case ILocalReferenceOperation localTarget:
-                if (direct) _ctx.CapturingLambdaLocals.Add(localTarget.Local);
+                _ctx.CapturingLambdaLocals.Add(localTarget.Local);
                 return;
             case IDeclarationExpressionOperation { Expression: ILocalReferenceOperation declLocal }:
-                if (direct) _ctx.CapturingLambdaLocals.Add(declLocal.Local);
+                _ctx.CapturingLambdaLocals.Add(declLocal.Local);
                 return;
             case IFieldReferenceOperation or IPropertyReferenceOperation when tainted:
                 throw new System.NotSupportedException(CaptureEscapeError);

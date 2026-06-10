@@ -243,6 +243,10 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
     CLeaf EmitDelegateDispatch(CLeaf bundle, INamedTypeSymbol delegateType, IInvocationOperation op, bool isConditional)
     {
         var invoke = delegateType.DelegateInvokeMethod;
+        // §3.4-1: the conv-var declaration side re-validates ref/out — a delegate VALUE received from
+        // elsewhere (param/field/cast-back) never went through this class's creation-site validation,
+        // and a copy-in-only conv protocol would silently drop ref/out write-backs.
+        DelegateAbi.ValidateNoRefOutParams(invoke);
         var (convArgs, convRet) = GetConventionFieldNames(delegateType, _typeParamMap);
 
         // The __dlgc_ conv vars are a signature-keyed cross-program byte contract (§3.2). Bridges declare

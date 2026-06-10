@@ -243,6 +243,151 @@ public class CapLocal : UdonSharpBehaviour {
         Assert.NotNull(uasm);
     }
 
+    // ── M2-review fixes (F1-F5): field initializers, buried capturing lambdas, taint laundering,
+    //    dispatch-site ref/out ──
+
+    [Fact]
+    public void DelegateFieldInitializer_Lambda_BuildsBundleAtStart()
+    {
+        // F1: the initializer must reach the bundle-creation path (VisitDelegateCreation), not be
+        // silently dropped to default(T) via the conversion-stripped inner operation.
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public class DlgInit : UdonSharpBehaviour {
+    public Func<int> cb = () => 5;
+    public int result;
+    void Start() { result = cb(); }
+}", "DlgInit");
+        Assert.Contains("cb: %SystemObjectArray, null", uasm);
+        Assert.Contains("SystemObjectArray.__ctor__SystemInt32__SystemObjectArray", uasm);
+        Assert.Contains("__dlg_", uasm);
+    }
+
+    [Fact]
+    public void DelegateFieldInitializer_StaticMethodGroup_BuildsBundleAtStart()
+    {
+        // F1: the stripped shape for a method-group initializer is IMethodReferenceOperation.
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public class DlgInitMg : UdonSharpBehaviour {
+    public Func<int> cb = Get;
+    public int result;
+    static int Get() { return 6; }
+    void Start() { result = cb(); }
+}", "DlgInitMg");
+        Assert.Contains("SystemObjectArray.__ctor__SystemInt32__SystemObjectArray", uasm);
+        Assert.Contains("__dlg_", uasm);
+    }
+
+    [Fact]
+    public void DelegateFieldInitializer_WithoutStart_SynthesizedStartEmitsBundle()
+    {
+        // F2: the synthesized _start (no user Start) must run the initializer BEFORE the pending
+        // local-function/bridge drains — the hoisted initializer lambda used to land in never-drained
+        // pending lists (CoreToUasm 'CFuncRef references unknown function' ICE).
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public class DlgInitNoStart : UdonSharpBehaviour {
+    public Func<int> cb = () => 7;
+}", "DlgInitNoStart");
+        Assert.Contains(".export _start", uasm);
+        Assert.Contains("SystemObjectArray.__ctor__SystemInt32__SystemObjectArray", uasm);
+        Assert.Contains("__dlg_", uasm);
+    }
+
+    [Fact]
+    public void CapturingLambda_InTernary_DelegateStore_Throws()
+    {
+        // F3 (the reviewer's ternary probe): a capturing lambda buried in a ternary RHS evades the
+        // §2.8 recording and the taint set — must be a loud reject, not 0 diagnostics.
+        var ex = Assert.ThrowsAny<Exception>(() => TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public class TernCap : UdonSharpBehaviour {
+    public bool flag;
+    public int r;
+    void Start() { int x = 3; Func<int> f = flag ? () => x : () => x + 1; r = f(); }
+}", "TernCap"));
+        Assert.Contains("assign the lambda directly", ex.Message);
+    }
+
+    [Fact]
+    public void CapturingLambda_InCoalesce_DelegateStore_Throws()
+    {
+        var ex = Assert.ThrowsAny<Exception>(() => TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public class CoalCap : UdonSharpBehaviour {
+    public int r;
+    void Start() { int x = 2; Func<int> g = null; Func<int> f = g ?? (() => x); r = f(); }
+}", "CoalCap"));
+        Assert.Contains("assign the lambda directly", ex.Message);
+    }
+
+    [Fact]
+    public void CapturingLambda_InSwitchExpressionArm_DelegateStore_Throws()
+    {
+        var ex = Assert.ThrowsAny<Exception>(() => TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public class SwitchCap : UdonSharpBehaviour {
+    public int k;
+    public int r;
+    void Start() { int x = 1; Func<int> f = k switch { 0 => () => x, _ => () => x + 1 }; r = f(); }
+}", "SwitchCap"));
+        Assert.Contains("assign the lambda directly", ex.Message);
+    }
+
+    [Fact]
+    public void CaptureFreeLambdas_InTernary_DelegateStore_Compiles()
+    {
+        // F3 companion: capture-free lambdas in composite shapes stay allowed — verified working on
+        // the real VM (local harness M2FixProbes, both arms).
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public class TernFree : UdonSharpBehaviour {
+    public bool flag;
+    public int r;
+    void Start() { Func<int> f = flag ? () => 1 : () => 2; r = f(); }
+}", "TernFree");
+        Assert.NotNull(uasm);
+    }
+
+    [Fact]
+    public void TaintedLocal_LaunderedViaCopy_ArrayStore_Throws()
+    {
+        // F4 (the reviewer's probe): `var g = f;` must PROPAGATE the taint — the escaping array
+        // store of the copy used to compile clean and ship wrong values on the real VM.
+        var ex = Assert.ThrowsAny<Exception>(() => TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public class TaintCopy : UdonSharpBehaviour {
+    public int r;
+    void Start() { var fs = new Func<int>[1]; int x = 4; Func<int> f = () => x; var g = f; fs[0] = g; r = fs[0](); }
+}", "TaintCopy"));
+        Assert.Contains("capture", ex.Message);
+    }
+
+    [Fact]
+    public void RefParamDelegate_DispatchSite_Throws()
+    {
+        // F5: a ref/out delegate VALUE received as a param never passes a creation site in this
+        // class — the dispatch-site conv-var declaration must re-validate (§3.4-1).
+        var ex = Assert.ThrowsAny<Exception>(() => TestHelper.CompileToUasm(@"
+using UdonSharp;
+public delegate void RefD2(ref int v);
+public class RefDispatch : UdonSharpBehaviour {
+    public int result;
+    void Use(RefD2 d) { int v = 1; if (d != null) { d(ref v); } result = v; }
+    void Start() { Use(null); }
+}", "RefDispatch"));
+        Assert.Contains("ref/out", ex.Message);
+    }
+
     // ── Type map + cast audit ──
 
     [Fact]

@@ -354,14 +354,18 @@ public class StatementHandler : HandlerBase, IOperationHandler
             var init = declarator.Initializer;
             if (init != null)
             {
+                // F3 backstop: a capturing lambda buried in a composite initializer (ternary/coalesce/
+                // switch arm) evades the direct-shape taint below — loud reject.
+                GuardBuriedCapturingLambda(init.Value);
+
                 // §2.8(b): a capturing lambda initializing a local TAINTS it (flow-insensitive); an
-                // object-typed local is itself an escaping store and is rejected loudly.
+                // object-typed local is itself an escaping store and is rejected loudly. A tainted-local
+                // read taints the new local too (F4: copies must not launder the taint).
                 if (IsDirectCapturingLambda(init.Value) || IsCaptureTaintedRead(init.Value))
                 {
                     if (IsObjectish(local.Type))
                         throw new System.NotSupportedException(CaptureEscapeError);
-                    if (IsDirectCapturingLambda(init.Value))
-                        _ctx.CapturingLambdaLocals.Add(local);
+                    _ctx.CapturingLambdaLocals.Add(local);
                 }
 
                 var srcVal = VisitExpression(init.Value);
