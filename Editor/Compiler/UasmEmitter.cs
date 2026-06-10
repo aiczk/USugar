@@ -1293,6 +1293,13 @@ public class UasmEmitter
     // that lie in its strongly-connected component (Tarjan). A call along such an edge can re-enter the
     // caller, so the caller's live values must be spilled to the software stack around the call (Udon's
     // flat heap shares param/local slots across frames). Includes direct self-recursion (self-loops).
+    //
+    // First-class-delegate extension (design §4): lambdas are graph nodes too; an EscapeSet E collects
+    // every function whose bridge address can be minted into a bundle (same-class method groups, local
+    // functions, lambdas); every function containing a delegate dispatch gets synthetic edges m→E
+    // (an indirect dispatch can start any escaped function). Cycle members' NON-TAIL dispatch sites are
+    // recorded syntax-keyed in EmitContext.ReentrantDispatchSites for the §4.3 Reentrant-flag marking;
+    // tail dispatch sites are spared so bundle-driven deep tail recursion never spills (§4.4).
     void BuildRecursionInfo()
     {
         // Generic method definitions are monomorphized per call-site and thus skipped in registration, so
@@ -1340,8 +1347,58 @@ public class UasmEmitter
             edges[m] = callees;
         }
 
+        // ── §4.2 graph extension: lambda nodes, EscapeSet, synthetic edges ──
+
+        // (a) Lambda nodes. Collected from the ROOT-method bodies and the field-initializer operations
+        // so each lambda is keyed in exactly one operation-tree family (local-function bodies are
+        // separate GetOperation trees, so collecting from them too would yield duplicate-but-distinct
+        // instances). Emit-time matching is value-based for symbols (Roslyn lambda/local-function
+        // symbols compare by syntax + container) and red-syntax-based for dispatch sites.
+        var lambdaNodes = new List<(IMethodSymbol Sym, IOperation Body)>();
+        foreach (var m in roots)
+            if (bodies.TryGetValue(m, out var rootBody))
+                CollectLambdaNodes(rootBody, lambdaNodes);
+        foreach (var (_, initOp, _) in _fieldInitOps)
+            CollectLambdaNodes(initOp, lambdaNodes);
+
+        foreach (var (sym, body) in lambdaNodes)
+        {
+            if (edges.ContainsKey(sym)) continue;
+            bodies[sym] = body;
+            var lambdaCallees = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
+            CollectInternalCallees(body, methodSet, lambdaCallees);
+            edges[sym] = lambdaCallees;
+        }
+
+        // (b) EscapeSet E (§4.1): conservative approximation of every function whose bridge address can
+        // end up inside a bundle — same-class method-group targets (incl. local functions) and lambdas.
+        // MEMBERSHIP-ONLY (§1.5): never drives emission order.
+        var escape = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
+        foreach (var m in roots)
+            if (bodies.TryGetValue(m, out var rootBody))
+                CollectEscapedDelegateTargets(rootBody, methodSet, escape);
+        foreach (var (_, initOp, _) in _fieldInitOps)
+            CollectEscapedDelegateTargets(initOp, methodSet, escape);
+
+        // (c) Synthetic edges m→E for every function m (lambdas included) containing a delegate
+        // dispatch: an indirect dispatch can start any escaped function. Real call edges are unchanged;
+        // the RecursiveCallees filter below self-filters synthetic edges (no named call to match), so
+        // they create cycle membership — consumed by the per-site Reentrant marking — without ever
+        // creating named-call spills.
+        var allNodes = internalMethods.Concat(lambdaNodes.Select(l => l.Sym))
+            .Distinct(SymbolEqualityComparer.Default).Cast<IMethodSymbol>().ToArray();
+        foreach (var node in allNodes)
+        {
+            if (!bodies.TryGetValue(node, out var nodeBody) || nodeBody == null) continue;
+            if (!ContainsDelegateDispatch(nodeBody)) continue;
+            var nodeEdges = edges[node];
+            foreach (var e in escape)
+                if (edges.ContainsKey(e)) nodeEdges.Add(e);
+        }
+
         var recursive = new Dictionary<IMethodSymbol, HashSet<IMethodSymbol>>(SymbolEqualityComparer.Default);
-        foreach (var scc in TarjanScc(internalMethods, edges))
+        var reentrantSites = new HashSet<SyntaxNode>();
+        foreach (var scc in TarjanScc(allNodes, edges))
         {
             var sccSet = new HashSet<IMethodSymbol>(scc, SymbolEqualityComparer.Default);
             // Non-trivial SCC (mutual cycle) OR a single method with a self-loop (direct self-recursion).
@@ -1357,9 +1414,76 @@ public class UasmEmitter
                     edges[caller].Where(c => sccSet.Contains(c) && HasNonTailCallTo(callerBody, c)),
                     SymbolEqualityComparer.Default);
                 if (inScc.Count > 0) recursive[caller] = inScc;
+
+                // §4.3: per-site Reentrant marking — a NON-TAIL dispatch inside a cycle member can
+                // re-enter its containing function via any escaped function. Keyed by red syntax node
+                // (shared across semantic models); tail sites are spared (§4.4).
+                if (callerBody == null) continue;
+                var dispatchSites = new List<IOperation>();
+                CollectDelegateDispatchSites(callerBody, dispatchSites);
+                foreach (var site in dispatchSites)
+                    if (site.Syntax != null && EmitContext.IsNonTailDispatchSite(callerBody, site))
+                        reentrantSites.Add(site.Syntax);
             }
         }
         _ctx.RecursiveCallees = recursive;
+        _ctx.ReentrantDispatchSites = reentrantSites;
+    }
+
+    // Collect every lambda (anonymous function) with its body — each becomes its own SCC node (§4.2).
+    // Descends everywhere (nested lambdas / lambdas inside local functions are nodes too).
+    static void CollectLambdaNodes(IOperation op, List<(IMethodSymbol Sym, IOperation Body)> result)
+    {
+        if (op == null) return;
+        if (op is IAnonymousFunctionOperation af && af.Symbol != null && af.Body != null)
+            result.Add((af.Symbol, af.Body));
+        foreach (var child in op.Children)
+            CollectLambdaNodes(child, result);
+    }
+
+    // EscapeSet collection (§4.1): targets of every IDelegateCreationOperation that resolve to an
+    // internal function — same-class method groups (incl. local functions) and lambdas. Full descent.
+    static void CollectEscapedDelegateTargets(IOperation op, HashSet<IMethodSymbol> internalMethods, HashSet<IMethodSymbol> result)
+    {
+        if (op == null) return;
+        if (op is IDelegateCreationOperation dc)
+        {
+            if (dc.Target is IMethodReferenceOperation mr && mr.Method != null)
+            {
+                var t = mr.Method.OriginalDefinition;
+                if (internalMethods.Contains(t)) result.Add(t);
+            }
+            else if (dc.Target is IAnonymousFunctionOperation af && af.Symbol != null)
+                result.Add(af.Symbol);
+        }
+        foreach (var child in op.Children)
+            CollectEscapedDelegateTargets(child, internalMethods, result);
+    }
+
+    // True if the body contains a delegate dispatch attributed to THIS function (hoisted children —
+    // local functions and lambdas — are their own nodes and are skipped).
+    static bool ContainsDelegateDispatch(IOperation op)
+    {
+        if (op == null) return false;
+        if (EmitContext.IsDelegateDispatch(op)) return true;
+        foreach (var child in op.Children)
+        {
+            if (child is ILocalFunctionOperation || child is IAnonymousFunctionOperation) continue;
+            if (ContainsDelegateDispatch(child)) return true;
+        }
+        return false;
+    }
+
+    // Collect the delegate-dispatch invocations attributed to THIS function (hoisted children skipped).
+    static void CollectDelegateDispatchSites(IOperation op, List<IOperation> result)
+    {
+        if (op == null) return;
+        if (EmitContext.IsDelegateDispatch(op)) result.Add(op);
+        foreach (var child in op.Children)
+        {
+            if (child is ILocalFunctionOperation || child is IAnonymousFunctionOperation) continue;
+            CollectDelegateDispatchSites(child, result);
+        }
     }
 
     // True if the caller body contains a call to callee that is NOT in tail position (its result is used
@@ -1380,7 +1504,7 @@ public class UasmEmitter
         if (IsInternalCallTo(op, callee, out _)) return true; // call not in tail position
         foreach (var child in op.Children)
         {
-            if (child is ILocalFunctionOperation) continue; // analysed as its own node
+            if (child is ILocalFunctionOperation || child is IAnonymousFunctionOperation) continue; // own nodes
             if (HasNonTailCallTo(child, callee)) return true;
         }
         return false;
@@ -1430,7 +1554,7 @@ public class UasmEmitter
             result.Add(opMethod.OriginalDefinition);
         foreach (var child in op.Children)
         {
-            if (child is ILocalFunctionOperation) continue; // analysed as its own node
+            if (child is ILocalFunctionOperation || child is IAnonymousFunctionOperation) continue; // own nodes
             CollectInternalCallees(child, internalMethods, result);
         }
     }

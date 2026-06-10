@@ -140,20 +140,13 @@ public class EmitContext
            && RecursiveCallees.TryGetValue(caller.OriginalDefinition, out var callees)
            && callees.Contains(callee.OriginalDefinition);
 
-    /// <summary>A hoisted internal function (local function or lambda) — these re-enter shared flat-heap slots.</summary>
-    public static bool IsHoistedFunction(IMethodSymbol m)
-        => m != null && m.MethodKind is MethodKind.LocalFunction or MethodKind.LambdaMethod or MethodKind.AnonymousFunction;
-
-    /// <summary>Record a recursion-cycle edge at emit time (used for mutual lambda recursion, which the
-    /// pre-emit SCC pass cannot see because lambdas hoist during emission).</summary>
-    public void MarkRecursiveEdge(IMethodSymbol caller, IMethodSymbol callee)
-    {
-        var key = caller.OriginalDefinition;
-        RecursiveCallees ??= new Dictionary<IMethodSymbol, HashSet<IMethodSymbol>>(SymbolEqualityComparer.Default);
-        if (!RecursiveCallees.TryGetValue(key, out var set))
-            RecursiveCallees[key] = set = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
-        set.Add(callee.OriginalDefinition);
-    }
+    /// <summary>Syntax nodes of delegate-dispatch invocations that can re-enter their containing
+    /// function: the containing function lies on a synthetic-edge-inclusive SCC cycle AND the dispatch
+    /// is non-tail (design §4.2/§4.3). Computed by <c>UasmEmitter.BuildRecursionInfo</c>; keyed by the
+    /// invocation's red SYNTAX node because operation trees are NOT shared between the analysis and emit
+    /// walks (each GetSemanticModel call builds a fresh operation tree) while red syntax nodes ARE shared.
+    /// MEMBERSHIP-ONLY — never enumerated (§1.5 determinism).</summary>
+    public HashSet<SyntaxNode> ReentrantDispatchSites;
 
     /// <summary>True if <paramref name="t"/> is <c>Nullable&lt;T&gt;</c>; yields the underlying T.
     /// Nullable is emulated as a boxed object (null | boxed T) — see ExternResolver type mapping.</summary>
@@ -221,12 +214,19 @@ public class EmitContext
         return false;
     }
 
-    /// <summary>Non-tail check for a recursive lambda: matches delegate invocations on <paramref name="selfVar"/>.</summary>
-    public static bool HasNonTailDelegateSelfCall(IOperation body, ILocalSymbol selfVar)
+    /// <summary>Generalized delegate-dispatch matcher: ANY-receiver delegate Invoke (replaces the
+    /// deleted local-variable-only HasNonTailDelegateSelfCall — design §4.2/#12).</summary>
+    public static bool IsDelegateDispatch(IOperation op)
+        => op is IInvocationOperation inv && inv.TargetMethod?.MethodKind == MethodKind.DelegateInvoke;
+
+    /// <summary>True when THIS specific dispatch operation occurs in NON-tail position within
+    /// <paramref name="body"/> (per-site tail sparing, design §4.3/§4.4: tail dispatches are never
+    /// marked Reentrant so bundle-driven deep tail recursion stays spill-free). Reference-equality
+    /// matcher — body and site must come from the SAME operation tree.</summary>
+    public static bool IsNonTailDispatchSite(IOperation body, IOperation site)
         => HasNonTailSelfCall(body, (IOperation op, out System.Collections.Immutable.ImmutableArray<IArgumentOperation> args) =>
         {
-            if (op is IInvocationOperation inv && inv.Instance is ILocalReferenceOperation lr
-                && SymbolEqualityComparer.Default.Equals(lr.Local, selfVar))
+            if (ReferenceEquals(op, site) && op is IInvocationOperation inv)
             {
                 args = inv.Arguments;
                 return true;

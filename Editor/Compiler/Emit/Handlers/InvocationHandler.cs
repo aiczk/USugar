@@ -275,6 +275,12 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
             EmitAssign(retSlot, DefaultConst(retType));
         }
 
+        // §4.3: this dispatch can re-enter the containing function (synthetic-SCC cycle member,
+        // non-tail site — pre-computed by BuildRecursionInfo). Flag BOTH dispatch arms Reentrant so
+        // InsertRecursionSpills wraps them with the __recurStack frame spill/reload; tail dispatches
+        // stay unflagged so bundle-driven deep tail recursion never spills (§4.4).
+        bool reentrant = MarkReentrantDispatch(op);
+
         // Guard-failure arm: LogError (NRE deviation, exact message per §2.6) — or silent for ?.Invoke.
         System.Action<CoreBuilder> failArm = null;
         if (!isConditional)
@@ -317,7 +323,7 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
                     _ =>
                     {
                         // SELF: JUMP_INDIRECT into the bridge __body (EmitCallIndirect verbatim, P5b).
-                        EmitInternalVoid("__indirect", new List<CLeaf> { adr });
+                        EmitInternalVoid("__indirect", new List<CLeaf> { adr }, reentrant);
                         // Immediate conv-ret materialization (§3.3-4, fcd11/12 invariant).
                         if (retType != null)
                             EmitAssign(retSlot, LoadField(convRet, retType));
@@ -340,7 +346,7 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
                             }
                             EmitExternVoid(
                                 "VRCUdonCommonInterfacesIUdonEventReceiver.__SendCustomEvent__SystemString__SystemVoid",
-                                new List<CLeaf> { tgt, mtd });
+                                new List<CLeaf> { tgt, mtd }, reentrant);
                             if (retType != null)
                                 EmitAssign(retSlot, ExternCall(
                                     "VRCUdonCommonInterfacesIUdonEventReceiver.__GetProgramVariable__SystemString__SystemObject",

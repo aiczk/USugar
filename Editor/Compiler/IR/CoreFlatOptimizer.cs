@@ -46,7 +46,9 @@ public static class CoreFlatOptimizer
 
     static void InsertRecursionSpillsFunc(CFunction func)
     {
-        if (func.RecursiveCalleeNames.Count == 0 || func.FlatBlocks.Count == 0) return;
+        // Spill work exists when the function has named recursive callees OR Reentrant-flagged
+        // delegate-dispatch sites (design §4.3 — flag count is tracked on the function).
+        if ((func.RecursiveCalleeNames.Count == 0 && func.ReentrantSiteCount == 0) || func.FlatBlocks.Count == 0) return;
 
         // PRECISE per-instruction live-out: the slots whose value AFTER an instruction is still read before
         // being overwritten. A single [firstDef,lastUse] interval is wrong here — CoalesceSlots reuses one
@@ -59,7 +61,7 @@ public static class CoreFlatOptimizer
             var newStmts = new List<CStmt>(block.Stmts.Count + 8);
             foreach (var inst in block.Stmts)
             {
-                if (IsRecursiveCall(inst, func.RecursiveCalleeNames))
+                if (IsSpillSite(inst, func.RecursiveCalleeNames))
                 {
                     // Spill the slots live across the call (live-out) EXCEPT the call's own result slot — that
                     // is written by the call (not clobbered by the recursion), so it must not be saved/restored.
@@ -142,10 +144,25 @@ public static class CoreFlatOptimizer
         return result;
     }
 
+    // A spill site is a named recursive-edge internal call OR a Reentrant-flagged delegate-dispatch
+    // arm (__indirect / SendCustomEvent — design §4.3): both can re-enter the containing function and
+    // clobber its frame, so both get the same spill/reload wrap.
+    static bool IsSpillSite(CStmt inst, HashSet<string> names)
+        => IsRecursiveCall(inst, names) || IsReentrantFlagged(inst);
+
     static bool IsRecursiveCall(CStmt inst, HashSet<string> names) => inst switch
     {
         CExprStmt { Expr: CInternalCall ic } => names.Contains(ic.FuncName),
         CAssign { Value: CInternalCall ic } => names.Contains(ic.FuncName),
+        _ => false,
+    };
+
+    static bool IsReentrantFlagged(CStmt inst) => inst switch
+    {
+        CExprStmt { Expr: CInternalCall ic } => ic.Reentrant,
+        CExprStmt { Expr: CExternCall ec } => ec.Reentrant,
+        CAssign { Value: CInternalCall ic } => ic.Reentrant,
+        CAssign { Value: CExternCall ec } => ec.Reentrant,
         _ => false,
     };
 
@@ -510,8 +527,10 @@ public static class CoreFlatOptimizer
         CAssign m => new CAssign(RemapSlotId(m.DestSlot, mapping), RemapOperand(m.Value, mapping)),
         CLoadField lf => new CLoadField(RemapSlotId(lf.DestSlot, mapping), lf.FieldName, lf.Type),
         CStoreField sf => new CStoreField(sf.FieldName, RemapLeaf(sf.Value, mapping)),
-        CExprStmt { Expr: CExternCall ce } => new CExprStmt(new CExternCall(ce.Sig, RemapArgs(ce.Args, mapping), ce.Type, RemapSlotIdNullable(ce.DestSlot, mapping))),
-        CExprStmt { Expr: CInternalCall ci } => new CExprStmt(new CInternalCall(ci.FuncName, RemapArgs(ci.Args, mapping), ci.Type, RemapSlotIdNullable(ci.DestSlot, mapping))),
+        // Reentrant MUST be copied: this rebuild is the second flag-killing reconstruction site
+        // (with CoreFlatten.LowerExpr — design §4.3); FlatVerify checks conservation after the pass.
+        CExprStmt { Expr: CExternCall ce } => new CExprStmt(new CExternCall(ce.Sig, RemapArgs(ce.Args, mapping), ce.Type, RemapSlotIdNullable(ce.DestSlot, mapping), ce.Reentrant)),
+        CExprStmt { Expr: CInternalCall ci } => new CExprStmt(new CInternalCall(ci.FuncName, RemapArgs(ci.Args, mapping), ci.Type, RemapSlotIdNullable(ci.DestSlot, mapping), ci.Reentrant)),
         _ => inst,
     };
 

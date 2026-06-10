@@ -33,8 +33,6 @@ public abstract class HandlerBase
     protected HashSet<string> _delegateFields => _ctx.DelegateFields;
     protected List<EmitDiagnostic> _diagnostics => _ctx.Diagnostics;
     protected bool IsRecursiveEdge(IMethodSymbol caller, IMethodSymbol callee) => _ctx.IsRecursiveEdge(caller, callee);
-    protected static bool IsHoistedFunction(IMethodSymbol m) => EmitContext.IsHoistedFunction(m);
-    protected void MarkRecursiveEdge(IMethodSymbol caller, IMethodSymbol callee) => _ctx.MarkRecursiveEdge(caller, callee);
 
     // ── Dispatch (recursive descent into other handlers via UasmEmitter facade) ──
     protected void VisitOperation(IOperation op) => _ctx.VisitOperation(op);
@@ -234,9 +232,10 @@ public abstract class HandlerBase
             new List<CLeaf> { left, prod }, t);
     }
 
-    /// <summary>Emit a void extern call as a statement.</summary>
-    protected void EmitExternVoid(string sig, List<CLeaf> args)
-        => _builder.EmitExternVoid(ResolveExtern(sig), args);
+    /// <summary>Emit a void extern call as a statement. <paramref name="reentrant"/> marks a
+    /// delegate-dispatch arm that can re-enter the containing function (design §4.3).</summary>
+    protected void EmitExternVoid(string sig, List<CLeaf> args, bool reentrant = false)
+        => _builder.EmitExternVoid(ResolveExtern(sig), args, reentrant);
 
     /// <summary>Create an internal call expression.</summary>
     protected CSlotRef InternalCall(string funcName, List<CLeaf> args, string retType)
@@ -267,8 +266,11 @@ public abstract class HandlerBase
         _builder.EmitExprStmt(expr);
     }
 
-    /// <summary>Emit a void internal call as a side-effecting statement (not materialized to a slot).</summary>
-    protected void EmitInternalVoid(string funcName, List<CLeaf> args) => _builder.EmitInternalVoid(funcName, args);
+    /// <summary>Emit a void internal call as a side-effecting statement (not materialized to a slot).
+    /// <paramref name="reentrant"/> marks a delegate-dispatch arm that can re-enter the containing
+    /// function (design §4.3).</summary>
+    protected void EmitInternalVoid(string funcName, List<CLeaf> args, bool reentrant = false)
+        => _builder.EmitInternalVoid(funcName, args, reentrant);
 
     // ── Nullable<T> (boxed-object emulation) helpers ──
 
@@ -1021,20 +1023,39 @@ public abstract class HandlerBase
         if (IsRecursiveEdge(_currentMethod, target))
         {
             _ctx.EnsureRecursionStack();
-            var cf = _builder.CurrentFunction;
-            cf.RecursiveCalleeNames.Add(func.Name);
-            // Accumulate the UNION of in-scope frame fields across every recursive call site: a later call has
-            // more locals in scope than an earlier one, and the post-pass uses a single field set for all calls.
-            // Over-spilling a not-yet-assigned local at an earlier call is inert (its garbage is saved/restored).
-            foreach (var f in CollectRecursionSpillFields())
-            {
-                bool seen = false;
-                foreach (var e in cf.RecursionSpillFields) if (e.Name == f.Name) { seen = true; break; }
-                if (!seen) cf.RecursionSpillFields.Add(f);
-            }
+            _builder.CurrentFunction.RecursiveCalleeNames.Add(func.Name);
+            AccumulateRecursionSpillFields(_builder.CurrentFunction);
         }
 
         return InternalCall(func.Name, args, retType);
+    }
+
+    /// <summary>True when the dispatch invocation at <paramref name="dispatchOp"/> can re-enter the
+    /// containing function (design §4.3: containing function on a synthetic-edge-inclusive SCC cycle
+    /// AND the dispatch is non-tail — pre-computed syntax-keyed by BuildRecursionInfo). When true,
+    /// also registers the frame: ensures the recursion stack and accumulates the named frame fields,
+    /// so InsertRecursionSpills wraps the flagged dispatch arms with the spill/reload.</summary>
+    protected bool MarkReentrantDispatch(IOperation dispatchOp)
+    {
+        if (_ctx.ReentrantDispatchSites == null || dispatchOp?.Syntax == null
+            || !_ctx.ReentrantDispatchSites.Contains(dispatchOp.Syntax))
+            return false;
+        _ctx.EnsureRecursionStack();
+        AccumulateRecursionSpillFields(_builder.CurrentFunction);
+        return true;
+    }
+
+    /// <summary>Accumulate the UNION of in-scope frame fields across every spill site: a later site has
+    /// more locals in scope than an earlier one, and the post-pass uses a single field set for all sites.
+    /// Over-spilling a not-yet-assigned local at an earlier site is inert (its garbage is saved/restored).</summary>
+    void AccumulateRecursionSpillFields(CFunction cf)
+    {
+        foreach (var f in CollectRecursionSpillFields())
+        {
+            bool seen = false;
+            foreach (var e in cf.RecursionSpillFields) if (e.Name == f.Name) { seen = true; break; }
+            if (!seen) cf.RecursionSpillFields.Add(f);
+        }
     }
 
     // The named heap fields that must survive a recursive re-entry of the current method: its parameters,

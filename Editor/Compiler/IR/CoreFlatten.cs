@@ -63,11 +63,47 @@ public static class CoreFlatten
             if (ctx.Current.Terminator != null)
             {
                 if (stmt is CLabel) { /* label starts a new reachable block */ }
-                else continue;
+                else
+                {
+                    // Dead-code drop: account for any Reentrant-flagged calls inside the dropped
+                    // statement so FlatVerify's conservation check stays balanced (the drop is a
+                    // deliberate, accounted removal — not the silent flag loss the check hunts).
+                    ctx.Func.ReentrantSiteCount -= CountReentrant(stmt);
+                    continue;
+                }
             }
             LowerStmt(stmt, ctx);
         }
     }
+
+    /// <summary>Count Reentrant-flagged calls in a STRUCTURED statement subtree (dead-code accounting).</summary>
+    static int CountReentrant(CStmt stmt)
+    {
+        switch (stmt)
+        {
+            case CExprStmt es: return CountReentrantValue(es.Expr);
+            case CAssign a: return CountReentrantValue(a.Value);
+            case CBlock b:
+            {
+                int n = 0;
+                foreach (var s in b.Stmts) n += CountReentrant(s);
+                return n;
+            }
+            case CIf cif: return CountReentrant(cif.Then) + CountReentrant(cif.Else);
+            case CWhile cw: return CountReentrant(cw.CondBlock) + CountReentrant(cw.Body);
+            case CFor cf:
+                return CountReentrant(cf.Init) + CountReentrant(cf.CondBlock)
+                     + CountReentrant(cf.Update) + CountReentrant(cf.Body);
+            default: return 0;
+        }
+    }
+
+    static int CountReentrantValue(CValue v) => v switch
+    {
+        CExternCall ec when ec.Reentrant => 1,
+        CInternalCall ic when ic.Reentrant => 1,
+        _ => 0,
+    };
 
     static void LowerStmt(CStmt stmt, Ctx ctx)
     {
@@ -247,15 +283,17 @@ public static class CoreFlatten
             case CExternCall ec:
             {
                 // ec.Args are CLeaf operands (ANF) — already flat leaves, no per-arg lowering needed.
+                // Reentrant MUST be copied: this rebuild is one of the two sites (with RemapInst) where
+                // object-identity marking would silently die (design §4.3) — FlatVerify checks conservation.
                 int? dest = ec.Type != "SystemVoid" ? ctx.AllocScratch(ec.Type) : (int?)null;
-                ctx.Current.Stmts.Add(new CExprStmt(new CExternCall(ec.Sig, new List<CLeaf>(ec.Args), ec.Type, dest)));
+                ctx.Current.Stmts.Add(new CExprStmt(new CExternCall(ec.Sig, new List<CLeaf>(ec.Args), ec.Type, dest, ec.Reentrant)));
                 return dest.HasValue ? new CSlotRef(dest.Value, ec.Type) : new CConst(null, "SystemVoid");
             }
 
             case CInternalCall ic:
             {
                 int? dest = ic.Type != "SystemVoid" ? ctx.AllocScratch(ic.Type) : (int?)null;
-                ctx.Current.Stmts.Add(new CExprStmt(new CInternalCall(ic.FuncName, new List<CLeaf>(ic.Args), ic.Type, dest)));
+                ctx.Current.Stmts.Add(new CExprStmt(new CInternalCall(ic.FuncName, new List<CLeaf>(ic.Args), ic.Type, dest, ic.Reentrant)));
                 return dest.HasValue ? new CSlotRef(dest.Value, ic.Type) : new CConst(null, "SystemVoid");
             }
 

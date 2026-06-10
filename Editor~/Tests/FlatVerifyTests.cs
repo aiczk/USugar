@@ -73,4 +73,54 @@ public class FlatVerifyTests
     {
         Assert.ThrowsAny<System.Exception>(() => FlatVerify.Verify(new CFunction("f"))); // Shape defaults to Structured
     }
+
+    // ── Reentrant-flag conservation (design §4.3) ──
+    // CoreFlatten and CoalesceSlots/RemapInst REBUILD call instructions; a rebuild that drops the
+    // Reentrant flag silently loses the dispatch-site recursion spill. FlatVerify must catch the
+    // imbalance structurally: flat flag count must equal CFunction.ReentrantSiteCount.
+
+    [Fact]
+    public void ReentrantFlagLost_Throws()
+    {
+        // The function claims one Reentrant dispatch arm, but the flat stream carries none —
+        // the signature of a rebuild pass that forgot to copy the flag.
+        var f = Flat(Block(0,
+            new List<CStmt> { new CExprStmt(new CInternalCall("__indirect",
+                new List<CLeaf> { new CSlotRef(0, "SystemUInt32") }, "SystemVoid")) },
+            new CRet()));
+        f.ReentrantSiteCount = 1;
+        var ex = Assert.ThrowsAny<System.Exception>(() => FlatVerify.Verify(f));
+        Assert.Contains("conservation", ex.Message);
+    }
+
+    [Fact]
+    public void ReentrantFlagDuplicated_Throws()
+    {
+        // The inverse imbalance (more flags than registered sites) is equally a verifier error.
+        var f = Flat(Block(0,
+            new List<CStmt> { new CExprStmt(new CInternalCall("__indirect",
+                new List<CLeaf> { new CSlotRef(0, "SystemUInt32") }, "SystemVoid", null, reentrant: true)) },
+            new CRet()));
+        f.ReentrantSiteCount = 0;
+        Assert.ThrowsAny<System.Exception>(() => FlatVerify.Verify(f));
+    }
+
+    [Fact]
+    public void ReentrantFlagBalanced_Passes()
+    {
+        // Balanced internal-call (self arm) + extern-call (cross arm) flags verify clean.
+        var f = Flat(Block(0,
+            new List<CStmt>
+            {
+                new CExprStmt(new CInternalCall("__indirect",
+                    new List<CLeaf> { new CSlotRef(0, "SystemUInt32") }, "SystemVoid", null, reentrant: true)),
+                new CExprStmt(new CExternCall(
+                    "VRCUdonCommonInterfacesIUdonEventReceiver.__SendCustomEvent__SystemString__SystemVoid",
+                    new List<CLeaf> { new CSlotRef(1, "SystemObject"), new CSlotRef(2, "SystemString") },
+                    "SystemVoid", null, reentrant: true)),
+            },
+            new CRet()));
+        f.ReentrantSiteCount = 2;
+        FlatVerify.Verify(f); // no throw
+    }
 }

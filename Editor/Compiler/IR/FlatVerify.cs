@@ -35,6 +35,26 @@ public static class FlatVerify
 
             VerifyTerminator(b.Terminator, blockIds, f.Name);
         }
+
+        VerifyReentrantConservation(f);
+    }
+
+    /// <summary>Reentrant-flag conservation (design §4.3): CoreFlatten and CoalesceSlots/RemapInst both
+    /// REBUILD call instructions, so a rebuild that forgets to copy the flag silently loses the
+    /// dispatch-site recursion spill — exactly the failure object-identity marking died of. The flat
+    /// instruction stream must carry exactly CFunction.ReentrantSiteCount flags (creation-counted by
+    /// CoreBuilder, dead-code-adjusted by CoreFlatten).</summary>
+    static void VerifyReentrantConservation(CFunction f)
+    {
+        int flagged = 0;
+        foreach (var b in f.FlatBlocks)
+            foreach (var inst in b.Stmts)
+                if (inst is CExprStmt es
+                    && (es.Expr is CExternCall { Reentrant: true } || es.Expr is CInternalCall { Reentrant: true }))
+                    flagged++;
+        if (flagged != f.ReentrantSiteCount)
+            throw new InvalidOperationException(
+                $"{f.Name}: Reentrant dispatch-site flag conservation violated — expected {f.ReentrantSiteCount} flagged call(s), found {flagged} (a rebuild pass dropped or duplicated the flag)");
     }
 
     static void VerifyInstruction(CStmt inst, string fn)

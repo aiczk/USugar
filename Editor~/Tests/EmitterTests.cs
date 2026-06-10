@@ -3607,10 +3607,11 @@ public class IndexerTest : UdonSharpBehaviour {
     [Fact]
     public void RecursiveLambda_Local_CompilesViaBundleDispatch()
     {
-        // M2 form: the recursive-lambda local idiom routes the self-call through the unified bundle
-        // dispatch (JUMP_INDIRECT under the guard ladder) — the old DelegateVarMap static resolution
-        // is gone. M3 re-pins the dispatch-site spill here (__recurStack across the non-tail dispatch,
-        // design §4; runtime-gated by fcd35 = 120).
+        // The recursive-lambda local idiom routes the self-call through the unified bundle dispatch
+        // (JUMP_INDIRECT under the guard ladder). M3 (design §4) pins the dispatch-site spill: the
+        // lambda is a synthetic-SCC self-loop and its dispatch is non-tail, so the Reentrant-flagged
+        // dispatch is wrapped in the __recurStack frame spill/reload (runtime-gated by fcd35 = 120 —
+        // without it the shared conv-arg/param slots are clobbered and fact(5) returns 1).
         var uasm = TestHelper.CompileToUasm(@"
 using UdonSharp;
 public class RecLambdaTest : UdonSharpBehaviour {
@@ -3624,6 +3625,28 @@ public class RecLambdaTest : UdonSharpBehaviour {
 ", "RecLambdaTest");
         Assert.Contains("JUMP_INDIRECT, __intnl_dlgptr", uasm);
         Assert.Contains("__dlg_", uasm);
+        Assert.Contains("__recurStack", uasm); // M3 dispatch-site spill (§4.3)
+    }
+
+    [Fact]
+    public void RecursiveLambda_Local_TailDispatch_DoesNotSpill()
+    {
+        // §4.4 tail sparing: a TAIL dispatch is never marked Reentrant, so a bundle-driven deep tail
+        // recursion must not allocate the recursion stack at all (spilling it would exhaust the
+        // 512-entry __recurStack on deep loops — the exact failure the per-site marking avoids).
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public class TailLambdaTest : UdonSharpBehaviour {
+    int _result;
+    void Start() {
+        System.Func<int,int,int> loop = null;
+        loop = (n, acc) => n <= 0 ? acc : loop(n - 1, acc + 1);
+        _result = loop(500, 0);
+    }
+}
+", "TailLambdaTest");
+        Assert.Contains("JUMP_INDIRECT, __intnl_dlgptr", uasm);
+        Assert.DoesNotContain("__recurStack", uasm);
     }
 
     // ── Re-entrance guard ──

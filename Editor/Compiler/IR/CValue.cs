@@ -79,12 +79,19 @@ public sealed class CExternCall : CValue
     public readonly string Sig;
     public readonly List<CLeaf> Args;
     public readonly int? DestSlot; // null in tree role; set in flat (instruction) role
+    /// <summary>Design §4.3: this call is a delegate-dispatch site that can re-enter its containing
+    /// function (the cross-arm SendCustomEvent of a marked dispatch). InsertRecursionSpills wraps
+    /// flagged instructions with the __recurStack frame spill/reload. The flag MUST be copied by every
+    /// site that reconstructs the instruction (CoreFlatten.LowerExpr, CoreFlatOptimizer.RemapInst) —
+    /// FlatVerify checks conservation against CFunction.ReentrantSiteCount.</summary>
+    public readonly bool Reentrant;
 
-    public CExternCall(string sig, List<CLeaf> args, string retType, int? destSlot = null) : base(retType)
+    public CExternCall(string sig, List<CLeaf> args, string retType, int? destSlot = null, bool reentrant = false) : base(retType)
     {
         Sig = sig ?? throw new ArgumentNullException(nameof(sig));
         Args = args ?? new List<CLeaf>();
         DestSlot = destSlot;
+        Reentrant = reentrant;
     }
 
     public override string ToString()
@@ -100,12 +107,16 @@ public sealed class CInternalCall : CValue
     public readonly string FuncName;
     public readonly List<CLeaf> Args;
     public readonly int? DestSlot;
+    /// <summary>Design §4.3: this call is a delegate-dispatch site that can re-enter its containing
+    /// function (the self-arm __indirect of a marked dispatch). See <see cref="CExternCall.Reentrant"/>.</summary>
+    public readonly bool Reentrant;
 
-    public CInternalCall(string funcName, List<CLeaf> args, string retType, int? destSlot = null) : base(retType)
+    public CInternalCall(string funcName, List<CLeaf> args, string retType, int? destSlot = null, bool reentrant = false) : base(retType)
     {
         FuncName = funcName ?? throw new ArgumentNullException(nameof(funcName));
         Args = args ?? new List<CLeaf>();
         DestSlot = destSlot;
+        Reentrant = reentrant;
     }
 
     public override string ToString()

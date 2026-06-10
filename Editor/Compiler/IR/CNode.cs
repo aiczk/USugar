@@ -211,6 +211,14 @@ public sealed class CFunction
     public readonly HashSet<string> RecursiveCalleeNames = new HashSet<string>();
     public readonly List<(string Name, string Type)> RecursionSpillFields = new List<(string, string)>();
 
+    /// <summary>Number of Reentrant-flagged call instructions this function must carry (design §4.3).
+    /// Incremented by CoreBuilder when a flagged dispatch arm is emitted; decremented by CoreFlatten
+    /// when an unreachable (dead-code) statement containing a flagged call is dropped. FlatVerify
+    /// asserts the flat instruction stream carries exactly this many flags after every rebuild pass
+    /// (CoreFlatten, CoalesceSlots/RemapInst, InsertRecursionSpills) — a silent flag loss would
+    /// silently lose the recursion spill.</summary>
+    public int ReentrantSiteCount;
+
     public CFunction(string name, string exportName = null)
     {
         Name = name ?? throw new ArgumentNullException(nameof(name));

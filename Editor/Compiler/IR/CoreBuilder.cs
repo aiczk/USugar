@@ -255,6 +255,18 @@ public sealed class CoreBuilder
         return Bind(cc, retType);
     }
 
-    public void EmitExternVoid(string sig, List<CLeaf> args) => Emit(new CExprStmt(new CExternCall(sig, args, "SystemVoid")));
-    public void EmitInternalVoid(string funcName, List<CLeaf> args) => Emit(new CExprStmt(new CInternalCall(funcName, args, "SystemVoid")));
+    // The reentrant flag (design §4.3) marks a delegate-dispatch arm that can re-enter the containing
+    // function; the count increment here is the single creation choke point FlatVerify's conservation
+    // check is balanced against.
+    public void EmitExternVoid(string sig, List<CLeaf> args, bool reentrant = false)
+    {
+        if (reentrant) CurrentFunction.ReentrantSiteCount++;
+        Emit(new CExprStmt(new CExternCall(sig, args, "SystemVoid", null, reentrant)));
+    }
+
+    public void EmitInternalVoid(string funcName, List<CLeaf> args, bool reentrant = false)
+    {
+        if (reentrant) CurrentFunction.ReentrantSiteCount++;
+        Emit(new CExprStmt(new CInternalCall(funcName, args, "SystemVoid", null, reentrant)));
+    }
 }
