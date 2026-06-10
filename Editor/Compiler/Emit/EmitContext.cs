@@ -275,6 +275,15 @@ public class EmitContext
     // drive emission order (symbol-keyed iteration order would break the 2-compile determinism gate).
     public readonly HashSet<ILocalSymbol> CapturingLambdaLocals = new(SymbolEqualityComparer.Default);
 
+    // §2.8 round-2: fields / auto-properties / struct members that receive a DIRECT capturing-lambda
+    // store anywhere in this class (pre-scanned by UasmEmitter.CollectCaptureReceivingMembers over all
+    // root bodies + field initializers BEFORE body emission, so the taint is emission-order-independent).
+    // Reading such a member is tainted-equivalent at escaping positions: the member can legally hold a
+    // multi-activation flat capture (one bundle live at a time is correct), but COPYING it out to an
+    // array / object / another member / a return re-creates the fcd30-class aliasing wrongness with a
+    // single lambda — which the 2+-lambda aliasing detector cannot see. MEMBERSHIP-ONLY set (§1.5).
+    public readonly HashSet<ISymbol> CaptureReceivingMembers = new(SymbolEqualityComparer.Default);
+
     /// <summary>
     /// Record that <paramref name="lambda"/> was assigned to a delegate field (or otherwise
     /// stored long-lived). Each captured symbol is appended to AllLambdaCaptures so post-emit

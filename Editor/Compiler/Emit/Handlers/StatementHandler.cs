@@ -362,11 +362,13 @@ public class StatementHandler : HandlerBase, IOperationHandler
 
                 // §2.8(b): a capturing lambda initializing a local TAINTS it (flow-insensitive); an
                 // object-typed local is itself an escaping store and is rejected loudly. A tainted-local
-                // read taints the new local too (F4: copies must not launder the taint), as do the two
-                // laundering shapes: a tainted delegate-typed invocation result (`var t = Id(()=>v);`)
-                // and a delegate-typed param read (`var t = x;` inside the callee).
+                // read taints the new local too (F4: copies must not launder the taint), as do the
+                // laundering shapes: a tainted delegate-capable invocation result (`var t = Id(()=>v);`),
+                // a delegate-capable param read (`var t = x;` inside the callee), and a laundering
+                // member read (recipient member / param-rooted envelope member, §2.8 round-2).
                 if (IsDirectCapturingLambda(init.Value) || IsCaptureTaintedRead(init.Value)
-                    || IsTaintedDelegateInvocationResult(init.Value) || IsDelegateParamRead(init.Value))
+                    || IsTaintedDelegateInvocationResult(init.Value) || IsDelegateParamRead(init.Value)
+                    || IsLaunderingMemberRead(init.Value))
                 {
                     if (IsObjectish(local.Type))
                         throw new System.NotSupportedException(CaptureEscapeError);
@@ -406,15 +408,34 @@ public class StatementHandler : HandlerBase, IOperationHandler
             DefaultInitAggregate(localId, layout);
             return;
         }
+
+        // §2.8 round-2 (H2): aggregate-typed locals `continue` past the scalar declaration guard
+        // block in VisitVariableDeclaration, so this path needs its own capture-escape guard — a
+        // tuple literal carrying a capturing lambda otherwise escapes into the backing object[]
+        // (an unguarded __Set) and launders out via a member read (VM-verified wrong values).
+        // Composite/tuple-literal shapes go loud via the buried-lambda walk; tainted-equivalent
+        // aggregate initializers (param read / tainted local / tainted invocation result) taint
+        // the local so escaping reads of it (or its members, via the tainted-root member rule)
+        // stay loud.
+        GuardBuriedCapturingLambda(init.Value);
+        if (IsCaptureTaintedRead(init.Value) || IsTaintedDelegateInvocationResult(init.Value)
+            || IsDelegateParamRead(init.Value) || IsLaunderingMemberRead(init.Value))
+            _ctx.CapturingLambdaLocals.Add(local);
+
         var value = UnwrapConversions(init.Value);
 
         if (value is ITupleOperation tupleLit)
         {
             // Tuple literal: set each element via __Set__
             for (int i = 0; i < tupleLit.Elements.Length && i < layout.Count; i++)
+            {
+                // §2.8 round-2 (H2): guard each element exactly like an array-initializer element
+                // (ArrayHandler) — the backing store is the same escaping object[] shape.
+                GuardCaptureEscapeValue(tupleLit.Elements[i]);
                 EmitExternVoid("SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid",
                     new List<CLeaf> { LoadField(localId, "SystemObjectArray"), Const(i, "SystemInt32"),
                         VisitExpression(tupleLit.Elements[i]) });
+            }
         }
         else if (value is IDefaultValueOperation)
         {
@@ -426,6 +447,8 @@ public class StatementHandler : HandlerBase, IOperationHandler
         {
             // new V(args): default-init the already-allocated array, then run the registered ctor
             // (receiver = this array, mutated in place via this.field = … in the ctor body).
+            // §2.8 round-2: erasing-typed ctor args are guarded like any call boundary.
+            GuardCaptureEscapeArguments(ocCtor.Arguments);
             DefaultInitAggregate(localId, layout);
             var ctorArgs = new List<CLeaf> { LoadField(localId, "SystemObjectArray") };
             foreach (var arg in ocCtor.Arguments)

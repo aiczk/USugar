@@ -826,34 +826,159 @@ public abstract class HandlerBase
         => t != null && (t.SpecialType == SpecialType.System_Object
             || (t is IArrayTypeSymbol at && at.ElementType.SpecialType == SpecialType.System_Object));
 
-    /// <summary>Conversion-stripped read of a delegate-typed PARAMETER. Such reads are
-    /// tainted-EQUIVALENT at escaping STORE targets (array element / object / field / property,
-    /// plus local-taint propagation): the callee cannot see whether its caller passed a capturing
-    /// lambda, so `void Keep(Func&lt;int&gt; x) { fs[k] = x; }` would launder the capture past every
-    /// loud reject (VM-verified silent wrong values). RETURNING a param stays legal — identity
-    /// callees (`Id(x) { return x; }`) are the method-group / capture-free flow, and the CALLER's
-    /// invocation-result taint (below) guards the laundered result. Over-rejection of method-group
-    /// setters (`SetCb(M)` → `cb = x` rejects) is accepted per design §8-3: loud beats silent-wrong.</summary>
-    protected static bool IsDelegateParamRead(IOperation value)
+    /// <summary>Resolved delegate-CAPABLE type (§2.8 round-2): a type whose value can carry a delegate
+    /// bundle past the delegate-typed guards — a delegate itself, System.Object (boxing erases the
+    /// delegate typing: `object IdO(object x)` laundered, VM-verified), an UNRESOLVED type parameter
+    /// (generic bodies are emitted from the definition tree so Parameter.Type stays T; the type-param
+    /// map is consulted first via ResolveType, keeping non-delegate instantiations precise and legal),
+    /// or a tuple with any delegate-capable element (tuples erase delegate typing the same way object
+    /// does — tuple return/param envelopes laundered, VM-verified). Over-rejection accepted per §8-3.</summary>
+    protected bool IsDelegateCapableType(ITypeSymbol t)
+    {
+        if (t == null) return false;
+        var r = ResolveType(t);
+        if (r == null) return false;
+        if (r.SpecialType == SpecialType.System_Object) return true;
+        return IsNonObjectDelegateCapableType(r);
+    }
+
+    /// <summary>Delegate-capable minus bare System.Object: delegate proper, unresolved type param,
+    /// or delegate-capable tuple. Bare-object VALUES cannot legally carry a bundle — every entry
+    /// point is sealed (objectish store targets reject, objectish locals reject at declaration,
+    /// erasing-typed ARGUMENTS are guarded at the call site) — so object-typed param/member reads
+    /// are clean and ordinary object plumbing keeps compiling.</summary>
+    protected bool IsNonObjectDelegateCapableType(ITypeSymbol t)
+    {
+        if (t == null) return false;
+        var r = ResolveType(t);
+        if (r == null) return false;
+        if (r is ITypeParameterSymbol) return true;
+        if (r is INamedTypeSymbol nt)
+        {
+            if (nt.DelegateInvokeMethod != null) return true;
+            if (nt.IsTupleType)
+                foreach (var el in nt.TupleElements)
+                    if (IsDelegateCapableType(el.Type)) return true;
+        }
+        return false;
+    }
+
+    /// <summary>Resolved delegate type proper (Func/Action/custom delegate after type-param
+    /// substitution). Arguments to delegate-PROPER params stay unguarded — fcd37's
+    /// `Apply(x =&gt; x * kk, 5)` is the supported consumption flow; the callee's own escape
+    /// guards own any misuse of the param.</summary>
+    protected bool IsDelegateProperType(ITypeSymbol t)
+        => t != null && ResolveType(t) is INamedTypeSymbol nt && nt.DelegateInvokeMethod != null;
+
+    /// <summary>Conversion-stripped read of a parameter whose RESOLVED type is a delegate proper
+    /// (or a still-unresolved type param — conservative). Such reads are tainted-EQUIVALENT at
+    /// escaping STORE targets (array element / object / field / property, plus local-taint
+    /// propagation): the callee cannot see whether its caller passed a capturing lambda, so
+    /// `void Keep(Func&lt;int&gt; x) { fs[k] = x; }` — and `Keep&lt;T&gt;(T[] a, int i, T x)` at a delegate
+    /// instantiation (the emitted body keeps Parameter.Type == T; ResolveType consults the
+    /// type-param map) — would launder the capture past every loud reject (VM-verified silent
+    /// wrong values). Object/tuple-typed params are NOT tainted here: bundles cannot legally
+    /// reach them (GuardCaptureEscapeArguments seals the call sites), which keeps ordinary
+    /// object plumbing (`void Add(object[] a, object b) { a[0] = b; }`) compiling. RETURNING a
+    /// param stays legal — identity callees (`Id(x) { return x; }`) are the method-group /
+    /// capture-free flow, and the CALLER's invocation-result taint guards the laundered result.
+    /// Over-rejection of method-group setters (`SetCb(M)` → `cb = x` rejects) is accepted per
+    /// design §8-3.</summary>
+    protected bool IsDelegateParamRead(IOperation value)
     {
         var v = value;
         while (v is IConversionOperation conv) v = conv.Operand;
-        return v is IParameterReferenceOperation pr
-            && pr.Parameter.Type is INamedTypeSymbol nt && nt.DelegateInvokeMethod != null;
+        if (v is not IParameterReferenceOperation pr) return false;
+        var rt = ResolveType(pr.Parameter.Type);
+        return IsDelegateProperType(rt) || rt is ITypeParameterSymbol;
     }
 
-    /// <summary>Caller-side §2.8(b) laundering guard: a delegate-typed invocation RESULT whose
+    /// <summary>§2.8 round-2 caller-side argument guard: a capturing lambda (or tainted-equivalent
+    /// read) passed to an ERASING-typed parameter — object, delegate-carrying tuple, or a type
+    /// param resolving to one — is a loud compile error. Type erasure makes the callee blind
+    /// (`KeepObj(object x)` / `KeepT((Func&lt;int&gt;,int) t)` / `Id&lt;object&gt;(x)` all laundered,
+    /// VM-verified silent wrong values), so the bundle must be stopped from ENTERING the erased
+    /// param instead of tainting every object read. Delegate-PROPER params stay unguarded (fcd37);
+    /// method groups and capture-free lambdas pass everywhere.</summary>
+    protected void GuardCaptureEscapeArguments(IEnumerable<IArgumentOperation> args)
+    {
+        foreach (var arg in args)
+        {
+            if (arg?.Value == null || arg.Parameter == null) continue;
+            var pt = arg.Parameter.Type;
+            if (!IsDelegateCapableType(pt) || IsDelegateProperType(pt)) continue;
+            if (ContainsCapturingLambdaOrTaintedRead(arg.Value))
+                throw new System.NotSupportedException(CaptureEscapeError);
+        }
+    }
+
+    /// <summary>§2.8 round-2 member-read taint, RECIPIENT flavor: conversion-stripped read of a
+    /// field / auto-property / struct member that received a DIRECT capturing-lambda store anywhere
+    /// in this class (pre-scanned before emission — order-independent). The store itself is legal
+    /// (one live bundle per member is correct; the aliasing detector owns the 2+-lambda case), but
+    /// COPYING the member out re-creates multi-activation aliasing with a single lambda, which the
+    /// detector's 2+ threshold cannot see (auto-property/field round-trips, VM-verified wrong).
+    /// Members seeded only with method groups / capture-free lambdas stay freely readable.</summary>
+    protected bool IsCaptureReceivingMemberRead(IOperation value)
+    {
+        var v = value;
+        while (v is IConversionOperation conv) v = conv.Operand;
+        switch (v)
+        {
+            case IFieldReferenceOperation fr: return _ctx.CaptureReceivingMembers.Contains(fr.Field);
+            case IPropertyReferenceOperation pr: return _ctx.CaptureReceivingMembers.Contains(pr.Property);
+            default: return false;
+        }
+    }
+
+    /// <summary>§2.8 round-2 member-read taint, full STORE-position flavor: a recipient-member read
+    /// (above), OR a delegate-capable member read whose instance chain roots at a PARAMETER (the
+    /// callee is blind to what the caller packed into a tuple/struct envelope — `fs[k] = t.Item1` /
+    /// `fs[k] = s.f` inside the callee, both VM-verified laundering) or at a capture-tainted local
+    /// (aggregate copies must not re-launder). Param/tainted-rooted reads stay legal at RETURNS,
+    /// mirroring bare param reads: the caller's invocation-result taint guards the laundered result.</summary>
+    protected bool IsLaunderingMemberRead(IOperation value)
+    {
+        if (IsCaptureReceivingMemberRead(value)) return true;
+        var v = value;
+        while (v is IConversionOperation conv) v = conv.Operand;
+        ITypeSymbol memberType;
+        IOperation root;
+        switch (v)
+        {
+            case IFieldReferenceOperation fr: memberType = fr.Field.Type; root = fr.Instance; break;
+            case IPropertyReferenceOperation pr: memberType = pr.Property.Type; root = pr.Instance; break;
+            default: return false;
+        }
+        // Bare-object members are excluded: bundles cannot legally reach them (objectish store
+        // targets and erasing-typed arguments are sealed), so `objs[i] = param.objField` plumbing
+        // stays legal. Delegate / delegate-tuple / unresolved-T members carry the taint.
+        if (!IsNonObjectDelegateCapableType(memberType)) return false;
+        while (true)
+        {
+            if (root is IFieldReferenceOperation rf) { root = rf.Instance; continue; }
+            if (root is IPropertyReferenceOperation rp) { root = rp.Instance; continue; }
+            if (root is IConversionOperation rc) { root = rc.Operand; continue; }
+            break;
+        }
+        return root is IParameterReferenceOperation
+            || (root is ILocalReferenceOperation rl && _ctx.CapturingLambdaLocals.Contains(rl.Local));
+    }
+
+    /// <summary>Caller-side §2.8(b) laundering guard: a delegate-CAPABLE invocation RESULT whose
     /// arguments contain a capturing lambda / tainted read is itself tainted-equivalent — an
-    /// identity callee (`Func&lt;int&gt; Id(Func&lt;int&gt; x) { return x; }`) otherwise launders the capture
-    /// past both the callee's return guard (a param ref passes it) and this caller's store guard
-    /// (the tree-walk does not descend past invocations). Results that are NOT delegate-typed stay
-    /// legal: the capture is consumed by the callee (fcd37's `int Apply(Func&lt;int,int&gt; fn, int v)`).</summary>
+    /// identity callee (`Func&lt;int&gt; Id(Func&lt;int&gt; x) { return x; }`, or its type-erased flavors
+    /// `object IdO(object x)` / `T Id&lt;T&gt;(T x)` at T=object, or a tuple-returning packer) otherwise
+    /// launders the capture past both the callee's return guard (a param ref passes it) and this
+    /// caller's store guard (the tree-walk does not descend past invocations). Results that are NOT
+    /// delegate-capable stay legal: the capture is consumed by the callee (fcd37's
+    /// `int Apply(Func&lt;int,int&gt; fn, int v)` — int cannot carry a bundle).</summary>
     protected bool IsTaintedDelegateInvocationResult(IOperation value)
     {
         var v = value;
         while (v is IConversionOperation conv) v = conv.Operand;
         if (v is not IInvocationOperation inv) return false;
-        if (inv.Type is not INamedTypeSymbol nt || nt.DelegateInvokeMethod == null) return false;
+        if (!IsDelegateCapableType(inv.Type)) return false;
         foreach (var arg in inv.Arguments)
             if (arg.Value != null && ContainsCapturingLambdaOrTaintedRead(arg.Value)) return true;
         return false;
@@ -875,9 +1000,18 @@ public abstract class HandlerBase
             case ILocalReferenceOperation lr:
                 return _ctx.CapturingLambdaLocals.Contains(lr.Local);
             case IParameterReferenceOperation pr:
-                return pr.Parameter.Type is INamedTypeSymbol pnt && pnt.DelegateInvokeMethod != null;
+                // Delegate-proper (or unresolved-T) param reads only: object/tuple params cannot
+                // legally hold a bundle (their call sites are sealed by GuardCaptureEscapeArguments),
+                // so plumbing an object param onward stays legal.
+                return IsDelegateProperType(pr.Parameter.Type)
+                    || ResolveType(pr.Parameter.Type) is ITypeParameterSymbol;
             case IInvocationOperation inv:
                 return IsTaintedDelegateInvocationResult(inv);
+            // §2.8 round-2: member reads carry taint too (recipient members / param-rooted envelope
+            // reads). A non-matching member read falls through to the children walk so taint inside
+            // the INSTANCE expression (e.g. `TaintedCall().field`) is still found.
+            case IFieldReferenceOperation or IPropertyReferenceOperation when IsLaunderingMemberRead(op):
+                return true;
         }
         foreach (var child in op.Children)
             if (child != null && ContainsCapturingLambdaOrTaintedRead(child)) return true;
@@ -895,7 +1029,10 @@ public abstract class HandlerBase
     /// </summary>
     protected void GuardBuriedCapturingLambda(IOperation value)
     {
-        if (value?.Type is not INamedTypeSymbol nt || nt.DelegateInvokeMethod == null) return;
+        // §2.8 round-2: the gate is delegate-CAPABLE (object / tuple-with-delegate / unresolved type
+        // param), not delegate-typed — tuple literals and object-typed composites erase the delegate
+        // typing but carry the bundle all the same (VM-verified laundering).
+        if (value == null || !IsDelegateCapableType(value.Type)) return;
         var v = value;
         while (v is IConversionOperation conv) v = conv.Operand;
         if (v is IDelegateCreationOperation) return;
@@ -929,22 +1066,25 @@ public abstract class HandlerBase
     {
         GuardBuriedCapturingLambda(value);
         if (IsDirectCapturingLambda(value) || IsCaptureTaintedRead(value)
-            || IsTaintedDelegateInvocationResult(value) || IsDelegateParamRead(value))
+            || IsTaintedDelegateInvocationResult(value) || IsDelegateParamRead(value)
+            || IsLaunderingMemberRead(value))
             throw new System.NotSupportedException(CaptureEscapeError);
     }
 
     /// <summary>
     /// §2.8(b) capture-escape guard for RETURN values. Differs from the array-initializer guard in
-    /// exactly one way: returning a delegate-typed PARAM stays legal (`Id(x) { return x; }` is the
-    /// supported method-group / capture-free flow; the CALLER's invocation-result taint guards a
-    /// laundered result), while a capturing lambda, a tainted-local read, or a tainted invocation
-    /// result (`return Id(x =&gt; x + a);`) is loud.
+    /// exactly one way: returning a delegate-typed PARAM — or a param-rooted member read of one —
+    /// stays legal (`Id(x) { return x; }` is the supported method-group / capture-free flow; the
+    /// CALLER's invocation-result taint guards a laundered result), while a capturing lambda, a
+    /// tainted-local read, a tainted invocation result (`return Id(x =&gt; x + a);`), or a read of a
+    /// capture-RECEIVING member (`return cb;` after `cb = () =&gt; v;` — a zero-arg laundering shape
+    /// the caller-side rule cannot see, VM-verified wrong) is loud.
     /// </summary>
     protected void GuardCaptureEscapeReturn(IOperation value)
     {
         GuardBuriedCapturingLambda(value);
         if (IsDirectCapturingLambda(value) || IsCaptureTaintedRead(value)
-            || IsTaintedDelegateInvocationResult(value))
+            || IsTaintedDelegateInvocationResult(value) || IsCaptureReceivingMemberRead(value))
             throw new System.NotSupportedException(CaptureEscapeError);
     }
 
@@ -965,7 +1105,8 @@ public abstract class HandlerBase
 
         bool direct = IsDirectCapturingLambda(value);
         bool tainted = IsCaptureTaintedRead(value)
-            || IsTaintedDelegateInvocationResult(value) || IsDelegateParamRead(value);
+            || IsTaintedDelegateInvocationResult(value) || IsDelegateParamRead(value)
+            || IsLaunderingMemberRead(value);
         if (!direct && !tainted) return;
 
         if (target is IArrayElementReferenceOperation || IsObjectish(target.Type))
@@ -984,9 +1125,36 @@ public abstract class HandlerBase
                 return;
             case IFieldReferenceOperation or IPropertyReferenceOperation when tainted:
                 throw new System.NotSupportedException(CaptureEscapeError);
+            // §2.8 round-2 (H6): a PARAMETER store target is an unguarded escape — an out/ref param
+            // write hands the capture to the caller's local with no taint mechanism (VM-verified
+            // wrong values), and a by-value param assigned a capturing lambda can launder through
+            // the param-ref-return legality. Reaching this arm implies direct || tainted, so reject
+            // all RefKinds; capture-free lambda / method-group param defaulting stays legal.
+            case IParameterReferenceOperation:
+                throw new System.NotSupportedException(CaptureEscapeError);
+            // §2.8 round-2: a direct capturing-lambda store into ANOTHER behaviour class's member
+            // cannot be recipient-tracked there (per-class pre-scan), so the read-back side would be
+            // silent — loud here instead. Same-class / base-class members stay legal (recorded).
+            case IFieldReferenceOperation crossF when IsForeignClassMember(crossF.Field):
+                throw new System.NotSupportedException(CaptureEscapeError);
+            case IPropertyReferenceOperation crossP when IsForeignClassMember(crossP.Property):
+                throw new System.NotSupportedException(CaptureEscapeError);
             default:
                 return;
         }
+    }
+
+    /// <summary>Member of a CLASS other than the one being emitted (or its bases) — the per-class
+    /// recipient pre-scan cannot make that class's reads loud. Struct members are not foreign:
+    /// struct values cross call boundaries as params, where the param-rooted member-read taint
+    /// applies in the receiving method regardless of class.</summary>
+    protected bool IsForeignClassMember(ISymbol member)
+    {
+        var ct = member?.ContainingType;
+        if (ct == null || ct.TypeKind != TypeKind.Class) return false;
+        for (var t = _ctx.ClassSymbol; t != null; t = t.BaseType)
+            if (SymbolEqualityComparer.Default.Equals(t, ct)) return false;
+        return true;
     }
 
     // ── Delegate bridge resolution ──

@@ -341,6 +341,10 @@ public partial class InvocationHandler
 
     CLeaf VisitObjectCreation(IObjectCreationOperation op)
     {
+        // §2.8 round-2: ctor arguments are call-boundary escapes too — a capturing lambda passed
+        // to an erasing-typed (object / delegate-tuple / T=object) ctor param is loud.
+        GuardCaptureEscapeArguments(op.Arguments);
+
         var resultType = GetUdonType(op.Type);
 
         // UdonSharpBehaviour subclasses cannot be instantiated at runtime —

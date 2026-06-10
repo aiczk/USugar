@@ -1347,6 +1347,18 @@ public class UasmEmitter
             edges[m] = callees;
         }
 
+        // §2.8 round-2: pre-scan every root body + field initializer for DIRECT capturing-lambda
+        // stores into fields / auto-properties / struct members (simple, coalesce, and deconstruction
+        // assignment shapes — the only legal ways a capturing lambda enters a member; tainted-equivalent
+        // member stores are loud rejects). Runs BEFORE body emission so the guards' member-read taint
+        // (HandlerBase.IsLaunderingMemberRead) is independent of method emission order. Local-function
+        // bodies are part of their root's operation tree, so walking roots covers them.
+        foreach (var m in roots)
+            if (bodies.TryGetValue(m, out var rb))
+                CollectCaptureReceivingMembers(rb);
+        foreach (var (_, initOp, _) in _fieldInitOps)
+            CollectCaptureReceivingMembers(initOp);
+
         // ── §4.2 graph extension: lambda nodes, EscapeSet, synthetic edges ──
 
         // (a) Lambda nodes. Collected from the ROOT-method bodies and the field-initializer operations
@@ -1428,6 +1440,49 @@ public class UasmEmitter
         }
         _ctx.RecursiveCallees = recursive;
         _ctx.ReentrantDispatchSites = reentrantSites;
+    }
+
+    // §2.8 round-2 pre-scan: record member symbols that receive a DIRECT capturing-lambda store.
+    // Covers simple assignment (cb = () => v), coalesce assignment (cb ??= () => v), deconstruction
+    // tuple-literal element stores ((f, g) = (() => v, M)), and object-initializer member assignments
+    // (new S { f = () => v } — an ISimpleAssignmentOperation in the tree). Full descent.
+    void CollectCaptureReceivingMembers(IOperation op)
+    {
+        if (op == null) return;
+        switch (op)
+        {
+            case ISimpleAssignmentOperation sa:
+                RecordIfCapturingMemberStore(sa.Target, sa.Value);
+                break;
+            case ICoalesceAssignmentOperation ca:
+                RecordIfCapturingMemberStore(ca.Target, ca.Value);
+                break;
+            case IDeconstructionAssignmentOperation da:
+            {
+                var tgt = da.Target is IDeclarationExpressionOperation de ? de.Expression : da.Target;
+                var val = da.Value;
+                while (val is IConversionOperation c) val = c.Operand;
+                if (tgt is ITupleOperation tt && val is ITupleOperation vt)
+                    for (int i = 0; i < tt.Elements.Length && i < vt.Elements.Length; i++)
+                        RecordIfCapturingMemberStore(tt.Elements[i], vt.Elements[i]);
+                break;
+            }
+        }
+        foreach (var child in op.Children)
+            CollectCaptureReceivingMembers(child);
+    }
+
+    void RecordIfCapturingMemberStore(IOperation target, IOperation value)
+    {
+        var v = value;
+        while (v is IConversionOperation conv) v = conv.Operand;
+        if (!(v is IDelegateCreationOperation dc) || !(dc.Target is IAnonymousFunctionOperation lambda)) return;
+        if (!_ctx.CaptureAnalyzer.HasCaptures(lambda)) return;
+        switch (target)
+        {
+            case IFieldReferenceOperation fr: _ctx.CaptureReceivingMembers.Add(fr.Field); break;
+            case IPropertyReferenceOperation pr: _ctx.CaptureReceivingMembers.Add(pr.Property); break;
+        }
     }
 
     // Collect every lambda (anonymous function) with its body — each becomes its own SCC node (§4.2).

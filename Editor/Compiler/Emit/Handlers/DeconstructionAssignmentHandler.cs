@@ -153,6 +153,10 @@ public class DeconstructionAssignmentHandler : AssignmentHandlerBase, IOperation
     void EmitCrossBehaviourTupleDeconstruction(IInvocationOperation invocation, IMethodSymbol callTarget,
         ITupleOperation targetTuple, bool isCrossBehaviour)
     {
+        // §2.8 round-2: this manual emission path bypasses InvocationHandler, so the erasing-typed
+        // argument guard must run here too.
+        GuardCaptureEscapeArguments(invocation.Arguments);
+
         // Get layout for the target method
         ReturnSlot[] callReturns;
         string exportName;

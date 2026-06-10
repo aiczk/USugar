@@ -26,6 +26,11 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
 
     CLeaf VisitInvocation(IInvocationOperation op)
     {
+        // §2.8 round-2: capturing lambdas / tainted reads must not enter ERASING-typed params
+        // (object / delegate-tuple / T=object) — the callee is type-blind there (VM-verified
+        // laundering). Delegate-proper params stay unguarded (fcd37).
+        GuardCaptureEscapeArguments(op.Arguments);
+
         var target = op.TargetMethod;
 
         // Resolve type parameters in generic method type arguments (e.g., Min<T> → Min<int>)

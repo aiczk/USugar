@@ -517,6 +517,349 @@ public class ApplyCap : UdonSharpBehaviour {
         Assert.NotNull(uasm);
     }
 
+    // ── Capture-escape laundering, round 2: tuple/object/type-param erasure, out/ref params,
+    //    member-read round-trips (all VM-reproduced silent-wrong pre-fix; see the local-harness
+    //    FcdLaunderProbes2 for the real-VM contract probes) ──
+
+    [Fact]
+    public void TupleReturnEnvelope_CapturingLambda_Throws()
+    {
+        // [H1a] tuples erase delegate typing: (Func<int>,int) Mk(a){return (()=>a*3,a);} compiled
+        // clean and shipped VM 68 vs CLR 56 — loud at Mk's return now.
+        var ex = Assert.ThrowsAny<Exception>(() => TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public class TupleRet : UdonSharpBehaviour {
+    public int result;
+    void Start() { var (f1, n1) = Mk(5); var (f2, n2) = Mk(9); result = f1() + f2() + n1 + n2; }
+    (Func<int>, int) Mk(int a) { return (() => a * 3, a); }
+}", "TupleRet"));
+        Assert.Contains("capture", ex.Message);
+    }
+
+    [Fact]
+    public void TupleParamMemberRead_ArrayStore_Throws()
+    {
+        // [H1b] KeepT((Func<int>,int) t){fs[k]=t.Item1;} — t.Item1 is an IFieldReferenceOperation,
+        // not a bare param read; VM 60 vs CLR 30 pre-fix. Param-rooted delegate member reads are
+        // tainted-equivalent at escaping stores (and the caller's tuple ARG is guarded too).
+        var ex = Assert.ThrowsAny<Exception>(() => TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public class TupleKeep : UdonSharpBehaviour {
+    public int sum;
+    int k;
+    Func<int>[] fs;
+    void Start() { fs = new Func<int>[3]; for (int i = 0; i < 3; i++) { int v = i * 10; KeepT((() => v, 0)); } sum = fs[0]() + fs[1]() + fs[2](); }
+    void KeepT((Func<int>, int) t) { fs[k] = t.Item1; k = k + 1; }
+}", "TupleKeep"));
+        Assert.Contains("capture", ex.Message);
+    }
+
+    [Fact]
+    public void TupleLiteralLocalDecl_CapturingLambda_Throws()
+    {
+        // [H2] aggregate local declarations bypassed the scalar guard block entirely:
+        // var t=((Func<int>)(()=>v),0);fs[i]=t.Item1; shipped VM 60 vs CLR 30. The aggregate
+        // declaration path now guards the initializer and each tuple-literal element.
+        var ex = Assert.ThrowsAny<Exception>(() => TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public class TupleDecl : UdonSharpBehaviour {
+    public int sum;
+    Func<int>[] fs;
+    void Start() { fs = new Func<int>[3]; for (int i = 0; i < 3; i++) { int v = i * 10; var t = ((Func<int>)(() => v), 0); fs[i] = t.Item1; } sum = fs[0]() + fs[1]() + fs[2](); }
+}", "TupleDecl"));
+        Assert.Contains("capture", ex.Message);
+    }
+
+    [Fact]
+    public void GenericObjectIdentity_Laundered_Throws()
+    {
+        // [H3a] T Id<T>(T x){return x;} at T=object laundered (VM 60 vs CLR 30): the capturing
+        // lambda must not enter the object-resolved param — loud at the argument now.
+        var ex = Assert.ThrowsAny<Exception>(() => TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public class GenObjId : UdonSharpBehaviour {
+    public int sum;
+    Func<int>[] fs;
+    void Start() { fs = new Func<int>[3]; for (int i = 0; i < 3; i++) { int v = i * 10; object o = Id<object>((Func<int>)(() => v)); fs[i] = (Func<int>)o; } sum = fs[0]() + fs[1]() + fs[2](); }
+    T Id<T>(T x) { return x; }
+}", "GenObjId"));
+        Assert.Contains("capture", ex.Message);
+    }
+
+    [Fact]
+    public void ObjectIdentity_Laundered_Throws()
+    {
+        // [H3b] object IdO(object x){return x;} laundered (VM 60 vs CLR 30) — loud at the
+        // capturing-lambda argument to the object param.
+        var ex = Assert.ThrowsAny<Exception>(() => TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public class ObjId : UdonSharpBehaviour {
+    public int sum;
+    Func<int>[] fs;
+    void Start() { fs = new Func<int>[3]; for (int i = 0; i < 3; i++) { int v = i * 10; fs[i] = (Func<int>)IdO((Func<int>)(() => v)); } sum = fs[0]() + fs[1]() + fs[2](); }
+    object IdO(object x) { return x; }
+}", "ObjId"));
+        Assert.Contains("capture", ex.Message);
+    }
+
+    [Fact]
+    public void AutoPropertyRoundTrip_ArrayStore_Throws()
+    {
+        // [H4] P=()=>v;fs[i]=P; — ONE lambda with multiple live activations aliases its own flat
+        // capture slot, below the aliasing detector's 2+ threshold (VM 60 vs CLR 30). Reads of a
+        // capture-RECEIVING member are tainted-equivalent at escaping stores.
+        var ex = Assert.ThrowsAny<Exception>(() => TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public class PropTrip : UdonSharpBehaviour {
+    public int sum;
+    Func<int>[] fs;
+    Func<int> P { get; set; }
+    void Start() { fs = new Func<int>[3]; for (int i = 0; i < 3; i++) { int v = i * 10; P = () => v; fs[i] = P; } sum = fs[0]() + fs[1]() + fs[2](); }
+}", "PropTrip"));
+        Assert.Contains("capture", ex.Message);
+    }
+
+    [Fact]
+    public void CapturingLambdaArg_ObjectParam_Throws()
+    {
+        // [H5a] KeepObj(object x){objs[k]=x;} laundered (VM 60 vs CLR 30). The object param is
+        // sealed at the CALL SITE (the callee is type-blind; tainting every object param read
+        // would reject ordinary object plumbing like the stock LocalFunctionTest).
+        var ex = Assert.ThrowsAny<Exception>(() => TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public class KeepObj : UdonSharpBehaviour {
+    public int sum;
+    int k;
+    object[] objs;
+    void Start() { objs = new object[3]; for (int i = 0; i < 3; i++) { int v = i * 10; Keep((Func<int>)(() => v)); } sum = ((Func<int>)objs[0])() + ((Func<int>)objs[1])() + ((Func<int>)objs[2])(); }
+    void Keep(object x) { objs[k] = x; k = k + 1; }
+}", "KeepObj"));
+        Assert.Contains("capture", ex.Message);
+    }
+
+    [Fact]
+    public void GenericDelegateInstantiation_ParamArrayStore_Throws()
+    {
+        // [H5b] Keep<T>(T[] a,int i,T x){a[i]=x;} at T=Func<int> laundered (VM 60 vs CLR 30):
+        // the emitted body keeps Parameter.Type == T, so the guard resolves T through the
+        // type-param map — the delegate instantiation rejects, Keep<int> keeps compiling.
+        var ex = Assert.ThrowsAny<Exception>(() => TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public class GenKeep : UdonSharpBehaviour {
+    public int sum;
+    Func<int>[] fs;
+    void Start() { fs = new Func<int>[3]; for (int i = 0; i < 3; i++) { int v = i * 10; Keep<Func<int>>(fs, i, () => v); } sum = fs[0]() + fs[1]() + fs[2](); }
+    void Keep<T>(T[] a, int i, T x) { a[i] = x; }
+}", "GenKeep"));
+        Assert.Contains("capture", ex.Message);
+    }
+
+    [Fact]
+    public void OutParamCapturingLambdaWrite_Throws()
+    {
+        // [H6] out/ref delegate param writes escaped to the caller's local with no taint
+        // (VM 60 vs CLR 30): a capturing lambda (or tainted value) stored into ANY parameter
+        // is loud (out/ref hands it to the caller; by-value could launder via param-ref return).
+        var ex = Assert.ThrowsAny<Exception>(() => TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public class OutMk : UdonSharpBehaviour {
+    public int sum;
+    Func<int>[] fs;
+    void Start() { fs = new Func<int>[3]; for (int i = 0; i < 3; i++) { int v = i * 10; Func<int> f; Mk(v, out f); fs[i] = f; } sum = fs[0]() + fs[1]() + fs[2](); }
+    void Mk(int v, out Func<int> f) { f = () => v; }
+}", "OutMk"));
+        Assert.Contains("capture", ex.Message);
+    }
+
+    [Fact]
+    public void RefParamCapturingLambdaWrite_Throws()
+    {
+        var ex = Assert.ThrowsAny<Exception>(() => TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public class RefMk : UdonSharpBehaviour {
+    public int sum;
+    Func<int>[] fs;
+    void Start() { fs = new Func<int>[3]; for (int i = 0; i < 3; i++) { int v = i * 10; Func<int> f = null; Mk(v, ref f); fs[i] = f; } sum = fs[0]() + fs[1]() + fs[2](); }
+    void Mk(int v, ref Func<int> f) { f = () => v; }
+}", "RefMk"));
+        Assert.Contains("capture", ex.Message);
+    }
+
+    [Fact]
+    public void CaptureReceivingFieldRead_ArrayStore_Throws()
+    {
+        // [H7a] cb=()=>v;fs[i]=cb; — the member store is legal (one live bundle is correct), but
+        // copying the member out re-creates single-lambda multi-activation aliasing (VM 40 vs
+        // CLR 30). The recipient set is PRE-SCANNED before emission, so the reject is independent
+        // of method emission order.
+        var ex = Assert.ThrowsAny<Exception>(() => TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public class FieldTrip : UdonSharpBehaviour {
+    public int sum;
+    Func<int> cb;
+    Func<int>[] fs;
+    void Start() { fs = new Func<int>[2]; for (int i = 0; i < 2; i++) { int v = (i + 1) * 10; cb = () => v; fs[i] = cb; } sum = fs[0]() + fs[1](); }
+}", "FieldTrip"));
+        Assert.Contains("capture", ex.Message);
+    }
+
+    [Fact]
+    public void CaptureReceivingFieldRead_Return_Throws()
+    {
+        // [H7b] Get(){return cb;} fs[i]=Get(); — a zero-arg delegate-typed invocation result is
+        // untainted by construction (the caller-side rule sees only arguments), so the RETURN of
+        // a capture-receiving member goes loud instead (VM 40 vs CLR 30 pre-fix).
+        var ex = Assert.ThrowsAny<Exception>(() => TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public class FieldGet : UdonSharpBehaviour {
+    public int sum;
+    Func<int> cb;
+    Func<int>[] fs;
+    void Start() { fs = new Func<int>[2]; for (int i = 0; i < 2; i++) { int v = (i + 1) * 10; cb = () => v; fs[i] = Get(); } sum = fs[0]() + fs[1](); }
+    Func<int> Get() { return cb; }
+}", "FieldGet"));
+        Assert.Contains("capture", ex.Message);
+    }
+
+    [Fact]
+    public void StructEnvelopeParamMemberRead_ArrayStore_Throws()
+    {
+        // [H7c] s.f=()=>v;Keep(s); with Keep(RS5 s){fs[k]=s.f;} — the stored value is a member
+        // read, not a param read (VM 60 vs CLR 30). Covered twice: RS5.f is a capture-receiving
+        // member (pre-scan), and s.f is a param-rooted delegate member read.
+        var ex = Assert.ThrowsAny<Exception>(() => TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public struct RS5 { public Func<int> f; }
+public class StructEnv : UdonSharpBehaviour {
+    public int sum;
+    int k;
+    Func<int>[] fs;
+    void Start() { fs = new Func<int>[3]; for (int i = 0; i < 3; i++) { int v = i * 10; RS5 s; s.f = () => v; Keep(s); } sum = fs[0]() + fs[1]() + fs[2](); }
+    void Keep(RS5 s) { fs[k] = s.f; k = k + 1; }
+}", "StructEnv"));
+        Assert.Contains("capture", ex.Message);
+    }
+
+    [Fact]
+    public void CrossBehaviourCapturingLambdaFieldStore_Throws()
+    {
+        // The recipient pre-scan is per-class: a capturing lambda stored into ANOTHER behaviour's
+        // member could not make that class's reads loud, so the cross-class direct store itself
+        // is loud. Method-group cross-behaviour stores (fcd22) stay legal.
+        var ex = Assert.ThrowsAny<Exception>(() => TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public class CrossTarget : UdonSharpBehaviour {
+    public Func<int> cb;
+}
+public class CrossStore : UdonSharpBehaviour {
+    public CrossTarget other;
+    void Start() { int v = 3; other.cb = () => v; }
+}", "CrossStore"));
+        Assert.Contains("capture", ex.Message);
+    }
+
+    // ── Round-2 precision pins: the legal flows the widened guards must NOT break ──
+
+    [Fact]
+    public void ObjectParamPlumbing_StoredIntoObjectArray_Compiles()
+    {
+        // The stock-UdonSharp LocalFunctionTest shape: object params are NOT tainted (their call
+        // sites are sealed instead), so ordinary object plumbing keeps compiling.
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public class ObjPlumb : UdonSharpBehaviour {
+    public int result;
+    object[] objs;
+    void Start() { objs = new object[2]; Add(objs, (Func<int>)Five); result = ((Func<int>)objs[0])(); }
+    void Add(object[] a, object b) { a[0] = b; }
+    int Five() { return 5; }
+}", "ObjPlumb");
+        Assert.NotNull(uasm);
+    }
+
+    [Fact]
+    public void GenericIntInstantiation_ParamArrayStore_Compiles()
+    {
+        // H5b precision: the SAME Keep<T> body at T=int stays legal — the guard resolves T
+        // through the type-param map instead of blanket-rejecting generic params.
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public class GenKeepInt : UdonSharpBehaviour {
+    public int sum;
+    void Start() { int[] ks = new int[3]; for (int i = 0; i < 3; i++) { Keep<int>(ks, i, i * 10); } sum = ks[0] + ks[1] + ks[2]; }
+    void Keep<T>(T[] a, int i, T x) { a[i] = x; }
+}", "GenKeepInt");
+        Assert.NotNull(uasm);
+    }
+
+    [Fact]
+    public void MethodGroupField_SwapCopyAndReturn_Compiles()
+    {
+        // H7 precision (fcd26 + Get shape): member-read taint is RECIPIENT-narrowed — fields that
+        // only ever received method groups stay copyable, swappable, and returnable.
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public class MgSwap : UdonSharpBehaviour {
+    public int result;
+    Func<int, int> a;
+    Func<int, int> b;
+    void Start() { a = AddOne; b = Dec; Func<int, int> t = a; a = b; b = t; var g = Get(); result = a(10) * 100 + b(10) + g(1); }
+    Func<int, int> Get() { return a; }
+    int AddOne(int x) { return x + 1; }
+    int Dec(int x) { return x - 1; }
+}", "MgSwap");
+        Assert.NotNull(uasm);
+    }
+
+    [Fact]
+    public void IntTupleReturnAndDeconstruct_Compiles()
+    {
+        // H1 precision: tuples without delegate-capable elements are untouched by the widenings.
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public class IntTuple : UdonSharpBehaviour {
+    public int result;
+    void Start() { var (x, y) = Mk(5); result = x + y; }
+    (int, int) Mk(int a) { return (a * 3, a); }
+}", "IntTuple");
+        Assert.NotNull(uasm);
+    }
+
+    [Fact]
+    public void CaptureReceivingField_InvokeOnly_Compiles()
+    {
+        // H4/H7 precision: storing a capturing lambda into a member and INVOKING it stays legal
+        // (one live bundle at a time is correct); only escaping READS of the member go loud.
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public class CbInvoke : UdonSharpBehaviour {
+    public int seed;
+    public int result;
+    Func<int> cb;
+    void Start() { int v = seed + 5; cb = () => v; result = cb(); }
+}", "CbInvoke");
+        Assert.NotNull(uasm);
+    }
+
     // ── Type map + cast audit ──
 
     [Fact]
