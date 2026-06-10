@@ -1289,7 +1289,7 @@ public class DelegateCaller : UdonSharpBehaviour {
         target.callback = () => { };
     }
 }" }, "DelegateCaller");
-        // Cross-behaviour delegate assignment emits 3x SetProgramVariable for the bundle
+        // Cross-behaviour delegate assignment ships the bundle reference in ONE SetProgramVariable
         Assert.Contains("SetProgramVariable", uasm);
     }
 
@@ -1332,34 +1332,35 @@ public class Dummy : UdonSharp.UdonSharpBehaviour { void Start() { } }
         Assert.Contains("Record type", ex.Message);
     }
 
-    // ── Delegate value as argument: rejected ──
-    // A delegate local/param passed as an argument has no convention rebinding — the callee
-    // would read never-written __dlg_* convention vars and return default(T) (silent miscompile,
-    // found by adversarial review). Must throw, not compile.
+    // ── Delegate value as argument: ordinary bundle value (design §2.4, fcd15/16) ──
+    // M2 replaced the old per-call-site convention rebinding (and its B27 reject) with the single
+    // SystemObjectArray bundle ABI: a delegate local/param/field passed as an argument is a plain
+    // reference copy into the callee's bundle param; the callee dispatches it through the unified
+    // EmitDelegateDispatch guard ladder.
 
     [Fact]
-    public void DelegateLocalAsArgument_ThrowsNotSupported()
+    public void DelegateLocalAsArgument_PassesBundleValue()
     {
-        var ex = Assert.ThrowsAny<Exception>(() => TestHelper.CompileToUasm(@"
+        var uasm = TestHelper.CompileToUasm(@"
 using UdonSharp;
 using System;
 public class DlgLocalArg : UdonSharpBehaviour {
     public int result;
     void Start() {
-        int x = 5;
-        Func<int> f = () => x;
-        Run(f);
+        Func<int, int> d = x => x * 3;
+        result = Apply(d, 5);
     }
-    void Run(Func<int> g) { result = g(); }
-}", "DlgLocalArg"));
-        Assert.Contains("delegate value", ex.Message);
-        Assert.Contains("lambda literal", ex.Message);
+    int Apply(Func<int, int> fn, int v) { return fn(v); }
+}", "DlgLocalArg");
+        Assert.Contains("SystemObjectArray.__ctor__SystemInt32__SystemObjectArray", uasm);
+        Assert.Contains("JUMP_INDIRECT", uasm);
+        Assert.Contains("__dlgc_SystemInt32__SystemInt32__a0", uasm);
     }
 
     [Fact]
-    public void DelegateParamPassedDown_ThrowsNotSupported()
+    public void DelegateParamPassedDown_PassesBundleValue()
     {
-        var ex = Assert.ThrowsAny<Exception>(() => TestHelper.CompileToUasm(@"
+        var uasm = TestHelper.CompileToUasm(@"
 using UdonSharp;
 using System;
 public class DlgParamPassDown : UdonSharpBehaviour {
@@ -1367,13 +1368,13 @@ public class DlgParamPassDown : UdonSharpBehaviour {
     void Start() { Outer(() => 7); }
     void Outer(Func<int> f) { Inner(f); }
     void Inner(Func<int> g) { result = g(); }
-}", "DlgParamPassDown"));
-        Assert.Contains("delegate value", ex.Message);
+}", "DlgParamPassDown");
+        // Param-to-param pass is a plain reference copy between SystemObjectArray param fields.
+        Assert.Contains("JUMP_INDIRECT", uasm);
+        Assert.Contains("__dlgc_Void__SystemInt32__ret", uasm);
     }
 
-    // ── Cross-behaviour delegate: self-assign + invoke ──
-    // Note: delegate bundle (3-var expansion) requires public fields.
-    // Private delegate fields remain as SystemUInt32 function pointers.
+    // ── Delegate field: self-assign + invoke (single-bundle ABI, design §2.1/§2.2/§2.6) ──
 
     [Fact]
     public void DelegateField_SelfAssignAndInvoke_Compiles()
@@ -1389,9 +1390,10 @@ public class SelfDlgInvoke : UdonSharpBehaviour {
     }
     void MyMethod() { }
 }", "SelfDlgInvoke");
-        Assert.Contains("callback__target", uasm);
-        Assert.Contains("callback__method", uasm);
-        Assert.Contains("callback__addr", uasm);
+        // ONE SystemObjectArray heap var holds the bundle reference (no 3-var expansion).
+        Assert.Contains("callback: %SystemObjectArray", uasm);
+        Assert.Contains("SystemObjectArray.__ctor__SystemInt32__SystemObjectArray", uasm);
+        Assert.Contains("SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid", uasm);
         Assert.Contains("JUMP_INDIRECT", uasm);
         Assert.Contains("__dlg_MyMethod", uasm);
     }
@@ -1399,8 +1401,9 @@ public class SelfDlgInvoke : UdonSharpBehaviour {
     [Fact]
     public void PrivateDelegateField_Invoke_BundleNotExported()
     {
-        // A PRIVATE delegate field is now bundle-expanded and invokable (previously threw "Cannot resolve
-        // delegate target"). Its bundle target must NOT be exported — the only difference from a public field.
+        // A PRIVATE delegate field is a single non-exported SystemObjectArray bundle var, invokable
+        // through the unified dispatch like a public one (design §1.6: delegate fields are never
+        // exported — SetProgramVariable needs no export).
         var uasm = TestHelper.CompileToUasm(@"
 using UdonSharp;
 using System;
@@ -1410,9 +1413,9 @@ public class PrivDlgInvoke : UdonSharpBehaviour {
     void Start() { cb = Dbl; outv = cb(21); }
     int Dbl(int x) { return x * 2; }
 }", "PrivDlgInvoke");
-        Assert.Contains("cb__addr", uasm);
+        Assert.Contains("cb: %SystemObjectArray", uasm);
         Assert.Contains("JUMP_INDIRECT", uasm);
-        Assert.DoesNotContain(".export cb__target", uasm);
+        Assert.DoesNotContain(".export cb", uasm);
     }
 
     // ── Cross-behaviour delegate: cross-assign ──
@@ -1507,6 +1510,7 @@ public class FuncDlgTest : UdonSharpBehaviour {
     [Fact]
     public void DelegateField_NullAssignment_Compiles()
     {
+        // d = null is ONE reference store into the single bundle var (design §2.3).
         var uasm = TestHelper.CompileToUasm(@"
 using UdonSharp;
 using System;
@@ -1514,14 +1518,17 @@ public class NullDlg : UdonSharpBehaviour {
     public Action callback;
     void Start() { callback = null; }
 }", "NullDlg");
-        Assert.Contains("callback__target", uasm);
+        Assert.Contains("callback: %SystemObjectArray", uasm);
+        Assert.DoesNotContain("callback__target", uasm);
     }
 
     // ── Null check ──
 
     [Fact]
-    public void DelegateField_NullCheck_ChecksTarget()
+    public void DelegateField_NullCheck_ComparesBundleReference()
     {
+        // d != null is a reference null check on the BUNDLE itself (design §2.5 — [0] is a
+        // different condition; the old ABI checked the expanded __target var).
         var uasm = TestHelper.CompileToUasm(@"
 using UdonSharp;
 using System;
@@ -1529,8 +1536,9 @@ public class NullCheckDlg : UdonSharpBehaviour {
     public Action callback;
     void Start() { if (callback != null) { } }
 }", "NullCheckDlg");
-        Assert.Contains("callback__target", uasm);
-        Assert.Contains("op_Inequality", uasm);
+        Assert.Contains("callback: %SystemObjectArray", uasm);
+        Assert.Contains("SystemObject.__op_Inequality__SystemObject_SystemObject__SystemBoolean", uasm);
+        Assert.DoesNotContain("callback__target", uasm);
     }
 
     // ── ?.Invoke() ──
@@ -1538,6 +1546,8 @@ public class NullCheckDlg : UdonSharpBehaviour {
     [Fact]
     public void DelegateField_NullSafeInvoke_Compiles()
     {
+        // ?.Invoke null-guards the bundle leaf itself and is C#-strict on null: silent skip,
+        // no LogError arm (design §2.6 — only the plain-invoke deviation logs).
         var uasm = TestHelper.CompileToUasm(@"
 using UdonSharp;
 using System;
@@ -1549,7 +1559,9 @@ public class NullSafeDlg : UdonSharpBehaviour {
     }
     void MyMethod() { }
 }", "NullSafeDlg");
-        Assert.Contains("callback__target", uasm);
+        Assert.Contains("callback: %SystemObjectArray", uasm);
+        Assert.Contains("JUMP_INDIRECT", uasm);
+        Assert.DoesNotContain("LogError", uasm);
     }
 
     // ── Delegate comparison ──
@@ -1557,6 +1569,8 @@ public class NullSafeDlg : UdonSharpBehaviour {
     [Fact]
     public void DelegateField_Comparison_ComparesTargetAndMethod()
     {
+        // Element-wise (target, method) value equality via __Get on bundle [0]/[1] — semantics
+        // unchanged from the 3-var ABI; addr is always excluded (design §2.5).
         var uasm = TestHelper.CompileToUasm(@"
 using UdonSharp;
 using System;
@@ -1571,11 +1585,33 @@ public class DlgCmp : UdonSharpBehaviour {
     void Foo() { }
     void Bar() { }
 }", "DlgCmp");
-        Assert.Contains("a__target", uasm);
-        Assert.Contains("b__target", uasm);
-        Assert.Contains("a__method", uasm);
-        Assert.Contains("b__method", uasm);
-        Assert.Contains("op_Equality", uasm);
+        Assert.Contains("SystemObjectArray.__Get__SystemInt32__SystemObject", uasm);
+        Assert.Contains("SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean", uasm);
+        Assert.Contains("SystemString.__op_Equality__SystemString_SystemString__SystemBoolean", uasm);
+    }
+
+    // ── Null-invoke deviation pin (design §2.6/§8-8) ──
+
+    [Fact]
+    public void DelegateField_NullInvoke_LogsErrorAndGuardsJumpIndirect()
+    {
+        // Plain d() on a null delegate deviates from C#: LogError + skip + default(T) result —
+        // never a VM halt, never P5d's silent jump-to-0. The dispatch JUMP_INDIRECT must be
+        // dominated by the guard ladder (a JUMP_IF_FALSE precedes it).
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public class NullInvokeDlg : UdonSharpBehaviour {
+    public Func<int> getter;
+    public int result;
+    void Start() { result = getter(); }
+}", "NullInvokeDlg");
+        Assert.Contains("UnityEngineDebug.__LogError__SystemObject__SystemVoid", uasm);
+        var lines = uasm.Split('\n');
+        var jiIdx = Array.FindIndex(lines, l => l.Contains("JUMP_INDIRECT, __intnl_dlgptr"));
+        Assert.True(jiIdx > 0, "expected the dispatch JUMP_INDIRECT (dlgptr temp)");
+        Assert.True(Array.FindIndex(lines, 0, jiIdx, l => l.Contains("JUMP_IF_FALSE")) >= 0,
+            "the dispatch JUMP_INDIRECT must be guard-dominated");
     }
 
     // ── += throws ──

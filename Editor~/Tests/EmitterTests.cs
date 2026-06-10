@@ -3605,10 +3605,12 @@ public class IndexerTest : UdonSharpBehaviour {
     }
 
     [Fact]
-    public void RecursiveLambda_Local_SpillsToRecursionStack()
+    public void RecursiveLambda_Local_CompilesViaBundleDispatch()
     {
-        // A self-recursive lambda assigned to a local delegate var (the standard recursive-lambda idiom)
-        // is hoisted, its self-invocation resolved, and its frame spilled across the non-tail call.
+        // M2 form: the recursive-lambda local idiom routes the self-call through the unified bundle
+        // dispatch (JUMP_INDIRECT under the guard ladder) — the old DelegateVarMap static resolution
+        // is gone. M3 re-pins the dispatch-site spill here (__recurStack across the non-tail dispatch,
+        // design §4; runtime-gated by fcd35 = 120).
         var uasm = TestHelper.CompileToUasm(@"
 using UdonSharp;
 public class RecLambdaTest : UdonSharpBehaviour {
@@ -3620,8 +3622,8 @@ public class RecLambdaTest : UdonSharpBehaviour {
     }
 }
 ", "RecLambdaTest");
-        Assert.Contains("__recurStack", uasm);
-        Assert.Contains("__recurSp", uasm);
+        Assert.Contains("JUMP_INDIRECT, __intnl_dlgptr", uasm);
+        Assert.Contains("__dlg_", uasm);
     }
 
     // ── Re-entrance guard ──
@@ -3826,11 +3828,12 @@ public class DlgTest : UdonSharpBehaviour
     }
 
     [Fact]
-    public void DelegateParam_MethodGroup_EmitsAdapter()
+    public void DelegateParam_MethodGroup_PassesBundle()
     {
-        // A bare method group passed to a delegate parameter must be bridged through a per-call-site adapter
-        // (__dlgadapt_*) that copies the convention args into the target's real params — NOT lowered to the
-        // target's raw address (which reads its own param fields and returns a stale 0).
+        // A bare method group passed to a delegate parameter builds the object[4] bundle at the call
+        // site (design §2.4) — its __dlg_ bridge is the callee-side prologue copy that absorbs both
+        // the self JUMP_INDIRECT and the cross SendCustomEvent path; the per-call-site __dlgadapt_
+        // adapter is gone.
         var uasm = TestHelper.CompileToUasm(@"
 using System;
 using UdonSharp;
@@ -3842,7 +3845,9 @@ public class DlgMgTest : UdonSharpBehaviour
     void Start() { int r = Apply(21, Dbl); }
 }
 ");
-        Assert.Contains("__dlgadapt", uasm);
+        Assert.DoesNotContain("__dlgadapt", uasm);
+        Assert.Contains("SystemObjectArray.__ctor__SystemInt32__SystemObjectArray", uasm);
+        Assert.Contains("__dlg_", uasm);
     }
 
     [Fact]
@@ -3917,7 +3922,7 @@ public class DlgPredicateTest : UdonSharpBehaviour
     }
 
     [Fact]
-    public void DelegateParam_FuncInvocation_VerifySystemUInt32Type()
+    public void DelegateParam_FuncInvocation_VerifyBundleParamType()
     {
         var uasm = TestHelper.CompileToUasm(@"
 using System;
@@ -3929,12 +3934,11 @@ public class DlgTest : UdonSharpBehaviour
     void Start() { int r = Apply(n => n + 1, 42); }
 }
 ");
-        // Verify that delegate parameter is typed as SystemUInt32
-        // Delegates are represented as uint indices into a function pointer table
+        // A delegate value is a single SystemObjectArray bundle reference (design §1.2/§2.1) —
+        // the delegate-typed parameter field carries the bundle, not a uint funcaddr.
         Assert.Contains("JUMP_INDIRECT", uasm);
         Assert.Contains("__0_f__param", uasm);
-        // The convention parameter should be declared with SystemUInt32 type
-        Assert.Matches(@"__0_f__param\s*:\s*%SystemUInt32", uasm);
+        Assert.Matches(@"__0_f__param\s*:\s*%SystemObjectArray", uasm);
     }
 
     // ── F3: Temp variable pooling ──
