@@ -1606,11 +1606,38 @@ public class UasmEmitter
             taintChanged = false;
             foreach (var kv in localCopyEdges)
             {
-                if (!_ctx.CapturingLambdaLocals.Contains(kv.Key)) continue;
+                bool srcTainted = _ctx.CapturingLambdaLocals.Contains(kv.Key);
+                // Wave-9 [W1]: iteration-fragility rides the SAME copy edges as the capture taint
+                // (fragile ⊆ tainted by construction — every fragile seed also taints).
+                var srcFragile = _ctx.IterationFragileLocals.TryGetValue(kv.Key, out var fl) ? fl : null;
+                if (!srcTainted && srcFragile == null) continue;
                 foreach (var dst in kv.Value)
-                    if (_ctx.CapturingLambdaLocals.Add(dst)) taintChanged = true;
+                {
+                    if (srcTainted && _ctx.CapturingLambdaLocals.Add(dst)) taintChanged = true;
+                    if (srcFragile != null && _ctx.AddIterationFragileLoops(dst, srcFragile)) taintChanged = true;
+                }
             }
         }
+
+        // Wave-9 [W1]/[W2] post-fixpoint check: a local carrying a per-iteration capture must
+        // itself be declared inside that loop (it then dies with the iteration). A fragile local
+        // declared OUTSIDE its loop — seeded directly, through a copy chain, or through a
+        // laundered invocation result — outlives the re-seeded capture slot and would read the
+        // LAST iteration's value (VM-proven 16 where C# gives 6). Loud reject, deterministic
+        // order (sorted by name) so multi-violation sources always name the same local.
+        ILocalSymbol worst = null;
+        foreach (var kv in _ctx.IterationFragileLocals)
+        {
+            foreach (var loop in kv.Value)
+            {
+                if (EmitContext.IsWithinIterationScope(kv.Key, loop)) continue;
+                if (worst == null || string.CompareOrdinal(kv.Key.Name, worst.Name) < 0) worst = kv.Key;
+                break;
+            }
+        }
+        if (worst != null)
+            throw new System.NotSupportedException(EmitContext.PerIterationCaptureError(
+                $"it reaches local '{worst.Name}', which is declared outside that loop"));
 
         // ── §4.2 graph extension: lambda nodes, EscapeSet, synthetic edges ──
 
@@ -1907,6 +1934,11 @@ public class UasmEmitter
         if (IsPreScanCapturingValue(value))
         {
             _ctx.CapturingLambdaLocals.Add(rootLocal);
+            // Wave-9 [W1]/[W2]: a per-iteration capture seeded into a local marks it
+            // iteration-fragile (order-independent twin of GuardPerIterationLocalTarget's
+            // recording; the post-fixpoint check rejects fragile locals declared outside
+            // their loop, closing the direct-outer-store AND copy-launder flavors).
+            _ctx.AddIterationFragileLoops(rootLocal, _ctx.GetPerIterationCaptureLoops(value));
             return;
         }
         // Copy edges feed the taint fixpoint; targets must be BARE locals (member-chain targets
@@ -2008,10 +2040,19 @@ public class UasmEmitter
         switch (op)
         {
             case IAnonymousFunctionOperation lambda:
-                if (_ctx.CaptureAnalyzer.HasCaptures(lambda)) _ctx.CapturingLambdaLocals.Add(target);
+                if (_ctx.CaptureAnalyzer.HasCaptures(lambda))
+                {
+                    _ctx.CapturingLambdaLocals.Add(target);
+                    // Wave-9 [W1]: a per-iteration capture laundered through an invocation result
+                    // (`g = Id(() => v)`) carries the iteration-fragility into the result local.
+                    _ctx.AddIterationFragileLoops(target, EmitContext.ComputePerIterationCaptureLoops(
+                        _ctx.CaptureAnalyzer.GetCaptures(lambda)));
+                }
                 return;
             case IMethodReferenceOperation mr when _ctx.IsCapturingLocalFunction(mr.Method):
                 _ctx.CapturingLambdaLocals.Add(target);
+                _ctx.AddIterationFragileLoops(target, EmitContext.ComputePerIterationCaptureLoops(
+                    _ctx.CaptureAnalyzer.GetLocalFunctionCaptures(mr.Method)));
                 return;
             case ILocalReferenceOperation lr:
                 AddCopyEdge(copyEdges, lr.Local, target);

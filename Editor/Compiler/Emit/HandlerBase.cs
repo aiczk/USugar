@@ -1211,7 +1211,19 @@ public abstract class HandlerBase
         if (target?.Type is not INamedTypeSymbol tnt || tnt.DelegateInvokeMethod == null) return;
         if (target is not (IFieldReferenceOperation or IPropertyReferenceOperation)) return;
         if (TryGetLambdaCreation(value, out var lambda) && _ctx.CaptureAnalyzer.HasCaptures(lambda))
+        {
             _ctx.RecordLambdaCaptures(lambda);
+            return;
+        }
+        // Wave-9 [W2]: a capturing LOCAL-FUNCTION method group is the same closure — register its
+        // (transitive) capture set too, so DetectLambdaCaptureAliasing sees caplf field stores
+        // exactly like lambda field stores (pre-fix the dictionary was lambda-keyed and two caplf
+        // fields sharing a captured local shipped compile-clean wrong values).
+        var v = value;
+        while (v is IConversionOperation conv) v = conv.Operand;
+        if (v is IDelegateCreationOperation { Target: IMethodReferenceOperation mr }
+            && _ctx.IsCapturingLocalFunction(mr.Method))
+            _ctx.RecordLocalFunctionCaptures(mr);
     }
 
     /// <summary>
@@ -1280,6 +1292,14 @@ public abstract class HandlerBase
             || IsLaunderingMemberRead(value);
         if (!direct && !tainted) return;
 
+        // Wave-9 [W1]/[W2]: a DIRECT capturing value whose capture set contains a per-iteration
+        // loop local must not outlive the iteration (the flat slot is re-seeded by later
+        // iterations; VM-proven 16 where C# gives 6 with a SINGLE lambda site). Member stores
+        // reject below; local-target stores are checked against the captured local's loop.
+        // Emission-time registration here is a redundant backstop — the BuildRecursionInfo
+        // pre-scan computes the same fragility order-independently.
+        var fragileLoops = direct ? _ctx.GetPerIterationCaptureLoops(value) : null;
+
         if (target is IArrayElementReferenceOperation || IsObjectish(target.Type))
             throw new System.NotSupportedException(foreign ? ForeignDelegateReadError : CaptureEscapeError);
 
@@ -1289,9 +1309,11 @@ public abstract class HandlerBase
             // copies too (F4: `var g = f;` then `fs[i] = g;` must stay loud — laundering a tainted
             // read through a copy used to drop the taint).
             case ILocalReferenceOperation localTarget:
+                GuardPerIterationLocalTarget(localTarget.Local, fragileLoops);
                 _ctx.CapturingLambdaLocals.Add(localTarget.Local);
                 return;
             case IDeclarationExpressionOperation { Expression: ILocalReferenceOperation declLocal }:
+                GuardPerIterationLocalTarget(declLocal.Local, fragileLoops);
                 _ctx.CapturingLambdaLocals.Add(declLocal.Local);
                 return;
             case IFieldReferenceOperation or IPropertyReferenceOperation when tainted:
@@ -1337,12 +1359,38 @@ public abstract class HandlerBase
                 if (root is IParameterReferenceOperation || root is IArrayElementReferenceOperation)
                     throw new System.NotSupportedException(CaptureEscapeError);
                 if (root is ILocalReferenceOperation rootLocal)
+                {
+                    // Wave-9 [W1]: the container local must itself die with the captured local's
+                    // iteration, else the envelope outlives the re-seeded slot.
+                    GuardPerIterationLocalTarget(rootLocal.Local, fragileLoops);
                     _ctx.CapturingLambdaLocals.Add(rootLocal.Local);
+                    return;
+                }
+                // Wave-9 [W1]/[W2]: a `this`-rooted member store ALWAYS outlives the iteration —
+                // a single capturing site in a loop ships a re-seeded slot (the 2+-site aliasing
+                // detector can never fire for it), so it is a loud reject, not a recording.
+                if (fragileLoops != null)
+                    throw new System.NotSupportedException(EmitContext.PerIterationCaptureError(
+                        "it is stored to a field/property that outlives the loop iteration"));
                 return;
             }
             default:
                 return;
         }
+    }
+
+    /// <summary>Wave-9 [W1]/[W2]: a direct capturing store into a LOCAL is legal only when the
+    /// target local's declaration lives inside every captured per-iteration loop (it then dies
+    /// with the iteration). A target declared outside the loop outlives the re-seeded slot —
+    /// loud reject; legal targets inherit the fragility so copies are checked the same way.</summary>
+    void GuardPerIterationLocalTarget(ILocalSymbol targetLocal, HashSet<SyntaxNode> fragileLoops)
+    {
+        if (fragileLoops == null) return;
+        foreach (var loop in fragileLoops)
+            if (!EmitContext.IsWithinIterationScope(targetLocal, loop))
+                throw new System.NotSupportedException(EmitContext.PerIterationCaptureError(
+                    $"it is stored to local '{targetLocal.Name}', which is declared outside that loop"));
+        _ctx.AddIterationFragileLoops(targetLocal, fragileLoops);
     }
 
     /// <summary>Member of a CLASS other than the one being emitted (or its bases) — the per-class

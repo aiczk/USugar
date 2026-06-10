@@ -384,6 +384,10 @@ public class StatementHandler : HandlerBase, IOperationHandler
                     if (IsObjectish(local.Type))
                         throw new System.NotSupportedException(CaptureEscapeError);
                     _ctx.CapturingLambdaLocals.Add(local);
+                    // Wave-9 [W1]: a declaration is always inside its initializer's loop, so no
+                    // reject here — record the fragility so copies of this local are checked
+                    // (redundant backstop; the pre-scan computes the same set order-independently).
+                    _ctx.AddIterationFragileLoops(local, _ctx.GetPerIterationCaptureLoops(init.Value));
                 }
 
                 var srcVal = VisitExpression(init.Value);

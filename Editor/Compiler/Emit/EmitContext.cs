@@ -281,10 +281,12 @@ public class EmitContext
     // See LambdaCaptureAnalyzer for rationale on manual walker vs Roslyn AnalyzeDataFlow.
     public readonly LambdaCaptureAnalyzer CaptureAnalyzer;
 
-    // Aliasing detection: per captured symbol, list of lambdas (delegate creations) that captured it.
-    // Populated by SimpleAssignmentHandler when a lambda is assigned to a delegate field.
-    // UasmEmitter inspects this after emit and raises an Error if any captured symbol has > 1 lambda.
-    public readonly Dictionary<ISymbol, List<IAnonymousFunctionOperation>> AllLambdaCaptures
+    // Aliasing detection: per captured symbol, list of closure-creation sites (lambdas and — wave-9
+    // [W2] — capturing local-function METHOD GROUPS, which are the same closure in
+    // IMethodReferenceOperation clothing) that captured it long-lived. Populated by
+    // RecordLongLivedLambdaStore when a capturing value is assigned to a delegate field.
+    // UasmEmitter inspects this after emit and raises an Error if any captured symbol has > 1 site.
+    public readonly Dictionary<ISymbol, List<IOperation>> AllLambdaCaptures
         = new(SymbolEqualityComparer.Default);
 
     // §2.8(b) capture-escape guard: locals initialized/reassigned with a CAPTURING lambda (flow-insensitive
@@ -325,6 +327,129 @@ public class EmitContext
     public bool IsCapturingLocalFunction(IMethodSymbol m)
         => m != null && m.MethodKind == MethodKind.LocalFunction
            && (CapturingLocalFunctions.Contains(m) || CapturingLocalFunctions.Contains(m.OriginalDefinition));
+
+    // ── Wave-9 [W1]/[W2]: per-iteration capture escapes ──
+    //
+    // C# re-instantiates a local declared inside a loop BODY (and the foreach iteration variable)
+    // on every iteration, so a closure capturing it references THAT iteration's instance. The flat
+    // capture model has ONE heap slot per captured local — later iterations re-seed it — so a
+    // closure that outlives its loop iteration reads the LAST iteration's value (VM-proven 16 where
+    // C# gives 6, with a SINGLE lambda site the 2+-site aliasing detector can never see). Escapes
+    // that outlive the iteration (member stores; stores into locals declared outside the loop —
+    // directly, via copies, or via laundered invocation results) are loud rejects; stores into
+    // locals declared inside the loop (die with the iteration) and direct invocation/arguments stay
+    // legal. Distinguishing the always-overwritten-then-read-after shape (observationally correct)
+    // would need dominance analysis — conservative over-rejection accepted per design §8-3.
+    //
+    // Locals carrying a per-iteration capture, mapped to the loop statements whose iteration they
+    // must not outlive. Seeded by the BuildRecursionInfo pre-scan (order-independent) and the
+    // emission-time guards (redundant backstop); propagated along the same local-to-local copy
+    // edges as the capture taint; checked against each local's own declaration position.
+    // LOOKUP-ONLY during emission (§1.5); the post-fixpoint check sorts before throwing.
+    public readonly Dictionary<ILocalSymbol, HashSet<SyntaxNode>> IterationFragileLocals
+        = new(SymbolEqualityComparer.Default);
+
+    /// <summary>The innermost loop statement whose ITERATION scope contains this local's
+    /// declaration — null when the local is not per-iteration. A `for` INITIALIZER declaration is
+    /// shared across iterations (C# closes over the one variable; the flat slot matches), so only
+    /// body/condition/incrementor positions count; the foreach iteration variable is per-iteration
+    /// (C# 5+). The walk stops at function/member boundaries: an enclosing loop OUTSIDE the
+    /// declaring function re-enters via CALLS, which is the documented cross-activation tier.</summary>
+    public static SyntaxNode GetPerIterationLoop(ILocalSymbol local)
+    {
+        var decl = local?.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax();
+        if (decl == null) return null;
+        if (decl is Microsoft.CodeAnalysis.CSharp.Syntax.CommonForEachStatementSyntax)
+            return decl; // the foreach iteration variable's declaring syntax IS the loop statement
+        for (SyntaxNode node = decl, a = decl.Parent; a != null; node = a, a = a.Parent)
+        {
+            switch (a)
+            {
+                case Microsoft.CodeAnalysis.CSharp.Syntax.ForStatementSyntax fs when node == fs.Declaration:
+                    break; // for-initializer variable: one instance for the whole loop
+                case Microsoft.CodeAnalysis.CSharp.Syntax.ForStatementSyntax
+                    or Microsoft.CodeAnalysis.CSharp.Syntax.WhileStatementSyntax
+                    or Microsoft.CodeAnalysis.CSharp.Syntax.DoStatementSyntax
+                    or Microsoft.CodeAnalysis.CSharp.Syntax.CommonForEachStatementSyntax:
+                    return a;
+                case Microsoft.CodeAnalysis.CSharp.Syntax.AnonymousFunctionExpressionSyntax
+                    or Microsoft.CodeAnalysis.CSharp.Syntax.LocalFunctionStatementSyntax
+                    or Microsoft.CodeAnalysis.CSharp.Syntax.MemberDeclarationSyntax
+                    or Microsoft.CodeAnalysis.CSharp.Syntax.AccessorDeclarationSyntax:
+                    return null;
+            }
+        }
+        return null;
+    }
+
+    /// <summary>True when this local's declaration lives inside ONE iteration of
+    /// <paramref name="loop"/> (it dies with the iteration, so it may legally hold a closure over
+    /// that iteration's captures). False for declarations outside the loop, in a `for` initializer
+    /// (whole-loop lifetime), or with no source declaration (conservative).</summary>
+    public static bool IsWithinIterationScope(ILocalSymbol local, SyntaxNode loop)
+    {
+        var decl = local?.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax();
+        if (decl == null || loop == null) return false;
+        if (decl == loop) return true; // the loop's own foreach iteration variable
+        for (SyntaxNode node = decl, a = decl.Parent; a != null; node = a, a = a.Parent)
+            if (a == loop)
+                return !(loop is Microsoft.CodeAnalysis.CSharp.Syntax.ForStatementSyntax fs
+                         && node == fs.Declaration);
+        return false;
+    }
+
+    /// <summary>Per-iteration loops of a capture SET: every captured local that is per-iteration
+    /// contributes its innermost loop. Null when none (captured params and out-of-loop locals are
+    /// not per-iteration).</summary>
+    public static HashSet<SyntaxNode> ComputePerIterationCaptureLoops(IEnumerable<ISymbol> captures)
+    {
+        HashSet<SyntaxNode> loops = null;
+        foreach (var c in captures)
+            if (c is ILocalSymbol l && GetPerIterationLoop(l) is { } loop)
+                (loops ??= new HashSet<SyntaxNode>()).Add(loop);
+        return loops;
+    }
+
+    /// <summary>Per-iteration loops of a DIRECT capturing value (conversions unwrapped): a capturing
+    /// lambda's capture set or a capturing local-function method group's transitive set. Null when
+    /// the value is not a direct capturing creation or captures nothing per-iteration.</summary>
+    public HashSet<SyntaxNode> GetPerIterationCaptureLoops(IOperation value)
+    {
+        var v = value;
+        while (v is IConversionOperation conv) v = conv.Operand;
+        if (v is not IDelegateCreationOperation dc) return null;
+        return dc.Target switch
+        {
+            IAnonymousFunctionOperation lambda when CaptureAnalyzer.HasCaptures(lambda)
+                => ComputePerIterationCaptureLoops(CaptureAnalyzer.GetCaptures(lambda)),
+            IMethodReferenceOperation mr when IsCapturingLocalFunction(mr.Method)
+                => ComputePerIterationCaptureLoops(CaptureAnalyzer.GetLocalFunctionCaptures(mr.Method)),
+            _ => null,
+        };
+    }
+
+    /// <summary>Merge per-iteration loops into a local's fragile set; true when something new was
+    /// added (drives the pre-scan fixpoint).</summary>
+    public bool AddIterationFragileLoops(ILocalSymbol local, IEnumerable<SyntaxNode> loops)
+    {
+        if (local == null || loops == null) return false;
+        if (!IterationFragileLocals.TryGetValue(local, out var set))
+        {
+            set = new HashSet<SyntaxNode>();
+            IterationFragileLocals[local] = set;
+        }
+        bool added = false;
+        foreach (var l in loops) added |= set.Add(l);
+        return added;
+    }
+
+    public static string PerIterationCaptureError(string escapeDescription)
+        => $"Lambda/local function captures a per-iteration loop local, but {escapeDescription}: "
+         + "C# re-creates the captured local on every iteration while the flat capture model has "
+         + "one heap slot that later iterations re-seed, so a closure outliving its loop iteration "
+         + "would read the LAST iteration's value (silent wrong value). Store the delegate only "
+         + "into locals declared inside the loop and invoke it within the iteration, or hoist the "
+         + "captured local out of the loop.";
 
     /// <summary>§2.8 round-5 [N2]: THE canonical form of a member symbol, used at EVERY
     /// CaptureReceivingMembers record point AND lookup point (a second ad-hoc symbol comparison is
@@ -442,8 +567,18 @@ public class EmitContext
     /// those to explicit compile errors is tracked in roadmap B28.
     /// </summary>
     public void RecordLambdaCaptures(IAnonymousFunctionOperation lambda)
+        => RecordCaptureSites(CaptureAnalyzer.GetCaptures(lambda), lambda);
+
+    /// <summary>Wave-9 [W2]: a capturing local-function METHOD GROUP stored long-lived registers its
+    /// (transitive) capture set exactly like a lambda — pre-fix the aliasing dictionary was keyed to
+    /// IAnonymousFunctionOperation only, so caplf method-group field stores bypassed
+    /// DetectLambdaCaptureAliasing entirely (two caplf fields sharing a captured local shipped a
+    /// compile-clean wrong value where the identical two-lambda shape was diagnosed).</summary>
+    public void RecordLocalFunctionCaptures(IMethodReferenceOperation methodGroup)
+        => RecordCaptureSites(CaptureAnalyzer.GetLocalFunctionCaptures(methodGroup.Method), methodGroup);
+
+    void RecordCaptureSites(System.Collections.Immutable.ImmutableArray<ISymbol> captures, IOperation site)
     {
-        var captures = CaptureAnalyzer.GetCaptures(lambda);
         foreach (var sym in captures)
         {
             // 'this' is always the same instance — captures of `this` (or instance-method receiver)
@@ -452,10 +587,10 @@ public class EmitContext
             if (sym is IParameterSymbol p && p.IsThis) continue;
             if (!AllLambdaCaptures.TryGetValue(sym, out var list))
             {
-                list = new List<IAnonymousFunctionOperation>();
+                list = new List<IOperation>();
                 AllLambdaCaptures[sym] = list;
             }
-            if (!list.Contains(lambda)) list.Add(lambda);
+            if (!list.Contains(site)) list.Add(site);
         }
     }
 

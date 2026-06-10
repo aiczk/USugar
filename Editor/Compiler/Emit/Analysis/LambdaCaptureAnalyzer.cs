@@ -108,6 +108,13 @@ public sealed class LambdaCaptureAnalyzer
 
     public bool HasCaptures(IAnonymousFunctionOperation lambda) => GetCaptures(lambda).Length > 0;
 
+    /// <summary>Wave-9 [W2]: the TRANSITIVE capture set of a local function (empty when capture-free
+    /// or unanalyzed). Public twin of <see cref="TryGetLocalFunctionCaptures"/> so a method-group
+    /// store can register its captured symbols in the aliasing detector and the per-iteration
+    /// escape guard exactly like a lambda's GetCaptures result.</summary>
+    public ImmutableArray<ISymbol> GetLocalFunctionCaptures(IMethodSymbol m)
+        => TryGetLocalFunctionCaptures(m, out var captures) ? captures : ImmutableArray<ISymbol>.Empty;
+
     /// <summary>
     /// Analyze a LOCAL FUNCTION body for the §2.8 round-3/round-4 capture machinery. A local
     /// function converted to a method group (IMethodReferenceOperation) is a closure exactly like
