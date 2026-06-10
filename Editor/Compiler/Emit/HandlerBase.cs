@@ -842,48 +842,17 @@ public abstract class HandlerBase
     /// or a tuple with any delegate-capable element (tuples erase delegate typing the same way object
     /// does — tuple return/param envelopes laundered, VM-verified). Over-rejection accepted per §8-3.</summary>
     protected bool IsDelegateCapableType(ITypeSymbol t)
-    {
-        if (t == null) return false;
-        var r = ResolveType(t);
-        if (r == null) return false;
-        if (r.SpecialType == SpecialType.System_Object) return true;
-        return IsNonObjectDelegateCapableType(r);
-    }
+        => EmitContext.IsDelegateCapableType(t, ResolveType);
 
     /// <summary>Delegate-capable minus bare System.Object: delegate proper, unresolved type param,
-    /// or delegate-capable tuple. Bare-object VALUES cannot legally carry a bundle — every entry
-    /// point is sealed (objectish store targets reject, objectish locals reject at declaration,
-    /// erasing-typed ARGUMENTS are guarded at the call site) — so object-typed param/member reads
-    /// are clean and ordinary object plumbing keeps compiling.</summary>
+    /// delegate-capable tuple, or user-struct envelope. Bare-object VALUES cannot legally carry a
+    /// bundle — every entry point is sealed (objectish store targets reject, objectish locals
+    /// reject at declaration, erasing-typed ARGUMENTS are guarded at the call site) — so
+    /// object-typed param/member reads are clean and ordinary object plumbing keeps compiling.
+    /// Logic lives in EmitContext (single source of truth — the pre-scans use it with the identity
+    /// resolver); this wrapper binds the emit-time type-param-map resolver.</summary>
     protected bool IsNonObjectDelegateCapableType(ITypeSymbol t)
-    {
-        if (t == null) return false;
-        var r = ResolveType(t);
-        if (r == null) return false;
-        if (r is ITypeParameterSymbol) return true;
-        if (r is INamedTypeSymbol nt)
-        {
-            if (nt.DelegateInvokeMethod != null) return true;
-            if (nt.IsTupleType)
-            {
-                foreach (var el in nt.TupleElements)
-                    if (IsDelegateCapableType(el.Type)) return true;
-            }
-            // §2.8 round-3 [B]: a USER STRUCT with a (recursively) delegate-capable instance field
-            // is an envelope — its object[] emulation carries the bundle past every delegate-typed
-            // gate (whole-struct array stores / returns / erased args, VM-verified laundering).
-            // Auto-prop backing fields are IFieldSymbols, so fields cover all stored members.
-            // Terminates: C# forbids value-type field cycles, and array fields are not capable
-            // (array-element stores of dangerous values are loud everywhere already).
-            else if (EmitContext.IsUserStruct(nt))
-            {
-                foreach (var member in nt.GetMembers())
-                    if (member is IFieldSymbol fld && !fld.IsStatic && IsDelegateCapableType(fld.Type))
-                        return true;
-            }
-        }
-        return false;
-    }
+        => EmitContext.IsNonObjectDelegateCapableType(t, ResolveType);
 
     /// <summary>Resolved delegate type proper (Func/Action/custom delegate after type-param
     /// substitution). Arguments to delegate-PROPER params stay unguarded — fcd37's
@@ -945,10 +914,19 @@ public abstract class HandlerBase
     {
         var v = value;
         while (v is IConversionOperation conv) v = conv.Operand;
+        // §2.8 round-5 [N2]: lookups MUST canonicalize exactly like the record point — a read
+        // through the base virtual symbol of an overridden recipient auto-property (or a named
+        // tuple element of a recorded ItemN) otherwise misses the set (VM-verified laundering).
+        // Interface members canonicalize to null (unknown implementing class) and are owned by
+        // the IsForeignDelegateMemberRead conservatism, not this set.
         switch (v)
         {
-            case IFieldReferenceOperation fr: return _ctx.CaptureReceivingMembers.Contains(fr.Field);
-            case IPropertyReferenceOperation pr: return _ctx.CaptureReceivingMembers.Contains(pr.Property);
+            case IFieldReferenceOperation fr:
+                return EmitContext.CanonicalMemberSymbol(fr.Field) is { } cf
+                    && _ctx.CaptureReceivingMembers.Contains(cf);
+            case IPropertyReferenceOperation pr:
+                return EmitContext.CanonicalMemberSymbol(pr.Property) is { } cp
+                    && _ctx.CaptureReceivingMembers.Contains(cp);
             default: return false;
         }
     }
@@ -996,11 +974,14 @@ public abstract class HandlerBase
       + "owning class.";
 
     /// <summary>§2.8 round-3 [D]: a delegate-capable member read whose member chain contains a
-    /// member of ANOTHER behaviour class. The recipient pre-scan is per-class, so the emitting
+    /// member of ANOTHER behaviour class — or (§2.8 round-5 [N2]) an INTERFACE member, whose
+    /// implementing class is unknown at emit time (an interface-typed receiver dispatches to any
+    /// behaviour, so neither the per-class recipient pre-scan nor this armor can see the real
+    /// member). The recipient pre-scan is per-class, so the emitting
     /// class can never see whether the foreign class seeded that member with a capturing lambda
     /// (B legally seeds its own field; A reads other.cb) — conservatism is the only sound option
     /// (§8-3). Loud at escaping stores / array initializers / returns and taints locals it is
-    /// copied into; DIRECT invocation (`other.cb()`) stays legal. Same-class cross-instance reads
+    /// copied into; DIRECT invocation (`other.cb()` / `h.F()`) stays legal. Same-class cross-instance reads
     /// are NOT foreign: the per-class pre-scan covers every store site of this class's members.</summary>
     protected bool IsForeignDelegateMemberRead(IOperation value)
     {
@@ -1256,17 +1237,13 @@ public abstract class HandlerBase
     }
 
     /// <summary>Member of a CLASS other than the one being emitted (or its bases) — the per-class
-    /// recipient pre-scan cannot make that class's reads loud. Struct members are not foreign:
-    /// struct values cross call boundaries as params, where the param-rooted member-read taint
-    /// applies in the receiving method regardless of class.</summary>
+    /// recipient pre-scan cannot make that class's reads loud — or (§2.8 round-5 [N2]) an
+    /// INTERFACE member, whose implementing class is unknown at emit time. Struct members are not
+    /// foreign: struct values cross call boundaries as params, where the param-rooted member-read
+    /// taint applies in the receiving method regardless of class. Logic lives in EmitContext
+    /// (single source of truth, shared with the pre-scans).</summary>
     protected bool IsForeignClassMember(ISymbol member)
-    {
-        var ct = member?.ContainingType;
-        if (ct == null || ct.TypeKind != TypeKind.Class) return false;
-        for (var t = _ctx.ClassSymbol; t != null; t = t.BaseType)
-            if (SymbolEqualityComparer.Default.Equals(t, ct)) return false;
-        return true;
-    }
+        => EmitContext.IsForeignOrInterfaceMember(member, _ctx.ClassSymbol);
 
     // ── Delegate bridge resolution ──
 

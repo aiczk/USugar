@@ -300,6 +300,105 @@ public class EmitContext
         => m != null && m.MethodKind == MethodKind.LocalFunction
            && (CapturingLocalFunctions.Contains(m) || CapturingLocalFunctions.Contains(m.OriginalDefinition));
 
+    /// <summary>§2.8 round-5 [N2]: THE canonical form of a member symbol, used at EVERY
+    /// CaptureReceivingMembers record point AND lookup point (a second ad-hoc symbol comparison is
+    /// how the round-5 identity holes were born). Maps named tuple elements to their ItemN field
+    /// (within the SAME constructed tuple — ItemN of different instantiations stay distinct),
+    /// compares generic members by original definition, and walks override chains to the ROOT
+    /// declaration so a store through a derived override symbol and a read through the base
+    /// virtual symbol hit the same entry (one virtual slot, one backing store). Returns NULL for
+    /// interface members: the implementing class is unknown at emit time (an interface-typed
+    /// receiver can dispatch to any behaviour), so there is no canonical form — callers must treat
+    /// null as "unknown → conservative/loud" (§8-3).</summary>
+    public static ISymbol CanonicalMemberSymbol(ISymbol member)
+    {
+        if (member == null) return null;
+        if (member.ContainingType?.TypeKind == TypeKind.Interface) return null;
+        if (member is IFieldSymbol f && f.CorrespondingTupleField is { } tupleField)
+            return tupleField;
+        member = member.OriginalDefinition;
+        while (true)
+        {
+            ISymbol overridden = member switch
+            {
+                IPropertySymbol p => p.OverriddenProperty,
+                IMethodSymbol m => m.OverriddenMethod,
+                IEventSymbol e => e.OverriddenEvent,
+                _ => null,
+            };
+            if (overridden == null) break;
+            member = overridden.OriginalDefinition;
+        }
+        return member;
+    }
+
+    /// <summary>§2.8 round-2/3 (single source of truth; HandlerBase wraps with the type-param-map
+    /// resolver, the pre-scans pass null = identity so an unresolved T stays conservatively
+    /// capable): a type whose value can carry a delegate bundle past the delegate-typed guards —
+    /// a delegate itself, System.Object (boxing erases the delegate typing), an unresolved type
+    /// parameter, a tuple with any delegate-capable element, or a user struct with a (recursively)
+    /// delegate-capable instance field. Over-rejection accepted per §8-3.</summary>
+    public static bool IsDelegateCapableType(ITypeSymbol t, Func<ITypeSymbol, ITypeSymbol> resolve)
+    {
+        if (t == null) return false;
+        var r = resolve != null ? resolve(t) : t;
+        if (r == null) return false;
+        if (r.SpecialType == SpecialType.System_Object) return true;
+        return IsNonObjectDelegateCapableType(t, resolve);
+    }
+
+    /// <summary>Delegate-capable minus bare System.Object (see HandlerBase doc: bare-object VALUES
+    /// cannot legally carry a bundle — every entry point is sealed — so object-typed param/member
+    /// reads stay clean and ordinary object plumbing keeps compiling).</summary>
+    public static bool IsNonObjectDelegateCapableType(ITypeSymbol t, Func<ITypeSymbol, ITypeSymbol> resolve)
+    {
+        if (t == null) return false;
+        var r = resolve != null ? resolve(t) : t;
+        if (r == null) return false;
+        if (r is ITypeParameterSymbol) return true;
+        if (r is INamedTypeSymbol nt)
+        {
+            if (nt.DelegateInvokeMethod != null) return true;
+            if (nt.IsTupleType)
+            {
+                foreach (var el in nt.TupleElements)
+                    if (IsDelegateCapableType(el.Type, resolve)) return true;
+            }
+            // §2.8 round-3 [B]: a USER STRUCT with a (recursively) delegate-capable instance field
+            // is an envelope — its object[] emulation carries the bundle past every delegate-typed
+            // gate (whole-struct array stores / returns / erased args, VM-verified laundering).
+            // Auto-prop backing fields are IFieldSymbols, so fields cover all stored members.
+            // Terminates: C# forbids value-type field cycles, and array fields are not capable
+            // (array-element stores of dangerous values are loud everywhere already).
+            else if (IsUserStruct(nt))
+            {
+                foreach (var member in nt.GetMembers())
+                    if (member is IFieldSymbol fld && !fld.IsStatic && IsDelegateCapableType(fld.Type, resolve))
+                        return true;
+            }
+        }
+        return false;
+    }
+
+    /// <summary>§2.8 round-3 [D] + round-5 [N2] (single source of truth; HandlerBase wraps with
+    /// its class symbol): member of a CLASS other than <paramref name="emittingClass"/> (or its
+    /// bases) — the per-class recipient pre-scan cannot make that class's reads loud — or an
+    /// INTERFACE member, whose implementing class is unknown at emit time (an interface-typed
+    /// receiver can dispatch to any behaviour, so neither the recipient pre-scan nor the foreign
+    /// armor can see the real member). Struct members are not foreign: struct values cross call
+    /// boundaries as params, where the param-rooted member-read taint applies in the receiving
+    /// method regardless of class.</summary>
+    public static bool IsForeignOrInterfaceMember(ISymbol member, INamedTypeSymbol emittingClass)
+    {
+        var ct = member?.ContainingType;
+        if (ct == null) return false;
+        if (ct.TypeKind == TypeKind.Interface) return true;
+        if (ct.TypeKind != TypeKind.Class) return false;
+        for (var t = emittingClass; t != null; t = t.BaseType)
+            if (SymbolEqualityComparer.Default.Equals(t, ct)) return false;
+        return true;
+    }
+
     /// <summary>
     /// Record that <paramref name="lambda"/> was assigned to a delegate field (or otherwise
     /// stored long-lived). Each captured symbol is appended to AllLambdaCaptures so post-emit

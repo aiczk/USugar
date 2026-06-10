@@ -68,6 +68,12 @@ public class DeconstructionAssignmentHandler : AssignmentHandlerBase, IOperation
             var callValue = op.Value;
             while (callValue is IConversionOperation conv2) callValue = conv2.Operand;
 
+            // §2.8 round-5 [N3]: every non-tuple-literal branch below assigns deconstructed
+            // elements via AssignToLValue with no escape guard, so a capture-carrying source
+            // shipped bundles into non-local lvalues silently (VM-proven: `t.Item1 = () => v;
+            // (fs[i], x) = t;` in a loop). Guard ALL branches uniformly before any emission.
+            GuardCaptureEscapeDeconstructionSource(callValue, targetTuple);
+
             // (a, b) = tup where the RHS is a tuple/struct-typed VALUE expression (local/parameter/field/array
             // element), emulated as object[]. Read each element from the backing array; snapshot ALL reads
             // before any store (value semantics + swap safety), deep-cloning aggregate elements so a later
@@ -143,6 +149,37 @@ public class DeconstructionAssignmentHandler : AssignmentHandlerBase, IOperation
                     }
                 }
             }
+        }
+    }
+
+    /// <summary>
+    /// §2.8 round-5 [N3] escape guard for the non-tuple-literal deconstruction branches, mirroring
+    /// GuardCaptureEscapeStore element-wise. A source that carries capture — a tainted container
+    /// local (`t.Item1 = () => v` taints t), a laundering member read (capture-receiving /
+    /// param-rooted / foreign / interface member), a tainted invocation result (identity-callee
+    /// laundering), or a bare delegate-capable PARAM (the callee is blind to what the caller
+    /// packed; mirrors the `fs[k] = t.Item1` member-read taint) — must not deconstruct into a
+    /// non-local lvalue: each delegate-capable element either taints its LOCAL target (F4) or
+    /// rejects loudly. Non-capable elements (int legs) and untainted sources (method-group-only
+    /// aggregates, guarded same-class returns) stay legal.
+    /// </summary>
+    void GuardCaptureEscapeDeconstructionSource(IOperation source, ITupleOperation targetTuple)
+    {
+        bool tainted = IsCaptureTaintedRead(source) || IsLaunderingMemberRead(source)
+            || IsTaintedDelegateInvocationResult(source)
+            || (source is IParameterReferenceOperation pr && IsDelegateCapableType(pr.Parameter.Type));
+        if (!tainted) return;
+        foreach (var element in targetTuple.Elements)
+        {
+            var target = element is IDeclarationExpressionOperation de ? de.Expression : element;
+            if (target is IDiscardOperation) continue;
+            if (!IsDelegateCapableType(target.Type)) continue;
+            if (target is ILocalReferenceOperation localTarget)
+            {
+                _ctx.CapturingLambdaLocals.Add(localTarget.Local);
+                continue;
+            }
+            throw new System.NotSupportedException(CaptureEscapeError);
         }
     }
 

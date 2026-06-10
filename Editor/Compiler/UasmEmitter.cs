@@ -1577,11 +1577,23 @@ public class UasmEmitter
         // makes the struct-typed class field `sField` an envelope carrying the bundle, so a whole-
         // struct read (`arr[i] = sField`, `return sField`) must go loud exactly like the leaf read.
         // Local/param chain roots are owned by the emit-time container taint / param-seed reject.
+        // §2.8 round-5 [N2]: record the CANONICAL symbol (override-chain root / ItemN — the one
+        // helper every lookup uses too). Interface members canonicalize to null and record nothing:
+        // the implementing class is unknown, so the emission-time guard rejects the store loudly
+        // instead (GuardCaptureEscapeStore's foreign/interface chain arm).
         var t = target;
         while (true)
         {
-            if (t is IFieldReferenceOperation fr) { _ctx.CaptureReceivingMembers.Add(fr.Field); t = fr.Instance; continue; }
-            if (t is IPropertyReferenceOperation pr) { _ctx.CaptureReceivingMembers.Add(pr.Property); t = pr.Instance; continue; }
+            if (t is IFieldReferenceOperation fr)
+            {
+                if (EmitContext.CanonicalMemberSymbol(fr.Field) is { } cf) _ctx.CaptureReceivingMembers.Add(cf);
+                t = fr.Instance; continue;
+            }
+            if (t is IPropertyReferenceOperation pr)
+            {
+                if (EmitContext.CanonicalMemberSymbol(pr.Property) is { } cp) _ctx.CaptureReceivingMembers.Add(cp);
+                t = pr.Instance; continue;
+            }
             if (t is IConversionOperation tc) { t = tc.Operand; continue; }
             break;
         }
@@ -1649,17 +1661,64 @@ public class UasmEmitter
             _ctx.CapturingLambdaLocals.Add(rootLocal);
             return;
         }
-        // Copy edge: a BARE local read into a BARE local target (member-chain targets receiving a
-        // tainted value are loud rejects at emission, so edges through them never carry taint).
+        // Copy edges feed the taint fixpoint; targets must be BARE locals (member-chain targets
+        // receiving a tainted value are loud rejects at emission, so edges through them never
+        // carry taint).
         if (hasMemberHops) return;
         var v = value;
         while (v is IConversionOperation conv) v = conv.Operand;
         if (v is ILocalReferenceOperation src)
         {
-            if (!copyEdges.TryGetValue(src.Local, out var dsts))
-                copyEdges[src.Local] = dsts = new HashSet<ILocalSymbol>(SymbolEqualityComparer.Default);
-            dsts.Add(rootLocal);
+            AddCopyEdge(copyEdges, src.Local, rootLocal);
+            return;
         }
+        // §2.8 round-5 [N4]: MEMBER-READ copy edges — `g = s.f` acquired taint only at emission
+        // time (lexical order), so `fs[i] = g; … s.f = () => w; g = s.f;` in a loop escaped clean
+        // yet executed seeded from iteration 2 on (VM-verified, the round-4 [K3] documented
+        // residual). Mirror IsLaunderingMemberRead order-independently, gated on a delegate-capable
+        // member type (identity resolver: the pre-scan walks definition trees, so an unresolved T
+        // is conservatively capable, §8-3): a capture-receiving / interface / foreign-class member
+        // anywhere in the chain taints the target local directly (recipient sets are already
+        // complete — the member pre-scan runs first); a local chain root adds a copy edge for the
+        // fixpoint (container taint propagates); a param chain root taints directly (the callee is
+        // blind to what the caller packed — mirrors the emission-time param-rooted read taint).
+        if (v is IFieldReferenceOperation or IPropertyReferenceOperation)
+        {
+            var leafType = v is IFieldReferenceOperation lf ? lf.Field.Type
+                : ((IPropertyReferenceOperation)v).Property.Type;
+            if (!EmitContext.IsNonObjectDelegateCapableType(leafType, null)) return;
+            var chain = v;
+            while (true)
+            {
+                ISymbol memberSym;
+                IOperation instance;
+                if (chain is IFieldReferenceOperation cf) { memberSym = cf.Field; instance = cf.Instance; }
+                else if (chain is IPropertyReferenceOperation cp) { memberSym = cp.Property; instance = cp.Instance; }
+                else if (chain is IConversionOperation cc) { chain = cc.Operand; continue; }
+                else break;
+                var canonical = EmitContext.CanonicalMemberSymbol(memberSym);
+                if (canonical == null // interface member — unknown implementing class, conservative
+                    || EmitContext.IsForeignOrInterfaceMember(memberSym, _classSymbol)
+                    || _ctx.CaptureReceivingMembers.Contains(canonical))
+                {
+                    _ctx.CapturingLambdaLocals.Add(rootLocal);
+                    return;
+                }
+                chain = instance;
+            }
+            if (chain is ILocalReferenceOperation containerLocal)
+                AddCopyEdge(copyEdges, containerLocal.Local, rootLocal);
+            else if (chain is IParameterReferenceOperation)
+                _ctx.CapturingLambdaLocals.Add(rootLocal);
+        }
+    }
+
+    static void AddCopyEdge(Dictionary<ILocalSymbol, HashSet<ILocalSymbol>> copyEdges,
+        ILocalSymbol from, ILocalSymbol to)
+    {
+        if (!copyEdges.TryGetValue(from, out var dsts))
+            copyEdges[from] = dsts = new HashSet<ILocalSymbol>(SymbolEqualityComparer.Default);
+        dsts.Add(to);
     }
 
     // Collect every lambda (anonymous function) with its body — each becomes its own SCC node (§4.2).

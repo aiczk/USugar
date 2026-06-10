@@ -1347,4 +1347,180 @@ public class DlgCast : UdonSharpBehaviour {
 }", "DlgCast");
         Assert.DoesNotContain("SystemConvert", uasm);
     }
+
+    // ── Capture-escape laundering, round 5: member-symbol canonicalization (override chains /
+    //    interface symbols), unguarded deconstruction branches, member-read copy edges ──
+
+    [Fact]
+    public void OverriddenDelegateAutoProp_BaseSymbolEscape_Throws()
+    {
+        // [N1/N2] seed through the derived override symbol, escape through the base virtual symbol:
+        // both canonicalize to the chain ROOT, so the recipient-member read is loud at the array
+        // store (VM 0 — null bundles — vs CLR 30 pre-fix; live-but-aliased bundles post-N1 alone).
+        var ex = Assert.ThrowsAny<Exception>(() => TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public class R5PBase : UdonSharpBehaviour { public virtual Func<int> P { get; set; } }
+public class R5PDrv : R5PBase {
+    public int sum;
+    public override Func<int> P { get; set; }
+    void Start() { var fs = new Func<int>[2]; R5PBase b = this; for (int i = 0; i < 2; i++) { int w = (i + 1) * 10; P = () => w; fs[i] = b.P; } sum = fs[0]() + fs[1](); }
+}", "R5PDrv"));
+        Assert.Contains("capture", ex.Message);
+    }
+
+    [Fact]
+    public void InterfaceSymbolRead_OfClassSeededRecipient_Throws()
+    {
+        // [N2 read side] F=()=>w records the class symbol; the h.F read binds the INTERFACE symbol,
+        // whose implementing class is unknown at emit time — tainted-equivalent at escape positions
+        // (VM 40 vs CLR 30 pre-fix).
+        var ex = Assert.ThrowsAny<Exception>(() => TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public interface IHold { Func<int> F { get; set; } }
+public class IfaceRead : UdonSharpBehaviour, IHold {
+    public Func<int> F { get; set; }
+    public int sum;
+    void Start() { var fs = new Func<int>[2]; IHold h = this; for (int i = 0; i < 2; i++) { int w = (i + 1) * 10; F = () => w; fs[i] = h.F; } sum = fs[0]() + fs[1](); }
+}", "IfaceRead"));
+        Assert.Contains("capture", ex.Message);
+    }
+
+    [Fact]
+    public void InterfaceSymbolStore_CapturingLambda_Throws()
+    {
+        // [N2 store side] h.F=()=>w stores through the interface symbol — the per-class pre-scan
+        // cannot cover an unknown implementing class, so the direct capturing store is loud
+        // (VM 40 vs CLR 30 pre-fix via the clean read of the class symbol).
+        var ex = Assert.ThrowsAny<Exception>(() => TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public interface IHold2 { Func<int> F { get; set; } }
+public class IfaceStore : UdonSharpBehaviour, IHold2 {
+    public Func<int> F { get; set; }
+    public int sum;
+    void Start() { var fs = new Func<int>[2]; IHold2 h = this; for (int i = 0; i < 2; i++) { int w = (i + 1) * 10; h.F = () => w; fs[i] = F; } sum = fs[0]() + fs[1](); }
+}", "IfaceStore"));
+        Assert.Contains("capture", ex.Message);
+    }
+
+    [Fact]
+    public void ForeignDelegateMemberRead_ThroughInterfaceTypedRef_Throws()
+    {
+        // [N2 foreign] a foreign behaviour's delegate member read through an interface-typed
+        // reference bypassed IsForeignDelegateMemberRead (containing type is an interface, not a
+        // class) — compile-proven clean pre-fix.
+        var ex = Assert.ThrowsAny<Exception>(() => TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public interface IHas { Func<int> cb { get; set; } }
+public class FOther : UdonSharpBehaviour, IHas { public Func<int> cb { get; set; } }
+public class FMain : UdonSharpBehaviour {
+    public FOther other;
+    public Func<int>[] fs;
+    void Start() { fs = new Func<int>[1]; IHas h = other; fs[0] = h.cb; }
+}", "FMain"));
+        Assert.Contains("capture", ex.Message);
+    }
+
+    [Fact]
+    public void TaintedTupleDeconstruction_IntoArrayElement_Throws()
+    {
+        // [N3] the aggregate-VALUE deconstruction branch ran with no escape guard: t.Item1=()=>v
+        // taints t, then (fs[i],x)=t shipped the bundle (VM 90 vs CLR 60 pre-fix).
+        var ex = Assert.ThrowsAny<Exception>(() => TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public class DeconT : UdonSharpBehaviour {
+    public int sum;
+    int M() { return 1; }
+    void Start() { var fs = new Func<int>[3]; int x = 0; for (int i = 0; i < 3; i++) { int v = (i + 1) * 10; (Func<int>, int) t = (M, 0); t.Item1 = () => v; t.Item2 = i; (fs[i], x) = t; } sum = fs[0]() + fs[1]() + fs[2](); }
+}", "DeconT"));
+        Assert.Contains("capture", ex.Message);
+    }
+
+    [Fact]
+    public void RecipientTupleFieldDeconstruction_IntoArrayElement_Throws()
+    {
+        // [N3] member-source flavor: the capture-receiving tuple FIELD read is laundering at the
+        // deconstruction source (VM 90 vs CLR 60 pre-fix).
+        var ex = Assert.ThrowsAny<Exception>(() => TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public class DeconF : UdonSharpBehaviour {
+    public int sum;
+    (Func<int>, int) tf;
+    void Start() { var fs = new Func<int>[3]; int x = 0; for (int i = 0; i < 3; i++) { int v = (i + 1) * 10; tf.Item1 = () => v; tf.Item2 = i; (fs[i], x) = tf; } sum = fs[0]() + fs[1]() + fs[2](); }
+}", "DeconF"));
+        Assert.Contains("capture", ex.Message);
+    }
+
+    [Fact]
+    public void TaintedStructDeconstruction_IntoArrayElement_Throws()
+    {
+        // [N3] user-struct source (Deconstruct method): s.f=()=>v taints s, the positional
+        // deconstruction shipped the bundle (VM 40 vs CLR 30 pre-fix).
+        var ex = Assert.ThrowsAny<Exception>(() => TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public struct DEnv { public Func<int> f; public int n; public void Deconstruct(out Func<int> a, out int b) { a = f; b = n; } }
+public class DeconS : UdonSharpBehaviour {
+    public int sum;
+    void Start() { var fs = new Func<int>[2]; int x = 0; for (int i = 0; i < 2; i++) { int v = (i + 1) * 10; DEnv s = default; s.f = () => v; s.n = i; (fs[i], x) = s; } sum = fs[0]() + fs[1](); }
+}", "DeconS"));
+        Assert.Contains("capture", ex.Message);
+    }
+
+    [Fact]
+    public void MemberReadCopy_UseBeforeSeed_Throws()
+    {
+        // [N4] member-read copy edge: fs[i]=g escaped clean lexically BEFORE g=s.f acquired the
+        // container taint, yet executed seeded from iteration 2 on (VM 21 vs CLR 11 pre-fix).
+        // The pre-scan now adds the s→g edge, so g is tainted before any emission.
+        var ex = Assert.ThrowsAny<Exception>(() => TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public struct CEnv { public Func<int> f; }
+public class CopyEdge : UdonSharpBehaviour {
+    public int sum;
+    int M() { return 1; }
+    void Start() { var fs = new Func<int>[2]; Func<int> g = M; CEnv s = default; for (int i = 0; i < 2; i++) { fs[i] = g; int w = (i + 1) * 10; s.f = () => w; g = s.f; } sum = fs[0]() + fs[1](); }
+}", "CopyEdge"));
+        Assert.Contains("capture", ex.Message);
+    }
+
+    [Fact]
+    public void MethodGroupAggregateDeconstruction_IntoLocals_Compiles()
+    {
+        // [N3 precision] deconstruction of a method-group-only aggregate into LOCALS stays legal —
+        // the guard is taint-gated, not shape-gated.
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public class DeconOk : UdonSharpBehaviour {
+    public int sum;
+    int M() { return 4; }
+    void Start() { (Func<int>, int) t = (M, 3); (Func<int> g, int x) = t; sum = g() + x; }
+}", "DeconOk");
+        Assert.NotNull(uasm);
+    }
+
+    [Fact]
+    public void MemberReadCopy_MethodGroupSeed_Compiles()
+    {
+        // [N4 precision] the member-read copy edge carries no taint from an unseeded container —
+        // the N4 shape with METHOD GROUPS stays legal end-to-end.
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public struct COk { public Func<int> f; }
+public class CopyOk : UdonSharpBehaviour {
+    public int sum;
+    int M() { return 1; }
+    int M2() { return 2; }
+    void Start() { var fs = new Func<int>[2]; Func<int> g = M; COk s = default; for (int i = 0; i < 2; i++) { fs[i] = g; s.f = M2; g = s.f; } sum = fs[0]() + fs[1](); }
+}", "CopyOk");
+        Assert.NotNull(uasm);
+    }
 }
