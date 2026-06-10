@@ -214,7 +214,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
     CLeaf VisitConditionalAnd(IBinaryOperation op)
     {
         // a && b: evaluate b only when a is true (short-circuit).
-        // VisitExpression on operands may emit HIR statements (e.g. temp stores for
+        // VisitExpression on operands may emit Core IR statements (e.g. temp stores for
         // enum conversions, UnityEngineObject casts). Those statements must live inside
         // the conditional branch so they don't execute unconditionally.
         var leftVal = VisitExpression(op.LeftOperand);

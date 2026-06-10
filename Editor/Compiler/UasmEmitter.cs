@@ -96,7 +96,7 @@ public class UasmEmitter
 
     // ── Emit ──
 
-    /// <summary>Access to the HIR module for debugging and testing.</summary>
+    /// <summary>Access to the Core IR module for debugging and testing.</summary>
     public CModule Module => _module;
 
     /// <summary>Called after handler emission, before optimization. Set for IR debugging.</summary>
@@ -1295,7 +1295,7 @@ public class UasmEmitter
 
     void PreScanGotoLabels(IOperation op)
     {
-        // No-op: HIR uses string-based CGoto/CLabel instead of IrBlock targets.
+        // No-op: the Core IR uses string-based CGoto/CLabel instead of IrBlock targets.
     }
 
     // ── Expression visitor (facade — delegates to handlers) ──

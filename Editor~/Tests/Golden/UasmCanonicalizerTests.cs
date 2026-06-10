@@ -40,7 +40,7 @@ public class UasmCanonicalizerTests
     [Fact]
     public void DlgptrIntnl_RenumberPreservesType()
     {
-        // dlgptr scratch (LirToUasm.cs:516) is also benign-renumberable but must not collapse
+        // dlgptr scratch (CoreToUasm) is also benign-renumberable but must not collapse
         // into a different-typed intnl bucket.
         var a = "__intnl_dlgptr_SystemUInt32_2 __intnl_SystemInt32_5";
         var b = "__intnl_dlgptr_SystemUInt32_0 __intnl_SystemInt32_0";

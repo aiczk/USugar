@@ -11,8 +11,8 @@ namespace USugar.Tests;
 /// no longer be constructed, so their former negative tests are gone. The remaining violations
 /// (missing/dangling terminators, a CFieldAddr in a CAssign value, a structured statement leaking
 /// into a flat block, a non-flat shape) flow through CValue positions and stay runtime-checked.
-/// The positive case (well-formed CoreFlatten output passes) is exercised inside CoreFlattenTests
-/// across all control-flow shapes.
+/// The positive case (well-formed CoreFlatten output passes) has no dedicated unit-test file —
+/// it is exercised by every compiling test, since IrPipeline runs FlatVerify on each compile.
 /// </summary>
 public class FlatVerifyTests
 {

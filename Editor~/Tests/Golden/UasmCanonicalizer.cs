@@ -7,7 +7,7 @@ namespace USugar.Tests;
 /// Normalizes benign internal-scratch renumbering so two UASM texts that differ ONLY in
 /// __intnl_&lt;Type&gt;_&lt;idx&gt; numeric indices (with the SAME first-appearance order)
 /// compare equal, while real regressions (reordering, type change, different externs) stay
-/// different. The numeric index of coalesced scratch (LirToUasm.cs:213) is an implementation
+/// different. The numeric index of coalesced scratch (CoreToUasm) is an implementation
 /// detail; only first-appearance order is semantically meaningful. The fixed return-jump
 /// sentinel is preserved verbatim.
 /// </summary>

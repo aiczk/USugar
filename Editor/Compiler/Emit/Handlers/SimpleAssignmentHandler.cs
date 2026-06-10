@@ -340,7 +340,7 @@ public class SimpleAssignmentHandler : AssignmentHandlerBase, IExpressionHandler
         // The assignment's VALUE is the stored value. Return a fresh read of the target rather than the
         // RHS expression tree: re-emitting the tree (when the assignment is used as an expression, e.g.
         // `G(n = n - 1)`) would re-evaluate it after the store already mutated its inputs. A dead read in
-        // statement form is removed by DCE.
+        // statement form is harmless and simply remains (the optimizer has no DCE pass).
         var targetFieldType = _ctx.GetFieldType(targetFieldName);
         if (targetFieldType == null) return srcFallback;
         var loaded = LoadField(targetFieldName, targetFieldType);

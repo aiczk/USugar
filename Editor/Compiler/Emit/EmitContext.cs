@@ -403,7 +403,7 @@ public class EmitContext
     public readonly List<EmitDiagnostic> Diagnostics = new();
     public readonly HashSet<string> ReportedExterns = new();
 
-    // Dispatch delegates (HIR-based)
+    // Dispatch delegates (Core IR-based)
     Action<IOperation> _visitOperation;
     Func<IOperation, CLeaf> _visitExpression;
     Func<CLeaf, ITypeSymbol, IPatternOperation, CLeaf> _emitPatternCheck;

@@ -501,7 +501,7 @@ public class RemapTest : UdonSharpBehaviour {
 }
 ");
         Assert.Contains("VRCUdonCommonInterfacesIUdonEventReceiver.__RequestSerialization__SystemVoid", uasm);
-        // HIR/LIR pipeline uses __this_ directly (no intermediate temp for IUdonEventReceiver)
+        // The IR pipeline uses __this_ directly (no intermediate temp for IUdonEventReceiver)
         Assert.Contains("__this_VRCUdonUdonBehaviour_0: %VRCUdonUdonBehaviour, this", uasm);
     }
 

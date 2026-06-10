@@ -16,7 +16,7 @@ public enum SlotClass
     Pinned,
     /// <summary>Local that lives across internal calls. Function-private, not shared.</summary>
     Frame,
-    /// <summary>Temp that does not span calls. Aggressively reused across functions.</summary>
+    /// <summary>Temp that does not span calls. Aggressively reused within a function by CoalesceSlots.</summary>
     Scratch,
 }
 

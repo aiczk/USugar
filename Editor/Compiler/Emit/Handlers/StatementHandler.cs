@@ -270,7 +270,7 @@ public class StatementHandler : HandlerBase, IOperationHandler
 
     public void PreScanGotoLabels(IOperation op)
     {
-        // In HIR, labels are string-based (EmitLabel/EmitGoto).
+        // In the Core IR, labels are string-based (EmitLabel/EmitGoto).
         // No pre-scan needed — labels are resolved by name at lowering time.
     }
 

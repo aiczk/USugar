@@ -60,7 +60,7 @@ public abstract class HandlerBase
         return t.Substring(0, t.Length - "Array".Length);
     }
 
-    // ── HIR convenience methods ──
+    // ── Core IR convenience methods ──
 
     /// <summary>Emit: slot = expr</summary>
     protected void EmitAssign(int destSlot, CValue value) => _builder.EmitAssign(destSlot, value);
@@ -729,7 +729,7 @@ public abstract class HandlerBase
         // Create CFunction (internal, no export)
         var func = _module.AddFunction(irName);
 
-        // Declare params as fields (HIR uses field-based parameter passing)
+        // Declare params as fields (the Core IR passes parameters as fields)
         var lfParamIds = new string[localFunc.Parameters.Length];
         for (int pi = 0; pi < localFunc.Parameters.Length; pi++)
         {
@@ -913,8 +913,8 @@ public abstract class HandlerBase
 
     /// <summary>
     /// Call an internal function via CoreBuilder.InternalCall.
-    /// Returns the result CValue — this is an expression only, NOT emitted to the HIR.
-    /// For void calls (e.g. property setters), wrap with <c>EmitExprStmt()</c> to add to the HIR.
+    /// Returns the result CValue — this is an expression only, NOT emitted to the IR.
+    /// For void calls (e.g. property setters), wrap with <c>EmitExprStmt()</c> to add to the IR.
     /// </summary>
     protected CLeaf EmitCallToMethod(IMethodSymbol target, List<CLeaf> args)
     {
