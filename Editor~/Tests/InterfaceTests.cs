@@ -210,4 +210,38 @@ public class DimWithImpl : UdonSharpBehaviour, IDimOk {
 }", "DimWithImpl");
         Assert.Contains(".export __iface_IDimOk_F", uasm);
     }
+
+    // ── Round-8 [R3]: inherited EXPLICIT interface implementations ──
+
+    [Fact]
+    public void Interface_InheritedExplicitImpl_ExportsBridge()
+    {
+        // A BASE class's explicit implementation must be inherited into the derived layout so the
+        // derived program emits and exports the __iface_* bridge — pre-fix the call site dispatched
+        // a never-exported name (silent no-op + stale return; VM-proven, DiffFuzz ref=5 post-fix).
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public interface IExpInh { int F(); }
+public class ExpInhBase : UdonSharpBehaviour, IExpInh { int IExpInh.F() { return 5; } }
+public class ExpInhDerived : ExpInhBase {
+    public int sum;
+    void Start() { IExpInh i = this; sum = i.F(); }
+}", "ExpInhDerived");
+        Assert.Contains(".export __iface_IExpInh_F", uasm);
+    }
+
+    [Fact]
+    public void Interface_OwnClassExplicitImpl_ExportsBridge()
+    {
+        // Control: the own-class explicit implementation keeps working (harness value pin = 5).
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public interface IExpOwn { int F(); }
+public class ExpOwnImpl : UdonSharpBehaviour, IExpOwn {
+    public int sum;
+    int IExpOwn.F() { return 5; }
+    void Start() { IExpOwn i = this; sum = i.F(); }
+}", "ExpOwnImpl");
+        Assert.Contains(".export __iface_IExpOwn_F", uasm);
+    }
 }

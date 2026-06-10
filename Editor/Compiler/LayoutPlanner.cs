@@ -505,8 +505,14 @@ public class LayoutPlanner
             if (!inheritBase.DeclaringSyntaxReferences.IsEmpty)
             {
                 var baseLayout = Plan(inheritBase);
+                // Round-8 [R3]: ExplicitInterfaceImplementation is inherited too — without it a
+                // derived class never lays out a base class's `int IFoo.F()` bridge target, so
+                // ComputeBridges silently skipped the bridge while the call site dispatched the
+                // canonical __iface_* name: silent no-op + stale return on device (unbounded
+                // SendCustomEvent self-reentry in the harness).
                 foreach (var bm in inheritBase.GetMembers().OfType<IMethodSymbol>()
                     .Where(m => (m.MethodKind == MethodKind.Ordinary
+                              || m.MethodKind == MethodKind.ExplicitInterfaceImplementation
                               || m.MethodKind == MethodKind.PropertyGet
                               || m.MethodKind == MethodKind.PropertySet)
                              && m.DeclaringSyntaxReferences.Length > 0 && !m.IsGenericMethod && !m.IsAbstract))

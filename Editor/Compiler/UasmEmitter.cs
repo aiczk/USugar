@@ -647,8 +647,13 @@ public class UasmEmitter
         {
             if (!inheritBase.DeclaringSyntaxReferences.IsEmpty)
             {
+                // Round-8 [R3]: inherit ExplicitInterfaceImplementation methods too, mirroring the
+                // planner's inherit loop — the derived program must emit and export the __iface_*
+                // bridge for a base class's explicit implementation (pre-fix: never-exported
+                // dispatch name, silent no-op).
                 foreach (var bm in inheritBase.GetMembers().OfType<IMethodSymbol>()
                     .Where(m => (m.MethodKind == MethodKind.Ordinary
+                              || m.MethodKind == MethodKind.ExplicitInterfaceImplementation
                               || m.MethodKind == MethodKind.PropertyGet
                               || m.MethodKind == MethodKind.PropertySet)
                              && !m.IsImplicitlyDeclared && !m.IsGenericMethod && !m.IsAbstract))
