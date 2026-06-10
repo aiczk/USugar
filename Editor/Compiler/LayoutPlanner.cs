@@ -531,7 +531,18 @@ public class LayoutPlanner
                         }
                         ml = new MethodLayout(ue, ue + "__body", baseMl.ParamIds, newReturns);
                     }
-                    if (methods.TryAdd(bm, ml)) usedExports.Add(ml.ExportName);
+                    if (methods.TryAdd(bm, ml))
+                    {
+                        usedExports.Add(ml.ExportName);
+                        // Wave-9 [W4]: an inherited OVERRIDE owns its whole chain's virtual slot in this
+                        // program — mark its overridden ancestors so a chain-ROOT declaration visible from
+                        // a HIGHER base is not laid out as a second, collision-renamed function (the
+                        // pre-fix dead `__N_get_P`/`__N_M` over stale storage that a root-typed receiver
+                        // dispatch then bound: silent stale read / lost write, VM-proven 0 vs 7).
+                        // The walk is closest-base-first, so the override is always seen before its root.
+                        for (var cur = bm.OverriddenMethod; cur != null; cur = cur.OverriddenMethod)
+                            overriddenMethods.Add(cur);
+                    }
                 }
             }
             inheritBase = inheritBase.BaseType;

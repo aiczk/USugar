@@ -692,7 +692,16 @@ public class UasmEmitter
                              && !m.IsImplicitlyDeclared && !m.IsGenericMethod && !m.IsAbstract))
                 {
                     if (!overriddenMethods.Contains(bm))
+                    {
                         inheritedMethodsList.Add(bm);
+                        // Wave-9 [W4] (mirrors the planner's inherit loop): an inherited override owns
+                        // its chain's virtual slot — never emit the overridden ROOT declaration as a
+                        // second standalone function (its auto-prop body reads the dead __basebk
+                        // storage / its method body is the base body, and a root-typed receiver
+                        // dispatch bound that stale function instead of the exported override).
+                        for (var cur = bm.OverriddenMethod; cur != null; cur = cur.OverriddenMethod)
+                            overriddenMethods.Add(cur);
+                    }
                 }
             }
             inheritBase = inheritBase.BaseType;
