@@ -55,24 +55,28 @@ public partial class InvocationHandler
         // this.gameObject / this.transform → __this_* variable (Udon VM resolves via "this" default)
         if (op.Instance is IInstanceReferenceOperation)
         {
+            // Virtual dispatch through `this` (round 7): a read inside an inherited base body binds the
+            // BASE accessor — resolve to the chain-leaf override; `base.P` keeps the static binding.
+            var thisProp = ResolveDispatchProperty(op);
+
             // User-defined property getter → internal call. A struct-typed getter result is COPIED (C#
             // getters return by value) — otherwise `read = this.Prop` aliases the backing field. (diff-fuzz w4)
-            if (op.Property.GetMethod != null
-                && _methodFunctions.ContainsKey(op.Property.GetMethod))
+            if (thisProp.GetMethod != null
+                && _methodFunctions.ContainsKey(thisProp.GetMethod))
             {
-                var gv = EmitCallToMethod(op.Property.GetMethod, new List<CLeaf>());
-                return op.Property.Type is INamedTypeSymbol thisGetAgg && EmitContext.IsAggregateType(thisGetAgg)
+                var gv = EmitCallToMethod(thisProp.GetMethod, new List<CLeaf>());
+                return thisProp.Type is INamedTypeSymbol thisGetAgg && EmitContext.IsAggregateType(thisGetAgg)
                     ? EmitDeepCloneAggregate(gv, thisGetAgg) : gv;
             }
 
             // Auto-property on this class → direct backing-field access (user-defined classes only). A
             // struct-typed backing field is COPIED on read (value semantics), same as a struct field.
-            if (op.Property.GetMethod?.DeclaringSyntaxReferences.IsEmpty == true
-                && ExternResolver.IsUdonSharpBehaviour(op.Property.ContainingType)
-                && op.Property.ContainingType.Name != "UdonSharpBehaviour")
+            if (thisProp.GetMethod?.DeclaringSyntaxReferences.IsEmpty == true
+                && ExternResolver.IsUdonSharpBehaviour(thisProp.ContainingType)
+                && thisProp.ContainingType.Name != "UdonSharpBehaviour")
             {
-                var bv = LoadField(op.Property.Name, GetUdonType(op.Property.Type));
-                return op.Property.Type is INamedTypeSymbol thisAutoAgg && EmitContext.IsAggregateType(thisAutoAgg)
+                var bv = LoadField(thisProp.Name, GetUdonType(thisProp.Type));
+                return thisProp.Type is INamedTypeSymbol thisAutoAgg && EmitContext.IsAggregateType(thisAutoAgg)
                     ? EmitDeepCloneAggregate(bv, thisAutoAgg) : bv;
             }
 
@@ -176,13 +180,16 @@ public partial class InvocationHandler
 
     CLeaf VisitIndexerGet(IPropertyReferenceOperation op)
     {
-        // User-defined indexer on this/base class → internal getter call (`this[i]` reads this-fields directly).
+        // User-defined indexer on this/base class → internal getter call (`this[i]` reads this-fields
+        // directly). ResolveDispatchProperty (round 7): `this[i]` inside an inherited base body binds
+        // the BASE indexer — dispatch the chain-leaf override; `base[i]` keeps the static binding.
         if (op.Instance is IInstanceReferenceOperation
-            && op.Property.GetMethod != null && _methodFunctions.ContainsKey(op.Property.GetMethod))
+            && ResolveDispatchProperty(op) is { GetMethod: { } idxDispatchGetter }
+            && _methodFunctions.ContainsKey(idxDispatchGetter))
         {
             var args = new List<CLeaf>();
             foreach (var arg in op.Arguments) args.Add(VisitExpression(arg.Value));
-            return EmitCallToMethod(op.Property.GetMethod, args);
+            return EmitCallToMethod(idxDispatchGetter, args);
         }
 
         // User-defined indexer on a user STRUCT instance (`s[i]`) → call the getter with the struct receiver

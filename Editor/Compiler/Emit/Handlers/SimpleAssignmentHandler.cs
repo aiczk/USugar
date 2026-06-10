@@ -111,16 +111,20 @@ public class SimpleAssignmentHandler : AssignmentHandlerBase, IExpressionHandler
         if (assign.Target is IPropertyReferenceOperation propRef)
         {
             var srcVal = VisitExpression(assign.Value);
+            // Virtual dispatch through `this` (round 7): a write inside an inherited base body binds
+            // the BASE accessor — resolve to the chain-leaf override for the this-path setter lookups
+            // below; `base.P` (and every non-this receiver) keeps the static binding.
+            var dispatchProp = ResolveDispatchProperty(propRef);
             var propContainingUdon = GetUdonType(propRef.Property.ContainingType);
 
             // User-defined indexer on this/base → internal setter call (index args followed by the value).
-            if (propRef.Property.IsIndexer && propRef.Instance is IInstanceReferenceOperation
-                && propRef.Property.SetMethod != null && _methodFunctions.ContainsKey(propRef.Property.SetMethod))
+            if (dispatchProp.IsIndexer && propRef.Instance is IInstanceReferenceOperation
+                && dispatchProp.SetMethod != null && _methodFunctions.ContainsKey(dispatchProp.SetMethod))
             {
                 var setterArgs = new List<CLeaf>();
                 foreach (var arg in propRef.Arguments) setterArgs.Add(VisitExpression(arg.Value));
                 setterArgs.Add(srcVal);
-                EmitExprStmt(EmitCallToMethod(propRef.Property.SetMethod, setterArgs));
+                EmitExprStmt(EmitCallToMethod(dispatchProp.SetMethod, setterArgs));
                 return srcVal;
             }
 
@@ -161,16 +165,16 @@ public class SimpleAssignmentHandler : AssignmentHandlerBase, IExpressionHandler
             else switch (propRef.Instance)
             {
                 case IInstanceReferenceOperation
-                    when propRef.Property.SetMethod != null && _methodFunctions.TryGetValue(propRef.Property.SetMethod, out _):
+                    when dispatchProp.SetMethod != null && _methodFunctions.TryGetValue(dispatchProp.SetMethod, out _):
                     // User-defined property setter on this → internal call
-                    EmitExprStmt(EmitCallToMethod(propRef.Property.SetMethod, new List<CLeaf> { srcVal }));
+                    EmitExprStmt(EmitCallToMethod(dispatchProp.SetMethod, new List<CLeaf> { srcVal }));
                     break;
                 case IInstanceReferenceOperation
-                    when propRef.Property.SetMethod?.DeclaringSyntaxReferences.IsEmpty == true
-                         && ExternResolver.IsUdonSharpBehaviour(propRef.Property.ContainingType)
-                         && propRef.Property.ContainingType.Name != "UdonSharpBehaviour":
+                    when dispatchProp.SetMethod?.DeclaringSyntaxReferences.IsEmpty == true
+                         && ExternResolver.IsUdonSharpBehaviour(dispatchProp.ContainingType)
+                         && dispatchProp.ContainingType.Name != "UdonSharpBehaviour":
                     // Auto-property set on this → direct variable assignment (user-defined classes only)
-                    EmitStoreField(propRef.Property.Name, srcVal);
+                    EmitStoreField(dispatchProp.Name, srcVal);
                     break;
                 default:
                 {

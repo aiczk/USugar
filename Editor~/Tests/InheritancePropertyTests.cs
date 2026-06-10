@@ -207,6 +207,114 @@ public class J4Drv : J4Base {
         Assert.Contains("P: %SystemInt32", uasm);     // chain-leaf keeps the bare exported name
     }
 
+    // ── round-7 [P1]: this-path virtual accessor dispatch from INHERITED base method bodies ──
+    // A property reference inside an inherited base body statically binds the BASE accessor; the
+    // this-path lookups must resolve the chain-leaf override (ResolveDispatchProperty) and the
+    // base-instance-copy collector must register accessors for actual `base.` receivers ONLY.
+    // Pre-fix the copy ran the base accessor body (manual/indexer, VM 3 vs CLR 5 — pre-existing
+    // v2.x) or read the base declaration's __basebk storage (auto, VM 7 vs CLR 77 — a 917d99c
+    // regression).
+
+    /// <summary>Function-entry labels for an accessor, excluding its __dlg_ delegate bridges —
+    /// a base-instance COPY would add a second non-bridge `__N_{accessor}:` label.</summary>
+    static int CountFunctionLabels(string uasm, string accessor)
+        => System.Text.RegularExpressions.Regex.Matches(
+            uasm, $@"^\s*(?!__dlg_)\S*{accessor}:\s*$",
+            System.Text.RegularExpressions.RegexOptions.Multiline).Count;
+
+    [Fact]
+    public void InheritedBaseBody_AutoPropRead_BindsLeafStorage()
+    {
+        // No base.P anywhere → no base-instance copy accessors, so the base declaration's
+        // per-declaration __basebk storage is never touched (its declaration stays, dead) and the
+        // inherited ReadP dispatches the ONE chain-leaf accessor over the bare exported storage.
+        var uasm = TestHelper.CompileToUasm(@"
+public class P1RBase : UdonSharp.UdonSharpBehaviour {
+    public virtual int P { get; set; }
+    public int ReadP() { return P; }
+}
+public class P1RDrv : P1RBase {
+    public int sum;
+    public override int P { get; set; }
+    void Start() { P = 7; sum = ReadP() * 10 + P; }
+}", "P1RDrv");
+        Assert.DoesNotContain("PUSH, __basebk", uasm);
+        Assert.Contains(".export get_P", uasm);
+        Assert.Equal(1, CountFunctionLabels(uasm, "get_P"));
+        Assert.Equal(1, CountFunctionLabels(uasm, "set_P"));
+    }
+
+    [Fact]
+    public void InheritedBaseBody_AutoPropWrite_BindsLeafStorage()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+public class P1WBase : UdonSharp.UdonSharpBehaviour {
+    public virtual int P { get; set; }
+    public void SetP(int v) { P = v; }
+}
+public class P1WDrv : P1WBase {
+    public int sum;
+    public override int P { get; set; }
+    void Start() { SetP(7); sum = P; }
+}", "P1WDrv");
+        Assert.DoesNotContain("PUSH, __basebk", uasm);
+        Assert.Equal(1, CountFunctionLabels(uasm, "set_P"));
+    }
+
+    [Fact]
+    public void InheritedBaseBody_ManualPropOverride_SingleLeafGetter()
+    {
+        // The overridden base getter must NOT be emitted as a base-instance copy (it would run the
+        // BASE accessor body); exactly one get_P function remains — the exported leaf override.
+        var uasm = TestHelper.CompileToUasm(@"
+public class P1MBase : UdonSharp.UdonSharpBehaviour {
+    public virtual int P { get { return 3; } }
+    public int ReadP() { return P; }
+}
+public class P1MDrv : P1MBase {
+    public int sum;
+    public override int P { get { return 5; } }
+    void Start() { sum = ReadP(); }
+}", "P1MDrv");
+        Assert.Equal(1, CountFunctionLabels(uasm, "get_P"));
+    }
+
+    [Fact]
+    public void InheritedBaseBody_VirtualIndexerOverride_SingleLeafGetter()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+public class P1IBase : UdonSharp.UdonSharpBehaviour {
+    public virtual int this[int i] { get { return 3; } }
+    public int ReadAt() { return this[0]; }
+}
+public class P1IDrv : P1IBase {
+    public int sum;
+    public override int this[int i] { get { return 5; } }
+    void Start() { sum = ReadAt(); }
+}", "P1IDrv");
+        Assert.Equal(1, CountFunctionLabels(uasm, "get_Item"));
+    }
+
+    [Fact]
+    public void BaseDotP_FromInheritedBaseBody_KeepsBaseStorage()
+    {
+        // base.P inside a BASE body (the mid-level override's Mix) keeps binding the ROOT
+        // declaration's per-declaration storage — the collector still registers actual `base.`
+        // receivers (917d99c semantics; real-VM value 57 pinned in the round-7 harness probes).
+        var uasm = TestHelper.CompileToUasm(@"
+public class P1BBase : UdonSharp.UdonSharpBehaviour { public virtual int P { get; set; } }
+public class P1BMid : P1BBase {
+    public override int P { get; set; }
+    public int Mix() { base.P = 5; P = 7; return base.P * 10 + P; }
+}
+public class P1BDrv : P1BMid {
+    public int sum;
+    void Start() { sum = Mix(); }
+}", "P1BDrv");
+        Assert.Contains("__basebk_P1BBase_P", uasm);
+        Assert.Contains("P: %SystemInt32", uasm);
+    }
+
     // ── round-6 [G4]: explicit interface implementation auto-property ──
 
     [Fact]

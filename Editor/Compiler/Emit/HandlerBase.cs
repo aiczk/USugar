@@ -1300,6 +1300,30 @@ public abstract class HandlerBase
         return (bridgeExportName, funcRef, targetInstance);
     }
 
+    /// <summary>Virtual dispatch through `this` for PROPERTY/INDEXER accessors (round 7): a property
+    /// reference inside an INHERITED base method body statically binds the BASE declaration, so the
+    /// this-path accessor lookups must resolve to the most-derived override visible from the compiled
+    /// class — the chain-leaf accessor over the chain-leaf storage — exactly like the
+    /// ResolveMostDerivedOverride arm for MethodKind.Ordinary calls. Without this the lookup hits the
+    /// base-instance COPY, which runs the base accessor body (manual props/indexers, pre-existing v2.x)
+    /// or reads the base declaration's per-declaration `__basebk` storage (auto-props, post-917d99c).
+    /// `base.P` keeps the static binding (the single non-virtual property access in C#), as does every
+    /// non-this receiver (cross dispatch is receiver-correct via the planner chain-root layout).</summary>
+    protected IPropertySymbol ResolveDispatchProperty(IPropertyReferenceOperation op)
+    {
+        var prop = op.Property;
+        if (!(prop.IsVirtual || prop.IsOverride || prop.IsAbstract)) return prop;
+        if (op.Instance is not IInstanceReferenceOperation iref) return prop;
+        if (iref.Syntax is Microsoft.CodeAnalysis.CSharp.Syntax.BaseExpressionSyntax) return prop;
+        var def = prop.OriginalDefinition;
+        for (var t = _classSymbol; t != null; t = t.BaseType)
+            foreach (var p in t.GetMembers(prop.Name).OfType<IPropertySymbol>())
+                for (var o = p; o != null; o = o.OverriddenProperty)
+                    if (SymbolEqualityComparer.Default.Equals(o.OriginalDefinition, def))
+                        return p;
+        return prop;
+    }
+
     // ── Call helpers ──
 
     protected (string exportName, string[] paramIds, string retId) GetCalleeLayout(IMethodSymbol target)

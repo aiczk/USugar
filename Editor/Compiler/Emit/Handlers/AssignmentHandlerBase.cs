@@ -30,8 +30,11 @@ public abstract class AssignmentHandlerBase : HandlerBase
         {
             // User-defined indexer on this: cache the (possibly side-effecting) index args ONCE, so a
             // compound assignment (`this[Idx()] += x`) does not evaluate the index twice.
+            // ResolveDispatchProperty (round 7): `this[i]` inside an inherited base body binds the BASE
+            // indexer — read through the chain-leaf override's getter; `base[i]` keeps the static binding.
             case IPropertyReferenceOperation { Instance: IInstanceReferenceOperation, Property: { IsIndexer: true } } idxRef
-                when idxRef.Property.GetMethod != null && _methodFunctions.ContainsKey(idxRef.Property.GetMethod):
+                when ResolveDispatchProperty(idxRef).GetMethod is { } idxDispatchGetter
+                && _methodFunctions.ContainsKey(idxDispatchGetter):
             {
                 // Each VisitExpression(arg) is bound to a scratch leaf once under ANF — the index side effect
                 // runs exactly once and the SAME leaf is reused by the getter here and the setter in
@@ -39,7 +42,7 @@ public abstract class AssignmentHandlerBase : HandlerBase
                 var cachedArgs = new List<CLeaf>();
                 foreach (var arg in idxRef.Arguments)
                     cachedArgs.Add(VisitExpression(arg.Value));
-                var currentVal = EmitCallToMethod(idxRef.Property.GetMethod, new List<CLeaf>(cachedArgs));
+                var currentVal = EmitCallToMethod(idxDispatchGetter, new List<CLeaf>(cachedArgs));
                 return new LValueCapture { Value = currentVal, IndexArgs = cachedArgs };
             }
             // User-defined indexer on a user STRUCT instance (`s[i] += x`): cache the struct receiver and the
@@ -165,23 +168,34 @@ public abstract class AssignmentHandlerBase : HandlerBase
                 EmitExternVoid("VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid", new List<CLeaf> { instanceVal, nameConst, valueVal });
                 break;
             }
-            // Auto-property on this → backing field already handled by write-back to field (user-defined classes only)
-            case IPropertyReferenceOperation { Instance: IInstanceReferenceOperation } propRef when propRef.Property.GetMethod?.DeclaringSyntaxReferences.IsEmpty == true && ExternResolver.IsUdonSharpBehaviour(propRef.Property.ContainingType) && propRef.Property.ContainingType.Name != "UdonSharpBehaviour":
+            // Auto-property on this → backing field already handled by write-back to field (user-defined
+            // classes only). ResolveDispatchProperty (round 7): an inherited base body's write binds the
+            // BASE accessor — all three this-path cases below dispatch the chain-leaf override instead;
+            // `base.P` keeps the static binding (its base-instance copy accessors).
+            case IPropertyReferenceOperation { Instance: IInstanceReferenceOperation } propRef
+                when ResolveDispatchProperty(propRef) is { } autoDispatchProp
+                && autoDispatchProp.GetMethod?.DeclaringSyntaxReferences.IsEmpty == true
+                && ExternResolver.IsUdonSharpBehaviour(autoDispatchProp.ContainingType)
+                && autoDispatchProp.ContainingType.Name != "UdonSharpBehaviour":
                 return;
             // User-defined indexer on this → call setter with the index args followed by the value. Reuse
             // the index args cached by CaptureLValue (compound assignment) to avoid re-evaluating them.
-            case IPropertyReferenceOperation { Instance: IInstanceReferenceOperation, Property: { IsIndexer: true, SetMethod: not null } } idxRef when _methodFunctions.TryGetValue(idxRef.Property.SetMethod, out _):
+            case IPropertyReferenceOperation { Instance: IInstanceReferenceOperation, Property: { IsIndexer: true } } idxRef
+                when ResolveDispatchProperty(idxRef).SetMethod is { } idxDispatchSetter
+                && _methodFunctions.TryGetValue(idxDispatchSetter, out _):
             {
                 var setterArgs = lv.IndexArgs != null ? new List<CLeaf>(lv.IndexArgs) : new List<CLeaf>();
                 if (lv.IndexArgs == null)
                     foreach (var arg in idxRef.Arguments) setterArgs.Add(VisitExpression(arg.Value));
                 setterArgs.Add(valueVal);
-                EmitExprStmt(EmitCallToMethod(idxRef.Property.SetMethod, setterArgs));
+                EmitExprStmt(EmitCallToMethod(idxDispatchSetter, setterArgs));
                 return;
             }
             // User-defined property on this → call setter
-            case IPropertyReferenceOperation { Instance: IInstanceReferenceOperation, Property: { SetMethod: not null } } propRef when _methodFunctions.TryGetValue(propRef.Property.SetMethod, out _):
-                EmitExprStmt(EmitCallToMethod(propRef.Property.SetMethod, new List<CLeaf> { valueVal }));
+            case IPropertyReferenceOperation { Instance: IInstanceReferenceOperation } propRef
+                when ResolveDispatchProperty(propRef).SetMethod is { } dispatchSetter
+                && _methodFunctions.TryGetValue(dispatchSetter, out _):
+                EmitExprStmt(EmitCallToMethod(dispatchSetter, new List<CLeaf> { valueVal }));
                 return;
             // Cross-behaviour UdonSharpBehaviour property → SetProgramVariable / SendCustomEvent
             case IPropertyReferenceOperation propRef when ExternResolver.IsUdonSharpBehaviour(propRef.Property.ContainingType) && propRef.Instance is not IInstanceReferenceOperation:

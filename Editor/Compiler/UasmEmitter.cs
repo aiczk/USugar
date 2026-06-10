@@ -2329,7 +2329,14 @@ public class UasmEmitter
         // base.Prop / base[i]: a property/indexer reference invokes an accessor implicitly (it is not an
         // IInvocationOperation), so collect the base accessor too — else the read/write handler emits a
         // bogus SystemX.__get_Prop__ extern instead of a JUMP to the registered base getter/setter.
-        if (op is IPropertyReferenceOperation pr)
+        // ONLY actual `base.` receivers (round 7): a this/implicit reference to an OVERRIDDEN base
+        // accessor must dispatch the chain-leaf override (ResolveDispatchProperty at the lookup sites),
+        // not a base-instance copy — registering it here made the this-path lookups direct-call the
+        // copy, which runs the base accessor body (manual, pre-existing v2.x) or reads the base
+        // declaration's `__basebk` storage (auto, post-917d99c). Non-overridden base accessors are
+        // already registered as inherited methods and never needed this arm.
+        if (op is IPropertyReferenceOperation pr
+            && pr.Instance is IInstanceReferenceOperation { Syntax: BaseExpressionSyntax })
         {
             if (pr.Property.GetMethod is { } g && IsBaseInstanceMethod(g)) result.Add(g);
             if (pr.Property.SetMethod is { } s && IsBaseInstanceMethod(s)) result.Add(s);
