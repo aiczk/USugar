@@ -1114,6 +1114,193 @@ public class FInvoker : UdonSharpBehaviour {
         Assert.NotNull(uasm);
     }
 
+    // ── Capture-escape laundering, round 4: array-element chain roots, transitive
+    //    local-function captures, loop back-edge use-before-seed ──
+
+    [Fact]
+    public void StructArrayElementCapturingSeed_Throws()
+    {
+        // [K1]/[K4] sa[i].f=()=>v — an array-element chain root mints N live bundles from ONE
+        // lambda site with no local to taint, so the seed itself is loud (VM 40 vs CLR 30 pre-fix).
+        var ex = Assert.ThrowsAny<Exception>(() => TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public struct AEnv { public Func<int> f; }
+public class AElem : UdonSharpBehaviour {
+    public int sum;
+    void Start() { AEnv[] sa = new AEnv[2]; for (int i = 0; i < 2; i++) { int v = (i + 1) * 10; sa[i].f = () => v; } sum = sa[0].f() + sa[1].f(); }
+}", "AElem"));
+        Assert.Contains("capture", ex.Message);
+    }
+
+    [Fact]
+    public void NestedStructArrayElementChainSeed_Throws()
+    {
+        // [K1] arr[i].inner.f=()=>v — the chain-root walk hops the member links and must still
+        // reject at the element root (VM 90 vs CLR 60 pre-fix).
+        var ex = Assert.ThrowsAny<Exception>(() => TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public struct AInner { public Func<int> f; }
+public struct AOuter { public AInner inner; }
+public class ANest : UdonSharpBehaviour {
+    public int sum;
+    void Start() { AOuter[] arr = new AOuter[3]; for (int i = 0; i < 3; i++) { int v = (i + 1) * 10; arr[i].inner.f = () => v; } sum = arr[0].inner.f() + arr[1].inner.f() + arr[2].inner.f(); }
+}", "ANest"));
+        Assert.Contains("capture", ex.Message);
+    }
+
+    [Fact]
+    public void CoalesceArrayElementMemberSeed_Throws()
+    {
+        // [K1] arr[i].f ??= ()=>v routes through NullableHandler into the same chain arm
+        // (VM 90 vs CLR 60 pre-fix).
+        var ex = Assert.ThrowsAny<Exception>(() => TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public struct ACo { public Func<int> f; }
+public class ACoalesce : UdonSharpBehaviour {
+    public int sum;
+    void Start() { ACo[] arr = new ACo[3]; for (int i = 0; i < 3; i++) { int v = (i + 1) * 10; arr[i].f ??= () => v; } sum = arr[0].f() + arr[1].f() + arr[2].f(); }
+}", "ACoalesce"));
+        Assert.Contains("capture", ex.Message);
+    }
+
+    [Fact]
+    public void CapturingLocalFunctionWrapper_MethodGroupArrayStore_Throws()
+    {
+        // [K2] Outer(){return Inner();} where Inner captures v — capture-ness must be transitive
+        // over the local-function call graph (VM 40 vs CLR 30 pre-fix).
+        var ex = Assert.ThrowsAny<Exception>(() => TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public class LfWrap : UdonSharpBehaviour {
+    public int sum;
+    Func<int>[] fs;
+    void Start() { fs = new Func<int>[2]; for (int i = 0; i < 2; i++) { int v = (i + 1) * 10; int Inner() { return v; } int Outer() { return Inner(); } fs[i] = Outer; } sum = fs[0]() + fs[1](); }
+}", "LfWrap"));
+        Assert.Contains("capture", ex.Message);
+    }
+
+    [Fact]
+    public void LambdaWrapperOverCapturingLocalFunction_Throws()
+    {
+        // [K2] fs[i]=()=>Inner(); — the lambda capture walk must see the invocation of a
+        // capturing local function as a capture (VM 40 vs CLR 30 pre-fix).
+        var ex = Assert.ThrowsAny<Exception>(() => TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public class LfLam : UdonSharpBehaviour {
+    public int sum;
+    Func<int>[] fs;
+    void Start() { fs = new Func<int>[2]; for (int i = 0; i < 2; i++) { int v = (i + 1) * 10; int Inner() { return v; } fs[i] = () => Inner(); } sum = fs[0]() + fs[1](); }
+}", "LfLam"));
+        Assert.Contains("capture", ex.Message);
+    }
+
+    [Fact]
+    public void LoopBackEdgeUseBeforeSeed_Local_Throws()
+    {
+        // [K3] fs[i]=f BEFORE f=()=>v in the loop body — the read executes after the seed from
+        // iteration 2 onward, so the local taint must be pre-scanned, not emission-ordered
+        // (VM 60 vs CLR 30 pre-fix).
+        var ex = Assert.ThrowsAny<Exception>(() => TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public class BkEdge : UdonSharpBehaviour {
+    public int sum;
+    Func<int>[] fs;
+    void Start() { fs = new Func<int>[3]; Func<int> f = null; for (int i = 0; i < 3; i++) { fs[i] = f; int v = (i + 1) * 10; f = () => v; } sum = fs[1]() + fs[2](); }
+}", "BkEdge"));
+        Assert.Contains("capture", ex.Message);
+    }
+
+    [Fact]
+    public void LoopBackEdgeUseBeforeSeed_StructContainer_Throws()
+    {
+        // [K3] arr[i]=s BEFORE s.f=()=>v — the round-3 [B] container taint gets the same
+        // pre-scan treatment (VM 60 vs CLR 30 pre-fix).
+        var ex = Assert.ThrowsAny<Exception>(() => TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public struct BEnv { public Func<int> f; }
+public class BkStruct : UdonSharpBehaviour {
+    public int sum;
+    void Start() { BEnv[] arr = new BEnv[3]; BEnv s; s.f = null; for (int i = 0; i < 3; i++) { arr[i] = s; int v = (i + 1) * 10; s.f = () => v; } sum = arr[1].f() + arr[2].f(); }
+}", "BkStruct"));
+        Assert.Contains("capture", ex.Message);
+    }
+
+    // ── Round-4 precision pins: the legal flows the new rules must NOT break ──
+
+    [Fact]
+    public void MethodGroupArrayElementMemberSeed_Compiles()
+    {
+        // [K1]/[K4] precision: the element-root reject is only reached on a DIRECT capturing
+        // store — method-group element seeds stay legal (real-VM-pinned in the local harness).
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public struct MgEnv { public Func<int> f; }
+public class MgElem : UdonSharpBehaviour {
+    public int result;
+    void Start() { MgEnv[] arr = new MgEnv[1]; arr[0].f = Eight; result = arr[0].f(); }
+    public int Eight() { return 8; }
+}", "MgElem");
+        Assert.NotNull(uasm);
+    }
+
+    [Fact]
+    public void CaptureFreeLocalFunctionChain_MethodGroup_Compiles()
+    {
+        // [K2] precision: the transitivity is capture-driven, not call-driven — a capture-free
+        // chain stays legal as a method group.
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public class LfChain : UdonSharpBehaviour {
+    public int result;
+    Func<int, int>[] fs;
+    void Start() { int Inner(int x) { return x * 2; } int Outer(int x) { return Inner(x); } fs = new Func<int, int>[1]; fs[0] = Outer; result = fs[0](21); }
+}", "LfChain");
+        Assert.NotNull(uasm);
+    }
+
+    [Fact]
+    public void LocalFunctionCapturingOnlyCallerLocals_MethodGroup_Compiles()
+    {
+        // [K2] precision (the inside-filter): a callee capturing only the CALLER's own locals
+        // runs entirely in the caller's activation — fs[0]=Outer stays legal and correct
+        // (real-VM-pinned in the local harness).
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public class LfSelf : UdonSharpBehaviour {
+    public int seed;
+    public int result;
+    Func<int>[] fs;
+    void Start() { int Outer() { int w = seed + 5; int I() { return w; } return I(); } fs = new Func<int>[1]; fs[0] = Outer; result = fs[0](); }
+}", "LfSelf");
+        Assert.NotNull(uasm);
+    }
+
+    [Fact]
+    public void MethodGroupSeededLocal_IntoArray_Compiles()
+    {
+        // [K3] precision: the pre-scan taints capturing seeds only — a local seeded with a
+        // method group stays freely storable.
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public class MgLocal : UdonSharpBehaviour {
+    public int result;
+    Func<int>[] fs;
+    void Start() { Func<int> f = Four; fs = new Func<int>[1]; fs[0] = f; result = fs[0](); }
+    public int Four() { return 4; }
+}", "MgLocal");
+        Assert.NotNull(uasm);
+    }
+
     // ── Type map + cast audit ──
 
     [Fact]

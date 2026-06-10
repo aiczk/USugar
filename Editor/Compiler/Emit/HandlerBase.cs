@@ -1218,7 +1218,10 @@ public abstract class HandlerBase
             // the bundle, so resolve the chain root: a LOCAL root is tainted (whole-struct copies /
             // returns / array stores of it must go loud — VM-verified silent aliasing otherwise);
             // a PARAM root is loud (the by-value copy launders out via the legal param-ref return,
-            // VM-verified); a chain through ANOTHER behaviour class's member is loud (per-class
+            // VM-verified); an ARRAY-ELEMENT root is loud (§2.8 round-4 [K1]/[K4]: arr[i].f = () => v
+            // mints N live bundles from ONE lambda site with no local to taint — unrepresentable in
+            // the taint model, and whole-element reads cannot be made loud, VM-verified silent
+            // aliasing); a chain through ANOTHER behaviour class's member is loud (per-class
             // pre-scan cannot make that class's reads loud — round-2 armor, now chain-deep);
             // a `this`-rooted chain stays legal — the pre-scan records every chain member.
             case IFieldReferenceOperation or IPropertyReferenceOperation:
@@ -1241,7 +1244,7 @@ public abstract class HandlerBase
                     if (root is IConversionOperation rc) { root = rc.Operand; continue; }
                     break;
                 }
-                if (root is IParameterReferenceOperation)
+                if (root is IParameterReferenceOperation || root is IArrayElementReferenceOperation)
                     throw new System.NotSupportedException(CaptureEscapeError);
                 if (root is ILocalReferenceOperation rootLocal)
                     _ctx.CapturingLambdaLocals.Add(rootLocal.Local);

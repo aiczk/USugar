@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.Linq;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
@@ -1347,17 +1348,58 @@ public class UasmEmitter
             edges[m] = callees;
         }
 
-        // §2.8 round-3 [A]: compute local-function capture sets BEFORE the recipient pre-scan and any
-        // emission — a capturing local function converted to a method group is a closure exactly like
-        // a capturing lambda, so the guards (and the pre-scan below) treat it as capturing-lambda-
-        // equivalent via EmitContext.CapturingLocalFunctions (membership-only, §1.5).
+        // §2.8 round-3 [A] + round-4 [K2]: compute local-function capture sets BEFORE the recipient
+        // pre-scan and any emission — a capturing local function converted to a method group is a
+        // closure exactly like a capturing lambda, so the guards (and the pre-scans below) treat it
+        // as capturing-lambda-equivalent via EmitContext.CapturingLocalFunctions (membership-only,
+        // §1.5). Capture-ness is TRANSITIVE over the local-function call graph ([K2]: a wrapper
+        // `Outer(){return Inner();}` — or any longer chain — is the same closure judged capture-free
+        // by the direct walk, VM-verified laundering), so run a fixpoint unioning callee capture
+        // sets, each hop filtered against the caller's own `inside` set (a callee capturing only the
+        // CALLER's locals runs entirely in the caller's activation and stays non-capturing).
+        var lfCaptures = new Dictionary<IMethodSymbol, HashSet<ISymbol>>(SymbolEqualityComparer.Default);
+        var lfInside = new Dictionary<IMethodSymbol, HashSet<ISymbol>>(SymbolEqualityComparer.Default);
+        var lfRefs = new Dictionary<IMethodSymbol, HashSet<IMethodSymbol>>(SymbolEqualityComparer.Default);
         foreach (var m in internalMethods)
         {
             if (m.MethodKind != MethodKind.LocalFunction) continue;
-            if (bodies.TryGetValue(m, out var lfBody) && lfBody != null
-                && LambdaCaptureAnalyzer.LocalFunctionHasCaptures(m, lfBody))
-                _ctx.CapturingLocalFunctions.Add(m);
+            if (!bodies.TryGetValue(m, out var lfBody) || lfBody == null) continue;
+            var direct = new HashSet<ISymbol>(SymbolEqualityComparer.Default);
+            var insideSet = new HashSet<ISymbol>(SymbolEqualityComparer.Default);
+            var refs = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
+            LambdaCaptureAnalyzer.AnalyzeLocalFunction(m, lfBody, direct, insideSet, refs);
+            lfCaptures[m] = direct;
+            lfInside[m] = insideSet;
+            lfRefs[m] = refs;
         }
+        bool lfChanged = true;
+        while (lfChanged)
+        {
+            lfChanged = false;
+            foreach (var kv in lfRefs)
+            {
+                var mySet = lfCaptures[kv.Key];
+                var myInside = lfInside[kv.Key];
+                foreach (var callee in kv.Value)
+                {
+                    if (!lfCaptures.TryGetValue(callee, out var calleeSet)) continue;
+                    if (ReferenceEquals(calleeSet, mySet)) continue; // self-recursion adds nothing
+                    foreach (var s in calleeSet)
+                        if (!myInside.Contains(s) && mySet.Add(s)) lfChanged = true;
+                }
+            }
+        }
+        var lfFinal = new Dictionary<IMethodSymbol, ImmutableArray<ISymbol>>(SymbolEqualityComparer.Default);
+        foreach (var kv in lfCaptures)
+        {
+            if (kv.Value.Count == 0) continue;
+            _ctx.CapturingLocalFunctions.Add(kv.Key);
+            lfFinal[kv.Key] = kv.Value.ToImmutableArray();
+        }
+        // [K2] lambda side: wrapper LAMBDAS over capturing local functions are the same hole —
+        // hand the transitive sets to the analyzer (consulted by GetCaptures' invocation/method-
+        // reference cases) BEFORE the first GetCaptures caller below pins the per-lambda cache.
+        _ctx.CaptureAnalyzer.SetLocalFunctionCaptures(lfFinal);
 
         // §2.8 round-2: pre-scan every root body + field initializer for DIRECT capturing-lambda
         // stores into fields / auto-properties / struct members (simple, coalesce, and deconstruction
@@ -1370,6 +1412,34 @@ public class UasmEmitter
                 CollectCaptureReceivingMembers(rb);
         foreach (var (_, initOp, _) in _fieldInitOps)
             CollectCaptureReceivingMembers(initOp);
+
+        // §2.8 round-4 [K3]: pre-scan LOCAL capture taint. The emission-time taint registration
+        // (GuardCaptureEscapeStore / the declaration arms) populates CapturingLambdaLocals in
+        // LEXICAL order, so a read emitted before the tainting store escapes clean yet executes
+        // AFTER the seed from iteration 2 onward (loop back-edge use-before-seed, VM-verified
+        // wrong values; round 2 fixed exactly this order-dependence for MEMBERS). Walk every root
+        // body for DIRECT capturing stores into locals / local-rooted member chains and taint the
+        // root local BEFORE emission, then propagate through local-to-local copy edges to a
+        // fixpoint (F4 emission-order-independent). Straight-line use-before-seed shapes over-
+        // reject by design (§8-3). Runs AFTER the [A]/[K2] fixpoint above (capturing local-function
+        // method groups are seeds too) — emission-time registration stays as a redundant backstop.
+        var localCopyEdges = new Dictionary<ILocalSymbol, HashSet<ILocalSymbol>>(SymbolEqualityComparer.Default);
+        foreach (var m in roots)
+            if (bodies.TryGetValue(m, out var rb3))
+                CollectCaptureSeededLocals(rb3, localCopyEdges);
+        foreach (var (_, initOp, _) in _fieldInitOps)
+            CollectCaptureSeededLocals(initOp, localCopyEdges);
+        bool taintChanged = true;
+        while (taintChanged)
+        {
+            taintChanged = false;
+            foreach (var kv in localCopyEdges)
+            {
+                if (!_ctx.CapturingLambdaLocals.Contains(kv.Key)) continue;
+                foreach (var dst in kv.Value)
+                    if (_ctx.CapturingLambdaLocals.Add(dst)) taintChanged = true;
+            }
+        }
 
         // ── §4.2 graph extension: lambda nodes, EscapeSet, synthetic edges ──
 
@@ -1484,19 +1554,25 @@ public class UasmEmitter
             CollectCaptureReceivingMembers(child);
     }
 
-    void RecordIfCapturingMemberStore(IOperation target, IOperation value)
+    // Value is DIRECTLY a capturing delegate creation (conversions unwrapped): a capturing lambda,
+    // or (§2.8 round-3 [A]) a capturing LOCAL FUNCTION method group — the pre-scan twin of
+    // HandlerBase.IsDirectCapturingLambda, shared by the member and local pre-scans.
+    bool IsPreScanCapturingValue(IOperation value)
     {
         var v = value;
         while (v is IConversionOperation conv) v = conv.Operand;
-        if (!(v is IDelegateCreationOperation dc)) return;
-        // §2.8 round-3 [A]: a capturing LOCAL FUNCTION method group is capturing-lambda-equivalent.
-        bool capturing = dc.Target switch
+        if (!(v is IDelegateCreationOperation dc)) return false;
+        return dc.Target switch
         {
             IAnonymousFunctionOperation lambda => _ctx.CaptureAnalyzer.HasCaptures(lambda),
             IMethodReferenceOperation mr => _ctx.IsCapturingLocalFunction(mr.Method),
             _ => false,
         };
-        if (!capturing) return;
+    }
+
+    void RecordIfCapturingMemberStore(IOperation target, IOperation value)
+    {
+        if (!IsPreScanCapturingValue(value)) return;
         // §2.8 round-3 [B]: record the WHOLE member chain, not just the leaf — `sField.f = () => v`
         // makes the struct-typed class field `sField` an envelope carrying the bundle, so a whole-
         // struct read (`arr[i] = sField`, `return sField`) must go loud exactly like the leaf read.
@@ -1508,6 +1584,81 @@ public class UasmEmitter
             if (t is IPropertyReferenceOperation pr) { _ctx.CaptureReceivingMembers.Add(pr.Property); t = pr.Instance; continue; }
             if (t is IConversionOperation tc) { t = tc.Operand; continue; }
             break;
+        }
+    }
+
+    // §2.8 round-4 [K3] pre-scan: taint locals seeded with a DIRECT capturing value — bare local
+    // targets, local-rooted member chains (the round-3 [B] container taint, order-independent),
+    // and declarators — and collect local-to-local copy edges (`var g = f;` / `g = f;` / tuple
+    // elements) for the taint-propagation fixpoint in BuildRecursionInfo. Same assignment shapes
+    // as CollectCaptureReceivingMembers plus declarators; array-element and param chain roots are
+    // skipped here because the emission-time guard rejects those seeds loudly ([K1]/[K4]/H6).
+    void CollectCaptureSeededLocals(IOperation op, Dictionary<ILocalSymbol, HashSet<ILocalSymbol>> copyEdges)
+    {
+        if (op == null) return;
+        switch (op)
+        {
+            case ISimpleAssignmentOperation sa:
+                RecordIfCapturingLocalSeedOrCopy(sa.Target, sa.Value, copyEdges);
+                break;
+            case ICoalesceAssignmentOperation ca:
+                RecordIfCapturingLocalSeedOrCopy(ca.Target, ca.Value, copyEdges);
+                break;
+            case IDeconstructionAssignmentOperation da:
+            {
+                var tgt = da.Target is IDeclarationExpressionOperation de ? de.Expression : da.Target;
+                var val = da.Value;
+                while (val is IConversionOperation c) val = c.Operand;
+                if (tgt is ITupleOperation tt && val is ITupleOperation vt)
+                    for (int i = 0; i < tt.Elements.Length && i < vt.Elements.Length; i++)
+                        RecordIfCapturingLocalSeedOrCopy(tt.Elements[i], vt.Elements[i], copyEdges);
+                break;
+            }
+            case IVariableDeclaratorOperation vd when vd.Initializer?.Value != null:
+                RecordLocalSeedOrCopy(vd.Symbol, hasMemberHops: false, vd.Initializer.Value, copyEdges);
+                break;
+        }
+        foreach (var child in op.Children)
+            CollectCaptureSeededLocals(child, copyEdges);
+    }
+
+    void RecordIfCapturingLocalSeedOrCopy(IOperation target, IOperation value,
+        Dictionary<ILocalSymbol, HashSet<ILocalSymbol>> copyEdges)
+    {
+        // Resolve the target's chain root exactly like the emission-time member-chain arm:
+        // strip declaration-expression wrapping, then hop field/property/conversion links.
+        var t = target is IDeclarationExpressionOperation de ? de.Expression : target;
+        bool hops = false;
+        while (true)
+        {
+            if (t is IFieldReferenceOperation fr) { hops = true; t = fr.Instance; continue; }
+            if (t is IPropertyReferenceOperation pr) { hops = true; t = pr.Instance; continue; }
+            if (t is IConversionOperation tc) { t = tc.Operand; continue; }
+            break;
+        }
+        if (t is ILocalReferenceOperation lr)
+            RecordLocalSeedOrCopy(lr.Local, hops, value, copyEdges);
+    }
+
+    void RecordLocalSeedOrCopy(ILocalSymbol rootLocal, bool hasMemberHops, IOperation value,
+        Dictionary<ILocalSymbol, HashSet<ILocalSymbol>> copyEdges)
+    {
+        if (rootLocal == null || value == null) return;
+        if (IsPreScanCapturingValue(value))
+        {
+            _ctx.CapturingLambdaLocals.Add(rootLocal);
+            return;
+        }
+        // Copy edge: a BARE local read into a BARE local target (member-chain targets receiving a
+        // tainted value are loud rejects at emission, so edges through them never carry taint).
+        if (hasMemberHops) return;
+        var v = value;
+        while (v is IConversionOperation conv) v = conv.Operand;
+        if (v is ILocalReferenceOperation src)
+        {
+            if (!copyEdges.TryGetValue(src.Local, out var dsts))
+                copyEdges[src.Local] = dsts = new HashSet<ILocalSymbol>(SymbolEqualityComparer.Default);
+            dsts.Add(rootLocal);
         }
     }
 
