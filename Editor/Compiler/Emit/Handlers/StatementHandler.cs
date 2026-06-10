@@ -217,6 +217,11 @@ public class StatementHandler : HandlerBase, IOperationHandler
         }
         else if (op.BranchKind == BranchKind.GoTo)
         {
+            // Wave-9 round-2 [W4]: a goto that leaves one or more using scopes must run their
+            // Dispose()s first (C# lowers using to try/finally; the finally runs on EVERY exit
+            // edge — break/continue/return were covered, the goto edge was not: VM-proven
+            // ref total=14/mark=1 vs 4/0, nested usings skipped BOTH disposes).
+            EmitPendingDisposeForGoto(op);
             // goto case <const>; / goto default; target a Roslyn label ("case 2:", "default") that is not a
             // valid UASM token — the enclosing switch maps it to a sanitized landing label. A plain user goto
             // (its label is emitted verbatim by ILabeledOperation) is not in the map and uses its own name.
@@ -275,10 +280,60 @@ public class StatementHandler : HandlerBase, IOperationHandler
         }
     }
 
-    public void PreScanGotoLabels(IOperation op)
+    /// <summary>
+    /// Wave-9 round-2 [W4]: emit Dispose() for every using scope a goto exits — the scopes between the
+    /// goto and its target label. C# scoping guarantees the label lives in the same or an ENCLOSING
+    /// block, so the exited scopes are exactly the innermost N entries of <c>_usingDisposableStack</c>,
+    /// where N counts the Block/UsingStatement syntax ancestors of the goto that do NOT contain the
+    /// label (each braced block pushes one scope in HandleBlock, each using statement one in VisitUsing —
+    /// same order, innermost first). A goto whose label is inside every enclosing scope disposes nothing
+    /// (jumping within one try region); `goto case` labels resolve through the switch the same way.
+    /// </summary>
+    void EmitPendingDisposeForGoto(IBranchOperation op)
     {
-        // In the Core IR, labels are string-based (EmitLabel/EmitGoto).
-        // No pre-scan needed — labels are resolved by name at lowering time.
+        if (op.Syntax == null || op.Target == null) return;
+        Microsoft.CodeAnalysis.Text.TextSpan labelSpan;
+        var labelRef = op.Target.DeclaringSyntaxReferences.FirstOrDefault();
+        if (labelRef != null && labelRef.SyntaxTree == op.Syntax.SyntaxTree)
+            labelSpan = labelRef.Span;
+        else
+        {
+            var loc = op.Target.Locations.FirstOrDefault(l => l.IsInSource && l.SourceTree == op.Syntax.SyntaxTree);
+            if (loc == null) return; // cannot locate the label — conservative no-op (pre-fix behavior)
+            labelSpan = loc.SourceSpan;
+        }
+
+        int scopesToDispose = 0;
+        bool found = false;
+        for (var node = op.Syntax.Parent; node != null; node = node.Parent)
+        {
+            if (node is Microsoft.CodeAnalysis.CSharp.Syntax.BlockSyntax
+                or Microsoft.CodeAnalysis.CSharp.Syntax.UsingStatementSyntax)
+            {
+                if (node.Span.Contains(labelSpan)) { found = true; break; }
+                scopesToDispose++;
+                continue;
+            }
+            // Function boundary: a goto can never cross it — defensive stop.
+            if (node is Microsoft.CodeAnalysis.CSharp.Syntax.MemberDeclarationSyntax
+                or Microsoft.CodeAnalysis.CSharp.Syntax.AccessorDeclarationSyntax
+                or Microsoft.CodeAnalysis.CSharp.Syntax.AnonymousFunctionExpressionSyntax
+                or Microsoft.CodeAnalysis.CSharp.Syntax.LocalFunctionStatementSyntax)
+                break;
+        }
+        if (!found || scopesToDispose <= 0) return;
+
+        int count = 0;
+        foreach (var scope in _usingDisposableStack)
+        {
+            if (count >= scopesToDispose) break;
+            for (int i = scope.Count - 1; i >= 0; i--)
+            {
+                var (val, type) = scope[i];
+                EmitDispose(val, type);
+            }
+            count++;
+        }
     }
 
     void VisitUsing(IUsingOperation op)
