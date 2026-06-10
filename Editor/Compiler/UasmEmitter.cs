@@ -1709,9 +1709,34 @@ public class UasmEmitter
                 var tgt = da.Target is IDeclarationExpressionOperation de ? de.Expression : da.Target;
                 var val = da.Value;
                 while (val is IConversionOperation c) val = c.Operand;
-                if (tgt is ITupleOperation tt && val is ITupleOperation vt)
+                if (tgt is not ITupleOperation tt) break;
+                if (val is ITupleOperation vt)
+                {
                     for (int i = 0; i < tt.Elements.Length && i < vt.Elements.Length; i++)
                         RecordIfCapturingLocalSeedOrCopy(tt.Elements[i], vt.Elements[i], copyEdges);
+                    break;
+                }
+                // §2.8 round-6 [J7]: NON-tuple-literal source ((g,x)=t / =s / =p / =Mk()) — the
+                // emission-time [N3] guard taints LOCAL element targets only lexically, so a loop
+                // back-edge read emitted before the deconstruction escaped clean (VM 21 vs CLR 11).
+                // Mirror it order-independently: every delegate-capable LOCAL element target
+                // receives the SOURCE's classification — local source → copy edge, delegate-capable
+                // param source → taint (the [N3] param gate is the WIDER NonObjectDelegateCapable:
+                // tuple/struct envelopes arrive whole, unlike the bare-param-copy gate), and
+                // member-read / invocation sources go through the shared classifier below.
+                foreach (var element in tt.Elements)
+                {
+                    var et = element is IDeclarationExpressionOperation ede ? ede.Expression : element;
+                    if (et is not ILocalReferenceOperation elr) continue;
+                    if (!EmitContext.IsDelegateCapableType(elr.Local.Type, null)) continue;
+                    if (val is IParameterReferenceOperation vp)
+                    {
+                        if (EmitContext.IsNonObjectDelegateCapableType(vp.Parameter.Type, null))
+                            _ctx.CapturingLambdaLocals.Add(elr.Local);
+                        continue;
+                    }
+                    RecordLocalSeedOrCopy(elr.Local, hasMemberHops: false, val, copyEdges);
+                }
                 break;
             }
             case IVariableDeclaratorOperation vd when vd.Initializer?.Value != null:
@@ -1740,6 +1765,21 @@ public class UasmEmitter
             RecordLocalSeedOrCopy(lr.Local, hops, value, copyEdges);
     }
 
+    // §2.8 round-6 [G1 closure contract] — THE order-independent taint classifier: "does this RHS
+    // propagate capture-taint into local Y". It is the pre-scan TWIN of the emission-time taint
+    // disjunction (GuardCaptureEscapeStore / StatementHandler declarations / the [N3] deconstruction
+    // guard: IsDirectCapturingLambda, bare local copies, IsDelegateParamRead,
+    // IsTaintedDelegateInvocationResult, IsLaunderingMemberRead) with one systematic substitution:
+    // where emission checks CURRENT taint membership, the pre-scan adds a COPY EDGE for the
+    // BuildRecursionInfo fixpoint — so a local EVER tainted in a body is tainted at every read,
+    // closing the loop back-edge use-before-seed family (rounds 4/5 covered direct seeds, bare local
+    // copies, and member reads; round 6 closed the remaining param / invocation-result /
+    // deconstruction sources, all VM-proven). The twin is NOT literally shared with emission on
+    // purpose: emission resolves types through the type-param map (Keep<int> stays legal — pinned),
+    // while the pre-scan walks definition trees with the IDENTITY resolver (unresolved T is
+    // conservatively capable, §8-3). ANY new taint-carrying arm added to the emission disjunction or
+    // to ContainsCapturingLambdaOrTaintedRead MUST be mirrored here — a lexical-order-only arm is a
+    // reopened back edge.
     void RecordLocalSeedOrCopy(ILocalSymbol rootLocal, bool hasMemberHops, IOperation value,
         Dictionary<ILocalSymbol, HashSet<ILocalSymbol>> copyEdges)
     {
@@ -1760,46 +1800,131 @@ public class UasmEmitter
             AddCopyEdge(copyEdges, src.Local, rootLocal);
             return;
         }
-        // §2.8 round-5 [N4]: MEMBER-READ copy edges — `g = s.f` acquired taint only at emission
-        // time (lexical order), so `fs[i] = g; … s.f = () => w; g = s.f;` in a loop escaped clean
-        // yet executed seeded from iteration 2 on (VM-verified, the round-4 [K3] documented
-        // residual). Mirror IsLaunderingMemberRead order-independently, gated on a delegate-capable
-        // member type (identity resolver: the pre-scan walks definition trees, so an unresolved T
-        // is conservatively capable, §8-3): a capture-receiving / interface / foreign-class member
-        // anywhere in the chain taints the target local directly (recipient sets are already
-        // complete — the member pre-scan runs first); a local chain root adds a copy edge for the
-        // fixpoint (container taint propagates); a param chain root taints directly (the callee is
-        // blind to what the caller packed — mirrors the emission-time param-rooted read taint).
-        if (v is IFieldReferenceOperation or IPropertyReferenceOperation)
+        // §2.8 round-6 [J5]: a BARE delegate-param copy (`g = p;` / `g ??= p;`) acquired taint only
+        // at emission time (IsDelegateParamRead's local-target arm), so a loop back-edge read
+        // emitted before the copy escaped clean (VM 42 vs CLR 32). Pre-scan twin of
+        // IsDelegateParamRead: delegate-proper or unresolved-T params taint; bare object/tuple
+        // params stay clean — they are sealed at CALL SITES (round-2 architecture, do not widen).
+        if (v is IParameterReferenceOperation pref)
         {
-            var leafType = v is IFieldReferenceOperation lf ? lf.Field.Type
-                : ((IPropertyReferenceOperation)v).Property.Type;
-            if (!EmitContext.IsNonObjectDelegateCapableType(leafType, null)) return;
-            var chain = v;
-            while (true)
-            {
-                ISymbol memberSym;
-                IOperation instance;
-                if (chain is IFieldReferenceOperation cf) { memberSym = cf.Field; instance = cf.Instance; }
-                else if (chain is IPropertyReferenceOperation cp) { memberSym = cp.Property; instance = cp.Instance; }
-                else if (chain is IConversionOperation cc) { chain = cc.Operand; continue; }
-                else break;
-                var canonical = EmitContext.CanonicalMemberSymbol(memberSym);
-                if (canonical == null // interface member — unknown implementing class, conservative
-                    || EmitContext.IsForeignOrInterfaceMember(memberSym, _classSymbol)
-                    || _ctx.CaptureReceivingMembers.Contains(canonical))
-                {
-                    _ctx.CapturingLambdaLocals.Add(rootLocal);
-                    return;
-                }
-                chain = instance;
-            }
-            if (chain is ILocalReferenceOperation containerLocal)
-                AddCopyEdge(copyEdges, containerLocal.Local, rootLocal);
-            else if (chain is IParameterReferenceOperation)
+            if (IsPreScanDelegateParamType(pref.Parameter.Type))
                 _ctx.CapturingLambdaLocals.Add(rootLocal);
+            return;
         }
+        // §2.8 round-6 [J6]: a tainted-invocation-result copy (`g = Id(t);`) acquired taint only at
+        // emission time (IsTaintedDelegateInvocationResult), the identity-callee launder composed
+        // with the back edge (VM 21 vs CLR 11). Pre-scan twin: a delegate-capable RESULT propagates
+        // its ARGUMENTS' classification into the target — capturing values taint, locals add copy
+        // edges (the round-1 `var g = Id(M);` method-group pin stays legal: no taint, no edges),
+        // argument subtrees walk like ContainsCapturingLambdaOrTaintedRead. Instance receivers are
+        // NOT walked (round-1 boundary: IsTaintedDelegateInvocationResult inspects arguments only).
+        if (v is IInvocationOperation inv)
+        {
+            if (EmitContext.IsDelegateCapableType(inv.Type, null))
+                foreach (var arg in inv.Arguments)
+                    CollectPreScanValueTaint(arg.Value, rootLocal, copyEdges);
+            return;
+        }
+        // §2.8 round-5 [N4]: member-read copy edges / taint (shared classification below).
+        if (v is IFieldReferenceOperation or IPropertyReferenceOperation)
+            ClassifyMemberReadIntoLocal(v, rootLocal, copyEdges);
     }
+
+    // §2.8 round-5 [N4] member-read classification, shared by the top-level classifier and the
+    // round-6 [J6] argument walk. Mirror of IsLaunderingMemberRead, order-independent and gated on
+    // a delegate-capable member type (identity resolver: unresolved T conservatively capable,
+    // §8-3): a capture-receiving / interface / foreign-class member anywhere in the chain taints
+    // the target local directly (recipient sets are complete — the member pre-scan runs first);
+    // a local chain root adds a copy edge (container taint propagates); a param chain root taints
+    // directly (the callee is blind to what the caller packed); any other root (invocation, array
+    // element) recurses the deep walk so taint INSIDE the root expression is still mirrored
+    // (emission's children-walk descends there). Returns true when the read was delegate-capable
+    // (classified); false lets the caller fall through to the children walk.
+    bool ClassifyMemberReadIntoLocal(IOperation memberRead, ILocalSymbol rootLocal,
+        Dictionary<ILocalSymbol, HashSet<ILocalSymbol>> copyEdges)
+    {
+        var leafType = memberRead is IFieldReferenceOperation lf ? lf.Field.Type
+            : ((IPropertyReferenceOperation)memberRead).Property.Type;
+        if (!EmitContext.IsNonObjectDelegateCapableType(leafType, null)) return false;
+        var chain = memberRead;
+        while (true)
+        {
+            ISymbol memberSym;
+            IOperation instance;
+            if (chain is IFieldReferenceOperation cf) { memberSym = cf.Field; instance = cf.Instance; }
+            else if (chain is IPropertyReferenceOperation cp) { memberSym = cp.Property; instance = cp.Instance; }
+            else if (chain is IConversionOperation cc) { chain = cc.Operand; continue; }
+            else break;
+            var canonical = EmitContext.CanonicalMemberSymbol(memberSym);
+            if (canonical == null // interface member — unknown implementing class, conservative
+                || EmitContext.IsForeignOrInterfaceMember(memberSym, _classSymbol)
+                || _ctx.CaptureReceivingMembers.Contains(canonical))
+            {
+                _ctx.CapturingLambdaLocals.Add(rootLocal);
+                return true;
+            }
+            chain = instance;
+        }
+        if (chain is ILocalReferenceOperation containerLocal)
+            AddCopyEdge(copyEdges, containerLocal.Local, rootLocal);
+        else if (chain is IParameterReferenceOperation)
+            _ctx.CapturingLambdaLocals.Add(rootLocal);
+        else if (chain is not null && chain is not IInstanceReferenceOperation)
+            CollectPreScanValueTaint(chain, rootLocal, copyEdges);
+        return true;
+    }
+
+    // §2.8 round-6 [J6] deep ARGUMENT walk — the order-independent twin of HandlerBase
+    // .ContainsCapturingLambdaOrTaintedRead for argument subtrees feeding a delegate-capable
+    // invocation result that lands in a local. Arm-for-arm mirror (see the [G1 closure contract]
+    // note on RecordLocalSeedOrCopy): capturing lambdas / capturing local-function method groups
+    // taint, local reads add copy edges (emission checks membership), delegate-proper/unresolved-T
+    // param reads taint, nested delegate-capable invocations walk their arguments only, capable
+    // member reads classify through ClassifyMemberReadIntoLocal, everything else descends children.
+    void CollectPreScanValueTaint(IOperation op, ILocalSymbol target,
+        Dictionary<ILocalSymbol, HashSet<ILocalSymbol>> copyEdges)
+    {
+        if (op == null) return;
+        switch (op)
+        {
+            case IAnonymousFunctionOperation lambda:
+                if (_ctx.CaptureAnalyzer.HasCaptures(lambda)) _ctx.CapturingLambdaLocals.Add(target);
+                return;
+            case IMethodReferenceOperation mr when _ctx.IsCapturingLocalFunction(mr.Method):
+                _ctx.CapturingLambdaLocals.Add(target);
+                return;
+            case ILocalReferenceOperation lr:
+                AddCopyEdge(copyEdges, lr.Local, target);
+                return;
+            case IParameterReferenceOperation pr:
+                if (IsPreScanDelegateParamType(pr.Parameter.Type))
+                    _ctx.CapturingLambdaLocals.Add(target);
+                return;
+            case IInvocationOperation inner:
+                if (EmitContext.IsDelegateCapableType(inner.Type, null))
+                    foreach (var arg in inner.Arguments)
+                        CollectPreScanValueTaint(arg.Value, target, copyEdges);
+                return;
+            case IFieldReferenceOperation or IPropertyReferenceOperation
+                when ClassifyMemberReadIntoLocal(op, target, copyEdges):
+                return;
+        }
+        foreach (var child in op.Children)
+            CollectPreScanValueTaint(child, target, copyEdges);
+    }
+
+    // Pre-scan twin of HandlerBase.IsDelegateParamRead's type gate (identity resolver): delegate
+    // proper or unresolved type param. Bare object/tuple params stay clean — they are sealed at
+    // call sites by GuardCaptureEscapeArguments (round-2: re-widening param reads to object breaks
+    // the stock LocalFunctionTest object-plumbing compat gate). A value-type-constrained T is
+    // excluded as a faithful mirror, not a weakening: delegates are reference types, so emission's
+    // IsDelegateParamRead can never fire for any `T : struct` instantiation (specializations always
+    // resolve T), and delegate-CARRYING struct envelopes are owned by the call-site seal plus the
+    // member-read rules — without this exclusion the shared definition-tree pre-scan over-tainted
+    // `T result = x; return result;` for plain int instantiations (tracked pin).
+    static bool IsPreScanDelegateParamType(ITypeSymbol t)
+        => (t is ITypeParameterSymbol tp && !tp.HasValueTypeConstraint)
+            || (t is INamedTypeSymbol nt && nt.DelegateInvokeMethod != null);
 
     static void AddCopyEdge(Dictionary<ILocalSymbol, HashSet<ILocalSymbol>> copyEdges,
         ILocalSymbol from, ILocalSymbol to)

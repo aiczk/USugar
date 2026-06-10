@@ -1037,7 +1037,12 @@ public abstract class HandlerBase
     /// delegate-typed-result laundering rule: a non-delegate-typed call consumes any capturing
     /// lambda in its arguments itself (fcd37 stays legal; the callee's own return/store sites
     /// guard any escape), while a delegate-typed result carrying taint in its arguments is the
-    /// identity-callee laundering shape and stays tainted.</summary>
+    /// identity-callee laundering shape and stays tainted.
+    /// §2.8 round-6 [G1 closure contract]: any NEW taint-carrying arm added here (or to the
+    /// GuardCaptureEscapeStore taint disjunction) MUST be mirrored in the order-independent
+    /// pre-scan classifier (UasmEmitter.RecordLocalSeedOrCopy / CollectPreScanValueTaint) — a
+    /// lexical-order-only arm is a reopened loop back edge (the rounds 4-6 use-before-seed
+    /// family, all VM-proven).</summary>
     protected bool ContainsCapturingLambdaOrTaintedRead(IOperation op)
     {
         switch (op)
@@ -1157,6 +1162,10 @@ public abstract class HandlerBase
     /// struct-member targets reject tainted-equivalent reads only (a direct capturing lambda into a
     /// delegate field stays legal — the aliasing detector owns that case). Over-rejection after a
     /// method-group reassign is accepted: loud and safe beats a silent wrong value (design §8-3).
+    /// The local-target taint registrations below are REDUNDANT BACKSTOPS since round 6: the
+    /// pre-scan classifier (UasmEmitter.RecordLocalSeedOrCopy — see its [G1 closure contract] note)
+    /// computes the full tainted-local set order-independently before any emission; new
+    /// taint-carrying value shapes must be added THERE, not only here.
     /// </summary>
     protected void GuardCaptureEscapeStore(IOperation target, IOperation value)
     {
