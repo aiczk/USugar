@@ -340,24 +340,15 @@ public class StatementHandler : HandlerBase, IOperationHandler
                 continue;
             }
 
-            // Delegate-typed locals → SystemUInt32 (holds label address; Udon has no delegate types)
-            var udonType = local.Type.TypeKind == TypeKind.Delegate
-                ? "SystemUInt32"
-                : GetUdonType(local.Type);
+            // Delegate-typed locals are SystemObjectArray bundle references via the type-map delegate arm
+            // (design §2.1); the initializer's VisitDelegateCreation hoists any lambda and builds the bundle.
+            var udonType = GetUdonType(local.Type);
             var id = _ctx.DeclareLocal(local.Name, udonType);
             _localBindings[local] = new EmitContext.LocalBinding(id);
 
             var init = declarator.Initializer;
             if (init != null)
             {
-                // Track delegate variable → hoisted method mapping
-                if (init.Value is IDelegateCreationOperation delegateInit
-                    && delegateInit.Target is IAnonymousFunctionOperation lambdaInit)
-                {
-                    var hoisted = HoistLambdaToMethod(lambdaInit);
-                    _delegateVarMap[local] = hoisted;
-                }
-
                 var srcVal = VisitExpression(init.Value);
                 EmitStoreField(id, srcVal);
             }

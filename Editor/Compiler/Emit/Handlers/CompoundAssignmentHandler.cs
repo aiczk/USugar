@@ -18,9 +18,9 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
 
     CLeaf VisitCompoundAssignment(ICompoundAssignmentOperation op)
     {
-        // Block += / -= on delegate fields — Udon VM does not support Delegate.Combine/Remove
-        if (op.Target is IFieldReferenceOperation fr
-            && fr.Field.Type is INamedTypeSymbol nt && nt.DelegateInvokeMethod != null)
+        // Block += / -= on ANY delegate-typed target (field, local, param, property, array element, …) —
+        // Udon VM does not support Delegate.Combine/Remove (predicate widened per design §5.2; message unchanged).
+        if (op.Target.Type is INamedTypeSymbol nt && nt.DelegateInvokeMethod != null)
             throw new System.NotSupportedException("Multicast delegates (+=/-=) are not supported. Udon VM does not support Delegate.Combine/Remove.");
 
         // Capture lvalue sub-expressions once to avoid double evaluation

@@ -108,18 +108,9 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
                 new List<CLeaf>(),
                 fldType);
         }
-        // Delegate field read as value is not supported — the original field has been expanded
-        // to a DelegateBundle (Target/Method/Addr). Only invocation, null-check, ?.Invoke(), and
-        // comparison are supported (handled by their respective handlers before reaching here).
-        if (fieldRef.Instance is IInstanceReferenceOperation
-            && fieldRef.Field.Type is INamedTypeSymbol dlgType
-            && dlgType.DelegateInvokeMethod != null
-            && _delegateFields.Contains(fieldRef.Field.Name))
-        {
-            throw new NotSupportedException(
-                $"Delegate field '{fieldRef.Field.Name}' cannot be used as a value (e.g., in variable assignment, parameter passing, or return). " +
-                "Only direct invocation (_callback()), null check (_callback != null), ?.Invoke(), and comparison (_a == _b) are supported.");
-        }
+        // Delegate field read as a value: a plain SystemObjectArray load of the bundle reference (the
+        // single-var ABI, design §2.1/§2.3 — the this.field arm below handles it; IsAggregateType's
+        // delegate armor guarantees no clone).
 
         // Aggregate field access: result.Item1, point.x, pair.Item1 → object[] indexing
         // Triggered by the containing type being aggregate, regardless of instance kind
@@ -188,6 +179,13 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
     CLeaf VisitConversion(IConversionOperation conv)
     {
         var srcVal = VisitExpression(conv.Operand);
+
+        // Delegate-typed conversions are reference passthrough (design §2.3, fcd25): delegate → object is
+        // box-free (the value already IS an object[] reference) and (Func<T>)objExpr cast-back keeps the
+        // same bundle reference. No Convert extern may ever be emitted for a delegate source or target.
+        if ((conv.Type is INamedTypeSymbol dlgDst && dlgDst.DelegateInvokeMethod != null)
+            || (conv.Operand.Type is INamedTypeSymbol dlgSrc && dlgSrc.DelegateInvokeMethod != null))
+            return srcVal;
 
         // Lifted numeric Nullable<T> conversion (e.g. char?→int? inserted by Roslyn around small-int nullable
         // arithmetic, or an explicit (int?)byteNullable). Both sides are Nullable<numeric>. The plain
@@ -394,21 +392,39 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
 
     // ── Delegate Creation ──
 
+    // The ONLY producer of delegate values (design §2.2): builds the runtime object[4] bundle
+    // { [0]=target, [1]=bridge export name, [2]=boxed-UInt32 funcaddr, [3]=env (Stage-1 null) }.
+    // ResolveDelegateBridge hoists lambdas/local functions and registers their __dlg_ bridge via
+    // PendingDelegateBridges (bundle[1] is the cross-path entry, so the bridge is always emitted).
+    // Capture-escape registration is pre-emit analysis (§4.1) — nothing is marked here.
     CLeaf VisitDelegateCreation(IDelegateCreationOperation op)
     {
-        switch (op.Target)
-        {
-            case IAnonymousFunctionOperation lambda:
-            {
-                var hoisted = HoistLambdaToMethod(lambda);
-                return FuncRef(_methodFunctions[hoisted].Name);
-            }
-            case IMethodReferenceOperation methodRef
-                when _methodFunctions.TryGetValue(methodRef.Method, out var func):
-                return FuncRef(func.Name);
-            default:
-                throw new NotSupportedException($"Unsupported delegate target: {op.Target.GetType().Name}");
-        }
+        var (bridgeName, funcRef, thirdParty) = ResolveDelegateBridge(op);
+        DelegateAbi.ValidateDelegateBinding(op.Type as INamedTypeSymbol,
+            (op.Target as IMethodReferenceOperation)?.Method, _ctx.TypeParamMap);
+
+        var bundle = ExternCall("SystemObjectArray.__ctor__SystemInt32__SystemObjectArray",
+            new List<CLeaf> { Const(DelegateAbi.BundleSize, "SystemInt32") }, "SystemObjectArray");
+
+        var thisType = GetUdonType(_classSymbol);
+        var target = thirdParty ?? LoadField(_ctx.DeclareThisOnce(thisType), thisType);
+        // Addr discipline (§1.3): the only sources for bundle[2] are the back-patched funcaddr const
+        // (boxed UInt32) or Const(0u). A third-party method group's local funcaddr is meaningless in the
+        // target program, so it carries 0u; a same-this target carries the REAL funcaddr — even when the
+        // bundle is later handed cross-Behaviour (the invoke-side target-identity guard is the only gate).
+        var addr = thirdParty != null ? (CLeaf)Const(0u, "SystemUInt32") : funcRef;
+
+        EmitExternVoid("SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid",
+            new List<CLeaf> { bundle, Const(DelegateAbi.Target, "SystemInt32"), target });
+        EmitExternVoid("SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid",
+            new List<CLeaf> { bundle, Const(DelegateAbi.Method, "SystemInt32"), Const(bridgeName, "SystemString") });
+        EmitExternVoid("SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid",
+            new List<CLeaf> { bundle, Const(DelegateAbi.Addr, "SystemInt32"), addr });
+        // §1.4: every creation site writes null to the reserved env slot; nothing reads it in Stage 1.
+        EmitExternVoid("SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid",
+            new List<CLeaf> { bundle, Const(DelegateAbi.Env, "SystemInt32"), Const(null, "SystemObject") });
+
+        return bundle;
     }
 
     // ── Tuple Literal ──

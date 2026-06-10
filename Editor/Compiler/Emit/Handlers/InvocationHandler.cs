@@ -393,10 +393,8 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
         for (int pi = 0; pi < constructed.Parameters.Length; pi++)
         {
             var param = constructed.Parameters[pi];
-            var isDelegateParam = param.Type is INamedTypeSymbol nt2 && nt2.DelegateInvokeMethod != null;
-            var udonType = isDelegateParam ? "SystemUInt32" : GetUdonType(param.Type);
             var paramId = $"__{idx}_{param.Name}__param";
-            _ctx.DeclareVar(paramId, udonType);
+            _ctx.DeclareVar(paramId, GetUdonType(param.Type));
             gsParamIds[pi] = paramId;
         }
         _methodParamVarIds[constructed] = gsParamIds;

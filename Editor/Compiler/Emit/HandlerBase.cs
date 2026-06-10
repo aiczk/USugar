@@ -529,15 +529,12 @@ public abstract class HandlerBase
           + "Not found in lambda overrides, method params, or variable table.");
     }
 
-    /// <summary>Read a parameter value as a CLeaf (field load).</summary>
+    /// <summary>Read a parameter value as a CLeaf (field load). A delegate-typed parameter is a
+    /// SystemObjectArray bundle reference via the type-map delegate arm (design §2.1).</summary>
     protected CLeaf LoadParam(IParameterSymbol param)
     {
         var fieldName = GetParamVarId(param);
-        // A delegate-typed parameter is stored as SystemUInt32 (the JUMP address / FuncRef) — Udon has no
-        // delegate types — so it must be LOADED as SystemUInt32 too, matching its declared var type.
-        var type = param.Type is INamedTypeSymbol nt && nt.DelegateInvokeMethod != null
-            ? "SystemUInt32" : GetUdonType(param.Type);
-        return LoadField(fieldName, type);
+        return LoadField(fieldName, GetUdonType(param.Type));
     }
 
     protected CLeaf EmitEnumToUnderlying(CLeaf operand, ITypeSymbol type)
@@ -729,15 +726,14 @@ public abstract class HandlerBase
         // Create CFunction (internal, no export)
         var func = _module.AddFunction(irName);
 
-        // Declare params as fields (the Core IR passes parameters as fields)
+        // Declare params as fields (the Core IR passes parameters as fields). Delegate-typed params are
+        // SystemObjectArray bundle references via the type-map delegate arm (design §2.1).
         var lfParamIds = new string[localFunc.Parameters.Length];
         for (int pi = 0; pi < localFunc.Parameters.Length; pi++)
         {
             var param = localFunc.Parameters[pi];
-            var isDlg = param.Type is INamedTypeSymbol nt4 && nt4.DelegateInvokeMethod != null;
-            var udonType = isDlg ? "SystemUInt32" : GetUdonType(param.Type);
             var paramId = $"__{idx}_{param.Name}__param";
-            _ctx.DeclareVar(paramId, udonType);
+            _ctx.DeclareVar(paramId, GetUdonType(param.Type));
             lfParamIds[pi] = paramId;
         }
         _methodParamVarIds[localFunc] = lfParamIds;
@@ -804,11 +800,12 @@ public abstract class HandlerBase
         }
     }
 
-    /// <summary>Compute signature-based convention field names for a delegate type.</summary>
+    /// <summary>Compute signature-based convention field names for a delegate type
+    /// (sig key via the unified DelegateAbi.BuildSigPart — design §3.2).</summary>
     internal static (string[] argNames, string retName) GetConventionFieldNames(INamedTypeSymbol delegateType)
     {
         var invoke = delegateType.DelegateInvokeMethod;
-        var sigPart = BuildConventionSigPart(invoke);
+        var sigPart = DelegateAbi.BuildSigPart(invoke);
 
         var argNames = new string[invoke.Parameters.Length];
         for (int i = 0; i < invoke.Parameters.Length; i++)
@@ -819,24 +816,6 @@ public abstract class HandlerBase
             retName = $"__dlgc_{sigPart}__ret";
 
         return (argNames, retName);
-    }
-
-    /// <summary>Build the canonical convention signature key for a delegate invoke method.</summary>
-    internal static string BuildConventionSigPart(IMethodSymbol invoke)
-    {
-        // Normalize delegate-typed params to SystemUInt32 (JUMP addresses)
-        var paramParts = invoke.Parameters.Select(p =>
-        {
-            if (p.Type is INamedTypeSymbol nt && nt.DelegateInvokeMethod != null)
-                return "SystemUInt32";
-            return ExternResolver.GetUdonTypeName(p.Type);
-        });
-
-        // Include return type to avoid Func<int> vs Func<bool> collision
-        var retPart = invoke.ReturnsVoid ? "Void" : ExternResolver.GetUdonTypeName(invoke.ReturnType);
-        var paramStr = string.Join("_", paramParts);
-        if (paramStr == "") paramStr = "Void";
-        return $"{paramStr}__{retPart}";
     }
 
     // ── Delegate bridge resolution ──

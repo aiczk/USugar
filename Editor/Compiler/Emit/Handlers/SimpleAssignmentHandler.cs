@@ -70,102 +70,16 @@ public class SimpleAssignmentHandler : AssignmentHandlerBase, IExpressionHandler
             return srcVal;
         }
 
-        // Self-delegate field assignment: _callback = MyMethod / _callback = () => { } / _callback = null
-        if (assign.Target is IFieldReferenceOperation { Instance: IInstanceReferenceOperation } selfDlg
-            && selfDlg.Field.Type is INamedTypeSymbol selfDlgType
-            && selfDlgType.DelegateInvokeMethod != null
-            && _delegateFields.Contains(selfDlg.Field.Name))
-        {
-            var fieldName = selfDlg.Field.Name;
-
-            var bundle = new DelegateBundle(fieldName);
-
-            // null assignment
-            if (assign.Value.ConstantValue is { HasValue: true, Value: null })
-            {
-                EmitStoreField(bundle.Target, Const(null, "SystemObject"));
-                EmitStoreField(bundle.Method, Const(null, "SystemString"));
-                EmitStoreField(bundle.Addr, Const(0u, "SystemUInt32"));
-                return Const(null, "SystemObject");
-            }
-
-            // delegate field copy: _a = _b
-            if (assign.Value is IFieldReferenceOperation { Instance: IInstanceReferenceOperation } rhsDlg
-                && _delegateFields.Contains(rhsDlg.Field.Name))
-            {
-                var srcBundle = new DelegateBundle(rhsDlg.Field.Name);
-                EmitStoreField(bundle.Target, LoadField(srcBundle.Target, "VRCUdonCommonInterfacesIUdonEventReceiver"));
-                EmitStoreField(bundle.Method, LoadField(srcBundle.Method, "SystemString"));
-                EmitStoreField(bundle.Addr, LoadField(srcBundle.Addr, "SystemUInt32"));
-                return LoadField(bundle.Target, "VRCUdonCommonInterfacesIUdonEventReceiver");
-            }
-
-            IDelegateCreationOperation dc = assign.Value as IDelegateCreationOperation;
-            if (dc == null && assign.Value is IConversionOperation convSelf && convSelf.Operand is IDelegateCreationOperation dc1)
-                dc = dc1;
-
-            if (dc != null)
-            {
-                var (bridgeName, funcRef, thirdParty) = ResolveDelegateBridge(dc);
-                var thisRef = LoadField(_ctx.DeclareThisOnce(GetUdonType(_classSymbol)), GetUdonType(_classSymbol));
-                var target = thirdParty ?? thisRef;
-                var addr = thirdParty != null ? (CLeaf)Const(0u, "SystemUInt32") : funcRef;
-
-                RecordIfCapturingLambda(dc);
-
-                EmitStoreField(bundle.Target, target);
-                EmitStoreField(bundle.Method, Const(bridgeName, "SystemString"));
-                EmitStoreField(bundle.Addr, addr);
-                return target;
-            }
-
-            throw new System.NotSupportedException($"Delegate field '{fieldName}' can only be assigned a method group, lambda, or null.");
-        }
-
         // cross-behaviour field write → SetProgramVariable
         if (assign.Target is IFieldReferenceOperation { Instance: not null and not IInstanceReferenceOperation } ubTarget && ExternResolver.IsUdonSharpBehaviour(ubTarget.Field.ContainingType))
         {
-            // Cross-behaviour delegate field → SetProgramVariable for bundle
-            if (ubTarget.Field.Type is INamedTypeSymbol dlgType && dlgType.DelegateInvokeMethod != null)
-            {
-                if (dlgType.DelegateInvokeMethod.ReturnType.IsTupleType)
-                    throw new System.NotSupportedException($"Tuple-return delegate field '{ubTarget.Field.Name}' is not supported.");
-
-                var instanceVal = VisitExpression(ubTarget.Instance);
-                var fn = ubTarget.Field.Name;
-                var bundle2 = new DelegateBundle(fn);
-
-                // null assignment
-                if (assign.Value.ConstantValue is { HasValue: true, Value: null })
-                {
-                    foreach (var (field, val) in new[] { (bundle2.Target, (CLeaf)Const(null, "SystemObject")), (bundle2.Method, Const(null, "SystemString")), (bundle2.Addr, Const(0u, "SystemUInt32")) })
-                        EmitExternVoid("VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid",
-                            new List<CLeaf> { instanceVal, Const(field, "SystemString"), val });
-                    return Const(null, "SystemObject");
-                }
-
-                IDelegateCreationOperation dc = assign.Value as IDelegateCreationOperation;
-                if (dc == null && assign.Value is IConversionOperation convCross && convCross.Operand is IDelegateCreationOperation dc2)
-                    dc = dc2;
-
-                if (dc != null)
-                {
-                    RecordIfCapturingLambda(dc);
-                    var (bridgeName, _, thirdParty) = ResolveDelegateBridge(dc);
-                    var thisRef = LoadField(_ctx.DeclareThisOnce(GetUdonType(_classSymbol)), GetUdonType(_classSymbol));
-                    var delegateTarget = thirdParty ?? thisRef;
-
-                    EmitExternVoid("VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid",
-                        new List<CLeaf> { instanceVal, Const(bundle2.Target, "SystemString"), delegateTarget });
-                    EmitExternVoid("VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid",
-                        new List<CLeaf> { instanceVal, Const(bundle2.Method, "SystemString"), Const(bridgeName, "SystemString") });
-                    EmitExternVoid("VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid",
-                        new List<CLeaf> { instanceVal, Const(bundle2.Addr, "SystemString"), Const(0u, "SystemUInt32") });
-                    return delegateTarget;
-                }
-
-                throw new System.NotSupportedException($"Delegate field '{fn}' can only be assigned a method group, lambda, or null.");
-            }
+            // Cross-behaviour delegate field: the generic arm below ships the BUNDLE REFERENCE in ONE
+            // SetProgramVariable (design §2.3 — one object[] shared by both heaps; a creation RHS carries
+            // the REAL funcaddr even cross-Behaviour, the invoke-side target-identity guard is the gate).
+            // Only the tuple-return reject stays special (design §3.4-3 KEEP).
+            if (ubTarget.Field.Type is INamedTypeSymbol dlgType && dlgType.DelegateInvokeMethod != null
+                && dlgType.DelegateInvokeMethod.ReturnType.IsTupleType)
+                throw new System.NotSupportedException($"Tuple-return delegate field '{ubTarget.Field.Name}' is not supported.");
 
             var srcVal = VisitExpression(assign.Value);
             var instanceVal2 = VisitExpression(ubTarget.Instance);
@@ -318,20 +232,9 @@ public class SimpleAssignmentHandler : AssignmentHandlerBase, IExpressionHandler
             return srcVal;
         }
 
-        // Fallback: local variable or this.field. (Private/this delegate-field assignments no longer reach here —
-        // private fields are bundled now, so the self-delegate bundle branch above intercepts and returns first.)
-
-        // Delegate-local re-assignment with a lambda (e.g. `f = null; f = (n) => ... f(n-1) ...;` — the
-        // required idiom for a recursive lambda). Hoist the lambda and record the var→method binding so the
-        // delegate invocation can resolve, then mark self-recursion so EmitCallToMethod spills.
-        if (assign.Target is ILocalReferenceOperation dlgLocal
-            && dlgLocal.Local.Type.TypeKind == TypeKind.Delegate
-            && UnwrapDelegateLambda(assign.Value, out var reassignLambda))
-        {
-            var hoisted = HoistLambdaToMethod(reassignLambda);
-            _delegateVarMap[dlgLocal.Local] = hoisted;
-            MarkLambdaSelfRecursion(reassignLambda, dlgLocal.Local, hoisted);
-        }
+        // Fallback: local variable or this.field. Delegate assignments (field and local, including
+        // `d = null` and `a = b` reference copy) ride this generic path now: VisitExpression yields the
+        // bundle reference (or null const) and the store is a single reference copy (design §2.3).
 
         // VisitExpression clones aggregate locals/params automatically (Clone-on-read).
         var srcFallback = VisitExpression(assign.Value);
@@ -351,31 +254,4 @@ public class SimpleAssignmentHandler : AssignmentHandlerBase, IExpressionHandler
             ? EmitDeepCloneAggregate(loaded, tAgg) : loaded;
     }
 
-    void RecordIfCapturingLambda(IDelegateCreationOperation dc)
-    {
-        if (dc.Target is IAnonymousFunctionOperation lambda && _ctx.CaptureAnalyzer.HasCaptures(lambda))
-            _ctx.RecordLambdaCaptures(lambda);
-    }
-
-    static bool UnwrapDelegateLambda(IOperation value, out IAnonymousFunctionOperation lambda)
-    {
-        lambda = null;
-        var dc = value as IDelegateCreationOperation
-                 ?? (value as IConversionOperation)?.Operand as IDelegateCreationOperation;
-        if (dc?.Target is IAnonymousFunctionOperation l) { lambda = l; return true; }
-        return false;
-    }
-
-    // If the lambda body has a NON-tail invocation of the delegate variable it is assigned to, it is
-    // self-recursive in a way that clobbers its flat-heap frame: record a recursion-cycle self-edge so
-    // EmitCallToMethod spills. Tail self-calls are left unmarked (no spill) so deep tail recursion is safe.
-    void MarkLambdaSelfRecursion(IAnonymousFunctionOperation lambda, ILocalSymbol selfVar, IMethodSymbol hoisted)
-    {
-        if (lambda.Body == null || !EmitContext.HasNonTailDelegateSelfCall(lambda.Body, selfVar)) return;
-        var key = hoisted.OriginalDefinition;
-        _ctx.RecursiveCallees ??= new Dictionary<IMethodSymbol, HashSet<IMethodSymbol>>(SymbolEqualityComparer.Default);
-        if (!_ctx.RecursiveCallees.TryGetValue(key, out var set))
-            _ctx.RecursiveCallees[key] = set = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
-        set.Add(key);
-    }
 }

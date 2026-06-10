@@ -277,27 +277,12 @@ public class UasmEmitter
                         $"Cannot sync field '{member.Name}': type '{member.Type}' is not supported by Udon sync");
             }
 
-            // Delegate field → expand to a 3-variable bundle (target, method, addr). Private fields are bundled
-            // too (assign/invoke route on _delegateFields set-membership, not accessibility); they just inherit
-            // `flags` without the Export bit, so the bundle's target is a non-exported same-behaviour pointer.
+            // First-class delegate field (design §2.1): ONE SystemObjectArray heap var holding the bundle
+            // reference, null-initialized in UASM data. Private fields are bundled too (assign/invoke route
+            // on _delegateFields set-membership, not accessibility).
             if (member.Type is INamedTypeSymbol delegateType && delegateType.DelegateInvokeMethod != null)
             {
-                if (delegateType.DelegateInvokeMethod.ReturnType.IsTupleType)
-                    throw new NotSupportedException($"Tuple-return delegate field '{member.Name}' is not supported.");
-
-                var bundle = new DelegateBundle(member.Name);
-                _ctx.DeclareField(bundle.Target, "VRCUdonCommonInterfacesIUdonEventReceiver", flags);
-                _ctx.DeclareField(bundle.Method, "SystemString");
-                _ctx.DeclareField(bundle.Addr, "SystemUInt32");
-                _ctx.DelegateFields.Add(member.Name);
-
-                // Declare convention fields for this delegate signature
-                var (convArgs, convRet) = HandlerBase.GetConventionFieldNames(delegateType);
-                for (int ci = 0; ci < convArgs.Length; ci++)
-                    _ctx.TryDeclareVar(convArgs[ci], NormalizeDelegateParamType(delegateType.DelegateInvokeMethod.Parameters[ci].Type));
-                if (convRet != null)
-                    _ctx.TryDeclareVar(convRet, ExternResolver.GetUdonTypeName(delegateType.DelegateInvokeMethod.ReturnType));
-
+                DeclareDelegateField(member, delegateType);
                 continue; // Skip normal field declaration
             }
 
@@ -383,6 +368,18 @@ public class UasmEmitter
             {
                 if (member.IsStatic || member.IsImplicitlyDeclared) continue;
                 if (declaredMemberNames.Contains(member.Name)) continue;
+
+                // Delegate field from a base class → same single-SystemObjectArray declaration as the derived
+                // path (private bundled too). Must intercept BEFORE the generic initializer scan below, which
+                // would otherwise also enqueue the init op (the helper routes it via _fieldInitOps itself) —
+                // this fixes the old base-path store into a never-declared variable.
+                if (member.Type is INamedTypeSymbol baseDelegateType && baseDelegateType.DelegateInvokeMethod != null)
+                {
+                    DeclareDelegateField(member, baseDelegateType);
+                    declaredMemberNames.Add(member.Name);
+                    continue;
+                }
+
                 var udonType = GetUdonType(member.Type);
                 object constValue = null;
                 var syntaxRef2 = member.DeclaringSyntaxReferences.FirstOrDefault();
@@ -409,29 +406,7 @@ public class UasmEmitter
                     || member.GetAttributes().Any(a => a.AttributeClass?.Name is "SerializeField" or "SerializeFieldAttribute"))
                     baseFlags |= FieldFlags.Export;
 
-                // Delegate field from a base class → expand to a 3-variable bundle (private bundled too; see above).
-                if (member.Type is INamedTypeSymbol baseDelegateType && baseDelegateType.DelegateInvokeMethod != null)
-                {
-                    if (baseDelegateType.DelegateInvokeMethod.ReturnType.IsTupleType)
-                        throw new NotSupportedException($"Tuple-return delegate field '{member.Name}' is not supported.");
-
-                    var bundle = new DelegateBundle(member.Name);
-                    _ctx.DeclareField(bundle.Target, "VRCUdonCommonInterfacesIUdonEventReceiver", baseFlags);
-                    _ctx.DeclareField(bundle.Method, "SystemString");
-                    _ctx.DeclareField(bundle.Addr, "SystemUInt32");
-                    _ctx.DelegateFields.Add(member.Name);
-
-                    // Declare convention fields for this delegate signature
-                    var (baseConvArgs, baseConvRet) = HandlerBase.GetConventionFieldNames(baseDelegateType);
-                    for (int ci = 0; ci < baseConvArgs.Length; ci++)
-                        _ctx.TryDeclareVar(baseConvArgs[ci], NormalizeDelegateParamType(baseDelegateType.DelegateInvokeMethod.Parameters[ci].Type));
-                    if (baseConvRet != null)
-                        _ctx.TryDeclareVar(baseConvRet, ExternResolver.GetUdonTypeName(baseDelegateType.DelegateInvokeMethod.ReturnType));
-                }
-                else
-                {
-                    _ctx.DeclareField(member.Name, udonType, baseFlags, constValue);
-                }
+                _ctx.DeclareField(member.Name, udonType, baseFlags, constValue);
 
                 var baseFcbAttr = member.GetAttributes()
                     .FirstOrDefault(a => a.AttributeClass?.Name == "FieldChangeCallbackAttribute");
@@ -482,6 +457,42 @@ public class UasmEmitter
             // Replace
             _fieldInitOps.Clear();
             _fieldInitOps.AddRange(reordered);
+        }
+    }
+
+    /// <summary>
+    /// First-class delegate field (design §2.1/§1.6): ONE SystemObjectArray heap var holding the bundle
+    /// reference, null-initialized in UASM data. Never exported (exported/synced vars must not be retyped;
+    /// SetProgramVariable needs no export) — [UdonSynced] is rejected by the IsSyncableType check before
+    /// this runs. An initializer (e.g. `public Action cb = M;`) always becomes runtime bundle construction
+    /// at _start via _fieldInitOps, which also fixes the old silent drop of derived-class initializers.
+    /// Shared by the derived-class and base-class field paths.
+    /// </summary>
+    void DeclareDelegateField(IFieldSymbol member, INamedTypeSymbol delegateType)
+    {
+        if (delegateType.DelegateInvokeMethod.ReturnType.IsTupleType)
+            throw new NotSupportedException($"Tuple-return delegate field '{member.Name}' is not supported.");
+        // §3.4-1: ref/out delegate signatures are rejected at the convention-var declaration side too.
+        DelegateAbi.ValidateNoRefOutParams(delegateType.DelegateInvokeMethod);
+
+        _ctx.DeclareField(member.Name, "SystemObjectArray", FieldFlags.None);
+        _ctx.DelegateFields.Add(member.Name);
+
+        // Declare the signature-keyed __dlgc_ convention vars for this delegate signature (§3.2).
+        var invoke = delegateType.DelegateInvokeMethod;
+        var (convArgs, convRet) = HandlerBase.GetConventionFieldNames(delegateType);
+        for (int ci = 0; ci < convArgs.Length; ci++)
+            _ctx.TryDeclareVar(convArgs[ci], ExternResolver.GetUdonTypeName(invoke.Parameters[ci].Type));
+        if (convRet != null)
+            _ctx.TryDeclareVar(convRet, ExternResolver.GetUdonTypeName(invoke.ReturnType));
+
+        if (member.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
+            is VariableDeclaratorSyntax { Initializer: not null } dlgDeclarator)
+        {
+            var model = _compilation.GetSemanticModel(dlgDeclarator.SyntaxTree);
+            var initOp = model.GetOperation(dlgDeclarator.Initializer.Value);
+            if (initOp != null)
+                _fieldInitOps.Add((member.Name, initOp, member.Type));
         }
     }
 
@@ -567,14 +578,12 @@ public class UasmEmitter
             var func = _module.AddFunction(exportName, shouldExport ? exportName : null);
             _methodFunctions[method] = func;
 
-            // Declare params using LayoutPlanner IDs
+            // Declare params using LayoutPlanner IDs (delegate-typed params are SystemObjectArray bundle
+            // references via the type-map delegate arm — design §2.1).
             var paramVarIds = new string[method.Parameters.Length];
             for (int i = 0; i < method.Parameters.Length; i++)
             {
-                var param = method.Parameters[i];
-                var isDelegateParam = param.Type is INamedTypeSymbol nt && nt.DelegateInvokeMethod != null;
-                var udonType = isDelegateParam ? "SystemUInt32" : GetUdonType(param.Type);
-                _ctx.DeclareVar(ml.ParamIds[i], udonType);
+                _ctx.DeclareVar(ml.ParamIds[i], GetUdonType(method.Parameters[i].Type));
                 paramVarIds[i] = ml.ParamIds[i];
             }
             _methodParamVarIds[method] = paramVarIds;
@@ -614,10 +623,8 @@ public class UasmEmitter
             for (int pi = 0; pi < fm.Parameters.Length; pi++)
             {
                 var param = fm.Parameters[pi];
-                var isDelegateParam = param.Type is INamedTypeSymbol nt3 && nt3.DelegateInvokeMethod != null;
-                var udonType = isDelegateParam ? "SystemUInt32" : GetUdonType(param.Type);
                 var paramId = $"__{idx}_{param.Name}__param";
-                _ctx.DeclareVar(paramId, udonType);
+                _ctx.DeclareVar(paramId, GetUdonType(param.Type));
                 fmParamIds[pi] = paramId;
             }
             _methodParamVarIds[fm] = fmParamIds;
@@ -697,10 +704,8 @@ public class UasmEmitter
             for (int pi = 0; pi < bm.Parameters.Length; pi++)
             {
                 var param = bm.Parameters[pi];
-                var isDelegateParam = param.Type is INamedTypeSymbol nt4 && nt4.DelegateInvokeMethod != null;
-                var udonType = isDelegateParam ? "SystemUInt32" : GetUdonType(param.Type);
                 var paramId = $"__{idx}_{param.Name}__param";
-                _ctx.DeclareVar(paramId, udonType);
+                _ctx.DeclareVar(paramId, GetUdonType(param.Type));
                 bmParamIds[pi] = paramId;
             }
             _methodParamVarIds[bm] = bmParamIds;
@@ -849,13 +854,13 @@ public class UasmEmitter
             // Skip methods with tuple returns (not supported as delegate targets)
             if (!method.ReturnsVoid && method.ReturnType.IsTupleType) continue;
 
-            // Build canonical convention key using shared helper
-            var sigPart = BuildBridgeSigPart(method);
+            // Build canonical convention key using the unified ABI builder (design §3.2)
+            var sigPart = DelegateAbi.BuildSigPart(method);
 
             // Declare convention fields (if not already declared)
             for (int i = 0; i < method.Parameters.Length; i++)
             {
-                var argType = NormalizeDelegateParamType(method.Parameters[i].Type);
+                var argType = ExternResolver.GetUdonTypeName(method.Parameters[i].Type);
                 _ctx.TryDeclareVar($"__dlgc_{sigPart}__a{i}", argType);
             }
             if (!method.ReturnsVoid)
@@ -874,7 +879,7 @@ public class UasmEmitter
             var callArgs = new List<CLeaf>();
             for (int i = 0; i < method.Parameters.Length; i++)
             {
-                var argType = NormalizeDelegateParamType(method.Parameters[i].Type);
+                var argType = ExternResolver.GetUdonTypeName(method.Parameters[i].Type);
                 var convName = $"__dlgc_{sigPart}__a{i}";
                 callArgs.Add(BridgeLoad(convName, argType));
             }
@@ -911,12 +916,12 @@ public class UasmEmitter
             if (!method.ReturnsVoid && method.ReturnType.IsTupleType) continue;
 
             // Use the saved type param snapshot instead of _typeParamMap (which may be cleared)
-            var sigPart = BuildBridgeSigPart(method, resolvedMap);
+            var sigPart = DelegateAbi.BuildSigPart(method, resolvedMap);
 
             // Declare convention fields (if not already declared)
             for (int i = 0; i < method.Parameters.Length; i++)
             {
-                var argType = NormalizeDelegateParamType(method.Parameters[i].Type, resolvedMap);
+                var argType = ExternResolver.GetUdonTypeName(method.Parameters[i].Type, resolvedMap);
                 _ctx.TryDeclareVar($"__dlgc_{sigPart}__a{i}", argType);
             }
             if (!method.ReturnsVoid)
@@ -935,7 +940,7 @@ public class UasmEmitter
             var callArgs = new List<CLeaf>();
             for (int i = 0; i < method.Parameters.Length; i++)
             {
-                var argType = NormalizeDelegateParamType(method.Parameters[i].Type, resolvedMap);
+                var argType = ExternResolver.GetUdonTypeName(method.Parameters[i].Type, resolvedMap);
                 var convName = $"__dlgc_{sigPart}__a{i}";
                 callArgs.Add(BridgeLoad(convName, argType));
             }
@@ -996,32 +1001,7 @@ public class UasmEmitter
         }
     }
 
-    // ── Delegate convention vars ──
-
     static string SanitizeId(string name) => name.Replace('.', '_');
-
-    /// <summary>Normalize param type: delegate-typed params become SystemUInt32 (JUMP addresses).</summary>
-    static string NormalizeDelegateParamType(ITypeSymbol type, Dictionary<ITypeParameterSymbol, ITypeSymbol> typeParamMap = null)
-    {
-        if (type is INamedTypeSymbol nt && nt.DelegateInvokeMethod != null)
-            return "SystemUInt32";
-        return ExternResolver.GetUdonTypeName(type, typeParamMap);
-    }
-
-    /// <summary>Build canonical convention sig part for a bridge method, matching HandlerBase.BuildConventionSigPart.</summary>
-    static string BuildBridgeSigPart(IMethodSymbol method, Dictionary<ITypeParameterSymbol, ITypeSymbol> typeParamMap = null)
-    {
-        var paramParts = method.Parameters.Select(p =>
-        {
-            if (p.Type is INamedTypeSymbol nt && nt.DelegateInvokeMethod != null)
-                return "SystemUInt32";
-            return ExternResolver.GetUdonTypeName(p.Type, typeParamMap);
-        });
-        var retPart = method.ReturnsVoid ? "Void" : ExternResolver.GetUdonTypeName(method.ReturnType, typeParamMap);
-        var paramStr = string.Join("_", paramParts);
-        if (paramStr == "") paramStr = "Void";
-        return $"{paramStr}__{retPart}";
-    }
 
     // ── EmitMethod ──
 
