@@ -23,15 +23,12 @@ public abstract class HandlerBase
     protected Dictionary<IMethodSymbol, string[]> _methodParamVarIds => _ctx.MethodParamVarIds;
     protected IMethodSymbol _currentMethod { get => _ctx.CurrentMethod; set => _ctx.CurrentMethod = value; }
     protected List<(IMethodSymbol symbol, CFunction func)> _pendingLocalFunctions => _ctx.PendingLocalFunctions;
-    protected Dictionary<ILocalSymbol, IMethodSymbol> _delegateVarMap => _ctx.DelegateVarMap;
     protected List<IMethodSymbol> _pendingGenericSpecs => _ctx.PendingGenericSpecs;
     protected Dictionary<ITypeParameterSymbol, ITypeSymbol> _typeParamMap { get => _ctx.TypeParamMap; set => _ctx.TypeParamMap = value; }
-    protected Dictionary<(int methodIdx, int paramOrdinal), DelegateConvention> _delegateParamConventions => _ctx.DelegateParamConventions;
-    protected Dictionary<IMethodSymbol, DelegateConvention> _lambdaConventionOverrides => _ctx.LambdaConventionOverrides;
     protected Dictionary<ILocalSymbol, EmitContext.LocalBinding> _localBindings => _ctx.LocalBindings;
     protected List<(string fieldName, IOperation initOp, ITypeSymbol fieldType)> _fieldInitOps => _ctx.FieldInitOps;
     protected Dictionary<string, string> _fieldChangeCallbacks => _ctx.FieldChangeCallbacks;
-    protected Stack<(CLeaf Target, string DelegateFieldName)> _conditionalAccessStack => _ctx.ConditionalAccessStack;
+    protected Stack<CLeaf> _conditionalAccessStack => _ctx.ConditionalAccessStack;
     protected Stack<List<(CLeaf val, ITypeSymbol type)>> _usingDisposableStack => _ctx.UsingDisposableStack;
     protected HashSet<string> _delegateFields => _ctx.DelegateFields;
     protected List<EmitDiagnostic> _diagnostics => _ctx.Diagnostics;
@@ -509,10 +506,6 @@ public abstract class HandlerBase
 
     protected string GetParamVarId(IParameterSymbol param)
     {
-        if (_currentMethod != null
-            && _lambdaConventionOverrides.TryGetValue(_currentMethod, out var conv)
-            && param.Ordinal < conv.ArgVarIds.Length)
-            return conv.ArgVarIds[param.Ordinal];
         if (param.ContainingSymbol is IMethodSymbol method
             && _methodParamVarIds.TryGetValue(method, out var paramIds)
             && param.Ordinal < paramIds.Length)
@@ -773,39 +766,14 @@ public abstract class HandlerBase
 
     // ── Delegate convention helpers ──
 
-    /// <summary>Declare the per-call-site '__dlg_{idx}_{param}' calling-convention fields (one per delegate-typed
-    /// parameter: its args + optional return) for <paramref name="method"/>, recording them in
-    /// ctx.DelegateParamConventions keyed by (idx, paramOrdinal). Shared single definition for the generic-spec,
-    /// class-method, and foreign-static emit paths — each passes its own type resolver (the generic-spec path's
-    /// resolver applies the type-param map; the emitter path uses the plain one).</summary>
-    internal static void DeclareDelegateConventionVars(EmitContext ctx, IMethodSymbol method, int idx,
-        Func<ITypeSymbol, string> getUdonType)
-    {
-        foreach (var param in method.Parameters)
-        {
-            if (param.Type is not INamedTypeSymbol namedType || namedType.DelegateInvokeMethod == null)
-                continue;
-
-            var invoke = namedType.DelegateInvokeMethod;
-            var argVarIds = new string[invoke.Parameters.Length];
-            for (int j = 0; j < invoke.Parameters.Length; j++)
-                argVarIds[j] = ctx.DeclareVar($"__dlg_{idx}_{param.Name}_a{j}", getUdonType(invoke.Parameters[j].Type));
-            string retVarId = null;
-            if (!invoke.ReturnsVoid)
-                retVarId = ctx.DeclareVar($"__dlg_{idx}_{param.Name}_ret", getUdonType(invoke.ReturnType));
-            ctx.DelegateParamConventions[(idx, param.Ordinal)] = new DelegateConvention
-            {
-                ArgVarIds = argVarIds, RetVarId = retVarId
-            };
-        }
-    }
-
     /// <summary>Compute signature-based convention field names for a delegate type
-    /// (sig key via the unified DelegateAbi.BuildSigPart — design §3.2).</summary>
-    internal static (string[] argNames, string retName) GetConventionFieldNames(INamedTypeSymbol delegateType)
+    /// (sig key via the unified DelegateAbi.BuildSigPart — design §3.2). Pass the type-param map when
+    /// resolving inside a generic-spec body so e.g. Func&lt;T&gt; keys on the substituted type.</summary>
+    internal static (string[] argNames, string retName) GetConventionFieldNames(INamedTypeSymbol delegateType,
+        IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeParamMap = null)
     {
         var invoke = delegateType.DelegateInvokeMethod;
-        var sigPart = DelegateAbi.BuildSigPart(invoke);
+        var sigPart = DelegateAbi.BuildSigPart(invoke, typeParamMap);
 
         var argNames = new string[invoke.Parameters.Length];
         for (int i = 0; i < invoke.Parameters.Length; i++)

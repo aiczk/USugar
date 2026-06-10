@@ -16,7 +16,7 @@ public class NullableHandler : AssignmentHandlerBase, IExpressionHandler
     {
         IConditionalAccessOperation op => VisitConditionalAccess(op),
         ICoalesceOperation op => VisitCoalesce(op),
-        IConditionalAccessInstanceOperation => _conditionalAccessStack.Peek().Target,
+        IConditionalAccessInstanceOperation => _conditionalAccessStack.Peek(),
         ICoalesceAssignmentOperation op => VisitCoalesceAssignment(op),
         _ => throw new System.NotSupportedException(expression.GetType().Name),
     };
@@ -35,23 +35,12 @@ public class NullableHandler : AssignmentHandlerBase, IExpressionHandler
             EmitAssign(resultSlot, defaultConst);
         }
 
-        // Detect delegate field conditional access (e.g., _callback?.Invoke(42))
-        // The original field variable doesn't exist — it's been expanded to a DelegateBundle.
-        string delegateFieldName = null;
-        if (op.Operation is IFieldReferenceOperation fieldRef
-            && fieldRef.Field.Type is INamedTypeSymbol dlgType
-            && dlgType.DelegateInvokeMethod != null
-            && _delegateFields.Contains(fieldRef.Field.Name))
-        {
-            delegateFieldName = fieldRef.Field.Name;
-        }
-
-        // targetVal is a single-assignment scratch leaf under ANF (LoadField for the delegate-bundle Target,
-        // else VisitExpression for the receiver) — re-readable for the null check and as the conditional-access
-        // instance without a snapshot. The null check is type-agnostic (SystemObject), so no retype is needed.
-        CLeaf targetVal = delegateFieldName != null
-            ? LoadField(new DelegateBundle(delegateFieldName).Target, "VRCUdonCommonInterfacesIUdonEventReceiver")
-            : VisitExpression(op.Operation);
+        // targetVal is a single-assignment scratch leaf under ANF — re-readable for the null check and
+        // as the conditional-access instance without a snapshot. A delegate-typed receiver is its BUNDLE
+        // reference (design §2.6: `d?.Invoke()` null-guards the bundle leaf itself, so any
+        // delegate-valued expression — field, local, param, element, call result — is a legal receiver).
+        // The null check is type-agnostic (SystemObject), so no retype is needed.
+        CLeaf targetVal = VisitExpression(op.Operation);
 
         var nullConst = Const(null, "SystemObject");
 
@@ -64,7 +53,7 @@ public class NullableHandler : AssignmentHandlerBase, IExpressionHandler
         _builder.EmitIf(condVal, b =>
         {
             // target is not null → evaluate WhenNotNull with target as the instance
-            _conditionalAccessStack.Push((targetVal, delegateFieldName));
+            _conditionalAccessStack.Push(targetVal);
             try
             {
                 var accessVal = VisitExpression(op.WhenNotNull);

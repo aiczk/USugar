@@ -640,7 +640,6 @@ public partial class InvocationHandler
 
     CLeaf EmitUserMethodCall(IInvocationOperation op, IMethodSymbol target)
     {
-        var idx = _methodSlots[target].Index;
         var paramIds = _methodParamVarIds[target];
 
         // Recursion is handled centrally in EmitCallToMethod (software-stack spill/reload around the call).
@@ -653,41 +652,13 @@ public partial class InvocationHandler
         {
             var param = op.Arguments[i].Parameter ?? target.Parameters[i];
             var argOp = op.Arguments[i].Value;
-            CLeaf val;
 
-            // Delegate parameter with lambda arg: hoist with convention vars
-            if (_delegateParamConventions.TryGetValue((idx, param.Ordinal), out var convention)
-                && UnwrapLambdaFromArg(argOp, out var lambda))
-            {
-                HoistLambdaForDelegateParam(lambda, convention);
-                // Use FuncRef to pass the function's entry address
-                val = FuncRef(_methodFunctions[lambda.Symbol].Name);
-            }
-            // Delegate parameter with a same-class method-group arg: a raw method reads its OWN param fields, not
-            // the call-site convention vars, so pass a per-call-site ADAPTER (emitted later) that copies the
-            // convention args into the real method's params, calls it, and copies its return to the convention ret.
-            else if (_delegateParamConventions.TryGetValue((idx, param.Ordinal), out var mgConvention)
-                && UnwrapMethodGroupFromArg(argOp, out var mgMethod)
-                && _methodFunctions.ContainsKey(mgMethod))
-            {
-                var adapterName = $"__dlgadapt_{idx}_{param.Ordinal}_{_methodSlots[mgMethod].Index}";
-                if (_ctx.PendingDelegateParamAdapters.All(a => a.adapterName != adapterName))
-                    _ctx.PendingDelegateParamAdapters.Add((mgMethod, mgConvention, adapterName));
-                val = FuncRef(adapterName);
-            }
-            else
-            {
-                // A delegate VALUE argument (local/param) has no convention rebinding: the callee reads
-                // its __dlg_* convention vars, which nothing would write — a silent miscompile where the
-                // call returns default(T). Only lambda literals and same-class method groups (both
-                // handled above) carry the convention, so reject everything else loudly.
-                if (param.Type.TypeKind == TypeKind.Delegate)
-                    throw new System.NotSupportedException(
-                        $"Cannot pass delegate value '{argOp.Syntax}' as argument '{param.Name}' of '{target.Name}'. " +
-                        "Pass a lambda literal or a method group directly at the call site.");
-                // VisitExpression clones aggregate locals/params automatically (Clone-on-read).
-                val = VisitExpression(argOp);
-            }
+            // A delegate-typed argument is an ordinary SystemObjectArray bundle value (design §2.4): a
+            // lambda literal / method group rides VisitDelegateCreation, a delegate local/param/field is
+            // a plain reference copy into the callee's bundle param. The callee dispatches it through
+            // EmitDelegateDispatch, so no per-call-site convention rebinding exists anymore.
+            // VisitExpression clones aggregate locals/params automatically (Clone-on-read).
+            var val = VisitExpression(argOp);
             if (param.Ordinal >= 0 && param.Ordinal < argSlots.Length) argSlots[param.Ordinal] = val;
         }
         var args = new List<CLeaf>(argSlots);

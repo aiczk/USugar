@@ -48,24 +48,26 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
             return EmitCallToMethod(binOpM.OriginalDefinition, new List<CLeaf> { lhs, rhs });
         }
 
-        // ── Delegate field null check / comparison ──
-        if (op.OperatorKind is BinaryOperatorKind.Equals or BinaryOperatorKind.NotEquals)
+        // ── Delegate null check / equality (design §2.5 — TYPE-routed, so fields, locals, params,
+        // array elements, properties, and expression results all land here; the dispatch stays gated
+        // on the delegate type because this linear handler scan is first-match) ──
+        if (op.OperatorKind is BinaryOperatorKind.Equals or BinaryOperatorKind.NotEquals
+            && (IsDelegateTyped(op.LeftOperand.Type) || IsDelegateTyped(op.RightOperand.Type)))
         {
-            var leftField = TryGetDelegateFieldName(op.LeftOperand);
-            var rightField = TryGetDelegateFieldName(op.RightOperand);
             bool leftIsNull = IsNullLiteral(op.LeftOperand);
             bool rightIsNull = IsNullLiteral(op.RightOperand);
             bool isNotEquals = op.OperatorKind == BinaryOperatorKind.NotEquals;
 
-            // delegate == null / delegate != null
-            if (leftField != null && rightIsNull)
-                return CompareDelegateToNull(new DelegateBundle(leftField).Target, isNotEquals);
-            if (rightField != null && leftIsNull)
-                return CompareDelegateToNull(new DelegateBundle(rightField).Target, isNotEquals);
+            // d == null / d != null → reference null check on the BUNDLE itself (P4: delegate-null is
+            // the bundle reference being null; [0] being null is a different condition).
+            if (rightIsNull)
+                return CompareDelegateToNull(VisitExpression(op.LeftOperand), isNotEquals);
+            if (leftIsNull)
+                return CompareDelegateToNull(VisitExpression(op.RightOperand), isNotEquals);
 
-            // delegate == delegate
-            if (leftField != null && rightField != null)
-                return CompareDelegates(leftField, rightField, isNotEquals);
+            // d1 == d2 → element-wise (target, method) value equality with null legs (fcd07).
+            if (IsDelegateTyped(op.LeftOperand.Type) && IsDelegateTyped(op.RightOperand.Type))
+                return CompareDelegates(VisitExpression(op.LeftOperand), VisitExpression(op.RightOperand), isNotEquals);
         }
 
         // ── Nullable (boxed object) compared to null literal → object reference null check ──
@@ -865,19 +867,10 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
         return result;
     }
 
-    // ── Delegate comparison helpers ──
+    // ── Delegate comparison helpers (design §2.5) ──
 
-    /// <summary>Try to extract delegate field name from an operation, unwrapping conversions.</summary>
-    string TryGetDelegateFieldName(IOperation op)
-    {
-        var unwrapped = op;
-        while (unwrapped is IConversionOperation conv) unwrapped = conv.Operand;
-        if (unwrapped is IFieldReferenceOperation { Instance: IInstanceReferenceOperation } fr
-            && fr.Field.Type is INamedTypeSymbol nt && nt.DelegateInvokeMethod != null
-            && _delegateFields.Contains(fr.Field.Name))
-            return fr.Field.Name;
-        return null;
-    }
+    static bool IsDelegateTyped(ITypeSymbol t)
+        => t is INamedTypeSymbol n && n.DelegateInvokeMethod != null;
 
     bool IsNullLiteral(IOperation op)
     {
@@ -886,39 +879,58 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
         return unwrapped is ILiteralOperation { ConstantValue: { HasValue: true, Value: null } };
     }
 
-    CLeaf CompareDelegateToNull(string targetFieldName, bool isNotEquals)
+    CLeaf CompareDelegateToNull(CLeaf bundle, bool isNotEquals)
     {
-        var targetVal = LoadField(targetFieldName, "VRCUdonCommonInterfacesIUdonEventReceiver");
         var nullVal = Const(null, "SystemObject");
         var sig = isNotEquals
             ? "SystemObject.__op_Inequality__SystemObject_SystemObject__SystemBoolean"
             : "SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean";
-        return ExternCall(sig, new List<CLeaf> { targetVal, nullVal }, "SystemBoolean");
+        return ExternCall(sig, new List<CLeaf> { bundle, nullVal }, "SystemBoolean");
     }
 
-    CLeaf CompareDelegates(string leftField, string rightField, bool isNotEquals)
+    /// <summary>Element-wise delegate value equality with null legs (§2.5): __Get on a null bundle
+    /// faults, so the element comparison only runs when BOTH bundles are non-null; null==null is true,
+    /// one-sided null is false (fcd07 eqAfterNull=0). Addr is intentionally excluded — it is derived
+    /// from Method and self-program-relative; including it would break (target, method) equality.</summary>
+    CLeaf CompareDelegates(CLeaf a, CLeaf b, bool isNotEquals)
     {
-        var leftBundle = new DelegateBundle(leftField);
-        var rightBundle = new DelegateBundle(rightField);
-        var leftTarget = LoadField(leftBundle.Target, "VRCUdonCommonInterfacesIUdonEventReceiver");
-        var rightTarget = LoadField(rightBundle.Target, "VRCUdonCommonInterfacesIUdonEventReceiver");
-        // Addr is intentionally excluded: it is derived from Method and only used
-        // for same-behaviour JUMP_INDIRECT optimization. Including it would cause
-        // false negatives when two delegates point to the same method.
-        var targetEq = ExternCall(
-            "SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean",
-            new List<CLeaf> { leftTarget, rightTarget }, "SystemBoolean");
+        var nullVal = Const(null, "SystemObject");
+        var ln = ExternCall("SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean",
+            new List<CLeaf> { a, nullVal }, "SystemBoolean");
+        var rn = ExternCall("SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean",
+            new List<CLeaf> { b, nullVal }, "SystemBoolean");
+        var anyNull = ExternCall("SystemBoolean.__op_LogicalOr__SystemBoolean_SystemBoolean__SystemBoolean",
+            new List<CLeaf> { ln, rn }, "SystemBoolean");
 
-        var leftMethod = LoadField(leftBundle.Method, "SystemString");
-        var rightMethod = LoadField(rightBundle.Method, "SystemString");
-        var methodEq = ExternCall(
-            "SystemString.__op_Equality__SystemString_SystemString__SystemBoolean",
-            new List<CLeaf> { leftMethod, rightMethod }, "SystemBoolean");
+        var resultSlot = _ctx.AllocTemp("SystemBoolean");
+        _builder.EmitIf(anyNull,
+            _ => EmitAssign(resultSlot, ExternCall(
+                "SystemBoolean.__op_Equality__SystemBoolean_SystemBoolean__SystemBoolean",
+                new List<CLeaf> { ln, rn }, "SystemBoolean")),
+            _ =>
+            {
+                var lt = ExternCall("SystemObjectArray.__Get__SystemInt32__SystemObject",
+                    new List<CLeaf> { a, Const(DelegateAbi.Target, "SystemInt32") }, "SystemObject");
+                var rt = ExternCall("SystemObjectArray.__Get__SystemInt32__SystemObject",
+                    new List<CLeaf> { b, Const(DelegateAbi.Target, "SystemInt32") }, "SystemObject");
+                var targetEq = ExternCall(
+                    "SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean",
+                    new List<CLeaf> { lt, rt }, "SystemBoolean");
 
-        var result = ExternCall(
-            "SystemBoolean.__op_LogicalAnd__SystemBoolean_SystemBoolean__SystemBoolean",
-            new List<CLeaf> { targetEq, methodEq }, "SystemBoolean");
+                var lm = ExternCall("SystemObjectArray.__Get__SystemInt32__SystemObject",
+                    new List<CLeaf> { a, Const(DelegateAbi.Method, "SystemInt32") }, "SystemString");
+                var rm = ExternCall("SystemObjectArray.__Get__SystemInt32__SystemObject",
+                    new List<CLeaf> { b, Const(DelegateAbi.Method, "SystemInt32") }, "SystemString");
+                var methodEq = ExternCall(
+                    "SystemString.__op_Equality__SystemString_SystemString__SystemBoolean",
+                    new List<CLeaf> { lm, rm }, "SystemBoolean");
 
+                EmitAssign(resultSlot, ExternCall(
+                    "SystemBoolean.__op_LogicalAnd__SystemBoolean_SystemBoolean__SystemBoolean",
+                    new List<CLeaf> { targetEq, methodEq }, "SystemBoolean"));
+            });
+
+        CLeaf result = SlotRef(resultSlot);
         if (isNotEquals)
             result = ExternCall(
                 "SystemBoolean.__op_UnaryNegation__SystemBoolean__SystemBoolean",

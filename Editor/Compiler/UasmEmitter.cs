@@ -27,7 +27,6 @@ public class UasmEmitter
     List<(IMethodSymbol symbol, CFunction func)> _pendingLocalFunctions => _ctx.PendingLocalFunctions;
     List<IMethodSymbol> _pendingGenericSpecs => _ctx.PendingGenericSpecs;
     Dictionary<ITypeParameterSymbol, ITypeSymbol> _typeParamMap { get => _ctx.TypeParamMap; set => _ctx.TypeParamMap = value; }
-    Dictionary<(int methodIdx, int paramOrdinal), DelegateConvention> _delegateParamConventions => _ctx.DelegateParamConventions;
     HashSet<IMethodSymbol> _inheritedMethods = new(SymbolEqualityComparer.Default);
     List<(string fieldName, IOperation initOp, ITypeSymbol fieldType)> _fieldInitOps => _ctx.FieldInitOps;
     Dictionary<string, string> _fieldChangeCallbacks => _ctx.FieldChangeCallbacks;
@@ -605,8 +604,6 @@ public class UasmEmitter
 
                 _methodReturns[method] = ml.Returns.ToArray();
             }
-
-            HandlerBase.DeclareDelegateConventionVars(_ctx, method, idx, GetUdonType);
         }
 
         // Collect foreign static methods
@@ -638,10 +635,6 @@ public class UasmEmitter
                 func.ReturnSlots.Add(new ReturnSlot(retId, retType));
                 _methodReturns[fm] = new[] { new ReturnSlot(retId, retType) };
             }
-
-            // Mirror the same-class path: a foreign-static method that invokes a delegate parameter needs its
-            // convention vars declared, else VisitDelegateInvocation cannot resolve the target.
-            HandlerBase.DeclareDelegateConventionVars(_ctx, fm, idx, GetUdonType);
         }
 
         // Register user-struct constructors + instance methods (object[]-emulated; synthetic receiver = param0).
@@ -770,9 +763,6 @@ public class UasmEmitter
 
         // Emit pending delegate bridges for hoisted lambdas/local functions
         EmitPendingDelegateBridges();
-
-        // Emit per-call-site adapters for method groups passed to delegate parameters
-        EmitPendingDelegateParamAdapters();
 
         // Synthesize _start if there are field initializers, FCB fields, or default-init aggregate fields but
         // no user-defined Start()
@@ -957,42 +947,6 @@ public class UasmEmitter
             {
                 _builder.EmitExprStmt(callResult);
             }
-
-            _builder.EmitReturn();
-
-            if (prevFunc != null)
-                _builder.SetFunction(prevFunc);
-        }
-    }
-
-    // ── Pending Delegate-Param Adapters (a same-class method group passed to a delegate parameter) ──
-    // A raw method reads its OWN __param fields; the call site writes/reads the __dlg_{idx} convention vars.
-    // The adapter (FuncRef'd at the call site, JUMP_INDIRECT target) bridges the two: load the convention args,
-    // InternalCall the real method (which copies them into its real params), store its return to the convention
-    // ret var. Structurally identical to EmitPendingDelegateBridges, keyed to the call-site convention vars.
-    void EmitPendingDelegateParamAdapters()
-    {
-        var emitted = new HashSet<string>();
-        foreach (var (target, convention, adapterName) in _ctx.PendingDelegateParamAdapters)
-        {
-            if (!emitted.Add(adapterName)) continue;
-            if (!_methodFunctions.TryGetValue(target, out var realFunc)) continue;
-
-            var adapterFunc = _module.AddFunction(adapterName);
-            var prevFunc = _builder.CurrentFunction;
-            _builder.SetFunction(adapterFunc);
-
-            var callArgs = new List<CLeaf>();
-            foreach (var argId in convention.ArgVarIds ?? System.Array.Empty<string>())
-                callArgs.Add(BridgeLoad(argId, _ctx.GetFieldType(argId)));
-
-            var retTypeStr = convention.RetVarId != null ? _ctx.GetFieldType(convention.RetVarId) : "SystemVoid";
-            var callResult = _builder.InternalCall(realFunc.Name, callArgs, retTypeStr);
-
-            if (convention.RetVarId != null)
-                BridgeStore(convention.RetVarId, callResult);
-            else
-                _builder.EmitExprStmt(callResult);
 
             _builder.EmitReturn();
 

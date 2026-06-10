@@ -236,15 +236,10 @@ public class EmitContext
         });
     public int NextMethodIndex;
     public readonly List<(IMethodSymbol symbol, CFunction func)> PendingLocalFunctions = new();
-    public readonly Dictionary<ILocalSymbol, IMethodSymbol> DelegateVarMap = new(SymbolEqualityComparer.Default);
 
     // Generic monomorphization
     public readonly List<IMethodSymbol> PendingGenericSpecs = new();
     public Dictionary<ITypeParameterSymbol, ITypeSymbol> TypeParamMap;
-
-    // Delegate parameter convention variables
-    public readonly Dictionary<(int methodIdx, int paramOrdinal), DelegateConvention> DelegateParamConventions = new();
-    public readonly Dictionary<IMethodSymbol, DelegateConvention> LambdaConventionOverrides = new(SymbolEqualityComparer.Default);
 
     // Persistent local symbol → field name mapping (survives scope pop, for capture resolution).
     //
@@ -375,9 +370,10 @@ public class EmitContext
     // FieldChangeCallback: fieldName → propertyName
     public readonly Dictionary<string, string> FieldChangeCallbacks = new();
 
-    // Conditional access stack (for ?. operator)
-    // Target is the evaluated instance; DelegateFieldName is non-null for delegate ?.Invoke().
-    public readonly Stack<(CLeaf Target, string DelegateFieldName)> ConditionalAccessStack = new();
+    // Conditional access stack (for ?. operator): the evaluated instance leaf. For a delegate-typed
+    // receiver this is the BUNDLE leaf itself (design §2.6) — `d?.Invoke()` dispatches on it, and any
+    // delegate-valued expression (local/param/element/call result) is a legal ?.Invoke receiver.
+    public readonly Stack<CLeaf> ConditionalAccessStack = new();
 
     // using declaration Dispose tracking
     public readonly Stack<List<(CLeaf val, ITypeSymbol type)>> UsingDisposableStack = new();
@@ -404,11 +400,6 @@ public class EmitContext
 
     // Pending delegate bridges for dynamically hoisted lambdas/local functions
     public readonly List<(IMethodSymbol method, string bridgeExportName, Dictionary<ITypeParameterSymbol, ITypeSymbol> resolvedTypeParamMap)> PendingDelegateBridges = new();
-
-    // A same-class method group passed to a delegate PARAMETER needs a per-call-site adapter that copies the
-    // call-site convention vars into the target method's real param fields, calls it, and copies the return back
-    // (a raw method address would read its OWN param fields, not the convention vars, and return a stale 0).
-    public readonly List<(IMethodSymbol target, DelegateConvention convention, string adapterName)> PendingDelegateParamAdapters = new();
 
     // Diagnostics collected during emission
     public readonly List<EmitDiagnostic> Diagnostics = new();

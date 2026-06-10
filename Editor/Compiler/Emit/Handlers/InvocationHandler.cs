@@ -213,166 +213,187 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
         return EmitCallToMethod(target, args);
     }
 
-    // ── Delegate Invocation ──
+    // ── Delegate Invocation (design §2.6: single unified dispatch for ALL invoke shapes) ──
 
     CLeaf VisitDelegateInvocation(IInvocationOperation op)
     {
-        // ── Delegate FIELD invocation via conditional access (?.Invoke()) ──
-        if (op.Instance is IConditionalAccessInstanceOperation
-            && _conditionalAccessStack.Count > 0
-            && _conditionalAccessStack.Peek().DelegateFieldName != null)
-        {
-            return EmitDelegateFieldInvocation(op, _conditionalAccessStack.Peek().DelegateFieldName,
-                op.TargetMethod.ContainingType as INamedTypeSymbol);
-        }
+        var delegateType = op.TargetMethod.ContainingType as INamedTypeSymbol;
 
-        // ── Delegate FIELD invocation ──
-        if (op.Instance is IFieldReferenceOperation { Instance: IInstanceReferenceOperation } fieldRef
-            && fieldRef.Field.Type is INamedTypeSymbol dlgFieldType
-            && dlgFieldType.DelegateInvokeMethod != null
-            && _delegateFields.Contains(fieldRef.Field.Name))
-        {
-            return EmitDelegateFieldInvocation(op, fieldRef.Field.Name, dlgFieldType);
-        }
+        // ?.Invoke: NullableHandler already evaluated the receiver to the BUNDLE leaf, guarded
+        // bundle-null (C#-strict silent skip — args are NOT evaluated on null, fcd06), and pushed the
+        // leaf; dispatch runs inside its non-null branch with silent guard-failure arms.
+        if (op.Instance is IConditionalAccessInstanceOperation && _conditionalAccessStack.Count > 0)
+            return EmitDelegateDispatch(_conditionalAccessStack.Peek(), delegateType, op, isConditional: true);
 
-        // Delegate parameter invocation via JUMP_INDIRECT
-        if (op.Instance is IParameterReferenceOperation paramRef2
-            && _currentMethod != null
-            && _methodSlots.TryGetValue(_currentMethod, out var currentSlot)
-            && _delegateParamConventions.TryGetValue((currentSlot.Index, paramRef2.Parameter.Ordinal), out var convention))
-        {
-            // Collect args as HExprs
-            var args = new List<CLeaf>();
-            for (int i = 0; i < op.Arguments.Length; i++)
-                args.Add(VisitExpression(op.Arguments[i].Value));
-
-            // Store args to convention fields
-            for (int i = 0; i < args.Count && i < convention.ArgVarIds.Length; i++)
-                EmitStoreField(convention.ArgVarIds[i], args[i]);
-
-            // Get the method pointer (param var holding the lambda's address)
-            var methodPtr = LoadParam(paramRef2.Parameter);
-
-            // Determine return type
-            string retType = convention.RetVarId != null
-                ? _ctx.GetFieldType(convention.RetVarId)
-                : null;
-
-            // Indirect call through delegate. __indirect is a VOID side-effect (the JUMP_INDIRECT): args were
-            // already stored to convention fields and the return is read from the convention ret field, not a
-            // slot — so it must NOT be materialized to a dest slot (EmitCallIndirect ignores the dest).
-            EmitInternalVoid("__indirect", new List<CLeaf> { methodPtr });
-            return retType != null ? LoadField(convention.RetVarId, retType) : null;
-        }
-
-        // op.Instance is the delegate local reference (e.g., 'a' in a())
-        if (op.Instance is ILocalReferenceOperation localRef
-            && _delegateVarMap.TryGetValue(localRef.Local, out var targetMethod))
-        {
-            // Mutual recursion between two local-variable lambdas (f calls g, g calls f) is invisible to the
-            // pre-emit SCC analysis (lambdas hoist during emit). When one hoisted function calls a DIFFERENT
-            // hoisted lambda through a delegate variable, conservatively mark it a recursion edge so the
-            // frame is spilled. (Self-recursion is handled tail-aware by MarkLambdaSelfRecursion.)
-            if (_currentMethod != null && IsHoistedFunction(_currentMethod) && IsHoistedFunction(targetMethod)
-                && !SymbolEqualityComparer.Default.Equals(targetMethod.OriginalDefinition, _currentMethod.OriginalDefinition))
-                MarkRecursiveEdge(_currentMethod, targetMethod);
-
-            var args = new List<CLeaf>();
-            for (int i = 0; i < op.Arguments.Length; i++)
-                args.Add(VisitExpression(op.Arguments[i].Value));
-
-            return EmitCallToMethod(targetMethod, args);
-        }
-        throw new System.NotSupportedException("Cannot resolve delegate target");
+        // Every other shape — field / local / param / array element / property / struct member /
+        // call result / object[] cast-back — yields the bundle reference through the generic visit.
+        return EmitDelegateDispatch(VisitExpression(op.Instance), delegateType, op, isConditional: false);
     }
 
     /// <summary>
-    /// Emit delegate field invocation logic (self-path via JUMP_INDIRECT, cross-path via SendCustomEvent).
-    /// Shared by direct invocation (_callback.Invoke()) and conditional access (_callback?.Invoke()).
+    /// §2.6 unified delegate dispatch: full guard ladder (bundle-null / target-null / target-identity +
+    /// addr≠0 self-vs-cross / method-null) around the self JUMP_INDIRECT and cross SendCustomEvent arms.
+    /// Null-invoke deviation (§2.6/§8-8): LogError + skip + default(T) result — never a VM halt, never
+    /// P5d's silent jump-to-0. ?.Invoke is C#-strict instead: silent skip, no LogError.
+    /// Clobber-window invariants (§3.3, pinned): (1) all argument expressions are fully evaluated to ANF
+    /// scratch slots BEFORE the first conv store; (2) between the conv stores and the JUMP/SendCustomEvent
+    /// only pure guard externs run; (4) the conv ret is materialized to a fresh slot immediately after
+    /// dispatch — never returned as a raw LoadField leaf (fcd11/12).
     /// </summary>
-    CLeaf EmitDelegateFieldInvocation(IInvocationOperation op, string fieldName, INamedTypeSymbol delegateType)
+    CLeaf EmitDelegateDispatch(CLeaf bundle, INamedTypeSymbol delegateType, IInvocationOperation op, bool isConditional)
     {
         var invoke = delegateType.DelegateInvokeMethod;
-        var (convArgs, convRet) = GetConventionFieldNames(delegateType);
+        var (convArgs, convRet) = GetConventionFieldNames(delegateType, _typeParamMap);
 
+        // The __dlgc_ conv vars are a signature-keyed cross-program byte contract (§3.2). Bridges declare
+        // the same names for their own sigs; the dispatch site declares-on-first-use for foreign sigs.
+        for (int i = 0; i < convArgs.Length; i++)
+            _ctx.TryDeclareVar(convArgs[i], GetUdonType(invoke.Parameters[i].Type));
         string retType = null;
         if (!invoke.ReturnsVoid)
+        {
             retType = GetUdonType(invoke.ReturnType);
+            _ctx.TryDeclareVar(convRet, retType);
+        }
 
-        // 1. Evaluate all args ONCE (before branching to avoid double-evaluation)
+        // C# evaluation order: a plain d(args) runs the argument side effects even when d is null (the
+        // NRE follows them). For ?.Invoke this whole sequence sits inside NullableHandler's non-null
+        // branch, so args are correctly unevaluated on a null bundle.
         var argExprs = new List<CLeaf>();
         for (int i = 0; i < op.Arguments.Length; i++)
             argExprs.Add(VisitExpression(op.Arguments[i].Value));
 
-        // 2. Write args to LOCAL convention fields
-        for (int i = 0; i < argExprs.Count && i < convArgs.Length; i++)
-            EmitStoreField(convArgs[i], argExprs[i]);
-
-        // Load bundle fields
-        var bundle = new DelegateBundle(fieldName);
-        var target = LoadField(bundle.Target, "VRCUdonCommonInterfacesIUdonEventReceiver");
-        var addr = LoadField(bundle.Addr, "SystemUInt32");
-        var thisRef = LoadField(_ctx.DeclareThisOnce(GetUdonType(_classSymbol)), GetUdonType(_classSymbol));
-
-        // 3. Condition: target == this && addr != 0
-        var isSelf = ExternCall(
-            "UnityEngineObject.__op_Equality__UnityEngineObject_UnityEngineObject__SystemBoolean",
-            new List<CLeaf> { target, thisRef }, "SystemBoolean");
-        var hasAddr = ExternCall(
-            "SystemUInt32.__op_Inequality__SystemUInt32_SystemUInt32__SystemBoolean",
-            new List<CLeaf> { addr, Const(0u, "SystemUInt32") }, "SystemBoolean");
-        var selfFast = ExternCall(
-            "SystemBoolean.__op_LogicalAnd__SystemBoolean_SystemBoolean__SystemBoolean",
-            new List<CLeaf> { isSelf, hasAddr }, "SystemBoolean");
-
-        // For Func<T>: temp to receive result from both paths
-        string resultVar = null;
+        // retSlot pre-initialized to default(T): every guard-failure arm falls through with it (§2.6).
+        int retSlot = -1;
         if (retType != null)
-            resultVar = _ctx.DeclareLocal("__dlg_ret", retType);
+        {
+            retSlot = _ctx.AllocTemp(retType);
+            EmitAssign(retSlot, DefaultConst(retType));
+        }
 
-        // 4-5. Branch: self (JUMP_INDIRECT) vs cross (SendCustomEvent)
-        _builder.EmitIf(selfFast,
-            // ── Self path: JUMP_INDIRECT (convention fields already written locally) ──
-            _ =>
-            {
-                // __indirect is a void side-effect (JUMP_INDIRECT); the return is read from the convention field.
-                EmitInternalVoid("__indirect", new List<CLeaf> { addr });
-                if (retType != null)
-                {
-                    // Read return from convention ret field
-                    EmitStoreField(resultVar, LoadField(convRet, retType));
-                }
-            },
-            // ── Cross path: SetProgramVariable + SendCustomEvent ──
-            _ =>
-            {
-                // Write convention fields on target via SetProgramVariable
-                for (int i = 0; i < convArgs.Length; i++)
-                {
-                    var argType = GetUdonType(invoke.Parameters[i].Type);
-                    EmitExternVoid(
-                        "VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid",
-                        new List<CLeaf> { target, Const(convArgs[i], "SystemString"), LoadField(convArgs[i], argType) });
-                }
-                // SendCustomEvent with dynamic method name
-                var method = LoadField(bundle.Method, "SystemString");
-                EmitExternVoid(
-                    "VRCUdonCommonInterfacesIUdonEventReceiver.__SendCustomEvent__SystemString__SystemVoid",
-                    new List<CLeaf> { target, method });
-                // GetProgramVariable for return (Func only)
-                if (retType != null)
-                {
-                    var retVal = ExternCall(
-                        "VRCUdonCommonInterfacesIUdonEventReceiver.__GetProgramVariable__SystemString__SystemObject",
-                        new List<CLeaf> { target, Const(convRet, "SystemString") }, "SystemObject");
-                    EmitStoreField(resultVar, retVal);
-                }
-            }
-        );
+        // Guard-failure arm: LogError (NRE deviation, exact message per §2.6) — or silent for ?.Invoke.
+        System.Action<CoreBuilder> failArm = null;
+        if (!isConditional)
+            failArm = _ =>
+                EmitExternVoid("UnityEngineDebug.__LogError__SystemObject__SystemVoid",
+                    new List<CLeaf> { Const(
+                        $"USugar: NullReferenceException — invoked a null delegate ({_classSymbol.Name}.{DescribeDelegateReceiver(op.Instance)})",
+                        "SystemString") });
 
-        if (retType != null)
-            return LoadField(resultVar, retType);
-        return null;
+        void EmitGuardedDispatch()
+        {
+            // tgt is a SystemObject temp fed to externs directly — no Convert needed (P1/P5a).
+            var tgt = ExternCall("SystemObjectArray.__Get__SystemInt32__SystemObject",
+                new List<CLeaf> { bundle, Const(DelegateAbi.Target, "SystemInt32") }, "SystemObject");
+            // target-null guard: unset element, or the in-game security filter nulling bundle[0].
+            var tOk = ExternCall("UnityEngineObject.__op_Inequality__UnityEngineObject_UnityEngineObject__SystemBoolean",
+                new List<CLeaf> { tgt, Const(null, "SystemObject") }, "SystemBoolean");
+            _builder.EmitIf(tOk, _ =>
+            {
+                // Conv stores: the FINAL writes before dispatch (§3.3 clobber discipline).
+                for (int i = 0; i < argExprs.Count && i < convArgs.Length; i++)
+                    EmitStoreField(convArgs[i], argExprs[i]);
+
+                var adr = ExternCall("SystemObjectArray.__Get__SystemInt32__SystemObject",
+                    new List<CLeaf> { bundle, Const(DelegateAbi.Addr, "SystemInt32") }, "SystemUInt32");
+                var mtd = ExternCall("SystemObjectArray.__Get__SystemInt32__SystemObject",
+                    new List<CLeaf> { bundle, Const(DelegateAbi.Method, "SystemInt32") }, "SystemString");
+                var thisType = GetUdonType(_classSymbol);
+                var thisRef = LoadField(_ctx.DeclareThisOnce(thisType), thisType);
+                // Self/cross is decided by TARGET IDENTITY only (P6) — addr≠0 merely qualifies the
+                // fast path (addr is meaningless across program boundaries; 0-addr JUMP_INDIRECT would
+                // silently jump to bytecode 0, P5d — addr is only ever read inside this guard).
+                var isSelf = ExternCall("UnityEngineObject.__op_Equality__UnityEngineObject_UnityEngineObject__SystemBoolean",
+                    new List<CLeaf> { tgt, thisRef }, "SystemBoolean");
+                var hasAddr = ExternCall("SystemUInt32.__op_Inequality__SystemUInt32_SystemUInt32__SystemBoolean",
+                    new List<CLeaf> { adr, Const(0u, "SystemUInt32") }, "SystemBoolean");
+                var selfFast = ExternCall("SystemBoolean.__op_LogicalAnd__SystemBoolean_SystemBoolean__SystemBoolean",
+                    new List<CLeaf> { isSelf, hasAddr }, "SystemBoolean");
+                _builder.EmitIf(selfFast,
+                    _ =>
+                    {
+                        // SELF: JUMP_INDIRECT into the bridge __body (EmitCallIndirect verbatim, P5b).
+                        EmitInternalVoid("__indirect", new List<CLeaf> { adr });
+                        // Immediate conv-ret materialization (§3.3-4, fcd11/12 invariant).
+                        if (retType != null)
+                            EmitAssign(retSlot, LoadField(convRet, retType));
+                    },
+                    _ =>
+                    {
+                        // CROSS — includes a foreign-minted bundle with target==this && addr==0, which
+                        // correctly falls to a self-addressed SendCustomEvent.
+                        // method-null guard: hand-rolled object[] bundles cast back to a delegate (§2.6).
+                        var mOk = ExternCall("SystemObject.__op_Inequality__SystemObject_SystemObject__SystemBoolean",
+                            new List<CLeaf> { mtd, Const(null, "SystemObject") }, "SystemBoolean");
+                        _builder.EmitIf(mOk, _ =>
+                        {
+                            for (int i = 0; i < convArgs.Length; i++)
+                            {
+                                var argType = GetUdonType(invoke.Parameters[i].Type);
+                                EmitExternVoid(
+                                    "VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid",
+                                    new List<CLeaf> { tgt, Const(convArgs[i], "SystemString"), LoadField(convArgs[i], argType) });
+                            }
+                            EmitExternVoid(
+                                "VRCUdonCommonInterfacesIUdonEventReceiver.__SendCustomEvent__SystemString__SystemVoid",
+                                new List<CLeaf> { tgt, mtd });
+                            if (retType != null)
+                                EmitAssign(retSlot, ExternCall(
+                                    "VRCUdonCommonInterfacesIUdonEventReceiver.__GetProgramVariable__SystemString__SystemObject",
+                                    new List<CLeaf> { tgt, Const(convRet, "SystemString") }, "SystemObject"));
+                        }, failArm);
+                    });
+            }, failArm);
+        }
+
+        if (isConditional)
+        {
+            // Bundle-null was already guarded by the conditional access (silent skip, args unevaluated).
+            EmitGuardedDispatch();
+        }
+        else
+        {
+            var nb = ExternCall("SystemObject.__op_Inequality__SystemObject_SystemObject__SystemBoolean",
+                new List<CLeaf> { bundle, Const(null, "SystemObject") }, "SystemBoolean");
+            _builder.EmitIf(nb, _ => EmitGuardedDispatch(), failArm);
+        }
+
+        return retSlot >= 0 ? SlotRef(retSlot) : null;
+    }
+
+    /// <summary>default(T) constant for the dispatch retSlot pre-init (§2.6). Non-primitive Udon types
+    /// (objects, arrays, bundles, SDK structs) approximate with null — only observable on the
+    /// null-invoke deviation path, which is already a documented deviation (§8-8).</summary>
+    CConst DefaultConst(string udonType) => udonType switch
+    {
+        "SystemBoolean" => Const(false, udonType),
+        "SystemInt32" => Const(0, udonType),
+        "SystemUInt32" => Const(0u, udonType),
+        "SystemInt64" => Const(0L, udonType),
+        "SystemUInt64" => Const(0UL, udonType),
+        "SystemInt16" => Const((short)0, udonType),
+        "SystemUInt16" => Const((ushort)0, udonType),
+        "SystemSByte" => Const((sbyte)0, udonType),
+        "SystemByte" => Const((byte)0, udonType),
+        "SystemSingle" => Const(0f, udonType),
+        "SystemDouble" => Const(0d, udonType),
+        "SystemDecimal" => Const(0m, udonType),
+        "SystemChar" => Const('\0', udonType),
+        _ => Const(null, udonType),
+    };
+
+    /// <summary>Best-effort member name for the null-invoke LogError message ({Class}.{member}).</summary>
+    static string DescribeDelegateReceiver(IOperation instance)
+    {
+        var i = instance != null ? UnwrapConversions(instance) : null;
+        return i switch
+        {
+            IFieldReferenceOperation f => f.Field.Name,
+            IPropertyReferenceOperation p => p.Property.Name,
+            ILocalReferenceOperation l => l.Local.Name,
+            IParameterReferenceOperation pr => pr.Parameter.Name,
+            _ => "delegate",
+        };
     }
 
     // ── Generic Monomorphization ──
@@ -411,77 +432,6 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
         }
 
         _pendingGenericSpecs.Add(constructed);
-        // Generic-spec path: resolve delegate param/return types through the type-param map (GetUdonType).
-        DeclareDelegateConventionVars(_ctx, constructed, idx, GetUdonType);
-    }
-
-    // ── Lambda / Delegate Helpers ──
-
-    static bool UnwrapLambdaFromArg(IOperation op, out IAnonymousFunctionOperation lambda)
-    {
-        while (true)
-        {
-            lambda = null;
-            if (op is IDelegateCreationOperation { Target: IAnonymousFunctionOperation l })
-            {
-                lambda = l;
-                return true;
-            }
-
-            if (op is not IConversionOperation conv)
-                return false;
-            op = conv.Operand;
-        }
-    }
-
-    // Dual of UnwrapLambdaFromArg for a bare METHOD GROUP. Only matches a same-`this`/static method group
-    // (Instance null or `this`); an `obj.M` group on another instance is left to fall through (it needs the
-    // cross-Behaviour path, not this same-Behaviour adapter).
-    static bool UnwrapMethodGroupFromArg(IOperation op, out IMethodSymbol method)
-    {
-        while (true)
-        {
-            method = null;
-            if (op is IDelegateCreationOperation { Target: IMethodReferenceOperation { Instance: null or IInstanceReferenceOperation } m })
-            {
-                method = m.Method;
-                return true;
-            }
-
-            if (op is not IConversionOperation conv)
-                return false;
-            op = conv.Operand;
-        }
-    }
-
-    void HoistLambdaForDelegateParam(IAnonymousFunctionOperation lambda, DelegateConvention convention)
-    {
-        var symbol = lambda.Symbol;
-        if (_methodFunctions.ContainsKey(symbol)) return;
-
-        var slot = _ctx.RegisterMethod(symbol, i => i.ToString());
-        var idx = slot.Index;
-        var func = _module.AddFunction($"__{idx}_lambda");
-        _methodFunctions[symbol] = func;
-
-        // Convention vars are used instead of standard param/ret vars.
-        // Store convention arg var IDs as param IDs for consistency.
-        _methodParamVarIds[symbol] = convention.ArgVarIds ?? System.Array.Empty<string>();
-
-        // Override: use convention vars instead of standard param/ret vars
-        _lambdaConventionOverrides[symbol] = convention;
-        if (convention.RetVarId != null)
-        {
-            // Set func.ReturnType + func.ReturnSlots (not just _methodReturns) so codegen actually STORES the
-            // lambda's return value into the convention ret field. Without these the function is treated as
-            // void: the body computes the result but never writes it back, so the caller reads a stale 0.
-            var retType = _ctx.GetFieldType(convention.RetVarId);
-            func.ReturnType = retType;
-            func.ReturnSlots.Add(new ReturnSlot(convention.RetVarId, retType));
-            _methodReturns[symbol] = new[] { new ReturnSlot(convention.RetVarId, retType) };
-        }
-
-        _pendingLocalFunctions.Add((symbol, func));
     }
 
     // ── Classification helpers ──
