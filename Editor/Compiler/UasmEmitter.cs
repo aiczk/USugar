@@ -340,6 +340,11 @@ public class UasmEmitter
             // accessors, so a PRIVATE auto-property was never detected and its backing field went undeclared.
             var isAuto = prop.ContainingType.GetMembers().OfType<IFieldSymbol>()
                 .Any(f => f.IsImplicitlyDeclared && SymbolEqualityComparer.Default.Equals(f.AssociatedSymbol, prop));
+            // An explicit interface implementation auto-property's metadata name is DOTTED
+            // ("IFoo.P"), which is not a valid UASM identifier — the backing-var declaration used to
+            // crash the assembler (UAssemblyParser ParseException, an ICE). Loud diagnostic instead.
+            if (isAuto && prop.ExplicitInterfaceImplementations.Length > 0)
+                throw new NotSupportedException(ExplicitInterfaceAutoPropError(prop));
             if (!isAuto && prop.DeclaredAccessibility != Accessibility.Public) continue;
             var udonType = GetUdonType(prop.Type);
             var flags = FieldFlags.None;
@@ -352,11 +357,18 @@ public class UasmEmitter
         int derivedFieldInitCount = _fieldInitOps.Count;
         var baseClassInitBoundaries = new List<int>(); // track boundaries per base class
 
-        // Collect declared member names to skip overridden/shadowed members in base classes
-        var declaredMemberNames = new HashSet<string>(
-            _classSymbol.GetMembers()
-                .Where(m => m is IFieldSymbol or IPropertySymbol && !m.IsStatic && !m.IsImplicitlyDeclared)
-                .Select(m => m.Name));
+        // Collect declared member SYMBOLS (name → derived-most declaration). A base member whose
+        // name matches is either (a) part of one override chain — legal, one virtual slot — or
+        // (b) `new`-style shadowing, where C# has TWO storages but this emitter's name-keyed heap
+        // model would collapse both symbols onto ONE heap var (VM-verified silent state corruption:
+        // SetBase/GetBase through the base symbol read the derived symbol's writes, and a
+        // type-conflicting shadow halts the VM with HeapTypeMismatchException at runtime).
+        // Storage collision is never acceptable → loud reject per design §8-3 (predates fcd-stage1).
+        var declaredMemberSyms = new Dictionary<string, ISymbol>();
+        foreach (var m in _classSymbol.GetMembers())
+            if (m is IFieldSymbol or IPropertySymbol && !m.IsStatic && !m.IsImplicitlyDeclared
+                && !declaredMemberSyms.ContainsKey(m.Name))
+                declaredMemberSyms[m.Name] = m;
 
         // Inherited fields and properties from user-defined base classes
         var baseType = _classSymbol.BaseType;
@@ -367,7 +379,10 @@ public class UasmEmitter
             foreach (var member in baseType.GetMembers().OfType<IFieldSymbol>())
             {
                 if (member.IsStatic || member.IsImplicitlyDeclared) continue;
-                if (declaredMemberNames.Contains(member.Name)) continue;
+                // A FIELD can never be overridden, so any name match with a nearer declaration is
+                // `new`-style shadowing — two distinct symbols, one heap var. Loud.
+                if (declaredMemberSyms.TryGetValue(member.Name, out var fieldShadower))
+                    throw new NotSupportedException(ShadowedStorageError(member, fieldShadower));
 
                 // Delegate field from a base class → same single-SystemObjectArray declaration as the derived
                 // path (private bundled too). Must intercept BEFORE the generic initializer scan below, which
@@ -376,7 +391,7 @@ public class UasmEmitter
                 if (member.Type is INamedTypeSymbol baseDelegateType && baseDelegateType.DelegateInvokeMethod != null)
                 {
                     DeclareDelegateField(member, baseDelegateType);
-                    declaredMemberNames.Add(member.Name);
+                    declaredMemberSyms[member.Name] = member;
                     continue;
                 }
 
@@ -400,7 +415,7 @@ public class UasmEmitter
                         }
                     }
                 }
-                declaredMemberNames.Add(member.Name);
+                declaredMemberSyms[member.Name] = member;
                 var baseFlags = FieldFlags.None;
                 if (member.DeclaredAccessibility == Accessibility.Public
                     || member.GetAttributes().Any(a => a.AttributeClass?.Name is "SerializeField" or "SerializeFieldAttribute"))
@@ -420,17 +435,31 @@ public class UasmEmitter
             foreach (var prop in baseType.GetMembers().OfType<IPropertySymbol>())
             {
                 if (prop.IsStatic || prop.IsImplicitlyDeclared) continue;
-                if (declaredMemberNames.Contains(prop.Name)) continue;
                 // Auto-property iff it has a compiler-generated backing field (its accessors have empty bodies).
             // The old DeclaringSyntaxReferences.IsEmpty check was always false for source `{ get; set; }`
             // accessors, so a PRIVATE auto-property was never detected and its backing field went undeclared.
             var isAuto = prop.ContainingType.GetMembers().OfType<IFieldSymbol>()
                 .Any(f => f.IsImplicitlyDeclared && SymbolEqualityComparer.Default.Equals(f.AssociatedSymbol, prop));
+                if (declaredMemberSyms.TryGetValue(prop.Name, out var propShadower))
+                {
+                    // Override chain (one virtual slot) → the leaf declaration owns the storage.
+                    if (propShadower is IPropertySymbol leafProp && IsOverrideChainAncestor(leafProp, prop))
+                        continue;
+                    // A storage-BEARING base member (auto-prop) hidden without an override relation
+                    // is the heap-var collision — loud. A MANUAL base property has no storage (its
+                    // accessors are real functions; the planner already disambiguates their export
+                    // names on collision), so `new`-shadowing it stays legal (wave-7 pinned).
+                    if (isAuto)
+                        throw new NotSupportedException(ShadowedStorageError(prop, propShadower));
+                    continue;
+                }
+                if (isAuto && prop.ExplicitInterfaceImplementations.Length > 0)
+                    throw new NotSupportedException(ExplicitInterfaceAutoPropError(prop));
                 if (!isAuto && prop.DeclaredAccessibility != Accessibility.Public) continue;
                 var udonType = GetUdonType(prop.Type);
                 var flags = FieldFlags.None;
                 if (prop.DeclaredAccessibility == Accessibility.Public) flags |= FieldFlags.Export;
-                declaredMemberNames.Add(prop.Name);
+                declaredMemberSyms[prop.Name] = prop;
                 _ctx.DeclareField(prop.Name, udonType, flags);
             }
             baseType = baseType.BaseType;
@@ -501,6 +530,29 @@ public class UasmEmitter
                 _fieldInitOps.Add((member.Name, initOp, member.Type));
         }
     }
+
+    /// <summary>True when <paramref name="ancestor"/> is reachable from <paramref name="leaf"/> via
+    /// the OverriddenProperty chain — i.e. both declarations share ONE virtual slot.</summary>
+    static bool IsOverrideChainAncestor(IPropertySymbol leaf, IPropertySymbol ancestor)
+    {
+        for (var p = leaf; p != null; p = p.OverriddenProperty)
+            if (SymbolEqualityComparer.Default.Equals(p, ancestor)) return true;
+        return false;
+    }
+
+    static string ShadowedStorageError(ISymbol baseMember, ISymbol shadower)
+        => $"Member '{baseMember.ContainingType.Name}.{baseMember.Name}' is hidden by "
+         + $"'{shadower.ContainingType.Name}.{shadower.Name}' without an override relation "
+         + "('new'-style shadowing). C# gives the two members separate storages, but the compiled "
+         + "program keys heap variables by member NAME, so both symbols would silently collapse "
+         + "onto one heap var (wrong values, or a runtime heap-type mismatch for type-conflicting "
+         + "shadows). Shadowing an inherited field/property is not supported in v2.x — rename the "
+         + "member, or use virtual/override.";
+
+    static string ExplicitInterfaceAutoPropError(IPropertySymbol prop)
+        => $"Explicit interface implementation auto-property '{prop.Name}' is not supported in "
+         + "v2.x: its backing storage name contains '.' and is not a valid Udon identifier. "
+         + "Implement the property implicitly (public auto-property) or with manual accessors.";
 
     // ── EmitMethods ──
 
