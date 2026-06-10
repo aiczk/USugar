@@ -340,6 +340,17 @@ public class StatementHandler : HandlerBase, IOperationHandler
         {
             var local = declarator.Symbol;
 
+            // ref locals (round 7, §8-3 loud): the flat-heap VM has no variable aliases, so
+            // `ref int r = ref x` can only emit as a VALUE copy — every flavor silently decouples
+            // (VM-proven: write-through 1 vs CLR 5, read-through 1 vs 5, array element 0 vs 7,
+            // struct member 0 vs 9, delegate 2 vs 11). ref/out PARAMS stay legal (caller-side
+            // copy-back convention, struct_ref_param-pinned).
+            if (local.IsRef)
+                throw new System.NotSupportedException(
+                    $"ref local '{local.Name}' is not supported: the flat-heap Udon VM has no "
+                    + "variable aliases, so a ref local would silently degrade to a value copy. "
+                    + "Use the referenced variable directly, or index the array element instead.");
+
             // Aggregate-typed local (tuple / user-defined struct) → object[] emulation
             if (local.Type is INamedTypeSymbol namedType && EmitContext.IsAggregateType(namedType))
             {

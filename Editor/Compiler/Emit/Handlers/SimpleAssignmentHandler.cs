@@ -17,6 +17,14 @@ public class SimpleAssignmentHandler : AssignmentHandlerBase, IExpressionHandler
 
     CLeaf VisitAssignment(ISimpleAssignmentOperation assign)
     {
+        // ref reassignment `r = ref y` (round 7, §8-3 loud): the declaration reject in
+        // VisitVariableDeclaration already makes ref locals unreachable, but keep the assignment
+        // form loud too so no future lvalue kind re-opens the alias-as-value-copy hole.
+        if (assign.IsRef)
+            throw new System.NotSupportedException(
+                "ref local reassignment ('r = ref y') is not supported: the flat-heap Udon VM has "
+                + "no variable aliases. Use the referenced variable directly.");
+
         // §2.8(a): capturing lambdas stored long-lived (delegate field / auto-property / struct member,
         // self or cross) feed the post-emit aliasing detector. §2.8(b): escaping stores (array element,
         // object/object[] target, tainted-local read into a member) are loud compile errors in Stage 1.
