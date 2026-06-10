@@ -1361,6 +1361,7 @@ public abstract class HandlerBase
     {
         IMethodSymbol targetMethod = null;
         CLeaf targetInstance = null;
+        bool baseReceiver = false;
         switch (op.Target)
         {
             case IAnonymousFunctionOperation lambda:
@@ -1368,6 +1369,8 @@ public abstract class HandlerBase
                 break;
             case IMethodReferenceOperation methodRef:
                 targetMethod = methodRef.Method;
+                baseReceiver = methodRef.Instance is IInstanceReferenceOperation
+                    { Syntax: Microsoft.CodeAnalysis.CSharp.Syntax.BaseExpressionSyntax };
                 if (methodRef.Instance != null && methodRef.Instance is not IInstanceReferenceOperation)
                     targetInstance = VisitExpression(methodRef.Instance);
                 break;
@@ -1375,9 +1378,27 @@ public abstract class HandlerBase
         if (targetMethod == null)
             throw new System.NotSupportedException($"Unsupported delegate target: {op.Target.GetType().Name}");
 
+        // Wave-9 [W3]: `base.M` binds the BASE implementation NON-virtually (C# ldftn). When the
+        // compiled class (or an intermediate) overrides M, the locally registered function for the
+        // base symbol is the never-exported base-instance COPY (the same body `base.M()` jumps to),
+        // so bridge THAT via a pending bridge — the planner bridge would normalize to the chain-root
+        // export, i.e. the most-derived override (VM-proven 6 where C# gives 103). When nothing
+        // overrides M, the base symbol's registration IS the exported inherited function and the
+        // planner path below stays correct (and byte-identical).
+        string bridgeExportName;
+        if (baseReceiver && _methodFunctions.TryGetValue(targetMethod, out var baseCopy)
+            && baseCopy.ExportName == null)
+        {
+            bridgeExportName = $"__dlg_{baseCopy.Name}";
+            var baseSnapshot = _ctx.TypeParamMap != null
+                ? new Dictionary<ITypeParameterSymbol, ITypeSymbol>(_ctx.TypeParamMap, SymbolEqualityComparer.Default)
+                : null;
+            _ctx.PendingDelegateBridges.Add((targetMethod, bridgeExportName, baseSnapshot));
+            return (bridgeExportName, FuncRef(bridgeExportName), targetInstance);
+        }
+
         // For hoisted lambdas/local functions, create a pending bridge dynamically
         // since they aren't part of the TypeLayout's pre-computed bridges.
-        string bridgeExportName;
         if (targetMethod.MethodKind == MethodKind.LambdaMethod || targetMethod.MethodKind == MethodKind.LocalFunction)
         {
             if (!_methodSlots.TryGetValue(targetMethod, out var targetSlot))

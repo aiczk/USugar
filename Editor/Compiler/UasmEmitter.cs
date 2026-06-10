@@ -2485,6 +2485,14 @@ public class UasmEmitter
             if (pr.Property.GetMethod is { } g && IsBaseInstanceMethod(g)) result.Add(g);
             if (pr.Property.SetMethod is { } s && IsBaseInstanceMethod(s)) result.Add(s);
         }
+        // Wave-9 [W3]: a `base.M` METHOD GROUP (delegate conversion) is a non-virtual binding of the
+        // BASE implementation, exactly like a `base.M()` call (C# ldftn semantics) — register the
+        // base-instance copy so ResolveDelegateBridge can bridge the base BODY instead of the
+        // chain-root export (which is the most-derived override in this program, VM-proven 6 vs 103).
+        if (op is IMethodReferenceOperation mref
+            && mref.Instance is IInstanceReferenceOperation { Syntax: BaseExpressionSyntax }
+            && IsBaseInstanceMethod(mref.Method))
+            result.Add(mref.Method);
         foreach (var child in op.Children)
             CollectBaseInstanceCallsInOperation(child, result);
     }
