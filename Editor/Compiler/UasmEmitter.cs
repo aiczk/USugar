@@ -442,9 +442,19 @@ public class UasmEmitter
                 .Any(f => f.IsImplicitlyDeclared && SymbolEqualityComparer.Default.Equals(f.AssociatedSymbol, prop));
                 if (declaredMemberSyms.TryGetValue(prop.Name, out var propShadower))
                 {
-                    // Override chain (one virtual slot) → the leaf declaration owns the storage.
+                    // Override chain (one virtual slot) → the leaf declaration owns the bare name.
                     if (propShadower is IPropertySymbol leafProp && IsOverrideChainAncestor(leafProp, prop))
+                    {
+                        // C# gives an override auto-property its OWN backing field: base.P (the only
+                        // non-virtual property access) statically binds this BASE declaration's
+                        // storage while every receiver-based read binds the chain leaf. The round-5
+                        // [N1] name-unification overshot exactly here (`base.P=5; P=7;` → VM 77 vs
+                        // CLR 57): declare a per-declaration backing var for the overridden AUTO
+                        // declaration, used only by its base-instance copy accessors (base.P calls).
+                        if (isAuto)
+                            _ctx.DeclareField(BaseAutoPropBackingName(prop), GetUdonType(prop.Type), FieldFlags.None);
                         continue;
+                    }
                     // A storage-BEARING base member (auto-prop) hidden without an override relation
                     // is the heap-var collision — loud. A MANUAL base property has no storage (its
                     // accessors are real functions; the planner already disambiguates their export
@@ -538,6 +548,29 @@ public class UasmEmitter
         for (var p = leaf; p != null; p = p.OverriddenProperty)
             if (SymbolEqualityComparer.Default.Equals(p, ancestor)) return true;
         return false;
+    }
+
+    /// <summary>Storage var for an overridden base auto-property DECLARATION (per-declaration
+    /// backing, mirroring C#'s one-backing-field-per-auto-prop-declaration semantics).</summary>
+    static string BaseAutoPropBackingName(IPropertySymbol prop)
+        => $"__basebk_{SanitizeId(prop.ContainingType.ToDisplayString())}_{prop.Name}";
+
+    /// <summary>Backing heap var an auto-property ACCESSOR body reads/writes. The chain-LEAF
+    /// declaration visible from the compiled class owns the bare property name (exported storage,
+    /// all virtual dispatch); an overridden base declaration uses its per-declaration var, reached
+    /// only through its base-instance copy accessors (`base.P`). ABSTRACT declarations have no
+    /// backing field at all — their registered copies are dead stubs (base.P on an abstract member
+    /// is illegal C#; receiver-based access dispatches the exported leaf accessor), so they read
+    /// the leaf var to stay validator-clean.</summary>
+    string AutoPropBackingVar(IPropertySymbol autoProp)
+    {
+        if (autoProp.IsAbstract) return autoProp.Name;
+        for (var t = _classSymbol; t != null
+            && !SymbolEqualityComparer.Default.Equals(t, autoProp.ContainingType); t = t.BaseType)
+            foreach (var p in t.GetMembers(autoProp.Name).OfType<IPropertySymbol>())
+                if (IsOverrideChainAncestor(p, autoProp))
+                    return BaseAutoPropBackingName(autoProp);
+        return autoProp.Name;
     }
 
     static string ShadowedStorageError(ISymbol baseMember, ISymbol shadower)
@@ -1158,17 +1191,20 @@ public class UasmEmitter
                 if (accessorDecl.Body == null && accessorDecl.ExpressionBody == null
                     && method.AssociatedSymbol is IPropertySymbol autoProp)
                 {
-                    // Auto-property accessor: synthesize body (get → load field, set → store field)
+                    // Auto-property accessor: synthesize body (get → load field, set → store field).
+                    // Per-DECLARATION backing (AutoPropBackingVar): the chain leaf owns the bare
+                    // name; an overridden base declaration's copies use their own storage (base.P).
+                    var backingVar = AutoPropBackingVar(autoProp);
                     var propType = GetUdonType(autoProp.Type);
                     if (method.MethodKind == MethodKind.PropertyGet
                         && _methodReturns.TryGetValue(method, out var autoRets) && autoRets.Length == 1)
                     {
-                        BridgeStore(autoRets[0].Id, BridgeLoad(autoProp.Name, propType));
+                        BridgeStore(autoRets[0].Id, BridgeLoad(backingVar, propType));
                     }
                     else if (method.MethodKind == MethodKind.PropertySet
                         && _methodParamVarIds.TryGetValue(method, out var paramIds) && paramIds.Length > 0)
                     {
-                        BridgeStore(autoProp.Name, BridgeLoad(paramIds[0], propType));
+                        BridgeStore(backingVar, BridgeLoad(paramIds[0], propType));
                     }
                 }
                 else
