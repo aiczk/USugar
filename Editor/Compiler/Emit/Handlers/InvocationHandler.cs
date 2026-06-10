@@ -446,6 +446,7 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
     void RegisterGenericSpecialization(IMethodSymbol constructed)
     {
         if (_methodFunctions.ContainsKey(constructed)) return;
+        EmitContext.RejectInParameters(constructed); // round-7 follow-up [Q3]
 
         var slot = _ctx.RegisterMethod(constructed, i => i.ToString());
         var idx = slot.Index;

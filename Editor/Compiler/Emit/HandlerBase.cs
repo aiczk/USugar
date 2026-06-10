@@ -713,6 +713,7 @@ public abstract class HandlerBase
     protected void RegisterLocalFunction(IMethodSymbol localFunc)
     {
         if (_methodFunctions.ContainsKey(localFunc)) return;
+        EmitContext.RejectInParameters(localFunc); // round-7 follow-up [Q3]
         var funcName = string.IsNullOrEmpty(localFunc.Name) ? "lambda" : localFunc.Name;
         var slot = _ctx.RegisterMethod(localFunc, i => $"__{i}_{funcName}");
         var idx = slot.Index;

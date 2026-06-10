@@ -433,6 +433,25 @@ public class EmitContext
         }
     }
 
+    /// <summary>Round-7 follow-up [Q3]: `in` parameters (RefKind.In) are a loud declaration-side
+    /// reject. The flat-heap calling convention copies arguments by value with no copy-back, so an
+    /// `in` param is neither a readonly ALIAS of the caller's storage (VM-proven: a callee observing
+    /// a caller field write through the param read 1 vs CLR 5) nor protected by the readonly
+    /// DEFENSIVE COPY (a mutating struct method on the param wrote the param storage, 11 vs CLR 1).
+    /// Called at every user-method registration point (class/base/struct/foreign-static methods,
+    /// generic specializations, local functions); delegates with `in` params already reject via
+    /// DelegateAbi.ValidateNoRefOutParams (RefKind != None).</summary>
+    public static void RejectInParameters(IMethodSymbol method)
+    {
+        foreach (var p in method.Parameters)
+            if (p.RefKind == RefKind.In)
+                throw new System.NotSupportedException(
+                    $"'in' parameter '{p.Name}' on '{method.Name}' is not supported: the flat-heap "
+                    + "calling convention copies by value, so 'in' would silently lose its readonly-"
+                    + "alias and defensive-copy semantics. Use a by-value parameter, or ref if "
+                    + "write-back is intended.");
+    }
+
     // Aggregate type support — tuples and user-defined structs share the object[] emulation.
     public static bool IsAggregateType(ITypeSymbol type)
     {

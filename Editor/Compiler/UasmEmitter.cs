@@ -637,6 +637,7 @@ public class UasmEmitter
         _ctx.NextMethodIndex = 0;
         foreach (var method in methods)
         {
+            EmitContext.RejectInParameters(method); // round-7 follow-up [Q3], declaration-side
             if (method.IsGenericMethod) continue;
 
             var ml = typeLayout.Methods[method];
@@ -702,6 +703,7 @@ public class UasmEmitter
         var foreignStatics = CollectForeignStaticMethods(methods);
         foreach (var fm in foreignStatics)
         {
+            EmitContext.RejectInParameters(fm); // round-7 follow-up [Q3]
             var slot = _ctx.RegisterMethod(fm, i => i.ToString());
             var idx = slot.Index;
             var funcName = $"__{idx}_{SanitizeId(fm.Name)}";
@@ -733,6 +735,7 @@ public class UasmEmitter
         var structMethods = CollectStructMethods(methods);
         foreach (var sm in structMethods)
         {
+            EmitContext.RejectInParameters(sm); // round-7 follow-up [Q3]
             var slot = _ctx.RegisterMethod(sm, i => i.ToString());
             var idx = slot.Index;
             var isCtor = sm.MethodKind == MethodKind.Constructor;
@@ -779,6 +782,7 @@ public class UasmEmitter
             .ToArray();
         foreach (var bm in baseInstanceMethods)
         {
+            EmitContext.RejectInParameters(bm); // round-7 follow-up [Q3]
             var slot = _ctx.RegisterMethod(bm, i => i.ToString());
             var idx = slot.Index;
             var funcName = $"__{idx}_{SanitizeId(bm.Name)}";
