@@ -778,8 +778,19 @@ public class UasmEmitter
             }
         }
 
+        // Wave-9 round-5 [X5]: base-instance copies are computed BEFORE the foreign-static/struct
+        // collectors so their BODIES seed both scans — a using/Dispose (or any struct/foreign call)
+        // inside a base virtual body reached via base.M previously had no CFunction registered
+        // ("No CFunction registered for method 'Dispose'" ICE on legal C#). Registration ORDER below
+        // is unchanged (foreign statics → struct methods → base copies) for name-index stability.
+        var methodSet = new HashSet<IMethodSymbol>(methods, SymbolEqualityComparer.Default);
+        var baseInstanceMethods = CollectBaseInstanceMethods(methods)
+            .Where(bm => !methodSet.Contains(bm))
+            .ToArray();
+        var collectorSeeds = methods.Concat(baseInstanceMethods).ToArray();
+
         // Collect foreign static methods
-        var foreignStatics = CollectForeignStaticMethods(methods);
+        var foreignStatics = CollectForeignStaticMethods(collectorSeeds);
         foreach (var fm in foreignStatics)
         {
             EmitContext.RejectInParameters(fm); // round-7 follow-up [Q3]
@@ -811,7 +822,7 @@ public class UasmEmitter
         }
 
         // Register user-struct constructors + instance methods (object[]-emulated; synthetic receiver = param0).
-        var structMethods = CollectStructMethods(methods);
+        var structMethods = CollectStructMethods(collectorSeeds);
         foreach (var sm in structMethods)
         {
             EmitContext.RejectInParameters(sm); // round-7 follow-up [Q3]
@@ -854,11 +865,7 @@ public class UasmEmitter
             }
         }
 
-        // Collect base class instance methods
-        var methodSet = new HashSet<IMethodSymbol>(methods, SymbolEqualityComparer.Default);
-        var baseInstanceMethods = CollectBaseInstanceMethods(methods)
-            .Where(bm => !methodSet.Contains(bm))
-            .ToArray();
+        // Register base class instance copies (collected above, before the [X5] collector seeds).
         foreach (var bm in baseInstanceMethods)
         {
             EmitContext.RejectInParameters(bm); // round-7 follow-up [Q3]
@@ -1613,9 +1620,14 @@ public class UasmEmitter
                 // (fragile ⊆ tainted by construction — every fragile seed also taints).
                 var srcFragile = _ctx.IterationFragileLocals.TryGetValue(kv.Key, out var fl) ? fl : null;
                 if (!srcTainted && srcFragile == null) continue;
+                // Wave-9 round-5 [X9]: the taint TIER rides the copy edges too — a copy of a weak
+                // (param-copy-only) local is weak, strong dominates, promotion re-propagates
+                // (monotone over clean < weak < strong, so the fixpoint still terminates).
+                bool srcWeak = srcTainted && _ctx.IsParamCopyOnlyTaint(kv.Key);
                 foreach (var dst in kv.Value)
                 {
-                    if (srcTainted && _ctx.CapturingLambdaLocals.Add(dst)) taintChanged = true;
+                    if (srcTainted && (srcWeak ? _ctx.AddParamCopyTaint(dst) : _ctx.AddCaptureTaint(dst)))
+                        taintChanged = true;
                     if (srcFragile != null && _ctx.AddIterationFragileLoops(dst, srcFragile)) taintChanged = true;
                 }
             }
@@ -1666,8 +1678,10 @@ public class UasmEmitter
             edges[sym] = lambdaCallees;
         }
 
-        // Wave-9 round-4 [X2]/[X3]: capture cells written by ANY hoisted node keep flat sharing
-        // (see CollectHoistedCellWrites); read-only cells become spill candidates below.
+        // Wave-9 round-4 [X2]/[X3]: capture cells written by ANY hoisted node; read-only cells
+        // become spill candidates below. Round-5 [X3]/[X10]/[X11]: a written cell whose hoisted
+        // node shares an SCC with the declarer is loud (flat sharing is VM-proven wrong across
+        // live re-entry); written cells of non-cycle nodes keep flat sharing.
         var hoistedWritten = new HashSet<ISymbol>(SymbolEqualityComparer.Default);
         foreach (var (_, lambdaBody, _) in lambdaNodes)
             CollectHoistedCellWrites(lambdaBody, hoistedWritten);
@@ -1777,10 +1791,16 @@ public class UasmEmitter
                 // node's marked sites (CollectRecursionSpillFields consumes the map): the cell's
                 // value at the node's dispatch IS the creating activation's value (single-activation
                 // surface), so save/restore reproduces the CLR fresh-environment semantics. Cells
-                // written by any hoisted node keep flat sharing (hoistedWritten, see above); cells
                 // whose declaring function is OUTSIDE the SCC can never be re-seeded mid-dispatch
                 // (no live re-entry path) and stay unspilled — byte-stable for the existing
-                // recursive-lambda shapes.
+                // recursive-lambda shapes. Wave-9 round-5 [X3]/[X10]/[X11]: a cell that is WRITTEN
+                // by any hoisted node AND whose declarer shares the SCC is loud — round 4 kept flat
+                // sharing for written cells, but across live re-entry the one flat cell bleeds the
+                // inner activation's writes into the outer frame (VM-proven 51 vs 21 / 126 vs 101,
+                // lambda and capturing-local-function flavors); correct codegen needs a closure
+                // environment per activation (Stage-2 territory, design §8-3). Written cells of
+                // NON-cycle hoisted nodes keep flat sharing — the correct same-environment C#
+                // semantics when no live re-entry exists.
                 if (caller.MethodKind is MethodKind.LocalFunction or MethodKind.LambdaMethod
                     or MethodKind.AnonymousFunction)
                 {
@@ -1792,11 +1812,18 @@ public class UasmEmitter
                     List<ISymbol> spillCells = null;
                     foreach (var cap in nodeCaptures)
                     {
-                        if (hoistedWritten.Contains(cap)) continue;
                         if (cap.ContainingSymbol is not IMethodSymbol declFunc) continue;
                         if (!sccSet.Contains(declFunc)
                             && (declFunc.OriginalDefinition == null || !sccSet.Contains(declFunc.OriginalDefinition)))
                             continue;
+                        if (hoistedWritten.Contains(cap))
+                            throw new System.NotSupportedException(
+                                $"Captured variable '{cap.Name}' is written inside a lambda or local function "
+                                + "that participates in a recursion cycle with its declaring method. The "
+                                + "flat-heap closure shares ONE cell across all live activations, so the "
+                                + "write would bleed between recursive frames (CLR closures get a fresh "
+                                + "environment per activation). Make the captured variable read-only inside "
+                                + "the lambda/local function, or pass the value as a parameter/return value.");
                         (spillCells ??= new List<ISymbol>()).Add(cap);
                     }
                     if (spillCells != null)
@@ -1927,8 +1954,9 @@ public class UasmEmitter
                     if (!EmitContext.IsDelegateCapableType(elr.Local.Type, null)) continue;
                     if (val is IParameterReferenceOperation vp)
                     {
+                        // Envelope unpack — strong ([X9]: tuple/struct param sources are not bare copies).
                         if (EmitContext.IsNonObjectDelegateCapableType(vp.Parameter.Type, null))
-                            _ctx.CapturingLambdaLocals.Add(elr.Local);
+                            _ctx.AddCaptureTaint(elr.Local);
                         continue;
                     }
                     RecordLocalSeedOrCopy(elr.Local, hasMemberHops: false, val, copyEdges);
@@ -1982,7 +2010,7 @@ public class UasmEmitter
         if (rootLocal == null || value == null) return;
         if (IsPreScanCapturingValue(value))
         {
-            _ctx.CapturingLambdaLocals.Add(rootLocal);
+            _ctx.AddCaptureTaint(rootLocal);
             // Wave-9 [W1]/[W2]: a per-iteration capture seeded into a local marks it
             // iteration-fragile (order-independent twin of GuardPerIterationLocalTarget's
             // recording; the post-fixpoint check rejects fragile locals declared outside
@@ -2008,8 +2036,10 @@ public class UasmEmitter
         // params stay clean — they are sealed at CALL SITES (round-2 architecture, do not widen).
         if (v is IParameterReferenceOperation pref)
         {
+            // Wave-9 round-5 [X9]: WEAK tier — a bare param copy stays sealed at stores/arguments
+            // but legal at returns (`T cur = v; …; return cur;` is the generic fold idiom).
             if (IsPreScanDelegateParamType(pref.Parameter.Type))
-                _ctx.CapturingLambdaLocals.Add(rootLocal);
+                _ctx.AddParamCopyTaint(rootLocal);
             return;
         }
         // §2.8 round-6 [J6]: a tainted-invocation-result copy (`g = Id(t);`) acquired taint only at
@@ -2061,7 +2091,7 @@ public class UasmEmitter
                 || EmitContext.IsForeignOrInterfaceMember(memberSym, _classSymbol)
                 || _ctx.CaptureReceivingMembers.Contains(canonical))
             {
-                _ctx.CapturingLambdaLocals.Add(rootLocal);
+                _ctx.AddCaptureTaint(rootLocal);
                 return true;
             }
             chain = instance;
@@ -2069,7 +2099,7 @@ public class UasmEmitter
         if (chain is ILocalReferenceOperation containerLocal)
             AddCopyEdge(copyEdges, containerLocal.Local, rootLocal);
         else if (chain is IParameterReferenceOperation)
-            _ctx.CapturingLambdaLocals.Add(rootLocal);
+            _ctx.AddCaptureTaint(rootLocal); // envelope member off a param — strong ([X9]: not a bare copy)
         else if (chain is not null && chain is not IInstanceReferenceOperation)
             CollectPreScanValueTaint(chain, rootLocal, copyEdges);
         return true;
@@ -2091,7 +2121,7 @@ public class UasmEmitter
             case IAnonymousFunctionOperation lambda:
                 if (_ctx.CaptureAnalyzer.HasCaptures(lambda))
                 {
-                    _ctx.CapturingLambdaLocals.Add(target);
+                    _ctx.AddCaptureTaint(target);
                     // Wave-9 [W1]: a per-iteration capture laundered through an invocation result
                     // (`g = Id(() => v)`) carries the iteration-fragility into the result local.
                     _ctx.AddIterationFragileLoops(target, EmitContext.ComputePerIterationCaptureLoops(
@@ -2099,7 +2129,7 @@ public class UasmEmitter
                 }
                 return;
             case IMethodReferenceOperation mr when _ctx.IsCapturingLocalFunction(mr.Method):
-                _ctx.CapturingLambdaLocals.Add(target);
+                _ctx.AddCaptureTaint(target);
                 _ctx.AddIterationFragileLoops(target, EmitContext.ComputePerIterationCaptureLoops(
                     _ctx.CaptureAnalyzer.GetLocalFunctionCaptures(mr.Method)));
                 return;
@@ -2107,8 +2137,9 @@ public class UasmEmitter
                 AddCopyEdge(copyEdges, lr.Local, target);
                 return;
             case IParameterReferenceOperation pr:
+                // [X9] weak tier: an identity-laundered param copy mirrors the bare copy.
                 if (IsPreScanDelegateParamType(pr.Parameter.Type))
-                    _ctx.CapturingLambdaLocals.Add(target);
+                    _ctx.AddParamCopyTaint(target);
                 return;
             case IInvocationOperation inner:
                 if (EmitContext.IsDelegateCapableType(inner.Type, null))
@@ -2210,7 +2241,12 @@ public class UasmEmitter
 
     // EscapeSet collection (§4.1): targets of every IDelegateCreationOperation that resolve to an
     // internal function — same-class method groups (incl. local functions) and lambdas. Full descent.
-    static void CollectEscapedDelegateTargets(IOperation op, HashSet<IMethodSymbol> internalMethods, HashSet<IMethodSymbol> result)
+    // Wave-9 round-5 [X1]: a this-receiver VIRTUAL method-group conversion in an inherited base body
+    // statically binds the BASE declaration, but the planner's bridge layout normalizes to the
+    // chain-root export whose body is the LEAF override (ResolveDelegateBridge) — so the escape set
+    // must contain the leaf's definition too, or a delegate-dispatch cycle through the override never
+    // gets a synthetic edge and its frames are never spilled (VM-proven 66 vs 6).
+    void CollectEscapedDelegateTargets(IOperation op, HashSet<IMethodSymbol> internalMethods, HashSet<IMethodSymbol> result)
     {
         if (op == null) return;
         if (op is IDelegateCreationOperation dc)
@@ -2219,6 +2255,8 @@ public class UasmEmitter
             {
                 var t = mr.Method.OriginalDefinition;
                 if (internalMethods.Contains(t)) result.Add(t);
+                if (LeafMethodRefTarget(mr) is { } leafT && internalMethods.Contains(leafT))
+                    result.Add(leafT);
             }
             else if (dc.Target is IAnonymousFunctionOperation af && af.Symbol != null)
                 result.Add(af.Symbol);
@@ -2271,6 +2309,21 @@ public class UasmEmitter
         if (inv.Instance is not IInstanceReferenceOperation iref
             || iref.Syntax is BaseExpressionSyntax) return null;
         var def = tm.OriginalDefinition;
+        var leaf = ResolveLeafOverrideDef(def);
+        return SymbolEqualityComparer.Default.Equals(leaf, def) ? null : leaf;
+    }
+
+    /// <summary>Wave-9 round-5 [X1]: leaf resolution for a this-receiver virtual METHOD-GROUP
+    /// conversion (delegate creation), gated identically to LeafCallTarget — emission's bridge
+    /// resolves these to the chain-root export running the leaf body, so the escape set mirrors it.</summary>
+    IMethodSymbol LeafMethodRefTarget(IMethodReferenceOperation mr)
+    {
+        var m = mr.Method;
+        if (m == null || !(m.IsVirtual || m.IsOverride || m.IsAbstract) || m.MethodKind != MethodKind.Ordinary)
+            return null;
+        if (mr.Instance is not IInstanceReferenceOperation iref
+            || iref.Syntax is BaseExpressionSyntax) return null;
+        var def = m.OriginalDefinition;
         var leaf = ResolveLeafOverrideDef(def);
         return SymbolEqualityComparer.Default.Equals(leaf, def) ? null : leaf;
     }

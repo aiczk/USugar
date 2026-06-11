@@ -176,7 +176,7 @@ public class DeconstructionAssignmentHandler : AssignmentHandlerBase, IOperation
             if (!IsDelegateCapableType(target.Type)) continue;
             if (target is ILocalReferenceOperation localTarget)
             {
-                _ctx.CapturingLambdaLocals.Add(localTarget.Local);
+                _ctx.AddCaptureTaint(localTarget.Local); // envelope unpack — strong ([X9])
                 continue;
             }
             throw new System.NotSupportedException(CaptureEscapeError);

@@ -44,11 +44,22 @@ public static class CoreFlatOptimizer
             InsertRecursionSpillsFunc(func);
     }
 
+    // Wave-9 round-5 [X4]: spill-temp coalesce trigger. Spill/reload wraps allocate ~10 fresh
+    // scratch slots per spilled value per site AFTER CoalesceSlots has run, so a many-site /
+    // many-value function can mint hundreds of never-merged heap symbols and push the program past
+    // the SDK assembler's 512-entry UdonHeap (VmFault on legal C#). Above this threshold the fresh
+    // temps are interval-coalesced among THEMSELVES (identity below it — byte-stable for every
+    // pinned shape: nontail_recursion.uasm, the only committed snapshot with __recurStack, has 29
+    // __intnl_ vars in total).
+    const int SpillTempCoalesceThreshold = 64;
+
     static void InsertRecursionSpillsFunc(CFunction func)
     {
         // Spill work exists when the function has named recursive callees OR Reentrant-flagged
         // delegate-dispatch sites (design §4.3 — flag count is tracked on the function).
         if ((func.RecursiveCalleeNames.Count == 0 && func.ReentrantSiteCount == 0) || func.FlatBlocks.Count == 0) return;
+
+        var firstSpillSlot = func.Slots.Count; // [X4] every slot from here on is a fresh spill temp
 
         // PRECISE per-instruction live-out: the slots whose value AFTER an instruction is still read before
         // being overwritten. A single [firstDef,lastUse] interval is wrong here — CoalesceSlots reuses one
@@ -90,6 +101,12 @@ public static class CoreFlatOptimizer
             block.Stmts.Clear();
             block.Stmts.AddRange(newStmts);
         }
+
+        // [X4]: coalesce the fresh spill temps among themselves when their count crosses the
+        // threshold (the restricted pass never touches pre-existing slots — pre-spill code is
+        // byte-identical; FlatVerify still runs after, in IrPipeline).
+        if (func.Slots.Count - firstSpillSlot > SpillTempCoalesceThreshold)
+            CoalesceSlotsFunc(func, firstSpillSlot);
     }
 
     /// <summary>Per-instruction live-out (slots whose post-instruction value is read before being overwritten),
@@ -234,7 +251,10 @@ public static class CoreFlatOptimizer
         output.Add(new CStoreField(RecurSpId, new CSlotRef(tNew, "SystemInt32")));
     }
 
-    static void CoalesceSlotsFunc(CFunction func)
+    /// <summary>Interval-coalesce a function's slots. <paramref name="minSlotId"/> restricts the
+    /// pass to slots with Id ≥ minSlotId ([X4]: the post-spill run merges only the fresh spill
+    /// temps among themselves; the default 0 is the full pre-spill pass).</summary>
+    static void CoalesceSlotsFunc(CFunction func, int minSlotId = 0)
     {
         if (func.FlatBlocks.Count == 0 || func.Slots.Count == 0) return;
 
@@ -246,6 +266,7 @@ public static class CoreFlatOptimizer
         foreach (var slot in func.Slots)
         {
             if (slot.Class == SlotClass.Pinned) continue;
+            if (slot.Id < minSlotId) continue; // [X4] restricted post-spill run
             if (!written.ContainsKey(slot.Id) && !lastUsed.ContainsKey(slot.Id)) continue;
             coalesceable.Add(slot);
         }

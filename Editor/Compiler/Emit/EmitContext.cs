@@ -271,6 +271,15 @@ public class EmitContext
     public readonly List<IMethodSymbol> PendingGenericSpecs = new();
     public Dictionary<ITypeParameterSymbol, ITypeSymbol> TypeParamMap;
 
+    // Wave-9 round-5 [X6]: first registered specialization per generic DEFINITION. Lambdas and
+    // local functions hoisted from a generic body are keyed by IMethodSymbol and therefore SHARED
+    // across that body's specializations — a capturing closure's capture cells are seeded by
+    // whichever spec emitted LAST (last-spec-wins; VM-proven r1=8 vs 3). A second DISTINCT
+    // instantiation of a definition whose body contains a capturing closure is loud (per-spec
+    // closure environments are Stage-2 territory, design §8-3). LOOKUP-ONLY (§1.5).
+    public readonly Dictionary<IMethodSymbol, IMethodSymbol> FirstGenericSpec
+        = new(SymbolEqualityComparer.Default);
+
     // Persistent local symbol → field name mapping (survives scope pop, for capture resolution).
     //
     // KNOWN LIMITATION (v2.2): All lambdas within the same UdonSharpBehaviour share this flat
@@ -306,6 +315,39 @@ public class EmitContext
     // would be a compile-clean wrong value otherwise. MEMBERSHIP-ONLY set (§1.5): never enumerate it to
     // drive emission order (symbol-keyed iteration order would break the 2-compile determinism gate).
     public readonly HashSet<ILocalSymbol> CapturingLambdaLocals = new(SymbolEqualityComparer.Default);
+
+    // Wave-9 round-5 [X9]: WEAK tier of the capture taint — locals whose ONLY taint source is a
+    // bare delegate-param copy (`T cur = v;`, [J5]/[J6] param arms, and copies thereof). [J5] made
+    // these strong, which loud-rejected the legal generic fold idiom `T cur = v; …; return cur;`
+    // at the RETURN guard. A param-copy-only local stays rejected at every escaping STORE and
+    // erasing ARGUMENT (it stays in CapturingLambdaLocals — the laundering channels are sealed),
+    // but returning it is exactly returning the param, which is legal by design (the CALLER's
+    // invocation-result taint owns the laundered result). Strict subset of CapturingLambdaLocals;
+    // strong taint dominates (promotion removes the marker; the fixpoint is monotone over
+    // clean < weak < strong). MEMBERSHIP-ONLY set (§1.5).
+    public readonly HashSet<ILocalSymbol> ParamCopyTaintLocals = new(SymbolEqualityComparer.Default);
+
+    /// <summary>[X9] STRONG capture taint: tainted everywhere, including returns. Clears any weak
+    /// marker. Returns true when the taint state changed (new taint or weak→strong promotion).</summary>
+    public bool AddCaptureTaint(ILocalSymbol local)
+    {
+        bool added = CapturingLambdaLocals.Add(local);
+        bool promoted = ParamCopyTaintLocals.Remove(local);
+        return added || promoted;
+    }
+
+    /// <summary>[X9] WEAK param-copy taint: store/argument-position taint only (returns stay
+    /// legal). Never demotes an existing strong taint. Returns true when newly tainted.</summary>
+    public bool AddParamCopyTaint(ILocalSymbol local)
+    {
+        if (CapturingLambdaLocals.Contains(local)) return false;
+        CapturingLambdaLocals.Add(local);
+        ParamCopyTaintLocals.Add(local);
+        return true;
+    }
+
+    /// <summary>[X9] The local's taint is exclusively the weak param-copy tier.</summary>
+    public bool IsParamCopyOnlyTaint(ILocalSymbol local) => ParamCopyTaintLocals.Contains(local);
 
     // Round-7 follow-up [Q4]: foreach ITERATION variables. C# makes them READONLY, so invoking a
     // non-readonly struct member on one runs on a DEFENSIVE COPY (the classic foreach-struct-

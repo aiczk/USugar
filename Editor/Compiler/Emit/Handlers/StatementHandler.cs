@@ -438,7 +438,7 @@ public class StatementHandler : HandlerBase, IOperationHandler
                 {
                     if (IsObjectish(local.Type))
                         throw new System.NotSupportedException(CaptureEscapeError);
-                    _ctx.CapturingLambdaLocals.Add(local);
+                    RegisterLocalTaint(local, init.Value); // [X9] tiered backstop
                     // Wave-9 [W1]: a declaration is always inside its initializer's loop, so no
                     // reject here — record the fragility so copies of this local are checked
                     // (redundant backstop; the pre-scan computes the same set order-independently).
@@ -456,19 +456,21 @@ public class StatementHandler : HandlerBase, IOperationHandler
     {
         var layout = _ctx.GetAggregateLayout(aggregateType);
 
-        // Declare as SystemObjectArray
-        if (!_localBindings.ContainsKey(local))
-        {
-            var id = _ctx.DeclareLocal(local.Name, "SystemObjectArray");
-            _localBindings[local] = new EmitContext.LocalBinding(id);
+        // Declare as SystemObjectArray. Always REdeclare + REallocate, mirroring the scalar path:
+        // _localBindings is keyed by ILocalSymbol and shared across generic-spec emissions of the
+        // same definition body, so a reuse guard here made the SECOND specialization skip both the
+        // declaration and the object[] ctor — every spec-2 activation then aliased spec-1's one
+        // array and per-frame struct locals broke under recursion (wave-9 round-5 [X7], VM-proven
+        // 183 vs 126 in the second instantiation).
+        var id = _ctx.DeclareLocal(local.Name, "SystemObjectArray");
+        _localBindings[local] = new EmitContext.LocalBinding(id);
 
-            // Create object[] of correct size
-            var arrExpr = ExternCall("SystemObjectArray.__ctor__SystemInt32__SystemObjectArray",
-                new List<CLeaf> { Const(layout.Count, "SystemInt32") }, "SystemObjectArray");
-            EmitStoreField(id, arrExpr);
-        }
+        // Create object[] of correct size
+        var arrExpr = ExternCall("SystemObjectArray.__ctor__SystemInt32__SystemObjectArray",
+            new List<CLeaf> { Const(layout.Count, "SystemInt32") }, "SystemObjectArray");
+        EmitStoreField(id, arrExpr);
 
-        var localId = _localBindings[local].Id;
+        var localId = id;
         if (init == null)
         {
             // No initializer (`Outer n;`): C# definite-assignment permits field writes before any read.
@@ -490,7 +492,7 @@ public class StatementHandler : HandlerBase, IOperationHandler
         GuardBuriedCapturingLambda(init.Value);
         if (IsCaptureTaintedRead(init.Value) || IsTaintedDelegateInvocationResult(init.Value)
             || IsDelegateParamRead(init.Value) || IsLaunderingMemberRead(init.Value))
-            _ctx.CapturingLambdaLocals.Add(local);
+            RegisterLocalTaint(local, init.Value); // [X9] tiered backstop
 
         var value = UnwrapConversions(init.Value);
 

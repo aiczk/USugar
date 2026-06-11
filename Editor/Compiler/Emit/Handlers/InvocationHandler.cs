@@ -24,8 +24,78 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
 
     // ── VisitInvocation ──
 
+    /// <summary>Wave-9 round-4 [X1] + round-5 [X8]/[X12]: delegate value equality through .Equals.
+    /// Instance a.Equals(b) and static object.Equals(a, b) on delegate bundles are VALUE equality in
+    /// the CLR — route both through the same (target, method) element comparison as the `==` operator
+    /// (CompareDelegates, §2.5). A DIFFERENT delegate type compares false regardless of target/method
+    /// (GetType() inequality) — emit the evaluations (C# evaluates both operands) and the constant.
+    /// Mixed delegate/non-delegate operands stay loud (§8-3). [X12]: the static form previously fell
+    /// through to an object.Equals extern comparing the two bundle object[] REFERENCES — reference
+    /// inequality where the CLR sees value equality.</summary>
+    bool TryEmitDelegateEquals(IInvocationOperation op, out CLeaf result)
+    {
+        result = null;
+        var target = op.TargetMethod;
+        if (target.Name != "Equals") return false;
+
+        // Instance form: a.Equals(b) on a delegate-typed receiver (round-4 [X1]). Extern resolution
+        // mapped the System.Func receiver onto UnityEngineComponent and emitted a nonexistent
+        // __Equals__SystemObject__SystemBoolean extern (loud crash on legal C#).
+        if (op.Instance != null && !target.IsStatic
+            && op.Arguments.Length == 1 && IsDelegateTyped(op.Instance.Type))
+        {
+            var eqArg = UnwrapConversions(op.Arguments[0].Value);
+            if (!IsDelegateTyped(eqArg.Type))
+                throw new System.NotSupportedException(
+                    "Delegate .Equals(...) with a non-delegate argument is not supported. "
+                    + "Compare two delegate values (or use ==).");
+            if (!SymbolEqualityComparer.Default.Equals(op.Instance.Type, eqArg.Type))
+            {
+                VisitExpression(op.Instance);
+                VisitExpression(eqArg);
+                result = Const(false, "SystemBoolean");
+                return true;
+            }
+            result = CompareDelegates(VisitExpression(op.Instance), VisitExpression(eqArg), isNotEquals: false);
+            return true;
+        }
+
+        // Static form: object.Equals(a, b) with delegate-typed operands (round-5 [X12]).
+        if (target.IsStatic && target.ContainingType.SpecialType == SpecialType.System_Object
+            && op.Arguments.Length == 2)
+        {
+            var lhs = UnwrapConversions(op.Arguments[0].Value);
+            var rhs = UnwrapConversions(op.Arguments[1].Value);
+            var lhsDlg = IsDelegateTyped(lhs.Type);
+            var rhsDlg = IsDelegateTyped(rhs.Type);
+            if (!lhsDlg && !rhsDlg) return false; // not a delegate comparison — existing extern path
+            if (lhsDlg != rhsDlg)
+                throw new System.NotSupportedException(
+                    "object.Equals(...) mixing a delegate and a non-delegate operand is not supported. "
+                    + "Compare two delegate values (or use ==).");
+            if (!SymbolEqualityComparer.Default.Equals(lhs.Type, rhs.Type))
+            {
+                VisitExpression(lhs);
+                VisitExpression(rhs);
+                result = Const(false, "SystemBoolean");
+                return true;
+            }
+            result = CompareDelegates(VisitExpression(lhs), VisitExpression(rhs), isNotEquals: false);
+            return true;
+        }
+
+        return false;
+    }
+
     CLeaf VisitInvocation(IInvocationOperation op)
     {
+        // Wave-9 round-5 [X8]: the delegate-Equals arms run BEFORE the erasing-channel argument
+        // guard — the operands are consumed HERE by the value comparison, never laundered through
+        // Equals' erasing System.Object parameter, but the guard saw that parameter first and
+        // loud-rejected a legal comparison whose argument was a delegate-typed PARAM.
+        if (TryEmitDelegateEquals(op, out var dlgEqResult))
+            return dlgEqResult;
+
         // §2.8 round-2: capturing lambdas / tainted reads must not enter ERASING-typed params
         // (object / delegate-tuple / T=object) — the callee is type-blind there (VM-verified
         // laundering). Delegate-proper params stay unguarded (fcd37).
@@ -38,31 +108,6 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
         if (op.Instance != null && target.Name == "GetValueOrDefault"
             && EmitContext.IsNullableT(target.ContainingType, out var govUnderlying))
             return EmitNullableGetValueOrDefault(op, govUnderlying);
-
-        // Wave-9 round-4 [X1]: a.Equals(b) on a delegate-typed receiver. Extern resolution mapped the
-        // System.Func receiver onto UnityEngineComponent and emitted a nonexistent
-        // __Equals__SystemObject__SystemBoolean extern (loud crash on legal C#). Delegate.Equals is
-        // VALUE equality for same-type bundles — route it through the same (target, method) element
-        // comparison as the `==` operator (CompareDelegates, §2.5). A DIFFERENT delegate type compares
-        // false in the CLR regardless of target/method (GetType() inequality) — emit the evaluations
-        // (C# evaluates both sides) and the constant. Non-delegate arguments stay loud (§8-3).
-        if (op.Instance != null && !target.IsStatic && target.Name == "Equals"
-            && op.Arguments.Length == 1 && IsDelegateTyped(op.Instance.Type))
-        {
-            var eqArg = op.Arguments[0].Value;
-            while (eqArg is IConversionOperation eqConv) eqArg = eqConv.Operand;
-            if (!IsDelegateTyped(eqArg.Type))
-                throw new System.NotSupportedException(
-                    "Delegate .Equals(...) with a non-delegate argument is not supported. "
-                    + "Compare two delegate values (or use ==).");
-            if (!SymbolEqualityComparer.Default.Equals(op.Instance.Type, eqArg.Type))
-            {
-                VisitExpression(op.Instance);
-                VisitExpression(eqArg);
-                return Const(false, "SystemBoolean");
-            }
-            return CompareDelegates(VisitExpression(op.Instance), VisitExpression(eqArg), isNotEquals: false);
-        }
 
         // Virtual dispatch through `this`: a call to a virtual/override/abstract method must bind to the
         // most-derived override in the COMPILED type, even when the call site is in an INHERITED base
