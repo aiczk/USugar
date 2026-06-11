@@ -1402,6 +1402,70 @@ public abstract class HandlerBase
     protected bool IsForeignClassMember(ISymbol member)
         => EmitContext.IsForeignOrInterfaceMember(member, _ctx.ClassSymbol);
 
+    // ── Generic Monomorphization ──
+
+    /// <summary>Resolve type parameters in a generic method's type arguments through the current
+    /// type-param map (e.g. Min&lt;T&gt; → Min&lt;int&gt; inside a specialization's emission). Shared by
+    /// the invocation path and the delegate-creation path (wave-9 round-2 [W7]).</summary>
+    protected IMethodSymbol SubstituteMethodTypeArgs(IMethodSymbol target)
+    {
+        if (!target.IsGenericMethod || _typeParamMap == null) return target;
+        var needsSub = false;
+        foreach (var ta in target.TypeArguments)
+        {
+            if (ta is not ITypeParameterSymbol tp || !_typeParamMap.ContainsKey(tp))
+                continue;
+            needsSub = true;
+            break;
+        }
+        if (!needsSub) return target;
+        var newTypeArgs = target.TypeArguments
+            .Select(ta => ta is ITypeParameterSymbol tp2 && _typeParamMap.TryGetValue(tp2, out var sub) ? sub : ta)
+            .ToArray();
+        return target.OriginalDefinition.Construct(newTypeArgs);
+    }
+
+    /// <summary>Register a monomorphized generic specialization: CFunction + ordinal param vars +
+    /// return slot, queued on PendingGenericSpecs for the post-body emission drain. Idempotent per
+    /// constructed symbol. (Moved from InvocationHandler when [W7] gave the delegate-creation path a
+    /// second caller — one registration knowledge source.)</summary>
+    protected void RegisterGenericSpecialization(IMethodSymbol constructed)
+    {
+        if (_methodFunctions.ContainsKey(constructed)) return;
+        EmitContext.RejectInParameters(constructed); // round-7 follow-up [Q3]
+
+        var slot = _ctx.RegisterMethod(constructed, i => i.ToString());
+        var idx = slot.Index;
+
+        var typeArgPart = string.Join("_", constructed.TypeArguments.Select(ExternResolver.GetUdonTypeName));
+        var name = $"__{idx}_{SanitizeId(constructed.Name)}_{typeArgPart}";
+        var func = _module.AddFunction(name);
+        _methodFunctions[constructed] = func;
+
+        var gsParamIds = new string[constructed.Parameters.Length];
+        for (int pi = 0; pi < constructed.Parameters.Length; pi++)
+        {
+            var param = constructed.Parameters[pi];
+            var paramId = $"__{idx}_{param.Name}__param";
+            _ctx.DeclareVar(paramId, GetUdonType(param.Type));
+            gsParamIds[pi] = paramId;
+        }
+        _methodParamVarIds[constructed] = gsParamIds;
+        foreach (var pid in gsParamIds) func.ParamFieldNames.Add(pid);
+
+        if (!constructed.ReturnsVoid)
+        {
+            var retType = GetUdonType(constructed.ReturnType);
+            var retId = $"__{idx}_{SanitizeId(constructed.Name)}__ret";
+            _ctx.DeclareVar(retId, retType);
+            func.ReturnType = retType;
+            func.ReturnSlots.Add(new ReturnSlot(retId, retType));
+            _methodReturns[constructed] = new[] { new ReturnSlot(retId, retType) };
+        }
+
+        _pendingGenericSpecs.Add(constructed);
+    }
+
     // ── Delegate bridge resolution ──
 
     /// <summary>Resolve delegate creation to bridge name, FuncRef, and target instance.</summary>
@@ -1458,6 +1522,32 @@ public abstract class HandlerBase
                 ? new Dictionary<ITypeParameterSymbol, ITypeSymbol>(_ctx.TypeParamMap, SymbolEqualityComparer.Default)
                 : null;
             _ctx.PendingDelegateBridges.Add((targetMethod, bridgeExportName, typeParamSnapshot));
+        }
+        else if (targetMethod.IsGenericMethod)
+        {
+            // Wave-9 round-2 [W7]: a method group of a GENERIC method. The planner never plans bridges
+            // for generic definitions (no per-spec layout), so the planner path below ICEd with
+            // 'No delegate bridge'. Legal C# whose monomorphization machinery already exists: register
+            // the constructed specialization (the same per-call-site registration invocations use) and
+            // bridge it via PendingDelegateBridges, exactly like a local function. Same-class targets
+            // with fully resolved type args only — a variable receiver would need the RECEIVER's
+            // program to export this specialization's bridge (it cannot know the instantiation), and
+            // an inherited/foreign generic target has no local body registration — loud per §8-3.
+            var constructed = SubstituteMethodTypeArgs(targetMethod);
+            bool unresolved = constructed.TypeArguments.Any(ta => ta is ITypeParameterSymbol);
+            if (unresolved || targetInstance != null || baseReceiver
+                || !SymbolEqualityComparer.Default.Equals(constructed.OriginalDefinition.ContainingType, _classSymbol))
+                throw new System.NotSupportedException(
+                    $"A delegate can only be created from generic method '{targetMethod.Name}' when it is "
+                    + "declared on the compiled class, accessed through 'this', and every type argument "
+                    + "resolves to a concrete type at the creation site (the specialization's bridge must "
+                    + "live in this program).");
+            RegisterGenericSpecialization(constructed);
+            bridgeExportName = $"__dlg_{_methodFunctions[constructed].Name}";
+            var specSnapshot = _ctx.TypeParamMap != null
+                ? new Dictionary<ITypeParameterSymbol, ITypeSymbol>(_ctx.TypeParamMap, SymbolEqualityComparer.Default)
+                : null;
+            _ctx.PendingDelegateBridges.Add((constructed, bridgeExportName, specSnapshot));
         }
         else
         {

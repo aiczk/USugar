@@ -31,27 +31,8 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
         // laundering). Delegate-proper params stay unguarded (fcd37).
         GuardCaptureEscapeArguments(op.Arguments);
 
-        var target = op.TargetMethod;
-
         // Resolve type parameters in generic method type arguments (e.g., Min<T> → Min<int>)
-        if (target.IsGenericMethod && _typeParamMap != null)
-        {
-            var needsSub = false;
-            foreach (var ta in target.TypeArguments)
-            {
-                if (ta is not ITypeParameterSymbol tp || !_typeParamMap.ContainsKey(tp))
-                    continue;
-
-                needsSub = true;
-                break;
-            }
-
-            if (needsSub)
-            {
-                var newTypeArgs = target.TypeArguments.Select(ta => ta is ITypeParameterSymbol tp2 && _typeParamMap.TryGetValue(tp2, out var sub) ? sub : ta).ToArray();
-                target = target.OriginalDefinition.Construct(newTypeArgs);
-            }
-        }
+        var target = SubstituteMethodTypeArgs(op.TargetMethod);
 
         // Nullable<T>.GetValueOrDefault() / GetValueOrDefault(fallback) → the value, else the fallback/default.
         if (op.Instance != null && target.Name == "GetValueOrDefault"
@@ -481,45 +462,6 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
             IParameterReferenceOperation pr => pr.Parameter.Name,
             _ => "delegate",
         };
-    }
-
-    // ── Generic Monomorphization ──
-
-    void RegisterGenericSpecialization(IMethodSymbol constructed)
-    {
-        if (_methodFunctions.ContainsKey(constructed)) return;
-        EmitContext.RejectInParameters(constructed); // round-7 follow-up [Q3]
-
-        var slot = _ctx.RegisterMethod(constructed, i => i.ToString());
-        var idx = slot.Index;
-
-        var typeArgPart = string.Join("_", constructed.TypeArguments.Select(ExternResolver.GetUdonTypeName));
-        var name = $"__{idx}_{SanitizeId(constructed.Name)}_{typeArgPart}";
-        var func = _module.AddFunction(name);
-        _methodFunctions[constructed] = func;
-
-        var gsParamIds = new string[constructed.Parameters.Length];
-        for (int pi = 0; pi < constructed.Parameters.Length; pi++)
-        {
-            var param = constructed.Parameters[pi];
-            var paramId = $"__{idx}_{param.Name}__param";
-            _ctx.DeclareVar(paramId, GetUdonType(param.Type));
-            gsParamIds[pi] = paramId;
-        }
-        _methodParamVarIds[constructed] = gsParamIds;
-        foreach (var pid in gsParamIds) func.ParamFieldNames.Add(pid);
-
-        if (!constructed.ReturnsVoid)
-        {
-            var retType = GetUdonType(constructed.ReturnType);
-            var retId = $"__{idx}_{SanitizeId(constructed.Name)}__ret";
-            _ctx.DeclareVar(retId, retType);
-            func.ReturnType = retType;
-            func.ReturnSlots.Add(new ReturnSlot(retId, retType));
-            _methodReturns[constructed] = new[] { new ReturnSlot(retId, retType) };
-        }
-
-        _pendingGenericSpecs.Add(constructed);
     }
 
     // ── Classification helpers ──
