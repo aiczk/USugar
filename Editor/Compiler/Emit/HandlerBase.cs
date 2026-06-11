@@ -1632,6 +1632,30 @@ public abstract class HandlerBase
         return new List<CLeaf>(ordered);
     }
 
+    /// <summary>Wave-9 round-3 [W4]: cross-program call arguments. Evaluated in TEXTUAL order
+    /// (C# evaluation semantics — the values become ANF leaves immediately) and paired with the
+    /// param id at the argument's PARAMETER ordinal; pairs returned in ORDINAL order so the
+    /// SetProgramVariable stores are canonical (a named/reordered call emits byte-identically to
+    /// its declaration-order twin). IInvocationOperation.Arguments is call-site-ordered for
+    /// named args — pairing by textual index bound names positionally on every cross-dispatch
+    /// path (VM-proven ref=54 vs usugar=45). Positional calls are unchanged (textual == ordinal).</summary>
+    protected List<(string, CLeaf)> CrossCallArgPairs(
+        System.Collections.Immutable.ImmutableArray<IArgumentOperation> args, string[] paramIds)
+    {
+        var byOrdinal = new CLeaf[paramIds.Length];
+        for (int i = 0; i < args.Length; i++)
+        {
+            var p = args[i].Parameter;
+            var ordinal = p != null && p.Ordinal >= 0 && p.Ordinal < byOrdinal.Length ? p.Ordinal : i;
+            byOrdinal[ordinal] = VisitExpression(args[i].Value);
+        }
+        var pairs = new List<(string, CLeaf)>();
+        for (int o = 0; o < byOrdinal.Length; o++)
+            if (byOrdinal[o] != null)
+                pairs.Add((paramIds[o], byOrdinal[o]));
+        return pairs;
+    }
+
     protected (string exportName, string[] paramIds, string retId) GetCalleeLayout(IMethodSymbol target)
     {
         if (_methodParamVarIds.TryGetValue(target, out var localParamIds))

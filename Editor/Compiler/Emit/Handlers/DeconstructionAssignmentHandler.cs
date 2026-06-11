@@ -225,11 +225,11 @@ public class DeconstructionAssignmentHandler : AssignmentHandlerBase, IOperation
 
         var instanceVal = VisitExpression(invocation.Instance);
 
-        // SetProgramVariable for each param
-        for (int i = 0; i < invocation.Arguments.Length; i++)
+        // SetProgramVariable for each param — by parameter ordinal, textual evaluation order
+        // (wave-9 round-3 [W4]: named/reordered args used to bind positionally on this path too).
+        foreach (var (paramId, argVal) in CrossCallArgPairs(invocation.Arguments, paramIds))
         {
-            var argVal = VisitExpression(invocation.Arguments[i].Value);
-            var nameConst = Const(paramIds[i], "SystemString");
+            var nameConst = Const(paramId, "SystemString");
             EmitExternVoid(
                 "VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid",
                 new List<CLeaf> { instanceVal, nameConst, argVal });

@@ -596,9 +596,13 @@ public partial class InvocationHandler
 
         // Build param pairs for CCrossCall
         // VisitExpression clones aggregate locals/params automatically (Clone-on-read).
-        var paramPairs = new List<(string, CLeaf)>();
-        for (int i = 0; i < op.Arguments.Length; i++)
-            paramPairs.Add((ifaceMl.ParamIds[i], VisitExpression(op.Arguments[i].Value)));
+        // Wave-9 round-3 [W4]: evaluate in textual order (C# semantics) but slot each value at its
+        // PARAMETER ordinal — op.Arguments is call-site-ordered for named/reordered args, so indexing
+        // ParamIds by textual position bound names positionally (VM-proven ref=54 vs 45). The pairs
+        // (= SetProgramVariable stores of already-evaluated leaves) are emitted in ordinal order so a
+        // named call is byte-identical to its declaration-order twin (positional calls unchanged:
+        // textual order IS ordinal order).
+        var paramPairs = CrossCallArgPairs(op.Arguments, ifaceMl.ParamIds.ToArray());
 
         // Build returns
         var ifaceReturns = ifaceMl.Returns.ToArray();
@@ -621,10 +625,9 @@ public partial class InvocationHandler
         var (exportName, paramIds, _) = GetCalleeLayout(target);
         var instanceVal = VisitExpression(op.Instance);
 
-        // Build param pairs for CCrossCall
-        var paramPairs = new List<(string, CLeaf)>();
-        for (int i = 0; i < op.Arguments.Length; i++)
-            paramPairs.Add((paramIds[i], VisitExpression(op.Arguments[i].Value)));
+        // Build param pairs for CCrossCall — by parameter ordinal, textual evaluation order
+        // (wave-9 round-3 [W4]: named/reordered args used to bind positionally on this path).
+        var paramPairs = CrossCallArgPairs(op.Arguments, paramIds);
 
         // Build returns
         var callReturns = GetCalleeReturns(target);
