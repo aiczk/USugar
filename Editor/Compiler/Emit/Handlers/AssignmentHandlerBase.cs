@@ -39,9 +39,8 @@ public abstract class AssignmentHandlerBase : HandlerBase
                 // Each VisitExpression(arg) is bound to a scratch leaf once under ANF — the index side effect
                 // runs exactly once and the SAME leaf is reused by the getter here and the setter in
                 // EmitWriteBack (via IndexArgs), so the cache itself is load-bearing but needs no extra copy.
-                var cachedArgs = new List<CLeaf>();
-                foreach (var arg in idxRef.Arguments)
-                    cachedArgs.Add(VisitExpression(arg.Value));
+                // Wave-9 round-4: slotted by parameter ordinal (named/reordered index args bind by name).
+                var cachedArgs = EvaluateIndexerArgs(idxRef);
                 var currentVal = EmitCallToMethod(idxDispatchGetter, new List<CLeaf>(cachedArgs));
                 return new LValueCapture { Value = currentVal, IndexArgs = cachedArgs };
             }
@@ -53,8 +52,7 @@ public abstract class AssignmentHandlerBase : HandlerBase
                 && sIdxRef.Property.GetMethod is { } sIdxGetter && _methodFunctions.ContainsKey(sIdxGetter.OriginalDefinition):
             {
                 var recv = LoadInstanceRaw(sIdxRef.Instance);
-                var cachedArgs = new List<CLeaf>();
-                foreach (var arg in sIdxRef.Arguments) cachedArgs.Add(VisitExpression(arg.Value));
+                var cachedArgs = EvaluateIndexerArgs(sIdxRef); // wave-9 r4: named index args bind by ordinal
                 var getterArgs = new List<CLeaf> { recv };
                 getterArgs.AddRange(cachedArgs);
                 var currentVal = EmitCallToMethod(sIdxGetter.OriginalDefinition, getterArgs);
@@ -70,6 +68,20 @@ public abstract class AssignmentHandlerBase : HandlerBase
                 var recvVal = VisitExpression(vIdxRef.Instance);
                 var cachedArgs = EvaluateIndexerArgs(vIdxRef);
                 var currentVal = EmitCrossIndexerCall(vIdxGetter, recvVal, cachedArgs);
+                return new LValueCapture { Value = currentVal, InstanceVal = recvVal, IndexArgs = cachedArgs };
+            }
+            // Wave-9 round-4 [X4]: user indexer COMPOUND assignment (and inc-dec) through an
+            // INTERFACE-typed receiver: read via the interface getter bridge; the receiver and the
+            // ordinal-ordered index args are cached so EmitWriteBack's setter bridge dispatch reuses
+            // them (index side effects run exactly once). Pre-fix both legs fell to extern resolution
+            // and emitted nonexistent IUdonEventReceiver.__get_Item/__set_Item externs.
+            case IPropertyReferenceOperation iIdxRef
+                when iIdxRef.Property.IsIndexer
+                && TryGetInterfaceAccessorLayout(iIdxRef, iIdxRef.Property.GetMethod, out var iIdxGetMl):
+            {
+                var recvVal = VisitExpression(iIdxRef.Instance);
+                var cachedArgs = EvaluateIndexerArgs(iIdxRef);
+                var currentVal = EmitInterfaceAccessorCall(iIdxRef.Property.GetMethod, iIdxGetMl, recvVal, cachedArgs);
                 return new LValueCapture { Value = currentVal, InstanceVal = recvVal, IndexArgs = cachedArgs };
             }
             case IFieldReferenceOperation aggFieldRef
@@ -196,9 +208,8 @@ public abstract class AssignmentHandlerBase : HandlerBase
                 when ResolveDispatchProperty(idxRef).SetMethod is { } idxDispatchSetter
                 && _methodFunctions.TryGetValue(idxDispatchSetter, out _):
             {
-                var setterArgs = lv.IndexArgs != null ? new List<CLeaf>(lv.IndexArgs) : new List<CLeaf>();
-                if (lv.IndexArgs == null)
-                    foreach (var arg in idxRef.Arguments) setterArgs.Add(VisitExpression(arg.Value));
+                // Wave-9 round-4: the no-cache fallback slots by parameter ordinal too (named args).
+                var setterArgs = lv.IndexArgs != null ? new List<CLeaf>(lv.IndexArgs) : EvaluateIndexerArgs(idxRef);
                 setterArgs.Add(valueVal);
                 EmitExprStmt(EmitCallToMethod(idxDispatchSetter, setterArgs));
                 return;
@@ -220,6 +231,22 @@ public abstract class AssignmentHandlerBase : HandlerBase
                 var ordered = lv.IndexArgs != null ? new List<CLeaf>(lv.IndexArgs) : EvaluateIndexerArgs(vIdxRef);
                 ordered.Add(valueVal);
                 EmitCrossIndexerCall(vIdxSetter, recvVal, ordered); // void: self-emitting
+                return;
+            }
+            // Wave-9 round-4 [X4]/[X5]: property/indexer COMPOUND (and inc-dec) write-back through an
+            // INTERFACE-typed receiver → dispatch the setter through its interface bridge, reusing the
+            // receiver/index leaves cached by CaptureLValue. The simple-set path already routed through
+            // the bridge; only this write-back arm fell to the generic property case below and emitted a
+            // nonexistent IUdonEventReceiver.__set_P / __set_Item (loud validator crash on legal C#).
+            case IPropertyReferenceOperation ifaceWbRef
+                when TryGetInterfaceAccessorLayout(ifaceWbRef, ifaceWbRef.Property.SetMethod, out var ifaceWbMl):
+            {
+                var recvVal = lv.InstanceVal ?? VisitExpression(ifaceWbRef.Instance);
+                var ordered = ifaceWbRef.Property.IsIndexer
+                    ? (lv.IndexArgs != null ? new List<CLeaf>(lv.IndexArgs) : EvaluateIndexerArgs(ifaceWbRef))
+                    : new List<CLeaf>();
+                ordered.Add(valueVal);
+                EmitInterfaceAccessorCall(ifaceWbRef.Property.SetMethod, ifaceWbMl, recvVal, ordered); // void: self-emitting
                 return;
             }
             // Cross-behaviour UdonSharpBehaviour property → SetProgramVariable / SendCustomEvent
@@ -271,8 +298,8 @@ public abstract class AssignmentHandlerBase : HandlerBase
                 && _methodFunctions.ContainsKey(aggIdxSetter.OriginalDefinition):
             {
                 var setterArgs = new List<CLeaf> { lv.ArrayVal ?? LoadInstanceRaw(aggIdxRef.Instance) };
-                if (lv.IndexArgs != null) setterArgs.AddRange(lv.IndexArgs);
-                else foreach (var arg in aggIdxRef.Arguments) setterArgs.Add(VisitExpression(arg.Value));
+                // Wave-9 round-4: the no-cache fallback slots by parameter ordinal too (named args).
+                setterArgs.AddRange(lv.IndexArgs ?? EvaluateIndexerArgs(aggIdxRef));
                 setterArgs.Add(valueVal);
                 EmitExprStmt(EmitCallToMethod(aggIdxSetter.OriginalDefinition, setterArgs));
                 return;

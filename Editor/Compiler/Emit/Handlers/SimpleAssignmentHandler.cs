@@ -65,7 +65,7 @@ public class SimpleAssignmentHandler : AssignmentHandlerBase, IExpressionHandler
             && _methodFunctions.ContainsKey(aggIdxSetter.OriginalDefinition))
         {
             var setterArgs = new List<CLeaf> { LoadInstanceRaw(aggIdxSetRef.Instance) };
-            foreach (var arg in aggIdxSetRef.Arguments) setterArgs.Add(VisitExpression(arg.Value));
+            setterArgs.AddRange(EvaluateIndexerArgs(aggIdxSetRef)); // wave-9 r4: named index args bind by ordinal
             var srcVal = VisitExpression(assign.Value);
             setterArgs.Add(srcVal);
             EmitExprStmt(EmitCallToMethod(aggIdxSetter.OriginalDefinition, setterArgs));
@@ -129,8 +129,9 @@ public class SimpleAssignmentHandler : AssignmentHandlerBase, IExpressionHandler
             if (dispatchProp.IsIndexer && propRef.Instance is IInstanceReferenceOperation
                 && dispatchProp.SetMethod != null && _methodFunctions.ContainsKey(dispatchProp.SetMethod))
             {
-                var setterArgs = new List<CLeaf>();
-                foreach (var arg in propRef.Arguments) setterArgs.Add(VisitExpression(arg.Value));
+                // Wave-9 round-4: index args slotted by parameter ordinal (named/reordered index args
+                // bind by name; the base[...] flavor rides this same arm via the base-instance copy).
+                var setterArgs = EvaluateIndexerArgs(propRef);
                 setterArgs.Add(srcVal);
                 EmitExprStmt(EmitCallToMethod(dispatchProp.SetMethod, setterArgs));
                 return srcVal;
@@ -166,6 +167,18 @@ public class SimpleAssignmentHandler : AssignmentHandlerBase, IExpressionHandler
                     var orderedIdx = EvaluateIndexerArgs(propRef);
                     orderedIdx.Add(srcVal);
                     EmitCrossIndexerCall(recvIdxSetter, instanceVal, orderedIdx); // void: self-emitting
+                    return srcVal;
+                }
+                // Wave-9 round-4 [X4]/[X9]: user indexer WRITE through an INTERFACE-typed receiver →
+                // dispatch the setter through its interface bridge (index args + the value as the
+                // setter's LAST parameter). Pre-fix this fell to the extern arm below and emitted a
+                // nonexistent IUdonEventReceiver.__set_Item (loud validator crash on legal C#).
+                if (TryGetInterfaceAccessorLayout(propRef, propRef.Property.SetMethod, out var ifaceIdxSetMl))
+                {
+                    var ifaceOrderedIdx = EvaluateIndexerArgs(propRef);
+                    ifaceOrderedIdx.Add(srcVal);
+                    EmitInterfaceAccessorCall(propRef.Property.SetMethod, ifaceIdxSetMl, instanceVal,
+                        ifaceOrderedIdx); // void: self-emitting
                     return srcVal;
                 }
                 var indexArgs = new List<CLeaf> { instanceVal };

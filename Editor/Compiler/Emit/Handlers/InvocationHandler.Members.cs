@@ -187,9 +187,9 @@ public partial class InvocationHandler
             && ResolveDispatchProperty(op) is { GetMethod: { } idxDispatchGetter }
             && _methodFunctions.ContainsKey(idxDispatchGetter))
         {
-            var args = new List<CLeaf>();
-            foreach (var arg in op.Arguments) args.Add(VisitExpression(arg.Value));
-            return EmitCallToMethod(idxDispatchGetter, args);
+            // Wave-9 round-4: index args slotted by parameter ordinal (named/reordered index args
+            // bind by name) — the textual foreach bound `this[col: 2, row: 1]` positionally.
+            return EmitCallToMethod(idxDispatchGetter, EvaluateIndexerArgs(op));
         }
 
         // User-defined indexer on a user STRUCT instance (`s[i]`) → call the getter with the struct receiver
@@ -199,7 +199,7 @@ public partial class InvocationHandler
             && op.Property.GetMethod is { } idxGetter && _methodFunctions.ContainsKey(idxGetter.OriginalDefinition))
         {
             var sargs = new List<CLeaf> { LoadInstanceRaw(op.Instance) };
-            foreach (var arg in op.Arguments) sargs.Add(VisitExpression(arg.Value));
+            sargs.AddRange(EvaluateIndexerArgs(op)); // wave-9 round-4: named index args bind by ordinal
             var ret = EmitCallToMethod(idxGetter.OriginalDefinition, sargs);
             return op.Property.Type is INamedTypeSymbol idxRetAgg && EmitContext.IsAggregateType(idxRetAgg)
                 ? EmitDeepCloneAggregate(ret, idxRetAgg) : ret;
@@ -213,6 +213,18 @@ public partial class InvocationHandler
         {
             var recvVal = VisitExpression(op.Instance);
             return EmitCrossIndexerCall(recvIdxGetter, recvVal, EvaluateIndexerArgs(op));
+        }
+
+        // Wave-9 round-4 [X4]/[X9]: user indexer read through an INTERFACE-typed receiver → dispatch
+        // the getter through its interface bridge, like an interface method/property. The [W6] gate
+        // tests IsUdonSharpBehaviour(ContainingType), which is the INTERFACE here, so this fell
+        // through to extern resolution and emitted a nonexistent IUdonEventReceiver.__get_Item the
+        // validator crashes on (loud crash on legal C#).
+        if (TryGetInterfaceAccessorLayout(op, op.Property.GetMethod, out var ifaceIdxGetMl))
+        {
+            var ifaceIdxInst = VisitExpression(op.Instance);
+            return EmitInterfaceAccessorCall(op.Property.GetMethod, ifaceIdxGetMl, ifaceIdxInst,
+                EvaluateIndexerArgs(op));
         }
 
         var cType = GetUdonType(op.Property.ContainingType);

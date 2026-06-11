@@ -1632,6 +1632,137 @@ public abstract class HandlerBase
         return new List<CLeaf>(ordered);
     }
 
+    /// <summary>True when the type is NOT a behaviour after resolving type parameters — an interface
+    /// call/accessor on such a receiver must use externs, not SendCustomEvent dispatch (e.g.
+    /// IComparable&lt;T&gt;.CompareTo with T=int). Interface-typed receivers stay undetermined (false).</summary>
+    protected bool IsResolvedConcreteNonBehaviour(ITypeSymbol type)
+    {
+        switch (type)
+        {
+            case null:
+            // Type parameter: resolve via TypeParamMap
+            case ITypeParameterSymbol when _typeParamMap == null:
+                return false;
+            case ITypeParameterSymbol tp:
+            {
+                if (!_typeParamMap.TryGetValue(tp, out var concrete)) return false;
+                return !ExternResolver.IsUdonSharpBehaviour(concrete);
+            }
+        }
+
+        // Concrete type: if not a UdonSharpBehaviour, interface calls should use extern
+        if (type.TypeKind == TypeKind.Interface) return false; // can't determine yet
+        return !ExternResolver.IsUdonSharpBehaviour(type);
+    }
+
+    /// <summary>Wave-9 round-4 [X4]/[X5]/[X9]: gate + layout lookup for a USER-INTERFACE property or
+    /// indexer accessor reached through an interface-typed receiver. The [W6] cross-indexer gate
+    /// tests IsUdonSharpBehaviour(Property.ContainingType) — the INTERFACE for these sites — so
+    /// indexer read/write/compound and the property compound/inc-dec WRITE-BACK fell through to
+    /// extern resolution and emitted nonexistent IUdonEventReceiver.__get_Item/__set_Item/__set_P
+    /// externs (UasmValidationException on legal C#). Mirrors the gates of the existing interface
+    /// property get/set arms: user interface (SpecialType None), variable receiver, not a resolved
+    /// concrete non-behaviour, and the accessor present in the planned interface layout.</summary>
+    protected bool TryGetInterfaceAccessorLayout(IPropertyReferenceOperation op, IMethodSymbol accessor,
+        out MethodLayout ml)
+    {
+        ml = null;
+        return accessor != null
+            && op.Property.ContainingType is INamedTypeSymbol ifaceType
+            && ifaceType.TypeKind == TypeKind.Interface
+            && ifaceType.SpecialType == SpecialType.None
+            && op.Instance != null && op.Instance is not IInstanceReferenceOperation
+            && !IsResolvedConcreteNonBehaviour(op.Instance.Type)
+            && _planner.GetLayout(ifaceType).Methods.TryGetValue(accessor, out ml);
+    }
+
+    /// <summary>Dispatch an interface property/indexer accessor through its canonical interface
+    /// bridge (the `__iface_*` name every implementing class exports), exactly like an interface
+    /// METHOD call: SetProgramVariable each ordinal-ordered arg (indexes, then the value for a
+    /// setter), SendCustomEvent the bridge, GetProgramVariable the return. Tuple-returning accessors
+    /// dispatch the bare export (no bridge), mirroring EmitInterfaceCall. Void accessors self-emit
+    /// and return null — never wrap in EmitExprStmt.</summary>
+    protected CLeaf EmitInterfaceAccessorCall(IMethodSymbol accessor, MethodLayout ml, CLeaf instanceVal,
+        List<CLeaf> orderedArgs)
+    {
+        var pairs = new List<(string, CLeaf)>();
+        for (int i = 0; i < orderedArgs.Count && i < ml.ParamIds.Count; i++)
+            pairs.Add((ml.ParamIds[i], orderedArgs[i]));
+        var rets = ml.Returns.ToArray();
+        if (rets.Length > 1)
+            return CrossCall(instanceVal, ml.ExportName, pairs, rets, "SystemVoid");
+        var dispatchName = LayoutPlanner.InterfaceDispatchName(accessor, ml);
+        var retType = accessor.ReturnsVoid ? "SystemVoid" : GetUdonType(accessor.ReturnType);
+        return CrossCall(instanceVal, dispatchName, pairs,
+            accessor.ReturnsVoid ? System.Array.Empty<ReturnSlot>() : rets, retType);
+    }
+
+    // ── Delegate value comparison (design §2.5; shared by OperatorHandler `==`/`!=` and the
+    // wave-9 round-4 [X1] `.Equals` method arm in InvocationHandler) ──
+
+    protected static bool IsDelegateTyped(ITypeSymbol t)
+        => t is INamedTypeSymbol n && n.DelegateInvokeMethod != null;
+
+    protected CLeaf CompareDelegateToNull(CLeaf bundle, bool isNotEquals)
+    {
+        var nullVal = Const(null, "SystemObject");
+        var sig = isNotEquals
+            ? "SystemObject.__op_Inequality__SystemObject_SystemObject__SystemBoolean"
+            : "SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean";
+        return ExternCall(sig, new List<CLeaf> { bundle, nullVal }, "SystemBoolean");
+    }
+
+    /// <summary>Element-wise delegate value equality with null legs (§2.5): __Get on a null bundle
+    /// faults, so the element comparison only runs when BOTH bundles are non-null; null==null is true,
+    /// one-sided null is false (fcd07 eqAfterNull=0). Addr is intentionally excluded — it is derived
+    /// from Method and self-program-relative; including it would break (target, method) equality.</summary>
+    protected CLeaf CompareDelegates(CLeaf a, CLeaf b, bool isNotEquals)
+    {
+        var nullVal = Const(null, "SystemObject");
+        var ln = ExternCall("SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean",
+            new List<CLeaf> { a, nullVal }, "SystemBoolean");
+        var rn = ExternCall("SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean",
+            new List<CLeaf> { b, nullVal }, "SystemBoolean");
+        var anyNull = ExternCall("SystemBoolean.__op_LogicalOr__SystemBoolean_SystemBoolean__SystemBoolean",
+            new List<CLeaf> { ln, rn }, "SystemBoolean");
+
+        var resultSlot = _ctx.AllocTemp("SystemBoolean");
+        _builder.EmitIf(anyNull,
+            _ => EmitAssign(resultSlot, ExternCall(
+                "SystemBoolean.__op_Equality__SystemBoolean_SystemBoolean__SystemBoolean",
+                new List<CLeaf> { ln, rn }, "SystemBoolean")),
+            _ =>
+            {
+                var lt = ExternCall("SystemObjectArray.__Get__SystemInt32__SystemObject",
+                    new List<CLeaf> { a, Const(DelegateAbi.Target, "SystemInt32") }, "SystemObject");
+                var rt = ExternCall("SystemObjectArray.__Get__SystemInt32__SystemObject",
+                    new List<CLeaf> { b, Const(DelegateAbi.Target, "SystemInt32") }, "SystemObject");
+                var targetEq = ExternCall(
+                    "SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean",
+                    new List<CLeaf> { lt, rt }, "SystemBoolean");
+
+                var lm = ExternCall("SystemObjectArray.__Get__SystemInt32__SystemObject",
+                    new List<CLeaf> { a, Const(DelegateAbi.Method, "SystemInt32") }, "SystemString");
+                var rm = ExternCall("SystemObjectArray.__Get__SystemInt32__SystemObject",
+                    new List<CLeaf> { b, Const(DelegateAbi.Method, "SystemInt32") }, "SystemString");
+                var methodEq = ExternCall(
+                    "SystemString.__op_Equality__SystemString_SystemString__SystemBoolean",
+                    new List<CLeaf> { lm, rm }, "SystemBoolean");
+
+                EmitAssign(resultSlot, ExternCall(
+                    "SystemBoolean.__op_LogicalAnd__SystemBoolean_SystemBoolean__SystemBoolean",
+                    new List<CLeaf> { targetEq, methodEq }, "SystemBoolean"));
+            });
+
+        CLeaf result = SlotRef(resultSlot);
+        if (isNotEquals)
+            result = ExternCall(
+                "SystemBoolean.__op_UnaryNegation__SystemBoolean__SystemBoolean",
+                new List<CLeaf> { result }, "SystemBoolean");
+
+        return result;
+    }
+
     /// <summary>Wave-9 round-3 [W4]: cross-program call arguments. Evaluated in TEXTUAL order
     /// (C# evaluation semantics — the values become ANF leaves immediately) and paired with the
     /// param id at the argument's PARAMETER ordinal; pairs returned in ORDINAL order so the
@@ -1762,9 +1893,12 @@ public abstract class HandlerBase
     }
 
     // The named heap fields that must survive a recursive re-entry of the current method: its parameters,
-    // the struct receiver, and its in-scope frame locals (NOT captured locals — those are shared by reference,
-    // so the flat-heap sharing is the correct closure behaviour). The SLOTS to spill are computed per call
-    // site from post-coalesce liveness by InsertRecursionSpills, so they are not collected here.
+    // the struct receiver, and its in-scope frame locals. Captured locals are shared by reference (the
+    // flat-heap sharing IS the closure behaviour) — EXCEPT the wave-9 round-4 [X2]/[X3] case below: a
+    // read-only capture cell whose declaring function shares the hoisted node's SCC must be spilled,
+    // because a dispatch can re-enter that function and re-seed the one flat slot (fresh-environment
+    // semantics). The SLOTS to spill are computed per call site from post-coalesce liveness by
+    // InsertRecursionSpills, so they are not collected here.
     List<(string Name, string Type)> CollectRecursionSpillFields()
     {
         var fields = new List<(string, string)>();
@@ -1799,6 +1933,34 @@ public abstract class HandlerBase
             if (isHoisted && !SymbolEqualityComparer.Default.Equals(kv.Key.ContainingSymbol, _currentMethod))
                 continue;
             AddField(kv.Value.Id);
+        }
+
+        // Wave-9 round-4 [X2]/[X3]: a hoisted recursion-cycle member additionally spills its
+        // READ-ONLY capture cells whose declaring function shares its SCC (BuildRecursionInfo
+        // computes the set — see EmitContext.HoistedCaptureSpillCells): a dispatch from inside the
+        // node can re-enter the declaring function, whose fresh activation re-seeds the one flat
+        // slot, and the node's POST-dispatch read must see the creating activation's value
+        // (DiffFuzz ref=60 vs VM 50, lambda and local-function flavors). Cells written by a hoisted
+        // node keep flat sharing (same-environment mutation stays visible) and are never in the map.
+        if (isHoisted
+            && (_ctx.HoistedCaptureSpillCells.TryGetValue(_currentMethod, out var capCells)
+                || (_currentMethod.OriginalDefinition != null
+                    && _ctx.HoistedCaptureSpillCells.TryGetValue(_currentMethod.OriginalDefinition, out capCells))))
+        {
+            foreach (var cap in capCells)
+            {
+                switch (cap)
+                {
+                    case ILocalSymbol capLocal when _localBindings.TryGetValue(capLocal, out var capBinding):
+                        AddField(capBinding.Id);
+                        break;
+                    case IParameterSymbol capParam when capParam.ContainingSymbol is IMethodSymbol capOwner
+                        && _methodParamVarIds.TryGetValue(capOwner, out var capPids)
+                        && capParam.Ordinal >= 0 && capParam.Ordinal < capPids.Length:
+                        AddField(capPids[capParam.Ordinal]);
+                        break;
+                }
+            }
         }
 
         return fields;

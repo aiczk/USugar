@@ -140,6 +140,17 @@ public class EmitContext
            && RecursiveCallees.TryGetValue(caller.OriginalDefinition, out var callees)
            && callees.Contains(callee.OriginalDefinition);
 
+    /// <summary>Wave-9 round-4 [X2]/[X3]: per HOISTED recursion-cycle member (lambda / local
+    /// function symbol), the read-only capture cells (locals/params of an enclosing function in
+    /// the SAME SCC) that must join the node's frame spill at its marked dispatch/recursive-call
+    /// sites. A dispatch from inside the node can re-enter the cell's declaring function, whose
+    /// fresh activation re-seeds the one flat slot — the node's post-dispatch read then sees the
+    /// inner value (DiffFuzz ref=60 vs VM 50). Cells WRITTEN by any hoisted node are excluded
+    /// (same-environment mutation must stay visible through the shared slot). Populated by
+    /// <c>UasmEmitter.BuildRecursionInfo</c>; consumed by CollectRecursionSpillFields.</summary>
+    public readonly Dictionary<IMethodSymbol, List<ISymbol>> HoistedCaptureSpillCells
+        = new(SymbolEqualityComparer.Default);
+
     /// <summary>Round-7 follow-up [Q5]: per internal method (keyed by OriginalDefinition), the
     /// this-FIELDS the method touches — directly (field reference through an implicit/explicit
     /// this/base receiver anywhere in its body) or transitively (closed over the internal call

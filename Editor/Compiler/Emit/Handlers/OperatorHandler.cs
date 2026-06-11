@@ -868,9 +868,9 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
     }
 
     // ── Delegate comparison helpers (design §2.5) ──
-
-    static bool IsDelegateTyped(ITypeSymbol t)
-        => t is INamedTypeSymbol n && n.DelegateInvokeMethod != null;
+    // IsDelegateTyped / CompareDelegateToNull / CompareDelegates moved to HandlerBase (wave-9
+    // round-4 [X1]: the .Equals METHOD spelling of delegate equality reuses the same value
+    // comparison from InvocationHandler — one knowledge source).
 
     bool IsNullLiteral(IOperation op)
     {
@@ -879,63 +879,4 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
         return unwrapped is ILiteralOperation { ConstantValue: { HasValue: true, Value: null } };
     }
 
-    CLeaf CompareDelegateToNull(CLeaf bundle, bool isNotEquals)
-    {
-        var nullVal = Const(null, "SystemObject");
-        var sig = isNotEquals
-            ? "SystemObject.__op_Inequality__SystemObject_SystemObject__SystemBoolean"
-            : "SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean";
-        return ExternCall(sig, new List<CLeaf> { bundle, nullVal }, "SystemBoolean");
-    }
-
-    /// <summary>Element-wise delegate value equality with null legs (§2.5): __Get on a null bundle
-    /// faults, so the element comparison only runs when BOTH bundles are non-null; null==null is true,
-    /// one-sided null is false (fcd07 eqAfterNull=0). Addr is intentionally excluded — it is derived
-    /// from Method and self-program-relative; including it would break (target, method) equality.</summary>
-    CLeaf CompareDelegates(CLeaf a, CLeaf b, bool isNotEquals)
-    {
-        var nullVal = Const(null, "SystemObject");
-        var ln = ExternCall("SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean",
-            new List<CLeaf> { a, nullVal }, "SystemBoolean");
-        var rn = ExternCall("SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean",
-            new List<CLeaf> { b, nullVal }, "SystemBoolean");
-        var anyNull = ExternCall("SystemBoolean.__op_LogicalOr__SystemBoolean_SystemBoolean__SystemBoolean",
-            new List<CLeaf> { ln, rn }, "SystemBoolean");
-
-        var resultSlot = _ctx.AllocTemp("SystemBoolean");
-        _builder.EmitIf(anyNull,
-            _ => EmitAssign(resultSlot, ExternCall(
-                "SystemBoolean.__op_Equality__SystemBoolean_SystemBoolean__SystemBoolean",
-                new List<CLeaf> { ln, rn }, "SystemBoolean")),
-            _ =>
-            {
-                var lt = ExternCall("SystemObjectArray.__Get__SystemInt32__SystemObject",
-                    new List<CLeaf> { a, Const(DelegateAbi.Target, "SystemInt32") }, "SystemObject");
-                var rt = ExternCall("SystemObjectArray.__Get__SystemInt32__SystemObject",
-                    new List<CLeaf> { b, Const(DelegateAbi.Target, "SystemInt32") }, "SystemObject");
-                var targetEq = ExternCall(
-                    "SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean",
-                    new List<CLeaf> { lt, rt }, "SystemBoolean");
-
-                var lm = ExternCall("SystemObjectArray.__Get__SystemInt32__SystemObject",
-                    new List<CLeaf> { a, Const(DelegateAbi.Method, "SystemInt32") }, "SystemString");
-                var rm = ExternCall("SystemObjectArray.__Get__SystemInt32__SystemObject",
-                    new List<CLeaf> { b, Const(DelegateAbi.Method, "SystemInt32") }, "SystemString");
-                var methodEq = ExternCall(
-                    "SystemString.__op_Equality__SystemString_SystemString__SystemBoolean",
-                    new List<CLeaf> { lm, rm }, "SystemBoolean");
-
-                EmitAssign(resultSlot, ExternCall(
-                    "SystemBoolean.__op_LogicalAnd__SystemBoolean_SystemBoolean__SystemBoolean",
-                    new List<CLeaf> { targetEq, methodEq }, "SystemBoolean"));
-            });
-
-        CLeaf result = SlotRef(resultSlot);
-        if (isNotEquals)
-            result = ExternCall(
-                "SystemBoolean.__op_UnaryNegation__SystemBoolean__SystemBoolean",
-                new List<CLeaf> { result }, "SystemBoolean");
-
-        return result;
-    }
 }

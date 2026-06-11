@@ -1648,21 +1648,32 @@ public class UasmEmitter
         // separate GetOperation trees, so collecting from them too would yield duplicate-but-distinct
         // instances). Emit-time matching is value-based for symbols (Roslyn lambda/local-function
         // symbols compare by syntax + container) and red-syntax-based for dispatch sites.
-        var lambdaNodes = new List<(IMethodSymbol Sym, IOperation Body)>();
+        var lambdaNodes = new List<(IMethodSymbol Sym, IOperation Body, IAnonymousFunctionOperation Op)>();
         foreach (var m in roots)
             if (bodies.TryGetValue(m, out var rootBody))
                 CollectLambdaNodes(rootBody, lambdaNodes);
         foreach (var (_, initOp, _) in _fieldInitOps)
             CollectLambdaNodes(initOp, lambdaNodes);
 
-        foreach (var (sym, body) in lambdaNodes)
+        var lambdaOps = new Dictionary<IMethodSymbol, IAnonymousFunctionOperation>(SymbolEqualityComparer.Default);
+        foreach (var (sym, body, lambdaOp) in lambdaNodes)
         {
             if (edges.ContainsKey(sym)) continue;
             bodies[sym] = body;
+            lambdaOps[sym] = lambdaOp;
             var lambdaCallees = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
             CollectInternalCallees(body, methodSet, lambdaCallees);
             edges[sym] = lambdaCallees;
         }
+
+        // Wave-9 round-4 [X2]/[X3]: capture cells written by ANY hoisted node keep flat sharing
+        // (see CollectHoistedCellWrites); read-only cells become spill candidates below.
+        var hoistedWritten = new HashSet<ISymbol>(SymbolEqualityComparer.Default);
+        foreach (var (_, lambdaBody, _) in lambdaNodes)
+            CollectHoistedCellWrites(lambdaBody, hoistedWritten);
+        foreach (var lf in localFuncs)
+            if (bodies.TryGetValue(lf, out var lfWriteBody))
+                CollectHoistedCellWrites(lfWriteBody, hoistedWritten);
 
         // (b) EscapeSet E (§4.1): conservative approximation of every function whose bridge address can
         // end up inside a bundle — same-class method-group targets (incl. local functions) and lambdas.
@@ -1755,6 +1766,42 @@ public class UasmEmitter
                 foreach (var site in dispatchSites)
                     if (site.Syntax != null && EmitContext.IsNonTailDispatchSite(callerBody, site))
                         reentrantSites.Add(site.Syntax);
+
+                // Wave-9 round-4 [X2]/[X3]: a HOISTED cycle member (lambda / local function) whose
+                // capture cells are declared by a function in the SAME SCC. A dispatch from inside
+                // this node can re-enter that declaring function while its activation is live (both
+                // path directions exist statically, so SCC co-membership is exactly the conservative
+                // gate), and the fresh activation re-seeds the one flat cell — the node's
+                // POST-dispatch read then sees the inner value (DiffFuzz ref=60 vs VM 50, lambda and
+                // direct-invoked local-function flavors). Spill the read-only capture cells at this
+                // node's marked sites (CollectRecursionSpillFields consumes the map): the cell's
+                // value at the node's dispatch IS the creating activation's value (single-activation
+                // surface), so save/restore reproduces the CLR fresh-environment semantics. Cells
+                // written by any hoisted node keep flat sharing (hoistedWritten, see above); cells
+                // whose declaring function is OUTSIDE the SCC can never be re-seeded mid-dispatch
+                // (no live re-entry path) and stay unspilled — byte-stable for the existing
+                // recursive-lambda shapes.
+                if (caller.MethodKind is MethodKind.LocalFunction or MethodKind.LambdaMethod
+                    or MethodKind.AnonymousFunction)
+                {
+                    var nodeCaptures = caller.MethodKind == MethodKind.LocalFunction
+                        ? _ctx.CaptureAnalyzer.GetLocalFunctionCaptures(caller)
+                        : lambdaOps.TryGetValue(caller, out var capOp)
+                            ? _ctx.CaptureAnalyzer.GetCaptures(capOp)
+                            : System.Collections.Immutable.ImmutableArray<ISymbol>.Empty;
+                    List<ISymbol> spillCells = null;
+                    foreach (var cap in nodeCaptures)
+                    {
+                        if (hoistedWritten.Contains(cap)) continue;
+                        if (cap.ContainingSymbol is not IMethodSymbol declFunc) continue;
+                        if (!sccSet.Contains(declFunc)
+                            && (declFunc.OriginalDefinition == null || !sccSet.Contains(declFunc.OriginalDefinition)))
+                            continue;
+                        (spillCells ??= new List<ISymbol>()).Add(cap);
+                    }
+                    if (spillCells != null)
+                        _ctx.HoistedCaptureSpillCells[caller] = spillCells;
+                }
             }
         }
         _ctx.RecursiveCallees = recursive;
@@ -2098,14 +2145,67 @@ public class UasmEmitter
     }
 
     // Collect every lambda (anonymous function) with its body — each becomes its own SCC node (§4.2).
-    // Descends everywhere (nested lambdas / lambdas inside local functions are nodes too).
-    static void CollectLambdaNodes(IOperation op, List<(IMethodSymbol Sym, IOperation Body)> result)
+    // Descends everywhere (nested lambdas / lambdas inside local functions are nodes too). The
+    // operation itself is carried so the [X2] capture-cell spill computation can ask the capture
+    // analyzer (GetCaptures is keyed by IAnonymousFunctionOperation).
+    static void CollectLambdaNodes(IOperation op,
+        List<(IMethodSymbol Sym, IOperation Body, IAnonymousFunctionOperation Op)> result)
     {
         if (op == null) return;
         if (op is IAnonymousFunctionOperation af && af.Symbol != null && af.Body != null)
-            result.Add((af.Symbol, af.Body));
+            result.Add((af.Symbol, af.Body, af));
         foreach (var child in op.Children)
             CollectLambdaNodes(child, result);
+    }
+
+    // ── Wave-9 round-4 [X2]/[X3]: capture cells written by hoisted nodes ──
+    // A capture cell that some lambda/local function WRITES carries same-environment mutation that
+    // must stay visible through the shared flat slot (restoring it at a dispatch site would discard
+    // the callee's legitimate write) — such cells keep today's no-spill behavior. Cells only READ by
+    // hoisted nodes can be re-seeded mid-dispatch ONLY by a fresh activation of their declaring
+    // method, whose writes the CLR closure never sees — save/restore at the node's marked sites is
+    // exactly the fresh-environment boundary. Bare local/param targets (and ref/out argument uses)
+    // count as writes; MEMBER-chain writes into an aggregate cell do not (the slot holds the
+    // object[] REFERENCE — contents mutations stay shared through the restored reference).
+    static void CollectHoistedCellWrites(IOperation op, HashSet<ISymbol> written)
+    {
+        if (op == null) return;
+        switch (op)
+        {
+            case IAssignmentOperation asg: // simple / compound / coalesce / deconstruction
+                RecordHoistedWriteTarget(asg.Target, written);
+                break;
+            case IIncrementOrDecrementOperation inc:
+                RecordHoistedWriteTarget(inc.Target, written);
+                break;
+            case IArgumentOperation { Parameter: { RefKind: RefKind.Ref or RefKind.Out } } refArg:
+                RecordHoistedWriteTarget(refArg.Value, written);
+                break;
+        }
+        foreach (var child in op.Children)
+            CollectHoistedCellWrites(child, written);
+    }
+
+    static void RecordHoistedWriteTarget(IOperation target, HashSet<ISymbol> written)
+    {
+        switch (target)
+        {
+            case ILocalReferenceOperation lr:
+                written.Add(lr.Local);
+                break;
+            case IParameterReferenceOperation pr:
+                written.Add(pr.Parameter);
+                break;
+            case ITupleOperation tup: // deconstruction target (a, b) = …
+                foreach (var e in tup.Elements) RecordHoistedWriteTarget(e, written);
+                break;
+            case IDeclarationExpressionOperation de:
+                RecordHoistedWriteTarget(de.Expression, written);
+                break;
+            case IConversionOperation cv:
+                RecordHoistedWriteTarget(cv.Operand, written);
+                break;
+        }
     }
 
     // EscapeSet collection (§4.1): targets of every IDelegateCreationOperation that resolve to an

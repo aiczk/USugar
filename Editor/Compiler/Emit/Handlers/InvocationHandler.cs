@@ -39,6 +39,31 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
             && EmitContext.IsNullableT(target.ContainingType, out var govUnderlying))
             return EmitNullableGetValueOrDefault(op, govUnderlying);
 
+        // Wave-9 round-4 [X1]: a.Equals(b) on a delegate-typed receiver. Extern resolution mapped the
+        // System.Func receiver onto UnityEngineComponent and emitted a nonexistent
+        // __Equals__SystemObject__SystemBoolean extern (loud crash on legal C#). Delegate.Equals is
+        // VALUE equality for same-type bundles — route it through the same (target, method) element
+        // comparison as the `==` operator (CompareDelegates, §2.5). A DIFFERENT delegate type compares
+        // false in the CLR regardless of target/method (GetType() inequality) — emit the evaluations
+        // (C# evaluates both sides) and the constant. Non-delegate arguments stay loud (§8-3).
+        if (op.Instance != null && !target.IsStatic && target.Name == "Equals"
+            && op.Arguments.Length == 1 && IsDelegateTyped(op.Instance.Type))
+        {
+            var eqArg = op.Arguments[0].Value;
+            while (eqArg is IConversionOperation eqConv) eqArg = eqConv.Operand;
+            if (!IsDelegateTyped(eqArg.Type))
+                throw new System.NotSupportedException(
+                    "Delegate .Equals(...) with a non-delegate argument is not supported. "
+                    + "Compare two delegate values (or use ==).");
+            if (!SymbolEqualityComparer.Default.Equals(op.Instance.Type, eqArg.Type))
+            {
+                VisitExpression(op.Instance);
+                VisitExpression(eqArg);
+                return Const(false, "SystemBoolean");
+            }
+            return CompareDelegates(VisitExpression(op.Instance), VisitExpression(eqArg), isNotEquals: false);
+        }
+
         // Virtual dispatch through `this`: a call to a virtual/override/abstract method must bind to the
         // most-derived override in the COMPILED type, even when the call site is in an INHERITED base
         // method whose static target is the base declaration. base.M() and calls on other objects
@@ -497,25 +522,8 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
         return false;
     }
 
-    bool IsResolvedConcreteNonBehaviour(ITypeSymbol type)
-    {
-        switch (type)
-        {
-            case null:
-            // Type parameter: resolve via TypeParamMap
-            case ITypeParameterSymbol when _typeParamMap == null:
-                return false;
-            case ITypeParameterSymbol tp:
-            {
-                if (!_typeParamMap.TryGetValue(tp, out var concrete)) return false;
-                return !ExternResolver.IsUdonSharpBehaviour(concrete);
-            }
-        }
-
-        // Concrete type: if not a UdonSharpBehaviour, interface calls should use extern
-        if (type.TypeKind == TypeKind.Interface) return false; // can't determine yet
-        return !ExternResolver.IsUdonSharpBehaviour(type);
-    }
+    // IsResolvedConcreteNonBehaviour moved to HandlerBase (wave-9 round-4 [X4]/[X5]/[X9]: the
+    // interface-receiver accessor gates in the assignment handlers share it).
 
     /// <summary>
     /// Like IsFrameworkNamespace but excludes UdonSharp — types in UdonSharp.* that are not
