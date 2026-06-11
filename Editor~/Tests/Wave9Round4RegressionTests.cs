@@ -161,13 +161,15 @@ public class W9R4Ctl : UdonSharpBehaviour {
     }
 
     [Fact]
-    public void LambdaCycleMember_WrittenCaptureCell_KeepsFlatSharing()
+    public void LambdaCycleMember_WrittenCaptureCell_RejectsLoudly()
     {
-        // A capture cell WRITTEN by the hoisted node carries same-environment mutation that must
-        // stay visible through the shared slot — restoring it would discard the callee's write.
-        // Written cells are excluded from the spill map: acc's reference count stays at the
-        // body-reference count (no spill/reload pairs were added for it).
-        var uasm = TestHelper.CompileToUasm(@"
+        // Wave-9 round-5 [X3]/[X10]/[X11] re-pin (supersedes the round-4 flat-sharing pin): a
+        // capture cell WRITTEN by a hoisted cycle member shares ONE flat slot across all live
+        // activations, so the inner activation's writes bleed into the outer frame across live
+        // re-entry (DiffFuzz ref=51 vs VM 21 / 126 vs 101 — the round-4 structural pin protected a
+        // VM-proven-wrong behavior). Correct codegen needs a per-activation closure environment
+        // (Stage-2), so the cycle+written combination is loud per design §8-3.
+        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
 using System;
 using UdonSharp;
 public class W9R4Written : UdonSharpBehaviour {
@@ -181,13 +183,28 @@ public class W9R4Written : UdonSharpBehaviour {
         Func<int, int> c = k => { acc = acc + 1; return d(k) + acc; };
         return c(m - 1) + acc;
     }
-}", "W9R4Written");
-        var withSpill = Regex.Matches(uasm, @"__lcl_acc_\w+").Count;
-        // acc is read AND written inside the lambda: pre- and post-fix identical (excluded from
-        // HoistedCaptureSpillCells by the hoistedWritten walk). M's own call-site spill of acc
-        // remains — pin only that the LAMBDA arms added nothing: the count must equal the
-        // stash-verified pre-fix value.
-        Assert.Equal(11, withSpill);
+}", "W9R4Written"));
+        Assert.Contains("recursion cycle", ex.Message);
+    }
+
+    [Fact]
+    public void NonCycleLambda_WrittenCaptureCell_KeepsFlatSharing()
+    {
+        // [X3] control: a written capture cell whose lambda is NOT in a recursion cycle keeps flat
+        // sharing — the correct same-environment C# semantics when no live re-entry exists.
+        var uasm = TestHelper.CompileToUasm(@"
+using System;
+using UdonSharp;
+public class W9R5WrittenCtl : UdonSharpBehaviour {
+    public int n;
+    public int result;
+    void Start() {
+        int acc = n * 10;
+        Func<int, int> c = k => { acc = acc + 1; return k + acc; };
+        result = c(n) + acc;
+    }
+}", "W9R5WrittenCtl");
+        Assert.Contains("__lcl_acc_", uasm);
     }
 
     // ── [X4]/[X5]/[X9] interface-receiver accessors ──
