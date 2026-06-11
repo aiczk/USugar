@@ -2153,9 +2153,57 @@ public class UasmEmitter
         }
     }
 
+    // ── Wave-9 round-3 [W1]/[W2]/[W3]: emission-faithful leaf-override resolution for the graph ──
+    // Emission resolves a this-receiver virtual call to the most-derived override visible from the
+    // compiled class (InvocationHandler.ResolveMostDerivedOverride / HandlerBase.ResolveDispatchProperty),
+    // but the recursion graph recorded only the STATIC binding — so a runtime cycle closed through an
+    // override (base body's virtual call/property read dispatching the leaf, or an override calling
+    // base.M whose body virtual-calls back) had no static counterpart and its frames were never spilled
+    // (VM-proven: 305 where the CLR gives 605; override<->base-copy 14 vs 12; fb=base.M bundle 17 vs 21).
+    // These mirrors return the leaf's ORIGINAL DEFINITION (graph nodes are definition-keyed) or null
+    // when the site keeps its static binding (no override visible / base. receiver / non-virtual).
+
+    IMethodSymbol LeafCallTarget(IInvocationOperation inv)
+    {
+        var tm = inv.TargetMethod;
+        if (!(tm.IsVirtual || tm.IsOverride || tm.IsAbstract) || tm.MethodKind != MethodKind.Ordinary)
+            return null;
+        if (inv.Instance is not IInstanceReferenceOperation iref
+            || iref.Syntax is BaseExpressionSyntax) return null;
+        var def = tm.OriginalDefinition;
+        var leaf = ResolveLeafOverrideDef(def);
+        return SymbolEqualityComparer.Default.Equals(leaf, def) ? null : leaf;
+    }
+
+    IPropertySymbol LeafPropertyTarget(IPropertyReferenceOperation pr)
+    {
+        var p = pr.Property;
+        if (!(p.IsVirtual || p.IsOverride || p.IsAbstract)) return null;
+        if (pr.Instance is not IInstanceReferenceOperation iref
+            || iref.Syntax is BaseExpressionSyntax) return null;
+        var def = p.OriginalDefinition;
+        for (var t = _classSymbol; t != null; t = t.BaseType)
+            foreach (var cand in t.GetMembers(p.Name).OfType<IPropertySymbol>())
+                for (var o = cand; o != null; o = o.OverriddenProperty)
+                    if (SymbolEqualityComparer.Default.Equals(o.OriginalDefinition, def))
+                        return SymbolEqualityComparer.Default.Equals(cand.OriginalDefinition, def)
+                            ? null : cand.OriginalDefinition;
+        return null;
+    }
+
+    IMethodSymbol ResolveLeafOverrideDef(IMethodSymbol def)
+    {
+        for (var t = _classSymbol; t != null; t = t.BaseType)
+            foreach (var m in t.GetMembers(def.Name).OfType<IMethodSymbol>())
+                for (var o = m; o != null; o = o.OverriddenMethod)
+                    if (SymbolEqualityComparer.Default.Equals(o.OriginalDefinition, def))
+                        return m.OriginalDefinition;
+        return def;
+    }
+
     // True if the caller body contains a call to callee that is NOT in tail position (its result is used
     // by something after the call, so the caller's live values would be clobbered by a recursive re-entry).
-    static bool HasNonTailCallTo(IOperation op, IMethodSymbol callee)
+    bool HasNonTailCallTo(IOperation op, IMethodSymbol callee)
     {
         if (op == null) return false;
         // `return Callee(args)` — the call itself is tail, but its argument/instance subexpressions are not.
@@ -2180,7 +2228,7 @@ public class UasmEmitter
         return false;
     }
 
-    static bool IsInternalCallTo(IOperation op, IMethodSymbol callee, out IOperation call)
+    bool IsInternalCallTo(IOperation op, IMethodSymbol callee, out IOperation call)
     {
         call = null;
         IMethodSymbol target = op switch
@@ -2190,13 +2238,27 @@ public class UasmEmitter
             _ => null,
         };
         if (target != null && SymbolEqualityComparer.Default.Equals(target, callee)) { call = op; return true; }
+        // Wave-9 round-3: a this-receiver virtual call site emits against the LEAF override —
+        // match the emission-faithful target too, else the leaf edge added by CollectInternalCallees
+        // is filtered as "no named call" and the spill never reaches the call site.
+        if (op is IInvocationOperation linv && LeafCallTarget(linv) is { } leaf
+            && SymbolEqualityComparer.Default.Equals(leaf, callee))
+        { call = op; return true; }
         // Wave-9 round-2 [W2]: a this-receiver property/indexer reference is an accessor CALL —
         // matched against either accessor (conservative: a write-position reference matching the
         // getter only ever classifies an extra site non-tail, which over-spills, never corrupts).
-        if (op is IPropertyReferenceOperation { Instance: IInstanceReferenceOperation } pr
-            && ((pr.Property.GetMethod is { } pg && SymbolEqualityComparer.Default.Equals(pg.OriginalDefinition, callee))
-             || (pr.Property.SetMethod is { } ps && SymbolEqualityComparer.Default.Equals(ps.OriginalDefinition, callee))))
-        { call = op; return true; }
+        if (op is IPropertyReferenceOperation { Instance: IInstanceReferenceOperation } pr)
+        {
+            if ((pr.Property.GetMethod is { } pg && SymbolEqualityComparer.Default.Equals(pg.OriginalDefinition, callee))
+             || (pr.Property.SetMethod is { } ps && SymbolEqualityComparer.Default.Equals(ps.OriginalDefinition, callee)))
+            { call = op; return true; }
+            // Wave-9 round-3: leaf-override accessors (the getter/setter emission dispatches via
+            // ResolveDispatchProperty) — same emission-faithful matching as the invocation arm.
+            if (LeafPropertyTarget(pr) is { } lp
+                && ((lp.GetMethod is { } lg && SymbolEqualityComparer.Default.Equals(lg.OriginalDefinition, callee))
+                 || (lp.SetMethod is { } ls && SymbolEqualityComparer.Default.Equals(ls.OriginalDefinition, callee))))
+            { call = op; return true; }
+        }
         return false;
     }
 
@@ -2237,13 +2299,20 @@ public class UasmEmitter
     // Collect call targets that resolve to a registered internal method (same program, JUMP-based).
     // Nested local functions are skipped — each is analysed as its own graph node, so their internal
     // calls are not attributed to the enclosing method.
-    static void CollectInternalCallees(IOperation op, HashSet<IMethodSymbol> internalMethods, HashSet<IMethodSymbol> result)
+    void CollectInternalCallees(IOperation op, HashSet<IMethodSymbol> internalMethods, HashSet<IMethodSymbol> result)
     {
         if (op == null) return;
         if (op is IInvocationOperation inv)
         {
             var t = inv.TargetMethod.OriginalDefinition;
             if (internalMethods.Contains(t)) result.Add(t);
+            // Wave-9 round-3 [W1]/[W2]/[W3]: a this-receiver virtual call dispatches the LEAF
+            // override at emission, so the leaf is a call-graph edge too. Without it a runtime
+            // cycle closed through the override relation (base body virtual-calling back into the
+            // override, or an override's base.M call whose base body recurses virtually) was
+            // invisible to the SCC analysis and no frame ever spilled (VM-proven 305 vs CLR 605 /
+            // 14 vs 12 / 17 vs 21). The static edge stays — extra edges only ever over-spill (§8-3).
+            if (LeafCallTarget(inv) is { } leafT && internalMethods.Contains(leafT)) result.Add(leafT);
         }
         if (op is IObjectCreationOperation oc && oc.Constructor != null)
         {
@@ -2264,6 +2333,16 @@ public class UasmEmitter
                 result.Add(pg.OriginalDefinition);
             if (pr.Property.SetMethod is { } ps && internalMethods.Contains(ps.OriginalDefinition))
                 result.Add(ps.OriginalDefinition);
+            // Wave-9 round-3: this-receiver virtual accessor references dispatch the LEAF override's
+            // accessors at emission (ResolveDispatchProperty) — add those edges too, same rationale
+            // as the invocation arm above (getter-recursion flavor VM-proven 305 vs CLR 605).
+            if (LeafPropertyTarget(pr) is { } leafP)
+            {
+                if (leafP.GetMethod is { } lg && internalMethods.Contains(lg.OriginalDefinition))
+                    result.Add(lg.OriginalDefinition);
+                if (leafP.SetMethod is { } ls && internalMethods.Contains(ls.OriginalDefinition))
+                    result.Add(ls.OriginalDefinition);
+            }
         }
         var opMethod = (op as IBinaryOperation)?.OperatorMethod ?? (op as IUnaryOperation)?.OperatorMethod;
         if (opMethod != null && internalMethods.Contains(opMethod.OriginalDefinition))
