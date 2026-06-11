@@ -712,7 +712,8 @@ public abstract class HandlerBase
     /// Callers with specialized targets (array elements, cross-behaviour fields) should handle those
     /// first, then delegate to this method for the common cases.
     /// </summary>
-    protected void AssignToLValue(IOperation target, CLeaf value)
+    protected void AssignToLValue(IOperation target, CLeaf value,
+        Dictionary<IOperation, System.Action<CLeaf>> preparedStores = null)
     {
         switch (target)
         {
@@ -725,13 +726,13 @@ public abstract class HandlerBase
                     EmitStoreField(localId, value);
                 }
                 else if (declExpr.Expression is ITupleOperation declTuple)
-                    AssignNestedTupleElements(declTuple, value);
+                    AssignNestedTupleElements(declTuple, value, preparedStores);
                 break;
 
             // A nested deconstruction target tuple, e.g. the (b,c) in `var (a, (b,c)) = …`. `value` is the
             // object[]-emulated nested tuple; read each element and recurse (handles arbitrary nesting depth).
             case ITupleOperation nestedTuple:
-                AssignNestedTupleElements(nestedTuple, value);
+                AssignNestedTupleElements(nestedTuple, value, preparedStores);
                 break;
 
             case ILocalReferenceOperation existingLocal:
@@ -769,18 +770,17 @@ public abstract class HandlerBase
                 break;
 
             case IArrayElementReferenceOperation arrayElem:
-            {
                 // Deconstruction into an array element: `(arr[0], arr[1]) = (...)`. The caller's two-loop split
-                // already evaluated every RHS element before any store, so the swap/rotate idiom is safe here.
-                var arrayVal = VisitExpression(arrayElem.ArrayReference);
-                var indexVal = VisitExpression(arrayElem.Indices[0]);
-                var arrSym = arrayElem.ArrayReference.Type as IArrayTypeSymbol;
-                var arrayType = GetArrayType(arrSym);
-                var elementType = GetArrayElemType(arrSym);
-                EmitExternVoid($"{arrayType}.__Set__SystemInt32_{elementType}__SystemVoid",
-                    new List<CLeaf> { arrayVal, indexVal, value });
+                // already evaluated every RHS element before any store, so the swap/rotate VALUES are safe here.
+                // Wave-9 round-6 [X6]: the array/index LEGS must come from the pre-RHS preparation when the
+                // deconstruction caller supplied one — C# evaluates every target's component expressions
+                // left-to-right BEFORE the RHS, so a store-time `VisitExpression(Indices[0])` that reads state
+                // the RHS mutated lands the write in the WRONG CELL (VM-proven ref=806 vs 86).
+                if (preparedStores != null && preparedStores.TryGetValue(arrayElem, out var arrStore))
+                    arrStore(value);
+                else
+                    PrepareArrayElementSet(arrayElem)(value);
                 break;
-            }
 
             case IDiscardOperation:
                 break;
@@ -788,8 +788,13 @@ public abstract class HandlerBase
             // Wave-9 round-5 [X13]: deconstruction into a property/indexer lvalue (`(p.X, this[i]) = …`).
             // Pre-fix every property target fell through to the default reject below on legal C#. The
             // value is already evaluated (two-loop split), so the factory is trivially side-effect-free.
+            // Wave-9 round-6 [X2]-[X5]: the receiver/index LEGS likewise come from the pre-RHS preparation
+            // when supplied (same wrong-cell family as the array arm above).
             case IPropertyReferenceOperation propLValue:
-                EmitPropertySet(propLValue, () => value);
+                if (preparedStores != null && preparedStores.TryGetValue(propLValue, out var propStore))
+                    propStore(value);
+                else
+                    EmitPropertySet(propLValue, () => value);
                 break;
 
             default:
@@ -801,7 +806,8 @@ public abstract class HandlerBase
     /// <summary>Assign a nested deconstruction target tuple from its object[]-emulated value: read each element
     /// via __Get and delegate to AssignToLValue (which recurses for deeper tuples / handles the leaf lvalues).
     /// A struct (non-tuple aggregate) leaf is deep-cloned for value semantics; a nested tuple recurses instead.</summary>
-    void AssignNestedTupleElements(ITupleOperation tuple, CLeaf arrValue)
+    void AssignNestedTupleElements(ITupleOperation tuple, CLeaf arrValue,
+        Dictionary<IOperation, System.Action<CLeaf>> preparedStores = null)
     {
         for (int i = 0; i < tuple.Elements.Length; i++)
         {
@@ -810,8 +816,54 @@ public abstract class HandlerBase
             var toAssign = tuple.Elements[i].Type is INamedTypeSymbol et
                 && EmitContext.IsAggregateType(et) && !et.IsTupleType
                 ? EmitDeepCloneAggregate(elemVal, et) : elemVal;
-            AssignToLValue(tuple.Elements[i], toAssign);
+            AssignToLValue(tuple.Elements[i], toAssign, preparedStores);
         }
+    }
+
+    /// <summary>Wave-9 round-6 [X2]-[X6]: pre-evaluate the receiver/index LEGS of every property/indexer
+    /// and array-element target of a deconstruction, left-to-right in lexical order (nested target tuples
+    /// included), BEFORE the caller evaluates the RHS — the C# order is "each target's component
+    /// expressions left-to-right, then the RHS, then the stores left-to-right". Returns a deferred store
+    /// per prepared target (keyed by the target operation, consumed by AssignToLValue), or null when no
+    /// target carries legs (plain locals/fields/discards — byte-identical to the pre-round-6 emission).</summary>
+    protected Dictionary<IOperation, System.Action<CLeaf>> PrepareDeconstructionTargets(ITupleOperation targetTuple)
+    {
+        Dictionary<IOperation, System.Action<CLeaf>> prepared = null;
+        void Walk(IOperation element)
+        {
+            switch (element)
+            {
+                case IDeclarationExpressionOperation declExpr:
+                    Walk(declExpr.Expression);
+                    break;
+                case ITupleOperation nested:
+                    foreach (var e in nested.Elements) Walk(e);
+                    break;
+                case IPropertyReferenceOperation propTarget:
+                    prepared ??= new Dictionary<IOperation, System.Action<CLeaf>>();
+                    prepared[propTarget] = PreparePropertySet(propTarget);
+                    break;
+                case IArrayElementReferenceOperation arrayElem:
+                    prepared ??= new Dictionary<IOperation, System.Action<CLeaf>>();
+                    prepared[arrayElem] = PrepareArrayElementSet(arrayElem);
+                    break;
+            }
+        }
+        foreach (var e in targetTuple.Elements) Walk(e);
+        return prepared;
+    }
+
+    /// <summary>Evaluate an array-element lvalue's array/index legs NOW and return the deferred
+    /// element store (wave-9 round-6 [X6]; the legs/value split twin of PreparePropertySet).</summary>
+    protected System.Action<CLeaf> PrepareArrayElementSet(IArrayElementReferenceOperation arrayElem)
+    {
+        var arrayVal = VisitExpression(arrayElem.ArrayReference);
+        var indexVal = VisitExpression(arrayElem.Indices[0]);
+        var arrSym = arrayElem.ArrayReference.Type as IArrayTypeSymbol;
+        var arrayType = GetArrayType(arrSym);
+        var elementType = GetArrayElemType(arrSym);
+        return value => EmitExternVoid($"{arrayType}.__Set__SystemInt32_{elementType}__SystemVoid",
+            new List<CLeaf> { arrayVal, indexVal, value });
     }
 
     /// <summary>Wave-9 round-5 [X2]/[X13]: the single property/indexer SET path, shared by simple
@@ -819,9 +871,24 @@ public abstract class HandlerBase
     /// arguments, then the value (valueFactory) — which is the [X2] fix: the old simple-assignment
     /// arm evaluated the RHS before the receiver and index args, so `this[i] = Step()`-style sites
     /// whose index/receiver expressions share state with the RHS diverged from the CLR.
-    /// Deconstruction callers ([X13]) pass an already-evaluated leaf, so the factory order is moot
-    /// there. Returns the stored value (the assignment-expression result).</summary>
+    /// Wave-9 round-6 [X2]-[X5]: split into PreparePropertySet (receiver/index legs, evaluated NOW)
+    /// + a deferred store, so deconstruction can evaluate every target's legs BEFORE the RHS.
+    /// Returns the stored value (the assignment-expression result).</summary>
     protected CLeaf EmitPropertySet(IPropertyReferenceOperation propRef, System.Func<CLeaf> valueFactory)
+    {
+        var store = PreparePropertySet(propRef);
+        var val = valueFactory();
+        store(val);
+        return val;
+    }
+
+    /// <summary>Evaluate a property/indexer SET target's receiver and index-argument legs NOW (in the
+    /// C# receiver → index args order) and return the deferred store that emits the actual SET with a
+    /// later-evaluated value. The single-assignment path (EmitPropertySet) runs legs → value → store,
+    /// byte-identical to the pre-split emission; the deconstruction path runs ALL targets' legs, then
+    /// the RHS, then the stores (wave-9 round-6 [X2]-[X5] — store-time leg evaluation inverted the C#
+    /// order and landed writes in the wrong cell when the legs read state the RHS mutates).</summary>
+    protected System.Action<CLeaf> PreparePropertySet(IPropertyReferenceOperation propRef)
     {
         // Aggregate (struct/tuple) auto-property → layout slot write on the backing object[].
         if (propRef.Instance is { Type: INamedTypeSymbol aggContaining } aggInst
@@ -829,10 +896,8 @@ public abstract class HandlerBase
             && _ctx.GetAggregateLayout(aggContaining).TryGetIndex(propRef.Property.Name, out var aggSlotIndex))
         {
             var arrExpr = LoadInstanceRaw(aggInst);
-            var aggVal = valueFactory();
-            EmitExternVoid("SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid",
+            return aggVal => EmitExternVoid("SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid",
                 new List<CLeaf> { arrExpr, Const(aggSlotIndex, "SystemInt32"), aggVal });
-            return aggVal;
         }
 
         // Computed (non-auto) struct property setter: p.Both = v → call the user setter with the receiver
@@ -842,9 +907,8 @@ public abstract class HandlerBase
             && _methodFunctions.ContainsKey(aggSetter.OriginalDefinition))
         {
             var aggRecv = LoadInstanceRaw(propRef.Instance);
-            var aggSetVal = valueFactory();
-            EmitExprStmt(EmitCallToMethod(aggSetter.OriginalDefinition, new List<CLeaf> { aggRecv, aggSetVal }));
-            return aggSetVal;
+            return aggSetVal => EmitExprStmt(
+                EmitCallToMethod(aggSetter.OriginalDefinition, new List<CLeaf> { aggRecv, aggSetVal }));
         }
 
         // User-defined indexer on a user STRUCT instance (`s[i] = v`) → call the setter with the struct
@@ -856,10 +920,11 @@ public abstract class HandlerBase
         {
             var setterArgs = new List<CLeaf> { LoadInstanceRaw(propRef.Instance) };
             setterArgs.AddRange(EvaluateIndexerArgs(propRef)); // wave-9 r4: named index args bind by ordinal
-            var aggIdxVal = valueFactory();
-            setterArgs.Add(aggIdxVal);
-            EmitExprStmt(EmitCallToMethod(aggIdxSetter.OriginalDefinition, setterArgs));
-            return aggIdxVal;
+            return aggIdxVal =>
+            {
+                setterArgs.Add(aggIdxVal);
+                EmitExprStmt(EmitCallToMethod(aggIdxSetter.OriginalDefinition, setterArgs));
+            };
         }
 
         // Virtual dispatch through `this` (round 7): a write inside an inherited base body binds
@@ -875,20 +940,20 @@ public abstract class HandlerBase
             // Wave-9 round-4: index args slotted by parameter ordinal (named/reordered index args
             // bind by name; the base[...] flavor rides this same arm via the base-instance copy).
             var thisIdxArgs = EvaluateIndexerArgs(propRef);
-            var thisIdxVal = valueFactory();
-            thisIdxArgs.Add(thisIdxVal);
-            EmitExprStmt(EmitCallToMethod(dispatchProp.SetMethod, thisIdxArgs));
-            return thisIdxVal;
+            return thisIdxVal =>
+            {
+                thisIdxArgs.Add(thisIdxVal);
+                EmitExprStmt(EmitCallToMethod(dispatchProp.SetMethod, thisIdxArgs));
+            };
         }
 
         // Static property setter (no instance) — e.g. Time.timeScale = 1.0f
         if (propRef.Instance == null)
         {
-            var staticVal = valueFactory();
             var staticValType = GetUdonType(propRef.Property.Type);
-            EmitExternVoid(ExternResolver.BuildPropertySetSignature(propContainingUdon, propRef.Property.Name, staticValType),
+            return staticVal => EmitExternVoid(
+                ExternResolver.BuildPropertySetSignature(propContainingUdon, propRef.Property.Name, staticValType),
                 new List<CLeaf> { staticVal });
-            return staticVal;
         }
 
         // Behaviour/MonoBehaviour have no Udon externs; resolve to actual type
@@ -911,10 +976,11 @@ public abstract class HandlerBase
             if (IsVariableReceiverBehaviourIndexer(propRef) && propRef.Property.SetMethod is { } recvIdxSetter)
             {
                 var orderedIdx = EvaluateIndexerArgs(propRef);
-                var recvIdxVal = valueFactory();
-                orderedIdx.Add(recvIdxVal);
-                EmitCrossIndexerCall(recvIdxSetter, instanceVal, orderedIdx); // void: self-emitting
-                return recvIdxVal;
+                return recvIdxVal =>
+                {
+                    orderedIdx.Add(recvIdxVal);
+                    EmitCrossIndexerCall(recvIdxSetter, instanceVal, orderedIdx); // void: self-emitting
+                };
             }
             // Wave-9 round-4 [X4]/[X9]: user indexer WRITE through an INTERFACE-typed receiver →
             // dispatch the setter through its interface bridge (index args + the value as the
@@ -923,11 +989,12 @@ public abstract class HandlerBase
             if (TryGetInterfaceAccessorLayout(propRef, propRef.Property.SetMethod, out var ifaceIdxSetMl))
             {
                 var ifaceOrderedIdx = EvaluateIndexerArgs(propRef);
-                var ifaceIdxVal = valueFactory();
-                ifaceOrderedIdx.Add(ifaceIdxVal);
-                EmitInterfaceAccessorCall(propRef.Property.SetMethod, ifaceIdxSetMl, instanceVal,
-                    ifaceOrderedIdx); // void: self-emitting
-                return ifaceIdxVal;
+                return ifaceIdxVal =>
+                {
+                    ifaceOrderedIdx.Add(ifaceIdxVal);
+                    EmitInterfaceAccessorCall(propRef.Property.SetMethod, ifaceIdxSetMl, instanceVal,
+                        ifaceOrderedIdx); // void: self-emitting
+                };
             }
             var indexArgs = new List<CLeaf> { instanceVal };
             var indexTypes = new List<string>();
@@ -936,15 +1003,17 @@ public abstract class HandlerBase
                 indexArgs.Add(VisitExpression(arg.Value));
                 indexTypes.Add(GetUdonType(arg.Value.Type));
             }
-            var externIdxVal = valueFactory();
-            indexArgs.Add(externIdxVal);
             var indexParamStr = string.Join("_", indexTypes);
-            // Indexer metadata name, not a hardcoded "Item" ([IndexerName] e.g. StringBuilder → "Chars").
-            EmitExternVoid($"{containingType}.__set_{propRef.Property.MetadataName}__{indexParamStr}_{valueType}__SystemVoid", indexArgs);
-            return externIdxVal;
+            return externIdxVal =>
+            {
+                indexArgs.Add(externIdxVal);
+                // Indexer metadata name, not a hardcoded "Item" ([IndexerName] e.g. StringBuilder → "Chars").
+                EmitExternVoid($"{containingType}.__set_{propRef.Property.MetadataName}__{indexParamStr}_{valueType}__SystemVoid", indexArgs);
+            };
         }
 
-        var srcVal = valueFactory();
+        return srcVal =>
+        {
         switch (propRef.Instance)
         {
             case IInstanceReferenceOperation
@@ -1009,7 +1078,7 @@ public abstract class HandlerBase
                 break;
             }
         }
-        return srcVal;
+        };
     }
 
     // ── Lambda / Local Function Helpers ──

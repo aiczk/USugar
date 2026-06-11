@@ -2356,7 +2356,13 @@ public class UasmEmitter
 
     // True if the caller body contains a call to callee that is NOT in tail position (its result is used
     // by something after the call, so the caller's live values would be clobbered by a recursive re-entry).
-    bool HasNonTailCallTo(IOperation op, IMethodSymbol callee)
+    // Wave-9 round-6 [X1]: statement-form tail positions count too — a void call (direct named call or
+    // `P = v;` setter write) that is the LAST statement executed before the implicit return reads nothing
+    // of its frame afterwards, exactly like `return Callee(args)`. Pre-fix these spilled every frame and
+    // overflowed the 512-entry __recurStack at depth (compile-clean VmFault on legal C#).
+    bool HasNonTailCallTo(IOperation op, IMethodSymbol callee) => HasNonTailCallTo(op, callee, tail: true);
+
+    bool HasNonTailCallTo(IOperation op, IMethodSymbol callee, bool tail)
     {
         if (op == null) return false;
         // `return Callee(args)` — the call itself is tail, but its argument/instance subexpressions are not.
@@ -2369,16 +2375,70 @@ public class UasmEmitter
                            ?? (tailInv as IPropertyReferenceOperation)?.Arguments
                            ?? System.Collections.Immutable.ImmutableArray<IArgumentOperation>.Empty;
             foreach (var arg in tailArgs)
-                if (HasNonTailCallTo(arg, callee)) return true;
-            return HasNonTailCallTo((tailInv as IInvocationOperation)?.Instance, callee);
+                if (HasNonTailCallTo(arg, callee, tail: false)) return true;
+            return HasNonTailCallTo((tailInv as IInvocationOperation)?.Instance, callee, tail: false);
+        }
+        if (tail)
+        {
+            switch (op)
+            {
+                // Method/accessor bodies arrive as IMethodBodyOperation (block XOR expression body).
+                case IMethodBodyBaseOperation mb:
+                    return HasNonTailCallTo(mb.BlockBody, callee, tail: true)
+                        || HasNonTailCallTo(mb.ExpressionBody, callee, tail: true);
+                // Only a block's LAST statement stays in tail position.
+                case IBlockOperation block:
+                {
+                    var ops = block.Operations;
+                    for (int i = 0; i < ops.Length; i++)
+                        if (HasNonTailCallTo(ops[i], callee, tail: i == ops.Length - 1)) return true;
+                    return false;
+                }
+                // Statement-form if/else in tail position: branches stay tail, the condition does not.
+                // Loops, usings, switches etc. deliberately fall to the generic non-tail walk below —
+                // code (back-edges, Dispose) runs after their last statement.
+                case IConditionalOperation cond:
+                    if (HasNonTailCallTo(cond.Condition, callee, tail: false)) return true;
+                    return HasNonTailCallTo(cond.WhenTrue, callee, tail: true)
+                        || HasNonTailCallTo(cond.WhenFalse, callee, tail: true);
+                case IExpressionStatementOperation exprStmt:
+                    return NonTailCallInTailStatement(exprStmt.Operation, callee);
+            }
         }
         if (IsInternalCallTo(op, callee, out _)) return true; // call not in tail position
         foreach (var child in op.Children)
         {
             if (child is ILocalFunctionOperation || child is IAnonymousFunctionOperation) continue; // own nodes
-            if (HasNonTailCallTo(child, callee)) return true;
+            if (HasNonTailCallTo(child, callee, tail: false)) return true;
         }
         return false;
+    }
+
+    // The discarded-result twin of the `return Callee(args)` arm above, for the expression of a TAIL
+    // statement. `Callee(args);` is a tail call (only its argument/instance legs are non-tail) UNLESS it
+    // carries ref/out arguments — their copy-back reads the param heap vars AFTER the call, and the tail
+    // classification gates the [Q2] re-chained-ref reject. `P = v;` / `this[i] = v;` as the tail statement
+    // runs the SETTER last: the setter reference is tail; the receiver, index args, and value are not
+    // (a get-only accessor match contributes no call at a simple-SET site at all — also fine to spare).
+    bool NonTailCallInTailStatement(IOperation expr, IMethodSymbol callee)
+    {
+        if (expr == null) return false;
+        if (expr is IInvocationOperation stmtInv && IsInternalCallTo(expr, callee, out _)
+            && stmtInv.TargetMethod.Parameters.All(p => p.RefKind == RefKind.None))
+        {
+            foreach (var arg in stmtInv.Arguments)
+                if (HasNonTailCallTo(arg, callee, tail: false)) return true;
+            return HasNonTailCallTo(stmtInv.Instance, callee, tail: false);
+        }
+        if (expr is ISimpleAssignmentOperation { Target: IPropertyReferenceOperation propTarget } setStmt
+            && IsInternalCallTo(propTarget, callee, out _))
+        {
+            if (HasNonTailCallTo(propTarget.Instance, callee, tail: false)) return true;
+            foreach (var arg in propTarget.Arguments)
+                if (HasNonTailCallTo(arg, callee, tail: false)) return true;
+            return HasNonTailCallTo(setStmt.Value, callee, tail: false);
+        }
+        return HasNonTailCallTo(expr, callee, tail: false);
     }
 
     bool IsInternalCallTo(IOperation op, IMethodSymbol callee, out IOperation call)

@@ -56,11 +56,14 @@ public class DeconstructionAssignmentHandler : AssignmentHandlerBase, IOperation
                 RecordLongLivedLambdaStore(targetTuple.Elements[i], valueTuple.Elements[i]);
                 GuardCaptureEscapeStore(targetTuple.Elements[i], valueTuple.Elements[i]);
             }
+            // Wave-9 round-6 [X2]/[X4]/[X5]: every target's receiver/index legs evaluate left-to-right
+            // BEFORE the RHS (C# order); the deferred stores below consume the cached legs.
+            var prepared = PrepareDeconstructionTargets(targetTuple);
             var snapshots = new List<CLeaf>(targetTuple.Elements.Length);
             for (int i = 0; i < targetTuple.Elements.Length; i++)
                 snapshots.Add(VisitExpression(valueTuple.Elements[i]));
             for (int i = 0; i < targetTuple.Elements.Length; i++)
-                AssignToLValue(targetTuple.Elements[i], snapshots[i]);
+                AssignToLValue(targetTuple.Elements[i], snapshots[i], prepared);
         }
         else
         {
@@ -73,6 +76,10 @@ public class DeconstructionAssignmentHandler : AssignmentHandlerBase, IOperation
             // shipped bundles into non-local lvalues silently (VM-proven: `t.Item1 = () => v;
             // (fs[i], x) = t;` in a loop). Guard ALL branches uniformly before any emission.
             GuardCaptureEscapeDeconstructionSource(callValue, targetTuple);
+
+            // Wave-9 round-6 [X3]/[X4]: target legs evaluate BEFORE the RHS on the non-tuple-literal
+            // branches too — C# evaluates each target's component expressions first, then the RHS.
+            var prepared = PrepareDeconstructionTargets(targetTuple);
 
             // (a, b) = tup where the RHS is a tuple/struct-typed VALUE expression (local/parameter/field/array
             // element), emulated as object[]. Read each element from the backing array; snapshot ALL reads
@@ -91,7 +98,7 @@ public class DeconstructionAssignmentHandler : AssignmentHandlerBase, IOperation
                         ? EmitDeepCloneAggregate(raw, et) : raw);
                 }
                 for (int i = 0; i < targetTuple.Elements.Length; i++)
-                    AssignToLValue(targetTuple.Elements[i], snaps[i]);
+                    AssignToLValue(targetTuple.Elements[i], snaps[i], prepared);
                 return;
             }
 
@@ -109,7 +116,7 @@ public class DeconstructionAssignmentHandler : AssignmentHandlerBase, IOperation
             {
                 // Cross-behaviour or interface tuple call:
                 // Emit the protocol manually and read back each element via GetProgramVariable
-                EmitCrossBehaviourTupleDeconstruction(invocation, callTarget, targetTuple, isCrossBehaviour);
+                EmitCrossBehaviourTupleDeconstruction(invocation, callTarget, targetTuple, isCrossBehaviour, prepared);
             }
             else
             {
@@ -136,7 +143,7 @@ public class DeconstructionAssignmentHandler : AssignmentHandlerBase, IOperation
                     {
                         var elemVal = ExternCall("SystemObjectArray.__Get__SystemInt32__SystemObject",
                             new List<CLeaf> { arrExpr, Const(i, "SystemInt32") }, "SystemObject");
-                        AssignToLValue(targetTuple.Elements[i], elemVal);
+                        AssignToLValue(targetTuple.Elements[i], elemVal, prepared);
                     }
                 }
                 else
@@ -145,7 +152,7 @@ public class DeconstructionAssignmentHandler : AssignmentHandlerBase, IOperation
                     for (int i = 0; i < targetTuple.Elements.Length && i < callReturns.Length; i++)
                     {
                         var elemVal = LoadField(callReturns[i].Id, callReturns[i].UdonType);
-                        AssignToLValue(targetTuple.Elements[i], elemVal);
+                        AssignToLValue(targetTuple.Elements[i], elemVal, prepared);
                     }
                 }
             }
@@ -186,9 +193,11 @@ public class DeconstructionAssignmentHandler : AssignmentHandlerBase, IOperation
     /// <summary>
     /// Handle tuple deconstruction from a cross-behaviour or interface method call.
     /// Emits SetProgramVariable for params, SendCustomEvent, then GetProgramVariable for each element.
+    /// Target legs arrive pre-evaluated in <paramref name="prepared"/> (wave-9 round-6 [X3]/[X4]).
     /// </summary>
     void EmitCrossBehaviourTupleDeconstruction(IInvocationOperation invocation, IMethodSymbol callTarget,
-        ITupleOperation targetTuple, bool isCrossBehaviour)
+        ITupleOperation targetTuple, bool isCrossBehaviour,
+        Dictionary<IOperation, System.Action<CLeaf>> prepared)
     {
         // §2.8 round-2: this manual emission path bypasses InvocationHandler, so the erasing-typed
         // argument guard must run here too.
@@ -254,7 +263,7 @@ public class DeconstructionAssignmentHandler : AssignmentHandlerBase, IOperation
             {
                 var elemVal = ExternCall("SystemObjectArray.__Get__SystemInt32__SystemObject",
                     new List<CLeaf> { arrVal, Const(i, "SystemInt32") }, "SystemObject");
-                AssignToLValue(targetTuple.Elements[i], elemVal);
+                AssignToLValue(targetTuple.Elements[i], elemVal, prepared);
             }
         }
         else
@@ -267,7 +276,7 @@ public class DeconstructionAssignmentHandler : AssignmentHandlerBase, IOperation
                     "VRCUdonCommonInterfacesIUdonEventReceiver.__GetProgramVariable__SystemString__SystemObject",
                     new List<CLeaf> { instanceVal, retNameConst },
                     callReturns[i].UdonType);
-                AssignToLValue(targetTuple.Elements[i], elemVal);
+                AssignToLValue(targetTuple.Elements[i], elemVal, prepared);
             }
         }
     }

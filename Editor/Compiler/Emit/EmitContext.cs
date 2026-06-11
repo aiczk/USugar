@@ -201,18 +201,72 @@ public class EmitContext
     public delegate bool SelfCallMatcher(IOperation op, out System.Collections.Immutable.ImmutableArray<IArgumentOperation> args);
 
     /// <summary>True if <paramref name="body"/> contains a NON-tail self-recursive call (per the matcher).
-    /// Conditional (`cond ? a : self(..)`) branches count as tail positions; the condition does not.</summary>
+    /// Conditional (`cond ? a : self(..)`) branches count as tail positions; the condition does not.
+    /// Wave-9 round-6 [X1]: STATEMENT-form tail positions count too — a void self-call that is the
+    /// LAST statement executed before the function's implicit return (`M(m-1);` / `da(m-1);` as the
+    /// final statement, including through nested blocks and if/else branches in tail position) reads
+    /// nothing of its frame afterwards, exactly like `return M(m-1);`. Pre-fix these spilled every
+    /// frame and overflowed the 512-entry __recurStack at depth (compile-clean VmFault on legal C#).</summary>
     public static bool HasNonTailSelfCall(IOperation body, SelfCallMatcher isSelf)
+        => HasNonTailSelfCall(body, isSelf, tail: true);
+
+    static bool HasNonTailSelfCall(IOperation body, SelfCallMatcher isSelf, bool tail)
     {
         if (body == null) return false;
         if (body is IReturnOperation ret) return NonTailInTailExpr(ret.ReturnedValue, isSelf);
+        if (tail)
+        {
+            switch (body)
+            {
+                // Method/accessor bodies arrive as IMethodBodyOperation (block XOR expression body).
+                case IMethodBodyBaseOperation mb:
+                    return HasNonTailSelfCall(mb.BlockBody, isSelf, tail: true)
+                        || HasNonTailSelfCall(mb.ExpressionBody, isSelf, tail: true);
+                // Only a block's LAST statement stays in tail position.
+                case IBlockOperation block:
+                {
+                    var ops = block.Operations;
+                    for (int i = 0; i < ops.Length; i++)
+                        if (HasNonTailSelfCall(ops[i], isSelf, tail: i == ops.Length - 1)) return true;
+                    return false;
+                }
+                // A statement-form if/else in tail position: branches stay tail, the condition does not
+                // (mirrors the expression-form conditional rule in NonTailInTailExpr). Loops, usings,
+                // switches etc. deliberately fall through to the generic non-tail walk below — code
+                // (back-edges, Dispose) runs after their last statement.
+                case IConditionalOperation cond:
+                    if (AnySelfCall(cond.Condition, isSelf)) return true;
+                    return HasNonTailSelfCall(cond.WhenTrue, isSelf, tail: true)
+                        || HasNonTailSelfCall(cond.WhenFalse, isSelf, tail: true);
+                case IExpressionStatementOperation exprStmt:
+                    return NonTailInTailStatement(exprStmt.Operation, isSelf);
+            }
+        }
         if (isSelf(body, out _)) return true; // self-call as a statement / non-tail position
         foreach (var child in body.Children)
         {
             if (child is ILocalFunctionOperation || child is IAnonymousFunctionOperation) continue;
-            if (HasNonTailSelfCall(child, isSelf)) return true;
+            if (HasNonTailSelfCall(child, isSelf, tail: false)) return true;
         }
         return false;
+    }
+
+    /// <summary>The discarded-result twin of NonTailInTailExpr: classify the expression of a TAIL
+    /// statement. A matched self-call is tail (only its argument/receiver subexpressions are non-tail);
+    /// a call carrying ref/out arguments is NOT spared — its copy-back reads the param heap vars AFTER
+    /// the call, and the tail classification also gates the [Q2] re-chained-ref reject.</summary>
+    static bool NonTailInTailStatement(IOperation expr, SelfCallMatcher isSelf)
+    {
+        if (expr == null) return false;
+        if (isSelf(expr, out var args)
+            && (expr is not IInvocationOperation refInv
+                || refInv.TargetMethod.Parameters.All(p => p.RefKind == RefKind.None)))
+        {
+            foreach (var a in args)
+                if (AnySelfCall(a, isSelf)) return true;
+            return AnySelfCall((expr as IInvocationOperation)?.Instance, isSelf);
+        }
+        return AnySelfCall(expr, isSelf);
     }
 
     static bool NonTailInTailExpr(IOperation expr, SelfCallMatcher isSelf)
