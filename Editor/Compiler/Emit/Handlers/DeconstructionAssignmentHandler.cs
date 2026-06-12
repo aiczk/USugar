@@ -106,7 +106,12 @@ public class DeconstructionAssignmentHandler : AssignmentHandlerBase, IOperation
                 throw new System.NotSupportedException(
                     $"Unsupported tuple deconstruction value: {op.Value.GetType().Name}");
 
-            var callTarget = invocation.TargetMethod;
+            // Wave-9 round-7 [Y5]: a same-class generic callee inside a generic body carries OPEN
+            // type args (`var (a,b) = P2<T>(x)` with the enclosing T in scope) — resolve through
+            // the enclosing specialization's type-param map so the return-slot lookup below sees
+            // the same monomorphized symbol the invocation emission registers. Closed/non-generic
+            // callees pass through unchanged (SubstituteMethodTypeArgs is identity for them).
+            var callTarget = SubstituteMethodTypeArgs(invocation.TargetMethod);
             var isCrossBehaviour = ExternResolver.IsUdonSharpBehaviour(callTarget.ContainingType)
                 && invocation.Instance is not IInstanceReferenceOperation
                 && callTarget.ContainingType.Name != "UdonSharpBehaviour";

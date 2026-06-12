@@ -518,6 +518,17 @@ public abstract class HandlerBase
             && _methodParamVarIds.TryGetValue(_currentMethod, out var specParamIds)
             && param.Ordinal < specParamIds.Length)
             return specParamIds[param.Ordinal];
+        // Wave-9 round-7 [Y3]: a hoisted lambda/local-function body inside a GENERIC method reads
+        // the enclosing method's parameter. The reference binds the generic DEFINITION's parameter
+        // symbol (the closure body is the definition's operation tree) while the param heap vars
+        // are registered under the monomorphized SPEC — and _currentMethod here is the closure, not
+        // the spec, so neither arm above fires. A capturing closure pins its generic to a single
+        // instantiation ([X6] round 5 reject), so FirstGenericSpec is the exact owner.
+        if (param.ContainingSymbol is IMethodSymbol genericOwner && genericOwner.IsGenericMethod
+            && _ctx.FirstGenericSpec.TryGetValue(genericOwner.OriginalDefinition, out var ownerSpec)
+            && _methodParamVarIds.TryGetValue(ownerSpec, out var ownerSpecIds)
+            && param.Ordinal < ownerSpecIds.Length)
+            return ownerSpecIds[param.Ordinal];
         throw new InvalidOperationException(
             $"Cannot resolve parameter '{param.Name}' (ordinal {param.Ordinal}) "
           + $"in method '{_currentMethod?.Name ?? "(none)"}'. "
@@ -749,20 +760,26 @@ public abstract class HandlerBase
                 }
                 break;
 
-            case IFieldReferenceOperation { Instance: IInstanceReferenceOperation } fieldRef:
-                EmitStoreField(fieldRef.Field.Name, value);
+            // Wave-9 round-7 [Y2]/[Y4]-[Y10]: field lvalues with receiver legs (struct member chains,
+            // struct-array-element receivers, cross-behaviour/extern variable receivers) route through
+            // the shared TryPrepareFieldSet path. Deconstruction callers supply pre-RHS legs via
+            // preparedStores (C# evaluates every target's component expressions BEFORE the RHS —
+            // store-time legs landed writes in the WRONG CELL when a leg read state the RHS mutated);
+            // other callers (`ref p.v` copy-back, nested-tuple legs) prepare at the store point,
+            // byte-identical to the old inline aggregate arm. Cross-behaviour / extern field targets
+            // were a loud "Unsupported l-value target" before this arm.
+            case IFieldReferenceOperation prepFieldRef
+                when preparedStores != null && preparedStores.TryGetValue(prepFieldRef, out var preparedFieldStore):
+                preparedFieldStore(value);
                 break;
 
-            // Field on a user STRUCT instance (`p.v`) as an l-value target — e.g. `ref p.v` copy-back or
-            // `(p.v, …) = …` deconstruction. The struct is an object[]; write the field's layout slot in place
-            // (the receiver array is shared, so the mutation reflects back to the caller's local).
-            case IFieldReferenceOperation aggFieldRef
-                when aggFieldRef.Instance != null
-                && aggFieldRef.Instance.Type is INamedTypeSymbol aggFieldType
-                && EmitContext.IsAggregateType(aggFieldType)
-                && _ctx.GetAggregateLayout(aggFieldType).TryGetIndex(aggFieldRef.Field, out var aggElemIdx):
-                EmitExternVoid("SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid",
-                    new List<CLeaf> { LoadInstanceRaw(aggFieldRef.Instance), Const(aggElemIdx, "SystemInt32"), value });
+            case IFieldReferenceOperation lateFieldRef when TryPrepareFieldSet(lateFieldRef) is { } lateFieldStore:
+                lateFieldStore(value);
+                break;
+
+            // Behaviour this-field (no legs; TryPrepareFieldSet returns null for it).
+            case IFieldReferenceOperation { Instance: IInstanceReferenceOperation } fieldRef:
+                EmitStoreField(fieldRef.Field.Name, value);
                 break;
 
             case IParameterReferenceOperation paramRef:
@@ -847,10 +864,133 @@ public abstract class HandlerBase
                     prepared ??= new Dictionary<IOperation, System.Action<CLeaf>>();
                     prepared[arrayElem] = PrepareArrayElementSet(arrayElem);
                     break;
+                // Wave-9 round-7 [Y2]/[Y4]/[Y6]/[Y8]/[Y10]: FIELD targets with receiver legs
+                // (struct-array-element receivers `arr[i].v`, member chains, cross-behaviour
+                // variable receivers) — the round-6 pass covered property/indexer/array-element
+                // leaves only, so field-target legs kept store-time evaluation (wrong cell when a
+                // leg read state the RHS mutates; VM-proven ref=702 vs 72). Behaviour this-fields
+                // return null (no legs) and keep the plain store.
+                case IFieldReferenceOperation fieldTarget:
+                    if (TryPrepareFieldSet(fieldTarget) is { } fieldStore)
+                    {
+                        prepared ??= new Dictionary<IOperation, System.Action<CLeaf>>();
+                        prepared[fieldTarget] = fieldStore;
+                    }
+                    break;
             }
         }
         foreach (var e in targetTuple.Elements) Walk(e);
         return prepared;
+    }
+
+    /// <summary>Pure (no-emission) twin of TryPrepareFieldSet's arm dispatch: true exactly when
+    /// TryPrepareFieldSet would return a store (aggregate member slot, cross-behaviour field,
+    /// extern value-type / reference-type field), false for behaviour this-fields and static
+    /// fields. Lets callers decide evaluation ORDER before any legs are emitted.</summary>
+    protected bool IsPreparableFieldSetTarget(IFieldReferenceOperation fieldRef)
+    {
+        if (fieldRef.Instance == null) return false;                       // static — no receiver legs
+        if (fieldRef.Instance is not IInstanceReferenceOperation) return true; // variable receiver — always a prepared arm
+        return fieldRef.Field.ContainingType.IsValueType                   // struct `this.v` (emulated receiver)
+            || (TryGetAggregateMemberTarget(fieldRef, out var inst, out var name)
+                && inst.Type is INamedTypeSymbol agg && EmitContext.IsAggregateType(agg)
+                && _ctx.GetAggregateLayout(agg).TryGetIndex(name, out _));
+    }
+
+    /// <summary>Wave-9 round-7 [Y2]: true when evaluating this expression can neither produce a
+    /// side effect nor be perturbed by another expression's side effects — literals, pure reads
+    /// (locals/params/fields/array elements), and built-in operators only. Used to keep the legacy
+    /// value-first field-SET emission order (pinned UASM byte-stability — struct_ref_param's
+    /// `x.v = x.v + 1` emits receiver-leg COPYs whose position is pinned) exactly where the C#
+    /// legs-before-RHS order is unobservable. ANY non-whitelisted node (invocation, property read,
+    /// user-defined operator, object creation, assignment, inc/dec, …) forces the C# order.</summary>
+    protected static bool IsEmissionOrderInert(IOperation op)
+    {
+        switch (op)
+        {
+            case ILiteralOperation:
+            case ILocalReferenceOperation:
+            case IParameterReferenceOperation:
+            case IInstanceReferenceOperation:
+            case IFieldReferenceOperation:
+            case IArrayElementReferenceOperation:
+            case ITupleOperation:
+            case IDefaultValueOperation:
+            case ITypeOfOperation:
+            case INameOfOperation:
+            case ISizeOfOperation:
+            case IConversionOperation { OperatorMethod: null }:
+            case IUnaryOperation { OperatorMethod: null }:
+            case IBinaryOperation { OperatorMethod: null }:
+                foreach (var child in op.Children)
+                    if (!IsEmissionOrderInert(child)) return false;
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    /// <summary>Wave-9 round-7 [Y2]/[Y4]-[Y10]: the single field SET path, shared by simple
+    /// assignment and deconstruction lvalues (the field twin of PreparePropertySet /
+    /// PrepareArrayElementSet). Evaluates the target's receiver legs NOW (C# order: the lvalue's
+    /// component expressions run BEFORE the RHS) and returns the deferred store. Arms mirror the
+    /// pre-round-7 SimpleAssignmentHandler order verbatim: aggregate member slot → cross-behaviour
+    /// SetProgramVariable → extern value-type field → extern reference-type field. Returns null for
+    /// behaviour this-fields and static fields (no legs) — callers keep their direct-store fallback.
+    /// Keep the arm dispatch in lockstep with IsPreparableFieldSetTarget above.</summary>
+    protected System.Action<CLeaf> TryPrepareFieldSet(IFieldReferenceOperation fieldRef)
+    {
+        // Aggregate (struct/tuple) member → layout slot write on the backing object[].
+        if (TryGetAggregateMemberTarget(fieldRef, out var aggInstance, out var aggMemberName)
+            && aggInstance.Type is INamedTypeSymbol aggContaining && EmitContext.IsAggregateType(aggContaining)
+            && _ctx.GetAggregateLayout(aggContaining).TryGetIndex(aggMemberName, out var fieldIndex))
+        {
+            var arrExpr = LoadInstanceRaw(aggInstance);
+            return value => EmitExternVoid("SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid",
+                new List<CLeaf> { arrExpr, Const(fieldIndex, "SystemInt32"), value });
+        }
+
+        // Cross-behaviour field → one SetProgramVariable (a delegate field ships the bundle
+        // REFERENCE — design §2.3; only the tuple-return delegate reject stays special, §3.4-3).
+        if (fieldRef is { Instance: not null and not IInstanceReferenceOperation }
+            && ExternResolver.IsUdonSharpBehaviour(fieldRef.Field.ContainingType))
+        {
+            if (fieldRef.Field.Type is INamedTypeSymbol dlgType && dlgType.DelegateInvokeMethod != null
+                && dlgType.DelegateInvokeMethod.ReturnType.IsTupleType)
+                throw new System.NotSupportedException(
+                    $"Tuple-return delegate field '{fieldRef.Field.Name}' is not supported.");
+            var crossInstanceVal = VisitExpression(fieldRef.Instance);
+            var nameConst = Const(fieldRef.Field.Name, "SystemString");
+            return value => EmitExternVoid(
+                "VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid",
+                new List<CLeaf> { crossInstanceVal, nameConst, value });
+        }
+
+        // Extern value-type field (e.g. a Vector3 component) → extern field setter.
+        if (fieldRef.Instance != null && fieldRef.Field.ContainingType.IsValueType)
+        {
+            var vtContainingType = GetUdonType(fieldRef.Field.ContainingType);
+            var vtInstanceVal = fieldRef.Instance is IInstanceReferenceOperation
+                ? LoadField(_ctx.DeclareThisOnce(vtContainingType), vtContainingType)
+                : VisitExpression(fieldRef.Instance);
+            var vtSig = ExternResolver.BuildFieldSetSignature(
+                vtContainingType, fieldRef.Field.Name, GetUdonType(fieldRef.Field.Type));
+            return value => EmitExternVoid(vtSig, new List<CLeaf> { vtInstanceVal, value });
+        }
+
+        // Extern reference-type field through a variable receiver → extern field setter.
+        if (fieldRef is { Instance: not null and not IInstanceReferenceOperation }
+            && !fieldRef.Field.ContainingType.IsValueType
+            && !ExternResolver.IsUdonSharpBehaviour(fieldRef.Field.ContainingType))
+        {
+            var refInstanceVal = VisitExpression(fieldRef.Instance);
+            var refSig = ExternResolver.BuildFieldSetSignature(
+                GetUdonType(fieldRef.Field.ContainingType), fieldRef.Field.Name,
+                GetUdonType(fieldRef.Field.Type), isValueType: false);
+            return value => EmitExternVoid(refSig, new List<CLeaf> { refInstanceVal, value });
+        }
+
+        return null; // behaviour this-field / static field — no legs
     }
 
     /// <summary>Evaluate an array-element lvalue's array/index legs NOW and return the deferred
