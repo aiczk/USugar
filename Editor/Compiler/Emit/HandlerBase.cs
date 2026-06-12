@@ -238,8 +238,8 @@ public abstract class HandlerBase
         => _builder.EmitExternVoid(ResolveExtern(sig), args, reentrant);
 
     /// <summary>Create an internal call expression.</summary>
-    protected CSlotRef InternalCall(string funcName, List<CLeaf> args, string retType)
-        => _builder.InternalCall(funcName, args, retType);
+    protected CSlotRef InternalCall(string funcName, List<CLeaf> args, string retType, bool tailSpared = false)
+        => _builder.InternalCall(funcName, args, retType, tailSpared);
 
     /// <summary>Emit a cross-behaviour call. Single-return → materialized to a scratch slot (returns the
     /// leaf); void or multi-return → side-effecting statement (returns null).</summary>
@@ -1781,6 +1781,19 @@ public abstract class HandlerBase
             // a `this`-rooted chain stays legal — the pre-scan records every chain member.
             case IFieldReferenceOperation or IPropertyReferenceOperation:
             {
+                // Round-9 [Y11]/[Y15]: a BEHAVIOUR member reached through a VARIABLE receiver
+                // (own-class local `v = this; v.hook = …`, base-typed local, behaviour field
+                // `other.cb = …`, tuple-decon target legs alike) is loud — the receiver's identity
+                // is a runtime value, so the per-class pre-scan cannot make the landing program's
+                // reads loud, and a cross-instance store would ship a bundle whose captured cells
+                // live in THIS program's heap. Only `this`-receivers (incl. cast-of-this) keep the
+                // legal direct-store surface; struct envelope chains are untouched (their
+                // containing type is not a behaviour).
+                static IOperation UnwrapRecv(IOperation r)
+                {
+                    while (r is IConversionOperation c) r = c.Operand;
+                    return r;
+                }
                 var root = target;
                 while (true)
                 {
@@ -1788,11 +1801,19 @@ public abstract class HandlerBase
                     {
                         if (IsForeignClassMember(rf.Field))
                             throw new System.NotSupportedException(CaptureEscapeError);
+                        if (ExternResolver.IsUdonSharpBehaviour(rf.Field.ContainingType)
+                            && rf.Instance != null
+                            && UnwrapRecv(rf.Instance) is not IInstanceReferenceOperation)
+                            throw new System.NotSupportedException(CaptureEscapeError);
                         root = rf.Instance; continue;
                     }
                     if (root is IPropertyReferenceOperation rp)
                     {
                         if (IsForeignClassMember(rp.Property))
+                            throw new System.NotSupportedException(CaptureEscapeError);
+                        if (ExternResolver.IsUdonSharpBehaviour(rp.Property.ContainingType)
+                            && rp.Instance != null
+                            && UnwrapRecv(rp.Instance) is not IInstanceReferenceOperation)
                             throw new System.NotSupportedException(CaptureEscapeError);
                         root = rp.Instance; continue;
                     }
@@ -1844,6 +1865,26 @@ public abstract class HandlerBase
     /// (single source of truth, shared with the pre-scans).</summary>
     protected bool IsForeignClassMember(ISymbol member)
         => EmitContext.IsForeignOrInterfaceMember(member, _ctx.ClassSymbol);
+
+    /// <summary>Most-derived override of <paramref name="baseMethod"/> reachable from the compiled type
+    /// (_classSymbol), or baseMethod itself if none — mirrors C# virtual dispatch for a `this` call whose
+    /// static target is a base declaration. Round-8 [R8]: GetMembers returns the UNCONSTRUCTED member,
+    /// so a generic virtual called through this lost its type arguments and monomorphized the open
+    /// definition — the SDK assembler then ICEd with TypeResolverException 'T' (even same-class).
+    /// Re-construct the resolved member with the original call's type arguments. (Moved from
+    /// InvocationHandler in round 9 — StatementHandler's TCO gate shares it.)</summary>
+    protected IMethodSymbol ResolveMostDerivedOverride(IMethodSymbol baseMethod)
+    {
+        var def = baseMethod.OriginalDefinition;
+        for (var t = _classSymbol; t != null; t = t.BaseType)
+            foreach (var m in t.GetMembers(baseMethod.Name).OfType<IMethodSymbol>())
+                for (IMethodSymbol o = m; o != null; o = o.OverriddenMethod)
+                    if (SymbolEqualityComparer.Default.Equals(o.OriginalDefinition, def))
+                        return baseMethod.IsGenericMethod && m.IsGenericMethod
+                            ? m.OriginalDefinition.Construct(baseMethod.TypeArguments.ToArray())
+                            : m;
+        return baseMethod;
+    }
 
     // ── Generic Monomorphization ──
 
@@ -1999,13 +2040,23 @@ public abstract class HandlerBase
             // an inherited/foreign generic target has no local body registration — loud per §8-3.
             var constructed = SubstituteMethodTypeArgs(targetMethod);
             bool unresolved = constructed.TypeArguments.Any(ta => ta is ITypeParameterSymbol);
-            if (unresolved || targetInstance != null || baseReceiver
-                || !SymbolEqualityComparer.Default.Equals(constructed.OriginalDefinition.ContainingType, _classSymbol))
+            // Wave-9 round-9 [Y7]: an INHERITED user-base generic method is part of the class
+            // family — round-8 [Y11] made its closed specializations emit in THIS program (the
+            // call flavor already worked), so the method-group flavor bridges the same on-demand
+            // spec. Foreign/SDK declarers stay loud (their bodies never live in this program).
+            var declType = constructed.OriginalDefinition.ContainingType;
+            bool declaredOnFamily = SymbolEqualityComparer.Default.Equals(declType, _classSymbol);
+            if (!declaredOnFamily && declType != null && declType.DeclaringSyntaxReferences.Length > 0
+                && declType.Name != "UdonSharpBehaviour"
+                && !USugarCompilerHelper.IsFrameworkNamespace(declType.ContainingNamespace))
+                for (var bt = _classSymbol.BaseType; bt != null; bt = bt.BaseType)
+                    if (SymbolEqualityComparer.Default.Equals(bt, declType)) { declaredOnFamily = true; break; }
+            if (unresolved || targetInstance != null || baseReceiver || !declaredOnFamily)
                 throw new System.NotSupportedException(
                     $"A delegate can only be created from generic method '{targetMethod.Name}' when it is "
-                    + "declared on the compiled class, accessed through 'this', and every type argument "
-                    + "resolves to a concrete type at the creation site (the specialization's bridge must "
-                    + "live in this program).");
+                    + "declared on the compiled class or an inherited user base class, accessed through "
+                    + "'this', and every type argument resolves to a concrete type at the creation site "
+                    + "(the specialization's bridge must live in this program).");
             RegisterGenericSpecialization(constructed);
             bridgeExportName = $"__dlg_{_methodFunctions[constructed].Name}";
             var specSnapshot = _ctx.TypeParamMap != null
@@ -2307,7 +2358,7 @@ public abstract class HandlerBase
     /// Returns the result CValue — this is an expression only, NOT emitted to the IR.
     /// For void calls (e.g. property setters), wrap with <c>EmitExprStmt()</c> to add to the IR.
     /// </summary>
-    protected CLeaf EmitCallToMethod(IMethodSymbol target, List<CLeaf> args)
+    protected CLeaf EmitCallToMethod(IMethodSymbol target, List<CLeaf> args, SyntaxNode callSite = null)
     {
         if (!_methodFunctions.TryGetValue(target, out var func))
             throw new InvalidOperationException($"No CFunction registered for method '{target.Name}'");
@@ -2318,8 +2369,17 @@ public abstract class HandlerBase
         // frame fields to save; the post-coalesce InsertRecursionSpills pass wraps the call with spill/reload
         // of those fields PLUS only the slots live across the call — bounded under A-normal form, where an
         // emit-time total-spill of every (now numerous) scratch slot would overflow the software stack.
+        // Wave-9 round-9 [Y3]: spilling is per-SITE — a tail-position site (pre-computed syntax-keyed by
+        // BuildRecursionInfo, exactly like the dispatch arm's ReentrantDispatchSites) reads nothing of its
+        // frame after the call, so it is flagged TailSpared instead of wrapped; ONE non-tail site used to
+        // make EVERY site of the callee spill and deep mixed tail/non-tail recursion overflowed the
+        // 512-entry __recurStack (compile-clean VmFault on legal C#).
         if (IsRecursiveEdge(_currentMethod, target))
         {
+            bool tailSpared = callSite != null && _ctx.TailSparedDirectCallSites != null
+                && _ctx.TailSparedDirectCallSites.Contains(callSite);
+            if (tailSpared)
+                return InternalCall(func.Name, args, retType, tailSpared: true);
             _ctx.EnsureRecursionStack();
             _builder.CurrentFunction.RecursiveCalleeNames.Add(func.Name);
             AccumulateRecursionSpillFields(_builder.CurrentFunction);

@@ -167,10 +167,14 @@ public static class CoreFlatOptimizer
     static bool IsSpillSite(CStmt inst, HashSet<string> names)
         => IsRecursiveCall(inst, names) || IsReentrantFlagged(inst);
 
+    // Round-9 [Y3]: a TailSpared instruction is a recursive-edge call SITE in tail position — the
+    // frame reads nothing after it, so it is exempt from the per-callee-name wrap (one non-tail
+    // site used to make every site of that callee spill, overflowing the stack on deep mixed
+    // tail/non-tail recursion; the dispatch arm has always been per-site via Reentrant).
     static bool IsRecursiveCall(CStmt inst, HashSet<string> names) => inst switch
     {
-        CExprStmt { Expr: CInternalCall ic } => names.Contains(ic.FuncName),
-        CAssign { Value: CInternalCall ic } => names.Contains(ic.FuncName),
+        CExprStmt { Expr: CInternalCall ic } => !ic.TailSpared && names.Contains(ic.FuncName),
+        CAssign { Value: CInternalCall ic } => !ic.TailSpared && names.Contains(ic.FuncName),
         _ => false,
     };
 
@@ -548,10 +552,11 @@ public static class CoreFlatOptimizer
         CAssign m => new CAssign(RemapSlotId(m.DestSlot, mapping), RemapOperand(m.Value, mapping)),
         CLoadField lf => new CLoadField(RemapSlotId(lf.DestSlot, mapping), lf.FieldName, lf.Type),
         CStoreField sf => new CStoreField(sf.FieldName, RemapLeaf(sf.Value, mapping)),
-        // Reentrant MUST be copied: this rebuild is the second flag-killing reconstruction site
-        // (with CoreFlatten.LowerExpr — design §4.3); FlatVerify checks conservation after the pass.
+        // Reentrant (and round-9 [Y3] TailSpared) MUST be copied: this rebuild is the second
+        // flag-killing reconstruction site (with CoreFlatten.LowerExpr — design §4.3); FlatVerify
+        // checks Reentrant conservation after the pass.
         CExprStmt { Expr: CExternCall ce } => new CExprStmt(new CExternCall(ce.Sig, RemapArgs(ce.Args, mapping), ce.Type, RemapSlotIdNullable(ce.DestSlot, mapping), ce.Reentrant)),
-        CExprStmt { Expr: CInternalCall ci } => new CExprStmt(new CInternalCall(ci.FuncName, RemapArgs(ci.Args, mapping), ci.Type, RemapSlotIdNullable(ci.DestSlot, mapping), ci.Reentrant)),
+        CExprStmt { Expr: CInternalCall ci } => new CExprStmt(new CInternalCall(ci.FuncName, RemapArgs(ci.Args, mapping), ci.Type, RemapSlotIdNullable(ci.DestSlot, mapping), ci.Reentrant, ci.TailSpared)),
         _ => inst,
     };
 

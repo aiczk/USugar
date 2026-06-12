@@ -57,7 +57,16 @@ public class StatementHandler : HandlerBase, IOperationHandler
             case IConditionalOperation op: VisitConditional(op); break;
             case IReturnOperation op: VisitReturn(op); break;
             case IBranchOperation op: VisitBranch(op); break;
-            case ILocalFunctionOperation op: RegisterLocalFunction(op.Symbol); break;
+            // Round-9 [Y8]: generic local functions are monomorphized per call site
+            // (RegisterGenericSpecialization), exactly like generic methods — registering the
+            // DEFINITION here declared 'T'-typed param/return heap vars, and the spec body
+            // emission bound THOSE instead of the spec's own (CReturn type-mismatch ICE on a
+            // single legal instantiation). Non-generic local functions still register at the
+            // declaration so declaration-first shapes keep their index allocation order.
+            case ILocalFunctionOperation op:
+                if (!op.Symbol.IsGenericMethod)
+                    RegisterLocalFunction(op.Symbol);
+                break;
             case ILabeledOperation labeled:
                 _builder.EmitLabel(labeled.Label.Name);
                 if (labeled.Operation != null)
@@ -150,9 +159,22 @@ public class StatementHandler : HandlerBase, IOperationHandler
         // loop treated `ref w` as a value arg, so every frame's writes threaded one param cell and the
         // outer copy-back read the innermost value (VM-proven 21021 vs CLR 9021). Fall through to the
         // ordinary call path, whose unfiltered cycle-edge guard rejects the re-chain loudly (§8-3).
+        // Round-9: TCO must compare against the RESOLVED dispatch target, not the syntactic one.
+        // Inside a BASE-COPY body a virtual self-call's semantic TargetMethod IS the base method
+        // (== _currentMethod), but C# dispatches the compiled class's LEAF override — the goto
+        // short-circuited the override (each "recursive" frame ran only the base body; VM-proven
+        // outv 363 vs CLR 528 at depth 30 once the cross-method ref-thread acceptance let the
+        // shape compile). The leaf's own self-call resolves to itself, keeping TCO byte-identical
+        // for every non-base-copy shape.
         if (op.ReturnedValue is IInvocationOperation tailCall
             && _currentMethod != null
             && SymbolEqualityComparer.Default.Equals(tailCall.TargetMethod, _currentMethod)
+            && (tailCall.Instance is not IInstanceReferenceOperation
+                || tailCall.TargetMethod.IsStatic
+                || !(tailCall.TargetMethod.IsVirtual || tailCall.TargetMethod.IsOverride
+                     || tailCall.TargetMethod.IsAbstract)
+                || SymbolEqualityComparer.Default.Equals(
+                    ResolveMostDerivedOverride(tailCall.TargetMethod), _currentMethod))
             && TailCallRefArgsSelfThreaded(tailCall))
         {
             EmitTailCall(tailCall);

@@ -235,10 +235,10 @@ public sealed class CoreBuilder
         return Bind(new CExternCall(sig, args, retType), retType);
     }
 
-    public CSlotRef InternalCall(string funcName, List<CLeaf> args, string retType)
+    public CSlotRef InternalCall(string funcName, List<CLeaf> args, string retType, bool tailSpared = false)
     {
-        if (retType == "SystemVoid") { Emit(new CExprStmt(new CInternalCall(funcName, args, retType))); return null; }
-        return Bind(new CInternalCall(funcName, args, retType), retType);
+        if (retType == "SystemVoid") { Emit(new CExprStmt(new CInternalCall(funcName, args, retType, tailSpared: tailSpared))); return null; }
+        return Bind(new CInternalCall(funcName, args, retType, tailSpared: tailSpared), retType);
     }
 
     /// <summary>Cross-behaviour call (SetProgramVariable* + SendCustomEvent + GetProgramVariable*).

@@ -787,7 +787,13 @@ public class UasmEmitter
         var baseInstanceMethods = CollectBaseInstanceMethods(methods)
             .Where(bm => !methodSet.Contains(bm))
             .ToArray();
-        var collectorSeeds = methods.Concat(baseInstanceMethods).ToArray();
+        // Wave-9 round-9 [Y6]: open-generic base definitions seed the collectors too — their bodies
+        // emit on demand (round-8 [Y11]) and a struct/foreign-static call inside them (e.g. a
+        // using/Dispose) previously had no CFunction registered (loud ICE on legal C#). They are
+        // NOT registered as copies (no single monomorphization) — seeds only.
+        var collectorSeeds = methods.Concat(baseInstanceMethods)
+            .Concat(_openGenericBaseDefs.Where(d => !methodSet.Contains(d)))
+            .ToArray();
 
         // Collect foreign static methods
         var foreignStatics = CollectForeignStaticMethods(collectorSeeds);
@@ -1247,8 +1253,11 @@ public class UasmEmitter
         // whose semantics depend on T pins its generic to ONE instantiation (the [X6] r5 reject,
         // widened in round 8 to type-param-referencing closures), so FirstGenericSpec is the exact
         // owner. Walk up through enclosing closures to (possibly nested) generic owners.
+        // Round-9 [Y8]: also runs for a generic LOCAL FUNCTION spec (isGenericSpec) nested in a
+        // generic method — the spec map above holds only the LF's OWN type params, so the
+        // enclosing generic's params are MERGED in (never replacing the spec map).
         bool closureMapSet = false;
-        if (!isGenericSpec && method.MethodKind is MethodKind.LocalFunction
+        if (method.MethodKind is MethodKind.LocalFunction
             or MethodKind.LambdaMethod or MethodKind.AnonymousFunction)
         {
             Dictionary<ITypeParameterSymbol, ITypeSymbol> closureMap = null;
@@ -1263,10 +1272,16 @@ public class UasmEmitter
                         closureMap[ownerDef.TypeParameters[i]] = ownerSpec.TypeArguments[i];
                 }
             }
-            if (closureMap != null)
+            if (closureMap != null && _typeParamMap == null)
             {
                 _typeParamMap = closureMap;
                 closureMapSet = true;
+            }
+            else if (closureMap != null)
+            {
+                foreach (var kv in closureMap)
+                    if (!_typeParamMap.ContainsKey(kv.Key))
+                        _typeParamMap[kv.Key] = kv.Value;
             }
         }
 
@@ -1280,6 +1295,20 @@ public class UasmEmitter
             var model = _compilation.GetSemanticModel(tree);
 
             var bodyOp = model.GetOperation(syntax);
+
+            // Round-9 [Y8]: a LOCAL FUNCTION's method symbol compares EQUAL across operation-tree
+            // walks, but its TYPE PARAMETER symbols do NOT (fresh per-walk instances with
+            // reference equality) — so the spec map keyed by the CALL SITE walk's T misses every
+            // body-walk reference and the body type-checks as raw 'T' (CReturn ICE on a single
+            // legal instantiation). Re-key the instantiation map with the body symbol's own
+            // type parameters; class-level generic methods share symbols and are unaffected.
+            if (isGenericSpec && bodyOp is ILocalFunctionOperation lfDefOp
+                && lfDefOp.Symbol.TypeParameters.Length == method.TypeArguments.Length)
+            {
+                for (int i = 0; i < lfDefOp.Symbol.TypeParameters.Length; i++)
+                    _typeParamMap[lfDefOp.Symbol.TypeParameters[i]] = method.TypeArguments[i];
+            }
+
             PreScanGotoLabels(bodyOp);
 
             // Emit tail-call optimization label at function entry (jump target for TCO goto)
@@ -1540,6 +1569,12 @@ public class UasmEmitter
             .Concat(_classSymbol.GetMembers().OfType<IMethodSymbol>()
                 .Where(m => m.IsGenericMethod && m.MethodKind == MethodKind.Ordinary && !m.IsImplicitlyDeclared)
                 .Select(m => (IMethodSymbol)m.OriginalDefinition))
+            // Wave-9 round-9 [Y5]: base-declared generic definitions called with OPEN type args —
+            // their on-demand specs (round-8 [Y11]) emit the base definition's body, so the
+            // definition needs a graph node exactly like a same-class generic definition; without
+            // it a self-recursive inherited generic had no self-edge and never spilled (VM-proven
+            // 63 where the CLR gives 234 — live locals clobbered per frame).
+            .Concat(_openGenericBaseDefs)
             .Where(m => m.DeclaringSyntaxReferences.Length > 0)
             .Distinct(SymbolEqualityComparer.Default)
             .Cast<IMethodSymbol>()
@@ -1804,12 +1839,45 @@ public class UasmEmitter
         var recursive = new Dictionary<IMethodSymbol, HashSet<IMethodSymbol>>(SymbolEqualityComparer.Default);
         var cycleEdges = new Dictionary<IMethodSymbol, HashSet<IMethodSymbol>>(SymbolEqualityComparer.Default);
         var reentrantSites = new HashSet<SyntaxNode>();
+        var tailSparedSites = new HashSet<SyntaxNode>();
+
+        // Wave-9 round-9 [Y4]: forward reachability from each escaped function (over the same
+        // `edges` graph, synthetic edges included), memoized across SCCs. A dispatch can only
+        // START an escaped function, so it can only RE-ENTER its containing function when some
+        // escaped function reaches that function's SCC.
+        var escapeReach = new Dictionary<IMethodSymbol, HashSet<IMethodSymbol>>(SymbolEqualityComparer.Default);
+        HashSet<IMethodSymbol> ReachFrom(IMethodSymbol e)
+        {
+            if (escapeReach.TryGetValue(e, out var cached)) return cached;
+            var seen = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default) { e };
+            var work = new Stack<IMethodSymbol>();
+            work.Push(e);
+            while (work.Count > 0)
+            {
+                var cur = work.Pop();
+                if (!edges.TryGetValue(cur, out var succ)) continue;
+                foreach (var s in succ)
+                    if (seen.Add(s)) work.Push(s);
+            }
+            escapeReach[e] = seen;
+            return seen;
+        }
+
         foreach (var scc in TarjanScc(allNodes, edges))
         {
             var sccSet = new HashSet<IMethodSymbol>(scc, SymbolEqualityComparer.Default);
             // Non-trivial SCC (mutual cycle) OR a single method with a self-loop (direct self-recursion).
             bool isCycle = scc.Count > 1 || (scc.Count == 1 && edges[scc[0]].Contains(scc[0]));
             if (!isCycle) continue;
+            // Wave-9 round-9 [Y4]: gate the per-site Reentrant marking on actual re-enterability.
+            // When NO escaped function reaches this SCC, a dispatch inside it can never re-enter the
+            // caller — and the spurious spill/reload (VM-proven) DISCARDED a same-environment write
+            // made by a dispatched non-cycle closure: the lambda's write to its captured cell never
+            // reached the declarer's post-dispatch read (acc=1 where the CLR gives 6 at depth 1).
+            // Direct-call spills (RecursiveCallees) are real edges and stay ungated.
+            bool sccReenterable = false;
+            foreach (var e in escape)
+                if (edges.ContainsKey(e) && ReachFrom(e).Overlaps(sccSet)) { sccReenterable = true; break; }
             foreach (var caller in scc)
             {
                 bodies.TryGetValue(caller, out var callerBody);
@@ -1827,15 +1895,41 @@ public class UasmEmitter
                     SymbolEqualityComparer.Default);
                 if (inScc.Count > 0) recursive[caller] = inScc;
 
-                // §4.3: per-site Reentrant marking — a NON-TAIL dispatch inside a cycle member can
-                // re-enter its containing function via any escaped function. Keyed by red syntax node
-                // (shared across semantic models); tail sites are spared (§4.4).
                 if (callerBody == null) continue;
-                var dispatchSites = new List<IOperation>();
-                CollectDelegateDispatchSites(callerBody, dispatchSites);
-                foreach (var site in dispatchSites)
-                    if (site.Syntax != null && EmitContext.IsNonTailDispatchSite(callerBody, site))
-                        reentrantSites.Add(site.Syntax);
+
+                // Wave-9 round-9 [Y3]: per-SITE tail classification for DIRECT calls on the
+                // recursive (non-tail-carrying) edges above. The spill map gates per callee NAME,
+                // so a callee with ONE non-tail site used to spill at EVERY site — tail sites of a
+                // mixed tail/non-tail callee are recorded here (syntax-keyed, exactly like the
+                // dispatch arm's per-site marking) and EmitCallToMethod flags them TailSpared.
+                if (inScc.Count > 0)
+                {
+                    var directSites = new List<IOperation>();
+                    CollectInvocationSites(callerBody, directSites);
+                    foreach (var site in directSites)
+                    {
+                        if (site.Syntax == null) continue;
+                        bool toRecursiveCallee = false;
+                        foreach (var c in inScc)
+                            if (IsInternalCallTo(site, c, out var matched) && ReferenceEquals(matched, site))
+                            { toRecursiveCallee = true; break; }
+                        if (toRecursiveCallee && !EmitContext.IsNonTailDispatchSite(callerBody, site))
+                            tailSparedSites.Add(site.Syntax);
+                    }
+                }
+
+                // §4.3: per-site Reentrant marking — a NON-TAIL dispatch inside a cycle member can
+                // re-enter its containing function via any escaped function that reaches this SCC
+                // (round-9 [Y4]: unreachable SCCs skip the marking entirely, see sccReenterable).
+                // Keyed by red syntax node (shared across semantic models); tail sites are spared (§4.4).
+                if (sccReenterable)
+                {
+                    var dispatchSites = new List<IOperation>();
+                    CollectDelegateDispatchSites(callerBody, dispatchSites);
+                    foreach (var site in dispatchSites)
+                        if (site.Syntax != null && EmitContext.IsNonTailDispatchSite(callerBody, site))
+                            reentrantSites.Add(site.Syntax);
+                }
 
                 // Wave-9 round-4 [X2]/[X3]: a HOISTED cycle member (lambda / local function) whose
                 // capture cells are declared by a function in the SAME SCC. A dispatch from inside
@@ -1890,6 +1984,7 @@ public class UasmEmitter
         _ctx.RecursiveCallees = recursive;
         _ctx.CycleCallees = cycleEdges;
         _ctx.ReentrantDispatchSites = reentrantSites;
+        _ctx.TailSparedDirectCallSites = tailSparedSites;
     }
 
     // §2.8 round-2 pre-scan: record member symbols that receive a DIRECT capturing-lambda store.
@@ -2348,6 +2443,19 @@ public class UasmEmitter
         }
     }
 
+    // Wave-9 round-9 [Y3]: collect every invocation operation attributed to THIS function
+    // (hoisted children skipped — same attribution rule as the dispatch-site collector above).
+    static void CollectInvocationSites(IOperation op, List<IOperation> result)
+    {
+        if (op == null) return;
+        if (op is IInvocationOperation) result.Add(op);
+        foreach (var child in op.Children)
+        {
+            if (child is ILocalFunctionOperation || child is IAnonymousFunctionOperation) continue;
+            CollectInvocationSites(child, result);
+        }
+    }
+
     // ── Wave-9 round-3 [W1]/[W2]/[W3]: emission-faithful leaf-override resolution for the graph ──
     // Emission resolves a this-receiver virtual call to the most-derived override visible from the
     // compiled class (InvocationHandler.ResolveMostDerivedOverride / HandlerBase.ResolveDispatchProperty),
@@ -2459,12 +2567,38 @@ public class UasmEmitter
                     return false;
                 }
                 // Statement-form if/else in tail position: branches stay tail, the condition does not.
-                // Loops, usings, switches etc. deliberately fall to the generic non-tail walk below —
+                // Loops, usings etc. deliberately fall to the generic non-tail walk below —
                 // code (back-edges, Dispose) runs after their last statement.
                 case IConditionalOperation cond:
                     if (HasNonTailCallTo(cond.Condition, callee, tail: false)) return true;
                     return HasNonTailCallTo(cond.WhenTrue, callee, tail: true)
                         || HasNonTailCallTo(cond.WhenFalse, callee, tail: true);
+                // Wave-9 round-9: a SWITCH in tail position — unlike loops/usings, nothing runs
+                // after an arm's last statement except the implicit break out of the switch (arms
+                // cannot fall through), so each arm's trailing statement (before that break) stays
+                // tail. The switch value and case clauses are not; a trailing `goto case`/`goto
+                // label` stays on the generic walk (another arm's body runs after it). Mirrors the
+                // EmitContext.HasNonTailSelfCall arm exactly (both classifiers must agree).
+                case ISwitchOperation sw:
+                {
+                    if (HasNonTailCallTo(sw.Value, callee, tail: false)) return true;
+                    foreach (var swCase in sw.Cases)
+                    {
+                        foreach (var clause in swCase.Clauses)
+                            if (HasNonTailCallTo(clause, callee, tail: false)) return true;
+                        var caseBody = swCase.Body;
+                        int caseLast = caseBody.Length - 1;
+                        if (caseLast >= 0 && caseBody[caseLast] is IBranchOperation { BranchKind: BranchKind.Break })
+                            caseLast--;
+                        for (int i = 0; i < caseBody.Length; i++)
+                            if (HasNonTailCallTo(caseBody[i], callee, tail: i == caseLast)) return true;
+                    }
+                    return false;
+                }
+                // Wave-9 round-9: a LABELED statement in tail position keeps the tail flag — the
+                // label changes where control can ARRIVE, not what runs after the statement.
+                case ILabeledOperation labeledStmt:
+                    return HasNonTailCallTo(labeledStmt.Operation, callee, tail: true);
                 case IExpressionStatementOperation exprStmt:
                     return NonTailCallInTailStatement(exprStmt.Operation, callee);
             }
@@ -2899,6 +3033,14 @@ public class UasmEmitter
     bool IsBaseInstanceMethod(IMethodSymbol method)
     {
         if (method.IsStatic) return false;
+        // Round-9 [Y10]: a LOCAL FUNCTION declared inside a base method's body has
+        // ContainingType = the base class but is NOT a base instance method — registering it as an
+        // eager phase-1 copy declared its param/return heap vars BEFORE any type-param map exists,
+        // so an enclosing-generic 'T' in its signature stayed raw and the body emission ICEd
+        // ("expected 'T', got 'SystemInt32'") on a single legal instantiation. Local functions
+        // register on demand during the enclosing body's emission (declaration statement or the
+        // [Y9] forward-reference arm), where the instantiation map is active.
+        if (method.MethodKind == MethodKind.LocalFunction) return false;
         if (method.ContainingType.DeclaringSyntaxReferences.Length == 0) return false;
         if (SymbolEqualityComparer.Default.Equals(method.ContainingType, _classSymbol)) return false;
         if (USugarCompilerHelper.IsFrameworkNamespace(method.ContainingType.ContainingNamespace)) return false;
@@ -2912,6 +3054,12 @@ public class UasmEmitter
         return false;
     }
 
+    /// <summary>Wave-9 round-9 [Y5]/[Y6]: definitions of base-declared generic methods called with
+    /// OPEN type args (the round-8 [Y11] on-demand-spec family). Their bodies are emitted on demand
+    /// per closed call site, so the DEFINITION seeds the collectors and the recursion graph exactly
+    /// like an eagerly registered base copy. Populated by CollectBaseInstanceCallsInOperation.</summary>
+    readonly HashSet<IMethodSymbol> _openGenericBaseDefs = new(SymbolEqualityComparer.Default);
+
     IMethodSymbol[] CollectBaseInstanceMethods(IMethodSymbol[] classMethods)
     {
         var result = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
@@ -2920,14 +3068,21 @@ public class UasmEmitter
         // Transitive closure: a discovered base method's OWN body may call a further base method (a
         // `base.M` chain across 3+ levels), and a base property accessor may reference another base member.
         // Keep scanning newly discovered base methods' bodies until a fixpoint (else the deepest target is
-        // never registered → its call falls through to a bogus extern).
-        var queue = new Queue<IMethodSymbol>(result);
+        // never registered → its call falls through to a bogus extern). Round-9 [Y5]/[Y6]: open-generic
+        // base definitions are scanned too — their bodies emit on demand and may reach further base
+        // members (or more open generics).
+        var scanned = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
+        var queue = new Queue<IMethodSymbol>(result.Concat(_openGenericBaseDefs));
         while (queue.Count > 0)
         {
+            var next = queue.Dequeue();
+            if (!scanned.Add(next)) continue;
             var discovered = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
-            CollectBaseInstanceCallsInOperation(GetMethodBodyOperation(queue.Dequeue()), discovered);
+            CollectBaseInstanceCallsInOperation(GetMethodBodyOperation(next), discovered);
             foreach (var d in discovered)
                 if (result.Add(d)) queue.Enqueue(d);
+            foreach (var od in _openGenericBaseDefs)
+                if (!scanned.Contains(od)) queue.Enqueue(od);
         }
         return result.ToArray();
     }
@@ -2948,10 +3103,19 @@ public class UasmEmitter
         // be keyed by a symbol no emission-time lookup ever produces (the invocation handler
         // substitutes the enclosing spec's map first), leaving a dead function whose param/return
         // types cannot resolve; the closed specialization registers lazily at the call site instead.
-        if (op is IInvocationOperation inv && IsBaseInstanceMethod(inv.TargetMethod)
-            && !(inv.TargetMethod.IsGenericMethod
-                 && inv.TargetMethod.TypeArguments.Any(ta => ta is ITypeParameterSymbol)))
-            result.Add(inv.TargetMethod);
+        // Wave-9 round-9 [Y5]/[Y6]: the skipped target's DEFINITION is still tracked — the on-demand
+        // spec emits that definition's body, so it must seed the foreign-static/struct collectors
+        // (using/Dispose inside it ICEd "No CFunction registered for method 'Dispose'") and join
+        // BuildRecursionInfo's roots (a self-recursive base generic had no graph node, no self-edge,
+        // and no spills — live locals clobbered per frame, VM-proven 63 where the CLR gives 234).
+        if (op is IInvocationOperation inv && IsBaseInstanceMethod(inv.TargetMethod))
+        {
+            if (!(inv.TargetMethod.IsGenericMethod
+                  && inv.TargetMethod.TypeArguments.Any(ta => ta is ITypeParameterSymbol)))
+                result.Add(inv.TargetMethod);
+            else
+                _openGenericBaseDefs.Add(inv.TargetMethod.OriginalDefinition);
+        }
         // base.Prop / base[i]: a property/indexer reference invokes an accessor implicitly (it is not an
         // IInvocationOperation), so collect the base accessor too — else the read/write handler emits a
         // bogus SystemX.__get_Prop__ extern instead of a JUMP to the registered base getter/setter.

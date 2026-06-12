@@ -131,6 +131,17 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
             case MethodKind.LocalFunction
                 when _methodFunctions.ContainsKey(target):
                 return EmitUserMethodCall(op, target);
+            // Round-9 [Y9]: non-generic local function called BEFORE its declaration statement
+            // (C# allows forward references within the enclosing body, but registration used to
+            // happen only when StatementHandler reached the ILocalFunctionOperation — the earlier
+            // call site then died with 'Method not found in layout'). Register on demand; the
+            // declaration-site registration above stays first so declaration-first shapes keep
+            // their index allocation order byte-identical. Generic local functions fall through
+            // to the generic monomorphization arm below ([Y8]).
+            case MethodKind.LocalFunction
+                when !target.IsGenericMethod:
+                RegisterLocalFunction(target);
+                return EmitUserMethodCall(op, target);
         }
 
         // User-struct instance method: v.Method(...) — receiver object[] passed as synthetic param0.
@@ -215,19 +226,25 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
                 args.Add(VisitExpression(op.Instance));
             }
             Dictionary<int, System.Action<CLeaf>> genPrepared = null;
+            List<(int slot, System.Func<CLeaf> read)> genDeferred = null;
             for (var i = 0; i < op.Arguments.Length; i++)
             {
-                // Wave-9 round-8 [Y12]: evaluate leg-bearing ref/out lvalue legs once (copy-back reuses them).
-                if (TryPrepareRefOutArg(op.Arguments[i]) is { } pre)
+                // Wave-9 round-8 [Y12]: evaluate leg-bearing ref/out lvalue legs once (copy-back
+                // reuses them). Round-9 [Y16]: defer the value read past later effectful args.
+                var (val, deferredRead, store) = EvaluateCallArgument(op, i);
+                if (store != null)
+                    (genPrepared ??= new Dictionary<int, System.Action<CLeaf>>())[i] = store;
+                if (deferredRead != null)
                 {
-                    args.Add(pre.value);
-                    (genPrepared ??= new Dictionary<int, System.Action<CLeaf>>())[i] = pre.store;
+                    (genDeferred ??= new List<(int, System.Func<CLeaf>)>()).Add((args.Count, deferredRead));
+                    args.Add(null);
                 }
                 else
-                {
-                    args.Add(VisitExpression(op.Arguments[i].Value));
-                }
+                    args.Add(val);
             }
+            if (genDeferred != null)
+                foreach (var (slot, read) in genDeferred)
+                    args[slot] = read();
             var genResult = EmitCallToMethod(constructed, args);
             // Round-8 [R6]: this arm used to drop the ref/out copy-back (DiffFuzz: ref=9 vs VM 1).
             // Reduced-extension argument ordinals shift by 1 onto the original's params (this=0).
@@ -249,19 +266,25 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
                     args.Add(VisitExpression(op.Instance));
                 }
                 Dictionary<int, System.Action<CLeaf>> fsPrepared = null;
+                List<(int slot, System.Func<CLeaf> read)> fsDeferred = null;
                 for (var i = 0; i < op.Arguments.Length; i++)
                 {
-                    // Wave-9 round-8 [Y12]: evaluate leg-bearing ref/out lvalue legs once (copy-back reuses them).
-                    if (TryPrepareRefOutArg(op.Arguments[i]) is { } pre)
+                    // Wave-9 round-8 [Y12]: evaluate leg-bearing ref/out lvalue legs once (copy-back
+                    // reuses them). Round-9 [Y16]: defer the value read past later effectful args.
+                    var (val, deferredRead, store) = EvaluateCallArgument(op, i);
+                    if (store != null)
+                        (fsPrepared ??= new Dictionary<int, System.Action<CLeaf>>())[i] = store;
+                    if (deferredRead != null)
                     {
-                        args.Add(pre.value);
-                        (fsPrepared ??= new Dictionary<int, System.Action<CLeaf>>())[i] = pre.store;
+                        (fsDeferred ??= new List<(int, System.Func<CLeaf>)>()).Add((args.Count, deferredRead));
+                        args.Add(null);
                     }
                     else
-                    {
-                        args.Add(VisitExpression(op.Arguments[i].Value));
-                    }
+                        args.Add(val);
                 }
+                if (fsDeferred != null)
+                    foreach (var (slot, read) in fsDeferred)
+                        args[slot] = read();
                 var fsResult = EmitCallToMethod(original, args);
                 // Round-8 [R6]: this arm used to drop the ref/out copy-back (DiffFuzz: ref=6 vs VM 1).
                 EmitRefOutCopyBack(op, original,
@@ -298,24 +321,8 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
         return EmitExternMethodCall(op, target);
     }
 
-    /// <summary>Most-derived override of <paramref name="baseMethod"/> reachable from the compiled type
-    /// (_classSymbol), or baseMethod itself if none — mirrors C# virtual dispatch for a `this` call whose
-    /// static target is a base declaration. Round-8 [R8]: GetMembers returns the UNCONSTRUCTED member,
-    /// so a generic virtual called through this lost its type arguments and monomorphized the open
-    /// definition — the SDK assembler then ICEd with TypeResolverException 'T' (even same-class).
-    /// Re-construct the resolved member with the original call's type arguments.</summary>
-    IMethodSymbol ResolveMostDerivedOverride(IMethodSymbol baseMethod)
-    {
-        var def = baseMethod.OriginalDefinition;
-        for (var t = _classSymbol; t != null; t = t.BaseType)
-            foreach (var m in t.GetMembers(baseMethod.Name).OfType<IMethodSymbol>())
-                for (IMethodSymbol o = m; o != null; o = o.OverriddenMethod)
-                    if (SymbolEqualityComparer.Default.Equals(o.OriginalDefinition, def))
-                        return baseMethod.IsGenericMethod && m.IsGenericMethod
-                            ? m.OriginalDefinition.Construct(baseMethod.TypeArguments.ToArray())
-                            : m;
-        return baseMethod;
-    }
+    // ResolveMostDerivedOverride moved to HandlerBase (round-9: StatementHandler's TCO gate needs
+    // the same virtual-dispatch resolution — see VisitReturn).
 
     // Nullable<T>.GetValueOrDefault: HasValue ? Value : (fallback arg or default(T)).
     CLeaf EmitNullableGetValueOrDefault(IInvocationOperation op, ITypeSymbol underlying)
@@ -359,19 +366,25 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
             recv = EmitDeepCloneAggregate(recv, recvAgg);
         var args = new List<CLeaf> { recv };
         Dictionary<int, System.Action<CLeaf>> structPrepared = null;
+        List<(int slot, System.Func<CLeaf> read)> structDeferred = null;
         for (var i = 0; i < op.Arguments.Length; i++)
         {
-            // Wave-9 round-8 [Y12]: evaluate leg-bearing ref/out lvalue legs once (copy-back reuses them).
-            if (TryPrepareRefOutArg(op.Arguments[i]) is { } pre)
+            // Wave-9 round-8 [Y12]: evaluate leg-bearing ref/out lvalue legs once (copy-back
+            // reuses them). Round-9 [Y16]: defer the value read past later effectful args.
+            var (val, deferredRead, store) = EvaluateCallArgument(op, i);
+            if (store != null)
+                (structPrepared ??= new Dictionary<int, System.Action<CLeaf>>())[i] = store;
+            if (deferredRead != null)
             {
-                args.Add(pre.value);
-                (structPrepared ??= new Dictionary<int, System.Action<CLeaf>>())[i] = pre.store;
+                (structDeferred ??= new List<(int, System.Func<CLeaf>)>()).Add((args.Count, deferredRead));
+                args.Add(null);
             }
             else
-            {
-                args.Add(VisitExpression(op.Arguments[i].Value));
-            }
+                args.Add(val);
         }
+        if (structDeferred != null)
+            foreach (var (slot, read) in structDeferred)
+                args[slot] = read();
         var result = EmitCallToMethod(target, args);
         // Round-8 [R5]: this path used to drop the ref/out copy-back entirely (DiffFuzz: ref-arg
         // ref=136 vs VM 106, out-arg ref=10 vs 0). Param ids are ordinal-indexed (receiver separate).

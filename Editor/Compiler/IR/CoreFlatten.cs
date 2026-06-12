@@ -292,8 +292,10 @@ public static class CoreFlatten
 
             case CInternalCall ic:
             {
+                // Reentrant AND TailSpared MUST be copied (see the CExternCall note above; TailSpared
+                // is the round-9 [Y3] per-site spill exemption).
                 int? dest = ic.Type != "SystemVoid" ? ctx.AllocScratch(ic.Type) : (int?)null;
-                ctx.Current.Stmts.Add(new CExprStmt(new CInternalCall(ic.FuncName, new List<CLeaf>(ic.Args), ic.Type, dest, ic.Reentrant)));
+                ctx.Current.Stmts.Add(new CExprStmt(new CInternalCall(ic.FuncName, new List<CLeaf>(ic.Args), ic.Type, dest, ic.Reentrant, ic.TailSpared)));
                 return dest.HasValue ? new CSlotRef(dest.Value, ic.Type) : new CConst(null, "SystemVoid");
             }
 

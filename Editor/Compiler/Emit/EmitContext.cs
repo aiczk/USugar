@@ -194,6 +194,16 @@ public class EmitContext
     /// MEMBERSHIP-ONLY — never enumerated (§1.5 determinism).</summary>
     public HashSet<SyntaxNode> ReentrantDispatchSites;
 
+    /// <summary>Wave-9 round-9 [Y3]: direct-call invocation sites on a RECURSIVE edge that are in
+    /// TAIL position (statement-form or return-form) — the frame reads nothing after them, so
+    /// EmitCallToMethod flags the instruction TailSpared and InsertRecursionSpills skips the wrap.
+    /// Without this, ONE non-tail site put the callee in RecursiveCalleeNames and EVERY site of
+    /// that callee spilled (per-callee gating), overflowing the 512-entry __recurStack on deep
+    /// mixed tail/non-tail recursion while the dispatch arm (per-site Reentrant marking) survived
+    /// the identical shape. Keyed by red SYNTAX node like ReentrantDispatchSites (operation trees
+    /// are not shared between analysis and emit walks). MEMBERSHIP-ONLY (§1.5).</summary>
+    public HashSet<SyntaxNode> TailSparedDirectCallSites;
+
     /// <summary>True if <paramref name="t"/> is <c>Nullable&lt;T&gt;</c>; yields the underlying T.
     /// Nullable is emulated as a boxed object (null | boxed T) — see ExternResolver type mapping.</summary>
     public static bool IsNullableT(ITypeSymbol t, out ITypeSymbol underlying)
@@ -254,13 +264,41 @@ public class EmitContext
                     return false;
                 }
                 // A statement-form if/else in tail position: branches stay tail, the condition does not
-                // (mirrors the expression-form conditional rule in NonTailInTailExpr). Loops, usings,
-                // switches etc. deliberately fall through to the generic non-tail walk below — code
+                // (mirrors the expression-form conditional rule in NonTailInTailExpr). Loops, usings
+                // etc. deliberately fall through to the generic non-tail walk below — code
                 // (back-edges, Dispose) runs after their last statement.
                 case IConditionalOperation cond:
                     if (AnySelfCall(cond.Condition, isSelf)) return true;
                     return HasNonTailSelfCall(cond.WhenTrue, isSelf, tail: true)
                         || HasNonTailSelfCall(cond.WhenFalse, isSelf, tail: true);
+                // Wave-9 round-9: a SWITCH in tail position — unlike loops/usings, nothing runs after
+                // an arm's last statement except the implicit break out of the switch (arms cannot
+                // fall through), so each arm's trailing statement (before that break) stays tail.
+                // The switch value and case clauses are not; a trailing `goto case`/`goto label`
+                // stays on the generic walk (another arm's body runs after it). Pre-fix every
+                // switch-arm tail self-call spilled per frame and overflowed the 512-entry
+                // __recurStack at depth (compile-clean VmFault on legal C#).
+                case ISwitchOperation sw:
+                {
+                    if (AnySelfCall(sw.Value, isSelf)) return true;
+                    foreach (var swCase in sw.Cases)
+                    {
+                        foreach (var clause in swCase.Clauses)
+                            if (AnySelfCall(clause, isSelf)) return true;
+                        var caseBody = swCase.Body;
+                        int caseLast = caseBody.Length - 1;
+                        if (caseLast >= 0 && caseBody[caseLast] is IBranchOperation { BranchKind: BranchKind.Break })
+                            caseLast--;
+                        for (int i = 0; i < caseBody.Length; i++)
+                            if (HasNonTailSelfCall(caseBody[i], isSelf, tail: i == caseLast)) return true;
+                    }
+                    return false;
+                }
+                // Wave-9 round-9: a LABELED statement in tail position — the label wrapper changes
+                // where control can ARRIVE, not what runs after, so the wrapped statement keeps the
+                // tail flag (`TAIL: M(m-1);` as the final statement is exactly `M(m-1);`).
+                case ILabeledOperation labeledStmt:
+                    return HasNonTailSelfCall(labeledStmt.Operation, isSelf, tail: true);
                 case IExpressionStatementOperation exprStmt:
                     return NonTailInTailStatement(exprStmt.Operation, isSelf);
             }

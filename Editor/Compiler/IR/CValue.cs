@@ -110,13 +110,22 @@ public sealed class CInternalCall : CValue
     /// <summary>Design §4.3: this call is a delegate-dispatch site that can re-enter its containing
     /// function (the self-arm __indirect of a marked dispatch). See <see cref="CExternCall.Reentrant"/>.</summary>
     public readonly bool Reentrant;
+    /// <summary>Wave-9 round-9 [Y3]: this is a recursive-edge call SITE in tail position — the frame
+    /// reads nothing after it, so InsertRecursionSpills must NOT wrap it even though the callee name
+    /// is in RecursiveCalleeNames (one non-tail site used to make every site of that callee spill,
+    /// overflowing the 512-entry __recurStack on deep mixed tail/non-tail recursion). Must be copied
+    /// by every site that reconstructs the instruction (CoreFlatten.LowerExpr,
+    /// CoreFlatOptimizer.RemapInst), like <see cref="Reentrant"/>.</summary>
+    public readonly bool TailSpared;
 
-    public CInternalCall(string funcName, List<CLeaf> args, string retType, int? destSlot = null, bool reentrant = false) : base(retType)
+    public CInternalCall(string funcName, List<CLeaf> args, string retType, int? destSlot = null,
+        bool reentrant = false, bool tailSpared = false) : base(retType)
     {
         FuncName = funcName ?? throw new ArgumentNullException(nameof(funcName));
         Args = args ?? new List<CLeaf>();
         DestSlot = destSlot;
         Reentrant = reentrant;
+        TailSpared = tailSpared;
     }
 
     public override string ToString()

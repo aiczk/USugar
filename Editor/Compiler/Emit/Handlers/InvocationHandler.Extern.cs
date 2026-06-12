@@ -665,9 +665,25 @@ public partial class InvocationHandler
             var a = UnwrapConversions(op.Arguments[i].Value);
             if (recursiveEdge)
             {
+                // Round-9: a cycle edge between DIFFERENT methods (override <-> base copy)
+                // threading the CALLER's own ref/out parameter at the same position is the same
+                // linear copy-in/copy-back identity chain as self-threading (W9P17 r7 precedent)
+                // — the callee's cell is written at copy-in and the caller's cell restored by the
+                // copy-back, so mutations thread through exactly like the self case; the symbols
+                // differ only because override and base declaration are distinct. Self-recursion
+                // keeps the strict same-symbol rule (a swapped or re-chained param still corrupts
+                // the one shared cell).
                 bool selfThreaded = a is IParameterReferenceOperation apr
-                    && SymbolEqualityComparer.Default.Equals(
-                        apr.Parameter.OriginalDefinition, p.OriginalDefinition);
+                    && (SymbolEqualityComparer.Default.Equals(
+                            apr.Parameter.OriginalDefinition, p.OriginalDefinition)
+                        || (_currentMethod != null
+                            && !SymbolEqualityComparer.Default.Equals(
+                                _currentMethod.OriginalDefinition, target.OriginalDefinition)
+                            && apr.Parameter.ContainingSymbol is IMethodSymbol argOwner
+                            && SymbolEqualityComparer.Default.Equals(
+                                argOwner.OriginalDefinition, _currentMethod.OriginalDefinition)
+                            && apr.Parameter.Ordinal == p.Ordinal
+                            && apr.Parameter.RefKind == p.RefKind));
                 if (!selfThreaded)
                     throw new System.NotSupportedException(
                         $"recursive call to '{target.Name}' passes '{p.RefKind.ToString().ToLowerInvariant()} "
@@ -751,7 +767,7 @@ public partial class InvocationHandler
     /// aggregate struct/tuple member chains (mirrors the ExpressionHandler aggregate-member read /
     /// TryPrepareFieldSet's aggregate arm). Everything else (locals, params, behaviour fields)
     /// keeps the legacy read + AssignToTarget copy-back, byte-identical.</summary>
-    (CLeaf value, System.Action<CLeaf> store)? TryPrepareRefOutArg(IArgumentOperation arg)
+    (System.Func<CLeaf> read, System.Action<CLeaf> store)? TryPrepareRefOutArg(IArgumentOperation arg)
     {
         var param = arg.Parameter;
         if (param == null || (param.RefKind != RefKind.Ref && param.RefKind != RefKind.Out))
@@ -769,11 +785,14 @@ public partial class InvocationHandler
                 var arrSym = arrayElem.ArrayReference.Type as IArrayTypeSymbol;
                 var arrayType = GetArrayType(arrSym);
                 var elementType = GetArrayElemType(arrSym);
-                CLeaf elemVal = ExternCall($"{arrayType}.__Get__SystemInt32__{elementType}",
-                    new List<CLeaf> { arrayVal, indexVal }, GetUdonType(arrayElem.Type));
-                if (arrayElem.Type is INamedTypeSymbol elemAgg && EmitContext.IsAggregateType(elemAgg))
-                    elemVal = EmitDeepCloneAggregate(elemVal, elemAgg);
-                return (elemVal, v => EmitExternVoid(
+                return (() =>
+                {
+                    CLeaf elemVal = ExternCall($"{arrayType}.__Get__SystemInt32__{elementType}",
+                        new List<CLeaf> { arrayVal, indexVal }, GetUdonType(arrayElem.Type));
+                    if (arrayElem.Type is INamedTypeSymbol elemAgg && EmitContext.IsAggregateType(elemAgg))
+                        elemVal = EmitDeepCloneAggregate(elemVal, elemAgg);
+                    return elemVal;
+                }, v => EmitExternVoid(
                     $"{arrayType}.__Set__SystemInt32_{elementType}__SystemVoid",
                     new List<CLeaf> { arrayVal, indexVal, v }));
             }
@@ -784,16 +803,91 @@ public partial class InvocationHandler
                      && _ctx.GetAggregateLayout(aggContaining).TryGetIndex(aggMemberName, out var memberIndex):
             {
                 var arrExpr = LoadInstanceRaw(aggInstance);
-                CLeaf memberVal = ExternCall("SystemObjectArray.__Get__SystemInt32__SystemObject",
-                    new List<CLeaf> { arrExpr, Const(memberIndex, "SystemInt32") }, "SystemObject");
-                if (fieldRef.Field.Type is INamedTypeSymbol memberAgg && EmitContext.IsAggregateType(memberAgg))
-                    memberVal = EmitDeepCloneAggregate(memberVal, memberAgg);
-                return (memberVal, v => EmitExternVoid(
+                return (() =>
+                {
+                    CLeaf memberVal = ExternCall("SystemObjectArray.__Get__SystemInt32__SystemObject",
+                        new List<CLeaf> { arrExpr, Const(memberIndex, "SystemInt32") }, "SystemObject");
+                    if (fieldRef.Field.Type is INamedTypeSymbol memberAgg && EmitContext.IsAggregateType(memberAgg))
+                        memberVal = EmitDeepCloneAggregate(memberVal, memberAgg);
+                    return memberVal;
+                }, v => EmitExternVoid(
                     "SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid",
                     new List<CLeaf> { arrExpr, Const(memberIndex, "SystemInt32"), v }));
             }
+            // Round-9 [Y12]: BEHAVIOUR field through a non-this receiver (`hs[Pick()].pub`,
+            // `other.pub`) — the legacy path re-evaluated the receiver legs at copy-back
+            // (AssignToTarget's SetProgramVariable arm), so a side-effecting index leg ran twice
+            // and the write landed in the cell chosen by the SECOND evaluation. Evaluate the
+            // receiver ONCE here (materialized — the copy-back must hit the SAME instance even if
+            // the receiver storage is reassigned during the call), read via GetProgramVariable,
+            // store via SetProgramVariable through the cached reference.
+            case IFieldReferenceOperation behField
+                when behField.Instance != null
+                     && behField.Instance is not IInstanceReferenceOperation
+                     && ExternResolver.IsUdonSharpBehaviour(behField.Field.ContainingType):
+            {
+                var instanceVal = VisitExpression(behField.Instance);
+                var instSlot = _ctx.AllocTemp(GetUdonType(behField.Instance.Type));
+                EmitAssign(instSlot, instanceVal);
+                var instRef = SlotRef(instSlot);
+                var nameConst = Const(behField.Field.Name, "SystemString");
+                return (() => ExternCall(
+                    "VRCUdonCommonInterfacesIUdonEventReceiver.__GetProgramVariable__SystemString__SystemObject",
+                    new List<CLeaf> { instRef, nameConst }, "SystemObject"),
+                    v => EmitExternVoid(
+                        "VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid",
+                        new List<CLeaf> { instRef, nameConst, v }));
+            }
         }
         return null;
+    }
+
+    /// <summary>Round-9 [Y16]: true when an argument AFTER index <paramref name="argIndex"/>
+    /// (evaluation order) can write observable state — an invocation (incl. delegate dispatch),
+    /// assignment, increment/decrement, object creation, or a property read (computed getters may
+    /// mutate). A ref/out argument's VALUE READ must then defer to just before the call: C# passes
+    /// the LOCATION (computed at argument position) and the callee reads it at call time, so a
+    /// later argument's write to that location is visible (VM-proven stale copy-in: plain array
+    /// element, struct-array-element field leaf, and behaviour this-field flavors, all c0 ref=55
+    /// vs 6). Side-effect-free later arguments keep the immediate read — byte-identical.</summary>
+    static bool HasLaterEffectfulArg(IInvocationOperation op, int argIndex)
+    {
+        for (int j = argIndex + 1; j < op.Arguments.Length; j++)
+            if (IsPotentiallyEffectful(op.Arguments[j].Value))
+                return true;
+        return false;
+    }
+
+    static bool IsPotentiallyEffectful(IOperation op)
+    {
+        if (op == null) return false;
+        if (op is IInvocationOperation or IObjectCreationOperation or IAssignmentOperation
+            or IIncrementOrDecrementOperation or IPropertyReferenceOperation)
+            return true;
+        foreach (var child in op.Children)
+            if (IsPotentiallyEffectful(child))
+                return true;
+        return false;
+    }
+
+    /// <summary>Evaluate ONE internal-call argument: ref/out lvalue legs evaluate now (C# computes
+    /// the location at argument position; round-8 [Y12] one-evaluation contract), the value read
+    /// defers past later effectful arguments ([Y16]), and the prepared copy-back store rides along.
+    /// Exactly one of <c>value</c>/<c>deferredRead</c> is non-null.</summary>
+    (CLeaf value, System.Func<CLeaf> deferredRead, System.Action<CLeaf> store) EvaluateCallArgument(
+        IInvocationOperation op, int i)
+    {
+        var argOp = op.Arguments[i].Value;
+        var param = op.Arguments[i].Parameter;
+        bool refOut = param != null && (param.RefKind == RefKind.Ref || param.RefKind == RefKind.Out);
+        if (!refOut)
+            return (VisitExpression(argOp), null, null);
+        bool defer = HasLaterEffectfulArg(op, i);
+        if (TryPrepareRefOutArg(op.Arguments[i]) is { } pre)
+            return defer ? (null, pre.read, pre.store) : (pre.read(), null, pre.store);
+        return defer
+            ? ((CLeaf)null, () => VisitExpression(argOp), (System.Action<CLeaf>)null)
+            : (VisitExpression(argOp), null, null);
     }
 
     CLeaf EmitUserMethodCall(IInvocationOperation op, IMethodSymbol target)
@@ -807,36 +901,39 @@ public partial class InvocationHandler
         // op.Arguments[i] ↔ Parameters[i] (which mis-routed a struct arg into another param's slot). (diff-fuzz w4)
         var argSlots = new CLeaf[target.Parameters.Length];
         Dictionary<int, System.Action<CLeaf>> preparedRefOut = null;
+        List<(int ordinal, System.Func<CLeaf> read)> deferredReads = null;
         for (int i = 0; i < op.Arguments.Length; i++)
         {
             var param = op.Arguments[i].Parameter ?? target.Parameters[i];
-            var argOp = op.Arguments[i].Value;
 
             // A delegate-typed argument is an ordinary SystemObjectArray bundle value (design §2.4): a
             // lambda literal / method group rides VisitDelegateCreation, a delegate local/param/field is
             // a plain reference copy into the callee's bundle param. The callee dispatches it through
             // EmitDelegateDispatch, so no per-call-site convention rebinding exists anymore.
             // VisitExpression clones aggregate locals/params automatically (Clone-on-read).
-            CLeaf val;
             // Wave-9 round-8 [Y12]: leg-bearing ref/out lvalues evaluate their legs ONCE here; the
             // copy-back stores through the SAME legs instead of re-evaluating them after the call.
-            if (TryPrepareRefOutArg(op.Arguments[i]) is { } pre)
-            {
-                val = pre.value;
-                (preparedRefOut ??= new Dictionary<int, System.Action<CLeaf>>())[i] = pre.store;
-            }
-            else
-            {
-                val = VisitExpression(argOp);
-            }
-            if (param.Ordinal >= 0 && param.Ordinal < argSlots.Length) argSlots[param.Ordinal] = val;
+            // Round-9 [Y16]: the ref/out VALUE READ defers past later effectful arguments.
+            var (val, deferredRead, store) = EvaluateCallArgument(op, i);
+            if (store != null)
+                (preparedRefOut ??= new Dictionary<int, System.Action<CLeaf>>())[i] = store;
+            if (deferredRead != null)
+                (deferredReads ??= new List<(int, System.Func<CLeaf>)>()).Add((param.Ordinal, deferredRead));
+            else if (param.Ordinal >= 0 && param.Ordinal < argSlots.Length)
+                argSlots[param.Ordinal] = val;
         }
+        // [Y16]: deferred ref/out reads run AFTER every argument evaluation, just before the call.
+        if (deferredReads != null)
+            foreach (var (ordinal, read) in deferredReads)
+                if (ordinal >= 0 && ordinal < argSlots.Length)
+                    argSlots[ordinal] = read();
         var args = new List<CLeaf>(argSlots);
 
         // Under A-normal form EmitCallToMethod already materialized the call (a non-void call returns a CSlotRef
         // leaf, void returns null), so the call and its copy-in are sequenced before the copy-out below — no
-        // manual re-sequencing of a lazy call is needed.
-        var result = EmitCallToMethod(target, args);
+        // manual re-sequencing of a lazy call is needed. The call SITE syntax rides along for the round-9
+        // [Y3] per-site tail sparing on recursive edges.
+        var result = EmitCallToMethod(target, args, op.Syntax);
 
         EmitRefOutCopyBack(op, target, 0, preparedRefOut);
 
