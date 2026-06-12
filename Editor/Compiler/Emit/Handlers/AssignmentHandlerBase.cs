@@ -84,6 +84,39 @@ public abstract class AssignmentHandlerBase : HandlerBase
                 var currentVal = EmitInterfaceAccessorCall(iIdxRef.Property.GetMethod, iIdxGetMl, recvVal, cachedArgs);
                 return new LValueCapture { Value = currentVal, InstanceVal = recvVal, IndexArgs = cachedArgs };
             }
+            // Wave-11 round-11 [Z1]: NON-indexer property on an aggregate (struct/tuple) receiver —
+            // compound assignment and inc-dec (`ss[Ix()].P += Mut()`, `arr[i].X++`). Evaluate the
+            // receiver legs ONCE and cache the raw backing object[] so EmitWriteBack's
+            // aggregate-property arm stores into the SAME cell. Pre-fix this fell to the default arm
+            // (ArrayVal stayed null) and the write-back re-ran side-effecting receiver legs AFTER the
+            // RHS (wrong element + legs twice; VM-proven ref trace=12/result=803 vs 121/283). The read
+            // mirrors VisitPropertyReference verbatim: auto-prop → layout slot; computed → user getter
+            // with the receiver as param0 (struct-typed results deep-clone, value semantics).
+            case IPropertyReferenceOperation { Property: { IsIndexer: false } } aggCapPropRef
+                when aggCapPropRef.Instance?.Type is INamedTypeSymbol aggCapPropType
+                && EmitContext.IsAggregateType(aggCapPropType):
+            {
+                if (_ctx.GetAggregateLayout(aggCapPropType).TryGetIndex(aggCapPropRef.Property.Name, out var capSlotIdx))
+                {
+                    var recv = LoadInstanceRaw(aggCapPropRef.Instance);
+                    var slotIdxVal = Const(capSlotIdx, "SystemInt32");
+                    CLeaf slotVal = ExternCall("SystemObjectArray.__Get__SystemInt32__SystemObject",
+                        new List<CLeaf> { recv, slotIdxVal }, "SystemObject");
+                    if (aggCapPropRef.Property.Type is INamedTypeSymbol capSlotAgg && EmitContext.IsAggregateType(capSlotAgg))
+                        slotVal = EmitDeepCloneAggregate(slotVal, capSlotAgg);
+                    return new LValueCapture { Value = slotVal, ArrayVal = recv, IndexVal = slotIdxVal };
+                }
+                if (aggCapPropRef.Property.GetMethod is { } capGetter
+                    && _methodFunctions.ContainsKey(capGetter.OriginalDefinition))
+                {
+                    var recv = LoadInstanceRaw(aggCapPropRef.Instance);
+                    CLeaf getVal = EmitCallToMethod(capGetter.OriginalDefinition, new List<CLeaf> { recv });
+                    if (aggCapPropRef.Property.Type is INamedTypeSymbol capGetAgg && EmitContext.IsAggregateType(capGetAgg))
+                        getVal = EmitDeepCloneAggregate(getVal, capGetAgg);
+                    return new LValueCapture { Value = getVal, ArrayVal = recv };
+                }
+                goto default;
+            }
             case IFieldReferenceOperation aggFieldRef
                 when aggFieldRef.Instance != null
                 && aggFieldRef.Instance.Type is INamedTypeSymbol aggCapType
@@ -284,8 +317,10 @@ public abstract class AssignmentHandlerBase : HandlerBase
                 }
                 if (aggPropRef.Property.SetMethod is { } aggSetter && _methodFunctions.ContainsKey(aggSetter.OriginalDefinition))
                 {
+                    // Wave-11 round-11 [Z1]: reuse the receiver cached by CaptureLValue — the
+                    // unconditional LoadInstanceRaw here re-ran side-effecting legs at store time.
                     EmitExprStmt(EmitCallToMethod(aggSetter.OriginalDefinition,
-                        new List<CLeaf> { LoadInstanceRaw(aggPropRef.Instance), valueVal }));
+                        new List<CLeaf> { lv.ArrayVal ?? LoadInstanceRaw(aggPropRef.Instance), valueVal }));
                     return;
                 }
                 break;

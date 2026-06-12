@@ -59,11 +59,19 @@ public class DeconstructionAssignmentHandler : AssignmentHandlerBase, IOperation
             // Wave-9 round-6 [X2]/[X4]/[X5]: every target's receiver/index legs evaluate left-to-right
             // BEFORE the RHS (C# order); the deferred stores below consume the cached legs.
             var prepared = PrepareDeconstructionTargets(targetTuple);
-            var snapshots = new List<CLeaf>(targetTuple.Elements.Length);
-            for (int i = 0; i < targetTuple.Elements.Length; i++)
-                snapshots.Add(VisitExpression(valueTuple.Elements[i]));
-            for (int i = 0; i < targetTuple.Elements.Length; i++)
-                AssignToLValue(targetTuple.Elements[i], snapshots[i], prepared);
+            // Wave-11 round-11 [Z2]: Roslyn's deconstruction lowering does NOT evaluate tuple-literal
+            // components in plain textual order when a NESTED deconstruction target is present.
+            // Components paired with non-deconstructed LEAF targets evaluate first (the lowering's
+            // `init` effects), then components feeding a nested deconstruction (its `deconstructions`
+            // effects) — textual order within each group, recursing through nested tuple LITERALS
+            // without leaving the init group (DiffFuzz-proven: ((a, t), u) = (MPair(), V3()) runs V3
+            // BEFORE MPair, ref trace=32; both-nested and all-literal shapes stay textual). Both
+            // snapshot walks complete before any store, so swap/rotate value safety is unchanged, and
+            // a literal without nested targets takes walk 1 only — the old textual loop exactly.
+            var snapshots = new Dictionary<IOperation, CLeaf>();
+            SnapshotLeafPairedComponents(targetTuple, valueTuple, snapshots);
+            SnapshotNestedPairedComponents(targetTuple, valueTuple, snapshots);
+            AssignPairedComponents(targetTuple, valueTuple, snapshots, prepared);
         }
         else
         {
@@ -161,6 +169,79 @@ public class DeconstructionAssignmentHandler : AssignmentHandlerBase, IOperation
                     }
                 }
             }
+        }
+    }
+
+    // ── Wave-11 round-11 [Z2]: tuple-literal component evaluation in Roslyn's lowering order ──
+
+    static IOperation UnwrapDeclaration(IOperation element)
+        => element is IDeclarationExpressionOperation de ? de.Expression : element;
+
+    /// <summary>The nested tuple LITERAL a component pairs with — the component itself, or its
+    /// operand under the same same-shape, same-element-type tuple conversion the top-level arm
+    /// peels — or null when the component is a non-literal expression (call/local/field/…): those
+    /// evaluate whole in the deconstructions group and element-read at assign time.</summary>
+    ITupleOperation MatchNestedLiteral(ITupleOperation nestedTarget, IOperation component)
+    {
+        var v = component;
+        if (v is IConversionOperation conv && conv.Operand is ITupleOperation inner
+            && inner.Elements.Length == nestedTarget.Elements.Length
+            && Enumerable.Range(0, inner.Elements.Length).All(
+                i => GetUdonType(inner.Elements[i].Type) == GetUdonType(nestedTarget.Elements[i].Type)))
+            v = inner;
+        return v is ITupleOperation lit && lit.Elements.Length == nestedTarget.Elements.Length ? lit : null;
+    }
+
+    /// <summary>Walk 1 (Roslyn `init` effects): evaluate every component paired with a
+    /// non-deconstructed LEAF target, textual order, recursing through nested tuple literals.</summary>
+    void SnapshotLeafPairedComponents(ITupleOperation targets, ITupleOperation values,
+        Dictionary<IOperation, CLeaf> snapshots)
+    {
+        for (int i = 0; i < targets.Elements.Length; i++)
+        {
+            var component = values.Elements[i];
+            if (UnwrapDeclaration(targets.Elements[i]) is ITupleOperation nestedTarget)
+            {
+                if (MatchNestedLiteral(nestedTarget, component) is { } nestedLiteral)
+                    SnapshotLeafPairedComponents(nestedTarget, nestedLiteral, snapshots);
+                // non-literal nested components evaluate in walk 2 (the deconstructions group)
+            }
+            else
+                snapshots[component] = VisitExpression(component);
+        }
+    }
+
+    /// <summary>Walk 2 (Roslyn `deconstructions` effects): evaluate every NON-literal component
+    /// paired with a nested deconstruction target, textual order, recursing through literals.</summary>
+    void SnapshotNestedPairedComponents(ITupleOperation targets, ITupleOperation values,
+        Dictionary<IOperation, CLeaf> snapshots)
+    {
+        for (int i = 0; i < targets.Elements.Length; i++)
+        {
+            var component = values.Elements[i];
+            if (UnwrapDeclaration(targets.Elements[i]) is not ITupleOperation nestedTarget) continue;
+            if (MatchNestedLiteral(nestedTarget, component) is { } nestedLiteral)
+                SnapshotNestedPairedComponents(nestedTarget, nestedLiteral, snapshots);
+            else
+                snapshots[component] = VisitExpression(component);
+        }
+    }
+
+    /// <summary>Stores, textual leaf order (C# assigns left-to-right after the whole RHS). A nested
+    /// target paired with a nested LITERAL assigns each leaf directly from its snapshot (the leaves
+    /// were evaluated individually — there is no intermediate tuple aggregate to element-read); a
+    /// nested target paired with a non-literal component keeps the AssignToLValue element-read path.</summary>
+    void AssignPairedComponents(ITupleOperation targets, ITupleOperation values,
+        Dictionary<IOperation, CLeaf> snapshots, Dictionary<IOperation, System.Action<CLeaf>> prepared)
+    {
+        for (int i = 0; i < targets.Elements.Length; i++)
+        {
+            var component = values.Elements[i];
+            if (UnwrapDeclaration(targets.Elements[i]) is ITupleOperation nestedTarget
+                && MatchNestedLiteral(nestedTarget, component) is { } nestedLiteral)
+                AssignPairedComponents(nestedTarget, nestedLiteral, snapshots, prepared);
+            else
+                AssignToLValue(targets.Elements[i], snapshots[component], prepared);
         }
     }
 
