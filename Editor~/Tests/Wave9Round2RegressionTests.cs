@@ -383,18 +383,23 @@ public class W9R2GenMGRecv : UdonSharpBehaviour {
         Assert.Contains("generic method", ex.ToString());
     }
 
+    // Round-9 [Y7] RESTORATION (was a [W7]-era reject pin): a delegate created from an INHERITED
+    // generic method group with concrete (inferred) type args is legal — the specialization's
+    // bridge lives in this program exactly like the same-class flavor, since the spec body emits
+    // from the base declaration's syntax. The reject gate now requires the declaring type to be
+    // outside the compiled class's base chain (true foreign), receiver-bound, or open-typed.
     [Fact]
-    public void GenericMethodGroup_InheritedFromBase_Rejects()
+    public void GenericMethodGroup_InheritedFromBase_Compiles()
     {
-        var ex = Record.Exception(() => TestHelper.CompileToUasm(@"
+        var uasm = TestHelper.CompileToUasm(@"
 using System;
 using UdonSharp;
 public class GenMGBase : UdonSharpBehaviour { protected T Echo<T>(T v) { return v; } }
 public class W9R2GenMGInherited : GenMGBase {
     public int seed; public int result;
     void Start() { Func<int, int> f = Echo; result = f(seed); }
-}", "W9R2GenMGInherited"));
-        Assert.NotNull(ex);
-        Assert.Contains("generic method", ex.ToString());
+}", "W9R2GenMGInherited");
+        Assert.Contains("_Echo_SystemInt32", uasm);  // the inherited specialization body
+        Assert.Contains(".export __dlg_", uasm);     // its exported pending bridge
     }
 }
