@@ -3139,6 +3139,20 @@ public class UasmEmitter
             && mref.Instance is IInstanceReferenceOperation { Syntax: BaseExpressionSyntax }
             && IsBaseInstanceMethod(mref.Method))
             result.Add(mref.Method);
+        // Wave-10 round-10 [Z1]: a method GROUP of an INHERITED generic method through `this`
+        // (implicit or explicit). The [Y7] bridge registers the constructed spec at EMIT time —
+        // AFTER BuildRecursionInfo ran — so a self-recursive base generic referenced ONLY through
+        // a delegate had no graph node, no self-edge, and no spill machinery (VM-proven r=17 where
+        // the CLR gives 47: every unwinding frame replayed the innermost frame's local). Seed the
+        // DEFINITION exactly like an open-T call site ([Y5] — closed and open MG flavors alike,
+        // the spec lookup reduces both ends to OriginalDefinition); a non-recursive body gains a
+        // trivially cycle-free node. `base.` and variable receivers stay uncollected — the [Y7]
+        // creation gate rejects them loudly.
+        if (op is IMethodReferenceOperation gmref && gmref.Method.IsGenericMethod
+            && IsBaseInstanceMethod(gmref.Method)
+            && (gmref.Instance == null
+                || gmref.Instance is IInstanceReferenceOperation { Syntax: not BaseExpressionSyntax }))
+            _openGenericBaseDefs.Add(gmref.Method.OriginalDefinition);
         foreach (var child in op.Children)
             CollectBaseInstanceCallsInOperation(child, result);
     }
