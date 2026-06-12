@@ -186,6 +186,21 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
         if (_methodFunctions.ContainsKey(target) && IsBaseInstanceMethod(target))
             return EmitUserMethodCall(op, target);
 
+        // Wave-9 round-8 [Y11]: INHERITED generic callee whose call site carries OPEN type args
+        // (`P2<T>(x)` inside the derived class's own generic body). The phase-1 base-copy collector
+        // only registers CLOSED call-site symbols (an open form has no single monomorphization), so
+        // when the enclosing specialization's map closes the symbol HERE (SubstituteMethodTypeArgs
+        // above), register it as an on-demand generic specialization — EmitMethod resolves the body
+        // from the base declaration's own syntax tree, exactly like a same-class spec. Without this
+        // the call fell through to the cross-class/extern arms (decon: 'Method P2 not found in
+        // layout for MB1Base'; direct: bogus IUdonEventReceiver extern — loud ICE on legal C#).
+        if (target.IsGenericMethod && !target.TypeArguments.Any(ta => ta is ITypeParameterSymbol)
+            && IsBaseInstanceMethod(target))
+        {
+            RegisterGenericSpecialization(target);
+            return EmitUserMethodCall(op, target);
+        }
+
         // Generic foreign static method → monomorphize and emit as internal call
         if (target.IsGenericMethod && IsForeignStatic(target))
         {
@@ -199,14 +214,25 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
             {
                 args.Add(VisitExpression(op.Instance));
             }
+            Dictionary<int, System.Action<CLeaf>> genPrepared = null;
             for (var i = 0; i < op.Arguments.Length; i++)
             {
-                args.Add(VisitExpression(op.Arguments[i].Value));
+                // Wave-9 round-8 [Y12]: evaluate leg-bearing ref/out lvalue legs once (copy-back reuses them).
+                if (TryPrepareRefOutArg(op.Arguments[i]) is { } pre)
+                {
+                    args.Add(pre.value);
+                    (genPrepared ??= new Dictionary<int, System.Action<CLeaf>>())[i] = pre.store;
+                }
+                else
+                {
+                    args.Add(VisitExpression(op.Arguments[i].Value));
+                }
             }
             var genResult = EmitCallToMethod(constructed, args);
             // Round-8 [R6]: this arm used to drop the ref/out copy-back (DiffFuzz: ref=9 vs VM 1).
             // Reduced-extension argument ordinals shift by 1 onto the original's params (this=0).
-            EmitRefOutCopyBack(op, constructed, target.ReducedFrom != null && op.Instance != null ? 1 : 0);
+            EmitRefOutCopyBack(op, constructed,
+                target.ReducedFrom != null && op.Instance != null ? 1 : 0, genPrepared);
             return genResult;
         }
 
@@ -222,13 +248,24 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
                 {
                     args.Add(VisitExpression(op.Instance));
                 }
+                Dictionary<int, System.Action<CLeaf>> fsPrepared = null;
                 for (var i = 0; i < op.Arguments.Length; i++)
                 {
-                    args.Add(VisitExpression(op.Arguments[i].Value));
+                    // Wave-9 round-8 [Y12]: evaluate leg-bearing ref/out lvalue legs once (copy-back reuses them).
+                    if (TryPrepareRefOutArg(op.Arguments[i]) is { } pre)
+                    {
+                        args.Add(pre.value);
+                        (fsPrepared ??= new Dictionary<int, System.Action<CLeaf>>())[i] = pre.store;
+                    }
+                    else
+                    {
+                        args.Add(VisitExpression(op.Arguments[i].Value));
+                    }
                 }
                 var fsResult = EmitCallToMethod(original, args);
                 // Round-8 [R6]: this arm used to drop the ref/out copy-back (DiffFuzz: ref=6 vs VM 1).
-                EmitRefOutCopyBack(op, original, target.ReducedFrom != null && op.Instance != null ? 1 : 0);
+                EmitRefOutCopyBack(op, original,
+                    target.ReducedFrom != null && op.Instance != null ? 1 : 0, fsPrepared);
                 return fsResult;
             }
         }
@@ -321,12 +358,24 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
             && op.Instance?.Type is INamedTypeSymbol recvAgg && EmitContext.IsAggregateType(recvAgg))
             recv = EmitDeepCloneAggregate(recv, recvAgg);
         var args = new List<CLeaf> { recv };
+        Dictionary<int, System.Action<CLeaf>> structPrepared = null;
         for (var i = 0; i < op.Arguments.Length; i++)
-            args.Add(VisitExpression(op.Arguments[i].Value));
+        {
+            // Wave-9 round-8 [Y12]: evaluate leg-bearing ref/out lvalue legs once (copy-back reuses them).
+            if (TryPrepareRefOutArg(op.Arguments[i]) is { } pre)
+            {
+                args.Add(pre.value);
+                (structPrepared ??= new Dictionary<int, System.Action<CLeaf>>())[i] = pre.store;
+            }
+            else
+            {
+                args.Add(VisitExpression(op.Arguments[i].Value));
+            }
+        }
         var result = EmitCallToMethod(target, args);
         // Round-8 [R5]: this path used to drop the ref/out copy-back entirely (DiffFuzz: ref-arg
         // ref=136 vs VM 106, out-arg ref=10 vs 0). Param ids are ordinal-indexed (receiver separate).
-        EmitRefOutCopyBack(op, target);
+        EmitRefOutCopyBack(op, target, 0, structPrepared);
         return result;
     }
 

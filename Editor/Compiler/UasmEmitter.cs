@@ -869,6 +869,24 @@ public class UasmEmitter
         foreach (var bm in baseInstanceMethods)
         {
             EmitContext.RejectInParameters(bm); // round-7 follow-up [Q3]
+            // Wave-9 round-8 [Y10]: an INHERITED generic method's call-site-constructed copy is the
+            // de-facto specialization this path emits (EmitMethod sets the type-param map from it),
+            // but it bypassed RegisterGenericSpecialization — so FirstGenericSpec never learned it
+            // and a hoisted closure inside the base generic body could not resolve the enclosing
+            // method's params (loud "Cannot resolve parameter") or its type-param map. Seed it here,
+            // with the same second-distinct-instantiation guard ([X6] r5, widened in round 8).
+            if (bm.IsGenericMethod && !bm.IsDefinition)
+            {
+                var bmDef = bm.OriginalDefinition;
+                if (_ctx.FirstGenericSpec.TryGetValue(bmDef, out var bmFirst))
+                {
+                    if (!SymbolEqualityComparer.Default.Equals(bmFirst, bm))
+                        EmitContext.ThrowIfClosurePinsInstantiation(
+                            _ctx.GenericBodyClosurePin(_compilation, bmDef), bm.Name);
+                }
+                else
+                    _ctx.FirstGenericSpec[bmDef] = bm;
+            }
             var slot = _ctx.RegisterMethod(bm, i => i.ToString());
             var idx = slot.Index;
             var funcName = $"__{idx}_{SanitizeId(bm.Name)}";
@@ -1221,6 +1239,37 @@ public class UasmEmitter
             _typeParamMap = map;
         }
 
+        // Wave-9 round-8 [Y2]: a hoisted closure (lambda / local function) declared inside a GENERIC
+        // method body — its operation tree is the generic DEFINITION's, so T-typed expressions need
+        // the instantiation's type-param map during body emission (registration already substituted
+        // the signature types while the enclosing spec's map was active; without the map here the
+        // body type-checks as 'T' and CoreVerify ICEs on a single legal instantiation). A closure
+        // whose semantics depend on T pins its generic to ONE instantiation (the [X6] r5 reject,
+        // widened in round 8 to type-param-referencing closures), so FirstGenericSpec is the exact
+        // owner. Walk up through enclosing closures to (possibly nested) generic owners.
+        bool closureMapSet = false;
+        if (!isGenericSpec && method.MethodKind is MethodKind.LocalFunction
+            or MethodKind.LambdaMethod or MethodKind.AnonymousFunction)
+        {
+            Dictionary<ITypeParameterSymbol, ITypeSymbol> closureMap = null;
+            for (var s = method.ContainingSymbol; s is IMethodSymbol enclosing; s = enclosing.ContainingSymbol)
+            {
+                if (enclosing.IsGenericMethod
+                    && _ctx.FirstGenericSpec.TryGetValue(enclosing.OriginalDefinition, out var ownerSpec))
+                {
+                    var ownerDef = ownerSpec.OriginalDefinition;
+                    closureMap ??= new Dictionary<ITypeParameterSymbol, ITypeSymbol>(SymbolEqualityComparer.Default);
+                    for (int i = 0; i < ownerDef.TypeParameters.Length; i++)
+                        closureMap[ownerDef.TypeParameters[i]] = ownerSpec.TypeArguments[i];
+                }
+            }
+            if (closureMap != null)
+            {
+                _typeParamMap = closureMap;
+                closureMapSet = true;
+            }
+        }
+
         // Get method body IOperation
         var bodySource = isGenericSpec ? method.OriginalDefinition : method;
         var syntaxRef = bodySource.DeclaringSyntaxReferences.FirstOrDefault();
@@ -1322,8 +1371,8 @@ public class UasmEmitter
             BridgeStore($"__old_{fcbFieldName}", curVal);
         }
 
-        // Clear type param map after generic specialization emission
-        if (isGenericSpec)
+        // Clear type param map after generic specialization / generic-body closure emission
+        if (isGenericSpec || closureMapSet)
             _typeParamMap = null;
 
         // Method epilogue: return
@@ -1753,6 +1802,7 @@ public class UasmEmitter
         _ctx.ThisFieldTouches = thisTouches;
 
         var recursive = new Dictionary<IMethodSymbol, HashSet<IMethodSymbol>>(SymbolEqualityComparer.Default);
+        var cycleEdges = new Dictionary<IMethodSymbol, HashSet<IMethodSymbol>>(SymbolEqualityComparer.Default);
         var reentrantSites = new HashSet<SyntaxNode>();
         foreach (var scc in TarjanScc(allNodes, edges))
         {
@@ -1763,6 +1813,12 @@ public class UasmEmitter
             foreach (var caller in scc)
             {
                 bodies.TryGetValue(caller, out var callerBody);
+                // Wave-9 round-8 [Y3]: the UNFILTERED in-SCC edge set feeds the ref/out re-chain
+                // guard (IsCycleEdge) — a tail `return M(m-1, ref w);` re-chain corrupts exactly
+                // like the non-tail statement form, so the guard must not ride the tail filter.
+                var allInScc = new HashSet<IMethodSymbol>(
+                    edges[caller].Where(c => sccSet.Contains(c)), SymbolEqualityComparer.Default);
+                if (allInScc.Count > 0) cycleEdges[caller] = allInScc;
                 // Only edges with a NON-tail call need spilling: a tail call (`return Callee(..)`) reads
                 // nothing after the call, so flat-heap clobbering is harmless — and spilling deep tail
                 // recursion would needlessly exhaust the stack.
@@ -1832,6 +1888,7 @@ public class UasmEmitter
             }
         }
         _ctx.RecursiveCallees = recursive;
+        _ctx.CycleCallees = cycleEdges;
         _ctx.ReentrantDispatchSites = reentrantSites;
     }
 
@@ -2386,12 +2443,19 @@ public class UasmEmitter
                 case IMethodBodyBaseOperation mb:
                     return HasNonTailCallTo(mb.BlockBody, callee, tail: true)
                         || HasNonTailCallTo(mb.ExpressionBody, callee, tail: true);
-                // Only a block's LAST statement stays in tail position.
+                // Only a block's LAST statement stays in tail position. Wave-9 round-8 [Y7]/[Y8]:
+                // hoisted lambda/local-function BLOCK bodies carry an IMPLICIT value-less trailing
+                // IReturnOperation (method bodies via IMethodBodyOperation do not), so the statement
+                // BEFORE it is the real tail position — without the skip every hoisted tail-if
+                // self-call spilled per frame and overflowed the 512-entry __recurStack at depth.
                 case IBlockOperation block:
                 {
                     var ops = block.Operations;
+                    int last = ops.Length - 1;
+                    if (last >= 0 && ops[last] is IReturnOperation { ReturnedValue: null, IsImplicit: true })
+                        last--;
                     for (int i = 0; i < ops.Length; i++)
-                        if (HasNonTailCallTo(ops[i], callee, tail: i == ops.Length - 1)) return true;
+                        if (HasNonTailCallTo(ops[i], callee, tail: i == last)) return true;
                     return false;
                 }
                 // Statement-form if/else in tail position: branches stay tail, the condition does not.
@@ -2416,10 +2480,14 @@ public class UasmEmitter
 
     // The discarded-result twin of the `return Callee(args)` arm above, for the expression of a TAIL
     // statement. `Callee(args);` is a tail call (only its argument/instance legs are non-tail) UNLESS it
-    // carries ref/out arguments — their copy-back reads the param heap vars AFTER the call, and the tail
-    // classification gates the [Q2] re-chained-ref reject. `P = v;` / `this[i] = v;` as the tail statement
-    // runs the SETTER last: the setter reference is tail; the receiver, index args, and value are not
-    // (a get-only accessor match contributes no call at a simple-SET site at all — also fine to spare).
+    // carries ref/out arguments — their copy-back reads the param heap vars AFTER the call. (The [Q2]
+    // re-chained-ref reject no longer rides this classification — round-8 [Y3] moved it to the
+    // unfiltered IsCycleEdge so tail re-chains reject too.) `P = v;` / `this[i] = v;` as the tail
+    // statement runs the SETTER last: the setter reference is tail; the receiver, index args, and value
+    // are not (a get-only accessor match contributes no call at a simple-SET site at all — also fine to
+    // spare). Wave-9 round-8 [Y5]/[Y6]/[Y13]: the COMPOUND (`P += v;` / `this[i] += v;`) and inc/dec
+    // (`P--;`) statement forms also run the setter last — but their GETTER runs first and its result is
+    // consumed afterwards, so the setter is spared ONLY when the callee is not also the getter.
     bool NonTailCallInTailStatement(IOperation expr, IMethodSymbol callee)
     {
         if (expr == null) return false;
@@ -2438,7 +2506,54 @@ public class UasmEmitter
                 if (HasNonTailCallTo(arg, callee, tail: false)) return true;
             return HasNonTailCallTo(setStmt.Value, callee, tail: false);
         }
+        // [Y5]/[Y13] compound property/indexer write: getter -> operator -> SETTER (last call).
+        if (expr is ICompoundAssignmentOperation { Target: IPropertyReferenceOperation cmpTarget } cmpStmt
+            && PropertyAccessorMatches(cmpTarget, callee, getter: false)
+            && !PropertyAccessorMatches(cmpTarget, callee, getter: true))
+        {
+            if (HasNonTailCallTo(cmpTarget.Instance, callee, tail: false)) return true;
+            foreach (var arg in cmpTarget.Arguments)
+                if (HasNonTailCallTo(arg, callee, tail: false)) return true;
+            return HasNonTailCallTo(cmpStmt.Value, callee, tail: false);
+        }
+        // [Y6] statement-form inc/dec through a property/indexer: same getter-then-setter shape.
+        if (expr is IIncrementOrDecrementOperation { Target: IPropertyReferenceOperation incTarget }
+            && PropertyAccessorMatches(incTarget, callee, getter: false)
+            && !PropertyAccessorMatches(incTarget, callee, getter: true))
+        {
+            if (HasNonTailCallTo(incTarget.Instance, callee, tail: false)) return true;
+            foreach (var arg in incTarget.Arguments)
+                if (HasNonTailCallTo(arg, callee, tail: false)) return true;
+            return false;
+        }
+        // [Y1]/[Y4] `d?.Invoke(args);` as the tail statement: the WhenNotNull dispatch is the last
+        // thing the frame runs (the null arm skips straight to the implicit return) — tail; the
+        // receiver leg is not.
+        if (expr is IConditionalAccessOperation condAcc)
+        {
+            if (HasNonTailCallTo(condAcc.Operation, callee, tail: false)) return true;
+            return NonTailCallInTailStatement(condAcc.WhenNotNull, callee);
+        }
         return HasNonTailCallTo(expr, callee, tail: false);
+    }
+
+    // [Y5]/[Y6]/[Y13]: accessor-SPECIFIC twin of IsInternalCallTo's property arm — true when the
+    // chosen accessor (static binding OR the emission-faithful leaf override) IS the callee. The
+    // either-accessor match is correct for simple SET (only the setter runs) but too coarse for
+    // compound/inc-dec, where the getter runs first and its result is read afterwards.
+    bool PropertyAccessorMatches(IPropertyReferenceOperation pr, IMethodSymbol callee, bool getter)
+    {
+        if (pr.Instance is not IInstanceReferenceOperation) return false;
+        var acc = getter ? pr.Property.GetMethod : pr.Property.SetMethod;
+        if (acc != null && SymbolEqualityComparer.Default.Equals(acc.OriginalDefinition, callee))
+            return true;
+        if (LeafPropertyTarget(pr) is { } lp)
+        {
+            var leafAcc = getter ? lp.GetMethod : lp.SetMethod;
+            if (leafAcc != null && SymbolEqualityComparer.Default.Equals(leafAcc.OriginalDefinition, callee))
+                return true;
+        }
+        return false;
     }
 
     bool IsInternalCallTo(IOperation op, IMethodSymbol callee, out IOperation call)
@@ -2828,7 +2943,14 @@ public class UasmEmitter
     void CollectBaseInstanceCallsInOperation(IOperation op, HashSet<IMethodSymbol> result)
     {
         if (op == null) return;
-        if (op is IInvocationOperation inv && IsBaseInstanceMethod(inv.TargetMethod))
+        // Wave-9 round-8 [Y11]: skip OPEN-constructed generic targets (`P2<T>(x)` inside a generic
+        // body — the type args are the ENCLOSING method's type params). The copy registration would
+        // be keyed by a symbol no emission-time lookup ever produces (the invocation handler
+        // substitutes the enclosing spec's map first), leaving a dead function whose param/return
+        // types cannot resolve; the closed specialization registers lazily at the call site instead.
+        if (op is IInvocationOperation inv && IsBaseInstanceMethod(inv.TargetMethod)
+            && !(inv.TargetMethod.IsGenericMethod
+                 && inv.TargetMethod.TypeArguments.Any(ta => ta is ITypeParameterSymbol)))
             result.Add(inv.TargetMethod);
         // base.Prop / base[i]: a property/indexer reference invokes an accessor implicitly (it is not an
         // IInvocationOperation), so collect the base accessor too — else the read/write handler emits a

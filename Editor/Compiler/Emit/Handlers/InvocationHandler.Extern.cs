@@ -651,7 +651,12 @@ public partial class InvocationHandler
         // sound for self-threading: a recursion-cycle call passing a DIFFERENT lvalue overwrites the
         // one shared param heap var at copy-in and nothing restores the outer frame's value
         // (VM-proven: re-chained scalar/struct ref recursion 200 vs CLR 101). Loud per design §8-3.
-        bool recursiveEdge = IsRecursiveEdge(_currentMethod, target);
+        // Wave-9 round-8 [Y3]: gate on the UNFILTERED cycle-edge map, not IsRecursiveEdge — the
+        // spill map keeps only non-tail edges, so a re-chained ref in pure RETURN position
+        // (`return M(m-1, ref w);` — a tail call) bypassed the reject and silently corrupted the
+        // outer frame's copy-back (VM-proven 21021 vs CLR 9021). Self-threading stays legal and
+        // tail (no new spills).
+        bool recursiveEdge = _ctx.IsCycleEdge(_currentMethod, target);
         List<ISymbol> refRoots = null;
         for (int i = 0; i < op.Arguments.Length; i++)
         {
@@ -710,7 +715,8 @@ public partial class InvocationHandler
     /// DiffFuzz: struct ref ref=136 vs VM 106 / out ref=10 vs 0; foreign static plain ref=6 vs 1,
     /// generic ref=9 vs 1). <paramref name="ordinalOffset"/> maps reduced-extension argument
     /// ordinals onto the original definition's params (the receiver occupies ordinal 0).</summary>
-    void EmitRefOutCopyBack(IInvocationOperation op, IMethodSymbol target, int ordinalOffset = 0)
+    void EmitRefOutCopyBack(IInvocationOperation op, IMethodSymbol target, int ordinalOffset = 0,
+        Dictionary<int, System.Action<CLeaf>> preparedStores = null)
     {
         for (int i = 0; i < op.Arguments.Length; i++)
         {
@@ -723,8 +729,71 @@ public partial class InvocationHandler
             var paramId = paramIds[param.Ordinal + ordinalOffset];
             var paramType = _ctx.GetFieldType(paramId);
             var paramVal = LoadField(paramId, paramType);
-            AssignToTarget(argTarget, paramVal);
+            // Wave-9 round-8 [Y12]: a copy-back whose lvalue legs were evaluated at copy-in
+            // (TryPrepareRefOutArg) stores through those SAME legs — AssignToTarget would
+            // re-evaluate them AFTER the call (side-effecting legs ran twice and the write landed
+            // in the cell chosen by the second evaluation).
+            if (preparedStores != null && preparedStores.TryGetValue(i, out var preparedStore))
+                preparedStore(paramVal);
+            else
+                AssignToTarget(argTarget, paramVal);
         }
+    }
+
+    /// <summary>Wave-9 round-8 [Y12]: evaluate a ref/out argument lvalue's receiver/index legs ONCE
+    /// and return (the value read through those legs, the deferred copy-back store over the SAME
+    /// legs). C# evaluates an argument's component expressions exactly once; the legacy path
+    /// re-evaluated them at copy-back via AssignToTarget, so side-effecting legs ran twice and the
+    /// copy-back landed in the cell chosen by the SECOND evaluation (VM-proven:
+    /// AddTo(ref arr[Idx()].v) with a k-mutating Idx — kk ref=1 vs 2, c0/c1 swapped cells; out and
+    /// plain-int[]-element flavors identical). Covers the proven leg-bearing shapes — plain array
+    /// elements (mirrors ArrayHandler.VisitArrayElementReference / PrepareArrayElementSet) and
+    /// aggregate struct/tuple member chains (mirrors the ExpressionHandler aggregate-member read /
+    /// TryPrepareFieldSet's aggregate arm). Everything else (locals, params, behaviour fields)
+    /// keeps the legacy read + AssignToTarget copy-back, byte-identical.</summary>
+    (CLeaf value, System.Action<CLeaf> store)? TryPrepareRefOutArg(IArgumentOperation arg)
+    {
+        var param = arg.Parameter;
+        if (param == null || (param.RefKind != RefKind.Ref && param.RefKind != RefKind.Out))
+            return null;
+        var target = UnwrapConversions(arg.Value);
+        switch (target)
+        {
+            case IArrayElementReferenceOperation arrayElem
+                when arrayElem.Indices.Length == 1
+                     && arrayElem.Indices[0] is not IRangeOperation
+                     && arrayElem.Indices[0] is not IUnaryOperation { Type: { Name: "Index" } }:
+            {
+                var arrayVal = VisitExpression(arrayElem.ArrayReference);
+                var indexVal = VisitExpression(arrayElem.Indices[0]);
+                var arrSym = arrayElem.ArrayReference.Type as IArrayTypeSymbol;
+                var arrayType = GetArrayType(arrSym);
+                var elementType = GetArrayElemType(arrSym);
+                CLeaf elemVal = ExternCall($"{arrayType}.__Get__SystemInt32__{elementType}",
+                    new List<CLeaf> { arrayVal, indexVal }, GetUdonType(arrayElem.Type));
+                if (arrayElem.Type is INamedTypeSymbol elemAgg && EmitContext.IsAggregateType(elemAgg))
+                    elemVal = EmitDeepCloneAggregate(elemVal, elemAgg);
+                return (elemVal, v => EmitExternVoid(
+                    $"{arrayType}.__Set__SystemInt32_{elementType}__SystemVoid",
+                    new List<CLeaf> { arrayVal, indexVal, v }));
+            }
+            case IFieldReferenceOperation fieldRef
+                when TryGetAggregateMemberTarget(fieldRef, out var aggInstance, out var aggMemberName)
+                     && aggInstance.Type is INamedTypeSymbol aggContaining
+                     && EmitContext.IsAggregateType(aggContaining)
+                     && _ctx.GetAggregateLayout(aggContaining).TryGetIndex(aggMemberName, out var memberIndex):
+            {
+                var arrExpr = LoadInstanceRaw(aggInstance);
+                CLeaf memberVal = ExternCall("SystemObjectArray.__Get__SystemInt32__SystemObject",
+                    new List<CLeaf> { arrExpr, Const(memberIndex, "SystemInt32") }, "SystemObject");
+                if (fieldRef.Field.Type is INamedTypeSymbol memberAgg && EmitContext.IsAggregateType(memberAgg))
+                    memberVal = EmitDeepCloneAggregate(memberVal, memberAgg);
+                return (memberVal, v => EmitExternVoid(
+                    "SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid",
+                    new List<CLeaf> { arrExpr, Const(memberIndex, "SystemInt32"), v }));
+            }
+        }
+        return null;
     }
 
     CLeaf EmitUserMethodCall(IInvocationOperation op, IMethodSymbol target)
@@ -737,6 +806,7 @@ public partial class InvocationHandler
         // named/reordered calls, so place each argument at its parameter's ordinal rather than assuming
         // op.Arguments[i] ↔ Parameters[i] (which mis-routed a struct arg into another param's slot). (diff-fuzz w4)
         var argSlots = new CLeaf[target.Parameters.Length];
+        Dictionary<int, System.Action<CLeaf>> preparedRefOut = null;
         for (int i = 0; i < op.Arguments.Length; i++)
         {
             var param = op.Arguments[i].Parameter ?? target.Parameters[i];
@@ -747,7 +817,18 @@ public partial class InvocationHandler
             // a plain reference copy into the callee's bundle param. The callee dispatches it through
             // EmitDelegateDispatch, so no per-call-site convention rebinding exists anymore.
             // VisitExpression clones aggregate locals/params automatically (Clone-on-read).
-            var val = VisitExpression(argOp);
+            CLeaf val;
+            // Wave-9 round-8 [Y12]: leg-bearing ref/out lvalues evaluate their legs ONCE here; the
+            // copy-back stores through the SAME legs instead of re-evaluating them after the call.
+            if (TryPrepareRefOutArg(op.Arguments[i]) is { } pre)
+            {
+                val = pre.value;
+                (preparedRefOut ??= new Dictionary<int, System.Action<CLeaf>>())[i] = pre.store;
+            }
+            else
+            {
+                val = VisitExpression(argOp);
+            }
             if (param.Ordinal >= 0 && param.Ordinal < argSlots.Length) argSlots[param.Ordinal] = val;
         }
         var args = new List<CLeaf>(argSlots);
@@ -757,7 +838,7 @@ public partial class InvocationHandler
         // manual re-sequencing of a lazy call is needed.
         var result = EmitCallToMethod(target, args);
 
-        EmitRefOutCopyBack(op, target);
+        EmitRefOutCopyBack(op, target, 0, preparedRefOut);
 
         return result;
     }

@@ -140,6 +140,22 @@ public class EmitContext
            && RecursiveCallees.TryGetValue(caller.OriginalDefinition, out var callees)
            && callees.Contains(callee.OriginalDefinition);
 
+    /// <summary>Wave-9 round-8 [Y3]: per internal method, ALL same-SCC callees — the UNFILTERED twin
+    /// of <see cref="RecursiveCallees"/> (which keeps only edges carrying a non-tail call, because it
+    /// drives frame SPILLS). The ref/out re-chain guard must fire on every recursion-cycle edge
+    /// regardless of tail position: a re-chained ref in pure RETURN position (`return M(m-1, ref w);`)
+    /// is a tail call (no spill needed) yet still threads every frame's write through the ONE shared
+    /// param heap var and corrupts the outer frame's copy-back (VM-proven 21021 vs CLR 9021).
+    /// Populated by <c>UasmEmitter.BuildRecursionInfo</c>.</summary>
+    public Dictionary<IMethodSymbol, HashSet<IMethodSymbol>> CycleCallees;
+
+    /// <summary>True when a call from <paramref name="caller"/> to <paramref name="callee"/> lies in
+    /// a recursion cycle (same non-trivial SCC or direct self-loop), tail or not ([Y3]).</summary>
+    public bool IsCycleEdge(IMethodSymbol caller, IMethodSymbol callee)
+        => caller != null && callee != null && CycleCallees != null
+           && CycleCallees.TryGetValue(caller.OriginalDefinition, out var callees)
+           && callees.Contains(callee.OriginalDefinition);
+
     /// <summary>Wave-9 round-4 [X2]/[X3]: per HOISTED recursion-cycle member (lambda / local
     /// function symbol), the read-only capture cells (locals/params of an enclosing function in
     /// the SAME SCC) that must join the node's frame spill at its marked dispatch/recursive-call
@@ -222,12 +238,19 @@ public class EmitContext
                 case IMethodBodyBaseOperation mb:
                     return HasNonTailSelfCall(mb.BlockBody, isSelf, tail: true)
                         || HasNonTailSelfCall(mb.ExpressionBody, isSelf, tail: true);
-                // Only a block's LAST statement stays in tail position.
+                // Only a block's LAST statement stays in tail position. Wave-9 round-8 [Y7]/[Y8]:
+                // hoisted lambda/local-function BLOCK bodies carry an IMPLICIT value-less trailing
+                // IReturnOperation (method bodies via IMethodBodyOperation do not), so the statement
+                // BEFORE it is the real tail position — without the skip every hoisted tail-if self
+                // dispatch/call spilled per frame and overflowed the 512-entry __recurStack at depth.
                 case IBlockOperation block:
                 {
                     var ops = block.Operations;
+                    int last = ops.Length - 1;
+                    if (last >= 0 && ops[last] is IReturnOperation { ReturnedValue: null, IsImplicit: true })
+                        last--;
                     for (int i = 0; i < ops.Length; i++)
-                        if (HasNonTailSelfCall(ops[i], isSelf, tail: i == ops.Length - 1)) return true;
+                        if (HasNonTailSelfCall(ops[i], isSelf, tail: i == last)) return true;
                     return false;
                 }
                 // A statement-form if/else in tail position: branches stay tail, the condition does not
@@ -254,7 +277,8 @@ public class EmitContext
     /// <summary>The discarded-result twin of NonTailInTailExpr: classify the expression of a TAIL
     /// statement. A matched self-call is tail (only its argument/receiver subexpressions are non-tail);
     /// a call carrying ref/out arguments is NOT spared — its copy-back reads the param heap vars AFTER
-    /// the call, and the tail classification also gates the [Q2] re-chained-ref reject.</summary>
+    /// the call. (The [Q2] re-chained-ref reject no longer rides this classification — round-8 [Y3]
+    /// moved it to the unfiltered IsCycleEdge so tail re-chains reject too.)</summary>
     static bool NonTailInTailStatement(IOperation expr, SelfCallMatcher isSelf)
     {
         if (expr == null) return false;
@@ -265,6 +289,14 @@ public class EmitContext
             foreach (var a in args)
                 if (AnySelfCall(a, isSelf)) return true;
             return AnySelfCall((expr as IInvocationOperation)?.Instance, isSelf);
+        }
+        // Wave-9 round-8 [Y1]/[Y4]: `d?.Invoke(args);` as the tail statement — the WhenNotNull
+        // dispatch is the last thing the frame runs (the null arm skips straight to the implicit
+        // return), so it stays in tail position; the receiver leg does not.
+        if (expr is IConditionalAccessOperation condAcc)
+        {
+            if (AnySelfCall(condAcc.Operation, isSelf)) return true;
+            return NonTailInTailStatement(condAcc.WhenNotNull, isSelf);
         }
         return AnySelfCall(expr, isSelf);
     }
@@ -333,6 +365,104 @@ public class EmitContext
     // closure environments are Stage-2 territory, design §8-3). LOOKUP-ONLY (§1.5).
     public readonly Dictionary<IMethodSymbol, IMethodSymbol> FirstGenericSpec
         = new(SymbolEqualityComparer.Default);
+
+    /// <summary>How a generic definition's body closures pin it to a single instantiation.
+    /// <c>Capturing</c>: a capturing lambda/local function (the [X6] round-5 reject — shared capture
+    /// cells are seeded last-spec-wins). <c>TypeParamDependent</c> (round-8 [Y2] widening): a closure
+    /// whose SIGNATURE or BODY references the enclosing generic's type parameters — the closure is
+    /// hoisted ONCE keyed by IMethodSymbol and its function types/body were emitted under the FIRST
+    /// spec's map, so a second instantiation would silently run the first instantiation's types.</summary>
+    public enum ClosurePin { None, Capturing, TypeParamDependent }
+
+    /// <summary>[X6]/[Y2] gate: does the generic DEFINITION's body contain an instantiation-pinning
+    /// closure? Walks the definition's own operation tree (specs share it). Capturing dominates.</summary>
+    public ClosurePin GenericBodyClosurePin(Compilation compilation, IMethodSymbol def)
+    {
+        var syntaxRef = def.DeclaringSyntaxReferences.FirstOrDefault();
+        if (syntaxRef == null) return ClosurePin.None;
+        var syntax = syntaxRef.GetSyntax();
+        var body = compilation.GetSemanticModel(syntax.SyntaxTree).GetOperation(syntax);
+        var pin = ClosurePin.None;
+        WalkClosurePins(body, ref pin);
+        return pin;
+    }
+
+    void WalkClosurePins(IOperation op, ref ClosurePin pin)
+    {
+        if (op == null || pin == ClosurePin.Capturing) return;
+        switch (op)
+        {
+            case IAnonymousFunctionOperation af:
+                if (CaptureAnalyzer.HasCaptures(af)) { pin = ClosurePin.Capturing; return; }
+                if (ClosureUsesMethodTypeParam(af.Symbol, af.Body)) pin = ClosurePin.TypeParamDependent;
+                break;
+            case ILocalFunctionOperation lf when lf.Symbol != null:
+                if (IsCapturingLocalFunction(lf.Symbol)
+                    || CaptureAnalyzer.GetLocalFunctionCaptures(lf.Symbol).Length > 0)
+                { pin = ClosurePin.Capturing; return; }
+                if (ClosureUsesMethodTypeParam(lf.Symbol, lf.Body)) pin = ClosurePin.TypeParamDependent;
+                break;
+        }
+        foreach (var child in op.Children)
+        {
+            WalkClosurePins(child, ref pin);
+            if (pin == ClosurePin.Capturing) return;
+        }
+    }
+
+    static bool ClosureUsesMethodTypeParam(IMethodSymbol closureSym, IOperation closureBody)
+    {
+        if (closureSym != null
+            && (TypeUsesMethodTypeParam(closureSym.ReturnType)
+                || closureSym.Parameters.Any(p => TypeUsesMethodTypeParam(p.Type))))
+            return true;
+        return OperationUsesMethodTypeParam(closureBody);
+    }
+
+    static bool OperationUsesMethodTypeParam(IOperation op)
+    {
+        if (op == null) return false;
+        if (TypeUsesMethodTypeParam(op.Type)) return true;
+        if (op is ITypeOfOperation typeOf && TypeUsesMethodTypeParam(typeOf.TypeOperand)) return true;
+        if (op is IIsTypeOperation isType && TypeUsesMethodTypeParam(isType.TypeOperand)) return true;
+        if (op is IInvocationOperation inv
+            && inv.TargetMethod.TypeArguments.Any(TypeUsesMethodTypeParam)) return true;
+        foreach (var child in op.Children)
+            if (OperationUsesMethodTypeParam(child)) return true;
+        return false;
+    }
+
+    static bool TypeUsesMethodTypeParam(ITypeSymbol t) => t switch
+    {
+        ITypeParameterSymbol => true,
+        IArrayTypeSymbol at => TypeUsesMethodTypeParam(at.ElementType),
+        INamedTypeSymbol nt => nt.IsGenericType && nt.TypeArguments.Any(TypeUsesMethodTypeParam),
+        _ => false,
+    };
+
+    /// <summary>Shared [X6]/[Y2] reject for a SECOND distinct instantiation of a generic whose body
+    /// pins it to one instantiation (capturing closure, or — round-8 — a closure referencing the
+    /// generic's type parameters). No-op for <see cref="ClosurePin.None"/>.</summary>
+    public static void ThrowIfClosurePinsInstantiation(ClosurePin pin, string methodName)
+    {
+        switch (pin)
+        {
+            case ClosurePin.Capturing:
+                throw new System.NotSupportedException(
+                    $"Generic method '{methodName}' is instantiated with more than one type-argument "
+                    + "combination but contains a lambda or local function that captures locals/parameters. "
+                    + "The hoisted closure and its capture cells are shared across instantiations in the "
+                    + "flat-heap model, so one instantiation would read the other's captured values. "
+                    + "Use a single instantiation, or make the closure capture-free.");
+            case ClosurePin.TypeParamDependent:
+                throw new System.NotSupportedException(
+                    $"Generic method '{methodName}' is instantiated with more than one type-argument "
+                    + "combination but contains a lambda or local function whose signature or body uses "
+                    + "the method's type parameters. The hoisted closure is shared across instantiations "
+                    + "in the flat-heap model and was emitted with the first instantiation's types. "
+                    + "Use a single instantiation, or keep the closure independent of the type parameters.");
+        }
+    }
 
     // Persistent local symbol → field name mapping (survives scope pop, for capture resolution).
     //

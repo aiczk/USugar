@@ -1881,18 +1881,16 @@ public abstract class HandlerBase
         // contains a CAPTURING lambda/local function is loud. The hoisted closure is keyed by
         // IMethodSymbol and shared across specs, so its capture cells are seeded by whichever spec
         // emitted last — the first spec's dispatch then reads the other instantiation's captured
-        // values (VM-proven r1=8 vs 3). Capture-free closures and single instantiations stay legal.
+        // values (VM-proven r1=8 vs 3). Round-8 [Y2] widening: a closure whose signature or body
+        // REFERENCES the generic's type parameters pins the instantiation the same way (the shared
+        // function was emitted with the first spec's map). Pin-free closures and single
+        // instantiations stay legal.
         var genericDef = constructed.OriginalDefinition;
         if (_ctx.FirstGenericSpec.TryGetValue(genericDef, out var firstSpec))
         {
-            if (!SymbolEqualityComparer.Default.Equals(firstSpec, constructed)
-                && GenericBodyHasCapturingClosure(genericDef))
-                throw new System.NotSupportedException(
-                    $"Generic method '{constructed.Name}' is instantiated with more than one type-argument "
-                    + "combination but contains a lambda or local function that captures locals/parameters. "
-                    + "The hoisted closure and its capture cells are shared across instantiations in the "
-                    + "flat-heap model, so one instantiation would read the other's captured values. "
-                    + "Use a single instantiation, or make the closure capture-free.");
+            if (!SymbolEqualityComparer.Default.Equals(firstSpec, constructed))
+                EmitContext.ThrowIfClosurePinsInstantiation(
+                    _ctx.GenericBodyClosurePin(_compilation, genericDef), constructed.Name);
         }
         else
             _ctx.FirstGenericSpec[genericDef] = constructed;
@@ -1929,32 +1927,8 @@ public abstract class HandlerBase
         _pendingGenericSpecs.Add(constructed);
     }
 
-    /// <summary>[X6] gate: does the generic DEFINITION's body contain a capturing lambda or a
-    /// capturing local function? Walks the definition's own operation tree (specs share it).</summary>
-    bool GenericBodyHasCapturingClosure(IMethodSymbol def)
-    {
-        var syntaxRef = def.DeclaringSyntaxReferences.FirstOrDefault();
-        if (syntaxRef == null) return false;
-        var syntax = syntaxRef.GetSyntax();
-        var body = _compilation.GetSemanticModel(syntax.SyntaxTree).GetOperation(syntax);
-        return ContainsCapturingClosure(body);
-    }
-
-    bool ContainsCapturingClosure(IOperation op)
-    {
-        if (op == null) return false;
-        switch (op)
-        {
-            case IAnonymousFunctionOperation af when _ctx.CaptureAnalyzer.HasCaptures(af):
-            case ILocalFunctionOperation lf when lf.Symbol != null
-                && (_ctx.IsCapturingLocalFunction(lf.Symbol)
-                    || _ctx.CaptureAnalyzer.GetLocalFunctionCaptures(lf.Symbol).Length > 0):
-                return true;
-        }
-        foreach (var child in op.Children)
-            if (ContainsCapturingClosure(child)) return true;
-        return false;
-    }
+    // [X6] gate moved to EmitContext.GenericBodyClosurePin (round-8 [Y2]/[Y10] — shared with the
+    // UasmEmitter base-instance-copy registration and widened to type-param-referencing closures).
 
     // ── Delegate bridge resolution ──
 
@@ -2412,15 +2386,24 @@ public abstract class HandlerBase
                 AddField(pids[i]);
             }
         AddField(_ctx.CurrentStructReceiverParamId);
-        // For a hoisted function (local function or lambda), only its OWN locals are frame-local and need
-        // spilling. Locals captured from an enclosing scope are shared by reference (C# closure semantics) —
-        // the same flat-heap sharing the recursion otherwise corrupts is here the CORRECT behaviour, so they
-        // must NOT be saved/restored.
-        bool isHoisted = _currentMethod != null
-            && _currentMethod.MethodKind is MethodKind.LocalFunction or MethodKind.LambdaMethod or MethodKind.AnonymousFunction;
+        // Only the CURRENT method's own locals are frame-local and need spilling. LocalBindings is a
+        // persistent class-wide map (survives scope pop for capture resolution), so before wave-9
+        // round-8 [Y9] a non-hoisted method spilled every local of every PREVIOUSLY EMITTED method
+        // too — per-frame __recurStack cost scaled with the FUNCTION COUNT of a mutual-recursion
+        // cycle (a 7-member ring with 6 locals each exhausted the 512-entry stack at ~21 frames,
+        // compile-clean VmFault; the CLR completes). Each frame saving its OWN fields at its own
+        // recursive-edge sites is the complete discipline — another method's locals are saved by
+        // that method's frames. For a hoisted function (local function or lambda) the same filter
+        // additionally keeps captured enclosing locals shared by reference (C# closure semantics —
+        // pre-existing behaviour); generic specs/base copies emit under the CONSTRUCTED symbol while
+        // their locals belong to the DEFINITION, so match through OriginalDefinition too.
         foreach (var kv in _localBindings)
         {
-            if (isHoisted && !SymbolEqualityComparer.Default.Equals(kv.Key.ContainingSymbol, _currentMethod))
+            if (kv.Key.ContainingSymbol is not IMethodSymbol localOwner
+                || _currentMethod == null
+                || (!SymbolEqualityComparer.Default.Equals(localOwner, _currentMethod)
+                    && (_currentMethod.OriginalDefinition == null
+                        || !SymbolEqualityComparer.Default.Equals(localOwner, _currentMethod.OriginalDefinition))))
                 continue;
             AddField(kv.Value.Id);
         }
@@ -2432,6 +2415,8 @@ public abstract class HandlerBase
         // slot, and the node's POST-dispatch read must see the creating activation's value
         // (DiffFuzz ref=60 vs VM 50, lambda and local-function flavors). Cells written by a hoisted
         // node keep flat sharing (same-environment mutation stays visible) and are never in the map.
+        bool isHoisted = _currentMethod != null
+            && _currentMethod.MethodKind is MethodKind.LocalFunction or MethodKind.LambdaMethod or MethodKind.AnonymousFunction;
         if (isHoisted
             && (_ctx.HoistedCaptureSpillCells.TryGetValue(_currentMethod, out var capCells)
                 || (_currentMethod.OriginalDefinition != null

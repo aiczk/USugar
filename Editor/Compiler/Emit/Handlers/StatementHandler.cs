@@ -143,10 +143,17 @@ public class StatementHandler : HandlerBase, IOperationHandler
         if (op.ReturnedValue != null)
             GuardCaptureEscapeReturn(op.ReturnedValue);
 
-        // Tail call optimization: return self(args) → overwrite params + goto entry
+        // Tail call optimization: return self(args) → overwrite params + goto entry.
+        // Wave-9 round-8 [Y3]: TCO is only sound when every ref/out arg threads the SAME parameter
+        // (param→param is an identity rebind under the shared flat heap). A re-chained ref/out
+        // (`return M(m - 1, ref w);`) rode this arm straight past GuardRefOutArguments — the snapshot
+        // loop treated `ref w` as a value arg, so every frame's writes threaded one param cell and the
+        // outer copy-back read the innermost value (VM-proven 21021 vs CLR 9021). Fall through to the
+        // ordinary call path, whose unfiltered cycle-edge guard rejects the re-chain loudly (§8-3).
         if (op.ReturnedValue is IInvocationOperation tailCall
             && _currentMethod != null
-            && SymbolEqualityComparer.Default.Equals(tailCall.TargetMethod, _currentMethod))
+            && SymbolEqualityComparer.Default.Equals(tailCall.TargetMethod, _currentMethod)
+            && TailCallRefArgsSelfThreaded(tailCall))
         {
             EmitTailCall(tailCall);
             return;
@@ -171,6 +178,23 @@ public class StatementHandler : HandlerBase, IOperationHandler
             EmitPendingDispose();
             EmitReturn();
         }
+    }
+
+    /// <summary>[Y3]: true when every ref/out argument of a self tail call is the callee parameter
+    /// itself (self-threading) — the only shape TCO's param-rebind preserves. Calls without ref/out
+    /// args trivially qualify (the common TCO case, byte-identical).</summary>
+    bool TailCallRefArgsSelfThreaded(IInvocationOperation call)
+    {
+        foreach (var arg in call.Arguments)
+        {
+            var p = arg.Parameter;
+            if (p == null || (p.RefKind != RefKind.Ref && p.RefKind != RefKind.Out)) continue;
+            if (UnwrapConversions(arg.Value) is not IParameterReferenceOperation apr
+                || !SymbolEqualityComparer.Default.Equals(
+                    apr.Parameter.OriginalDefinition, p.OriginalDefinition))
+                return false;
+        }
+        return true;
     }
 
     void EmitTailCall(IInvocationOperation tailCall)
