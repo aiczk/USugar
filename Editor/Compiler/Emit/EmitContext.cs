@@ -741,8 +741,14 @@ public class EmitContext
 
     public const string RecurStackId = "__recurStack";
     public const string RecurSpId = "__recurSp";
-    /// <summary>Max boxed values held across all live recursion frames (depth × live-vars-per-frame).</summary>
-    public const int RecurStackSize = 512;
+    /// <summary>Max boxed values held across all live recursion frames (depth × live-vars-per-frame).
+    /// Wave-12 [V1]: 512 → 8192. Legal non-tail recursion at depth ~600 with per-frame closure state
+    /// (~9 spilled slots per logical frame, VM-proven ER05/ER11 budget probes) needs ~5400 entries —
+    /// the old 512 budget VmFaulted compile-clean code at depths plain C# handles trivially. The
+    /// array is allocated once per program and ONLY when a recursion cycle exists
+    /// (EnsureRecursionStack is on-demand), so non-recursive programs pay nothing; the size lives in
+    /// the heap-default side channel, not the UASM text.</summary>
+    public const int RecurStackSize = 8192;
     bool _recurStackDeclared;
 
     /// <summary>Idempotently declare the per-program recursion stack (object[] backing + int stack pointer).

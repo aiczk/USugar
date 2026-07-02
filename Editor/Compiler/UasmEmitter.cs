@@ -1770,6 +1770,11 @@ public class UasmEmitter
         var escapeSig = new Dictionary<IMethodSymbol, string>(SymbolEqualityComparer.Default);
         foreach (var e in escape)
             if (edges.ContainsKey(e)) escapeSig[e] = DispatchSigOrWildcard(e);
+        // Wave-12 [V1]: sites whose bundle provenance is exact (see TryResolvePreciseDispatchTargets)
+        // contribute edges to their KNOWN targets only, instead of sig-matching against the whole
+        // widened escape set; every other site keeps the §5.4 blanket treatment. Keyed by operation
+        // reference — the reentrant-marking loop below re-collects sites from the same shared bodies.
+        var preciseDispatchTargets = new Dictionary<IOperation, HashSet<IMethodSymbol>>();
         foreach (var node in allNodes)
         {
             if (!bodies.TryGetValue(node, out var nodeBody) || nodeBody == null) continue;
@@ -1777,11 +1782,20 @@ public class UasmEmitter
             var dispatchSites = new List<IOperation>();
             CollectDelegateDispatchSites(nodeBody, dispatchSites);
             var nodeSigs = new List<string>();
-            foreach (var site in dispatchSites)
-                if (site is IInvocationOperation dinv && dinv.TargetMethod != null)
-                    nodeSigs.Add(DispatchSigOrWildcard(dinv.TargetMethod));
-            if (nodeSigs.Count == 0) continue;
             var nodeEdges = edges[node];
+            foreach (var site in dispatchSites)
+            {
+                if (site is not IInvocationOperation dinv || dinv.TargetMethod == null) continue;
+                if (TryResolvePreciseDispatchTargets(nodeBody, dinv, out var preciseTargets))
+                {
+                    preciseDispatchTargets[site] = preciseTargets;
+                    foreach (var t in preciseTargets)
+                        if (edges.ContainsKey(t)) nodeEdges.Add(t);
+                }
+                else
+                    nodeSigs.Add(DispatchSigOrWildcard(dinv.TargetMethod));
+            }
+            if (nodeSigs.Count == 0) continue;
             foreach (var kv in escapeSig)
                 foreach (var ds in nodeSigs)
                     if (SigsMatch(ds, kv.Value)) { nodeEdges.Add(kv.Key); break; }
@@ -1926,6 +1940,18 @@ public class UasmEmitter
                         if (site.Syntax != null && EmitContext.IsNonTailDispatchSite(callerBody, site)
                             && site is IInvocationOperation dsInv && dsInv.TargetMethod != null)
                         {
+                            // Wave-12 [V1]: a provenance-exact site is Reentrant only when one of
+                            // ITS OWN possible callees reaches this SCC (through that callee's full
+                            // edge set, blanket edges included — a captured-field dispatch inside
+                            // the callee still re-enters and still spills, FP5B4 form). The sig
+                            // match against the whole widened escape set stays for every site whose
+                            // bundle can be foreign-minted.
+                            if (preciseDispatchTargets.TryGetValue(site, out var preciseTargets))
+                            {
+                                foreach (var t in preciseTargets)
+                                    if (ReachFrom(t).Overlaps(sccSet)) { reentrantSites.Add(site.Syntax); break; }
+                                continue;
+                            }
                             var dsSig = DispatchSigOrWildcard(dsInv.TargetMethod);
                             foreach (var rs in reenterSigs)
                                 if (SigsMatch(rs, dsSig)) { reentrantSites.Add(site.Syntax); break; }
@@ -2033,6 +2059,105 @@ public class UasmEmitter
         }
         foreach (var child in op.Children)
             CollectEscapedDelegateTargets(child, internalMethods, result);
+    }
+
+    // ── Wave-12 [V1]: per-site dispatch-target provenance ──
+    // A dispatch that reads a LOCAL whose every write (declaration initializer / simple assignment,
+    // anywhere in the body tree, nested closures included) is a delegate CREATION has a provably
+    // exact callee set: locals are not foreign-writable through the sanctioned surface
+    // (SetProgramVariable targets symbols by name only via the documented accepted-risk raw boundary,
+    // ref locals and delegate-typed ref/out params are rejected), so the bundle can only be one the
+    // scanned creations minted. The §5.4 same-signature widening — sound and required for
+    // foreign-writable storage (fields, params, elements, foreign receivers) — over-approximated
+    // these sites too: every same-sig bridge-bearing method joined the callee set, so a per-frame
+    // closure-helper dispatch inside a recursion cycle was marked Reentrant and spilled the whole
+    // frame at EVERY iteration's dispatch, overflowing the 512-entry __recurStack ~20% earlier than
+    // the equivalent plain-call recursion (VM-proven VmFault at 102 frames on legal code, ErD_D100).
+    // Precise iff: the dispatch instance (conversions unwrapped) is a local reference; the local's
+    // DECLARATOR is inside this node's own body (a local declared in an enclosing method and
+    // dispatched inside a hoisted closure keeps the blanket treatment — its defs live outside this
+    // tree); no ref/out use, no compound/increment/deconstruction target anywhere; at least one
+    // write exists; and every write's RHS resolves to a delegate creation (or null). Targets mirror
+    // CollectEscapedDelegateTargets' mapping (OriginalDefinition + the [X1] leaf override).
+    bool TryResolvePreciseDispatchTargets(IOperation callerBody, IInvocationOperation site,
+        out HashSet<IMethodSymbol> targets)
+    {
+        targets = null;
+        var instance = site.Instance;
+        while (instance is IConversionOperation conv) instance = conv.Operand;
+        if (instance is not ILocalReferenceOperation locRef || locRef.Local is not { } local)
+            return false;
+
+        var found = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
+        bool declFound = false, poisoned = false; int writeCount = 0;
+
+        bool RhsIsCreation(IOperation rhs)
+        {
+            while (rhs is IConversionOperation c) rhs = c.Operand;
+            switch (rhs)
+            {
+                case IDelegateCreationOperation dc:
+                    return RhsIsCreation(dc.Target);
+                case IAnonymousFunctionOperation af when af.Symbol != null:
+                    found.Add(af.Symbol);
+                    return true;
+                case IMethodReferenceOperation mr when mr.Method != null:
+                    found.Add(mr.Method.OriginalDefinition);
+                    if (LeafMethodRefTarget(mr) is { } leafT) found.Add(leafT);
+                    return true;
+                default:
+                    // null / default contribute no callee; anything else breaks provenance.
+                    return rhs.ConstantValue is { HasValue: true, Value: null }
+                        || rhs is IDefaultValueOperation;
+            }
+        }
+
+        void Walk(IOperation op)
+        {
+            if (op == null || poisoned) return;
+            switch (op)
+            {
+                case IVariableDeclaratorOperation vd when SymbolEqualityComparer.Default.Equals(vd.Symbol, local):
+                    declFound = true;
+                    if (vd.Initializer?.Value is { } init)
+                    {
+                        writeCount++;
+                        if (!RhsIsCreation(init)) { poisoned = true; return; }
+                    }
+                    break;
+                case ISimpleAssignmentOperation sa
+                    when sa.Target is ILocalReferenceOperation t && SymbolEqualityComparer.Default.Equals(t.Local, local):
+                    writeCount++;
+                    if (!RhsIsCreation(sa.Value)) { poisoned = true; return; }
+                    Walk(sa.Value); // still scan the RHS subtree (a creation may nest another write)
+                    return;
+                case ISimpleAssignmentOperation sa2 when SubtreeReferencesLocal(sa2.Target):
+                case IDeconstructionAssignmentOperation da when SubtreeReferencesLocal(da.Target):
+                case ICompoundAssignmentOperation ca when SubtreeReferencesLocal(ca.Target):
+                case IIncrementOrDecrementOperation io when SubtreeReferencesLocal(io.Target):
+                case IArgumentOperation { Parameter: { RefKind: not RefKind.None } } arg when SubtreeReferencesLocal(arg.Value):
+                    poisoned = true;
+                    return;
+            }
+            foreach (var child in op.Children)
+                Walk(child);
+        }
+
+        bool SubtreeReferencesLocal(IOperation op)
+        {
+            if (op == null) return false;
+            if (op is ILocalReferenceOperation lr && SymbolEqualityComparer.Default.Equals(lr.Local, local))
+                return true;
+            foreach (var child in op.Children)
+                if (SubtreeReferencesLocal(child)) return true;
+            return false;
+        }
+
+        Walk(callerBody);
+        if (poisoned || !declFound || writeCount == 0)
+            return false;
+        targets = found;
+        return true;
     }
 
     // True if the body contains a delegate dispatch attributed to THIS function (hoisted children —

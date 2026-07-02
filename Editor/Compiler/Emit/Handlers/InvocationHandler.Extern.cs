@@ -1030,6 +1030,30 @@ public partial class InvocationHandler
             && _typeParamMap.TryGetValue(tp, out var concreteType))
             containingTypeSym = concreteType;
 
+        // Wave-12 [V3]: an Object/ValueType/Enum-inherited member (Equals/GetHashCode/ToString) invoked
+        // on a TYPE-PARAMETER receiver binds the effective-base-class symbol (e.g. System.ValueType.Equals
+        // under a struct constraint), whose Udon-mapped containing type (SystemValueType) has no registered
+        // extern — the invalid signature then fell into ResolveExtern's Component fallback chain and
+        // silently adopted UnityEngineComponent.__Equals/__GetHashCode/__ToString for a boxed value
+        // receiver (type-mismatched extern on the real VM). Monomorphization knows the exact runtime type,
+        // so resolve the boxed virtual dispatch at compile time: re-route to the concrete type's own
+        // extern (SystemInt32.__Equals__SystemObject__SystemBoolean etc. — all registered per primitive).
+        // A user aggregate (object[]-emulated struct) has no such extern and C#'s ValueType semantics
+        // (field-wise Equals, type-name ToString) cannot be expressed as one — loud per design §8-3.
+        if (instanceType is ITypeParameterSymbol vtp && _typeParamMap != null
+            && _typeParamMap.TryGetValue(vtp, out var vConcrete)
+            && method.ContainingType.SpecialType is SpecialType.System_Object
+                or SpecialType.System_ValueType or SpecialType.System_Enum)
+        {
+            if (vConcrete is INamedTypeSymbol vAgg && EmitContext.IsAggregateType(vAgg))
+                throw new System.NotSupportedException(
+                    $"'{method.Name}' on type parameter '{vtp.Name}' instantiated with user-defined "
+                    + $"struct '{vConcrete.Name}' is not supported: Udon has no extern for it and C#'s "
+                    + "ValueType semantics cannot be emulated. Compare/format the struct's fields "
+                    + "directly instead.");
+            containingTypeSym = vConcrete;
+        }
+
         var containingType = GetUdonType(containingTypeSym);
 
         // Object.Instantiate → VRCInstantiate (Udon VM redirect)

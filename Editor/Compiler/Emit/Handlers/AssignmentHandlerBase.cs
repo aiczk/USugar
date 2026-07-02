@@ -286,14 +286,18 @@ public abstract class AssignmentHandlerBase : HandlerBase
             case IPropertyReferenceOperation propRef when ExternResolver.IsUdonSharpBehaviour(propRef.Property.ContainingType) && propRef.Instance is not IInstanceReferenceOperation:
             {
                 var instanceVal = VisitExpression(propRef.Instance);
-                var isAutoSet = propRef.Property.SetMethod?.DeclaringSyntaxReferences.IsEmpty == true;
-                if (isAutoSet || propRef.Property.SetMethod == null)
+                // Wave-12 [V2]: non-public autos write the declared backing symbol directly (their
+                // accessors are never exported); see IsNonPublicAutoCrossProperty.
+                var isAutoSet = propRef.Property.SetMethod == null
+                    || IsNonPublicAutoCrossProperty(propRef.Property.SetMethod, propRef.Property);
+                if (isAutoSet)
                 {
                     var nameConst = Const(propRef.Property.Name, "SystemString");
                     EmitExternVoid("VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid", new List<CLeaf> { instanceVal, nameConst, valueVal });
                 }
                 else
                 {
+                    RejectNonPublicCrossAccessor(propRef.Property.SetMethod, propRef.Property); // wave-12 [V2]
                     var (exportName, setParamIds, _) = GetCalleeLayout(propRef.Property.SetMethod);
                     var paramNameConst = Const(setParamIds[0], "SystemString");
                     EmitExternVoid("VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid", new List<CLeaf> { instanceVal, paramNameConst, valueVal });

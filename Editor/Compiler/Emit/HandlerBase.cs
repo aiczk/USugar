@@ -482,6 +482,14 @@ public abstract class HandlerBase
         var dotIdx = externSig.IndexOf(".__");
         if (dotIdx < 0) return externSig;
         var containingType = externSig.Substring(0, dotIdx);
+        // Wave-12 [V3]: the fallback chain exists for Component-hierarchy receivers whose leaf type
+        // lacks a direct extern (Udon registers e.g. __GetComponent on UnityEngineComponent only). A
+        // System.* receiver can never be Component-derived, so substituting one of these base types
+        // mechanically laundered an invalid System-typed signature into an unrelated Component extern
+        // (VM-proven: boxed value-type Equals/GetHashCode/ToString adopted UnityEngineComponent.__*).
+        // Let the invalid signature through unchanged instead — the validator rejects it loudly.
+        if (containingType.StartsWith("System", System.StringComparison.Ordinal))
+            return externSig;
         var rest = externSig.Substring(dotIdx);
         foreach (var baseType in FallbackBaseTypes)
         {
@@ -1243,8 +1251,11 @@ public abstract class HandlerBase
                     if (propRef.Property.Type is INamedTypeSymbol dlgPropType && dlgPropType.DelegateInvokeMethod != null)
                         throw new System.NotSupportedException("Delegate properties are not supported in v2.1. Use delegate fields instead.");
 
-                    var isAutoSet = propRef.Property.SetMethod?.DeclaringSyntaxReferences.IsEmpty == true;
-                    if (isAutoSet || propRef.Property.SetMethod == null)
+                    // Wave-12 [V2]: a NON-public auto-property's backing symbol is declared but its
+                    // accessors are never exported — write the symbol directly (needs no entry point).
+                    var isAutoSet = propRef.Property.SetMethod == null
+                        || IsNonPublicAutoCrossProperty(propRef.Property.SetMethod, propRef.Property);
+                    if (isAutoSet)
                     {
                         // Auto-property or read-only: direct SetProgramVariable("PropertyName")
                         var nameConst = Const(propRef.Property.Name, "SystemString");
@@ -1253,6 +1264,7 @@ public abstract class HandlerBase
                     else
                     {
                         // Non-auto property setter: call via SendCustomEvent
+                        RejectNonPublicCrossAccessor(propRef.Property.SetMethod, propRef.Property); // wave-12 [V2]
                         var (exportName, setParamIds, _) = GetCalleeLayout(propRef.Property.SetMethod);
 
                         // SetProgramVariable for the value parameter
@@ -1665,6 +1677,39 @@ public abstract class HandlerBase
     }
 
     // ── Call helpers ──
+
+    /// <summary>Wave-12 [V2]: a NON-auto property accessor dispatched through a variable receiver
+    /// needs an exported entry point (SetProgramVariable + SendCustomEvent), but EmitMethods only
+    /// exports PUBLIC accessors — the dispatch of a non-public one targets an event name matching no
+    /// .export, a silent no-op on device (VM-proven: the setter body never ran, the cross write was
+    /// lost and the getter read a stale return var). Loud per design §8-3, mirroring the
+    /// EmitCrossIndexerCall gate and the [J2] non-this method reject. Auto-properties are exempt:
+    /// they route through SetProgramVariable/GetProgramVariable on the backing symbol, which needs no
+    /// entry point.</summary>
+    protected static void RejectNonPublicCrossAccessor(IMethodSymbol accessor, IPropertySymbol prop)
+    {
+        if (accessor.DeclaredAccessibility != Accessibility.Public)
+            throw new System.NotSupportedException(
+                $"Property '{prop.Name}' of '{prop.ContainingType.Name}' is accessed through a "
+                + "variable receiver, which dispatches cross-program (SetProgramVariable + "
+                + "SendCustomEvent) and so needs a public "
+                + (accessor.MethodKind == MethodKind.PropertySet ? "setter" : "getter")
+                + ". Make the accessor public, or access the property through 'this'.");
+    }
+
+    /// <summary>Wave-12 [V2]: TRUE auto-property detection — a compiler-generated backing field is
+    /// associated with the property. The cross-arm `DeclaringSyntaxReferences.IsEmpty` checks were
+    /// always FALSE for source `{ get; set; }` accessors (same trap UasmEmitter's field-declaration
+    /// pass documents), so the SetProgramVariable/GetProgramVariable direct arms were dead and every
+    /// cross property access dispatched accessor functions — a silent no-op for NON-public autos,
+    /// whose accessors are never exported yet whose backing symbol IS declared on the receiver's
+    /// heap. Non-public autos now take the direct-symbol arm (needs no entry point); public
+    /// accessors keep the dispatch path byte-for-byte.</summary>
+    protected static bool IsNonPublicAutoCrossProperty(IMethodSymbol accessor, IPropertySymbol prop)
+        => accessor != null
+           && accessor.DeclaredAccessibility != Accessibility.Public
+           && prop.ContainingType.GetMembers().OfType<IFieldSymbol>()
+               .Any(f => f.IsImplicitlyDeclared && SymbolEqualityComparer.Default.Equals(f.AssociatedSymbol, prop));
 
     /// <summary>Wave-9 round-2 [W6]: user-defined indexer accessed through a VARIABLE receiver (an
     /// own-typed copy of this, a base-typed reference, or another behaviour). Only the literal
