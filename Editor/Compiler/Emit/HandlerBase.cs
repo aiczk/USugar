@@ -1313,7 +1313,7 @@ public abstract class HandlerBase
             System.Array.Copy(lfParamIds, withEnvp, lfParamIds.Length);
             withEnvp[lfParamIds.Length] = envpId;
             lfParamIds = withEnvp;
-            _ctx.EnvpParamFields[localFunc.OriginalDefinition] = envpId;
+            _ctx.RegisterEnvpField(localFunc.OriginalDefinition, envpId);
         }
         _methodParamVarIds[localFunc] = lfParamIds;
         foreach (var pid in lfParamIds) func.ParamFieldNames.Add(pid);
@@ -1479,7 +1479,7 @@ public abstract class HandlerBase
             // generic (Lf<int> + Lf<long>) each own an __envp field — a definition key is
             // last-spec-wins and wires spec 1's body to spec 2's field (silent wrong env / fault).
             // Same keying discipline as _methodParamVarIds[constructed] below.
-            _ctx.EnvpParamFields[constructed] = envpId;
+            _ctx.RegisterEnvpField(constructed, envpId);
         }
         _methodParamVarIds[constructed] = gsParamIds;
         foreach (var pid in gsParamIds) func.ParamFieldNames.Add(pid);

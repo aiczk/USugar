@@ -552,11 +552,32 @@ public class EmitContext
     // instead (EnvEmit.Leaf).
     public readonly Dictionary<(object Func, int ScopeId), int> ScopeEnvSlots = new();
 
-    // Stage 2 M2: hoisted closure method (definition-keyed) → the param FIELD id of its hidden
-    // trailing __envp parameter. Registered where the closure's params are laid out; read by
-    // EnvEmit.Leaf when emission inside the closure body needs an outer scope's env.
-    public readonly Dictionary<IMethodSymbol, string> EnvpParamFields
-        = new(SymbolEqualityComparer.Default);
+    // Stage 2 M2: hoisted closure method → the param FIELD id of its hidden trailing __envp
+    // parameter. Registered where the closure's params are laid out; read by EnvEmit.Leaf and the
+    // TCO self-rebind when emission inside the closure body needs an outer scope's env.
+    //
+    // KEYING DISCIPLINE (Stage 2 M5 gotcha-3: a definition key here was last-spec-wins and wired
+    // one generic spec's body to another spec's field — VM-proven wrong-value fault, fixed in
+    // 5064f77). This map is intentionally MIXED-key: a capturing generic specialization that is
+    // pinned to per-instantiation storage registers under its CONSTRUCTED symbol (each spec owns
+    // its own field); a capturing closure with only ever one instantiation (non-generic, or a
+    // generic local function sharing one T-free hoist) registers under its DEFINITION. Callers
+    // never touch the dictionary directly — go through RegisterEnvpField / TryGetEnvpField, which
+    // encode the constructed-first / definition-fallback lookup in exactly one place.
+    readonly Dictionary<IMethodSymbol, string> _envpParamFields = new(SymbolEqualityComparer.Default);
+
+    /// <summary>Register a hoisted closure's hidden __envp field. Pass the CONSTRUCTED symbol for a
+    /// per-instantiation registration (each spec owns its own field), or a DEFINITION for a
+    /// closure that only ever has one instantiation. See the field's keying-discipline comment.</summary>
+    public void RegisterEnvpField(IMethodSymbol closureKey, string envpFieldId)
+        => _envpParamFields[closureKey] = envpFieldId;
+
+    /// <summary>Resolve a closure's __envp field: the CONSTRUCTED symbol first (per-instantiation
+    /// storage), its ORIGINAL DEFINITION as fallback (shared/non-generic storage). The single
+    /// lookup point for the mixed keying discipline documented on the backing field.</summary>
+    public bool TryGetEnvpField(IMethodSymbol closure, out string envpFieldId)
+        => _envpParamFields.TryGetValue(closure, out envpFieldId)
+           || _envpParamFields.TryGetValue(closure.OriginalDefinition, out envpFieldId);
 
     // Round-7 follow-up [Q4]: foreach ITERATION variables. C# makes them READONLY, so invoking a
     // non-readonly struct member on one runs on a DEFENSIVE COPY (the classic foreach-struct-

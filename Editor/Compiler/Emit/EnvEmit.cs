@@ -61,10 +61,7 @@ static class EnvEmit
             throw new InvalidOperationException(
                 $"Env scope #{scope.Id} ({scope.Kind}) is not live in this frame and there is no enclosing closure to chain from.");
         var def = currentClosure.OriginalDefinition;
-        // Constructed-spec key first (a generic closure's specs each own an __envp field),
-        // definition key as the non-generic fallback.
-        if (!ctx.EnvpParamFields.TryGetValue(currentClosure, out var envpField)
-            && !ctx.EnvpParamFields.TryGetValue(def, out envpField))
+        if (!ctx.TryGetEnvpField(currentClosure, out var envpField))
             throw new InvalidOperationException(
                 $"Closure '{currentClosure.Name}' reads captured state but has no __envp parameter registered.");
         if (!ctx.CaptureScope.ClosureScopes.TryGetValue(def, out var ownScope) || ownScope.BindingScope == null)
