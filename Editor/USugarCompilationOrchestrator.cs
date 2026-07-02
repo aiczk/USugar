@@ -98,11 +98,22 @@ static class USugarCompilationOrchestrator
         var sw = System.Diagnostics.Stopwatch.StartNew();
         var collectedDiagnostics = new List<(string file, int line, int character, string message, string severity)>();
         string fingerprint = null;
+        var marks = new List<(string label, double ms)>();
+        var lastMark = TimeSpan.Zero;
+        void Mark(string label)
+        {
+            var now = sw.Elapsed;
+            marks.Add((label, (now - lastMark).TotalMilliseconds));
+            lastMark = now;
+        }
+        var classTimes = new System.Collections.Concurrent.ConcurrentBag<(string name, double ms)>();
+        double assembleMs = 0, storeMs = 0, uasmIoMs = 0;
 
         try
         {
             // ── Phase 1: Serial preparation ──
             var sourcePaths = CollectSourcePaths();
+            Mark("collect-sources");
             if (sourcePaths.Count == 0)
             {
                 USugarLog.Warn("No UdonSharpBehaviour sources found");
@@ -111,6 +122,7 @@ static class USugarCompilationOrchestrator
             }
 
             fingerprint = ComputeFingerprint(sourcePaths);
+            Mark("fingerprint");
             var lastFp = SessionState.GetString(FingerprintKey, "");
             var lastApplied = SessionState.GetBool(AppliedKey, false);
             if (!force && fingerprint == lastFp && (!applyToAssets || lastApplied))
@@ -129,8 +141,10 @@ static class USugarCompilationOrchestrator
                     .Select(d => d.fullName)
                     .Where(n => !string.IsNullOrEmpty(n)));
             ExternResolver.IsExternValid = validExterns.Contains;
+            Mark("extern-set");
 
             var compilation = BuildCompilation(sourcePaths);
+            Mark("build-compilation");
 
             Dictionary<string, List<(UdonSharpProgramAsset asset, string scriptPath)>> programAssetLookup = null;
             if (applyToAssets)
@@ -151,6 +165,7 @@ static class USugarCompilationOrchestrator
                     list.Add((asset, AssetDatabase.GetAssetPath(asset.sourceCsScript)));
                 }
             }
+            Mark("program-asset-lookup");
 
             // Collect all UdonSharpBehaviour classes
             var classList = new List<(INamedTypeSymbol symbol, SemanticModel model, SyntaxTree tree)>();
@@ -168,6 +183,7 @@ static class USugarCompilationOrchestrator
                     classList.Add((symbol, model, tree));
                 }
             }
+            Mark("semantic-models");
 
             // Pre-plan all layouts (serial, populates cache)
             var planner = new LayoutPlanner(compilation);
@@ -178,6 +194,7 @@ static class USugarCompilationOrchestrator
                     planner.Plan(iface);
             }
             planner.Freeze();
+            Mark("layout-plan");
 
             // Pre-compute diagnostics per tree (serial — avoids Roslyn lock contention)
             var treeDiagnostics = new Dictionary<SyntaxTree, Diagnostic[]>();
@@ -187,12 +204,14 @@ static class USugarCompilationOrchestrator
                 treeDiagnostics[tree] = model.GetDiagnostics()
                     .Where(d => d.Severity == DiagnosticSeverity.Error).ToArray();
             }
+            Mark("get-diagnostics");
 
             // ── Phase 2: Parallel emit ──
             var emitResults = new System.Collections.Concurrent.ConcurrentBag<EmitResult>();
             System.Threading.Tasks.Parallel.ForEach(classList, classInfo =>
             {
                 var (symbol, model, tree) = classInfo;
+                var classSw = System.Diagnostics.Stopwatch.StartNew();
                 try
                 {
                     var treeErrors = treeDiagnostics[tree];
@@ -231,7 +250,12 @@ static class USugarCompilationOrchestrator
                     emitResults.Add(EmitResult.Error(symbol, tree, className, line, character,
                         $"Failed to compile {symbol.Name}: {inner.Message}"));
                 }
+                finally
+                {
+                    classTimes.Add((symbol.Name, classSw.Elapsed.TotalMilliseconds));
+                }
             });
+            Mark("emit-wall");
 
             // ── Phase 3: Serial apply ──
             // OrderBy class name for deterministic output order (ConcurrentBag yields in arbitrary order).
@@ -254,9 +278,11 @@ static class USugarCompilationOrchestrator
                 var ns = result.Symbol.ContainingNamespace?.IsGlobalNamespace == false
                     ? result.Symbol.ContainingNamespace.ToDisplayString() + "." : "";
                 var className = $"{ns}{result.Symbol.Name}";
+                var opSw = System.Diagnostics.Stopwatch.StartNew();
                 var classDir = Path.Combine("Library", "USugarCache", className);
                 Directory.CreateDirectory(classDir);
                 File.WriteAllText(Path.Combine(classDir, "uasm.txt"), result.Uasm);
+                uasmIoMs += opSw.Elapsed.TotalMilliseconds;
 
                 // Merge emitter diagnostics. Anything not explicitly "Warning" is treated as an error
                 // (default-deny: a typo'd severity must not silently demote to a shipped program).
@@ -297,9 +323,12 @@ static class USugarCompilationOrchestrator
                         continue;
                     }
 
+                    opSw.Restart();
                     var program = USugarConstantApplier.AssembleUasm(result.Uasm, result.HeapSize);
+                    assembleMs += opSw.Elapsed.TotalMilliseconds;
                     if (program != null)
                     {
+                        opSw.Restart();
                         USugarConstantApplier.ApplyConstantValues(program, result.Constants);
                         programAsset.fieldDefinitions = USugarTypeCacheManager.BuildFieldDefinitions(result.Symbol);
                         // [NetworkCallable] entry-point metadata — required for SendCustomNetworkEvent with
@@ -318,6 +347,7 @@ static class USugarCompilationOrchestrator
                             programAsset.behaviourSyncMode = (BehaviourSyncMode)syncMode;
                         EditorUtility.SetDirty(programAsset);
                         PushUasmToEditorCache(programAsset, result.Uasm);
+                        storeMs += opSw.Elapsed.TotalMilliseconds;
                     }
                     else
                     {
@@ -329,11 +359,13 @@ static class USugarCompilationOrchestrator
                 }
             }
 
+            Mark("apply-loop");
             if (applyToAssets && count > 0)
             {
                 InvalidateSerializationCaches();
                 AssetDatabase.SaveAssets();
             }
+            Mark("save-assets");
 
             sw.Stop();
             LastCompileHadErrors = failures > 0;
@@ -347,6 +379,14 @@ static class USugarCompilationOrchestrator
                 SessionState.SetString(FingerprintKey, fingerprint);
                 SessionState.SetBool(AppliedKey, applyToAssets || lastApplied);
             }
+            var emitSum = classTimes.Sum(c => c.ms);
+            var slowest = string.Join(", ", classTimes.OrderByDescending(c => c.ms).Take(10)
+                .Select(c => $"{c.name}={c.ms:F0}"));
+            USugarLog.Info(
+                "Compile breakdown (ms): "
+                + string.Join(", ", marks.Select(m => $"{m.label}={m.ms:F0}"))
+                + $" | apply detail: uasm-io={uasmIoMs:F0}, assemble={assembleMs:F0}, store={storeMs:F0}"
+                + $" | emit cpu-sum={emitSum:F0} over {classTimes.Count} classes, slowest: {slowest}");
             var msg = failures > 0
                 ? $"Compile of {count} script{(count != 1 ? "s" : "")} finished in {sw.Elapsed:mm\\:ss\\.fff} ({failures} failed)"
                 : $"Compile of {count} script{(count != 1 ? "s" : "")} finished in {sw.Elapsed:mm\\:ss\\.fff}";
