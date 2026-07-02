@@ -17,6 +17,7 @@
     <Compile Include="../../Editor/Compiler/Emit/EmitDiagnostic.cs" />
     <Compile Include="../../Editor/Compiler/Emit/EmitContext.cs" />
     <Compile Include="../../Editor/Compiler/Emit/EnvEmit.cs" />
+    <Compile Include="../../Editor/Compiler/Emit/TailCallAnalysis.cs" />
     <Compile Include="../../Editor/Compiler/Emit/Analysis/LambdaCaptureAnalyzer.cs" />
     <Compile Include="../../Editor/Compiler/Emit/Analysis/CaptureScopeAnalysis.cs" />
     <Compile Include="../../Editor/Compiler/Emit/IOperationHandler.cs" />

@@ -216,153 +216,8 @@ public class EmitContext
     // ── Tail-call analysis (shared by named-method and recursive-lambda recursion detection) ──
     // A self-recursive call only needs spilling when it is NOT in tail position: a tail call reads nothing
     // of its frame afterwards, so the flat-heap clobber is harmless and deep tail recursion must not spill.
-
-    /// <summary>Returns the call's argument list if <paramref name="op"/> is a self-recursive call to
-    /// track, else default (and false via the out usage). Lets one tail walker serve named calls and
-    /// delegate-variable invocations.</summary>
-    public delegate bool SelfCallMatcher(IOperation op, out System.Collections.Immutable.ImmutableArray<IArgumentOperation> args);
-
-    /// <summary>True if <paramref name="body"/> contains a NON-tail self-recursive call (per the matcher).
-    /// Conditional (`cond ? a : self(..)`) branches count as tail positions; the condition does not.
-    /// Wave-9 round-6 [X1]: STATEMENT-form tail positions count too — a void self-call that is the
-    /// LAST statement executed before the function's implicit return (`M(m-1);` / `da(m-1);` as the
-    /// final statement, including through nested blocks and if/else branches in tail position) reads
-    /// nothing of its frame afterwards, exactly like `return M(m-1);`. Pre-fix these spilled every
-    /// frame and overflowed the 512-entry __recurStack at depth (compile-clean VmFault on legal C#).</summary>
-    public static bool HasNonTailSelfCall(IOperation body, SelfCallMatcher isSelf)
-        => HasNonTailSelfCall(body, isSelf, tail: true);
-
-    static bool HasNonTailSelfCall(IOperation body, SelfCallMatcher isSelf, bool tail)
-    {
-        if (body == null) return false;
-        if (body is IReturnOperation ret) return NonTailInTailExpr(ret.ReturnedValue, isSelf);
-        if (tail)
-        {
-            switch (body)
-            {
-                // Method/accessor bodies arrive as IMethodBodyOperation (block XOR expression body).
-                case IMethodBodyBaseOperation mb:
-                    return HasNonTailSelfCall(mb.BlockBody, isSelf, tail: true)
-                        || HasNonTailSelfCall(mb.ExpressionBody, isSelf, tail: true);
-                // Only a block's LAST statement stays in tail position. Wave-9 round-8 [Y7]/[Y8]:
-                // hoisted lambda/local-function BLOCK bodies carry an IMPLICIT value-less trailing
-                // IReturnOperation (method bodies via IMethodBodyOperation do not), so the statement
-                // BEFORE it is the real tail position — without the skip every hoisted tail-if self
-                // dispatch/call spilled per frame and overflowed the 512-entry __recurStack at depth.
-                case IBlockOperation block:
-                {
-                    var ops = block.Operations;
-                    int last = ops.Length - 1;
-                    if (last >= 0 && ops[last] is IReturnOperation { ReturnedValue: null, IsImplicit: true })
-                        last--;
-                    for (int i = 0; i < ops.Length; i++)
-                        if (HasNonTailSelfCall(ops[i], isSelf, tail: i == last)) return true;
-                    return false;
-                }
-                // A statement-form if/else in tail position: branches stay tail, the condition does not
-                // (mirrors the expression-form conditional rule in NonTailInTailExpr). Loops, usings
-                // etc. deliberately fall through to the generic non-tail walk below — code
-                // (back-edges, Dispose) runs after their last statement.
-                case IConditionalOperation cond:
-                    if (AnySelfCall(cond.Condition, isSelf)) return true;
-                    return HasNonTailSelfCall(cond.WhenTrue, isSelf, tail: true)
-                        || HasNonTailSelfCall(cond.WhenFalse, isSelf, tail: true);
-                // Wave-9 round-9: a SWITCH in tail position — unlike loops/usings, nothing runs after
-                // an arm's last statement except the implicit break out of the switch (arms cannot
-                // fall through), so each arm's trailing statement (before that break) stays tail.
-                // The switch value and case clauses are not; a trailing `goto case`/`goto label`
-                // stays on the generic walk (another arm's body runs after it). Pre-fix every
-                // switch-arm tail self-call spilled per frame and overflowed the 512-entry
-                // __recurStack at depth (compile-clean VmFault on legal C#).
-                case ISwitchOperation sw:
-                {
-                    if (AnySelfCall(sw.Value, isSelf)) return true;
-                    foreach (var swCase in sw.Cases)
-                    {
-                        foreach (var clause in swCase.Clauses)
-                            if (AnySelfCall(clause, isSelf)) return true;
-                        var caseBody = swCase.Body;
-                        int caseLast = caseBody.Length - 1;
-                        if (caseLast >= 0 && caseBody[caseLast] is IBranchOperation { BranchKind: BranchKind.Break })
-                            caseLast--;
-                        for (int i = 0; i < caseBody.Length; i++)
-                            if (HasNonTailSelfCall(caseBody[i], isSelf, tail: i == caseLast)) return true;
-                    }
-                    return false;
-                }
-                // Wave-9 round-9: a LABELED statement in tail position — the label wrapper changes
-                // where control can ARRIVE, not what runs after, so the wrapped statement keeps the
-                // tail flag (`TAIL: M(m-1);` as the final statement is exactly `M(m-1);`).
-                case ILabeledOperation labeledStmt:
-                    return HasNonTailSelfCall(labeledStmt.Operation, isSelf, tail: true);
-                case IExpressionStatementOperation exprStmt:
-                    return NonTailInTailStatement(exprStmt.Operation, isSelf);
-            }
-        }
-        if (isSelf(body, out _)) return true; // self-call as a statement / non-tail position
-        foreach (var child in body.Children)
-        {
-            if (child is ILocalFunctionOperation || child is IAnonymousFunctionOperation) continue;
-            if (HasNonTailSelfCall(child, isSelf, tail: false)) return true;
-        }
-        return false;
-    }
-
-    /// <summary>The discarded-result twin of NonTailInTailExpr: classify the expression of a TAIL
-    /// statement. A matched self-call is tail (only its argument/receiver subexpressions are non-tail);
-    /// a call carrying ref/out arguments is NOT spared — its copy-back reads the param heap vars AFTER
-    /// the call. (The [Q2] re-chained-ref reject no longer rides this classification — round-8 [Y3]
-    /// moved it to the unfiltered IsCycleEdge so tail re-chains reject too.)</summary>
-    static bool NonTailInTailStatement(IOperation expr, SelfCallMatcher isSelf)
-    {
-        if (expr == null) return false;
-        if (isSelf(expr, out var args)
-            && (expr is not IInvocationOperation refInv
-                || refInv.TargetMethod.Parameters.All(p => p.RefKind == RefKind.None)))
-        {
-            foreach (var a in args)
-                if (AnySelfCall(a, isSelf)) return true;
-            return AnySelfCall((expr as IInvocationOperation)?.Instance, isSelf);
-        }
-        // Wave-9 round-8 [Y1]/[Y4]: `d?.Invoke(args);` as the tail statement — the WhenNotNull
-        // dispatch is the last thing the frame runs (the null arm skips straight to the implicit
-        // return), so it stays in tail position; the receiver leg does not.
-        if (expr is IConditionalAccessOperation condAcc)
-        {
-            if (AnySelfCall(condAcc.Operation, isSelf)) return true;
-            return NonTailInTailStatement(condAcc.WhenNotNull, isSelf);
-        }
-        return AnySelfCall(expr, isSelf);
-    }
-
-    static bool NonTailInTailExpr(IOperation expr, SelfCallMatcher isSelf)
-    {
-        if (expr == null) return false;
-        if (isSelf(expr, out var args)) // a tail self-call; only its arguments are non-tail
-        {
-            foreach (var a in args)
-                if (AnySelfCall(a, isSelf)) return true;
-            return false;
-        }
-        if (expr is IConditionalOperation cond) // branches stay in tail position; the condition does not
-        {
-            if (AnySelfCall(cond.Condition, isSelf)) return true;
-            return NonTailInTailExpr(cond.WhenTrue, isSelf) || NonTailInTailExpr(cond.WhenFalse, isSelf);
-        }
-        return AnySelfCall(expr, isSelf); // any self-call buried in a non-tail expression
-    }
-
-    static bool AnySelfCall(IOperation op, SelfCallMatcher isSelf)
-    {
-        if (op == null) return false;
-        if (isSelf(op, out _)) return true;
-        foreach (var child in op.Children)
-        {
-            if (child is ILocalFunctionOperation || child is IAnonymousFunctionOperation) continue;
-            if (AnySelfCall(child, isSelf)) return true;
-        }
-        return false;
-    }
+    // The walk itself lives in TailCallAnalysis (shared with UasmEmitter.HasNonTailCallTo); this is the
+    // delegate-dispatch-site matcher's parameterization of it.
 
     /// <summary>Generalized delegate-dispatch matcher: ANY-receiver delegate Invoke (design §4.2;
     /// the pre-§4 local-variable-only matcher was removed per deletion #12).</summary>
@@ -372,18 +227,20 @@ public class EmitContext
     /// <summary>True when THIS specific dispatch operation occurs in NON-tail position within
     /// <paramref name="body"/> (per-site tail sparing, design §4.3/§4.4: tail dispatches are never
     /// marked Reentrant so bundle-driven deep tail recursion stays spill-free). Reference-equality
-    /// matcher — body and site must come from the SAME operation tree.</summary>
+    /// matcher — body and site must come from the SAME operation tree. A dispatch site is always a
+    /// bare IInvocationOperation (never a property accessor), so the receiver leg is not checked on
+    /// return (never reachable — see TailCallAnalysis's file header) and ternary return branches keep
+    /// their precise tail treatment.</summary>
     public static bool IsNonTailDispatchSite(IOperation body, IOperation site)
-        => HasNonTailSelfCall(body, (IOperation op, out System.Collections.Immutable.ImmutableArray<IArgumentOperation> args) =>
-        {
-            if (ReferenceEquals(op, site) && op is IInvocationOperation inv)
+        => TailCallAnalysis.HasNonTailCall(body,
+            (IOperation op, out IOperation matched) =>
             {
-                args = inv.Arguments;
-                return true;
-            }
-            args = default;
-            return false;
-        });
+                matched = op;
+                return ReferenceEquals(op, site) && op is IInvocationOperation;
+            },
+            matchesAccessor: (_, _) => false,
+            checkReturnInstanceLeg: false,
+            ternaryPreciseReturn: true);
     public int NextMethodIndex;
     public readonly List<(IMethodSymbol symbol, CFunction func)> PendingLocalFunctions = new();
 
