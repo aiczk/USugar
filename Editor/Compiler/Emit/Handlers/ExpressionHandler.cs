@@ -314,6 +314,10 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
             case ICoalesceOperation coal:
                 return DivergingDelegateEvidence(coal.Value, dstSig, visited)
                     ?? DivergingDelegateEvidence(coal.WhenNull, dstSig, visited);
+            case ISwitchExpressionOperation swx:
+                foreach (var arm in swx.Arms)
+                    if (DivergingDelegateEvidence(arm.Value, dstSig, visited) is { } t) return t;
+                return null;
         }
         if (val.Type is INamedTypeSymbol dlg && dlg.DelegateInvokeMethod is { } invoke)
             return DelegateAbi.BuildSigPart(invoke, _ctx.TypeParamMap) != dstSig ? val.Type : null;
@@ -340,7 +344,49 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
                     if (DivergingDelegateEvidence(v, dstSig, visited) is { } t) return t;
             }
         }
+        // Wave-12 r6 [X5]: a same-class method CALL whose return value is the object-boxed producer
+        // (`object boxed = Identity(narrow);`) — trace into the callee's return expressions. A return
+        // that yields a parameter is picked up by the IParameterReferenceOperation branch above (which
+        // maps it back to this and other class-family call-site arguments), so an identity-like helper
+        // no longer opaquely defeats the reject. Only user methods with a visible body are followed;
+        // framework calls and body-less methods yield nothing and keep flowing.
+        if (val is IInvocationOperation inv && inv.TargetMethod != null
+            && visited.Add(inv.TargetMethod.OriginalDefinition)
+            && MethodBody(inv.TargetMethod) is { } invBody)
+        {
+            var returns = new List<IOperation>();
+            CollectReturns(invBody, returns);
+            foreach (var r in returns)
+                if (DivergingDelegateEvidence(r, dstSig, visited) is { } t) return t;
+        }
         return null;
+    }
+
+    /// <summary>The bound body operation of <paramref name="method"/> when it is declared in source and
+    /// visible to this compile, else null (framework / metadata-only methods).</summary>
+    IOperation MethodBody(IMethodSymbol method)
+    {
+        var def = method.OriginalDefinition;
+        var sr = def.DeclaringSyntaxReferences.Length > 0 ? def.DeclaringSyntaxReferences[0] : null;
+        if (sr == null) return null;
+        var syntax = sr.GetSyntax();
+        return _compilation.GetSemanticModel(syntax.SyntaxTree).GetOperation(syntax);
+    }
+
+    static void CollectReturns(IOperation op, List<IOperation> returns)
+    {
+        if (op == null) return;
+        switch (op)
+        {
+            case IAnonymousFunctionOperation _:
+            case ILocalFunctionOperation _:
+                return; // a nested function's returns are its own, not the enclosing method's
+            case IReturnOperation ret when ret.ReturnedValue != null:
+                returns.Add(ret.ReturnedValue);
+                break;
+        }
+        foreach (var child in op.Children)
+            CollectReturns(child, returns);
     }
 
     CLeaf VisitConversion(IConversionOperation conv)
