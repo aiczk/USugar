@@ -143,6 +143,64 @@ public class ChainEnv : UdonSharpBehaviour {
     }
 
     [Fact]
+    public void CapturingClosure_InInheritedBaseMethod_RoutesThroughEnv()
+    {
+        // FP5B4 shape (coverage pin): the capturing closure lives in an INHERITED user-base method
+        // body that the derived program emits. CaptureScopeAnalysis must walk base-type method bodies
+        // (not only the class's own GetMembers) or the closure silently stays a flat __lcl_ cell —
+        // unsound when the method is a reentrant-recursion cycle member (the flat cell aliases across
+        // activations; VM-proven 100 vs CLR 120). Pin that the inherited body's captured `s` is env-
+        // backed, not flat.
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public class EnvBaseMethod : UdonSharpBehaviour {
+    public virtual int Hop(int k) { return 0; }
+    public int M(int m) {
+        if (m <= 0) return 0;
+        int s = m * 10;
+        Func<int, int> c = k => Hop(k) + s;
+        return c(m - 1) + s;
+    }
+}
+public class EnvBaseMethodClosure : EnvBaseMethod {
+    public int n; public int result;
+    public override int Hop(int k) { return M(k); }
+    void Start() { result = M(n); }
+}", "EnvBaseMethodClosure");
+        Assert.Contains(EnvCtor, uasm);
+        Assert.Contains("__envp", uasm);
+        Assert.DoesNotContain("__lcl_s_", uasm);
+    }
+
+    [Fact]
+    public void CapturingClosure_InPropertyAccessor_RoutesThroughEnv()
+    {
+        // R8C01/R8L03 shape (coverage pin): the capturing closure lives in a property GET accessor
+        // body. CaptureScopeAnalysis must include PropertyGet/PropertySet roots (they are emitted like
+        // ordinary methods) or the closure stays flat — same reentrant-recursion unsoundness as the
+        // inherited-body case. Pin that the accessor's captured `cell` is env-backed.
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public class EnvAccessorClosure : UdonSharpBehaviour {
+    Func<int, int> f;
+    public int seed; public int result;
+    int P {
+        get {
+            int cell = seed * 3;
+            f = k => k + cell;
+            return f(2) + cell;
+        }
+    }
+    void Start() { result = P; }
+}", "EnvAccessorClosure");
+        Assert.Contains(EnvCtor, uasm);
+        Assert.Contains("__envp", uasm);
+        Assert.DoesNotContain("__lcl_cell_", uasm);
+    }
+
+    [Fact]
     public void WhileConditionOutVar_Captured_CompilesInv3()
     {
         // fcd50 shape (INV-3): an out-var declared in a WHILE condition and captured by a body lambda
