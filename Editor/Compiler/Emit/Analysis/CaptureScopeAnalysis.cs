@@ -88,6 +88,12 @@ public sealed class CaptureScopeAnalysis
     /// (read its .BindingScope for the design §2 BindingScope map).</summary>
     public IReadOnlyDictionary<IMethodSymbol, CaptureScope> ClosureScopes { get; }
 
+    // (introducing operation, scope kind) → scope. The kind disambiguates a for-loop, which
+    // introduces TWO scopes at the SAME operation (a ForInit scope shared across iterations plus a
+    // per-iteration Iteration scope); a plain Node map would collide there. Reference equality on the
+    // IOperation (Roslyn does not override Equals) is exactly the identity a mid-emit handler holds.
+    readonly Dictionary<(IOperation, CaptureScopeKind), CaptureScope> _scopeByNodeKind;
+
     internal CaptureScopeAnalysis(
         List<CaptureScope> scopes,
         Dictionary<ISymbol, (CaptureScope, int)> capturedSlots,
@@ -96,7 +102,21 @@ public sealed class CaptureScopeAnalysis
         Scopes = scopes;
         CapturedSlots = capturedSlots;
         ClosureScopes = closureScopes;
+
+        _scopeByNodeKind = new Dictionary<(IOperation, CaptureScopeKind), CaptureScope>();
+        foreach (var scope in scopes)
+            if (scope.Node != null)
+                _scopeByNodeKind[(scope.Node, scope.Kind)] = scope;
     }
+
+    /// <summary>The scope a given construct introduces, so a handler lowering
+    /// <paramref name="node"/> can find the env-alloc point for it (design §3 scope-entry EnvAlloc).
+    /// <paramref name="kind"/> disambiguates a for-loop's two scopes (ForInit vs Iteration at the same
+    /// operation). Returns null when the construct introduced no scope of that kind (e.g. it owns no
+    /// captures and was never recorded, or the caller passed a mismatched kind) — callers treat a null
+    /// or non-capture-bearing result as "no env here".</summary>
+    public CaptureScope ScopeFor(IOperation node, CaptureScopeKind kind)
+        => node != null && _scopeByNodeKind.TryGetValue((node, kind), out var scope) ? scope : null;
 
     /// <summary>Nearest capture-bearing ANCESTOR of <paramref name="scope"/> (strictly above it —
     /// never returns <paramref name="scope"/> itself), skipping non-capture-bearing scopes in the raw

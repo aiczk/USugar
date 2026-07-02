@@ -195,6 +195,38 @@ public class ForClass : UdonSharpBehaviour {
     }
 
     [Fact]
+    public void ScopeFor_DisambiguatesForLoopsTwoScopesBySameNode()
+    {
+        // A for-loop introduces TWO scopes (ForInit + Iteration) at the SAME operation. ScopeFor must
+        // key on (node, kind) so a mid-emit handler can fetch either one; a plain Node map would collide.
+        TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public class ScopeForClass : UdonSharpBehaviour {
+    void Start() {
+        for (int i = 0; i < 3; i++) {
+            int v = i;
+            Action cb = () => { int y = v + i; };
+            cb();
+        }
+    }
+}", "ScopeForClass", out var emitter);
+
+        var analysis = emitter.CaptureScope;
+        var forScope = OwnerScope(analysis, "i");   // ForInit
+        var iterScope = OwnerScope(analysis, "v");  // Iteration
+        // Both scopes carry the SAME representative operation.
+        Assert.Same(forScope.Node, iterScope.Node);
+
+        // ScopeFor resolves each by kind off that shared node.
+        Assert.Same(forScope, analysis.ScopeFor(forScope.Node, CaptureScopeKind.ForInit));
+        Assert.Same(iterScope, analysis.ScopeFor(forScope.Node, CaptureScopeKind.Iteration));
+        // A kind that construct did not introduce, and a null node, both resolve to null.
+        Assert.Null(analysis.ScopeFor(forScope.Node, CaptureScopeKind.Switch));
+        Assert.Null(analysis.ScopeFor(null, CaptureScopeKind.MethodEntry));
+    }
+
+    [Fact]
     public void NestedForLoops_FourDistinctScopesCorrectlyChained()
     {
         TestHelper.CompileToUasm(@"
