@@ -67,7 +67,8 @@ public abstract class AssignmentHandlerBase : HandlerBase
             {
                 var recvVal = VisitExpression(vIdxRef.Instance);
                 var cachedArgs = EvaluateIndexerArgs(vIdxRef);
-                var currentVal = EmitCrossIndexerCall(vIdxGetter, recvVal, cachedArgs);
+                var currentVal = EmitCrossIndexerCall(vIdxGetter, recvVal, cachedArgs,
+                    TryMarkReentrantCrossDispatch(vIdxRef, vIdxGetter)); // wave-12 r2 [V1]
                 return new LValueCapture { Value = currentVal, InstanceVal = recvVal, IndexArgs = cachedArgs };
             }
             // Wave-9 round-4 [X4]: user indexer COMPOUND assignment (and inc-dec) through an
@@ -81,7 +82,8 @@ public abstract class AssignmentHandlerBase : HandlerBase
             {
                 var recvVal = VisitExpression(iIdxRef.Instance);
                 var cachedArgs = EvaluateIndexerArgs(iIdxRef);
-                var currentVal = EmitInterfaceAccessorCall(iIdxRef.Property.GetMethod, iIdxGetMl, recvVal, cachedArgs);
+                var currentVal = EmitInterfaceAccessorCall(iIdxRef.Property.GetMethod, iIdxGetMl, recvVal, cachedArgs,
+                    TryMarkReentrantCrossDispatch(iIdxRef, iIdxRef.Property.GetMethod)); // wave-12 r2 [V1]
                 return new LValueCapture { Value = currentVal, InstanceVal = recvVal, IndexArgs = cachedArgs };
             }
             // Wave-11 round-11 [Z1]: NON-indexer property on an aggregate (struct/tuple) receiver —
@@ -263,7 +265,8 @@ public abstract class AssignmentHandlerBase : HandlerBase
                 var recvVal = lv.InstanceVal ?? VisitExpression(vIdxRef.Instance);
                 var ordered = lv.IndexArgs != null ? new List<CLeaf>(lv.IndexArgs) : EvaluateIndexerArgs(vIdxRef);
                 ordered.Add(valueVal);
-                EmitCrossIndexerCall(vIdxSetter, recvVal, ordered); // void: self-emitting
+                EmitCrossIndexerCall(vIdxSetter, recvVal, ordered,
+                    TryMarkReentrantCrossDispatch(vIdxRef, vIdxSetter)); // wave-12 r2 [V1]; void: self-emitting
                 return;
             }
             // Wave-9 round-4 [X4]/[X5]: property/indexer COMPOUND (and inc-dec) write-back through an
@@ -279,7 +282,8 @@ public abstract class AssignmentHandlerBase : HandlerBase
                     ? (lv.IndexArgs != null ? new List<CLeaf>(lv.IndexArgs) : EvaluateIndexerArgs(ifaceWbRef))
                     : new List<CLeaf>();
                 ordered.Add(valueVal);
-                EmitInterfaceAccessorCall(ifaceWbRef.Property.SetMethod, ifaceWbMl, recvVal, ordered); // void: self-emitting
+                EmitInterfaceAccessorCall(ifaceWbRef.Property.SetMethod, ifaceWbMl, recvVal, ordered,
+                    TryMarkReentrantCrossDispatch(ifaceWbRef, ifaceWbRef.Property.SetMethod)); // wave-12 r2 [V1]; void: self-emitting
                 return;
             }
             // Cross-behaviour UdonSharpBehaviour property → SetProgramVariable / SendCustomEvent
@@ -298,11 +302,14 @@ public abstract class AssignmentHandlerBase : HandlerBase
                 else
                 {
                     RejectNonPublicCrossAccessor(propRef.Property.SetMethod, propRef.Property); // wave-12 [V2]
+                    // Wave-12 r2 [V1]: reentrant setter — value copy-in inside the spill window.
+                    bool wbReentrant = TryMarkReentrantCrossDispatch(propRef, propRef.Property.SetMethod);
                     var (exportName, setParamIds, _) = GetCalleeLayout(propRef.Property.SetMethod);
                     var paramNameConst = Const(setParamIds[0], "SystemString");
                     EmitExternVoid("VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid", new List<CLeaf> { instanceVal, paramNameConst, valueVal });
                     var eventConst = Const(exportName, "SystemString");
-                    EmitExternVoid("VRCUdonCommonInterfacesIUdonEventReceiver.__SendCustomEvent__SystemString__SystemVoid", new List<CLeaf> { instanceVal, eventConst });
+                    EmitExternVoid("VRCUdonCommonInterfacesIUdonEventReceiver.__SendCustomEvent__SystemString__SystemVoid", new List<CLeaf> { instanceVal, eventConst },
+                        wbReentrant, wbReentrant ? 1 : 0);
                 }
                 return;
             }

@@ -102,6 +102,9 @@ public static class CoreFlatten
     {
         CExternCall ec when ec.Reentrant => 1,
         CInternalCall ic when ic.Reentrant => 1,
+        // Wave-12 r2 [V1]: a reentrant CCrossCall lowers to ONE flagged SendCustomEvent — dropping
+        // the structured statement must decrement the creation-counted flag exactly once.
+        CCrossCall cc when cc.Reentrant => 1,
         _ => 0,
     };
 
@@ -286,7 +289,7 @@ public static class CoreFlatten
                 // Reentrant MUST be copied: this rebuild is one of the two sites (with RemapInst) where
                 // object-identity marking would silently die (design §4.3) — FlatVerify checks conservation.
                 int? dest = ec.Type != "SystemVoid" ? ctx.AllocScratch(ec.Type) : (int?)null;
-                ctx.Current.Stmts.Add(new CExprStmt(new CExternCall(ec.Sig, new List<CLeaf>(ec.Args), ec.Type, dest, ec.Reentrant)));
+                ctx.Current.Stmts.Add(new CExprStmt(new CExternCall(ec.Sig, new List<CLeaf>(ec.Args), ec.Type, dest, ec.Reentrant, ec.PreSpillStmts)));
                 return dest.HasValue ? new CSlotRef(dest.Value, ec.Type) : new CConst(null, "SystemVoid");
             }
 
@@ -319,9 +322,15 @@ public static class CoreFlatten
                 new List<CLeaf> { inst, new CConst(paramName, "SystemString"), value }, "SystemVoid", null)));
         }
 
+        // Wave-12 r2 [V1]: a reentrant cross dispatch flags its SendCustomEvent as the §4.3 spill
+        // site, with every param copy-in inside the spill window (PreSpillStmts — a same-program
+        // reentrant callee shares the caller's param heap vars, so a copy-in that preceded the save
+        // would be captured post-clobber). The copy-ins above are emitted back-to-back into the same
+        // flat block, so the count is exact by construction.
         ctx.Current.Stmts.Add(new CExprStmt(new CExternCall(
             "VRCUdonCommonInterfacesIUdonEventReceiver.__SendCustomEvent__SystemString__SystemVoid",
-            new List<CLeaf> { inst, new CConst(cc.EventName, "SystemString") }, "SystemVoid", null)));
+            new List<CLeaf> { inst, new CConst(cc.EventName, "SystemString") }, "SystemVoid", null,
+            cc.Reentrant, cc.Reentrant ? cc.Params.Count : 0)));
 
         if (cc.Returns.Count == 1)
         {

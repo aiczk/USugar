@@ -233,19 +233,22 @@ public abstract class HandlerBase
     }
 
     /// <summary>Emit a void extern call as a statement. <paramref name="reentrant"/> marks a
-    /// delegate-dispatch arm that can re-enter the containing function (design §4.3).</summary>
-    protected void EmitExternVoid(string sig, List<CLeaf> args, bool reentrant = false)
-        => _builder.EmitExternVoid(ResolveExtern(sig), args, reentrant);
+    /// delegate-dispatch arm that can re-enter the containing function (design §4.3). preSpillStmts:
+    /// wave-12 r2 [V1], see CExternCall.PreSpillStmts (cross setter copy-ins inside the wrap).</summary>
+    protected void EmitExternVoid(string sig, List<CLeaf> args, bool reentrant = false, int preSpillStmts = 0)
+        => _builder.EmitExternVoid(ResolveExtern(sig), args, reentrant, preSpillStmts);
 
     /// <summary>Create an internal call expression.</summary>
     protected CSlotRef InternalCall(string funcName, List<CLeaf> args, string retType, bool tailSpared = false)
         => _builder.InternalCall(funcName, args, retType, tailSpared);
 
     /// <summary>Emit a cross-behaviour call. Single-return → materialized to a scratch slot (returns the
-    /// leaf); void or multi-return → side-effecting statement (returns null).</summary>
+    /// leaf); void or multi-return → side-effecting statement (returns null). reentrant: wave-12 r2
+    /// [V1] — this dispatch can re-enter the containing function (see TryMarkReentrantCrossDispatch).</summary>
     protected CSlotRef CrossCall(CLeaf instance, string eventName,
-        List<(string, CLeaf)> parameters, IReadOnlyList<ReturnSlot> returns, string retType)
-        => _builder.CrossCall(instance, eventName, parameters, returns, retType);
+        List<(string, CLeaf)> parameters, IReadOnlyList<ReturnSlot> returns, string retType,
+        bool reentrant = false)
+        => _builder.CrossCall(instance, eventName, parameters, returns, retType, reentrant);
 
     /// <summary>Create a select (ternary) expression.</summary>
     protected CSlotRef Select(CLeaf cond, CLeaf trueVal, CLeaf falseVal, string type)
@@ -1181,7 +1184,8 @@ public abstract class HandlerBase
                 return recvIdxVal =>
                 {
                     orderedIdx.Add(recvIdxVal);
-                    EmitCrossIndexerCall(recvIdxSetter, instanceVal, orderedIdx); // void: self-emitting
+                    EmitCrossIndexerCall(recvIdxSetter, instanceVal, orderedIdx,
+                        TryMarkReentrantCrossDispatch(propRef, recvIdxSetter)); // void: self-emitting
                 };
             }
             // Wave-9 round-4 [X4]/[X9]: user indexer WRITE through an INTERFACE-typed receiver →
@@ -1195,7 +1199,8 @@ public abstract class HandlerBase
                 {
                     ifaceOrderedIdx.Add(ifaceIdxVal);
                     EmitInterfaceAccessorCall(propRef.Property.SetMethod, ifaceIdxSetMl, instanceVal,
-                        ifaceOrderedIdx); // void: self-emitting
+                        ifaceOrderedIdx,
+                        TryMarkReentrantCrossDispatch(propRef, propRef.Property.SetMethod)); // void: self-emitting
                 };
             }
             var indexArgs = new List<CLeaf> { instanceVal };
@@ -1241,10 +1246,14 @@ public abstract class HandlerBase
                     && propRef.Instance is not IInstanceReferenceOperation
                     && _planner.GetLayout(propRef.Property.ContainingType).Methods.TryGetValue(ifaceSetter, out var ifaceSetterMl))
                 {
+                    // Wave-12 r2 [V1]: a reentrant setter dispatch pulls its value copy-in inside the
+                    // spill window (preSpillStmts: 1 — the SetProgramVariable emitted just above).
+                    bool ifaceSetReentrant = TryMarkReentrantCrossDispatch(propRef, ifaceSetter);
                     var paramNameConst = Const(ifaceSetterMl.ParamIds[0], "SystemString");
                     EmitExternVoid("VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid", new List<CLeaf> { instanceVal, paramNameConst, srcVal });
                     EmitExternVoid("VRCUdonCommonInterfacesIUdonEventReceiver.__SendCustomEvent__SystemString__SystemVoid",
-                        new List<CLeaf> { instanceVal, Const(LayoutPlanner.InterfaceDispatchName(ifaceSetter, ifaceSetterMl), "SystemString") });
+                        new List<CLeaf> { instanceVal, Const(LayoutPlanner.InterfaceDispatchName(ifaceSetter, ifaceSetterMl), "SystemString") },
+                        ifaceSetReentrant, ifaceSetReentrant ? 1 : 0);
                 }
                 else if (ExternResolver.IsUdonSharpBehaviour(propRef.Property.ContainingType) && propRef.Instance is not IInstanceReferenceOperation)
                 {
@@ -1265,6 +1274,8 @@ public abstract class HandlerBase
                     {
                         // Non-auto property setter: call via SendCustomEvent
                         RejectNonPublicCrossAccessor(propRef.Property.SetMethod, propRef.Property); // wave-12 [V2]
+                        // Wave-12 r2 [V1]: reentrant setter — value copy-in inside the spill window.
+                        bool setReentrant = TryMarkReentrantCrossDispatch(propRef, propRef.Property.SetMethod);
                         var (exportName, setParamIds, _) = GetCalleeLayout(propRef.Property.SetMethod);
 
                         // SetProgramVariable for the value parameter
@@ -1273,7 +1284,8 @@ public abstract class HandlerBase
 
                         // SendCustomEvent to invoke setter
                         var eventConst = Const(exportName, "SystemString");
-                        EmitExternVoid("VRCUdonCommonInterfacesIUdonEventReceiver.__SendCustomEvent__SystemString__SystemVoid", new List<CLeaf> { instanceVal, eventConst });
+                        EmitExternVoid("VRCUdonCommonInterfacesIUdonEventReceiver.__SendCustomEvent__SystemString__SystemVoid", new List<CLeaf> { instanceVal, eventConst },
+                            setReentrant, setReentrant ? 1 : 0);
                     }
                 }
                 else
@@ -1720,7 +1732,8 @@ public abstract class HandlerBase
     /// setter — its LAST parameter) + SendCustomEvent the chain-ROOT export (GetCalleeLayout
     /// normalization), which runs the receiver program's most-derived override. A non-public accessor
     /// has no exported entry point — loud per design §8-3 (mirrors the [J2] non-this method reject).</summary>
-    protected CLeaf EmitCrossIndexerCall(IMethodSymbol accessor, CLeaf instanceVal, List<CLeaf> orderedArgs)
+    protected CLeaf EmitCrossIndexerCall(IMethodSymbol accessor, CLeaf instanceVal, List<CLeaf> orderedArgs,
+        bool reentrant = false)
     {
         if (accessor.DeclaredAccessibility != Accessibility.Public)
             throw new System.NotSupportedException(
@@ -1733,7 +1746,7 @@ public abstract class HandlerBase
             pairs.Add((paramIds[i], orderedArgs[i]));
         var returns = accessor.ReturnsVoid ? System.Array.Empty<ReturnSlot>() : GetCalleeReturns(accessor);
         var retType = accessor.ReturnsVoid ? "SystemVoid" : GetUdonType(accessor.ReturnType);
-        return CrossCall(instanceVal, exportName, pairs, returns, retType);
+        return CrossCall(instanceVal, exportName, pairs, returns, retType, reentrant);
     }
 
     /// <summary>[W6] gate shared by the read/write/compound indexer sites: a user-behaviour indexer
@@ -1809,18 +1822,18 @@ public abstract class HandlerBase
     /// dispatch the bare export (no bridge), mirroring EmitInterfaceCall. Void accessors self-emit
     /// and return null — never wrap in EmitExprStmt.</summary>
     protected CLeaf EmitInterfaceAccessorCall(IMethodSymbol accessor, MethodLayout ml, CLeaf instanceVal,
-        List<CLeaf> orderedArgs)
+        List<CLeaf> orderedArgs, bool reentrant = false)
     {
         var pairs = new List<(string, CLeaf)>();
         for (int i = 0; i < orderedArgs.Count && i < ml.ParamIds.Count; i++)
             pairs.Add((ml.ParamIds[i], orderedArgs[i]));
         var rets = ml.Returns.ToArray();
         if (rets.Length > 1)
-            return CrossCall(instanceVal, ml.ExportName, pairs, rets, "SystemVoid");
+            return CrossCall(instanceVal, ml.ExportName, pairs, rets, "SystemVoid", reentrant);
         var dispatchName = LayoutPlanner.InterfaceDispatchName(accessor, ml);
         var retType = accessor.ReturnsVoid ? "SystemVoid" : GetUdonType(accessor.ReturnType);
         return CrossCall(instanceVal, dispatchName, pairs,
-            accessor.ReturnsVoid ? System.Array.Empty<ReturnSlot>() : rets, retType);
+            accessor.ReturnsVoid ? System.Array.Empty<ReturnSlot>() : rets, retType, reentrant);
     }
 
     // ── Delegate value comparison (design §2.5; shared by OperatorHandler `==`/`!=` and the
@@ -2023,6 +2036,49 @@ public abstract class HandlerBase
     {
         if (_ctx.ReentrantDispatchSites == null || dispatchOp?.Syntax == null
             || !_ctx.ReentrantDispatchSites.Contains(dispatchOp.Syntax))
+            return false;
+        _ctx.EnsureRecursionStack();
+        AccumulateRecursionSpillFields(_builder.CurrentFunction);
+        return true;
+    }
+
+    /// <summary>Wave-12 r2 [V1]: the LOCAL method a variable-receiver / interface cross dispatch
+    /// lands on when the receiver holds `this` at runtime — the class family's most-derived
+    /// override of the target (the chain-root export the dispatch names runs the receiver
+    /// program's own override), or the interface member's local implementation. Null when the
+    /// dispatch can never land on this program (foreign class, unimplemented interface, static).
+    /// Mirrors UasmEmitter.CrossDispatchLocalTarget (the analysis side that adds the graph edge).</summary>
+    protected IMethodSymbol CrossDispatchLocalCallee(IMethodSymbol target)
+    {
+        if (target == null || target.IsStatic) return null;
+        if (target.ContainingType?.TypeKind == TypeKind.Interface)
+        {
+            var impl = (_classSymbol.FindImplementationForInterfaceMember(target)
+                        ?? _classSymbol.FindImplementationForInterfaceMember(target.OriginalDefinition))
+                       as IMethodSymbol;
+            return impl == null ? null : ResolveMostDerivedOverride(impl);
+        }
+        for (var t = _classSymbol; t != null; t = t.BaseType)
+            if (SymbolEqualityComparer.Default.Equals(t, target.ContainingType))
+                return ResolveMostDerivedOverride(target);
+        return null;
+    }
+
+    /// <summary>Wave-12 r2 [V1]: true when the cross dispatch at <paramref name="site"/> (a method
+    /// invocation or property/indexer accessor access through a variable / interface-typed receiver)
+    /// can re-enter the containing function: its local landing method is a recursion-cycle edge from
+    /// the current method (BuildRecursionInfo's cross arms) and the site is not tail-spared. When
+    /// true, also registers the frame (recursion stack + named spill fields) so InsertRecursionSpills
+    /// wraps the flagged SendCustomEvent — with the param copy-ins inside the window
+    /// (CExternCall.PreSpillStmts), because a same-program reentrant callee shares the caller's param
+    /// heap vars and a copy-in preceding the save would be captured post-clobber.</summary>
+    protected bool TryMarkReentrantCrossDispatch(IOperation site, IMethodSymbol staticCallee)
+    {
+        if (_currentMethod == null) return false;
+        var local = CrossDispatchLocalCallee(staticCallee);
+        if (local == null || !_ctx.IsRecursiveEdge(_currentMethod, local)) return false;
+        if (site?.Syntax != null && _ctx.TailSparedDirectCallSites != null
+            && _ctx.TailSparedDirectCallSites.Contains(site.Syntax))
             return false;
         _ctx.EnsureRecursionStack();
         AccumulateRecursionSpillFields(_builder.CurrentFunction);

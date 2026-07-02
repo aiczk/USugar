@@ -85,13 +85,22 @@ public sealed class CExternCall : CValue
     /// site that reconstructs the instruction (CoreFlatten.LowerExpr, CoreFlatOptimizer.RemapInst) —
     /// FlatVerify checks conservation against CFunction.ReentrantSiteCount.</summary>
     public readonly bool Reentrant;
+    /// <summary>Wave-12 r2 [V1]: number of IMMEDIATELY-PRECEDING statements (the cross-call
+    /// convention's SetProgramVariable copy-ins, same flat block by construction) that must sit
+    /// INSIDE this Reentrant site's spill window. A same-program reentrant callee shares the
+    /// caller's param heap vars (self-recursion through a variable receiver), so a copy-in write
+    /// that precedes the save would be captured post-clobber and the reload would restore the
+    /// clobbered value. Only ever non-zero on a Reentrant SendCustomEvent lowered from a reentrant
+    /// CCrossCall / cross setter pair; copied by the same rebuild sites as <see cref="Reentrant"/>.</summary>
+    public readonly int PreSpillStmts;
 
-    public CExternCall(string sig, List<CLeaf> args, string retType, int? destSlot = null, bool reentrant = false) : base(retType)
+    public CExternCall(string sig, List<CLeaf> args, string retType, int? destSlot = null, bool reentrant = false, int preSpillStmts = 0) : base(retType)
     {
         Sig = sig ?? throw new ArgumentNullException(nameof(sig));
         Args = args ?? new List<CLeaf>();
         DestSlot = destSlot;
         Reentrant = reentrant;
+        PreSpillStmts = preSpillStmts;
     }
 
     public override string ToString()
@@ -162,14 +171,22 @@ public sealed class CCrossCall : CValue
     public readonly string EventName;
     public readonly List<(string ParamName, CLeaf Value)> Params; // SetProgramVariable pairs
     public readonly IReadOnlyList<ReturnSlot> Returns;             // empty for void
+    /// <summary>Wave-12 r2 [V1]: this cross dispatch can land back on THIS program's own recursion
+    /// cycle (same-typed / base-typed / interface-typed variable receiver holding `this` at runtime)
+    /// — LowerCrossCall marks the SendCustomEvent Reentrant (with the param copy-ins inside the
+    /// spill window via <see cref="CExternCall.PreSpillStmts"/>). Counted into
+    /// CFunction.ReentrantSiteCount at the CoreBuilder.CrossCall creation choke point.</summary>
+    public readonly bool Reentrant;
 
     public CCrossCall(CLeaf instance, string eventName,
-        List<(string, CLeaf)> parameters, IReadOnlyList<ReturnSlot> returns, string retType) : base(retType)
+        List<(string, CLeaf)> parameters, IReadOnlyList<ReturnSlot> returns, string retType,
+        bool reentrant = false) : base(retType)
     {
         Instance = instance ?? throw new ArgumentNullException(nameof(instance));
         EventName = eventName ?? throw new ArgumentNullException(nameof(eventName));
         Params = parameters ?? new List<(string, CLeaf)>();
         Returns = returns ?? Array.Empty<ReturnSlot>();
+        Reentrant = reentrant;
     }
 
     public override string ToString() =>

@@ -195,7 +195,30 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
         // same bundle reference. No Convert extern may ever be emitted for a delegate source or target.
         if ((conv.Type is INamedTypeSymbol dlgDst && dlgDst.DelegateInvokeMethod != null)
             || (conv.Operand.Type is INamedTypeSymbol dlgSrc && dlgSrc.DelegateInvokeMethod != null))
+        {
+            // Wave-12 r2 [V2]: a VARIANT delegate-VALUE conversion (Func<string> value flowing into a
+            // Func<object>-typed field/local/param/return via C# co/contravariance) diverges the
+            // __dlgc_ convention keys — the callee's bridge writes the channel keyed by its OWN
+            // signature while the dispatch site reads the channel keyed by the receiving STATIC
+            // delegate type, so arguments/returns are silently dropped (VM-proven: NRE / lost return).
+            // The 'variant delegate bindings' policy tier already rejects variant METHOD-GROUP
+            // creations (DelegateAbi.ValidateDelegateBinding); this closes the delegate-to-delegate
+            // hole the same loud way. Equal sig parts (identity or Udon-type-identical conversions)
+            // keep the reference passthrough — their channels agree. Also load-bearing for §5.4's
+            // sig-filter soundness (tracked pin SigFilterCoupledToVarianceReject).
+            if (conv.Type is INamedTypeSymbol vDst && vDst.DelegateInvokeMethod is { } vDstInvoke
+                && conv.Operand.Type is INamedTypeSymbol vSrc && vSrc.DelegateInvokeMethod is { } vSrcInvoke
+                && !SymbolEqualityComparer.Default.Equals(vDst, vSrc)
+                && DelegateAbi.BuildSigPart(vDstInvoke, _ctx.TypeParamMap)
+                   != DelegateAbi.BuildSigPart(vSrcInvoke, _ctx.TypeParamMap))
+                throw new System.NotSupportedException(
+                    $"Variant delegate conversion from '{vSrc.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}' "
+                    + $"to '{vDst.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}' is not supported: "
+                    + "the delegate calling convention keys its argument/return channels by the exact "
+                    + "signature, so a co/contravariant binding silently drops values across the "
+                    + "dispatch. Use matching delegate type parameters.");
             return srcVal;
+        }
 
         // Lifted numeric Nullable<T> conversion (e.g. char?→int? inserted by Roslyn around small-int nullable
         // arithmetic, or an explicit (int?)byteNullable). Both sides are Nullable<numeric>. The plain

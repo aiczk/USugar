@@ -2262,6 +2262,46 @@ public class UasmEmitter
         return def;
     }
 
+    // ── Wave-12 r2 [V1]: cross-dispatch landing target for the recursion graph ──
+    // A method/accessor dispatched through a VARIABLE receiver (same-typed field/local, base-typed
+    // reference) or an INTERFACE-typed receiver emits SetProgramVariable + SendCustomEvent — and when
+    // the receiver holds `this` at runtime, the event re-enters THIS program synchronously, exactly
+    // like a direct recursive call. These edges were invisible to the SCC analysis (the interface
+    // flavor entirely; the class flavor had the static edge but no spill site at emission), so a
+    // live local/param after the reentrant self-call was silently clobbered (VM-proven ref=36 vs 0
+    // field/local/base flavors, 180 vs 0 interface, 75 vs 60 property accessor, 69 vs 27 mutual).
+    // Returns the ORIGINAL DEFINITION of the local method the dispatch lands on when the receiver is
+    // this program (the class family's most-derived override — mirroring the chain-root export
+    // normalization the emission dispatches), or null when it can never land here (foreign class,
+    // unimplemented interface, static). HandlerBase.CrossDispatchLocalCallee mirrors this for the
+    // per-site Reentrant marking at emission.
+    IMethodSymbol CrossDispatchLocalTarget(IMethodSymbol target)
+    {
+        if (target == null || target.IsStatic) return null;
+        if (target.ContainingType?.TypeKind == TypeKind.Interface)
+        {
+            var impl = (_classSymbol.FindImplementationForInterfaceMember(target)
+                        ?? _classSymbol.FindImplementationForInterfaceMember(target.OriginalDefinition))
+                       as IMethodSymbol;
+            // FindImplementationForInterfaceMember returns the chain ROOT ([W5]) — the dispatch runs
+            // the receiver program's most-derived override, so leaf-resolve like the class flavor.
+            return impl == null ? null : ResolveLeafOverrideDef(impl.OriginalDefinition);
+        }
+        for (var t = _classSymbol; t != null; t = t.BaseType)
+            if (SymbolEqualityComparer.Default.Equals(t, target.ContainingType))
+                return ResolveLeafOverrideDef(target.OriginalDefinition);
+        return null;
+    }
+
+    /// <summary>[V1] arm shared by CollectInternalCallees / IsInternalCallTo / PropertyAccessorMatches:
+    /// true when <paramref name="op"/> is a variable-receiver (or interface-typed) member access whose
+    /// cross dispatch can land back on this program. Interface members dispatch cross for EVERY
+    /// receiver shape (a `(IFace)this` cast wraps the instance reference in a conversion).</summary>
+    static bool IsCrossDispatchReceiver(IOperation instance, ISymbol member)
+        => instance != null
+           && (instance is not IInstanceReferenceOperation
+               || member.ContainingType?.TypeKind == TypeKind.Interface);
+
     // True if the caller body contains a call to callee that is NOT in tail position (its result is used
     // by something after the call, so the caller's live values would be clobbered by a recursive re-entry).
     // The walk itself lives in TailCallAnalysis (shared with EmitContext.IsNonTailDispatchSite); this is
@@ -2282,8 +2322,13 @@ public class UasmEmitter
     // compound/inc-dec, where the getter runs first and its result is read afterwards.
     bool PropertyAccessorMatches(IPropertyReferenceOperation pr, IMethodSymbol callee, bool getter)
     {
-        if (pr.Instance is not IInstanceReferenceOperation) return false;
         var acc = getter ? pr.Property.GetMethod : pr.Property.SetMethod;
+        // Wave-12 r2 [V1]: variable-receiver / interface accessor dispatch — match the local method
+        // the cross dispatch can land on (same rationale as IsInternalCallTo's cross arms).
+        if (IsCrossDispatchReceiver(pr.Instance, pr.Property))
+            return CrossDispatchLocalTarget(acc) is { } xacc
+                && SymbolEqualityComparer.Default.Equals(xacc, callee);
+        if (pr.Instance is not IInstanceReferenceOperation) return false;
         if (acc != null && SymbolEqualityComparer.Default.Equals(acc.OriginalDefinition, callee))
             return true;
         if (LeafPropertyTarget(pr) is { } lp)
@@ -2311,6 +2356,13 @@ public class UasmEmitter
         if (op is IInvocationOperation linv && LeafCallTarget(linv) is { } leaf
             && SymbolEqualityComparer.Default.Equals(leaf, callee))
         { call = op; return true; }
+        // Wave-12 r2 [V1]: a variable-receiver / interface dispatch matches the LOCAL method it can
+        // land on (mirrors the CrossDispatchLocalTarget edge added by CollectInternalCallees), so
+        // the tail classification and the per-site tail-spared marking see these sites too.
+        if (op is IInvocationOperation xinv && IsCrossDispatchReceiver(xinv.Instance, xinv.TargetMethod)
+            && CrossDispatchLocalTarget(xinv.TargetMethod) is { } crossLeaf
+            && SymbolEqualityComparer.Default.Equals(crossLeaf, callee))
+        { call = op; return true; }
         // Wave-9 round-2 [W2]: a this-receiver property/indexer reference is an accessor CALL —
         // matched against either accessor (conservative: a write-position reference matching the
         // getter only ever classifies an extra site non-tail, which over-spills, never corrupts).
@@ -2326,6 +2378,14 @@ public class UasmEmitter
                  || (lp.SetMethod is { } ls && SymbolEqualityComparer.Default.Equals(ls.OriginalDefinition, callee))))
             { call = op; return true; }
         }
+        // Wave-12 r2 [V1]: variable-receiver / interface accessor dispatch — same emission-faithful
+        // matching as the cross invocation arm (mirrors CollectInternalCallees' cross property arm).
+        if (op is IPropertyReferenceOperation xpr && IsCrossDispatchReceiver(xpr.Instance, xpr.Property)
+            && ((CrossDispatchLocalTarget(xpr.Property.GetMethod) is { } xg
+                 && SymbolEqualityComparer.Default.Equals(xg, callee))
+             || (CrossDispatchLocalTarget(xpr.Property.SetMethod) is { } xs
+                 && SymbolEqualityComparer.Default.Equals(xs, callee))))
+        { call = op; return true; }
         return false;
     }
 
@@ -2380,6 +2440,12 @@ public class UasmEmitter
             // invisible to the SCC analysis and no frame ever spilled (VM-proven 305 vs CLR 605 /
             // 14 vs 12 / 17 vs 21). The static edge stays — extra edges only ever over-spill (§8-3).
             if (LeafCallTarget(inv) is { } leafT && internalMethods.Contains(leafT)) result.Add(leafT);
+            // Wave-12 r2 [V1]: a variable-receiver / interface dispatch that can land back on this
+            // program is a call-graph edge to the local most-derived override (see
+            // CrossDispatchLocalTarget). Extra edges only ever over-spill (§8-3).
+            if (IsCrossDispatchReceiver(inv.Instance, inv.TargetMethod)
+                && CrossDispatchLocalTarget(inv.TargetMethod) is { } crossT
+                && internalMethods.Contains(crossT)) result.Add(crossT);
         }
         if (op is IObjectCreationOperation oc && oc.Constructor != null)
         {
@@ -2410,6 +2476,18 @@ public class UasmEmitter
                 if (leafP.SetMethod is { } ls && internalMethods.Contains(ls.OriginalDefinition))
                     result.Add(ls.OriginalDefinition);
             }
+        }
+        // Wave-12 r2 [V1]: a property/indexer accessor dispatched through a variable or
+        // interface-typed receiver is a cross-program accessor CALL that can land back on this
+        // program — same rationale as the invocation arm (VM-proven 75 vs CLR 59+16: the getter's
+        // live local was clobbered by the reentrant accessor activation). Both accessors are added
+        // conservatively, mirroring the this-receiver arm above.
+        if (op is IPropertyReferenceOperation vpr && IsCrossDispatchReceiver(vpr.Instance, vpr.Property))
+        {
+            if (CrossDispatchLocalTarget(vpr.Property.GetMethod) is { } cg && internalMethods.Contains(cg))
+                result.Add(cg);
+            if (CrossDispatchLocalTarget(vpr.Property.SetMethod) is { } cs && internalMethods.Contains(cs))
+                result.Add(cs);
         }
         var opMethod = (op as IBinaryOperation)?.OperatorMethod ?? (op as IUnaryOperation)?.OperatorMethod;
         if (opMethod != null && internalMethods.Contains(opMethod.OriginalDefinition))

@@ -89,7 +89,22 @@ public static class CoreFlatOptimizer
                         }
                     liveSlots.Sort((a, b) => a.Id.CompareTo(b.Id)); // deterministic spill order
 
-                    EmitSpill(func, newStmts, func.RecursionSpillFields, liveSlots);
+                    // Wave-12 r2 [V1]: a reentrant cross-dispatch SendCustomEvent carries its param
+                    // copy-ins (SetProgramVariable stmts emitted immediately before it, same block by
+                    // construction) INSIDE the spill window — a same-program reentrant callee shares
+                    // the caller's param heap vars, so a copy-in preceding the save would be captured
+                    // post-clobber and the reload would restore the clobbered value. The copy-ins
+                    // write no slots (void externs), so the liveness computed at the flagged
+                    // instruction is unchanged at the earlier save point.
+                    int preWindow = PreSpillStmtCount(inst);
+                    if (preWindow > 0)
+                    {
+                        var saveStmts = new List<CStmt>();
+                        EmitSpill(func, saveStmts, func.RecursionSpillFields, liveSlots);
+                        newStmts.InsertRange(Math.Max(newStmts.Count - preWindow, 0), saveStmts);
+                    }
+                    else
+                        EmitSpill(func, newStmts, func.RecursionSpillFields, liveSlots);
                     newStmts.Add(inst);
                     EmitReload(func, newStmts, func.RecursionSpillFields, liveSlots);
                 }
@@ -185,6 +200,14 @@ public static class CoreFlatOptimizer
         CAssign { Value: CInternalCall ic } => ic.Reentrant,
         CAssign { Value: CExternCall ec } => ec.Reentrant,
         _ => false,
+    };
+
+    // Wave-12 r2 [V1]: statements to pull inside the spill window ahead of a flagged cross-dispatch
+    // SendCustomEvent (its SetProgramVariable copy-ins — see CExternCall.PreSpillStmts).
+    static int PreSpillStmtCount(CStmt inst) => inst switch
+    {
+        CExprStmt { Expr: CExternCall ec } => ec.PreSpillStmts,
+        _ => 0,
     };
 
     // Push order: fields then slots (reload pops in reverse → LIFO balanced).
@@ -555,7 +578,7 @@ public static class CoreFlatOptimizer
         // Reentrant (and round-9 [Y3] TailSpared) MUST be copied: this rebuild is the second
         // flag-killing reconstruction site (with CoreFlatten.LowerExpr — design §4.3); FlatVerify
         // checks Reentrant conservation after the pass.
-        CExprStmt { Expr: CExternCall ce } => new CExprStmt(new CExternCall(ce.Sig, RemapArgs(ce.Args, mapping), ce.Type, RemapSlotIdNullable(ce.DestSlot, mapping), ce.Reentrant)),
+        CExprStmt { Expr: CExternCall ce } => new CExprStmt(new CExternCall(ce.Sig, RemapArgs(ce.Args, mapping), ce.Type, RemapSlotIdNullable(ce.DestSlot, mapping), ce.Reentrant, ce.PreSpillStmts)),
         CExprStmt { Expr: CInternalCall ci } => new CExprStmt(new CInternalCall(ci.FuncName, RemapArgs(ci.Args, mapping), ci.Type, RemapSlotIdNullable(ci.DestSlot, mapping), ci.Reentrant, ci.TailSpared)),
         _ => inst,
     };

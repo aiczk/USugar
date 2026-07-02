@@ -604,18 +604,23 @@ public partial class InvocationHandler
         // textual order IS ordinal order).
         var paramPairs = CrossCallArgPairs(op.Arguments, ifaceMl.ParamIds.ToArray());
 
+        // Wave-12 r2 [V1]: an interface dispatch whose local implementation is a recursion-cycle
+        // edge from the current method re-enters this program when the receiver is `this` — flag
+        // the SendCustomEvent as a spill site (R225 form: live locals after the call were clobbered).
+        bool ifaceReentrant = TryMarkReentrantCrossDispatch(op, target);
+
         // Build returns
         var ifaceReturns = ifaceMl.Returns.ToArray();
         // Tuple-returning interface methods dispatch directly (no bridge) under the interface's bare name.
         if (ifaceReturns.Length > 1)
-            return CrossCall(instanceVal, ifaceMl.ExportName, paramPairs, ifaceReturns, "SystemVoid");
+            return CrossCall(instanceVal, ifaceMl.ExportName, paramPairs, ifaceReturns, "SystemVoid", ifaceReentrant);
 
         // Non-tuple: dispatch the canonical interface-qualified bridge name (matches the emitted bridge export
         // and stays collision-free across overloads / multiple interfaces / explicit impls).
         var dispatchName = LayoutPlanner.InterfaceDispatchName(target, ifaceMl);
         var returnType = target.ReturnsVoid ? "SystemVoid" : GetUdonType(target.ReturnType);
         return CrossCall(instanceVal, dispatchName, paramPairs,
-            target.ReturnsVoid ? System.Array.Empty<ReturnSlot>() : ifaceReturns, returnType);
+            target.ReturnsVoid ? System.Array.Empty<ReturnSlot>() : ifaceReturns, returnType, ifaceReentrant);
     }
 
     // ── Cross-Class Call ──
@@ -629,14 +634,20 @@ public partial class InvocationHandler
         // (wave-9 round-3 [W4]: named/reordered args used to bind positionally on this path).
         var paramPairs = CrossCallArgPairs(op.Arguments, paramIds);
 
+        // Wave-12 r2 [V1]: a same-family variable-receiver dispatch on a recursion-cycle edge
+        // re-enters this program when the receiver is `this` — flag the SendCustomEvent as a spill
+        // site, with the param copy-ins inside the wrap (a self-recursive callee shares the
+        // caller's param heap vars; VM-proven ref=36 vs 0 on the minimized field-receiver form).
+        bool crossReentrant = TryMarkReentrantCrossDispatch(op, target);
+
         // Build returns
         var callReturns = GetCalleeReturns(target);
         if (callReturns.Length > 1)
-            return CrossCall(instanceVal, exportName, paramPairs, callReturns, "SystemVoid");
+            return CrossCall(instanceVal, exportName, paramPairs, callReturns, "SystemVoid", crossReentrant);
 
         var returnType = target.ReturnsVoid ? "SystemVoid" : GetUdonType(target.ReturnType);
         return CrossCall(instanceVal, exportName, paramPairs,
-            target.ReturnsVoid ? System.Array.Empty<ReturnSlot>() : callReturns, returnType);
+            target.ReturnsVoid ? System.Array.Empty<ReturnSlot>() : callReturns, returnType, crossReentrant);
     }
 
     // ── User Method Call ──

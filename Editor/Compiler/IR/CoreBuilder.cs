@@ -248,20 +248,25 @@ public sealed class CoreBuilder
     /// point keeps the SendCustomEvent in program order; ternary branches construct their cross-call inside
     /// the branch block (VisitConditionalExpression uses EmitIf, not CSelect), so the bind is conditional.</summary>
     public CSlotRef CrossCall(CLeaf instance, string eventName,
-        List<(string, CLeaf)> parameters, IReadOnlyList<ReturnSlot> returns, string retType)
+        List<(string, CLeaf)> parameters, IReadOnlyList<ReturnSlot> returns, string retType,
+        bool reentrant = false)
     {
-        var cc = new CCrossCall(instance, eventName, parameters, returns, retType);
+        // Wave-12 r2 [V1]: a reentrant cross dispatch is a §4.3 spill site — the flag is counted here
+        // (creation choke point) and materialized on the SendCustomEvent by CoreFlatten.LowerCrossCall.
+        if (reentrant) CurrentFunction.ReentrantSiteCount++;
+        var cc = new CCrossCall(instance, eventName, parameters, returns, retType, reentrant);
         if (retType == "SystemVoid") { Emit(new CExprStmt(cc)); return null; }
         return Bind(cc, retType);
     }
 
     // The reentrant flag (design §4.3) marks a delegate-dispatch arm that can re-enter the containing
     // function; the count increment here is the single creation choke point FlatVerify's conservation
-    // check is balanced against.
-    public void EmitExternVoid(string sig, List<CLeaf> args, bool reentrant = false)
+    // check is balanced against. preSpillStmts (wave-12 r2 [V1]): see CExternCall.PreSpillStmts — used
+    // by the raw cross property-setter pairs whose SetProgramVariable copy-in must sit inside the wrap.
+    public void EmitExternVoid(string sig, List<CLeaf> args, bool reentrant = false, int preSpillStmts = 0)
     {
         if (reentrant) CurrentFunction.ReentrantSiteCount++;
-        Emit(new CExprStmt(new CExternCall(sig, args, "SystemVoid", null, reentrant)));
+        Emit(new CExprStmt(new CExternCall(sig, args, "SystemVoid", null, reentrant, preSpillStmts)));
     }
 
     public void EmitInternalVoid(string funcName, List<CLeaf> args, bool reentrant = false)

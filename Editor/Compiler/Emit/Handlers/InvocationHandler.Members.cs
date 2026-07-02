@@ -149,7 +149,8 @@ public partial class InvocationHandler
                     ? new[] { new ReturnSlot(getRetId, returnType) }
                     : System.Array.Empty<ReturnSlot>();
                 return CrossCall(instanceVal, getExportName,
-                    new List<(string, CLeaf)>(), getReturns, returnType);
+                    new List<(string, CLeaf)>(), getReturns, returnType,
+                    TryMarkReentrantCrossDispatch(op, op.Property.GetMethod)); // wave-12 r2 [V1]
             }
         }
 
@@ -164,7 +165,8 @@ public partial class InvocationHandler
         {
             var ifaceInst = VisitExpression(op.Instance);
             return CrossCall(ifaceInst, LayoutPlanner.InterfaceDispatchName(ifaceGetter, ifaceGetterMl),
-                new List<(string, CLeaf)>(), ifaceGetterMl.Returns.ToArray(), returnType);
+                new List<(string, CLeaf)>(), ifaceGetterMl.Returns.ToArray(), returnType,
+                TryMarkReentrantCrossDispatch(op, ifaceGetter)); // wave-12 r2 [V1]
         }
 
         // Other instance.property → extern getter
@@ -215,7 +217,8 @@ public partial class InvocationHandler
         if (IsVariableReceiverBehaviourIndexer(op) && op.Property.GetMethod is { } recvIdxGetter)
         {
             var recvVal = VisitExpression(op.Instance);
-            return EmitCrossIndexerCall(recvIdxGetter, recvVal, EvaluateIndexerArgs(op));
+            return EmitCrossIndexerCall(recvIdxGetter, recvVal, EvaluateIndexerArgs(op),
+                TryMarkReentrantCrossDispatch(op, recvIdxGetter)); // wave-12 r2 [V1]
         }
 
         // Wave-9 round-4 [X4]/[X9]: user indexer read through an INTERFACE-typed receiver → dispatch
@@ -227,7 +230,8 @@ public partial class InvocationHandler
         {
             var ifaceIdxInst = VisitExpression(op.Instance);
             return EmitInterfaceAccessorCall(op.Property.GetMethod, ifaceIdxGetMl, ifaceIdxInst,
-                EvaluateIndexerArgs(op));
+                EvaluateIndexerArgs(op),
+                TryMarkReentrantCrossDispatch(op, op.Property.GetMethod)); // wave-12 r2 [V1]
         }
 
         var cType = GetUdonType(op.Property.ContainingType);
