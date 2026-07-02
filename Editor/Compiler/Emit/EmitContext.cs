@@ -523,6 +523,13 @@ public class EmitContext
     // See LambdaCaptureAnalyzer for rationale on manual walker vs Roslyn AnalyzeDataFlow.
     public readonly LambdaCaptureAnalyzer CaptureAnalyzer;
 
+    // Stage 2 M1: structural closure-scope analysis (CaptureScopeAnalysis) — scope ownership, slot
+    // assignment, and per-closure binding-scope/hop-distance chain shape. Built once per class in
+    // UasmEmitter.Emit(); read-only, consumed by nothing yet (behavior-neutral — env alloc/access
+    // codegen is Stage 2 M2). Self-contained (owns its own LambdaCaptureAnalyzer instance), so this
+    // is a plain result holder, not shared mutable state.
+    public CaptureScopeAnalysis CaptureScope;
+
     // Aliasing detection: per captured symbol, list of closure-creation sites (lambdas and — wave-9
     // [W2] — capturing local-function METHOD GROUPS, which are the same closure in
     // IMethodReferenceOperation clothing) that captured it long-lived. Populated by

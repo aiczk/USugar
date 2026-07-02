@@ -99,6 +99,12 @@ public class UasmEmitter
     /// <summary>Access to the Core IR module for debugging and testing.</summary>
     public CModule Module => _module;
 
+    /// <summary>Test/tooling accessors for the Stage 2 M1 CaptureScopeAnalysis (built in <see cref="Emit"/>,
+    /// consumed by nothing yet — see EmitContext.CaptureScope).</summary>
+    public CaptureScopeAnalysis CaptureScope => _ctx.CaptureScope;
+    public Compilation Compilation => _ctx.Compilation;
+    public INamedTypeSymbol ClassSymbol => _ctx.ClassSymbol;
+
     /// <summary>Called after handler emission, before optimization. Set for IR debugging.</summary>
     public Action<string, CModule> OnIrPass;
 
@@ -113,6 +119,10 @@ public class UasmEmitter
         EnsurePlannerReady();
         EmitFields();
         SetReflectionValues();
+        // Stage 2 M1: structural analysis only — computed and unit-tested, not consumed by codegen
+        // (design §11 M1: "コード生成は未接続"). Running it unconditionally here exercises it against
+        // every compiled class in the existing suite/corpus as a standing hardening check.
+        _ctx.CaptureScope = CaptureScopeAnalysis.Build(_compilation, _classSymbol);
         EmitMethods();
         DetectLambdaCaptureAliasing();
         OnIrPass?.Invoke("after-emit", _module);
