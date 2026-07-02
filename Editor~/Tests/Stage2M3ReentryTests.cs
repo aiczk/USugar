@@ -86,6 +86,12 @@ public class M3GenCapParam : UdonSharpBehaviour {
         // widening N is not a delegate-creation target, so its dispatch is not Reentrant and its env-ref
         // is unprotected (HEAD: zero __recurStack). Widening makes N a bridge-bearing escape target of
         // its own signature, so the cb() dispatch self-connects N→N and spills its frame.
+        // Wave-12 [V1] re-shape: the ORIGINAL shape's cb() sat in tail position (last statement) and its
+        // __recurStack came from the LOCAL logger() dispatch, which the blanket sig-match spuriously
+        // marked Reentrant — logger's provenance is exact (one creation, the lambda cannot re-enter N),
+        // so the precise analysis rightly unmarks it. cb() now reads cap AFTER the dispatch (non-tail),
+        // pinning the genuine §5.4 protection surface: a foreign-writable FIELD dispatch keeps the
+        // widening and spills N's live frame.
         var uasm = TestHelper.CompileToUasm(@"
 using System;
 using UdonSharp;
@@ -95,7 +101,7 @@ public class M3WorkerGap : UdonSharpBehaviour {
         int cap = seed;
         Action logger = () => { acc = acc + cap; };
         logger();
-        if (nn < 3) { nn = nn + 1; cb(); }
+        if (nn < 3) { nn = nn + 1; cb(); acc = acc + cap; }
     }
 }", "M3WorkerGap");
         Assert.Contains("__recurStack", uasm);                  // N's frame is spilled across the dispatch
@@ -204,17 +210,22 @@ public class M3Fcd56 : UdonSharpBehaviour {
     int Ring5(int n) { int cap = seed + 600; Func<int> f = () => cap; if (n <= 0) return 0; return f() + Ring0(n - 1); }
 }";
 
+    // Wave-12 [V1] re-shape: the ORIGINAL shape's fN() dispatches were all in tail position, so the
+    // pinned spill traffic came from the LOCAL g() dispatches the blanket sig-match spuriously marked
+    // Reentrant (g's provenance is exact — its lambda cannot re-enter DN). The fN() dispatches now
+    // read c AFTER the dispatch (non-tail), so the pinned cost is the genuine widening surface: five
+    // same-signature foreign-writable FIELD dispatches, each spilling its live frame.
     const string SameSigWorst = @"
 using System;
 using UdonSharp;
 public class M3SameSigWorst : UdonSharpBehaviour {
     public System.Action f0; public System.Action f1; public System.Action f2; public System.Action f3; public System.Action f4;
     public int acc; int nn;
-    void D0(){ int c=acc+0; System.Action g=()=>{acc=acc+c;}; g(); if(nn<3){nn=nn+1; f0();} }
-    void D1(){ int c=acc+1; System.Action g=()=>{acc=acc+c;}; g(); if(nn<3){nn=nn+1; f1();} }
-    void D2(){ int c=acc+2; System.Action g=()=>{acc=acc+c;}; g(); if(nn<3){nn=nn+1; f2();} }
-    void D3(){ int c=acc+3; System.Action g=()=>{acc=acc+c;}; g(); if(nn<3){nn=nn+1; f3();} }
-    void D4(){ int c=acc+4; System.Action g=()=>{acc=acc+c;}; g(); if(nn<3){nn=nn+1; f4();} }
+    void D0(){ int c=acc+0; System.Action g=()=>{acc=acc+c;}; g(); if(nn<3){nn=nn+1; f0(); acc=acc+c;} }
+    void D1(){ int c=acc+1; System.Action g=()=>{acc=acc+c;}; g(); if(nn<3){nn=nn+1; f1(); acc=acc+c;} }
+    void D2(){ int c=acc+2; System.Action g=()=>{acc=acc+c;}; g(); if(nn<3){nn=nn+1; f2(); acc=acc+c;} }
+    void D3(){ int c=acc+3; System.Action g=()=>{acc=acc+c;}; g(); if(nn<3){nn=nn+1; f3(); acc=acc+c;} }
+    void D4(){ int c=acc+4; System.Action g=()=>{acc=acc+c;}; g(); if(nn<3){nn=nn+1; f4(); acc=acc+c;} }
 }";
 
     [Fact]
@@ -237,8 +248,12 @@ public class M3SameSigWorst : UdonSharpBehaviour {
     public void MeasurementGate_SameSigWorst_WideningCostBounded()
     {
         var uasm = TestHelper.CompileToUasm(SameSigWorst, "M3SameSigWorst", out _);
-        Assert.Contains("__recurStack", uasm);   // the widening DOES protect the same-sig ring (HEAD: 0)
-        Assert.True(Count(uasm, ": %") <= 310, "same-sig widening heap-var cost must stay bounded");
-        Assert.True(Count(uasm, "__recurStack") <= 21, "same-sig widening spill cost must stay bounded");
+        Assert.Contains("__recurStack", uasm);   // the widening DOES protect the same-sig ring
+        // Bounds re-measured at the wave-12 [V1] re-shape (non-tail field dispatches, see SameSigWorst
+        // comment): 410 heap vars / 41 spill refs — five live frames spilled across their field
+        // dispatches. The old 310/21 bound belonged to the tail-dispatch shape, whose only spill
+        // traffic was the local g() over-spill the precise analysis retired.
+        Assert.True(Count(uasm, ": %") <= 410, "same-sig widening heap-var cost must stay bounded");
+        Assert.True(Count(uasm, "__recurStack") <= 41, "same-sig widening spill cost must stay bounded");
     }
 }
