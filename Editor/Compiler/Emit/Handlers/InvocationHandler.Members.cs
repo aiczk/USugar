@@ -370,10 +370,6 @@ public partial class InvocationHandler
 
     CLeaf VisitObjectCreation(IObjectCreationOperation op)
     {
-        // §2.8 round-2: ctor arguments are call-boundary escapes too — a capturing lambda passed
-        // to an erasing-typed (object / delegate-tuple / T=object) ctor param is loud.
-        GuardCaptureEscapeArguments(op.Arguments);
-
         var resultType = GetUdonType(op.Type);
 
         // UdonSharpBehaviour subclasses cannot be instantiated at runtime —
@@ -464,11 +460,6 @@ public partial class InvocationHandler
             foreach (var init in op.Initializer.Initializers)
             {
                 if (init is not ISimpleAssignmentOperation assign) continue;
-                // §2.8 round-3 [C]: object-initializer member stores are escaping stores into the
-                // value's backing storage — guard each member value like an array-initializer
-                // element (this arm used to emit the member set with no guard and no taint,
-                // VM-verified laundering through struct envelopes).
-                GuardCaptureEscapeValue(assign.Value);
                 var valueVal = VisitExpression(assign.Value);
                 EmitMemberSet(resultVal, assign.Target, valueVal);
             }

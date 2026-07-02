@@ -395,6 +395,8 @@ public abstract class AssignmentHandlerBase : HandlerBase
             }
             default:
             {
+                // Stage 2 §4.1: captured local/param → env cell write-back.
+                if (TryEmitEnvStore(target, valueVal)) break;
                 // Simple l-value (local, field on this): write back via EmitStoreField
                 var fieldName = GetAssignTargetFieldName(target);
                 EmitStoreField(fieldName, valueVal);

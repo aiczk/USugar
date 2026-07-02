@@ -124,44 +124,11 @@ public class UasmEmitter
         // every compiled class in the existing suite/corpus as a standing hardening check.
         _ctx.CaptureScope = CaptureScopeAnalysis.Build(_compilation, _classSymbol);
         EmitMethods();
-        DetectLambdaCaptureAliasing();
         OnIrPass?.Invoke("after-emit", _module);
         // Handlers build Core IR; the pipeline (verify/optimize/flatten) runs on Core directly.
         var result = IrPipeline.GenerateUasmFromCore(_module, DumpEnabled);
         _codeGenResult = result;
         return result.Uasm;
-    }
-
-    /// <summary>
-    /// Post-emit aliasing check: a captured local shared by 2+ lambdas / delegate fields
-    /// aliases the same flat-heap field (Udon VM has no closure objects). Reassigning one
-    /// delegate would silently overwrite the other's capture — an Error; the orchestrator's
-    /// Phase-3 gate (roadmap B26) blocks asset apply on it.
-    /// </summary>
-    void DetectLambdaCaptureAliasing()
-    {
-        foreach (var kv in _ctx.AllLambdaCaptures)
-        {
-            if (kv.Value.Count <= 1) continue;
-            var symbolName = kv.Key.Name;
-            // Point the diagnostic at the captured local's declaration; list the capturing lambdas' lines.
-            var span = kv.Key.Locations.FirstOrDefault(l => l.IsInSource)?.GetLineSpan();
-            var lambdaLines = string.Join(", ", kv.Value
-                .Select(l => l.Syntax.GetLocation().GetLineSpan().StartLinePosition.Line + 1)
-                .OrderBy(n => n));
-            _diagnostics.Add(new EmitDiagnostic
-            {
-                Severity = "Error",
-                Message =
-                    $"Captured local '{symbolName}' is shared by {kv.Value.Count} lambdas / delegate fields (lines {lambdaLines}). " +
-                    "Udon VM has no closure objects — captured locals alias a single flat-heap field, " +
-                    "so reassigning one delegate overwrites the other's captured value. " +
-                    "Use distinct locals per lambda, or restructure to avoid simultaneous live captures.",
-                FilePath = span?.Path ?? "",
-                Line = (span?.StartLinePosition.Line ?? -1) + 1,
-                Character = (span?.StartLinePosition.Character ?? -1) + 1,
-            });
-        }
     }
 
     public uint GetHeapSize() => _codeGenResult.HeapSize;
@@ -567,7 +534,10 @@ public class UasmEmitter
 
         // Declare the signature-keyed __dlgc_ convention vars for this delegate signature (§3.2).
         var invoke = delegateType.DelegateInvokeMethod;
-        var (convArgs, convRet) = HandlerBase.GetConventionFieldNames(delegateType);
+        // envName is intentionally ignored here: a delegate FIELD declaration is not a dispatch site
+        // or capturing bridge, so declaring __dlgc_{sig}__env unconditionally would break the
+        // capture-free byte invariant (§1.3). It is declared on-first-use at the dispatch/bridge site.
+        var (convArgs, convRet, _) = HandlerBase.GetConventionFieldNames(delegateType);
         for (int ci = 0; ci < convArgs.Length; ci++)
             _ctx.TryDeclareVar(convArgs[ci], ExternResolver.GetUdonTypeName(invoke.Parameters[ci].Type));
         if (convRet != null)
@@ -1169,16 +1139,43 @@ public class UasmEmitter
             }
 
             var retTypeStr = method.ReturnsVoid ? "SystemVoid" : ExternResolver.GetUdonTypeName(method.ReturnType, resolvedMap);
-            var callResult = _builder.InternalCall(realFunc.Name, callArgs, retTypeStr);
+            var convRet = method.ReturnsVoid ? null : $"__dlgc_{sigPart}__ret";
 
-            if (!method.ReturnsVoid)
+            void EmitBridgeCall(List<CLeaf> args)
             {
-                var convRet = $"__dlgc_{sigPart}__ret";
-                BridgeStore(convRet, callResult);
+                var callResult = _builder.InternalCall(realFunc.Name, args, retTypeStr);
+                if (!method.ReturnsVoid) BridgeStore(convRet, callResult);
+                else _builder.EmitExprStmt(callResult);
+            }
+
+            // Stage 2 §5.1: a CAPTURING target's bridge consumes the staged env global as the trailing
+            // arg (positional copy-in binds it to the real function's __envp param field) under an
+            // env-null LOUD guard — a hand-rolled object[] or a mixed-world old dispatcher leaves the
+            // env unset, which must LogError + default, not fault or silently read garbage. Non-
+            // capturing bridges (named methods, capture-free lambdas) are byte-unchanged.
+            if (_ctx.CaptureScope != null && _ctx.CaptureScope.IsCapturingClosure(method))
+            {
+                var envConv = $"__dlgc_{sigPart}__env";
+                _ctx.TryDeclareVar(envConv, EnvEmit.EnvType);
+                callArgs.Add(BridgeLoad(envConv, EnvEmit.EnvType));
+                var envOk = BridgeCallExtern("SystemBoolean",
+                    "SystemObject.__op_Inequality__SystemObject_SystemObject__SystemBoolean",
+                    new[] { BridgeLoad(envConv, EnvEmit.EnvType), _builder.Const(null, "SystemObject") });
+                _builder.EmitIf(envOk,
+                    _ => EmitBridgeCall(callArgs),
+                    _ =>
+                    {
+                        BridgeCallExternVoid("UnityEngineDebug.__LogError__SystemObject__SystemVoid",
+                            new[] { (CLeaf)_builder.Const(
+                                $"USugar: missing closure environment — invoked a captured delegate whose bundle carries no env ({method.Name})",
+                                "SystemString") });
+                        if (!method.ReturnsVoid)
+                            BridgeStore(convRet, InvocationHandler.DefaultConst(_builder, retTypeStr));
+                    });
             }
             else
             {
-                _builder.EmitExprStmt(callResult);
+                EmitBridgeCall(callArgs);
             }
 
             _builder.EmitReturn();
@@ -1323,6 +1320,30 @@ public class UasmEmitter
 
             // Emit tail-call optimization label at function entry (jump target for TCO goto)
             _builder.EmitLabel($"__tco_{func.Name}");
+
+            // Stage 2 M2 (design §3.0 INV-2): the MethodEntry-scope EnvAlloc lowers AFTER the __tco_
+            // label so a self-tail loopback re-runs it every logical activation (per-activation env
+            // freshness). A closure reaches its own body scope via ClosureScopes (its MethodEntry
+            // Node is the lambda/LF body, not this bodyOp); a root method via ScopeFor(bodyOp).
+            // No-ops on a null / non-capture-bearing scope, so the call is unconditional.
+            CaptureScope entryScope = null;
+            if (_ctx.CaptureScope != null)
+            {
+                if (method.MethodKind is MethodKind.LocalFunction
+                    or MethodKind.LambdaMethod or MethodKind.AnonymousFunction)
+                    _ctx.CaptureScope.ClosureScopes.TryGetValue(method.OriginalDefinition, out entryScope);
+                else
+                    entryScope = _ctx.CaptureScope.ScopeFor(bodyOp, CaptureScopeKind.MethodEntry);
+            }
+            EnvEmit.Alloc(_builder, _ctx, entryScope);
+
+            // Consume every captured PARAMETER of this method out of its flat param field into its env
+            // cell (the arg arrived positionally in the flat field; all body reads route through env).
+            if (_ctx.CaptureScope != null && _methodParamVarIds.TryGetValue(method, out var entryParamIds))
+                foreach (var p in method.Parameters)
+                    if (p.Ordinal < entryParamIds.Length && _ctx.TryGetEnvBinding(p, out _))
+                        EnvEmit.Write(_builder, _ctx, p,
+                            BridgeLoad(entryParamIds[p.Ordinal], GetUdonType(p.Type)));
 
             if (bodyOp is IMethodBodyOperation methodBody)
             {
@@ -1675,78 +1696,6 @@ public class UasmEmitter
         // reference cases) BEFORE the first GetCaptures caller below pins the per-lambda cache.
         _ctx.CaptureAnalyzer.SetLocalFunctionCaptures(lfFinal);
 
-        // §2.8 round-2: pre-scan every root body + field initializer for DIRECT capturing-lambda
-        // stores into fields / auto-properties / struct members (simple, coalesce, and deconstruction
-        // assignment shapes — the only legal ways a capturing lambda enters a member; tainted-equivalent
-        // member stores are loud rejects). Runs BEFORE body emission so the guards' member-read taint
-        // (HandlerBase.IsLaunderingMemberRead) is independent of method emission order. Local-function
-        // bodies are part of their root's operation tree, so walking roots covers them.
-        foreach (var m in roots)
-            if (bodies.TryGetValue(m, out var rb))
-                CollectCaptureReceivingMembers(rb);
-        foreach (var (_, initOp, _) in _fieldInitOps)
-            CollectCaptureReceivingMembers(initOp);
-
-        // §2.8 round-4 [K3]: pre-scan LOCAL capture taint. The emission-time taint registration
-        // (GuardCaptureEscapeStore / the declaration arms) populates CapturingLambdaLocals in
-        // LEXICAL order, so a read emitted before the tainting store escapes clean yet executes
-        // AFTER the seed from iteration 2 onward (loop back-edge use-before-seed, VM-verified
-        // wrong values; round 2 fixed exactly this order-dependence for MEMBERS). Walk every root
-        // body for DIRECT capturing stores into locals / local-rooted member chains and taint the
-        // root local BEFORE emission, then propagate through local-to-local copy edges to a
-        // fixpoint (F4 emission-order-independent). Straight-line use-before-seed shapes over-
-        // reject by design (§8-3). Runs AFTER the [A]/[K2] fixpoint above (capturing local-function
-        // method groups are seeds too) — emission-time registration stays as a redundant backstop.
-        var localCopyEdges = new Dictionary<ILocalSymbol, HashSet<ILocalSymbol>>(SymbolEqualityComparer.Default);
-        foreach (var m in roots)
-            if (bodies.TryGetValue(m, out var rb3))
-                CollectCaptureSeededLocals(rb3, localCopyEdges);
-        foreach (var (_, initOp, _) in _fieldInitOps)
-            CollectCaptureSeededLocals(initOp, localCopyEdges);
-        bool taintChanged = true;
-        while (taintChanged)
-        {
-            taintChanged = false;
-            foreach (var kv in localCopyEdges)
-            {
-                bool srcTainted = _ctx.CapturingLambdaLocals.Contains(kv.Key);
-                // Wave-9 [W1]: iteration-fragility rides the SAME copy edges as the capture taint
-                // (fragile ⊆ tainted by construction — every fragile seed also taints).
-                var srcFragile = _ctx.IterationFragileLocals.TryGetValue(kv.Key, out var fl) ? fl : null;
-                if (!srcTainted && srcFragile == null) continue;
-                // Wave-9 round-5 [X9]: the taint TIER rides the copy edges too — a copy of a weak
-                // (param-copy-only) local is weak, strong dominates, promotion re-propagates
-                // (monotone over clean < weak < strong, so the fixpoint still terminates).
-                bool srcWeak = srcTainted && _ctx.IsParamCopyOnlyTaint(kv.Key);
-                foreach (var dst in kv.Value)
-                {
-                    if (srcTainted && (srcWeak ? _ctx.AddParamCopyTaint(dst) : _ctx.AddCaptureTaint(dst)))
-                        taintChanged = true;
-                    if (srcFragile != null && _ctx.AddIterationFragileLoops(dst, srcFragile)) taintChanged = true;
-                }
-            }
-        }
-
-        // Wave-9 [W1]/[W2] post-fixpoint check: a local carrying a per-iteration capture must
-        // itself be declared inside that loop (it then dies with the iteration). A fragile local
-        // declared OUTSIDE its loop — seeded directly, through a copy chain, or through a
-        // laundered invocation result — outlives the re-seeded capture slot and would read the
-        // LAST iteration's value (VM-proven 16 where C# gives 6). Loud reject, deterministic
-        // order (sorted by name) so multi-violation sources always name the same local.
-        ILocalSymbol worst = null;
-        foreach (var kv in _ctx.IterationFragileLocals)
-        {
-            foreach (var loop in kv.Value)
-            {
-                if (EmitContext.IsWithinIterationScope(kv.Key, loop)) continue;
-                if (worst == null || string.CompareOrdinal(kv.Key.Name, worst.Name) < 0) worst = kv.Key;
-                break;
-            }
-        }
-        if (worst != null)
-            throw new System.NotSupportedException(EmitContext.PerIterationCaptureError(
-                $"it reaches local '{worst.Name}', which is declared outside that loop"));
-
         // ── §4.2 graph extension: lambda nodes, EscapeSet, synthetic edges ──
 
         // (a) Lambda nodes. Collected from the ROOT-method bodies and the field-initializer operations
@@ -1771,17 +1720,6 @@ public class UasmEmitter
             CollectInternalCallees(body, methodSet, lambdaCallees);
             edges[sym] = lambdaCallees;
         }
-
-        // Wave-9 round-4 [X2]/[X3]: capture cells written by ANY hoisted node; read-only cells
-        // become spill candidates below. Round-5 [X3]/[X10]/[X11]: a written cell whose hoisted
-        // node shares an SCC with the declarer is loud (flat sharing is VM-proven wrong across
-        // live re-entry); written cells of non-cycle nodes keep flat sharing.
-        var hoistedWritten = new HashSet<ISymbol>(SymbolEqualityComparer.Default);
-        foreach (var (_, lambdaBody, _) in lambdaNodes)
-            CollectHoistedCellWrites(lambdaBody, hoistedWritten);
-        foreach (var lf in localFuncs)
-            if (bodies.TryGetValue(lf, out var lfWriteBody))
-                CollectHoistedCellWrites(lfWriteBody, hoistedWritten);
 
         // (b) EscapeSet E (§4.1): conservative approximation of every function whose bridge address can
         // end up inside a bundle — same-class method-group targets (incl. local functions) and lambdas.
@@ -1941,54 +1879,6 @@ public class UasmEmitter
                             reentrantSites.Add(site.Syntax);
                 }
 
-                // Wave-9 round-4 [X2]/[X3]: a HOISTED cycle member (lambda / local function) whose
-                // capture cells are declared by a function in the SAME SCC. A dispatch from inside
-                // this node can re-enter that declaring function while its activation is live (both
-                // path directions exist statically, so SCC co-membership is exactly the conservative
-                // gate), and the fresh activation re-seeds the one flat cell — the node's
-                // POST-dispatch read then sees the inner value (DiffFuzz ref=60 vs VM 50, lambda and
-                // direct-invoked local-function flavors). Spill the read-only capture cells at this
-                // node's marked sites (CollectRecursionSpillFields consumes the map): the cell's
-                // value at the node's dispatch IS the creating activation's value (single-activation
-                // surface), so save/restore reproduces the CLR fresh-environment semantics. Cells
-                // whose declaring function is OUTSIDE the SCC can never be re-seeded mid-dispatch
-                // (no live re-entry path) and stay unspilled — byte-stable for the existing
-                // recursive-lambda shapes. Wave-9 round-5 [X3]/[X10]/[X11]: a cell that is WRITTEN
-                // by any hoisted node AND whose declarer shares the SCC is loud — round 4 kept flat
-                // sharing for written cells, but across live re-entry the one flat cell bleeds the
-                // inner activation's writes into the outer frame (VM-proven 51 vs 21 / 126 vs 101,
-                // lambda and capturing-local-function flavors); correct codegen needs a closure
-                // environment per activation (Stage-2 territory, design §8-3). Written cells of
-                // NON-cycle hoisted nodes keep flat sharing — the correct same-environment C#
-                // semantics when no live re-entry exists.
-                if (caller.MethodKind is MethodKind.LocalFunction or MethodKind.LambdaMethod
-                    or MethodKind.AnonymousFunction)
-                {
-                    var nodeCaptures = caller.MethodKind == MethodKind.LocalFunction
-                        ? _ctx.CaptureAnalyzer.GetLocalFunctionCaptures(caller)
-                        : lambdaOps.TryGetValue(caller, out var capOp)
-                            ? _ctx.CaptureAnalyzer.GetCaptures(capOp)
-                            : System.Collections.Immutable.ImmutableArray<ISymbol>.Empty;
-                    List<ISymbol> spillCells = null;
-                    foreach (var cap in nodeCaptures)
-                    {
-                        if (cap.ContainingSymbol is not IMethodSymbol declFunc) continue;
-                        if (!sccSet.Contains(declFunc)
-                            && (declFunc.OriginalDefinition == null || !sccSet.Contains(declFunc.OriginalDefinition)))
-                            continue;
-                        if (hoistedWritten.Contains(cap))
-                            throw new System.NotSupportedException(
-                                $"Captured variable '{cap.Name}' is written inside a lambda or local function "
-                                + "that participates in a recursion cycle with its declaring method. The "
-                                + "flat-heap closure shares ONE cell across all live activations, so the "
-                                + "write would bleed between recursive frames (CLR closures get a fresh "
-                                + "environment per activation). Make the captured variable read-only inside "
-                                + "the lambda/local function, or pass the value as a parameter/return value.");
-                        (spillCells ??= new List<ISymbol>()).Add(cap);
-                    }
-                    if (spillCells != null)
-                        _ctx.HoistedCaptureSpillCells[caller] = spillCells;
-                }
             }
         }
         _ctx.RecursiveCallees = recursive;
@@ -1997,350 +1887,10 @@ public class UasmEmitter
         _ctx.TailSparedDirectCallSites = tailSparedSites;
     }
 
-    // §2.8 round-2 pre-scan: record member symbols that receive a DIRECT capturing-lambda store.
-    // Covers simple assignment (cb = () => v), coalesce assignment (cb ??= () => v), deconstruction
-    // tuple-literal element stores ((f, g) = (() => v, M)), and object-initializer member assignments
-    // (new S { f = () => v } — an ISimpleAssignmentOperation in the tree). Full descent.
-    void CollectCaptureReceivingMembers(IOperation op)
-    {
-        if (op == null) return;
-        switch (op)
-        {
-            case ISimpleAssignmentOperation sa:
-                RecordIfCapturingMemberStore(sa.Target, sa.Value);
-                break;
-            case ICoalesceAssignmentOperation ca:
-                RecordIfCapturingMemberStore(ca.Target, ca.Value);
-                break;
-            case IDeconstructionAssignmentOperation da:
-            {
-                var tgt = da.Target is IDeclarationExpressionOperation de ? de.Expression : da.Target;
-                var val = da.Value;
-                while (val is IConversionOperation c) val = c.Operand;
-                if (tgt is ITupleOperation tt && val is ITupleOperation vt)
-                    for (int i = 0; i < tt.Elements.Length && i < vt.Elements.Length; i++)
-                        RecordIfCapturingMemberStore(tt.Elements[i], vt.Elements[i]);
-                break;
-            }
-        }
-        foreach (var child in op.Children)
-            CollectCaptureReceivingMembers(child);
-    }
-
-    // Value is DIRECTLY a capturing delegate creation (conversions unwrapped): a capturing lambda,
-    // or (§2.8 round-3 [A]) a capturing LOCAL FUNCTION method group — the pre-scan twin of
-    // HandlerBase.IsDirectCapturingLambda, shared by the member and local pre-scans.
-    bool IsPreScanCapturingValue(IOperation value)
-    {
-        var v = value;
-        while (v is IConversionOperation conv) v = conv.Operand;
-        if (!(v is IDelegateCreationOperation dc)) return false;
-        return dc.Target switch
-        {
-            IAnonymousFunctionOperation lambda => _ctx.CaptureAnalyzer.HasCaptures(lambda),
-            IMethodReferenceOperation mr => _ctx.IsCapturingLocalFunction(mr.Method),
-            _ => false,
-        };
-    }
-
-    void RecordIfCapturingMemberStore(IOperation target, IOperation value)
-    {
-        if (!IsPreScanCapturingValue(value)) return;
-        // §2.8 round-3 [B]: record the WHOLE member chain, not just the leaf — `sField.f = () => v`
-        // makes the struct-typed class field `sField` an envelope carrying the bundle, so a whole-
-        // struct read (`arr[i] = sField`, `return sField`) must go loud exactly like the leaf read.
-        // Local/param chain roots are owned by the emit-time container taint / param-seed reject.
-        // §2.8 round-5 [N2]: record the CANONICAL symbol (override-chain root / ItemN — the one
-        // helper every lookup uses too). Interface members canonicalize to null and record nothing:
-        // the implementing class is unknown, so the emission-time guard rejects the store loudly
-        // instead (GuardCaptureEscapeStore's foreign/interface chain arm).
-        var t = target;
-        while (true)
-        {
-            if (t is IFieldReferenceOperation fr)
-            {
-                if (EmitContext.CanonicalMemberSymbol(fr.Field) is { } cf) _ctx.CaptureReceivingMembers.Add(cf);
-                t = fr.Instance; continue;
-            }
-            if (t is IPropertyReferenceOperation pr)
-            {
-                if (EmitContext.CanonicalMemberSymbol(pr.Property) is { } cp) _ctx.CaptureReceivingMembers.Add(cp);
-                t = pr.Instance; continue;
-            }
-            if (t is IConversionOperation tc) { t = tc.Operand; continue; }
-            break;
-        }
-    }
-
-    // §2.8 round-4 [K3] pre-scan: taint locals seeded with a DIRECT capturing value — bare local
-    // targets, local-rooted member chains (the round-3 [B] container taint, order-independent),
-    // and declarators — and collect local-to-local copy edges (`var g = f;` / `g = f;` / tuple
-    // elements) for the taint-propagation fixpoint in BuildRecursionInfo. Same assignment shapes
-    // as CollectCaptureReceivingMembers plus declarators; array-element and param chain roots are
-    // skipped here because the emission-time guard rejects those seeds loudly ([K1]/[K4]/H6).
-    void CollectCaptureSeededLocals(IOperation op, Dictionary<ILocalSymbol, HashSet<ILocalSymbol>> copyEdges)
-    {
-        if (op == null) return;
-        switch (op)
-        {
-            case ISimpleAssignmentOperation sa:
-                RecordIfCapturingLocalSeedOrCopy(sa.Target, sa.Value, copyEdges);
-                break;
-            case ICoalesceAssignmentOperation ca:
-                RecordIfCapturingLocalSeedOrCopy(ca.Target, ca.Value, copyEdges);
-                break;
-            case IDeconstructionAssignmentOperation da:
-            {
-                var tgt = da.Target is IDeclarationExpressionOperation de ? de.Expression : da.Target;
-                var val = da.Value;
-                while (val is IConversionOperation c) val = c.Operand;
-                if (tgt is not ITupleOperation tt) break;
-                if (val is ITupleOperation vt)
-                {
-                    for (int i = 0; i < tt.Elements.Length && i < vt.Elements.Length; i++)
-                        RecordIfCapturingLocalSeedOrCopy(tt.Elements[i], vt.Elements[i], copyEdges);
-                    break;
-                }
-                // §2.8 round-6 [J7]: NON-tuple-literal source ((g,x)=t / =s / =p / =Mk()) — the
-                // emission-time [N3] guard taints LOCAL element targets only lexically, so a loop
-                // back-edge read emitted before the deconstruction escaped clean (VM 21 vs CLR 11).
-                // Mirror it order-independently: every delegate-capable LOCAL element target
-                // receives the SOURCE's classification — local source → copy edge, delegate-capable
-                // param source → taint (the [N3] param gate is the WIDER NonObjectDelegateCapable:
-                // tuple/struct envelopes arrive whole, unlike the bare-param-copy gate), and
-                // member-read / invocation sources go through the shared classifier below.
-                foreach (var element in tt.Elements)
-                {
-                    var et = element is IDeclarationExpressionOperation ede ? ede.Expression : element;
-                    if (et is not ILocalReferenceOperation elr) continue;
-                    if (!EmitContext.IsDelegateCapableType(elr.Local.Type, null)) continue;
-                    if (val is IParameterReferenceOperation vp)
-                    {
-                        // Envelope unpack — strong ([X9]: tuple/struct param sources are not bare copies).
-                        if (EmitContext.IsNonObjectDelegateCapableType(vp.Parameter.Type, null))
-                            _ctx.AddCaptureTaint(elr.Local);
-                        continue;
-                    }
-                    RecordLocalSeedOrCopy(elr.Local, hasMemberHops: false, val, copyEdges);
-                }
-                break;
-            }
-            case IVariableDeclaratorOperation vd when vd.Initializer?.Value != null:
-                RecordLocalSeedOrCopy(vd.Symbol, hasMemberHops: false, vd.Initializer.Value, copyEdges);
-                break;
-        }
-        foreach (var child in op.Children)
-            CollectCaptureSeededLocals(child, copyEdges);
-    }
-
-    void RecordIfCapturingLocalSeedOrCopy(IOperation target, IOperation value,
-        Dictionary<ILocalSymbol, HashSet<ILocalSymbol>> copyEdges)
-    {
-        // Resolve the target's chain root exactly like the emission-time member-chain arm:
-        // strip declaration-expression wrapping, then hop field/property/conversion links.
-        var t = target is IDeclarationExpressionOperation de ? de.Expression : target;
-        bool hops = false;
-        while (true)
-        {
-            if (t is IFieldReferenceOperation fr) { hops = true; t = fr.Instance; continue; }
-            if (t is IPropertyReferenceOperation pr) { hops = true; t = pr.Instance; continue; }
-            if (t is IConversionOperation tc) { t = tc.Operand; continue; }
-            break;
-        }
-        if (t is ILocalReferenceOperation lr)
-            RecordLocalSeedOrCopy(lr.Local, hops, value, copyEdges);
-    }
-
-    // §2.8 round-6 [G1 closure contract] — THE order-independent taint classifier: "does this RHS
-    // propagate capture-taint into local Y". It is the pre-scan TWIN of the emission-time taint
-    // disjunction (GuardCaptureEscapeStore / StatementHandler declarations / the [N3] deconstruction
-    // guard: IsDirectCapturingLambda, bare local copies, IsDelegateParamRead,
-    // IsTaintedDelegateInvocationResult, IsLaunderingMemberRead) with one systematic substitution:
-    // where emission checks CURRENT taint membership, the pre-scan adds a COPY EDGE for the
-    // BuildRecursionInfo fixpoint — so a local EVER tainted in a body is tainted at every read,
-    // closing the loop back-edge use-before-seed family (rounds 4/5 covered direct seeds, bare local
-    // copies, and member reads; round 6 closed the remaining param / invocation-result /
-    // deconstruction sources, all VM-proven). The twin is NOT literally shared with emission on
-    // purpose: emission resolves types through the type-param map (Keep<int> stays legal — pinned),
-    // while the pre-scan walks definition trees with the IDENTITY resolver (unresolved T is
-    // conservatively capable, §8-3). ANY new taint-carrying arm added to the emission disjunction or
-    // to ContainsCapturingLambdaOrTaintedRead MUST be mirrored here — a lexical-order-only arm is a
-    // reopened back edge.
-    void RecordLocalSeedOrCopy(ILocalSymbol rootLocal, bool hasMemberHops, IOperation value,
-        Dictionary<ILocalSymbol, HashSet<ILocalSymbol>> copyEdges)
-    {
-        if (rootLocal == null || value == null) return;
-        if (IsPreScanCapturingValue(value))
-        {
-            _ctx.AddCaptureTaint(rootLocal);
-            // Wave-9 [W1]/[W2]: a per-iteration capture seeded into a local marks it
-            // iteration-fragile (order-independent twin of GuardPerIterationLocalTarget's
-            // recording; the post-fixpoint check rejects fragile locals declared outside
-            // their loop, closing the direct-outer-store AND copy-launder flavors).
-            _ctx.AddIterationFragileLoops(rootLocal, _ctx.GetPerIterationCaptureLoops(value));
-            return;
-        }
-        // Copy edges feed the taint fixpoint; targets must be BARE locals (member-chain targets
-        // receiving a tainted value are loud rejects at emission, so edges through them never
-        // carry taint).
-        if (hasMemberHops) return;
-        var v = value;
-        while (v is IConversionOperation conv) v = conv.Operand;
-        if (v is ILocalReferenceOperation src)
-        {
-            AddCopyEdge(copyEdges, src.Local, rootLocal);
-            return;
-        }
-        // §2.8 round-6 [J5]: a BARE delegate-param copy (`g = p;` / `g ??= p;`) acquired taint only
-        // at emission time (IsDelegateParamRead's local-target arm), so a loop back-edge read
-        // emitted before the copy escaped clean (VM 42 vs CLR 32). Pre-scan twin of
-        // IsDelegateParamRead: delegate-proper or unresolved-T params taint; bare object/tuple
-        // params stay clean — they are sealed at CALL SITES (round-2 architecture, do not widen).
-        if (v is IParameterReferenceOperation pref)
-        {
-            // Wave-9 round-5 [X9]: WEAK tier — a bare param copy stays sealed at stores/arguments
-            // but legal at returns (`T cur = v; …; return cur;` is the generic fold idiom).
-            if (IsPreScanDelegateParamType(pref.Parameter.Type))
-                _ctx.AddParamCopyTaint(rootLocal);
-            return;
-        }
-        // §2.8 round-6 [J6]: a tainted-invocation-result copy (`g = Id(t);`) acquired taint only at
-        // emission time (IsTaintedDelegateInvocationResult), the identity-callee launder composed
-        // with the back edge (VM 21 vs CLR 11). Pre-scan twin: a delegate-capable RESULT propagates
-        // its ARGUMENTS' classification into the target — capturing values taint, locals add copy
-        // edges (the round-1 `var g = Id(M);` method-group pin stays legal: no taint, no edges),
-        // argument subtrees walk like ContainsCapturingLambdaOrTaintedRead. Instance receivers are
-        // NOT walked (round-1 boundary: IsTaintedDelegateInvocationResult inspects arguments only).
-        if (v is IInvocationOperation inv)
-        {
-            if (EmitContext.IsDelegateCapableType(inv.Type, null))
-                foreach (var arg in inv.Arguments)
-                    CollectPreScanValueTaint(arg.Value, rootLocal, copyEdges);
-            return;
-        }
-        // §2.8 round-5 [N4]: member-read copy edges / taint (shared classification below).
-        if (v is IFieldReferenceOperation or IPropertyReferenceOperation)
-            ClassifyMemberReadIntoLocal(v, rootLocal, copyEdges);
-    }
-
-    // §2.8 round-5 [N4] member-read classification, shared by the top-level classifier and the
-    // round-6 [J6] argument walk. Mirror of IsLaunderingMemberRead, order-independent and gated on
-    // a delegate-capable member type (identity resolver: unresolved T conservatively capable,
-    // §8-3): a capture-receiving / interface / foreign-class member anywhere in the chain taints
-    // the target local directly (recipient sets are complete — the member pre-scan runs first);
-    // a local chain root adds a copy edge (container taint propagates); a param chain root taints
-    // directly (the callee is blind to what the caller packed); any other root (invocation, array
-    // element) recurses the deep walk so taint INSIDE the root expression is still mirrored
-    // (emission's children-walk descends there). Returns true when the read was delegate-capable
-    // (classified); false lets the caller fall through to the children walk.
-    bool ClassifyMemberReadIntoLocal(IOperation memberRead, ILocalSymbol rootLocal,
-        Dictionary<ILocalSymbol, HashSet<ILocalSymbol>> copyEdges)
-    {
-        var leafType = memberRead is IFieldReferenceOperation lf ? lf.Field.Type
-            : ((IPropertyReferenceOperation)memberRead).Property.Type;
-        if (!EmitContext.IsNonObjectDelegateCapableType(leafType, null)) return false;
-        var chain = memberRead;
-        while (true)
-        {
-            ISymbol memberSym;
-            IOperation instance;
-            if (chain is IFieldReferenceOperation cf) { memberSym = cf.Field; instance = cf.Instance; }
-            else if (chain is IPropertyReferenceOperation cp) { memberSym = cp.Property; instance = cp.Instance; }
-            else if (chain is IConversionOperation cc) { chain = cc.Operand; continue; }
-            else break;
-            var canonical = EmitContext.CanonicalMemberSymbol(memberSym);
-            if (canonical == null // interface member — unknown implementing class, conservative
-                || EmitContext.IsForeignOrInterfaceMember(memberSym, _classSymbol)
-                || _ctx.CaptureReceivingMembers.Contains(canonical))
-            {
-                _ctx.AddCaptureTaint(rootLocal);
-                return true;
-            }
-            chain = instance;
-        }
-        if (chain is ILocalReferenceOperation containerLocal)
-            AddCopyEdge(copyEdges, containerLocal.Local, rootLocal);
-        else if (chain is IParameterReferenceOperation)
-            _ctx.AddCaptureTaint(rootLocal); // envelope member off a param — strong ([X9]: not a bare copy)
-        else if (chain is not null && chain is not IInstanceReferenceOperation)
-            CollectPreScanValueTaint(chain, rootLocal, copyEdges);
-        return true;
-    }
-
-    // §2.8 round-6 [J6] deep ARGUMENT walk — the order-independent twin of HandlerBase
-    // .ContainsCapturingLambdaOrTaintedRead for argument subtrees feeding a delegate-capable
-    // invocation result that lands in a local. Arm-for-arm mirror (see the [G1 closure contract]
-    // note on RecordLocalSeedOrCopy): capturing lambdas / capturing local-function method groups
-    // taint, local reads add copy edges (emission checks membership), delegate-proper/unresolved-T
-    // param reads taint, nested delegate-capable invocations walk their arguments only, capable
-    // member reads classify through ClassifyMemberReadIntoLocal, everything else descends children.
-    void CollectPreScanValueTaint(IOperation op, ILocalSymbol target,
-        Dictionary<ILocalSymbol, HashSet<ILocalSymbol>> copyEdges)
-    {
-        if (op == null) return;
-        switch (op)
-        {
-            case IAnonymousFunctionOperation lambda:
-                if (_ctx.CaptureAnalyzer.HasCaptures(lambda))
-                {
-                    _ctx.AddCaptureTaint(target);
-                    // Wave-9 [W1]: a per-iteration capture laundered through an invocation result
-                    // (`g = Id(() => v)`) carries the iteration-fragility into the result local.
-                    _ctx.AddIterationFragileLoops(target, EmitContext.ComputePerIterationCaptureLoops(
-                        _ctx.CaptureAnalyzer.GetCaptures(lambda)));
-                }
-                return;
-            case IMethodReferenceOperation mr when _ctx.IsCapturingLocalFunction(mr.Method):
-                _ctx.AddCaptureTaint(target);
-                _ctx.AddIterationFragileLoops(target, EmitContext.ComputePerIterationCaptureLoops(
-                    _ctx.CaptureAnalyzer.GetLocalFunctionCaptures(mr.Method)));
-                return;
-            case ILocalReferenceOperation lr:
-                AddCopyEdge(copyEdges, lr.Local, target);
-                return;
-            case IParameterReferenceOperation pr:
-                // [X9] weak tier: an identity-laundered param copy mirrors the bare copy.
-                if (IsPreScanDelegateParamType(pr.Parameter.Type))
-                    _ctx.AddParamCopyTaint(target);
-                return;
-            case IInvocationOperation inner:
-                if (EmitContext.IsDelegateCapableType(inner.Type, null))
-                    foreach (var arg in inner.Arguments)
-                        CollectPreScanValueTaint(arg.Value, target, copyEdges);
-                return;
-            case IFieldReferenceOperation or IPropertyReferenceOperation
-                when ClassifyMemberReadIntoLocal(op, target, copyEdges):
-                return;
-        }
-        foreach (var child in op.Children)
-            CollectPreScanValueTaint(child, target, copyEdges);
-    }
-
-    // Pre-scan twin of HandlerBase.IsDelegateParamRead's type gate (identity resolver): delegate
-    // proper or unresolved type param. Bare object/tuple params stay clean — they are sealed at
-    // call sites by GuardCaptureEscapeArguments (round-2: re-widening param reads to object breaks
-    // the stock LocalFunctionTest object-plumbing compat gate). A value-type-constrained T is
-    // excluded as a faithful mirror, not a weakening: delegates are reference types, so emission's
-    // IsDelegateParamRead can never fire for any `T : struct` instantiation (specializations always
-    // resolve T), and delegate-CARRYING struct envelopes are owned by the call-site seal plus the
-    // member-read rules — without this exclusion the shared definition-tree pre-scan over-tainted
-    // `T result = x; return result;` for plain int instantiations (tracked pin).
-    static bool IsPreScanDelegateParamType(ITypeSymbol t)
-        => (t is ITypeParameterSymbol tp && !tp.HasValueTypeConstraint)
-            || (t is INamedTypeSymbol nt && nt.DelegateInvokeMethod != null);
-
-    static void AddCopyEdge(Dictionary<ILocalSymbol, HashSet<ILocalSymbol>> copyEdges,
-        ILocalSymbol from, ILocalSymbol to)
-    {
-        if (!copyEdges.TryGetValue(from, out var dsts))
-            copyEdges[from] = dsts = new HashSet<ILocalSymbol>(SymbolEqualityComparer.Default);
-        dsts.Add(to);
-    }
-
     // Collect every lambda (anonymous function) with its body — each becomes its own SCC node (§4.2).
     // Descends everywhere (nested lambdas / lambdas inside local functions are nodes too). The
-    // operation itself is carried so the [X2] capture-cell spill computation can ask the capture
-    // analyzer (GetCaptures is keyed by IAnonymousFunctionOperation).
+    // operation itself is carried so callers can ask the capture analyzer (GetCaptures is keyed by
+    // IAnonymousFunctionOperation).
     static void CollectLambdaNodes(IOperation op,
         List<(IMethodSymbol Sym, IOperation Body, IAnonymousFunctionOperation Op)> result)
     {
@@ -2349,56 +1899,6 @@ public class UasmEmitter
             result.Add((af.Symbol, af.Body, af));
         foreach (var child in op.Children)
             CollectLambdaNodes(child, result);
-    }
-
-    // ── Wave-9 round-4 [X2]/[X3]: capture cells written by hoisted nodes ──
-    // A capture cell that some lambda/local function WRITES carries same-environment mutation that
-    // must stay visible through the shared flat slot (restoring it at a dispatch site would discard
-    // the callee's legitimate write) — such cells keep today's no-spill behavior. Cells only READ by
-    // hoisted nodes can be re-seeded mid-dispatch ONLY by a fresh activation of their declaring
-    // method, whose writes the CLR closure never sees — save/restore at the node's marked sites is
-    // exactly the fresh-environment boundary. Bare local/param targets (and ref/out argument uses)
-    // count as writes; MEMBER-chain writes into an aggregate cell do not (the slot holds the
-    // object[] REFERENCE — contents mutations stay shared through the restored reference).
-    static void CollectHoistedCellWrites(IOperation op, HashSet<ISymbol> written)
-    {
-        if (op == null) return;
-        switch (op)
-        {
-            case IAssignmentOperation asg: // simple / compound / coalesce / deconstruction
-                RecordHoistedWriteTarget(asg.Target, written);
-                break;
-            case IIncrementOrDecrementOperation inc:
-                RecordHoistedWriteTarget(inc.Target, written);
-                break;
-            case IArgumentOperation { Parameter: { RefKind: RefKind.Ref or RefKind.Out } } refArg:
-                RecordHoistedWriteTarget(refArg.Value, written);
-                break;
-        }
-        foreach (var child in op.Children)
-            CollectHoistedCellWrites(child, written);
-    }
-
-    static void RecordHoistedWriteTarget(IOperation target, HashSet<ISymbol> written)
-    {
-        switch (target)
-        {
-            case ILocalReferenceOperation lr:
-                written.Add(lr.Local);
-                break;
-            case IParameterReferenceOperation pr:
-                written.Add(pr.Parameter);
-                break;
-            case ITupleOperation tup: // deconstruction target (a, b) = …
-                foreach (var e in tup.Elements) RecordHoistedWriteTarget(e, written);
-                break;
-            case IDeclarationExpressionOperation de:
-                RecordHoistedWriteTarget(de.Expression, written);
-                break;
-            case IConversionOperation cv:
-                RecordHoistedWriteTarget(cv.Operand, written);
-                break;
-        }
     }
 
     // EscapeSet collection (§4.1): targets of every IDelegateCreationOperation that resolve to an

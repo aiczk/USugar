@@ -929,6 +929,13 @@ public partial class InvocationHandler
                     argSlots[ordinal] = read();
         var args = new List<CLeaf>(argSlots);
 
+        // Stage 2 §5.6: a same-program CAPTURING local function called by NAME receives its env as a
+        // trailing REAL argument (positional copy-in binds it to the callee's __envp param field) —
+        // env resolved in the caller's frame via the binding-scope chain. Tail/spill classification
+        // treats it like any argument (no new statement-form tail shape).
+        if (_ctx.CaptureScope != null && _ctx.CaptureScope.IsCapturingClosure(target.OriginalDefinition))
+            args.Add(ClosureEnvLeaf(target));
+
         // Under A-normal form EmitCallToMethod already materialized the call (a non-void call returns a CSlotRef
         // leaf, void returns null), so the call and its copy-in are sequenced before the copy-out below — no
         // manual re-sequencing of a lazy call is needed. The call SITE syntax rides along for the round-9
@@ -983,15 +990,21 @@ public partial class InvocationHandler
         while (op is IConversionOperation conv) op = conv.Operand;
         switch (op)
         {
+            // Stage 2 §4.1: env cells have no heap ADDRESS — captured out/ref targets return null so
+            // the caller's generic path stages a temp and copies back through the lvalue-store arms
+            // (which route captured symbols into their env cells).
             case ILocalReferenceOperation localRef:
+                if (_ctx.TryGetEnvBinding(localRef.Local, out _)) return null;
                 return _localBindings.TryGetValue(localRef.Local, out var rb) ? rb.Id : null;
             case IFieldReferenceOperation { Instance: IInstanceReferenceOperation } fieldRef:
                 return fieldRef.Field.Name;
             case IParameterReferenceOperation paramRef:
+                if (_ctx.TryGetEnvBinding(paramRef.Parameter, out _)) return null;
                 return GetParamVarId(paramRef.Parameter);
             case IDeclarationExpressionOperation declExpr:
                 if (declExpr.Expression is ILocalReferenceOperation declLocal)
                 {
+                    if (_ctx.TryGetEnvBinding(declLocal.Local, out _)) return null;
                     var type = GetUdonType(declLocal.Type);
                     var localId = _ctx.DeclareLocal(declLocal.Local.Name, type);
                     _localBindings[declLocal.Local] = new EmitContext.LocalBinding(localId);

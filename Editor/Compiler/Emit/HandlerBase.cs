@@ -570,8 +570,16 @@ public abstract class HandlerBase
     {
         return instance switch
         {
+            // Stage 2 §4.1: captured locals/params live in env records — raw (no-clone) loads read
+            // the env cell directly so mutation hits the live storage.
+            ILocalReferenceOperation lr when _ctx.TryGetEnvBinding(lr.Local, out _)
+                => EnvEmit.Read(_builder, _ctx, lr.Local,
+                       EmitContext.IsAggregateType(lr.Type) ? "SystemObjectArray" : GetUdonType(lr.Type)),
             ILocalReferenceOperation lr when _localBindings.TryGetValue(lr.Local, out var b)
                 => LoadField(b.Id, EmitContext.IsAggregateType(lr.Type) ? "SystemObjectArray" : GetUdonType(lr.Type)),
+            IParameterReferenceOperation pr when _ctx.TryGetEnvBinding(pr.Parameter, out _)
+                => EnvEmit.Read(_builder, _ctx, pr.Parameter,
+                       EmitContext.IsAggregateType(pr.Type) ? "SystemObjectArray" : GetUdonType(pr.Type)),
             IParameterReferenceOperation pr
                 => LoadParam(pr.Parameter),
             // Inside a struct method/ctor, `this` is the receiver object[] param, not the Behaviour.
@@ -586,6 +594,41 @@ public abstract class HandlerBase
                 => ReadArrayElementRaw(ae),
             _ => VisitExpression(instance), // method return, field on this, etc. — fresh or already raw
         };
+    }
+
+    // ── Stage 2 §4.1: captured-variable storage ──
+
+    /// <summary>Bind a freshly declared local: env-bound (captured) locals get NO flat field — the
+    /// caller must route the initial value through <see cref="EnvEmit.Write"/> (returns false);
+    /// ordinary locals get their flat field + LocalBindings entry as before (returns true, flat id
+    /// in <paramref name="flatId"/>).</summary>
+    protected bool BindLocal(ILocalSymbol local, string udonType, out string flatId)
+    {
+        if (_ctx.TryGetEnvBinding(local, out _))
+        {
+            flatId = null;
+            return false;
+        }
+        flatId = _ctx.DeclareLocal(local.Name, udonType);
+        _localBindings[local] = new EmitContext.LocalBinding(flatId);
+        return true;
+    }
+
+    /// <summary>Env arm shared by every assignment write path: when the target is a captured
+    /// local/param, store the value into its env cell and return true; false = caller proceeds with
+    /// its flat-field path. Aggregate value semantics are the CALLER's job (pass an already-cloned
+    /// value where the flat path would clone).</summary>
+    protected bool TryEmitEnvStore(IOperation target, CLeaf value)
+    {
+        ISymbol sym = target switch
+        {
+            ILocalReferenceOperation lr => lr.Local,
+            IParameterReferenceOperation pr => pr.Parameter,
+            _ => null,
+        };
+        if (sym == null || !_ctx.TryGetEnvBinding(sym, out _)) return false;
+        EnvEmit.Write(_builder, _ctx, sym, value);
+        return true;
     }
 
     /// <summary>Round-7 follow-up [Q5]: the this-FIELD whose storage a ref/out argument aliases, or
@@ -731,6 +774,12 @@ public abstract class HandlerBase
             case IDeclarationExpressionOperation declExpr:
                 if (declExpr.Expression is ILocalReferenceOperation localRef)
                 {
+                    // Stage 2 §4.1: captured declaration target → env cell, no flat field.
+                    if (_ctx.TryGetEnvBinding(localRef.Local, out _))
+                    {
+                        EnvEmit.Write(_builder, _ctx, localRef.Local, value);
+                        break;
+                    }
                     var udonType = GetUdonType(localRef.Type);
                     var localId = _ctx.DeclareLocal(localRef.Local.Name, udonType);
                     _localBindings[localRef.Local] = new EmitContext.LocalBinding(localId);
@@ -747,6 +796,11 @@ public abstract class HandlerBase
                 break;
 
             case ILocalReferenceOperation existingLocal:
+                // Stage 2 §4.1: captured local target → env cell.
+                if (TryEmitEnvStore(existingLocal, value))
+                {
+                    break;
+                }
                 if (_localBindings.TryGetValue(existingLocal.Local, out var existingBinding))
                 {
                     EmitStoreField(existingBinding.Id, value);
@@ -1245,6 +1299,22 @@ public abstract class HandlerBase
             _ctx.DeclareVar(paramId, GetUdonType(param.Type));
             lfParamIds[pi] = paramId;
         }
+        // Stage 2 §1.3/§6: a CAPTURING hoisted closure carries a hidden trailing __envp param — the
+        // binding-scope env arrives here (bridge conv-consume §5.1 / direct call §5.6 / TCO rebind).
+        // Appended to lfParamIds → _methodParamVarIds (so CollectRecursionSpillFields' param loop
+        // spills it unchanged) and func.ParamFieldNames (so EmitCallInternal's positional copy-in
+        // binds the trailing env arg into it). NOT in the delegate sig / conv-arg count (§1.3). A
+        // capture-free closure and every named method get NO __envp — the capture-free byte invariant.
+        if (_ctx.CaptureScope != null && _ctx.CaptureScope.IsCapturingClosure(localFunc))
+        {
+            var envpId = $"__{idx}_{funcName}__envp";
+            _ctx.DeclareVar(envpId, EnvEmit.EnvType);
+            var withEnvp = new string[lfParamIds.Length + 1];
+            System.Array.Copy(lfParamIds, withEnvp, lfParamIds.Length);
+            withEnvp[lfParamIds.Length] = envpId;
+            lfParamIds = withEnvp;
+            _ctx.EnvpParamFields[localFunc.OriginalDefinition] = envpId;
+        }
         _methodParamVarIds[localFunc] = lfParamIds;
         foreach (var pid in lfParamIds) func.ParamFieldNames.Add(pid);
 
@@ -1285,7 +1355,7 @@ public abstract class HandlerBase
     /// <summary>Compute signature-based convention field names for a delegate type
     /// (sig key via the unified DelegateAbi.BuildSigPart — design §3.2). Pass the type-param map when
     /// resolving inside a generic-spec body so e.g. Func&lt;T&gt; keys on the substituted type.</summary>
-    internal static (string[] argNames, string retName) GetConventionFieldNames(INamedTypeSymbol delegateType,
+    internal static (string[] argNames, string retName, string envName) GetConventionFieldNames(INamedTypeSymbol delegateType,
         IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeParamMap = null)
     {
         var invoke = delegateType.DelegateInvokeMethod;
@@ -1299,572 +1369,13 @@ public abstract class HandlerBase
         if (!invoke.ReturnsVoid)
             retName = $"__dlgc_{sigPart}__ret";
 
-        return (argNames, retName);
+        // Stage 2 §1.3: the signature-keyed env conv global. Env is NOT part of BuildSigPart (the
+        // cross-program byte contract), only this convention name. Declared on-first-use at the
+        // dispatch site / capturing bridge — NEVER unconditionally (capture-free byte invariant).
+        var envName = $"__dlgc_{sigPart}__env";
+
+        return (argNames, retName, envName);
     }
-
-    // ── §2.8 capture recording + capture-escape guard ──
-
-    protected const string CaptureEscapeError =
-        "Lambdas that capture local variables cannot be stored into arrays/objects or returned in v2.x Stage 1. "
-      + "Use a capture-free lambda or a method group; closure environments arrive in Stage 2.";
-
-    protected const string BuriedCapturingLambdaError =
-        "A lambda that captures local variables cannot appear inside a composite expression "
-      + "(ternary / coalesce / switch arm) assigned to a delegate-typed target in v2.x Stage 1 — "
-      + "restructure: assign the lambda directly. Capture-free lambdas and method groups are unrestricted.";
-
-    /// <summary>Unwrap conversions to a delegate creation whose target is a lambda; true when found.</summary>
-    protected static bool TryGetLambdaCreation(IOperation value, out IAnonymousFunctionOperation lambda)
-    {
-        lambda = null;
-        var v = value;
-        while (v is IConversionOperation conv) v = conv.Operand;
-        if (v is IDelegateCreationOperation { Target: IAnonymousFunctionOperation l }) { lambda = l; return true; }
-        return false;
-    }
-
-    /// <summary>Value is directly a capturing-lambda delegate creation (conversions unwrapped) —
-    /// or, §2.8 round-3 [A], a method-group conversion of a CAPTURING LOCAL FUNCTION, which is the
-    /// same closure in IMethodReferenceOperation clothing (the lambda analyzer never sees it).</summary>
-    protected bool IsDirectCapturingLambda(IOperation value)
-    {
-        if (TryGetLambdaCreation(value, out var l)) return _ctx.CaptureAnalyzer.HasCaptures(l);
-        var v = value;
-        while (v is IConversionOperation conv) v = conv.Operand;
-        return v is IDelegateCreationOperation { Target: IMethodReferenceOperation mr }
-            && _ctx.IsCapturingLocalFunction(mr.Method);
-    }
-
-    /// <summary>Value reads a local tainted by a capturing-lambda store (§2.8(b) flow-insensitive taint).</summary>
-    protected bool IsCaptureTaintedRead(IOperation value)
-    {
-        var v = value;
-        while (v is IConversionOperation conv) v = conv.Operand;
-        return v is ILocalReferenceOperation lr && _ctx.CapturingLambdaLocals.Contains(lr.Local);
-    }
-
-    /// <summary>Wave-9 round-5 [X9]: value reads a local whose taint is exclusively the WEAK
-    /// param-copy tier (legal at returns; still sealed at stores/erasing arguments).</summary>
-    protected bool IsParamCopyOnlyTaintedRead(IOperation value)
-    {
-        var v = value;
-        while (v is IConversionOperation conv) v = conv.Operand;
-        return v is ILocalReferenceOperation lr && _ctx.IsParamCopyOnlyTaint(lr.Local);
-    }
-
-    /// <summary>[X9] The value's only taint contribution is the weak tier — a bare delegate-param
-    /// read or a read of a param-copy-only local. The taint predicates are mutually exclusive by
-    /// conversion-stripped node kind (param ref / local ref / delegate creation / invocation /
-    /// member ref), so this classification is exact, not heuristic.</summary>
-    protected bool IsWeakOnlyTaintSource(IOperation value)
-        => IsDelegateParamRead(value) || IsParamCopyOnlyTaintedRead(value);
-
-    /// <summary>[X9] Tiered local-taint registration backstop — mirrors the pre-scan classifier's
-    /// tiers ([G1 closure contract]): weak sources mark the param-copy tier, everything else is
-    /// strong (and promotes).</summary>
-    protected void RegisterLocalTaint(ILocalSymbol local, IOperation value)
-    {
-        if (IsWeakOnlyTaintSource(value)) _ctx.AddParamCopyTaint(local);
-        else _ctx.AddCaptureTaint(local);
-    }
-
-    /// <summary>object / object[] — storing a delegate there erases the loud delegate typing (§2.8(b)).</summary>
-    protected static bool IsObjectish(ITypeSymbol t)
-        => t != null && (t.SpecialType == SpecialType.System_Object
-            || (t is IArrayTypeSymbol at && at.ElementType.SpecialType == SpecialType.System_Object));
-
-    /// <summary>Resolved delegate-CAPABLE type (§2.8 round-2): a type whose value can carry a delegate
-    /// bundle past the delegate-typed guards — a delegate itself, System.Object (boxing erases the
-    /// delegate typing: `object IdO(object x)` laundered, VM-verified), an UNRESOLVED type parameter
-    /// (generic bodies are emitted from the definition tree so Parameter.Type stays T; the type-param
-    /// map is consulted first via ResolveType, keeping non-delegate instantiations precise and legal),
-    /// or a tuple with any delegate-capable element (tuples erase delegate typing the same way object
-    /// does — tuple return/param envelopes laundered, VM-verified). Over-rejection accepted per §8-3.</summary>
-    protected bool IsDelegateCapableType(ITypeSymbol t)
-        => EmitContext.IsDelegateCapableType(t, ResolveType);
-
-    /// <summary>Delegate-capable minus bare System.Object: delegate proper, unresolved type param,
-    /// delegate-capable tuple, or user-struct envelope. Bare-object VALUES cannot legally carry a
-    /// bundle — every entry point is sealed (objectish store targets reject, objectish locals
-    /// reject at declaration, erasing-typed ARGUMENTS are guarded at the call site) — so
-    /// object-typed param/member reads are clean and ordinary object plumbing keeps compiling.
-    /// Logic lives in EmitContext (single source of truth — the pre-scans use it with the identity
-    /// resolver); this wrapper binds the emit-time type-param-map resolver.</summary>
-    protected bool IsNonObjectDelegateCapableType(ITypeSymbol t)
-        => EmitContext.IsNonObjectDelegateCapableType(t, ResolveType);
-
-    /// <summary>Resolved delegate type proper (Func/Action/custom delegate after type-param
-    /// substitution). Arguments to delegate-PROPER params stay unguarded — fcd37's
-    /// `Apply(x =&gt; x * kk, 5)` is the supported consumption flow; the callee's own escape
-    /// guards own any misuse of the param.</summary>
-    protected bool IsDelegateProperType(ITypeSymbol t)
-        => t != null && ResolveType(t) is INamedTypeSymbol nt && nt.DelegateInvokeMethod != null;
-
-    /// <summary>Conversion-stripped read of a parameter whose RESOLVED type is a delegate proper
-    /// (or a still-unresolved type param — conservative). Such reads are tainted-EQUIVALENT at
-    /// escaping STORE targets (array element / object / field / property, plus local-taint
-    /// propagation): the callee cannot see whether its caller passed a capturing lambda, so
-    /// `void Keep(Func&lt;int&gt; x) { fs[k] = x; }` — and `Keep&lt;T&gt;(T[] a, int i, T x)` at a delegate
-    /// instantiation (the emitted body keeps Parameter.Type == T; ResolveType consults the
-    /// type-param map) — would launder the capture past every loud reject (VM-verified silent
-    /// wrong values). Object/tuple-typed params are NOT tainted here: bundles cannot legally
-    /// reach them (GuardCaptureEscapeArguments seals the call sites), which keeps ordinary
-    /// object plumbing (`void Add(object[] a, object b) { a[0] = b; }`) compiling. RETURNING a
-    /// param stays legal — identity callees (`Id(x) { return x; }`) are the method-group /
-    /// capture-free flow, and the CALLER's invocation-result taint guards the laundered result.
-    /// Over-rejection of method-group setters (`SetCb(M)` → `cb = x` rejects) is accepted per
-    /// design §8-3.</summary>
-    protected bool IsDelegateParamRead(IOperation value)
-    {
-        var v = value;
-        while (v is IConversionOperation conv) v = conv.Operand;
-        if (v is not IParameterReferenceOperation pr) return false;
-        var rt = ResolveType(pr.Parameter.Type);
-        return IsDelegateProperType(rt) || rt is ITypeParameterSymbol;
-    }
-
-    /// <summary>§2.8 round-2 caller-side argument guard: a capturing lambda (or tainted-equivalent
-    /// read) passed to an ERASING-typed parameter — object, delegate-carrying tuple, or a type
-    /// param resolving to one — is a loud compile error. Type erasure makes the callee blind
-    /// (`KeepObj(object x)` / `KeepT((Func&lt;int&gt;,int) t)` / `Id&lt;object&gt;(x)` all laundered,
-    /// VM-verified silent wrong values), so the bundle must be stopped from ENTERING the erased
-    /// param instead of tainting every object read. Delegate-PROPER params stay unguarded (fcd37);
-    /// method groups and capture-free lambdas pass everywhere.</summary>
-    protected void GuardCaptureEscapeArguments(IEnumerable<IArgumentOperation> args)
-    {
-        foreach (var arg in args)
-        {
-            if (arg?.Value == null || arg.Parameter == null) continue;
-            var pt = arg.Parameter.Type;
-            if (!IsDelegateCapableType(pt) || IsDelegateProperType(pt)) continue;
-            if (ContainsCapturingLambdaOrTaintedRead(arg.Value))
-                throw new System.NotSupportedException(CaptureEscapeError);
-        }
-    }
-
-    /// <summary>§2.8 round-2 member-read taint, RECIPIENT flavor: conversion-stripped read of a
-    /// field / auto-property / struct member that received a DIRECT capturing-lambda store anywhere
-    /// in this class (pre-scanned before emission — order-independent). The store itself is legal
-    /// (one live bundle per member is correct; the aliasing detector owns the 2+-lambda case), but
-    /// COPYING the member out re-creates multi-activation aliasing with a single lambda, which the
-    /// detector's 2+ threshold cannot see (auto-property/field round-trips, VM-verified wrong).
-    /// Members seeded only with method groups / capture-free lambdas stay freely readable.</summary>
-    protected bool IsCaptureReceivingMemberRead(IOperation value)
-    {
-        var v = value;
-        while (v is IConversionOperation conv) v = conv.Operand;
-        // §2.8 round-5 [N2]: lookups MUST canonicalize exactly like the record point — a read
-        // through the base virtual symbol of an overridden recipient auto-property (or a named
-        // tuple element of a recorded ItemN) otherwise misses the set (VM-verified laundering).
-        // Interface members canonicalize to null (unknown implementing class) and are owned by
-        // the IsForeignDelegateMemberRead conservatism, not this set.
-        switch (v)
-        {
-            case IFieldReferenceOperation fr:
-                return EmitContext.CanonicalMemberSymbol(fr.Field) is { } cf
-                    && _ctx.CaptureReceivingMembers.Contains(cf);
-            case IPropertyReferenceOperation pr:
-                return EmitContext.CanonicalMemberSymbol(pr.Property) is { } cp
-                    && _ctx.CaptureReceivingMembers.Contains(cp);
-            default: return false;
-        }
-    }
-
-    /// <summary>§2.8 round-2 member-read taint, full STORE-position flavor: a recipient-member read
-    /// (above), OR a delegate-capable member read whose instance chain roots at a PARAMETER (the
-    /// callee is blind to what the caller packed into a tuple/struct envelope — `fs[k] = t.Item1` /
-    /// `fs[k] = s.f` inside the callee, both VM-verified laundering) or at a capture-tainted local
-    /// (aggregate copies must not re-launder). Param/tainted-rooted reads stay legal at RETURNS,
-    /// mirroring bare param reads: the caller's invocation-result taint guards the laundered result.</summary>
-    protected bool IsLaunderingMemberRead(IOperation value)
-    {
-        if (IsCaptureReceivingMemberRead(value)) return true;
-        if (IsForeignDelegateMemberRead(value)) return true;
-        var v = value;
-        while (v is IConversionOperation conv) v = conv.Operand;
-        ITypeSymbol memberType;
-        IOperation root;
-        switch (v)
-        {
-            case IFieldReferenceOperation fr: memberType = fr.Field.Type; root = fr.Instance; break;
-            case IPropertyReferenceOperation pr: memberType = pr.Property.Type; root = pr.Instance; break;
-            default: return false;
-        }
-        // Bare-object members are excluded: bundles cannot legally reach them (objectish store
-        // targets and erasing-typed arguments are sealed), so `objs[i] = param.objField` plumbing
-        // stays legal. Delegate / delegate-tuple / unresolved-T members carry the taint.
-        if (!IsNonObjectDelegateCapableType(memberType)) return false;
-        while (true)
-        {
-            if (root is IFieldReferenceOperation rf) { root = rf.Instance; continue; }
-            if (root is IPropertyReferenceOperation rp) { root = rp.Instance; continue; }
-            if (root is IConversionOperation rc) { root = rc.Operand; continue; }
-            break;
-        }
-        return root is IParameterReferenceOperation
-            || (root is ILocalReferenceOperation rl && _ctx.CapturingLambdaLocals.Contains(rl.Local));
-    }
-
-    protected const string ForeignDelegateReadError =
-        "A delegate-typed member read from another behaviour class cannot be stored into "
-      + "arrays/objects/members/escaping locals or returned in v2.x Stage 1 — the emitting class "
-      + "cannot verify the foreign member never holds a capturing lambda (capture tracking is "
-      + "per-class). Invoke it directly (other.cb()) instead, or route the value through the "
-      + "owning class.";
-
-    /// <summary>§2.8 round-3 [D]: a delegate-capable member read whose member chain contains a
-    /// member of ANOTHER behaviour class — or (§2.8 round-5 [N2]) an INTERFACE member, whose
-    /// implementing class is unknown at emit time (an interface-typed receiver dispatches to any
-    /// behaviour, so neither the per-class recipient pre-scan nor this armor can see the real
-    /// member). The recipient pre-scan is per-class, so the emitting
-    /// class can never see whether the foreign class seeded that member with a capturing lambda
-    /// (B legally seeds its own field; A reads other.cb) — conservatism is the only sound option
-    /// (§8-3). Loud at escaping stores / array initializers / returns and taints locals it is
-    /// copied into; DIRECT invocation (`other.cb()` / `h.F()`) stays legal. Same-class cross-instance reads
-    /// are NOT foreign: the per-class pre-scan covers every store site of this class's members.</summary>
-    protected bool IsForeignDelegateMemberRead(IOperation value)
-    {
-        var v = value;
-        while (v is IConversionOperation conv) v = conv.Operand;
-        ITypeSymbol memberType;
-        switch (v)
-        {
-            case IFieldReferenceOperation fr: memberType = fr.Field.Type; break;
-            case IPropertyReferenceOperation pr: memberType = pr.Property.Type; break;
-            default: return false;
-        }
-        if (!IsNonObjectDelegateCapableType(memberType)) return false;
-        while (true)
-        {
-            if (v is IFieldReferenceOperation rf)
-            {
-                if (IsForeignClassMember(rf.Field)) return true;
-                v = rf.Instance; continue;
-            }
-            if (v is IPropertyReferenceOperation rp)
-            {
-                if (IsForeignClassMember(rp.Property)) return true;
-                v = rp.Instance; continue;
-            }
-            if (v is IConversionOperation rc) { v = rc.Operand; continue; }
-            return false;
-        }
-    }
-
-    /// <summary>Caller-side §2.8(b) laundering guard: a delegate-CAPABLE invocation RESULT whose
-    /// arguments contain a capturing lambda / tainted read is itself tainted-equivalent — an
-    /// identity callee (`Func&lt;int&gt; Id(Func&lt;int&gt; x) { return x; }`, or its type-erased flavors
-    /// `object IdO(object x)` / `T Id&lt;T&gt;(T x)` at T=object, or a tuple-returning packer) otherwise
-    /// launders the capture past both the callee's return guard (a param ref passes it) and this
-    /// caller's store guard (the tree-walk does not descend past invocations). Results that are NOT
-    /// delegate-capable stay legal: the capture is consumed by the callee (fcd37's
-    /// `int Apply(Func&lt;int,int&gt; fn, int v)` — int cannot carry a bundle).</summary>
-    protected bool IsTaintedDelegateInvocationResult(IOperation value)
-    {
-        var v = value;
-        while (v is IConversionOperation conv) v = conv.Operand;
-        if (v is not IInvocationOperation inv) return false;
-        if (!IsDelegateCapableType(inv.Type)) return false;
-        foreach (var arg in inv.Arguments)
-            if (arg.Value != null && ContainsCapturingLambdaOrTaintedRead(arg.Value)) return true;
-        return false;
-    }
-
-    /// <summary>Tree-walk: does this operation contain a capturing lambda — or a read of a
-    /// capture-tainted local / delegate-typed param — anywhere (e.g. buried in a ternary /
-    /// coalesce / switch-expression arm)? Invocation subtrees are descended into ONLY via the
-    /// delegate-typed-result laundering rule: a non-delegate-typed call consumes any capturing
-    /// lambda in its arguments itself (fcd37 stays legal; the callee's own return/store sites
-    /// guard any escape), while a delegate-typed result carrying taint in its arguments is the
-    /// identity-callee laundering shape and stays tainted.
-    /// §2.8 round-6 [G1 closure contract]: any NEW taint-carrying arm added here (or to the
-    /// GuardCaptureEscapeStore taint disjunction) MUST be mirrored in the order-independent
-    /// pre-scan classifier (UasmEmitter.RecordLocalSeedOrCopy / CollectPreScanValueTaint) — a
-    /// lexical-order-only arm is a reopened loop back edge (the rounds 4-6 use-before-seed
-    /// family, all VM-proven).</summary>
-    protected bool ContainsCapturingLambdaOrTaintedRead(IOperation op)
-    {
-        switch (op)
-        {
-            case IAnonymousFunctionOperation l:
-                return _ctx.CaptureAnalyzer.HasCaptures(l);
-            // §2.8 round-3 [A]: a method-group reference to a CAPTURING local function is a
-            // capturing lambda in different clothing (reached as the child of a delegate creation
-            // or buried in ternary/tuple/object-initializer composites). Non-capturing method
-            // refs fall through to the children walk (their instance expression may carry taint).
-            case IMethodReferenceOperation mr when _ctx.IsCapturingLocalFunction(mr.Method):
-                return true;
-            case ILocalReferenceOperation lr:
-                return _ctx.CapturingLambdaLocals.Contains(lr.Local);
-            case IParameterReferenceOperation pr:
-                // Delegate-proper (or unresolved-T) param reads only: object/tuple params cannot
-                // legally hold a bundle (their call sites are sealed by GuardCaptureEscapeArguments),
-                // so plumbing an object param onward stays legal.
-                return IsDelegateProperType(pr.Parameter.Type)
-                    || ResolveType(pr.Parameter.Type) is ITypeParameterSymbol;
-            case IInvocationOperation inv:
-                return IsTaintedDelegateInvocationResult(inv);
-            // §2.8 round-2: member reads carry taint too (recipient members / param-rooted envelope
-            // reads). A non-matching member read falls through to the children walk so taint inside
-            // the INSTANCE expression (e.g. `TaintedCall().field`) is still found.
-            case IFieldReferenceOperation or IPropertyReferenceOperation when IsLaunderingMemberRead(op):
-                return true;
-        }
-        foreach (var child in op.Children)
-            if (child != null && ContainsCapturingLambdaOrTaintedRead(child)) return true;
-        return false;
-    }
-
-    /// <summary>
-    /// Loud-or-correct backstop for NON-direct delegate RHS shapes: a capturing lambda (or tainted-local
-    /// read) buried inside a composite delegate-typed expression — ternary, coalesce, switch-expression
-    /// arm — evades both the §2.8(a) aliasing recording and the §2.8(b) taint set, so it must be a loud
-    /// compile error at delegate-typed stores and value positions. The direct creation shape and simple
-    /// reads are excluded: §2.8 recording/taint owns those (a bare tainted-local read stays legal into a
-    /// local — F4 propagates the taint — and is rejected target-sensitively at escaping stores).
-    /// Capture-free lambdas in composite shapes stay allowed (verified working on the real VM).
-    /// </summary>
-    protected void GuardBuriedCapturingLambda(IOperation value)
-    {
-        // §2.8 round-2: the gate is delegate-CAPABLE (object / tuple-with-delegate / unresolved type
-        // param), not delegate-typed — tuple literals and object-typed composites erase the delegate
-        // typing but carry the bundle all the same (VM-verified laundering).
-        if (value == null || !IsDelegateCapableType(value.Type)) return;
-        var v = value;
-        while (v is IConversionOperation conv) v = conv.Operand;
-        if (v is IDelegateCreationOperation) return;
-        if (v is ILocalReferenceOperation or IParameterReferenceOperation or IFieldReferenceOperation
-            or IPropertyReferenceOperation or IArrayElementReferenceOperation or IInvocationOperation
-            or IInstanceReferenceOperation or ILiteralOperation or IDefaultValueOperation) return;
-        if (ContainsCapturingLambdaOrTaintedRead(v))
-            throw new System.NotSupportedException(BuriedCapturingLambdaError);
-    }
-
-    /// <summary>
-    /// §2.8(a): record a capturing lambda stored LONG-LIVED — a delegate field / auto-property / struct
-    /// member (self or cross) — for the post-emit aliasing detector. Delegate locals and argument-position
-    /// lambdas are intentionally NOT recorded (observationally equivalent today; fcd27/28/37 stay working).
-    /// </summary>
-    protected void RecordLongLivedLambdaStore(IOperation target, IOperation value)
-    {
-        if (target?.Type is not INamedTypeSymbol tnt || tnt.DelegateInvokeMethod == null) return;
-        if (target is not (IFieldReferenceOperation or IPropertyReferenceOperation)) return;
-        if (TryGetLambdaCreation(value, out var lambda) && _ctx.CaptureAnalyzer.HasCaptures(lambda))
-        {
-            _ctx.RecordLambdaCaptures(lambda);
-            return;
-        }
-        // Wave-9 [W2]: a capturing LOCAL-FUNCTION method group is the same closure — register its
-        // (transitive) capture set too, so DetectLambdaCaptureAliasing sees caplf field stores
-        // exactly like lambda field stores (pre-fix the dictionary was lambda-keyed and two caplf
-        // fields sharing a captured local shipped compile-clean wrong values).
-        var v = value;
-        while (v is IConversionOperation conv) v = conv.Operand;
-        if (v is IDelegateCreationOperation { Target: IMethodReferenceOperation mr }
-            && _ctx.IsCapturingLocalFunction(mr.Method))
-            _ctx.RecordLocalFunctionCaptures(mr);
-    }
-
-    /// <summary>
-    /// §2.8(b) capture-escape guard for ARRAY-INITIALIZER elements (escaping stores): a capturing
-    /// lambda, a tainted-local read, a laundered delegate-typed invocation result, or a
-    /// delegate-typed param read escaping into the array is a loud compile error in Stage 1
-    /// (capture-free lambdas and method groups are unrestricted).
-    /// </summary>
-    protected void GuardCaptureEscapeValue(IOperation value)
-    {
-        GuardBuriedCapturingLambda(value);
-        if (IsForeignDelegateMemberRead(value))
-            throw new System.NotSupportedException(ForeignDelegateReadError);
-        if (IsDirectCapturingLambda(value) || IsCaptureTaintedRead(value)
-            || IsTaintedDelegateInvocationResult(value) || IsDelegateParamRead(value)
-            || IsLaunderingMemberRead(value))
-            throw new System.NotSupportedException(CaptureEscapeError);
-    }
-
-    /// <summary>
-    /// §2.8(b) capture-escape guard for RETURN values. Differs from the array-initializer guard in
-    /// exactly one way: returning a delegate-typed PARAM — or a param-rooted member read of one —
-    /// stays legal (`Id(x) { return x; }` is the supported method-group / capture-free flow; the
-    /// CALLER's invocation-result taint guards a laundered result), while a capturing lambda, a
-    /// tainted-local read, a tainted invocation result (`return Id(x =&gt; x + a);`), or a read of a
-    /// capture-RECEIVING member (`return cb;` after `cb = () =&gt; v;` — a zero-arg laundering shape
-    /// the caller-side rule cannot see, VM-verified wrong) is loud.
-    /// </summary>
-    protected void GuardCaptureEscapeReturn(IOperation value)
-    {
-        GuardBuriedCapturingLambda(value);
-        // Wave-9 round-5 [X9]: the tainted-local check is STRONG-tier only — a param-copy-only
-        // local (`T cur = v; …; return cur;`) is exactly the legal param-return flow ([J5]
-        // over-rejected it); the caller's invocation-result taint owns the laundered result.
-        if (IsDirectCapturingLambda(value)
-            || (IsCaptureTaintedRead(value) && !IsParamCopyOnlyTaintedRead(value))
-            || IsTaintedDelegateInvocationResult(value) || IsCaptureReceivingMemberRead(value))
-            throw new System.NotSupportedException(CaptureEscapeError);
-        // §2.8 round-3 [D]: returning a foreign-class delegate member launders it past the caller's
-        // store guards (the zero-arg invocation result is untainted by construction) — loud here.
-        // Param-ROOTED member reads stay legal at returns (the caller's invocation-result taint
-        // owns those), so this is a separate check, not part of IsLaunderingMemberRead's role here.
-        if (IsForeignDelegateMemberRead(value))
-            throw new System.NotSupportedException(ForeignDelegateReadError);
-    }
-
-    /// <summary>
-    /// §2.8(b) capture-escape guard for STORE sites, plus flow-insensitive taint registration.
-    /// Array-element and object/object[]-typed targets reject a direct capturing lambda and any
-    /// tainted-equivalent read (tainted local, laundered delegate-typed invocation result,
-    /// delegate-typed param); a LOCAL target stores legally but is tainted; field/property/
-    /// struct-member targets reject tainted-equivalent reads only (a direct capturing lambda into a
-    /// delegate field stays legal — the aliasing detector owns that case). Over-rejection after a
-    /// method-group reassign is accepted: loud and safe beats a silent wrong value (design §8-3).
-    /// The local-target taint registrations below are REDUNDANT BACKSTOPS since round 6: the
-    /// pre-scan classifier (UasmEmitter.RecordLocalSeedOrCopy — see its [G1 closure contract] note)
-    /// computes the full tainted-local set order-independently before any emission; new
-    /// taint-carrying value shapes must be added THERE, not only here.
-    /// </summary>
-    protected void GuardCaptureEscapeStore(IOperation target, IOperation value)
-    {
-        // F3 backstop first: a capturing lambda buried in a non-direct RHS shape is loud regardless
-        // of target kind (the recording/taint below can only see the direct shape).
-        GuardBuriedCapturingLambda(value);
-
-        bool direct = IsDirectCapturingLambda(value);
-        bool foreign = IsForeignDelegateMemberRead(value);
-        bool tainted = foreign || IsCaptureTaintedRead(value)
-            || IsTaintedDelegateInvocationResult(value) || IsDelegateParamRead(value)
-            || IsLaunderingMemberRead(value);
-        if (!direct && !tainted) return;
-
-        // Wave-9 [W1]/[W2]: a DIRECT capturing value whose capture set contains a per-iteration
-        // loop local must not outlive the iteration (the flat slot is re-seeded by later
-        // iterations; VM-proven 16 where C# gives 6 with a SINGLE lambda site). Member stores
-        // reject below; local-target stores are checked against the captured local's loop.
-        // Emission-time registration here is a redundant backstop — the BuildRecursionInfo
-        // pre-scan computes the same fragility order-independently.
-        var fragileLoops = direct ? _ctx.GetPerIterationCaptureLoops(value) : null;
-
-        if (target is IArrayElementReferenceOperation || IsObjectish(target.Type))
-            throw new System.NotSupportedException(foreign ? ForeignDelegateReadError : CaptureEscapeError);
-
-        switch (target)
-        {
-            // Local targets store legally but become tainted. Taint propagates through local-to-local
-            // copies too (F4: `var g = f;` then `fs[i] = g;` must stay loud — laundering a tainted
-            // read through a copy used to drop the taint).
-            case ILocalReferenceOperation localTarget:
-                GuardPerIterationLocalTarget(localTarget.Local, fragileLoops);
-                RegisterLocalTaint(localTarget.Local, value); // [X9] tiered
-                return;
-            case IDeclarationExpressionOperation { Expression: ILocalReferenceOperation declLocal }:
-                GuardPerIterationLocalTarget(declLocal.Local, fragileLoops);
-                RegisterLocalTaint(declLocal.Local, value); // [X9] tiered
-                return;
-            case IFieldReferenceOperation or IPropertyReferenceOperation when tainted:
-                throw new System.NotSupportedException(foreign ? ForeignDelegateReadError : CaptureEscapeError);
-            // §2.8 round-2 (H6): a PARAMETER store target is an unguarded escape — an out/ref param
-            // write hands the capture to the caller's local with no taint mechanism (VM-verified
-            // wrong values), and a by-value param assigned a capturing lambda can launder through
-            // the param-ref-return legality. Reaching this arm implies direct || tainted, so reject
-            // all RefKinds; capture-free lambda / method-group param defaulting stays legal.
-            case IParameterReferenceOperation:
-                throw new System.NotSupportedException(CaptureEscapeError);
-            // §2.8 round-3 [B]: reaching here, the value is a DIRECT capturing store into a member
-            // chain (s.f = () => v, s.inner.f = () => v) — the CONTAINER is now an envelope carrying
-            // the bundle, so resolve the chain root: a LOCAL root is tainted (whole-struct copies /
-            // returns / array stores of it must go loud — VM-verified silent aliasing otherwise);
-            // a PARAM root is loud (the by-value copy launders out via the legal param-ref return,
-            // VM-verified); an ARRAY-ELEMENT root is loud (§2.8 round-4 [K1]/[K4]: arr[i].f = () => v
-            // mints N live bundles from ONE lambda site with no local to taint — unrepresentable in
-            // the taint model, and whole-element reads cannot be made loud, VM-verified silent
-            // aliasing); a chain through ANOTHER behaviour class's member is loud (per-class
-            // pre-scan cannot make that class's reads loud — round-2 armor, now chain-deep);
-            // a `this`-rooted chain stays legal — the pre-scan records every chain member.
-            case IFieldReferenceOperation or IPropertyReferenceOperation:
-            {
-                // Round-9 [Y11]/[Y15]: a BEHAVIOUR member reached through a VARIABLE receiver
-                // (own-class local `v = this; v.hook = …`, base-typed local, behaviour field
-                // `other.cb = …`, tuple-decon target legs alike) is loud — the receiver's identity
-                // is a runtime value, so the per-class pre-scan cannot make the landing program's
-                // reads loud, and a cross-instance store would ship a bundle whose captured cells
-                // live in THIS program's heap. Only `this`-receivers (incl. cast-of-this) keep the
-                // legal direct-store surface; struct envelope chains are untouched (their
-                // containing type is not a behaviour).
-                static IOperation UnwrapRecv(IOperation r)
-                {
-                    while (r is IConversionOperation c) r = c.Operand;
-                    return r;
-                }
-                var root = target;
-                while (true)
-                {
-                    if (root is IFieldReferenceOperation rf)
-                    {
-                        if (IsForeignClassMember(rf.Field))
-                            throw new System.NotSupportedException(CaptureEscapeError);
-                        if (ExternResolver.IsUdonSharpBehaviour(rf.Field.ContainingType)
-                            && rf.Instance != null
-                            && UnwrapRecv(rf.Instance) is not IInstanceReferenceOperation)
-                            throw new System.NotSupportedException(CaptureEscapeError);
-                        root = rf.Instance; continue;
-                    }
-                    if (root is IPropertyReferenceOperation rp)
-                    {
-                        if (IsForeignClassMember(rp.Property))
-                            throw new System.NotSupportedException(CaptureEscapeError);
-                        if (ExternResolver.IsUdonSharpBehaviour(rp.Property.ContainingType)
-                            && rp.Instance != null
-                            && UnwrapRecv(rp.Instance) is not IInstanceReferenceOperation)
-                            throw new System.NotSupportedException(CaptureEscapeError);
-                        root = rp.Instance; continue;
-                    }
-                    if (root is IConversionOperation rc) { root = rc.Operand; continue; }
-                    break;
-                }
-                if (root is IParameterReferenceOperation || root is IArrayElementReferenceOperation)
-                    throw new System.NotSupportedException(CaptureEscapeError);
-                if (root is ILocalReferenceOperation rootLocal)
-                {
-                    // Wave-9 [W1]: the container local must itself die with the captured local's
-                    // iteration, else the envelope outlives the re-seeded slot.
-                    GuardPerIterationLocalTarget(rootLocal.Local, fragileLoops);
-                    _ctx.AddCaptureTaint(rootLocal.Local); // envelope container — strong ([X9])
-                    return;
-                }
-                // Wave-9 [W1]/[W2]: a `this`-rooted member store ALWAYS outlives the iteration —
-                // a single capturing site in a loop ships a re-seeded slot (the 2+-site aliasing
-                // detector can never fire for it), so it is a loud reject, not a recording.
-                if (fragileLoops != null)
-                    throw new System.NotSupportedException(EmitContext.PerIterationCaptureError(
-                        "it is stored to a field/property that outlives the loop iteration"));
-                return;
-            }
-            default:
-                return;
-        }
-    }
-
-    /// <summary>Wave-9 [W1]/[W2]: a direct capturing store into a LOCAL is legal only when the
-    /// target local's declaration lives inside every captured per-iteration loop (it then dies
-    /// with the iteration). A target declared outside the loop outlives the re-seeded slot —
-    /// loud reject; legal targets inherit the fragility so copies are checked the same way.</summary>
-    void GuardPerIterationLocalTarget(ILocalSymbol targetLocal, HashSet<SyntaxNode> fragileLoops)
-    {
-        if (fragileLoops == null) return;
-        foreach (var loop in fragileLoops)
-            if (!EmitContext.IsWithinIterationScope(targetLocal, loop))
-                throw new System.NotSupportedException(EmitContext.PerIterationCaptureError(
-                    $"it is stored to local '{targetLocal.Name}', which is declared outside that loop"));
-        _ctx.AddIterationFragileLoops(targetLocal, fragileLoops);
-    }
-
-    /// <summary>Member of a CLASS other than the one being emitted (or its bases) — the per-class
-    /// recipient pre-scan cannot make that class's reads loud — or (§2.8 round-5 [N2]) an
-    /// INTERFACE member, whose implementing class is unknown at emit time. Struct members are not
-    /// foreign: struct values cross call boundaries as params, where the param-rooted member-read
-    /// taint applies in the receiving method regardless of class. Logic lives in EmitContext
-    /// (single source of truth, shared with the pre-scans).</summary>
-    protected bool IsForeignClassMember(ISymbol member)
-        => EmitContext.IsForeignOrInterfaceMember(member, _ctx.ClassSymbol);
 
     /// <summary>Most-derived override of <paramref name="baseMethod"/> reachable from the compiled type
     /// (_classSymbol), or baseMethod itself if none — mirrors C# virtual dispatch for a `this` call whose
@@ -1952,6 +1463,20 @@ public abstract class HandlerBase
             _ctx.DeclareVar(paramId, GetUdonType(param.Type));
             gsParamIds[pi] = paramId;
         }
+        // Stage 2 §1.3: __envp twin of RegisterLocalFunction, for a capturing GENERIC local function
+        // specialization (keyed by OriginalDefinition = the generic def, matching EnvEmit.Leaf's
+        // lookup). Non-T-dependent capturing generics share one physical node; T-dependent ones are
+        // pinned to a single instantiation by the ClosurePin gate above, so one envp field per def.
+        if (_ctx.CaptureScope != null && _ctx.CaptureScope.IsCapturingClosure(constructed))
+        {
+            var envpId = $"__{idx}_{SanitizeId(constructed.Name)}__envp";
+            _ctx.DeclareVar(envpId, EnvEmit.EnvType);
+            var withEnvp = new string[gsParamIds.Length + 1];
+            System.Array.Copy(gsParamIds, withEnvp, gsParamIds.Length);
+            withEnvp[gsParamIds.Length] = envpId;
+            gsParamIds = withEnvp;
+            _ctx.EnvpParamFields[constructed.OriginalDefinition] = envpId;
+        }
         _methodParamVarIds[constructed] = gsParamIds;
         foreach (var pid in gsParamIds) func.ParamFieldNames.Add(pid);
 
@@ -1974,7 +1499,23 @@ public abstract class HandlerBase
     // ── Delegate bridge resolution ──
 
     /// <summary>Resolve delegate creation to bridge name, FuncRef, and target instance.</summary>
-    protected (string bridgeName, CLeaf funcRef, CLeaf targetInstance) ResolveDelegateBridge(IDelegateCreationOperation op)
+    /// <summary>Stage 2 §3.7/§4.1: the env leaf for a delegate/direct-call target — the binding-scope
+    /// env of a CAPTURING closure (resolved statically from the current frame, §4.1), or a null const
+    /// for a capture-free closure / named method (byte-invariant). Emit-time armor: a capturing
+    /// closure must have a BindingScope lexically enclosing this creation site.</summary>
+    protected CLeaf ClosureEnvLeaf(IMethodSymbol targetMethod)
+    {
+        if (targetMethod == null || _ctx.CaptureScope == null
+            || !_ctx.CaptureScope.IsCapturingClosure(targetMethod.OriginalDefinition))
+            return Const(null, "SystemObject");
+        if (!_ctx.CaptureScope.ClosureScopes.TryGetValue(targetMethod.OriginalDefinition, out var closureScope)
+            || closureScope.BindingScope == null)
+            throw new System.InvalidOperationException(
+                $"Capturing closure '{targetMethod.Name}' has no binding scope enclosing its creation site.");
+        return EnvEmit.Leaf(_builder, _ctx, closureScope.BindingScope);
+    }
+
+    protected (string bridgeName, CLeaf funcRef, CLeaf targetInstance, CLeaf envLeaf) ResolveDelegateBridge(IDelegateCreationOperation op)
     {
         IMethodSymbol targetMethod = null;
         CLeaf targetInstance = null;
@@ -1995,6 +1536,10 @@ public abstract class HandlerBase
         if (targetMethod == null)
             throw new System.NotSupportedException($"Unsupported delegate target: {op.Target.GetType().Name}");
 
+        // Stage 2 §3.7: bundle[3] env for a capturing closure target (null for named methods / base.M
+        // / capture-free lambdas). Resolved here in the creation site's frame.
+        var envLeaf = ClosureEnvLeaf(targetMethod);
+
         // Wave-9 [W3]: `base.M` binds the BASE implementation NON-virtually (C# ldftn). When the
         // compiled class (or an intermediate) overrides M, the locally registered function for the
         // base symbol is the never-exported base-instance COPY (the same body `base.M()` jumps to),
@@ -2011,7 +1556,7 @@ public abstract class HandlerBase
                 ? new Dictionary<ITypeParameterSymbol, ITypeSymbol>(_ctx.TypeParamMap, SymbolEqualityComparer.Default)
                 : null;
             _ctx.PendingDelegateBridges.Add((targetMethod, bridgeExportName, baseSnapshot));
-            return (bridgeExportName, FuncRef(bridgeExportName), targetInstance);
+            return (bridgeExportName, FuncRef(bridgeExportName), targetInstance, envLeaf);
         }
 
         // For hoisted lambdas/local functions, create a pending bridge dynamically
@@ -2071,7 +1616,7 @@ public abstract class HandlerBase
         }
 
         var funcRef = FuncRef(bridgeExportName);
-        return (bridgeExportName, funcRef, targetInstance);
+        return (bridgeExportName, funcRef, targetInstance, envLeaf);
     }
 
     /// <summary>Virtual dispatch through `this` for PROPERTY/INDEXER accessors (round 7): a property
@@ -2264,9 +1809,24 @@ public abstract class HandlerBase
                     "SystemString.__op_Equality__SystemString_SystemString__SystemBoolean",
                     new List<CLeaf> { lm, rm }, "SystemBoolean");
 
+                // Stage 2 §4.5: distinct closure activations are unequal delegates — add an env
+                // reference-equality leg. bundle[3] is null for method groups / capture-free lambdas,
+                // so null==null → true keeps their behaviour identical to Stage 1. Addr (slot 2) stays
+                // excluded (self-program-relative).
+                var le = ExternCall("SystemObjectArray.__Get__SystemInt32__SystemObject",
+                    new List<CLeaf> { a, Const(DelegateAbi.Env, "SystemInt32") }, "SystemObject");
+                var re = ExternCall("SystemObjectArray.__Get__SystemInt32__SystemObject",
+                    new List<CLeaf> { b, Const(DelegateAbi.Env, "SystemInt32") }, "SystemObject");
+                var envEq = ExternCall(
+                    "SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean",
+                    new List<CLeaf> { le, re }, "SystemBoolean");
+
+                var tmEq = ExternCall(
+                    "SystemBoolean.__op_LogicalAnd__SystemBoolean_SystemBoolean__SystemBoolean",
+                    new List<CLeaf> { targetEq, methodEq }, "SystemBoolean");
                 EmitAssign(resultSlot, ExternCall(
                     "SystemBoolean.__op_LogicalAnd__SystemBoolean_SystemBoolean__SystemBoolean",
-                    new List<CLeaf> { targetEq, methodEq }, "SystemBoolean"));
+                    new List<CLeaf> { tmEq, envEq }, "SystemBoolean"));
             });
 
         CLeaf result = SlotRef(resultSlot);
@@ -2466,36 +2026,6 @@ public abstract class HandlerBase
                         || !SymbolEqualityComparer.Default.Equals(localOwner, _currentMethod.OriginalDefinition))))
                 continue;
             AddField(kv.Value.Id);
-        }
-
-        // Wave-9 round-4 [X2]/[X3]: a hoisted recursion-cycle member additionally spills its
-        // READ-ONLY capture cells whose declaring function shares its SCC (BuildRecursionInfo
-        // computes the set — see EmitContext.HoistedCaptureSpillCells): a dispatch from inside the
-        // node can re-enter the declaring function, whose fresh activation re-seeds the one flat
-        // slot, and the node's POST-dispatch read must see the creating activation's value
-        // (DiffFuzz ref=60 vs VM 50, lambda and local-function flavors). Cells written by a hoisted
-        // node keep flat sharing (same-environment mutation stays visible) and are never in the map.
-        bool isHoisted = _currentMethod != null
-            && _currentMethod.MethodKind is MethodKind.LocalFunction or MethodKind.LambdaMethod or MethodKind.AnonymousFunction;
-        if (isHoisted
-            && (_ctx.HoistedCaptureSpillCells.TryGetValue(_currentMethod, out var capCells)
-                || (_currentMethod.OriginalDefinition != null
-                    && _ctx.HoistedCaptureSpillCells.TryGetValue(_currentMethod.OriginalDefinition, out capCells))))
-        {
-            foreach (var cap in capCells)
-            {
-                switch (cap)
-                {
-                    case ILocalSymbol capLocal when _localBindings.TryGetValue(capLocal, out var capBinding):
-                        AddField(capBinding.Id);
-                        break;
-                    case IParameterSymbol capParam when capParam.ContainingSymbol is IMethodSymbol capOwner
-                        && _methodParamVarIds.TryGetValue(capOwner, out var capPids)
-                        && capParam.Ordinal >= 0 && capParam.Ordinal < capPids.Length:
-                        AddField(capPids[capParam.Ordinal]);
-                        break;
-                }
-            }
         }
 
         return fields;

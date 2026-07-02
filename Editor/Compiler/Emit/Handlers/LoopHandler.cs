@@ -27,8 +27,14 @@ public class LoopHandler : HandlerBase, IOperationHandler
     {
         if (op.ConditionIsTop)
         {
-            // while (cond) { body }
-            _builder.EmitWhile(() => VisitExpression(op.Condition), _ =>
+            // while (cond) { body }. Stage 2 §3 INV-1/INV-3: the Iteration env is (re)allocated at the
+            // top of the condition block (runs each iteration before the condition test AND the body),
+            // so a captured out-var/pattern in the condition writes into a live per-iteration env.
+            _builder.EmitWhile(() =>
+            {
+                EnvEmit.Alloc(_builder, _ctx, _ctx.CaptureScope?.ScopeFor(op, CaptureScopeKind.Iteration));
+                return VisitExpression(op.Condition);
+            }, _ =>
             {
                 _ctx.SwitchBreakLabels.Push(null); // sentinel: loop break should not target switch
                 try
@@ -45,9 +51,12 @@ public class LoopHandler : HandlerBase, IOperationHandler
         }
         else
         {
-            // do { body } while (cond)
+            // do { body } while (cond). Stage 2 §3 INV-1: body top is correct here — the do-while
+            // condition runs AFTER the body, so a fresh env at body top covers both the body's
+            // captures and any closure the (later) condition creates over an Iteration-scoped var.
             _builder.EmitWhile(() => VisitExpression(op.Condition), _ =>
             {
+                EnvEmit.Alloc(_builder, _ctx, _ctx.CaptureScope?.ScopeFor(op, CaptureScopeKind.Iteration));
                 _ctx.SwitchBreakLabels.Push(null); // sentinel: loop break should not target switch
                 try
                 {
@@ -68,12 +77,25 @@ public class LoopHandler : HandlerBase, IOperationHandler
         _builder.EmitFor(
             _ =>
             {
+                // Stage 2 §3: the ForInit env is allocated ONCE (init runs once), before the
+                // init-clause declarations write their captured loop vars into it. A captured
+                // `for (int i…)` variable therefore shares ONE cell across all iterations — the
+                // classic C# for-loop capture semantics (every lambda sees the final i).
+                EnvEmit.Alloc(_builder, _ctx, _ctx.CaptureScope?.ScopeFor(op, CaptureScopeKind.ForInit));
                 // Init: variable declarations register locals in _localBindings
                 foreach (var init in op.Before)
                     VisitOperation(init);
             },
-            // Lazy condition: evaluated AFTER init so loop vars (e.g. 'i') are registered
-            () => op.Condition != null ? VisitExpression(op.Condition) : null,
+            // Lazy condition: evaluated AFTER init so loop vars (e.g. 'i') are registered. Stage 2 §3
+            // INV-1/INV-3: the Iteration env is (re)allocated at the TOP of the condition block, which
+            // re-runs each iteration BEFORE both the condition test and the body — so a captured
+            // out-var/pattern declared in the condition writes into a live per-iteration env, and a
+            // body-declared captured local still gets its per-iteration freshness.
+            () =>
+            {
+                EnvEmit.Alloc(_builder, _ctx, _ctx.CaptureScope?.ScopeFor(op, CaptureScopeKind.Iteration));
+                return op.Condition != null ? VisitExpression(op.Condition) : null;
+            },
             _ =>
             {
                 // Update
@@ -118,8 +140,16 @@ public class LoopHandler : HandlerBase, IOperationHandler
         // Declare loop variable
         var loopLocal = op.Locals.FirstOrDefault()
             ?? throw new System.InvalidOperationException("foreach has no loop variable");
-        var loopVarId = _ctx.DeclareLocal(loopLocal.Name, elemType);
-        _localBindings[loopLocal] = new EmitContext.LocalBinding(loopVarId);
+        // Stage 2 §3: a CAPTURED foreach control var has no flat slot — it is owned by the Iteration
+        // scope (fresh per iteration in C#), so its element value is written into the per-iteration
+        // env cell at body top (below), not a flat field. Skip the flat bind entirely for it.
+        bool loopVarCaptured = _ctx.TryGetEnvBinding(loopLocal, out _);
+        string loopVarId = null;
+        if (!loopVarCaptured)
+        {
+            loopVarId = _ctx.DeclareLocal(loopLocal.Name, elemType);
+            _localBindings[loopLocal] = new EmitContext.LocalBinding(loopVarId);
+        }
         // [Q4]/[R1] the iteration variable is READONLY in C# — struct method receivers reaching it
         // through a value-typed FIELD link get a defensive clone (EmitStructInstanceCall); a DIRECT
         // method call on the loop local mutates it (Roslyn ldloca — readonly only forbids assignment).
@@ -156,6 +186,9 @@ public class LoopHandler : HandlerBase, IOperationHandler
             },
             _ =>
             {
+                // Stage 2 §3 INV-1: fresh per-iteration Iteration env at body top, BEFORE the control
+                // var's element value is written into its (now-live) env cell.
+                EnvEmit.Alloc(_builder, _ctx, _ctx.CaptureScope?.ScopeFor(op, CaptureScopeKind.Iteration));
                 // Body: loopVar = arr[idx]; <body>
                 CLeaf elemVal = ExternCall(
                     $"{arrayType}.__Get__SystemInt32__{elemAccessorType}",
@@ -166,7 +199,10 @@ public class LoopHandler : HandlerBase, IOperationHandler
                 // does not write through to the array (C# value-copy semantics; mirrors VisitArrayElementReference).
                 if (arrayTypeSymbol.ElementType is INamedTypeSymbol elemAgg && EmitContext.IsAggregateType(elemAgg))
                     elemVal = EmitDeepCloneAggregate(elemVal, elemAgg);
-                EmitStoreField(loopVarId, elemVal);
+                if (loopVarCaptured)
+                    EnvEmit.Write(_builder, _ctx, loopLocal, elemVal);
+                else
+                    EmitStoreField(loopVarId, elemVal);
 
                 _ctx.SwitchBreakLabels.Push(null); // sentinel: loop break should not target switch
                 try

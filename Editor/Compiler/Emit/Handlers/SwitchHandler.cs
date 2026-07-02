@@ -30,6 +30,11 @@ public class SwitchHandler : HandlerBase, IOperationHandler
         // exactly once, so the resulting leaf can be re-read across every case arm with no re-evaluation.
         var valueVal = VisitExpression(op.Value);
 
+        // Stage 2 §3: one Switch env per switch (shared by all sections), allocated before any case
+        // pattern/section local is written — a case-label pattern var is bound while the case
+        // CONDITION is built (below), so the env cell must already exist.
+        EnvEmit.Alloc(_builder, _ctx, _ctx.CaptureScope?.ScopeFor(op, CaptureScopeKind.Switch));
+
         var endLabel = _ctx.NextSwitchEndLabel();
         _ctx.SwitchBreakLabels.Push(endLabel);
         _ctx.LoopUsingDepthStack.Push(_usingDisposableStack.Count);

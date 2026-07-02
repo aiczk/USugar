@@ -88,25 +88,42 @@ public sealed class CaptureScopeAnalysis
     /// (read its .BindingScope for the design §2 BindingScope map).</summary>
     public IReadOnlyDictionary<IMethodSymbol, CaptureScope> ClosureScopes { get; }
 
-    // (introducing operation, scope kind) → scope. The kind disambiguates a for-loop, which
-    // introduces TWO scopes at the SAME operation (a ForInit scope shared across iterations plus a
-    // per-iteration Iteration scope); a plain Node map would collide there. Reference equality on the
-    // IOperation (Roslyn does not override Equals) is exactly the identity a mid-emit handler holds.
-    readonly Dictionary<(IOperation, CaptureScopeKind), CaptureScope> _scopeByNodeKind;
+    // Stage 2 M2 (design §1.3/§3.7): the set of hoisted closures (lambdas + local functions,
+    // definition-keyed) that CAPTURE at least one outer variable — the exact predicate for "needs a
+    // hidden __envp param / bundle[3] carries a real env / bridge consumes env". A closure with a
+    // non-null BindingScope but zero captures (a capture-free closure lexically nested in a
+    // capturing context) is NOT in this set: giving it an __envp would break capture-free byte
+    // identity (§1.3). Transitive over the local-function call graph via the analyzer's fixpoint.
+    readonly HashSet<IMethodSymbol> _capturingClosures;
+
+    /// <summary>True when <paramref name="closureDef"/> is a hoisted closure that captures ≥1 outer
+    /// variable (design §1.3 "capturing hoisted closure のみ" — the single predicate for env wiring).</summary>
+    public bool IsCapturingClosure(IMethodSymbol closureDef)
+        => closureDef != null && _capturingClosures.Contains(closureDef.OriginalDefinition);
+
+    // (introducing SYNTAX node, scope kind) → scope. The kind disambiguates a for-loop, which
+    // introduces TWO scopes at the SAME construct (ForInit + Iteration); a plain node map would
+    // collide there. Keyed on IOperation.Syntax, NOT the IOperation: the analysis and the emitter
+    // obtain their operation trees from SEPARATE GetSemanticModel calls, so IOperation reference
+    // identity does NOT hold across them — SyntaxNode red-tree instances ARE shared per SyntaxTree
+    // within one Compilation, so syntax identity does.
+    readonly Dictionary<(SyntaxNode, CaptureScopeKind), CaptureScope> _scopeByNodeKind;
 
     internal CaptureScopeAnalysis(
         List<CaptureScope> scopes,
         Dictionary<ISymbol, (CaptureScope, int)> capturedSlots,
-        Dictionary<IMethodSymbol, CaptureScope> closureScopes)
+        Dictionary<IMethodSymbol, CaptureScope> closureScopes,
+        HashSet<IMethodSymbol> capturingClosures)
     {
         Scopes = scopes;
         CapturedSlots = capturedSlots;
         ClosureScopes = closureScopes;
+        _capturingClosures = capturingClosures;
 
-        _scopeByNodeKind = new Dictionary<(IOperation, CaptureScopeKind), CaptureScope>();
+        _scopeByNodeKind = new Dictionary<(SyntaxNode, CaptureScopeKind), CaptureScope>();
         foreach (var scope in scopes)
-            if (scope.Node != null)
-                _scopeByNodeKind[(scope.Node, scope.Kind)] = scope;
+            if (scope.Node?.Syntax != null)
+                _scopeByNodeKind[(scope.Node.Syntax, scope.Kind)] = scope;
     }
 
     /// <summary>The scope a given construct introduces, so a handler lowering
@@ -116,7 +133,7 @@ public sealed class CaptureScopeAnalysis
     /// captures and was never recorded, or the caller passed a mismatched kind) — callers treat a null
     /// or non-capture-bearing result as "no env here".</summary>
     public CaptureScope ScopeFor(IOperation node, CaptureScopeKind kind)
-        => node != null && _scopeByNodeKind.TryGetValue((node, kind), out var scope) ? scope : null;
+        => node?.Syntax != null && _scopeByNodeKind.TryGetValue((node.Syntax, kind), out var scope) ? scope : null;
 
     /// <summary>Nearest capture-bearing ANCESTOR of <paramref name="scope"/> (strictly above it —
     /// never returns <paramref name="scope"/> itself), skipping non-capture-bearing scopes in the raw
@@ -161,12 +178,30 @@ public sealed class CaptureScopeAnalysis
     {
         var captureAnalyzer = new LambdaCaptureAnalyzer(compilation);
 
-        var roots = classSymbol.GetMembers().OfType<IMethodSymbol>()
-            .Where(m => m.DeclaringSyntaxReferences.Length > 0
-                && m.MethodKind != MethodKind.PropertyGet && m.MethodKind != MethodKind.PropertySet)
-            .Select(m => m.IsGenericMethod ? (IMethodSymbol)m.OriginalDefinition : m)
-            .Distinct(SymbolEqualityComparer.Default).Cast<IMethodSymbol>()
-            .ToList();
+        // Roots must be a SUPERSET of the method set UasmEmitter.EmitMethods actually emits — a closure
+        // in an un-walked body silently stays flat (never reaches the env path), which is unsound across
+        // reentrant recursion. So walk property accessors (get/set) AND inherited user-defined base
+        // methods, not just the class's own ordinary methods; over-coverage is harmless (unused scope
+        // entries), under-coverage is the bug. Definition-keyed (generic → OriginalDefinition).
+        var roots = new List<IMethodSymbol>();
+        var seenRoots = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
+        void AddRoots(INamedTypeSymbol type)
+        {
+            foreach (var m in type.GetMembers().OfType<IMethodSymbol>())
+            {
+                if (m.DeclaringSyntaxReferences.Length == 0 || m.IsImplicitlyDeclared) continue;
+                if (m.MethodKind is not (MethodKind.Ordinary or MethodKind.ExplicitInterfaceImplementation
+                    or MethodKind.PropertyGet or MethodKind.PropertySet)) continue;
+                var def = m.IsGenericMethod ? (IMethodSymbol)m.OriginalDefinition : m;
+                if (seenRoots.Add(def)) roots.Add(def);
+            }
+        }
+        AddRoots(classSymbol);
+        for (var baseType = classSymbol.BaseType;
+             baseType != null && baseType.Name != "UdonSharpBehaviour";
+             baseType = baseType.BaseType)
+            if (!baseType.DeclaringSyntaxReferences.IsEmpty)
+                AddRoots(baseType);
 
         var rootBodies = new List<(IMethodSymbol Root, IOperation Body)>();
         foreach (var root in roots)
@@ -468,10 +503,19 @@ public sealed class CaptureScopeAnalysis
         public CaptureScopeAnalysis Finish()
         {
             var captured = new HashSet<ISymbol>(SymbolEqualityComparer.Default);
-            foreach (var (_, op) in _lambdas)
-                foreach (var s in _captureAnalyzer.GetCaptures(op)) captured.Add(s);
+            var capturingClosures = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
+            foreach (var (sym, op) in _lambdas)
+            {
+                var caps = _captureAnalyzer.GetCaptures(op);
+                if (caps.Length > 0) capturingClosures.Add(sym.OriginalDefinition);
+                foreach (var s in caps) captured.Add(s);
+            }
             foreach (var sym in _localFunctions)
-                foreach (var s in _captureAnalyzer.GetLocalFunctionCaptures(sym)) captured.Add(s);
+            {
+                var caps = _captureAnalyzer.GetLocalFunctionCaptures(sym);
+                if (caps.Length > 0) capturingClosures.Add(sym.OriginalDefinition);
+                foreach (var s in caps) captured.Add(s);
+            }
 
             var capturedSlots = new Dictionary<ISymbol, (CaptureScope, int)>(SymbolEqualityComparer.Default);
             foreach (var scope in _scopes)
@@ -495,7 +539,7 @@ public sealed class CaptureScopeAnalysis
                 scope.BindingScope = cur;
             }
 
-            return new CaptureScopeAnalysis(_scopes, capturedSlots, closureScopes);
+            return new CaptureScopeAnalysis(_scopes, capturedSlots, closureScopes, capturingClosures);
         }
     }
 }

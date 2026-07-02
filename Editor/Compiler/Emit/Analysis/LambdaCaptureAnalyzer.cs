@@ -72,7 +72,24 @@ public sealed class LambdaCaptureAnalyzer
         foreach (var p in lambda.Symbol.Parameters) inside.Add(p);
         foreach (var op in body.DescendantsAndSelf())
         {
-            if (op is IVariableDeclaratorOperation decl) inside.Add(decl.Symbol);
+            switch (op)
+            {
+                case IVariableDeclaratorOperation decl:
+                    inside.Add(decl.Symbol);
+                    break;
+                // A symbol declared INSIDE a nested closure (its params, and — via the declarator
+                // arm above — its locals) is NOT captured by THIS lambda: the nested closure owns it
+                // and chains its own env. Without this, `a => b => a + b` reports `b` as an outer
+                // capture, so IsCapturingClosure(outer) is spuriously true (BindingScope=null →
+                // ClosureEnvLeaf throws) and `b` is wrongly slotted in the inner scope. Mirrors
+                // AnalyzeLocalFunction's nested-closure-param exclusion.
+                case IAnonymousFunctionOperation af when af.Symbol != null:
+                    foreach (var p in af.Symbol.Parameters) inside.Add(p);
+                    break;
+                case ILocalFunctionOperation lf when lf.Symbol != null:
+                    foreach (var p in lf.Symbol.Parameters) inside.Add(p);
+                    break;
+            }
         }
 
         var captures = new HashSet<ISymbol>(SymbolEqualityComparer.Default);

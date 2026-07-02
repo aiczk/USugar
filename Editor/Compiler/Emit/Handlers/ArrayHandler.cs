@@ -32,9 +32,6 @@ public class ArrayHandler : HandlerBase, IExpressionHandler
         {
             for (int i = 0; i < op.Initializer.ElementValues.Length; i++)
             {
-                // §2.8(b): a capturing lambda (or tainted local) in an array initializer escapes the
-                // flat-capture model — loud compile error in Stage 1 (capture-free lambdas are fine).
-                GuardCaptureEscapeValue(op.Initializer.ElementValues[i]);
                 EmitExternVoid($"{arrayType}.__Set__SystemInt32_{elementType}__SystemVoid",
                     new List<CLeaf> { SlotRef(arrSlot), Const(i, "SystemInt32"), VisitExpression(op.Initializer.ElementValues[i]) });
             }

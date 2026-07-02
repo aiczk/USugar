@@ -96,22 +96,6 @@ public class W9R4MinLambda : UdonSharpBehaviour {
         return c(m - 1) + keep;
     }
 }";
-
-    [Fact]
-    public void LambdaCycleMember_SpillsReadOnlyCaptureCellAtDispatchSite()
-    {
-        // The captured local `keep` is declared by M, which shares the lambda's SCC (d = M; the
-        // lambda dispatches d; M dispatches the lambda) — the lambda's marked dispatch arms must
-        // save/restore keep's flat slot so the post-dispatch read sees the creating activation's
-        // value (DiffFuzz ref=60 vs VM 50 pre-fix). Pre-fix the only references to keep were M's
-        // own body + M's call-site spill; post-fix the lambda's two flagged arms each add a
-        // spill LoadField + reload store of the cell. Exact occurrence count pinned (the [Q4]
-        // exact-delta precedent); stash-verified lower pre-fix.
-        var uasm = TestHelper.CompileToUasm(X2LambdaSource, "W9R4MinLambda");
-        int keepRefs = Regex.Matches(uasm, @"__lcl_keep_\w+").Count;
-        Assert.Equal(12, keepRefs); // pre-fix: 8 (no lambda-side spill/reload of the cell; stash-verified)
-    }
-
     const string X3CapLfSource = @"
 using System;
 using UdonSharp;
@@ -127,86 +111,6 @@ public class W9R4MinCapLf : UdonSharpBehaviour {
         return L(m - 1) + keep;
     }
 }";
-
-    [Fact]
-    public void CapturingLocalFunctionCycleMember_SpillsReadOnlyCaptureCellAtDispatchSite()
-    {
-        var uasm = TestHelper.CompileToUasm(X3CapLfSource, "W9R4MinCapLf");
-        int keepRefs = Regex.Matches(uasm, @"__lcl_keep_\w+").Count;
-        Assert.Equal(10, keepRefs); // pre-fix: 6 (no local-function-side spill/reload of the cell; stash-verified)
-    }
-
-    [Fact]
-    public void RecursiveLambda_EnclosingMethodOutsideScc_CaptureCellStaysUnspilled()
-    {
-        // Control for the SCC gate: g captures Start's local zed, but Start is not a cycle member
-        // (nothing dispatches back into it) — zed can never be re-seeded mid-dispatch, so it must
-        // NOT join g's spill set (byte-stability for the existing recursive-lambda shapes; the
-        // count is identical pre-fix, stash-verified).
-        var uasm = TestHelper.CompileToUasm(@"
-using System;
-using UdonSharp;
-public class W9R4Ctl : UdonSharpBehaviour {
-    Func<int, int> g;
-    public int n;
-    public int result;
-    void Start() {
-        int zed = n * 10;
-        g = k => k <= 0 ? zed : g(k - 1) + 1;
-        result = g(n);
-    }
-}", "W9R4Ctl");
-        int zedRefs = Regex.Matches(uasm, @"__lcl_zed_\w+").Count;
-        Assert.Equal(3, zedRefs); // declaration store + lambda read; unchanged pre/post (no spill)
-    }
-
-    [Fact]
-    public void LambdaCycleMember_WrittenCaptureCell_RejectsLoudly()
-    {
-        // Wave-9 round-5 [X3]/[X10]/[X11] re-pin (supersedes the round-4 flat-sharing pin): a
-        // capture cell WRITTEN by a hoisted cycle member shares ONE flat slot across all live
-        // activations, so the inner activation's writes bleed into the outer frame across live
-        // re-entry (DiffFuzz ref=51 vs VM 21 / 126 vs 101 — the round-4 structural pin protected a
-        // VM-proven-wrong behavior). Correct codegen needs a per-activation closure environment
-        // (Stage-2), so the cycle+written combination is loud per design §8-3.
-        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
-using System;
-using UdonSharp;
-public class W9R4Written : UdonSharpBehaviour {
-    Func<int, int> d;
-    public int n;
-    public int result;
-    void Start() { d = M; result = M(n); }
-    int M(int m) {
-        if (m <= 0) return 0;
-        int acc = m * 10;
-        Func<int, int> c = k => { acc = acc + 1; return d(k) + acc; };
-        return c(m - 1) + acc;
-    }
-}", "W9R4Written"));
-        Assert.Contains("recursion cycle", ex.Message);
-    }
-
-    [Fact]
-    public void NonCycleLambda_WrittenCaptureCell_KeepsFlatSharing()
-    {
-        // [X3] control: a written capture cell whose lambda is NOT in a recursion cycle keeps flat
-        // sharing — the correct same-environment C# semantics when no live re-entry exists.
-        var uasm = TestHelper.CompileToUasm(@"
-using System;
-using UdonSharp;
-public class W9R5WrittenCtl : UdonSharpBehaviour {
-    public int n;
-    public int result;
-    void Start() {
-        int acc = n * 10;
-        Func<int, int> c = k => { acc = acc + 1; return k + acc; };
-        result = c(n) + acc;
-    }
-}", "W9R5WrittenCtl");
-        Assert.Contains("__lcl_acc_", uasm);
-    }
-
     // ── [X4]/[X5]/[X9] interface-receiver accessors ──
 
     [Fact]

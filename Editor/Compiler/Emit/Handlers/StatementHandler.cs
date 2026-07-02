@@ -81,9 +81,13 @@ public class StatementHandler : HandlerBase, IOperationHandler
                     VisitVariableDeclaration(decl);
                     foreach (var declarator in decl.Declarators)
                     {
-                        var localId = _localBindings.TryGetValue(declarator.Symbol, out var ub) ? ub.Id : declarator.Symbol.Name;
                         var localType = GetUdonType(declarator.Symbol.Type);
-                        _usingDisposableStack.Peek().Add((LoadField(localId, localType), declarator.Symbol.Type));
+                        // Stage 2 §4.1: captured using-local → read the disposable ref from its env
+                        // cell (using-locals are readonly, so the read-now leaf stays valid).
+                        var dispRef = _ctx.TryGetEnvBinding(declarator.Symbol, out _)
+                            ? EnvEmit.Read(_builder, _ctx, declarator.Symbol, localType)
+                            : LoadField(_localBindings.TryGetValue(declarator.Symbol, out var ub) ? ub.Id : declarator.Symbol.Name, localType);
+                        _usingDisposableStack.Peek().Add((dispRef, declarator.Symbol.Type));
                     }
                 }
                 break;
@@ -93,6 +97,11 @@ public class StatementHandler : HandlerBase, IOperationHandler
 
     void HandleBlock(IBlockOperation block)
     {
+        // Stage 2 §3: a nested block (if/else body, bare braces, using-statement body) owns a Block
+        // scope; re-entering it re-allocates the env (per-iteration freshness inside loops). The
+        // method's OWN outer block is NOT a recorded Block scope (its statements live in MethodEntry),
+        // so ScopeFor returns null there and Alloc no-ops.
+        EnvEmit.Alloc(_builder, _ctx, _ctx.CaptureScope?.ScopeFor(block, CaptureScopeKind.Block));
         _usingDisposableStack.Push(new List<(CLeaf, ITypeSymbol)>());
         foreach (var stmt in block.Operations)
             VisitOperation(stmt);
@@ -145,13 +154,6 @@ public class StatementHandler : HandlerBase, IOperationHandler
 
     void VisitReturn(IReturnOperation op)
     {
-        // §2.8(b): returning a capturing lambda (or a tainted-equivalent value) escapes the
-        // flat-capture model — loud compile error in Stage 1 (fcd36 stays rejected; closure
-        // environments arrive in Stage 2). Returning a delegate-typed PARAM stays legal
-        // (identity flow — the caller's invocation-result taint guards a laundered result).
-        if (op.ReturnedValue != null)
-            GuardCaptureEscapeReturn(op.ReturnedValue);
-
         // Tail call optimization: return self(args) → overwrite params + goto entry.
         // Wave-9 round-8 [Y3]: TCO is only sound when every ref/out arg threads the SAME parameter
         // (param→param is an identity rebind under the shared flat heap). A re-chained ref/out
@@ -239,6 +241,14 @@ public class StatementHandler : HandlerBase, IOperationHandler
         // Overwrite param vars from the snapshots
         for (int i = 0; i < tailCall.Arguments.Length; i++)
             EmitStoreField(paramIds[i], SlotRef(argSlots[i]));
+
+        // Stage 2 §3.0 INV-2 / §5.6: the snapshot loop is Arguments.Length-bounded and so EXCLUDES
+        // the hidden __envp. A self-tail-recursive capturing closure passes its OWN env forward, so
+        // rebind __envp from itself — identity here, but the wiring is not elided (the MethodEntry
+        // EnvAlloc after the __tco_ label re-runs per logical activation for freshness).
+        if (_ctx.CaptureScope != null
+            && _ctx.EnvpParamFields.TryGetValue(_currentMethod.OriginalDefinition, out var tcoEnvp))
+            EmitStoreField(tcoEnvp, LoadField(tcoEnvp, EnvEmit.EnvType));
 
         // Jump back to method entry via goto label
         var func = _methodFunctions[_currentMethod];
@@ -393,9 +403,12 @@ public class StatementHandler : HandlerBase, IOperationHandler
                 VisitVariableDeclaration(decl);
                 foreach (var declarator in decl.Declarators)
                 {
-                    var localId = _localBindings.TryGetValue(declarator.Symbol, out var ub2) ? ub2.Id : declarator.Symbol.Name;
                     var localType = GetUdonType(declarator.Symbol.Type);
-                    disposableVars.Add((LoadField(localId, localType), declarator.Symbol.Type));
+                    // Stage 2 §4.1: captured using-statement local → env cell read (readonly, so safe).
+                    var dispRef2 = _ctx.TryGetEnvBinding(declarator.Symbol, out _)
+                        ? EnvEmit.Read(_builder, _ctx, declarator.Symbol, localType)
+                        : LoadField(_localBindings.TryGetValue(declarator.Symbol, out var ub2) ? ub2.Id : declarator.Symbol.Name, localType);
+                    disposableVars.Add((dispRef2, declarator.Symbol.Type));
                 }
             }
         }
@@ -452,6 +465,32 @@ public class StatementHandler : HandlerBase, IOperationHandler
                     + "variable aliases, so a ref local would silently degrade to a value copy. "
                     + "Use the referenced variable directly, or index the array element instead.");
 
+            // Stage 2 §4.1: a CAPTURED local has no flat storage — its cell lives in the owning
+            // scope's env record. The initializer value routes into the cell (VisitExpression
+            // already clones aggregate values, so value semantics are preserved); an uninitialized
+            // aggregate pre-allocates its default object[] (incl. nested sub-arrays) like the flat
+            // path, since C# definite assignment permits field writes before any whole-value read.
+            if (_ctx.TryGetEnvBinding(local, out _))
+            {
+                var envInit = declarator.Initializer;
+                if (envInit != null)
+                {
+                    EnvEmit.Write(_builder, _ctx, local, VisitExpression(envInit.Value));
+                }
+                else if (local.Type is INamedTypeSymbol envAggT && EmitContext.IsAggregateType(envAggT))
+                {
+                    var envAggLayout = _ctx.GetAggregateLayout(envAggT);
+                    // DefaultInitAggregate operates on a heap FIELD — stage through a synthetic one.
+                    var envTmpId = _ctx.DeclareLocal(local.Name + "__envinit", "SystemObjectArray");
+                    EmitStoreField(envTmpId, ExternCall(
+                        "SystemObjectArray.__ctor__SystemInt32__SystemObjectArray",
+                        new List<CLeaf> { Const(envAggLayout.Count, "SystemInt32") }, "SystemObjectArray"));
+                    DefaultInitAggregate(envTmpId, envAggLayout);
+                    EnvEmit.Write(_builder, _ctx, local, LoadField(envTmpId, "SystemObjectArray"));
+                }
+                continue;
+            }
+
             // Aggregate-typed local (tuple / user-defined struct) → object[] emulation
             if (local.Type is INamedTypeSymbol namedType && EmitContext.IsAggregateType(namedType))
             {
@@ -468,29 +507,6 @@ public class StatementHandler : HandlerBase, IOperationHandler
             var init = declarator.Initializer;
             if (init != null)
             {
-                // F3 backstop: a capturing lambda buried in a composite initializer (ternary/coalesce/
-                // switch arm) evades the direct-shape taint below — loud reject.
-                GuardBuriedCapturingLambda(init.Value);
-
-                // §2.8(b): a capturing lambda initializing a local TAINTS it (flow-insensitive); an
-                // object-typed local is itself an escaping store and is rejected loudly. A tainted-local
-                // read taints the new local too (F4: copies must not launder the taint), as do the
-                // laundering shapes: a tainted delegate-capable invocation result (`var t = Id(()=>v);`),
-                // a delegate-capable param read (`var t = x;` inside the callee), and a laundering
-                // member read (recipient member / param-rooted envelope member, §2.8 round-2).
-                if (IsDirectCapturingLambda(init.Value) || IsCaptureTaintedRead(init.Value)
-                    || IsTaintedDelegateInvocationResult(init.Value) || IsDelegateParamRead(init.Value)
-                    || IsLaunderingMemberRead(init.Value))
-                {
-                    if (IsObjectish(local.Type))
-                        throw new System.NotSupportedException(CaptureEscapeError);
-                    RegisterLocalTaint(local, init.Value); // [X9] tiered backstop
-                    // Wave-9 [W1]: a declaration is always inside its initializer's loop, so no
-                    // reject here — record the fragility so copies of this local are checked
-                    // (redundant backstop; the pre-scan computes the same set order-independently).
-                    _ctx.AddIterationFragileLoops(local, _ctx.GetPerIterationCaptureLoops(init.Value));
-                }
-
                 var srcVal = VisitExpression(init.Value);
                 EmitStoreField(id, srcVal);
             }
@@ -527,19 +543,6 @@ public class StatementHandler : HandlerBase, IOperationHandler
             return;
         }
 
-        // §2.8 round-2 (H2): aggregate-typed locals `continue` past the scalar declaration guard
-        // block in VisitVariableDeclaration, so this path needs its own capture-escape guard — a
-        // tuple literal carrying a capturing lambda otherwise escapes into the backing object[]
-        // (an unguarded __Set) and launders out via a member read (VM-verified wrong values).
-        // Composite/tuple-literal shapes go loud via the buried-lambda walk; tainted-equivalent
-        // aggregate initializers (param read / tainted local / tainted invocation result) taint
-        // the local so escaping reads of it (or its members, via the tainted-root member rule)
-        // stay loud.
-        GuardBuriedCapturingLambda(init.Value);
-        if (IsCaptureTaintedRead(init.Value) || IsTaintedDelegateInvocationResult(init.Value)
-            || IsDelegateParamRead(init.Value) || IsLaunderingMemberRead(init.Value))
-            RegisterLocalTaint(local, init.Value); // [X9] tiered backstop
-
         var value = UnwrapConversions(init.Value);
 
         if (value is ITupleOperation tupleLit)
@@ -547,9 +550,6 @@ public class StatementHandler : HandlerBase, IOperationHandler
             // Tuple literal: set each element via __Set__
             for (int i = 0; i < tupleLit.Elements.Length && i < layout.Count; i++)
             {
-                // §2.8 round-2 (H2): guard each element exactly like an array-initializer element
-                // (ArrayHandler) — the backing store is the same escaping object[] shape.
-                GuardCaptureEscapeValue(tupleLit.Elements[i]);
                 EmitExternVoid("SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid",
                     new List<CLeaf> { LoadField(localId, "SystemObjectArray"), Const(i, "SystemInt32"),
                         VisitExpression(tupleLit.Elements[i]) });
@@ -565,8 +565,6 @@ public class StatementHandler : HandlerBase, IOperationHandler
         {
             // new V(args): default-init the already-allocated array, then run the registered ctor
             // (receiver = this array, mutated in place via this.field = … in the ctor body).
-            // §2.8 round-2: erasing-typed ctor args are guarded like any call boundary.
-            GuardCaptureEscapeArguments(ocCtor.Arguments);
             DefaultInitAggregate(localId, layout);
             var ctorArgs = new List<CLeaf> { LoadField(localId, "SystemObjectArray") };
             foreach (var arg in ocCtor.Arguments)
@@ -593,12 +591,6 @@ public class StatementHandler : HandlerBase, IOperationHandler
                     };
                     if (memberName != null && layout.TryGetIndex(memberName, out var idx))
                     {
-                        // §2.8 round-3 [C]: object-initializer member stores are escaping stores
-                        // into the backing object[] — guard each value exactly like an
-                        // array-initializer element (raw __Set used to bypass the guard cluster;
-                        // VM-verified laundering). The whole-value buried-lambda walk above
-                        // already rejects most shapes; this is the per-member backstop.
-                        GuardCaptureEscapeValue(sa.Value);
                         EmitExternVoid("SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid",
                             new List<CLeaf> { LoadField(localId, "SystemObjectArray"),
                                 Const(idx, "SystemInt32"), VisitExpression(sa.Value) });

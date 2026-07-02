@@ -101,33 +101,6 @@ public class W9R5EvalOrder : UdonSharpBehaviour {
         Assert.True(idxPos >= 0 && valPos >= 0, "expected both externs in the code section");
         Assert.True(idxPos < valPos, "index args must evaluate before the RHS value (C# order)");
     }
-
-    // ── [X3]/[X10] written capture cell in a hoisted cycle member (caplf/method-read flavor;
-    //    the lambda flavor + non-cycle control live in Wave9Round4RegressionTests) ──
-
-    [Fact]
-    public void LambdaCycleMember_WrittenCell_MethodRecursionFlavor_RejectsLoudly()
-    {
-        // w9l36min1: the lambda writes v and re-enters Step (its declarer) mid-body — one flat
-        // cell across live activations bled the inner write into the outer frame (DiffFuzz
-        // ref=126 vs 101).
-        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
-using System;
-using UdonSharp;
-public class W9L36Min : UdonSharpBehaviour {
-    public int seed;
-    public int result;
-    public int Step(int n) {
-        int v = n * 10;
-        Func<int, int> g = m => { v = v + 1; int inner = (m > 0) ? Step(m) : 0; return v + inner; };
-        int r = g(n - 1);
-        return r + v;
-    }
-    void Start() { result = Step(seed); }
-}", "W9L36Min"));
-        Assert.Contains("recursion cycle", ex.Message);
-    }
-
     // ── [X4] spill-temp coalescing under heap pressure ──
 
     [Fact]
@@ -266,8 +239,10 @@ public class MinA3Ctl : UdonSharpBehaviour {
     [Fact]
     public void SingleInstantiation_GenericWithCapturingLambda_StaysLegal()
     {
-        // [X6] control: one instantiation, one closure, one set of capture cells — legal and
-        // VM-verified (MinA1/MinA2 Match in the wave corpus).
+        // [X6] control (Stage-2 flip): a SINGLE instantiation of a generic whose body has a
+        // capturing closure stays legal — ClosurePin.Capturing only rejects a SECOND distinct
+        // instantiation. The captured `bias` now lives in a per-scope env record (Stage 2), so it
+        // has no flat `__lcl_bias_` cell and an env-record ctor is emitted instead.
         var uasm = TestHelper.CompileToUasm(@"
 using System;
 using UdonSharp;
@@ -281,7 +256,8 @@ public class MinA1Ctl : UdonSharpBehaviour {
         return f(v);
     }
 }", "MinA1Ctl");
-        Assert.Contains("__lcl_bias_", uasm);
+        Assert.DoesNotContain("__lcl_bias_", uasm);
+        Assert.Contains("SystemObjectArray.__ctor__SystemInt32__SystemObjectArray", uasm);
     }
 
     // ── [X7] per-spec aggregate local allocation ──
@@ -386,23 +362,6 @@ public class MinF1Fold : UdonSharpBehaviour {
 }", "MinF1Fold");
         Assert.Contains("__lcl_cur_", uasm);
     }
-
-    [Fact]
-    public void ParamCopyLocal_EscapingStore_StaysLoud()
-    {
-        // [X9] control: the weak tier relaxes RETURNS only — a param-copy local stored into an
-        // array element is still the VM-verified laundering channel and stays loud.
-        Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
-using System;
-using UdonSharp;
-public class W9R5WeakStore : UdonSharpBehaviour {
-    object[] slots = new object[2];
-    public int result;
-    void Keep(Func<int> x) { var g = x; slots[0] = g; }
-    void Start() { Keep(() => result + 1); result = 1; }
-}", "W9R5WeakStore"));
-    }
-
     // ── [X12] static object.Equals on delegate bundles ──
 
     [Fact]

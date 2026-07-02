@@ -434,6 +434,33 @@ namespace TestStubs
         return uasm;
     }
 
+    /// <summary>Build a Compilation + resolve the named class WITHOUT emitting — for analysis-only
+    /// tests (e.g. CaptureScopeAnalysis) that must run regardless of whether the emit-time guards
+    /// would reject the source.</summary>
+    public static Microsoft.CodeAnalysis.Compilation BuildCompilation(string source, string className, out INamedTypeSymbol classSymbol)
+    {
+        var trees = new Microsoft.CodeAnalysis.SyntaxTree[]
+        {
+            CSharpSyntaxTree.ParseText(Stubs),
+            CSharpSyntaxTree.ParseText(source),
+        };
+
+        var compilation = CSharpCompilation.Create("TestAssembly", trees, _standardRefs,
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+
+        var diags = compilation.GetDiagnostics().Where(d => d.Severity == DiagnosticSeverity.Error).ToArray();
+        if (diags.Length > 0)
+            throw new System.Exception("Compilation errors:\n" + string.Join("\n", diags.Select(d => d.ToString())));
+
+        var model = compilation.GetSemanticModel(trees[1]);
+        var root = trees[1].GetRoot();
+        var classDecl = root.DescendantNodes()
+            .OfType<Microsoft.CodeAnalysis.CSharp.Syntax.TypeDeclarationSyntax>()
+            .First(c => c.Identifier.Text == className && c is not Microsoft.CodeAnalysis.CSharp.Syntax.InterfaceDeclarationSyntax);
+        classSymbol = model.GetDeclaredSymbol(classDecl) as INamedTypeSymbol;
+        return compilation;
+    }
+
     public static string CompileToUasm(string source, string className, out UasmEmitter outEmitter)
     {
         var trees = new Microsoft.CodeAnalysis.SyntaxTree[]

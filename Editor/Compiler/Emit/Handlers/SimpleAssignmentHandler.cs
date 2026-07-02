@@ -31,12 +31,6 @@ public class SimpleAssignmentHandler : AssignmentHandlerBase, IExpressionHandler
         if (assign.Target is IDiscardOperation)
             return VisitExpression(assign.Value);
 
-        // §2.8(a): capturing lambdas stored long-lived (delegate field / auto-property / struct member,
-        // self or cross) feed the post-emit aliasing detector. §2.8(b): escaping stores (array element,
-        // object/object[] target, tainted-local read into a member) are loud compile errors in Stage 1.
-        RecordLongLivedLambdaStore(assign.Target, assign.Value);
-        GuardCaptureEscapeStore(assign.Target, assign.Value);
-
         // Field lvalue with receiver legs (aggregate member `point.x` / `arr[i].v`, cross-behaviour
         // field, extern value-type / reference-type field) — the shared legs-now/store-later path,
         // also consumed by the deconstruction lvalue arm. Wave-9 round-7 [Y2]: C# evaluates the
@@ -84,6 +78,18 @@ public class SimpleAssignmentHandler : AssignmentHandlerBase, IExpressionHandler
 
         // VisitExpression clones aggregate locals/params automatically (Clone-on-read).
         var srcFallback = VisitExpression(assign.Value);
+        // Stage 2 §4.1: captured local/param target → env cell store (value read-back contract kept:
+        // re-read the cell, clone aggregates when the assignment is used as a value).
+        if (TryEmitEnvStore(assign.Target, srcFallback))
+        {
+            if (assign.Parent is IExpressionStatementOperation) return srcFallback;
+            ISymbol envSym = assign.Target is ILocalReferenceOperation elr
+                ? elr.Local
+                : ((IParameterReferenceOperation)assign.Target).Parameter;
+            var envLoaded = EnvEmit.Read(_builder, _ctx, envSym, GetUdonType(assign.Target.Type));
+            return assign.Target.Type is INamedTypeSymbol eAgg && EmitContext.IsAggregateType(eAgg)
+                ? EmitDeepCloneAggregate(envLoaded, eAgg) : envLoaded;
+        }
         var targetFieldName = GetAssignTargetFieldName(assign.Target);
         EmitStoreField(targetFieldName, srcFallback);
         // The assignment's VALUE is the stored value. Return a fresh read of the target rather than the

@@ -41,6 +41,18 @@ public static class GoldenCorpus
   public int v;
   void Start(){ Action a = () => v = 5; a(); }
 }"),
+        // Stage 2 M2 canonical capturing-closure form (design §10): a per-iteration loop local
+        // captured by a body lambda stored into an array. The byte gate for env alloc / __Get-__Set
+        // access / __envp chain / capturing-bridge null-env guard on all later Stage-2 changes.
+        ("capturing_lambda_loop", "CapturingLambdaLoop",
+@"using System; using UdonSharp; public class CapturingLambdaLoop : UdonSharpBehaviour {
+  public int a; public int b;
+  void Start(){
+    Func<int>[] fs = new Func<int>[2];
+    for (int i = 0; i < 2; i++){ int v = i * 10; fs[i] = () => v; }
+    a = fs[0](); b = fs[1]();
+  }
+}"),
         ("tuple_deconstruct", "TupleDeconstruct",
 @"using UdonSharp; public class TupleDeconstruct : UdonSharpBehaviour {
   public int a; public int b;

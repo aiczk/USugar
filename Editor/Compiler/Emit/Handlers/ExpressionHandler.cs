@@ -25,12 +25,22 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
     public CLeaf Handle(IOperation expression) => expression switch
     {
         ILiteralOperation op => VisitLiteral(op),
+        // Stage 2 §4.1: a captured local/param has NO flat storage — reads route through the owning
+        // scope's env record (aggregate captures keep clone-on-read value semantics on the way out).
+        ILocalReferenceOperation localRef when _ctx.TryGetEnvBinding(localRef.Local, out _)
+            => ResolveType(localRef.Type) is INamedTypeSymbol eaggT && EmitContext.IsAggregateType(eaggT)
+                   ? EmitDeepCloneAggregate(EnvEmit.Read(_builder, _ctx, localRef.Local, "SystemObjectArray"), eaggT)
+                   : EnvEmit.Read(_builder, _ctx, localRef.Local, GetUdonType(localRef.Type)),
         ILocalReferenceOperation localRef => _localBindings.TryGetValue(localRef.Local, out var localBinding)
                                                  ? ResolveType(localRef.Type) is INamedTypeSymbol laggT && EmitContext.IsAggregateType(laggT)
                                                      ? EmitDeepCloneAggregate(LoadField(localBinding.Id, "SystemObjectArray"), laggT)
                                                      : LoadField(localBinding.Id, GetUdonType(localRef.Type))
                                                  : throw new InvalidOperationException($"Cannot resolve local variable '{localRef.Local.Name}' in method '{_currentMethod?.Name ?? "(none)"}'."),
         IFieldReferenceOperation op => VisitFieldReference(op),
+        IParameterReferenceOperation paramRef when _ctx.TryGetEnvBinding(paramRef.Parameter, out _)
+            => ResolveType(paramRef.Type) is INamedTypeSymbol epaggT && EmitContext.IsAggregateType(epaggT)
+                   ? EmitDeepCloneAggregate(EnvEmit.Read(_builder, _ctx, paramRef.Parameter, "SystemObjectArray"), epaggT)
+                   : EnvEmit.Read(_builder, _ctx, paramRef.Parameter, GetUdonType(paramRef.Type)),
         IParameterReferenceOperation paramRef => ResolveType(paramRef.Type) is INamedTypeSymbol paggT && EmitContext.IsAggregateType(paggT)
                                                      ? EmitDeepCloneAggregate(LoadParam(paramRef.Parameter), paggT)
                                                      : LoadParam(paramRef.Parameter),
@@ -385,6 +395,17 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
             return VisitExpression(declExpr.Expression);
 
         var udonType = GetUdonType(localRef2.Type);
+        // Stage 2 §4.1: a CAPTURED out-var/pattern declaration still needs an ADDRESSABLE heap slot
+        // for the writer (env cells have no address) — declare a flat staging field as before, and
+        // the consumer that populated it must sync it into the env cell (out-arg copy-back /
+        // pattern-binding stores go through AssignToLValue / TryEmitEnvStore arms). Registering the
+        // staging field in _localBindings is WRONG for captured symbols (reads would bypass the env),
+        // so captured declarations get a staging slot WITHOUT a binding.
+        if (_ctx.TryGetEnvBinding(localRef2.Local, out _))
+        {
+            var stagingId = _ctx.DeclareLocal(localRef2.Local.Name, udonType);
+            return LoadField(stagingId, udonType);
+        }
         var localId = _ctx.DeclareLocal(localRef2.Local.Name, udonType);
         _localBindings[localRef2.Local] = new EmitContext.LocalBinding(localId);
         return LoadField(localId, udonType);
@@ -399,7 +420,7 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
     // Capture-escape registration is pre-emit analysis (§4.1) — nothing is marked here.
     CLeaf VisitDelegateCreation(IDelegateCreationOperation op)
     {
-        var (bridgeName, funcRef, thirdParty) = ResolveDelegateBridge(op);
+        var (bridgeName, funcRef, thirdParty, envLeaf) = ResolveDelegateBridge(op);
         DelegateAbi.ValidateDelegateBinding(op.Type as INamedTypeSymbol,
             (op.Target as IMethodReferenceOperation)?.Method, _ctx.TypeParamMap);
 
@@ -420,9 +441,10 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
             new List<CLeaf> { bundle, Const(DelegateAbi.Method, "SystemInt32"), Const(bridgeName, "SystemString") });
         EmitExternVoid("SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid",
             new List<CLeaf> { bundle, Const(DelegateAbi.Addr, "SystemInt32"), addr });
-        // §1.4: every creation site writes null to the reserved env slot; nothing reads it in Stage 1.
+        // Stage 2 §3.7: bundle[3] carries the binding-scope env for a CAPTURING closure target, else
+        // a null const (capture-free lambda / named method / base.M) = byte-identical to Stage 1.
         EmitExternVoid("SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid",
-            new List<CLeaf> { bundle, Const(DelegateAbi.Env, "SystemInt32"), Const(null, "SystemObject") });
+            new List<CLeaf> { bundle, Const(DelegateAbi.Env, "SystemInt32"), envLeaf });
 
         return bundle;
     }

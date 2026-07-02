@@ -96,11 +96,6 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
         if (TryEmitDelegateEquals(op, out var dlgEqResult))
             return dlgEqResult;
 
-        // §2.8 round-2: capturing lambdas / tainted reads must not enter ERASING-typed params
-        // (object / delegate-tuple / T=object) — the callee is type-blind there (VM-verified
-        // laundering). Delegate-proper params stay unguarded (fcd37).
-        GuardCaptureEscapeArguments(op.Arguments);
-
         // Resolve type parameters in generic method type arguments (e.g., Min<T> → Min<int>)
         var target = SubstituteMethodTypeArgs(op.TargetMethod);
 
@@ -426,7 +421,7 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
         // elsewhere (param/field/cast-back) never went through this class's creation-site validation,
         // and a copy-in-only conv protocol would silently drop ref/out write-backs.
         DelegateAbi.ValidateNoRefOutParams(invoke);
-        var (convArgs, convRet) = GetConventionFieldNames(delegateType, _typeParamMap);
+        var (convArgs, convRet, convEnv) = GetConventionFieldNames(delegateType, _typeParamMap);
 
         // The __dlgc_ conv vars are a signature-keyed cross-program byte contract (§3.2). Bridges declare
         // the same names for their own sigs; the dispatch site declares-on-first-use for foreign sigs.
@@ -438,6 +433,10 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
             retType = GetUdonType(invoke.ReturnType);
             _ctx.TryDeclareVar(convRet, retType);
         }
+        // Stage 2 §5.1: every dispatch site unconditionally stages bundle[3] → __dlgc_{sig}__env, so
+        // declare it on first use here (a capture-free target sends null; the bridge's null guard is
+        // the backstop). Declared at the dispatch site only — never in a capture-free bridge (§1.3).
+        _ctx.TryDeclareVar(convEnv, EnvEmit.EnvType);
 
         // C# evaluation order: a plain d(args) runs the argument side effects even when d is null (the
         // NRE follows them). For ?.Invoke this whole sequence sits inside NullableHandler's non-null
@@ -494,6 +493,12 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
                     if (argExprs[i] != null)
                         EmitStoreField(convArgs[i], argExprs[i]);
 
+                // Stage 2 §5.1: stage bundle[3] into the env conv global (unconditional, both arms —
+                // the SELF arm's bridge reads this field directly; the CROSS arm SPVs it below). A
+                // capture-free target sends null; the receiving bridge's null-env guard is the backstop.
+                EmitStoreField(convEnv, ExternCall("SystemObjectArray.__Get__SystemInt32__SystemObject",
+                    new List<CLeaf> { bundle, Const(DelegateAbi.Env, "SystemInt32") }, EnvEmit.EnvType));
+
                 var adr = ExternCall("SystemObjectArray.__Get__SystemInt32__SystemObject",
                     new List<CLeaf> { bundle, Const(DelegateAbi.Addr, "SystemInt32") }, "SystemUInt32");
                 var mtd = ExternCall("SystemObjectArray.__Get__SystemInt32__SystemObject",
@@ -534,6 +539,11 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
                                     "VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid",
                                     new List<CLeaf> { tgt, Const(convArgs[i], "SystemString"), LoadField(convArgs[i], argType) });
                             }
+                            // Stage 2 §5.1: forward the staged env to the receiver alongside the conv args
+                            // (a missing-symbol SPV on a capture-free receiver is a proven silent no-op).
+                            EmitExternVoid(
+                                "VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid",
+                                new List<CLeaf> { tgt, Const(convEnv, "SystemString"), LoadField(convEnv, EnvEmit.EnvType) });
                             EmitExternVoid(
                                 "VRCUdonCommonInterfacesIUdonEventReceiver.__SendCustomEvent__SystemString__SystemVoid",
                                 new List<CLeaf> { tgt, mtd }, reentrant);
@@ -564,22 +574,26 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
     /// <summary>default(T) constant for the dispatch retSlot pre-init (§2.6). Non-primitive Udon types
     /// (objects, arrays, bundles, SDK structs) approximate with null — only observable on the
     /// null-invoke deviation path, which is already a documented deviation (§8-8).</summary>
-    CConst DefaultConst(string udonType) => udonType switch
+    CConst DefaultConst(string udonType) => DefaultConst(_builder, udonType);
+
+    /// <summary>Shared default(T) const builder (dispatch retSlot pre-init + Stage 2 §5.1 bridge
+    /// null-env arm). Static so UasmEmitter's bridge emission reuses the same mapping.</summary>
+    internal static CConst DefaultConst(CoreBuilder b, string udonType) => udonType switch
     {
-        "SystemBoolean" => Const(false, udonType),
-        "SystemInt32" => Const(0, udonType),
-        "SystemUInt32" => Const(0u, udonType),
-        "SystemInt64" => Const(0L, udonType),
-        "SystemUInt64" => Const(0UL, udonType),
-        "SystemInt16" => Const((short)0, udonType),
-        "SystemUInt16" => Const((ushort)0, udonType),
-        "SystemSByte" => Const((sbyte)0, udonType),
-        "SystemByte" => Const((byte)0, udonType),
-        "SystemSingle" => Const(0f, udonType),
-        "SystemDouble" => Const(0d, udonType),
-        "SystemDecimal" => Const(0m, udonType),
-        "SystemChar" => Const('\0', udonType),
-        _ => Const(null, udonType),
+        "SystemBoolean" => b.Const(false, udonType),
+        "SystemInt32" => b.Const(0, udonType),
+        "SystemUInt32" => b.Const(0u, udonType),
+        "SystemInt64" => b.Const(0L, udonType),
+        "SystemUInt64" => b.Const(0UL, udonType),
+        "SystemInt16" => b.Const((short)0, udonType),
+        "SystemUInt16" => b.Const((ushort)0, udonType),
+        "SystemSByte" => b.Const((sbyte)0, udonType),
+        "SystemByte" => b.Const((byte)0, udonType),
+        "SystemSingle" => b.Const(0f, udonType),
+        "SystemDouble" => b.Const(0d, udonType),
+        "SystemDecimal" => b.Const(0m, udonType),
+        "SystemChar" => b.Const('\0', udonType),
+        _ => b.Const(null, udonType),
     };
 
     /// <summary>Best-effort member name for the null-invoke LogError message ({Class}.{member}).</summary>

@@ -413,6 +413,107 @@ public class SharedCaptureClass : UdonSharpBehaviour {
         Assert.Equal(1, SlotOf(analysis, "shared"));
     }
 
+    // ── nested-closure params are NOT outer captures (Stage 2 M2 B-blocker fix) ──
+
+    [Fact]
+    public void CurryShape_InnerLambdaParam_NotCapturedByOuter()
+    {
+        // `a => b => a + b`: the inner lambda's param `b` must NOT be reported as a capture of the
+        // OUTER lambda. Before the fix GetCaptures(outer) over-approximated `b`, making the outer a
+        // spurious capturing closure with BindingScope=null (ClosureEnvLeaf throws) and slotting `b`
+        // in the inner scope (silent-wrong self-param-through-env). Analysis-only (BuildCompilation)
+        // so it holds independent of the emit-time escape guards.
+        var comp = TestHelper.BuildCompilation(@"
+using UdonSharp;
+using System;
+public class CurryClass : UdonSharpBehaviour {
+    public int result;
+    void Start() {
+        Func<int, Func<int, int>> add = a => b => a + b;
+        Func<int, int> add3 = add(3);
+        result = add3(4) + add3(10);
+    }
+}", "CurryClass", out var classSymbol);
+
+        var analysis = CaptureScopeAnalysis.Build(comp, classSymbol);
+        var lambdas = LambdaScopesInEncounterOrder(analysis);
+        Assert.Equal(2, lambdas.Length);
+        var outer = lambdas[0];
+        var inner = lambdas[1];
+
+        // `b` (inner param) is never captured; `a` (outer param) is captured by the inner and owned
+        // by the outer's own scope.
+        Assert.False(IsCaptured(analysis, "b"));
+        Assert.True(IsCaptured(analysis, "a"));
+        Assert.Same(outer, OwnerScope(analysis, "a"));
+        Assert.Equal(1, SlotOf(analysis, "a"));
+
+        // The outer captures nothing from above → NOT a capturing closure. The inner captures `a`.
+        Assert.False(analysis.IsCapturingClosure(outer.ClosureSymbol));
+        Assert.True(analysis.IsCapturingClosure(inner.ClosureSymbol));
+        // The inner binds its env chain to the outer's scope (where `a` lives) — zero hops to `a`.
+        Assert.Same(outer, inner.BindingScope);
+        Assert.Equal(0, analysis.HopDistance(inner.BindingScope, outer));
+    }
+
+    [Fact]
+    public void NestedLambdaWithParam_ReadingTrueOuterLocal_CapturesOnlyTheOuterLocal()
+    {
+        // A nested lambda `y => x + y + m` where `m` is a genuine method local and `y` is the nested
+        // param: the outer `x => …` must capture `m` (real, flows down the chain) but NOT `y`.
+        var comp = TestHelper.BuildCompilation(@"
+using UdonSharp;
+using System;
+public class NestedParamClass : UdonSharpBehaviour {
+    public int result;
+    void Start() {
+        int m = 100;
+        Func<int, Func<int, int>> f = x => y => x + y + m;
+        Func<int, int> g = f(1);
+        result = g(2);
+    }
+}", "NestedParamClass", out var classSymbol);
+
+        var analysis = CaptureScopeAnalysis.Build(comp, classSymbol);
+        var lambdas = LambdaScopesInEncounterOrder(analysis);
+        var outer = lambdas[0];
+        var inner = lambdas[1];
+
+        Assert.False(IsCaptured(analysis, "y"));   // nested param, never captured
+        Assert.True(IsCaptured(analysis, "m"));    // real method local, captured
+        Assert.True(IsCaptured(analysis, "x"));    // outer param, captured by inner
+        // The outer IS capturing (it reads `m` from the method) but its capture set excludes `y`.
+        Assert.True(analysis.IsCapturingClosure(outer.ClosureSymbol));
+        Assert.True(analysis.IsCapturingClosure(inner.ClosureSymbol));
+        // `m` owned by the method-entry scope, `x` owned by the outer's own scope.
+        Assert.Equal(CaptureScopeKind.MethodEntry, OwnerScope(analysis, "m").Kind);
+        Assert.Same(outer, OwnerScope(analysis, "x"));
+    }
+
+    [Fact]
+    public void NestedLocalFunctionParam_NotCapturedByOuterLambda()
+    {
+        // Same over-approximation guard for a nested LOCAL FUNCTION's param inside a lambda body.
+        var comp = TestHelper.BuildCompilation(@"
+using UdonSharp;
+using System;
+public class NestedLfParamClass : UdonSharpBehaviour {
+    public Action _cb;
+    void Start() {
+        int a = 5;
+        _cb = () => {
+            int Inner(int b) => a + b;
+            int z = Inner(1);
+        };
+    }
+}", "NestedLfParamClass", out var classSymbol);
+
+        var analysis = CaptureScopeAnalysis.Build(comp, classSymbol);
+        // `b` is the nested local function's param — not a capture of the outer lambda.
+        Assert.False(IsCaptured(analysis, "b"));
+        Assert.True(IsCaptured(analysis, "a"));
+    }
+
     // ── generics: OriginalDefinition keying (design §2 rule 2) ──
 
     [Fact]

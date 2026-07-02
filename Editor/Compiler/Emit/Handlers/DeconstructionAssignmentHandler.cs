@@ -49,13 +49,6 @@ public class DeconstructionAssignmentHandler : AssignmentHandlerBase, IOperation
             // a single-assignment scratch leaf — pinned at its phase-1 read point and never clobbered by a
             // phase-2 EmitStoreField (which targets a named heap id, not the scratch) — so no extra temp is
             // needed. Aggregate elements are deep-cloned by clone-on-read inside VisitExpression.
-            // §2.8: a lambda element deconstructed into a delegate-field lvalue is a long-lived store
-            // (record for the aliasing detector); escaping element targets are guarded like plain stores.
-            for (int i = 0; i < targetTuple.Elements.Length; i++)
-            {
-                RecordLongLivedLambdaStore(targetTuple.Elements[i], valueTuple.Elements[i]);
-                GuardCaptureEscapeStore(targetTuple.Elements[i], valueTuple.Elements[i]);
-            }
             // Wave-9 round-6 [X2]/[X4]/[X5]: every target's receiver/index legs evaluate left-to-right
             // BEFORE the RHS (C# order); the deferred stores below consume the cached legs.
             var prepared = PrepareDeconstructionTargets(targetTuple);
@@ -78,12 +71,6 @@ public class DeconstructionAssignmentHandler : AssignmentHandlerBase, IOperation
             // Peel conversions to find the underlying RHS.
             var callValue = op.Value;
             while (callValue is IConversionOperation conv2) callValue = conv2.Operand;
-
-            // §2.8 round-5 [N3]: every non-tuple-literal branch below assigns deconstructed
-            // elements via AssignToLValue with no escape guard, so a capture-carrying source
-            // shipped bundles into non-local lvalues silently (VM-proven: `t.Item1 = () => v;
-            // (fs[i], x) = t;` in a loop). Guard ALL branches uniformly before any emission.
-            GuardCaptureEscapeDeconstructionSource(callValue, targetTuple);
 
             // Wave-9 round-6 [X3]/[X4]: target legs evaluate BEFORE the RHS on the non-tuple-literal
             // branches too — C# evaluates each target's component expressions first, then the RHS.
@@ -246,37 +233,6 @@ public class DeconstructionAssignmentHandler : AssignmentHandlerBase, IOperation
     }
 
     /// <summary>
-    /// §2.8 round-5 [N3] escape guard for the non-tuple-literal deconstruction branches, mirroring
-    /// GuardCaptureEscapeStore element-wise. A source that carries capture — a tainted container
-    /// local (`t.Item1 = () => v` taints t), a laundering member read (capture-receiving /
-    /// param-rooted / foreign / interface member), a tainted invocation result (identity-callee
-    /// laundering), or a bare delegate-capable PARAM (the callee is blind to what the caller
-    /// packed; mirrors the `fs[k] = t.Item1` member-read taint) — must not deconstruct into a
-    /// non-local lvalue: each delegate-capable element either taints its LOCAL target (F4) or
-    /// rejects loudly. Non-capable elements (int legs) and untainted sources (method-group-only
-    /// aggregates, guarded same-class returns) stay legal.
-    /// </summary>
-    void GuardCaptureEscapeDeconstructionSource(IOperation source, ITupleOperation targetTuple)
-    {
-        bool tainted = IsCaptureTaintedRead(source) || IsLaunderingMemberRead(source)
-            || IsTaintedDelegateInvocationResult(source)
-            || (source is IParameterReferenceOperation pr && IsDelegateCapableType(pr.Parameter.Type));
-        if (!tainted) return;
-        foreach (var element in targetTuple.Elements)
-        {
-            var target = element is IDeclarationExpressionOperation de ? de.Expression : element;
-            if (target is IDiscardOperation) continue;
-            if (!IsDelegateCapableType(target.Type)) continue;
-            if (target is ILocalReferenceOperation localTarget)
-            {
-                _ctx.AddCaptureTaint(localTarget.Local); // envelope unpack — strong ([X9])
-                continue;
-            }
-            throw new System.NotSupportedException(CaptureEscapeError);
-        }
-    }
-
-    /// <summary>
     /// Handle tuple deconstruction from a cross-behaviour or interface method call.
     /// Emits SetProgramVariable for params, SendCustomEvent, then GetProgramVariable for each element.
     /// Target legs arrive pre-evaluated in <paramref name="prepared"/> (wave-9 round-6 [X3]/[X4]).
@@ -285,10 +241,6 @@ public class DeconstructionAssignmentHandler : AssignmentHandlerBase, IOperation
         ITupleOperation targetTuple, bool isCrossBehaviour,
         Dictionary<IOperation, System.Action<CLeaf>> prepared)
     {
-        // §2.8 round-2: this manual emission path bypasses InvocationHandler, so the erasing-typed
-        // argument guard must run here too.
-        GuardCaptureEscapeArguments(invocation.Arguments);
-
         // Get layout for the target method
         ReturnSlot[] callReturns;
         string exportName;

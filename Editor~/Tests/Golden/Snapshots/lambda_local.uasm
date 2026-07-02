@@ -7,6 +7,7 @@
     __refl_typename: %SystemString, null
     __lcl_a_SystemObjectArray_0: %SystemObjectArray, null
     __this_VRCUdonUdonBehaviour_0: %VRCUdonUdonBehaviour, this
+    __dlgc_Void__Void__env: %SystemObjectArray, null
     __const_SystemUInt32_sentinel: %SystemUInt32, null
     __const_SystemInt32_0: %SystemInt32, null
     __intnl_SystemObjectArray_c0: %SystemObjectArray, null
@@ -24,14 +25,16 @@
     __const_SystemString_7: %SystemString, null
     __intnl_SystemObject_c0: %SystemObject, null
     __intnl_SystemObject_c1: %SystemObject, null
+    __intnl_SystemObjectArray_c2: %SystemObjectArray, null
     __intnl_SystemUInt32_c0: %SystemUInt32, null
     __intnl_SystemUInt32_c1: %SystemUInt32, null
     __intnl_SystemString_c0: %SystemString, null
     __intnl_SystemString_c1: %SystemString, null
     __const_SystemUInt32_8: %SystemUInt32, null
     __intnl_SystemBoolean_c2: %SystemBoolean, null
+    __const_SystemString_9: %SystemString, null
     __intnl_dlgptr_SystemUInt32_c0: %SystemUInt32, null
-    __const_SystemInt32_9: %SystemInt32, null
+    __const_SystemInt32_10: %SystemInt32, null
     __intnl_SystemInt32_c0: %SystemInt32, null
     __intnl_SystemInt32_c1: %SystemInt32, null
     __const_retaddr_SystemUInt32_0: %SystemUInt32, null
@@ -93,7 +96,7 @@
     ___start_bb3:
         PUSH, __const_SystemString_7
         EXTERN, "UnityEngineDebug.__LogError__SystemObject__SystemVoid"
-        JUMP, 0x00000400
+        JUMP, 0x00000490
     ___start_bb2:
         PUSH, __intnl_SystemObjectArray_c1
         PUSH, __const_SystemInt32_1
@@ -115,8 +118,18 @@
     ___start_bb6:
         PUSH, __const_SystemString_7
         EXTERN, "UnityEngineDebug.__LogError__SystemObject__SystemVoid"
-        JUMP, 0x00000400
+        JUMP, 0x00000490
     ___start_bb5:
+        PUSH, __intnl_SystemObjectArray_c1
+        PUSH, __const_SystemInt32_5
+        PUSH, __intnl_SystemObjectArray_c0
+        EXTERN, "SystemObjectArray.__Get__SystemInt32__SystemObject"
+        PUSH, __intnl_SystemObjectArray_c0
+        PUSH, __intnl_SystemObjectArray_c2
+        COPY
+        PUSH, __intnl_SystemObjectArray_c2
+        PUSH, __dlgc_Void__Void__env
+        COPY
         PUSH, __intnl_SystemObjectArray_c1
         PUSH, __const_SystemInt32_4
         PUSH, __intnl_SystemUInt32_c0
@@ -159,8 +172,8 @@
         PUSH, __intnl_SystemBoolean_c1
         COPY
         PUSH, __intnl_SystemBoolean_c1
-        JUMP_IF_FALSE, 0x00000358
-        JUMP, 0x000003dc
+        JUMP_IF_FALSE, 0x000003a0
+        JUMP, 0x0000046c
     ___start_bb9:
         PUSH, __intnl_SystemString_c1
         PUSH, __const_SystemObject_6
@@ -170,18 +183,28 @@
         PUSH, __intnl_SystemBoolean_c1
         COPY
         PUSH, __intnl_SystemBoolean_c1
-        JUMP_IF_FALSE, 0x000003a4
-        JUMP, 0x000003bc
+        JUMP_IF_FALSE, 0x000003ec
+        JUMP, 0x00000404
     ___start_bb12:
         PUSH, __const_SystemString_7
         EXTERN, "UnityEngineDebug.__LogError__SystemObject__SystemVoid"
-        JUMP, 0x000003d4
+        JUMP, 0x00000464
     ___start_bb11:
+        PUSH, __dlgc_Void__Void__env
+        PUSH, __intnl_SystemObjectArray_c0
+        COPY
+        PUSH, __intnl_SystemObjectArray_c0
+        PUSH, __intnl_SystemObjectArray_c1
+        COPY
+        PUSH, __intnl_SystemObject_c1
+        PUSH, __const_SystemString_9
+        PUSH, __intnl_SystemObjectArray_c1
+        EXTERN, "VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid"
         PUSH, __intnl_SystemObject_c1
         PUSH, __intnl_SystemString_c1
         EXTERN, "VRCUdonCommonInterfacesIUdonEventReceiver.__SendCustomEvent__SystemString__SystemVoid"
     ___start_bb13:
-        JUMP, 0x00000400
+        JUMP, 0x00000490
     ___start_bb8:
         PUSH, __intnl_SystemUInt32_c1
         PUSH, __intnl_dlgptr_SystemUInt32_c0
@@ -193,7 +216,7 @@
         COPY
         JUMP_INDIRECT, __intnl_returnJump_SystemUInt32_0
     ____1_lambda:
-        PUSH, __const_SystemInt32_9
+        PUSH, __const_SystemInt32_10
         PUSH, v
         COPY
         PUSH, v
@@ -210,7 +233,7 @@
         PUSH, __const_SystemUInt32_sentinel
     __dlg___1_lambda__body:
         PUSH, __const_retaddr_SystemUInt32_1
-        JUMP, 0x00000414
+        JUMP, 0x000004a4
     ____dlg___1_lambda__callret_1:
         PUSH, __intnl_returnJump_SystemUInt32_0
         COPY

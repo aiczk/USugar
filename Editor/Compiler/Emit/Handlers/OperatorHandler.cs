@@ -471,6 +471,16 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
                 var checkVal = isVar ? (CLeaf)Const(true, "SystemBoolean") : EmitTypeCheck(valueVal, declPat.MatchedType);
                 if (declPat.DeclaredSymbol is ILocalSymbol local)
                 {
+                    // Stage 2 §4.1: captured pattern variable → env cell (its owning scope's env is
+                    // live at every point a condition/section hosting this pattern executes).
+                    if (_ctx.TryGetEnvBinding(local, out _))
+                    {
+                        if (isVar)
+                            EnvEmit.Write(_builder, _ctx, local, valueVal);
+                        else
+                            _builder.EmitIf(checkVal, b => EnvEmit.Write(_builder, _ctx, local, valueVal));
+                        return checkVal;
+                    }
                     var localType = GetUdonType(local.Type);
                     var localId = _ctx.DeclareLocal(local.Name, localType);
                     _localBindings[local] = new EmitContext.LocalBinding(localId);
@@ -609,9 +619,18 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
 
                     if (rec.DeclaredSymbol is ILocalSymbol bound)
                     {
-                        var boundId = _ctx.DeclareLocal(bound.Name, GetUdonType(bound.Type));
-                        _localBindings[bound] = new EmitContext.LocalBinding(boundId);
-                        EmitStoreField(boundId, SlotRef(valSlot));
+                        // Stage 2 §4.1: captured recursive-pattern binding → env cell.
+                        // (named out var: the enclosing EmitIf lambda's parameter is `_`.)
+                        if (_ctx.TryGetEnvBinding(bound, out var envbUnused))
+                        {
+                            EnvEmit.Write(_builder, _ctx, bound, SlotRef(valSlot));
+                        }
+                        else
+                        {
+                            var boundId = _ctx.DeclareLocal(bound.Name, GetUdonType(bound.Type));
+                            _localBindings[bound] = new EmitContext.LocalBinding(boundId);
+                            EmitStoreField(boundId, SlotRef(valSlot));
+                        }
                     }
 
                     CLeaf acc = Const(true, "SystemBoolean");

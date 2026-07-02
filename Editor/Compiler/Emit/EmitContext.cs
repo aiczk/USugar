@@ -156,17 +156,6 @@ public class EmitContext
            && CycleCallees.TryGetValue(caller.OriginalDefinition, out var callees)
            && callees.Contains(callee.OriginalDefinition);
 
-    /// <summary>Wave-9 round-4 [X2]/[X3]: per HOISTED recursion-cycle member (lambda / local
-    /// function symbol), the read-only capture cells (locals/params of an enclosing function in
-    /// the SAME SCC) that must join the node's frame spill at its marked dispatch/recursive-call
-    /// sites. A dispatch from inside the node can re-enter the cell's declaring function, whose
-    /// fresh activation re-seeds the one flat slot — the node's post-dispatch read then sees the
-    /// inner value (DiffFuzz ref=60 vs VM 50). Cells WRITTEN by any hoisted node are excluded
-    /// (same-environment mutation must stay visible through the shared slot). Populated by
-    /// <c>UasmEmitter.BuildRecursionInfo</c>; consumed by CollectRecursionSpillFields.</summary>
-    public readonly Dictionary<IMethodSymbol, List<ISymbol>> HoistedCaptureSpillCells
-        = new(SymbolEqualityComparer.Default);
-
     /// <summary>Round-7 follow-up [Q5]: per internal method (keyed by OriginalDefinition), the
     /// this-FIELDS the method touches — directly (field reference through an implicit/explicit
     /// this/base receiver anywhere in its body) or transitively (closed over the internal call
@@ -502,15 +491,9 @@ public class EmitContext
         }
     }
 
-    // Persistent local symbol → field name mapping (survives scope pop, for capture resolution).
-    //
-    // KNOWN LIMITATION (v2.2): All lambdas within the same UdonSharpBehaviour share this flat
-    // mapping. A captured local is hoisted to a single module-level field. When two distinct
-    // lambdas / delegate fields capture the SAME local, they alias — reassigning one delegate
-    // overwrites the other's captured value. v2.2 detects this structurally via
-    // LambdaCaptureAnalyzer + AllLambdaCaptures aggregation and raises an emit-time Error
-    // (was a Warning in v2.1). Full cure requires a closure-object emulation layer
-    // (long-term Phase F).
+    // Persistent local symbol → field name mapping (survives scope pop). Holds NON-captured locals
+    // only: a captured local has no flat field — its cell lives in the owning scope's env record
+    // (Stage 2, TryGetEnvBinding / EnvEmit), so per-activation captures no longer alias.
     public readonly struct LocalBinding
     {
         public readonly string Id;
@@ -530,53 +513,46 @@ public class EmitContext
     // is a plain result holder, not shared mutable state.
     public CaptureScopeAnalysis CaptureScope;
 
-    // Aliasing detection: per captured symbol, list of closure-creation sites (lambdas and — wave-9
-    // [W2] — capturing local-function METHOD GROUPS, which are the same closure in
-    // IMethodReferenceOperation clothing) that captured it long-lived. Populated by
-    // RecordLongLivedLambdaStore when a capturing value is assigned to a delegate field.
-    // UasmEmitter inspects this after emit and raises an Error if any captured symbol has > 1 site.
-    public readonly Dictionary<ISymbol, List<IOperation>> AllLambdaCaptures
+    // Stage 2 M2 (design §4.1): resolve a symbol's env binding (owning scope, 1-based env slot).
+    // Single source of truth is CaptureScope.CapturedSlots; this helper adds the generic-spec
+    // re-keying (a constructed spec's IParameterSymbol never compares equal to the definition's —
+    // re-key through ContainingSymbol.OriginalDefinition + ordinal). A symbol that resolves here
+    // must NEVER get a flat LocalBindings field — every read/write routes through the env record.
+    public bool TryGetEnvBinding(ISymbol symbol, out (CaptureScope Scope, int Slot) binding)
+    {
+        binding = default;
+        if (CaptureScope == null || symbol == null) return false;
+        if (CaptureScope.CapturedSlots.TryGetValue(symbol, out var direct))
+        {
+            binding = direct;
+            return true;
+        }
+        if (symbol is IParameterSymbol p
+            && p.ContainingSymbol is IMethodSymbol m
+            && !ReferenceEquals(m, m.OriginalDefinition))
+        {
+            var defParams = m.OriginalDefinition.Parameters;
+            if (p.Ordinal < defParams.Length
+                && CaptureScope.CapturedSlots.TryGetValue(defParams[p.Ordinal], out var reKeyed))
+            {
+                binding = reKeyed;
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // Stage 2 M2: (function, capture-bearing scope id) → the scratch slot holding that scope's LIVE
+    // env-record reference in that function's frame. Keyed per CFunction because an env-ref scratch
+    // is frame state: a hoisted closure reaches its declaring scopes through __envp + parent hops
+    // instead (EnvEmit.Leaf).
+    public readonly Dictionary<(object Func, int ScopeId), int> ScopeEnvSlots = new();
+
+    // Stage 2 M2: hoisted closure method (definition-keyed) → the param FIELD id of its hidden
+    // trailing __envp parameter. Registered where the closure's params are laid out; read by
+    // EnvEmit.Leaf when emission inside the closure body needs an outer scope's env.
+    public readonly Dictionary<IMethodSymbol, string> EnvpParamFields
         = new(SymbolEqualityComparer.Default);
-
-    // §2.8(b) capture-escape guard: locals initialized/reassigned with a CAPTURING lambda (flow-insensitive
-    // taint). Reading such a local in an escaping position (array/object store, return, field/property/
-    // struct store) is a compile error in Stage 1 — flat capture + a delegate that outlives the frame
-    // would be a compile-clean wrong value otherwise. MEMBERSHIP-ONLY set (§1.5): never enumerate it to
-    // drive emission order (symbol-keyed iteration order would break the 2-compile determinism gate).
-    public readonly HashSet<ILocalSymbol> CapturingLambdaLocals = new(SymbolEqualityComparer.Default);
-
-    // Wave-9 round-5 [X9]: WEAK tier of the capture taint — locals whose ONLY taint source is a
-    // bare delegate-param copy (`T cur = v;`, [J5]/[J6] param arms, and copies thereof). [J5] made
-    // these strong, which loud-rejected the legal generic fold idiom `T cur = v; …; return cur;`
-    // at the RETURN guard. A param-copy-only local stays rejected at every escaping STORE and
-    // erasing ARGUMENT (it stays in CapturingLambdaLocals — the laundering channels are sealed),
-    // but returning it is exactly returning the param, which is legal by design (the CALLER's
-    // invocation-result taint owns the laundered result). Strict subset of CapturingLambdaLocals;
-    // strong taint dominates (promotion removes the marker; the fixpoint is monotone over
-    // clean < weak < strong). MEMBERSHIP-ONLY set (§1.5).
-    public readonly HashSet<ILocalSymbol> ParamCopyTaintLocals = new(SymbolEqualityComparer.Default);
-
-    /// <summary>[X9] STRONG capture taint: tainted everywhere, including returns. Clears any weak
-    /// marker. Returns true when the taint state changed (new taint or weak→strong promotion).</summary>
-    public bool AddCaptureTaint(ILocalSymbol local)
-    {
-        bool added = CapturingLambdaLocals.Add(local);
-        bool promoted = ParamCopyTaintLocals.Remove(local);
-        return added || promoted;
-    }
-
-    /// <summary>[X9] WEAK param-copy taint: store/argument-position taint only (returns stay
-    /// legal). Never demotes an existing strong taint. Returns true when newly tainted.</summary>
-    public bool AddParamCopyTaint(ILocalSymbol local)
-    {
-        if (CapturingLambdaLocals.Contains(local)) return false;
-        CapturingLambdaLocals.Add(local);
-        ParamCopyTaintLocals.Add(local);
-        return true;
-    }
-
-    /// <summary>[X9] The local's taint is exclusively the weak param-copy tier.</summary>
-    public bool IsParamCopyOnlyTaint(ILocalSymbol local) => ParamCopyTaintLocals.Contains(local);
 
     // Round-7 follow-up [Q4]: foreach ITERATION variables. C# makes them READONLY, so invoking a
     // non-readonly struct member on one runs on a DEFENSIVE COPY (the classic foreach-struct-
@@ -584,15 +560,6 @@ public class EmitContext
     // struct-instance-call receiver is CLONED when its chain roots at one of these locals
     // (VM-proven: loop-var reads after a mutating call 1112 vs CLR 102). MEMBERSHIP-ONLY set (§1.5).
     public readonly HashSet<ILocalSymbol> ForeachIterationLocals = new(SymbolEqualityComparer.Default);
-
-    // §2.8 round-2: fields / auto-properties / struct members that receive a DIRECT capturing-lambda
-    // store anywhere in this class (pre-scanned by UasmEmitter.CollectCaptureReceivingMembers over all
-    // root bodies + field initializers BEFORE body emission, so the taint is emission-order-independent).
-    // Reading such a member is tainted-equivalent at escaping positions: the member can legally hold a
-    // multi-activation flat capture (one bundle live at a time is correct), but COPYING it out to an
-    // array / object / another member / a return re-creates the fcd30-class aliasing wrongness with a
-    // single lambda — which the 2+-lambda aliasing detector cannot see. MEMBERSHIP-ONLY set (§1.5).
-    public readonly HashSet<ISymbol> CaptureReceivingMembers = new(SymbolEqualityComparer.Default);
 
     // §2.8 round-3 [A]: local functions whose bodies capture enclosing locals/params. A method-group
     // conversion of such a local function is a closure exactly like a capturing lambda, but it is an
@@ -609,272 +576,6 @@ public class EmitContext
     public bool IsCapturingLocalFunction(IMethodSymbol m)
         => m != null && m.MethodKind == MethodKind.LocalFunction
            && (CapturingLocalFunctions.Contains(m) || CapturingLocalFunctions.Contains(m.OriginalDefinition));
-
-    // ── Wave-9 [W1]/[W2]: per-iteration capture escapes ──
-    //
-    // C# re-instantiates a local declared inside a loop BODY (and the foreach iteration variable)
-    // on every iteration, so a closure capturing it references THAT iteration's instance. The flat
-    // capture model has ONE heap slot per captured local — later iterations re-seed it — so a
-    // closure that outlives its loop iteration reads the LAST iteration's value (VM-proven 16 where
-    // C# gives 6, with a SINGLE lambda site the 2+-site aliasing detector can never see). Escapes
-    // that outlive the iteration (member stores; stores into locals declared outside the loop —
-    // directly, via copies, or via laundered invocation results) are loud rejects; stores into
-    // locals declared inside the loop (die with the iteration) and direct invocation/arguments stay
-    // legal. Distinguishing the always-overwritten-then-read-after shape (observationally correct)
-    // would need dominance analysis — conservative over-rejection accepted per design §8-3.
-    //
-    // Locals carrying a per-iteration capture, mapped to the loop statements whose iteration they
-    // must not outlive. Seeded by the BuildRecursionInfo pre-scan (order-independent) and the
-    // emission-time guards (redundant backstop); propagated along the same local-to-local copy
-    // edges as the capture taint; checked against each local's own declaration position.
-    // LOOKUP-ONLY during emission (§1.5); the post-fixpoint check sorts before throwing.
-    public readonly Dictionary<ILocalSymbol, HashSet<SyntaxNode>> IterationFragileLocals
-        = new(SymbolEqualityComparer.Default);
-
-    /// <summary>The innermost loop statement whose ITERATION scope contains this local's
-    /// declaration — null when the local is not per-iteration. A `for` INITIALIZER declaration is
-    /// shared across iterations (C# closes over the one variable; the flat slot matches), so only
-    /// body/condition/incrementor positions count; the foreach iteration variable is per-iteration
-    /// (C# 5+). The walk stops at function/member boundaries: an enclosing loop OUTSIDE the
-    /// declaring function re-enters via CALLS, which is the documented cross-activation tier.</summary>
-    public static SyntaxNode GetPerIterationLoop(ILocalSymbol local)
-    {
-        var decl = local?.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax();
-        if (decl == null) return null;
-        if (decl is Microsoft.CodeAnalysis.CSharp.Syntax.CommonForEachStatementSyntax)
-            return decl; // the foreach iteration variable's declaring syntax IS the loop statement
-        for (SyntaxNode node = decl, a = decl.Parent; a != null; node = a, a = a.Parent)
-        {
-            switch (a)
-            {
-                case Microsoft.CodeAnalysis.CSharp.Syntax.ForStatementSyntax fs when node == fs.Declaration:
-                    break; // for-initializer variable: one instance for the whole loop
-                case Microsoft.CodeAnalysis.CSharp.Syntax.ForStatementSyntax
-                    or Microsoft.CodeAnalysis.CSharp.Syntax.WhileStatementSyntax
-                    or Microsoft.CodeAnalysis.CSharp.Syntax.DoStatementSyntax
-                    or Microsoft.CodeAnalysis.CSharp.Syntax.CommonForEachStatementSyntax:
-                    return a;
-                case Microsoft.CodeAnalysis.CSharp.Syntax.AnonymousFunctionExpressionSyntax
-                    or Microsoft.CodeAnalysis.CSharp.Syntax.LocalFunctionStatementSyntax
-                    or Microsoft.CodeAnalysis.CSharp.Syntax.MemberDeclarationSyntax
-                    or Microsoft.CodeAnalysis.CSharp.Syntax.AccessorDeclarationSyntax:
-                    return null;
-            }
-        }
-        return null;
-    }
-
-    /// <summary>True when this local's declaration lives inside ONE iteration of
-    /// <paramref name="loop"/> (it dies with the iteration, so it may legally hold a closure over
-    /// that iteration's captures). False for declarations outside the loop, in a `for` initializer
-    /// (whole-loop lifetime), or with no source declaration (conservative).</summary>
-    public static bool IsWithinIterationScope(ILocalSymbol local, SyntaxNode loop)
-    {
-        var decl = local?.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax();
-        if (decl == null || loop == null) return false;
-        if (decl == loop) return true; // the loop's own foreach iteration variable
-        for (SyntaxNode node = decl, a = decl.Parent; a != null; node = a, a = a.Parent)
-            if (a == loop)
-                return !(loop is Microsoft.CodeAnalysis.CSharp.Syntax.ForStatementSyntax fs
-                         && node == fs.Declaration);
-        return false;
-    }
-
-    /// <summary>Per-iteration loops of a capture SET: every captured local that is per-iteration
-    /// contributes its innermost loop. Null when none (captured params and out-of-loop locals are
-    /// not per-iteration).</summary>
-    public static HashSet<SyntaxNode> ComputePerIterationCaptureLoops(IEnumerable<ISymbol> captures)
-    {
-        HashSet<SyntaxNode> loops = null;
-        foreach (var c in captures)
-            if (c is ILocalSymbol l && GetPerIterationLoop(l) is { } loop)
-                (loops ??= new HashSet<SyntaxNode>()).Add(loop);
-        return loops;
-    }
-
-    /// <summary>Per-iteration loops of a DIRECT capturing value (conversions unwrapped): a capturing
-    /// lambda's capture set or a capturing local-function method group's transitive set. Null when
-    /// the value is not a direct capturing creation or captures nothing per-iteration.</summary>
-    public HashSet<SyntaxNode> GetPerIterationCaptureLoops(IOperation value)
-    {
-        var v = value;
-        while (v is IConversionOperation conv) v = conv.Operand;
-        if (v is not IDelegateCreationOperation dc) return null;
-        return dc.Target switch
-        {
-            IAnonymousFunctionOperation lambda when CaptureAnalyzer.HasCaptures(lambda)
-                => ComputePerIterationCaptureLoops(CaptureAnalyzer.GetCaptures(lambda)),
-            IMethodReferenceOperation mr when IsCapturingLocalFunction(mr.Method)
-                => ComputePerIterationCaptureLoops(CaptureAnalyzer.GetLocalFunctionCaptures(mr.Method)),
-            _ => null,
-        };
-    }
-
-    /// <summary>Merge per-iteration loops into a local's fragile set; true when something new was
-    /// added (drives the pre-scan fixpoint).</summary>
-    public bool AddIterationFragileLoops(ILocalSymbol local, IEnumerable<SyntaxNode> loops)
-    {
-        if (local == null || loops == null) return false;
-        if (!IterationFragileLocals.TryGetValue(local, out var set))
-        {
-            set = new HashSet<SyntaxNode>();
-            IterationFragileLocals[local] = set;
-        }
-        bool added = false;
-        foreach (var l in loops) added |= set.Add(l);
-        return added;
-    }
-
-    public static string PerIterationCaptureError(string escapeDescription)
-        => $"Lambda/local function captures a per-iteration loop local, but {escapeDescription}: "
-         + "C# re-creates the captured local on every iteration while the flat capture model has "
-         + "one heap slot that later iterations re-seed, so a closure outliving its loop iteration "
-         + "would read the LAST iteration's value (silent wrong value). Store the delegate only "
-         + "into locals declared inside the loop and invoke it within the iteration, or hoist the "
-         + "captured local out of the loop.";
-
-    /// <summary>§2.8 round-5 [N2]: THE canonical form of a member symbol, used at EVERY
-    /// CaptureReceivingMembers record point AND lookup point (a second ad-hoc symbol comparison is
-    /// how the round-5 identity holes were born). Maps named tuple elements to their ItemN field
-    /// (within the SAME constructed tuple — ItemN of different instantiations stay distinct),
-    /// compares generic members by original definition, and walks override chains to the ROOT
-    /// declaration so a store through a derived override symbol and a read through the base
-    /// virtual symbol hit the same entry (one virtual slot, one backing store). Returns NULL for
-    /// interface members: the implementing class is unknown at emit time (an interface-typed
-    /// receiver can dispatch to any behaviour), so there is no canonical form — callers must treat
-    /// null as "unknown → conservative/loud" (§8-3).</summary>
-    public static ISymbol CanonicalMemberSymbol(ISymbol member)
-    {
-        if (member == null) return null;
-        if (member.ContainingType?.TypeKind == TypeKind.Interface) return null;
-        if (member is IFieldSymbol f && f.CorrespondingTupleField is { } tupleField)
-            return tupleField;
-        member = member.OriginalDefinition;
-        while (true)
-        {
-            ISymbol overridden = member switch
-            {
-                IPropertySymbol p => p.OverriddenProperty,
-                IMethodSymbol m => m.OverriddenMethod,
-                IEventSymbol e => e.OverriddenEvent,
-                _ => null,
-            };
-            if (overridden == null) break;
-            member = overridden.OriginalDefinition;
-        }
-        return member;
-    }
-
-    /// <summary>§2.8 round-2/3 (single source of truth; HandlerBase wraps with the type-param-map
-    /// resolver, the pre-scans pass null = identity so an unresolved T stays conservatively
-    /// capable): a type whose value can carry a delegate bundle past the delegate-typed guards —
-    /// a delegate itself, System.Object (boxing erases the delegate typing), an unresolved type
-    /// parameter, a tuple with any delegate-capable element, or a user struct with a (recursively)
-    /// delegate-capable instance field. Over-rejection accepted per §8-3.</summary>
-    public static bool IsDelegateCapableType(ITypeSymbol t, Func<ITypeSymbol, ITypeSymbol> resolve)
-    {
-        if (t == null) return false;
-        var r = resolve != null ? resolve(t) : t;
-        if (r == null) return false;
-        if (r.SpecialType == SpecialType.System_Object) return true;
-        return IsNonObjectDelegateCapableType(t, resolve);
-    }
-
-    /// <summary>Delegate-capable minus bare System.Object (see HandlerBase doc: bare-object VALUES
-    /// cannot legally carry a bundle — every entry point is sealed — so object-typed param/member
-    /// reads stay clean and ordinary object plumbing keeps compiling).</summary>
-    public static bool IsNonObjectDelegateCapableType(ITypeSymbol t, Func<ITypeSymbol, ITypeSymbol> resolve)
-    {
-        if (t == null) return false;
-        var r = resolve != null ? resolve(t) : t;
-        if (r == null) return false;
-        if (r is ITypeParameterSymbol) return true;
-        if (r is INamedTypeSymbol nt)
-        {
-            if (nt.DelegateInvokeMethod != null) return true;
-            if (nt.IsTupleType)
-            {
-                foreach (var el in nt.TupleElements)
-                    if (IsDelegateCapableType(el.Type, resolve)) return true;
-            }
-            // §2.8 round-3 [B]: a USER STRUCT with a (recursively) delegate-capable instance field
-            // is an envelope — its object[] emulation carries the bundle past every delegate-typed
-            // gate (whole-struct array stores / returns / erased args, VM-verified laundering).
-            // Auto-prop backing fields are IFieldSymbols, so fields cover all stored members.
-            // Terminates: C# forbids value-type field cycles, and array fields are not capable
-            // (array-element stores of dangerous values are loud everywhere already).
-            else if (IsUserStruct(nt))
-            {
-                foreach (var member in nt.GetMembers())
-                    if (member is IFieldSymbol fld && !fld.IsStatic && IsDelegateCapableType(fld.Type, resolve))
-                        return true;
-            }
-        }
-        return false;
-    }
-
-    /// <summary>§2.8 round-3 [D] + round-5 [N2] (single source of truth; HandlerBase wraps with
-    /// its class symbol): member of a CLASS other than <paramref name="emittingClass"/> (or its
-    /// bases) — the per-class recipient pre-scan cannot make that class's reads loud — or an
-    /// INTERFACE member, whose implementing class is unknown at emit time (an interface-typed
-    /// receiver can dispatch to any behaviour, so neither the recipient pre-scan nor the foreign
-    /// armor can see the real member). Struct members are not foreign: struct values cross call
-    /// boundaries as params, where the param-rooted member-read taint applies in the receiving
-    /// method regardless of class.</summary>
-    public static bool IsForeignOrInterfaceMember(ISymbol member, INamedTypeSymbol emittingClass)
-    {
-        var ct = member?.ContainingType;
-        if (ct == null) return false;
-        if (ct.TypeKind == TypeKind.Interface) return true;
-        if (ct.TypeKind != TypeKind.Class) return false;
-        for (var t = emittingClass; t != null; t = t.BaseType)
-            if (SymbolEqualityComparer.Default.Equals(t, ct)) return false;
-        return true;
-    }
-
-    /// <summary>
-    /// Record that <paramref name="lambda"/> was assigned to a delegate field (or otherwise
-    /// stored long-lived). Each captured symbol is appended to AllLambdaCaptures so post-emit
-    /// aliasing detection can flag multiple lambdas sharing the same captured local.
-    ///
-    /// Recording is intentionally limited to delegate-FIELD stores. A delegate LOCAL lives only
-    /// within one method invocation, where C# shares the closure environment too, so flat-heap
-    /// aliasing is observationally equivalent there (holds under re-entrancy: the recursion spill
-    /// saves/restores captured locals of non-hoisted methods). Lambda literals passed as delegate
-    /// arguments get a fresh hoist + convention per call site; delegate locals/params as
-    /// arguments throw in InvocationHandler. Caveat: a few delegate-field write shapes
-    /// (deconstruction targets, cross-behaviour ??=, delegate auto-properties, delegate members
-    /// in user structs / object-typed fields) bypass this recording and are only stopped
-    /// downstream (CoreVerify / Udon assembler) or ship as dead, uninvokable values — promoting
-    /// those to explicit compile errors is tracked in roadmap B28.
-    /// </summary>
-    public void RecordLambdaCaptures(IAnonymousFunctionOperation lambda)
-        => RecordCaptureSites(CaptureAnalyzer.GetCaptures(lambda), lambda);
-
-    /// <summary>Wave-9 [W2]: a capturing local-function METHOD GROUP stored long-lived registers its
-    /// (transitive) capture set exactly like a lambda — pre-fix the aliasing dictionary was keyed to
-    /// IAnonymousFunctionOperation only, so caplf method-group field stores bypassed
-    /// DetectLambdaCaptureAliasing entirely (two caplf fields sharing a captured local shipped a
-    /// compile-clean wrong value where the identical two-lambda shape was diagnosed).</summary>
-    public void RecordLocalFunctionCaptures(IMethodReferenceOperation methodGroup)
-        => RecordCaptureSites(CaptureAnalyzer.GetLocalFunctionCaptures(methodGroup.Method), methodGroup);
-
-    void RecordCaptureSites(System.Collections.Immutable.ImmutableArray<ISymbol> captures, IOperation site)
-    {
-        foreach (var sym in captures)
-        {
-            // 'this' is always the same instance — captures of `this` (or instance-method receiver)
-            // never alias in the problematic sense. Skip to avoid false positives when multiple
-            // lambdas merely access this.field.
-            if (sym is IParameterSymbol p && p.IsThis) continue;
-            if (!AllLambdaCaptures.TryGetValue(sym, out var list))
-            {
-                list = new List<IOperation>();
-                AllLambdaCaptures[sym] = list;
-            }
-            if (!list.Contains(site)) list.Add(site);
-        }
-    }
 
     /// <summary>Round-7 follow-up [Q3]: `in` parameters (RefKind.In) are a loud declaration-side
     /// reject. The flat-heap calling convention copies arguments by value with no copy-back, so an
@@ -922,9 +623,9 @@ public class EmitContext
                 + "receiving side.");
     }
 
-    /// <summary>Delegate proper, or an array (of arrays…) of delegates. Deliberately NOT the wider
-    /// IsDelegateCapableType (object / delegate-tuples / type params): [NetworkCallable] methods
-    /// with object params are outside this policy item and must not start rejecting.</summary>
+    /// <summary>Delegate proper, or an array (of arrays…) of delegates. Deliberately NARROW (not
+    /// object / delegate-tuples / type params): [NetworkCallable] methods with object params are
+    /// outside this policy item and must not start rejecting.</summary>
     static bool ContainsDelegateType(ITypeSymbol type)
     {
         if (type is INamedTypeSymbol n && n.DelegateInvokeMethod != null) return true;
