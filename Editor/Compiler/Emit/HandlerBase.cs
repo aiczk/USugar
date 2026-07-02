@@ -1475,7 +1475,11 @@ public abstract class HandlerBase
             System.Array.Copy(gsParamIds, withEnvp, gsParamIds.Length);
             withEnvp[gsParamIds.Length] = envpId;
             gsParamIds = withEnvp;
-            _ctx.EnvpParamFields[constructed.OriginalDefinition] = envpId;
+            // Keyed by the CONSTRUCTED spec, not OriginalDefinition: two specs of one capturing
+            // generic (Lf<int> + Lf<long>) each own an __envp field — a definition key is
+            // last-spec-wins and wires spec 1's body to spec 2's field (silent wrong env / fault).
+            // Same keying discipline as _methodParamVarIds[constructed] below.
+            _ctx.EnvpParamFields[constructed] = envpId;
         }
         _methodParamVarIds[constructed] = gsParamIds;
         foreach (var pid in gsParamIds) func.ParamFieldNames.Add(pid);

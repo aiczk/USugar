@@ -247,7 +247,8 @@ public class StatementHandler : HandlerBase, IOperationHandler
         // rebind __envp from itself — identity here, but the wiring is not elided (the MethodEntry
         // EnvAlloc after the __tco_ label re-runs per logical activation for freshness).
         if (_ctx.CaptureScope != null
-            && _ctx.EnvpParamFields.TryGetValue(_currentMethod.OriginalDefinition, out var tcoEnvp))
+            && (_ctx.EnvpParamFields.TryGetValue(_currentMethod, out var tcoEnvp)
+                || _ctx.EnvpParamFields.TryGetValue(_currentMethod.OriginalDefinition, out tcoEnvp)))
             EmitStoreField(tcoEnvp, LoadField(tcoEnvp, EnvEmit.EnvType));
 
         // Jump back to method entry via goto label
