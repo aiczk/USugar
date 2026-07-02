@@ -154,6 +154,8 @@ static class USugarCompilationOrchestrator
 
             // Collect all UdonSharpBehaviour classes
             var classList = new List<(INamedTypeSymbol symbol, SemanticModel model, SyntaxTree tree)>();
+            // A partial class has one declaration node per part but ONE symbol — emit it once, not once per part.
+            var seenClassSymbols = new HashSet<INamedTypeSymbol>(SymbolEqualityComparer.Default);
             foreach (var tree in compilation.SyntaxTrees)
             {
                 var model = compilation.GetSemanticModel(tree);
@@ -162,6 +164,7 @@ static class USugarCompilationOrchestrator
                 {
                     var symbol = model.GetDeclaredSymbol(classDecl) as INamedTypeSymbol;
                     if (symbol == null || !IsUdonSharpBehaviour(symbol)) continue;
+                    if (!seenClassSymbols.Add(symbol)) continue;
                     classList.Add((symbol, model, tree));
                 }
             }
