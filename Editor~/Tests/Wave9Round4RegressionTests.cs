@@ -15,10 +15,11 @@ namespace USugar.Tests;
 ///      (CompareDelegates, moved to HandlerBase — one knowledge source).
 /// [X2] Capturing LAMBDA as recursion-cycle member: a captured local read AFTER the reentrant
 ///      dispatch inside the lambda body saw the inner activation's re-seeded flat slot
-///      (DiffFuzz ref=60 vs VM 50). The hoisted node's dispatch-site spill set now includes its
-///      READ-ONLY capture cells whose declaring function shares the node's SCC
-///      (EmitContext.HoistedCaptureSpillCells; cells written by any hoisted node keep flat
-///      sharing — same-environment mutation must stay visible).
+///      (DiffFuzz ref=60 vs VM 50). The hoisted node's dispatch-site spill set then included its
+///      READ-ONLY capture cells whose declaring function shares the node's SCC via
+///      EmitContext.HoistedCaptureSpillCells (retired Stage 2 M2 — captures now live in
+///      per-scope env records; reentrant safety comes from the env-ref/`__envp` spill instead,
+///      see design §6.1/§6.3).
 /// [X3] Same root, capturing LOCAL FUNCTION flavor (direct-invoked; ref=60 vs 50).
 /// [X4] Interface-typed receiver: user indexer read/write/compound/inc-dec fell through to
 ///      extern resolution (nonexistent IUdonEventReceiver.__get_Item/__set_Item → loud

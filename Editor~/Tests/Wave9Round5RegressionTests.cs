@@ -245,9 +245,11 @@ public class MinA3Ctl : UdonSharpBehaviour {
     public void SingleInstantiation_GenericWithCapturingLambda_StaysLegal()
     {
         // [X6] control (Stage-2 flip): a SINGLE instantiation of a generic whose body has a
-        // capturing closure stays legal — ClosurePin.Capturing only rejects a SECOND distinct
-        // instantiation. The captured `bias` now lives in a per-scope env record (Stage 2), so it
-        // has no flat `__lcl_bias_` cell and an env-record ctor is emitted instead.
+        // capturing closure stays legal — historically (pre-Stage-2-M4) ClosurePin.Capturing
+        // rejected only a SECOND distinct instantiation; that tier is now retired (Stage 2 M4),
+        // so a second instantiation is legal too (see Stage2M4GenericsTests). The captured `bias`
+        // now lives in a per-scope env record (Stage 2), so it has no flat `__lcl_bias_` cell and
+        // an env-record ctor is emitted instead.
         var uasm = TestHelper.CompileToUasm(@"
 using System;
 using UdonSharp;
