@@ -1563,6 +1563,23 @@ public abstract class HandlerBase
         // since they aren't part of the TypeLayout's pre-computed bridges.
         if (targetMethod.MethodKind == MethodKind.LambdaMethod || targetMethod.MethodKind == MethodKind.LocalFunction)
         {
+            // Stage 2 M4 (fcd54): a GENERIC local function referenced as a method group
+            // (`Func<int,int> d = Lf<int>`) arrives as a constructed spec whose MethodKind stays
+            // LocalFunction, so it enters this arm rather than the generic-method arm below — but no
+            // invocation registered it (the [Y8] invoke path monomorphizes generic LFs on the call
+            // site; a method-group-only reference never hits it). Register the fully-resolved
+            // specialization on demand, the same RegisterGenericSpecialization the invoke/generic-method
+            // paths use (it also wires the __envp field for a capturing LF, keyed by OriginalDefinition).
+            if (targetMethod.IsGenericMethod && !_methodFunctions.ContainsKey(targetMethod))
+            {
+                var constructedLf = SubstituteMethodTypeArgs(targetMethod);
+                if (!constructedLf.TypeArguments.Any(ta => ta is ITypeParameterSymbol))
+                {
+                    targetMethod = constructedLf;
+                    if (!_methodFunctions.ContainsKey(targetMethod))
+                        RegisterGenericSpecialization(targetMethod);
+                }
+            }
             if (!_methodSlots.TryGetValue(targetMethod, out var targetSlot))
                 throw new System.InvalidOperationException($"Lambda/local function '{targetMethod.Name}' not registered.");
             bridgeExportName = $"__dlg_{targetSlot.VarPrefix}";

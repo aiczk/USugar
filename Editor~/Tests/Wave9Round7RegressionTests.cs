@@ -260,12 +260,13 @@ public class W9R7GenCap2 : UdonSharpBehaviour {
     }
 
     [Fact]
-    public void GenericParamCapture_TwoInstantiations_StillRejectsLoudly()
+    public void GenericParamCapture_TwoInstantiations_StaysLegal()
     {
-        // Interaction guard: the new FirstGenericSpec param resolution must not weaken the
-        // round-5 [X6] reject — a SECOND distinct instantiation of a param-capturing generic
-        // stays loud (the one flat closure would read the other spec's params).
-        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
+        // Stage 2 §8.1 FLIP (was GenericParamCapture_..._StillRejectsLoudly): the closure captures the
+        // int param `n`, NOT the generic's type parameter, so it is non-T-dependent — the retired
+        // Capturing tier no longer rejects it. Both instantiations share one T-free hoist and each
+        // activation's `n` lives in its own env record, so the specs no longer alias.
+        var uasm = TestHelper.CompileToUasm(@"
 using System;
 using UdonSharp;
 public class W9R7GenCap3 : UdonSharpBehaviour {
@@ -275,8 +276,10 @@ public class W9R7GenCap3 : UdonSharpBehaviour {
         return p();
     }
     void Start() { result = Gen(seed, 2) + Gen((long)seed, 3); }
-}", "W9R7GenCap3"));
-        Assert.Contains("more than one type-argument", ex.Message);
+}", "W9R7GenCap3");
+        Assert.Contains("_Gen_SystemInt32", uasm);
+        Assert.Contains("_Gen_SystemInt64", uasm);
+        Assert.Contains("SystemObjectArray.__ctor__SystemInt32__SystemObjectArray", uasm);
     }
 
     // ── [Y5] deconstruction of a same-class generic call with an open type arg ──

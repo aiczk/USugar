@@ -186,12 +186,14 @@ public struct W9R5MinRes03 : IDisposable {
     // ── [X6] two-instantiation generic with a capturing closure ──
 
     [Fact]
-    public void TwoInstantiation_GenericWithCapturingLambda_RejectsLoudly()
+    public void TwoInstantiation_GenericWithCapturingLambda_StaysLegal()
     {
-        // MinA3: the lambda is hoisted ONCE (keyed by IMethodSymbol) but its capture cell `bias`
-        // is a per-spec local — the shared body reads whichever spec emitted last (DiffFuzz
-        // r1=8 vs 3, last-spec-wins).
-        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
+        // Stage 2 §8.1 FLIP (was [X6] TwoInstantiation_...RejectsLoudly): the former Capturing tier is
+        // retired. The lambda is a NON-type-param-dependent capture (`bias` is int, no T in its
+        // signature or body), so it shares one T-free hoist and its capture lives in a per-activation
+        // env record — the two instantiations no longer alias (VM-proven: fcd45a ri=9 AND rl=9 both
+        // correct). Both specs compile and no flat `__lcl_bias_` cell exists (capture is in the env).
+        var uasm = TestHelper.CompileToUasm(@"
 using System;
 using UdonSharp;
 public class MinA3 : UdonSharpBehaviour {
@@ -207,8 +209,11 @@ public class MinA3 : UdonSharpBehaviour {
         Func<int, int> f = x => x + bias;
         return f(v);
     }
-}", "MinA3"));
-        Assert.Contains("more than one type-argument", ex.Message);
+}", "MinA3");
+        Assert.Contains("__1_Gen_SystemInt32", uasm);
+        Assert.Contains("__2_Gen_SystemInt64", uasm);
+        Assert.DoesNotContain("__lcl_bias_", uasm);
+        Assert.Contains("SystemObjectArray.__ctor__SystemInt32__SystemObjectArray", uasm);
     }
 
     [Fact]

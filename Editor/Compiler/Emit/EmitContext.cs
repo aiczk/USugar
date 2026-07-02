@@ -401,12 +401,14 @@ public class EmitContext
         = new(SymbolEqualityComparer.Default);
 
     /// <summary>How a generic definition's body closures pin it to a single instantiation.
-    /// <c>Capturing</c>: a capturing lambda/local function (the [X6] round-5 reject — shared capture
-    /// cells are seeded last-spec-wins). <c>TypeParamDependent</c> (round-8 [Y2] widening): a closure
-    /// whose SIGNATURE or BODY references the enclosing generic's type parameters — the closure is
-    /// hoisted ONCE keyed by IMethodSymbol and its function types/body were emitted under the FIRST
-    /// spec's map, so a second instantiation would silently run the first instantiation's types.</summary>
-    public enum ClosurePin { None, Capturing, TypeParamDependent }
+    /// <c>TypeParamDependent</c> (round-8 [Y2] widening): a closure whose SIGNATURE, BODY, or captured
+    /// variables reference the enclosing generic's type parameters — the closure is hoisted ONCE keyed
+    /// by IMethodSymbol and its function types/body were emitted under the FIRST spec's map, so a
+    /// second instantiation would silently run the first instantiation's types. (Stage 2 §8.1: the
+    /// former <c>Capturing</c> tier is retired — a NON-type-param-dependent capturing closure shares
+    /// one T-free hoist and its captures live in per-activation env records, so multiple
+    /// instantiations no longer alias.)</summary>
+    public enum ClosurePin { None, TypeParamDependent }
 
     /// <summary>[X6]/[Y2] gate: does the generic DEFINITION's body contain an instantiation-pinning
     /// closure? Walks the definition's own operation tree (specs share it). Capturing dominates.</summary>
@@ -421,26 +423,28 @@ public class EmitContext
         return pin;
     }
 
+    // Stage 2 §8.2: the walk no longer early-returns on capture — capture alone no longer pins an
+    // instantiation (per-activation env records de-alias multi-instantiation captures). It visits
+    // EVERY closure and only pins on TypeParamDependence: a closure whose signature, body, or a
+    // captured variable references the enclosing generic's type parameters cannot share one T-free
+    // hoist across specs. Granularity stays per-definition (§8.2): one T-dependent closure pins the
+    // whole definition; no partial legalization.
     void WalkClosurePins(IOperation op, ref ClosurePin pin)
     {
-        if (op == null || pin == ClosurePin.Capturing) return;
+        if (op == null || pin == ClosurePin.TypeParamDependent) return;
         switch (op)
         {
             case IAnonymousFunctionOperation af:
-                if (CaptureAnalyzer.HasCaptures(af)) { pin = ClosurePin.Capturing; return; }
-                if (ClosureUsesMethodTypeParam(af.Symbol, af.Body)) pin = ClosurePin.TypeParamDependent;
+                if (ClosureUsesMethodTypeParam(af.Symbol, af.Body)) { pin = ClosurePin.TypeParamDependent; return; }
                 break;
             case ILocalFunctionOperation lf when lf.Symbol != null:
-                if (IsCapturingLocalFunction(lf.Symbol)
-                    || CaptureAnalyzer.GetLocalFunctionCaptures(lf.Symbol).Length > 0)
-                { pin = ClosurePin.Capturing; return; }
-                if (ClosureUsesMethodTypeParam(lf.Symbol, lf.Body)) pin = ClosurePin.TypeParamDependent;
+                if (ClosureUsesMethodTypeParam(lf.Symbol, lf.Body)) { pin = ClosurePin.TypeParamDependent; return; }
                 break;
         }
         foreach (var child in op.Children)
         {
             WalkClosurePins(child, ref pin);
-            if (pin == ClosurePin.Capturing) return;
+            if (pin == ClosurePin.TypeParamDependent) return;
         }
     }
 
@@ -474,20 +478,13 @@ public class EmitContext
         _ => false,
     };
 
-    /// <summary>Shared [X6]/[Y2] reject for a SECOND distinct instantiation of a generic whose body
-    /// pins it to one instantiation (capturing closure, or — round-8 — a closure referencing the
-    /// generic's type parameters). No-op for <see cref="ClosurePin.None"/>.</summary>
+    /// <summary>Shared [Y2] reject for a SECOND distinct instantiation of a generic whose body pins it
+    /// to one instantiation via a type-param-dependent closure (round-8; the former capture-only tier
+    /// is retired in Stage 2 §8.1). No-op for <see cref="ClosurePin.None"/>.</summary>
     public static void ThrowIfClosurePinsInstantiation(ClosurePin pin, string methodName)
     {
         switch (pin)
         {
-            case ClosurePin.Capturing:
-                throw new System.NotSupportedException(
-                    $"Generic method '{methodName}' is instantiated with more than one type-argument "
-                    + "combination but contains a lambda or local function that captures locals/parameters. "
-                    + "The hoisted closure and its capture cells are shared across instantiations in the "
-                    + "flat-heap model, so one instantiation would read the other's captured values. "
-                    + "Use a single instantiation, or make the closure capture-free.");
             case ClosurePin.TypeParamDependent:
                 throw new System.NotSupportedException(
                     $"Generic method '{methodName}' is instantiated with more than one type-argument "
