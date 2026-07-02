@@ -3,6 +3,10 @@
     <TargetFramework>net9.0</TargetFramework>
     <LangVersion>latest</LangVersion>
     <IsPackable>false</IsPackable>
+    <!-- The LangGuard guard project lives under this directory; keep the test project's default globs
+         from sweeping its generated obj/ artifacts (would duplicate TargetFrameworkAttribute → CS0579
+         on every incremental build). -->
+    <DefaultItemExcludes>$(DefaultItemExcludes);LangGuard/**</DefaultItemExcludes>
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="../../Editor/Compiler/NameAllocator.cs" />
