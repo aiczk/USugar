@@ -191,7 +191,7 @@ public sealed class CaptureScopeAnalysis
             foreach (var syntaxRef in field.DeclaringSyntaxReferences)
             {
                 if (syntaxRef.GetSyntax() is not Microsoft.CodeAnalysis.CSharp.Syntax.VariableDeclaratorSyntax
-                    { Initializer.Value: { } initSyntax })
+                    { Initializer: { Value: { } initSyntax } })
                     continue;
                 var model = compilation.GetSemanticModel(syntaxRef.SyntaxTree);
                 if (model.GetOperation(initSyntax) is { } initOp) result.Add(initOp);
