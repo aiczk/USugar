@@ -186,9 +186,52 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
         return false;
     }
 
+    // Wave-12 r4 [W1]/[W2]: true when converting src to dst re-types a DELEGATE somewhere inside an
+    // array (covariance: Func<string>[] → Func<object>[]) or a tuple ((Func<string>,int) →
+    // (Func<object>,int)) with a diverging __dlgc_ sig part — the exact channel-divergence criterion
+    // of the [V2] delegate-value arm, which never sees these because the conversion node sits on the
+    // ARRAY/TUPLE type. Recurses through nested arrays and tuple elements. An `object`(/[])
+    // destination element is NOT a delegate, so object-laundering stays the accepted boundary.
+    static bool ContainsVariantDelegateConversion(ITypeSymbol src, ITypeSymbol dst,
+        IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeParamMap)
+    {
+        if (src == null || dst == null) return false;
+        if (src is IArrayTypeSymbol srcArr && dst is IArrayTypeSymbol dstArr)
+            return ContainsVariantDelegateConversion(srcArr.ElementType, dstArr.ElementType, typeParamMap);
+        if (src is INamedTypeSymbol srcTup && dst is INamedTypeSymbol dstTup
+            && srcTup.IsTupleType && dstTup.IsTupleType)
+        {
+            var se = srcTup.TupleElements;
+            var de = dstTup.TupleElements;
+            for (int i = 0; i < se.Length && i < de.Length; i++)
+                if (ContainsVariantDelegateConversion(se[i].Type, de[i].Type, typeParamMap))
+                    return true;
+            return false;
+        }
+        return src is INamedTypeSymbol srcDlg && srcDlg.DelegateInvokeMethod is { } srcInvoke
+            && dst is INamedTypeSymbol dstDlg && dstDlg.DelegateInvokeMethod is { } dstInvoke
+            && !SymbolEqualityComparer.Default.Equals(srcDlg, dstDlg)
+            && DelegateAbi.BuildSigPart(srcInvoke, typeParamMap)
+               != DelegateAbi.BuildSigPart(dstInvoke, typeParamMap);
+    }
+
     CLeaf VisitConversion(IConversionOperation conv)
     {
         var srcVal = VisitExpression(conv.Operand);
+
+        // Wave-12 r4 [W1]/[W2]: variance laundered through array covariance or a tuple conversion
+        // diverges the __dlgc_ channels exactly like the direct delegate-value conversion the [V2]
+        // arm below rejects (VM-proven lost return: ref=2 vs -1 on both shapes). Same loud reject,
+        // same criterion, recursing through the aggregate structure; equal-sig element conversions
+        // and delegate↔object flows are untouched.
+        if ((conv.Type is IArrayTypeSymbol || (conv.Type as INamedTypeSymbol)?.IsTupleType == true)
+            && ContainsVariantDelegateConversion(conv.Operand.Type, conv.Type, _ctx.TypeParamMap))
+            throw new System.NotSupportedException(
+                $"Variant delegate conversion from '{conv.Operand.Type.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}' "
+                + $"to '{conv.Type.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}' is not supported: "
+                + "the delegate calling convention keys its argument/return channels by the exact "
+                + "signature, so a co/contravariant element binding silently drops values across the "
+                + "dispatch. Use matching delegate type parameters.");
 
         // Delegate-typed conversions are reference passthrough (design §2.3, fcd25): delegate → object is
         // box-free (the value already IS an object[] reference) and (Func<T>)objExpr cast-back keeps the

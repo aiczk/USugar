@@ -1564,6 +1564,23 @@ public abstract class HandlerBase
         if (targetMethod == null)
             throw new System.NotSupportedException($"Unsupported delegate target: {op.Target.GetType().Name}");
 
+        // Wave-12 r4 [W3]: a method group bound to an INTERFACE member (`cb = iface.Get`) previously
+        // ICEd in GetDelegateBridgeLayout ('No delegate bridge'). It cannot compile correctly today:
+        // bundle[1] is SendCustomEvent'd on the RUNTIME receiver, so it must name a __dlgc_-convention
+        // bridge export derivable from the interface member alone, and implementers only export
+        // bridges named by their own implementing methods — a canonical per-interface-member bridge
+        // family in every implementer is a feature-scale ABI addition, not a fix (§8-3: loud over
+        // silent/ICE; same rationale as the variable-receiver generic method-group reject below).
+        // The lambda wrapping IS supported (VM-proven Match): it captures the receiver and dispatches
+        // through the interface-call convention.
+        if (targetMethod.ContainingType?.TypeKind == TypeKind.Interface)
+            throw new System.NotSupportedException(
+                $"A delegate cannot be created from interface member "
+                + $"'{targetMethod.ContainingType.Name}.{targetMethod.Name}': the receiver's concrete "
+                + "program is not known at compile time, so no bridge entry point exists for the "
+                + "delegate dispatch. Wrap the call in a lambda instead ('() => receiver."
+                + $"{targetMethod.Name}(...)'), or bind the implementing class's method directly.");
+
         // Stage 2 §3.7: bundle[3] env for a capturing closure target (null for named methods / base.M
         // / capture-free lambdas). Resolved here in the creation site's frame.
         var envLeaf = ClosureEnvLeaf(targetMethod);
