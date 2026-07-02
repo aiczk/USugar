@@ -964,6 +964,9 @@ public class UasmEmitter
 
         // Emit pending delegate bridges for hoisted lambdas/local functions
         EmitPendingDelegateBridges();
+
+        // §5.5 (graft #2): now that every capturing bridge is registered, assert each has a graph node.
+        VerifyBridgeTargetsAreNodes();
     }
 
     // ── Interface Bridges ──
@@ -1721,8 +1724,19 @@ public class UasmEmitter
             edges[sym] = lambdaCallees;
         }
 
-        // (b) EscapeSet E (§4.1): conservative approximation of every function whose bridge address can
-        // end up inside a bundle — same-class method-group targets (incl. local functions) and lambdas.
+        // (b) EscapeSet E (§4.1 + §5.4 widening): conservative approximation of every function whose
+        // bridge address can end up inside a dispatched bundle. Two sources:
+        //   1. Same-class delegate-creation targets (method groups incl. local functions, and lambdas).
+        //   2. §5.4 widening — every BRIDGE-BEARING method. A bundle can be minted in ANOTHER program
+        //      (foreign-wired self-callback, fcd47 form; or SetProgramVariable-delivered) whose creation
+        //      site is invisible to CollectEscapedDelegateTargets, yet dispatched here re-enters THIS
+        //      program's method. The planner emits a speculative bridge per non-event user method, and
+        //      each such method is already a graph node (a root), so it is an escape target too. The
+        //      resulting SCC growth is contained by the sig-filter on the synthetic edges (c): a typed
+        //      dispatch can only enter a bridge of the SAME signature. That filter is sound ONLY while
+        //      variance is rejected at creation (DelegateProtocol.ValidateDelegateBinding forces the
+        //      delegate-Invoke sig to equal the target-method sig) — if that reject is ever relaxed, this
+        //      filter must be revisited (see the tracked coupling pin SigFilterCoupledToVarianceReject).
         // MEMBERSHIP-ONLY (§1.5): never drives emission order.
         var escape = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
         foreach (var m in roots)
@@ -1730,21 +1744,47 @@ public class UasmEmitter
                 CollectEscapedDelegateTargets(rootBody, methodSet, escape);
         foreach (var (_, initOp, _) in _fieldInitOps)
             CollectEscapedDelegateTargets(initOp, methodSet, escape);
+        foreach (var m in _planner.GetLayout(_classSymbol).DelegateBridges.Keys)
+        {
+            var def = m.OriginalDefinition;
+            if (bodies.ContainsKey(def)) escape.Add(def);
+        }
 
-        // (c) Synthetic edges m→E for every function m (lambdas included) containing a delegate
-        // dispatch: an indirect dispatch can start any escaped function. Real call edges are unchanged;
-        // the RecursiveCallees filter below self-filters synthetic edges (no named call to match), so
-        // they create cycle membership — consumed by the per-site Reentrant marking — without ever
-        // creating named-call spills.
+        // (c) Synthetic SIG-FILTERED edges m→{e ∈ E : sig(e) == sig(one of m's dispatches)}: an indirect
+        // dispatch of a delegate type T can only start an escaped function whose signature matches T's
+        // Invoke method (§5.4). Real call edges are unchanged; the RecursiveCallees filter below
+        // self-filters synthetic edges (no named call to match), so they create cycle membership —
+        // consumed by the per-site Reentrant marking — without ever creating named-call spills. Signature
+        // matching (SigsMatch) uses the concrete definition-level BuildSigPart, with a wildcard escape
+        // hatch for type-param-involving signatures (see the escapeSig comment below).
         var allNodes = internalMethods.Concat(lambdaNodes.Select(l => l.Sym))
             .Distinct(SymbolEqualityComparer.Default).Cast<IMethodSymbol>().ToArray();
+        // sig(e) = concrete open-definition BuildSigPart, or WILDCARD (null) when the signature
+        // involves a type parameter. At analysis time there is no type-param map, so a generic escape
+        // target (e.g. an inherited `FreeG<T>` dispatched as a monomorphized spec) and a concrete
+        // dispatch (`Func<int,int>`) cannot be reliably matched by string — the OPEN sig of a generic
+        // never equals the CONCRETE dispatch sig. Treating either side as wildcard when it involves a
+        // type param restores the pre-widening connect-all behaviour for generic-involved dispatches
+        // (sound: conservative), while keeping the exact sig-filter for the concrete common case
+        // (contains the §5.4 widening). SigsMatch: equal, or either is wildcard.
+        var escapeSig = new Dictionary<IMethodSymbol, string>(SymbolEqualityComparer.Default);
+        foreach (var e in escape)
+            if (edges.ContainsKey(e)) escapeSig[e] = DispatchSigOrWildcard(e);
         foreach (var node in allNodes)
         {
             if (!bodies.TryGetValue(node, out var nodeBody) || nodeBody == null) continue;
             if (!ContainsDelegateDispatch(nodeBody)) continue;
+            var dispatchSites = new List<IOperation>();
+            CollectDelegateDispatchSites(nodeBody, dispatchSites);
+            var nodeSigs = new List<string>();
+            foreach (var site in dispatchSites)
+                if (site is IInvocationOperation dinv && dinv.TargetMethod != null)
+                    nodeSigs.Add(DispatchSigOrWildcard(dinv.TargetMethod));
+            if (nodeSigs.Count == 0) continue;
             var nodeEdges = edges[node];
-            foreach (var e in escape)
-                if (edges.ContainsKey(e)) nodeEdges.Add(e);
+            foreach (var kv in escapeSig)
+                foreach (var ds in nodeSigs)
+                    if (SigsMatch(ds, kv.Value)) { nodeEdges.Add(kv.Key); break; }
         }
 
         // Round-7 follow-up [Q5]: per-node this-FIELD touch sets for the ref/out-argument alias
@@ -1823,9 +1863,17 @@ public class UasmEmitter
             // made by a dispatched non-cycle closure: the lambda's write to its captured cell never
             // reached the declarer's post-dispatch read (acc=1 where the CLR gives 6 at depth 1).
             // Direct-call spills (RecursiveCallees) are real edges and stay ungated.
-            bool sccReenterable = false;
-            foreach (var e in escape)
-                if (edges.ContainsKey(e) && ReachFrom(e).Overlaps(sccSet)) { sccReenterable = true; break; }
+            // §5.4 sig-filter applied to the reachability gate (NOT only the synthetic edges): the set
+            // of delegate signatures that can re-enter this SCC — an escaped function of signature S
+            // reaches the SCC. A dispatch site is Reentrant only when ITS OWN signature is in this set.
+            // Widening E (§5.4) can add a same-SCC method of a DIFFERENT signature (e.g. `M(int)` reaches
+            // its own SCC); without the per-site sig gate that would spuriously mark a Void→Void `bump()`
+            // dispatch in M reentrant even though a bundle of M's signature can never flow to it. Sound
+            // while variance is rejected at creation (SigFilterCoupledToVarianceReject).
+            var reenterSigs = new List<string>();   // may hold WILDCARD (null) entries
+            foreach (var kv in escapeSig)
+                if (ReachFrom(kv.Key).Overlaps(sccSet)) reenterSigs.Add(kv.Value);
+            bool sccReenterable = reenterSigs.Count > 0;
             foreach (var caller in scc)
             {
                 bodies.TryGetValue(caller, out var callerBody);
@@ -1875,8 +1923,13 @@ public class UasmEmitter
                     var dispatchSites = new List<IOperation>();
                     CollectDelegateDispatchSites(callerBody, dispatchSites);
                     foreach (var site in dispatchSites)
-                        if (site.Syntax != null && EmitContext.IsNonTailDispatchSite(callerBody, site))
-                            reentrantSites.Add(site.Syntax);
+                        if (site.Syntax != null && EmitContext.IsNonTailDispatchSite(callerBody, site)
+                            && site is IInvocationOperation dsInv && dsInv.TargetMethod != null)
+                        {
+                            var dsSig = DispatchSigOrWildcard(dsInv.TargetMethod);
+                            foreach (var rs in reenterSigs)
+                                if (SigsMatch(rs, dsSig)) { reentrantSites.Add(site.Syntax); break; }
+                        }
                 }
 
             }
@@ -1885,6 +1938,61 @@ public class UasmEmitter
         _ctx.CycleCallees = cycleEdges;
         _ctx.ReentrantDispatchSites = reentrantSites;
         _ctx.TailSparedDirectCallSites = tailSparedSites;
+        // §5.5 (graft #2): snapshot the graph-node set (definition-keyed) so the post-emission armor
+        // can verify every capturing delegate bridge target reached the reentrancy analysis. Bodies is
+        // keyed by every node that got an edge set (roots, local functions, lambdas).
+        _ctx.RecursionGraphNodes = new HashSet<IMethodSymbol>(bodies.Keys, SymbolEqualityComparer.Default);
+    }
+
+    // §5.5 (graft #2): VerifyBridgeTargetsAreNodes — the wave-10 [Z1]-class emit-time-registration
+    // hole detector. A CAPTURING delegate bridge carries an env and MUST have its frame protected
+    // across reentrant dispatch; that protection is driven by its recursion-graph node (BuildRecursionInfo
+    // above). PendingDelegateBridges is populated DURING body emission (after BuildRecursionInfo), so
+    // this runs AFTER EmitPendingDelegateBridges — the design's "end of BuildRecursionInfo" intent, at
+    // the only point where the full capturing-bridge set exists. A capturing target with no node means a
+    // future registration path escaped the reentrancy analysis: fail loud at compile time, never emit
+    // silently-unprotected. Non-capturing bridges (named methods, capture-free lambdas) carry no env and
+    // are intentionally skipped — they have no reentrancy-sensitive frame state to lose.
+    void VerifyBridgeTargetsAreNodes()
+    {
+        if (_ctx.CaptureScope == null || _ctx.RecursionGraphNodes == null) return;
+        foreach (var (method, bridgeExportName, _) in _ctx.PendingDelegateBridges)
+        {
+            var def = method.OriginalDefinition;
+            if (!_ctx.CaptureScope.IsCapturingClosure(def)) continue;
+            if (!_ctx.RecursionGraphNodes.Contains(def))
+                throw new InvalidOperationException(
+                    $"USugar internal error (§5.5 bridge-target armor): capturing delegate bridge "
+                  + $"'{bridgeExportName}' targets '{def}', which has no recursion-graph node — its "
+                  + "reentrancy spill protection would be silently missing. A registration path added a "
+                  + "capturing bridge without seeding the recursion analysis (wave-10 [Z1] class).");
+        }
+    }
+
+    // §5.4 sig-filter helpers. The delegate signature key is BuildSigPart, but only reliable when the
+    // signature is CONCRETE. When it involves a type parameter (own generic method, or a param/return
+    // referencing an enclosing generic's T), it has no analysis-time concrete form — return WILDCARD
+    // (null) so it conservatively matches every dispatch (pre-widening connect-all for generics).
+    static string DispatchSigOrWildcard(IMethodSymbol m)
+        => SigInvolvesTypeParam(m) ? null : DelegateAbi.BuildSigPart(m);
+
+    // Two signatures match if equal, or either is WILDCARD (a type-param-involving sig matches anything).
+    static bool SigsMatch(string a, string b) => a == null || b == null || a == b;
+
+    static bool SigInvolvesTypeParam(IMethodSymbol m)
+    {
+        if (m.IsGenericMethod) return true;
+        static bool Has(ITypeSymbol t) => t switch
+        {
+            ITypeParameterSymbol => true,
+            IArrayTypeSymbol a => Has(a.ElementType),
+            INamedTypeSymbol n => n.IsGenericType && n.TypeArguments.Any(Has),
+            _ => false,
+        };
+        if (Has(m.ReturnType)) return true;
+        foreach (var p in m.Parameters)
+            if (Has(p.Type)) return true;
+        return false;
     }
 
     // Collect every lambda (anonymous function) with its body — each becomes its own SCC node (§4.2).

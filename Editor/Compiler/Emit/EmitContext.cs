@@ -193,6 +193,13 @@ public class EmitContext
     /// are not shared between analysis and emit walks). MEMBERSHIP-ONLY (§1.5).</summary>
     public HashSet<SyntaxNode> TailSparedDirectCallSites;
 
+    /// <summary>Stage 2 M3 (§5.5, graft #2): the definition-keyed set of every function that got a
+    /// recursion-graph node in BuildRecursionInfo (roots + local functions + lambda nodes). Consumed
+    /// by <c>UasmEmitter.VerifyBridgeTargetsAreNodes</c> AFTER emission to assert every capturing
+    /// delegate bridge target is a graph node — a capturing bridge with no node has its reentrancy
+    /// protection silently missing (wave-10 [Z1] class). MEMBERSHIP-ONLY (§1.5).</summary>
+    public HashSet<IMethodSymbol> RecursionGraphNodes;
+
     /// <summary>True if <paramref name="t"/> is <c>Nullable&lt;T&gt;</c>; yields the underlying T.
     /// Nullable is emulated as a boxed object (null | boxed T) — see ExternResolver type mapping.</summary>
     public static bool IsNullableT(ITypeSymbol t, out ITypeSymbol underlying)

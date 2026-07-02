@@ -114,9 +114,19 @@ public class W9R3B02Base : UdonSharpBehaviour {
     }
 
     [Fact]
-    public void BaseMethodGroupBundle_AcyclicBase_Control_DoesNotSpill()
+    public void BaseMethodGroupBundle_AcyclicBase_SameSigDispatch_SpillsUnderWidening()
     {
-        // fb = base.M where the base body never calls back: synthetic edge only, no cycle.
+        // fb = base.M, and the OVERRIDE M dispatches fb — whose delegate signature (int→int) EQUALS
+        // M's own signature. Under the Stage-2 §5.4 EscapeSet widening every bridge-bearing method is a
+        // conservative escape target; the sig-filter keeps only same-signature synthetic edges, so M's
+        // fb(int→int) dispatch self-connects M → M and the dispatch is marked Reentrant (a bundle of M's
+        // signature could, under foreign wiring, hold M itself — fcd47 form). The base body being acyclic
+        // no longer implies no-spill for a SAME-SIGNATURE dispatch: the frame now spills conservatively.
+        // (Contrast OverrideBaseCall_AcyclicBase_Control_DoesNotSpill, which makes a DIRECT base.M call —
+        // no delegate dispatch, so the widening leaves it untouched and it correctly stays spill-free.)
+        // The spill is sound over-approximation; here fb is a private field wired only to base.M, so it
+        // is unnecessary in practice — a precision refinement (widen only for foreign-reachable dispatch
+        // surfaces) is a documented M4 follow-up.
         var uasm = TestHelper.CompileToUasm(@"
 using System;
 using UdonSharp;
@@ -134,7 +144,7 @@ public class W9R3Ctl2 : W9R3Ctl2Base {
 public class W9R3Ctl2Base : UdonSharpBehaviour {
     public virtual int M(int m) { return m * 2 + 1; }
 }", "W9R3Ctl2");
-        Assert.DoesNotContain("__recurStack", uasm);
+        Assert.Contains("__recurStack", uasm);
     }
 
     // ── [W3] virtual-override recursion hole ──

@@ -2000,9 +2000,20 @@ public abstract class HandlerBase
                 // so its mutations must PERSIST across the call. Saving+restoring it would discard the
                 // recursive levels' writes (only the outermost would reach the caller). Value params are
                 // per-frame and must still be spilled. (diff-fuzz wave 3 #3)
-                if (i < _currentMethod.Parameters.Length
-                    && _currentMethod.Parameters[i].RefKind is RefKind.Ref or RefKind.Out)
-                    continue;
+                if (i < _currentMethod.Parameters.Length)
+                {
+                    var param = _currentMethod.Parameters[i];
+                    if (param.RefKind is RefKind.Ref or RefKind.Out)
+                        continue;
+                    // Stage 2 §6.2 (E5 corollary): a captured param is consumed into the env record at
+                    // MethodEntry (§3.1) and every later read routes through env (§4.1), so its param
+                    // field is dead across the recursive call — the env carrier (the closure's env-ref
+                    // local / bundle) is what the existing spill preserves. Spilling the dead field is
+                    // the wastefully-conservative over-spill the entry criteria forbid. Definition-keyed
+                    // via TryGetEnvBinding (constructed specs re-key through OriginalDefinition, §2 rule 2).
+                    if (_ctx.TryGetEnvBinding(param, out _))
+                        continue;
+                }
                 AddField(pids[i]);
             }
         AddField(_ctx.CurrentStructReceiverParamId);
