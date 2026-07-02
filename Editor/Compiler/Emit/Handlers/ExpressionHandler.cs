@@ -215,6 +215,134 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
                != DelegateAbi.BuildSigPart(dstInvoke, typeParamMap);
     }
 
+    // ── Wave-12 r5 [W1]/[W2]: object-laundered variant delegate casts ──
+    // A non-delegate-typed value (object / System.Delegate) cast or `as`-cast to a DELEGATE type
+    // erases the source signature from the conversion node, so the [V2] delegate-to-delegate arm
+    // never fires and a co/contravariant bundle flows into channels keyed by the DESTINATION
+    // signature (VM-proven silent loss: covariant Func ref=2 vs -1, contravariant Action ref=7
+    // vs 5). Compile-time cannot see through `object` in general, so the gate is EVIDENCE-BASED:
+    // reject only when a statically visible producer of the operand carries a delegate whose sig
+    // part diverges from the destination's — nested conversions, ternary/coalesce arms, the
+    // operand LOCAL's writes (transitively through other object-typed locals), and, for a
+    // PARAMETER operand (incl. a setter's `value`), the class-family-visible call-site arguments /
+    // property-write values feeding it. Same-signature roundtrips (the pinned accepted boundary)
+    // and unprovable sources (foreign-class callers, fields, array elements) keep flowing; if a
+    // future wave reds a laundering shape through an uncovered source, extend the evidence
+    // collectors, not the criterion.
+
+    List<IOperation> _launderEvidenceBodies;
+
+    /// <summary>Bodies whose delegate flows are visible to this program: the compiled class's own
+    /// member bodies plus its user base chain's (inherited bodies emit into this program).</summary>
+    IReadOnlyList<IOperation> ClassFamilyBodies()
+    {
+        if (_launderEvidenceBodies != null) return _launderEvidenceBodies;
+        var list = new List<IOperation>();
+        for (var t = _classSymbol; t != null && t.Name != "UdonSharpBehaviour"; t = t.BaseType)
+        {
+            if (t.DeclaringSyntaxReferences.IsEmpty
+                || USugarCompilerHelper.IsFrameworkNamespace(t.ContainingNamespace)) break;
+            foreach (var m in t.GetMembers().OfType<IMethodSymbol>())
+            {
+                if (m.MethodKind is not (MethodKind.Ordinary or MethodKind.PropertyGet
+                    or MethodKind.PropertySet or MethodKind.ExplicitInterfaceImplementation)) continue;
+                var sr = m.DeclaringSyntaxReferences.Length > 0 ? m.DeclaringSyntaxReferences[0] : null;
+                if (sr == null) continue;
+                var syntax = sr.GetSyntax();
+                var bodyOp = _compilation.GetSemanticModel(syntax.SyntaxTree).GetOperation(syntax);
+                if (bodyOp != null) list.Add(bodyOp);
+            }
+        }
+        return _launderEvidenceBodies = list;
+    }
+
+    static IOperation OperationRoot(IOperation op)
+    {
+        while (op.Parent != null) op = op.Parent;
+        return op;
+    }
+
+    static void CollectLocalWrites(IOperation op, ILocalSymbol local, List<IOperation> writes)
+    {
+        if (op == null) return;
+        switch (op)
+        {
+            case IVariableDeclaratorOperation vd when SymbolEqualityComparer.Default.Equals(vd.Symbol, local):
+                if (vd.Initializer?.Value is { } init) writes.Add(init);
+                break;
+            case ISimpleAssignmentOperation sa when sa.Target is ILocalReferenceOperation t
+                && SymbolEqualityComparer.Default.Equals(t.Local, local):
+                writes.Add(sa.Value);
+                break;
+        }
+        foreach (var child in op.Children)
+            CollectLocalWrites(child, local, writes);
+    }
+
+    static void CollectParamEvidence(IOperation op, IMethodSymbol method, IParameterSymbol param,
+        IPropertySymbol setterProp, List<IOperation> values)
+    {
+        if (op == null) return;
+        if (setterProp != null)
+        {
+            if (op is ISimpleAssignmentOperation sa && sa.Target is IPropertyReferenceOperation pref
+                && SymbolEqualityComparer.Default.Equals(pref.Property.OriginalDefinition, setterProp.OriginalDefinition))
+                values.Add(sa.Value);
+        }
+        else if (op is IInvocationOperation inv
+            && SymbolEqualityComparer.Default.Equals(inv.TargetMethod.OriginalDefinition, method.OriginalDefinition))
+        {
+            foreach (var a in inv.Arguments)
+                if (a.Parameter != null && a.Parameter.Ordinal == param.Ordinal) { values.Add(a.Value); break; }
+        }
+        foreach (var child in op.Children)
+            CollectParamEvidence(child, method, param, setterProp, values);
+    }
+
+    /// <summary>The first statically visible delegate-typed producer of <paramref name="val"/> whose
+    /// sig part diverges from <paramref name="dstSig"/>, or null when every visible producer agrees
+    /// (or nothing is visible).</summary>
+    ITypeSymbol DivergingDelegateEvidence(IOperation val, string dstSig, HashSet<ISymbol> visited)
+    {
+        while (val is IConversionOperation c) val = c.Operand;
+        if (val == null) return null;
+        switch (val)
+        {
+            case IConditionalOperation cond:
+                return DivergingDelegateEvidence(cond.WhenTrue, dstSig, visited)
+                    ?? DivergingDelegateEvidence(cond.WhenFalse, dstSig, visited);
+            case ICoalesceOperation coal:
+                return DivergingDelegateEvidence(coal.Value, dstSig, visited)
+                    ?? DivergingDelegateEvidence(coal.WhenNull, dstSig, visited);
+        }
+        if (val.Type is INamedTypeSymbol dlg && dlg.DelegateInvokeMethod is { } invoke)
+            return DelegateAbi.BuildSigPart(invoke, _ctx.TypeParamMap) != dstSig ? val.Type : null;
+        if (val is ILocalReferenceOperation lr && lr.Local != null && visited.Add(lr.Local))
+        {
+            var writes = new List<IOperation>();
+            CollectLocalWrites(OperationRoot(val), lr.Local, writes);
+            foreach (var w in writes)
+                if (DivergingDelegateEvidence(w, dstSig, visited) is { } t) return t;
+        }
+        if (val is IParameterReferenceOperation pr && pr.Parameter != null && visited.Add(pr.Parameter)
+            && pr.Parameter.ContainingSymbol is IMethodSymbol pm)
+        {
+            var setterProp = pm.MethodKind == MethodKind.PropertySet
+                             && pr.Parameter.Ordinal == pm.Parameters.Length - 1
+                ? pm.AssociatedSymbol as IPropertySymbol : null;
+            if (setterProp != null || pm.MethodKind is MethodKind.Ordinary or MethodKind.PropertyGet
+                or MethodKind.PropertySet or MethodKind.LocalFunction)
+            {
+                var values = new List<IOperation>();
+                foreach (var body in ClassFamilyBodies())
+                    CollectParamEvidence(body, pm, pr.Parameter, setterProp, values);
+                foreach (var v in values)
+                    if (DivergingDelegateEvidence(v, dstSig, visited) is { } t) return t;
+            }
+        }
+        return null;
+    }
+
     CLeaf VisitConversion(IConversionOperation conv)
     {
         var srcVal = VisitExpression(conv.Operand);
@@ -257,6 +385,23 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
                 throw new System.NotSupportedException(
                     $"Variant delegate conversion from '{vSrc.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}' "
                     + $"to '{vDst.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}' is not supported: "
+                    + "the delegate calling convention keys its argument/return channels by the exact "
+                    + "signature, so a co/contravariant binding silently drops values across the "
+                    + "dispatch. Use matching delegate type parameters.");
+
+            // Wave-12 r5 [W1]/[W2]: a NON-delegate-typed operand (object / System.Delegate box) cast
+            // to a delegate type — evidence-based reject when a statically visible producer of the
+            // operand carries a diverging sig (see the collectors above). Same-sig roundtrips and
+            // evidence-free casts keep the reference passthrough.
+            if (conv.Type is INamedTypeSymbol lDst && lDst.DelegateInvokeMethod is { } lInvoke
+                && !(conv.Operand.Type is INamedTypeSymbol opDlg && opDlg.DelegateInvokeMethod != null)
+                && DivergingDelegateEvidence(conv.Operand,
+                       DelegateAbi.BuildSigPart(lInvoke, _ctx.TypeParamMap),
+                       new HashSet<ISymbol>(SymbolEqualityComparer.Default)) is { } launderSrc)
+                throw new System.NotSupportedException(
+                    $"Variant delegate conversion from '{launderSrc.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}' "
+                    + $"to '{lDst.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}' is not supported "
+                    + $"(laundered through '{conv.Operand.Type?.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat) ?? "object"}'): "
                     + "the delegate calling convention keys its argument/return channels by the exact "
                     + "signature, so a co/contravariant binding silently drops values across the "
                     + "dispatch. Use matching delegate type parameters.");

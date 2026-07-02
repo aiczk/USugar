@@ -367,6 +367,29 @@ public class LayoutPlanner
         return false;
     }
 
+    /// <summary>Wave-12 r5 [W3]: true when a parameterless non-event member method would take the plain
+    /// export name that an inherited (non-overridden) member method already owns. The closest user base's
+    /// layout folds the whole ancestor chain (its own inheritance walk inherited everything above it), so
+    /// one lookup covers all bases. An override chain legitimately shares its slot's export and is excluded
+    /// (user-base overrides never reach the caller anyway — they reuse the base layout and continue).</summary>
+    bool ShadowsInheritedPlainExport(INamedTypeSymbol type, IMethodSymbol method, string plainName)
+    {
+        var baseType = type.BaseType;
+        if (baseType == null || baseType.Name == "UdonSharpBehaviour" || baseType.DeclaringSyntaxReferences.IsEmpty
+            || USugarCompilerHelper.IsFrameworkNamespace(baseType.ContainingNamespace))
+            return false;
+        var baseLayout = Plan(baseType);
+        foreach (var (bm, bml) in baseLayout.Methods)
+        {
+            if (bml.ExportName != plainName) continue;
+            bool overridden = false;
+            for (var cur = method.OverriddenMethod; cur != null; cur = cur.OverriddenMethod)
+                if (SymbolEqualityComparer.Default.Equals(cur, bm)) { overridden = true; break; }
+            if (!overridden) return true;
+        }
+        return false;
+    }
+
     TypeLayout PlanClass(INamedTypeSymbol type)
     {
         var methods = new Dictionary<IMethodSymbol, MethodLayout>(SymbolEqualityComparer.Default);
@@ -441,9 +464,18 @@ public class LayoutPlanner
                 // [NetworkCallable] methods must keep their unmangled name — other clients invoke them by name
                 // through SendCustomNetworkEvent, and the runtime's TryGetEntrypointHashFromName looks them up
                 // by the original method name. (Their parameters are still mangled below, like stock UdonSharp.)
-                // Otherwise mangle if: has parameters, OR name collides with a Udon event export name.
+                // Otherwise mangle if: has parameters, OR name collides with a Udon event export name,
+                // OR the method `new`-hides an inherited member that owns the plain export (wave-12 r5 [W3]:
+                // cross-program dispatch is name-keyed, so the statically-bound BASE method must keep its
+                // chain-wide export name in every descendant program — pre-fix the INHERITED member was the
+                // one collision-renamed below, and a base-typed receiver's method group / call resolved via
+                // Plan(Base) to the plain name, which in the derived program was the `new` method's export
+                // (VM-proven 162 where C# statically binds the base and gives 2). Parameterized methods are
+                // already consistent through counter inheritance; events and [NetworkCallable] keep the raw
+                // name channel bound to the most-derived declaration, matching Unity/network name reflection.
                 exportName = (!IsNetworkCallable(method)
-                              && (method.Parameters.Length > 0 || UdonEventExportNames.Contains(safeName)))
+                              && (method.Parameters.Length > 0 || UdonEventExportNames.Contains(safeName)
+                                  || ShadowsInheritedPlainExport(type, method, safeName)))
                     ? NameAllocator.FormatId(safeName, alloc.Allocate(safeName))
                     : safeName;
             }
