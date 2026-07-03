@@ -192,9 +192,39 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
     // of the [V2] delegate-value arm, which never sees these because the conversion node sits on the
     // ARRAY/TUPLE type. Recurses through nested arrays and tuple elements. An `object`(/[])
     // destination element is NOT a delegate, so object-laundering stays the accepted boundary.
+    static ITypeSymbol ResolveTypeParam(ITypeSymbol t,
+        IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeParamMap)
+        => t is ITypeParameterSymbol tp && typeParamMap != null && typeParamMap.TryGetValue(tp, out var r) ? r : t;
+
+    // A delegate proper, or one reachable through an array element / tuple element / user-struct field —
+    // the "delegate-carrying" shape. Resolves each level through the type-param map so a monomorphized
+    // generic T (e.g. Func<object>[]) is classified as the concrete type it becomes. Mirrors
+    // EmitContext.ContainsDelegateType but with type-param resolution (the [NetworkCallable] guard's
+    // source shows concrete field types, so it needs no resolution; the conversion site can see a raw T).
+    static bool StructurallyContainsDelegate(ITypeSymbol t,
+        IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeParamMap,
+        HashSet<ITypeSymbol> visited)
+    {
+        t = ResolveTypeParam(t, typeParamMap);
+        if (t == null) return false;
+        if (t is INamedTypeSymbol n && n.DelegateInvokeMethod != null) return true;
+        if (t is IArrayTypeSymbol a) return StructurallyContainsDelegate(a.ElementType, typeParamMap, visited);
+        if (t is INamedTypeSymbol agg && EmitContext.IsAggregateType(agg) && visited.Add(agg))
+            foreach (var m in agg.GetMembers())
+                if (m is IFieldSymbol f && !f.IsStatic
+                    && StructurallyContainsDelegate(f.Type, typeParamMap, visited))
+                    return true;
+        return false;
+    }
+
     static bool ContainsVariantDelegateConversion(ITypeSymbol src, ITypeSymbol dst,
         IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeParamMap)
     {
+        // Resolve each end through the type-param map at EVERY recursion level: a generic method whose
+        // element/tuple type is a bare T (T=Func<object>) shows the raw type parameter here, so the
+        // structural array/tuple/delegate tests below would miss it without substitution.
+        src = ResolveTypeParam(src, typeParamMap);
+        dst = ResolveTypeParam(dst, typeParamMap);
         if (src == null || dst == null) return false;
         if (src is IArrayTypeSymbol srcArr && dst is IArrayTypeSymbol dstArr)
             return ContainsVariantDelegateConversion(srcArr.ElementType, dstArr.ElementType, typeParamMap);
@@ -226,7 +256,11 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
         // arm below rejects (VM-proven lost return: ref=2 vs -1 on both shapes). Same loud reject,
         // same criterion, recursing through the aggregate structure; equal-sig element conversions
         // and delegate↔object flows are untouched.
-        if ((conv.Type is IArrayTypeSymbol || (conv.Type as INamedTypeSymbol)?.IsTupleType == true)
+        // Resolve conv.Type through the type-param map BEFORE the structural gate: a generic T
+        // monomorphizing to Func<object>[] shows the raw type parameter on conv.Type, so a bare
+        // `conv.Type is IArrayTypeSymbol` test would miss it (mirrors the scalar arm's ResolveType).
+        var variantDst = ResolveType(conv.Type);
+        if ((variantDst is IArrayTypeSymbol || (variantDst as INamedTypeSymbol)?.IsTupleType == true)
             && ContainsVariantDelegateConversion(conv.Operand.Type, conv.Type, _ctx.TypeParamMap))
             throw new System.NotSupportedException(
                 $"Variant delegate conversion from '{conv.Operand.Type.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}' "
@@ -234,6 +268,36 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
                 + "the delegate calling convention keys its argument/return channels by the exact "
                 + "signature, so a co/contravariant element binding silently drops values across the "
                 + "dispatch. Use matching delegate type parameters.");
+
+        // Object-laundering of a delegate-CARRYING array/tuple — the aggregate analogue of the scalar
+        // object→delegate bounded reject below. A generic `CastIt<Func<object>[]>(object o)` monomorphizes
+        // the `(T)o` cast's destination to Func<object>[]; its SOURCE is object, so neither the variant arm
+        // above (source carries no visible delegate) nor the scalar delegate arm below (destination is an
+        // array, not a named delegate) fires, and a bundle built for a DIFFERENT signature is reinterpreted,
+        // silently dropping values across the dispatch (VM-proven: r11 array/two-hop, ref=8 vs -1). Mirror
+        // the scalar bounded rule: allow only null/default or an operand that statically carries the SAME
+        // delegate structure (a same-sig source is already vetted by the variant arm; what remains dangerous
+        // is a source carrying NO visible delegate — object / object[]). Keep the value typed as its
+        // delegate-carrying type instead of routing it through object.
+        if ((variantDst is IArrayTypeSymbol || (variantDst as INamedTypeSymbol)?.IsTupleType == true)
+            && StructurallyContainsDelegate(variantDst, _ctx.TypeParamMap, new HashSet<ITypeSymbol>(SymbolEqualityComparer.Default)))
+        {
+            var stripped = conv.Operand;
+            while (stripped is IConversionOperation strippedConv) stripped = strippedConv.Operand;
+            var isNull = stripped is IDefaultValueOperation
+                || (stripped?.ConstantValue.HasValue == true && stripped.ConstantValue.Value == null);
+            var srcCarriesDelegate = StructurallyContainsDelegate(ResolveType(stripped?.Type),
+                _ctx.TypeParamMap, new HashSet<ITypeSymbol>(SymbolEqualityComparer.Default));
+            if (!isNull && !srcCarriesDelegate)
+                throw new System.NotSupportedException(
+                    $"Cast from '{(ResolveType(conv.Operand.Type) ?? conv.Operand.Type)?.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat) ?? "object"}' "
+                    + $"to delegate-carrying type '{variantDst.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}' is not supported: "
+                    + "the delegate calling convention keys its argument/return channels by the exact "
+                    + "signature, and a delegate boxed inside a non-delegate type carries no statically "
+                    + "visible signature, so a variant boxed delegate would silently drop values across the "
+                    + "dispatch. Keep the value typed as its delegate-carrying type instead of routing it "
+                    + "through object.");
+        }
 
         // Delegate-typed conversions are reference passthrough (design §2.3, fcd25): delegate → object is
         // box-free (the value already IS an object[] reference) and (Func<T>)objExpr cast-back keeps the

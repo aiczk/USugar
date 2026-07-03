@@ -126,6 +126,57 @@ public static class ExternResolver
         return IsUdonSharpBehaviour(type);
     }
 
+    // Layer-2 choke point: can a RUNTIME type test (SystemType.__IsInstanceOfType) against `target`
+    // honestly discriminate it? GetUdonTypeName is NON-INJECTIVE — it folds many distinct CLR types onto
+    // one Udon runtime tag, so a type test against a folded type matches ANY same-tag value and silently
+    // takes the wrong branch. Return FALSE (test cannot be honest → the caller MUST reject) for every type
+    // in a collapse set; TRUE only for a type whose Udon tag uniquely identifies it. This is the single
+    // predicate every runtime-type-test site routes through, so the unsoundness is closed by construction
+    // rather than by per-node guards. Resolve `target` through the type-param map first (a generic T
+    // monomorphizing to e.g. Func<object>[] must be classified as the concrete type it becomes).
+    public static bool IsRuntimeDistinguishable(ITypeSymbol target,
+        IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeParamMap)
+    {
+        while (target is ITypeParameterSymbol tp && typeParamMap != null
+            && typeParamMap.TryGetValue(tp, out var resolved))
+            target = resolved;
+
+        if (target == null) return false;
+
+        // Bare object: IsInstanceOfType(typeof(object), v) == `v is object` exactly for every value —
+        // the one universally answerable test, even though its tag "SystemObject" is otherwise shared.
+        if (target.SpecialType == SpecialType.System_Object) return true;
+
+        // Nullable<T> → boxed SystemObject: a runtime test cannot see through the box (any box matches).
+        if (target is INamedTypeSymbol nt && nt.OriginalDefinition.SpecialType == SpecialType.System_Nullable_T)
+            return false;
+
+        // Delegate / user struct / tuple: all fold to SystemObjectArray, sharing that tag with each other,
+        // with arrays of those, and with object[] itself. (IsAggregateType deliberately excludes delegates,
+        // so the delegate is tested on its own.)
+        if (target is INamedTypeSymbol dlg && dlg.DelegateInvokeMethod != null) return false;
+        if (EmitContext.IsAggregateType(target)) return false;
+
+        // User-defined enum → its underlying int tag (indistinguishable from int or a sibling enum). SDK
+        // enums keep a uniquely registered tag, so they stay distinguishable — mirror GetUdonTypeName's
+        // exact enum classification (source syntax refs AND non-SDK namespace).
+        if (target.TypeKind == TypeKind.Enum
+            && !target.DeclaringSyntaxReferences.IsEmpty
+            && !IsSdkNamespace(target.ContainingNamespace))
+            return false;
+
+        // The collapsing runtime tags themselves: SystemObjectArray (delegate/struct/tuple/array-of-those +
+        // object[]), IUdonEventReceiver (UdonSharpBehaviour + every derived type + UdonBehaviour + every
+        // user-defined interface), ComponentArray (arrays of the IUdonEventReceiver set).
+        var tag = GetUdonTypeName(target, typeParamMap);
+        if (tag == "SystemObjectArray"
+            || tag == "VRCUdonCommonInterfacesIUdonEventReceiver"
+            || tag == "UnityEngineComponentArray")
+            return false;
+
+        return true;
+    }
+
     public static string GetUdonTypeName(ITypeSymbol type)
     {
         // Array types

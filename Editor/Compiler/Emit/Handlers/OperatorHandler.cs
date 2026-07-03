@@ -395,12 +395,10 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
 
     CLeaf VisitIsType(IIsTypeOperation op)
     {
-        var valueVal = VisitExpression(op.ValueOperand);
-        var typeConst = Const(GetUdonType(op.TypeOperand), "SystemType");
-        return ExternCall(
-            "SystemType.__IsInstanceOfType__SystemObject__SystemBoolean",
-            new List<CLeaf> { typeConst, valueVal },
-            "SystemBoolean");
+        // A bare `x is T` (no binding) is exactly a type pattern without a variable — route it through the
+        // single guarded EmitTypeCheck so NO reachable path emits IsInstanceOfType without the layer-2
+        // distinguishability guard.
+        return EmitTypeCheck(VisitExpression(op.ValueOperand), op.TypeOperand);
     }
 
     CLeaf VisitIsPattern(IIsPatternOperation op)
@@ -701,22 +699,29 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
 
     CLeaf EmitTypeCheck(CLeaf valueVal, ITypeSymbol targetType)
     {
-        // Udon collapses EVERY delegate signature to the single runtime type SystemObjectArray
-        // (ExternResolver.GetUdonTypeName), so an IsInstanceOfType test against a delegate target can
-        // never discriminate Func<int> from Func<string> from Action<object> — any non-null delegate
-        // bundle "matches" any delegate pattern, taking the wrong branch (VM-proven control-flow
-        // divergence: `o is Func<int,int>` matched an actual 0-arg Func<string>) AND, on the match,
-        // binding the bundle to a delegate pattern variable that then reads the wrong __dlgc_ channel.
-        // The runtime cannot test a delegate's signature, so this pattern is unsupportable — reject
-        // loudly rather than emit a check that silently lies (design §8-3; keep the value typed as its
-        // delegate type instead of testing it through a base type).
-        if (ResolveType(targetType) is INamedTypeSymbol dlgTarget && dlgTarget.DelegateInvokeMethod != null)
+        // Layer-2 choke point. ExternResolver.GetUdonTypeName is non-injective: it folds many distinct CLR
+        // types onto one Udon runtime tag (every delegate/struct/tuple/array-of-those + object[] →
+        // SystemObjectArray; UdonSharpBehaviour + every derived type + every user interface →
+        // IUdonEventReceiver; a user enum → its underlying int; Nullable<T> → a box). A runtime type test
+        // (SystemType.__IsInstanceOfType) against such a type CANNOT discriminate it — it matches ANY
+        // same-tag value and silently takes the wrong branch (VM-proven: `o is Func<int,int>` matched a
+        // 0-arg Func<string>; `o is DerivedA` matches a DerivedB). Rather than emit a check that silently
+        // lies, reject loudly (design §8-3). This single guard subsumes the former delegate-only reject and
+        // closes struct/tuple/array/enum/interface/USB-derived; bare `object` and uniquely-tagged SDK/native
+        // types (int/string/Vector3/GameObject/SDK enums/int[]/…) stay distinguishable and compile.
+        if (!ExternResolver.IsRuntimeDistinguishable(targetType, _ctx.TypeParamMap))
+        {
+            var disp = ResolveType(targetType).ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat);
+            var hint = ResolveType(targetType) is INamedTypeSymbol dlgTarget && dlgTarget.DelegateInvokeMethod != null
+                ? " (Udon represents every delegate as one runtime type, so it cannot tell delegate signatures "
+                  + "apart and would match any delegate, then read the wrong argument/return channel)"
+                : "";
             throw new System.NotSupportedException(
-                $"Pattern-matching against delegate type '{dlgTarget.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}' "
-                + "is not supported: Udon represents every delegate as one runtime type, so a runtime type "
-                + "test cannot tell delegate signatures apart and would match any delegate (and then read the "
-                + "wrong argument/return channel). Keep the value typed as its delegate type instead of "
-                + "recovering it with an 'is'/'switch' pattern.");
+                $"Runtime type test against '{disp}' is not supported: Udon collapses it and several distinct "
+                + "types onto one runtime type tag, so an 'is'/'switch' type test cannot tell them apart and "
+                + "would match the wrong value" + hint + ". Keep the value typed as its static type instead of "
+                + "recovering it with a runtime type test.");
+        }
         var typeConst = Const(GetUdonType(targetType), "SystemType");
         return ExternCall(
             "SystemType.__IsInstanceOfType__SystemObject__SystemBoolean",
