@@ -83,7 +83,7 @@ public partial class InvocationHandler
         // is updated in-place. No copy-back needed for simple field targets.
         // For complex lvalues (array elements, cross-behaviour fields), use a temp field + copy-back.
         var argVals = new List<CLeaf>();
-        var outCopyBacks = new List<(int argIdx, string tempField)>();
+        var outCopyBacks = new List<(int argIdx, string tempField, System.Action<CLeaf> store)>();
         for (int i = 0; i < op.Arguments.Length; i++)
         {
             var param = target.Parameters[i];
@@ -102,13 +102,27 @@ public partial class InvocationHandler
                     argVals.Add(FieldAddr(fieldName, GetUdonType(param.Type)));
                     continue;
                 }
-                // Complex lvalue: use temp field + copy-back
+                // Complex lvalue: evaluate the receiver/index legs ONCE via the hardened
+                // TryPrepareRefOutArg machinery (wave-9 [Y12]) and copy back through the SAME
+                // legs — C# evaluates an argument's component expressions exactly once, at the
+                // argument's syntax position, before the call. Falls back to the legacy temp
+                // field + AssignToTarget for shapes it doesn't cover (e.g. captured env locals),
+                // which don't re-evaluate side-effecting legs.
                 var paramType = GetUdonType(param.Type);
                 var tempField = _ctx.DeclareLocal("outref", paramType);
+                var prepared = TryPrepareRefOutArg(op.Arguments[i]);
+                if (prepared is { } pre)
+                {
+                    if (param.RefKind == RefKind.Ref)
+                        EmitStoreField(tempField, pre.read());
+                    argVals.Add(FieldAddr(tempField, paramType));
+                    outCopyBacks.Add((i, tempField, pre.store));
+                    continue;
+                }
                 if (param.RefKind == RefKind.Ref)
                     EmitStoreField(tempField, VisitExpression(op.Arguments[i].Value));
                 argVals.Add(FieldAddr(tempField, paramType));
-                outCopyBacks.Add((i, tempField));
+                outCopyBacks.Add((i, tempField, null));
                 continue;
             }
             argVals.Add(VisitExpression(op.Arguments[i].Value));
@@ -138,10 +152,14 @@ public partial class InvocationHandler
         }
 
         // Copy-back for complex out/ref lvalues
-        foreach (var (argIdx, tempField) in outCopyBacks)
+        foreach (var (argIdx, tempField, store) in outCopyBacks)
         {
             var paramType = GetUdonType(target.Parameters[argIdx].Type);
-            AssignToTarget(op.Arguments[argIdx].Value, LoadField(tempField, paramType));
+            var val = LoadField(tempField, paramType);
+            if (store != null)
+                store(val);
+            else
+                AssignToTarget(op.Arguments[argIdx].Value, val);
         }
 
         return result;
