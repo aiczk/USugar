@@ -274,9 +274,93 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
                 && SymbolEqualityComparer.Default.Equals(t.Local, local):
                 writes.Add(sa.Value);
                 break;
+            // Wave-12 r7 [X6]: a tuple-deconstruction declaration/assignment writes the local through
+            // neither an initializer nor a simple assignment — pair the target tuple to its value tuple
+            // positionally (recursing through nested tuples) and add the matching value element.
+            case IDeconstructionAssignmentOperation da:
+                MatchDeconstruction(da.Target, da.Value, local, writes);
+                break;
         }
         foreach (var child in op.Children)
             CollectLocalWrites(child, local, writes);
+    }
+
+    static void MatchDeconstruction(IOperation target, IOperation value, ILocalSymbol local,
+        List<IOperation> writes)
+    {
+        while (target is IConversionOperation tc) target = tc.Operand;
+        while (value is IConversionOperation vc) value = vc.Operand;
+        if (target is ITupleOperation tt && value is ITupleOperation vt
+            && tt.Elements.Length == vt.Elements.Length)
+        {
+            for (int i = 0; i < tt.Elements.Length; i++)
+                MatchDeconstruction(tt.Elements[i], vt.Elements[i], local, writes);
+            return;
+        }
+        var te = target;
+        if (te is IDeclarationExpressionOperation de) te = de.Expression;
+        if (te is ILocalReferenceOperation lr && SymbolEqualityComparer.Default.Equals(lr.Local, local))
+            writes.Add(value);
+    }
+
+    /// <summary>The local/field/parameter storage symbol at the root of a reference expression, or
+    /// null for anything else (used to key array-element and array-reference writes).</summary>
+    static ISymbol RootStorageSymbol(IOperation op)
+    {
+        while (op != null)
+            switch (op)
+            {
+                case IConversionOperation c: op = c.Operand; break;
+                case ILocalReferenceOperation l: return l.Local;
+                case IFieldReferenceOperation f: return f.Field;
+                case IParameterReferenceOperation p: return p.Parameter;
+                default: return null;
+            }
+        return null;
+    }
+
+    static void CollectFieldWrites(IOperation op, IFieldSymbol field, List<IOperation> writes)
+    {
+        if (op == null) return;
+        if (op is ISimpleAssignmentOperation sa && sa.Target is IFieldReferenceOperation t
+            && SymbolEqualityComparer.Default.Equals(t.Field.OriginalDefinition, field.OriginalDefinition))
+            writes.Add(sa.Value);
+        foreach (var child in op.Children)
+            CollectFieldWrites(child, field, writes);
+    }
+
+    static void CollectArrayElementWrites(IOperation op, ISymbol arraySym, List<IOperation> writes)
+    {
+        if (op == null) return;
+        if (op is ISimpleAssignmentOperation sa && sa.Target is IArrayElementReferenceOperation t
+            && SymbolEqualityComparer.Default.Equals(RootStorageSymbol(t.ArrayReference), arraySym))
+            writes.Add(sa.Value);
+        foreach (var child in op.Children)
+            CollectArrayElementWrites(child, arraySym, writes);
+    }
+
+    static void CollectOutRefArgs(IOperation op, ILocalSymbol local, List<IArgumentOperation> args)
+    {
+        if (op == null) return;
+        if (op is IArgumentOperation arg && arg.Parameter is { RefKind: RefKind.Out or RefKind.Ref })
+        {
+            var v = arg.Value;
+            if (v is IDeclarationExpressionOperation de) v = de.Expression;
+            if (v is ILocalReferenceOperation lr && SymbolEqualityComparer.Default.Equals(lr.Local, local))
+                args.Add(arg);
+        }
+        foreach (var child in op.Children)
+            CollectOutRefArgs(child, local, args);
+    }
+
+    static void CollectParamAssignments(IOperation op, IParameterSymbol param, List<IOperation> values)
+    {
+        if (op == null) return;
+        if (op is ISimpleAssignmentOperation sa && sa.Target is IParameterReferenceOperation pr
+            && SymbolEqualityComparer.Default.Equals(pr.Parameter, param))
+            values.Add(sa.Value);
+        foreach (var child in op.Children)
+            CollectParamAssignments(child, param, values);
     }
 
     static void CollectParamEvidence(IOperation op, IMethodSymbol method, IParameterSymbol param,
@@ -323,10 +407,25 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
             return DelegateAbi.BuildSigPart(invoke, _ctx.TypeParamMap) != dstSig ? val.Type : null;
         if (val is ILocalReferenceOperation lr && lr.Local != null && visited.Add(lr.Local))
         {
+            var root = OperationRoot(val);
             var writes = new List<IOperation>();
-            CollectLocalWrites(OperationRoot(val), lr.Local, writes);
+            CollectLocalWrites(root, lr.Local, writes);
             foreach (var w in writes)
                 if (DivergingDelegateEvidence(w, dstSig, visited) is { } t) return t;
+            // Wave-12 r7 [X5]/[X7]: the local written through an out/ref argument — the producing
+            // value is whatever the callee assigns to its by-ref parameter, invisible at the call
+            // site. Trace the callee body's assignments to that parameter.
+            var refArgs = new List<IArgumentOperation>();
+            CollectOutRefArgs(root, lr.Local, refArgs);
+            foreach (var arg in refArgs)
+                if (arg.Parameter is { } rp && rp.ContainingSymbol is IMethodSymbol rm
+                    && visited.Add(rp) && MethodBody(rm) is { } rbody)
+                {
+                    var pvals = new List<IOperation>();
+                    CollectParamAssignments(rbody, rp, pvals);
+                    foreach (var v in pvals)
+                        if (DivergingDelegateEvidence(v, dstSig, visited) is { } t) return t;
+                }
         }
         if (val is IParameterReferenceOperation pr && pr.Parameter != null && visited.Add(pr.Parameter)
             && pr.Parameter.ContainingSymbol is IMethodSymbol pm)
@@ -344,6 +443,42 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
                     if (DivergingDelegateEvidence(v, dstSig, visited) is { } t) return t;
             }
         }
+        // Wave-12 r7 [X2]: a get-only PROPERTY whose getter returns the object-boxed producer
+        // (`object boxed = BoxedNarrow;`) — trace the visible getter's return expressions, exactly
+        // like the method-call branch below. Auto-property / metadata getters have no visible body
+        // and keep flowing.
+        if (val is IPropertyReferenceOperation propRef && propRef.Property?.GetMethod is { } getter
+            && visited.Add(getter.OriginalDefinition) && MethodBody(getter) is { } getBody)
+        {
+            var returns = new List<IOperation>();
+            CollectReturns(getBody, returns);
+            foreach (var r in returns)
+                if (DivergingDelegateEvidence(r, dstSig, visited) is { } t) return t;
+        }
+        // Wave-12 r7 [X3]: a FIELD holding the object-boxed producer (`_stash = narrow; object boxed
+        // = _stash;`) — trace class-family assignments to the field.
+        if (val is IFieldReferenceOperation fref && fref.Field != null
+            && visited.Add(fref.Field.OriginalDefinition))
+        {
+            var writes = new List<IOperation>();
+            foreach (var body in ClassFamilyBodies())
+                CollectFieldWrites(body, fref.Field, writes);
+            foreach (var w in writes)
+                if (DivergingDelegateEvidence(w, dstSig, visited) is { } t) return t;
+        }
+        // Wave-12 r7 [X4]: an ARRAY ELEMENT holding the object-boxed producer (`arr[0] = narrow;
+        // object boxed = arr[0];`) — trace class-family element assignments to the same array storage
+        // symbol. Index-insensitive: any diverging element write is evidence (a same-sig control keeps
+        // flowing because every element write agrees).
+        if (val is IArrayElementReferenceOperation aref
+            && RootStorageSymbol(aref.ArrayReference) is { } arrSym && visited.Add(arrSym))
+        {
+            var writes = new List<IOperation>();
+            foreach (var body in ClassFamilyBodies())
+                CollectArrayElementWrites(body, arrSym, writes);
+            foreach (var w in writes)
+                if (DivergingDelegateEvidence(w, dstSig, visited) is { } t) return t;
+        }
         // Wave-12 r6 [X5]: a same-class method CALL whose return value is the object-boxed producer
         // (`object boxed = Identity(narrow);`) — trace into the callee's return expressions. A return
         // that yields a parameter is picked up by the IParameterReferenceOperation branch above (which
@@ -354,8 +489,13 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
             && visited.Add(inv.TargetMethod.OriginalDefinition)
             && MethodBody(inv.TargetMethod) is { } invBody)
         {
+            // Wave-12 r7 [X1]: a LOCAL FUNCTION target's body op IS the ILocalFunctionOperation node;
+            // descend into its .Body so CollectReturns' nested-function guard doesn't bail on the very
+            // body we came to inspect (an instance-method target's body op is not a local function, so
+            // this is a no-op for the r6 case).
+            var scanBody = invBody is ILocalFunctionOperation invLf ? (IOperation)invLf.Body : invBody;
             var returns = new List<IOperation>();
-            CollectReturns(invBody, returns);
+            CollectReturns(scanBody, returns);
             foreach (var r in returns)
                 if (DivergingDelegateEvidence(r, dstSig, visited) is { } t) return t;
         }
