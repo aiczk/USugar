@@ -299,6 +299,15 @@ public class UasmEmitter
             }
         }
 
+        // Field-like events (design §2.1, A-M2): materialize each as a private multicast delegate field
+        // via the SAME DeclareDelegateField choke point plain delegate fields use (heap var = event
+        // name, DelegateFields registration, __dlgc_{sig} conv globals, sync/NetworkCallable/tuple-
+        // return/ref-out reject all inherited for free). The compiler-synthesized backing IFieldSymbol
+        // stays IsImplicitlyDeclared and is skipped by the field loop above — materialize here instead,
+        // so it never double-declares.
+        foreach (var evt in _classSymbol.GetMembers().OfType<IEventSymbol>())
+            DeclareEvent(evt);
+
         // Properties → declare as heap variables
         foreach (var prop in _classSymbol.GetMembers().OfType<IPropertySymbol>())
         {
@@ -338,9 +347,11 @@ public class UasmEmitter
         // Non-const, non-mutable static readonly fields are tracked here too (feature B materializes
         // them into a heap var by the same bare name) — a static MUTABLE field gets no storage, so
         // reusing its name lower in the hierarchy collides with nothing and is left untracked.
+        // Field-like events materialize storage under their bare name too (DeclareEvent/DeclareDelegateField)
+        // — tracked here so a base field/prop/event of the same name collides loudly (design §8 item 6).
         var declaredMemberSyms = new Dictionary<string, ISymbol>();
         foreach (var m in _classSymbol.GetMembers())
-            if (m is IFieldSymbol or IPropertySymbol && !m.IsImplicitlyDeclared
+            if (m is IFieldSymbol or IPropertySymbol or IEventSymbol && !m.IsImplicitlyDeclared
                 && (!m.IsStatic || (m is IFieldSymbol { IsReadOnly: true, HasConstantValue: false }))
                 && !declaredMemberSyms.ContainsKey(m.Name))
                 declaredMemberSyms[m.Name] = m;
@@ -419,6 +430,15 @@ public class UasmEmitter
                     _fieldChangeCallbacks[member.Name] = basePropName;
                     _ctx.DeclareField($"__old_{member.Name}", udonType);
                 }
+            }
+            // Field-like events inherited from a user base class (design §2.1, A-M2) — same
+            // shadow-collision guard as base fields/props (design §8 item 6).
+            foreach (var evt in baseType.GetMembers().OfType<IEventSymbol>())
+            {
+                if (declaredMemberSyms.TryGetValue(evt.Name, out var evtShadower))
+                    throw new NotSupportedException(ShadowedStorageError(evt, evtShadower));
+                DeclareEvent(evt);
+                declaredMemberSyms[evt.Name] = evt;
             }
             foreach (var prop in baseType.GetMembers().OfType<IPropertySymbol>())
             {
@@ -614,17 +634,28 @@ public class UasmEmitter
     /// (which reads no sync attributes at all) compiled the synced delegate field CLEAN with no .sync
     /// directive. An initializer (e.g. `public Action cb = M;`) always becomes runtime bundle construction
     /// at _start via _fieldInitOps, which also fixes the old silent drop of derived-class initializers.
-    /// Shared by the derived-class and base-class field paths.
+    /// Shared by the derived-class and base-class field paths — AND (design §2.1, A-M2) by field-like
+    /// event materialization: an IEventSymbol exposes the same ISymbol surface this method actually
+    /// uses (GetAttributes/Name/DeclaringSyntaxReferences — the delegate TYPE is passed separately by
+    /// every caller), so widening from IFieldSymbol to ISymbol is behavior-neutral for existing callers.
     /// </summary>
-    void DeclareDelegateField(IFieldSymbol member, INamedTypeSymbol delegateType)
+    void DeclareDelegateField(ISymbol member, INamedTypeSymbol delegateType)
     {
-        // M4 [T2]: Udon sync cannot carry the object[] bundle (the on-device security filter over
+        // M4 [T2]: Udon sync cannot carry the object[] bundle (the on-game security filter over
         // synced vars is the unverified design §8-7 risk) — loud on BOTH declaration paths.
         if (member.GetAttributes().Any(a => a.AttributeClass?.Name == "UdonSyncedAttribute"))
             throw new NotSupportedException(
                 $"[UdonSynced] delegate field '{member.Name}' cannot be synced: a delegate value is a "
                 + "runtime object[] bundle (target/method/addr), which Udon sync cannot carry. Sync "
                 + "plain data instead and re-create the delegate locally.");
+        // Design §2.4 (A-M2): [NetworkCallable] marks a METHOD as a remotely-invokable entry point —
+        // it has no meaning on a delegate value (a bundle is program-local and cannot cross the
+        // network), so reject it the same way RejectNetworkCallableDelegates rejects a delegate-typed
+        // method param/return. Applies uniformly to plain delegate fields and event backing storage.
+        if (member.GetAttributes().Any(a => a.AttributeClass?.Name == "NetworkCallableAttribute"))
+            throw new NotSupportedException(
+                $"[NetworkCallable] delegate '{member.Name}' is not supported: NetworkCallable marks a "
+                + "method as a remotely-invokable entry point, which does not apply to a delegate value.");
         if (delegateType.DelegateInvokeMethod.ReturnType.IsTupleType)
             throw new NotSupportedException($"Tuple-return delegate field '{member.Name}' is not supported.");
         // §3.4-1: ref/out delegate signatures are rejected at the convention-var declaration side too.
@@ -656,8 +687,35 @@ public class UasmEmitter
             var initOp = (model.GetOperation(dlgDeclarator.Initializer) as ISymbolInitializerOperation)?.Value
                          ?? model.GetOperation(dlgDeclarator.Initializer.Value);
             if (initOp != null)
-                _fieldInitOps.Add((member.Name, initOp, member.Type));
+                _fieldInitOps.Add((member.Name, initOp, delegateType)); // delegateType == member.Type (caller-supplied)
         }
+    }
+
+    /// <summary>
+    /// Field-like event materialization (design §2.1, A-M2). Custom-accessor events
+    /// (`event E { add{...} remove{...} }`) are R1 — field-like only, since a custom add/remove has no
+    /// well-defined backing storage this model can materialize. Static events have no shared-memory
+    /// story on Udon (no design provision at all — same rationale as static mutable fields, R8) and are
+    /// rejected rather than silently materialized as per-instance storage, which would diverge from C#'s
+    /// single shared static event. Shared by the derived-class and base-class event paths.
+    /// </summary>
+    void DeclareEvent(IEventSymbol evt)
+    {
+        if (evt.IsStatic)
+            throw new NotSupportedException(
+                $"Static event '{evt.Name}' is not supported: the Udon VM has no shared static storage "
+                + "(same reason static mutable fields are unsupported). Use an instance event.");
+        // Field-like events get compiler-synthesized (IsImplicitlyDeclared) add/remove accessors; a
+        // custom accessor body means the user wrote add{...}/remove{...} explicitly.
+        if (evt.AddMethod == null || !evt.AddMethod.IsImplicitlyDeclared
+            || evt.RemoveMethod == null || !evt.RemoveMethod.IsImplicitlyDeclared)
+            throw new NotSupportedException(
+                $"Custom-accessor event '{evt.Name}' (add{{...}}/remove{{...}}) is not supported; only "
+                + "field-like events ('event Action Foo;') are, since a custom accessor has no "
+                + "well-defined backing storage to materialize.");
+        if (evt.Type is not INamedTypeSymbol delegateType || delegateType.DelegateInvokeMethod == null)
+            throw new NotSupportedException($"Event '{evt.Name}' has a non-delegate type.");
+        DeclareDelegateField(evt, delegateType);
     }
 
     /// <summary>True when <paramref name="ancestor"/> is reachable from <paramref name="leaf"/> via

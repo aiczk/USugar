@@ -7,12 +7,14 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
 {
     public CompoundAssignmentHandler(EmitContext ctx) : base(ctx) { }
 
-    public bool CanHandle(IOperation op) => op is ICompoundAssignmentOperation or IIncrementOrDecrementOperation;
+    public bool CanHandle(IOperation op)
+        => op is ICompoundAssignmentOperation or IIncrementOrDecrementOperation or IEventAssignmentOperation;
 
     public CLeaf Handle(IOperation op) => op switch
     {
         ICompoundAssignmentOperation compound => VisitCompoundAssignment(compound),
         IIncrementOrDecrementOperation incDec => VisitIncrementDecrement(incDec),
+        IEventAssignmentOperation evtAssign => VisitEventAssignment(evtAssign),
         _ => throw new System.NotSupportedException(op.GetType().Name),
     };
 
@@ -125,6 +127,55 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
         var resultVal = _builder.InternalCall(helperName, new List<CLeaf> { leftVal, rightVal }, "SystemObjectArray");
         EmitWriteBack(op.Target, resultVal, lv);
         return resultVal;
+    }
+
+    /// <summary>
+    /// `evt += h` / `evt -= h` (design §2.2, A-M2): Roslyn models event add/remove as
+    /// IEventAssignmentOperation, distinct from ICompoundAssignmentOperation — same combine/remove
+    /// helper lowering as a plain delegate field's `+=`/`-=` (§1.4), just against the event's backing
+    /// storage (UasmEmitter.DeclareEvent) instead of an lvalue-captured target. Same-program only:
+    /// cross-behaviour subscribe (`other.Foo += h`) is a LOUD reject (§2.2) — the add accessor would
+    /// need to run ON the target program, which this compiler cannot combine into from here.
+    /// </summary>
+    CLeaf VisitEventAssignment(IEventAssignmentOperation op)
+    {
+        if (op.EventReference is not IEventReferenceOperation evtRef)
+            throw new System.NotSupportedException("Unsupported event assignment target.");
+        var evt = evtRef.Event;
+
+        // R1 armor: custom-accessor events never get backing storage (UasmEmitter.DeclareEvent already
+        // loud-rejects them at declaration) — if one somehow reached here, fail loud rather than write
+        // to nonexistent storage.
+        if (evt.AddMethod == null || !evt.AddMethod.IsImplicitlyDeclared
+            || evt.RemoveMethod == null || !evt.RemoveMethod.IsImplicitlyDeclared)
+            throw new System.NotSupportedException(
+                $"Custom-accessor event '{evt.Name}' (add{{...}}/remove{{...}}) is not supported.");
+
+        // §2.2 R2: cross-behaviour subscribe. A this-receiver is the ONLY supported shape.
+        if (evtRef.Instance is not IInstanceReferenceOperation)
+            throw new System.NotSupportedException(
+                "cross-behaviour event subscription is not supported; combine into a delegate field the "
+                + "target exposes, or subscribe from within the declaring behaviour.");
+
+        var delegateType = (INamedTypeSymbol)evt.Type;
+        var invoke = delegateType.DelegateInvokeMethod;
+        DelegateAbi.ValidateNoRefOutParams(invoke);
+        if (!invoke.ReturnsVoid && invoke.ReturnType.IsTupleType)
+            throw new System.NotSupportedException($"Tuple-return delegate event '{evt.Name}' is not supported.");
+
+        var currentVal = LoadField(evt.Name, "SystemObjectArray");
+        var handlerVal = VisitExpression(op.HandlerValue);
+
+        var sigPart = DelegateAbi.BuildSigPart(invoke, _ctx.TypeParamMap);
+        RegisterMulticastSig(sigPart, invoke);
+
+        var helperName = op.Adds
+            ? DelegateAbi.MulticastCombineName(sigPart)
+            : DelegateAbi.MulticastRemoveName(sigPart);
+
+        var resultVal = _builder.InternalCall(helperName, new List<CLeaf> { currentVal, handlerVal }, "SystemObjectArray");
+        EmitStoreField(evt.Name, resultVal);
+        return null; // event add/remove is a void-shaped statement expression
     }
 
     CLeaf PromoteToInt32(CLeaf value, string srcUdonType)

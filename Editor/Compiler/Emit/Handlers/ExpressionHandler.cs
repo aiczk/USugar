@@ -11,6 +11,7 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
         => expression is ILiteralOperation
             or ILocalReferenceOperation
             or IFieldReferenceOperation
+            or IEventReferenceOperation
             or IParameterReferenceOperation
             or IInstanceReferenceOperation
             or IConversionOperation
@@ -37,6 +38,7 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
                                                      : LoadField(localBinding.Id, GetUdonType(localRef.Type))
                                                  : throw new InvalidOperationException($"Cannot resolve local variable '{localRef.Local.Name}' in method '{_currentMethod?.Name ?? "(none)"}'."),
         IFieldReferenceOperation op => VisitFieldReference(op),
+        IEventReferenceOperation op => VisitEventReference(op),
         IParameterReferenceOperation paramRef when _ctx.TryGetEnvBinding(paramRef.Parameter, out _)
             => ResolveType(paramRef.Type) is INamedTypeSymbol epaggT && EmitContext.IsAggregateType(epaggT)
                    ? EmitDeepCloneAggregate(EnvEmit.Read(_builder, _ctx, paramRef.Parameter, "SystemObjectArray"), epaggT)
@@ -185,6 +187,28 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
                 new List<CLeaf> { instanceVal },
                 fldType);
         }
+    }
+
+    // ── Event Reference ──
+
+    /// <summary>
+    /// Field-like event value read (design §2.3, A-M2): within the declaring class (or a class that
+    /// inherits it), `Foo` used as a plain value/invoke receiver resolves to its backing multicast
+    /// delegate field — same SystemObjectArray load a this-field read uses (UasmEmitter.DeclareEvent
+    /// materialized the storage under the event's bare name). `+=`/`-=` never reach here (they are
+    /// IEventAssignmentOperation, handled by CompoundAssignmentHandler.VisitEventAssignment).
+    /// Defensive reject: C# only allows a non-this-receiver event reference via `+=`/`-=`; reading or
+    /// invoking `other.Foo` directly is a Roslyn compile error that should never reach an IOperation
+    /// tree — this is armor for a future registration gap (§8-3), not a reachable user-facing path.
+    /// </summary>
+    CLeaf VisitEventReference(IEventReferenceOperation eventRef)
+    {
+        if (eventRef.Instance is not IInstanceReferenceOperation)
+            throw new NotSupportedException(
+                $"Cannot reference event '{eventRef.Event.Name}' through a non-this receiver; only "
+                + "`+=`/`-=` may target another behaviour's event (and cross-behaviour subscribe is "
+                + "itself rejected — see the event add/remove diagnostic).");
+        return LoadField(eventRef.Event.Name, "SystemObjectArray");
     }
 
     // ── Conversion ──
