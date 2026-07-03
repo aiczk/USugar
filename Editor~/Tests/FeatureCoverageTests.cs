@@ -1614,19 +1614,22 @@ public class NullInvokeDlg : UdonSharpBehaviour {
             "the dispatch JUMP_INDIRECT must be guard-dominated");
     }
 
-    // ── += throws ──
+    // ── += lowers to the multicast combine helper (design 2026-07-03 §1.4, A-M1) ──
+    // Formerly a loud reject ("Multicast delegates (+=/-=) are not supported"); the design promotes
+    // it to the combine/remove + fan-out synthesis pinned in MulticastDelegateTests.
 
     [Fact]
-    public void DelegateField_PlusEquals_ThrowsNotSupported()
+    public void DelegateField_PlusEquals_LowersToCombineHelperAndFanout()
     {
-        var ex = Assert.ThrowsAny<Exception>(() => TestHelper.CompileToUasm(@"
+        var uasm = TestHelper.CompileToUasm(@"
 using UdonSharp;
 using System;
 public class DlgPlusEq : UdonSharpBehaviour {
     public Action callback;
     void Start() { callback += () => { }; }
-}", "DlgPlusEq"));
-        Assert.Contains("Multicast", ex.Message);
+}", "DlgPlusEq");
+        Assert.Contains("__dlg_combine_", uasm);
+        Assert.Contains("__dlg_fanout_", uasm);
     }
 
     // ── Delegate property throws ──

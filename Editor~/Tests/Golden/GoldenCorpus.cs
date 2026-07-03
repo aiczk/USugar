@@ -178,6 +178,25 @@ public class StructRefParam : UdonSharpBehaviour {
   public int result;
   void Start(){ result = Table[0] + fromTable; }
 }"),
+        // Multicast combine + fan-out (design 2026-07-03 §1, feature A A-M1): a loop-built `+=`
+        // (three handlers subscribed) followed by a single fire — pins the __dlg_combine_/__dlg_remove_/
+        // __dlg_fanout_{sig} synthesis and the CompoundAssignmentHandler lowering byte-exact, the
+        // canonical baseline the A-M1 gate requires (§6). Single-cast golden stays untouched — this is
+        // an ADDED baseline, not a regeneration of an existing one.
+        ("multicast_loop_combine_fanout", "MulticastLoopCombineFanout",
+@"using System; using UdonSharp; public class MulticastLoopCombineFanout : UdonSharpBehaviour {
+  public int[] trace;
+  public int n;
+  public int lastRet;
+  Func<int> d;
+  void Start(){
+    for (int i = 0; i < 3; i++){
+      int captured = i;
+      d += () => { trace[n++] = captured; return captured; };
+    }
+    lastRet = d();
+  }
+}"),
     };
 
     public static (string Name, string ClassName, string Source) ByName(string name)
