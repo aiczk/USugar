@@ -30,6 +30,23 @@ public static class ExternResolver
     internal const string MultidimArrayMessage =
         "Multi-dimensional arrays (int[,]) are not supported: use a jagged array (int[][]) or a flat array with manual indexing";
 
+    /// <summary>A user-authored reference type (class Foo {...}, record Foo): TypeKind.Class, source-defined
+    /// in this compilation, not an SDK/Unity/System stand-in, and not a UdonSharpBehaviour. Distinct from a
+    /// genuine foreign/SDK class (VRCUrl, DataList, …), which routes through the SAME extern-name-based
+    /// method/ctor dispatch but has REAL registered externs — that distinction can only be checked at a
+    /// specific call site (via IsExternValid against the exact candidate name), not from the type alone, so
+    /// this predicate only narrows the shape; the caller decides whether a matching extern exists.</summary>
+    public static bool IsPlainUserClass(ITypeSymbol type)
+    {
+        if (type is not INamedTypeSymbol named) return false;
+        if (named.TypeKind != TypeKind.Class) return false;
+        if (named.SpecialType != SpecialType.None) return false; // string, object, … — natively supported
+        if (named.DeclaringSyntaxReferences.IsEmpty) return false; // compiled assembly (SDK/Unity/System)
+        if (IsSdkNamespace(named.ContainingNamespace)) return false;
+        if (IsUdonSharpBehaviour(named)) return false;
+        return true;
+    }
+
     static readonly Dictionary<string, string> UdonTypeRemap = new()
     {
         ["UdonSharpUdonSharpBehaviour"] = "VRCUdonCommonInterfacesIUdonEventReceiver",

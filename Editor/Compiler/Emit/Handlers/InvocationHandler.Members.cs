@@ -401,6 +401,24 @@ public partial class InvocationHandler
             return Const(null, resultType);
         }
 
+        // Plain user-defined reference type (class Foo {...}, record Foo): Udon has no runtime heap
+        // allocation for user types, and unlike a user struct there is no object[] emulation to fall back
+        // to. Left unguarded, a ctor with no registered extern would reach ExternCall below and crash
+        // opaquely ("Unknown extern: Foo__ctor__..."). A genuine foreign/SDK class (VRCUrl, DataList, …)
+        // shares this same TypeKind/namespace shape but HAS a real registered ctor extern — checked here via
+        // IsExternValid so that case still compiles; IsExternValid==null (not wired up) stays permissive,
+        // matching every other optional-check use of it in this compiler.
+        if (!op.Type.IsValueType && ExternResolver.IsPlainUserClass(op.Type))
+        {
+            var ctorParamTypes = op.Arguments.Select(a => GetUdonType(a.Value.Type)).ToArray();
+            var ctorCandidate = $"{resultType}.__ctor__{string.Join("_", ctorParamTypes)}__{resultType}";
+            if (ExternResolver.IsExternValid != null && !ExternResolver.IsExternValid(ctorCandidate))
+                throw new NotSupportedException(
+                    $"User-defined reference types (class '{op.Type.Name}') are not supported: the Udon VM "
+                    + $"has no runtime heap allocation for user types. Convert '{op.Type.Name}' to a struct "
+                    + "(value type), or to a UdonSharpBehaviour referenced through a scene object.");
+        }
+
         // Parameterless struct ctor. A user struct used AS A VALUE (e.g. `_field = new V()`, `Foo(new V())`)
         // must allocate + default-init a fresh object[]; the local-declaration path already does this, but
         // other contexts reach here. SDK value types fall through to the null placeholder.
