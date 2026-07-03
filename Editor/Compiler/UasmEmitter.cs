@@ -3106,6 +3106,15 @@ public class UasmEmitter
             var syntax = syntaxRef.GetSyntax();
             CollectStructMethodsInOperation(_compilation.GetSemanticModel(syntax.SyntaxTree).GetOperation(syntax), result);
         }
+        // Field initializers (instance + static) can construct/call a user-struct member OUTSIDE any
+        // method body (`private MyStruct _s = new MyStruct(1, 2);`) — EmitFields() has already populated
+        // both lists by the time this runs. Without this, VisitObjectCreation's S1 check
+        // (_methodFunctions.ContainsKey(op.Constructor)) never sees a ctor used ONLY in a field
+        // initializer and falls back to a bogus SystemObjectArray extern (roadmap B41).
+        foreach (var (_, initOp, _) in _fieldInitOps)
+            CollectStructMethodsInOperation(initOp, result);
+        foreach (var (_, initOp, _) in _staticFieldInitOps)
+            CollectStructMethodsInOperation(initOp, result);
         var visited = new HashSet<IMethodSymbol>(result, SymbolEqualityComparer.Default);
         var queue = new Queue<IMethodSymbol>(result);
         while (queue.Count > 0)

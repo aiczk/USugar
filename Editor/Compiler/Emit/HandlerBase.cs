@@ -339,6 +339,33 @@ public abstract class HandlerBase
         return SlotRef(slot);
     }
 
+    /// <summary>Apply `new T { A = x, B = y }`-style object-initializer assignments to an aggregate
+    /// (tuple/user-struct) value already allocated as an object[]. Each member write is a layout-INDEX
+    /// __Set__ (object[]-emulated structs have no native per-field extern), mirroring
+    /// VisitAggregateLocalDeclaration's local-declaration lowering — object creation used outside a local
+    /// declaration (field initializer, argument, return value, …) shares this same S1 path (roadmap B41).</summary>
+    protected void EmitAggregateObjectInitializer(CLeaf instanceVal, INamedTypeSymbol aggType,
+        IObjectOrCollectionInitializerOperation initializer)
+    {
+        if (initializer == null) return;
+        var layout = _ctx.GetAggregateLayout(aggType);
+        foreach (var member in initializer.Initializers)
+        {
+            if (member is not ISimpleAssignmentOperation sa) continue;
+            var memberName = sa.Target switch
+            {
+                IFieldReferenceOperation fr => fr.Field.Name,
+                IPropertyReferenceOperation pr => pr.Property.Name,
+                _ => null,
+            };
+            if (memberName != null && layout.TryGetIndex(memberName, out var idx))
+            {
+                EmitExternVoid(ExternResolver.BuildArraySetSignature("SystemObjectArray", "SystemObject"),
+                    new List<CLeaf> { instanceVal, Const(idx, "SystemInt32"), VisitExpression(sa.Value) });
+            }
+        }
+    }
+
     /// <summary>Set each value-type element of an object[]-emulated aggregate to its type default; a nested
     /// aggregate field is recursively allocated + default-initialized rather than left null.</summary>
     protected void EmitDefaultInitAggregate(CValue arrayVal, AggregateLayout layout)

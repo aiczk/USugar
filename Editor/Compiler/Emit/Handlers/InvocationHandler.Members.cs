@@ -454,7 +454,22 @@ public partial class InvocationHandler
             foreach (var arg in op.Arguments)
                 ctorArgs.Add(VisitExpression(arg.Value));
             EmitExprStmt(EmitCallToMethod(op.Constructor, ctorArgs));
+            // ctor + object-initializer combo (`new V(1,2) { Y = 3 }`): apply the initializer AFTER the
+            // ctor runs, same order C# gives the fields (roadmap B41 (d)).
+            EmitAggregateObjectInitializer(SlotRef(slot), userStruct, op.Initializer);
             return SlotRef(slot);
+        }
+
+        // User struct / tuple object initializer with NO ctor args (`new V { X = 1 }`): allocate +
+        // default-init the object[] like the local-declaration path, then apply the initializer via
+        // layout-INDEX writes. The generic fallback below assumes a native per-field setter extern (SDK
+        // value types like Vector3), which object[]-emulated aggregates don't have (roadmap B41).
+        if (op.Arguments.Length == 0 && op.Type.IsValueType && op.Initializer != null
+            && op.Type is INamedTypeSymbol aggInitType && EmitContext.IsAggregateType(aggInitType))
+        {
+            var aggVal = EmitNewAggregate(aggInitType);
+            EmitAggregateObjectInitializer(aggVal, aggInitType, op.Initializer);
+            return aggVal;
         }
 
         CLeaf resultVal;
