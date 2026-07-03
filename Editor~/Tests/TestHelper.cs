@@ -231,6 +231,7 @@ namespace UnityEngine
         public static float Abs(float f) => f;
         public static float Sign(float f) => 1;
         public static bool Approximately(float a, float b) => true;
+        public static float SmoothDamp(float current, float target, ref float currentVelocity, float smoothTime) => current;
     }
     public struct Ray {
         public Vector3 origin { get; set; }

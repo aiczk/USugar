@@ -1,0 +1,111 @@
+using System;
+using Xunit;
+
+namespace USugar.Tests;
+
+/// <summary>
+/// The extern (foreign, non-UdonSharp) ref/out copy-back path double-evaluates (or mis-times)
+/// complex lvalue legs — the wave-9 [Y12]/[Y16] fixes hardened the USER-method ref/out path
+/// (TryPrepareRefOutArg/EmitRefOutCopyBack) but EmitExternMethodCall's own copy-back
+/// (InvocationHandler.Extern.cs) still reads the initial value via a raw VisitExpression and
+/// writes back via the legacy AssignToTarget, which re-evaluates the array index / behaviour
+/// receiver legs a second time after the call.
+/// </summary>
+public class ExternRefOutSideEffectTests
+{
+    [Fact]
+    public void RefExtern_ArrayElement_IndexLegEvaluatesOnce()
+    {
+        // Mathf.SmoothDamp(float, float, ref float, float) is a genuine Udon extern with a
+        // RefKind.Ref (not Out) parameter. Pre-fix: the index leg (Math.Abs) is evaluated once at
+        // the copy-in read (EmitExternMethodCall line ~109) and AGAIN at copy-back (AssignToTarget's
+        // array-element arm re-evaluates arrayElem.Indices[0]) — two occurrences instead of one.
+        var uasm = TestHelper.CompileToUasm(@"
+using System;
+using UnityEngine;
+using UdonSharp;
+public class ExtRefArrLeg : UdonSharpBehaviour {
+    public int seed; public float v0; public float v1;
+    void Start() {
+        float[] vel = new float[2];
+        Mathf.SmoothDamp(1f, 2f, ref vel[Math.Abs(seed) % 2], 0.5f);
+        v0 = vel[0]; v1 = vel[1];
+    }
+}", "ExtRefArrLeg");
+        AssertExternCount(uasm, "SystemMath.__Abs__SystemInt32__SystemInt32", 1);
+    }
+
+    [Fact]
+    public void OutExtern_ArrayElement_IndexLegEvaluatesBeforeCall()
+    {
+        // int.TryParse(string, out int) is a genuine Udon extern with a RefKind.Out parameter.
+        // C# evaluates an argument's component expressions (here, the index leg) at the argument's
+        // syntax position, BEFORE the call — pre-fix, EmitExternMethodCall skips the copy-in read for
+        // Out params entirely and only evaluates the index leg in the copy-back AFTER the call, so
+        // the Math.Abs extern is emitted after (not before) the TryParse extern.
+        var uasm = TestHelper.CompileToUasm(@"
+using System;
+using UdonSharp;
+public class ExtOutArrLeg : UdonSharpBehaviour {
+    public int seed; public int r0; public int r1;
+    void Start() {
+        int[] a = new int[2];
+        int.TryParse(""5"", out a[Math.Abs(seed) % 2]);
+        r0 = a[0]; r1 = a[1];
+    }
+}", "ExtOutArrLeg");
+        AssertExternCount(uasm, "SystemMath.__Abs__SystemInt32__SystemInt32", 1);
+        string code = uasm.Substring(uasm.IndexOf(".code_start", StringComparison.Ordinal));
+        int absIdx = code.IndexOf("SystemMath.__Abs__SystemInt32__SystemInt32", StringComparison.Ordinal);
+        int tryParseIdx = code.IndexOf("SystemInt32.__TryParse__SystemString_SystemInt32Ref__SystemBoolean", StringComparison.Ordinal);
+        Assert.True(absIdx >= 0 && tryParseIdx >= 0, "expected externs missing");
+        Assert.True(absIdx < tryParseIdx,
+            "the index leg must be evaluated BEFORE the extern call, matching C# argument-evaluation order");
+    }
+
+    [Fact]
+    public void RefExtern_BehaviourArrayElementField_ReceiverLegEvaluatesOnce()
+    {
+        // hs[Pick()].pub as a `ref` argument to a genuine extern (Mathf.SmoothDamp): pre-fix, the
+        // receiver leg (hs[Pick()], an array Get) is read once at copy-in and re-evaluated at
+        // copy-back (AssignToTarget's cross-behaviour-field arm), so Pick() runs twice and the
+        // UnityEngineComponentArray.__Get__ extern appears twice instead of once.
+        var uasm = TestHelper.CompileToUasm(@"
+using UnityEngine;
+using UdonSharp;
+public class ExtRefBehField : UdonSharpBehaviour {
+    ExtRefBehField[] hs;
+    int cur;
+    public float pub; public int trace; public float total;
+    void Start() {
+        hs = new ExtRefBehField[2];
+        hs[0] = this;
+        hs[1] = this;
+        pub = 1.5f;
+        Mathf.SmoothDamp(1f, 2f, ref hs[Pick()].pub, 0.5f);
+        total = pub * 1000 + trace;
+    }
+    public int Pick() { trace = trace * 10 + (cur % 2 + 1); int r = cur % 2; cur = cur + 1; return r; }
+}", "ExtRefBehField");
+        AssertExternCount(uasm, "UnityEngineComponentArray.__Get__", 1);
+    }
+
+    static void AssertExternCount(string uasm, string extern_, int expected)
+    {
+        var code = uasm.Substring(uasm.IndexOf(".code_start", StringComparison.Ordinal));
+        int actual = CountOccurrences(code, extern_);
+        Assert.True(actual == expected,
+            $"expected '{extern_}' to appear {expected} time(s) in the code section, got {actual}");
+    }
+
+    static int CountOccurrences(string text, string token)
+    {
+        int count = 0, idx = 0;
+        while ((idx = text.IndexOf(token, idx, StringComparison.Ordinal)) >= 0)
+        {
+            count++;
+            idx += token.Length;
+        }
+        return count;
+    }
+}
