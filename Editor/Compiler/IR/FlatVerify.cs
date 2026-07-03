@@ -37,7 +37,45 @@ public static class FlatVerify
         }
 
         VerifyReentrantConservation(f);
+        VerifyPreSpillStmtsShape(f);
     }
+
+    /// <summary>PreSpillStmts positional contract (wave-12 r2 [V1], see <see cref="CExternCall.PreSpillStmts"/>):
+    /// a Reentrant SendCustomEvent's PreSpillStmts=N claims the N statements immediately preceding it in the
+    /// same flat block are its own param copy-ins — void SetProgramVariable extern calls — so
+    /// InsertRecursionSpillsFunc can pull them inside the spill window. Nothing else confirmed that shape
+    /// before; a future edit inserting a statement between a hand-emitted copy-in/dispatch pair (e.g.
+    /// HandlerBase's interface-setter dispatch) would silently desync the count from reality. Checked
+    /// structurally rather than trusting the producer, mirroring VerifyReentrantConservation's stance on
+    /// the sibling Reentrant flag.</summary>
+    static void VerifyPreSpillStmtsShape(CFunction f)
+    {
+        foreach (var b in f.FlatBlocks)
+        {
+            for (int i = 0; i < b.Stmts.Count; i++)
+            {
+                if (b.Stmts[i] is not CExprStmt { Expr: CExternCall { PreSpillStmts: > 0 } ec }) continue;
+                int n = ec.PreSpillStmts;
+                if (n > i)
+                    throw new InvalidOperationException(
+                        $"{f.Name}: block {b.Id} instruction {i}: PreSpillStmts={n} exceeds the {i} statement(s) " +
+                        "available before it (a rebuild pass moved or dropped the copy-ins)");
+
+                for (int k = i - n; k < i; k++)
+                {
+                    if (!IsVoidSetProgramVariableCopyIn(b.Stmts[k]))
+                        throw new InvalidOperationException(
+                            $"{f.Name}: block {b.Id} instruction {i}: PreSpillStmts={n} expects a void " +
+                            $"SetProgramVariable copy-in at index {k}, found {b.Stmts[k]?.GetType().Name} " +
+                            "(the spill window would capture the wrong statements)");
+                }
+            }
+        }
+    }
+
+    static bool IsVoidSetProgramVariableCopyIn(CStmt stmt)
+        => stmt is CExprStmt { Expr: CExternCall { Type: "SystemVoid", DestSlot: null } call }
+           && call.Sig.Contains("SetProgramVariable");
 
     /// <summary>Reentrant-flag conservation (design §4.3): CoreFlatten and CoalesceSlots/RemapInst both
     /// REBUILD call instructions, so a rebuild that forgets to copy the flag silently loses the

@@ -15,6 +15,11 @@ public static class CoreVerify
 
     public static void VerifyFunction(CFunction func)
     {
+        if (func.Shape != Shape.Structured)
+            throw new VerificationException(
+                $"CoreVerify requires Shape=Structured, got {func.Shape} for function '{func.Name}' " +
+                "(func.Body is stale after CoreFlatten — verify before flattening, or use FlatVerify after)");
+
         var ctx = new VerifyContext(func);
         VerifyBlock(func.Body, ctx);
         VerifyGotoLabels(func);

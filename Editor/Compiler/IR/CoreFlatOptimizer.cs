@@ -124,24 +124,29 @@ public static class CoreFlatOptimizer
             CoalesceSlotsFunc(func, firstSpillSlot);
     }
 
-    /// <summary>Per-instruction live-out (slots whose post-instruction value is read before being overwritten),
-    /// via standard backward dataflow over the flat CFG to a fixpoint.</summary>
-    static Dictionary<CStmt, HashSet<int>> ComputeLiveOutPerInstruction(CFunction func)
+    /// <summary>Live-out of a block: the union of its successors' live-in, plus the terminator's own reads.
+    /// Shared by <see cref="ComputeBlockLiveIn"/> (fixpoint) and <see cref="ComputeLiveOutPerInstruction"/>
+    /// (one more pass over the converged result).</summary>
+    static HashSet<int> BlockOut(CBlock b, Dictionary<int, HashSet<int>> blockLiveIn)
+    {
+        var outSet = new HashSet<int>();
+        if (b.Terminator != null)
+        {
+            foreach (var s in GetSuccessors(b.Terminator))
+                if (blockLiveIn.TryGetValue(s, out var li)) outSet.UnionWith(li);
+            foreach (var r in GetReadSlotsTerm(b.Terminator)) outSet.Add(r);
+        }
+        return outSet;
+    }
+
+    /// <summary>Per-block live-in via standard backward dataflow over the flat CFG to a fixpoint —
+    /// the SAME correct liveness <see cref="ComputeLiveOutPerInstruction"/> and <see cref="VerifyNoInterference"/>
+    /// trust, exposed separately so <see cref="ComputeLivenessIntervals"/> can correct its RPO-linear
+    /// "first write" def-position heuristic for slots read before being dominated by a write.</summary>
+    static Dictionary<int, HashSet<int>> ComputeBlockLiveIn(CFunction func)
     {
         var blockLiveIn = new Dictionary<int, HashSet<int>>();
         foreach (var b in func.FlatBlocks) blockLiveIn[b.Id] = new HashSet<int>();
-
-        HashSet<int> BlockOut(CBlock b)
-        {
-            var outSet = new HashSet<int>();
-            if (b.Terminator != null)
-            {
-                foreach (var s in GetSuccessors(b.Terminator))
-                    if (blockLiveIn.TryGetValue(s, out var li)) outSet.UnionWith(li);
-                foreach (var r in GetReadSlotsTerm(b.Terminator)) outSet.Add(r);
-            }
-            return outSet;
-        }
 
         bool changed = true;
         while (changed)
@@ -150,7 +155,7 @@ public static class CoreFlatOptimizer
             for (int bi = func.FlatBlocks.Count - 1; bi >= 0; bi--) // reverse order speeds convergence
             {
                 var b = func.FlatBlocks[bi];
-                var live = BlockOut(b);
+                var live = BlockOut(b, blockLiveIn);
                 for (int i = b.Stmts.Count - 1; i >= 0; i--)
                 {
                     var d = GetWrittenSlot(b.Stmts[i]);
@@ -160,11 +165,19 @@ public static class CoreFlatOptimizer
                 if (!blockLiveIn[b.Id].SetEquals(live)) { blockLiveIn[b.Id] = live; changed = true; }
             }
         }
+        return blockLiveIn;
+    }
+
+    /// <summary>Per-instruction live-out (slots whose post-instruction value is read before being overwritten),
+    /// via standard backward dataflow over the flat CFG to a fixpoint.</summary>
+    static Dictionary<CStmt, HashSet<int>> ComputeLiveOutPerInstruction(CFunction func)
+    {
+        var blockLiveIn = ComputeBlockLiveIn(func);
 
         var result = new Dictionary<CStmt, HashSet<int>>();
         foreach (var b in func.FlatBlocks)
         {
-            var live = BlockOut(b);
+            var live = BlockOut(b, blockLiveIn);
             for (int i = b.Stmts.Count - 1; i >= 0; i--)
             {
                 result[b.Stmts[i]] = new HashSet<int>(live); // live-out of instruction i
@@ -367,6 +380,11 @@ public static class CoreFlatOptimizer
 
         if (mapping.Count == 0) return;
 
+        // Fast approximate allocator + sound independent checker: the interval coloring above assumes an
+        // unasserted block-ordering fact of this compiler's own loop lowering. Recompute liveness properly
+        // (fixpoint dataflow, not a linearized interval) and reject the merge map before it is ever applied.
+        VerifyNoInterference(func, mapping);
+
         // Step 4: Rewrite all instructions and terminators. Drop self-copies (CAssign s = s) that arise when
         // a copy's source and destination coalesce to the same physical slot — A-normal form's binding temps
         // (t = producer; slot = t) become slot = slot once t≡slot, a no-op that must be removed.
@@ -390,6 +408,40 @@ public static class CoreFlatOptimizer
         // CoreToUasm indexes into Slots by slot ID (positional). The coalesced-away
         // slots simply won't be referenced by any instruction and GetSlotVar will
         // never be called for them, so no UASM variable will be emitted.
+    }
+
+    /// <summary>Independent post-hoc interference check for a proposed slot-coalescing merge map, run
+    /// BEFORE the map is applied. The interval coloring in <see cref="CoalesceSlotsFunc"/> is a fast
+    /// linearized-RPO approximation; this recomputes liveness properly via the same fixpoint backward
+    /// dataflow InsertRecursionSpillsFunc uses (<see cref="ComputeLiveOutPerInstruction"/>) and asserts no
+    /// two DISTINCT source slots mapped to the same physical slot are ever simultaneously live — the
+    /// classic "fast approximate allocator + sound independent checker" pairing. Internal (not private) so
+    /// tests can drive it directly with a hand-built bad mapping the real interval algorithm is not
+    /// expected to ever produce.</summary>
+    internal static void VerifyNoInterference(CFunction func, Dictionary<int, int> mapping)
+    {
+        if (mapping.Count == 0) return;
+
+        var liveOut = ComputeLiveOutPerInstruction(func);
+        foreach (var live in liveOut.Values)
+        {
+            var physicalToSource = new Dictionary<int, int>();
+            foreach (var slotId in live)
+            {
+                int physical = mapping.TryGetValue(slotId, out var np) ? np : slotId;
+                if (physicalToSource.TryGetValue(physical, out var otherSlot))
+                {
+                    if (otherSlot != slotId)
+                        throw new InvalidOperationException(
+                            $"CoalesceSlots interference violation in {func.Name}: slot{otherSlot} and " +
+                            $"slot{slotId} are simultaneously live but both would be coalesced to slot{physical}");
+                }
+                else
+                {
+                    physicalToSource[physical] = slotId;
+                }
+            }
+        }
     }
 
     static (Dictionary<int, int> Written, Dictionary<int, int> LastUsed) ComputeLivenessIntervals(CFunction func)
@@ -468,6 +520,27 @@ public static class CoreFlatOptimizer
                         }
                     }
                 }
+            }
+        }
+
+        // Fix (real bug found by VerifyNoInterference on Compat_GetComponentTest): a slot read on some
+        // path before it is ever assigned — relying on the Udon VM's implicit zero/null heap default,
+        // e.g. a GetComponent<T>() "not found" fallthrough that never explicitly assigns the result —
+        // has a TRUE live range starting earlier than its first CAssign position, which this RPO-linear
+        // "first write" heuristic cannot see (it only ever records a write position). Any slot proven
+        // live-in to a block by real fixpoint dataflow must have its recorded def position pulled back
+        // to no later than that block's start. For ordinary code — where the slot's first CAssign
+        // already dominates every use — the slot is never live-in anywhere, so this is a no-op; it only
+        // widens (never narrows) the interval of a genuinely used-before-def slot.
+        var blockLiveIn = ComputeBlockLiveIn(func);
+        foreach (var block in rpo)
+        {
+            if (!blockLiveIn.TryGetValue(block.Id, out var liveIn)) continue;
+            int start = blockStartPos[block.Id];
+            foreach (var slotId in liveIn)
+            {
+                if (!written.TryGetValue(slotId, out var w) || w > start)
+                    written[slotId] = start;
             }
         }
 
