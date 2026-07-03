@@ -2146,8 +2146,9 @@ public class UasmEmitter
 
     // ── Wave-9 round-3 [W1]/[W2]/[W3]: emission-faithful leaf-override resolution for the graph ──
     // Emission resolves a this-receiver virtual call to the most-derived override visible from the
-    // compiled class (InvocationHandler.ResolveMostDerivedOverride / HandlerBase.ResolveDispatchProperty),
-    // but the recursion graph recorded only the STATIC binding — so a runtime cycle closed through an
+    // compiled class (HandlerBase.ResolveMostDerivedOverride / ResolveDispatchProperty, sharing this
+    // file's HandlerBase.FindOverrideMethodInChain/FindOverridePropertyInChain walkers), but the
+    // recursion graph recorded only the STATIC binding — so a runtime cycle closed through an
     // override (base body's virtual call/property read dispatching the leaf, or an override calling
     // base.M whose body virtual-calls back) had no static counterpart and its frames were never spilled
     // (VM-proven: 305 where the CLR gives 605; override<->base-copy 14 vs 12; fb=base.M bundle 17 vs 21).
@@ -2188,24 +2189,16 @@ public class UasmEmitter
         if (pr.Instance is not IInstanceReferenceOperation iref
             || iref.Syntax is BaseExpressionSyntax) return null;
         var def = p.OriginalDefinition;
-        for (var t = _classSymbol; t != null; t = t.BaseType)
-            foreach (var cand in t.GetMembers(p.Name).OfType<IPropertySymbol>())
-                for (var o = cand; o != null; o = o.OverriddenProperty)
-                    if (SymbolEqualityComparer.Default.Equals(o.OriginalDefinition, def))
-                        return SymbolEqualityComparer.Default.Equals(cand.OriginalDefinition, def)
-                            ? null : cand.OriginalDefinition;
-        return null;
+        var cand = HandlerBase.FindOverridePropertyInChain(_classSymbol, def, p.Name);
+        if (cand == null) return null;
+        return SymbolEqualityComparer.Default.Equals(cand.OriginalDefinition, def) ? null : cand.OriginalDefinition;
     }
 
+    // Definition-keyed twin of HandlerBase.ResolveMostDerivedOverride, sharing its
+    // FindOverrideMethodInChain walker: the graph is keyed by OriginalDefinition, so unlike the emission
+    // side there is no generic re-Construct here — just normalize the found override to its definition.
     IMethodSymbol ResolveLeafOverrideDef(IMethodSymbol def)
-    {
-        for (var t = _classSymbol; t != null; t = t.BaseType)
-            foreach (var m in t.GetMembers(def.Name).OfType<IMethodSymbol>())
-                for (var o = m; o != null; o = o.OverriddenMethod)
-                    if (SymbolEqualityComparer.Default.Equals(o.OriginalDefinition, def))
-                        return m.OriginalDefinition;
-        return def;
-    }
+        => HandlerBase.FindOverrideMethodInChain(_classSymbol, def, def.Name)?.OriginalDefinition ?? def;
 
     // ── Wave-12 r2 [V1]: cross-dispatch landing target for the recursion graph ──
     // A method/accessor dispatched through a VARIABLE receiver (same-typed field/local, base-typed

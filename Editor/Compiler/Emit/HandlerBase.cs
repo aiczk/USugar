@@ -1442,6 +1442,42 @@ public abstract class HandlerBase
         return (argNames, retName, envName);
     }
 
+    // ── Override-chain resolution (shared core) ──
+    //
+    // The "walk _classSymbol's BaseType chain; for each same-named member, walk its
+    // Overridden{Method,Property} chain looking for a match on the target's OriginalDefinition" search
+    // was independently copy-pasted four times (this file's method/property flavors, plus
+    // UasmEmitter.ResolveLeafOverrideDef/LeafPropertyTarget for the recursion-graph's emission-faithful
+    // mirror of this same dispatch) — the two walker methods below are the single shared core; each of
+    // the four call sites differs only in what it does with the raw match (generic re-Construct here,
+    // OriginalDefinition-normalization in UasmEmitter) and its own guards/fallback.
+
+    /// <summary>Search <paramref name="classSymbol"/>'s BaseType chain for a same-named method whose
+    /// OverriddenMethod chain reaches <paramref name="def"/> (an OriginalDefinition). Returns the found
+    /// member AS DECLARED — callers that need it OriginalDefinition-normalized do that themselves — or
+    /// null if no override chain reaches it.</summary>
+    internal static IMethodSymbol FindOverrideMethodInChain(INamedTypeSymbol classSymbol, IMethodSymbol def, string name)
+    {
+        for (var t = classSymbol; t != null; t = t.BaseType)
+            foreach (var m in t.GetMembers(name).OfType<IMethodSymbol>())
+                for (IMethodSymbol o = m; o != null; o = o.OverriddenMethod)
+                    if (SymbolEqualityComparer.Default.Equals(o.OriginalDefinition, def))
+                        return m;
+        return null;
+    }
+
+    /// <summary>Property twin of <see cref="FindOverrideMethodInChain"/> — walks OverriddenProperty
+    /// instead of OverriddenMethod.</summary>
+    internal static IPropertySymbol FindOverridePropertyInChain(INamedTypeSymbol classSymbol, IPropertySymbol def, string name)
+    {
+        for (var t = classSymbol; t != null; t = t.BaseType)
+            foreach (var p in t.GetMembers(name).OfType<IPropertySymbol>())
+                for (var o = p; o != null; o = o.OverriddenProperty)
+                    if (SymbolEqualityComparer.Default.Equals(o.OriginalDefinition, def))
+                        return p;
+        return null;
+    }
+
     /// <summary>Most-derived override of <paramref name="baseMethod"/> reachable from the compiled type
     /// (_classSymbol), or baseMethod itself if none — mirrors C# virtual dispatch for a `this` call whose
     /// static target is a base declaration. Round-8 [R8]: GetMembers returns the UNCONSTRUCTED member,
@@ -1452,14 +1488,11 @@ public abstract class HandlerBase
     protected IMethodSymbol ResolveMostDerivedOverride(IMethodSymbol baseMethod)
     {
         var def = baseMethod.OriginalDefinition;
-        for (var t = _classSymbol; t != null; t = t.BaseType)
-            foreach (var m in t.GetMembers(baseMethod.Name).OfType<IMethodSymbol>())
-                for (IMethodSymbol o = m; o != null; o = o.OverriddenMethod)
-                    if (SymbolEqualityComparer.Default.Equals(o.OriginalDefinition, def))
-                        return baseMethod.IsGenericMethod && m.IsGenericMethod
-                            ? m.OriginalDefinition.Construct(baseMethod.TypeArguments.ToArray())
-                            : m;
-        return baseMethod;
+        var m = FindOverrideMethodInChain(_classSymbol, def, baseMethod.Name);
+        if (m == null) return baseMethod;
+        return baseMethod.IsGenericMethod && m.IsGenericMethod
+            ? m.OriginalDefinition.Construct(baseMethod.TypeArguments.ToArray())
+            : m;
     }
 
     // ── Generic Monomorphization ──
@@ -1725,8 +1758,9 @@ public abstract class HandlerBase
     /// <summary>Virtual dispatch through `this` for PROPERTY/INDEXER accessors (round 7): a property
     /// reference inside an INHERITED base method body statically binds the BASE declaration, so the
     /// this-path accessor lookups must resolve to the most-derived override visible from the compiled
-    /// class — the chain-leaf accessor over the chain-leaf storage — exactly like the
-    /// ResolveMostDerivedOverride arm for MethodKind.Ordinary calls. Without this the lookup hits the
+    /// class — the chain-leaf accessor over the chain-leaf storage — exactly like
+    /// <see cref="ResolveMostDerivedOverride"/> for MethodKind.Ordinary calls (shares its
+    /// <see cref="FindOverridePropertyInChain"/> walker). Without this the lookup hits the
     /// base-instance COPY, which runs the base accessor body (manual props/indexers, pre-existing v2.x)
     /// or reads the base declaration's per-declaration `__basebk` storage (auto-props, post-917d99c).
     /// `base.P` keeps the static binding (the single non-virtual property access in C#), as does every
@@ -1738,12 +1772,7 @@ public abstract class HandlerBase
         if (op.Instance is not IInstanceReferenceOperation iref) return prop;
         if (iref.Syntax is Microsoft.CodeAnalysis.CSharp.Syntax.BaseExpressionSyntax) return prop;
         var def = prop.OriginalDefinition;
-        for (var t = _classSymbol; t != null; t = t.BaseType)
-            foreach (var p in t.GetMembers(prop.Name).OfType<IPropertySymbol>())
-                for (var o = p; o != null; o = o.OverriddenProperty)
-                    if (SymbolEqualityComparer.Default.Equals(o.OriginalDefinition, def))
-                        return p;
-        return prop;
+        return FindOverridePropertyInChain(_classSymbol, def, prop.Name) ?? prop;
     }
 
     // ── Call helpers ──
