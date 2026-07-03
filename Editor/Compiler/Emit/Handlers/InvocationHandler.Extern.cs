@@ -367,7 +367,7 @@ public partial class InvocationHandler
             {
                 // element = allComponents[idx]
                 var elementVal = ExternCall(
-                    "UnityEngineComponentArray.__Get__SystemInt32__UnityEngineComponent",
+                    ExternResolver.BuildArrayGetSignature("UnityEngineComponentArray", "UnityEngineComponent"),
                     new List<CLeaf> { allComponents, SlotRef(idxSlot) },
                     "UnityEngineComponent");
 
@@ -455,7 +455,7 @@ public partial class InvocationHandler
 
         // === Allocate result array ===
         var resultArr = ExternCall(
-            "UnityEngineComponentArray.__ctor__SystemInt32__UnityEngineComponentArray",
+            ExternResolver.BuildArrayCtorSignature("UnityEngineComponentArray"),
             new List<CLeaf> { SlotRef(countSlot) },
             "UnityEngineComponentArray");
 
@@ -475,7 +475,7 @@ public partial class InvocationHandler
             {
                 // element = allComponents[idx2]
                 var elementVal = ExternCall(
-                    "UnityEngineComponentArray.__Get__SystemInt32__UnityEngineComponent",
+                    ExternResolver.BuildArrayGetSignature("UnityEngineComponentArray", "UnityEngineComponent"),
                     new List<CLeaf> { allComponents, SlotRef(idx2Slot) },
                     "UnityEngineComponent");
 
@@ -498,7 +498,7 @@ public partial class InvocationHandler
                     _builder.EmitIf(matchVal, matchB =>
                     {
                         // result[writeIdx] = element
-                        EmitExternVoid("UnityEngineComponentArray.__Set__SystemInt32_UnityEngineComponent__SystemVoid",
+                        EmitExternVoid(ExternResolver.BuildArraySetSignature("UnityEngineComponentArray", "UnityEngineComponent"),
                             new List<CLeaf> { resultArr, SlotRef(writeIdxSlot), elementVal });
 
                         // writeIdx++
@@ -566,7 +566,7 @@ public partial class InvocationHandler
     {
         // element = allComponents[idx]
         var elementVal = ExternCall(
-            "UnityEngineComponentArray.__Get__SystemInt32__UnityEngineComponent",
+            ExternResolver.BuildArrayGetSignature("UnityEngineComponentArray", "UnityEngineComponent"),
             new List<CLeaf> { allComponents, SlotRef(idxSlot) },
             "UnityEngineComponent");
 
@@ -816,13 +816,13 @@ public partial class InvocationHandler
                 var elementType = GetArrayElemType(arrSym);
                 return (() =>
                 {
-                    CLeaf elemVal = ExternCall($"{arrayType}.__Get__SystemInt32__{elementType}",
+                    CLeaf elemVal = ExternCall(ExternResolver.BuildArrayGetSignature(arrayType, elementType),
                         new List<CLeaf> { arrayVal, indexVal }, GetUdonType(arrayElem.Type));
                     if (arrayElem.Type is INamedTypeSymbol elemAgg && EmitContext.IsAggregateType(elemAgg))
                         elemVal = EmitDeepCloneAggregate(elemVal, elemAgg);
                     return elemVal;
                 }, v => EmitExternVoid(
-                    $"{arrayType}.__Set__SystemInt32_{elementType}__SystemVoid",
+                    ExternResolver.BuildArraySetSignature(arrayType, elementType),
                     new List<CLeaf> { arrayVal, indexVal, v }));
             }
             case IFieldReferenceOperation fieldRef
@@ -834,13 +834,13 @@ public partial class InvocationHandler
                 var arrExpr = LoadInstanceRaw(aggInstance);
                 return (() =>
                 {
-                    CLeaf memberVal = ExternCall("SystemObjectArray.__Get__SystemInt32__SystemObject",
+                    CLeaf memberVal = ExternCall(ExternResolver.BuildArrayGetSignature("SystemObjectArray", "SystemObject"),
                         new List<CLeaf> { arrExpr, Const(memberIndex, "SystemInt32") }, "SystemObject");
                     if (fieldRef.Field.Type is INamedTypeSymbol memberAgg && EmitContext.IsAggregateType(memberAgg))
                         memberVal = EmitDeepCloneAggregate(memberVal, memberAgg);
                     return memberVal;
                 }, v => EmitExternVoid(
-                    "SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid",
+                    ExternResolver.BuildArraySetSignature("SystemObjectArray", "SystemObject"),
                     new List<CLeaf> { arrExpr, Const(memberIndex, "SystemInt32"), v }));
             }
             // Round-9 [Y12]: BEHAVIOUR field through a non-this receiver (`hs[Pick()].pub`,
@@ -988,7 +988,7 @@ public partial class InvocationHandler
                 var arrSymbol = arrayElem.ArrayReference.Type as IArrayTypeSymbol;
                 var arrayType = GetArrayType(arrSymbol);
                 var elementType = GetArrayElemType(arrSymbol);
-                EmitExternVoid($"{arrayType}.__Set__SystemInt32_{elementType}__SystemVoid",
+                EmitExternVoid(ExternResolver.BuildArraySetSignature(arrayType, elementType),
                     new List<CLeaf> { arrayVal, indexVal, value });
                 break;
 

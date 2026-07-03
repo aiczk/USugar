@@ -580,7 +580,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
                 for (int i = 0; i < rec.DeconstructionSubpatterns.Length; i++)
                 {
                     var elemType = layout.Fields[i].Type;
-                    var elemRaw = ExternCall("SystemObjectArray.__Get__SystemInt32__SystemObject",
+                    var elemRaw = ExternCall(ExternResolver.BuildArrayGetSignature("SystemObjectArray", "SystemObject"),
                         new List<CLeaf> { SlotRef(aggSlot), Const(i, "SystemInt32") }, "SystemObject");
                     // Materialize into a typed temp (Udon COPY unboxes) so the sub-pattern compares
                     // with the correct type tag, exactly as tuple deconstruction extracts elements.
@@ -662,7 +662,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
                         {
                             // Aggregate member: read the boxed object[] slot, then materialize into a typed temp
                             // (Udon COPY unboxes) so the sub-pattern compares with the correct type tag.
-                            var rawMember = ExternCall("SystemObjectArray.__Get__SystemInt32__SystemObject",
+                            var rawMember = ExternCall(ExternResolver.BuildArrayGetSignature("SystemObjectArray", "SystemObject"),
                                 new List<CLeaf> { SlotRef(valSlot), Const(aggMemberIdx, "SystemInt32") }, "SystemObject");
                             var memberSlot = _ctx.AllocTemp(GetUdonType(memberType));
                             EmitAssign(memberSlot, rawMember);
@@ -906,9 +906,9 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
         CLeaf result = Const(true, "SystemBoolean");
         for (int i = 0; i < layout.Count; i++)
         {
-            var leftElem = ExternCall("SystemObjectArray.__Get__SystemInt32__SystemObject",
+            var leftElem = ExternCall(ExternResolver.BuildArrayGetSignature("SystemObjectArray", "SystemObject"),
                 new List<CLeaf> { SlotRef(leftSlot), Const(i, "SystemInt32") }, "SystemObject");
-            var rightElem = ExternCall("SystemObjectArray.__Get__SystemInt32__SystemObject",
+            var rightElem = ExternCall(ExternResolver.BuildArrayGetSignature("SystemObjectArray", "SystemObject"),
                 new List<CLeaf> { SlotRef(rightSlot), Const(i, "SystemInt32") }, "SystemObject");
 
             CLeaf elemEq = layout.Fields[i].Type is INamedTypeSymbol nested && nested.IsTupleType

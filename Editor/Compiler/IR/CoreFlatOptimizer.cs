@@ -252,7 +252,7 @@ public static class CoreFlatOptimizer
         var tSp = func.NewSlot("SystemInt32", SlotClass.Scratch);
         output.Add(new CLoadField(tSp, RecurSpId, "SystemInt32"));
         output.Add(new CExprStmt(new CExternCall(
-            "SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid",
+            ExternResolver.BuildArraySetSignature("SystemObjectArray", "SystemObject"),
             new List<CLeaf> { new CSlotRef(tStack, "SystemObjectArray"), new CSlotRef(tSp, "SystemInt32"), valueLeaf },
             "SystemVoid")));
         SpDelta(func, output, +1);
@@ -268,7 +268,7 @@ public static class CoreFlatOptimizer
         output.Add(new CLoadField(tSp, RecurSpId, "SystemInt32"));
         var tGet = func.NewSlot("SystemObject", SlotClass.Scratch);
         output.Add(new CExprStmt(new CExternCall(
-            "SystemObjectArray.__Get__SystemInt32__SystemObject",
+            ExternResolver.BuildArrayGetSignature("SystemObjectArray", "SystemObject"),
             new List<CLeaf> { new CSlotRef(tStack, "SystemObjectArray"), new CSlotRef(tSp, "SystemInt32") },
             "SystemObject", tGet)));
         if (fieldName != null)

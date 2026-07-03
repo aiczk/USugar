@@ -482,7 +482,7 @@ public class StatementHandler : HandlerBase, IOperationHandler
                     // DefaultInitAggregate operates on a heap FIELD — stage through a synthetic one.
                     var envTmpId = _ctx.DeclareLocal(local.Name + "__envinit", "SystemObjectArray");
                     EmitStoreField(envTmpId, ExternCall(
-                        "SystemObjectArray.__ctor__SystemInt32__SystemObjectArray",
+                        ExternResolver.BuildArrayCtorSignature("SystemObjectArray"),
                         new List<CLeaf> { Const(envAggLayout.Count, "SystemInt32") }, "SystemObjectArray"));
                     DefaultInitAggregate(envTmpId, envAggLayout);
                     EnvEmit.Write(_builder, _ctx, local, LoadField(envTmpId, "SystemObjectArray"));
@@ -527,7 +527,7 @@ public class StatementHandler : HandlerBase, IOperationHandler
         _localBindings[local] = new EmitContext.LocalBinding(id);
 
         // Create object[] of correct size
-        var arrExpr = ExternCall("SystemObjectArray.__ctor__SystemInt32__SystemObjectArray",
+        var arrExpr = ExternCall(ExternResolver.BuildArrayCtorSignature("SystemObjectArray"),
             new List<CLeaf> { Const(layout.Count, "SystemInt32") }, "SystemObjectArray");
         EmitStoreField(id, arrExpr);
 
@@ -549,7 +549,7 @@ public class StatementHandler : HandlerBase, IOperationHandler
             // Tuple literal: set each element via __Set__
             for (int i = 0; i < tupleLit.Elements.Length && i < layout.Count; i++)
             {
-                EmitExternVoid("SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid",
+                EmitExternVoid(ExternResolver.BuildArraySetSignature("SystemObjectArray", "SystemObject"),
                     new List<CLeaf> { LoadField(localId, "SystemObjectArray"), Const(i, "SystemInt32"),
                         VisitExpression(tupleLit.Elements[i]) });
             }
@@ -590,7 +590,7 @@ public class StatementHandler : HandlerBase, IOperationHandler
                     };
                     if (memberName != null && layout.TryGetIndex(memberName, out var idx))
                     {
-                        EmitExternVoid("SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid",
+                        EmitExternVoid(ExternResolver.BuildArraySetSignature("SystemObjectArray", "SystemObject"),
                             new List<CLeaf> { LoadField(localId, "SystemObjectArray"),
                                 Const(idx, "SystemInt32"), VisitExpression(sa.Value) });
                     }

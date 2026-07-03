@@ -25,14 +25,14 @@ public class ArrayHandler : HandlerBase, IExpressionHandler
 
         var sizeVal = VisitExpression(op.DimensionSizes[0]);
         var arrSlot = _ctx.AllocTemp(arrayType);
-        EmitAssign(arrSlot, ExternCall($"{arrayType}.__ctor__SystemInt32__{arrayType}",
+        EmitAssign(arrSlot, ExternCall(ExternResolver.BuildArrayCtorSignature(arrayType),
             new List<CLeaf> { sizeVal }, arrayType));
 
         if (op.Initializer != null)
         {
             for (int i = 0; i < op.Initializer.ElementValues.Length; i++)
             {
-                EmitExternVoid($"{arrayType}.__Set__SystemInt32_{elementType}__SystemVoid",
+                EmitExternVoid(ExternResolver.BuildArraySetSignature(arrayType, elementType),
                     new List<CLeaf> { SlotRef(arrSlot), Const(i, "SystemInt32"), VisitExpression(op.Initializer.ElementValues[i]) });
             }
         }
@@ -47,7 +47,7 @@ public class ArrayHandler : HandlerBase, IExpressionHandler
                     new List<CLeaf> { SlotRef(iSlot), sizeVal }, "SystemBoolean"),
                 _ =>
                 {
-                    EmitExternVoid($"{arrayType}.__Set__SystemInt32_{elementType}__SystemVoid",
+                    EmitExternVoid(ExternResolver.BuildArraySetSignature(arrayType, elementType),
                         new List<CLeaf> { SlotRef(arrSlot), SlotRef(iSlot), EmitNewAggregate((INamedTypeSymbol)elemSym) });
                     EmitAssign(iSlot, ExternCall("SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32",
                         new List<CLeaf> { SlotRef(iSlot), Const(1, "SystemInt32") }, "SystemInt32"));
@@ -76,7 +76,7 @@ public class ArrayHandler : HandlerBase, IExpressionHandler
             ? EmitIndexFromEnd(arrayVal, arrayType, unary.Operand)
             : VisitExpression(index);
 
-        var resultVal = ExternCall($"{arrayType}.__Get__SystemInt32__{elementType}", new List<CLeaf> { arrayVal, indexVal }, GetUdonType(op.Type));
+        var resultVal = ExternCall(ExternResolver.BuildArrayGetSignature(arrayType, elementType), new List<CLeaf> { arrayVal, indexVal }, GetUdonType(op.Type));
         // A struct/tuple element read AS A VALUE is copied (value semantics). Receiver access (arr[i].x =)
         // goes through LoadInstanceRaw → ReadArrayElementRaw, which does NOT clone.
         return op.Type is INamedTypeSymbol elemAggT && EmitContext.IsAggregateType(elemAggT)
@@ -130,7 +130,7 @@ public class ArrayHandler : HandlerBase, IExpressionHandler
             new List<CLeaf> { endVal, startVal }, "SystemInt32");
 
         // result = new T[len]
-        var resultVal = ExternCall($"{udonArrType}.__ctor__SystemInt32__{udonArrType}",
+        var resultVal = ExternCall(ExternResolver.BuildArrayCtorSignature(udonArrType),
             new List<CLeaf> { lenVal }, udonArrType);
 
         // for (i = 0; i < len; i++) result[i] = arr[start + i]
@@ -159,11 +159,11 @@ public class ArrayHandler : HandlerBase, IExpressionHandler
                     new List<CLeaf> { startVal, SlotRef(iSlot) }, "SystemInt32");
 
                 // val = arr[srcIdx]
-                var valVal = ExternCall($"{arrayType}.__Get__SystemInt32__{elementType}",
+                var valVal = ExternCall(ExternResolver.BuildArrayGetSignature(arrayType, elementType),
                     new List<CLeaf> { arrayVal, srcIdxVal }, udonElemType);
 
                 // result[i] = val
-                EmitExternVoid($"{arrayType}.__Set__SystemInt32_{elementType}__SystemVoid",
+                EmitExternVoid(ExternResolver.BuildArraySetSignature(arrayType, elementType),
                     new List<CLeaf> { resultVal, SlotRef(iSlot), valVal });
             }
         );

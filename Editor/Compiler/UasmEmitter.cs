@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Collections.Immutable;
 using System.Linq;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
@@ -119,9 +118,8 @@ public class UasmEmitter
         EnsurePlannerReady();
         EmitFields();
         SetReflectionValues();
-        // Stage 2 M1: structural analysis only — computed and unit-tested, not consumed by codegen
-        // (design §11 M1: "コード生成は未接続"). Running it unconditionally here exercises it against
-        // every compiled class in the existing suite/corpus as a standing hardening check.
+        // Stage 2: closure-scope analysis feeding real codegen — EnvEmit's alloc/read/write and every
+        // IsCapturingClosure call site (HandlerBase, InvocationHandler.Extern, this file) key off it.
         _ctx.CaptureScope = CaptureScopeAnalysis.Build(_compilation, _classSymbol);
         EmitMethods();
         OnIrPass?.Invoke("after-emit", _module);
@@ -1464,7 +1462,7 @@ public class UasmEmitter
                     var elementType = GetArrayElemType(arrTypeSym);
                     var sizeConst = BridgeConstInt(arrayInit.ElementValues.Length);
                     var arrVal = BridgeCallExtern(arrayType,
-                        $"{arrayType}.__ctor__SystemInt32__{arrayType}",
+                        ExternResolver.BuildArrayCtorSignature(arrayType),
                         new CLeaf[] { sizeConst });
                     BridgeStore(fieldId, arrVal);
                     for (int i = 0; i < arrayInit.ElementValues.Length; i++)
@@ -1473,7 +1471,7 @@ public class UasmEmitter
                         var idxConst = BridgeConstInt(i);
                         var arrLoad = BridgeLoad(fieldId, arrayType);
                         BridgeCallExternVoid(
-                            $"{arrayType}.__Set__SystemInt32_{elementType}__SystemVoid",
+                            ExternResolver.BuildArraySetSignature(arrayType, elementType),
                             new CLeaf[] { arrLoad, idxConst, elemVal });
                     }
                     continue;
@@ -1645,59 +1643,6 @@ public class UasmEmitter
             }
             edges[m] = callees;
         }
-
-        // §2.8 round-3 [A] + round-4 [K2]: compute local-function capture sets BEFORE the recipient
-        // pre-scan and any emission — a capturing local function converted to a method group is a
-        // closure exactly like a capturing lambda, so the guards (and the pre-scans below) treat it
-        // as capturing-lambda-equivalent via EmitContext.CapturingLocalFunctions (membership-only,
-        // §1.5). Capture-ness is TRANSITIVE over the local-function call graph ([K2]: a wrapper
-        // `Outer(){return Inner();}` — or any longer chain — is the same closure judged capture-free
-        // by the direct walk, VM-verified laundering), so run a fixpoint unioning callee capture
-        // sets, each hop filtered against the caller's own `inside` set (a callee capturing only the
-        // CALLER's locals runs entirely in the caller's activation and stays non-capturing).
-        var lfCaptures = new Dictionary<IMethodSymbol, HashSet<ISymbol>>(SymbolEqualityComparer.Default);
-        var lfInside = new Dictionary<IMethodSymbol, HashSet<ISymbol>>(SymbolEqualityComparer.Default);
-        var lfRefs = new Dictionary<IMethodSymbol, HashSet<IMethodSymbol>>(SymbolEqualityComparer.Default);
-        foreach (var m in internalMethods)
-        {
-            if (m.MethodKind != MethodKind.LocalFunction) continue;
-            if (!bodies.TryGetValue(m, out var lfBody) || lfBody == null) continue;
-            var direct = new HashSet<ISymbol>(SymbolEqualityComparer.Default);
-            var insideSet = new HashSet<ISymbol>(SymbolEqualityComparer.Default);
-            var refs = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
-            LambdaCaptureAnalyzer.AnalyzeLocalFunction(m, lfBody, direct, insideSet, refs);
-            lfCaptures[m] = direct;
-            lfInside[m] = insideSet;
-            lfRefs[m] = refs;
-        }
-        bool lfChanged = true;
-        while (lfChanged)
-        {
-            lfChanged = false;
-            foreach (var kv in lfRefs)
-            {
-                var mySet = lfCaptures[kv.Key];
-                var myInside = lfInside[kv.Key];
-                foreach (var callee in kv.Value)
-                {
-                    if (!lfCaptures.TryGetValue(callee, out var calleeSet)) continue;
-                    if (ReferenceEquals(calleeSet, mySet)) continue; // self-recursion adds nothing
-                    foreach (var s in calleeSet)
-                        if (!myInside.Contains(s) && mySet.Add(s)) lfChanged = true;
-                }
-            }
-        }
-        var lfFinal = new Dictionary<IMethodSymbol, ImmutableArray<ISymbol>>(SymbolEqualityComparer.Default);
-        foreach (var kv in lfCaptures)
-        {
-            if (kv.Value.Count == 0) continue;
-            _ctx.CapturingLocalFunctions.Add(kv.Key);
-            lfFinal[kv.Key] = kv.Value.ToImmutableArray();
-        }
-        // [K2] lambda side: wrapper LAMBDAS over capturing local functions are the same hole —
-        // hand the transitive sets to the analyzer (consulted by GetCaptures' invocation/method-
-        // reference cases) BEFORE the first GetCaptures caller below pins the per-lambda cache.
-        _ctx.CaptureAnalyzer.SetLocalFunctionCaptures(lfFinal);
 
         // ── §4.2 graph extension: lambda nodes, EscapeSet, synthetic edges ──
 

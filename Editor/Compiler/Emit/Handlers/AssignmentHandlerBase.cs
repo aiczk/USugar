@@ -3,9 +3,11 @@ using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.Operations;
 
 /// <summary>
-/// Common lvalue handling shared by SimpleAssignmentHandler / CompoundAssignmentHandler /
-/// DeconstructionAssignmentHandler. Provides LValueCapture, write-back, and target field
-/// name resolution.
+/// Base for the assignment-family handlers (SimpleAssignmentHandler, CompoundAssignmentHandler,
+/// DeconstructionAssignmentHandler, NullableHandler). LValueCapture/CaptureLValue and EmitWriteBack
+/// — capture an l-value's sub-expressions once, then write back after computing the new value — are
+/// used by CompoundAssignmentHandler and NullableHandler for their read-modify-write targets;
+/// GetAssignTargetFieldName is used by SimpleAssignmentHandler.
 /// </summary>
 public abstract class AssignmentHandlerBase : HandlerBase
 {
@@ -102,7 +104,7 @@ public abstract class AssignmentHandlerBase : HandlerBase
                 {
                     var recv = LoadInstanceRaw(aggCapPropRef.Instance);
                     var slotIdxVal = Const(capSlotIdx, "SystemInt32");
-                    CLeaf slotVal = ExternCall("SystemObjectArray.__Get__SystemInt32__SystemObject",
+                    CLeaf slotVal = ExternCall(ExternResolver.BuildArrayGetSignature("SystemObjectArray", "SystemObject"),
                         new List<CLeaf> { recv, slotIdxVal }, "SystemObject");
                     if (aggCapPropRef.Property.Type is INamedTypeSymbol capSlotAgg && EmitContext.IsAggregateType(capSlotAgg))
                         slotVal = EmitDeepCloneAggregate(slotVal, capSlotAgg);
@@ -129,7 +131,7 @@ public abstract class AssignmentHandlerBase : HandlerBase
                 {
                     var arrVal = LoadInstanceRaw(aggFieldRef.Instance);
                     var idxVal = Const(elemIdx, "SystemInt32");
-                    var currentVal = ExternCall("SystemObjectArray.__Get__SystemInt32__SystemObject",
+                    var currentVal = ExternCall(ExternResolver.BuildArrayGetSignature("SystemObjectArray", "SystemObject"),
                         new List<CLeaf> { arrVal, idxVal }, "SystemObject");
                     return new LValueCapture { Value = currentVal, ArrayVal = arrVal, IndexVal = idxVal };
                 }
@@ -151,7 +153,7 @@ public abstract class AssignmentHandlerBase : HandlerBase
 
                 // Read current value: arr[idx]
                 var valResult = ExternCall(
-                    $"{arrayType}.__Get__SystemInt32__{elemAccessorType}",
+                    ExternResolver.BuildArrayGetSignature(arrayType, elemAccessorType),
                     new List<CLeaf> { arrayVal, indexVal },
                     GetUdonType(arrayElem.Type));
                 return new LValueCapture { Value = valResult, ArrayVal = arrayVal, IndexVal = indexVal };
@@ -201,7 +203,7 @@ public abstract class AssignmentHandlerBase : HandlerBase
                 if (layout.TryGetIndex(aggFieldRef.Field, out var elemIdx))
                 {
                     var arrVal = lv.ArrayVal ?? VisitExpression(aggFieldRef.Instance);
-                    EmitExternVoid("SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid",
+                    EmitExternVoid(ExternResolver.BuildArraySetSignature("SystemObjectArray", "SystemObject"),
                         new List<CLeaf> { arrVal, Const(elemIdx, "SystemInt32"), valueVal });
                     return;
                 }
@@ -215,7 +217,7 @@ public abstract class AssignmentHandlerBase : HandlerBase
                 var arrSymbol = arrayElem.ArrayReference.Type as IArrayTypeSymbol;
                 var arrayType = GetArrayType(arrSymbol);
                 var elementType = GetArrayElemType(arrSymbol);
-                EmitExternVoid($"{arrayType}.__Set__SystemInt32_{elementType}__SystemVoid", new List<CLeaf> { arrayVal, indexVal, valueVal });
+                EmitExternVoid(ExternResolver.BuildArraySetSignature(arrayType, elementType), new List<CLeaf> { arrayVal, indexVal, valueVal });
                 break;
             }
             case IFieldReferenceOperation { Instance: not null and not IInstanceReferenceOperation } fieldRef
@@ -322,7 +324,7 @@ public abstract class AssignmentHandlerBase : HandlerBase
                 if (_ctx.GetAggregateLayout(aggPropType).TryGetIndex(aggPropRef.Property.Name, out var propIdx))
                 {
                     var arrVal = lv.ArrayVal ?? LoadInstanceRaw(aggPropRef.Instance);
-                    EmitExternVoid("SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid",
+                    EmitExternVoid(ExternResolver.BuildArraySetSignature("SystemObjectArray", "SystemObject"),
                         new List<CLeaf> { arrVal, Const(propIdx, "SystemInt32"), valueVal });
                     return;
                 }

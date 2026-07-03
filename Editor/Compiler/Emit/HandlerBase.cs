@@ -312,16 +312,16 @@ public abstract class HandlerBase
         // src is a single-assignment SystemObjectArray leaf under ANF; the loop only READS its elements
         // (writes target the fresh dstSlot), so it is stable without a snapshot.
         var dstSlot = _ctx.AllocTemp("SystemObjectArray");
-        EmitAssign(dstSlot, ExternCall("SystemObjectArray.__ctor__SystemInt32__SystemObjectArray",
+        EmitAssign(dstSlot, ExternCall(ExternResolver.BuildArrayCtorSignature("SystemObjectArray"),
             new List<CLeaf> { Const(layout.Count, "SystemInt32") }, "SystemObjectArray"));
         for (int i = 0; i < layout.Count; i++)
         {
-            var elem = ExternCall("SystemObjectArray.__Get__SystemInt32__SystemObject",
+            var elem = ExternCall(ExternResolver.BuildArrayGetSignature("SystemObjectArray", "SystemObject"),
                 new List<CLeaf> { src, Const(i, "SystemInt32") }, "SystemObject");
             CLeaf copy = layout.Fields[i].Type is INamedTypeSymbol nested && EmitContext.IsAggregateType(nested)
                 ? EmitDeepCloneAggregate(elem, nested) // nested aggregate → recurse
                 : elem;                                // boxed scalar → reference copy is fine (immutable box)
-            EmitExternVoid("SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid",
+            EmitExternVoid(ExternResolver.BuildArraySetSignature("SystemObjectArray", "SystemObject"),
                 new List<CLeaf> { SlotRef(dstSlot), Const(i, "SystemInt32"), copy });
         }
         return SlotRef(dstSlot);
@@ -333,7 +333,7 @@ public abstract class HandlerBase
     {
         var layout = _ctx.GetAggregateLayout(aggType);
         var slot = _ctx.AllocTemp("SystemObjectArray");
-        EmitAssign(slot, ExternCall("SystemObjectArray.__ctor__SystemInt32__SystemObjectArray",
+        EmitAssign(slot, ExternCall(ExternResolver.BuildArrayCtorSignature("SystemObjectArray"),
             new List<CLeaf> { Const(layout.Count, "SystemInt32") }, "SystemObjectArray"));
         EmitDefaultInitAggregate(SlotRef(slot), layout);
         return SlotRef(slot);
@@ -352,9 +352,9 @@ public abstract class HandlerBase
             {
                 var nl = _ctx.GetAggregateLayout(nested);
                 var subSlot = _ctx.AllocTemp("SystemObjectArray");
-                EmitAssign(subSlot, ExternCall("SystemObjectArray.__ctor__SystemInt32__SystemObjectArray",
+                EmitAssign(subSlot, ExternCall(ExternResolver.BuildArrayCtorSignature("SystemObjectArray"),
                     new List<CLeaf> { Const(nl.Count, "SystemInt32") }, "SystemObjectArray"));
-                EmitExternVoid("SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid",
+                EmitExternVoid(ExternResolver.BuildArraySetSignature("SystemObjectArray", "SystemObject"),
                     new List<CLeaf> { SlotRef(slot), Const(i, "SystemInt32"), SlotRef(subSlot) });
                 EmitDefaultInitAggregate(SlotRef(subSlot), nl);
                 continue;
@@ -376,7 +376,7 @@ public abstract class HandlerBase
                 _ => null, // reference types default to null
             };
             if (defVal != null)
-                EmitExternVoid("SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid",
+                EmitExternVoid(ExternResolver.BuildArraySetSignature("SystemObjectArray", "SystemObject"),
                     new List<CLeaf> { SlotRef(slot), Const(i, "SystemInt32"), Const(defVal, GetUdonType(fieldType)) });
         }
     }
@@ -766,7 +766,7 @@ public abstract class HandlerBase
                 { ExternCall($"{arrType}.__get_Length__SystemInt32", new List<CLeaf> { arrayVal }, "SystemInt32"),
                   VisitExpression(fromEnd.Operand) }, "SystemInt32")
             : VisitExpression(idx);
-        return ExternCall($"{arrType}.__Get__SystemInt32__{elemType}", new List<CLeaf> { arrayVal, idxVal }, "SystemObject");
+        return ExternCall(ExternResolver.BuildArrayGetSignature(arrType, elemType), new List<CLeaf> { arrayVal, idxVal }, "SystemObject");
     }
 
     /// <summary>Read an aggregate-typed field as the raw stored object[] (no clone): a nested element via
@@ -775,7 +775,7 @@ public abstract class HandlerBase
     {
         if (fr.Instance != null && fr.Instance.Type is INamedTypeSymbol cont && EmitContext.IsAggregateType(cont)
             && _ctx.GetAggregateLayout(cont).TryGetIndex(fr.Field, out var idx))
-            return ExternCall("SystemObjectArray.__Get__SystemInt32__SystemObject",
+            return ExternCall(ExternResolver.BuildArrayGetSignature("SystemObjectArray", "SystemObject"),
                 new List<CLeaf> { LoadInstanceRaw(fr.Instance), Const(idx, "SystemInt32") }, "SystemObject");
         if (fr.Instance is IInstanceReferenceOperation)
             return LoadField(fr.Field.Name, "SystemObjectArray");
@@ -905,7 +905,7 @@ public abstract class HandlerBase
     {
         for (int i = 0; i < tuple.Elements.Length; i++)
         {
-            var elemVal = ExternCall("SystemObjectArray.__Get__SystemInt32__SystemObject",
+            var elemVal = ExternCall(ExternResolver.BuildArrayGetSignature("SystemObjectArray", "SystemObject"),
                 new List<CLeaf> { arrValue, Const(i, "SystemInt32") }, "SystemObject");
             var toAssign = tuple.Elements[i].Type is INamedTypeSymbol et
                 && EmitContext.IsAggregateType(et) && !et.IsTupleType
@@ -1023,7 +1023,7 @@ public abstract class HandlerBase
             && _ctx.GetAggregateLayout(aggContaining).TryGetIndex(aggMemberName, out var fieldIndex))
         {
             var arrExpr = LoadInstanceRaw(aggInstance);
-            return value => EmitExternVoid("SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid",
+            return value => EmitExternVoid(ExternResolver.BuildArraySetSignature("SystemObjectArray", "SystemObject"),
                 new List<CLeaf> { arrExpr, Const(fieldIndex, "SystemInt32"), value });
         }
 
@@ -1079,7 +1079,7 @@ public abstract class HandlerBase
         var arrSym = arrayElem.ArrayReference.Type as IArrayTypeSymbol;
         var arrayType = GetArrayType(arrSym);
         var elementType = GetArrayElemType(arrSym);
-        return value => EmitExternVoid($"{arrayType}.__Set__SystemInt32_{elementType}__SystemVoid",
+        return value => EmitExternVoid(ExternResolver.BuildArraySetSignature(arrayType, elementType),
             new List<CLeaf> { arrayVal, indexVal, value });
     }
 
@@ -1113,7 +1113,7 @@ public abstract class HandlerBase
             && _ctx.GetAggregateLayout(aggContaining).TryGetIndex(propRef.Property.Name, out var aggSlotIndex))
         {
             var arrExpr = LoadInstanceRaw(aggInst);
-            return aggVal => EmitExternVoid("SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid",
+            return aggVal => EmitExternVoid(ExternResolver.BuildArraySetSignature("SystemObjectArray", "SystemObject"),
                 new List<CLeaf> { arrExpr, Const(aggSlotIndex, "SystemInt32"), aggVal });
         }
 
@@ -1901,17 +1901,17 @@ public abstract class HandlerBase
                 new List<CLeaf> { ln, rn }, "SystemBoolean")),
             _ =>
             {
-                var lt = ExternCall("SystemObjectArray.__Get__SystemInt32__SystemObject",
+                var lt = ExternCall(ExternResolver.BuildArrayGetSignature("SystemObjectArray", "SystemObject"),
                     new List<CLeaf> { a, Const(DelegateAbi.Target, "SystemInt32") }, "SystemObject");
-                var rt = ExternCall("SystemObjectArray.__Get__SystemInt32__SystemObject",
+                var rt = ExternCall(ExternResolver.BuildArrayGetSignature("SystemObjectArray", "SystemObject"),
                     new List<CLeaf> { b, Const(DelegateAbi.Target, "SystemInt32") }, "SystemObject");
                 var targetEq = ExternCall(
                     "SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean",
                     new List<CLeaf> { lt, rt }, "SystemBoolean");
 
-                var lm = ExternCall("SystemObjectArray.__Get__SystemInt32__SystemObject",
+                var lm = ExternCall(ExternResolver.BuildArrayGetSignature("SystemObjectArray", "SystemObject"),
                     new List<CLeaf> { a, Const(DelegateAbi.Method, "SystemInt32") }, "SystemString");
-                var rm = ExternCall("SystemObjectArray.__Get__SystemInt32__SystemObject",
+                var rm = ExternCall(ExternResolver.BuildArrayGetSignature("SystemObjectArray", "SystemObject"),
                     new List<CLeaf> { b, Const(DelegateAbi.Method, "SystemInt32") }, "SystemString");
                 var methodEq = ExternCall(
                     "SystemString.__op_Equality__SystemString_SystemString__SystemBoolean",
@@ -1921,9 +1921,9 @@ public abstract class HandlerBase
                 // reference-equality leg. bundle[3] is null for method groups / capture-free lambdas,
                 // so null==null → true keeps their behaviour identical to Stage 1. Addr (slot 2) stays
                 // excluded (self-program-relative).
-                var le = ExternCall("SystemObjectArray.__Get__SystemInt32__SystemObject",
+                var le = ExternCall(ExternResolver.BuildArrayGetSignature("SystemObjectArray", "SystemObject"),
                     new List<CLeaf> { a, Const(DelegateAbi.Env, "SystemInt32") }, "SystemObject");
-                var re = ExternCall("SystemObjectArray.__Get__SystemInt32__SystemObject",
+                var re = ExternCall(ExternResolver.BuildArrayGetSignature("SystemObjectArray", "SystemObject"),
                     new List<CLeaf> { b, Const(DelegateAbi.Env, "SystemInt32") }, "SystemObject");
                 var envEq = ExternCall(
                     "SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean",

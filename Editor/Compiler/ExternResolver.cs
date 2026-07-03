@@ -363,6 +363,21 @@ public static class ExternResolver
         return $"SystemConvert.__To{shortName}__{fromType}__{toType}";
     }
 
+    public static string BuildArrayGetSignature(string arrayType, string elemType)
+    {
+        return $"{arrayType}.__Get__SystemInt32__{elemType}";
+    }
+
+    public static string BuildArraySetSignature(string arrayType, string elemType)
+    {
+        return $"{arrayType}.__Set__SystemInt32_{elemType}__SystemVoid";
+    }
+
+    public static string BuildArrayCtorSignature(string arrayType)
+    {
+        return $"{arrayType}.__ctor__SystemInt32__{arrayType}";
+    }
+
     public static string GetArrayAccessorType(IArrayTypeSymbol arrayType)
     {
         return GetUdonTypeName(arrayType);

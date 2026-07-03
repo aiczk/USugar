@@ -191,7 +191,7 @@ public class LoopHandler : HandlerBase, IOperationHandler
                 EnvEmit.Alloc(_builder, _ctx, _ctx.CaptureScope?.ScopeFor(op, CaptureScopeKind.Iteration));
                 // Body: loopVar = arr[idx]; <body>
                 CLeaf elemVal = ExternCall(
-                    $"{arrayType}.__Get__SystemInt32__{elemAccessorType}",
+                    ExternResolver.BuildArrayGetSignature(arrayType, elemAccessorType),
                     new List<CLeaf> { collVal, SlotRef(idxSlot) },
                     elemType);
                 // foreach yields a by-value COPY of the element. For an aggregate (struct/tuple) element the

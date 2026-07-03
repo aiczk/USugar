@@ -33,7 +33,7 @@ public partial class InvocationHandler
             && _ctx.GetAggregateLayout(aggProp).TryGetIndex(op.Property.Name, out var aggPropIdx))
         {
             var arrExpr = LoadInstanceRaw(op.Instance);
-            var getVal = ExternCall("SystemObjectArray.__Get__SystemInt32__SystemObject",
+            var getVal = ExternCall(ExternResolver.BuildArrayGetSignature("SystemObjectArray", "SystemObject"),
                 new List<CLeaf> { arrExpr, Const(aggPropIdx, "SystemInt32") }, "SystemObject");
             // A struct-typed property returns a COPY (C# getters return by value; you cannot mutate through it).
             return op.Property.Type is INamedTypeSymbol propAgg && EmitContext.IsAggregateType(propAgg)
@@ -252,7 +252,7 @@ public partial class InvocationHandler
                 "SystemCharArray");
             var zeroConst = Const(0, "SystemInt32");
             return ExternCall(
-                "SystemCharArray.__Get__SystemInt32__SystemChar",
+                ExternResolver.BuildArrayGetSignature("SystemCharArray", "SystemChar"),
                 new List<CLeaf> { charArr, zeroConst },
                 "SystemChar");
         }
@@ -350,13 +350,13 @@ public partial class InvocationHandler
             // 4+ args: pack into SystemObjectArray, use Format(string, object[])
             var sizeConst = Const(argVals.Count, "SystemInt32");
             var arrVal = ExternCall(
-                "SystemObjectArray.__ctor__SystemInt32__SystemObjectArray",
+                ExternResolver.BuildArrayCtorSignature("SystemObjectArray"),
                 new List<CLeaf> { sizeConst },
                 "SystemObjectArray");
             for (int i = 0; i < argVals.Count; i++)
             {
                 var idxConst = Const(i, "SystemInt32");
-                EmitExternVoid("SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid",
+                EmitExternVoid(ExternResolver.BuildArraySetSignature("SystemObjectArray", "SystemObject"),
                     new List<CLeaf> { arrVal, idxConst, argVals[i] });
             }
             return ExternCall(
@@ -447,7 +447,7 @@ public partial class InvocationHandler
         {
             var layout = _ctx.GetAggregateLayout(userStruct);
             var slot = _ctx.AllocTemp("SystemObjectArray");
-            EmitAssign(slot, ExternCall("SystemObjectArray.__ctor__SystemInt32__SystemObjectArray",
+            EmitAssign(slot, ExternCall(ExternResolver.BuildArrayCtorSignature("SystemObjectArray"),
                 new List<CLeaf> { Const(layout.Count, "SystemInt32") }, "SystemObjectArray"));
             EmitDefaultInitAggregate(SlotRef(slot), layout);
             var ctorArgs = new List<CLeaf> { SlotRef(slot) };

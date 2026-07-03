@@ -87,7 +87,7 @@ public class DeconstructionAssignmentHandler : AssignmentHandlerBase, IOperation
                 var snaps = new List<CLeaf>(targetTuple.Elements.Length);
                 for (int i = 0; i < targetTuple.Elements.Length; i++)
                 {
-                    var raw = ExternCall("SystemObjectArray.__Get__SystemInt32__SystemObject",
+                    var raw = ExternCall(ExternResolver.BuildArrayGetSignature("SystemObjectArray", "SystemObject"),
                         new List<CLeaf> { arrVal, Const(i, "SystemInt32") }, "SystemObject");
                     snaps.Add(targetTuple.Elements[i].Type is INamedTypeSymbol et && EmitContext.IsAggregateType(et)
                         ? EmitDeepCloneAggregate(raw, et) : raw);
@@ -141,7 +141,7 @@ public class DeconstructionAssignmentHandler : AssignmentHandlerBase, IOperation
                     var arrExpr = LoadField(callReturns[0].Id, "SystemObjectArray");
                     for (int i = 0; i < targetTuple.Elements.Length; i++)
                     {
-                        var elemVal = ExternCall("SystemObjectArray.__Get__SystemInt32__SystemObject",
+                        var elemVal = ExternCall(ExternResolver.BuildArrayGetSignature("SystemObjectArray", "SystemObject"),
                             new List<CLeaf> { arrExpr, Const(i, "SystemInt32") }, "SystemObject");
                         AssignToLValue(targetTuple.Elements[i], elemVal, prepared);
                     }
@@ -299,7 +299,7 @@ public class DeconstructionAssignmentHandler : AssignmentHandlerBase, IOperation
                 "SystemObjectArray");
             for (int i = 0; i < targetTuple.Elements.Length; i++)
             {
-                var elemVal = ExternCall("SystemObjectArray.__Get__SystemInt32__SystemObject",
+                var elemVal = ExternCall(ExternResolver.BuildArrayGetSignature("SystemObjectArray", "SystemObject"),
                     new List<CLeaf> { arrVal, Const(i, "SystemInt32") }, "SystemObject");
                 AssignToLValue(targetTuple.Elements[i], elemVal, prepared);
             }

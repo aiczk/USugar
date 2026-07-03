@@ -62,7 +62,7 @@ public class SimpleAssignmentHandler : AssignmentHandlerBase, IExpressionHandler
             var arrSymbol = arrayElem.ArrayReference.Type as IArrayTypeSymbol;
             var arrayType = GetArrayType(arrSymbol);
             var elementType = GetArrayElemType(arrSymbol);
-            EmitExternVoid($"{arrayType}.__Set__SystemInt32_{elementType}__SystemVoid", new List<CLeaf> { arrayVal, indexVal, srcVal });
+            EmitExternVoid(ExternResolver.BuildArraySetSignature(arrayType, elementType), new List<CLeaf> { arrayVal, indexVal, srcVal });
             return srcVal;
         }
 

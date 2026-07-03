@@ -132,7 +132,7 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
             if (layout.TryGetIndex(fieldRef.Field, out var elemIndex))
             {
                 var arrExpr = LoadInstanceRaw(fieldRef.Instance);
-                var getVal = ExternCall("SystemObjectArray.__Get__SystemInt32__SystemObject",
+                var getVal = ExternCall(ExternResolver.BuildArrayGetSignature("SystemObjectArray", "SystemObject"),
                     new List<CLeaf> { arrExpr, Const(elemIndex, "SystemInt32") }, "SystemObject");
                 // A struct-typed element read AS A VALUE is copied (value semantics); scalar elements are immutable boxes.
                 return fieldRef.Field.Type is INamedTypeSymbol elemAgg && EmitContext.IsAggregateType(elemAgg)
@@ -600,7 +600,7 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
         DelegateAbi.ValidateDelegateBinding(op.Type as INamedTypeSymbol,
             (op.Target as IMethodReferenceOperation)?.Method, _ctx.TypeParamMap);
 
-        var bundle = ExternCall("SystemObjectArray.__ctor__SystemInt32__SystemObjectArray",
+        var bundle = ExternCall(ExternResolver.BuildArrayCtorSignature("SystemObjectArray"),
             new List<CLeaf> { Const(DelegateAbi.BundleSize, "SystemInt32") }, "SystemObjectArray");
 
         var thisType = GetUdonType(_classSymbol);
@@ -611,15 +611,15 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
         // bundle is later handed cross-Behaviour (the invoke-side target-identity guard is the only gate).
         var addr = thirdParty != null ? (CLeaf)Const(0u, "SystemUInt32") : funcRef;
 
-        EmitExternVoid("SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid",
+        EmitExternVoid(ExternResolver.BuildArraySetSignature("SystemObjectArray", "SystemObject"),
             new List<CLeaf> { bundle, Const(DelegateAbi.Target, "SystemInt32"), target });
-        EmitExternVoid("SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid",
+        EmitExternVoid(ExternResolver.BuildArraySetSignature("SystemObjectArray", "SystemObject"),
             new List<CLeaf> { bundle, Const(DelegateAbi.Method, "SystemInt32"), Const(bridgeName, "SystemString") });
-        EmitExternVoid("SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid",
+        EmitExternVoid(ExternResolver.BuildArraySetSignature("SystemObjectArray", "SystemObject"),
             new List<CLeaf> { bundle, Const(DelegateAbi.Addr, "SystemInt32"), addr });
         // Stage 2 §3.7: bundle[3] carries the binding-scope env for a CAPTURING closure target, else
         // a null const (capture-free lambda / named method / base.M) = byte-identical to Stage 1.
-        EmitExternVoid("SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid",
+        EmitExternVoid(ExternResolver.BuildArraySetSignature("SystemObjectArray", "SystemObject"),
             new List<CLeaf> { bundle, Const(DelegateAbi.Env, "SystemInt32"), envLeaf });
 
         return bundle;
@@ -631,13 +631,13 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
     {
         // Create object[] and set each element
         var count = op.Elements.Length;
-        var arrExpr = ExternCall("SystemObjectArray.__ctor__SystemInt32__SystemObjectArray",
+        var arrExpr = ExternCall(ExternResolver.BuildArrayCtorSignature("SystemObjectArray"),
             new List<CLeaf> { Const(count, "SystemInt32") }, "SystemObjectArray");
 
         for (int i = 0; i < count; i++)
         {
             var elemVal = VisitExpression(op.Elements[i]);
-            EmitExternVoid("SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid",
+            EmitExternVoid(ExternResolver.BuildArraySetSignature("SystemObjectArray", "SystemObject"),
                 new List<CLeaf> { arrExpr, Const(i, "SystemInt32"), elemVal });
         }
 

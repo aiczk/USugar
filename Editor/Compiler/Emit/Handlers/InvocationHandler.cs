@@ -481,7 +481,7 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
         void EmitGuardedDispatch()
         {
             // tgt is a SystemObject temp fed to externs directly — no Convert needed (P1/P5a).
-            var tgt = ExternCall("SystemObjectArray.__Get__SystemInt32__SystemObject",
+            var tgt = ExternCall(ExternResolver.BuildArrayGetSignature("SystemObjectArray", "SystemObject"),
                 new List<CLeaf> { bundle, Const(DelegateAbi.Target, "SystemInt32") }, "SystemObject");
             // target-null guard: unset element, or the in-game security filter nulling bundle[0].
             var tOk = ExternCall("UnityEngineObject.__op_Inequality__UnityEngineObject_UnityEngineObject__SystemBoolean",
@@ -496,12 +496,12 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
                 // Stage 2 §5.1: stage bundle[3] into the env conv global (unconditional, both arms —
                 // the SELF arm's bridge reads this field directly; the CROSS arm SPVs it below). A
                 // capture-free target sends null; the receiving bridge's null-env guard is the backstop.
-                EmitStoreField(convEnv, ExternCall("SystemObjectArray.__Get__SystemInt32__SystemObject",
+                EmitStoreField(convEnv, ExternCall(ExternResolver.BuildArrayGetSignature("SystemObjectArray", "SystemObject"),
                     new List<CLeaf> { bundle, Const(DelegateAbi.Env, "SystemInt32") }, EnvEmit.EnvType));
 
-                var adr = ExternCall("SystemObjectArray.__Get__SystemInt32__SystemObject",
+                var adr = ExternCall(ExternResolver.BuildArrayGetSignature("SystemObjectArray", "SystemObject"),
                     new List<CLeaf> { bundle, Const(DelegateAbi.Addr, "SystemInt32") }, "SystemUInt32");
-                var mtd = ExternCall("SystemObjectArray.__Get__SystemInt32__SystemObject",
+                var mtd = ExternCall(ExternResolver.BuildArrayGetSignature("SystemObjectArray", "SystemObject"),
                     new List<CLeaf> { bundle, Const(DelegateAbi.Method, "SystemInt32") }, "SystemString");
                 var thisType = GetUdonType(_classSymbol);
                 var thisRef = LoadField(_ctx.DeclareThisOnce(thisType), thisType);

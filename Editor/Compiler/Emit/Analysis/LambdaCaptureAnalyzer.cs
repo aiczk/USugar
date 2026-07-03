@@ -47,7 +47,7 @@ public sealed class LambdaCaptureAnalyzer
         if (_localFunctionCaptures == null || m == null || m.MethodKind != MethodKind.LocalFunction)
             return false;
         // Symbol identity across semantic models is value-based for local functions
-        // (syntax + container) — same OriginalDefinition fallback as EmitContext.IsCapturingLocalFunction.
+        // (syntax + container), hence the OriginalDefinition fallback.
         return _localFunctionCaptures.TryGetValue(m, out captures)
             || (m.OriginalDefinition != null && _localFunctionCaptures.TryGetValue(m.OriginalDefinition, out captures));
     }
