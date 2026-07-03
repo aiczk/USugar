@@ -18,10 +18,11 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
 
     CLeaf VisitCompoundAssignment(ICompoundAssignmentOperation op)
     {
-        // Block += / -= on ANY delegate-typed target (field, local, param, property, array element, …) —
-        // Udon VM does not support Delegate.Combine/Remove (predicate widened per design §5.2; message unchanged).
+        // Multicast design (2026-07-03 §1.4/§7 A-M1): `+=`/`-=` on ANY delegate-typed target (field,
+        // local, param, property, array element, …) lowers to the sig's synthetic combine/remove helper
+        // instead of rejecting. Predicate unchanged from the former reject arm (widened per Stage-1 §5.2).
         if (op.Target.Type is INamedTypeSymbol nt && nt.DelegateInvokeMethod != null)
-            throw new System.NotSupportedException("Multicast delegates (+=/-=) are not supported. Udon VM does not support Delegate.Combine/Remove.");
+            return VisitDelegateCompoundAssignment(op, nt);
 
         // Capture lvalue sub-expressions once to avoid double evaluation
         var lv = CaptureLValue(op.Target);
@@ -86,6 +87,42 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
         if (opResultType != resultType)
             resultVal = EmitNarrowingConvert(resultVal, opResultType, resultType);
 
+        EmitWriteBack(op.Target, resultVal, lv);
+        return resultVal;
+    }
+
+    /// <summary>
+    /// Multicast design (2026-07-03 §1.4/§7 A-M1): `d += h` / `d -= h` lowers to
+    /// `d = __dlg_combine_{sig}(d, h)` / `d = __dlg_remove_{sig}(d, h)`. The helper is a per-class
+    /// synthetic function (UasmEmitter.EmitMulticastCombineRemoveHelpers, sibling of
+    /// EmitPendingDelegateBridges) minted lazily via RegisterMulticastSig — a class with no `+=`/`-=`
+    /// on a delegate emits none of this (single-cast golden stays byte-identical, §6 gate).
+    /// </summary>
+    CLeaf VisitDelegateCompoundAssignment(ICompoundAssignmentOperation op, INamedTypeSymbol delegateType)
+    {
+        if (op.OperatorKind != BinaryOperatorKind.Add && op.OperatorKind != BinaryOperatorKind.Subtract)
+            throw new System.NotSupportedException(
+                $"Delegate compound operator '{op.OperatorKind}' is not supported.");
+
+        var invoke = delegateType.DelegateInvokeMethod;
+        // §3.4-1: re-validate ref/out and tuple-return at the lowering site, mirroring the dispatch-side
+        // re-validation — a delegate value from a foreign source never passed creation-site validation.
+        DelegateAbi.ValidateNoRefOutParams(invoke);
+        if (!invoke.ReturnsVoid && invoke.ReturnType.IsTupleType)
+            throw new System.NotSupportedException($"Tuple-return delegate '{delegateType.Name}' is not supported.");
+
+        var lv = CaptureLValue(op.Target);
+        var leftVal = lv.Value;
+        var rightVal = VisitExpression(op.Value);
+
+        var sigPart = DelegateAbi.BuildSigPart(invoke, _ctx.TypeParamMap);
+        RegisterMulticastSig(sigPart, invoke);
+
+        var helperName = op.OperatorKind == BinaryOperatorKind.Add
+            ? DelegateAbi.MulticastCombineName(sigPart)
+            : DelegateAbi.MulticastRemoveName(sigPart);
+
+        var resultVal = _builder.InternalCall(helperName, new List<CLeaf> { leftVal, rightVal }, "SystemObjectArray");
         EmitWriteBack(op.Target, resultVal, lv);
         return resultVal;
     }

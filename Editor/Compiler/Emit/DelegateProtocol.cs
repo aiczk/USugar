@@ -76,6 +76,16 @@ public static class DelegateAbi
                 throw new System.NotSupportedException(
                     "Delegate types with ref/out parameters are not supported.");
     }
+
+    /// <summary>
+    /// Multicast design (2026-07-03 §1.1): the ONLY name source for the per-sig synthetic fan-out
+    /// bridge / combine / remove helpers. A multicast bundle routes bundle[1]/[2] to this bridge;
+    /// the combine/remove helpers detect a multicast OPERAND via a compile-time constant string
+    /// compare against MulticastFanoutName (§1.4) — never re-derive these strings at another site.
+    /// </summary>
+    public static string MulticastFanoutName(string sigPart) => $"__dlg_fanout_{sigPart}";
+    public static string MulticastCombineName(string sigPart) => $"__dlg_combine_{sigPart}";
+    public static string MulticastRemoveName(string sigPart) => $"__dlg_remove_{sigPart}";
 }
 
 /// <summary>

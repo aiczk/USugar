@@ -1502,6 +1502,21 @@ public abstract class HandlerBase
         return (argNames, retName, envName);
     }
 
+    /// <summary>Multicast design (2026-07-03 §1.4): register the sig this `+=`/`-=` site needs a
+    /// combine/remove helper (and fan-out bridge) for. Keyed on sig content (first registration wins) —
+    /// a second `+=` site sharing the signature is a no-op here, same class of dedup as
+    /// EmitPendingDelegateBridges' `emitted.Add`. Snapshots the type-param map for the same reason
+    /// ResolveDelegateBridge does (§7 A-M1): synthetic emission runs after body emission, when the
+    /// ambient map may already be cleared.</summary>
+    protected void RegisterMulticastSig(string sigPart, IMethodSymbol invoke)
+    {
+        if (_ctx.PendingMulticastSigs.ContainsKey(sigPart)) return;
+        var snapshot = _ctx.TypeParamMap != null
+            ? new Dictionary<ITypeParameterSymbol, ITypeSymbol>(_ctx.TypeParamMap, SymbolEqualityComparer.Default)
+            : null;
+        _ctx.PendingMulticastSigs[sigPart] = (invoke, snapshot);
+    }
+
     // ── Override-chain resolution (shared core) ──
     //
     // The "walk _classSymbol's BaseType chain; for each same-named member, walk its

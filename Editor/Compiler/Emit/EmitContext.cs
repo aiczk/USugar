@@ -675,6 +675,15 @@ public class EmitContext
     // Pending delegate bridges for dynamically hoisted lambdas/local functions
     public readonly List<(IMethodSymbol method, string bridgeExportName, Dictionary<ITypeParameterSymbol, ITypeSymbol> resolvedTypeParamMap)> PendingDelegateBridges = new();
 
+    // Multicast design (2026-07-03 §1): sig-part → (Invoke, resolved type-param snapshot) for every
+    // delegate signature this class combines/removes via `+=`/`-=` (CompoundAssignmentHandler). Drives
+    // the per-class __dlg_fanout_/__dlg_combine_/__dlg_remove_{sig} synthetic emission (UasmEmitter,
+    // sibling of EmitPendingDelegateBridges). Keyed on sig content, not occurrence — so two `+=` sites
+    // sharing a signature dedupe to one fan-out/helper set. Snapshot mirrors PendingDelegateBridges:
+    // this dict is read AFTER body emission completes, when a generic method's ambient TypeParamMap
+    // may already be cleared.
+    public readonly Dictionary<string, (IMethodSymbol Invoke, Dictionary<ITypeParameterSymbol, ITypeSymbol> TypeParamMap)> PendingMulticastSigs = new();
+
     // Diagnostics collected during emission
     public readonly List<EmitDiagnostic> Diagnostics = new();
     public readonly HashSet<string> ReportedExterns = new();

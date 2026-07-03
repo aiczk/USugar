@@ -455,6 +455,32 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
             if (ordinal < argExprs.Length) argExprs[ordinal] = val;
         }
 
+        // §4.3: this dispatch can re-enter the containing function (synthetic-SCC cycle member,
+        // non-tail site — pre-computed by BuildRecursionInfo). Flag BOTH dispatch arms Reentrant so
+        // InsertRecursionSpills wraps them with the __recurStack frame spill/reload; tail dispatches
+        // stay unflagged so bundle-driven deep tail recursion never spills (§4.4).
+        bool reentrant = MarkReentrantDispatch(op);
+
+        return EmitDelegateDispatchCore(bundle, invoke, convArgs, convRet, convEnv, retType, _typeParamMap,
+            argExprs, isConditional, reentrant, DescribeDelegateReceiver(op.Instance));
+    }
+
+    /// <summary>
+    /// Multicast design (2026-07-03 §1.2/§1.6) shared guard-ladder core, extracted from
+    /// <see cref="EmitDelegateDispatch(CLeaf, INamedTypeSymbol, IInvocationOperation, bool)"/> so the
+    /// synthetic fan-out bridge dispatches invocation-list elements through the IDENTICAL dispatch body
+    /// single-cast call sites use (dispatch itself carries zero multicast awareness — this is the basis
+    /// for single-cast byte-identity). <paramref name="argExprsByOrdinal"/> arrive ALREADY evaluated
+    /// (the caller resolved them from either real call-site arguments or fan-out snapshot locals);
+    /// <paramref name="reentrant"/> is decided by the caller (the fan-out element-dispatch site always
+    /// passes false — reentrancy wiring is A-M3 scope, §1.6). <paramref name="typeParamMap"/> is used
+    /// explicitly (never the ambient ctx map) so this stays correct when called from post-body-emission
+    /// synthetic passes, mirroring EmitPendingDelegateBridges' resolvedTypeParamMap snapshot use.
+    /// </summary>
+    CLeaf EmitDelegateDispatchCore(CLeaf bundle, IMethodSymbol invoke, string[] convArgs, string convRet, string convEnv,
+        string retType, IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeParamMap,
+        CLeaf[] argExprs, bool isConditional, bool reentrant, string receiverDescription)
+    {
         // retSlot pre-initialized to default(T): every guard-failure arm falls through with it (§2.6).
         int retSlot = -1;
         if (retType != null)
@@ -463,19 +489,13 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
             EmitAssign(retSlot, DefaultConst(retType));
         }
 
-        // §4.3: this dispatch can re-enter the containing function (synthetic-SCC cycle member,
-        // non-tail site — pre-computed by BuildRecursionInfo). Flag BOTH dispatch arms Reentrant so
-        // InsertRecursionSpills wraps them with the __recurStack frame spill/reload; tail dispatches
-        // stay unflagged so bundle-driven deep tail recursion never spills (§4.4).
-        bool reentrant = MarkReentrantDispatch(op);
-
         // Guard-failure arm: LogError (NRE deviation, exact message per §2.6) — or silent for ?.Invoke.
         System.Action<CoreBuilder> failArm = null;
         if (!isConditional)
             failArm = _ =>
                 EmitExternVoid("UnityEngineDebug.__LogError__SystemObject__SystemVoid",
                     new List<CLeaf> { Const(
-                        $"USugar: NullReferenceException — invoked a null delegate ({_classSymbol.Name}.{DescribeDelegateReceiver(op.Instance)})",
+                        $"USugar: NullReferenceException — invoked a null delegate ({_classSymbol.Name}.{receiverDescription})",
                         "SystemString") });
 
         void EmitGuardedDispatch()
@@ -534,7 +554,7 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
                         {
                             for (int i = 0; i < convArgs.Length; i++)
                             {
-                                var argType = GetUdonType(invoke.Parameters[i].Type);
+                                var argType = ExternResolver.GetUdonTypeName(invoke.Parameters[i].Type, typeParamMap);
                                 EmitExternVoid(
                                     "VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid",
                                     new List<CLeaf> { tgt, Const(convArgs[i], "SystemString"), LoadField(convArgs[i], argType) });
@@ -570,6 +590,30 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
 
         return retSlot >= 0 ? SlotRef(retSlot) : null;
     }
+
+    /// <summary>
+    /// Multicast design (2026-07-03 §1.2) fan-out per-element dispatch entry point: called by
+    /// UasmEmitter's synthetic __dlg_fanout_{sig} bridge for EACH invocation-list element bundle,
+    /// through the SAME guard ladder as a single-cast call site — dispatch itself carries zero
+    /// multicast awareness, which is why single-cast dispatch bytes never move (§1.2/§6 gate).
+    /// <paramref name="argExprsByOrdinal"/> are the bridge's fan-out-local snapshot slots (already
+    /// re-staged this iteration by the caller); reentrant is always false here — the fan-out reentrancy
+    /// graph-node registration is A-M3 scope (§1.6), not wired yet.
+    /// </summary>
+    internal CLeaf EmitFanoutElementDispatch(CLeaf bundle, IMethodSymbol invoke,
+        IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeParamMap, CLeaf[] argExprsByOrdinal)
+    {
+        var (convArgs, convRet, convEnv) = GetConventionFieldNames(
+            (INamedTypeSymbol)invoke.ContainingType, typeParamMap);
+        string retType = invoke.ReturnsVoid ? null : ExternResolver.GetUdonTypeName(invoke.ReturnType, typeParamMap);
+        return EmitDelegateDispatchCore(bundle, invoke, convArgs, convRet, convEnv, retType, typeParamMap,
+            argExprsByOrdinal, isConditional: false, reentrant: false, receiverDescription: "multicast fan-out");
+    }
+
+    /// <summary>Multicast design §1.4: exposes the existing element-equality leg (target+method+env,
+    /// §2.5) for the synthetic combine/remove helpers' LastContiguousMatch search — reused verbatim,
+    /// never re-derived, so the `-=` removal semantics can never drift from `==`'s element leg.</summary>
+    internal CLeaf EmitDelegateElementEquals(CLeaf a, CLeaf b) => CompareDelegates(a, b, isNotEquals: false);
 
     /// <summary>default(T) constant for the dispatch retSlot pre-init (§2.6). Non-primitive Udon types
     /// (objects, arrays, bundles, SDK structs) approximate with null — only observable on the
