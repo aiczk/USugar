@@ -921,6 +921,66 @@ public class BareArrTest : UdonSharpBehaviour {
         Assert.Equal(new[] { 10, 20, 30 }, arr);
     }
 
+    // ── Field initializers: user-struct construction (roadmap B41) ──
+    // A user-struct field initializer's ctor-call / object-initializer form must take the same S1
+    // object[]-emulation lowering the method-body path (VisitAggregateLocalDeclaration) uses, not the
+    // generic VisitObjectCreation fallback meant for SDK value types (Vector3, …) — that fallback treats
+    // the aggregate's Udon type name ("SystemObjectArray") as if it were a real registered type and emits
+    // nonexistent externs (SystemObjectArray.__ctor__…/__set_x__…).
+
+    [Fact]
+    public void FieldInitializer_UserStructCtorCall_NoBogusExtern()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public class FIStructCtorTest : UdonSharpBehaviour {
+    TestStubs.MyVec3 _s = new TestStubs.MyVec3(1, 2, 3);
+    void Start() { }
+}");
+        // The bogus extern took the ctor's ARG types (SystemSingle x3), not the array-allocation ctor
+        // (SystemInt32 size arg) — that one is a real, legal SystemObjectArray extern and must stay.
+        Assert.DoesNotContain("SystemObjectArray.__ctor__SystemSingle_SystemSingle_SystemSingle__SystemObjectArray", uasm);
+        Assert.Contains("SystemObjectArray.__ctor__SystemInt32__SystemObjectArray", uasm);
+    }
+
+    [Fact]
+    public void FieldInitializer_UserStructObjectInitializer_NoBogusExtern()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public class FIStructObjInitTest : UdonSharpBehaviour {
+    TestStubs.MyVec3 _s = new TestStubs.MyVec3 { x = 1 };
+    void Start() { }
+}");
+        Assert.DoesNotContain("SystemObjectArray.__set_x__", uasm);
+    }
+
+    [Fact]
+    public void StaticReadonlyFieldInitializer_UserStructCtorCall_NoBogusExtern()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public class FIStaticStructCtorTest : UdonSharpBehaviour {
+    static readonly TestStubs.MyVec3 _s = new TestStubs.MyVec3(1, 2, 3);
+    void Start() { }
+}");
+        Assert.DoesNotContain("SystemObjectArray.__ctor__SystemSingle_SystemSingle_SystemSingle__SystemObjectArray", uasm);
+        Assert.Contains("SystemObjectArray.__ctor__SystemInt32__SystemObjectArray", uasm);
+    }
+
+    [Fact]
+    public void FieldInitializer_UserStructCtorCallWithObjectInitializer_AppliesBothCtorAndInitializer()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public class FIStructCtorPlusInitTest : UdonSharpBehaviour {
+    TestStubs.MyVec3 _s = new TestStubs.MyVec3(1, 2, 3) { z = 9 };
+    void Start() { }
+}");
+        Assert.DoesNotContain("SystemObjectArray.__ctor__SystemSingle_SystemSingle_SystemSingle__SystemObjectArray", uasm);
+        Assert.DoesNotContain("SystemObjectArray.__set_z__SystemSingle", uasm);
+    }
+
     // ── Postfix increment/decrement ──
 
     [Fact]
