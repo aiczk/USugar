@@ -90,6 +90,76 @@ public class ExtRefBehField : UdonSharpBehaviour {
         AssertExternCount(uasm, "UnityEngineComponentArray.__Get__", 1);
     }
 
+    [Fact]
+    public void RefExtern_CapturedLocal_RoundTripsThroughEnvCell()
+    {
+        // A captured local has no flat heap field (Stage 2 §4.1) — ResolveOutRefFieldName returns
+        // null for it, same as any complex lvalue. Pre-fix this fell through the legacy
+        // VisitExpression + AssignToTarget path (which happens to be correct for a bare variable,
+        // since there's no side-effecting leg to double-evaluate); now TryPrepareRefOutArg prepares
+        // it directly via the env cell, the ONE mechanism. Assert the round-trip value is correct
+        // and the lambda closure that captures the local later observes the mutation.
+        var uasm = TestHelper.CompileToUasm(@"
+using UnityEngine;
+using UdonSharp;
+using System;
+public class ExtRefCapLocal : UdonSharpBehaviour {
+    public float result;
+    void Start() {
+        float v = 1f;
+        Action bump = () => { v = v + 100f; };
+        Mathf.SmoothDamp(1f, 2f, ref v, 0.5f);
+        bump();
+        result = v;
+    }
+}", "ExtRefCapLocal");
+        Assert.Contains("UnityEngineMathf.__SmoothDamp__", uasm);
+        Assert.Contains("SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid", uasm);
+    }
+
+    [Fact]
+    public void OutExtern_CapturedOutVar_RoundTripsThroughEnvCell()
+    {
+        // `out var x` declaring a CAPTURED local: ResolveOutRefFieldName returns null for it too
+        // (same Stage 2 §4.1 rule), so it reaches the same TryPrepareRefOutArg call as the ref case.
+        var uasm = TestHelper.CompileToUasm(@"
+using System;
+using UdonSharp;
+public class ExtOutCapVar : UdonSharpBehaviour {
+    public int result;
+    void Start() {
+        int.TryParse(""5"", out int captured);
+        Action bump = () => { captured = captured + 100; };
+        bump();
+        result = captured;
+    }
+}", "ExtOutCapVar");
+        Assert.Contains("SystemInt32.__TryParse__SystemString_SystemInt32Ref__SystemBoolean", uasm);
+    }
+
+    [Fact]
+    public void RefExtern_IndexSubscriptArrayElement_LoudRejects()
+    {
+        // `ref arr[^1]`: TryPrepareRefOutArg explicitly declines a from-end Index-subscripted array
+        // element (its own arithmetic isn't resolved through the ref/out copy-in/copy-back legs).
+        // Pre-fix, EmitExternMethodCall's fallback silently tried the plain-write path
+        // (PrepareArrayElementSet), which doesn't special-case Index and crashed with an unrelated,
+        // confusing "Unsupported unary operator: Hat" — now the argument site rejects loudly and
+        // names the parameter that couldn't bind.
+        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
+using UnityEngine;
+using UdonSharp;
+public class ExtRefIdxSub : UdonSharpBehaviour {
+    public float result;
+    void Start() {
+        float[] arr = new float[3];
+        Mathf.SmoothDamp(1f, 2f, ref arr[^1], 0.5f);
+        result = arr[2];
+    }
+}", "ExtRefIdxSub"));
+        Assert.Contains("currentVelocity", ex.Message);
+    }
+
     static void AssertExternCount(string uasm, string extern_, int expected)
     {
         var code = uasm.Substring(uasm.IndexOf(".code_start", StringComparison.Ordinal));

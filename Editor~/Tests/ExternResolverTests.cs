@@ -5,9 +5,8 @@ using Xunit;
 
 namespace USugar.Tests;
 
-public class ExternResolverTests : System.IDisposable
+public class ExternResolverTests
 {
-    public void Dispose() => ExternResolver.OnTypeFallback = null;
     [Theory]
     [InlineData("System.Int32", "SystemInt32")]
     [InlineData("System.String", "SystemString")]
@@ -80,13 +79,13 @@ public class ExternResolverTests : System.IDisposable
     }
 
     [Fact]
-    public void OnTypeFallback_FiresForDisplayStringTypes()
+    public void DisplayStringFallback_ResolvesNonSpecialTypeName()
     {
-        var captured = new System.Collections.Concurrent.ConcurrentBag<(ITypeSymbol type, string sanitized)>();
-        ExternResolver.OnTypeFallback = (t, s) => captured.Add((t, s));
-
-        // Vector3 field triggers the display-string fallback path
-        TestHelper.CompileToUasm(@"
+        // Vector3 has no dedicated GetUdonTypeName branch (not an array/delegate/behaviour/interface/
+        // nullable/aggregate/enum/generic special case) — it resolves through the terminal
+        // display-string sanitization branch. Assert the real resolution behavior directly instead
+        // of observing it via the (now-removed) OnTypeFallback instrumentation hook.
+        var uasm = TestHelper.CompileToUasm(@"
 using UdonSharp;
 [UdonBehaviourSyncMode(BehaviourSyncMode.None)]
 public class FallbackTest : UdonSharpBehaviour {
@@ -94,7 +93,7 @@ public class FallbackTest : UdonSharpBehaviour {
     void Start() { UnityEngine.Vector3 v = _pos; }
 }
 ");
-        Assert.Contains(captured.ToArray(), c => c.sanitized == "UnityEngineVector3");
+        Assert.Contains("UnityEngineVector3", uasm);
     }
 
     [Fact]
