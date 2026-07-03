@@ -2642,11 +2642,22 @@ public class UasmEmitter
             && oc.Type is INamedTypeSymbol nt && EmitContext.IsUserStruct(nt)
             && oc.Arguments.Length > 0 && !oc.Constructor.IsImplicitlyDeclared)
             result.Add(oc.Constructor);
-        // User-struct instance method: v.Method(...).
+        // User-struct instance method: v.Method(...). A struct that declares its OWN type parameter
+        // (struct Box<T>) has no monomorphization path — this collector registers the method once by
+        // OriginalDefinition regardless of the receiver's concrete T, so every call site would dispatch
+        // to one body and hit an SDK-assembler ICE. Reject loudly here, before extern/assembler
+        // (roadmap B36; USugar monomorphizes generic METHODS but not generic struct TYPES).
         if (op is IInvocationOperation inv && inv.TargetMethod is { IsStatic: false } tm
             && tm.MethodKind == MethodKind.Ordinary && !tm.IsImplicitlyDeclared
             && tm.ContainingType is INamedTypeSymbol it && EmitContext.IsUserStruct(it))
+        {
+            if (it.IsGenericType)
+                throw new NotSupportedException(
+                    $"Generic struct instance methods ({it.Name}<T>.{tm.Name}) are not supported: "
+                    + "USugar monomorphizes generic methods but not generic struct types. Make the "
+                    + "struct non-generic, or move the type parameter to the method.");
             result.Add(tm.OriginalDefinition);
+        }
         // Computed (non-auto) user-struct property: v.Prop (read) or v.Prop = x (write). Auto-properties use
         // their backing-field slot directly (no method), but a computed accessor must be inlined as a struct
         // instance method. Register both accessors (the reference alone doesn't reveal read-vs-write context).
