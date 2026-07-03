@@ -7,14 +7,6 @@ using Microsoft.CodeAnalysis.Operations;
 
 public static class ExternResolver
 {
-    // Called when a type falls back to display-string sanitization (informational).
-    static Action<ITypeSymbol, string> _onTypeFallback;
-    public static Action<ITypeSymbol, string> OnTypeFallback
-    {
-        get => Volatile.Read(ref _onTypeFallback);
-        set => Volatile.Write(ref _onTypeFallback, value);
-    }
-
     // Optional extern existence check (set by test harness or Unity editor).
     // Used to resolve ambiguous containing types for conversion operators.
     static Func<string, bool> _isExternValid;
@@ -268,9 +260,7 @@ public static class ExternResolver
         var full = type.SpecialType != SpecialType.None
             ? GetSpecialTypeName(type.SpecialType)
             : type.ToDisplayString(SymbolDisplayFormat.CSharpErrorMessageFormat);
-        var sanitized = RemapUdonType(SanitizeTypeName(full));
-        OnTypeFallback?.Invoke(type, sanitized);
-        return sanitized;
+        return RemapUdonType(SanitizeTypeName(full));
     }
 
     static string GetSpecialTypeName(SpecialType st) => st switch

@@ -105,24 +105,22 @@ public partial class InvocationHandler
                 // Complex lvalue: evaluate the receiver/index legs ONCE via the hardened
                 // TryPrepareRefOutArg machinery (wave-9 [Y12]) and copy back through the SAME
                 // legs — C# evaluates an argument's component expressions exactly once, at the
-                // argument's syntax position, before the call. Falls back to the legacy temp
-                // field + AssignToTarget for shapes it doesn't cover (e.g. captured env locals),
-                // which don't re-evaluate side-effecting legs.
+                // argument's syntax position, before the call. Every shape that reaches here and
+                // compiles today is covered by TryPrepareRefOutArg (array element, aggregate
+                // member, cross-behaviour field, captured env local/param) — anything it declines
+                // is loud-rejected below instead of falling through a second, un-audited path.
                 var paramType = GetUdonType(param.Type);
                 var tempField = _ctx.DeclareLocal("outref", paramType);
-                var prepared = TryPrepareRefOutArg(op.Arguments[i]);
-                if (prepared is { } pre)
-                {
-                    if (param.RefKind == RefKind.Ref)
-                        EmitStoreField(tempField, pre.read());
-                    argVals.Add(FieldAddr(tempField, paramType));
-                    outCopyBacks.Add((i, tempField, pre.store));
-                    continue;
-                }
+                var prepared = TryPrepareRefOutArg(op.Arguments[i]) ?? throw new System.NotSupportedException(
+                    $"'{(param.RefKind == RefKind.Ref ? "ref" : "out")} {param.Name}' of '{target.Name}' cannot "
+                    + $"bind to '{op.Arguments[i].Value.Syntax}' ({op.Arguments[i].Value.Kind}): this l-value "
+                    + "shape has no ref/out extern binding (locals, parameters, behaviour fields, single-index "
+                    + "array elements, and struct/tuple members are supported). Assign it to a local variable "
+                    + "first, or restructure the expression.");
                 if (param.RefKind == RefKind.Ref)
-                    EmitStoreField(tempField, VisitExpression(op.Arguments[i].Value));
+                    EmitStoreField(tempField, prepared.read());
                 argVals.Add(FieldAddr(tempField, paramType));
-                outCopyBacks.Add((i, tempField, null));
+                outCopyBacks.Add((i, tempField, prepared.store));
                 continue;
             }
             argVals.Add(VisitExpression(op.Arguments[i].Value));
@@ -151,15 +149,13 @@ public partial class InvocationHandler
             result = null;
         }
 
-        // Copy-back for complex out/ref lvalues
+        // Copy-back for complex out/ref lvalues — always through the SAME legs TryPrepareRefOutArg
+        // evaluated at copy-in (never a re-evaluating fallback).
         foreach (var (argIdx, tempField, store) in outCopyBacks)
         {
             var paramType = GetUdonType(target.Parameters[argIdx].Type);
             var val = LoadField(tempField, paramType);
-            if (store != null)
-                store(val);
-            else
-                AssignToTarget(op.Arguments[argIdx].Value, val);
+            store(val);
         }
 
         return result;
@@ -787,15 +783,18 @@ public partial class InvocationHandler
 
     /// <summary>Wave-9 round-8 [Y12]: evaluate a ref/out argument lvalue's receiver/index legs ONCE
     /// and return (the value read through those legs, the deferred copy-back store over the SAME
-    /// legs). C# evaluates an argument's component expressions exactly once; the legacy path
-    /// re-evaluated them at copy-back via AssignToTarget, so side-effecting legs ran twice and the
-    /// copy-back landed in the cell chosen by the SECOND evaluation (VM-proven:
-    /// AddTo(ref arr[Idx()].v) with a k-mutating Idx — kk ref=1 vs 2, c0/c1 swapped cells; out and
-    /// plain-int[]-element flavors identical). Covers the proven leg-bearing shapes — plain array
-    /// elements (mirrors ArrayHandler.VisitArrayElementReference / PrepareArrayElementSet) and
-    /// aggregate struct/tuple member chains (mirrors the ExpressionHandler aggregate-member read /
-    /// TryPrepareFieldSet's aggregate arm). Everything else (locals, params, behaviour fields)
-    /// keeps the legacy read + AssignToTarget copy-back, byte-identical.</summary>
+    /// legs). C# evaluates an argument's component expressions exactly once; re-evaluating them at
+    /// copy-back (the retired AssignToTarget fallback) ran side-effecting legs twice and landed the
+    /// write in the cell chosen by the SECOND evaluation (VM-proven: AddTo(ref arr[Idx()].v) with a
+    /// k-mutating Idx — kk ref=1 vs 2, c0/c1 swapped cells; out and plain-int[]-element flavors
+    /// identical). This is the ONLY ref/out argument-preparation path for EmitExternMethodCall — a
+    /// simple direct-address target (plain local/param/this-field) never reaches here at all
+    /// (ResolveOutRefFieldName takes it first); every complex shape that reaches here and compiles
+    /// today is covered: single-index array elements (mirrors ArrayHandler.VisitArrayElementReference
+    /// / PrepareArrayElementSet), aggregate struct/tuple member chains (mirrors the
+    /// ExpressionHandler aggregate-member read / TryPrepareFieldSet's aggregate arm), cross-behaviour
+    /// fields, and captured env locals/params. A shape that still returns null here is a genuine
+    /// argument-site reject at the call in EmitExternMethodCall, not a silent fallback.</summary>
     (System.Func<CLeaf> read, System.Action<CLeaf> store)? TryPrepareRefOutArg(IArgumentOperation arg)
     {
         var param = arg.Parameter;
@@ -804,6 +803,10 @@ public partial class InvocationHandler
         var target = UnwrapConversions(arg.Value);
         switch (target)
         {
+            // `out _` — the value is thrown away, so both legs are trivial no-ops (read is never
+            // invoked for an Out param; kept for symmetry with the leg-bearing cases above).
+            case IDiscardOperation:
+                return (() => (CLeaf)null, _ => { });
             case IArrayElementReferenceOperation arrayElem
                 when arrayElem.Indices.Length == 1
                      && arrayElem.Indices[0] is not IRangeOperation
@@ -866,6 +869,33 @@ public partial class InvocationHandler
                     v => EmitExternVoid(
                         "VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid",
                         new List<CLeaf> { instRef, nameConst, v }));
+            }
+            // Captured local/parameter: no flat heap address (Stage 2 §4.1 — ResolveOutRefFieldName
+            // returns null for these), so the direct-FieldAddr fast path above can't take them. A bare
+            // variable reference has no side-effecting legs to double-evaluate; route through the same
+            // env cell EnvEmit.Read/Write use elsewhere so this shape shares the ONE prepared mechanism
+            // instead of a second read-then-AssignToLValue path.
+            case ILocalReferenceOperation envLocalRef when _ctx.TryGetEnvBinding(envLocalRef.Local, out _):
+            {
+                var envType = GetUdonType(envLocalRef.Type);
+                return (() => EnvEmit.Read(_builder, _ctx, envLocalRef.Local, envType),
+                    v => EnvEmit.Write(_builder, _ctx, envLocalRef.Local, v));
+            }
+            case IParameterReferenceOperation envParamRef when _ctx.TryGetEnvBinding(envParamRef.Parameter, out _):
+            {
+                var envType = GetUdonType(envParamRef.Type);
+                return (() => EnvEmit.Read(_builder, _ctx, envParamRef.Parameter, envType),
+                    v => EnvEmit.Write(_builder, _ctx, envParamRef.Parameter, v));
+            }
+            // `out var x` declaring a captured local: same env-cell routing (the read side is never
+            // invoked for an Out param, kept for symmetry with the Ref cases above).
+            case IDeclarationExpressionOperation declExpr
+                when declExpr.Expression is ILocalReferenceOperation declLocal
+                     && _ctx.TryGetEnvBinding(declLocal.Local, out _):
+            {
+                var envType = GetUdonType(declLocal.Type);
+                return (() => EnvEmit.Read(_builder, _ctx, declLocal.Local, envType),
+                    v => EnvEmit.Write(_builder, _ctx, declLocal.Local, v));
             }
         }
         return null;
@@ -978,10 +1008,13 @@ public partial class InvocationHandler
 
     // ── Ref/Out copy-back helper ──
 
-    /// <summary>Fallback copy-back for a ref/out argument shape TryPrepareRefOutArg didn't prepare
-    /// (e.g. a multi-index or Range/Index-subscripted array element — its own array-element/
-    /// cross-behaviour-field arms were removed as duplicates of AssignToLValue's, which every other
-    /// write path already goes through).</summary>
+    /// <summary>Copy-back for a ref/out argument of a USER-METHOD call (EmitRefOutCopyBack) whose
+    /// target TryPrepareRefOutArg declined to prepare a leg-caching store for — a plain local,
+    /// parameter, or this-field, none of which have side-effecting receiver/index legs to
+    /// double-evaluate, so a direct AssignToLValue write-back is already correct and byte-identical.
+    /// EmitExternMethodCall no longer has a caller here: its ref/out branch requires
+    /// TryPrepareRefOutArg to succeed (throwing a NotSupportedException at the argument site
+    /// otherwise), so it never falls through to this second path.</summary>
     void AssignToTarget(IOperation target, CLeaf value) => AssignToLValue(target, value);
 
     // ── Out/Ref Field Resolution ──
