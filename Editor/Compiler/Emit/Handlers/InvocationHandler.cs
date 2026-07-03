@@ -592,13 +592,19 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
     }
 
     /// <summary>
-    /// Multicast design (2026-07-03 §1.2) fan-out per-element dispatch entry point: called by
+    /// Multicast design (2026-07-03 §1.2/§1.6) fan-out per-element dispatch entry point: called by
     /// UasmEmitter's synthetic __dlg_fanout_{sig} bridge for EACH invocation-list element bundle,
     /// through the SAME guard ladder as a single-cast call site — dispatch itself carries zero
     /// multicast awareness, which is why single-cast dispatch bytes never move (§1.2/§6 gate).
     /// <paramref name="argExprsByOrdinal"/> are the bridge's fan-out-local snapshot slots (already
-    /// re-staged this iteration by the caller); reentrant is always false here — the fan-out reentrancy
-    /// graph-node registration is A-M3 scope (§1.6), not wired yet.
+    /// re-staged this iteration by the caller). UNCONDITIONALLY reentrant (A-M3, §1.6): fan-out(sig) is
+    /// always its own sig escape target by construction, and a sig-matched escape-set membership check
+    /// only narrows the false case to an under-approximation hole (a multicast composed entirely from
+    /// foreign-received bundles) — over-spilling here is strictly conservative and cheap (§8-3
+    /// direction). InsertRecursionSpills protects the fan-out's OWN live-across-the-call slots (i/n/
+    /// list/args-snapshot/ret) via its existing generic per-function slot-liveness machinery — no new
+    /// spill category, since that pass is driven by CFunction.ReentrantSiteCount and post-coalesce
+    /// slot liveness, not by the caller having an IMethodSymbol.
     /// </summary>
     internal CLeaf EmitFanoutElementDispatch(CLeaf bundle, IMethodSymbol invoke,
         IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeParamMap, CLeaf[] argExprsByOrdinal)
@@ -607,7 +613,7 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
             (INamedTypeSymbol)invoke.ContainingType, typeParamMap);
         string retType = invoke.ReturnsVoid ? null : ExternResolver.GetUdonTypeName(invoke.ReturnType, typeParamMap);
         return EmitDelegateDispatchCore(bundle, invoke, convArgs, convRet, convEnv, retType, typeParamMap,
-            argExprsByOrdinal, isConditional: false, reentrant: false, receiverDescription: "multicast fan-out");
+            argExprsByOrdinal, isConditional: false, reentrant: true, receiverDescription: "multicast fan-out");
     }
 
     /// <summary>Multicast design §1.4: exposes the existing element-equality leg (target+method+env,

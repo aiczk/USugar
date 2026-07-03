@@ -187,7 +187,7 @@ public class EmitContext
     /// TAIL position (statement-form or return-form) — the frame reads nothing after them, so
     /// EmitCallToMethod flags the instruction TailSpared and InsertRecursionSpills skips the wrap.
     /// Without this, ONE non-tail site put the callee in RecursiveCalleeNames and EVERY site of
-    /// that callee spilled (per-callee gating), overflowing the 512-entry __recurStack on deep
+    /// that callee spilled (per-callee gating), overflowing the 8192-entry __recurStack on deep
     /// mixed tail/non-tail recursion while the dispatch arm (per-site Reentrant marking) survived
     /// the identical shape. Keyed by red SYNTAX node like ReentrantDispatchSites (operation trees
     /// are not shared between analysis and emit walks). MEMBERSHIP-ONLY (§1.5).</summary>

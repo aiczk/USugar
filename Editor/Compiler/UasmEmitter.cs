@@ -1648,11 +1648,31 @@ public class UasmEmitter
     /// locals, then loops the invocation list dispatching each element through the EXISTING unified
     /// dispatch (InvocationHandler.EmitFanoutElementDispatch) — args are re-staged from the snapshot
     /// each iteration so a prior element's cross-dispatch clobber never leaks into the next. Last
-    /// element's return value wins (§1.5, matches C# Invoke semantics); empty/null list → default.</summary>
+    /// element's return value wins (§1.5, matches C# Invoke semantics); empty/null list → default.
+    /// §1.6/A-M3: the element-dispatch call site is UNCONDITIONALLY Reentrant-flagged — see the
+    /// reentrant-decision comment below.</summary>
     void EmitMulticastFanoutBridge(string sigPart, IMethodSymbol invoke,
         IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeParamMap)
     {
         var fanoutName = DelegateAbi.MulticastFanoutName(sigPart);
+
+        // §1.6/A-M3 reentrancy decision: UNCONDITIONALLY reentrant. fan-out(sigPart) is always its own
+        // sig-S escape target (any sig-S bundle's [1]/[2] can point at it, by construction), so a
+        // sig-matched escape-set membership check only ever narrows the false case to a multicast
+        // composed ENTIRELY from foreign-received bundles (no local delegate-creation of this sig) —
+        // an under-approximation hole, not a real safety margin: a cross element dispatch can still
+        // SendCustomEvent into a foreign handler that redispatches this sig and SCEs back into this
+        // fan-out mid-iteration. Unconditional closes that hole pre-emptively and needs no snapshot of
+        // BuildRecursionInfo's escape set (which cannot be computed before this synthetic function
+        // exists anyway — see the design doc §1.6 note). Strictly conservative, matching the §8-3
+        // "extra edges only ever over-spill" direction used throughout BuildRecursionInfo.
+        // MarkReentrantDispatch (the normal path for a Reentrant-flagged site) declares __recurStack/
+        // __recurSp on first use; this path bypasses that helper entirely (no IMethodSymbol to key
+        // AccumulateRecursionSpillFields off), so declare the software stack here directly. No named
+        // spill fields are added for the fan-out itself — every one of its locals (i/n/list/args-
+        // snapshot/ret) is a plain scratch slot, spilled by InsertRecursionSpillsFunc's generic
+        // post-coalesce liveness pass, not by the named-field mechanism.
+        _ctx.EnsureRecursionStack();
 
         var argTypes = new string[invoke.Parameters.Length];
         for (int i = 0; i < invoke.Parameters.Length; i++)
