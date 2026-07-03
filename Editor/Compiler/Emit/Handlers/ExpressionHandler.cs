@@ -286,9 +286,34 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
             case IDeconstructionAssignmentOperation da:
                 MatchDeconstruction(da.Target, da.Value, local, writes);
                 break;
+            // Wave-12 r9 [X7]: a `foreach` LOOP CONTROL VARIABLE (`foreach (object boxed in arr)`) is
+            // written each iteration through the implicit enumerator `Current`, modeled as none of the
+            // recognized write forms — the loop var's declarator has no initializer. The producers are
+            // the collection's elements: add them directly from an inline array creation, or trace the
+            // element writes of the referenced array storage over the same operation root.
+            case IForEachLoopOperation fe when LoopControlVariableIs(fe.LoopControlVariable, local):
+                var coll = fe.Collection;
+                while (coll is IConversionOperation cc) coll = cc.Operand;
+                if (coll is IArrayCreationOperation)
+                    AddArrayInitializerElements(coll, writes);
+                else if (RootStorageSymbol(coll) is { } collSym)
+                    CollectArrayElementWrites(OperationRoot(fe), collSym, writes);
+                break;
         }
         foreach (var child in op.Children)
             CollectLocalWrites(child, local, writes);
+    }
+
+    static bool LoopControlVariableIs(IOperation ctrl, ILocalSymbol local)
+    {
+        while (ctrl is IConversionOperation c) ctrl = c.Operand;
+        if (ctrl is IDeclarationExpressionOperation de) ctrl = de.Expression;
+        return ctrl switch
+        {
+            IVariableDeclaratorOperation vd => SymbolEqualityComparer.Default.Equals(vd.Symbol, local),
+            ILocalReferenceOperation lr => SymbolEqualityComparer.Default.Equals(lr.Local, local),
+            _ => false,
+        };
     }
 
     static void MatchDeconstruction(IOperation target, IOperation value, ILocalSymbol local,
@@ -362,11 +387,21 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
                 when SymbolEqualityComparer.Default.Equals(vd.Symbol, arraySym):
                 AddArrayInitializerElements(vd.Initializer?.Value, writes);
                 break;
-            // Wave-12 r8 [X4]/[X5]: a user `params object[]` call site (`Boxed(narrow)`) desugars to a
-            // synthesized array-creation passed as the params argument — its elements are invisible to
-            // any declarator/indexer match. When the traced array symbol is the params parameter, add the
-            // creation elements of every class-family call-site argument bound to it.
-            case IArgumentOperation arg when arg.Parameter is { IsParams: true } pp
+            // Wave-12 r9 [X3]: a whole-array assignment carrying an inline initializer to a FIELD (or a
+            // non-declarator local) — `_arr = new object[] { narrow };` — writes element 0 through the
+            // creation initializer, not an indexer assignment or a declarator. Match the assignment
+            // target's root storage to the traced array symbol and add the creation elements.
+            case ISimpleAssignmentOperation wa when RootStorageSymbol(wa.Target) is { } wts
+                && SymbolEqualityComparer.Default.Equals(wts.OriginalDefinition, arraySym.OriginalDefinition):
+                AddArrayInitializerElements(wa.Value, writes);
+                break;
+            // Wave-12 r8 [X4]/[X5], r9 [X4]: a user array-parameter call site (`Boxed(new object[]{narrow})`
+            // for a plain `object[]` param, or `Boxed(narrow)` for a `params object[]` param) passes an
+            // array-creation-with-initializer as the argument — its elements are invisible to any
+            // declarator/indexer match. When the traced array symbol is that parameter, add the creation
+            // elements of every class-family call-site argument bound to it. (r8 was params-only; r9
+            // relaxed the params guard so an ordinary non-params `object[]` parameter is covered too.)
+            case IArgumentOperation arg when arg.Parameter is { } pp
                 && SymbolEqualityComparer.Default.Equals(pp.OriginalDefinition, arraySym.OriginalDefinition):
                 AddArrayInitializerElements(arg.Value, writes);
                 break;
@@ -404,6 +439,12 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
         if (op is ISimpleAssignmentOperation sa && sa.Target is IParameterReferenceOperation pr
             && SymbolEqualityComparer.Default.Equals(pr.Parameter, param))
             values.Add(sa.Value);
+        // Wave-12 r9 [X5]: a `??=` reassignment of the by-ref parameter inside the callee
+        // (`void SetBoxed(ref object o) { o ??= MakeNarrow(); }`) is neither a plain simple assignment
+        // nor an initializer — add the null-coalescing RHS.
+        else if (op is ICoalesceAssignmentOperation ca && ca.Target is IParameterReferenceOperation cpr
+            && SymbolEqualityComparer.Default.Equals(cpr.Parameter, param))
+            values.Add(ca.Value);
         foreach (var child in op.Children)
             CollectParamAssignments(child, param, values);
     }
@@ -417,6 +458,12 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
             if (op is ISimpleAssignmentOperation sa && sa.Target is IPropertyReferenceOperation pref
                 && SymbolEqualityComparer.Default.Equals(pref.Property.OriginalDefinition, setterProp.OriginalDefinition))
                 values.Add(sa.Value);
+            // Wave-12 r9 [X6]: a `??=` write through the same cross-dispatched setter (`other.Store ??=
+            // narrow;` / `other[0] ??= narrow;`) is invisible to the simple-assignment check — add the
+            // null-coalescing RHS. Matches named properties and indexers (set_Item) alike.
+            else if (op is ICoalesceAssignmentOperation ca && ca.Target is IPropertyReferenceOperation cpref
+                && SymbolEqualityComparer.Default.Equals(cpref.Property.OriginalDefinition, setterProp.OriginalDefinition))
+                values.Add(ca.Value);
         }
         else if (op is IInvocationOperation inv
             && SymbolEqualityComparer.Default.Equals(inv.TargetMethod.OriginalDefinition, method.OriginalDefinition))
@@ -452,6 +499,17 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
             // top unwrap loop never strips — trace the .WhenNotNull member (property getter / call).
             case IConditionalAccessOperation cacc:
                 return DivergingDelegateEvidence(cacc.WhenNotNull, dstSig, visited);
+            // Wave-12 r9 [X1]: a simple-assignment EXPRESSION used inline as a value
+            // (`object boxed = (_stash = narrow);`) — the value that flows out IS the assigned RHS,
+            // distinct from the statement-form write discovered later via CollectFieldWrites/
+            // CollectLocalWrites/CollectArrayElementWrites. Trace the assigned value directly.
+            case ISimpleAssignmentOperation sae:
+                return DivergingDelegateEvidence(sae.Value, dstSig, visited);
+            // Wave-12 r9 [X2]: an inline `??=`-as-value (`object boxed = (_stash ??= narrow);`) — the
+            // result is either the target's prior contents or the coalesced RHS, so both are producers.
+            case ICoalesceAssignmentOperation cae:
+                return DivergingDelegateEvidence(cae.Value, dstSig, visited)
+                    ?? DivergingDelegateEvidence(cae.Target, dstSig, visited);
         }
         if (val.Type is INamedTypeSymbol dlg && dlg.DelegateInvokeMethod is { } invoke)
             return DelegateAbi.BuildSigPart(invoke, _ctx.TypeParamMap) != dstSig ? val.Type : null;
