@@ -1032,15 +1032,9 @@ public abstract class HandlerBase
         if (fieldRef is { Instance: not null and not IInstanceReferenceOperation }
             && ExternResolver.IsUdonSharpBehaviour(fieldRef.Field.ContainingType))
         {
-            if (fieldRef.Field.Type is INamedTypeSymbol dlgType && dlgType.DelegateInvokeMethod != null
-                && dlgType.DelegateInvokeMethod.ReturnType.IsTupleType)
-                throw new System.NotSupportedException(
-                    $"Tuple-return delegate field '{fieldRef.Field.Name}' is not supported.");
+            GuardTupleDelegateFieldSet(fieldRef.Field);
             var crossInstanceVal = VisitExpression(fieldRef.Instance);
-            var nameConst = Const(fieldRef.Field.Name, "SystemString");
-            return value => EmitExternVoid(
-                "VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid",
-                new List<CLeaf> { crossInstanceVal, nameConst, value });
+            return value => EmitCrossBehaviourFieldSet(fieldRef.Field, crossInstanceVal, value);
         }
 
         // Extern value-type field (e.g. a Vector3 component) → extern field setter.
@@ -1077,10 +1071,45 @@ public abstract class HandlerBase
         var arrayVal = VisitExpression(arrayElem.ArrayReference);
         var indexVal = VisitExpression(arrayElem.Indices[0]);
         var arrSym = arrayElem.ArrayReference.Type as IArrayTypeSymbol;
-        var arrayType = GetArrayType(arrSym);
-        var elementType = GetArrayElemType(arrSym);
-        return value => EmitExternVoid(ExternResolver.BuildArraySetSignature(arrayType, elementType),
+        return value => EmitArrayElementSet(arrSym, arrayVal, indexVal, value);
+    }
+
+    /// <summary>Emit an array element Set extern from already-evaluated array/index/value leaves.
+    /// Shared by PrepareArrayElementSet (single write) and AssignmentHandlerBase.EmitWriteBack's
+    /// read-modify-write array arm (which reuses CaptureLValue's cached array/index leaves instead
+    /// of re-evaluating them).</summary>
+    protected void EmitArrayElementSet(IArrayTypeSymbol arrSymbol, CLeaf arrayVal, CLeaf indexVal, CLeaf value)
+    {
+        var arrayType = GetArrayType(arrSymbol);
+        var elementType = GetArrayElemType(arrSymbol);
+        EmitExternVoid(ExternResolver.BuildArraySetSignature(arrayType, elementType),
             new List<CLeaf> { arrayVal, indexVal, value });
+    }
+
+    /// <summary>Emit a cross-behaviour field Set via SetProgramVariable from an already-evaluated
+    /// instance leaf. Shared by TryPrepareFieldSet (single write) and AssignmentHandlerBase.EmitWriteBack's
+    /// read-modify-write field arm (which reuses CaptureLValue's cached instance leaf instead of
+    /// re-evaluating it). Caller must run GuardTupleDelegateFieldSet first (matches the pre-extraction
+    /// per-path check order: guard before the receiver is evaluated).</summary>
+    protected void EmitCrossBehaviourFieldSet(IFieldSymbol field, CLeaf instanceVal, CLeaf value)
+    {
+        var nameConst = Const(field.Name, "SystemString");
+        EmitExternVoid(
+            "VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid",
+            new List<CLeaf> { instanceVal, nameConst, value });
+    }
+
+    /// <summary>A delegate field whose invoke signature returns a tuple ships no bundle representation
+    /// USugar supports (design §3.4-3) — reject before any receiver/value evaluation. In practice this
+    /// is unreachable in a successfully-declared class (UasmEmitter.DeclareDelegateField already rejects
+    /// the field at declaration time), so this is defense-in-depth kept consistent across both cross-
+    /// behaviour field-set paths rather than a live behavioral branch.</summary>
+    protected static void GuardTupleDelegateFieldSet(IFieldSymbol field)
+    {
+        if (field.Type is INamedTypeSymbol dlgType && dlgType.DelegateInvokeMethod != null
+            && dlgType.DelegateInvokeMethod.ReturnType.IsTupleType)
+            throw new System.NotSupportedException(
+                $"Tuple-return delegate field '{field.Name}' is not supported.");
     }
 
     /// <summary>Wave-9 round-5 [X2]/[X13]: the single property/indexer SET path, shared by simple

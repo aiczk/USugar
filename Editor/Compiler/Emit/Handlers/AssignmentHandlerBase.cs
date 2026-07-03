@@ -7,7 +7,11 @@ using Microsoft.CodeAnalysis.Operations;
 /// DeconstructionAssignmentHandler, NullableHandler). LValueCapture/CaptureLValue and EmitWriteBack
 /// — capture an l-value's sub-expressions once, then write back after computing the new value — are
 /// used by CompoundAssignmentHandler and NullableHandler for their read-modify-write targets;
-/// GetAssignTargetFieldName is used by SimpleAssignmentHandler.
+/// GetAssignTargetFieldName is used by SimpleAssignmentHandler. EmitWriteBack's array-element and
+/// cross-behaviour-field arms only evaluate the receiver/index legs (or reuse CaptureLValue's cached
+/// ones) — the actual Set emission is HandlerBase.EmitArrayElementSet / EmitCrossBehaviourFieldSet,
+/// shared with HandlerBase's single-write path (PrepareArrayElementSet / TryPrepareFieldSet) so the
+/// two mechanisms can't drift on the emitted extern.
 /// </summary>
 public abstract class AssignmentHandlerBase : HandlerBase
 {
@@ -215,18 +219,16 @@ public abstract class AssignmentHandlerBase : HandlerBase
                 var arrayVal = lv.ArrayVal ?? VisitExpression(arrayElem.ArrayReference);
                 var indexVal = lv.IndexVal ?? VisitExpression(arrayElem.Indices[0]);
                 var arrSymbol = arrayElem.ArrayReference.Type as IArrayTypeSymbol;
-                var arrayType = GetArrayType(arrSymbol);
-                var elementType = GetArrayElemType(arrSymbol);
-                EmitExternVoid(ExternResolver.BuildArraySetSignature(arrayType, elementType), new List<CLeaf> { arrayVal, indexVal, valueVal });
+                EmitArrayElementSet(arrSymbol, arrayVal, indexVal, valueVal);
                 break;
             }
             case IFieldReferenceOperation { Instance: not null and not IInstanceReferenceOperation } fieldRef
                 when ExternResolver.IsUdonSharpBehaviour(fieldRef.Field.ContainingType):
             {
                 // Cross-behaviour field write-back → SetProgramVariable
+                GuardTupleDelegateFieldSet(fieldRef.Field);
                 var instanceVal = lv.InstanceVal ?? VisitExpression(fieldRef.Instance);
-                var nameConst = Const(fieldRef.Field.Name, "SystemString");
-                EmitExternVoid("VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid", new List<CLeaf> { instanceVal, nameConst, valueVal });
+                EmitCrossBehaviourFieldSet(fieldRef.Field, instanceVal, valueVal);
                 break;
             }
             // Auto-property on this → backing field already handled by write-back to field (user-defined

@@ -978,35 +978,11 @@ public partial class InvocationHandler
 
     // ── Ref/Out copy-back helper ──
 
-    void AssignToTarget(IOperation target, CLeaf value)
-    {
-        switch (target)
-        {
-            case IArrayElementReferenceOperation arrayElem:
-                var arrayVal = VisitExpression(arrayElem.ArrayReference);
-                var indexVal = VisitExpression(arrayElem.Indices[0]);
-                var arrSymbol = arrayElem.ArrayReference.Type as IArrayTypeSymbol;
-                var arrayType = GetArrayType(arrSymbol);
-                var elementType = GetArrayElemType(arrSymbol);
-                EmitExternVoid(ExternResolver.BuildArraySetSignature(arrayType, elementType),
-                    new List<CLeaf> { arrayVal, indexVal, value });
-                break;
-
-            case IFieldReferenceOperation fieldRef
-                when fieldRef.Instance != null
-                && fieldRef.Instance is not IInstanceReferenceOperation
-                && ExternResolver.IsUdonSharpBehaviour(fieldRef.Field.ContainingType):
-                var instanceVal = VisitExpression(fieldRef.Instance);
-                var nameConst = Const(fieldRef.Field.Name, "SystemString");
-                EmitExternVoid("VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid",
-                    new List<CLeaf> { instanceVal, nameConst, value });
-                break;
-
-            default:
-                AssignToLValue(target, value);
-                break;
-        }
-    }
+    /// <summary>Fallback copy-back for a ref/out argument shape TryPrepareRefOutArg didn't prepare
+    /// (e.g. a multi-index or Range/Index-subscripted array element — its own array-element/
+    /// cross-behaviour-field arms were removed as duplicates of AssignToLValue's, which every other
+    /// write path already goes through).</summary>
+    void AssignToTarget(IOperation target, CLeaf value) => AssignToLValue(target, value);
 
     // ── Out/Ref Field Resolution ──
 
