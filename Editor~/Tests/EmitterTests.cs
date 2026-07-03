@@ -3401,6 +3401,96 @@ public class RangeEndTest : UdonSharpBehaviour {
         Assert.Contains("__op_Subtraction", uasm);
     }
 
+    // ── Index write (B40: read/write asymmetry) ──
+
+    [Fact]
+    public void IndexWrite_PlainAssignment_EmitsLengthMinusNAndSet()
+    {
+        // Pre-fix: PrepareArrayElementSet passes Indices[0] to a raw VisitExpression, which falls
+        // into OperatorHandler.BuildBuiltinUnarySignature and throws "Unsupported unary operator:
+        // Hat on type SystemInt32". The write side must lower `^1` the same way the read side does.
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public class IdxWriteTest : UdonSharpBehaviour {
+    int[] _arr;
+    void Start() { _arr = new int[3]; _arr[^1] = 5; }
+}
+");
+        Assert.Contains("__get_Length__SystemInt32", uasm);
+        Assert.Contains("__op_Subtraction__SystemInt32_SystemInt32__SystemInt32", uasm);
+        Assert.Contains("__Set__SystemInt32", uasm);
+    }
+
+    [Fact]
+    public void IndexWrite_CompoundAssignment_EmitsLengthMinusNAndSet()
+    {
+        // `arr[^1] += v`: CaptureLValue's array arm has the same raw-VisitExpression bug as
+        // PrepareArrayElementSet — same Hat crash, one level up (read-modify-write).
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public class IdxCompoundWriteTest : UdonSharpBehaviour {
+    int[] _arr;
+    void Start() { _arr = new int[3]; _arr[^1] += 5; }
+}
+");
+        Assert.Contains("__get_Length__SystemInt32", uasm);
+        Assert.Contains("__op_Subtraction__SystemInt32_SystemInt32__SystemInt32", uasm);
+        Assert.Contains("__Get__SystemInt32", uasm);
+        Assert.Contains("__Set__SystemInt32", uasm);
+    }
+
+    [Fact]
+    public void IndexWrite_CompoundAssignment_ResolvesIndexOnlyOnce()
+    {
+        // CaptureLValue evaluates the array/index legs ONCE and EmitWriteBack must reuse the SAME
+        // cached leaves (ArrayVal/IndexVal) instead of re-lowering `^1` a second time at store —
+        // otherwise `__get_Length` would appear twice for one compound assignment.
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public class IdxCompoundOnceTest : UdonSharpBehaviour {
+    int[] _arr;
+    void Start() { _arr = new int[3]; _arr[^1] += 5; }
+}
+");
+        var code = uasm.Substring(uasm.IndexOf(".code_start", System.StringComparison.Ordinal));
+        int count = 0, idx = 0;
+        const string tok = "__get_Length__SystemInt32";
+        while ((idx = code.IndexOf(tok, idx, System.StringComparison.Ordinal)) >= 0) { count++; idx += tok.Length; }
+        Assert.Equal(1, count);
+    }
+
+    [Fact]
+    public void IndexWrite_ReadModifyWriteParity_WriteThenReadBackSameElement()
+    {
+        // `_arr[^1] = 7; _last = _arr[^1];` must resolve to the SAME element on both sides
+        // (arr.Length - 1) — pins the read/write parity this bug asymmetry violated.
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public class IdxWriteReadTest : UdonSharpBehaviour {
+    int[] _arr; int _last;
+    void Start() { _arr = new int[3]; _arr[^1] = 7; _last = _arr[^1]; }
+}
+");
+        Assert.Contains("__Set__SystemInt32", uasm);
+        Assert.Contains("__Get__SystemInt32", uasm);
+    }
+
+    [Fact]
+    public void IndexWrite_DeconstructionTarget_EmitsLengthMinusNAndSet()
+    {
+        // Deconstruction into an Index-subscripted element: `(arr[^1], arr[^2]) = (a, b)`.
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public class IdxDeconTest : UdonSharpBehaviour {
+    int[] _arr;
+    void Start() { _arr = new int[3]; (_arr[^1], _arr[^2]) = (5, 6); }
+}
+");
+        Assert.Contains("__get_Length__SystemInt32", uasm);
+        Assert.Contains("__op_Subtraction__SystemInt32_SystemInt32__SystemInt32", uasm);
+        Assert.Contains("__Set__SystemInt32", uasm);
+    }
+
     // ── Extension method as foreign static ──
 
     [Fact]

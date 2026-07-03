@@ -138,15 +138,14 @@ public class ExtOutCapVar : UdonSharpBehaviour {
     }
 
     [Fact]
-    public void RefExtern_IndexSubscriptArrayElement_LoudRejects()
+    public void RefExtern_IndexSubscriptArrayElement_Compiles()
     {
-        // `ref arr[^1]`: TryPrepareRefOutArg explicitly declines a from-end Index-subscripted array
-        // element (its own arithmetic isn't resolved through the ref/out copy-in/copy-back legs).
-        // Pre-fix, EmitExternMethodCall's fallback silently tried the plain-write path
-        // (PrepareArrayElementSet), which doesn't special-case Index and crashed with an unrelated,
-        // confusing "Unsupported unary operator: Hat" — now the argument site rejects loudly and
-        // names the parameter that couldn't bind.
-        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
+        // `ref arr[^1]` (B40 follow-up): TryPrepareRefOutArg used to explicitly decline a from-end
+        // Index-subscripted array element, and EmitExternMethodCall's fallback silently tried the
+        // plain-write path (PrepareArrayElementSet), which doesn't special-case Index and crashed
+        // with an unrelated, confusing "Unsupported unary operator: Hat". Now the array case lowers
+        // `^1` the same way the read side does (arr.Length - 1) and prepares it as a normal ref/out leg.
+        var uasm = TestHelper.CompileToUasm(@"
 using UnityEngine;
 using UdonSharp;
 public class ExtRefIdxSub : UdonSharpBehaviour {
@@ -156,8 +155,34 @@ public class ExtRefIdxSub : UdonSharpBehaviour {
         Mathf.SmoothDamp(1f, 2f, ref arr[^1], 0.5f);
         result = arr[2];
     }
-}", "ExtRefIdxSub"));
-        Assert.Contains("currentVelocity", ex.Message);
+}", "ExtRefIdxSub");
+        Assert.Contains("UnityEngineMathf.__SmoothDamp__", uasm);
+        Assert.Contains("__get_Length__SystemInt32", uasm);
+    }
+
+    [Fact]
+    public void RefExtern_IndexSubscriptArrayElement_IndexLegEvaluatesOnce()
+    {
+        // `ref arr[^Idx()]`: the resolved int position (arr.Length - Idx()) must be computed ONCE
+        // and reused for both the copy-in read and the copy-back store — not re-lowered (which
+        // would re-run the side-effecting `Idx()` a second time).
+        var uasm = TestHelper.CompileToUasm(@"
+using UnityEngine;
+using UdonSharp;
+public class ExtRefIdxSubOnce : UdonSharpBehaviour {
+    public int calls;
+    void Start() {
+        float[] arr = new float[3];
+        Mathf.SmoothDamp(1f, 2f, ref arr[^Idx()], 0.5f);
+    }
+    public int Idx() { calls = calls + 1; return 1; }
+}", "ExtRefIdxSubOnce");
+        AssertExternCount(uasm, "UnityEngineMathf.__SmoothDamp__", 1);
+        var code = uasm.Substring(uasm.IndexOf(".code_start", StringComparison.Ordinal));
+        int count = 0, idx = 0;
+        const string tok = "__get_Length__SystemInt32";
+        while ((idx = code.IndexOf(tok, idx, StringComparison.Ordinal)) >= 0) { count++; idx += tok.Length; }
+        Assert.Equal(1, count);
     }
 
     static void AssertExternCount(string uasm, string extern_, int expected)
