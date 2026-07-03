@@ -197,6 +197,21 @@ public class StructRefParam : UdonSharpBehaviour {
     lastRet = d();
   }
 }"),
+        // Field-like event subscribe + fire (design §2, feature A A-M2): backing-field materialize,
+        // combine helper via `+=`, and invoke via the this-receiver event reference resolving to the
+        // SAME dispatch path a plain delegate field uses — the canonical baseline the A-M2 gate
+        // requires (§6). An ADDED baseline, not a regeneration of an existing one.
+        ("event_subscribe_fire", "EventSubscribeFire",
+@"using System; using UdonSharp; public class EventSubscribeFire : UdonSharpBehaviour {
+  public int[] trace;
+  public int n;
+  public event Action<int> Foo;
+  void Start(){
+    Foo += x => trace[n++] = x;
+    Foo += x => trace[n++] = x * 10;
+    Foo(3);
+  }
+}"),
     };
 
     public static (string Name, string ClassName, string Source) ByName(string name)
