@@ -214,8 +214,8 @@ public class W12CGenCast : UdonSharpBehaviour {
         // Wave-12c confirmation finding: `o is Func<...> f` never reached VisitConversion — the type
         // test flows through EmitTypeCheck, whose IsInstanceOfType against Udon's single delegate
         // runtime type (SystemObjectArray) cannot tell delegate signatures apart (VM-proven: an
-        // unrelated-arity pattern matched, taking the wrong branch). EmitTypeCheck now rejects any
-        // delegate-typed pattern target loudly.
+        // unrelated-arity pattern matched, taking the wrong branch). Layer-2: EmitTypeCheck now rejects
+        // via the IsRuntimeDistinguishable choke point, which keeps a delegate-specific hint.
         var ex = Assert.Throws<System.NotSupportedException>(() => TestHelper.CompileToUasm(@"
 using System;
 using UdonSharp;
@@ -229,7 +229,7 @@ public class W12CPat : UdonSharpBehaviour {
         result = boxed is Func<object> f ? (f() == null ? 0 : 1) : -1;
     }
 }", "W12CPat"));
-        Assert.Contains("Pattern-matching against delegate type", ex.Message);
+        Assert.Contains("cannot tell delegate signatures apart", ex.Message);
     }
 
     // ── [W3] planner invariant: the `new` declaration is the mangled one ──
