@@ -760,13 +760,31 @@ public abstract class HandlerBase
         var arrSym = ae.ArrayReference.Type as IArrayTypeSymbol;
         var arrType = GetArrayType(arrSym);
         var elemType = GetArrayElemType(arrSym);
-        var idx = ae.Indices[0];
-        CLeaf idxVal = idx is IUnaryOperation { Type: { Name: "Index" } } fromEnd
-            ? ExternCall("SystemInt32.__op_Subtraction__SystemInt32_SystemInt32__SystemInt32", new List<CLeaf>
-                { ExternCall($"{arrType}.__get_Length__SystemInt32", new List<CLeaf> { arrayVal }, "SystemInt32"),
-                  VisitExpression(fromEnd.Operand) }, "SystemInt32")
-            : VisitExpression(idx);
+        var idxVal = ResolveArrayIndex(arrayVal, arrType, ae.Indices[0]);
         return ExternCall(ExternResolver.BuildArrayGetSignature(arrType, elemType), new List<CLeaf> { arrayVal, idxVal }, "SystemObject");
+    }
+
+    /// <summary>Lower a single array-element index operand to its resolved SystemInt32 position,
+    /// Index-aware: `arr[^k]` (a from-end IUnaryOperation of type System.Index) becomes
+    /// `arr.Length - k`, matching C#'s <c>new Index(k, fromEnd: true)</c> resolved against the
+    /// array's length at access time; any other operand is a plain int index. This is the SINGLE
+    /// lowering shared by every array-index site — read (ArrayHandler), receiver reads
+    /// (ReadArrayElementRaw), and both write paths (PrepareArrayElementSet, CaptureLValue's array
+    /// arm, TryPrepareRefOutArg's array-element ref/out leg) — so read and write can't drift on
+    /// which Index shapes are supported (B40: the write paths used to call VisitExpression
+    /// directly, which cannot lower `^k` and threw an unrelated "Unsupported unary operator: Hat").</summary>
+    protected CLeaf ResolveArrayIndex(CLeaf arrayVal, string arrayType, IOperation indexOp)
+        => indexOp is IUnaryOperation { Type: { Name: "Index" } } fromEnd
+            ? EmitIndexFromEnd(arrayVal, arrayType, fromEnd.Operand)
+            : VisitExpression(indexOp);
+
+    /// <summary>`arr[^k]` → `arr.Length - k`. <paramref name="arrayVal"/> must already be a
+    /// single-assignment scratch leaf (read once here); <paramref name="operand"/> is the `k` in `^k`.</summary>
+    protected CLeaf EmitIndexFromEnd(CLeaf arrayVal, string arrayType, IOperation operand)
+    {
+        var lenVal = ExternCall($"{arrayType}.__get_Length__SystemInt32", new List<CLeaf> { arrayVal }, "SystemInt32");
+        var nVal = VisitExpression(operand);
+        return ExternCall("SystemInt32.__op_Subtraction__SystemInt32_SystemInt32__SystemInt32", new List<CLeaf> { lenVal, nVal }, "SystemInt32");
     }
 
     /// <summary>Read an aggregate-typed field as the raw stored object[] (no clone): a nested element via
@@ -1069,8 +1087,8 @@ public abstract class HandlerBase
     protected System.Action<CLeaf> PrepareArrayElementSet(IArrayElementReferenceOperation arrayElem)
     {
         var arrayVal = VisitExpression(arrayElem.ArrayReference);
-        var indexVal = VisitExpression(arrayElem.Indices[0]);
         var arrSym = arrayElem.ArrayReference.Type as IArrayTypeSymbol;
+        var indexVal = ResolveArrayIndex(arrayVal, GetArrayType(arrSym), arrayElem.Indices[0]);
         return value => EmitArrayElementSet(arrSym, arrayVal, indexVal, value);
     }
 

@@ -57,12 +57,10 @@ public class SimpleAssignmentHandler : AssignmentHandlerBase, IExpressionHandler
         if (assign.Target is IArrayElementReferenceOperation arrayElem)
         {
             var arrayVal = VisitExpression(arrayElem.ArrayReference);
-            var indexVal = VisitExpression(arrayElem.Indices[0]);
-            var srcVal = VisitExpression(assign.Value);
             var arrSymbol = arrayElem.ArrayReference.Type as IArrayTypeSymbol;
-            var arrayType = GetArrayType(arrSymbol);
-            var elementType = GetArrayElemType(arrSymbol);
-            EmitExternVoid(ExternResolver.BuildArraySetSignature(arrayType, elementType), new List<CLeaf> { arrayVal, indexVal, srcVal });
+            var indexVal = ResolveArrayIndex(arrayVal, GetArrayType(arrSymbol), arrayElem.Indices[0]);
+            var srcVal = VisitExpression(assign.Value);
+            EmitArrayElementSet(arrSymbol, arrayVal, indexVal, srcVal);
             return srcVal;
         }
 

@@ -153,7 +153,7 @@ public abstract class AssignmentHandlerBase : HandlerBase
                 // VisitExpression already binds each to a single-assignment scratch, so the capture needs no
                 // extra copy slot — storing the leaves directly preserves the read↔writeback sharing.
                 var arrayVal = VisitExpression(arrayElem.ArrayReference);
-                var indexVal = VisitExpression(arrayElem.Indices[0]);
+                var indexVal = ResolveArrayIndex(arrayVal, arrayType, arrayElem.Indices[0]);
 
                 // Read current value: arr[idx]
                 var valResult = ExternCall(

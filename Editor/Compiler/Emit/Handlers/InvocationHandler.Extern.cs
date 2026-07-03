@@ -809,13 +809,15 @@ public partial class InvocationHandler
                 return (() => (CLeaf)null, _ => { });
             case IArrayElementReferenceOperation arrayElem
                 when arrayElem.Indices.Length == 1
-                     && arrayElem.Indices[0] is not IRangeOperation
-                     && arrayElem.Indices[0] is not IUnaryOperation { Type: { Name: "Index" } }:
+                     && arrayElem.Indices[0] is not IRangeOperation:
             {
                 var arrayVal = VisitExpression(arrayElem.ArrayReference);
-                var indexVal = VisitExpression(arrayElem.Indices[0]);
                 var arrSym = arrayElem.ArrayReference.Type as IArrayTypeSymbol;
                 var arrayType = GetArrayType(arrSym);
+                // B40 follow-up: the RESOLVED int position (arr.Length - k for `^k`) is computed
+                // ONCE here and closed over by both the read and store below — a side-effecting
+                // `^Idx()` runs exactly once, matching every other ref/out leg in this method.
+                var indexVal = ResolveArrayIndex(arrayVal, arrayType, arrayElem.Indices[0]);
                 var elementType = GetArrayElemType(arrSym);
                 return (() =>
                 {

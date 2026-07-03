@@ -71,24 +71,13 @@ public class ArrayHandler : HandlerBase, IExpressionHandler
         var arrayType = GetArrayType(arrSymbol);
 
         // Index from end: arr[^1] → arr[arr.Length - 1]
-        CLeaf indexVal;
-        indexVal = index is IUnaryOperation { Type: { Name: "Index" } } unary
-            ? EmitIndexFromEnd(arrayVal, arrayType, unary.Operand)
-            : VisitExpression(index);
+        var indexVal = ResolveArrayIndex(arrayVal, arrayType, index);
 
         var resultVal = ExternCall(ExternResolver.BuildArrayGetSignature(arrayType, elementType), new List<CLeaf> { arrayVal, indexVal }, GetUdonType(op.Type));
         // A struct/tuple element read AS A VALUE is copied (value semantics). Receiver access (arr[i].x =)
         // goes through LoadInstanceRaw → ReadArrayElementRaw, which does NOT clone.
         return op.Type is INamedTypeSymbol elemAggT && EmitContext.IsAggregateType(elemAggT)
             ? EmitDeepCloneAggregate(resultVal, elemAggT) : resultVal;
-    }
-
-    CLeaf EmitIndexFromEnd(CLeaf arrayVal, string arrayType, IOperation operand)
-    {
-        var lenVal = ExternCall($"{arrayType}.__get_Length__SystemInt32", new List<CLeaf> { arrayVal }, "SystemInt32");
-        var nVal = VisitExpression(operand);
-        var resultVal = ExternCall("SystemInt32.__op_Subtraction__SystemInt32_SystemInt32__SystemInt32", new List<CLeaf> { lenVal, nVal }, "SystemInt32");
-        return resultVal;
     }
 
     CLeaf ResolveRangeOperand(CLeaf arrayVal, string arrayType, IOperation operand, bool isEnd)
