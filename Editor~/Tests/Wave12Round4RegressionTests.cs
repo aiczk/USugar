@@ -146,12 +146,14 @@ public class W12R4TupSame : UdonSharpBehaviour {
     }
 
     [Fact]
-    public void DelegateArrayToObjectArray_Launder_Compiles()
+    public void DelegateArrayToObjectArray_Launder_Throws()
     {
-        // The documented accepted boundary, one aggregate layer up: an `object` destination element
-        // is NOT a delegate, so the covariant Func<string>[] → object[] flow is statically invisible
-        // variance-wise and must stay accepted (cast-back to the SAME delegate type, channels agree).
-        var uasm = TestHelper.CompileToUasm(@"
+        // The covariant Func<string>[] → object[] flow itself is statically invisible variance-wise
+        // (an `object` element is not a delegate, so the array arm does not fire), but the CAST-BACK
+        // `(Func<string>)wide[0]` from an object[] element now rejects under the bounded check: the
+        // element's runtime delegate signature is not visible at the cast. Accepted over-rejection
+        // (design §8-3) — a former walker-era accept that the shape-agnostic reject subsumes.
+        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
 using System;
 using UdonSharp;
 public class W12R4ObjArr : UdonSharpBehaviour {
@@ -165,8 +167,8 @@ public class W12R4ObjArr : UdonSharpBehaviour {
         string s = back();
         result = s == null ? -1 : s.Length;
     }
-}", "W12R4ObjArr");
-        Assert.Contains("__dlg", uasm);
+}", "W12R4ObjArr"));
+        Assert.Contains("carries no statically visible signature", ex.Message);
     }
 
     // ── [W3] interface method group off a variable receiver: clean loud reject, not an ICE ──

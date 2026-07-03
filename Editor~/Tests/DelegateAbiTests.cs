@@ -296,11 +296,13 @@ public class ApplyCap : UdonSharpBehaviour {
     // ── Round-2 precision pins: the legal flows the widened guards must NOT break ──
 
     [Fact]
-    public void ObjectParamPlumbing_StoredIntoObjectArray_Compiles()
+    public void ObjectParamPlumbing_StoredIntoObjectArray_Throws()
     {
-        // The stock-UdonSharp LocalFunctionTest shape: object params are NOT tainted (their call
-        // sites are sealed instead), so ordinary object plumbing keeps compiling.
-        var uasm = TestHelper.CompileToUasm(@"
+        // The stock-UdonSharp LocalFunctionTest shape stores a delegate into an object[] and casts
+        // it back: `(Func<int>)objs[0]` reads an object element whose runtime delegate signature is
+        // not statically visible, so the wave-12c bounded cast check rejects it (accepted
+        // over-rejection, design §8-3 — route the delegate typed, not through object[]).
+        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
 using UdonSharp;
 using System;
 public class ObjPlumb : UdonSharpBehaviour {
@@ -309,8 +311,8 @@ public class ObjPlumb : UdonSharpBehaviour {
     void Start() { objs = new object[2]; Add(objs, (Func<int>)Five); result = ((Func<int>)objs[0])(); }
     void Add(object[] a, object b) { a[0] = b; }
     int Five() { return 5; }
-}", "ObjPlumb");
-        Assert.NotNull(uasm);
+}", "ObjPlumb"));
+        Assert.Contains("carries no statically visible signature", ex.Message);
     }
 
     [Fact]
@@ -554,18 +556,21 @@ public class DlgArr : UdonSharpBehaviour {
     }
 
     [Fact]
-    public void DelegateCast_FromObjectElement_IsReferencePassthrough()
+    public void DelegateCast_FromObjectElement_Throws()
     {
-        // fcd25 audit: (Func<int>)box[0] must not emit any Convert extern — the bundle reference passes through.
-        var uasm = TestHelper.CompileToUasm(@"
+        // fcd25 previously allowed (Func<int>)box[0] as a reference passthrough. The wave-12c bounded
+        // cast check rejects it: an object[] element's runtime delegate signature is not statically
+        // visible at the cast, so a variant boxed delegate would silently diverge the channels.
+        // Accepted over-rejection (design §8-3) — keep the value typed as Func<int> instead of object[].
+        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
 using UdonSharp;
 using System;
 public class DlgCast : UdonSharpBehaviour {
     public object[] box;
     public Func<int> f;
     void Start() { f = (Func<int>)box[0]; }
-}", "DlgCast");
-        Assert.DoesNotContain("SystemConvert", uasm);
+}", "DlgCast"));
+        Assert.Contains("carries no statically visible signature", ex.Message);
     }
     [Fact]
     public void MethodGroupAggregateDeconstruction_IntoLocals_Compiles()

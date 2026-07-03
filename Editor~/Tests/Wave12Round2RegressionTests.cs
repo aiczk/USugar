@@ -256,11 +256,14 @@ public class W12R2VarC : UdonSharpBehaviour {
     // ── [V2] controls: passthrough shapes stay legal ──
 
     [Fact]
-    public void DelegateObjectRoundtrip_SameType_Compiles()
+    public void DelegateObjectRoundtrip_SameType_CrossStatement_Throws()
     {
-        // delegate → object → cast back to the SAME delegate type is the pinned reference
-        // passthrough (design §2.3, fcd25) — sig parts are equal, channels agree, no reject.
-        var uasm = TestHelper.CompileToUasm(@"
+        // A same-type delegate → object → cast-back that crosses STATEMENTS (`object o = d;` then
+        // `(Func<string>)o`) now rejects: the bounded check only sees `o`, an object local whose
+        // runtime delegate signature is not statically visible at the cast. The accepted
+        // over-rejection (design §8-3) — the in-expression form `(Func<string>)(object)d` still
+        // compiles (pinned in Wave12Round5.SameSigDelegateRoundtripInOneExpression_Compiles).
+        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
 using System;
 using UdonSharp;
 public class W12R2ObjRt : UdonSharpBehaviour {
@@ -272,8 +275,8 @@ public class W12R2ObjRt : UdonSharpBehaviour {
         Func<string> e = (Func<string>)o;
         result = e().Length;
     }
-}", "W12R2ObjRt");
-        Assert.Contains("__dlg", uasm);
+}", "W12R2ObjRt"));
+        Assert.Contains("carries no statically visible signature", ex.Message);
     }
 
     [Fact]

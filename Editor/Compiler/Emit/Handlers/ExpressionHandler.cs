@@ -215,428 +215,6 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
                != DelegateAbi.BuildSigPart(dstInvoke, typeParamMap);
     }
 
-    // ── Wave-12 r5 [W1]/[W2]: object-laundered variant delegate casts ──
-    // A non-delegate-typed value (object / System.Delegate) cast or `as`-cast to a DELEGATE type
-    // erases the source signature from the conversion node, so the [V2] delegate-to-delegate arm
-    // never fires and a co/contravariant bundle flows into channels keyed by the DESTINATION
-    // signature (VM-proven silent loss: covariant Func ref=2 vs -1, contravariant Action ref=7
-    // vs 5). Compile-time cannot see through `object` in general, so the gate is EVIDENCE-BASED:
-    // reject only when a statically visible producer of the operand carries a delegate whose sig
-    // part diverges from the destination's — nested conversions, ternary/coalesce arms, the
-    // operand LOCAL's writes (transitively through other object-typed locals), and, for a
-    // PARAMETER operand (incl. a setter's `value`), the class-family-visible call-site arguments /
-    // property-write values feeding it. Same-signature roundtrips (the pinned accepted boundary)
-    // and unprovable sources (foreign-class callers, fields, array elements) keep flowing; if a
-    // future wave reds a laundering shape through an uncovered source, extend the evidence
-    // collectors, not the criterion.
-
-    List<IOperation> _launderEvidenceBodies;
-
-    /// <summary>Bodies whose delegate flows are visible to this program: the compiled class's own
-    /// member bodies plus its user base chain's (inherited bodies emit into this program).</summary>
-    IReadOnlyList<IOperation> ClassFamilyBodies()
-    {
-        if (_launderEvidenceBodies != null) return _launderEvidenceBodies;
-        var list = new List<IOperation>();
-        for (var t = _classSymbol; t != null && t.Name != "UdonSharpBehaviour"; t = t.BaseType)
-        {
-            if (t.DeclaringSyntaxReferences.IsEmpty
-                || USugarCompilerHelper.IsFrameworkNamespace(t.ContainingNamespace)) break;
-            foreach (var m in t.GetMembers().OfType<IMethodSymbol>())
-            {
-                if (m.MethodKind is not (MethodKind.Ordinary or MethodKind.PropertyGet
-                    or MethodKind.PropertySet or MethodKind.ExplicitInterfaceImplementation)) continue;
-                var sr = m.DeclaringSyntaxReferences.Length > 0 ? m.DeclaringSyntaxReferences[0] : null;
-                if (sr == null) continue;
-                var syntax = sr.GetSyntax();
-                var bodyOp = _compilation.GetSemanticModel(syntax.SyntaxTree).GetOperation(syntax);
-                if (bodyOp != null) list.Add(bodyOp);
-            }
-        }
-        return _launderEvidenceBodies = list;
-    }
-
-    static IOperation OperationRoot(IOperation op)
-    {
-        while (op.Parent != null) op = op.Parent;
-        return op;
-    }
-
-    static void CollectLocalWrites(IOperation op, ILocalSymbol local, List<IOperation> writes)
-    {
-        if (op == null) return;
-        switch (op)
-        {
-            case IVariableDeclaratorOperation vd when SymbolEqualityComparer.Default.Equals(vd.Symbol, local):
-                if (vd.Initializer?.Value is { } init) writes.Add(init);
-                break;
-            case ISimpleAssignmentOperation sa when sa.Target is ILocalReferenceOperation t
-                && SymbolEqualityComparer.Default.Equals(t.Local, local):
-                writes.Add(sa.Value);
-                break;
-            // Wave-12 r8 [X11]/[X12]: a `??=` local write (`boxed ??= narrow;`) is neither an initializer
-            // nor a simple assignment — add the null-coalescing RHS as a writer.
-            case ICoalesceAssignmentOperation ca when ca.Target is ILocalReferenceOperation ct
-                && SymbolEqualityComparer.Default.Equals(ct.Local, local):
-                writes.Add(ca.Value);
-                break;
-            // Wave-12 r7 [X6]: a tuple-deconstruction declaration/assignment writes the local through
-            // neither an initializer nor a simple assignment — pair the target tuple to its value tuple
-            // positionally (recursing through nested tuples) and add the matching value element.
-            case IDeconstructionAssignmentOperation da:
-                MatchDeconstruction(da.Target, da.Value, local, writes);
-                break;
-            // Wave-12 r9 [X7]: a `foreach` LOOP CONTROL VARIABLE (`foreach (object boxed in arr)`) is
-            // written each iteration through the implicit enumerator `Current`, modeled as none of the
-            // recognized write forms — the loop var's declarator has no initializer. The producers are
-            // the collection's elements: add them directly from an inline array creation, or trace the
-            // element writes of the referenced array storage over the same operation root.
-            case IForEachLoopOperation fe when LoopControlVariableIs(fe.LoopControlVariable, local):
-                var coll = fe.Collection;
-                while (coll is IConversionOperation cc) coll = cc.Operand;
-                if (coll is IArrayCreationOperation)
-                    AddArrayInitializerElements(coll, writes);
-                else if (RootStorageSymbol(coll) is { } collSym)
-                    CollectArrayElementWrites(OperationRoot(fe), collSym, writes);
-                break;
-        }
-        foreach (var child in op.Children)
-            CollectLocalWrites(child, local, writes);
-    }
-
-    static bool LoopControlVariableIs(IOperation ctrl, ILocalSymbol local)
-    {
-        while (ctrl is IConversionOperation c) ctrl = c.Operand;
-        if (ctrl is IDeclarationExpressionOperation de) ctrl = de.Expression;
-        return ctrl switch
-        {
-            IVariableDeclaratorOperation vd => SymbolEqualityComparer.Default.Equals(vd.Symbol, local),
-            ILocalReferenceOperation lr => SymbolEqualityComparer.Default.Equals(lr.Local, local),
-            _ => false,
-        };
-    }
-
-    static void MatchDeconstruction(IOperation target, IOperation value, ILocalSymbol local,
-        List<IOperation> writes)
-    {
-        while (target is IConversionOperation tc) target = tc.Operand;
-        while (value is IConversionOperation vc) value = vc.Operand;
-        if (target is ITupleOperation tt && value is ITupleOperation vt
-            && tt.Elements.Length == vt.Elements.Length)
-        {
-            for (int i = 0; i < tt.Elements.Length; i++)
-                MatchDeconstruction(tt.Elements[i], vt.Elements[i], local, writes);
-            return;
-        }
-        var te = target;
-        if (te is IDeclarationExpressionOperation de) te = de.Expression;
-        if (te is ILocalReferenceOperation lr && SymbolEqualityComparer.Default.Equals(lr.Local, local))
-            writes.Add(value);
-    }
-
-    /// <summary>The local/field/parameter storage symbol at the root of a reference expression, or
-    /// null for anything else (used to key array-element and array-reference writes).</summary>
-    static ISymbol RootStorageSymbol(IOperation op)
-    {
-        while (op != null)
-            switch (op)
-            {
-                case IConversionOperation c: op = c.Operand; break;
-                case ILocalReferenceOperation l: return l.Local;
-                case IFieldReferenceOperation f: return f.Field;
-                case IParameterReferenceOperation p: return p.Parameter;
-                default: return null;
-            }
-        return null;
-    }
-
-    static void CollectFieldWrites(IOperation op, IFieldSymbol field, List<IOperation> writes)
-    {
-        if (op == null) return;
-        if (op is ISimpleAssignmentOperation sa && sa.Target is IFieldReferenceOperation t
-            && SymbolEqualityComparer.Default.Equals(t.Field.OriginalDefinition, field.OriginalDefinition))
-            writes.Add(sa.Value);
-        // Wave-12 r8 [X13]: a `??=` FIELD write (`_stash ??= narrow;`) is invisible to the simple-
-        // assignment check — add the null-coalescing RHS.
-        else if (op is ICoalesceAssignmentOperation ca && ca.Target is IFieldReferenceOperation ct
-            && SymbolEqualityComparer.Default.Equals(ct.Field.OriginalDefinition, field.OriginalDefinition))
-            writes.Add(ca.Value);
-        foreach (var child in op.Children)
-            CollectFieldWrites(child, field, writes);
-    }
-
-    static void CollectArrayElementWrites(IOperation op, ISymbol arraySym, List<IOperation> writes)
-    {
-        if (op == null) return;
-        switch (op)
-        {
-            case ISimpleAssignmentOperation sa when sa.Target is IArrayElementReferenceOperation t
-                && SymbolEqualityComparer.Default.Equals(RootStorageSymbol(t.ArrayReference), arraySym):
-                writes.Add(sa.Value);
-                break;
-            // Wave-12 r8 [X14]: a `??=` ARRAY-ELEMENT write (`arr[0] ??= narrow;`) is invisible to the
-            // simple-assignment check — add the null-coalescing RHS.
-            case ICoalesceAssignmentOperation ca when ca.Target is IArrayElementReferenceOperation ct
-                && SymbolEqualityComparer.Default.Equals(RootStorageSymbol(ct.ArrayReference), arraySym):
-                writes.Add(ca.Value);
-                break;
-            // Wave-12 r8 [X1]/[X6]: an array-creation-WITH-INITIALIZER element (`var arr = new object[]{
-            // narrow };`) writes element 0 through the initializer, not an indexer assignment. Match the
-            // creation to the array local via its declarator and add every initializer element.
-            case IVariableDeclaratorOperation vd
-                when SymbolEqualityComparer.Default.Equals(vd.Symbol, arraySym):
-                AddArrayInitializerElements(vd.Initializer?.Value, writes);
-                break;
-            // Wave-12 r9 [X3]: a whole-array assignment carrying an inline initializer to a FIELD (or a
-            // non-declarator local) — `_arr = new object[] { narrow };` — writes element 0 through the
-            // creation initializer, not an indexer assignment or a declarator. Match the assignment
-            // target's root storage to the traced array symbol and add the creation elements.
-            case ISimpleAssignmentOperation wa when RootStorageSymbol(wa.Target) is { } wts
-                && SymbolEqualityComparer.Default.Equals(wts.OriginalDefinition, arraySym.OriginalDefinition):
-                AddArrayInitializerElements(wa.Value, writes);
-                break;
-            // Wave-12 r8 [X4]/[X5], r9 [X4]: a user array-parameter call site (`Boxed(new object[]{narrow})`
-            // for a plain `object[]` param, or `Boxed(narrow)` for a `params object[]` param) passes an
-            // array-creation-with-initializer as the argument — its elements are invisible to any
-            // declarator/indexer match. When the traced array symbol is that parameter, add the creation
-            // elements of every class-family call-site argument bound to it. (r8 was params-only; r9
-            // relaxed the params guard so an ordinary non-params `object[]` parameter is covered too.)
-            case IArgumentOperation arg when arg.Parameter is { } pp
-                && SymbolEqualityComparer.Default.Equals(pp.OriginalDefinition, arraySym.OriginalDefinition):
-                AddArrayInitializerElements(arg.Value, writes);
-                break;
-        }
-        foreach (var child in op.Children)
-            CollectArrayElementWrites(child, arraySym, writes);
-    }
-
-    /// <summary>Adds each element value of an array-creation-with-initializer (unwrapping conversions
-    /// around the creation) to <paramref name="writes"/>; a no-op for anything else.</summary>
-    static void AddArrayInitializerElements(IOperation value, List<IOperation> writes)
-    {
-        while (value is IConversionOperation c) value = c.Operand;
-        if (value is IArrayCreationOperation ac && ac.Initializer is { } init)
-            foreach (var e in init.ElementValues) writes.Add(e);
-    }
-
-    static void CollectOutRefArgs(IOperation op, ILocalSymbol local, List<IArgumentOperation> args)
-    {
-        if (op == null) return;
-        if (op is IArgumentOperation arg && arg.Parameter is { RefKind: RefKind.Out or RefKind.Ref })
-        {
-            var v = arg.Value;
-            if (v is IDeclarationExpressionOperation de) v = de.Expression;
-            if (v is ILocalReferenceOperation lr && SymbolEqualityComparer.Default.Equals(lr.Local, local))
-                args.Add(arg);
-        }
-        foreach (var child in op.Children)
-            CollectOutRefArgs(child, local, args);
-    }
-
-    static void CollectParamAssignments(IOperation op, IParameterSymbol param, List<IOperation> values)
-    {
-        if (op == null) return;
-        if (op is ISimpleAssignmentOperation sa && sa.Target is IParameterReferenceOperation pr
-            && SymbolEqualityComparer.Default.Equals(pr.Parameter, param))
-            values.Add(sa.Value);
-        // Wave-12 r9 [X5]: a `??=` reassignment of the by-ref parameter inside the callee
-        // (`void SetBoxed(ref object o) { o ??= MakeNarrow(); }`) is neither a plain simple assignment
-        // nor an initializer — add the null-coalescing RHS.
-        else if (op is ICoalesceAssignmentOperation ca && ca.Target is IParameterReferenceOperation cpr
-            && SymbolEqualityComparer.Default.Equals(cpr.Parameter, param))
-            values.Add(ca.Value);
-        foreach (var child in op.Children)
-            CollectParamAssignments(child, param, values);
-    }
-
-    static void CollectParamEvidence(IOperation op, IMethodSymbol method, IParameterSymbol param,
-        IPropertySymbol setterProp, List<IOperation> values)
-    {
-        if (op == null) return;
-        if (setterProp != null)
-        {
-            if (op is ISimpleAssignmentOperation sa && sa.Target is IPropertyReferenceOperation pref
-                && SymbolEqualityComparer.Default.Equals(pref.Property.OriginalDefinition, setterProp.OriginalDefinition))
-                values.Add(sa.Value);
-            // Wave-12 r9 [X6]: a `??=` write through the same cross-dispatched setter (`other.Store ??=
-            // narrow;` / `other[0] ??= narrow;`) is invisible to the simple-assignment check — add the
-            // null-coalescing RHS. Matches named properties and indexers (set_Item) alike.
-            else if (op is ICoalesceAssignmentOperation ca && ca.Target is IPropertyReferenceOperation cpref
-                && SymbolEqualityComparer.Default.Equals(cpref.Property.OriginalDefinition, setterProp.OriginalDefinition))
-                values.Add(ca.Value);
-        }
-        else if (op is IInvocationOperation inv
-            && SymbolEqualityComparer.Default.Equals(inv.TargetMethod.OriginalDefinition, method.OriginalDefinition))
-        {
-            foreach (var a in inv.Arguments)
-                if (a.Parameter != null && a.Parameter.Ordinal == param.Ordinal) { values.Add(a.Value); break; }
-        }
-        foreach (var child in op.Children)
-            CollectParamEvidence(child, method, param, setterProp, values);
-    }
-
-    /// <summary>The first statically visible delegate-typed producer of <paramref name="val"/> whose
-    /// sig part diverges from <paramref name="dstSig"/>, or null when every visible producer agrees
-    /// (or nothing is visible).</summary>
-    ITypeSymbol DivergingDelegateEvidence(IOperation val, string dstSig, HashSet<ISymbol> visited)
-    {
-        while (val is IConversionOperation c) val = c.Operand;
-        if (val == null) return null;
-        switch (val)
-        {
-            case IConditionalOperation cond:
-                return DivergingDelegateEvidence(cond.WhenTrue, dstSig, visited)
-                    ?? DivergingDelegateEvidence(cond.WhenFalse, dstSig, visited);
-            case ICoalesceOperation coal:
-                return DivergingDelegateEvidence(coal.Value, dstSig, visited)
-                    ?? DivergingDelegateEvidence(coal.WhenNull, dstSig, visited);
-            case ISwitchExpressionOperation swx:
-                foreach (var arm in swx.Arms)
-                    if (DivergingDelegateEvidence(arm.Value, dstSig, visited) is { } t) return t;
-                return null;
-            // Wave-12 r8 [X7]-[X10]: a null-conditional producer (`object boxed = other?.BoxedNarrow;`
-            // or `other?.GetBoxed()`) wraps the real member access in an IConditionalAccessOperation the
-            // top unwrap loop never strips — trace the .WhenNotNull member (property getter / call).
-            case IConditionalAccessOperation cacc:
-                return DivergingDelegateEvidence(cacc.WhenNotNull, dstSig, visited);
-            // Wave-12 r9 [X1]: a simple-assignment EXPRESSION used inline as a value
-            // (`object boxed = (_stash = narrow);`) — the value that flows out IS the assigned RHS,
-            // distinct from the statement-form write discovered later via CollectFieldWrites/
-            // CollectLocalWrites/CollectArrayElementWrites. Trace the assigned value directly.
-            case ISimpleAssignmentOperation sae:
-                return DivergingDelegateEvidence(sae.Value, dstSig, visited);
-            // Wave-12 r9 [X2]: an inline `??=`-as-value (`object boxed = (_stash ??= narrow);`) — the
-            // result is either the target's prior contents or the coalesced RHS, so both are producers.
-            case ICoalesceAssignmentOperation cae:
-                return DivergingDelegateEvidence(cae.Value, dstSig, visited)
-                    ?? DivergingDelegateEvidence(cae.Target, dstSig, visited);
-        }
-        if (val.Type is INamedTypeSymbol dlg && dlg.DelegateInvokeMethod is { } invoke)
-            return DelegateAbi.BuildSigPart(invoke, _ctx.TypeParamMap) != dstSig ? val.Type : null;
-        if (val is ILocalReferenceOperation lr && lr.Local != null && visited.Add(lr.Local))
-        {
-            var root = OperationRoot(val);
-            var writes = new List<IOperation>();
-            CollectLocalWrites(root, lr.Local, writes);
-            foreach (var w in writes)
-                if (DivergingDelegateEvidence(w, dstSig, visited) is { } t) return t;
-            // Wave-12 r7 [X5]/[X7]: the local written through an out/ref argument — the producing
-            // value is whatever the callee assigns to its by-ref parameter, invisible at the call
-            // site. Trace the callee body's assignments to that parameter.
-            var refArgs = new List<IArgumentOperation>();
-            CollectOutRefArgs(root, lr.Local, refArgs);
-            foreach (var arg in refArgs)
-                if (arg.Parameter is { } rp && rp.ContainingSymbol is IMethodSymbol rm
-                    && visited.Add(rp) && MethodBody(rm) is { } rbody)
-                {
-                    var pvals = new List<IOperation>();
-                    CollectParamAssignments(rbody, rp, pvals);
-                    foreach (var v in pvals)
-                        if (DivergingDelegateEvidence(v, dstSig, visited) is { } t) return t;
-                }
-        }
-        if (val is IParameterReferenceOperation pr && pr.Parameter != null && visited.Add(pr.Parameter)
-            && pr.Parameter.ContainingSymbol is IMethodSymbol pm)
-        {
-            var setterProp = pm.MethodKind == MethodKind.PropertySet
-                             && pr.Parameter.Ordinal == pm.Parameters.Length - 1
-                ? pm.AssociatedSymbol as IPropertySymbol : null;
-            if (setterProp != null || pm.MethodKind is MethodKind.Ordinary or MethodKind.PropertyGet
-                or MethodKind.PropertySet or MethodKind.LocalFunction)
-            {
-                var values = new List<IOperation>();
-                foreach (var body in ClassFamilyBodies())
-                    CollectParamEvidence(body, pm, pr.Parameter, setterProp, values);
-                foreach (var v in values)
-                    if (DivergingDelegateEvidence(v, dstSig, visited) is { } t) return t;
-            }
-        }
-        // Wave-12 r7 [X2]: a get-only PROPERTY whose getter returns the object-boxed producer
-        // (`object boxed = BoxedNarrow;`) — trace the visible getter's return expressions, exactly
-        // like the method-call branch below. Auto-property / metadata getters have no visible body
-        // and keep flowing.
-        if (val is IPropertyReferenceOperation propRef && propRef.Property?.GetMethod is { } getter
-            && visited.Add(getter.OriginalDefinition) && MethodBody(getter) is { } getBody)
-        {
-            var returns = new List<IOperation>();
-            CollectReturns(getBody, returns);
-            foreach (var r in returns)
-                if (DivergingDelegateEvidence(r, dstSig, visited) is { } t) return t;
-        }
-        // Wave-12 r7 [X3]: a FIELD holding the object-boxed producer (`_stash = narrow; object boxed
-        // = _stash;`) — trace class-family assignments to the field.
-        if (val is IFieldReferenceOperation fref && fref.Field != null
-            && visited.Add(fref.Field.OriginalDefinition))
-        {
-            var writes = new List<IOperation>();
-            foreach (var body in ClassFamilyBodies())
-                CollectFieldWrites(body, fref.Field, writes);
-            foreach (var w in writes)
-                if (DivergingDelegateEvidence(w, dstSig, visited) is { } t) return t;
-        }
-        // Wave-12 r7 [X4]: an ARRAY ELEMENT holding the object-boxed producer (`arr[0] = narrow;
-        // object boxed = arr[0];`) — trace class-family element assignments to the same array storage
-        // symbol. Index-insensitive: any diverging element write is evidence (a same-sig control keeps
-        // flowing because every element write agrees).
-        if (val is IArrayElementReferenceOperation aref
-            && RootStorageSymbol(aref.ArrayReference) is { } arrSym && visited.Add(arrSym))
-        {
-            var writes = new List<IOperation>();
-            foreach (var body in ClassFamilyBodies())
-                CollectArrayElementWrites(body, arrSym, writes);
-            foreach (var w in writes)
-                if (DivergingDelegateEvidence(w, dstSig, visited) is { } t) return t;
-        }
-        // Wave-12 r6 [X5]: a same-class method CALL whose return value is the object-boxed producer
-        // (`object boxed = Identity(narrow);`) — trace into the callee's return expressions. A return
-        // that yields a parameter is picked up by the IParameterReferenceOperation branch above (which
-        // maps it back to this and other class-family call-site arguments), so an identity-like helper
-        // no longer opaquely defeats the reject. Only user methods with a visible body are followed;
-        // framework calls and body-less methods yield nothing and keep flowing.
-        if (val is IInvocationOperation inv && inv.TargetMethod != null
-            && visited.Add(inv.TargetMethod.OriginalDefinition)
-            && MethodBody(inv.TargetMethod) is { } invBody)
-        {
-            // Wave-12 r7 [X1]: a LOCAL FUNCTION target's body op IS the ILocalFunctionOperation node;
-            // descend into its .Body so CollectReturns' nested-function guard doesn't bail on the very
-            // body we came to inspect (an instance-method target's body op is not a local function, so
-            // this is a no-op for the r6 case).
-            var scanBody = invBody is ILocalFunctionOperation invLf ? (IOperation)invLf.Body : invBody;
-            var returns = new List<IOperation>();
-            CollectReturns(scanBody, returns);
-            foreach (var r in returns)
-                if (DivergingDelegateEvidence(r, dstSig, visited) is { } t) return t;
-        }
-        return null;
-    }
-
-    /// <summary>The bound body operation of <paramref name="method"/> when it is declared in source and
-    /// visible to this compile, else null (framework / metadata-only methods).</summary>
-    IOperation MethodBody(IMethodSymbol method)
-    {
-        var def = method.OriginalDefinition;
-        var sr = def.DeclaringSyntaxReferences.Length > 0 ? def.DeclaringSyntaxReferences[0] : null;
-        if (sr == null) return null;
-        var syntax = sr.GetSyntax();
-        return _compilation.GetSemanticModel(syntax.SyntaxTree).GetOperation(syntax);
-    }
-
-    static void CollectReturns(IOperation op, List<IOperation> returns)
-    {
-        if (op == null) return;
-        switch (op)
-        {
-            case IAnonymousFunctionOperation _:
-            case ILocalFunctionOperation _:
-                return; // a nested function's returns are its own, not the enclosing method's
-            case IReturnOperation ret when ret.ReturnedValue != null:
-                returns.Add(ret.ReturnedValue);
-                break;
-        }
-        foreach (var child in op.Children)
-            CollectReturns(child, returns);
-    }
-
     CLeaf VisitConversion(IConversionOperation conv)
     {
         var srcVal = VisitExpression(conv.Operand);
@@ -683,22 +261,43 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
                     + "signature, so a co/contravariant binding silently drops values across the "
                     + "dispatch. Use matching delegate type parameters.");
 
-            // Wave-12 r5 [W1]/[W2]: a NON-delegate-typed operand (object / System.Delegate box) cast
-            // to a delegate type — evidence-based reject when a statically visible producer of the
-            // operand carries a diverging sig (see the collectors above). Same-sig roundtrips and
-            // evidence-free casts keep the reference passthrough.
+            // A NON-delegate-typed operand (object / System.Delegate box) cast to a delegate type: the
+            // __dlgc_ channels are keyed by the STATIC destination signature, but the boxed delegate's
+            // RUNTIME signature is unknown, so a variant box silently drops values across the dispatch.
+            // CONSERVATIVE + BOUNDED: allow only when the operand, after stripping conversions on THIS
+            // expression, is DIRECTLY a delegate-typed value whose sig part equals the destination (the
+            // trivially-safe box-and-unbox-same-type roundtrip); reject everything whose boxed delegate
+            // we cannot see statically. This replaces the wave-12 r5-r9 producer-walking evidence check
+            // — which tried to PROVE divergence by tracing every AST shape that can produce/launder a
+            // boxed delegate (an unbounded whack-a-mole: 33 channels found across 4 rounds, never
+            // saturating). Over-rejecting the rare cross-statement box roundtrip is acceptable (design
+            // §8-3: loud over-rejection, never a silent wrong value); the fix is to keep the delegate
+            // typed instead of routing it through object.
             if (conv.Type is INamedTypeSymbol lDst && lDst.DelegateInvokeMethod is { } lInvoke
-                && !(conv.Operand.Type is INamedTypeSymbol opDlg && opDlg.DelegateInvokeMethod != null)
-                && DivergingDelegateEvidence(conv.Operand,
-                       DelegateAbi.BuildSigPart(lInvoke, _ctx.TypeParamMap),
-                       new HashSet<ISymbol>(SymbolEqualityComparer.Default)) is { } launderSrc)
-                throw new System.NotSupportedException(
-                    $"Variant delegate conversion from '{launderSrc.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}' "
-                    + $"to '{lDst.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}' is not supported "
-                    + $"(laundered through '{conv.Operand.Type?.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat) ?? "object"}'): "
-                    + "the delegate calling convention keys its argument/return channels by the exact "
-                    + "signature, so a co/contravariant binding silently drops values across the "
-                    + "dispatch. Use matching delegate type parameters.");
+                && !(conv.Operand.Type is INamedTypeSymbol opDlg && opDlg.DelegateInvokeMethod != null))
+            {
+                var stripped = conv.Operand;
+                while (stripped is IConversionOperation strippedConv) stripped = strippedConv.Operand;
+                // A null / default operand carries no delegate and no signature — `(Func<...>)null`
+                // dispatches through the invoke-time target-null guard (LogError+skip), never diverging
+                // a channel. Safe passthrough.
+                var isNull = stripped is IDefaultValueOperation
+                    || (stripped?.ConstantValue.HasValue == true && stripped.ConstantValue.Value == null);
+                // A same-signature delegate boxed and unboxed within THIS expression is the trivially
+                // safe roundtrip — its channels agree.
+                var safeRoundtrip = stripped?.Type is INamedTypeSymbol sDlg && sDlg.DelegateInvokeMethod is { } sInvoke
+                    && DelegateAbi.BuildSigPart(sInvoke, _ctx.TypeParamMap)
+                       == DelegateAbi.BuildSigPart(lInvoke, _ctx.TypeParamMap);
+                if (!isNull && !safeRoundtrip)
+                    throw new System.NotSupportedException(
+                        $"Cast from '{conv.Operand.Type?.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat) ?? "object"}' "
+                        + $"to delegate type '{lDst.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}' is not supported: "
+                        + "the delegate calling convention keys its argument/return channels by the exact "
+                        + "signature, and a delegate boxed to a non-delegate type carries no statically "
+                        + "visible signature, so a variant boxed delegate would silently drop values across "
+                        + "the dispatch. Keep the value typed as its delegate type instead of routing it "
+                        + "through object.");
+            }
             return srcVal;
         }
 

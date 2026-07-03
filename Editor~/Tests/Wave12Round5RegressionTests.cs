@@ -15,14 +15,15 @@ namespace USugar.Tests;
 ///      System.Delegate, explicit cast or `as`) bypassed the whole [V2]/round-4 gate family: the
 ///      conversion node's source side is not a delegate type, so the sig-part-divergence check
 ///      never ran, and the bundle flowed into channels keyed by the DESTINATION signature
-///      (VM-proven silent loss: covariant Func ref=2 vs -1, contravariant Action ref=7 vs 5, and
-///      the same channel through a setter's `value` param ref=3 vs -1). VisitConversion now runs
-///      an EVIDENCE-BASED check on delegate-destination casts with non-delegate operands: it
-///      rejects loudly iff a statically visible producer of the operand (nested conversions,
-///      ternary/coalesce arms, the operand local's writes transitively through other locals, or a
-///      parameter's class-family-visible call-site arguments / property-write values) carries a
-///      delegate whose sig part diverges. Same-signature roundtrips (the pinned accepted
-///      boundary) and evidence-free casts keep the reference passthrough.
+///      (VM-proven silent loss: covariant Func ref=2 vs -1, contravariant Action ref=7 vs 5).
+///      VisitConversion now rejects a non-delegate→delegate cast unless the operand, after
+///      stripping conversions on THIS expression, is DIRECTLY a same-signature delegate (the
+///      trivially-safe box-and-unbox roundtrip) or null/default. Everything whose boxed delegate
+///      is not statically visible in the expression rejects loudly — a conservative, bounded
+///      replacement for the former unbounded producer-walking evidence check (rounds 5-9 traced
+///      33 producer AST shapes and never saturated). Design §8-3: loud over-rejection of the rare
+///      cross-statement box roundtrip, never a silent wrong value; the per-shape reject pins are
+///      consolidated here since the check no longer inspects how the box was produced.
 ///
 /// [W3] A method group bound off a BASE-typed variable receiver resolved to the derived class's
 ///      `new`-hidden method instead of the statically bound base method (VM-proven 162 where C#
@@ -35,13 +36,25 @@ namespace USugar.Tests;
 /// </summary>
 public class Wave12Round5RegressionTests
 {
-    // ── [W1] object-boxed covariant Func laundering ──
+    // ── [W1]/[W2] object-boxed variant delegate casts reject loudly (bounded, shape-agnostic) ──
+    // The former per-producer-shape walker (rounds 5-9) is gone; the reject no longer inspects HOW
+    // the box was produced, only that the cast's operand is not a statically visible same-sig
+    // delegate. These pin the covariant Func, `as`-cast, and contravariant Action channels; the
+    // controls below pin the flows the bounded check still accepts.
+
+    static void AssertObjectDelegateCastReject(string src, string cls)
+    {
+        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(src, cls));
+        Assert.Contains("carries no statically visible signature", ex.Message);
+    }
 
     [Fact]
     public void ObjectBoxedCastCovariantDelegate_Throws()
     {
-        // Verbatim minimized repro (VM-proven ref=2, usugar -1: return silently dropped).
-        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
+        // Verbatim minimized repro (VM-proven ref=2, usugar -1: return silently dropped). The box
+        // is a cross-statement object local — its runtime delegate signature is not visible at the
+        // cast, so the bounded check rejects.
+        AssertObjectDelegateCastReject(@"
 using System;
 using UdonSharp;
 public class W12R5ObjCo : UdonSharpBehaviour {
@@ -58,18 +71,15 @@ public class W12R5ObjCo : UdonSharpBehaviour {
         object o = other.bundle();
         result = o == null ? -1 : o.ToString().Length;
     }
-}", "W12R5ObjCo"));
-        Assert.Contains("Variant delegate conversion", ex.Message);
-        Assert.Contains("laundered through 'object'", ex.Message);
-        Assert.Contains("Func<string>", ex.Message);
-        Assert.Contains("Func<object>", ex.Message);
+}", "W12R5ObjCo");
     }
 
     [Fact]
     public void ObjectBoxedAsCastCovariantDelegate_Throws()
     {
-        // `as` flavor of the same channel (corpus W12EC5R05, VM-proven ref=2 vs -1).
-        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
+        // `as` flavor of the same channel (corpus W12EC5R05, VM-proven ref=2 vs -1) — an `as`-cast
+        // to a delegate type is the same IConversionOperation and rejects the same way.
+        AssertObjectDelegateCastReject(@"
 using System;
 using UdonSharp;
 public class W12R5ObjAs : UdonSharpBehaviour {
@@ -83,17 +93,14 @@ public class W12R5ObjAs : UdonSharpBehaviour {
         object o = bundle();
         result = o == null ? -1 : o.ToString().Length;
     }
-}", "W12R5ObjAs"));
-        Assert.Contains("laundered through 'object'", ex.Message);
+}", "W12R5ObjAs");
     }
-
-    // ── [W2] object-boxed contravariant Action laundering ──
 
     [Fact]
     public void ObjectBoxedCastContravariantAction_Throws()
     {
         // Verbatim minimized repro (VM-proven ref=7, usugar 5: argument silently dropped).
-        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
+        AssertObjectDelegateCastReject(@"
 using System;
 using UdonSharp;
 public class W12R5ObjContra : UdonSharpBehaviour {
@@ -109,81 +116,70 @@ public class W12R5ObjContra : UdonSharpBehaviour {
         other.bundle = narrowBundle;
         other.bundle(""ab"");
     }
-}", "W12R5ObjContra"));
-        Assert.Contains("Variant delegate conversion", ex.Message);
-        Assert.Contains("Action<object>", ex.Message);
-        Assert.Contains("Action<string>", ex.Message);
+}", "W12R5ObjContra");
     }
 
-    // ── [W1] parameter-evidence flavor: the box is a setter's `value` param ──
+    // ── [W1]/[W2] controls: the flows the bounded check still accepts ──
 
     [Fact]
-    public void SetterValueObjectCastVariantDelegate_Throws()
+    public void SameSigDelegateRoundtripInOneExpression_Compiles()
     {
-        // Corpus W12EC5R16 (VM-proven ref=3 vs -1): the cast sits inside the setter body, so the
-        // operand is the object-typed `value` PARAMETER — evidence comes from the class-visible
-        // property write's RHS (Func<string>), not from a local.
-        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
-using System;
-using UdonSharp;
-public class W12R5SetVal : UdonSharpBehaviour {
-    public int seed; public int result;
-    Func<object> _store;
-    string MakeTag() { return ""bb"" + seed; }
-    public object Boxed { set { _store = (Func<object>)value; } }
-    void Start() {
-        Func<string> narrow = MakeTag;
-        Boxed = narrow;
-        object o = _store();
-        result = o == null ? -1 : o.ToString().Length;
-    }
-}", "W12R5SetVal"));
-        Assert.Contains("Variant delegate conversion", ex.Message);
-        Assert.Contains("laundered through 'object'", ex.Message);
-    }
-
-    // ── [W1]/[W2] controls: the pinned accepted boundary keeps flowing ──
-
-    [Fact]
-    public void ObjectRoundtripSameTypeThroughParam_Compiles()
-    {
-        // w9w30-shaped control: all class-visible call sites feed the SAME sig — the parameter
-        // evidence agrees with the destination, so the reference passthrough stays.
+        // The trivially-safe roundtrip: a delegate boxed and unboxed to the SAME signature WITHIN
+        // one expression — the stripped operand is directly a same-sig delegate value, so the
+        // channels agree and the reference passthrough stays.
         var uasm = TestHelper.CompileToUasm(@"
 using System;
 using UdonSharp;
-public class W12R5ParamRt : UdonSharpBehaviour {
-    public int k; public int r1;
-    void Start() { r1 = Run((Func<int, int>)Quad, k); }
-    int Run(object boxed, int v) {
-        Func<int, int> g = (Func<int, int>)boxed;
-        return g(v);
+public class W12R5InExpr : UdonSharpBehaviour {
+    public int seed; public int result;
+    string MakeTag() { return ""x"" + seed; }
+    void Start() {
+        Func<string> d = MakeTag;
+        Func<string> e = (Func<string>)(object)d;
+        result = e().Length;
     }
-    public int Quad(int v) { return v * 4; }
-}", "W12R5ParamRt");
+}", "W12R5InExpr");
         Assert.Contains("__dlg", uasm);
     }
 
     [Fact]
-    public void ObjectCastEvidenceFree_Compiles()
+    public void NullCastToDelegate_Compiles()
     {
-        // w12ec4r19-shaped control: the operand local's only write is a CALL RESULT — no delegate
-        // evidence is visible, so the cast keeps flowing (the documented unprovable residual).
+        // `(Func<...>)null` / `(Func<...>)(object)null` carry no delegate and no signature — the
+        // invoke-time target-null guard handles them, never diverging a channel. Safe passthrough.
         var uasm = TestHelper.CompileToUasm(@"
 using System;
 using UdonSharp;
-public class W12R5EvFree : UdonSharpBehaviour {
+public class W12R5NullCast : UdonSharpBehaviour {
+    public int result;
+    Func<int> a;
+    Func<int> b;
+    void Start() {
+        a = (Func<int>)null;
+        b = (Func<int>)(object)null;
+        result = (a == null && b == null) ? 1 : 0;
+    }
+}", "W12R5NullCast");
+        Assert.Contains("__dlg", uasm);
+    }
+
+    [Fact]
+    public void DelegateToObjectBoxing_Compiles()
+    {
+        // The boxing DIRECTION (delegate → object) is untouched: the reject fires only on a
+        // NON-delegate operand cast TO a delegate, so storing a delegate into an object stays legal.
+        var uasm = TestHelper.CompileToUasm(@"
+using System;
+using UdonSharp;
+public class W12R5Boxing : UdonSharpBehaviour {
     public int seed; public int result;
-    string MakeTag() { return ""z"" + seed; }
-    public T Echo<T>(T x) { return x; }
+    string MakeTag() { return ""b"" + seed; }
     void Start() {
         Func<string> d = MakeTag;
-        object boxed = d;
-        object echoed = Echo<object>(boxed);
-        Func<string> rebound = (Func<string>)echoed;
-        result = rebound().Length;
+        object o = d;
+        result = o == null ? 0 : 1;
     }
-}", "W12R5EvFree");
+}", "W12R5Boxing");
         Assert.Contains("__dlg", uasm);
     }
 
