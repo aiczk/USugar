@@ -167,6 +167,17 @@ public class StructRefParam : UdonSharpBehaviour {
   public bool eq;
   void Start(){ (int a, int b) x = (1, 2); (int a, int b) y = (1, 2); eq = x == y; }
 }"),
+        // Static readonly materialization (design §3, feature B): a non-const static readonly array
+        // table declared+read, plus an instance field initialized FROM it — pins the static-tier
+        // DeclareField/_start-init/LoadField codegen and the static-before-instance init order (§3.6)
+        // byte-exact, the canonical baseline the S-M1 gate requires (§6).
+        ("static_readonly_array_table", "StaticReadonlyArrayTable",
+@"using UdonSharp; public class StaticReadonlyArrayTable : UdonSharpBehaviour {
+  static readonly int[] Table = { 10, 20, 30 };
+  public int fromTable = Table[1];
+  public int result;
+  void Start(){ result = Table[0] + fromTable; }
+}"),
     };
 
     public static (string Name, string ClassName, string Source) ByName(string name)
