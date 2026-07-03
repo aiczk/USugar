@@ -29,6 +29,7 @@ public class UasmEmitter
     Dictionary<ITypeParameterSymbol, ITypeSymbol> _typeParamMap { get => _ctx.TypeParamMap; set => _ctx.TypeParamMap = value; }
     HashSet<IMethodSymbol> _inheritedMethods = new(SymbolEqualityComparer.Default);
     List<(string fieldName, IOperation initOp, ITypeSymbol fieldType)> _fieldInitOps => _ctx.FieldInitOps;
+    List<(string fieldName, IOperation initOp, ITypeSymbol fieldType)> _staticFieldInitOps => _ctx.StaticFieldInitOps;
     Dictionary<string, string> _fieldChangeCallbacks => _ctx.FieldChangeCallbacks;
     List<EmitDiagnostic> _diagnostics => _ctx.Diagnostics;
 
@@ -227,7 +228,12 @@ public class UasmEmitter
     {
         foreach (var member in _classSymbol.GetMembers().OfType<IFieldSymbol>())
         {
-            if (member.IsStatic || member.IsImplicitlyDeclared) continue;
+            if (member.IsImplicitlyDeclared) continue;
+            if (member.IsStatic)
+            {
+                EmitStaticReadonlyField(member);
+                continue;
+            }
 
             // First-class delegate field (design §2.1): ONE SystemObjectArray heap var holding the bundle
             // reference, null-initialized in UASM data. Private fields are bundled too (assign/invoke route
@@ -318,7 +324,9 @@ public class UasmEmitter
         // Record count of derived-class field init ops; base class init ops added below
         // must be reordered to come first (C# spec: base → derived initializer order).
         int derivedFieldInitCount = _fieldInitOps.Count;
+        int derivedStaticFieldInitCount = _staticFieldInitOps.Count; // §3.6: static tier gets the same treatment
         var baseClassInitBoundaries = new List<int>(); // track boundaries per base class
+        var baseStaticInitBoundaries = new List<int>();
 
         // Collect declared member SYMBOLS (name → derived-most declaration). A base member whose
         // name matches is either (a) part of one override chain — legal, one virtual slot — or
@@ -327,9 +335,13 @@ public class UasmEmitter
         // SetBase/GetBase through the base symbol read the derived symbol's writes, and a
         // type-conflicting shadow halts the VM with HeapTypeMismatchException at runtime).
         // Storage collision is never acceptable → loud reject per design §8-3 (predates fcd-stage1).
+        // Non-const, non-mutable static readonly fields are tracked here too (feature B materializes
+        // them into a heap var by the same bare name) — a static MUTABLE field gets no storage, so
+        // reusing its name lower in the hierarchy collides with nothing and is left untracked.
         var declaredMemberSyms = new Dictionary<string, ISymbol>();
         foreach (var m in _classSymbol.GetMembers())
-            if (m is IFieldSymbol or IPropertySymbol && !m.IsStatic && !m.IsImplicitlyDeclared
+            if (m is IFieldSymbol or IPropertySymbol && !m.IsImplicitlyDeclared
+                && (!m.IsStatic || (m is IFieldSymbol { IsReadOnly: true, HasConstantValue: false }))
                 && !declaredMemberSyms.ContainsKey(m.Name))
                 declaredMemberSyms[m.Name] = m;
 
@@ -339,13 +351,22 @@ public class UasmEmitter
         {
             if (USugarCompilerHelper.IsFrameworkNamespace(baseType.ContainingNamespace) || baseType.Name == "UdonSharpBehaviour") break;
             baseClassInitBoundaries.Add(_fieldInitOps.Count);
+            baseStaticInitBoundaries.Add(_staticFieldInitOps.Count);
             foreach (var member in baseType.GetMembers().OfType<IFieldSymbol>())
             {
-                if (member.IsStatic || member.IsImplicitlyDeclared) continue;
+                if (member.IsImplicitlyDeclared) continue;
                 // A FIELD can never be overridden, so any name match with a nearer declaration is
-                // `new`-style shadowing — two distinct symbols, one heap var. Loud.
+                // `new`-style shadowing — two distinct symbols, one heap var. Loud. (Materialized static
+                // readonly fields are name-keyed heap vars too, so this applies to them identically;
+                // static MUTABLE fields carry no storage and were never tracked into declaredMemberSyms.)
                 if (declaredMemberSyms.TryGetValue(member.Name, out var fieldShadower))
                     throw new NotSupportedException(ShadowedStorageError(member, fieldShadower));
+                if (member.IsStatic)
+                {
+                    EmitStaticReadonlyField(member);
+                    if (!member.IsConst && member.IsReadOnly) declaredMemberSyms[member.Name] = member;
+                    continue;
+                }
 
                 // Delegate field from a base class → same single-SystemObjectArray declaration as the derived
                 // path (private bundled too). Must intercept BEFORE the generic initializer scan below, which
@@ -449,25 +470,37 @@ public class UasmEmitter
         // Reorder field init ops: base class initializers must run before derived (C# spec).
         // Base classes were walked nearest-parent-first, so reverse class-level order
         // while preserving field order within each class.
-        if (_fieldInitOps.Count > derivedFieldInitCount)
+        ReorderBaseFirst(_fieldInitOps, baseClassInitBoundaries, derivedFieldInitCount);
+
+        // §3.6 (feature B): the static TIER gets the identical base-first reorder, independently of
+        // the instance tier above (they were collected into separate lists), then splices in FRONT of
+        // it — base static → derived static → base instance → derived instance.
+        ReorderBaseFirst(_staticFieldInitOps, baseStaticInitBoundaries, derivedStaticFieldInitCount);
+        if (_staticFieldInitOps.Count > 0)
+            _fieldInitOps.InsertRange(0, _staticFieldInitOps);
+    }
+
+    /// <summary>Base-first reorder shared by the instance and static field-initializer tiers (§3.6):
+    /// <paramref name="ops"/> was collected derived-first (indices [0, derivedCount) ) then base-class
+    /// groups nearest-parent-first (each group's start boundary recorded in <paramref name="boundaries"/>);
+    /// rewrites it to outermost-base ... nearest-base ... derived (C# spec order). A no-op when no base
+    /// class contributed any ops.</summary>
+    static void ReorderBaseFirst<T>(List<T> ops, List<int> boundaries, int derivedCount)
+    {
+        if (ops.Count <= derivedCount) return;
+        boundaries.Add(ops.Count); // sentinel
+        var reordered = new List<T>();
+        for (int i = boundaries.Count - 2; i >= 0; i--)
         {
-            baseClassInitBoundaries.Add(_fieldInitOps.Count); // sentinel
-            var reordered = new List<(string, IOperation, ITypeSymbol)>();
-            // Reverse iterate base class groups (outermost base first)
-            for (int i = baseClassInitBoundaries.Count - 2; i >= 0; i--)
-            {
-                int start = baseClassInitBoundaries[i];
-                int end = baseClassInitBoundaries[i + 1];
-                for (int j = start; j < end; j++)
-                    reordered.Add(_fieldInitOps[j]);
-            }
-            // Append derived class init ops
-            for (int j = 0; j < derivedFieldInitCount; j++)
-                reordered.Add(_fieldInitOps[j]);
-            // Replace
-            _fieldInitOps.Clear();
-            _fieldInitOps.AddRange(reordered);
+            int start = boundaries[i];
+            int end = boundaries[i + 1];
+            for (int j = start; j < end; j++)
+                reordered.Add(ops[j]);
         }
+        for (int j = 0; j < derivedCount; j++)
+            reordered.Add(ops[j]);
+        ops.Clear();
+        ops.AddRange(reordered);
     }
 
     /// <summary>
@@ -501,6 +534,76 @@ public class UasmEmitter
                 + "uint, long, ulong, float, double, string, VRCUrl, Vector2/3/4, Quaternion, "
                 + "Color, Color32, and arrays of these.");
         return syncMode;
+    }
+
+    /// <summary>
+    /// Static field declaration branch (design §3, feature B), shared verbatim by the own-class and
+    /// base-class field walks. `const` fields and `static readonly` fields whose initializer folds to
+    /// a compile-time constant get NO storage here — ExpressionHandler's existing read-time fold
+    /// (byte-invariant, §6 gate) keeps handling them exactly as before this feature. Static MUTABLE
+    /// fields also get no storage (reject stays at the read/write use site, §3.7/R8). A non-const,
+    /// non-foldable `static readonly` (array / struct / tuple / delegate / computed-but-pure value) is
+    /// PER-PROGRAM INSTANCE MATERIALIZED: declared exactly like an instance field (reusing
+    /// TryEvaluateFieldInitForHeap for the same constant-array/struct heap-default fast path), its
+    /// initializer enqueued to the STATIC TIER of _staticFieldInitOps (run before the instance tier at
+    /// _start — §3.6) so each behaviour instance builds its own independent copy. An impure initializer
+    /// is loud-rejected (§3.4, R6) before any storage is declared — purity is what makes running it once
+    /// per instance observationally identical to C#'s once-per-domain. Returns true iff a heap var was
+    /// declared (materialized), so callers can track the name for cross-hierarchy shadow-collision
+    /// detection the same way instance fields already are.
+    /// </summary>
+    bool EmitStaticReadonlyField(IFieldSymbol member)
+    {
+        if (member.HasConstantValue) return false;    // `const` → existing fold path, no storage
+        if (!member.IsReadOnly) return false;         // static mutable → no storage; reject at use site
+
+        var syntaxRef = member.DeclaringSyntaxReferences.FirstOrDefault();
+        IOperation initOp = null;
+        if (syntaxRef?.GetSyntax() is VariableDeclaratorSyntax { Initializer: not null } declarator)
+        {
+            var model = _compilation.GetSemanticModel(declarator.SyntaxTree);
+            initOp = model.GetOperation(declarator.Initializer.Value);
+        }
+
+        // Compile-time-constant initializer (`static readonly int X = 1 + 2;`) → the EXISTING fold
+        // path (ExpressionHandler.VisitFieldReference), byte-invariant — must stay storage-free exactly
+        // as before this feature.
+        if (initOp != null && initOp.ConstantValue.HasValue && initOp.ConstantValue.Value != null) return false;
+        if (initOp != null && EmitContext.TryGetConstFieldInitializer(_compilation, member, out _)) return false;
+
+        if (initOp != null && !EmitContext.IsPureStaticReadonlyInitializer(initOp))
+            throw new NotSupportedException(
+                $"a static readonly initializer must be pure (composed of constants and value construction); "
+                + $"'{member.Name}' calls a method or reads mutable state, which would run once per behaviour "
+                + "instance rather than once. Compute it in an instance field initializer or Start().");
+
+        // Nothing to synchronize: each instance already materializes its own immutable copy at Start.
+        if (member.GetAttributes().Any(a => a.AttributeClass?.Name == "UdonSyncedAttribute"))
+            throw new NotSupportedException(
+                $"[UdonSynced] static readonly field '{member.Name}' cannot be synced: each behaviour "
+                + "instance already materializes its own immutable copy at Start, so there is nothing to "
+                + "synchronize. Remove [UdonSynced].");
+
+        if (member.Type is INamedTypeSymbol delegateType && delegateType.DelegateInvokeMethod != null)
+        {
+            DeclareDelegateField(member, delegateType);
+            return true;
+        }
+
+        var udonType = GetUdonType(member.Type);
+        object constValue = null;
+        if (initOp != null)
+        {
+            constValue = TryEvaluateFieldInitForHeap(initOp, member.Type);
+            if (constValue == null)
+                _staticFieldInitOps.Add((member.Name, initOp, member.Type)); // static tier — §3.6
+        }
+        _ctx.DeclareField(member.Name, udonType, FieldFlags.None, constValue);
+
+        if (initOp == null && member.Type is INamedTypeSymbol aggFieldType && EmitContext.IsAggregateType(aggFieldType))
+            _ctx.AggregateFieldDefaults.Add((member.Name, aggFieldType));
+
+        return true;
     }
 
     /// <summary>

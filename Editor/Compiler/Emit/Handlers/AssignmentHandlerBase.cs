@@ -133,6 +133,7 @@ public abstract class AssignmentHandlerBase : HandlerBase
                 var layout = _ctx.GetAggregateLayout(aggCapType);
                 if (layout.TryGetIndex(aggFieldRef.Field, out var elemIdx))
                 {
+                    RejectStaticReadonlyWriteThrough(aggFieldRef.Instance); // §3.3, R5 (compound/inc-dec write-back)
                     var arrVal = LoadInstanceRaw(aggFieldRef.Instance);
                     var idxVal = Const(elemIdx, "SystemInt32");
                     var currentVal = ExternCall(ExternResolver.BuildArrayGetSignature("SystemObjectArray", "SystemObject"),
@@ -143,6 +144,7 @@ public abstract class AssignmentHandlerBase : HandlerBase
             }
             case IArrayElementReferenceOperation arrayElem:
             {
+                RejectStaticReadonlyWriteThrough(arrayElem.ArrayReference); // §3.3, R5 (compound/inc-dec write-back)
                 var arrSymbol = arrayElem.ArrayReference.Type as IArrayTypeSymbol;
                 var arrayType = GetArrayType(arrSymbol);
                 var elemAccessorType = GetArrayElemType(arrSymbol);

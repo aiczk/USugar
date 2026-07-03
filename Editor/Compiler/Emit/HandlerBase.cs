@@ -715,6 +715,46 @@ public abstract class HandlerBase
         }
     }
 
+    /// <summary>Design §3.3, Q-S2 (feature B): walks a WRITE target's receiver chain (array-element /
+    /// struct-member links, mirroring TryGetRefStorageRoot's walk) down to its storage root, returning
+    /// the static readonly FIELD when that root is a per-program-materialized static readonly field —
+    /// each behaviour instance holds its own copy of that field, so a write through an array element
+    /// or aggregate member (`A[i] = v`, `A[i].x = v`) would silently diverge per instance instead of
+    /// being shared as C# expects (the readonly-ness only forbids reassigning the FIELD itself; its
+    /// referenced contents are still mutable in real C#). Any other root (local/param/this-field/
+    /// cross-behaviour/fresh value) returns null — no hazard.</summary>
+    protected static IFieldSymbol TryGetStaticReadonlyWriteThroughRoot(IOperation target)
+    {
+        var op = target;
+        while (true)
+        {
+            switch (op)
+            {
+                case IConversionOperation c:
+                    op = c.Operand; continue;
+                case IArrayElementReferenceOperation ae:
+                    op = ae.ArrayReference; continue; // element storage roots at the array reference
+                case IFieldReferenceOperation { Instance: null } fr when fr.Field.IsStatic && fr.Field.IsReadOnly:
+                    return fr.Field.OriginalDefinition;
+                case IFieldReferenceOperation fr2 when fr2.Instance != null
+                    && fr2.Field.ContainingType?.IsValueType == true:
+                    op = fr2.Instance; continue; // struct member chain → resolve its root
+                default:
+                    return null;
+            }
+        }
+    }
+
+    /// <summary>Loud reject for a write-through mutation rooted at a static readonly field (§3.3, R5).
+    /// A no-op when <paramref name="target"/> isn't rooted there.</summary>
+    protected static void RejectStaticReadonlyWriteThrough(IOperation target)
+    {
+        if (TryGetStaticReadonlyWriteThroughRoot(target) is not { } root) return;
+        throw new NotSupportedException(
+            $"cannot mutate the contents of a static readonly field '{root.Name}'; each behaviour instance "
+            + "holds its own copy, so the write would not be shared as in C#. Use an instance field.");
+    }
+
     /// <summary>Round-8 [R1]/[R7]: true when a non-readonly struct member invocation's receiver
     /// chain is READONLY in C# and so runs on a defensive copy the emulation must reproduce.
     /// Two flavors (both DiffFuzz-proven):
@@ -1040,6 +1080,7 @@ public abstract class HandlerBase
             && aggInstance.Type is INamedTypeSymbol aggContaining && EmitContext.IsAggregateType(aggContaining)
             && _ctx.GetAggregateLayout(aggContaining).TryGetIndex(aggMemberName, out var fieldIndex))
         {
+            RejectStaticReadonlyWriteThrough(aggInstance); // §3.3, R5
             var arrExpr = LoadInstanceRaw(aggInstance);
             return value => EmitExternVoid(ExternResolver.BuildArraySetSignature("SystemObjectArray", "SystemObject"),
                 new List<CLeaf> { arrExpr, Const(fieldIndex, "SystemInt32"), value });
@@ -1086,6 +1127,7 @@ public abstract class HandlerBase
     /// element store (wave-9 round-6 [X6]; the legs/value split twin of PreparePropertySet).</summary>
     protected System.Action<CLeaf> PrepareArrayElementSet(IArrayElementReferenceOperation arrayElem)
     {
+        RejectStaticReadonlyWriteThrough(arrayElem.ArrayReference); // §3.3, R5
         var arrayVal = VisitExpression(arrayElem.ArrayReference);
         var arrSym = arrayElem.ArrayReference.Type as IArrayTypeSymbol;
         var indexVal = ResolveArrayIndex(arrayVal, GetArrayType(arrSym), arrayElem.Indices[0]);

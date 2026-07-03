@@ -89,26 +89,44 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
         // expression. Each program gets its own copy, which is observationally identical to a true shared
         // static because the value is immutable — so no singleton/shared storage is needed.
         if (fieldRef.Field.IsStatic && fieldRef.Field.IsReadOnly
-            && (fieldRef.ConstantValue.HasValue || TryGetConstInitializer(fieldRef.Field, out _)))
+            && (fieldRef.ConstantValue.HasValue || EmitContext.TryGetConstFieldInitializer(_compilation, fieldRef.Field, out _)))
         {
             var constType = GetUdonType(fieldRef.Field.Type);
             var value = fieldRef.ConstantValue.HasValue ? fieldRef.ConstantValue.Value
-                : (TryGetConstInitializer(fieldRef.Field, out var v) ? v : null);
+                : (EmitContext.TryGetConstFieldInitializer(_compilation, fieldRef.Field, out var v) ? v : null);
             return Const(value, constType);
         }
         if (fieldRef.Field.IsStatic)
         {
-            // UdonSharpBehaviour static field → compile error (Udon VM has no shared static storage)
             if (ExternResolver.IsUdonSharpBehaviour(fieldRef.Field.ContainingType))
             {
-                var qualifier = fieldRef.Field.IsReadOnly ? "'static readonly'" : "Static";
-                _diagnostics.Add(new EmitDiagnostic
+                // Non-const, non-foldable `static readonly` (const/foldable already returned above) —
+                // per-program instance materialization (design §3.1, Q-S1). Declared within this
+                // program's own class-or-base hierarchy → UasmEmitter's static field walk gave it a
+                // heap var (LoadField, same shape as a this-field read; aggregates clone-on-read).
+                // Otherwise no storage for it exists in THIS program at all (§3.5, Q-S5) — loud.
+                if (fieldRef.Field.IsReadOnly)
                 {
-                    Severity = "Error",
-                    Message = $"{qualifier} field '{fieldRef.Field.Name}' is not supported on UdonSharpBehaviour types. " +
-                        "Udon VM has no static variable support. Use 'const' for compile-time constants or convert to an instance field."
-                });
-                throw new NotSupportedException("Static fields are not supported on UdonSharpBehaviour types. " + $"Use 'const' for compile-time constants or convert '{fieldRef.Field.Name}' to an instance field.");
+                    if (IsDeclaredInOwnHierarchy(_classSymbol, fieldRef.Field.ContainingType))
+                        return fieldRef.Field.Type is INamedTypeSymbol staticFieldAgg && EmitContext.IsAggregateType(staticFieldAgg)
+                            ? EmitDeepCloneAggregate(LoadField(fieldRef.Field.Name, "SystemObjectArray"), staticFieldAgg)
+                            : LoadField(fieldRef.Field.Name, GetUdonType(fieldRef.Field.Type));
+
+                    var crossMsg = $"cannot read a non-constant static readonly field "
+                        + $"'{fieldRef.Field.ContainingType.Name}.{fieldRef.Field.Name}' from another behaviour; "
+                        + "Udon programs have no shared static storage. Make it 'const' if it is compile-time "
+                        + "constant, or expose an instance field.";
+                    _diagnostics.Add(new EmitDiagnostic { Severity = "Error", Message = crossMsg });
+                    throw new NotSupportedException(crossMsg);
+                }
+                // static MUTABLE field → compile error (Udon VM has no shared static storage). §3.7/R8:
+                // message sharpened to make clear 'static readonly' IS supported (only mutable statics aren't).
+                var mutableMsg = $"Static field '{fieldRef.Field.Name}' is not supported on UdonSharpBehaviour "
+                    + "types: the Udon VM has no shared static storage. 'static readonly' IS supported (each "
+                    + "behaviour instance materializes its own immutable copy) — use 'const' for a compile-time "
+                    + "constant, 'static readonly' for immutable per-instance data, or convert to an instance field.";
+                _diagnostics.Add(new EmitDiagnostic { Severity = "Error", Message = mutableMsg });
+                throw new NotSupportedException(mutableMsg);
             }
             // Unity/System static field → extern getter
             var fldType = GetUdonType(fieldRef.Field.Type);
@@ -171,18 +189,15 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
 
     // ── Conversion ──
 
-    // Evaluate a field's initializer to a compile-time constant (primitives/enums). Used to fold a
-    // `static readonly` field, whose own ConstantValue is unset, when its initializer is constant.
-    bool TryGetConstInitializer(IFieldSymbol field, out object value)
+    // True when fieldContainingType is _classSymbol or one of its user-defined base classes — i.e. a
+    // static readonly field declared there is materialized as a heap var IN THIS PROGRAM (UasmEmitter's
+    // static field walk covers the same hierarchy). Design §3.5, Q-S5: any OTHER class has no storage
+    // for it here at all, regardless of accessibility.
+    static bool IsDeclaredInOwnHierarchy(INamedTypeSymbol classSymbol, INamedTypeSymbol fieldContainingType)
     {
-        value = null;
-        var refs = field.DeclaringSyntaxReferences;
-        if (refs.Length > 0 && refs[0].GetSyntax()
-            is Microsoft.CodeAnalysis.CSharp.Syntax.VariableDeclaratorSyntax { Initializer: { } init })
-        {
-            var cv = _compilation.GetSemanticModel(init.SyntaxTree).GetConstantValue(init.Value);
-            if (cv.HasValue) { value = cv.Value; return true; }
-        }
+        for (var t = classSymbol; t != null; t = t.BaseType)
+            if (SymbolEqualityComparer.Default.Equals(t, fieldContainingType))
+                return true;
         return false;
     }
 
