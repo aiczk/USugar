@@ -88,6 +88,27 @@ public class CoreVerifyTests
         CoreVerify.Verify(module); // should not throw
     }
 
+    // ── Shape guard (mirrors FlatVerify.Verify's `f.Shape != Flat` check) ──
+    // CoreVerify.VerifyFunction walks the STRUCTURED func.Body; CoreFlatten leaves that tree stale
+    // once it sets Shape=Flat and populates FlatBlocks instead. Without a guard, re-running CoreVerify
+    // on an already-flattened function silently "passes" by re-validating the frozen pre-flatten tree.
+
+    [Fact]
+    public void Verifier_FlattenedFunction_Throws()
+    {
+        var module = new CModule();
+        var builder = new CoreBuilder(module);
+        var func = builder.BeginFunction("test");
+        func.ReturnType = "SystemInt32";
+        var slot = builder.AllocFrame("SystemInt32");
+        builder.EmitAssign(slot, builder.Const(42, "SystemInt32"));
+        builder.EmitReturn(builder.SlotRef(slot));
+
+        CoreFlatten.Lower(func); // sets Shape = Flat; func.Body is now stale
+
+        Assert.Throws<VerificationException>(() => CoreVerify.Verify(module));
+    }
+
     [Fact]
     public void Verifier_ReturnTypeMismatch_Throws()
     {

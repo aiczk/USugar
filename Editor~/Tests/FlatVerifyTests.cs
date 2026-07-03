@@ -123,4 +123,88 @@ public class FlatVerifyTests
         f.ReentrantSiteCount = 2;
         FlatVerify.Verify(f); // no throw
     }
+
+    // ── PreSpillStmts positional contract (wave-12 r2 [V1], CExternCall.PreSpillStmts) ──
+    // A Reentrant SendCustomEvent's PreSpillStmts=N claims the N immediately-preceding statements are
+    // its own void SetProgramVariable copy-ins (same flat block by construction), so
+    // InsertRecursionSpillsFunc can pull them inside the spill window. Nothing confirmed that shape
+    // before; these pin the checker against the exact violations a rebuild-pass regression would cause.
+
+    static CExprStmt SetVar(int recvSlot, int strSlot) => new(new CExternCall(
+        "VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid",
+        new List<CLeaf> { new CSlotRef(recvSlot, "SystemObject"), new CConst("p", "SystemString"), new CSlotRef(strSlot, "SystemObject") },
+        "SystemVoid"));
+
+    static CExprStmt SendEvent(int recvSlot, int nameSlot, int preSpillStmts) => new(new CExternCall(
+        "VRCUdonCommonInterfacesIUdonEventReceiver.__SendCustomEvent__SystemString__SystemVoid",
+        new List<CLeaf> { new CSlotRef(recvSlot, "SystemObject"), new CSlotRef(nameSlot, "SystemString") },
+        "SystemVoid", null, reentrant: true, preSpillStmts: preSpillStmts));
+
+    [Fact]
+    public void PreSpillStmts_ExceedsAvailablePrecedingStatements_Throws()
+    {
+        // PreSpillStmts=1 claims one preceding copy-in, but this is the first instruction in the block.
+        var f = Flat(Block(0, new List<CStmt> { SendEvent(0, 1, preSpillStmts: 1) }, new CRet()));
+        f.ReentrantSiteCount = 1;
+        var ex = Assert.ThrowsAny<System.Exception>(() => FlatVerify.Verify(f));
+        Assert.Contains("PreSpillStmts", ex.Message);
+    }
+
+    [Fact]
+    public void PreSpillStmts_PrecedingStatementIsNotACopyIn_Throws()
+    {
+        // The statement right before the flagged dispatch is an ordinary CAssign, not a void
+        // SetProgramVariable copy-in — exactly what a future edit inserting a statement between a
+        // hand-emitted copy-in/dispatch pair (HandlerBase's interface-setter dispatch) would produce.
+        var f = Flat(Block(0,
+            new List<CStmt>
+            {
+                new CAssign(2, new CConst(1, "SystemInt32")),
+                SendEvent(0, 1, preSpillStmts: 1),
+            },
+            new CRet()));
+        f.ReentrantSiteCount = 1;
+        var ex = Assert.ThrowsAny<System.Exception>(() => FlatVerify.Verify(f));
+        Assert.Contains("PreSpillStmts", ex.Message);
+    }
+
+    [Fact]
+    public void PreSpillStmts_CopyInHasDestSlot_Throws()
+    {
+        // A copy-in-shaped call that (incorrectly) binds a result slot is not a void self-effecting
+        // SetProgramVariable — the spill window's "no value survives this call" assumption would be wrong.
+        var f = Flat(Block(0,
+            new List<CStmt>
+            {
+                new CExprStmt(new CExternCall(
+                    "VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid",
+                    new List<CLeaf> { new CSlotRef(0, "SystemObject"), new CConst("p", "SystemString"), new CSlotRef(1, "SystemObject") },
+                    "SystemVoid", destSlot: 5)),
+                SendEvent(0, 1, preSpillStmts: 1),
+            },
+            new CRet()));
+        f.ReentrantSiteCount = 1;
+        Assert.ThrowsAny<System.Exception>(() => FlatVerify.Verify(f));
+    }
+
+    [Fact]
+    public void PreSpillStmts_CorrectShape_Passes()
+    {
+        var f = Flat(Block(0,
+            new List<CStmt> { SetVar(0, 1), SendEvent(0, 2, preSpillStmts: 1) },
+            new CRet()));
+        f.ReentrantSiteCount = 1;
+        FlatVerify.Verify(f); // no throw
+    }
+
+    [Fact]
+    public void PreSpillStmts_MultiParamCorrectShape_Passes()
+    {
+        // Mirrors LowerCrossCall: N SetProgramVariable copy-ins back-to-back, then the flagged dispatch.
+        var f = Flat(Block(0,
+            new List<CStmt> { SetVar(0, 1), SetVar(0, 2), SetVar(0, 3), SendEvent(0, 4, preSpillStmts: 3) },
+            new CRet()));
+        f.ReentrantSiteCount = 1;
+        FlatVerify.Verify(f); // no throw
+    }
 }
