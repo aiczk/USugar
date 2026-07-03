@@ -32,6 +32,8 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
 
     CLeaf VisitBinary(IBinaryOperation op)
     {
+        RejectChecked(op.IsChecked);
+
         // Short-circuit evaluation for && and ||
         if (op.OperatorKind == BinaryOperatorKind.ConditionalAnd)
             return VisitConditionalAnd(op);
@@ -248,6 +250,8 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
 
     CLeaf VisitUnary(IUnaryOperation op)
     {
+        RejectChecked(op.IsChecked);
+
         // ── User-defined struct operator (ANY unary kind, incl. ~): static operator method call. MUST come
         // before the built-in ~ branch below — that branch builds an extern on the struct's SystemObjectArray
         // type and throws "Bitwise NOT not supported on SystemObjectArray". Only fires for a user operator
@@ -754,6 +758,17 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
                 var armVal = VisitExpression(defArm.Value);
                 EmitAssign(resultSlot, armVal);
             };
+        }
+        else
+        {
+            // Non-exhaustive fallthrough: C# throws SwitchExpressionException, but Udon has no
+            // exceptions. Match the null-invoke deviation (§8-8): loud LogError at runtime, then keep
+            // the default(T) the result slot was seeded with — never a silent wrong value.
+            tail = _ =>
+                EmitExternVoid("UnityEngineDebug.__LogError__SystemObject__SystemVoid",
+                    new List<CLeaf> { Const(
+                        $"USugar: SwitchExpressionException — no arm matched in switch expression ({_classSymbol.Name})",
+                        "SystemString") });
         }
 
         for (int i = patternArms.Count - 1; i >= 0; i--)

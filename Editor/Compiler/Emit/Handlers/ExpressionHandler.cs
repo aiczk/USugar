@@ -217,6 +217,8 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
 
     CLeaf VisitConversion(IConversionOperation conv)
     {
+        RejectChecked(conv.IsChecked);
+
         var srcVal = VisitExpression(conv.Operand);
 
         // Wave-12 r4 [W1]/[W2]: variance laundered through array covariance or a tuple conversion

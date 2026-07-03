@@ -24,6 +24,12 @@ public static class ExternResolver
         set => Volatile.Write(ref _isExternValid, value);
     }
 
+    // Rank>1 array type (int[,], …) has no Udon representation — the runtime only knows single-rank
+    // System*Array externs. Lowering one silently dropped dimensions 2+; loud-reject at the single
+    // type-lowering choke point so creation, element read/write, and field/param/local all reject.
+    internal const string MultidimArrayMessage =
+        "Multi-dimensional arrays (int[,]) are not supported: use a jagged array (int[][]) or a flat array with manual indexing";
+
     static readonly Dictionary<string, string> UdonTypeRemap = new()
     {
         ["UdonSharpUdonSharpBehaviour"] = "VRCUdonCommonInterfacesIUdonEventReceiver",
@@ -57,6 +63,7 @@ public static class ExternResolver
 
         if (type is IArrayTypeSymbol arrayType)
         {
+            if (arrayType.Rank > 1) throw new System.NotSupportedException(MultidimArrayMessage);
             // Substitute a type-parameter element through the map BEFORE classifying. A generic method's
             // T[] param with T=<user struct> must be seen as struct[] (→ SystemObjectArray), like the
             // non-generic path. Without this, the aggregate check below runs on the raw type parameter
@@ -124,6 +131,7 @@ public static class ExternResolver
         // Array types
         if (type is IArrayTypeSymbol arrayType)
         {
+            if (arrayType.Rank > 1) throw new System.NotSupportedException(MultidimArrayMessage);
             if (arrayType.ElementType is IArrayTypeSymbol)
                 return "SystemObjectArray";
             // Delegate-element array (Func<T>[], …) → object[] of boxed bundle references, same shape as

@@ -40,6 +40,18 @@ public abstract class HandlerBase
     protected CLeaf EmitPatternCheck(CLeaf value, ITypeSymbol valueType, IPatternOperation pattern)
         => _ctx.EmitPatternCheck(value, valueType, pattern);
 
+    // A `checked` context asks the runtime to trap integer overflow, but the Udon VM has no overflow
+    // trap — the arithmetic silently wraps where C# would throw OverflowException. `unchecked`/default
+    // wrapping IS USugar's behavior (C#-correct), so only an explicit `checked` (IsChecked==true) rejects.
+    protected static void RejectChecked(bool isChecked)
+    {
+        if (isChecked)
+            throw new NotSupportedException(
+                "A 'checked' context is not supported: the Udon VM has no integer-overflow trap, so "
+                + "overflow silently wraps. Remove 'checked' (wrapping is the only available behavior) "
+                + "or guard the range yourself.");
+    }
+
     // ── Type resolution ──
     protected string GetUdonType(ITypeSymbol type) => ExternResolver.GetUdonTypeName(type, _ctx.TypeParamMap);
     protected ITypeSymbol ResolveType(ITypeSymbol type)

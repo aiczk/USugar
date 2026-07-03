@@ -505,13 +505,22 @@ public class EmitContext
                 + "receiving side.");
     }
 
-    /// <summary>Delegate proper, or an array (of arrays…) of delegates. Deliberately NARROW (not
-    /// object / delegate-tuples / type params): [NetworkCallable] methods with object params are
-    /// outside this policy item and must not start rejecting.</summary>
+    /// <summary>Delegate proper, an array (of arrays…) of delegates, or a delegate reachable through
+    /// a struct/tuple field. A delegate smuggled inside a struct/tuple param is the same program-local
+    /// object[] bundle and equally cannot cross the network — recurse aggregate fields so it rejects too
+    /// (visited set guards a struct that transitively contains itself). Still NARROW on object / bare
+    /// type params: [NetworkCallable] methods with plain object params stay outside this policy.</summary>
     static bool ContainsDelegateType(ITypeSymbol type)
+        => ContainsDelegateType(type, new HashSet<ITypeSymbol>(SymbolEqualityComparer.Default));
+
+    static bool ContainsDelegateType(ITypeSymbol type, HashSet<ITypeSymbol> visited)
     {
         if (type is INamedTypeSymbol n && n.DelegateInvokeMethod != null) return true;
-        if (type is IArrayTypeSymbol a) return ContainsDelegateType(a.ElementType);
+        if (type is IArrayTypeSymbol a) return ContainsDelegateType(a.ElementType, visited);
+        if (type is INamedTypeSymbol agg && IsAggregateType(agg) && visited.Add(agg))
+            foreach (var m in agg.GetMembers())
+                if (m is IFieldSymbol f && !f.IsStatic && ContainsDelegateType(f.Type, visited))
+                    return true;
         return false;
     }
 
