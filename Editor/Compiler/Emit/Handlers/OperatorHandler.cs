@@ -697,6 +697,22 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
 
     CLeaf EmitTypeCheck(CLeaf valueVal, ITypeSymbol targetType)
     {
+        // Udon collapses EVERY delegate signature to the single runtime type SystemObjectArray
+        // (ExternResolver.GetUdonTypeName), so an IsInstanceOfType test against a delegate target can
+        // never discriminate Func<int> from Func<string> from Action<object> — any non-null delegate
+        // bundle "matches" any delegate pattern, taking the wrong branch (VM-proven control-flow
+        // divergence: `o is Func<int,int>` matched an actual 0-arg Func<string>) AND, on the match,
+        // binding the bundle to a delegate pattern variable that then reads the wrong __dlgc_ channel.
+        // The runtime cannot test a delegate's signature, so this pattern is unsupportable — reject
+        // loudly rather than emit a check that silently lies (design §8-3; keep the value typed as its
+        // delegate type instead of testing it through a base type).
+        if (ResolveType(targetType) is INamedTypeSymbol dlgTarget && dlgTarget.DelegateInvokeMethod != null)
+            throw new System.NotSupportedException(
+                $"Pattern-matching against delegate type '{dlgTarget.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}' "
+                + "is not supported: Udon represents every delegate as one runtime type, so a runtime type "
+                + "test cannot tell delegate signatures apart and would match any delegate (and then read the "
+                + "wrong argument/return channel). Keep the value typed as its delegate type instead of "
+                + "recovering it with an 'is'/'switch' pattern.");
         var typeConst = Const(GetUdonType(targetType), "SystemType");
         return ExternCall(
             "SystemType.__IsInstanceOfType__SystemObject__SystemBoolean",

@@ -183,6 +183,55 @@ public class W12R5Boxing : UdonSharpBehaviour {
         Assert.Contains("__dlg", uasm);
     }
 
+    [Fact]
+    public void GenericTypeParamCastToDelegate_VariantLaunder_Throws()
+    {
+        // Wave-12c confirmation finding: a `(T)o` cast inside a generic body, monomorphized to a
+        // delegate type at the call site, bypassed the VisitConversion guard because Roslyn shows
+        // conv.Type as the un-substituted type parameter T. The guard now resolves conv.Type/operand
+        // through the type-param map first, so a variant delegate laundered through a generic identity
+        // rejects loudly (VM-proven silent lost return pre-fix).
+        var ex = Assert.Throws<System.NotSupportedException>(() => TestHelper.CompileToUasm(@"
+using System;
+using UdonSharp;
+public class W12CGenCast : UdonSharpBehaviour {
+    public int seed; public int result;
+    string MakeTag() { return ""g"" + seed; }
+    T Identity<T>(object o) { return (T)o; }
+    void Start() {
+        Func<string> narrow = MakeTag;
+        object boxed = narrow;
+        Func<object> bundle = Identity<Func<object>>(boxed);
+        result = bundle() == null ? -1 : 1;
+    }
+}", "W12CGenCast"));
+        Assert.Contains("statically visible signature", ex.Message);
+    }
+
+    [Fact]
+    public void PatternMatchAgainstDelegateType_Throws()
+    {
+        // Wave-12c confirmation finding: `o is Func<...> f` never reached VisitConversion — the type
+        // test flows through EmitTypeCheck, whose IsInstanceOfType against Udon's single delegate
+        // runtime type (SystemObjectArray) cannot tell delegate signatures apart (VM-proven: an
+        // unrelated-arity pattern matched, taking the wrong branch). EmitTypeCheck now rejects any
+        // delegate-typed pattern target loudly.
+        var ex = Assert.Throws<System.NotSupportedException>(() => TestHelper.CompileToUasm(@"
+using System;
+using UdonSharp;
+public class W12CPat : UdonSharpBehaviour {
+    public int seed; public int result;
+    object boxed;
+    string MakeTag() { return ""p"" + seed; }
+    void Start() {
+        Func<string> narrow = MakeTag;
+        boxed = narrow;
+        result = boxed is Func<object> f ? (f() == null ? 0 : 1) : -1;
+    }
+}", "W12CPat"));
+        Assert.Contains("Pattern-matching against delegate type", ex.Message);
+    }
+
     // ── [W3] planner invariant: the `new` declaration is the mangled one ──
 
     static readonly string PlannerStubSource = @"

@@ -236,8 +236,13 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
         // Delegate-typed conversions are reference passthrough (design §2.3, fcd25): delegate → object is
         // box-free (the value already IS an object[] reference) and (Func<T>)objExpr cast-back keeps the
         // same bundle reference. No Convert extern may ever be emitted for a delegate source or target.
-        if ((conv.Type is INamedTypeSymbol dlgDst && dlgDst.DelegateInvokeMethod != null)
-            || (conv.Operand.Type is INamedTypeSymbol dlgSrc && dlgSrc.DelegateInvokeMethod != null))
+        // Resolve BOTH ends through the type-param map first: inside a generic body Roslyn shows a `(T)o`
+        // cast's type as the un-substituted ITypeParameterSymbol T, so a raw `conv.Type is INamedTypeSymbol`
+        // check misses the monomorphized delegate destination entirely (VM-proven silent lost return).
+        var convDstType = ResolveType(conv.Type);
+        var convSrcType = ResolveType(conv.Operand.Type);
+        if ((convDstType is INamedTypeSymbol dlgDst && dlgDst.DelegateInvokeMethod != null)
+            || (convSrcType is INamedTypeSymbol dlgSrc && dlgSrc.DelegateInvokeMethod != null))
         {
             // Wave-12 r2 [V2]: a VARIANT delegate-VALUE conversion (Func<string> value flowing into a
             // Func<object>-typed field/local/param/return via C# co/contravariance) diverges the
@@ -249,8 +254,8 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
             // hole the same loud way. Equal sig parts (identity or Udon-type-identical conversions)
             // keep the reference passthrough — their channels agree. Also load-bearing for §5.4's
             // sig-filter soundness (tracked pin SigFilterCoupledToVarianceReject).
-            if (conv.Type is INamedTypeSymbol vDst && vDst.DelegateInvokeMethod is { } vDstInvoke
-                && conv.Operand.Type is INamedTypeSymbol vSrc && vSrc.DelegateInvokeMethod is { } vSrcInvoke
+            if (convDstType is INamedTypeSymbol vDst && vDst.DelegateInvokeMethod is { } vDstInvoke
+                && convSrcType is INamedTypeSymbol vSrc && vSrc.DelegateInvokeMethod is { } vSrcInvoke
                 && !SymbolEqualityComparer.Default.Equals(vDst, vSrc)
                 && DelegateAbi.BuildSigPart(vDstInvoke, _ctx.TypeParamMap)
                    != DelegateAbi.BuildSigPart(vSrcInvoke, _ctx.TypeParamMap))
@@ -273,8 +278,8 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
             // saturating). Over-rejecting the rare cross-statement box roundtrip is acceptable (design
             // §8-3: loud over-rejection, never a silent wrong value); the fix is to keep the delegate
             // typed instead of routing it through object.
-            if (conv.Type is INamedTypeSymbol lDst && lDst.DelegateInvokeMethod is { } lInvoke
-                && !(conv.Operand.Type is INamedTypeSymbol opDlg && opDlg.DelegateInvokeMethod != null))
+            if (convDstType is INamedTypeSymbol lDst && lDst.DelegateInvokeMethod is { } lInvoke
+                && !(convSrcType is INamedTypeSymbol opDlg && opDlg.DelegateInvokeMethod != null))
             {
                 var stripped = conv.Operand;
                 while (stripped is IConversionOperation strippedConv) stripped = strippedConv.Operand;
@@ -284,13 +289,14 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
                 var isNull = stripped is IDefaultValueOperation
                     || (stripped?.ConstantValue.HasValue == true && stripped.ConstantValue.Value == null);
                 // A same-signature delegate boxed and unboxed within THIS expression is the trivially
-                // safe roundtrip — its channels agree.
-                var safeRoundtrip = stripped?.Type is INamedTypeSymbol sDlg && sDlg.DelegateInvokeMethod is { } sInvoke
+                // safe roundtrip — its channels agree (resolve through the type-param map so a generic
+                // operand whose spec is a same-sig delegate still qualifies).
+                var safeRoundtrip = ResolveType(stripped?.Type) is INamedTypeSymbol sDlg && sDlg.DelegateInvokeMethod is { } sInvoke
                     && DelegateAbi.BuildSigPart(sInvoke, _ctx.TypeParamMap)
                        == DelegateAbi.BuildSigPart(lInvoke, _ctx.TypeParamMap);
                 if (!isNull && !safeRoundtrip)
                     throw new System.NotSupportedException(
-                        $"Cast from '{conv.Operand.Type?.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat) ?? "object"}' "
+                        $"Cast from '{(convSrcType ?? conv.Operand.Type)?.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat) ?? "object"}' "
                         + $"to delegate type '{lDst.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}' is not supported: "
                         + "the delegate calling convention keys its argument/return channels by the exact "
                         + "signature, and a delegate boxed to a non-delegate type carries no statically "
