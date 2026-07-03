@@ -2174,7 +2174,7 @@ public abstract class HandlerBase
         // BuildRecursionInfo, exactly like the dispatch arm's ReentrantDispatchSites) reads nothing of its
         // frame after the call, so it is flagged TailSpared instead of wrapped; ONE non-tail site used to
         // make EVERY site of the callee spill and deep mixed tail/non-tail recursion overflowed the
-        // 512-entry __recurStack (compile-clean VmFault on legal C#).
+        // 8192-entry __recurStack (compile-clean VmFault on legal C#).
         if (IsRecursiveEdge(_currentMethod, target))
         {
             bool tailSpared = callSite != null && _ctx.TailSparedDirectCallSites != null

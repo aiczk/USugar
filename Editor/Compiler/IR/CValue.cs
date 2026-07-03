@@ -122,7 +122,7 @@ public sealed class CInternalCall : CValue
     /// <summary>Wave-9 round-9 [Y3]: this is a recursive-edge call SITE in tail position — the frame
     /// reads nothing after it, so InsertRecursionSpills must NOT wrap it even though the callee name
     /// is in RecursiveCalleeNames (one non-tail site used to make every site of that callee spill,
-    /// overflowing the 512-entry __recurStack on deep mixed tail/non-tail recursion). Must be copied
+    /// overflowing the 8192-entry __recurStack on deep mixed tail/non-tail recursion). Must be copied
     /// by every site that reconstructs the instruction (CoreFlatten.LowerExpr,
     /// CoreFlatOptimizer.RemapInst), like <see cref="Reentrant"/>.</summary>
     public readonly bool TailSpared;

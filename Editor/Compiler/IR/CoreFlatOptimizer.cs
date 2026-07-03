@@ -36,7 +36,7 @@ public static class CoreFlatOptimizer
     /// clobber on re-entry: the function's named frame fields (params / frame-locals / receiver, recorded at
     /// emit time) PLUS only the scratch/frame slots LIVE ACROSS that call (computed from the post-coalesce
     /// liveness here). Run AFTER CoalesceSlots so the slot set is the small physical set — under A-normal form
-    /// an emit-time total-spill of every (numerous) logical slot overflows the 512-entry recursion stack.
+    /// an emit-time total-spill of every (numerous) logical slot overflows the 8192-entry recursion stack.
     /// </summary>
     public static void InsertRecursionSpills(CModule module)
     {
