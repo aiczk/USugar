@@ -3300,6 +3300,14 @@ public class UasmEmitter
             var bodyOp = model.GetOperation(syntax);
             CollectForeignStaticCallsInOperation(bodyOp, result);
         }
+        // wave-13 staticro lens (2026-07-04): field initializers (instance AND static-readonly tier)
+        // are never part of any method's syntax, so a delegate created ONLY in a field initializer
+        // (`static readonly Func<int,int> Op = Helper.M;`) was invisible to the walk above. Both lists
+        // are fully populated by the earlier own-class + base-class field walks (before this point).
+        foreach (var (_, initOp, _) in _fieldInitOps)
+            CollectForeignStaticCallsInOperation(initOp, result);
+        foreach (var (_, initOp, _) in _staticFieldInitOps)
+            CollectForeignStaticCallsInOperation(initOp, result);
         var visited = new HashSet<IMethodSymbol>(result, SymbolEqualityComparer.Default);
         var queue = new Queue<IMethodSymbol>(result);
         while (queue.Count > 0)
@@ -3326,6 +3334,18 @@ public class UasmEmitter
         if (op is IInvocationOperation inv && IsForeignStatic(inv.TargetMethod))
         {
             var original = inv.TargetMethod.ReducedFrom ?? inv.TargetMethod;
+            if (!original.IsGenericMethod)
+                result.Add(original);
+        }
+        // wave-13 staticro lens (2026-07-04): a delegate/method-group reference to a foreign static
+        // method (`Func<int,int> f = Helper.M;`) is itself a call site the collector must see — the
+        // ONLY prior collection route was IInvocationOperation, so a method referenced exclusively via
+        // delegate creation never got a CFunction registered at all, and ResolveDelegateBridge's
+        // fallback to the frozen LayoutPlanner (which never pre-plans non-UdonSharpBehaviour types)
+        // crashed with "was not pre-planned" on legal C#.
+        if (op is IMethodReferenceOperation mref && IsForeignStatic(mref.Method))
+        {
+            var original = mref.Method.ReducedFrom ?? mref.Method;
             if (!original.IsGenericMethod)
                 result.Add(original);
         }

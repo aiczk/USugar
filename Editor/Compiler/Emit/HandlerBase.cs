@@ -1860,6 +1860,22 @@ public abstract class HandlerBase
                 : null;
             _ctx.PendingDelegateBridges.Add((constructed, bridgeExportName, specSnapshot));
         }
+        // wave-13 staticro lens (2026-07-04): a static method on a plain (non-UdonSharpBehaviour)
+        // helper class is never pre-planned by LayoutPlanner (Phase 1 only discovers
+        // UdonSharpBehaviour classes) — GetDelegateBridgeLayout's Plan() call would throw on the
+        // frozen planner. A plain (non-delegate) call to the same method already works via
+        // CollectForeignStaticCallsInOperation's per-program inlining into _methodFunctions; route
+        // the delegate-bridge naming through that same registration instead, exactly like the
+        // lambda/local-function/generic-method arms above.
+        else if (targetMethod.IsStatic && _methodFunctions.TryGetValue(targetMethod, out var foreignFunc)
+            && !ExternResolver.IsUdonSharpBehaviour(targetMethod.ContainingType))
+        {
+            bridgeExportName = $"__dlg_{foreignFunc.Name}";
+            var foreignSnapshot = _ctx.TypeParamMap != null
+                ? new Dictionary<ITypeParameterSymbol, ITypeSymbol>(_ctx.TypeParamMap, SymbolEqualityComparer.Default)
+                : null;
+            _ctx.PendingDelegateBridges.Add((targetMethod, bridgeExportName, foreignSnapshot));
+        }
         else
         {
             var bridge = _planner.GetDelegateBridgeLayout(targetMethod);

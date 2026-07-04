@@ -575,6 +575,16 @@ public class EmitContext
             // appear in a static initializer in the first place, but is rejected defensively anyway.
             case IMethodReferenceOperation mref:
                 return mref.Instance == null;
+            // wave-13 staticro lens (2026-07-04): minting a delegate from a lambda literal or an
+            // explicit delegate-creation expression is itself side-effect-free (the lambda BODY only
+            // runs later, at invocation — never during the mint). A lambda appearing directly in a
+            // static field initializer can never capture instance state (no `this`/locals exist in
+            // that scope; C# itself rejects an instance-member reference there), so unlike an ordinary
+            // method call this is unconditionally pure — same category as the method-group case above.
+            case IAnonymousFunctionOperation:
+                return true;
+            case IDelegateCreationOperation dc:
+                return IsPureStaticReadonlyInitializer(dc.Target);
             case IConversionOperation conv:
                 return IsPureStaticReadonlyInitializer(conv.Operand);
             case IUnaryOperation { OperatorMethod: null } un:

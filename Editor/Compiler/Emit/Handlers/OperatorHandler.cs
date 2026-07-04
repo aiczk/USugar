@@ -72,6 +72,31 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
                 return CompareDelegates(VisitExpression(op.LeftOperand), VisitExpression(op.RightOperand), isNotEquals);
         }
 
+        // wave-13 multishapes lens (2026-07-04): a PLAIN `d1 + d2` / `d1 - d2` on delegate-typed VALUES
+        // (Roslyn IBinaryOperation) is C#'s Delegate.Combine/Remove operator overload -- the SAME
+        // operation `d += h` (ICompoundAssignmentOperation, CompoundAssignmentHandler) and `evt += h`
+        // (IEventAssignmentOperation) already lower to the combine/remove helper, but this operation
+        // kind was never routed there and fell through to the generic numeric/extern binary-op path,
+        // which emitted a non-existent "SystemObjectArray.__op_Addition__..." extern.
+        if (op.OperatorKind is BinaryOperatorKind.Add or BinaryOperatorKind.Subtract
+            && IsDelegateTyped(op.LeftOperand.Type) && IsDelegateTyped(op.RightOperand.Type))
+        {
+            var delegateType = (INamedTypeSymbol)op.Type;
+            var invoke = delegateType.DelegateInvokeMethod;
+            DelegateAbi.ValidateNoRefOutParams(invoke);
+
+            var combineLeftVal = VisitExpression(op.LeftOperand);
+            var combineRightVal = VisitExpression(op.RightOperand);
+
+            var sigPart = DelegateAbi.BuildSigPart(invoke, _ctx.TypeParamMap);
+            RegisterMulticastSig(sigPart, invoke);
+
+            var helperName = op.OperatorKind == BinaryOperatorKind.Add
+                ? DelegateAbi.MulticastCombineName(sigPart)
+                : DelegateAbi.MulticastRemoveName(sigPart);
+            return _builder.InternalCall(helperName, new List<CLeaf> { combineLeftVal, combineRightVal }, "SystemObjectArray");
+        }
+
         // ── Nullable (boxed object) compared to null literal → object reference null check ──
         if (op.OperatorKind is BinaryOperatorKind.Equals or BinaryOperatorKind.NotEquals)
         {
