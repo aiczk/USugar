@@ -74,8 +74,37 @@ public class EmitContext
 
     // Generic monomorphization
     public readonly List<IMethodSymbol> PendingGenericSpecs = new();
-    // Immutable: built only by TypeParamScope.Compose and replaced wholesale (never mutated in place).
-    public IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> TypeParamMap;
+    // Immutable and scope-owned: built only by TypeParamScope.Compose, and written ONLY by the
+    // EnterTypeParamScope machinery below (private setter). Read freely everywhere.
+    public IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> TypeParamMap { get; private set; }
+
+    // Depth-1 type-param scope. EmitMethod is a non-recursive serial drain, so exactly one map is
+    // active at a time; a nested Enter means a prior scope leaked (a compiler bug) and throws loudly
+    // rather than silently inheriting someone else's map. Dispose is the SOLE clear site, so the map
+    // is cleared even if body emission throws.
+    public IDisposable EnterTypeParamScope(IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> map)
+    {
+        if (TypeParamMap != null)
+            throw new InvalidOperationException(
+                $"EnterTypeParamScope: a type-param map is already active on entry to "
+                + $"'{CurrentMethod?.ToDisplayString() ?? "(none)"}' — a prior scope was not disposed.");
+        TypeParamMap = map;
+        return new TypeParamScopeToken(this);
+    }
+
+    sealed class TypeParamScopeToken : IDisposable
+    {
+        readonly EmitContext _ctx;
+        bool _disposed;
+        public TypeParamScopeToken(EmitContext ctx) => _ctx = ctx;
+        public void Dispose()
+        {
+            if (_disposed)
+                throw new InvalidOperationException("TypeParamScopeToken disposed twice.");
+            _disposed = true;
+            _ctx.TypeParamMap = null;
+        }
+    }
 
     // Wave-9 round-5 [X6]: first registered specialization per generic DEFINITION. Lambdas and
     // local functions hoisted from a generic body are keyed by IMethodSymbol and therefore SHARED

@@ -26,7 +26,7 @@ public class UasmEmitter
     IMethodSymbol _currentMethod { get => _ctx.CurrentMethod; set => _ctx.CurrentMethod = value; }
     List<(IMethodSymbol symbol, CFunction func)> _pendingLocalFunctions => _ctx.PendingLocalFunctions;
     List<IMethodSymbol> _pendingGenericSpecs => _ctx.PendingGenericSpecs;
-    IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> _typeParamMap { get => _ctx.TypeParamMap; set => _ctx.TypeParamMap = value; }
+    IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> _typeParamMap => _ctx.TypeParamMap;
     HashSet<IMethodSymbol> _inheritedMethods = new(SymbolEqualityComparer.Default);
     List<(string fieldName, IOperation initOp, ITypeSymbol fieldType)> _fieldInitOps => _ctx.FieldInitOps;
     List<(string fieldName, IOperation initOp, ITypeSymbol fieldType)> _staticFieldInitOps => _ctx.StaticFieldInitOps;
@@ -1990,6 +1990,9 @@ public class UasmEmitter
         // generic-method type args (if the method itself is generic) with its ContainingType's type
         // args (if the containing type is generic — a generic-struct member); a method that is itself
         // generic ON a generic struct (Box<T>.Map<U>()) merges both.
+        // Compose this method's type-param map locally, then open ONE scope for it just before body
+        // emission (below). Nothing between here and the scope reads the ambient map.
+        IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeMap = null;
         if (isSpec)
         {
             var bindings = new List<(IReadOnlyList<ITypeParameterSymbol>, IReadOnlyList<ITypeSymbol>)>(2);
@@ -1997,7 +2000,7 @@ public class UasmEmitter
                 bindings.Add((method.OriginalDefinition.TypeParameters, method.TypeArguments));
             if (method.ContainingType.IsGenericType)
                 bindings.Add((method.ContainingType.OriginalDefinition.TypeParameters, method.ContainingType.TypeArguments));
-            _typeParamMap = TypeParamScope.Compose(null, newWins: true, bindings);
+            typeMap = TypeParamScope.Compose(null, newWins: true, bindings);
         }
 
         // Wave-9 round-8 [Y2]: a hoisted closure (lambda / local function) declared inside a GENERIC
@@ -2011,7 +2014,6 @@ public class UasmEmitter
         // Round-9 [Y8]: also runs for a generic LOCAL FUNCTION spec (isSpec) nested in a
         // generic method — the spec map above holds only the LF's OWN type params, so the
         // enclosing generic's params are MERGED in (never replacing the spec map).
-        bool closureMapSet = false;
         if (method.MethodKind is MethodKind.LocalFunction
             or MethodKind.LambdaMethod or MethodKind.AnonymousFunction)
         {
@@ -2031,13 +2033,9 @@ public class UasmEmitter
                 }
             }
             // Inherit the owner generic's args but let this method's own map keep colliding keys
-            // (newWins:false = add-if-missing, mirroring the former merge). closureMapSet ⇔ we were
-            // the site that first populated the map (drives the end-of-method clear).
+            // (newWins:false = add-if-missing, mirroring the former merge).
             if (closureBindings != null)
-            {
-                closureMapSet = _typeParamMap == null;
-                _typeParamMap = TypeParamScope.Compose(_typeParamMap, newWins: false, closureBindings);
-            }
+                typeMap = TypeParamScope.Compose(typeMap, newWins: false, closureBindings);
         }
 
         // Get method body IOperation
@@ -2062,10 +2060,15 @@ public class UasmEmitter
             {
                 // old ∪ rekeyed: the body-walk's fresh type-param symbols are added (newWins), the
                 // call-site symbols already in the map are RETAINED — never a replacing composition.
-                _typeParamMap = TypeParamScope.Compose(_typeParamMap, newWins: true,
+                typeMap = TypeParamScope.Compose(typeMap, newWins: true,
                     new[] { ((IReadOnlyList<ITypeParameterSymbol>)lfDefOp.Symbol.TypeParameters,
                              (IReadOnlyList<ITypeSymbol>)method.TypeArguments) });
             }
+
+            // Open the depth-1 scope now that the map is fully composed; Dispose (at block end) is the
+            // sole clear, running even if body emission throws. Non-generic methods carry a null map
+            // and open no scope. A closure/spec emitted later recomposes its own map at its own entry.
+            using var _typeScope = typeMap != null ? _ctx.EnterTypeParamScope(typeMap) : null;
 
             PreScanGotoLabels(bodyOp);
 
@@ -2181,10 +2184,6 @@ public class UasmEmitter
             var curVal = BridgeLoad(fcbFieldName, fcbFieldType);
             BridgeStore($"__old_{fcbFieldName}", curVal);
         }
-
-        // Clear type param map after generic specialization / generic-body closure emission
-        if (isSpec || closureMapSet)
-            _typeParamMap = null;
 
         // Method epilogue: return
         _builder.EmitReturn();
