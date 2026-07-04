@@ -834,17 +834,25 @@ public class UasmEmitter
             planned.Where(m => !SymbolEqualityComparer.Default.Equals(m.ContainingType, _classSymbol)),
             SymbolEqualityComparer.Default);
 
-        // Emitter-only projection: own generic ordinary/accessor method DEFINITIONS (see summary).
-        var ownGenerics = _classSymbol.GetMembers().OfType<IMethodSymbol>()
-            .Where(m => m.IsGenericMethod
-                     && (m.MethodKind == MethodKind.Ordinary
-                      || m.MethodKind == MethodKind.ExplicitInterfaceImplementation
-                      || m.MethodKind == MethodKind.PropertyGet
-                      || m.MethodKind == MethodKind.PropertySet)
-                     && !m.IsImplicitlyDeclared);
+        // Emitter-only projection: own generic user-method DEFINITIONS (see summary).
+        var ownGenerics = _classSymbol.GetMembers().OfType<IMethodSymbol>().Where(IsOwnGenericSeed);
 
         return planned.Concat(ownGenerics).ToArray();
     }
+
+    /// <summary>C3: the own-generic method-DEFINITION projection, single-sourced so the ComputeMethods reach
+    /// seed and the BuildRecursionInfo recursion-root arm can never drift on which MethodKinds they cover.
+    /// A generic method with no per-spec planner layout (monomorphized at call sites) still needs (a) its
+    /// body walked as a reach seed and (b) a recursion-graph node so a recursive spec's frame spills. The
+    /// user-method kinds are Ordinary / ExplicitInterfaceImplementation / PropertyGet / PropertySet — the
+    /// last two are dead for generics (accessors are never generic), included only to make the two projections
+    /// textually identical. Explicit-interface generic methods are currently loud-rejected at their (interface-
+    /// dispatch-only) call site, so covering them here is defensive: if that reject is ever lifted, the
+    /// recursion root is already present rather than silently missing.</summary>
+    static bool IsOwnGenericSeed(IMethodSymbol m)
+        => m.IsGenericMethod && !m.IsImplicitlyDeclared
+           && m.MethodKind is MethodKind.Ordinary or MethodKind.ExplicitInterfaceImplementation
+              or MethodKind.PropertyGet or MethodKind.PropertySet;
 
     /// <summary>CaptureScopeAnalysis root projection (design §1, consumer 3): every method DEFINITION whose
     /// body this class emits — the FULL ReachableBodies artifact (all provenances). C1 fix: this must be the
@@ -2338,8 +2346,10 @@ public class UasmEmitter
         // (e.g. `int Fact<T>(int n) => n * Fact<T>(n-1)`) has no graph node and its frame is never spilled.
         var roots = _methodFunctions.Keys
             .Select(m => m.OriginalDefinition)
+            // C3: SAME own-generic MethodKind set as ComputeMethods's reach seed (IsOwnGenericSeed) — a
+            // recursive generic method of any user kind needs a graph node or its frame is never spilled.
             .Concat(_classSymbol.GetMembers().OfType<IMethodSymbol>()
-                .Where(m => m.IsGenericMethod && m.MethodKind == MethodKind.Ordinary && !m.IsImplicitlyDeclared)
+                .Where(IsOwnGenericSeed)
                 .Select(m => (IMethodSymbol)m.OriginalDefinition))
             // Wave-9 round-9 [Y5]: base-declared generic definitions called with OPEN type args —
             // their on-demand specs (round-8 [Y11]) emit the base definition's body, so the
