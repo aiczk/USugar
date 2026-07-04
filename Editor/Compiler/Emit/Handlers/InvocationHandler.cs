@@ -294,6 +294,46 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
             }
         }
 
+        // Wave-14 r4: a NON-generic static method on a CONSTRUCTED generic user type (Helper<U>.Boost,
+        // U = the enclosing generic context's type argument) is monomorphized per closed containing-type
+        // exactly like a generic method — but target.IsGenericMethod is false so the generic-foreign-static
+        // arm above skips it, and its closed form is never pre-registered: Phase-1's foreign-static
+        // collector only walks class/base bodies (a generic struct/method body is emitted on demand, in
+        // OPEN form), so the closed Helper<float>.Boost has no Phase-1 CFunction and the plain
+        // foreign-static arm's ContainsKey misses. Fell through to a bogus SystemObjectArray.__Boost__
+        // extern. Register the closed spec on demand (RegisterGenericSpecialization composes the containing
+        // type's type-arg map in EmitMethod, so a T-dependent body monomorphizes correctly) and JUMP to it
+        // — static, so no receiver and argument ordinals start at 0.
+        if (IsForeignStatic(target) && target.ReducedFrom == null && !target.IsGenericMethod
+            && target.ContainingType is INamedTypeSymbol fsGenCt && fsGenCt.IsGenericType
+            && !fsGenCt.TypeArguments.Any(ta => ta is ITypeParameterSymbol))
+        {
+            GuardRefOutArguments(op, target);
+            RegisterGenericSpecialization(target);
+            var args = new List<CLeaf>();
+            Dictionary<int, System.Action<CLeaf>> gsPrepared = null;
+            List<(int slot, System.Func<CLeaf> read)> gsDeferred = null;
+            for (var i = 0; i < op.Arguments.Length; i++)
+            {
+                var (val, deferredRead, store) = EvaluateCallArgument(op, i);
+                if (store != null)
+                    (gsPrepared ??= new Dictionary<int, System.Action<CLeaf>>())[i] = store;
+                if (deferredRead != null)
+                {
+                    (gsDeferred ??= new List<(int, System.Func<CLeaf>)>()).Add((args.Count, deferredRead));
+                    args.Add(null);
+                }
+                else
+                    args.Add(val);
+            }
+            if (gsDeferred != null)
+                foreach (var (slot, read) in gsDeferred)
+                    args[slot] = read();
+            var gsResult = EmitCallToMethod(target, args);
+            EmitRefOutCopyBack(op, target, 0, gsPrepared);
+            return gsResult;
+        }
+
         // Cross-class UdonSharpBehaviour call → SetProgramVariable + SendCustomEvent
         // Only for calls on other instances (fields), not on 'this' (base class methods like RequestSerialization).
         // Exclude methods declared on UdonSharpBehaviour itself (SendCustomEvent, SetProgramVariable, etc.)

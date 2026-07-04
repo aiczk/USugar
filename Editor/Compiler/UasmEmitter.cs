@@ -3154,6 +3154,13 @@ public class UasmEmitter
         if (IsCrossDispatchReceiver(pr.Instance, pr.Property))
             return CrossDispatchLocalTarget(acc) is { } xacc
                 && SymbolEqualityComparer.Default.Equals(xacc, callee);
+        // Wave-14 r4: struct accessor on a fresh instance (a `next[d-1] += ..` / `next.P--` compound or
+        // inc-dec through a struct-typed local) — the specific get/set accessor on a user-struct receiver
+        // is the callee, independent of a `this` receiver (mirrors the IsInternalCallTo struct arm).
+        if (pr.Property is { IsStatic: false } && pr.Property.ContainingType is INamedTypeSymbol saCt
+            && EmitContext.IsUserStruct(saCt)
+            && acc != null && SymbolEqualityComparer.Default.Equals(acc.OriginalDefinition, callee))
+            return true;
         if (pr.Instance is not IInstanceReferenceOperation) return false;
         if (acc != null && SymbolEqualityComparer.Default.Equals(acc.OriginalDefinition, callee))
             return true;
@@ -3211,6 +3218,20 @@ public class UasmEmitter
                  && SymbolEqualityComparer.Default.Equals(xg, callee))
              || (CrossDispatchLocalTarget(xpr.Property.SetMethod) is { } xs
                  && SymbolEqualityComparer.Default.Equals(xs, callee))))
+        { call = op; return true; }
+        // Wave-14 r4: a computed property / indexer reference on a USER-STRUCT receiver — whether `this`
+        // OR a struct-typed local/temp on a FRESH instance (`next.Fact`, `next[d-1]`, and the write path
+        // `next[d-1] = ..`) — is a same-program accessor CALL (structs compile into this program's accessor
+        // functions). The this-receiver arm above only matches an IInstanceReferenceOperation, so this
+        // per-callee non-tail classification (HasNonTailCallTo) missed recursion threaded through an
+        // accessor on a fresh instance and the spill-driving `recursive` edge was never recorded even
+        // though CollectInternalCallees now adds the graph edge. Both accessors matched conservatively
+        // (an extra site only over-spills, §8-3), mirroring the this-receiver arm and CollectInternalCallees.
+        if (op is IPropertyReferenceOperation sprc
+            && sprc.Property is { IsStatic: false } sprcProp
+            && sprcProp.ContainingType is INamedTypeSymbol sprcCt && EmitContext.IsUserStruct(sprcCt)
+            && ((sprcProp.GetMethod is { } spg && SymbolEqualityComparer.Default.Equals(spg.OriginalDefinition, callee))
+             || (sprcProp.SetMethod is { } sps && SymbolEqualityComparer.Default.Equals(sps.OriginalDefinition, callee))))
         { call = op; return true; }
         return false;
     }
@@ -3314,6 +3335,27 @@ public class UasmEmitter
                 result.Add(cg);
             if (CrossDispatchLocalTarget(vpr.Property.SetMethod) is { } cs && internalMethods.Contains(cs))
                 result.Add(cs);
+        }
+        // Wave-14 r4: a computed property / indexer reference on a USER-STRUCT receiver — whether `this`
+        // OR a struct-typed local/temp on a FRESH instance (`next.Fact`, `c.Zong`, `next[d-1]`, and the
+        // WRITE path `next[d-1] = ...`) — is a same-program CALL to the struct's manual accessor (structs
+        // are value types compiled into this program's accessor functions), so it is a call-graph edge.
+        // The this-receiver arm above only matches an IInstanceReferenceOperation, so recursion threaded
+        // through a computed property / indexer on a fresh struct instance was invisible to the SCC
+        // analysis and the accessor frame never spilled — every activation clobbered the caller's live
+        // locals (VM-proven: computed-property factorial 1 where the CLR gives 120; indexer-setter
+        // side-effect 0 vs 16; cross-type property bridge 0 vs 12). Mirrors the invocation arm's
+        // receiver-agnostic add-if-internal (the accessor DEFINITIONS are recursion roots via
+        // CollectStructMemberDefinitions, so they are already in internalMethods) and
+        // CollectStructMemberDefinitions's struct-property arm (both accessors, read AND write paths).
+        if (op is IPropertyReferenceOperation spr
+            && spr.Property is { IsStatic: false } sprop
+            && sprop.ContainingType is INamedTypeSymbol sprct && EmitContext.IsUserStruct(sprct))
+        {
+            if (sprop.GetMethod is { } sg && internalMethods.Contains(sg.OriginalDefinition))
+                result.Add(sg.OriginalDefinition);
+            if (sprop.SetMethod is { } ss && internalMethods.Contains(ss.OriginalDefinition))
+                result.Add(ss.OriginalDefinition);
         }
         var opMethod = (op as IBinaryOperation)?.OperatorMethod ?? (op as IUnaryOperation)?.OperatorMethod;
         if (opMethod != null && internalMethods.Contains(opMethod.OriginalDefinition))
