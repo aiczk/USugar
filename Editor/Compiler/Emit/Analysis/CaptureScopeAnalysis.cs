@@ -179,8 +179,9 @@ public sealed class CaptureScopeAnalysis
     /// user-struct member definitions (the former AddRoots enumeration AND the structQueue struct-member
     /// expansion, now supplied by the single reach fixpoint). Definition-keyed, with syntax. Field
     /// initializers are added below (they are not method roots).</param>
-    /// <param name="reachBodies">F1: the ReachableBodies body map (definition → body, fetched once). Root
-    /// bodies come from here; a fresh fetch is only a defensive fallback for a root absent from the map.</param>
+    /// <param name="reachBodies">F1/C2: the ReachableBodies body map (definition → body, fetched once).
+    /// When injected it is AUTHORITATIVE — a root absent from it throws (invariant violation); only the
+    /// analysis-only null path (no reach fixpoint, unit tests) self-fetches root bodies.</param>
     /// <param name="fieldInits">C1: the field-initializer operations this class emits (own + BASE +
     /// auto-property + static, as collected + base-first spliced by EmitFields). REQUIRED — there is no
     /// null fallback: the former own-class-instance-only re-collection silently dropped base and
@@ -209,9 +210,18 @@ public sealed class CaptureScopeAnalysis
         var rootBodies = new List<(IMethodSymbol Root, IOperation Body)>();
         foreach (var root in reachRoots)
         {
-            // F1: reuse the body the reach fixpoint already fetched (no re-fetch); defensive fallback only.
-            var body = reachBodies != null && reachBodies.TryGetValue(root, out var cached)
-                ? cached : GetOperationBody(compilation, root);
+            // C2: when a reach body map is injected (production), it is AUTHORITATIVE — every root came from
+            // its keys, so a miss is an invariant violation, not a fetch to paper over. Only the analysis-
+            // only / test path (reachBodies == null, no reach fixpoint) fetches the body itself.
+            IOperation body;
+            if (reachBodies != null)
+            {
+                if (!reachBodies.TryGetValue(root, out body))
+                    throw new InvalidOperationException(
+                        $"CaptureScopeAnalysis: reach root '{root?.ToDisplayString()}' is absent from the "
+                      + "injected ReachableBodies map (BodyByDef authoritativeness invariant violation).");
+            }
+            else body = GetOperationBody(compilation, root);
             if (body != null) rootBodies.Add((root, body));
         }
 

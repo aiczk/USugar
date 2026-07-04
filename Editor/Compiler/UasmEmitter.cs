@@ -2381,26 +2381,30 @@ public class UasmEmitter
         var localFuncs = new List<IMethodSymbol>();
         foreach (var m in roots)
         {
-            var op = ReachBodyOrFetch(m);
+            var op = ReachRootBody(m); // C2: a root's body is authoritative in BodyByDef (loud on miss)
             if (op != null) CollectLocalFunctions(op, localFuncs);
         }
 
         var internalMethods = roots.Concat(localFuncs)
             .Distinct(SymbolEqualityComparer.Default).Cast<IMethodSymbol>().ToArray();
         var methodSet = new HashSet<IMethodSymbol>(internalMethods, SymbolEqualityComparer.Default);
+        var localFuncSet = new HashSet<IMethodSymbol>(localFuncs, SymbolEqualityComparer.Default);
 
         var bodies = new Dictionary<IMethodSymbol, IOperation>(SymbolEqualityComparer.Default);
         var edges = new Dictionary<IMethodSymbol, HashSet<IMethodSymbol>>(SymbolEqualityComparer.Default);
         foreach (var m in internalMethods)
         {
             var callees = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
-            // Roots reuse the reach result's body (F1, fetched once); local functions (discovered here,
-            // not reach entries) fetch their own ILocalFunctionOperation and use its inner block. Every
-            // internalMethod has syntax (roots are pre-filtered, local funcs are source), so it becomes a
-            // graph node UNCONDITIONALLY — an auto-property accessor has a bodyless (null) operation yet
-            // must still be a node (CollectInternalCallees no-ops on null). Restricting to non-null bodies
-            // would silently drop those nodes from RecursionGraphNodes.
-            var op = ReachBodyOrFetch(m);
+            // C2: a reach root's body is authoritative in BodyByDef (LOUD on miss — a missing root is a
+            // fixpoint invariant violation, not a fetch to paper over). A LOCAL FUNCTION is discovered
+            // during THIS analysis and is legitimately NOT a reach entry — that is the ONE explicit fetch
+            // arm. Every internalMethod has syntax, so it becomes a graph node UNCONDITIONALLY — an
+            // auto-property accessor's operation is a bodyless null yet must still be a node
+            // (CollectInternalCallees no-ops on null); dropping null-body nodes would lose them from
+            // RecursionGraphNodes.
+            IOperation op = _reach.BodyByDef.TryGetValue(m, out var cached) ? cached
+                : localFuncSet.Contains(m) ? GetMethodBodyOperation(m)
+                : throw ReachMiss(m);
             var body = (op as ILocalFunctionOperation)?.Body ?? op;
             bodies[m] = body;
             CollectInternalCallees(body, methodSet, callees);
@@ -3604,11 +3608,16 @@ public class UasmEmitter
         return _compilation.GetSemanticModel(syntax.SyntaxTree).GetOperation(syntax);
     }
 
-    /// <summary>F1: return the body the reach fixpoint already fetched for <paramref name="def"/> (a reach
-    /// definition), falling back to a fresh fetch for a non-reach definition (e.g. a local function
-    /// discovered during recursion analysis, which is never a ReachableBodies entry).</summary>
-    IOperation ReachBodyOrFetch(IMethodSymbol def)
-        => def != null && _reach.BodyByDef.TryGetValue(def, out var body) ? body : GetMethodBodyOperation(def);
+    /// <summary>C2: the authoritative body of a REACH definition — from BodyByDef, fetched once by the
+    /// fixpoint. A miss is an invariant violation (the fixpoint was supposed to walk every reach root),
+    /// so it throws rather than silently re-fetching. The only legitimate non-reach body is a local
+    /// function discovered during recursion analysis, handled by its own explicit arm in BuildRecursionInfo.</summary>
+    IOperation ReachRootBody(IMethodSymbol root)
+        => root != null && _reach.BodyByDef.TryGetValue(root, out var body) ? body : throw ReachMiss(root);
+
+    static System.InvalidOperationException ReachMiss(IMethodSymbol def)
+        => new($"ReachableBodies.BodyByDef has no entry for reach definition '{def?.ToDisplayString()}' — "
+             + "the reach fixpoint did not walk it (BodyByDef authoritativeness invariant violation).");
 
     void CollectBaseInstanceCallsInOperation(IOperation op, HashSet<IMethodSymbol> result)
     {
