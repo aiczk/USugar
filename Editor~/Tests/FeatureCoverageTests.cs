@@ -1652,19 +1652,19 @@ public class PropCaller : UdonSharpBehaviour {
         Assert.Contains("not supported", ex.Message, StringComparison.OrdinalIgnoreCase);
     }
 
-    // ── Tuple-return delegate throws ──
+    // ── Tuple-return delegate field (Stage 1.75 design 2026-07-04 §1): SUPPORTED ──
 
     [Fact]
-    public void DelegateField_TupleReturn_ThrowsNotSupported()
+    public void DelegateField_TupleReturn_Compiles()
     {
-        var ex = Assert.ThrowsAny<Exception>(() => TestHelper.CompileToUasm(@"
+        var uasm = TestHelper.CompileToUasm(@"
 using UdonSharp;
 using System;
 public class TupleDlg : UdonSharpBehaviour {
     public Func<(int, int)> getter;
     void Start() { }
-}", "TupleDlg"));
-        Assert.Contains("Tuple", ex.Message);
+}", "TupleDlg");
+        Assert.Contains("SystemObjectArray", uasm);
     }
 
     // ── Tuple local SROA edge cases ──

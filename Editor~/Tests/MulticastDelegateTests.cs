@@ -149,17 +149,22 @@ public class DlgRefOut : UdonSharpBehaviour {
         Assert.Contains("ref/out", ex.Message, StringComparison.OrdinalIgnoreCase);
     }
 
+    // ── tuple-return delegate `+=` (Stage 1.75 design 2026-07-04 §1.2 bullet 6): SUPPORTED ──
+    // The fan-out's last-ret is a type-blind COPY of the packed SystemObjectArray aggregate — no
+    // multicast-side change needed (probe P1). Real VM values: Editor~/_local_harness DiffFuzz.
+
     [Fact]
-    public void PlusEquals_OnTupleReturnDelegate_ThrowsNotSupported()
+    public void PlusEquals_OnTupleReturnDelegate_EmitsCombineAndFanout()
     {
-        var ex = Assert.ThrowsAny<Exception>(() => TestHelper.CompileToUasm(@"
+        var uasm = TestHelper.CompileToUasm(@"
 using UdonSharp;
 public delegate (int, int) PairDel();
 public class DlgTupleRet : UdonSharpBehaviour {
     PairDel d;
     (int, int) Pair() => (1, 2);
     void Start() { d += Pair; }
-}", "DlgTupleRet"));
-        Assert.Contains("Tuple-return", ex.Message, StringComparison.OrdinalIgnoreCase);
+}", "DlgTupleRet");
+        Assert.Contains("__dlg_combine_Void__SystemObjectArray", uasm);
+        Assert.Contains("__dlg_fanout_Void__SystemObjectArray", uasm);
     }
 }

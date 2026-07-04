@@ -137,18 +137,19 @@ public class EvtStatic : UdonSharpBehaviour {
         Assert.Contains("Static event", ex.Message);
     }
 
-    // ── tuple-return / ref-out delegate event reject (R9, inherited policy) ──
+    // ── tuple-return delegate event (Stage 1.75 design 2026-07-04 §1): SUPPORTED ──
+    // ref-out delegate event reject (R9, inherited policy) stays below.
 
     [Fact]
-    public void TupleReturnDelegateEvent_Throws()
+    public void TupleReturnDelegateEvent_Compiles()
     {
-        var ex = Assert.ThrowsAny<Exception>(() => TestHelper.CompileToUasm(@"
+        var uasm = TestHelper.CompileToUasm(@"
 using UdonSharp;
 public delegate (int, int) PairDel();
 public class EvtTupleRet : UdonSharpBehaviour {
     public event PairDel Foo;
-}", "EvtTupleRet"));
-        Assert.Contains("Tuple-return delegate field", ex.Message);
+}", "EvtTupleRet");
+        Assert.Contains("SystemObjectArray", uasm);
     }
 
     [Fact]

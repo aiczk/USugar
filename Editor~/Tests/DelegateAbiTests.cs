@@ -10,7 +10,8 @@ namespace USugar.Tests;
 /// M1 pins for the first-class delegate ABI (design 2026-06-10):
 /// - DelegateAbi.BuildSigPart is the single sig builder (SystemObjectArray token for delegate-typed params)
 ///   and must agree between the delegate-type side (caller) and the target-method side (bridge).
-/// - ValidateDelegateBinding rejects ref/out, variant method groups, and tuple returns loudly.
+/// - ValidateDelegateBinding rejects ref/out and variant method groups loudly; tuple-return delegates are
+///   SUPPORTED (Stage 1.75 design 2026-07-04 §1 — see DelegateAbiTests.ValidateDelegateBinding_TupleReturn_Passes).
 /// - §2.8(b) capture-escape guard: capturing lambdas cannot be stored into arrays/objects or returned.
 /// - Delegate casts are reference passthrough (no Convert extern — fcd25 audit).
 /// </summary>
@@ -93,12 +94,13 @@ public class C {
     }
 
     [Fact]
-    public void ValidateDelegateBinding_TupleReturn_Throws()
+    public void ValidateDelegateBinding_TupleReturn_Passes()
     {
+        // Stage 1.75 (design 2026-07-04 §1): a tuple return is already a single SystemObjectArray
+        // aggregate slot (same representation as a user-struct return) — no adapter needed, so binding
+        // a tuple-return delegate type is not rejected.
         var c = AbiCompile(AbiSrc);
-        var ex = Assert.Throws<NotSupportedException>(
-            () => DelegateAbi.ValidateDelegateBinding(DelegateOf(c, "T"), null));
-        Assert.Contains("Tuple-return", ex.Message);
+        DelegateAbi.ValidateDelegateBinding(DelegateOf(c, "T"), null);
     }
 
     [Fact]
@@ -635,5 +637,116 @@ public class J5Gen : UdonSharpBehaviour {
     void Start() { sum = Dup<int>(21); }
 }", "J5Gen");
         Assert.NotNull(uasm);
+    }
+
+    // ── Tuple-return delegate (Stage 1.75 design 2026-07-04 §1): SUPPORTED ──
+    // Structural/UASM-level pins for the headless main suite (mirrors MulticastDelegateTests' split);
+    // real VM values live in Editor~/_local_harness (DiffFuzz CLR oracle + 2-program cross-behaviour).
+
+    [Fact]
+    public void TupleReturnDelegate_FieldAndLocalBinding_Compiles()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public class TupleDlgBind : UdonSharpBehaviour {
+    public Func<int, int, (int, int)> field;
+    (int, int) Callee(int p, int q) => (p, q);
+    void Start() {
+        field = Callee;
+        Func<int, int, (int, int)> local = Callee;
+        field = local;
+    }
+}", "TupleDlgBind");
+        Assert.Contains("SystemObjectArray", uasm);
+        Assert.Contains(".export __dlg_", uasm);
+    }
+
+    [Fact]
+    public void TupleReturnDelegate_Invoke_ElementAccess_Compiles()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public class TupleDlgElem : UdonSharpBehaviour {
+    public int x;
+    public int y;
+    (int, int) Callee(int p, int q) => (p * 10 + 1, q * 10 + 2);
+    void Start() {
+        Func<int, int, (int, int)> f = Callee;
+        (int, int) r = f(3, 4);
+        x = r.Item1; y = r.Item2;
+    }
+}", "TupleDlgElem");
+        Assert.Contains("__dlgc_SystemInt32_SystemInt32__SystemObjectArray__ret", uasm);
+        Assert.Contains("SystemObjectArray.__Get__SystemInt32__SystemObject", uasm);
+    }
+
+    [Fact]
+    public void TupleReturnDelegate_Invoke_Deconstruct_Compiles()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public class TupleDlgDeco : UdonSharpBehaviour {
+    public int x;
+    public int y;
+    (int, int) Callee(int p, int q) => (p * 10 + 1, q * 10 + 2);
+    void Start() {
+        Func<int, int, (int, int)> f = Callee;
+        var (a, b) = f(3, 4);
+        x = a; y = b;
+    }
+}", "TupleDlgDeco");
+        Assert.Contains("__dlgc_SystemInt32_SystemInt32__SystemObjectArray__ret", uasm);
+        Assert.Contains("SystemObjectArray.__Get__SystemInt32__SystemObject", uasm);
+    }
+
+    [Fact]
+    public void TupleReturnDelegate_CapturingLambda_Compiles()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public class TupleDlgCapture : UdonSharpBehaviour {
+    public int x;
+    public int y;
+    void Start() {
+        int c = 7;
+        Func<int, (int, int)> f = p => (p + c, p - c);
+        (int, int) r = f(10);
+        x = r.Item1; y = r.Item2;
+    }
+}", "TupleDlgCapture");
+        Assert.Contains("SystemObjectArray", uasm);
+    }
+
+    [Fact]
+    public void TupleReturnDelegate_CrossBehaviourDispatch_Compiles()
+    {
+        // A method-group bound to a FOREIGN behaviour's tuple-returning method (thirdParty target):
+        // dispatch takes the CROSS arm (SetProgramVariable/SendCustomEvent/GetProgramVariable), never
+        // JUMP_INDIRECT. The provider's OWN __dlg_ bridge (planned unconditionally, like any other
+        // method — design 2026-07-04 §1.2, T-M0 finding) is what makes this resolvable without the
+        // provider class participating in the caller's compile.
+        var uasm = TestHelper.CompileToUasm(new[] { @"
+using UdonSharp;
+public class TupleDlgProvider : UdonSharpBehaviour {
+    public (int, int) Pair(int p, int q) => (p, q);
+}", @"
+using UdonSharp;
+using System;
+public class TupleDlgCaller : UdonSharpBehaviour {
+    public TupleDlgProvider provider;
+    public int x;
+    public int y;
+    void Start() {
+        Func<int, int, (int, int)> f = provider.Pair;
+        (int, int) r = f(3, 4);
+        x = r.Item1; y = r.Item2;
+    }
+}" }, "TupleDlgCaller");
+        Assert.Contains("VRCUdonCommonInterfacesIUdonEventReceiver.__SendCustomEvent__SystemString__SystemVoid", uasm);
+        Assert.Contains("VRCUdonCommonInterfacesIUdonEventReceiver.__GetProgramVariable__SystemString__SystemObject", uasm);
     }
 }

@@ -212,6 +212,22 @@ public class StructRefParam : UdonSharpBehaviour {
     Foo(3);
   }
 }"),
+        // Tuple-return delegate: invoke + deconstruction (Stage 1.75 design 2026-07-04 §1 canonical
+        // baseline, §5). A method-group bound to a tuple-returning method, invoked through the
+        // delegate bundle, then deconstructed — the bridge InternalCalls the real method and stores
+        // its already-SystemObjectArray result straight into conv-ret (no pack adapter: a tuple return
+        // is already the same single aggregate slot a struct return uses), and the dispatch's conv-ret
+        // read feeds DeconstructionAssignmentHandler's delegate-invocation arm directly.
+        ("tuple_return_delegate", "TupleReturnDelegate",
+@"using System; using UdonSharp; public class TupleReturnDelegate : UdonSharpBehaviour {
+  public int x; public int y;
+  (int, int) Callee(int p, int q) => (p * 10 + 1, q * 10 + 2);
+  void Start(){
+    Func<int, int, (int, int)> f = Callee;
+    var (a, b) = f(3, 4);
+    x = a; y = b;
+  }
+}"),
     };
 
     public static (string Name, string ClassName, string Source) ByName(string name)
