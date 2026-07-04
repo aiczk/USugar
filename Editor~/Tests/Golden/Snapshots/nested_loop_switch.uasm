@@ -13,7 +13,6 @@
     __const_SystemInt32_1: %SystemInt32, null
     __intnl_SystemBoolean_c0: %SystemBoolean, null
     __intnl_SystemBoolean_c1: %SystemBoolean, null
-    __intnl_SystemInt32_c2: %SystemInt32, null
     __const_SystemInt32_2: %SystemInt32, null
     __const_SystemInt32_3: %SystemInt32, null
     __const_SystemInt32_4: %SystemInt32, null
@@ -49,12 +48,12 @@
         JUMP_INDIRECT, __intnl_returnJump_SystemUInt32_0
     ___start_bb4:
         PUSH, __lcl_i_SystemInt32_0
+        PUSH, __intnl_SystemInt32_c0
+        COPY
+        PUSH, __intnl_SystemInt32_c0
         PUSH, __intnl_SystemInt32_c1
         COPY
         PUSH, __intnl_SystemInt32_c1
-        PUSH, __intnl_SystemInt32_c2
-        COPY
-        PUSH, __intnl_SystemInt32_c2
         PUSH, __const_SystemInt32_0
         PUSH, __intnl_SystemBoolean_c0
         EXTERN, "SystemInt32.__op_Equality__SystemInt32_SystemInt32__SystemBoolean"
@@ -65,7 +64,7 @@
         JUMP_IF_FALSE, 0x00000118
         JUMP, 0x00000254
     ___start_bb8:
-        PUSH, __intnl_SystemInt32_c2
+        PUSH, __intnl_SystemInt32_c1
         PUSH, __const_SystemInt32_2
         PUSH, __intnl_SystemBoolean_c0
         EXTERN, "SystemInt32.__op_Equality__SystemInt32_SystemInt32__SystemBoolean"
@@ -77,72 +76,72 @@
         JUMP, 0x000001dc
     ___start_bb11:
         PUSH, acc
+        PUSH, __intnl_SystemInt32_c0
+        COPY
+        PUSH, __intnl_SystemInt32_c0
         PUSH, __intnl_SystemInt32_c1
         COPY
         PUSH, __intnl_SystemInt32_c1
-        PUSH, __intnl_SystemInt32_c2
-        COPY
-        PUSH, __intnl_SystemInt32_c2
         PUSH, __const_SystemInt32_3
-        PUSH, __intnl_SystemInt32_c1
+        PUSH, __intnl_SystemInt32_c0
         EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __intnl_SystemInt32_c0
         PUSH, __intnl_SystemInt32_c1
-        PUSH, __intnl_SystemInt32_c2
         COPY
-        PUSH, __intnl_SystemInt32_c2
+        PUSH, __intnl_SystemInt32_c1
         PUSH, acc
         COPY
         JUMP, 0x000002c4
     ___start_bb10:
         PUSH, acc
+        PUSH, __intnl_SystemInt32_c0
+        COPY
+        PUSH, __intnl_SystemInt32_c0
         PUSH, __intnl_SystemInt32_c1
         COPY
         PUSH, __intnl_SystemInt32_c1
-        PUSH, __intnl_SystemInt32_c2
-        COPY
-        PUSH, __intnl_SystemInt32_c2
         PUSH, __const_SystemInt32_4
-        PUSH, __intnl_SystemInt32_c1
+        PUSH, __intnl_SystemInt32_c0
         EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __intnl_SystemInt32_c0
         PUSH, __intnl_SystemInt32_c1
-        PUSH, __intnl_SystemInt32_c2
         COPY
-        PUSH, __intnl_SystemInt32_c2
+        PUSH, __intnl_SystemInt32_c1
         PUSH, acc
         COPY
         JUMP, 0x000002c4
     ___start_bb7:
         PUSH, acc
+        PUSH, __intnl_SystemInt32_c0
+        COPY
+        PUSH, __intnl_SystemInt32_c0
         PUSH, __intnl_SystemInt32_c1
         COPY
         PUSH, __intnl_SystemInt32_c1
-        PUSH, __intnl_SystemInt32_c2
-        COPY
-        PUSH, __intnl_SystemInt32_c2
         PUSH, __const_SystemInt32_2
-        PUSH, __intnl_SystemInt32_c1
+        PUSH, __intnl_SystemInt32_c0
         EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __intnl_SystemInt32_c0
         PUSH, __intnl_SystemInt32_c1
-        PUSH, __intnl_SystemInt32_c2
         COPY
-        PUSH, __intnl_SystemInt32_c2
+        PUSH, __intnl_SystemInt32_c1
         PUSH, acc
         COPY
     __goto__start___switchEnd_1:
         PUSH, __lcl_i_SystemInt32_0
+        PUSH, __intnl_SystemInt32_c0
+        COPY
+        PUSH, __intnl_SystemInt32_c0
         PUSH, __intnl_SystemInt32_c1
         COPY
         PUSH, __intnl_SystemInt32_c1
-        PUSH, __intnl_SystemInt32_c2
-        COPY
-        PUSH, __intnl_SystemInt32_c2
         PUSH, __const_SystemInt32_2
-        PUSH, __intnl_SystemInt32_c1
+        PUSH, __intnl_SystemInt32_c0
         EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __intnl_SystemInt32_c0
         PUSH, __intnl_SystemInt32_c1
-        PUSH, __intnl_SystemInt32_c2
         COPY
-        PUSH, __intnl_SystemInt32_c2
+        PUSH, __intnl_SystemInt32_c1
         PUSH, __lcl_i_SystemInt32_0
         COPY
         JUMP, 0x0000001c

@@ -11,7 +11,6 @@
     __intnl_SystemInt32_c0: %SystemInt32, null
     __intnl_SystemInt32_c1: %SystemInt32, null
     __intnl_SystemInt32_c2: %SystemInt32, null
-    __intnl_SystemInt32_c3: %SystemInt32, null
     __intnl_SystemBoolean_c0: %SystemBoolean, null
     __intnl_SystemBoolean_c1: %SystemBoolean, null
     __const_SystemInt32_1: %SystemInt32, null
@@ -32,13 +31,13 @@
         PUSH, __intnl_SystemInt32_c1
         COPY
         PUSH, n
-        PUSH, __intnl_SystemInt32_c2
+        PUSH, __intnl_SystemInt32_c0
         COPY
+        PUSH, __intnl_SystemInt32_c0
         PUSH, __intnl_SystemInt32_c2
-        PUSH, __intnl_SystemInt32_c3
         COPY
         PUSH, __intnl_SystemInt32_c1
-        PUSH, __intnl_SystemInt32_c3
+        PUSH, __intnl_SystemInt32_c2
         PUSH, __intnl_SystemBoolean_c0
         EXTERN, "SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean"
         PUSH, __intnl_SystemBoolean_c0
@@ -53,26 +52,26 @@
         JUMP_INDIRECT, __intnl_returnJump_SystemUInt32_0
     ___start_bb3:
         PUSH, __lcl_i_SystemInt32_0
+        PUSH, __intnl_SystemInt32_c0
+        COPY
+        PUSH, __intnl_SystemInt32_c0
         PUSH, __intnl_SystemInt32_c1
         COPY
         PUSH, __intnl_SystemInt32_c1
-        PUSH, __intnl_SystemInt32_c2
-        COPY
-        PUSH, __intnl_SystemInt32_c2
         PUSH, __const_SystemInt32_1
-        PUSH, __intnl_SystemInt32_c1
+        PUSH, __intnl_SystemInt32_c0
         EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __intnl_SystemInt32_c0
         PUSH, __intnl_SystemInt32_c1
-        PUSH, __intnl_SystemInt32_c2
         COPY
-        PUSH, __intnl_SystemInt32_c2
+        PUSH, __intnl_SystemInt32_c1
         PUSH, __lcl_i_SystemInt32_0
         COPY
         PUSH, __lcl_i_SystemInt32_0
-        PUSH, __intnl_SystemInt32_c1
+        PUSH, __intnl_SystemInt32_c0
         COPY
+        PUSH, __intnl_SystemInt32_c0
         PUSH, __intnl_SystemInt32_c1
-        PUSH, __intnl_SystemInt32_c2
         COPY
         JUMP, 0x0000001c
 .code_end

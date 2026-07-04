@@ -138,10 +138,11 @@ public static class CoreFlatOptimizer
         return outSet;
     }
 
-    /// <summary>Per-block live-in via standard backward dataflow over the flat CFG to a fixpoint —
-    /// the SAME correct liveness <see cref="ComputeLiveOutPerInstruction"/> and <see cref="VerifyNoInterference"/>
-    /// trust, exposed separately so <see cref="ComputeLivenessIntervals"/> can correct its RPO-linear
-    /// "first write" def-position heuristic for slots read before being dominated by a write.</summary>
+    /// <summary>Per-block live-in via standard backward dataflow over the flat CFG to a fixpoint — the one
+    /// exact liveness the whole pass trusts. Computed once per <see cref="CoalesceSlotsFunc"/> call and
+    /// shared by <see cref="ComputeLivenessIntervals"/> (interval derivation) and
+    /// <see cref="VerifyNoInterference"/> (the checker), and recomputed independently by
+    /// <see cref="InsertRecursionSpillsFunc"/> in its later post-coalesce phase.</summary>
     static Dictionary<int, HashSet<int>> ComputeBlockLiveIn(CFunction func)
     {
         var blockLiveIn = new Dictionary<int, HashSet<int>>();
@@ -169,9 +170,9 @@ public static class CoreFlatOptimizer
 
     /// <summary>Per-instruction live-out (slots whose post-instruction value is read before being overwritten),
     /// via standard backward dataflow over the flat CFG to a fixpoint.</summary>
-    static Dictionary<CStmt, HashSet<int>> ComputeLiveOutPerInstruction(CFunction func)
+    static Dictionary<CStmt, HashSet<int>> ComputeLiveOutPerInstruction(CFunction func, Dictionary<int, HashSet<int>> blockLiveIn = null)
     {
-        var blockLiveIn = ComputeBlockLiveIn(func);
+        blockLiveIn ??= ComputeBlockLiveIn(func);
 
         var result = new Dictionary<CStmt, HashSet<int>>();
         foreach (var b in func.FlatBlocks)
@@ -297,8 +298,11 @@ public static class CoreFlatOptimizer
     {
         if (func.FlatBlocks.Count == 0 || func.Slots.Count == 0) return;
 
-        // Step 1: Linearize instructions and compute liveness intervals
-        var (written, lastUsed) = ComputeLivenessIntervals(func);
+        // Step 1: exact per-block liveness (fixpoint) — computed ONCE and shared by both the interval
+        // derivation below and the independent VerifyNoInterference checker (both consume the same
+        // liveness now, so the former's two-fixpoints-per-pass redundancy is gone).
+        var blockLiveIn = ComputeBlockLiveIn(func);
+        var (written, lastUsed) = ComputeLivenessIntervals(func, blockLiveIn);
 
         // Collect coalesceable slots (Scratch or Frame, not Pinned)
         var coalesceable = new List<SlotDecl>();
@@ -382,7 +386,7 @@ public static class CoreFlatOptimizer
         // Fast approximate allocator + sound independent checker: the interval coloring above assumes an
         // unasserted block-ordering fact of this compiler's own loop lowering. Recompute liveness properly
         // (fixpoint dataflow, not a linearized interval) and reject the merge map before it is ever applied.
-        VerifyNoInterference(func, mapping);
+        VerifyNoInterference(func, mapping, blockLiveIn);
 
         // Step 4: Rewrite all instructions and terminators. Drop self-copies (CAssign s = s) that arise when
         // a copy's source and destination coalesce to the same physical slot — A-normal form's binding temps
@@ -409,19 +413,21 @@ public static class CoreFlatOptimizer
         // never be called for them, so no UASM variable will be emitted.
     }
 
-    /// <summary>Independent post-hoc interference check for a proposed slot-coalescing merge map, run
-    /// BEFORE the map is applied. The interval coloring in <see cref="CoalesceSlotsFunc"/> is a fast
-    /// linearized-RPO approximation; this recomputes liveness properly via the same fixpoint backward
-    /// dataflow InsertRecursionSpillsFunc uses (<see cref="ComputeLiveOutPerInstruction"/>) and asserts no
-    /// two DISTINCT source slots mapped to the same physical slot are ever simultaneously live — the
-    /// classic "fast approximate allocator + sound independent checker" pairing. Internal (not private) so
-    /// tests can drive it directly with a hand-built bad mapping the real interval algorithm is not
-    /// expected to ever produce.</summary>
-    internal static void VerifyNoInterference(CFunction func, Dictionary<int, int> mapping)
+    /// <summary>Interference check for a proposed slot-coalescing merge map, run BEFORE the map is applied.
+    /// The interval coloring in <see cref="CoalesceSlotsFunc"/> compares linearized [start,end] intervals;
+    /// this checks the finer per-instruction set membership (<see cref="ComputeLiveOutPerInstruction"/>) and
+    /// asserts no two DISTINCT source slots mapped to the same physical slot are ever simultaneously live.
+    /// Independence note: the intervals are now DERIVED from this same fixpoint liveness (shared
+    /// <paramref name="blockLiveIn"/>), so this is no longer an independent re-derivation guarding an
+    /// approximation — it guards the interval-derivation code. The intervals are a strict superset of the
+    /// per-instruction live sets (every slot in liveOut(p) has p inside its interval), so this checker can
+    /// never fire on a map the derivation produces; if it DOES, that is a derivation bug. Internal (not
+    /// private) so tests can drive it directly with a hand-built bad mapping.</summary>
+    internal static void VerifyNoInterference(CFunction func, Dictionary<int, int> mapping, Dictionary<int, HashSet<int>> blockLiveIn = null)
     {
         if (mapping.Count == 0) return;
 
-        var liveOut = ComputeLiveOutPerInstruction(func);
+        var liveOut = ComputeLiveOutPerInstruction(func, blockLiveIn);
         foreach (var live in liveOut.Values)
         {
             var physicalToSource = new Dictionary<int, int>();
@@ -443,107 +449,69 @@ public static class CoreFlatOptimizer
         }
     }
 
-    static (Dictionary<int, int> Written, Dictionary<int, int> LastUsed) ComputeLivenessIntervals(CFunction func)
+    /// <summary>Each coalesceable slot's [start,end] interval over the RPO linearization, derived DIRECTLY
+    /// from the exact fixpoint liveness (<paramref name="blockLiveIn"/>) instead of an RPO-linear
+    /// first-write/last-use approximation. The interval spans every linearized position at which the slot's
+    /// value matters: where it is defined, where it is read, and every position it is live-OUT of. Two
+    /// former correction patches fall out for free: a slot used before any def is live-in from block entry
+    /// (start pulls back naturally — the old B39 pullback for a GetComponent-style unassigned fallthrough),
+    /// and a loop-carried slot is live-out across the back-edge latch terminator (end extends naturally —
+    /// the old back-edge extension). Every slot in liveOut(p) has p inside its interval, so the derived
+    /// intervals are a strict superset of the per-instruction live sets <see cref="VerifyNoInterference"/>
+    /// checks — that checker can therefore never fire on a map built from these intervals.</summary>
+    static (Dictionary<int, int> Written, Dictionary<int, int> LastUsed) ComputeLivenessIntervals(
+        CFunction func, Dictionary<int, HashSet<int>> blockLiveIn)
     {
-        var written = new Dictionary<int, int>();
-        var lastUsed = new Dictionary<int, int>();
-
-        // Compute RPO ordering
         var rpo = ComputeRPO(func);
 
-        int pos = 0;
-        foreach (var block in rpo)
-        {
-            foreach (var inst in block.Stmts)
-            {
-                // Record reads first (a read at pos before a write at same pos)
-                foreach (var slotId in GetReadSlotsInst(inst))
-                    lastUsed[slotId] = pos;
-
-                var dest = GetWrittenSlot(inst);
-                if (dest.HasValue)
-                {
-                    if (!written.ContainsKey(dest.Value))
-                        written[dest.Value] = pos;
-                    // A write is also a "last use" for interval purposes
-                    lastUsed[dest.Value] = pos;
-                }
-
-                pos++;
-            }
-
-            // Terminator reads
-            foreach (var slotId in GetReadSlotsTerm(block.Terminator))
-                lastUsed[slotId] = pos;
-
-            pos++;
-        }
-
-        // Extend liveness for loop back-edges.
-        // A back-edge is B→H where H has a lower RPO position than B.
-        // Any slot alive at the loop header must stay alive through the entire loop body.
+        // Positional scheme identical to the flat CFG's: each statement one position, the terminator one
+        // position after the block's statements.
         var blockStartPos = new Dictionary<int, int>();
-        var blockEndPos = new Dictionary<int, int>();
-
         int p = 0;
         foreach (var block in rpo)
         {
             blockStartPos[block.Id] = p;
-            p += block.Stmts.Count + 1; // +1 for terminator
-            blockEndPos[block.Id] = p - 1;
+            p += block.Stmts.Count + 1;
         }
 
-        var rpoIndex = new Dictionary<int, int>();
-        for (int i = 0; i < rpo.Count; i++)
-            rpoIndex[rpo[i].Id] = i;
+        var start = new Dictionary<int, int>();
+        var end = new Dictionary<int, int>();
+        void Mark(int slot, int pos)
+        {
+            if (!start.TryGetValue(slot, out var s) || pos < s) start[slot] = pos;
+            if (!end.TryGetValue(slot, out var e) || pos > e) end[slot] = pos;
+        }
 
         foreach (var block in rpo)
         {
-            if (block.Terminator == null) continue;
-            foreach (var succId in GetSuccessors(block.Terminator))
+            int basePos = blockStartPos[block.Id];
+            int termPos = basePos + block.Stmts.Count;
+
+            // live-out of the terminator = union of successor block live-ins.
+            var live = new HashSet<int>();
+            if (block.Terminator != null)
+                foreach (var succ in GetSuccessors(block.Terminator))
+                    if (blockLiveIn.TryGetValue(succ, out var li)) live.UnionWith(li);
+
+            foreach (var slot in live) Mark(slot, termPos);        // live across the terminator
+            foreach (var r in GetReadSlotsTerm(block.Terminator))  // terminator's own reads (branch/ret)
             {
-                if (!rpoIndex.ContainsKey(succId)) continue;
-                if (rpoIndex[succId] <= rpoIndex[block.Id]) // back-edge
-                {
-                    int headerStart = blockStartPos[succId];
-                    int loopEnd = blockEndPos[block.Id];
+                Mark(r, termPos);
+                live.Add(r);
+            }
+            // live is now live-in of the terminator = live-out of the last statement.
 
-                    foreach (var slotId in written.Keys.ToList())
-                    {
-                        int def = written.TryGetValue(slotId, out var d) ? d : int.MaxValue;
-                        int last = lastUsed.TryGetValue(slotId, out var u) ? u : -1;
-
-                        if (def <= headerStart && last >= headerStart && last < loopEnd)
-                        {
-                            lastUsed[slotId] = loopEnd;
-                        }
-                    }
-                }
+            for (int i = block.Stmts.Count - 1; i >= 0; i--)
+            {
+                int pos = basePos + i;
+                foreach (var slot in live) Mark(slot, pos);        // slot live-OUT of statement i
+                var d = GetWrittenSlot(block.Stmts[i]);
+                if (d.HasValue) { Mark(d.Value, pos); live.Remove(d.Value); }
+                foreach (var r in GetReadSlotsInst(block.Stmts[i])) { Mark(r, pos); live.Add(r); }
             }
         }
 
-        // Fix (real bug found by VerifyNoInterference on Compat_GetComponentTest): a slot read on some
-        // path before it is ever assigned — relying on the Udon VM's implicit zero/null heap default,
-        // e.g. a GetComponent<T>() "not found" fallthrough that never explicitly assigns the result —
-        // has a TRUE live range starting earlier than its first CAssign position, which this RPO-linear
-        // "first write" heuristic cannot see (it only ever records a write position). Any slot proven
-        // live-in to a block by real fixpoint dataflow must have its recorded def position pulled back
-        // to no later than that block's start. For ordinary code — where the slot's first CAssign
-        // already dominates every use — the slot is never live-in anywhere, so this is a no-op; it only
-        // widens (never narrows) the interval of a genuinely used-before-def slot.
-        var blockLiveIn = ComputeBlockLiveIn(func);
-        foreach (var block in rpo)
-        {
-            if (!blockLiveIn.TryGetValue(block.Id, out var liveIn)) continue;
-            int start = blockStartPos[block.Id];
-            foreach (var slotId in liveIn)
-            {
-                if (!written.TryGetValue(slotId, out var w) || w > start)
-                    written[slotId] = start;
-            }
-        }
-
-        return (written, lastUsed);
+        return (start, end);
     }
 
     static List<CBlock> ComputeRPO(CFunction func)
