@@ -941,8 +941,22 @@ public class UasmEmitter
             .Concat(_openGenericBaseDefs.Where(d => !methodSet.Contains(d)))
             .ToArray();
 
-        // Collect foreign static methods
-        var foreignStatics = CollectForeignStaticMethods(collectorSeeds);
+        // User-struct members are collected first so their BODIES also seed the foreign-static scan
+        // (registration ORDER below is unchanged — foreign statics → struct methods → base copies —
+        // for name-index stability; only the collection of structMethods moves up, and it does not
+        // call RegisterMethod).
+        var structMethods = CollectStructMethods(collectorSeeds);
+
+        // Collect foreign static methods. B46 (wave-14 r4): a static method on a user struct
+        // (Helper.Boost()) called from INSIDE another struct's member body is a foreign-static call
+        // too, but the collector previously walked only class/base/field-init bodies — so the call
+        // fell through to a bogus SystemObjectArray.__Boost__ extern (worked from the class body,
+        // which IS walked). Seed the scan with the struct member bodies as well. A generic-struct
+        // static call whose containing type is still OPEN in the shared body (Helper<U>.Boost inside
+        // Box<T>) is skipped by CollectForeignStaticCallsInOperation's open-type-param guard and
+        // registered on demand at its closed call site (InvocationHandler's foreign-static-on-generic
+        // arm), mirroring how open struct members avoid a phantom CFunction.
+        var foreignStatics = CollectForeignStaticMethods(collectorSeeds.Concat(structMethods).ToArray());
         foreach (var fm in foreignStatics)
         {
             EmitContext.RejectInParameters(fm); // round-7 follow-up [Q3]
@@ -974,7 +988,7 @@ public class UasmEmitter
         }
 
         // Register user-struct constructors + instance methods (object[]-emulated; synthetic receiver = param0).
-        var structMethods = CollectStructMethods(collectorSeeds);
+        // structMethods was collected above (before the foreign-static scan, which it also seeds).
         foreach (var sm in structMethods)
         {
             EmitContext.RejectInParameters(sm); // round-7 follow-up [Q3]
@@ -3466,13 +3480,23 @@ public class UasmEmitter
         return result.ToArray();
     }
 
+    // B46 (wave-14 r4): a foreign-static call whose containing type still carries an OPEN type
+    // parameter (Helper<U>.Boost seen in the SHARED body of a generic struct/method, U unbound) has
+    // no single monomorphization here — collecting it would register a phantom open CFunction, exactly
+    // the shape IsCollectibleStructMember skips. It is registered on demand at its closed call site
+    // (InvocationHandler's foreign-static-on-generic arm). Genuinely closed foreign statics (incl.
+    // non-generic Helper.Boost, or Helper<int>.Boost from a concretely-typed context) are collected.
+    static bool IsClosedForeignStaticTarget(IMethodSymbol m)
+        => !(m.ContainingType is INamedTypeSymbol ct && ct.IsGenericType
+             && ct.TypeArguments.Any(ta => ta is ITypeParameterSymbol));
+
     void CollectForeignStaticCallsInOperation(IOperation op, HashSet<IMethodSymbol> result)
     {
         if (op == null) return;
         if (op is IInvocationOperation inv && IsForeignStatic(inv.TargetMethod))
         {
             var original = inv.TargetMethod.ReducedFrom ?? inv.TargetMethod;
-            if (!original.IsGenericMethod)
+            if (!original.IsGenericMethod && IsClosedForeignStaticTarget(original))
                 result.Add(original);
         }
         // wave-13 staticro lens (2026-07-04): a delegate/method-group reference to a foreign static
@@ -3484,7 +3508,7 @@ public class UasmEmitter
         if (op is IMethodReferenceOperation mref && IsForeignStatic(mref.Method))
         {
             var original = mref.Method.ReducedFrom ?? mref.Method;
-            if (!original.IsGenericMethod)
+            if (!original.IsGenericMethod && IsClosedForeignStaticTarget(original))
                 result.Add(original);
         }
         foreach (var child in op.Children)
