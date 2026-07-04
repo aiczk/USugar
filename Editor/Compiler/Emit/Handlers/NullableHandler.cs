@@ -80,7 +80,7 @@ public class NullableHandler : AssignmentHandlerBase, IExpressionHandler
         // When op.Type is the aggregate, the right side has the non-nullable aggregate type → always non-null,
         // and the non-null left is cloned in the else branch, so EmitDeepCloneAggregate never sees null.
         var aggType = ResolveType(op.Type) as INamedTypeSymbol;
-        bool aggResult = aggType != null && EmitContext.IsAggregateType(aggType);
+        bool aggResult = aggType != null && EmitPolicy.IsAggregateType(aggType);
         var leftVal = VisitExpression(op.Value);
         EmitAssign(resultSlot, leftVal);
 

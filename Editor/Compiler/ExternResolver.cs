@@ -101,7 +101,7 @@ public static class ExternResolver
             if (elementType is INamedTypeSymbol elemDlg && elemDlg.DelegateInvokeMethod != null)
                 return "SystemObjectArray";
             // struct[] / tuple[] → object[] of boxed object[] elements (no SystemObjectArrayArray in Udon).
-            if (EmitContext.IsAggregateType(elementType))
+            if (EmitPolicy.IsAggregateType(elementType))
                 return "SystemObjectArray";
             var elemTypeName = GetUdonTypeName(elementType, typeParamMap);
             if (elemTypeName == "VRCUdonCommonInterfacesIUdonEventReceiver")
@@ -123,7 +123,7 @@ public static class ExternResolver
         if (typeParamMap != null && type is INamedTypeSymbol named && named.IsGenericType
             && named.OriginalDefinition.SpecialType != SpecialType.System_Nullable_T
             && type.TypeKind != TypeKind.Enum
-            && !EmitContext.IsAggregateType(type))
+            && !EmitPolicy.IsAggregateType(type))
         {
             var def = named.ConstructedFrom;
             var ns = def.ContainingNamespace?.ToDisplayString();
@@ -174,7 +174,7 @@ public static class ExternResolver
         // with arrays of those, and with object[] itself. (IsAggregateType deliberately excludes delegates,
         // so the delegate is tested on its own.)
         if (target is INamedTypeSymbol dlg && dlg.DelegateInvokeMethod != null) return false;
-        if (EmitContext.IsAggregateType(target)) return false;
+        if (EmitPolicy.IsAggregateType(target)) return false;
 
         // User-defined enum → its underlying int tag (indistinguishable from int or a sibling enum). SDK
         // enums keep a uniquely registered tag, so they stay distinguishable — mirror GetUdonTypeName's
@@ -212,7 +212,7 @@ public static class ExternResolver
             // struct[] / tuple[] → object[] whose elements are the boxed per-element object[]. Udon has no
             // SystemObjectArrayArray (object[][]) externs, so a nested-array element type cannot be used;
             // a plain object[] holds the object[] elements as boxed objects.
-            if (EmitContext.IsAggregateType(arrayType.ElementType))
+            if (EmitPolicy.IsAggregateType(arrayType.ElementType))
                 return "SystemObjectArray";
             // All types that resolve to IUdonEventReceiver use ComponentArray at runtime:
             // UdonSharpBehaviour[], derived[], UdonBehaviour[], user-interface[]
@@ -244,7 +244,7 @@ public static class ExternResolver
             return "SystemObject";
 
         // Aggregate types (tuples, user-defined structs) → SystemObjectArray (object[] emulation)
-        if (EmitContext.IsAggregateType(type))
+        if (EmitPolicy.IsAggregateType(type))
             return "SystemObjectArray";
 
         // User-defined enums → underlying type (Udon has no type registration for user enums).

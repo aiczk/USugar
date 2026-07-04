@@ -101,7 +101,7 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
 
         // Nullable<T>.GetValueOrDefault() / GetValueOrDefault(fallback) → the value, else the fallback/default.
         if (op.Instance != null && target.Name == "GetValueOrDefault"
-            && EmitContext.IsNullableT(target.ContainingType, out var govUnderlying))
+            && EmitPolicy.IsNullableT(target.ContainingType, out var govUnderlying))
             return EmitNullableGetValueOrDefault(op, govUnderlying);
 
         // Virtual dispatch through `this`: a call to a virtual/override/abstract method must bind to the
@@ -148,7 +148,7 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
         // (CollectStructMethodsInOperation deliberately skips the open form) — register it on demand,
         // like a generic method's own on-demand arm below (wave-14 residual gap).
         if (!target.IsStatic && target.MethodKind == MethodKind.Ordinary
-            && target.ContainingType is INamedTypeSymbol structRecv && EmitContext.IsUserStruct(structRecv))
+            && target.ContainingType is INamedTypeSymbol structRecv && EmitPolicy.IsUserStruct(structRecv))
             return EmitStructInstanceCall(op, ResolveStructMember(target));
 
         // Receiver identity (predates fcd-stage1): an instance method of THIS class family invoked
@@ -373,7 +373,7 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
         // nullable's storage — deep-clone it out (value semantics). default(T) for an aggregate is a fresh
         // zero-initialized struct, NOT null, so use EmitNewAggregate rather than the scalar value default.
         var aggType = ResolveType(underlying) as INamedTypeSymbol;
-        bool aggResult = aggType != null && EmitContext.IsAggregateType(aggType);
+        bool aggResult = aggType != null && EmitPolicy.IsAggregateType(aggType);
         // nv is the boxed nullable (SystemObject) bound once under ANF — re-readable for the HasValue test
         // and the present-value branch without a snapshot slot.
         var nv = VisitExpression(op.Instance);
@@ -403,7 +403,7 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
         // readonly rs.Bump();rs.Bump() ref=0 vs the live-storage 20). Chains through array
         // elements keep live storage (the helper stops there, reference semantics, CLR-equal).
         if (!target.IsReadOnly && ReceiverNeedsDefensiveCopy(op.Instance)
-            && op.Instance?.Type is INamedTypeSymbol recvAgg && EmitContext.IsAggregateType(recvAgg))
+            && op.Instance?.Type is INamedTypeSymbol recvAgg && EmitPolicy.IsAggregateType(recvAgg))
             recv = EmitDeepCloneAggregate(recv, recvAgg);
         var args = new List<CLeaf> { recv };
         Dictionary<int, System.Action<CLeaf>> structPrepared = null;

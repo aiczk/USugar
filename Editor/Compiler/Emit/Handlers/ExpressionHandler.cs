@@ -29,21 +29,21 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
         // Stage 2 §4.1: a captured local/param has NO flat storage — reads route through the owning
         // scope's env record (aggregate captures keep clone-on-read value semantics on the way out).
         ILocalReferenceOperation localRef when _ctx.TryGetEnvBinding(localRef.Local, out _)
-            => ResolveType(localRef.Type) is INamedTypeSymbol eaggT && EmitContext.IsAggregateType(eaggT)
+            => ResolveType(localRef.Type) is INamedTypeSymbol eaggT && EmitPolicy.IsAggregateType(eaggT)
                    ? EmitDeepCloneAggregate(EnvEmit.Read(_builder, _ctx, localRef.Local, "SystemObjectArray"), eaggT)
                    : EnvEmit.Read(_builder, _ctx, localRef.Local, GetUdonType(localRef.Type)),
         ILocalReferenceOperation localRef => _localBindings.TryGetValue(localRef.Local, out var localBinding)
-                                                 ? ResolveType(localRef.Type) is INamedTypeSymbol laggT && EmitContext.IsAggregateType(laggT)
+                                                 ? ResolveType(localRef.Type) is INamedTypeSymbol laggT && EmitPolicy.IsAggregateType(laggT)
                                                      ? EmitDeepCloneAggregate(LoadField(localBinding.Id, "SystemObjectArray"), laggT)
                                                      : LoadField(localBinding.Id, GetUdonType(localRef.Type))
                                                  : throw new InvalidOperationException($"Cannot resolve local variable '{localRef.Local.Name}' in method '{_currentMethod?.Name ?? "(none)"}'."),
         IFieldReferenceOperation op => VisitFieldReference(op),
         IEventReferenceOperation op => VisitEventReference(op),
         IParameterReferenceOperation paramRef when _ctx.TryGetEnvBinding(paramRef.Parameter, out _)
-            => ResolveType(paramRef.Type) is INamedTypeSymbol epaggT && EmitContext.IsAggregateType(epaggT)
+            => ResolveType(paramRef.Type) is INamedTypeSymbol epaggT && EmitPolicy.IsAggregateType(epaggT)
                    ? EmitDeepCloneAggregate(EnvEmit.Read(_builder, _ctx, paramRef.Parameter, "SystemObjectArray"), epaggT)
                    : EnvEmit.Read(_builder, _ctx, paramRef.Parameter, GetUdonType(paramRef.Type)),
-        IParameterReferenceOperation paramRef => ResolveType(paramRef.Type) is INamedTypeSymbol paggT && EmitContext.IsAggregateType(paggT)
+        IParameterReferenceOperation paramRef => ResolveType(paramRef.Type) is INamedTypeSymbol paggT && EmitPolicy.IsAggregateType(paggT)
                                                      ? EmitDeepCloneAggregate(LoadParam(paramRef.Parameter), paggT)
                                                      : LoadParam(paramRef.Parameter),
         IInstanceReferenceOperation when _ctx.CurrentStructReceiverParamId != null
@@ -91,11 +91,11 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
         // expression. Each program gets its own copy, which is observationally identical to a true shared
         // static because the value is immutable — so no singleton/shared storage is needed.
         if (fieldRef.Field.IsStatic && fieldRef.Field.IsReadOnly
-            && (fieldRef.ConstantValue.HasValue || EmitContext.TryGetConstFieldInitializer(_compilation, fieldRef.Field, out _)))
+            && (fieldRef.ConstantValue.HasValue || EmitPolicy.TryGetConstFieldInitializer(_compilation, fieldRef.Field, out _)))
         {
             var constType = GetUdonType(fieldRef.Field.Type);
             var value = fieldRef.ConstantValue.HasValue ? fieldRef.ConstantValue.Value
-                : (EmitContext.TryGetConstFieldInitializer(_compilation, fieldRef.Field, out var v) ? v : null);
+                : (EmitPolicy.TryGetConstFieldInitializer(_compilation, fieldRef.Field, out var v) ? v : null);
             return Const(value, constType);
         }
         if (fieldRef.Field.IsStatic)
@@ -111,7 +111,7 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
             // (StgSampler<int>.Table and StgSampler<string>.Table are C#-distinct) — which needs its own
             // materialization design (mirroring feature S but keyed by constructed struct type), not a
             // one-line patch. Reject loudly instead of emitting an assembler-crashing extern.
-            if (fieldRef.Field.ContainingType is INamedTypeSymbol structFieldCt && EmitContext.IsUserStruct(structFieldCt))
+            if (fieldRef.Field.ContainingType is INamedTypeSymbol structFieldCt && EmitPolicy.IsUserStruct(structFieldCt))
                 throw new NotSupportedException(
                     $"Static field '{fieldRef.Field.ContainingType.Name}.{fieldRef.Field.Name}' on a "
                     + "user-defined struct is not supported: static storage for a struct type (per closed "
@@ -127,7 +127,7 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
                 if (fieldRef.Field.IsReadOnly)
                 {
                     if (IsDeclaredInOwnHierarchy(_classSymbol, fieldRef.Field.ContainingType))
-                        return fieldRef.Field.Type is INamedTypeSymbol staticFieldAgg && EmitContext.IsAggregateType(staticFieldAgg)
+                        return fieldRef.Field.Type is INamedTypeSymbol staticFieldAgg && EmitPolicy.IsAggregateType(staticFieldAgg)
                             ? EmitDeepCloneAggregate(LoadField(fieldRef.Field.Name, "SystemObjectArray"), staticFieldAgg)
                             : LoadField(fieldRef.Field.Name, GetUdonType(fieldRef.Field.Type));
 
@@ -163,7 +163,7 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
         // Triggered by the containing type being aggregate, regardless of instance kind
         if (fieldRef.Instance != null
             && fieldRef.Instance.Type is INamedTypeSymbol aggContaining
-            && EmitContext.IsAggregateType(aggContaining))
+            && EmitPolicy.IsAggregateType(aggContaining))
         {
             var layout = _ctx.GetAggregateLayout(aggContaining);
             if (layout.TryGetIndex(fieldRef.Field, out var elemIndex))
@@ -172,7 +172,7 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
                 var getVal = ExternCall(ExternResolver.BuildArrayGetSignature("SystemObjectArray", "SystemObject"),
                     new List<CLeaf> { arrExpr, Const(elemIndex, "SystemInt32") }, "SystemObject");
                 // A struct-typed element read AS A VALUE is copied (value semantics); scalar elements are immutable boxes.
-                return fieldRef.Field.Type is INamedTypeSymbol elemAgg && EmitContext.IsAggregateType(elemAgg)
+                return fieldRef.Field.Type is INamedTypeSymbol elemAgg && EmitPolicy.IsAggregateType(elemAgg)
                     ? EmitDeepCloneAggregate(getVal, elemAgg) : getVal;
             }
             throw new System.NotSupportedException(
@@ -181,7 +181,7 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
 
         // this.field → direct variable name → LoadField (struct-typed field copied on value read)
         if (fieldRef.Instance is IInstanceReferenceOperation)
-            return fieldRef.Field.Type is INamedTypeSymbol thisFieldAgg && EmitContext.IsAggregateType(thisFieldAgg)
+            return fieldRef.Field.Type is INamedTypeSymbol thisFieldAgg && EmitPolicy.IsAggregateType(thisFieldAgg)
                 ? EmitDeepCloneAggregate(LoadField(fieldRef.Field.Name, "SystemObjectArray"), thisFieldAgg)
                 : LoadField(fieldRef.Field.Name, GetUdonType(fieldRef.Field.Type));
         // cross-behaviour field → GetProgramVariable
@@ -255,7 +255,7 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
     // A delegate proper, or one reachable through an array element / tuple element / user-struct field —
     // the "delegate-carrying" shape. Resolves each level through the type-param map so a monomorphized
     // generic T (e.g. Func<object>[]) is classified as the concrete type it becomes. Mirrors
-    // EmitContext.ContainsDelegateType but with type-param resolution (the [NetworkCallable] guard's
+    // EmitPolicy.ContainsDelegateType but with type-param resolution (the [NetworkCallable] guard's
     // source shows concrete field types, so it needs no resolution; the conversion site can see a raw T).
     static bool StructurallyContainsDelegate(ITypeSymbol t,
         IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeParamMap,
@@ -265,7 +265,7 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
         if (t == null) return false;
         if (t is INamedTypeSymbol n && n.DelegateInvokeMethod != null) return true;
         if (t is IArrayTypeSymbol a) return StructurallyContainsDelegate(a.ElementType, typeParamMap, visited);
-        if (t is INamedTypeSymbol agg && EmitContext.IsAggregateType(agg) && visited.Add(agg))
+        if (t is INamedTypeSymbol agg && EmitPolicy.IsAggregateType(agg) && visited.Add(agg))
             foreach (var m in agg.GetMembers())
                 if (m is IFieldSymbol f && !f.IsStatic
                     && StructurallyContainsDelegate(f.Type, typeParamMap, visited))
@@ -460,9 +460,9 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
         // `int? -> byte` conversion (nullable SOURCE, BARE byte dest) wrapped by an outer byte->byte?. Accept a
         // bare numeric dest too, so the narrow+rebox below still runs — otherwise the boxed int falls through to
         // the identity passthrough and a later `.Value`'s strict ToInt32(SystemByte) InvalidCasts on the boxed int.
-        var liftedDstU = EmitContext.IsNullableT(conv.Type, out var dstNblU) ? dstNblU : conv.Type;
+        var liftedDstU = EmitPolicy.IsNullableT(conv.Type, out var dstNblU) ? dstNblU : conv.Type;
         if (conv.Conversion.IsNullable
-            && EmitContext.IsNullableT(conv.Operand.Type, out var liftedSrcU)
+            && EmitPolicy.IsNullableT(conv.Operand.Type, out var liftedSrcU)
             && ExternResolver.IsNumericType(liftedSrcU) && liftedDstU != null && ExternResolver.IsNumericType(liftedDstU)
             && !SymbolEqualityComparer.Default.Equals(liftedSrcU, liftedDstU)
             && ExternResolver.GetConvertMethodName(liftedDstU) is { } liftedDstMethod)
@@ -501,7 +501,7 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
         // nullable's SystemObject slot with the right tag, so a later `.Value`'s strict small-int extern reads it.
         if (conv.Conversion.IsNullable
             && conv.Operand.Type != null && ExternResolver.IsNumericType(conv.Operand.Type)
-            && EmitContext.IsNullableT(conv.Type, out var bareDstU) && ExternResolver.IsNumericType(bareDstU)
+            && EmitPolicy.IsNullableT(conv.Type, out var bareDstU) && ExternResolver.IsNumericType(bareDstU)
             && !SymbolEqualityComparer.Default.Equals(conv.Operand.Type, bareDstU))
         {
             return EmitNarrowingConvert(srcVal, GetUdonType(conv.Operand.Type), GetUdonType(bareDstU));
@@ -558,7 +558,7 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
         {
             // A user STRUCT conversion operator is an emitted method, not an extern: route to it (its containing
             // type is SystemObjectArray-backed, so ResolveConversionExtern would build a non-existent extern).
-            if (conv.OperatorMethod.ContainingType is INamedTypeSymbol convOpCt && EmitContext.IsUserStruct(convOpCt))
+            if (conv.OperatorMethod.ContainingType is INamedTypeSymbol convOpCt && EmitPolicy.IsUserStruct(convOpCt))
                 return EmitCallToMethod(ResolveStructMember(conv.OperatorMethod), new List<CLeaf> { srcVal });
 
             var dstType = GetUdonType(conv.Type);
@@ -613,7 +613,7 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
         // access on the default does not NRE. ResolveType is required for `default(T)` inside a generic method
         // where T is a struct type arg: defaultVal.Type is then the open type parameter, which a directly-named
         // INamedTypeSymbol check would miss — leaving the default as null and crashing on the first field read.
-        if (ResolveType(defaultVal.Type) is INamedTypeSymbol aggDef && EmitContext.IsAggregateType(aggDef))
+        if (ResolveType(defaultVal.Type) is INamedTypeSymbol aggDef && EmitPolicy.IsAggregateType(aggDef))
             return EmitNewAggregate(aggDef);
 
         var dvType = GetUdonType(defaultVal.Type);

@@ -23,7 +23,7 @@ public class ArrayHandler : HandlerBase, IExpressionHandler
         var arrayType = GetUdonType(op.Type);
         var elementType = GetArrayElemType((IArrayTypeSymbol)op.Type);
         var elemSym = ((IArrayTypeSymbol)op.Type).ElementType;
-        bool aggElem = elemSym is INamedTypeSymbol && EmitContext.IsAggregateType(elemSym);
+        bool aggElem = elemSym is INamedTypeSymbol && EmitPolicy.IsAggregateType(elemSym);
 
         var sizeVal = VisitExpression(op.DimensionSizes[0]);
         var arrSlot = _ctx.AllocTemp(arrayType);
@@ -80,7 +80,7 @@ public class ArrayHandler : HandlerBase, IExpressionHandler
         var resultVal = ExternCall(ExternResolver.BuildArrayGetSignature(arrayType, elementType), new List<CLeaf> { arrayVal, indexVal }, GetUdonType(op.Type));
         // A struct/tuple element read AS A VALUE is copied (value semantics). Receiver access (arr[i].x =)
         // goes through LoadInstanceRaw → ReadArrayElementRaw, which does NOT clone.
-        return op.Type is INamedTypeSymbol elemAggT && EmitContext.IsAggregateType(elemAggT)
+        return op.Type is INamedTypeSymbol elemAggT && EmitPolicy.IsAggregateType(elemAggT)
             ? EmitDeepCloneAggregate(resultVal, elemAggT) : resultVal;
     }
 

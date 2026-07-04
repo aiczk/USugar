@@ -55,7 +55,7 @@ public abstract class AssignmentHandlerBase : HandlerBase
             // (possibly side-effecting) index args ONCE, then read via the getter with the receiver as param0.
             // The same receiver/args are reused by the setter in EmitWriteBack. Mirrors VisitIndexerGet.
             case IPropertyReferenceOperation { Property: { IsIndexer: true } } sIdxRef
-                when sIdxRef.Instance?.Type is INamedTypeSymbol sIdxType && EmitContext.IsAggregateType(sIdxType)
+                when sIdxRef.Instance?.Type is INamedTypeSymbol sIdxType && EmitPolicy.IsAggregateType(sIdxType)
                 && sIdxRef.Property.GetMethod is { } sIdxGetterRaw:
             {
                 var recv = LoadInstanceRaw(sIdxRef.Instance);
@@ -103,7 +103,7 @@ public abstract class AssignmentHandlerBase : HandlerBase
             // with the receiver as param0 (struct-typed results deep-clone, value semantics).
             case IPropertyReferenceOperation { Property: { IsIndexer: false } } aggCapPropRef
                 when aggCapPropRef.Instance?.Type is INamedTypeSymbol aggCapPropType
-                && EmitContext.IsAggregateType(aggCapPropType):
+                && EmitPolicy.IsAggregateType(aggCapPropType):
             {
                 if (_ctx.GetAggregateLayout(aggCapPropType).TryGetIndex(aggCapPropRef.Property.Name, out var capSlotIdx))
                 {
@@ -111,7 +111,7 @@ public abstract class AssignmentHandlerBase : HandlerBase
                     var slotIdxVal = Const(capSlotIdx, "SystemInt32");
                     CLeaf slotVal = ExternCall(ExternResolver.BuildArrayGetSignature("SystemObjectArray", "SystemObject"),
                         new List<CLeaf> { recv, slotIdxVal }, "SystemObject");
-                    if (aggCapPropRef.Property.Type is INamedTypeSymbol capSlotAgg && EmitContext.IsAggregateType(capSlotAgg))
+                    if (aggCapPropRef.Property.Type is INamedTypeSymbol capSlotAgg && EmitPolicy.IsAggregateType(capSlotAgg))
                         slotVal = EmitDeepCloneAggregate(slotVal, capSlotAgg);
                     return new LValueCapture { Value = slotVal, ArrayVal = recv, IndexVal = slotIdxVal };
                 }
@@ -119,7 +119,7 @@ public abstract class AssignmentHandlerBase : HandlerBase
                 {
                     var recv = LoadInstanceRaw(aggCapPropRef.Instance);
                     CLeaf getVal = EmitCallToMethod(ResolveStructMember(capGetterRaw), new List<CLeaf> { recv });
-                    if (aggCapPropRef.Property.Type is INamedTypeSymbol capGetAgg && EmitContext.IsAggregateType(capGetAgg))
+                    if (aggCapPropRef.Property.Type is INamedTypeSymbol capGetAgg && EmitPolicy.IsAggregateType(capGetAgg))
                         getVal = EmitDeepCloneAggregate(getVal, capGetAgg);
                     return new LValueCapture { Value = getVal, ArrayVal = recv };
                 }
@@ -128,7 +128,7 @@ public abstract class AssignmentHandlerBase : HandlerBase
             case IFieldReferenceOperation aggFieldRef
                 when aggFieldRef.Instance != null
                 && aggFieldRef.Instance.Type is INamedTypeSymbol aggCapType
-                && EmitContext.IsAggregateType(aggCapType):
+                && EmitPolicy.IsAggregateType(aggCapType):
             {
                 var layout = _ctx.GetAggregateLayout(aggCapType);
                 if (layout.TryGetIndex(aggFieldRef.Field, out var elemIdx))
@@ -212,7 +212,7 @@ public abstract class AssignmentHandlerBase : HandlerBase
             case IFieldReferenceOperation aggFieldRef
                 when aggFieldRef.Instance != null
                 && aggFieldRef.Instance.Type is INamedTypeSymbol aggWbType
-                && EmitContext.IsAggregateType(aggWbType):
+                && EmitPolicy.IsAggregateType(aggWbType):
             {
                 var layout = _ctx.GetAggregateLayout(aggWbType);
                 if (layout.TryGetIndex(aggFieldRef.Field, out var elemIdx))
@@ -340,7 +340,7 @@ public abstract class AssignmentHandlerBase : HandlerBase
             // which routes through CaptureLValue + EmitWriteBack. Auto-property → write the backing-field
             // slot by layout index; computed (non-auto) → call the user setter with the receiver as param0.
             case IPropertyReferenceOperation { Property: { IsIndexer: false } } aggPropRef
-                when aggPropRef.Instance?.Type is INamedTypeSymbol aggPropType && EmitContext.IsAggregateType(aggPropType):
+                when aggPropRef.Instance?.Type is INamedTypeSymbol aggPropType && EmitPolicy.IsAggregateType(aggPropType):
             {
                 if (_ctx.GetAggregateLayout(aggPropType).TryGetIndex(aggPropRef.Property.Name, out var propIdx))
                 {
@@ -363,7 +363,7 @@ public abstract class AssignmentHandlerBase : HandlerBase
             // the struct receiver (object[]) as param0, the index args, then the value. Reuse the receiver/args
             // cached by CaptureLValue (compound assignment); without this it falls to a bogus __set_Item extern.
             case IPropertyReferenceOperation { Property: { IsIndexer: true, SetMethod: { } aggIdxSetter } } aggIdxRef
-                when aggIdxRef.Instance?.Type is INamedTypeSymbol aggIdxType && EmitContext.IsAggregateType(aggIdxType)
+                when aggIdxRef.Instance?.Type is INamedTypeSymbol aggIdxType && EmitPolicy.IsAggregateType(aggIdxType)
                 && _methodFunctions.ContainsKey(aggIdxSetter):
             {
                 var setterArgs = new List<CLeaf> { lv.ArrayVal ?? LoadInstanceRaw(aggIdxRef.Instance) };

@@ -16,6 +16,9 @@
     <Compile Include="../../Editor/Compiler/Emit/DelegateProtocol.cs" />
     <Compile Include="../../Editor/Compiler/Emit/EmitDiagnostic.cs" />
     <Compile Include="../../Editor/Compiler/Emit/EmitContext.cs" />
+    <Compile Include="../../Editor/Compiler/Emit/EmitPolicy.cs" />
+    <Compile Include="../../Editor/Compiler/Emit/RecursionInfo.cs" />
+    <Compile Include="../../Editor/Compiler/Emit/AggregateLayout.cs" />
     <Compile Include="../../Editor/Compiler/Emit/EnvEmit.cs" />
     <Compile Include="../../Editor/Compiler/Emit/TailCallAnalysis.cs" />
     <Compile Include="../../Editor/Compiler/Emit/Analysis/LambdaCaptureAnalyzer.cs" />

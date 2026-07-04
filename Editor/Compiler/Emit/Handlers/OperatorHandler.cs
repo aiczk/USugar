@@ -42,7 +42,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
 
         // ── User-defined struct operator: v1 + v2 → static operator method call ──
         if (op.OperatorMethod is { MethodKind: MethodKind.UserDefinedOperator } binOpM
-            && binOpM.ContainingType is INamedTypeSymbol binOpCt && EmitContext.IsUserStruct(binOpCt))
+            && binOpM.ContainingType is INamedTypeSymbol binOpCt && EmitPolicy.IsUserStruct(binOpCt))
         {
             var lhs = VisitExpression(op.LeftOperand);
             var rhs = VisitExpression(op.RightOperand);
@@ -99,8 +99,8 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
         // ── Nullable (boxed object) compared to null literal → object reference null check ──
         if (op.OperatorKind is BinaryOperatorKind.Equals or BinaryOperatorKind.NotEquals)
         {
-            bool leftNullable = EmitContext.IsNullableT(op.LeftOperand.Type, out _);
-            bool rightNullable = EmitContext.IsNullableT(op.RightOperand.Type, out _);
+            bool leftNullable = EmitPolicy.IsNullableT(op.LeftOperand.Type, out _);
+            bool rightNullable = EmitPolicy.IsNullableT(op.RightOperand.Type, out _);
             bool leftNull = IsNullLiteral(op.LeftOperand);
             bool rightNull = IsNullLiteral(op.RightOperand);
             if ((leftNullable && rightNull) || (rightNullable && leftNull))
@@ -115,21 +115,21 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
 
         // ── Nullable bool & / | : C# three-valued logic (false & null = false, true | null = true) ──
         if (op.IsLifted && (op.OperatorKind is BinaryOperatorKind.And or BinaryOperatorKind.Or)
-            && EmitContext.IsNullableT(op.Type, out var boolUnder) && boolUnder.SpecialType == SpecialType.System_Boolean)
+            && EmitPolicy.IsNullableT(op.Type, out var boolUnder) && boolUnder.SpecialType == SpecialType.System_Boolean)
         {
             return EmitLiftedBoolLogic(op);
         }
 
         // ── Lifted operator on Nullable<T> (null propagation) ──
         if (op.IsLifted
-            && (EmitContext.IsNullableT(op.LeftOperand.Type, out _) || EmitContext.IsNullableT(op.RightOperand.Type, out _)))
+            && (EmitPolicy.IsNullableT(op.LeftOperand.Type, out _) || EmitPolicy.IsNullableT(op.RightOperand.Type, out _)))
         {
             return EmitLiftedBinary(op);
         }
 
         // ── Aggregate (tuple) structural equality ──
         if (op.OperatorKind is BinaryOperatorKind.Equals or BinaryOperatorKind.NotEquals
-            && EmitContext.IsAggregateType(op.LeftOperand.Type)
+            && EmitPolicy.IsAggregateType(op.LeftOperand.Type)
             && op.LeftOperand.Type is INamedTypeSymbol aggType)
         {
             return EmitAggregateEquality(op, aggType);
@@ -139,7 +139,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
         if (op.ConstantValue.HasValue)
         {
             var constType = GetUdonType(op.Type);
-            return Const(EmitContext.ParseConstValue(constType, ToInvariantString(op.ConstantValue.Value)), constType);
+            return Const(EmitPolicy.ParseConstValue(constType, ToInvariantString(op.ConstantValue.Value)), constType);
         }
 
         var leftVal = VisitExpression(op.LeftOperand);
@@ -229,8 +229,8 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
     // Lifted binary operator on Nullable<T> (null propagation) — see HandlerBase.EmitLiftedBinaryCore.
     CLeaf EmitLiftedBinary(IBinaryOperation op)
     {
-        var leftNullable = EmitContext.IsNullableT(op.LeftOperand.Type, out var lu);
-        var rightNullable = EmitContext.IsNullableT(op.RightOperand.Type, out var ru);
+        var leftNullable = EmitPolicy.IsNullableT(op.LeftOperand.Type, out var lu);
+        var rightNullable = EmitPolicy.IsNullableT(op.RightOperand.Type, out var ru);
         var leftVal = VisitExpression(op.LeftOperand);
         var rightVal = VisitExpression(op.RightOperand);
         return EmitLiftedBinaryCore(
@@ -281,7 +281,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
         // type and throws "Bitwise NOT not supported on SystemObjectArray". Only fires for a user operator
         // (a built-in lifted ~ has OperatorMethod null → falls through to the BitwiseNegation handling). ──
         if (op.OperatorMethod is { MethodKind: MethodKind.UserDefinedOperator } unOpM
-            && unOpM.ContainingType is INamedTypeSymbol unOpCt && EmitContext.IsUserStruct(unOpCt))
+            && unOpM.ContainingType is INamedTypeSymbol unOpCt && EmitPolicy.IsUserStruct(unOpCt))
         {
             var operand = VisitExpression(op.Operand);
             return EmitCallToMethod(ResolveStructMember(unOpM), new List<CLeaf> { operand });
@@ -292,7 +292,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
         {
             // Lifted ~ on Nullable<T> null-propagates; route it through EmitLiftedUnary before the non-lifted
             // path, whose extern would be built on the Nullable operand type (SystemObject) and throw.
-            if (op.IsLifted && EmitContext.IsNullableT(op.Type, out var bnResU))
+            if (op.IsLifted && EmitPolicy.IsNullableT(op.Type, out var bnResU))
                 return EmitLiftedUnary(op, bnResU);
             return VisitBitwiseNot(op);
         }
@@ -301,12 +301,12 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
         if (op.ConstantValue.HasValue)
         {
             var constType = GetUdonType(op.Type);
-            return Const(EmitContext.ParseConstValue(constType, ToInvariantString(op.ConstantValue.Value)), constType);
+            return Const(EmitPolicy.ParseConstValue(constType, ToInvariantString(op.ConstantValue.Value)), constType);
         }
 
         // Lifted unary on Nullable<T> (null propagation): null stays null, else apply the op to the unwrapped
         // value. The non-lifted path below would build an invalid extern on the Nullable operand type.
-        if (op.IsLifted && EmitContext.IsNullableT(op.Type, out var unaryResU))
+        if (op.IsLifted && EmitPolicy.IsNullableT(op.Type, out var unaryResU))
             return EmitLiftedUnary(op, unaryResU);
 
         var operandVal = VisitExpression(op.Operand);
@@ -326,7 +326,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
     // result is re-boxed into the SystemObject nullable slot. (Lifted bitwise ~ is not covered here.)
     CLeaf EmitLiftedUnary(IUnaryOperation op, ITypeSymbol resUnderlying)
     {
-        EmitContext.IsNullableT(op.Operand.Type, out var opUnderlying);
+        EmitPolicy.IsNullableT(op.Operand.Type, out var opUnderlying);
         var resU = GetUdonType(resUnderlying);
 
         // Lifted bitwise NOT: ~x ≡ x ^ allBits — reuse the lifted-binary machinery (promotion / narrowing /
@@ -336,7 +336,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
             object allBitsValue = resUnderlying.SpecialType switch
             {
                 SpecialType.System_Int32 or SpecialType.System_Int16 or SpecialType.System_Int64
-                    or SpecialType.System_SByte => EmitContext.ParseConstValue(resU, "-1"),
+                    or SpecialType.System_SByte => EmitPolicy.ParseConstValue(resU, "-1"),
                 SpecialType.System_UInt32 => uint.MaxValue,
                 SpecialType.System_UInt64 => ulong.MaxValue,
                 SpecialType.System_UInt16 => ushort.MaxValue,
@@ -398,7 +398,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
         // int/uint/long/ulong have native ops: ~x ≡ x ^ allBits (signed: -1 = all bits set, unsigned: MaxValue).
         object allBitsValue = effSpecial switch
         {
-            SpecialType.System_Int32 or SpecialType.System_Int64 => EmitContext.ParseConstValue(operandType, "-1"),
+            SpecialType.System_Int32 or SpecialType.System_Int64 => EmitPolicy.ParseConstValue(operandType, "-1"),
             SpecialType.System_UInt32 => uint.MaxValue,
             SpecialType.System_UInt64 => ulong.MaxValue,
             _ => throw new System.NotSupportedException(
@@ -436,7 +436,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
     {
         // Nullable<T> scrutinee (boxed object): `x is null` is an object null check; any other pattern
         // requires HasValue, then matches against the unboxed underlying value (Udon unboxes transparently).
-        if (EmitContext.IsNullableT(valueType, out var patUnderlying))
+        if (EmitPolicy.IsNullableT(valueType, out var patUnderlying))
         {
             var nSlot = _ctx.AllocTemp("SystemObject");
             EmitAssign(nSlot, valueVal);
@@ -587,7 +587,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
             {
                 // Positional/deconstruction pattern — tuple-typed only (reuse the aggregate object[]
                 // machinery; user-defined Deconstruct is out of scope).
-                if (valueType is not INamedTypeSymbol aggType || !EmitContext.IsAggregateType(valueType))
+                if (valueType is not INamedTypeSymbol aggType || !EmitPolicy.IsAggregateType(valueType))
                     throw new System.NotSupportedException(
                         "Positional pattern is only supported on tuple types (user Deconstruct is not supported).");
                 var layout = _ctx.GetAggregateLayout(aggType);
@@ -662,7 +662,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
                     // For a user struct / tuple scrutinee, members live as object[] indices — there is no Udon
                     // property getter (SystemObjectArray.__get_X does not exist) — so read via the layout __Get.
                     var aggMatchType = matchType as INamedTypeSymbol;
-                    bool isAgg = aggMatchType != null && EmitContext.IsAggregateType(aggMatchType);
+                    bool isAgg = aggMatchType != null && EmitPolicy.IsAggregateType(aggMatchType);
                     foreach (var sub in rec.PropertySubpatterns)
                     {
                         ITypeSymbol memberType;
@@ -692,7 +692,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
                             memberVal = SlotRef(memberSlot);
                         }
                         else if (isAgg && sub.Member is IPropertyReferenceOperation cpr
-                            && EmitContext.IsUserStruct(aggMatchType) && cpr.Property.GetMethod is { } cgetter)
+                            && EmitPolicy.IsUserStruct(aggMatchType) && cpr.Property.GetMethod is { } cgetter)
                         {
                             // Computed user-struct property (no object[] storage slot): JUMP to its registered
                             // getter with the struct as the receiver, not a non-existent SystemObjectArray.__get_X
@@ -760,7 +760,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
         var resultSlot = _ctx.AllocTemp(resultType);
         // Initialize result to default in case no arm matches (non-exhaustive)
         EmitAssign(resultSlot, Const(
-            EmitContext.ParseConstValue(resultType, GetDefaultConstValue(resultType)), resultType));
+            EmitPolicy.ParseConstValue(resultType, GetDefaultConstValue(resultType)), resultType));
         var valueVal = VisitExpression(op.Value);
 
         // Separate default arm from pattern arms to build proper if/else-if/else chain

@@ -18,37 +18,37 @@ public partial class InvocationHandler
 
         // Nullable<T> (boxed-object emulation): HasValue → null check; Value → the boxed value itself
         // (Udon unboxes transparently when the result is used as the underlying type).
-        if (op.Instance != null && EmitContext.IsNullableT(op.Property.ContainingType, out var nblUnder))
+        if (op.Instance != null && EmitPolicy.IsNullableT(op.Property.ContainingType, out var nblUnder))
         {
             var nv = VisitExpression(op.Instance);
             if (op.Property.Name == "HasValue") return EmitNullableHasValue(nv);
             // Value of a nullable AGGREGATE (e.g. (int,int)? / V?) copies the struct out (value semantics).
             if (op.Property.Name == "Value")
-                return nblUnder is INamedTypeSymbol nblAgg && EmitContext.IsAggregateType(nblAgg)
+                return nblUnder is INamedTypeSymbol nblAgg && EmitPolicy.IsAggregateType(nblAgg)
                     ? EmitDeepCloneAggregate(nv, nblAgg) : nv;
         }
 
         // Auto-property on an aggregate (struct/tuple) → object[] element (the backing field's slot).
-        if (op.Instance != null && op.Instance.Type is INamedTypeSymbol aggProp && EmitContext.IsAggregateType(aggProp)
+        if (op.Instance != null && op.Instance.Type is INamedTypeSymbol aggProp && EmitPolicy.IsAggregateType(aggProp)
             && _ctx.GetAggregateLayout(aggProp).TryGetIndex(op.Property.Name, out var aggPropIdx))
         {
             var arrExpr = LoadInstanceRaw(op.Instance);
             var getVal = ExternCall(ExternResolver.BuildArrayGetSignature("SystemObjectArray", "SystemObject"),
                 new List<CLeaf> { arrExpr, Const(aggPropIdx, "SystemInt32") }, "SystemObject");
             // A struct-typed property returns a COPY (C# getters return by value; you cannot mutate through it).
-            return op.Property.Type is INamedTypeSymbol propAgg && EmitContext.IsAggregateType(propAgg)
+            return op.Property.Type is INamedTypeSymbol propAgg && EmitPolicy.IsAggregateType(propAgg)
                 ? EmitDeepCloneAggregate(getVal, propAgg) : getVal;
         }
 
         // Computed (non-auto) property on an aggregate (struct): no backing-field slot, so inline-call the
         // user getter with the receiver object[] as synthetic param0 (same convention as EmitStructInstanceCall).
         // The getter only reads, so the receiver is passed uncloned.
-        if (op.Instance != null && op.Instance.Type is INamedTypeSymbol aggGet && EmitContext.IsAggregateType(aggGet)
+        if (op.Instance != null && op.Instance.Type is INamedTypeSymbol aggGet && EmitPolicy.IsAggregateType(aggGet)
             && op.Property.GetMethod is { } aggGetterRaw)
         {
             var ret = EmitCallToMethod(ResolveStructMember(aggGetterRaw),
                 new List<CLeaf> { LoadInstanceRaw(op.Instance) });
-            return op.Property.Type is INamedTypeSymbol getRetAgg && EmitContext.IsAggregateType(getRetAgg)
+            return op.Property.Type is INamedTypeSymbol getRetAgg && EmitPolicy.IsAggregateType(getRetAgg)
                 ? EmitDeepCloneAggregate(ret, getRetAgg) : ret;
         }
 
@@ -65,7 +65,7 @@ public partial class InvocationHandler
                 && _methodFunctions.ContainsKey(thisProp.GetMethod))
             {
                 var gv = EmitCallToMethod(thisProp.GetMethod, new List<CLeaf>());
-                return thisProp.Type is INamedTypeSymbol thisGetAgg && EmitContext.IsAggregateType(thisGetAgg)
+                return thisProp.Type is INamedTypeSymbol thisGetAgg && EmitPolicy.IsAggregateType(thisGetAgg)
                     ? EmitDeepCloneAggregate(gv, thisGetAgg) : gv;
             }
 
@@ -76,7 +76,7 @@ public partial class InvocationHandler
                 && thisProp.ContainingType.Name != "UdonSharpBehaviour")
             {
                 var bv = LoadField(thisProp.Name, GetUdonType(thisProp.Type));
-                return thisProp.Type is INamedTypeSymbol thisAutoAgg && EmitContext.IsAggregateType(thisAutoAgg)
+                return thisProp.Type is INamedTypeSymbol thisAutoAgg && EmitPolicy.IsAggregateType(thisAutoAgg)
                     ? EmitDeepCloneAggregate(bv, thisAutoAgg) : bv;
             }
 
@@ -122,7 +122,7 @@ public partial class InvocationHandler
                 // spec on demand; an already-closed getter (a class-body call site) is returned unchanged
                 // and was pre-registered by the collection layer.
                 var sgv = EmitCallToMethod(ResolveStructMember(sPropGetter), new List<CLeaf>());
-                return op.Property.Type is INamedTypeSymbol sgAgg && EmitContext.IsAggregateType(sgAgg)
+                return op.Property.Type is INamedTypeSymbol sgAgg && EmitPolicy.IsAggregateType(sgAgg)
                     ? EmitDeepCloneAggregate(sgv, sgAgg) : sgv;
             }
 
@@ -239,7 +239,7 @@ public partial class InvocationHandler
         // the struct arm below, which passes LoadInstanceRaw(this) = the receiver param — mirroring how
         // a struct's `this.Method()` self-call routes through EmitStructInstanceCall (struct-first).
         if (op.Instance is IInstanceReferenceOperation
-            && !EmitContext.IsAggregateType(op.Property.ContainingType)
+            && !EmitPolicy.IsAggregateType(op.Property.ContainingType)
             && ResolveDispatchProperty(op) is { GetMethod: { } idxDispatchGetter }
             && _methodFunctions.ContainsKey(idxDispatchGetter))
         {
@@ -251,13 +251,13 @@ public partial class InvocationHandler
         // User-defined indexer on a user STRUCT instance (`s[i]`) → call the getter with the struct receiver
         // (object[]) as param0 plus the index args, like a struct computed property. Without this it falls to
         // a bogus SystemObjectArray.__get_Item extern the validator rejects. (diff-fuzz wave 4)
-        if (op.Instance != null && op.Instance.Type is INamedTypeSymbol aggIdx && EmitContext.IsAggregateType(aggIdx)
+        if (op.Instance != null && op.Instance.Type is INamedTypeSymbol aggIdx && EmitPolicy.IsAggregateType(aggIdx)
             && op.Property.GetMethod is { } idxGetterRaw)
         {
             var sargs = new List<CLeaf> { LoadInstanceRaw(op.Instance) };
             sargs.AddRange(EvaluateIndexerArgs(op)); // wave-9 round-4: named index args bind by ordinal
             var ret = EmitCallToMethod(ResolveStructMember(idxGetterRaw), sargs);
-            return op.Property.Type is INamedTypeSymbol idxRetAgg && EmitContext.IsAggregateType(idxRetAgg)
+            return op.Property.Type is INamedTypeSymbol idxRetAgg && EmitPolicy.IsAggregateType(idxRetAgg)
                 ? EmitDeepCloneAggregate(ret, idxRetAgg) : ret;
         }
 
@@ -474,7 +474,7 @@ public partial class InvocationHandler
         // must allocate + default-init a fresh object[]; the local-declaration path already does this, but
         // other contexts reach here. SDK value types fall through to the null placeholder.
         if (op.Arguments.Length == 0 && op.Type.IsValueType && op.Initializer == null)
-            return op.Type is INamedTypeSymbol structTy && EmitContext.IsAggregateType(structTy)
+            return op.Type is INamedTypeSymbol structTy && EmitPolicy.IsAggregateType(structTy)
                 ? EmitNewAggregate(structTy)
                 : Const(null, resultType);
 
@@ -493,7 +493,7 @@ public partial class InvocationHandler
         // path. The extern-ctor fallback below is only for SDK value types (Vector3, …) — for a user struct it
         // would emit a bogus SystemObjectArray.__ctor__<args>__ extern that the validator rejects. (diff-fuzz w3)
         if (op.Type.IsValueType && op.Arguments.Length > 0
-            && op.Type is INamedTypeSymbol userStruct && EmitContext.IsUserStruct(userStruct)
+            && op.Type is INamedTypeSymbol userStruct && EmitPolicy.IsUserStruct(userStruct)
             && op.Constructor != null)
         {
             var layout = _ctx.GetAggregateLayout(userStruct);
@@ -516,7 +516,7 @@ public partial class InvocationHandler
         // layout-INDEX writes. The generic fallback below assumes a native per-field setter extern (SDK
         // value types like Vector3), which object[]-emulated aggregates don't have (roadmap B41).
         if (op.Arguments.Length == 0 && op.Type.IsValueType && op.Initializer != null
-            && op.Type is INamedTypeSymbol aggInitType && EmitContext.IsAggregateType(aggInitType))
+            && op.Type is INamedTypeSymbol aggInitType && EmitPolicy.IsAggregateType(aggInitType))
         {
             var aggVal = EmitNewAggregate(aggInitType);
             EmitAggregateObjectInitializer(aggVal, aggInitType, op.Initializer);

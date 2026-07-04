@@ -438,8 +438,8 @@ public class StatementHandler : HandlerBase, IOperationHandler
     /// Dispose method (collected in CollectStructMethodsInOperation). Real Udon disposables keep the extern.</summary>
     void EmitDispose(CLeaf val, ITypeSymbol type)
     {
-        if (type is INamedTypeSymbol nt && EmitContext.IsUserStruct(nt)
-            && EmitContext.FindStructDisposeMethod(nt) is { } dispose)
+        if (type is INamedTypeSymbol nt && EmitPolicy.IsUserStruct(nt)
+            && EmitPolicy.FindStructDisposeMethod(nt) is { } dispose)
         {
             EmitCallToMethod(ResolveStructMember(dispose), new List<CLeaf> { val });
             return;
@@ -476,7 +476,7 @@ public class StatementHandler : HandlerBase, IOperationHandler
                 {
                     EnvEmit.Write(_builder, _ctx, local, VisitExpression(envInit.Value));
                 }
-                else if (local.Type is INamedTypeSymbol envAggT && EmitContext.IsAggregateType(envAggT))
+                else if (local.Type is INamedTypeSymbol envAggT && EmitPolicy.IsAggregateType(envAggT))
                 {
                     var envAggLayout = _ctx.GetAggregateLayout(envAggT);
                     // DefaultInitAggregate operates on a heap FIELD — stage through a synthetic one.
@@ -491,7 +491,7 @@ public class StatementHandler : HandlerBase, IOperationHandler
             }
 
             // Aggregate-typed local (tuple / user-defined struct) → object[] emulation
-            if (local.Type is INamedTypeSymbol namedType && EmitContext.IsAggregateType(namedType))
+            if (local.Type is INamedTypeSymbol namedType && EmitPolicy.IsAggregateType(namedType))
             {
                 VisitAggregateLocalDeclaration(local, namedType, declarator.Initializer);
                 continue;
@@ -559,7 +559,7 @@ public class StatementHandler : HandlerBase, IOperationHandler
             DefaultInitAggregate(localId, layout);
         }
         else if (value is IObjectCreationOperation ocCtor && ocCtor.Arguments.Length > 0
-                 && EmitContext.IsUserStruct(aggregateType) && ocCtor.Constructor != null
+                 && EmitPolicy.IsUserStruct(aggregateType) && ocCtor.Constructor != null
                  && _methodFunctions.ContainsKey(ocCtor.Constructor))
         {
             // new V(args): default-init the already-allocated array, then run the registered ctor

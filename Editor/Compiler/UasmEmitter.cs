@@ -292,7 +292,7 @@ public class UasmEmitter
             // zeroed struct. In the object[] emulation that requires a fresh default array; without it the heap
             // var stays null and `f.x = …` faults (NRE on __Set__). Reference-type/array fields stay null (correct).
             if (syntaxRef?.GetSyntax() is not VariableDeclaratorSyntax { Initializer: not null }
-                && member.Type is INamedTypeSymbol aggFieldType && EmitContext.IsAggregateType(aggFieldType))
+                && member.Type is INamedTypeSymbol aggFieldType && EmitPolicy.IsAggregateType(aggFieldType))
             {
                 _ctx.AggregateFieldDefaults.Add((member.Name, aggFieldType));
             }
@@ -598,9 +598,9 @@ public class UasmEmitter
         // path (ExpressionHandler.VisitFieldReference), byte-invariant — must stay storage-free exactly
         // as before this feature.
         if (initOp != null && initOp.ConstantValue.HasValue && initOp.ConstantValue.Value != null) return false;
-        if (initOp != null && EmitContext.TryGetConstFieldInitializer(_compilation, member, out _)) return false;
+        if (initOp != null && EmitPolicy.TryGetConstFieldInitializer(_compilation, member, out _)) return false;
 
-        if (initOp != null && !EmitContext.IsPureStaticReadonlyInitializer(initOp))
+        if (initOp != null && !EmitPolicy.IsPureStaticReadonlyInitializer(initOp))
             throw new NotSupportedException(
                 $"a static readonly initializer must be pure (composed of constants and value construction); "
                 + $"'{member.Name}' calls a method or reads mutable state, which would run once per behaviour "
@@ -629,7 +629,7 @@ public class UasmEmitter
         }
         _ctx.DeclareField(member.Name, udonType, FieldFlags.None, constValue);
 
-        if (initOp == null && member.Type is INamedTypeSymbol aggFieldType && EmitContext.IsAggregateType(aggFieldType))
+        if (initOp == null && member.Type is INamedTypeSymbol aggFieldType && EmitPolicy.IsAggregateType(aggFieldType))
             _ctx.AggregateFieldDefaults.Add((member.Name, aggFieldType));
 
         return true;
@@ -861,8 +861,8 @@ public class UasmEmitter
         _ctx.NextMethodIndex = 0;
         foreach (var method in methods)
         {
-            EmitContext.RejectInParameters(method); // round-7 follow-up [Q3], declaration-side
-            EmitContext.RejectNetworkCallableDelegates(method); // M4 [T1], declaration-side
+            EmitPolicy.RejectInParameters(method); // round-7 follow-up [Q3], declaration-side
+            EmitPolicy.RejectNetworkCallableDelegates(method); // M4 [T1], declaration-side
             if (method.IsGenericMethod) continue;
 
             var ml = typeLayout.Methods[method];
@@ -959,7 +959,7 @@ public class UasmEmitter
         var foreignStatics = CollectForeignStaticMethods(collectorSeeds.Concat(structMethods).ToArray());
         foreach (var fm in foreignStatics)
         {
-            EmitContext.RejectInParameters(fm); // round-7 follow-up [Q3]
+            EmitPolicy.RejectInParameters(fm); // round-7 follow-up [Q3]
             var slot = _ctx.RegisterMethod(fm, i => i.ToString());
             var idx = slot.Index;
             var funcName = $"__{idx}_{SanitizeId(fm.Name)}";
@@ -991,7 +991,7 @@ public class UasmEmitter
         // structMethods was collected above (before the foreign-static scan, which it also seeds).
         foreach (var sm in structMethods)
         {
-            EmitContext.RejectInParameters(sm); // round-7 follow-up [Q3]
+            EmitPolicy.RejectInParameters(sm); // round-7 follow-up [Q3]
 
             // Feature G: a member of a CONSTRUCTED generic struct (Box<int>.Get(), Box<int>(x), a
             // generic struct's operator, etc.) gets its own per-spec body — the containing-type
@@ -1062,7 +1062,7 @@ public class UasmEmitter
         // Register base class instance copies (collected above, before the [X5] collector seeds).
         foreach (var bm in baseInstanceMethods)
         {
-            EmitContext.RejectInParameters(bm); // round-7 follow-up [Q3]
+            EmitPolicy.RejectInParameters(bm); // round-7 follow-up [Q3]
             // Wave-9 round-8 [Y10]: an INHERITED generic method's call-site-constructed copy is the
             // de-facto specialization this path emits (EmitMethod sets the type-param map from it),
             // but it bypassed RegisterGenericSpecialization — so FirstGenericSpec never learned it
@@ -1929,7 +1929,7 @@ public class UasmEmitter
         // struct closure from referencing `this`'s members (CS1673), so it never needs the receiver;
         // indexing ParamFieldNames[0] for it read past an empty list.
         _ctx.CurrentStructReceiverParamId =
-            (method.ContainingType is INamedTypeSymbol structCt && EmitContext.IsUserStruct(structCt) && !method.IsStatic
+            (method.ContainingType is INamedTypeSymbol structCt && EmitPolicy.IsUserStruct(structCt) && !method.IsStatic
                 && method.MethodKind is not (MethodKind.LambdaMethod or MethodKind.LocalFunction))
                 ? func.ParamFieldNames[0] : null;
 
@@ -2345,7 +2345,7 @@ public class UasmEmitter
     // every function whose bridge address can be minted into a bundle (same-class method groups, local
     // functions, lambdas); every function containing a delegate dispatch gets synthetic edges m→E
     // (an indirect dispatch can start any escaped function). Cycle members' NON-TAIL dispatch sites are
-    // recorded syntax-keyed in EmitContext.ReentrantDispatchSites for the §4.3 Reentrant-flag marking;
+    // recorded syntax-keyed in EmitContext.Recursion.ReentrantDispatchSites for the §4.3 Reentrant-flag marking;
     // tail dispatch sites are spared so bundle-driven deep tail recursion never spills (§4.4).
     void BuildRecursionInfo()
     {
@@ -2549,7 +2549,7 @@ public class UasmEmitter
         }
 
         // Round-7 follow-up [Q5]: per-node this-FIELD touch sets for the ref/out-argument alias
-        // guard (see EmitContext.ThisFieldTouches). Direct touches are collected per node;
+        // guard (see EmitContext.Recursion.ThisFieldTouches). Direct touches are collected per node;
         // this-property references add accessor edges (a callee reading a manual property whose
         // getter touches the field is the same alias one hop deeper); the closure runs over the
         // same `edges` graph — synthetic dispatch edges included, conservative per §8-3.
@@ -2583,7 +2583,7 @@ public class UasmEmitter
                             if (mySet.Add(f)) touchChanged = true;
             }
         }
-        _ctx.ThisFieldTouches = thisTouches;
+        _ctx.Recursion.ThisFieldTouches = thisTouches;
 
         var recursive = new Dictionary<IMethodSymbol, HashSet<IMethodSymbol>>(SymbolEqualityComparer.Default);
         var cycleEdges = new Dictionary<IMethodSymbol, HashSet<IMethodSymbol>>(SymbolEqualityComparer.Default);
@@ -2671,7 +2671,7 @@ public class UasmEmitter
                         foreach (var c in inScc)
                             if (IsInternalCallTo(site, c, out var matched) && ReferenceEquals(matched, site))
                             { toRecursiveCallee = true; break; }
-                        if (toRecursiveCallee && !EmitContext.IsNonTailDispatchSite(callerBody, site))
+                        if (toRecursiveCallee && !EmitPolicy.IsNonTailDispatchSite(callerBody, site))
                             tailSparedSites.Add(site.Syntax);
                     }
                 }
@@ -2685,7 +2685,7 @@ public class UasmEmitter
                     var dispatchSites = new List<IOperation>();
                     CollectDelegateDispatchSites(callerBody, dispatchSites);
                     foreach (var site in dispatchSites)
-                        if (site.Syntax != null && EmitContext.IsNonTailDispatchSite(callerBody, site)
+                        if (site.Syntax != null && EmitPolicy.IsNonTailDispatchSite(callerBody, site)
                             && site is IInvocationOperation dsInv && dsInv.TargetMethod != null)
                         {
                             // Wave-12 [V1]: a provenance-exact site is Reentrant only when one of
@@ -2708,14 +2708,14 @@ public class UasmEmitter
 
             }
         }
-        _ctx.RecursiveCallees = recursive;
-        _ctx.CycleCallees = cycleEdges;
-        _ctx.ReentrantDispatchSites = reentrantSites;
-        _ctx.TailSparedDirectCallSites = tailSparedSites;
+        _ctx.Recursion.RecursiveCallees = recursive;
+        _ctx.Recursion.CycleCallees = cycleEdges;
+        _ctx.Recursion.ReentrantDispatchSites = reentrantSites;
+        _ctx.Recursion.TailSparedDirectCallSites = tailSparedSites;
         // §5.5 (graft #2): snapshot the graph-node set (definition-keyed) so the post-emission armor
         // can verify every capturing delegate bridge target reached the reentrancy analysis. Bodies is
         // keyed by every node that got an edge set (roots, local functions, lambdas).
-        _ctx.RecursionGraphNodes = new HashSet<IMethodSymbol>(bodies.Keys, SymbolEqualityComparer.Default);
+        _ctx.Recursion.RecursionGraphNodes = new HashSet<IMethodSymbol>(bodies.Keys, SymbolEqualityComparer.Default);
     }
 
     // §5.5 (graft #2): VerifyBridgeTargetsAreNodes — the wave-10 [Z1]-class emit-time-registration
@@ -2729,12 +2729,12 @@ public class UasmEmitter
     // are intentionally skipped — they have no reentrancy-sensitive frame state to lose.
     void VerifyBridgeTargetsAreNodes()
     {
-        if (_ctx.CaptureScope == null || _ctx.RecursionGraphNodes == null) return;
+        if (_ctx.CaptureScope == null || _ctx.Recursion.RecursionGraphNodes == null) return;
         foreach (var (method, bridgeExportName, _) in _ctx.PendingDelegateBridges)
         {
             var def = method.OriginalDefinition;
             if (!_ctx.CaptureScope.IsCapturingClosure(def)) continue;
-            if (!_ctx.RecursionGraphNodes.Contains(def))
+            if (!_ctx.Recursion.RecursionGraphNodes.Contains(def))
                 throw new InvalidOperationException(
                     $"USugar internal error (§5.5 bridge-target armor): capturing delegate bridge "
                   + $"'{bridgeExportName}' targets '{def}', which has no recursion-graph node — its "
@@ -2747,7 +2747,7 @@ public class UasmEmitter
         {
             var def = targetMethod.OriginalDefinition;
             if (!_ctx.CaptureScope.IsCapturingClosure(def)) continue;
-            if (!_ctx.RecursionGraphNodes.Contains(def))
+            if (!_ctx.Recursion.RecursionGraphNodes.Contains(def))
                 throw new InvalidOperationException(
                     $"USugar internal error (§5.5 bridge-target armor): capturing sig adapter "
                   + $"'{adapterName}' targets '{def}', which has no recursion-graph node — its "
@@ -2951,7 +2951,7 @@ public class UasmEmitter
     static void CollectDelegateDispatchSites(IOperation op, List<IOperation> result)
     {
         if (op == null) return;
-        if (EmitContext.IsDelegateDispatch(op)) result.Add(op);
+        if (EmitPolicy.IsDelegateDispatch(op)) result.Add(op);
         foreach (var child in op.Children)
         {
             if (child is ILocalFunctionOperation || child is IAnonymousFunctionOperation) continue;
@@ -3070,7 +3070,7 @@ public class UasmEmitter
 
     // True if the caller body contains a call to callee that is NOT in tail position (its result is used
     // by something after the call, so the caller's live values would be clobbered by a recursive re-entry).
-    // The walk itself lives in TailCallAnalysis (shared with EmitContext.IsNonTailDispatchSite); this is
+    // The walk itself lives in TailCallAnalysis (shared with EmitPolicy.IsNonTailDispatchSite); this is
     // the named-callee matcher's parameterization of it — `checkReturnInstanceLeg: true` and
     // `ternaryPreciseReturn: false` reproduce this classifier's own return-position behavior exactly
     // (see TailCallAnalysis's file header for what those two differences from the dispatch-site
@@ -3098,7 +3098,7 @@ public class UasmEmitter
         // inc-dec through a struct-typed local) — the specific get/set accessor on a user-struct receiver
         // is the callee, independent of a `this` receiver (mirrors the IsInternalCallTo struct arm).
         if (pr.Property is { IsStatic: false } && pr.Property.ContainingType is INamedTypeSymbol saCt
-            && EmitContext.IsUserStruct(saCt)
+            && EmitPolicy.IsUserStruct(saCt)
             && acc != null && SymbolEqualityComparer.Default.Equals(acc.OriginalDefinition, callee))
             return true;
         if (pr.Instance is not IInstanceReferenceOperation) return false;
@@ -3165,7 +3165,7 @@ public class UasmEmitter
                 // computed property / indexer on a USER-STRUCT receiver — `this` OR a fresh struct
                 // instance (structs compile into this program's accessor functions).
                 if (pr.Property is { IsStatic: false } sprop
-                    && sprop.ContainingType is INamedTypeSymbol sprct && EmitContext.IsUserStruct(sprct))
+                    && sprop.ContainingType is INamedTypeSymbol sprct && EmitPolicy.IsUserStruct(sprct))
                 {
                     if (sprop.GetMethod is { } sg) yield return sg.OriginalDefinition;
                     if (sprop.SetMethod is { } ss) yield return ss.OriginalDefinition;
@@ -3471,7 +3471,7 @@ public class UasmEmitter
     {
         // Parameterized user-struct constructor: new V(...).
         if (op is IObjectCreationOperation oc && oc.Constructor != null
-            && oc.Type is INamedTypeSymbol nt && EmitContext.IsUserStruct(nt)
+            && oc.Type is INamedTypeSymbol nt && EmitPolicy.IsUserStruct(nt)
             && oc.Arguments.Length > 0 && !oc.Constructor.IsImplicitlyDeclared)
             yield return oc.Constructor;
         // User-struct instance method: v.Method(...). Feature G: yield the CONSTRUCTED symbol
@@ -3482,7 +3482,7 @@ public class UasmEmitter
         // there, so this is byte-identical for them.
         if (op is IInvocationOperation inv && inv.TargetMethod is { IsStatic: false } tm
             && tm.MethodKind == MethodKind.Ordinary && !tm.IsImplicitlyDeclared
-            && tm.ContainingType is INamedTypeSymbol it && EmitContext.IsUserStruct(it))
+            && tm.ContainingType is INamedTypeSymbol it && EmitPolicy.IsUserStruct(it))
             yield return tm;
         // Computed (non-auto) user-struct property: v.Prop (read) or v.Prop = x (write). Auto-properties use
         // their backing-field slot directly (no method), but a computed accessor must be inlined as a struct
@@ -3491,7 +3491,7 @@ public class UasmEmitter
         // is collected the same way — its accessors carry the index args after the synthetic receiver.
         if (op is IPropertyReferenceOperation pr
             && pr.Property is { IsStatic: false } prop
-            && pr.Property.ContainingType is INamedTypeSymbol pit && EmitContext.IsUserStruct(pit)
+            && pr.Property.ContainingType is INamedTypeSymbol pit && EmitPolicy.IsUserStruct(pit)
             && IsComputedProperty(prop))
         {
             if (prop.GetMethod != null) yield return prop.GetMethod;
@@ -3502,7 +3502,7 @@ public class UasmEmitter
         // here too — else the pattern lowering emits a bogus accessor extern for an unregistered getter.
         if (op is IPropertySubpatternOperation sub && sub.Member is IPropertyReferenceOperation spr
             && spr.Property is { IsStatic: false } sprop
-            && spr.Property.ContainingType is INamedTypeSymbol spit && EmitContext.IsUserStruct(spit)
+            && spr.Property.ContainingType is INamedTypeSymbol spit && EmitPolicy.IsUserStruct(spit)
             && IsComputedProperty(sprop) && sprop.GetMethod != null)
             yield return sprop.GetMethod;
         // User-struct operator: v1 + v2, -v, s += t, c++ (static operator methods). Compound-assignment and
@@ -3513,12 +3513,12 @@ public class UasmEmitter
             ?? (op as ICompoundAssignmentOperation)?.OperatorMethod
             ?? (op as IIncrementOrDecrementOperation)?.OperatorMethod;
         if (opMethod is { MethodKind: MethodKind.UserDefinedOperator }
-            && opMethod.ContainingType is INamedTypeSymbol ot && EmitContext.IsUserStruct(ot))
+            && opMethod.ContainingType is INamedTypeSymbol ot && EmitPolicy.IsUserStruct(ot))
             yield return opMethod;
         // User-struct CONVERSION operator (implicit/explicit). MethodKind is Conversion (not UserDefinedOperator),
         // so it needs its own arm — invoked implicitly by an IConversionOperation, routed to the method on emit.
         if (op is IConversionOperation convOp && convOp.OperatorMethod is { MethodKind: MethodKind.Conversion } convM
-            && convM.ContainingType is INamedTypeSymbol convCt && EmitContext.IsUserStruct(convCt))
+            && convM.ContainingType is INamedTypeSymbol convCt && EmitPolicy.IsUserStruct(convCt))
             yield return convM;
     }
 
@@ -3559,7 +3559,7 @@ public class UasmEmitter
                 foreach (var decl in g.Declarations)
                     foreach (var declarator in decl.Declarators)
                         if (declarator.Symbol.Type is INamedTypeSymbol dnt
-                            && EmitContext.FindStructDisposeMethod(dnt) is { } dispose)
+                            && EmitPolicy.FindStructDisposeMethod(dnt) is { } dispose)
                             defs.Add(dispose.OriginalDefinition);
         }
         foreach (var child in op.Children)
@@ -3582,8 +3582,8 @@ public class UasmEmitter
 
     static void AddStructDispose(ITypeSymbol type, HashSet<IMethodSymbol> result)
     {
-        if (type is INamedTypeSymbol nt && EmitContext.IsUserStruct(nt)
-            && EmitContext.FindStructDisposeMethod(nt) is { } dispose
+        if (type is INamedTypeSymbol nt && EmitPolicy.IsUserStruct(nt)
+            && EmitPolicy.FindStructDisposeMethod(nt) is { } dispose
             && IsCollectibleStructMember(dispose))
             result.Add(dispose);
     }

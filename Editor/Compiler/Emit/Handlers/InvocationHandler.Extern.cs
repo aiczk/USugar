@@ -861,7 +861,7 @@ public partial class InvocationHandler
                 {
                     CLeaf elemVal = ExternCall(ExternResolver.BuildArrayGetSignature(arrayType, elementType),
                         new List<CLeaf> { arrayVal, indexVal }, GetUdonType(arrayElem.Type));
-                    if (arrayElem.Type is INamedTypeSymbol elemAgg && EmitContext.IsAggregateType(elemAgg))
+                    if (arrayElem.Type is INamedTypeSymbol elemAgg && EmitPolicy.IsAggregateType(elemAgg))
                         elemVal = EmitDeepCloneAggregate(elemVal, elemAgg);
                     return elemVal;
                 }, v => EmitExternVoid(
@@ -871,7 +871,7 @@ public partial class InvocationHandler
             case IFieldReferenceOperation fieldRef
                 when TryGetAggregateMemberTarget(fieldRef, out var aggInstance, out var aggMemberName)
                      && aggInstance.Type is INamedTypeSymbol aggContaining
-                     && EmitContext.IsAggregateType(aggContaining)
+                     && EmitPolicy.IsAggregateType(aggContaining)
                      && _ctx.GetAggregateLayout(aggContaining).TryGetIndex(aggMemberName, out var memberIndex):
             {
                 var arrExpr = LoadInstanceRaw(aggInstance);
@@ -879,7 +879,7 @@ public partial class InvocationHandler
                 {
                     CLeaf memberVal = ExternCall(ExternResolver.BuildArrayGetSignature("SystemObjectArray", "SystemObject"),
                         new List<CLeaf> { arrExpr, Const(memberIndex, "SystemInt32") }, "SystemObject");
-                    if (fieldRef.Field.Type is INamedTypeSymbol memberAgg && EmitContext.IsAggregateType(memberAgg))
+                    if (fieldRef.Field.Type is INamedTypeSymbol memberAgg && EmitPolicy.IsAggregateType(memberAgg))
                         memberVal = EmitDeepCloneAggregate(memberVal, memberAgg);
                     return memberVal;
                 }, v => EmitExternVoid(
@@ -1123,7 +1123,7 @@ public partial class InvocationHandler
             && method.ContainingType.SpecialType is SpecialType.System_Object
                 or SpecialType.System_ValueType or SpecialType.System_Enum)
         {
-            if (vConcrete is INamedTypeSymbol vAgg && EmitContext.IsAggregateType(vAgg))
+            if (vConcrete is INamedTypeSymbol vAgg && EmitPolicy.IsAggregateType(vAgg))
                 throw new System.NotSupportedException(
                     $"'{method.Name}' on type parameter '{vtp.Name}' instantiated with user-defined "
                     + $"struct '{vConcrete.Name}' is not supported: Udon has no extern for it and C#'s "
