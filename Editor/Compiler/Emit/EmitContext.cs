@@ -74,7 +74,8 @@ public class EmitContext
 
     // Generic monomorphization
     public readonly List<IMethodSymbol> PendingGenericSpecs = new();
-    public Dictionary<ITypeParameterSymbol, ITypeSymbol> TypeParamMap;
+    // Immutable: built only by TypeParamScope.Compose and replaced wholesale (never mutated in place).
+    public IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> TypeParamMap;
 
     // Wave-9 round-5 [X6]: first registered specialization per generic DEFINITION. Lambdas and
     // local functions hoisted from a generic body are keyed by IMethodSymbol and therefore SHARED

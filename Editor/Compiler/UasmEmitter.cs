@@ -26,7 +26,7 @@ public class UasmEmitter
     IMethodSymbol _currentMethod { get => _ctx.CurrentMethod; set => _ctx.CurrentMethod = value; }
     List<(IMethodSymbol symbol, CFunction func)> _pendingLocalFunctions => _ctx.PendingLocalFunctions;
     List<IMethodSymbol> _pendingGenericSpecs => _ctx.PendingGenericSpecs;
-    Dictionary<ITypeParameterSymbol, ITypeSymbol> _typeParamMap { get => _ctx.TypeParamMap; set => _ctx.TypeParamMap = value; }
+    IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> _typeParamMap { get => _ctx.TypeParamMap; set => _ctx.TypeParamMap = value; }
     HashSet<IMethodSymbol> _inheritedMethods = new(SymbolEqualityComparer.Default);
     List<(string fieldName, IOperation initOp, ITypeSymbol fieldType)> _fieldInitOps => _ctx.FieldInitOps;
     List<(string fieldName, IOperation initOp, ITypeSymbol fieldType)> _staticFieldInitOps => _ctx.StaticFieldInitOps;
@@ -1992,20 +1992,12 @@ public class UasmEmitter
         // generic ON a generic struct (Box<T>.Map<U>()) merges both.
         if (isSpec)
         {
-            var map = new Dictionary<ITypeParameterSymbol, ITypeSymbol>(SymbolEqualityComparer.Default);
+            var bindings = new List<(IReadOnlyList<ITypeParameterSymbol>, IReadOnlyList<ITypeSymbol>)>(2);
             if (method.IsGenericMethod)
-            {
-                var origMethod = method.OriginalDefinition;
-                for (int i = 0; i < origMethod.TypeParameters.Length; i++)
-                    map[origMethod.TypeParameters[i]] = method.TypeArguments[i];
-            }
+                bindings.Add((method.OriginalDefinition.TypeParameters, method.TypeArguments));
             if (method.ContainingType.IsGenericType)
-            {
-                var origType = method.ContainingType.OriginalDefinition;
-                for (int i = 0; i < origType.TypeParameters.Length; i++)
-                    map[origType.TypeParameters[i]] = method.ContainingType.TypeArguments[i];
-            }
-            _typeParamMap = map;
+                bindings.Add((method.ContainingType.OriginalDefinition.TypeParameters, method.ContainingType.TypeArguments));
+            _typeParamMap = TypeParamScope.Compose(null, newWins: true, bindings);
         }
 
         // Wave-9 round-8 [Y2]: a hoisted closure (lambda / local function) declared inside a GENERIC
@@ -2023,7 +2015,7 @@ public class UasmEmitter
         if (method.MethodKind is MethodKind.LocalFunction
             or MethodKind.LambdaMethod or MethodKind.AnonymousFunction)
         {
-            Dictionary<ITypeParameterSymbol, ITypeSymbol> closureMap = null;
+            List<(IReadOnlyList<ITypeParameterSymbol>, IReadOnlyList<ITypeSymbol>)> closureBindings = null;
             for (var s = method.ContainingSymbol; s is IMethodSymbol enclosing; s = enclosing.ContainingSymbol)
             {
                 // No IsGenericMethod pre-filter: FirstGenericSpec is keyed by OriginalDefinition
@@ -2031,28 +2023,20 @@ public class UasmEmitter
                 // both — feature G), so the dictionary lookup alone is the correct, sufficient gate.
                 if (_ctx.FirstGenericSpec.TryGetValue(enclosing.OriginalDefinition, out var ownerSpec))
                 {
-                    var ownerDef = ownerSpec.OriginalDefinition;
-                    closureMap ??= new Dictionary<ITypeParameterSymbol, ITypeSymbol>(SymbolEqualityComparer.Default);
-                    for (int i = 0; i < ownerDef.TypeParameters.Length; i++)
-                        closureMap[ownerDef.TypeParameters[i]] = ownerSpec.TypeArguments[i];
+                    closureBindings ??= new();
+                    closureBindings.Add((ownerSpec.OriginalDefinition.TypeParameters, ownerSpec.TypeArguments));
                     if (ownerSpec.ContainingType.IsGenericType)
-                    {
-                        var ownerTypeDef = ownerSpec.ContainingType.OriginalDefinition;
-                        for (int i = 0; i < ownerTypeDef.TypeParameters.Length; i++)
-                            closureMap[ownerTypeDef.TypeParameters[i]] = ownerSpec.ContainingType.TypeArguments[i];
-                    }
+                        closureBindings.Add((ownerSpec.ContainingType.OriginalDefinition.TypeParameters,
+                            ownerSpec.ContainingType.TypeArguments));
                 }
             }
-            if (closureMap != null && _typeParamMap == null)
+            // Inherit the owner generic's args but let this method's own map keep colliding keys
+            // (newWins:false = add-if-missing, mirroring the former merge). closureMapSet ⇔ we were
+            // the site that first populated the map (drives the end-of-method clear).
+            if (closureBindings != null)
             {
-                _typeParamMap = closureMap;
-                closureMapSet = true;
-            }
-            else if (closureMap != null)
-            {
-                foreach (var kv in closureMap)
-                    if (!_typeParamMap.ContainsKey(kv.Key))
-                        _typeParamMap[kv.Key] = kv.Value;
+                closureMapSet = _typeParamMap == null;
+                _typeParamMap = TypeParamScope.Compose(_typeParamMap, newWins: false, closureBindings);
             }
         }
 
@@ -2076,8 +2060,11 @@ public class UasmEmitter
             if (isSpec && bodyOp is ILocalFunctionOperation lfDefOp
                 && lfDefOp.Symbol.TypeParameters.Length == method.TypeArguments.Length)
             {
-                for (int i = 0; i < lfDefOp.Symbol.TypeParameters.Length; i++)
-                    _typeParamMap[lfDefOp.Symbol.TypeParameters[i]] = method.TypeArguments[i];
+                // old ∪ rekeyed: the body-walk's fresh type-param symbols are added (newWins), the
+                // call-site symbols already in the map are RETAINED — never a replacing composition.
+                _typeParamMap = TypeParamScope.Compose(_typeParamMap, newWins: true,
+                    new[] { ((IReadOnlyList<ITypeParameterSymbol>)lfDefOp.Symbol.TypeParameters,
+                             (IReadOnlyList<ITypeSymbol>)method.TypeArguments) });
             }
 
             PreScanGotoLabels(bodyOp);
