@@ -3673,7 +3673,10 @@ public class UasmEmitter
     /// "_methodFunctions.Keys.Select(OriginalDefinition)" above), so this is the right shape for
     /// discovering a struct member that Phase-1 registration deliberately skipped (the open self/cross
     /// -struct-method form) but that the emitted program can still recursively re-enter.</summary>
-    static void CollectStructMemberDefinitions(IOperation op, HashSet<IMethodSymbol> defs)
+    // internal: shared as the single struct-member-definition collector by BOTH the recursion-graph
+    // root expansion (BuildRecursionInfo) and the capture-scope root expansion (CaptureScopeAnalysis,
+    // roadmap B45) — same set, one definition (design §1-1: "CollectStructMethods が見つけるのと同じ集合").
+    internal static void CollectStructMemberDefinitions(IOperation op, HashSet<IMethodSymbol> defs)
     {
         if (op == null) return;
         if (op is IObjectCreationOperation oc && oc.Constructor != null

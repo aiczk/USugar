@@ -1497,15 +1497,18 @@ public abstract partial class HandlerBase
     }
 
     /// <summary>
-    /// Hoist a lambda expression to an internal method.
+    /// Hoist a lambda expression to an internal method. A CAPTURING lambda's captured variables are
+    /// resolved PER-ACTIVATION through the Stage-2 closure environment records (design §3/§4): the
+    /// capture analysis (<see cref="CaptureScopeAnalysis"/>) assigns each captured symbol an env-record
+    /// slot and all access routes through <see cref="EnvEmit"/> __Get/__Set on the owning scope's env —
+    /// never the flat <see cref="EmitContext.LocalBindings"/> slot. This holds for closures hoisted from
+    /// user-STRUCT member bodies too (roadmap B45): CaptureScopeAnalysis.Build walks struct members
+    /// transitively, so a struct-method closure joins the same env chain rather than aliasing a shared
+    /// module field.
     ///
-    /// KNOWN LIMITATION: Captured locals are mapped to module-level fields via
-    /// <see cref="EmitContext.LocalBindings"/>. All lambdas share the same field for a
-    /// given local, so nested lambdas (lambda inside lambda) that capture the same
-    /// variable will alias. This is correct for sequential execution but not for
-    /// concurrent delegate storage with different capture values (e.g., loop-variable
-    /// capture where the delegate outlives the loop iteration). This is a fundamental
-    /// constraint of the Udon VM's flat heap — there are no per-invocation closures.
+    /// (Pre-Stage-2 this method's captures aliased a single module-level LocalBindings field, correct
+    /// only for sequential non-escaping single-activation use — retired. VM-proven multi-activation
+    /// clobber for the struct-hosted case: roadmap B45 M0 shapes (c)/(d).)
     /// </summary>
     protected IMethodSymbol HoistLambdaToMethod(IAnonymousFunctionOperation lambda)
     {

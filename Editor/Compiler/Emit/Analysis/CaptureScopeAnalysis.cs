@@ -183,6 +183,8 @@ public sealed class CaptureScopeAnalysis
         // reentrant recursion. So walk property accessors (get/set) AND inherited user-defined base
         // methods, not just the class's own ordinary methods; over-coverage is harmless (unused scope
         // entries), under-coverage is the bug. Definition-keyed (generic → OriginalDefinition).
+        // B45 (design §1-1): user-struct member bodies are NOT named-type members of this class, so this
+        // pass never reaches them here — the transitive struct-member expansion below adds them.
         var roots = new List<IMethodSymbol>();
         var seenRoots = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
         void AddRoots(INamedTypeSymbol type)
@@ -211,6 +213,31 @@ public sealed class CaptureScopeAnalysis
         }
 
         var fieldInits = CollectFieldInitializerOperations(compilation, classSymbol);
+
+        // B45 (design §1-1): a capturing closure hoisted from a user-struct member body is emitted as an
+        // ordinary CFunction in THIS class's context and must join the Stage-2 env chain — otherwise its
+        // captured locals fall back to the naive shared flat field (roadmap B45; VM-proven multi-activation
+        // clobber, M0 shapes (c)/(d)). Transitively discover every user-struct member DEFINITION reachable
+        // from the class/base root bodies + field initializers and walk it as an additional MethodEntry
+        // root — the capture-analysis twin of UasmEmitter.BuildRecursionInfo's structDefRoots expansion,
+        // sharing the SAME CollectStructMemberDefinitions collector. Definition-keyed (§2 rule 2), so every
+        // instantiation of a generic struct collapses onto one scope tree; the live _typeParamMap resolves
+        // captured-access types per spec at emit time (§2 rule 1 — no type resolution here).
+        var structSeen = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
+        var structQueue = new Queue<IOperation>(rootBodies.Select(rb => rb.Body).Concat(fieldInits));
+        while (structQueue.Count > 0)
+        {
+            var found = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
+            UasmEmitter.CollectStructMemberDefinitions(structQueue.Dequeue(), found);
+            foreach (var f in found)
+            {
+                if (f.DeclaringSyntaxReferences.Length == 0 || !structSeen.Add(f)) continue;
+                var body = GetOperationBody(compilation, f);
+                if (body == null) continue;
+                rootBodies.Add((f, body));
+                structQueue.Enqueue(body);
+            }
+        }
 
         SeedLocalFunctionCaptureFixpoint(rootBodies.Select(rb => rb.Body).Concat(fieldInits), captureAnalyzer);
 
