@@ -40,8 +40,14 @@ public class UasmEmitter
 
     static Dictionary<string, string> UdonEventNames => LayoutPlanner.UdonEventNames;
 
+    // F2: true when this emitter created its OWN private planner (no shared planner was passed). A private
+    // planner is safe to lazily Plan()+Freeze() in EnsurePlannerReady on any thread (nothing else reads it);
+    // a SHARED planner reaching EnsurePlannerReady unfrozen is the parallel-emit race the guard rejects.
+    readonly bool _ownsPlanner;
+
     public UasmEmitter(Compilation compilation, INamedTypeSymbol classSymbol, LayoutPlanner planner = null)
     {
+        _ownsPlanner = planner == null;
         _ctx = new EmitContext(compilation, classSymbol, planner ?? new LayoutPlanner(compilation));
 
         var stmtHandler = new StatementHandler(_ctx);
@@ -184,28 +190,21 @@ public class UasmEmitter
     {
         if (_planner.IsFrozen) return;
 
-        // Defense-in-depth: detect likely parallel misuse. If we're on a thread pool
-        // thread and the planner isn't frozen, this is almost certainly a bug in the
-        // orchestrator — planning should have been done in the serial prep phase.
-        if (!System.Threading.Thread.CurrentThread.IsBackground)
-        {
-            // Main thread: safe to plan lazily (test / standalone path)
-        }
-        else
-        {
-            // Background thread: log a warning. The plan-and-freeze below is still
-            // safe IF this emitter has its own private planner (constructor default).
-            // It is NOT safe if a shared planner was passed in.
-#if UNITY_EDITOR
-            UnityEngine.Debug.LogWarning(
-#else
-            System.Diagnostics.Debug.WriteLine(
-#endif
-                "[USugar] EnsurePlannerReady called on a background thread with an unfrozen planner. "
-              + "This is safe only if the planner is private to this emitter instance. "
-              + "Callers running in parallel MUST pass a pre-frozen LayoutPlanner.");
-        }
+        // F2: Phase-2 emit runs in parallel (USugarCompilationOrchestrator's Parallel.ForEach) over a
+        // SHARED planner that Phase-1 must have Plan()'d and Freeze()'d (orchestrator freezes at line ~212
+        // before the ForEach at ~227). A SHARED planner reaching here UNFROZEN means that freeze contract
+        // was violated — lazily planning it now would MUTATE a planner other emitter threads read
+        // concurrently. Fail loudly instead of racing. (The discriminator is planner OWNERSHIP, not thread
+        // type: xUnit runs tests on background thread-pool threads, so a thread check would reject the
+        // legitimate test/standalone path. A PRIVATE planner is unshared and safe to plan lazily anywhere.)
+        if (!_ownsPlanner)
+            throw new System.InvalidOperationException(
+                "EnsurePlannerReady: a SHARED LayoutPlanner reached emit unfrozen. Phase-1 must "
+              + "Plan() and Freeze() every layout before Phase-2's Parallel.ForEach — mutating a shared "
+              + "planner during parallel emit would race concurrent emitters. Pass a pre-frozen planner, "
+              + "or omit the planner argument to use a private one (the test/standalone lazy path).");
 
+        // Private (emitter-owned) planner, unfrozen: the documented test/standalone path — plan, then freeze.
         foreach (var tree in _compilation.SyntaxTrees)
         {
             var model = _compilation.GetSemanticModel(tree);
