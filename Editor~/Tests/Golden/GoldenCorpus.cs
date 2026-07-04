@@ -228,6 +228,19 @@ public class StructRefParam : UdonSharpBehaviour {
     x = a; y = b;
   }
 }"),
+        // Variant method-group binding + invoke (Stage 1.75 design 2026-07-04 §2 canonical baseline,
+        // §5). A covariant-return method group mints a sig adapter under the delegate's OWN sig
+        // (design §2.2, B-1) — the adapter InternalCalls the real target with zero conversion
+        // (reference-variance only, P2-verified) and stores its result into the sig-S conv-ret.
+        ("variant_methodgroup_binding", "VariantMethodGroupBinding",
+@"using System; using UdonSharp; public class VariantMethodGroupBinding : UdonSharpBehaviour {
+  public object result;
+  string MakeTag() => ""tag"";
+  void Start(){
+    Func<object> f = MakeTag;
+    result = f();
+  }
+}"),
     };
 
     public static (string Name, string ClassName, string Source) ByName(string name)

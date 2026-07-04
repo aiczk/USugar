@@ -135,27 +135,52 @@ public class M3CrossSig : UdonSharpBehaviour {
             "cross-signature dispatch must not be wrapped by the widening (sig-filter over-spill)");
     }
 
-    // ── §5.4 sig-filter ↔ variance-reject coupling (SigFilterCoupledToVarianceReject) ──
+    // ── §5.4 sig-filter ↔ variance widening (SigFilterCoupledToVarianceReject → widened form) ──
 
     [Fact]
-    public void SigFilter_IsCoupledTo_VarianceReject()
+    public void SigFilter_WidensUnderVariantAdapter_NotRejected()
     {
-        // The §5.4 sig-filter matches a dispatch's delegate-Invoke signature to a target-method signature
-        // by STRING EQUALITY (UasmEmitter.SigsMatch). That is sound ONLY because a variant method-group
-        // binding — whose Invoke signature differs from the target signature — is REJECTED at creation
-        // (DelegateProtocol.ValidateDelegateBinding). If that reject is ever relaxed, a variant target
-        // would be dispatchable under a signature the sig-filter would not match to it, silently dropping
-        // its reentrancy protection. This pin fails the moment the variance reject stops firing, forcing a
-        // revisit of the sig-filter. (Couples to UasmEmitter.cs escapeSig/SigsMatch/DispatchSigOrWildcard.)
-        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
+        // Stage 1.75 (design 2026-07-04 §2.2): variance is no longer rejected at creation — the §5.4
+        // sig-filter now widens correctly: a variant target is escaped under its ADAPTER's protocol sig
+        // (sig-S), not its own (UasmEmitter.CollectVariantEscapeSigs). Bare compile pin; the reentrancy
+        // gate itself is pinned below (SigFilter_VariantAdapterTarget_GetsReentrantSpill).
+        var uasm = TestHelper.CompileToUasm(@"
 using System;
 using UdonSharp;
 public class M3VariantMg : UdonSharpBehaviour {
     Action<string> a;
     void Start() { a = M; a(""x""); }
     void M(object o) { }
-}", "M3VariantMg"));
-        Assert.Contains("Variant method-group", ex.Message);
+}", "M3VariantMg");
+        Assert.Contains("__dlg_adapt_", uasm);
+    }
+
+    [Fact]
+    public void SigFilter_VariantAdapterTarget_GetsReentrantSpill()
+    {
+        // The widened escape-set must key a variant target by its ADAPTER's sig-S, not its own —
+        // otherwise a variant target that reaches back into the dispatch's own recursion cycle would
+        // silently lose its reentrancy spill (the exact gap SigFilterCoupledToVarianceReject used to
+        // guard against by rejecting variance outright). Here M (bound to Action<string> a, sig-S =
+        // SystemString__Void, differing from M's own SystemObject__Void) calls Go — closing a real
+        // cycle Go→Go / Go→a-dispatch→M→Go. If the widening keyed M by its OWN sig, SigsMatch would
+        // never fire and the a(\"x\") dispatch inside Go would NOT be marked Reentrant (no
+        // __recurStack spill wrap) — a silent frame-clobber hazard on real recursion.
+        var uasm = TestHelper.CompileToUasm(@"
+using System;
+using UdonSharp;
+public class M3VariantReentrySpill : UdonSharpBehaviour {
+    public int n; public int acc;
+    Action<string> a;
+    void Start() { a = M; Go(n); }
+    void M(object o) { acc = acc + ((string)o).Length; if (acc < 100) Go(1); }
+    void Go(int d) {
+        if (d <= 0) return;
+        a(""x"");
+        Go(d - 1);
+    }
+}", "M3VariantReentrySpill");
+        Assert.Contains("__recurStack", uasm);
     }
 
     // ── §5.5 bridge-target armor: dormant on valid programs ──

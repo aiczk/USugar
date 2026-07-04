@@ -208,14 +208,14 @@ public class W12R2NoCyc : UdonSharpBehaviour {
         Assert.DoesNotContain("__recurStack", uasm);
     }
 
-    // ── [V2] variant delegate-value conversions reject loudly ──
+    // ── [V2] → Stage 1.75 §2.3 (B-2): variant delegate-value conversions mint a wrapper ──
 
     [Fact]
-    public void CovariantDelegateValueConversion_FieldAssignment_Throws()
+    public void CovariantDelegateValueConversion_FieldAssignment_MintsWrapper_Compiles()
     {
-        // Verbatim minimized repro (VM-proven: ref result=4, usugar VmFault — NRE reading the
-        // never-written __dlgc_Void__SystemObject__ret channel).
-        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
+        // Verbatim minimized repro from the former reject pin (now VM-verified in
+        // Editor~/_local_harness/VarianceVmTests.cs — CLR ref result=4).
+        var uasm = TestHelper.CompileToUasm(@"
 using System;
 using UdonSharp;
 public class W12R2VarF : UdonSharpBehaviour {
@@ -228,15 +228,16 @@ public class W12R2VarF : UdonSharpBehaviour {
         object o = cb();
         result = ((string)o).Length;
     }
-}", "W12R2VarF"));
-        Assert.Contains("Variant delegate conversion", ex.Message);
+}", "W12R2VarF");
+        Assert.Contains("__dlg_wrap_", uasm);
     }
 
     [Fact]
-    public void ContravariantActionValueConversion_Throws()
+    public void ContravariantActionValueConversion_MintsWrapper_Compiles()
     {
-        // Contravariant arm: the ARGUMENT channel diverges the same way the covariant return does.
-        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
+        // Contravariant arm: the ARGUMENT channel, wrapped the same way the covariant return is. Real
+        // VM values in Editor~/_local_harness/VarianceVmTests.cs.
+        var uasm = TestHelper.CompileToUasm(@"
 using System;
 using UdonSharp;
 public class W12R2VarC : UdonSharpBehaviour {
@@ -249,8 +250,8 @@ public class W12R2VarC : UdonSharpBehaviour {
         b(""xy"" + seed);
         result = acc;
     }
-}", "W12R2VarC"));
-        Assert.Contains("Variant delegate conversion", ex.Message);
+}", "W12R2VarC");
+        Assert.Contains("__dlg_wrap_", uasm);
     }
 
     // ── [V2] controls: passthrough shapes stay legal ──

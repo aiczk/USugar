@@ -136,17 +136,137 @@ public class RefDlg : UdonSharpBehaviour {
     }
 
     [Fact]
-    public void VariantMethodGroupBinding_ThrowsNotSupported()
+    public void VariantMethodGroupBinding_MintsSigAdapter_Compiles()
     {
-        var ex = Assert.ThrowsAny<Exception>(() => TestHelper.CompileToUasm(@"
+        // Stage 1.75 (design 2026-07-04 §2.2, B-1): a same-program covariant-return method-group
+        // binding mints a sig adapter under the delegate's OWN sig (Void__SystemObject, since Func<object>
+        // erases to SystemObject) instead of rejecting.
+        var uasm = TestHelper.CompileToUasm(@"
 using UdonSharp;
 using System;
 public class VariantDlg : UdonSharpBehaviour {
     public Func<object> f;
     string GetStr() { return ""s""; }
     void Start() { f = GetStr; }
-}", "VariantDlg"));
-        Assert.Contains("Variant method-group", ex.Message);
+}", "VariantDlg");
+        Assert.Contains("__dlg_adapt_", uasm);
+    }
+
+    [Fact]
+    public void VariantMethodGroupBinding_ContravariantParam_Invoke_Compiles()
+    {
+        // B-1, contravariant parameter direction: the delegate declares the NARROWER type (string, what
+        // callers pass); the method accepts the WIDER type (object) it's convertible to.
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public class VariantDlgParam : UdonSharpBehaviour {
+    public int result;
+    void TakesObject(object o) { result = ((string)o).Length; }
+    void Start() {
+        Action<string> a = TakesObject;
+        a(""hey"");
+    }
+}", "VariantDlgParam");
+        Assert.Contains("__dlg_adapt_", uasm);
+    }
+
+    [Fact]
+    public void VariantMethodGroupBinding_CapturingLocalFunction_ForwardsEnv_Compiles()
+    {
+        // B-1 capturing-LF flavor (design §2.2): a captured local function bound as a variant
+        // method-group target forwards __envp untouched through the adapter.
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public class VariantDlgCaptureLf : UdonSharpBehaviour {
+    public int cap;
+    public object result;
+    void Start() {
+        int c = cap;
+        string Lf(object o) { return o + ""|"" + c; }
+        Func<object, object> f = Lf;
+        result = f(""x"");
+    }
+}", "VariantDlgCaptureLf");
+        Assert.Contains("__dlg_adapt_", uasm);
+        Assert.Contains("__envp", uasm);
+    }
+
+    [Fact]
+    public void VariantMethodGroupBinding_ThirdPartyTarget_MintsWrapper_Compiles()
+    {
+        // Stage 1.75 §2.2's hinge: a variant method-group binding to a THIRD-PARTY target cannot mint
+        // an adapter (no program to plant it in) — it wraps the exact-sig third-party bundle instead
+        // (§2.2's confirmed composition rule, B-2).
+        var uasm = TestHelper.CompileToUasm(new[] { @"
+using UdonSharp;
+public class VariantThirdPartyProvider : UdonSharpBehaviour {
+    public string GetStr() { return ""s""; }
+}", @"
+using UdonSharp;
+using System;
+public class VariantThirdPartyCaller : UdonSharpBehaviour {
+    public VariantThirdPartyProvider provider;
+    public object result;
+    void Start() {
+        Func<object> f = provider.GetStr;
+        result = f();
+    }
+}" }, "VariantThirdPartyCaller");
+        Assert.Contains("__dlg_wrap_", uasm);
+        Assert.DoesNotContain("__dlg_adapt_", uasm);
+    }
+
+    [Fact]
+    public void VariantMethodGroupBinding_SameTargetSig_DedupsToOneAdapter()
+    {
+        // Design §8-3 emission-count measurement (T-M2 gate, multicast §8-1 methodology): adapters are
+        // bounded per-(target, sig-S), not per usage site. Two bindings of the SAME target (M1) to the
+        // SAME sig-S dedup to ONE adapter; a different target (M2) to the same sig-S gets its own.
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public class VarianceEmissionCount : UdonSharpBehaviour {
+    public object r1, r2, r3;
+    string M1() { return ""a""; }
+    string M2() { return ""b""; }
+    void Start() {
+        Func<object> f1 = M1;
+        Func<object> f2 = M1;
+        Func<object> f3 = M2;
+        r1 = f1(); r2 = f2(); r3 = f3();
+    }
+}", "VarianceEmissionCount");
+        var adapterExports = System.Text.RegularExpressions.Regex.Matches(uasm, @"\.export __dlg_adapt_\S+").Count;
+        Assert.Equal(2, adapterExports);   // M1 (shared by f1/f2) + M2 — not 3
+    }
+
+    [Fact]
+    public void WrapperEquality_ComparesTwoVariantConversions_Compiles()
+    {
+        // D1' (design §4): comparing two SEPARATELY method-group-bound delegates, both variant-converted
+        // to the same wider type, structurally compiles (delegate compare extern emitted). The VALUE
+        // divergence from C# (D1' — env is compared by BUNDLE REFERENCE, so two separately-minted
+        // same-method bundles wrapped for comparison are unequal even though C#'s Method+Target equality
+        // says they should match) is VM-verified in Editor~/_local_harness/VarianceVmTests.cs
+        // (DiffCategory.Mismatch, documented deviation — same reasoning class as multicast's D1).
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public class D1WrapperEq : UdonSharpBehaviour {
+    public bool same;
+    string MakeTag() { return ""s""; }
+    void Start() {
+        Func<string> d1 = MakeTag;
+        Func<string> d2 = MakeTag;
+        Func<object> w1 = d1;
+        Func<object> w2 = d2;
+        same = w1 == w2;
+    }
+}", "D1WrapperEq");
+        Assert.Contains("__dlg_wrap_", uasm);
+        Assert.Contains("SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean", uasm);
     }
     [Fact]
     public void CaptureFreeLambda_StoredIntoArrayElement_Compiles()
