@@ -3187,66 +3187,72 @@ public class UasmEmitter
         return false;
     }
 
+    /// <summary>[V1 unification] The per-NODE call-target classifier shared by the recursion-graph edge
+    /// walk (<see cref="CollectInternalCallees"/>) and the per-site non-tail classifier
+    /// (<see cref="IsInternalCallTo"/>). Yields every method (OriginalDefinition, or the emission-faithful
+    /// leaf/cross target) that a SINGLE operation node can dispatch to: an invocation's static /
+    /// this-virtual-leaf-override / variable-or-interface-cross targets; a ctor; and a property or indexer
+    /// reference's this / leaf-override / variable-or-interface-cross / user-struct accessor pairs (both
+    /// get and set, conservatively — a write-position reference yielding the getter only over-spills,
+    /// §8-3, never corrupts). Each arm was VM-proven necessary (wave-9 r2/r3 [W1..W3], wave-12 r2 [V1],
+    /// wave-14 r4): recursion threaded through leaf-override / variable-receiver / fresh-struct-instance
+    /// accessors was invisible to the SCC analysis and the accessor frame never spilled (e.g. 5 vs CLR 11,
+    /// 305 vs 605, computed-property factorial 1 vs 120). Extracting the two formerly hand-mirrored switches
+    /// into ONE enumerator removes the drift that caused those wave-14 r4 miscompiles — the arms can no
+    /// longer fall out of lockstep. ASYMMETRY: the user-defined OPERATOR edge is NOT enumerated here.
+    /// CollectInternalCallees adds it separately (its SCC edge is what makes IsRecursiveEdge fire), while
+    /// IsInternalCallTo has always omitted it — a CONFIRMED latent miscompile (a self-recursive struct
+    /// operator is not frame-spilled: VM-proven ref=15/usugar=0), preserved verbatim so this refactor
+    /// stays zero-codegen-change and reported for a separate, VM-verified fix.</summary>
+    IEnumerable<IMethodSymbol> EnumerateInternalCallTargets(IOperation op)
+    {
+        switch (op)
+        {
+            case IInvocationOperation inv:
+                yield return inv.TargetMethod.OriginalDefinition;
+                if (LeafCallTarget(inv) is { } leafT) yield return leafT;
+                if (IsCrossDispatchReceiver(inv.Instance, inv.TargetMethod)
+                    && CrossDispatchLocalTarget(inv.TargetMethod) is { } crossT)
+                    yield return crossT;
+                break;
+            case IObjectCreationOperation { Constructor: { } ctor }:
+                yield return ctor.OriginalDefinition;
+                break;
+            case IPropertyReferenceOperation pr:
+                // this-receiver accessor call (both accessors + the emission-faithful leaf override).
+                if (pr.Instance is IInstanceReferenceOperation)
+                {
+                    if (pr.Property.GetMethod is { } pg) yield return pg.OriginalDefinition;
+                    if (pr.Property.SetMethod is { } ps) yield return ps.OriginalDefinition;
+                    if (LeafPropertyTarget(pr) is { } lp)
+                    {
+                        if (lp.GetMethod is { } lg) yield return lg.OriginalDefinition;
+                        if (lp.SetMethod is { } ls) yield return ls.OriginalDefinition;
+                    }
+                }
+                // variable-receiver / interface-typed accessor dispatch that can land back on this program.
+                if (IsCrossDispatchReceiver(pr.Instance, pr.Property))
+                {
+                    if (CrossDispatchLocalTarget(pr.Property.GetMethod) is { } cg) yield return cg;
+                    if (CrossDispatchLocalTarget(pr.Property.SetMethod) is { } cs) yield return cs;
+                }
+                // computed property / indexer on a USER-STRUCT receiver — `this` OR a fresh struct
+                // instance (structs compile into this program's accessor functions).
+                if (pr.Property is { IsStatic: false } sprop
+                    && sprop.ContainingType is INamedTypeSymbol sprct && EmitContext.IsUserStruct(sprct))
+                {
+                    if (sprop.GetMethod is { } sg) yield return sg.OriginalDefinition;
+                    if (sprop.SetMethod is { } ss) yield return ss.OriginalDefinition;
+                }
+                break;
+        }
+    }
+
     bool IsInternalCallTo(IOperation op, IMethodSymbol callee, out IOperation call)
     {
         call = null;
-        IMethodSymbol target = op switch
-        {
-            IInvocationOperation inv => inv.TargetMethod.OriginalDefinition,
-            IObjectCreationOperation oc => oc.Constructor?.OriginalDefinition,
-            _ => null,
-        };
-        if (target != null && SymbolEqualityComparer.Default.Equals(target, callee)) { call = op; return true; }
-        // Wave-9 round-3: a this-receiver virtual call site emits against the LEAF override —
-        // match the emission-faithful target too, else the leaf edge added by CollectInternalCallees
-        // is filtered as "no named call" and the spill never reaches the call site.
-        if (op is IInvocationOperation linv && LeafCallTarget(linv) is { } leaf
-            && SymbolEqualityComparer.Default.Equals(leaf, callee))
-        { call = op; return true; }
-        // Wave-12 r2 [V1]: a variable-receiver / interface dispatch matches the LOCAL method it can
-        // land on (mirrors the CrossDispatchLocalTarget edge added by CollectInternalCallees), so
-        // the tail classification and the per-site tail-spared marking see these sites too.
-        if (op is IInvocationOperation xinv && IsCrossDispatchReceiver(xinv.Instance, xinv.TargetMethod)
-            && CrossDispatchLocalTarget(xinv.TargetMethod) is { } crossLeaf
-            && SymbolEqualityComparer.Default.Equals(crossLeaf, callee))
-        { call = op; return true; }
-        // Wave-9 round-2 [W2]: a this-receiver property/indexer reference is an accessor CALL —
-        // matched against either accessor (conservative: a write-position reference matching the
-        // getter only ever classifies an extra site non-tail, which over-spills, never corrupts).
-        if (op is IPropertyReferenceOperation { Instance: IInstanceReferenceOperation } pr)
-        {
-            if ((pr.Property.GetMethod is { } pg && SymbolEqualityComparer.Default.Equals(pg.OriginalDefinition, callee))
-             || (pr.Property.SetMethod is { } ps && SymbolEqualityComparer.Default.Equals(ps.OriginalDefinition, callee)))
-            { call = op; return true; }
-            // Wave-9 round-3: leaf-override accessors (the getter/setter emission dispatches via
-            // ResolveDispatchProperty) — same emission-faithful matching as the invocation arm.
-            if (LeafPropertyTarget(pr) is { } lp
-                && ((lp.GetMethod is { } lg && SymbolEqualityComparer.Default.Equals(lg.OriginalDefinition, callee))
-                 || (lp.SetMethod is { } ls && SymbolEqualityComparer.Default.Equals(ls.OriginalDefinition, callee))))
-            { call = op; return true; }
-        }
-        // Wave-12 r2 [V1]: variable-receiver / interface accessor dispatch — same emission-faithful
-        // matching as the cross invocation arm (mirrors CollectInternalCallees' cross property arm).
-        if (op is IPropertyReferenceOperation xpr && IsCrossDispatchReceiver(xpr.Instance, xpr.Property)
-            && ((CrossDispatchLocalTarget(xpr.Property.GetMethod) is { } xg
-                 && SymbolEqualityComparer.Default.Equals(xg, callee))
-             || (CrossDispatchLocalTarget(xpr.Property.SetMethod) is { } xs
-                 && SymbolEqualityComparer.Default.Equals(xs, callee))))
-        { call = op; return true; }
-        // Wave-14 r4: a computed property / indexer reference on a USER-STRUCT receiver — whether `this`
-        // OR a struct-typed local/temp on a FRESH instance (`next.Fact`, `next[d-1]`, and the write path
-        // `next[d-1] = ..`) — is a same-program accessor CALL (structs compile into this program's accessor
-        // functions). The this-receiver arm above only matches an IInstanceReferenceOperation, so this
-        // per-callee non-tail classification (HasNonTailCallTo) missed recursion threaded through an
-        // accessor on a fresh instance and the spill-driving `recursive` edge was never recorded even
-        // though CollectInternalCallees now adds the graph edge. Both accessors matched conservatively
-        // (an extra site only over-spills, §8-3), mirroring the this-receiver arm and CollectInternalCallees.
-        if (op is IPropertyReferenceOperation sprc
-            && sprc.Property is { IsStatic: false } sprcProp
-            && sprcProp.ContainingType is INamedTypeSymbol sprcCt && EmitContext.IsUserStruct(sprcCt)
-            && ((sprcProp.GetMethod is { } spg && SymbolEqualityComparer.Default.Equals(spg.OriginalDefinition, callee))
-             || (sprcProp.SetMethod is { } sps && SymbolEqualityComparer.Default.Equals(sps.OriginalDefinition, callee))))
-        { call = op; return true; }
+        foreach (var t in EnumerateInternalCallTargets(op))
+            if (SymbolEqualityComparer.Default.Equals(t, callee)) { call = op; return true; }
         return false;
     }
 
@@ -3290,87 +3296,13 @@ public class UasmEmitter
     void CollectInternalCallees(IOperation op, HashSet<IMethodSymbol> internalMethods, HashSet<IMethodSymbol> result)
     {
         if (op == null) return;
-        if (op is IInvocationOperation inv)
-        {
-            var t = inv.TargetMethod.OriginalDefinition;
+        // Symmetric arms (invocation static/leaf/cross, ctor, property this/leaf/cross/user-struct) —
+        // shared with IsInternalCallTo so they cannot drift (see EnumerateInternalCallTargets).
+        foreach (var t in EnumerateInternalCallTargets(op))
             if (internalMethods.Contains(t)) result.Add(t);
-            // Wave-9 round-3 [W1]/[W2]/[W3]: a this-receiver virtual call dispatches the LEAF
-            // override at emission, so the leaf is a call-graph edge too. Without it a runtime
-            // cycle closed through the override relation (base body virtual-calling back into the
-            // override, or an override's base.M call whose base body recurses virtually) was
-            // invisible to the SCC analysis and no frame ever spilled (VM-proven 305 vs CLR 605 /
-            // 14 vs 12 / 17 vs 21). The static edge stays — extra edges only ever over-spill (§8-3).
-            if (LeafCallTarget(inv) is { } leafT && internalMethods.Contains(leafT)) result.Add(leafT);
-            // Wave-12 r2 [V1]: a variable-receiver / interface dispatch that can land back on this
-            // program is a call-graph edge to the local most-derived override (see
-            // CrossDispatchLocalTarget). Extra edges only ever over-spill (§8-3).
-            if (IsCrossDispatchReceiver(inv.Instance, inv.TargetMethod)
-                && CrossDispatchLocalTarget(inv.TargetMethod) is { } crossT
-                && internalMethods.Contains(crossT)) result.Add(crossT);
-        }
-        if (op is IObjectCreationOperation oc && oc.Constructor != null)
-        {
-            var c = oc.Constructor.OriginalDefinition;
-            if (internalMethods.Contains(c)) result.Add(c);
-        }
-        // Wave-9 round-2 [W2]: a this-receiver property/indexer reference is a CALL to its manual
-        // accessor (this-path reads/writes direct-JUMP the registered accessor function), so it is a
-        // call-graph edge — without it, recursion threaded through any accessor was invisible to the
-        // SCC analysis and accessor frames were never spilled (VM-proven: every frame's locals
-        // clobbered to the deepest value, 5 where the CLR gives 11). Both accessors are added
-        // conservatively (read/write/compound positions all route here; an extra edge only ever
-        // over-spills, §8-3 direction). Auto accessors have no body op and thus no outgoing edges —
-        // they can never close a cycle, so the extra edges are inert for them.
-        if (op is IPropertyReferenceOperation { Instance: IInstanceReferenceOperation } pr)
-        {
-            if (pr.Property.GetMethod is { } pg && internalMethods.Contains(pg.OriginalDefinition))
-                result.Add(pg.OriginalDefinition);
-            if (pr.Property.SetMethod is { } ps && internalMethods.Contains(ps.OriginalDefinition))
-                result.Add(ps.OriginalDefinition);
-            // Wave-9 round-3: this-receiver virtual accessor references dispatch the LEAF override's
-            // accessors at emission (ResolveDispatchProperty) — add those edges too, same rationale
-            // as the invocation arm above (getter-recursion flavor VM-proven 305 vs CLR 605).
-            if (LeafPropertyTarget(pr) is { } leafP)
-            {
-                if (leafP.GetMethod is { } lg && internalMethods.Contains(lg.OriginalDefinition))
-                    result.Add(lg.OriginalDefinition);
-                if (leafP.SetMethod is { } ls && internalMethods.Contains(ls.OriginalDefinition))
-                    result.Add(ls.OriginalDefinition);
-            }
-        }
-        // Wave-12 r2 [V1]: a property/indexer accessor dispatched through a variable or
-        // interface-typed receiver is a cross-program accessor CALL that can land back on this
-        // program — same rationale as the invocation arm (VM-proven 75 vs CLR 59+16: the getter's
-        // live local was clobbered by the reentrant accessor activation). Both accessors are added
-        // conservatively, mirroring the this-receiver arm above.
-        if (op is IPropertyReferenceOperation vpr && IsCrossDispatchReceiver(vpr.Instance, vpr.Property))
-        {
-            if (CrossDispatchLocalTarget(vpr.Property.GetMethod) is { } cg && internalMethods.Contains(cg))
-                result.Add(cg);
-            if (CrossDispatchLocalTarget(vpr.Property.SetMethod) is { } cs && internalMethods.Contains(cs))
-                result.Add(cs);
-        }
-        // Wave-14 r4: a computed property / indexer reference on a USER-STRUCT receiver — whether `this`
-        // OR a struct-typed local/temp on a FRESH instance (`next.Fact`, `c.Zong`, `next[d-1]`, and the
-        // WRITE path `next[d-1] = ...`) — is a same-program CALL to the struct's manual accessor (structs
-        // are value types compiled into this program's accessor functions), so it is a call-graph edge.
-        // The this-receiver arm above only matches an IInstanceReferenceOperation, so recursion threaded
-        // through a computed property / indexer on a fresh struct instance was invisible to the SCC
-        // analysis and the accessor frame never spilled — every activation clobbered the caller's live
-        // locals (VM-proven: computed-property factorial 1 where the CLR gives 120; indexer-setter
-        // side-effect 0 vs 16; cross-type property bridge 0 vs 12). Mirrors the invocation arm's
-        // receiver-agnostic add-if-internal (the accessor DEFINITIONS are recursion roots via
-        // CollectStructMemberDefinitions, so they are already in internalMethods) and
-        // CollectStructMemberDefinitions's struct-property arm (both accessors, read AND write paths).
-        if (op is IPropertyReferenceOperation spr
-            && spr.Property is { IsStatic: false } sprop
-            && sprop.ContainingType is INamedTypeSymbol sprct && EmitContext.IsUserStruct(sprct))
-        {
-            if (sprop.GetMethod is { } sg && internalMethods.Contains(sg.OriginalDefinition))
-                result.Add(sg.OriginalDefinition);
-            if (sprop.SetMethod is { } ss && internalMethods.Contains(ss.OriginalDefinition))
-                result.Add(ss.OriginalDefinition);
-        }
+        // ASYMMETRY (see EnumerateInternalCallTargets): the user-defined operator edge lives ONLY here.
+        // IsInternalCallTo omits it — a confirmed latent recursive-operator spill bug preserved as-is so
+        // this refactor is zero-codegen-change. The SCC edge itself is needed for IsRecursiveEdge.
         var opMethod = (op as IBinaryOperation)?.OperatorMethod ?? (op as IUnaryOperation)?.OperatorMethod;
         if (opMethod != null && internalMethods.Contains(opMethod.OriginalDefinition))
             result.Add(opMethod.OriginalDefinition);

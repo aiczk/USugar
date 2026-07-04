@@ -2432,6 +2432,27 @@ public abstract partial class HandlerBase
         return InternalCall(func.Name, args, retType);
     }
 
+    /// <summary>Loud-fail armor for the struct-member-REACHABILITY side of walk-scope drift — the
+    /// analogue of <see cref="ClosureEnvLeaf"/> on the delegate-capture side. A user-struct member
+    /// only reaches generic extern-signature construction (<c>BuildExternCallSignature</c> for a
+    /// call, <c>BuildPropertyGetSignature</c> for an accessor) when it has NO registered CFunction —
+    /// i.e. a Phase-1 collector (CollectStructMethodsInOperation / CollectForeignStaticCallsInOperation)
+    /// or an on-demand ResolveStructMember arm did not cover this member/reach shape. Historically that
+    /// silently minted a bogus <c>SystemObjectArray.__&lt;Name&gt;__…</c> extern that only UasmValidator
+    /// or the VM caught, with a message that never named the root cause (this exact shape recurred as
+    /// roadmap B41/B46/B47). Fail HERE, where the bogus extern would be born, with a diagnosis instead.
+    /// Sound: <see cref="EmitContext.IsUserStruct"/> is false for every SDK/native/BCL type, so this can
+    /// never fire on a legitimate extern call. The source location and operation kind are appended
+    /// automatically by UasmEmitter.TagLocation (the statement/expression dispatch wraps every handler).</summary>
+    protected void GuardUserStructMemberReachedExtern(ITypeSymbol containingType, string memberName)
+    {
+        if (containingType is INamedTypeSymbol ct && EmitContext.IsUserStruct(ct))
+            throw new InvalidOperationException(
+                $"user-struct member '{ct.Name}.{memberName}' reached emission without a registered "
+                + "CFunction — a Phase-1 collector or on-demand registration arm does not cover this "
+                + "member/reach shape (collector-scope drift; see roadmap B46/B47 family).");
+    }
+
     /// <summary>True when the dispatch invocation at <paramref name="dispatchOp"/> can re-enter the
     /// containing function (design §4.3: containing function on a synthetic-edge-inclusive SCC cycle
     /// AND the dispatch is non-tail — pre-computed syntax-keyed by BuildRecursionInfo). When true,

@@ -1132,6 +1132,13 @@ public partial class InvocationHandler
             containingTypeSym = vConcrete;
         }
 
+        // Armor: a user-struct member reaching generic extern construction means no CFunction was
+        // registered for it (collector-scope drift) — fail with a diagnosis, not a bogus
+        // SystemObjectArray.__<Name>__ extern (roadmap B46 family). An instance user-struct method is
+        // pre-routed to EmitStructInstanceCall (InvocationHandler), so this catches static-on-struct and
+        // any future uncovered call shape.
+        GuardUserStructMemberReachedExtern(containingTypeSym, method.Name);
+
         var containingType = GetUdonType(containingTypeSym);
 
         // Object.Instantiate → VRCInstantiate (Udon VM redirect)

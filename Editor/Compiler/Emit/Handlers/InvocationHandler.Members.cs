@@ -134,6 +134,11 @@ public partial class InvocationHandler
                     return LoadField(_ctx.DeclareStructConst(returnType, value), returnType);
             }
 
+            // Armor: a user-struct static property reaching here (the B47 on-demand arm above did not
+            // register its accessor) would mint a bogus SystemObjectArray.__get_<Name>__ extern — fail
+            // with a diagnosis instead (collector-scope drift, roadmap B47 family).
+            GuardUserStructMemberReachedExtern(op.Property.ContainingType, op.Property.Name);
+
             return ExternCall(
                 ExternResolver.BuildPropertyGetSignature(containingType, op.Property.Name, returnType),
                 new List<CLeaf>(),
