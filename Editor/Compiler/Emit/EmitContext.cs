@@ -263,147 +263,51 @@ public class EmitContext
     /// by IMethodSymbol and its function types/body were emitted under the FIRST spec's map, so a
     /// second instantiation would silently run the first instantiation's types. (Stage 2 §8.1: the
     /// former <c>Capturing</c> tier is retired — a NON-type-param-dependent capturing closure shares
-    /// one T-free hoist and its captures live in per-activation env records, so multiple
-    /// instantiations no longer alias.) <c>StructMemberCapturing</c> (wave-14): the Stage-2
-    /// per-activation env record that makes the T-free case above safe is NEVER available to a closure
-    /// hosted inside a GENERIC STRUCT's own member — CaptureScopeAnalysis.AddRoots only walks class+base
-    /// roots (B45, ledgered as a known struct-closure gap), so a struct-hosted closure always falls
-    /// back to the naive shared-field LocalBindings mechanism regardless of T-dependence. That fallback
-    /// is fine for a NON-capturing closure (nothing to alias) but not for a capturing one: the shared
-    /// captured-local field is rebound by whichever instantiation registers last, and the ONE hoisted
-    /// closure body was already emitted against a single fixed binding (VM-proven: a non-T-dependent
-    /// closure inside a two-instantiation generic struct method silently dropped the first
-    /// instantiation's captured contribution — 90 instead of the CLR's 110).</summary>
-    public enum ClosurePin { None, TypeParamDependent, StructMemberCapturing }
+    /// one T-free hoist and its captures live in per-activation env records, so multiple instantiations
+    /// no longer alias. B45 M2: the former <c>StructMemberCapturing</c> tier (wave-14) is likewise
+    /// retired — once CaptureScopeAnalysis walks user-struct member bodies (B45 M1), a struct-hosted
+    /// capturing closure gets the SAME per-activation env record as a class-method one, so the T-free
+    /// multi-instantiation case is sound for struct members too. Only T-dependence still pins.)</summary>
+    public enum ClosurePin { None, TypeParamDependent }
 
     /// <summary>[X6]/[Y2]/wave-14 gate: does the generic DEFINITION's body contain an
     /// instantiation-pinning closure? Walks the definition's own operation tree (specs share it).
-    /// Type-param dependence dominates; for a generic STRUCT member, ANY capturing closure pins too
-    /// (B45 — no per-activation protection exists for struct-hosted closures at all).</summary>
+    /// Only type-param dependence pins now (B45 M2 retired the struct-member capture tier — struct-hosted
+    /// closures get the same per-activation env records as class ones, so capture alone no longer pins).</summary>
     public ClosurePin GenericBodyClosurePin(Compilation compilation, IMethodSymbol def)
     {
         var syntaxRef = def.DeclaringSyntaxReferences.FirstOrDefault();
         if (syntaxRef == null) return ClosurePin.None;
         var syntax = syntaxRef.GetSyntax();
         var body = compilation.GetSemanticModel(syntax.SyntaxTree).GetOperation(syntax);
-        bool isStructMember = def.ContainingType is INamedTypeSymbol ct && IsUserStruct(ct);
-        // Wave-14 r5: resolve the transitive local-function capture set ONCE over the whole method
-        // body so a NON-capturing self/mutually-recursive LF is not mis-pinned. A raw
-        // localFunctionRefs count conflates "references another/own LF" with "captures state"; only
-        // the fixpoint distinguishes them, and it needs every LF's body (sibling bodies live outside
-        // any single closure), so it runs here, not inside the per-closure check.
-        var lfTransitiveCaptures = isStructMember
-            ? ComputeTransitiveLocalFunctionCaptures(body)
-            : null;
         var pin = ClosurePin.None;
-        WalkClosurePins(body, isStructMember, lfTransitiveCaptures, ref pin);
+        WalkClosurePins(body, ref pin);
         return pin;
     }
 
     // Stage 2 §8.2: the walk no longer early-returns on capture — capture alone no longer pins an
-    // instantiation (per-activation env records de-alias multi-instantiation captures). It visits
-    // EVERY closure and only pins on TypeParamDependence: a closure whose signature, body, or a
-    // captured variable references the enclosing generic's type parameters cannot share one T-free
-    // hoist across specs. Granularity stays per-definition (§8.2): one T-dependent closure pins the
-    // whole definition; no partial legalization. Wave-14: for a STRUCT member, additionally pin on
-    // ANY capture (B45 — struct-hosted closures never get the per-activation env-record protection
-    // that makes the T-free case safe for ordinary class-method generics).
-    void WalkClosurePins(IOperation op, bool isStructMember,
-        Dictionary<IMethodSymbol, HashSet<ISymbol>> lfTransitiveCaptures, ref ClosurePin pin)
+    // instantiation (per-activation env records de-alias multi-instantiation captures, class- and
+    // struct-hosted alike since B45 M2). It visits EVERY closure and only pins on TypeParamDependence:
+    // a closure whose signature, body, or a captured variable references the enclosing generic's type
+    // parameters cannot share one T-free hoist across specs. Granularity stays per-definition (§8.2):
+    // one T-dependent closure pins the whole definition; no partial legalization.
+    void WalkClosurePins(IOperation op, ref ClosurePin pin)
     {
         if (op == null || pin != ClosurePin.None) return;
         switch (op)
         {
             case IAnonymousFunctionOperation af:
                 if (ClosureUsesMethodTypeParam(af.Symbol, af.Body)) { pin = ClosurePin.TypeParamDependent; return; }
-                if (isStructMember && ClosureCapturesAnything(af.Symbol, af.Body, lfTransitiveCaptures))
-                    { pin = ClosurePin.StructMemberCapturing; return; }
                 break;
             case ILocalFunctionOperation lf when lf.Symbol != null:
                 if (ClosureUsesMethodTypeParam(lf.Symbol, lf.Body)) { pin = ClosurePin.TypeParamDependent; return; }
-                if (isStructMember && ClosureCapturesAnything(lf.Symbol, lf.Body, lfTransitiveCaptures))
-                    { pin = ClosurePin.StructMemberCapturing; return; }
                 break;
         }
         foreach (var child in op.Children)
         {
-            WalkClosurePins(child, isStructMember, lfTransitiveCaptures, ref pin);
+            WalkClosurePins(child, ref pin);
             if (pin != ClosurePin.None) return;
         }
-    }
-
-    /// <summary>Does this closure capture any outer local/parameter — directly, or TRANSITIVELY through
-    /// a local function it references? Reuses LambdaCaptureAnalyzer's free-variable walk (same exclusion
-    /// rules: the closure's own parameters/locals/nested-closure parameters are not captures).
-    /// localFunctionRefs alone is NOT a capture signal (wave-14 r5) — it is the fixpoint seed; a
-    /// referenced LF marks this closure capturing only when its resolved transitive capture set holds a
-    /// symbol this closure did not declare. A self/mutually-recursive LF with zero free variables
-    /// resolves to the empty set and is correctly non-capturing.</summary>
-    static bool ClosureCapturesAnything(IMethodSymbol closureSym, IOperation closureBody,
-        Dictionary<IMethodSymbol, HashSet<ISymbol>> lfTransitiveCaptures)
-    {
-        if (closureSym == null || closureBody == null) return false;
-        var directCaptures = new HashSet<ISymbol>(SymbolEqualityComparer.Default);
-        var inside = new HashSet<ISymbol>(SymbolEqualityComparer.Default);
-        var localFunctionRefs = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
-        LambdaCaptureAnalyzer.AnalyzeLocalFunction(closureSym, closureBody, directCaptures, inside, localFunctionRefs);
-        if (directCaptures.Count > 0) return true;
-        if (lfTransitiveCaptures != null)
-            foreach (var callee in localFunctionRefs)
-                if (lfTransitiveCaptures.TryGetValue(callee.OriginalDefinition ?? callee, out var calleeCaps))
-                    foreach (var s in calleeCaps)
-                        if (!inside.Contains(s)) return true;
-        return false;
-    }
-
-    /// <summary>Wave-14 r5: transitive capture set per local function in a method body — the
-    /// StructMemberCapturing-guard twin of CaptureScopeAnalysis.SeedLocalFunctionCaptureFixpoint.
-    /// Capture-ness is TRANSITIVE over the local-function call graph (a wrapper LF over a capturing LF
-    /// is the same closure one hop removed); each hop is filtered against the caller's own `inside` set
-    /// so a callee capturing only the CALLER's locals does not mark the caller. Keyed by
-    /// OriginalDefinition to match AnalyzeLocalFunction's ref keys.</summary>
-    static Dictionary<IMethodSymbol, HashSet<ISymbol>> ComputeTransitiveLocalFunctionCaptures(IOperation body)
-    {
-        var lfCaptures = new Dictionary<IMethodSymbol, HashSet<ISymbol>>(SymbolEqualityComparer.Default);
-        var lfInside = new Dictionary<IMethodSymbol, HashSet<ISymbol>>(SymbolEqualityComparer.Default);
-        var lfRefs = new Dictionary<IMethodSymbol, HashSet<IMethodSymbol>>(SymbolEqualityComparer.Default);
-
-        void Collect(IOperation op)
-        {
-            if (op == null) return;
-            if (op is ILocalFunctionOperation lf && lf.Symbol != null && lf.Body != null)
-            {
-                var direct = new HashSet<ISymbol>(SymbolEqualityComparer.Default);
-                var inside = new HashSet<ISymbol>(SymbolEqualityComparer.Default);
-                var refs = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
-                LambdaCaptureAnalyzer.AnalyzeLocalFunction(lf.Symbol, lf.Body, direct, inside, refs);
-                var key = lf.Symbol.OriginalDefinition ?? lf.Symbol;
-                lfCaptures[key] = direct;
-                lfInside[key] = inside;
-                lfRefs[key] = refs;
-            }
-            foreach (var child in op.Children) Collect(child);
-        }
-        Collect(body);
-
-        bool changed = true;
-        while (changed)
-        {
-            changed = false;
-            foreach (var kv in lfRefs)
-            {
-                var mySet = lfCaptures[kv.Key];
-                var myInside = lfInside[kv.Key];
-                foreach (var callee in kv.Value)
-                {
-                    if (!lfCaptures.TryGetValue(callee, out var calleeSet)) continue;
-                    if (ReferenceEquals(calleeSet, mySet)) continue;
-                    foreach (var s in calleeSet)
-                        if (!myInside.Contains(s) && mySet.Add(s)) changed = true;
-                }
-            }
-        }
-        return lfCaptures;
     }
 
     static bool ClosureUsesMethodTypeParam(IMethodSymbol closureSym, IOperation closureBody)
@@ -450,14 +354,6 @@ public class EmitContext
                     + "the method's type parameters. The hoisted closure is shared across instantiations "
                     + "in the flat-heap model and was emitted with the first instantiation's types. "
                     + "Use a single instantiation, or keep the closure independent of the type parameters.");
-            case ClosurePin.StructMemberCapturing:
-                throw new System.NotSupportedException(
-                    $"Generic struct member '{methodName}' is instantiated with more than one "
-                    + "type-argument combination but contains a lambda or local function that captures "
-                    + "an outer variable. A struct method's hoisted closure has no per-activation capture "
-                    + "record and shares one flat-heap field across every instantiation, so a second "
-                    + "instantiation would silently read/write the wrong instantiation's captured state. "
-                    + "Use a single instantiation, or make the closure non-capturing.");
         }
     }
 
