@@ -562,19 +562,25 @@ public abstract class HandlerBase
             && _methodParamVarIds.TryGetValue(method, out var paramIds)
             && param.Ordinal < paramIds.Length)
             return paramIds[param.Ordinal];
+        // !IsDefinition (not IsGenericMethod): a constructed spec of ANY kind — a generic method
+        // instantiation, a member of a constructed generic struct (feature G; the method itself need
+        // not be generic), or both. IsGenericMethod alone misses the containing-type-generic case.
         if (_currentMethod != null && param.ContainingSymbol is IMethodSymbol paramMethod
-            && _currentMethod.IsGenericMethod && !_currentMethod.IsDefinition
+            && !_currentMethod.IsDefinition
             && SymbolEqualityComparer.Default.Equals(paramMethod, _currentMethod.OriginalDefinition)
             && _methodParamVarIds.TryGetValue(_currentMethod, out var specParamIds)
             && param.Ordinal < specParamIds.Length)
             return specParamIds[param.Ordinal];
-        // Wave-9 round-7 [Y3]: a hoisted lambda/local-function body inside a GENERIC method reads
-        // the enclosing method's parameter. The reference binds the generic DEFINITION's parameter
-        // symbol (the closure body is the definition's operation tree) while the param heap vars
-        // are registered under the monomorphized SPEC — and _currentMethod here is the closure, not
-        // the spec, so neither arm above fires. A capturing closure pins its generic to a single
-        // instantiation ([X6] round 5 reject), so FirstGenericSpec is the exact owner.
-        if (param.ContainingSymbol is IMethodSymbol genericOwner && genericOwner.IsGenericMethod
+        // Wave-9 round-7 [Y3]: a hoisted lambda/local-function body inside a GENERIC method (or,
+        // feature G, a method on a generic struct) reads the enclosing method's parameter. The
+        // reference binds the generic DEFINITION's parameter symbol (the closure body is the
+        // definition's operation tree) while the param heap vars are registered under the
+        // monomorphized SPEC — and _currentMethod here is the closure, not the spec, so neither arm
+        // above fires. A capturing closure pins its generic to a single instantiation ([X6] round 5
+        // reject), so FirstGenericSpec is the exact owner. No IsGenericMethod pre-filter: the
+        // dictionary lookup on OriginalDefinition is itself the correct, sufficient gate (same
+        // reasoning as the EmitMethod closure-map walk-up).
+        if (param.ContainingSymbol is IMethodSymbol genericOwner
             && _ctx.FirstGenericSpec.TryGetValue(genericOwner.OriginalDefinition, out var ownerSpec)
             && _methodParamVarIds.TryGetValue(ownerSpec, out var ownerSpecIds)
             && param.Ordinal < ownerSpecIds.Length)
@@ -1222,11 +1228,11 @@ public abstract class HandlerBase
         // object[] as synthetic param0 (mutates this-fields through the shared backing array).
         if (propRef.Property is { IsIndexer: false, SetMethod: { } aggSetter }
             && propRef.Instance?.Type is INamedTypeSymbol aggSetType && EmitContext.IsAggregateType(aggSetType)
-            && _methodFunctions.ContainsKey(aggSetter.OriginalDefinition))
+            && _methodFunctions.ContainsKey(aggSetter))
         {
             var aggRecv = LoadInstanceRaw(propRef.Instance);
             return aggSetVal => EmitExprStmt(
-                EmitCallToMethod(aggSetter.OriginalDefinition, new List<CLeaf> { aggRecv, aggSetVal }));
+                EmitCallToMethod(aggSetter, new List<CLeaf> { aggRecv, aggSetVal }));
         }
 
         // User-defined indexer on a user STRUCT instance (`s[i] = v`) → call the setter with the struct
@@ -1234,14 +1240,14 @@ public abstract class HandlerBase
         // VisitIndexerGet; without it this falls to a bogus SystemObjectArray.__set_Item extern. (diff-fuzz wave 4)
         if (propRef.Property is { IsIndexer: true, SetMethod: { } aggIdxSetter }
             && propRef.Instance?.Type is INamedTypeSymbol aggIdxSetType && EmitContext.IsAggregateType(aggIdxSetType)
-            && _methodFunctions.ContainsKey(aggIdxSetter.OriginalDefinition))
+            && _methodFunctions.ContainsKey(aggIdxSetter))
         {
             var setterArgs = new List<CLeaf> { LoadInstanceRaw(propRef.Instance) };
             setterArgs.AddRange(EvaluateIndexerArgs(propRef)); // wave-9 r4: named index args bind by ordinal
             return aggIdxVal =>
             {
                 setterArgs.Add(aggIdxVal);
-                EmitExprStmt(EmitCallToMethod(aggIdxSetter.OriginalDefinition, setterArgs));
+                EmitExprStmt(EmitCallToMethod(aggIdxSetter, setterArgs));
             };
         }
 
@@ -1616,23 +1622,49 @@ public abstract class HandlerBase
 
     /// <summary>Resolve type parameters in a generic method's type arguments through the current
     /// type-param map (e.g. Min&lt;T&gt; → Min&lt;int&gt; inside a specialization's emission). Shared by
-    /// the invocation path and the delegate-creation path (wave-9 round-2 [W7]).</summary>
+    /// the invocation path and the delegate-creation path (wave-9 round-2 [W7]).
+    ///
+    /// Feature G: a call INSIDE a generic struct's own method body to another member of the SAME
+    /// struct (self-recursion, or a same-struct helper call) binds its target at the OPEN containing
+    /// type (Box&lt;T&gt;.Helper(), never Box&lt;int&gt;.Helper()) — the body is always processed from the
+    /// shared/unconstructed operation tree regardless of which instantiation is emitting (same
+    /// invariant as a generic method's own type args). So this also re-closes the CONTAINING type
+    /// through the ambient map when it carries an open type parameter, re-locating the member on the
+    /// closed containing type before (if the method is itself ALSO generic) re-applying the method's
+    /// own type-arg substitution on top — the two dimensions are independent and compose.</summary>
     protected IMethodSymbol SubstituteMethodTypeArgs(IMethodSymbol target)
     {
-        if (!target.IsGenericMethod || _typeParamMap == null) return target;
-        var needsSub = false;
-        foreach (var ta in target.TypeArguments)
+        if (_typeParamMap == null) return target;
+
+        bool ContainsOpenParam(IEnumerable<ITypeSymbol> args) =>
+            args.Any(ta => ta is ITypeParameterSymbol tp && _typeParamMap.ContainsKey(tp));
+
+        bool containingNeedsSub = target.ContainingType.IsGenericType
+            && ContainsOpenParam(target.ContainingType.TypeArguments);
+        bool methodNeedsSub = target.IsGenericMethod && ContainsOpenParam(target.TypeArguments);
+        if (!containingNeedsSub && !methodNeedsSub) return target;
+
+        var memberDef = target.OriginalDefinition;
+        var relocated = memberDef;
+        if (containingNeedsSub)
         {
-            if (ta is not ITypeParameterSymbol tp || !_typeParamMap.ContainsKey(tp))
-                continue;
-            needsSub = true;
-            break;
+            var newContainingArgs = target.ContainingType.TypeArguments
+                .Select(ta => ta is ITypeParameterSymbol tp && _typeParamMap.TryGetValue(tp, out var sub) ? sub : ta)
+                .ToArray();
+            var closedContaining = target.ContainingType.OriginalDefinition.Construct(newContainingArgs);
+            relocated = closedContaining.GetMembers(memberDef.Name).OfType<IMethodSymbol>()
+                .First(m => SymbolEqualityComparer.Default.Equals(m.OriginalDefinition, memberDef));
         }
-        if (!needsSub) return target;
-        var newTypeArgs = target.TypeArguments
-            .Select(ta => ta is ITypeParameterSymbol tp2 && _typeParamMap.TryGetValue(tp2, out var sub) ? sub : ta)
-            .ToArray();
-        return target.OriginalDefinition.Construct(newTypeArgs);
+
+        if (methodNeedsSub)
+        {
+            var newMethodArgs = target.TypeArguments
+                .Select(ta => ta is ITypeParameterSymbol tp2 && _typeParamMap.TryGetValue(tp2, out var sub2) ? sub2 : ta)
+                .ToArray();
+            relocated = relocated.OriginalDefinition.Construct(newMethodArgs);
+        }
+
+        return relocated;
     }
 
     /// <summary>Register a monomorphized generic specialization: CFunction + ordinal param vars +

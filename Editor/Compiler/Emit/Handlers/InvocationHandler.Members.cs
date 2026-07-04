@@ -44,9 +44,9 @@ public partial class InvocationHandler
         // user getter with the receiver object[] as synthetic param0 (same convention as EmitStructInstanceCall).
         // The getter only reads, so the receiver is passed uncloned.
         if (op.Instance != null && op.Instance.Type is INamedTypeSymbol aggGet && EmitContext.IsAggregateType(aggGet)
-            && op.Property.GetMethod is { } aggGetter && _methodFunctions.ContainsKey(aggGetter.OriginalDefinition))
+            && op.Property.GetMethod is { } aggGetter && _methodFunctions.ContainsKey(aggGetter))
         {
-            var ret = EmitCallToMethod(aggGetter.OriginalDefinition,
+            var ret = EmitCallToMethod(aggGetter,
                 new List<CLeaf> { LoadInstanceRaw(op.Instance) });
             return op.Property.Type is INamedTypeSymbol getRetAgg && EmitContext.IsAggregateType(getRetAgg)
                 ? EmitDeepCloneAggregate(ret, getRetAgg) : ret;
@@ -201,11 +201,11 @@ public partial class InvocationHandler
         // (object[]) as param0 plus the index args, like a struct computed property. Without this it falls to
         // a bogus SystemObjectArray.__get_Item extern the validator rejects. (diff-fuzz wave 4)
         if (op.Instance != null && op.Instance.Type is INamedTypeSymbol aggIdx && EmitContext.IsAggregateType(aggIdx)
-            && op.Property.GetMethod is { } idxGetter && _methodFunctions.ContainsKey(idxGetter.OriginalDefinition))
+            && op.Property.GetMethod is { } idxGetter && _methodFunctions.ContainsKey(idxGetter))
         {
             var sargs = new List<CLeaf> { LoadInstanceRaw(op.Instance) };
             sargs.AddRange(EvaluateIndexerArgs(op)); // wave-9 round-4: named index args bind by ordinal
-            var ret = EmitCallToMethod(idxGetter.OriginalDefinition, sargs);
+            var ret = EmitCallToMethod(idxGetter, sargs);
             return op.Property.Type is INamedTypeSymbol idxRetAgg && EmitContext.IsAggregateType(idxRetAgg)
                 ? EmitDeepCloneAggregate(ret, idxRetAgg) : ret;
         }

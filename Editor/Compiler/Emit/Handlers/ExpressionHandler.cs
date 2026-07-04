@@ -551,8 +551,8 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
             // A user STRUCT conversion operator is an emitted method, not an extern: route to it (its containing
             // type is SystemObjectArray-backed, so ResolveConversionExtern would build a non-existent extern).
             if (conv.OperatorMethod.ContainingType is INamedTypeSymbol convOpCt && EmitContext.IsUserStruct(convOpCt)
-                && _methodFunctions.ContainsKey(conv.OperatorMethod.OriginalDefinition))
-                return EmitCallToMethod(conv.OperatorMethod.OriginalDefinition, new List<CLeaf> { srcVal });
+                && _methodFunctions.ContainsKey(conv.OperatorMethod))
+                return EmitCallToMethod(conv.OperatorMethod, new List<CLeaf> { srcVal });
 
             var dstType = GetUdonType(conv.Type);
             return ExternCall(

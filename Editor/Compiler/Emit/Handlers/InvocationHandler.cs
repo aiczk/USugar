@@ -140,10 +140,14 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
         }
 
         // User-struct instance method: v.Method(...) — receiver object[] passed as synthetic param0.
+        // Feature G: dispatch by the CONSTRUCTED symbol (Box<int>.Get(), not Box<T>.Get()) — target is
+        // already the right constructed spec here, whether from an outer call site (Roslyn hands us
+        // the concretely-typed receiver's member directly) or a self/cross-struct-method call inside
+        // another generic struct method's own body (SubstituteMethodTypeArgs re-closes it above).
         if (!target.IsStatic && target.MethodKind == MethodKind.Ordinary
             && target.ContainingType is INamedTypeSymbol structRecv && EmitContext.IsUserStruct(structRecv)
-            && _methodFunctions.ContainsKey(target.OriginalDefinition))
-            return EmitStructInstanceCall(op, target.OriginalDefinition);
+            && _methodFunctions.ContainsKey(target))
+            return EmitStructInstanceCall(op, target);
 
         // Receiver identity (predates fcd-stage1): an instance method of THIS class family invoked
         // through a NON-this receiver (same-class field/local, base-typed local, cast) used to

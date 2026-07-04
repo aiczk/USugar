@@ -35,9 +35,9 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
         // back. The struct's Udon type is SystemObjectArray, so ResolveBinaryExtern would build a bogus extern.
         if (op.OperatorMethod is { MethodKind: MethodKind.UserDefinedOperator } cuOpM
             && cuOpM.ContainingType is INamedTypeSymbol cuOpCt && EmitContext.IsUserStruct(cuOpCt)
-            && _methodFunctions.ContainsKey(cuOpM.OriginalDefinition))
+            && _methodFunctions.ContainsKey(cuOpM))
         {
-            var res = EmitCallToMethod(cuOpM.OriginalDefinition, new List<CLeaf> { leftVal, rightVal });
+            var res = EmitCallToMethod(cuOpM, new List<CLeaf> { leftVal, rightVal });
             EmitWriteBack(op.Target, res, lv);
             return res;
         }
@@ -189,9 +189,9 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
         // a bogus extern on the struct's SystemObjectArray type and use the wrong (value, 1) shape.
         if (op.OperatorMethod is { MethodKind: MethodKind.UserDefinedOperator } iuOpM
             && iuOpM.ContainingType is INamedTypeSymbol iuOpCt && EmitContext.IsUserStruct(iuOpCt)
-            && _methodFunctions.ContainsKey(iuOpM.OriginalDefinition))
+            && _methodFunctions.ContainsKey(iuOpM))
         {
-            var res = EmitCallToMethod(iuOpM.OriginalDefinition, new List<CLeaf> { targetVal });
+            var res = EmitCallToMethod(iuOpM, new List<CLeaf> { targetVal });
             EmitWriteBack(op.Target, res, lv);
             return op.IsPostfix ? lv.Value : res;
         }

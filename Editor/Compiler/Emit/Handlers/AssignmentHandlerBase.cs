@@ -55,13 +55,13 @@ public abstract class AssignmentHandlerBase : HandlerBase
             // The same receiver/args are reused by the setter in EmitWriteBack. Mirrors VisitIndexerGet.
             case IPropertyReferenceOperation { Property: { IsIndexer: true } } sIdxRef
                 when sIdxRef.Instance?.Type is INamedTypeSymbol sIdxType && EmitContext.IsAggregateType(sIdxType)
-                && sIdxRef.Property.GetMethod is { } sIdxGetter && _methodFunctions.ContainsKey(sIdxGetter.OriginalDefinition):
+                && sIdxRef.Property.GetMethod is { } sIdxGetter && _methodFunctions.ContainsKey(sIdxGetter):
             {
                 var recv = LoadInstanceRaw(sIdxRef.Instance);
                 var cachedArgs = EvaluateIndexerArgs(sIdxRef); // wave-9 r4: named index args bind by ordinal
                 var getterArgs = new List<CLeaf> { recv };
                 getterArgs.AddRange(cachedArgs);
-                var currentVal = EmitCallToMethod(sIdxGetter.OriginalDefinition, getterArgs);
+                var currentVal = EmitCallToMethod(sIdxGetter, getterArgs);
                 return new LValueCapture { Value = currentVal, ArrayVal = recv, IndexArgs = cachedArgs };
             }
             // Wave-9 round-2 [W6]: user indexer COMPOUND assignment through a VARIABLE receiver
@@ -115,10 +115,10 @@ public abstract class AssignmentHandlerBase : HandlerBase
                     return new LValueCapture { Value = slotVal, ArrayVal = recv, IndexVal = slotIdxVal };
                 }
                 if (aggCapPropRef.Property.GetMethod is { } capGetter
-                    && _methodFunctions.ContainsKey(capGetter.OriginalDefinition))
+                    && _methodFunctions.ContainsKey(capGetter))
                 {
                     var recv = LoadInstanceRaw(aggCapPropRef.Instance);
-                    CLeaf getVal = EmitCallToMethod(capGetter.OriginalDefinition, new List<CLeaf> { recv });
+                    CLeaf getVal = EmitCallToMethod(capGetter, new List<CLeaf> { recv });
                     if (aggCapPropRef.Property.Type is INamedTypeSymbol capGetAgg && EmitContext.IsAggregateType(capGetAgg))
                         getVal = EmitDeepCloneAggregate(getVal, capGetAgg);
                     return new LValueCapture { Value = getVal, ArrayVal = recv };
@@ -331,11 +331,11 @@ public abstract class AssignmentHandlerBase : HandlerBase
                         new List<CLeaf> { arrVal, Const(propIdx, "SystemInt32"), valueVal });
                     return;
                 }
-                if (aggPropRef.Property.SetMethod is { } aggSetter && _methodFunctions.ContainsKey(aggSetter.OriginalDefinition))
+                if (aggPropRef.Property.SetMethod is { } aggSetter && _methodFunctions.ContainsKey(aggSetter))
                 {
                     // Wave-11 round-11 [Z1]: reuse the receiver cached by CaptureLValue — the
                     // unconditional LoadInstanceRaw here re-ran side-effecting legs at store time.
-                    EmitExprStmt(EmitCallToMethod(aggSetter.OriginalDefinition,
+                    EmitExprStmt(EmitCallToMethod(aggSetter,
                         new List<CLeaf> { lv.ArrayVal ?? LoadInstanceRaw(aggPropRef.Instance), valueVal }));
                     return;
                 }
@@ -346,13 +346,13 @@ public abstract class AssignmentHandlerBase : HandlerBase
             // cached by CaptureLValue (compound assignment); without this it falls to a bogus __set_Item extern.
             case IPropertyReferenceOperation { Property: { IsIndexer: true, SetMethod: { } aggIdxSetter } } aggIdxRef
                 when aggIdxRef.Instance?.Type is INamedTypeSymbol aggIdxType && EmitContext.IsAggregateType(aggIdxType)
-                && _methodFunctions.ContainsKey(aggIdxSetter.OriginalDefinition):
+                && _methodFunctions.ContainsKey(aggIdxSetter):
             {
                 var setterArgs = new List<CLeaf> { lv.ArrayVal ?? LoadInstanceRaw(aggIdxRef.Instance) };
                 // Wave-9 round-4: the no-cache fallback slots by parameter ordinal too (named args).
                 setterArgs.AddRange(lv.IndexArgs ?? EvaluateIndexerArgs(aggIdxRef));
                 setterArgs.Add(valueVal);
-                EmitExprStmt(EmitCallToMethod(aggIdxSetter.OriginalDefinition, setterArgs));
+                EmitExprStmt(EmitCallToMethod(aggIdxSetter, setterArgs));
                 return;
             }
             // Resolve containing type and instance

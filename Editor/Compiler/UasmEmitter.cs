@@ -969,12 +969,40 @@ public class UasmEmitter
         foreach (var sm in structMethods)
         {
             EmitContext.RejectInParameters(sm); // round-7 follow-up [Q3]
+
+            // Feature G: a member of a CONSTRUCTED generic struct (Box<int>.Get(), Box<int>(x), a
+            // generic struct's operator, etc.) gets its own per-spec body — the containing-type
+            // dimension's version of RegisterGenericSpecialization's discipline (constructed key,
+            // FirstGenericSpec/ClosurePin gate reused via GenericBodyClosurePin, type-arg-suffixed
+            // name: containing type's args, then the method's own if it is ALSO generic). A
+            // non-generic-struct member (sm.ContainingType.IsGenericType false, so sm ==
+            // sm.OriginalDefinition trivially) takes the unchanged path below byte-identically.
+            string typeArgSuffix = "";
+            if (sm.ContainingType.IsGenericType)
+            {
+                var genericDef = sm.OriginalDefinition;
+                if (_ctx.FirstGenericSpec.TryGetValue(genericDef, out var firstSpec))
+                {
+                    if (!SymbolEqualityComparer.Default.Equals(firstSpec, sm))
+                        EmitContext.ThrowIfClosurePinsInstantiation(
+                            _ctx.GenericBodyClosurePin(_compilation, genericDef), sm.Name);
+                }
+                else
+                    _ctx.FirstGenericSpec[genericDef] = sm;
+
+                var containingArgPart = string.Join("_", sm.ContainingType.TypeArguments.Select(ExternResolver.GetUdonTypeName));
+                var methodArgPart = sm.IsGenericMethod
+                    ? "_" + string.Join("_", sm.TypeArguments.Select(ExternResolver.GetUdonTypeName))
+                    : "";
+                typeArgSuffix = $"_{containingArgPart}{methodArgPart}";
+            }
+
             var slot = _ctx.RegisterMethod(sm, i => i.ToString());
             var idx = slot.Index;
             var isCtor = sm.MethodKind == MethodKind.Constructor;
             var funcName = isCtor
-                ? $"__{idx}_{SanitizeId(sm.ContainingType.Name)}__ctor"
-                : $"__{idx}_{SanitizeId(sm.Name)}";
+                ? $"__{idx}_{SanitizeId(sm.ContainingType.Name)}__ctor{typeArgSuffix}"
+                : $"__{idx}_{SanitizeId(sm.Name)}{typeArgSuffix}";
             var func = _module.AddFunction(funcName);
             _methodFunctions[sm] = func;
 
@@ -1931,12 +1959,22 @@ public class UasmEmitter
         var func = _methodFunctions[method];
 
         // Struct instance methods/ctors carry the receiver object[] as synthetic param0; make `this`
-        // resolve to it for the body. Static (operator) struct methods have no receiver.
+        // resolve to it for the body. Static (operator) struct methods have no receiver. B44: a hoisted
+        // lambda/local function declared INSIDE a struct method also reports ContainingType == the
+        // struct (Roslyn resolves a closure's ContainingType up to the nearest named type), but it was
+        // registered via RegisterLocalFunction (envp-based, no receiver param0) — C# itself forbids a
+        // struct closure from referencing `this`'s members (CS1673), so it never needs the receiver;
+        // indexing ParamFieldNames[0] for it read past an empty list.
         _ctx.CurrentStructReceiverParamId =
-            (method.ContainingType is INamedTypeSymbol structCt && EmitContext.IsUserStruct(structCt) && !method.IsStatic)
+            (method.ContainingType is INamedTypeSymbol structCt && EmitContext.IsUserStruct(structCt) && !method.IsStatic
+                && method.MethodKind is not (MethodKind.LambdaMethod or MethodKind.LocalFunction))
                 ? func.ParamFieldNames[0] : null;
 
-        bool isGenericSpec = method.IsGenericMethod && !method.IsDefinition;
+        // A "spec" is any constructed (non-definition) method symbol — a generic method instantiation,
+        // a member of a constructed generic struct (feature G, method itself need not be generic), or
+        // both. IsGenericMethod alone under-fires for the containing-type-generic case (Box<T>.Get()
+        // is not itself a generic method), which is exactly the G-M0-4 gap this predicate closes.
+        bool isSpec = !method.IsDefinition;
 
         // FieldChangeCallback: check if this setter has an associated callback field
         string fcbFieldName = null;
@@ -1978,13 +2016,25 @@ public class UasmEmitter
         if (exportName == "_start")
             EmitFieldInitializers();
 
-        // Set up type param map for generic specializations
-        if (isGenericSpec)
+        // Set up type param map for generic specializations. Feature G: compose the method's OWN
+        // generic-method type args (if the method itself is generic) with its ContainingType's type
+        // args (if the containing type is generic — a generic-struct member); a method that is itself
+        // generic ON a generic struct (Box<T>.Map<U>()) merges both.
+        if (isSpec)
         {
-            var orig = method.OriginalDefinition;
             var map = new Dictionary<ITypeParameterSymbol, ITypeSymbol>(SymbolEqualityComparer.Default);
-            for (int i = 0; i < orig.TypeParameters.Length; i++)
-                map[orig.TypeParameters[i]] = method.TypeArguments[i];
+            if (method.IsGenericMethod)
+            {
+                var origMethod = method.OriginalDefinition;
+                for (int i = 0; i < origMethod.TypeParameters.Length; i++)
+                    map[origMethod.TypeParameters[i]] = method.TypeArguments[i];
+            }
+            if (method.ContainingType.IsGenericType)
+            {
+                var origType = method.ContainingType.OriginalDefinition;
+                for (int i = 0; i < origType.TypeParameters.Length; i++)
+                    map[origType.TypeParameters[i]] = method.ContainingType.TypeArguments[i];
+            }
             _typeParamMap = map;
         }
 
@@ -1996,7 +2046,7 @@ public class UasmEmitter
         // whose semantics depend on T pins its generic to ONE instantiation (the [X6] r5 reject,
         // widened in round 8 to type-param-referencing closures), so FirstGenericSpec is the exact
         // owner. Walk up through enclosing closures to (possibly nested) generic owners.
-        // Round-9 [Y8]: also runs for a generic LOCAL FUNCTION spec (isGenericSpec) nested in a
+        // Round-9 [Y8]: also runs for a generic LOCAL FUNCTION spec (isSpec) nested in a
         // generic method — the spec map above holds only the LF's OWN type params, so the
         // enclosing generic's params are MERGED in (never replacing the spec map).
         bool closureMapSet = false;
@@ -2006,13 +2056,21 @@ public class UasmEmitter
             Dictionary<ITypeParameterSymbol, ITypeSymbol> closureMap = null;
             for (var s = method.ContainingSymbol; s is IMethodSymbol enclosing; s = enclosing.ContainingSymbol)
             {
-                if (enclosing.IsGenericMethod
-                    && _ctx.FirstGenericSpec.TryGetValue(enclosing.OriginalDefinition, out var ownerSpec))
+                // No IsGenericMethod pre-filter: FirstGenericSpec is keyed by OriginalDefinition
+                // regardless of WHY a method is a spec (generic method, generic-struct member, or
+                // both — feature G), so the dictionary lookup alone is the correct, sufficient gate.
+                if (_ctx.FirstGenericSpec.TryGetValue(enclosing.OriginalDefinition, out var ownerSpec))
                 {
                     var ownerDef = ownerSpec.OriginalDefinition;
                     closureMap ??= new Dictionary<ITypeParameterSymbol, ITypeSymbol>(SymbolEqualityComparer.Default);
                     for (int i = 0; i < ownerDef.TypeParameters.Length; i++)
                         closureMap[ownerDef.TypeParameters[i]] = ownerSpec.TypeArguments[i];
+                    if (ownerSpec.ContainingType.IsGenericType)
+                    {
+                        var ownerTypeDef = ownerSpec.ContainingType.OriginalDefinition;
+                        for (int i = 0; i < ownerTypeDef.TypeParameters.Length; i++)
+                            closureMap[ownerTypeDef.TypeParameters[i]] = ownerSpec.ContainingType.TypeArguments[i];
+                    }
                 }
             }
             if (closureMap != null && _typeParamMap == null)
@@ -2029,7 +2087,7 @@ public class UasmEmitter
         }
 
         // Get method body IOperation
-        var bodySource = isGenericSpec ? method.OriginalDefinition : method;
+        var bodySource = isSpec ? method.OriginalDefinition : method;
         var syntaxRef = bodySource.DeclaringSyntaxReferences.FirstOrDefault();
         if (syntaxRef != null)
         {
@@ -2045,7 +2103,7 @@ public class UasmEmitter
             // body-walk reference and the body type-checks as raw 'T' (CReturn ICE on a single
             // legal instantiation). Re-key the instantiation map with the body symbol's own
             // type parameters; class-level generic methods share symbols and are unaffected.
-            if (isGenericSpec && bodyOp is ILocalFunctionOperation lfDefOp
+            if (isSpec && bodyOp is ILocalFunctionOperation lfDefOp
                 && lfDefOp.Symbol.TypeParameters.Length == method.TypeArguments.Length)
             {
                 for (int i = 0; i < lfDefOp.Symbol.TypeParameters.Length; i++)
@@ -2168,7 +2226,7 @@ public class UasmEmitter
         }
 
         // Clear type param map after generic specialization / generic-body closure emission
-        if (isGenericSpec || closureMapSet)
+        if (isSpec || closureMapSet)
             _typeParamMap = null;
 
         // Method epilogue: return
@@ -3393,30 +3451,39 @@ public class UasmEmitter
         => !prop.ContainingType.GetMembers().OfType<IFieldSymbol>()
             .Any(f => SymbolEqualityComparer.Default.Equals(f.AssociatedSymbol, prop));
 
+    // Feature G: a generic struct's OWN method body — walked from its single shared/original syntax
+    // regardless of which instantiation is collecting it — resolves a SELF-reference (recursion, or
+    // one struct member calling a sibling) to the RAW OPEN containing type (Box<T> where T is the
+    // struct's own type parameter, ContainingType.IsDefinition true), never to any concrete spec.
+    // Collecting this phantom open-form entry registers a SECOND, dead (never actually dispatched —
+    // SubstituteMethodTypeArgs always re-closes real call sites to the live spec) CFunction that
+    // corrupts the definition-keyed recursion/spill bookkeeping (VM-proven: a self-recursive generic
+    // struct method returned 0 instead of the CLR's 6). Skip collecting through the open form; the
+    // real call sites (outer construction/invocation, always concretely typed) already reach every
+    // instantiation this collector needs.
+    static bool IsCollectibleStructMember(IMethodSymbol m)
+        => m != null && !(m.ContainingType.IsGenericType && m.ContainingType.IsDefinition);
+
     void CollectStructMethodsInOperation(IOperation op, HashSet<IMethodSymbol> result)
     {
         if (op == null) return;
         // Parameterized user-struct constructor: new V(...).
         if (op is IObjectCreationOperation oc && oc.Constructor != null
             && oc.Type is INamedTypeSymbol nt && EmitContext.IsUserStruct(nt)
-            && oc.Arguments.Length > 0 && !oc.Constructor.IsImplicitlyDeclared)
+            && oc.Arguments.Length > 0 && !oc.Constructor.IsImplicitlyDeclared
+            && IsCollectibleStructMember(oc.Constructor))
             result.Add(oc.Constructor);
-        // User-struct instance method: v.Method(...). A struct that declares its OWN type parameter
-        // (struct Box<T>) has no monomorphization path — this collector registers the method once by
-        // OriginalDefinition regardless of the receiver's concrete T, so every call site would dispatch
-        // to one body and hit an SDK-assembler ICE. Reject loudly here, before extern/assembler
-        // (roadmap B36; USugar monomorphizes generic METHODS but not generic struct TYPES).
+        // User-struct instance method: v.Method(...). Feature G: register the CONSTRUCTED symbol
+        // (roadmap B36 residue — a struct declaring its OWN type parameter used to be collected by
+        // OriginalDefinition and rejected loudly here; now the receiver's concrete T is carried
+        // through, mirroring RegisterGenericSpecialization's per-spec discipline for the
+        // containing-type dimension). Non-generic structs are unaffected: tm == tm.OriginalDefinition
+        // there, so this is byte-identical for them.
         if (op is IInvocationOperation inv && inv.TargetMethod is { IsStatic: false } tm
             && tm.MethodKind == MethodKind.Ordinary && !tm.IsImplicitlyDeclared
-            && tm.ContainingType is INamedTypeSymbol it && EmitContext.IsUserStruct(it))
-        {
-            if (it.IsGenericType)
-                throw new NotSupportedException(
-                    $"Generic struct instance methods ({it.Name}<T>.{tm.Name}) are not supported: "
-                    + "USugar monomorphizes generic methods but not generic struct types. Make the "
-                    + "struct non-generic, or move the type parameter to the method.");
-            result.Add(tm.OriginalDefinition);
-        }
+            && tm.ContainingType is INamedTypeSymbol it && EmitContext.IsUserStruct(it)
+            && IsCollectibleStructMember(tm))
+            result.Add(tm);
         // Computed (non-auto) user-struct property: v.Prop (read) or v.Prop = x (write). Auto-properties use
         // their backing-field slot directly (no method), but a computed accessor must be inlined as a struct
         // instance method. Register both accessors (the reference alone doesn't reveal read-vs-write context).
@@ -3427,8 +3494,8 @@ public class UasmEmitter
             && pr.Property.ContainingType is INamedTypeSymbol pit && EmitContext.IsUserStruct(pit)
             && IsComputedProperty(prop))
         {
-            if (prop.GetMethod != null) result.Add(prop.GetMethod.OriginalDefinition);
-            if (prop.SetMethod != null) result.Add(prop.SetMethod.OriginalDefinition);
+            if (prop.GetMethod != null && IsCollectibleStructMember(prop.GetMethod)) result.Add(prop.GetMethod);
+            if (prop.SetMethod != null && IsCollectibleStructMember(prop.SetMethod)) result.Add(prop.SetMethod);
         }
         // Property-pattern subpattern: `p is { Doubled: ... }` reads Doubled via an IMPLICIT getter call,
         // not an explicit IPropertyReferenceOperation, so collect a computed user-struct property's getter
@@ -3436,8 +3503,9 @@ public class UasmEmitter
         if (op is IPropertySubpatternOperation sub && sub.Member is IPropertyReferenceOperation spr
             && spr.Property is { IsStatic: false } sprop
             && spr.Property.ContainingType is INamedTypeSymbol spit && EmitContext.IsUserStruct(spit)
-            && IsComputedProperty(sprop) && sprop.GetMethod != null)
-            result.Add(sprop.GetMethod.OriginalDefinition);
+            && IsComputedProperty(sprop) && sprop.GetMethod != null
+            && IsCollectibleStructMember(sprop.GetMethod))
+            result.Add(sprop.GetMethod);
         // User-struct operator: v1 + v2, -v, s += t, c++ (static operator methods). Compound-assignment and
         // increment/decrement carry their operator method too, so collect those so the emit side can JUMP to
         // the user operator instead of a bogus SystemObjectArray.__op_* extern.
@@ -3446,13 +3514,15 @@ public class UasmEmitter
             ?? (op as ICompoundAssignmentOperation)?.OperatorMethod
             ?? (op as IIncrementOrDecrementOperation)?.OperatorMethod;
         if (opMethod is { MethodKind: MethodKind.UserDefinedOperator }
-            && opMethod.ContainingType is INamedTypeSymbol ot && EmitContext.IsUserStruct(ot))
-            result.Add(opMethod.OriginalDefinition);
+            && opMethod.ContainingType is INamedTypeSymbol ot && EmitContext.IsUserStruct(ot)
+            && IsCollectibleStructMember(opMethod))
+            result.Add(opMethod);
         // User-struct CONVERSION operator (implicit/explicit). MethodKind is Conversion (not UserDefinedOperator),
         // so it needs its own arm — invoked implicitly by an IConversionOperation, routed to the method on emit.
         if (op is IConversionOperation convOp && convOp.OperatorMethod is { MethodKind: MethodKind.Conversion } convM
-            && convM.ContainingType is INamedTypeSymbol convCt && EmitContext.IsUserStruct(convCt))
-            result.Add(convM.OriginalDefinition);
+            && convM.ContainingType is INamedTypeSymbol convCt && EmitContext.IsUserStruct(convCt)
+            && IsCollectibleStructMember(convM))
+            result.Add(convM);
         // `using` resource: the Dispose() is invoked IMPLICITLY (no IInvocationOperation in the tree), so
         // collect a user-struct disposable's Dispose so it is registered as a struct method and the using
         // lowering can JUMP to it instead of emitting a non-existent SystemObjectArray.__Dispose__ extern.
@@ -3479,8 +3549,9 @@ public class UasmEmitter
     static void AddStructDispose(ITypeSymbol type, HashSet<IMethodSymbol> result)
     {
         if (type is INamedTypeSymbol nt && EmitContext.IsUserStruct(nt)
-            && EmitContext.FindStructDisposeMethod(nt) is { } dispose)
-            result.Add(dispose.OriginalDefinition);
+            && EmitContext.FindStructDisposeMethod(nt) is { } dispose
+            && IsCollectibleStructMember(dispose))
+            result.Add(dispose);
     }
 
     bool IsBaseInstanceMethod(IMethodSymbol method)
