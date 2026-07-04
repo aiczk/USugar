@@ -308,8 +308,8 @@ public partial class InvocationHandler
         // Inheritance: if derived USB types exist, use __refl_typeids + Array.IndexOf
         bool useTypeIds = HasInheritedUsbTypes(target.TypeArguments[0]);
         var reflKeyConst = useTypeIds
-            ? Const("__refl_typeids", "SystemString")
-            : Const("__refl_typeid", "SystemString");
+            ? Const(EmitContext.ReflTypeIdsField, "SystemString")
+            : Const(EmitContext.ReflTypeIdField, "SystemString");
 
         return isSingular
             ? EmitShimSingular(allComponents, targetIdConst, reflKeyConst, useTypeIds)

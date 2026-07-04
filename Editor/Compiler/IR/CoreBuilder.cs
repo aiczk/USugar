@@ -119,15 +119,6 @@ public sealed class CoreBuilder
         Emit(new CIf(cond, thenBlock, elseBlock));
     }
 
-    public void EmitWhile(CLeaf cond, Action<CoreBuilder> bodyBuilder, bool isDoWhile = false, CBlock condBlock = null)
-    {
-        var body = new CBlock();
-        _stmtStack.Push(body.Stmts);
-        bodyBuilder(this);
-        _stmtStack.Pop();
-        Emit(new CWhile(cond, body, isDoWhile, condBlock));
-    }
-
     public void EmitWhile(Func<CLeaf> condFactory, Action<CoreBuilder> bodyBuilder, bool isDoWhile = false)
     {
         var condBlock = new CBlock();
@@ -141,28 +132,6 @@ public sealed class CoreBuilder
         _stmtStack.Pop();
 
         Emit(new CWhile(cond, body, isDoWhile, condBlock));
-    }
-
-    public void EmitFor(Action<CoreBuilder> initBuilder, CLeaf cond,
-        Action<CoreBuilder> updateBuilder, Action<CoreBuilder> bodyBuilder)
-    {
-        var init = new CBlock();
-        var update = new CBlock();
-        var body = new CBlock();
-
-        _stmtStack.Push(init.Stmts);
-        initBuilder(this);
-        _stmtStack.Pop();
-
-        _stmtStack.Push(update.Stmts);
-        updateBuilder(this);
-        _stmtStack.Pop();
-
-        _stmtStack.Push(body.Stmts);
-        bodyBuilder(this);
-        _stmtStack.Pop();
-
-        Emit(new CFor(init, cond, update, body));
     }
 
     public void EmitFor(Action<CoreBuilder> initBuilder, Func<CLeaf> condFactory,

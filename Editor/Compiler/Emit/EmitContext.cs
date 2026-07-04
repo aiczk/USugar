@@ -845,8 +845,8 @@ public class EmitContext
     // Udon's flat heap shares param/local slots across call frames, so recursion-cycle calls must spill
     // the caller's live values to a heap-backed LIFO stack (boxed object[]) and reload after the call.
 
-    public const string RecurStackId = "__recurStack";
-    public const string RecurSpId = "__recurSp";
+    public const string RecurStackId = RecurStack.StackId;
+    public const string RecurSpId = RecurStack.SpId;
     /// <summary>Max boxed values held across all live recursion frames (depth × live-vars-per-frame).
     /// Wave-12 [V1]: 512 → 8192. Legal non-tail recursion at depth ~600 with per-frame closure state
     /// (~9 spilled slots per logical frame, VM-proven ER05/ER11 budget probes) needs ~5400 entries —
@@ -854,7 +854,7 @@ public class EmitContext
     /// array is allocated once per program and ONLY when a recursion cycle exists
     /// (EnsureRecursionStack is on-demand), so non-recursive programs pay nothing; the size lives in
     /// the heap-default side channel, not the UASM text.</summary>
-    public const int RecurStackSize = 8192;
+    public const int RecurStackSize = RecurStack.Size;
     bool _recurStackDeclared;
 
     /// <summary>Idempotently declare the per-program recursion stack (object[] backing + int stack pointer).
@@ -870,10 +870,14 @@ public class EmitContext
     }
 
 
+    public const string ReflTypeIdField = "__refl_typeid";
+    public const string ReflTypeIdsField = "__refl_typeids";
+    public const string ReflTypeNameField = "__refl_typename";
+
     /// <summary>Declare reflection type IDs array.</summary>
     public void DeclareReflTypeIds(long[] typeIds)
     {
-        DeclareField("__refl_typeids", "SystemInt64Array", defaultValue: typeIds);
+        DeclareField(ReflTypeIdsField, "SystemInt64Array", defaultValue: typeIds);
     }
 
     /// <summary>Set const value on an existing field.</summary>

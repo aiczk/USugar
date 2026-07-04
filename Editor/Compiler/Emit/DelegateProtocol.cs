@@ -41,6 +41,12 @@ public static class DelegateAbi
         return $"{paramStr}__{retPart}";
     }
 
+    /// <summary>The ONE name source for the signature-keyed `__dlgc_{sig}__*` convention globals
+    /// (§3.2) — argument slot i, the return slot, and the env slot every dispatch site stages.</summary>
+    public static string ConvArgName(string sigPart, int i) => $"__dlgc_{sigPart}__a{i}";
+    public static string ConvRetName(string sigPart) => $"__dlgc_{sigPart}__ret";
+    public static string ConvEnvName(string sigPart) => $"__dlgc_{sigPart}__env";
+
     /// <summary>
     /// Generation-time compile errors (§3.4): ref/out delegate params (no copy-in/write-back protocol —
     /// today a silent miscompile, made loud). Tuple-return delegates are SUPPORTED (Stage 1.75 design
@@ -79,6 +85,10 @@ public static class DelegateAbi
                 throw new System.NotSupportedException(
                     "Delegate types with ref/out parameters are not supported.");
     }
+
+    /// <summary>The ONLY name source for a plain per-method delegate bridge (a same-program target's
+    /// own exact-sig entry point — every other bridge flavor below is keyed by signature instead).</summary>
+    public static string BridgeName(string key) => $"__dlg_{key}";
 
     /// <summary>
     /// Multicast design (2026-07-03 §1.1): the ONLY name source for the per-sig synthetic fan-out

@@ -27,9 +27,8 @@ public static class CoreFlatOptimizer
     // Recursion frame spill / reload (post-coalesce, liveness-aware)
     // ========================================================================
 
-    // Mirror EmitContext.RecurStackId/RecurSpId as literals to avoid an IR→Emit layering dependency.
-    const string RecurStackId = "__recurStack";
-    const string RecurSpId = "__recurSp";
+    const string RecurStackId = RecurStack.StackId;
+    const string RecurSpId = RecurStack.SpId;
 
     /// <summary>
     /// Wrap each recursive-edge internal call with a software-stack spill/reload of the frame values it would
@@ -651,8 +650,8 @@ public static class CoreFlatOptimizer
         // Reentrant (and round-9 [Y3] TailSpared) MUST be copied: this rebuild is the second
         // flag-killing reconstruction site (with CoreFlatten.LowerExpr — design §4.3); FlatVerify
         // checks Reentrant conservation after the pass.
-        CExprStmt { Expr: CExternCall ce } => new CExprStmt(new CExternCall(ce.Sig, RemapArgs(ce.Args, mapping), ce.Type, RemapSlotIdNullable(ce.DestSlot, mapping), ce.Reentrant, ce.PreSpillStmts)),
-        CExprStmt { Expr: CInternalCall ci } => new CExprStmt(new CInternalCall(ci.FuncName, RemapArgs(ci.Args, mapping), ci.Type, RemapSlotIdNullable(ci.DestSlot, mapping), ci.Reentrant, ci.TailSpared)),
+        CExprStmt { Expr: CExternCall ce } => new CExprStmt(ce.With(RemapArgs(ce.Args, mapping), RemapSlotIdNullable(ce.DestSlot, mapping))),
+        CExprStmt { Expr: CInternalCall ci } => new CExprStmt(ci.With(RemapArgs(ci.Args, mapping), RemapSlotIdNullable(ci.DestSlot, mapping))),
         _ => inst,
     };
 

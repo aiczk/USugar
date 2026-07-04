@@ -103,6 +103,11 @@ public sealed class CExternCall : CValue
         PreSpillStmts = preSpillStmts;
     }
 
+    /// <summary>Clone with new args/destSlot, copying Sig/Type/Reentrant/PreSpillStmts by construction —
+    /// the two call-rebuild sites (CoreFlatten.LowerExpr, CoreFlatOptimizer.RemapInst) route through this
+    /// instead of hand-copying the constructor argument list, so a new field can never drift out of sync.</summary>
+    public CExternCall With(List<CLeaf> args, int? destSlot) => new CExternCall(Sig, args, Type, destSlot, Reentrant, PreSpillStmts);
+
     public override string ToString()
     {
         var dest = DestSlot.HasValue ? $"slot{DestSlot.Value} = " : "";
@@ -136,6 +141,10 @@ public sealed class CInternalCall : CValue
         Reentrant = reentrant;
         TailSpared = tailSpared;
     }
+
+    /// <summary>Clone with new args/destSlot, copying FuncName/Type/Reentrant/TailSpared by construction —
+    /// see <see cref="CExternCall.With"/> for why the two rebuild sites route through this.</summary>
+    public CInternalCall With(List<CLeaf> args, int? destSlot) => new CInternalCall(FuncName, args, Type, destSlot, Reentrant, TailSpared);
 
     public override string ToString()
     {

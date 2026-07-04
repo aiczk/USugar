@@ -136,8 +136,8 @@ public class UasmEmitter
     {
         var typeName = _classSymbol.ToDisplayString();
         long typeId = ComputeTypeId(typeName);
-        _ctx.DeclareField("__refl_typeid", "SystemInt64", defaultValue: typeId);
-        _ctx.DeclareField("__refl_typename", "SystemString", defaultValue: typeName);
+        _ctx.DeclareField(EmitContext.ReflTypeIdField, "SystemInt64", defaultValue: typeId);
+        _ctx.DeclareField(EmitContext.ReflTypeNameField, "SystemString", defaultValue: typeName);
 
         var ancestorIds = CollectAncestorTypeIds(_classSymbol);
         if (ancestorIds.Length > 1)
@@ -1276,12 +1276,12 @@ public class UasmEmitter
             for (int i = 0; i < method.Parameters.Length; i++)
             {
                 var argType = ExternResolver.GetUdonTypeName(method.Parameters[i].Type);
-                _ctx.TryDeclareVar($"__dlgc_{sigPart}__a{i}", argType);
+                _ctx.TryDeclareVar(DelegateAbi.ConvArgName(sigPart, i), argType);
             }
             if (!method.ReturnsVoid)
             {
                 var retType = ExternResolver.GetUdonTypeName(method.ReturnType);
-                _ctx.TryDeclareVar($"__dlgc_{sigPart}__ret", retType);
+                _ctx.TryDeclareVar(DelegateAbi.ConvRetName(sigPart), retType);
             }
 
             // Build bridge function
@@ -1295,7 +1295,7 @@ public class UasmEmitter
             for (int i = 0; i < method.Parameters.Length; i++)
             {
                 var argType = ExternResolver.GetUdonTypeName(method.Parameters[i].Type);
-                var convName = $"__dlgc_{sigPart}__a{i}";
+                var convName = DelegateAbi.ConvArgName(sigPart, i);
                 callArgs.Add(BridgeLoad(convName, argType));
             }
 
@@ -1304,7 +1304,7 @@ public class UasmEmitter
 
             if (!method.ReturnsVoid)
             {
-                var convRet = $"__dlgc_{sigPart}__ret";
+                var convRet = DelegateAbi.ConvRetName(sigPart);
                 BridgeStore(convRet, callResult);
             }
             else
@@ -1337,10 +1337,10 @@ public class UasmEmitter
         for (int i = 0; i < invoke.Parameters.Length; i++)
         {
             argTypes[i] = ExternResolver.GetUdonTypeName(invoke.Parameters[i].Type, typeParamMap);
-            _ctx.TryDeclareVar($"__dlgc_{sigPart}__a{i}", argTypes[i]);
+            _ctx.TryDeclareVar(DelegateAbi.ConvArgName(sigPart, i), argTypes[i]);
         }
         string retType = invoke.ReturnsVoid ? null : ExternResolver.GetUdonTypeName(invoke.ReturnType, typeParamMap);
-        if (retType != null) _ctx.TryDeclareVar($"__dlgc_{sigPart}__ret", retType);
+        if (retType != null) _ctx.TryDeclareVar(DelegateAbi.ConvRetName(sigPart), retType);
         return retType;
     }
 
@@ -1413,10 +1413,10 @@ public class UasmEmitter
         for (int i = 0; i < sigMethod.Parameters.Length; i++)
         {
             var argType = ExternResolver.GetUdonTypeName(sigMethod.Parameters[i].Type, resolvedMap);
-            callArgs.Add(BridgeLoad($"__dlgc_{sigPart}__a{i}", argType));
+            callArgs.Add(BridgeLoad(DelegateAbi.ConvArgName(sigPart, i), argType));
         }
 
-        var convRet = retType != null ? $"__dlgc_{sigPart}__ret" : null;
+        var convRet = retType != null ? DelegateAbi.ConvRetName(sigPart) : null;
 
         void EmitBridgeCall(List<CLeaf> args)
         {
@@ -1432,7 +1432,7 @@ public class UasmEmitter
         // capturing bridges (named methods, capture-free lambdas) are byte-unchanged.
         if (_ctx.CaptureScope != null && _ctx.CaptureScope.IsCapturingClosure(closureCheckMethod))
         {
-            var envConv = $"__dlgc_{sigPart}__env";
+            var envConv = DelegateAbi.ConvEnvName(sigPart);
             _ctx.TryDeclareVar(envConv, EnvEmit.EnvType);
             callArgs.Add(BridgeLoad(envConv, EnvEmit.EnvType));
             var envOk = BridgeCallExtern("SystemBoolean",
@@ -1491,7 +1491,7 @@ public class UasmEmitter
         _ctx.EnsureRecursionStack();
 
         var retType = DeclareConvSigFields(outerSigPart, outerInvoke, typeParamMap, out var argTypes);
-        _ctx.TryDeclareVar($"__dlgc_{outerSigPart}__env", EnvEmit.EnvType);
+        _ctx.TryDeclareVar(DelegateAbi.ConvEnvName(outerSigPart), EnvEmit.EnvType);
 
         var wrapperFunc = _module.AddFunction(wrapperName, wrapperName);
         var prevFunc = _builder.CurrentFunction;
@@ -1499,13 +1499,13 @@ public class UasmEmitter
 
         // INV-A: snapshot the inner bundle + every OUTER conv arg to LOCAL SLOTS before dispatching.
         var innerSlot = _ctx.AllocTemp("SystemObjectArray");
-        _builder.EmitAssign(innerSlot, BridgeLoad($"__dlgc_{outerSigPart}__env", "SystemObjectArray"));
+        _builder.EmitAssign(innerSlot, BridgeLoad(DelegateAbi.ConvEnvName(outerSigPart), "SystemObjectArray"));
 
         var argSlots = new int[outerInvoke.Parameters.Length];
         for (int i = 0; i < outerInvoke.Parameters.Length; i++)
         {
             argSlots[i] = _ctx.AllocTemp(argTypes[i]);
-            _builder.EmitAssign(argSlots[i], BridgeLoad($"__dlgc_{outerSigPart}__a{i}", argTypes[i]));
+            _builder.EmitAssign(argSlots[i], BridgeLoad(DelegateAbi.ConvArgName(outerSigPart, i), argTypes[i]));
         }
         var argLeaves = new CLeaf[argSlots.Length];
         for (int i = 0; i < argSlots.Length; i++) argLeaves[i] = _builder.SlotRef(argSlots[i]);
@@ -1521,13 +1521,13 @@ public class UasmEmitter
         // whether any method of sig-T exists locally.
         var innerSigPart = DelegateAbi.BuildSigPart(innerInvoke, typeParamMap);
         DeclareConvSigFields(innerSigPart, innerInvoke, typeParamMap);
-        _ctx.TryDeclareVar($"__dlgc_{innerSigPart}__env", EnvEmit.EnvType);
+        _ctx.TryDeclareVar(DelegateAbi.ConvEnvName(innerSigPart), EnvEmit.EnvType);
 
         var dispatch = new InvocationHandler(_ctx);
         var innerRet = dispatch.EmitFanoutElementDispatch(_builder.SlotRef(innerSlot), innerInvoke, typeParamMap, argLeaves);
 
         if (retType != null && innerRet != null)
-            BridgeStore($"__dlgc_{outerSigPart}__ret", innerRet);
+            BridgeStore(DelegateAbi.ConvRetName(outerSigPart), innerRet);
 
         _builder.EmitReturn();
         if (prevFunc != null) _builder.SetFunction(prevFunc);
@@ -1854,20 +1854,20 @@ public class UasmEmitter
         _ctx.EnsureRecursionStack();
 
         var retType = DeclareConvSigFields(sigPart, invoke, typeParamMap, out var argTypes);
-        _ctx.TryDeclareVar($"__dlgc_{sigPart}__env", EnvEmit.EnvType);
+        _ctx.TryDeclareVar(DelegateAbi.ConvEnvName(sigPart), EnvEmit.EnvType);
 
         var fanoutFunc = _module.AddFunction(fanoutName, fanoutName);
         var prevFunc = _builder.CurrentFunction;
         _builder.SetFunction(fanoutFunc);
 
         var listSlot = _ctx.AllocTemp(EnvEmit.EnvType);
-        _builder.EmitAssign(listSlot, BridgeLoad($"__dlgc_{sigPart}__env", EnvEmit.EnvType));
+        _builder.EmitAssign(listSlot, BridgeLoad(DelegateAbi.ConvEnvName(sigPart), EnvEmit.EnvType));
 
         var argSlots = new int[invoke.Parameters.Length];
         for (int i = 0; i < invoke.Parameters.Length; i++)
         {
             argSlots[i] = _ctx.AllocTemp(argTypes[i]);
-            _builder.EmitAssign(argSlots[i], BridgeLoad($"__dlgc_{sigPart}__a{i}", argTypes[i]));
+            _builder.EmitAssign(argSlots[i], BridgeLoad(DelegateAbi.ConvArgName(sigPart, i), argTypes[i]));
         }
 
         int retSlot = -1;
@@ -1906,7 +1906,7 @@ public class UasmEmitter
             });
 
         if (retSlot >= 0)
-            BridgeStore($"__dlgc_{sigPart}__ret", _builder.SlotRef(retSlot));
+            BridgeStore(DelegateAbi.ConvRetName(sigPart), _builder.SlotRef(retSlot));
 
         _builder.EmitReturn();
         if (prevFunc != null) _builder.SetFunction(prevFunc);
@@ -2525,9 +2525,9 @@ public class UasmEmitter
         foreach (var node in allNodes)
         {
             if (!bodies.TryGetValue(node, out var nodeBody) || nodeBody == null) continue;
-            if (!ContainsDelegateDispatch(nodeBody)) continue;
             var dispatchSites = new List<IOperation>();
             CollectDelegateDispatchSites(nodeBody, dispatchSites);
+            if (dispatchSites.Count == 0) continue;
             var nodeSigs = new List<string>();
             var nodeEdges = edges[node];
             foreach (var site in dispatchSites)
@@ -2945,20 +2945,6 @@ public class UasmEmitter
             return false;
         targets = found;
         return true;
-    }
-
-    // True if the body contains a delegate dispatch attributed to THIS function (hoisted children —
-    // local functions and lambdas — are their own nodes and are skipped).
-    static bool ContainsDelegateDispatch(IOperation op)
-    {
-        if (op == null) return false;
-        if (EmitContext.IsDelegateDispatch(op)) return true;
-        foreach (var child in op.Children)
-        {
-            if (child is ILocalFunctionOperation || child is IAnonymousFunctionOperation) continue;
-            if (ContainsDelegateDispatch(child)) return true;
-        }
-        return false;
     }
 
     // Collect the delegate-dispatch invocations attributed to THIS function (hoisted children skipped).
@@ -3474,16 +3460,21 @@ public class UasmEmitter
         => m != null && !(m.ContainingType.IsGenericType
             && m.ContainingType.TypeArguments.Any(ta => ta is ITypeParameterSymbol));
 
-    void CollectStructMethodsInOperation(IOperation op, HashSet<IMethodSymbol> result)
+    /// <summary>The six non-using node shapes referencing a user-struct member (ctor/instance-method/
+    /// computed-property/subpattern-property/operator/conversion), yielded as-observed (constructed
+    /// symbol, ungated) — shared by CollectStructMethodsInOperation (registration: gates with
+    /// IsCollectibleStructMember, keeps the constructed symbol) and CollectStructMemberDefinitions
+    /// (recursion/capture-scope root expansion: ungated, projects .OriginalDefinition). `using`-resource
+    /// dispose is NOT included here — the two callers handle it with different resource shapes (see
+    /// each caller) and must not be merged.</summary>
+    static IEnumerable<IMethodSymbol> EnumerateStructMemberRefs(IOperation op)
     {
-        if (op == null) return;
         // Parameterized user-struct constructor: new V(...).
         if (op is IObjectCreationOperation oc && oc.Constructor != null
             && oc.Type is INamedTypeSymbol nt && EmitContext.IsUserStruct(nt)
-            && oc.Arguments.Length > 0 && !oc.Constructor.IsImplicitlyDeclared
-            && IsCollectibleStructMember(oc.Constructor))
-            result.Add(oc.Constructor);
-        // User-struct instance method: v.Method(...). Feature G: register the CONSTRUCTED symbol
+            && oc.Arguments.Length > 0 && !oc.Constructor.IsImplicitlyDeclared)
+            yield return oc.Constructor;
+        // User-struct instance method: v.Method(...). Feature G: yield the CONSTRUCTED symbol
         // (roadmap B36 residue — a struct declaring its OWN type parameter used to be collected by
         // OriginalDefinition and rejected loudly here; now the receiver's concrete T is carried
         // through, mirroring RegisterGenericSpecialization's per-spec discipline for the
@@ -3491,12 +3482,11 @@ public class UasmEmitter
         // there, so this is byte-identical for them.
         if (op is IInvocationOperation inv && inv.TargetMethod is { IsStatic: false } tm
             && tm.MethodKind == MethodKind.Ordinary && !tm.IsImplicitlyDeclared
-            && tm.ContainingType is INamedTypeSymbol it && EmitContext.IsUserStruct(it)
-            && IsCollectibleStructMember(tm))
-            result.Add(tm);
+            && tm.ContainingType is INamedTypeSymbol it && EmitContext.IsUserStruct(it))
+            yield return tm;
         // Computed (non-auto) user-struct property: v.Prop (read) or v.Prop = x (write). Auto-properties use
         // their backing-field slot directly (no method), but a computed accessor must be inlined as a struct
-        // instance method. Register both accessors (the reference alone doesn't reveal read-vs-write context).
+        // instance method. Yield both accessors (the reference alone doesn't reveal read-vs-write context).
         // A user-struct indexer (s[i]) is just a parameterized computed property (never auto-backed), so it
         // is collected the same way — its accessors carry the index args after the synthetic receiver.
         if (op is IPropertyReferenceOperation pr
@@ -3504,35 +3494,39 @@ public class UasmEmitter
             && pr.Property.ContainingType is INamedTypeSymbol pit && EmitContext.IsUserStruct(pit)
             && IsComputedProperty(prop))
         {
-            if (prop.GetMethod != null && IsCollectibleStructMember(prop.GetMethod)) result.Add(prop.GetMethod);
-            if (prop.SetMethod != null && IsCollectibleStructMember(prop.SetMethod)) result.Add(prop.SetMethod);
+            if (prop.GetMethod != null) yield return prop.GetMethod;
+            if (prop.SetMethod != null) yield return prop.SetMethod;
         }
         // Property-pattern subpattern: `p is { Doubled: ... }` reads Doubled via an IMPLICIT getter call,
-        // not an explicit IPropertyReferenceOperation, so collect a computed user-struct property's getter
+        // not an explicit IPropertyReferenceOperation, so yield a computed user-struct property's getter
         // here too — else the pattern lowering emits a bogus accessor extern for an unregistered getter.
         if (op is IPropertySubpatternOperation sub && sub.Member is IPropertyReferenceOperation spr
             && spr.Property is { IsStatic: false } sprop
             && spr.Property.ContainingType is INamedTypeSymbol spit && EmitContext.IsUserStruct(spit)
-            && IsComputedProperty(sprop) && sprop.GetMethod != null
-            && IsCollectibleStructMember(sprop.GetMethod))
-            result.Add(sprop.GetMethod);
+            && IsComputedProperty(sprop) && sprop.GetMethod != null)
+            yield return sprop.GetMethod;
         // User-struct operator: v1 + v2, -v, s += t, c++ (static operator methods). Compound-assignment and
-        // increment/decrement carry their operator method too, so collect those so the emit side can JUMP to
+        // increment/decrement carry their operator method too, so yield those so the emit side can JUMP to
         // the user operator instead of a bogus SystemObjectArray.__op_* extern.
         var opMethod = (op as IBinaryOperation)?.OperatorMethod
             ?? (op as IUnaryOperation)?.OperatorMethod
             ?? (op as ICompoundAssignmentOperation)?.OperatorMethod
             ?? (op as IIncrementOrDecrementOperation)?.OperatorMethod;
         if (opMethod is { MethodKind: MethodKind.UserDefinedOperator }
-            && opMethod.ContainingType is INamedTypeSymbol ot && EmitContext.IsUserStruct(ot)
-            && IsCollectibleStructMember(opMethod))
-            result.Add(opMethod);
+            && opMethod.ContainingType is INamedTypeSymbol ot && EmitContext.IsUserStruct(ot))
+            yield return opMethod;
         // User-struct CONVERSION operator (implicit/explicit). MethodKind is Conversion (not UserDefinedOperator),
         // so it needs its own arm — invoked implicitly by an IConversionOperation, routed to the method on emit.
         if (op is IConversionOperation convOp && convOp.OperatorMethod is { MethodKind: MethodKind.Conversion } convM
-            && convM.ContainingType is INamedTypeSymbol convCt && EmitContext.IsUserStruct(convCt)
-            && IsCollectibleStructMember(convM))
-            result.Add(convM);
+            && convM.ContainingType is INamedTypeSymbol convCt && EmitContext.IsUserStruct(convCt))
+            yield return convM;
+    }
+
+    void CollectStructMethodsInOperation(IOperation op, HashSet<IMethodSymbol> result)
+    {
+        if (op == null) return;
+        foreach (var m in EnumerateStructMemberRefs(op))
+            if (IsCollectibleStructMember(m)) result.Add(m);
         // `using` resource: the Dispose() is invoked IMPLICITLY (no IInvocationOperation in the tree), so
         // collect a user-struct disposable's Dispose so it is registered as a struct method and the using
         // lowering can JUMP to it instead of emitting a non-existent SystemObjectArray.__Dispose__ extern.
@@ -3556,37 +3550,8 @@ public class UasmEmitter
     internal static void CollectStructMemberDefinitions(IOperation op, HashSet<IMethodSymbol> defs)
     {
         if (op == null) return;
-        if (op is IObjectCreationOperation oc && oc.Constructor != null
-            && oc.Type is INamedTypeSymbol ocNt && EmitContext.IsUserStruct(ocNt)
-            && oc.Arguments.Length > 0 && !oc.Constructor.IsImplicitlyDeclared)
-            defs.Add(oc.Constructor.OriginalDefinition);
-        if (op is IInvocationOperation inv && inv.TargetMethod is { IsStatic: false } tm
-            && tm.MethodKind == MethodKind.Ordinary && !tm.IsImplicitlyDeclared
-            && tm.ContainingType is INamedTypeSymbol it && EmitContext.IsUserStruct(it))
-            defs.Add(tm.OriginalDefinition);
-        if (op is IPropertyReferenceOperation pr
-            && pr.Property is { IsStatic: false } prop
-            && pr.Property.ContainingType is INamedTypeSymbol pit && EmitContext.IsUserStruct(pit)
-            && IsComputedProperty(prop))
-        {
-            if (prop.GetMethod != null) defs.Add(prop.GetMethod.OriginalDefinition);
-            if (prop.SetMethod != null) defs.Add(prop.SetMethod.OriginalDefinition);
-        }
-        if (op is IPropertySubpatternOperation sub && sub.Member is IPropertyReferenceOperation spr
-            && spr.Property is { IsStatic: false } sprop
-            && spr.Property.ContainingType is INamedTypeSymbol spit && EmitContext.IsUserStruct(spit)
-            && IsComputedProperty(sprop) && sprop.GetMethod != null)
-            defs.Add(sprop.GetMethod.OriginalDefinition);
-        var opMethod = (op as IBinaryOperation)?.OperatorMethod
-            ?? (op as IUnaryOperation)?.OperatorMethod
-            ?? (op as ICompoundAssignmentOperation)?.OperatorMethod
-            ?? (op as IIncrementOrDecrementOperation)?.OperatorMethod;
-        if (opMethod is { MethodKind: MethodKind.UserDefinedOperator }
-            && opMethod.ContainingType is INamedTypeSymbol ot && EmitContext.IsUserStruct(ot))
-            defs.Add(opMethod.OriginalDefinition);
-        if (op is IConversionOperation convOp && convOp.OperatorMethod is { MethodKind: MethodKind.Conversion } convM
-            && convM.ContainingType is INamedTypeSymbol convCt && EmitContext.IsUserStruct(convCt))
-            defs.Add(convM.OriginalDefinition);
+        foreach (var m in EnumerateStructMemberRefs(op))
+            defs.Add(m.OriginalDefinition);
         if (op is IUsingOperation or IUsingDeclarationOperation)
         {
             var resources = op is IUsingOperation uo2 ? uo2.Resources : ((IUsingDeclarationOperation)op).DeclarationGroup;

@@ -289,7 +289,7 @@ public static class CoreFlatten
                 // Reentrant MUST be copied: this rebuild is one of the two sites (with RemapInst) where
                 // object-identity marking would silently die (design §4.3) — FlatVerify checks conservation.
                 int? dest = ec.Type != "SystemVoid" ? ctx.AllocScratch(ec.Type) : (int?)null;
-                ctx.Current.Stmts.Add(new CExprStmt(new CExternCall(ec.Sig, new List<CLeaf>(ec.Args), ec.Type, dest, ec.Reentrant, ec.PreSpillStmts)));
+                ctx.Current.Stmts.Add(new CExprStmt(ec.With(new List<CLeaf>(ec.Args), dest)));
                 return dest.HasValue ? new CSlotRef(dest.Value, ec.Type) : new CConst(null, "SystemVoid");
             }
 
@@ -298,7 +298,7 @@ public static class CoreFlatten
                 // Reentrant AND TailSpared MUST be copied (see the CExternCall note above; TailSpared
                 // is the round-9 [Y3] per-site spill exemption).
                 int? dest = ic.Type != "SystemVoid" ? ctx.AllocScratch(ic.Type) : (int?)null;
-                ctx.Current.Stmts.Add(new CExprStmt(new CInternalCall(ic.FuncName, new List<CLeaf>(ic.Args), ic.Type, dest, ic.Reentrant, ic.TailSpared)));
+                ctx.Current.Stmts.Add(new CExprStmt(ic.With(new List<CLeaf>(ic.Args), dest)));
                 return dest.HasValue ? new CSlotRef(dest.Value, ic.Type) : new CConst(null, "SystemVoid");
             }
 

@@ -620,7 +620,7 @@ public class LayoutPlanner
             if (method.IsGenericMethod) continue;
             if (UdonEventNames.ContainsKey(method.Name)) continue;
             if (ml.Returns.Count > 1) continue;
-            delegateBridges[method] = new DelegateBridgeLayout($"__dlg_{ml.ExportName}", ml);
+            delegateBridges[method] = new DelegateBridgeLayout(DelegateAbi.BridgeName(ml.ExportName), ml);
         }
 
         return new TypeLayout(methods, fields, alloc.GetCounters(), delegateBridges);

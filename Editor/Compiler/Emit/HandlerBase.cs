@@ -52,6 +52,13 @@ public abstract partial class HandlerBase
                 + "or guard the range yourself.");
     }
 
+    /// <summary>Snapshot the ambient type-param map for a bridge pending emitted after body emission,
+    /// when the ambient map may already be cleared (§7 A-M1).</summary>
+    protected Dictionary<ITypeParameterSymbol, ITypeSymbol> SnapshotTypeParamMap() =>
+        _ctx.TypeParamMap != null
+            ? new Dictionary<ITypeParameterSymbol, ITypeSymbol>(_ctx.TypeParamMap, SymbolEqualityComparer.Default)
+            : null;
+
     // ── Type resolution ──
     protected string GetUdonType(ITypeSymbol type) => ExternResolver.GetUdonTypeName(type, _ctx.TypeParamMap);
     protected ITypeSymbol ResolveType(ITypeSymbol type)
@@ -1544,16 +1551,16 @@ public abstract partial class HandlerBase
 
         var argNames = new string[invoke.Parameters.Length];
         for (int i = 0; i < invoke.Parameters.Length; i++)
-            argNames[i] = $"__dlgc_{sigPart}__a{i}";
+            argNames[i] = DelegateAbi.ConvArgName(sigPart, i);
 
         string retName = null;
         if (!invoke.ReturnsVoid)
-            retName = $"__dlgc_{sigPart}__ret";
+            retName = DelegateAbi.ConvRetName(sigPart);
 
         // Stage 2 §1.3: the signature-keyed env conv global. Env is NOT part of BuildSigPart (the
         // cross-program byte contract), only this convention name. Declared on-first-use at the
         // dispatch site / capturing bridge — NEVER unconditionally (capture-free byte invariant).
-        var envName = $"__dlgc_{sigPart}__env";
+        var envName = DelegateAbi.ConvEnvName(sigPart);
 
         return (argNames, retName, envName);
     }
@@ -1567,9 +1574,7 @@ public abstract partial class HandlerBase
     protected void RegisterMulticastSig(string sigPart, IMethodSymbol invoke)
     {
         if (_ctx.PendingMulticastSigs.ContainsKey(sigPart)) return;
-        var snapshot = _ctx.TypeParamMap != null
-            ? new Dictionary<ITypeParameterSymbol, ITypeSymbol>(_ctx.TypeParamMap, SymbolEqualityComparer.Default)
-            : null;
+        var snapshot = SnapshotTypeParamMap();
         _ctx.PendingMulticastSigs[sigPart] = (invoke, snapshot);
     }
 
@@ -1903,10 +1908,8 @@ public abstract partial class HandlerBase
         if (baseReceiver && _methodFunctions.TryGetValue(targetMethod, out var baseCopy)
             && baseCopy.ExportName == null)
         {
-            bridgeExportName = $"__dlg_{baseCopy.Name}";
-            var baseSnapshot = _ctx.TypeParamMap != null
-                ? new Dictionary<ITypeParameterSymbol, ITypeSymbol>(_ctx.TypeParamMap, SymbolEqualityComparer.Default)
-                : null;
+            bridgeExportName = DelegateAbi.BridgeName(baseCopy.Name);
+            var baseSnapshot = SnapshotTypeParamMap();
             _ctx.PendingDelegateBridges.Add((targetMethod, bridgeExportName, baseSnapshot));
         }
         // For hoisted lambdas/local functions, create a pending bridge dynamically
@@ -1932,12 +1935,10 @@ public abstract partial class HandlerBase
             }
             if (!_methodSlots.TryGetValue(targetMethod, out var targetSlot))
                 throw new System.InvalidOperationException($"Lambda/local function '{targetMethod.Name}' not registered.");
-            bridgeExportName = $"__dlg_{targetSlot.VarPrefix}";
+            bridgeExportName = DelegateAbi.BridgeName(targetSlot.VarPrefix);
             // Snapshot current type parameter map — bridge emission happens after generic method
             // emit completes and TypeParamMap is cleared, so we must capture resolved types now.
-            var typeParamSnapshot = _ctx.TypeParamMap != null
-                ? new Dictionary<ITypeParameterSymbol, ITypeSymbol>(_ctx.TypeParamMap, SymbolEqualityComparer.Default)
-                : null;
+            var typeParamSnapshot = SnapshotTypeParamMap();
             _ctx.PendingDelegateBridges.Add((targetMethod, bridgeExportName, typeParamSnapshot));
         }
         else if (targetMethod.IsGenericMethod)
@@ -1970,10 +1971,8 @@ public abstract partial class HandlerBase
                     + "'this', and every type argument resolves to a concrete type at the creation site "
                     + "(the specialization's bridge must live in this program).");
             RegisterGenericSpecialization(constructed);
-            bridgeExportName = $"__dlg_{_methodFunctions[constructed].Name}";
-            var specSnapshot = _ctx.TypeParamMap != null
-                ? new Dictionary<ITypeParameterSymbol, ITypeSymbol>(_ctx.TypeParamMap, SymbolEqualityComparer.Default)
-                : null;
+            bridgeExportName = DelegateAbi.BridgeName(_methodFunctions[constructed].Name);
+            var specSnapshot = SnapshotTypeParamMap();
             _ctx.PendingDelegateBridges.Add((constructed, bridgeExportName, specSnapshot));
         }
         // wave-13 staticro lens (2026-07-04): a static method on a plain (non-UdonSharpBehaviour)
@@ -1986,10 +1985,8 @@ public abstract partial class HandlerBase
         else if (targetMethod.IsStatic && _methodFunctions.TryGetValue(targetMethod, out var foreignFunc)
             && !ExternResolver.IsUdonSharpBehaviour(targetMethod.ContainingType))
         {
-            bridgeExportName = $"__dlg_{foreignFunc.Name}";
-            var foreignSnapshot = _ctx.TypeParamMap != null
-                ? new Dictionary<ITypeParameterSymbol, ITypeSymbol>(_ctx.TypeParamMap, SymbolEqualityComparer.Default)
-                : null;
+            bridgeExportName = DelegateAbi.BridgeName(foreignFunc.Name);
+            var foreignSnapshot = SnapshotTypeParamMap();
             _ctx.PendingDelegateBridges.Add((targetMethod, bridgeExportName, foreignSnapshot));
         }
         else
@@ -2015,9 +2012,7 @@ public abstract partial class HandlerBase
             var sigS = DelegateAbi.BuildSigPart(delegateInvoke, _ctx.TypeParamMap);
             if (sigS != DelegateAbi.BuildSigPart(targetMethod, _ctx.TypeParamMap))
             {
-                var varianceSnapshot = _ctx.TypeParamMap != null
-                    ? new Dictionary<ITypeParameterSymbol, ITypeSymbol>(_ctx.TypeParamMap, SymbolEqualityComparer.Default)
-                    : null;
+                var varianceSnapshot = SnapshotTypeParamMap();
                 if (targetInstance == null)
                 {
                     var targetKey = bridgeExportName.StartsWith("__dlg_")

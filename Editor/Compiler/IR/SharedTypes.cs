@@ -80,6 +80,15 @@ public sealed class FieldDecl
     }
 }
 
+/// <summary>Software-recursion-stack field names/size, shared by the IR (CoreFlatOptimizer spill/reload)
+/// and Emit (EmitContext.EnsureRecursionStack) layers so both sides name the same heap fields.</summary>
+public static class RecurStack
+{
+    public const string StackId = "__recurStack";
+    public const string SpId = "__recurSp";
+    public const int Size = 8192;
+}
+
 /// <summary>Result of UASM code generation.</summary>
 public struct CodeGenResult
 {
