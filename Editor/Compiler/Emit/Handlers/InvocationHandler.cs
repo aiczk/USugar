@@ -609,8 +609,12 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
     internal CLeaf EmitFanoutElementDispatch(CLeaf bundle, IMethodSymbol invoke,
         IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeParamMap, CLeaf[] argExprsByOrdinal)
     {
-        var (convArgs, convRet, convEnv) = GetConventionFieldNames(
-            (INamedTypeSymbol)invoke.ContainingType, typeParamMap);
+        // Stage 1.75 §2.3: use invoke DIRECTLY (not invoke.ContainingType.DelegateInvokeMethod) — a
+        // wrapper's inner dispatch passes the WRAPPED bundle's own native protocol here, which for a
+        // third-party-hinge inner bundle is a PLAIN method (e.g. GetStr), never itself a genuine
+        // delegate Invoke method. Byte-identical for the pre-existing fan-out caller (invoke there
+        // already IS the delegate's own Invoke method, so the old round-trip was a no-op derivation).
+        var (convArgs, convRet, convEnv) = GetConventionFieldNames(invoke, typeParamMap);
         string retType = invoke.ReturnsVoid ? null : ExternResolver.GetUdonTypeName(invoke.ReturnType, typeParamMap);
         return EmitDelegateDispatchCore(bundle, invoke, convArgs, convRet, convEnv, retType, typeParamMap,
             argExprsByOrdinal, isConditional: false, reentrant: true, receiverDescription: "multicast fan-out");

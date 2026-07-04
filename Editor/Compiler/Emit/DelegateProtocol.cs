@@ -42,24 +42,28 @@ public static class DelegateAbi
 
     /// <summary>
     /// Generation-time compile errors (§3.4): ref/out delegate params (no copy-in/write-back protocol —
-    /// today a silent miscompile, made loud) and variant method-group conversions (the caller derives the
-    /// __dlgc_ name from the delegate type while the bridge derives it from the target method, so a
-    /// co/contravariant binding diverges the names — a silent miscompile, made loud). Tuple-return
-    /// delegates are SUPPORTED (Stage 1.75 design 2026-07-04 §1): a tuple return is already a single
-    /// SystemObjectArray aggregate slot (same representation as a user-struct return), so the delegate
-    /// conv-ret and the target method's own return slot agree with zero adapter code.
+    /// today a silent miscompile, made loud). Tuple-return delegates are SUPPORTED (Stage 1.75 design
+    /// 2026-07-04 §1): a tuple return is already a single SystemObjectArray aggregate slot (same
+    /// representation as a user-struct return), so the delegate conv-ret and the target method's own
+    /// return slot agree with zero adapter code. Variant method-group conversions are SUPPORTED too
+    /// (Stage 1.75 §2): the caller (<see cref="HandlerBase.ResolveDelegateBridge"/>) mints a sig adapter
+    /// (same-program target, §2.2) or a wrapper (third-party target, §2.2's hinge) BEFORE this runs, so
+    /// <paramref name="varianceResolved"/> tells this call the mismatch it's about to see was already
+    /// handled — the throw below is armor for a mismatch reaching here UNRESOLVED (should be
+    /// unreachable: C# only permits reference-conversion variance in a delegate binding, which the
+    /// caller's resolution always handles).
     /// <paramref name="targetMethod"/> is the bound method for method-group bindings, null for lambdas
     /// (a lambda's signature is inferred from the delegate type, so it can never be variant).
     /// </summary>
     public static void ValidateDelegateBinding(INamedTypeSymbol delegateType, IMethodSymbol targetMethod,
-        IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeParamMap = null)
+        IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeParamMap = null, bool varianceResolved = false)
     {
         var invoke = delegateType?.DelegateInvokeMethod;
         if (invoke == null) return;
 
         ValidateNoRefOutParams(invoke);
 
-        if (targetMethod != null
+        if (!varianceResolved && targetMethod != null
             && BuildSigPart(invoke, typeParamMap) != BuildSigPart(targetMethod, typeParamMap))
             throw new System.NotSupportedException(
                 "Variant method-group conversion to a delegate is not supported "
@@ -84,6 +88,32 @@ public static class DelegateAbi
     public static string MulticastFanoutName(string sigPart) => $"__dlg_fanout_{sigPart}";
     public static string MulticastCombineName(string sigPart) => $"__dlg_combine_{sigPart}";
     public static string MulticastRemoveName(string sigPart) => $"__dlg_remove_{sigPart}";
+
+    /// <summary>
+    /// Variance design (2026-07-04 §2.2, B-1): the ONLY name source for a per-(target, sig-S) sig
+    /// adapter bridge — mints under the DELEGATE's declared signature (sig-S) so bundle[1]/[2] point at
+    /// a sig-S-protocol entry point (Stage-2 §5.4 sig-filter invariant preserved by construction).
+    /// <paramref name="targetKey"/> disambiguates two different targets adapting to the same sig-S
+    /// (the target's own plain bridge/export name, unique per NameAllocator).
+    /// </summary>
+    public static string SigAdapterName(string targetKey, string sigPart) => $"__dlg_adapt_{targetKey}_{sigPart}";
+
+    /// <summary>
+    /// Variance design (2026-07-04 §2.3, B-2): the ONLY name source for a wrapper-with-payload bridge —
+    /// OUTER protocol is sig-S (what callers holding the declared delegate type use), receives an INNER
+    /// bundle via slot[3] (bridge-private payload, same principle as a capturing bridge's env record or
+    /// a multicast fan-out's invocation list) and fires it through the existing unified dispatch (the
+    /// fan-out's one-element form) using the INNER bundle's OWN native protocol (sig-T — the wrapped
+    /// value's actual declared type, or a third-party target's own method signature). Keyed by BOTH:
+    /// unlike the fan-out (every invocation-list element is ALREADY sig-S-compliant by construction), a
+    /// wrapper's inner bundle speaks a DIFFERENT protocol than the outer one, so two different sig-T's
+    /// wrapped to the same sig-S need two distinct wrapper bodies (the inner dispatch's conv-var names
+    /// are sig-T's, and staging them under the wrong sig would silently drop values across the dispatch
+    /// — the exact hazard variance rejection used to prevent). Used both for a third-party variant
+    /// method-group target (§2.2's hinge — sig-T is the target method's own signature) and a delegate-
+    /// VALUE variant conversion (sig-T is the source delegate type's own Invoke signature).
+    /// </summary>
+    public static string WrapperName(string outerSigPart, string innerSigPart) => $"__dlg_wrap_{outerSigPart}_{innerSigPart}";
 }
 
 /// <summary>

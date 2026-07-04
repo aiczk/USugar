@@ -1122,6 +1122,13 @@ public class UasmEmitter
         // Emit pending delegate bridges for hoisted lambdas/local functions
         EmitPendingDelegateBridges();
 
+        // Variance design (2026-07-04 §2.2/§2.3) T-M2: sig adapters (B-1) + wrapper-with-payload
+        // bridges (B-2), for every variant method-group binding / third-party-variant hinge / variant
+        // delegate-value conversion registered in this class. A class with no variance emits neither —
+        // single-cast golden untouched (§5 gate).
+        EmitPendingSigAdapterBridges();
+        EmitPendingWrapperBridges();
+
         // Multicast design (2026-07-03 §1) A-M1: per-sig synthetic combine/remove helpers + fan-out
         // bridge, for every sig a `+=`/`-=` site registered in this class (RegisterMulticastSig). A
         // class with no delegate compound assignment emits none of this — single-cast golden is
@@ -1350,6 +1357,182 @@ public class UasmEmitter
             if (prevFunc != null)
                 _builder.SetFunction(prevFunc);
         }
+    }
+
+    // ── Variance Sig Adapter Bridges (design 2026-07-04 §2.2, B-1) ──
+    //
+    // A same-program variant method-group binding mints one of these instead of the plain bridge:
+    // reads sig-S conv args (the DELEGATE's own declared types), InternalCalls the real target (zero
+    // conversion — C# only permits reference-conversion variance here, P2-verified), stores the result
+    // into the sig-S conv-ret. Sibling of EmitPendingDelegateBridges; the ONLY differences are which
+    // signature drives the conv-var names/types (sig-S here, the target method's own sig there) and the
+    // synthesized bridge name (DelegateAbi.SigAdapterName).
+
+    void EmitPendingSigAdapterBridges()
+    {
+        var emitted = new HashSet<string>();
+        foreach (var (targetMethod, delegateInvoke, adapterName, resolvedMap) in _ctx.PendingSigAdapterBridges)
+        {
+            if (!emitted.Add(adapterName)) continue;
+            if (!_methodFunctions.TryGetValue(targetMethod, out var realFunc)) continue;
+
+            DelegateAbi.ValidateNoRefOutParams(targetMethod);
+
+            var sigPart = DelegateAbi.BuildSigPart(delegateInvoke, resolvedMap);
+
+            // Declare sig-S convention fields using the DELEGATE's own declared types (not the target
+            // method's) — these are the caller-facing conv vars every sig-S dispatch site already uses.
+            for (int i = 0; i < delegateInvoke.Parameters.Length; i++)
+            {
+                var argType = ExternResolver.GetUdonTypeName(delegateInvoke.Parameters[i].Type, resolvedMap);
+                _ctx.TryDeclareVar($"__dlgc_{sigPart}__a{i}", argType);
+            }
+            if (!delegateInvoke.ReturnsVoid)
+            {
+                var retType = ExternResolver.GetUdonTypeName(delegateInvoke.ReturnType, resolvedMap);
+                _ctx.TryDeclareVar($"__dlgc_{sigPart}__ret", retType);
+            }
+
+            var adapterFunc = _module.AddFunction(adapterName, adapterName);
+            var prevFunc = _builder.CurrentFunction;
+            _builder.SetFunction(adapterFunc);
+
+            // Read each sig-S conv arg and forward it DIRECTLY to the real target's InternalCall — no
+            // conversion extern: a reference-variance value (e.g. an object-declared leaf holding a
+            // string) COPYs cleanly into the target's own differently-declared param slot (P2-verified).
+            var callArgs = new List<CLeaf>();
+            for (int i = 0; i < delegateInvoke.Parameters.Length; i++)
+            {
+                var argType = ExternResolver.GetUdonTypeName(delegateInvoke.Parameters[i].Type, resolvedMap);
+                callArgs.Add(BridgeLoad($"__dlgc_{sigPart}__a{i}", argType));
+            }
+
+            var targetRetTypeStr = targetMethod.ReturnsVoid
+                ? "SystemVoid" : ExternResolver.GetUdonTypeName(targetMethod.ReturnType, resolvedMap);
+            var convRet = delegateInvoke.ReturnsVoid ? null : $"__dlgc_{sigPart}__ret";
+
+            void EmitAdapterCall(List<CLeaf> args)
+            {
+                var callResult = _builder.InternalCall(realFunc.Name, args, targetRetTypeStr);
+                if (convRet != null) BridgeStore(convRet, callResult);
+                else if (!targetMethod.ReturnsVoid) _builder.EmitExprStmt(callResult);
+            }
+
+            // Capturing-LF method-group variance (design §2.2): forward __envp untouched, same null-
+            // guard discipline as EmitPendingDelegateBridges' capturing arm, keyed by sig-S.
+            if (_ctx.CaptureScope != null && _ctx.CaptureScope.IsCapturingClosure(targetMethod))
+            {
+                var envConv = $"__dlgc_{sigPart}__env";
+                _ctx.TryDeclareVar(envConv, EnvEmit.EnvType);
+                callArgs.Add(BridgeLoad(envConv, EnvEmit.EnvType));
+                var envOk = BridgeCallExtern("SystemBoolean",
+                    "SystemObject.__op_Inequality__SystemObject_SystemObject__SystemBoolean",
+                    new[] { BridgeLoad(envConv, EnvEmit.EnvType), _builder.Const(null, "SystemObject") });
+                _builder.EmitIf(envOk,
+                    _ => EmitAdapterCall(callArgs),
+                    _ =>
+                    {
+                        BridgeCallExternVoid("UnityEngineDebug.__LogError__SystemObject__SystemVoid",
+                            new[] { (CLeaf)_builder.Const(
+                                $"USugar: missing closure environment — invoked a captured delegate whose bundle carries no env ({targetMethod.Name})",
+                                "SystemString") });
+                        if (convRet != null)
+                            BridgeStore(convRet, InvocationHandler.DefaultConst(_builder,
+                                ExternResolver.GetUdonTypeName(delegateInvoke.ReturnType, resolvedMap)));
+                    });
+            }
+            else
+            {
+                EmitAdapterCall(callArgs);
+            }
+
+            _builder.EmitReturn();
+
+            if (prevFunc != null)
+                _builder.SetFunction(prevFunc);
+        }
+    }
+
+    // ── Wrapper-with-Payload Bridges (design 2026-07-04 §2.3, B-2) ──
+    //
+    // Per sig registered via RegisterWrapperSig: a sig-S bridge that receives an INNER bundle via
+    // slot[3] (bridge-private payload — same principle as a capturing bridge's env record or a
+    // multicast fan-out's invocation list) and fires it through the EXISTING unified dispatch (the
+    // fan-out's one-element form, InvocationHandler.EmitFanoutElementDispatch — unconditionally
+    // Reentrant, A-M3 inheritance, §2.3). INV-A (§2.5/§6): sig-S conv args snapshot to LOCAL SLOTS
+    // before the inner dispatch; conv-ret stores from the LOCAL result, never a post-call conv reread.
+
+    void EmitPendingWrapperBridges()
+    {
+        foreach (var (wrapperName, (outerInvoke, innerInvoke, typeParamMap)) in _ctx.PendingWrapperSigs)
+            EmitWrapperBridge(wrapperName, outerInvoke, innerInvoke, typeParamMap);
+    }
+
+    void EmitWrapperBridge(string wrapperName, IMethodSymbol outerInvoke, IMethodSymbol innerInvoke,
+        IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeParamMap)
+    {
+        // OUTER protocol (sig-S, outerInvoke): what callers holding the declared delegate type stage
+        // into / read out of — the wrapper's OWN conv-var contract. INNER protocol (sig-T, innerInvoke):
+        // the wrapped bundle's OWN native signature (never sig-S, unless they happen to coincide) — the
+        // inner EmitFanoutElementDispatch call derives ITS OWN conv-var names from innerInvoke, distinct
+        // from the outer ones read/written here.
+        var outerSigPart = DelegateAbi.BuildSigPart(outerInvoke, typeParamMap);
+
+        // §1.6/A-M3 reentrancy: unconditionally reentrant, same reasoning as the fan-out bridge (any
+        // sig-S bundle's [1]/[2] can point at this wrapper by construction).
+        _ctx.EnsureRecursionStack();
+
+        var argTypes = new string[outerInvoke.Parameters.Length];
+        for (int i = 0; i < outerInvoke.Parameters.Length; i++)
+        {
+            argTypes[i] = ExternResolver.GetUdonTypeName(outerInvoke.Parameters[i].Type, typeParamMap);
+            _ctx.TryDeclareVar($"__dlgc_{outerSigPart}__a{i}", argTypes[i]);
+        }
+        string retType = outerInvoke.ReturnsVoid ? null : ExternResolver.GetUdonTypeName(outerInvoke.ReturnType, typeParamMap);
+        if (retType != null) _ctx.TryDeclareVar($"__dlgc_{outerSigPart}__ret", retType);
+        _ctx.TryDeclareVar($"__dlgc_{outerSigPart}__env", EnvEmit.EnvType);
+
+        var wrapperFunc = _module.AddFunction(wrapperName, wrapperName);
+        var prevFunc = _builder.CurrentFunction;
+        _builder.SetFunction(wrapperFunc);
+
+        // INV-A: snapshot the inner bundle + every OUTER conv arg to LOCAL SLOTS before dispatching.
+        var innerSlot = _ctx.AllocTemp("SystemObjectArray");
+        _builder.EmitAssign(innerSlot, BridgeLoad($"__dlgc_{outerSigPart}__env", "SystemObjectArray"));
+
+        var argSlots = new int[outerInvoke.Parameters.Length];
+        for (int i = 0; i < outerInvoke.Parameters.Length; i++)
+        {
+            argSlots[i] = _ctx.AllocTemp(argTypes[i]);
+            _builder.EmitAssign(argSlots[i], BridgeLoad($"__dlgc_{outerSigPart}__a{i}", argTypes[i]));
+        }
+        var argLeaves = new CLeaf[argSlots.Length];
+        for (int i = 0; i < argSlots.Length; i++) argLeaves[i] = _builder.SlotRef(argSlots[i]);
+
+        // Dispatch the INNER bundle using ITS OWN protocol (innerInvoke) — EmitFanoutElementDispatch
+        // derives sig-T's conv names from innerInvoke directly (Stage 1.75 §2.3 fix to
+        // GetConventionFieldNames' IMethodSymbol overload), matching whatever bridge the inner bundle's
+        // bundle[1]/[2] actually names. Unlike the fan-out (whose caller pre-declares the SAME sig's
+        // conv vars for both outer and inner use, since they coincide), sig-T here is DIFFERENT from
+        // sig-S — EmitFanoutElementDispatch assumes its conv vars are already declared (mirroring every
+        // other dispatch site's declare-on-first-use discipline), so declare sig-T's here explicitly:
+        // THIS program is the "caller" for the inner dispatch (stages args / reads ret), regardless of
+        // whether any method of sig-T exists locally.
+        var innerSigPart = DelegateAbi.BuildSigPart(innerInvoke, typeParamMap);
+        for (int i = 0; i < innerInvoke.Parameters.Length; i++)
+            _ctx.TryDeclareVar($"__dlgc_{innerSigPart}__a{i}", ExternResolver.GetUdonTypeName(innerInvoke.Parameters[i].Type, typeParamMap));
+        if (!innerInvoke.ReturnsVoid)
+            _ctx.TryDeclareVar($"__dlgc_{innerSigPart}__ret", ExternResolver.GetUdonTypeName(innerInvoke.ReturnType, typeParamMap));
+        _ctx.TryDeclareVar($"__dlgc_{innerSigPart}__env", EnvEmit.EnvType);
+
+        var dispatch = new InvocationHandler(_ctx);
+        var innerRet = dispatch.EmitFanoutElementDispatch(_builder.SlotRef(innerSlot), innerInvoke, typeParamMap, argLeaves);
+
+        if (retType != null && innerRet != null)
+            BridgeStore($"__dlgc_{outerSigPart}__ret", innerRet);
+
+        _builder.EmitReturn();
+        if (prevFunc != null) _builder.SetFunction(prevFunc);
     }
 
     // ── Multicast Delegate Synthetics (design 2026-07-03 §1, A-M1) ──
@@ -2230,10 +2413,11 @@ public class UasmEmitter
         //      program's method. The planner emits a speculative bridge per non-event user method, and
         //      each such method is already a graph node (a root), so it is an escape target too. The
         //      resulting SCC growth is contained by the sig-filter on the synthetic edges (c): a typed
-        //      dispatch can only enter a bridge of the SAME signature. That filter is sound ONLY while
-        //      variance is rejected at creation (DelegateProtocol.ValidateDelegateBinding forces the
-        //      delegate-Invoke sig to equal the target-method sig) — if that reject is ever relaxed, this
-        //      filter must be revisited (see the tracked coupling pin SigFilterCoupledToVarianceReject).
+        //      dispatch can only enter a bridge of the SAME signature. Variance (Stage 1.75 §2.2) keeps
+        //      this sound WITHOUT rejecting the binding: a variant method-group target is escaped under
+        //      its ADAPTER's protocol sig (sig-S), not its own — see the variantEscapeSigs collection
+        //      below (was previously "sound only while variance is rejected," the tracked coupling pin
+        //      SigFilterCoupledToVarianceReject; that pin now asserts the widened-not-rejected form).
         // MEMBERSHIP-ONLY (§1.5): never drives emission order.
         var escape = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
         foreach (var m in roots)
@@ -2246,6 +2430,18 @@ public class UasmEmitter
             var def = m.OriginalDefinition;
             if (bodies.ContainsKey(def)) escape.Add(def);
         }
+
+        // Variance design (2026-07-04 §2.2): a target reached ONLY via a sig adapter is escaped under
+        // the adapter's protocol sig (sig-S), which can differ from the target's OWN sig — collected
+        // separately since a single target may be BOTH an exact-sig escape target (elsewhere) AND a
+        // variant one (multiple entries per method, hence a list rather than the single-valued dict
+        // below used for the exact-sig case).
+        var variantEscapeSigs = new List<(IMethodSymbol Method, string Sig)>();
+        foreach (var m in roots)
+            if (bodies.TryGetValue(m, out var rootBody))
+                CollectVariantEscapeSigs(rootBody, methodSet, variantEscapeSigs);
+        foreach (var (_, initOp, _) in _fieldInitOps)
+            CollectVariantEscapeSigs(initOp, methodSet, variantEscapeSigs);
 
         // (c) Synthetic SIG-FILTERED edges m→{e ∈ E : sig(e) == sig(one of m's dispatches)}: an indirect
         // dispatch of a delegate type T can only start an escaped function whose signature matches T's
@@ -2263,10 +2459,14 @@ public class UasmEmitter
         // never equals the CONCRETE dispatch sig. Treating either side as wildcard when it involves a
         // type param restores the pre-widening connect-all behaviour for generic-involved dispatches
         // (sound: conservative), while keeping the exact sig-filter for the concrete common case
-        // (contains the §5.4 widening). SigsMatch: equal, or either is wildcard.
-        var escapeSig = new Dictionary<IMethodSymbol, string>(SymbolEqualityComparer.Default);
+        // (contains the §5.4 widening). SigsMatch: equal, or either is wildcard. A method may appear
+        // MULTIPLE times (once under its own exact sig, again under each sig-S it's variant-adapted to)
+        // — hence a list, not a single-valued dict (Stage 1.75 §2.2).
+        var escapeSig = new List<(IMethodSymbol Method, string Sig)>();
         foreach (var e in escape)
-            if (edges.ContainsKey(e)) escapeSig[e] = DispatchSigOrWildcard(e);
+            if (edges.ContainsKey(e)) escapeSig.Add((e, DispatchSigOrWildcard(e)));
+        foreach (var (vm, vSig) in variantEscapeSigs)
+            if (edges.ContainsKey(vm)) escapeSig.Add((vm, vSig));
         // Wave-12 [V1]: sites whose bundle provenance is exact (see TryResolvePreciseDispatchTargets)
         // contribute edges to their KNOWN targets only, instead of sig-matching against the whole
         // widened escape set; every other site keeps the §5.4 blanket treatment. Keyed by operation
@@ -2293,9 +2493,9 @@ public class UasmEmitter
                     nodeSigs.Add(DispatchSigOrWildcard(dinv.TargetMethod));
             }
             if (nodeSigs.Count == 0) continue;
-            foreach (var kv in escapeSig)
+            foreach (var (escMethod, escSig) in escapeSig)
                 foreach (var ds in nodeSigs)
-                    if (SigsMatch(ds, kv.Value)) { nodeEdges.Add(kv.Key); break; }
+                    if (SigsMatch(ds, escSig)) { nodeEdges.Add(escMethod); break; }
         }
 
         // Round-7 follow-up [Q5]: per-node this-FIELD touch sets for the ref/out-argument alias
@@ -2379,11 +2579,12 @@ public class UasmEmitter
             // reaches the SCC. A dispatch site is Reentrant only when ITS OWN signature is in this set.
             // Widening E (§5.4) can add a same-SCC method of a DIFFERENT signature (e.g. `M(int)` reaches
             // its own SCC); without the per-site sig gate that would spuriously mark a Void→Void `bump()`
-            // dispatch in M reentrant even though a bundle of M's signature can never flow to it. Sound
-            // while variance is rejected at creation (SigFilterCoupledToVarianceReject).
+            // dispatch in M reentrant even though a bundle of M's signature can never flow to it. Variant
+            // targets contribute their ADAPTER's sig-S here (via escapeSig's variantEscapeSigs entries),
+            // not their own — SigFilterCoupledToVarianceReject now pins the widened-not-rejected form.
             var reenterSigs = new List<string>();   // may hold WILDCARD (null) entries
-            foreach (var kv in escapeSig)
-                if (ReachFrom(kv.Key).Overlaps(sccSet)) reenterSigs.Add(kv.Value);
+            foreach (var (escMethod, escSig) in escapeSig)
+                if (ReachFrom(escMethod).Overlaps(sccSet)) reenterSigs.Add(escSig);
             bool sccReenterable = reenterSigs.Count > 0;
             foreach (var caller in scc)
             {
@@ -2490,6 +2691,18 @@ public class UasmEmitter
                   + "reentrancy spill protection would be silently missing. A registration path added a "
                   + "capturing bridge without seeding the recursion analysis (wave-10 [Z1] class).");
         }
+        // Variance design (2026-07-04 §2.2): a sig adapter's target is exactly as reachable via
+        // dispatch as a plain bridge's — same armor requirement.
+        foreach (var (targetMethod, _, adapterName, _) in _ctx.PendingSigAdapterBridges)
+        {
+            var def = targetMethod.OriginalDefinition;
+            if (!_ctx.CaptureScope.IsCapturingClosure(def)) continue;
+            if (!_ctx.RecursionGraphNodes.Contains(def))
+                throw new InvalidOperationException(
+                    $"USugar internal error (§5.5 bridge-target armor): capturing sig adapter "
+                  + $"'{adapterName}' targets '{def}', which has no recursion-graph node — its "
+                  + "reentrancy spill protection would be silently missing.");
+        }
     }
 
     // §5.4 sig-filter helpers. The delegate signature key is BuildSigPart, but only reliable when the
@@ -2556,6 +2769,33 @@ public class UasmEmitter
         }
         foreach (var child in op.Children)
             CollectEscapedDelegateTargets(child, internalMethods, result);
+    }
+
+    /// <summary>Variance design (2026-07-04 §2.2): collect (target, declared sig-S) pairs for every
+    /// VARIANT method-group delegate-creation site — a target reached through a sig adapter is escaped
+    /// under the ADAPTER's protocol sig (sig-S = the delegate type's OWN Invoke signature), not its own,
+    /// so the widened synthetic edge / SCC-reentrancy check must key on sig-S here (§5.4
+    /// SigFilterCoupledToVarianceReject). Mirrors CollectEscapedDelegateTargets's method-group arm but
+    /// omits the base-override leaf-target resolution (base.M variance is an unexercised compounding
+    /// edge case, not part of this design's tested scope) and the lambda arm (a lambda's sig is inferred
+    /// from the delegate type, so it can never be variant).</summary>
+    void CollectVariantEscapeSigs(IOperation op, HashSet<IMethodSymbol> internalMethods,
+        List<(IMethodSymbol Method, string Sig)> result)
+    {
+        if (op == null) return;
+        if (op is IDelegateCreationOperation { Target: IMethodReferenceOperation { Method: { } mr } } variantDc
+            && variantDc.Type is INamedTypeSymbol vDlgType && vDlgType.DelegateInvokeMethod is { } vInvoke)
+        {
+            var t = mr.OriginalDefinition;
+            if (internalMethods.Contains(t))
+            {
+                var sigS = DelegateAbi.BuildSigPart(vInvoke);
+                if (sigS != DelegateAbi.BuildSigPart(t))
+                    result.Add((t, sigS));
+            }
+        }
+        foreach (var child in op.Children)
+            CollectVariantEscapeSigs(child, internalMethods, result);
     }
 
     // ── Wave-12 [V1]: per-site dispatch-target provenance ──

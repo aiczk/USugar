@@ -684,6 +684,21 @@ public class EmitContext
     // may already be cleared.
     public readonly Dictionary<string, (IMethodSymbol Invoke, Dictionary<ITypeParameterSymbol, ITypeSymbol> TypeParamMap)> PendingMulticastSigs = new();
 
+    // Variance design (2026-07-04 §2.2, B-1): per-(target, sig-S) sig adapter bridges — a same-program
+    // variant method-group binding mints one of these instead of the plain bridge. delegateInvoke is the
+    // DESTINATION delegate's own Invoke method (sig-S's param/return types for the conv-var declarations),
+    // distinct from targetMethod (the real callee's own types, used only for the InternalCall). Sibling of
+    // PendingDelegateBridges — same dedup-by-name-at-emission shape (UasmEmitter.EmitPendingSigAdapterBridges).
+    public readonly List<(IMethodSymbol targetMethod, IMethodSymbol delegateInvoke, string adapterName, Dictionary<ITypeParameterSymbol, ITypeSymbol> resolvedTypeParamMap)> PendingSigAdapterBridges = new();
+
+    // Variance design (2026-07-04 §2.3, B-2): wrapper name → (outer sig-S Invoke, inner sig-T
+    // Invoke-or-method, resolved type-param snapshot) for every wrapper-with-payload bridge needed
+    // (third-party variant method-group hinge, or a delegate-VALUE variant conversion). Keyed by the
+    // WRAPPER NAME (already unique per (outer,inner) sig pair — DelegateAbi.WrapperName) rather than a
+    // single sig, since a wrapper's inner dispatch speaks the INNER bundle's own protocol, distinct from
+    // the outer one two different sig-T's could both wrap to the same sig-S.
+    public readonly Dictionary<string, (IMethodSymbol OuterInvoke, IMethodSymbol InnerInvoke, Dictionary<ITypeParameterSymbol, ITypeSymbol> TypeParamMap)> PendingWrapperSigs = new();
+
     // Diagnostics collected during emission
     public readonly List<EmitDiagnostic> Diagnostics = new();
     public readonly HashSet<string> ReportedExterns = new();

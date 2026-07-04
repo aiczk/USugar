@@ -349,27 +349,57 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
         if ((convDstType is INamedTypeSymbol dlgDst && dlgDst.DelegateInvokeMethod != null)
             || (convSrcType is INamedTypeSymbol dlgSrc && dlgSrc.DelegateInvokeMethod != null))
         {
-            // Wave-12 r2 [V2]: a VARIANT delegate-VALUE conversion (Func<string> value flowing into a
-            // Func<object>-typed field/local/param/return via C# co/contravariance) diverges the
-            // __dlgc_ convention keys — the callee's bridge writes the channel keyed by its OWN
-            // signature while the dispatch site reads the channel keyed by the receiving STATIC
-            // delegate type, so arguments/returns are silently dropped (VM-proven: NRE / lost return).
-            // The 'variant delegate bindings' policy tier already rejects variant METHOD-GROUP
-            // creations (DelegateAbi.ValidateDelegateBinding); this closes the delegate-to-delegate
-            // hole the same loud way. Equal sig parts (identity or Udon-type-identical conversions)
-            // keep the reference passthrough — their channels agree. Also load-bearing for §5.4's
-            // sig-filter soundness (tracked pin SigFilterCoupledToVarianceReject).
+            // Wave-12 r2 [V2] → Stage 1.75 §2.3 (B-2): a VARIANT delegate-VALUE conversion (Func<string>
+            // value flowing into a Func<object>-typed field/local/param/return via C# co/contravariance)
+            // diverges the __dlgc_ convention keys — the callee's bridge writes the channel keyed by its
+            // OWN signature while the dispatch site reads the channel keyed by the receiving STATIC
+            // delegate type, so arguments/returns would be silently dropped if passed through unchanged.
+            // Mint a sig-S wrapper-with-payload bundle around the existing value instead: the wrapper's
+            // unified dispatch fires the INNER bundle through the fan-out's one-element form, so self/
+            // cross routing is handled generically regardless of the inner bundle's actual target.
+            // Equal sig parts (identity or Udon-type-identical conversions) keep the reference
+            // passthrough below — their channels already agree, no wrapper needed. Also load-bearing for
+            // §5.4's sig-filter soundness (SigFilterCoupledToVarianceReject — now the widened-not-
+            // rejected form, since the wrapper's own dispatch site is unconditionally Reentrant like the
+            // fan-out, sidestepping the sig-filter question entirely for this arm).
             if (convDstType is INamedTypeSymbol vDst && vDst.DelegateInvokeMethod is { } vDstInvoke
                 && convSrcType is INamedTypeSymbol vSrc && vSrc.DelegateInvokeMethod is { } vSrcInvoke
                 && !SymbolEqualityComparer.Default.Equals(vDst, vSrc)
                 && DelegateAbi.BuildSigPart(vDstInvoke, _ctx.TypeParamMap)
                    != DelegateAbi.BuildSigPart(vSrcInvoke, _ctx.TypeParamMap))
-                throw new System.NotSupportedException(
-                    $"Variant delegate conversion from '{vSrc.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}' "
-                    + $"to '{vDst.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}' is not supported: "
-                    + "the delegate calling convention keys its argument/return channels by the exact "
-                    + "signature, so a co/contravariant binding silently drops values across the "
-                    + "dispatch. Use matching delegate type parameters.");
+            {
+                // The wrapper's INNER dispatch must speak srcVal's OWN native protocol — vSrc's Invoke
+                // method (sig-T), never vDst's (sig-S): srcVal's bundle[1] names ITS OWN bridge (under
+                // sig-T's conv-var protocol), so staging under sig-S would silently drop values.
+                var wrapperName = RegisterWrapperSig(vDstInvoke, vSrcInvoke, _ctx.TypeParamMap);
+
+                // A null delegate VALUE converts to null (C# semantics: converting null is null) — never
+                // wrap it, or `o == null` and invoke-null-guard behavior would both silently diverge from
+                // a plain unwrapped null. Guarded at RUNTIME (not just the statically-known-null case
+                // below): srcVal may be a variable whose null-ness is unknown at compile time.
+                var wrapResultSlot = _ctx.AllocTemp("SystemObjectArray");
+                var srcNotNull = ExternCall("SystemObject.__op_Inequality__SystemObject_SystemObject__SystemBoolean",
+                    new List<CLeaf> { srcVal, Const(null, "SystemObject") }, "SystemBoolean");
+                _builder.EmitIf(srcNotNull,
+                    _ =>
+                    {
+                        var wrapperBundle = ExternCall(ExternResolver.BuildArrayCtorSignature("SystemObjectArray"),
+                            new List<CLeaf> { Const(DelegateAbi.BundleSize, "SystemInt32") }, "SystemObjectArray");
+                        var wThisType = GetUdonType(_classSymbol);
+                        var wThis = LoadField(_ctx.DeclareThisOnce(wThisType), wThisType);
+                        EmitExternVoid(ExternResolver.BuildArraySetSignature("SystemObjectArray", "SystemObject"),
+                            new List<CLeaf> { wrapperBundle, Const(DelegateAbi.Target, "SystemInt32"), wThis });
+                        EmitExternVoid(ExternResolver.BuildArraySetSignature("SystemObjectArray", "SystemObject"),
+                            new List<CLeaf> { wrapperBundle, Const(DelegateAbi.Method, "SystemInt32"), Const(wrapperName, "SystemString") });
+                        EmitExternVoid(ExternResolver.BuildArraySetSignature("SystemObjectArray", "SystemObject"),
+                            new List<CLeaf> { wrapperBundle, Const(DelegateAbi.Addr, "SystemInt32"), FuncRef(wrapperName) });
+                        EmitExternVoid(ExternResolver.BuildArraySetSignature("SystemObjectArray", "SystemObject"),
+                            new List<CLeaf> { wrapperBundle, Const(DelegateAbi.Env, "SystemInt32"), srcVal });
+                        EmitAssign(wrapResultSlot, wrapperBundle);
+                    },
+                    _ => EmitAssign(wrapResultSlot, Const(null, "SystemObjectArray")));
+                return SlotRef(wrapResultSlot);
+            }
 
             // A NON-delegate-typed operand (object / System.Delegate box) cast to a delegate type: the
             // __dlgc_ channels are keyed by the STATIC destination signature, but the boxed delegate's
@@ -636,8 +666,17 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
     CLeaf VisitDelegateCreation(IDelegateCreationOperation op)
     {
         var (bridgeName, funcRef, thirdParty, envLeaf) = ResolveDelegateBridge(op);
+        // Stage 1.75 §2.2: a variant method-group binding was already resolved (adapter- or
+        // wrapper-minted) by ResolveDelegateBridge above — recompute the same sig comparison to tell
+        // ValidateDelegateBinding this mismatch is handled, not a reject (its throw stays armor for a
+        // mismatch that somehow reaches it unresolved).
+        var targetMethodForValidation = (op.Target as IMethodReferenceOperation)?.Method;
+        bool varianceResolved = targetMethodForValidation != null
+            && op.Type is INamedTypeSymbol vDelegateType && vDelegateType.DelegateInvokeMethod is { } vInvoke
+            && DelegateAbi.BuildSigPart(vInvoke, _ctx.TypeParamMap)
+               != DelegateAbi.BuildSigPart(targetMethodForValidation, _ctx.TypeParamMap);
         DelegateAbi.ValidateDelegateBinding(op.Type as INamedTypeSymbol,
-            (op.Target as IMethodReferenceOperation)?.Method, _ctx.TypeParamMap);
+            targetMethodForValidation, _ctx.TypeParamMap, varianceResolved);
 
         var bundle = ExternCall(ExternResolver.BuildArrayCtorSignature("SystemObjectArray"),
             new List<CLeaf> { Const(DelegateAbi.BundleSize, "SystemInt32") }, "SystemObjectArray");

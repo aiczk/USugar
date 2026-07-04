@@ -1494,8 +1494,17 @@ public abstract class HandlerBase
     /// resolving inside a generic-spec body so e.g. Func&lt;T&gt; keys on the substituted type.</summary>
     internal static (string[] argNames, string retName, string envName) GetConventionFieldNames(INamedTypeSymbol delegateType,
         IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeParamMap = null)
+        => GetConventionFieldNames(delegateType.DelegateInvokeMethod, typeParamMap);
+
+    /// <summary>Overload taking the Invoke (or Invoke-shaped) method directly — the delegate-type
+    /// overload above just re-derives this from delegateType.DelegateInvokeMethod, so a caller that
+    /// already holds the method (or, per Stage 1.75 §2.3, a WRAPPER dispatching an inner bundle whose
+    /// native protocol is a PLAIN method's own signature, never itself a delegate's Invoke method) skips
+    /// the round-trip. BuildSigPart only reads Parameters/ReturnsVoid/ReturnType, so any IMethodSymbol
+    /// is a valid "invoke" here, not only a genuine DelegateInvokeMethod.</summary>
+    internal static (string[] argNames, string retName, string envName) GetConventionFieldNames(IMethodSymbol invoke,
+        IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeParamMap = null)
     {
-        var invoke = delegateType.DelegateInvokeMethod;
         var sigPart = DelegateAbi.BuildSigPart(invoke, typeParamMap);
 
         var argNames = new string[invoke.Parameters.Length];
@@ -1527,6 +1536,24 @@ public abstract class HandlerBase
             ? new Dictionary<ITypeParameterSymbol, ITypeSymbol>(_ctx.TypeParamMap, SymbolEqualityComparer.Default)
             : null;
         _ctx.PendingMulticastSigs[sigPart] = (invoke, snapshot);
+    }
+
+    /// <summary>Variance design (2026-07-04 §2.3, B-2): register the (outer sig-S, inner sig-T) pair a
+    /// wrapper-with-payload bridge is needed for, returning its name. Same dedup/snapshot discipline as
+    /// <see cref="RegisterMulticastSig"/> (first registration wins; a second site needing the same
+    /// (outer,inner) wrapper is a no-op here) — keyed by the wrapper's own name since that's already the
+    /// unique key for this pair.</summary>
+    protected string RegisterWrapperSig(IMethodSymbol outerInvoke, IMethodSymbol innerInvoke,
+        IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeParamMap)
+    {
+        var wrapperName = DelegateAbi.WrapperName(
+            DelegateAbi.BuildSigPart(outerInvoke, typeParamMap), DelegateAbi.BuildSigPart(innerInvoke, typeParamMap));
+        if (_ctx.PendingWrapperSigs.ContainsKey(wrapperName)) return wrapperName;
+        var snapshot = typeParamMap != null
+            ? new Dictionary<ITypeParameterSymbol, ITypeSymbol>(typeParamMap, SymbolEqualityComparer.Default)
+            : null;
+        _ctx.PendingWrapperSigs[wrapperName] = (outerInvoke, innerInvoke, snapshot);
+        return wrapperName;
     }
 
     // ── Override-chain resolution (shared core) ──
@@ -1762,12 +1789,10 @@ public abstract class HandlerBase
                 ? new Dictionary<ITypeParameterSymbol, ITypeSymbol>(_ctx.TypeParamMap, SymbolEqualityComparer.Default)
                 : null;
             _ctx.PendingDelegateBridges.Add((targetMethod, bridgeExportName, baseSnapshot));
-            return (bridgeExportName, FuncRef(bridgeExportName), targetInstance, envLeaf);
         }
-
         // For hoisted lambdas/local functions, create a pending bridge dynamically
         // since they aren't part of the TypeLayout's pre-computed bridges.
-        if (targetMethod.MethodKind == MethodKind.LambdaMethod || targetMethod.MethodKind == MethodKind.LocalFunction)
+        else if (targetMethod.MethodKind == MethodKind.LambdaMethod || targetMethod.MethodKind == MethodKind.LocalFunction)
         {
             // Stage 2 M4 (fcd54): a GENERIC local function referenced as a method group
             // (`Func<int,int> d = Lf<int>`) arrives as a constructed spec whose MethodKind stays
@@ -1836,6 +1861,56 @@ public abstract class HandlerBase
         {
             var bridge = _planner.GetDelegateBridgeLayout(targetMethod);
             bridgeExportName = bridge.BridgeExportName;
+        }
+
+        // Variance hinge (design 2026-07-04 §2.2/§2.3): a method-group binding whose delegate-declared
+        // sig-S differs from targetMethod's OWN sig is pure C# reference variance (a lambda's sig is
+        // inferred from the delegate type, so op.Target is never IMethodReferenceOperation for one —
+        // this arm is unreachable for lambdas by construction, matching §2.2's note). Same-program
+        // target (targetInstance == null: this-bound, base.M, a hoisted lambda/local-function, or a
+        // same-family generic spec) mints a sig adapter (B-1, direct InternalCall, no extra hop).
+        // Third-party target (targetInstance != null) cannot host an adapter (the foreign program can't
+        // know at ITS OWN compile time which adapter shapes another class will need) — mint the INNER
+        // exact-sig third-party bundle here (identical shape to any third-party bundle: addr=0u, env=
+        // null) and hand back a sig-S WRAPPER (B-2) as the outer creation's bridge, with the inner
+        // bundle riding bundle[3] — the wrapper's unified dispatch handles the cross hop generically.
+        if (op.Target is IMethodReferenceOperation
+            && op.Type is INamedTypeSymbol delegateType && delegateType.DelegateInvokeMethod is { } delegateInvoke)
+        {
+            var sigS = DelegateAbi.BuildSigPart(delegateInvoke, _ctx.TypeParamMap);
+            if (sigS != DelegateAbi.BuildSigPart(targetMethod, _ctx.TypeParamMap))
+            {
+                var varianceSnapshot = _ctx.TypeParamMap != null
+                    ? new Dictionary<ITypeParameterSymbol, ITypeSymbol>(_ctx.TypeParamMap, SymbolEqualityComparer.Default)
+                    : null;
+                if (targetInstance == null)
+                {
+                    var targetKey = bridgeExportName.StartsWith("__dlg_")
+                        ? bridgeExportName.Substring("__dlg_".Length) : bridgeExportName;
+                    var adapterName = DelegateAbi.SigAdapterName(targetKey, sigS);
+                    _ctx.PendingSigAdapterBridges.Add((targetMethod, delegateInvoke, adapterName, varianceSnapshot));
+                    return (adapterName, FuncRef(adapterName), targetInstance, envLeaf);
+                }
+
+                var innerBundle = ExternCall(ExternResolver.BuildArrayCtorSignature("SystemObjectArray"),
+                    new List<CLeaf> { Const(DelegateAbi.BundleSize, "SystemInt32") }, "SystemObjectArray");
+                EmitExternVoid(ExternResolver.BuildArraySetSignature("SystemObjectArray", "SystemObject"),
+                    new List<CLeaf> { innerBundle, Const(DelegateAbi.Target, "SystemInt32"), targetInstance });
+                EmitExternVoid(ExternResolver.BuildArraySetSignature("SystemObjectArray", "SystemObject"),
+                    new List<CLeaf> { innerBundle, Const(DelegateAbi.Method, "SystemInt32"), Const(bridgeExportName, "SystemString") });
+                EmitExternVoid(ExternResolver.BuildArraySetSignature("SystemObjectArray", "SystemObject"),
+                    new List<CLeaf> { innerBundle, Const(DelegateAbi.Addr, "SystemInt32"), Const(0u, "SystemUInt32") });
+                EmitExternVoid(ExternResolver.BuildArraySetSignature("SystemObjectArray", "SystemObject"),
+                    new List<CLeaf> { innerBundle, Const(DelegateAbi.Env, "SystemInt32"), Const(null, "SystemObject") });
+
+                // The wrapper's INNER dispatch must speak the inner bundle's OWN protocol — here, the
+                // third-party target's OWN signature (targetMethod, sig-T), never sig-S: bundle[1] names
+                // targetMethod's OWN plain bridge (bridgeExportName, planned unconditionally on the
+                // FOREIGN class per its speculative-bridge policy), which reads/writes sig-T's conv
+                // vars — staging under sig-S would silently drop values across the dispatch.
+                var wrapperName = RegisterWrapperSig(delegateInvoke, targetMethod, _ctx.TypeParamMap);
+                return (wrapperName, FuncRef(wrapperName), null, innerBundle);
+            }
         }
 
         var funcRef = FuncRef(bridgeExportName);
