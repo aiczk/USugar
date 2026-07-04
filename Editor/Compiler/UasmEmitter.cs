@@ -123,15 +123,13 @@ public class UasmEmitter
         // initializers are seeds) and before its consumers. Its projections feed Phase-1 registration,
         // BuildRecursionInfo roots, and CaptureScope roots (all in EmitMethods / injected below).
         var methods = ComputeMethods();
-        var reach = BuildReachableBodies(methods);
-        _reachForeignStatics = reach.ForeignStatics;
-        _reachStructMembers = reach.StructMembers;
-        _reachBaseCopies = reach.BaseCopies;
-        _reachStructMemberDefs = reach.StructMemberDefs;
+        _reach = BuildReachableBodies(methods);
         // Stage 2: closure-scope analysis feeding real codegen — EnvEmit's alloc/read/write and every
         // IsCapturingClosure call site (HandlerBase, InvocationHandler.Extern, this file) key off it.
-        // Its roots are the reach definition projection (ComputeCaptureRoots), not a private enumeration.
-        _ctx.CaptureScope = CaptureScopeAnalysis.Build(_compilation, _classSymbol, ComputeCaptureRoots(methods));
+        // Its roots are the reach definition projection (ComputeCaptureRoots); root bodies come from the
+        // reach result (BodyByDef) — no re-fetch (F1).
+        _ctx.CaptureScope = CaptureScopeAnalysis.Build(_compilation, _classSymbol,
+            ComputeCaptureRoots(methods), _reach.BodyByDef);
         EmitMethods(methods);
         OnIrPass?.Invoke("after-emit", _module);
         // Handlers build Core IR; the pipeline (verify/optimize/flatten) runs on Core directly.
@@ -884,8 +882,8 @@ public class UasmEmitter
             if (def.DeclaringSyntaxReferences.Length > 0 && seen.Add(def)) roots.Add(def);
         }
         foreach (var m in methods) Add(m);
-        foreach (var m in _reachBaseCopies) Add(m);
-        foreach (var m in _reachStructMemberDefs) Add(m);
+        foreach (var m in _reach.BaseCopies) Add(m);
+        foreach (var m in _reach.StructMemberDefs) Add(m);
         return roots;
     }
 
@@ -970,9 +968,9 @@ public class UasmEmitter
         // struct/foreign/using call inside any reached body is seen. Gates (IsCollectibleStructMember /
         // IsClosedForeignStaticTarget / methodSet exclusion) stay on the projection side — meaning preserved.
         var methodSet = new HashSet<IMethodSymbol>(methods, SymbolEqualityComparer.Default);
-        var baseInstanceMethods = _reachBaseCopies.Where(bm => !methodSet.Contains(bm)).ToArray();
-        var structMethods = _reachStructMembers;
-        var foreignStatics = _reachForeignStatics;
+        var baseInstanceMethods = _reach.BaseCopies.Where(bm => !methodSet.Contains(bm)).ToArray();
+        var structMethods = _reach.StructMembers;
+        var foreignStatics = _reach.ForeignStatics;
         foreach (var fm in foreignStatics)
         {
             EmitPolicy.RejectInParameters(fm); // round-7 follow-up [Q3]
@@ -2400,7 +2398,7 @@ public class UasmEmitter
         // former private structDefRoots BFS — the same "every user-struct member DEFINITION transitively
         // reachable" set (both propagate via CollectStructMemberDefinitions, ignoring open/closed so
         // instantiations collapse onto one node), with the duplicate semantic-model body walk removed.
-        roots = roots.Concat(_reachStructMemberDefs)
+        roots = roots.Concat(_reach.StructMemberDefs)
             .Where(m => m.DeclaringSyntaxReferences.Length > 0)
             .Distinct(SymbolEqualityComparer.Default)
             .Cast<IMethodSymbol>()
@@ -2408,13 +2406,13 @@ public class UasmEmitter
 
         // Local functions are registered lazily during emission (after this pass), so discover them now by
         // walking the bodies — otherwise a recursive local function would not be detected and would corrupt
-        // the flat heap. Transitive: a local function may contain nested local functions.
+        // the flat heap. Transitive: a local function may contain nested local functions. F1: every root is
+        // a reach definition, so its body comes from the reach result (BodyByDef) — no re-fetch.
         var localFuncs = new List<IMethodSymbol>();
         foreach (var m in roots)
         {
-            var sr = m.DeclaringSyntaxReferences.FirstOrDefault();
-            if (sr != null)
-                CollectLocalFunctions(_compilation.GetSemanticModel(sr.SyntaxTree).GetOperation(sr.GetSyntax()), localFuncs);
+            var op = ReachBodyOrFetch(m);
+            if (op != null) CollectLocalFunctions(op, localFuncs);
         }
 
         var internalMethods = roots.Concat(localFuncs)
@@ -2426,15 +2424,16 @@ public class UasmEmitter
         foreach (var m in internalMethods)
         {
             var callees = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
-            var syntaxRef = m.DeclaringSyntaxReferences.FirstOrDefault();
-            if (syntaxRef != null)
-            {
-                var op = _compilation.GetSemanticModel(syntaxRef.SyntaxTree).GetOperation(syntaxRef.GetSyntax());
-                // A local function's analysable body is the block inside its ILocalFunctionOperation.
-                var body = (op as ILocalFunctionOperation)?.Body ?? op;
-                bodies[m] = body;
-                CollectInternalCallees(body, methodSet, callees);
-            }
+            // Roots reuse the reach result's body (F1, fetched once); local functions (discovered here,
+            // not reach entries) fetch their own ILocalFunctionOperation and use its inner block. Every
+            // internalMethod has syntax (roots are pre-filtered, local funcs are source), so it becomes a
+            // graph node UNCONDITIONALLY — an auto-property accessor has a bodyless (null) operation yet
+            // must still be a node (CollectInternalCallees no-ops on null). Restricting to non-null bodies
+            // would silently drop those nodes from RecursionGraphNodes.
+            var op = ReachBodyOrFetch(m);
+            var body = (op as ILocalFunctionOperation)?.Body ?? op;
+            bodies[m] = body;
+            CollectInternalCallees(body, methodSet, callees);
             edges[m] = callees;
         }
 
@@ -3323,14 +3322,16 @@ public class UasmEmitter
     /// the shared classifier), so the recursion/capture DEFINITION projection (StructMemberDefs) subsumes
     /// the former BuildRecursionInfo.structDefRoots and CaptureScope.structQueue expansions; the REGISTRATION
     /// projections keep their existing gates (IsCollectibleStructMember / IsClosedForeignStaticTarget). The
-    /// union-of-rules can widen reach vs the former staged seeding (design §5-3) — that surfaces in the census.</summary>
-    (IMethodSymbol[] ForeignStatics, IMethodSymbol[] StructMembers, IMethodSymbol[] BaseCopies,
-     HashSet<IMethodSymbol> StructMemberDefs) BuildReachableBodies(IMethodSymbol[] methods)
+    /// union-of-rules can widen reach vs the former staged seeding (design §5-3) — that surfaces in the census.
+    /// F1 (R-M3): each definition's body is fetched ONCE and retained in the result (BodyByDef), so
+    /// BuildRecursionInfo and CaptureScopeAnalysis read bodies from here instead of re-fetching.</summary>
+    ReachableBodies BuildReachableBodies(IMethodSymbol[] methods)
     {
+        var result = new ReachableBodies();
         var foreignStatics = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
         var structMembers = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
         var baseCopies = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
-        var structMemberDefs = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
+        var structMemberDefs = result.StructMemberDefs;
 
         var visited = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default); // definitions walked
         var queue = new Queue<IMethodSymbol>();                                    // definitions to walk
@@ -3359,17 +3360,25 @@ public class UasmEmitter
         }
 
         foreach (var m in methods) TryEnqueue(m);
+        // F1 double-seed fix: EmitFields has already spliced _staticFieldInitOps into the FRONT of
+        // _fieldInitOps (§3.6, runs before this in Emit()), so _fieldInitOps covers BOTH tiers — walk it
+        // once. (Walking _staticFieldInitOps as well only re-discovered the same reach, deduped by visited.)
         foreach (var (_, initOp, _) in _fieldInitOps) Walk(initOp);
-        foreach (var (_, initOp, _) in _staticFieldInitOps) Walk(initOp);
         EnqueueDiscovered();
 
         while (queue.Count > 0)
         {
-            Walk(GetMethodBodyOperation(queue.Dequeue()));
+            var def = queue.Dequeue();
+            var body = GetMethodBodyOperation(def);
+            result.BodyByDef[def] = body; // fetch once, retained for every consumer
+            Walk(body);
             EnqueueDiscovered();
         }
 
-        return (foreignStatics.ToArray(), structMembers.ToArray(), baseCopies.ToArray(), structMemberDefs);
+        result.ForeignStatics = foreignStatics.ToArray();
+        result.StructMembers = structMembers.ToArray();
+        result.BaseCopies = baseCopies.ToArray();
+        return result;
     }
 
     // B46 (wave-14 r4): a foreign-static call whose containing type still carries an OPEN type
@@ -3612,14 +3621,10 @@ public class UasmEmitter
     /// like an eagerly registered base copy. Populated by CollectBaseInstanceCallsInOperation.</summary>
     readonly HashSet<IMethodSymbol> _openGenericBaseDefs = new(SymbolEqualityComparer.Default);
 
-    // ReachableBodies projections (design §1), built once in Emit() before CaptureScopeAnalysis and
-    // consumed by the Phase-1 registration regimes, BuildRecursionInfo roots, and CaptureScope roots.
-    IMethodSymbol[] _reachForeignStatics = System.Array.Empty<IMethodSymbol>();
-    IMethodSymbol[] _reachStructMembers = System.Array.Empty<IMethodSymbol>();
-    IMethodSymbol[] _reachBaseCopies = System.Array.Empty<IMethodSymbol>();
-    /// <summary>The ungated struct-member DEFINITION projection: consumed by BuildRecursionInfo's roots
-    /// (replacing its own structDefRoots expansion) and CaptureScope roots (replacing its structQueue).</summary>
-    HashSet<IMethodSymbol> _reachStructMemberDefs = new(SymbolEqualityComparer.Default);
+    /// <summary>The single ReachableBodies fixpoint result (design §1), built once in Emit() before
+    /// CaptureScopeAnalysis and consumed by the Phase-1 registration regimes, BuildRecursionInfo roots,
+    /// and CaptureScope roots. Carries each reachable DEFINITION's body fetched EXACTLY ONCE.</summary>
+    ReachableBodies _reach = new();
 
     IOperation GetMethodBodyOperation(IMethodSymbol method)
     {
@@ -3628,6 +3633,12 @@ public class UasmEmitter
         var syntax = syntaxRef.GetSyntax();
         return _compilation.GetSemanticModel(syntax.SyntaxTree).GetOperation(syntax);
     }
+
+    /// <summary>F1: return the body the reach fixpoint already fetched for <paramref name="def"/> (a reach
+    /// definition), falling back to a fresh fetch for a non-reach definition (e.g. a local function
+    /// discovered during recursion analysis, which is never a ReachableBodies entry).</summary>
+    IOperation ReachBodyOrFetch(IMethodSymbol def)
+        => def != null && _reach.BodyByDef.TryGetValue(def, out var body) ? body : GetMethodBodyOperation(def);
 
     void CollectBaseInstanceCallsInOperation(IOperation op, HashSet<IMethodSymbol> result)
     {

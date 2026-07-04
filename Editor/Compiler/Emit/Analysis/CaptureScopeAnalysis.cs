@@ -179,8 +179,10 @@ public sealed class CaptureScopeAnalysis
     /// user-struct member definitions (the former AddRoots enumeration AND the structQueue struct-member
     /// expansion, now supplied by the single reach fixpoint). Definition-keyed, with syntax. Field
     /// initializers are added below (they are not method roots).</param>
+    /// <param name="reachBodies">F1: the ReachableBodies body map (definition → body, fetched once). Root
+    /// bodies come from here; a fresh fetch is only a defensive fallback for a root absent from the map.</param>
     public static CaptureScopeAnalysis Build(Compilation compilation, INamedTypeSymbol classSymbol,
-        IReadOnlyList<IMethodSymbol> reachRoots)
+        IReadOnlyList<IMethodSymbol> reachRoots, IReadOnlyDictionary<IMethodSymbol, IOperation> reachBodies)
     {
         var captureAnalyzer = new LambdaCaptureAnalyzer(compilation);
 
@@ -194,7 +196,9 @@ public sealed class CaptureScopeAnalysis
         var rootBodies = new List<(IMethodSymbol Root, IOperation Body)>();
         foreach (var root in reachRoots)
         {
-            var body = GetOperationBody(compilation, root);
+            // F1: reuse the body the reach fixpoint already fetched (no re-fetch); defensive fallback only.
+            var body = reachBodies != null && reachBodies.TryGetValue(root, out var cached)
+                ? cached : GetOperationBody(compilation, root);
             if (body != null) rootBodies.Add((root, body));
         }
 
