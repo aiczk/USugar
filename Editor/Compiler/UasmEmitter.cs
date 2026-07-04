@@ -3199,11 +3199,11 @@ public class UasmEmitter
     /// accessors was invisible to the SCC analysis and the accessor frame never spilled (e.g. 5 vs CLR 11,
     /// 305 vs 605, computed-property factorial 1 vs 120). Extracting the two formerly hand-mirrored switches
     /// into ONE enumerator removes the drift that caused those wave-14 r4 miscompiles — the arms can no
-    /// longer fall out of lockstep. ASYMMETRY: the user-defined OPERATOR edge is NOT enumerated here.
-    /// CollectInternalCallees adds it separately (its SCC edge is what makes IsRecursiveEdge fire), while
-    /// IsInternalCallTo has always omitted it — a CONFIRMED latent miscompile (a self-recursive struct
-    /// operator is not frame-spilled: VM-proven ref=15/usugar=0), preserved verbatim so this refactor
-    /// stays zero-codegen-change and reported for a separate, VM-verified fix.</summary>
+    /// longer fall out of lockstep. Includes the user-defined OPERATOR edge (binary / unary /
+    /// compound-assignment / increment-decrement forms all carry an OperatorMethod) — B49: it formerly
+    /// lived only in CollectInternalCallees, so IsInternalCallTo could not see it and a recursive struct
+    /// operator was never frame-spilled (VM-proven ref=15/usugar=0); routing it through here makes both
+    /// consumers agree and fixes the spill.</summary>
     IEnumerable<IMethodSymbol> EnumerateInternalCallTargets(IOperation op)
     {
         switch (op)
@@ -3246,6 +3246,16 @@ public class UasmEmitter
                 }
                 break;
         }
+        // User-defined operator call — every form that resolves one carries the OperatorMethod: a plain
+        // `a + b` (IBinaryOperation) / `-a` (IUnaryOperation), a `a += b` (ICompoundAssignmentOperation),
+        // and a `a++`/`--a` (IIncrementOrDecrementOperation). A BCL operator has a null OperatorMethod and
+        // is naturally excluded; the consumers' internalMethods / callee filter restricts to registered
+        // struct operators. (B49 — see the summary above.)
+        var opMethod = (op as IBinaryOperation)?.OperatorMethod
+            ?? (op as IUnaryOperation)?.OperatorMethod
+            ?? (op as ICompoundAssignmentOperation)?.OperatorMethod
+            ?? (op as IIncrementOrDecrementOperation)?.OperatorMethod;
+        if (opMethod != null) yield return opMethod.OriginalDefinition;
     }
 
     bool IsInternalCallTo(IOperation op, IMethodSymbol callee, out IOperation call)
@@ -3296,16 +3306,11 @@ public class UasmEmitter
     void CollectInternalCallees(IOperation op, HashSet<IMethodSymbol> internalMethods, HashSet<IMethodSymbol> result)
     {
         if (op == null) return;
-        // Symmetric arms (invocation static/leaf/cross, ctor, property this/leaf/cross/user-struct) —
-        // shared with IsInternalCallTo so they cannot drift (see EnumerateInternalCallTargets).
+        // Every call-target shape (invocation static/leaf/cross, ctor, property this/leaf/cross/user-struct,
+        // and the user-defined operator) is enumerated by the shared classifier, so this walk and
+        // IsInternalCallTo cannot drift (see EnumerateInternalCallTargets).
         foreach (var t in EnumerateInternalCallTargets(op))
             if (internalMethods.Contains(t)) result.Add(t);
-        // ASYMMETRY (see EnumerateInternalCallTargets): the user-defined operator edge lives ONLY here.
-        // IsInternalCallTo omits it — a confirmed latent recursive-operator spill bug preserved as-is so
-        // this refactor is zero-codegen-change. The SCC edge itself is needed for IsRecursiveEdge.
-        var opMethod = (op as IBinaryOperation)?.OperatorMethod ?? (op as IUnaryOperation)?.OperatorMethod;
-        if (opMethod != null && internalMethods.Contains(opMethod.OriginalDefinition))
-            result.Add(opMethod.OriginalDefinition);
         foreach (var child in op.Children)
         {
             if (child is ILocalFunctionOperation || child is IAnonymousFunctionOperation) continue; // own nodes
