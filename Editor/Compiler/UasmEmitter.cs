@@ -656,8 +656,6 @@ public class UasmEmitter
             throw new NotSupportedException(
                 $"[NetworkCallable] delegate '{member.Name}' is not supported: NetworkCallable marks a "
                 + "method as a remotely-invokable entry point, which does not apply to a delegate value.");
-        if (delegateType.DelegateInvokeMethod.ReturnType.IsTupleType)
-            throw new NotSupportedException($"Tuple-return delegate field '{member.Name}' is not supported.");
         // §3.4-1: ref/out delegate signatures are rejected at the convention-var declaration side too.
         DelegateAbi.ValidateNoRefOutParams(delegateType.DelegateInvokeMethod);
 
@@ -1202,8 +1200,9 @@ public class UasmEmitter
         foreach (var (method, bridge) in classLayout.DelegateBridges)
         {
             if (!_methodFunctions.TryGetValue(method, out var realFunc)) continue;
-            // Skip methods with tuple returns (not supported as delegate targets)
-            if (!method.ReturnsVoid && method.ReturnType.IsTupleType) continue;
+            // Tuple returns (design 2026-07-04 §1.2): the bridge InternalCalls the real method and
+            // stores its result straight into conv-ret — no special casing, since a tuple return is
+            // already the same single SystemObjectArray aggregate slot a struct return uses.
 
             // §3.4-1 NOTE: ValidateNoRefOutParams deliberately does NOT run here. This loop emits a
             // speculative bridge for EVERY non-event user method (planner DelegateBridges), so a throw
@@ -1271,7 +1270,6 @@ public class UasmEmitter
         {
             if (!emitted.Add(bridgeExportName)) continue;
             if (!_methodFunctions.TryGetValue(method, out var realFunc)) continue;
-            if (!method.ReturnsVoid && method.ReturnType.IsTupleType) continue;
 
             // §3.4-1 conv-var declaration side check. Pending bridges are delegate-originated by
             // construction (creation already validated), but a future registration path must stay loud.

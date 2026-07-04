@@ -107,11 +107,9 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
                 $"Delegate compound operator '{op.OperatorKind}' is not supported.");
 
         var invoke = delegateType.DelegateInvokeMethod;
-        // §3.4-1: re-validate ref/out and tuple-return at the lowering site, mirroring the dispatch-side
-        // re-validation — a delegate value from a foreign source never passed creation-site validation.
+        // §3.4-1: re-validate ref/out at the lowering site, mirroring the dispatch-side re-validation —
+        // a delegate value from a foreign source never passed creation-site validation.
         DelegateAbi.ValidateNoRefOutParams(invoke);
-        if (!invoke.ReturnsVoid && invoke.ReturnType.IsTupleType)
-            throw new System.NotSupportedException($"Tuple-return delegate '{delegateType.Name}' is not supported.");
 
         var lv = CaptureLValue(op.Target);
         var leftVal = lv.Value;
@@ -160,8 +158,6 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
         var delegateType = (INamedTypeSymbol)evt.Type;
         var invoke = delegateType.DelegateInvokeMethod;
         DelegateAbi.ValidateNoRefOutParams(invoke);
-        if (!invoke.ReturnsVoid && invoke.ReturnType.IsTupleType)
-            throw new System.NotSupportedException($"Tuple-return delegate event '{evt.Name}' is not supported.");
 
         var currentVal = LoadField(evt.Name, "SystemObjectArray");
         var handlerVal = VisitExpression(op.HandlerValue);

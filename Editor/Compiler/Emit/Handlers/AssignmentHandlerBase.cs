@@ -228,7 +228,6 @@ public abstract class AssignmentHandlerBase : HandlerBase
                 when ExternResolver.IsUdonSharpBehaviour(fieldRef.Field.ContainingType):
             {
                 // Cross-behaviour field write-back → SetProgramVariable
-                GuardTupleDelegateFieldSet(fieldRef.Field);
                 var instanceVal = lv.InstanceVal ?? VisitExpression(fieldRef.Instance);
                 EmitCrossBehaviourFieldSet(fieldRef.Field, instanceVal, valueVal);
                 break;

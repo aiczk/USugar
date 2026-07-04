@@ -42,10 +42,12 @@ public static class DelegateAbi
 
     /// <summary>
     /// Generation-time compile errors (§3.4): ref/out delegate params (no copy-in/write-back protocol —
-    /// today a silent miscompile, made loud), tuple-return delegates (multi-ReturnSlot bridges are
-    /// unplanned — Stage 1 scope-out), and variant method-group conversions (the caller derives the
+    /// today a silent miscompile, made loud) and variant method-group conversions (the caller derives the
     /// __dlgc_ name from the delegate type while the bridge derives it from the target method, so a
-    /// co/contravariant binding diverges the names — a silent miscompile, made loud).
+    /// co/contravariant binding diverges the names — a silent miscompile, made loud). Tuple-return
+    /// delegates are SUPPORTED (Stage 1.75 design 2026-07-04 §1): a tuple return is already a single
+    /// SystemObjectArray aggregate slot (same representation as a user-struct return), so the delegate
+    /// conv-ret and the target method's own return slot agree with zero adapter code.
     /// <paramref name="targetMethod"/> is the bound method for method-group bindings, null for lambdas
     /// (a lambda's signature is inferred from the delegate type, so it can never be variant).
     /// </summary>
@@ -56,10 +58,6 @@ public static class DelegateAbi
         if (invoke == null) return;
 
         ValidateNoRefOutParams(invoke);
-
-        if (!invoke.ReturnsVoid && invoke.ReturnType.IsTupleType)
-            throw new System.NotSupportedException(
-                $"Tuple-return delegate '{delegateType.Name}' is not supported.");
 
         if (targetMethod != null
             && BuildSigPart(invoke, typeParamMap) != BuildSigPart(targetMethod, typeParamMap))

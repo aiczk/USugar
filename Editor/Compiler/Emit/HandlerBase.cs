@@ -1114,11 +1114,10 @@ public abstract class HandlerBase
         }
 
         // Cross-behaviour field → one SetProgramVariable (a delegate field ships the bundle
-        // REFERENCE — design §2.3; only the tuple-return delegate reject stays special, §3.4-3).
+        // REFERENCE — design §2.3, incl. a tuple-return delegate's SystemObjectArray bundle).
         if (fieldRef is { Instance: not null and not IInstanceReferenceOperation }
             && ExternResolver.IsUdonSharpBehaviour(fieldRef.Field.ContainingType))
         {
-            GuardTupleDelegateFieldSet(fieldRef.Field);
             var crossInstanceVal = VisitExpression(fieldRef.Instance);
             return value => EmitCrossBehaviourFieldSet(fieldRef.Field, crossInstanceVal, value);
         }
@@ -1176,27 +1175,13 @@ public abstract class HandlerBase
     /// <summary>Emit a cross-behaviour field Set via SetProgramVariable from an already-evaluated
     /// instance leaf. Shared by TryPrepareFieldSet (single write) and AssignmentHandlerBase.EmitWriteBack's
     /// read-modify-write field arm (which reuses CaptureLValue's cached instance leaf instead of
-    /// re-evaluating it). Caller must run GuardTupleDelegateFieldSet first (matches the pre-extraction
-    /// per-path check order: guard before the receiver is evaluated).</summary>
+    /// re-evaluating it).</summary>
     protected void EmitCrossBehaviourFieldSet(IFieldSymbol field, CLeaf instanceVal, CLeaf value)
     {
         var nameConst = Const(field.Name, "SystemString");
         EmitExternVoid(
             "VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid",
             new List<CLeaf> { instanceVal, nameConst, value });
-    }
-
-    /// <summary>A delegate field whose invoke signature returns a tuple ships no bundle representation
-    /// USugar supports (design §3.4-3) — reject before any receiver/value evaluation. In practice this
-    /// is unreachable in a successfully-declared class (UasmEmitter.DeclareDelegateField already rejects
-    /// the field at declaration time), so this is defense-in-depth kept consistent across both cross-
-    /// behaviour field-set paths rather than a live behavioral branch.</summary>
-    protected static void GuardTupleDelegateFieldSet(IFieldSymbol field)
-    {
-        if (field.Type is INamedTypeSymbol dlgType && dlgType.DelegateInvokeMethod != null
-            && dlgType.DelegateInvokeMethod.ReturnType.IsTupleType)
-            throw new System.NotSupportedException(
-                $"Tuple-return delegate field '{field.Name}' is not supported.");
     }
 
     /// <summary>Wave-9 round-5 [X2]/[X13]: the single property/indexer SET path, shared by simple

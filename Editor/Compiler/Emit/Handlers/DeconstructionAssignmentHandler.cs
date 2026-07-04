@@ -76,6 +76,30 @@ public class DeconstructionAssignmentHandler : AssignmentHandlerBase, IOperation
             // branches too — C# evaluates each target's component expressions first, then the RHS.
             var prepared = PrepareDeconstructionTargets(targetTuple);
 
+            // Tuple-return delegate invocation (`var (a,b) = f(...)` where f is Action/Func-shaped):
+            // route through the SAME unified dispatch every other delegate call site uses (guard
+            // ladder, self/cross routing) — VisitExpression already returns the dispatched conv-ret,
+            // which for a tuple-return delegate IS the packed SystemObjectArray aggregate (Stage 1.75
+            // design 2026-07-04 §1) — deconstruct it like any other aggregate value. A delegate's
+            // ContainingType is a BCL Func/Action, never planned by LayoutPlanner, so this must be
+            // checked BEFORE the same-class/cross-behaviour method-call arms below.
+            if (callValue is IInvocationOperation dlgInvocation
+                && dlgInvocation.TargetMethod.MethodKind == MethodKind.DelegateInvoke)
+            {
+                var dlgResult = VisitExpression(op.Value);
+                var dlgSnaps = new List<CLeaf>(targetTuple.Elements.Length);
+                for (int i = 0; i < targetTuple.Elements.Length; i++)
+                {
+                    var raw = ExternCall(ExternResolver.BuildArrayGetSignature("SystemObjectArray", "SystemObject"),
+                        new List<CLeaf> { dlgResult, Const(i, "SystemInt32") }, "SystemObject");
+                    dlgSnaps.Add(targetTuple.Elements[i].Type is INamedTypeSymbol det && EmitContext.IsAggregateType(det)
+                        ? EmitDeepCloneAggregate(raw, det) : raw);
+                }
+                for (int i = 0; i < targetTuple.Elements.Length; i++)
+                    AssignToLValue(targetTuple.Elements[i], dlgSnaps[i], prepared);
+                return;
+            }
+
             // (a, b) = tup where the RHS is a tuple/struct-typed VALUE expression (local/parameter/field/array
             // element), emulated as object[]. Read each element from the backing array; snapshot ALL reads
             // before any store (value semantics + swap safety), deep-cloning aggregate elements so a later
