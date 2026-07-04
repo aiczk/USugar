@@ -259,6 +259,31 @@ public class CrossBehaviourDelegatePropertyCaller : UdonSharpBehaviour {
     a();
   }
 }"),
+        // Feature G canonical baseline (2026-07-04 design §6): Box<int> and Box<string> coexisting in
+        // one program, each calling its OWN per-spec method/indexer body — the byte gate for the
+        // constructed-symbol collector + per-spec registration replacing roadmap B36's reject.
+        ("genstruct_two_instantiations", "GenStructTwoInstantiations",
+@"using UdonSharp;
+public struct Box<T> {
+  public T[] items;
+  public T Get(int i) { return items[i]; }
+  public T this[int i] { get { return items[i]; } set { items[i] = value; } }
+}
+public class GenStructTwoInstantiations : UdonSharpBehaviour {
+  public int outInt;
+  public int outStrLen;
+  void Start(){
+    Box<int> a = new Box<int>();
+    a.items = new int[1];
+    a[0] = 5;
+    outInt = a.Get(0);
+
+    Box<string> b = new Box<string>();
+    b.items = new string[1];
+    b[0] = ""hi"";
+    outStrLen = b.Get(0).Length;
+  }
+}"),
     };
 
     public static (string Name, string ClassName, string Source) ByName(string name)
