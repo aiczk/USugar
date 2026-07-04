@@ -806,65 +806,40 @@ public class UasmEmitter
 
     // ── EmitMethods ──
 
-    /// <summary>The class's own + inherited (non-overridden) user-defined method set — the ReachableBodies
-    /// SEED and the first-pass registration set. Sets <see cref="_inheritedMethods"/> as a side effect.
-    /// Hoisted out of EmitMethods so Emit() can build the reach fixpoint (which seeds from this) BEFORE
-    /// CaptureScopeAnalysis consumes its definition projection.</summary>
+    /// <summary>The class's own + inherited method universe — the ReachableBodies SEED and the first-pass
+    /// registration set. F3: single-sourced from the planner's FROZEN Phase-1 result
+    /// (<see cref="TypeLayout.Methods"/>) — the ONE place the method family is derived (own non-generic +
+    /// inherited-non-overridden, with the override-reuse / [W4] chain-slot / collision-rename rules) — so
+    /// this method no longer re-derives the same inherit walk (deleting the loop whose own comment admitted
+    /// it "mirrors the planner's inherit loop").
+    ///
+    /// One EXPLICIT emitter-only projection is layered on: own GENERIC ordinary/accessor methods. The
+    /// planner deliberately excludes them (they are monomorphized per call-site and have no per-spec
+    /// layout), but the reach fixpoint must walk their bodies (a generic method may reach struct/foreign/
+    /// base members) and BuildRecursionInfo needs their DEFINITIONS as recursion-graph roots (a recursive
+    /// generic method must spill). Empirically (rm3 method-universe probe) this is the ONLY membership
+    /// difference between the two derivations across the census corpus + deep-inheritance / new-shadow /
+    /// explicit-interface / generic-mix stress shapes.
+    ///
+    /// Sets <see cref="_inheritedMethods"/> (the inherited subset = planned methods NOT declared on this
+    /// class). Runs after EnsurePlannerReady, so the planner is frozen and this class is planned.</summary>
     IMethodSymbol[] ComputeMethods()
     {
-        var directMethods = _classSymbol.GetMembers().OfType<IMethodSymbol>()
-            .Where(m => (m.MethodKind == MethodKind.Ordinary
+        var planned = _planner.GetLayout(_classSymbol).Methods.Keys.ToArray();
+        _inheritedMethods = new HashSet<IMethodSymbol>(
+            planned.Where(m => !SymbolEqualityComparer.Default.Equals(m.ContainingType, _classSymbol)),
+            SymbolEqualityComparer.Default);
+
+        // Emitter-only projection: own generic ordinary/accessor method DEFINITIONS (see summary).
+        var ownGenerics = _classSymbol.GetMembers().OfType<IMethodSymbol>()
+            .Where(m => m.IsGenericMethod
+                     && (m.MethodKind == MethodKind.Ordinary
                       || m.MethodKind == MethodKind.ExplicitInterfaceImplementation
                       || m.MethodKind == MethodKind.PropertyGet
                       || m.MethodKind == MethodKind.PropertySet)
-                     && !m.IsImplicitlyDeclared)
-            .ToArray();
+                     && !m.IsImplicitlyDeclared);
 
-        // Collect inherited methods from user-defined base classes
-        var overriddenMethods = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
-        foreach (var m in directMethods)
-        {
-            var cur = m.OverriddenMethod;
-            while (cur != null)
-            {
-                overriddenMethods.Add(cur);
-                cur = cur.OverriddenMethod;
-            }
-        }
-        var inheritedMethodsList = new List<IMethodSymbol>();
-        var inheritBase = _classSymbol.BaseType;
-        while (inheritBase != null && inheritBase.Name != "UdonSharpBehaviour")
-        {
-            if (!inheritBase.DeclaringSyntaxReferences.IsEmpty)
-            {
-                // Round-8 [R3]: inherit ExplicitInterfaceImplementation methods too, mirroring the
-                // planner's inherit loop — the derived program must emit and export the __iface_*
-                // bridge for a base class's explicit implementation (pre-fix: never-exported
-                // dispatch name, silent no-op).
-                foreach (var bm in inheritBase.GetMembers().OfType<IMethodSymbol>()
-                    .Where(m => (m.MethodKind == MethodKind.Ordinary
-                              || m.MethodKind == MethodKind.ExplicitInterfaceImplementation
-                              || m.MethodKind == MethodKind.PropertyGet
-                              || m.MethodKind == MethodKind.PropertySet)
-                             && !m.IsImplicitlyDeclared && !m.IsGenericMethod && !m.IsAbstract))
-                {
-                    if (!overriddenMethods.Contains(bm))
-                    {
-                        inheritedMethodsList.Add(bm);
-                        // Wave-9 [W4] (mirrors the planner's inherit loop): an inherited override owns
-                        // its chain's virtual slot — never emit the overridden ROOT declaration as a
-                        // second standalone function (its auto-prop body reads the dead __basebk
-                        // storage / its method body is the base body, and a root-typed receiver
-                        // dispatch bound that stale function instead of the exported override).
-                        for (var cur = bm.OverriddenMethod; cur != null; cur = cur.OverriddenMethod)
-                            overriddenMethods.Add(cur);
-                    }
-                }
-            }
-            inheritBase = inheritBase.BaseType;
-        }
-        _inheritedMethods = new HashSet<IMethodSymbol>(inheritedMethodsList, SymbolEqualityComparer.Default);
-        return directMethods.Concat(inheritedMethodsList).ToArray();
+        return planned.Concat(ownGenerics).ToArray();
     }
 
     /// <summary>CaptureScopeAnalysis root projection (design §1, consumer 3): every method DEFINITION whose
