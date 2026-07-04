@@ -13,7 +13,7 @@ public class SwitchHandler : HandlerBase, IOperationHandler
 {
     public SwitchHandler(EmitContext ctx) : base(ctx) { }
 
-    public bool CanHandle(IOperation operation) => operation is ISwitchOperation;
+    public OperationKind[] HandledKinds { get; } = new[] { OperationKind.Switch };
 
     public void Handle(IOperation operation)
     {

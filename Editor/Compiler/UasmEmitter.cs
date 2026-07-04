@@ -8,8 +8,8 @@ using Microsoft.CodeAnalysis.Operations;
 public class UasmEmitter
 {
     readonly EmitContext _ctx;
-    readonly IOperationHandler[] _stmtHandlers;
-    readonly IExpressionHandler[] _exprHandlers;
+    readonly Dictionary<OperationKind, IOperationHandler> _stmtDispatch;
+    readonly Dictionary<OperationKind, IExpressionHandler> _exprDispatch;
 
     public bool DumpEnabled;
 
@@ -58,20 +58,35 @@ public class UasmEmitter
         var compoundAssignHandler = new CompoundAssignmentHandler(_ctx);
         var operatorHandler = new OperatorHandler(_ctx);
 
-        _stmtHandlers = new IOperationHandler[] { stmtHandler, loopHandler, switchHandler, deconstructHandler };
-        _exprHandlers = new IExpressionHandler[]
-        {
+        _stmtDispatch = BuildDispatch<IOperationHandler>(
+            stmtHandler, loopHandler, switchHandler, deconstructHandler);
+        _exprDispatch = BuildDispatch<IExpressionHandler>(
             new ExpressionHandler(_ctx),
             simpleAssignHandler,
             compoundAssignHandler,
             operatorHandler,
             new InvocationHandler(_ctx),
             new ArrayHandler(_ctx),
-            new NullableHandler(_ctx),
-        };
+            new NullableHandler(_ctx));
 
         _ctx.InitializeDispatchers(VisitOperation, VisitExpression, operatorHandler.EmitPatternCheckImpl,
             operatorHandler.EmitNewAggregate);
+    }
+
+    // Build one kind→handler table from each handler's declared HandledKinds. A kind claimed by two
+    // handlers in the same table is a construction-time bug (throws), not a silent first-wins tie-break.
+    static Dictionary<OperationKind, T> BuildDispatch<T>(params T[] handlers) where T : IHandler
+    {
+        var table = new Dictionary<OperationKind, T>();
+        foreach (var h in handlers)
+            foreach (var kind in h.HandledKinds)
+            {
+                if (table.TryGetValue(kind, out var existing))
+                    throw new InvalidOperationException(
+                        $"Duplicate handler for OperationKind.{kind}: {existing.GetType().Name} and {h.GetType().Name}");
+                table[kind] = h;
+            }
+        return table;
     }
 
     // Type name resolution helper
@@ -2286,8 +2301,8 @@ public class UasmEmitter
             throw new NotSupportedException("VisitOperation called with null operation");
         // Unwrap parenthesized expressions in statement context
         while (op is IParenthesizedOperation paren) op = paren.Operand;
-        foreach (var h in _stmtHandlers)
-            if (h.CanHandle(op)) { try { h.Handle(op); return; } catch (System.Exception ex) { throw TagLocation(ex, op); } }
+        if (_stmtDispatch.TryGetValue(op.Kind, out var h))
+            try { h.Handle(op); return; } catch (System.Exception ex) { throw TagLocation(ex, op); }
         throw new NotSupportedException($"Unsupported operation: {op.Kind} ({op.GetType().Name})");
     }
 
@@ -2304,8 +2319,8 @@ public class UasmEmitter
             throw new NotSupportedException("VisitExpression called with null operation");
         // Unwrap parenthesized expressions (transparent wrapper)
         while (op is IParenthesizedOperation paren) op = paren.Operand;
-        foreach (var h in _exprHandlers)
-            if (h.CanHandle(op)) { try { return h.Handle(op); } catch (System.Exception ex) { throw TagLocation(ex, op); } }
+        if (_exprDispatch.TryGetValue(op.Kind, out var h))
+            try { return h.Handle(op); } catch (System.Exception ex) { throw TagLocation(ex, op); }
         throw new NotSupportedException(
             $"Unsupported expression: {op.Kind} ({op.GetType().Name})");
     }

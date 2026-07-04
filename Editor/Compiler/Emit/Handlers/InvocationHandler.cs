@@ -7,11 +7,10 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
 {
     public InvocationHandler(EmitContext ctx) : base(ctx) { }
 
-    public bool CanHandle(IOperation expression)
-        => expression is IInvocationOperation
-            or IObjectCreationOperation
-            or IPropertyReferenceOperation
-            or IInterpolatedStringOperation;
+    public OperationKind[] HandledKinds { get; } = new[]
+    {
+        OperationKind.Invocation, OperationKind.ObjectCreation, OperationKind.PropertyReference, OperationKind.InterpolatedString,
+    };
 
     public CLeaf Handle(IOperation expression) => expression switch
     {

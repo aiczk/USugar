@@ -7,21 +7,13 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
 {
     public ExpressionHandler(EmitContext ctx) : base(ctx) { }
 
-    public bool CanHandle(IOperation expression)
-        => expression is ILiteralOperation
-            or ILocalReferenceOperation
-            or IFieldReferenceOperation
-            or IEventReferenceOperation
-            or IParameterReferenceOperation
-            or IInstanceReferenceOperation
-            or IConversionOperation
-            or IDefaultValueOperation
-            or ITypeOfOperation
-            or INameOfOperation
-            or IDeclarationExpressionOperation
-            or IDiscardOperation
-            or IDelegateCreationOperation
-            or ITupleOperation;
+    public OperationKind[] HandledKinds { get; } = new[]
+    {
+        OperationKind.Literal, OperationKind.LocalReference, OperationKind.FieldReference,
+        OperationKind.EventReference, OperationKind.ParameterReference, OperationKind.InstanceReference,
+        OperationKind.Conversion, OperationKind.DefaultValue, OperationKind.TypeOf, OperationKind.NameOf,
+        OperationKind.DeclarationExpression, OperationKind.Discard, OperationKind.DelegateCreation, OperationKind.Tuple,
+    };
 
     public CLeaf Handle(IOperation expression) => expression switch
     {

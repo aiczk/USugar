@@ -7,14 +7,12 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
 {
     public OperatorHandler(EmitContext ctx) : base(ctx) { }
 
-    public bool CanHandle(IOperation expression)
-        => expression is IBinaryOperation
-            or IUnaryOperation
-            or IConditionalOperation
-            or IIsTypeOperation
-            or IIsPatternOperation
-            or ISwitchExpressionOperation
-            or ITupleBinaryOperation;
+    // OperationKind.Conditional also appears in the statement table (StatementHandler) — the ternary lives here.
+    public OperationKind[] HandledKinds { get; } = new[]
+    {
+        OperationKind.BinaryOperator, OperationKind.UnaryOperator, OperationKind.Conditional, OperationKind.IsType,
+        OperationKind.IsPattern, OperationKind.SwitchExpression, OperationKind.TupleBinaryOperator,
+    };
 
     public CLeaf Handle(IOperation expression) => expression switch
     {

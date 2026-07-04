@@ -6,11 +6,10 @@ public class NullableHandler : AssignmentHandlerBase, IExpressionHandler
 {
     public NullableHandler(EmitContext ctx) : base(ctx) { }
 
-    public bool CanHandle(IOperation expression)
-        => expression is IConditionalAccessOperation
-            or ICoalesceOperation
-            or IConditionalAccessInstanceOperation
-            or ICoalesceAssignmentOperation;
+    public OperationKind[] HandledKinds { get; } = new[]
+    {
+        OperationKind.ConditionalAccess, OperationKind.Coalesce, OperationKind.ConditionalAccessInstance, OperationKind.CoalesceAssignment,
+    };
 
     public CLeaf Handle(IOperation expression) => expression switch
     {

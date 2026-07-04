@@ -8,7 +8,7 @@ public class SimpleAssignmentHandler : AssignmentHandlerBase, IExpressionHandler
 {
     public SimpleAssignmentHandler(EmitContext ctx) : base(ctx) { }
 
-    public bool CanHandle(IOperation op) => op is ISimpleAssignmentOperation;
+    public OperationKind[] HandledKinds { get; } = new[] { OperationKind.SimpleAssignment };
 
     public CLeaf Handle(IOperation op)
         => op is ISimpleAssignmentOperation assign

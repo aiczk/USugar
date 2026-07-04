@@ -7,18 +7,14 @@ public class StatementHandler : HandlerBase, IOperationHandler
 {
     public StatementHandler(EmitContext ctx) : base(ctx) { }
 
-    public bool CanHandle(IOperation operation)
-        => operation is IBlockOperation
-            or IExpressionStatementOperation
-            or IVariableDeclarationGroupOperation
-            or IConditionalOperation
-            or IReturnOperation
-            or IBranchOperation
-            or ILabeledOperation
-            or ILocalFunctionOperation
-            or IUsingOperation
-            or IUsingDeclarationOperation
-            or IEmptyOperation;
+    // IReturnOperation spans Return/YieldReturn/YieldBreak; all three route here as under `is IReturnOperation`.
+    public OperationKind[] HandledKinds { get; } = new[]
+    {
+        OperationKind.Block, OperationKind.ExpressionStatement, OperationKind.VariableDeclarationGroup,
+        OperationKind.Conditional, OperationKind.Return, OperationKind.YieldReturn, OperationKind.YieldBreak,
+        OperationKind.Branch, OperationKind.Labeled, OperationKind.LocalFunction,
+        OperationKind.Using, OperationKind.UsingDeclaration, OperationKind.Empty,
+    };
 
     public void Handle(IOperation operation)
     {

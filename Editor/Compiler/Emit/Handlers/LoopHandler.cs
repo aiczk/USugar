@@ -7,10 +7,8 @@ public class LoopHandler : HandlerBase, IOperationHandler
 {
     public LoopHandler(EmitContext ctx) : base(ctx) { }
 
-    public bool CanHandle(IOperation operation)
-        => operation is IWhileLoopOperation
-            or IForLoopOperation
-            or IForEachLoopOperation;
+    // While/For/ForEach all carry OperationKind.Loop, distinguished by LoopKind inside Handle().
+    public OperationKind[] HandledKinds { get; } = new[] { OperationKind.Loop };
 
     public void Handle(IOperation operation)
     {

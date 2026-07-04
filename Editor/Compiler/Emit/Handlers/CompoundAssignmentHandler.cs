@@ -7,8 +7,11 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
 {
     public CompoundAssignmentHandler(EmitContext ctx) : base(ctx) { }
 
-    public bool CanHandle(IOperation op)
-        => op is ICompoundAssignmentOperation or IIncrementOrDecrementOperation or IEventAssignmentOperation;
+    // IIncrementOrDecrementOperation spans BOTH Increment and Decrement — a single kind would drop `x--`.
+    public OperationKind[] HandledKinds { get; } = new[]
+    {
+        OperationKind.CompoundAssignment, OperationKind.Increment, OperationKind.Decrement, OperationKind.EventAssignment,
+    };
 
     public CLeaf Handle(IOperation op) => op switch
     {

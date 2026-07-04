@@ -8,7 +8,7 @@ public class DeconstructionAssignmentHandler : AssignmentHandlerBase, IOperation
 {
     public DeconstructionAssignmentHandler(EmitContext ctx) : base(ctx) { }
 
-    public bool CanHandle(IOperation op) => op is IDeconstructionAssignmentOperation;
+    public OperationKind[] HandledKinds { get; } = new[] { OperationKind.DeconstructionAssignment };
 
     public void Handle(IOperation op)
     {

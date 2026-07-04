@@ -6,8 +6,7 @@ public class ArrayHandler : HandlerBase, IExpressionHandler
 {
     public ArrayHandler(EmitContext ctx) : base(ctx) { }
 
-    public bool CanHandle(IOperation expression)
-        => expression is IArrayCreationOperation or IArrayElementReferenceOperation;
+    public OperationKind[] HandledKinds { get; } = new[] { OperationKind.ArrayCreation, OperationKind.ArrayElementReference };
 
     public CLeaf Handle(IOperation expression) => expression switch
     {
