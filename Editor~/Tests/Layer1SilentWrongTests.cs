@@ -6,8 +6,10 @@ namespace USugar.Tests;
 /// Layer-1 silent-wrong sweep: compile-clean code that produced a wrong value / wrong cross-client
 /// behavior, made LOUD (doctrine: "LOUD or CORRECT — a silent wrong value is never acceptable; loud
 /// over-rejection is acceptable"). Four holes, each pinned reject + a compiling control.
-///  1. Multi-dimensional arrays (int[,]) silently dropped dimensions 2+ → loud reject at the single
-///     type-lowering choke point (creation / element read / element write / field/param/local).
+///  1. Multi-dimensional arrays (int[,]) FLIPPED to acceptance (N-dim array design, 2026-07-04): the
+///     object[1+r] bundle (flat backing + boxed dimension lengths) now gives creation / element
+///     read / element write / field/param/local a sound, non-silent lowering — see NdimArrayTests
+///     for the full acceptance lattice and D-N1 bounds-violation deviation pins.
 ///  2. [NetworkCallable] delegate smuggled inside a struct/tuple param passed the delegate guard →
 ///     ContainsDelegateType now recurses aggregate fields.
 ///  3. `checked` was a silent no-op (overflow wraps where C# throws OverflowException) → loud reject
@@ -17,52 +19,53 @@ namespace USugar.Tests;
 /// </summary>
 public class Layer1SilentWrongTests
 {
-    // ── 1. Multi-dimensional arrays ──
+    // ── 1. Multi-dimensional arrays (flipped to acceptance, N-dim array design 2026-07-04) ──
 
     [Fact]
-    public void Multidim_Creation_Rejects()
+    public void Multidim_Creation_Compiles()
     {
-        var ex = Assert.ThrowsAny<System.Exception>(() => TestHelper.CompileToUasm(@"
+        var uasm = TestHelper.CompileToUasm(@"
 using UdonSharp;
 public class L1M1 : UdonSharpBehaviour {
     public void M() { var a = new int[2,3]; }
-}", "L1M1"));
-        Assert.Contains("Multi-dimensional arrays", ex.Message);
+}", "L1M1");
+        Assert.Contains("SystemObjectArray.__ctor__SystemInt32__SystemObjectArray", uasm);
+        Assert.Contains("SystemInt32Array.__ctor__SystemInt32__SystemInt32Array", uasm);
     }
 
     [Fact]
-    public void Multidim_ElementRead_Rejects()
+    public void Multidim_ElementRead_Compiles()
     {
-        var ex = Assert.ThrowsAny<System.Exception>(() => TestHelper.CompileToUasm(@"
+        var uasm = TestHelper.CompileToUasm(@"
 using UdonSharp;
 public class L1M2 : UdonSharpBehaviour {
     public int[,] a;
     public int M() { return a[1,2]; }
-}", "L1M2"));
-        Assert.Contains("Multi-dimensional arrays", ex.Message);
+}", "L1M2");
+        Assert.Contains("SystemInt32Array.__Get__SystemInt32__SystemInt32", uasm);
     }
 
     [Fact]
-    public void Multidim_ElementWrite_Rejects()
+    public void Multidim_ElementWrite_Compiles()
     {
-        var ex = Assert.ThrowsAny<System.Exception>(() => TestHelper.CompileToUasm(@"
+        var uasm = TestHelper.CompileToUasm(@"
 using UdonSharp;
 public class L1M3 : UdonSharpBehaviour {
     public int[,] a;
     public void M() { a[1,2] = 5; }
-}", "L1M3"));
-        Assert.Contains("Multi-dimensional arrays", ex.Message);
+}", "L1M3");
+        Assert.Contains("SystemInt32Array.__Set__SystemInt32_SystemInt32", uasm);
     }
 
     [Fact]
-    public void Multidim_Field_Rejects()
+    public void Multidim_Field_Compiles()
     {
-        var ex = Assert.ThrowsAny<System.Exception>(() => TestHelper.CompileToUasm(@"
+        var uasm = TestHelper.CompileToUasm(@"
 using UdonSharp;
 public class L1M4 : UdonSharpBehaviour {
     public int[,] grid;
-}", "L1M4"));
-        Assert.Contains("Multi-dimensional arrays", ex.Message);
+}", "L1M4");
+        Assert.Contains("grid: %SystemObjectArray", uasm);
     }
 
     [Fact]

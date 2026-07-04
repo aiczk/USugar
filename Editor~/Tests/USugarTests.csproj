@@ -23,6 +23,7 @@
     <Compile Include="../../Editor/Compiler/Emit/IOperationHandler.cs" />
     <Compile Include="../../Editor/Compiler/Emit/IExpressionHandler.cs" />
     <Compile Include="../../Editor/Compiler/Emit/HandlerBase.cs" />
+    <Compile Include="../../Editor/Compiler/Emit/HandlerBase.Ndim.cs" />
     <Compile Include="../../Editor/Compiler/Emit/Handlers/StatementHandler.cs" />
     <Compile Include="../../Editor/Compiler/Emit/Handlers/LoopHandler.cs" />
     <Compile Include="../../Editor/Compiler/Emit/Handlers/SwitchHandler.cs" />
