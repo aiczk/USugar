@@ -1370,8 +1370,11 @@ public abstract class HandlerBase
                 }
                 else if (ExternResolver.IsUdonSharpBehaviour(propRef.Property.ContainingType) && propRef.Instance is not IInstanceReferenceOperation)
                 {
-                    if (propRef.Property.Type is INamedTypeSymbol dlgPropType && dlgPropType.DelegateInvokeMethod != null)
-                        throw new System.NotSupportedException("Delegate properties are not supported in v2.1. Use delegate fields instead.");
+                    // Delegate-typed cross-behaviour property SET (Stage 1.75 design 2026-07-04 §3):
+                    // the bundle is an opaque object[] reference — it transports through the EXISTING
+                    // cross property machinery below with no special casing (P6 cross-boundary
+                    // machinery already proven for any reference-typed value; P4 VM-verified both the
+                    // auto SPV-direct and non-auto SCE-accessor transports preserve the bundle).
 
                     // Wave-12 [V2]: a NON-public auto-property's backing symbol is declared but its
                     // accessors are never exported — write the symbol directly (needs no entry point).
