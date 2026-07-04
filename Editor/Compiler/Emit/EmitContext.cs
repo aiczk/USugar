@@ -287,8 +287,16 @@ public class EmitContext
         var syntax = syntaxRef.GetSyntax();
         var body = compilation.GetSemanticModel(syntax.SyntaxTree).GetOperation(syntax);
         bool isStructMember = def.ContainingType is INamedTypeSymbol ct && IsUserStruct(ct);
+        // Wave-14 r5: resolve the transitive local-function capture set ONCE over the whole method
+        // body so a NON-capturing self/mutually-recursive LF is not mis-pinned. A raw
+        // localFunctionRefs count conflates "references another/own LF" with "captures state"; only
+        // the fixpoint distinguishes them, and it needs every LF's body (sibling bodies live outside
+        // any single closure), so it runs here, not inside the per-closure check.
+        var lfTransitiveCaptures = isStructMember
+            ? ComputeTransitiveLocalFunctionCaptures(body)
+            : null;
         var pin = ClosurePin.None;
-        WalkClosurePins(body, isStructMember, ref pin);
+        WalkClosurePins(body, isStructMember, lfTransitiveCaptures, ref pin);
         return pin;
     }
 
@@ -300,40 +308,102 @@ public class EmitContext
     // whole definition; no partial legalization. Wave-14: for a STRUCT member, additionally pin on
     // ANY capture (B45 — struct-hosted closures never get the per-activation env-record protection
     // that makes the T-free case safe for ordinary class-method generics).
-    void WalkClosurePins(IOperation op, bool isStructMember, ref ClosurePin pin)
+    void WalkClosurePins(IOperation op, bool isStructMember,
+        Dictionary<IMethodSymbol, HashSet<ISymbol>> lfTransitiveCaptures, ref ClosurePin pin)
     {
         if (op == null || pin != ClosurePin.None) return;
         switch (op)
         {
             case IAnonymousFunctionOperation af:
                 if (ClosureUsesMethodTypeParam(af.Symbol, af.Body)) { pin = ClosurePin.TypeParamDependent; return; }
-                if (isStructMember && ClosureCapturesAnything(af.Symbol, af.Body))
+                if (isStructMember && ClosureCapturesAnything(af.Symbol, af.Body, lfTransitiveCaptures))
                     { pin = ClosurePin.StructMemberCapturing; return; }
                 break;
             case ILocalFunctionOperation lf when lf.Symbol != null:
                 if (ClosureUsesMethodTypeParam(lf.Symbol, lf.Body)) { pin = ClosurePin.TypeParamDependent; return; }
-                if (isStructMember && ClosureCapturesAnything(lf.Symbol, lf.Body))
+                if (isStructMember && ClosureCapturesAnything(lf.Symbol, lf.Body, lfTransitiveCaptures))
                     { pin = ClosurePin.StructMemberCapturing; return; }
                 break;
         }
         foreach (var child in op.Children)
         {
-            WalkClosurePins(child, isStructMember, ref pin);
+            WalkClosurePins(child, isStructMember, lfTransitiveCaptures, ref pin);
             if (pin != ClosurePin.None) return;
         }
     }
 
-    /// <summary>Does this closure reference any outer local/parameter, or any local function (itself
-    /// possibly capturing)? Reuses LambdaCaptureAnalyzer's free-variable walk (same exclusion rules:
-    /// the closure's own parameters/locals/nested-closure parameters are not captures).</summary>
-    static bool ClosureCapturesAnything(IMethodSymbol closureSym, IOperation closureBody)
+    /// <summary>Does this closure capture any outer local/parameter — directly, or TRANSITIVELY through
+    /// a local function it references? Reuses LambdaCaptureAnalyzer's free-variable walk (same exclusion
+    /// rules: the closure's own parameters/locals/nested-closure parameters are not captures).
+    /// localFunctionRefs alone is NOT a capture signal (wave-14 r5) — it is the fixpoint seed; a
+    /// referenced LF marks this closure capturing only when its resolved transitive capture set holds a
+    /// symbol this closure did not declare. A self/mutually-recursive LF with zero free variables
+    /// resolves to the empty set and is correctly non-capturing.</summary>
+    static bool ClosureCapturesAnything(IMethodSymbol closureSym, IOperation closureBody,
+        Dictionary<IMethodSymbol, HashSet<ISymbol>> lfTransitiveCaptures)
     {
         if (closureSym == null || closureBody == null) return false;
         var directCaptures = new HashSet<ISymbol>(SymbolEqualityComparer.Default);
         var inside = new HashSet<ISymbol>(SymbolEqualityComparer.Default);
         var localFunctionRefs = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
         LambdaCaptureAnalyzer.AnalyzeLocalFunction(closureSym, closureBody, directCaptures, inside, localFunctionRefs);
-        return directCaptures.Count > 0 || localFunctionRefs.Count > 0;
+        if (directCaptures.Count > 0) return true;
+        if (lfTransitiveCaptures != null)
+            foreach (var callee in localFunctionRefs)
+                if (lfTransitiveCaptures.TryGetValue(callee.OriginalDefinition ?? callee, out var calleeCaps))
+                    foreach (var s in calleeCaps)
+                        if (!inside.Contains(s)) return true;
+        return false;
+    }
+
+    /// <summary>Wave-14 r5: transitive capture set per local function in a method body — the
+    /// StructMemberCapturing-guard twin of CaptureScopeAnalysis.SeedLocalFunctionCaptureFixpoint.
+    /// Capture-ness is TRANSITIVE over the local-function call graph (a wrapper LF over a capturing LF
+    /// is the same closure one hop removed); each hop is filtered against the caller's own `inside` set
+    /// so a callee capturing only the CALLER's locals does not mark the caller. Keyed by
+    /// OriginalDefinition to match AnalyzeLocalFunction's ref keys.</summary>
+    static Dictionary<IMethodSymbol, HashSet<ISymbol>> ComputeTransitiveLocalFunctionCaptures(IOperation body)
+    {
+        var lfCaptures = new Dictionary<IMethodSymbol, HashSet<ISymbol>>(SymbolEqualityComparer.Default);
+        var lfInside = new Dictionary<IMethodSymbol, HashSet<ISymbol>>(SymbolEqualityComparer.Default);
+        var lfRefs = new Dictionary<IMethodSymbol, HashSet<IMethodSymbol>>(SymbolEqualityComparer.Default);
+
+        void Collect(IOperation op)
+        {
+            if (op == null) return;
+            if (op is ILocalFunctionOperation lf && lf.Symbol != null && lf.Body != null)
+            {
+                var direct = new HashSet<ISymbol>(SymbolEqualityComparer.Default);
+                var inside = new HashSet<ISymbol>(SymbolEqualityComparer.Default);
+                var refs = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
+                LambdaCaptureAnalyzer.AnalyzeLocalFunction(lf.Symbol, lf.Body, direct, inside, refs);
+                var key = lf.Symbol.OriginalDefinition ?? lf.Symbol;
+                lfCaptures[key] = direct;
+                lfInside[key] = inside;
+                lfRefs[key] = refs;
+            }
+            foreach (var child in op.Children) Collect(child);
+        }
+        Collect(body);
+
+        bool changed = true;
+        while (changed)
+        {
+            changed = false;
+            foreach (var kv in lfRefs)
+            {
+                var mySet = lfCaptures[kv.Key];
+                var myInside = lfInside[kv.Key];
+                foreach (var callee in kv.Value)
+                {
+                    if (!lfCaptures.TryGetValue(callee, out var calleeSet)) continue;
+                    if (ReferenceEquals(calleeSet, mySet)) continue;
+                    foreach (var s in calleeSet)
+                        if (!myInside.Contains(s) && mySet.Add(s)) changed = true;
+                }
+            }
+        }
+        return lfCaptures;
     }
 
     static bool ClosureUsesMethodTypeParam(IMethodSymbol closureSym, IOperation closureBody)
