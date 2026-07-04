@@ -193,7 +193,15 @@ public class TwoInstUser : UdonSharpBehaviour {
     }
 
     // ── G-R1: a closure referencing the generic's type parameter (struct's OR method's own) pins the
-    // definition to a single instantiation — reject continues (design §3, widened [X6]/[Y2] tier). ──
+    // definition to a single instantiation — reject continues (design §3, widened [X6]/[Y2] tier).
+    //
+    // B45 note: a struct closure compiles today via a naive shared-field fallback (CaptureScopeAnalysis
+    // never walks struct methods as roots, so it never gets the multi-activation-safe envp/BindingScope
+    // treatment — B45, ledgered, out of scope here). That fallback is only CORRECT for single
+    // activation / no escape / no recursion. Every closure shape below is created and invoked
+    // immediately within the SAME call, never stored/returned, never called recursively or
+    // concurrently — so these tests pin FEATURE G's own behavior (the type-param-pin gate) and do not
+    // depend on B45's broken corner for their pass/fail outcome. ──
 
     [Fact]
     public void GenericStructMethod_TDependentClosure_SecondInstantiation_ThrowsNotSupported()
