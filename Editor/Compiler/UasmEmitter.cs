@@ -3511,6 +3511,22 @@ public class UasmEmitter
             if (!original.IsGenericMethod && IsClosedForeignStaticTarget(original))
                 result.Add(original);
         }
+        // B47 (wave-14 r6): a STATIC COMPUTED property on a user struct/class (StaticPropHelper<T>.Doubled)
+        // is referenced as an IPropertyReferenceOperation, never an invocation/method-ref, so the two arms
+        // above never saw it — its accessor fell through to a bogus SystemObjectArray.__get_Doubled__
+        // extern (the B46 shape, one node kind over). Collect the computed accessor(s) as foreign statics
+        // (they ARE static "methods" — get_X/set_X); auto-properties (backed by a field) are excluded by
+        // IsComputedProperty, BCL statics by IsForeignStatic's extern-namespace filter, and an open
+        // generic containing type by the closed guard (registered on demand at its closed call site).
+        if (op is IPropertyReferenceOperation spr && spr.Property.IsStatic && IsComputedProperty(spr.Property))
+        {
+            if (spr.Property.GetMethod is { } sg && IsForeignStatic(sg)
+                && !sg.IsGenericMethod && IsClosedForeignStaticTarget(sg))
+                result.Add(sg);
+            if (spr.Property.SetMethod is { } ss && IsForeignStatic(ss)
+                && !ss.IsGenericMethod && IsClosedForeignStaticTarget(ss))
+                result.Add(ss);
+        }
         foreach (var child in op.Children)
             CollectForeignStaticCallsInOperation(child, result);
     }

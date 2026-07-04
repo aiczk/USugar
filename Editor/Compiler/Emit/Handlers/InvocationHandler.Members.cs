@@ -106,6 +106,26 @@ public partial class InvocationHandler
         // Static property: no instance
         if (op.Instance == null)
         {
+            // B47 (wave-14 r6): a STATIC COMPUTED property on a user struct/class (StaticPropHelper<T>.Doubled)
+            // is a foreign-static accessor CALL, not a real extern — inline-call its getter (the B46
+            // static-method pattern, one node kind over). Without this the fall-through emits a bogus
+            // SystemObjectArray.__get_Doubled__ extern. The getter is pre-registered when its call site was
+            // reachable with a CLOSED containing type (collection layer); a closed spec first seen at a
+            // generic call site inside a struct/generic body is registered on demand here (mirrors the
+            // foreign-static-on-generic method arm). Auto/BCL/const-foldable statics are excluded: the
+            // const-fold arm below owns the BCL foldables, and IsUserComputedStaticProperty gates out autos.
+            if (op.Property.IsStatic && op.Property.GetMethod is { } sPropGetter
+                && IsForeignStatic(sPropGetter) && IsUserComputedStaticProperty(op.Property))
+            {
+                // ResolveStructMember substitutes the containing type's type args from the current map
+                // (SP<T>.get_Doubled → SP<int>.get_Doubled inside a Box<int> spec) and registers the closed
+                // spec on demand; an already-closed getter (a class-body call site) is returned unchanged
+                // and was pre-registered by the collection layer.
+                var sgv = EmitCallToMethod(ResolveStructMember(sPropGetter), new List<CLeaf>());
+                return op.Property.Type is INamedTypeSymbol sgAgg && EmitContext.IsAggregateType(sgAgg)
+                    ? EmitDeepCloneAggregate(sgv, sgAgg) : sgv;
+            }
+
             // Constant folding: static properties on foldable struct types (e.g., Vector3.zero)
             if (op.Property.IsStatic && ConstFoldableStructTypes.Contains(containingType))
             {
@@ -604,6 +624,13 @@ public partial class InvocationHandler
         }
         catch { return null; }
     }
+
+    // B47: a user-defined COMPUTED (non-auto) static property — its getter has a real body to inline-call,
+    // vs an auto-property whose getter reads a backing field. Mirrors UasmEmitter.IsComputedProperty (no
+    // field on the containing type is associated with the property).
+    static bool IsUserComputedStaticProperty(IPropertySymbol prop)
+        => !prop.ContainingType.GetMembers().OfType<IFieldSymbol>()
+            .Any(f => SymbolEqualityComparer.Default.Equals(f.AssociatedSymbol, prop));
 
     static object TryGetStaticPropertyValue(string udonType, string propertyName)
     {
