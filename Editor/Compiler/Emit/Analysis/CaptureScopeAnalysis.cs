@@ -181,9 +181,22 @@ public sealed class CaptureScopeAnalysis
     /// initializers are added below (they are not method roots).</param>
     /// <param name="reachBodies">F1: the ReachableBodies body map (definition → body, fetched once). Root
     /// bodies come from here; a fresh fetch is only a defensive fallback for a root absent from the map.</param>
+    /// <param name="fieldInits">C1: the field-initializer operations this class emits (own + BASE +
+    /// auto-property + static, as collected + base-first spliced by EmitFields). REQUIRED — there is no
+    /// null fallback: the former own-class-instance-only re-collection silently dropped base and
+    /// auto-property initializer closures (B50), so any caller that omitted the list would silently
+    /// reproduce that miscompile. Callers with no emitter pass an explicit list (empty when the class has
+    /// no field initializers). Unlike <paramref name="reachBodies"/> (whose null arm self-fetches the SAME
+    /// roots, yielding identical bodies), an incomplete field-init list changes CONTENT, not just provenance.</param>
     public static CaptureScopeAnalysis Build(Compilation compilation, INamedTypeSymbol classSymbol,
-        IReadOnlyList<IMethodSymbol> reachRoots, IReadOnlyDictionary<IMethodSymbol, IOperation> reachBodies)
+        IReadOnlyList<IMethodSymbol> reachRoots, IReadOnlyDictionary<IMethodSymbol, IOperation> reachBodies,
+        IReadOnlyList<IOperation> fieldInits)
     {
+        if (fieldInits == null)
+            throw new ArgumentNullException(nameof(fieldInits),
+                "CaptureScopeAnalysis.Build requires the emitted field-initializer list (empty is fine) — "
+              + "a null fallback would silently drop base/auto-property initializer closures (B50).");
+
         var captureAnalyzer = new LambdaCaptureAnalyzer(compilation);
 
         // Design §1: the injected ReachableBodies definition projection replaces this module's former
@@ -201,8 +214,6 @@ public sealed class CaptureScopeAnalysis
                 ? cached : GetOperationBody(compilation, root);
             if (body != null) rootBodies.Add((root, body));
         }
-
-        var fieldInits = CollectFieldInitializerOperations(compilation, classSymbol);
 
         SeedLocalFunctionCaptureFixpoint(rootBodies.Select(rb => rb.Body).Concat(fieldInits), captureAnalyzer);
 
@@ -227,24 +238,6 @@ public sealed class CaptureScopeAnalysis
         var syntaxRef = method.DeclaringSyntaxReferences.FirstOrDefault();
         if (syntaxRef == null) return null;
         return compilation.GetSemanticModel(syntaxRef.SyntaxTree).GetOperation(syntaxRef.GetSyntax());
-    }
-
-    static List<IOperation> CollectFieldInitializerOperations(Compilation compilation, INamedTypeSymbol classSymbol)
-    {
-        var result = new List<IOperation>();
-        foreach (var field in classSymbol.GetMembers().OfType<IFieldSymbol>())
-        {
-            if (field.IsConst || field.IsStatic) continue;
-            foreach (var syntaxRef in field.DeclaringSyntaxReferences)
-            {
-                if (syntaxRef.GetSyntax() is not Microsoft.CodeAnalysis.CSharp.Syntax.VariableDeclaratorSyntax
-                    { Initializer: { Value: { } initSyntax } })
-                    continue;
-                var model = compilation.GetSemanticModel(syntaxRef.SyntaxTree);
-                if (model.GetOperation(initSyntax) is { } initOp) result.Add(initOp);
-            }
-        }
-        return result;
     }
 
     /// <summary>Miniature standalone twin of UasmEmitter.BuildRecursionInfo's [K2] fixpoint: a local

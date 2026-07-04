@@ -134,8 +134,12 @@ public class UasmEmitter
         // IsCapturingClosure call site (HandlerBase, InvocationHandler.Extern, this file) key off it.
         // Its roots are the reach definition projection (ComputeCaptureRoots); root bodies come from the
         // reach result (BodyByDef) — no re-fetch (F1).
+        // C1 fix: roots = the FULL reach artifact (all provenances); field inits = the emitter's own
+        // _fieldInitOps (own + base + auto-property + static, already collected + spliced by EmitFields),
+        // NOT CaptureScopeAnalysis's own own-class-instance-only re-collection which missed base field and
+        // auto-property initializers.
         _ctx.CaptureScope = CaptureScopeAnalysis.Build(_compilation, _classSymbol,
-            ComputeCaptureRoots(methods), _reach.BodyByDef);
+            ComputeCaptureRoots(), _reach.BodyByDef, _fieldInitOps.Select(fi => fi.initOp).ToList());
         EmitMethods(methods);
         OnIrPass?.Invoke("after-emit", _module);
         // Handlers build Core IR; the pipeline (verify/optimize/flatten) runs on Core directly.
@@ -843,23 +847,15 @@ public class UasmEmitter
     }
 
     /// <summary>CaptureScopeAnalysis root projection (design §1, consumer 3): every method DEFINITION whose
-    /// body this class emits — the seed methods (own + inherited) plus reached base copies plus the reached
-    /// user-struct member definitions — deduped, definition-keyed, with syntax. Replaces the former
-    /// AddRoots + structQueue enumeration inside CaptureScopeAnalysis.</summary>
-    List<IMethodSymbol> ComputeCaptureRoots(IMethodSymbol[] methods)
-    {
-        var seen = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
-        var roots = new List<IMethodSymbol>();
-        void Add(IMethodSymbol m)
-        {
-            var def = m.OriginalDefinition;
-            if (def.DeclaringSyntaxReferences.Length > 0 && seen.Add(def)) roots.Add(def);
-        }
-        foreach (var m in methods) Add(m);
-        foreach (var m in _reach.BaseCopies) Add(m);
-        foreach (var m in _reach.StructMemberDefs) Add(m);
-        return roots;
-    }
+    /// body this class emits — the FULL ReachableBodies artifact (all provenances). C1 fix: this must be the
+    /// complete reach set, not just own+base+struct. A capturing lambda hoisted from a reached FOREIGN-STATIC
+    /// body (inlined into this program) or an OPEN-GENERIC-BASE definition body is emitted as a CFunction in
+    /// THIS class's context, so its closure needs env analysis here; the former (methods + base copies +
+    /// struct-member defs) set omitted foreign statics and open-generic-base defs, silently falling their
+    /// per-iteration captures back to a shared flat field (VM-proven multi-activation clobber). BodyByDef's
+    /// keys ARE every reached definition, so this is exactly the emitted-body set.</summary>
+    List<IMethodSymbol> ComputeCaptureRoots()
+        => _reach.BodyByDef.Keys.Where(m => m.DeclaringSyntaxReferences.Length > 0).ToList();
 
     void EmitMethods(IMethodSymbol[] methods)
     {

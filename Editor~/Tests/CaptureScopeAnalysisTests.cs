@@ -454,7 +454,7 @@ public class CurryClass : UdonSharpBehaviour {
     }
 }", "CurryClass", out var classSymbol);
 
-        var analysis = CaptureScopeAnalysis.Build(comp, classSymbol, Roots(classSymbol), null);
+        var analysis = CaptureScopeAnalysis.Build(comp, classSymbol, Roots(classSymbol), null, System.Array.Empty<IOperation>());
         var lambdas = LambdaScopesInEncounterOrder(analysis);
         Assert.Equal(2, lambdas.Length);
         var outer = lambdas[0];
@@ -493,7 +493,7 @@ public class NestedParamClass : UdonSharpBehaviour {
     }
 }", "NestedParamClass", out var classSymbol);
 
-        var analysis = CaptureScopeAnalysis.Build(comp, classSymbol, Roots(classSymbol), null);
+        var analysis = CaptureScopeAnalysis.Build(comp, classSymbol, Roots(classSymbol), null, System.Array.Empty<IOperation>());
         var lambdas = LambdaScopesInEncounterOrder(analysis);
         var outer = lambdas[0];
         var inner = lambdas[1];
@@ -527,7 +527,7 @@ public class NestedLfParamClass : UdonSharpBehaviour {
     }
 }", "NestedLfParamClass", out var classSymbol);
 
-        var analysis = CaptureScopeAnalysis.Build(comp, classSymbol, Roots(classSymbol), null);
+        var analysis = CaptureScopeAnalysis.Build(comp, classSymbol, Roots(classSymbol), null, System.Array.Empty<IOperation>());
         // `b` is the nested local function's param — not a capture of the outer lambda.
         Assert.False(IsCaptured(analysis, "b"));
         Assert.True(IsCaptured(analysis, "a"));
@@ -602,8 +602,8 @@ public class DeterminismClass : UdonSharpBehaviour {
     }
 }", "DeterminismClass", out var emitter);
 
-        var a1 = CaptureScopeAnalysis.Build(emitter.Compilation, emitter.ClassSymbol, Roots(emitter.ClassSymbol), null);
-        var a2 = CaptureScopeAnalysis.Build(emitter.Compilation, emitter.ClassSymbol, Roots(emitter.ClassSymbol), null);
+        var a1 = CaptureScopeAnalysis.Build(emitter.Compilation, emitter.ClassSymbol, Roots(emitter.ClassSymbol), null, System.Array.Empty<IOperation>());
+        var a2 = CaptureScopeAnalysis.Build(emitter.Compilation, emitter.ClassSymbol, Roots(emitter.ClassSymbol), null, System.Array.Empty<IOperation>());
 
         Assert.Equal(a1.Scopes.Count, a2.Scopes.Count);
         Assert.Equal(a1.Scopes.Select(s => s.Kind), a2.Scopes.Select(s => s.Kind));
