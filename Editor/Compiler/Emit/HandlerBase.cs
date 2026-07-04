@@ -269,6 +269,10 @@ public abstract partial class HandlerBase
     /// <summary>Create a function reference (for delegate/JUMP_INDIRECT).</summary>
     protected CFuncRef FuncRef(string funcName) => _builder.FuncRef(funcName);
 
+    /// <summary>Mint a delegate bundle: the shared 4-field object[] sequence (see <see cref="DelegateAbi.EmitBundleMint"/>).</summary>
+    protected CLeaf EmitBundleMint(Func<CLeaf> targetFn, CLeaf methodNameLeaf, CLeaf addrLeaf, CLeaf envLeaf)
+        => DelegateAbi.EmitBundleMint(_builder, targetFn, methodNameLeaf, addrLeaf, envLeaf);
+
     /// <summary>Emit a statement.</summary>
     protected void Emit(CStmt stmt) => _builder.Emit(stmt);
 
@@ -2023,16 +2027,8 @@ public abstract partial class HandlerBase
                     return (adapterName, FuncRef(adapterName), targetInstance, envLeaf);
                 }
 
-                var innerBundle = ExternCall(ExternResolver.BuildArrayCtorSignature("SystemObjectArray"),
-                    new List<CLeaf> { Const(DelegateAbi.BundleSize, "SystemInt32") }, "SystemObjectArray");
-                EmitExternVoid(ExternResolver.BuildArraySetSignature("SystemObjectArray", "SystemObject"),
-                    new List<CLeaf> { innerBundle, Const(DelegateAbi.Target, "SystemInt32"), targetInstance });
-                EmitExternVoid(ExternResolver.BuildArraySetSignature("SystemObjectArray", "SystemObject"),
-                    new List<CLeaf> { innerBundle, Const(DelegateAbi.Method, "SystemInt32"), Const(bridgeExportName, "SystemString") });
-                EmitExternVoid(ExternResolver.BuildArraySetSignature("SystemObjectArray", "SystemObject"),
-                    new List<CLeaf> { innerBundle, Const(DelegateAbi.Addr, "SystemInt32"), Const(0u, "SystemUInt32") });
-                EmitExternVoid(ExternResolver.BuildArraySetSignature("SystemObjectArray", "SystemObject"),
-                    new List<CLeaf> { innerBundle, Const(DelegateAbi.Env, "SystemInt32"), Const(null, "SystemObject") });
+                var innerBundle = EmitBundleMint(() => targetInstance,
+                    Const(bridgeExportName, "SystemString"), Const(0u, "SystemUInt32"), Const(null, "SystemObject"));
 
                 // The wrapper's INNER dispatch must speak the inner bundle's OWN protocol — here, the
                 // third-party target's OWN signature (targetMethod, sig-T), never sig-S: bundle[1] names

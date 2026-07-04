@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using Microsoft.CodeAnalysis;
@@ -114,6 +115,32 @@ public static class DelegateAbi
     /// VALUE variant conversion (sig-T is the source delegate type's own Invoke signature).
     /// </summary>
     public static string WrapperName(string outerSigPart, string innerSigPart) => $"__dlg_wrap_{outerSigPart}_{innerSigPart}";
+
+    /// <summary>
+    /// The ONE bundle-mint sequence (§1.1): a fresh object[BundleSize] with [Target]/[Method]/[Addr]/
+    /// [Env] set in that order — shared by every mint site (delegate creation, the sig-adapter's inner
+    /// third-party bundle, the variance wrapper bundle, the multicast fan-out bundle) instead of each
+    /// hand-rolling the same four <c>__Set</c> calls. <paramref name="targetFn"/> is a thunk, not a
+    /// plain value: every existing call site emits the ctor FIRST and only THEN evaluates its target
+    /// operand (which sometimes needs a fresh field load) — passing target eagerly would let C#'s
+    /// left-to-right argument evaluation run that load before this method's ctor call, reordering the
+    /// emitted instructions (and their scratch-slot numbers) relative to every site's current output.
+    /// method/addr/env are cheap pure leaves (Const/FuncRef/already-materialized values) at every
+    /// existing call site, so evaluating them eagerly as ordinary arguments never reorders anything.
+    /// </summary>
+    public static CLeaf EmitBundleMint(CoreBuilder builder, Func<CLeaf> targetFn,
+        CLeaf methodNameLeaf, CLeaf addrLeaf, CLeaf envLeaf)
+    {
+        var setSig = ExternResolver.BuildArraySetSignature("SystemObjectArray", "SystemObject");
+        var bundle = builder.ExternCall(ExternResolver.BuildArrayCtorSignature("SystemObjectArray"),
+            new List<CLeaf> { builder.Const(BundleSize, "SystemInt32") }, "SystemObjectArray");
+        var target = targetFn();
+        builder.EmitExternVoid(setSig, new List<CLeaf> { bundle, builder.Const(Target, "SystemInt32"), target });
+        builder.EmitExternVoid(setSig, new List<CLeaf> { bundle, builder.Const(Method, "SystemInt32"), methodNameLeaf });
+        builder.EmitExternVoid(setSig, new List<CLeaf> { bundle, builder.Const(Addr, "SystemInt32"), addrLeaf });
+        builder.EmitExternVoid(setSig, new List<CLeaf> { bundle, builder.Const(Env, "SystemInt32"), envLeaf });
+        return bundle;
+    }
 }
 
 /// <summary>

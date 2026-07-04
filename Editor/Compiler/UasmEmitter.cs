@@ -1321,6 +1321,29 @@ public class UasmEmitter
 
     // ── Pending Delegate Bridges (for hoisted lambdas/local functions) ──
 
+    /// <summary>Declare a sig's `__dlgc_` conv arg/ret fields — the preamble shared by every delegate
+    /// bridge flavor (plain bridge, sig adapter, wrapper, fan-out). Returns the ret Udon type string,
+    /// or null when the sig is void.</summary>
+    string DeclareConvSigFields(string sigPart, IMethodSymbol invoke,
+        IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeParamMap)
+        => DeclareConvSigFields(sigPart, invoke, typeParamMap, out _);
+
+    /// <summary>Overload exposing the per-parameter Udon type array (fan-out/wrapper need it afterward
+    /// to allocate typed argument slots) alongside the same declaration preamble.</summary>
+    string DeclareConvSigFields(string sigPart, IMethodSymbol invoke,
+        IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeParamMap, out string[] argTypes)
+    {
+        argTypes = new string[invoke.Parameters.Length];
+        for (int i = 0; i < invoke.Parameters.Length; i++)
+        {
+            argTypes[i] = ExternResolver.GetUdonTypeName(invoke.Parameters[i].Type, typeParamMap);
+            _ctx.TryDeclareVar($"__dlgc_{sigPart}__a{i}", argTypes[i]);
+        }
+        string retType = invoke.ReturnsVoid ? null : ExternResolver.GetUdonTypeName(invoke.ReturnType, typeParamMap);
+        if (retType != null) _ctx.TryDeclareVar($"__dlgc_{sigPart}__ret", retType);
+        return retType;
+    }
+
     void EmitPendingDelegateBridges()
     {
         var emitted = new HashSet<string>();
@@ -1333,80 +1356,8 @@ public class UasmEmitter
             // construction (creation already validated), but a future registration path must stay loud.
             DelegateAbi.ValidateNoRefOutParams(method);
 
-            // Use the saved type param snapshot instead of _typeParamMap (which may be cleared)
-            var sigPart = DelegateAbi.BuildSigPart(method, resolvedMap);
-
-            // Declare convention fields (if not already declared)
-            for (int i = 0; i < method.Parameters.Length; i++)
-            {
-                var argType = ExternResolver.GetUdonTypeName(method.Parameters[i].Type, resolvedMap);
-                _ctx.TryDeclareVar($"__dlgc_{sigPart}__a{i}", argType);
-            }
-            if (!method.ReturnsVoid)
-            {
-                var retType = ExternResolver.GetUdonTypeName(method.ReturnType, resolvedMap);
-                _ctx.TryDeclareVar($"__dlgc_{sigPart}__ret", retType);
-            }
-
-            // Build bridge function
-            var bridgeFunc = _module.AddFunction(bridgeExportName, bridgeExportName);
-
-            var prevFunc = _builder.CurrentFunction;
-            _builder.SetFunction(bridgeFunc);
-
-            // Copy convention fields → real param fields, then call real method
-            var callArgs = new List<CLeaf>();
-            for (int i = 0; i < method.Parameters.Length; i++)
-            {
-                var argType = ExternResolver.GetUdonTypeName(method.Parameters[i].Type, resolvedMap);
-                var convName = $"__dlgc_{sigPart}__a{i}";
-                callArgs.Add(BridgeLoad(convName, argType));
-            }
-
-            var retTypeStr = method.ReturnsVoid ? "SystemVoid" : ExternResolver.GetUdonTypeName(method.ReturnType, resolvedMap);
-            var convRet = method.ReturnsVoid ? null : $"__dlgc_{sigPart}__ret";
-
-            void EmitBridgeCall(List<CLeaf> args)
-            {
-                var callResult = _builder.InternalCall(realFunc.Name, args, retTypeStr);
-                if (!method.ReturnsVoid) BridgeStore(convRet, callResult);
-                else _builder.EmitExprStmt(callResult);
-            }
-
-            // Stage 2 §5.1: a CAPTURING target's bridge consumes the staged env global as the trailing
-            // arg (positional copy-in binds it to the real function's __envp param field) under an
-            // env-null LOUD guard — a hand-rolled object[] or a mixed-world old dispatcher leaves the
-            // env unset, which must LogError + default, not fault or silently read garbage. Non-
-            // capturing bridges (named methods, capture-free lambdas) are byte-unchanged.
-            if (_ctx.CaptureScope != null && _ctx.CaptureScope.IsCapturingClosure(method))
-            {
-                var envConv = $"__dlgc_{sigPart}__env";
-                _ctx.TryDeclareVar(envConv, EnvEmit.EnvType);
-                callArgs.Add(BridgeLoad(envConv, EnvEmit.EnvType));
-                var envOk = BridgeCallExtern("SystemBoolean",
-                    "SystemObject.__op_Inequality__SystemObject_SystemObject__SystemBoolean",
-                    new[] { BridgeLoad(envConv, EnvEmit.EnvType), _builder.Const(null, "SystemObject") });
-                _builder.EmitIf(envOk,
-                    _ => EmitBridgeCall(callArgs),
-                    _ =>
-                    {
-                        BridgeCallExternVoid("UnityEngineDebug.__LogError__SystemObject__SystemVoid",
-                            new[] { (CLeaf)_builder.Const(
-                                $"USugar: missing closure environment — invoked a captured delegate whose bundle carries no env ({method.Name})",
-                                "SystemString") });
-                        if (!method.ReturnsVoid)
-                            BridgeStore(convRet, InvocationHandler.DefaultConst(_builder, retTypeStr));
-                    });
-            }
-            else
-            {
-                EmitBridgeCall(callArgs);
-            }
-
-            _builder.EmitReturn();
-
-            if (prevFunc != null)
-                _builder.SetFunction(prevFunc);
+            var targetRetTypeStr = method.ReturnsVoid ? "SystemVoid" : ExternResolver.GetUdonTypeName(method.ReturnType, resolvedMap);
+            EmitDelegateBridgeBody(bridgeExportName, method, resolvedMap, realFunc, targetRetTypeStr, method);
         }
     }
 
@@ -1415,9 +1366,10 @@ public class UasmEmitter
     // A same-program variant method-group binding mints one of these instead of the plain bridge:
     // reads sig-S conv args (the DELEGATE's own declared types), InternalCalls the real target (zero
     // conversion — C# only permits reference-conversion variance here, P2-verified), stores the result
-    // into the sig-S conv-ret. Sibling of EmitPendingDelegateBridges; the ONLY differences are which
-    // signature drives the conv-var names/types (sig-S here, the target method's own sig there) and the
-    // synthesized bridge name (DelegateAbi.SigAdapterName).
+    // into the sig-S conv-ret. Shares EmitDelegateBridgeBody with EmitPendingDelegateBridges; the ONLY
+    // differences are which signature drives the conv-var names/types (sig-S/delegateInvoke here, the
+    // target method's own sig there — the same symbol as the plain bridge's target) and the synthesized
+    // bridge name (DelegateAbi.SigAdapterName).
 
     void EmitPendingSigAdapterBridges()
     {
@@ -1429,79 +1381,84 @@ public class UasmEmitter
 
             DelegateAbi.ValidateNoRefOutParams(targetMethod);
 
-            var sigPart = DelegateAbi.BuildSigPart(delegateInvoke, resolvedMap);
-
-            // Declare sig-S convention fields using the DELEGATE's own declared types (not the target
-            // method's) — these are the caller-facing conv vars every sig-S dispatch site already uses.
-            for (int i = 0; i < delegateInvoke.Parameters.Length; i++)
-            {
-                var argType = ExternResolver.GetUdonTypeName(delegateInvoke.Parameters[i].Type, resolvedMap);
-                _ctx.TryDeclareVar($"__dlgc_{sigPart}__a{i}", argType);
-            }
-            if (!delegateInvoke.ReturnsVoid)
-            {
-                var retType = ExternResolver.GetUdonTypeName(delegateInvoke.ReturnType, resolvedMap);
-                _ctx.TryDeclareVar($"__dlgc_{sigPart}__ret", retType);
-            }
-
-            var adapterFunc = _module.AddFunction(adapterName, adapterName);
-            var prevFunc = _builder.CurrentFunction;
-            _builder.SetFunction(adapterFunc);
-
-            // Read each sig-S conv arg and forward it DIRECTLY to the real target's InternalCall — no
-            // conversion extern: a reference-variance value (e.g. an object-declared leaf holding a
-            // string) COPYs cleanly into the target's own differently-declared param slot (P2-verified).
-            var callArgs = new List<CLeaf>();
-            for (int i = 0; i < delegateInvoke.Parameters.Length; i++)
-            {
-                var argType = ExternResolver.GetUdonTypeName(delegateInvoke.Parameters[i].Type, resolvedMap);
-                callArgs.Add(BridgeLoad($"__dlgc_{sigPart}__a{i}", argType));
-            }
-
             var targetRetTypeStr = targetMethod.ReturnsVoid
                 ? "SystemVoid" : ExternResolver.GetUdonTypeName(targetMethod.ReturnType, resolvedMap);
-            var convRet = delegateInvoke.ReturnsVoid ? null : $"__dlgc_{sigPart}__ret";
-
-            void EmitAdapterCall(List<CLeaf> args)
-            {
-                var callResult = _builder.InternalCall(realFunc.Name, args, targetRetTypeStr);
-                if (convRet != null) BridgeStore(convRet, callResult);
-                else if (!targetMethod.ReturnsVoid) _builder.EmitExprStmt(callResult);
-            }
-
-            // Capturing-LF method-group variance (design §2.2): forward __envp untouched, same null-
-            // guard discipline as EmitPendingDelegateBridges' capturing arm, keyed by sig-S.
-            if (_ctx.CaptureScope != null && _ctx.CaptureScope.IsCapturingClosure(targetMethod))
-            {
-                var envConv = $"__dlgc_{sigPart}__env";
-                _ctx.TryDeclareVar(envConv, EnvEmit.EnvType);
-                callArgs.Add(BridgeLoad(envConv, EnvEmit.EnvType));
-                var envOk = BridgeCallExtern("SystemBoolean",
-                    "SystemObject.__op_Inequality__SystemObject_SystemObject__SystemBoolean",
-                    new[] { BridgeLoad(envConv, EnvEmit.EnvType), _builder.Const(null, "SystemObject") });
-                _builder.EmitIf(envOk,
-                    _ => EmitAdapterCall(callArgs),
-                    _ =>
-                    {
-                        BridgeCallExternVoid("UnityEngineDebug.__LogError__SystemObject__SystemVoid",
-                            new[] { (CLeaf)_builder.Const(
-                                $"USugar: missing closure environment — invoked a captured delegate whose bundle carries no env ({targetMethod.Name})",
-                                "SystemString") });
-                        if (convRet != null)
-                            BridgeStore(convRet, InvocationHandler.DefaultConst(_builder,
-                                ExternResolver.GetUdonTypeName(delegateInvoke.ReturnType, resolvedMap)));
-                    });
-            }
-            else
-            {
-                EmitAdapterCall(callArgs);
-            }
-
-            _builder.EmitReturn();
-
-            if (prevFunc != null)
-                _builder.SetFunction(prevFunc);
+            EmitDelegateBridgeBody(adapterName, delegateInvoke, resolvedMap, realFunc, targetRetTypeStr, targetMethod);
         }
+    }
+
+    /// <summary>Shared protocol skeleton for a delegate bridge body (plain bridge and sig adapter
+    /// alike, design 2026-07-04 §2.2): declare the sig's conv arg/ret fields, stage them into
+    /// <paramref name="targetFunc"/>'s InternalCall, store the result back into the conv-ret — with
+    /// the capturing-closure __envp forwarding + env-null guard when <paramref
+    /// name="closureCheckMethod"/> is a capturing closure. <paramref name="sigMethod"/> drives the
+    /// conv-var names/types (the delegate's OWN declared signature for a sig adapter; the target
+    /// method's own signature — the same symbol as <paramref name="closureCheckMethod"/> — for a plain
+    /// bridge). <paramref name="targetRetTypeStr"/> is the actual InternalCall's return type, which can
+    /// differ from sigMethod's for a sig adapter (Stage 1.75 §2's reference-variance guarantee is what
+    /// makes that safe to forward with zero conversion).</summary>
+    void EmitDelegateBridgeBody(string bridgeName, IMethodSymbol sigMethod,
+        Dictionary<ITypeParameterSymbol, ITypeSymbol> resolvedMap, CFunction targetFunc,
+        string targetRetTypeStr, IMethodSymbol closureCheckMethod)
+    {
+        var sigPart = DelegateAbi.BuildSigPart(sigMethod, resolvedMap);
+        var retType = DeclareConvSigFields(sigPart, sigMethod, resolvedMap);
+
+        var bridgeFunc = _module.AddFunction(bridgeName, bridgeName);
+        var prevFunc = _builder.CurrentFunction;
+        _builder.SetFunction(bridgeFunc);
+
+        // Copy convention fields → real param fields, then call real method
+        var callArgs = new List<CLeaf>();
+        for (int i = 0; i < sigMethod.Parameters.Length; i++)
+        {
+            var argType = ExternResolver.GetUdonTypeName(sigMethod.Parameters[i].Type, resolvedMap);
+            callArgs.Add(BridgeLoad($"__dlgc_{sigPart}__a{i}", argType));
+        }
+
+        var convRet = retType != null ? $"__dlgc_{sigPart}__ret" : null;
+
+        void EmitBridgeCall(List<CLeaf> args)
+        {
+            var callResult = _builder.InternalCall(targetFunc.Name, args, targetRetTypeStr);
+            if (convRet != null) BridgeStore(convRet, callResult);
+            else _builder.EmitExprStmt(callResult);
+        }
+
+        // Stage 2 §5.1: a CAPTURING target's bridge consumes the staged env global as the trailing
+        // arg (positional copy-in binds it to the real function's __envp param field) under an
+        // env-null LOUD guard — a hand-rolled object[] or a mixed-world old dispatcher leaves the
+        // env unset, which must LogError + default, not fault or silently read garbage. Non-
+        // capturing bridges (named methods, capture-free lambdas) are byte-unchanged.
+        if (_ctx.CaptureScope != null && _ctx.CaptureScope.IsCapturingClosure(closureCheckMethod))
+        {
+            var envConv = $"__dlgc_{sigPart}__env";
+            _ctx.TryDeclareVar(envConv, EnvEmit.EnvType);
+            callArgs.Add(BridgeLoad(envConv, EnvEmit.EnvType));
+            var envOk = BridgeCallExtern("SystemBoolean",
+                "SystemObject.__op_Inequality__SystemObject_SystemObject__SystemBoolean",
+                new[] { BridgeLoad(envConv, EnvEmit.EnvType), _builder.Const(null, "SystemObject") });
+            _builder.EmitIf(envOk,
+                _ => EmitBridgeCall(callArgs),
+                _ =>
+                {
+                    BridgeCallExternVoid("UnityEngineDebug.__LogError__SystemObject__SystemVoid",
+                        new[] { (CLeaf)_builder.Const(
+                            $"USugar: missing closure environment — invoked a captured delegate whose bundle carries no env ({closureCheckMethod.Name})",
+                            "SystemString") });
+                    if (convRet != null)
+                        BridgeStore(convRet, InvocationHandler.DefaultConst(_builder, retType));
+                });
+        }
+        else
+        {
+            EmitBridgeCall(callArgs);
+        }
+
+        _builder.EmitReturn();
+
+        if (prevFunc != null)
+            _builder.SetFunction(prevFunc);
     }
 
     // ── Wrapper-with-Payload Bridges (design 2026-07-04 §2.3, B-2) ──
@@ -1533,14 +1490,7 @@ public class UasmEmitter
         // sig-S bundle's [1]/[2] can point at this wrapper by construction).
         _ctx.EnsureRecursionStack();
 
-        var argTypes = new string[outerInvoke.Parameters.Length];
-        for (int i = 0; i < outerInvoke.Parameters.Length; i++)
-        {
-            argTypes[i] = ExternResolver.GetUdonTypeName(outerInvoke.Parameters[i].Type, typeParamMap);
-            _ctx.TryDeclareVar($"__dlgc_{outerSigPart}__a{i}", argTypes[i]);
-        }
-        string retType = outerInvoke.ReturnsVoid ? null : ExternResolver.GetUdonTypeName(outerInvoke.ReturnType, typeParamMap);
-        if (retType != null) _ctx.TryDeclareVar($"__dlgc_{outerSigPart}__ret", retType);
+        var retType = DeclareConvSigFields(outerSigPart, outerInvoke, typeParamMap, out var argTypes);
         _ctx.TryDeclareVar($"__dlgc_{outerSigPart}__env", EnvEmit.EnvType);
 
         var wrapperFunc = _module.AddFunction(wrapperName, wrapperName);
@@ -1570,10 +1520,7 @@ public class UasmEmitter
         // THIS program is the "caller" for the inner dispatch (stages args / reads ret), regardless of
         // whether any method of sig-T exists locally.
         var innerSigPart = DelegateAbi.BuildSigPart(innerInvoke, typeParamMap);
-        for (int i = 0; i < innerInvoke.Parameters.Length; i++)
-            _ctx.TryDeclareVar($"__dlgc_{innerSigPart}__a{i}", ExternResolver.GetUdonTypeName(innerInvoke.Parameters[i].Type, typeParamMap));
-        if (!innerInvoke.ReturnsVoid)
-            _ctx.TryDeclareVar($"__dlgc_{innerSigPart}__ret", ExternResolver.GetUdonTypeName(innerInvoke.ReturnType, typeParamMap));
+        DeclareConvSigFields(innerSigPart, innerInvoke, typeParamMap);
         _ctx.TryDeclareVar($"__dlgc_{innerSigPart}__env", EnvEmit.EnvType);
 
         var dispatch = new InvocationHandler(_ctx);
@@ -1906,14 +1853,7 @@ public class UasmEmitter
         // post-coalesce liveness pass, not by the named-field mechanism.
         _ctx.EnsureRecursionStack();
 
-        var argTypes = new string[invoke.Parameters.Length];
-        for (int i = 0; i < invoke.Parameters.Length; i++)
-        {
-            argTypes[i] = ExternResolver.GetUdonTypeName(invoke.Parameters[i].Type, typeParamMap);
-            _ctx.TryDeclareVar($"__dlgc_{sigPart}__a{i}", argTypes[i]);
-        }
-        string retType = invoke.ReturnsVoid ? null : ExternResolver.GetUdonTypeName(invoke.ReturnType, typeParamMap);
-        if (retType != null) _ctx.TryDeclareVar($"__dlgc_{sigPart}__ret", retType);
+        var retType = DeclareConvSigFields(sigPart, invoke, typeParamMap, out var argTypes);
         _ctx.TryDeclareVar($"__dlgc_{sigPart}__env", EnvEmit.EnvType);
 
         var fanoutFunc = _module.AddFunction(fanoutName, fanoutName);

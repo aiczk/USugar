@@ -400,18 +400,9 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
                 _builder.EmitIf(srcNotNull,
                     _ =>
                     {
-                        var wrapperBundle = ExternCall(ExternResolver.BuildArrayCtorSignature("SystemObjectArray"),
-                            new List<CLeaf> { Const(DelegateAbi.BundleSize, "SystemInt32") }, "SystemObjectArray");
                         var wThisType = GetUdonType(_classSymbol);
-                        var wThis = LoadField(_ctx.DeclareThisOnce(wThisType), wThisType);
-                        EmitExternVoid(ExternResolver.BuildArraySetSignature("SystemObjectArray", "SystemObject"),
-                            new List<CLeaf> { wrapperBundle, Const(DelegateAbi.Target, "SystemInt32"), wThis });
-                        EmitExternVoid(ExternResolver.BuildArraySetSignature("SystemObjectArray", "SystemObject"),
-                            new List<CLeaf> { wrapperBundle, Const(DelegateAbi.Method, "SystemInt32"), Const(wrapperName, "SystemString") });
-                        EmitExternVoid(ExternResolver.BuildArraySetSignature("SystemObjectArray", "SystemObject"),
-                            new List<CLeaf> { wrapperBundle, Const(DelegateAbi.Addr, "SystemInt32"), FuncRef(wrapperName) });
-                        EmitExternVoid(ExternResolver.BuildArraySetSignature("SystemObjectArray", "SystemObject"),
-                            new List<CLeaf> { wrapperBundle, Const(DelegateAbi.Env, "SystemInt32"), srcVal });
+                        var wrapperBundle = EmitBundleMint(() => LoadField(_ctx.DeclareThisOnce(wThisType), wThisType),
+                            Const(wrapperName, "SystemString"), FuncRef(wrapperName), srcVal);
                         EmitAssign(wrapResultSlot, wrapperBundle);
                     },
                     _ => EmitAssign(wrapResultSlot, Const(null, "SystemObjectArray")));
@@ -694,27 +685,17 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
         DelegateAbi.ValidateDelegateBinding(op.Type as INamedTypeSymbol,
             targetMethodForValidation, _ctx.TypeParamMap, varianceResolved);
 
-        var bundle = ExternCall(ExternResolver.BuildArrayCtorSignature("SystemObjectArray"),
-            new List<CLeaf> { Const(DelegateAbi.BundleSize, "SystemInt32") }, "SystemObjectArray");
-
         var thisType = GetUdonType(_classSymbol);
-        var target = thirdParty ?? LoadField(_ctx.DeclareThisOnce(thisType), thisType);
         // Addr discipline (§1.3): the only sources for bundle[2] are the back-patched funcaddr const
         // (boxed UInt32) or Const(0u). A third-party method group's local funcaddr is meaningless in the
         // target program, so it carries 0u; a same-this target carries the REAL funcaddr — even when the
         // bundle is later handed cross-Behaviour (the invoke-side target-identity guard is the only gate).
         var addr = thirdParty != null ? (CLeaf)Const(0u, "SystemUInt32") : funcRef;
 
-        EmitExternVoid(ExternResolver.BuildArraySetSignature("SystemObjectArray", "SystemObject"),
-            new List<CLeaf> { bundle, Const(DelegateAbi.Target, "SystemInt32"), target });
-        EmitExternVoid(ExternResolver.BuildArraySetSignature("SystemObjectArray", "SystemObject"),
-            new List<CLeaf> { bundle, Const(DelegateAbi.Method, "SystemInt32"), Const(bridgeName, "SystemString") });
-        EmitExternVoid(ExternResolver.BuildArraySetSignature("SystemObjectArray", "SystemObject"),
-            new List<CLeaf> { bundle, Const(DelegateAbi.Addr, "SystemInt32"), addr });
         // Stage 2 §3.7: bundle[3] carries the binding-scope env for a CAPTURING closure target, else
         // a null const (capture-free lambda / named method / base.M) = byte-identical to Stage 1.
-        EmitExternVoid(ExternResolver.BuildArraySetSignature("SystemObjectArray", "SystemObject"),
-            new List<CLeaf> { bundle, Const(DelegateAbi.Env, "SystemInt32"), envLeaf });
+        var bundle = EmitBundleMint(() => thirdParty ?? LoadField(_ctx.DeclareThisOnce(thisType), thisType),
+            Const(bridgeName, "SystemString"), addr, envLeaf);
 
         return bundle;
     }
