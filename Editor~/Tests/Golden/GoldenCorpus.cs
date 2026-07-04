@@ -241,6 +241,24 @@ public class StructRefParam : UdonSharpBehaviour {
     result = f();
   }
 }"),
+        // Cross-behaviour delegate property get/set (Stage 1.75 design 2026-07-04 §3 canonical
+        // baseline, §5). The bundle is an opaque object[] reference transported through the EXISTING
+        // cross property machinery (auto: direct SetProgramVariable/GetProgramVariable) — no new
+        // mechanism, only the former setter-side reject removed.
+        ("crossbehaviour_delegate_property", "CrossBehaviourDelegatePropertyCaller",
+@"using System; using UdonSharp;
+public class CrossBehaviourDelegatePropertyOwner : UdonSharpBehaviour {
+  public Action Callback { get; set; }
+}
+public class CrossBehaviourDelegatePropertyCaller : UdonSharpBehaviour {
+  public CrossBehaviourDelegatePropertyOwner owner;
+  public int result;
+  void Start(){
+    owner.Callback = () => { result = 1; };
+    Action a = owner.Callback;
+    a();
+  }
+}"),
     };
 
     public static (string Name, string ClassName, string Source) ByName(string name)

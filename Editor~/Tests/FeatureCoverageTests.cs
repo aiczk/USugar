@@ -1632,12 +1632,12 @@ public class DlgPlusEq : UdonSharpBehaviour {
         Assert.Contains("__dlg_fanout_", uasm);
     }
 
-    // ── Delegate property throws ──
+    // ── Delegate property, cross-behaviour (Stage 1.75 design 2026-07-04 §3): SUPPORTED ──
 
     [Fact]
-    public void DelegateProperty_CrossBehaviour_ThrowsNotSupported()
+    public void DelegateProperty_CrossBehaviour_Set_Compiles()
     {
-        var ex = Assert.ThrowsAny<Exception>(() => TestHelper.CompileToUasm(new[] { @"
+        var uasm = TestHelper.CompileToUasm(new[] { @"
 using UdonSharp;
 using System;
 public class PropTarget : UdonSharpBehaviour {
@@ -1648,8 +1648,74 @@ using System;
 public class PropCaller : UdonSharpBehaviour {
     public PropTarget target;
     void Start() { target.Callback = () => { }; }
-}" }, "PropCaller"));
-        Assert.Contains("not supported", ex.Message, StringComparison.OrdinalIgnoreCase);
+}" }, "PropCaller");
+        Assert.Contains("VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid", uasm);
+    }
+
+    [Fact]
+    public void DelegateProperty_CrossBehaviour_Get_Compiles()
+    {
+        var uasm = TestHelper.CompileToUasm(new[] { @"
+using UdonSharp;
+using System;
+public class PropGetTarget : UdonSharpBehaviour {
+    public Action Callback { get; set; }
+}", @"
+using UdonSharp;
+using System;
+public class PropGetCaller : UdonSharpBehaviour {
+    public PropGetTarget target;
+    void Start() { Action a = target.Callback; a(); }
+}" }, "PropGetCaller");
+        Assert.Contains("VRCUdonCommonInterfacesIUdonEventReceiver.__GetProgramVariable__SystemString__SystemObject", uasm);
+    }
+
+    [Fact]
+    public void DelegateProperty_CrossBehaviour_NonAutoAccessors_Compiles()
+    {
+        // Manual (non-auto) get/set accessors: get→CrossCall (SendCustomEvent), set→SPV+SCE, instead of
+        // the auto-prop direct GetProgramVariable/SetProgramVariable shortcut.
+        var uasm = TestHelper.CompileToUasm(new[] { @"
+using UdonSharp;
+using System;
+public class PropNonAutoTarget : UdonSharpBehaviour {
+    Action _cb;
+    public Action Callback { get { return _cb; } set { _cb = value; } }
+}", @"
+using UdonSharp;
+using System;
+public class PropNonAutoCaller : UdonSharpBehaviour {
+    public PropNonAutoTarget target;
+    void Start() {
+        target.Callback = () => { };
+        Action a = target.Callback;
+        a();
+    }
+}" }, "PropNonAutoCaller");
+        Assert.Contains("VRCUdonCommonInterfacesIUdonEventReceiver.__SendCustomEvent__SystemString__SystemVoid", uasm);
+    }
+
+    [Fact]
+    public void DelegateProperty_CrossBehaviour_PlusEquals_Compiles()
+    {
+        // a.P += h needs no new lowering (design §3): VisitDelegateCompoundAssignment already dispatches
+        // on any delegate-typed target; get→combine→set decomposes through the now-unblocked cross
+        // property machinery.
+        var uasm = TestHelper.CompileToUasm(new[] { @"
+using UdonSharp;
+using System;
+public class PropPlusEqTarget : UdonSharpBehaviour {
+    public Action Callback { get; set; }
+}", @"
+using UdonSharp;
+using System;
+public class PropPlusEqCaller : UdonSharpBehaviour {
+    public PropPlusEqTarget target;
+    void Start() { target.Callback += () => { }; }
+}" }, "PropPlusEqCaller");
+        Assert.Contains("__dlg_combine_", uasm);
+        Assert.Contains("VRCUdonCommonInterfacesIUdonEventReceiver.__GetProgramVariable__SystemString__SystemObject", uasm);
+        Assert.Contains("VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid", uasm);
     }
 
     // ── Tuple-return delegate field (Stage 1.75 design 2026-07-04 §1): SUPPORTED ──
