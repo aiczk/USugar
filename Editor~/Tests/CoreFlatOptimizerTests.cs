@@ -144,11 +144,19 @@ public class CoreFlatOptimizerTests
     }
 
     [Fact]
-    public void Coalesce_LoopBackEdge_PreventsInvalidMerge()
+    public void Coalesce_LoopHeaderRedefinedSlot_MergesAcrossDeadBody()
     {
-        // slot0 used in loop header, slot1 used in loop body
-        // Back-edge from body to header → slot0 is live throughout body
-        // Must NOT merge slot0 and slot1
+        // slot0 is loaded at the TOP of the header and read only by the header's branch; the body reads
+        // and writes only slot1. The back-edge re-enters the header, which RE-DEFINES slot0 before any
+        // read — so slot0's value from iteration N is never observed in the body or in iteration N+1. Its
+        // true live range is [header load, header branch] only; it is DEAD across the body. Exact-liveness
+        // coalescing therefore MERGES slot0 and slot1 (non-overlapping lifetimes), and VerifyNoInterference
+        // (which shares that liveness) agrees — the merge is runtime-safe.
+        //
+        // (This test previously asserted NON-merge on the false premise that a back-edge makes slot0 "live
+        // throughout the body". That premise is wrong: a slot the header re-defines each iteration is not
+        // loop-carried. The genuinely-loop-carried hazard is pinned separately by
+        // Coalesce_LoopCarriedSlot_LiveAcrossBody_DoesNotMerge below.)
         var func = MakeFunc();
         func.Slots.Add(new SlotDecl(0, "SystemInt32", SlotClass.Scratch));
         func.Slots.Add(new SlotDecl(1, "SystemInt32", SlotClass.Scratch));
@@ -172,9 +180,53 @@ public class CoreFlatOptimizerTests
         var module = MakeModule(func);
         CoreFlatOptimizer.CoalesceSlots(module);
 
-        // slot0 and slot1 must NOT be merged (slot0 alive through body via back-edge)
+        // slot0 dead across the body → slot1 coalesces onto slot0's physical slot.
         var bodyMove = Assert.IsType<CAssign>(body.Stmts[0]);
-        Assert.NotEqual(0, bodyMove.DestSlot); // slot1 must keep its own ID
+        Assert.Equal(0, bodyMove.DestSlot);
+    }
+
+    [Fact]
+    public void Coalesce_LoopCarriedSlot_LiveAcrossBody_DoesNotMerge()
+    {
+        // True-positive boundary (the other side of Coalesce_LoopHeaderRedefinedSlot_MergesAcrossDeadBody):
+        // slot0 is defined ONCE in the preheader and read every iteration inside the body — it is genuinely
+        // loop-carried and live across the whole loop, INCLUDING the point where slot1's lifetime begins
+        // (slot1 = 42, before slot0 is read at "b"). slot0 and slot1 are therefore simultaneously live and
+        // must NOT be coalesced onto one physical slot — merging would clobber the carried value.
+        var func = MakeFunc();
+        func.Slots.Add(new SlotDecl(0, "SystemInt32", SlotClass.Scratch));
+        func.Slots.Add(new SlotDecl(1, "SystemInt32", SlotClass.Scratch));
+        func.Slots.Add(new SlotDecl(2, "SystemBoolean", SlotClass.Scratch));
+
+        var pre = func.NewBlock();    // bb0 preheader
+        var header = func.NewBlock(); // bb1
+        var body = func.NewBlock();   // bb2
+        var exit = func.NewBlock();   // bb3
+
+        // preheader: slot0 = base (defined once, never redefined)
+        pre.Stmts.Add(new CLoadField(0, "base", "SystemInt32"));
+        pre.Terminator = new CJump(header.Id);
+
+        // header: slot2 = cond; branch
+        header.Stmts.Add(new CLoadField(2, "cond", "SystemBoolean"));
+        header.Terminator = new CBranch(new CSlotRef(2, "SystemBoolean"), body.Id, exit.Id);
+
+        // body: slot1 = 42; use slot1; then READ slot0 (carried) → both live at once; back-edge
+        body.Stmts.Add(new CAssign(1, new CConst(42, "SystemInt32")));
+        body.Stmts.Add(new CStoreField("a", new CSlotRef(1, "SystemInt32")));
+        body.Stmts.Add(new CStoreField("b", new CSlotRef(0, "SystemInt32")));
+        body.Terminator = new CJump(header.Id); // back-edge → slot0 live across body
+
+        exit.Terminator = new CRet();
+
+        var module = MakeModule(func);
+        CoreFlatOptimizer.CoalesceSlots(module);
+
+        // slot0 live across the body while slot1 is live → distinct physical slots.
+        var bodyMove = Assert.IsType<CAssign>(body.Stmts[0]);      // slot1 def
+        var carriedRead = Assert.IsType<CStoreField>(body.Stmts[2]); // slot0 read
+        var carriedRef = Assert.IsType<CSlotRef>(carriedRead.Value);
+        Assert.NotEqual(carriedRef.SlotId, bodyMove.DestSlot);
     }
 
     [Fact]

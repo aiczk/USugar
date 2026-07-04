@@ -124,7 +124,7 @@ public class PW12TernaryMixed : UdonSharpBehaviour {
         Assert.Contains("__recurStack", uasm);
     }
 
-    // ── delegate-dispatch-site (EmitContext.IsNonTailDispatchSite) battery ──
+    // ── delegate-dispatch-site (EmitPolicy.IsNonTailDispatchSite) battery ──
 
     [Fact]
     public void DispatchSite_ReturnTernary_BothBranchesTail_NoSpill()
