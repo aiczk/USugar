@@ -378,6 +378,14 @@ public class LayoutPlanner
     // Explicit interface implementations produce names with dots — invalid in UASM.
     static string SanitizeId(string name) => name.Replace('.', '_');
 
+    /// <summary>R-M2 (design §2): a method excluded from SPECULATIVE delegate-bridge planning because no
+    /// third-party program can bind it (C# accessibility) — private and private protected
+    /// (<see cref="Accessibility.ProtectedAndInternal"/>). protected is NOT excluded (a derived class in
+    /// another program can bind it). The single predicate shared by the planner's bridge loop and
+    /// HandlerBase.ResolveDelegateBridge's on-demand private arm so the two can never drift.</summary>
+    public static bool IsExcludedFromSpeculativeBridge(IMethodSymbol method)
+        => method.DeclaredAccessibility is Accessibility.Private or Accessibility.ProtectedAndInternal;
+
     /// <summary>True if the method carries [VRC.SDK3.UdonNetworkCalling.NetworkCallable], which makes it a
     /// remotely-invokable entry point (kept unmangled, with network-calling metadata emitted for it).</summary>
     public static bool IsNetworkCallable(IMethodSymbol method)
@@ -613,13 +621,19 @@ public class LayoutPlanner
             fields[member] = new FieldLayout(member.Name, udonType, flags);
         }
 
-        // Generate delegate bridge layouts for all non-generic, non-event user methods
+        // Generate SPECULATIVE delegate bridge layouts for non-generic, non-event user methods. The
+        // speculation exists for cross-program visibility (another program may bind a method of THIS class
+        // as a delegate). R-M2 (design §2): a private / private-protected method cannot be bound by a
+        // third party (C# accessibility), so its speculative bridge has no reason to exist — exclude it.
+        // A SAME-program private method-group binding registers its bridge on demand instead
+        // (HandlerBase.ResolveDelegateBridge's private arm). protected is kept (derived-class edges).
         var delegateBridges = new Dictionary<IMethodSymbol, DelegateBridgeLayout>(SymbolEqualityComparer.Default);
         foreach (var (method, ml) in methods)
         {
             if (method.IsGenericMethod) continue;
             if (UdonEventNames.ContainsKey(method.Name)) continue;
             if (ml.Returns.Count > 1) continue;
+            if (IsExcludedFromSpeculativeBridge(method)) continue;
             delegateBridges[method] = new DelegateBridgeLayout(DelegateAbi.BridgeName(ml.ExportName), ml);
         }
 

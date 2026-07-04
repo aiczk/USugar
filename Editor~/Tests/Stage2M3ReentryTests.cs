@@ -48,7 +48,10 @@ public class M3CapParam : UdonSharpBehaviour {
     }
 }", "M3CapParam");
         Assert.Contains("SystemObjectArray.__ctor", uasm);      // p lives in an env record
-        Assert.Equal(4, Count(uasm, "PUSH, __0_p__param"));      // no spill save/restore of p (HEAD: 6)
+        // R-M2: M is an unbound private method — no speculative __dlg_M bridge is emitted, so its
+        // conv-arg copy of __0_p__param is gone too (pre-R-M2: 4, incl. the bridge's copy; the skip arm
+        // still removes the spill save/restore pair, which was the point — HEAD-with-spill was 6).
+        Assert.Equal(3, Count(uasm, "PUSH, __0_p__param"));      // consume-early read + recursive-call arg pass only
     }
 
     [Fact]
@@ -79,19 +82,15 @@ public class M3GenCapParam : UdonSharpBehaviour {
     // ── §5.4 EscapeSet widening: foreign-wired self-callback protection ──
 
     [Fact]
-    public void ForeignWiredSelfCallback_IsProtected_ByWidening()
+    public void ForeignWiredUnboundPrivate_HasNoBridge_AndIsNotWideningSpilled()
     {
-        // N captures a local (needs an env) and non-tail self-dispatches through a PUBLIC field `cb`
-        // that is NEVER assigned in this class — a foreign program can wire it to N (fcd47 form). Pre-
-        // widening N is not a delegate-creation target, so its dispatch is not Reentrant and its env-ref
-        // is unprotected (HEAD: zero __recurStack). Widening makes N a bridge-bearing escape target of
-        // its own signature, so the cb() dispatch self-connects N→N and spills its frame.
-        // Wave-12 [V1] re-shape: the ORIGINAL shape's cb() sat in tail position (last statement) and its
-        // __recurStack came from the LOCAL logger() dispatch, which the blanket sig-match spuriously
-        // marked Reentrant — logger's provenance is exact (one creation, the lambda cannot re-enter N),
-        // so the precise analysis rightly unmarks it. cb() now reads cap AFTER the dispatch (non-tail),
-        // pinning the genuine §5.4 protection surface: a foreign-writable FIELD dispatch keeps the
-        // widening and spills N's live frame.
+        // R-M2 (design §2, lead ruling): N is an UNBOUND PRIVATE method that non-tail self-dispatches
+        // through a public field `cb` never assigned in this class. Pre-R-M2 the wave-12 [V1] widening
+        // protected it because N had a SPECULATIVE __dlg_N export a foreign program could name and wire
+        // into cb (runtime bundle-wiring). R-M2 removes that export — the channel is CLOSED, so no bundle
+        // (foreign or same-program) can ever name N, N is undispatchable, and its blanket spill correctly
+        // goes with the removed door. This control pins the LOAD-BEARING fact (the absent door), not just
+        // the absent spill. (N has no direct self-recursion, so it now needs no spill at all.)
         var uasm = TestHelper.CompileToUasm(@"
 using System;
 using UdonSharp;
@@ -104,7 +103,45 @@ public class M3WorkerGap : UdonSharpBehaviour {
         if (nn < 3) { nn = nn + 1; cb(); acc = acc + cap; }
     }
 }", "M3WorkerGap");
-        Assert.Contains("__recurStack", uasm);                  // N's frame is spilled across the dispatch
+        Assert.DoesNotContain(".export __dlg_N", uasm);         // channel closed: no speculative bridge to wire
+        Assert.DoesNotContain("__recurStack", uasm);            // undispatchable + no direct recursion → no spill
+    }
+
+    [Fact]
+    public void PublicForeignFieldDispatch_KeepsWidening_NarrowingIsPrivateScoped()
+    {
+        // Scope control (design §2 condition d): the SAME shape with a PUBLIC method N stays widening-
+        // protected. A public method keeps its speculative __dlg_N export, so a foreign program CAN wire
+        // cb to it (runtime bundle-wiring), the cb() dispatch self-connects N→N, and N's frame is spilled.
+        // Proves the R-M2 narrowing is EXACTLY private-unbound-scoped, not a blanket removal.
+        var uasm = TestHelper.CompileToUasm(@"
+using System;
+using UdonSharp;
+public class M3PubWired : UdonSharpBehaviour {
+    public Action cb; public int seed; public int acc; int nn;
+    public void N() { int cap = seed; if (nn < 3) { nn = nn + 1; cb(); acc = acc + cap; } }
+}", "M3PubWired");
+        Assert.Contains(".export __dlg_N", uasm);               // public → speculative bridge kept (wireable)
+        Assert.Contains("__recurStack", uasm);                  // widening still protects the public dispatch
+    }
+
+    [Fact]
+    public void BoundPrivateForeignFieldDispatch_StaysEscapedAndSpilled()
+    {
+        // Positive control (design §2 condition c): a private method that IS method-group bound gets a
+        // PENDING bridge (on-demand, same-program), so its __dlg_N export exists and a bundle CAN name it.
+        // It stays in the escape set (via the body-walk of the actual binding) and keeps its blanket spill.
+        // Proves the protection that REMAINS for dispatchable private methods is intact.
+        var uasm = TestHelper.CompileToUasm(@"
+using System;
+using UdonSharp;
+public class M3BoundPriv : UdonSharpBehaviour {
+    public int seed; public int acc; int nn; Action cb;
+    void Start() { cb = N; N(); }
+    void N() { int cap = seed; if (nn < 3) { nn = nn + 1; cb(); acc = acc + cap; } }
+}", "M3BoundPriv");
+        Assert.Contains(".export __dlg_N", uasm);               // bound → pending bridge exists (dispatchable)
+        Assert.Contains("__recurStack", uasm);                  // still escaped + spilled across the dispatch
     }
 
     [Fact]
@@ -270,15 +307,16 @@ public class M3SameSigWorst : UdonSharpBehaviour {
     }
 
     [Fact]
-    public void MeasurementGate_SameSigWorst_WideningCostBounded()
+    public void SameSigPrivateRing_Undispatchable_NotWideningProtected()
     {
+        // R-M2 (design §2): D0..D4 are all UNBOUND PRIVATE, forming a same-signature ring only through the
+        // public fields f0..f4 (each Dk non-tail dispatches fk()). Pre-R-M2 the widening spilled all five
+        // frames because each Dk had a speculative __dlg_Dk export a foreign program could wire into any fj.
+        // R-M2 removes those exports, so NO fj can ever name a Dk — the ring is undispatchable and the
+        // widening correctly no longer protects it (no Dk has direct recursion, so no spill remains). This
+        // is the same-sig-worst measurement gate re-pinned to the closed door rather than the removed spill.
         var uasm = TestHelper.CompileToUasm(SameSigWorst, "M3SameSigWorst", out _);
-        Assert.Contains("__recurStack", uasm);   // the widening DOES protect the same-sig ring
-        // Bounds re-measured at the wave-12 [V1] re-shape (non-tail field dispatches, see SameSigWorst
-        // comment): 410 heap vars / 41 spill refs — five live frames spilled across their field
-        // dispatches. The old 310/21 bound belonged to the tail-dispatch shape, whose only spill
-        // traffic was the local g() over-spill the precise analysis retired.
-        Assert.True(Count(uasm, ": %") <= 410, "same-sig widening heap-var cost must stay bounded");
-        Assert.True(Count(uasm, "__recurStack") <= 41, "same-sig widening spill cost must stay bounded");
+        Assert.DoesNotContain(".export __dlg_D", uasm);   // no speculative bridge for any private Dk
+        Assert.DoesNotContain("__recurStack", uasm);      // undispatchable ring → no widening spill at all
     }
 }

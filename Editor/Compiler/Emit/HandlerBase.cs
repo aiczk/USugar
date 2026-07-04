@@ -1989,6 +1989,29 @@ public abstract partial class HandlerBase
             var foreignSnapshot = SnapshotTypeParamMap();
             _ctx.PendingDelegateBridges.Add((targetMethod, bridgeExportName, foreignSnapshot));
         }
+        // R-M2 (design §2): a method-group binding of a THIS-CLASS private / private-protected method. The
+        // planner no longer plans a speculative bridge for it (LayoutPlanner.IsExcludedFromSpeculativeBridge),
+        // so GetDelegateBridgeLayout below would throw — register the bridge on demand via
+        // PendingDelegateBridges, exactly like the lambda/local-function/generic/foreign-static arms. The
+        // binding itself is what makes the bridge needed, so this arm fires for the actual binding (the
+        // reentrancy narrowing is preserved: an UNBOUND private method never reaches here and gets no bridge).
+        //
+        // Both receiver forms are covered because the target is a member of THIS compiled class:
+        //   - this-bound (targetInstance == null): same-program dispatch.
+        //   - same-class variable receiver (`other.Priv`, other : this class): a legal C# binding (private is
+        //     type-scoped, not instance-scoped) that dispatches CROSS-program to another instance of THIS
+        //     class. Registering the pending bridge force-exports `__dlg_Priv`, and since `other` is the same
+        //     class it is compiled from the same source and exports the same name — the dispatch resolves.
+        // A cross-CLASS private binding is not expressible in C# (CS0122), so the target is always this class.
+        else if (!baseReceiver
+                 && _methodFunctions.TryGetValue(targetMethod, out var privFunc)
+                 && LayoutPlanner.IsExcludedFromSpeculativeBridge(targetMethod)
+                 && SymbolEqualityComparer.Default.Equals(targetMethod.ContainingType, _classSymbol))
+        {
+            bridgeExportName = DelegateAbi.BridgeName(privFunc.Name);
+            var privSnapshot = SnapshotTypeParamMap();
+            _ctx.PendingDelegateBridges.Add((targetMethod, bridgeExportName, privSnapshot));
+        }
         else
         {
             var bridge = _planner.GetDelegateBridgeLayout(targetMethod);

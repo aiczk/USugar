@@ -71,11 +71,14 @@ public class W12ErD : UdonSharpBehaviour {
     }
 
     [Fact]
-    public void ClosureHelperRecursion_FieldRoutedDispatch_KeepsBlanketSpill()
+    public void ClosureHelperRecursion_FieldRoutedDispatch_PrivateMUndispatchable_DirectRecursionStillSpills()
     {
-        // Soundness control: the same shape dispatching a FIELD (foreign-writable — a same-sig
-        // bundle for M can be wired in from another program) must keep the widening's dispatch
-        // spill: strictly more spill traffic than the local-provenance flavor's 10.
+        // R-M2 (design §2): M is PRIVATE. Pre-R-M2 the wave-12 [V1] widening treated the foreign-writable
+        // c(m) field dispatch as a re-entry into M, because M had a speculative __dlg_M export a foreign
+        // program could wire into c — so the dispatch got a blanket spill on top of M's direct recursion.
+        // R-M2 removes __dlg_M: no bundle can name M, so c(m) can never re-enter M and the widening spill
+        // correctly disappears. M's DIRECT self-recursion (M(m-1)) is a separate protection and is
+        // untouched — its frame still spills. Pin the closed door + the intact real-reentry protection.
         var uasm = TestHelper.CompileToUasm(@"
 using System;
 using UdonSharp;
@@ -92,15 +95,19 @@ public class W12ErDField : UdonSharpBehaviour {
         return inner + r + local;
     }
 }", "W12ErDField");
-        Assert.True(Count(uasm, "PUSH, __recurStack") > 10,
-            "a foreign-writable field dispatch inside the cycle must keep the §5.4 blanket spill");
+        Assert.DoesNotContain(".export __dlg_M", uasm);   // channel closed: c() can never re-enter private M
+        Assert.Contains("__recurStack", uasm);            // M's DIRECT self-recursion is still spilled
     }
 
     [Fact]
-    public void ClosureHelperRecursion_PoisonedLocal_KeepsBlanketSpill()
+    public void ClosureHelperRecursion_PoisonedLocal_PrivateMUndispatchable_DirectRecursionStillSpills()
     {
-        // Soundness control: the dispatched local is reassigned from a FIELD on one path — its
-        // provenance is no longer creation-only, so the site keeps the blanket treatment.
+        // R-M2 (design §2): same as the field-routed control, but the dispatched local `c` is poisoned
+        // from a FIELD on one path (provenance no longer creation-only), so pre-R-M2 the site kept the
+        // blanket widening. M is PRIVATE, so R-M2 removes __dlg_M and the widening spill goes with the
+        // closed door — c(m) can never re-enter M. M's direct self-recursion still spills. The poisoned-
+        // provenance path is now moot for re-entry into M specifically (it can still reach the escaped
+        // bound H, which does not re-enter M).
         var uasm = TestHelper.CompileToUasm(@"
 using System;
 using UdonSharp;
@@ -119,8 +126,8 @@ public class W12ErDPoison : UdonSharpBehaviour {
         return inner + r + local;
     }
 }", "W12ErDPoison");
-        Assert.True(Count(uasm, "PUSH, __recurStack") > 10,
-            "a local with a non-creation write must keep the §5.4 blanket spill");
+        Assert.DoesNotContain(".export __dlg_M", uasm);   // channel closed: c() can never re-enter private M
+        Assert.Contains("__recurStack", uasm);            // M's DIRECT self-recursion is still spilled
     }
 
     // ── [V2] non-public property accessor through a variable receiver ──
