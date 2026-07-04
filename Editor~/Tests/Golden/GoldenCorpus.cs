@@ -53,6 +53,30 @@ public static class GoldenCorpus
     a = fs[0](); b = fs[1]();
   }
 }"),
+        // B45 canonical baseline (design §4 M1): a RECURSIVE user-struct method that mints a per-frame
+        // capturing closure and escapes it into an array, all fired after the full unwind — the struct
+        // analogue of capturing_lambda_loop. The byte gate proving struct-member closures join the same
+        // Stage-2 env chain (env alloc / __Get-__Set / __envp / capturing bridge) as class closures, per
+        // CaptureScopeAnalysis's struct-member root expansion. An ADDED baseline, not a regeneration.
+        ("struct_recursion_per_frame_closure", "StructRecursionPerFrameClosure",
+@"using System; using UdonSharp;
+public struct StructPerFrameRecBox {
+  public void Rec(Func<int>[] arr, int depth){
+    int captured = depth * 10;
+    arr[depth] = () => captured;
+    if (depth <= 0) return;
+    Rec(arr, depth - 1);
+  }
+}
+public class StructRecursionPerFrameClosure : UdonSharpBehaviour {
+  public int sum;
+  void Start(){
+    Func<int>[] fs = new Func<int>[3];
+    StructPerFrameRecBox box = new StructPerFrameRecBox();
+    box.Rec(fs, 2);
+    sum = fs[0]() + fs[1]() + fs[2]();
+  }
+}"),
         ("tuple_deconstruct", "TupleDeconstruct",
 @"using UdonSharp; public class TupleDeconstruct : UdonSharpBehaviour {
   public int a; public int b;
