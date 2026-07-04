@@ -119,10 +119,20 @@ public class UasmEmitter
         EnsurePlannerReady();
         EmitFields();
         SetReflectionValues();
+        // Design §1: build the single ReachableBodies fixpoint ONCE here — after EmitFields (field
+        // initializers are seeds) and before its consumers. Its projections feed Phase-1 registration,
+        // BuildRecursionInfo roots, and CaptureScope roots (all in EmitMethods / injected below).
+        var methods = ComputeMethods();
+        var reach = BuildReachableBodies(methods);
+        _reachForeignStatics = reach.ForeignStatics;
+        _reachStructMembers = reach.StructMembers;
+        _reachBaseCopies = reach.BaseCopies;
+        _reachStructMemberDefs = reach.StructMemberDefs;
         // Stage 2: closure-scope analysis feeding real codegen — EnvEmit's alloc/read/write and every
         // IsCapturingClosure call site (HandlerBase, InvocationHandler.Extern, this file) key off it.
-        _ctx.CaptureScope = CaptureScopeAnalysis.Build(_compilation, _classSymbol);
-        EmitMethods();
+        // Its roots are the reach definition projection (ComputeCaptureRoots), not a private enumeration.
+        _ctx.CaptureScope = CaptureScopeAnalysis.Build(_compilation, _classSymbol, ComputeCaptureRoots(methods));
+        EmitMethods(methods);
         OnIrPass?.Invoke("after-emit", _module);
         // Handlers build Core IR; the pipeline (verify/optimize/flatten) runs on Core directly.
         var result = IrPipeline.GenerateUasmFromCore(_module, DumpEnabled);
@@ -799,7 +809,11 @@ public class UasmEmitter
 
     // ── EmitMethods ──
 
-    void EmitMethods()
+    /// <summary>The class's own + inherited (non-overridden) user-defined method set — the ReachableBodies
+    /// SEED and the first-pass registration set. Sets <see cref="_inheritedMethods"/> as a side effect.
+    /// Hoisted out of EmitMethods so Emit() can build the reach fixpoint (which seeds from this) BEFORE
+    /// CaptureScopeAnalysis consumes its definition projection.</summary>
+    IMethodSymbol[] ComputeMethods()
     {
         var directMethods = _classSymbol.GetMembers().OfType<IMethodSymbol>()
             .Where(m => (m.MethodKind == MethodKind.Ordinary
@@ -853,8 +867,30 @@ public class UasmEmitter
             inheritBase = inheritBase.BaseType;
         }
         _inheritedMethods = new HashSet<IMethodSymbol>(inheritedMethodsList, SymbolEqualityComparer.Default);
-        var methods = directMethods.Concat(inheritedMethodsList).ToArray();
+        return directMethods.Concat(inheritedMethodsList).ToArray();
+    }
 
+    /// <summary>CaptureScopeAnalysis root projection (design §1, consumer 3): every method DEFINITION whose
+    /// body this class emits — the seed methods (own + inherited) plus reached base copies plus the reached
+    /// user-struct member definitions — deduped, definition-keyed, with syntax. Replaces the former
+    /// AddRoots + structQueue enumeration inside CaptureScopeAnalysis.</summary>
+    List<IMethodSymbol> ComputeCaptureRoots(IMethodSymbol[] methods)
+    {
+        var seen = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
+        var roots = new List<IMethodSymbol>();
+        void Add(IMethodSymbol m)
+        {
+            var def = m.OriginalDefinition;
+            if (def.DeclaringSyntaxReferences.Length > 0 && seen.Add(def)) roots.Add(def);
+        }
+        foreach (var m in methods) Add(m);
+        foreach (var m in _reachBaseCopies) Add(m);
+        foreach (var m in _reachStructMemberDefs) Add(m);
+        return roots;
+    }
+
+    void EmitMethods(IMethodSymbol[] methods)
+    {
         var typeLayout = _planner.GetLayout(_classSymbol);
 
         // First pass: create IrFunctions, assign params, return vars (skip generic definitions)
@@ -924,39 +960,19 @@ public class UasmEmitter
             }
         }
 
-        // Wave-9 round-5 [X5]: base-instance copies are computed BEFORE the foreign-static/struct
-        // collectors so their BODIES seed both scans — a using/Dispose (or any struct/foreign call)
-        // inside a base virtual body reached via base.M previously had no CFunction registered
-        // ("No CFunction registered for method 'Dispose'" ICE on legal C#). Registration ORDER below
-        // is unchanged (foreign statics → struct methods → base copies) for name-index stability.
+        // ReachableBodies (design §1): ONE reach fixpoint replaces the three separate Phase-1 collector
+        // fixpoints + their duplicated body fetches. The registration regimes below are projections of it:
+        // foreign statics / collectible struct members / base-instance copies. Registration ORDER
+        // (foreign → struct → base) is unchanged; the ungated struct-member DEFINITION projection
+        // (reach.StructMemberDefs) feeds BuildRecursionInfo. The former [X5] base-first / [Y6]
+        // open-generic-base seeding is subsumed: the single fixpoint walks every reachable body (own,
+        // base, struct, foreign, field-init) once and applies all three per-operation rules to each, so a
+        // struct/foreign/using call inside any reached body is seen. Gates (IsCollectibleStructMember /
+        // IsClosedForeignStaticTarget / methodSet exclusion) stay on the projection side — meaning preserved.
         var methodSet = new HashSet<IMethodSymbol>(methods, SymbolEqualityComparer.Default);
-        var baseInstanceMethods = CollectBaseInstanceMethods(methods)
-            .Where(bm => !methodSet.Contains(bm))
-            .ToArray();
-        // Wave-9 round-9 [Y6]: open-generic base definitions seed the collectors too — their bodies
-        // emit on demand (round-8 [Y11]) and a struct/foreign-static call inside them (e.g. a
-        // using/Dispose) previously had no CFunction registered (loud ICE on legal C#). They are
-        // NOT registered as copies (no single monomorphization) — seeds only.
-        var collectorSeeds = methods.Concat(baseInstanceMethods)
-            .Concat(_openGenericBaseDefs.Where(d => !methodSet.Contains(d)))
-            .ToArray();
-
-        // User-struct members are collected first so their BODIES also seed the foreign-static scan
-        // (registration ORDER below is unchanged — foreign statics → struct methods → base copies —
-        // for name-index stability; only the collection of structMethods moves up, and it does not
-        // call RegisterMethod).
-        var structMethods = CollectStructMethods(collectorSeeds);
-
-        // Collect foreign static methods. B46 (wave-14 r4): a static method on a user struct
-        // (Helper.Boost()) called from INSIDE another struct's member body is a foreign-static call
-        // too, but the collector previously walked only class/base/field-init bodies — so the call
-        // fell through to a bogus SystemObjectArray.__Boost__ extern (worked from the class body,
-        // which IS walked). Seed the scan with the struct member bodies as well. A generic-struct
-        // static call whose containing type is still OPEN in the shared body (Helper<U>.Boost inside
-        // Box<T>) is skipped by CollectForeignStaticCallsInOperation's open-type-param guard and
-        // registered on demand at its closed call site (InvocationHandler's foreign-static-on-generic
-        // arm), mirroring how open struct members avoid a phantom CFunction.
-        var foreignStatics = CollectForeignStaticMethods(collectorSeeds.Concat(structMethods).ToArray());
+        var baseInstanceMethods = _reachBaseCopies.Where(bm => !methodSet.Contains(bm)).ToArray();
+        var structMethods = _reachStructMembers;
+        var foreignStatics = _reachForeignStatics;
         foreach (var fm in foreignStatics)
         {
             EmitPolicy.RejectInParameters(fm); // round-7 follow-up [Q3]
@@ -2373,29 +2389,22 @@ public class UasmEmitter
         // types — APart<T> <-> BPart<T>) is registered ON DEMAND during Phase-2 body emission
         // (HandlerBase.ResolveStructMember/RegisterGenericSpecialization), which runs AFTER this
         // analysis — so it has no graph node yet and _methodFunctions above never sees it (Phase-1's
-        // CollectStructMethods walks the SAME open/shared body and, correctly, skips exactly this
-        // open-form reference to avoid a ghost CFunction — IsCollectibleStructMember). Without a
-        // node, IsRecursiveEdge silently returns false for the edge and the software-stack spill
-        // never wraps it (VM-proven: mutual recursion between two generic struct types clobbered
-        // shared frame fields — 7 instead of the CLR's 21). Transitively discover every user-struct
-        // member DEFINITION reachable from a root's body (ignoring open/closed — DEFINITIONS
-        // naturally collapse every instantiation onto one graph node, matching this method's
-        // existing "_methodFunctions.Keys.Select(OriginalDefinition)" invariant) and add it as a root.
-        var structDefRoots = new HashSet<IMethodSymbol>(roots, SymbolEqualityComparer.Default);
-        var structDefQueue = new Queue<IMethodSymbol>(roots);
-        while (structDefQueue.Count > 0)
-        {
-            var m = structDefQueue.Dequeue();
-            var sr = m.DeclaringSyntaxReferences.FirstOrDefault();
-            if (sr == null) continue;
-            var found = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
-            CollectStructMemberDefinitions(
-                _compilation.GetSemanticModel(sr.SyntaxTree).GetOperation(sr.GetSyntax()), found);
-            foreach (var f in found)
-                if (f.DeclaringSyntaxReferences.Length > 0 && structDefRoots.Add(f))
-                    structDefQueue.Enqueue(f);
-        }
-        roots = structDefRoots.ToList();
+        // struct collector walks the SAME open/shared body and, correctly, skips exactly this
+        // open-form reference to avoid a ghost CFunction — IsCollectibleStructMember). Without a node,
+        // IsRecursiveEdge silently returns false for the edge and the software-stack spill never wraps
+        // it (VM-proven: mutual recursion between two generic struct types clobbered shared frame
+        // fields — 7 instead of the CLR's 21).
+        //
+        // ReachableBodies definition projection (design §1, consumer 2): the ungated struct-member
+        // DEFINITION set from the single reach fixpoint (_reachStructMemberDefs) replaces this method's
+        // former private structDefRoots BFS — the same "every user-struct member DEFINITION transitively
+        // reachable" set (both propagate via CollectStructMemberDefinitions, ignoring open/closed so
+        // instantiations collapse onto one node), with the duplicate semantic-model body walk removed.
+        roots = roots.Concat(_reachStructMemberDefs)
+            .Where(m => m.DeclaringSyntaxReferences.Length > 0)
+            .Distinct(SymbolEqualityComparer.Default)
+            .Cast<IMethodSymbol>()
+            .ToList();
 
         // Local functions are registered lazily during emission (after this pass), so discover them now by
         // walking the bodies — otherwise a recursive local function would not be detected and would corrupt
@@ -3303,44 +3312,64 @@ public class UasmEmitter
 
     // ── Static collection helpers ──
 
-    IMethodSymbol[] CollectForeignStaticMethods(IMethodSymbol[] classMethods)
+    /// <summary>Design §1: the single provenance-tagged ReachableBodies fixpoint. ONE queue+visited
+    /// (keyed by definition) and ONE GetOperation per body replace the three separate Phase-1 collector
+    /// fixpoints (CollectForeignStaticMethods / CollectStructMethods / CollectBaseInstanceMethods) and the
+    /// duplicated body fetches. Seeds = own+inherited method bodies (<paramref name="methods"/>) + field
+    /// initializers (instance + static). Transitions = the UNION of the three current per-operation rules,
+    /// reusing the existing collectors verbatim (no new shape-switch): CollectForeignStaticCallsInOperation,
+    /// CollectStructMethodsInOperation, CollectBaseInstanceCallsInOperation, plus the ungated
+    /// CollectStructMemberDefinitions. Propagation is UNGATED (walks open self/cross-struct bodies too, per
+    /// the shared classifier), so the recursion/capture DEFINITION projection (StructMemberDefs) subsumes
+    /// the former BuildRecursionInfo.structDefRoots and CaptureScope.structQueue expansions; the REGISTRATION
+    /// projections keep their existing gates (IsCollectibleStructMember / IsClosedForeignStaticTarget). The
+    /// union-of-rules can widen reach vs the former staged seeding (design §5-3) — that surfaces in the census.</summary>
+    (IMethodSymbol[] ForeignStatics, IMethodSymbol[] StructMembers, IMethodSymbol[] BaseCopies,
+     HashSet<IMethodSymbol> StructMemberDefs) BuildReachableBodies(IMethodSymbol[] methods)
     {
-        var result = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
-        foreach (var method in classMethods)
+        var foreignStatics = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
+        var structMembers = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
+        var baseCopies = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
+        var structMemberDefs = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
+
+        var visited = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default); // definitions walked
+        var queue = new Queue<IMethodSymbol>();                                    // definitions to walk
+
+        void Walk(IOperation body)
         {
-            var syntaxRef = method.DeclaringSyntaxReferences.FirstOrDefault();
-            if (syntaxRef == null) continue;
-            var syntax = syntaxRef.GetSyntax();
-            var model = _compilation.GetSemanticModel(syntax.SyntaxTree);
-            var bodyOp = model.GetOperation(syntax);
-            CollectForeignStaticCallsInOperation(bodyOp, result);
+            if (body == null) return;
+            CollectForeignStaticCallsInOperation(body, foreignStatics); // gated: closed, non-generic
+            CollectStructMethodsInOperation(body, structMembers);       // gated: IsCollectibleStructMember
+            CollectBaseInstanceCallsInOperation(body, baseCopies);      // + populates _openGenericBaseDefs
+            CollectStructMemberDefinitions(body, structMemberDefs);     // ungated: definition-keyed
         }
-        // wave-13 staticro lens (2026-07-04): field initializers (instance AND static-readonly tier)
-        // are never part of any method's syntax, so a delegate created ONLY in a field initializer
-        // (`static readonly Func<int,int> Op = Helper.M;`) was invisible to the walk above. Both lists
-        // are fully populated by the earlier own-class + base-class field walks (before this point).
-        foreach (var (_, initOp, _) in _fieldInitOps)
-            CollectForeignStaticCallsInOperation(initOp, result);
-        foreach (var (_, initOp, _) in _staticFieldInitOps)
-            CollectForeignStaticCallsInOperation(initOp, result);
-        var visited = new HashSet<IMethodSymbol>(result, SymbolEqualityComparer.Default);
-        var queue = new Queue<IMethodSymbol>(result);
+
+        void EnqueueDiscovered()
+        {
+            foreach (var m in foreignStatics) TryEnqueue(m);
+            foreach (var m in structMembers) TryEnqueue(m);
+            foreach (var m in baseCopies) TryEnqueue(m);
+            foreach (var m in _openGenericBaseDefs) TryEnqueue(m);
+            foreach (var m in structMemberDefs) TryEnqueue(m);
+        }
+        void TryEnqueue(IMethodSymbol m)
+        {
+            if (m.DeclaringSyntaxReferences.Length > 0 && visited.Add(m.OriginalDefinition))
+                queue.Enqueue(m.OriginalDefinition);
+        }
+
+        foreach (var m in methods) TryEnqueue(m);
+        foreach (var (_, initOp, _) in _fieldInitOps) Walk(initOp);
+        foreach (var (_, initOp, _) in _staticFieldInitOps) Walk(initOp);
+        EnqueueDiscovered();
+
         while (queue.Count > 0)
         {
-            var fm = queue.Dequeue();
-            var syntaxRef = fm.DeclaringSyntaxReferences.FirstOrDefault();
-            if (syntaxRef == null) continue;
-            var syntax = syntaxRef.GetSyntax();
-            var model = _compilation.GetSemanticModel(syntax.SyntaxTree);
-            var bodyOp = model.GetOperation(syntax);
-            CollectForeignStaticCallsInOperation(bodyOp, result);
-            foreach (var newMethod in result.Except(visited))
-            {
-                visited.Add(newMethod);
-                queue.Enqueue(newMethod);
-            }
+            Walk(GetMethodBodyOperation(queue.Dequeue()));
+            EnqueueDiscovered();
         }
-        return result.ToArray();
+
+        return (foreignStatics.ToArray(), structMembers.ToArray(), baseCopies.ToArray(), structMemberDefs);
     }
 
     // B46 (wave-14 r4): a foreign-static call whose containing type still carries an OPEN type
@@ -3392,40 +3421,6 @@ public class UasmEmitter
         }
         foreach (var child in op.Children)
             CollectForeignStaticCallsInOperation(child, result);
-    }
-
-    // User-struct parameterized constructors + instance methods reachable from the class (transitive).
-    IMethodSymbol[] CollectStructMethods(IMethodSymbol[] classMethods)
-    {
-        var result = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
-        foreach (var method in classMethods)
-        {
-            var syntaxRef = method.DeclaringSyntaxReferences.FirstOrDefault();
-            if (syntaxRef == null) continue;
-            var syntax = syntaxRef.GetSyntax();
-            CollectStructMethodsInOperation(_compilation.GetSemanticModel(syntax.SyntaxTree).GetOperation(syntax), result);
-        }
-        // Field initializers (instance + static) can construct/call a user-struct member OUTSIDE any
-        // method body (`private MyStruct _s = new MyStruct(1, 2);`) — EmitFields() has already populated
-        // both lists by the time this runs. Without this, VisitObjectCreation's S1 check
-        // (_methodFunctions.ContainsKey(op.Constructor)) never sees a ctor used ONLY in a field
-        // initializer and falls back to a bogus SystemObjectArray extern (roadmap B41).
-        foreach (var (_, initOp, _) in _fieldInitOps)
-            CollectStructMethodsInOperation(initOp, result);
-        foreach (var (_, initOp, _) in _staticFieldInitOps)
-            CollectStructMethodsInOperation(initOp, result);
-        var visited = new HashSet<IMethodSymbol>(result, SymbolEqualityComparer.Default);
-        var queue = new Queue<IMethodSymbol>(result);
-        while (queue.Count > 0)
-        {
-            var sm = queue.Dequeue();
-            var syntaxRef = sm.DeclaringSyntaxReferences.FirstOrDefault();
-            if (syntaxRef == null) continue;
-            var syntax = syntaxRef.GetSyntax();
-            CollectStructMethodsInOperation(_compilation.GetSemanticModel(syntax.SyntaxTree).GetOperation(syntax), result);
-            foreach (var nc in result.Except(visited)) { visited.Add(nc); queue.Enqueue(nc); }
-        }
-        return result.ToArray();
     }
 
     // A property is auto-implemented iff the compiler synthesized a backing field associated with it.
@@ -3536,17 +3531,16 @@ public class UasmEmitter
             CollectStructMethodsInOperation(child, result);
     }
 
-    /// <summary>BuildRecursionInfo helper (wave-14): the recursion-graph counterpart of
-    /// CollectStructMethodsInOperation — same node shapes (ctor/instance-method/computed-property/
-    /// operator/conversion on a user struct), but collects the method's OriginalDEFINITION unfiltered
-    /// (no IsCollectibleStructMember gate) instead of a constructed CFunction-ready symbol. The graph
-    /// is keyed by definition regardless of instantiation (mirroring
-    /// "_methodFunctions.Keys.Select(OriginalDefinition)" above), so this is the right shape for
-    /// discovering a struct member that Phase-1 registration deliberately skipped (the open self/cross
-    /// -struct-method form) but that the emitted program can still recursively re-enter.</summary>
-    // internal: shared as the single struct-member-definition collector by BOTH the recursion-graph
-    // root expansion (BuildRecursionInfo) and the capture-scope root expansion (CaptureScopeAnalysis,
-    // roadmap B45) — same set, one definition (design §1-1: "CollectStructMethods が見つけるのと同じ集合").
+    /// <summary>The ungated definition-side counterpart of CollectStructMethodsInOperation — same node
+    /// shapes (ctor/instance-method/computed-property/operator/conversion on a user struct), but collects
+    /// the method's OriginalDEFINITION unfiltered (no IsCollectibleStructMember gate) instead of a
+    /// constructed CFunction-ready symbol. Definition-keyed regardless of instantiation (mirroring
+    /// "_methodFunctions.Keys.Select(OriginalDefinition)"), so it discovers a struct member that Phase-1
+    /// registration deliberately skipped (the open self/cross-struct-method form) but that the emitted
+    /// program can still recursively re-enter or capture into.</summary>
+    // internal: the ungated struct-member DEFINITION transition of the single ReachableBodies fixpoint
+    // (BuildReachableBodies). Its StructMemberDefs projection feeds BOTH BuildRecursionInfo roots and
+    // CaptureScope roots — one set, one definition, one walk (design §1, consumers 2 & 3).
     internal static void CollectStructMemberDefinitions(IOperation op, HashSet<IMethodSymbol> defs)
     {
         if (op == null) return;
@@ -3618,32 +3612,14 @@ public class UasmEmitter
     /// like an eagerly registered base copy. Populated by CollectBaseInstanceCallsInOperation.</summary>
     readonly HashSet<IMethodSymbol> _openGenericBaseDefs = new(SymbolEqualityComparer.Default);
 
-    IMethodSymbol[] CollectBaseInstanceMethods(IMethodSymbol[] classMethods)
-    {
-        var result = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
-        foreach (var method in classMethods)
-            CollectBaseInstanceCallsInOperation(GetMethodBodyOperation(method), result);
-        // Transitive closure: a discovered base method's OWN body may call a further base method (a
-        // `base.M` chain across 3+ levels), and a base property accessor may reference another base member.
-        // Keep scanning newly discovered base methods' bodies until a fixpoint (else the deepest target is
-        // never registered → its call falls through to a bogus extern). Round-9 [Y5]/[Y6]: open-generic
-        // base definitions are scanned too — their bodies emit on demand and may reach further base
-        // members (or more open generics).
-        var scanned = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
-        var queue = new Queue<IMethodSymbol>(result.Concat(_openGenericBaseDefs));
-        while (queue.Count > 0)
-        {
-            var next = queue.Dequeue();
-            if (!scanned.Add(next)) continue;
-            var discovered = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
-            CollectBaseInstanceCallsInOperation(GetMethodBodyOperation(next), discovered);
-            foreach (var d in discovered)
-                if (result.Add(d)) queue.Enqueue(d);
-            foreach (var od in _openGenericBaseDefs)
-                if (!scanned.Contains(od)) queue.Enqueue(od);
-        }
-        return result.ToArray();
-    }
+    // ReachableBodies projections (design §1), built once in Emit() before CaptureScopeAnalysis and
+    // consumed by the Phase-1 registration regimes, BuildRecursionInfo roots, and CaptureScope roots.
+    IMethodSymbol[] _reachForeignStatics = System.Array.Empty<IMethodSymbol>();
+    IMethodSymbol[] _reachStructMembers = System.Array.Empty<IMethodSymbol>();
+    IMethodSymbol[] _reachBaseCopies = System.Array.Empty<IMethodSymbol>();
+    /// <summary>The ungated struct-member DEFINITION projection: consumed by BuildRecursionInfo's roots
+    /// (replacing its own structDefRoots expansion) and CaptureScope roots (replacing its structQueue).</summary>
+    HashSet<IMethodSymbol> _reachStructMemberDefs = new(SymbolEqualityComparer.Default);
 
     IOperation GetMethodBodyOperation(IMethodSymbol method)
     {

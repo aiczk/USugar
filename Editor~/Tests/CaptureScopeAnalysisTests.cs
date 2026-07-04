@@ -14,6 +14,25 @@ namespace USugar.Tests;
 /// </summary>
 public class CaptureScopeAnalysisTests
 {
+    // Standalone capture roots for these analysis-only tests. Production injects the emitter's
+    // ReachableBodies definition projection (design §1); CaptureScopeAnalysis no longer enumerates its
+    // own roots. Every class here is struct-free and base-free, so own ordinary/accessor method defs are
+    // the complete root set (no user-struct-member-def expansion needed).
+    static System.Collections.Generic.List<IMethodSymbol> Roots(INamedTypeSymbol classSymbol)
+    {
+        var roots = new System.Collections.Generic.List<IMethodSymbol>();
+        var seen = new System.Collections.Generic.HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
+        foreach (var m in classSymbol.GetMembers().OfType<IMethodSymbol>())
+        {
+            if (m.DeclaringSyntaxReferences.Length == 0 || m.IsImplicitlyDeclared) continue;
+            if (m.MethodKind is not (MethodKind.Ordinary or MethodKind.ExplicitInterfaceImplementation
+                or MethodKind.PropertyGet or MethodKind.PropertySet)) continue;
+            var def = m.OriginalDefinition;
+            if (seen.Add(def)) roots.Add(def);
+        }
+        return roots;
+    }
+
     static CaptureScope OwnerScope(CaptureScopeAnalysis a, string capturedName)
         => a.CapturedSlots.Single(kv => kv.Key.Name == capturedName).Value.Scope;
 
@@ -435,7 +454,7 @@ public class CurryClass : UdonSharpBehaviour {
     }
 }", "CurryClass", out var classSymbol);
 
-        var analysis = CaptureScopeAnalysis.Build(comp, classSymbol);
+        var analysis = CaptureScopeAnalysis.Build(comp, classSymbol, Roots(classSymbol));
         var lambdas = LambdaScopesInEncounterOrder(analysis);
         Assert.Equal(2, lambdas.Length);
         var outer = lambdas[0];
@@ -474,7 +493,7 @@ public class NestedParamClass : UdonSharpBehaviour {
     }
 }", "NestedParamClass", out var classSymbol);
 
-        var analysis = CaptureScopeAnalysis.Build(comp, classSymbol);
+        var analysis = CaptureScopeAnalysis.Build(comp, classSymbol, Roots(classSymbol));
         var lambdas = LambdaScopesInEncounterOrder(analysis);
         var outer = lambdas[0];
         var inner = lambdas[1];
@@ -508,7 +527,7 @@ public class NestedLfParamClass : UdonSharpBehaviour {
     }
 }", "NestedLfParamClass", out var classSymbol);
 
-        var analysis = CaptureScopeAnalysis.Build(comp, classSymbol);
+        var analysis = CaptureScopeAnalysis.Build(comp, classSymbol, Roots(classSymbol));
         // `b` is the nested local function's param — not a capture of the outer lambda.
         Assert.False(IsCaptured(analysis, "b"));
         Assert.True(IsCaptured(analysis, "a"));
@@ -583,8 +602,8 @@ public class DeterminismClass : UdonSharpBehaviour {
     }
 }", "DeterminismClass", out var emitter);
 
-        var a1 = CaptureScopeAnalysis.Build(emitter.Compilation, emitter.ClassSymbol);
-        var a2 = CaptureScopeAnalysis.Build(emitter.Compilation, emitter.ClassSymbol);
+        var a1 = CaptureScopeAnalysis.Build(emitter.Compilation, emitter.ClassSymbol, Roots(emitter.ClassSymbol));
+        var a2 = CaptureScopeAnalysis.Build(emitter.Compilation, emitter.ClassSymbol, Roots(emitter.ClassSymbol));
 
         Assert.Equal(a1.Scopes.Count, a2.Scopes.Count);
         Assert.Equal(a1.Scopes.Select(s => s.Kind), a2.Scopes.Select(s => s.Kind));
