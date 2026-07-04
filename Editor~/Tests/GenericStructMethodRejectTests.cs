@@ -195,13 +195,15 @@ public class TwoInstUser : UdonSharpBehaviour {
     // ── G-R1: a closure referencing the generic's type parameter (struct's OR method's own) pins the
     // definition to a single instantiation — reject continues (design §3, widened [X6]/[Y2] tier).
     //
-    // B45 note: a struct closure compiles today via a naive shared-field fallback (CaptureScopeAnalysis
-    // never walks struct methods as roots, so it never gets the multi-activation-safe envp/BindingScope
-    // treatment — B45, ledgered, out of scope here). That fallback is only CORRECT for single
-    // activation / no escape / no recursion. Every closure shape below is created and invoked
-    // immediately within the SAME call, never stored/returned, never called recursively or
-    // concurrently — so these tests pin FEATURE G's own behavior (the type-param-pin gate) and do not
-    // depend on B45's broken corner for their pass/fail outcome. ──
+    // B45 update (wave-14, corrected from the original note below): a struct-hosted closure ALWAYS
+    // compiles via the naive shared-field fallback (CaptureScopeAnalysis never walks struct methods as
+    // roots, so it never gets the multi-activation-safe envp/BindingScope treatment). The original note
+    // here believed that fallback was safe for any single-activation/non-escaping/non-recursive shape
+    // REGARDLESS of T-dependence — real-VM diff-fuzzing proved that false for a CAPTURING closure shared
+    // across two DISTINCT struct instantiations (the shared field is rebound by whichever instantiation
+    // registers last). The boundary is now: non-capturing closures stay legal to share (nothing to
+    // alias); a capturing closure pins the instantiation exactly like the type-param-dependent case,
+    // regardless of whether it references T. ──
 
     [Fact]
     public void GenericStructMethod_TDependentClosure_SecondInstantiation_ThrowsNotSupported()
@@ -252,10 +254,21 @@ public class GR1Single : UdonSharpBehaviour {
     }
 
     [Fact]
-    public void GenericStructMethod_NonTDependentClosure_TwoInstantiations_StillCompiles()
+    public void GenericStructMethod_NonTDependentClosure_TwoInstantiations_ThrowsNotSupported()
     {
-        // Non-T-dependent closures are legal shared hoist (design §3) even across instantiations.
-        var uasm = TestHelper.CompileToUasm(@"
+        // Corrected (wave-14 diff-fuzzing, DiffFuzz real-VM oracle): this used to assert
+        // "StillCompiles" on the belief that a non-T-dependent closure is a safe shared hoist across
+        // instantiations (design §3's G-R1 note). That belief was never runtime-value-checked here
+        // (Assert.NotNull(uasm) — compile-success only) and was FALSE: a struct-hosted closure never
+        // gets the Stage-2 per-activation env-record protection that makes the T-free case safe for an
+        // ordinary generic METHOD (CaptureScopeAnalysis.AddRoots walks class+base roots only — B45), so
+        // it always falls back to the naive shared-field LocalBindings mechanism — rebound by whichever
+        // instantiation registers last while the ONE shared hoisted closure body was already emitted
+        // against a single fixed binding. Real-VM proof: the first instantiation's captured contribution
+        // silently vanished (90 instead of the CLR's 110 for `bi.Compute(a) + bs.Compute(b)`). Now loud
+        // (ClosurePin.StructMemberCapturing) instead of silently wrong — same "loud over silent" doctrine
+        // as the T-dependent case above.
+        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
 using UdonSharp;
 using System;
 public struct Box<T> {
@@ -273,7 +286,34 @@ public class GR1NonDep : UdonSharpBehaviour {
         Box<string> b = new Box<string>();
         var y = b.RunWithClosure(2);
     }
-}", "GR1NonDep");
+}", "GR1NonDep"));
+        Assert.Contains("captures an outer variable", ex.Message);
+    }
+
+    [Fact]
+    public void GenericStructMethod_NonCapturingClosure_TwoInstantiations_StillCompiles()
+    {
+        // The safe half of the corrected boundary above: a struct-hosted closure that captures NOTHING
+        // has no shared-field state to alias, so sharing one physical hoist across instantiations is
+        // fine regardless of T-dependence.
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public struct Box<T> {
+    public T value;
+    public int RunWithClosure(int extra) {
+        Func<int, int> f = y => y + 1;
+        return f(extra);
+    }
+}
+public class GR1NonCapturing : UdonSharpBehaviour {
+    void Start() {
+        Box<int> a = new Box<int>();
+        var x = a.RunWithClosure(1);
+        Box<string> b = new Box<string>();
+        var y = b.RunWithClosure(2);
+    }
+}", "GR1NonCapturing");
         Assert.NotNull(uasm);
     }
 
