@@ -218,6 +218,15 @@ public class UasmEmitter
                 if (ifaceSymbol != null)
                     _planner.Plan(ifaceSymbol);
             }
+            // Wave-14 r3: record every interface a user STRUCT implements (see LayoutPlanner's
+            // InterfaceHasStructImplementor doc comment) — a separate walk since structs aren't classes.
+            foreach (var structDecl in root.DescendantNodes().OfType<StructDeclarationSyntax>())
+            {
+                var structSymbol = model.GetDeclaredSymbol(structDecl) as INamedTypeSymbol;
+                if (structSymbol == null) continue;
+                foreach (var iface in structSymbol.AllInterfaces)
+                    _planner.RegisterStructImplementedInterface(iface);
+            }
         }
         _planner.Freeze();
     }
@@ -2405,6 +2414,35 @@ public class UasmEmitter
             .Cast<IMethodSymbol>()
             .ToList();
 
+        // Wave-14: a generic struct member reached ONLY via internal self/cross-struct-method
+        // reference (Box<T>'s own body, or mutual recursion between two DIFFERENT generic struct
+        // types — APart<T> <-> BPart<T>) is registered ON DEMAND during Phase-2 body emission
+        // (HandlerBase.ResolveStructMember/RegisterGenericSpecialization), which runs AFTER this
+        // analysis — so it has no graph node yet and _methodFunctions above never sees it (Phase-1's
+        // CollectStructMethods walks the SAME open/shared body and, correctly, skips exactly this
+        // open-form reference to avoid a ghost CFunction — IsCollectibleStructMember). Without a
+        // node, IsRecursiveEdge silently returns false for the edge and the software-stack spill
+        // never wraps it (VM-proven: mutual recursion between two generic struct types clobbered
+        // shared frame fields — 7 instead of the CLR's 21). Transitively discover every user-struct
+        // member DEFINITION reachable from a root's body (ignoring open/closed — DEFINITIONS
+        // naturally collapse every instantiation onto one graph node, matching this method's
+        // existing "_methodFunctions.Keys.Select(OriginalDefinition)" invariant) and add it as a root.
+        var structDefRoots = new HashSet<IMethodSymbol>(roots, SymbolEqualityComparer.Default);
+        var structDefQueue = new Queue<IMethodSymbol>(roots);
+        while (structDefQueue.Count > 0)
+        {
+            var m = structDefQueue.Dequeue();
+            var sr = m.DeclaringSyntaxReferences.FirstOrDefault();
+            if (sr == null) continue;
+            var found = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
+            CollectStructMemberDefinitions(
+                _compilation.GetSemanticModel(sr.SyntaxTree).GetOperation(sr.GetSyntax()), found);
+            foreach (var f in found)
+                if (f.DeclaringSyntaxReferences.Length > 0 && structDefRoots.Add(f))
+                    structDefQueue.Enqueue(f);
+        }
+        roots = structDefRoots.ToList();
+
         // Local functions are registered lazily during emission (after this pass), so discover them now by
         // walking the bodies — otherwise a recursive local function would not be detected and would corrupt
         // the flat heap. Transitive: a local function may contain nested local functions.
@@ -3454,15 +3492,28 @@ public class UasmEmitter
     // Feature G: a generic struct's OWN method body — walked from its single shared/original syntax
     // regardless of which instantiation is collecting it — resolves a SELF-reference (recursion, or
     // one struct member calling a sibling) to the RAW OPEN containing type (Box<T> where T is the
-    // struct's own type parameter, ContainingType.IsDefinition true), never to any concrete spec.
-    // Collecting this phantom open-form entry registers a SECOND, dead (never actually dispatched —
-    // SubstituteMethodTypeArgs always re-closes real call sites to the live spec) CFunction that
-    // corrupts the definition-keyed recursion/spill bookkeeping (VM-proven: a self-recursive generic
-    // struct method returned 0 instead of the CLR's 6). Skip collecting through the open form; the
-    // real call sites (outer construction/invocation, always concretely typed) already reach every
-    // instantiation this collector needs.
+    // struct's own type parameter), never to any concrete spec. Collecting this phantom open-form
+    // entry registers a SECOND, dead (never actually dispatched — SubstituteMethodTypeArgs always
+    // re-closes real call sites to the live spec) CFunction that corrupts the definition-keyed
+    // recursion/spill bookkeeping (VM-proven: a self-recursive generic struct method returned 0
+    // instead of the CLR's 6). Skip collecting through the open form; the real call sites (outer
+    // construction/invocation, always concretely typed) already reach every instantiation this
+    // collector needs (an internal-only self/sibling reference is instead resolved on demand via
+    // HandlerBase.ResolveStructMember, wave-14).
+    //
+    // Wave-14 widening: the original check (ContainingType.IsDefinition) only catches a struct
+    // referencing ITSELF. A CROSS-type reference — APart<T>'s own body doing `new BPart<T>()` /
+    // `b.Pong(...)`, where the T is APart's OWN (still open) type parameter used as BPart's type
+    // ARGUMENT — produces a containing type (BPart<T_APart>) that is NOT its own IsDefinition (its
+    // argument isn't BPart's own type parameter) but is STILL fundamentally open: T_APart is only
+    // ever closed once APart's OWN spec is known, so this is exactly the same phantom-open-form shape,
+    // just one level removed. Checking "any type argument is still an open type parameter" (rather
+    // than IsDefinition specifically) subsumes both shapes identically — mutual/cross recursion
+    // between two generic struct types corrupted the same definition-keyed bookkeeping the original
+    // fix targeted (VM-proven: BoxMutualRecurse Ping(5)+Ping(3) returned 8 instead of the CLR's 21).
     static bool IsCollectibleStructMember(IMethodSymbol m)
-        => m != null && !(m.ContainingType.IsGenericType && m.ContainingType.IsDefinition);
+        => m != null && !(m.ContainingType.IsGenericType
+            && m.ContainingType.TypeArguments.Any(ta => ta is ITypeParameterSymbol));
 
     void CollectStructMethodsInOperation(IOperation op, HashSet<IMethodSymbol> result)
     {
@@ -3530,6 +3581,62 @@ public class UasmEmitter
         if (op is IUsingDeclarationOperation ud) CollectUsingDispose(ud.DeclarationGroup, result);
         foreach (var child in op.Children)
             CollectStructMethodsInOperation(child, result);
+    }
+
+    /// <summary>BuildRecursionInfo helper (wave-14): the recursion-graph counterpart of
+    /// CollectStructMethodsInOperation — same node shapes (ctor/instance-method/computed-property/
+    /// operator/conversion on a user struct), but collects the method's OriginalDEFINITION unfiltered
+    /// (no IsCollectibleStructMember gate) instead of a constructed CFunction-ready symbol. The graph
+    /// is keyed by definition regardless of instantiation (mirroring
+    /// "_methodFunctions.Keys.Select(OriginalDefinition)" above), so this is the right shape for
+    /// discovering a struct member that Phase-1 registration deliberately skipped (the open self/cross
+    /// -struct-method form) but that the emitted program can still recursively re-enter.</summary>
+    static void CollectStructMemberDefinitions(IOperation op, HashSet<IMethodSymbol> defs)
+    {
+        if (op == null) return;
+        if (op is IObjectCreationOperation oc && oc.Constructor != null
+            && oc.Type is INamedTypeSymbol ocNt && EmitContext.IsUserStruct(ocNt)
+            && oc.Arguments.Length > 0 && !oc.Constructor.IsImplicitlyDeclared)
+            defs.Add(oc.Constructor.OriginalDefinition);
+        if (op is IInvocationOperation inv && inv.TargetMethod is { IsStatic: false } tm
+            && tm.MethodKind == MethodKind.Ordinary && !tm.IsImplicitlyDeclared
+            && tm.ContainingType is INamedTypeSymbol it && EmitContext.IsUserStruct(it))
+            defs.Add(tm.OriginalDefinition);
+        if (op is IPropertyReferenceOperation pr
+            && pr.Property is { IsStatic: false } prop
+            && pr.Property.ContainingType is INamedTypeSymbol pit && EmitContext.IsUserStruct(pit)
+            && IsComputedProperty(prop))
+        {
+            if (prop.GetMethod != null) defs.Add(prop.GetMethod.OriginalDefinition);
+            if (prop.SetMethod != null) defs.Add(prop.SetMethod.OriginalDefinition);
+        }
+        if (op is IPropertySubpatternOperation sub && sub.Member is IPropertyReferenceOperation spr
+            && spr.Property is { IsStatic: false } sprop
+            && spr.Property.ContainingType is INamedTypeSymbol spit && EmitContext.IsUserStruct(spit)
+            && IsComputedProperty(sprop) && sprop.GetMethod != null)
+            defs.Add(sprop.GetMethod.OriginalDefinition);
+        var opMethod = (op as IBinaryOperation)?.OperatorMethod
+            ?? (op as IUnaryOperation)?.OperatorMethod
+            ?? (op as ICompoundAssignmentOperation)?.OperatorMethod
+            ?? (op as IIncrementOrDecrementOperation)?.OperatorMethod;
+        if (opMethod is { MethodKind: MethodKind.UserDefinedOperator }
+            && opMethod.ContainingType is INamedTypeSymbol ot && EmitContext.IsUserStruct(ot))
+            defs.Add(opMethod.OriginalDefinition);
+        if (op is IConversionOperation convOp && convOp.OperatorMethod is { MethodKind: MethodKind.Conversion } convM
+            && convM.ContainingType is INamedTypeSymbol convCt && EmitContext.IsUserStruct(convCt))
+            defs.Add(convM.OriginalDefinition);
+        if (op is IUsingOperation or IUsingDeclarationOperation)
+        {
+            var resources = op is IUsingOperation uo2 ? uo2.Resources : ((IUsingDeclarationOperation)op).DeclarationGroup;
+            if (resources is IVariableDeclarationGroupOperation g)
+                foreach (var decl in g.Declarations)
+                    foreach (var declarator in decl.Declarators)
+                        if (declarator.Symbol.Type is INamedTypeSymbol dnt
+                            && EmitContext.FindStructDisposeMethod(dnt) is { } dispose)
+                            defs.Add(dispose.OriginalDefinition);
+        }
+        foreach (var child in op.Children)
+            CollectStructMemberDefinitions(child, defs);
     }
 
     static void CollectUsingDispose(IOperation resources, HashSet<IMethodSymbol> result)

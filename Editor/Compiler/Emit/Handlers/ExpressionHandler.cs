@@ -100,6 +100,23 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
         }
         if (fieldRef.Field.IsStatic)
         {
+            // Wave-14 crossfeature lens: a static field on a USER STRUCT (readonly or not; generic or
+            // not) is NOT materialized anywhere — feature S's per-program static-readonly storage
+            // (design S-M1) only walks the compiled UdonSharpBehaviour class's own hierarchy. Left
+            // unguarded this fell through to the "Unity/System static field → extern getter" arm below
+            // (meant for SDK statics like Vector3.zero), building a bogus property-get extern on the
+            // struct's own SystemObjectArray Udon type (VM-proven: "Unknown extern:
+            // SystemObjectArray.__get_Table__SystemObjectArray" for `StgSampler<T>.Table`). A struct's
+            // static field is per-TYPE storage — for a GENERIC struct, per-CLOSED-instantiation
+            // (StgSampler<int>.Table and StgSampler<string>.Table are C#-distinct) — which needs its own
+            // materialization design (mirroring feature S but keyed by constructed struct type), not a
+            // one-line patch. Reject loudly instead of emitting an assembler-crashing extern.
+            if (fieldRef.Field.ContainingType is INamedTypeSymbol structFieldCt && EmitContext.IsUserStruct(structFieldCt))
+                throw new NotSupportedException(
+                    $"Static field '{fieldRef.Field.ContainingType.Name}.{fieldRef.Field.Name}' on a "
+                    + "user-defined struct is not supported: static storage for a struct type (per closed "
+                    + "instantiation, if generic) has no materialization mechanism yet. Move the data to "
+                    + "a field on the UdonSharpBehaviour class instead.");
             if (ExternResolver.IsUdonSharpBehaviour(fieldRef.Field.ContainingType))
             {
                 // Non-const, non-foldable `static readonly` (const/foldable already returned above) —
@@ -550,9 +567,8 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
         {
             // A user STRUCT conversion operator is an emitted method, not an extern: route to it (its containing
             // type is SystemObjectArray-backed, so ResolveConversionExtern would build a non-existent extern).
-            if (conv.OperatorMethod.ContainingType is INamedTypeSymbol convOpCt && EmitContext.IsUserStruct(convOpCt)
-                && _methodFunctions.ContainsKey(conv.OperatorMethod))
-                return EmitCallToMethod(conv.OperatorMethod, new List<CLeaf> { srcVal });
+            if (conv.OperatorMethod.ContainingType is INamedTypeSymbol convOpCt && EmitContext.IsUserStruct(convOpCt))
+                return EmitCallToMethod(ResolveStructMember(conv.OperatorMethod), new List<CLeaf> { srcVal });
 
             var dstType = GetUdonType(conv.Type);
             return ExternCall(

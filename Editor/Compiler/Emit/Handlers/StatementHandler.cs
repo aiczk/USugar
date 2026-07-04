@@ -441,7 +441,7 @@ public class StatementHandler : HandlerBase, IOperationHandler
         if (type is INamedTypeSymbol nt && EmitContext.IsUserStruct(nt)
             && EmitContext.FindStructDisposeMethod(nt) is { } dispose)
         {
-            EmitCallToMethod(dispose, new List<CLeaf> { val });
+            EmitCallToMethod(ResolveStructMember(dispose), new List<CLeaf> { val });
             return;
         }
         EmitExternVoid($"{GetUdonType(type)}.__Dispose__SystemVoid", new List<CLeaf> { val });

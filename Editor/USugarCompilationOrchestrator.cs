@@ -193,6 +193,22 @@ static class USugarCompilationOrchestrator
                 foreach (var iface in symbol.AllInterfaces)
                     planner.Plan(iface);
             }
+            // Wave-14 r3: record every interface a user STRUCT implements — see LayoutPlanner's
+            // InterfaceHasStructImplementor doc comment. Struct declarations aren't in classList (that
+            // collects UdonSharpBehaviour classes only), so this is a separate pass.
+            var seenStructSymbols = new HashSet<INamedTypeSymbol>(SymbolEqualityComparer.Default);
+            foreach (var tree in compilation.SyntaxTrees)
+            {
+                var model = compilation.GetSemanticModel(tree);
+                foreach (var structDecl in tree.GetRoot().DescendantNodes()
+                    .OfType<Microsoft.CodeAnalysis.CSharp.Syntax.StructDeclarationSyntax>())
+                {
+                    var symbol = model.GetDeclaredSymbol(structDecl) as INamedTypeSymbol;
+                    if (symbol == null || !seenStructSymbols.Add(symbol)) continue;
+                    foreach (var iface in symbol.AllInterfaces)
+                        planner.RegisterStructImplementedInterface(iface);
+                }
+            }
             planner.Freeze();
             Mark("layout-plan");
 

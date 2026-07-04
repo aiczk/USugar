@@ -264,19 +264,31 @@ public class EmitContext
     /// second instantiation would silently run the first instantiation's types. (Stage 2 §8.1: the
     /// former <c>Capturing</c> tier is retired — a NON-type-param-dependent capturing closure shares
     /// one T-free hoist and its captures live in per-activation env records, so multiple
-    /// instantiations no longer alias.)</summary>
-    public enum ClosurePin { None, TypeParamDependent }
+    /// instantiations no longer alias.) <c>StructMemberCapturing</c> (wave-14): the Stage-2
+    /// per-activation env record that makes the T-free case above safe is NEVER available to a closure
+    /// hosted inside a GENERIC STRUCT's own member — CaptureScopeAnalysis.AddRoots only walks class+base
+    /// roots (B45, ledgered as a known struct-closure gap), so a struct-hosted closure always falls
+    /// back to the naive shared-field LocalBindings mechanism regardless of T-dependence. That fallback
+    /// is fine for a NON-capturing closure (nothing to alias) but not for a capturing one: the shared
+    /// captured-local field is rebound by whichever instantiation registers last, and the ONE hoisted
+    /// closure body was already emitted against a single fixed binding (VM-proven: a non-T-dependent
+    /// closure inside a two-instantiation generic struct method silently dropped the first
+    /// instantiation's captured contribution — 90 instead of the CLR's 110).</summary>
+    public enum ClosurePin { None, TypeParamDependent, StructMemberCapturing }
 
-    /// <summary>[X6]/[Y2] gate: does the generic DEFINITION's body contain an instantiation-pinning
-    /// closure? Walks the definition's own operation tree (specs share it). Capturing dominates.</summary>
+    /// <summary>[X6]/[Y2]/wave-14 gate: does the generic DEFINITION's body contain an
+    /// instantiation-pinning closure? Walks the definition's own operation tree (specs share it).
+    /// Type-param dependence dominates; for a generic STRUCT member, ANY capturing closure pins too
+    /// (B45 — no per-activation protection exists for struct-hosted closures at all).</summary>
     public ClosurePin GenericBodyClosurePin(Compilation compilation, IMethodSymbol def)
     {
         var syntaxRef = def.DeclaringSyntaxReferences.FirstOrDefault();
         if (syntaxRef == null) return ClosurePin.None;
         var syntax = syntaxRef.GetSyntax();
         var body = compilation.GetSemanticModel(syntax.SyntaxTree).GetOperation(syntax);
+        bool isStructMember = def.ContainingType is INamedTypeSymbol ct && IsUserStruct(ct);
         var pin = ClosurePin.None;
-        WalkClosurePins(body, ref pin);
+        WalkClosurePins(body, isStructMember, ref pin);
         return pin;
     }
 
@@ -285,24 +297,43 @@ public class EmitContext
     // EVERY closure and only pins on TypeParamDependence: a closure whose signature, body, or a
     // captured variable references the enclosing generic's type parameters cannot share one T-free
     // hoist across specs. Granularity stays per-definition (§8.2): one T-dependent closure pins the
-    // whole definition; no partial legalization.
-    void WalkClosurePins(IOperation op, ref ClosurePin pin)
+    // whole definition; no partial legalization. Wave-14: for a STRUCT member, additionally pin on
+    // ANY capture (B45 — struct-hosted closures never get the per-activation env-record protection
+    // that makes the T-free case safe for ordinary class-method generics).
+    void WalkClosurePins(IOperation op, bool isStructMember, ref ClosurePin pin)
     {
-        if (op == null || pin == ClosurePin.TypeParamDependent) return;
+        if (op == null || pin != ClosurePin.None) return;
         switch (op)
         {
             case IAnonymousFunctionOperation af:
                 if (ClosureUsesMethodTypeParam(af.Symbol, af.Body)) { pin = ClosurePin.TypeParamDependent; return; }
+                if (isStructMember && ClosureCapturesAnything(af.Symbol, af.Body))
+                    { pin = ClosurePin.StructMemberCapturing; return; }
                 break;
             case ILocalFunctionOperation lf when lf.Symbol != null:
                 if (ClosureUsesMethodTypeParam(lf.Symbol, lf.Body)) { pin = ClosurePin.TypeParamDependent; return; }
+                if (isStructMember && ClosureCapturesAnything(lf.Symbol, lf.Body))
+                    { pin = ClosurePin.StructMemberCapturing; return; }
                 break;
         }
         foreach (var child in op.Children)
         {
-            WalkClosurePins(child, ref pin);
-            if (pin == ClosurePin.TypeParamDependent) return;
+            WalkClosurePins(child, isStructMember, ref pin);
+            if (pin != ClosurePin.None) return;
         }
+    }
+
+    /// <summary>Does this closure reference any outer local/parameter, or any local function (itself
+    /// possibly capturing)? Reuses LambdaCaptureAnalyzer's free-variable walk (same exclusion rules:
+    /// the closure's own parameters/locals/nested-closure parameters are not captures).</summary>
+    static bool ClosureCapturesAnything(IMethodSymbol closureSym, IOperation closureBody)
+    {
+        if (closureSym == null || closureBody == null) return false;
+        var directCaptures = new HashSet<ISymbol>(SymbolEqualityComparer.Default);
+        var inside = new HashSet<ISymbol>(SymbolEqualityComparer.Default);
+        var localFunctionRefs = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
+        LambdaCaptureAnalyzer.AnalyzeLocalFunction(closureSym, closureBody, directCaptures, inside, localFunctionRefs);
+        return directCaptures.Count > 0 || localFunctionRefs.Count > 0;
     }
 
     static bool ClosureUsesMethodTypeParam(IMethodSymbol closureSym, IOperation closureBody)
@@ -349,6 +380,14 @@ public class EmitContext
                     + "the method's type parameters. The hoisted closure is shared across instantiations "
                     + "in the flat-heap model and was emitted with the first instantiation's types. "
                     + "Use a single instantiation, or keep the closure independent of the type parameters.");
+            case ClosurePin.StructMemberCapturing:
+                throw new System.NotSupportedException(
+                    $"Generic struct member '{methodName}' is instantiated with more than one "
+                    + "type-argument combination but contains a lambda or local function that captures "
+                    + "an outer variable. A struct method's hoisted closure has no per-activation capture "
+                    + "record and shares one flat-heap field across every instantiation, so a second "
+                    + "instantiation would silently read/write the wrong instantiation's captured state. "
+                    + "Use a single instantiation, or make the closure non-capturing.");
         }
     }
 

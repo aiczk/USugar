@@ -44,9 +44,9 @@ public partial class InvocationHandler
         // user getter with the receiver object[] as synthetic param0 (same convention as EmitStructInstanceCall).
         // The getter only reads, so the receiver is passed uncloned.
         if (op.Instance != null && op.Instance.Type is INamedTypeSymbol aggGet && EmitContext.IsAggregateType(aggGet)
-            && op.Property.GetMethod is { } aggGetter && _methodFunctions.ContainsKey(aggGetter))
+            && op.Property.GetMethod is { } aggGetterRaw)
         {
-            var ret = EmitCallToMethod(aggGetter,
+            var ret = EmitCallToMethod(ResolveStructMember(aggGetterRaw),
                 new List<CLeaf> { LoadInstanceRaw(op.Instance) });
             return op.Property.Type is INamedTypeSymbol getRetAgg && EmitContext.IsAggregateType(getRetAgg)
                 ? EmitDeepCloneAggregate(ret, getRetAgg) : ret;
@@ -163,6 +163,7 @@ public partial class InvocationHandler
             && !IsResolvedConcreteNonBehaviour(op.Instance.Type)
             && _planner.GetLayout(op.Property.ContainingType).Methods.TryGetValue(ifaceGetter, out var ifaceGetterMl))
         {
+            GuardInterfaceHasBehaviourImplementor(op.Property.ContainingType, op.Property.Name);
             var ifaceInst = VisitExpression(op.Instance);
             return CrossCall(ifaceInst, LayoutPlanner.InterfaceDispatchName(ifaceGetter, ifaceGetterMl),
                 new List<(string, CLeaf)>(), ifaceGetterMl.Returns.ToArray(), returnType,
@@ -219,11 +220,11 @@ public partial class InvocationHandler
         // (object[]) as param0 plus the index args, like a struct computed property. Without this it falls to
         // a bogus SystemObjectArray.__get_Item extern the validator rejects. (diff-fuzz wave 4)
         if (op.Instance != null && op.Instance.Type is INamedTypeSymbol aggIdx && EmitContext.IsAggregateType(aggIdx)
-            && op.Property.GetMethod is { } idxGetter && _methodFunctions.ContainsKey(idxGetter))
+            && op.Property.GetMethod is { } idxGetterRaw)
         {
             var sargs = new List<CLeaf> { LoadInstanceRaw(op.Instance) };
             sargs.AddRange(EvaluateIndexerArgs(op)); // wave-9 round-4: named index args bind by ordinal
-            var ret = EmitCallToMethod(idxGetter, sargs);
+            var ret = EmitCallToMethod(ResolveStructMember(idxGetterRaw), sargs);
             return op.Property.Type is INamedTypeSymbol idxRetAgg && EmitContext.IsAggregateType(idxRetAgg)
                 ? EmitDeepCloneAggregate(ret, idxRetAgg) : ret;
         }
@@ -461,7 +462,7 @@ public partial class InvocationHandler
         // would emit a bogus SystemObjectArray.__ctor__<args>__ extern that the validator rejects. (diff-fuzz w3)
         if (op.Type.IsValueType && op.Arguments.Length > 0
             && op.Type is INamedTypeSymbol userStruct && EmitContext.IsUserStruct(userStruct)
-            && op.Constructor != null && _methodFunctions.ContainsKey(op.Constructor))
+            && op.Constructor != null)
         {
             var layout = _ctx.GetAggregateLayout(userStruct);
             var slot = _ctx.AllocTemp("SystemObjectArray");
@@ -471,7 +472,7 @@ public partial class InvocationHandler
             var ctorArgs = new List<CLeaf> { SlotRef(slot) };
             foreach (var arg in op.Arguments)
                 ctorArgs.Add(VisitExpression(arg.Value));
-            EmitExprStmt(EmitCallToMethod(op.Constructor, ctorArgs));
+            EmitExprStmt(EmitCallToMethod(ResolveStructMember(op.Constructor), ctorArgs));
             // ctor + object-initializer combo (`new V(1,2) { Y = 3 }`): apply the initializer AFTER the
             // ctor runs, same order C# gives the fields (roadmap B41 (d)).
             EmitAggregateObjectInitializer(SlotRef(slot), userStruct, op.Initializer);

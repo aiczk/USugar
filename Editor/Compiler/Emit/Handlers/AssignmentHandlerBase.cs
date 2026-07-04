@@ -56,13 +56,13 @@ public abstract class AssignmentHandlerBase : HandlerBase
             // The same receiver/args are reused by the setter in EmitWriteBack. Mirrors VisitIndexerGet.
             case IPropertyReferenceOperation { Property: { IsIndexer: true } } sIdxRef
                 when sIdxRef.Instance?.Type is INamedTypeSymbol sIdxType && EmitContext.IsAggregateType(sIdxType)
-                && sIdxRef.Property.GetMethod is { } sIdxGetter && _methodFunctions.ContainsKey(sIdxGetter):
+                && sIdxRef.Property.GetMethod is { } sIdxGetterRaw:
             {
                 var recv = LoadInstanceRaw(sIdxRef.Instance);
                 var cachedArgs = EvaluateIndexerArgs(sIdxRef); // wave-9 r4: named index args bind by ordinal
                 var getterArgs = new List<CLeaf> { recv };
                 getterArgs.AddRange(cachedArgs);
-                var currentVal = EmitCallToMethod(sIdxGetter, getterArgs);
+                var currentVal = EmitCallToMethod(ResolveStructMember(sIdxGetterRaw), getterArgs);
                 return new LValueCapture { Value = currentVal, ArrayVal = recv, IndexArgs = cachedArgs };
             }
             // Wave-9 round-2 [W6]: user indexer COMPOUND assignment through a VARIABLE receiver
@@ -115,11 +115,10 @@ public abstract class AssignmentHandlerBase : HandlerBase
                         slotVal = EmitDeepCloneAggregate(slotVal, capSlotAgg);
                     return new LValueCapture { Value = slotVal, ArrayVal = recv, IndexVal = slotIdxVal };
                 }
-                if (aggCapPropRef.Property.GetMethod is { } capGetter
-                    && _methodFunctions.ContainsKey(capGetter))
+                if (aggCapPropRef.Property.GetMethod is { } capGetterRaw)
                 {
                     var recv = LoadInstanceRaw(aggCapPropRef.Instance);
-                    CLeaf getVal = EmitCallToMethod(capGetter, new List<CLeaf> { recv });
+                    CLeaf getVal = EmitCallToMethod(ResolveStructMember(capGetterRaw), new List<CLeaf> { recv });
                     if (aggCapPropRef.Property.Type is INamedTypeSymbol capGetAgg && EmitContext.IsAggregateType(capGetAgg))
                         getVal = EmitDeepCloneAggregate(getVal, capGetAgg);
                     return new LValueCapture { Value = getVal, ArrayVal = recv };

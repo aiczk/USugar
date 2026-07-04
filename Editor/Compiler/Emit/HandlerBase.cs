@@ -829,6 +829,23 @@ public abstract partial class HandlerBase
     /// <summary>Read an aggregate array element as the raw stored object[] (no clone), for receiver access.</summary>
     protected CLeaf ReadArrayElementRaw(IArrayElementReferenceOperation ae)
     {
+        // Wave-14 ndimaccess lens: an N-dim aggregate-array element used as a RECEIVER (`arr[i,j].X += 1`,
+        // `arr[i,j].Item1`) reaches this method (EmitContext.IsAggregateType(ae.Type) at the
+        // LoadInstanceRaw dispatch site), but this method was written before feature N and always used
+        // Indices[0] alone against the BUNDLE array directly — every OTHER array-index site
+        // (ArrayHandler.VisitArrayElementReference, HandlerBase.PrepareArrayElementSet,
+        // AssignmentHandlerBase's capture/write-back arms, InvocationHandler.Extern's ref/out prepare)
+        // already special-cases Indices.Length>1 via PrepareNdimAccess; this receiver-access path was the
+        // one gap. Pre-fix, a single stray index read bundle[idx] directly (the bundle's OWN 1+r slots —
+        // flat backing at [0], boxed dim lengths at [1..r] — not the logical element), corrupting the
+        // struct-field mutation (VM-proven: `arr[idx,1].X += 10; sum += arr[i,j].X + arr[i,j].Y;` faulted
+        // with a heap type mismatch reading a dimension-length int as if it were the struct's object[]).
+        if (ae.Indices.Length > 1)
+        {
+            var ndimType = (IArrayTypeSymbol)ae.ArrayReference.Type;
+            var plan = PrepareNdimAccess(ae.ArrayReference, ae.Indices, ndimType);
+            return EmitNdimReadFromPlan(ae, plan, GetUdonType(ndimType.ElementType));
+        }
         var arrayVal = VisitExpression(ae.ArrayReference);
         var arrSym = ae.ArrayReference.Type as IArrayTypeSymbol;
         var arrType = GetArrayType(arrSym);
@@ -1227,10 +1244,10 @@ public abstract partial class HandlerBase
 
         // Computed (non-auto) struct property setter: p.Both = v → call the user setter with the receiver
         // object[] as synthetic param0 (mutates this-fields through the shared backing array).
-        if (propRef.Property is { IsIndexer: false, SetMethod: { } aggSetter }
-            && propRef.Instance?.Type is INamedTypeSymbol aggSetType && EmitContext.IsAggregateType(aggSetType)
-            && _methodFunctions.ContainsKey(aggSetter))
+        if (propRef.Property is { IsIndexer: false, SetMethod: { } aggSetterRaw }
+            && propRef.Instance?.Type is INamedTypeSymbol aggSetType && EmitContext.IsAggregateType(aggSetType))
         {
+            var aggSetter = ResolveStructMember(aggSetterRaw);
             var aggRecv = LoadInstanceRaw(propRef.Instance);
             return aggSetVal => EmitExprStmt(
                 EmitCallToMethod(aggSetter, new List<CLeaf> { aggRecv, aggSetVal }));
@@ -1239,10 +1256,10 @@ public abstract partial class HandlerBase
         // User-defined indexer on a user STRUCT instance (`s[i] = v`) → call the setter with the struct
         // receiver object[] as param0, the index args, then the value. Mirrors the GET routing in
         // VisitIndexerGet; without it this falls to a bogus SystemObjectArray.__set_Item extern. (diff-fuzz wave 4)
-        if (propRef.Property is { IsIndexer: true, SetMethod: { } aggIdxSetter }
-            && propRef.Instance?.Type is INamedTypeSymbol aggIdxSetType && EmitContext.IsAggregateType(aggIdxSetType)
-            && _methodFunctions.ContainsKey(aggIdxSetter))
+        if (propRef.Property is { IsIndexer: true, SetMethod: { } aggIdxSetterRaw }
+            && propRef.Instance?.Type is INamedTypeSymbol aggIdxSetType && EmitContext.IsAggregateType(aggIdxSetType))
         {
+            var aggIdxSetter = ResolveStructMember(aggIdxSetterRaw);
             var setterArgs = new List<CLeaf> { LoadInstanceRaw(propRef.Instance) };
             setterArgs.AddRange(EvaluateIndexerArgs(propRef)); // wave-9 r4: named index args bind by ordinal
             return aggIdxVal =>
@@ -1366,6 +1383,7 @@ public abstract partial class HandlerBase
                     && propRef.Instance is not IInstanceReferenceOperation
                     && _planner.GetLayout(propRef.Property.ContainingType).Methods.TryGetValue(ifaceSetter, out var ifaceSetterMl))
                 {
+                    GuardInterfaceHasBehaviourImplementor(propRef.Property.ContainingType, propRef.Property.Name);
                     // Wave-12 r2 [V1]: a reentrant setter dispatch pulls its value copy-in inside the
                     // spill window (preSpillStmts: 1 — the SetProgramVariable emitted just above).
                     bool ifaceSetReentrant = TryMarkReentrantCrossDispatch(propRef, ifaceSetter);
@@ -1640,7 +1658,15 @@ public abstract partial class HandlerBase
         bool ContainsOpenParam(IEnumerable<ITypeSymbol> args) =>
             args.Any(ta => ta is ITypeParameterSymbol tp && _typeParamMap.ContainsKey(tp));
 
+        // Wave-14 r3: a local function/lambda's ContainingType is the enclosing generic struct/method's
+        // type (e.g. Helper's ContainingType is Box<T> when Helper is declared inside Box<T>.Compute), so
+        // it also looks "containingNeedsSub" — but a local function/lambda is lexically scoped, never a
+        // MEMBER of that type, so INamedTypeSymbol.GetMembers(name) below can never find it (empty
+        // sequence, LINQ .First() throws "Sequence contains no matching element"). The shared/unconstructed
+        // operation tree already carries the correct symbol identity for these (RegisterLocalFunction keys
+        // on it directly) — skip relocation for them entirely.
         bool containingNeedsSub = target.ContainingType.IsGenericType
+            && target.MethodKind is not (MethodKind.LocalFunction or MethodKind.LambdaMethod)
             && ContainsOpenParam(target.ContainingType.TypeArguments);
         bool methodNeedsSub = target.IsGenericMethod && ContainsOpenParam(target.TypeArguments);
         if (!containingNeedsSub && !methodNeedsSub) return target;
@@ -1662,7 +1688,15 @@ public abstract partial class HandlerBase
             var newMethodArgs = target.TypeArguments
                 .Select(ta => ta is ITypeParameterSymbol tp2 && _typeParamMap.TryGetValue(tp2, out var sub2) ? sub2 : ta)
                 .ToArray();
-            relocated = relocated.OriginalDefinition.Construct(newMethodArgs);
+            // Wave-14 r3: Construct() on relocated.OriginalDefinition RESETS the containing type back to
+            // fully open (Box<T>, not Box<int>) when containingNeedsSub already closed it above — a
+            // generic METHOD on a generic STRUCT (Box<T>.RepeatGen<U>) then loses its T substitution on
+            // this second dimension (VM-proven: emitted UASM referenced the unresolved type parameter
+            // 'U' — actually T resurfacing as the containing type — "Type referenced by 'U' could not be
+            // resolved", SelfRecursiveGenericMethod). `relocated` is already method-dimension-open with
+            // the CORRECT (possibly-closed) containing type from the branch above (or straight from
+            // `target.OriginalDefinition` when containingNeedsSub was false) — construct directly on it.
+            relocated = relocated.Construct(newMethodArgs);
         }
 
         return relocated;
@@ -1702,6 +1736,24 @@ public abstract partial class HandlerBase
         var name = $"__{idx}_{SanitizeId(constructed.Name)}_{typeArgPart}";
         var func = _module.AddFunction(name);
         _methodFunctions[constructed] = func;
+
+        // Feature G residual gap (wave-14): a member of a CONSTRUCTED generic struct carries the same
+        // synthetic receiver object[] as param0 that the Phase-1 struct-method registration gives every
+        // non-static struct instance member (UasmEmitter's structMethods loop, "param0 = receiver
+        // object[]") — EmitMethod's CurrentStructReceiverParamId reads func.ParamFieldNames[0]
+        // unconditionally for one. This on-demand path predates feature G (plain generic METHODS have
+        // no receiver concept — a class instance's `this` is a declared field, not param0; a foreign
+        // static has no receiver at all) and never grew this convention, so a struct member reached
+        // ONLY via internal self-reference (never pre-collected) got no receiver slot and EmitMethod's
+        // ParamFieldNames[0] read threw IndexOutOfRange.
+        if (!constructed.IsStatic
+            && constructed.ContainingType is INamedTypeSymbol structRecvCt && EmitContext.IsUserStruct(structRecvCt)
+            && constructed.MethodKind is not (MethodKind.LambdaMethod or MethodKind.LocalFunction))
+        {
+            var receiverId = $"__{idx}_this__param";
+            _ctx.DeclareVar(receiverId, "SystemObjectArray");
+            func.ParamFieldNames.Add(receiverId);
+        }
 
         var gsParamIds = new string[constructed.Parameters.Length];
         for (int pi = 0; pi < constructed.Parameters.Length; pi++)
@@ -1743,6 +1795,30 @@ public abstract partial class HandlerBase
         }
 
         _pendingGenericSpecs.Add(constructed);
+    }
+
+    /// <summary>Feature G residual gap (wave-14): a struct-member reference (computed property/indexer
+    /// accessor, ctor, operator/conversion method) discovered while emitting a GENERIC STRUCT'S OWN
+    /// method body binds to the OPEN containing type (Box&lt;T&gt;.Member, never Box&lt;int&gt;.Member) —
+    /// the operation tree is built from the shared/unconstructed syntax regardless of which spec is
+    /// emitting, the exact invariant SubstituteMethodTypeArgs closes for plain method calls
+    /// (VisitInvocation). Every OTHER struct-member call site instead depended solely on
+    /// CollectStructMethodsInOperation's pre-pass, which deliberately SKIPS this same open-form
+    /// self-reference (IsCollectibleStructMember's feature-G comment — collecting it registers a dead
+    /// second CFunction that corrupted definition-keyed recursion bookkeeping). So a member reached
+    /// ONLY via internal self/sibling reference — e.g. a computed property read by a sibling method, an
+    /// indexer used from within another instance method, a ctor called from a same-struct helper, or an
+    /// operator/conversion invoked from another operator's body — never got a CFunction and fell through
+    /// to a bogus SystemObjectArray extern (VM-proven: DiffFuzz wave-14 8/10 UsugarRejected). Substitute
+    /// through the live type-param map, then register on demand exactly like a plain self-recursive
+    /// call — both operations are idempotent, so this is a no-op for non-generic structs and for members
+    /// already reached by an external concretely-typed call site.</summary>
+    protected IMethodSymbol ResolveStructMember(IMethodSymbol member)
+    {
+        var resolved = SubstituteMethodTypeArgs(member);
+        if (!_methodFunctions.ContainsKey(resolved))
+            RegisterGenericSpecialization(resolved);
+        return resolved;
     }
 
     // [X6] gate moved to EmitContext.GenericBodyClosurePin (round-8 [Y2]/[Y10] — shared with the
@@ -2095,6 +2171,28 @@ public abstract partial class HandlerBase
         return !ExternResolver.IsUdonSharpBehaviour(type);
     }
 
+    /// <summary>Wave-14 r3: interface dispatch (method or property/indexer accessor) is a cross-behaviour
+    /// SendCustomEvent bridge — there is no struct-vtable equivalent. If some user STRUCT in the
+    /// compilation implements `ifaceType`, a receiver flowing through it MAY be that struct, and the
+    /// generated dispatch can never resolve for a struct receiver (SendCustomEvent to a bridge name that
+    /// is never exported by any program — VM-proven: infinite self re-entry / stack overflow, not merely a
+    /// silent no-op). Reject loudly at the call site rather than emit it. An interface with no struct
+    /// implementor is unaffected — including one whose only implementor is a UdonSharpBehaviour not
+    /// present in THIS narrow compile (the ordinary, working cross-behaviour dispatch feature; not
+    /// rejectable just because no class implementor happens to be visible here). Call this from every
+    /// gate that currently reads `!IsResolvedConcreteNonBehaviour(...)` to route to interface dispatch.
+    /// </summary>
+    protected void GuardInterfaceHasBehaviourImplementor(INamedTypeSymbol ifaceType, string memberName)
+    {
+        if (ifaceType != null && _planner.InterfaceHasStructImplementor(ifaceType))
+            throw new System.NotSupportedException(
+                $"Interface member '{ifaceType.Name}.{memberName}' is invoked through an interface-typed "
+              + $"receiver, but a struct in this compilation implements '{ifaceType.Name}'. USugar's "
+              + "interface dispatch is a cross-behaviour SendCustomEvent bridge with no struct-vtable "
+              + "equivalent; calling a struct-implemented interface through an interface-typed reference "
+              + "is not supported.");
+    }
+
     /// <summary>Wave-9 round-4 [X4]/[X5]/[X9]: gate + layout lookup for a USER-INTERFACE property or
     /// indexer accessor reached through an interface-typed receiver. The [W6] cross-indexer gate
     /// tests IsUdonSharpBehaviour(Property.ContainingType) — the INTERFACE for these sites — so
@@ -2107,13 +2205,16 @@ public abstract partial class HandlerBase
         out MethodLayout ml)
     {
         ml = null;
-        return accessor != null
+        var matched = accessor != null
             && op.Property.ContainingType is INamedTypeSymbol ifaceType
             && ifaceType.TypeKind == TypeKind.Interface
             && ifaceType.SpecialType == SpecialType.None
             && op.Instance != null && op.Instance is not IInstanceReferenceOperation
             && !IsResolvedConcreteNonBehaviour(op.Instance.Type)
             && _planner.GetLayout(ifaceType).Methods.TryGetValue(accessor, out ml);
+        if (matched)
+            GuardInterfaceHasBehaviourImplementor((INamedTypeSymbol)op.Property.ContainingType, accessor.Name);
+        return matched;
     }
 
     /// <summary>Dispatch an interface property/indexer accessor through its canonical interface

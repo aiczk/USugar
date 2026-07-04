@@ -143,11 +143,13 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
         // Feature G: dispatch by the CONSTRUCTED symbol (Box<int>.Get(), not Box<T>.Get()) — target is
         // already the right constructed spec here, whether from an outer call site (Roslyn hands us
         // the concretely-typed receiver's member directly) or a self/cross-struct-method call inside
-        // another generic struct method's own body (SubstituteMethodTypeArgs re-closes it above).
+        // another generic struct method's own body (SubstituteMethodTypeArgs re-closes it above). But a
+        // method reached ONLY via such an internal self/sibling reference was never pre-collected
+        // (CollectStructMethodsInOperation deliberately skips the open form) — register it on demand,
+        // like a generic method's own on-demand arm below (wave-14 residual gap).
         if (!target.IsStatic && target.MethodKind == MethodKind.Ordinary
-            && target.ContainingType is INamedTypeSymbol structRecv && EmitContext.IsUserStruct(structRecv)
-            && _methodFunctions.ContainsKey(target))
-            return EmitStructInstanceCall(op, target);
+            && target.ContainingType is INamedTypeSymbol structRecv && EmitContext.IsUserStruct(structRecv))
+            return EmitStructInstanceCall(op, ResolveStructMember(target));
 
         // Receiver identity (predates fcd-stage1): an instance method of THIS class family invoked
         // through a NON-this receiver (same-class field/local, base-typed local, cast) used to

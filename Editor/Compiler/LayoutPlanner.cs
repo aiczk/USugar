@@ -96,6 +96,27 @@ public class LayoutPlanner
     readonly Dictionary<INamedTypeSymbol, TypeLayout> _cache = new(SymbolEqualityComparer.Default);
     bool _frozen;
 
+    // Wave-14 r3: interfaces implemented by at least one user STRUCT, populated (serially, Phase 1) by
+    // every caller that walks StructDeclarationSyntax alongside the existing class-interface walk — see
+    // USugarCompilationOrchestrator and UasmEmitter.EnsurePlannerReady. Struct methods never get an
+    // interface bridge (ComputeBridges only bridges the CLASS's own interface implementations), so an
+    // interface-typed receiver that actually holds struct data dispatches SendCustomEvent to a bridge name
+    // that is exported by NO program — VM-proven infinite self re-entry / stack overflow
+    // (GenBoxInterfaceScorable, wave-14 r3), not merely a wrong value. An interface with NO struct
+    // implementor (the common case — implemented only by UdonSharpBehaviour classes, possibly ones not
+    // present in a narrow test compile) is unaffected: that is the pre-existing, working cross-behaviour
+    // dispatch feature, and must NOT be rejected just because no CLASS implementor happens to be visible.
+    readonly HashSet<INamedTypeSymbol> _interfacesWithStructImplementor = new(SymbolEqualityComparer.Default);
+
+    public void RegisterStructImplementedInterface(INamedTypeSymbol iface)
+        => _interfacesWithStructImplementor.Add(iface);
+
+    /// <summary>True if some user struct in this compilation implements `iface`. Dispatching a call/
+    /// accessor through an `iface`-typed receiver can then never soundly resolve (see field comment
+    /// above) and must be rejected loudly rather than emitted.</summary>
+    public bool InterfaceHasStructImplementor(INamedTypeSymbol iface)
+        => _interfacesWithStructImplementor.Contains(iface);
+
     public static readonly Dictionary<string, string> UdonEventNames = new()
     {
         // Lifecycle

@@ -42,12 +42,11 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
 
         // ── User-defined struct operator: v1 + v2 → static operator method call ──
         if (op.OperatorMethod is { MethodKind: MethodKind.UserDefinedOperator } binOpM
-            && binOpM.ContainingType is INamedTypeSymbol binOpCt && EmitContext.IsUserStruct(binOpCt)
-            && _methodFunctions.ContainsKey(binOpM))
+            && binOpM.ContainingType is INamedTypeSymbol binOpCt && EmitContext.IsUserStruct(binOpCt))
         {
             var lhs = VisitExpression(op.LeftOperand);
             var rhs = VisitExpression(op.RightOperand);
-            return EmitCallToMethod(binOpM, new List<CLeaf> { lhs, rhs });
+            return EmitCallToMethod(ResolveStructMember(binOpM), new List<CLeaf> { lhs, rhs });
         }
 
         // ── Delegate null check / equality (design §2.5 — TYPE-routed, so fields, locals, params,
@@ -282,11 +281,10 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
         // type and throws "Bitwise NOT not supported on SystemObjectArray". Only fires for a user operator
         // (a built-in lifted ~ has OperatorMethod null → falls through to the BitwiseNegation handling). ──
         if (op.OperatorMethod is { MethodKind: MethodKind.UserDefinedOperator } unOpM
-            && unOpM.ContainingType is INamedTypeSymbol unOpCt && EmitContext.IsUserStruct(unOpCt)
-            && _methodFunctions.ContainsKey(unOpM))
+            && unOpM.ContainingType is INamedTypeSymbol unOpCt && EmitContext.IsUserStruct(unOpCt))
         {
             var operand = VisitExpression(op.Operand);
-            return EmitCallToMethod(unOpM, new List<CLeaf> { operand });
+            return EmitCallToMethod(ResolveStructMember(unOpM), new List<CLeaf> { operand });
         }
 
         // Bitwise NOT (~): Udon VM has no unary complement extern → synthesize as XOR with all-bits-set
@@ -699,7 +697,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
                             // Computed user-struct property (no object[] storage slot): JUMP to its registered
                             // getter with the struct as the receiver, not a non-existent SystemObjectArray.__get_X
                             // extern. The getter is collected in CollectStructMethodsInOperation's subpattern case.
-                            memberVal = EmitCallToMethod(cgetter, new List<CLeaf> { SlotRef(valSlot) });
+                            memberVal = EmitCallToMethod(ResolveStructMember(cgetter), new List<CLeaf> { SlotRef(valSlot) });
                         }
                         else
                         {

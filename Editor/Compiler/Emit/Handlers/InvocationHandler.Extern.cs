@@ -637,6 +637,8 @@ public partial class InvocationHandler
             throw new System.InvalidOperationException(
                 $"Cannot resolve interface method layout for '{target.ContainingType?.Name ?? "(unknown)"}.{target.Name}'.");
 
+        GuardInterfaceHasBehaviourImplementor(ifaceType, target.Name);
+
         var instanceVal = VisitExpression(op.Instance);
 
         // Build param pairs for CCrossCall
