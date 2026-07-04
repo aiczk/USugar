@@ -5,7 +5,7 @@ using System.Linq;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.Operations;
 
-public abstract class HandlerBase
+public abstract partial class HandlerBase
 {
     protected readonly EmitContext _ctx;
 
@@ -1160,6 +1160,7 @@ public abstract class HandlerBase
     protected System.Action<CLeaf> PrepareArrayElementSet(IArrayElementReferenceOperation arrayElem)
     {
         RejectStaticReadonlyWriteThrough(arrayElem.ArrayReference); // §3.3, R5
+        if (arrayElem.Indices.Length > 1) return PrepareNdimElementSet(arrayElem);
         var arrayVal = VisitExpression(arrayElem.ArrayReference);
         var arrSym = arrayElem.ArrayReference.Type as IArrayTypeSymbol;
         var indexVal = ResolveArrayIndex(arrayVal, GetArrayType(arrSym), arrayElem.Indices[0]);

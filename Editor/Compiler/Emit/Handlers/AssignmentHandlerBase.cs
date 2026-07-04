@@ -28,6 +28,7 @@ public abstract class AssignmentHandlerBase : HandlerBase
         public CLeaf IndexVal;       // Cached index (for array elements)
         public CLeaf InstanceVal;    // Cached instance (for cross-behaviour fields/properties)
         public List<CLeaf> IndexArgs; // Cached index args (for user indexers — avoid re-evaluating side effects)
+        public NdimAccessPlan? NdimPlan; // Cached N-dim bounds/backing/flat-index plan (rank>1 array elements)
     }
 
     protected LValueCapture CaptureLValue(IOperation target)
@@ -142,6 +143,15 @@ public abstract class AssignmentHandlerBase : HandlerBase
                 }
                 goto default;
             }
+            case IArrayElementReferenceOperation ndimCapElem when ndimCapElem.Indices.Length > 1:
+            {
+                RejectStaticReadonlyWriteThrough(ndimCapElem.ArrayReference); // §3.3, R5 (compound/inc-dec write-back)
+                var ndimType = (IArrayTypeSymbol)ndimCapElem.ArrayReference.Type;
+                var elemUdonType = GetUdonType(ndimType.ElementType);
+                var plan = PrepareNdimAccess(ndimCapElem.ArrayReference, ndimCapElem.Indices, ndimType);
+                var ndimCurrentVal = EmitNdimReadFromPlan(ndimCapElem, plan, elemUdonType);
+                return new LValueCapture { Value = ndimCurrentVal, NdimPlan = plan };
+            }
             case IArrayElementReferenceOperation arrayElem:
             {
                 RejectStaticReadonlyWriteThrough(arrayElem.ArrayReference); // §3.3, R5 (compound/inc-dec write-back)
@@ -213,6 +223,15 @@ public abstract class AssignmentHandlerBase : HandlerBase
                         new List<CLeaf> { arrVal, Const(elemIdx, "SystemInt32"), valueVal });
                     return;
                 }
+                break;
+            }
+            case IArrayElementReferenceOperation ndimWbElem when ndimWbElem.Indices.Length > 1:
+            {
+                // Reuse CaptureLValue's plan when available (avoid re-evaluating indices/bundle);
+                // the read-only fallback path is defensive (mirrors the rank-1 arm's ?? default).
+                var plan = lv.NdimPlan
+                    ?? PrepareNdimAccess(ndimWbElem.ArrayReference, ndimWbElem.Indices, (IArrayTypeSymbol)ndimWbElem.ArrayReference.Type);
+                EmitNdimWriteFromPlan(ndimWbElem, plan, valueVal);
                 break;
             }
             case IArrayElementReferenceOperation arrayElem:

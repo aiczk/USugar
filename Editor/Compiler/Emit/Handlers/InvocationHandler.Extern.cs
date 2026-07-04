@@ -9,6 +9,27 @@ public partial class InvocationHandler
 
     CLeaf EmitExternMethodCall(IInvocationOperation op, IMethodSymbol target)
     {
+        // N-dim array (design 2026-07-04 §2/N-R4): Rank>1 array VALUE is an object[] bundle whose Udon
+        // type tag (SystemObjectArray) has REAL, valid GetLength/GetUpperBound/Clone/… externs
+        // registered — MUST intercept before the generic extern dispatch below, or e.g. `.Clone()`
+        // would silently shallow-copy the bundle WRAPPER (aliasing the same flat backing) instead of
+        // the logical array, and `.GetLength(d)`/`.GetUpperBound(d)` would read the wrapper's own
+        // (wrong) shape. GetLength(d) = bundle[1+d] unboxed; GetUpperBound(d) = GetLength(d)-1. Every
+        // other Array member (Clone/CopyTo/SetValue/…) is a new loud reject (N-R4).
+        if (op.Instance != null && IsNdimArray(op.Instance.Type))
+        {
+            var ndimMethodType = (IArrayTypeSymbol)op.Instance.Type;
+            var bundleVal = VisitExpression(op.Instance);
+            switch (target.Name)
+            {
+                case "GetLength": return EmitNdimGetLength(bundleVal, VisitExpression(op.Arguments[0].Value));
+                case "GetUpperBound": return EmitNdimGetUpperBound(bundleVal, VisitExpression(op.Arguments[0].Value));
+                default:
+                    RejectNdimArrayMember(target.Name);
+                    return null; // unreachable
+            }
+        }
+
         // Generic GetComponent<T>() / GetComponentInChildren<T>() / GetComponentsInChildren<T>() etc.
         // Udon VM uses non-generic form with typeof(T) parameter.
         if (target.IsGenericMethod && target.Name.StartsWith("GetComponent")
@@ -86,6 +107,16 @@ public partial class InvocationHandler
         var outCopyBacks = new List<(int argIdx, string tempField, System.Action<CLeaf> store)>();
         for (int i = 0; i < op.Arguments.Length; i++)
         {
+            // N-R1 (design 2026-07-04 §2/§4): a Rank>1 array's runtime value is an object[] bundle,
+            // not a real System*Array — an extern parameter (however it's typed: object, Array, a
+            // concrete SDK array, …) would silently receive the wrong shape. Checked on the ARGUMENT's
+            // static type before any of the branches below (params expansion / ref-out / plain) so no
+            // path can smuggle a bundle past this choke point. Unwrap conversions FIRST — passing a
+            // T[,] to an `object`/`Array`-typed parameter wraps it in an implicit IConversionOperation
+            // whose OWN Type is the widened target, hiding the T[,] source type from a direct check.
+            if (IsNdimArray(UnwrapConversions(op.Arguments[i].Value).Type))
+                throw new System.NotSupportedException(ExternResolver.MultidimExternArgMessage);
+
             var param = target.Parameters[i];
             if (param.IsParams && paramsElems != null)
             {
@@ -807,6 +838,11 @@ public partial class InvocationHandler
             // invoked for an Out param; kept for symmetry with the leg-bearing cases above).
             case IDiscardOperation:
                 return (() => (CLeaf)null, _ => { });
+            // N-dim array element (design 2026-07-04 §2): lift the single-index exclusion below —
+            // PrepareNdimRefOutArg evaluates every index once and caches the bounds/backing/flat-index
+            // plan, mirroring the single-index arm's (arrayVal, indexVal) caching.
+            case IArrayElementReferenceOperation ndimArrayElem when ndimArrayElem.Indices.Length > 1:
+                return PrepareNdimRefOutArg(ndimArrayElem);
             case IArrayElementReferenceOperation arrayElem
                 when arrayElem.Indices.Length == 1
                      && arrayElem.Indices[0] is not IRangeOperation:

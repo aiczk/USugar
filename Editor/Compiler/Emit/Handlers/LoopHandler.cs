@@ -130,12 +130,21 @@ public class LoopHandler : HandlerBase, IOperationHandler
 
         var arrayTypeSymbol = (IArrayTypeSymbol)collectionOp.Type;
         var elemType = GetUdonType(arrayTypeSymbol.ElementType);
-        var arrayType = GetArrayType(arrayTypeSymbol);
-        var elemAccessorType = GetArrayElemType(arrayTypeSymbol);
+
+        // N-dim array (design 2026-07-04 §2): foreach visits the FLAT BACKING, not the bundle wrapper
+        // — C# row-major order over all elements falls out of iterating the backing in flat-index
+        // order (the backing's own construction already wrote elements row-major). Unwrap bundle[0]
+        // ONCE here; everything below (cached length, index loop, Get) is then IDENTICAL to the rank-1
+        // path, just against the backing array's own type instead of the bundle's SystemObjectArray tag.
+        bool isNdim = IsNdimArray(arrayTypeSymbol);
+        var backingTypeSymbol = isNdim ? GetNdimBackingType(arrayTypeSymbol) : arrayTypeSymbol;
+        var arrayType = GetArrayType(backingTypeSymbol);
+        var elemAccessorType = GetArrayElemType(backingTypeSymbol);
 
         // collVal is a single-assignment scratch leaf under ANF — the collection reference is loop-invariant
         // and stable, so it can be re-read directly in the length read and the body without a snapshot slot.
         var collVal = VisitExpression(collectionOp);
+        if (isNdim) collVal = EmitNdimGetBacking(collVal, backingTypeSymbol);
 
         // Declare loop variable
         var loopLocal = op.Locals.FirstOrDefault()

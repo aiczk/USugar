@@ -169,6 +169,24 @@ public partial class InvocationHandler
                 TryMarkReentrantCrossDispatch(op, ifaceGetter)); // wave-12 r2 [V1]
         }
 
+        // N-dim array (design 2026-07-04 §2/N-R4): Rank>1 array VALUE is an object[] bundle whose Udon
+        // type tag (SystemObjectArray) happens to have REAL, valid Rank/Length externs registered — MUST
+        // intercept before the generic extern-getter fallback below, or ".Rank"/".Length" would silently
+        // read the bundle wrapper's own shape (rank always 1, length always 1+r) instead of the logical
+        // array's. Length reads the FLAT BACKING's length (§2); Rank is a compile-time constant.
+        if (op.Instance != null && IsNdimArray(op.Instance.Type))
+        {
+            var ndimPropType = (IArrayTypeSymbol)op.Instance.Type;
+            switch (op.Property.Name)
+            {
+                case "Length": return EmitNdimLength(VisitExpression(op.Instance), ndimPropType);
+                case "Rank": return EmitNdimRank(ndimPropType);
+                default:
+                    RejectNdimArrayMember(op.Property.Name);
+                    return null; // unreachable
+            }
+        }
+
         // Other instance.property → extern getter
         var instVal = VisitExpression(op.Instance);
         // Array .Length → use SystemArray (not the concrete array type) to match UdonSharp

@@ -57,6 +57,13 @@ public class SimpleAssignmentHandler : AssignmentHandlerBase, IExpressionHandler
         if (assign.Target is IArrayElementReferenceOperation arrayElem)
         {
             RejectStaticReadonlyWriteThrough(arrayElem.ArrayReference); // §3.3, R5
+            if (arrayElem.Indices.Length > 1)
+            {
+                var ndimStore = PrepareNdimElementSet(arrayElem);
+                var ndimSrcVal = VisitExpression(assign.Value);
+                ndimStore(ndimSrcVal);
+                return ndimSrcVal;
+            }
             var arrayVal = VisitExpression(arrayElem.ArrayReference);
             var arrSymbol = arrayElem.ArrayReference.Type as IArrayTypeSymbol;
             var indexVal = ResolveArrayIndex(arrayVal, GetArrayType(arrSymbol), arrayElem.Indices[0]);

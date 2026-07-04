@@ -18,6 +18,8 @@ public class ArrayHandler : HandlerBase, IExpressionHandler
 
     CLeaf VisitArrayCreation(IArrayCreationOperation op)
     {
+        if (IsNdimArray(op.Type)) return EmitNdimArrayCreation(op);
+
         var arrayType = GetUdonType(op.Type);
         var elementType = GetArrayElemType((IArrayTypeSymbol)op.Type);
         var elemSym = ((IArrayTypeSymbol)op.Type).ElementType;
@@ -59,6 +61,8 @@ public class ArrayHandler : HandlerBase, IExpressionHandler
 
     CLeaf VisitArrayElementReference(IArrayElementReferenceOperation op)
     {
+        if (op.Indices.Length > 1) return EmitNdimElementRead(op);
+
         var index = op.Indices[0];
 
         // Range slicing: arr[1..3]
