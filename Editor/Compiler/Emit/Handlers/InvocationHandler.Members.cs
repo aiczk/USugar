@@ -227,7 +227,14 @@ public partial class InvocationHandler
         // User-defined indexer on this/base class → internal getter call (`this[i]` reads this-fields
         // directly). ResolveDispatchProperty (round 7): `this[i]` inside an inherited base body binds
         // the BASE indexer — dispatch the chain-leaf override; `base[i]` keeps the static binding.
+        // B48: a struct's `this[i]` (implicit-`this` receiver whose type is a user struct) must NOT take
+        // this class-receiver arm — the struct getter is a CFunction expecting the receiver object[] as
+        // param0, and calling it with only the index args slots the index into the receiver slot
+        // (HeapTypeMismatch 'Int32' as 'Object[]' inside the getter's field read). It falls through to
+        // the struct arm below, which passes LoadInstanceRaw(this) = the receiver param — mirroring how
+        // a struct's `this.Method()` self-call routes through EmitStructInstanceCall (struct-first).
         if (op.Instance is IInstanceReferenceOperation
+            && !EmitContext.IsAggregateType(op.Property.ContainingType)
             && ResolveDispatchProperty(op) is { GetMethod: { } idxDispatchGetter }
             && _methodFunctions.ContainsKey(idxDispatchGetter))
         {
