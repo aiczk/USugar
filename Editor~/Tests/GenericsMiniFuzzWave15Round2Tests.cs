@@ -118,6 +118,8 @@ public class CTT : UdonSharpBehaviour {
     [InlineData("FN1", "result = this.name;", "public string result;")]
     [InlineData("FN2", "result = name;", "public string result;")]
     [InlineData("FN3", "result = gameObject.name;", "public string result;")]
+    [InlineData("FN4", "this.name = \"x\";", "")]                 // B55 setter door: property-SET write-back
+    [InlineData("FN5", "gameObject.name = \"z\";", "")]           // inherited settable property on a concrete receiver
     public void OwnerFunnel_InheritedUnityMember_ResolvesReceiverType(string cls, string body, string field)
     {
         var uasm = TestHelper.CompileToUasm($@"

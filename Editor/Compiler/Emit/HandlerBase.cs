@@ -68,6 +68,27 @@ public abstract partial class HandlerBase
         return t.Substring(0, t.Length - "Array".Length);
     }
 
+    // Extern-owner resolution choke point (B55/B59/B60 + audit): an INHERITED instance member is
+    // registered in Udon under the RECEIVER's own static type, not its declaring base (System.Object /
+    // ValueType / Enum / Reflection.MemberInfo / UnityEngine.Component|Behaviour). Every site that builds
+    // an instance member's extern owner (getter/this-getter/indexer/property-set/field-set/method-call)
+    // routes through here. Array receivers are excluded — they keep their own owner logic (SystemArray for
+    // .Length, element-typed array otherwise). A user-struct (object[]-emulated) receiver of an inherited
+    // Object/ValueType member has no extern and ValueType semantics cannot be emulated → the designed loud
+    // reject (B60), matching the type-parameter case.
+    protected ITypeSymbol ResolveExternOwnerType(ITypeSymbol memberContainingType, ITypeSymbol receiverType, string memberName)
+    {
+        if (receiverType is not INamedTypeSymbol recv
+            || SymbolEqualityComparer.Default.Equals(memberContainingType, recv))
+            return memberContainingType;
+        if (EmitPolicy.IsAggregateType(recv))
+            throw new NotSupportedException(
+                $"'{memberName}' on user-defined struct '{recv.Name}' is not supported: Udon has no extern "
+                + "for it and C#'s ValueType semantics (field-wise Equals, type-name ToString) cannot be "
+                + "emulated. Compare/format the struct's fields directly instead.");
+        return recv;
+    }
+
     // The single place a System.Type CONSTANT (type token) is baked — `o is T`, `typeof(T)`, and the
     // GetComponent<T> type-token arg all route here. A SystemType const is a heap constant no validator
     // checks, so an UNRESOLVED type parameter would silently resolve to a null System.Type and NRE at

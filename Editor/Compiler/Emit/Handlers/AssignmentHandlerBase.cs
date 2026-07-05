@@ -189,7 +189,7 @@ public abstract class AssignmentHandlerBase : HandlerBase
                 when fieldRef2.Field.ContainingType.IsValueType:
             {
                 var instanceVal = VisitExpression(fieldRef2.Instance);
-                var containingType = GetUdonType(fieldRef2.Field.ContainingType);
+                var containingType = GetUdonType(ResolveExternOwnerType(fieldRef2.Field.ContainingType, fieldRef2.Instance?.Type, fieldRef2.Field.Name));
                 var valueType = GetUdonType(fieldRef2.Field.Type);
                 var sig = ExternResolver.BuildPropertyGetSignature(containingType, fieldRef2.Field.Name, valueType);
                 var valResult = ExternCall(sig, new List<CLeaf> { instanceVal }, valueType);
@@ -376,11 +376,10 @@ public abstract class AssignmentHandlerBase : HandlerBase
             // Resolve containing type and instance
             case IPropertyReferenceOperation propRef:
             {
-                var containingType = GetUdonType(propRef.Property.ContainingType);
-                if (containingType is "UnityEngineBehaviour" or "UnityEngineMonoBehaviour")
-                    containingType = propRef.Instance is IInstanceReferenceOperation
-                        ? GetUdonType(_classSymbol)
-                        : GetUdonType(propRef.Instance.Type);
+                // B55 setter door: the property-SET write-back resolves its extern owner through the same
+                // inherited-member choke point as the getter (subsumes the former Behaviour fixup). Static
+                // (Instance null) → declaring type; inherited instance member → receiver's static type.
+                var containingType = GetUdonType(ResolveExternOwnerType(propRef.Property.ContainingType, propRef.Instance?.Type, propRef.Property.Name));
 
                 CLeaf wbInstanceVal;
                 if (propRef.Instance is IInstanceReferenceOperation)
@@ -421,7 +420,7 @@ public abstract class AssignmentHandlerBase : HandlerBase
             {
                 // Struct field setter (e.g., vec.y += 3f where vec is an array element)
                 var instanceVal = lv.InstanceVal ?? VisitExpression(fieldRef2.Instance);
-                var containingType = GetUdonType(fieldRef2.Field.ContainingType);
+                var containingType = GetUdonType(ResolveExternOwnerType(fieldRef2.Field.ContainingType, fieldRef2.Instance?.Type, fieldRef2.Field.Name));
                 var valueType = GetUdonType(fieldRef2.Field.Type);
                 var sig = ExternResolver.BuildFieldSetSignature(containingType, fieldRef2.Field.Name, valueType);
                 EmitExternVoid(sig, new List<CLeaf> { instanceVal, valueVal });
