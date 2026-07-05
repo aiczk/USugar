@@ -311,26 +311,50 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
                != DelegateAbi.BuildSigPart(dstInvoke, typeParamMap);
     }
 
+    // B82 (wave-16, ruling Option A): a class→object(-erased) conversion is legal ONLY when it is the DIRECT
+    // operand of a ==/!= comparison or an argument of object.Equals/.Equals — the reference-equality lowering
+    // (E2 shape) genuinely needs the class as object. Every other position (object local, array/field element,
+    // call argument, string.Format arg) is a laundering channel that erases the class's static identity and
+    // defeats the §2-1 boundary checks, so it rejects.
+    static bool IsClassToObjectEqualityPosition(IConversionOperation conv)
+    {
+        switch (conv.Parent)
+        {
+            case IBinaryOperation { OperatorKind: BinaryOperatorKind.Equals or BinaryOperatorKind.NotEquals }:
+                return true;
+            case IArgumentOperation { Parent: IInvocationOperation inv }
+                when inv.TargetMethod.Name == "Equals"
+                    && inv.TargetMethod.ContainingType.SpecialType
+                        is SpecialType.System_Object or SpecialType.System_ValueType:
+                return true;
+            default:
+                return false;
+        }
+    }
+
     CLeaf VisitConversion(IConversionOperation conv)
     {
         RejectChecked(conv.IsChecked);
 
-        // CA-M1 §2-1: `(object[])(object)foo` / `foo as object[]` — laundering a v1 class to its raw object[]
-        // bundle (a class IS an object[] at runtime, so the cast would silently succeed and hand back the
-        // internal slots, forging identity the is/type-test choke otherwise denies). Reject when the operand,
-        // through any object/object[] intermediate conversions, statically carries a v1 class and the
-        // destination is object[]. Establishes "unforgeable" by construction (the delegate-launder mirror).
-        if (ResolveType(conv.Type) is IArrayTypeSymbol clsArrDst
-            && clsArrDst.ElementType.SpecialType == SpecialType.System_Object)
-        {
-            var launderRoot = conv.Operand;
-            while (launderRoot is IConversionOperation lrc) launderRoot = lrc.Operand;
-            if (launderRoot.Type != null && EmitPolicy.IsUserClassType(ResolveType(launderRoot.Type)))
-                throw new System.NotSupportedException(
-                    $"Casting the v1 user class '{ResolveType(launderRoot.Type).Name}' to object[] is not "
-                    + "supported: it would expose the class's internal object[] bundle and forge an identity "
-                    + "the runtime type-test choke denies. Keep the value typed as its class type.");
-        }
+        // B82 (wave-16, ruling Option A): reject a user-level conversion that ERASES a v1 class to a non-class
+        // type (object / object[] / any object-erased type). A class value is a program-local object[] bundle
+        // with NO runtime type identity, so once erased to object it launders past every §2-1 boundary check
+        // that keys on the declared type (cross-call arg, object[] field element, string.Format arg,
+        // (object[])(object)foo forge). Unlike a delegate (which carries provenance and gets dispatch-time
+        // target checks, so delegate→object stays a passthrough), a class MUST be contained at the erasure.
+        // The sole exemption is the equality/Equals operand position (§reference-equality lowering, E2 shape);
+        // an in-program `object o = classInstance` is the documented over-rejection (E1 shape). Closure-env
+        // capture stores the ref via a compiler-emitted EnvEmit.Write, not a user conversion — it never lands
+        // here (the F1 execution-locality pin stays green).
+        if (ResolveType(conv.Operand.Type) is { } b82Src && EmitPolicy.ContainsUserClassType(b82Src)
+            && ResolveType(conv.Type) is { } b82Dst && !EmitPolicy.ContainsUserClassType(b82Dst)
+            && !IsClassToObjectEqualityPosition(conv))
+            throw new System.NotSupportedException(
+                $"Erasing the v1 user class '{b82Src.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}' "
+                + $"to '{b82Dst.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}' is not supported: "
+                + "a class value is a program-local object[] bundle with no runtime type identity, so once boxed "
+                + "to object it launders past the cross-program / cast / ToString boundary checks. Compare class "
+                + "references directly, or keep the value class-typed / use Foo[].");
 
         var srcVal = VisitExpression(conv.Operand);
 
