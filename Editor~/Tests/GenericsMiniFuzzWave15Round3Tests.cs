@@ -165,8 +165,8 @@ public class B67N : UdonSharpBehaviour {
         // The synthesized value→name helper exists and its label is reached (all three sites route to it);
         // the member-name string constants live in the data table so are not asserted as inline text here —
         // their VALUES are pinned on the real VM (Wave15Batch4RegressionTests).
-        Assert.Contains("__enumstr_Suit67:", uasm);
-        Assert.Contains("__enumstr_Suit67__ret", uasm);
+        Assert.Contains("__enumstr_TSuit67:", uasm);
+        Assert.Contains("__enumstr_TSuit67__ret", uasm);
     }
 
     [Fact]
@@ -413,5 +413,105 @@ public class B65N : UdonSharpBehaviour {
   public Behaviour b;
   void Start(){ b.enabled = false; }
 }", "B65N"));
+    }
+
+    // ── B76: B66's array carve-out gated on the ELEMENT's distinguishability, the wrong axis. Component[]'s
+    //         element (UnityEngine.Component) is runtime-distinguishable, but the ARRAY folds to
+    //         UnityEngineComponentArray — a collapse tag shared with behaviour[]/interface[] arrays — so
+    //         typeof(Component[]) escaped the gate and myBehaviourArray.GetType()==typeof(Component[]) was
+    //         silently true (the exact laundering B63 enumerates). The carve-out is re-gated on the ARRAY's
+    //         OWN runtime tag with an explicit object[]-only exemption for the stock-conformant fold. ──
+
+    [Fact]
+    public void B76_ComponentArrayTypeof_FoldingArray_RejectsLoudly()
+    {
+        // Component[] → UnityEngineComponentArray, the same collapse tag a UdonSharpBehaviour[] or user
+        // interface[] carries; stored and compared it lies, so the mint must reject even though the element
+        // Component is itself distinguishable.
+        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
+using UnityEngine; using UdonSharp;
+public class B76C : UdonSharpBehaviour { public int result; void Start(){ System.Type t1 = typeof(Component[]); System.Type t2 = typeof(Component[]); result = (t1 == t2) ? 1 : 0; } }", "B76C"));
+        Assert.Contains("typeof(", ex.Message);
+    }
+
+    [Fact]
+    public void B76_DistinguishableAndStockArrayTypeof_StillCompile()
+    {
+        // Controls: int[]/Camera[] have unique array tags (distinguishable on their own axis), and object[]
+        // is the stock-conformant SystemObjectArray fold — all stay legal to store and compare.
+        TestHelper.CompileToUasm(@"
+using UnityEngine; using UdonSharp;
+public class B76D : UdonSharpBehaviour {
+  public int result;
+  void Start(){ System.Type t1 = typeof(int[]); System.Type t2 = typeof(Camera[]); System.Type t3 = typeof(object[]);
+    result = (t1 == t2 ? 1 : 0) + (t3 == typeof(object[]) ? 2 : 0); }
+}", "B76D");
+    }
+
+    // ── B77: the enum ToString helper name was a lossy ToDisplayString().Replace('.','_') — non-injective
+    //         (ns Foo.Bar type Baz and ns Foo type Bar_Baz both → __enumstr_Foo_Bar_Baz), so two collision-
+    //         shaped enums overwrote one another in _funcByName and emitted duplicate helper labels. The name
+    //         is now derived from the enum's namespace/containing-type chain with per-segment underscore
+    //         doubling (injective; still a pure function of the symbol, so mint and drain sites agree). VM
+    //         value parity for both is pinned in the harness (Wave15Batch6RegressionTests). ──
+
+    [Fact]
+    public void B77_CollisionShapedEnums_GetDistinctHelpers()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using System; using UdonSharp;
+namespace Foo.Bar { public enum Baz { A, B } }
+namespace Foo { public enum Bar_Baz { C, D } }
+public class B77E : UdonSharpBehaviour {
+  public int seed; public string r1; public string r2;
+  void Start(){ Foo.Bar.Baz x = (Foo.Bar.Baz)(seed % 2); Foo.Bar_Baz y = (Foo.Bar_Baz)(seed % 2); r1 = x.ToString(); r2 = y.ToString(); }
+}", "B77E");
+        // Two distinct helper functions, neither overwriting the other (bug: one lossy name → one shared
+        // __ret var). The per-helper __ret var uniquely names each helper (block labels/params are noisy).
+        var rets = new System.Collections.Generic.HashSet<string>();
+        foreach (System.Text.RegularExpressions.Match mm in
+                 System.Text.RegularExpressions.Regex.Matches(uasm, @"__enumstr_[A-Za-z0-9_]+?__ret"))
+            rets.Add(mm.Value);
+        Assert.Equal(2, rets.Count);
+    }
+
+    // ── B78: ClosureCapturesDefScopedVar was a hand-rolled twin of CollectInsideSymbols that omitted
+    //         IDeclarationExpressionOperation (out-var / deconstruction) — so a static generic's closure using
+    //         ONLY its own out-var/deconstruction locals had those locals mistaken for def-scope captures and
+    //         wrongly tripped the B64C multi-instantiation capture-alias reject. The twin now consumes the
+    //         shared collector. VM parity (divergent instantiations) is pinned in the harness. ──
+
+    [Fact]
+    public void B78_StaticGeneric_OutVarOnlyClosure_TwoInstantiations_Compiles()
+    {
+        // H78's closure declares its OWN deconstruction locals (a,b) and captures nothing from the method's
+        // scope; only U varies across the two calls. Nothing aliases, so it must compile (the twin's blind
+        // spot classified a,b as def-scope captures → static + varying-U → false reject).
+        TestHelper.CompileToUasm(@"
+using System; using UdonSharp;
+public static class H78 {
+  public static int Run<T, U>(T t, U u) { System.Func<int> inner = () => { var (a, b) = (2, 3); return a + b; }; return inner(); }
+}
+public class B78A : UdonSharpBehaviour {
+  public int result;
+  void Start(){ int a = H78.Run<int, string>(3, ""x""); int b = H78.Run<int, bool>(4, true); result = a + b; }
+}", "B78A");
+    }
+
+    [Fact]
+    public void B78_StaticGeneric_GenuineDefScopeCapture_StillRejects()
+    {
+        // Control against over-widening: the closure genuinely captures the method's own parameter `t`
+        // alongside its deconstruction locals — that aliases across the static specs and must still reject.
+        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
+using System; using UdonSharp;
+public static class H78B {
+  public static int Run<T, U>(int t, U u) { System.Func<int> inner = () => { var (a, b) = (2, 3); return a + b + t; }; return inner(); }
+}
+public class B78B : UdonSharpBehaviour {
+  public int result;
+  void Start(){ int a = H78B.Run<int, string>(3, ""x""); int b = H78B.Run<int, bool>(4, true); result = a + b; }
+}", "B78B"));
+        Assert.Contains("captures locals/parameters", ex.Message);
     }
 }

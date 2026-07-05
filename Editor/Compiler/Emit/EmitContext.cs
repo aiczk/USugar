@@ -204,25 +204,16 @@ public class EmitContext
     // ANCESTOR scope's variable (e.g. a generic local function Lf<T> capturing the enclosing non-generic
     // method's local) is shared legitimately — there is one ancestor activation, so both specs must read
     // it, and the per-spec __envp keying (Stage-2 M5) plumbs it correctly. A `this`/field capture is
-    // invariant across activations and never aliases. (Boolean twin of LambdaCaptureAnalyzer's set.)
+    // invariant across activations and never aliases. B78: the closure's own declarations are collected via
+    // the SHARED LambdaCaptureAnalyzer.CollectInsideSymbols (the former inline twin missed out-var /
+    // deconstruction declarations, so a closure using only its own out-var locals was mistaken for a
+    // def-scope capture and false-rejected).
     static bool ClosureCapturesDefScopedVar(IMethodSymbol closureSym, IOperation closureBody, IMethodSymbol def)
     {
         if (closureBody == null) return false;
         var inside = new HashSet<ISymbol>(SymbolEqualityComparer.Default);
         if (closureSym != null) foreach (var p in closureSym.Parameters) inside.Add(p);
-        foreach (var d in closureBody.DescendantsAndSelf())
-        {
-            switch (d)
-            {
-                case IVariableDeclaratorOperation decl: inside.Add(decl.Symbol); break;
-                case IDeclarationPatternOperation dp when dp.DeclaredSymbol != null: inside.Add(dp.DeclaredSymbol); break;
-                case IRecursivePatternOperation rp when rp.DeclaredSymbol != null: inside.Add(rp.DeclaredSymbol); break;
-                case IAnonymousFunctionOperation naf when naf.Symbol != null:
-                    foreach (var p in naf.Symbol.Parameters) inside.Add(p); break;
-                case ILocalFunctionOperation nlf when nlf.Symbol != null:
-                    foreach (var p in nlf.Symbol.Parameters) inside.Add(p); break;
-            }
-        }
+        LambdaCaptureAnalyzer.CollectInsideSymbols(closureBody, inside);
         foreach (var d in closureBody.DescendantsAndSelf())
         {
             if (d is ILocalReferenceOperation lr && !inside.Contains(lr.Local)

@@ -76,7 +76,10 @@ public sealed class LambdaCaptureAnalyzer
         _ => (null, null),
     };
 
-    static void CollectInsideSymbols(IOperation body, HashSet<ISymbol> inside)
+    // Exposed so EmitContext's def-scope-capture pin walks the SAME self-declaration set (B78: its former
+    // hand-rolled twin missed out-var/deconstruction declarations, false-rejecting a static generic whose
+    // closure used only its own out-var locals). Seed params separately, exactly as GetCaptures does.
+    internal static void CollectInsideSymbols(IOperation body, HashSet<ISymbol> inside)
     {
         foreach (var op in body.DescendantsAndSelf())
         {

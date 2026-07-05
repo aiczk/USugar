@@ -1644,8 +1644,22 @@ public abstract partial class HandlerBase
     }
 
     // B67: the synthesized value→name helper's name for a user enum (one per enum, drained in UasmEmitter).
+    // B77: the name MUST be injective. The former ToDisplayString().Replace('.','_') was lossy — ns Foo.Bar
+    // type Baz and ns Foo type Bar_Baz both mapped to __enumstr_Foo_Bar_Baz, so two enums overwrote one
+    // another in _funcByName and emitted a corrupt shared helper. Derive it from the enum's containing-type
+    // (nesting) then namespace chain, each segment carrying a T/N kind marker and its underscores doubled, so
+    // distinct enums never collide (a lone '_' is always a separator; '__' is always an escaped literal
+    // underscore) — while staying a pure function of the symbol, so the mint and drain sites still agree.
     internal static string EnumToStringHelperName(INamedTypeSymbol enumType)
-        => "__enumstr_" + SanitizeId(enumType.ToDisplayString());
+    {
+        var chain = new List<string>();
+        for (INamedTypeSymbol t = enumType; t != null; t = t.ContainingType)
+            chain.Add("T" + t.Name.Replace("_", "__"));
+        for (var ns = enumType.ContainingNamespace; ns != null && !ns.IsGlobalNamespace; ns = ns.ContainingNamespace)
+            chain.Add("N" + ns.Name.Replace("_", "__"));
+        chain.Reverse();
+        return "__enumstr_" + string.Join("_", chain);
+    }
 
     /// <summary>B67: if <paramref name="type"/> is a user enum, convert its (already underlying-int)
     /// <paramref name="value"/> to the C#-correct NAME string via the synthesized per-enum helper and return

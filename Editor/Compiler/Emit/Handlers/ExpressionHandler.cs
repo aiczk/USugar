@@ -630,17 +630,17 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
         var operand = typeOf.TypeOperand;
         // object[]'s fold to SystemObjectArray IS UdonSharp's intended representation (a jagged/object array
         // genuinely IS object[] at the VM level — GetType()==typeof(object[]) is documented, SDK-Compat-pinned
-        // behaviour), so typeof(object[]) is unrestricted. But an array whose ELEMENT is itself
-        // non-injective — a user struct/tuple (S1[]), a delegate, a user interface, or another array (jagged
-        // int[][]) — folds to the SAME SystemObjectArray tag as a sibling and is the C#-divergent identity
-        // collapse B63 targets (B66: typeof(S1[])==typeof(S2[]) was silently true). Reuse the choke point's
-        // own element classification: exempt the array only when its element is runtime-distinguishable AND
-        // not itself an array (that leaves exactly object[] among the folding arrays; distinguishable-element
-        // arrays like int[]/Camera[] already pass IsRuntimeDistinguishable below).
-        bool distinguishableElementArray = operand is IArrayTypeSymbol arr
-            && arr.ElementType is not IArrayTypeSymbol
-            && ExternResolver.IsRuntimeDistinguishable(arr.ElementType, _ctx.TypeParamMap);
-        if (!distinguishableElementArray
+        // behaviour), so typeof(object[]) is unrestricted. B76: the exemption MUST gate on the ARRAY's own
+        // runtime tag, not its element's. Component[] has a runtime-distinguishable ELEMENT (UnityEngine.
+        // Component) yet the array itself folds to UnityEngineComponentArray — the SAME collapse tag a
+        // UdonSharpBehaviour[] / user interface[] carries — so an element-axis test let typeof(Component[])
+        // escape and lie (myBehaviourArray.GetType()==typeof(Component[]) silently true, the B63 vector). The
+        // distinguishable arrays (int[]/Camera[]) pass IsRuntimeDistinguishable(operand) below on their own
+        // unique tag; the one folding array that stays legal is object[], carved out explicitly.
+        bool stockObjectArray = operand is IArrayTypeSymbol arr
+            && arr.Rank == 1
+            && arr.ElementType.SpecialType == SpecialType.System_Object;
+        if (!stockObjectArray
             && !ExternResolver.IsRuntimeDistinguishable(operand, _ctx.TypeParamMap)
             && !IsDirectComponentQueryArgument(typeOf))
             throw new NotSupportedException(
