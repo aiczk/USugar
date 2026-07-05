@@ -1351,9 +1351,9 @@ public abstract partial class HandlerBase
     /// order and landed writes in the wrong cell when the legs read state the RHS mutates).</summary>
     protected System.Action<CLeaf> PreparePropertySet(IPropertyReferenceOperation propRef)
     {
-        // Aggregate (struct/tuple) auto-property → layout slot write on the backing object[].
+        // Aggregate (struct/tuple) OR v1-class auto-property → layout slot write on the backing object[].
         if (propRef.Instance is { Type: INamedTypeSymbol aggContaining } aggInst
-            && EmitPolicy.IsAggregateType(aggContaining)
+            && EmitPolicy.IsObjectArrayEmulated(aggContaining)
             && _ctx.GetAggregateLayout(aggContaining).TryGetIndex(propRef.Property.Name, out var aggSlotIndex))
         {
             var arrExpr = LoadInstanceRaw(aggInst);
@@ -1364,7 +1364,7 @@ public abstract partial class HandlerBase
         // Computed (non-auto) struct property setter: p.Both = v → call the user setter with the receiver
         // object[] as synthetic param0 (mutates this-fields through the shared backing array).
         if (propRef.Property is { IsIndexer: false, SetMethod: { } aggSetterRaw }
-            && propRef.Instance?.Type is INamedTypeSymbol aggSetType && EmitPolicy.IsAggregateType(aggSetType))
+            && propRef.Instance?.Type is INamedTypeSymbol aggSetType && EmitPolicy.IsObjectArrayEmulated(aggSetType))
         {
             var aggSetter = ResolveStructMember(aggSetterRaw);
             var aggRecv = LoadInstanceRaw(propRef.Instance);
@@ -1376,7 +1376,7 @@ public abstract partial class HandlerBase
         // receiver object[] as param0, the index args, then the value. Mirrors the GET routing in
         // VisitIndexerGet; without it this falls to a bogus SystemObjectArray.__set_Item extern. (diff-fuzz wave 4)
         if (propRef.Property is { IsIndexer: true, SetMethod: { } aggIdxSetterRaw }
-            && propRef.Instance?.Type is INamedTypeSymbol aggIdxSetType && EmitPolicy.IsAggregateType(aggIdxSetType))
+            && propRef.Instance?.Type is INamedTypeSymbol aggIdxSetType && EmitPolicy.IsObjectArrayEmulated(aggIdxSetType))
         {
             var aggIdxSetter = ResolveStructMember(aggIdxSetterRaw);
             var setterArgs = new List<CLeaf> { LoadInstanceRaw(propRef.Instance) };
@@ -2036,6 +2036,16 @@ public abstract partial class HandlerBase
                 + "shared object[], so the delegate would alias the live receiver and observe its later mutations "
                 + "(a silent value divergence). Wrap the call in a behaviour method and bind that instead.");
 
+        // CA-M1: a v1 class instance method bound as a delegate. The delegate bundle's target slot expects an
+        // IUdonEventReceiver (a behaviour) for cross-program dispatch, but a class instance is an object[]
+        // bundle — no dispatch entry point exists for it. Wrap it in a lambda instead.
+        if (op.Target is IMethodReferenceOperation && !targetMethod.IsStatic
+            && targetMethod.ContainingType is INamedTypeSymbol classCt && EmitPolicy.IsUserClassType(classCt))
+            throw new System.NotSupportedException(
+                $"A delegate cannot be created from v1 class instance method '{classCt.Name}.{targetMethod.Name}': "
+                + "a user class is not a dispatch target for the delegate ABI. Wrap the call in a lambda instead "
+                + $"('() => receiver.{targetMethod.Name}(...)').");
+
         // Wave-12 r4 [W3]: a method group bound to an INTERFACE member (`cb = iface.Get`) previously
         // ICEd in GetDelegateBridgeLayout ('No delegate bridge'). It cannot compile correctly today:
         // bundle[1] is SendCustomEvent'd on the RUNTIME receiver, so it must name a __dlgc_-convention
@@ -2630,11 +2640,47 @@ public abstract partial class HandlerBase
     /// automatically by UasmEmitter.TagLocation (the statement/expression dispatch wraps every handler).</summary>
     protected void GuardUserStructMemberReachedExtern(ITypeSymbol containingType, string memberName)
     {
-        if (containingType is INamedTypeSymbol ct && EmitPolicy.IsUserStruct(ct))
+        // CA-M1: the same armor covers a v1 class member (object[]-emulated) — a class instance member
+        // that reached the extern path was not routed to its CFunction (collector-scope drift), which
+        // would otherwise mint a bogus SystemObjectArray.__<Name>__ extern.
+        if (containingType is INamedTypeSymbol ct && EmitPolicy.IsObjectArrayEmulated(ct))
             throw new InvalidOperationException(
-                $"user-struct member '{ct.Name}.{memberName}' reached emission without a registered "
+                $"user struct/class member '{ct.Name}.{memberName}' reached emission without a registered "
                 + "CFunction — a Phase-1 collector or on-demand registration arm does not cover this "
                 + "member/reach shape (collector-scope drift; see roadmap B46/B47 family).");
+    }
+
+    /// <summary>CA-M1: a v1 user class defines NO user-defined operators or conversions (design §2 "ユーザー
+    /// 演算子なし"). Reject one loudly — a class `==`/`!=` is REFERENCE equality (no user operator), and any
+    /// other user operator has no lowering. A struct operator (IsUserStruct) is unaffected: it routes to its
+    /// registered method at its own site, so this only fires for a v1 class operator method.</summary>
+    protected static void RejectClassUserOperator(IMethodSymbol opMethod)
+    {
+        if (opMethod is { MethodKind: MethodKind.UserDefinedOperator or MethodKind.Conversion }
+            && opMethod.ContainingType is INamedTypeSymbol opCt && EmitPolicy.IsUserClassType(opCt))
+            throw new NotSupportedException(
+                $"User-defined operator '{opCt.Name}.{opMethod.Name}' on a v1 user class is not supported: "
+                + "a class has reference semantics (== / != compare object identity) and no user operator or "
+                + "conversion is emitted. Call a named method instead.");
+    }
+
+    /// <summary>CA-M1: v1 rejects inheritance/polymorphism, so a v1 class member may not be virtual, abstract,
+    /// or override (the only overridable base is System.Object, so `override Equals/GetHashCode/ToString`
+    /// lands here too). Scanned once at the mint site — every instantiated class passes through it.</summary>
+    protected static void RejectUnsupportedClassMembers(INamedTypeSymbol classTy)
+    {
+        foreach (var m in classTy.GetMembers())
+        {
+            if (m.IsImplicitlyDeclared) continue;
+            if (m is IMethodSymbol { MethodKind: MethodKind.Ordinary or MethodKind.PropertyGet or MethodKind.PropertySet } || m is IPropertySymbol)
+            {
+                if (m.IsVirtual || m.IsAbstract || m.IsOverride)
+                    throw new NotSupportedException(
+                        $"Member '{classTy.Name}.{m.Name}' is virtual/abstract/override: class ABI v1 has no "
+                        + "inheritance or virtual dispatch, so declare it non-virtual, or call a named method "
+                        + "directly instead of dispatching through a base type.");
+            }
+        }
     }
 
     /// <summary>True when the dispatch invocation at <paramref name="dispatchOp"/> can re-enter the

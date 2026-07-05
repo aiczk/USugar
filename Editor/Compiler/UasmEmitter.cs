@@ -3163,7 +3163,7 @@ public class UasmEmitter
         // inc-dec through a struct-typed local) — the specific get/set accessor on a user-struct receiver
         // is the callee, independent of a `this` receiver (mirrors the IsInternalCallTo struct arm).
         if (pr.Property is { IsStatic: false } && pr.Property.ContainingType is INamedTypeSymbol saCt
-            && EmitPolicy.IsUserStruct(saCt)
+            && EmitPolicy.IsObjectArrayEmulated(saCt)
             && acc != null && SymbolEqualityComparer.Default.Equals(acc.OriginalDefinition, callee))
             return true;
         if (pr.Instance is not IInstanceReferenceOperation) return false;
@@ -3230,7 +3230,7 @@ public class UasmEmitter
                 // computed property / indexer on a USER-STRUCT receiver — `this` OR a fresh struct
                 // instance (structs compile into this program's accessor functions).
                 if (pr.Property is { IsStatic: false } sprop
-                    && sprop.ContainingType is INamedTypeSymbol sprct && EmitPolicy.IsUserStruct(sprct))
+                    && sprop.ContainingType is INamedTypeSymbol sprct && EmitPolicy.IsObjectArrayEmulated(sprct))
                 {
                     if (sprop.GetMethod is { } sg) yield return sg.OriginalDefinition;
                     if (sprop.SetMethod is { } ss) yield return ss.OriginalDefinition;
@@ -3551,7 +3551,7 @@ public class UasmEmitter
         // there, so this is byte-identical for them.
         if (op is IInvocationOperation inv && inv.TargetMethod is { IsStatic: false } tm
             && tm.MethodKind == MethodKind.Ordinary && !tm.IsImplicitlyDeclared
-            && tm.ContainingType is INamedTypeSymbol it && EmitPolicy.IsUserStruct(it))
+            && tm.ContainingType is INamedTypeSymbol it && EmitPolicy.IsObjectArrayEmulated(it))
             yield return tm;
         // Computed (non-auto) user-struct property: v.Prop (read) or v.Prop = x (write). Auto-properties use
         // their backing-field slot directly (no method), but a computed accessor must be inlined as a struct
@@ -3560,7 +3560,7 @@ public class UasmEmitter
         // is collected the same way — its accessors carry the index args after the synthetic receiver.
         if (op is IPropertyReferenceOperation pr
             && pr.Property is { IsStatic: false } prop
-            && pr.Property.ContainingType is INamedTypeSymbol pit && EmitPolicy.IsUserStruct(pit)
+            && pr.Property.ContainingType is INamedTypeSymbol pit && EmitPolicy.IsObjectArrayEmulated(pit)
             && IsComputedProperty(prop))
         {
             if (prop.GetMethod != null) yield return prop.GetMethod;
@@ -3571,7 +3571,7 @@ public class UasmEmitter
         // here too — else the pattern lowering emits a bogus accessor extern for an unregistered getter.
         if (op is IPropertySubpatternOperation sub && sub.Member is IPropertyReferenceOperation spr
             && spr.Property is { IsStatic: false } sprop
-            && spr.Property.ContainingType is INamedTypeSymbol spit && EmitPolicy.IsUserStruct(spit)
+            && spr.Property.ContainingType is INamedTypeSymbol spit && EmitPolicy.IsObjectArrayEmulated(spit)
             && IsComputedProperty(sprop) && sprop.GetMethod != null)
             yield return sprop.GetMethod;
         // User-struct operator: v1 + v2, -v, s += t, c++ (static operator methods). Compound-assignment and

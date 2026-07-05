@@ -43,6 +43,7 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
             EmitWriteBack(op.Target, res, lv);
             return res;
         }
+        RejectClassUserOperator(op.OperatorMethod); // v1 class: no user operators
 
         // Nullable (lifted) compound assignment: x += v  →  x = lifted(x, v) (null-propagating).
         if (EmitPolicy.IsNullableT(op.Target.Type, out var tUnderlying))
@@ -196,6 +197,7 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
             EmitWriteBack(op.Target, res, lv);
             return op.IsPostfix ? lv.Value : res;
         }
+        RejectClassUserOperator(op.OperatorMethod); // v1 class: no user operators
 
         // Nullable (lifted) increment/decrement: x++  →  x = lifted(x, 1) (null-propagating).
         if (EmitPolicy.IsNullableT(op.Type, out var incUnderlying))

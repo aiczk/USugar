@@ -162,8 +162,11 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
         // (CollectStructMethodsInOperation deliberately skips the open form) — register it on demand,
         // like a generic method's own on-demand arm below (wave-14 residual gap).
         if (!target.IsStatic && target.MethodKind == MethodKind.Ordinary
-            && target.ContainingType is INamedTypeSymbol structRecv && EmitPolicy.IsUserStruct(structRecv))
+            && target.ContainingType is INamedTypeSymbol structRecv && EmitPolicy.IsObjectArrayEmulated(structRecv))
         {
+            // CA-M1: a v1 class instance method rides the SAME param0-receiver path. The receiver bundle
+            // flows by reference (EmitStructInstanceCall's defensive copy stays gated on IsAggregateType,
+            // which is false for a class — so mutations through the receiver are visible to every alias).
             var structTarget = ResolveStructMember(target);
             // B56: a struct-hosted generic method must record its instantiation so a nested closure/LF
             // referencing the method's T finds the owner in the closure-compose (the class arm does this
@@ -171,6 +174,27 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
             if (structTarget.IsGenericMethod)
                 RegisterFirstGenericSpec(structTarget);
             return EmitStructInstanceCall(op, structTarget);
+        }
+
+        // CA-M1: Object-inherited method on a v1 class receiver (target owner = System.Object, i.e. the
+        // method is NOT overridden — an override carries the `override` keyword and is rejected at the
+        // declaration). Equals(object) → reference compare on the two object[] bundles (unoverridden
+        // object.Equals IS reference equality for a class). GetHashCode / ToString / GetType → loud reject
+        // (no stable hash, no member-name synthesis, no runtime type identity for a reference bundle in v1).
+        if (!target.IsStatic && op.Instance?.Type is INamedTypeSymbol clsRecv && EmitPolicy.IsUserClassType(clsRecv)
+            && target.ContainingType.SpecialType == SpecialType.System_Object)
+        {
+            if (target.Name == "Equals" && op.Arguments.Length == 1)
+            {
+                var lhs = VisitExpression(op.Instance);
+                var rhs = VisitExpression(op.Arguments[0].Value);
+                return ExternCall("SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean",
+                    new List<CLeaf> { lhs, rhs }, "SystemBoolean");
+            }
+            throw new System.NotSupportedException(
+                $"'{clsRecv.Name}.{target.Name}()' is not supported on a v1 user class: class ABI v1 gives a "
+                + "reference bundle no stable hash, no member-name synthesis, and no runtime type identity. "
+                + "Use reference equality (== / Equals) or format the class's fields directly.");
         }
 
         // Receiver identity (predates fcd-stage1): an instance method of THIS class family invoked

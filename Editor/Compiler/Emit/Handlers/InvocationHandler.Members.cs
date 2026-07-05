@@ -28,8 +28,9 @@ public partial class InvocationHandler
                     ? EmitDeepCloneAggregate(nv, nblAgg) : nv;
         }
 
-        // Auto-property on an aggregate (struct/tuple) → object[] element (the backing field's slot).
-        if (op.Instance != null && op.Instance.Type is INamedTypeSymbol aggProp && EmitPolicy.IsAggregateType(aggProp)
+        // Auto-property on an aggregate (struct/tuple) OR v1 class → object[] element (the backing field's
+        // slot). The clone at the return stays IsAggregateType, so a class-typed property returns by reference.
+        if (op.Instance != null && op.Instance.Type is INamedTypeSymbol aggProp && EmitPolicy.IsObjectArrayEmulated(aggProp)
             && _ctx.GetAggregateLayout(aggProp).TryGetIndex(op.Property.Name, out var aggPropIdx))
         {
             var arrExpr = LoadInstanceRaw(op.Instance);
@@ -40,10 +41,11 @@ public partial class InvocationHandler
                 ? EmitDeepCloneAggregate(getVal, propAgg) : getVal;
         }
 
-        // Computed (non-auto) property on an aggregate (struct): no backing-field slot, so inline-call the
-        // user getter with the receiver object[] as synthetic param0 (same convention as EmitStructInstanceCall).
-        // The getter only reads, so the receiver is passed uncloned.
-        if (op.Instance != null && op.Instance.Type is INamedTypeSymbol aggGet && EmitPolicy.IsAggregateType(aggGet)
+        // Computed (non-auto) property on an aggregate (struct) OR v1 class: no backing-field slot, so
+        // inline-call the user getter with the receiver object[] as synthetic param0 (same convention as
+        // EmitStructInstanceCall). The getter only reads, so the receiver is passed uncloned. The return
+        // clone stays IsAggregateType, so a class-typed getter result is returned by reference.
+        if (op.Instance != null && op.Instance.Type is INamedTypeSymbol aggGet && EmitPolicy.IsObjectArrayEmulated(aggGet)
             && op.Property.GetMethod is { } aggGetterRaw)
         {
             var ret = EmitCallToMethod(ResolveStructMember(aggGetterRaw),
@@ -103,6 +105,17 @@ public partial class InvocationHandler
         // Static property: no instance
         if (op.Instance == null)
         {
+            // CA-M1 statics choke: a static property on a v1 user class (computed OR auto) is rejected —
+            // the design allows only const-fold and static methods; every other static member is a loud
+            // reject (relaxing later is free, the reverse is breaking). Placed before the B47 foreign-static
+            // arm below, which would otherwise inline a class's computed static getter.
+            if (op.Property.IsStatic && op.Property.ContainingType is INamedTypeSymbol clsStProp
+                && EmitPolicy.IsUserClassType(clsStProp))
+                throw new System.NotSupportedException(
+                    $"Static property '{clsStProp.Name}.{op.Property.Name}' on a v1 user class is not "
+                    + "supported (only `const` and static methods are): move it to a static method, or to "
+                    + "a field on the UdonSharpBehaviour class.");
+
             // B47 (wave-14 r6): a STATIC COMPUTED property on a user struct/class (StaticPropHelper<T>.Doubled)
             // is a foreign-static accessor CALL, not a real extern — inline-call its getter (the B46
             // static-method pattern, one node kind over). Without this the fall-through emits a bogus
@@ -247,10 +260,11 @@ public partial class InvocationHandler
             return EmitCallToMethod(idxDispatchGetter, EvaluateIndexerArgs(op));
         }
 
-        // User-defined indexer on a user STRUCT instance (`s[i]`) → call the getter with the struct receiver
-        // (object[]) as param0 plus the index args, like a struct computed property. Without this it falls to
-        // a bogus SystemObjectArray.__get_Item extern the validator rejects. (diff-fuzz wave 4)
-        if (op.Instance != null && op.Instance.Type is INamedTypeSymbol aggIdx && EmitPolicy.IsAggregateType(aggIdx)
+        // User-defined indexer on a user STRUCT or v1-class instance (`s[i]`) → call the getter with the
+        // receiver (object[]) as param0 plus the index args, like a computed property. Without this it falls
+        // to a bogus SystemObjectArray.__get_Item extern the validator rejects. (diff-fuzz wave 4) The return
+        // clone stays IsAggregateType, so a class-typed indexer result is returned by reference.
+        if (op.Instance != null && op.Instance.Type is INamedTypeSymbol aggIdx && EmitPolicy.IsObjectArrayEmulated(aggIdx)
             && op.Property.GetMethod is { } idxGetterRaw)
         {
             var sargs = new List<CLeaf> { LoadInstanceRaw(op.Instance) };
@@ -436,6 +450,7 @@ public partial class InvocationHandler
     /// param0) → apply any object-initializer. NO defensive copies — the same bundle reference flows through.</summary>
     CLeaf EmitClassInstanceMint(IObjectCreationOperation op, INamedTypeSymbol classTy)
     {
+        RejectUnsupportedClassMembers(classTy); // v1: no virtual/abstract/override members
         var layout = _ctx.GetAggregateLayout(classTy);
         var slot = _ctx.AllocTemp("SystemObjectArray");
         EmitAssign(slot, ExternCall(ExternResolver.BuildArrayCtorSignature("SystemObjectArray"),

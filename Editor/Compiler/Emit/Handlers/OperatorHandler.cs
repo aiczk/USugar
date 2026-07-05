@@ -52,6 +52,23 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
             return EmitCallToMethod(ResolveStructMember(binOpM), new List<CLeaf> { lhs, rhs });
         }
 
+        // CA-M1: a v1 class defines NO user operators (design §2 "ユーザー演算子なし") — reject a user-defined
+        // binary operator loudly BEFORE the reference-equality arm below would silently ignore a user `==`.
+        RejectClassUserOperator(op.OperatorMethod);
+
+        // ── User class (v1) reference equality: c1 == c2 / c == null → reference compare on the object[]
+        // bundle (the bundle reference IS the identity; an unoverridden Equals/== is reference equality). ──
+        if (op.OperatorKind is BinaryOperatorKind.Equals or BinaryOperatorKind.NotEquals
+            && (EmitPolicy.IsUserClassType(op.LeftOperand.Type) || EmitPolicy.IsUserClassType(op.RightOperand.Type)))
+        {
+            var l = VisitExpression(op.LeftOperand);
+            var r = VisitExpression(op.RightOperand);
+            var refEqSig = op.OperatorKind == BinaryOperatorKind.NotEquals
+                ? "SystemObject.__op_Inequality__SystemObject_SystemObject__SystemBoolean"
+                : "SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean";
+            return ExternCall(refEqSig, new List<CLeaf> { l, r }, "SystemBoolean");
+        }
+
         // ── Delegate null check / equality (design §2.5 — TYPE-routed, so fields, locals, params,
         // array elements, properties, and expression results all land here; the dispatch stays gated
         // on the delegate type because this linear handler scan is first-match) ──
@@ -343,6 +360,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
             var operand = VisitExpression(op.Operand);
             return EmitCallToMethod(ResolveStructMember(unOpM), new List<CLeaf> { operand });
         }
+        RejectClassUserOperator(op.OperatorMethod); // v1 class: no user operators
 
         // Bitwise NOT (~): Udon VM has no unary complement extern → synthesize as XOR with all-bits-set
         if (op.OperatorKind == UnaryOperatorKind.BitwiseNegation)
@@ -719,7 +737,10 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
                     // For a user struct / tuple scrutinee, members live as object[] indices — there is no Udon
                     // property getter (SystemObjectArray.__get_X does not exist) — so read via the layout __Get.
                     var aggMatchType = matchType as INamedTypeSymbol;
-                    bool isAgg = aggMatchType != null && EmitPolicy.IsAggregateType(aggMatchType);
+                    // CA-M1: a v1 class scrutinee is also object[]-backed (no Udon property getter), so its
+                    // subpattern members read via the layout __Get / computed-getter arms too. The receiver
+                    // was null-guarded above (line ~689, reference-type guard), so the slot read is safe.
+                    bool isAgg = aggMatchType != null && EmitPolicy.IsObjectArrayEmulated(aggMatchType);
                     foreach (var sub in rec.PropertySubpatterns)
                     {
                         ITypeSymbol memberType, memberContainingType;
@@ -749,7 +770,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
                             memberVal = SlotRef(memberSlot);
                         }
                         else if (isAgg && sub.Member is IPropertyReferenceOperation cpr
-                            && EmitPolicy.IsUserStruct(aggMatchType) && cpr.Property.GetMethod is { } cgetter)
+                            && EmitPolicy.IsObjectArrayEmulated(aggMatchType) && cpr.Property.GetMethod is { } cgetter)
                         {
                             // Computed user-struct property (no object[] storage slot): JUMP to its registered
                             // getter with the struct as the receiver, not a non-existent SystemObjectArray.__get_X
