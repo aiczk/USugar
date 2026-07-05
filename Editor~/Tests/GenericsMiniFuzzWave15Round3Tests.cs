@@ -241,6 +241,35 @@ public class B70S : UdonSharpBehaviour { public int seedA; public int seedB; pub
         Assert.Contains("type parameter", ex.Message);
     }
 
+    // ── B72: enum→floating/decimal is a real conversion, not a re-typing — the emitter must produce the
+    //         SystemConvert.__To{Double,Single,Decimal}__, not COPY the raw underlying int into the wider
+    //         slot. (VM value pins in the harness; DiffFuzz numeric coercion masks the double/float mistype,
+    //         so the structural extern presence is the real regression guard.) enum→object stays identity. ──
+
+    [Theory]
+    [InlineData("B72Dd", "double", "SystemConvert.__ToDouble__SystemInt32__SystemDouble")]
+    [InlineData("B72Ff", "float", "SystemConvert.__ToSingle__SystemInt32__SystemSingle")]
+    [InlineData("B72Mm", "decimal", "SystemConvert.__ToDecimal__SystemInt32__SystemDecimal")]
+    public void B72_EnumToFloatingDecimal_EmitsConversion(string cls, string dstType, string expectedExtern)
+    {
+        var uasm = TestHelper.CompileToUasm($@"
+using System; using UdonSharp;
+public enum E72c {{ A, B = 5, C = 10 }}
+public class {cls} : UdonSharpBehaviour {{ public int seed; public {dstType} result; void Start(){{ E72c e = (E72c)seed; result = ({dstType})e; }} }}", cls);
+        Assert.Contains(expectedExtern, uasm);
+    }
+
+    [Fact]
+    public void B72_EnumToObjectBoxing_StaysIdentity_NoBogusConvert()
+    {
+        // Control: enum→object boxing must NOT mint a SystemConvert.__ToObject__ (the B61 fix this preserves).
+        var uasm = TestHelper.CompileToUasm(@"
+using System; using UdonSharp;
+public enum E72b { A, B = 5 }
+public class B72Bx : UdonSharpBehaviour { public int seed; public int result; void Start(){ E72b e = (E72b)seed; object o = e; result = (o == null) ? 0 : ((int)(E72b)o); } }", "B72Bx");
+        Assert.DoesNotContain("SystemConvert.__ToObject__", uasm);
+    }
+
     // ── B64: the closure-pin is per-parameter AND capture-aware. A second instantiation that only varies a
     //         type param NO closure uses is legal; a varying CLOSURE-USED param still pins on type; and a
     //         STATIC generic method whose captures alias across its inlined specializations pins on capture

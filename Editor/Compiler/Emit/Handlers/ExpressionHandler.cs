@@ -568,14 +568,16 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
                 dstType);
         }
 
-        // Enum ↔ underlying type conversions (int→enum, enum→int). B61: this arm is a re-typing between an
-        // enum and an INTEGRAL numeric type — it must NOT fire when the other side is `object` (enum→object
-        // BOXING), or it mints a nonexistent SystemConvert.__ToObject__ extern. Boxing falls through to the
-        // identity pass-through below (the underlying value is already a heap object in Udon's object[] model).
+        // Enum ↔ numeric conversions (int→enum, enum→int, and B72: enum→float/double/decimal). This arm is a
+        // conversion between an enum and a numeric type. It must NOT fire when the other side is `object`
+        // (enum→object BOXING) — that mints a nonexistent SystemConvert.__ToObject__ and must fall through to
+        // the identity pass-through below (the underlying value is already a heap object in Udon's object[]
+        // model). B61 restricted this to exclude boxing; B72 widened it back to floating/decimal targets,
+        // which are genuine conversions (a raw COPY into a float/decimal slot is a silent mistype).
         if (conv.Operand.Type != null && conv.Type != null
                                       && !SymbolEqualityComparer.Default.Equals(conv.Operand.Type, conv.Type)
                                       && (conv.Operand.Type.TypeKind == TypeKind.Enum || conv.Type.TypeKind == TypeKind.Enum)
-                                      && IsEnumOrIntegral(conv.Operand.Type) && IsEnumOrIntegral(conv.Type))
+                                      && IsEnumOrNumeric(conv.Operand.Type) && IsEnumOrNumeric(conv.Type))
         {
             var dstType = GetUdonType(conv.Type);
             // Prefer const: avoids COPY type-tag corruption
@@ -681,14 +683,16 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
         return SlotRef(resultSlot);
     }
 
-    // An enum or one of the integral types an enum can be backed by — the only types the enum↔underlying
-    // re-typing arm may involve (excludes object/reference targets, i.e. boxing — B61).
-    static bool IsEnumOrIntegral(ITypeSymbol t) =>
+    // An enum or a NUMERIC type (integral, char, OR floating/decimal) — the sides the enum↔numeric conversion
+    // arm may involve. Excludes object/reference targets so enum→object BOXING still falls through to the
+    // identity pass-through (B61). B72: a FLOATING/DECIMAL target must be included — `(double)enumVal` is a
+    // real numeric conversion (SystemConvert.ToDouble), not a re-typing; the former integral-only guard let it
+    // fall through to identity, COPY'ing the raw underlying int into a %SystemDouble slot with no convert
+    // (silent-wrong, invisible to both extern-name gates). IsNumericType lacks Decimal, so add it explicitly.
+    static bool IsEnumOrNumeric(ITypeSymbol t) =>
         t.TypeKind == TypeKind.Enum
-        || t.SpecialType is SpecialType.System_Int32 or SpecialType.System_UInt32
-            or SpecialType.System_Int64 or SpecialType.System_UInt64
-            or SpecialType.System_Byte or SpecialType.System_SByte
-            or SpecialType.System_Int16 or SpecialType.System_UInt16 or SpecialType.System_Char;
+        || ExternResolver.IsNumericType(t)
+        || t.SpecialType == SpecialType.System_Decimal;
 
     // ── Default Value ──
 
