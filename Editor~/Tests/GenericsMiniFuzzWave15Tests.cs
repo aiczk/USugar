@@ -62,6 +62,42 @@ public class B53Ctrl : UdonSharpBehaviour {
         Assert.Contains("type parameters", ex.Message);
     }
 
+    // ── B51: a nested generic local function must resolve the ENCLOSING generic's type parameters ──
+    // The generic LF's OriginalDefinition body-walk freshens the enclosing T too, so it resolved as raw
+    // 'T' (bogus TArray extern). The rekey now carries the enclosing owners' params under body-walk symbols.
+
+    [Fact]
+    public void B51_GenericLocalFunction_ResolvesEnclosingTypeParam()
+    {
+        // Single instantiation (passes the pin); Inner<W> references both enclosing T and its own W.
+        TestHelper.CompileToUasm(@"
+using System; using UdonSharp;
+public class B51C1 : UdonSharpBehaviour {
+  public int r1;
+  int M<T>(int b){ int Inner<W>(){ T[] t = new T[1]; W[] w = new W[2]; return b + t.Length + w.Length; } return Inner<int>(); }
+  void Start(){ r1 = M<int>(10); }
+}", "B51C1");
+    }
+
+    [Fact]
+    public void B51_GenericLocalFunction_MultiLevelAndMultiParamEnclosing()
+    {
+        // Two generic levels (M<T> -> Mid<S> -> Inner<W>): every enclosing owner's params must resolve.
+        TestHelper.CompileToUasm(@"
+using System; using UdonSharp;
+public class B51V4 : UdonSharpBehaviour {
+  public int r1;
+  int M<T>(int b){
+    int Mid<S>(){
+      int Inner<W>(){ T[] t = new T[1]; S[] s = new S[2]; W[] w = new W[3]; return b + t.Length + s.Length + w.Length; }
+      return Inner<int>();
+    }
+    return Mid<int>();
+  }
+  void Start(){ r1 = M<string>(10); }
+}", "B51V4");
+    }
+
     [Fact]
     public void B53_MultiSpecCapturingGenericLocalFunction_StillRejects()
     {

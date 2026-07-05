@@ -2060,9 +2060,21 @@ public class UasmEmitter
             {
                 // old ∪ rekeyed: the body-walk's fresh type-param symbols are added (newWins), the
                 // call-site symbols already in the map are RETAINED — never a replacing composition.
-                typeMap = TypeParamScope.Compose(typeMap, newWins: true,
-                    new[] { ((IReadOnlyList<ITypeParameterSymbol>)lfDefOp.Symbol.TypeParameters,
-                             (IReadOnlyList<ITypeSymbol>)method.TypeArguments) });
+                var rekey = new List<(IReadOnlyList<ITypeParameterSymbol>, IReadOnlyList<ITypeSymbol>)>
+                {
+                    (lfDefOp.Symbol.TypeParameters, method.TypeArguments),
+                };
+                // B51: the generic LF's OriginalDefinition body-walk freshens the ENCLOSING generic's
+                // type params too (not only the LF's own), so the closure-compose keys (owner-def
+                // symbols) miss the body-walk references — `new T[]` / default(T) / (T)x on the enclosing
+                // T then resolve as raw 'T' (bogus TArray extern). Re-key each enclosing FirstGenericSpec
+                // owner's params under the body-walk symbols (lfDefOp's containing chain), same walk the
+                // body's T references come from, mapped to the same owner-spec type arguments.
+                for (var s = lfDefOp.Symbol.ContainingSymbol; s is IMethodSymbol enclBw; s = enclBw.ContainingSymbol)
+                    if (_ctx.FirstGenericSpec.TryGetValue(enclBw.OriginalDefinition, out var ownerSpec)
+                        && enclBw.TypeParameters.Length == ownerSpec.TypeArguments.Length)
+                        rekey.Add((enclBw.TypeParameters, ownerSpec.TypeArguments));
+                typeMap = TypeParamScope.Compose(typeMap, newWins: true, rekey);
             }
 
             // Open the depth-1 scope now that the map is fully composed; Dispose (at block end) is the
