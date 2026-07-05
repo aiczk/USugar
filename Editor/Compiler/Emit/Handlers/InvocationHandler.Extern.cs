@@ -1131,6 +1131,15 @@ public partial class InvocationHandler
                     + "directly instead.");
             containingTypeSym = vConcrete;
         }
+        // B59: the SAME Object/ValueType/Enum-inherited member on a CONCRETE receiver (not a type
+        // parameter) keeps the base owner (SystemEnum/SystemValueType — no registered extern). Resolve
+        // it to the receiver's own static type so GetUdonType's enum→underlying peel yields the
+        // registered primitive extern (e.g. a user enum's Equals/GetHashCode/CompareTo → SystemInt32).
+        else if (instanceType != null && instanceType is not ITypeParameterSymbol
+            && method.ContainingType.SpecialType is SpecialType.System_Object
+                or SpecialType.System_ValueType or SpecialType.System_Enum
+            && !(instanceType is INamedTypeSymbol cAgg && EmitPolicy.IsAggregateType(cAgg)))
+            containingTypeSym = instanceType;
 
         // Armor: a user-struct member reaching generic extern construction means no CFunction was
         // registered for it (collector-scope drift) — fail with a diagnosis, not a bogus

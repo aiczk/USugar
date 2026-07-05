@@ -59,6 +59,22 @@ public class {cls} : UdonSharpBehaviour {{
 }}", cls);
     }
 
+    // ── B59: a concrete enum receiver's inherited Equals/GetHashCode/CompareTo resolves to the
+    // underlying-primitive extern (SystemInt32), not the unregistered SystemEnum owner. ──
+
+    [Theory]
+    [InlineData("B59E", "result = e.Equals(EE.A) ? 1 : 0;")]
+    [InlineData("B59H", "result = e.GetHashCode();")]
+    [InlineData("B59C", "result = e.CompareTo(EE.B);")]
+    public void B59_ConcreteEnumInheritedMember_ResolvesUnderlyingExtern(string cls, string body)
+    {
+        var uasm = TestHelper.CompileToUasm($@"
+using System; using UdonSharp;
+public enum EE {{ A, B, C }}
+public class {cls} : UdonSharpBehaviour {{ public int seed; public int result; void Start(){{ EE e = (EE)(seed % 3); {body} }} }}", cls);
+        Assert.DoesNotContain("SystemEnum.__", uasm);
+    }
+
     // ── B58: a foreign generic STATIC method (helper class or struct) as a delegate target is now
     // supported — its spec is inlined into this program, so it bridges through the same machinery. ──
 
