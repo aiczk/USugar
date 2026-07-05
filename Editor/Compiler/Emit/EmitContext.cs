@@ -352,24 +352,24 @@ public class EmitContext
     // Delegate fields: tracks which user fields are delegate-typed and were expanded to bundles
     public readonly HashSet<string> DelegateFields = new();
 
-    // Pending delegate bridges for dynamically hoisted lambdas/local functions
-    public readonly List<(IMethodSymbol method, string bridgeExportName, Dictionary<ITypeParameterSymbol, ITypeSymbol> resolvedTypeParamMap)> PendingDelegateBridges = new();
+    // Pending delegate bridges for dynamically hoisted lambdas/local functions. The carried map is the
+    // creating method's immutable TypeParamMap by REFERENCE (it is per-EmitMethod fresh and never mutated,
+    // so no snapshot copy is needed even though the drain runs after emission when the ambient map is null).
+    public readonly List<(IMethodSymbol method, string bridgeExportName, IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> resolvedTypeParamMap)> PendingDelegateBridges = new();
 
-    // Multicast design (2026-07-03 §1): sig-part → (Invoke, resolved type-param snapshot) for every
+    // Multicast design (2026-07-03 §1): sig-part → (Invoke, resolved type-param map) for every
     // delegate signature this class combines/removes via `+=`/`-=` (CompoundAssignmentHandler). Drives
     // the per-class __dlg_fanout_/__dlg_combine_/__dlg_remove_{sig} synthetic emission (UasmEmitter,
     // sibling of EmitPendingDelegateBridges). Keyed on sig content, not occurrence — so two `+=` sites
-    // sharing a signature dedupe to one fan-out/helper set. Snapshot mirrors PendingDelegateBridges:
-    // this dict is read AFTER body emission completes, when a generic method's ambient TypeParamMap
-    // may already be cleared.
-    public readonly Dictionary<string, (IMethodSymbol Invoke, Dictionary<ITypeParameterSymbol, ITypeSymbol> TypeParamMap)> PendingMulticastSigs = new();
+    // sharing a signature dedupe to one fan-out/helper set. Carries the map by reference (immutable).
+    public readonly Dictionary<string, (IMethodSymbol Invoke, IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> TypeParamMap)> PendingMulticastSigs = new();
 
     // Variance design (2026-07-04 §2.2, B-1): per-(target, sig-S) sig adapter bridges — a same-program
     // variant method-group binding mints one of these instead of the plain bridge. delegateInvoke is the
     // DESTINATION delegate's own Invoke method (sig-S's param/return types for the conv-var declarations),
     // distinct from targetMethod (the real callee's own types, used only for the InternalCall). Sibling of
     // PendingDelegateBridges — same dedup-by-name-at-emission shape (UasmEmitter.EmitPendingSigAdapterBridges).
-    public readonly List<(IMethodSymbol targetMethod, IMethodSymbol delegateInvoke, string adapterName, Dictionary<ITypeParameterSymbol, ITypeSymbol> resolvedTypeParamMap)> PendingSigAdapterBridges = new();
+    public readonly List<(IMethodSymbol targetMethod, IMethodSymbol delegateInvoke, string adapterName, IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> resolvedTypeParamMap)> PendingSigAdapterBridges = new();
 
     // Variance design (2026-07-04 §2.3, B-2): wrapper name → (outer sig-S Invoke, inner sig-T
     // Invoke-or-method, resolved type-param snapshot) for every wrapper-with-payload bridge needed
@@ -377,7 +377,7 @@ public class EmitContext
     // WRAPPER NAME (already unique per (outer,inner) sig pair — DelegateAbi.WrapperName) rather than a
     // single sig, since a wrapper's inner dispatch speaks the INNER bundle's own protocol, distinct from
     // the outer one two different sig-T's could both wrap to the same sig-S.
-    public readonly Dictionary<string, (IMethodSymbol OuterInvoke, IMethodSymbol InnerInvoke, Dictionary<ITypeParameterSymbol, ITypeSymbol> TypeParamMap)> PendingWrapperSigs = new();
+    public readonly Dictionary<string, (IMethodSymbol OuterInvoke, IMethodSymbol InnerInvoke, IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> TypeParamMap)> PendingWrapperSigs = new();
 
     // Diagnostics collected during emission
     public readonly List<EmitDiagnostic> Diagnostics = new();

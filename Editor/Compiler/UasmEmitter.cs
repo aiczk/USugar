@@ -1405,7 +1405,7 @@ public class UasmEmitter
     /// differ from sigMethod's for a sig adapter (Stage 1.75 §2's reference-variance guarantee is what
     /// makes that safe to forward with zero conversion).</summary>
     void EmitDelegateBridgeBody(string bridgeName, IMethodSymbol sigMethod,
-        Dictionary<ITypeParameterSymbol, ITypeSymbol> resolvedMap, CFunction targetFunc,
+        IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> resolvedMap, CFunction targetFunc,
         string targetRetTypeStr, IMethodSymbol closureCheckMethod)
     {
         var sigPart = DelegateAbi.BuildSigPart(sigMethod, resolvedMap);
