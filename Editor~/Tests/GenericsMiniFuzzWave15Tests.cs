@@ -113,6 +113,23 @@ public class B51IsT : UdonSharpBehaviour {
 }", "B51IsT");
     }
 
+    // ── B52: a variant method group of a GENERIC method must register its specialization so the sig
+    // adapter's target is emitted (the arm now advances targetMethod to the constructed spec). ──
+
+    [Fact]
+    public void B52_GenericTargetSigAdapter_EmitsAdapterFunction()
+    {
+        // Func<object> d = MakeTag<T> (variance) minted an adapter whose target spec was never emitted.
+        TestHelper.CompileToUasm(@"
+using System; using UdonSharp;
+public class B52A : UdonSharpBehaviour {
+  public int result;
+  string MakeTag<T2>() => ""abc"";
+  int M<T>(){ Func<object> d = MakeTag<T>; return ((string)d()).Length; }
+  void Start(){ result = M<int>(); }
+}", "B52A");
+    }
+
     [Fact]
     public void B53_MultiSpecCapturingGenericLocalFunction_StillRejects()
     {

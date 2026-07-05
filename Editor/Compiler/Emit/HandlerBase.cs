@@ -1963,6 +1963,11 @@ public abstract partial class HandlerBase
             RegisterGenericSpecialization(constructed);
             bridgeExportName = DelegateAbi.BridgeName(_methodFunctions[constructed].Name);
             _ctx.PendingDelegateBridges.Add((constructed, bridgeExportName, _ctx.TypeParamMap));
+            // B52: advance targetMethod to the registered specialization (mirroring the local-function
+            // arm) so the variance/adapter block below enqueues the ADAPTER against the spec that is
+            // actually emitted — otherwise the adapter names the raw generic definition, EmitPending-
+            // SigAdapterBridges cannot find it in _methodFunctions, and the sig-adapter FuncRef dangles.
+            targetMethod = constructed;
         }
         // wave-13 staticro lens (2026-07-04): a static method on a plain (non-UdonSharpBehaviour)
         // helper class is never pre-planned by LayoutPlanner (Phase 1 only discovers
