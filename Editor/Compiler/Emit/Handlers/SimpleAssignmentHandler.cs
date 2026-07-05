@@ -31,6 +31,19 @@ public class SimpleAssignmentHandler : AssignmentHandlerBase, IExpressionHandler
         if (assign.Target is IDiscardOperation)
             return VisitExpression(assign.Value);
 
+        // B83: a class-capturing closure written to a CROSS-PROGRAM delegate field (public/exported/synced
+        // this-field, or another behaviour's field) would carry the captured class through bundle[3]'s env
+        // across the boundary, undetected by the signature-only ValidateNoUserClassSignature. Reject at the
+        // write. An in-program (private this-field) delegate stays legal — execution-locality (the F1 pin).
+        if (assign.Target is IFieldReferenceOperation dlgFieldTarget
+            && IsCrossProgramDelegateFieldTarget(dlgFieldTarget)
+            && DelegateValueCapturesUserClass(assign.Value))
+            throw new System.NotSupportedException(
+                $"A delegate stored in the cross-program field '{dlgFieldTarget.Field.Name}' captures a v1 "
+                + "user class in its closure environment: the captured class is a program-local object[] "
+                + "bundle and cannot cross a program boundary through the delegate's env. Capture plain data "
+                + "instead, or keep the delegate field private (in-program only).");
+
         // Field lvalue with receiver legs (aggregate member `point.x` / `arr[i].v`, cross-behaviour
         // field, extern value-type / reference-type field) — the shared legs-now/store-later path,
         // also consumed by the deconstruction lvalue arm. Wave-9 round-7 [Y2]: C# evaluates the

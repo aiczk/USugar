@@ -2012,6 +2012,50 @@ public abstract partial class HandlerBase
         return EnvEmit.Leaf(_builder, _ctx, closureScope.BindingScope);
     }
 
+    /// <summary>B83: does a delegate-VALUE expression carry a closure whose env — transitively, through the
+    /// env-record parent chain (CaptureScopeAnalysis, a compile-time fact) — captures a v1 user class? A
+    /// signature-clean delegate (e.g. Action) can still smuggle a class through bundle[3] (the captured env),
+    /// so a cross-program delegate write must inspect the captures, not just the invoke signature. Only a
+    /// direct delegate CREATION (lambda / local function) is inspected — its closure symbol is statically
+    /// known here; a method group / capture-free lambda owns no captures and returns false.</summary>
+    protected bool DelegateValueCapturesUserClass(IOperation value)
+    {
+        var v = value;
+        while (v is IConversionOperation c) v = c.Operand;
+        var closure = v switch
+        {
+            IDelegateCreationOperation dc => (dc.Target as IAnonymousFunctionOperation)?.Symbol
+                                             ?? (dc.Target as IMethodReferenceOperation)?.Method,
+            IAnonymousFunctionOperation af => af.Symbol,
+            _ => null,
+        };
+        if (closure == null || _ctx.CaptureScope == null) return false;
+        if (!_ctx.CaptureScope.ClosureScopes.TryGetValue(closure.OriginalDefinition, out var closureScope)
+            || closureScope?.BindingScope == null)
+            return false;
+        for (var s = closureScope.BindingScope; s != null; s = _ctx.CaptureScope.EffectiveParent(s))
+            foreach (var cap in s.OwnedCaptures)
+            {
+                var t = (cap as ILocalSymbol)?.Type ?? (cap as IParameterSymbol)?.Type;
+                if (t != null && EmitPolicy.ContainsUserClassType(t)) return true;
+            }
+        return false;
+    }
+
+    /// <summary>B83: a delegate-field write that crosses a program boundary — a public / [SerializeField] /
+    /// [UdonSynced] delegate field on THIS behaviour (readable cross-program via GetProgramVariable + fired
+    /// by SendCustomEvent), or a delegate field on ANOTHER behaviour. A PRIVATE this-field stays in-program
+    /// (execution-locality — legal even with a class-capturing closure).</summary>
+    protected bool IsCrossProgramDelegateFieldTarget(IFieldReferenceOperation fieldRef)
+    {
+        if (fieldRef.Field.Type is not INamedTypeSymbol dft || dft.DelegateInvokeMethod == null) return false;
+        if (fieldRef.Instance is not null and not IInstanceReferenceOperation)
+            return ExternResolver.IsUdonSharpBehaviour(fieldRef.Field.ContainingType); // cross-behaviour write
+        return fieldRef.Field.DeclaredAccessibility == Accessibility.Public
+            || fieldRef.Field.GetAttributes().Any(a =>
+                a.AttributeClass?.Name is "SerializeField" or "SerializeFieldAttribute" or "UdonSyncedAttribute");
+    }
+
     protected (string bridgeName, CLeaf funcRef, CLeaf targetInstance, CLeaf envLeaf) ResolveDelegateBridge(IDelegateCreationOperation op)
     {
         IMethodSymbol targetMethod = null;
