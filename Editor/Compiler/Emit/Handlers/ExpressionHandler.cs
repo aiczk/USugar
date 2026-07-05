@@ -188,6 +188,13 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
         // cross-behaviour field → GetProgramVariable
         if (ExternResolver.IsUdonSharpBehaviour(fieldRef.Field.ContainingType))
         {
+            // CA-M1 §2-1: reading another behaviour's field cross-program returns a value marshalled out of
+            // that program — a v1 class is a program-local object[] bundle whose reference is meaningless here.
+            if (EmitPolicy.ContainsUserClassType(fieldRef.Field.Type))
+                throw new NotSupportedException(
+                    $"Reading another behaviour's field '{fieldRef.Field.Name}' that carries a v1 user class "
+                    + "is not supported: a class value is a program-local object[] bundle and cannot cross a "
+                    + "program boundary.");
             var instanceVal = VisitExpression(fieldRef.Instance);
             var nameConst = Const(fieldRef.Field.Name, "SystemString");
             return ExternCall(
@@ -307,6 +314,23 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
     CLeaf VisitConversion(IConversionOperation conv)
     {
         RejectChecked(conv.IsChecked);
+
+        // CA-M1 §2-1: `(object[])(object)foo` / `foo as object[]` — laundering a v1 class to its raw object[]
+        // bundle (a class IS an object[] at runtime, so the cast would silently succeed and hand back the
+        // internal slots, forging identity the is/type-test choke otherwise denies). Reject when the operand,
+        // through any object/object[] intermediate conversions, statically carries a v1 class and the
+        // destination is object[]. Establishes "unforgeable" by construction (the delegate-launder mirror).
+        if (ResolveType(conv.Type) is IArrayTypeSymbol clsArrDst
+            && clsArrDst.ElementType.SpecialType == SpecialType.System_Object)
+        {
+            var launderRoot = conv.Operand;
+            while (launderRoot is IConversionOperation lrc) launderRoot = lrc.Operand;
+            if (launderRoot.Type != null && EmitPolicy.IsUserClassType(ResolveType(launderRoot.Type)))
+                throw new System.NotSupportedException(
+                    $"Casting the v1 user class '{ResolveType(launderRoot.Type).Name}' to object[] is not "
+                    + "supported: it would expose the class's internal object[] bundle and forge an identity "
+                    + "the runtime type-test choke denies. Keep the value typed as its class type.");
+        }
 
         var srcVal = VisitExpression(conv.Operand);
 

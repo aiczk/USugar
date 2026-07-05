@@ -385,6 +385,7 @@ public partial class InvocationHandler
                     formatParts.Add(placeholder.ToString());
                     // B67: a user enum in an interpolation hole would be boxed and Format-ToString'd to its
                     // underlying number — pre-convert it to the C#-correct name string instead.
+                    RejectImplicitClassToString(interpolation.Expression.Type); // §2-1: no class ToString
                     var interpVal = VisitExpression(interpolation.Expression);
                     argVals.Add(TryEmitEnumToString(interpVal, interpolation.Expression.Type) ?? interpVal);
                     argIndex++;

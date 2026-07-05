@@ -171,6 +171,8 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
         {
             var lOp = UnwrapConversions(op.LeftOperand);
             var rOp = UnwrapConversions(op.RightOperand);
+            RejectImplicitClassToString(lOp.Type); // §2-1: a class concat operand has no ToString
+            RejectImplicitClassToString(rOp.Type);
             if (ExternResolver.IsUserEnum(ResolveType(lOp.Type)) || ExternResolver.IsUserEnum(ResolveType(rOp.Type)))
             {
                 var l = VisitExpression(lOp);

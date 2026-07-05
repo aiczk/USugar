@@ -69,6 +69,7 @@ public static class DelegateAbi
         if (invoke == null) return;
 
         ValidateNoRefOutParams(invoke);
+        ValidateNoUserClassSignature(invoke);
 
         if (!varianceResolved && targetMethod != null
             && BuildSigPart(invoke, typeParamMap) != BuildSigPart(targetMethod, typeParamMap))
@@ -84,6 +85,25 @@ public static class DelegateAbi
             if (p.RefKind != RefKind.None)
                 throw new System.NotSupportedException(
                     "Delegate types with ref/out parameters are not supported.");
+    }
+
+    /// <summary>CA-M1 §2-1: the __dlgc_ conv vars are an explicit cross-program byte contract, and a v1
+    /// class parameter/return is a program-local object[] bundle that cannot ride it (a foreign delegate
+    /// binding is aligned and poison-proof — the only defence is a reject). Shared by the creation-site
+    /// binding and the dispatch-site conv-var declaration (a delegate VALUE received from elsewhere never
+    /// went through the creation-site check).</summary>
+    public static void ValidateNoUserClassSignature(IMethodSymbol invoke)
+    {
+        foreach (var p in invoke.Parameters)
+            if (EmitPolicy.ContainsUserClassType(p.Type))
+                throw new System.NotSupportedException(
+                    $"A delegate carrying a v1 user class parameter '{p.Name}' is not supported: a class "
+                    + "value is a program-local object[] bundle and cannot cross the delegate convention "
+                    + "channel. Pass plain data through the delegate instead.");
+        if (EmitPolicy.ContainsUserClassType(invoke.ReturnType))
+            throw new System.NotSupportedException(
+                "A delegate returning a v1 user class is not supported: a class value is a program-local "
+                + "object[] bundle and cannot cross the delegate convention channel.");
     }
 
     /// <summary>The ONLY name source for a plain per-method delegate bridge (a same-program target's

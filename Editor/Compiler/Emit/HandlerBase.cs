@@ -1321,6 +1321,12 @@ public abstract partial class HandlerBase
     /// re-evaluating it).</summary>
     protected void EmitCrossBehaviourFieldSet(IFieldSymbol field, CLeaf instanceVal, CLeaf value)
     {
+        // CA-M1 §2-1: SetProgramVariable on another behaviour's field ships the value cross-program — a v1
+        // class value is a program-local object[] bundle and cannot cross the boundary.
+        if (EmitPolicy.ContainsUserClassType(field.Type))
+            throw new NotSupportedException(
+                $"A v1 user class cannot be written to another behaviour's field '{field.Name}': a class "
+                + "value is a program-local object[] bundle and cannot cross a program boundary.");
         var nameConst = Const(field.Name, "SystemString");
         EmitExternVoid(
             "VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid",
@@ -2529,6 +2535,14 @@ public abstract partial class HandlerBase
         var byOrdinal = new CLeaf[paramIds.Length];
         for (int i = 0; i < args.Length; i++)
         {
+            // CA-M1 §2-1: a cross-program (SendCustomEvent) call marshals args through SetProgramVariable —
+            // a v1 class value is a program-local object[] bundle whose reference means nothing in the
+            // callee's program. Reject loudly rather than silently ship a dangling reference.
+            if (args[i].Value.Type is { } argTy && EmitPolicy.ContainsUserClassType(argTy))
+                throw new NotSupportedException(
+                    "A v1 user class cannot be passed to a cross-behaviour (SendCustomEvent) call: a class "
+                    + "value is a program-local object[] bundle and cannot cross a program boundary. Pass "
+                    + "plain data instead and rebuild the object on the receiving side.");
             var p = args[i].Parameter;
             var ordinal = p != null && p.Ordinal >= 0 && p.Ordinal < byOrdinal.Length ? p.Ordinal : i;
             byOrdinal[ordinal] = VisitExpression(args[i].Value);
@@ -2650,6 +2664,18 @@ public abstract partial class HandlerBase
                 + "member/reach shape (collector-scope drift; see roadmap B46/B47 family).");
     }
 
+    /// <summary>CA-M1 §2-1: a v1 class in a string interpolation hole or a `+`-concat operand would be boxed
+    /// and Format/Concat-ToString'd to "System.Object[]" (its object[] runtime type) — a silent wrong string.
+    /// Reject loudly, same as the explicit ToString reject.</summary>
+    protected static void RejectImplicitClassToString(ITypeSymbol type)
+    {
+        if (type != null && EmitPolicy.IsUserClassType(type))
+            throw new NotSupportedException(
+                $"A v1 user class '{type.Name}' cannot be converted to a string (interpolation / concat): a "
+                + "class ABI v1 reference bundle has no member-name synthesis, so it would stringify to "
+                + "\"System.Object[]\". Format the class's fields directly instead.");
+    }
+
     /// <summary>CA-M1: a v1 user class defines NO user-defined operators or conversions (design §2 "ユーザー
     /// 演算子なし"). Reject one loudly — a class `==`/`!=` is REFERENCE equality (no user operator), and any
     /// other user operator has no lowering. A struct operator (IsUserStruct) is unaffected: it routes to its
@@ -2669,6 +2695,14 @@ public abstract partial class HandlerBase
     /// lands here too). Scanned once at the mint site — every instantiated class passes through it.</summary>
     protected static void RejectUnsupportedClassMembers(INamedTypeSymbol classTy)
     {
+        // CA-M1 §2-1: v1 rejects interface implementation — the B35 SendCustomEvent dispatch is
+        // behaviour-only, so a class interface has no dispatch layer to reuse. Call a named method directly,
+        // or use a behaviour interface. (The base=System.Object check already excludes a class base.)
+        if (classTy.Interfaces.Length > 0)
+            throw new NotSupportedException(
+                $"Class '{classTy.Name}' implements interface '{classTy.Interfaces[0].Name}': class ABI v1 "
+                + "does not support interface implementation on a user class. Call the method directly, or "
+                + "use a UdonSharpBehaviour interface for dispatch.");
         foreach (var m in classTy.GetMembers())
         {
             if (m.IsImplicitlyDeclared) continue;

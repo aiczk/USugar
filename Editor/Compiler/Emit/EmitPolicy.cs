@@ -84,18 +84,30 @@ public static class EmitPolicy
     {
         if (!LayoutPlanner.IsNetworkCallable(method)) return;
         foreach (var p in method.Parameters)
+        {
             if (ContainsDelegateType(p.Type))
                 throw new System.NotSupportedException(
                     $"[NetworkCallable] method '{method.Name}' cannot take delegate-typed parameter "
                     + $"'{p.Name}': a delegate value is a program-local object[] bundle and cannot "
                     + "cross a network call. Pass plain data instead and re-create the delegate "
                     + "locally on the receiving side.");
+            // CA-M1 §2-1: a v1 class parameter is the same program-local object[] bundle — cannot cross.
+            if (ContainsUserClassType(p.Type))
+                throw new System.NotSupportedException(
+                    $"[NetworkCallable] method '{method.Name}' cannot take v1-class-typed parameter "
+                    + $"'{p.Name}': a class value is a program-local object[] bundle and cannot cross a "
+                    + "network call. Pass plain data instead and rebuild the object on the receiving side.");
+        }
         if (ContainsDelegateType(method.ReturnType))
             throw new System.NotSupportedException(
                 $"[NetworkCallable] method '{method.Name}' cannot return a delegate-typed value: "
                 + "a delegate value is a program-local object[] bundle and cannot cross a network "
                 + "call. Return plain data instead and re-create the delegate locally on the "
                 + "receiving side.");
+        if (ContainsUserClassType(method.ReturnType))
+            throw new System.NotSupportedException(
+                $"[NetworkCallable] method '{method.Name}' cannot return a v1-class-typed value: a class "
+                + "value is a program-local object[] bundle and cannot cross a network call.");
     }
 
     /// <summary>Delegate proper, an array (of arrays…) of delegates, or a delegate reachable through
@@ -114,6 +126,38 @@ public static class EmitPolicy
             foreach (var m in agg.GetMembers())
                 if (m is IFieldSymbol f && !f.IsStatic && ContainsDelegateType(f.Type, visited))
                     return true;
+        return false;
+    }
+
+    /// <summary>CA-M1 §2-1: a v1 user class proper, or one reachable through an array element, a
+    /// struct/tuple field, a generic type argument, or a delegate's parameter/return signature. A class
+    /// value is a program-local object[] bundle — like a delegate, its reference is meaningless in any
+    /// other client's program, so it can never cross a network sync / cross-behaviour call / delegate
+    /// __dlgc_ channel / GetProgramVariable surface. Mirror of <see cref="ContainsDelegateType"/> (the
+    /// visited set guards a type that transitively contains itself, e.g. a self-referential Node).</summary>
+    public static bool ContainsUserClassType(ITypeSymbol type)
+        => ContainsUserClassType(type, new HashSet<ITypeSymbol>(SymbolEqualityComparer.Default));
+
+    static bool ContainsUserClassType(ITypeSymbol type, HashSet<ITypeSymbol> visited)
+    {
+        if (IsUserClassType(type)) return true;
+        if (type is IArrayTypeSymbol a) return ContainsUserClassType(a.ElementType, visited);
+        if (type is not INamedTypeSymbol n || !visited.Add(n)) return false;
+        // A delegate smuggling a class through Action<Foo> across the __dlgc_ byte contract.
+        if (n.DelegateInvokeMethod is { } inv)
+        {
+            foreach (var p in inv.Parameters)
+                if (ContainsUserClassType(p.Type, visited)) return true;
+            if (ContainsUserClassType(inv.ReturnType, visited)) return true;
+        }
+        // A class reachable through a struct/tuple field.
+        if (IsAggregateType(n))
+            foreach (var m in n.GetMembers())
+                if (m is IFieldSymbol { IsStatic: false } f && ContainsUserClassType(f.Type, visited))
+                    return true;
+        // A constructed generic's type arguments (covers tuple elements and any other generic wrapper).
+        foreach (var ta in n.TypeArguments)
+            if (ContainsUserClassType(ta, visited)) return true;
         return false;
     }
 

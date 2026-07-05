@@ -282,6 +282,24 @@ public class UasmEmitter
                 continue; // Skip normal field declaration
             }
 
+            // CA-M1 §2-1: a v1 class value is a program-local object[] bundle, so a class-carrying field must
+            // not be a cross-program surface. A public / [SerializeField] / [UdonSynced] field is exposed via
+            // GetProgramVariable, network sync, or the Inspector — none can carry the bundle. A PRIVATE,
+            // non-synced class field stays legal (in-program storage, e.g. a linked-list root).
+            if (EmitPolicy.ContainsUserClassType(member.Type))
+            {
+                bool exported = member.DeclaredAccessibility == Accessibility.Public
+                    || member.GetAttributes().Any(a => a.AttributeClass?.Name is "SerializeField" or "SerializeFieldAttribute");
+                bool synced = member.GetAttributes().Any(a => a.AttributeClass?.Name == "UdonSyncedAttribute");
+                if (exported || synced)
+                    throw new NotSupportedException(
+                        $"Field '{member.Name}' carries a v1 user class and is "
+                        + (synced ? "[UdonSynced]" : "public/[SerializeField]")
+                        + ": a class value is a program-local object[] bundle that cannot cross the "
+                        + "GetProgramVariable / network-sync / Inspector surface. Make the field private, or "
+                        + "store plain data.");
+            }
+
             var udonType = GetUdonType(member.Type);
             var flags = FieldFlags.None;
             if (member.DeclaredAccessibility == Accessibility.Public
