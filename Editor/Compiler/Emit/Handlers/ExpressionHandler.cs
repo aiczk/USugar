@@ -624,12 +624,19 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
     CLeaf EmitTypeofToken(ITypeOfOperation typeOf)
     {
         var operand = typeOf.TypeOperand;
-        // An array type's fold to SystemObjectArray IS UdonSharp's intended representation (a jagged/object
-        // array genuinely IS object[] at the VM level — GetType()==typeof(object[]) is documented,
-        // SDK-Compat-pinned behavior), not the C#-divergent identity collapse B63 targets (user behaviours,
-        // enums). So typeof(array) is unrestricted here; a direct typeof(A[])==typeof(B[]) same-tag compare is
-        // still caught by the redundant equality armor (OperatorHandler.RejectTypeofTokenEquality).
-        if (operand is not IArrayTypeSymbol
+        // object[]'s fold to SystemObjectArray IS UdonSharp's intended representation (a jagged/object array
+        // genuinely IS object[] at the VM level — GetType()==typeof(object[]) is documented, SDK-Compat-pinned
+        // behaviour), so typeof(object[]) is unrestricted. But an array whose ELEMENT is itself
+        // non-injective — a user struct/tuple (S1[]), a delegate, a user interface, or another array (jagged
+        // int[][]) — folds to the SAME SystemObjectArray tag as a sibling and is the C#-divergent identity
+        // collapse B63 targets (B66: typeof(S1[])==typeof(S2[]) was silently true). Reuse the choke point's
+        // own element classification: exempt the array only when its element is runtime-distinguishable AND
+        // not itself an array (that leaves exactly object[] among the folding arrays; distinguishable-element
+        // arrays like int[]/Camera[] already pass IsRuntimeDistinguishable below).
+        bool distinguishableElementArray = operand is IArrayTypeSymbol arr
+            && arr.ElementType is not IArrayTypeSymbol
+            && ExternResolver.IsRuntimeDistinguishable(arr.ElementType, _ctx.TypeParamMap);
+        if (!distinguishableElementArray
             && !ExternResolver.IsRuntimeDistinguishable(operand, _ctx.TypeParamMap)
             && !IsDirectComponentQueryArgument(typeOf))
             throw new NotSupportedException(

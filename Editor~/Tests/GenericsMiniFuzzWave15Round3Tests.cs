@@ -114,6 +114,40 @@ public class B63G : UdonSharpBehaviour {
         Assert.Contains("__GetComponent", uasm);
     }
 
+    // ── B66: the B63 array-typeof exemption was `operand is not IArrayTypeSymbol` (unconditional), so
+    //         typeof(S1[]) (aggregate element → SystemObjectArray) laundered-compared silently equal. The
+    //         exemption is narrowed to arrays whose ELEMENT is runtime-distinguishable AND not itself an
+    //         array — exactly object[] (the stock-conformant fold); aggregate/delegate/interface/nested-array
+    //         elements reject like any collapse token. ──
+
+    [Theory]
+    // Aggregate-element and nested-array typeof stored then compared → collapse tag, must reject at the mint.
+    [InlineData("B66S", @"public struct S1_66 { public int a; } public struct S2_66 { public int b; }
+public class B66S : UdonSharpBehaviour { public int result; void Start(){ System.Type t1 = typeof(S1_66[]); System.Type t2 = typeof(S2_66[]); result = (t1 == t2) ? 1 : 0; } }")]
+    [InlineData("B66N", @"public class B66N : UdonSharpBehaviour { public int result; void Start(){ System.Type t1 = typeof(int[][]); System.Type t2 = typeof(string[][]); result = (t1 == t2) ? 1 : 0; } }")]
+    public void B66_NonDistinguishableElementArrayTypeof_RejectsLoudly(string cls, string body)
+    {
+        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm($@"
+using System; using UdonSharp;
+{body}", cls));
+        Assert.Contains("typeof(", ex.Message);
+    }
+
+    [Fact]
+    public void B66_DistinguishableElementArrayTypeof_StillCompiles()
+    {
+        // Controls: int[]/long[] elements are distinguishable (their arrays have unique tags), and object[]
+        // (element object) is the stock-conformant SystemObjectArray fold DefaultHeapValueTest pins — all
+        // stay legal to store and compare.
+        TestHelper.CompileToUasm(@"
+using System; using UdonSharp;
+public class B66D : UdonSharpBehaviour {
+  public int result;
+  void Start(){ System.Type t1 = typeof(int[]); System.Type t2 = typeof(long[]); System.Type t3 = typeof(object[]);
+    result = (t1 == t2 ? 1 : 0) + (t3 == typeof(object[]) ? 2 : 0); }
+}", "B66D");
+    }
+
     // ── B64: the closure-pin is per-parameter AND capture-aware. A second instantiation that only varies a
     //         type param NO closure uses is legal; a varying CLOSURE-USED param still pins on type; and a
     //         STATIC generic method whose captures alias across its inlined specializations pins on capture
