@@ -65,14 +65,20 @@ public class B62D : UdonSharpBehaviour {
         Assert.Contains("'as'", ex.Message);
     }
 
-    // ── B63: typeof(A)==typeof(B) on two DISTINCT C# types that fold onto one Udon tag is rejected at the
-    //         comparison site; a bare typeof token (GetComponent(typeof(...)), .Name) stays legal.
+    // ── B63 (immediate-use-only): a collapse-set typeof (non-injective Udon tag) may exist ONLY as a direct
+    //    argument to a component-query engine call, where it is consumed in place. Any other position — ==/!=,
+    //    a local/field store, a user-method argument, a return — is a loud reject at the mint site, so the
+    //    non-injective token can never be laundered into a later comparison. Honest (uniquely-tagged) types
+    //    are fully unrestricted. ──
 
     [Theory]
+    // Direct compare, store-then-anything, pass-to-user-method, and enum-vs-underlying all reject at the mint.
     [InlineData("B63A", @"public class B63A : UdonSharpBehaviour { public int result; void Start(){ result = (typeof(B63A) == typeof(B63B2)) ? 1 : 0; } }
 public class B63B2 : UdonSharpBehaviour { void Start(){} }")]
     [InlineData("B63E", @"public enum E63 { A, B } public class B63E : UdonSharpBehaviour { public int result; void Start(){ result = (typeof(E63) == typeof(int)) ? 1 : 0; } }")]
-    public void B63_TypeofCollapseSet_EqualityRejectsLoudly(string cls, string body)
+    [InlineData("B63S", @"public class B63S : UdonSharpBehaviour { public int result; void Start(){ System.Type t = typeof(B63S); result = t.Name.Length; } }")]
+    [InlineData("B63P", @"public class B63P : UdonSharpBehaviour { public int result; int L(System.Type t) => 1; void Start(){ result = L(typeof(B63P)); } }")]
+    public void B63_TypeofCollapseSet_NonImmediateUse_RejectsLoudly(string cls, string body)
     {
         var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm($@"
 using System; using UdonSharp;
@@ -81,29 +87,31 @@ using System; using UdonSharp;
     }
 
     [Fact]
-    public void B63_TypeofDistinguishable_EqualityStillCompiles()
+    public void B63_HonestTypeofToken_StoreAndCompare_StillCompiles()
     {
-        // Control: primitive/array typeof stays honest (distinguishable) and compiles.
+        // Control: a distinguishable (unique-tag) typeof is fully unrestricted — store it, compare it, read
+        // its Name — all legal. Only the non-injective collapse-set tokens are gated.
         TestHelper.CompileToUasm(@"
 using System; using UdonSharp;
 public class B63C : UdonSharpBehaviour {
   public int result;
-  void Start(){ int a = (typeof(int) == typeof(int)) ? 1 : 0; int b = (typeof(int[]) == typeof(string[])) ? 0 : 2; result = a + b + typeof(int).Name.Length; }
+  void Start(){ System.Type ti = typeof(int); int a = (ti == typeof(int)) ? 1 : 0; int b = (typeof(int[]) == typeof(string[])) ? 0 : 2; result = a + b + ti.Name.Length; }
 }", "B63C");
     }
 
     [Fact]
-    public void B63_BareCollapseSetTypeofToken_StillCompiles()
+    public void B63_CollapseSetTypeof_AsComponentQueryArgument_StillCompiles()
     {
-        // Control: a collapse-set typeof used only as a TOKEN (never == another type) is legal — the token
-        // resolves through the receiver extern; only the ==/!= comparison is unsound. Mirrors the Compat
-        // GetComponent(typeof(UdonBehaviour)) shape.
-        TestHelper.CompileToUasm(@"
-using System; using UdonSharp;
-public class B63T : UdonSharpBehaviour {
+        // The one legal position for a collapse-set typeof: a direct argument to a GetComponent-family engine
+        // call, which consumes the token in place (it never becomes a comparable heap value). Mirrors the SDK
+        // Compat GetComponent(typeof(UdonBehaviour)) / GetComponents(typeof(UdonBehaviour)) shapes.
+        var uasm = TestHelper.CompileToUasm(@"
+using System; using UnityEngine; using UdonSharp;
+public class B63G : UdonSharpBehaviour {
   public int result;
-  void Start(){ System.Type t = typeof(B63T); result = t.Name.Length; }
-}", "B63T");
+  void Start(){ Component c = GetComponent(typeof(UdonSharpBehaviour)); Component[] cs = GetComponents(typeof(UdonSharpBehaviour)); result = (c == null ? 0 : 1) + cs.Length; }
+}", "B63G");
+        Assert.Contains("__GetComponent", uasm);
     }
 
     // ── B64: the closure-pin is per-parameter AND capture-aware. A second instantiation that only varies a

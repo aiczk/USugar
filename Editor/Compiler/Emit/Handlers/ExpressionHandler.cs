@@ -43,7 +43,7 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
         IInstanceReferenceOperation => LoadField(_ctx.DeclareThisOnce(GetUdonType(_classSymbol)), GetUdonType(_classSymbol)),
         IConversionOperation op => VisitConversion(op),
         IDefaultValueOperation op => VisitDefaultValue(op),
-        ITypeOfOperation typeOf => EmitTypeofToken(typeOf.TypeOperand),
+        ITypeOfOperation typeOf => EmitTypeofToken(typeOf),
         INameOfOperation nameOf => Const(nameOf.ConstantValue.Value.ToString(), "SystemString"),
         IDeclarationExpressionOperation op => VisitDeclarationExpression(op),
         IDiscardOperation discard => SlotRef(_ctx.AllocTemp(GetUdonType(discard.Type))),
@@ -608,12 +608,57 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
         return srcVal;
     }
 
-    // B63: a bare typeof() is a legitimate type token (GetComponent(typeof(UdonBehaviour)), typeof(int).Name,
-    // GetValue(…, typeof(string))) — Udon resolves it through the receiver extern. The unsoundness is confined
-    // to `==`/`!=` BETWEEN two typeof tokens (SystemType compares by the non-injective Udon tag, so
-    // typeof(A)==typeof(B) is silently true for two collapse-set types); that is rejected at the equality site
-    // (OperatorHandler.RejectTypeofTokenEquality), not here, so bare tokens keep compiling.
-    CLeaf EmitTypeofToken(ITypeSymbol operand) => ConstTypeToken(operand);
+    // B63 (mint-site reject, immediate-use-only): a typeof() on a NON-distinguishable type bakes a SystemType
+    // constant whose Udon runtime tag is non-injective — many distinct CLR types share one tag (every
+    // UdonSharpBehaviour-derived type + UdonBehaviour + user interfaces → IUdonEventReceiver, an enum → its
+    // underlying, every delegate/struct/tuple/array-of-those → SystemObjectArray). Once that constant is a
+    // storable heap value, ANY equality path silently lies (`typeof(A)==typeof(B)`, `ta==tb` after a store,
+    // `object o=typeof(A); o==p`, `object.Equals`, `.Equals`, or a comparison in a callee it was passed to) —
+    // an unbounded surface no comparison-site check can close. So the collapse-set token may exist ONLY
+    // transiently as a direct argument to a component-query engine call (GetComponent/GetComponents family),
+    // where the extern consumes it immediately and it never becomes a comparable value; every other parent
+    // (assignment/local init, ==/!=, field/array store, user-method argument, return) is a loud reject at this
+    // single mint choke point. A token that cannot be stored cannot be laundered into a later comparison.
+    // Distinguishable types (primitives, arrays with distinct element tags, uniquely-tagged SDK/native types)
+    // keep an honest token and are fully unrestricted.
+    CLeaf EmitTypeofToken(ITypeOfOperation typeOf)
+    {
+        var operand = typeOf.TypeOperand;
+        // An array type's fold to SystemObjectArray IS UdonSharp's intended representation (a jagged/object
+        // array genuinely IS object[] at the VM level — GetType()==typeof(object[]) is documented,
+        // SDK-Compat-pinned behavior), not the C#-divergent identity collapse B63 targets (user behaviours,
+        // enums). So typeof(array) is unrestricted here; a direct typeof(A[])==typeof(B[]) same-tag compare is
+        // still caught by the redundant equality armor (OperatorHandler.RejectTypeofTokenEquality).
+        if (operand is not IArrayTypeSymbol
+            && !ExternResolver.IsRuntimeDistinguishable(operand, _ctx.TypeParamMap)
+            && !IsDirectComponentQueryArgument(typeOf))
+            throw new NotSupportedException(
+                $"typeof('{(ResolveType(operand) ?? operand).ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}') "
+                + "is not supported here: Udon folds it and several distinct types onto one non-injective runtime "
+                + "type tag, so once stored its System.Type token compares equal to every same-tag type (==, "
+                + ".Equals, object-boxed, or stored-then-compared all silently lie). A collapse-set typeof may "
+                + "only be passed directly to a component query (GetComponent(typeof(...))); pass typeof(...) "
+                + "directly to the engine call, or use the generic GetComponent<T>() overload.");
+        return ConstTypeToken(operand);
+    }
+
+    // Immediate-use gate for a collapse-set typeof: is this typeof (through any conversion wrapper) the direct
+    // argument of a GetComponent-family engine call? Those externs consume the token in place and never return
+    // it, so it can never be stored and later compared. A user-defined method that merely starts with
+    // "GetComponent" is excluded by the receiver-type check (must be UnityEngine.Component/GameObject).
+    static bool IsDirectComponentQueryArgument(ITypeOfOperation typeOf)
+    {
+        IOperation node = typeOf;
+        while (node.Parent is IConversionOperation conv) node = conv;
+        if (node.Parent is IArgumentOperation arg && arg.Parent is IInvocationOperation inv)
+        {
+            var ct = inv.TargetMethod.ContainingType;
+            return inv.TargetMethod.Name.StartsWith("GetComponent")
+                && ct != null && (ct.Name == "Component" || ct.Name == "GameObject")
+                && ct.ContainingNamespace?.Name == "UnityEngine";
+        }
+        return false;
+    }
 
     // `o as T` ≡ (o is T) ? (T)o : null, reusing the shared is-machinery: EmitTypeCheck enforces the
     // distinguishability choke point (collapse-set target rejects loudly), then the else branch nulls the

@@ -38,7 +38,9 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
         if (op.OperatorKind == BinaryOperatorKind.ConditionalOr)
             return VisitConditionalOr(op);
 
-        // ── B63: typeof(A) ==/!= typeof(B) on a collapse-set operand is silently wrong ──
+        // ── B63 redundant armor: typeof(A)==typeof(B) on a collapse-set operand. The mint-site
+        // immediate-use gate (EmitTypeofToken) already rejects a collapse-set typeof outside a component-query
+        // argument, so a direct both-typeof compare never reaches here; this is defence-in-depth. ──
         RejectTypeofTokenEquality(op);
 
         // ── User-defined struct operator: v1 + v2 → static operator method call ──
@@ -200,32 +202,23 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
         t is INamedTypeSymbol n && n.TypeKind == TypeKind.Enum
             ? GetUdonType(n.EnumUnderlyingType) : GetUdonType(t);
 
-    // B63: `typeof(A) ==/!= typeof(B)` lowers to a SystemType `==`, which distinguishes tokens only by the
-    // (non-injective) Udon runtime tag. When A and B are DISTINCT C# types that fold onto the SAME tag — two
-    // UdonSharpBehaviour-derived types (both → VRCUdonUdonBehaviour), or an enum vs. its underlying integral
-    // (both → the underlying tag) — the comparison is silently `true` where C# says `false`. Reject exactly that
-    // collision. Distinct tags (typeof(int[]) vs typeof(string[])), identical types (typeof(int)==typeof(int)),
-    // a bare token (GetComponent(typeof(...)), typeof(X).Name), and GetType()-vs-typeof stay untouched.
-    // NOTE: only the syntactic both-`typeof` shape is caught; a token laundered through a `System.Type` local
-    // (static type erases the origin) is not statically detectable without dataflow — reported to team-lead.
+    // B63 redundant armor: reject a direct `typeof(A) ==/!= typeof(B)` where A,B are distinct C# types that
+    // fold onto one Udon tag (the mint-site immediate-use gate already catches this — kept as defence-in-depth).
     void RejectTypeofTokenEquality(IBinaryOperation op)
     {
         if (op.OperatorKind is not (BinaryOperatorKind.Equals or BinaryOperatorKind.NotEquals))
             return;
         var a = AsTypeofOperand(op.LeftOperand);
         var b = AsTypeofOperand(op.RightOperand);
-        if (a == null || b == null)
+        if (a == null || b == null || SymbolEqualityComparer.Default.Equals(a, b))
             return;
-        if (SymbolEqualityComparer.Default.Equals(a, b))
-            return; // typeof(T) == typeof(T): honestly true
         if (GetUdonType(a) != GetUdonType(b))
-            return; // distinct Udon tags: honestly resolved
+            return;
         throw new System.NotSupportedException(
             $"typeof('{(ResolveType(a) ?? a).ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}') "
             + $"==/!= typeof('{(ResolveType(b) ?? b).ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}') "
             + "is unsound: these are distinct C# types but Udon folds both onto one runtime type tag "
-            + $"('{GetUdonType(a)}'), so the comparison is silently true where C# says false. Compare the values "
-            + "by their static type instead of their System.Type token.");
+            + $"('{GetUdonType(a)}'), so the comparison is silently true where C# says false.");
     }
 
     // The type operand of a typeof, seeing through an identity/boxing conversion wrapper; null if not a typeof.
