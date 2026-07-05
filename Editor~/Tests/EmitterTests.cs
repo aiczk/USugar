@@ -2911,7 +2911,7 @@ public class IsPatternTest : UdonSharpBehaviour {
     // ── as cast ──
 
     [Fact]
-    public void AsCast_ReferenceType_PassesThrough()
+    public void AsCast_DistinguishableReferenceType_EmitsTypeTest()
     {
         var uasm = TestHelper.CompileToUasm(@"
 using UdonSharp;
@@ -2921,8 +2921,10 @@ public class AsCastTest : UdonSharpBehaviour {
     void Start() { var t = _c as Transform; }
 }
 ");
-        // Reference-type 'as' is a no-op conversion in Udon (no runtime type enforcement)
-        Assert.DoesNotContain("IsInstanceOfType", uasm);
+        // B62: reference-type 'as' now emits a runtime type-test (nulls the slot on a failed cast) instead
+        // of passing the value through untyped (which faulted the VM on the next use). Transform is a
+        // uniquely-tagged Udon type, so the test is honest.
+        Assert.Contains("IsInstanceOfType", uasm);
         Assert.Contains(".code_start", uasm);
     }
 

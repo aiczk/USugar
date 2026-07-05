@@ -39,4 +39,29 @@ public enum L {{ A, B, C }}
 public class {cls} : UdonSharpBehaviour {{ public int seed; public int result; void Start(){{ {body} }} }}", cls);
         Assert.DoesNotContain("SystemConvert.__ToObject__", uasm);
     }
+
+    // ── B62: `as`-cast implemented via the is-machinery (distinguishable → test+null-out; collapse → reject) ──
+
+    [Fact]
+    public void B62_AsCast_DistinguishableTarget_Compiles()
+    {
+        TestHelper.CompileToUasm(@"
+using System; using UdonSharp;
+public class B62A : UdonSharpBehaviour {
+  public int seed; public int result;
+  void Start(){ object o = seed; string s = o as string; result = (s == null) ? 1 : 0; }
+}", "B62A");
+    }
+
+    [Fact]
+    public void B62_AsCast_CollapseSetTarget_RejectsLikeIs()
+    {
+        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
+using System; using UdonSharp;
+public class B62D : UdonSharpBehaviour {
+  public int result;
+  void Start(){ object o = ""x""; Func<int> f = o as Func<int>; result = (f == null) ? 1 : 0; }
+}", "B62D"));
+        Assert.Contains("'as'", ex.Message);
+    }
 }

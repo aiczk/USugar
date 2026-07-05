@@ -299,6 +299,13 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
 
         var srcVal = VisitExpression(conv.Operand);
 
+        // B62: `o as T` — mirror the `is` machinery through the same runtime-type-test choke point:
+        // (o is T) ? o : null. A non-distinguishable (collapse-set) target hits EmitTypeCheck's loud
+        // reject, exactly like `is`; a failing cast nulls the slot instead of passing the value through
+        // untyped (which faulted the VM on next use — no IsTryCast handling existed before).
+        if (conv.IsTryCast)
+            return EmitTryCast(srcVal, conv.Type);
+
         // Wave-12 r4 [W1]/[W2]: variance laundered through array covariance or a tuple conversion
         // diverges the __dlgc_ channels exactly like the direct delegate-value conversion the [V2]
         // arm below rejects (VM-proven lost return: ref=2 vs -1 on both shapes). Same loud reject,
@@ -599,6 +606,20 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
 
         // Identity conversion: pass through
         return srcVal;
+    }
+
+    // `o as T` ≡ (o is T) ? (T)o : null, reusing the shared is-machinery: EmitTypeCheck enforces the
+    // distinguishability choke point (collapse-set target rejects loudly), then the else branch nulls the
+    // slot so a failed cast yields null rather than passing the value through untyped (B62).
+    CLeaf EmitTryCast(CLeaf srcVal, ITypeSymbol targetType)
+    {
+        var targetUdon = GetUdonType(targetType);
+        var resultSlot = _ctx.AllocTemp(targetUdon);
+        var isCheck = EmitTypeCheck(srcVal, targetType);
+        _builder.EmitIf(isCheck,
+            _ => EmitAssign(resultSlot, srcVal),
+            _ => EmitAssign(resultSlot, Const(null, targetUdon)));
+        return SlotRef(resultSlot);
     }
 
     // An enum or one of the integral types an enum can be backed by — the only types the enum↔underlying

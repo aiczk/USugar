@@ -77,9 +77,10 @@ public class W12R5ObjCo : UdonSharpBehaviour {
     [Fact]
     public void ObjectBoxedAsCastCovariantDelegate_Throws()
     {
-        // `as` flavor of the same channel (corpus W12EC5R05, VM-proven ref=2 vs -1) — an `as`-cast
-        // to a delegate type is the same IConversionOperation and rejects the same way.
-        AssertObjectDelegateCastReject(@"
+        // `as` flavor of the same channel — after B62 an `as`-cast routes through the is-machinery's
+        // runtime-type-test choke point, so a delegate (collapse-set) target rejects there instead (the
+        // same unsound recovery is prevented, with the delegate-collapse message).
+        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
 using System;
 using UdonSharp;
 public class W12R5ObjAs : UdonSharpBehaviour {
@@ -93,7 +94,9 @@ public class W12R5ObjAs : UdonSharpBehaviour {
         object o = bundle();
         result = o == null ? -1 : o.ToString().Length;
     }
-}", "W12R5ObjAs");
+}", "W12R5ObjAs"));
+        Assert.Contains("delegate", ex.Message);
+        Assert.Contains("'as'", ex.Message);
     }
 
     [Fact]

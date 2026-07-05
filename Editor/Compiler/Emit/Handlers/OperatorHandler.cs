@@ -718,39 +718,6 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
         }
     }
 
-    CLeaf EmitTypeCheck(CLeaf valueVal, ITypeSymbol targetType)
-    {
-        // Layer-2 choke point. ExternResolver.GetUdonTypeName is non-injective: it folds many distinct CLR
-        // types onto one Udon runtime tag (every delegate/struct/tuple/array-of-those + object[] →
-        // SystemObjectArray; UdonSharpBehaviour + every derived type + every user interface →
-        // IUdonEventReceiver; a user enum → its underlying int; Nullable<T> → a box). A runtime type test
-        // (SystemType.__IsInstanceOfType) against such a type CANNOT discriminate it — it matches ANY
-        // same-tag value and silently takes the wrong branch (VM-proven: `o is Func<int,int>` matched a
-        // 0-arg Func<string>; `o is DerivedA` matches a DerivedB). Rather than emit a check that silently
-        // lies, reject loudly (design §8-3). This single guard subsumes the former delegate-only reject and
-        // closes struct/tuple/array/enum/interface/USB-derived; bare `object` and uniquely-tagged SDK/native
-        // types (int/string/Vector3/GameObject/SDK enums/int[]/…) stay distinguishable and compile.
-        if (!ExternResolver.IsRuntimeDistinguishable(targetType, _ctx.TypeParamMap))
-        {
-            var disp = ResolveType(targetType).ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat);
-            var hint = ResolveType(targetType) is INamedTypeSymbol dlgTarget && dlgTarget.DelegateInvokeMethod != null
-                ? " (Udon represents every delegate as one runtime type, so it cannot tell delegate signatures "
-                  + "apart and would match any delegate, then read the wrong argument/return channel)"
-                : "";
-            throw new System.NotSupportedException(
-                $"Runtime type test against '{disp}' is not supported: Udon collapses it and several distinct "
-                + "types onto one runtime type tag, so an 'is'/'switch' type test cannot tell them apart and "
-                + "would match the wrong value" + hint + ". Keep the value typed as its static type instead of "
-                + "recovering it with a runtime type test.");
-        }
-        // The type token is baked through the shared choke point (B51 silent-class armor: an unresolved
-        // type parameter would bake a null System.Type constant no validator catches → loud reject there).
-        return ExternCall(
-            "SystemType.__IsInstanceOfType__SystemObject__SystemBoolean",
-            new List<CLeaf> { ConstTypeToken(targetType), valueVal },
-            "SystemBoolean");
-    }
-
     // ── Switch expression ──
 
     CLeaf VisitSwitchExpression(ISwitchExpressionOperation op)

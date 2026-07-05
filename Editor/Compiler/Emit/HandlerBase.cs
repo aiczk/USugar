@@ -89,6 +89,36 @@ public abstract partial class HandlerBase
         return recv;
     }
 
+    // Layer-2 runtime-type-test choke point (is / switch / as). ExternResolver.GetUdonTypeName is
+    // non-injective: it folds many distinct CLR types onto one Udon runtime tag (every delegate/struct/
+    // tuple/array-of-those + object[] → SystemObjectArray; UdonSharpBehaviour + every derived type + every
+    // user interface → IUdonEventReceiver; a user enum → its underlying int; Nullable<T> → a box). A
+    // runtime type test against such a type CANNOT discriminate it — it matches ANY same-tag value and
+    // silently takes the wrong branch. Reject loudly (design §8-3); bare `object` and uniquely-tagged
+    // SDK/native types stay distinguishable and compile.
+    protected CLeaf EmitTypeCheck(CLeaf valueVal, ITypeSymbol targetType)
+    {
+        if (!ExternResolver.IsRuntimeDistinguishable(targetType, _ctx.TypeParamMap))
+        {
+            var disp = ResolveType(targetType).ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat);
+            var hint = ResolveType(targetType) is INamedTypeSymbol dlgTarget && dlgTarget.DelegateInvokeMethod != null
+                ? " (Udon represents every delegate as one runtime type, so it cannot tell delegate signatures "
+                  + "apart and would match any delegate, then read the wrong argument/return channel)"
+                : "";
+            throw new NotSupportedException(
+                $"Runtime type test against '{disp}' is not supported: Udon collapses it and several distinct "
+                + "types onto one runtime type tag, so an 'is'/'switch'/'as' test cannot tell them apart and "
+                + "would match the wrong value" + hint + ". Keep the value typed as its static type instead of "
+                + "recovering it with a runtime type test.");
+        }
+        // The type token is baked through the shared choke point (B51 silent-class armor: an unresolved
+        // type parameter would bake a null System.Type constant no validator catches → loud reject there).
+        return ExternCall(
+            "SystemType.__IsInstanceOfType__SystemObject__SystemBoolean",
+            new List<CLeaf> { ConstTypeToken(targetType), valueVal },
+            "SystemBoolean");
+    }
+
     // The single place a System.Type CONSTANT (type token) is baked — `o is T`, `typeof(T)`, and the
     // GetComponent<T> type-token arg all route here. A SystemType const is a heap constant no validator
     // checks, so an UNRESOLVED type parameter would silently resolve to a null System.Type and NRE at
