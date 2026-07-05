@@ -743,6 +743,15 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
                 + "would match the wrong value" + hint + ". Keep the value typed as its static type instead of "
                 + "recovering it with a runtime type test.");
         }
+        // Armor (B51 silent variant): an UNRESOLVED type parameter here would bake Const("T","SystemType"),
+        // which — unlike a bogus "TArray" extern the validator rejects — is a heap CONSTANT no validator
+        // checks: it resolves to a null System.Type and NREs inside IsInstanceOfType at runtime. Convert
+        // that one silent path to a loud ICE. (The generic-instantiation map should already carry T — B51.)
+        if (ResolveType(targetType) is ITypeParameterSymbol unresolvedTp)
+            throw new System.NotSupportedException(
+                $"Runtime type test against unresolved type parameter '{unresolvedTp.Name}': its type "
+                + "argument did not reach this emit site (a generic-instantiation map gap). Emitting the test "
+                + "would bake a null System.Type constant and fault at runtime.");
         var typeConst = Const(GetUdonType(targetType), "SystemType");
         return ExternCall(
             "SystemType.__IsInstanceOfType__SystemObject__SystemBoolean",

@@ -98,6 +98,21 @@ public class B51V4 : UdonSharpBehaviour {
 }", "B51V4");
     }
 
+    // ── B51 silent variant: `o is T` / `o is T tv` inside a generic LF now resolve T (were a silent
+    // null-SystemType VM crash). EmitTypeCheck additionally armors any residual unresolved param loudly. ──
+
+    [Fact]
+    public void B51_RuntimeTypeTest_EnclosingTypeParam_InGenericLocalFunction_Compiles()
+    {
+        TestHelper.CompileToUasm(@"
+using System; using UdonSharp;
+public class B51IsT : UdonSharpBehaviour {
+  public int r1;
+  int M<T>(int b){ int Inner<W>(){ object o = b; bool m = o is T; if (o is T tv) b += 1; W[] w = new W[1]; return b + (m?100:0) + w.Length; } return Inner<int>(); }
+  void Start(){ r1 = M<int>(6); }
+}", "B51IsT");
+    }
+
     [Fact]
     public void B53_MultiSpecCapturingGenericLocalFunction_StillRejects()
     {
