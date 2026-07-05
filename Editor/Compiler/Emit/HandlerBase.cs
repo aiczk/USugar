@@ -1710,6 +1710,24 @@ public abstract partial class HandlerBase
     /// return slot, queued on PendingGenericSpecs for the post-body emission drain. Idempotent per
     /// constructed symbol. (Moved from InvocationHandler when [W7] gave the delegate-creation path a
     /// second caller — one registration knowledge source.)</summary>
+    // Wave-9 round-5 [X6] / round-8 [Y2] gate — first-wins record of a generic definition's instantiation
+    // (drives the closure-compose that carries the enclosing generic's T into a nested closure/LF, and the
+    // multi-instantiation pin). Struct-hosted generic methods route through EmitStructInstanceCall, which
+    // registers the spec itself but NOT through RegisterGenericSpecialization — so this must run there too
+    // (B56), else a nested LF referencing the method's T finds no owner and CoreVerify ICEs on raw 'T'.
+    protected void RegisterFirstGenericSpec(IMethodSymbol constructed)
+    {
+        var genericDef = constructed.OriginalDefinition;
+        if (_ctx.FirstGenericSpec.TryGetValue(genericDef, out var firstSpec))
+        {
+            if (!SymbolEqualityComparer.Default.Equals(firstSpec, constructed))
+                EmitContext.ThrowIfClosurePinsInstantiation(
+                    _ctx.GenericBodyClosurePin(_compilation, genericDef), constructed.Name);
+        }
+        else
+            _ctx.FirstGenericSpec[genericDef] = constructed;
+    }
+
     protected void RegisterGenericSpecialization(IMethodSymbol constructed)
     {
         if (_methodFunctions.ContainsKey(constructed)) return;
@@ -1723,15 +1741,7 @@ public abstract partial class HandlerBase
         // REFERENCES the generic's type parameters pins the instantiation the same way (the shared
         // function was emitted with the first spec's map). Pin-free closures and single
         // instantiations stay legal.
-        var genericDef = constructed.OriginalDefinition;
-        if (_ctx.FirstGenericSpec.TryGetValue(genericDef, out var firstSpec))
-        {
-            if (!SymbolEqualityComparer.Default.Equals(firstSpec, constructed))
-                EmitContext.ThrowIfClosurePinsInstantiation(
-                    _ctx.GenericBodyClosurePin(_compilation, genericDef), constructed.Name);
-        }
-        else
-            _ctx.FirstGenericSpec[genericDef] = constructed;
+        RegisterFirstGenericSpec(constructed);
 
         var slot = _ctx.RegisterMethod(constructed, i => i.ToString());
         var idx = slot.Index;

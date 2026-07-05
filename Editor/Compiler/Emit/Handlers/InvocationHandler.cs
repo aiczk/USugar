@@ -148,7 +148,15 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
         // like a generic method's own on-demand arm below (wave-14 residual gap).
         if (!target.IsStatic && target.MethodKind == MethodKind.Ordinary
             && target.ContainingType is INamedTypeSymbol structRecv && EmitPolicy.IsUserStruct(structRecv))
-            return EmitStructInstanceCall(op, ResolveStructMember(target));
+        {
+            var structTarget = ResolveStructMember(target);
+            // B56: a struct-hosted generic method must record its instantiation so a nested closure/LF
+            // referencing the method's T finds the owner in the closure-compose (the class arm does this
+            // via RegisterGenericSpecialization; the struct path registers the spec separately).
+            if (structTarget.IsGenericMethod)
+                RegisterFirstGenericSpec(structTarget);
+            return EmitStructInstanceCall(op, structTarget);
+        }
 
         // Receiver identity (predates fcd-stage1): an instance method of THIS class family invoked
         // through a NON-this receiver (same-class field/local, base-typed local, cast) used to
