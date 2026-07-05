@@ -16,6 +16,31 @@ public static class ExternResolver
         set => Volatile.Write(ref _isExternValid, value);
     }
 
+    // Round-3 item 0 (production validation gate): the orchestrator assembles emitted UASM directly with
+    // no hard validation — so a bogus extern that slips past the per-call-site IsExternValid selection
+    // reaches the SDK assembler as an OPAQUE error in the real Unity Editor (the class 12b5215/32fcae3
+    // killed elsewhere), while the test harness catches it loudly via UasmValidator. This sweeps every
+    // emitted EXTERN against the wired registry and throws a NAMED diagnostic, per class, before assembly —
+    // giving production the same loud surface the harness has. No-op when the registry is not wired.
+    public static void AssertEmittedExternsValid(string uasm)
+    {
+        var isValid = IsExternValid;
+        if (isValid == null || uasm == null) return;
+        const string prefix = "EXTERN, \"";
+        List<string> bad = null;
+        foreach (var line in uasm.Split('\n'))
+        {
+            var t = line.Trim();
+            if (!t.StartsWith(prefix, StringComparison.Ordinal)) continue;
+            var name = t.Substring(prefix.Length).TrimEnd('"');
+            if (!isValid(name)) (bad ??= new List<string>()).Add(name);
+        }
+        if (bad != null)
+            throw new NotSupportedException(
+                "Emitted unregistered Udon extern(s) — these would fail opaquely in the SDK assembler: "
+                + string.Join(", ", bad.Distinct()));
+    }
+
     // Rank>1 array type (int[,], …) has no native Udon representation — it is emulated as an
     // object[1+r] bundle: [0] = typed flat backing (T[], row-major), [1..r] = boxed dimension
     // lengths (N-dim array design, 2026-07-04 §0). GetUdonTypeName folds it to the SAME

@@ -245,6 +245,9 @@ static class USugarCompilationOrchestrator
 
                     var emitter = new UasmEmitter(compilation, symbol, planner) { DumpEnabled = dumpEnabled };
                     var uasm = emitter.Emit();
+                    // Round-3 item 0: hard per-class extern-validation gate before Phase-3 assembly — a bogus
+                    // extern becomes a named USugar diagnostic here instead of an opaque SDK assembler error.
+                    ExternResolver.AssertEmittedExternsValid(uasm);
                     emitResults.Add(new EmitResult(symbol, tree, uasm,
                         emitter.CodeGenResult.Constants, emitter.GetHeapSize(), emitter.Diagnostics));
                 }
