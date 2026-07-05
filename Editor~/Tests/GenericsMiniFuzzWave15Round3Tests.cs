@@ -165,4 +165,39 @@ public class B64C : UdonSharpBehaviour {
 }", "B64C"));
         Assert.Contains("captures locals/parameters", ex.Message);
     }
+
+    // ── B65: a type-parameter receiver (T : Behaviour) resolves the inherited-member extern owner through
+    //         the ambient type-param map to the CONCRETE leaf (which has the extern), not the abstract base. ──
+
+    [Fact]
+    public void B65_TypeParamReceiver_InheritedMember_ResolvesToConcreteLeaf()
+    {
+        // Read<T>(T c) where T : Behaviour reads c.enabled. T is inferred as Camera at the call site, so the
+        // GET must emit UnityEngineCamera.__get_enabled__ (Camera carries the inherited extern) — before B65
+        // the type-param receiver on the getter path fell through to the abstract UnityEngineBehaviour owner,
+        // whose __get_enabled__ extern does not exist (UasmValidationException: Unknown extern).
+        var uasm = TestHelper.CompileToUasm(@"
+using UnityEngine; using UdonSharp;
+public class B65G : UdonSharpBehaviour {
+  public Camera cam; public bool r;
+  bool Read<T>(T c) where T : Behaviour { return c.enabled; }
+  void Start(){ r = Read(cam); }
+}", "B65G");
+        Assert.Contains("UnityEngineCamera.__get_enabled__", uasm);
+        Assert.DoesNotContain("UnityEngineBehaviour.__get_enabled__", uasm);
+    }
+
+    [Fact]
+    public void B65_AbstractBaseTypedReceiver_NonGeneric_StaysLoudReject()
+    {
+        // Control: a receiver STATICALLY typed as the abstract base Behaviour (not a type param bound to a
+        // leaf) has no concrete extern owner — Udon registers .enabled per concrete type, never under
+        // UnityEngineBehaviour — so it must stay a loud reject, not silently resolve.
+        Assert.ThrowsAny<Exception>(() => TestHelper.CompileToUasm(@"
+using UnityEngine; using UdonSharp;
+public class B65N : UdonSharpBehaviour {
+  public Behaviour b;
+  void Start(){ b.enabled = false; }
+}", "B65N"));
+    }
 }

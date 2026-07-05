@@ -78,6 +78,12 @@ public abstract partial class HandlerBase
     // reject (B60), matching the type-parameter case.
     protected ITypeSymbol ResolveExternOwnerType(ITypeSymbol memberContainingType, ITypeSymbol receiverType, string memberName)
     {
+        // B65: a type-parameter receiver (T : SomeBase, e.g. `where T : Behaviour`) carries an inherited
+        // member's extern under its CONCRETE leaf — Udon registers `.enabled` per concrete type, never under
+        // the abstract constraint base — so substitute the receiver through the ambient monomorphization map
+        // before resolving the owner. A receiver STATICALLY typed as the abstract base itself (non-generic
+        // `Behaviour b`) does not substitute, so it stays the designed loud reject (no such extern owner).
+        receiverType = ResolveType(receiverType);
         if (receiverType is not INamedTypeSymbol recv
             || SymbolEqualityComparer.Default.Equals(memberContainingType, recv))
             return memberContainingType;
