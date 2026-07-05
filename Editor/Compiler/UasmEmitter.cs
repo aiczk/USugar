@@ -153,8 +153,8 @@ public class UasmEmitter
         // _fieldInitOps (own + base + auto-property + static, already collected + spliced by EmitFields),
         // NOT CaptureScopeAnalysis's own own-class-instance-only re-collection which missed base field and
         // auto-property initializers.
-        _ctx.CaptureScope = CaptureScopeAnalysis.Build(_compilation, _classSymbol,
-            ComputeCaptureRoots(), _reach.BodyByDef, _fieldInitOps.Select(fi => fi.initOp).ToList());
+        _ctx.SetCaptureScope(CaptureScopeAnalysis.Build(_compilation, _classSymbol,
+            ComputeCaptureRoots(), _reach.BodyByDef, _fieldInitOps.Select(fi => fi.initOp).ToList()));
         EmitMethods(methods);
         OnIrPass?.Invoke("after-emit", _module);
         // Handlers build Core IR; the pipeline (verify/optimize/flatten) runs on Core directly.
@@ -2576,8 +2576,6 @@ public class UasmEmitter
                             if (mySet.Add(f)) touchChanged = true;
             }
         }
-        _ctx.Recursion.ThisFieldTouches = thisTouches;
-
         var recursive = new Dictionary<IMethodSymbol, HashSet<IMethodSymbol>>(SymbolEqualityComparer.Default);
         var cycleEdges = new Dictionary<IMethodSymbol, HashSet<IMethodSymbol>>(SymbolEqualityComparer.Default);
         var reentrantSites = new HashSet<SyntaxNode>();
@@ -2701,14 +2699,11 @@ public class UasmEmitter
 
             }
         }
-        _ctx.Recursion.RecursiveCallees = recursive;
-        _ctx.Recursion.CycleCallees = cycleEdges;
-        _ctx.Recursion.ReentrantDispatchSites = reentrantSites;
-        _ctx.Recursion.TailSparedDirectCallSites = tailSparedSites;
-        // §5.5 (graft #2): snapshot the graph-node set (definition-keyed) so the post-emission armor
-        // can verify every capturing delegate bridge target reached the reentrancy analysis. Bodies is
-        // keyed by every node that got an edge set (roots, local functions, lambdas).
-        _ctx.Recursion.RecursionGraphNodes = new HashSet<IMethodSymbol>(bodies.Keys, SymbolEqualityComparer.Default);
+        // Write-once populate of every analysis artifact at the tail (ThisFieldTouches was computed
+        // above; the rest just now). §5.5 (graft #2): RecursionGraphNodes is the definition-keyed
+        // graph-node set (bodies.Keys = roots, local functions, lambdas) the post-emission armor reads.
+        _ctx.Recursion.Populate(recursive, cycleEdges, thisTouches, reentrantSites, tailSparedSites,
+            new HashSet<IMethodSymbol>(bodies.Keys, SymbolEqualityComparer.Default));
     }
 
     // §5.5 (graft #2): VerifyBridgeTargetsAreNodes — the wave-10 [Z1]-class emit-time-registration

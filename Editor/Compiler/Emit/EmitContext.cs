@@ -231,7 +231,16 @@ public class EmitContext
     // UasmEmitter.Emit(); read-only, consumed by nothing yet (behavior-neutral — env alloc/access
     // codegen is Stage 2 M2). Self-contained (owns its own LambdaCaptureAnalyzer instance), so this
     // is a plain result holder, not shared mutable state.
-    public CaptureScopeAnalysis CaptureScope;
+    // Write-once: built once in UasmEmitter.Emit() via SetCaptureScope; a second set throws so a future
+    // restructure cannot silently swap this frozen analysis artifact under in-flight emission.
+    public CaptureScopeAnalysis CaptureScope { get; private set; }
+
+    public void SetCaptureScope(CaptureScopeAnalysis value)
+    {
+        if (CaptureScope != null)
+            throw new InvalidOperationException("EmitContext.CaptureScope is write-once (set once in Emit, never reassigned).");
+        CaptureScope = value;
+    }
 
     // Stage 2 M2 (design §4.1): resolve a symbol's env binding (owning scope, 1-based env slot).
     // Single source of truth is CaptureScope.CapturedSlots; this helper adds the generic-spec
