@@ -136,11 +136,20 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
             // happen only when StatementHandler reached the ILocalFunctionOperation — the earlier
             // call site then died with 'Method not found in layout'). Register on demand; the
             // declaration-site registration above stays first so declaration-first shapes keep
-            // their index allocation order byte-identical. Generic local functions fall through
-            // to the generic monomorphization arm below ([Y8]).
+            // their index allocation order byte-identical.
             case MethodKind.LocalFunction
                 when !target.IsGenericMethod:
                 RegisterLocalFunction(target);
+                return EmitUserMethodCall(op, target);
+            // B68/B69: a GENERIC local function is monomorphized per call site regardless of its HOST —
+            // the compiled behaviour, a foreign static helper class, or a user struct. The generic
+            // monomorphization arm further below is gated on the container being _classSymbol (own members),
+            // so a foreign-hosted generic LF used to fall through to the extern path and mint a bogus
+            // `{Host}.__Lf__{T}` extern (B68) or hit the user-struct-member guard (B69). Register+jump here
+            // by MethodKind, before any container-gated arm; RegisterGenericSpecialization is container-
+            // agnostic and idempotent, so the behaviour-host path stays byte-identical.
+            case MethodKind.LocalFunction:
+                RegisterGenericSpecialization(target);
                 return EmitUserMethodCall(op, target);
         }
 

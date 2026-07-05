@@ -148,7 +148,13 @@ public class EmitContext
         var syntaxRef = def.DeclaringSyntaxReferences.FirstOrDefault();
         if (syntaxRef == null) return new ClosurePinInfo(used, false);
         var syntax = syntaxRef.GetSyntax();
-        var body = compilation.GetSemanticModel(syntax.SyntaxTree).GetOperation(syntax);
+        var op = compilation.GetSemanticModel(syntax.SyntaxTree).GetOperation(syntax);
+        // B68/B69 (ControlC): if `def` is itself a generic LOCAL FUNCTION, its declaration's operation IS an
+        // ILocalFunctionOperation — walk its BODY, not the node itself. `def` is monomorphized per call site
+        // (Lf<int>/Lf<string> emit as separate functions, no shared hoist), so its own type-param usage never
+        // aliases; only a NESTED closure inside it can pin. (A generic METHOD def already yields its body
+        // block here, so this only changes the LF-def case.)
+        var body = op is ILocalFunctionOperation lfDef ? lfDef.Body : op;
         // B53: only THIS definition's own instantiation dimension pins it — a nested generic local
         // function's own (unrelated) type parameter must not. Every reference test filters to `def`'s
         // params (method type params, or the containing type's for a generic-struct member).

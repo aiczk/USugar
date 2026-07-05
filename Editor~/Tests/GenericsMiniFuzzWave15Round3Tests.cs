@@ -182,6 +182,26 @@ public class B67F : UdonSharpBehaviour {
         Assert.Contains("[Flags]", ex.Message);
     }
 
+    // ── B68/B69: a generic local function registers as a real function (JUMP) in a FOREIGN host — a static
+    //         helper class method or a user struct instance method — not a bogus `{Host}.__Lf__{T}` extern.
+    //         Two distinct instantiations of a generic LF are separate specs (no shared hoist), so a generic
+    //         LF using its OWN type param must not trip the B64 closure-alias pin. VM values pinned in the
+    //         harness (Wave15Batch4RegressionTests). ──
+
+    [Theory]
+    [InlineData("B68H", @"public static class H68T { public static int Run(int seed){ int Lf<T>(){ T[] a = new T[2]; return a.Length; } return Lf<int>() + Lf<string>() + seed; } }
+public class B68H : UdonSharpBehaviour { public int seed; public int result; void Start(){ result = H68T.Run(seed); } }")]
+    [InlineData("B69H", @"public struct S69T { public int Tag; public int Run(int seed){ int Lf<T>(){ T[] a = new T[2]; return a.Length; } return Lf<int>() + seed; } }
+public class B69H : UdonSharpBehaviour { public int seed; public int result; void Start(){ S69T s = new S69T(); result = s.Run(seed); } }")]
+    public void B68_69_GenericLocalFunction_ForeignHost_RegistersAsJump(string cls, string body)
+    {
+        var uasm = TestHelper.CompileToUasm($@"
+using System; using UdonSharp;
+{body}", cls);
+        Assert.DoesNotContain("__Lf__", uasm);   // no bogus {Host}.__Lf__{T} extern
+        Assert.Contains("_Lf_", uasm);            // the monomorphized Lf specialization function(s) exist
+    }
+
     // ── B64: the closure-pin is per-parameter AND capture-aware. A second instantiation that only varies a
     //         type param NO closure uses is legal; a varying CLOSURE-USED param still pins on type; and a
     //         STATIC generic method whose captures alias across its inlined specializations pins on capture
