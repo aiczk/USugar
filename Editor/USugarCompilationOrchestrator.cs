@@ -225,6 +225,14 @@ static class USugarCompilationOrchestrator
             }
             Mark("get-diagnostics");
 
+            // Registry hooks MUST be wired before parallel emit — the class-support (B79) and extern-validity
+            // gates both read them off the ambient ExternResolver, and a future embedding that forgets to wire
+            // one would silently fall to the permissive arm. Fail loud here instead (armor; unreachable today).
+            if (ExternResolver.IsExternValid == null || ExternResolver.HasAnyExternForType == null)
+                throw new InvalidOperationException(
+                    "ExternResolver.IsExternValid and HasAnyExternForType must be wired before Phase-2 emit "
+                    + "(extern-validity and class-support gates depend on them).");
+
             // ── Phase 2: Parallel emit ──
             var emitResults = new System.Collections.Concurrent.ConcurrentBag<EmitResult>();
             System.Threading.Tasks.Parallel.ForEach(classList, classInfo =>
