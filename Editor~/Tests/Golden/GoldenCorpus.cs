@@ -372,6 +372,42 @@ public class LatticeGenMulticast : UdonSharpBehaviour {
   T Run<T>(T a, T b){ Func<T> d = null; d += () => a; d += () => b; return d(); }
   void Start(){ result = Run<int>(seed, seed + 5); }
 }"),
+        // CA-M1 canonical baseline (class ABI v1, §2-2): a data class minted as a reference-semantics
+        // object[1+F] bundle — new (no ctor) → field writes → ctor → field reads. Pins the reserved slot-0
+        // layout, the mint sequence, and reference-semantics field r/w for a plain user class.
+        ("class_data_crud", "ClassDataCrud",
+@"using UdonSharp;
+public class DataRec { public int A; public int B; public DataRec(int a){ A = a; } }
+public class ClassDataCrud : UdonSharpBehaviour {
+  public int seed;
+  public int result;
+  void Start(){ DataRec d = new DataRec(seed); d.B = seed * 2 + 1; result = d.A * 10 + d.B; }
+}"),
+        // CA-M1 canonical baseline: a self-referential linked list — the shape a struct cannot express (a
+        // struct cannot hold a field of its own type). Pins reference-aliased chained mutation through
+        // Next : Node and an instance method walking the chain.
+        ("class_linked_list", "ClassLinkedList",
+@"using UdonSharp;
+public class LlNode { public int V; public LlNode Next; public LlNode(int v){ V = v; }
+  public int Sum(){ int s = V; if (Next != null) s += Next.Sum(); return s; } }
+public class ClassLinkedList : UdonSharpBehaviour {
+  public int seed;
+  public int result;
+  void Start(){ LlNode a = new LlNode(seed); LlNode b = new LlNode(seed * 2); a.Next = b;
+    result = a.Sum(); }
+}"),
+        // CA-M1 canonical baseline: a self-referential CONSTRUCTED GENERIC class Node<T> — monomorphized
+        // per instantiation, self-reference walked by the AggregateLayout constructed-key cache without
+        // recursion. Pins the generic class layout + mint + field r/w through a T-typed value.
+        ("class_generic_node", "ClassGenericNode",
+@"using UdonSharp;
+public class GenNode<T> { public T Val; public GenNode<T> Next; public GenNode(T v){ Val = v; } }
+public class ClassGenericNode : UdonSharpBehaviour {
+  public int seed;
+  public int result;
+  void Start(){ GenNode<int> a = new GenNode<int>(seed); GenNode<int> b = new GenNode<int>(seed * 3);
+    a.Next = b; result = a.Val + a.Next.Val; }
+}"),
     };
 
     public static (string Name, string ClassName, string Source) ByName(string name)
