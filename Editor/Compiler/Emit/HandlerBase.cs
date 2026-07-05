@@ -68,6 +68,23 @@ public abstract partial class HandlerBase
         return t.Substring(0, t.Length - "Array".Length);
     }
 
+    // The single place a System.Type CONSTANT (type token) is baked — `o is T`, `typeof(T)`, and the
+    // GetComponent<T> type-token arg all route here. A SystemType const is a heap constant no validator
+    // checks, so an UNRESOLVED type parameter would silently resolve to a null System.Type and NRE at
+    // runtime (B51 silent class) — reject loudly instead. The IUdonEventReceiver collapse tag is not
+    // VM-resolvable as a token; the concrete UdonBehaviour type is (GetComponent<T>'s prior remap).
+    protected CLeaf ConstTypeToken(ITypeSymbol typeSymbol)
+    {
+        if (ResolveType(typeSymbol) is ITypeParameterSymbol unresolvedTp)
+            throw new NotSupportedException(
+                $"A System.Type token for unresolved type parameter '{unresolvedTp.Name}' cannot be emitted: "
+                + "its type argument did not reach this emit site (a generic-instantiation map gap). The token "
+                + "would bake a null System.Type constant and fault at runtime.");
+        var name = GetUdonType(typeSymbol);
+        if (name == "VRCUdonCommonInterfacesIUdonEventReceiver") name = "VRCUdonUdonBehaviour";
+        return Const(name, "SystemType");
+    }
+
     // ── Core IR convenience methods ──
 
     /// <summary>Emit: slot = expr</summary>

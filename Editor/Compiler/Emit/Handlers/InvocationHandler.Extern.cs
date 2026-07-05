@@ -228,11 +228,8 @@ public partial class InvocationHandler
         // Push explicit arguments FIRST, then SystemType (matches UdonSharp push order for __T externs)
         externArgs.AddRange(argVals);
 
-        // typeof(T) as SystemType constant (after explicit args)
-        var typeArgName = GetUdonType(target.TypeArguments[0]);
-        var typeConstValue = typeArgName == "VRCUdonCommonInterfacesIUdonEventReceiver" ? "VRCUdonUdonBehaviour" : typeArgName;
-        var typeConst = Const(typeConstValue, "SystemType");
-        externArgs.Add(typeConst);
+        // typeof(T) as SystemType constant (after explicit args) — shared type-token choke point.
+        externArgs.Add(ConstTypeToken(target.TypeArguments[0]));
 
         // Result type — typed as T for __T externs
         var isPlural = target.Name.StartsWith("GetComponents");

@@ -94,6 +94,23 @@ public class {cls} : UdonSharpBehaviour {{
         Assert.DoesNotContain("SystemValueType", ex.Message);
     }
 
+    // ── ConstTypeToken funnel (audit): every System.Type-constant bake (o is T / typeof(T) /
+    // GetComponent<T>) routes through one resolve-or-throw-loud choke point. ──
+
+    [Fact]
+    public void ConstTypeToken_TypeofGenericTypeParam_Resolves()
+    {
+        // typeof(T)/typeof(W) in a generic method and a nested generic LF must resolve, not bake null.
+        TestHelper.CompileToUasm(@"
+using System; using UdonSharp;
+public class CTT : UdonSharpBehaviour {
+  public int r1, r2, r3;
+  int Tag<T>() => typeof(T).Name.Length;
+  int M<T>(){ int Inner<W>(){ return typeof(W).Name.Length; } return Inner<int>(); }
+  void Start(){ r1 = Tag<int>(); r2 = Tag<string>(); r3 = M<int>(); }
+}", "CTT");
+    }
+
     // ── Owner-resolution funnel (audit): the inherited-member extern owner resolves through one shared
     // choke point across every site. Control shapes that must keep resolving to the receiver's type. ──
 

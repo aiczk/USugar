@@ -43,7 +43,7 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
         IInstanceReferenceOperation => LoadField(_ctx.DeclareThisOnce(GetUdonType(_classSymbol)), GetUdonType(_classSymbol)),
         IConversionOperation op => VisitConversion(op),
         IDefaultValueOperation op => VisitDefaultValue(op),
-        ITypeOfOperation typeOf => Const(GetUdonType(typeOf.TypeOperand), "SystemType"),
+        ITypeOfOperation typeOf => ConstTypeToken(typeOf.TypeOperand),
         INameOfOperation nameOf => Const(nameOf.ConstantValue.Value.ToString(), "SystemString"),
         IDeclarationExpressionOperation op => VisitDeclarationExpression(op),
         IDiscardOperation discard => SlotRef(_ctx.AllocTemp(GetUdonType(discard.Type))),
