@@ -43,7 +43,7 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
         IInstanceReferenceOperation => LoadField(_ctx.DeclareThisOnce(GetUdonType(_classSymbol)), GetUdonType(_classSymbol)),
         IConversionOperation op => VisitConversion(op),
         IDefaultValueOperation op => VisitDefaultValue(op),
-        ITypeOfOperation typeOf => ConstTypeToken(typeOf.TypeOperand),
+        ITypeOfOperation typeOf => EmitTypeofToken(typeOf.TypeOperand),
         INameOfOperation nameOf => Const(nameOf.ConstantValue.Value.ToString(), "SystemString"),
         IDeclarationExpressionOperation op => VisitDeclarationExpression(op),
         IDiscardOperation discard => SlotRef(_ctx.AllocTemp(GetUdonType(discard.Type))),
@@ -607,6 +607,13 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
         // Identity conversion: pass through
         return srcVal;
     }
+
+    // B63: a bare typeof() is a legitimate type token (GetComponent(typeof(UdonBehaviour)), typeof(int).Name,
+    // GetValue(…, typeof(string))) — Udon resolves it through the receiver extern. The unsoundness is confined
+    // to `==`/`!=` BETWEEN two typeof tokens (SystemType compares by the non-injective Udon tag, so
+    // typeof(A)==typeof(B) is silently true for two collapse-set types); that is rejected at the equality site
+    // (OperatorHandler.RejectTypeofTokenEquality), not here, so bare tokens keep compiling.
+    CLeaf EmitTypeofToken(ITypeSymbol operand) => ConstTypeToken(operand);
 
     // `o as T` ≡ (o is T) ? (T)o : null, reusing the shared is-machinery: EmitTypeCheck enforces the
     // distinguishability choke point (collapse-set target rejects loudly), then the else branch nulls the

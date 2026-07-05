@@ -64,4 +64,45 @@ public class B62D : UdonSharpBehaviour {
 }", "B62D"));
         Assert.Contains("'as'", ex.Message);
     }
+
+    // ── B63: typeof(A)==typeof(B) on two DISTINCT C# types that fold onto one Udon tag is rejected at the
+    //         comparison site; a bare typeof token (GetComponent(typeof(...)), .Name) stays legal.
+
+    [Theory]
+    [InlineData("B63A", @"public class B63A : UdonSharpBehaviour { public int result; void Start(){ result = (typeof(B63A) == typeof(B63B2)) ? 1 : 0; } }
+public class B63B2 : UdonSharpBehaviour { void Start(){} }")]
+    [InlineData("B63E", @"public enum E63 { A, B } public class B63E : UdonSharpBehaviour { public int result; void Start(){ result = (typeof(E63) == typeof(int)) ? 1 : 0; } }")]
+    public void B63_TypeofCollapseSet_EqualityRejectsLoudly(string cls, string body)
+    {
+        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm($@"
+using System; using UdonSharp;
+{body}", cls));
+        Assert.Contains("typeof(", ex.Message);
+    }
+
+    [Fact]
+    public void B63_TypeofDistinguishable_EqualityStillCompiles()
+    {
+        // Control: primitive/array typeof stays honest (distinguishable) and compiles.
+        TestHelper.CompileToUasm(@"
+using System; using UdonSharp;
+public class B63C : UdonSharpBehaviour {
+  public int result;
+  void Start(){ int a = (typeof(int) == typeof(int)) ? 1 : 0; int b = (typeof(int[]) == typeof(string[])) ? 0 : 2; result = a + b + typeof(int).Name.Length; }
+}", "B63C");
+    }
+
+    [Fact]
+    public void B63_BareCollapseSetTypeofToken_StillCompiles()
+    {
+        // Control: a collapse-set typeof used only as a TOKEN (never == another type) is legal — the token
+        // resolves through the receiver extern; only the ==/!= comparison is unsound. Mirrors the Compat
+        // GetComponent(typeof(UdonBehaviour)) shape.
+        TestHelper.CompileToUasm(@"
+using System; using UdonSharp;
+public class B63T : UdonSharpBehaviour {
+  public int result;
+  void Start(){ System.Type t = typeof(B63T); result = t.Name.Length; }
+}", "B63T");
+    }
 }
