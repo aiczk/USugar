@@ -1000,7 +1000,11 @@ public abstract partial class HandlerBase
     /// __Get__, or a this.field directly. Used for receiver access; value reads add a clone on top.</summary>
     protected CLeaf ReadAggregateFieldRaw(IFieldReferenceOperation fr)
     {
-        if (fr.Instance != null && fr.Instance.Type is INamedTypeSymbol cont && EmitPolicy.IsAggregateType(cont)
+        // B80: the container may be a v1 CLASS too (a struct field on a class — `w.P.Ref = x`). Reading the
+        // struct-field slot RAW yields the LIVE nested object[] stored in the class bundle (no clone), so a
+        // chained write lands in the class's storage, not a discarded copy. Gated on IsObjectArrayEmulated
+        // (Category-A: object[] slot resolution); the caller only asks for a raw receiver, never a value read.
+        if (fr.Instance != null && fr.Instance.Type is INamedTypeSymbol cont && EmitPolicy.IsObjectArrayEmulated(cont)
             && _ctx.GetAggregateLayout(cont).TryGetIndex(fr.Field, out var idx))
             return ExternCall(ExternResolver.BuildArrayGetSignature("SystemObjectArray", "SystemObject"),
                 new List<CLeaf> { LoadInstanceRaw(fr.Instance), Const(idx, "SystemInt32") }, "SystemObject");
