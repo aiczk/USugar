@@ -115,35 +115,46 @@ public class EmitContext
     public readonly Dictionary<IMethodSymbol, IMethodSymbol> FirstGenericSpec
         = new(SymbolEqualityComparer.Default);
 
-    /// <summary>How a generic definition's body closures pin it to a single instantiation.
-    /// <c>TypeParamDependent</c> (round-8 [Y2] widening): a closure whose SIGNATURE, BODY, or captured
-    /// variables reference the enclosing generic's type parameters — the closure is hoisted ONCE keyed
-    /// by IMethodSymbol and its function types/body were emitted under the FIRST spec's map, so a
-    /// second instantiation would silently run the first instantiation's types. (Stage 2 §8.1: the
-    /// former <c>Capturing</c> tier is retired — a NON-type-param-dependent capturing closure shares
-    /// one T-free hoist and its captures live in per-activation env records, so multiple instantiations
-    /// no longer alias. B45 M2: the former <c>StructMemberCapturing</c> tier (wave-14) is likewise
-    /// retired — once CaptureScopeAnalysis walks user-struct member bodies (B45 M1), a struct-hosted
-    /// capturing closure gets the SAME per-activation env record as a class-method one, so the T-free
-    /// multi-instantiation case is sound for struct members too. Only T-dependence still pins.)</summary>
-    public enum ClosurePin { None, TypeParamDependent }
-
-    /// <summary>[X6]/[Y2]/wave-14 gate: does the generic DEFINITION's body contain an
-    /// instantiation-pinning closure? Walks the definition's own operation tree (specs share it).
-    /// Only type-param dependence pins now (B45 M2 retired the struct-member capture tier — struct-hosted
-    /// closures get the same per-activation env records as class ones, so capture alone no longer pins).</summary>
-    public ClosurePin GenericBodyClosurePin(Compilation compilation, IMethodSymbol def)
+    /// <summary>What about a generic definition's body closures pins it to a single instantiation.
+    /// <c>UsedParams</c> (round-8 [Y2]): which of the generic's OWN type parameters (by kind+ordinal,
+    /// Y8-robust) a closure's signature or body references — the closure is hoisted ONCE keyed by
+    /// IMethodSymbol and emitted under the FIRST spec's type map, so a second instantiation that changes
+    /// one of THOSE params would silently run the first instantiation's type. B64: this is per-param, so
+    /// a second instantiation that only varies a param NO closure touches (MBox&lt;T&gt;.Run&lt;U&gt;
+    /// where the closure uses T only, U varies) is legal.
+    /// <c>Capturing</c> (B64 soundness): whether any body closure captures a local/parameter owned by the
+    /// generic's OWN scope (an ancestor-scope capture — a generic local function over the enclosing
+    /// non-generic method's local — is shared correctly and is NOT flagged). This only matters for a STATIC
+    /// method: its inlined per-call-site specialization shares the one hoisted closure across specs WITHOUT
+    /// re-seeding a per-activation env record, so a captured value written by one instantiation is read by
+    /// the other (VM-proven: static HE.Run&lt;int&gt;/&lt;string&gt; returns 3+3, not 3+4). INSTANCE methods
+    /// (behaviour or struct receiver) get per-activation env records that de-alias across instantiations
+    /// (VM-proven Match with DIVERGENT values: MinA3, Box=110) — the case Stage-2 §8.1 correctly retired;
+    /// the caller (<see cref="ThrowIfClosureAliasesInstantiation"/>) applies the static-only gate. (The
+    /// original §8.1 "proof" happened to only exercise instance methods, so the static gap went unseen.)
+    /// Single-instantiation multi-call capture de-aliases everywhere; the pin only fires on a second
+    /// DISTINCT instantiation.</summary>
+    public readonly struct ClosurePinInfo
     {
+        public readonly HashSet<(TypeParameterKind Kind, int Ordinal)> UsedParams;
+        public readonly bool Capturing;
+        public ClosurePinInfo(HashSet<(TypeParameterKind, int)> used, bool capturing)
+        { UsedParams = used; Capturing = capturing; }
+    }
+
+    public static ClosurePinInfo GenericBodyClosurePins(Compilation compilation, IMethodSymbol def)
+    {
+        var used = new HashSet<(TypeParameterKind, int)>();
         var syntaxRef = def.DeclaringSyntaxReferences.FirstOrDefault();
-        if (syntaxRef == null) return ClosurePin.None;
+        if (syntaxRef == null) return new ClosurePinInfo(used, false);
         var syntax = syntaxRef.GetSyntax();
         var body = compilation.GetSemanticModel(syntax.SyntaxTree).GetOperation(syntax);
         // B53: only THIS definition's own instantiation dimension pins it — a nested generic local
         // function's own (unrelated) type parameter must not. Every reference test filters to `def`'s
         // params (method type params, or the containing type's for a generic-struct member).
-        var pin = ClosurePin.None;
-        WalkClosurePins(body, ref pin, def);
-        return pin;
+        bool capturing = false;
+        WalkClosurePins(body, used, ref capturing, def);
+        return new ClosurePinInfo(used, capturing);
     }
 
     // Y8-robust ownership: a body-walk's type-parameter symbol is fresh (reference-distinct) from the
@@ -159,76 +170,183 @@ public class EmitContext
         return false;
     }
 
-    // Stage 2 §8.2: the walk no longer early-returns on capture — capture alone no longer pins an
-    // instantiation (per-activation env records de-alias multi-instantiation captures, class- and
-    // struct-hosted alike since B45 M2). It visits EVERY closure and only pins on TypeParamDependence:
-    // a closure whose signature, body, or a captured variable references the enclosing generic's type
-    // parameters cannot share one T-free hoist across specs. Granularity stays per-definition (§8.2):
-    // one T-dependent closure pins the whole definition; no partial legalization.
-    void WalkClosurePins(IOperation op, ref ClosurePin pin, IMethodSymbol def)
+    // Visits EVERY closure: collects the union of def-owned type parameters any closure references
+    // (UsedParams) and whether any closure captures an enclosing local/parameter (Capturing).
+    static void WalkClosurePins(
+        IOperation op, HashSet<(TypeParameterKind, int)> used, ref bool capturing, IMethodSymbol def)
     {
-        if (op == null || pin != ClosurePin.None) return;
+        if (op == null) return;
         switch (op)
         {
             case IAnonymousFunctionOperation af:
-                if (ClosureUsesMethodTypeParam(af.Symbol, af.Body, def)) { pin = ClosurePin.TypeParamDependent; return; }
+                CollectClosureTypeParams(af.Symbol, af.Body, def, used);
+                if (!capturing && ClosureCapturesDefScopedVar(af.Symbol, af.Body, def)) capturing = true;
                 break;
             case ILocalFunctionOperation lf when lf.Symbol != null:
-                if (ClosureUsesMethodTypeParam(lf.Symbol, lf.Body, def)) { pin = ClosurePin.TypeParamDependent; return; }
+                CollectClosureTypeParams(lf.Symbol, lf.Body, def, used);
+                if (!capturing && ClosureCapturesDefScopedVar(lf.Symbol, lf.Body, def)) capturing = true;
                 break;
         }
         foreach (var child in op.Children)
+            WalkClosurePins(child, used, ref capturing, def);
+    }
+
+    // Does this closure capture a local/parameter whose scope is `def` ITSELF or a closure nested inside
+    // def? Only those alias across instantiations: def emits one owner body per spec but they SHARE the
+    // one hoisted closure, and def's own locals/params take a fresh value in each instantiation's
+    // activation, so the shared capture cell leaks one spec's value into the other's read. A capture of an
+    // ANCESTOR scope's variable (e.g. a generic local function Lf<T> capturing the enclosing non-generic
+    // method's local) is shared legitimately — there is one ancestor activation, so both specs must read
+    // it, and the per-spec __envp keying (Stage-2 M5) plumbs it correctly. A `this`/field capture is
+    // invariant across activations and never aliases. (Boolean twin of LambdaCaptureAnalyzer's set.)
+    static bool ClosureCapturesDefScopedVar(IMethodSymbol closureSym, IOperation closureBody, IMethodSymbol def)
+    {
+        if (closureBody == null) return false;
+        var inside = new HashSet<ISymbol>(SymbolEqualityComparer.Default);
+        if (closureSym != null) foreach (var p in closureSym.Parameters) inside.Add(p);
+        foreach (var d in closureBody.DescendantsAndSelf())
         {
-            WalkClosurePins(child, ref pin, def);
-            if (pin != ClosurePin.None) return;
+            switch (d)
+            {
+                case IVariableDeclaratorOperation decl: inside.Add(decl.Symbol); break;
+                case IDeclarationPatternOperation dp when dp.DeclaredSymbol != null: inside.Add(dp.DeclaredSymbol); break;
+                case IRecursivePatternOperation rp when rp.DeclaredSymbol != null: inside.Add(rp.DeclaredSymbol); break;
+                case IAnonymousFunctionOperation naf when naf.Symbol != null:
+                    foreach (var p in naf.Symbol.Parameters) inside.Add(p); break;
+                case ILocalFunctionOperation nlf when nlf.Symbol != null:
+                    foreach (var p in nlf.Symbol.Parameters) inside.Add(p); break;
+            }
         }
-    }
-
-    static bool ClosureUsesMethodTypeParam(IMethodSymbol closureSym, IOperation closureBody, IMethodSymbol def)
-    {
-        if (closureSym != null
-            && (TypeUsesMethodTypeParam(closureSym.ReturnType, def)
-                || closureSym.Parameters.Any(p => TypeUsesMethodTypeParam(p.Type, def))))
-            return true;
-        return OperationUsesMethodTypeParam(closureBody, def);
-    }
-
-    static bool OperationUsesMethodTypeParam(IOperation op, IMethodSymbol def)
-    {
-        if (op == null) return false;
-        if (TypeUsesMethodTypeParam(op.Type, def)) return true;
-        if (op is ITypeOfOperation typeOf && TypeUsesMethodTypeParam(typeOf.TypeOperand, def)) return true;
-        if (op is IIsTypeOperation isType && TypeUsesMethodTypeParam(isType.TypeOperand, def)) return true;
-        if (op is IInvocationOperation inv
-            && inv.TargetMethod.TypeArguments.Any(ta => TypeUsesMethodTypeParam(ta, def))) return true;
-        foreach (var child in op.Children)
-            if (OperationUsesMethodTypeParam(child, def)) return true;
+        foreach (var d in closureBody.DescendantsAndSelf())
+        {
+            if (d is ILocalReferenceOperation lr && !inside.Contains(lr.Local)
+                && CapturedVarBelongsToDefScope(lr.Local, def)) return true;
+            if (d is IParameterReferenceOperation pr && !inside.Contains(pr.Parameter)
+                && CapturedVarBelongsToDefScope(pr.Parameter, def)) return true;
+        }
         return false;
     }
 
-    static bool TypeUsesMethodTypeParam(ITypeSymbol t, IMethodSymbol def) => t switch
+    // Walk the captured variable's declaring-method chain: is `def` on it? True ⇒ the variable lives in
+    // def's own activation (or a closure nested in def), so it takes a distinct value per instantiation.
+    // False ⇒ it belongs to an ancestor scope shared across all instantiations.
+    static bool CapturedVarBelongsToDefScope(ISymbol capturedVar, IMethodSymbol def)
     {
-        ITypeParameterSymbol tp => OwnedByDef(tp, def),
-        IArrayTypeSymbol at => TypeUsesMethodTypeParam(at.ElementType, def),
-        INamedTypeSymbol nt => nt.IsGenericType && nt.TypeArguments.Any(ta => TypeUsesMethodTypeParam(ta, def)),
-        _ => false,
-    };
+        for (var s = capturedVar.ContainingSymbol as IMethodSymbol; s != null; s = s.ContainingSymbol as IMethodSymbol)
+            if (SymbolEqualityComparer.Default.Equals(s.OriginalDefinition, def.OriginalDefinition))
+                return true;
+        return false;
+    }
 
-    /// <summary>Shared [Y2] reject for a SECOND distinct instantiation of a generic whose body pins it
-    /// to one instantiation via a type-param-dependent closure (round-8; the former capture-only tier
-    /// is retired in Stage 2 §8.1). No-op for <see cref="ClosurePin.None"/>.</summary>
-    public static void ThrowIfClosurePinsInstantiation(ClosurePin pin, string methodName)
+    static void CollectClosureTypeParams(
+        IMethodSymbol closureSym, IOperation closureBody, IMethodSymbol def, HashSet<(TypeParameterKind, int)> used)
     {
-        switch (pin)
+        if (closureSym != null)
         {
-            case ClosurePin.TypeParamDependent:
-                throw new System.NotSupportedException(
-                    $"Generic method '{methodName}' is instantiated with more than one type-argument "
-                    + "combination but contains a lambda or local function whose signature or body uses "
-                    + "the method's type parameters. The hoisted closure is shared across instantiations "
-                    + "in the flat-heap model and was emitted with the first instantiation's types. "
-                    + "Use a single instantiation, or keep the closure independent of the type parameters.");
+            CollectTypeParams(closureSym.ReturnType, def, used);
+            foreach (var p in closureSym.Parameters) CollectTypeParams(p.Type, def, used);
         }
+        CollectOperationTypeParams(closureBody, def, used);
+    }
+
+    static void CollectOperationTypeParams(IOperation op, IMethodSymbol def, HashSet<(TypeParameterKind, int)> used)
+    {
+        if (op == null) return;
+        CollectTypeParams(op.Type, def, used);
+        if (op is ITypeOfOperation typeOf) CollectTypeParams(typeOf.TypeOperand, def, used);
+        if (op is IIsTypeOperation isType) CollectTypeParams(isType.TypeOperand, def, used);
+        if (op is IInvocationOperation inv)
+            foreach (var ta in inv.TargetMethod.TypeArguments) CollectTypeParams(ta, def, used);
+        foreach (var child in op.Children)
+            CollectOperationTypeParams(child, def, used);
+    }
+
+    static void CollectTypeParams(ITypeSymbol t, IMethodSymbol def, HashSet<(TypeParameterKind, int)> used)
+    {
+        switch (t)
+        {
+            case ITypeParameterSymbol tp when OwnedByDef(tp, def):
+                used.Add((tp.TypeParameterKind, tp.Ordinal));
+                break;
+            case IArrayTypeSymbol at:
+                CollectTypeParams(at.ElementType, def, used);
+                break;
+            case INamedTypeSymbol nt when nt.IsGenericType:
+                foreach (var ta in nt.TypeArguments) CollectTypeParams(ta, def, used);
+                break;
+        }
+    }
+
+    static bool MethodTypeArgsDiffer(IMethodSymbol a, IMethodSymbol b)
+    {
+        var xa = a.TypeArguments;
+        var xb = b.TypeArguments;
+        if (xa.Length != xb.Length) return true;
+        for (int i = 0; i < xa.Length; i++)
+            if (!SymbolEqualityComparer.Default.Equals(xa[i], xb[i])) return true;
+        return false;
+    }
+
+    // The type argument a constructed method substitutes for its own (method-kind) or its containing
+    // type's (type-kind) parameter at the given ordinal; null if out of range.
+    static ITypeSymbol SubstituteTypeArg(IMethodSymbol m, TypeParameterKind kind, int ordinal)
+    {
+        if (kind == TypeParameterKind.Method)
+            return ordinal < m.TypeArguments.Length ? m.TypeArguments[ordinal] : null;
+        if (kind == TypeParameterKind.Type && m.ContainingType is { } ct)
+            return ordinal < ct.TypeArguments.Length ? ct.TypeArguments[ordinal] : null;
+        return null;
+    }
+
+    /// <summary>Shared [Y2]/B64 reject on a SECOND DISTINCT instantiation of a generic whose body
+    /// contains a closure. Loud when EITHER a closure-used type parameter varies between the two specs
+    /// (the hoist was emitted with the first spec's types), OR the two specs differ in a METHOD type
+    /// argument and a closure captures a variable owned by the generic method's own scope (the closure is
+    /// hoisted once and SHARED across the method's specs, so its capture cells alias across them —
+    /// VM-proven: a differing captured value leaks one spec's value into the other's read). A capture in a
+    /// generic-STRUCT member that differs only in the CONTAINING type argument does NOT alias — each
+    /// struct specialization emits its own closure copy (B45 M1, VM-proven Box&lt;int&gt;/Box&lt;string&gt;
+    /// = 110), so it stays legal; and a capture of an ANCESTOR scope (a generic local function capturing
+    /// the enclosing non-generic method's local) is shared correctly (Stage-2 M5). A closure that neither
+    /// uses a VARYING param nor def-scope-captures across a method-arg change is legal (B64:
+    /// MBox&lt;T&gt;.Run&lt;U&gt; with a capture-free closure that uses only the constant T). The type-param
+    /// check runs first so a closure that both captures and uses a varying param reports the
+    /// distinguishable type-param message (§8.2). No-op when the two specs are the same symbol.</summary>
+    public static void ThrowIfClosureAliasesInstantiation(
+        Compilation compilation, IMethodSymbol firstSpec, IMethodSymbol constructed)
+    {
+        if (SymbolEqualityComparer.Default.Equals(firstSpec, constructed)) return;
+        var pin = GenericBodyClosurePins(compilation, constructed.OriginalDefinition);
+        foreach (var (kind, ordinal) in pin.UsedParams)
+        {
+            var a = SubstituteTypeArg(firstSpec, kind, ordinal);
+            var b = SubstituteTypeArg(constructed, kind, ordinal);
+            if (a != null && b != null && !SymbolEqualityComparer.Default.Equals(a, b))
+                throw new System.NotSupportedException(
+                    $"Generic method '{constructed.Name}' is instantiated with more than one type-argument "
+                    + "combination but contains a lambda or local function whose signature or body uses the "
+                    + "generic's type parameters, one of which varies between those instantiations. The hoisted "
+                    + "closure is shared across instantiations in the flat-heap model and was emitted with the "
+                    + "first instantiation's types. Use a single instantiation, or keep the closure independent "
+                    + "of the varying type parameter.");
+        }
+        // Capture aliasing is confined to a STATIC generic method: its inlined per-call-site specialization
+        // path shares the one hoisted closure across the specs WITHOUT re-seeding a per-activation env
+        // record, so a differing captured value leaks between specs (VM-proven: a static HE.Run<int>/<string>
+        // that captures its int param returns 3+3, not 3+4). An INSTANCE generic method (on the behaviour or
+        // a struct receiver) DOES get per-activation env records that de-alias across instantiations
+        // (VM-proven Match: MinA3 Gen<int>/Gen<long>, Box<int>/Box<string> = 110), so it stays legal — this
+        // is the case Stage-2 §8.1 correctly retired. A differing CONTAINING type argument likewise emits a
+        // fresh closure per spec (B45). So the capture pin fires only on a static method whose OWN type
+        // arguments differ between the specs.
+        if (pin.Capturing && constructed.IsStatic && MethodTypeArgsDiffer(firstSpec, constructed))
+            throw new System.NotSupportedException(
+                $"Static generic method '{constructed.Name}' is instantiated with more than one method "
+                + "type-argument combination but contains a lambda or local function that captures "
+                + "locals/parameters. Its inlined specialization shares one hoisted closure across the specs "
+                + "without a per-activation env record, so a value captured by one instantiation leaks into the "
+                + "other (VM-proven aliasing). Use a single instantiation, make the closure capture-free, or "
+                + "move the method onto a UdonSharpBehaviour/struct instance (whose captures de-alias).");
     }
 
     // Persistent local symbol → field name mapping (survives scope pop). Holds NON-captured locals

@@ -1787,11 +1787,7 @@ public abstract partial class HandlerBase
     {
         var genericDef = constructed.OriginalDefinition;
         if (_ctx.FirstGenericSpec.TryGetValue(genericDef, out var firstSpec))
-        {
-            if (!SymbolEqualityComparer.Default.Equals(firstSpec, constructed))
-                EmitContext.ThrowIfClosurePinsInstantiation(
-                    _ctx.GenericBodyClosurePin(_compilation, genericDef), constructed.Name);
-        }
+            EmitContext.ThrowIfClosureAliasesInstantiation(_compilation, firstSpec, constructed);
         else
             _ctx.FirstGenericSpec[genericDef] = constructed;
     }

@@ -16,14 +16,17 @@ namespace USugar.Tests;
 /// </summary>
 public class Stage2M4GenericsTests
 {
-    // ── §8.1 the retired Capturing tier: non-T capture across two instantiations is legal ──
+    // ── §8.1 the retired Capturing tier: non-T capture across two INSTANCE-method instantiations is legal ──
 
     [Fact]
     public void NonTypeParamCapturingGeneric_TwoInstantiations_StaysLegal()
     {
-        // fcd45a shape: G<T> holds a closure capturing an int local (no T in the closure's sig/body).
-        // Both G<int> and G<long> compile; the capture has no flat cell (it is in a per-activation env
-        // record) and both specs are emitted. VM-proven correct (ri=9 AND rl=9, no cross-spec aliasing).
+        // fcd45a shape: G<T> is an INSTANCE method holding a closure capturing an int local (no T in the
+        // closure's sig/body). Both G<int> and G<long> compile; the capture has no flat cell (it is in a
+        // per-activation env record) and both specs are emitted. Instance-method captures de-alias across
+        // instantiations — divergent-value VM-proven (MinA3 Gen<int>/Gen<long> Match). (The aliasing that
+        // B64 rejects is confined to STATIC generic methods, whose inlined specialization shares one hoist
+        // without a per-activation env — see B64C in the round-3 tracked pins.)
         var uasm = TestHelper.CompileToUasm(@"
 using System;
 using UdonSharp;

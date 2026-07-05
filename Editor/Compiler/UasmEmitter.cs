@@ -1012,11 +1012,7 @@ public class UasmEmitter
             {
                 var genericDef = sm.OriginalDefinition;
                 if (_ctx.FirstGenericSpec.TryGetValue(genericDef, out var firstSpec))
-                {
-                    if (!SymbolEqualityComparer.Default.Equals(firstSpec, sm))
-                        EmitContext.ThrowIfClosurePinsInstantiation(
-                            _ctx.GenericBodyClosurePin(_compilation, genericDef), sm.Name);
-                }
+                    EmitContext.ThrowIfClosureAliasesInstantiation(_compilation, firstSpec, sm);
                 else
                     _ctx.FirstGenericSpec[genericDef] = sm;
 
@@ -1080,11 +1076,7 @@ public class UasmEmitter
             {
                 var bmDef = bm.OriginalDefinition;
                 if (_ctx.FirstGenericSpec.TryGetValue(bmDef, out var bmFirst))
-                {
-                    if (!SymbolEqualityComparer.Default.Equals(bmFirst, bm))
-                        EmitContext.ThrowIfClosurePinsInstantiation(
-                            _ctx.GenericBodyClosurePin(_compilation, bmDef), bm.Name);
-                }
+                    EmitContext.ThrowIfClosureAliasesInstantiation(_compilation, bmFirst, bm);
                 else
                     _ctx.FirstGenericSpec[bmDef] = bm;
             }
