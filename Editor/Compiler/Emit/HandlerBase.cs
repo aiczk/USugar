@@ -106,6 +106,14 @@ public abstract partial class HandlerBase
     {
         if (!ExternResolver.IsRuntimeDistinguishable(targetType, _ctx.TypeParamMap))
         {
+            // CA-M0 B79 (face 1): a plain user class has no runtime type identity in class-ABI v1 — give the
+            // is/as/switch site a class-specific message rather than the collapse-tag one.
+            if (ExternResolver.IsUnsupportedUserClass(ResolveType(targetType)))
+                throw new NotSupportedException(
+                    $"Runtime type tests (is / as / switch) against the user-defined class "
+                    + $"'{ResolveType(targetType).Name}' are not supported: class ABI v1 gives a user class no "
+                    + "runtime type identity yet. Keep the value typed as its static type instead of recovering "
+                    + "it with a type test.");
             var disp = ResolveType(targetType).ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat);
             var hint = ResolveType(targetType) is INamedTypeSymbol dlgTarget && dlgTarget.DelegateInvokeMethod != null
                 ? " (Udon represents every delegate as one runtime type, so it cannot tell delegate signatures "

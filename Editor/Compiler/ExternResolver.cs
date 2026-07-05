@@ -16,6 +16,66 @@ public static class ExternResolver
         set => Volatile.Write(ref _isExternValid, value);
     }
 
+    // CA-M0 B79 (registry-truth): does the Udon extern registry hold ANY extern under a given udon TYPE name?
+    // "Supported class type" has always meant "Udon has externs for it" — VRCUrl/DataList are exactly
+    // source-shaped classes whose support comes from the registry, indistinguishable from a genuinely
+    // unsupported user class by symbol shape alone. Wired alongside IsExternValid (orchestrator + TestHelper);
+    // null (unwired) is permissive, mirroring the IsExternValid convention.
+    static Func<string, bool> _hasAnyExternForType;
+    public static Func<string, bool> HasAnyExternForType
+    {
+        get => Volatile.Read(ref _hasAnyExternForType);
+        set => Volatile.Write(ref _hasAnyExternForType, value);
+    }
+
+    /// <summary>The udon TYPE-name prefix of an extern full name ("SystemInt32.__op_Addition__…" → "SystemInt32").
+    /// Sanitized udon type names carry no '.', so the first '.' is always the type/member boundary. Used to
+    /// build the <see cref="HasAnyExternForType"/> lookup set from a flat extern list.</summary>
+    public static string ExternTypePrefix(string externFullName)
+    {
+        if (string.IsNullOrEmpty(externFullName)) return externFullName;
+        int i = externFullName.IndexOf('.');
+        return i < 0 ? externFullName : externFullName.Substring(0, i);
+    }
+
+    /// <summary>CA-M0 B79: a plain user class the Udon VM cannot represent in class-ABI v1 — a source-defined
+    /// non-behaviour class (<see cref="IsPlainUserClass"/>) with NO registered externs. A foreign type modelled
+    /// as a source stub (registered externs) is supported and returns false; unwired registry stays permissive
+    /// (false), mirroring the new-reject's IsExternValid convention.</summary>
+    public static bool IsUnsupportedUserClass(ITypeSymbol type)
+    {
+        if (!IsPlainUserClass(type)) return false;
+        var probe = HasAnyExternForType;
+        if (probe == null) return false;
+        return !probe(ComputeUdonTypeName(type));
+    }
+
+    // Loud reject for a plain user class with no Udon representation (class-ABI v1), tailored per axis: a
+    // non-Object base (user OR native), a record, or a plain class. Shape-passing foreign stubs (registered
+    // externs) and the unwired-permissive case fall through silently. `udonName` is the already-computed name
+    // so the registry probe matches exactly what a declaration would have emitted.
+    static void RejectIfUnsupportedUserClass(ITypeSymbol type, string udonName)
+    {
+        if (!IsPlainUserClass(type)) return;
+        var probe = HasAnyExternForType;
+        if (probe == null || probe(udonName)) return;
+        var named = (INamedTypeSymbol)type;
+        if (named.BaseType != null && named.BaseType.SpecialType != SpecialType.System_Object)
+            throw new NotSupportedException(
+                $"User-defined class '{named.Name}' has a base type ('{named.BaseType.Name}') other than "
+                + "System.Object. Class ABI v1 supports only a class with no explicit base — a UdonSharpBehaviour "
+                + "subclass is a behaviour (reference it through a scene object), and an SDK/native base type is "
+                + "not supported on a plain class.");
+        if (named.IsRecord)
+            throw new NotSupportedException(
+                $"Record type '{named.Name}' is not supported. User-defined reference types have no Udon heap "
+                + "representation in this compiler (class ABI v1). Use a struct (value type) instead.");
+        throw new NotSupportedException(
+            $"User-defined reference types (class '{named.Name}') are not supported yet: the Udon VM has no heap "
+            + "representation for a user class in this compiler (class ABI v1). Convert it to a struct (value "
+            + "type), or reference a UdonSharpBehaviour through a scene object.");
+    }
+
     // Round-3 item 0 (production validation gate): the orchestrator assembles emitted UASM directly with
     // no hard validation — so a bogus extern that slips past the per-call-site IsExternValid selection
     // reaches the SDK assembler as an OPAQUE error in the real Unity Editor (the class 12b5215/32fcae3
@@ -166,7 +226,9 @@ public static class ExternResolver
             var baseName = SanitizeTypeName(string.IsNullOrEmpty(ns) ? def.Name : $"{ns}.{def.Name}");
             foreach (var arg in named.TypeArguments)
                 baseName += GetUdonTypeName(arg, typeParamMap);
-            return RemapUdonType(baseName);
+            var genericName = RemapUdonType(baseName);
+            RejectIfUnsupportedUserClass(type, genericName); // a generic user class (Node<int>) has no externs
+            return genericName;
         }
 
         return GetUdonTypeName(type);
@@ -197,6 +259,12 @@ public static class ExternResolver
             target = resolved;
 
         if (target == null) return false;
+
+        // CA-M0 B79 (face 1): a plain user class the VM cannot represent (no registered externs) has no
+        // runtime type identity in class-ABI v1 — an is/as/switch test against it would bake an unresolvable
+        // "Foo" SystemType token. Route it through the same choke as every collapse tag (caller MUST reject);
+        // a foreign stub WITH externs (real tag) stays distinguishable and its is-test stays legal.
+        if (IsUnsupportedUserClass(target)) return false;
 
         // Bare object: IsInstanceOfType(typeof(object), v) == `v is object` exactly for every value —
         // the one universally answerable test, even though its tag "SystemObject" is otherwise shared.
@@ -241,6 +309,13 @@ public static class ExternResolver
         && !IsSdkNamespace(e.ContainingNamespace);
 
     public static string GetUdonTypeName(ITypeSymbol type)
+    {
+        var name = ComputeUdonTypeName(type);
+        RejectIfUnsupportedUserClass(type, name);
+        return name;
+    }
+
+    static string ComputeUdonTypeName(ITypeSymbol type)
     {
         // Array types
         if (type is IArrayTypeSymbol arrayType)

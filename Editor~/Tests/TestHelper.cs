@@ -10,6 +10,7 @@ public static class TestHelper
     static TestHelper()
     {
         ExternResolver.IsExternValid = ExternRegistry.IsValid;
+        ExternResolver.HasAnyExternForType = ExternRegistry.HasExternForType;
     }
 
     public static string StubSource => Stubs;

@@ -637,6 +637,12 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
         // escape and lie (myBehaviourArray.GetType()==typeof(Component[]) silently true, the B63 vector). The
         // distinguishable arrays (int[]/Camera[]) pass IsRuntimeDistinguishable(operand) below on their own
         // unique tag; the one folding array that stays legal is object[], carved out explicitly.
+        // CA-M0 B79 (face 1): typeof(userClass) would bake an unresolvable "Foo" SystemType token — reject
+        // with a class-specific message (a foreign stub with a real tag stays legal via IsUnsupportedUserClass).
+        if (ExternResolver.IsUnsupportedUserClass(ResolveType(operand)))
+            throw new NotSupportedException(
+                $"typeof(user-defined class '{ResolveType(operand).Name}') is not supported: class ABI v1 gives "
+                + "a user class no runtime type identity yet, so its System.Type token cannot be resolved.");
         bool stockObjectArray = operand is IArrayTypeSymbol arr
             && arr.Rank == 1
             && arr.ElementType.SpecialType == SpecialType.System_Object;

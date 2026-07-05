@@ -8,6 +8,8 @@ namespace USugar.Tests;
 public static class ExternRegistry
 {
     static readonly HashSet<string> ValidExterns = LoadRegistry();
+    static readonly HashSet<string> ValidTypePrefixes =
+        new(ValidExterns.Select(ExternResolver.ExternTypePrefix));
 
     static HashSet<string> LoadRegistry()
     {
@@ -16,4 +18,7 @@ public static class ExternRegistry
     }
 
     public static bool IsValid(string externName) => ValidExterns.Contains(externName);
+
+    // CA-M0 B79: registry-truth — does any extern live under this udon type name?
+    public static bool HasExternForType(string typeName) => ValidTypePrefixes.Contains(typeName);
 }
