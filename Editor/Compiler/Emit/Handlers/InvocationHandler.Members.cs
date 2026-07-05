@@ -89,10 +89,7 @@ public partial class InvocationHandler
             // Other this.property → extern getter with this instance
             var thisType = GetUdonType(_classSymbol);
             var thisVal = LoadField(_ctx.DeclareThisOnce(thisType), thisType);
-            var cType = GetUdonType(op.Property.ContainingType);
-            // Behaviour/MonoBehaviour have no Udon externs; use the class's Udon type instead
-            if (cType is "UnityEngineBehaviour" or "UnityEngineMonoBehaviour")
-                cType = GetUdonType(_classSymbol);
+            var cType = GetUdonType(ResolveExternOwnerType(op.Property.ContainingType, op.Instance?.Type, op.Property.Name));
             var rType = GetUdonType(op.Property.Type);
             return ExternCall(
                 ExternResolver.BuildPropertyGetSignature(cType, propName, rType),
@@ -218,15 +215,11 @@ public partial class InvocationHandler
         // Array .Length → use SystemArray (not the concrete array type) to match UdonSharp
         if (op.Instance.Type is IArrayTypeSymbol && op.Property.Name != "Length")
             containingType = GetUdonType((IArrayTypeSymbol)op.Instance.Type);
-        // Behaviour/MonoBehaviour have no Udon externs; use the instance type
-        if (containingType is "UnityEngineBehaviour" or "UnityEngineMonoBehaviour")
-            containingType = GetUdonType(op.Instance.Type);
-        // B55: an INHERITED BCL member's extern is registered under the RECEIVER's static type, not the
-        // property's declaring base (Type.Name is declared on System.Reflection.MemberInfo — never Udon-
-        // registered — but exists as SystemType.__get_Name__). Resolve against the receiver's static type.
-        else if (op.Instance.Type is not IArrayTypeSymbol
-            && !SymbolEqualityComparer.Default.Equals(op.Property.ContainingType, op.Instance.Type))
-            containingType = GetUdonType(op.Instance.Type);
+        // An inherited member (incl. Behaviour/MonoBehaviour/BCL-base) registers under the RECEIVER's
+        // static type, not the declaring base — resolve through the shared owner choke point (B55/B59).
+        // Array receivers keep the fixup above (SystemArray for .Length, element-typed otherwise).
+        else if (op.Instance.Type is not IArrayTypeSymbol)
+            containingType = GetUdonType(ResolveExternOwnerType(op.Property.ContainingType, op.Instance.Type, op.Property.Name));
         var sig = ExternResolver.BuildPropertyGetSignature(containingType, op.Property.Name, returnType);
         return ExternCall(sig, new List<CLeaf> { instVal }, returnType);
     }
@@ -291,7 +284,7 @@ public partial class InvocationHandler
                 TryMarkReentrantCrossDispatch(op, op.Property.GetMethod)); // wave-12 r2 [V1]
         }
 
-        var cType = GetUdonType(op.Property.ContainingType);
+        var cType = GetUdonType(ResolveExternOwnerType(op.Property.ContainingType, op.Instance?.Type, op.Property.Name));
         var rType = GetUdonType(op.Property.Type);
 
         // string[i] → str.ToCharArray(i, 1)[0]
@@ -565,18 +558,38 @@ public partial class InvocationHandler
         return resultVal;
     }
 
+    // Extern-owner resolution choke point (B55/B59/B60 + audit): an INHERITED instance member is
+    // registered in Udon under the RECEIVER's own static type, not its declaring base (System.Object /
+    // ValueType / Enum / Reflection.MemberInfo / UnityEngine.Component|Behaviour). Every site that builds
+    // an instance member's extern owner routes through here. Array receivers are excluded — they keep
+    // their own owner logic (SystemArray for .Length, element-typed array otherwise). A user-struct
+    // (object[]-emulated) receiver of an inherited Object/ValueType member has no extern and ValueType
+    // semantics cannot be emulated → the designed loud reject (B60), matching the type-parameter case.
+    ITypeSymbol ResolveExternOwnerType(ITypeSymbol memberContainingType, ITypeSymbol receiverType, string memberName)
+    {
+        if (receiverType is not INamedTypeSymbol recv
+            || SymbolEqualityComparer.Default.Equals(memberContainingType, recv))
+            return memberContainingType;
+        if (EmitPolicy.IsAggregateType(recv))
+            throw new System.NotSupportedException(
+                $"'{memberName}' on user-defined struct '{recv.Name}' is not supported: Udon has no extern "
+                + "for it and C#'s ValueType semantics (field-wise Equals, type-name ToString) cannot be "
+                + "emulated. Compare/format the struct's fields directly instead.");
+        return recv;
+    }
+
     void EmitMemberSet(CLeaf instanceVal, IOperation target, CLeaf valueVal)
     {
         if (target is IFieldReferenceOperation fieldRef && fieldRef.Field.ContainingType.IsValueType)
         {
-            var containingType = GetUdonType(fieldRef.Field.ContainingType);
+            var containingType = GetUdonType(ResolveExternOwnerType(fieldRef.Field.ContainingType, fieldRef.Instance?.Type, fieldRef.Field.Name));
             var valueType = GetUdonType(fieldRef.Field.Type);
             var sig = ExternResolver.BuildFieldSetSignature(containingType, fieldRef.Field.Name, valueType);
             EmitExternVoid(sig, new List<CLeaf> { instanceVal, valueVal });
         }
         else if (target is IPropertyReferenceOperation propRef)
         {
-            var containingType = GetUdonType(propRef.Property.ContainingType);
+            var containingType = GetUdonType(ResolveExternOwnerType(propRef.Property.ContainingType, propRef.Instance?.Type, propRef.Property.Name));
             var valueType = GetUdonType(propRef.Property.Type);
             if (propRef.Property.IsIndexer)
             {

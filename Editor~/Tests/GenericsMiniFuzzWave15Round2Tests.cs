@@ -94,6 +94,21 @@ public class {cls} : UdonSharpBehaviour {{
         Assert.DoesNotContain("SystemValueType", ex.Message);
     }
 
+    // ── Owner-resolution funnel (audit): the inherited-member extern owner resolves through one shared
+    // choke point across every site. Control shapes that must keep resolving to the receiver's type. ──
+
+    [Theory]
+    [InlineData("FN1", "result = this.name;", "public string result;")]
+    [InlineData("FN2", "result = name;", "public string result;")]
+    [InlineData("FN3", "result = gameObject.name;", "public string result;")]
+    public void OwnerFunnel_InheritedUnityMember_ResolvesReceiverType(string cls, string body, string field)
+    {
+        var uasm = TestHelper.CompileToUasm($@"
+using UnityEngine; using UdonSharp;
+public class {cls} : UdonSharpBehaviour {{ {field} void Start(){{ {body} }} }}", cls);
+        Assert.DoesNotContain("SystemReflectionMemberInfo", uasm);
+    }
+
     // ── B58: a foreign generic STATIC method (helper class or struct) as a delegate target is now
     // supported — its spec is inlined into this program, so it bridges through the same machinery. ──
 

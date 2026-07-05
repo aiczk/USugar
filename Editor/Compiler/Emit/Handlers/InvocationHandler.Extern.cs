@@ -1132,22 +1132,13 @@ public partial class InvocationHandler
             containingTypeSym = vConcrete;
         }
         // B59/B60: the SAME Object/ValueType/Enum-inherited member on a CONCRETE receiver (not a type
-        // parameter) keeps the base owner (SystemEnum/SystemValueType — no registered extern). Resolve
-        // it to the receiver's own static type so GetUdonType's enum→underlying peel yields the
-        // registered primitive extern (B59, e.g. a user enum → SystemInt32). A user-struct (object[]-
-        // emulated aggregate) receiver has no such extern and ValueType semantics cannot be emulated —
-        // route it through the SAME designed reject the type-param branch above gives (B60, parity).
+        // parameter) keeps the base owner (SystemEnum/SystemValueType — no registered extern). Route it
+        // through the shared owner choke point: an enum resolves to the receiver's static type (→
+        // underlying-primitive extern, B59); a user-struct receiver hits the designed reject (B60).
         else if (instanceType != null && instanceType is not ITypeParameterSymbol
             && method.ContainingType.SpecialType is SpecialType.System_Object
                 or SpecialType.System_ValueType or SpecialType.System_Enum)
-        {
-            if (instanceType is INamedTypeSymbol cAgg && EmitPolicy.IsAggregateType(cAgg))
-                throw new System.NotSupportedException(
-                    $"'{method.Name}' on user-defined struct '{cAgg.Name}' is not supported: Udon has no "
-                    + "extern for it and C#'s ValueType semantics (field-wise Equals, type-name ToString) "
-                    + "cannot be emulated. Compare/format the struct's fields directly instead.");
-            containingTypeSym = instanceType;
-        }
+            containingTypeSym = ResolveExternOwnerType(method.ContainingType, instanceType, method.Name);
 
         // Armor: a user-struct member reaching generic extern construction means no CFunction was
         // registered for it (collector-scope drift) — fail with a diagnosis, not a bogus
