@@ -221,6 +221,14 @@ public static class ExternResolver
         return true;
     }
 
+    /// <summary>A user-defined enum (source-declared, non-SDK namespace) — the ones whose Udon tag is the
+    /// bare underlying integer, so ToString/name lookup must be synthesized (B67). Mirrors the enum branch
+    /// of <see cref="IsRuntimeDistinguishable"/>; SDK enums keep their own registered tag and externs.</summary>
+    public static bool IsUserEnum(ITypeSymbol type) =>
+        type is INamedTypeSymbol e && e.TypeKind == TypeKind.Enum
+        && !e.DeclaringSyntaxReferences.IsEmpty
+        && !IsSdkNamespace(e.ContainingNamespace);
+
     public static string GetUdonTypeName(ITypeSymbol type)
     {
         // Array types

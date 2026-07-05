@@ -369,7 +369,10 @@ public partial class InvocationHandler
                     }
                     placeholder.Append('}');
                     formatParts.Add(placeholder.ToString());
-                    argVals.Add(VisitExpression(interpolation.Expression));
+                    // B67: a user enum in an interpolation hole would be boxed and Format-ToString'd to its
+                    // underlying number — pre-convert it to the C#-correct name string instead.
+                    var interpVal = VisitExpression(interpolation.Expression);
+                    argVals.Add(TryEmitEnumToString(interpVal, interpolation.Expression.Type) ?? interpVal);
                     argIndex++;
                     break;
             }

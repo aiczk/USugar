@@ -1646,6 +1646,30 @@ public abstract partial class HandlerBase
         _ctx.PendingMulticastSigs[sigPart] = (invoke, _ctx.TypeParamMap);
     }
 
+    // B67: the synthesized value→name helper's name for a user enum (one per enum, drained in UasmEmitter).
+    internal static string EnumToStringHelperName(INamedTypeSymbol enumType)
+        => "__enumstr_" + SanitizeId(enumType.ToDisplayString());
+
+    /// <summary>B67: if <paramref name="type"/> is a user enum, convert its (already underlying-int)
+    /// <paramref name="value"/> to the C#-correct NAME string via the synthesized per-enum helper and return
+    /// that string leaf; otherwise return null so the caller emits the value as-is. A [Flags] enum rejects
+    /// (Udon cannot synthesize the comma-separated decomposition — that is gold-plating).</summary>
+    protected CLeaf TryEmitEnumToString(CLeaf value, ITypeSymbol type)
+    {
+        var resolved = ResolveType(type);
+        if (!ExternResolver.IsUserEnum(resolved) || resolved is not INamedTypeSymbol e)
+            return null;
+        if (e.GetAttributes().Any(a => a.AttributeClass?.Name == "FlagsAttribute"))
+            throw new NotSupportedException(
+                $"'{e.Name}.ToString()' is not supported: '{e.Name}' is a [Flags] enum and Udon cannot "
+                + "synthesize the comma-separated flag decomposition. Format the individual flag bits manually "
+                + "(e.g. compare against each flag and build the string yourself).");
+        _ctx.PendingEnumToString.Add(e);
+        // `value` is already the enum's underlying-typed leaf (GetUdonType(enum) == underlying), which the
+        // helper's parameter type matches — pass it straight through.
+        return InternalCall(EnumToStringHelperName(e), new List<CLeaf> { value }, "SystemString");
+    }
+
     /// <summary>Variance design (2026-07-04 §2.3, B-2): register the (outer sig-S, inner sig-T) pair a
     /// wrapper-with-payload bridge is needed for, returning its name. Same dedup/snapshot discipline as
     /// <see cref="RegisterMulticastSig"/> (first registration wins; a second site needing the same

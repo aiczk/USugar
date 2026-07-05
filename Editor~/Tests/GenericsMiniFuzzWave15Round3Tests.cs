@@ -148,6 +148,40 @@ public class B66D : UdonSharpBehaviour {
 }", "B66D");
     }
 
+    // ── B67: Enum.ToString()/concat/interpolation synthesize the value→name lookup (non-Flags); a [Flags]
+    //         enum's ToString rejects (Udon can't synthesize the comma-separated decomposition). VM value
+    //         parity is pinned in the harness (Wave15Batch4RegressionTests). ──
+
+    [Fact]
+    public void B67_NonFlagsEnumToString_CompilesWithNameHelper()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using System; using UdonSharp;
+public enum Suit67 { Clubs, Diamonds, Hearts, Spades }
+public class B67N : UdonSharpBehaviour {
+  public string r1; public string r2; public string r3;
+  void Start(){ Suit67 s = Suit67.Hearts; r1 = s.ToString(); r2 = $""x={s}""; r3 = ""y=""+s; }
+}", "B67N");
+        // The synthesized value→name helper exists and its label is reached (all three sites route to it);
+        // the member-name string constants live in the data table so are not asserted as inline text here —
+        // their VALUES are pinned on the real VM (Wave15Batch4RegressionTests).
+        Assert.Contains("__enumstr_Suit67:", uasm);
+        Assert.Contains("__enumstr_Suit67__ret", uasm);
+    }
+
+    [Fact]
+    public void B67_FlagsEnumToString_RejectsLoudly()
+    {
+        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
+using System; using UdonSharp;
+[Flags] public enum Perm67 { None = 0, A = 1, B = 2 }
+public class B67F : UdonSharpBehaviour {
+  public string result;
+  void Start(){ Perm67 p = Perm67.A | Perm67.B; result = p.ToString(); }
+}", "B67F"));
+        Assert.Contains("[Flags]", ex.Message);
+    }
+
     // ── B64: the closure-pin is per-parameter AND capture-aware. A second instantiation that only varies a
     //         type param NO closure uses is legal; a varying CLOSURE-USED param still pins on type; and a
     //         STATIC generic method whose captures alias across its inlined specializations pins on capture

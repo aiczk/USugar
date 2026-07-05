@@ -145,6 +145,26 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
             return Const(EmitPolicy.ParseConstValue(constType, ToInvariantString(op.ConstantValue.Value)), constType);
         }
 
+        // B67: string concat with a user enum operand. C# boxes each operand to object for
+        // string.Concat(object,object), so the enum operand arrives wrapped in a Suit→object conversion; look
+        // THROUGH it. Left as-is the enum would be Concat-ToString'd to its underlying number, so convert that
+        // operand to the C#-correct name string first and emit the object/object concat directly (routing it
+        // back through the generic path would re-select the extern by the now-string operand types).
+        if (op.OperatorKind == BinaryOperatorKind.Add && GetUdonType(op.Type) == "SystemString")
+        {
+            var lOp = UnwrapConversions(op.LeftOperand);
+            var rOp = UnwrapConversions(op.RightOperand);
+            if (ExternResolver.IsUserEnum(ResolveType(lOp.Type)) || ExternResolver.IsUserEnum(ResolveType(rOp.Type)))
+            {
+                var l = VisitExpression(lOp);
+                l = TryEmitEnumToString(l, lOp.Type) ?? l;
+                var r = VisitExpression(rOp);
+                r = TryEmitEnumToString(r, rOp.Type) ?? r;
+                return ExternCall("SystemString.__Concat__SystemObject_SystemObject__SystemString",
+                    new List<CLeaf> { l, r }, "SystemString");
+            }
+        }
+
         var leftVal = VisitExpression(op.LeftOperand);
         var rightVal = VisitExpression(op.RightOperand);
 
@@ -226,6 +246,14 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
     {
         while (op is IConversionOperation conv) op = conv.Operand;
         return op is ITypeOfOperation t ? t.TypeOperand : null;
+    }
+
+    // Strip conversion wrappers (e.g. the implicit box a string-concat operand gets for Concat(object,object))
+    // to reach the real underlying value operation.
+    static IOperation UnwrapConversions(IOperation op)
+    {
+        while (op is IConversionOperation conv) op = conv.Operand;
+        return op;
     }
 
     // Nullable bool `&` / `|` with C# three-valued logic: a known false dominates `&` (false & null = false)

@@ -507,6 +507,11 @@ public class EmitContext
     // sharing a signature dedupe to one fan-out/helper set. Carries the map by reference (immutable).
     public readonly Dictionary<string, (IMethodSymbol Invoke, IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> TypeParamMap)> PendingMulticastSigs = new();
 
+    // B67: user enums whose ToString()/concat/interpolation needs a synthesized value→name helper. Keyed by
+    // the enum symbol; the per-enum `__enumstr_{Name}` function is emitted once in the UasmEmitter drain
+    // (EmitEnumToStringSynthetics), sibling of EmitMulticastSynthetics.
+    public readonly HashSet<INamedTypeSymbol> PendingEnumToString = new(SymbolEqualityComparer.Default);
+
     // Variance design (2026-07-04 §2.2, B-1): per-(target, sig-S) sig adapter bridges — a same-program
     // variant method-group binding mints one of these instead of the plain bridge. delegateInvoke is the
     // DESTINATION delegate's own Invoke method (sig-S's param/return types for the conv-var declarations),

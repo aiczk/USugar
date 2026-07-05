@@ -98,6 +98,12 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
         // Resolve type parameters in generic method type arguments (e.g., Min<T> → Min<int>)
         var target = SubstituteMethodTypeArgs(op.TargetMethod);
 
+        // B67: user-enum.ToString() → synthesized value→name helper (the inherited Enum.ToString would
+        // resolve to the underlying integer's ToString and print the number). Flags enums reject inside.
+        if (target.Name == "ToString" && target.Parameters.Length == 0 && op.Instance != null
+            && ExternResolver.IsUserEnum(ResolveType(op.Instance.Type)))
+            return TryEmitEnumToString(VisitExpression(op.Instance), op.Instance.Type);
+
         // Nullable<T>.GetValueOrDefault() / GetValueOrDefault(fallback) → the value, else the fallback/default.
         if (op.Instance != null && target.Name == "GetValueOrDefault"
             && EmitPolicy.IsNullableT(target.ContainingType, out var govUnderlying))

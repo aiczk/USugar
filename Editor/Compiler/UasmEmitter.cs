@@ -1185,6 +1185,7 @@ public class UasmEmitter
         // untouched (§6 gate). Reentrancy graph-node registration for the fan-out is A-M3 scope (§1.6),
         // deliberately not wired here.
         EmitMulticastSynthetics();
+        EmitEnumToStringSynthetics();
 
         // §5.5 (graft #2): now that every capturing bridge is registered, assert each has a graph node.
         VerifyBridgeTargetsAreNodes();
@@ -1576,6 +1577,49 @@ public class UasmEmitter
             EmitMulticastCombineHelper(sigPart);
             EmitMulticastRemoveHelper(sigPart);
             EmitMulticastFanoutBridge(sigPart, invoke, typeParamMap);
+        }
+    }
+
+    // B67: one value→name helper per user enum whose ToString/concat/interpolation was reached. The Udon tag
+    // of a user enum is its bare underlying integer, so ToString on it prints the number — C# prints the
+    // member name. The member list is compile-time known, so emit `string __enumstr_{Enum}(underlying v)`
+    // as a value→name chain; the default arm is the underlying .ToString(), which matches C# for a value
+    // with no defined member (e.g. (Suit)99 → "99").
+    void EmitEnumToStringSynthetics()
+    {
+        foreach (var enumType in _ctx.PendingEnumToString)
+        {
+            var helperName = HandlerBase.EnumToStringHelperName(enumType);
+            var underlyingUdon = ExternResolver.GetUdonTypeName(enumType.EnumUnderlyingType);
+            var vId = $"{helperName}__v";
+            var retId = $"{helperName}__ret";
+            _ctx.TryDeclareVar(vId, underlyingUdon);
+            _ctx.TryDeclareVar(retId, "SystemString");
+
+            var func = _module.AddFunction(helperName);
+            func.ParamFieldNames.Add(vId);
+            func.ReturnType = "SystemString";
+            func.ReturnSlots.Add(new ReturnSlot(retId, "SystemString"));
+
+            var prevFunc = _builder.CurrentFunction;
+            _builder.SetFunction(func);
+
+            var vLeaf = BridgeLoad(vId, underlyingUdon);
+            var eqExtern = $"{underlyingUdon}.__op_Equality__{underlyingUdon}_{underlyingUdon}__SystemBoolean";
+            foreach (var member in enumType.GetMembers().OfType<IFieldSymbol>())
+            {
+                if (!member.HasConstantValue) continue;
+                var constLeaf = _builder.Const(
+                    EmitPolicy.ParseConstValue(underlyingUdon, System.Convert.ToString(
+                        member.ConstantValue, System.Globalization.CultureInfo.InvariantCulture)), underlyingUdon);
+                var isMatch = BridgeCallExtern("SystemBoolean", eqExtern, new CLeaf[] { vLeaf, constLeaf });
+                _builder.EmitIf(isMatch, _ => _builder.EmitReturn(_builder.Const(member.Name, "SystemString")));
+            }
+            // Default: an undefined value formats as the underlying number (C#-parity).
+            _builder.EmitReturn(BridgeCallExtern("SystemString", $"{underlyingUdon}.__ToString__SystemString",
+                new CLeaf[] { vLeaf }));
+
+            if (prevFunc != null) _builder.SetFunction(prevFunc);
         }
     }
 
