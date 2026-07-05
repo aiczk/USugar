@@ -221,6 +221,12 @@ public partial class InvocationHandler
         // Behaviour/MonoBehaviour have no Udon externs; use the instance type
         if (containingType is "UnityEngineBehaviour" or "UnityEngineMonoBehaviour")
             containingType = GetUdonType(op.Instance.Type);
+        // B55: an INHERITED BCL member's extern is registered under the RECEIVER's static type, not the
+        // property's declaring base (Type.Name is declared on System.Reflection.MemberInfo — never Udon-
+        // registered — but exists as SystemType.__get_Name__). Resolve against the receiver's static type.
+        else if (op.Instance.Type is not IArrayTypeSymbol
+            && !SymbolEqualityComparer.Default.Equals(op.Property.ContainingType, op.Instance.Type))
+            containingType = GetUdonType(op.Instance.Type);
         var sig = ExternResolver.BuildPropertyGetSignature(containingType, op.Property.Name, returnType);
         return ExternCall(sig, new List<CLeaf> { instVal }, returnType);
     }

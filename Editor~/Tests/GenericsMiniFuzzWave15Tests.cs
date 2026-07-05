@@ -113,6 +113,32 @@ public class B51IsT : UdonSharpBehaviour {
 }", "B51IsT");
     }
 
+    // ── B55: typeof(X).Name resolves its extern owner from the receiver's static type (System.Type)
+    // instead of the property's inherited declaring type (MemberInfo, never Udon-registered). ──
+
+    [Fact]
+    public void B55_TypeofName_ResolvesSystemTypeOwner()
+    {
+        TestHelper.CompileToUasm(@"
+using System; using UdonSharp;
+public class B55 : UdonSharpBehaviour {
+  public int r;
+  void Start(){ r = typeof(int).Name.Length; }
+}", "B55");
+    }
+
+    [Fact]
+    public void B55_GenericTypeofName_Compiles()
+    {
+        TestHelper.CompileToUasm(@"
+using System; using UdonSharp;
+public class B55g : UdonSharpBehaviour {
+  public int r1, r2;
+  int Tag<T>() => typeof(T).Name.Length;
+  void Start(){ r1 = Tag<int>(); r2 = Tag<string>(); }
+}", "B55g");
+    }
+
     // ── B54: a struct instance method as a delegate target is a clean loud reject (by-value capture
     // divergence), not a frozen-planner ICE. A static struct method (no receiver) stays legal. ──
 
