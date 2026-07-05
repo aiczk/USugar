@@ -306,6 +306,20 @@ public class B74P : UdonSharpBehaviour {
         Assert.DoesNotContain("UnityEngineBehaviour.__get_enabled__", uasm);
     }
 
+    // ── B75: a FRAMEWORK generic static method group (Array.Empty<int>, no source) as a delegate target must
+    //         hit the same loud reject as the non-generic foreign arm — its body isn't in this program, so
+    //         the B58 arm would otherwise register an EMPTY bridge. B58's gate is narrowed to source-defined,
+    //         non-framework statics (the project's IsForeignStatic intent). ──
+
+    [Fact]
+    public void B75_FrameworkGenericStaticMethodGroup_AsDelegate_RejectsLoudly()
+    {
+        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
+using System; using UdonSharp;
+public class B75F : UdonSharpBehaviour { public int result; void Start(){ Func<int[]> f = Array.Empty<int>; result = f().Length; } }", "B75F"));
+        Assert.Contains("generic method", ex.Message);
+    }
+
     // ── B64: the closure-pin is per-parameter AND capture-aware. A second instantiation that only varies a
     //         type param NO closure uses is legal; a varying CLOSURE-USED param still pins on type; and a
     //         STATIC generic method whose captures alias across its inlined specializations pins on capture

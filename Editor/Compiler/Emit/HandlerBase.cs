@@ -2071,8 +2071,13 @@ public abstract partial class HandlerBase
             // B58: a foreign generic STATIC (on a plain helper class or a struct) has its spec body
             // inlined into THIS program exactly like a foreign generic static CALL, so — like the
             // non-generic foreign-static delegate arm below — it can bridge through the same registration.
-            // It has no receiver (static), so the same-family gate does not apply.
+            // It has no receiver (static), so the same-family gate does not apply. B75: it must be a
+            // SOURCE-defined, non-framework static (mirroring IsForeignStatic's exclusions) — a framework
+            // generic static method group (Array.Empty<int>, no syntax) has no body in this program, so it
+            // must fall to the loud reject below, not silently register an EMPTY bridge.
             bool foreignStatic = constructed.IsStatic && declType != null
+                && declType.DeclaringSyntaxReferences.Length > 0
+                && !USugarCompilerHelper.IsFrameworkNamespace(declType.ContainingNamespace)
                 && !ExternResolver.IsUdonSharpBehaviour(declType);
             if (unresolved || targetInstance != null || baseReceiver || (!declaredOnFamily && !foreignStatic))
                 throw new System.NotSupportedException(
