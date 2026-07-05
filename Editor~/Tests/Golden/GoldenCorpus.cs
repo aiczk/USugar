@@ -321,6 +321,57 @@ public class GenStructTwoInstantiations : UdonSharpBehaviour {
     result = a[0,0] + len0 + len1;
   }
 }"),
+        // ── Modernization phase-1 lattice (design §2-3): each of the four pending-bridge queues
+        // exercised under a NON-null type-param map — the coverage hole the M1-3 snapshot→reference
+        // change must not silently break. The resolved generic type is byte-load-bearing in each
+        // (union: new U[]; adapter: new T[]; wrapper/multicast: Func<T>), so a mis-composed or
+        // mis-carried map changes the UASM. All four are real-VM value-verified (DiffFuzz Match).
+        //
+        // (1) delegate bridge from inside a generic LOCAL FUNCTION spec body — the union-compose shape
+        // (Inner<U>'s map = spec(U) ∪ closure(T) ∪ rekey): the body binds a method group (bridge queue)
+        // and reads new U[] so the re-keyed U is byte-load-bearing.
+        ("genlf_bridge_union", "LatticeGenLfBridge",
+@"using System; using UdonSharp;
+public class LatticeGenLfBridge : UdonSharpBehaviour {
+  public int seed;
+  public int result;
+  int Helper() => 7;
+  void Start(){ result = M<int>(seed); }
+  int M<T>(int baseVal){
+    int Inner<U>(){ Func<int> d = Helper; U[] ua = new U[1]; return baseVal + d() + ua.Length; }
+    return Inner<int>();
+  }
+}"),
+        // (2) sig adapter under a generic method's map: a variant method-group binding (Func<object> ← a
+        // string-returning method) mints a sig adapter; new T[] keeps the map content byte-load-bearing.
+        ("genctx_sig_adapter", "LatticeGenAdapter",
+@"using System; using UdonSharp;
+public class LatticeGenAdapter : UdonSharpBehaviour {
+  public int result;
+  string MakeTag() => ""abc"";
+  int M<T>(){ Func<object> d = MakeTag; T[] ta = new T[1]; return ((string)d()).Length + ta.Length; }
+  void Start(){ result = M<int>(); }
+}"),
+        // (3) variance wrapper under a generic method's map: a Func<T> value converted to Func<object>
+        // mints a wrapper whose INNER sig is T resolved (Void__SystemString), byte-load-bearing on T.
+        ("genctx_variance_wrapper", "LatticeGenWrapper",
+@"using System; using UdonSharp;
+public class LatticeGenWrapper : UdonSharpBehaviour {
+  public int result;
+  string Make() => ""wxyz"";
+  int M<T>(Func<T> src) where T : class { Func<object> o = src; return ((string)o()).Length; }
+  void Start(){ Func<string> s = Make; result = M<string>(s); }
+}"),
+        // (4) multicast under a generic method's map: `+=` on a Func<T> registers the combine/remove/
+        // fan-out helpers keyed by the T-resolved sig (Void__SystemInt32), byte-load-bearing on T.
+        ("genctx_multicast", "LatticeGenMulticast",
+@"using System; using UdonSharp;
+public class LatticeGenMulticast : UdonSharpBehaviour {
+  public int seed;
+  public int result;
+  T Run<T>(T a, T b){ Func<T> d = null; d += () => a; d += () => b; return d(); }
+  void Start(){ result = Run<int>(seed, seed + 5); }
+}"),
     };
 
     public static (string Name, string ClassName, string Source) ByName(string name)
