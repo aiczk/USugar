@@ -561,10 +561,14 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
                 dstType);
         }
 
-        // Enum ↔ underlying type conversions (int→enum, enum→int)
+        // Enum ↔ underlying type conversions (int→enum, enum→int). B61: this arm is a re-typing between an
+        // enum and an INTEGRAL numeric type — it must NOT fire when the other side is `object` (enum→object
+        // BOXING), or it mints a nonexistent SystemConvert.__ToObject__ extern. Boxing falls through to the
+        // identity pass-through below (the underlying value is already a heap object in Udon's object[] model).
         if (conv.Operand.Type != null && conv.Type != null
                                       && !SymbolEqualityComparer.Default.Equals(conv.Operand.Type, conv.Type)
-                                      && (conv.Operand.Type.TypeKind == TypeKind.Enum || conv.Type.TypeKind == TypeKind.Enum))
+                                      && (conv.Operand.Type.TypeKind == TypeKind.Enum || conv.Type.TypeKind == TypeKind.Enum)
+                                      && IsEnumOrIntegral(conv.Operand.Type) && IsEnumOrIntegral(conv.Type))
         {
             var dstType = GetUdonType(conv.Type);
             // Prefer const: avoids COPY type-tag corruption
@@ -596,6 +600,15 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
         // Identity conversion: pass through
         return srcVal;
     }
+
+    // An enum or one of the integral types an enum can be backed by — the only types the enum↔underlying
+    // re-typing arm may involve (excludes object/reference targets, i.e. boxing — B61).
+    static bool IsEnumOrIntegral(ITypeSymbol t) =>
+        t.TypeKind == TypeKind.Enum
+        || t.SpecialType is SpecialType.System_Int32 or SpecialType.System_UInt32
+            or SpecialType.System_Int64 or SpecialType.System_UInt64
+            or SpecialType.System_Byte or SpecialType.System_SByte
+            or SpecialType.System_Int16 or SpecialType.System_UInt16 or SpecialType.System_Char;
 
     // ── Default Value ──
 
