@@ -113,6 +113,36 @@ public class B51IsT : UdonSharpBehaviour {
 }", "B51IsT");
     }
 
+    // ── B54: a struct instance method as a delegate target is a clean loud reject (by-value capture
+    // divergence), not a frozen-planner ICE. A static struct method (no receiver) stays legal. ──
+
+    [Fact]
+    public void B54_StructInstanceMethodDelegate_RejectsWithSemanticMessage()
+    {
+        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
+using System; using UdonSharp;
+public struct S54 { public int v; public int Val() => v + 1; }
+public class B54 : UdonSharpBehaviour {
+  public int r;
+  void Start(){ S54 s = new S54(); s.v = 41; Func<int> f = s.Val; r = f(); }
+}", "B54"));
+        Assert.Contains("struct instance method", ex.Message);
+        Assert.Contains("by value", ex.Message);
+        Assert.DoesNotContain("not pre-planned", ex.Message);
+    }
+
+    [Fact]
+    public void B54_StructStaticMethodDelegate_StillCompiles()
+    {
+        TestHelper.CompileToUasm(@"
+using System; using UdonSharp;
+public struct S54s { public static int Val() => 7; }
+public class B54s : UdonSharpBehaviour {
+  public int r;
+  void Start(){ Func<int> f = S54s.Val; r = f(); }
+}", "B54s");
+    }
+
     // ── B52: a variant method group of a GENERIC method must register its specialization so the sig
     // adapter's target is emitted (the arm now advances targetMethod to the constructed spec). ──
 

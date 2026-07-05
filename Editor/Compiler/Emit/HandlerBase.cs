@@ -1868,6 +1868,19 @@ public abstract partial class HandlerBase
         if (targetMethod == null)
             throw new System.NotSupportedException($"Unsupported delegate target: {op.Target.GetType().Name}");
 
+        // B54: a struct INSTANCE method bound as a delegate. C# copies the struct receiver BY VALUE at
+        // bind time; USugar represents a struct as a shared object[], so the bound delegate would alias
+        // the live receiver and observe (or leak) later mutations — a silent value divergence, not a
+        // clean feature gap. Reject loudly (design §8-3: loud over silent-wrong) instead of hitting the
+        // frozen-planner ICE. A static struct method (no receiver) is unaffected and stays legal.
+        if (op.Target is IMethodReferenceOperation && !targetMethod.IsStatic
+            && targetMethod.ContainingType is INamedTypeSymbol structCt && EmitPolicy.IsUserStruct(structCt))
+            throw new System.NotSupportedException(
+                $"A delegate cannot be created from struct instance method '{structCt.Name}.{targetMethod.Name}': "
+                + "C# captures the struct receiver by value at bind time, but USugar represents a struct as a "
+                + "shared object[], so the delegate would alias the live receiver and observe its later mutations "
+                + "(a silent value divergence). Wrap the call in a behaviour method and bind that instead.");
+
         // Wave-12 r4 [W3]: a method group bound to an INTERFACE member (`cb = iface.Get`) previously
         // ICEd in GetDelegateBridgeLayout ('No delegate bridge'). It cannot compile correctly today:
         // bundle[1] is SendCustomEvent'd on the RUNTIME receiver, so it must name a __dlgc_-convention
