@@ -151,11 +151,12 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
         // single-var ABI, design §2.1/§2.3 — the this.field arm below handles it; IsAggregateType's
         // delegate armor guarantees no clone).
 
-        // Aggregate field access: result.Item1, point.x, pair.Item1 → object[] indexing
-        // Triggered by the containing type being aggregate, regardless of instance kind
+        // Aggregate / v1-class field access: result.Item1, point.x, node.Val → object[] slot indexing.
+        // Triggered by the containing type being object[]-emulated, regardless of instance kind (the clone at
+        // the element read below stays IsAggregateType so a class-typed element is returned by reference).
         if (fieldRef.Instance != null
             && fieldRef.Instance.Type is INamedTypeSymbol aggContaining
-            && EmitPolicy.IsAggregateType(aggContaining))
+            && EmitPolicy.IsObjectArrayEmulated(aggContaining))
         {
             var layout = _ctx.GetAggregateLayout(aggContaining);
             if (layout.TryGetIndex(fieldRef.Field, out var elemIndex))

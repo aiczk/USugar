@@ -46,46 +46,44 @@ public class F1Sw : UdonSharpBehaviour { public object o; public int r; void Sta
         Assert.Contains("PlainFoo79", ex.Message);
     }
 
-    // ── Face 2: class-typed heap-var declarations (field / local / param / return) ──
+    // ── Face 2: class-typed heap-var declarations (field / local / param / return). CA-M1 FLIP: a v1
+    //    supported class now declares as a SystemObjectArray heap var (object[1+F] bundle) rather than
+    //    rejecting — the B79 fabricated-name silent path is closed by acceptance, not rejection. ──
 
     [Fact]
-    public void Face2_Field_PlainClass_Rejects()
+    public void Face2_Field_PlainClass_Compiles()
     {
-        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
+        TestHelper.CompileToUasm(@"
 using UdonSharp;
 public class PlainFoo79 { public int V; }
-public class F2Fld : UdonSharpBehaviour { PlainFoo79 f; void Start(){ } }", "F2Fld"));
-        Assert.Contains("PlainFoo79", ex.Message);
+public class F2Fld : UdonSharpBehaviour { PlainFoo79 f; void Start(){ } }", "F2Fld");
     }
 
     [Fact]
-    public void Face2_Local_PlainClass_Rejects()
+    public void Face2_Local_PlainClass_Compiles()
     {
-        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
+        TestHelper.CompileToUasm(@"
 using UdonSharp;
 public class PlainFoo79 { public int V; }
-public class F2Loc : UdonSharpBehaviour { void Start(){ PlainFoo79 f = null; } }", "F2Loc"));
-        Assert.Contains("PlainFoo79", ex.Message);
+public class F2Loc : UdonSharpBehaviour { void Start(){ PlainFoo79 f = null; } }", "F2Loc");
     }
 
     [Fact]
-    public void Face2_Param_PlainClass_Rejects()
+    public void Face2_Param_PlainClass_Compiles()
     {
-        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
+        TestHelper.CompileToUasm(@"
 using UdonSharp;
 public class PlainFoo79 { public int V; }
-public class F2Par : UdonSharpBehaviour { void M(PlainFoo79 f){ } void Start(){ } }", "F2Par"));
-        Assert.Contains("PlainFoo79", ex.Message);
+public class F2Par : UdonSharpBehaviour { void M(PlainFoo79 f){ } void Start(){ } }", "F2Par");
     }
 
     [Fact]
-    public void Face2_Return_PlainClass_Rejects()
+    public void Face2_Return_PlainClass_Compiles()
     {
-        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
+        TestHelper.CompileToUasm(@"
 using UdonSharp;
 public class PlainFoo79 { public int V; }
-public class F2Ret : UdonSharpBehaviour { PlainFoo79 M() => null; void Start(){ } }", "F2Ret"));
-        Assert.Contains("PlainFoo79", ex.Message);
+public class F2Ret : UdonSharpBehaviour { PlainFoo79 M() => null; void Start(){ } }", "F2Ret");
     }
 
     // ── Face 3: a record used as a member type gets the RECORD message ──

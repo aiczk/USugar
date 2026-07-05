@@ -22,30 +22,28 @@ namespace USugar.Tests;
 /// </summary>
 public class UserReferenceTypeRejectTests
 {
+    // CA-M1 FLIP: `new` on a v1 supported user class now MINTS an object[1+F] bundle (reference semantics)
+    // instead of rejecting. VM value parity is pinned in the harness (ClassAbiM1VmTests).
     [Fact]
-    public void PlainClass_NewInstance_ThrowsNotSupported()
+    public void PlainClass_NewInstance_Compiles()
     {
-        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
+        TestHelper.CompileToUasm(@"
 using UdonSharp;
 public class PlainFoo { public int Value; }
 public class PlainFooCtorUser : UdonSharpBehaviour {
     void Start() { var f = new PlainFoo(); }
-}", "PlainFooCtorUser"));
-        Assert.Contains("User-defined reference types", ex.Message);
-        Assert.Contains("PlainFoo", ex.Message);
+}", "PlainFooCtorUser");
     }
 
     [Fact]
-    public void PlainClass_NewInstanceWithArgs_ThrowsNotSupported()
+    public void PlainClass_NewInstanceWithArgs_Compiles()
     {
-        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
+        TestHelper.CompileToUasm(@"
 using UdonSharp;
 public class PlainQux { public int Value; public PlainQux(int v) { Value = v; } }
 public class PlainQuxCtorUser : UdonSharpBehaviour {
     void Start() { var f = new PlainQux(1); }
-}", "PlainQuxCtorUser"));
-        Assert.Contains("User-defined reference types", ex.Message);
-        Assert.Contains("PlainQux", ex.Message);
+}", "PlainQuxCtorUser");
     }
 
     [Fact]

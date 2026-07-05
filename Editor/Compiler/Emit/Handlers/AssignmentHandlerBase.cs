@@ -128,7 +128,7 @@ public abstract class AssignmentHandlerBase : HandlerBase
             case IFieldReferenceOperation aggFieldRef
                 when aggFieldRef.Instance != null
                 && aggFieldRef.Instance.Type is INamedTypeSymbol aggCapType
-                && EmitPolicy.IsAggregateType(aggCapType):
+                && EmitPolicy.IsObjectArrayEmulated(aggCapType):
             {
                 var layout = _ctx.GetAggregateLayout(aggCapType);
                 if (layout.TryGetIndex(aggFieldRef.Field, out var elemIdx))
@@ -212,7 +212,7 @@ public abstract class AssignmentHandlerBase : HandlerBase
             case IFieldReferenceOperation aggFieldRef
                 when aggFieldRef.Instance != null
                 && aggFieldRef.Instance.Type is INamedTypeSymbol aggWbType
-                && EmitPolicy.IsAggregateType(aggWbType):
+                && EmitPolicy.IsObjectArrayEmulated(aggWbType):
             {
                 var layout = _ctx.GetAggregateLayout(aggWbType);
                 if (layout.TryGetIndex(aggFieldRef.Field, out var elemIdx))

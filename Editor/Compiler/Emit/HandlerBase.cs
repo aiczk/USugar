@@ -421,7 +421,7 @@ public abstract partial class HandlerBase
         var layout = _ctx.GetAggregateLayout(aggType);
         var slot = _ctx.AllocTemp("SystemObjectArray");
         EmitAssign(slot, ExternCall(ExternResolver.BuildArrayCtorSignature("SystemObjectArray"),
-            new List<CLeaf> { Const(layout.Count, "SystemInt32") }, "SystemObjectArray"));
+            new List<CLeaf> { Const(layout.SlotCount, "SystemInt32") }, "SystemObjectArray"));
         EmitDefaultInitAggregate(SlotRef(slot), layout);
         return SlotRef(slot);
     }
@@ -459,15 +459,19 @@ public abstract partial class HandlerBase
     {
         var slot = _ctx.AllocTemp("SystemObjectArray");
         EmitAssign(slot, arrayVal);
-        for (int i = 0; i < layout.Count; i++)
+        // Iterate fields by their layout INDEX (a class's fields start at slot 1; slot 0 stays the null the
+        // array ctor gave it). A nested aggregate (struct) field is allocated; a class-typed field is a
+        // reference and defaults to null via the scalar arm below (IsAggregateType(class) == false).
+        foreach (var fi in layout.Fields)
         {
-            var fieldType = layout.Fields[i].Type;
+            int i = fi.Index;
+            var fieldType = fi.Type;
             if (fieldType is INamedTypeSymbol nested && EmitPolicy.IsAggregateType(nested))
             {
                 var nl = _ctx.GetAggregateLayout(nested);
                 var subSlot = _ctx.AllocTemp("SystemObjectArray");
                 EmitAssign(subSlot, ExternCall(ExternResolver.BuildArrayCtorSignature("SystemObjectArray"),
-                    new List<CLeaf> { Const(nl.Count, "SystemInt32") }, "SystemObjectArray"));
+                    new List<CLeaf> { Const(nl.SlotCount, "SystemInt32") }, "SystemObjectArray"));
                 EmitExternVoid(ExternResolver.BuildArraySetSignature("SystemObjectArray", "SystemObject"),
                     new List<CLeaf> { SlotRef(slot), Const(i, "SystemInt32"), SlotRef(subSlot) });
                 EmitDefaultInitAggregate(SlotRef(subSlot), nl);
@@ -492,6 +496,34 @@ public abstract partial class HandlerBase
             if (defVal != null)
                 EmitExternVoid(ExternResolver.BuildArraySetSignature("SystemObjectArray", "SystemObject"),
                     new List<CLeaf> { SlotRef(slot), Const(i, "SystemInt32"), Const(defVal, GetUdonType(fieldType)) });
+        }
+    }
+
+    /// <summary>Class ABI v1 (CA-M1): run a class's instance field / auto-property INITIALIZERS on a freshly
+    /// minted object[] bundle, in declaration order, after the default-init and before the ctor body (the C#
+    /// order). An instance initializer cannot reference `this` or other instance members (CS0236), so each
+    /// initializer expression is instance-independent and emits standalone as a layout-INDEX __Set__.</summary>
+    protected void EmitInstanceFieldInitializers(CLeaf instance, INamedTypeSymbol classTy, AggregateLayout layout)
+    {
+        foreach (var member in classTy.GetMembers())
+        {
+            if (member is not IFieldSymbol { IsStatic: false, IsConst: false } f) continue;
+            var (slotName, initHolder) = f.IsImplicitlyDeclared && f.AssociatedSymbol is IPropertySymbol prop
+                ? (prop.Name, (ISymbol)prop)
+                : (f.Name, f);
+            if (!layout.TryGetIndex(slotName, out var idx)) continue;
+            var syntax = initHolder.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax();
+            var initValue = syntax switch
+            {
+                Microsoft.CodeAnalysis.CSharp.Syntax.VariableDeclaratorSyntax vd => vd.Initializer?.Value,
+                Microsoft.CodeAnalysis.CSharp.Syntax.PropertyDeclarationSyntax pd => pd.Initializer?.Value,
+                _ => null,
+            };
+            if (initValue == null) continue;
+            var initOp = _compilation.GetSemanticModel(initValue.SyntaxTree).GetOperation(initValue);
+            if (initOp == null) continue;
+            EmitExternVoid(ExternResolver.BuildArraySetSignature("SystemObjectArray", "SystemObject"),
+                new List<CLeaf> { instance, Const(idx, "SystemInt32"), VisitExpression(initOp) });
         }
     }
 
@@ -1165,7 +1197,7 @@ public abstract partial class HandlerBase
         if (fieldRef.Instance is not IInstanceReferenceOperation) return true; // variable receiver — always a prepared arm
         return fieldRef.Field.ContainingType.IsValueType                   // struct `this.v` (emulated receiver)
             || (TryGetAggregateMemberTarget(fieldRef, out var inst, out var name)
-                && inst.Type is INamedTypeSymbol agg && EmitPolicy.IsAggregateType(agg)
+                && inst.Type is INamedTypeSymbol agg && EmitPolicy.IsObjectArrayEmulated(agg)
                 && _ctx.GetAggregateLayout(agg).TryGetIndex(name, out _));
     }
 
@@ -1212,9 +1244,9 @@ public abstract partial class HandlerBase
     /// Keep the arm dispatch in lockstep with IsPreparableFieldSetTarget above.</summary>
     protected System.Action<CLeaf> TryPrepareFieldSet(IFieldReferenceOperation fieldRef)
     {
-        // Aggregate (struct/tuple) member → layout slot write on the backing object[].
+        // Aggregate (struct/tuple) OR v1-class member → layout slot write on the backing object[].
         if (TryGetAggregateMemberTarget(fieldRef, out var aggInstance, out var aggMemberName)
-            && aggInstance.Type is INamedTypeSymbol aggContaining && EmitPolicy.IsAggregateType(aggContaining)
+            && aggInstance.Type is INamedTypeSymbol aggContaining && EmitPolicy.IsObjectArrayEmulated(aggContaining)
             && _ctx.GetAggregateLayout(aggContaining).TryGetIndex(aggMemberName, out var fieldIndex))
         {
             RejectStaticReadonlyWriteThrough(aggInstance); // §3.3, R5
@@ -1874,7 +1906,7 @@ public abstract partial class HandlerBase
         // ONLY via internal self-reference (never pre-collected) got no receiver slot and EmitMethod's
         // ParamFieldNames[0] read threw IndexOutOfRange.
         if (!constructed.IsStatic
-            && constructed.ContainingType is INamedTypeSymbol structRecvCt && EmitPolicy.IsUserStruct(structRecvCt)
+            && constructed.ContainingType is INamedTypeSymbol structRecvCt && EmitPolicy.IsObjectArrayEmulated(structRecvCt)
             && constructed.MethodKind is not (MethodKind.LambdaMethod or MethodKind.LocalFunction))
         {
             var receiverId = $"__{idx}_this__param";

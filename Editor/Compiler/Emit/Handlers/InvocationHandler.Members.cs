@@ -428,6 +428,30 @@ public partial class InvocationHandler
         "UnityEngineMatrix4x4", "UnityEngineRect",
     };
 
+    /// <summary>Class ABI v1 (CA-M1): THE single mint sequence for a supported user class — a
+    /// reference-semantics object[1+F] bundle (slot 0 reserved for the future type-object reference). Kept in
+    /// one place (the DelegateAbi.EmitBundleMint analogue) so the future slot-0 flip is a one-line change here.
+    /// Order (C# semantics): allocate object[SlotCount] → default-init fields (slot 0 stays the ctor's null) →
+    /// run instance field initializers in declaration order → run the ctor body (ctor-as-CFunction, receiver =
+    /// param0) → apply any object-initializer. NO defensive copies — the same bundle reference flows through.</summary>
+    CLeaf EmitClassInstanceMint(IObjectCreationOperation op, INamedTypeSymbol classTy)
+    {
+        var layout = _ctx.GetAggregateLayout(classTy);
+        var slot = _ctx.AllocTemp("SystemObjectArray");
+        EmitAssign(slot, ExternCall(ExternResolver.BuildArrayCtorSignature("SystemObjectArray"),
+            new List<CLeaf> { Const(layout.SlotCount, "SystemInt32") }, "SystemObjectArray"));
+        EmitDefaultInitAggregate(SlotRef(slot), layout);
+        EmitInstanceFieldInitializers(SlotRef(slot), classTy, layout);
+        if (op.Constructor != null && !op.Constructor.IsImplicitlyDeclared)
+        {
+            var ctorArgs = new List<CLeaf> { SlotRef(slot) };
+            foreach (var arg in op.Arguments) ctorArgs.Add(VisitExpression(arg.Value));
+            EmitExprStmt(EmitCallToMethod(ResolveStructMember(op.Constructor), ctorArgs));
+        }
+        EmitAggregateObjectInitializer(SlotRef(slot), classTy, op.Initializer);
+        return SlotRef(slot);
+    }
+
     CLeaf VisitObjectCreation(IObjectCreationOperation op)
     {
         var resultType = GetUdonType(op.Type);
@@ -454,23 +478,11 @@ public partial class InvocationHandler
             return Const(null, resultType);
         }
 
-        // Plain user-defined reference type (class Foo {...}, record Foo): Udon has no runtime heap
-        // allocation for user types, and unlike a user struct there is no object[] emulation to fall back
-        // to. Left unguarded, a ctor with no registered extern would reach ExternCall below and crash
-        // opaquely ("Unknown extern: Foo__ctor__..."). A genuine foreign/SDK class (VRCUrl, DataList, …)
-        // shares this same TypeKind/namespace shape but HAS a real registered ctor extern — checked here via
-        // IsExternValid so that case still compiles; IsExternValid==null (not wired up) stays permissive,
-        // matching every other optional-check use of it in this compiler.
-        if (!op.Type.IsValueType && ExternResolver.IsPlainUserClass(op.Type))
-        {
-            var ctorParamTypes = op.Arguments.Select(a => GetUdonType(a.Value.Type)).ToArray();
-            var ctorCandidate = $"{resultType}.__ctor__{string.Join("_", ctorParamTypes)}__{resultType}";
-            if (ExternResolver.IsExternValid != null && !ExternResolver.IsExternValid(ctorCandidate))
-                throw new NotSupportedException(
-                    $"User-defined reference types (class '{op.Type.Name}') are not supported: the Udon VM "
-                    + $"has no runtime heap allocation for user types. Convert '{op.Type.Name}' to a struct "
-                    + "(value type), or to a UdonSharpBehaviour referenced through a scene object.");
-        }
+        // Class ABI v1 (CA-M1): a supported user class mints via the single ClassAbi bundle sequence. An
+        // unsupported class (record / non-Object base / extern-backed foreign) already threw at the resultType
+        // GetUdonType above (B79); nothing unsupported lands here.
+        if (op.Type is INamedTypeSymbol classTy && EmitPolicy.IsUserClassType(classTy))
+            return EmitClassInstanceMint(op, classTy);
 
         // Parameterless struct ctor. A user struct used AS A VALUE (e.g. `_field = new V()`, `Foo(new V())`)
         // must allocate + default-init a fresh object[]; the local-declaration path already does this, but

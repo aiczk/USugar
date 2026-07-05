@@ -16,7 +16,14 @@ public class AggregateLayout
     public readonly IReadOnlyList<FieldInfo> Fields;
     readonly Dictionary<string, int> _nameToIndex;
 
+    // Class ABI v1: a user class reserves object[] slot 0 (null placeholder for the future type-object
+    // reference); its fields live at 1..F. A struct/tuple reserves nothing (fields at 0..F-1). SlotCount is
+    // the backing array size; Count stays the field count. Each FieldInfo.Index already carries the reserved
+    // offset, so field-slot resolution (TryGetIndex) is correct without a per-site +1.
+    readonly int _reservedLeadingSlots;
+
     public int Count => Fields.Count;
+    public int SlotCount => _reservedLeadingSlots + Fields.Count;
 
     public bool TryGetIndex(string fieldName, out int index)
         => _nameToIndex.TryGetValue(fieldName, out index);
@@ -30,13 +37,15 @@ public class AggregateLayout
         return false;
     }
 
-    AggregateLayout(IReadOnlyList<FieldInfo> fields, Dictionary<string, int> nameToIndex)
-    { Fields = fields; _nameToIndex = nameToIndex; }
+    AggregateLayout(IReadOnlyList<FieldInfo> fields, Dictionary<string, int> nameToIndex, int reservedLeadingSlots)
+    { Fields = fields; _nameToIndex = nameToIndex; _reservedLeadingSlots = reservedLeadingSlots; }
 
     public static AggregateLayout Build(INamedTypeSymbol type)
     {
         var fields = new List<FieldInfo>();
         var nameToIndex = new Dictionary<string, int>();
+        // Class ABI v1: reserve slot 0, fields start at index 1. Struct/tuple: no reservation.
+        int reserved = EmitPolicy.IsUserClassType(type) ? 1 : 0;
 
         if (type.IsTupleType)
         {
@@ -55,12 +64,13 @@ public class AggregateLayout
                 }
             }
         }
-        else if (type.TypeKind == TypeKind.Struct)
+        else if (type.TypeKind == TypeKind.Struct || reserved > 0)
         {
-            // User struct → instance fields mapped to indices in declaration order. Auto-property backing
+            // User struct / v1 user class → instance fields mapped to indices in declaration order (a class
+            // starts at `reserved`=1, slot 0 held for the future type-object reference). Auto-property backing
             // fields are implicitly declared but carry the property as AssociatedSymbol; map them by the
             // property name so `get`/`set`/`init` resolve to the same object[] element.
-            int i = 0;
+            int i = reserved;
             foreach (var member in type.GetMembers())
             {
                 if (member is not IFieldSymbol { IsStatic: false, IsConst: false } f) continue;
@@ -82,6 +92,6 @@ public class AggregateLayout
                 $"AggregateLayout.Build called on non-aggregate type '{type.Name}'");
         }
 
-        return new AggregateLayout(fields.AsReadOnly(), nameToIndex);
+        return new AggregateLayout(fields.AsReadOnly(), nameToIndex, reserved);
     }
 }

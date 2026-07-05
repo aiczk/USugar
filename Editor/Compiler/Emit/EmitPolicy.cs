@@ -138,6 +138,30 @@ public static class EmitPolicy
         return !IsSdkNamespace(type.ContainingNamespace);
     }
 
+    /// <summary>Class ABI v1 (CA-M1): a plain user class the compiler represents as a reference-semantics
+    /// object[1+F] bundle (slot 0 reserved). The single semantic entry for class support — a supported v1
+    /// class has no explicit base (System.Object only) and is not a record; those excluded shapes stay
+    /// B79-rejected. Distinct from IsAggregateType (which stays FALSE for a class) so the ~30 clone-on-read
+    /// sites keyed on IsAggregateType automatically give a class REFERENCE semantics.</summary>
+    public static bool IsUserClassType(ITypeSymbol type)
+    {
+        if (type is not INamedTypeSymbol n) return false;
+        if (!ExternResolver.IsPlainUserClass(n)) return false;
+        if (n.IsRecord) return false;
+        if (n.BaseType != null && n.BaseType.SpecialType != SpecialType.System_Object) return false;
+        // A foreign type modelled as a source stub (registered externs — DisposableResource, and real SDK
+        // types) is NOT a v1 user class: it keeps its real Udon extern type, not the object[] bundle ABI.
+        if (ExternResolver.ClassHasRegisteredExterns(n)) return false;
+        return true;
+    }
+
+    /// <summary>A named type whose runtime value is an object[] the VM tags SystemObjectArray — a user
+    /// struct/tuple OR a v1 user class. The "is this object[]-emulated?" test for Category-A sites (layout,
+    /// mint, field-slot resolution, size); clone-on-read (Category-B) sites keep IsAggregateType alone so a
+    /// class stays reference-semantics.</summary>
+    public static bool IsObjectArrayEmulated(ITypeSymbol type)
+        => IsAggregateType(type) || IsUserClassType(type);
+
     /// <summary>Evaluates a field's initializer syntax to a compile-time constant (primitives/enums/
     /// string). A `static readonly` field has no ConstantValue of its own (only `const` does), so this
     /// folds `static readonly int X = 1 + 2;`-style initializers that ARE compile-time-constant

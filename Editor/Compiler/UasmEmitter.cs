@@ -1987,8 +1987,10 @@ public class UasmEmitter
         // registered via RegisterLocalFunction (envp-based, no receiver param0) — C# itself forbids a
         // struct closure from referencing `this`'s members (CS1673), so it never needs the receiver;
         // indexing ParamFieldNames[0] for it read past an empty list.
+        // CA-M1: a v1 class instance member uses the SAME param0 object[] receiver as a user struct member
+        // (reference semantics — no clone; the bundle flows through by reference).
         _ctx.CurrentStructReceiverParamId =
-            (method.ContainingType is INamedTypeSymbol structCt && EmitPolicy.IsUserStruct(structCt) && !method.IsStatic
+            (method.ContainingType is INamedTypeSymbol structCt && EmitPolicy.IsObjectArrayEmulated(structCt) && !method.IsStatic
                 && method.MethodKind is not (MethodKind.LambdaMethod or MethodKind.LocalFunction))
                 ? func.ParamFieldNames[0] : null;
 
@@ -3536,9 +3538,9 @@ public class UasmEmitter
     /// each caller) and must not be merged.</summary>
     static IEnumerable<IMethodSymbol> EnumerateStructMemberRefs(IOperation op)
     {
-        // Parameterized user-struct constructor: new V(...).
+        // Parameterized user-struct / v1-class constructor: new V(...) / new C(...).
         if (op is IObjectCreationOperation oc && oc.Constructor != null
-            && oc.Type is INamedTypeSymbol nt && EmitPolicy.IsUserStruct(nt)
+            && oc.Type is INamedTypeSymbol nt && EmitPolicy.IsObjectArrayEmulated(nt)
             && oc.Arguments.Length > 0 && !oc.Constructor.IsImplicitlyDeclared)
             yield return oc.Constructor;
         // User-struct instance method: v.Method(...). Feature G: yield the CONSTRUCTED symbol

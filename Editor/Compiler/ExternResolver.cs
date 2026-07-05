@@ -38,6 +38,19 @@ public static class ExternResolver
         return i < 0 ? externFullName : externFullName.Substring(0, i);
     }
 
+    /// <summary>Does the Udon registry hold any extern under this class's RAW (foreign) udon name? True for a
+    /// foreign type modelled as a source stub (registered externs — VRCUrl/DataList/TestStubs); false for a
+    /// genuine user class. Computes the raw name DIRECTLY (not via ComputeUdonTypeName) to avoid recursion
+    /// with EmitPolicy.IsUserClassType. Unwired registry → false (permissive: treat as a genuine class).</summary>
+    public static bool ClassHasRegisteredExterns(INamedTypeSymbol type)
+    {
+        var probe = HasAnyExternForType;
+        if (probe == null) return false;
+        var raw = RemapUdonType(SanitizeTypeName(
+            type.ToDisplayString(SymbolDisplayFormat.CSharpErrorMessageFormat)));
+        return probe(raw);
+    }
+
     /// <summary>CA-M0 B79: a plain user class the Udon VM cannot represent in class-ABI v1 — a source-defined
     /// non-behaviour class (<see cref="IsPlainUserClass"/>) with NO registered externs. A foreign type modelled
     /// as a source stub (registered externs) is supported and returns false; unwired registry stays permissive
@@ -45,6 +58,7 @@ public static class ExternResolver
     public static bool IsUnsupportedUserClass(ITypeSymbol type)
     {
         if (!IsPlainUserClass(type)) return false;
+        if (EmitPolicy.IsUserClassType(type)) return false; // CA-M1: a v1 class is now a supported object[] type
         var probe = HasAnyExternForType;
         if (probe == null) return false;
         return !probe(ComputeUdonTypeName(type));
@@ -57,6 +71,7 @@ public static class ExternResolver
     static void RejectIfUnsupportedUserClass(ITypeSymbol type, string udonName)
     {
         if (!IsPlainUserClass(type)) return;
+        if (EmitPolicy.IsUserClassType(type)) return; // CA-M1: v1 class is supported (object[1+F] bundle)
         var probe = HasAnyExternForType;
         if (probe == null || probe(udonName)) return;
         var named = (INamedTypeSymbol)type;
@@ -196,8 +211,8 @@ public static class ExternResolver
             // element recursion would otherwise produce a bogus SystemObjectArrayArray (design §1.2).
             if (elementType is INamedTypeSymbol elemDlg && elemDlg.DelegateInvokeMethod != null)
                 return "SystemObjectArray";
-            // struct[] / tuple[] → object[] of boxed object[] elements (no SystemObjectArrayArray in Udon).
-            if (EmitPolicy.IsAggregateType(elementType))
+            // struct[] / tuple[] / class[] → object[] of boxed object[] elements (no SystemObjectArrayArray).
+            if (EmitPolicy.IsObjectArrayEmulated(elementType))
                 return "SystemObjectArray";
             var elemTypeName = GetUdonTypeName(elementType, typeParamMap);
             if (elemTypeName == "VRCUdonCommonInterfacesIUdonEventReceiver")
@@ -219,7 +234,7 @@ public static class ExternResolver
         if (typeParamMap != null && type is INamedTypeSymbol named && named.IsGenericType
             && named.OriginalDefinition.SpecialType != SpecialType.System_Nullable_T
             && type.TypeKind != TypeKind.Enum
-            && !EmitPolicy.IsAggregateType(type))
+            && !EmitPolicy.IsObjectArrayEmulated(type))
         {
             var def = named.ConstructedFrom;
             var ns = def.ContainingNamespace?.ToDisplayString();
@@ -328,10 +343,10 @@ public static class ExternResolver
             // recursion would otherwise produce a bogus SystemObjectArrayArray (design §1.2).
             if (arrayType.ElementType is INamedTypeSymbol arrElemDlg && arrElemDlg.DelegateInvokeMethod != null)
                 return "SystemObjectArray";
-            // struct[] / tuple[] → object[] whose elements are the boxed per-element object[]. Udon has no
-            // SystemObjectArrayArray (object[][]) externs, so a nested-array element type cannot be used;
-            // a plain object[] holds the object[] elements as boxed objects.
-            if (EmitPolicy.IsAggregateType(arrayType.ElementType))
+            // struct[] / tuple[] / class[] → object[] whose elements are the boxed per-element object[]. Udon
+            // has no SystemObjectArrayArray (object[][]) externs, so a nested-array element type cannot be
+            // used; a plain object[] holds the object[] elements as boxed objects.
+            if (EmitPolicy.IsObjectArrayEmulated(arrayType.ElementType))
                 return "SystemObjectArray";
             // All types that resolve to IUdonEventReceiver use ComponentArray at runtime:
             // UdonSharpBehaviour[], derived[], UdonBehaviour[], user-interface[]
@@ -362,8 +377,8 @@ public static class ExternResolver
         if (type is INamedTypeSymbol nullable && nullable.OriginalDefinition.SpecialType == SpecialType.System_Nullable_T)
             return "SystemObject";
 
-        // Aggregate types (tuples, user-defined structs) → SystemObjectArray (object[] emulation)
-        if (EmitPolicy.IsAggregateType(type))
+        // Aggregate (tuple/user struct) OR v1 user class → SystemObjectArray (object[] emulation)
+        if (EmitPolicy.IsObjectArrayEmulated(type))
             return "SystemObjectArray";
 
         // User-defined enums → underlying type (Udon has no type registration for user enums).
