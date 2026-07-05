@@ -138,9 +138,25 @@ public class EmitContext
         if (syntaxRef == null) return ClosurePin.None;
         var syntax = syntaxRef.GetSyntax();
         var body = compilation.GetSemanticModel(syntax.SyntaxTree).GetOperation(syntax);
+        // B53: only THIS definition's own instantiation dimension pins it — a nested generic local
+        // function's own (unrelated) type parameter must not. Every reference test filters to `def`'s
+        // params (method type params, or the containing type's for a generic-struct member).
         var pin = ClosurePin.None;
-        WalkClosurePins(body, ref pin);
+        WalkClosurePins(body, ref pin, def);
         return pin;
+    }
+
+    // Y8-robust ownership: a body-walk's type-parameter symbol is fresh (reference-distinct) from the
+    // declaration's, so compare the DECLARING method/type's OriginalDefinition, never symbol identity.
+    static bool OwnedByDef(ITypeParameterSymbol tp, IMethodSymbol def)
+    {
+        if (tp.TypeParameterKind == TypeParameterKind.Method)
+            return tp.DeclaringMethod != null
+                && SymbolEqualityComparer.Default.Equals(tp.DeclaringMethod.OriginalDefinition, def.OriginalDefinition);
+        if (tp.TypeParameterKind == TypeParameterKind.Type)
+            return def.ContainingType is { IsGenericType: true } ct && tp.DeclaringType != null
+                && SymbolEqualityComparer.Default.Equals(tp.DeclaringType.OriginalDefinition, ct.OriginalDefinition);
+        return false;
     }
 
     // Stage 2 §8.2: the walk no longer early-returns on capture — capture alone no longer pins an
@@ -149,52 +165,52 @@ public class EmitContext
     // a closure whose signature, body, or a captured variable references the enclosing generic's type
     // parameters cannot share one T-free hoist across specs. Granularity stays per-definition (§8.2):
     // one T-dependent closure pins the whole definition; no partial legalization.
-    void WalkClosurePins(IOperation op, ref ClosurePin pin)
+    void WalkClosurePins(IOperation op, ref ClosurePin pin, IMethodSymbol def)
     {
         if (op == null || pin != ClosurePin.None) return;
         switch (op)
         {
             case IAnonymousFunctionOperation af:
-                if (ClosureUsesMethodTypeParam(af.Symbol, af.Body)) { pin = ClosurePin.TypeParamDependent; return; }
+                if (ClosureUsesMethodTypeParam(af.Symbol, af.Body, def)) { pin = ClosurePin.TypeParamDependent; return; }
                 break;
             case ILocalFunctionOperation lf when lf.Symbol != null:
-                if (ClosureUsesMethodTypeParam(lf.Symbol, lf.Body)) { pin = ClosurePin.TypeParamDependent; return; }
+                if (ClosureUsesMethodTypeParam(lf.Symbol, lf.Body, def)) { pin = ClosurePin.TypeParamDependent; return; }
                 break;
         }
         foreach (var child in op.Children)
         {
-            WalkClosurePins(child, ref pin);
+            WalkClosurePins(child, ref pin, def);
             if (pin != ClosurePin.None) return;
         }
     }
 
-    static bool ClosureUsesMethodTypeParam(IMethodSymbol closureSym, IOperation closureBody)
+    static bool ClosureUsesMethodTypeParam(IMethodSymbol closureSym, IOperation closureBody, IMethodSymbol def)
     {
         if (closureSym != null
-            && (TypeUsesMethodTypeParam(closureSym.ReturnType)
-                || closureSym.Parameters.Any(p => TypeUsesMethodTypeParam(p.Type))))
+            && (TypeUsesMethodTypeParam(closureSym.ReturnType, def)
+                || closureSym.Parameters.Any(p => TypeUsesMethodTypeParam(p.Type, def))))
             return true;
-        return OperationUsesMethodTypeParam(closureBody);
+        return OperationUsesMethodTypeParam(closureBody, def);
     }
 
-    static bool OperationUsesMethodTypeParam(IOperation op)
+    static bool OperationUsesMethodTypeParam(IOperation op, IMethodSymbol def)
     {
         if (op == null) return false;
-        if (TypeUsesMethodTypeParam(op.Type)) return true;
-        if (op is ITypeOfOperation typeOf && TypeUsesMethodTypeParam(typeOf.TypeOperand)) return true;
-        if (op is IIsTypeOperation isType && TypeUsesMethodTypeParam(isType.TypeOperand)) return true;
+        if (TypeUsesMethodTypeParam(op.Type, def)) return true;
+        if (op is ITypeOfOperation typeOf && TypeUsesMethodTypeParam(typeOf.TypeOperand, def)) return true;
+        if (op is IIsTypeOperation isType && TypeUsesMethodTypeParam(isType.TypeOperand, def)) return true;
         if (op is IInvocationOperation inv
-            && inv.TargetMethod.TypeArguments.Any(TypeUsesMethodTypeParam)) return true;
+            && inv.TargetMethod.TypeArguments.Any(ta => TypeUsesMethodTypeParam(ta, def))) return true;
         foreach (var child in op.Children)
-            if (OperationUsesMethodTypeParam(child)) return true;
+            if (OperationUsesMethodTypeParam(child, def)) return true;
         return false;
     }
 
-    static bool TypeUsesMethodTypeParam(ITypeSymbol t) => t switch
+    static bool TypeUsesMethodTypeParam(ITypeSymbol t, IMethodSymbol def) => t switch
     {
-        ITypeParameterSymbol => true,
-        IArrayTypeSymbol at => TypeUsesMethodTypeParam(at.ElementType),
-        INamedTypeSymbol nt => nt.IsGenericType && nt.TypeArguments.Any(TypeUsesMethodTypeParam),
+        ITypeParameterSymbol tp => OwnedByDef(tp, def),
+        IArrayTypeSymbol at => TypeUsesMethodTypeParam(at.ElementType, def),
+        INamedTypeSymbol nt => nt.IsGenericType && nt.TypeArguments.Any(ta => TypeUsesMethodTypeParam(ta, def)),
         _ => false,
     };
 
