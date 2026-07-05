@@ -289,6 +289,23 @@ using System; using UdonSharp;
         Assert.Contains("type parameter", ex.Message);
     }
 
+    // ── B74: a property SUBPATTERN member (`c is { enabled: true }`) is the owner funnel's 7th site — an
+    //         inherited member must resolve to the scrutinee's own static type (Camera), not the declaring
+    //         abstract base (Behaviour, which has no extern). ──
+
+    [Fact]
+    public void B74_PropertySubpattern_InheritedMember_ResolvesToConcreteReceiver()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using System; using UnityEngine; using UdonSharp;
+public class B74P : UdonSharpBehaviour {
+  public Camera cam; public int result;
+  void Start(){ result = (cam is { enabled: true }) ? 1 : 0; }
+}", "B74P");
+        Assert.Contains("UnityEngineCamera.__get_enabled__", uasm);
+        Assert.DoesNotContain("UnityEngineBehaviour.__get_enabled__", uasm);
+    }
+
     // ── B64: the closure-pin is per-parameter AND capture-aware. A second instantiation that only varies a
     //         type param NO closure uses is legal; a varying CLOSURE-USED param still pins on type; and a
     //         STATIC generic method whose captures alias across its inlined specializations pins on capture

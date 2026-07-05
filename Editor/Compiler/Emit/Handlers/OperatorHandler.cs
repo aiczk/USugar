@@ -722,16 +722,16 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
                     bool isAgg = aggMatchType != null && EmitPolicy.IsAggregateType(aggMatchType);
                     foreach (var sub in rec.PropertySubpatterns)
                     {
-                        ITypeSymbol memberType;
-                        string memberName, memberOwner;
+                        ITypeSymbol memberType, memberContainingType;
+                        string memberName;
                         switch (sub.Member)
                         {
                             case IPropertyReferenceOperation pr:
                                 memberType = pr.Property.Type; memberName = pr.Property.Name;
-                                memberOwner = GetUdonType(pr.Property.ContainingType); break;
+                                memberContainingType = pr.Property.ContainingType; break;
                             case IFieldReferenceOperation fr:
                                 memberType = fr.Field.Type; memberName = fr.Field.Name;
-                                memberOwner = GetUdonType(fr.Field.ContainingType); break;
+                                memberContainingType = fr.Field.ContainingType; break;
                             default:
                                 throw new System.NotSupportedException(
                                     $"Property pattern member '{sub.Member?.GetType().Name}' is not supported "
@@ -758,6 +758,11 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
                         }
                         else
                         {
+                            // B74 (owner funnel's 7th site): an INHERITED member in a property subpattern
+                            // (`c is { enabled: true }` where enabled is declared on the abstract Behaviour)
+                            // must resolve its extern owner to the SCRUTINEE's own static type, not the
+                            // declaring base — else it mints an unknown UnityEngineBehaviour.__get_enabled__.
+                            var memberOwner = GetUdonType(ResolveExternOwnerType(memberContainingType, matchType, memberName));
                             memberVal = ExternCall(
                                 ExternResolver.BuildPropertyGetSignature(memberOwner, memberName, GetUdonType(memberType)),
                                 new List<CLeaf> { SlotRef(valSlot) }, GetUdonType(memberType));

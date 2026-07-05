@@ -1352,7 +1352,11 @@ public abstract partial class HandlerBase
         // the BASE accessor — resolve to the chain-leaf override for the this-path setter lookups
         // below; `base.P` (and every non-this receiver) keeps the static binding.
         var dispatchProp = ResolveDispatchProperty(propRef);
-        var propContainingUdon = GetUdonType(propRef.Property.ContainingType);
+        // B74 fold: route the extern owner through the shared funnel (an inherited property registers under
+        // the receiver's own static type, not its declaring base) — replaces the old Behaviour/MonoBehaviour-
+        // only string fixup below. A null instance (static setter) leaves the owner unchanged.
+        var propOwnerReceiver = propRef.Instance is IInstanceReferenceOperation ? _classSymbol : propRef.Instance?.Type;
+        var propContainingUdon = GetUdonType(ResolveExternOwnerType(propRef.Property.ContainingType, propOwnerReceiver, propRef.Property.Name));
 
         // User-defined indexer on this/base → internal setter call (index args followed by the value).
         if (dispatchProp.IsIndexer && propRef.Instance is IInstanceReferenceOperation
@@ -1377,13 +1381,6 @@ public abstract partial class HandlerBase
                 new List<CLeaf> { staticVal });
         }
 
-        // Behaviour/MonoBehaviour have no Udon externs; resolve to actual type
-        if (propContainingUdon is "UnityEngineBehaviour" or "UnityEngineMonoBehaviour")
-        {
-            propContainingUdon = propRef.Instance is IInstanceReferenceOperation
-                ? GetUdonType(_classSymbol)
-                : GetUdonType(propRef.Instance.Type);
-        }
         var instanceVal = propRef.Instance is IInstanceReferenceOperation
             ? LoadField(_ctx.DeclareThisOnce(propContainingUdon), propContainingUdon)
             : VisitExpression(propRef.Instance);

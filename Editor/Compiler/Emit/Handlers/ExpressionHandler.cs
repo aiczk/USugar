@@ -189,7 +189,9 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
         // other.field → extern getter (same pattern as VisitPropertyReference)
         {
             var fldType = GetUdonType(fieldRef.Field.Type);
-            var containingType = GetUdonType(fieldRef.Field.ContainingType);
+            // B74 fold: an inherited field registers under the receiver's own static type, not its declaring
+            // base — route through the shared owner funnel like the property-get/set sites.
+            var containingType = GetUdonType(ResolveExternOwnerType(fieldRef.Field.ContainingType, fieldRef.Instance?.Type, fieldRef.Field.Name));
             var instanceVal = VisitExpression(fieldRef.Instance);
             return ExternCall(
                 ExternResolver.BuildPropertyGetSignature(containingType, fieldRef.Field.Name, fldType),
