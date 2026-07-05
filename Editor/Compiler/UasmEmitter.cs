@@ -3411,6 +3411,8 @@ public class UasmEmitter
         var visited = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default); // definitions walked
         var queue = new Queue<IMethodSymbol>();                                    // definitions to walk
 
+        var mintWalked = new HashSet<INamedTypeSymbol>(SymbolEqualityComparer.Default);
+
         void Walk(IOperation body)
         {
             if (body == null) return;
@@ -3418,6 +3420,26 @@ public class UasmEmitter
             CollectStructMethodsInOperation(body, structMembers);       // gated: IsCollectibleStructMember
             CollectBaseInstanceCallsInOperation(body, baseCopies);      // + populates _openGenericBaseDefs
             CollectStructMemberDefinitions(body, structMemberDefs);     // ungated: definition-keyed
+            CollectClassMintReach(body);                                // B81: v1-class field-inits + ctor bodies
+        }
+
+        // B81 (B50's foreign-static twin on the reach side): a v1 class's field-INITIALIZER expressions and
+        // ctor BODY run at `new C()` mint, so any foreign-static / struct-member they call must be Phase-1
+        // registered too — but they live in the class declaration, not in the walked body tree, so the
+        // collectors never reach them. On seeing a minted v1 class (deduped by constructed type), walk its
+        // field-init ops and ctor body through the same Walk (recurses into nested mints; the parameterless
+        // ctor the struct-member collector skips at Arguments.Length==0 is covered here directly).
+        void CollectClassMintReach(IOperation op)
+        {
+            if (op == null) return;
+            if (op is IObjectCreationOperation oc && oc.Type is INamedTypeSymbol ct
+                && EmitPolicy.IsUserClassType(ct) && mintWalked.Add(ct))
+            {
+                foreach (var initOp in EnumerateClassFieldInitOps(ct)) Walk(initOp);
+                if (oc.Constructor is { IsImplicitlyDeclared: false } ctor)
+                    Walk(GetMethodBodyOperation(ctor.OriginalDefinition));
+            }
+            foreach (var child in op.Children) CollectClassMintReach(child);
         }
 
         void EnqueueDiscovered()
@@ -3454,6 +3476,29 @@ public class UasmEmitter
         result.StructMembers = structMembers.ToArray();
         result.BaseCopies = baseCopies.ToArray();
         return result;
+    }
+
+    /// <summary>B81: the instance field-/auto-property-INITIALIZER value operations of a v1 class, in
+    /// declaration order — the reach-side twin of HandlerBase.EmitInstanceFieldInitializers (which emits
+    /// them at mint). Static/const fields are excluded (const folds; statics reject). Used to Phase-1-walk
+    /// a minted class's initializer expressions for foreign-static / struct-member collection.</summary>
+    IEnumerable<IOperation> EnumerateClassFieldInitOps(INamedTypeSymbol classTy)
+    {
+        foreach (var member in classTy.GetMembers())
+        {
+            if (member is not IFieldSymbol { IsStatic: false, IsConst: false } f) continue;
+            ISymbol initHolder = f.IsImplicitlyDeclared && f.AssociatedSymbol is IPropertySymbol prop ? prop : f;
+            var syntax = initHolder.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax();
+            var initValue = syntax switch
+            {
+                Microsoft.CodeAnalysis.CSharp.Syntax.VariableDeclaratorSyntax vd => vd.Initializer?.Value,
+                Microsoft.CodeAnalysis.CSharp.Syntax.PropertyDeclarationSyntax pd => pd.Initializer?.Value,
+                _ => null,
+            };
+            if (initValue == null) continue;
+            var initOp = _compilation.GetSemanticModel(initValue.SyntaxTree).GetOperation(initValue);
+            if (initOp != null) yield return initOp;
+        }
     }
 
     // B46 (wave-14 r4): a foreign-static call whose containing type still carries an OPEN type
