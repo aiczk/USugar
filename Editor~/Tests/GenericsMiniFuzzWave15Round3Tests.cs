@@ -202,6 +202,45 @@ using System; using UdonSharp;
         Assert.Contains("_Lf_", uasm);            // the monomorphized Lf specialization function(s) exist
     }
 
+    // ── B70: local functions inside generic structs. The enclosing struct's CLOSED type args now reach the
+    //         LF body's type-param map (no bogus TArray), a recursive generic LF's open self-reference is no
+    //         longer collected as a mapless second body, and a nested closure/LF that uses a type param SHARED
+    //         across two instantiations still pins on aliasing. Structural armor: an identity binding (T→T)
+    //         from an unclosed spec can never recurse GetUdonTypeName into a stack overflow. VM values pinned
+    //         in the harness (LensAWave15R5Probe A14/A11). ──
+
+    [Theory]
+    // A14: generic struct GS<T> STATIC method hosting a generic LF<U> that uses BOTH the struct's T and its
+    // own U — the closed T (GS<bool>) must resolve so `new T[]` emits the bool-array ctor, not TArray.
+    [InlineData("B70A", @"public struct GS70A<T> { public static int Run(int seed){ int Lf<U>(){ T[] ta = new T[1]; U[] ua = new U[2]; return ta.Length + ua.Length; } return Lf<int>() + seed; } }
+public class B70A : UdonSharpBehaviour { public int seed; public int result; void Start(){ result = GS70A<bool>.Run(seed); } }")]
+    // A11: recursive generic LF in a struct INSTANCE method, single instantiation — the open self-reference
+    // Lf<T>(n-1) must not be collected as a mapless second body (that emitted TArray for the recursion arm).
+    [InlineData("B70R", @"public struct S70R { public int Tag; public int Lf<T>(int n){ if(n<=0){ T[] a = new T[1]; return a.Length - 1; } return Lf<T>(n-1) + 1; } public int Run(int seed){ return Lf<int>(seed); } }
+public class B70R : UdonSharpBehaviour { public int seed; public int result; void Start(){ S70R s = new S70R(); result = s.Run(seed); } }")]
+    public void B70_GenericStructLocalFunction_ResolvesClosedTypeArgs_Compiles(string cls, string body)
+    {
+        var uasm = TestHelper.CompileToUasm($@"
+using System; using UdonSharp;
+{body}", cls);
+        Assert.DoesNotContain("TArray.__ctor", uasm);   // no bogus unmapped-T array ctor
+    }
+
+    [Fact]
+    public void B70_TwoStructInstantiations_SharedLFUsingStructT_RejectsAliasing()
+    {
+        // A15: GS<int>.Run and GS<string>.Run share ONE hoisted LF that uses the struct's T; it is emitted
+        // with the first spec's T (VM-proven divergent: default(T) via GD<int>/GD<string> returned 410 not
+        // 310 — both ran with T=int). So a type-param that varies across the two struct instantiations pins
+        // exactly like a method-instantiation alias (same class as B64). Loud reject, not silent-wrong.
+        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
+using System; using UdonSharp;
+public struct GS70S<T> { public static int Run(int seed){ int Lf<U>(){ object o = default(T); return (o == null ? 100 : 200); } return Lf<int>() + seed; } }
+public class B70S : UdonSharpBehaviour { public int seedA; public int seedB; public int result;
+  void Start(){ int a = GS70S<int>.Run(seedA); int b = GS70S<string>.Run(seedB); result = a + b; } }", "B70S"));
+        Assert.Contains("type parameter", ex.Message);
+    }
+
     // ── B64: the closure-pin is per-parameter AND capture-aware. A second instantiation that only varies a
     //         type param NO closure uses is legal; a varying CLOSURE-USED param still pins on type; and a
     //         STATIC generic method whose captures alias across its inlined specializations pins on capture

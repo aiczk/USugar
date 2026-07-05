@@ -967,6 +967,22 @@ public class UasmEmitter
         foreach (var fm in foreignStatics)
         {
             EmitPolicy.RejectInParameters(fm); // round-7 follow-up [Q3]
+
+            // B70 root 1 (A14/A15): a static method on a CLOSED generic struct (GS14<bool>.Run) is registered
+            // here, but this loop — unlike the struct-instance and base-instance loops — never seeded
+            // FirstGenericSpec. A nested LF then could not reach the enclosing struct's closed T (the
+            // closureBindings walk at EmitMethod misses the owner), so `new T[]` emitted a bogus TArray. Seed
+            // it the same way the struct-methods loop does (including the two-instantiation aliasing guard,
+            // which GS15<int>/GS15<string> exercises).
+            if (fm.ContainingType.IsGenericType && !fm.IsDefinition)
+            {
+                var fmGenericDef = fm.OriginalDefinition;
+                if (_ctx.FirstGenericSpec.TryGetValue(fmGenericDef, out var fmFirstSpec))
+                    EmitContext.ThrowIfClosureAliasesInstantiation(_compilation, fmFirstSpec, fm);
+                else
+                    _ctx.FirstGenericSpec[fmGenericDef] = fm;
+            }
+
             var slot = _ctx.RegisterMethod(fm, i => i.ToString());
             var idx = slot.Index;
             var funcName = $"__{idx}_{SanitizeId(fm.Name)}";
@@ -2107,9 +2123,20 @@ public class UasmEmitter
                 // owner's params under the body-walk symbols (lfDefOp's containing chain), same walk the
                 // body's T references come from, mapped to the same owner-spec type arguments.
                 for (var s = lfDefOp.Symbol.ContainingSymbol; s is IMethodSymbol enclBw; s = enclBw.ContainingSymbol)
-                    if (_ctx.FirstGenericSpec.TryGetValue(enclBw.OriginalDefinition, out var ownerSpec)
-                        && enclBw.TypeParameters.Length == ownerSpec.TypeArguments.Length)
-                        rekey.Add((enclBw.TypeParameters, ownerSpec.TypeArguments));
+                    if (_ctx.FirstGenericSpec.TryGetValue(enclBw.OriginalDefinition, out var ownerSpec))
+                    {
+                        if (enclBw.TypeParameters.Length == ownerSpec.TypeArguments.Length)
+                            rekey.Add((enclBw.TypeParameters, ownerSpec.TypeArguments));
+                        // B70 (A14/A15): the enclosing owner may be a member of a GENERIC STRUCT — the
+                        // body-walk freshens the struct's OWN type params (T) too, not just the method's, so
+                        // re-key the enclosing CONTAINING-TYPE params under the body-walk symbols as well.
+                        // Otherwise `new T[]` on the struct's T resolves as raw 'T' → bogus TArray extern.
+                        if (enclBw.ContainingType.IsGenericType
+                            && enclBw.ContainingType.OriginalDefinition.TypeParameters.Length
+                                == ownerSpec.ContainingType.TypeArguments.Length)
+                            rekey.Add((enclBw.ContainingType.OriginalDefinition.TypeParameters,
+                                ownerSpec.ContainingType.TypeArguments));
+                    }
                 typeMap = TypeParamScope.Compose(typeMap, newWins: true, rekey);
             }
 
@@ -3488,9 +3515,17 @@ public class UasmEmitter
     // than IsDefinition specifically) subsumes both shapes identically — mutual/cross recursion
     // between two generic struct types corrupted the same definition-keyed bookkeeping the original
     // fix targeted (VM-proven: BoxMutualRecurse Ping(5)+Ping(3) returned 8 instead of the CLR's 21).
+    // B70 root 2 (A11): a recursive generic LF / struct method's self-call `Lf<T>(n-1)` is an open generic-
+    // METHOD form (its OWN type argument is still the open T), the method-dimension twin of the open-
+    // containing-type shape above. Left collectible it registers a dead second CFunction whose body is
+    // emitted mapless (no isSpec map) → `new T[]` → bogus `TArray` (the closed Lf<int> spec is registered
+    // separately via SubstituteMethodTypeArgs + on-demand RegisterGenericSpecialization). Reject it too.
     static bool IsCollectibleStructMember(IMethodSymbol m)
-        => m != null && !(m.ContainingType.IsGenericType
-            && m.ContainingType.TypeArguments.Any(ta => ta is ITypeParameterSymbol));
+        => m != null
+            && !(m.ContainingType.IsGenericType
+                && m.ContainingType.TypeArguments.Any(ta => ta is ITypeParameterSymbol))
+            && !(m.IsGenericMethod
+                && m.TypeArguments.Any(ta => ta is ITypeParameterSymbol));
 
     /// <summary>The six non-using node shapes referencing a user-struct member (ctor/instance-method/
     /// computed-property/subpattern-property/operator/conversion), yielded as-observed (constructed

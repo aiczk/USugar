@@ -20,8 +20,16 @@ public static class TypeParamScope
             foreach (var kv in baseMap) dict[kv.Key] = kv.Value;
         foreach (var (parms, args) in bindings)
             for (int i = 0; i < parms.Count; i++)
+            {
+                // B70 armor: an identity binding (T→T) is a no-op for lookup but turns
+                // GetUdonTypeName's resolve-then-recurse into an infinite self-reference (process-killing
+                // stack overflow). Such a binding only arises from an UNCLOSED containing-type spec (the
+                // bug being fixed). Never install it: skip so the key keeps its real base binding (or stays
+                // unmapped) instead of becoming a self-cycle.
+                if (SymbolEqualityComparer.Default.Equals(args[i], parms[i])) continue;
                 if (newWins || !dict.ContainsKey(parms[i]))
                     dict[parms[i]] = args[i];
+            }
         return dict;
     }
 }

@@ -99,7 +99,18 @@ public static class ExternResolver
     {
         if (type is ITypeParameterSymbol tp && typeParamMap != null
             && typeParamMap.TryGetValue(tp, out var resolved))
+        {
+            // B70 armor: a self-referential binding (T→T, from an UNCLOSED containing-type spec whose
+            // bindings were composed as identity) makes this recursion infinite — a process-killing stack
+            // overflow. Never recurse into it; fail loud and named. A correctly CLOSED map maps T→a concrete
+            // type, so this never fires on a well-formed spec.
+            if (SymbolEqualityComparer.Default.Equals(resolved, tp))
+                throw new NotSupportedException(
+                    $"Type parameter '{tp.Name}' resolves to itself in the monomorphization map — a "
+                    + "self-referential binding from an unclosed containing-type specialization. The generic "
+                    + "was not fully monomorphized to a concrete type at this emit site.");
             return GetUdonTypeName(resolved, typeParamMap);
+        }
 
         if (type is IArrayTypeSymbol arrayType)
         {

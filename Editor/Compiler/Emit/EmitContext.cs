@@ -325,6 +325,11 @@ public class EmitContext
         var pin = GenericBodyClosurePins(compilation, constructed.OriginalDefinition);
         foreach (var (kind, ordinal) in pin.UsedParams)
         {
+            // B70 (A15): a TYPE-kind param varies when the CONTAINING generic struct is instantiated at two
+            // args (GS15<int>.Run vs GS15<string>.Run). VM-proven this DOES alias — the nested LF is one
+            // shared hoist across the two struct specs, emitted with the first spec's T (divergent probe:
+            // default(T) via GD<int>/GD<string> returned 410 not 310, i.e. both ran with T=int). So a
+            // type-kind variance pins exactly like a method-kind one; both are checked here.
             var a = SubstituteTypeArg(firstSpec, kind, ordinal);
             var b = SubstituteTypeArg(constructed, kind, ordinal);
             if (a != null && b != null && !SymbolEqualityComparer.Default.Equals(a, b))
