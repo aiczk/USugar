@@ -1977,11 +1977,17 @@ public abstract partial class HandlerBase
                 && !USugarCompilerHelper.IsFrameworkNamespace(declType.ContainingNamespace))
                 for (var bt = _classSymbol.BaseType; bt != null; bt = bt.BaseType)
                     if (SymbolEqualityComparer.Default.Equals(bt, declType)) { declaredOnFamily = true; break; }
-            if (unresolved || targetInstance != null || baseReceiver || !declaredOnFamily)
+            // B58: a foreign generic STATIC (on a plain helper class or a struct) has its spec body
+            // inlined into THIS program exactly like a foreign generic static CALL, so — like the
+            // non-generic foreign-static delegate arm below — it can bridge through the same registration.
+            // It has no receiver (static), so the same-family gate does not apply.
+            bool foreignStatic = constructed.IsStatic && declType != null
+                && !ExternResolver.IsUdonSharpBehaviour(declType);
+            if (unresolved || targetInstance != null || baseReceiver || (!declaredOnFamily && !foreignStatic))
                 throw new System.NotSupportedException(
                     $"A delegate can only be created from generic method '{targetMethod.Name}' when it is "
-                    + "declared on the compiled class or an inherited user base class, accessed through "
-                    + "'this', and every type argument resolves to a concrete type at the creation site "
+                    + "declared on the compiled class, an inherited user base class, or a helper class/struct "
+                    + "as a static, and every type argument resolves to a concrete type at the creation site "
                     + "(the specialization's bridge must live in this program).");
             RegisterGenericSpecialization(constructed);
             bridgeExportName = DelegateAbi.BridgeName(_methodFunctions[constructed].Name);

@@ -59,6 +59,24 @@ public class {cls} : UdonSharpBehaviour {{
 }}", cls);
     }
 
+    // ── B58: a foreign generic STATIC method (helper class or struct) as a delegate target is now
+    // supported — its spec is inlined into this program, so it bridges through the same machinery. ──
+
+    [Theory]
+    [InlineData("B58a", @"public static class HGC { public static T Id<T>(T x) => x; }",
+        @"Func<int,int> d = HGC.Id<int>; result = d(5);")]
+    [InlineData("B58b", @"public struct HGS { public static T Id<T>(T x) => x; }",
+        @"Func<int,int> d = HGS.Id<int>; result = d(5);")]
+    [InlineData("B58m", @"public struct LBPt { public static int Sum<T>(int a, int b) => a + b; }",
+        @"Func<int,int,int> d = null; d += LBPt.Sum<int>; result = d(3,4);")]
+    public void B58_ForeignGenericStaticDelegate_Compiles(string cls, string helper, string body)
+    {
+        TestHelper.CompileToUasm($@"
+using System; using UdonSharp;
+{helper}
+public class {cls} : UdonSharpBehaviour {{ public int result; void Start(){{ {body} }} }}", cls);
+    }
+
     [Fact]
     public void B56_StructGenericMethod_DualInstantiation_TDependentLF_StillRejects()
     {
