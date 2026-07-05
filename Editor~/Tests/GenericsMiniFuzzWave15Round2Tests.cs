@@ -38,6 +38,27 @@ public class R2C : UdonSharpBehaviour {
 }", "R2C");
     }
 
+    // ── B57: a closure whose only "capture" is its own self-declared symbol (is-pattern var, out-var,
+    // deconstruction, recursive-pattern var) must not be misclassified as capturing. ──
+
+    [Theory]
+    [InlineData("B57a", @"int Inner(object o){ if (o is int tv) return tv; return 0; } return Inner(baseVal);")]
+    [InlineData("B57b", @"Func<object,int> f = o => (o is int tv) ? tv : 0; return f(baseVal);")]
+    [InlineData("B57c", @"int Inner(object o){ if (o is int tv) return tv; return -1; } return Inner(baseVal) + Peek();")]
+    [InlineData("B57d", @"int Inner(){ int r; if (int.TryParse(""7"", out int p)) r = p; else r = 0; return r; } return Inner();")]
+    [InlineData("B57e", @"int Inner(){ (int a, int b) t = (baseVal, 2); var (x, y) = t; return x + y; } return Inner();")]
+    public void B57_SelfDeclaredSymbolNotMisclassifiedAsCapture(string cls, string body)
+    {
+        TestHelper.CompileToUasm($@"
+using System; using UdonSharp;
+public class {cls} : UdonSharpBehaviour {{
+  public int seed; public int result;
+  int Peek() => 5;
+  void Start(){{ result = M(seed); }}
+  int M(int baseVal){{ {body} }}
+}}", cls);
+    }
+
     [Fact]
     public void B56_StructGenericMethod_DualInstantiation_TDependentLF_StillRejects()
     {
