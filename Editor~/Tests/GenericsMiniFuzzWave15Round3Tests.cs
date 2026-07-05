@@ -270,6 +270,25 @@ public class B72Bx : UdonSharpBehaviour { public int seed; public int result; vo
         Assert.DoesNotContain("SystemConvert.__ToObject__", uasm);
     }
 
+    // ── B73: a type parameter used ONLY inside a pattern (`o is T x`, `case T t:`, recursive `T { … }`) was
+    //         invisible to the closure-pin's type-param walk (it saw only typeof/is-type/invocation targs), so
+    //         a closure using the pattern's T across two instantiations shared one hoisted type-test constant
+    //         (M<string> silently ran M<int>'s test). The walk now sees pattern MATCHED-types. These closures
+    //         capture nothing, so only the pattern-type-param path can catch them — a clean red for the fix. ──
+
+    [Theory]
+    [InlineData("B73I", @"public static class H73I { public static int M<T>(){ System.Func<int> f = () => (new object() is T x) ? 1 : 0; return f(); } }
+public class B73I : UdonSharpBehaviour { public int result; void Start(){ result = H73I.M<int>() + H73I.M<string>(); } }")]
+    [InlineData("B73S", @"public static class H73S { public static int M<T>(){ System.Func<int> f = () => { switch(new object()){ case T t: return 1; default: return 0; } }; return f(); } }
+public class B73S : UdonSharpBehaviour { public int result; void Start(){ result = H73S.M<int>() + H73S.M<string>(); } }")]
+    public void B73_ClosureUsesTypeParamInPattern_TwoInstantiations_Rejects(string cls, string body)
+    {
+        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm($@"
+using System; using UdonSharp;
+{body}", cls));
+        Assert.Contains("type parameter", ex.Message);
+    }
+
     // ── B64: the closure-pin is per-parameter AND capture-aware. A second instantiation that only varies a
     //         type param NO closure uses is legal; a varying CLOSURE-USED param still pins on type; and a
     //         STATIC generic method whose captures alias across its inlined specializations pins on capture

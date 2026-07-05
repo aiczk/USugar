@@ -63,20 +63,29 @@ public sealed class LambdaCaptureAnalyzer
     // self-declaration form CaptureScopeAnalysis.Walk declares — is/switch/recursive pattern variables
     // and out-var/deconstruction declaration expressions — else a closure whose only "capture" is its
     // own pattern variable is misclassified as capturing and ClosureEnvLeaf throws 'no binding scope'.
+    // B73: the ONE place a pattern operation is decomposed for both concerns that read patterns — its matched
+    // TYPE (type-parameter-usage walks, EmitContext.CollectOperationTypeParams) and its declared DESIGNATOR
+    // symbol (capture / inside-symbol walks here). A var pattern (`o is var x`) is an IDeclarationPatternOperation
+    // with a null MatchedType, so its designator is still collected; a bare type pattern (`case T:`) has a
+    // matched type but no designator. Returns (null, null) for a non-pattern op.
+    public static (ITypeSymbol MatchedType, ISymbol Designator) PatternInfo(IOperation op) => op switch
+    {
+        IDeclarationPatternOperation d => (d.MatchedType, d.DeclaredSymbol),
+        IRecursivePatternOperation r => (r.MatchedType, r.DeclaredSymbol),
+        ITypePatternOperation t => (t.MatchedType, null),
+        _ => (null, null),
+    };
+
     static void CollectInsideSymbols(IOperation body, HashSet<ISymbol> inside)
     {
         foreach (var op in body.DescendantsAndSelf())
         {
+            var (_, designator) = PatternInfo(op);
+            if (designator != null) inside.Add(designator);
             switch (op)
             {
                 case IVariableDeclaratorOperation decl:
                     inside.Add(decl.Symbol);
-                    break;
-                case IDeclarationPatternOperation dp when dp.DeclaredSymbol != null:
-                    inside.Add(dp.DeclaredSymbol);
-                    break;
-                case IRecursivePatternOperation rp when rp.DeclaredSymbol != null:
-                    inside.Add(rp.DeclaredSymbol);
                     break;
                 case IDeclarationExpressionOperation de:
                     AddDeclaredFromExpression(de.Expression, inside);

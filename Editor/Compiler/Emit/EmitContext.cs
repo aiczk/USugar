@@ -261,6 +261,11 @@ public class EmitContext
         CollectTypeParams(op.Type, def, used);
         if (op is ITypeOfOperation typeOf) CollectTypeParams(typeOf.TypeOperand, def, used);
         if (op is IIsTypeOperation isType) CollectTypeParams(isType.TypeOperand, def, used);
+        // B73: a type parameter used ONLY in a pattern (`o is T x`, `case T t:`, recursive `T { … }`) is a
+        // real per-instantiation type test — route the pattern's matched type through the same collector so
+        // the closure pin sees it (shared with the capture walk via LambdaCaptureAnalyzer.PatternInfo).
+        var (matchedType, _) = LambdaCaptureAnalyzer.PatternInfo(op);
+        if (matchedType != null) CollectTypeParams(matchedType, def, used);
         if (op is IInvocationOperation inv)
             foreach (var ta in inv.TargetMethod.TypeArguments) CollectTypeParams(ta, def, used);
         foreach (var child in op.Children)
