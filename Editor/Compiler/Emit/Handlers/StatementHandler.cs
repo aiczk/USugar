@@ -518,7 +518,7 @@ public class StatementHandler : HandlerBase, IOperationHandler
         _localBindings[local] = new EmitContext.LocalBinding(id);
 
         // Create object[] of correct size
-        EmitStoreField(id, AggregateAbi.Allocate(_builder, layout.Count));
+        AggregateAbi.AllocateField(_builder, id, layout);
 
         var localId = id;
         if (init == null)
@@ -527,7 +527,7 @@ public class StatementHandler : HandlerBase, IOperationHandler
             // The flat array allocated above is NOT enough for a NESTED struct — its inner struct-typed
             // fields must be recursively allocated (exactly like default(T)/new T()), or a write to a
             // nested field (`n.inner.x = …`) hits a null sub-array and faults the real VM. (diff-fuzz w2)
-            DefaultInitAggregate(localId, layout);
+            AggregateAbi.DefaultInitializeField(_builder, localId, layout, _ctx.GetAggregateLayout, GetUdonType);
             return;
         }
 
@@ -544,7 +544,7 @@ public class StatementHandler : HandlerBase, IOperationHandler
         }
         else if (value is IDefaultValueOperation)
         {
-            DefaultInitAggregate(localId, layout);
+            AggregateAbi.DefaultInitializeField(_builder, localId, layout, _ctx.GetAggregateLayout, GetUdonType);
         }
         else if (value is IObjectCreationOperation ocCtor && ocCtor.Arguments.Length > 0
                  && EmitPolicy.IsUserStruct(aggregateType) && ocCtor.Constructor != null
@@ -552,7 +552,7 @@ public class StatementHandler : HandlerBase, IOperationHandler
         {
             // new V(args): default-init the already-allocated array, then run the registered ctor
             // (receiver = this array, mutated in place via this.field = … in the ctor body).
-            DefaultInitAggregate(localId, layout);
+            AggregateAbi.DefaultInitializeField(_builder, localId, layout, _ctx.GetAggregateLayout, GetUdonType);
             var ctorArgs = new List<CLeaf> { LoadField(localId, "SystemObjectArray") };
             foreach (var arg in ocCtor.Arguments)
                 ctorArgs.Add(VisitExpression(arg.Value));
@@ -563,7 +563,7 @@ public class StatementHandler : HandlerBase, IOperationHandler
             // new V() / new V { field = ... }: the array is already allocated above; value-type
             // fields need 0/false/etc., then apply any object-initializer assignments. (A parameterless
             // struct ctor's VisitObjectCreation returns a null placeholder, so handle creation here.)
-            DefaultInitAggregate(localId, layout);
+            AggregateAbi.DefaultInitializeField(_builder, localId, layout, _ctx.GetAggregateLayout, GetUdonType);
             if (oc.Initializer != null)
                 AggregateAbi.EmitObjectInitializer(_builder, LoadField(localId, AggregateAbi.ArrayType),
                     layout, oc.Initializer, VisitExpression);
@@ -576,11 +576,5 @@ public class StatementHandler : HandlerBase, IOperationHandler
             EmitStoreField(localId, srcVal);
         }
     }
-
-    /// <summary>Default-initialize an object[]-emulated aggregate local (delegates to the shared
-    /// recursive HandlerBase helper).</summary>
-    void DefaultInitAggregate(string localId, AggregateLayout layout)
-        => AggregateAbi.DefaultInitialize(_builder, LoadField(localId, "SystemObjectArray"),
-            layout, _ctx.GetAggregateLayout, GetUdonType);
 
 }

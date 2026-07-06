@@ -151,6 +151,13 @@ public static class AggregateAbi
         }
     }
 
+    public static void AllocateField(CoreBuilder builder, string fieldName, AggregateLayout layout)
+        => builder.EmitStoreField(fieldName, Allocate(builder, layout.Count));
+
+    public static void DefaultInitializeField(CoreBuilder builder, string fieldName, AggregateLayout layout,
+        Func<INamedTypeSymbol, AggregateLayout> getLayout, Func<ITypeSymbol, string> getUdonType)
+        => DefaultInitialize(builder, builder.LoadField(fieldName, ArrayType), layout, getLayout, getUdonType);
+
     /// <summary>Deep value-copy of an object[]-backed struct/tuple aggregate. Nested aggregate elements
     /// are recursively cloned; scalar boxed elements are copied by reference.</summary>
     public static CLeaf DeepClone(CoreBuilder builder, CLeaf source, AggregateLayout layout,
