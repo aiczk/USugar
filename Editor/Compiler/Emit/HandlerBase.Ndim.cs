@@ -73,30 +73,11 @@ public abstract partial class HandlerBase
             EmitAssign(dimSlots[d], EmitNdimGetDimLength(bundleVal, d));
         }
 
-        CLeaf inBounds = null;
-        for (int d = 0; d < rank; d++)
-        {
-            var geZero = ExternCall("SystemInt32.__op_GreaterThanOrEqual__SystemInt32_SystemInt32__SystemBoolean",
-                new List<CLeaf> { SlotRef(idxSlots[d]), Const(0, "SystemInt32") }, "SystemBoolean");
-            var ltDim = ExternCall("SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean",
-                new List<CLeaf> { SlotRef(idxSlots[d]), SlotRef(dimSlots[d]) }, "SystemBoolean");
-            var dimOk = ExternCall("SystemBoolean.__op_ConditionalAnd__SystemBoolean_SystemBoolean__SystemBoolean",
-                new List<CLeaf> { geZero, ltDim }, "SystemBoolean");
-            inBounds = inBounds == null ? dimOk
-                : ExternCall("SystemBoolean.__op_ConditionalAnd__SystemBoolean_SystemBoolean__SystemBoolean",
-                    new List<CLeaf> { inBounds, dimOk }, "SystemBoolean");
-        }
+        var inBounds = NdimArrayAbi.BuildInBounds(_builder, idxSlots, dimSlots);
 
         // Horner: ((i0*d1+i1)*d2+i2)...  — always computed; only USED when inBounds (an OOB flat
         // index is never fed to a Get/Set, so a garbage value here is harmless).
-        CLeaf flatIndex = SlotRef(idxSlots[0]);
-        for (int d = 1; d < rank; d++)
-        {
-            var mul = ExternCall("SystemInt32.__op_Multiplication__SystemInt32_SystemInt32__SystemInt32",
-                new List<CLeaf> { flatIndex, SlotRef(dimSlots[d]) }, "SystemInt32");
-            flatIndex = ExternCall("SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32",
-                new List<CLeaf> { mul, SlotRef(idxSlots[d]) }, "SystemInt32");
-        }
+        var flatIndex = NdimArrayAbi.BuildFlatIndex(_builder, idxSlots, dimSlots);
 
         return new NdimArrayAbi.AccessPlan(bundleVal, inBounds, flatIndex, backingType, idxSlots, dimSlots);
     }

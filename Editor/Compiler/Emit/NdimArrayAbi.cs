@@ -61,6 +61,37 @@ public static class NdimArrayAbi
     public static string BundleSetSignature()
         => ExternResolver.BuildArraySetSignature(BundleUdonType, BoxedElementUdonType);
 
+    public static CLeaf BuildInBounds(CoreBuilder builder, int[] idxSlots, int[] dimSlots)
+    {
+        CLeaf inBounds = null;
+        for (int d = 0; d < idxSlots.Length; d++)
+        {
+            var geZero = builder.ExternCall("SystemInt32.__op_GreaterThanOrEqual__SystemInt32_SystemInt32__SystemBoolean",
+                new List<CLeaf> { builder.SlotRef(idxSlots[d]), builder.Const(0, "SystemInt32") }, "SystemBoolean");
+            var ltDim = builder.ExternCall("SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean",
+                new List<CLeaf> { builder.SlotRef(idxSlots[d]), builder.SlotRef(dimSlots[d]) }, "SystemBoolean");
+            var dimOk = builder.ExternCall("SystemBoolean.__op_ConditionalAnd__SystemBoolean_SystemBoolean__SystemBoolean",
+                new List<CLeaf> { geZero, ltDim }, "SystemBoolean");
+            inBounds = inBounds == null ? dimOk
+                : builder.ExternCall("SystemBoolean.__op_ConditionalAnd__SystemBoolean_SystemBoolean__SystemBoolean",
+                    new List<CLeaf> { inBounds, dimOk }, "SystemBoolean");
+        }
+        return inBounds;
+    }
+
+    public static CLeaf BuildFlatIndex(CoreBuilder builder, int[] idxSlots, int[] dimSlots)
+    {
+        CLeaf flatIndex = builder.SlotRef(idxSlots[0]);
+        for (int d = 1; d < idxSlots.Length; d++)
+        {
+            var mul = builder.ExternCall("SystemInt32.__op_Multiplication__SystemInt32_SystemInt32__SystemInt32",
+                new List<CLeaf> { flatIndex, builder.SlotRef(dimSlots[d]) }, "SystemInt32");
+            flatIndex = builder.ExternCall("SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32",
+                new List<CLeaf> { mul, builder.SlotRef(idxSlots[d]) }, "SystemInt32");
+        }
+        return flatIndex;
+    }
+
     public static void FlattenInitializer(IArrayInitializerOperation init, List<IOperation> outLeaves)
     {
         foreach (var elem in init.ElementValues)
