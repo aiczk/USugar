@@ -34,8 +34,7 @@ public partial class InvocationHandler
             && _ctx.GetAggregateLayout(aggProp).TryGetIndex(op.Property.Name, out var aggPropIdx))
         {
             var arrExpr = LoadInstanceRaw(op.Instance);
-            var getVal = ExternCall(ExternResolver.BuildArrayGetSignature("SystemObjectArray", "SystemObject"),
-                new List<CLeaf> { arrExpr, Const(aggPropIdx, "SystemInt32") }, "SystemObject");
+            var getVal = AggregateAbi.ReadSlot(_builder, arrExpr, aggPropIdx, "SystemObject");
             // A struct-typed property returns a COPY (C# getters return by value; you cannot mutate through it).
             return op.Property.Type is INamedTypeSymbol propAgg && EmitPolicy.IsAggregateType(propAgg)
                 ? EmitDeepCloneAggregate(getVal, propAgg) : getVal;

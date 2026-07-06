@@ -108,12 +108,10 @@ public abstract class AssignmentHandlerBase : HandlerBase
                 if (_ctx.GetAggregateLayout(aggCapPropType).TryGetIndex(aggCapPropRef.Property.Name, out var capSlotIdx))
                 {
                     var recv = LoadInstanceRaw(aggCapPropRef.Instance);
-                    var slotIdxVal = Const(capSlotIdx, "SystemInt32");
-                    CLeaf slotVal = ExternCall(ExternResolver.BuildArrayGetSignature("SystemObjectArray", "SystemObject"),
-                        new List<CLeaf> { recv, slotIdxVal }, "SystemObject");
+                    CLeaf slotVal = AggregateAbi.ReadSlot(_builder, recv, capSlotIdx, "SystemObject");
                     if (aggCapPropRef.Property.Type is INamedTypeSymbol capSlotAgg && EmitPolicy.IsAggregateType(capSlotAgg))
                         slotVal = EmitDeepCloneAggregate(slotVal, capSlotAgg);
-                    return new LValueCapture { Value = slotVal, ArrayVal = recv, IndexVal = slotIdxVal };
+                    return new LValueCapture { Value = slotVal, ArrayVal = recv, IndexVal = Const(capSlotIdx, "SystemInt32") };
                 }
                 if (aggCapPropRef.Property.GetMethod is { } capGetterRaw)
                 {
@@ -136,8 +134,7 @@ public abstract class AssignmentHandlerBase : HandlerBase
                     RejectStaticReadonlyWriteThrough(aggFieldRef.Instance); // §3.3, R5 (compound/inc-dec write-back)
                     var arrVal = LoadInstanceRaw(aggFieldRef.Instance);
                     var idxVal = Const(elemIdx, "SystemInt32");
-                    var currentVal = ExternCall(ExternResolver.BuildArrayGetSignature("SystemObjectArray", "SystemObject"),
-                        new List<CLeaf> { arrVal, idxVal }, "SystemObject");
+                    var currentVal = AggregateAbi.ReadSlot(_builder, arrVal, elemIdx, "SystemObject");
                     return new LValueCapture { Value = currentVal, ArrayVal = arrVal, IndexVal = idxVal };
                 }
                 goto default;
@@ -218,8 +215,7 @@ public abstract class AssignmentHandlerBase : HandlerBase
                 if (layout.TryGetIndex(aggFieldRef.Field, out var elemIdx))
                 {
                     var arrVal = lv.ArrayVal ?? VisitExpression(aggFieldRef.Instance);
-                    EmitExternVoid(ExternResolver.BuildArraySetSignature("SystemObjectArray", "SystemObject"),
-                        new List<CLeaf> { arrVal, Const(elemIdx, "SystemInt32"), valueVal });
+                    AggregateAbi.WriteSlot(_builder, arrVal, elemIdx, valueVal);
                     return;
                 }
                 break;
@@ -345,8 +341,7 @@ public abstract class AssignmentHandlerBase : HandlerBase
                 if (_ctx.GetAggregateLayout(aggPropType).TryGetIndex(aggPropRef.Property.Name, out var propIdx))
                 {
                     var arrVal = lv.ArrayVal ?? LoadInstanceRaw(aggPropRef.Instance);
-                    EmitExternVoid(ExternResolver.BuildArraySetSignature("SystemObjectArray", "SystemObject"),
-                        new List<CLeaf> { arrVal, Const(propIdx, "SystemInt32"), valueVal });
+                    AggregateAbi.WriteSlot(_builder, arrVal, propIdx, valueVal);
                     return;
                 }
                 if (aggPropRef.Property.SetMethod is { } aggSetter && _methodFunctions.ContainsKey(aggSetter))
