@@ -173,7 +173,7 @@ public class EmitContext
                 if (!capturing && ClosureCapturesDefScopedVar(lf.Symbol, lf.Body, def)) capturing = true;
                 break;
         }
-        foreach (var child in op.Children)
+        foreach (var child in op.ChildOperations)
             WalkClosurePins(child, used, ref capturing, def);
     }
 
@@ -239,7 +239,7 @@ public class EmitContext
         if (matchedType != null) CollectTypeParams(matchedType, def, used);
         if (op is IInvocationOperation inv)
             foreach (var ta in inv.TargetMethod.TypeArguments) CollectTypeParams(ta, def, used);
-        foreach (var child in op.Children)
+        foreach (var child in op.ChildOperations)
             CollectOperationTypeParams(child, def, used);
     }
 

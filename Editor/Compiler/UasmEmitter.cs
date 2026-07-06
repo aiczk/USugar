@@ -2908,7 +2908,7 @@ public class UasmEmitter
         if (op == null) return;
         if (op is IAnonymousFunctionOperation af && af.Symbol != null && af.Body != null)
             result.Add((af.Symbol, af.Body, af));
-        foreach (var child in op.Children)
+        foreach (var child in op.ChildOperations)
             CollectLambdaNodes(child, result);
     }
 
@@ -2934,7 +2934,7 @@ public class UasmEmitter
             else if (dc.Target is IAnonymousFunctionOperation af && af.Symbol != null)
                 result.Add(af.Symbol);
         }
-        foreach (var child in op.Children)
+        foreach (var child in op.ChildOperations)
             CollectEscapedDelegateTargets(child, internalMethods, result);
     }
 
@@ -2961,7 +2961,7 @@ public class UasmEmitter
                     result.Add((t, sigS));
             }
         }
-        foreach (var child in op.Children)
+        foreach (var child in op.ChildOperations)
             CollectVariantEscapeSigs(child, internalMethods, result);
     }
 
@@ -3043,7 +3043,7 @@ public class UasmEmitter
                     poisoned = true;
                     return;
             }
-            foreach (var child in op.Children)
+            foreach (var child in op.ChildOperations)
                 Walk(child);
         }
 
@@ -3052,7 +3052,7 @@ public class UasmEmitter
             if (op == null) return false;
             if (op is ILocalReferenceOperation lr && SymbolEqualityComparer.Default.Equals(lr.Local, local))
                 return true;
-            foreach (var child in op.Children)
+            foreach (var child in op.ChildOperations)
                 if (SubtreeReferencesLocal(child)) return true;
             return false;
         }
@@ -3069,7 +3069,7 @@ public class UasmEmitter
     {
         if (op == null) return;
         if (EmitPolicy.IsDelegateDispatch(op)) result.Add(op);
-        foreach (var child in op.Children)
+        foreach (var child in op.ChildOperations)
         {
             if (child is ILocalFunctionOperation || child is IAnonymousFunctionOperation) continue;
             CollectDelegateDispatchSites(child, result);
@@ -3082,7 +3082,7 @@ public class UasmEmitter
     {
         if (op == null) return;
         if (op is IInvocationOperation) result.Add(op);
-        foreach (var child in op.Children)
+        foreach (var child in op.ChildOperations)
         {
             if (child is ILocalFunctionOperation || child is IAnonymousFunctionOperation) continue;
             CollectInvocationSites(child, result);
@@ -3315,7 +3315,7 @@ public class UasmEmitter
         if (op == null) return;
         if (op is ILocalFunctionOperation lf && lf.Symbol != null)
             result.Add(lf.Symbol.OriginalDefinition);
-        foreach (var child in op.Children)
+        foreach (var child in op.ChildOperations)
             CollectLocalFunctions(child, result);
     }
 
@@ -3336,7 +3336,7 @@ public class UasmEmitter
                 if (pr.Property.SetMethod != null) accessorEdges.Add(pr.Property.SetMethod.OriginalDefinition);
                 break;
         }
-        foreach (var child in op.Children)
+        foreach (var child in op.ChildOperations)
         {
             if (child is ILocalFunctionOperation || child is IAnonymousFunctionOperation) continue; // own nodes
             CollectThisFieldTouches(child, touch, accessorEdges);
@@ -3354,7 +3354,7 @@ public class UasmEmitter
         // IsInternalCallTo cannot drift (see EnumerateInternalCallTargets).
         foreach (var t in EnumerateInternalCallTargets(op))
             if (internalMethods.Contains(t)) result.Add(t);
-        foreach (var child in op.Children)
+        foreach (var child in op.ChildOperations)
         {
             if (child is ILocalFunctionOperation || child is IAnonymousFunctionOperation) continue; // own nodes
             CollectInternalCallees(child, internalMethods, result);
@@ -3473,7 +3473,7 @@ public class UasmEmitter
                 if (oc.Constructor is { IsImplicitlyDeclared: false } ctor)
                     Walk(GetMethodBodyOperation(ctor.OriginalDefinition));
             }
-            foreach (var child in op.Children) CollectClassMintReach(child);
+            foreach (var child in op.ChildOperations) CollectClassMintReach(child);
         }
 
         void EnqueueDiscovered()
@@ -3582,7 +3582,7 @@ public class UasmEmitter
                 && !ss.IsGenericMethod && IsClosedForeignStaticTarget(ss))
                 result.Add(ss);
         }
-        foreach (var child in op.Children)
+        foreach (var child in op.ChildOperations)
             CollectForeignStaticCallsInOperation(child, result);
     }
 
@@ -3698,7 +3698,7 @@ public class UasmEmitter
         // lowering can JUMP to it instead of emitting a non-existent SystemObjectArray.__Dispose__ extern.
         if (op is IUsingOperation uo) CollectUsingDispose(uo.Resources, result);
         if (op is IUsingDeclarationOperation ud) CollectUsingDispose(ud.DeclarationGroup, result);
-        foreach (var child in op.Children)
+        foreach (var child in op.ChildOperations)
             CollectStructMethodsInOperation(child, result);
     }
 
@@ -3727,7 +3727,7 @@ public class UasmEmitter
                             && EmitPolicy.FindStructDisposeMethod(dnt) is { } dispose)
                             defs.Add(dispose.OriginalDefinition);
         }
-        foreach (var child in op.Children)
+        foreach (var child in op.ChildOperations)
             CollectStructMemberDefinitions(child, defs);
     }
 
@@ -3866,7 +3866,7 @@ public class UasmEmitter
             && (gmref.Instance == null
                 || gmref.Instance is IInstanceReferenceOperation { Syntax: not BaseExpressionSyntax }))
             _openGenericBaseDefs.Add(gmref.Method.OriginalDefinition);
-        foreach (var child in op.Children)
+        foreach (var child in op.ChildOperations)
             CollectBaseInstanceCallsInOperation(child, result);
     }
 

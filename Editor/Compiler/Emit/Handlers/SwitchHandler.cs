@@ -77,7 +77,7 @@ public class SwitchHandler : HandlerBase, IOperationHandler
     // switch's own VisitSwitch collects its targets. Used to decide which case bodies need a jump label.
     static void CollectGotoCaseTargets(IOperation op, HashSet<string> into)
     {
-        foreach (var child in op.Children)
+        foreach (var child in op.ChildOperations)
         {
             if (child is ISwitchOperation) continue; // nested switch owns its own goto-case labels
             if (child is IBranchOperation { BranchKind: BranchKind.GoTo, Target: { } t }

@@ -266,7 +266,7 @@ public sealed class CaptureScopeAnalysis
         {
             if (op == null) return;
             if (op is ILocalFunctionOperation lf && lf.Body != null) into.Add(op);
-            foreach (var child in op.Children) CollectLocalFunctions(child, into);
+            foreach (var child in op.ChildOperations) CollectLocalFunctions(child, into);
         }
 
         var lfOps = new List<IOperation>();
@@ -475,7 +475,7 @@ public sealed class CaptureScopeAnalysis
                     return;
 
                 default:
-                    foreach (var child in op.Children) Walk(child, scope);
+                    foreach (var child in op.ChildOperations) Walk(child, scope);
                     return;
             }
         }

@@ -1233,7 +1233,7 @@ public abstract partial class HandlerBase
             case IConversionOperation { OperatorMethod: null }:
             case IUnaryOperation { OperatorMethod: null }:
             case IBinaryOperation { OperatorMethod: null }:
-                foreach (var child in op.Children)
+                foreach (var child in op.ChildOperations)
                     if (!IsEmissionOrderInert(child)) return false;
                 return true;
             default:
