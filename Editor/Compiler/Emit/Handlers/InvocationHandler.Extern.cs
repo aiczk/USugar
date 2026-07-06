@@ -874,14 +874,11 @@ public partial class InvocationHandler
                 var arrExpr = LoadInstanceRaw(aggInstance);
                 return (() =>
                 {
-                    CLeaf memberVal = ExternCall(ExternResolver.BuildArrayGetSignature("SystemObjectArray", "SystemObject"),
-                        new List<CLeaf> { arrExpr, Const(memberIndex, "SystemInt32") }, "SystemObject");
+                    CLeaf memberVal = AggregateAbi.ReadSlot(_builder, arrExpr, memberIndex, "SystemObject");
                     if (fieldRef.Field.Type is INamedTypeSymbol memberAgg && EmitPolicy.IsAggregateType(memberAgg))
                         memberVal = EmitDeepCloneAggregate(memberVal, memberAgg);
                     return memberVal;
-                }, v => EmitExternVoid(
-                    ExternResolver.BuildArraySetSignature("SystemObjectArray", "SystemObject"),
-                    new List<CLeaf> { arrExpr, Const(memberIndex, "SystemInt32"), v }));
+                }, v => AggregateAbi.WriteSlot(_builder, arrExpr, memberIndex, v));
             }
             // Round-9 [Y12]: BEHAVIOUR field through a non-this receiver (`hs[Pick()].pub`,
             // `other.pub`) — the legacy path re-evaluated the receiver legs at copy-back

@@ -1129,8 +1129,7 @@ public abstract partial class HandlerBase
     {
         for (int i = 0; i < tuple.Elements.Length; i++)
         {
-            var elemVal = ExternCall(ExternResolver.BuildArrayGetSignature("SystemObjectArray", "SystemObject"),
-                new List<CLeaf> { arrValue, Const(i, "SystemInt32") }, "SystemObject");
+            var elemVal = AggregateAbi.ReadSlot(_builder, arrValue, i, "SystemObject");
             var toAssign = tuple.Elements[i].Type is INamedTypeSymbol et
                 && EmitPolicy.IsAggregateType(et) && !et.IsTupleType
                 ? EmitDeepCloneAggregate(elemVal, et) : elemVal;

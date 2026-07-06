@@ -672,8 +672,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
                 for (int i = 0; i < rec.DeconstructionSubpatterns.Length; i++)
                 {
                     var elemType = layout.Fields[i].Type;
-                    var elemRaw = ExternCall(ExternResolver.BuildArrayGetSignature("SystemObjectArray", "SystemObject"),
-                        new List<CLeaf> { SlotRef(aggSlot), Const(i, "SystemInt32") }, "SystemObject");
+                    var elemRaw = AggregateAbi.ReadSlot(_builder, SlotRef(aggSlot), i, "SystemObject");
                     // Materialize into a typed temp (Udon COPY unboxes) so the sub-pattern compares
                     // with the correct type tag, exactly as tuple deconstruction extracts elements.
                     var elemSlot = _ctx.AllocTemp(GetUdonType(elemType));
@@ -757,8 +756,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
                         {
                             // Aggregate member: read the boxed object[] slot, then materialize into a typed temp
                             // (Udon COPY unboxes) so the sub-pattern compares with the correct type tag.
-                            var rawMember = ExternCall(ExternResolver.BuildArrayGetSignature("SystemObjectArray", "SystemObject"),
-                                new List<CLeaf> { SlotRef(valSlot), Const(aggMemberIdx, "SystemInt32") }, "SystemObject");
+                            var rawMember = AggregateAbi.ReadSlot(_builder, SlotRef(valSlot), aggMemberIdx, "SystemObject");
                             var memberSlot = _ctx.AllocTemp(GetUdonType(memberType));
                             EmitAssign(memberSlot, rawMember);
                             memberVal = SlotRef(memberSlot);
