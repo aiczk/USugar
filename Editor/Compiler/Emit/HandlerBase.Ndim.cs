@@ -22,12 +22,6 @@ public abstract partial class HandlerBase
         return NdimArrayAbi.ReadBacking(_builder, bundleVal, backingUdonType, _ctx.AllocTemp, EmitAssign, SlotRef);
     }
 
-    /// <summary>Fetch bundle[1+dim] (a boxed dimension length) as a SystemInt32, unboxed on typed
-    /// COPY (same pattern as EmitNdimGetBacking / the recursion-stack reload).</summary>
-    protected CLeaf EmitNdimGetDimLength(CLeaf bundleVal, CLeaf dimIndexPlusOne)
-        => NdimArrayAbi.ReadDimLength(_builder, bundleVal, dimIndexPlusOne, _ctx.AllocTemp, EmitAssign, SlotRef);
-    protected CLeaf EmitNdimGetDimLength(CLeaf bundleVal, int dim) => EmitNdimGetDimLength(bundleVal, Const(NdimArrayAbi.DimSlotIndex(dim), "SystemInt32"));
-
     /// <summary>A fully-prepared N-dim element access: every index expression evaluated EXACTLY ONCE
     /// (B38 — a side-effecting index must not re-run for bounds-check vs. Horner-flatten vs.
     /// message), every dimension length fetched once, the AND-ed per-dimension in-bounds flag, and
@@ -54,7 +48,8 @@ public abstract partial class HandlerBase
         for (int d = 0; d < rank; d++)
         {
             dimSlots[d] = _ctx.AllocTemp("SystemInt32");
-            EmitAssign(dimSlots[d], EmitNdimGetDimLength(bundleVal, d));
+            EmitAssign(dimSlots[d], NdimArrayAbi.ReadDimLength(_builder, bundleVal,
+                Const(NdimArrayAbi.DimSlotIndex(d), "SystemInt32"), _ctx.AllocTemp, EmitAssign, SlotRef));
         }
 
         var inBounds = NdimArrayAbi.BuildInBounds(_builder, idxSlots, dimSlots);
@@ -65,11 +60,6 @@ public abstract partial class HandlerBase
 
         return new NdimArrayAbi.AccessPlan(bundleVal, inBounds, flatIndex, backingType, idxSlots, dimSlots);
     }
-
-    /// <summary>D-N1: LogError naming the array expression, its rank, and every (index/length) pair,
-    /// at runtime — the caller has already established at least one dimension is out of range.</summary>
-    protected void EmitNdimBoundsLogError(IOperation arrayExprSyntaxSrc, string verb, NdimArrayAbi.AccessPlan plan)
-        => NdimArrayAbi.EmitBoundsLogError(_builder, arrayExprSyntaxSrc.Syntax.ToString(), verb, plan);
 
     /// <summary>Shared in-bounds Get from an already-prepared plan: default(T) pre-init, in-bounds
     /// branch does the real Horner-flattened Get on the flat backing (the EXISTING 1-D Get choke
@@ -88,7 +78,7 @@ public abstract partial class HandlerBase
                     new List<CLeaf> { backing, plan.FlatIndex }, elemUdonType);
                 EmitAssign(resultSlot, elemVal);
             },
-            _ => EmitNdimBoundsLogError(ae, "read", plan));
+            _ => NdimArrayAbi.EmitBoundsLogError(_builder, ae.Syntax.ToString(), "read", plan));
         return SlotRef(resultSlot);
     }
 
@@ -105,7 +95,7 @@ public abstract partial class HandlerBase
                     ExternResolver.BuildArraySetSignature(GetArrayType(plan.BackingType), GetArrayElemType(plan.BackingType)),
                     new List<CLeaf> { backing, plan.FlatIndex, value });
             },
-            _ => EmitNdimBoundsLogError(ae, "write", plan));
+            _ => NdimArrayAbi.EmitBoundsLogError(_builder, ae.Syntax.ToString(), "write", plan));
     }
 
     /// <summary>N-dim element READ (§1/§2). Struct/tuple elements are deep-cloned on the way out,
@@ -228,7 +218,7 @@ public abstract partial class HandlerBase
     protected CLeaf EmitNdimGetLength(CLeaf bundleVal, CLeaf dimArg)
     {
         var plusOne = NdimArrayAbi.BuildRuntimeDimSlotIndex(_builder, dimArg);
-        return EmitNdimGetDimLength(bundleVal, plusOne);
+        return NdimArrayAbi.ReadDimLength(_builder, bundleVal, plusOne, _ctx.AllocTemp, EmitAssign, SlotRef);
     }
 
     /// <summary>`ndimArr.Rank` — the static rank is known at compile time from the declared type; no
