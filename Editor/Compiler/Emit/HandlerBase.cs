@@ -407,10 +407,7 @@ public abstract partial class HandlerBase
     public CLeaf EmitNewAggregate(INamedTypeSymbol aggType)
     {
         var layout = _ctx.GetAggregateLayout(aggType);
-        var slot = _ctx.AllocTemp("SystemObjectArray");
-        EmitAssign(slot, AggregateAbi.Allocate(_builder, layout.SlotCount));
-        EmitDefaultInitAggregate(SlotRef(slot), layout);
-        return SlotRef(slot);
+        return AggregateAbi.MintDefault(_builder, layout, _ctx.GetAggregateLayout, GetUdonType);
     }
 
     /// <summary>Apply `new T { A = x, B = y }`-style object-initializer assignments to an aggregate

@@ -167,6 +167,16 @@ public static class AggregateAbi
         return builder.SlotRef(dstSlot);
     }
 
+    /// <summary>Allocate and default-initialize a fresh aggregate bundle.</summary>
+    public static CLeaf MintDefault(CoreBuilder builder, AggregateLayout layout,
+        Func<INamedTypeSymbol, AggregateLayout> getLayout, Func<ITypeSymbol, string> getUdonType)
+    {
+        var slot = builder.AllocScratch(ArrayType);
+        builder.EmitAssign(slot, Allocate(builder, layout.SlotCount));
+        DefaultInitialize(builder, builder.SlotRef(slot), layout, getLayout, getUdonType);
+        return builder.SlotRef(slot);
+    }
+
     static object DefaultScalarValue(ITypeSymbol type)
     {
         switch (type.SpecialType)
