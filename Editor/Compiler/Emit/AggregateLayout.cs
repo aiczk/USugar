@@ -95,3 +95,30 @@ public class AggregateLayout
         return new AggregateLayout(fields.AsReadOnly(), nameToIndex, reserved);
     }
 }
+
+/// <summary>
+/// Object[] ABI for class, struct, and tuple values. Layout decides which slot a logical member owns;
+/// this type owns the backing array representation and element access protocol.
+/// </summary>
+public static class AggregateAbi
+{
+    public const string ArrayType = "SystemObjectArray";
+    public const string ElementType = "SystemObject";
+
+    public static CLeaf Allocate(CoreBuilder builder, int slotCount)
+        => builder.ExternCall(
+            ExternResolver.BuildArrayCtorSignature(ArrayType),
+            new List<CLeaf> { builder.Const(slotCount, "SystemInt32") },
+            ArrayType);
+
+    public static CLeaf ReadSlot(CoreBuilder builder, CLeaf instance, int index, string udonType)
+        => builder.ExternCall(
+            ExternResolver.BuildArrayGetSignature(ArrayType, ElementType),
+            new List<CLeaf> { instance, builder.Const(index, "SystemInt32") },
+            udonType);
+
+    public static void WriteSlot(CoreBuilder builder, CLeaf instance, int index, CLeaf value)
+        => builder.EmitExternVoid(
+            ExternResolver.BuildArraySetSignature(ArrayType, ElementType),
+            new List<CLeaf> { instance, builder.Const(index, "SystemInt32"), value });
+}

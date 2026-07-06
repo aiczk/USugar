@@ -402,17 +402,14 @@ public abstract partial class HandlerBase
         // src is a single-assignment SystemObjectArray leaf under ANF; the loop only READS its elements
         // (writes target the fresh dstSlot), so it is stable without a snapshot.
         var dstSlot = _ctx.AllocTemp("SystemObjectArray");
-        EmitAssign(dstSlot, ExternCall(ExternResolver.BuildArrayCtorSignature("SystemObjectArray"),
-            new List<CLeaf> { Const(layout.Count, "SystemInt32") }, "SystemObjectArray"));
+        EmitAssign(dstSlot, AggregateAbi.Allocate(_builder, layout.Count));
         for (int i = 0; i < layout.Count; i++)
         {
-            var elem = ExternCall(ExternResolver.BuildArrayGetSignature("SystemObjectArray", "SystemObject"),
-                new List<CLeaf> { src, Const(i, "SystemInt32") }, "SystemObject");
+            var elem = AggregateAbi.ReadSlot(_builder, src, i, "SystemObject");
             CLeaf copy = layout.Fields[i].Type is INamedTypeSymbol nested && EmitPolicy.IsAggregateType(nested)
                 ? EmitDeepCloneAggregate(elem, nested) // nested aggregate → recurse
                 : elem;                                // boxed scalar → reference copy is fine (immutable box)
-            EmitExternVoid(ExternResolver.BuildArraySetSignature("SystemObjectArray", "SystemObject"),
-                new List<CLeaf> { SlotRef(dstSlot), Const(i, "SystemInt32"), copy });
+            AggregateAbi.WriteSlot(_builder, SlotRef(dstSlot), i, copy);
         }
         return SlotRef(dstSlot);
     }
@@ -423,8 +420,7 @@ public abstract partial class HandlerBase
     {
         var layout = _ctx.GetAggregateLayout(aggType);
         var slot = _ctx.AllocTemp("SystemObjectArray");
-        EmitAssign(slot, ExternCall(ExternResolver.BuildArrayCtorSignature("SystemObjectArray"),
-            new List<CLeaf> { Const(layout.SlotCount, "SystemInt32") }, "SystemObjectArray"));
+        EmitAssign(slot, AggregateAbi.Allocate(_builder, layout.SlotCount));
         EmitDefaultInitAggregate(SlotRef(slot), layout);
         return SlotRef(slot);
     }
@@ -450,8 +446,7 @@ public abstract partial class HandlerBase
             };
             if (memberName != null && layout.TryGetIndex(memberName, out var idx))
             {
-                EmitExternVoid(ExternResolver.BuildArraySetSignature("SystemObjectArray", "SystemObject"),
-                    new List<CLeaf> { instanceVal, Const(idx, "SystemInt32"), VisitExpression(sa.Value) });
+                AggregateAbi.WriteSlot(_builder, instanceVal, idx, VisitExpression(sa.Value));
             }
         }
     }
@@ -473,10 +468,8 @@ public abstract partial class HandlerBase
             {
                 var nl = _ctx.GetAggregateLayout(nested);
                 var subSlot = _ctx.AllocTemp("SystemObjectArray");
-                EmitAssign(subSlot, ExternCall(ExternResolver.BuildArrayCtorSignature("SystemObjectArray"),
-                    new List<CLeaf> { Const(nl.SlotCount, "SystemInt32") }, "SystemObjectArray"));
-                EmitExternVoid(ExternResolver.BuildArraySetSignature("SystemObjectArray", "SystemObject"),
-                    new List<CLeaf> { SlotRef(slot), Const(i, "SystemInt32"), SlotRef(subSlot) });
+                EmitAssign(subSlot, AggregateAbi.Allocate(_builder, nl.SlotCount));
+                AggregateAbi.WriteSlot(_builder, SlotRef(slot), i, SlotRef(subSlot));
                 EmitDefaultInitAggregate(SlotRef(subSlot), nl);
                 continue;
             }
@@ -497,8 +490,7 @@ public abstract partial class HandlerBase
                 _ => null, // reference types default to null
             };
             if (defVal != null)
-                EmitExternVoid(ExternResolver.BuildArraySetSignature("SystemObjectArray", "SystemObject"),
-                    new List<CLeaf> { SlotRef(slot), Const(i, "SystemInt32"), Const(defVal, GetUdonType(fieldType)) });
+                AggregateAbi.WriteSlot(_builder, SlotRef(slot), i, Const(defVal, GetUdonType(fieldType)));
         }
     }
 
@@ -525,8 +517,7 @@ public abstract partial class HandlerBase
             if (initValue == null) continue;
             var initOp = _compilation.GetSemanticModel(initValue.SyntaxTree).GetOperation(initValue);
             if (initOp == null) continue;
-            EmitExternVoid(ExternResolver.BuildArraySetSignature("SystemObjectArray", "SystemObject"),
-                new List<CLeaf> { instance, Const(idx, "SystemInt32"), VisitExpression(initOp) });
+            AggregateAbi.WriteSlot(_builder, instance, idx, VisitExpression(initOp));
         }
     }
 
