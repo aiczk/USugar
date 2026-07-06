@@ -22,6 +22,7 @@
     <Compile Include="../../Editor/Compiler/Emit/TypeClassifier.cs" />
     <Compile Include="../../Editor/Compiler/Emit/BoundaryChecker.cs" />
     <Compile Include="../../Editor/Compiler/Emit/RecursionInfo.cs" />
+    <Compile Include="../../Editor/Compiler/Emit/RecursionContext.cs" />
     <Compile Include="../../Editor/Compiler/Emit/ReachableBodies.cs" />
     <Compile Include="../../Editor/Compiler/Emit/AggregateLayout.cs" />
     <Compile Include="../../Editor/Compiler/Emit/EnvEmit.cs" />
