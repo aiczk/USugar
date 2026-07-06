@@ -411,21 +411,6 @@ public abstract partial class HandlerBase
     protected void EmitDefaultInitAggregate(CValue arrayVal, AggregateLayout layout)
         => AggregateAbi.DefaultInitialize(_builder, arrayVal, layout, _ctx.GetAggregateLayout, GetUdonType);
 
-    /// <summary>Unwrap a field or auto-property member access into (instance, member name) for
-    /// aggregate (struct/tuple) object[] element resolution.</summary>
-    protected static bool TryGetAggregateMemberTarget(IOperation target, out IOperation instance, out string memberName)
-    {
-        switch (target)
-        {
-            case IFieldReferenceOperation { Instance: not null } fr:
-                instance = fr.Instance; memberName = fr.Field.Name; return true;
-            case IPropertyReferenceOperation { Instance: not null } pr:
-                instance = pr.Instance; memberName = pr.Property.Name; return true;
-            default:
-                instance = null; memberName = null; return false;
-        }
-    }
-
     /// <summary>Promote a boxed small-int/char operand to int32 (Udon has no operators on those types and a
     /// boxed small-int does not coerce to int for a SystemInt32 extern). Routes through ToInt32(SystemObject)
     /// rather than the type-strict ToInt32(SystemByte/SystemChar/…): a nullable small-int's stored value is
@@ -1033,7 +1018,7 @@ public abstract partial class HandlerBase
         if (fieldRef.Instance == null) return false;                       // static — no receiver legs
         if (fieldRef.Instance is not IInstanceReferenceOperation) return true; // variable receiver — always a prepared arm
         return fieldRef.Field.ContainingType.IsValueType                   // struct `this.v` (emulated receiver)
-            || (TryGetAggregateMemberTarget(fieldRef, out var inst, out var name)
+            || (AggregateAbi.TryGetMemberTarget(fieldRef, out var inst, out var name)
                 && inst.Type is INamedTypeSymbol agg && EmitPolicy.IsObjectArrayEmulated(agg)
                 && _ctx.GetAggregateLayout(agg).TryGetIndex(name, out _));
     }
@@ -1082,7 +1067,7 @@ public abstract partial class HandlerBase
     protected System.Action<CLeaf> TryPrepareFieldSet(IFieldReferenceOperation fieldRef)
     {
         // Aggregate (struct/tuple) OR v1-class member → layout slot write on the backing object[].
-        if (TryGetAggregateMemberTarget(fieldRef, out var aggInstance, out var aggMemberName)
+        if (AggregateAbi.TryGetMemberTarget(fieldRef, out var aggInstance, out var aggMemberName)
             && aggInstance.Type is INamedTypeSymbol aggContaining && EmitPolicy.IsObjectArrayEmulated(aggContaining)
             && _ctx.GetAggregateLayout(aggContaining).TryGetIndex(aggMemberName, out var fieldIndex))
         {

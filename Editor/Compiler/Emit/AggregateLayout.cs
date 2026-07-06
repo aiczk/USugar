@@ -197,6 +197,25 @@ public static class AggregateAbi
         }
     }
 
+    public static bool TryGetMemberTarget(IOperation target, out IOperation instance, out string memberName)
+    {
+        switch (target)
+        {
+            case IFieldReferenceOperation { Instance: not null } fieldRef:
+                instance = fieldRef.Instance;
+                memberName = fieldRef.Field.Name;
+                return true;
+            case IPropertyReferenceOperation { Instance: not null } propertyRef:
+                instance = propertyRef.Instance;
+                memberName = propertyRef.Property.Name;
+                return true;
+            default:
+                instance = null;
+                memberName = null;
+                return false;
+        }
+    }
+
     static object DefaultScalarValue(ITypeSymbol type)
     {
         switch (type.SpecialType)

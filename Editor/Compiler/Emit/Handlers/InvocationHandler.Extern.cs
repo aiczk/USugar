@@ -866,7 +866,7 @@ public partial class InvocationHandler
                     new List<CLeaf> { arrayVal, indexVal, v }));
             }
             case IFieldReferenceOperation fieldRef
-                when TryGetAggregateMemberTarget(fieldRef, out var aggInstance, out var aggMemberName)
+                when AggregateAbi.TryGetMemberTarget(fieldRef, out var aggInstance, out var aggMemberName)
                      && aggInstance.Type is INamedTypeSymbol aggContaining
                      && EmitPolicy.IsAggregateType(aggContaining)
                      && _ctx.GetAggregateLayout(aggContaining).TryGetIndex(aggMemberName, out var memberIndex):
