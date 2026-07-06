@@ -168,20 +168,10 @@ public class UasmEmitter
         // Design §1: build the single ReachableBodies fixpoint ONCE here — after EmitFields (field
         // initializers are seeds) and before its consumers. Its projections feed Phase-1 registration,
         // BuildRecursionInfo roots, and CaptureScope roots (all in EmitMethods / injected below).
-        var methods = ComputeMethods();
-        var reach = BuildReachableBodies(methods);
-        var methodSet = new HashSet<IMethodSymbol>(methods, SymbolEqualityComparer.Default);
-        var baseInstanceMethods = reach.BaseCopies.Where(bm => !methodSet.Contains(bm)).ToArray();
-        var captureRoots = reach.BodyByDef.Keys.Where(m => m.DeclaringSyntaxReferences.Length > 0).ToList();
-        var fieldInitOps = _fieldInitOps.Select(fi => fi.initOp).ToList();
-        return new ClassCompilePlan(
-            methods,
-            reach,
-            reach.ForeignStatics,
-            reach.StructMembers,
-            baseInstanceMethods,
-            captureRoots,
-            fieldInitOps);
+        return new ClassCompilePlanBuilder(
+            ComputeMethods,
+            BuildReachableBodies,
+            () => _fieldInitOps.Select(fi => fi.initOp)).Build();
     }
 
     void SetReflectionValues()

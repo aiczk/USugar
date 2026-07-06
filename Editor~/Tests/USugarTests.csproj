@@ -26,6 +26,7 @@
     <Compile Include="../../Editor/Compiler/Emit/ClosureContext.cs" />
     <Compile Include="../../Editor/Compiler/Emit/ReachableBodies.cs" />
     <Compile Include="../../Editor/Compiler/Emit/ClassCompilePlan.cs" />
+    <Compile Include="../../Editor/Compiler/Emit/ClassCompilePlanBuilder.cs" />
     <Compile Include="../../Editor/Compiler/Emit/AggregateLayout.cs" />
     <Compile Include="../../Editor/Compiler/Emit/AggregateContext.cs" />
     <Compile Include="../../Editor/Compiler/Emit/SyntheticContext.cs" />
