@@ -475,13 +475,8 @@ public class StatementHandler : HandlerBase, IOperationHandler
                 else if (local.Type is INamedTypeSymbol envAggT && EmitPolicy.IsAggregateType(envAggT))
                 {
                     var envAggLayout = _ctx.GetAggregateLayout(envAggT);
-                    // DefaultInitAggregate operates on a heap FIELD — stage through a synthetic one.
-                    var envTmpId = _ctx.DeclareLocal(local.Name + "__envinit", "SystemObjectArray");
-                    EmitStoreField(envTmpId, ExternCall(
-                        ExternResolver.BuildArrayCtorSignature("SystemObjectArray"),
-                        new List<CLeaf> { Const(envAggLayout.Count, "SystemInt32") }, "SystemObjectArray"));
-                    DefaultInitAggregate(envTmpId, envAggLayout);
-                    EnvEmit.Write(_builder, _ctx, local, LoadField(envTmpId, "SystemObjectArray"));
+                    EnvEmit.Write(_builder, _ctx, local,
+                        AggregateAbi.MintDefault(_builder, envAggLayout, _ctx.GetAggregateLayout, GetUdonType));
                 }
                 continue;
             }
