@@ -23,16 +23,6 @@ public class NullableHandler : AssignmentHandlerBase, IExpressionHandler
     {
         bool isVoid = op.Type == null || op.Type.SpecialType == SpecialType.System_Void;
 
-        int resultSlot = -1;
-        string resultType = null;
-        if (!isVoid)
-        {
-            resultType = GetUdonType(op.Type);
-            resultSlot = _ctx.AllocTemp(resultType);
-            var defaultConst = Const(null, resultType);
-            EmitAssign(resultSlot, defaultConst);
-        }
-
         // targetVal is a single-assignment scratch leaf under ANF — re-readable for the null check and
         // as the conditional-access instance without a snapshot. A delegate-typed receiver is its BUNDLE
         // reference (design §2.6: `d?.Invoke()` null-guards the bundle leaf itself, so any
@@ -40,27 +30,20 @@ public class NullableHandler : AssignmentHandlerBase, IExpressionHandler
         // The null check is type-agnostic (SystemObject), so no retype is needed.
         CLeaf targetVal = VisitExpression(op.Operation);
 
-        // condVal = (target != null); if true -> evaluate WhenNotNull, else skip
-        var condVal = NullableAbi.IsNotNull(_builder, targetVal);
-
-        _builder.EmitIf(condVal, b =>
+        return NullableAbi.EmitConditionalAccess(_builder, targetVal, isVoid, isVoid ? null : GetUdonType(op.Type),
+            target =>
         {
             // target is not null → evaluate WhenNotNull with target as the instance
-            _conditionalAccessStack.Push(targetVal);
+            _conditionalAccessStack.Push(target);
             try
             {
-                var accessVal = VisitExpression(op.WhenNotNull);
-
-                if (!isVoid && accessVal != null)
-                    EmitAssign(resultSlot, accessVal);
+                return VisitExpression(op.WhenNotNull);
             }
             finally
             {
                 _conditionalAccessStack.Pop();
             }
-        });
-
-        return resultSlot >= 0 ? SlotRef(resultSlot) : null;
+        }, _ctx.AllocTemp, EmitAssign, SlotRef);
     }
 
     CLeaf VisitCoalesce(ICoalesceOperation op)

@@ -69,6 +69,27 @@ public static class NullableAbi
         return slotRef(resultSlot);
     }
 
+    public static CLeaf EmitConditionalAccess(CoreBuilder builder, CLeaf targetValue, bool isVoid, string resultType,
+        Func<CLeaf, CLeaf> whenNotNull,
+        Func<string, int> allocTemp, Action<int, CValue> emitAssign, Func<int, CLeaf> slotRef)
+    {
+        int resultSlot = -1;
+        if (!isVoid)
+        {
+            resultSlot = allocTemp(resultType);
+            emitAssign(resultSlot, builder.Const(null, resultType));
+        }
+
+        builder.EmitIf(IsNotNull(builder, targetValue), _ =>
+        {
+            var accessValue = whenNotNull(targetValue);
+            if (!isVoid && accessValue != null)
+                emitAssign(resultSlot, accessValue);
+        });
+
+        return resultSlot >= 0 ? slotRef(resultSlot) : null;
+    }
+
     public static CLeaf EmitLiftedBoolLogic(CoreBuilder builder, CValue leftValue, CValue rightValue,
         BinaryOperatorKind kind, Func<string, int> allocTemp, Action<int, CValue> emitAssign, Func<int, CLeaf> slotRef)
     {
