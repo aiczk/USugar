@@ -394,18 +394,6 @@ public abstract partial class HandlerBase
         return AggregateAbi.MintDefault(_builder, layout, _ctx.GetAggregateLayout, GetUdonType);
     }
 
-    /// <summary>Apply `new T { A = x, B = y }`-style object-initializer assignments to an aggregate
-    /// (tuple/user-struct) value already allocated as an object[]. Each member write is a layout-INDEX
-    /// __Set__ (object[]-emulated structs have no native per-field extern), mirroring
-    /// VisitAggregateLocalDeclaration's local-declaration lowering — object creation used outside a local
-    /// declaration (field initializer, argument, return value, …) shares this same S1 path (roadmap B41).</summary>
-    protected void EmitAggregateObjectInitializer(CLeaf instanceVal, INamedTypeSymbol aggType,
-        IObjectOrCollectionInitializerOperation initializer)
-    {
-        var layout = _ctx.GetAggregateLayout(aggType);
-        AggregateAbi.EmitObjectInitializer(_builder, instanceVal, layout, initializer, VisitExpression);
-    }
-
     /// <summary>Set each value-type element of an object[]-emulated aggregate to its type default; a nested
     /// aggregate field is recursively allocated + default-initialized rather than left null.</summary>
     protected void EmitDefaultInitAggregate(CValue arrayVal, AggregateLayout layout)

@@ -453,7 +453,7 @@ public partial class InvocationHandler
                 foreach (var arg in op.Arguments) ctorArgs.Add(VisitExpression(arg.Value));
                 EmitExprStmt(EmitCallToMethod(ResolveStructMember(op.Constructor), ctorArgs));
             },
-            instance => EmitAggregateObjectInitializer(instance, classTy, op.Initializer));
+            instance => AggregateAbi.EmitObjectInitializer(_builder, instance, layout, op.Initializer, VisitExpression));
     }
 
     CLeaf VisitObjectCreation(IObjectCreationOperation op)
@@ -524,7 +524,7 @@ public partial class InvocationHandler
             EmitExprStmt(EmitCallToMethod(ResolveStructMember(op.Constructor), ctorArgs));
             // ctor + object-initializer combo (`new V(1,2) { Y = 3 }`): apply the initializer AFTER the
             // ctor runs, same order C# gives the fields (roadmap B41 (d)).
-            EmitAggregateObjectInitializer(SlotRef(slot), userStruct, op.Initializer);
+            AggregateAbi.EmitObjectInitializer(_builder, SlotRef(slot), layout, op.Initializer, VisitExpression);
             return SlotRef(slot);
         }
 
@@ -535,8 +535,9 @@ public partial class InvocationHandler
         if (op.Arguments.Length == 0 && op.Type.IsValueType && op.Initializer != null
             && op.Type is INamedTypeSymbol aggInitType && EmitPolicy.IsAggregateType(aggInitType))
         {
+            var layout = _ctx.GetAggregateLayout(aggInitType);
             var aggVal = EmitNewAggregate(aggInitType);
-            EmitAggregateObjectInitializer(aggVal, aggInitType, op.Initializer);
+            AggregateAbi.EmitObjectInitializer(_builder, aggVal, layout, op.Initializer, VisitExpression);
             return aggVal;
         }
 
