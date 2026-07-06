@@ -1527,8 +1527,8 @@ public class NullDlg : UdonSharpBehaviour {
     [Fact]
     public void DelegateField_NullCheck_ComparesBundleReference()
     {
-        // d != null is a reference null check on the BUNDLE itself (design §2.5 — [0] is a
-        // different condition; the old ABI checked the expanded __target var).
+        // d != null is a reference null check on the BUNDLE itself; DelegateAbi.Target is a
+        // different condition and is only checked by dispatch.
         var uasm = TestHelper.CompileToUasm(@"
 using UdonSharp;
 using System;

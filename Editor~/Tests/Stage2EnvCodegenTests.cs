@@ -96,7 +96,7 @@ public class LoopEnv : UdonSharpBehaviour {
     public void CapturingClosure_DispatchedThroughField_HasEnvpParamAndNullEnvGuard()
     {
         // A capturing lambda stored to a delegate FIELD and dispatched exercises the full env ABI:
-        // the hoisted closure gains a hidden __envp parameter (copy-in of bundle[3]) and its bridge
+        // the hoisted closure gains a hidden __envp parameter (copy-in of DelegateAbi.Env) and its bridge
         // guards a null env with a loud LogError before consuming it.
         var uasm = TestHelper.CompileToUasm(@"
 using UdonSharp;

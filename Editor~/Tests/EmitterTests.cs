@@ -4046,7 +4046,7 @@ public class DlgTest : UdonSharpBehaviour
     [Fact]
     public void DelegateParam_MethodGroup_PassesBundle()
     {
-        // A bare method group passed to a delegate parameter builds the object[4] bundle at the call
+        // A bare method group passed to a delegate parameter builds the tagged delegate bundle at the call
         // site (design §2.4) — its __dlg_ bridge is the callee-side prologue copy that absorbs both
         // the self JUMP_INDIRECT and the cross SendCustomEvent path (no per-call-site adapter).
         var uasm = TestHelper.CompileToUasm(@"

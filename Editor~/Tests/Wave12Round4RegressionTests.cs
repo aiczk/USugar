@@ -23,7 +23,7 @@ namespace USugar.Tests;
 /// [W3] Binding a method group off an INTERFACE-typed variable receiver (`cb = iface.Get`) threw a
 ///      raw InvalidOperationException ('No delegate bridge for ...') from
 ///      LayoutPlanner.GetDelegateBridgeLayout — an ICE, neither loud-by-design nor correct. It
-///      cannot compile correctly today: bundle[1] is SendCustomEvent'd on the runtime receiver, so
+///      cannot compile correctly today: DelegateAbi.Method is SendCustomEvent'd on the runtime receiver, so
 ///      it must name a __dlgc_-convention bridge export derivable from the interface member alone,
 ///      and implementers only export bridges named by their own implementing methods. Rejected
 ///      loudly in ResolveDelegateBridge (§8-3), pointing at the supported lambda wrapping

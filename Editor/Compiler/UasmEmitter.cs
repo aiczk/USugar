@@ -1459,7 +1459,7 @@ public class UasmEmitter
 
         // Stage 2 §5.1: a CAPTURING target's bridge consumes the staged env global as the trailing
         // arg (positional copy-in binds it to the real function's __envp param field) under an
-        // env-null LOUD guard — a hand-rolled object[] or a mixed-world old dispatcher leaves the
+        // env-null LOUD guard — a hand-rolled object[] or mismatched delegate bundle leaves the
         // env unset, which must LogError + default, not fault or silently read garbage. Non-
         // capturing bridges (named methods, capture-free lambdas) are byte-unchanged.
         if (_ctx.CaptureScope != null && _ctx.CaptureScope.IsCapturingClosure(closureCheckMethod))

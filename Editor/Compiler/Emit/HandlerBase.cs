@@ -2526,7 +2526,7 @@ public abstract partial class HandlerBase
 
                 // Stage 2 §4.5: distinct closure activations are unequal delegates — add an env
                 // reference-equality leg. DelegateAbi.Env is null for method groups / capture-free lambdas,
-                // so null==null → true keeps their behaviour identical to Stage 1. Addr (slot 2) stays
+                // so null==null → true keeps their capture-free behaviour. DelegateAbi.Addr stays
                 // excluded (self-program-relative).
                 var le = ExternCall(ExternResolver.BuildArrayGetSignature("SystemObjectArray", "SystemObject"),
                     new List<CLeaf> { a, Const(DelegateAbi.Env, "SystemInt32") }, "SystemObject");

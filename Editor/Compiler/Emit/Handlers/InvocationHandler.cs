@@ -590,6 +590,13 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
                     new List<CLeaf> { Const(
                         $"USugar: NullReferenceException — invoked a null delegate ({_classSymbol.Name}.{receiverDescription})",
                         "SystemString") });
+        System.Action<CoreBuilder> invalidBundleArm = null;
+        if (!isConditional)
+            invalidBundleArm = _ =>
+                EmitExternVoid("UnityEngineDebug.__LogError__SystemObject__SystemVoid",
+                    new List<CLeaf> { Const(
+                        $"USugar: invalid delegate bundle — value is not a USugar delegate ({_classSymbol.Name}.{receiverDescription})",
+                        "SystemString") });
 
         void EmitGuardedDispatch()
         {
@@ -599,81 +606,81 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
                 new List<CLeaf> { kind, Const(DelegateAbi.KindTag, "SystemString") }, "SystemBoolean");
             _builder.EmitIf(kindOk, _ =>
             {
-            // tgt is a SystemObject temp fed to externs directly — no Convert needed (P1/P5a).
-            var tgt = ExternCall(ExternResolver.BuildArrayGetSignature("SystemObjectArray", "SystemObject"),
-                new List<CLeaf> { bundle, Const(DelegateAbi.Target, "SystemInt32") }, "SystemObject");
-            // target-null guard: unset element, or the in-game security filter nulling DelegateAbi.Target.
-            var tOk = ExternCall("UnityEngineObject.__op_Inequality__UnityEngineObject_UnityEngineObject__SystemBoolean",
-                new List<CLeaf> { tgt, Const(null, "SystemObject") }, "SystemBoolean");
-            _builder.EmitIf(tOk, _ =>
-            {
-                // Conv stores: the FINAL writes before dispatch (§3.3 clobber discipline).
-                for (int i = 0; i < argExprs.Length && i < convArgs.Length; i++)
-                    if (argExprs[i] != null)
-                        EmitStoreField(convArgs[i], argExprs[i]);
+                // tgt is a SystemObject temp fed to externs directly — no Convert needed (P1/P5a).
+                var tgt = ExternCall(ExternResolver.BuildArrayGetSignature("SystemObjectArray", "SystemObject"),
+                    new List<CLeaf> { bundle, Const(DelegateAbi.Target, "SystemInt32") }, "SystemObject");
+                // target-null guard: unset element, or the in-game security filter nulling DelegateAbi.Target.
+                var tOk = ExternCall("UnityEngineObject.__op_Inequality__UnityEngineObject_UnityEngineObject__SystemBoolean",
+                    new List<CLeaf> { tgt, Const(null, "SystemObject") }, "SystemBoolean");
+                _builder.EmitIf(tOk, _ =>
+                {
+                    // Conv stores: the FINAL writes before dispatch (§3.3 clobber discipline).
+                    for (int i = 0; i < argExprs.Length && i < convArgs.Length; i++)
+                        if (argExprs[i] != null)
+                            EmitStoreField(convArgs[i], argExprs[i]);
 
-                // Stage 2 §5.1: stage DelegateAbi.Env into the env conv global (unconditional, both arms —
-                // the SELF arm's bridge reads this field directly; the CROSS arm SPVs it below). A
-                // capture-free target sends null; the receiving bridge's null-env guard is the backstop.
-                EmitStoreField(convEnv, ExternCall(ExternResolver.BuildArrayGetSignature("SystemObjectArray", "SystemObject"),
-                    new List<CLeaf> { bundle, Const(DelegateAbi.Env, "SystemInt32") }, EnvEmit.EnvType));
+                    // Stage 2 §5.1: stage DelegateAbi.Env into the env conv global (unconditional, both arms —
+                    // the SELF arm's bridge reads this field directly; the CROSS arm SPVs it below). A
+                    // capture-free target sends null; the receiving bridge's null-env guard is the backstop.
+                    EmitStoreField(convEnv, ExternCall(ExternResolver.BuildArrayGetSignature("SystemObjectArray", "SystemObject"),
+                        new List<CLeaf> { bundle, Const(DelegateAbi.Env, "SystemInt32") }, EnvEmit.EnvType));
 
-                var adr = ExternCall(ExternResolver.BuildArrayGetSignature("SystemObjectArray", "SystemObject"),
-                    new List<CLeaf> { bundle, Const(DelegateAbi.Addr, "SystemInt32") }, "SystemUInt32");
-                var mtd = ExternCall(ExternResolver.BuildArrayGetSignature("SystemObjectArray", "SystemObject"),
-                    new List<CLeaf> { bundle, Const(DelegateAbi.Method, "SystemInt32") }, "SystemString");
-                var thisType = GetUdonType(_classSymbol);
-                var thisRef = LoadField(_ctx.DeclareThisOnce(thisType), thisType);
-                // Self/cross is decided by TARGET IDENTITY only (P6) — addr≠0 merely qualifies the
-                // fast path (addr is meaningless across program boundaries; 0-addr JUMP_INDIRECT would
-                // silently jump to bytecode 0, P5d — addr is only ever read inside this guard).
-                var isSelf = ExternCall("UnityEngineObject.__op_Equality__UnityEngineObject_UnityEngineObject__SystemBoolean",
-                    new List<CLeaf> { tgt, thisRef }, "SystemBoolean");
-                var hasAddr = ExternCall("SystemUInt32.__op_Inequality__SystemUInt32_SystemUInt32__SystemBoolean",
-                    new List<CLeaf> { adr, Const(0u, "SystemUInt32") }, "SystemBoolean");
-                var selfFast = ExternCall("SystemBoolean.__op_LogicalAnd__SystemBoolean_SystemBoolean__SystemBoolean",
-                    new List<CLeaf> { isSelf, hasAddr }, "SystemBoolean");
-                _builder.EmitIf(selfFast,
-                    _ =>
-                    {
-                        // SELF: JUMP_INDIRECT into the bridge __body (EmitCallIndirect verbatim, P5b).
-                        EmitInternalVoid("__indirect", new List<CLeaf> { adr }, reentrant);
-                        // Immediate conv-ret materialization (§3.3-4, fcd11/12 invariant).
-                        if (retType != null)
-                            EmitAssign(retSlot, LoadField(convRet, retType));
-                    },
-                    _ =>
-                    {
-                        // CROSS — includes a foreign-minted bundle with target==this && addr==0, which
-                        // correctly falls to a self-addressed SendCustomEvent.
-                        // method-null guard: hand-rolled object[] bundles cast back to a delegate (§2.6).
-                        var mOk = ExternCall("SystemObject.__op_Inequality__SystemObject_SystemObject__SystemBoolean",
-                            new List<CLeaf> { mtd, Const(null, "SystemObject") }, "SystemBoolean");
-                        _builder.EmitIf(mOk, _ =>
+                    var adr = ExternCall(ExternResolver.BuildArrayGetSignature("SystemObjectArray", "SystemObject"),
+                        new List<CLeaf> { bundle, Const(DelegateAbi.Addr, "SystemInt32") }, "SystemUInt32");
+                    var mtd = ExternCall(ExternResolver.BuildArrayGetSignature("SystemObjectArray", "SystemObject"),
+                        new List<CLeaf> { bundle, Const(DelegateAbi.Method, "SystemInt32") }, "SystemString");
+                    var thisType = GetUdonType(_classSymbol);
+                    var thisRef = LoadField(_ctx.DeclareThisOnce(thisType), thisType);
+                    // Self/cross is decided by TARGET IDENTITY only (P6) — addr≠0 merely qualifies the
+                    // fast path (addr is meaningless across program boundaries; 0-addr JUMP_INDIRECT would
+                    // silently jump to bytecode 0, P5d — addr is only ever read inside this guard).
+                    var isSelf = ExternCall("UnityEngineObject.__op_Equality__UnityEngineObject_UnityEngineObject__SystemBoolean",
+                        new List<CLeaf> { tgt, thisRef }, "SystemBoolean");
+                    var hasAddr = ExternCall("SystemUInt32.__op_Inequality__SystemUInt32_SystemUInt32__SystemBoolean",
+                        new List<CLeaf> { adr, Const(0u, "SystemUInt32") }, "SystemBoolean");
+                    var selfFast = ExternCall("SystemBoolean.__op_LogicalAnd__SystemBoolean_SystemBoolean__SystemBoolean",
+                        new List<CLeaf> { isSelf, hasAddr }, "SystemBoolean");
+                    _builder.EmitIf(selfFast,
+                        _ =>
                         {
-                            for (int i = 0; i < convArgs.Length; i++)
+                            // SELF: JUMP_INDIRECT into the bridge __body (EmitCallIndirect verbatim, P5b).
+                            EmitInternalVoid("__indirect", new List<CLeaf> { adr }, reentrant);
+                            // Immediate conv-ret materialization (§3.3-4, fcd11/12 invariant).
+                            if (retType != null)
+                                EmitAssign(retSlot, LoadField(convRet, retType));
+                        },
+                        _ =>
+                        {
+                            // CROSS — includes a foreign-minted bundle with target==this && addr==0, which
+                            // correctly falls to a self-addressed SendCustomEvent.
+                            // method-null guard: hand-rolled object[] bundles cast back to a delegate (§2.6).
+                            var mOk = ExternCall("SystemObject.__op_Inequality__SystemObject_SystemObject__SystemBoolean",
+                                new List<CLeaf> { mtd, Const(null, "SystemObject") }, "SystemBoolean");
+                            _builder.EmitIf(mOk, _ =>
                             {
-                                var argType = ExternResolver.GetUdonTypeName(invoke.Parameters[i].Type, typeParamMap);
+                                for (int i = 0; i < convArgs.Length; i++)
+                                {
+                                    var argType = ExternResolver.GetUdonTypeName(invoke.Parameters[i].Type, typeParamMap);
+                                    EmitExternVoid(
+                                        "VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid",
+                                        new List<CLeaf> { tgt, Const(convArgs[i], "SystemString"), LoadField(convArgs[i], argType) });
+                                }
+                                // Stage 2 §5.1: forward the staged env to the receiver alongside the conv args
+                                // (a missing-symbol SPV on a capture-free receiver is a proven silent no-op).
                                 EmitExternVoid(
                                     "VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid",
-                                    new List<CLeaf> { tgt, Const(convArgs[i], "SystemString"), LoadField(convArgs[i], argType) });
-                            }
-                            // Stage 2 §5.1: forward the staged env to the receiver alongside the conv args
-                            // (a missing-symbol SPV on a capture-free receiver is a proven silent no-op).
-                            EmitExternVoid(
-                                "VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid",
-                                new List<CLeaf> { tgt, Const(convEnv, "SystemString"), LoadField(convEnv, EnvEmit.EnvType) });
-                            EmitExternVoid(
-                                "VRCUdonCommonInterfacesIUdonEventReceiver.__SendCustomEvent__SystemString__SystemVoid",
-                                new List<CLeaf> { tgt, mtd }, reentrant);
-                            if (retType != null)
-                                EmitAssign(retSlot, ExternCall(
-                                    "VRCUdonCommonInterfacesIUdonEventReceiver.__GetProgramVariable__SystemString__SystemObject",
-                                    new List<CLeaf> { tgt, Const(convRet, "SystemString") }, "SystemObject"));
-                        }, failArm);
-                    });
-            }, failArm);
-            }, failArm);
+                                    new List<CLeaf> { tgt, Const(convEnv, "SystemString"), LoadField(convEnv, EnvEmit.EnvType) });
+                                EmitExternVoid(
+                                    "VRCUdonCommonInterfacesIUdonEventReceiver.__SendCustomEvent__SystemString__SystemVoid",
+                                    new List<CLeaf> { tgt, mtd }, reentrant);
+                                if (retType != null)
+                                    EmitAssign(retSlot, ExternCall(
+                                        "VRCUdonCommonInterfacesIUdonEventReceiver.__GetProgramVariable__SystemString__SystemObject",
+                                        new List<CLeaf> { tgt, Const(convRet, "SystemString") }, "SystemObject"));
+                            }, failArm);
+                        });
+                }, failArm);
+            }, invalidBundleArm);
         }
 
         if (isConditional)
