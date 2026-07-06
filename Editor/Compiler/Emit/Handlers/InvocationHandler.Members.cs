@@ -445,7 +445,7 @@ public partial class InvocationHandler
         return ClassAbi.EmitMint(
             _builder, _compilation, classTy, layout,
             _ctx.AllocTemp, EmitAssign, SlotRef, VisitExpression,
-            instance => EmitDefaultInitAggregate(instance, layout),
+            instance => AggregateAbi.DefaultInitialize(_builder, instance, layout, _ctx.GetAggregateLayout, GetUdonType),
             instance =>
             {
                 if (op.Constructor == null || op.Constructor.IsImplicitlyDeclared) return;
@@ -517,7 +517,7 @@ public partial class InvocationHandler
             var layout = _ctx.GetAggregateLayout(userStruct);
             var slot = _ctx.AllocTemp("SystemObjectArray");
             EmitAssign(slot, AggregateAbi.Allocate(_builder, layout.Count));
-            EmitDefaultInitAggregate(SlotRef(slot), layout);
+            AggregateAbi.DefaultInitialize(_builder, SlotRef(slot), layout, _ctx.GetAggregateLayout, GetUdonType);
             var ctorArgs = new List<CLeaf> { SlotRef(slot) };
             foreach (var arg in op.Arguments)
                 ctorArgs.Add(VisitExpression(arg.Value));

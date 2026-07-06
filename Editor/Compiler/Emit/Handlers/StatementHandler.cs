@@ -601,6 +601,7 @@ public class StatementHandler : HandlerBase, IOperationHandler
     /// <summary>Default-initialize an object[]-emulated aggregate local (delegates to the shared
     /// recursive HandlerBase helper).</summary>
     void DefaultInitAggregate(string localId, AggregateLayout layout)
-        => EmitDefaultInitAggregate(LoadField(localId, "SystemObjectArray"), layout);
+        => AggregateAbi.DefaultInitialize(_builder, LoadField(localId, "SystemObjectArray"),
+            layout, _ctx.GetAggregateLayout, GetUdonType);
 
 }

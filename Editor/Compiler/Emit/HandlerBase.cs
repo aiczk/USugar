@@ -394,11 +394,6 @@ public abstract partial class HandlerBase
         return AggregateAbi.MintDefault(_builder, layout, _ctx.GetAggregateLayout, GetUdonType);
     }
 
-    /// <summary>Set each value-type element of an object[]-emulated aggregate to its type default; a nested
-    /// aggregate field is recursively allocated + default-initialized rather than left null.</summary>
-    protected void EmitDefaultInitAggregate(CValue arrayVal, AggregateLayout layout)
-        => AggregateAbi.DefaultInitialize(_builder, arrayVal, layout, _ctx.GetAggregateLayout, GetUdonType);
-
     /// <summary>Promote a boxed small-int/char operand to int32 (Udon has no operators on those types and a
     /// boxed small-int does not coerce to int for a SystemInt32 extern). Routes through ToInt32(SystemObject)
     /// rather than the type-strict ToInt32(SystemByte/SystemChar/…): a nullable small-int's stored value is
