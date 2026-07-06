@@ -391,7 +391,7 @@ public abstract partial class HandlerBase
 
     // ── Extern resolution ──
 
-    static readonly string[] FallbackBaseTypes = new[]
+    static readonly string[] UnityEngineComponentBaseTypes = new[]
     {
         "UnityEngineComponent", "UnityEngineBehaviour",
         "UnityEngineMonoBehaviour", "UnityEngineObject",
@@ -405,16 +405,17 @@ public abstract partial class HandlerBase
         var dotIdx = externSig.IndexOf(".__");
         if (dotIdx < 0) return externSig;
         var containingType = externSig.Substring(0, dotIdx);
-        // Wave-12 [V3]: the fallback chain exists for Component-hierarchy receivers whose leaf type
+        // Wave-12 [V3]: the owner fallback exists for Component-hierarchy receivers whose leaf type
         // lacks a direct extern (Udon registers e.g. __GetComponent on UnityEngineComponent only). A
         // System.* receiver can never be Component-derived, so substituting one of these base types
         // mechanically laundered an invalid System-typed signature into an unrelated Component extern
         // (VM-proven: boxed value-type Equals/GetHashCode/ToString adopted UnityEngineComponent.__*).
-        // Let the invalid signature through unchanged instead — the validator rejects it loudly.
-        if (containingType.StartsWith("System", System.StringComparison.Ordinal))
+        // Non-UnityEngine owners are equally ineligible; let the invalid signature through unchanged
+        // so the validator rejects it loudly instead of adopting an unrelated Component extern.
+        if (!containingType.StartsWith("UnityEngine", System.StringComparison.Ordinal))
             return externSig;
         var rest = externSig.Substring(dotIdx);
-        foreach (var baseType in FallbackBaseTypes)
+        foreach (var baseType in UnityEngineComponentBaseTypes)
         {
             if (baseType == containingType) continue;
             var alt = baseType + rest;
