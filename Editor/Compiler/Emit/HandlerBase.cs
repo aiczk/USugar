@@ -469,65 +469,17 @@ public abstract partial class HandlerBase
         CValue leftVal, bool leftNullable, ITypeSymbol ltUnderlying,
         CValue rightVal, bool rightNullable, ITypeSymbol rtUnderlying,
         Microsoft.CodeAnalysis.Operations.BinaryOperatorKind kind, IMethodSymbol operatorMethod, ITypeSymbol resultType)
-    {
-        var resultNullable = EmitPolicy.IsNullableT(resultType, out var resU);
-
-        var aSlot = _ctx.AllocTemp("SystemObject"); EmitAssign(aSlot, leftVal);
-        var bSlot = _ctx.AllocTemp("SystemObject"); EmitAssign(bSlot, rightVal);
-
-        CLeaf IsNullV(int slot) => NullableAbi.IsNull(_builder, SlotRef(slot));
-
-        void IfBothPresent(Action<CoreBuilder> body)
-        {
-            Action<CoreBuilder> inner = rightNullable
-                ? _ => _builder.EmitIf(EmitNullableHasValue(SlotRef(bSlot)), body) : body;
-            if (leftNullable) _builder.EmitIf(EmitNullableHasValue(SlotRef(aSlot)), inner);
-            else inner(_builder);
-        }
-
-        // Small-int/char underlying: Udon has no byte/short/char operators, so promote the (boxed) operands
-        // to int32 — the boxed small-int does not implicitly coerce to int for the SystemInt32 extern — then
-        // narrow an arithmetic result back. (int/float/etc. underlyings pass through unchanged.)
-        CValue ValueOp(Microsoft.CodeAnalysis.Operations.BinaryOperatorKind k)
-        {
-            var resUnder = resultNullable ? resU : resultType;
-            var aV = PromoteBoxedToInt32(SlotRef(aSlot), ltUnderlying, out var ltEff);
-            var bV = PromoteBoxedToInt32(SlotRef(bSlot), rtUnderlying, out var rtEff);
-            bool resPromotes = ExternResolver.IsSmallIntOrChar(GetUdonType(resUnder));
-            var resEff = resPromotes ? _compilation.GetSpecialType(SpecialType.System_Int32) : resUnder;
-            var raw = ExternCall(
-                ExternResolver.ResolveBinaryExtern(k, operatorMethod, ResolveType(ltEff), ResolveType(rtEff), ResolveType(resEff)),
-                new List<CLeaf> { aV, bV }, GetUdonType(resEff));
-            return resPromotes && GetUdonType(resUnder) != "SystemInt32"
-                ? EmitNarrowingConvert(raw, "SystemInt32", GetUdonType(resUnder)) : raw;
-        }
-
-        if (resultNullable) // arithmetic → T? : null unless both present
-        {
-            var rSlot = _ctx.AllocTemp("SystemObject");
-            EmitAssign(rSlot, Const(null, "SystemObject"));
-            IfBothPresent(_ => EmitAssign(rSlot, ValueOp(kind)));
-            return SlotRef(rSlot);
-        }
-        if (kind is Microsoft.CodeAnalysis.Operations.BinaryOperatorKind.Equals
-            or Microsoft.CodeAnalysis.Operations.BinaryOperatorKind.NotEquals)
-        {
-            var eqSlot = _ctx.AllocTemp("SystemBoolean");
-            EmitAssign(eqSlot, Const(false, "SystemBoolean"));
-            if (leftNullable && rightNullable) // both null → equal
-                _builder.EmitIf(IsNullV(aSlot), _ => _builder.EmitIf(IsNullV(bSlot),
-                    __ => EmitAssign(eqSlot, Const(true, "SystemBoolean"))));
-            IfBothPresent(_ => EmitAssign(eqSlot, ValueOp(Microsoft.CodeAnalysis.Operations.BinaryOperatorKind.Equals)));
-            if (kind == Microsoft.CodeAnalysis.Operations.BinaryOperatorKind.NotEquals)
-                return ExternCall("SystemBoolean.__op_UnaryNegation__SystemBoolean__SystemBoolean",
-                    new List<CLeaf> { SlotRef(eqSlot) }, "SystemBoolean");
-            return SlotRef(eqSlot);
-        }
-        var relSlot = _ctx.AllocTemp("SystemBoolean"); // relational → bool : false unless both present
-        EmitAssign(relSlot, Const(false, "SystemBoolean"));
-        IfBothPresent(_ => EmitAssign(relSlot, ValueOp(kind)));
-        return SlotRef(relSlot);
-    }
+        => NullableAbi.EmitLiftedBinaryCore(_builder,
+            leftVal, leftNullable, ltUnderlying,
+            rightVal, rightNullable, rtUnderlying,
+            kind, operatorMethod, resultType, _compilation.GetSpecialType(SpecialType.System_Int32),
+            _ctx.AllocTemp, EmitAssign, SlotRef, GetUdonType, ResolveType,
+            (boxed, underlying) =>
+            {
+                var promoted = PromoteBoxedToInt32(boxed, underlying, out var effectiveType);
+                return (promoted, effectiveType);
+            },
+            EmitNarrowingConvert);
 
     // ── Extern resolution ──
 

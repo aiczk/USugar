@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.Operations;
 
 /// <summary>
@@ -64,5 +65,75 @@ public static class NullableAbi
         // Both non-dominating values: both true for &, both false for |.
         IfBool(aSlot, isAnd, _ => IfBool(bSlot, isAnd, __ => emitAssign(resultSlot, builder.Const(isAnd, "SystemBoolean"))));
         return slotRef(resultSlot);
+    }
+
+    public static CLeaf EmitLiftedBinaryCore(CoreBuilder builder,
+        CValue leftValue, bool leftNullable, ITypeSymbol leftUnderlying,
+        CValue rightValue, bool rightNullable, ITypeSymbol rightUnderlying,
+        BinaryOperatorKind kind, IMethodSymbol operatorMethod, ITypeSymbol resultType, ITypeSymbol int32Type,
+        Func<string, int> allocTemp, Action<int, CValue> emitAssign, Func<int, CLeaf> slotRef,
+        Func<ITypeSymbol, string> getUdonType, Func<ITypeSymbol, ITypeSymbol> resolveType,
+        Func<CLeaf, ITypeSymbol, (CLeaf Value, ITypeSymbol EffectiveType)> promoteBoxed,
+        Func<CLeaf, string, string, CLeaf> narrowConvert)
+    {
+        var resultNullable = EmitPolicy.IsNullableT(resultType, out var resultUnderlying);
+
+        var aSlot = allocTemp(StorageType);
+        emitAssign(aSlot, leftValue);
+        var bSlot = allocTemp(StorageType);
+        emitAssign(bSlot, rightValue);
+
+        void IfBothPresent(Action<CoreBuilder> body)
+        {
+            Action<CoreBuilder> inner = rightNullable
+                ? _ => builder.EmitIf(HasValue(builder, slotRef(bSlot)), body)
+                : body;
+            if (leftNullable) builder.EmitIf(HasValue(builder, slotRef(aSlot)), inner);
+            else inner(builder);
+        }
+
+        CValue ValueOp(BinaryOperatorKind opKind)
+        {
+            var resultUnder = resultNullable ? resultUnderlying : resultType;
+            var (leftOperand, leftEffective) = promoteBoxed(slotRef(aSlot), leftUnderlying);
+            var (rightOperand, rightEffective) = promoteBoxed(slotRef(bSlot), rightUnderlying);
+            bool resultPromotes = ExternResolver.IsSmallIntOrChar(getUdonType(resultUnder));
+            var resultEffective = resultPromotes ? int32Type : resultUnder;
+            var raw = builder.ExternCall(
+                ExternResolver.ResolveBinaryExtern(opKind, operatorMethod,
+                    resolveType(leftEffective), resolveType(rightEffective), resolveType(resultEffective)),
+                new List<CLeaf> { leftOperand, rightOperand }, getUdonType(resultEffective));
+            return resultPromotes && getUdonType(resultUnder) != "SystemInt32"
+                ? narrowConvert(raw, "SystemInt32", getUdonType(resultUnder))
+                : raw;
+        }
+
+        if (resultNullable)
+        {
+            var resultSlot = allocTemp(StorageType);
+            emitAssign(resultSlot, builder.Const(null, StorageType));
+            IfBothPresent(_ => emitAssign(resultSlot, ValueOp(kind)));
+            return slotRef(resultSlot);
+        }
+
+        if (kind is BinaryOperatorKind.Equals or BinaryOperatorKind.NotEquals)
+        {
+            var eqSlot = allocTemp("SystemBoolean");
+            emitAssign(eqSlot, builder.Const(false, "SystemBoolean"));
+            if (leftNullable && rightNullable)
+                builder.EmitIf(IsNull(builder, slotRef(aSlot)),
+                    _ => builder.EmitIf(IsNull(builder, slotRef(bSlot)),
+                        __ => emitAssign(eqSlot, builder.Const(true, "SystemBoolean"))));
+            IfBothPresent(_ => emitAssign(eqSlot, ValueOp(BinaryOperatorKind.Equals)));
+            if (kind == BinaryOperatorKind.NotEquals)
+                return builder.ExternCall("SystemBoolean.__op_UnaryNegation__SystemBoolean__SystemBoolean",
+                    new List<CLeaf> { slotRef(eqSlot) }, "SystemBoolean");
+            return slotRef(eqSlot);
+        }
+
+        var relSlot = allocTemp("SystemBoolean");
+        emitAssign(relSlot, builder.Const(false, "SystemBoolean"));
+        IfBothPresent(_ => emitAssign(relSlot, ValueOp(kind)));
+        return slotRef(relSlot);
     }
 }
