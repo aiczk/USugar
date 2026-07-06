@@ -300,6 +300,20 @@ public static class ClassAbi
         return builder.ExternCall(signature, new List<CLeaf> { left, right }, "SystemBoolean");
     }
 
+    public static bool IsObjectMethodOnUserClass(IMethodSymbol method, ITypeSymbol receiverType)
+        => !method.IsStatic
+           && receiverType is INamedTypeSymbol classTy
+           && EmitPolicy.IsUserClassType(classTy)
+           && method.ContainingType.SpecialType == SpecialType.System_Object;
+
+    public static CLeaf EmitObjectEquals(CoreBuilder builder, CLeaf left, CLeaf right)
+        => EmitReferenceEquality(builder, BinaryOperatorKind.Equals, left, right);
+
+    public static string UnsupportedObjectMethodMessage(INamedTypeSymbol classTy, IMethodSymbol method)
+        => $"'{classTy.Name}.{method.Name}()' is not supported on a v1 user class: class ABI v1 gives a "
+           + "reference bundle no stable hash, no member-name synthesis, and no runtime type identity. "
+           + "Use reference equality (== / Equals) or format the class's fields directly.";
+
     /// <summary>Run instance field / auto-property initializers on an already allocated class bundle.</summary>
     public static void EmitInstanceFieldInitializers(CoreBuilder builder, Compilation compilation,
         CLeaf instance, INamedTypeSymbol classTy, AggregateLayout layout, Func<IOperation, CLeaf> emitValue)

@@ -181,20 +181,16 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
         // declaration). Equals(object) → reference compare on the two object[] bundles (unoverridden
         // object.Equals IS reference equality for a class). GetHashCode / ToString / GetType → loud reject
         // (no stable hash, no member-name synthesis, no runtime type identity for a reference bundle in v1).
-        if (!target.IsStatic && op.Instance?.Type is INamedTypeSymbol clsRecv && EmitPolicy.IsUserClassType(clsRecv)
-            && target.ContainingType.SpecialType == SpecialType.System_Object)
+        if (ClassAbi.IsObjectMethodOnUserClass(target, op.Instance?.Type))
         {
+            var clsRecv = (INamedTypeSymbol)op.Instance.Type;
             if (target.Name == "Equals" && op.Arguments.Length == 1)
             {
                 var lhs = VisitExpression(op.Instance);
                 var rhs = VisitExpression(op.Arguments[0].Value);
-                return ExternCall("SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean",
-                    new List<CLeaf> { lhs, rhs }, "SystemBoolean");
+                return ClassAbi.EmitObjectEquals(_builder, lhs, rhs);
             }
-            throw new System.NotSupportedException(
-                $"'{clsRecv.Name}.{target.Name}()' is not supported on a v1 user class: class ABI v1 gives a "
-                + "reference bundle no stable hash, no member-name synthesis, and no runtime type identity. "
-                + "Use reference equality (== / Equals) or format the class's fields directly.");
+            throw new System.NotSupportedException(ClassAbi.UnsupportedObjectMethodMessage(clsRecv, target));
         }
 
         // Receiver identity (predates fcd-stage1): an instance method of THIS class family invoked
