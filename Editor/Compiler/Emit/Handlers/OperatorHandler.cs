@@ -390,26 +390,14 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
                 BinaryOperatorKind.ExclusiveOr, null, op.Type);
         }
 
-        var opName = op.OperatorKind switch
-        {
-            UnaryOperatorKind.Not => "op_UnaryNegation",
-            UnaryOperatorKind.Minus => resU == "SystemDecimal" ? "op_UnaryNegation" : "op_UnaryMinus",
-            _ => throw new System.NotSupportedException($"Unsupported lifted unary operator: {op.OperatorKind}")
-        };
-
-        var nSlot = _ctx.AllocTemp("SystemObject");
-        EmitAssign(nSlot, VisitExpression(op.Operand));
-        var resSlot = _ctx.AllocTemp("SystemObject");
-        EmitAssign(resSlot, Const(null, "SystemObject"));
-        _builder.EmitIf(EmitNullableHasValue(SlotRef(nSlot)), _ =>
-        {
-            var v = PromoteBoxedToInt32(SlotRef(nSlot), opUnderlying, out var _eff);
-            var computed = ExternCall(
-                ExternResolver.BuildMethodSignature(resU, $"__{opName}", new[] { resU }, resU),
-                new List<CLeaf> { v }, resU);
-            EmitAssign(resSlot, computed); // re-box into the nullable's SystemObject slot
-        });
-        return SlotRef(resSlot);
+        return NullableAbi.EmitLiftedUnary(_builder, VisitExpression(op.Operand),
+            opUnderlying, resUnderlying, op.OperatorKind, GetUdonType,
+            (boxed, underlying) =>
+            {
+                var promoted = PromoteBoxedToInt32(boxed, underlying, out var effectiveType);
+                return (promoted, effectiveType);
+            },
+            _ctx.AllocTemp, EmitAssign, SlotRef);
     }
 
     CLeaf VisitBitwiseNot(IUnaryOperation op)

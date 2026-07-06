@@ -136,4 +136,33 @@ public static class NullableAbi
         IfBothPresent(_ => emitAssign(relSlot, ValueOp(kind)));
         return slotRef(relSlot);
     }
+
+    public static CLeaf EmitLiftedUnary(CoreBuilder builder, CValue operandValue,
+        ITypeSymbol operandUnderlying, ITypeSymbol resultUnderlying, UnaryOperatorKind kind,
+        Func<ITypeSymbol, string> getUdonType,
+        Func<CLeaf, ITypeSymbol, (CLeaf Value, ITypeSymbol EffectiveType)> promoteBoxed,
+        Func<string, int> allocTemp, Action<int, CValue> emitAssign, Func<int, CLeaf> slotRef)
+    {
+        var resultUdonType = getUdonType(resultUnderlying);
+        var opName = kind switch
+        {
+            UnaryOperatorKind.Not => "op_UnaryNegation",
+            UnaryOperatorKind.Minus => resultUdonType == "SystemDecimal" ? "op_UnaryNegation" : "op_UnaryMinus",
+            _ => throw new NotSupportedException($"Unsupported lifted unary operator: {kind}")
+        };
+
+        var nullableSlot = allocTemp(StorageType);
+        emitAssign(nullableSlot, operandValue);
+        var resultSlot = allocTemp(StorageType);
+        emitAssign(resultSlot, builder.Const(null, StorageType));
+        builder.EmitIf(HasValue(builder, slotRef(nullableSlot)), _ =>
+        {
+            var (value, _) = promoteBoxed(slotRef(nullableSlot), operandUnderlying);
+            var computed = builder.ExternCall(
+                ExternResolver.BuildMethodSignature(resultUdonType, $"__{opName}", new[] { resultUdonType }, resultUdonType),
+                new List<CLeaf> { value }, resultUdonType);
+            emitAssign(resultSlot, computed);
+        });
+        return slotRef(resultSlot);
+    }
 }
