@@ -262,29 +262,9 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
     // Nullable bool `&` / `|` with C# three-valued logic: a known false dominates `&` (false & null = false)
     // and a known true dominates `|` (true | null = true), regardless of the other operand being null.
     CLeaf EmitLiftedBoolLogic(IBinaryOperation op)
-    {
-        var aSlot = _ctx.AllocTemp("SystemObject"); EmitAssign(aSlot, VisitExpression(op.LeftOperand));
-        var bSlot = _ctx.AllocTemp("SystemObject"); EmitAssign(bSlot, VisitExpression(op.RightOperand));
-
-        void IfBool(int slot, bool wantTrue, System.Action<CoreBuilder> body)
-        {
-            CLeaf boolCond = wantTrue
-                ? SlotRef(slot) // boxed bool used directly (Udon unboxes for the branch test)
-                : ExternCall("SystemBoolean.__op_UnaryNegation__SystemBoolean__SystemBoolean",
-                    new List<CLeaf> { SlotRef(slot) }, "SystemBoolean");
-            _builder.EmitIf(EmitNullableHasValue(SlotRef(slot)), _ => _builder.EmitIf(boolCond, body));
-        }
-
-        var rSlot = _ctx.AllocTemp("SystemObject");
-        EmitAssign(rSlot, Const(null, "SystemObject"));
-        bool isAnd = op.OperatorKind == BinaryOperatorKind.And;
-        // dominating value: false for &, true for |
-        IfBool(aSlot, !isAnd, _ => EmitAssign(rSlot, Const(!isAnd, "SystemBoolean")));
-        IfBool(bSlot, !isAnd, _ => EmitAssign(rSlot, Const(!isAnd, "SystemBoolean")));
-        // both the non-dominating value (both true for &, both false for |) → the non-dominating result
-        IfBool(aSlot, isAnd, _ => IfBool(bSlot, isAnd, __ => EmitAssign(rSlot, Const(isAnd, "SystemBoolean"))));
-        return SlotRef(rSlot);
-    }
+        => NullableAbi.EmitLiftedBoolLogic(_builder,
+            VisitExpression(op.LeftOperand), VisitExpression(op.RightOperand),
+            op.OperatorKind, _ctx.AllocTemp, EmitAssign, SlotRef);
 
     // Lifted binary operator on Nullable<T> (null propagation) — see HandlerBase.EmitLiftedBinaryCore.
     CLeaf EmitLiftedBinary(IBinaryOperation op)
