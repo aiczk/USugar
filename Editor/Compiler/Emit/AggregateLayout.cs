@@ -149,6 +149,24 @@ public static class AggregateAbi
         }
     }
 
+    /// <summary>Deep value-copy of an object[]-backed struct/tuple aggregate. Nested aggregate elements
+    /// are recursively cloned; scalar boxed elements are copied by reference.</summary>
+    public static CLeaf DeepClone(CoreBuilder builder, CLeaf source, AggregateLayout layout,
+        Func<INamedTypeSymbol, AggregateLayout> getLayout)
+    {
+        var dstSlot = builder.AllocScratch(ArrayType);
+        builder.EmitAssign(dstSlot, Allocate(builder, layout.Count));
+        for (int i = 0; i < layout.Count; i++)
+        {
+            var elem = ReadSlot(builder, source, i, ElementType);
+            CLeaf copy = layout.Fields[i].Type is INamedTypeSymbol nested && EmitPolicy.IsAggregateType(nested)
+                ? DeepClone(builder, elem, getLayout(nested), getLayout)
+                : elem;
+            WriteSlot(builder, builder.SlotRef(dstSlot), i, copy);
+        }
+        return builder.SlotRef(dstSlot);
+    }
+
     static object DefaultScalarValue(ITypeSymbol type)
     {
         switch (type.SpecialType)
