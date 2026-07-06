@@ -1655,7 +1655,7 @@ public class UasmEmitter
         }
     }
 
-    /// <summary>Mint a fresh multicast bundle (§1.1/§1.4): a delegate ABI bundle tagged as v2, with
+    /// <summary>Mint a fresh multicast bundle (§1.1/§1.4): a tagged delegate ABI bundle with
     /// Target=this, Method=this sig's fan-out export name, Addr=that bridge's funcaddr
     /// (back-patched CFuncRef, §1.3 addr discipline), Env=the given invocation list.</summary>
     CLeaf EmitMulticastMintBundle(string sigPart, CLeaf listLeaf)

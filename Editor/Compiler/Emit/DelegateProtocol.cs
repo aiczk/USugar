@@ -5,7 +5,7 @@ using Microsoft.CodeAnalysis;
 
 /// <summary>
 /// First-class delegate ABI. A delegate VALUE is a single reference to a runtime object[5] bundle;
-/// assignment is reference copy; dispatch reads the bundle elements. ABI v2 reserves slot 0 for an
+/// assignment is reference copy; dispatch reads the bundle elements. The ABI reserves slot 0 for an
 /// explicit provenance tag so SystemObjectArray can be distinguished from class/aggregate/env bundles
 /// by convention instead of only by the static type at the producer.
 /// </summary>
@@ -24,7 +24,7 @@ public static class DelegateAbi
     public const int Env = 4;
 
     public const int BundleSize = 5;
-    public const string KindTag = "__usugar_delegate_v2";
+    public const string KindTag = "__usugar_delegate";
 
     /// <summary>
     /// Canonical signature key for the global __dlgc_{sig}__a{i} / __dlgc_{sig}__ret convention vars — a

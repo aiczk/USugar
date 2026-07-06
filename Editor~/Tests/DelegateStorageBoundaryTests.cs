@@ -109,7 +109,7 @@ public class DelegateAbiTagHost : UdonSharpBehaviour {
         Assert.Contains("SystemObjectArray.__ctor__SystemInt32__SystemObjectArray", uasm);
         Assert.True(
             Count(uasm, "SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid") >= 5,
-            "A delegate ABI v2 mint writes Kind, Target, Method, Addr, and Env slots.");
+            "A delegate ABI mint writes Kind, Target, Method, Addr, and Env slots.");
     }
 
     static int Count(string haystack, string needle)
