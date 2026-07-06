@@ -121,7 +121,7 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
                     ? AggregateAbi.MintDefault(_builder, _ctx.GetAggregateLayout(aggType), _ctx.GetAggregateLayout, GetUdonType)
                     : EmitValueTypeDefault(uType));
             return NullableAbi.EmitGetValueOrDefault(_builder, nv, uType, fallback,
-                present => aggResult ? EmitDeepCloneAggregate(present, aggType) : present,
+                present => aggResult ? AggregateAbi.DeepClone(_builder, present, aggType, _ctx.GetAggregateLayout) : present,
                 _ctx.AllocTemp, EmitAssign, SlotRef);
         }
 
@@ -440,7 +440,7 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
         // elements keep live storage (the helper stops there, reference semantics, CLR-equal).
         if (!target.IsReadOnly && ReceiverNeedsDefensiveCopy(op.Instance)
             && op.Instance?.Type is INamedTypeSymbol recvAgg && EmitPolicy.IsAggregateType(recvAgg))
-            recv = EmitDeepCloneAggregate(recv, recvAgg);
+            recv = AggregateAbi.DeepClone(_builder, recv, recvAgg, _ctx.GetAggregateLayout);
         var args = new List<CLeaf> { recv };
         Dictionary<int, System.Action<CLeaf>> structPrepared = null;
         List<(int slot, System.Func<CLeaf> read)> structDeferred = null;

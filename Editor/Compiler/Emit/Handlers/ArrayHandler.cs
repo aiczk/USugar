@@ -82,7 +82,7 @@ public class ArrayHandler : HandlerBase, IExpressionHandler
         // A struct/tuple element read AS A VALUE is copied (value semantics). Receiver access (arr[i].x =)
         // goes through LoadInstanceRaw → ReadArrayElementRaw, which does NOT clone.
         return op.Type is INamedTypeSymbol elemAggT && EmitPolicy.IsAggregateType(elemAggT)
-            ? EmitDeepCloneAggregate(resultVal, elemAggT) : resultVal;
+            ? AggregateAbi.DeepClone(_builder, resultVal, elemAggT, _ctx.GetAggregateLayout) : resultVal;
     }
 
     CLeaf ResolveRangeOperand(CLeaf arrayVal, string arrayType, IOperation operand, bool isEnd)

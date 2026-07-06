@@ -53,7 +53,7 @@ public class NullableHandler : AssignmentHandlerBase, IExpressionHandler
         // For an aggregate (struct/tuple) result both branches yield a boxed object[] that aliases the
         // nullable's internal storage; deep-clone so the copied-out value has independent value semantics.
         // When op.Type is the aggregate, the right side has the non-nullable aggregate type → always non-null,
-        // and the non-null left is cloned in the else branch, so EmitDeepCloneAggregate never sees null.
+        // and the non-null left is cloned in the else branch, so AggregateAbi.DeepClone never sees null.
         var aggType = ResolveType(op.Type) as INamedTypeSymbol;
         bool aggResult = aggType != null && EmitPolicy.IsAggregateType(aggType);
         var leftVal = VisitExpression(op.Value);
@@ -61,9 +61,9 @@ public class NullableHandler : AssignmentHandlerBase, IExpressionHandler
             () =>
             {
                 var rightVal = VisitExpression(op.WhenNull);
-                return aggResult ? EmitDeepCloneAggregate(rightVal, aggType) : rightVal;
+                return aggResult ? AggregateAbi.DeepClone(_builder, rightVal, aggType, _ctx.GetAggregateLayout) : rightVal;
             },
-            aggResult ? present => EmitDeepCloneAggregate(present, aggType) : null,
+            aggResult ? present => AggregateAbi.DeepClone(_builder, present, aggType, _ctx.GetAggregateLayout) : null,
             _ctx.AllocTemp, EmitAssign, SlotRef);
     }
 

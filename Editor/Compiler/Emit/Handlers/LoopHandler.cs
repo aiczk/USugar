@@ -205,7 +205,7 @@ public class LoopHandler : HandlerBase, IOperationHandler
                 // raw __Get__ returns the LIVE backing object[]; deep-clone it so mutating the loop variable
                 // does not write through to the array (C# value-copy semantics; mirrors VisitArrayElementReference).
                 if (arrayTypeSymbol.ElementType is INamedTypeSymbol elemAgg && EmitPolicy.IsAggregateType(elemAgg))
-                    elemVal = EmitDeepCloneAggregate(elemVal, elemAgg);
+                    elemVal = AggregateAbi.DeepClone(_builder, elemVal, elemAgg, _ctx.GetAggregateLayout);
                 if (loopVarCaptured)
                     EnvEmit.Write(_builder, _ctx, loopLocal, elemVal);
                 else
