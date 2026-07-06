@@ -70,20 +70,20 @@ public class SimpleAssignmentHandler : AssignmentHandlerBase, IExpressionHandler
         if (assign.Target is IPropertyReferenceOperation propRef)
             return EmitPropertySet(propRef, () => VisitExpression(assign.Value));
 
-        // Fallback: local variable or this.field. Delegate assignments (field and local, including
-        // `d = null` and `a = b` reference copy) ride this generic path now: VisitExpression yields the
+        // Direct store: local variable or this.field. Delegate assignments (field and local, including
+        // `d = null` and `a = b` reference copy) ride this path now: VisitExpression yields the
         // bundle reference (or null const) and the store is a single reference copy (design §2.3).
 
         // VisitExpression clones aggregate locals/params automatically (Clone-on-read).
-        var srcValueFallback = VisitEmittedValue(assign.Value);
+        var directValue = VisitEmittedValue(assign.Value);
         if (assign.Target is IFieldReferenceOperation dlgFieldTarget)
-            RejectUnsafeCrossProgramDelegateWrite(dlgFieldTarget, srcValueFallback.Info);
-        var srcFallback = srcValueFallback.Leaf;
+            RejectUnsafeCrossProgramDelegateWrite(dlgFieldTarget, directValue.Info);
+        var srcLeaf = directValue.Leaf;
         // Stage 2 §4.1: captured local/param target → env cell store (value read-back contract kept:
         // re-read the cell, clone aggregates when the assignment is used as a value).
-        if (TryEmitEnvStore(assign.Target, srcFallback))
+        if (TryEmitEnvStore(assign.Target, srcLeaf))
         {
-            if (assign.Parent is IExpressionStatementOperation) return srcFallback;
+            if (assign.Parent is IExpressionStatementOperation) return srcLeaf;
             ISymbol envSym = assign.Target is ILocalReferenceOperation elr
                 ? elr.Local
                 : ((IParameterReferenceOperation)assign.Target).Parameter;
@@ -92,13 +92,13 @@ public class SimpleAssignmentHandler : AssignmentHandlerBase, IExpressionHandler
                 ? AggregateAbi.DeepClone(_builder, envLoaded, eAgg, _ctx.GetAggregateLayout) : envLoaded;
         }
         var targetFieldName = GetAssignTargetFieldName(assign.Target);
-        EmitStoreField(targetFieldName, srcFallback);
+        EmitStoreField(targetFieldName, srcLeaf);
         // The assignment's VALUE is the stored value. Return a fresh read of the target rather than the
         // RHS expression tree: re-emitting the tree (when the assignment is used as an expression, e.g.
         // `G(n = n - 1)`) would re-evaluate it after the store already mutated its inputs. A dead read in
         // statement form is harmless and simply remains (the optimizer has no DCE pass).
         var targetFieldType = _ctx.GetFieldType(targetFieldName);
-        if (targetFieldType == null) return srcFallback;
+        if (targetFieldType == null) return srcLeaf;
         var loaded = LoadField(targetFieldName, targetFieldType);
         // When the assignment is USED AS A VALUE (e.g. chained `z = y = x`) and the target is an aggregate,
         // that value must be an independent COPY (struct value semantics) — otherwise z aliases y. (diff-fuzz w4)

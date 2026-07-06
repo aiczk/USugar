@@ -223,7 +223,7 @@ public abstract class AssignmentHandlerBase : HandlerBase
             case IArrayElementReferenceOperation ndimWbElem when ndimWbElem.Indices.Length > 1:
             {
                 // Reuse CaptureLValue's plan when available (avoid re-evaluating indices/bundle);
-                // the read-only fallback path is defensive (mirrors the rank-1 arm's ?? default).
+                // the uncached path is defensive (mirrors the rank-1 arm's ?? default).
                 var plan = lv.NdimPlan
                     ?? PrepareNdimAccess(ndimWbElem.ArrayReference, ndimWbElem.Indices, (IArrayTypeSymbol)ndimWbElem.ArrayReference.Type);
                 EmitNdimWriteFromPlan(ndimWbElem, plan, valueVal);
@@ -262,7 +262,7 @@ public abstract class AssignmentHandlerBase : HandlerBase
                 when ResolveDispatchProperty(idxRef).SetMethod is { } idxDispatchSetter
                 && _methodFunctions.TryGetValue(idxDispatchSetter, out _):
             {
-                // Wave-9 round-4: the no-cache fallback slots by parameter ordinal too (named args).
+                // Wave-9 round-4: the uncached path slots by parameter ordinal too (named args).
                 var setterArgs = lv.IndexArgs != null ? new List<CLeaf>(lv.IndexArgs) : EvaluateIndexerArgs(idxRef);
                 setterArgs.Add(valueVal);
                 EmitExprStmt(EmitCallToMethod(idxDispatchSetter, setterArgs));
@@ -362,7 +362,7 @@ public abstract class AssignmentHandlerBase : HandlerBase
                 && _methodFunctions.ContainsKey(aggIdxSetter):
             {
                 var setterArgs = new List<CLeaf> { lv.ArrayVal ?? LoadInstanceRaw(aggIdxRef.Instance) };
-                // Wave-9 round-4: the no-cache fallback slots by parameter ordinal too (named args).
+                // Wave-9 round-4: the uncached path slots by parameter ordinal too (named args).
                 setterArgs.AddRange(lv.IndexArgs ?? EvaluateIndexerArgs(aggIdxRef));
                 setterArgs.Add(valueVal);
                 EmitExprStmt(EmitCallToMethod(aggIdxSetter, setterArgs));
@@ -435,7 +435,7 @@ public abstract class AssignmentHandlerBase : HandlerBase
 
     /// <summary>
     /// Resolve the field name (lvalue) for a simple assignment target.
-    /// Used by the fallback paths in SimpleAssignmentHandler / CompoundAssignmentHandler.
+    /// Used by direct local/this-field store paths in SimpleAssignmentHandler / CompoundAssignmentHandler.
     /// </summary>
     protected string GetAssignTargetFieldName(IOperation target)
     {

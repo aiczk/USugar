@@ -896,7 +896,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
             op.OperatorKind == BinaryOperatorKind.NotEquals);
     }
 
-    // ── Aggregate (tuple) equality (via IBinaryOperation — fallback) ──
+    // ── Aggregate (tuple) equality (via IBinaryOperation shape) ──
 
     CLeaf EmitAggregateEquality(IBinaryOperation op, INamedTypeSymbol aggType)
         => EmitTupleStructuralEquality(
