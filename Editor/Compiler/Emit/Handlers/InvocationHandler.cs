@@ -117,7 +117,9 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
             var nv = VisitExpression(op.Instance);
             var fallback = op.Arguments.Length > 0
                 ? VisitExpression(op.Arguments[0].Value)
-                : (aggResult ? EmitNewAggregate(aggType) : EmitValueTypeDefault(uType));
+                : (aggResult
+                    ? AggregateAbi.MintDefault(_builder, _ctx.GetAggregateLayout(aggType), _ctx.GetAggregateLayout, GetUdonType)
+                    : EmitValueTypeDefault(uType));
             return NullableAbi.EmitGetValueOrDefault(_builder, nv, uType, fallback,
                 present => aggResult ? EmitDeepCloneAggregate(present, aggType) : present,
                 _ctx.AllocTemp, EmitAssign, SlotRef);

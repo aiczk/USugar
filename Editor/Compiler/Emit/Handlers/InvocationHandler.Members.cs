@@ -493,7 +493,8 @@ public partial class InvocationHandler
         // other contexts reach here. SDK value types fall through to the null placeholder.
         if (op.Arguments.Length == 0 && op.Type.IsValueType && op.Initializer == null)
             return op.Type is INamedTypeSymbol structTy && EmitPolicy.IsAggregateType(structTy)
-                ? EmitNewAggregate(structTy)
+                ? AggregateAbi.MintDefault(_builder, _ctx.GetAggregateLayout(structTy),
+                    _ctx.GetAggregateLayout, GetUdonType)
                 : Const(null, resultType);
 
         // Constant folding: struct ctor with all-constant args
@@ -536,7 +537,7 @@ public partial class InvocationHandler
             && op.Type is INamedTypeSymbol aggInitType && EmitPolicy.IsAggregateType(aggInitType))
         {
             var layout = _ctx.GetAggregateLayout(aggInitType);
-            var aggVal = EmitNewAggregate(aggInitType);
+            var aggVal = AggregateAbi.MintDefault(_builder, layout, _ctx.GetAggregateLayout, GetUdonType);
             AggregateAbi.EmitObjectInitializer(_builder, aggVal, layout, op.Initializer, VisitExpression);
             return aggVal;
         }

@@ -275,7 +275,9 @@ public abstract partial class HandlerBase
                 _ =>
                 {
                     EmitExternVoid(ExternResolver.BuildArraySetSignature(backingUdonType, elemUdonType),
-                        new List<CLeaf> { SlotRef(backingSlot), SlotRef(iSlot), EmitNewAggregate((INamedTypeSymbol)elemSym) });
+                        new List<CLeaf> { SlotRef(backingSlot), SlotRef(iSlot),
+                            AggregateAbi.MintDefault(_builder, _ctx.GetAggregateLayout((INamedTypeSymbol)elemSym),
+                                _ctx.GetAggregateLayout, GetUdonType) });
                     EmitAssign(iSlot, ExternCall("SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32",
                         new List<CLeaf> { SlotRef(iSlot), Const(1, "SystemInt32") }, "SystemInt32"));
                 });

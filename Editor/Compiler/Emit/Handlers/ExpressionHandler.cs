@@ -708,7 +708,8 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
         // where T is a struct type arg: defaultVal.Type is then the open type parameter, which a directly-named
         // INamedTypeSymbol check would miss — leaving the default as null and crashing on the first field read.
         if (ResolveType(defaultVal.Type) is INamedTypeSymbol aggDef && EmitPolicy.IsAggregateType(aggDef))
-            return EmitNewAggregate(aggDef);
+            return AggregateAbi.MintDefault(_builder, _ctx.GetAggregateLayout(aggDef),
+                _ctx.GetAggregateLayout, GetUdonType);
 
         var dvType = GetUdonType(defaultVal.Type);
         if (!defaultVal.Type.IsValueType)
