@@ -12,6 +12,7 @@ public class EmitContext
     public readonly CModule Module;
     public readonly CoreBuilder Builder;
     public readonly LayoutPlanner Planner;
+    public readonly BoundaryChecker Boundary;
 
     // Method bookkeeping
     public readonly Dictionary<IMethodSymbol, CFunction> MethodFunctions = new(SymbolEqualityComparer.Default);
@@ -579,6 +580,7 @@ public class EmitContext
         Module = new CModule { ClassName = classSymbol.ToDisplayString() };
         Builder = new CoreBuilder(Module);
         Planner = planner;
+        Boundary = new BoundaryChecker(this);
     }
 
     // ══════════════════════════════════════════════════════════════════

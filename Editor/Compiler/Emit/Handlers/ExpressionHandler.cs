@@ -190,7 +190,7 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
         {
             // CA-M1 §2-1: reading another behaviour's field cross-program returns a value marshalled out of
             // that program — a v1 class is a program-local object[] bundle whose reference is meaningless here.
-            if (EmitPolicy.ContainsUserClassType(fieldRef.Field.Type))
+            if (TypeClassifier.ContainsProgramLocalPayload(fieldRef.Field.Type, TypeCtx))
                 throw new NotSupportedException(
                     $"Reading another behaviour's field '{fieldRef.Field.Name}' that carries a v1 user class "
                     + "is not supported: a class value is a program-local object[] bundle and cannot cross a "
@@ -346,8 +346,8 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
         // an in-program `object o = classInstance` is the documented over-rejection (E1 shape). Closure-env
         // capture stores the ref via a compiler-emitted EnvEmit.Write, not a user conversion — it never lands
         // here (the F1 execution-locality pin stays green).
-        if (ResolveType(conv.Operand.Type) is { } b82Src && EmitPolicy.ContainsUserClassType(b82Src)
-            && ResolveType(conv.Type) is { } b82Dst && !EmitPolicy.ContainsUserClassType(b82Dst)
+        if (ResolveType(conv.Operand.Type) is { } b82Src && TypeClassifier.ContainsProgramLocalPayload(b82Src, TypeCtx)
+            && ResolveType(conv.Type) is { } b82Dst && !TypeClassifier.ContainsProgramLocalPayload(b82Dst, TypeCtx)
             && !IsClassToObjectEqualityPosition(conv))
             throw new System.NotSupportedException(
                 $"Erasing the v1 user class '{b82Src.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}' "

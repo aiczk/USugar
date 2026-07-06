@@ -136,28 +136,37 @@ public static class EmitPolicy
     /// __dlgc_ channel / GetProgramVariable surface. Mirror of <see cref="ContainsDelegateType"/> (the
     /// visited set guards a type that transitively contains itself, e.g. a self-referential Node).</summary>
     public static bool ContainsUserClassType(ITypeSymbol type)
-        => ContainsUserClassType(type, new HashSet<ITypeSymbol>(SymbolEqualityComparer.Default));
+        => ContainsUserClassType(type, null);
 
-    static bool ContainsUserClassType(ITypeSymbol type, HashSet<ITypeSymbol> visited)
+    public static bool ContainsUserClassType(ITypeSymbol type,
+        IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeParamMap)
+        => ContainsUserClassType(type, typeParamMap, new HashSet<ITypeSymbol>(SymbolEqualityComparer.Default));
+
+    static bool ContainsUserClassType(ITypeSymbol type,
+        IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeParamMap,
+        HashSet<ITypeSymbol> visited)
     {
+        if (type is ITypeParameterSymbol tp && typeParamMap != null
+            && typeParamMap.TryGetValue(tp, out var resolved))
+            type = resolved;
         if (IsUserClassType(type)) return true;
-        if (type is IArrayTypeSymbol a) return ContainsUserClassType(a.ElementType, visited);
+        if (type is IArrayTypeSymbol a) return ContainsUserClassType(a.ElementType, typeParamMap, visited);
         if (type is not INamedTypeSymbol n || !visited.Add(n)) return false;
         // A delegate smuggling a class through Action<Foo> across the __dlgc_ byte contract.
         if (n.DelegateInvokeMethod is { } inv)
         {
             foreach (var p in inv.Parameters)
-                if (ContainsUserClassType(p.Type, visited)) return true;
-            if (ContainsUserClassType(inv.ReturnType, visited)) return true;
+                if (ContainsUserClassType(p.Type, typeParamMap, visited)) return true;
+            if (ContainsUserClassType(inv.ReturnType, typeParamMap, visited)) return true;
         }
         // A class reachable through a struct/tuple field.
         if (IsAggregateType(n))
             foreach (var m in n.GetMembers())
-                if (m is IFieldSymbol { IsStatic: false } f && ContainsUserClassType(f.Type, visited))
+                if (m is IFieldSymbol { IsStatic: false } f && ContainsUserClassType(f.Type, typeParamMap, visited))
                     return true;
         // A constructed generic's type arguments (covers tuple elements and any other generic wrapper).
         foreach (var ta in n.TypeArguments)
-            if (ContainsUserClassType(ta, visited)) return true;
+            if (ContainsUserClassType(ta, typeParamMap, visited)) return true;
         return false;
     }
 

@@ -18,6 +18,8 @@
     <Compile Include="../../Editor/Compiler/Emit/EmitContext.cs" />
     <Compile Include="../../Editor/Compiler/Emit/TypeParamScope.cs" />
     <Compile Include="../../Editor/Compiler/Emit/EmitPolicy.cs" />
+    <Compile Include="../../Editor/Compiler/Emit/TypeClassifier.cs" />
+    <Compile Include="../../Editor/Compiler/Emit/BoundaryChecker.cs" />
     <Compile Include="../../Editor/Compiler/Emit/RecursionInfo.cs" />
     <Compile Include="../../Editor/Compiler/Emit/ReachableBodies.cs" />
     <Compile Include="../../Editor/Compiler/Emit/AggregateLayout.cs" />

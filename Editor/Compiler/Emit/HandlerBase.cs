@@ -55,6 +55,7 @@ public abstract partial class HandlerBase
 
     // ── Type resolution ──
     protected string GetUdonType(ITypeSymbol type) => ExternResolver.GetUdonTypeName(type, _ctx.TypeParamMap);
+    protected TypeClassifierContext TypeCtx => new TypeClassifierContext(_ctx.TypeParamMap);
     protected ITypeSymbol ResolveType(ITypeSymbol type)
     {
         if (type is ITypeParameterSymbol tp && _ctx.TypeParamMap != null && _ctx.TypeParamMap.TryGetValue(tp, out var resolved))
@@ -1327,7 +1328,7 @@ public abstract partial class HandlerBase
     {
         // CA-M1 §2-1: SetProgramVariable on another behaviour's field ships the value cross-program — a v1
         // class value is a program-local object[] bundle and cannot cross the boundary.
-        if (EmitPolicy.ContainsUserClassType(field.Type))
+        if (TypeClassifier.ContainsProgramLocalPayload(field.Type, TypeCtx))
             throw new NotSupportedException(
                 $"A v1 user class cannot be written to another behaviour's field '{field.Name}': a class "
                 + "value is a program-local object[] bundle and cannot cross a program boundary.");
@@ -2019,42 +2020,29 @@ public abstract partial class HandlerBase
     /// direct delegate CREATION (lambda / local function) is inspected — its closure symbol is statically
     /// known here; a method group / capture-free lambda owns no captures and returns false.</summary>
     protected bool DelegateValueCapturesUserClass(IOperation value)
-    {
-        var v = value;
-        while (v is IConversionOperation c) v = c.Operand;
-        var closure = v switch
-        {
-            IDelegateCreationOperation dc => (dc.Target as IAnonymousFunctionOperation)?.Symbol
-                                             ?? (dc.Target as IMethodReferenceOperation)?.Method,
-            IAnonymousFunctionOperation af => af.Symbol,
-            _ => null,
-        };
-        if (closure == null || _ctx.CaptureScope == null) return false;
-        if (!_ctx.CaptureScope.ClosureScopes.TryGetValue(closure.OriginalDefinition, out var closureScope)
-            || closureScope?.BindingScope == null)
-            return false;
-        for (var s = closureScope.BindingScope; s != null; s = _ctx.CaptureScope.EffectiveParent(s))
-            foreach (var cap in s.OwnedCaptures)
-            {
-                var t = (cap as ILocalSymbol)?.Type ?? (cap as IParameterSymbol)?.Type;
-                if (t != null && EmitPolicy.ContainsUserClassType(t)) return true;
-            }
-        return false;
-    }
+        => _ctx.Boundary.DelegateValueCapturesProgramLocalPayload(value);
 
     /// <summary>B83: a delegate-field write that crosses a program boundary — a public / [SerializeField] /
     /// [UdonSynced] delegate field on THIS behaviour (readable cross-program via GetProgramVariable + fired
     /// by SendCustomEvent), or a delegate field on ANOTHER behaviour. A PRIVATE this-field stays in-program
     /// (execution-locality — legal even with a class-capturing closure).</summary>
+    protected bool IsNullDelegateValue(IOperation value)
+        => _ctx.Boundary.IsNullDelegateValue(value);
+
+    protected bool IsDirectClassSafeDelegateValue(IOperation value)
+        => _ctx.Boundary.IsDirectProgramLocalSafeDelegateValue(value);
+
+    protected bool CurrentMethodBodyMentionsUserClass()
+        => _ctx.Boundary.CurrentMethodBodyMentionsProgramLocalPayload();
+
+    protected void RejectUnsafeCrossProgramDelegateWrite(IFieldReferenceOperation target, IOperation value)
+        => _ctx.Boundary.RequireCanStoreCrossProgramDelegate(target, value);
+
+    protected void RejectUnsafeCrossProgramEventHandler(IEventSymbol evt, IOperation value)
+        => _ctx.Boundary.RequireCanStorePublicEventHandler(evt, value);
+
     protected bool IsCrossProgramDelegateFieldTarget(IFieldReferenceOperation fieldRef)
-    {
-        if (fieldRef.Field.Type is not INamedTypeSymbol dft || dft.DelegateInvokeMethod == null) return false;
-        if (fieldRef.Instance is not null and not IInstanceReferenceOperation)
-            return ExternResolver.IsUdonSharpBehaviour(fieldRef.Field.ContainingType); // cross-behaviour write
-        return fieldRef.Field.DeclaredAccessibility == Accessibility.Public
-            || fieldRef.Field.GetAttributes().Any(a =>
-                a.AttributeClass?.Name is "SerializeField" or "SerializeFieldAttribute" or "UdonSyncedAttribute");
-    }
+        => _ctx.Boundary.IsCrossProgramDelegateFieldTarget(fieldRef);
 
     protected (string bridgeName, CLeaf funcRef, CLeaf targetInstance, CLeaf envLeaf) ResolveDelegateBridge(IDelegateCreationOperation op)
     {
@@ -2586,7 +2574,7 @@ public abstract partial class HandlerBase
             // CA-M1 §2-1: a cross-program (SendCustomEvent) call marshals args through SetProgramVariable —
             // a v1 class value is a program-local object[] bundle whose reference means nothing in the
             // callee's program. Reject loudly rather than silently ship a dangling reference.
-            if (args[i].Value.Type is { } argTy && EmitPolicy.ContainsUserClassType(argTy))
+            if (args[i].Value.Type is { } argTy && TypeClassifier.ContainsProgramLocalPayload(argTy, TypeCtx))
                 throw new NotSupportedException(
                     "A v1 user class cannot be passed to a cross-behaviour (SendCustomEvent) call: a class "
                     + "value is a program-local object[] bundle and cannot cross a program boundary. Pass "

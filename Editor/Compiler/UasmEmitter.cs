@@ -1991,6 +1991,13 @@ public class UasmEmitter
 
     static string SanitizeId(string name) => name.Replace('.', '_');
 
+    static bool IsHoistedClosureMethod(IMethodSymbol method)
+        => method.MethodKind is MethodKind.LocalFunction
+            or MethodKind.LambdaMethod or MethodKind.AnonymousFunction;
+
+    static bool ClosureBodyTouchesInstance(IOperation bodyOp)
+        => bodyOp != null && bodyOp.DescendantsAndSelf().Any(op => op is IInstanceReferenceOperation);
+
     // ── EmitMethod ──
 
     void EmitMethod(IMethodSymbol method)
@@ -2086,8 +2093,7 @@ public class UasmEmitter
         // Round-9 [Y8]: also runs for a generic LOCAL FUNCTION spec (isSpec) nested in a
         // generic method — the spec map above holds only the LF's OWN type params, so the
         // enclosing generic's params are MERGED in (never replacing the spec map).
-        if (method.MethodKind is MethodKind.LocalFunction
-            or MethodKind.LambdaMethod or MethodKind.AnonymousFunction)
+        if (IsHoistedClosureMethod(method))
         {
             List<(IReadOnlyList<ITypeParameterSymbol>, IReadOnlyList<ITypeSymbol>)> closureBindings = null;
             for (var s = method.ContainingSymbol; s is IMethodSymbol enclosing; s = enclosing.ContainingSymbol)
@@ -2165,6 +2171,16 @@ public class UasmEmitter
             // and open no scope. A closure/spec emitted later recomposes its own map at its own entry.
             using var _typeScope = typeMap != null ? _ctx.EnterTypeParamScope(typeMap) : null;
 
+            if (IsHoistedClosureMethod(method)
+                && method.ContainingType is INamedTypeSymbol classCt
+                && EmitPolicy.IsUserClassType(classCt)
+                && ClosureBodyTouchesInstance(bodyOp))
+                throw new NotSupportedException(
+                    $"A lambda or local function declared inside v1 class '{classCt.Name}' cannot reference "
+                    + "`this` or instance members yet: class receiver capture is not represented in the "
+                    + "current closure ABI, and would fault at runtime. Pass the needed values as locals, "
+                    + "or move the closure to the behaviour side.");
+
             PreScanGotoLabels(bodyOp);
 
             // Emit tail-call optimization label at function entry (jump target for TCO goto)
@@ -2178,8 +2194,7 @@ public class UasmEmitter
             CaptureScope entryScope = null;
             if (_ctx.CaptureScope != null)
             {
-                if (method.MethodKind is MethodKind.LocalFunction
-                    or MethodKind.LambdaMethod or MethodKind.AnonymousFunction)
+                if (IsHoistedClosureMethod(method))
                     _ctx.CaptureScope.ClosureScopes.TryGetValue(method.OriginalDefinition, out entryScope);
                 else
                     entryScope = _ctx.CaptureScope.ScopeFor(bodyOp, CaptureScopeKind.MethodEntry);
