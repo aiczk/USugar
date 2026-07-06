@@ -454,45 +454,7 @@ public abstract partial class HandlerBase
     /// <summary>Set each value-type element of an object[]-emulated aggregate to its type default; a nested
     /// aggregate field is recursively allocated + default-initialized rather than left null.</summary>
     protected void EmitDefaultInitAggregate(CValue arrayVal, AggregateLayout layout)
-    {
-        var slot = _ctx.AllocTemp("SystemObjectArray");
-        EmitAssign(slot, arrayVal);
-        // Iterate fields by their layout INDEX (a class's fields start at slot 1; slot 0 stays the null the
-        // array ctor gave it). A nested aggregate (struct) field is allocated; a class-typed field is a
-        // reference and defaults to null via the scalar arm below (IsAggregateType(class) == false).
-        foreach (var fi in layout.Fields)
-        {
-            int i = fi.Index;
-            var fieldType = fi.Type;
-            if (fieldType is INamedTypeSymbol nested && EmitPolicy.IsAggregateType(nested))
-            {
-                var nl = _ctx.GetAggregateLayout(nested);
-                var subSlot = _ctx.AllocTemp("SystemObjectArray");
-                EmitAssign(subSlot, AggregateAbi.Allocate(_builder, nl.SlotCount));
-                AggregateAbi.WriteSlot(_builder, SlotRef(slot), i, SlotRef(subSlot));
-                EmitDefaultInitAggregate(SlotRef(subSlot), nl);
-                continue;
-            }
-            object defVal = fieldType.SpecialType switch
-            {
-                SpecialType.System_Boolean => (object)false,
-                SpecialType.System_Int32 => (object)0,
-                SpecialType.System_Single => (object)0f,
-                SpecialType.System_Double => (object)0d,
-                SpecialType.System_Int64 => (object)0L,
-                SpecialType.System_Byte => (object)(byte)0,
-                SpecialType.System_UInt32 => (object)0u,
-                SpecialType.System_UInt64 => (object)0UL,
-                SpecialType.System_Int16 => (object)(short)0,
-                SpecialType.System_UInt16 => (object)(ushort)0,
-                SpecialType.System_Char => (object)'\0',
-                SpecialType.System_SByte => (object)(sbyte)0,
-                _ => null, // reference types default to null
-            };
-            if (defVal != null)
-                AggregateAbi.WriteSlot(_builder, SlotRef(slot), i, Const(defVal, GetUdonType(fieldType)));
-        }
-    }
+        => AggregateAbi.DefaultInitialize(_builder, arrayVal, layout, _ctx.GetAggregateLayout, GetUdonType);
 
     /// <summary>Class ABI v1 (CA-M1): run a class's instance field / auto-property INITIALIZERS on a freshly
     /// minted object[] bundle, in declaration order, after the default-init and before the ctor body (the C#

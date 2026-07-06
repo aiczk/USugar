@@ -121,4 +121,51 @@ public static class AggregateAbi
         => builder.EmitExternVoid(
             ExternResolver.BuildArraySetSignature(ArrayType, ElementType),
             new List<CLeaf> { instance, builder.Const(index, "SystemInt32"), value });
+
+    /// <summary>Default-initialize an allocated aggregate bundle. Nested aggregate fields are allocated
+    /// recursively; class-typed fields stay null by default.</summary>
+    public static void DefaultInitialize(CoreBuilder builder, CValue arrayVal, AggregateLayout layout,
+        Func<INamedTypeSymbol, AggregateLayout> getLayout, Func<ITypeSymbol, string> getUdonType)
+    {
+        var slot = builder.AllocScratch(ArrayType);
+        builder.EmitAssign(slot, arrayVal);
+        foreach (var fi in layout.Fields)
+        {
+            int i = fi.Index;
+            var fieldType = fi.Type;
+            if (fieldType is INamedTypeSymbol nested && EmitPolicy.IsAggregateType(nested))
+            {
+                var nestedLayout = getLayout(nested);
+                var subSlot = builder.AllocScratch(ArrayType);
+                builder.EmitAssign(subSlot, Allocate(builder, nestedLayout.SlotCount));
+                WriteSlot(builder, builder.SlotRef(slot), i, builder.SlotRef(subSlot));
+                DefaultInitialize(builder, builder.SlotRef(subSlot), nestedLayout, getLayout, getUdonType);
+                continue;
+            }
+
+            var defVal = DefaultScalarValue(fieldType);
+            if (defVal != null)
+                WriteSlot(builder, builder.SlotRef(slot), i, builder.Const(defVal, getUdonType(fieldType)));
+        }
+    }
+
+    static object DefaultScalarValue(ITypeSymbol type)
+    {
+        switch (type.SpecialType)
+        {
+            case SpecialType.System_Boolean: return false;
+            case SpecialType.System_Int32: return 0;
+            case SpecialType.System_Single: return 0f;
+            case SpecialType.System_Double: return 0d;
+            case SpecialType.System_Int64: return 0L;
+            case SpecialType.System_Byte: return (byte)0;
+            case SpecialType.System_UInt32: return 0u;
+            case SpecialType.System_UInt64: return 0UL;
+            case SpecialType.System_Int16: return (short)0;
+            case SpecialType.System_UInt16: return (ushort)0;
+            case SpecialType.System_Char: return '\0';
+            case SpecialType.System_SByte: return (sbyte)0;
+            default: return null;
+        }
+    }
 }
