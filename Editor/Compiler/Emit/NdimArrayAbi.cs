@@ -71,6 +71,18 @@ public static class NdimArrayAbi
         Func<string, int> allocTemp, Action<int, CValue> emitAssign, Func<int, CLeaf> slotRef)
         => ReadBoxedSlot(builder, bundleVal, dimIndexPlusOne, "SystemInt32", allocTemp, emitAssign, slotRef);
 
+    public static void MintBundleToSlot(CoreBuilder builder, int bundleSlot, int backingSlot, int[] dimSlots)
+    {
+        builder.EmitAssign(bundleSlot, builder.ExternCall(BundleCtorSignature(),
+            new List<CLeaf> { builder.Const(BundleLength(dimSlots.Length), "SystemInt32") }, BundleUdonType));
+        var bundle = builder.SlotRef(bundleSlot);
+        builder.EmitExternVoid(BundleSetSignature(),
+            new List<CLeaf> { bundle, builder.Const(BackingSlotIndex, "SystemInt32"), builder.SlotRef(backingSlot) });
+        for (int d = 0; d < dimSlots.Length; d++)
+            builder.EmitExternVoid(BundleSetSignature(),
+                new List<CLeaf> { bundle, builder.Const(DimSlotIndex(d), "SystemInt32"), builder.SlotRef(dimSlots[d]) });
+    }
+
     static CLeaf ReadBoxedSlot(CoreBuilder builder, CLeaf bundleVal, CLeaf bundleIndex, string targetUdonType,
         Func<string, int> allocTemp, Action<int, CValue> emitAssign, Func<int, CLeaf> slotRef)
     {

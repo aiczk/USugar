@@ -182,13 +182,7 @@ public abstract partial class HandlerBase
             new List<CLeaf> { SlotRef(totalSlot) }, backingUdonType));
 
         var bundleSlot = _ctx.AllocTemp(NdimArrayAbi.BundleUdonType);
-        EmitAssign(bundleSlot, ExternCall(NdimArrayAbi.BundleCtorSignature(),
-            new List<CLeaf> { Const(NdimArrayAbi.BundleLength(rank), "SystemInt32") }, NdimArrayAbi.BundleUdonType));
-        EmitExternVoid(NdimArrayAbi.BundleSetSignature(),
-            new List<CLeaf> { SlotRef(bundleSlot), Const(NdimArrayAbi.BackingSlotIndex, "SystemInt32"), SlotRef(backingSlot) });
-        for (int d = 0; d < rank; d++)
-            EmitExternVoid(NdimArrayAbi.BundleSetSignature(),
-                new List<CLeaf> { SlotRef(bundleSlot), Const(NdimArrayAbi.DimSlotIndex(d), "SystemInt32"), SlotRef(dimSlots[d]) });
+        NdimArrayAbi.MintBundleToSlot(_builder, bundleSlot, backingSlot, dimSlots);
 
         if (op.Initializer != null)
         {
