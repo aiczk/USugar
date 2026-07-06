@@ -1328,7 +1328,7 @@ public abstract partial class HandlerBase
     /// re-evaluating it).</summary>
     protected void EmitCrossBehaviourFieldSet(IFieldSymbol field, CLeaf instanceVal, CLeaf value)
     {
-        _ctx.Boundary.RequireCanWriteCrossBehaviourField(field);
+        RejectProgramLocalCrossBehaviourFieldWrite(field);
         var nameConst = Const(field.Name, "SystemString");
         EmitExternVoid(
             "VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid",
@@ -2016,6 +2016,19 @@ public abstract partial class HandlerBase
     protected void RejectUnsafeCrossProgramEventHandler(IEventSymbol evt, ValueInfo value)
         => _ctx.Boundary.RequireCanStorePublicEventHandler(evt, value);
 
+    protected void RejectProgramLocalCrossBehaviourFieldWrite(IFieldSymbol field)
+        => _ctx.Boundary.RequireCanWriteCrossBehaviourField(field);
+
+    protected void RejectProgramLocalCrossBehaviourFieldRead(IFieldSymbol field)
+        => _ctx.Boundary.RequireCanReadCrossBehaviourField(field);
+
+    protected void RejectProgramLocalCrossBehaviourArgument(ITypeSymbol argType)
+        => _ctx.Boundary.RequireCanPassCrossBehaviourArgument(argType);
+
+    protected void RejectProgramLocalErasure(IConversionOperation conversion,
+        ITypeSymbol sourceType, ITypeSymbol destinationType)
+        => _ctx.Boundary.RequireCanEraseProgramLocalPayload(conversion, sourceType, destinationType);
+
     protected (string bridgeName, CLeaf funcRef, CLeaf targetInstance, CLeaf envLeaf) ResolveDelegateBridge(IDelegateCreationOperation op)
     {
         IMethodSymbol targetMethod = null;
@@ -2544,7 +2557,7 @@ public abstract partial class HandlerBase
         for (int i = 0; i < args.Length; i++)
         {
             if (args[i].Value.Type is { } argTy)
-                _ctx.Boundary.RequireCanPassCrossBehaviourArgument(argTy);
+                RejectProgramLocalCrossBehaviourArgument(argTy);
             var p = args[i].Parameter;
             var ordinal = p != null && p.Ordinal >= 0 && p.Ordinal < byOrdinal.Length ? p.Ordinal : i;
             byOrdinal[ordinal] = VisitExpression(args[i].Value);

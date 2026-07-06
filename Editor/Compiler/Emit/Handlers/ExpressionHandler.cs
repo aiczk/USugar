@@ -188,7 +188,7 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
         // cross-behaviour field → GetProgramVariable
         if (ExternResolver.IsUdonSharpBehaviour(fieldRef.Field.ContainingType))
         {
-            _ctx.Boundary.RequireCanReadCrossBehaviourField(fieldRef.Field);
+            RejectProgramLocalCrossBehaviourFieldRead(fieldRef.Field);
             var instanceVal = VisitExpression(fieldRef.Instance);
             var nameConst = Const(fieldRef.Field.Name, "SystemString");
             return ExternCall(
@@ -320,7 +320,7 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
         // capture stores the ref via a compiler-emitted EnvEmit.Write, not a user conversion — it never lands
         // here (the F1 execution-locality pin stays green).
         if (ResolveType(conv.Operand.Type) is { } b82Src && ResolveType(conv.Type) is { } b82Dst)
-            _ctx.Boundary.RequireCanEraseProgramLocalPayload(conv, b82Src, b82Dst);
+            RejectProgramLocalErasure(conv, b82Src, b82Dst);
 
         var srcVal = VisitExpression(conv.Operand);
 
