@@ -19,6 +19,7 @@ public class EmitContext
     public readonly AggregateContext Aggregates = new AggregateContext();
     public readonly SyntheticContext Synthetics = new SyntheticContext();
     public readonly ControlFlowContext ControlFlow = new ControlFlowContext();
+    public readonly InitializationContext Initializers = new InitializationContext();
 
     // Method bookkeeping
     public readonly Dictionary<IMethodSymbol, CFunction> MethodFunctions = new(SymbolEqualityComparer.Default);
@@ -405,16 +406,16 @@ public class EmitContext
         => Aggregates.GetLayout(type);
 
     // Field initializers to emit at _start
-    public readonly List<(string fieldName, IOperation initOp, ITypeSymbol fieldType)> FieldInitOps = new();
+    public List<(string fieldName, IOperation initOp, ITypeSymbol fieldType)> FieldInitOps => Initializers.FieldInitOps;
 
     // static readonly field initializers (design §3.1/§3.6, feature B) — same shape as FieldInitOps,
     // kept separate so UasmEmitter can base-first reorder the static TIER independently, then splice
     // it in front of FieldInitOps (static tier runs before instance tier, mirroring C#'s static→instance
     // initializer order applied to per-program materialization).
-    public readonly List<(string fieldName, IOperation initOp, ITypeSymbol fieldType)> StaticFieldInitOps = new();
+    public List<(string fieldName, IOperation initOp, ITypeSymbol fieldType)> StaticFieldInitOps => Initializers.StaticFieldInitOps;
 
     // FieldChangeCallback: fieldName → propertyName
-    public readonly Dictionary<string, string> FieldChangeCallbacks = new();
+    public Dictionary<string, string> FieldChangeCallbacks => Initializers.FieldChangeCallbacks;
 
     // Conditional access stack (for ?. operator): the evaluated instance leaf. For a delegate-typed
     // receiver this is the BUNDLE leaf itself (design §2.6) — `d?.Invoke()` dispatches on it, and any
