@@ -25,7 +25,7 @@ public partial class InvocationHandler
             // Value of a nullable AGGREGATE (e.g. (int,int)? / V?) copies the struct out (value semantics).
             if (op.Property.Name == "Value")
                 return nblUnder is INamedTypeSymbol nblAgg && EmitPolicy.IsAggregateType(nblAgg)
-                    ? EmitDeepCloneAggregate(nv, nblAgg) : nv;
+                    ? AggregateAbi.DeepClone(_builder, nv, nblAgg, _ctx.GetAggregateLayout) : nv;
         }
 
         // Auto-property on an aggregate (struct/tuple) OR v1 class → object[] element (the backing field's
@@ -37,7 +37,7 @@ public partial class InvocationHandler
             var getVal = AggregateAbi.ReadSlot(_builder, arrExpr, aggPropIdx, "SystemObject");
             // A struct-typed property returns a COPY (C# getters return by value; you cannot mutate through it).
             return op.Property.Type is INamedTypeSymbol propAgg && EmitPolicy.IsAggregateType(propAgg)
-                ? EmitDeepCloneAggregate(getVal, propAgg) : getVal;
+                ? AggregateAbi.DeepClone(_builder, getVal, propAgg, _ctx.GetAggregateLayout) : getVal;
         }
 
         // Computed (non-auto) property on an aggregate (struct) OR v1 class: no backing-field slot, so
@@ -50,7 +50,7 @@ public partial class InvocationHandler
             var ret = EmitCallToMethod(ResolveStructMember(aggGetterRaw),
                 new List<CLeaf> { LoadInstanceRaw(op.Instance) });
             return op.Property.Type is INamedTypeSymbol getRetAgg && EmitPolicy.IsAggregateType(getRetAgg)
-                ? EmitDeepCloneAggregate(ret, getRetAgg) : ret;
+                ? AggregateAbi.DeepClone(_builder, ret, getRetAgg, _ctx.GetAggregateLayout) : ret;
         }
 
         // this.gameObject / this.transform → __this_* variable (Udon VM resolves via "this" default)
@@ -67,7 +67,7 @@ public partial class InvocationHandler
             {
                 var gv = EmitCallToMethod(thisProp.GetMethod, new List<CLeaf>());
                 return thisProp.Type is INamedTypeSymbol thisGetAgg && EmitPolicy.IsAggregateType(thisGetAgg)
-                    ? EmitDeepCloneAggregate(gv, thisGetAgg) : gv;
+                    ? AggregateAbi.DeepClone(_builder, gv, thisGetAgg, _ctx.GetAggregateLayout) : gv;
             }
 
             // Auto-property on this class → direct backing-field access (user-defined classes only). A
@@ -78,7 +78,7 @@ public partial class InvocationHandler
             {
                 var bv = LoadField(thisProp.Name, GetUdonType(thisProp.Type));
                 return thisProp.Type is INamedTypeSymbol thisAutoAgg && EmitPolicy.IsAggregateType(thisAutoAgg)
-                    ? EmitDeepCloneAggregate(bv, thisAutoAgg) : bv;
+                    ? AggregateAbi.DeepClone(_builder, bv, thisAutoAgg, _ctx.GetAggregateLayout) : bv;
             }
 
             var propName = op.Property.Name;
@@ -123,7 +123,7 @@ public partial class InvocationHandler
                 // and was pre-registered by the collection layer.
                 var sgv = EmitCallToMethod(ResolveStructMember(sPropGetter), new List<CLeaf>());
                 return op.Property.Type is INamedTypeSymbol sgAgg && EmitPolicy.IsAggregateType(sgAgg)
-                    ? EmitDeepCloneAggregate(sgv, sgAgg) : sgv;
+                    ? AggregateAbi.DeepClone(_builder, sgv, sgAgg, _ctx.GetAggregateLayout) : sgv;
             }
 
             // Constant folding: static properties on foldable struct types (e.g., Vector3.zero)
@@ -261,7 +261,7 @@ public partial class InvocationHandler
             sargs.AddRange(EvaluateIndexerArgs(op)); // wave-9 round-4: named index args bind by ordinal
             var ret = EmitCallToMethod(ResolveStructMember(idxGetterRaw), sargs);
             return op.Property.Type is INamedTypeSymbol idxRetAgg && EmitPolicy.IsAggregateType(idxRetAgg)
-                ? EmitDeepCloneAggregate(ret, idxRetAgg) : ret;
+                ? AggregateAbi.DeepClone(_builder, ret, idxRetAgg, _ctx.GetAggregateLayout) : ret;
         }
 
         // Wave-9 round-2 [W6]: user indexer read through a VARIABLE receiver (own-typed copy /

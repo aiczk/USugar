@@ -22,21 +22,25 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
         // scope's env record (aggregate captures keep clone-on-read value semantics on the way out).
         ILocalReferenceOperation localRef when _ctx.TryGetEnvBinding(localRef.Local, out _)
             => ResolveType(localRef.Type) is INamedTypeSymbol eaggT && EmitPolicy.IsAggregateType(eaggT)
-                   ? EmitDeepCloneAggregate(EnvEmit.Read(_builder, _ctx, localRef.Local, "SystemObjectArray"), eaggT)
+                   ? AggregateAbi.DeepClone(_builder, EnvEmit.Read(_builder, _ctx, localRef.Local, "SystemObjectArray"),
+                       eaggT, _ctx.GetAggregateLayout)
                    : EnvEmit.Read(_builder, _ctx, localRef.Local, GetUdonType(localRef.Type)),
         ILocalReferenceOperation localRef => _localBindings.TryGetValue(localRef.Local, out var localBinding)
                                                  ? ResolveType(localRef.Type) is INamedTypeSymbol laggT && EmitPolicy.IsAggregateType(laggT)
-                                                     ? EmitDeepCloneAggregate(LoadField(localBinding.Id, "SystemObjectArray"), laggT)
+                                                     ? AggregateAbi.DeepClone(_builder, LoadField(localBinding.Id, "SystemObjectArray"),
+                                                         laggT, _ctx.GetAggregateLayout)
                                                      : LoadField(localBinding.Id, GetUdonType(localRef.Type))
                                                  : throw new InvalidOperationException($"Cannot resolve local variable '{localRef.Local.Name}' in method '{_currentMethod?.Name ?? "(none)"}'."),
         IFieldReferenceOperation op => VisitFieldReference(op),
         IEventReferenceOperation op => VisitEventReference(op),
         IParameterReferenceOperation paramRef when _ctx.TryGetEnvBinding(paramRef.Parameter, out _)
             => ResolveType(paramRef.Type) is INamedTypeSymbol epaggT && EmitPolicy.IsAggregateType(epaggT)
-                   ? EmitDeepCloneAggregate(EnvEmit.Read(_builder, _ctx, paramRef.Parameter, "SystemObjectArray"), epaggT)
+                   ? AggregateAbi.DeepClone(_builder, EnvEmit.Read(_builder, _ctx, paramRef.Parameter, "SystemObjectArray"),
+                       epaggT, _ctx.GetAggregateLayout)
                    : EnvEmit.Read(_builder, _ctx, paramRef.Parameter, GetUdonType(paramRef.Type)),
         IParameterReferenceOperation paramRef => ResolveType(paramRef.Type) is INamedTypeSymbol paggT && EmitPolicy.IsAggregateType(paggT)
-                                                     ? EmitDeepCloneAggregate(LoadParam(paramRef.Parameter), paggT)
+                                                     ? AggregateAbi.DeepClone(_builder, LoadParam(paramRef.Parameter),
+                                                         paggT, _ctx.GetAggregateLayout)
                                                      : LoadParam(paramRef.Parameter),
         IInstanceReferenceOperation when _ctx.CurrentStructReceiverParamId != null
             => LoadField(_ctx.CurrentStructReceiverParamId, "SystemObjectArray"),
@@ -121,7 +125,8 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
                 {
                     if (IsDeclaredInOwnHierarchy(_classSymbol, fieldRef.Field.ContainingType))
                         return fieldRef.Field.Type is INamedTypeSymbol staticFieldAgg && EmitPolicy.IsAggregateType(staticFieldAgg)
-                            ? EmitDeepCloneAggregate(LoadField(fieldRef.Field.Name, "SystemObjectArray"), staticFieldAgg)
+                            ? AggregateAbi.DeepClone(_builder, LoadField(fieldRef.Field.Name, "SystemObjectArray"),
+                                staticFieldAgg, _ctx.GetAggregateLayout)
                             : LoadField(fieldRef.Field.Name, GetUdonType(fieldRef.Field.Type));
 
                     var crossMsg = $"cannot read a non-constant static readonly field "
@@ -166,7 +171,7 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
                 var getVal = AggregateAbi.ReadSlot(_builder, arrExpr, elemIndex, "SystemObject");
                 // A struct-typed element read AS A VALUE is copied (value semantics); scalar elements are immutable boxes.
                 return fieldRef.Field.Type is INamedTypeSymbol elemAgg && EmitPolicy.IsAggregateType(elemAgg)
-                    ? EmitDeepCloneAggregate(getVal, elemAgg) : getVal;
+                    ? AggregateAbi.DeepClone(_builder, getVal, elemAgg, _ctx.GetAggregateLayout) : getVal;
             }
             throw new System.NotSupportedException(
                 $"Cannot access '{fieldRef.Field.Name}' on aggregate type '{aggContaining.Name}'.");
@@ -175,7 +180,8 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
         // this.field → direct variable name → LoadField (struct-typed field copied on value read)
         if (fieldRef.Instance is IInstanceReferenceOperation)
             return fieldRef.Field.Type is INamedTypeSymbol thisFieldAgg && EmitPolicy.IsAggregateType(thisFieldAgg)
-                ? EmitDeepCloneAggregate(LoadField(fieldRef.Field.Name, "SystemObjectArray"), thisFieldAgg)
+                ? AggregateAbi.DeepClone(_builder, LoadField(fieldRef.Field.Name, "SystemObjectArray"),
+                    thisFieldAgg, _ctx.GetAggregateLayout)
                 : LoadField(fieldRef.Field.Name, GetUdonType(fieldRef.Field.Type));
         // cross-behaviour field → GetProgramVariable
         if (ExternResolver.IsUdonSharpBehaviour(fieldRef.Field.ContainingType))

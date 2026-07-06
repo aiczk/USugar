@@ -169,6 +169,10 @@ public static class AggregateAbi
         return builder.SlotRef(dstSlot);
     }
 
+    public static CLeaf DeepClone(CoreBuilder builder, CLeaf source, INamedTypeSymbol aggregateType,
+        Func<INamedTypeSymbol, AggregateLayout> getLayout)
+        => DeepClone(builder, source, getLayout(aggregateType), getLayout);
+
     /// <summary>Allocate and default-initialize a fresh aggregate bundle.</summary>
     public static CLeaf MintDefault(CoreBuilder builder, AggregateLayout layout,
         Func<INamedTypeSymbol, AggregateLayout> getLayout, Func<ITypeSymbol, string> getUdonType)
