@@ -441,10 +441,6 @@ public abstract partial class HandlerBase
     protected void EmitDefaultInitAggregate(CValue arrayVal, AggregateLayout layout)
         => AggregateAbi.DefaultInitialize(_builder, arrayVal, layout, _ctx.GetAggregateLayout, GetUdonType);
 
-    /// <summary>Emit class instance field / auto-property initializers through the class ABI.</summary>
-    protected void EmitInstanceFieldInitializers(CLeaf instance, INamedTypeSymbol classTy, AggregateLayout layout)
-        => ClassAbi.EmitInstanceFieldInitializers(_builder, _compilation, instance, classTy, layout, VisitExpression);
-
     /// <summary>Unwrap a field or auto-property member access into (instance, member name) for
     /// aggregate (struct/tuple) object[] element resolution.</summary>
     protected static bool TryGetAggregateMemberTarget(IOperation target, out IOperation instance, out string memberName)
@@ -2609,10 +2605,6 @@ public abstract partial class HandlerBase
                 + "a class has reference semantics (== / != compare object identity) and no user operator or "
                 + "conversion is emitted. Call a named method instead.");
     }
-
-    /// <summary>Reject class constructs outside the class ABI.</summary>
-    protected static void RejectUnsupportedClassMembers(INamedTypeSymbol classTy)
-        => ClassAbi.RejectUnsupportedMembers(classTy);
 
     /// <summary>True when the dispatch invocation at <paramref name="dispatchOp"/> can re-enter the
     /// containing function (design §4.3: containing function on a synthetic-edge-inclusive SCC cycle

@@ -206,6 +206,24 @@ public static class AggregateAbi
 /// </summary>
 public static class ClassAbi
 {
+    /// <summary>Emit the complete class instance mint sequence for a supported v1 user class.</summary>
+    public static CLeaf EmitMint(CoreBuilder builder, Compilation compilation,
+        INamedTypeSymbol classTy, AggregateLayout layout,
+        Func<string, int> allocTemp, Action<int, CValue> emitAssign, Func<int, CLeaf> slotRef,
+        Func<IOperation, CLeaf> emitValue, Action<CLeaf> emitDefaultInitialize,
+        Action<CLeaf> emitConstructor, Action<CLeaf> emitObjectInitializer)
+    {
+        RejectUnsupportedMembers(classTy);
+        var slot = allocTemp(AggregateAbi.ArrayType);
+        emitAssign(slot, AggregateAbi.Allocate(builder, layout.SlotCount));
+        var instance = slotRef(slot);
+        emitDefaultInitialize(instance);
+        EmitInstanceFieldInitializers(builder, compilation, instance, classTy, layout, emitValue);
+        emitConstructor(instance);
+        emitObjectInitializer(instance);
+        return instance;
+    }
+
     /// <summary>CA-M1: user classes have reference semantics and no inheritance/interface dispatch.</summary>
     public static void RejectUnsupportedMembers(INamedTypeSymbol classTy)
     {

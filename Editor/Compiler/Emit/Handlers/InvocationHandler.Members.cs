@@ -450,20 +450,19 @@ public partial class InvocationHandler
     /// param0) → apply any object-initializer. NO defensive copies — the same bundle reference flows through.</summary>
     CLeaf EmitClassInstanceMint(IObjectCreationOperation op, INamedTypeSymbol classTy)
     {
-        RejectUnsupportedClassMembers(classTy); // v1: no virtual/abstract/override members
         var layout = _ctx.GetAggregateLayout(classTy);
-        var slot = _ctx.AllocTemp("SystemObjectArray");
-        EmitAssign(slot, AggregateAbi.Allocate(_builder, layout.SlotCount));
-        EmitDefaultInitAggregate(SlotRef(slot), layout);
-        EmitInstanceFieldInitializers(SlotRef(slot), classTy, layout);
-        if (op.Constructor != null && !op.Constructor.IsImplicitlyDeclared)
-        {
-            var ctorArgs = new List<CLeaf> { SlotRef(slot) };
-            foreach (var arg in op.Arguments) ctorArgs.Add(VisitExpression(arg.Value));
-            EmitExprStmt(EmitCallToMethod(ResolveStructMember(op.Constructor), ctorArgs));
-        }
-        EmitAggregateObjectInitializer(SlotRef(slot), classTy, op.Initializer);
-        return SlotRef(slot);
+        return ClassAbi.EmitMint(
+            _builder, _compilation, classTy, layout,
+            _ctx.AllocTemp, EmitAssign, SlotRef, VisitExpression,
+            instance => EmitDefaultInitAggregate(instance, layout),
+            instance =>
+            {
+                if (op.Constructor == null || op.Constructor.IsImplicitlyDeclared) return;
+                var ctorArgs = new List<CLeaf> { instance };
+                foreach (var arg in op.Arguments) ctorArgs.Add(VisitExpression(arg.Value));
+                EmitExprStmt(EmitCallToMethod(ResolveStructMember(op.Constructor), ctorArgs));
+            },
+            instance => EmitAggregateObjectInitializer(instance, classTy, op.Initializer));
     }
 
     CLeaf VisitObjectCreation(IObjectCreationOperation op)
