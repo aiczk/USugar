@@ -466,17 +466,8 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
         // Nullable<T> scrutinee (boxed object): `x is null` is an object null check; any other pattern
         // requires HasValue, then matches against the unboxed underlying value (Udon unboxes transparently).
         if (EmitPolicy.IsNullableT(valueType, out var patUnderlying))
-        {
-            var nSlot = _ctx.AllocTemp("SystemObject");
-            EmitAssign(nSlot, valueVal);
-            if (pattern is IConstantPatternOperation cpn && cpn.Value.ConstantValue is { HasValue: true, Value: null })
-                return NullableAbi.IsNull(_builder, SlotRef(nSlot));
-            var matchSlot = _ctx.AllocTemp("SystemBoolean");
-            EmitAssign(matchSlot, Const(false, "SystemBoolean"));
-            _builder.EmitIf(EmitNullableHasValue(SlotRef(nSlot)), _ =>
-                EmitAssign(matchSlot, EmitPatternCheckImpl(SlotRef(nSlot), patUnderlying, pattern)));
-            return SlotRef(matchSlot);
-        }
+            return NullableAbi.EmitPatternCheck(_builder, valueVal, patUnderlying, pattern,
+                EmitPatternCheckImpl, _ctx.AllocTemp, EmitAssign, SlotRef);
 
         switch (pattern)
         {

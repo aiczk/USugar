@@ -90,6 +90,22 @@ public static class NullableAbi
         return resultSlot >= 0 ? slotRef(resultSlot) : null;
     }
 
+    public static CLeaf EmitPatternCheck(CoreBuilder builder, CValue value, ITypeSymbol underlyingType,
+        IPatternOperation pattern, Func<CLeaf, ITypeSymbol, IPatternOperation, CLeaf> matchUnderlying,
+        Func<string, int> allocTemp, Action<int, CValue> emitAssign, Func<int, CLeaf> slotRef)
+    {
+        var nullableSlot = allocTemp(StorageType);
+        emitAssign(nullableSlot, value);
+        if (pattern is IConstantPatternOperation cpn && cpn.Value.ConstantValue is { HasValue: true, Value: null })
+            return IsNull(builder, slotRef(nullableSlot));
+
+        var matchSlot = allocTemp("SystemBoolean");
+        emitAssign(matchSlot, builder.Const(false, "SystemBoolean"));
+        builder.EmitIf(HasValue(builder, slotRef(nullableSlot)),
+            _ => emitAssign(matchSlot, matchUnderlying(slotRef(nullableSlot), underlyingType, pattern)));
+        return slotRef(matchSlot);
+    }
+
     public static CLeaf EmitLiftedBoolLogic(CoreBuilder builder, CValue leftValue, CValue rightValue,
         BinaryOperatorKind kind, Func<string, int> allocTemp, Action<int, CValue> emitAssign, Func<int, CLeaf> slotRef)
     {
