@@ -197,7 +197,7 @@ public partial class InvocationHandler
 
         // N-dim array (design 2026-07-04 §2/N-R4): Rank>1 array VALUE is an object[] bundle whose Udon
         // type tag (SystemObjectArray) happens to have REAL, valid Rank/Length externs registered — MUST
-        // intercept before the generic extern-getter fallback below, or ".Rank"/".Length" would silently
+        // intercept before the generic extern-getter path below, or ".Rank"/".Length" would silently
         // read the bundle wrapper's own shape (rank always 1, length always 1+r) instead of the logical
         // array's. Length reads the FLAT BACKING's length (§2); Rank is a compile-time constant.
         if (op.Instance != null && NdimArrayAbi.IsNdimArray(op.Instance.Type))
@@ -512,7 +512,7 @@ public partial class InvocationHandler
 
         // User struct with a user-defined ctor, used AS A VALUE (e.g. an operator body `return new V(x,y)`):
         // allocate + default-init the object[] and run the registered ctor on it, like the local-declaration
-        // path. The extern-ctor fallback below is only for SDK value types (Vector3, …) — for a user struct it
+        // path. The SDK extern-ctor path below is only for SDK value types (Vector3, …) — for a user struct it
         // would emit a bogus SystemObjectArray.__ctor__<args>__ extern that the validator rejects. (diff-fuzz w3)
         if (op.Type.IsValueType && op.Arguments.Length > 0
             && op.Type is INamedTypeSymbol userStruct && EmitPolicy.IsUserStruct(userStruct)
@@ -534,7 +534,7 @@ public partial class InvocationHandler
 
         // User struct / tuple object initializer with NO ctor args (`new V { X = 1 }`): allocate +
         // default-init the object[] like the local-declaration path, then apply the initializer via
-        // layout-INDEX writes. The generic fallback below assumes a native per-field setter extern (SDK
+        // layout-INDEX writes. The SDK extern initializer path below assumes a native per-field setter extern (SDK
         // value types like Vector3), which object[]-emulated aggregates don't have (roadmap B41).
         if (op.Arguments.Length == 0 && op.Type.IsValueType && op.Initializer != null
             && op.Type is INamedTypeSymbol aggInitType && EmitPolicy.IsAggregateType(aggInitType))

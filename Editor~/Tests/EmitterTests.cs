@@ -938,7 +938,7 @@ public class FIUnsupportedTest : UdonSharpBehaviour {
     // ── Field initializers: user-struct construction (roadmap B41) ──
     // A user-struct field initializer's ctor-call / object-initializer form must take the same S1
     // object[]-emulation lowering the method-body path (VisitAggregateLocalDeclaration) uses, not the
-    // generic VisitObjectCreation fallback meant for SDK value types (Vector3, …) — that fallback treats
+    // SDK-native VisitObjectCreation path meant for SDK value types (Vector3, …) — that path treats
     // the aggregate's Udon type name ("SystemObjectArray") as if it were a real registered type and emits
     // nonexistent externs (SystemObjectArray.__ctor__…/__set_x__…).
 
