@@ -247,6 +247,59 @@ public static class ClassAbi
         }
     }
 
+    /// <summary>Reject static field storage on a v1 user class, except consts folded before this point.</summary>
+    public static void RejectStaticField(IFieldSymbol field)
+    {
+        if (field.IsStatic && field.ContainingType is INamedTypeSymbol classTy && EmitPolicy.IsUserClassType(classTy))
+            throw new NotSupportedException(
+                $"Static field '{classTy.Name}.{field.Name}' on a v1 user class is not "
+                + "supported (only `const` is): a class has no per-type static storage yet. Move the data "
+                + "to a field on the UdonSharpBehaviour class, or make it a `const`.");
+    }
+
+    /// <summary>Reject static properties on a v1 user class.</summary>
+    public static void RejectStaticProperty(IPropertySymbol property)
+    {
+        if (property.IsStatic && property.ContainingType is INamedTypeSymbol classTy && EmitPolicy.IsUserClassType(classTy))
+            throw new NotSupportedException(
+                $"Static property '{classTy.Name}.{property.Name}' on a v1 user class is not "
+                + "supported (only `const` and static methods are): move it to a static method, or to "
+                + "a field on the UdonSharpBehaviour class.");
+    }
+
+    /// <summary>Reject implicit stringification of a v1 class reference bundle.</summary>
+    public static void RejectImplicitToString(ITypeSymbol type)
+    {
+        if (type != null && EmitPolicy.IsUserClassType(type))
+            throw new NotSupportedException(
+                $"A v1 user class '{type.Name}' cannot be converted to a string (interpolation / concat): a "
+                + "class ABI v1 reference bundle has no member-name synthesis, so it would stringify to "
+                + "\"System.Object[]\". Format the class's fields directly instead.");
+    }
+
+    /// <summary>Reject user-defined operators and conversions on v1 user classes.</summary>
+    public static void RejectUserOperator(IMethodSymbol method)
+    {
+        if (method is { MethodKind: MethodKind.UserDefinedOperator or MethodKind.Conversion }
+            && method.ContainingType is INamedTypeSymbol classTy && EmitPolicy.IsUserClassType(classTy))
+            throw new NotSupportedException(
+                $"User-defined operator '{classTy.Name}.{method.Name}' on a v1 user class is not supported: "
+                + "a class has reference semantics (== / != compare object identity) and no user operator or "
+                + "conversion is emitted. Call a named method instead.");
+    }
+
+    public static bool IsReferenceEquality(BinaryOperatorKind kind, ITypeSymbol leftType, ITypeSymbol rightType)
+        => kind is BinaryOperatorKind.Equals or BinaryOperatorKind.NotEquals
+           && (EmitPolicy.IsUserClassType(leftType) || EmitPolicy.IsUserClassType(rightType));
+
+    public static CLeaf EmitReferenceEquality(CoreBuilder builder, BinaryOperatorKind kind, CLeaf left, CLeaf right)
+    {
+        var signature = kind == BinaryOperatorKind.NotEquals
+            ? "SystemObject.__op_Inequality__SystemObject_SystemObject__SystemBoolean"
+            : "SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean";
+        return builder.ExternCall(signature, new List<CLeaf> { left, right }, "SystemBoolean");
+    }
+
     /// <summary>Run instance field / auto-property initializers on an already allocated class bundle.</summary>
     public static void EmitInstanceFieldInitializers(CoreBuilder builder, Compilation compilation,
         CLeaf instance, INamedTypeSymbol classTy, AggregateLayout layout, Func<IOperation, CLeaf> emitValue)

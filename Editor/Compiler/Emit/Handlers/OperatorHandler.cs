@@ -54,20 +54,13 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
 
         // CA-M1: a v1 class defines NO user operators (design §2 "ユーザー演算子なし") — reject a user-defined
         // binary operator loudly BEFORE the reference-equality arm below would silently ignore a user `==`.
-        RejectClassUserOperator(op.OperatorMethod);
+        ClassAbi.RejectUserOperator(op.OperatorMethod);
 
         // ── User class (v1) reference equality: c1 == c2 / c == null → reference compare on the object[]
         // bundle (the bundle reference IS the identity; an unoverridden Equals/== is reference equality). ──
-        if (op.OperatorKind is BinaryOperatorKind.Equals or BinaryOperatorKind.NotEquals
-            && (EmitPolicy.IsUserClassType(op.LeftOperand.Type) || EmitPolicy.IsUserClassType(op.RightOperand.Type)))
-        {
-            var l = VisitExpression(op.LeftOperand);
-            var r = VisitExpression(op.RightOperand);
-            var refEqSig = op.OperatorKind == BinaryOperatorKind.NotEquals
-                ? "SystemObject.__op_Inequality__SystemObject_SystemObject__SystemBoolean"
-                : "SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean";
-            return ExternCall(refEqSig, new List<CLeaf> { l, r }, "SystemBoolean");
-        }
+        if (ClassAbi.IsReferenceEquality(op.OperatorKind, op.LeftOperand.Type, op.RightOperand.Type))
+            return ClassAbi.EmitReferenceEquality(_builder, op.OperatorKind,
+                VisitExpression(op.LeftOperand), VisitExpression(op.RightOperand));
 
         // ── Delegate null check / equality (design §2.5 — TYPE-routed, so fields, locals, params,
         // array elements, properties, and expression results all land here; the dispatch stays gated
@@ -171,8 +164,8 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
         {
             var lOp = UnwrapConversions(op.LeftOperand);
             var rOp = UnwrapConversions(op.RightOperand);
-            RejectImplicitClassToString(lOp.Type); // §2-1: a class concat operand has no ToString
-            RejectImplicitClassToString(rOp.Type);
+            ClassAbi.RejectImplicitToString(lOp.Type);
+            ClassAbi.RejectImplicitToString(rOp.Type);
             if (ExternResolver.IsUserEnum(ResolveType(lOp.Type)) || ExternResolver.IsUserEnum(ResolveType(rOp.Type)))
             {
                 var l = VisitExpression(lOp);
@@ -354,7 +347,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
             var operand = VisitExpression(op.Operand);
             return EmitCallToMethod(ResolveStructMember(unOpM), new List<CLeaf> { operand });
         }
-        RejectClassUserOperator(op.OperatorMethod); // v1 class: no user operators
+        ClassAbi.RejectUserOperator(op.OperatorMethod);
 
         // Bitwise NOT (~): Udon VM has no unary complement extern → synthesize as XOR with all-bits-set
         if (op.OperatorKind == UnaryOperatorKind.BitwiseNegation)

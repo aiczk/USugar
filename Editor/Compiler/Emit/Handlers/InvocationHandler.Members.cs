@@ -104,16 +104,7 @@ public partial class InvocationHandler
         // Static property: no instance
         if (op.Instance == null)
         {
-            // CA-M1 statics choke: a static property on a v1 user class (computed OR auto) is rejected —
-            // the design allows only const-fold and static methods; every other static member is a loud
-            // reject (relaxing later is free, the reverse is breaking). Placed before the B47 foreign-static
-            // arm below, which would otherwise inline a class's computed static getter.
-            if (op.Property.IsStatic && op.Property.ContainingType is INamedTypeSymbol clsStProp
-                && EmitPolicy.IsUserClassType(clsStProp))
-                throw new System.NotSupportedException(
-                    $"Static property '{clsStProp.Name}.{op.Property.Name}' on a v1 user class is not "
-                    + "supported (only `const` and static methods are): move it to a static method, or to "
-                    + "a field on the UdonSharpBehaviour class.");
+            ClassAbi.RejectStaticProperty(op.Property);
 
             // B47 (wave-14 r6): a STATIC COMPUTED property on a user struct/class (StaticPropHelper<T>.Doubled)
             // is a foreign-static accessor CALL, not a real extern — inline-call its getter (the B46
@@ -384,7 +375,7 @@ public partial class InvocationHandler
                     formatParts.Add(placeholder.ToString());
                     // B67: a user enum in an interpolation hole would be boxed and Format-ToString'd to its
                     // underlying number — pre-convert it to the C#-correct name string instead.
-                    RejectImplicitClassToString(interpolation.Expression.Type); // §2-1: no class ToString
+                    ClassAbi.RejectImplicitToString(interpolation.Expression.Type);
                     var interpVal = VisitExpression(interpolation.Expression);
                     argVals.Add(TryEmitEnumToString(interpVal, interpolation.Expression.Type) ?? interpVal);
                     argIndex++;

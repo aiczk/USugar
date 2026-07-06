@@ -2580,32 +2580,6 @@ public abstract partial class HandlerBase
                 + "member/reach shape (collector-scope drift; see roadmap B46/B47 family).");
     }
 
-    /// <summary>CA-M1 §2-1: a v1 class in a string interpolation hole or a `+`-concat operand would be boxed
-    /// and Format/Concat-ToString'd to "System.Object[]" (its object[] runtime type) — a silent wrong string.
-    /// Reject loudly, same as the explicit ToString reject.</summary>
-    protected static void RejectImplicitClassToString(ITypeSymbol type)
-    {
-        if (type != null && EmitPolicy.IsUserClassType(type))
-            throw new NotSupportedException(
-                $"A v1 user class '{type.Name}' cannot be converted to a string (interpolation / concat): a "
-                + "class ABI v1 reference bundle has no member-name synthesis, so it would stringify to "
-                + "\"System.Object[]\". Format the class's fields directly instead.");
-    }
-
-    /// <summary>CA-M1: a v1 user class defines NO user-defined operators or conversions (design §2 "ユーザー
-    /// 演算子なし"). Reject one loudly — a class `==`/`!=` is REFERENCE equality (no user operator), and any
-    /// other user operator has no lowering. A struct operator (IsUserStruct) is unaffected: it routes to its
-    /// registered method at its own site, so this only fires for a v1 class operator method.</summary>
-    protected static void RejectClassUserOperator(IMethodSymbol opMethod)
-    {
-        if (opMethod is { MethodKind: MethodKind.UserDefinedOperator or MethodKind.Conversion }
-            && opMethod.ContainingType is INamedTypeSymbol opCt && EmitPolicy.IsUserClassType(opCt))
-            throw new NotSupportedException(
-                $"User-defined operator '{opCt.Name}.{opMethod.Name}' on a v1 user class is not supported: "
-                + "a class has reference semantics (== / != compare object identity) and no user operator or "
-                + "conversion is emitted. Call a named method instead.");
-    }
-
     /// <summary>True when the dispatch invocation at <paramref name="dispatchOp"/> can re-enter the
     /// containing function (design §4.3: containing function on a synthetic-edge-inclusive SCC cycle
     /// AND the dispatch is non-tail — pre-computed syntax-keyed by BuildRecursionInfo). When true,

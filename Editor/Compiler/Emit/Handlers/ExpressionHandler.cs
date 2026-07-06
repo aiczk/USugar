@@ -109,14 +109,7 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
                     + "user-defined struct is not supported: static storage for a struct type (per closed "
                     + "instantiation, if generic) has no materialization mechanism yet. Move the data to "
                     + "a field on the UdonSharpBehaviour class instead.");
-            // CA-M1 statics choke: `const` already folded above; every other static field on a v1 class
-            // (incl. `static readonly`) has no per-type storage mechanism — reject loudly. Relaxing later
-            // is free; the reverse is a breaking change (design §2-1).
-            if (fieldRef.Field.ContainingType is INamedTypeSymbol classFieldCt && EmitPolicy.IsUserClassType(classFieldCt))
-                throw new NotSupportedException(
-                    $"Static field '{classFieldCt.Name}.{fieldRef.Field.Name}' on a v1 user class is not "
-                    + "supported (only `const` is): a class has no per-type static storage yet. Move the data "
-                    + "to a field on the UdonSharpBehaviour class, or make it a `const`.");
+            ClassAbi.RejectStaticField(fieldRef.Field);
             if (ExternResolver.IsUdonSharpBehaviour(fieldRef.Field.ContainingType))
             {
                 // Non-const, non-foldable `static readonly` (const/foldable already returned above) —
@@ -583,7 +576,7 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
             // type is SystemObjectArray-backed, so ResolveConversionExtern would build a non-existent extern).
             if (conv.OperatorMethod.ContainingType is INamedTypeSymbol convOpCt && EmitPolicy.IsUserStruct(convOpCt))
                 return EmitCallToMethod(ResolveStructMember(conv.OperatorMethod), new List<CLeaf> { srcVal });
-            RejectClassUserOperator(conv.OperatorMethod); // v1 class: no user conversion operators
+            ClassAbi.RejectUserOperator(conv.OperatorMethod);
 
             var dstType = GetUdonType(conv.Type);
             return ExternCall(
