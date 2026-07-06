@@ -6,6 +6,18 @@ using Microsoft.CodeAnalysis;
 /// </summary>
 static class NdimArrayAbi
 {
+    public enum PropertyKind
+    {
+        Length,
+        Rank
+    }
+
+    public enum MethodKind
+    {
+        GetLength,
+        GetUpperBound
+    }
+
     public const string BundleUdonType = "SystemObjectArray";
     public const string BoxedElementUdonType = "SystemObject";
     public const int BackingSlotIndex = 0;
@@ -26,6 +38,38 @@ static class NdimArrayAbi
 
     public static string BundleSetSignature()
         => ExternResolver.BuildArraySetSignature(BundleUdonType, BoxedElementUdonType);
+
+    public static bool TryGetProperty(string memberName, out PropertyKind kind)
+    {
+        switch (memberName)
+        {
+            case "Length":
+                kind = PropertyKind.Length;
+                return true;
+            case "Rank":
+                kind = PropertyKind.Rank;
+                return true;
+            default:
+                kind = default;
+                return false;
+        }
+    }
+
+    public static bool TryGetMethod(string memberName, out MethodKind kind)
+    {
+        switch (memberName)
+        {
+            case "GetLength":
+                kind = MethodKind.GetLength;
+                return true;
+            case "GetUpperBound":
+                kind = MethodKind.GetUpperBound;
+                return true;
+            default:
+                kind = default;
+                return false;
+        }
+    }
 
     public static void RejectMember(string memberName)
         => throw new System.NotSupportedException(

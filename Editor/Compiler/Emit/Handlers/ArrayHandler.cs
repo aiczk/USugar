@@ -17,7 +17,7 @@ public class ArrayHandler : HandlerBase, IExpressionHandler
 
     CLeaf VisitArrayCreation(IArrayCreationOperation op)
     {
-        if (IsNdimArray(op.Type)) return EmitNdimArrayCreation(op);
+        if (NdimArrayAbi.IsNdimArray(op.Type)) return EmitNdimArrayCreation(op);
 
         var arrayType = GetUdonType(op.Type);
         var elementType = GetArrayElemType((IArrayTypeSymbol)op.Type);

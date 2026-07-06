@@ -200,16 +200,19 @@ public partial class InvocationHandler
         // intercept before the generic extern-getter fallback below, or ".Rank"/".Length" would silently
         // read the bundle wrapper's own shape (rank always 1, length always 1+r) instead of the logical
         // array's. Length reads the FLAT BACKING's length (§2); Rank is a compile-time constant.
-        if (op.Instance != null && IsNdimArray(op.Instance.Type))
+        if (op.Instance != null && NdimArrayAbi.IsNdimArray(op.Instance.Type))
         {
             var ndimPropType = (IArrayTypeSymbol)op.Instance.Type;
-            switch (op.Property.Name)
+            if (!NdimArrayAbi.TryGetProperty(op.Property.Name, out var propertyKind))
             {
-                case "Length": return EmitNdimLength(VisitExpression(op.Instance), ndimPropType);
-                case "Rank": return EmitNdimRank(ndimPropType);
-                default:
-                    RejectNdimArrayMember(op.Property.Name);
-                    return null; // unreachable
+                NdimArrayAbi.RejectMember(op.Property.Name);
+                return null; // unreachable
+            }
+            switch (propertyKind)
+            {
+                case NdimArrayAbi.PropertyKind.Length: return EmitNdimLength(VisitExpression(op.Instance), ndimPropType);
+                case NdimArrayAbi.PropertyKind.Rank: return EmitNdimRank(ndimPropType);
+                default: throw new System.InvalidOperationException($"Unknown N-dim array property kind: {propertyKind}");
             }
         }
 

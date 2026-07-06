@@ -16,17 +16,19 @@ public partial class InvocationHandler
         // the logical array, and `.GetLength(d)`/`.GetUpperBound(d)` would read the wrapper's own
         // (wrong) shape. GetLength(d) = bundle[1+d] unboxed; GetUpperBound(d) = GetLength(d)-1. Every
         // other Array member (Clone/CopyTo/SetValue/…) is a new loud reject (N-R4).
-        if (op.Instance != null && IsNdimArray(op.Instance.Type))
+        if (op.Instance != null && NdimArrayAbi.IsNdimArray(op.Instance.Type))
         {
-            var ndimMethodType = (IArrayTypeSymbol)op.Instance.Type;
             var bundleVal = VisitExpression(op.Instance);
-            switch (target.Name)
+            if (!NdimArrayAbi.TryGetMethod(target.Name, out var methodKind))
             {
-                case "GetLength": return EmitNdimGetLength(bundleVal, VisitExpression(op.Arguments[0].Value));
-                case "GetUpperBound": return EmitNdimGetUpperBound(bundleVal, VisitExpression(op.Arguments[0].Value));
-                default:
-                    RejectNdimArrayMember(target.Name);
-                    return null; // unreachable
+                NdimArrayAbi.RejectMember(target.Name);
+                return null; // unreachable
+            }
+            switch (methodKind)
+            {
+                case NdimArrayAbi.MethodKind.GetLength: return EmitNdimGetLength(bundleVal, VisitExpression(op.Arguments[0].Value));
+                case NdimArrayAbi.MethodKind.GetUpperBound: return EmitNdimGetUpperBound(bundleVal, VisitExpression(op.Arguments[0].Value));
+                default: throw new System.InvalidOperationException($"Unknown N-dim array method kind: {methodKind}");
             }
         }
 
@@ -114,7 +116,7 @@ public partial class InvocationHandler
             // path can smuggle a bundle past this choke point. Unwrap conversions FIRST — passing a
             // T[,] to an `object`/`Array`-typed parameter wraps it in an implicit IConversionOperation
             // whose OWN Type is the widened target, hiding the T[,] source type from a direct check.
-            if (IsNdimArray(UnwrapConversions(op.Arguments[i].Value).Type))
+            if (NdimArrayAbi.IsNdimArray(UnwrapConversions(op.Arguments[i].Value).Type))
                 throw new System.NotSupportedException(ExternResolver.MultidimExternArgMessage);
 
             var param = target.Parameters[i];

@@ -12,10 +12,6 @@ using Microsoft.CodeAnalysis.Operations;
 /// </summary>
 public abstract partial class HandlerBase
 {
-    /// <summary>True for T[d0,…,dr-1] with r>=2 — the bundle representation applies. Rank==1 (or a
-    /// non-array type) is the existing, unchanged native-array path.</summary>
-    protected static bool IsNdimArray(ITypeSymbol type) => NdimArrayAbi.IsNdimArray(type);
-
     /// <summary>The rank-1 CLR array symbol for an N-dim array's flat backing storage (T[,] → T[]).
     /// Synthesized via the Compilation — Roslyn gives no direct "reinterpret at rank 1" operation on
     /// an existing IArrayTypeSymbol.</summary>
@@ -335,6 +331,4 @@ public abstract partial class HandlerBase
     /// SystemObjectArray.__Clone__SystemObject IS a real, valid extern; letting it through would
     /// silently shallow-copy the 3-element bundle WRAPPER, aliasing the same flat backing between the
     /// "clone" and the original instead of copying elements).</summary>
-    protected static void RejectNdimArrayMember(string memberName)
-        => NdimArrayAbi.RejectMember(memberName);
 }
