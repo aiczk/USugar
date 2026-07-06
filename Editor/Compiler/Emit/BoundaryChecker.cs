@@ -18,15 +18,6 @@ public sealed class BoundaryChecker
     public ValueInfo ClassifyValue(IOperation value)
         => ValueClassifier.Classify(value, TypeCtx, _ctx.CaptureScope);
 
-    public bool DelegateValueCapturesProgramLocalPayload(IOperation value)
-        => ClassifyValue(value).DelegateCapturesProgramLocalPayload;
-
-    public bool IsNullDelegateValue(IOperation value)
-        => ClassifyValue(value).Kind == ValueKind.Null;
-
-    public bool IsDirectProgramLocalSafeDelegateValue(IOperation value)
-        => ValueClassifier.IsDirectProgramLocalSafeDelegate(ClassifyValue(value));
-
     public bool CurrentMethodBodyMentionsProgramLocalPayload()
     {
         var syntaxRef = _ctx.CurrentMethod?.DeclaringSyntaxReferences.FirstOrDefault();

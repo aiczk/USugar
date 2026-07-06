@@ -2010,28 +2010,6 @@ public abstract partial class HandlerBase
         return EnvEmit.Leaf(_builder, _ctx, closureScope.BindingScope);
     }
 
-    /// <summary>B83: does a delegate-VALUE expression carry a closure whose env — transitively, through the
-    /// env-record parent chain (CaptureScopeAnalysis, a compile-time fact) — captures a v1 user class? A
-    /// signature-clean delegate (e.g. Action) can still smuggle a class through DelegateAbi.Env,
-    /// so a cross-program delegate write must inspect the captures, not just the invoke signature. Only a
-    /// direct delegate CREATION (lambda / local function) is inspected — its closure symbol is statically
-    /// known here; a method group / capture-free lambda owns no captures and returns false.</summary>
-    protected bool DelegateValueCapturesUserClass(IOperation value)
-        => _ctx.Boundary.DelegateValueCapturesProgramLocalPayload(value);
-
-    /// <summary>B83: a delegate-field write that crosses a program boundary — a public / [SerializeField] /
-    /// [UdonSynced] delegate field on THIS behaviour (readable cross-program via GetProgramVariable + fired
-    /// by SendCustomEvent), or a delegate field on ANOTHER behaviour. A PRIVATE this-field stays in-program
-    /// (execution-locality — legal even with a class-capturing closure).</summary>
-    protected bool IsNullDelegateValue(IOperation value)
-        => _ctx.Boundary.IsNullDelegateValue(value);
-
-    protected bool IsDirectClassSafeDelegateValue(IOperation value)
-        => _ctx.Boundary.IsDirectProgramLocalSafeDelegateValue(value);
-
-    protected bool CurrentMethodBodyMentionsUserClass()
-        => _ctx.Boundary.CurrentMethodBodyMentionsProgramLocalPayload();
-
     protected void RejectUnsafeCrossProgramDelegateWrite(IFieldReferenceOperation target, ValueInfo value)
         => _ctx.Boundary.RequireCanStoreCrossProgramDelegate(target, value);
 
