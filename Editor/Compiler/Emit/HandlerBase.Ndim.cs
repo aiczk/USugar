@@ -25,23 +25,13 @@ public abstract partial class HandlerBase
     protected CLeaf EmitNdimGetBacking(CLeaf bundleVal, IArrayTypeSymbol backingType)
     {
         var backingUdonType = GetArrayType(backingType);
-        var boxed = ExternCall(NdimArrayAbi.BundleGetSignature(),
-            new List<CLeaf> { bundleVal, Const(NdimArrayAbi.BackingSlotIndex, "SystemInt32") }, NdimArrayAbi.BoxedElementUdonType);
-        var slot = _ctx.AllocTemp(backingUdonType);
-        EmitAssign(slot, boxed);
-        return SlotRef(slot);
+        return NdimArrayAbi.ReadBacking(_builder, bundleVal, backingUdonType, _ctx.AllocTemp, EmitAssign, SlotRef);
     }
 
     /// <summary>Fetch bundle[1+dim] (a boxed dimension length) as a SystemInt32, unboxed on typed
     /// COPY (same pattern as EmitNdimGetBacking / the recursion-stack reload).</summary>
     protected CLeaf EmitNdimGetDimLength(CLeaf bundleVal, CLeaf dimIndexPlusOne)
-    {
-        var boxed = ExternCall(NdimArrayAbi.BundleGetSignature(),
-            new List<CLeaf> { bundleVal, dimIndexPlusOne }, NdimArrayAbi.BoxedElementUdonType);
-        var slot = _ctx.AllocTemp("SystemInt32");
-        EmitAssign(slot, boxed);
-        return SlotRef(slot);
-    }
+        => NdimArrayAbi.ReadDimLength(_builder, bundleVal, dimIndexPlusOne, _ctx.AllocTemp, EmitAssign, SlotRef);
     protected CLeaf EmitNdimGetDimLength(CLeaf bundleVal, int dim) => EmitNdimGetDimLength(bundleVal, Const(NdimArrayAbi.DimSlotIndex(dim), "SystemInt32"));
 
     /// <summary>A fully-prepared N-dim element access: every index expression evaluated EXACTLY ONCE

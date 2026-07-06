@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.Operations;
@@ -60,6 +61,25 @@ public static class NdimArrayAbi
 
     public static string BundleSetSignature()
         => ExternResolver.BuildArraySetSignature(BundleUdonType, BoxedElementUdonType);
+
+    public static CLeaf ReadBacking(CoreBuilder builder, CLeaf bundleVal, string backingUdonType,
+        Func<string, int> allocTemp, Action<int, CValue> emitAssign, Func<int, CLeaf> slotRef)
+        => ReadBoxedSlot(builder, bundleVal, builder.Const(BackingSlotIndex, "SystemInt32"),
+            backingUdonType, allocTemp, emitAssign, slotRef);
+
+    public static CLeaf ReadDimLength(CoreBuilder builder, CLeaf bundleVal, CLeaf dimIndexPlusOne,
+        Func<string, int> allocTemp, Action<int, CValue> emitAssign, Func<int, CLeaf> slotRef)
+        => ReadBoxedSlot(builder, bundleVal, dimIndexPlusOne, "SystemInt32", allocTemp, emitAssign, slotRef);
+
+    static CLeaf ReadBoxedSlot(CoreBuilder builder, CLeaf bundleVal, CLeaf bundleIndex, string targetUdonType,
+        Func<string, int> allocTemp, Action<int, CValue> emitAssign, Func<int, CLeaf> slotRef)
+    {
+        var boxed = builder.ExternCall(BundleGetSignature(),
+            new List<CLeaf> { bundleVal, bundleIndex }, BoxedElementUdonType);
+        var slot = allocTemp(targetUdonType);
+        emitAssign(slot, boxed);
+        return slotRef(slot);
+    }
 
     public static CLeaf BuildInBounds(CoreBuilder builder, int[] idxSlots, int[] dimSlots)
     {
