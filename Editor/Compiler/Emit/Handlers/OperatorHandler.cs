@@ -66,7 +66,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
         // array elements, properties, and expression results all land here; the dispatch stays gated
         // on the delegate type because this linear handler scan is first-match) ──
         if (op.OperatorKind is BinaryOperatorKind.Equals or BinaryOperatorKind.NotEquals
-            && (IsDelegateTyped(op.LeftOperand.Type) || IsDelegateTyped(op.RightOperand.Type)))
+            && (DelegateAbi.IsDelegateType(op.LeftOperand.Type) || DelegateAbi.IsDelegateType(op.RightOperand.Type)))
         {
             bool leftIsNull = IsNullLiteral(op.LeftOperand);
             bool rightIsNull = IsNullLiteral(op.RightOperand);
@@ -75,13 +75,15 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
             // d == null / d != null → reference null check on the BUNDLE itself (P4: delegate-null is
             // the bundle reference being null; [0] being null is a different condition).
             if (rightIsNull)
-                return CompareDelegateToNull(VisitExpression(op.LeftOperand), isNotEquals);
+                return DelegateAbi.CompareToNull(_builder, VisitExpression(op.LeftOperand), isNotEquals);
             if (leftIsNull)
-                return CompareDelegateToNull(VisitExpression(op.RightOperand), isNotEquals);
+                return DelegateAbi.CompareToNull(_builder, VisitExpression(op.RightOperand), isNotEquals);
 
             // d1 == d2 → element-wise (target, method) value equality with null legs (fcd07).
-            if (IsDelegateTyped(op.LeftOperand.Type) && IsDelegateTyped(op.RightOperand.Type))
-                return CompareDelegates(VisitExpression(op.LeftOperand), VisitExpression(op.RightOperand), isNotEquals);
+            if (DelegateAbi.IsDelegateType(op.LeftOperand.Type) && DelegateAbi.IsDelegateType(op.RightOperand.Type))
+                return DelegateAbi.CompareDelegates(_builder,
+                    VisitExpression(op.LeftOperand), VisitExpression(op.RightOperand), isNotEquals,
+                    _ctx.AllocTemp, EmitAssign, SlotRef);
         }
 
         // wave-13 multishapes lens (2026-07-04): a PLAIN `d1 + d2` / `d1 - d2` on delegate-typed VALUES
@@ -91,7 +93,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
         // kind was never routed there and fell through to the generic numeric/extern binary-op path,
         // which emitted a non-existent "SystemObjectArray.__op_Addition__..." extern.
         if (op.OperatorKind is BinaryOperatorKind.Add or BinaryOperatorKind.Subtract
-            && IsDelegateTyped(op.LeftOperand.Type) && IsDelegateTyped(op.RightOperand.Type))
+            && DelegateAbi.IsDelegateType(op.LeftOperand.Type) && DelegateAbi.IsDelegateType(op.RightOperand.Type))
         {
             var delegateType = (INamedTypeSymbol)op.Type;
             var invoke = delegateType.DelegateInvokeMethod;
@@ -937,7 +939,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
     }
 
     // ── Delegate comparison helpers (design §2.5) ──
-    // IsDelegateTyped / CompareDelegateToNull / CompareDelegates moved to HandlerBase (wave-9
+    // Delegate comparison helpers moved to DelegateAbi (wave-9
     // round-4 [X1]: the .Equals METHOD spelling of delegate equality reuses the same value
     // comparison from InvocationHandler — one knowledge source).
 

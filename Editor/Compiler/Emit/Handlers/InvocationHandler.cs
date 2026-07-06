@@ -41,10 +41,10 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
         // mapped the System.Func receiver onto UnityEngineComponent and emitted a nonexistent
         // __Equals__SystemObject__SystemBoolean extern (loud crash on legal C#).
         if (op.Instance != null && !target.IsStatic
-            && op.Arguments.Length == 1 && IsDelegateTyped(op.Instance.Type))
+            && op.Arguments.Length == 1 && DelegateAbi.IsDelegateType(op.Instance.Type))
         {
             var eqArg = UnwrapConversions(op.Arguments[0].Value);
-            if (!IsDelegateTyped(eqArg.Type))
+            if (!DelegateAbi.IsDelegateType(eqArg.Type))
                 throw new System.NotSupportedException(
                     "Delegate .Equals(...) with a non-delegate argument is not supported. "
                     + "Compare two delegate values (or use ==).");
@@ -55,7 +55,9 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
                 result = Const(false, "SystemBoolean");
                 return true;
             }
-            result = CompareDelegates(VisitExpression(op.Instance), VisitExpression(eqArg), isNotEquals: false);
+            result = DelegateAbi.CompareDelegates(_builder,
+                VisitExpression(op.Instance), VisitExpression(eqArg), isNotEquals: false,
+                _ctx.AllocTemp, EmitAssign, SlotRef);
             return true;
         }
 
@@ -65,8 +67,8 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
         {
             var lhs = UnwrapConversions(op.Arguments[0].Value);
             var rhs = UnwrapConversions(op.Arguments[1].Value);
-            var lhsDlg = IsDelegateTyped(lhs.Type);
-            var rhsDlg = IsDelegateTyped(rhs.Type);
+            var lhsDlg = DelegateAbi.IsDelegateType(lhs.Type);
+            var rhsDlg = DelegateAbi.IsDelegateType(rhs.Type);
             if (!lhsDlg && !rhsDlg) return false; // not a delegate comparison — existing extern path
             if (lhsDlg != rhsDlg)
                 throw new System.NotSupportedException(
@@ -79,7 +81,9 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
                 result = Const(false, "SystemBoolean");
                 return true;
             }
-            result = CompareDelegates(VisitExpression(lhs), VisitExpression(rhs), isNotEquals: false);
+            result = DelegateAbi.CompareDelegates(_builder,
+                VisitExpression(lhs), VisitExpression(rhs), isNotEquals: false,
+                _ctx.AllocTemp, EmitAssign, SlotRef);
             return true;
         }
 
@@ -715,7 +719,9 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
     /// <summary>Multicast design §1.4: exposes the existing element-equality leg (target+method+env,
     /// §2.5) for the synthetic combine/remove helpers' LastContiguousMatch search — reused verbatim,
     /// never re-derived, so the `-=` removal semantics can never drift from `==`'s element leg.</summary>
-    internal CLeaf EmitDelegateElementEquals(CLeaf a, CLeaf b) => CompareDelegates(a, b, isNotEquals: false);
+    internal CLeaf EmitDelegateElementEquals(CLeaf a, CLeaf b)
+        => DelegateAbi.CompareDelegates(_builder, a, b, isNotEquals: false,
+            _ctx.AllocTemp, EmitAssign, SlotRef);
 
     /// <summary>default(T) constant for the dispatch retSlot pre-init (§2.6). Non-primitive Udon types
     /// (objects, arrays, bundles, SDK structs) approximate with null — only observable on the

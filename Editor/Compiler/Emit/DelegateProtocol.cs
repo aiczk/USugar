@@ -205,6 +205,73 @@ public static class DelegateAbi
             ExternResolver.BuildArrayGetSignature("SystemObjectArray", "SystemObject"),
             new List<CLeaf> { bundle, builder.Const(slot, "SystemInt32") },
             udonType);
+
+    public static bool IsDelegateType(ITypeSymbol type)
+        => type is INamedTypeSymbol named && named.DelegateInvokeMethod != null;
+
+    public static CLeaf CompareToNull(CoreBuilder builder, CLeaf bundle, bool isNotEquals)
+    {
+        var signature = isNotEquals
+            ? "SystemObject.__op_Inequality__SystemObject_SystemObject__SystemBoolean"
+            : "SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean";
+        return builder.ExternCall(signature,
+            new List<CLeaf> { bundle, builder.Const(null, "SystemObject") }, "SystemBoolean");
+    }
+
+    public static CLeaf CompareDelegates(CoreBuilder builder, CLeaf left, CLeaf right, bool isNotEquals,
+        Func<string, int> allocTemp, Action<int, CValue> emitAssign, Func<int, CLeaf> slotRef)
+    {
+        var nullValue = builder.Const(null, "SystemObject");
+        var leftNull = builder.ExternCall(
+            "SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean",
+            new List<CLeaf> { left, nullValue }, "SystemBoolean");
+        var rightNull = builder.ExternCall(
+            "SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean",
+            new List<CLeaf> { right, nullValue }, "SystemBoolean");
+        var anyNull = builder.ExternCall(
+            "SystemBoolean.__op_LogicalOr__SystemBoolean_SystemBoolean__SystemBoolean",
+            new List<CLeaf> { leftNull, rightNull }, "SystemBoolean");
+
+        var resultSlot = allocTemp("SystemBoolean");
+        builder.EmitIf(anyNull,
+            _ => emitAssign(resultSlot, builder.ExternCall(
+                "SystemBoolean.__op_Equality__SystemBoolean_SystemBoolean__SystemBoolean",
+                new List<CLeaf> { leftNull, rightNull }, "SystemBoolean")),
+            _ =>
+            {
+                var leftTarget = ReadSlot(builder, left, Target, "SystemObject");
+                var rightTarget = ReadSlot(builder, right, Target, "SystemObject");
+                var targetEq = builder.ExternCall(
+                    "SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean",
+                    new List<CLeaf> { leftTarget, rightTarget }, "SystemBoolean");
+
+                var leftMethod = ReadSlot(builder, left, Method, "SystemString");
+                var rightMethod = ReadSlot(builder, right, Method, "SystemString");
+                var methodEq = builder.ExternCall(
+                    "SystemString.__op_Equality__SystemString_SystemString__SystemBoolean",
+                    new List<CLeaf> { leftMethod, rightMethod }, "SystemBoolean");
+
+                var leftEnv = ReadSlot(builder, left, Env, "SystemObject");
+                var rightEnv = ReadSlot(builder, right, Env, "SystemObject");
+                var envEq = builder.ExternCall(
+                    "SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean",
+                    new List<CLeaf> { leftEnv, rightEnv }, "SystemBoolean");
+
+                var targetMethodEq = builder.ExternCall(
+                    "SystemBoolean.__op_LogicalAnd__SystemBoolean_SystemBoolean__SystemBoolean",
+                    new List<CLeaf> { targetEq, methodEq }, "SystemBoolean");
+                emitAssign(resultSlot, builder.ExternCall(
+                    "SystemBoolean.__op_LogicalAnd__SystemBoolean_SystemBoolean__SystemBoolean",
+                    new List<CLeaf> { targetMethodEq, envEq }, "SystemBoolean"));
+            });
+
+        CLeaf result = slotRef(resultSlot);
+        if (isNotEquals)
+            result = builder.ExternCall(
+                "SystemBoolean.__op_UnaryNegation__SystemBoolean__SystemBoolean",
+                new List<CLeaf> { result }, "SystemBoolean");
+        return result;
+    }
 }
 
 /// <summary>
