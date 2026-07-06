@@ -200,10 +200,7 @@ public abstract partial class HandlerBase
             EmitAssign(dimSlots[d], VisitExpression(op.DimensionSizes[d]));
         }
 
-        CLeaf totalSize = SlotRef(dimSlots[0]);
-        for (int d = 1; d < rank; d++)
-            totalSize = ExternCall("SystemInt32.__op_Multiplication__SystemInt32_SystemInt32__SystemInt32",
-                new List<CLeaf> { totalSize, SlotRef(dimSlots[d]) }, "SystemInt32");
+        var totalSize = NdimArrayAbi.BuildTotalElementCount(_builder, dimSlots);
         var totalSlot = _ctx.AllocTemp("SystemInt32");
         EmitAssign(totalSlot, totalSize);
 
@@ -269,8 +266,7 @@ public abstract partial class HandlerBase
     /// bounds proof / constant-fold optimization is explicitly out of scope, §1).</summary>
     protected CLeaf EmitNdimGetLength(CLeaf bundleVal, CLeaf dimArg)
     {
-        var plusOne = ExternCall("SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32",
-            new List<CLeaf> { dimArg, Const(NdimArrayAbi.DimSlotIndex(0), "SystemInt32") }, "SystemInt32");
+        var plusOne = NdimArrayAbi.BuildRuntimeDimSlotIndex(_builder, dimArg);
         return EmitNdimGetDimLength(bundleVal, plusOne);
     }
 
@@ -282,8 +278,7 @@ public abstract partial class HandlerBase
     protected CLeaf EmitNdimGetUpperBound(CLeaf bundleVal, CLeaf dimArg)
     {
         var len = EmitNdimGetLength(bundleVal, dimArg);
-        return ExternCall("SystemInt32.__op_Subtraction__SystemInt32_SystemInt32__SystemInt32",
-            new List<CLeaf> { len, Const(1, "SystemInt32") }, "SystemInt32");
+        return NdimArrayAbi.BuildUpperBound(_builder, len);
     }
 
     /// <summary>N-R4: every OTHER Array instance member (Clone/CopyTo/SetValue/GetValue/Equals/…) is a

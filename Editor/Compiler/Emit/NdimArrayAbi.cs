@@ -92,6 +92,23 @@ public static class NdimArrayAbi
         return flatIndex;
     }
 
+    public static CLeaf BuildTotalElementCount(CoreBuilder builder, int[] dimSlots)
+    {
+        CLeaf totalSize = builder.SlotRef(dimSlots[0]);
+        for (int d = 1; d < dimSlots.Length; d++)
+            totalSize = builder.ExternCall("SystemInt32.__op_Multiplication__SystemInt32_SystemInt32__SystemInt32",
+                new List<CLeaf> { totalSize, builder.SlotRef(dimSlots[d]) }, "SystemInt32");
+        return totalSize;
+    }
+
+    public static CLeaf BuildRuntimeDimSlotIndex(CoreBuilder builder, CLeaf dimArg)
+        => builder.ExternCall("SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32",
+            new List<CLeaf> { dimArg, builder.Const(DimSlotIndex(0), "SystemInt32") }, "SystemInt32");
+
+    public static CLeaf BuildUpperBound(CoreBuilder builder, CLeaf length)
+        => builder.ExternCall("SystemInt32.__op_Subtraction__SystemInt32_SystemInt32__SystemInt32",
+            new List<CLeaf> { length, builder.Const(1, "SystemInt32") }, "SystemInt32");
+
     public static void FlattenInitializer(IArrayInitializerOperation init, List<IOperation> outLeaves)
     {
         foreach (var elem in init.ElementValues)
