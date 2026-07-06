@@ -15,48 +15,17 @@ public sealed class BoundaryChecker
 
     TypeClassifierContext TypeCtx => new TypeClassifierContext(_ctx.TypeParamMap);
 
+    public ValueInfo ClassifyValue(IOperation value)
+        => ValueClassifier.Classify(value, TypeCtx, _ctx.CaptureScope);
+
     public bool DelegateValueCapturesProgramLocalPayload(IOperation value)
-    {
-        var v = UnwrapConversions(value);
-        var closure = v switch
-        {
-            IDelegateCreationOperation dc => (dc.Target as IAnonymousFunctionOperation)?.Symbol
-                                             ?? (dc.Target as IMethodReferenceOperation)?.Method,
-            IAnonymousFunctionOperation af => af.Symbol,
-            _ => null,
-        };
-        if (closure == null || _ctx.CaptureScope == null) return false;
-        if (!_ctx.CaptureScope.ClosureScopes.TryGetValue(closure.OriginalDefinition, out var closureScope)
-            || closureScope?.BindingScope == null)
-            return false;
-        for (var s = closureScope.BindingScope; s != null; s = _ctx.CaptureScope.EffectiveParent(s))
-            foreach (var cap in s.OwnedCaptures)
-            {
-                var t = (cap as ILocalSymbol)?.Type ?? (cap as IParameterSymbol)?.Type;
-                if (t != null && TypeClassifier.ContainsProgramLocalPayload(t, TypeCtx)) return true;
-            }
-        return false;
-    }
+        => ClassifyValue(value).DelegateCapturesProgramLocalPayload;
 
     public bool IsNullDelegateValue(IOperation value)
-    {
-        var v = UnwrapConversions(value);
-        return v.ConstantValue.HasValue && v.ConstantValue.Value == null;
-    }
+        => ClassifyValue(value).Kind == ValueKind.Null;
 
     public bool IsDirectProgramLocalSafeDelegateValue(IOperation value)
-    {
-        var v = UnwrapConversions(value);
-        return v switch
-        {
-            IAnonymousFunctionOperation => !DelegateValueCapturesProgramLocalPayload(v),
-            IDelegateCreationOperation dc when dc.Target is IAnonymousFunctionOperation
-                => !DelegateValueCapturesProgramLocalPayload(dc),
-            IDelegateCreationOperation { Target: IMethodReferenceOperation } => true,
-            IMethodReferenceOperation => true,
-            _ => false,
-        };
-    }
+        => ValueClassifier.IsDirectProgramLocalSafeDelegate(ClassifyValue(value));
 
     public bool CurrentMethodBodyMentionsProgramLocalPayload()
     {
@@ -85,8 +54,9 @@ public sealed class BoundaryChecker
     public void RequireCanStoreCrossProgramDelegate(IFieldReferenceOperation target, IOperation value)
     {
         if (!IsCrossProgramDelegateFieldTarget(target)) return;
-        if (IsNullDelegateValue(value) || IsDirectProgramLocalSafeDelegateValue(value)) return;
-        if (!DelegateValueCapturesProgramLocalPayload(value) && !CurrentMethodBodyMentionsProgramLocalPayload())
+        var info = ClassifyValue(value);
+        if (info.Kind == ValueKind.Null || ValueClassifier.IsDirectProgramLocalSafeDelegate(info)) return;
+        if (!info.DelegateCapturesProgramLocalPayload && !CurrentMethodBodyMentionsProgramLocalPayload())
             return;
         throw new NotSupportedException(
             $"A delegate stored in the cross-program field '{target.Field.Name}' must be created directly "
@@ -98,10 +68,11 @@ public sealed class BoundaryChecker
 
     public void RequireCanStorePublicEventHandler(IEventSymbol evt, IOperation value)
     {
-        if (evt.DeclaredAccessibility != Accessibility.Public || IsNullDelegateValue(value)
-            || IsDirectProgramLocalSafeDelegateValue(value))
+        if (evt.DeclaredAccessibility != Accessibility.Public) return;
+        var info = ClassifyValue(value);
+        if (info.Kind == ValueKind.Null || ValueClassifier.IsDirectProgramLocalSafeDelegate(info))
             return;
-        if (!DelegateValueCapturesProgramLocalPayload(value) && !CurrentMethodBodyMentionsProgramLocalPayload())
+        if (!info.DelegateCapturesProgramLocalPayload && !CurrentMethodBodyMentionsProgramLocalPayload())
             return;
         throw new NotSupportedException(
             $"A handler stored in the public event '{evt.Name}' must be created directly from a capture-safe "
@@ -177,10 +148,4 @@ public sealed class BoundaryChecker
             + "plain data instead and rebuild the object on the receiving side.");
     }
 
-    static IOperation UnwrapConversions(IOperation value)
-    {
-        var v = value;
-        while (v is IConversionOperation c) v = c.Operand;
-        return v;
-    }
 }
