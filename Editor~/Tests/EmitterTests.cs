@@ -921,6 +921,20 @@ public class BareArrTest : UdonSharpBehaviour {
         Assert.Equal(new[] { 10, 20, 30 }, arr);
     }
 
+    [Fact]
+    public void FieldInitializer_UnsupportedExpression_ThrowsInsteadOfDefaulting()
+    {
+        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
+using UdonSharp;
+public class FIUnsupportedTest : UdonSharpBehaviour {
+    object value = new { X = 1 };
+    void Start() { }
+}
+"));
+        Assert.Contains("Field 'value' initializer is not supported", ex.ToString());
+        Assert.Contains("default(T)", ex.ToString());
+    }
+
     // ── Field initializers: user-struct construction (roadmap B41) ──
     // A user-struct field initializer's ctor-call / object-initializer form must take the same S1
     // object[]-emulation lowering the method-body path (VisitAggregateLocalDeclaration) uses, not the

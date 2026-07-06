@@ -2366,19 +2366,9 @@ public class UasmEmitter
             }
             catch (NotSupportedException ex)
             {
-                // Loud-or-correct: a delegate field whose initializer fails to lower must BLOCK the
-                // compile — demoting to a Warning ships a silently-null bundle (compile-clean wrong
-                // value). Other field types keep the legacy Warning demotion.
-                if (_ctx.DelegateFields.Contains(fieldId)) throw;
-                var loc = initOp.Syntax?.GetLocation()?.GetLineSpan();
-                _diagnostics.Add(new EmitDiagnostic
-                {
-                    Severity = "Warning",
-                    Message = $"Field '{fieldId}' initializer not supported, will be default(T) at runtime: {ex.Message}",
-                    FilePath = loc?.Path ?? "",
-                    Line = (loc?.StartLinePosition.Line ?? -1) + 1,
-                    Character = (loc?.StartLinePosition.Character ?? -1) + 1,
-                });
+                throw new NotSupportedException(
+                    $"Field '{fieldId}' initializer is not supported and would otherwise compile as default(T): {ex.Message}",
+                    ex);
             }
         }
 
