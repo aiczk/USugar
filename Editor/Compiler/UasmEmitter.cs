@@ -1681,24 +1681,12 @@ public class UasmEmitter
     {
         var fanoutName = DelegateAbi.MulticastFanoutName(sigPart);
         var mSlot = _ctx.AllocTemp("SystemObjectArray");
-        _builder.EmitAssign(mSlot, BridgeCallExtern("SystemObjectArray", MulticastArrCtor,
-            new CLeaf[] { BridgeConstInt(DelegateAbi.BundleSize) }));
-
         var thisType = ExternResolver.GetUdonTypeName(_classSymbol);
-        var thisRef = BridgeLoad(_ctx.DeclareThisOnce(thisType), thisType);
-
-        BridgeCallExternVoid(MulticastArrSet, new CLeaf[]
-            { _builder.SlotRef(mSlot), BridgeConstInt(DelegateAbi.Kind), _builder.Const(DelegateAbi.KindTag, "SystemString") });
-        BridgeCallExternVoid(MulticastArrSet, new CLeaf[]
-            { _builder.SlotRef(mSlot), BridgeConstInt(DelegateAbi.Target), thisRef });
-        BridgeCallExternVoid(MulticastArrSet, new CLeaf[]
-            { _builder.SlotRef(mSlot), BridgeConstInt(DelegateAbi.Method), _builder.Const(fanoutName, "SystemString") });
-        BridgeCallExternVoid(MulticastArrSet, new CLeaf[]
-            { _builder.SlotRef(mSlot), BridgeConstInt(DelegateAbi.Addr), _builder.FuncRef(fanoutName) });
-        BridgeCallExternVoid(MulticastArrSet, new CLeaf[]
-            { _builder.SlotRef(mSlot), BridgeConstInt(DelegateAbi.Env), listLeaf });
-
-        return _builder.SlotRef(mSlot);
+        return DelegateAbi.EmitBundleMintToSlot(_builder, mSlot,
+            () => BridgeLoad(_ctx.DeclareThisOnce(thisType), thisType),
+            _builder.Const(fanoutName, "SystemString"),
+            _builder.FuncRef(fanoutName),
+            listLeaf);
     }
 
     /// <summary>Multicast combine/remove shared operand normalization (§1.4): a multicast operand

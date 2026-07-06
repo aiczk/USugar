@@ -165,16 +165,37 @@ public static class DelegateAbi
     public static CLeaf EmitBundleMint(CoreBuilder builder, Func<CLeaf> targetFn,
         CLeaf methodNameLeaf, CLeaf addrLeaf, CLeaf envLeaf)
     {
-        var setSig = ExternResolver.BuildArraySetSignature("SystemObjectArray", "SystemObject");
         var bundle = builder.ExternCall(ExternResolver.BuildArrayCtorSignature("SystemObjectArray"),
             new List<CLeaf> { builder.Const(BundleSize, "SystemInt32") }, "SystemObjectArray");
+        EmitBundleSlotWrites(builder, bundle, targetFn, methodNameLeaf, addrLeaf, envLeaf);
+        return bundle;
+    }
+
+    /// <summary>Mint a delegate bundle into a caller-owned slot. Use this when the surrounding ABI helper
+    /// already exposes a stable temporary slot and changing that materialization would perturb generated
+    /// bytecode layout.</summary>
+    public static CLeaf EmitBundleMintToSlot(CoreBuilder builder, int bundleSlot, Func<CLeaf> targetFn,
+        CLeaf methodNameLeaf, CLeaf addrLeaf, CLeaf envLeaf)
+    {
+        builder.EmitAssign(bundleSlot, builder.ExternCall(
+            ExternResolver.BuildArrayCtorSignature("SystemObjectArray"),
+            new List<CLeaf> { builder.Const(BundleSize, "SystemInt32") },
+            "SystemObjectArray"));
+        var bundle = builder.SlotRef(bundleSlot);
+        EmitBundleSlotWrites(builder, bundle, targetFn, methodNameLeaf, addrLeaf, envLeaf);
+        return bundle;
+    }
+
+    static void EmitBundleSlotWrites(CoreBuilder builder, CLeaf bundle, Func<CLeaf> targetFn,
+        CLeaf methodNameLeaf, CLeaf addrLeaf, CLeaf envLeaf)
+    {
+        var setSig = ExternResolver.BuildArraySetSignature("SystemObjectArray", "SystemObject");
         var target = targetFn();
         builder.EmitExternVoid(setSig, new List<CLeaf> { bundle, builder.Const(Kind, "SystemInt32"), builder.Const(KindTag, "SystemString") });
         builder.EmitExternVoid(setSig, new List<CLeaf> { bundle, builder.Const(Target, "SystemInt32"), target });
         builder.EmitExternVoid(setSig, new List<CLeaf> { bundle, builder.Const(Method, "SystemInt32"), methodNameLeaf });
         builder.EmitExternVoid(setSig, new List<CLeaf> { bundle, builder.Const(Addr, "SystemInt32"), addrLeaf });
         builder.EmitExternVoid(setSig, new List<CLeaf> { bundle, builder.Const(Env, "SystemInt32"), envLeaf });
-        return bundle;
     }
 
     /// <summary>Read a typed slot from a delegate ABI bundle. All delegate slot reads should route here
