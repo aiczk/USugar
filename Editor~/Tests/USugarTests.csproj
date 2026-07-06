@@ -30,6 +30,9 @@
     <Compile Include="../../Editor/Compiler/Emit/SyntheticContext.cs" />
     <Compile Include="../../Editor/Compiler/Emit/ControlFlowContext.cs" />
     <Compile Include="../../Editor/Compiler/Emit/InitializationContext.cs" />
+    <Compile Include="../../Editor/Compiler/Emit/DiagnosticContext.cs" />
+    <Compile Include="../../Editor/Compiler/Emit/MethodContext.cs" />
+    <Compile Include="../../Editor/Compiler/Emit/StorageContext.cs" />
     <Compile Include="../../Editor/Compiler/Emit/EnvEmit.cs" />
     <Compile Include="../../Editor/Compiler/Emit/TailCallAnalysis.cs" />
     <Compile Include="../../Editor/Compiler/Emit/Analysis/LambdaCaptureAnalyzer.cs" />

@@ -12,6 +12,7 @@ public class EmitContext
     public readonly CModule Module;
     public readonly CoreBuilder Builder;
     public readonly LayoutPlanner Planner;
+    public readonly StorageContext Storage;
     public readonly BoundaryChecker Boundary;
     public readonly GenericContext Generics = new GenericContext();
     public readonly RecursionContext RecursionContext = new RecursionContext();
@@ -20,9 +21,11 @@ public class EmitContext
     public readonly SyntheticContext Synthetics = new SyntheticContext();
     public readonly ControlFlowContext ControlFlow = new ControlFlowContext();
     public readonly InitializationContext Initializers = new InitializationContext();
+    public readonly DiagnosticContext DiagnosticState = new DiagnosticContext();
+    public readonly MethodContext Methods = new MethodContext();
 
     // Method bookkeeping
-    public readonly Dictionary<IMethodSymbol, CFunction> MethodFunctions = new(SymbolEqualityComparer.Default);
+    public Dictionary<IMethodSymbol, CFunction> MethodFunctions => Methods.Functions;
     public readonly struct MethodSlot
     {
         public readonly int Index;
@@ -30,23 +33,23 @@ public class EmitContext
         public MethodSlot(int index, string varPrefix) { Index = index; VarPrefix = varPrefix; }
     }
 
-    public readonly Dictionary<IMethodSymbol, MethodSlot> MethodSlots = new(SymbolEqualityComparer.Default);
+    public Dictionary<IMethodSymbol, MethodSlot> MethodSlots => Methods.Slots;
 
     public MethodSlot RegisterMethod(IMethodSymbol method, Func<int, string> prefixFactory)
-    {
-        var idx = NextMethodIndex++;
-        var slot = new MethodSlot(idx, prefixFactory(idx));
-        MethodSlots[method] = slot;
-        return slot;
-    }
+        => Methods.Register(method, prefixFactory);
+
     /// <summary>Per-method return slots. Empty array for void. Length 1 for scalar. Length N for tuple.</summary>
-    public readonly Dictionary<IMethodSymbol, ReturnSlot[]> MethodReturns = new(SymbolEqualityComparer.Default);
-    public readonly Dictionary<IMethodSymbol, string[]> MethodParamVarIds = new(SymbolEqualityComparer.Default);
-    public IMethodSymbol CurrentMethod;
+    public Dictionary<IMethodSymbol, ReturnSlot[]> MethodReturns => Methods.Returns;
+    public Dictionary<IMethodSymbol, string[]> MethodParamVarIds => Methods.ParamVarIds;
+    public IMethodSymbol CurrentMethod { get => Methods.CurrentMethod; set => Methods.CurrentMethod = value; }
 
     /// <summary>When emitting a user-struct method/ctor, the receiver object[] param var id; otherwise null.
     /// Makes <c>this</c> / <c>this.field</c> resolve to the receiver array instead of the Behaviour.</summary>
-    public string CurrentStructReceiverParamId;
+    public string CurrentStructReceiverParamId
+    {
+        get => Methods.CurrentStructReceiverParamId;
+        set => Methods.CurrentStructReceiverParamId = value;
+    }
 
     /// <summary>Recursion/reentrancy analysis results for this class — see <see cref="RecursionInfo"/>
     /// for what each product field means. Populated in place by <c>UasmEmitter.BuildRecursionInfo</c>
@@ -68,11 +71,11 @@ public class EmitContext
     public bool CalleeTouchesThisField(IMethodSymbol callee, IFieldSymbol field)
         => RecursionContext.CalleeTouchesThisField(callee, field);
 
-    public int NextMethodIndex;
-    public readonly List<(IMethodSymbol symbol, CFunction func)> PendingLocalFunctions = new();
+    public int NextMethodIndex { get => Methods.NextMethodIndex; set => Methods.NextMethodIndex = value; }
+    public List<(IMethodSymbol symbol, CFunction func)> PendingLocalFunctions => Methods.PendingLocalFunctions;
 
     // Generic monomorphization
-    public readonly List<IMethodSymbol> PendingGenericSpecs = new();
+    public List<IMethodSymbol> PendingGenericSpecs => Generics.PendingSpecs;
     // Immutable and scope-owned: built only by TypeParamScope.Compose, and written ONLY by the
     // EnterTypeParamScope machinery below (private setter). Read freely everywhere.
     public IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> TypeParamMap => Generics.TypeParamMap;
@@ -90,8 +93,7 @@ public class EmitContext
     // whichever spec emitted LAST (last-spec-wins; VM-proven r1=8 vs 3). A second DISTINCT
     // instantiation of a definition whose body contains a capturing closure is loud (per-spec
     // closure environments are Stage-2 territory, design §8-3). LOOKUP-ONLY (§1.5).
-    public readonly Dictionary<IMethodSymbol, IMethodSymbol> FirstGenericSpec
-        = new(SymbolEqualityComparer.Default);
+    public Dictionary<IMethodSymbol, IMethodSymbol> FirstGenericSpec => Generics.FirstSpecByDefinition;
 
     /// <summary>What about a generic definition's body closures pins it to a single instantiation.
     /// <c>UsedParams</c> (round-8 [Y2]): which of the generic's OWN type parameters (by kind+ordinal,
@@ -343,7 +345,7 @@ public class EmitContext
         public LocalBinding(string id) { Id = id; }
     }
 
-    public readonly Dictionary<ILocalSymbol, LocalBinding> LocalBindings = new(SymbolEqualityComparer.Default);
+    public Dictionary<ILocalSymbol, LocalBinding> LocalBindings => Storage.LocalBindings;
 
     // Stage 2 M1: structural closure-scope analysis (CaptureScopeAnalysis) — scope ownership, slot
     // assignment, and per-closure binding-scope/hop-distance chain shape. Built once per class in
@@ -477,8 +479,8 @@ public class EmitContext
     public Dictionary<string, (IMethodSymbol OuterInvoke, IMethodSymbol InnerInvoke, IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> TypeParamMap)> PendingWrapperSigs => Synthetics.WrapperSigs;
 
     // Diagnostics collected during emission
-    public readonly List<EmitDiagnostic> Diagnostics = new();
-    public readonly HashSet<string> ReportedExterns = new();
+    public List<EmitDiagnostic> Diagnostics => DiagnosticState.Diagnostics;
+    public HashSet<string> ReportedExterns => DiagnosticState.ReportedExterns;
 
     // Dispatch delegates (Core IR-based)
     Action<IOperation> _visitOperation;
@@ -521,6 +523,7 @@ public class EmitContext
         Module = new CModule { ClassName = classSymbol.ToDisplayString() };
         Builder = new CoreBuilder(Module);
         Planner = planner;
+        Storage = new StorageContext(Module);
         Boundary = new BoundaryChecker(this);
     }
 
@@ -528,81 +531,30 @@ public class EmitContext
     // Variable naming utilities (replaces VariableTable)
     // ══════════════════════════════════════════════════════════════════
 
-    readonly Dictionary<string, int> _counters = new();
-    readonly HashSet<string> _declaredFieldNames = new();
-    readonly Dictionary<string, string> _thisVars = new();
-    readonly Dictionary<string, string> _structConstIds = new();
-
-    int NextIndex(string key)
-    {
-        _counters.TryGetValue(key, out var n);
-        _counters[key] = n + 1;
-        return n;
-    }
-
     /// <summary>Declare a field in Module. Idempotent — returns existing name if already declared.</summary>
     public string DeclareField(string name, string type, FieldFlags flags = FieldFlags.None,
         object defaultValue = null, string syncMode = null)
-    {
-        if (_declaredFieldNames.Contains(name)) return name;
-        var field = new FieldDecl(name, type) { Flags = flags, DefaultValue = defaultValue, SyncMode = syncMode };
-        Module.Fields.Add(field);
-        _declaredFieldNames.Add(name);
-        return name;
-    }
+        => Storage.DeclareField(name, type, flags, defaultValue, syncMode);
 
     /// <summary>Declare a named variable field. Idempotent.</summary>
     public string DeclareVar(string id, string type)
-    {
-        if (_declaredFieldNames.Contains(id)) return id;
-        Module.Fields.Add(new FieldDecl(id, type));
-        _declaredFieldNames.Add(id);
-        return id;
-    }
+        => Storage.DeclareVar(id, type);
 
     /// <summary>Try to declare a variable. Returns true if newly declared.</summary>
     public bool TryDeclareVar(string id, string type)
-    {
-        if (_declaredFieldNames.Contains(id)) return false;
-        Module.Fields.Add(new FieldDecl(id, type));
-        _declaredFieldNames.Add(id);
-        return true;
-    }
+        => Storage.TryDeclareVar(id, type);
 
     /// <summary>Declare a local variable with unique field name.</summary>
     public string DeclareLocal(string name, string type)
-    {
-        var idx = NextIndex($"lcl_{name}_{type}");
-        var id = $"__lcl_{name}_{type}_{idx}";
-        Module.Fields.Add(new FieldDecl(id, type));
-        _declaredFieldNames.Add(id);
-        return id;
-    }
+        => Storage.DeclareLocal(name, type);
 
     /// <summary>Declare a "this" reference field with type remapping for Udon heap.</summary>
     public string DeclareThis(string udonType)
-    {
-        var heapType = SupportedThisTypes.Contains(udonType) ? udonType : "VRCUdonUdonBehaviour";
-        var idx = NextIndex($"this_{heapType}");
-        var id = $"__this_{heapType}_{idx}";
-        Module.Fields.Add(new FieldDecl(id, heapType) { DefaultValue = "this" });
-        _declaredFieldNames.Add(id);
-        return id;
-    }
+        => Storage.DeclareThis(udonType);
 
     /// <summary>Declare or reuse a "this" reference for the given type.</summary>
     public string DeclareThisOnce(string udonType)
-    {
-        if (_thisVars.TryGetValue(udonType, out var existing)) return existing;
-        var id = DeclareThis(udonType);
-        _thisVars[udonType] = id;
-        return id;
-    }
-
-    static readonly HashSet<string> SupportedThisTypes = new()
-    {
-        "UnityEngineGameObject", "UnityEngineTransform", "VRCUdonUdonBehaviour",
-    };
+        => Storage.DeclareThisOnce(udonType);
 
     // ── Software recursion stack ──
     // Udon's flat heap shares param/local slots across call frames, so recursion-cycle calls must spill
@@ -618,19 +570,11 @@ public class EmitContext
     /// (EnsureRecursionStack is on-demand), so non-recursive programs pay nothing; the size lives in
     /// the heap-default side channel, not the UASM text.</summary>
     public const int RecurStackSize = RecurStack.Size;
-    bool _recurStackDeclared;
 
     /// <summary>Idempotently declare the per-program recursion stack (object[] backing + int stack pointer).
     /// Heap default allocates the backing array and zeroes the pointer; LIFO spill/reload keeps it balanced.</summary>
     public void EnsureRecursionStack()
-    {
-        if (_recurStackDeclared) return;
-        _recurStackDeclared = true;
-        Module.Fields.Add(new FieldDecl(RecurStackId, "SystemObjectArray") { DefaultValue = new object[RecurStackSize] });
-        _declaredFieldNames.Add(RecurStackId);
-        Module.Fields.Add(new FieldDecl(RecurSpId, "SystemInt32") { DefaultValue = 0 });
-        _declaredFieldNames.Add(RecurSpId);
-    }
+        => Storage.EnsureRecursionStack();
 
 
     public const string ReflTypeIdField = "__refl_typeid";
@@ -645,34 +589,20 @@ public class EmitContext
 
     /// <summary>Set const value on an existing field.</summary>
     public void SetFieldConstValue(string name, object value)
-    {
-        var field = Module.Fields.FirstOrDefault(f => f.Name == name);
-        if (field != null) field.DefaultValue = value;
-    }
+        => Storage.SetFieldConstValue(name, value);
 
     /// <summary>Check if a field name has been declared.</summary>
-    public bool IsFieldDeclared(string name) => _declaredFieldNames.Contains(name);
+    public bool IsFieldDeclared(string name) => Storage.IsFieldDeclared(name);
 
     /// <summary>Allocate a Scratch slot for a temporary value (slot-based, coalesced by register allocator).</summary>
     public int AllocTemp(string type) => Builder.AllocScratch(type);
 
     /// <summary>Declare a struct constant field with deduplication (e.g., Vector3.zero).</summary>
     public string DeclareStructConst(string type, object value)
-    {
-        var key = $"{type}_{value}";
-        if (_structConstIds.TryGetValue(key, out var existing)) return existing;
-        var idx = NextIndex($"structconst_{type}");
-        var id = $"__const_{type}_{idx}";
-        Module.Fields.Add(new FieldDecl(id, type) { DefaultValue = value });
-        _declaredFieldNames.Add(id);
-        _structConstIds[key] = id;
-        return id;
-    }
+        => Storage.DeclareStructConst(type, value);
 
     /// <summary>Get the Udon type of a declared field by its ID.</summary>
     public string GetFieldType(string id)
-    {
-        return Module.Fields.FirstOrDefault(f => f.Name == id)?.Type;
-    }
+        => Storage.GetFieldType(id);
 
 }

@@ -11,6 +11,11 @@ public sealed class GenericContext
 {
     public IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> TypeParamMap { get; private set; }
 
+    public readonly List<IMethodSymbol> PendingSpecs = new();
+
+    public readonly Dictionary<IMethodSymbol, IMethodSymbol> FirstSpecByDefinition
+        = new(SymbolEqualityComparer.Default);
+
     public IDisposable EnterScope(IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> map, IMethodSymbol currentMethod)
     {
         if (TypeParamMap != null)
