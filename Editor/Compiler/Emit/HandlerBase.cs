@@ -1000,8 +1000,7 @@ public abstract partial class HandlerBase
         // (Category-A: object[] slot resolution); the caller only asks for a raw receiver, never a value read.
         if (fr.Instance != null && fr.Instance.Type is INamedTypeSymbol cont && EmitPolicy.IsObjectArrayEmulated(cont)
             && _ctx.GetAggregateLayout(cont).TryGetIndex(fr.Field, out var idx))
-            return ExternCall(ExternResolver.BuildArrayGetSignature("SystemObjectArray", "SystemObject"),
-                new List<CLeaf> { LoadInstanceRaw(fr.Instance), Const(idx, "SystemInt32") }, "SystemObject");
+            return AggregateAbi.ReadSlot(_builder, LoadInstanceRaw(fr.Instance), idx, "SystemObject");
         if (fr.Instance is IInstanceReferenceOperation)
             return LoadField(fr.Field.Name, "SystemObjectArray");
         return VisitExpression(fr); // cross-behaviour aggregate field etc. — rare
@@ -1249,8 +1248,7 @@ public abstract partial class HandlerBase
         {
             RejectStaticReadonlyWriteThrough(aggInstance); // §3.3, R5
             var arrExpr = LoadInstanceRaw(aggInstance);
-            return value => EmitExternVoid(ExternResolver.BuildArraySetSignature("SystemObjectArray", "SystemObject"),
-                new List<CLeaf> { arrExpr, Const(fieldIndex, "SystemInt32"), value });
+            return value => AggregateAbi.WriteSlot(_builder, arrExpr, fieldIndex, value);
         }
 
         // Cross-behaviour field → one SetProgramVariable (a delegate field ships the bundle
@@ -1356,8 +1354,7 @@ public abstract partial class HandlerBase
             && _ctx.GetAggregateLayout(aggContaining).TryGetIndex(propRef.Property.Name, out var aggSlotIndex))
         {
             var arrExpr = LoadInstanceRaw(aggInst);
-            return aggVal => EmitExternVoid(ExternResolver.BuildArraySetSignature("SystemObjectArray", "SystemObject"),
-                new List<CLeaf> { arrExpr, Const(aggSlotIndex, "SystemInt32"), aggVal });
+            return aggVal => AggregateAbi.WriteSlot(_builder, arrExpr, aggSlotIndex, aggVal);
         }
 
         // Computed (non-auto) struct property setter: p.Both = v → call the user setter with the receiver

@@ -170,8 +170,7 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
             if (layout.TryGetIndex(fieldRef.Field, out var elemIndex))
             {
                 var arrExpr = LoadInstanceRaw(fieldRef.Instance);
-                var getVal = ExternCall(ExternResolver.BuildArrayGetSignature("SystemObjectArray", "SystemObject"),
-                    new List<CLeaf> { arrExpr, Const(elemIndex, "SystemInt32") }, "SystemObject");
+                var getVal = AggregateAbi.ReadSlot(_builder, arrExpr, elemIndex, "SystemObject");
                 // A struct-typed element read AS A VALUE is copied (value semantics); scalar elements are immutable boxes.
                 return fieldRef.Field.Type is INamedTypeSymbol elemAgg && EmitPolicy.IsAggregateType(elemAgg)
                     ? EmitDeepCloneAggregate(getVal, elemAgg) : getVal;
