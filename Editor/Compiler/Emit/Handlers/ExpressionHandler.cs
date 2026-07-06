@@ -410,7 +410,7 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
                    != DelegateAbi.BuildSigPart(vSrcInvoke, _ctx.TypeParamMap))
             {
                 // The wrapper's INNER dispatch must speak srcVal's OWN native protocol — vSrc's Invoke
-                // method (sig-T), never vDst's (sig-S): srcVal's bundle[1] names ITS OWN bridge (under
+            // method (sig-T), never vDst's (sig-S): srcVal's DelegateAbi.Method names ITS OWN bridge (under
                 // sig-T's conv-var protocol), so staging under sig-S would silently drop values.
                 var wrapperName = RegisterWrapperSig(vDstInvoke, vSrcInvoke, _ctx.TypeParamMap);
 
@@ -786,10 +786,10 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
 
     // ── Delegate Creation ──
 
-    // The ONLY producer of delegate values (design §2.2): builds the runtime object[4] bundle
-    // { [0]=target, [1]=bridge export name, [2]=boxed-UInt32 funcaddr, [3]=env (Stage-1 null) }.
+    // The ONLY producer of delegate values (design §2.2): builds the tagged runtime delegate bundle
+    // { Kind, Target, Method, Addr, Env }.
     // ResolveDelegateBridge hoists lambdas/local functions and registers their __dlg_ bridge via
-    // PendingDelegateBridges (bundle[1] is the cross-path entry, so the bridge is always emitted).
+    // PendingDelegateBridges (DelegateAbi.Method is the cross-path entry, so the bridge is always emitted).
     // Capture-escape registration is pre-emit analysis (§4.1) — nothing is marked here.
     CLeaf VisitDelegateCreation(IDelegateCreationOperation op)
     {
@@ -807,13 +807,13 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
             targetMethodForValidation, _ctx.TypeParamMap, varianceResolved);
 
         var thisType = GetUdonType(_classSymbol);
-        // Addr discipline (§1.3): the only sources for bundle[2] are the back-patched funcaddr const
+        // Addr discipline (§1.3): the only sources for DelegateAbi.Addr are the back-patched funcaddr const
         // (boxed UInt32) or Const(0u). A third-party method group's local funcaddr is meaningless in the
         // target program, so it carries 0u; a same-this target carries the REAL funcaddr — even when the
         // bundle is later handed cross-Behaviour (the invoke-side target-identity guard is the only gate).
         var addr = thirdParty != null ? (CLeaf)Const(0u, "SystemUInt32") : funcRef;
 
-        // Stage 2 §3.7: bundle[3] carries the binding-scope env for a CAPTURING closure target, else
+        // Stage 2 §3.7: DelegateAbi.Env carries the binding-scope env for a CAPTURING closure target, else
         // a null const (capture-free lambda / named method / base.M) = byte-identical to Stage 1.
         var bundle = EmitBundleMint(() => thirdParty ?? LoadField(_ctx.DeclareThisOnce(thisType), thisType),
             Const(bridgeName, "SystemString"), addr, envLeaf);

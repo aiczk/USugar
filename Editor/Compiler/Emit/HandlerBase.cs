@@ -353,7 +353,7 @@ public abstract partial class HandlerBase
     /// <summary>Create a function reference (for delegate/JUMP_INDIRECT).</summary>
     protected CFuncRef FuncRef(string funcName) => _builder.FuncRef(funcName);
 
-    /// <summary>Mint a delegate bundle: the shared 4-field object[] sequence (see <see cref="DelegateAbi.EmitBundleMint"/>).</summary>
+    /// <summary>Mint a delegate bundle: the shared tagged object[] sequence (see <see cref="DelegateAbi.EmitBundleMint"/>).</summary>
     protected CLeaf EmitBundleMint(Func<CLeaf> targetFn, CLeaf methodNameLeaf, CLeaf addrLeaf, CLeaf envLeaf)
         => DelegateAbi.EmitBundleMint(_builder, targetFn, methodNameLeaf, addrLeaf, envLeaf);
 
@@ -2010,7 +2010,7 @@ public abstract partial class HandlerBase
 
     /// <summary>B83: does a delegate-VALUE expression carry a closure whose env — transitively, through the
     /// env-record parent chain (CaptureScopeAnalysis, a compile-time fact) — captures a v1 user class? A
-    /// signature-clean delegate (e.g. Action) can still smuggle a class through bundle[3] (the captured env),
+    /// signature-clean delegate (e.g. Action) can still smuggle a class through DelegateAbi.Env,
     /// so a cross-program delegate write must inspect the captures, not just the invoke signature. Only a
     /// direct delegate CREATION (lambda / local function) is inspected — its closure symbol is statically
     /// known here; a method group / capture-free lambda owns no captures and returns false.</summary>
@@ -2085,7 +2085,7 @@ public abstract partial class HandlerBase
 
         // Wave-12 r4 [W3]: a method group bound to an INTERFACE member (`cb = iface.Get`) previously
         // ICEd in GetDelegateBridgeLayout ('No delegate bridge'). It cannot compile correctly today:
-        // bundle[1] is SendCustomEvent'd on the RUNTIME receiver, so it must name a __dlgc_-convention
+        // DelegateAbi.Method is SendCustomEvent'd on the RUNTIME receiver, so it must name a __dlgc_-convention
         // bridge export derivable from the interface member alone, and implementers only export
         // bridges named by their own implementing methods — a canonical per-interface-member bridge
         // family in every implementer is a feature-scale ABI addition, not a fix (§8-3: loud over
@@ -2100,7 +2100,7 @@ public abstract partial class HandlerBase
                 + "delegate dispatch. Wrap the call in a lambda instead ('() => receiver."
                 + $"{targetMethod.Name}(...)'), or bind the implementing class's method directly.");
 
-        // Stage 2 §3.7: bundle[3] env for a capturing closure target (null for named methods / base.M
+        // Stage 2 §3.7: DelegateAbi.Env for a capturing closure target (null for named methods / base.M
         // / capture-free lambdas). Resolved here in the creation site's frame.
         var envLeaf = ClosureEnvLeaf(targetMethod);
 
@@ -2246,7 +2246,7 @@ public abstract partial class HandlerBase
         // know at ITS OWN compile time which adapter shapes another class will need) — mint the INNER
         // exact-sig third-party bundle here (identical shape to any third-party bundle: addr=0u, env=
         // null) and hand back a sig-S WRAPPER (B-2) as the outer creation's bridge, with the inner
-        // bundle riding bundle[3] — the wrapper's unified dispatch handles the cross hop generically.
+        // bundle riding DelegateAbi.Env — the wrapper's unified dispatch handles the cross hop generically.
         if (op.Target is IMethodReferenceOperation
             && op.Type is INamedTypeSymbol delegateType && delegateType.DelegateInvokeMethod is { } delegateInvoke)
         {
@@ -2266,7 +2266,7 @@ public abstract partial class HandlerBase
                     Const(bridgeExportName, "SystemString"), Const(0u, "SystemUInt32"), Const(null, "SystemObject"));
 
                 // The wrapper's INNER dispatch must speak the inner bundle's OWN protocol — here, the
-                // third-party target's OWN signature (targetMethod, sig-T), never sig-S: bundle[1] names
+                // third-party target's OWN signature (targetMethod, sig-T), never sig-S: DelegateAbi.Method names
                 // targetMethod's OWN plain bridge (bridgeExportName, planned unconditionally on the
                 // FOREIGN class per its speculative-bridge policy), which reads/writes sig-T's conv
                 // vars — staging under sig-S would silently drop values across the dispatch.
@@ -2525,7 +2525,7 @@ public abstract partial class HandlerBase
                     new List<CLeaf> { lm, rm }, "SystemBoolean");
 
                 // Stage 2 §4.5: distinct closure activations are unequal delegates — add an env
-                // reference-equality leg. bundle[3] is null for method groups / capture-free lambdas,
+                // reference-equality leg. DelegateAbi.Env is null for method groups / capture-free lambdas,
                 // so null==null → true keeps their behaviour identical to Stage 1. Addr (slot 2) stays
                 // excluded (self-program-relative).
                 var le = ExternCall(ExternResolver.BuildArrayGetSignature("SystemObjectArray", "SystemObject"),

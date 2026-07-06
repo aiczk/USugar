@@ -90,7 +90,7 @@ public sealed class CaptureScopeAnalysis
 
     // Stage 2 M2 (design §1.3/§3.7): the set of hoisted closures (lambdas + local functions,
     // definition-keyed) that CAPTURE at least one outer variable — the exact predicate for "needs a
-    // hidden __envp param / bundle[3] carries a real env / bridge consumes env". A closure with a
+    // hidden __envp param / DelegateAbi.Env carries a real env / bridge consumes env". A closure with a
     // non-null BindingScope but zero captures (a capture-free closure lexically nested in a
     // capturing context) is NOT in this set: giving it an __envp would break capture-free byte
     // identity (§1.3). Transitive over the local-function call graph via the analyzer's fixpoint.

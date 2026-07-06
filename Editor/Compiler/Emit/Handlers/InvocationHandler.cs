@@ -526,7 +526,7 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
             retType = GetUdonType(invoke.ReturnType);
             _ctx.TryDeclareVar(convRet, retType);
         }
-        // Stage 2 §5.1: every dispatch site unconditionally stages bundle[3] → __dlgc_{sig}__env, so
+        // Stage 2 §5.1: every dispatch site unconditionally stages DelegateAbi.Env → __dlgc_{sig}__env, so
         // declare it on first use here (a capture-free target sends null; the bridge's null guard is
         // the backstop). Declared at the dispatch site only — never in a capture-free bridge (§1.3).
         _ctx.TryDeclareVar(convEnv, EnvEmit.EnvType);
@@ -593,10 +593,16 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
 
         void EmitGuardedDispatch()
         {
+            var kind = ExternCall(ExternResolver.BuildArrayGetSignature("SystemObjectArray", "SystemObject"),
+                new List<CLeaf> { bundle, Const(DelegateAbi.Kind, "SystemInt32") }, "SystemString");
+            var kindOk = ExternCall("SystemString.__op_Equality__SystemString_SystemString__SystemBoolean",
+                new List<CLeaf> { kind, Const(DelegateAbi.KindTag, "SystemString") }, "SystemBoolean");
+            _builder.EmitIf(kindOk, _ =>
+            {
             // tgt is a SystemObject temp fed to externs directly — no Convert needed (P1/P5a).
             var tgt = ExternCall(ExternResolver.BuildArrayGetSignature("SystemObjectArray", "SystemObject"),
                 new List<CLeaf> { bundle, Const(DelegateAbi.Target, "SystemInt32") }, "SystemObject");
-            // target-null guard: unset element, or the in-game security filter nulling bundle[0].
+            // target-null guard: unset element, or the in-game security filter nulling DelegateAbi.Target.
             var tOk = ExternCall("UnityEngineObject.__op_Inequality__UnityEngineObject_UnityEngineObject__SystemBoolean",
                 new List<CLeaf> { tgt, Const(null, "SystemObject") }, "SystemBoolean");
             _builder.EmitIf(tOk, _ =>
@@ -606,7 +612,7 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
                     if (argExprs[i] != null)
                         EmitStoreField(convArgs[i], argExprs[i]);
 
-                // Stage 2 §5.1: stage bundle[3] into the env conv global (unconditional, both arms —
+                // Stage 2 §5.1: stage DelegateAbi.Env into the env conv global (unconditional, both arms —
                 // the SELF arm's bridge reads this field directly; the CROSS arm SPVs it below). A
                 // capture-free target sends null; the receiving bridge's null-env guard is the backstop.
                 EmitStoreField(convEnv, ExternCall(ExternResolver.BuildArrayGetSignature("SystemObjectArray", "SystemObject"),
@@ -666,6 +672,7 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
                                     new List<CLeaf> { tgt, Const(convRet, "SystemString") }, "SystemObject"));
                         }, failArm);
                     });
+            }, failArm);
             }, failArm);
         }
 

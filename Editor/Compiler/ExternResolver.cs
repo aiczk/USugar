@@ -220,8 +220,8 @@ public static class ExternResolver
             return RemapUdonType(elemTypeName) + "Array";
         }
 
-        // Delegate type → SystemObjectArray: the runtime value is a reference to the {target, method, addr,
-        // env} object[] bundle (first-class delegate ABI, design §1.2). Must precede the constructed-generic
+        // Delegate type → SystemObjectArray: the runtime value is a reference to the tagged
+        // {kind, target, method, addr, env} object[] bundle. Must precede the constructed-generic
         // branch below, which would otherwise fabricate fake names like SystemFuncSystemInt32SystemInt32.
         if (type is INamedTypeSymbol dlgWithMap && dlgWithMap.DelegateInvokeMethod != null)
             return "SystemObjectArray";
@@ -356,8 +356,8 @@ public static class ExternResolver
             return RemapUdonType(elemTypeName) + "Array";
         }
 
-        // Delegate type → SystemObjectArray: a delegate value is a reference to the {target, method, addr,
-        // env} object[] bundle (first-class delegate ABI, design §1.2). Must precede the generic branch,
+        // Delegate type → SystemObjectArray: a delegate value is a reference to the tagged
+        // {kind, target, method, addr, env} object[] bundle. Must precede the generic branch,
         // which would otherwise fabricate fake names like SystemFuncSystemInt32SystemInt32 / SystemAction.
         if (type is INamedTypeSymbol dlgNamed && dlgNamed.DelegateInvokeMethod != null)
             return "SystemObjectArray";

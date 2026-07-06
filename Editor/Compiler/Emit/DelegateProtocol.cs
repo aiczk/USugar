@@ -4,23 +4,27 @@ using System.Linq;
 using Microsoft.CodeAnalysis;
 
 /// <summary>
-/// First-class delegate ABI (Stage 1, design 2026-06-10 §1). A delegate VALUE is a single reference to a
-/// runtime object[4] bundle; assignment is reference copy; dispatch reads the bundle elements. The bundle
-/// layout is FROZEN — Stage 2 only starts writing/reading Env, never re-shapes the bundle.
+/// First-class delegate ABI. A delegate VALUE is a single reference to a runtime object[5] bundle;
+/// assignment is reference copy; dispatch reads the bundle elements. ABI v2 reserves slot 0 for an
+/// explicit provenance tag so SystemObjectArray can be distinguished from class/aggregate/env bundles
+/// by convention instead of only by the static type at the producer.
 /// </summary>
 public static class DelegateAbi
 {
-    /// <summary>bundle[0]: IUdonEventReceiver target. Delegate-null is the BUNDLE reference being null — not [0].</summary>
-    public const int Target = 0;
-    /// <summary>bundle[1]: SystemString — the receiving program's bridge EXPORT name (__dlg_{ExportName} / __dlg_{lambdaPrefix}).</summary>
-    public const int Method = 1;
-    /// <summary>bundle[2]: boxed System.UInt32 — funcaddr of the bridge's {name}__body label. 0u for third-party method groups.
+    /// <summary>bundle[0]: SystemString ABI provenance tag.</summary>
+    public const int Kind = 0;
+    /// <summary>bundle[1]: IUdonEventReceiver target. Delegate-null is the BUNDLE reference being null — not [Target].</summary>
+    public const int Target = 1;
+    /// <summary>bundle[2]: SystemString — the receiving program's bridge EXPORT name (__dlg_{ExportName} / __dlg_{lambdaPrefix}).</summary>
+    public const int Method = 2;
+    /// <summary>bundle[3]: boxed System.UInt32 — funcaddr of the bridge's {name}__body label. 0u for third-party method groups.
     /// Only ever sourced from a funcaddr const (back-patched) or Const(0u) — never an Int32 intermediate (§1.3).</summary>
-    public const int Addr = 2;
-    /// <summary>bundle[3]: reserved env slot. Stage 1 writes null at every creation site and never reads it (§1.4).</summary>
-    public const int Env = 3;
+    public const int Addr = 3;
+    /// <summary>bundle[4]: closure env record, variance wrapper payload, or multicast invocation list.</summary>
+    public const int Env = 4;
 
-    public const int BundleSize = 4;
+    public const int BundleSize = 5;
+    public const string KindTag = "__usugar_delegate_v2";
 
     /// <summary>
     /// Canonical signature key for the global __dlgc_{sig}__a{i} / __dlgc_{sig}__ret convention vars — a
@@ -112,7 +116,7 @@ public static class DelegateAbi
 
     /// <summary>
     /// Multicast design (2026-07-03 §1.1): the ONLY name source for the per-sig synthetic fan-out
-    /// bridge / combine / remove helpers. A multicast bundle routes bundle[1]/[2] to this bridge;
+    /// bridge / combine / remove helpers. A multicast bundle routes DelegateAbi.Method/Addr to this bridge;
     /// the combine/remove helpers detect a multicast OPERAND via a compile-time constant string
     /// compare against MulticastFanoutName (§1.4) — never re-derive these strings at another site.
     /// </summary>
@@ -122,7 +126,7 @@ public static class DelegateAbi
 
     /// <summary>
     /// Variance design (2026-07-04 §2.2, B-1): the ONLY name source for a per-(target, sig-S) sig
-    /// adapter bridge — mints under the DELEGATE's declared signature (sig-S) so bundle[1]/[2] point at
+    /// adapter bridge — mints under the DELEGATE's declared signature (sig-S) so Method/Addr point at
     /// a sig-S-protocol entry point (Stage-2 §5.4 sig-filter invariant preserved by construction).
     /// <paramref name="targetKey"/> disambiguates two different targets adapting to the same sig-S
     /// (the target's own plain bridge/export name, unique per NameAllocator).
@@ -147,8 +151,8 @@ public static class DelegateAbi
     public static string WrapperName(string outerSigPart, string innerSigPart) => $"__dlg_wrap_{outerSigPart}_{innerSigPart}";
 
     /// <summary>
-    /// The ONE bundle-mint sequence (§1.1): a fresh object[BundleSize] with [Target]/[Method]/[Addr]/
-    /// [Env] set in that order — shared by every mint site (delegate creation, the sig-adapter's inner
+    /// The ONE bundle-mint sequence (§1.1): a fresh object[BundleSize] with [Kind]/[Target]/[Method]/
+    /// [Addr]/[Env] set in that order — shared by every mint site (delegate creation, the sig-adapter's inner
     /// third-party bundle, the variance wrapper bundle, the multicast fan-out bundle) instead of each
     /// hand-rolling the same four <c>__Set</c> calls. <paramref name="targetFn"/> is a thunk, not a
     /// plain value: every existing call site emits the ctor FIRST and only THEN evaluates its target
@@ -165,6 +169,7 @@ public static class DelegateAbi
         var bundle = builder.ExternCall(ExternResolver.BuildArrayCtorSignature("SystemObjectArray"),
             new List<CLeaf> { builder.Const(BundleSize, "SystemInt32") }, "SystemObjectArray");
         var target = targetFn();
+        builder.EmitExternVoid(setSig, new List<CLeaf> { bundle, builder.Const(Kind, "SystemInt32"), builder.Const(KindTag, "SystemString") });
         builder.EmitExternVoid(setSig, new List<CLeaf> { bundle, builder.Const(Target, "SystemInt32"), target });
         builder.EmitExternVoid(setSig, new List<CLeaf> { bundle, builder.Const(Method, "SystemInt32"), methodNameLeaf });
         builder.EmitExternVoid(setSig, new List<CLeaf> { bundle, builder.Const(Addr, "SystemInt32"), addrLeaf });

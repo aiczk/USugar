@@ -708,7 +708,7 @@ public class UasmEmitter
         if (member.GetAttributes().Any(a => a.AttributeClass?.Name == "UdonSyncedAttribute"))
             throw new NotSupportedException(
                 $"[UdonSynced] delegate field '{member.Name}' cannot be synced: a delegate value is a "
-                + "runtime object[] bundle (target/method/addr), which Udon sync cannot carry. Sync "
+                + "runtime object[] bundle (kind/target/method/addr), which Udon sync cannot carry. Sync "
                 + "plain data instead and re-create the delegate locally.");
         // Design §2.4 (A-M2): [NetworkCallable] marks a METHOD as a remotely-invokable entry point —
         // it has no meaning on a delegate value (a bundle is program-local and cannot cross the
@@ -1545,7 +1545,7 @@ public class UasmEmitter
         // Dispatch the INNER bundle using ITS OWN protocol (innerInvoke) — EmitFanoutElementDispatch
         // derives sig-T's conv names from innerInvoke directly (Stage 1.75 §2.3 fix to
         // GetConventionFieldNames' IMethodSymbol overload), matching whatever bridge the inner bundle's
-        // bundle[1]/[2] actually names. Unlike the fan-out (whose caller pre-declares the SAME sig's
+        // Method/Addr actually names. Unlike the fan-out (whose caller pre-declares the SAME sig's
         // conv vars for both outer and inner use, since they coincide), sig-T here is DIFFERENT from
         // sig-S — EmitFanoutElementDispatch assumes its conv vars are already declared (mirroring every
         // other dispatch site's declare-on-first-use discipline), so declare sig-T's here explicitly:
@@ -1655,9 +1655,9 @@ public class UasmEmitter
         }
     }
 
-    /// <summary>Mint a fresh multicast bundle (§1.1/§1.4): object[4] with [0]=this, [1]=this sig's
-    /// fan-out export name, [2]=that bridge's funcaddr (back-patched CFuncRef, §1.3 addr discipline),
-    /// [3]=the given invocation list.</summary>
+    /// <summary>Mint a fresh multicast bundle (§1.1/§1.4): a delegate ABI bundle tagged as v2, with
+    /// Target=this, Method=this sig's fan-out export name, Addr=that bridge's funcaddr
+    /// (back-patched CFuncRef, §1.3 addr discipline), Env=the given invocation list.</summary>
     CLeaf EmitMulticastMintBundle(string sigPart, CLeaf listLeaf)
     {
         var fanoutName = DelegateAbi.MulticastFanoutName(sigPart);
@@ -1668,6 +1668,8 @@ public class UasmEmitter
         var thisType = ExternResolver.GetUdonTypeName(_classSymbol);
         var thisRef = BridgeLoad(_ctx.DeclareThisOnce(thisType), thisType);
 
+        BridgeCallExternVoid(MulticastArrSet, new CLeaf[]
+            { _builder.SlotRef(mSlot), BridgeConstInt(DelegateAbi.Kind), _builder.Const(DelegateAbi.KindTag, "SystemString") });
         BridgeCallExternVoid(MulticastArrSet, new CLeaf[]
             { _builder.SlotRef(mSlot), BridgeConstInt(DelegateAbi.Target), thisRef });
         BridgeCallExternVoid(MulticastArrSet, new CLeaf[]
@@ -1681,8 +1683,8 @@ public class UasmEmitter
     }
 
     /// <summary>Multicast combine/remove shared operand normalization (§1.4): a multicast operand
-    /// unwraps to its invocation list (bundle[3]); a single-cast operand wraps as its own 1-element
-    /// list. The multicast test is a compile-time constant string compare against bundle[1] — the only
+    /// unwraps to its invocation list (DelegateAbi.Env); a single-cast operand wraps as its own 1-element
+    /// list. The multicast test is a compile-time constant string compare against DelegateAbi.Method — the only
     /// test allowed to distinguish a multicast bundle from a single-cast one (the __dlg_fanout_ prefix
     /// is reserved and can never collide with a real user method/bridge export name).</summary>
     void EmitMulticastFlattenOperand(CLeaf operand, string fanoutName, out int listSlot, out int lenSlot)

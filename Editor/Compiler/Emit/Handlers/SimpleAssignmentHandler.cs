@@ -32,7 +32,7 @@ public class SimpleAssignmentHandler : AssignmentHandlerBase, IExpressionHandler
             return VisitExpression(assign.Value);
 
         // B83: a class-capturing closure written to a CROSS-PROGRAM delegate field (public/exported/synced
-        // this-field, or another behaviour's field) would carry the captured class through bundle[3]'s env
+        // this-field, or another behaviour's field) would carry the captured class through DelegateAbi.Env
         // across the boundary, undetected by the signature-only ValidateNoUserClassSignature. Reject at the
         // write. An in-program (private this-field) delegate stays legal — execution-locality (the F1 pin).
         if (assign.Target is IFieldReferenceOperation dlgFieldTarget)
