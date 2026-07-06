@@ -17,6 +17,7 @@ public class EmitContext
     public readonly RecursionContext RecursionContext = new RecursionContext();
     public readonly ClosureContext Closures = new ClosureContext();
     public readonly AggregateContext Aggregates = new AggregateContext();
+    public readonly SyntheticContext Synthetics = new SyntheticContext();
 
     // Method bookkeeping
     public readonly Dictionary<IMethodSymbol, CFunction> MethodFunctions = new(SymbolEqualityComparer.Default);
@@ -440,31 +441,31 @@ public class EmitContext
     public readonly Stack<Dictionary<string, string>> GotoCaseLabels = new();
 
     // Delegate fields: tracks which user fields are delegate-typed and were expanded to bundles
-    public readonly HashSet<string> DelegateFields = new();
+    public HashSet<string> DelegateFields => Synthetics.DelegateFields;
 
     // Pending delegate bridges for dynamically hoisted lambdas/local functions. The carried map is the
     // creating method's immutable TypeParamMap by REFERENCE (it is per-EmitMethod fresh and never mutated,
     // so no snapshot copy is needed even though the drain runs after emission when the ambient map is null).
-    public readonly List<(IMethodSymbol method, string bridgeExportName, IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> resolvedTypeParamMap)> PendingDelegateBridges = new();
+    public List<(IMethodSymbol method, string bridgeExportName, IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> resolvedTypeParamMap)> PendingDelegateBridges => Synthetics.DelegateBridges;
 
     // Multicast design (2026-07-03 §1): sig-part → (Invoke, resolved type-param map) for every
     // delegate signature this class combines/removes via `+=`/`-=` (CompoundAssignmentHandler). Drives
     // the per-class __dlg_fanout_/__dlg_combine_/__dlg_remove_{sig} synthetic emission (UasmEmitter,
     // sibling of EmitPendingDelegateBridges). Keyed on sig content, not occurrence — so two `+=` sites
     // sharing a signature dedupe to one fan-out/helper set. Carries the map by reference (immutable).
-    public readonly Dictionary<string, (IMethodSymbol Invoke, IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> TypeParamMap)> PendingMulticastSigs = new();
+    public Dictionary<string, (IMethodSymbol Invoke, IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> TypeParamMap)> PendingMulticastSigs => Synthetics.MulticastSigs;
 
     // B67: user enums whose ToString()/concat/interpolation needs a synthesized value→name helper. Keyed by
     // the enum symbol; the per-enum `__enumstr_{Name}` function is emitted once in the UasmEmitter drain
     // (EmitEnumToStringSynthetics), sibling of EmitMulticastSynthetics.
-    public readonly HashSet<INamedTypeSymbol> PendingEnumToString = new(SymbolEqualityComparer.Default);
+    public HashSet<INamedTypeSymbol> PendingEnumToString => Synthetics.EnumToString;
 
     // Variance design (2026-07-04 §2.2, B-1): per-(target, sig-S) sig adapter bridges — a same-program
     // variant method-group binding mints one of these instead of the plain bridge. delegateInvoke is the
     // DESTINATION delegate's own Invoke method (sig-S's param/return types for the conv-var declarations),
     // distinct from targetMethod (the real callee's own types, used only for the InternalCall). Sibling of
     // PendingDelegateBridges — same dedup-by-name-at-emission shape (UasmEmitter.EmitPendingSigAdapterBridges).
-    public readonly List<(IMethodSymbol targetMethod, IMethodSymbol delegateInvoke, string adapterName, IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> resolvedTypeParamMap)> PendingSigAdapterBridges = new();
+    public List<(IMethodSymbol targetMethod, IMethodSymbol delegateInvoke, string adapterName, IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> resolvedTypeParamMap)> PendingSigAdapterBridges => Synthetics.SigAdapterBridges;
 
     // Variance design (2026-07-04 §2.3, B-2): wrapper name → (outer sig-S Invoke, inner sig-T
     // Invoke-or-method, resolved type-param snapshot) for every wrapper-with-payload bridge needed
@@ -472,7 +473,7 @@ public class EmitContext
     // WRAPPER NAME (already unique per (outer,inner) sig pair — DelegateAbi.WrapperName) rather than a
     // single sig, since a wrapper's inner dispatch speaks the INNER bundle's own protocol, distinct from
     // the outer one two different sig-T's could both wrap to the same sig-S.
-    public readonly Dictionary<string, (IMethodSymbol OuterInvoke, IMethodSymbol InnerInvoke, IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> TypeParamMap)> PendingWrapperSigs = new();
+    public Dictionary<string, (IMethodSymbol OuterInvoke, IMethodSymbol InnerInvoke, IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> TypeParamMap)> PendingWrapperSigs => Synthetics.WrapperSigs;
 
     // Diagnostics collected during emission
     public readonly List<EmitDiagnostic> Diagnostics = new();
