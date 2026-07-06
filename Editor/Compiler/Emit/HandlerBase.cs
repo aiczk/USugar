@@ -2032,14 +2032,8 @@ public abstract partial class HandlerBase
     protected bool CurrentMethodBodyMentionsUserClass()
         => _ctx.Boundary.CurrentMethodBodyMentionsProgramLocalPayload();
 
-    protected void RejectUnsafeCrossProgramDelegateWrite(IFieldReferenceOperation target, IOperation value)
-        => _ctx.Boundary.RequireCanStoreCrossProgramDelegate(target, value);
-
     protected void RejectUnsafeCrossProgramDelegateWrite(IFieldReferenceOperation target, ValueInfo value)
         => _ctx.Boundary.RequireCanStoreCrossProgramDelegate(target, value);
-
-    protected void RejectUnsafeCrossProgramEventHandler(IEventSymbol evt, IOperation value)
-        => _ctx.Boundary.RequireCanStorePublicEventHandler(evt, value);
 
     protected void RejectUnsafeCrossProgramEventHandler(IEventSymbol evt, ValueInfo value)
         => _ctx.Boundary.RequireCanStorePublicEventHandler(evt, value);

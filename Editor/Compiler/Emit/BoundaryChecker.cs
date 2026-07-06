@@ -51,9 +51,6 @@ public sealed class BoundaryChecker
         return false;
     }
 
-    public void RequireCanStoreCrossProgramDelegate(IFieldReferenceOperation target, IOperation value)
-        => RequireCanStoreCrossProgramDelegate(target, ClassifyValue(value));
-
     public void RequireCanStoreCrossProgramDelegate(IFieldReferenceOperation target, ValueInfo info)
     {
         if (!IsCrossProgramDelegateFieldTarget(target)) return;
@@ -67,9 +64,6 @@ public sealed class BoundaryChecker
             + "through their closure environment, and cannot cross a program boundary. Keep the delegate "
             + "field private, or assign a direct class-free lambda/method group.");
     }
-
-    public void RequireCanStorePublicEventHandler(IEventSymbol evt, IOperation value)
-        => RequireCanStorePublicEventHandler(evt, ClassifyValue(value));
 
     public void RequireCanStorePublicEventHandler(IEventSymbol evt, ValueInfo info)
     {
