@@ -570,24 +570,8 @@ public class StatementHandler : HandlerBase, IOperationHandler
             // struct ctor's VisitObjectCreation returns a null placeholder, so handle creation here.)
             DefaultInitAggregate(localId, layout);
             if (oc.Initializer != null)
-            {
-                foreach (var member in oc.Initializer.Initializers)
-                {
-                    if (member is not ISimpleAssignmentOperation sa) continue;
-                    // Field or auto-property (incl. init) target → object[] element by member name.
-                    var memberName = sa.Target switch
-                    {
-                        IFieldReferenceOperation fr => fr.Field.Name,
-                        IPropertyReferenceOperation pr => pr.Property.Name,
-                        _ => null,
-                    };
-                    if (memberName != null && layout.TryGetIndex(memberName, out var idx))
-                    {
-                        AggregateAbi.WriteSlot(_builder, LoadField(localId, "SystemObjectArray"),
-                            idx, VisitExpression(sa.Value));
-                    }
-                }
-            }
+                AggregateAbi.EmitObjectInitializer(_builder, LoadField(localId, AggregateAbi.ArrayType),
+                    layout, oc.Initializer, VisitExpression);
         }
         else
         {
