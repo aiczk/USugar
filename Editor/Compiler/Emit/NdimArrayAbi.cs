@@ -4,7 +4,7 @@ using Microsoft.CodeAnalysis;
 /// ABI for rank-2+ CLR arrays. A logical T[d0,...,dn] is represented as a SystemObjectArray bundle:
 /// slot 0 is the rank-1 typed backing array, slots 1..rank are boxed dimension lengths.
 /// </summary>
-static class NdimArrayAbi
+public static class NdimArrayAbi
 {
     public enum PropertyKind
     {
@@ -16,6 +16,26 @@ static class NdimArrayAbi
     {
         GetLength,
         GetUpperBound
+    }
+
+    public readonly struct AccessPlan
+    {
+        public readonly CLeaf BundleVal;
+        public readonly CLeaf InBounds;
+        public readonly CLeaf FlatIndex;
+        public readonly IArrayTypeSymbol BackingType;
+        public readonly int[] IdxSlots;
+        public readonly int[] DimSlots;
+
+        public AccessPlan(CLeaf bundleVal, CLeaf inBounds, CLeaf flatIndex, IArrayTypeSymbol backingType, int[] idxSlots, int[] dimSlots)
+        {
+            BundleVal = bundleVal;
+            InBounds = inBounds;
+            FlatIndex = flatIndex;
+            BackingType = backingType;
+            IdxSlots = idxSlots;
+            DimSlots = dimSlots;
+        }
     }
 
     public const string BundleUdonType = "SystemObjectArray";

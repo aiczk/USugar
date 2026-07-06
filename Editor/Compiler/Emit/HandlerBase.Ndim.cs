@@ -50,19 +50,7 @@ public abstract partial class HandlerBase
     /// the Horner-flattened index (computed unconditionally — cheap arithmetic, only USED when
     /// in-bounds). Shared verbatim by read, write, and the ref/out prepare leg so a violation is
     /// detected identically regardless of access shape.</summary>
-    protected readonly struct NdimAccessPlan
-    {
-        public readonly CLeaf BundleVal;
-        public readonly CLeaf InBounds;
-        public readonly CLeaf FlatIndex;
-        public readonly IArrayTypeSymbol BackingType;
-        public readonly int[] IdxSlots;
-        public readonly int[] DimSlots;
-        public NdimAccessPlan(CLeaf bundleVal, CLeaf inBounds, CLeaf flatIndex, IArrayTypeSymbol backingType, int[] idxSlots, int[] dimSlots)
-        { BundleVal = bundleVal; InBounds = inBounds; FlatIndex = flatIndex; BackingType = backingType; IdxSlots = idxSlots; DimSlots = dimSlots; }
-    }
-
-    protected NdimAccessPlan PrepareNdimAccess(IOperation arrayRefOp, IReadOnlyList<IOperation> indexOps, IArrayTypeSymbol ndimType)
+    protected NdimArrayAbi.AccessPlan PrepareNdimAccess(IOperation arrayRefOp, IReadOnlyList<IOperation> indexOps, IArrayTypeSymbol ndimType)
     {
         int rank = ndimType.Rank;
         var backingType = GetNdimBackingType(ndimType);
@@ -110,7 +98,7 @@ public abstract partial class HandlerBase
                 new List<CLeaf> { mul, SlotRef(idxSlots[d]) }, "SystemInt32");
         }
 
-        return new NdimAccessPlan(bundleVal, inBounds, flatIndex, backingType, idxSlots, dimSlots);
+        return new NdimArrayAbi.AccessPlan(bundleVal, inBounds, flatIndex, backingType, idxSlots, dimSlots);
     }
 
     CLeaf EmitIntToStr(CLeaf intVal)
@@ -121,7 +109,7 @@ public abstract partial class HandlerBase
 
     /// <summary>D-N1: LogError naming the array expression, its rank, and every (index/length) pair,
     /// at runtime — the caller has already established at least one dimension is out of range.</summary>
-    protected void EmitNdimBoundsLogError(IOperation arrayExprSyntaxSrc, string verb, NdimAccessPlan plan)
+    protected void EmitNdimBoundsLogError(IOperation arrayExprSyntaxSrc, string verb, NdimArrayAbi.AccessPlan plan)
     {
         CLeaf msg = Const($"USugar: index out of range on '{arrayExprSyntaxSrc.Syntax}' ({verb}, rank {plan.IdxSlots.Length}):", "SystemString");
         for (int d = 0; d < plan.IdxSlots.Length; d++)
@@ -139,7 +127,7 @@ public abstract partial class HandlerBase
     /// branch does the real Horner-flattened Get on the flat backing (the EXISTING 1-D Get choke
     /// point); else branch LogErrors (D-N1). Used by both the plain element read and the ref/out
     /// read leg so a violation is reported identically either way.</summary>
-    protected CLeaf EmitNdimReadFromPlan(IArrayElementReferenceOperation ae, NdimAccessPlan plan, string elemUdonType)
+    protected CLeaf EmitNdimReadFromPlan(IArrayElementReferenceOperation ae, NdimArrayAbi.AccessPlan plan, string elemUdonType)
     {
         var resultSlot = _ctx.AllocTemp(elemUdonType);
         EmitAssign(resultSlot, InvocationHandler.DefaultConst(_builder, elemUdonType));
@@ -159,7 +147,7 @@ public abstract partial class HandlerBase
     /// <summary>Shared in-bounds Set from an already-prepared plan: in-bounds branch Sets on the flat
     /// backing (the EXISTING 1-D Set choke point); else branch LogErrors and SKIPS the write (D-N1 —
     /// no partial state, the write either fully happens or not at all).</summary>
-    protected void EmitNdimWriteFromPlan(IArrayElementReferenceOperation ae, NdimAccessPlan plan, CLeaf value)
+    protected void EmitNdimWriteFromPlan(IArrayElementReferenceOperation ae, NdimArrayAbi.AccessPlan plan, CLeaf value)
     {
         _builder.EmitIf(plan.InBounds,
             _ =>

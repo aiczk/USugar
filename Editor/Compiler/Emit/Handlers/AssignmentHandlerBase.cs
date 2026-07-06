@@ -28,7 +28,7 @@ public abstract class AssignmentHandlerBase : HandlerBase
         public CLeaf IndexVal;       // Cached index (for array elements)
         public CLeaf InstanceVal;    // Cached instance (for cross-behaviour fields/properties)
         public List<CLeaf> IndexArgs; // Cached index args (for user indexers — avoid re-evaluating side effects)
-        public NdimAccessPlan? NdimPlan; // Cached N-dim bounds/backing/flat-index plan (rank>1 array elements)
+        public NdimArrayAbi.AccessPlan? NdimPlan; // Cached N-dim bounds/backing/flat-index plan (rank>1 array elements)
     }
 
     protected LValueCapture CaptureLValue(IOperation target)
