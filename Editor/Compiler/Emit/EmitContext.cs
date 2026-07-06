@@ -16,6 +16,7 @@ public class EmitContext
     public readonly GenericContext Generics = new GenericContext();
     public readonly RecursionContext RecursionContext = new RecursionContext();
     public readonly ClosureContext Closures = new ClosureContext();
+    public readonly AggregateContext Aggregates = new AggregateContext();
 
     // Method bookkeeping
     public readonly Dictionary<IMethodSymbol, CFunction> MethodFunctions = new(SymbolEqualityComparer.Default);
@@ -398,15 +399,8 @@ public class EmitContext
     // (VM-proven: loop-var reads after a mutating call 1112 vs CLR 102). MEMBERSHIP-ONLY set (§1.5).
     public readonly HashSet<ILocalSymbol> ForeachIterationLocals = new(SymbolEqualityComparer.Default);
 
-    readonly Dictionary<ITypeSymbol, AggregateLayout> _aggregateLayoutCache = new(SymbolEqualityComparer.Default);
-
     public AggregateLayout GetAggregateLayout(INamedTypeSymbol type)
-    {
-        if (_aggregateLayoutCache.TryGetValue(type, out var cached)) return cached;
-        var layout = AggregateLayout.Build(type);
-        _aggregateLayoutCache[type] = layout;
-        return layout;
-    }
+        => Aggregates.GetLayout(type);
 
     // Field initializers to emit at _start
     public readonly List<(string fieldName, IOperation initOp, ITypeSymbol fieldType)> FieldInitOps = new();
@@ -504,7 +498,7 @@ public class EmitContext
     /// <summary>Aggregate (struct/tuple) instance fields with NO explicit initializer. C# default-initializes
     /// them to a zeroed struct; in the object[] emulation that requires a fresh default object[] (else the heap
     /// var stays null and a field write faults). Reference-type / array fields correctly stay null and are absent here.</summary>
-    public readonly List<(string fieldName, INamedTypeSymbol aggType)> AggregateFieldDefaults = new();
+    public List<(string fieldName, INamedTypeSymbol aggType)> AggregateFieldDefaults => Aggregates.FieldDefaults;
 
     public void InitializeDispatchers(
         Action<IOperation> visitOp,
