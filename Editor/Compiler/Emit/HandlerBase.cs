@@ -965,47 +965,14 @@ public abstract partial class HandlerBase
                 && _ctx.GetAggregateLayout(agg).TryGetIndex(name, out _));
     }
 
-    /// <summary>Wave-9 round-7 [Y2]: true when evaluating this expression can neither produce a
-    /// side effect nor be perturbed by another expression's side effects — literals, pure reads
-    /// (locals/params/fields/array elements), and built-in operators only. Used to keep the legacy
-    /// value-first field-SET emission order (pinned UASM byte-stability — struct_ref_param's
-    /// `x.v = x.v + 1` emits receiver-leg COPYs whose position is pinned) exactly where the C#
-    /// legs-before-RHS order is unobservable. ANY non-whitelisted node (invocation, property read,
-    /// user-defined operator, object creation, assignment, inc/dec, …) forces the C# order.</summary>
-    protected static bool IsEmissionOrderInert(IOperation op)
-    {
-        switch (op)
-        {
-            case ILiteralOperation:
-            case ILocalReferenceOperation:
-            case IParameterReferenceOperation:
-            case IInstanceReferenceOperation:
-            case IFieldReferenceOperation:
-            case IArrayElementReferenceOperation:
-            case ITupleOperation:
-            case IDefaultValueOperation:
-            case ITypeOfOperation:
-            case INameOfOperation:
-            case ISizeOfOperation:
-            case IConversionOperation { OperatorMethod: null }:
-            case IUnaryOperation { OperatorMethod: null }:
-            case IBinaryOperation { OperatorMethod: null }:
-                foreach (var child in op.ChildOperations)
-                    if (!IsEmissionOrderInert(child)) return false;
-                return true;
-            default:
-                return false;
-        }
-    }
-
     /// <summary>Wave-9 round-7 [Y2]/[Y4]-[Y10]: the single field SET path, shared by simple
     /// assignment and deconstruction lvalues (the field twin of PreparePropertySet /
     /// PrepareArrayElementSet). Evaluates the target's receiver legs NOW (C# order: the lvalue's
-    /// component expressions run BEFORE the RHS) and returns the deferred store. Arms mirror the
-    /// pre-round-7 SimpleAssignmentHandler order verbatim: aggregate member slot → cross-behaviour
-    /// SetProgramVariable → extern value-type field → extern reference-type field. Returns null for
-    /// behaviour this-fields and static fields (no legs) — callers keep their direct-store fallback.
-    /// Keep the arm dispatch in lockstep with IsPreparableFieldSetTarget above.</summary>
+    /// component expressions run BEFORE the RHS) and returns the deferred store: aggregate member
+    /// slot → cross-behaviour SetProgramVariable → extern value-type field → extern reference-type
+    /// field. Returns null for behaviour this-fields and static fields (no legs) — callers keep
+    /// their direct-store path. Keep the arm dispatch in lockstep with IsPreparableFieldSetTarget
+    /// above.</summary>
     protected System.Action<CLeaf> TryPrepareFieldSet(IFieldReferenceOperation fieldRef)
     {
         // Aggregate (struct/tuple) OR v1-class member → layout slot write on the backing object[].

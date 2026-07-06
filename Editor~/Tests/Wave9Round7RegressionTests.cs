@@ -16,9 +16,8 @@ namespace USugar.Tests;
 ///       receivers `arr[idx].v`, member chains) evaluated those legs at STORE time — AFTER the
 ///       RHS — on BOTH the simple-assignment arm (ref=701 vs 71) and every deconstruction arm
 ///       (ref=702 vs 72, 1402 vs 72, wrong-cell writes). Fixed: TryPrepareFieldSet (the field
-///       twin of PreparePropertySet) evaluates legs in C# order; the simple-assignment arm keeps
-///       the legacy value-first order ONLY when both sides are emission-order inert (pure
-///       reads/operators — unobservable; pins struct_ref_param sentinel bytes).
+///       twin of PreparePropertySet) evaluates legs in C# order; simple assignment now uses the
+///       same legs-before-RHS path for every preparable field target.
 /// [Y3]  A closure inside a GENERIC method capturing the generic method's PARAMETER ICEd on a
 ///       single legal instantiation ("Cannot resolve parameter 'n' … in method ''") — the capture
 ///       walk binds the DEFINITION's parameter symbol while the param heap vars live under the

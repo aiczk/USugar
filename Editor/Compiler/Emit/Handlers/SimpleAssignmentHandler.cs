@@ -36,19 +36,9 @@ public class SimpleAssignmentHandler : AssignmentHandlerBase, IExpressionHandler
         // also consumed by the deconstruction lvalue arm. Wave-9 round-7 [Y2]: C# evaluates the
         // target's component expressions BEFORE the RHS; the old arms evaluated the RHS first, so
         // `arr[idx].v = Mut()` with Mut() bumping idx wrote the WRONG element (VM-proven ref=701
-        // vs 71). When BOTH sides are emission-order inert (pure reads/operators — neither can
-        // perturb the other), keep the legacy value-first order so pinned UASM stays byte-identical
-        // (struct_ref_param sentinel: the receiver-leg COPY position is pinned). Behaviour
-        // this-fields ride the fallback below (no legs, byte-identical).
+        // vs 71). Behaviour this-fields ride the fallback below (no receiver legs).
         if (assign.Target is IFieldReferenceOperation fieldLValue && IsPreparableFieldSetTarget(fieldLValue))
         {
-            if (IsEmissionOrderInert(fieldLValue) && IsEmissionOrderInert(assign.Value))
-            {
-                var inertValue = VisitEmittedValue(assign.Value);
-                RejectUnsafeCrossProgramDelegateWrite(fieldLValue, inertValue.Info);
-                TryPrepareFieldSet(fieldLValue)(inertValue.Leaf);
-                return inertValue.Leaf;
-            }
             var fieldStore = TryPrepareFieldSet(fieldLValue);
             var srcValue = VisitEmittedValue(assign.Value);
             RejectUnsafeCrossProgramDelegateWrite(fieldLValue, srcValue.Info);
