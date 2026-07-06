@@ -188,13 +188,7 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
         // cross-behaviour field → GetProgramVariable
         if (ExternResolver.IsUdonSharpBehaviour(fieldRef.Field.ContainingType))
         {
-            // CA-M1 §2-1: reading another behaviour's field cross-program returns a value marshalled out of
-            // that program — a v1 class is a program-local object[] bundle whose reference is meaningless here.
-            if (TypeClassifier.ContainsProgramLocalPayload(fieldRef.Field.Type, TypeCtx))
-                throw new NotSupportedException(
-                    $"Reading another behaviour's field '{fieldRef.Field.Name}' that carries a v1 user class "
-                    + "is not supported: a class value is a program-local object[] bundle and cannot cross a "
-                    + "program boundary.");
+            _ctx.Boundary.RequireCanReadCrossBehaviourField(fieldRef.Field);
             var instanceVal = VisitExpression(fieldRef.Instance);
             var nameConst = Const(fieldRef.Field.Name, "SystemString");
             return ExternCall(

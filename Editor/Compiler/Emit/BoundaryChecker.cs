@@ -151,6 +151,32 @@ public sealed class BoundaryChecker
         }
     }
 
+    public void RequireCanWriteCrossBehaviourField(IFieldSymbol field)
+    {
+        if (!TypeClassifier.ContainsProgramLocalPayload(field.Type, TypeCtx)) return;
+        throw new NotSupportedException(
+            $"A v1 user class cannot be written to another behaviour's field '{field.Name}': a class "
+            + "value is a program-local object[] bundle and cannot cross a program boundary.");
+    }
+
+    public void RequireCanReadCrossBehaviourField(IFieldSymbol field)
+    {
+        if (!TypeClassifier.ContainsProgramLocalPayload(field.Type, TypeCtx)) return;
+        throw new NotSupportedException(
+            $"Reading another behaviour's field '{field.Name}' that carries a v1 user class "
+            + "is not supported: a class value is a program-local object[] bundle and cannot cross a "
+            + "program boundary.");
+    }
+
+    public void RequireCanPassCrossBehaviourArgument(ITypeSymbol argType)
+    {
+        if (!TypeClassifier.ContainsProgramLocalPayload(argType, TypeCtx)) return;
+        throw new NotSupportedException(
+            "A v1 user class cannot be passed to a cross-behaviour (SendCustomEvent) call: a class "
+            + "value is a program-local object[] bundle and cannot cross a program boundary. Pass "
+            + "plain data instead and rebuild the object on the receiving side.");
+    }
+
     static IOperation UnwrapConversions(IOperation value)
     {
         var v = value;

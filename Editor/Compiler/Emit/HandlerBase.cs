@@ -1326,12 +1326,7 @@ public abstract partial class HandlerBase
     /// re-evaluating it).</summary>
     protected void EmitCrossBehaviourFieldSet(IFieldSymbol field, CLeaf instanceVal, CLeaf value)
     {
-        // CA-M1 §2-1: SetProgramVariable on another behaviour's field ships the value cross-program — a v1
-        // class value is a program-local object[] bundle and cannot cross the boundary.
-        if (TypeClassifier.ContainsProgramLocalPayload(field.Type, TypeCtx))
-            throw new NotSupportedException(
-                $"A v1 user class cannot be written to another behaviour's field '{field.Name}': a class "
-                + "value is a program-local object[] bundle and cannot cross a program boundary.");
+        _ctx.Boundary.RequireCanWriteCrossBehaviourField(field);
         var nameConst = Const(field.Name, "SystemString");
         EmitExternVoid(
             "VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid",
@@ -2571,14 +2566,8 @@ public abstract partial class HandlerBase
         var byOrdinal = new CLeaf[paramIds.Length];
         for (int i = 0; i < args.Length; i++)
         {
-            // CA-M1 §2-1: a cross-program (SendCustomEvent) call marshals args through SetProgramVariable —
-            // a v1 class value is a program-local object[] bundle whose reference means nothing in the
-            // callee's program. Reject loudly rather than silently ship a dangling reference.
-            if (args[i].Value.Type is { } argTy && TypeClassifier.ContainsProgramLocalPayload(argTy, TypeCtx))
-                throw new NotSupportedException(
-                    "A v1 user class cannot be passed to a cross-behaviour (SendCustomEvent) call: a class "
-                    + "value is a program-local object[] bundle and cannot cross a program boundary. Pass "
-                    + "plain data instead and rebuild the object on the receiving side.");
+            if (args[i].Value.Type is { } argTy)
+                _ctx.Boundary.RequireCanPassCrossBehaviourArgument(argTy);
             var p = args[i].Parameter;
             var ordinal = p != null && p.Ordinal >= 0 && p.Ordinal < byOrdinal.Length ? p.Ordinal : i;
             byOrdinal[ordinal] = VisitExpression(args[i].Value);
