@@ -2498,18 +2498,14 @@ public abstract partial class HandlerBase
                 new List<CLeaf> { ln, rn }, "SystemBoolean")),
             _ =>
             {
-                var lt = ExternCall(ExternResolver.BuildArrayGetSignature("SystemObjectArray", "SystemObject"),
-                    new List<CLeaf> { a, Const(DelegateAbi.Target, "SystemInt32") }, "SystemObject");
-                var rt = ExternCall(ExternResolver.BuildArrayGetSignature("SystemObjectArray", "SystemObject"),
-                    new List<CLeaf> { b, Const(DelegateAbi.Target, "SystemInt32") }, "SystemObject");
+                var lt = DelegateAbi.ReadSlot(_builder, a, DelegateAbi.Target, "SystemObject");
+                var rt = DelegateAbi.ReadSlot(_builder, b, DelegateAbi.Target, "SystemObject");
                 var targetEq = ExternCall(
                     "SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean",
                     new List<CLeaf> { lt, rt }, "SystemBoolean");
 
-                var lm = ExternCall(ExternResolver.BuildArrayGetSignature("SystemObjectArray", "SystemObject"),
-                    new List<CLeaf> { a, Const(DelegateAbi.Method, "SystemInt32") }, "SystemString");
-                var rm = ExternCall(ExternResolver.BuildArrayGetSignature("SystemObjectArray", "SystemObject"),
-                    new List<CLeaf> { b, Const(DelegateAbi.Method, "SystemInt32") }, "SystemString");
+                var lm = DelegateAbi.ReadSlot(_builder, a, DelegateAbi.Method, "SystemString");
+                var rm = DelegateAbi.ReadSlot(_builder, b, DelegateAbi.Method, "SystemString");
                 var methodEq = ExternCall(
                     "SystemString.__op_Equality__SystemString_SystemString__SystemBoolean",
                     new List<CLeaf> { lm, rm }, "SystemBoolean");
@@ -2518,10 +2514,8 @@ public abstract partial class HandlerBase
                 // reference-equality leg. DelegateAbi.Env is null for method groups / capture-free lambdas,
                 // so null==null → true keeps their capture-free behaviour. DelegateAbi.Addr stays
                 // excluded (self-program-relative).
-                var le = ExternCall(ExternResolver.BuildArrayGetSignature("SystemObjectArray", "SystemObject"),
-                    new List<CLeaf> { a, Const(DelegateAbi.Env, "SystemInt32") }, "SystemObject");
-                var re = ExternCall(ExternResolver.BuildArrayGetSignature("SystemObjectArray", "SystemObject"),
-                    new List<CLeaf> { b, Const(DelegateAbi.Env, "SystemInt32") }, "SystemObject");
+                var le = DelegateAbi.ReadSlot(_builder, a, DelegateAbi.Env, "SystemObject");
+                var re = DelegateAbi.ReadSlot(_builder, b, DelegateAbi.Env, "SystemObject");
                 var envEq = ExternCall(
                     "SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean",
                     new List<CLeaf> { le, re }, "SystemBoolean");

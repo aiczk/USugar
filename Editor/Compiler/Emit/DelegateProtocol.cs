@@ -176,6 +176,14 @@ public static class DelegateAbi
         builder.EmitExternVoid(setSig, new List<CLeaf> { bundle, builder.Const(Env, "SystemInt32"), envLeaf });
         return bundle;
     }
+
+    /// <summary>Read a typed slot from a delegate ABI bundle. All delegate slot reads should route here
+    /// so slot numbers stay ABI-owned rather than being re-open-coded at dispatch/equality sites.</summary>
+    public static CLeaf ReadSlot(CoreBuilder builder, CLeaf bundle, int slot, string udonType)
+        => builder.ExternCall(
+            ExternResolver.BuildArrayGetSignature("SystemObjectArray", "SystemObject"),
+            new List<CLeaf> { bundle, builder.Const(slot, "SystemInt32") },
+            udonType);
 }
 
 /// <summary>

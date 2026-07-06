@@ -600,15 +600,13 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
 
         void EmitGuardedDispatch()
         {
-            var kind = ExternCall(ExternResolver.BuildArrayGetSignature("SystemObjectArray", "SystemObject"),
-                new List<CLeaf> { bundle, Const(DelegateAbi.Kind, "SystemInt32") }, "SystemString");
+            var kind = DelegateAbi.ReadSlot(_builder, bundle, DelegateAbi.Kind, "SystemString");
             var kindOk = ExternCall("SystemString.__op_Equality__SystemString_SystemString__SystemBoolean",
                 new List<CLeaf> { kind, Const(DelegateAbi.KindTag, "SystemString") }, "SystemBoolean");
             _builder.EmitIf(kindOk, _ =>
             {
                 // tgt is a SystemObject temp fed to externs directly — no Convert needed (P1/P5a).
-                var tgt = ExternCall(ExternResolver.BuildArrayGetSignature("SystemObjectArray", "SystemObject"),
-                    new List<CLeaf> { bundle, Const(DelegateAbi.Target, "SystemInt32") }, "SystemObject");
+                var tgt = DelegateAbi.ReadSlot(_builder, bundle, DelegateAbi.Target, "SystemObject");
                 // target-null guard: unset element, or the in-game security filter nulling DelegateAbi.Target.
                 var tOk = ExternCall("UnityEngineObject.__op_Inequality__UnityEngineObject_UnityEngineObject__SystemBoolean",
                     new List<CLeaf> { tgt, Const(null, "SystemObject") }, "SystemBoolean");
@@ -622,13 +620,10 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
                     // Stage 2 §5.1: stage DelegateAbi.Env into the env conv global (unconditional, both arms —
                     // the SELF arm's bridge reads this field directly; the CROSS arm SPVs it below). A
                     // capture-free target sends null; the receiving bridge's null-env guard is the backstop.
-                    EmitStoreField(convEnv, ExternCall(ExternResolver.BuildArrayGetSignature("SystemObjectArray", "SystemObject"),
-                        new List<CLeaf> { bundle, Const(DelegateAbi.Env, "SystemInt32") }, EnvEmit.EnvType));
+                    EmitStoreField(convEnv, DelegateAbi.ReadSlot(_builder, bundle, DelegateAbi.Env, EnvEmit.EnvType));
 
-                    var adr = ExternCall(ExternResolver.BuildArrayGetSignature("SystemObjectArray", "SystemObject"),
-                        new List<CLeaf> { bundle, Const(DelegateAbi.Addr, "SystemInt32") }, "SystemUInt32");
-                    var mtd = ExternCall(ExternResolver.BuildArrayGetSignature("SystemObjectArray", "SystemObject"),
-                        new List<CLeaf> { bundle, Const(DelegateAbi.Method, "SystemInt32") }, "SystemString");
+                    var adr = DelegateAbi.ReadSlot(_builder, bundle, DelegateAbi.Addr, "SystemUInt32");
+                    var mtd = DelegateAbi.ReadSlot(_builder, bundle, DelegateAbi.Method, "SystemString");
                     var thisType = GetUdonType(_classSymbol);
                     var thisRef = LoadField(_ctx.DeclareThisOnce(thisType), thisType);
                     // Self/cross is decided by TARGET IDENTITY only (P6) — addr≠0 merely qualifies the
