@@ -523,9 +523,7 @@ public class StatementHandler : HandlerBase, IOperationHandler
         _localBindings[local] = new EmitContext.LocalBinding(id);
 
         // Create object[] of correct size
-        var arrExpr = ExternCall(ExternResolver.BuildArrayCtorSignature("SystemObjectArray"),
-            new List<CLeaf> { Const(layout.Count, "SystemInt32") }, "SystemObjectArray");
-        EmitStoreField(id, arrExpr);
+        EmitStoreField(id, AggregateAbi.Allocate(_builder, layout.Count));
 
         var localId = id;
         if (init == null)
@@ -545,9 +543,8 @@ public class StatementHandler : HandlerBase, IOperationHandler
             // Tuple literal: set each element via __Set__
             for (int i = 0; i < tupleLit.Elements.Length && i < layout.Count; i++)
             {
-                EmitExternVoid(ExternResolver.BuildArraySetSignature("SystemObjectArray", "SystemObject"),
-                    new List<CLeaf> { LoadField(localId, "SystemObjectArray"), Const(i, "SystemInt32"),
-                        VisitExpression(tupleLit.Elements[i]) });
+                AggregateAbi.WriteSlot(_builder, LoadField(localId, "SystemObjectArray"),
+                    i, VisitExpression(tupleLit.Elements[i]));
             }
         }
         else if (value is IDefaultValueOperation)
@@ -586,9 +583,8 @@ public class StatementHandler : HandlerBase, IOperationHandler
                     };
                     if (memberName != null && layout.TryGetIndex(memberName, out var idx))
                     {
-                        EmitExternVoid(ExternResolver.BuildArraySetSignature("SystemObjectArray", "SystemObject"),
-                            new List<CLeaf> { LoadField(localId, "SystemObjectArray"),
-                                Const(idx, "SystemInt32"), VisitExpression(sa.Value) });
+                        AggregateAbi.WriteSlot(_builder, LoadField(localId, "SystemObjectArray"),
+                            idx, VisitExpression(sa.Value));
                     }
                 }
             }

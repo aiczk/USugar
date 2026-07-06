@@ -454,8 +454,7 @@ public partial class InvocationHandler
         RejectUnsupportedClassMembers(classTy); // v1: no virtual/abstract/override members
         var layout = _ctx.GetAggregateLayout(classTy);
         var slot = _ctx.AllocTemp("SystemObjectArray");
-        EmitAssign(slot, ExternCall(ExternResolver.BuildArrayCtorSignature("SystemObjectArray"),
-            new List<CLeaf> { Const(layout.SlotCount, "SystemInt32") }, "SystemObjectArray"));
+        EmitAssign(slot, AggregateAbi.Allocate(_builder, layout.SlotCount));
         EmitDefaultInitAggregate(SlotRef(slot), layout);
         EmitInstanceFieldInitializers(SlotRef(slot), classTy, layout);
         if (op.Constructor != null && !op.Constructor.IsImplicitlyDeclared)
@@ -528,8 +527,7 @@ public partial class InvocationHandler
         {
             var layout = _ctx.GetAggregateLayout(userStruct);
             var slot = _ctx.AllocTemp("SystemObjectArray");
-            EmitAssign(slot, ExternCall(ExternResolver.BuildArrayCtorSignature("SystemObjectArray"),
-                new List<CLeaf> { Const(layout.Count, "SystemInt32") }, "SystemObjectArray"));
+            EmitAssign(slot, AggregateAbi.Allocate(_builder, layout.Count));
             EmitDefaultInitAggregate(SlotRef(slot), layout);
             var ctorArgs = new List<CLeaf> { SlotRef(slot) };
             foreach (var arg in op.Arguments)
