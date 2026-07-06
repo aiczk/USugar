@@ -31,13 +31,6 @@ public class SimpleAssignmentHandler : AssignmentHandlerBase, IExpressionHandler
         if (assign.Target is IDiscardOperation)
             return VisitExpression(assign.Value);
 
-        // B83: a class-capturing closure written to a CROSS-PROGRAM delegate field (public/exported/synced
-        // this-field, or another behaviour's field) would carry the captured class through DelegateAbi.Env
-        // across the boundary, undetected by the signature-only ValidateNoUserClassSignature. Reject at the
-        // write. An in-program (private this-field) delegate stays legal — execution-locality (the F1 pin).
-        if (assign.Target is IFieldReferenceOperation dlgFieldTarget)
-            RejectUnsafeCrossProgramDelegateWrite(dlgFieldTarget, assign.Value);
-
         // Field lvalue with receiver legs (aggregate member `point.x` / `arr[i].v`, cross-behaviour
         // field, extern value-type / reference-type field) — the shared legs-now/store-later path,
         // also consumed by the deconstruction lvalue arm. Wave-9 round-7 [Y2]: C# evaluates the
@@ -51,14 +44,16 @@ public class SimpleAssignmentHandler : AssignmentHandlerBase, IExpressionHandler
         {
             if (IsEmissionOrderInert(fieldLValue) && IsEmissionOrderInert(assign.Value))
             {
-                var inertVal = VisitExpression(assign.Value);
-                TryPrepareFieldSet(fieldLValue)(inertVal);
-                return inertVal;
+                var inertValue = VisitEmittedValue(assign.Value);
+                RejectUnsafeCrossProgramDelegateWrite(fieldLValue, inertValue.Info);
+                TryPrepareFieldSet(fieldLValue)(inertValue.Leaf);
+                return inertValue.Leaf;
             }
             var fieldStore = TryPrepareFieldSet(fieldLValue);
-            var srcVal = VisitExpression(assign.Value);
-            fieldStore(srcVal);
-            return srcVal;
+            var srcValue = VisitEmittedValue(assign.Value);
+            RejectUnsafeCrossProgramDelegateWrite(fieldLValue, srcValue.Info);
+            fieldStore(srcValue.Leaf);
+            return srcValue.Leaf;
         }
 
         if (assign.Target is IArrayElementReferenceOperation arrayElem)
@@ -90,7 +85,10 @@ public class SimpleAssignmentHandler : AssignmentHandlerBase, IExpressionHandler
         // bundle reference (or null const) and the store is a single reference copy (design §2.3).
 
         // VisitExpression clones aggregate locals/params automatically (Clone-on-read).
-        var srcFallback = VisitExpression(assign.Value);
+        var srcValueFallback = VisitEmittedValue(assign.Value);
+        if (assign.Target is IFieldReferenceOperation dlgFieldTarget)
+            RejectUnsafeCrossProgramDelegateWrite(dlgFieldTarget, srcValueFallback.Info);
+        var srcFallback = srcValueFallback.Leaf;
         // Stage 2 §4.1: captured local/param target → env cell store (value read-back contract kept:
         // re-read the cell, clone aggregates when the assignment is used as a value).
         if (TryEmitEnvStore(assign.Target, srcFallback))
