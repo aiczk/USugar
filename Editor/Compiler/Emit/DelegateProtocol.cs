@@ -237,6 +237,24 @@ public static class DelegateAbi
         => builder.ExternCall("SystemUInt32.__op_Inequality__SystemUInt32_SystemUInt32__SystemBoolean",
             new List<CLeaf> { address, builder.Const(0u, "SystemUInt32") }, "SystemBoolean");
 
+    public static void EmitNullInvokeLog(CoreBuilder builder, string className, string receiverDescription)
+        => builder.EmitExternVoid("UnityEngineDebug.__LogError__SystemObject__SystemVoid",
+            new List<CLeaf>
+            {
+                builder.Const(
+                    $"USugar: NullReferenceException — invoked a null delegate ({className}.{receiverDescription})",
+                    "SystemString")
+            });
+
+    public static void EmitInvalidBundleLog(CoreBuilder builder, string className, string receiverDescription)
+        => builder.EmitExternVoid("UnityEngineDebug.__LogError__SystemObject__SystemVoid",
+            new List<CLeaf>
+            {
+                builder.Const(
+                    $"USugar: invalid delegate bundle — value is not a USugar delegate ({className}.{receiverDescription})",
+                    "SystemString")
+            });
+
     public static CLeaf CompareDelegates(CoreBuilder builder, CLeaf left, CLeaf right, bool isNotEquals,
         Func<string, int> allocTemp, Action<int, CValue> emitAssign, Func<int, CLeaf> slotRef)
     {

@@ -124,6 +124,15 @@ public static class AggregateAbi
             ExternResolver.BuildArraySetSignature(ArrayType, ElementType),
             new List<CLeaf> { instance, builder.Const(index, "SystemInt32"), value });
 
+    public static CLeaf MintTupleLiteral(CoreBuilder builder, ITupleOperation tuple,
+        Func<IOperation, CLeaf> emitValue)
+    {
+        var instance = Allocate(builder, tuple.Elements.Length);
+        for (int i = 0; i < tuple.Elements.Length; i++)
+            WriteSlot(builder, instance, i, emitValue(tuple.Elements[i]));
+        return instance;
+    }
+
     /// <summary>Default-initialize an allocated aggregate bundle. Nested aggregate fields are allocated
     /// recursively; class-typed fields stay null by default.</summary>
     public static void DefaultInitialize(CoreBuilder builder, CValue arrayVal, AggregateLayout layout,

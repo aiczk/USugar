@@ -71,6 +71,41 @@ public static class NdimArrayAbi
         Func<string, int> allocTemp, Action<int, CValue> emitAssign, Func<int, CLeaf> slotRef)
         => ReadBoxedSlot(builder, bundleVal, dimIndexPlusOne, "SystemInt32", allocTemp, emitAssign, slotRef);
 
+    public static CLeaf ReadFromPlan(CoreBuilder builder, AccessPlan plan, string elemUdonType,
+        string backingUdonType, string backingElemUdonType, string arrayExprSyntax,
+        Func<CLeaf, CLeaf> readBacking, Func<string, CLeaf> defaultConst,
+        Func<string, int> allocTemp, Action<int, CValue> emitAssign, Func<int, CLeaf> slotRef)
+    {
+        var resultSlot = allocTemp(elemUdonType);
+        emitAssign(resultSlot, defaultConst(elemUdonType));
+        builder.EmitIf(plan.InBounds,
+            _ =>
+            {
+                var backing = readBacking(plan.BundleVal);
+                var elemVal = builder.ExternCall(
+                    ExternResolver.BuildArrayGetSignature(backingUdonType, backingElemUdonType),
+                    new List<CLeaf> { backing, plan.FlatIndex }, elemUdonType);
+                emitAssign(resultSlot, elemVal);
+            },
+            _ => EmitBoundsLogError(builder, arrayExprSyntax, "read", plan));
+        return slotRef(resultSlot);
+    }
+
+    public static void WriteFromPlan(CoreBuilder builder, AccessPlan plan, CLeaf value,
+        string backingUdonType, string backingElemUdonType, string arrayExprSyntax,
+        Func<CLeaf, CLeaf> readBacking)
+    {
+        builder.EmitIf(plan.InBounds,
+            _ =>
+            {
+                var backing = readBacking(plan.BundleVal);
+                builder.EmitExternVoid(
+                    ExternResolver.BuildArraySetSignature(backingUdonType, backingElemUdonType),
+                    new List<CLeaf> { backing, plan.FlatIndex, value });
+            },
+            _ => EmitBoundsLogError(builder, arrayExprSyntax, "write", plan));
+    }
+
     public static void MintBundleToSlot(CoreBuilder builder, int bundleSlot, int backingSlot, int[] dimSlots)
     {
         builder.EmitAssign(bundleSlot, builder.ExternCall(BundleCtorSignature(),

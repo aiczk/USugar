@@ -67,19 +67,12 @@ public abstract partial class HandlerBase
     /// read leg so a violation is reported identically either way.</summary>
     protected CLeaf EmitNdimReadFromPlan(IArrayElementReferenceOperation ae, NdimArrayAbi.AccessPlan plan, string elemUdonType)
     {
-        var resultSlot = _ctx.AllocTemp(elemUdonType);
-        EmitAssign(resultSlot, InvocationHandler.DefaultConst(_builder, elemUdonType));
-        _builder.EmitIf(plan.InBounds,
-            _ =>
-            {
-                var backing = EmitNdimGetBacking(plan.BundleVal, plan.BackingType);
-                var elemVal = ExternCall(
-                    ExternResolver.BuildArrayGetSignature(GetArrayType(plan.BackingType), GetArrayElemType(plan.BackingType)),
-                    new List<CLeaf> { backing, plan.FlatIndex }, elemUdonType);
-                EmitAssign(resultSlot, elemVal);
-            },
-            _ => NdimArrayAbi.EmitBoundsLogError(_builder, ae.Syntax.ToString(), "read", plan));
-        return SlotRef(resultSlot);
+        var backingUdonType = GetArrayType(plan.BackingType);
+        var backingElemUdonType = GetArrayElemType(plan.BackingType);
+        return NdimArrayAbi.ReadFromPlan(_builder, plan, elemUdonType, backingUdonType, backingElemUdonType,
+            ae.Syntax.ToString(), bundle => NdimArrayAbi.ReadBacking(_builder, bundle, backingUdonType,
+                _ctx.AllocTemp, EmitAssign, SlotRef),
+            type => InvocationHandler.DefaultConst(_builder, type), _ctx.AllocTemp, EmitAssign, SlotRef);
     }
 
     /// <summary>Shared in-bounds Set from an already-prepared plan: in-bounds branch Sets on the flat
@@ -87,15 +80,11 @@ public abstract partial class HandlerBase
     /// no partial state, the write either fully happens or not at all).</summary>
     protected void EmitNdimWriteFromPlan(IArrayElementReferenceOperation ae, NdimArrayAbi.AccessPlan plan, CLeaf value)
     {
-        _builder.EmitIf(plan.InBounds,
-            _ =>
-            {
-                var backing = EmitNdimGetBacking(plan.BundleVal, plan.BackingType);
-                EmitExternVoid(
-                    ExternResolver.BuildArraySetSignature(GetArrayType(plan.BackingType), GetArrayElemType(plan.BackingType)),
-                    new List<CLeaf> { backing, plan.FlatIndex, value });
-            },
-            _ => NdimArrayAbi.EmitBoundsLogError(_builder, ae.Syntax.ToString(), "write", plan));
+        var backingUdonType = GetArrayType(plan.BackingType);
+        var backingElemUdonType = GetArrayElemType(plan.BackingType);
+        NdimArrayAbi.WriteFromPlan(_builder, plan, value, backingUdonType, backingElemUdonType,
+            ae.Syntax.ToString(), bundle => NdimArrayAbi.ReadBacking(_builder, bundle, backingUdonType,
+                _ctx.AllocTemp, EmitAssign, SlotRef));
     }
 
     /// <summary>N-dim element READ (§1/§2). Struct/tuple elements are deep-cloned on the way out,

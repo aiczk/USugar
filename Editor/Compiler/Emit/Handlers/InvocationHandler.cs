@@ -579,18 +579,10 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
         // Guard-failure arm: LogError (NRE deviation, exact message per §2.6) — or silent for ?.Invoke.
         System.Action<CoreBuilder> failArm = null;
         if (!isConditional)
-            failArm = _ =>
-                EmitExternVoid("UnityEngineDebug.__LogError__SystemObject__SystemVoid",
-                    new List<CLeaf> { Const(
-                        $"USugar: NullReferenceException — invoked a null delegate ({_classSymbol.Name}.{receiverDescription})",
-                        "SystemString") });
+            failArm = _ => DelegateAbi.EmitNullInvokeLog(_builder, _classSymbol.Name, receiverDescription);
         System.Action<CoreBuilder> invalidBundleArm = null;
         if (!isConditional)
-            invalidBundleArm = _ =>
-                EmitExternVoid("UnityEngineDebug.__LogError__SystemObject__SystemVoid",
-                    new List<CLeaf> { Const(
-                        $"USugar: invalid delegate bundle — value is not a USugar delegate ({_classSymbol.Name}.{receiverDescription})",
-                        "SystemString") });
+            invalidBundleArm = _ => DelegateAbi.EmitInvalidBundleLog(_builder, _classSymbol.Name, receiverDescription);
 
         void EmitGuardedDispatch()
         {

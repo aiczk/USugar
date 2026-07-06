@@ -805,19 +805,7 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
 
     CLeaf VisitTupleLiteral(ITupleOperation op)
     {
-        // Create object[] and set each element
-        var count = op.Elements.Length;
-        var arrExpr = ExternCall(ExternResolver.BuildArrayCtorSignature("SystemObjectArray"),
-            new List<CLeaf> { Const(count, "SystemInt32") }, "SystemObjectArray");
-
-        for (int i = 0; i < count; i++)
-        {
-            var elemVal = VisitExpression(op.Elements[i]);
-            EmitExternVoid(ExternResolver.BuildArraySetSignature("SystemObjectArray", "SystemObject"),
-                new List<CLeaf> { arrExpr, Const(i, "SystemInt32"), elemVal });
-        }
-
-        return arrExpr;
+        return AggregateAbi.MintTupleLiteral(_builder, op, VisitExpression);
     }
 
 }
