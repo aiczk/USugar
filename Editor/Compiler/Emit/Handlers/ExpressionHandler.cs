@@ -498,7 +498,7 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
             bool liftedIntToInt =
                 (ExternResolver.IsIntegerType(liftedSrcU) || liftedSrcU.SpecialType == SpecialType.System_Char)
                 && (ExternResolver.IsIntegerType(liftedDstU) || liftedDstU.SpecialType == SpecialType.System_Char);
-            _builder.EmitIf(EmitNullableHasValue(srcVal), _ =>
+            _builder.EmitIf(NullableAbi.HasValue(_builder, srcVal), _ =>
             {
                 CValue converted = liftedIntToInt
                     ? EmitNarrowingConvert(

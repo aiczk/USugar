@@ -120,7 +120,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
             {
                 var nv = VisitExpression(leftNullable ? op.LeftOperand : op.RightOperand);
                 if (op.OperatorKind == BinaryOperatorKind.NotEquals)
-                    return EmitNullableHasValue(nv); // != null  ⇔  HasValue
+                    return NullableAbi.HasValue(_builder, nv); // != null  ⇔  HasValue
                 return NullableAbi.IsNull(_builder, nv);
             }
         }

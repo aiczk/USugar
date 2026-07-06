@@ -21,7 +21,7 @@ public partial class InvocationHandler
         if (op.Instance != null && EmitPolicy.IsNullableT(op.Property.ContainingType, out var nblUnder))
         {
             var nv = VisitExpression(op.Instance);
-            if (op.Property.Name == "HasValue") return EmitNullableHasValue(nv);
+            if (op.Property.Name == "HasValue") return NullableAbi.HasValue(_builder, nv);
             // Value of a nullable AGGREGATE (e.g. (int,int)? / V?) copies the struct out (value semantics).
             if (op.Property.Name == "Value")
                 return nblUnder is INamedTypeSymbol nblAgg && EmitPolicy.IsAggregateType(nblAgg)

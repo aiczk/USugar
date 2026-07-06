@@ -373,11 +373,6 @@ public abstract partial class HandlerBase
 
     // ── Nullable<T> (boxed-object emulation) helpers ──
 
-    /// <summary>HasValue: the boxed nullable object is non-null. Returns SystemBoolean.
-    /// <paramref name="nullableVal"/> must be pure or pre-materialised (it is read once).</summary>
-    protected CLeaf EmitNullableHasValue(CLeaf nullableVal)
-        => NullableAbi.HasValue(_builder, nullableVal);
-
     /// <summary>Default value for a Udon value type (0 / false). Used for `default(T)`-style fills.</summary>
     protected CLeaf EmitValueTypeDefault(string udonType)
         => Const(EmitPolicy.ParseConstValue(udonType, udonType == "SystemBoolean" ? "False" : "0"), udonType);
