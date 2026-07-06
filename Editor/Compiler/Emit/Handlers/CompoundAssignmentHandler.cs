@@ -114,12 +114,12 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
         // a delegate value from a foreign source never passed creation-site validation.
         DelegateAbi.ValidateNoRefOutParams(invoke);
 
-        if (op.OperatorKind == BinaryOperatorKind.Add && op.Target is IFieldReferenceOperation dlgFieldTarget)
-            RejectUnsafeCrossProgramDelegateWrite(dlgFieldTarget, op.Value);
-
         var lv = CaptureLValue(op.Target);
         var leftVal = lv.Value;
-        var rightVal = VisitExpression(op.Value);
+        var right = VisitEmittedValue(op.Value);
+        if (op.OperatorKind == BinaryOperatorKind.Add && op.Target is IFieldReferenceOperation dlgFieldTarget)
+            RejectUnsafeCrossProgramDelegateWrite(dlgFieldTarget, right.Info);
+        var rightVal = right.Leaf;
 
         var sigPart = DelegateAbi.BuildSigPart(invoke, _ctx.TypeParamMap);
         RegisterMulticastSig(sigPart, invoke);
@@ -164,11 +164,11 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
         var delegateType = (INamedTypeSymbol)evt.Type;
         var invoke = delegateType.DelegateInvokeMethod;
         DelegateAbi.ValidateNoRefOutParams(invoke);
-        if (op.Adds)
-            RejectUnsafeCrossProgramEventHandler(evt, op.HandlerValue);
-
         var currentVal = LoadField(evt.Name, "SystemObjectArray");
-        var handlerVal = VisitExpression(op.HandlerValue);
+        var handler = VisitEmittedValue(op.HandlerValue);
+        if (op.Adds)
+            RejectUnsafeCrossProgramEventHandler(evt, handler.Info);
+        var handlerVal = handler.Leaf;
 
         var sigPart = DelegateAbi.BuildSigPart(invoke, _ctx.TypeParamMap);
         RegisterMulticastSig(sigPart, invoke);

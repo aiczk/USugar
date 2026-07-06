@@ -37,6 +37,8 @@ public abstract partial class HandlerBase
     // ── Dispatch (recursive descent into other handlers via UasmEmitter facade) ──
     protected void VisitOperation(IOperation op) => _ctx.VisitOperation(op);
     protected CLeaf VisitExpression(IOperation op) => _ctx.VisitExpression(op);
+    protected EmittedValue VisitEmittedValue(IOperation op)
+        => new EmittedValue(VisitExpression(op), _ctx.Boundary.ClassifyValue(op));
     protected CLeaf EmitPatternCheck(CLeaf value, ITypeSymbol valueType, IPatternOperation pattern)
         => _ctx.EmitPatternCheck(value, valueType, pattern);
 
@@ -2033,7 +2035,13 @@ public abstract partial class HandlerBase
     protected void RejectUnsafeCrossProgramDelegateWrite(IFieldReferenceOperation target, IOperation value)
         => _ctx.Boundary.RequireCanStoreCrossProgramDelegate(target, value);
 
+    protected void RejectUnsafeCrossProgramDelegateWrite(IFieldReferenceOperation target, ValueInfo value)
+        => _ctx.Boundary.RequireCanStoreCrossProgramDelegate(target, value);
+
     protected void RejectUnsafeCrossProgramEventHandler(IEventSymbol evt, IOperation value)
+        => _ctx.Boundary.RequireCanStorePublicEventHandler(evt, value);
+
+    protected void RejectUnsafeCrossProgramEventHandler(IEventSymbol evt, ValueInfo value)
         => _ctx.Boundary.RequireCanStorePublicEventHandler(evt, value);
 
     protected bool IsCrossProgramDelegateFieldTarget(IFieldReferenceOperation fieldRef)

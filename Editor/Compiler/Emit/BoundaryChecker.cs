@@ -52,9 +52,11 @@ public sealed class BoundaryChecker
     }
 
     public void RequireCanStoreCrossProgramDelegate(IFieldReferenceOperation target, IOperation value)
+        => RequireCanStoreCrossProgramDelegate(target, ClassifyValue(value));
+
+    public void RequireCanStoreCrossProgramDelegate(IFieldReferenceOperation target, ValueInfo info)
     {
         if (!IsCrossProgramDelegateFieldTarget(target)) return;
-        var info = ClassifyValue(value);
         if (info.Kind == ValueKind.Null || ValueClassifier.IsDirectProgramLocalSafeDelegate(info)) return;
         if (!info.DelegateCapturesProgramLocalPayload && !CurrentMethodBodyMentionsProgramLocalPayload())
             return;
@@ -67,9 +69,11 @@ public sealed class BoundaryChecker
     }
 
     public void RequireCanStorePublicEventHandler(IEventSymbol evt, IOperation value)
+        => RequireCanStorePublicEventHandler(evt, ClassifyValue(value));
+
+    public void RequireCanStorePublicEventHandler(IEventSymbol evt, ValueInfo info)
     {
         if (evt.DeclaredAccessibility != Accessibility.Public) return;
-        var info = ClassifyValue(value);
         if (info.Kind == ValueKind.Null || ValueClassifier.IsDirectProgramLocalSafeDelegate(info))
             return;
         if (!info.DelegateCapturesProgramLocalPayload && !CurrentMethodBodyMentionsProgramLocalPayload())
