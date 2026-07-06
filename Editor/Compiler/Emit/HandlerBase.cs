@@ -377,15 +377,6 @@ public abstract partial class HandlerBase
     protected CLeaf EmitValueTypeDefault(string udonType)
         => Const(EmitPolicy.ParseConstValue(udonType, udonType == "SystemBoolean" ? "False" : "0"), udonType);
 
-    /// <summary>Deep value-copy of an object[]-backed aggregate (struct/tuple): a fresh array with each
-    /// element copied, recursing into nested-aggregate elements. A shallow SystemObjectArray.__Clone__ would
-    /// copy the nested object[] REFERENCE, so mutating the copy's nested struct would corrupt the source.</summary>
-    protected CLeaf EmitDeepCloneAggregate(CLeaf src, INamedTypeSymbol aggType)
-    {
-        var layout = _ctx.GetAggregateLayout(aggType);
-        return AggregateAbi.DeepClone(_builder, src, layout, _ctx.GetAggregateLayout);
-    }
-
     /// <summary>Allocate a fresh object[]-backed aggregate (struct/tuple) and default-initialize it as a
     /// VALUE (e.g. `new V()` used as an expression). Nested aggregate fields are recursively allocated.</summary>
     public CLeaf EmitNewAggregate(INamedTypeSymbol aggType)
@@ -941,7 +932,7 @@ public abstract partial class HandlerBase
             var elemVal = AggregateAbi.ReadSlot(_builder, arrValue, i, "SystemObject");
             var toAssign = tuple.Elements[i].Type is INamedTypeSymbol et
                 && EmitPolicy.IsAggregateType(et) && !et.IsTupleType
-                ? EmitDeepCloneAggregate(elemVal, et) : elemVal;
+                ? AggregateAbi.DeepClone(_builder, elemVal, et, _ctx.GetAggregateLayout) : elemVal;
             AssignToLValue(tuple.Elements[i], toAssign, preparedStores);
         }
     }

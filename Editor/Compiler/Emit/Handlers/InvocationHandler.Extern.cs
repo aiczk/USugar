@@ -859,7 +859,7 @@ public partial class InvocationHandler
                     CLeaf elemVal = ExternCall(ExternResolver.BuildArrayGetSignature(arrayType, elementType),
                         new List<CLeaf> { arrayVal, indexVal }, GetUdonType(arrayElem.Type));
                     if (arrayElem.Type is INamedTypeSymbol elemAgg && EmitPolicy.IsAggregateType(elemAgg))
-                        elemVal = EmitDeepCloneAggregate(elemVal, elemAgg);
+                        elemVal = AggregateAbi.DeepClone(_builder, elemVal, elemAgg, _ctx.GetAggregateLayout);
                     return elemVal;
                 }, v => EmitExternVoid(
                     ExternResolver.BuildArraySetSignature(arrayType, elementType),
@@ -876,7 +876,7 @@ public partial class InvocationHandler
                 {
                     CLeaf memberVal = AggregateAbi.ReadSlot(_builder, arrExpr, memberIndex, "SystemObject");
                     if (fieldRef.Field.Type is INamedTypeSymbol memberAgg && EmitPolicy.IsAggregateType(memberAgg))
-                        memberVal = EmitDeepCloneAggregate(memberVal, memberAgg);
+                        memberVal = AggregateAbi.DeepClone(_builder, memberVal, memberAgg, _ctx.GetAggregateLayout);
                     return memberVal;
                 }, v => AggregateAbi.WriteSlot(_builder, arrExpr, memberIndex, v));
             }

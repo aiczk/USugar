@@ -110,7 +110,7 @@ public abstract class AssignmentHandlerBase : HandlerBase
                     var recv = LoadInstanceRaw(aggCapPropRef.Instance);
                     CLeaf slotVal = AggregateAbi.ReadSlot(_builder, recv, capSlotIdx, "SystemObject");
                     if (aggCapPropRef.Property.Type is INamedTypeSymbol capSlotAgg && EmitPolicy.IsAggregateType(capSlotAgg))
-                        slotVal = EmitDeepCloneAggregate(slotVal, capSlotAgg);
+                        slotVal = AggregateAbi.DeepClone(_builder, slotVal, capSlotAgg, _ctx.GetAggregateLayout);
                     return new LValueCapture { Value = slotVal, ArrayVal = recv, IndexVal = Const(capSlotIdx, "SystemInt32") };
                 }
                 if (aggCapPropRef.Property.GetMethod is { } capGetterRaw)
@@ -118,7 +118,7 @@ public abstract class AssignmentHandlerBase : HandlerBase
                     var recv = LoadInstanceRaw(aggCapPropRef.Instance);
                     CLeaf getVal = EmitCallToMethod(ResolveStructMember(capGetterRaw), new List<CLeaf> { recv });
                     if (aggCapPropRef.Property.Type is INamedTypeSymbol capGetAgg && EmitPolicy.IsAggregateType(capGetAgg))
-                        getVal = EmitDeepCloneAggregate(getVal, capGetAgg);
+                        getVal = AggregateAbi.DeepClone(_builder, getVal, capGetAgg, _ctx.GetAggregateLayout);
                     return new LValueCapture { Value = getVal, ArrayVal = recv };
                 }
                 goto default;

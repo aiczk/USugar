@@ -185,7 +185,7 @@ public abstract partial class HandlerBase
         var plan = PrepareNdimAccess(ae.ArrayReference, ae.Indices, ndimType);
         var resultLeaf = EmitNdimReadFromPlan(ae, plan, elemUdonType);
         return ndimType.ElementType is INamedTypeSymbol elemAggT && EmitPolicy.IsAggregateType(elemAggT)
-            ? EmitDeepCloneAggregate(resultLeaf, elemAggT) : resultLeaf;
+            ? AggregateAbi.DeepClone(_builder, resultLeaf, elemAggT, _ctx.GetAggregateLayout) : resultLeaf;
     }
 
     /// <summary>N-dim element WRITE prepare (mirrors HandlerBase.PrepareArrayElementSet's rank-1
