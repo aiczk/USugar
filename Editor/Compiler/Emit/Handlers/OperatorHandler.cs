@@ -121,8 +121,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
                 var nv = VisitExpression(leftNullable ? op.LeftOperand : op.RightOperand);
                 if (op.OperatorKind == BinaryOperatorKind.NotEquals)
                     return EmitNullableHasValue(nv); // != null  ⇔  HasValue
-                return ExternCall("SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean",
-                    new List<CLeaf> { nv, Const(null, "SystemObject") }, "SystemBoolean");
+                return NullableAbi.IsNull(_builder, nv);
             }
         }
 
@@ -503,8 +502,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
             var nSlot = _ctx.AllocTemp("SystemObject");
             EmitAssign(nSlot, valueVal);
             if (pattern is IConstantPatternOperation cpn && cpn.Value.ConstantValue is { HasValue: true, Value: null })
-                return ExternCall("SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean",
-                    new List<CLeaf> { SlotRef(nSlot), Const(null, "SystemObject") }, "SystemBoolean");
+                return NullableAbi.IsNull(_builder, SlotRef(nSlot));
             var matchSlot = _ctx.AllocTemp("SystemBoolean");
             EmitAssign(matchSlot, Const(false, "SystemBoolean"));
             _builder.EmitIf(EmitNullableHasValue(SlotRef(nSlot)), _ =>

@@ -1,4 +1,3 @@
-using System.Collections.Generic;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.Operations;
 
@@ -41,13 +40,8 @@ public class NullableHandler : AssignmentHandlerBase, IExpressionHandler
         // The null check is type-agnostic (SystemObject), so no retype is needed.
         CLeaf targetVal = VisitExpression(op.Operation);
 
-        var nullConst = Const(null, "SystemObject");
-
-        // condVal = (target != null); if true → evaluate WhenNotNull, else skip
-        var condVal = ExternCall(
-            "SystemObject.__op_Inequality__SystemObject_SystemObject__SystemBoolean",
-            new List<CLeaf> { targetVal, nullConst },
-            "SystemBoolean");
+        // condVal = (target != null); if true -> evaluate WhenNotNull, else skip
+        var condVal = NullableAbi.IsNotNull(_builder, targetVal);
 
         _builder.EmitIf(condVal, b =>
         {
@@ -83,13 +77,8 @@ public class NullableHandler : AssignmentHandlerBase, IExpressionHandler
         var leftVal = VisitExpression(op.Value);
         EmitAssign(resultSlot, leftVal);
 
-        var nullConst = Const(null, "SystemObject");
-
         // Use SlotRef for null check to avoid double evaluation of impure left-hand side
-        var condVal = ExternCall(
-            "SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean",
-            new List<CLeaf> { SlotRef(resultSlot), nullConst },
-            "SystemBoolean");
+        var condVal = NullableAbi.IsNull(_builder, SlotRef(resultSlot));
 
         System.Action<CoreBuilder> elseB = null;
         if (aggResult)
@@ -118,11 +107,7 @@ public class NullableHandler : AssignmentHandlerBase, IExpressionHandler
         var targetSlot = _ctx.AllocTemp(targetType);
         EmitAssign(targetSlot, lv.Value);
 
-        var nullConst = Const(null, "SystemObject");
-        var condVal = ExternCall(
-            "SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean",
-            new List<CLeaf> { SlotRef(targetSlot), nullConst },
-            "SystemBoolean");
+        var condVal = NullableAbi.IsNull(_builder, SlotRef(targetSlot));
 
         _builder.EmitIf(condVal, b =>
         {

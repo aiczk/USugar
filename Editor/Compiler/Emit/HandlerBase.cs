@@ -376,12 +376,7 @@ public abstract partial class HandlerBase
     /// <summary>HasValue: the boxed nullable object is non-null. Returns SystemBoolean.
     /// <paramref name="nullableVal"/> must be pure or pre-materialised (it is read once).</summary>
     protected CLeaf EmitNullableHasValue(CLeaf nullableVal)
-    {
-        var isNull = ExternCall("SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean",
-            new List<CLeaf> { nullableVal, Const(null, "SystemObject") }, "SystemBoolean");
-        return ExternCall("SystemBoolean.__op_UnaryNegation__SystemBoolean__SystemBoolean",
-            new List<CLeaf> { isNull }, "SystemBoolean");
-    }
+        => NullableAbi.HasValue(_builder, nullableVal);
 
     /// <summary>Default value for a Udon value type (0 / false). Used for `default(T)`-style fills.</summary>
     protected CLeaf EmitValueTypeDefault(string udonType)
@@ -480,8 +475,7 @@ public abstract partial class HandlerBase
         var aSlot = _ctx.AllocTemp("SystemObject"); EmitAssign(aSlot, leftVal);
         var bSlot = _ctx.AllocTemp("SystemObject"); EmitAssign(bSlot, rightVal);
 
-        CLeaf IsNullV(int slot) => ExternCall("SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean",
-            new List<CLeaf> { SlotRef(slot), Const(null, "SystemObject") }, "SystemBoolean");
+        CLeaf IsNullV(int slot) => NullableAbi.IsNull(_builder, SlotRef(slot));
 
         void IfBothPresent(Action<CoreBuilder> body)
         {
