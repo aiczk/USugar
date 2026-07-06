@@ -82,27 +82,10 @@ public abstract partial class HandlerBase
         return new NdimArrayAbi.AccessPlan(bundleVal, inBounds, flatIndex, backingType, idxSlots, dimSlots);
     }
 
-    CLeaf EmitIntToStr(CLeaf intVal)
-        => ExternCall("SystemInt32.__ToString__SystemString", new List<CLeaf> { intVal }, "SystemString");
-
-    CLeaf ConcatStr(CLeaf a, CLeaf b)
-        => ExternCall("SystemString.__op_Addition__SystemString_SystemString__SystemString", new List<CLeaf> { a, b }, "SystemString");
-
     /// <summary>D-N1: LogError naming the array expression, its rank, and every (index/length) pair,
     /// at runtime — the caller has already established at least one dimension is out of range.</summary>
     protected void EmitNdimBoundsLogError(IOperation arrayExprSyntaxSrc, string verb, NdimArrayAbi.AccessPlan plan)
-    {
-        CLeaf msg = Const($"USugar: index out of range on '{arrayExprSyntaxSrc.Syntax}' ({verb}, rank {plan.IdxSlots.Length}):", "SystemString");
-        for (int d = 0; d < plan.IdxSlots.Length; d++)
-        {
-            msg = ConcatStr(msg, Const($" dim{d}[", "SystemString"));
-            msg = ConcatStr(msg, EmitIntToStr(SlotRef(plan.IdxSlots[d])));
-            msg = ConcatStr(msg, Const("/", "SystemString"));
-            msg = ConcatStr(msg, EmitIntToStr(SlotRef(plan.DimSlots[d])));
-            msg = ConcatStr(msg, Const("]", "SystemString"));
-        }
-        EmitExternVoid("UnityEngineDebug.__LogError__SystemObject__SystemVoid", new List<CLeaf> { msg });
-    }
+        => NdimArrayAbi.EmitBoundsLogError(_builder, arrayExprSyntaxSrc.Syntax.ToString(), verb, plan);
 
     /// <summary>Shared in-bounds Get from an already-prepared plan: default(T) pre-init, in-bounds
     /// branch does the real Horner-flattened Get on the flat backing (the EXISTING 1-D Get choke

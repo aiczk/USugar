@@ -109,6 +109,27 @@ public static class NdimArrayAbi
         => builder.ExternCall("SystemInt32.__op_Subtraction__SystemInt32_SystemInt32__SystemInt32",
             new List<CLeaf> { length, builder.Const(1, "SystemInt32") }, "SystemInt32");
 
+    public static void EmitBoundsLogError(CoreBuilder builder, string arrayExprSyntax, string verb, AccessPlan plan)
+    {
+        CLeaf msg = builder.Const($"USugar: index out of range on '{arrayExprSyntax}' ({verb}, rank {plan.IdxSlots.Length}):", "SystemString");
+        for (int d = 0; d < plan.IdxSlots.Length; d++)
+        {
+            msg = ConcatString(builder, msg, builder.Const($" dim{d}[", "SystemString"));
+            msg = ConcatString(builder, msg, IntToString(builder, builder.SlotRef(plan.IdxSlots[d])));
+            msg = ConcatString(builder, msg, builder.Const("/", "SystemString"));
+            msg = ConcatString(builder, msg, IntToString(builder, builder.SlotRef(plan.DimSlots[d])));
+            msg = ConcatString(builder, msg, builder.Const("]", "SystemString"));
+        }
+        builder.EmitExternVoid("UnityEngineDebug.__LogError__SystemObject__SystemVoid", new List<CLeaf> { msg });
+    }
+
+    static CLeaf IntToString(CoreBuilder builder, CLeaf intVal)
+        => builder.ExternCall("SystemInt32.__ToString__SystemString", new List<CLeaf> { intVal }, "SystemString");
+
+    static CLeaf ConcatString(CoreBuilder builder, CLeaf a, CLeaf b)
+        => builder.ExternCall("SystemString.__op_Addition__SystemString_SystemString__SystemString",
+            new List<CLeaf> { a, b }, "SystemString");
+
     public static void FlattenInitializer(IArrayInitializerOperation init, List<IOperation> outLeaves)
     {
         foreach (var elem in init.ElementValues)
