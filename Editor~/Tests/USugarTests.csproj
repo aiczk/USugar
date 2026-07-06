@@ -28,6 +28,7 @@
     <Compile Include="../../Editor/Compiler/Emit/AggregateLayout.cs" />
     <Compile Include="../../Editor/Compiler/Emit/AggregateContext.cs" />
     <Compile Include="../../Editor/Compiler/Emit/SyntheticContext.cs" />
+    <Compile Include="../../Editor/Compiler/Emit/ControlFlowContext.cs" />
     <Compile Include="../../Editor/Compiler/Emit/EnvEmit.cs" />
     <Compile Include="../../Editor/Compiler/Emit/TailCallAnalysis.cs" />
     <Compile Include="../../Editor/Compiler/Emit/Analysis/LambdaCaptureAnalyzer.cs" />

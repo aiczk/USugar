@@ -18,6 +18,7 @@ public class EmitContext
     public readonly ClosureContext Closures = new ClosureContext();
     public readonly AggregateContext Aggregates = new AggregateContext();
     public readonly SyntheticContext Synthetics = new SyntheticContext();
+    public readonly ControlFlowContext ControlFlow = new ControlFlowContext();
 
     // Method bookkeeping
     public readonly Dictionary<IMethodSymbol, CFunction> MethodFunctions = new(SymbolEqualityComparer.Default);
@@ -418,27 +419,26 @@ public class EmitContext
     // Conditional access stack (for ?. operator): the evaluated instance leaf. For a delegate-typed
     // receiver this is the BUNDLE leaf itself (design §2.6) — `d?.Invoke()` dispatches on it, and any
     // delegate-valued expression (local/param/element/call result) is a legal ?.Invoke receiver.
-    public readonly Stack<CLeaf> ConditionalAccessStack = new();
+    public Stack<CLeaf> ConditionalAccessStack => ControlFlow.ConditionalAccessStack;
 
     // using declaration Dispose tracking
-    public readonly Stack<List<(CLeaf val, ITypeSymbol type)>> UsingDisposableStack = new();
+    public Stack<List<(CLeaf val, ITypeSymbol type)>> UsingDisposableStack => ControlFlow.UsingDisposableStack;
 
     /// <summary>Stack of using-stack depths at loop/switch entry points.
     /// Used to limit Dispose emission for break/continue to scopes inside the loop.</summary>
-    public readonly Stack<int> LoopUsingDepthStack = new();
+    public Stack<int> LoopUsingDepthStack => ControlFlow.LoopUsingDepthStack;
 
     // Switch break label stack — top is non-null inside switch body, null sentinel inside loop body.
     // StatementHandler.VisitBranch reads top to distinguish switch breaks (goto end label) from loop breaks (CBreak).
-    public readonly Stack<string> SwitchBreakLabels = new();
+    public Stack<string> SwitchBreakLabels => ControlFlow.SwitchBreakLabels;
 
-    int _switchLabelCounter;
     /// <summary>Generate a unique end label for a switch statement (per EmitContext = per class).</summary>
-    public string NextSwitchEndLabel() => $"__switchEnd_{++_switchLabelCounter}";
+    public string NextSwitchEndLabel() => ControlFlow.NextSwitchEndLabel();
 
     // goto-case / goto-default → sanitized UASM landing label, per enclosing switch (innermost on top). The
     // Roslyn target name ("case 2:", "default") is not a valid UASM label token, so both the case-body label
     // (SwitchHandler) and the goto (StatementHandler.VisitBranch) resolve through this shared map.
-    public readonly Stack<Dictionary<string, string>> GotoCaseLabels = new();
+    public Stack<Dictionary<string, string>> GotoCaseLabels => ControlFlow.GotoCaseLabels;
 
     // Delegate fields: tracks which user fields are delegate-typed and were expanded to bundles
     public HashSet<string> DelegateFields => Synthetics.DelegateFields;
