@@ -2016,9 +2016,6 @@ public abstract partial class HandlerBase
     protected void RejectUnsafeCrossProgramEventHandler(IEventSymbol evt, ValueInfo value)
         => _ctx.Boundary.RequireCanStorePublicEventHandler(evt, value);
 
-    protected bool IsCrossProgramDelegateFieldTarget(IFieldReferenceOperation fieldRef)
-        => _ctx.Boundary.IsCrossProgramDelegateFieldTarget(fieldRef);
-
     protected (string bridgeName, CLeaf funcRef, CLeaf targetInstance, CLeaf envLeaf) ResolveDelegateBridge(IDelegateCreationOperation op)
     {
         IMethodSymbol targetMethod = null;
