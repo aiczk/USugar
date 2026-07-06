@@ -841,12 +841,12 @@ public class UasmEmitter
          + "('new'-style shadowing). C# gives the two members separate storages, but the compiled "
          + "program keys heap variables by member NAME, so both symbols would silently collapse "
          + "onto one heap var (wrong values, or a runtime heap-type mismatch for type-conflicting "
-         + "shadows). Shadowing an inherited field/property is not supported in v2.x — rename the "
+         + "shadows). Shadowing an inherited field/property is not supported by the current storage ABI — rename the "
          + "member, or use virtual/override.";
 
     static string ExplicitInterfaceAutoPropError(IPropertySymbol prop)
         => $"Explicit interface implementation auto-property '{prop.Name}' is not supported in "
-         + "v2.x: its backing storage name contains '.' and is not a valid Udon identifier. "
+         + "the current storage ABI: its backing storage name contains '.' and is not a valid Udon identifier. "
          + "Implement the property implicitly (public auto-property) or with manual accessors.";
 
     // ── EmitMethods ──
@@ -3811,7 +3811,7 @@ public class UasmEmitter
         // ONLY actual `base.` receivers (round 7): a this/implicit reference to an OVERRIDDEN base
         // accessor must dispatch the chain-leaf override (ResolveDispatchProperty at the lookup sites),
         // not a base-instance copy — registering it here made the this-path lookups direct-call the
-        // copy, which runs the base accessor body (manual, pre-existing v2.x) or reads the base
+        // copy, which runs the base accessor body (manual, pre-chain-dispatch behavior) or reads the base
         // declaration's `__basebk` storage (auto, post-917d99c). Non-overridden base accessors are
         // already registered as inherited methods and never needed this arm.
         if (op is IPropertyReferenceOperation pr

@@ -212,7 +212,7 @@ public class J4Drv : J4Base {
     // this-path lookups must resolve the chain-leaf override (ResolveDispatchProperty) and the
     // base-instance-copy collector must register accessors for actual `base.` receivers ONLY.
     // Pre-fix the copy ran the base accessor body (manual/indexer, VM 3 vs CLR 5 — pre-existing
-    // v2.x) or read the base declaration's __basebk storage (auto, VM 7 vs CLR 77 — a 917d99c
+    // pre-chain-dispatch behavior) or read the base declaration's __basebk storage (auto, VM 7 vs CLR 77 — a 917d99c
     // regression).
 
     /// <summary>Function-entry labels for an accessor, excluding its __dlg_ delegate bridges —

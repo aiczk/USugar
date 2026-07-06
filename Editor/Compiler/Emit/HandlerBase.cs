@@ -1994,7 +1994,7 @@ public abstract partial class HandlerBase
     /// class — the chain-leaf accessor over the chain-leaf storage — exactly like
     /// <see cref="ResolveMostDerivedOverride"/> for MethodKind.Ordinary calls (shares its
     /// <see cref="FindOverridePropertyInChain"/> walker). Without this the lookup hits the
-    /// base-instance COPY, which runs the base accessor body (manual props/indexers, pre-existing v2.x)
+    /// base-instance COPY, which runs the base accessor body (manual props/indexers, pre-chain-dispatch behavior)
     /// or reads the base declaration's per-declaration `__basebk` storage (auto-props, post-917d99c).
     /// `base.P` keeps the static binding (the single non-virtual property access in C#), as does every
     /// non-this receiver (cross dispatch is receiver-correct via the planner chain-root layout).</summary>
