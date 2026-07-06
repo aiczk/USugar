@@ -15,6 +15,7 @@ public class EmitContext
     public readonly BoundaryChecker Boundary;
     public readonly GenericContext Generics = new GenericContext();
     public readonly RecursionContext RecursionContext = new RecursionContext();
+    public readonly ClosureContext Closures = new ClosureContext();
 
     // Method bookkeeping
     public readonly Dictionary<IMethodSymbol, CFunction> MethodFunctions = new(SymbolEqualityComparer.Default);
@@ -347,14 +348,10 @@ public class EmitContext
     // is a plain result holder, not shared mutable state.
     // Write-once: built once in UasmEmitter.Emit() via SetCaptureScope; a second set throws so a future
     // restructure cannot silently swap this frozen analysis artifact under in-flight emission.
-    public CaptureScopeAnalysis CaptureScope { get; private set; }
+    public CaptureScopeAnalysis CaptureScope => Closures.CaptureScope;
 
     public void SetCaptureScope(CaptureScopeAnalysis value)
-    {
-        if (CaptureScope != null)
-            throw new InvalidOperationException("EmitContext.CaptureScope is write-once (set once in Emit, never reassigned).");
-        CaptureScope = value;
-    }
+        => Closures.SetCaptureScope(value);
 
     // Stage 2 M2 (design §4.1): resolve a symbol's env binding (owning scope, 1-based env slot).
     // Single source of truth is CaptureScope.CapturedSlots; this helper adds the generic-spec
@@ -362,34 +359,13 @@ public class EmitContext
     // re-key through ContainingSymbol.OriginalDefinition + ordinal). A symbol that resolves here
     // must NEVER get a flat LocalBindings field — every read/write routes through the env record.
     public bool TryGetEnvBinding(ISymbol symbol, out (CaptureScope Scope, int Slot) binding)
-    {
-        binding = default;
-        if (CaptureScope == null || symbol == null) return false;
-        if (CaptureScope.CapturedSlots.TryGetValue(symbol, out var direct))
-        {
-            binding = direct;
-            return true;
-        }
-        if (symbol is IParameterSymbol p
-            && p.ContainingSymbol is IMethodSymbol m
-            && !ReferenceEquals(m, m.OriginalDefinition))
-        {
-            var defParams = m.OriginalDefinition.Parameters;
-            if (p.Ordinal < defParams.Length
-                && CaptureScope.CapturedSlots.TryGetValue(defParams[p.Ordinal], out var reKeyed))
-            {
-                binding = reKeyed;
-                return true;
-            }
-        }
-        return false;
-    }
+        => Closures.TryGetEnvBinding(symbol, out binding);
 
     // Stage 2 M2: (function, capture-bearing scope id) → the scratch slot holding that scope's LIVE
     // env-record reference in that function's frame. Keyed per CFunction because an env-ref scratch
     // is frame state: a hoisted closure reaches its declaring scopes through __envp + parent hops
     // instead (EnvEmit.Leaf).
-    public readonly Dictionary<(object Func, int ScopeId), int> ScopeEnvSlots = new();
+    public Dictionary<(object Func, int ScopeId), int> ScopeEnvSlots => Closures.ScopeEnvSlots;
 
     // Stage 2 M2: hoisted closure method → the param FIELD id of its hidden trailing __envp
     // parameter. Registered where the closure's params are laid out; read by EnvEmit.Leaf and the
@@ -403,20 +379,17 @@ public class EmitContext
     // generic local function sharing one T-free hoist) registers under its DEFINITION. Callers
     // never touch the dictionary directly — go through RegisterEnvpField / TryGetEnvpField, which
     // encode the constructed-first / definition-fallback lookup in exactly one place.
-    readonly Dictionary<IMethodSymbol, string> _envpParamFields = new(SymbolEqualityComparer.Default);
-
     /// <summary>Register a hoisted closure's hidden __envp field. Pass the CONSTRUCTED symbol for a
     /// per-instantiation registration (each spec owns its own field), or a DEFINITION for a
     /// closure that only ever has one instantiation. See the field's keying-discipline comment.</summary>
     public void RegisterEnvpField(IMethodSymbol closureKey, string envpFieldId)
-        => _envpParamFields[closureKey] = envpFieldId;
+        => Closures.RegisterEnvpField(closureKey, envpFieldId);
 
     /// <summary>Resolve a closure's __envp field: the CONSTRUCTED symbol first (per-instantiation
     /// storage), its ORIGINAL DEFINITION as fallback (shared/non-generic storage). The single
     /// lookup point for the mixed keying discipline documented on the backing field.</summary>
     public bool TryGetEnvpField(IMethodSymbol closure, out string envpFieldId)
-        => _envpParamFields.TryGetValue(closure, out envpFieldId)
-           || _envpParamFields.TryGetValue(closure.OriginalDefinition, out envpFieldId);
+        => Closures.TryGetEnvpField(closure, out envpFieldId);
 
     // Round-7 follow-up [Q4]: foreach ITERATION variables. C# makes them READONLY, so invoking a
     // non-readonly struct member on one runs on a DEFENSIVE COPY (the classic foreach-struct-
