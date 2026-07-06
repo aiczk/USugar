@@ -135,7 +135,7 @@ public class LoopHandler : HandlerBase, IOperationHandler
         // ONCE here; everything below (cached length, index loop, Get) is then IDENTICAL to the rank-1
         // path, just against the backing array's own type instead of the bundle's SystemObjectArray tag.
         bool isNdim = NdimArrayAbi.IsNdimArray(arrayTypeSymbol);
-        var backingTypeSymbol = isNdim ? GetNdimBackingType(arrayTypeSymbol) : arrayTypeSymbol;
+        var backingTypeSymbol = isNdim ? NdimArrayAbi.BackingType(_compilation, arrayTypeSymbol) : arrayTypeSymbol;
         var arrayType = GetArrayType(backingTypeSymbol);
         var elemAccessorType = GetArrayElemType(backingTypeSymbol);
 

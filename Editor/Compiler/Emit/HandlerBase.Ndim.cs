@@ -12,12 +12,6 @@ using Microsoft.CodeAnalysis.Operations;
 /// </summary>
 public abstract partial class HandlerBase
 {
-    /// <summary>The rank-1 CLR array symbol for an N-dim array's flat backing storage (T[,] → T[]).
-    /// Synthesized via the Compilation — Roslyn gives no direct "reinterpret at rank 1" operation on
-    /// an existing IArrayTypeSymbol.</summary>
-    protected IArrayTypeSymbol GetNdimBackingType(IArrayTypeSymbol ndimType)
-        => NdimArrayAbi.BackingType(_compilation, ndimType);
-
     /// <summary>Fetch bundle[0] (the flat backing) as a value of its real rank-1 array type. The
     /// bundle stores it boxed as SystemObject; Udon unboxes on the typed COPY into a backing-typed
     /// scratch slot (same mechanism as the recursion-stack reload, CoreFlatOptimizer.ReloadValue).
@@ -43,7 +37,7 @@ public abstract partial class HandlerBase
     protected NdimArrayAbi.AccessPlan PrepareNdimAccess(IOperation arrayRefOp, IReadOnlyList<IOperation> indexOps, IArrayTypeSymbol ndimType)
     {
         int rank = ndimType.Rank;
-        var backingType = GetNdimBackingType(ndimType);
+        var backingType = NdimArrayAbi.BackingType(_compilation, ndimType);
 
         var bundleSlot = _ctx.AllocTemp(NdimArrayAbi.BundleUdonType);
         EmitAssign(bundleSlot, VisitExpression(arrayRefOp));
@@ -160,7 +154,7 @@ public abstract partial class HandlerBase
     {
         var ndimType = (IArrayTypeSymbol)op.Type;
         int rank = ndimType.Rank;
-        var backingType = GetNdimBackingType(ndimType);
+        var backingType = NdimArrayAbi.BackingType(_compilation, ndimType);
         var backingUdonType = GetArrayType(backingType);
         var elemUdonType = GetArrayElemType(backingType);
         var elemSym = ndimType.ElementType;
@@ -223,7 +217,7 @@ public abstract partial class HandlerBase
     /// real object[]), so without this it would silently return 1+r instead of Πdᵢ.</summary>
     protected CLeaf EmitNdimLength(CLeaf bundleVal, IArrayTypeSymbol ndimType)
     {
-        var backing = EmitNdimGetBacking(bundleVal, GetNdimBackingType(ndimType));
+        var backing = EmitNdimGetBacking(bundleVal, NdimArrayAbi.BackingType(_compilation, ndimType));
         return ExternCall("SystemArray.__get_Length__SystemInt32", new List<CLeaf> { backing }, "SystemInt32");
     }
 
