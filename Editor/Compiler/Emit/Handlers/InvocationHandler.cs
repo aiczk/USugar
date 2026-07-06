@@ -107,7 +107,21 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
         // Nullable<T>.GetValueOrDefault() / GetValueOrDefault(fallback) → the value, else the fallback/default.
         if (op.Instance != null && target.Name == "GetValueOrDefault"
             && EmitPolicy.IsNullableT(target.ContainingType, out var govUnderlying))
-            return EmitNullableGetValueOrDefault(op, govUnderlying);
+        {
+            var uType = GetUdonType(govUnderlying);
+            // For an aggregate (struct/tuple) underlying, the present value is a boxed object[] aliasing the
+            // nullable's storage — deep-clone it out (value semantics). default(T) for an aggregate is a fresh
+            // zero-initialized struct, NOT null, so use EmitNewAggregate rather than the scalar value default.
+            var aggType = ResolveType(govUnderlying) as INamedTypeSymbol;
+            bool aggResult = aggType != null && EmitPolicy.IsAggregateType(aggType);
+            var nv = VisitExpression(op.Instance);
+            var fallback = op.Arguments.Length > 0
+                ? VisitExpression(op.Arguments[0].Value)
+                : (aggResult ? EmitNewAggregate(aggType) : EmitValueTypeDefault(uType));
+            return NullableAbi.EmitGetValueOrDefault(_builder, nv, uType, fallback,
+                present => aggResult ? EmitDeepCloneAggregate(present, aggType) : present,
+                _ctx.AllocTemp, EmitAssign, SlotRef);
+        }
 
         // Virtual dispatch through `this`: a call to a virtual/override/abstract method must bind to the
         // most-derived override in the COMPILED type, even when the call site is in an INHERITED base
@@ -406,26 +420,6 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
 
     // ResolveMostDerivedOverride moved to HandlerBase (round-9: StatementHandler's TCO gate needs
     // the same virtual-dispatch resolution — see VisitReturn).
-
-    // Nullable<T>.GetValueOrDefault: HasValue ? Value : (fallback arg or default(T)).
-    CLeaf EmitNullableGetValueOrDefault(IInvocationOperation op, ITypeSymbol underlying)
-    {
-        var uType = GetUdonType(underlying);
-        // For an aggregate (struct/tuple) underlying, the present value is a boxed object[] aliasing the
-        // nullable's storage — deep-clone it out (value semantics). default(T) for an aggregate is a fresh
-        // zero-initialized struct, NOT null, so use EmitNewAggregate rather than the scalar value default.
-        var aggType = ResolveType(underlying) as INamedTypeSymbol;
-        bool aggResult = aggType != null && EmitPolicy.IsAggregateType(aggType);
-        // nv is the boxed nullable (SystemObject) bound once under ANF — re-readable for the HasValue test
-        // and the present-value branch without a snapshot slot.
-        var nv = VisitExpression(op.Instance);
-        var fallback = op.Arguments.Length > 0
-            ? VisitExpression(op.Arguments[0].Value)
-            : (aggResult ? EmitNewAggregate(aggType) : EmitValueTypeDefault(uType));
-        return NullableAbi.EmitGetValueOrDefault(_builder, nv, uType, fallback,
-            present => aggResult ? EmitDeepCloneAggregate(present, aggType) : present,
-            _ctx.AllocTemp, EmitAssign, SlotRef);
-    }
 
     // User-struct instance method call: receiver object[] passed (uncloned) as synthetic param0
     // so `this`-field mutations reflect back to the caller's local (value-type by-ref `this` semantics).
