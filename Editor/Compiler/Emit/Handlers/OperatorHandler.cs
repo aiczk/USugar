@@ -263,16 +263,8 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
     // The type operand of a typeof, seeing through an identity/boxing conversion wrapper; null if not a typeof.
     static ITypeSymbol AsTypeofOperand(IOperation op)
     {
-        while (op is IConversionOperation conv) op = conv.Operand;
+        op = UnwrapConversions(op);
         return op is ITypeOfOperation t ? t.TypeOperand : null;
-    }
-
-    // Strip conversion wrappers (e.g. the implicit box a string-concat operand gets for Concat(object,object))
-    // to reach the real underlying value operation.
-    static IOperation UnwrapConversions(IOperation op)
-    {
-        while (op is IConversionOperation conv) op = conv.Operand;
-        return op;
     }
 
     // Nullable bool `&` / `|` with C# three-valued logic: a known false dominates `&` (false & null = false)
