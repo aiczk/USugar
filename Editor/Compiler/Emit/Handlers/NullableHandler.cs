@@ -67,7 +67,6 @@ public class NullableHandler : AssignmentHandlerBase, IExpressionHandler
     {
         // a ?? b → var r = a; if (r == null) r = b;
         var resultType = GetUdonType(op.Type);
-        var resultSlot = _ctx.AllocTemp(resultType);
         // For an aggregate (struct/tuple) result both branches yield a boxed object[] that aliases the
         // nullable's internal storage; deep-clone so the copied-out value has independent value semantics.
         // When op.Type is the aggregate, the right side has the non-nullable aggregate type → always non-null,
@@ -75,23 +74,14 @@ public class NullableHandler : AssignmentHandlerBase, IExpressionHandler
         var aggType = ResolveType(op.Type) as INamedTypeSymbol;
         bool aggResult = aggType != null && EmitPolicy.IsAggregateType(aggType);
         var leftVal = VisitExpression(op.Value);
-        EmitAssign(resultSlot, leftVal);
-
-        // Use SlotRef for null check to avoid double evaluation of impure left-hand side
-        var condVal = NullableAbi.IsNull(_builder, SlotRef(resultSlot));
-
-        System.Action<CoreBuilder> elseB = null;
-        if (aggResult)
-            elseB = b => EmitAssign(resultSlot, EmitDeepCloneAggregate(SlotRef(resultSlot), aggType));
-
-        _builder.EmitIf(condVal, b =>
-        {
-            // left IS null → use right
-            var rightVal = VisitExpression(op.WhenNull);
-            EmitAssign(resultSlot, aggResult ? EmitDeepCloneAggregate(rightVal, aggType) : rightVal);
-        }, elseB);
-
-        return SlotRef(resultSlot);
+        return NullableAbi.EmitCoalesce(_builder, leftVal, resultType,
+            () =>
+            {
+                var rightVal = VisitExpression(op.WhenNull);
+                return aggResult ? EmitDeepCloneAggregate(rightVal, aggType) : rightVal;
+            },
+            aggResult ? present => EmitDeepCloneAggregate(present, aggType) : null,
+            _ctx.AllocTemp, EmitAssign, SlotRef);
     }
 
     CLeaf VisitCoalesceAssignment(ICoalesceAssignmentOperation op)
@@ -104,18 +94,9 @@ public class NullableHandler : AssignmentHandlerBase, IExpressionHandler
         // aggregate-member (tuple/struct) write-backs and built a bogus __set_X extern for user auto-properties.
         var lv = CaptureLValue(op.Target);
         var targetType = GetUdonType(op.Target.Type);
-        var targetSlot = _ctx.AllocTemp(targetType);
-        EmitAssign(targetSlot, lv.Value);
-
-        var condVal = NullableAbi.IsNull(_builder, SlotRef(targetSlot));
-
-        _builder.EmitIf(condVal, b =>
-        {
-            var rightVal = VisitExpression(op.Value);
-            EmitAssign(targetSlot, rightVal);
-            EmitWriteBack(op.Target, rightVal, lv);
-        });
-
-        return SlotRef(targetSlot);
+        return NullableAbi.EmitCoalesceAssignment(_builder, lv.Value, targetType,
+            () => VisitExpression(op.Value),
+            rightVal => EmitWriteBack(op.Target, rightVal, lv),
+            _ctx.AllocTemp, EmitAssign, SlotRef);
     }
 }

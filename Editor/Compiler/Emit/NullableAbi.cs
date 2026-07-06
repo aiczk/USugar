@@ -39,6 +39,36 @@ public static class NullableAbi
         return slotRef(resultSlot);
     }
 
+    public static CLeaf EmitCoalesce(CoreBuilder builder, CValue leftValue, string resultType,
+        Func<CLeaf> whenNullValue, Func<CLeaf, CLeaf> presentValue,
+        Func<string, int> allocTemp, Action<int, CValue> emitAssign, Func<int, CLeaf> slotRef)
+    {
+        var resultSlot = allocTemp(resultType);
+        emitAssign(resultSlot, leftValue);
+        Action<CoreBuilder> elseBranch = presentValue == null
+            ? null
+            : _ => emitAssign(resultSlot, presentValue(slotRef(resultSlot)));
+        builder.EmitIf(IsNull(builder, slotRef(resultSlot)),
+            _ => emitAssign(resultSlot, whenNullValue()),
+            elseBranch);
+        return slotRef(resultSlot);
+    }
+
+    public static CLeaf EmitCoalesceAssignment(CoreBuilder builder, CValue currentValue, string resultType,
+        Func<CLeaf> whenNullValue, Action<CLeaf> writeBack,
+        Func<string, int> allocTemp, Action<int, CValue> emitAssign, Func<int, CLeaf> slotRef)
+    {
+        var resultSlot = allocTemp(resultType);
+        emitAssign(resultSlot, currentValue);
+        builder.EmitIf(IsNull(builder, slotRef(resultSlot)), _ =>
+        {
+            var rightValue = whenNullValue();
+            emitAssign(resultSlot, rightValue);
+            writeBack(rightValue);
+        });
+        return slotRef(resultSlot);
+    }
+
     public static CLeaf EmitLiftedBoolLogic(CoreBuilder builder, CValue leftValue, CValue rightValue,
         BinaryOperatorKind kind, Func<string, int> allocTemp, Action<int, CValue> emitAssign, Func<int, CLeaf> slotRef)
     {
