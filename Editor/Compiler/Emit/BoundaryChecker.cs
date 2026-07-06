@@ -3,6 +3,13 @@ using System.Linq;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.Operations;
 
+public enum BoundarySite
+{
+    CrossBehaviourFieldWrite,
+    CrossBehaviourFieldRead,
+    CrossBehaviourArgument,
+}
+
 /// <summary>
 /// Emit-time boundary policy. Handlers should identify boundary sites and delegate the semantic decision
 /// here, instead of open-coding class/delegate/env escape checks per syntax shape.
@@ -112,29 +119,37 @@ public sealed class BoundaryChecker
     }
 
     public void RequireCanWriteCrossBehaviourField(IFieldSymbol field)
-    {
-        if (!TypeClassifier.ContainsProgramLocalPayload(field.Type, TypeCtx)) return;
-        throw new NotSupportedException(
-            $"A v1 user class cannot be written to another behaviour's field '{field.Name}': a class "
-            + "value is a program-local object[] bundle and cannot cross a program boundary.");
-    }
+        => RequireNoProgramLocalPayload(BoundarySite.CrossBehaviourFieldWrite, field.Type, field.Name);
 
     public void RequireCanReadCrossBehaviourField(IFieldSymbol field)
-    {
-        if (!TypeClassifier.ContainsProgramLocalPayload(field.Type, TypeCtx)) return;
-        throw new NotSupportedException(
-            $"Reading another behaviour's field '{field.Name}' that carries a v1 user class "
-            + "is not supported: a class value is a program-local object[] bundle and cannot cross a "
-            + "program boundary.");
-    }
+        => RequireNoProgramLocalPayload(BoundarySite.CrossBehaviourFieldRead, field.Type, field.Name);
 
     public void RequireCanPassCrossBehaviourArgument(ITypeSymbol argType)
+        => RequireNoProgramLocalPayload(BoundarySite.CrossBehaviourArgument, argType, null);
+
+    void RequireNoProgramLocalPayload(BoundarySite site, ITypeSymbol type, string memberName)
     {
-        if (!TypeClassifier.ContainsProgramLocalPayload(argType, TypeCtx)) return;
-        throw new NotSupportedException(
-            "A v1 user class cannot be passed to a cross-behaviour (SendCustomEvent) call: a class "
-            + "value is a program-local object[] bundle and cannot cross a program boundary. Pass "
-            + "plain data instead and rebuild the object on the receiving side.");
+        if (!TypeClassifier.ContainsProgramLocalPayload(type, TypeCtx)) return;
+        throw new NotSupportedException(ProgramLocalPayloadMessage(site, memberName));
     }
 
+    static string ProgramLocalPayloadMessage(BoundarySite site, string memberName)
+    {
+        switch (site)
+        {
+            case BoundarySite.CrossBehaviourFieldWrite:
+                return $"A v1 user class cannot be written to another behaviour's field '{memberName}': a class "
+                       + "value is a program-local object[] bundle and cannot cross a program boundary.";
+            case BoundarySite.CrossBehaviourFieldRead:
+                return $"Reading another behaviour's field '{memberName}' that carries a v1 user class "
+                       + "is not supported: a class value is a program-local object[] bundle and cannot cross a "
+                       + "program boundary.";
+            case BoundarySite.CrossBehaviourArgument:
+                return "A v1 user class cannot be passed to a cross-behaviour (SendCustomEvent) call: a class "
+                       + "value is a program-local object[] bundle and cannot cross a program boundary. Pass "
+                       + "plain data instead and rebuild the object on the receiving side.";
+            default:
+                throw new ArgumentOutOfRangeException(nameof(site), site, null);
+        }
+    }
 }
