@@ -140,11 +140,9 @@ public class UasmEmitter
         EnsurePlannerReady();
         EmitFields();
         SetReflectionValues();
-        // Design §1: build the single ReachableBodies fixpoint ONCE here — after EmitFields (field
-        // initializers are seeds) and before its consumers. Its projections feed Phase-1 registration,
-        // BuildRecursionInfo roots, and CaptureScope roots (all in EmitMethods / injected below).
-        var methods = ComputeMethods();
-        _reach = BuildReachableBodies(methods);
+        var plan = BuildClassCompilePlan();
+        _plan = plan;
+        _reach = plan.Reach;
         // Stage 2: closure-scope analysis feeding real codegen — EnvEmit's alloc/read/write and every
         // IsCapturingClosure call site (HandlerBase, InvocationHandler.Extern, this file) key off it.
         // Its roots are the reach definition projection (ComputeCaptureRoots); root bodies come from the
@@ -154,8 +152,8 @@ public class UasmEmitter
         // NOT CaptureScopeAnalysis's own own-class-instance-only re-collection which missed base field and
         // auto-property initializers.
         _ctx.SetCaptureScope(CaptureScopeAnalysis.Build(_compilation, _classSymbol,
-            ComputeCaptureRoots(), _reach.BodyByDef, _fieldInitOps.Select(fi => fi.initOp).ToList()));
-        EmitMethods(methods);
+            plan.CaptureRoots, plan.Reach.BodyByDef, plan.FieldInitOps));
+        EmitMethods(plan);
         OnIrPass?.Invoke("after-emit", _module);
         // Handlers build Core IR; the pipeline (verify/optimize/flatten) runs on Core directly.
         var result = IrPipeline.GenerateUasmFromCore(_module, DumpEnabled);
@@ -164,6 +162,27 @@ public class UasmEmitter
     }
 
     public uint GetHeapSize() => _codeGenResult.HeapSize;
+
+    ClassCompilePlan BuildClassCompilePlan()
+    {
+        // Design §1: build the single ReachableBodies fixpoint ONCE here — after EmitFields (field
+        // initializers are seeds) and before its consumers. Its projections feed Phase-1 registration,
+        // BuildRecursionInfo roots, and CaptureScope roots (all in EmitMethods / injected below).
+        var methods = ComputeMethods();
+        var reach = BuildReachableBodies(methods);
+        var methodSet = new HashSet<IMethodSymbol>(methods, SymbolEqualityComparer.Default);
+        var baseInstanceMethods = reach.BaseCopies.Where(bm => !methodSet.Contains(bm)).ToArray();
+        var captureRoots = reach.BodyByDef.Keys.Where(m => m.DeclaringSyntaxReferences.Length > 0).ToList();
+        var fieldInitOps = _fieldInitOps.Select(fi => fi.initOp).ToList();
+        return new ClassCompilePlan(
+            methods,
+            reach,
+            reach.ForeignStatics,
+            reach.StructMembers,
+            baseInstanceMethods,
+            captureRoots,
+            fieldInitOps);
+    }
 
     void SetReflectionValues()
     {
@@ -887,19 +906,9 @@ public class UasmEmitter
            && m.MethodKind is MethodKind.Ordinary or MethodKind.ExplicitInterfaceImplementation
               or MethodKind.PropertyGet or MethodKind.PropertySet;
 
-    /// <summary>CaptureScopeAnalysis root projection (design §1, consumer 3): every method DEFINITION whose
-    /// body this class emits — the FULL ReachableBodies artifact (all provenances). C1 fix: this must be the
-    /// complete reach set, not just own+base+struct. A capturing lambda hoisted from a reached FOREIGN-STATIC
-    /// body (inlined into this program) or an OPEN-GENERIC-BASE definition body is emitted as a CFunction in
-    /// THIS class's context, so its closure needs env analysis here; the former (methods + base copies +
-    /// struct-member defs) set omitted foreign statics and open-generic-base defs, silently falling their
-    /// per-iteration captures back to a shared flat field (VM-proven multi-activation clobber). BodyByDef's
-    /// keys ARE every reached definition, so this is exactly the emitted-body set.</summary>
-    List<IMethodSymbol> ComputeCaptureRoots()
-        => _reach.BodyByDef.Keys.Where(m => m.DeclaringSyntaxReferences.Length > 0).ToList();
-
-    void EmitMethods(IMethodSymbol[] methods)
+    void EmitMethods(ClassCompilePlan plan)
     {
+        var methods = plan.Methods;
         var typeLayout = _planner.GetLayout(_classSymbol);
 
         // First pass: create IrFunctions, assign params, return vars (skip generic definitions)
@@ -978,10 +987,9 @@ public class UasmEmitter
         // base, struct, foreign, field-init) once and applies all three per-operation rules to each, so a
         // struct/foreign/using call inside any reached body is seen. Gates (IsCollectibleStructMember /
         // IsClosedForeignStaticTarget / methodSet exclusion) stay on the projection side — meaning preserved.
-        var methodSet = new HashSet<IMethodSymbol>(methods, SymbolEqualityComparer.Default);
-        var baseInstanceMethods = _reach.BaseCopies.Where(bm => !methodSet.Contains(bm)).ToArray();
-        var structMethods = _reach.StructMembers;
-        var foreignStatics = _reach.ForeignStatics;
+        var baseInstanceMethods = plan.BaseInstanceMethods;
+        var structMethods = plan.StructMethods;
+        var foreignStatics = plan.ForeignStatics;
         foreach (var fm in foreignStatics)
         {
             EmitPolicy.RejectInParameters(fm); // round-7 follow-up [Q3]
@@ -3767,6 +3775,7 @@ public class UasmEmitter
     /// <summary>The single ReachableBodies fixpoint result (design §1), built once in Emit() before
     /// CaptureScopeAnalysis and consumed by the Phase-1 registration regimes, BuildRecursionInfo roots,
     /// and CaptureScope roots. Carries each reachable DEFINITION's body fetched EXACTLY ONCE.</summary>
+    ClassCompilePlan _plan;
     ReachableBodies _reach = new();
 
     IOperation GetMethodBodyOperation(IMethodSymbol method)
