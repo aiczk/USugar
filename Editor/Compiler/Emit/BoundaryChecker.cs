@@ -110,6 +110,21 @@ public sealed class BoundaryChecker
             + "environment, and cannot cross a program boundary.");
     }
 
+    public void RequireCanEraseProgramLocalPayload(IConversionOperation conversion,
+        ITypeSymbol sourceType, ITypeSymbol destinationType)
+    {
+        if (!TypeClassifier.ContainsProgramLocalPayload(sourceType, TypeCtx)
+            || TypeClassifier.ContainsProgramLocalPayload(destinationType, TypeCtx)
+            || IsProgramLocalEqualityPosition(conversion))
+            return;
+        throw new NotSupportedException(
+            $"Erasing the v1 user class '{sourceType.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}' "
+            + $"to '{destinationType.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}' is not supported: "
+            + "a class value is a program-local object[] bundle with no runtime type identity, so once boxed "
+            + "to object it launders past the cross-program / cast / ToString boundary checks. Compare class "
+            + "references directly, or keep the value class-typed / use Foo[].");
+    }
+
     public bool IsCrossProgramDelegateFieldTarget(IFieldReferenceOperation fieldRef)
     {
         if (fieldRef.Field.Type is not INamedTypeSymbol dft || dft.DelegateInvokeMethod == null) return false;
@@ -118,6 +133,22 @@ public sealed class BoundaryChecker
         return fieldRef.Field.DeclaredAccessibility == Accessibility.Public
             || fieldRef.Field.GetAttributes().Any(a =>
                 a.AttributeClass?.Name is "SerializeField" or "SerializeFieldAttribute" or "UdonSyncedAttribute");
+    }
+
+    static bool IsProgramLocalEqualityPosition(IConversionOperation conv)
+    {
+        switch (conv.Parent)
+        {
+            case IBinaryOperation { OperatorKind: BinaryOperatorKind.Equals or BinaryOperatorKind.NotEquals }:
+                return true;
+            case IArgumentOperation { Parent: IInvocationOperation inv }
+                when inv.TargetMethod.Name == "Equals"
+                    && inv.TargetMethod.ContainingType.SpecialType
+                        is SpecialType.System_Object or SpecialType.System_ValueType:
+                return true;
+            default:
+                return false;
+        }
     }
 
     static IOperation UnwrapConversions(IOperation value)

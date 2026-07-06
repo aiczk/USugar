@@ -311,27 +311,6 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
                != DelegateAbi.BuildSigPart(dstInvoke, typeParamMap);
     }
 
-    // B82 (wave-16, ruling Option A): a class→object(-erased) conversion is legal ONLY when it is the DIRECT
-    // operand of a ==/!= comparison or an argument of object.Equals/.Equals — the reference-equality lowering
-    // (E2 shape) genuinely needs the class as object. Every other position (object local, array/field element,
-    // call argument, string.Format arg) is a laundering channel that erases the class's static identity and
-    // defeats the §2-1 boundary checks, so it rejects.
-    static bool IsClassToObjectEqualityPosition(IConversionOperation conv)
-    {
-        switch (conv.Parent)
-        {
-            case IBinaryOperation { OperatorKind: BinaryOperatorKind.Equals or BinaryOperatorKind.NotEquals }:
-                return true;
-            case IArgumentOperation { Parent: IInvocationOperation inv }
-                when inv.TargetMethod.Name == "Equals"
-                    && inv.TargetMethod.ContainingType.SpecialType
-                        is SpecialType.System_Object or SpecialType.System_ValueType:
-                return true;
-            default:
-                return false;
-        }
-    }
-
     CLeaf VisitConversion(IConversionOperation conv)
     {
         RejectChecked(conv.IsChecked);
@@ -346,15 +325,8 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
         // an in-program `object o = classInstance` is the documented over-rejection (E1 shape). Closure-env
         // capture stores the ref via a compiler-emitted EnvEmit.Write, not a user conversion — it never lands
         // here (the F1 execution-locality pin stays green).
-        if (ResolveType(conv.Operand.Type) is { } b82Src && TypeClassifier.ContainsProgramLocalPayload(b82Src, TypeCtx)
-            && ResolveType(conv.Type) is { } b82Dst && !TypeClassifier.ContainsProgramLocalPayload(b82Dst, TypeCtx)
-            && !IsClassToObjectEqualityPosition(conv))
-            throw new System.NotSupportedException(
-                $"Erasing the v1 user class '{b82Src.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}' "
-                + $"to '{b82Dst.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}' is not supported: "
-                + "a class value is a program-local object[] bundle with no runtime type identity, so once boxed "
-                + "to object it launders past the cross-program / cast / ToString boundary checks. Compare class "
-                + "references directly, or keep the value class-typed / use Foo[].");
+        if (ResolveType(conv.Operand.Type) is { } b82Src && ResolveType(conv.Type) is { } b82Dst)
+            _ctx.Boundary.RequireCanEraseProgramLocalPayload(conv, b82Src, b82Dst);
 
         var srcVal = VisitExpression(conv.Operand);
 
