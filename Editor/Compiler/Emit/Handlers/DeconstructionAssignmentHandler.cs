@@ -90,8 +90,7 @@ public class DeconstructionAssignmentHandler : AssignmentHandlerBase, IOperation
                 var dlgSnaps = new List<CLeaf>(targetTuple.Elements.Length);
                 for (int i = 0; i < targetTuple.Elements.Length; i++)
                 {
-                    var raw = ExternCall(ExternResolver.BuildArrayGetSignature("SystemObjectArray", "SystemObject"),
-                        new List<CLeaf> { dlgResult, Const(i, "SystemInt32") }, "SystemObject");
+                    var raw = AggregateAbi.ReadSlot(_builder, dlgResult, i, "SystemObject");
                     dlgSnaps.Add(targetTuple.Elements[i].Type is INamedTypeSymbol det && EmitPolicy.IsAggregateType(det)
                         ? EmitDeepCloneAggregate(raw, det) : raw);
                 }
@@ -111,8 +110,7 @@ public class DeconstructionAssignmentHandler : AssignmentHandlerBase, IOperation
                 var snaps = new List<CLeaf>(targetTuple.Elements.Length);
                 for (int i = 0; i < targetTuple.Elements.Length; i++)
                 {
-                    var raw = ExternCall(ExternResolver.BuildArrayGetSignature("SystemObjectArray", "SystemObject"),
-                        new List<CLeaf> { arrVal, Const(i, "SystemInt32") }, "SystemObject");
+                    var raw = AggregateAbi.ReadSlot(_builder, arrVal, i, "SystemObject");
                     snaps.Add(targetTuple.Elements[i].Type is INamedTypeSymbol et && EmitPolicy.IsAggregateType(et)
                         ? EmitDeepCloneAggregate(raw, et) : raw);
                 }
@@ -165,8 +163,7 @@ public class DeconstructionAssignmentHandler : AssignmentHandlerBase, IOperation
                     var arrExpr = LoadField(callReturns[0].Id, "SystemObjectArray");
                     for (int i = 0; i < targetTuple.Elements.Length; i++)
                     {
-                        var elemVal = ExternCall(ExternResolver.BuildArrayGetSignature("SystemObjectArray", "SystemObject"),
-                            new List<CLeaf> { arrExpr, Const(i, "SystemInt32") }, "SystemObject");
+                        var elemVal = AggregateAbi.ReadSlot(_builder, arrExpr, i, "SystemObject");
                         AssignToLValue(targetTuple.Elements[i], elemVal, prepared);
                     }
                 }
@@ -323,8 +320,7 @@ public class DeconstructionAssignmentHandler : AssignmentHandlerBase, IOperation
                 "SystemObjectArray");
             for (int i = 0; i < targetTuple.Elements.Length; i++)
             {
-                var elemVal = ExternCall(ExternResolver.BuildArrayGetSignature("SystemObjectArray", "SystemObject"),
-                    new List<CLeaf> { arrVal, Const(i, "SystemInt32") }, "SystemObject");
+                var elemVal = AggregateAbi.ReadSlot(_builder, arrVal, i, "SystemObject");
                 AssignToLValue(targetTuple.Elements[i], elemVal, prepared);
             }
         }

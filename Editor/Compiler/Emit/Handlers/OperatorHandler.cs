@@ -974,10 +974,8 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
         CLeaf result = Const(true, "SystemBoolean");
         for (int i = 0; i < layout.Count; i++)
         {
-            var leftElem = ExternCall(ExternResolver.BuildArrayGetSignature("SystemObjectArray", "SystemObject"),
-                new List<CLeaf> { SlotRef(leftSlot), Const(i, "SystemInt32") }, "SystemObject");
-            var rightElem = ExternCall(ExternResolver.BuildArrayGetSignature("SystemObjectArray", "SystemObject"),
-                new List<CLeaf> { SlotRef(rightSlot), Const(i, "SystemInt32") }, "SystemObject");
+            var leftElem = AggregateAbi.ReadSlot(_builder, SlotRef(leftSlot), i, "SystemObject");
+            var rightElem = AggregateAbi.ReadSlot(_builder, SlotRef(rightSlot), i, "SystemObject");
 
             CLeaf elemEq = layout.Fields[i].Type is INamedTypeSymbol nested && nested.IsTupleType
                 ? EmitAggregateElementsEqual(leftElem, rightElem, nested) // nested tuple → recurse
