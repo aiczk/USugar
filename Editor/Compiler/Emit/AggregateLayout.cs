@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.Operations;
 
 public class AggregateLayout
 {
@@ -194,6 +196,61 @@ public static class AggregateAbi
             case SpecialType.System_Char: return '\0';
             case SpecialType.System_SByte: return (sbyte)0;
             default: return null;
+        }
+    }
+}
+
+/// <summary>
+/// User class ABI policy and class-specific object[] initialization. AggregateAbi owns the backing array;
+/// ClassAbi owns the user-class restrictions and initializer ordering layered on top of that storage.
+/// </summary>
+public static class ClassAbi
+{
+    /// <summary>CA-M1: user classes have reference semantics and no inheritance/interface dispatch.</summary>
+    public static void RejectUnsupportedMembers(INamedTypeSymbol classTy)
+    {
+        if (classTy.Interfaces.Length > 0)
+            throw new NotSupportedException(
+                $"Class '{classTy.Name}' implements interface '{classTy.Interfaces[0].Name}': class ABI v1 "
+                + "does not support interface implementation on a user class. Call the method directly, or "
+                + "use a UdonSharpBehaviour interface for dispatch.");
+        foreach (var m in classTy.GetMembers())
+        {
+            if (m.IsImplicitlyDeclared) continue;
+            if (m is IMethodSymbol { MethodKind: MethodKind.Ordinary or MethodKind.PropertyGet or MethodKind.PropertySet }
+                || m is IPropertySymbol)
+            {
+                if (m.IsVirtual || m.IsAbstract || m.IsOverride)
+                    throw new NotSupportedException(
+                        $"Member '{classTy.Name}.{m.Name}' is virtual/abstract/override: class ABI v1 has no "
+                        + "inheritance or virtual dispatch, so declare it non-virtual, or call a named method "
+                        + "directly instead of dispatching through a base type.");
+            }
+        }
+    }
+
+    /// <summary>Run instance field / auto-property initializers on an already allocated class bundle.</summary>
+    public static void EmitInstanceFieldInitializers(CoreBuilder builder, Compilation compilation,
+        CLeaf instance, INamedTypeSymbol classTy, AggregateLayout layout, Func<IOperation, CLeaf> emitValue)
+    {
+        foreach (var member in classTy.GetMembers())
+        {
+            if (member is not IFieldSymbol { IsStatic: false, IsConst: false } f) continue;
+            var (slotName, initHolder) = f.IsImplicitlyDeclared && f.AssociatedSymbol is IPropertySymbol prop
+                ? (prop.Name, (ISymbol)prop)
+                : (f.Name, f);
+            if (!layout.TryGetIndex(slotName, out var idx)) continue;
+            var syntax = initHolder.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax();
+            var initValue = syntax switch
+            {
+                Microsoft.CodeAnalysis.CSharp.Syntax.VariableDeclaratorSyntax vd => vd.Initializer?.Value,
+                Microsoft.CodeAnalysis.CSharp.Syntax.PropertyDeclarationSyntax pd => pd.Initializer?.Value,
+                _ => null,
+            };
+            if (initValue == null) continue;
+            var initOp = compilation.GetSemanticModel(initValue.SyntaxTree).GetOperation(initValue);
+            if (initOp == null) continue;
+            AggregateAbi.WriteSlot(builder, instance, idx, emitValue(initOp));
         }
     }
 }

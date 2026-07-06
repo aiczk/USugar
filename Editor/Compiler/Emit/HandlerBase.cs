@@ -441,32 +441,9 @@ public abstract partial class HandlerBase
     protected void EmitDefaultInitAggregate(CValue arrayVal, AggregateLayout layout)
         => AggregateAbi.DefaultInitialize(_builder, arrayVal, layout, _ctx.GetAggregateLayout, GetUdonType);
 
-    /// <summary>Class ABI v1 (CA-M1): run a class's instance field / auto-property INITIALIZERS on a freshly
-    /// minted object[] bundle, in declaration order, after the default-init and before the ctor body (the C#
-    /// order). An instance initializer cannot reference `this` or other instance members (CS0236), so each
-    /// initializer expression is instance-independent and emits standalone as a layout-INDEX __Set__.</summary>
+    /// <summary>Emit class instance field / auto-property initializers through the class ABI.</summary>
     protected void EmitInstanceFieldInitializers(CLeaf instance, INamedTypeSymbol classTy, AggregateLayout layout)
-    {
-        foreach (var member in classTy.GetMembers())
-        {
-            if (member is not IFieldSymbol { IsStatic: false, IsConst: false } f) continue;
-            var (slotName, initHolder) = f.IsImplicitlyDeclared && f.AssociatedSymbol is IPropertySymbol prop
-                ? (prop.Name, (ISymbol)prop)
-                : (f.Name, f);
-            if (!layout.TryGetIndex(slotName, out var idx)) continue;
-            var syntax = initHolder.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax();
-            var initValue = syntax switch
-            {
-                Microsoft.CodeAnalysis.CSharp.Syntax.VariableDeclaratorSyntax vd => vd.Initializer?.Value,
-                Microsoft.CodeAnalysis.CSharp.Syntax.PropertyDeclarationSyntax pd => pd.Initializer?.Value,
-                _ => null,
-            };
-            if (initValue == null) continue;
-            var initOp = _compilation.GetSemanticModel(initValue.SyntaxTree).GetOperation(initValue);
-            if (initOp == null) continue;
-            AggregateAbi.WriteSlot(_builder, instance, idx, VisitExpression(initOp));
-        }
-    }
+        => ClassAbi.EmitInstanceFieldInitializers(_builder, _compilation, instance, classTy, layout, VisitExpression);
 
     /// <summary>Unwrap a field or auto-property member access into (instance, member name) for
     /// aggregate (struct/tuple) object[] element resolution.</summary>
@@ -2633,32 +2610,9 @@ public abstract partial class HandlerBase
                 + "conversion is emitted. Call a named method instead.");
     }
 
-    /// <summary>CA-M1: v1 rejects inheritance/polymorphism, so a v1 class member may not be virtual, abstract,
-    /// or override (the only overridable base is System.Object, so `override Equals/GetHashCode/ToString`
-    /// lands here too). Scanned once at the mint site — every instantiated class passes through it.</summary>
+    /// <summary>Reject class constructs outside the class ABI.</summary>
     protected static void RejectUnsupportedClassMembers(INamedTypeSymbol classTy)
-    {
-        // CA-M1 §2-1: v1 rejects interface implementation — the B35 SendCustomEvent dispatch is
-        // behaviour-only, so a class interface has no dispatch layer to reuse. Call a named method directly,
-        // or use a behaviour interface. (The base=System.Object check already excludes a class base.)
-        if (classTy.Interfaces.Length > 0)
-            throw new NotSupportedException(
-                $"Class '{classTy.Name}' implements interface '{classTy.Interfaces[0].Name}': class ABI v1 "
-                + "does not support interface implementation on a user class. Call the method directly, or "
-                + "use a UdonSharpBehaviour interface for dispatch.");
-        foreach (var m in classTy.GetMembers())
-        {
-            if (m.IsImplicitlyDeclared) continue;
-            if (m is IMethodSymbol { MethodKind: MethodKind.Ordinary or MethodKind.PropertyGet or MethodKind.PropertySet } || m is IPropertySymbol)
-            {
-                if (m.IsVirtual || m.IsAbstract || m.IsOverride)
-                    throw new NotSupportedException(
-                        $"Member '{classTy.Name}.{m.Name}' is virtual/abstract/override: class ABI v1 has no "
-                        + "inheritance or virtual dispatch, so declare it non-virtual, or call a named method "
-                        + "directly instead of dispatching through a base type.");
-            }
-        }
-    }
+        => ClassAbi.RejectUnsupportedMembers(classTy);
 
     /// <summary>True when the dispatch invocation at <paramref name="dispatchOp"/> can re-enter the
     /// containing function (design §4.3: containing function on a synthetic-edge-inclusive SCC cycle
