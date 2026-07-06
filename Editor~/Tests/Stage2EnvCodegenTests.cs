@@ -22,6 +22,17 @@ public class Stage2EnvCodegenTests
     const string EnvGet = "SystemObjectArray.__Get__SystemInt32__SystemObject";
 
     [Fact]
+    public void EnvAbi_RecordLayout_IsTaggedBeforeParentAndCaptures()
+    {
+        Assert.Equal(0, EnvAbi.Kind);
+        Assert.Equal(1, EnvAbi.Parent);
+        Assert.Equal(2, EnvAbi.FirstCapture);
+        Assert.Equal("__usugar_env", EnvAbi.KindTag);
+        Assert.Equal(2, EnvAbi.RecordSize(0));
+        Assert.Equal(3, EnvAbi.CaptureSlot(2));
+    }
+
+    [Fact]
     public void Curry_ReturnsCapturingClosure_CompilesThroughEnv()
     {
         // fcd36: `a => b => a + b`, then add(3), add3(4)+add3(10). Pre-B1 this threw at the OUTER

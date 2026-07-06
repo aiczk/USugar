@@ -1458,20 +1458,39 @@ public class UasmEmitter
         }
 
         // Stage 2 §5.1: a CAPTURING target's bridge consumes the staged env global as the trailing
-        // arg (positional copy-in binds it to the real function's __envp param field) under an
-        // env-null LOUD guard — a hand-rolled object[] or mismatched delegate bundle leaves the
-        // env unset, which must LogError + default, not fault or silently read garbage. Non-
-        // capturing bridges (named methods, capture-free lambdas) are byte-unchanged.
+        // arg (positional copy-in binds it to the real function's __envp param field) under env
+        // null/tag guards. A hand-rolled object[] or mismatched delegate bundle must LogError +
+        // default, not fault or silently read garbage.
         if (_ctx.CaptureScope != null && _ctx.CaptureScope.IsCapturingClosure(closureCheckMethod))
         {
             var envConv = DelegateAbi.ConvEnvName(sigPart);
             _ctx.TryDeclareVar(envConv, EnvEmit.EnvType);
-            callArgs.Add(BridgeLoad(envConv, EnvEmit.EnvType));
+            var envLeaf = BridgeLoad(envConv, EnvEmit.EnvType);
+            callArgs.Add(envLeaf);
             var envOk = BridgeCallExtern("SystemBoolean",
                 "SystemObject.__op_Inequality__SystemObject_SystemObject__SystemBoolean",
-                new[] { BridgeLoad(envConv, EnvEmit.EnvType), _builder.Const(null, "SystemObject") });
+                new[] { envLeaf, _builder.Const(null, "SystemObject") });
             _builder.EmitIf(envOk,
-                _ => EmitBridgeCall(callArgs),
+                _ =>
+                {
+                    var envKind = BridgeCallExtern("SystemString",
+                        ExternResolver.BuildArrayGetSignature("SystemObjectArray", "SystemObject"),
+                        new[] { envLeaf, _builder.Const(EnvAbi.Kind, "SystemInt32") });
+                    var envKindOk = BridgeCallExtern("SystemBoolean",
+                        "SystemString.__op_Equality__SystemString_SystemString__SystemBoolean",
+                        new[] { envKind, _builder.Const(EnvAbi.KindTag, "SystemString") });
+                    _builder.EmitIf(envKindOk,
+                        _ => EmitBridgeCall(callArgs),
+                        _ =>
+                        {
+                            BridgeCallExternVoid("UnityEngineDebug.__LogError__SystemObject__SystemVoid",
+                                new[] { (CLeaf)_builder.Const(
+                                    $"USugar: invalid closure environment — invoked a captured delegate with a non-env payload ({closureCheckMethod.Name})",
+                                    "SystemString") });
+                            if (convRet != null)
+                                BridgeStore(convRet, InvocationHandler.DefaultConst(_builder, retType));
+                        });
+                },
                 _ =>
                 {
                     BridgeCallExternVoid("UnityEngineDebug.__LogError__SystemObject__SystemVoid",

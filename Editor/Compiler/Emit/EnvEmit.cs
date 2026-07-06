@@ -8,8 +8,8 @@ using Microsoft.CodeAnalysis;
 //   sequential codegen — emitted once, RE-EXECUTED on every dynamic re-entry (per loop iteration),
 //   which is exactly what gives per-iteration freshness. Never hoist.
 // - Leaf: resolve the live env-record reference for a scope — the current frame's slot when the
-//   scope was allocated here, else a __envp + __Get(·,0) parent-chain walk (EffectiveParent hops,
-//   never raw .Parent).
+//   scope was allocated here, else a __envp + parent-slot walk (EffectiveParent hops, never raw
+//   .Parent).
 // - Read/Write: captured-variable access through SystemObjectArray __Get/__Set on the owning
 //   scope's env. Typed __Get destinations are safe for every value type (M1 gating probe P-A:
 //   UdonHeap retypes the dest StrongBox and typed reads match on boxed runtime type).
@@ -33,24 +33,26 @@ static class EnvEmit
             ? m : null;
 
     /// <summary>Allocate the env record for a capture-bearing scope at its entry point and register
-    /// its frame slot. Slot 0 is always the EffectiveParent scope's live env (null when the scope
-    /// has no capture-bearing ancestor). No-op for null / non-capture-bearing scopes.</summary>
+    /// its frame slot. Slot 0 is the env ABI tag and slot 1 is always the EffectiveParent scope's
+    /// live env (null when the scope has no capture-bearing ancestor). No-op for null /
+    /// non-capture-bearing scopes.</summary>
     public static void Alloc(CoreBuilder b, EmitContext ctx, CaptureScope scope)
     {
         if (scope == null || !scope.IsCaptureBearing) return;
         var env = b.ExternCall(CtorSig,
-            new List<CLeaf> { new CConst(scope.OwnedCaptures.Count + 1, "SystemInt32") }, EnvType);
+            new List<CLeaf> { new CConst(EnvAbi.RecordSize(scope.OwnedCaptures.Count), "SystemInt32") }, EnvType);
         var parent = ctx.CaptureScope.EffectiveParent(scope);
         var parentLeaf = parent != null
             ? Leaf(b, ctx, parent)
             : (CLeaf)new CConst(null, "SystemObject");
-        b.EmitExternVoid(SetSig, new List<CLeaf> { env, new CConst(0, "SystemInt32"), parentLeaf });
+        b.EmitExternVoid(SetSig, new List<CLeaf> { env, new CConst(EnvAbi.Kind, "SystemInt32"), new CConst(EnvAbi.KindTag, "SystemString") });
+        b.EmitExternVoid(SetSig, new List<CLeaf> { env, new CConst(EnvAbi.Parent, "SystemInt32"), parentLeaf });
         ctx.ScopeEnvSlots[(b.CurrentFunction, scope.Id)] = env.SlotId;
     }
 
     /// <summary>The live env-record reference for <paramref name="scope"/> at the current emission
     /// point: the frame slot when this function allocated it, else a chain walk from the current
-    /// closure's __envp (hop 0 = the closure's BindingScope, each hop = one __Get(·,0)).</summary>
+    /// closure's __envp (hop 0 = the closure's BindingScope, each hop = one parent __Get).</summary>
     public static CLeaf Leaf(CoreBuilder b, EmitContext ctx, CaptureScope scope)
     {
         if (ctx.ScopeEnvSlots.TryGetValue((b.CurrentFunction, scope.Id), out var slotId))
@@ -71,7 +73,7 @@ static class EnvEmit
         var hops = ctx.CaptureScope.HopDistance(ownScope.BindingScope, scope);
         CLeaf cur = b.LoadField(envpField, EnvType);
         for (int i = 0; i < hops; i++)
-            cur = b.ExternCall(GetSig, new List<CLeaf> { cur, new CConst(0, "SystemInt32") }, EnvType);
+            cur = b.ExternCall(GetSig, new List<CLeaf> { cur, new CConst(EnvAbi.Parent, "SystemInt32") }, EnvType);
         return cur;
     }
 
@@ -82,7 +84,7 @@ static class EnvEmit
             throw new InvalidOperationException($"'{symbol.Name}' has no env binding.");
         var env = Leaf(b, ctx, binding.Scope);
         return b.ExternCall(GetSig,
-            new List<CLeaf> { env, new CConst(binding.Slot, "SystemInt32") }, udonType);
+            new List<CLeaf> { env, new CConst(EnvAbi.CaptureSlot(binding.Slot), "SystemInt32") }, udonType);
     }
 
     /// <summary>Write a value into a captured variable's env cell.</summary>
@@ -92,6 +94,19 @@ static class EnvEmit
             throw new InvalidOperationException($"'{symbol.Name}' has no env binding.");
         var env = Leaf(b, ctx, binding.Scope);
         b.EmitExternVoid(SetSig,
-            new List<CLeaf> { env, new CConst(binding.Slot, "SystemInt32"), value });
+            new List<CLeaf> { env, new CConst(EnvAbi.CaptureSlot(binding.Slot), "SystemInt32"), value });
     }
+}
+
+static class EnvAbi
+{
+    public const int Kind = 0;
+    public const int Parent = 1;
+    public const int FirstCapture = 2;
+    public const string KindTag = "__usugar_env";
+
+    public static int RecordSize(int captureCount) => FirstCapture + captureCount;
+
+    public static int CaptureSlot(int logicalCaptureSlot)
+        => FirstCapture + logicalCaptureSlot - 1;
 }

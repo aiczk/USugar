@@ -60,7 +60,8 @@ public sealed class CaptureScope
     public readonly List<ISymbol> DeclaredSymbols = new();
 
     /// <summary>The subset of <see cref="DeclaredSymbols"/> that is captured by some closure, in the
-    /// SAME relative order — index + 1 is the env record slot (design §1.1: slot 0 is always parent).</summary>
+    /// SAME relative order. Slot values here are logical 1-based capture slots; EnvAbi maps them to
+    /// physical env-record indices after the tag/parent header.</summary>
     public readonly List<ISymbol> OwnedCaptures = new();
 
     public bool IsCaptureBearing => OwnedCaptures.Count > 0;
@@ -80,8 +81,8 @@ public sealed class CaptureScopeAnalysis
 {
     public IReadOnlyList<CaptureScope> Scopes { get; }
 
-    /// <summary>Captured symbol (definition-keyed) → (owning scope, slot). Slot is 1-based;
-    /// slot 0 in the eventual env record is always the parent link (design §1.1).</summary>
+    /// <summary>Captured symbol (definition-keyed) → (owning scope, slot). Slot is a logical 1-based
+    /// capture slot; EnvAbi maps it to the physical env-record index.</summary>
     public IReadOnlyDictionary<ISymbol, (CaptureScope Scope, int Slot)> CapturedSlots { get; }
 
     /// <summary>Closure method symbol (definition-keyed) → that closure's OWN MethodEntry scope
@@ -138,7 +139,7 @@ public sealed class CaptureScopeAnalysis
     /// <summary>Nearest capture-bearing ANCESTOR of <paramref name="scope"/> (strictly above it —
     /// never returns <paramref name="scope"/> itself), skipping non-capture-bearing scopes in the raw
     /// parent chain. Null at the top of the chain. This is the runtime env-record parent link a
-    /// capture-bearing scope's EnvAlloc writes into slot 0 (design §3, ParentLeaf).</summary>
+    /// capture-bearing scope's EnvAlloc writes into EnvAbi.Parent (design §3, ParentLeaf).</summary>
     public CaptureScope EffectiveParent(CaptureScope scope)
     {
         var p = scope?.Parent;
