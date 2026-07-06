@@ -1696,8 +1696,7 @@ public class UasmEmitter
     /// is reserved and can never collide with a real user method/bridge export name).</summary>
     void EmitMulticastFlattenOperand(CLeaf operand, string fanoutName, out int listSlot, out int lenSlot)
     {
-        var tag = BridgeCallExtern("SystemString", MulticastArrGet,
-            new CLeaf[] { operand, BridgeConstInt(DelegateAbi.Method) });
+        var tag = DelegateAbi.ReadSlot(_builder, operand, DelegateAbi.Method, "SystemString");
         var isMulticast = BridgeCallExtern("SystemBoolean",
             "SystemString.__op_Equality__SystemString_SystemString__SystemBoolean",
             new CLeaf[] { tag, _builder.Const(fanoutName, "SystemString") });
@@ -1707,8 +1706,7 @@ public class UasmEmitter
         _builder.EmitIf(isMulticast,
             _ =>
             {
-                _builder.EmitAssign(lSlot, BridgeCallExtern("SystemObjectArray", MulticastArrGet,
-                    new CLeaf[] { operand, BridgeConstInt(DelegateAbi.Env) }));
+                _builder.EmitAssign(lSlot, DelegateAbi.ReadSlot(_builder, operand, DelegateAbi.Env, "SystemObjectArray"));
                 _builder.EmitAssign(nSlot, BridgeCallExtern("SystemInt32", "SystemArray.__get_Length__SystemInt32",
                     new CLeaf[] { _builder.SlotRef(lSlot) }));
             },
