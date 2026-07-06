@@ -14,13 +14,13 @@ public abstract partial class HandlerBase
 {
     /// <summary>True for T[d0,…,dr-1] with r>=2 — the bundle representation applies. Rank==1 (or a
     /// non-array type) is the existing, unchanged native-array path.</summary>
-    protected static bool IsNdimArray(ITypeSymbol type) => type is IArrayTypeSymbol { Rank: > 1 };
+    protected static bool IsNdimArray(ITypeSymbol type) => NdimArrayAbi.IsNdimArray(type);
 
     /// <summary>The rank-1 CLR array symbol for an N-dim array's flat backing storage (T[,] → T[]).
     /// Synthesized via the Compilation — Roslyn gives no direct "reinterpret at rank 1" operation on
     /// an existing IArrayTypeSymbol.</summary>
     protected IArrayTypeSymbol GetNdimBackingType(IArrayTypeSymbol ndimType)
-        => (IArrayTypeSymbol)_compilation.CreateArrayTypeSymbol(ndimType.ElementType, 1);
+        => NdimArrayAbi.BackingType(_compilation, ndimType);
 
     /// <summary>Fetch bundle[0] (the flat backing) as a value of its real rank-1 array type. The
     /// bundle stores it boxed as SystemObject; Udon unboxes on the typed COPY into a backing-typed
@@ -29,8 +29,8 @@ public abstract partial class HandlerBase
     protected CLeaf EmitNdimGetBacking(CLeaf bundleVal, IArrayTypeSymbol backingType)
     {
         var backingUdonType = GetArrayType(backingType);
-        var boxed = ExternCall(ExternResolver.BuildArrayGetSignature("SystemObjectArray", "SystemObject"),
-            new List<CLeaf> { bundleVal, Const(0, "SystemInt32") }, "SystemObject");
+        var boxed = ExternCall(NdimArrayAbi.BundleGetSignature(),
+            new List<CLeaf> { bundleVal, Const(NdimArrayAbi.BackingSlotIndex, "SystemInt32") }, NdimArrayAbi.BoxedElementUdonType);
         var slot = _ctx.AllocTemp(backingUdonType);
         EmitAssign(slot, boxed);
         return SlotRef(slot);
@@ -40,13 +40,13 @@ public abstract partial class HandlerBase
     /// COPY (same pattern as EmitNdimGetBacking / the recursion-stack reload).</summary>
     protected CLeaf EmitNdimGetDimLength(CLeaf bundleVal, CLeaf dimIndexPlusOne)
     {
-        var boxed = ExternCall(ExternResolver.BuildArrayGetSignature("SystemObjectArray", "SystemObject"),
-            new List<CLeaf> { bundleVal, dimIndexPlusOne }, "SystemObject");
+        var boxed = ExternCall(NdimArrayAbi.BundleGetSignature(),
+            new List<CLeaf> { bundleVal, dimIndexPlusOne }, NdimArrayAbi.BoxedElementUdonType);
         var slot = _ctx.AllocTemp("SystemInt32");
         EmitAssign(slot, boxed);
         return SlotRef(slot);
     }
-    protected CLeaf EmitNdimGetDimLength(CLeaf bundleVal, int dim) => EmitNdimGetDimLength(bundleVal, Const(dim + 1, "SystemInt32"));
+    protected CLeaf EmitNdimGetDimLength(CLeaf bundleVal, int dim) => EmitNdimGetDimLength(bundleVal, Const(NdimArrayAbi.DimSlotIndex(dim), "SystemInt32"));
 
     /// <summary>A fully-prepared N-dim element access: every index expression evaluated EXACTLY ONCE
     /// (B38 — a side-effecting index must not re-run for bounds-check vs. Horner-flatten vs.
@@ -71,7 +71,7 @@ public abstract partial class HandlerBase
         int rank = ndimType.Rank;
         var backingType = GetNdimBackingType(ndimType);
 
-        var bundleSlot = _ctx.AllocTemp("SystemObjectArray");
+        var bundleSlot = _ctx.AllocTemp(NdimArrayAbi.BundleUdonType);
         EmitAssign(bundleSlot, VisitExpression(arrayRefOp));
         var bundleVal = SlotRef(bundleSlot);
 
@@ -246,14 +246,14 @@ public abstract partial class HandlerBase
         EmitAssign(backingSlot, ExternCall(ExternResolver.BuildArrayCtorSignature(backingUdonType),
             new List<CLeaf> { SlotRef(totalSlot) }, backingUdonType));
 
-        var bundleSlot = _ctx.AllocTemp("SystemObjectArray");
-        EmitAssign(bundleSlot, ExternCall(ExternResolver.BuildArrayCtorSignature("SystemObjectArray"),
-            new List<CLeaf> { Const(1 + rank, "SystemInt32") }, "SystemObjectArray"));
-        EmitExternVoid(ExternResolver.BuildArraySetSignature("SystemObjectArray", "SystemObject"),
-            new List<CLeaf> { SlotRef(bundleSlot), Const(0, "SystemInt32"), SlotRef(backingSlot) });
+        var bundleSlot = _ctx.AllocTemp(NdimArrayAbi.BundleUdonType);
+        EmitAssign(bundleSlot, ExternCall(NdimArrayAbi.BundleCtorSignature(),
+            new List<CLeaf> { Const(NdimArrayAbi.BundleLength(rank), "SystemInt32") }, NdimArrayAbi.BundleUdonType));
+        EmitExternVoid(NdimArrayAbi.BundleSetSignature(),
+            new List<CLeaf> { SlotRef(bundleSlot), Const(NdimArrayAbi.BackingSlotIndex, "SystemInt32"), SlotRef(backingSlot) });
         for (int d = 0; d < rank; d++)
-            EmitExternVoid(ExternResolver.BuildArraySetSignature("SystemObjectArray", "SystemObject"),
-                new List<CLeaf> { SlotRef(bundleSlot), Const(1 + d, "SystemInt32"), SlotRef(dimSlots[d]) });
+            EmitExternVoid(NdimArrayAbi.BundleSetSignature(),
+                new List<CLeaf> { SlotRef(bundleSlot), Const(NdimArrayAbi.DimSlotIndex(d), "SystemInt32"), SlotRef(dimSlots[d]) });
 
         if (op.Initializer != null)
         {
@@ -314,7 +314,7 @@ public abstract partial class HandlerBase
     protected CLeaf EmitNdimGetLength(CLeaf bundleVal, CLeaf dimArg)
     {
         var plusOne = ExternCall("SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32",
-            new List<CLeaf> { dimArg, Const(1, "SystemInt32") }, "SystemInt32");
+            new List<CLeaf> { dimArg, Const(NdimArrayAbi.DimSlotIndex(0), "SystemInt32") }, "SystemInt32");
         return EmitNdimGetDimLength(bundleVal, plusOne);
     }
 
@@ -336,9 +336,5 @@ public abstract partial class HandlerBase
     /// silently shallow-copy the 3-element bundle WRAPPER, aliasing the same flat backing between the
     /// "clone" and the original instead of copying elements).</summary>
     protected static void RejectNdimArrayMember(string memberName)
-        => throw new System.NotSupportedException(
-            $"'{memberName}' is not supported on a multi-dimensional array (T[,], …): its runtime value "
-            + "is an object[] bundle (flat backing + dimension lengths), so a generic Array member would "
-            + "operate on the bundle wrapper instead of the logical array (e.g. Clone would alias the "
-            + "backing rather than copy it). Only Length, GetLength, Rank, and GetUpperBound are supported.");
+        => NdimArrayAbi.RejectMember(memberName);
 }
