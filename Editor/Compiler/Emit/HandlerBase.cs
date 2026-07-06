@@ -410,9 +410,12 @@ public abstract partial class HandlerBase
         // System.* receiver can never be Component-derived, so substituting one of these base types
         // mechanically laundered an invalid System-typed signature into an unrelated Component extern
         // (VM-proven: boxed value-type Equals/GetHashCode/ToString adopted UnityEngineComponent.__*).
-        // Non-UnityEngine owners are equally ineligible; let the invalid signature through unchanged
-        // so the validator rejects it loudly instead of adopting an unrelated Component extern.
-        if (!containingType.StartsWith("UnityEngine", System.StringComparison.Ordinal))
+        // Non-UnityEngine/non-UdonBehaviour owners are equally ineligible; let the invalid signature
+        // through unchanged so the validator rejects it loudly instead of adopting an unrelated
+        // Component extern. UdonSharpBehaviour instances map to IUdonEventReceiver but still inherit
+        // UnityEngine.Object members such as name.
+        if (!containingType.StartsWith("UnityEngine", System.StringComparison.Ordinal)
+            && containingType != "VRCUdonCommonInterfacesIUdonEventReceiver")
             return externSig;
         var rest = externSig.Substring(dotIdx);
         foreach (var baseType in UnityEngineComponentBaseTypes)
