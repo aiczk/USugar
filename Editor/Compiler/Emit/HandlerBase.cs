@@ -109,16 +109,10 @@ public abstract partial class HandlerBase
     {
         if (!ExternResolver.IsRuntimeDistinguishable(targetType, _ctx.TypeParamMap))
         {
-            // CA-M0 B79 (face 1): a plain user class has no runtime type identity in class-ABI v1 — give the
-            // is/as/switch site a class-specific message rather than the collapse-tag one.
-            if (ExternResolver.IsUnsupportedUserClass(ResolveType(targetType)))
-                throw new NotSupportedException(
-                    $"Runtime type tests (is / as / switch) against the user-defined class "
-                    + $"'{ResolveType(targetType).Name}' are not supported: class ABI v1 gives a user class no "
-                    + "runtime type identity yet. Keep the value typed as its static type instead of recovering "
-                    + "it with a type test.");
-            var disp = ResolveType(targetType).ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat);
-            var hint = ResolveType(targetType) is INamedTypeSymbol dlgTarget && dlgTarget.DelegateInvokeMethod != null
+            var resolvedTarget = ResolveType(targetType);
+            ClassAbi.RejectRuntimeTypeTest(resolvedTarget);
+            var disp = resolvedTarget.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat);
+            var hint = resolvedTarget is INamedTypeSymbol dlgTarget && dlgTarget.DelegateInvokeMethod != null
                 ? " (Udon represents every delegate as one runtime type, so it cannot tell delegate signatures "
                   + "apart and would match any delegate, then read the wrong argument/return channel)"
                 : "";
@@ -1970,15 +1964,8 @@ public abstract partial class HandlerBase
                 + "shared object[], so the delegate would alias the live receiver and observe its later mutations "
                 + "(a silent value divergence). Wrap the call in a behaviour method and bind that instead.");
 
-        // CA-M1: a v1 class instance method bound as a delegate. The delegate bundle's target slot expects an
-        // IUdonEventReceiver (a behaviour) for cross-program dispatch, but a class instance is an object[]
-        // bundle — no dispatch entry point exists for it. Wrap it in a lambda instead.
-        if (op.Target is IMethodReferenceOperation && !targetMethod.IsStatic
-            && targetMethod.ContainingType is INamedTypeSymbol classCt && EmitPolicy.IsUserClassType(classCt))
-            throw new System.NotSupportedException(
-                $"A delegate cannot be created from v1 class instance method '{classCt.Name}.{targetMethod.Name}': "
-                + "a user class is not a dispatch target for the delegate ABI. Wrap the call in a lambda instead "
-                + $"('() => receiver.{targetMethod.Name}(...)').");
+        if (op.Target is IMethodReferenceOperation)
+            ClassAbi.RejectDelegateBindingToInstanceMethod(targetMethod);
 
         // Wave-12 r4 [W3]: a method group bound to an INTERFACE member (`cb = iface.Get`) previously
         // ICEd in GetDelegateBridgeLayout ('No delegate bridge'). It cannot compile correctly today:

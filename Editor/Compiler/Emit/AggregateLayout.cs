@@ -314,6 +314,35 @@ public static class ClassAbi
            + "reference bundle no stable hash, no member-name synthesis, and no runtime type identity. "
            + "Use reference equality (== / Equals) or format the class's fields directly.";
 
+    public static void RejectRuntimeTypeTest(ITypeSymbol targetType)
+    {
+        if (ExternResolver.IsUnsupportedUserClass(targetType))
+            throw new NotSupportedException(
+                $"Runtime type tests (is / as / switch) against the user-defined class "
+                + $"'{targetType.Name}' are not supported: class ABI v1 gives a user class no "
+                + "runtime type identity yet. Keep the value typed as its static type instead of recovering "
+                + "it with a type test.");
+    }
+
+    public static void RejectTypeofToken(ITypeSymbol type)
+    {
+        if (ExternResolver.IsUnsupportedUserClass(type))
+            throw new NotSupportedException(
+                $"typeof(user-defined class '{type.Name}') is not supported: class ABI v1 gives "
+                + "a user class no runtime type identity yet, so its System.Type token cannot be resolved.");
+    }
+
+    public static void RejectDelegateBindingToInstanceMethod(IMethodSymbol targetMethod)
+    {
+        if (!targetMethod.IsStatic
+            && targetMethod.ContainingType is INamedTypeSymbol classTy
+            && EmitPolicy.IsUserClassType(classTy))
+            throw new NotSupportedException(
+                $"A delegate cannot be created from v1 class instance method '{classTy.Name}.{targetMethod.Name}': "
+                + "a user class is not a dispatch target for the delegate ABI. Wrap the call in a lambda instead "
+                + $"('() => receiver.{targetMethod.Name}(...)').");
+    }
+
     /// <summary>Run instance field / auto-property initializers on an already allocated class bundle.</summary>
     public static void EmitInstanceFieldInitializers(CoreBuilder builder, Compilation compilation,
         CLeaf instance, INamedTypeSymbol classTy, AggregateLayout layout, Func<IOperation, CLeaf> emitValue)
