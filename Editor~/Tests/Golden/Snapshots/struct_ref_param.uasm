@@ -19,6 +19,7 @@
     __intnl_SystemInt32_c1: %SystemInt32, null
     __intnl_SystemObjectArray_c3: %SystemObjectArray, null
     __intnl_SystemObjectArray_c4: %SystemObjectArray, null
+    __intnl_SystemObjectArray_c5: %SystemObjectArray, null
     __intnl_SystemObject_c2: %SystemObject, null
     __intnl_SystemObject_c3: %SystemObject, null
     __intnl_SystemInt32_c2: %SystemInt32, null
@@ -135,7 +136,13 @@
         PUSH, __intnl_SystemObjectArray_c3
         PUSH, __intnl_SystemObjectArray_c4
         COPY
-        PUSH, __intnl_SystemObjectArray_c4
+        PUSH, __0_x__param
+        PUSH, __intnl_SystemObjectArray_c3
+        COPY
+        PUSH, __intnl_SystemObjectArray_c3
+        PUSH, __intnl_SystemObjectArray_c5
+        COPY
+        PUSH, __intnl_SystemObjectArray_c5
         PUSH, __const_SystemInt32_1
         PUSH, __intnl_SystemObject_c2
         EXTERN, "SystemObjectArray.__Get__SystemInt32__SystemObject"
@@ -148,12 +155,6 @@
         EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
         PUSH, __intnl_SystemInt32_c2
         PUSH, __intnl_SystemInt32_c3
-        COPY
-        PUSH, __0_x__param
-        PUSH, __intnl_SystemObjectArray_c3
-        COPY
-        PUSH, __intnl_SystemObjectArray_c3
-        PUSH, __intnl_SystemObjectArray_c4
         COPY
         PUSH, __intnl_SystemObjectArray_c4
         PUSH, __const_SystemInt32_1

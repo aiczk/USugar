@@ -24,10 +24,10 @@
     __intnl_SystemObject_c0: %SystemObject, null
     __intnl_SystemObject_c1: %SystemObject, null
     __intnl_SystemObject_c2: %SystemObject, null
-    __intnl_SystemInt32_c2: %SystemInt32, null
-    __intnl_SystemInt32_c3: %SystemInt32, null
     __intnl_SystemObjectArray_c3: %SystemObjectArray, null
     __intnl_SystemObjectArray_c4: %SystemObjectArray, null
+    __intnl_SystemInt32_c2: %SystemInt32, null
+    __intnl_SystemInt32_c3: %SystemInt32, null
     __const_retaddr_SystemUInt32_0: %SystemUInt32, null
     __const_retaddr_SystemUInt32_1: %SystemUInt32, null
 .data_end
@@ -111,21 +111,21 @@
         PUSH, __intnl_SystemObjectArray_c0
         PUSH, __lcl_b_SystemObjectArray_0
         COPY
-        PUSH, __lcl_b_SystemObjectArray_0
-        PUSH, __intnl_SystemObjectArray_c0
-        COPY
-        PUSH, __intnl_SystemObjectArray_c0
-        PUSH, __intnl_SystemObjectArray_c1
-        COPY
         PUSH, __lcl_a_SystemObjectArray_0
         PUSH, __intnl_SystemObjectArray_c0
         COPY
         PUSH, __intnl_SystemObjectArray_c0
+        PUSH, __intnl_SystemObjectArray_c1
+        COPY
+        PUSH, __lcl_b_SystemObjectArray_0
+        PUSH, __intnl_SystemObjectArray_c0
+        COPY
+        PUSH, __intnl_SystemObjectArray_c0
         PUSH, __intnl_SystemObjectArray_c2
         COPY
-        PUSH, __intnl_SystemObjectArray_c2
-        PUSH, __const_SystemInt32_3
         PUSH, __intnl_SystemObjectArray_c1
+        PUSH, __const_SystemInt32_3
+        PUSH, __intnl_SystemObjectArray_c2
         EXTERN, "SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid"
         PUSH, __lcl_a_SystemObjectArray_0
         PUSH, __intnl_SystemObjectArray_c0
@@ -180,17 +180,17 @@
         COPY
         JUMP_INDIRECT, __intnl_returnJump_SystemUInt32_0
     ____1_GenNode__ctor_SystemInt32:
-        PUSH, __1_v__param
-        PUSH, __intnl_SystemInt32_c2
-        COPY
-        PUSH, __intnl_SystemInt32_c2
-        PUSH, __intnl_SystemInt32_c3
-        COPY
         PUSH, __1_this__param
         PUSH, __intnl_SystemObjectArray_c3
         COPY
         PUSH, __intnl_SystemObjectArray_c3
         PUSH, __intnl_SystemObjectArray_c4
+        COPY
+        PUSH, __1_v__param
+        PUSH, __intnl_SystemInt32_c2
+        COPY
+        PUSH, __intnl_SystemInt32_c2
+        PUSH, __intnl_SystemInt32_c3
         COPY
         PUSH, __intnl_SystemObjectArray_c4
         PUSH, __const_SystemInt32_1
