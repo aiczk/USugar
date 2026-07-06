@@ -218,6 +218,25 @@ public static class DelegateAbi
             new List<CLeaf> { bundle, builder.Const(null, "SystemObject") }, "SystemBoolean");
     }
 
+    public static CLeaf IsTaggedBundle(CoreBuilder builder, CLeaf bundle)
+    {
+        var kind = ReadSlot(builder, bundle, Kind, "SystemString");
+        return builder.ExternCall("SystemString.__op_Equality__SystemString_SystemString__SystemBoolean",
+            new List<CLeaf> { kind, builder.Const(KindTag, "SystemString") }, "SystemBoolean");
+    }
+
+    public static CLeaf HasTarget(CoreBuilder builder, CLeaf target)
+        => builder.ExternCall("UnityEngineObject.__op_Inequality__UnityEngineObject_UnityEngineObject__SystemBoolean",
+            new List<CLeaf> { target, builder.Const(null, "SystemObject") }, "SystemBoolean");
+
+    public static CLeaf HasMethod(CoreBuilder builder, CLeaf methodName)
+        => builder.ExternCall("SystemObject.__op_Inequality__SystemObject_SystemObject__SystemBoolean",
+            new List<CLeaf> { methodName, builder.Const(null, "SystemObject") }, "SystemBoolean");
+
+    public static CLeaf HasAddress(CoreBuilder builder, CLeaf address)
+        => builder.ExternCall("SystemUInt32.__op_Inequality__SystemUInt32_SystemUInt32__SystemBoolean",
+            new List<CLeaf> { address, builder.Const(0u, "SystemUInt32") }, "SystemBoolean");
+
     public static CLeaf CompareDelegates(CoreBuilder builder, CLeaf left, CLeaf right, bool isNotEquals,
         Func<string, int> allocTemp, Action<int, CValue> emitAssign, Func<int, CLeaf> slotRef)
     {

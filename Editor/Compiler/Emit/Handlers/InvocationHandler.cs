@@ -594,16 +594,13 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
 
         void EmitGuardedDispatch()
         {
-            var kind = DelegateAbi.ReadSlot(_builder, bundle, DelegateAbi.Kind, "SystemString");
-            var kindOk = ExternCall("SystemString.__op_Equality__SystemString_SystemString__SystemBoolean",
-                new List<CLeaf> { kind, Const(DelegateAbi.KindTag, "SystemString") }, "SystemBoolean");
+            var kindOk = DelegateAbi.IsTaggedBundle(_builder, bundle);
             _builder.EmitIf(kindOk, _ =>
             {
                 // tgt is a SystemObject temp fed to externs directly — no Convert needed (P1/P5a).
                 var tgt = DelegateAbi.ReadSlot(_builder, bundle, DelegateAbi.Target, "SystemObject");
                 // target-null guard: unset element, or the in-game security filter nulling DelegateAbi.Target.
-                var tOk = ExternCall("UnityEngineObject.__op_Inequality__UnityEngineObject_UnityEngineObject__SystemBoolean",
-                    new List<CLeaf> { tgt, Const(null, "SystemObject") }, "SystemBoolean");
+                var tOk = DelegateAbi.HasTarget(_builder, tgt);
                 _builder.EmitIf(tOk, _ =>
                 {
                     // Conv stores: the FINAL writes before dispatch (§3.3 clobber discipline).
@@ -625,8 +622,7 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
                     // silently jump to bytecode 0, P5d — addr is only ever read inside this guard).
                     var isSelf = ExternCall("UnityEngineObject.__op_Equality__UnityEngineObject_UnityEngineObject__SystemBoolean",
                         new List<CLeaf> { tgt, thisRef }, "SystemBoolean");
-                    var hasAddr = ExternCall("SystemUInt32.__op_Inequality__SystemUInt32_SystemUInt32__SystemBoolean",
-                        new List<CLeaf> { adr, Const(0u, "SystemUInt32") }, "SystemBoolean");
+                    var hasAddr = DelegateAbi.HasAddress(_builder, adr);
                     var selfFast = ExternCall("SystemBoolean.__op_LogicalAnd__SystemBoolean_SystemBoolean__SystemBoolean",
                         new List<CLeaf> { isSelf, hasAddr }, "SystemBoolean");
                     _builder.EmitIf(selfFast,
@@ -643,8 +639,7 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
                             // CROSS — includes a foreign-minted bundle with target==this && addr==0, which
                             // correctly falls to a self-addressed SendCustomEvent.
                             // method-null guard: hand-rolled object[] bundles cast back to a delegate (§2.6).
-                            var mOk = ExternCall("SystemObject.__op_Inequality__SystemObject_SystemObject__SystemBoolean",
-                                new List<CLeaf> { mtd, Const(null, "SystemObject") }, "SystemBoolean");
+                            var mOk = DelegateAbi.HasMethod(_builder, mtd);
                             _builder.EmitIf(mOk, _ =>
                             {
                                 for (int i = 0; i < convArgs.Length; i++)
@@ -679,8 +674,7 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
         }
         else
         {
-            var nb = ExternCall("SystemObject.__op_Inequality__SystemObject_SystemObject__SystemBoolean",
-                new List<CLeaf> { bundle, Const(null, "SystemObject") }, "SystemBoolean");
+            var nb = DelegateAbi.CompareToNull(_builder, bundle, isNotEquals: true);
             _builder.EmitIf(nb, _ => EmitGuardedDispatch(), failArm);
         }
 
