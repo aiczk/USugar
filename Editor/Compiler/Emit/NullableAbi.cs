@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 
 /// <summary>
@@ -24,4 +25,15 @@ public static class NullableAbi
             "SystemObject.__op_Inequality__SystemObject_SystemObject__SystemBoolean",
             new List<CLeaf> { nullableValue, builder.Const(null, StorageType) },
             "SystemBoolean");
+
+    public static CLeaf EmitGetValueOrDefault(CoreBuilder builder, CLeaf nullableValue, string resultType,
+        CLeaf fallbackValue, Func<CLeaf, CLeaf> presentValue,
+        Func<string, int> allocTemp, Action<int, CValue> emitAssign, Func<int, CLeaf> slotRef)
+    {
+        var resultSlot = allocTemp(resultType);
+        emitAssign(resultSlot, fallbackValue);
+        builder.EmitIf(HasValue(builder, nullableValue),
+            _ => emitAssign(resultSlot, presentValue(nullableValue)));
+        return slotRef(resultSlot);
+    }
 }

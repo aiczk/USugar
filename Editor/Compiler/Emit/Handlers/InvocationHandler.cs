@@ -419,14 +419,12 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
         // nv is the boxed nullable (SystemObject) bound once under ANF — re-readable for the HasValue test
         // and the present-value branch without a snapshot slot.
         var nv = VisitExpression(op.Instance);
-        var resultSlot = _ctx.AllocTemp(uType);
         var fallback = op.Arguments.Length > 0
             ? VisitExpression(op.Arguments[0].Value)
             : (aggResult ? EmitNewAggregate(aggType) : EmitValueTypeDefault(uType));
-        EmitAssign(resultSlot, fallback);
-        _builder.EmitIf(EmitNullableHasValue(nv),
-            _ => EmitAssign(resultSlot, aggResult ? EmitDeepCloneAggregate(nv, aggType) : nv));
-        return SlotRef(resultSlot);
+        return NullableAbi.EmitGetValueOrDefault(_builder, nv, uType, fallback,
+            present => aggResult ? EmitDeepCloneAggregate(present, aggType) : present,
+            _ctx.AllocTemp, EmitAssign, SlotRef);
     }
 
     // User-struct instance method call: receiver object[] passed (uncloned) as synthetic param0
