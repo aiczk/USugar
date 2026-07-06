@@ -169,12 +169,9 @@ public class DeconstructionAssignmentHandler : AssignmentHandlerBase, IOperation
                 }
                 else
                 {
-                    // Legacy per-element return slots (non-aggregate types)
-                    for (int i = 0; i < targetTuple.Elements.Length && i < callReturns.Length; i++)
-                    {
-                        var elemVal = LoadField(callReturns[i].Id, callReturns[i].UdonType);
-                        AssignToLValue(targetTuple.Elements[i], elemVal, prepared);
-                    }
+                    throw new System.NotSupportedException(
+                        $"Cannot deconstruct return of '{callTarget.Name}': tuple returns must use a single "
+                        + "SystemObjectArray return slot.");
                 }
             }
         }
@@ -326,16 +323,9 @@ public class DeconstructionAssignmentHandler : AssignmentHandlerBase, IOperation
         }
         else
         {
-            // Legacy per-element return slots
-            for (int i = 0; i < targetTuple.Elements.Length && i < callReturns.Length; i++)
-            {
-                var retNameConst = Const(callReturns[i].Id, "SystemString");
-                var elemVal = ExternCall(
-                    "VRCUdonCommonInterfacesIUdonEventReceiver.__GetProgramVariable__SystemString__SystemObject",
-                    new List<CLeaf> { instanceVal, retNameConst },
-                    callReturns[i].UdonType);
-                AssignToLValue(targetTuple.Elements[i], elemVal, prepared);
-            }
+            throw new System.NotSupportedException(
+                $"Cannot deconstruct cross-behaviour return of '{callTarget.Name}': tuple returns must use "
+                + "a single SystemObjectArray return slot.");
         }
     }
 }
