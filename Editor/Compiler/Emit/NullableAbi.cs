@@ -39,6 +39,27 @@ public static class NullableAbi
         return slotRef(resultSlot);
     }
 
+    public static CLeaf EmitLiftedNumericConversion(CoreBuilder builder, CLeaf sourceValue,
+        string destinationUdonType, string convertMethodName, bool integerToInteger,
+        Func<CLeaf, string, string, CLeaf> narrowConvert,
+        Func<string, int> allocTemp, Action<int, CValue> emitAssign, Func<int, CLeaf> slotRef)
+    {
+        var resultSlot = allocTemp(StorageType);
+        emitAssign(resultSlot, builder.Const(null, StorageType));
+        builder.EmitIf(HasValue(builder, sourceValue), _ =>
+        {
+            CValue converted = integerToInteger
+                ? narrowConvert(
+                    builder.ExternCall("SystemConvert.__ToInt64__SystemObject__SystemInt64",
+                        new List<CLeaf> { sourceValue }, "SystemInt64"),
+                    "SystemInt64", destinationUdonType)
+                : builder.ExternCall($"SystemConvert.__{convertMethodName}__SystemObject__{destinationUdonType}",
+                    new List<CLeaf> { sourceValue }, destinationUdonType);
+            emitAssign(resultSlot, converted);
+        });
+        return slotRef(resultSlot);
+    }
+
     public static CLeaf EmitCoalesce(CoreBuilder builder, CValue leftValue, string resultType,
         Func<CLeaf> whenNullValue, Func<CLeaf, CLeaf> presentValue,
         Func<string, int> allocTemp, Action<int, CValue> emitAssign, Func<int, CLeaf> slotRef)

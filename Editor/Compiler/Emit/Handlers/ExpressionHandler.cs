@@ -484,10 +484,6 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
             && ExternResolver.GetConvertMethodName(liftedDstU) is { } liftedDstMethod)
         {
             var dstU = GetUdonType(liftedDstU);
-            // srcVal is already a single-assignment SystemObject leaf (the boxed nullable) under ANF — re-read
-            // directly for the HasValue test and the conversion. resSlot below is an accumulator (kept).
-            var resSlot = _ctx.AllocTemp("SystemObject");
-            EmitAssign(resSlot, Const(null, "SystemObject"));
             // C# integer narrowing is UNCHECKED (wrap); Convert.To{Small} is CHECKED and throws. For an
             // integer→integer lifted conversion, promote the boxed source to int64 (tolerates any boxed integer
             // tag, never overflows) and wrap/reinterpret via EmitNarrowingConvert. Float-involved conversions
@@ -498,18 +494,8 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
             bool liftedIntToInt =
                 (ExternResolver.IsIntegerType(liftedSrcU) || liftedSrcU.SpecialType == SpecialType.System_Char)
                 && (ExternResolver.IsIntegerType(liftedDstU) || liftedDstU.SpecialType == SpecialType.System_Char);
-            _builder.EmitIf(NullableAbi.HasValue(_builder, srcVal), _ =>
-            {
-                CValue converted = liftedIntToInt
-                    ? EmitNarrowingConvert(
-                        ExternCall("SystemConvert.__ToInt64__SystemObject__SystemInt64",
-                            new List<CLeaf> { srcVal }, "SystemInt64"),
-                        "SystemInt64", dstU)
-                    : ExternCall($"SystemConvert.__{liftedDstMethod}__SystemObject__{dstU}",
-                        new List<CLeaf> { srcVal }, dstU);
-                EmitAssign(resSlot, converted);
-            });
-            return SlotRef(resSlot);
+            return NullableAbi.EmitLiftedNumericConversion(_builder, srcVal, dstU, liftedDstMethod,
+                liftedIntToInt, EmitNarrowingConvert, _ctx.AllocTemp, EmitAssign, SlotRef);
         }
 
         // Lifted numeric conversion with a BARE source and a Nullable<numeric> dest (e.g. `(byte?)(intExpr)`):
