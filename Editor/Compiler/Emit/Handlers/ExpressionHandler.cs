@@ -423,7 +423,7 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
                     _ =>
                     {
                         var wThisType = GetUdonType(_classSymbol);
-                        var wrapperBundle = EmitBundleMint(() => LoadField(_ctx.DeclareThisOnce(wThisType), wThisType),
+                        var wrapperBundle = DelegateAbi.EmitBundleMint(_builder, () => LoadField(_ctx.DeclareThisOnce(wThisType), wThisType),
                             Const(wrapperName, "SystemString"), FuncRef(wrapperName), srcVal);
                         EmitAssign(wrapResultSlot, wrapperBundle);
                     },
@@ -795,7 +795,7 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
 
         // Stage 2 §3.7: DelegateAbi.Env carries the binding-scope env for a CAPTURING closure target, else
         // a null const (capture-free lambda / named method / base.M) = byte-identical to Stage 1.
-        var bundle = EmitBundleMint(() => thirdParty ?? LoadField(_ctx.DeclareThisOnce(thisType), thisType),
+        var bundle = DelegateAbi.EmitBundleMint(_builder, () => thirdParty ?? LoadField(_ctx.DeclareThisOnce(thisType), thisType),
             Const(bridgeName, "SystemString"), addr, envLeaf);
 
         return bundle;

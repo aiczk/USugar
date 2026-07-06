@@ -349,10 +349,6 @@ public abstract partial class HandlerBase
     /// <summary>Create a function reference (for delegate/JUMP_INDIRECT).</summary>
     protected CFuncRef FuncRef(string funcName) => _builder.FuncRef(funcName);
 
-    /// <summary>Mint a delegate bundle: the shared tagged object[] sequence (see <see cref="DelegateAbi.EmitBundleMint"/>).</summary>
-    protected CLeaf EmitBundleMint(Func<CLeaf> targetFn, CLeaf methodNameLeaf, CLeaf addrLeaf, CLeaf envLeaf)
-        => DelegateAbi.EmitBundleMint(_builder, targetFn, methodNameLeaf, addrLeaf, envLeaf);
-
     /// <summary>Emit a statement.</summary>
     protected void Emit(CStmt stmt) => _builder.Emit(stmt);
 
@@ -2032,7 +2028,7 @@ public abstract partial class HandlerBase
                     return (adapterName, FuncRef(adapterName), targetInstance, envLeaf);
                 }
 
-                var innerBundle = EmitBundleMint(() => targetInstance,
+                var innerBundle = DelegateAbi.EmitBundleMint(_builder, () => targetInstance,
                     Const(bridgeExportName, "SystemString"), Const(0u, "SystemUInt32"), Const(null, "SystemObject"));
 
                 // The wrapper's INNER dispatch must speak the inner bundle's OWN protocol — here, the
