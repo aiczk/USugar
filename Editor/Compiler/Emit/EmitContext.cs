@@ -486,17 +486,12 @@ public class EmitContext
     Action<IOperation> _visitOperation;
     Func<IOperation, CLeaf> _visitExpression;
     Func<CLeaf, ITypeSymbol, IPatternOperation, CLeaf> _emitPatternCheck;
-    Func<INamedTypeSymbol, CLeaf> _emitNewAggregate;
 
     public Action<IOperation> VisitOperation => _visitOperation
         ?? throw new InvalidOperationException("EmitContext dispatchers not initialized. Call InitializeDispatchers first.");
     public Func<IOperation, CLeaf> VisitExpression => _visitExpression
         ?? throw new InvalidOperationException("EmitContext dispatchers not initialized. Call InitializeDispatchers first.");
     public Func<CLeaf, ITypeSymbol, IPatternOperation, CLeaf> EmitPatternCheck => _emitPatternCheck
-        ?? throw new InvalidOperationException("EmitContext dispatchers not initialized. Call InitializeDispatchers first.");
-    /// <summary>Allocate + default-initialize a fresh object[]-backed aggregate (struct/tuple) as a value.
-    /// Exposed so non-handler emit paths (e.g. default-initializing an aggregate field) can reuse it.</summary>
-    public Func<INamedTypeSymbol, CLeaf> EmitNewAggregate => _emitNewAggregate
         ?? throw new InvalidOperationException("EmitContext dispatchers not initialized. Call InitializeDispatchers first.");
 
     /// <summary>Aggregate (struct/tuple) instance fields with NO explicit initializer. C# default-initializes
@@ -507,13 +502,11 @@ public class EmitContext
     public void InitializeDispatchers(
         Action<IOperation> visitOp,
         Func<IOperation, CLeaf> visitExpr,
-        Func<CLeaf, ITypeSymbol, IPatternOperation, CLeaf> emitPattern,
-        Func<INamedTypeSymbol, CLeaf> emitNewAggregate)
+        Func<CLeaf, ITypeSymbol, IPatternOperation, CLeaf> emitPattern)
     {
         _visitOperation = visitOp ?? throw new ArgumentNullException(nameof(visitOp));
         _visitExpression = visitExpr ?? throw new ArgumentNullException(nameof(visitExpr));
         _emitPatternCheck = emitPattern ?? throw new ArgumentNullException(nameof(emitPattern));
-        _emitNewAggregate = emitNewAggregate ?? throw new ArgumentNullException(nameof(emitNewAggregate));
     }
 
     public EmitContext(Compilation compilation, INamedTypeSymbol classSymbol, LayoutPlanner planner)

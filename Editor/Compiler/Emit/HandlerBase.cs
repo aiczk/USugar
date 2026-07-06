@@ -373,14 +373,6 @@ public abstract partial class HandlerBase
     protected CLeaf EmitValueTypeDefault(string udonType)
         => Const(EmitPolicy.ParseConstValue(udonType, udonType == "SystemBoolean" ? "False" : "0"), udonType);
 
-    /// <summary>Allocate a fresh object[]-backed aggregate (struct/tuple) and default-initialize it as a
-    /// VALUE (e.g. `new V()` used as an expression). Nested aggregate fields are recursively allocated.</summary>
-    public CLeaf EmitNewAggregate(INamedTypeSymbol aggType)
-    {
-        var layout = _ctx.GetAggregateLayout(aggType);
-        return AggregateAbi.MintDefault(_builder, layout, _ctx.GetAggregateLayout, GetUdonType);
-    }
-
     /// <summary>Lifted binary operator on Nullable&lt;T&gt; (null propagation), from already-evaluated operand
     /// values. Arithmetic yields T? (null unless both present); relational yields bool (false if either null);
     /// equality yields bool (both-null is equal). Shared by <c>OperatorHandler</c> and compound assignment.</summary>

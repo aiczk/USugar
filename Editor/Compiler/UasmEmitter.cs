@@ -69,8 +69,7 @@ public class UasmEmitter
             new ArrayHandler(_ctx),
             new NullableHandler(_ctx));
 
-        _ctx.InitializeDispatchers(VisitOperation, VisitExpression, operatorHandler.EmitPatternCheckImpl,
-            operatorHandler.EmitNewAggregate);
+        _ctx.InitializeDispatchers(VisitOperation, VisitExpression, operatorHandler.EmitPatternCheckImpl);
     }
 
     // Build one kind→handler table from each handler's declared HandledKinds. A kind claimed by two
@@ -2312,7 +2311,8 @@ public class UasmEmitter
         // Default-init aggregate (struct/tuple) fields with no explicit initializer FIRST, so any explicit
         // initializer that references one sees a non-null backing array (C# default-then-initializer order).
         foreach (var (fieldId, aggType) in _ctx.AggregateFieldDefaults)
-            BridgeStore(fieldId, _ctx.EmitNewAggregate(aggType));
+            BridgeStore(fieldId, AggregateAbi.MintDefault(_builder, _ctx.GetAggregateLayout(aggType),
+                _ctx.GetAggregateLayout, GetUdonType));
 
         foreach (var (fieldId, initOp, fieldType) in _fieldInitOps)
         {

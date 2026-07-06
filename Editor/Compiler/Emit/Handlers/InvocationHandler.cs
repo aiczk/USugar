@@ -115,7 +115,7 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
             var uType = GetUdonType(govUnderlying);
             // For an aggregate (struct/tuple) underlying, the present value is a boxed object[] aliasing the
             // nullable's storage — deep-clone it out (value semantics). default(T) for an aggregate is a fresh
-            // zero-initialized struct, NOT null, so use EmitNewAggregate rather than the scalar value default.
+            // zero-initialized struct, NOT null, so mint through AggregateAbi rather than using scalar default.
             var aggType = ResolveType(govUnderlying) as INamedTypeSymbol;
             bool aggResult = aggType != null && EmitPolicy.IsAggregateType(aggType);
             var nv = VisitExpression(op.Instance);
