@@ -1,4 +1,6 @@
+using System.Collections.Generic;
 using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.Operations;
 
 /// <summary>
 /// ABI for rank-2+ CLR arrays. A logical T[d0,...,dn] is represented as a SystemObjectArray bundle:
@@ -58,6 +60,15 @@ public static class NdimArrayAbi
 
     public static string BundleSetSignature()
         => ExternResolver.BuildArraySetSignature(BundleUdonType, BoxedElementUdonType);
+
+    public static void FlattenInitializer(IArrayInitializerOperation init, List<IOperation> outLeaves)
+    {
+        foreach (var elem in init.ElementValues)
+        {
+            if (elem is IArrayInitializerOperation nested) FlattenInitializer(nested, outLeaves);
+            else outLeaves.Add(elem);
+        }
+    }
 
     public static bool TryGetProperty(string memberName, out PropertyKind kind)
     {

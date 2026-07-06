@@ -242,7 +242,7 @@ public abstract partial class HandlerBase
         if (op.Initializer != null)
         {
             var leaves = new List<IOperation>();
-            FlattenNdimInitializer(op.Initializer, leaves);
+            NdimArrayAbi.FlattenInitializer(op.Initializer, leaves);
             for (int i = 0; i < leaves.Count; i++)
                 EmitExternVoid(ExternResolver.BuildArraySetSignature(backingUdonType, elemUdonType),
                     new List<CLeaf> { SlotRef(backingSlot), Const(i, "SystemInt32"), VisitExpression(leaves[i]) });
@@ -268,15 +268,6 @@ public abstract partial class HandlerBase
         }
 
         return SlotRef(bundleSlot);
-    }
-
-    static void FlattenNdimInitializer(IArrayInitializerOperation init, List<IOperation> outLeaves)
-    {
-        foreach (var elem in init.ElementValues)
-        {
-            if (elem is IArrayInitializerOperation nested) FlattenNdimInitializer(nested, outLeaves);
-            else outLeaves.Add(elem);
-        }
     }
 
     // ── Length / GetLength / Rank / GetUpperBound (§2) ──
