@@ -179,6 +179,24 @@ public static class AggregateAbi
         return builder.SlotRef(slot);
     }
 
+    public static void EmitObjectInitializer(CoreBuilder builder, CLeaf instanceValue, AggregateLayout layout,
+        IObjectOrCollectionInitializerOperation initializer, Func<IOperation, CLeaf> emitValue)
+    {
+        if (initializer == null) return;
+        foreach (var member in initializer.Initializers)
+        {
+            if (member is not ISimpleAssignmentOperation assignment) continue;
+            var memberName = assignment.Target switch
+            {
+                IFieldReferenceOperation fieldRef => fieldRef.Field.Name,
+                IPropertyReferenceOperation propertyRef => propertyRef.Property.Name,
+                _ => null,
+            };
+            if (memberName != null && layout.TryGetIndex(memberName, out var idx))
+                WriteSlot(builder, instanceValue, idx, emitValue(assignment.Value));
+        }
+    }
+
     static object DefaultScalarValue(ITypeSymbol type)
     {
         switch (type.SpecialType)

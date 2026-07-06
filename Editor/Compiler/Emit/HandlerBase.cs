@@ -402,22 +402,8 @@ public abstract partial class HandlerBase
     protected void EmitAggregateObjectInitializer(CLeaf instanceVal, INamedTypeSymbol aggType,
         IObjectOrCollectionInitializerOperation initializer)
     {
-        if (initializer == null) return;
         var layout = _ctx.GetAggregateLayout(aggType);
-        foreach (var member in initializer.Initializers)
-        {
-            if (member is not ISimpleAssignmentOperation sa) continue;
-            var memberName = sa.Target switch
-            {
-                IFieldReferenceOperation fr => fr.Field.Name,
-                IPropertyReferenceOperation pr => pr.Property.Name,
-                _ => null,
-            };
-            if (memberName != null && layout.TryGetIndex(memberName, out var idx))
-            {
-                AggregateAbi.WriteSlot(_builder, instanceVal, idx, VisitExpression(sa.Value));
-            }
-        }
+        AggregateAbi.EmitObjectInitializer(_builder, instanceVal, layout, initializer, VisitExpression);
     }
 
     /// <summary>Set each value-type element of an object[]-emulated aggregate to its type default; a nested
