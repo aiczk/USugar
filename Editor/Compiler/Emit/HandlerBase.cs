@@ -381,23 +381,6 @@ public abstract partial class HandlerBase
         return AggregateAbi.MintDefault(_builder, layout, _ctx.GetAggregateLayout, GetUdonType);
     }
 
-    /// <summary>Promote a boxed small-int/char operand to int32 (Udon has no operators on those types and a
-    /// boxed small-int does not coerce to int for a SystemInt32 extern). Routes through ToInt32(SystemObject)
-    /// rather than the type-strict ToInt32(SystemByte/SystemChar/…): a nullable small-int's stored value is
-    /// often a boxed plain int (e.g. <c>byte? x = 5</c> keeps the int literal un-narrowed), which a strict
-    /// typed fetch rejects with InvalidCast. Convert.ToInt32(object) tolerates any boxed numeric. Pass-through
-    /// for non-small types.</summary>
-    protected CLeaf PromoteBoxedToInt32(CLeaf boxed, ITypeSymbol underlying, out ITypeSymbol effectiveType)
-    {
-        if (ExternResolver.IsSmallIntOrChar(GetUdonType(underlying)))
-        {
-            effectiveType = _compilation.GetSpecialType(SpecialType.System_Int32);
-            return ExternCall("SystemConvert.__ToInt32__SystemObject__SystemInt32", new List<CLeaf> { boxed }, "SystemInt32");
-        }
-        effectiveType = underlying;
-        return boxed;
-    }
-
     /// <summary>Lifted binary operator on Nullable&lt;T&gt; (null propagation), from already-evaluated operand
     /// values. Arithmetic yields T? (null unless both present); relational yields bool (false if either null);
     /// equality yields bool (both-null is equal). Shared by <c>OperatorHandler</c> and compound assignment.</summary>
@@ -410,11 +393,8 @@ public abstract partial class HandlerBase
             rightVal, rightNullable, rtUnderlying,
             kind, operatorMethod, resultType, _compilation.GetSpecialType(SpecialType.System_Int32),
             _ctx.AllocTemp, EmitAssign, SlotRef, GetUdonType, ResolveType,
-            (boxed, underlying) =>
-            {
-                var promoted = PromoteBoxedToInt32(boxed, underlying, out var effectiveType);
-                return (promoted, effectiveType);
-            },
+            (boxed, underlying) => NullableAbi.PromoteBoxedToInt32(_builder, boxed, underlying,
+                _compilation.GetSpecialType(SpecialType.System_Int32), GetUdonType),
             EmitNarrowingConvert);
 
     // ── Extern resolution ──

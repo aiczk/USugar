@@ -394,11 +394,8 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
 
         return NullableAbi.EmitLiftedUnary(_builder, VisitExpression(op.Operand),
             opUnderlying, resUnderlying, op.OperatorKind, GetUdonType,
-            (boxed, underlying) =>
-            {
-                var promoted = PromoteBoxedToInt32(boxed, underlying, out var effectiveType);
-                return (promoted, effectiveType);
-            },
+            (boxed, underlying) => NullableAbi.PromoteBoxedToInt32(_builder, boxed, underlying,
+                _compilation.GetSpecialType(SpecialType.System_Int32), GetUdonType),
             _ctx.AllocTemp, EmitAssign, SlotRef);
     }
 
@@ -489,8 +486,10 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
                     // A nullable small-int/char (or small-underlying enum) scrutinee may carry a boxed plain int
                     // rather than the strict small-int tag; promote both sides to int32 (ToInt32(SystemObject)
                     // tolerates any boxed numeric) and compare with the int32 extern, like the binary path.
-                    convertedValueVal = PromoteBoxedToInt32(convertedValueVal, underlyingSym, out _);
-                    constVal = PromoteBoxedToInt32(constVal, underlyingSym, out _);
+                    convertedValueVal = NullableAbi.PromoteBoxedToInt32(_builder, convertedValueVal, underlyingSym,
+                        _compilation.GetSpecialType(SpecialType.System_Int32), GetUdonType).Value;
+                    constVal = NullableAbi.PromoteBoxedToInt32(_builder, constVal, underlyingSym,
+                        _compilation.GetSpecialType(SpecialType.System_Int32), GetUdonType).Value;
                     eqType = "SystemInt32";
                 }
                 return ExternCall(
@@ -554,8 +553,10 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
                 {
                     // A nullable small-int/char (or small-underlying enum) scrutinee may be boxed as a plain int;
                     // promote both sides to int32 so the strict small-int extern's box-tag fetch cannot InvalidCast.
-                    scrut = PromoteBoxedToInt32(scrut, underlyingSym, out _);
-                    constVal = PromoteBoxedToInt32(constVal, underlyingSym, out _);
+                    scrut = NullableAbi.PromoteBoxedToInt32(_builder, scrut, underlyingSym,
+                        _compilation.GetSpecialType(SpecialType.System_Int32), GetUdonType).Value;
+                    constVal = NullableAbi.PromoteBoxedToInt32(_builder, constVal, underlyingSym,
+                        _compilation.GetSpecialType(SpecialType.System_Int32), GetUdonType).Value;
                     valType = "SystemInt32";
                 }
                 var opName = relPat.OperatorKind switch

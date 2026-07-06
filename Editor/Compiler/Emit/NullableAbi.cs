@@ -28,6 +28,17 @@ public static class NullableAbi
             new List<CLeaf> { nullableValue, builder.Const(null, StorageType) },
             "SystemBoolean");
 
+    public static (CLeaf Value, ITypeSymbol EffectiveType) PromoteBoxedToInt32(CoreBuilder builder,
+        CLeaf boxed, ITypeSymbol underlying, ITypeSymbol int32Type, Func<ITypeSymbol, string> getUdonType)
+    {
+        if (ExternResolver.IsSmallIntOrChar(getUdonType(underlying)))
+        {
+            return (builder.ExternCall("SystemConvert.__ToInt32__SystemObject__SystemInt32",
+                new List<CLeaf> { boxed }, "SystemInt32"), int32Type);
+        }
+        return (boxed, underlying);
+    }
+
     public static CLeaf EmitGetValueOrDefault(CoreBuilder builder, CLeaf nullableValue, string resultType,
         CLeaf fallbackValue, Func<CLeaf, CLeaf> presentValue,
         Func<string, int> allocTemp, Action<int, CValue> emitAssign, Func<int, CLeaf> slotRef)
