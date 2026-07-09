@@ -62,43 +62,38 @@ public static class NdimArrayAbi
     public static string BundleSetSignature()
         => ExternResolver.BuildArraySetSignature(BundleUdonType, BoxedElementUdonType);
 
-    public static CLeaf ReadBacking(CoreBuilder builder, CLeaf bundleVal, string backingUdonType,
-        Func<string, int> allocTemp, Action<int, CValue> emitAssign, Func<int, CLeaf> slotRef)
-        => ReadBoxedSlot(builder, bundleVal, builder.Const(BackingSlotIndex, "SystemInt32"),
-            backingUdonType, allocTemp, emitAssign, slotRef);
+    public static CLeaf ReadBacking(CoreBuilder builder, CLeaf bundleVal, string backingUdonType)
+        => ReadBoxedSlot(builder, bundleVal, builder.Const(BackingSlotIndex, "SystemInt32"), backingUdonType);
 
-    public static CLeaf ReadDimLength(CoreBuilder builder, CLeaf bundleVal, CLeaf dimIndexPlusOne,
-        Func<string, int> allocTemp, Action<int, CValue> emitAssign, Func<int, CLeaf> slotRef)
-        => ReadBoxedSlot(builder, bundleVal, dimIndexPlusOne, "SystemInt32", allocTemp, emitAssign, slotRef);
+    public static CLeaf ReadDimLength(CoreBuilder builder, CLeaf bundleVal, CLeaf dimIndexPlusOne)
+        => ReadBoxedSlot(builder, bundleVal, dimIndexPlusOne, "SystemInt32");
 
     public static CLeaf ReadFromPlan(CoreBuilder builder, AccessPlan plan, string elemUdonType,
         string backingUdonType, string backingElemUdonType, string arrayExprSyntax,
-        Func<CLeaf, CLeaf> readBacking, Func<string, CLeaf> defaultConst,
-        Func<string, int> allocTemp, Action<int, CValue> emitAssign, Func<int, CLeaf> slotRef)
+        Func<string, CLeaf> defaultConst)
     {
-        var resultSlot = allocTemp(elemUdonType);
-        emitAssign(resultSlot, defaultConst(elemUdonType));
+        var resultSlot = builder.AllocScratch(elemUdonType);
+        builder.EmitAssign(resultSlot, defaultConst(elemUdonType));
         builder.EmitIf(plan.InBounds,
             _ =>
             {
-                var backing = readBacking(plan.BundleVal);
+                var backing = ReadBacking(builder, plan.BundleVal, backingUdonType);
                 var elemVal = builder.ExternCall(
                     ExternResolver.BuildArrayGetSignature(backingUdonType, backingElemUdonType),
                     new List<CLeaf> { backing, plan.FlatIndex }, elemUdonType);
-                emitAssign(resultSlot, elemVal);
+                builder.EmitAssign(resultSlot, elemVal);
             },
             _ => EmitBoundsLogError(builder, arrayExprSyntax, "read", plan));
-        return slotRef(resultSlot);
+        return builder.SlotRef(resultSlot);
     }
 
     public static void WriteFromPlan(CoreBuilder builder, AccessPlan plan, CLeaf value,
-        string backingUdonType, string backingElemUdonType, string arrayExprSyntax,
-        Func<CLeaf, CLeaf> readBacking)
+        string backingUdonType, string backingElemUdonType, string arrayExprSyntax)
     {
         builder.EmitIf(plan.InBounds,
             _ =>
             {
-                var backing = readBacking(plan.BundleVal);
+                var backing = ReadBacking(builder, plan.BundleVal, backingUdonType);
                 builder.EmitExternVoid(
                     ExternResolver.BuildArraySetSignature(backingUdonType, backingElemUdonType),
                     new List<CLeaf> { backing, plan.FlatIndex, value });
@@ -118,14 +113,13 @@ public static class NdimArrayAbi
                 new List<CLeaf> { bundle, builder.Const(DimSlotIndex(d), "SystemInt32"), builder.SlotRef(dimSlots[d]) });
     }
 
-    static CLeaf ReadBoxedSlot(CoreBuilder builder, CLeaf bundleVal, CLeaf bundleIndex, string targetUdonType,
-        Func<string, int> allocTemp, Action<int, CValue> emitAssign, Func<int, CLeaf> slotRef)
+    static CLeaf ReadBoxedSlot(CoreBuilder builder, CLeaf bundleVal, CLeaf bundleIndex, string targetUdonType)
     {
         var boxed = builder.ExternCall(BundleGetSignature(),
             new List<CLeaf> { bundleVal, bundleIndex }, BoxedElementUdonType);
-        var slot = allocTemp(targetUdonType);
-        emitAssign(slot, boxed);
-        return slotRef(slot);
+        var slot = builder.AllocScratch(targetUdonType);
+        builder.EmitAssign(slot, boxed);
+        return builder.SlotRef(slot);
     }
 
     public static CLeaf BuildInBounds(CoreBuilder builder, int[] idxSlots, int[] dimSlots)

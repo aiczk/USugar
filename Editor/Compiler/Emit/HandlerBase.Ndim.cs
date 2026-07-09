@@ -19,7 +19,7 @@ public abstract partial class HandlerBase
     protected CLeaf EmitNdimGetBacking(CLeaf bundleVal, IArrayTypeSymbol backingType)
     {
         var backingUdonType = GetArrayType(backingType);
-        return NdimArrayAbi.ReadBacking(_builder, bundleVal, backingUdonType, _ctx.AllocTemp, EmitAssign, SlotRef);
+        return NdimArrayAbi.ReadBacking(_builder, bundleVal, backingUdonType);
     }
 
     /// <summary>A fully-prepared N-dim element access: every index expression evaluated EXACTLY ONCE
@@ -49,7 +49,7 @@ public abstract partial class HandlerBase
         {
             dimSlots[d] = _ctx.AllocTemp("SystemInt32");
             EmitAssign(dimSlots[d], NdimArrayAbi.ReadDimLength(_builder, bundleVal,
-                Const(NdimArrayAbi.DimSlotIndex(d), "SystemInt32"), _ctx.AllocTemp, EmitAssign, SlotRef));
+                Const(NdimArrayAbi.DimSlotIndex(d), "SystemInt32")));
         }
 
         var inBounds = NdimArrayAbi.BuildInBounds(_builder, idxSlots, dimSlots);
@@ -70,9 +70,7 @@ public abstract partial class HandlerBase
         var backingUdonType = GetArrayType(plan.BackingType);
         var backingElemUdonType = GetArrayElemType(plan.BackingType);
         return NdimArrayAbi.ReadFromPlan(_builder, plan, elemUdonType, backingUdonType, backingElemUdonType,
-            ae.Syntax.ToString(), bundle => NdimArrayAbi.ReadBacking(_builder, bundle, backingUdonType,
-                _ctx.AllocTemp, EmitAssign, SlotRef),
-            type => InvocationHandler.DefaultConst(_builder, type), _ctx.AllocTemp, EmitAssign, SlotRef);
+            ae.Syntax.ToString(), type => InvocationHandler.DefaultConst(_builder, type));
     }
 
     /// <summary>Shared in-bounds Set from an already-prepared plan: in-bounds branch Sets on the flat
@@ -83,8 +81,7 @@ public abstract partial class HandlerBase
         var backingUdonType = GetArrayType(plan.BackingType);
         var backingElemUdonType = GetArrayElemType(plan.BackingType);
         NdimArrayAbi.WriteFromPlan(_builder, plan, value, backingUdonType, backingElemUdonType,
-            ae.Syntax.ToString(), bundle => NdimArrayAbi.ReadBacking(_builder, bundle, backingUdonType,
-                _ctx.AllocTemp, EmitAssign, SlotRef));
+            ae.Syntax.ToString());
     }
 
     /// <summary>N-dim element READ (§1/§2). Struct/tuple elements are deep-cloned on the way out,
@@ -207,7 +204,7 @@ public abstract partial class HandlerBase
     protected CLeaf EmitNdimGetLength(CLeaf bundleVal, CLeaf dimArg)
     {
         var plusOne = NdimArrayAbi.BuildRuntimeDimSlotIndex(_builder, dimArg);
-        return NdimArrayAbi.ReadDimLength(_builder, bundleVal, plusOne, _ctx.AllocTemp, EmitAssign, SlotRef);
+        return NdimArrayAbi.ReadDimLength(_builder, bundleVal, plusOne);
     }
 
     /// <summary>`ndimArr.Rank` — the static rank is known at compile time from the declared type; no
