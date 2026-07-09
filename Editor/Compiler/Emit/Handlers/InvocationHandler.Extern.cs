@@ -816,7 +816,7 @@ public partial class InvocationHandler
     /// <summary>Wave-9 round-8 [Y12]: evaluate a ref/out argument lvalue's receiver/index legs ONCE
     /// and return (the value read through those legs, the deferred copy-back store over the SAME
     /// legs). C# evaluates an argument's component expressions exactly once; re-evaluating them at
-    /// copy-back (the retired AssignToTarget fallback) ran side-effecting legs twice and landed the
+    /// copy-back (the retired direct AssignToTarget path) ran side-effecting legs twice and landed the
     /// write in the cell chosen by the SECOND evaluation (VM-proven: AddTo(ref arr[Idx()].v) with a
     /// k-mutating Idx — kk ref=1 vs 2, c0/c1 swapped cells; out and plain-int[]-element flavors
     /// identical). This is the ONLY ref/out argument-preparation path for EmitExternMethodCall — a
@@ -826,7 +826,7 @@ public partial class InvocationHandler
     /// / PrepareArrayElementSet), aggregate struct/tuple member chains (mirrors the
     /// ExpressionHandler aggregate-member read / TryPrepareFieldSet's aggregate arm), cross-behaviour
     /// fields, and captured env locals/params. A shape that still returns null here is a genuine
-    /// argument-site reject at the call in EmitExternMethodCall, not a silent fallback.</summary>
+    /// argument-site reject at the call in EmitExternMethodCall, not a silent continuation.</summary>
     (System.Func<CLeaf> read, System.Action<CLeaf> store)? TryPrepareRefOutArg(IArgumentOperation arg)
     {
         var param = arg.Parameter;
@@ -883,7 +883,7 @@ public partial class InvocationHandler
                 }, v => AggregateAbi.WriteSlot(_builder, arrExpr, memberIndex, v));
             }
             // Round-9 [Y12]: BEHAVIOUR field through a non-this receiver (`hs[Pick()].pub`,
-            // `other.pub`) — the legacy path re-evaluated the receiver legs at copy-back
+            // `other.pub`) — the pre-fix path re-evaluated the receiver legs at copy-back
             // (AssignToTarget's SetProgramVariable arm), so a side-effecting index leg ran twice
             // and the write landed in the cell chosen by the SECOND evaluation. Evaluate the
             // receiver ONCE here (materialized — the copy-back must hit the SAME instance even if

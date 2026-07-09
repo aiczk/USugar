@@ -226,7 +226,7 @@ public abstract partial class HandlerBase
             case "SystemInt16":  return ConvertInRange(ShiftTruncate(lowSigned, 16), toUdonType);
             case "SystemUInt32": return Int32BitsToUInt32(lowSigned);
         }
-        // Unreachable for the supported integer target set; safety fallback.
+        // Unreachable for the supported integer target set; defensive default.
         return ExternCall(ExternResolver.BuildConvertSignature(fromUdonType, toUdonType),
             new List<CLeaf> { value }, toUdonType);
     }
@@ -1479,7 +1479,7 @@ public abstract partial class HandlerBase
     // UasmEmitter.ResolveLeafOverrideDef/LeafPropertyTarget for the recursion-graph's emission-faithful
     // mirror of this same dispatch) — the two walker methods below are the single shared core; each of
     // the four call sites differs only in what it does with the raw match (generic re-Construct here,
-    // OriginalDefinition-normalization in UasmEmitter) and its own guards/fallback.
+    // OriginalDefinition-normalization in UasmEmitter) and its own guards.
 
     /// <summary>Search <paramref name="classSymbol"/>'s BaseType chain for a same-named method whose
     /// OverriddenMethod chain reaches <paramref name="def"/> (an OriginalDefinition). Returns the found

@@ -400,7 +400,7 @@ public static class ExternResolver
             return RemapUdonType(baseName);
         }
 
-        // Non-generic fallback
+        // Non-generic type-name path
         var full = type.SpecialType != SpecialType.None
             ? GetSpecialTypeName(type.SpecialType)
             : type.ToDisplayString(SymbolDisplayFormat.CSharpErrorMessageFormat);
@@ -619,7 +619,7 @@ public static class ExternResolver
                 return externName;
         }
 
-        // Fallback to ContainingType
+        // Deterministic default when the registry probe cannot validate any candidate.
         return $"{containingUdon}.__{opName}__{srcUdon}__{dstUdon}";
     }
 
