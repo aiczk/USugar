@@ -959,7 +959,7 @@ public partial class InvocationHandler
         if (op is IInvocationOperation or IObjectCreationOperation or IAssignmentOperation
             or IIncrementOrDecrementOperation or IPropertyReferenceOperation)
             return true;
-        foreach (var child in op.ChildOperations)
+        foreach (var child in op.ChildOps())
             if (IsPotentiallyEffectful(child))
                 return true;
         return false;

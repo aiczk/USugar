@@ -120,7 +120,7 @@ static class TailCallAnalysis
             }
         }
         if (isMatch(op, out _)) return true; // matched call as a statement / non-tail position
-        foreach (var child in op.ChildOperations)
+        foreach (var child in op.ChildOps())
         {
             if (child is ILocalFunctionOperation || child is IAnonymousFunctionOperation) continue; // own nodes
             if (Walk(child, isMatch, matchesAccessor, checkReturnInstanceLeg, ternaryPreciseReturn, tail: false)) return true;

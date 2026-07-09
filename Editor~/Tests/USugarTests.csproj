@@ -13,6 +13,7 @@
     <Compile Include="../../Editor/Compiler/LayoutPlanner.cs" />
 
     <Compile Include="../../Editor/Compiler/ExternResolver.cs" />
+    <Compile Include="../../Editor/Compiler/OperationCompat.cs" />
     <Compile Include="../../Editor/Compiler/Emit/DelegateProtocol.cs" />
     <Compile Include="../../Editor/Compiler/Emit/EmitDiagnostic.cs" />
     <Compile Include="../../Editor/Compiler/Emit/EmitContext.cs" />
