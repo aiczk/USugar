@@ -244,8 +244,6 @@ public class StatementHandler : HandlerBase, IOperationHandler
         // rebind __envp from itself — identity here, but the wiring is not elided (the MethodEntry
         // EnvAlloc after the __tco_ label re-runs per logical activation for freshness).
         var tcoEnvp = _ctx.Methods.CurrentClosureSpec?.EnvpFieldId;
-        if (tcoEnvp == null && _ctx.Closures.CaptureScope != null)
-            _ctx.Closures.TryGetEnvpField(_currentMethod, out tcoEnvp);
         if (tcoEnvp != null)
             EmitStoreField(tcoEnvp, LoadField(tcoEnvp, EnvEmit.EnvType));
 

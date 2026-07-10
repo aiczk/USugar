@@ -63,14 +63,11 @@ static class EnvEmit
             throw new InvalidOperationException(
                 $"Env scope #{scope.Id} ({scope.Kind}) is not live in this frame and there is no enclosing closure to chain from.");
         var def = currentClosure.OriginalDefinition;
-        // SS2B: the currently emitting per-spec closure carries its own __envp field on its record —
-        // the definition-keyed map would be last-spec-wins under multi-instantiation (F3).
-        string envpField;
-        if (ctx.Methods.CurrentClosureSpec is { } ccs
-            && SymbolEqualityComparer.Default.Equals(ccs.Def.OriginalDefinition, def))
-            envpField = ccs.EnvpFieldId;
-        else
-            ctx.Closures.TryGetEnvpField(currentClosure, out envpField);
+        // SS2B: the currently emitting per-spec closure carries its own __envp field on its record
+        // (a definition-keyed map here would be last-spec-wins under multi-instantiation, F3).
+        string envpField = ctx.Methods.CurrentClosureSpec is { } ccs
+            && SymbolEqualityComparer.Default.Equals(ccs.Def.OriginalDefinition, def)
+                ? ccs.EnvpFieldId : null;
         if (envpField == null)
             throw new InvalidOperationException(
                 $"Closure '{currentClosure.Name}' reads captured state but has no __envp parameter registered.");

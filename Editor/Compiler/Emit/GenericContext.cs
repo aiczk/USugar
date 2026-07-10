@@ -15,10 +15,10 @@ public sealed class GenericContext
     // constructed symbol can pend once per enclosing spec); named specs carry null.
     public readonly List<(IMethodSymbol Method, MethodContext.ClosureSpec Spec)> PendingSpecs = new();
 
-    // Wave-9 round-5 [X6]: first registered specialization per generic DEFINITION. Closures hoisted
-    // from a generic body are keyed by IMethodSymbol and therefore SHARED across that body's
-    // specializations (last-spec-wins seeding; VM-proven r1=8 vs 3) - a second DISTINCT instantiation
-    // of a definition whose body contains a capturing closure is loud. LOOKUP-ONLY.
+    // First registered specialization per generic DEFINITION (first-wins record; historical [X6]
+    // origin). Since the per-spec closure separation, closures are NOT shared across specs and no
+    // second-instantiation reject exists — the sole remaining read is ComposeClosureKeyArgs' owner
+    // fallback for owners outside the current chain. LOOKUP-ONLY.
     public readonly Dictionary<IMethodSymbol, IMethodSymbol> FirstSpecByDefinition
         = new(SymbolEqualityComparer.Default);
 

@@ -1638,14 +1638,8 @@ public abstract partial class HandlerBase
                         : _methodFunctions.ContainsKey(constructed)) return;
         EmitPolicy.RejectInParameters(constructed); // round-7 follow-up [Q3]
 
-        // Wave-9 round-5 [X6]: a SECOND distinct instantiation of a generic definition whose body
-        // contains a CAPTURING lambda/local function is loud. The hoisted closure is keyed by
-        // IMethodSymbol and shared across specs, so its capture cells are seeded by whichever spec
-        // emitted last — the first spec's dispatch then reads the other instantiation's captured
-        // values (VM-proven r1=8 vs 3). Round-8 [Y2] widening: a closure whose signature or body
-        // REFERENCES the generic's type parameters pins the instantiation the same way (the shared
-        // function was emitted with the first spec's map). Pin-free closures and single
-        // instantiations stay legal.
+        // First-wins spec record (feeds ComposeClosureKeyArgs' owner fallback). The former [X6]/[Y2]
+        // second-instantiation rejects are retired: closures duplicate per spec.
         RegisterFirstGenericSpec(constructed);
 
         EmitContext.MethodSlot slot;
@@ -1690,10 +1684,8 @@ public abstract partial class HandlerBase
             gsParamIds[pi] = paramId;
         }
         string specEnvpFieldId = null;
-        // Stage 2 §1.3: __envp twin of RegisterLocalFunction, for a capturing GENERIC local function
-        // specialization (keyed by OriginalDefinition = the generic def, matching EnvEmit.Leaf's
-        // lookup). Non-T-dependent capturing generics share one physical node; T-dependent ones are
-        // pinned to a single instantiation by the ClosurePin gate above, so one envp field per def.
+        // Stage 2 §1.3: __envp twin of RegisterLocalFunction — the id lives on this spec's
+        // ClosureSpec record (per-spec storage; no sharing, no pinning since per-spec separation).
         if (_ctx.Closures.CaptureScope != null && _ctx.Closures.CaptureScope.IsCapturingClosure(constructed))
         {
             var envpId = $"__{idx}_{SanitizeId(constructed.Name)}__envp";
@@ -1765,8 +1757,8 @@ public abstract partial class HandlerBase
         return resolved;
     }
 
-    // [X6] gate moved to EmitContext.GenericBodyClosurePin (round-8 [Y2]/[Y10] — shared with the
-    // UasmEmitter base-instance-copy registration and widened to type-param-referencing closures).
+    // The [X6]/[Y2] instantiation-pin gates were retired by the per-spec closure separation
+    // (2026-07-10) — closures duplicate per spec, so no second-instantiation reject exists.
 
     // ── Delegate bridge resolution ──
 

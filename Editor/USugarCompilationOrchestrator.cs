@@ -290,7 +290,7 @@ static class USugarCompilationOrchestrator
             // ── Phase 3: Serial apply ──
             // OrderBy class name for deterministic output order (ConcurrentBag yields in arbitrary order).
             int count = 0, failures = 0;
-            foreach (var result in emitResults.OrderBy(r => r.Symbol.Name))
+            foreach (var result in emitResults.OrderBy(r => r.Symbol.Name).ThenBy(r => r.Symbol.ToDisplayString()))
             {
                 if (result.IsError)
                 {

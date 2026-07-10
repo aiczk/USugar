@@ -99,6 +99,72 @@ public class TpCls : UdonSharpBehaviour {
         Assert.True(SymbolEqualityComparer.Default.Equals(keyInt.Def, keyStr.Def)); // …despite one def
     }
 
+    // Registry loud-polarity: registering the same (def, args) twice must throw, not last-writer-win.
+    [Fact]
+    public void AddClosureSpec_DuplicateKey_Throws()
+    {
+        var (comp, model, root) = Compile();
+        var lfSym = ((ILocalFunctionOperation)model.GetOperation(
+            root.DescendantNodes().OfType<LocalFunctionStatementSyntax>().Single())).Symbol;
+        var mc = new MethodContext();
+        var args = System.Collections.Immutable.ImmutableArray<ITypeSymbol>.Empty
+            .Add(comp.GetSpecialType(SpecialType.System_Int32));
+        mc.AddClosureSpec(new MethodContext.ClosureSpec { Def = lfSym, KeyArgs = args });
+        Assert.ThrowsAny<System.ArgumentException>(() =>
+            mc.AddClosureSpec(new MethodContext.ClosureSpec { Def = lfSym, KeyArgs = args }));
+    }
+
+    // TypeParamScope.Compose unit pins (2026-07-11 audit coverage hole): the identity-binding skip is
+    // the B70 stack-overflow armor and was previously exercised only through full compiles.
+    [Fact]
+    public void Compose_SkipsIdentityBinding_IncludingFreshTwin()
+    {
+        var (comp, model, root) = Compile();
+        var lfSyntax = root.DescendantNodes().OfType<LocalFunctionStatementSyntax>().Single();
+        var enclosing = lfSyntax.Ancestors().OfType<MethodDeclarationSyntax>().First();
+        var walk1 = ((ILocalFunctionOperation)model.GetOperation(lfSyntax)).Symbol.TypeParameters;
+        ILocalFunctionOperation viaBody = null;
+        void Find(IOperation op)
+        {
+            if (op is ILocalFunctionOperation lf) { viaBody = lf; return; }
+            foreach (var c in op.ChildOps()) { Find(c); if (viaBody != null) return; }
+        }
+        Find(model.GetOperation(enclosing));
+        var walk2 = viaBody.Symbol.TypeParameters;
+
+        // Literal identity binding (W -> same W): never installed.
+        var m1 = TypeParamScope.Compose(null, newWins: true,
+            new[] { ((IReadOnlyList<ITypeParameterSymbol>)walk1, (IReadOnlyList<ITypeSymbol>)walk1.CastArray<ITypeSymbol>()) });
+        Assert.False(m1.ContainsKey(walk1[0]));
+
+        // Fresh-twin identity binding (walk1 W -> walk2 W, TypeParamId-equal): equally skipped —
+        // installing it would self-cycle GetUdonTypeName's resolve-then-recurse through the twin.
+        var m2 = TypeParamScope.Compose(null, newWins: true,
+            new[] { ((IReadOnlyList<ITypeParameterSymbol>)walk1, (IReadOnlyList<ITypeSymbol>)walk2.CastArray<ITypeSymbol>()) });
+        Assert.False(m2.ContainsKey(walk1[0]));
+    }
+
+    [Fact]
+    public void Compose_NewWinsPrecedence()
+    {
+        var (comp, model, root) = Compile();
+        var lfSym = ((ILocalFunctionOperation)model.GetOperation(
+            root.DescendantNodes().OfType<LocalFunctionStatementSyntax>().Single())).Symbol;
+        var tp = lfSym.TypeParameters;
+        var intType = (ITypeSymbol)comp.GetSpecialType(SpecialType.System_Int32);
+        var strType = (ITypeSymbol)comp.GetSpecialType(SpecialType.System_String);
+
+        var baseMap = TypeParamScope.Compose(null, newWins: true,
+            new[] { ((IReadOnlyList<ITypeParameterSymbol>)tp, (IReadOnlyList<ITypeSymbol>)new[] { intType }) });
+        var overlaid = TypeParamScope.Compose(baseMap, newWins: true,
+            new[] { ((IReadOnlyList<ITypeParameterSymbol>)tp, (IReadOnlyList<ITypeSymbol>)new[] { strType }) });
+        var kept = TypeParamScope.Compose(baseMap, newWins: false,
+            new[] { ((IReadOnlyList<ITypeParameterSymbol>)tp, (IReadOnlyList<ITypeSymbol>)new[] { strType }) });
+
+        Assert.Equal(strType, overlaid[tp[0]], SymbolEqualityComparer.Default);
+        Assert.Equal(intType, kept[tp[0]], SymbolEqualityComparer.Default);
+    }
+
     // S3 freshness erasure (the load-bearing direction, [Y8]): a local function's type-parameter
     // symbols obtained from TWO independent operation walks must intern to ONE id — this is exactly
     // the equivalence the retired rekey block compensated for. The assert deliberately does NOT

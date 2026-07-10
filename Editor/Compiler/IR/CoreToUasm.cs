@@ -89,7 +89,15 @@ public static class CoreToUasm
         {
             _module = module;
             foreach (var func in module.Functions)
-                _funcByName[func.Name] = func;
+            {
+                // Module-level uniqueness gate (2026-07-11 audit): a duplicate name would silently
+                // last-writer-win here AND in the label/address maps, resolving calls and jumps to
+                // the wrong function — loud beats a silent miscompile.
+                if (!_funcByName.TryAdd(func.Name, func))
+                    throw new InvalidOperationException(
+                        $"CModule contains two functions named '{func.Name}' — function names must be "
+                        + "module-unique (emit-side index allocation bug).");
+            }
         }
 
         public CodeGenResult Run()
@@ -478,8 +486,17 @@ public static class CoreToUasm
             if (!_funcByName.TryGetValue(call.FuncName, out var target))
                 throw new InvalidOperationException($"CInternalCall references unknown function: {call.FuncName}");
 
+            // Arity gate (2026-07-11 audit): a mismatch used to truncate silently — the unbound
+            // param field kept a STALE value from a prior call (the envp-regression failure mode
+            // becomes runtime garbage instead of a compile error).
+            if (call.Args.Count != target.ParamFieldNames.Count)
+                throw new InvalidOperationException(
+                    $"CInternalCall to '{call.FuncName}' passes {call.Args.Count} args but the target "
+                    + $"declares {target.ParamFieldNames.Count} param fields (arity skew — check hidden "
+                    + "__envp / receiver param wiring).");
+
             // Copy args to param fields
-            for (int i = 0; i < call.Args.Count && i < target.ParamFieldNames.Count; i++)
+            for (int i = 0; i < call.Args.Count; i++)
                 AddCopyPair(ResolveOperand(call.Args[i], funcIdx, func), target.ParamFieldNames[i]);
 
             // Push return address and jump

@@ -58,19 +58,7 @@ public sealed class ClosureContext
     // env-record reference in that function's frame.
     public readonly Dictionary<(object Func, int ScopeId), int> ScopeEnvSlots = new();
 
-    // Hoisted closure method -> the param FIELD id of its hidden trailing __envp parameter.
-    // KEYING DISCIPLINE (Stage 2 M5 gotcha-3, fixed in 5064f77: a definition key was last-spec-wins
-    // and wired one generic spec's body to another spec's field - VM-proven wrong-value fault).
-    // Intentionally MIXED-key: a capturing generic specialization pinned to per-instantiation
-    // storage registers under its CONSTRUCTED symbol; a closure with only one instantiation
-    // registers under its DEFINITION. Callers never touch this directly - RegisterEnvpField /
-    // TryGetEnvpField encode the constructed-first / definition-fallback lookup in one place.
-    readonly Dictionary<IMethodSymbol, string> _envpParamFields = new(SymbolEqualityComparer.Default);
-
-    public void RegisterEnvpField(IMethodSymbol closureKey, string envpFieldId)
-        => _envpParamFields[closureKey] = envpFieldId;
-
-    public bool TryGetEnvpField(IMethodSymbol closure, out string envpFieldId)
-        => _envpParamFields.TryGetValue(closure, out envpFieldId)
-           || _envpParamFields.TryGetValue(closure.OriginalDefinition, out envpFieldId);
+    // The former envp field map (RegisterEnvpField/TryGetEnvpField) is gone: every __envp id lives
+    // on the per-spec ClosureSpec record (EnvpFieldId) since the per-spec separation, and the map
+    // had become write-dead (2026-07-11 audit, two independent zero-caller confirmations).
 }

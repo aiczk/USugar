@@ -1041,7 +1041,7 @@ public class UasmEmitter
             // Feature G: a member of a CONSTRUCTED generic struct (Box<int>.Get(), Box<int>(x), a
             // generic struct's operator, etc.) gets its own per-spec body — the containing-type
             // dimension's version of RegisterGenericSpecialization's discipline (constructed key,
-            // FirstGenericSpec/ClosurePin gate reused via GenericBodyClosurePin, type-arg-suffixed
+            // First-wins spec seed (ComposeClosureKeyArgs owner fallback; pin gates retired), type-arg-suffixed
             // name: containing type's args, then the method's own if it is ALSO generic). A
             // non-generic-struct member (sm.ContainingType.IsGenericType false, so sm ==
             // sm.OriginalDefinition trivially) takes the unchanged path below byte-identically.
@@ -2309,6 +2309,12 @@ public class UasmEmitter
 
     void EmitFieldInitializers()
     {
+        // 2026-07-11 audit: field-initializer expressions belong to the CLASS context — never to
+        // whatever spec/closure happened to emit last (the synthesized-_start path runs outside any
+        // EmitMethod, so the ambient would otherwise be stale). A delegate-field initializer lambda
+        // registers against this clean ambient.
+        _ctx.Methods.CurrentClosureSpec = null;
+        _ctx.Methods.CurrentOwnerSpecs = System.Collections.Immutable.ImmutableArray<IMethodSymbol>.Empty;
         // Default-init aggregate (struct/tuple) fields with no explicit initializer FIRST, so any explicit
         // initializer that references one sees a non-null backing array (C# default-then-initializer order).
         foreach (var (fieldId, aggType) in _ctx.Aggregates.FieldDefaults)
