@@ -25,19 +25,19 @@ public partial class InvocationHandler
             // Value of a nullable AGGREGATE (e.g. (int,int)? / V?) copies the struct out (value semantics).
             if (op.Property.Name == "Value")
                 return nblUnder is INamedTypeSymbol nblAgg && EmitPolicy.IsAggregateType(nblAgg)
-                    ? AggregateAbi.DeepClone(_builder, nv, nblAgg, _ctx.GetAggregateLayout) : nv;
+                    ? AggregateAbi.DeepClone(_builder, nv, nblAgg, _ctx.Aggregates.GetLayout) : nv;
         }
 
         // Auto-property on an aggregate (struct/tuple) OR v1 class → object[] element (the backing field's
         // slot). The clone at the return stays IsAggregateType, so a class-typed property returns by reference.
         if (op.Instance != null && op.Instance.Type is INamedTypeSymbol aggProp && EmitPolicy.IsObjectArrayEmulated(aggProp)
-            && _ctx.GetAggregateLayout(aggProp).TryGetIndex(op.Property.Name, out var aggPropIdx))
+            && _ctx.Aggregates.GetLayout(aggProp).TryGetIndex(op.Property.Name, out var aggPropIdx))
         {
             var arrExpr = LoadInstanceRaw(op.Instance);
             var getVal = AggregateAbi.ReadSlot(_builder, arrExpr, aggPropIdx, "SystemObject");
             // A struct-typed property returns a COPY (C# getters return by value; you cannot mutate through it).
             return op.Property.Type is INamedTypeSymbol propAgg && EmitPolicy.IsAggregateType(propAgg)
-                ? AggregateAbi.DeepClone(_builder, getVal, propAgg, _ctx.GetAggregateLayout) : getVal;
+                ? AggregateAbi.DeepClone(_builder, getVal, propAgg, _ctx.Aggregates.GetLayout) : getVal;
         }
 
         // Computed (non-auto) property on an aggregate (struct) OR v1 class: no backing-field slot, so
@@ -50,7 +50,7 @@ public partial class InvocationHandler
             var ret = EmitCallToMethod(ResolveStructMember(aggGetterRaw),
                 new List<CLeaf> { LoadInstanceRaw(op.Instance) });
             return op.Property.Type is INamedTypeSymbol getRetAgg && EmitPolicy.IsAggregateType(getRetAgg)
-                ? AggregateAbi.DeepClone(_builder, ret, getRetAgg, _ctx.GetAggregateLayout) : ret;
+                ? AggregateAbi.DeepClone(_builder, ret, getRetAgg, _ctx.Aggregates.GetLayout) : ret;
         }
 
         // this.gameObject / this.transform → __this_* variable (Udon VM resolves via "this" default)
@@ -67,7 +67,7 @@ public partial class InvocationHandler
             {
                 var gv = EmitCallToMethod(thisProp.GetMethod, new List<CLeaf>());
                 return thisProp.Type is INamedTypeSymbol thisGetAgg && EmitPolicy.IsAggregateType(thisGetAgg)
-                    ? AggregateAbi.DeepClone(_builder, gv, thisGetAgg, _ctx.GetAggregateLayout) : gv;
+                    ? AggregateAbi.DeepClone(_builder, gv, thisGetAgg, _ctx.Aggregates.GetLayout) : gv;
             }
 
             // Auto-property on this class → direct backing-field access (user-defined classes only). A
@@ -78,18 +78,18 @@ public partial class InvocationHandler
             {
                 var bv = LoadField(thisProp.Name, GetUdonType(thisProp.Type));
                 return thisProp.Type is INamedTypeSymbol thisAutoAgg && EmitPolicy.IsAggregateType(thisAutoAgg)
-                    ? AggregateAbi.DeepClone(_builder, bv, thisAutoAgg, _ctx.GetAggregateLayout) : bv;
+                    ? AggregateAbi.DeepClone(_builder, bv, thisAutoAgg, _ctx.Aggregates.GetLayout) : bv;
             }
 
             var propName = op.Property.Name;
             if (propName == "gameObject" || propName == "transform")
             {
                 var propType = GetUdonType(op.Property.Type);
-                return LoadField(_ctx.DeclareThisOnce(propType), propType);
+                return LoadField(_ctx.Storage.DeclareThisOnce(propType), propType);
             }
             // Other this.property → extern getter with this instance
             var thisType = GetUdonType(_classSymbol);
-            var thisVal = LoadField(_ctx.DeclareThisOnce(thisType), thisType);
+            var thisVal = LoadField(_ctx.Storage.DeclareThisOnce(thisType), thisType);
             var cType = GetUdonType(ResolveExternOwnerType(op.Property.ContainingType, op.Instance?.Type, op.Property.Name));
             var rType = GetUdonType(op.Property.Type);
             return ExternCall(
@@ -123,7 +123,7 @@ public partial class InvocationHandler
                 // and was pre-registered by the collection layer.
                 var sgv = EmitCallToMethod(ResolveStructMember(sPropGetter), new List<CLeaf>());
                 return op.Property.Type is INamedTypeSymbol sgAgg && EmitPolicy.IsAggregateType(sgAgg)
-                    ? AggregateAbi.DeepClone(_builder, sgv, sgAgg, _ctx.GetAggregateLayout) : sgv;
+                    ? AggregateAbi.DeepClone(_builder, sgv, sgAgg, _ctx.Aggregates.GetLayout) : sgv;
             }
 
             // Constant folding: static properties on foldable struct types (e.g., Vector3.zero)
@@ -131,7 +131,7 @@ public partial class InvocationHandler
             {
                 var value = TryGetStaticPropertyValue(containingType, op.Property.Name);
                 if (value != null)
-                    return LoadField(_ctx.DeclareStructConst(returnType, value), returnType);
+                    return LoadField(_ctx.Storage.DeclareStructConst(returnType, value), returnType);
             }
 
             // Armor: a user-struct static property reaching here (the B47 on-demand arm above did not
@@ -264,7 +264,7 @@ public partial class InvocationHandler
             sargs.AddRange(EvaluateIndexerArgs(op)); // wave-9 round-4: named index args bind by ordinal
             var ret = EmitCallToMethod(ResolveStructMember(idxGetterRaw), sargs);
             return op.Property.Type is INamedTypeSymbol idxRetAgg && EmitPolicy.IsAggregateType(idxRetAgg)
-                ? AggregateAbi.DeepClone(_builder, ret, idxRetAgg, _ctx.GetAggregateLayout) : ret;
+                ? AggregateAbi.DeepClone(_builder, ret, idxRetAgg, _ctx.Aggregates.GetLayout) : ret;
         }
 
         // Wave-9 round-2 [W6]: user indexer read through a VARIABLE receiver (own-typed copy /
@@ -299,7 +299,7 @@ public partial class InvocationHandler
         if (cType == "SystemString")
         {
             CLeaf inst = op.Instance is IInstanceReferenceOperation
-                ? LoadField(_ctx.DeclareThisOnce(GetUdonType(_classSymbol)), GetUdonType(_classSymbol))
+                ? LoadField(_ctx.Storage.DeclareThisOnce(GetUdonType(_classSymbol)), GetUdonType(_classSymbol))
                 : VisitExpression(op.Instance);
             var indexVal = VisitExpression(op.Arguments[0].Value);
             var oneConst = Const(1, "SystemInt32");
@@ -316,7 +316,7 @@ public partial class InvocationHandler
 
         CLeaf instVal;
         if (op.Instance is IInstanceReferenceOperation)
-            instVal = LoadField(_ctx.DeclareThisOnce(GetUdonType(_classSymbol)), GetUdonType(_classSymbol));
+            instVal = LoadField(_ctx.Storage.DeclareThisOnce(GetUdonType(_classSymbol)), GetUdonType(_classSymbol));
         else
             instVal = VisitExpression(op.Instance);
 
@@ -444,11 +444,11 @@ public partial class InvocationHandler
     /// param0) → apply any object-initializer. NO defensive copies — the same bundle reference flows through.</summary>
     CLeaf EmitClassInstanceMint(IObjectCreationOperation op, INamedTypeSymbol classTy)
     {
-        var layout = _ctx.GetAggregateLayout(classTy);
+        var layout = _ctx.Aggregates.GetLayout(classTy);
         return ClassAbi.EmitMint(
             _builder, _compilation, classTy, layout,
-            _ctx.AllocTemp, EmitAssign, SlotRef, VisitExpression,
-            instance => AggregateAbi.DefaultInitialize(_builder, instance, layout, _ctx.GetAggregateLayout, GetUdonType),
+            _ctx.Builder.AllocScratch, EmitAssign, SlotRef, VisitExpression,
+            instance => AggregateAbi.DefaultInitialize(_builder, instance, layout, _ctx.Aggregates.GetLayout, GetUdonType),
             instance =>
             {
                 if (op.Constructor == null || op.Constructor.IsImplicitlyDeclared) return;
@@ -496,8 +496,8 @@ public partial class InvocationHandler
         // other contexts reach here. SDK value types fall through to the null placeholder.
         if (op.Arguments.Length == 0 && op.Type.IsValueType && op.Initializer == null)
             return op.Type is INamedTypeSymbol structTy && EmitPolicy.IsAggregateType(structTy)
-                ? AggregateAbi.MintDefault(_builder, _ctx.GetAggregateLayout(structTy),
-                    _ctx.GetAggregateLayout, GetUdonType)
+                ? AggregateAbi.MintDefault(_builder, _ctx.Aggregates.GetLayout(structTy),
+                    _ctx.Aggregates.GetLayout, GetUdonType)
                 : Const(null, resultType);
 
         // Constant folding: struct ctor with all-constant args
@@ -507,7 +507,7 @@ public partial class InvocationHandler
         {
             var value = TryConstructAtCompileTime(resultType, op.Arguments);
             if (value != null)
-                return LoadField(_ctx.DeclareStructConst(resultType, value), resultType);
+                return LoadField(_ctx.Storage.DeclareStructConst(resultType, value), resultType);
         }
 
         // User struct with a user-defined ctor, used AS A VALUE (e.g. an operator body `return new V(x,y)`):
@@ -518,10 +518,10 @@ public partial class InvocationHandler
             && op.Type is INamedTypeSymbol userStruct && EmitPolicy.IsUserStruct(userStruct)
             && op.Constructor != null)
         {
-            var layout = _ctx.GetAggregateLayout(userStruct);
-            var slot = _ctx.AllocTemp(AggregateAbi.ArrayType);
+            var layout = _ctx.Aggregates.GetLayout(userStruct);
+            var slot = _ctx.Builder.AllocScratch(AggregateAbi.ArrayType);
             EmitAssign(slot, AggregateAbi.Allocate(_builder, layout.Count));
-            AggregateAbi.DefaultInitialize(_builder, SlotRef(slot), layout, _ctx.GetAggregateLayout, GetUdonType);
+            AggregateAbi.DefaultInitialize(_builder, SlotRef(slot), layout, _ctx.Aggregates.GetLayout, GetUdonType);
             var ctorArgs = new List<CLeaf> { SlotRef(slot) };
             foreach (var arg in op.Arguments)
                 ctorArgs.Add(VisitExpression(arg.Value));
@@ -539,8 +539,8 @@ public partial class InvocationHandler
         if (op.Arguments.Length == 0 && op.Type.IsValueType && op.Initializer != null
             && op.Type is INamedTypeSymbol aggInitType && EmitPolicy.IsAggregateType(aggInitType))
         {
-            var layout = _ctx.GetAggregateLayout(aggInitType);
-            var aggVal = AggregateAbi.MintDefault(_builder, layout, _ctx.GetAggregateLayout, GetUdonType);
+            var layout = _ctx.Aggregates.GetLayout(aggInitType);
+            var aggVal = AggregateAbi.MintDefault(_builder, layout, _ctx.Aggregates.GetLayout, GetUdonType);
             AggregateAbi.EmitObjectInitializer(_builder, aggVal, layout, op.Initializer, VisitExpression);
             return aggVal;
         }
@@ -549,7 +549,7 @@ public partial class InvocationHandler
         if (op.Arguments.Length == 0 && op.Type.IsValueType)
         {
             // Struct with initializer but no ctor args: need a mutable temp
-            var resultSlot = _ctx.AllocTemp(resultType);
+            var resultSlot = _ctx.Builder.AllocScratch(resultType);
             EmitAssign(resultSlot, Const(null, resultType));
             resultVal = SlotRef(resultSlot);
         }

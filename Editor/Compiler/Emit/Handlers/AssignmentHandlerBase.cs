@@ -105,12 +105,12 @@ public abstract class AssignmentHandlerBase : HandlerBase
                 when aggCapPropRef.Instance?.Type is INamedTypeSymbol aggCapPropType
                 && EmitPolicy.IsAggregateType(aggCapPropType):
             {
-                if (_ctx.GetAggregateLayout(aggCapPropType).TryGetIndex(aggCapPropRef.Property.Name, out var capSlotIdx))
+                if (_ctx.Aggregates.GetLayout(aggCapPropType).TryGetIndex(aggCapPropRef.Property.Name, out var capSlotIdx))
                 {
                     var recv = LoadInstanceRaw(aggCapPropRef.Instance);
                     CLeaf slotVal = AggregateAbi.ReadSlot(_builder, recv, capSlotIdx, "SystemObject");
                     if (aggCapPropRef.Property.Type is INamedTypeSymbol capSlotAgg && EmitPolicy.IsAggregateType(capSlotAgg))
-                        slotVal = AggregateAbi.DeepClone(_builder, slotVal, capSlotAgg, _ctx.GetAggregateLayout);
+                        slotVal = AggregateAbi.DeepClone(_builder, slotVal, capSlotAgg, _ctx.Aggregates.GetLayout);
                     return new LValueCapture { Value = slotVal, ArrayVal = recv, IndexVal = Const(capSlotIdx, "SystemInt32") };
                 }
                 if (aggCapPropRef.Property.GetMethod is { } capGetterRaw)
@@ -118,7 +118,7 @@ public abstract class AssignmentHandlerBase : HandlerBase
                     var recv = LoadInstanceRaw(aggCapPropRef.Instance);
                     CLeaf getVal = EmitCallToMethod(ResolveStructMember(capGetterRaw), new List<CLeaf> { recv });
                     if (aggCapPropRef.Property.Type is INamedTypeSymbol capGetAgg && EmitPolicy.IsAggregateType(capGetAgg))
-                        getVal = AggregateAbi.DeepClone(_builder, getVal, capGetAgg, _ctx.GetAggregateLayout);
+                        getVal = AggregateAbi.DeepClone(_builder, getVal, capGetAgg, _ctx.Aggregates.GetLayout);
                     return new LValueCapture { Value = getVal, ArrayVal = recv };
                 }
                 goto default;
@@ -128,7 +128,7 @@ public abstract class AssignmentHandlerBase : HandlerBase
                 && aggFieldRef.Instance.Type is INamedTypeSymbol aggCapType
                 && EmitPolicy.IsObjectArrayEmulated(aggCapType):
             {
-                var layout = _ctx.GetAggregateLayout(aggCapType);
+                var layout = _ctx.Aggregates.GetLayout(aggCapType);
                 if (layout.TryGetIndex(aggFieldRef.Field, out var elemIdx))
                 {
                     RejectStaticReadonlyWriteThrough(aggFieldRef.Instance); // §3.3, R5 (compound/inc-dec write-back)
@@ -211,7 +211,7 @@ public abstract class AssignmentHandlerBase : HandlerBase
                 && aggFieldRef.Instance.Type is INamedTypeSymbol aggWbType
                 && EmitPolicy.IsObjectArrayEmulated(aggWbType):
             {
-                var layout = _ctx.GetAggregateLayout(aggWbType);
+                var layout = _ctx.Aggregates.GetLayout(aggWbType);
                 if (layout.TryGetIndex(aggFieldRef.Field, out var elemIdx))
                 {
                     var arrVal = lv.ArrayVal ?? VisitExpression(aggFieldRef.Instance);
@@ -338,7 +338,7 @@ public abstract class AssignmentHandlerBase : HandlerBase
             case IPropertyReferenceOperation { Property: { IsIndexer: false } } aggPropRef
                 when aggPropRef.Instance?.Type is INamedTypeSymbol aggPropType && EmitPolicy.IsAggregateType(aggPropType):
             {
-                if (_ctx.GetAggregateLayout(aggPropType).TryGetIndex(aggPropRef.Property.Name, out var propIdx))
+                if (_ctx.Aggregates.GetLayout(aggPropType).TryGetIndex(aggPropRef.Property.Name, out var propIdx))
                 {
                     var arrVal = lv.ArrayVal ?? LoadInstanceRaw(aggPropRef.Instance);
                     AggregateAbi.WriteSlot(_builder, arrVal, propIdx, valueVal);
@@ -378,7 +378,7 @@ public abstract class AssignmentHandlerBase : HandlerBase
 
                 CLeaf wbInstanceVal;
                 if (propRef.Instance is IInstanceReferenceOperation)
-                    wbInstanceVal = LoadField(_ctx.DeclareThisOnce(containingType), containingType);
+                    wbInstanceVal = LoadField(_ctx.Storage.DeclareThisOnce(containingType), containingType);
                 else if (propRef.Instance != null)
                     wbInstanceVal = VisitExpression(propRef.Instance);
                 else

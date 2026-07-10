@@ -44,7 +44,7 @@ public partial class InvocationHandler
         if (!target.IsStatic)
         {
             if (op.Instance is IInstanceReferenceOperation)
-                instanceVal = LoadField(_ctx.DeclareThisOnce(GetUdonType(target.ContainingType)), GetUdonType(target.ContainingType));
+                instanceVal = LoadField(_ctx.Storage.DeclareThisOnce(GetUdonType(target.ContainingType)), GetUdonType(target.ContainingType));
             else if (op.Instance is IFieldReferenceOperation { Instance: IInstanceReferenceOperation } fieldRef
                      && fieldRef.Field.Type.IsValueType && !fieldRef.Field.IsStatic)
             {
@@ -143,7 +143,7 @@ public partial class InvocationHandler
                 // member, cross-behaviour field, captured env local/param) — anything it declines
                 // is loud-rejected below instead of falling through a second, un-audited path.
                 var paramType = GetUdonType(param.Type);
-                var tempField = _ctx.DeclareLocal("outref", paramType);
+                var tempField = _ctx.Storage.DeclareLocal("outref", paramType);
                 var prepared = TryPrepareRefOutArg(op.Arguments[i]) ?? throw new System.NotSupportedException(
                     $"'{(param.RefKind == RefKind.Ref ? "ref" : "out")} {param.Name}' of '{target.Name}' cannot "
                     + $"bind to '{op.Arguments[i].Value.Syntax}' ({op.Arguments[i].Value.Kind}): this l-value "
@@ -209,7 +209,7 @@ public partial class InvocationHandler
         // Evaluate instance and arguments first
         CLeaf instanceVal = null;
         if (op.Instance is IInstanceReferenceOperation)
-            instanceVal = LoadField(_ctx.DeclareThisOnce("UnityEngineTransform"), "UnityEngineTransform");
+            instanceVal = LoadField(_ctx.Storage.DeclareThisOnce("UnityEngineTransform"), "UnityEngineTransform");
         else if (op.Instance != null)
             instanceVal = VisitExpression(op.Instance);
 
@@ -271,7 +271,7 @@ public partial class InvocationHandler
         // Evaluate instance
         CLeaf instanceVal = null;
         if (op.Instance is IInstanceReferenceOperation)
-            instanceVal = LoadField(_ctx.DeclareThisOnce("UnityEngineTransform"), "UnityEngineTransform");
+            instanceVal = LoadField(_ctx.Storage.DeclareThisOnce("UnityEngineTransform"), "UnityEngineTransform");
         else if (op.Instance != null)
             instanceVal = VisitExpression(op.Instance);
 
@@ -295,7 +295,7 @@ public partial class InvocationHandler
         fetchArgs.AddRange(argVals);
 
         // Call GetComponents → ComponentArray (store to slot so it's evaluated once)
-        var allComponentsSlot = _ctx.AllocTemp("UnityEngineComponentArray");
+        var allComponentsSlot = _ctx.Builder.AllocScratch("UnityEngineComponentArray");
         EmitAssign(allComponentsSlot, ExternCall(fetchExtern, fetchArgs, "UnityEngineComponentArray"));
         var allComponents = SlotRef(allComponentsSlot);
 
@@ -370,17 +370,17 @@ public partial class InvocationHandler
     CLeaf EmitShimSingular(CLeaf allComponents, CLeaf targetIdConst, CLeaf reflKeyConst, bool useTypeIds)
     {
         // Get array length (store to slot so it's not re-evaluated each iteration)
-        var lenSlot = _ctx.AllocTemp("SystemInt32");
+        var lenSlot = _ctx.Builder.AllocScratch("SystemInt32");
         EmitAssign(lenSlot, ExternCall(
             "UnityEngineComponentArray.__get_Length__SystemInt32",
             new List<CLeaf> { allComponents }, "SystemInt32"));
 
         // Loop index (mutable across control flow)
-        var idxSlot = _ctx.AllocTemp("SystemInt32");
+        var idxSlot = _ctx.Builder.AllocScratch("SystemInt32");
         EmitAssign(idxSlot, Const(0, "SystemInt32"));
 
         // Result slot (null initially — returns null if no match found)
-        var resultSlot = _ctx.AllocTemp("VRCUdonCommonInterfacesIUdonEventReceiver");
+        var resultSlot = _ctx.Builder.AllocScratch("VRCUdonCommonInterfacesIUdonEventReceiver");
 
         // while (idx < len) — Func overload so the counter-dependent condition re-evaluates each iteration.
         // The CLeaf overload evaluates it ONCE (idx still 0), so the loop never advances / never runs.
@@ -438,7 +438,7 @@ public partial class InvocationHandler
     CLeaf EmitShimPlural(CLeaf allComponents, CLeaf targetIdConst, CLeaf reflKeyConst, bool useTypeIds)
     {
         // Get array length (store to slot so it's not re-evaluated each iteration)
-        var lenSlot = _ctx.AllocTemp("SystemInt32");
+        var lenSlot = _ctx.Builder.AllocScratch("SystemInt32");
         EmitAssign(lenSlot, ExternCall(
             "UnityEngineComponentArray.__get_Length__SystemInt32",
             new List<CLeaf> { allComponents }, "SystemInt32"));
@@ -447,9 +447,9 @@ public partial class InvocationHandler
         var oneConst = Const(1, "SystemInt32");
 
         // === Pass 1: Count matches ===
-        var countSlot = _ctx.AllocTemp("SystemInt32");
+        var countSlot = _ctx.Builder.AllocScratch("SystemInt32");
         EmitAssign(countSlot, zeroConst);
-        var idx1Slot = _ctx.AllocTemp("SystemInt32");
+        var idx1Slot = _ctx.Builder.AllocScratch("SystemInt32");
         EmitAssign(idx1Slot, zeroConst);
 
         // while (idx1 < len) — Func overload (re-evaluate each iteration); CLeaf would evaluate idx1<len once.
@@ -486,9 +486,9 @@ public partial class InvocationHandler
             "UnityEngineComponentArray");
 
         // === Pass 2: Fill result array ===
-        var idx2Slot = _ctx.AllocTemp("SystemInt32");
+        var idx2Slot = _ctx.Builder.AllocScratch("SystemInt32");
         EmitAssign(idx2Slot, zeroConst);
-        var writeIdxSlot = _ctx.AllocTemp("SystemInt32");
+        var writeIdxSlot = _ctx.Builder.AllocScratch("SystemInt32");
         EmitAssign(writeIdxSlot, zeroConst);
 
         // while (idx2 < len) — Func overload (re-evaluate each iteration); CLeaf would evaluate idx2<len once.
@@ -713,7 +713,7 @@ public partial class InvocationHandler
         // (`return M(m-1, ref w);` — a tail call) bypassed the reject and silently corrupted the
         // outer frame's copy-back (VM-proven 21021 vs CLR 9021). Self-threading stays legal and
         // tail (no new spills).
-        bool recursiveEdge = _ctx.IsCycleEdge(_currentMethod, target);
+        bool recursiveEdge = _ctx.RecursionContext.IsCycleEdge(_currentMethod, target);
         List<ISymbol> refRoots = null;
         for (int i = 0; i < op.Arguments.Length; i++)
         {
@@ -755,7 +755,7 @@ public partial class InvocationHandler
             // reverts the callee's direct field writes (VM-proven 19 vs CLR 59 / 1 vs 5). Loud per
             // §8-3. Callees that never touch the field keep the pinned convention (Inc/Swap).
             var aliasedField = TryGetThisRootedRefStorage(a);
-            if (aliasedField != null && _ctx.CalleeTouchesThisField(target, aliasedField))
+            if (aliasedField != null && _ctx.RecursionContext.CalleeTouchesThisField(target, aliasedField))
                 throw new System.NotSupportedException(
                     $"'{p.RefKind.ToString().ToLowerInvariant()} {p.Name}' of '{target.Name}' is passed "
                     + $"this-field '{aliasedField.Name}', which the callee (or a method it calls) also "
@@ -800,7 +800,7 @@ public partial class InvocationHandler
             var paramIds = _methodParamVarIds[target]; // loud (KeyNotFound) if unregistered
             var argTarget = op.Arguments[i].Value;
             var paramId = paramIds[param.Ordinal + ordinalOffset];
-            var paramType = _ctx.GetFieldType(paramId);
+            var paramType = _ctx.Storage.GetFieldType(paramId);
             var paramVal = LoadField(paramId, paramType);
             // Wave-9 round-8 [Y12]: a copy-back whose lvalue legs were evaluated at copy-in
             // (TryPrepareRefOutArg) stores through those SAME legs — AssignToTarget would
@@ -861,7 +861,7 @@ public partial class InvocationHandler
                     CLeaf elemVal = ExternCall(ExternResolver.BuildArrayGetSignature(arrayType, elementType),
                         new List<CLeaf> { arrayVal, indexVal }, GetUdonType(arrayElem.Type));
                     if (arrayElem.Type is INamedTypeSymbol elemAgg && EmitPolicy.IsAggregateType(elemAgg))
-                        elemVal = AggregateAbi.DeepClone(_builder, elemVal, elemAgg, _ctx.GetAggregateLayout);
+                        elemVal = AggregateAbi.DeepClone(_builder, elemVal, elemAgg, _ctx.Aggregates.GetLayout);
                     return elemVal;
                 }, v => EmitExternVoid(
                     ExternResolver.BuildArraySetSignature(arrayType, elementType),
@@ -871,14 +871,14 @@ public partial class InvocationHandler
                 when AggregateAbi.TryGetMemberTarget(fieldRef, out var aggInstance, out var aggMemberName)
                      && aggInstance.Type is INamedTypeSymbol aggContaining
                      && EmitPolicy.IsAggregateType(aggContaining)
-                     && _ctx.GetAggregateLayout(aggContaining).TryGetIndex(aggMemberName, out var memberIndex):
+                     && _ctx.Aggregates.GetLayout(aggContaining).TryGetIndex(aggMemberName, out var memberIndex):
             {
                 var arrExpr = LoadInstanceRaw(aggInstance);
                 return (() =>
                 {
                     CLeaf memberVal = AggregateAbi.ReadSlot(_builder, arrExpr, memberIndex, "SystemObject");
                     if (fieldRef.Field.Type is INamedTypeSymbol memberAgg && EmitPolicy.IsAggregateType(memberAgg))
-                        memberVal = AggregateAbi.DeepClone(_builder, memberVal, memberAgg, _ctx.GetAggregateLayout);
+                        memberVal = AggregateAbi.DeepClone(_builder, memberVal, memberAgg, _ctx.Aggregates.GetLayout);
                     return memberVal;
                 }, v => AggregateAbi.WriteSlot(_builder, arrExpr, memberIndex, v));
             }
@@ -895,7 +895,7 @@ public partial class InvocationHandler
                      && ExternResolver.IsUdonSharpBehaviour(behField.Field.ContainingType):
             {
                 var instanceVal = VisitExpression(behField.Instance);
-                var instSlot = _ctx.AllocTemp(GetUdonType(behField.Instance.Type));
+                var instSlot = _ctx.Builder.AllocScratch(GetUdonType(behField.Instance.Type));
                 EmitAssign(instSlot, instanceVal);
                 var instRef = SlotRef(instSlot);
                 var nameConst = Const(behField.Field.Name, "SystemString");
@@ -911,13 +911,13 @@ public partial class InvocationHandler
             // variable reference has no side-effecting legs to double-evaluate; route through the same
             // env cell EnvEmit.Read/Write use elsewhere so this shape shares the ONE prepared mechanism
             // instead of a second read-then-AssignToLValue path.
-            case ILocalReferenceOperation envLocalRef when _ctx.TryGetEnvBinding(envLocalRef.Local, out _):
+            case ILocalReferenceOperation envLocalRef when _ctx.Closures.TryGetEnvBinding(envLocalRef.Local, out _):
             {
                 var envType = GetUdonType(envLocalRef.Type);
                 return (() => EnvEmit.Read(_builder, _ctx, envLocalRef.Local, envType),
                     v => EnvEmit.Write(_builder, _ctx, envLocalRef.Local, v));
             }
-            case IParameterReferenceOperation envParamRef when _ctx.TryGetEnvBinding(envParamRef.Parameter, out _):
+            case IParameterReferenceOperation envParamRef when _ctx.Closures.TryGetEnvBinding(envParamRef.Parameter, out _):
             {
                 var envType = GetUdonType(envParamRef.Type);
                 return (() => EnvEmit.Read(_builder, _ctx, envParamRef.Parameter, envType),
@@ -927,7 +927,7 @@ public partial class InvocationHandler
             // invoked for an Out param, kept for symmetry with the Ref cases above).
             case IDeclarationExpressionOperation declExpr
                 when declExpr.Expression is ILocalReferenceOperation declLocal
-                     && _ctx.TryGetEnvBinding(declLocal.Local, out _):
+                     && _ctx.Closures.TryGetEnvBinding(declLocal.Local, out _):
             {
                 var envType = GetUdonType(declLocal.Type);
                 return (() => EnvEmit.Read(_builder, _ctx, declLocal.Local, envType),
@@ -1028,7 +1028,7 @@ public partial class InvocationHandler
         // trailing REAL argument (positional copy-in binds it to the callee's __envp param field) —
         // env resolved in the caller's frame via the binding-scope chain. Tail/spill classification
         // treats it like any argument (no new statement-form tail shape).
-        if (_ctx.CaptureScope != null && _ctx.CaptureScope.IsCapturingClosure(target.OriginalDefinition))
+        if (_ctx.Closures.CaptureScope != null && _ctx.Closures.CaptureScope.IsCapturingClosure(target.OriginalDefinition))
             args.Add(ClosureEnvLeaf(target));
 
         // Under A-normal form EmitCallToMethod already materialized the call (a non-void call returns a CSlotRef
@@ -1068,19 +1068,19 @@ public partial class InvocationHandler
             // the caller's generic path stages a temp and copies back through the lvalue-store arms
             // (which route captured symbols into their env cells).
             case ILocalReferenceOperation localRef:
-                if (_ctx.TryGetEnvBinding(localRef.Local, out _)) return null;
+                if (_ctx.Closures.TryGetEnvBinding(localRef.Local, out _)) return null;
                 return _localBindings.TryGetValue(localRef.Local, out var rb) ? rb.Id : null;
             case IFieldReferenceOperation { Instance: IInstanceReferenceOperation } fieldRef:
                 return fieldRef.Field.Name;
             case IParameterReferenceOperation paramRef:
-                if (_ctx.TryGetEnvBinding(paramRef.Parameter, out _)) return null;
+                if (_ctx.Closures.TryGetEnvBinding(paramRef.Parameter, out _)) return null;
                 return GetParamVarId(paramRef.Parameter);
             case IDeclarationExpressionOperation declExpr:
                 if (declExpr.Expression is ILocalReferenceOperation declLocal)
                 {
-                    if (_ctx.TryGetEnvBinding(declLocal.Local, out _)) return null;
+                    if (_ctx.Closures.TryGetEnvBinding(declLocal.Local, out _)) return null;
                     var type = GetUdonType(declLocal.Type);
-                    var localId = _ctx.DeclareLocal(declLocal.Local.Name, type);
+                    var localId = _ctx.Storage.DeclareLocal(declLocal.Local.Name, type);
                     _localBindings[declLocal.Local] = new EmitContext.LocalBinding(localId);
                     return localId;
                 }

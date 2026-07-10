@@ -25,7 +25,7 @@ public class ArrayHandler : HandlerBase, IExpressionHandler
         bool aggElem = elemSym is INamedTypeSymbol && EmitPolicy.IsAggregateType(elemSym);
 
         var sizeVal = VisitExpression(op.DimensionSizes[0]);
-        var arrSlot = _ctx.AllocTemp(arrayType);
+        var arrSlot = _ctx.Builder.AllocScratch(arrayType);
         EmitAssign(arrSlot, ExternCall(ExternResolver.BuildArrayCtorSignature(arrayType),
             new List<CLeaf> { sizeVal }, arrayType));
 
@@ -41,7 +41,7 @@ public class ArrayHandler : HandlerBase, IExpressionHandler
         {
             // struct[]/tuple[]: C# zero-init means each element is a fresh default struct (not a null slot),
             // so `arr[i].field = x` works on a freshly allocated array. Fill via a runtime loop.
-            var iSlot = _ctx.AllocTemp("SystemInt32");
+            var iSlot = _ctx.Builder.AllocScratch("SystemInt32");
             EmitAssign(iSlot, Const(0, "SystemInt32"));
             _builder.EmitWhile(
                 () => ExternCall("SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean",
@@ -50,8 +50,8 @@ public class ArrayHandler : HandlerBase, IExpressionHandler
                 {
                     EmitExternVoid(ExternResolver.BuildArraySetSignature(arrayType, elementType),
                         new List<CLeaf> { SlotRef(arrSlot), SlotRef(iSlot),
-                            AggregateAbi.MintDefault(_builder, _ctx.GetAggregateLayout((INamedTypeSymbol)elemSym),
-                                _ctx.GetAggregateLayout, GetUdonType) });
+                            AggregateAbi.MintDefault(_builder, _ctx.Aggregates.GetLayout((INamedTypeSymbol)elemSym),
+                                _ctx.Aggregates.GetLayout, GetUdonType) });
                     EmitAssign(iSlot, ExternCall("SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32",
                         new List<CLeaf> { SlotRef(iSlot), Const(1, "SystemInt32") }, "SystemInt32"));
                 });
@@ -82,7 +82,7 @@ public class ArrayHandler : HandlerBase, IExpressionHandler
         // A struct/tuple element read AS A VALUE is copied (value semantics). Receiver access (arr[i].x =)
         // goes through LoadInstanceRaw → ReadArrayElementRaw, which does NOT clone.
         return op.Type is INamedTypeSymbol elemAggT && EmitPolicy.IsAggregateType(elemAggT)
-            ? AggregateAbi.DeepClone(_builder, resultVal, elemAggT, _ctx.GetAggregateLayout) : resultVal;
+            ? AggregateAbi.DeepClone(_builder, resultVal, elemAggT, _ctx.Aggregates.GetLayout) : resultVal;
     }
 
     CLeaf ResolveRangeOperand(CLeaf arrayVal, string arrayType, IOperation operand, bool isEnd)
@@ -128,7 +128,7 @@ public class ArrayHandler : HandlerBase, IExpressionHandler
             new List<CLeaf> { lenVal }, udonArrType);
 
         // for (i = 0; i < len; i++) result[i] = arr[start + i]
-        var iSlot = _ctx.AllocTemp("SystemInt32");
+        var iSlot = _ctx.Builder.AllocScratch("SystemInt32");
 
         _builder.EmitFor(
             // init: i = 0

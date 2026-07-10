@@ -30,20 +30,20 @@ public class LoopHandler : HandlerBase, IOperationHandler
             // so a captured out-var/pattern in the condition writes into a live per-iteration env.
             _builder.EmitWhile(() =>
             {
-                EnvEmit.Alloc(_builder, _ctx, _ctx.CaptureScope?.ScopeFor(op, CaptureScopeKind.Iteration));
+                EnvEmit.Alloc(_builder, _ctx, _ctx.Closures.CaptureScope?.ScopeFor(op, CaptureScopeKind.Iteration));
                 return VisitExpression(op.Condition);
             }, _ =>
             {
-                _ctx.SwitchBreakLabels.Push(null); // sentinel: loop break should not target switch
+                _ctx.ControlFlow.SwitchBreakLabels.Push(null); // sentinel: loop break should not target switch
                 try
                 {
-                    _ctx.LoopUsingDepthStack.Push(_usingDisposableStack.Count);
+                    _ctx.ControlFlow.LoopUsingDepthStack.Push(_usingDisposableStack.Count);
                     VisitOperation(op.Body);
-                    _ctx.LoopUsingDepthStack.Pop();
+                    _ctx.ControlFlow.LoopUsingDepthStack.Pop();
                 }
                 finally
                 {
-                    _ctx.SwitchBreakLabels.Pop();
+                    _ctx.ControlFlow.SwitchBreakLabels.Pop();
                 }
             });
         }
@@ -54,17 +54,17 @@ public class LoopHandler : HandlerBase, IOperationHandler
             // captures and any closure the (later) condition creates over an Iteration-scoped var.
             _builder.EmitWhile(() => VisitExpression(op.Condition), _ =>
             {
-                EnvEmit.Alloc(_builder, _ctx, _ctx.CaptureScope?.ScopeFor(op, CaptureScopeKind.Iteration));
-                _ctx.SwitchBreakLabels.Push(null); // sentinel: loop break should not target switch
+                EnvEmit.Alloc(_builder, _ctx, _ctx.Closures.CaptureScope?.ScopeFor(op, CaptureScopeKind.Iteration));
+                _ctx.ControlFlow.SwitchBreakLabels.Push(null); // sentinel: loop break should not target switch
                 try
                 {
-                    _ctx.LoopUsingDepthStack.Push(_usingDisposableStack.Count);
+                    _ctx.ControlFlow.LoopUsingDepthStack.Push(_usingDisposableStack.Count);
                     VisitOperation(op.Body);
-                    _ctx.LoopUsingDepthStack.Pop();
+                    _ctx.ControlFlow.LoopUsingDepthStack.Pop();
                 }
                 finally
                 {
-                    _ctx.SwitchBreakLabels.Pop();
+                    _ctx.ControlFlow.SwitchBreakLabels.Pop();
                 }
             }, isDoWhile: true);
         }
@@ -79,7 +79,7 @@ public class LoopHandler : HandlerBase, IOperationHandler
                 // init-clause declarations write their captured loop vars into it. A captured
                 // `for (int i…)` variable therefore shares ONE cell across all iterations — the
                 // classic C# for-loop capture semantics (every lambda sees the final i).
-                EnvEmit.Alloc(_builder, _ctx, _ctx.CaptureScope?.ScopeFor(op, CaptureScopeKind.ForInit));
+                EnvEmit.Alloc(_builder, _ctx, _ctx.Closures.CaptureScope?.ScopeFor(op, CaptureScopeKind.ForInit));
                 // Init: variable declarations register locals in _localBindings
                 foreach (var init in op.Before)
                     VisitOperation(init);
@@ -91,7 +91,7 @@ public class LoopHandler : HandlerBase, IOperationHandler
             // body-declared captured local still gets its per-iteration freshness.
             () =>
             {
-                EnvEmit.Alloc(_builder, _ctx, _ctx.CaptureScope?.ScopeFor(op, CaptureScopeKind.Iteration));
+                EnvEmit.Alloc(_builder, _ctx, _ctx.Closures.CaptureScope?.ScopeFor(op, CaptureScopeKind.Iteration));
                 return op.Condition != null ? VisitExpression(op.Condition) : null;
             },
             _ =>
@@ -103,16 +103,16 @@ public class LoopHandler : HandlerBase, IOperationHandler
             _ =>
             {
                 // Body
-                _ctx.SwitchBreakLabels.Push(null); // sentinel: loop break should not target switch
+                _ctx.ControlFlow.SwitchBreakLabels.Push(null); // sentinel: loop break should not target switch
                 try
                 {
-                    _ctx.LoopUsingDepthStack.Push(_usingDisposableStack.Count);
+                    _ctx.ControlFlow.LoopUsingDepthStack.Push(_usingDisposableStack.Count);
                     VisitOperation(op.Body);
-                    _ctx.LoopUsingDepthStack.Pop();
+                    _ctx.ControlFlow.LoopUsingDepthStack.Pop();
                 }
                 finally
                 {
-                    _ctx.SwitchBreakLabels.Pop();
+                    _ctx.ControlFlow.SwitchBreakLabels.Pop();
                 }
             });
     }
@@ -150,11 +150,11 @@ public class LoopHandler : HandlerBase, IOperationHandler
         // Stage 2 §3: a CAPTURED foreach control var has no flat slot — it is owned by the Iteration
         // scope (fresh per iteration in C#), so its element value is written into the per-iteration
         // env cell at body top (below), not a flat field. Skip the flat bind entirely for it.
-        bool loopVarCaptured = _ctx.TryGetEnvBinding(loopLocal, out _);
+        bool loopVarCaptured = _ctx.Closures.TryGetEnvBinding(loopLocal, out _);
         string loopVarId = null;
         if (!loopVarCaptured)
         {
-            loopVarId = _ctx.DeclareLocal(loopLocal.Name, elemType);
+            loopVarId = _ctx.Storage.DeclareLocal(loopLocal.Name, elemType);
             _localBindings[loopLocal] = new EmitContext.LocalBinding(loopVarId);
         }
         // [Q4]/[R1] the iteration variable is READONLY in C# — struct method receivers reaching it
@@ -163,10 +163,10 @@ public class LoopHandler : HandlerBase, IOperationHandler
         _ctx.ForeachIterationLocals.Add(loopLocal);
 
         // Index variable
-        var idxSlot = _ctx.AllocTemp("SystemInt32");
+        var idxSlot = _ctx.Builder.AllocScratch("SystemInt32");
 
         // Cache array length before the loop
-        var lenSlot = _ctx.AllocTemp("SystemInt32");
+        var lenSlot = _ctx.Builder.AllocScratch("SystemInt32");
         EmitAssign(lenSlot, ExternCall("SystemArray.__get_Length__SystemInt32",
             new List<CLeaf> { collVal }, "SystemInt32"));
 
@@ -195,7 +195,7 @@ public class LoopHandler : HandlerBase, IOperationHandler
             {
                 // Stage 2 §3 INV-1: fresh per-iteration Iteration env at body top, BEFORE the control
                 // var's element value is written into its (now-live) env cell.
-                EnvEmit.Alloc(_builder, _ctx, _ctx.CaptureScope?.ScopeFor(op, CaptureScopeKind.Iteration));
+                EnvEmit.Alloc(_builder, _ctx, _ctx.Closures.CaptureScope?.ScopeFor(op, CaptureScopeKind.Iteration));
                 // Body: loopVar = arr[idx]; <body>
                 CLeaf elemVal = ExternCall(
                     ExternResolver.BuildArrayGetSignature(arrayType, elemAccessorType),
@@ -205,22 +205,22 @@ public class LoopHandler : HandlerBase, IOperationHandler
                 // raw __Get__ returns the LIVE backing object[]; deep-clone it so mutating the loop variable
                 // does not write through to the array (C# value-copy semantics; mirrors VisitArrayElementReference).
                 if (arrayTypeSymbol.ElementType is INamedTypeSymbol elemAgg && EmitPolicy.IsAggregateType(elemAgg))
-                    elemVal = AggregateAbi.DeepClone(_builder, elemVal, elemAgg, _ctx.GetAggregateLayout);
+                    elemVal = AggregateAbi.DeepClone(_builder, elemVal, elemAgg, _ctx.Aggregates.GetLayout);
                 if (loopVarCaptured)
                     EnvEmit.Write(_builder, _ctx, loopLocal, elemVal);
                 else
                     EmitStoreField(loopVarId, elemVal);
 
-                _ctx.SwitchBreakLabels.Push(null); // sentinel: loop break should not target switch
+                _ctx.ControlFlow.SwitchBreakLabels.Push(null); // sentinel: loop break should not target switch
                 try
                 {
-                    _ctx.LoopUsingDepthStack.Push(_usingDisposableStack.Count);
+                    _ctx.ControlFlow.LoopUsingDepthStack.Push(_usingDisposableStack.Count);
                     VisitOperation(op.Body);
-                    _ctx.LoopUsingDepthStack.Pop();
+                    _ctx.ControlFlow.LoopUsingDepthStack.Pop();
                 }
                 finally
                 {
-                    _ctx.SwitchBreakLabels.Pop();
+                    _ctx.ControlFlow.SwitchBreakLabels.Pop();
                 }
             });
     }

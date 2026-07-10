@@ -92,7 +92,7 @@ public class SimpleAssignmentHandler : AssignmentHandlerBase, IExpressionHandler
                 : ((IParameterReferenceOperation)assign.Target).Parameter;
             var envLoaded = EnvEmit.Read(_builder, _ctx, envSym, GetUdonType(assign.Target.Type));
             return assign.Target.Type is INamedTypeSymbol eAgg && EmitPolicy.IsAggregateType(eAgg)
-                ? AggregateAbi.DeepClone(_builder, envLoaded, eAgg, _ctx.GetAggregateLayout) : envLoaded;
+                ? AggregateAbi.DeepClone(_builder, envLoaded, eAgg, _ctx.Aggregates.GetLayout) : envLoaded;
         }
         var targetFieldName = GetAssignTargetFieldName(assign.Target);
         EmitStoreField(targetFieldName, srcLeaf);
@@ -100,14 +100,14 @@ public class SimpleAssignmentHandler : AssignmentHandlerBase, IExpressionHandler
         // RHS expression tree: re-emitting the tree (when the assignment is used as an expression, e.g.
         // `G(n = n - 1)`) would re-evaluate it after the store already mutated its inputs. A dead read in
         // statement form is harmless and simply remains (the optimizer has no DCE pass).
-        var targetFieldType = _ctx.GetFieldType(targetFieldName);
+        var targetFieldType = _ctx.Storage.GetFieldType(targetFieldName);
         if (targetFieldType == null) return srcLeaf;
         var loaded = LoadField(targetFieldName, targetFieldType);
         // When the assignment is USED AS A VALUE (e.g. chained `z = y = x`) and the target is an aggregate,
         // that value must be an independent COPY (struct value semantics) — otherwise z aliases y. (diff-fuzz w4)
         return assign.Parent is not IExpressionStatementOperation
                && assign.Target.Type is INamedTypeSymbol tAgg && EmitPolicy.IsAggregateType(tAgg)
-            ? AggregateAbi.DeepClone(_builder, loaded, tAgg, _ctx.GetAggregateLayout) : loaded;
+            ? AggregateAbi.DeepClone(_builder, loaded, tAgg, _ctx.Aggregates.GetLayout) : loaded;
     }
 
 }

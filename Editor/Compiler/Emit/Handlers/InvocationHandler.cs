@@ -57,7 +57,7 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
             }
             result = DelegateAbi.CompareDelegates(_builder,
                 VisitExpression(op.Instance), VisitExpression(eqArg), isNotEquals: false,
-                _ctx.AllocTemp, EmitAssign, SlotRef);
+                _ctx.Builder.AllocScratch, EmitAssign, SlotRef);
             return true;
         }
 
@@ -83,7 +83,7 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
             }
             result = DelegateAbi.CompareDelegates(_builder,
                 VisitExpression(lhs), VisitExpression(rhs), isNotEquals: false,
-                _ctx.AllocTemp, EmitAssign, SlotRef);
+                _ctx.Builder.AllocScratch, EmitAssign, SlotRef);
             return true;
         }
 
@@ -122,11 +122,11 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
             var fallback = op.Arguments.Length > 0
                 ? VisitExpression(op.Arguments[0].Value)
                 : (aggResult
-                    ? AggregateAbi.MintDefault(_builder, _ctx.GetAggregateLayout(aggType), _ctx.GetAggregateLayout, GetUdonType)
+                    ? AggregateAbi.MintDefault(_builder, _ctx.Aggregates.GetLayout(aggType), _ctx.Aggregates.GetLayout, GetUdonType)
                     : EmitValueTypeDefault(uType));
             return NullableAbi.EmitGetValueOrDefault(_builder, nv, uType, fallback,
-                present => aggResult ? AggregateAbi.DeepClone(_builder, present, aggType, _ctx.GetAggregateLayout) : present,
-                _ctx.AllocTemp, EmitAssign, SlotRef);
+                present => aggResult ? AggregateAbi.DeepClone(_builder, present, aggType, _ctx.Aggregates.GetLayout) : present,
+                _ctx.Builder.AllocScratch, EmitAssign, SlotRef);
         }
 
         // Virtual dispatch through `this`: a call to a virtual/override/abstract method must bind to the
@@ -444,7 +444,7 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
         // elements keep live storage (the helper stops there, reference semantics, CLR-equal).
         if (!target.IsReadOnly && ReceiverNeedsDefensiveCopy(op.Instance)
             && op.Instance?.Type is INamedTypeSymbol recvAgg && EmitPolicy.IsAggregateType(recvAgg))
-            recv = AggregateAbi.DeepClone(_builder, recv, recvAgg, _ctx.GetAggregateLayout);
+            recv = AggregateAbi.DeepClone(_builder, recv, recvAgg, _ctx.Aggregates.GetLayout);
         var args = new List<CLeaf> { recv };
         Dictionary<int, System.Action<CLeaf>> structPrepared = null;
         List<(int slot, System.Func<CLeaf> read)> structDeferred = null;
@@ -513,17 +513,17 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
         // The __dlgc_ conv vars are a signature-keyed cross-program byte contract (§3.2). Bridges declare
         // the same names for their own sigs; the dispatch site declares-on-first-use for foreign sigs.
         for (int i = 0; i < convArgs.Length; i++)
-            _ctx.TryDeclareVar(convArgs[i], GetUdonType(invoke.Parameters[i].Type));
+            _ctx.Storage.TryDeclareVar(convArgs[i], GetUdonType(invoke.Parameters[i].Type));
         string retType = null;
         if (!invoke.ReturnsVoid)
         {
             retType = GetUdonType(invoke.ReturnType);
-            _ctx.TryDeclareVar(convRet, retType);
+            _ctx.Storage.TryDeclareVar(convRet, retType);
         }
         // Stage 2 §5.1: every dispatch site unconditionally stages DelegateAbi.Env → __dlgc_{sig}__env, so
         // declare it on first use here (a capture-free target sends null; the bridge's null guard is
         // the backstop). Declared at the dispatch site only — never in a capture-free bridge (§1.3).
-        _ctx.TryDeclareVar(convEnv, EnvEmit.EnvType);
+        _ctx.Storage.TryDeclareVar(convEnv, EnvEmit.EnvType);
 
         // C# evaluation order: a plain d(args) runs the argument side effects even when d is null (the
         // NRE follows them). For ?.Invoke this whole sequence sits inside NullableHandler's non-null
@@ -572,7 +572,7 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
         int retSlot = -1;
         if (retType != null)
         {
-            retSlot = _ctx.AllocTemp(retType);
+            retSlot = _ctx.Builder.AllocScratch(retType);
             EmitAssign(retSlot, DefaultConst(retType));
         }
 
@@ -608,7 +608,7 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
                     var adr = DelegateAbi.ReadSlot(_builder, bundle, DelegateAbi.Addr, "SystemUInt32");
                     var mtd = DelegateAbi.ReadSlot(_builder, bundle, DelegateAbi.Method, "SystemString");
                     var thisType = GetUdonType(_classSymbol);
-                    var thisRef = LoadField(_ctx.DeclareThisOnce(thisType), thisType);
+                    var thisRef = LoadField(_ctx.Storage.DeclareThisOnce(thisType), thisType);
                     // Self/cross is decided by TARGET IDENTITY only (P6) — addr≠0 merely qualifies the
                     // fast path (addr is meaningless across program boundaries; 0-addr JUMP_INDIRECT would
                     // silently jump to bytecode 0, P5d — addr is only ever read inside this guard).
@@ -707,7 +707,7 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
     /// never re-derived, so the `-=` removal semantics can never drift from `==`'s element leg.</summary>
     internal CLeaf EmitDelegateElementEquals(CLeaf a, CLeaf b)
         => DelegateAbi.CompareDelegates(_builder, a, b, isNotEquals: false,
-            _ctx.AllocTemp, EmitAssign, SlotRef);
+            _ctx.Builder.AllocScratch, EmitAssign, SlotRef);
 
     /// <summary>default(T) constant for the dispatch retSlot pre-init (§2.6). Non-primitive Udon types
     /// (objects, arrays, bundles, SDK structs) approximate with null — only observable on the

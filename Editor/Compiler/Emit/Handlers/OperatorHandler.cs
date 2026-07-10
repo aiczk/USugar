@@ -83,7 +83,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
             if (DelegateAbi.IsDelegateType(op.LeftOperand.Type) && DelegateAbi.IsDelegateType(op.RightOperand.Type))
                 return DelegateAbi.CompareDelegates(_builder,
                     VisitExpression(op.LeftOperand), VisitExpression(op.RightOperand), isNotEquals,
-                    _ctx.AllocTemp, EmitAssign, SlotRef);
+                    _ctx.Builder.AllocScratch, EmitAssign, SlotRef);
         }
 
         // wave-13 multishapes lens (2026-07-04): a PLAIN `d1 + d2` / `d1 - d2` on delegate-typed VALUES
@@ -102,7 +102,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
             var combineLeftVal = VisitExpression(op.LeftOperand);
             var combineRightVal = VisitExpression(op.RightOperand);
 
-            var sigPart = DelegateAbi.BuildSigPart(invoke, _ctx.TypeParamMap);
+            var sigPart = DelegateAbi.BuildSigPart(invoke, _ctx.Generics.TypeParamMap);
             RegisterMulticastSig(sigPart, invoke);
 
             var helperName = op.OperatorKind == BinaryOperatorKind.Add
@@ -220,9 +220,9 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
             && (op.OperatorKind == BinaryOperatorKind.Equals
                 || op.OperatorKind == BinaryOperatorKind.NotEquals))
         {
-            var objLeftSlot = _ctx.AllocTemp("UnityEngineObject");
+            var objLeftSlot = _ctx.Builder.AllocScratch("UnityEngineObject");
             EmitAssign(objLeftSlot, leftVal);
-            var objRightSlot = _ctx.AllocTemp("UnityEngineObject");
+            var objRightSlot = _ctx.Builder.AllocScratch("UnityEngineObject");
             EmitAssign(objRightSlot, rightVal);
             return ExternCall(sig, new List<CLeaf> { SlotRef(objLeftSlot), SlotRef(objRightSlot) }, resultType);
         }
@@ -266,7 +266,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
     CLeaf EmitLiftedBoolLogic(IBinaryOperation op)
         => NullableAbi.EmitLiftedBoolLogic(_builder,
             VisitExpression(op.LeftOperand), VisitExpression(op.RightOperand),
-            op.OperatorKind, _ctx.AllocTemp, EmitAssign, SlotRef);
+            op.OperatorKind, _ctx.Builder.AllocScratch, EmitAssign, SlotRef);
 
     // Lifted binary operator on Nullable<T> (null propagation) — see HandlerBase.EmitLiftedBinaryCore.
     CLeaf EmitLiftedBinary(IBinaryOperation op)
@@ -288,7 +288,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
         // enum conversions, UnityEngineObject casts). Those statements must live inside
         // the conditional branch so they don't execute unconditionally.
         var leftVal = VisitExpression(op.LeftOperand);
-        var resultSlot = _ctx.AllocTemp("SystemBoolean");
+        var resultSlot = _ctx.Builder.AllocScratch("SystemBoolean");
         EmitAssign(resultSlot, Const(false, "SystemBoolean"));
         _builder.EmitIf(leftVal, _ =>
         {
@@ -302,7 +302,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
     {
         // a || b: evaluate b only when a is false (short-circuit).
         var leftVal = VisitExpression(op.LeftOperand);
-        var resultSlot = _ctx.AllocTemp("SystemBoolean");
+        var resultSlot = _ctx.Builder.AllocScratch("SystemBoolean");
         EmitAssign(resultSlot, Const(true, "SystemBoolean"));
         _builder.EmitIf(leftVal, null, _ =>
         {
@@ -396,7 +396,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
             opUnderlying, resUnderlying, op.OperatorKind, GetUdonType,
             (boxed, underlying) => NullableAbi.PromoteBoxedToInt32(_builder, boxed, underlying,
                 _compilation.GetSpecialType(SpecialType.System_Int32), GetUdonType),
-            _ctx.AllocTemp, EmitAssign, SlotRef);
+            _ctx.Builder.AllocScratch, EmitAssign, SlotRef);
     }
 
     CLeaf VisitBitwiseNot(IUnaryOperation op)
@@ -466,7 +466,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
         // requires HasValue, then matches against the unboxed underlying value (Udon unboxes transparently).
         if (EmitPolicy.IsNullableT(valueType, out var patUnderlying))
             return NullableAbi.EmitPatternCheck(_builder, valueVal, patUnderlying, pattern,
-                EmitPatternCheckImpl, _ctx.AllocTemp, EmitAssign, SlotRef);
+                EmitPatternCheckImpl, _ctx.Builder.AllocScratch, EmitAssign, SlotRef);
 
         switch (pattern)
         {
@@ -518,7 +518,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
                 {
                     // Stage 2 §4.1: captured pattern variable → env cell (its owning scope's env is
                     // live at every point a condition/section hosting this pattern executes).
-                    if (_ctx.TryGetEnvBinding(local, out _))
+                    if (_ctx.Closures.TryGetEnvBinding(local, out _))
                     {
                         if (isVar)
                             EnvEmit.Write(_builder, _ctx, local, valueVal);
@@ -527,7 +527,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
                         return checkVal;
                     }
                     var localType = GetUdonType(local.Type);
-                    var localId = _ctx.DeclareLocal(local.Name, localType);
+                    var localId = _ctx.Storage.DeclareLocal(local.Name, localType);
                     _localBindings[local] = new EmitContext.LocalBinding(localId);
                     if (isVar)
                         EmitStoreField(localId, valueVal); // always matches → bind unconditionally
@@ -586,12 +586,12 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
                     && binPat.LeftPattern.NarrowedType is { } narrowedType
                     && !SymbolEqualityComparer.Default.Equals(narrowedType, valueType))
                 {
-                    var resultSlot = _ctx.AllocTemp("SystemBoolean");
+                    var resultSlot = _ctx.Builder.AllocScratch("SystemBoolean");
                     EmitAssign(resultSlot, Const(false, "SystemBoolean"));
                     var matched = EmitPatternCheckImpl(valueVal, valueType, binPat.LeftPattern);
                     _builder.EmitIf(matched, b =>
                     {
-                        var nt = _ctx.AllocTemp(GetUdonType(narrowedType));
+                        var nt = _ctx.Builder.AllocScratch(GetUdonType(narrowedType));
                         EmitAssign(nt, valueVal);
                         EmitAssign(resultSlot, EmitPatternCheckImpl(SlotRef(nt), narrowedType, binPat.RightPattern));
                     });
@@ -612,13 +612,13 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
                 if (valueType is not INamedTypeSymbol aggType || !EmitPolicy.IsAggregateType(valueType))
                     throw new System.NotSupportedException(
                         "Positional pattern is only supported on tuple types (user Deconstruct is not supported).");
-                var layout = _ctx.GetAggregateLayout(aggType);
+                var layout = _ctx.Aggregates.GetLayout(aggType);
                 if (rec.DeconstructionSubpatterns.Length != layout.Count)
                     throw new System.NotSupportedException(
                         $"Positional pattern element count ({rec.DeconstructionSubpatterns.Length}) "
                         + $"does not match tuple arity ({layout.Count}).");
 
-                var aggSlot = _ctx.AllocTemp(AggregateAbi.ArrayType);
+                var aggSlot = _ctx.Builder.AllocScratch(AggregateAbi.ArrayType);
                 EmitAssign(aggSlot, valueVal);
 
                 CLeaf result = Const(true, "SystemBoolean");
@@ -628,7 +628,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
                     var elemRaw = AggregateAbi.ReadSlot(_builder, SlotRef(aggSlot), i, "SystemObject");
                     // Materialize into a typed temp (Udon COPY unboxes) so the sub-pattern compares
                     // with the correct type tag, exactly as tuple deconstruction extracts elements.
-                    var elemSlot = _ctx.AllocTemp(GetUdonType(elemType));
+                    var elemSlot = _ctx.Builder.AllocScratch(GetUdonType(elemType));
                     EmitAssign(elemSlot, elemRaw);
                     var subResult = EmitPatternCheckImpl(SlotRef(elemSlot), elemType, rec.DeconstructionSubpatterns[i]);
                     result = ExternCall(
@@ -644,7 +644,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
                 //   ≡  x passes the (optional) type/null guard  &&  x.P is subpat  &&  ...
                 // Member reads are emitted INSIDE the guard's then-block so a null or type-mismatched
                 // receiver short-circuits to false without dereferencing (extern AND does not short-circuit).
-                var resultSlot = _ctx.AllocTemp("SystemBoolean");
+                var resultSlot = _ctx.Builder.AllocScratch("SystemBoolean");
                 EmitAssign(resultSlot, Const(false, "SystemBoolean"));
 
                 CLeaf guard;
@@ -660,20 +660,20 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
                 _builder.EmitIf(guard, _ =>
                 {
                     var matchType = rec.MatchedType ?? valueType;
-                    var valSlot = _ctx.AllocTemp(GetUdonType(matchType));
+                    var valSlot = _ctx.Builder.AllocScratch(GetUdonType(matchType));
                     EmitAssign(valSlot, valueVal);
 
                     if (rec.DeclaredSymbol is ILocalSymbol bound)
                     {
                         // Stage 2 §4.1: captured recursive-pattern binding → env cell.
                         // (named out var: the enclosing EmitIf lambda's parameter is `_`.)
-                        if (_ctx.TryGetEnvBinding(bound, out var envbUnused))
+                        if (_ctx.Closures.TryGetEnvBinding(bound, out var envbUnused))
                         {
                             EnvEmit.Write(_builder, _ctx, bound, SlotRef(valSlot));
                         }
                         else
                         {
-                            var boundId = _ctx.DeclareLocal(bound.Name, GetUdonType(bound.Type));
+                            var boundId = _ctx.Storage.DeclareLocal(bound.Name, GetUdonType(bound.Type));
                             _localBindings[bound] = new EmitContext.LocalBinding(boundId);
                             EmitStoreField(boundId, SlotRef(valSlot));
                         }
@@ -705,12 +705,12 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
                                     + "(only System/Unity properties and fields).");
                         }
                         CLeaf memberVal;
-                        if (isAgg && _ctx.GetAggregateLayout(aggMatchType).TryGetIndex(memberName, out var aggMemberIdx))
+                        if (isAgg && _ctx.Aggregates.GetLayout(aggMatchType).TryGetIndex(memberName, out var aggMemberIdx))
                         {
                             // Aggregate member: read the boxed object[] slot, then materialize into a typed temp
                             // (Udon COPY unboxes) so the sub-pattern compares with the correct type tag.
                             var rawMember = AggregateAbi.ReadSlot(_builder, SlotRef(valSlot), aggMemberIdx, "SystemObject");
-                            var memberSlot = _ctx.AllocTemp(GetUdonType(memberType));
+                            var memberSlot = _ctx.Builder.AllocScratch(GetUdonType(memberType));
                             EmitAssign(memberSlot, rawMember);
                             memberVal = SlotRef(memberSlot);
                         }
@@ -753,7 +753,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
     CLeaf VisitSwitchExpression(ISwitchExpressionOperation op)
     {
         var resultType = GetUdonType(op.Type);
-        var resultSlot = _ctx.AllocTemp(resultType);
+        var resultSlot = _ctx.Builder.AllocScratch(resultType);
         // Initialize result to default in case no arm matches (non-exhaustive)
         EmitAssign(resultSlot, Const(
             EmitPolicy.ParseConstValue(resultType, GetDefaultConstValue(resultType)), resultType));
@@ -840,7 +840,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
         // cond ? a : b: evaluate branches only on the taken path.
         var condVal = VisitExpression(op.Condition);
         var resultType = GetUdonType(op.Type);
-        var resultSlot = _ctx.AllocTemp(resultType);
+        var resultSlot = _ctx.Builder.AllocScratch(resultType);
         _builder.EmitIf(condVal,
             _ => EmitAssign(resultSlot, VisitExpression(op.WhenTrue)),
             _ => EmitAssign(resultSlot, VisitExpression(op.WhenFalse)));
@@ -918,9 +918,9 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
     // is reference equality). Caveat: float NaN compares equal under object.Equals.
     CLeaf EmitAggregateElementsEqual(CValue leftArr, CValue rightArr, INamedTypeSymbol aggType)
     {
-        var layout = _ctx.GetAggregateLayout(aggType);
-        var leftSlot = _ctx.AllocTemp(AggregateAbi.ArrayType); EmitAssign(leftSlot, leftArr);
-        var rightSlot = _ctx.AllocTemp(AggregateAbi.ArrayType); EmitAssign(rightSlot, rightArr);
+        var layout = _ctx.Aggregates.GetLayout(aggType);
+        var leftSlot = _ctx.Builder.AllocScratch(AggregateAbi.ArrayType); EmitAssign(leftSlot, leftArr);
+        var rightSlot = _ctx.Builder.AllocScratch(AggregateAbi.ArrayType); EmitAssign(rightSlot, rightArr);
 
         CLeaf result = Const(true, "SystemBoolean");
         for (int i = 0; i < layout.Count; i++)

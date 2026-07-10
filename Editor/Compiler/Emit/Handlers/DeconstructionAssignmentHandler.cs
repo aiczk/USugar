@@ -97,7 +97,7 @@ public class DeconstructionAssignmentHandler : AssignmentHandlerBase, IOperation
                 {
                     var raw = AggregateAbi.ReadSlot(_builder, dlgResult, i, "SystemObject");
                     dlgSnaps.Add(targetTuple.Elements[i].Type is INamedTypeSymbol det && EmitPolicy.IsAggregateType(det)
-                        ? AggregateAbi.DeepClone(_builder, raw, det, _ctx.GetAggregateLayout) : raw);
+                        ? AggregateAbi.DeepClone(_builder, raw, det, _ctx.Aggregates.GetLayout) : raw);
                 }
                 for (int i = 0; i < targetTuple.Elements.Length; i++)
                     AssignToLValue(targetTuple.Elements[i], dlgSnaps[i], prepared);
@@ -117,7 +117,7 @@ public class DeconstructionAssignmentHandler : AssignmentHandlerBase, IOperation
                 {
                     var raw = AggregateAbi.ReadSlot(_builder, arrVal, i, "SystemObject");
                     snaps.Add(targetTuple.Elements[i].Type is INamedTypeSymbol et && EmitPolicy.IsAggregateType(et)
-                        ? AggregateAbi.DeepClone(_builder, raw, et, _ctx.GetAggregateLayout) : raw);
+                        ? AggregateAbi.DeepClone(_builder, raw, et, _ctx.Aggregates.GetLayout) : raw);
                 }
                 for (int i = 0; i < targetTuple.Elements.Length; i++)
                     AssignToLValue(targetTuple.Elements[i], snaps[i], prepared);

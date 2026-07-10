@@ -17,6 +17,8 @@ public sealed class MethodContext
 
     public IMethodSymbol CurrentMethod;
 
+    // When emitting a user-struct method/ctor, the receiver object[] param var id; otherwise null.
+    // Makes this / this.field resolve to the receiver array instead of the Behaviour.
     public string CurrentStructReceiverParamId;
 
     public int NextMethodIndex;

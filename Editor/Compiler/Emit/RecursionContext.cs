@@ -5,6 +5,8 @@ using Microsoft.CodeAnalysis;
 /// </summary>
 public sealed class RecursionContext
 {
+    // Populated in place by UasmEmitter.BuildRecursionInfo before body emission; each product
+    // field is null until then.
     public readonly RecursionInfo Info = new RecursionInfo();
 
     /// <summary>True when a call from <paramref name="caller"/> to <paramref name="callee"/> is a

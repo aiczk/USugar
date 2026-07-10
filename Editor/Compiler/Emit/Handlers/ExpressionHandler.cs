@@ -20,37 +20,37 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
         ILiteralOperation op => VisitLiteral(op),
         // Stage 2 §4.1: a captured local/param has NO flat storage — reads route through the owning
         // scope's env record (aggregate captures keep clone-on-read value semantics on the way out).
-        ILocalReferenceOperation localRef when _ctx.TryGetEnvBinding(localRef.Local, out _)
+        ILocalReferenceOperation localRef when _ctx.Closures.TryGetEnvBinding(localRef.Local, out _)
             => ResolveType(localRef.Type) is INamedTypeSymbol eaggT && EmitPolicy.IsAggregateType(eaggT)
                    ? AggregateAbi.DeepClone(_builder, EnvEmit.Read(_builder, _ctx, localRef.Local, AggregateAbi.ArrayType),
-                       eaggT, _ctx.GetAggregateLayout)
+                       eaggT, _ctx.Aggregates.GetLayout)
                    : EnvEmit.Read(_builder, _ctx, localRef.Local, GetUdonType(localRef.Type)),
         ILocalReferenceOperation localRef => _localBindings.TryGetValue(localRef.Local, out var localBinding)
                                                  ? ResolveType(localRef.Type) is INamedTypeSymbol laggT && EmitPolicy.IsAggregateType(laggT)
                                                      ? AggregateAbi.DeepClone(_builder, LoadField(localBinding.Id, AggregateAbi.ArrayType),
-                                                         laggT, _ctx.GetAggregateLayout)
+                                                         laggT, _ctx.Aggregates.GetLayout)
                                                      : LoadField(localBinding.Id, GetUdonType(localRef.Type))
                                                  : throw new InvalidOperationException($"Cannot resolve local variable '{localRef.Local.Name}' in method '{_currentMethod?.Name ?? "(none)"}'."),
         IFieldReferenceOperation op => VisitFieldReference(op),
         IEventReferenceOperation op => VisitEventReference(op),
-        IParameterReferenceOperation paramRef when _ctx.TryGetEnvBinding(paramRef.Parameter, out _)
+        IParameterReferenceOperation paramRef when _ctx.Closures.TryGetEnvBinding(paramRef.Parameter, out _)
             => ResolveType(paramRef.Type) is INamedTypeSymbol epaggT && EmitPolicy.IsAggregateType(epaggT)
                    ? AggregateAbi.DeepClone(_builder, EnvEmit.Read(_builder, _ctx, paramRef.Parameter, AggregateAbi.ArrayType),
-                       epaggT, _ctx.GetAggregateLayout)
+                       epaggT, _ctx.Aggregates.GetLayout)
                    : EnvEmit.Read(_builder, _ctx, paramRef.Parameter, GetUdonType(paramRef.Type)),
         IParameterReferenceOperation paramRef => ResolveType(paramRef.Type) is INamedTypeSymbol paggT && EmitPolicy.IsAggregateType(paggT)
                                                      ? AggregateAbi.DeepClone(_builder, LoadParam(paramRef.Parameter),
-                                                         paggT, _ctx.GetAggregateLayout)
+                                                         paggT, _ctx.Aggregates.GetLayout)
                                                      : LoadParam(paramRef.Parameter),
-        IInstanceReferenceOperation when _ctx.CurrentStructReceiverParamId != null
-            => LoadField(_ctx.CurrentStructReceiverParamId, AggregateAbi.ArrayType),
-        IInstanceReferenceOperation => LoadField(_ctx.DeclareThisOnce(GetUdonType(_classSymbol)), GetUdonType(_classSymbol)),
+        IInstanceReferenceOperation when _ctx.Methods.CurrentStructReceiverParamId != null
+            => LoadField(_ctx.Methods.CurrentStructReceiverParamId, AggregateAbi.ArrayType),
+        IInstanceReferenceOperation => LoadField(_ctx.Storage.DeclareThisOnce(GetUdonType(_classSymbol)), GetUdonType(_classSymbol)),
         IConversionOperation op => VisitConversion(op),
         IDefaultValueOperation op => VisitDefaultValue(op),
         ITypeOfOperation typeOf => EmitTypeofToken(typeOf),
         INameOfOperation nameOf => Const(nameOf.ConstantValue.Value.ToString(), "SystemString"),
         IDeclarationExpressionOperation op => VisitDeclarationExpression(op),
-        IDiscardOperation discard => SlotRef(_ctx.AllocTemp(GetUdonType(discard.Type))),
+        IDiscardOperation discard => SlotRef(_ctx.Builder.AllocScratch(GetUdonType(discard.Type))),
         IDelegateCreationOperation op => VisitDelegateCreation(op),
         ITupleOperation op => VisitTupleLiteral(op),
         _ => throw new NotSupportedException(expression.GetType().Name),
@@ -126,7 +126,7 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
                     if (IsDeclaredInOwnHierarchy(_classSymbol, fieldRef.Field.ContainingType))
                         return fieldRef.Field.Type is INamedTypeSymbol staticFieldAgg && EmitPolicy.IsAggregateType(staticFieldAgg)
                             ? AggregateAbi.DeepClone(_builder, LoadField(fieldRef.Field.Name, AggregateAbi.ArrayType),
-                                staticFieldAgg, _ctx.GetAggregateLayout)
+                                staticFieldAgg, _ctx.Aggregates.GetLayout)
                             : LoadField(fieldRef.Field.Name, GetUdonType(fieldRef.Field.Type));
 
                     var crossMsg = $"cannot read a non-constant static readonly field "
@@ -164,14 +164,14 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
             && fieldRef.Instance.Type is INamedTypeSymbol aggContaining
             && EmitPolicy.IsObjectArrayEmulated(aggContaining))
         {
-            var layout = _ctx.GetAggregateLayout(aggContaining);
+            var layout = _ctx.Aggregates.GetLayout(aggContaining);
             if (layout.TryGetIndex(fieldRef.Field, out var elemIndex))
             {
                 var arrExpr = LoadInstanceRaw(fieldRef.Instance);
                 var getVal = AggregateAbi.ReadSlot(_builder, arrExpr, elemIndex, "SystemObject");
                 // A struct-typed element read AS A VALUE is copied (value semantics); scalar elements are immutable boxes.
                 return fieldRef.Field.Type is INamedTypeSymbol elemAgg && EmitPolicy.IsAggregateType(elemAgg)
-                    ? AggregateAbi.DeepClone(_builder, getVal, elemAgg, _ctx.GetAggregateLayout) : getVal;
+                    ? AggregateAbi.DeepClone(_builder, getVal, elemAgg, _ctx.Aggregates.GetLayout) : getVal;
             }
             throw new System.NotSupportedException(
                 $"Cannot access '{fieldRef.Field.Name}' on aggregate type '{aggContaining.Name}'.");
@@ -181,7 +181,7 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
         if (fieldRef.Instance is IInstanceReferenceOperation)
             return fieldRef.Field.Type is INamedTypeSymbol thisFieldAgg && EmitPolicy.IsAggregateType(thisFieldAgg)
                 ? AggregateAbi.DeepClone(_builder, LoadField(fieldRef.Field.Name, AggregateAbi.ArrayType),
-                    thisFieldAgg, _ctx.GetAggregateLayout)
+                    thisFieldAgg, _ctx.Aggregates.GetLayout)
                 : LoadField(fieldRef.Field.Name, GetUdonType(fieldRef.Field.Type));
         // cross-behaviour field → GetProgramVariable
         if (ExternResolver.IsUdonSharpBehaviour(fieldRef.Field.ContainingType))
@@ -339,7 +339,7 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
         // `conv.Type is IArrayTypeSymbol` test would miss it (mirrors the scalar arm's ResolveType).
         var variantDst = ResolveType(conv.Type);
         if ((variantDst is IArrayTypeSymbol || (variantDst as INamedTypeSymbol)?.IsTupleType == true)
-            && ContainsVariantDelegateConversion(conv.Operand.Type, conv.Type, _ctx.TypeParamMap))
+            && ContainsVariantDelegateConversion(conv.Operand.Type, conv.Type, _ctx.Generics.TypeParamMap))
             throw new System.NotSupportedException(
                 $"Variant delegate conversion from '{conv.Operand.Type.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}' "
                 + $"to '{conv.Type.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}' is not supported: "
@@ -358,14 +358,14 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
         // is a source carrying NO visible delegate — object / object[]). Keep the value typed as its
         // delegate-carrying type instead of routing it through object.
         if ((variantDst is IArrayTypeSymbol || (variantDst as INamedTypeSymbol)?.IsTupleType == true)
-            && StructurallyContainsDelegate(variantDst, _ctx.TypeParamMap, new HashSet<ITypeSymbol>(SymbolEqualityComparer.Default)))
+            && StructurallyContainsDelegate(variantDst, _ctx.Generics.TypeParamMap, new HashSet<ITypeSymbol>(SymbolEqualityComparer.Default)))
         {
             var stripped = conv.Operand;
             while (stripped is IConversionOperation strippedConv) stripped = strippedConv.Operand;
             var isNull = stripped is IDefaultValueOperation
                 || (stripped?.ConstantValue.HasValue == true && stripped.ConstantValue.Value == null);
             var srcCarriesDelegate = StructurallyContainsDelegate(ResolveType(stripped?.Type),
-                _ctx.TypeParamMap, new HashSet<ITypeSymbol>(SymbolEqualityComparer.Default));
+                _ctx.Generics.TypeParamMap, new HashSet<ITypeSymbol>(SymbolEqualityComparer.Default));
             if (!isNull && !srcCarriesDelegate)
                 throw new System.NotSupportedException(
                     $"Cast from '{(ResolveType(conv.Operand.Type) ?? conv.Operand.Type)?.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat) ?? "object"}' "
@@ -404,26 +404,26 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
             if (convDstType is INamedTypeSymbol vDst && vDst.DelegateInvokeMethod is { } vDstInvoke
                 && convSrcType is INamedTypeSymbol vSrc && vSrc.DelegateInvokeMethod is { } vSrcInvoke
                 && !SymbolEqualityComparer.Default.Equals(vDst, vSrc)
-                && DelegateAbi.BuildSigPart(vDstInvoke, _ctx.TypeParamMap)
-                   != DelegateAbi.BuildSigPart(vSrcInvoke, _ctx.TypeParamMap))
+                && DelegateAbi.BuildSigPart(vDstInvoke, _ctx.Generics.TypeParamMap)
+                   != DelegateAbi.BuildSigPart(vSrcInvoke, _ctx.Generics.TypeParamMap))
             {
                 // The wrapper's INNER dispatch must speak srcVal's OWN native protocol — vSrc's Invoke
             // method (sig-T), never vDst's (sig-S): srcVal's DelegateAbi.Method names ITS OWN bridge (under
                 // sig-T's conv-var protocol), so staging under sig-S would silently drop values.
-                var wrapperName = RegisterWrapperSig(vDstInvoke, vSrcInvoke, _ctx.TypeParamMap);
+                var wrapperName = RegisterWrapperSig(vDstInvoke, vSrcInvoke, _ctx.Generics.TypeParamMap);
 
                 // A null delegate VALUE converts to null (C# semantics: converting null is null) — never
                 // wrap it, or `o == null` and invoke-null-guard behavior would both silently diverge from
                 // a plain unwrapped null. Guarded at RUNTIME (not just the statically-known-null case
                 // below): srcVal may be a variable whose null-ness is unknown at compile time.
-                var wrapResultSlot = _ctx.AllocTemp(DelegateAbi.BundleType);
+                var wrapResultSlot = _ctx.Builder.AllocScratch(DelegateAbi.BundleType);
                 var srcNotNull = ExternCall("SystemObject.__op_Inequality__SystemObject_SystemObject__SystemBoolean",
                     new List<CLeaf> { srcVal, Const(null, "SystemObject") }, "SystemBoolean");
                 _builder.EmitIf(srcNotNull,
                     _ =>
                     {
                         var wThisType = GetUdonType(_classSymbol);
-                        var wrapperBundle = DelegateAbi.EmitBundleMint(_builder, () => LoadField(_ctx.DeclareThisOnce(wThisType), wThisType),
+                        var wrapperBundle = DelegateAbi.EmitBundleMint(_builder, () => LoadField(_ctx.Storage.DeclareThisOnce(wThisType), wThisType),
                             Const(wrapperName, "SystemString"), FuncRef(wrapperName), srcVal);
                         EmitAssign(wrapResultSlot, wrapperBundle);
                     },
@@ -457,8 +457,8 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
                 // safe roundtrip — its channels agree (resolve through the type-param map so a generic
                 // operand whose spec is a same-sig delegate still qualifies).
                 var safeRoundtrip = ResolveType(stripped?.Type) is INamedTypeSymbol sDlg && sDlg.DelegateInvokeMethod is { } sInvoke
-                    && DelegateAbi.BuildSigPart(sInvoke, _ctx.TypeParamMap)
-                       == DelegateAbi.BuildSigPart(lInvoke, _ctx.TypeParamMap);
+                    && DelegateAbi.BuildSigPart(sInvoke, _ctx.Generics.TypeParamMap)
+                       == DelegateAbi.BuildSigPart(lInvoke, _ctx.Generics.TypeParamMap);
                 if (!isNull && !safeRoundtrip)
                     throw new System.NotSupportedException(
                         $"Cast from '{(convSrcType ?? conv.Operand.Type)?.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat) ?? "object"}' "
@@ -501,7 +501,7 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
                 (ExternResolver.IsIntegerType(liftedSrcU) || liftedSrcU.SpecialType == SpecialType.System_Char)
                 && (ExternResolver.IsIntegerType(liftedDstU) || liftedDstU.SpecialType == SpecialType.System_Char);
             return NullableAbi.EmitLiftedNumericConversion(_builder, srcVal, dstU, liftedDstMethod,
-                liftedIntToInt, EmitNarrowingConvert, _ctx.AllocTemp, EmitAssign, SlotRef);
+                liftedIntToInt, EmitNarrowingConvert, _ctx.Builder.AllocScratch, EmitAssign, SlotRef);
         }
 
         // Lifted numeric conversion with a BARE source and a Nullable<numeric> dest (e.g. `(byte?)(intExpr)`):
@@ -611,7 +611,7 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
                 : GetUdonType(conv.Operand.Type);
             if (srcUnderlying != dstType)
                 return EmitNarrowingConvert(srcVal, srcUnderlying, dstType);
-            var tmpSlot = _ctx.AllocTemp(dstType);
+            var tmpSlot = _ctx.Builder.AllocScratch(dstType);
             EmitAssign(tmpSlot, srcVal);
             return SlotRef(tmpSlot);
         }
@@ -650,7 +650,7 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
             && arr.Rank == 1
             && arr.ElementType.SpecialType == SpecialType.System_Object;
         if (!stockObjectArray
-            && !ExternResolver.IsRuntimeDistinguishable(operand, _ctx.TypeParamMap)
+            && !ExternResolver.IsRuntimeDistinguishable(operand, _ctx.Generics.TypeParamMap)
             && !IsDirectComponentQueryArgument(typeOf))
             throw new NotSupportedException(
                 $"typeof('{(ResolveType(operand) ?? operand).ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}') "
@@ -686,7 +686,7 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
     CLeaf EmitTryCast(CLeaf srcVal, ITypeSymbol targetType)
     {
         var targetUdon = GetUdonType(targetType);
-        var resultSlot = _ctx.AllocTemp(targetUdon);
+        var resultSlot = _ctx.Builder.AllocScratch(targetUdon);
         var isCheck = EmitTypeCheck(srcVal, targetType);
         _builder.EmitIf(isCheck,
             _ => EmitAssign(resultSlot, srcVal),
@@ -714,8 +714,8 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
         // where T is a struct type arg: defaultVal.Type is then the open type parameter, which a directly-named
         // INamedTypeSymbol check would miss — leaving the default as null and crashing on the first field read.
         if (ResolveType(defaultVal.Type) is INamedTypeSymbol aggDef && EmitPolicy.IsAggregateType(aggDef))
-            return AggregateAbi.MintDefault(_builder, _ctx.GetAggregateLayout(aggDef),
-                _ctx.GetAggregateLayout, GetUdonType);
+            return AggregateAbi.MintDefault(_builder, _ctx.Aggregates.GetLayout(aggDef),
+                _ctx.Aggregates.GetLayout, GetUdonType);
 
         var dvType = GetUdonType(defaultVal.Type);
         if (!defaultVal.Type.IsValueType)
@@ -754,12 +754,12 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
         // pattern-binding stores go through AssignToLValue / TryEmitEnvStore arms). Registering the
         // staging field in _localBindings is WRONG for captured symbols (reads would bypass the env),
         // so captured declarations get a staging slot WITHOUT a binding.
-        if (_ctx.TryGetEnvBinding(localRef2.Local, out _))
+        if (_ctx.Closures.TryGetEnvBinding(localRef2.Local, out _))
         {
-            var stagingId = _ctx.DeclareLocal(localRef2.Local.Name, udonType);
+            var stagingId = _ctx.Storage.DeclareLocal(localRef2.Local.Name, udonType);
             return LoadField(stagingId, udonType);
         }
-        var localId = _ctx.DeclareLocal(localRef2.Local.Name, udonType);
+        var localId = _ctx.Storage.DeclareLocal(localRef2.Local.Name, udonType);
         _localBindings[localRef2.Local] = new EmitContext.LocalBinding(localId);
         return LoadField(localId, udonType);
     }
@@ -781,10 +781,10 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
         var targetMethodForValidation = (op.Target as IMethodReferenceOperation)?.Method;
         bool varianceResolved = targetMethodForValidation != null
             && op.Type is INamedTypeSymbol vDelegateType && vDelegateType.DelegateInvokeMethod is { } vInvoke
-            && DelegateAbi.BuildSigPart(vInvoke, _ctx.TypeParamMap)
-               != DelegateAbi.BuildSigPart(targetMethodForValidation, _ctx.TypeParamMap);
+            && DelegateAbi.BuildSigPart(vInvoke, _ctx.Generics.TypeParamMap)
+               != DelegateAbi.BuildSigPart(targetMethodForValidation, _ctx.Generics.TypeParamMap);
         DelegateAbi.ValidateDelegateBinding(op.Type as INamedTypeSymbol,
-            targetMethodForValidation, _ctx.TypeParamMap, varianceResolved);
+            targetMethodForValidation, _ctx.Generics.TypeParamMap, varianceResolved);
 
         var thisType = GetUdonType(_classSymbol);
         // Addr discipline (§1.3): the only sources for DelegateAbi.Addr are the back-patched funcaddr const
@@ -795,7 +795,7 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
 
         // Stage 2 §3.7: DelegateAbi.Env carries the binding-scope env for a CAPTURING closure target, else
         // a null const (capture-free lambda / named method / base.M) = byte-identical to Stage 1.
-        var bundle = DelegateAbi.EmitBundleMint(_builder, () => thirdParty ?? LoadField(_ctx.DeclareThisOnce(thisType), thisType),
+        var bundle = DelegateAbi.EmitBundleMint(_builder, () => thirdParty ?? LoadField(_ctx.Storage.DeclareThisOnce(thisType), thisType),
             Const(bridgeName, "SystemString"), addr, envLeaf);
 
         return bundle;

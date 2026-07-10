@@ -13,6 +13,10 @@ public sealed class GenericContext
 
     public readonly List<IMethodSymbol> PendingSpecs = new();
 
+    // Wave-9 round-5 [X6]: first registered specialization per generic DEFINITION. Closures hoisted
+    // from a generic body are keyed by IMethodSymbol and therefore SHARED across that body's
+    // specializations (last-spec-wins seeding; VM-proven r1=8 vs 3) - a second DISTINCT instantiation
+    // of a definition whose body contains a capturing closure is loud. LOOKUP-ONLY.
     public readonly Dictionary<IMethodSymbol, IMethodSymbol> FirstSpecByDefinition
         = new(SymbolEqualityComparer.Default);
 

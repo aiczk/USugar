@@ -17,22 +17,22 @@ public abstract partial class HandlerBase
     protected CModule _module => _ctx.Module;
     protected CoreBuilder _builder => _ctx.Builder;
     protected LayoutPlanner _planner => _ctx.Planner;
-    protected Dictionary<IMethodSymbol, CFunction> _methodFunctions => _ctx.MethodFunctions;
-    protected Dictionary<IMethodSymbol, EmitContext.MethodSlot> _methodSlots => _ctx.MethodSlots;
-    protected Dictionary<IMethodSymbol, ReturnSlot[]> _methodReturns => _ctx.MethodReturns;
-    protected Dictionary<IMethodSymbol, string[]> _methodParamVarIds => _ctx.MethodParamVarIds;
-    protected IMethodSymbol _currentMethod { get => _ctx.CurrentMethod; set => _ctx.CurrentMethod = value; }
-    protected List<(IMethodSymbol symbol, CFunction func)> _pendingLocalFunctions => _ctx.PendingLocalFunctions;
-    protected List<IMethodSymbol> _pendingGenericSpecs => _ctx.PendingGenericSpecs;
-    protected IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> _typeParamMap => _ctx.TypeParamMap;
-    protected Dictionary<ILocalSymbol, EmitContext.LocalBinding> _localBindings => _ctx.LocalBindings;
-    protected List<(string fieldName, IOperation initOp, ITypeSymbol fieldType)> _fieldInitOps => _ctx.FieldInitOps;
-    protected Dictionary<string, string> _fieldChangeCallbacks => _ctx.FieldChangeCallbacks;
-    protected Stack<CLeaf> _conditionalAccessStack => _ctx.ConditionalAccessStack;
-    protected Stack<List<(CLeaf val, ITypeSymbol type)>> _usingDisposableStack => _ctx.UsingDisposableStack;
-    protected HashSet<string> _delegateFields => _ctx.DelegateFields;
-    protected List<EmitDiagnostic> _diagnostics => _ctx.Diagnostics;
-    protected bool IsRecursiveEdge(IMethodSymbol caller, IMethodSymbol callee) => _ctx.IsRecursiveEdge(caller, callee);
+    protected Dictionary<IMethodSymbol, CFunction> _methodFunctions => _ctx.Methods.Functions;
+    protected Dictionary<IMethodSymbol, EmitContext.MethodSlot> _methodSlots => _ctx.Methods.Slots;
+    protected Dictionary<IMethodSymbol, ReturnSlot[]> _methodReturns => _ctx.Methods.Returns;
+    protected Dictionary<IMethodSymbol, string[]> _methodParamVarIds => _ctx.Methods.ParamVarIds;
+    protected IMethodSymbol _currentMethod { get => _ctx.Methods.CurrentMethod; set => _ctx.Methods.CurrentMethod = value; }
+    protected List<(IMethodSymbol symbol, CFunction func)> _pendingLocalFunctions => _ctx.Methods.PendingLocalFunctions;
+    protected List<IMethodSymbol> _pendingGenericSpecs => _ctx.Generics.PendingSpecs;
+    protected IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> _typeParamMap => _ctx.Generics.TypeParamMap;
+    protected Dictionary<ILocalSymbol, EmitContext.LocalBinding> _localBindings => _ctx.Storage.LocalBindings;
+    protected List<(string fieldName, IOperation initOp, ITypeSymbol fieldType)> _fieldInitOps => _ctx.Initializers.FieldInitOps;
+    protected Dictionary<string, string> _fieldChangeCallbacks => _ctx.Initializers.FieldChangeCallbacks;
+    protected Stack<CLeaf> _conditionalAccessStack => _ctx.ControlFlow.ConditionalAccessStack;
+    protected Stack<List<(CLeaf val, ITypeSymbol type)>> _usingDisposableStack => _ctx.ControlFlow.UsingDisposableStack;
+    protected HashSet<string> _delegateFields => _ctx.Synthetics.DelegateFields;
+    protected List<EmitDiagnostic> _diagnostics => _ctx.DiagnosticState.Diagnostics;
+    protected bool IsRecursiveEdge(IMethodSymbol caller, IMethodSymbol callee) => _ctx.RecursionContext.IsRecursiveEdge(caller, callee);
 
     // ── Dispatch (recursive descent into other handlers via UasmEmitter facade) ──
     protected void VisitOperation(IOperation op) => _ctx.VisitOperation(op);
@@ -56,11 +56,11 @@ public abstract partial class HandlerBase
 
 
     // ── Type resolution ──
-    protected string GetUdonType(ITypeSymbol type) => ExternResolver.GetUdonTypeName(type, _ctx.TypeParamMap);
-    protected TypeClassifierContext TypeCtx => new TypeClassifierContext(_ctx.TypeParamMap);
+    protected string GetUdonType(ITypeSymbol type) => ExternResolver.GetUdonTypeName(type, _ctx.Generics.TypeParamMap);
+    protected TypeClassifierContext TypeCtx => new TypeClassifierContext(_ctx.Generics.TypeParamMap);
     protected ITypeSymbol ResolveType(ITypeSymbol type)
     {
-        if (type is ITypeParameterSymbol tp && _ctx.TypeParamMap != null && _ctx.TypeParamMap.TryGetValue(tp, out var resolved))
+        if (type is ITypeParameterSymbol tp && _ctx.Generics.TypeParamMap != null && _ctx.Generics.TypeParamMap.TryGetValue(tp, out var resolved))
             return resolved;
         return type;
     }
@@ -107,7 +107,7 @@ public abstract partial class HandlerBase
     // SDK/native types stay distinguishable and compile.
     protected CLeaf EmitTypeCheck(CLeaf valueVal, ITypeSymbol targetType)
     {
-        if (!ExternResolver.IsRuntimeDistinguishable(targetType, _ctx.TypeParamMap))
+        if (!ExternResolver.IsRuntimeDistinguishable(targetType, _ctx.Generics.TypeParamMap))
         {
             var resolvedTarget = ResolveType(targetType);
             ClassAbi.RejectRuntimeTypeTest(resolvedTarget);
@@ -384,7 +384,7 @@ public abstract partial class HandlerBase
             leftVal, leftNullable, ltUnderlying,
             rightVal, rightNullable, rtUnderlying,
             kind, operatorMethod, resultType, _compilation.GetSpecialType(SpecialType.System_Int32),
-            _ctx.AllocTemp, EmitAssign, SlotRef, GetUdonType, ResolveType,
+            _ctx.Builder.AllocScratch, EmitAssign, SlotRef, GetUdonType, ResolveType,
             (boxed, underlying) => NullableAbi.PromoteBoxedToInt32(_builder, boxed, underlying,
                 _compilation.GetSpecialType(SpecialType.System_Int32), GetUdonType),
             EmitNarrowingConvert);
@@ -466,7 +466,7 @@ public abstract partial class HandlerBase
         // dictionary lookup on OriginalDefinition is itself the correct, sufficient gate (same
         // reasoning as the EmitMethod closure-map walk-up).
         if (param.ContainingSymbol is IMethodSymbol genericOwner
-            && _ctx.FirstGenericSpec.TryGetValue(genericOwner.OriginalDefinition, out var ownerSpec)
+            && _ctx.Generics.FirstSpecByDefinition.TryGetValue(genericOwner.OriginalDefinition, out var ownerSpec)
             && _methodParamVarIds.TryGetValue(ownerSpec, out var ownerSpecIds)
             && param.Ordinal < ownerSpecIds.Length)
             return ownerSpecIds[param.Ordinal];
@@ -513,19 +513,19 @@ public abstract partial class HandlerBase
         {
             // Stage 2 §4.1: captured locals/params live in env records — raw (no-clone) loads read
             // the env cell directly so mutation hits the live storage.
-            ILocalReferenceOperation lr when _ctx.TryGetEnvBinding(lr.Local, out _)
+            ILocalReferenceOperation lr when _ctx.Closures.TryGetEnvBinding(lr.Local, out _)
                 => EnvEmit.Read(_builder, _ctx, lr.Local,
                        EmitPolicy.IsAggregateType(lr.Type) ? "SystemObjectArray" : GetUdonType(lr.Type)),
             ILocalReferenceOperation lr when _localBindings.TryGetValue(lr.Local, out var b)
                 => LoadField(b.Id, EmitPolicy.IsAggregateType(lr.Type) ? "SystemObjectArray" : GetUdonType(lr.Type)),
-            IParameterReferenceOperation pr when _ctx.TryGetEnvBinding(pr.Parameter, out _)
+            IParameterReferenceOperation pr when _ctx.Closures.TryGetEnvBinding(pr.Parameter, out _)
                 => EnvEmit.Read(_builder, _ctx, pr.Parameter,
                        EmitPolicy.IsAggregateType(pr.Type) ? "SystemObjectArray" : GetUdonType(pr.Type)),
             IParameterReferenceOperation pr
                 => LoadParam(pr.Parameter),
             // Inside a struct method/ctor, `this` is the receiver object[] param, not the Behaviour.
-            IInstanceReferenceOperation when _ctx.CurrentStructReceiverParamId != null
-                => LoadField(_ctx.CurrentStructReceiverParamId, "SystemObjectArray"),
+            IInstanceReferenceOperation when _ctx.Methods.CurrentStructReceiverParamId != null
+                => LoadField(_ctx.Methods.CurrentStructReceiverParamId, "SystemObjectArray"),
             // Aggregate field as a RECEIVER (e.g. `o.inner.x`, `this.structField.x`) must NOT be cloned —
             // the access/mutation has to hit the live storage. (Value reads clone in VisitFieldReference.)
             IFieldReferenceOperation fr when EmitPolicy.IsAggregateType(fr.Type)
@@ -545,12 +545,12 @@ public abstract partial class HandlerBase
     /// in <paramref name="flatId"/>).</summary>
     protected bool BindLocal(ILocalSymbol local, string udonType, out string flatId)
     {
-        if (_ctx.TryGetEnvBinding(local, out _))
+        if (_ctx.Closures.TryGetEnvBinding(local, out _))
         {
             flatId = null;
             return false;
         }
-        flatId = _ctx.DeclareLocal(local.Name, udonType);
+        flatId = _ctx.Storage.DeclareLocal(local.Name, udonType);
         _localBindings[local] = new EmitContext.LocalBinding(flatId);
         return true;
     }
@@ -567,7 +567,7 @@ public abstract partial class HandlerBase
             IParameterReferenceOperation pr => pr.Parameter,
             _ => null,
         };
-        if (sym == null || !_ctx.TryGetEnvBinding(sym, out _)) return false;
+        if (sym == null || !_ctx.Closures.TryGetEnvBinding(sym, out _)) return false;
         EnvEmit.Write(_builder, _ctx, sym, value);
         return true;
     }
@@ -771,7 +771,7 @@ public abstract partial class HandlerBase
         // chained write lands in the class's storage, not a discarded copy. Gated on IsObjectArrayEmulated
         // (Category-A: object[] slot resolution); the caller only asks for a raw receiver, never a value read.
         if (fr.Instance != null && fr.Instance.Type is INamedTypeSymbol cont && EmitPolicy.IsObjectArrayEmulated(cont)
-            && _ctx.GetAggregateLayout(cont).TryGetIndex(fr.Field, out var idx))
+            && _ctx.Aggregates.GetLayout(cont).TryGetIndex(fr.Field, out var idx))
             return AggregateAbi.ReadSlot(_builder, LoadInstanceRaw(fr.Instance), idx, "SystemObject");
         if (fr.Instance is IInstanceReferenceOperation)
             return LoadField(fr.Field.Name, "SystemObjectArray");
@@ -794,13 +794,13 @@ public abstract partial class HandlerBase
                 if (declExpr.Expression is ILocalReferenceOperation localRef)
                 {
                     // Stage 2 §4.1: captured declaration target → env cell, no flat field.
-                    if (_ctx.TryGetEnvBinding(localRef.Local, out _))
+                    if (_ctx.Closures.TryGetEnvBinding(localRef.Local, out _))
                     {
                         EnvEmit.Write(_builder, _ctx, localRef.Local, value);
                         break;
                     }
                     var udonType = GetUdonType(localRef.Type);
-                    var localId = _ctx.DeclareLocal(localRef.Local.Name, udonType);
+                    var localId = _ctx.Storage.DeclareLocal(localRef.Local.Name, udonType);
                     _localBindings[localRef.Local] = new EmitContext.LocalBinding(localId);
                     EmitStoreField(localId, value);
                 }
@@ -827,7 +827,7 @@ public abstract partial class HandlerBase
                 else
                 {
                     var udonType = GetUdonType(existingLocal.Type);
-                    var newId = _ctx.DeclareLocal(existingLocal.Local.Name, udonType);
+                    var newId = _ctx.Storage.DeclareLocal(existingLocal.Local.Name, udonType);
                     _localBindings[existingLocal.Local] = new EmitContext.LocalBinding(newId);
                     EmitStoreField(newId, value);
                 }
@@ -904,7 +904,7 @@ public abstract partial class HandlerBase
             var elemVal = AggregateAbi.ReadSlot(_builder, arrValue, i, "SystemObject");
             var toAssign = tuple.Elements[i].Type is INamedTypeSymbol et
                 && EmitPolicy.IsAggregateType(et) && !et.IsTupleType
-                ? AggregateAbi.DeepClone(_builder, elemVal, et, _ctx.GetAggregateLayout) : elemVal;
+                ? AggregateAbi.DeepClone(_builder, elemVal, et, _ctx.Aggregates.GetLayout) : elemVal;
             AssignToLValue(tuple.Elements[i], toAssign, preparedStores);
         }
     }
@@ -966,7 +966,7 @@ public abstract partial class HandlerBase
         return fieldRef.Field.ContainingType.IsValueType                   // struct `this.v` (emulated receiver)
             || (AggregateAbi.TryGetMemberTarget(fieldRef, out var inst, out var name)
                 && inst.Type is INamedTypeSymbol agg && EmitPolicy.IsObjectArrayEmulated(agg)
-                && _ctx.GetAggregateLayout(agg).TryGetIndex(name, out _));
+                && _ctx.Aggregates.GetLayout(agg).TryGetIndex(name, out _));
     }
 
     /// <summary>Wave-9 round-7 [Y2]/[Y4]-[Y10]: the single field SET path, shared by simple
@@ -982,7 +982,7 @@ public abstract partial class HandlerBase
         // Aggregate (struct/tuple) OR v1-class member → layout slot write on the backing object[].
         if (AggregateAbi.TryGetMemberTarget(fieldRef, out var aggInstance, out var aggMemberName)
             && aggInstance.Type is INamedTypeSymbol aggContaining && EmitPolicy.IsObjectArrayEmulated(aggContaining)
-            && _ctx.GetAggregateLayout(aggContaining).TryGetIndex(aggMemberName, out var fieldIndex))
+            && _ctx.Aggregates.GetLayout(aggContaining).TryGetIndex(aggMemberName, out var fieldIndex))
         {
             RejectStaticReadonlyWriteThrough(aggInstance); // §3.3, R5
             var arrExpr = LoadInstanceRaw(aggInstance);
@@ -1003,7 +1003,7 @@ public abstract partial class HandlerBase
         {
             var vtContainingType = GetUdonType(fieldRef.Field.ContainingType);
             var vtInstanceVal = fieldRef.Instance is IInstanceReferenceOperation
-                ? LoadField(_ctx.DeclareThisOnce(vtContainingType), vtContainingType)
+                ? LoadField(_ctx.Storage.DeclareThisOnce(vtContainingType), vtContainingType)
                 : VisitExpression(fieldRef.Instance);
             var vtSig = ExternResolver.BuildFieldSetSignature(
                 vtContainingType, fieldRef.Field.Name, GetUdonType(fieldRef.Field.Type));
@@ -1089,7 +1089,7 @@ public abstract partial class HandlerBase
         // Aggregate (struct/tuple) OR v1-class auto-property → layout slot write on the backing object[].
         if (propRef.Instance is { Type: INamedTypeSymbol aggContaining } aggInst
             && EmitPolicy.IsObjectArrayEmulated(aggContaining)
-            && _ctx.GetAggregateLayout(aggContaining).TryGetIndex(propRef.Property.Name, out var aggSlotIndex))
+            && _ctx.Aggregates.GetLayout(aggContaining).TryGetIndex(propRef.Property.Name, out var aggSlotIndex))
         {
             var arrExpr = LoadInstanceRaw(aggInst);
             return aggVal => AggregateAbi.WriteSlot(_builder, arrExpr, aggSlotIndex, aggVal);
@@ -1156,7 +1156,7 @@ public abstract partial class HandlerBase
         }
 
         var instanceVal = propRef.Instance is IInstanceReferenceOperation
-            ? LoadField(_ctx.DeclareThisOnce(propContainingUdon), propContainingUdon)
+            ? LoadField(_ctx.Storage.DeclareThisOnce(propContainingUdon), propContainingUdon)
             : VisitExpression(propRef.Instance);
         var containingType = propContainingUdon;
         var valueType = GetUdonType(propRef.Property.Type);
@@ -1297,7 +1297,7 @@ public abstract partial class HandlerBase
         if (_methodFunctions.ContainsKey(localFunc)) return;
         EmitPolicy.RejectInParameters(localFunc); // round-7 follow-up [Q3]
         var funcName = string.IsNullOrEmpty(localFunc.Name) ? "lambda" : localFunc.Name;
-        var slot = _ctx.RegisterMethod(localFunc, i => $"__{i}_{funcName}");
+        var slot = _ctx.Methods.Register(localFunc, i => $"__{i}_{funcName}");
         var idx = slot.Index;
         var irName = slot.VarPrefix;
 
@@ -1311,7 +1311,7 @@ public abstract partial class HandlerBase
         {
             var param = localFunc.Parameters[pi];
             var paramId = $"__{idx}_{param.Name}__param";
-            _ctx.DeclareVar(paramId, GetUdonType(param.Type));
+            _ctx.Storage.DeclareVar(paramId, GetUdonType(param.Type));
             lfParamIds[pi] = paramId;
         }
         // Stage 2 §1.3/§6: a CAPTURING hoisted closure carries a hidden trailing __envp param — the
@@ -1320,15 +1320,15 @@ public abstract partial class HandlerBase
         // spills it unchanged) and func.ParamFieldNames (so EmitCallInternal's positional copy-in
         // binds the trailing env arg into it). NOT in the delegate sig / conv-arg count (§1.3). A
         // capture-free closure and every named method get NO __envp — the capture-free byte invariant.
-        if (_ctx.CaptureScope != null && _ctx.CaptureScope.IsCapturingClosure(localFunc))
+        if (_ctx.Closures.CaptureScope != null && _ctx.Closures.CaptureScope.IsCapturingClosure(localFunc))
         {
             var envpId = $"__{idx}_{funcName}__envp";
-            _ctx.DeclareVar(envpId, EnvEmit.EnvType);
+            _ctx.Storage.DeclareVar(envpId, EnvEmit.EnvType);
             var withEnvp = new string[lfParamIds.Length + 1];
             System.Array.Copy(lfParamIds, withEnvp, lfParamIds.Length);
             withEnvp[lfParamIds.Length] = envpId;
             lfParamIds = withEnvp;
-            _ctx.RegisterEnvpField(localFunc.OriginalDefinition, envpId);
+            _ctx.Closures.RegisterEnvpField(localFunc.OriginalDefinition, envpId);
         }
         _methodParamVarIds[localFunc] = lfParamIds;
         foreach (var pid in lfParamIds) func.ParamFieldNames.Add(pid);
@@ -1412,9 +1412,9 @@ public abstract partial class HandlerBase
     /// ambient map may already be cleared.</summary>
     protected void RegisterMulticastSig(string sigPart, IMethodSymbol invoke)
     {
-        if (_ctx.PendingMulticastSigs.ContainsKey(sigPart)) return;
+        if (_ctx.Synthetics.MulticastSigs.ContainsKey(sigPart)) return;
         // Carry the immutable ambient map by reference — the drain resolves the sig later (ambient map null by then).
-        _ctx.PendingMulticastSigs[sigPart] = (invoke, _ctx.TypeParamMap);
+        _ctx.Synthetics.MulticastSigs[sigPart] = (invoke, _ctx.Generics.TypeParamMap);
     }
 
     // B67: the synthesized value→name helper's name for a user enum (one per enum, drained in UasmEmitter).
@@ -1449,7 +1449,7 @@ public abstract partial class HandlerBase
                 $"'{e.Name}.ToString()' is not supported: '{e.Name}' is a [Flags] enum and Udon cannot "
                 + "synthesize the comma-separated flag decomposition. Format the individual flag bits manually "
                 + "(e.g. compare against each flag and build the string yourself).");
-        _ctx.PendingEnumToString.Add(e);
+        _ctx.Synthetics.EnumToString.Add(e);
         // `value` is already the enum's underlying-typed leaf (GetUdonType(enum) == underlying), which the
         // helper's parameter type matches — pass it straight through.
         return InternalCall(EnumToStringHelperName(e), new List<CLeaf> { value }, "SystemString");
@@ -1465,9 +1465,9 @@ public abstract partial class HandlerBase
     {
         var wrapperName = DelegateAbi.WrapperName(
             DelegateAbi.BuildSigPart(outerInvoke, typeParamMap), DelegateAbi.BuildSigPart(innerInvoke, typeParamMap));
-        if (_ctx.PendingWrapperSigs.ContainsKey(wrapperName)) return wrapperName;
-        // Carry the immutable map by reference (callers pass the ambient _ctx.TypeParamMap).
-        _ctx.PendingWrapperSigs[wrapperName] = (outerInvoke, innerInvoke, typeParamMap);
+        if (_ctx.Synthetics.WrapperSigs.ContainsKey(wrapperName)) return wrapperName;
+        // Carry the immutable map by reference (callers pass the ambient _ctx.Generics.TypeParamMap).
+        _ctx.Synthetics.WrapperSigs[wrapperName] = (outerInvoke, innerInvoke, typeParamMap);
         return wrapperName;
     }
 
@@ -1601,10 +1601,10 @@ public abstract partial class HandlerBase
     protected void RegisterFirstGenericSpec(IMethodSymbol constructed)
     {
         var genericDef = constructed.OriginalDefinition;
-        if (_ctx.FirstGenericSpec.TryGetValue(genericDef, out var firstSpec))
+        if (_ctx.Generics.FirstSpecByDefinition.TryGetValue(genericDef, out var firstSpec))
             EmitContext.ThrowIfClosureAliasesInstantiation(_compilation, firstSpec, constructed);
         else
-            _ctx.FirstGenericSpec[genericDef] = constructed;
+            _ctx.Generics.FirstSpecByDefinition[genericDef] = constructed;
     }
 
     protected void RegisterGenericSpecialization(IMethodSymbol constructed)
@@ -1622,7 +1622,7 @@ public abstract partial class HandlerBase
         // instantiations stay legal.
         RegisterFirstGenericSpec(constructed);
 
-        var slot = _ctx.RegisterMethod(constructed, i => i.ToString());
+        var slot = _ctx.Methods.Register(constructed, i => i.ToString());
         var idx = slot.Index;
 
         var typeArgPart = string.Join("_", constructed.TypeArguments.Select(ExternResolver.GetUdonTypeName));
@@ -1644,7 +1644,7 @@ public abstract partial class HandlerBase
             && constructed.MethodKind is not (MethodKind.LambdaMethod or MethodKind.LocalFunction))
         {
             var receiverId = $"__{idx}_this__param";
-            _ctx.DeclareVar(receiverId, "SystemObjectArray");
+            _ctx.Storage.DeclareVar(receiverId, "SystemObjectArray");
             func.ParamFieldNames.Add(receiverId);
         }
 
@@ -1653,17 +1653,17 @@ public abstract partial class HandlerBase
         {
             var param = constructed.Parameters[pi];
             var paramId = $"__{idx}_{param.Name}__param";
-            _ctx.DeclareVar(paramId, GetUdonType(param.Type));
+            _ctx.Storage.DeclareVar(paramId, GetUdonType(param.Type));
             gsParamIds[pi] = paramId;
         }
         // Stage 2 §1.3: __envp twin of RegisterLocalFunction, for a capturing GENERIC local function
         // specialization (keyed by OriginalDefinition = the generic def, matching EnvEmit.Leaf's
         // lookup). Non-T-dependent capturing generics share one physical node; T-dependent ones are
         // pinned to a single instantiation by the ClosurePin gate above, so one envp field per def.
-        if (_ctx.CaptureScope != null && _ctx.CaptureScope.IsCapturingClosure(constructed))
+        if (_ctx.Closures.CaptureScope != null && _ctx.Closures.CaptureScope.IsCapturingClosure(constructed))
         {
             var envpId = $"__{idx}_{SanitizeId(constructed.Name)}__envp";
-            _ctx.DeclareVar(envpId, EnvEmit.EnvType);
+            _ctx.Storage.DeclareVar(envpId, EnvEmit.EnvType);
             var withEnvp = new string[gsParamIds.Length + 1];
             System.Array.Copy(gsParamIds, withEnvp, gsParamIds.Length);
             withEnvp[gsParamIds.Length] = envpId;
@@ -1672,7 +1672,7 @@ public abstract partial class HandlerBase
             // generic (Lf<int> + Lf<long>) each own an __envp field — a definition key is
             // last-spec-wins and wires spec 1's body to spec 2's field (silent wrong env / fault).
             // Same keying discipline as _methodParamVarIds[constructed] below.
-            _ctx.RegisterEnvpField(constructed, envpId);
+            _ctx.Closures.RegisterEnvpField(constructed, envpId);
         }
         _methodParamVarIds[constructed] = gsParamIds;
         foreach (var pid in gsParamIds) func.ParamFieldNames.Add(pid);
@@ -1681,7 +1681,7 @@ public abstract partial class HandlerBase
         {
             var retType = GetUdonType(constructed.ReturnType);
             var retId = $"__{idx}_{SanitizeId(constructed.Name)}__ret";
-            _ctx.DeclareVar(retId, retType);
+            _ctx.Storage.DeclareVar(retId, retType);
             func.ReturnType = retType;
             func.ReturnSlots.Add(new ReturnSlot(retId, retType));
             _methodReturns[constructed] = new[] { new ReturnSlot(retId, retType) };
@@ -1726,10 +1726,10 @@ public abstract partial class HandlerBase
     /// closure must have a BindingScope lexically enclosing this creation site.</summary>
     protected CLeaf ClosureEnvLeaf(IMethodSymbol targetMethod)
     {
-        if (targetMethod == null || _ctx.CaptureScope == null
-            || !_ctx.CaptureScope.IsCapturingClosure(targetMethod.OriginalDefinition))
+        if (targetMethod == null || _ctx.Closures.CaptureScope == null
+            || !_ctx.Closures.CaptureScope.IsCapturingClosure(targetMethod.OriginalDefinition))
             return Const(null, "SystemObject");
-        if (!_ctx.CaptureScope.ClosureScopes.TryGetValue(targetMethod.OriginalDefinition, out var closureScope)
+        if (!_ctx.Closures.CaptureScope.ClosureScopes.TryGetValue(targetMethod.OriginalDefinition, out var closureScope)
             || closureScope.BindingScope == null)
             throw new System.InvalidOperationException(
                 $"Capturing closure '{targetMethod.Name}' has no binding scope enclosing its creation site.");
@@ -1825,7 +1825,7 @@ public abstract partial class HandlerBase
             && baseCopy.ExportName == null)
         {
             bridgeExportName = DelegateAbi.BridgeName(baseCopy.Name);
-            _ctx.PendingDelegateBridges.Add((targetMethod, bridgeExportName, _ctx.TypeParamMap));
+            _ctx.Synthetics.DelegateBridges.Add((targetMethod, bridgeExportName, _ctx.Generics.TypeParamMap));
         }
         // For hoisted lambdas/local functions, create a pending bridge dynamically
         // since they aren't part of the TypeLayout's pre-computed bridges.
@@ -1853,7 +1853,7 @@ public abstract partial class HandlerBase
             bridgeExportName = DelegateAbi.BridgeName(targetSlot.VarPrefix);
             // Carry the current type-param map by reference — it is immutable and per-EmitMethod fresh, so
             // it stays valid for the drain (which runs after generic-method emit clears the ambient map).
-            _ctx.PendingDelegateBridges.Add((targetMethod, bridgeExportName, _ctx.TypeParamMap));
+            _ctx.Synthetics.DelegateBridges.Add((targetMethod, bridgeExportName, _ctx.Generics.TypeParamMap));
         }
         else if (targetMethod.IsGenericMethod)
         {
@@ -1897,7 +1897,7 @@ public abstract partial class HandlerBase
                     + "(the specialization's bridge must live in this program).");
             RegisterGenericSpecialization(constructed);
             bridgeExportName = DelegateAbi.BridgeName(_methodFunctions[constructed].Name);
-            _ctx.PendingDelegateBridges.Add((constructed, bridgeExportName, _ctx.TypeParamMap));
+            _ctx.Synthetics.DelegateBridges.Add((constructed, bridgeExportName, _ctx.Generics.TypeParamMap));
             // B52: advance targetMethod to the registered specialization (mirroring the local-function
             // arm) so the variance/adapter block below enqueues the ADAPTER against the spec that is
             // actually emitted — otherwise the adapter names the raw generic definition, EmitPending-
@@ -1915,7 +1915,7 @@ public abstract partial class HandlerBase
             && !ExternResolver.IsUdonSharpBehaviour(targetMethod.ContainingType))
         {
             bridgeExportName = DelegateAbi.BridgeName(foreignFunc.Name);
-            _ctx.PendingDelegateBridges.Add((targetMethod, bridgeExportName, _ctx.TypeParamMap));
+            _ctx.Synthetics.DelegateBridges.Add((targetMethod, bridgeExportName, _ctx.Generics.TypeParamMap));
         }
         // R-M2 (design §2): a method-group binding of a THIS-CLASS private / private-protected method. The
         // planner no longer plans a speculative bridge for it (LayoutPlanner.IsExcludedFromSpeculativeBridge),
@@ -1937,7 +1937,7 @@ public abstract partial class HandlerBase
                  && SymbolEqualityComparer.Default.Equals(targetMethod.ContainingType, _classSymbol))
         {
             bridgeExportName = DelegateAbi.BridgeName(privFunc.Name);
-            _ctx.PendingDelegateBridges.Add((targetMethod, bridgeExportName, _ctx.TypeParamMap));
+            _ctx.Synthetics.DelegateBridges.Add((targetMethod, bridgeExportName, _ctx.Generics.TypeParamMap));
         }
         else
         {
@@ -1959,15 +1959,15 @@ public abstract partial class HandlerBase
         if (op.Target is IMethodReferenceOperation
             && op.Type is INamedTypeSymbol delegateType && delegateType.DelegateInvokeMethod is { } delegateInvoke)
         {
-            var sigS = DelegateAbi.BuildSigPart(delegateInvoke, _ctx.TypeParamMap);
-            if (sigS != DelegateAbi.BuildSigPart(targetMethod, _ctx.TypeParamMap))
+            var sigS = DelegateAbi.BuildSigPart(delegateInvoke, _ctx.Generics.TypeParamMap);
+            if (sigS != DelegateAbi.BuildSigPart(targetMethod, _ctx.Generics.TypeParamMap))
             {
                 if (targetInstance == null)
                 {
                     var targetKey = bridgeExportName.StartsWith("__dlg_")
                         ? bridgeExportName.Substring("__dlg_".Length) : bridgeExportName;
                     var adapterName = DelegateAbi.SigAdapterName(targetKey, sigS);
-                    _ctx.PendingSigAdapterBridges.Add((targetMethod, delegateInvoke, adapterName, _ctx.TypeParamMap));
+                    _ctx.Synthetics.SigAdapterBridges.Add((targetMethod, delegateInvoke, adapterName, _ctx.Generics.TypeParamMap));
                     return (adapterName, FuncRef(adapterName), targetInstance, envLeaf);
                 }
 
@@ -1979,7 +1979,7 @@ public abstract partial class HandlerBase
                 // targetMethod's OWN plain bridge (bridgeExportName, planned unconditionally on the
                 // FOREIGN class per its speculative-bridge policy), which reads/writes sig-T's conv
                 // vars — staging under sig-S would silently drop values across the dispatch.
-                var wrapperName = RegisterWrapperSig(delegateInvoke, targetMethod, _ctx.TypeParamMap);
+                var wrapperName = RegisterWrapperSig(delegateInvoke, targetMethod, _ctx.Generics.TypeParamMap);
                 return (wrapperName, FuncRef(wrapperName), null, innerBundle);
             }
         }
@@ -2284,11 +2284,11 @@ public abstract partial class HandlerBase
         // 8192-entry __recurStack (compile-clean VmFault on legal C#).
         if (IsRecursiveEdge(_currentMethod, target))
         {
-            bool tailSpared = callSite != null && _ctx.Recursion.TailSparedDirectCallSites != null
-                && _ctx.Recursion.TailSparedDirectCallSites.Contains(callSite);
+            bool tailSpared = callSite != null && _ctx.RecursionContext.Info.TailSparedDirectCallSites != null
+                && _ctx.RecursionContext.Info.TailSparedDirectCallSites.Contains(callSite);
             if (tailSpared)
                 return InternalCall(func.Name, args, retType, tailSpared: true);
-            _ctx.EnsureRecursionStack();
+            _ctx.Storage.EnsureRecursionStack();
             _builder.CurrentFunction.RecursiveCalleeNames.Add(func.Name);
             AccumulateRecursionSpillFields(_builder.CurrentFunction);
         }
@@ -2327,10 +2327,10 @@ public abstract partial class HandlerBase
     /// so InsertRecursionSpills wraps the flagged dispatch arms with the spill/reload.</summary>
     protected bool MarkReentrantDispatch(IOperation dispatchOp)
     {
-        if (_ctx.Recursion.ReentrantDispatchSites == null || dispatchOp?.Syntax == null
-            || !_ctx.Recursion.ReentrantDispatchSites.Contains(dispatchOp.Syntax))
+        if (_ctx.RecursionContext.Info.ReentrantDispatchSites == null || dispatchOp?.Syntax == null
+            || !_ctx.RecursionContext.Info.ReentrantDispatchSites.Contains(dispatchOp.Syntax))
             return false;
-        _ctx.EnsureRecursionStack();
+        _ctx.Storage.EnsureRecursionStack();
         AccumulateRecursionSpillFields(_builder.CurrentFunction);
         return true;
     }
@@ -2369,11 +2369,11 @@ public abstract partial class HandlerBase
     {
         if (_currentMethod == null) return false;
         var local = CrossDispatchLocalCallee(staticCallee);
-        if (local == null || !_ctx.IsRecursiveEdge(_currentMethod, local)) return false;
-        if (site?.Syntax != null && _ctx.Recursion.TailSparedDirectCallSites != null
-            && _ctx.Recursion.TailSparedDirectCallSites.Contains(site.Syntax))
+        if (local == null || !_ctx.RecursionContext.IsRecursiveEdge(_currentMethod, local)) return false;
+        if (site?.Syntax != null && _ctx.RecursionContext.Info.TailSparedDirectCallSites != null
+            && _ctx.RecursionContext.Info.TailSparedDirectCallSites.Contains(site.Syntax))
             return false;
-        _ctx.EnsureRecursionStack();
+        _ctx.Storage.EnsureRecursionStack();
         AccumulateRecursionSpillFields(_builder.CurrentFunction);
         return true;
     }
@@ -2405,7 +2405,7 @@ public abstract partial class HandlerBase
         void AddField(string id)
         {
             if (id == null || !seen.Add(id)) return;
-            var t = _ctx.GetFieldType(id);
+            var t = _ctx.Storage.GetFieldType(id);
             if (t != null) fields.Add((id, t));
         }
         if (_currentMethod != null && _methodParamVarIds.TryGetValue(_currentMethod, out var pids))
@@ -2426,12 +2426,12 @@ public abstract partial class HandlerBase
                     // local / bundle) is what the existing spill preserves. Spilling the dead field is
                     // the wastefully-conservative over-spill the entry criteria forbid. Definition-keyed
                     // via TryGetEnvBinding (constructed specs re-key through OriginalDefinition, §2 rule 2).
-                    if (_ctx.TryGetEnvBinding(param, out _))
+                    if (_ctx.Closures.TryGetEnvBinding(param, out _))
                         continue;
                 }
                 AddField(pids[i]);
             }
-        AddField(_ctx.CurrentStructReceiverParamId);
+        AddField(_ctx.Methods.CurrentStructReceiverParamId);
         // Only the CURRENT method's own locals are frame-local and need spilling. LocalBindings is a
         // persistent class-wide map (survives scope pop for capture resolution), so before wave-9
         // round-8 [Y9] a non-hoisted method spilled every local of every PREVIOUSLY EMITTED method

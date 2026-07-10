@@ -19,19 +19,19 @@ public class UasmEmitter
     CModule _module => _ctx.Module;
     CoreBuilder _builder => _ctx.Builder;
     LayoutPlanner _planner => _ctx.Planner;
-    Dictionary<IMethodSymbol, CFunction> _methodFunctions => _ctx.MethodFunctions;
-    Dictionary<IMethodSymbol, EmitContext.MethodSlot> _methodSlots => _ctx.MethodSlots;
-    Dictionary<IMethodSymbol, ReturnSlot[]> _methodReturns => _ctx.MethodReturns;
-    Dictionary<IMethodSymbol, string[]> _methodParamVarIds => _ctx.MethodParamVarIds;
-    IMethodSymbol _currentMethod { get => _ctx.CurrentMethod; set => _ctx.CurrentMethod = value; }
-    List<(IMethodSymbol symbol, CFunction func)> _pendingLocalFunctions => _ctx.PendingLocalFunctions;
-    List<IMethodSymbol> _pendingGenericSpecs => _ctx.PendingGenericSpecs;
-    IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> _typeParamMap => _ctx.TypeParamMap;
+    Dictionary<IMethodSymbol, CFunction> _methodFunctions => _ctx.Methods.Functions;
+    Dictionary<IMethodSymbol, EmitContext.MethodSlot> _methodSlots => _ctx.Methods.Slots;
+    Dictionary<IMethodSymbol, ReturnSlot[]> _methodReturns => _ctx.Methods.Returns;
+    Dictionary<IMethodSymbol, string[]> _methodParamVarIds => _ctx.Methods.ParamVarIds;
+    IMethodSymbol _currentMethod { get => _ctx.Methods.CurrentMethod; set => _ctx.Methods.CurrentMethod = value; }
+    List<(IMethodSymbol symbol, CFunction func)> _pendingLocalFunctions => _ctx.Methods.PendingLocalFunctions;
+    List<IMethodSymbol> _pendingGenericSpecs => _ctx.Generics.PendingSpecs;
+    IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> _typeParamMap => _ctx.Generics.TypeParamMap;
     HashSet<IMethodSymbol> _inheritedMethods = new(SymbolEqualityComparer.Default);
-    List<(string fieldName, IOperation initOp, ITypeSymbol fieldType)> _fieldInitOps => _ctx.FieldInitOps;
-    List<(string fieldName, IOperation initOp, ITypeSymbol fieldType)> _staticFieldInitOps => _ctx.StaticFieldInitOps;
-    Dictionary<string, string> _fieldChangeCallbacks => _ctx.FieldChangeCallbacks;
-    List<EmitDiagnostic> _diagnostics => _ctx.Diagnostics;
+    List<(string fieldName, IOperation initOp, ITypeSymbol fieldType)> _fieldInitOps => _ctx.Initializers.FieldInitOps;
+    List<(string fieldName, IOperation initOp, ITypeSymbol fieldType)> _staticFieldInitOps => _ctx.Initializers.StaticFieldInitOps;
+    Dictionary<string, string> _fieldChangeCallbacks => _ctx.Initializers.FieldChangeCallbacks;
+    List<EmitDiagnostic> _diagnostics => _ctx.DiagnosticState.Diagnostics;
 
     CodeGenResult _codeGenResult;
 
@@ -121,7 +121,7 @@ public class UasmEmitter
 
     /// <summary>Test/tooling accessors for the Stage 2 M1 CaptureScopeAnalysis (built in <see cref="Emit"/>,
     /// consumed by nothing yet — see EmitContext.CaptureScope).</summary>
-    public CaptureScopeAnalysis CaptureScope => _ctx.CaptureScope;
+    public CaptureScopeAnalysis CaptureScope => _ctx.Closures.CaptureScope;
     public Compilation Compilation => _ctx.Compilation;
     public INamedTypeSymbol ClassSymbol => _ctx.ClassSymbol;
 
@@ -150,7 +150,7 @@ public class UasmEmitter
         // _fieldInitOps (own + base + auto-property + static, already collected + spliced by EmitFields),
         // NOT CaptureScopeAnalysis's own own-class-instance-only re-collection which missed base field and
         // auto-property initializers.
-        _ctx.SetCaptureScope(CaptureScopeAnalysis.Build(_compilation, _classSymbol,
+        _ctx.Closures.SetCaptureScope(CaptureScopeAnalysis.Build(_compilation, _classSymbol,
             plan.CaptureRoots, plan.Reach.BodyByDef, plan.FieldInitOps));
         EmitMethods(plan);
         OnIrPass?.Invoke("after-emit", _module);
@@ -177,8 +177,8 @@ public class UasmEmitter
     {
         var typeName = _classSymbol.ToDisplayString();
         long typeId = ComputeTypeId(typeName);
-        _ctx.DeclareField(EmitContext.ReflTypeIdField, "SystemInt64", defaultValue: typeId);
-        _ctx.DeclareField(EmitContext.ReflTypeNameField, "SystemString", defaultValue: typeName);
+        _ctx.Storage.DeclareField(EmitContext.ReflTypeIdField, "SystemInt64", defaultValue: typeId);
+        _ctx.Storage.DeclareField(EmitContext.ReflTypeNameField, "SystemString", defaultValue: typeName);
 
         var ancestorIds = CollectAncestorTypeIds(_classSymbol);
         if (ancestorIds.Length > 1)
@@ -338,7 +338,7 @@ public class UasmEmitter
                     }
                 }
             }
-            _ctx.DeclareField(member.Name, udonType, flags, constValue, syncMode);
+            _ctx.Storage.DeclareField(member.Name, udonType, flags, constValue, syncMode);
 
             // Aggregate (struct/tuple) field with NO explicit initializer → C# default-initializes it to a
             // zeroed struct. In the object[] emulation that requires a fresh default array; without it the heap
@@ -346,7 +346,7 @@ public class UasmEmitter
             if (syntaxRef?.GetSyntax() is not VariableDeclaratorSyntax { Initializer: not null }
                 && member.Type is INamedTypeSymbol aggFieldType && EmitPolicy.IsAggregateType(aggFieldType))
             {
-                _ctx.AggregateFieldDefaults.Add((member.Name, aggFieldType));
+                _ctx.Aggregates.FieldDefaults.Add((member.Name, aggFieldType));
             }
 
             // Detect [FieldChangeCallback("PropertyName")]
@@ -356,7 +356,7 @@ public class UasmEmitter
                 && fcbAttr.ConstructorArguments[0].Value is string propName)
             {
                 _fieldChangeCallbacks[member.Name] = propName;
-                _ctx.DeclareField($"__old_{member.Name}", udonType);
+                _ctx.Storage.DeclareField($"__old_{member.Name}", udonType);
             }
         }
 
@@ -387,7 +387,7 @@ public class UasmEmitter
             var udonType = GetUdonType(prop.Type);
             var flags = FieldFlags.None;
             if (prop.DeclaredAccessibility == Accessibility.Public) flags |= FieldFlags.Export;
-            _ctx.DeclareField(prop.Name, udonType, flags,
+            _ctx.Storage.DeclareField(prop.Name, udonType, flags,
                 isAuto ? ResolveAutoPropInitializer(prop.Name, prop) : null);
         }
 
@@ -481,7 +481,7 @@ public class UasmEmitter
                 // the field compiled clean but shipped unsynced (networking silently dead on device).
                 var baseSyncMode = ReadFieldSyncMode(member, udonType, ref baseFlags);
 
-                _ctx.DeclareField(member.Name, udonType, baseFlags, constValue, baseSyncMode);
+                _ctx.Storage.DeclareField(member.Name, udonType, baseFlags, constValue, baseSyncMode);
 
                 var baseFcbAttr = member.GetAttributes()
                     .FirstOrDefault(a => a.AttributeClass?.Name == "FieldChangeCallbackAttribute");
@@ -489,7 +489,7 @@ public class UasmEmitter
                     && baseFcbAttr.ConstructorArguments[0].Value is string basePropName)
                 {
                     _fieldChangeCallbacks[member.Name] = basePropName;
-                    _ctx.DeclareField($"__old_{member.Name}", udonType);
+                    _ctx.Storage.DeclareField($"__old_{member.Name}", udonType);
                 }
             }
             // Field-like events inherited from a user base class (design §2.1, A-M2) — same
@@ -523,7 +523,7 @@ public class UasmEmitter
                         // Round-8 [R2]: C# runs the BASE declaration's initializer into THIS backing
                         // (the leaf's stays default — DiffFuzz: base.P*10+P ref=50).
                         if (isAuto)
-                            _ctx.DeclareField(BaseAutoPropBackingName(prop), GetUdonType(prop.Type), FieldFlags.None,
+                            _ctx.Storage.DeclareField(BaseAutoPropBackingName(prop), GetUdonType(prop.Type), FieldFlags.None,
                                 ResolveAutoPropInitializer(BaseAutoPropBackingName(prop), prop));
                         continue;
                     }
@@ -542,7 +542,7 @@ public class UasmEmitter
                 var flags = FieldFlags.None;
                 if (prop.DeclaredAccessibility == Accessibility.Public) flags |= FieldFlags.Export;
                 declaredMemberSyms[prop.Name] = prop;
-                _ctx.DeclareField(prop.Name, udonType, flags,
+                _ctx.Storage.DeclareField(prop.Name, udonType, flags,
                     isAuto ? ResolveAutoPropInitializer(prop.Name, prop) : null);
             }
             baseType = baseType.BaseType;
@@ -679,10 +679,10 @@ public class UasmEmitter
             if (constValue == null)
                 _staticFieldInitOps.Add((member.Name, initOp, member.Type)); // static tier — §3.6
         }
-        _ctx.DeclareField(member.Name, udonType, FieldFlags.None, constValue);
+        _ctx.Storage.DeclareField(member.Name, udonType, FieldFlags.None, constValue);
 
         if (initOp == null && member.Type is INamedTypeSymbol aggFieldType && EmitPolicy.IsAggregateType(aggFieldType))
-            _ctx.AggregateFieldDefaults.Add((member.Name, aggFieldType));
+            _ctx.Aggregates.FieldDefaults.Add((member.Name, aggFieldType));
 
         return true;
     }
@@ -720,8 +720,8 @@ public class UasmEmitter
         // §3.4-1: ref/out delegate signatures are rejected at the convention-var declaration side too.
         DelegateAbi.ValidateNoRefOutParams(delegateType.DelegateInvokeMethod);
 
-        _ctx.DeclareField(member.Name, "SystemObjectArray", FieldFlags.None);
-        _ctx.DelegateFields.Add(member.Name);
+        _ctx.Storage.DeclareField(member.Name, "SystemObjectArray", FieldFlags.None);
+        _ctx.Synthetics.DelegateFields.Add(member.Name);
 
         // Declare the signature-keyed __dlgc_ convention vars for this delegate signature (§3.2).
         var invoke = delegateType.DelegateInvokeMethod;
@@ -730,9 +730,9 @@ public class UasmEmitter
         // capture-free byte invariant (§1.3). It is declared on-first-use at the dispatch/bridge site.
         var (convArgs, convRet, _) = HandlerBase.GetConventionFieldNames(delegateType);
         for (int ci = 0; ci < convArgs.Length; ci++)
-            _ctx.TryDeclareVar(convArgs[ci], ExternResolver.GetUdonTypeName(invoke.Parameters[ci].Type));
+            _ctx.Storage.TryDeclareVar(convArgs[ci], ExternResolver.GetUdonTypeName(invoke.Parameters[ci].Type));
         if (convRet != null)
-            _ctx.TryDeclareVar(convRet, ExternResolver.GetUdonTypeName(invoke.ReturnType));
+            _ctx.Storage.TryDeclareVar(convRet, ExternResolver.GetUdonTypeName(invoke.ReturnType));
 
         if (member.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
             is VariableDeclaratorSyntax { Initializer: not null } dlgDeclarator)
@@ -901,7 +901,7 @@ public class UasmEmitter
         var typeLayout = _planner.GetLayout(_classSymbol);
 
         // First pass: create IrFunctions, assign params, return vars (skip generic definitions)
-        _ctx.NextMethodIndex = 0;
+        _ctx.Methods.NextMethodIndex = 0;
         foreach (var method in methods)
         {
             EmitPolicy.RejectInParameters(method); // round-7 follow-up [Q3], declaration-side
@@ -910,7 +910,7 @@ public class UasmEmitter
 
             var ml = typeLayout.Methods[method];
             var exportName = ml.ExportName;
-            var slot = _ctx.RegisterMethod(method, _ => exportName);
+            var slot = _ctx.Methods.Register(method, _ => exportName);
             var idx = slot.Index;
 
             // Determine if this method should be exported
@@ -943,7 +943,7 @@ public class UasmEmitter
             var paramVarIds = new string[method.Parameters.Length];
             for (int i = 0; i < method.Parameters.Length; i++)
             {
-                _ctx.DeclareVar(ml.ParamIds[i], GetUdonType(method.Parameters[i].Type));
+                _ctx.Storage.DeclareVar(ml.ParamIds[i], GetUdonType(method.Parameters[i].Type));
                 paramVarIds[i] = ml.ParamIds[i];
             }
             _methodParamVarIds[method] = paramVarIds;
@@ -953,7 +953,7 @@ public class UasmEmitter
             if (ml.Returns.Count > 0)
             {
                 foreach (var ret in ml.Returns)
-                    _ctx.DeclareVar(ret.Id, ret.UdonType);
+                    _ctx.Storage.DeclareVar(ret.Id, ret.UdonType);
 
                 if (ml.Returns.Count == 1)
                     func.ReturnType = ml.Returns[0].UdonType;
@@ -992,13 +992,13 @@ public class UasmEmitter
             if (fm.ContainingType.IsGenericType && !fm.IsDefinition)
             {
                 var fmGenericDef = fm.OriginalDefinition;
-                if (_ctx.FirstGenericSpec.TryGetValue(fmGenericDef, out var fmFirstSpec))
+                if (_ctx.Generics.FirstSpecByDefinition.TryGetValue(fmGenericDef, out var fmFirstSpec))
                     EmitContext.ThrowIfClosureAliasesInstantiation(_compilation, fmFirstSpec, fm);
                 else
-                    _ctx.FirstGenericSpec[fmGenericDef] = fm;
+                    _ctx.Generics.FirstSpecByDefinition[fmGenericDef] = fm;
             }
 
-            var slot = _ctx.RegisterMethod(fm, i => i.ToString());
+            var slot = _ctx.Methods.Register(fm, i => i.ToString());
             var idx = slot.Index;
             var funcName = $"__{idx}_{SanitizeId(fm.Name)}";
             var func = _module.AddFunction(funcName);
@@ -1009,7 +1009,7 @@ public class UasmEmitter
             {
                 var param = fm.Parameters[pi];
                 var paramId = $"__{idx}_{param.Name}__param";
-                _ctx.DeclareVar(paramId, GetUdonType(param.Type));
+                _ctx.Storage.DeclareVar(paramId, GetUdonType(param.Type));
                 fmParamIds[pi] = paramId;
             }
             _methodParamVarIds[fm] = fmParamIds;
@@ -1042,10 +1042,10 @@ public class UasmEmitter
             if (sm.ContainingType.IsGenericType)
             {
                 var genericDef = sm.OriginalDefinition;
-                if (_ctx.FirstGenericSpec.TryGetValue(genericDef, out var firstSpec))
+                if (_ctx.Generics.FirstSpecByDefinition.TryGetValue(genericDef, out var firstSpec))
                     EmitContext.ThrowIfClosureAliasesInstantiation(_compilation, firstSpec, sm);
                 else
-                    _ctx.FirstGenericSpec[genericDef] = sm;
+                    _ctx.Generics.FirstSpecByDefinition[genericDef] = sm;
 
                 var containingArgPart = string.Join("_", sm.ContainingType.TypeArguments.Select(ExternResolver.GetUdonTypeName));
                 var methodArgPart = sm.IsGenericMethod
@@ -1054,7 +1054,7 @@ public class UasmEmitter
                 typeArgSuffix = $"_{containingArgPart}{methodArgPart}";
             }
 
-            var slot = _ctx.RegisterMethod(sm, i => i.ToString());
+            var slot = _ctx.Methods.Register(sm, i => i.ToString());
             var idx = slot.Index;
             var isCtor = sm.MethodKind == MethodKind.Constructor;
             var funcName = isCtor
@@ -1068,7 +1068,7 @@ public class UasmEmitter
             if (!sm.IsStatic)
             {
                 var receiverId = $"__{idx}_this__param";
-                _ctx.DeclareVar(receiverId, "SystemObjectArray");
+                _ctx.Storage.DeclareVar(receiverId, "SystemObjectArray");
                 func.ParamFieldNames.Add(receiverId);
             }
 
@@ -1077,7 +1077,7 @@ public class UasmEmitter
             {
                 var p = sm.Parameters[pi];
                 var pid = $"__{idx}_{p.Name}__param";
-                _ctx.DeclareVar(pid, GetUdonType(p.Type));
+                _ctx.Storage.DeclareVar(pid, GetUdonType(p.Type));
                 smParamIds[pi] = pid;
                 func.ParamFieldNames.Add(pid);
             }
@@ -1106,12 +1106,12 @@ public class UasmEmitter
             if (bm.IsGenericMethod && !bm.IsDefinition)
             {
                 var bmDef = bm.OriginalDefinition;
-                if (_ctx.FirstGenericSpec.TryGetValue(bmDef, out var bmFirst))
+                if (_ctx.Generics.FirstSpecByDefinition.TryGetValue(bmDef, out var bmFirst))
                     EmitContext.ThrowIfClosureAliasesInstantiation(_compilation, bmFirst, bm);
                 else
-                    _ctx.FirstGenericSpec[bmDef] = bm;
+                    _ctx.Generics.FirstSpecByDefinition[bmDef] = bm;
             }
-            var slot = _ctx.RegisterMethod(bm, i => i.ToString());
+            var slot = _ctx.Methods.Register(bm, i => i.ToString());
             var idx = slot.Index;
             var funcName = $"__{idx}_{SanitizeId(bm.Name)}";
             var func = _module.AddFunction(funcName);
@@ -1122,7 +1122,7 @@ public class UasmEmitter
             {
                 var param = bm.Parameters[pi];
                 var paramId = $"__{idx}_{param.Name}__param";
-                _ctx.DeclareVar(paramId, GetUdonType(param.Type));
+                _ctx.Storage.DeclareVar(paramId, GetUdonType(param.Type));
                 bmParamIds[pi] = paramId;
             }
             _methodParamVarIds[bm] = bmParamIds;
@@ -1166,7 +1166,7 @@ public class UasmEmitter
         // EmitFieldInitializers runs during the body pass — so an initializer that hoists a lambda
         // (delegate-field initializer) gets its CFunction body and __dlg_ bridge emitted instead of
         // landing in never-drained pending lists (CoreToUasm 'CFuncRef references unknown function').
-        if ((_fieldInitOps.Count > 0 || _fieldChangeCallbacks.Count > 0 || _ctx.AggregateFieldDefaults.Count > 0)
+        if ((_fieldInitOps.Count > 0 || _fieldChangeCallbacks.Count > 0 || _ctx.Aggregates.FieldDefaults.Count > 0)
             && !methods.Any(m => UdonEventNames.TryGetValue(m.Name, out var en) && en == "_start"))
         {
             var startFunc = _module.AddFunction("_start", "_start");
@@ -1235,13 +1235,13 @@ public class UasmEmitter
                 if (ifaceMl.ParamIds[i] != classMl.ParamIds[i])
                 {
                     var udonType = GetUdonType(ifaceMethod.Parameters[i].Type);
-                    _ctx.TryDeclareVar(ifaceMl.ParamIds[i], udonType);
+                    _ctx.Storage.TryDeclareVar(ifaceMl.ParamIds[i], udonType);
                 }
             }
             if (ifaceMl.ReturnId != null && ifaceMl.ReturnId != classMl.ReturnId)
             {
                 var retType = GetUdonType(ifaceMethod.ReturnType);
-                _ctx.TryDeclareVar(ifaceMl.ReturnId, retType);
+                _ctx.Storage.TryDeclareVar(ifaceMl.ReturnId, retType);
             }
 
             // Export the bridge under the canonical interface-qualified name (unique vs class methods and
@@ -1307,12 +1307,12 @@ public class UasmEmitter
             for (int i = 0; i < method.Parameters.Length; i++)
             {
                 var argType = ExternResolver.GetUdonTypeName(method.Parameters[i].Type);
-                _ctx.TryDeclareVar(DelegateAbi.ConvArgName(sigPart, i), argType);
+                _ctx.Storage.TryDeclareVar(DelegateAbi.ConvArgName(sigPart, i), argType);
             }
             if (!method.ReturnsVoid)
             {
                 var retType = ExternResolver.GetUdonTypeName(method.ReturnType);
-                _ctx.TryDeclareVar(DelegateAbi.ConvRetName(sigPart), retType);
+                _ctx.Storage.TryDeclareVar(DelegateAbi.ConvRetName(sigPart), retType);
             }
 
             // Build bridge function
@@ -1368,17 +1368,17 @@ public class UasmEmitter
         for (int i = 0; i < invoke.Parameters.Length; i++)
         {
             argTypes[i] = ExternResolver.GetUdonTypeName(invoke.Parameters[i].Type, typeParamMap);
-            _ctx.TryDeclareVar(DelegateAbi.ConvArgName(sigPart, i), argTypes[i]);
+            _ctx.Storage.TryDeclareVar(DelegateAbi.ConvArgName(sigPart, i), argTypes[i]);
         }
         string retType = invoke.ReturnsVoid ? null : ExternResolver.GetUdonTypeName(invoke.ReturnType, typeParamMap);
-        if (retType != null) _ctx.TryDeclareVar(DelegateAbi.ConvRetName(sigPart), retType);
+        if (retType != null) _ctx.Storage.TryDeclareVar(DelegateAbi.ConvRetName(sigPart), retType);
         return retType;
     }
 
     void EmitPendingDelegateBridges()
     {
         var emitted = new HashSet<string>();
-        foreach (var (method, bridgeExportName, resolvedMap) in _ctx.PendingDelegateBridges)
+        foreach (var (method, bridgeExportName, resolvedMap) in _ctx.Synthetics.DelegateBridges)
         {
             if (!emitted.Add(bridgeExportName)) continue;
             if (!_methodFunctions.TryGetValue(method, out var realFunc)) continue;
@@ -1405,7 +1405,7 @@ public class UasmEmitter
     void EmitPendingSigAdapterBridges()
     {
         var emitted = new HashSet<string>();
-        foreach (var (targetMethod, delegateInvoke, adapterName, resolvedMap) in _ctx.PendingSigAdapterBridges)
+        foreach (var (targetMethod, delegateInvoke, adapterName, resolvedMap) in _ctx.Synthetics.SigAdapterBridges)
         {
             if (!emitted.Add(adapterName)) continue;
             if (!_methodFunctions.TryGetValue(targetMethod, out var realFunc)) continue;
@@ -1460,10 +1460,10 @@ public class UasmEmitter
         // arg (positional copy-in binds it to the real function's __envp param field) under env
         // null/tag guards. A hand-rolled object[] or mismatched delegate bundle must LogError +
         // default, not fault or silently read garbage.
-        if (_ctx.CaptureScope != null && _ctx.CaptureScope.IsCapturingClosure(closureCheckMethod))
+        if (_ctx.Closures.CaptureScope != null && _ctx.Closures.CaptureScope.IsCapturingClosure(closureCheckMethod))
         {
             var envConv = DelegateAbi.ConvEnvName(sigPart);
-            _ctx.TryDeclareVar(envConv, EnvEmit.EnvType);
+            _ctx.Storage.TryDeclareVar(envConv, EnvEmit.EnvType);
             var envLeaf = BridgeLoad(envConv, EnvEmit.EnvType);
             callArgs.Add(envLeaf);
             var envOk = BridgeCallExtern("SystemBoolean",
@@ -1522,7 +1522,7 @@ public class UasmEmitter
 
     void EmitPendingWrapperBridges()
     {
-        foreach (var (wrapperName, (outerInvoke, innerInvoke, typeParamMap)) in _ctx.PendingWrapperSigs)
+        foreach (var (wrapperName, (outerInvoke, innerInvoke, typeParamMap)) in _ctx.Synthetics.WrapperSigs)
             EmitWrapperBridge(wrapperName, outerInvoke, innerInvoke, typeParamMap);
     }
 
@@ -1538,23 +1538,23 @@ public class UasmEmitter
 
         // §1.6/A-M3 reentrancy: unconditionally reentrant, same reasoning as the fan-out bridge (any
         // sig-S bundle's [1]/[2] can point at this wrapper by construction).
-        _ctx.EnsureRecursionStack();
+        _ctx.Storage.EnsureRecursionStack();
 
         var retType = DeclareConvSigFields(outerSigPart, outerInvoke, typeParamMap, out var argTypes);
-        _ctx.TryDeclareVar(DelegateAbi.ConvEnvName(outerSigPart), EnvEmit.EnvType);
+        _ctx.Storage.TryDeclareVar(DelegateAbi.ConvEnvName(outerSigPart), EnvEmit.EnvType);
 
         var wrapperFunc = _module.AddFunction(wrapperName, wrapperName);
         var prevFunc = _builder.CurrentFunction;
         _builder.SetFunction(wrapperFunc);
 
         // INV-A: snapshot the inner bundle + every OUTER conv arg to LOCAL SLOTS before dispatching.
-        var innerSlot = _ctx.AllocTemp("SystemObjectArray");
+        var innerSlot = _ctx.Builder.AllocScratch("SystemObjectArray");
         _builder.EmitAssign(innerSlot, BridgeLoad(DelegateAbi.ConvEnvName(outerSigPart), "SystemObjectArray"));
 
         var argSlots = new int[outerInvoke.Parameters.Length];
         for (int i = 0; i < outerInvoke.Parameters.Length; i++)
         {
-            argSlots[i] = _ctx.AllocTemp(argTypes[i]);
+            argSlots[i] = _ctx.Builder.AllocScratch(argTypes[i]);
             _builder.EmitAssign(argSlots[i], BridgeLoad(DelegateAbi.ConvArgName(outerSigPart, i), argTypes[i]));
         }
         var argLeaves = new CLeaf[argSlots.Length];
@@ -1571,7 +1571,7 @@ public class UasmEmitter
         // whether any method of sig-T exists locally.
         var innerSigPart = DelegateAbi.BuildSigPart(innerInvoke, typeParamMap);
         DeclareConvSigFields(innerSigPart, innerInvoke, typeParamMap);
-        _ctx.TryDeclareVar(DelegateAbi.ConvEnvName(innerSigPart), EnvEmit.EnvType);
+        _ctx.Storage.TryDeclareVar(DelegateAbi.ConvEnvName(innerSigPart), EnvEmit.EnvType);
 
         var dispatch = new InvocationHandler(_ctx);
         var innerRet = dispatch.EmitFanoutElementDispatch(_builder.SlotRef(innerSlot), innerInvoke, typeParamMap, argLeaves);
@@ -1601,7 +1601,7 @@ public class UasmEmitter
     /// Same semantics as Array.Copy(src, srcStart, dst, dstStart, len), one extra loop per copy.</summary>
     void EmitMulticastArrayBlit(int srcSlot, CLeaf srcStart, int dstSlot, CLeaf dstStart, int lenSlot)
     {
-        var kSlot = _ctx.AllocTemp("SystemInt32");
+        var kSlot = _ctx.Builder.AllocScratch("SystemInt32");
         _builder.EmitFor(
             _ => _builder.EmitAssign(kSlot, BridgeConstInt(0)),
             () => BridgeCallExtern("SystemBoolean", "SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean",
@@ -1622,7 +1622,7 @@ public class UasmEmitter
 
     void EmitMulticastSynthetics()
     {
-        foreach (var (sigPart, (invoke, typeParamMap)) in _ctx.PendingMulticastSigs)
+        foreach (var (sigPart, (invoke, typeParamMap)) in _ctx.Synthetics.MulticastSigs)
         {
             EmitMulticastCombineHelper(sigPart);
             EmitMulticastRemoveHelper(sigPart);
@@ -1637,14 +1637,14 @@ public class UasmEmitter
     // with no defined member (e.g. (Suit)99 → "99").
     void EmitEnumToStringSynthetics()
     {
-        foreach (var enumType in _ctx.PendingEnumToString)
+        foreach (var enumType in _ctx.Synthetics.EnumToString)
         {
             var helperName = HandlerBase.EnumToStringHelperName(enumType);
             var underlyingUdon = ExternResolver.GetUdonTypeName(enumType.EnumUnderlyingType);
             var vId = $"{helperName}__v";
             var retId = $"{helperName}__ret";
-            _ctx.TryDeclareVar(vId, underlyingUdon);
-            _ctx.TryDeclareVar(retId, "SystemString");
+            _ctx.Storage.TryDeclareVar(vId, underlyingUdon);
+            _ctx.Storage.TryDeclareVar(retId, "SystemString");
 
             var func = _module.AddFunction(helperName);
             func.ParamFieldNames.Add(vId);
@@ -1679,10 +1679,10 @@ public class UasmEmitter
     CLeaf EmitMulticastMintBundle(string sigPart, CLeaf listLeaf)
     {
         var fanoutName = DelegateAbi.MulticastFanoutName(sigPart);
-        var mSlot = _ctx.AllocTemp("SystemObjectArray");
+        var mSlot = _ctx.Builder.AllocScratch("SystemObjectArray");
         var thisType = ExternResolver.GetUdonTypeName(_classSymbol);
         return DelegateAbi.EmitBundleMintToSlot(_builder, mSlot,
-            () => BridgeLoad(_ctx.DeclareThisOnce(thisType), thisType),
+            () => BridgeLoad(_ctx.Storage.DeclareThisOnce(thisType), thisType),
             _builder.Const(fanoutName, "SystemString"),
             _builder.FuncRef(fanoutName),
             listLeaf);
@@ -1700,8 +1700,8 @@ public class UasmEmitter
             "SystemString.__op_Equality__SystemString_SystemString__SystemBoolean",
             new CLeaf[] { tag, _builder.Const(fanoutName, "SystemString") });
 
-        var lSlot = _ctx.AllocTemp("SystemObjectArray");
-        var nSlot = _ctx.AllocTemp("SystemInt32");
+        var lSlot = _ctx.Builder.AllocScratch("SystemObjectArray");
+        var nSlot = _ctx.Builder.AllocScratch("SystemInt32");
         _builder.EmitIf(isMulticast,
             _ =>
             {
@@ -1726,9 +1726,9 @@ public class UasmEmitter
     {
         var helperName = DelegateAbi.MulticastCombineName(sigPart);
         var xId = $"{helperName}__x"; var yId = $"{helperName}__y"; var retId = $"{helperName}__ret";
-        _ctx.TryDeclareVar(xId, "SystemObjectArray");
-        _ctx.TryDeclareVar(yId, "SystemObjectArray");
-        _ctx.TryDeclareVar(retId, "SystemObjectArray");
+        _ctx.Storage.TryDeclareVar(xId, "SystemObjectArray");
+        _ctx.Storage.TryDeclareVar(yId, "SystemObjectArray");
+        _ctx.Storage.TryDeclareVar(retId, "SystemObjectArray");
 
         var func = _module.AddFunction(helperName);
         func.ParamFieldNames.Add(xId);
@@ -1754,12 +1754,12 @@ public class UasmEmitter
         EmitMulticastFlattenOperand(xLeaf, fanoutName, out var lxSlot, out var lenLxSlot);
         EmitMulticastFlattenOperand(yLeaf, fanoutName, out var lySlot, out var lenLySlot);
 
-        var catLenSlot = _ctx.AllocTemp("SystemInt32");
+        var catLenSlot = _ctx.Builder.AllocScratch("SystemInt32");
         _builder.EmitAssign(catLenSlot, BridgeCallExtern("SystemInt32",
             "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32",
             new CLeaf[] { _builder.SlotRef(lenLxSlot), _builder.SlotRef(lenLySlot) }));
 
-        var catSlot = _ctx.AllocTemp("SystemObjectArray");
+        var catSlot = _ctx.Builder.AllocScratch("SystemObjectArray");
         _builder.EmitAssign(catSlot, BridgeCallExtern("SystemObjectArray", MulticastArrCtor,
             new CLeaf[] { _builder.SlotRef(catLenSlot) }));
         EmitMulticastArrayBlit(lxSlot, BridgeConstInt(0), catSlot, BridgeConstInt(0), lenLxSlot);
@@ -1778,9 +1778,9 @@ public class UasmEmitter
     {
         var helperName = DelegateAbi.MulticastRemoveName(sigPart);
         var xId = $"{helperName}__x"; var yId = $"{helperName}__y"; var retId = $"{helperName}__ret";
-        _ctx.TryDeclareVar(xId, "SystemObjectArray");
-        _ctx.TryDeclareVar(yId, "SystemObjectArray");
-        _ctx.TryDeclareVar(retId, "SystemObjectArray");
+        _ctx.Storage.TryDeclareVar(xId, "SystemObjectArray");
+        _ctx.Storage.TryDeclareVar(yId, "SystemObjectArray");
+        _ctx.Storage.TryDeclareVar(retId, "SystemObjectArray");
 
         var func = _module.AddFunction(helperName);
         func.ParamFieldNames.Add(xId);
@@ -1810,13 +1810,13 @@ public class UasmEmitter
 
         // LastContiguousMatch: search the candidate start index DOWNWARD from (lenLx-lenLy) to 0 — the
         // first full match found this way is the RIGHTMOST (= last) one, per Delegate.Remove semantics.
-        var startSlot = _ctx.AllocTemp("SystemInt32");
+        var startSlot = _ctx.Builder.AllocScratch("SystemInt32");
         _builder.EmitAssign(startSlot, BridgeCallExtern("SystemInt32",
             "SystemInt32.__op_Subtraction__SystemInt32_SystemInt32__SystemInt32",
             new CLeaf[] { _builder.SlotRef(lenLxSlot), _builder.SlotRef(lenLySlot) }));
-        var foundSlot = _ctx.AllocTemp("SystemBoolean");
+        var foundSlot = _ctx.Builder.AllocScratch("SystemBoolean");
         _builder.EmitAssign(foundSlot, _builder.Const(false, "SystemBoolean"));
-        var matchIdxSlot = _ctx.AllocTemp("SystemInt32");
+        var matchIdxSlot = _ctx.Builder.AllocScratch("SystemInt32");
         _builder.EmitAssign(matchIdxSlot, BridgeConstInt(-1));
 
         _builder.EmitWhile(() =>
@@ -1831,9 +1831,9 @@ public class UasmEmitter
             },
             _ =>
             {
-                var allMatchSlot = _ctx.AllocTemp("SystemBoolean");
+                var allMatchSlot = _ctx.Builder.AllocScratch("SystemBoolean");
                 _builder.EmitAssign(allMatchSlot, _builder.Const(true, "SystemBoolean"));
-                var kSlot = _ctx.AllocTemp("SystemInt32");
+                var kSlot = _ctx.Builder.AllocScratch("SystemInt32");
                 _builder.EmitAssign(kSlot, BridgeConstInt(0));
 
                 _builder.EmitWhile(() =>
@@ -1873,7 +1873,7 @@ public class UasmEmitter
 
         _builder.EmitIf(_builder.SlotRef(foundSlot), null, _ => _builder.EmitReturn(xLeaf)); // no match → x unchanged
 
-        var rLenSlot = _ctx.AllocTemp("SystemInt32");
+        var rLenSlot = _ctx.Builder.AllocScratch("SystemInt32");
         _builder.EmitAssign(rLenSlot, BridgeCallExtern("SystemInt32",
             "SystemInt32.__op_Subtraction__SystemInt32_SystemInt32__SystemInt32",
             new CLeaf[] { _builder.SlotRef(lenLxSlot), _builder.SlotRef(lenLySlot) }));
@@ -1882,13 +1882,13 @@ public class UasmEmitter
             new CLeaf[] { _builder.SlotRef(rLenSlot), BridgeConstInt(0) });
         _builder.EmitIf(rLenIsZero, _ => _builder.EmitReturn(_builder.Const(null, "SystemObjectArray"))); // full removal → null
 
-        var rSlot = _ctx.AllocTemp("SystemObjectArray");
+        var rSlot = _ctx.Builder.AllocScratch("SystemObjectArray");
         _builder.EmitAssign(rSlot, BridgeCallExtern("SystemObjectArray", MulticastArrCtor, new CLeaf[] { _builder.SlotRef(rLenSlot) }));
         EmitMulticastArrayBlit(lxSlot, BridgeConstInt(0), rSlot, BridgeConstInt(0), matchIdxSlot);
-        var tailStartSlot = _ctx.AllocTemp("SystemInt32");
+        var tailStartSlot = _ctx.Builder.AllocScratch("SystemInt32");
         _builder.EmitAssign(tailStartSlot, BridgeCallExtern("SystemInt32", "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32",
             new CLeaf[] { _builder.SlotRef(matchIdxSlot), _builder.SlotRef(lenLySlot) }));
-        var tailLenSlot = _ctx.AllocTemp("SystemInt32");
+        var tailLenSlot = _ctx.Builder.AllocScratch("SystemInt32");
         _builder.EmitAssign(tailLenSlot, BridgeCallExtern("SystemInt32", "SystemInt32.__op_Subtraction__SystemInt32_SystemInt32__SystemInt32",
             new CLeaf[] { _builder.SlotRef(lenLxSlot), _builder.SlotRef(tailStartSlot) }));
         EmitMulticastArrayBlit(lxSlot, _builder.SlotRef(tailStartSlot), rSlot, _builder.SlotRef(matchIdxSlot), tailLenSlot);
@@ -1932,37 +1932,37 @@ public class UasmEmitter
         // spill fields are added for the fan-out itself — every one of its locals (i/n/list/args-
         // snapshot/ret) is a plain scratch slot, spilled by InsertRecursionSpillsFunc's generic
         // post-coalesce liveness pass, not by the named-field mechanism.
-        _ctx.EnsureRecursionStack();
+        _ctx.Storage.EnsureRecursionStack();
 
         var retType = DeclareConvSigFields(sigPart, invoke, typeParamMap, out var argTypes);
-        _ctx.TryDeclareVar(DelegateAbi.ConvEnvName(sigPart), EnvEmit.EnvType);
+        _ctx.Storage.TryDeclareVar(DelegateAbi.ConvEnvName(sigPart), EnvEmit.EnvType);
 
         var fanoutFunc = _module.AddFunction(fanoutName, fanoutName);
         var prevFunc = _builder.CurrentFunction;
         _builder.SetFunction(fanoutFunc);
 
-        var listSlot = _ctx.AllocTemp(EnvEmit.EnvType);
+        var listSlot = _ctx.Builder.AllocScratch(EnvEmit.EnvType);
         _builder.EmitAssign(listSlot, BridgeLoad(DelegateAbi.ConvEnvName(sigPart), EnvEmit.EnvType));
 
         var argSlots = new int[invoke.Parameters.Length];
         for (int i = 0; i < invoke.Parameters.Length; i++)
         {
-            argSlots[i] = _ctx.AllocTemp(argTypes[i]);
+            argSlots[i] = _ctx.Builder.AllocScratch(argTypes[i]);
             _builder.EmitAssign(argSlots[i], BridgeLoad(DelegateAbi.ConvArgName(sigPart, i), argTypes[i]));
         }
 
         int retSlot = -1;
         if (retType != null)
         {
-            retSlot = _ctx.AllocTemp(retType);
+            retSlot = _ctx.Builder.AllocScratch(retType);
             _builder.EmitAssign(retSlot, InvocationHandler.DefaultConst(_builder, retType));
         }
 
-        var nSlot = _ctx.AllocTemp("SystemInt32");
+        var nSlot = _ctx.Builder.AllocScratch("SystemInt32");
         _builder.EmitAssign(nSlot, BridgeCallExtern("SystemInt32", "SystemArray.__get_Length__SystemInt32",
             new CLeaf[] { _builder.SlotRef(listSlot) }));
 
-        var iSlot = _ctx.AllocTemp("SystemInt32");
+        var iSlot = _ctx.Builder.AllocScratch("SystemInt32");
         var dispatch = new InvocationHandler(_ctx);
 
         _builder.EmitFor(
@@ -1974,7 +1974,7 @@ public class UasmEmitter
                 new CLeaf[] { _builder.SlotRef(iSlot), BridgeConstInt(1) })),
             _ =>
             {
-                var elemSlot = _ctx.AllocTemp("SystemObjectArray");
+                var elemSlot = _ctx.Builder.AllocScratch("SystemObjectArray");
                 _builder.EmitAssign(elemSlot, BridgeCallExtern("SystemObjectArray", MulticastArrGet,
                     new CLeaf[] { _builder.SlotRef(listSlot), _builder.SlotRef(iSlot) }));
 
@@ -2018,7 +2018,7 @@ public class UasmEmitter
         // indexing ParamFieldNames[0] for it read past an empty list.
         // CA-M1: a v1 class instance member uses the SAME param0 object[] receiver as a user struct member
         // (reference semantics — no clone; the bundle flows through by reference).
-        _ctx.CurrentStructReceiverParamId =
+        _ctx.Methods.CurrentStructReceiverParamId =
             (method.ContainingType is INamedTypeSymbol structCt && EmitPolicy.IsObjectArrayEmulated(structCt) && !method.IsStatic
                 && method.MethodKind is not (MethodKind.LambdaMethod or MethodKind.LocalFunction))
                 ? func.ParamFieldNames[0] : null;
@@ -2105,7 +2105,7 @@ public class UasmEmitter
                 // No IsGenericMethod pre-filter: FirstGenericSpec is keyed by OriginalDefinition
                 // regardless of WHY a method is a spec (generic method, generic-struct member, or
                 // both — feature G), so the dictionary lookup alone is the correct, sufficient gate.
-                if (_ctx.FirstGenericSpec.TryGetValue(enclosing.OriginalDefinition, out var ownerSpec))
+                if (_ctx.Generics.FirstSpecByDefinition.TryGetValue(enclosing.OriginalDefinition, out var ownerSpec))
                 {
                     closureBindings ??= new();
                     closureBindings.Add((ownerSpec.OriginalDefinition.TypeParameters, ownerSpec.TypeArguments));
@@ -2153,7 +2153,7 @@ public class UasmEmitter
                 // owner's params under the body-walk symbols (lfDefOp's containing chain), same walk the
                 // body's T references come from, mapped to the same owner-spec type arguments.
                 for (var s = lfDefOp.Symbol.ContainingSymbol; s is IMethodSymbol enclBw; s = enclBw.ContainingSymbol)
-                    if (_ctx.FirstGenericSpec.TryGetValue(enclBw.OriginalDefinition, out var ownerSpec))
+                    if (_ctx.Generics.FirstSpecByDefinition.TryGetValue(enclBw.OriginalDefinition, out var ownerSpec))
                     {
                         if (enclBw.TypeParameters.Length == ownerSpec.TypeArguments.Length)
                             rekey.Add((enclBw.TypeParameters, ownerSpec.TypeArguments));
@@ -2196,20 +2196,20 @@ public class UasmEmitter
             // Node is the lambda/LF body, not this bodyOp); a root method via ScopeFor(bodyOp).
             // No-ops on a null / non-capture-bearing scope, so the call is unconditional.
             CaptureScope entryScope = null;
-            if (_ctx.CaptureScope != null)
+            if (_ctx.Closures.CaptureScope != null)
             {
                 if (IsHoistedClosureMethod(method))
-                    _ctx.CaptureScope.ClosureScopes.TryGetValue(method.OriginalDefinition, out entryScope);
+                    _ctx.Closures.CaptureScope.ClosureScopes.TryGetValue(method.OriginalDefinition, out entryScope);
                 else
-                    entryScope = _ctx.CaptureScope.ScopeFor(bodyOp, CaptureScopeKind.MethodEntry);
+                    entryScope = _ctx.Closures.CaptureScope.ScopeFor(bodyOp, CaptureScopeKind.MethodEntry);
             }
             EnvEmit.Alloc(_builder, _ctx, entryScope);
 
             // Consume every captured PARAMETER of this method out of its flat param field into its env
             // cell (the arg arrived positionally in the flat field; all body reads route through env).
-            if (_ctx.CaptureScope != null && _methodParamVarIds.TryGetValue(method, out var entryParamIds))
+            if (_ctx.Closures.CaptureScope != null && _methodParamVarIds.TryGetValue(method, out var entryParamIds))
                 foreach (var p in method.Parameters)
-                    if (p.Ordinal < entryParamIds.Length && _ctx.TryGetEnvBinding(p, out _))
+                    if (p.Ordinal < entryParamIds.Length && _ctx.Closures.TryGetEnvBinding(p, out _))
                         EnvEmit.Write(_builder, _ctx, p,
                             BridgeLoad(entryParamIds[p.Ordinal], GetUdonType(p.Type)));
 
@@ -2310,9 +2310,9 @@ public class UasmEmitter
     {
         // Default-init aggregate (struct/tuple) fields with no explicit initializer FIRST, so any explicit
         // initializer that references one sees a non-null backing array (C# default-then-initializer order).
-        foreach (var (fieldId, aggType) in _ctx.AggregateFieldDefaults)
-            BridgeStore(fieldId, AggregateAbi.MintDefault(_builder, _ctx.GetAggregateLayout(aggType),
-                _ctx.GetAggregateLayout, GetUdonType));
+        foreach (var (fieldId, aggType) in _ctx.Aggregates.FieldDefaults)
+            BridgeStore(fieldId, AggregateAbi.MintDefault(_builder, _ctx.Aggregates.GetLayout(aggType),
+                _ctx.Aggregates.GetLayout, GetUdonType));
 
         foreach (var (fieldId, initOp, fieldType) in _fieldInitOps)
         {
@@ -2375,7 +2375,7 @@ public class UasmEmitter
         // Initialize _old_ variables for FieldChangeCallback fields
         foreach (var kvp in _fieldChangeCallbacks)
         {
-            var fcbType = _ctx.GetFieldType(kvp.Key);
+            var fcbType = _ctx.Storage.GetFieldType(kvp.Key);
             if (fcbType != null)
             {
                 var fieldVal = BridgeLoad(kvp.Key, fcbType);
@@ -2807,7 +2807,7 @@ public class UasmEmitter
         // Write-once populate of every analysis artifact at the tail (ThisFieldTouches was computed
         // above; the rest just now). §5.5 (graft #2): RecursionGraphNodes is the definition-keyed
         // graph-node set (bodies.Keys = roots, local functions, lambdas) the post-emission armor reads.
-        _ctx.Recursion.Populate(recursive, cycleEdges, thisTouches, reentrantSites, tailSparedSites,
+        _ctx.RecursionContext.Info.Populate(recursive, cycleEdges, thisTouches, reentrantSites, tailSparedSites,
             new HashSet<IMethodSymbol>(bodies.Keys, SymbolEqualityComparer.Default));
     }
 
@@ -2822,12 +2822,12 @@ public class UasmEmitter
     // are intentionally skipped — they have no reentrancy-sensitive frame state to lose.
     void VerifyBridgeTargetsAreNodes()
     {
-        if (_ctx.CaptureScope == null || _ctx.Recursion.RecursionGraphNodes == null) return;
-        foreach (var (method, bridgeExportName, _) in _ctx.PendingDelegateBridges)
+        if (_ctx.Closures.CaptureScope == null || _ctx.RecursionContext.Info.RecursionGraphNodes == null) return;
+        foreach (var (method, bridgeExportName, _) in _ctx.Synthetics.DelegateBridges)
         {
             var def = method.OriginalDefinition;
-            if (!_ctx.CaptureScope.IsCapturingClosure(def)) continue;
-            if (!_ctx.Recursion.RecursionGraphNodes.Contains(def))
+            if (!_ctx.Closures.CaptureScope.IsCapturingClosure(def)) continue;
+            if (!_ctx.RecursionContext.Info.RecursionGraphNodes.Contains(def))
                 throw new InvalidOperationException(
                     $"USugar internal error (§5.5 bridge-target armor): capturing delegate bridge "
                   + $"'{bridgeExportName}' targets '{def}', which has no recursion-graph node — its "
@@ -2836,11 +2836,11 @@ public class UasmEmitter
         }
         // Variance design (2026-07-04 §2.2): a sig adapter's target is exactly as reachable via
         // dispatch as a plain bridge's — same armor requirement.
-        foreach (var (targetMethod, _, adapterName, _) in _ctx.PendingSigAdapterBridges)
+        foreach (var (targetMethod, _, adapterName, _) in _ctx.Synthetics.SigAdapterBridges)
         {
             var def = targetMethod.OriginalDefinition;
-            if (!_ctx.CaptureScope.IsCapturingClosure(def)) continue;
-            if (!_ctx.Recursion.RecursionGraphNodes.Contains(def))
+            if (!_ctx.Closures.CaptureScope.IsCapturingClosure(def)) continue;
+            if (!_ctx.RecursionContext.Info.RecursionGraphNodes.Contains(def))
                 throw new InvalidOperationException(
                     $"USugar internal error (§5.5 bridge-target armor): capturing sig adapter "
                   + $"'{adapterName}' targets '{def}', which has no recursion-graph node — its "

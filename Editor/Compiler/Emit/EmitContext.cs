@@ -23,9 +23,6 @@ public class EmitContext
     public readonly InitializationContext Initializers = new InitializationContext();
     public readonly DiagnosticContext DiagnosticState = new DiagnosticContext();
     public readonly MethodContext Methods = new MethodContext();
-
-    // Method bookkeeping
-    public Dictionary<IMethodSymbol, CFunction> MethodFunctions => Methods.Functions;
     public readonly struct MethodSlot
     {
         public readonly int Index;
@@ -33,67 +30,12 @@ public class EmitContext
         public MethodSlot(int index, string varPrefix) { Index = index; VarPrefix = varPrefix; }
     }
 
-    public Dictionary<IMethodSymbol, MethodSlot> MethodSlots => Methods.Slots;
-
-    public MethodSlot RegisterMethod(IMethodSymbol method, Func<int, string> prefixFactory)
-        => Methods.Register(method, prefixFactory);
-
-    /// <summary>Per-method return slots. Empty array for void. Length 1 for scalar. Length N for tuple.</summary>
-    public Dictionary<IMethodSymbol, ReturnSlot[]> MethodReturns => Methods.Returns;
-    public Dictionary<IMethodSymbol, string[]> MethodParamVarIds => Methods.ParamVarIds;
-    public IMethodSymbol CurrentMethod { get => Methods.CurrentMethod; set => Methods.CurrentMethod = value; }
-
-    /// <summary>When emitting a user-struct method/ctor, the receiver object[] param var id; otherwise null.
-    /// Makes <c>this</c> / <c>this.field</c> resolve to the receiver array instead of the Behaviour.</summary>
-    public string CurrentStructReceiverParamId
-    {
-        get => Methods.CurrentStructReceiverParamId;
-        set => Methods.CurrentStructReceiverParamId = value;
-    }
-
-    /// <summary>Recursion/reentrancy analysis results for this class — see <see cref="RecursionInfo"/>
-    /// for what each product field means. Populated in place by <c>UasmEmitter.BuildRecursionInfo</c>
-    /// before body emission; each of its fields is null until then.</summary>
-    public RecursionInfo Recursion => RecursionContext.Info;
-
-    /// <summary>True when a call from <paramref name="caller"/> to <paramref name="callee"/> is a
-    /// recursion-cycle edge (callee in caller's non-trivial SCC, including direct self-recursion).</summary>
-    public bool IsRecursiveEdge(IMethodSymbol caller, IMethodSymbol callee)
-        => RecursionContext.IsRecursiveEdge(caller, callee);
-
-    /// <summary>True when a call from <paramref name="caller"/> to <paramref name="callee"/> lies in
-    /// a recursion cycle (same non-trivial SCC or direct self-loop), tail or not ([Y3]).</summary>
-    public bool IsCycleEdge(IMethodSymbol caller, IMethodSymbol callee)
-        => RecursionContext.IsCycleEdge(caller, callee);
-
-    /// <summary>[Q5] True when <paramref name="callee"/>'s transitive touch set contains the
-    /// this-field <paramref name="field"/> (both compared by OriginalDefinition).</summary>
-    public bool CalleeTouchesThisField(IMethodSymbol callee, IFieldSymbol field)
-        => RecursionContext.CalleeTouchesThisField(callee, field);
-
-    public int NextMethodIndex { get => Methods.NextMethodIndex; set => Methods.NextMethodIndex = value; }
-    public List<(IMethodSymbol symbol, CFunction func)> PendingLocalFunctions => Methods.PendingLocalFunctions;
-
-    // Generic monomorphization
-    public List<IMethodSymbol> PendingGenericSpecs => Generics.PendingSpecs;
-    // Immutable and scope-owned: built only by TypeParamScope.Compose, and written ONLY by the
-    // EnterTypeParamScope machinery below (private setter). Read freely everywhere.
-    public IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> TypeParamMap => Generics.TypeParamMap;
-
     // Depth-1 type-param scope. EmitMethod is a non-recursive serial drain, so exactly one map is
     // active at a time; a nested Enter means a prior scope leaked (a compiler bug) and throws loudly
     // rather than silently inheriting someone else's map. Dispose is the SOLE clear site, so the map
     // is cleared even if body emission throws.
     public IDisposable EnterTypeParamScope(IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> map)
-        => Generics.EnterScope(map, CurrentMethod);
-
-    // Wave-9 round-5 [X6]: first registered specialization per generic DEFINITION. Lambdas and
-    // local functions hoisted from a generic body are keyed by IMethodSymbol and therefore SHARED
-    // across that body's specializations — a capturing closure's capture cells are seeded by
-    // whichever spec emitted LAST (last-spec-wins; VM-proven r1=8 vs 3). A second DISTINCT
-    // instantiation of a definition whose body contains a capturing closure is loud (per-spec
-    // closure environments are Stage-2 territory, design §8-3). LOOKUP-ONLY (§1.5).
-    public Dictionary<IMethodSymbol, IMethodSymbol> FirstGenericSpec => Generics.FirstSpecByDefinition;
+        => Generics.EnterScope(map, Methods.CurrentMethod);
 
     /// <summary>What about a generic definition's body closures pins it to a single instantiation.
     /// <c>UsedParams</c> (round-8 [Y2]): which of the generic's OWN type parameters (by kind+ordinal,
@@ -345,142 +287,12 @@ public class EmitContext
         public LocalBinding(string id) { Id = id; }
     }
 
-    public Dictionary<ILocalSymbol, LocalBinding> LocalBindings => Storage.LocalBindings;
-
-    // Stage 2 M1: structural closure-scope analysis (CaptureScopeAnalysis) — scope ownership, slot
-    // assignment, and per-closure binding-scope/hop-distance chain shape. Built once per class in
-    // UasmEmitter.Emit(); read-only, consumed by nothing yet (behavior-neutral — env alloc/access
-    // codegen is Stage 2 M2). Self-contained (owns its own LambdaCaptureAnalyzer instance), so this
-    // is a plain result holder, not shared mutable state.
-    // Write-once: built once in UasmEmitter.Emit() via SetCaptureScope; a second set throws so a future
-    // restructure cannot silently swap this frozen analysis artifact under in-flight emission.
-    public CaptureScopeAnalysis CaptureScope => Closures.CaptureScope;
-
-    public void SetCaptureScope(CaptureScopeAnalysis value)
-        => Closures.SetCaptureScope(value);
-
-    // Stage 2 M2 (design §4.1): resolve a symbol's env binding (owning scope, 1-based env slot).
-    // Single source of truth is CaptureScope.CapturedSlots; this helper adds the generic-spec
-    // re-keying (a constructed spec's IParameterSymbol never compares equal to the definition's —
-    // re-key through ContainingSymbol.OriginalDefinition + ordinal). A symbol that resolves here
-    // must NEVER get a flat LocalBindings field — every read/write routes through the env record.
-    public bool TryGetEnvBinding(ISymbol symbol, out (CaptureScope Scope, int Slot) binding)
-        => Closures.TryGetEnvBinding(symbol, out binding);
-
-    // Stage 2 M2: (function, capture-bearing scope id) → the scratch slot holding that scope's LIVE
-    // env-record reference in that function's frame. Keyed per CFunction because an env-ref scratch
-    // is frame state: a hoisted closure reaches its declaring scopes through __envp + parent hops
-    // instead (EnvEmit.Leaf).
-    public Dictionary<(object Func, int ScopeId), int> ScopeEnvSlots => Closures.ScopeEnvSlots;
-
-    // Stage 2 M2: hoisted closure method → the param FIELD id of its hidden trailing __envp
-    // parameter. Registered where the closure's params are laid out; read by EnvEmit.Leaf and the
-    // TCO self-rebind when emission inside the closure body needs an outer scope's env.
-    //
-    // KEYING DISCIPLINE (Stage 2 M5 gotcha-3: a definition key here was last-spec-wins and wired
-    // one generic spec's body to another spec's field — VM-proven wrong-value fault, fixed in
-    // 5064f77). This map is intentionally MIXED-key: a capturing generic specialization that is
-    // pinned to per-instantiation storage registers under its CONSTRUCTED symbol (each spec owns
-    // its own field); a capturing closure with only ever one instantiation (non-generic, or a
-    // generic local function sharing one T-free hoist) registers under its DEFINITION. Callers
-    // never touch the dictionary directly — go through RegisterEnvpField / TryGetEnvpField, which
-    // encode the constructed-first / definition-fallback lookup in exactly one place.
-    /// <summary>Register a hoisted closure's hidden __envp field. Pass the CONSTRUCTED symbol for a
-    /// per-instantiation registration (each spec owns its own field), or a DEFINITION for a
-    /// closure that only ever has one instantiation. See the field's keying-discipline comment.</summary>
-    public void RegisterEnvpField(IMethodSymbol closureKey, string envpFieldId)
-        => Closures.RegisterEnvpField(closureKey, envpFieldId);
-
-    /// <summary>Resolve a closure's __envp field: the CONSTRUCTED symbol first (per-instantiation
-    /// storage), its ORIGINAL DEFINITION as fallback (shared/non-generic storage). The single
-    /// lookup point for the mixed keying discipline documented on the backing field.</summary>
-    public bool TryGetEnvpField(IMethodSymbol closure, out string envpFieldId)
-        => Closures.TryGetEnvpField(closure, out envpFieldId);
-
     // Round-7 follow-up [Q4]: foreach ITERATION variables. C# makes them READONLY, so invoking a
     // non-readonly struct member on one runs on a DEFENSIVE COPY (the classic foreach-struct-
     // mutation no-op); the loop variable's object[] is live storage in the flat emulation, so the
     // struct-instance-call receiver is CLONED when its chain roots at one of these locals
     // (VM-proven: loop-var reads after a mutating call 1112 vs CLR 102). MEMBERSHIP-ONLY set (§1.5).
     public readonly HashSet<ILocalSymbol> ForeachIterationLocals = new(SymbolEqualityComparer.Default);
-
-    public AggregateLayout GetAggregateLayout(INamedTypeSymbol type)
-        => Aggregates.GetLayout(type);
-
-    // Field initializers to emit at _start
-    public List<(string fieldName, IOperation initOp, ITypeSymbol fieldType)> FieldInitOps => Initializers.FieldInitOps;
-
-    // static readonly field initializers (design §3.1/§3.6, feature B) — same shape as FieldInitOps,
-    // kept separate so UasmEmitter can base-first reorder the static TIER independently, then splice
-    // it in front of FieldInitOps (static tier runs before instance tier, mirroring C#'s static→instance
-    // initializer order applied to per-program materialization).
-    public List<(string fieldName, IOperation initOp, ITypeSymbol fieldType)> StaticFieldInitOps => Initializers.StaticFieldInitOps;
-
-    // FieldChangeCallback: fieldName → propertyName
-    public Dictionary<string, string> FieldChangeCallbacks => Initializers.FieldChangeCallbacks;
-
-    // Conditional access stack (for ?. operator): the evaluated instance leaf. For a delegate-typed
-    // receiver this is the BUNDLE leaf itself (design §2.6) — `d?.Invoke()` dispatches on it, and any
-    // delegate-valued expression (local/param/element/call result) is a legal ?.Invoke receiver.
-    public Stack<CLeaf> ConditionalAccessStack => ControlFlow.ConditionalAccessStack;
-
-    // using declaration Dispose tracking
-    public Stack<List<(CLeaf val, ITypeSymbol type)>> UsingDisposableStack => ControlFlow.UsingDisposableStack;
-
-    /// <summary>Stack of using-stack depths at loop/switch entry points.
-    /// Used to limit Dispose emission for break/continue to scopes inside the loop.</summary>
-    public Stack<int> LoopUsingDepthStack => ControlFlow.LoopUsingDepthStack;
-
-    // Switch break label stack — top is non-null inside switch body, null sentinel inside loop body.
-    // StatementHandler.VisitBranch reads top to distinguish switch breaks (goto end label) from loop breaks (CBreak).
-    public Stack<string> SwitchBreakLabels => ControlFlow.SwitchBreakLabels;
-
-    /// <summary>Generate a unique end label for a switch statement (per EmitContext = per class).</summary>
-    public string NextSwitchEndLabel() => ControlFlow.NextSwitchEndLabel();
-
-    // goto-case / goto-default → sanitized UASM landing label, per enclosing switch (innermost on top). The
-    // Roslyn target name ("case 2:", "default") is not a valid UASM label token, so both the case-body label
-    // (SwitchHandler) and the goto (StatementHandler.VisitBranch) resolve through this shared map.
-    public Stack<Dictionary<string, string>> GotoCaseLabels => ControlFlow.GotoCaseLabels;
-
-    // Delegate fields: tracks which user fields are delegate-typed and were expanded to bundles
-    public HashSet<string> DelegateFields => Synthetics.DelegateFields;
-
-    // Pending delegate bridges for dynamically hoisted lambdas/local functions. The carried map is the
-    // creating method's immutable TypeParamMap by REFERENCE (it is per-EmitMethod fresh and never mutated,
-    // so no snapshot copy is needed even though the drain runs after emission when the ambient map is null).
-    public List<(IMethodSymbol method, string bridgeExportName, IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> resolvedTypeParamMap)> PendingDelegateBridges => Synthetics.DelegateBridges;
-
-    // Multicast design (2026-07-03 §1): sig-part → (Invoke, resolved type-param map) for every
-    // delegate signature this class combines/removes via `+=`/`-=` (CompoundAssignmentHandler). Drives
-    // the per-class __dlg_fanout_/__dlg_combine_/__dlg_remove_{sig} synthetic emission (UasmEmitter,
-    // sibling of EmitPendingDelegateBridges). Keyed on sig content, not occurrence — so two `+=` sites
-    // sharing a signature dedupe to one fan-out/helper set. Carries the map by reference (immutable).
-    public Dictionary<string, (IMethodSymbol Invoke, IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> TypeParamMap)> PendingMulticastSigs => Synthetics.MulticastSigs;
-
-    // B67: user enums whose ToString()/concat/interpolation needs a synthesized value→name helper. Keyed by
-    // the enum symbol; the per-enum `__enumstr_{Name}` function is emitted once in the UasmEmitter drain
-    // (EmitEnumToStringSynthetics), sibling of EmitMulticastSynthetics.
-    public HashSet<INamedTypeSymbol> PendingEnumToString => Synthetics.EnumToString;
-
-    // Variance design (2026-07-04 §2.2, B-1): per-(target, sig-S) sig adapter bridges — a same-program
-    // variant method-group binding mints one of these instead of the plain bridge. delegateInvoke is the
-    // DESTINATION delegate's own Invoke method (sig-S's param/return types for the conv-var declarations),
-    // distinct from targetMethod (the real callee's own types, used only for the InternalCall). Sibling of
-    // PendingDelegateBridges — same dedup-by-name-at-emission shape (UasmEmitter.EmitPendingSigAdapterBridges).
-    public List<(IMethodSymbol targetMethod, IMethodSymbol delegateInvoke, string adapterName, IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> resolvedTypeParamMap)> PendingSigAdapterBridges => Synthetics.SigAdapterBridges;
-
-    // Variance design (2026-07-04 §2.3, B-2): wrapper name → (outer sig-S Invoke, inner sig-T
-    // Invoke-or-method, resolved type-param snapshot) for every wrapper-with-payload bridge needed
-    // (third-party variant method-group hinge, or a delegate-VALUE variant conversion). Keyed by the
-    // WRAPPER NAME (already unique per (outer,inner) sig pair — DelegateAbi.WrapperName) rather than a
-    // single sig, since a wrapper's inner dispatch speaks the INNER bundle's own protocol, distinct from
-    // the outer one two different sig-T's could both wrap to the same sig-S.
-    public Dictionary<string, (IMethodSymbol OuterInvoke, IMethodSymbol InnerInvoke, IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> TypeParamMap)> PendingWrapperSigs => Synthetics.WrapperSigs;
-
-    // Diagnostics collected during emission
-    public List<EmitDiagnostic> Diagnostics => DiagnosticState.Diagnostics;
-    public HashSet<string> ReportedExterns => DiagnosticState.ReportedExterns;
 
     // Dispatch delegates (Core IR-based)
     Action<IOperation> _visitOperation;
@@ -493,11 +305,6 @@ public class EmitContext
         ?? throw new InvalidOperationException("EmitContext dispatchers not initialized. Call InitializeDispatchers first.");
     public Func<CLeaf, ITypeSymbol, IPatternOperation, CLeaf> EmitPatternCheck => _emitPatternCheck
         ?? throw new InvalidOperationException("EmitContext dispatchers not initialized. Call InitializeDispatchers first.");
-
-    /// <summary>Aggregate (struct/tuple) instance fields with NO explicit initializer. C# default-initializes
-    /// them to a zeroed struct; in the object[] emulation that requires a fresh default object[] (else the heap
-    /// var stays null and a field write faults). Reference-type / array fields correctly stay null and are absent here.</summary>
-    public List<(string fieldName, INamedTypeSymbol aggType)> AggregateFieldDefaults => Aggregates.FieldDefaults;
 
     public void InitializeDispatchers(
         Action<IOperation> visitOp,
@@ -524,31 +331,6 @@ public class EmitContext
     // Variable naming utilities (replaces VariableTable)
     // ══════════════════════════════════════════════════════════════════
 
-    /// <summary>Declare a field in Module. Idempotent — returns existing name if already declared.</summary>
-    public string DeclareField(string name, string type, FieldFlags flags = FieldFlags.None,
-        object defaultValue = null, string syncMode = null)
-        => Storage.DeclareField(name, type, flags, defaultValue, syncMode);
-
-    /// <summary>Declare a named variable field. Idempotent.</summary>
-    public string DeclareVar(string id, string type)
-        => Storage.DeclareVar(id, type);
-
-    /// <summary>Try to declare a variable. Returns true if newly declared.</summary>
-    public bool TryDeclareVar(string id, string type)
-        => Storage.TryDeclareVar(id, type);
-
-    /// <summary>Declare a local variable with unique field name.</summary>
-    public string DeclareLocal(string name, string type)
-        => Storage.DeclareLocal(name, type);
-
-    /// <summary>Declare a "this" reference field with type remapping for Udon heap.</summary>
-    public string DeclareThis(string udonType)
-        => Storage.DeclareThis(udonType);
-
-    /// <summary>Declare or reuse a "this" reference for the given type.</summary>
-    public string DeclareThisOnce(string udonType)
-        => Storage.DeclareThisOnce(udonType);
-
     // ── Software recursion stack ──
     // Udon's flat heap shares param/local slots across call frames, so recursion-cycle calls must spill
     // the caller's live values to a heap-backed LIFO stack (boxed object[]) and reload after the call.
@@ -564,11 +346,6 @@ public class EmitContext
     /// the heap-default side channel, not the UASM text.</summary>
     public const int RecurStackSize = RecurStack.Size;
 
-    /// <summary>Idempotently declare the per-program recursion stack (object[] backing + int stack pointer).
-    /// Heap default allocates the backing array and zeroes the pointer; LIFO spill/reload keeps it balanced.</summary>
-    public void EnsureRecursionStack()
-        => Storage.EnsureRecursionStack();
-
 
     public const string ReflTypeIdField = "__refl_typeid";
     public const string ReflTypeIdsField = "__refl_typeids";
@@ -577,25 +354,7 @@ public class EmitContext
     /// <summary>Declare reflection type IDs array.</summary>
     public void DeclareReflTypeIds(long[] typeIds)
     {
-        DeclareField(ReflTypeIdsField, "SystemInt64Array", defaultValue: typeIds);
+        Storage.DeclareField(ReflTypeIdsField, "SystemInt64Array", defaultValue: typeIds);
     }
-
-    /// <summary>Set const value on an existing field.</summary>
-    public void SetFieldConstValue(string name, object value)
-        => Storage.SetFieldConstValue(name, value);
-
-    /// <summary>Check if a field name has been declared.</summary>
-    public bool IsFieldDeclared(string name) => Storage.IsFieldDeclared(name);
-
-    /// <summary>Allocate a Scratch slot for a temporary value (slot-based, coalesced by register allocator).</summary>
-    public int AllocTemp(string type) => Builder.AllocScratch(type);
-
-    /// <summary>Declare a struct constant field with deduplication (e.g., Vector3.zero).</summary>
-    public string DeclareStructConst(string type, object value)
-        => Storage.DeclareStructConst(type, value);
-
-    /// <summary>Get the Udon type of a declared field by its ID.</summary>
-    public string GetFieldType(string id)
-        => Storage.GetFieldType(id);
 
 }

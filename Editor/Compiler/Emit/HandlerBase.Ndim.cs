@@ -33,21 +33,21 @@ public abstract partial class HandlerBase
         int rank = ndimType.Rank;
         var backingType = NdimArrayAbi.BackingType(_compilation, ndimType);
 
-        var bundleSlot = _ctx.AllocTemp(NdimArrayAbi.BundleUdonType);
+        var bundleSlot = _ctx.Builder.AllocScratch(NdimArrayAbi.BundleUdonType);
         EmitAssign(bundleSlot, VisitExpression(arrayRefOp));
         var bundleVal = SlotRef(bundleSlot);
 
         var idxSlots = new int[rank];
         for (int d = 0; d < rank; d++)
         {
-            idxSlots[d] = _ctx.AllocTemp("SystemInt32");
+            idxSlots[d] = _ctx.Builder.AllocScratch("SystemInt32");
             EmitAssign(idxSlots[d], VisitExpression(indexOps[d]));
         }
 
         var dimSlots = new int[rank];
         for (int d = 0; d < rank; d++)
         {
-            dimSlots[d] = _ctx.AllocTemp("SystemInt32");
+            dimSlots[d] = _ctx.Builder.AllocScratch("SystemInt32");
             EmitAssign(dimSlots[d], NdimArrayAbi.ReadDimLength(_builder, bundleVal,
                 Const(NdimArrayAbi.DimSlotIndex(d), "SystemInt32")));
         }
@@ -93,7 +93,7 @@ public abstract partial class HandlerBase
         var plan = PrepareNdimAccess(ae.ArrayReference, ae.Indices, ndimType);
         var resultLeaf = EmitNdimReadFromPlan(ae, plan, elemUdonType);
         return ndimType.ElementType is INamedTypeSymbol elemAggT && EmitPolicy.IsAggregateType(elemAggT)
-            ? AggregateAbi.DeepClone(_builder, resultLeaf, elemAggT, _ctx.GetAggregateLayout) : resultLeaf;
+            ? AggregateAbi.DeepClone(_builder, resultLeaf, elemAggT, _ctx.Aggregates.GetLayout) : resultLeaf;
     }
 
     /// <summary>N-dim element WRITE prepare (mirrors HandlerBase.PrepareArrayElementSet's rank-1
@@ -139,19 +139,19 @@ public abstract partial class HandlerBase
         var dimSlots = new int[rank];
         for (int d = 0; d < rank; d++)
         {
-            dimSlots[d] = _ctx.AllocTemp("SystemInt32");
+            dimSlots[d] = _ctx.Builder.AllocScratch("SystemInt32");
             EmitAssign(dimSlots[d], VisitExpression(op.DimensionSizes[d]));
         }
 
         var totalSize = NdimArrayAbi.BuildTotalElementCount(_builder, dimSlots);
-        var totalSlot = _ctx.AllocTemp("SystemInt32");
+        var totalSlot = _ctx.Builder.AllocScratch("SystemInt32");
         EmitAssign(totalSlot, totalSize);
 
-        var backingSlot = _ctx.AllocTemp(backingUdonType);
+        var backingSlot = _ctx.Builder.AllocScratch(backingUdonType);
         EmitAssign(backingSlot, ExternCall(ExternResolver.BuildArrayCtorSignature(backingUdonType),
             new List<CLeaf> { SlotRef(totalSlot) }, backingUdonType));
 
-        var bundleSlot = _ctx.AllocTemp(NdimArrayAbi.BundleUdonType);
+        var bundleSlot = _ctx.Builder.AllocScratch(NdimArrayAbi.BundleUdonType);
         NdimArrayAbi.MintBundleToSlot(_builder, bundleSlot, backingSlot, dimSlots);
 
         if (op.Initializer != null)
@@ -166,7 +166,7 @@ public abstract partial class HandlerBase
         {
             // struct[]/tuple[] zero-init: each flat slot gets a fresh default struct (mirrors the rank-1 path
             // in ArrayHandler.VisitArrayCreation — `arr[i,j].field = x` must work on a freshly allocated array).
-            var iSlot = _ctx.AllocTemp("SystemInt32");
+            var iSlot = _ctx.Builder.AllocScratch("SystemInt32");
             EmitAssign(iSlot, Const(0, "SystemInt32"));
             _builder.EmitWhile(
                 () => ExternCall("SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean",
@@ -175,8 +175,8 @@ public abstract partial class HandlerBase
                 {
                     EmitExternVoid(ExternResolver.BuildArraySetSignature(backingUdonType, elemUdonType),
                         new List<CLeaf> { SlotRef(backingSlot), SlotRef(iSlot),
-                            AggregateAbi.MintDefault(_builder, _ctx.GetAggregateLayout((INamedTypeSymbol)elemSym),
-                                _ctx.GetAggregateLayout, GetUdonType) });
+                            AggregateAbi.MintDefault(_builder, _ctx.Aggregates.GetLayout((INamedTypeSymbol)elemSym),
+                                _ctx.Aggregates.GetLayout, GetUdonType) });
                     EmitAssign(iSlot, ExternCall("SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32",
                         new List<CLeaf> { SlotRef(iSlot), Const(1, "SystemInt32") }, "SystemInt32"));
                 });

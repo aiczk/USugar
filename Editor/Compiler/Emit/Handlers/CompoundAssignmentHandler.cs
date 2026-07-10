@@ -121,7 +121,7 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
             RejectUnsafeCrossProgramDelegateWrite(op.Target, right.Info);
         var rightVal = right.Leaf;
 
-        var sigPart = DelegateAbi.BuildSigPart(invoke, _ctx.TypeParamMap);
+        var sigPart = DelegateAbi.BuildSigPart(invoke, _ctx.Generics.TypeParamMap);
         RegisterMulticastSig(sigPart, invoke);
 
         var helperName = op.OperatorKind == BinaryOperatorKind.Add
@@ -170,7 +170,7 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
             RejectUnsafeCrossProgramEventHandler(evt, handler.Info);
         var handlerVal = handler.Leaf;
 
-        var sigPart = DelegateAbi.BuildSigPart(invoke, _ctx.TypeParamMap);
+        var sigPart = DelegateAbi.BuildSigPart(invoke, _ctx.Generics.TypeParamMap);
         RegisterMulticastSig(sigPart, invoke);
 
         var helperName = op.Adds

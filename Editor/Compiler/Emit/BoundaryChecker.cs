@@ -20,14 +20,14 @@ public sealed class BoundaryChecker
 
     public BoundaryChecker(EmitContext ctx) => _ctx = ctx ?? throw new ArgumentNullException(nameof(ctx));
 
-    TypeClassifierContext TypeCtx => new TypeClassifierContext(_ctx.TypeParamMap);
+    TypeClassifierContext TypeCtx => new TypeClassifierContext(_ctx.Generics.TypeParamMap);
 
     public ValueInfo ClassifyValue(IOperation value)
-        => ValueClassifier.Classify(value, TypeCtx, _ctx.CaptureScope);
+        => ValueClassifier.Classify(value, TypeCtx, _ctx.Closures.CaptureScope);
 
     public bool CurrentMethodBodyMentionsProgramLocalPayload()
     {
-        var syntaxRef = _ctx.CurrentMethod?.DeclaringSyntaxReferences.FirstOrDefault();
+        var syntaxRef = _ctx.Methods.CurrentMethod?.DeclaringSyntaxReferences.FirstOrDefault();
         if (syntaxRef == null) return false;
         var syntax = syntaxRef.GetSyntax();
         var model = _ctx.Compilation.GetSemanticModel(syntax.SyntaxTree);
