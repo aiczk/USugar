@@ -128,7 +128,7 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
             ? DelegateAbi.MulticastCombineName(sigPart)
             : DelegateAbi.MulticastRemoveName(sigPart);
 
-        var resultVal = _builder.InternalCall(helperName, new List<CLeaf> { leftVal, rightVal }, "SystemObjectArray");
+        var resultVal = _builder.InternalCall(helperName, new List<CLeaf> { leftVal, rightVal }, DelegateAbi.BundleType);
         EmitWriteBack(op.Target, resultVal, lv);
         return resultVal;
     }
@@ -164,7 +164,7 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
         var delegateType = (INamedTypeSymbol)evt.Type;
         var invoke = delegateType.DelegateInvokeMethod;
         DelegateAbi.ValidateNoRefOutParams(invoke);
-        var currentVal = LoadField(evt.Name, "SystemObjectArray");
+        var currentVal = LoadField(evt.Name, DelegateAbi.BundleType);
         var handler = VisitEmittedValue(op.HandlerValue);
         if (op.Adds)
             RejectUnsafeCrossProgramEventHandler(evt, handler.Info);
@@ -177,7 +177,7 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
             ? DelegateAbi.MulticastCombineName(sigPart)
             : DelegateAbi.MulticastRemoveName(sigPart);
 
-        var resultVal = _builder.InternalCall(helperName, new List<CLeaf> { currentVal, handlerVal }, "SystemObjectArray");
+        var resultVal = _builder.InternalCall(helperName, new List<CLeaf> { currentVal, handlerVal }, DelegateAbi.BundleType);
         EmitStoreField(evt.Name, resultVal);
         return null; // event add/remove is a void-shaped statement expression
     }

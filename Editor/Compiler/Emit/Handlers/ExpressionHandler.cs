@@ -22,12 +22,12 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
         // scope's env record (aggregate captures keep clone-on-read value semantics on the way out).
         ILocalReferenceOperation localRef when _ctx.TryGetEnvBinding(localRef.Local, out _)
             => ResolveType(localRef.Type) is INamedTypeSymbol eaggT && EmitPolicy.IsAggregateType(eaggT)
-                   ? AggregateAbi.DeepClone(_builder, EnvEmit.Read(_builder, _ctx, localRef.Local, "SystemObjectArray"),
+                   ? AggregateAbi.DeepClone(_builder, EnvEmit.Read(_builder, _ctx, localRef.Local, AggregateAbi.ArrayType),
                        eaggT, _ctx.GetAggregateLayout)
                    : EnvEmit.Read(_builder, _ctx, localRef.Local, GetUdonType(localRef.Type)),
         ILocalReferenceOperation localRef => _localBindings.TryGetValue(localRef.Local, out var localBinding)
                                                  ? ResolveType(localRef.Type) is INamedTypeSymbol laggT && EmitPolicy.IsAggregateType(laggT)
-                                                     ? AggregateAbi.DeepClone(_builder, LoadField(localBinding.Id, "SystemObjectArray"),
+                                                     ? AggregateAbi.DeepClone(_builder, LoadField(localBinding.Id, AggregateAbi.ArrayType),
                                                          laggT, _ctx.GetAggregateLayout)
                                                      : LoadField(localBinding.Id, GetUdonType(localRef.Type))
                                                  : throw new InvalidOperationException($"Cannot resolve local variable '{localRef.Local.Name}' in method '{_currentMethod?.Name ?? "(none)"}'."),
@@ -35,7 +35,7 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
         IEventReferenceOperation op => VisitEventReference(op),
         IParameterReferenceOperation paramRef when _ctx.TryGetEnvBinding(paramRef.Parameter, out _)
             => ResolveType(paramRef.Type) is INamedTypeSymbol epaggT && EmitPolicy.IsAggregateType(epaggT)
-                   ? AggregateAbi.DeepClone(_builder, EnvEmit.Read(_builder, _ctx, paramRef.Parameter, "SystemObjectArray"),
+                   ? AggregateAbi.DeepClone(_builder, EnvEmit.Read(_builder, _ctx, paramRef.Parameter, AggregateAbi.ArrayType),
                        epaggT, _ctx.GetAggregateLayout)
                    : EnvEmit.Read(_builder, _ctx, paramRef.Parameter, GetUdonType(paramRef.Type)),
         IParameterReferenceOperation paramRef => ResolveType(paramRef.Type) is INamedTypeSymbol paggT && EmitPolicy.IsAggregateType(paggT)
@@ -43,7 +43,7 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
                                                          paggT, _ctx.GetAggregateLayout)
                                                      : LoadParam(paramRef.Parameter),
         IInstanceReferenceOperation when _ctx.CurrentStructReceiverParamId != null
-            => LoadField(_ctx.CurrentStructReceiverParamId, "SystemObjectArray"),
+            => LoadField(_ctx.CurrentStructReceiverParamId, AggregateAbi.ArrayType),
         IInstanceReferenceOperation => LoadField(_ctx.DeclareThisOnce(GetUdonType(_classSymbol)), GetUdonType(_classSymbol)),
         IConversionOperation op => VisitConversion(op),
         IDefaultValueOperation op => VisitDefaultValue(op),
@@ -125,7 +125,7 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
                 {
                     if (IsDeclaredInOwnHierarchy(_classSymbol, fieldRef.Field.ContainingType))
                         return fieldRef.Field.Type is INamedTypeSymbol staticFieldAgg && EmitPolicy.IsAggregateType(staticFieldAgg)
-                            ? AggregateAbi.DeepClone(_builder, LoadField(fieldRef.Field.Name, "SystemObjectArray"),
+                            ? AggregateAbi.DeepClone(_builder, LoadField(fieldRef.Field.Name, AggregateAbi.ArrayType),
                                 staticFieldAgg, _ctx.GetAggregateLayout)
                             : LoadField(fieldRef.Field.Name, GetUdonType(fieldRef.Field.Type));
 
@@ -180,7 +180,7 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
         // this.field → direct variable name → LoadField (struct-typed field copied on value read)
         if (fieldRef.Instance is IInstanceReferenceOperation)
             return fieldRef.Field.Type is INamedTypeSymbol thisFieldAgg && EmitPolicy.IsAggregateType(thisFieldAgg)
-                ? AggregateAbi.DeepClone(_builder, LoadField(fieldRef.Field.Name, "SystemObjectArray"),
+                ? AggregateAbi.DeepClone(_builder, LoadField(fieldRef.Field.Name, AggregateAbi.ArrayType),
                     thisFieldAgg, _ctx.GetAggregateLayout)
                 : LoadField(fieldRef.Field.Name, GetUdonType(fieldRef.Field.Type));
         // cross-behaviour field → GetProgramVariable
@@ -227,7 +227,7 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
                 $"Cannot reference event '{eventRef.Event.Name}' through a non-this receiver; only "
                 + "`+=`/`-=` may target another behaviour's event (and cross-behaviour subscribe is "
                 + "itself rejected — see the event add/remove diagnostic).");
-        return LoadField(eventRef.Event.Name, "SystemObjectArray");
+        return LoadField(eventRef.Event.Name, DelegateAbi.BundleType);
     }
 
     // ── Conversion ──
@@ -416,7 +416,7 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
                 // wrap it, or `o == null` and invoke-null-guard behavior would both silently diverge from
                 // a plain unwrapped null. Guarded at RUNTIME (not just the statically-known-null case
                 // below): srcVal may be a variable whose null-ness is unknown at compile time.
-                var wrapResultSlot = _ctx.AllocTemp("SystemObjectArray");
+                var wrapResultSlot = _ctx.AllocTemp(DelegateAbi.BundleType);
                 var srcNotNull = ExternCall("SystemObject.__op_Inequality__SystemObject_SystemObject__SystemBoolean",
                     new List<CLeaf> { srcVal, Const(null, "SystemObject") }, "SystemBoolean");
                 _builder.EmitIf(srcNotNull,
@@ -427,7 +427,7 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
                             Const(wrapperName, "SystemString"), FuncRef(wrapperName), srcVal);
                         EmitAssign(wrapResultSlot, wrapperBundle);
                     },
-                    _ => EmitAssign(wrapResultSlot, Const(null, "SystemObjectArray")));
+                    _ => EmitAssign(wrapResultSlot, Const(null, DelegateAbi.BundleType)));
                 return SlotRef(wrapResultSlot);
             }
 

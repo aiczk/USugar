@@ -26,6 +26,10 @@ public static class DelegateAbi
     public const int BundleSize = 5;
     public const string KindTag = "__usugar_delegate";
 
+    /// <summary>A delegate value's VM representation: the bundle object[] and its boxed slot element type.</summary>
+    public const string BundleType = "SystemObjectArray";
+    public const string SlotType = "SystemObject";
+
     /// <summary>
     /// Canonical signature key for the global __dlgc_{sig}__a{i} / __dlgc_{sig}__ret convention vars — a
     /// cross-program byte contract (§3.2). Single source of truth (replaces the former
@@ -165,8 +169,8 @@ public static class DelegateAbi
     public static CLeaf EmitBundleMint(CoreBuilder builder, Func<CLeaf> targetFn,
         CLeaf methodNameLeaf, CLeaf addrLeaf, CLeaf envLeaf)
     {
-        var bundle = builder.ExternCall(ExternResolver.BuildArrayCtorSignature("SystemObjectArray"),
-            new List<CLeaf> { builder.Const(BundleSize, "SystemInt32") }, "SystemObjectArray");
+        var bundle = builder.ExternCall(ExternResolver.BuildArrayCtorSignature(BundleType),
+            new List<CLeaf> { builder.Const(BundleSize, "SystemInt32") }, BundleType);
         EmitBundleSlotWrites(builder, bundle, targetFn, methodNameLeaf, addrLeaf, envLeaf);
         return bundle;
     }
@@ -178,9 +182,9 @@ public static class DelegateAbi
         CLeaf methodNameLeaf, CLeaf addrLeaf, CLeaf envLeaf)
     {
         builder.EmitAssign(bundleSlot, builder.ExternCall(
-            ExternResolver.BuildArrayCtorSignature("SystemObjectArray"),
+            ExternResolver.BuildArrayCtorSignature(BundleType),
             new List<CLeaf> { builder.Const(BundleSize, "SystemInt32") },
-            "SystemObjectArray"));
+            BundleType));
         var bundle = builder.SlotRef(bundleSlot);
         EmitBundleSlotWrites(builder, bundle, targetFn, methodNameLeaf, addrLeaf, envLeaf);
         return bundle;
@@ -189,7 +193,7 @@ public static class DelegateAbi
     static void EmitBundleSlotWrites(CoreBuilder builder, CLeaf bundle, Func<CLeaf> targetFn,
         CLeaf methodNameLeaf, CLeaf addrLeaf, CLeaf envLeaf)
     {
-        var setSig = ExternResolver.BuildArraySetSignature("SystemObjectArray", "SystemObject");
+        var setSig = ExternResolver.BuildArraySetSignature(BundleType, SlotType);
         var target = targetFn();
         builder.EmitExternVoid(setSig, new List<CLeaf> { bundle, builder.Const(Kind, "SystemInt32"), builder.Const(KindTag, "SystemString") });
         builder.EmitExternVoid(setSig, new List<CLeaf> { bundle, builder.Const(Target, "SystemInt32"), target });
@@ -202,7 +206,7 @@ public static class DelegateAbi
     /// so slot numbers stay ABI-owned rather than being re-open-coded at dispatch/equality sites.</summary>
     public static CLeaf ReadSlot(CoreBuilder builder, CLeaf bundle, int slot, string udonType)
         => builder.ExternCall(
-            ExternResolver.BuildArrayGetSignature("SystemObjectArray", "SystemObject"),
+            ExternResolver.BuildArrayGetSignature(BundleType, SlotType),
             new List<CLeaf> { bundle, builder.Const(slot, "SystemInt32") },
             udonType);
 

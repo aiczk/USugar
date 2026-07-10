@@ -163,9 +163,9 @@ public class DeconstructionAssignmentHandler : AssignmentHandlerBase, IOperation
                         $"Cannot deconstruct return of '{callTarget.Name}': no return layout found.");
 
                 // Single SystemObjectArray return slot: load the array, then index into it
-                if (callReturns.Length == 1 && callReturns[0].UdonType == "SystemObjectArray")
+                if (callReturns.Length == 1 && callReturns[0].UdonType == AggregateAbi.ArrayType)
                 {
-                    var arrExpr = LoadField(callReturns[0].Id, "SystemObjectArray");
+                    var arrExpr = LoadField(callReturns[0].Id, AggregateAbi.ArrayType);
                     for (int i = 0; i < targetTuple.Elements.Length; i++)
                     {
                         var elemVal = AggregateAbi.ReadSlot(_builder, arrExpr, i, "SystemObject");
@@ -326,14 +326,14 @@ public class DeconstructionAssignmentHandler : AssignmentHandlerBase, IOperation
             new List<CLeaf> { instanceVal, eventConst });
 
         // GetProgramVariable for return value and deconstruct
-        if (callReturns.Length == 1 && callReturns[0].UdonType == "SystemObjectArray")
+        if (callReturns.Length == 1 && callReturns[0].UdonType == AggregateAbi.ArrayType)
         {
             // Single SystemObjectArray return: get the array, then index into it
             var retNameConst = Const(callReturns[0].Id, "SystemString");
             var arrVal = ExternCall(
                 "VRCUdonCommonInterfacesIUdonEventReceiver.__GetProgramVariable__SystemString__SystemObject",
                 new List<CLeaf> { instanceVal, retNameConst },
-                "SystemObjectArray");
+                AggregateAbi.ArrayType);
             for (int i = 0; i < targetTuple.Elements.Length; i++)
             {
                 var elemVal = AggregateAbi.ReadSlot(_builder, arrVal, i, "SystemObject");

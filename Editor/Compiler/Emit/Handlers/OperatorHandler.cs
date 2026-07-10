@@ -108,7 +108,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
             var helperName = op.OperatorKind == BinaryOperatorKind.Add
                 ? DelegateAbi.MulticastCombineName(sigPart)
                 : DelegateAbi.MulticastRemoveName(sigPart);
-            return _builder.InternalCall(helperName, new List<CLeaf> { combineLeftVal, combineRightVal }, "SystemObjectArray");
+            return _builder.InternalCall(helperName, new List<CLeaf> { combineLeftVal, combineRightVal }, DelegateAbi.BundleType);
         }
 
         // ── Nullable (boxed object) compared to null literal → object reference null check ──
@@ -618,7 +618,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
                         $"Positional pattern element count ({rec.DeconstructionSubpatterns.Length}) "
                         + $"does not match tuple arity ({layout.Count}).");
 
-                var aggSlot = _ctx.AllocTemp("SystemObjectArray");
+                var aggSlot = _ctx.AllocTemp(AggregateAbi.ArrayType);
                 EmitAssign(aggSlot, valueVal);
 
                 CLeaf result = Const(true, "SystemBoolean");
@@ -919,8 +919,8 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
     CLeaf EmitAggregateElementsEqual(CValue leftArr, CValue rightArr, INamedTypeSymbol aggType)
     {
         var layout = _ctx.GetAggregateLayout(aggType);
-        var leftSlot = _ctx.AllocTemp("SystemObjectArray"); EmitAssign(leftSlot, leftArr);
-        var rightSlot = _ctx.AllocTemp("SystemObjectArray"); EmitAssign(rightSlot, rightArr);
+        var leftSlot = _ctx.AllocTemp(AggregateAbi.ArrayType); EmitAssign(leftSlot, leftArr);
+        var rightSlot = _ctx.AllocTemp(AggregateAbi.ArrayType); EmitAssign(rightSlot, rightArr);
 
         CLeaf result = Const(true, "SystemBoolean");
         for (int i = 0; i < layout.Count; i++)

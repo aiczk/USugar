@@ -519,7 +519,7 @@ public partial class InvocationHandler
             && op.Constructor != null)
         {
             var layout = _ctx.GetAggregateLayout(userStruct);
-            var slot = _ctx.AllocTemp("SystemObjectArray");
+            var slot = _ctx.AllocTemp(AggregateAbi.ArrayType);
             EmitAssign(slot, AggregateAbi.Allocate(_builder, layout.Count));
             AggregateAbi.DefaultInitialize(_builder, SlotRef(slot), layout, _ctx.GetAggregateLayout, GetUdonType);
             var ctorArgs = new List<CLeaf> { SlotRef(slot) };

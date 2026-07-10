@@ -514,7 +514,7 @@ public class StatementHandler : HandlerBase, IOperationHandler
         // declaration and the object[] ctor — every spec-2 activation then aliased spec-1's one
         // array and per-frame struct locals broke under recursion (wave-9 round-5 [X7], VM-proven
         // 183 vs 126 in the second instantiation).
-        var id = _ctx.DeclareLocal(local.Name, "SystemObjectArray");
+        var id = _ctx.DeclareLocal(local.Name, AggregateAbi.ArrayType);
         _localBindings[local] = new EmitContext.LocalBinding(id);
 
         // Create object[] of correct size
@@ -538,7 +538,7 @@ public class StatementHandler : HandlerBase, IOperationHandler
             // Tuple literal: set each element via __Set__
             for (int i = 0; i < tupleLit.Elements.Length && i < layout.Count; i++)
             {
-                AggregateAbi.WriteSlot(_builder, LoadField(localId, "SystemObjectArray"),
+                AggregateAbi.WriteSlot(_builder, LoadField(localId, AggregateAbi.ArrayType),
                     i, VisitExpression(tupleLit.Elements[i]));
             }
         }
@@ -553,7 +553,7 @@ public class StatementHandler : HandlerBase, IOperationHandler
             // new V(args): default-init the already-allocated array, then run the registered ctor
             // (receiver = this array, mutated in place via this.field = … in the ctor body).
             AggregateAbi.DefaultInitializeField(_builder, localId, layout, _ctx.GetAggregateLayout, GetUdonType);
-            var ctorArgs = new List<CLeaf> { LoadField(localId, "SystemObjectArray") };
+            var ctorArgs = new List<CLeaf> { LoadField(localId, AggregateAbi.ArrayType) };
             foreach (var arg in ocCtor.Arguments)
                 ctorArgs.Add(VisitExpression(arg.Value));
             EmitExprStmt(EmitCallToMethod(ocCtor.Constructor, ctorArgs));
