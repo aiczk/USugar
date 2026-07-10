@@ -390,13 +390,18 @@ public static class ClassAbi
 
     public static void RejectDelegateBindingToInstanceMethod(IMethodSymbol targetMethod)
     {
+        // A lambda / local function hosted INSIDE a class member reports the class as its
+        // ContainingType too (Roslyn resolves up to the nearest named type), but it is a hoisted
+        // closure dispatched via its own bridge + env — not a receiver-dispatch target. Only a real
+        // named instance method is the unsupported B54-class shape.
+        if (targetMethod.MethodKind is MethodKind.LambdaMethod or MethodKind.LocalFunction) return;
         if (!targetMethod.IsStatic
             && targetMethod.ContainingType is INamedTypeSymbol classTy
             && EmitPolicy.IsUserClassType(classTy))
             throw new NotSupportedException(
                 $"A delegate cannot be created from v1 class instance method '{classTy.Name}.{targetMethod.Name}': "
                 + "a user class is not a dispatch target for the delegate ABI. Wrap the call in a lambda instead "
-                + $"('() => receiver.{targetMethod.Name}(...)').");
+                + $"('() => {targetMethod.Name}(...)' inside the class, '() => receiver.{targetMethod.Name}(...)' outside).");
     }
 
     /// <summary>Run instance field / auto-property initializers on an already allocated class bundle.</summary>

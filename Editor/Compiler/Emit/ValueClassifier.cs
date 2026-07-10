@@ -34,6 +34,10 @@ public readonly struct ValueInfo
     public readonly ValueProvenance Provenance;
     public readonly bool ContainsProgramLocalPayload;
     public readonly bool DelegateCapturesProgramLocalPayload;
+    // Receiver-capture design v2 SS2(a): the delegate captures a value whose TYPE can hide arbitrary
+    // payload from the static walk (delegate / object / object[] / delegate-containing aggregate) -
+    // such a capture defeats type-based classification, so the value cannot be proven class-free.
+    public readonly bool CapturesUnclassifiablePayload;
     public readonly bool IsDirectDelegateValue;
 
     public ValueInfo(
@@ -43,6 +47,7 @@ public readonly struct ValueInfo
         ValueProvenance provenance,
         bool containsProgramLocalPayload,
         bool delegateCapturesProgramLocalPayload,
+        bool capturesUnclassifiablePayload,
         bool isDirectDelegateValue)
     {
         Operation = operation;
@@ -51,6 +56,7 @@ public readonly struct ValueInfo
         Provenance = provenance;
         ContainsProgramLocalPayload = containsProgramLocalPayload;
         DelegateCapturesProgramLocalPayload = delegateCapturesProgramLocalPayload;
+        CapturesUnclassifiablePayload = capturesUnclassifiablePayload;
         IsDirectDelegateValue = isDirectDelegateValue;
     }
 }
@@ -65,14 +71,14 @@ public static class ValueClassifier
         var unwrapped = UnwrapConversions(value);
         var staticType = unwrapped?.Type ?? value?.Type;
         if (unwrapped == null)
-            return Create(null, staticType, ValueKind.Unknown, ValueProvenance.Unknown, false, false, false);
+            return Create(null, staticType, ValueKind.Unknown, ValueProvenance.Unknown, false, false, false, false);
 
         if (unwrapped.ConstantValue.HasValue && unwrapped.ConstantValue.Value == null)
-            return Create(unwrapped, staticType, ValueKind.Null, ValueProvenance.LiteralNull, false, false, false);
+            return Create(unwrapped, staticType, ValueKind.Null, ValueProvenance.LiteralNull, false, false, false, false);
 
         if (TryGetDelegateTarget(unwrapped, out var target, out var provenance))
         {
-            var capturesPayload = DelegateTargetCapturesProgramLocalPayload(target, captureScope, typeCtx);
+            var (capturesPayload, capturesUnclassifiable) = DelegateTargetCaptureFlags(target, captureScope, typeCtx);
             return Create(
                 unwrapped,
                 staticType,
@@ -80,6 +86,7 @@ public static class ValueClassifier
                 provenance,
                 capturesPayload,
                 capturesPayload,
+                capturesUnclassifiable,
                 IsDirectDelegateProvenance(provenance));
         }
 
@@ -91,24 +98,28 @@ public static class ValueClassifier
                 ProvenanceOf(unwrapped),
                 false,
                 false,
+                false,
                 false);
 
         if (staticType == null)
-            return Create(unwrapped, staticType, ValueKind.Unknown, ProvenanceOf(unwrapped), false, false, false);
+            return Create(unwrapped, staticType, ValueKind.Unknown, ProvenanceOf(unwrapped), false, false, false, false);
         if (TypeClassifier.ContainsProgramLocalPayload(staticType, typeCtx))
-            return Create(unwrapped, staticType, ValueKind.ProgramLocalPayload, ProvenanceOf(unwrapped), true, false, false);
+            return Create(unwrapped, staticType, ValueKind.ProgramLocalPayload, ProvenanceOf(unwrapped), true, false, false, false);
         if (TypeClassifier.IsAggregateValue(staticType))
-            return Create(unwrapped, staticType, ValueKind.Aggregate, ProvenanceOf(unwrapped), false, false, false);
+            return Create(unwrapped, staticType, ValueKind.Aggregate, ProvenanceOf(unwrapped), false, false, false, false);
         if (TypeClassifier.IsObjectArrayEmulated(staticType))
-            return Create(unwrapped, staticType, ValueKind.ObjectArray, ProvenanceOf(unwrapped), false, false, false);
+            return Create(unwrapped, staticType, ValueKind.ObjectArray, ProvenanceOf(unwrapped), false, false, false, false);
 
-        return Create(unwrapped, staticType, ValueKind.Native, ProvenanceOf(unwrapped), false, false, false);
+        return Create(unwrapped, staticType, ValueKind.Native, ProvenanceOf(unwrapped), false, false, false, false);
     }
 
     public static bool IsDirectProgramLocalSafeDelegate(ValueInfo info)
         => info.Kind == ValueKind.Delegate
            && info.IsDirectDelegateValue
-           && !info.DelegateCapturesProgramLocalPayload;
+           && !info.DelegateCapturesProgramLocalPayload
+           // v2 SS2(a): a delegate/object-typed capture can smuggle a program-local payload past the
+           // type walk (transitive laundering, gates-audit probe) - not provably class-free.
+           && !info.CapturesUnclassifiablePayload;
 
     public static IOperation UnwrapConversions(IOperation value)
     {
@@ -124,6 +135,7 @@ public static class ValueClassifier
         ValueProvenance provenance,
         bool containsProgramLocalPayload,
         bool delegateCapturesProgramLocalPayload,
+        bool capturesUnclassifiablePayload,
         bool isDirectDelegateValue)
         => new ValueInfo(
             operation,
@@ -132,6 +144,7 @@ public static class ValueClassifier
             provenance,
             containsProgramLocalPayload,
             delegateCapturesProgramLocalPayload,
+            capturesUnclassifiablePayload,
             isDirectDelegateValue);
 
     static bool IsDelegateType(ITypeSymbol type)
@@ -168,27 +181,42 @@ public static class ValueClassifier
         }
     }
 
-    static bool DelegateTargetCapturesProgramLocalPayload(
+    static (bool Payload, bool Unclassifiable) DelegateTargetCaptureFlags(
         IMethodSymbol target,
         CaptureScopeAnalysis captureScope,
         TypeClassifierContext typeCtx)
     {
-        if (target == null || captureScope == null) return false;
+        if (target == null || captureScope == null) return (false, false);
         if (!captureScope.ClosureScopes.TryGetValue(target.OriginalDefinition, out var closureScope)
             || closureScope?.BindingScope == null)
-            return false;
+            return (false, false);
+        bool payload = false, unclassifiable = false;
         for (var s = closureScope.BindingScope; s != null; s = captureScope.EffectiveParent(s))
             foreach (var cap in s.OwnedCaptures)
-                if (CapturedSymbolType(cap) is { } t && TypeClassifier.ContainsProgramLocalPayload(t, typeCtx))
-                    return true;
-        return false;
+            {
+                if (CapturedSymbolType(cap) is not { } t) continue;
+                if (TypeClassifier.ContainsProgramLocalPayload(t, typeCtx)) payload = true;
+                if (IsUnclassifiableCarrierType(t)) unclassifiable = true;
+            }
+        return (payload, unclassifiable);
     }
+
+    // A capture of this TYPE can carry arbitrary hidden payload (a delegate's env, a boxed value,
+    // an object[] cell) that the static type walk cannot see - classification cannot prove it clean.
+    static bool IsUnclassifiableCarrierType(ITypeSymbol t)
+        => EmitPolicy.ContainsDelegateType(t)
+           || t.SpecialType == SpecialType.System_Object
+           || (t is IArrayTypeSymbol arr && arr.ElementType.SpecialType == SpecialType.System_Object);
 
     static ITypeSymbol CapturedSymbolType(ISymbol symbol)
         => symbol switch
         {
             ILocalSymbol local => local.Type,
             IParameterSymbol parameter => parameter.Type,
+            // Class receiver capture (design 2026-07-10 v2 §1.6, SOUNDNESS GATE): the synthetic
+            // receiver key carries the v1 class itself — without this arm a receiver-capturing
+            // delegate would classify clean and silently cross a program boundary.
+            IMethodSymbol member => member.ContainingType,
             _ => null,
         };
 

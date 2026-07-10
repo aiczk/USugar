@@ -171,7 +171,14 @@ public class EmitContext
     static void CollectOperationTypeParams(IOperation op, IMethodSymbol def, HashSet<(TypeParameterKind, int)> used)
     {
         if (op == null) return;
-        CollectTypeParams(op.Type, def, used);
+        // Class receiver capture (design 2026-07-10): the receiver node's own STATIC type mentions the
+        // containing generic (`this` inside a GRcv<T> member types as GRcv<T>), but the emitted closure
+        // handles the receiver as a type-erased object[] env cell — the shared hoist stays correct
+        // across instantiations (per-activation env de-aliases; B45 instance precedent). Any REAL T use
+        // hanging off the receiver (a T-typed field read, a conversion, an argument) still pins via
+        // that operation's own Type on the recursive walk below.
+        if (op is not IInstanceReferenceOperation)
+            CollectTypeParams(op.Type, def, used);
         if (op is ITypeOfOperation typeOf) CollectTypeParams(typeOf.TypeOperand, def, used);
         if (op is IIsTypeOperation isType) CollectTypeParams(isType.TypeOperand, def, used);
         // B73: a type parameter used ONLY in a pattern (`o is T x`, `case T t:`, recursive `T { … }`) is a

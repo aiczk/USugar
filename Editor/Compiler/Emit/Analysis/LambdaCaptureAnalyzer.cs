@@ -116,6 +116,23 @@ public sealed class LambdaCaptureAnalyzer
         }
     }
 
+    /// <summary>Class receiver capture (design 2026-07-10): the synthetic capture key for `this`
+    /// inside a closure hosted by a v1 user-class instance member — the owning member method's
+    /// OriginalDefinition (an ISymbol, so it rides the ordinary capture sets, the LF transitive
+    /// fixpoint, slot assignment, and the boundary classifier unchanged). Null for behaviour /
+    /// struct / static hosts: behaviour closures reach `this` via flat heap vars, struct closures
+    /// are CS1673-blocked — the arm must never fire there (behaviour byte-invariance gate).</summary>
+    public static IMethodSymbol ReceiverCaptureKey(IMethodSymbol closureOrMember)
+    {
+        var m = closureOrMember;
+        while (m != null && m.MethodKind is MethodKind.LambdaMethod or MethodKind.LocalFunction)
+            m = m.ContainingSymbol as IMethodSymbol;
+        if (m == null || m.IsStatic) return null;
+        return m.ContainingType is INamedTypeSymbol ct && EmitPolicy.IsUserClassType(ct)
+            ? m.OriginalDefinition
+            : null;
+    }
+
     public ImmutableArray<ISymbol> GetCaptures(IAnonymousFunctionOperation lambda)
     {
         if (_capturesCache.TryGetValue(lambda, out var cached)) return cached;
@@ -131,6 +148,7 @@ public sealed class LambdaCaptureAnalyzer
         foreach (var p in lambda.Symbol.Parameters) inside.Add(p);
         CollectInsideSymbols(body, inside);
 
+        var receiverKey = ReceiverCaptureKey(lambda.Symbol);
         var captures = new HashSet<ISymbol>(SymbolEqualityComparer.Default);
         foreach (var op in body.DescendantsAndSelf())
         {
@@ -141,6 +159,12 @@ public sealed class LambdaCaptureAnalyzer
                     break;
                 case IParameterReferenceOperation pr when !inside.Contains(pr.Parameter):
                     captures.Add(pr.Parameter);
+                    break;
+                // Receiver capture: only a real `this` of the containing type — ImplicitReceiver
+                // (object initializers) and PatternInput must not fire it.
+                case IInstanceReferenceOperation { ReferenceKind: InstanceReferenceKind.ContainingTypeInstance }
+                    when receiverKey != null:
+                    captures.Add(receiverKey);
                     break;
                 // §2.8 round-4 [K2]: invoking or referencing a CAPTURING local function makes this
                 // lambda capture that function's (transitive) capture set — a wrapper lambda is the
@@ -194,6 +218,7 @@ public sealed class LambdaCaptureAnalyzer
         foreach (var p in symbol.Parameters) inside.Add(p);
         CollectInsideSymbols(body, inside);
 
+        var receiverKey = ReceiverCaptureKey(symbol);
         foreach (var op in body.DescendantsAndSelf())
         {
             switch (op)
@@ -203,6 +228,10 @@ public sealed class LambdaCaptureAnalyzer
                     break;
                 case IParameterReferenceOperation pr when !inside.Contains(pr.Parameter):
                     directCaptures.Add(pr.Parameter);
+                    break;
+                case IInstanceReferenceOperation { ReferenceKind: InstanceReferenceKind.ContainingTypeInstance }
+                    when receiverKey != null:
+                    directCaptures.Add(receiverKey);
                     break;
                 case IInvocationOperation inv
                     when inv.TargetMethod is { MethodKind: MethodKind.LocalFunction }:

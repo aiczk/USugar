@@ -233,6 +233,12 @@ public sealed class CaptureScopeAnalysis
         {
             var scope = builder.NewScope(CaptureScopeKind.MethodEntry, null, body);
             foreach (var p in root.Parameters) builder.Declare(p, scope);
+            // Class receiver capture (design 2026-07-10): a v1-class instance member owns its
+            // receiver as a declarable — Finish's DeclaredSymbols∩captured intersection assigns it
+            // an env slot only when some closure actually captured it (field initializers never do:
+            // `this` in a field initializer is CS0027).
+            if (LambdaCaptureAnalyzer.ReceiverCaptureKey(root) is { } receiverKey)
+                builder.Declare(receiverKey, scope);
             builder.FlattenInto(body, scope);
         }
         foreach (var initOp in fieldInits)

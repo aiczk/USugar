@@ -30,6 +30,15 @@ public sealed class ClosureContext
             binding = direct;
             return true;
         }
+        // Class receiver capture (design 2026-07-10 v2 §1.5): the receiver's synthetic key is the
+        // member method's OriginalDefinition — re-key a constructed generic spec the same way params
+        // are re-keyed below, so a caller holding the spec symbol resolves instead of loud-throwing.
+        if (symbol is IMethodSymbol receiverMethod
+            && CaptureScope.CapturedSlots.TryGetValue(receiverMethod.OriginalDefinition, out var receiverBinding))
+        {
+            binding = receiverBinding;
+            return true;
+        }
         if (symbol is IParameterSymbol p
             && p.ContainingSymbol is IMethodSymbol m
             && !ReferenceEquals(m, m.OriginalDefinition))

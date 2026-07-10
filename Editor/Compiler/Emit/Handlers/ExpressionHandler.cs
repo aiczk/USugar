@@ -44,6 +44,14 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
                                                      : LoadParam(paramRef.Parameter),
         IInstanceReferenceOperation when _ctx.Methods.CurrentStructReceiverParamId != null
             => LoadField(_ctx.Methods.CurrentStructReceiverParamId, AggregateAbi.ArrayType),
+        // Class receiver capture (design 2026-07-10 v2 §1.4, the SINGLE new resolution arm): inside
+        // a hoisted closure hosted by a v1-class member, `this` is the receiver bundle in the env
+        // chain (synthetic capture keyed by the member's OriginalDefinition). Every access shape —
+        // field read/write/compound, instance call, property, indexer — funnels here through
+        // LoadInstanceRaw's fallthrough, so no second arm exists anywhere.
+        IInstanceReferenceOperation when LambdaCaptureAnalyzer.ReceiverCaptureKey(_ctx.Methods.CurrentMethod) is { } rcvKey
+                                         && _ctx.Closures.TryGetEnvBinding(rcvKey, out _)
+            => EnvEmit.Read(_builder, _ctx, rcvKey, AggregateAbi.ArrayType),
         IInstanceReferenceOperation => LoadField(_ctx.Storage.DeclareThisOnce(GetUdonType(_classSymbol)), GetUdonType(_classSymbol)),
         IConversionOperation op => VisitConversion(op),
         IDefaultValueOperation op => VisitDefaultValue(op),

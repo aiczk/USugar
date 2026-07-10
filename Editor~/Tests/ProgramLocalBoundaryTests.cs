@@ -6,11 +6,13 @@ namespace USugar.Tests;
 public class ProgramLocalBoundaryTests
 {
     [Fact]
-    public void ClassReceiverCapturedByHostedLambda_Rejects()
+    public void ClassReceiverCapturedByHostedLambda_Compiles()
     {
-        // B84 ledger: a lambda hosted inside a v1 class would need to capture the class receiver
-        // through closure env state. Until class receiver capture is a formal ABI feature, reject it.
-        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
+        // B84 ledger, superseded by the class-receiver-capture feature (design 2026-07-10 v2): the
+        // receiver rides the closure env as a synthetic capture keyed by the owning member method.
+        // Runtime value correctness is pinned in the harness (ClassReceiverCaptureTests, real-VM
+        // DiffFuzz with divergent seeds); this pin keeps the shape compiling.
+        var uasm = TestHelper.CompileToUasm(@"
 using UdonSharp;
 using System;
 public class C {
@@ -20,7 +22,7 @@ public class C {
 public class ClassReceiverCaptureHost : UdonSharpBehaviour {
     public int result;
     void Start() { var c = new C(); result = c.M(); }
-}", "ClassReceiverCaptureHost"));
-        Assert.Contains("class receiver capture", ex.Message);
+}", "ClassReceiverCaptureHost");
+        Assert.NotNull(uasm);
     }
 }

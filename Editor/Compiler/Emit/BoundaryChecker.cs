@@ -27,6 +27,10 @@ public sealed class BoundaryChecker
 
     public bool CurrentMethodBodyMentionsProgramLocalPayload()
     {
+        // Receiver-capture design v2 SS2(b): inside a v1-class instance member the receiver itself is
+        // a program-local payload in scope - an unclassifiable delegate store from here cannot be
+        // proven class-free (bounded conservative polarity; over-reject is the accepted trade).
+        if (LambdaCaptureAnalyzer.ReceiverCaptureKey(_ctx.Methods.CurrentMethod) != null) return true;
         var syntaxRef = _ctx.Methods.CurrentMethod?.DeclaringSyntaxReferences.FirstOrDefault();
         if (syntaxRef == null) return false;
         var syntax = syntaxRef.GetSyntax();
@@ -107,8 +111,13 @@ public sealed class BoundaryChecker
     public bool IsCrossProgramDelegateFieldTarget(IFieldReferenceOperation fieldRef)
     {
         if (fieldRef.Field.Type is not INamedTypeSymbol dft || dft.DelegateInvokeMethod == null) return false;
+        // Only a BEHAVIOUR's storage is a program surface — a v1 class / struct field is program-local
+        // regardless of accessibility (a class is not a program; its bundle has no exported symbols).
+        // Without this gate, `F = lambda` inside a class member treats the class's own public delegate
+        // field as cross-program and over-rejects (receiver-capture M2).
+        if (!ExternResolver.IsUdonSharpBehaviour(fieldRef.Field.ContainingType)) return false;
         if (fieldRef.Instance is not null and not IInstanceReferenceOperation)
-            return ExternResolver.IsUdonSharpBehaviour(fieldRef.Field.ContainingType);
+            return true;
         return fieldRef.Field.DeclaredAccessibility == Accessibility.Public
             || fieldRef.Field.GetAttributes().Any(a =>
                 a.AttributeClass?.Name is "SerializeField" or "SerializeFieldAttribute" or "UdonSyncedAttribute");

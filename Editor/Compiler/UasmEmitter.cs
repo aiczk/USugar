@@ -1999,9 +1999,6 @@ public class UasmEmitter
         => method.MethodKind is MethodKind.LocalFunction
             or MethodKind.LambdaMethod or MethodKind.AnonymousFunction;
 
-    static bool ClosureBodyTouchesInstance(IOperation bodyOp)
-        => bodyOp != null && bodyOp.DescendantsAndSelf().Any(op => op is IInstanceReferenceOperation);
-
     // ── EmitMethod ──
 
     void EmitMethod(IMethodSymbol method)
@@ -2175,16 +2172,6 @@ public class UasmEmitter
             // and open no scope. A closure/spec emitted later recomposes its own map at its own entry.
             using var _typeScope = typeMap != null ? _ctx.EnterTypeParamScope(typeMap) : null;
 
-            if (IsHoistedClosureMethod(method)
-                && method.ContainingType is INamedTypeSymbol classCt
-                && EmitPolicy.IsUserClassType(classCt)
-                && ClosureBodyTouchesInstance(bodyOp))
-                throw new NotSupportedException(
-                    $"A lambda or local function declared inside v1 class '{classCt.Name}' cannot reference "
-                    + "`this` or instance members yet: class receiver capture is not represented in the "
-                    + "current closure ABI, and would fault at runtime. Pass the needed values as locals, "
-                    + "or move the closure to the behaviour side.");
-
             PreScanGotoLabels(bodyOp);
 
             // Emit tail-call optimization label at function entry (jump target for TCO goto)
@@ -2212,6 +2199,16 @@ public class UasmEmitter
                     if (p.Ordinal < entryParamIds.Length && _ctx.Closures.TryGetEnvBinding(p, out _))
                         EnvEmit.Write(_builder, _ctx, p,
                             BridgeLoad(entryParamIds[p.Ordinal], GetUdonType(p.Type)));
+
+            // Class receiver capture (design 2026-07-10 v2 §1.3): consume the receiver param0 into its
+            // env cell exactly like a captured parameter — after __tco_ + EnvAlloc, so a self-tail
+            // loopback re-seeds each logical activation's fresh env. Null CurrentStructReceiverParamId
+            // (behaviour methods, hoisted closures) and an uncaptured receiver both skip.
+            if (_ctx.Closures.CaptureScope != null
+                && _ctx.Methods.CurrentStructReceiverParamId is { } rcvParamId
+                && LambdaCaptureAnalyzer.ReceiverCaptureKey(method) is { } rcvKey
+                && _ctx.Closures.TryGetEnvBinding(rcvKey, out _))
+                EnvEmit.Write(_builder, _ctx, rcvKey, BridgeLoad(rcvParamId, AggregateAbi.ArrayType));
 
             if (bodyOp is IMethodBodyOperation methodBody)
             {

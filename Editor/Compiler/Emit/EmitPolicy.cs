@@ -115,7 +115,7 @@ public static class EmitPolicy
     /// object[] bundle and equally cannot cross the network — recurse aggregate fields so it rejects too
     /// (visited set guards a struct that transitively contains itself). Still NARROW on object / bare
     /// type params: [NetworkCallable] methods with plain object params stay outside this policy.</summary>
-    static bool ContainsDelegateType(ITypeSymbol type)
+    public static bool ContainsDelegateType(ITypeSymbol type)
         => ContainsDelegateType(type, new HashSet<ITypeSymbol>(SymbolEqualityComparer.Default));
 
     static bool ContainsDelegateType(ITypeSymbol type, HashSet<ITypeSymbol> visited)
