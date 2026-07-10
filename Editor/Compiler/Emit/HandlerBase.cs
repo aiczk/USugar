@@ -1600,6 +1600,7 @@ public abstract partial class HandlerBase
     // (B56), else a nested LF referencing the method's T finds no owner and CoreVerify ICEs on raw 'T'.
     protected void RegisterFirstGenericSpec(IMethodSymbol constructed)
     {
+        EmitContext.ThrowIfStaticGenericClosureCaptures(_compilation, constructed);
         var genericDef = constructed.OriginalDefinition;
         if (_ctx.Generics.FirstSpecByDefinition.TryGetValue(genericDef, out var firstSpec))
             EmitContext.ThrowIfClosureAliasesInstantiation(_compilation, firstSpec, constructed);

@@ -229,6 +229,25 @@ public class EmitContext
         return null;
     }
 
+    /// <summary>Safety stop (2026-07-10, pre-root-fix): a def-scope-capturing closure inside a STATIC
+    /// generic method is unsafe at ANY instantiation count - the inlined spec's closure reads the
+    /// definition-keyed FLAT param field (no env wiring; VM-proven single-spec two-activation aliasing:
+    /// f1()*1000+f2() gave 58058 where the CLR oracle gives 8058), so every activation shares one cell.
+    /// Fires on FIRST registration; the per-spec closure separation root fix (B64/B70) retires this
+    /// together with the two-instantiation tier below.</summary>
+    public static void ThrowIfStaticGenericClosureCaptures(Compilation compilation, IMethodSymbol constructed)
+    {
+        if (!constructed.IsStatic) return;
+        var pin = GenericBodyClosurePins(compilation, constructed.OriginalDefinition);
+        if (pin.Capturing)
+            throw new System.NotSupportedException(
+                $"Static generic method '{constructed.Name}' contains a lambda or local function that "
+                + "captures locals/parameters. Its inlined specialization shares one flat capture cell "
+                + "across ALL activations, so a later call's captured value overwrites an earlier "
+                + "delegate's (VM-proven aliasing). Make the closure capture-free, or move the method "
+                + "onto a UdonSharpBehaviour/struct instance (whose captures ride per-activation env records).");
+    }
+
     /// <summary>Shared [Y2]/B64 reject on a SECOND DISTINCT instantiation of a generic whose body
     /// contains a closure. Loud when EITHER a closure-used type parameter varies between the two specs
     /// (the hoist was emitted with the first spec's types), OR the two specs differ in a METHOD type

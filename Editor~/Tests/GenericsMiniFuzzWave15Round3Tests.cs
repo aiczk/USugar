@@ -346,8 +346,10 @@ public class B64A : UdonSharpBehaviour {
     [Fact]
     public void B64_MultiInstantiation_VaryingClosureUsedParam_Rejects()
     {
-        // H.Run<T,U>'s closure returns U (uses U). Two calls fix T=int and vary U (string/bool): the shared
-        // hoist can only carry one U, so the second instantiation genuinely aliases — must still reject.
+        // H.Run<T,U>'s closure returns U (uses U) AND captures the parameter `u`. Since the 2026-07-10
+        // safety stop, the capture alone rejects at FIRST registration (flat capture cell aliases across
+        // ACTIVATIONS, not just instantiations — VM-proven single-spec 58058-vs-8058), so that tier fires
+        // before the [Y2] varying-used-param tier this pin originally targeted. Either way: must reject.
         var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
 using System; using UdonSharp;
 public static class H64B {
@@ -357,7 +359,7 @@ public class B64B : UdonSharpBehaviour {
   public int result;
   void Start(){ var a = H64B.Run<int, string>(3, ""x""); var b = H64B.Run<int, bool>(4, true); result = a.Length + (b ? 1 : 0); }
 }", "B64B"));
-        Assert.Contains("type parameter", ex.Message);
+        Assert.Contains("captures locals/parameters", ex.Message);
     }
 
     [Fact]

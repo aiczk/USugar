@@ -992,6 +992,7 @@ public class UasmEmitter
             if (fm.ContainingType.IsGenericType && !fm.IsDefinition)
             {
                 var fmGenericDef = fm.OriginalDefinition;
+                EmitContext.ThrowIfStaticGenericClosureCaptures(_compilation, fm);
                 if (_ctx.Generics.FirstSpecByDefinition.TryGetValue(fmGenericDef, out var fmFirstSpec))
                     EmitContext.ThrowIfClosureAliasesInstantiation(_compilation, fmFirstSpec, fm);
                 else
@@ -1042,6 +1043,7 @@ public class UasmEmitter
             if (sm.ContainingType.IsGenericType)
             {
                 var genericDef = sm.OriginalDefinition;
+                EmitContext.ThrowIfStaticGenericClosureCaptures(_compilation, sm);
                 if (_ctx.Generics.FirstSpecByDefinition.TryGetValue(genericDef, out var firstSpec))
                     EmitContext.ThrowIfClosureAliasesInstantiation(_compilation, firstSpec, sm);
                 else
@@ -1106,6 +1108,7 @@ public class UasmEmitter
             if (bm.IsGenericMethod && !bm.IsDefinition)
             {
                 var bmDef = bm.OriginalDefinition;
+                EmitContext.ThrowIfStaticGenericClosureCaptures(_compilation, bm);
                 if (_ctx.Generics.FirstSpecByDefinition.TryGetValue(bmDef, out var bmFirst))
                     EmitContext.ThrowIfClosureAliasesInstantiation(_compilation, bmFirst, bm);
                 else
