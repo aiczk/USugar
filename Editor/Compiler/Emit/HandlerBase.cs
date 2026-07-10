@@ -23,7 +23,7 @@ public abstract partial class HandlerBase
     protected Dictionary<IMethodSymbol, string[]> _methodParamVarIds => _ctx.Methods.ParamVarIds;
     protected IMethodSymbol _currentMethod { get => _ctx.Methods.CurrentMethod; set => _ctx.Methods.CurrentMethod = value; }
     protected List<MethodContext.ClosureSpec> _pendingClosures => _ctx.Methods.PendingClosures;
-    protected List<IMethodSymbol> _pendingGenericSpecs => _ctx.Generics.PendingSpecs;
+    protected List<(IMethodSymbol Method, MethodContext.ClosureSpec Spec)> _pendingGenericSpecs => _ctx.Generics.PendingSpecs;
     protected IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> _typeParamMap => _ctx.Generics.TypeParamMap;
     protected Dictionary<ILocalSymbol, EmitContext.LocalBinding> _localBindings => _ctx.Storage.LocalBindings;
     protected List<(string fieldName, IOperation initOp, ITypeSymbol fieldType)> _fieldInitOps => _ctx.Initializers.FieldInitOps;
@@ -1636,7 +1636,17 @@ public abstract partial class HandlerBase
 
     protected void RegisterGenericSpecialization(IMethodSymbol constructed)
     {
-        if (_methodFunctions.ContainsKey(constructed)) return;
+        // SS2B (M2b): a GENERIC local function is a hoisted closure and registers in the per-spec
+        // registry under (own type args + ambient enclosing-spec args) — its constructed symbol is
+        // symbol-EQUAL across the enclosing generic's instantiations, so a bare-constructed key would
+        // share one body across enclosing specs (the B64 first-spec-T bake / capture aliasing, one
+        // level down). Named generic specs keep their constructed-symbol maps.
+        bool closureKind = constructed.MethodKind is MethodKind.LambdaMethod or MethodKind.LocalFunction;
+        var closureKeyArgs = closureKind
+            ? _ctx.Methods.ComposeKeyArgs(constructed)
+            : System.Collections.Immutable.ImmutableArray<ITypeSymbol>.Empty;
+        if (closureKind ? _ctx.Methods.TryGetClosureSpec(constructed, closureKeyArgs, out _)
+                        : _methodFunctions.ContainsKey(constructed)) return;
         EmitPolicy.RejectInParameters(constructed); // round-7 follow-up [Q3]
 
         // Wave-9 round-5 [X6]: a SECOND distinct instantiation of a generic definition whose body
@@ -1649,13 +1659,20 @@ public abstract partial class HandlerBase
         // instantiations stay legal.
         RegisterFirstGenericSpec(constructed);
 
-        var slot = _ctx.Methods.Register(constructed, i => i.ToString());
+        EmitContext.MethodSlot slot;
+        if (closureKind)
+        {
+            var ci = _ctx.Methods.NextMethodIndex++;
+            slot = new EmitContext.MethodSlot(ci, ci.ToString());
+        }
+        else
+            slot = _ctx.Methods.Register(constructed, i => i.ToString());
         var idx = slot.Index;
 
         var typeArgPart = string.Join("_", constructed.TypeArguments.Select(ExternResolver.GetUdonTypeName));
         var name = $"__{idx}_{SanitizeId(constructed.Name)}_{typeArgPart}";
         var func = _module.AddFunction(name);
-        _methodFunctions[constructed] = func;
+        if (!closureKind) _methodFunctions[constructed] = func;
 
         // Feature G residual gap (wave-14): a member of a CONSTRUCTED generic struct carries the same
         // synthetic receiver object[] as param0 that the Phase-1 struct-method registration gives every
@@ -1683,6 +1700,7 @@ public abstract partial class HandlerBase
             _ctx.Storage.DeclareVar(paramId, GetUdonType(param.Type));
             gsParamIds[pi] = paramId;
         }
+        string specEnvpFieldId = null;
         // Stage 2 §1.3: __envp twin of RegisterLocalFunction, for a capturing GENERIC local function
         // specialization (keyed by OriginalDefinition = the generic def, matching EnvEmit.Leaf's
         // lookup). Non-T-dependent capturing generics share one physical node; T-dependent ones are
@@ -1695,15 +1713,12 @@ public abstract partial class HandlerBase
             System.Array.Copy(gsParamIds, withEnvp, gsParamIds.Length);
             withEnvp[gsParamIds.Length] = envpId;
             gsParamIds = withEnvp;
-            // Keyed by the CONSTRUCTED spec, not OriginalDefinition: two specs of one capturing
-            // generic (Lf<int> + Lf<long>) each own an __envp field — a definition key is
-            // last-spec-wins and wires spec 1's body to spec 2's field (silent wrong env / fault).
-            // Same keying discipline as _methodParamVarIds[constructed] below.
-            _ctx.Closures.RegisterEnvpField(constructed, envpId);
+            specEnvpFieldId = envpId;
         }
-        _methodParamVarIds[constructed] = gsParamIds;
+        if (!closureKind) _methodParamVarIds[constructed] = gsParamIds;
         foreach (var pid in gsParamIds) func.ParamFieldNames.Add(pid);
 
+        var specRetSlots = System.Array.Empty<ReturnSlot>();
         if (!constructed.ReturnsVoid)
         {
             var retType = GetUdonType(constructed.ReturnType);
@@ -1711,10 +1726,30 @@ public abstract partial class HandlerBase
             _ctx.Storage.DeclareVar(retId, retType);
             func.ReturnType = retType;
             func.ReturnSlots.Add(new ReturnSlot(retId, retType));
-            _methodReturns[constructed] = new[] { new ReturnSlot(retId, retType) };
+            specRetSlots = new[] { new ReturnSlot(retId, retType) };
+            if (!closureKind) _methodReturns[constructed] = specRetSlots;
         }
 
-        _pendingGenericSpecs.Add(constructed);
+        if (closureKind)
+        {
+            var record = new MethodContext.ClosureSpec
+            {
+                Def = constructed,
+                KeyArgs = closureKeyArgs,
+                // The spec itself joins its owner chain so a NESTED closure inherits the LF's own
+                // T binding through the record channel (F7 - consistent supply at any depth).
+                OwnerSpecs = _ctx.Methods.CurrentOwnerSpecs.Add(constructed),
+                Func = func,
+                Slot = slot,
+                ParamVarIds = gsParamIds,
+                ReturnSlots = specRetSlots,
+                EnvpFieldId = specEnvpFieldId,
+            };
+            _ctx.Methods.AddClosureSpec(record);
+            _pendingGenericSpecs.Add((constructed, record));
+        }
+        else
+            _pendingGenericSpecs.Add((constructed, null));
     }
 
     /// <summary>Feature G residual gap (wave-14): a struct-member reference (computed property/indexer
@@ -1865,14 +1900,13 @@ public abstract partial class HandlerBase
             // site; a method-group-only reference never hits it). Register the fully-resolved
             // specialization on demand, the same RegisterGenericSpecialization the invoke/generic-method
             // paths use (it also wires the __envp field for a capturing LF, keyed by OriginalDefinition).
-            if (targetMethod.IsGenericMethod && !_methodFunctions.ContainsKey(targetMethod))
+            if (targetMethod.IsGenericMethod)
             {
                 var constructedLf = SubstituteMethodTypeArgs(targetMethod);
                 if (!constructedLf.TypeArguments.Any(ta => ta is ITypeParameterSymbol))
                 {
                     targetMethod = constructedLf;
-                    if (!_methodFunctions.ContainsKey(targetMethod))
-                        RegisterGenericSpecialization(targetMethod);
+                    RegisterGenericSpecialization(targetMethod); // idempotent per composite key
                 }
             }
             // SS2B: a non-generic hoisted closure resolves through the per-spec registry (the ambient
@@ -1880,8 +1914,7 @@ public abstract partial class HandlerBase
             // constructed-symbol registration above.
             MethodContext.ClosureSpec bridgeClosure = null;
             EmitContext.MethodSlot targetSlot;
-            if (!targetMethod.IsGenericMethod
-                && _ctx.Methods.TryGetClosureSpec(targetMethod, _ctx.Methods.CurrentSpecArgs, out bridgeClosure))
+            if (_ctx.Methods.TryGetClosureSpec(targetMethod, _ctx.Methods.ComposeKeyArgs(targetMethod), out bridgeClosure))
                 targetSlot = bridgeClosure.Slot;
             else if (!_methodSlots.TryGetValue(targetMethod, out targetSlot))
                 throw new System.InvalidOperationException($"Lambda/local function '{targetMethod.Name}' not registered.");
@@ -2253,9 +2286,9 @@ public abstract partial class HandlerBase
 
     protected (string exportName, string[] paramIds, string retId) GetCalleeLayout(IMethodSymbol target)
     {
-        // SS2B: a hoisted closure callee resolves through the per-spec registry.
-        if (target.MethodKind is MethodKind.LambdaMethod or MethodKind.LocalFunction && !target.IsGenericMethod
-            && _ctx.Methods.TryGetClosureSpec(target, _ctx.Methods.CurrentSpecArgs, out var calleeClosure))
+        // SS2B: a hoisted closure callee (generic LF specs included) resolves through the registry.
+        if (target.MethodKind is MethodKind.LambdaMethod or MethodKind.LocalFunction
+            && _ctx.Methods.TryGetClosureSpec(target, _ctx.Methods.ComposeKeyArgs(target), out var calleeClosure))
             return (calleeClosure.Slot.VarPrefix, calleeClosure.ParamVarIds,
                 calleeClosure.ReturnSlots is { Length: 1 } ? calleeClosure.ReturnSlots[0].Id : null);
         if (_methodParamVarIds.TryGetValue(target, out var localParamIds))
@@ -2292,9 +2325,9 @@ public abstract partial class HandlerBase
     /// <summary>Get return slots for a callee method.</summary>
     protected ReturnSlot[] GetCalleeReturns(IMethodSymbol target)
     {
-        // SS2B: a hoisted closure callee resolves through the per-spec registry.
-        if (target.MethodKind is MethodKind.LambdaMethod or MethodKind.LocalFunction && !target.IsGenericMethod
-            && _ctx.Methods.TryGetClosureSpec(target, _ctx.Methods.CurrentSpecArgs, out var retClosure))
+        // SS2B: a hoisted closure callee (generic LF specs included) resolves through the registry.
+        if (target.MethodKind is MethodKind.LambdaMethod or MethodKind.LocalFunction
+            && _ctx.Methods.TryGetClosureSpec(target, _ctx.Methods.ComposeKeyArgs(target), out var retClosure))
             return retClosure.ReturnSlots;
         if (_methodReturns.TryGetValue(target, out var slots))
         {
@@ -2321,9 +2354,8 @@ public abstract partial class HandlerBase
         CFunction func;
         // SS2B: non-generic hoisted closures resolve per-spec (ambient args) with throw-on-miss —
         // a bare-symbol fallback here would silently call another spec's copy.
-        if (target.MethodKind is MethodKind.LambdaMethod or MethodKind.LocalFunction
-            && !target.IsGenericMethod)
-            func = _ctx.Methods.GetClosureSpec(target, _ctx.Methods.CurrentSpecArgs).Func;
+        if (target.MethodKind is MethodKind.LambdaMethod or MethodKind.LocalFunction)
+            func = _ctx.Methods.GetClosureSpec(target, _ctx.Methods.ComposeKeyArgs(target)).Func;
         else if (!_methodFunctions.TryGetValue(target, out func))
             throw new InvalidOperationException($"No CFunction registered for method '{target.Name}'");
         var retType = func.ReturnType ?? "SystemVoid";

@@ -89,6 +89,15 @@ public sealed class MethodContext
         return true;
     }
 
+    /// <summary>Composite lookup key args for a hoisted closure reference: the CONSTRUCTED symbol's
+    /// own type args (a generic LF spec; empty for a plain lambda/LF) prepended to the ambient
+    /// enclosing-spec args. Registration and every lookup compose through this one helper so the two
+    /// sides can never skew.</summary>
+    public ImmutableArray<ITypeSymbol> ComposeKeyArgs(IMethodSymbol closure)
+        => closure.TypeArguments.Length == 0
+            ? CurrentSpecArgs
+            : closure.TypeArguments.AddRange(CurrentSpecArgs);
+
     public bool TryGetClosureSpec(IMethodSymbol def, ImmutableArray<ITypeSymbol> keyArgs, out ClosureSpec spec)
     {
         spec = null;

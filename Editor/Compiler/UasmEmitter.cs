@@ -25,7 +25,7 @@ public class UasmEmitter
     Dictionary<IMethodSymbol, string[]> _methodParamVarIds => _ctx.Methods.ParamVarIds;
     IMethodSymbol _currentMethod { get => _ctx.Methods.CurrentMethod; set => _ctx.Methods.CurrentMethod = value; }
     List<MethodContext.ClosureSpec> _pendingClosures => _ctx.Methods.PendingClosures;
-    List<IMethodSymbol> _pendingGenericSpecs => _ctx.Generics.PendingSpecs;
+    List<(IMethodSymbol Method, MethodContext.ClosureSpec Spec)> _pendingGenericSpecs => _ctx.Generics.PendingSpecs;
     IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> _typeParamMap => _ctx.Generics.TypeParamMap;
     HashSet<IMethodSymbol> _inheritedMethods = new(SymbolEqualityComparer.Default);
     List<(string fieldName, IOperation initOp, ITypeSymbol fieldType)> _fieldInitOps => _ctx.Initializers.FieldInitOps;
@@ -1207,8 +1207,8 @@ public class UasmEmitter
             {
                 var batch = _pendingGenericSpecs.ToList();
                 _pendingGenericSpecs.Clear();
-                foreach (var spec in batch)
-                    EmitMethod(spec);
+                foreach (var (specSym, specRecord) in batch)
+                    EmitMethod(specSym, specRecord);
             }
         }
 
@@ -2190,7 +2190,15 @@ public class UasmEmitter
                 // owner's params under the body-walk symbols (lfDefOp's containing chain), same walk the
                 // body's T references come from, mapped to the same owner-spec type arguments.
                 for (var s = lfDefOp.Symbol.ContainingSymbol; s is IMethodSymbol enclBw; s = enclBw.ContainingSymbol)
-                    if (_ctx.Generics.FirstSpecByDefinition.TryGetValue(enclBw.OriginalDefinition, out var ownerSpec))
+                {
+                    // SS2B: prefer the record's own owner chain (per-spec T) over first-wins.
+                    IMethodSymbol ownerSpec = null;
+                    if (closureSpec != null)
+                        foreach (var os in closureSpec.OwnerSpecs)
+                            if (SymbolEqualityComparer.Default.Equals(os.OriginalDefinition, enclBw.OriginalDefinition))
+                            { ownerSpec = os; break; }
+                    if (ownerSpec != null
+                        || _ctx.Generics.FirstSpecByDefinition.TryGetValue(enclBw.OriginalDefinition, out ownerSpec))
                     {
                         if (enclBw.TypeParameters.Length == ownerSpec.TypeArguments.Length)
                             rekey.Add((enclBw.TypeParameters, ownerSpec.TypeArguments));
@@ -2204,6 +2212,7 @@ public class UasmEmitter
                             rekey.Add((enclBw.ContainingType.OriginalDefinition.TypeParameters,
                                 ownerSpec.ContainingType.TypeArguments));
                     }
+                }
                 typeMap = TypeParamScope.Compose(typeMap, newWins: true, rekey);
             }
 
