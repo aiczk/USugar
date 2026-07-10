@@ -19,6 +19,15 @@ sealed class ReachableBodies
     /// OriginalDefinition. Field-initializer bodies are NOT method definitions and are not keyed here.</summary>
     public readonly Dictionary<IMethodSymbol, IOperation> BodyByDef = new(SymbolEqualityComparer.Default);
 
+    /// <summary>Design 2026-07-10 v3 SS2A (B89 leg A): supplementary capture roots - definitions of
+    /// generic (method-generic or open-container) foreign statics, which the REGISTRATION projections
+    /// deliberately exclude (phantom-open / on-demand-spec rules) but whose bodies still host closures
+    /// that must be capture-analyzed (else they fall to flat capture wiring - VM-proven activation
+    /// aliasing, B89). Populated by a registration-free fixpoint: these bodies feed ONLY this map,
+    /// never ForeignStatics/StructMembers/BodyByDef, so Phase-1 registration ordinals are untouched
+    /// (F1/F2 implementation guard - do NOT fold this into another projection).</summary>
+    public readonly Dictionary<IMethodSymbol, IOperation> GenericForeignStaticBodies = new(SymbolEqualityComparer.Default);
+
     public IMethodSymbol[] ForeignStatics = Array.Empty<IMethodSymbol>();
     public IMethodSymbol[] StructMembers = Array.Empty<IMethodSymbol>();
     public IMethodSymbol[] BaseCopies = Array.Empty<IMethodSymbol>();

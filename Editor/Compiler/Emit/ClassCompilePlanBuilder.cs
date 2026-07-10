@@ -31,6 +31,10 @@ sealed class ClassCompilePlanBuilder
         var methodSet = new HashSet<IMethodSymbol>(methods, SymbolEqualityComparer.Default);
         var baseInstanceMethods = reach.BaseCopies.Where(bm => !methodSet.Contains(bm)).ToArray();
         var captureRoots = reach.BodyByDef.Keys.Where(m => m.DeclaringSyntaxReferences.Length > 0).ToList();
+        // Design 2026-07-10 v3 SS2A: supplementary capture roots (generic foreign statics) join the
+        // root set; their bodies ride reach.GenericForeignStaticBodies into the Build call.
+        captureRoots.AddRange(reach.GenericForeignStaticBodies.Keys
+            .Where(m => m.DeclaringSyntaxReferences.Length > 0 && !reach.BodyByDef.ContainsKey(m)));
         return new ClassCompilePlan(
             methods,
             reach,

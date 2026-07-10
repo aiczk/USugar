@@ -150,8 +150,17 @@ public class UasmEmitter
         // _fieldInitOps (own + base + auto-property + static, already collected + spliced by EmitFields),
         // NOT CaptureScopeAnalysis's own own-class-instance-only re-collection which missed base field and
         // auto-property initializers.
+        IReadOnlyDictionary<IMethodSymbol, IOperation> captureBodies = plan.Reach.BodyByDef;
+        if (plan.Reach.GenericForeignStaticBodies.Count > 0)
+        {
+            // SS2A: merge the supplementary bodies for the authoritative Build lookup (reach itself
+            // stays untouched - registration consumers never see these).
+            var mergedBodies = new Dictionary<IMethodSymbol, IOperation>(plan.Reach.BodyByDef, SymbolEqualityComparer.Default);
+            foreach (var kv in plan.Reach.GenericForeignStaticBodies) mergedBodies[kv.Key] = kv.Value;
+            captureBodies = mergedBodies;
+        }
         _ctx.Closures.SetCaptureScope(CaptureScopeAnalysis.Build(_compilation, _classSymbol,
-            plan.CaptureRoots, plan.Reach.BodyByDef, plan.FieldInitOps));
+            plan.CaptureRoots, captureBodies, plan.FieldInitOps));
         EmitMethods(plan);
         OnIrPass?.Invoke("after-emit", _module);
         // Handlers build Core IR; the pipeline (verify/optimize/flatten) runs on Core directly.
@@ -3423,10 +3432,12 @@ public class UasmEmitter
 
         var mintWalked = new HashSet<INamedTypeSymbol>(SymbolEqualityComparer.Default);
 
+        var suppCaptureDefs = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
+
         void Walk(IOperation body)
         {
             if (body == null) return;
-            CollectForeignStaticCallsInOperation(body, foreignStatics); // gated: closed, non-generic
+            CollectForeignStaticCallsInOperation(body, foreignStatics, suppCaptureDefs); // gated: closed, non-generic
             CollectStructMethodsInOperation(body, structMembers);       // gated: IsCollectibleStructMember
             CollectBaseInstanceCallsInOperation(body, baseCopies);      // + populates _openGenericBaseDefs
             CollectStructMemberDefinitions(body, structMemberDefs);     // ungated: definition-keyed
@@ -3482,6 +3493,42 @@ public class UasmEmitter
             EnqueueDiscovered();
         }
 
+        // Design 2026-07-10 v3 SS2A (B89 leg A): registration-free SUPPLEMENTARY fixpoint. Fetch the
+        // dropped generic-foreign-static definitions' bodies for CAPTURE ANALYSIS ONLY - these bodies
+        // are walked with a throwaway registration set (their callees register on demand at emit, as
+        // today), so Phase-1 registration ordinals are byte-identical. Foreign statics reachable ONLY
+        // through these bodies also join the supplementary roots (their closures were equally blind).
+        var suppThrowaway = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
+        var suppQueue = new Queue<IMethodSymbol>();
+        void EnqueueSupp()
+        {
+            foreach (var d in suppCaptureDefs)
+                if (d.DeclaringSyntaxReferences.Length > 0
+                    && !visited.Contains(d)
+                    && !result.GenericForeignStaticBodies.ContainsKey(d))
+                    suppQueue.Enqueue(d);
+            foreach (var d in suppThrowaway)
+            {
+                var def = d.OriginalDefinition;
+                if (def.DeclaringSyntaxReferences.Length > 0
+                    && !visited.Contains(def)
+                    && !result.GenericForeignStaticBodies.ContainsKey(def))
+                    suppQueue.Enqueue(def);
+            }
+            suppCaptureDefs.Clear();
+            suppThrowaway.Clear();
+        }
+        EnqueueSupp();
+        while (suppQueue.Count > 0)
+        {
+            var def = suppQueue.Dequeue();
+            if (result.GenericForeignStaticBodies.ContainsKey(def)) continue;
+            var suppBody = GetMethodBodyOperation(def);
+            result.GenericForeignStaticBodies[def] = suppBody;
+            CollectForeignStaticCallsInOperation(suppBody, suppThrowaway, suppCaptureDefs);
+            EnqueueSupp();
+        }
+
         result.ForeignStatics = foreignStatics.ToArray();
         result.StructMembers = structMembers.ToArray();
         result.BaseCopies = baseCopies.ToArray();
@@ -3521,14 +3568,22 @@ public class UasmEmitter
         => !(m.ContainingType is INamedTypeSymbol ct && ct.IsGenericType
              && ct.TypeArguments.Any(ta => ta is ITypeParameterSymbol));
 
-    void CollectForeignStaticCallsInOperation(IOperation op, HashSet<IMethodSymbol> result)
+    void CollectForeignStaticCallsInOperation(IOperation op, HashSet<IMethodSymbol> result,
+        HashSet<IMethodSymbol> suppCaptureDefs = null)
     {
         if (op == null) return;
+        // Design 2026-07-10 v3 SS2A (B89 leg A): the arms below deliberately DROP generic /
+        // open-container foreign statics from the registration set - but their closures still need
+        // capture analysis. Report the dropped definitions to the supplementary capture-roots set.
+        void SuppDef(IMethodSymbol original)
+            => suppCaptureDefs?.Add(original.OriginalDefinition);
         if (op is IInvocationOperation inv && IsForeignStatic(inv.TargetMethod))
         {
             var original = inv.TargetMethod.ReducedFrom ?? inv.TargetMethod;
             if (!original.IsGenericMethod && IsClosedForeignStaticTarget(original))
                 result.Add(original);
+            else
+                SuppDef(original);
         }
         // wave-13 staticro lens (2026-07-04): a delegate/method-group reference to a foreign static
         // method (`Func<int,int> f = Helper.M;`) is itself a call site the collector must see — the
@@ -3541,6 +3596,8 @@ public class UasmEmitter
             var original = mref.Method.ReducedFrom ?? mref.Method;
             if (!original.IsGenericMethod && IsClosedForeignStaticTarget(original))
                 result.Add(original);
+            else
+                SuppDef(original);
         }
         // B47 (wave-14 r6): a STATIC COMPUTED property on a user struct/class (StaticPropHelper<T>.Doubled)
         // is referenced as an IPropertyReferenceOperation, never an invocation/method-ref, so the two arms
@@ -3551,15 +3608,19 @@ public class UasmEmitter
         // generic containing type by the closed guard (registered on demand at its closed call site).
         if (op is IPropertyReferenceOperation spr && spr.Property.IsStatic && IsComputedProperty(spr.Property))
         {
-            if (spr.Property.GetMethod is { } sg && IsForeignStatic(sg)
-                && !sg.IsGenericMethod && IsClosedForeignStaticTarget(sg))
-                result.Add(sg);
-            if (spr.Property.SetMethod is { } ss && IsForeignStatic(ss)
-                && !ss.IsGenericMethod && IsClosedForeignStaticTarget(ss))
-                result.Add(ss);
+            if (spr.Property.GetMethod is { } sg && IsForeignStatic(sg))
+            {
+                if (!sg.IsGenericMethod && IsClosedForeignStaticTarget(sg)) result.Add(sg);
+                else SuppDef(sg);
+            }
+            if (spr.Property.SetMethod is { } ss && IsForeignStatic(ss))
+            {
+                if (!ss.IsGenericMethod && IsClosedForeignStaticTarget(ss)) result.Add(ss);
+                else SuppDef(ss);
+            }
         }
         foreach (var child in op.ChildOps())
-            CollectForeignStaticCallsInOperation(child, result);
+            CollectForeignStaticCallsInOperation(child, result, suppCaptureDefs);
     }
 
     // A property is auto-implemented iff the compiler synthesized a backing field associated with it.
