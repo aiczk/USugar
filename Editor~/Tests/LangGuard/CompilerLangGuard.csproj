@@ -1,8 +1,10 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <TargetFramework>net9.0</TargetFramework>
-    <!-- Unity 2022.3 compiles Assets code as C# 9.0: every compiler source must parse at that level.
-         This project exists ONLY to fail the headless build when a C# 10+ construct sneaks in. -->
+    <!-- Unity 2022.3 compiles Assets code as C# 9.0 against the UdonSharp-bundled Roslyn 3.10:
+         every compiler source must parse at that language level AND bind against that API surface.
+         This project exists ONLY to fail the headless build when a C# 10+ construct or a
+         Roslyn-4.x-only API (e.g. IOperation.ChildOperations) sneaks in. -->
     <LangVersion>9.0</LangVersion>
     <IsPackable>false</IsPackable>
     <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
@@ -12,6 +14,6 @@
     <Compile Include="../../../Editor/Compiler/**/*.cs" />
   </ItemGroup>
   <ItemGroup>
-    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.3.0" />
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="3.10.0" />
   </ItemGroup>
 </Project>
