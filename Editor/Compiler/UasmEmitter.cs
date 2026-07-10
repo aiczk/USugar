@@ -3490,12 +3490,15 @@ public class UasmEmitter
             EnqueueDiscovered();
         }
 
-        // Design 2026-07-10 v3 SS2A (B89 leg A): registration-free SUPPLEMENTARY fixpoint. Fetch the
-        // dropped generic-foreign-static definitions' bodies for CAPTURE ANALYSIS ONLY - these bodies
-        // are walked with a throwaway registration set (their callees register on demand at emit, as
-        // today), so Phase-1 registration ordinals are byte-identical. Foreign statics reachable ONLY
-        // through these bodies also join the supplementary roots (their closures were equally blind).
-        var suppThrowaway = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
+        // Design 2026-07-10 v3 SS2A (B89 leg A), widened 2026-07-11 (pre-fuzz audit): SUPPLEMENTARY
+        // fixpoint over dropped generic-foreign-static definitions. The generic DEFINITIONS themselves
+        // stay registration-free (GenericForeignStaticBodies feeds capture analysis + recursion nodes
+        // only — F1/F2), but their bodies are walked with the REAL collectors and alternate with the
+        // main queue until both dry: a foreign static / struct member / base copy / class mint
+        // reachable ONLY through a generic-foreign-static body registers like any other reach (it
+        // previously reached emission with no CFunction — loud W17D reject; the struct-member leg was
+        // the same hole). Byte-neutral for programs without the shape: they have no supp-only members,
+        // so the registration sets are unchanged.
         var suppQueue = new Queue<IMethodSymbol>();
         void EnqueueSupp()
         {
@@ -3504,16 +3507,7 @@ public class UasmEmitter
                     && !visited.Contains(d)
                     && !result.GenericForeignStaticBodies.ContainsKey(d))
                     suppQueue.Enqueue(d);
-            foreach (var d in suppThrowaway)
-            {
-                var def = d.OriginalDefinition;
-                if (def.DeclaringSyntaxReferences.Length > 0
-                    && !visited.Contains(def)
-                    && !result.GenericForeignStaticBodies.ContainsKey(def))
-                    suppQueue.Enqueue(def);
-            }
             suppCaptureDefs.Clear();
-            suppThrowaway.Clear();
         }
         EnqueueSupp();
         while (suppQueue.Count > 0)
@@ -3522,7 +3516,16 @@ public class UasmEmitter
             if (result.GenericForeignStaticBodies.ContainsKey(def)) continue;
             var suppBody = GetMethodBodyOperation(def);
             result.GenericForeignStaticBodies[def] = suppBody;
-            CollectForeignStaticCallsInOperation(suppBody, suppThrowaway, suppCaptureDefs);
+            Walk(suppBody);
+            EnqueueDiscovered();
+            while (queue.Count > 0)
+            {
+                var mainDef = queue.Dequeue();
+                var mainBody = GetMethodBodyOperation(mainDef);
+                result.BodyByDef[mainDef] = mainBody;
+                Walk(mainBody);
+                EnqueueDiscovered();
+            }
             EnqueueSupp();
         }
 

@@ -797,7 +797,14 @@ public partial class InvocationHandler
             if (param.RefKind != RefKind.Out && param.RefKind != RefKind.Ref) continue;
             // Index the param field by the argument's parameter ordinal, not its call-site position
             // (named/reordered args), matching the by-ordinal copy-in.
-            var paramIds = _methodParamVarIds[target]; // loud (KeyNotFound) if unregistered
+            // SS2B: a hoisted closure target resolves through the per-spec registry (same arm as
+            // GetCalleeLayout/EmitCallToMethod — the definition-keyed map no longer holds closures).
+            string[] paramIds;
+            if (target.MethodKind is MethodKind.LambdaMethod or MethodKind.LocalFunction
+                && _ctx.Methods.TryGetClosureSpec(target, _ctx.Methods.ComposeKeyArgs(target), out var refClosure))
+                paramIds = refClosure.ParamVarIds;
+            else
+                paramIds = _methodParamVarIds[target]; // loud (KeyNotFound) if unregistered
             var argTarget = op.Arguments[i].Value;
             var paramId = paramIds[param.Ordinal + ordinalOffset];
             var paramType = _ctx.Storage.GetFieldType(paramId);
