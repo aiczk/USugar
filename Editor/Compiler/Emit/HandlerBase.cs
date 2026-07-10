@@ -462,20 +462,12 @@ public abstract partial class HandlerBase
             && _methodParamVarIds.TryGetValue(_currentMethod, out var specParamIds)
             && param.Ordinal < specParamIds.Length)
             return specParamIds[param.Ordinal];
-        // Wave-9 round-7 [Y3]: a hoisted lambda/local-function body inside a GENERIC method (or,
-        // feature G, a method on a generic struct) reads the enclosing method's parameter. The
-        // reference binds the generic DEFINITION's parameter symbol (the closure body is the
-        // definition's operation tree) while the param heap vars are registered under the
-        // monomorphized SPEC — and _currentMethod here is the closure, not the spec, so neither arm
-        // above fires. A capturing closure pins its generic to a single instantiation ([X6] round 5
-        // reject), so FirstGenericSpec is the exact owner. No IsGenericMethod pre-filter: the
-        // dictionary lookup on OriginalDefinition is itself the correct, sufficient gate (same
-        // reasoning as the EmitMethod closure-map walk-up).
-        if (param.ContainingSymbol is IMethodSymbol genericOwner
-            && _ctx.Generics.FirstSpecByDefinition.TryGetValue(genericOwner.OriginalDefinition, out var ownerSpec)
-            && _methodParamVarIds.TryGetValue(ownerSpec, out var ownerSpecIds)
-            && param.Ordinal < ownerSpecIds.Length)
-            return ownerSpecIds[param.Ordinal];
+        // The former [Y3] arm (closure reads an enclosing generic's param via FirstSpecByDefinition,
+        // first-wins) was adjudicated DEAD 2026-07-10: a closure reading an enclosing param is a
+        // capture by definition and resolves through its env record before LoadParam, so the arm was
+        // unreachable across the full tracked + real-VM corpus (throw-instrumented run). Deleted —
+        // any future shape that would have needed it now fails loud here instead of silently reading
+        // the FIRST spec's param var.
         throw new InvalidOperationException(
             $"Cannot resolve parameter '{param.Name}' (ordinal {param.Ordinal}) "
           + $"in method '{_currentMethod?.Name ?? "(none)"}'. "
