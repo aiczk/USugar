@@ -24,7 +24,7 @@ public class UasmEmitter
     Dictionary<IMethodSymbol, ReturnSlot[]> _methodReturns => _ctx.Methods.Returns;
     Dictionary<IMethodSymbol, string[]> _methodParamVarIds => _ctx.Methods.ParamVarIds;
     IMethodSymbol _currentMethod { get => _ctx.Methods.CurrentMethod; set => _ctx.Methods.CurrentMethod = value; }
-    List<(IMethodSymbol symbol, CFunction func)> _pendingLocalFunctions => _ctx.Methods.PendingLocalFunctions;
+    List<MethodContext.ClosureSpec> _pendingClosures => _ctx.Methods.PendingClosures;
     List<IMethodSymbol> _pendingGenericSpecs => _ctx.Generics.PendingSpecs;
     IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> _typeParamMap => _ctx.Generics.TypeParamMap;
     HashSet<IMethodSymbol> _inheritedMethods = new(SymbolEqualityComparer.Default);
@@ -1194,14 +1194,14 @@ public class UasmEmitter
         EmitDelegateBridges();
 
         // Emit pending local functions and generic specializations (may chain)
-        while (_pendingLocalFunctions.Count > 0 || _pendingGenericSpecs.Count > 0)
+        while (_pendingClosures.Count > 0 || _pendingGenericSpecs.Count > 0)
         {
-            if (_pendingLocalFunctions.Count > 0)
+            if (_pendingClosures.Count > 0)
             {
-                var batch = _pendingLocalFunctions.ToList();
-                _pendingLocalFunctions.Clear();
-                foreach (var (sym, _) in batch)
-                    EmitMethod(sym);
+                var batch = _pendingClosures.ToList();
+                _pendingClosures.Clear();
+                foreach (var closureSpec in batch)
+                    EmitMethod(closureSpec.Def, closureSpec);
             }
             if (_pendingGenericSpecs.Count > 0)
             {
@@ -1393,7 +1393,9 @@ public class UasmEmitter
         foreach (var (method, bridgeExportName, resolvedMap) in _ctx.Synthetics.DelegateBridges)
         {
             if (!emitted.Add(bridgeExportName)) continue;
-            if (!_methodFunctions.TryGetValue(method, out var realFunc)) continue;
+            // SS2B: per-spec closure bridges resolve by bridge name (a bare symbol cannot name a spec).
+            if (!_ctx.Synthetics.ClosureBridgeFuncs.TryGetValue(bridgeExportName, out var realFunc)
+                && !_methodFunctions.TryGetValue(method, out realFunc)) continue;
 
             // §3.4-1 conv-var declaration side check. Pending bridges are delegate-originated by
             // construction (creation already validated), but a future registration path must stay loud.
@@ -1420,7 +1422,9 @@ public class UasmEmitter
         foreach (var (targetMethod, delegateInvoke, adapterName, resolvedMap) in _ctx.Synthetics.SigAdapterBridges)
         {
             if (!emitted.Add(adapterName)) continue;
-            if (!_methodFunctions.TryGetValue(targetMethod, out var realFunc)) continue;
+            // SS2B: per-spec closure adapters resolve by adapter name (a bare symbol cannot name a spec).
+            if (!_ctx.Synthetics.ClosureBridgeFuncs.TryGetValue(adapterName, out var realFunc)
+                && !_methodFunctions.TryGetValue(targetMethod, out realFunc)) continue;
 
             DelegateAbi.ValidateNoRefOutParams(targetMethod);
 
@@ -2013,10 +2017,11 @@ public class UasmEmitter
 
     // ── EmitMethod ──
 
-    void EmitMethod(IMethodSymbol method)
+    void EmitMethod(IMethodSymbol method, MethodContext.ClosureSpec closureSpec = null)
     {
         _currentMethod = method;
-        var func = _methodFunctions[method];
+        _ctx.Methods.CurrentClosureSpec = closureSpec;
+        var func = closureSpec?.Func ?? _methodFunctions[method];
 
         // Struct instance methods/ctors carry the receiver object[] as synthetic param0; make `this`
         // resolve to it for the body. Static (operator) struct methods have no receiver. B44: a hoisted
@@ -2074,7 +2079,7 @@ public class UasmEmitter
         _builder.SetFunction(func);
 
         // Emit field initializers at the start of _start
-        var exportName = _methodSlots[method].VarPrefix;
+        var exportName = (closureSpec?.Slot ?? _methodSlots[method]).VarPrefix;
         if (exportName == "_start")
             EmitFieldInitializers();
 
@@ -2095,6 +2100,13 @@ public class UasmEmitter
             typeMap = TypeParamScope.Compose(null, newWins: true, bindings);
         }
 
+        // SS2B ambient spec identity: closures registered/looked up during THIS emission key on it.
+        _ctx.Methods.CurrentSpecArgs = closureSpec?.KeyArgs
+            ?? (isSpec ? FlattenSpecArgs(method) : System.Collections.Immutable.ImmutableArray<ITypeSymbol>.Empty);
+        _ctx.Methods.CurrentOwnerSpecs = closureSpec?.OwnerSpecs
+            ?? (isSpec ? System.Collections.Immutable.ImmutableArray.Create(method)
+                       : System.Collections.Immutable.ImmutableArray<IMethodSymbol>.Empty);
+
         // Wave-9 round-8 [Y2]: a hoisted closure (lambda / local function) declared inside a GENERIC
         // method body — its operation tree is the generic DEFINITION's, so T-typed expressions need
         // the instantiation's type-param map during body emission (registration already substituted
@@ -2109,8 +2121,24 @@ public class UasmEmitter
         if (IsHoistedClosureMethod(method))
         {
             List<(IReadOnlyList<ITypeParameterSymbol>, IReadOnlyList<ITypeSymbol>)> closureBindings = null;
+            // SS2B: a per-spec closure composes from ITS OWN registration-time owner-spec chain — the
+            // first-wins FirstSpecByDefinition read was leg-B's silent first-spec-T bake. Owners not in
+            // the record's chain (an outer generic beyond the registration ambient — M2b bound) still
+            // fall through to the legacy walk below, which SKIPS owners the record already covered.
+            var coveredOwners = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
+            if (closureSpec != null)
+                foreach (var ownerSpec in closureSpec.OwnerSpecs)
+                {
+                    coveredOwners.Add(ownerSpec.OriginalDefinition);
+                    closureBindings ??= new();
+                    closureBindings.Add((ownerSpec.OriginalDefinition.TypeParameters, ownerSpec.TypeArguments));
+                    if (ownerSpec.ContainingType.IsGenericType)
+                        closureBindings.Add((ownerSpec.ContainingType.OriginalDefinition.TypeParameters,
+                            ownerSpec.ContainingType.TypeArguments));
+                }
             for (var s = method.ContainingSymbol; s is IMethodSymbol enclosing; s = enclosing.ContainingSymbol)
             {
+                if (coveredOwners.Contains(enclosing.OriginalDefinition)) continue;
                 // No IsGenericMethod pre-filter: FirstGenericSpec is keyed by OriginalDefinition
                 // regardless of WHY a method is a spec (generic method, generic-struct member, or
                 // both — feature G), so the dictionary lookup alone is the correct, sufficient gate.
@@ -2206,7 +2234,9 @@ public class UasmEmitter
 
             // Consume every captured PARAMETER of this method out of its flat param field into its env
             // cell (the arg arrived positionally in the flat field; all body reads route through env).
-            if (_ctx.Closures.CaptureScope != null && _methodParamVarIds.TryGetValue(method, out var entryParamIds))
+            var entryParamIds = closureSpec?.ParamVarIds;
+            if (entryParamIds == null) _methodParamVarIds.TryGetValue(method, out entryParamIds);
+            if (_ctx.Closures.CaptureScope != null && entryParamIds != null)
                 foreach (var p in method.Parameters)
                     if (p.Ordinal < entryParamIds.Length && _ctx.Closures.TryGetEnvBinding(p, out _))
                         EnvEmit.Write(_builder, _ctx, p,
@@ -2244,10 +2274,15 @@ public class UasmEmitter
             {
                 if (anonFunc.Body is IBlockOperation anonBlock)
                     VisitOperation(anonBlock);
-                else if (anonFunc.Body != null && _methodReturns.TryGetValue(method, out var lambdaRets) && lambdaRets.Length == 1)
+                else if (anonFunc.Body != null)
                 {
-                    var resultVal = VisitExpression(anonFunc.Body);
-                    BridgeStore(lambdaRets[0].Id, resultVal);
+                    var lambdaRets = closureSpec?.ReturnSlots;
+                    if (lambdaRets == null) _methodReturns.TryGetValue(method, out lambdaRets);
+                    if (lambdaRets is { Length: 1 })
+                    {
+                        var resultVal = VisitExpression(anonFunc.Body);
+                        BridgeStore(lambdaRets[0].Id, resultVal);
+                    }
                 }
             }
             else if (bodyOp is IBlockOperation block)
@@ -3564,6 +3599,16 @@ public class UasmEmitter
     // the shape IsCollectibleStructMember skips. It is registered on demand at its closed call site
     // (InvocationHandler's foreign-static-on-generic arm). Genuinely closed foreign statics (incl.
     // non-generic Helper.Boost, or Helper<int>.Boost from a concretely-typed context) are collected.
+    /// <summary>SS2B: the flattened enclosing-spec type arguments of a constructed spec (method args
+    /// then containing-type args) — the ambient key-args component for per-spec closure keying.</summary>
+    static System.Collections.Immutable.ImmutableArray<ITypeSymbol> FlattenSpecArgs(IMethodSymbol m)
+    {
+        var b = System.Collections.Immutable.ImmutableArray.CreateBuilder<ITypeSymbol>();
+        if (m.IsGenericMethod) b.AddRange(m.TypeArguments);
+        if (m.ContainingType is { IsGenericType: true } ct) b.AddRange(ct.TypeArguments);
+        return b.ToImmutable();
+    }
+
     static bool IsClosedForeignStaticTarget(IMethodSymbol m)
         => !(m.ContainingType is INamedTypeSymbol ct && ct.IsGenericType
              && ct.TypeArguments.Any(ta => ta is ITypeParameterSymbol));

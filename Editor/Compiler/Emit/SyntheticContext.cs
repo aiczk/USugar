@@ -8,6 +8,11 @@ public sealed class SyntheticContext
 {
     public readonly HashSet<string> DelegateFields = new();
 
+    // Per-spec closure bridges (design 2026-07-10 v3 SS2B): bridgeExportName -> the closure's
+    // per-spec CFunction. The pending-bridge drain resolves closure targets here (a bare
+    // definition-symbol lookup cannot distinguish specs).
+    public readonly Dictionary<string, CFunction> ClosureBridgeFuncs = new();
+
     // Pending delegate bridges for dynamically hoisted lambdas/local functions. The carried map is
     // the creating method's immutable TypeParamMap by REFERENCE (per-EmitMethod fresh, never mutated,
     // so no snapshot copy is needed even though the drain runs after emission when the ambient map

@@ -179,8 +179,9 @@ public class StatementHandler : HandlerBase, IOperationHandler
             return;
         }
 
-        if (op.ReturnedValue != null && _currentMethod != null
-            && _methodReturns.TryGetValue(_currentMethod, out var retSlots) && retSlots.Length > 0)
+        var curRets = _ctx.Methods.CurrentClosureSpec?.ReturnSlots;
+        if (curRets == null && _currentMethod != null) _methodReturns.TryGetValue(_currentMethod, out curRets);
+        if (op.ReturnedValue != null && curRets is { Length: > 0 })
         {
             // All returns are single-value (aggregates are SystemObjectArray)
             var srcVal = VisitExpression(op.ReturnedValue);
@@ -219,7 +220,7 @@ public class StatementHandler : HandlerBase, IOperationHandler
 
     void EmitTailCall(IInvocationOperation tailCall)
     {
-        var paramIds = _methodParamVarIds[_currentMethod];
+        var paramIds = _ctx.Methods.CurrentClosureSpec?.ParamVarIds ?? _methodParamVarIds[_currentMethod];
 
         // Snapshot every arg into a temp BEFORE overwriting any param. VisitExpression returns a lazy expr
         // that reads its operand slots when lowered, not a materialized value — so storing param i first
@@ -242,11 +243,14 @@ public class StatementHandler : HandlerBase, IOperationHandler
         // the hidden __envp. A self-tail-recursive capturing closure passes its OWN env forward, so
         // rebind __envp from itself — identity here, but the wiring is not elided (the MethodEntry
         // EnvAlloc after the __tco_ label re-runs per logical activation for freshness).
-        if (_ctx.Closures.CaptureScope != null && _ctx.Closures.TryGetEnvpField(_currentMethod, out var tcoEnvp))
+        var tcoEnvp = _ctx.Methods.CurrentClosureSpec?.EnvpFieldId;
+        if (tcoEnvp == null && _ctx.Closures.CaptureScope != null)
+            _ctx.Closures.TryGetEnvpField(_currentMethod, out tcoEnvp);
+        if (tcoEnvp != null)
             EmitStoreField(tcoEnvp, LoadField(tcoEnvp, EnvEmit.EnvType));
 
         // Jump back to method entry via goto label
-        var func = _methodFunctions[_currentMethod];
+        var func = _ctx.Methods.CurrentClosureSpec?.Func ?? _methodFunctions[_currentMethod];
         _builder.EmitGoto($"__tco_{func.Name}");
     }
 
