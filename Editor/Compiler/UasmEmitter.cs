@@ -1001,10 +1001,7 @@ public class UasmEmitter
             if (fm.ContainingType.IsGenericType && !fm.IsDefinition)
             {
                 var fmGenericDef = fm.OriginalDefinition;
-                EmitContext.ThrowIfStaticGenericClosureCaptures(_compilation, fm);
-                if (_ctx.Generics.FirstSpecByDefinition.TryGetValue(fmGenericDef, out var fmFirstSpec))
-                    EmitContext.ThrowIfClosureAliasesInstantiation(_compilation, fmFirstSpec, fm);
-                else
+                if (!_ctx.Generics.FirstSpecByDefinition.ContainsKey(fmGenericDef))
                     _ctx.Generics.FirstSpecByDefinition[fmGenericDef] = fm;
             }
 
@@ -1052,10 +1049,7 @@ public class UasmEmitter
             if (sm.ContainingType.IsGenericType)
             {
                 var genericDef = sm.OriginalDefinition;
-                EmitContext.ThrowIfStaticGenericClosureCaptures(_compilation, sm);
-                if (_ctx.Generics.FirstSpecByDefinition.TryGetValue(genericDef, out var firstSpec))
-                    EmitContext.ThrowIfClosureAliasesInstantiation(_compilation, firstSpec, sm);
-                else
+                if (!_ctx.Generics.FirstSpecByDefinition.ContainsKey(genericDef))
                     _ctx.Generics.FirstSpecByDefinition[genericDef] = sm;
 
                 var containingArgPart = string.Join("_", sm.ContainingType.TypeArguments.Select(ExternResolver.GetUdonTypeName));
@@ -1117,10 +1111,7 @@ public class UasmEmitter
             if (bm.IsGenericMethod && !bm.IsDefinition)
             {
                 var bmDef = bm.OriginalDefinition;
-                EmitContext.ThrowIfStaticGenericClosureCaptures(_compilation, bm);
-                if (_ctx.Generics.FirstSpecByDefinition.TryGetValue(bmDef, out var bmFirst))
-                    EmitContext.ThrowIfClosureAliasesInstantiation(_compilation, bmFirst, bm);
-                else
+                if (!_ctx.Generics.FirstSpecByDefinition.ContainsKey(bmDef))
                     _ctx.Generics.FirstSpecByDefinition[bmDef] = bm;
             }
             var slot = _ctx.Methods.Register(bm, i => i.ToString());
@@ -2174,22 +2165,32 @@ public class UasmEmitter
             // body-walk reference and the body type-checks as raw 'T' (CReturn ICE on a single
             // legal instantiation). Re-key the instantiation map with the body symbol's own
             // type parameters; class-level generic methods share symbols and are unaffected.
-            if (isSpec && bodyOp is ILocalFunctionOperation lfDefOp
-                && lfDefOp.Symbol.TypeParameters.Length == method.TypeArguments.Length)
+            // SS2B (M3): the same freshness applies to ANY closure nested under a generic LOCAL
+            // FUNCTION — the nested closure's own emission re-walks its syntax, freshening the LF's
+            // type params yet again, and no LF-spec rekey runs for it (a lambda is never isSpec). So
+            // the rekey runs for every hoisted-closure emission too, resolving each body-walk
+            // enclosing owner against the record's OwnerSpecs chain.
+            var bodyWalkSym = bodyOp switch
+            {
+                ILocalFunctionOperation lfDefOp => lfDefOp.Symbol,
+                IAnonymousFunctionOperation anonDefOp => anonDefOp.Symbol,
+                _ => null,
+            };
+            if (bodyWalkSym != null && (isSpec || closureSpec != null))
             {
                 // old ∪ rekeyed: the body-walk's fresh type-param symbols are added (newWins), the
                 // call-site symbols already in the map are RETAINED — never a replacing composition.
-                var rekey = new List<(IReadOnlyList<ITypeParameterSymbol>, IReadOnlyList<ITypeSymbol>)>
-                {
-                    (lfDefOp.Symbol.TypeParameters, method.TypeArguments),
-                };
+                var rekey = new List<(IReadOnlyList<ITypeParameterSymbol>, IReadOnlyList<ITypeSymbol>)>();
+                if (isSpec && bodyWalkSym.TypeParameters.Length == method.TypeArguments.Length
+                    && bodyWalkSym.TypeParameters.Length > 0)
+                    rekey.Add((bodyWalkSym.TypeParameters, method.TypeArguments));
                 // B51: the generic LF's OriginalDefinition body-walk freshens the ENCLOSING generic's
                 // type params too (not only the LF's own), so the closure-compose keys (owner-def
                 // symbols) miss the body-walk references — `new T[]` / default(T) / (T)x on the enclosing
-                // T then resolve as raw 'T' (bogus TArray extern). Re-key each enclosing FirstGenericSpec
-                // owner's params under the body-walk symbols (lfDefOp's containing chain), same walk the
-                // body's T references come from, mapped to the same owner-spec type arguments.
-                for (var s = lfDefOp.Symbol.ContainingSymbol; s is IMethodSymbol enclBw; s = enclBw.ContainingSymbol)
+                // T then resolve as raw 'T' (bogus TArray extern). Re-key each enclosing owner's params
+                // under the body-walk symbols (the containing chain of the body-walk's own symbol), same
+                // walk the body's T references come from, mapped to the same owner-spec type arguments.
+                for (var s = bodyWalkSym.ContainingSymbol; s is IMethodSymbol enclBw; s = enclBw.ContainingSymbol)
                 {
                     // SS2B: prefer the record's own owner chain (per-spec T) over first-wins.
                     IMethodSymbol ownerSpec = null;
@@ -2213,7 +2214,8 @@ public class UasmEmitter
                                 ownerSpec.ContainingType.TypeArguments));
                     }
                 }
-                typeMap = TypeParamScope.Compose(typeMap, newWins: true, rekey);
+                if (rekey.Count > 0)
+                    typeMap = TypeParamScope.Compose(typeMap, newWins: true, rekey);
             }
 
             // Open the depth-1 scope now that the map is fully composed; Dispose (at block end) is the
@@ -2516,6 +2518,9 @@ public class UasmEmitter
             // it a self-recursive inherited generic had no self-edge and never spilled (VM-proven
             // 63 where the CLR gives 234 — live locals clobbered per frame).
             .Concat(_openGenericBaseDefs)
+            // SS2A/M3 (F8): generic foreign-static definitions — emitted on demand like open base
+            // generics, so they need graph nodes the same way (armor + self-recursion spill).
+            .Concat(_reach.GenericForeignStaticBodies.Keys)
             .Where(m => m.DeclaringSyntaxReferences.Length > 0)
             .Distinct(SymbolEqualityComparer.Default)
             .Cast<IMethodSymbol>()
@@ -2572,6 +2577,7 @@ public class UasmEmitter
             // (CollectInternalCallees no-ops on null); dropping null-body nodes would lose them from
             // RecursionGraphNodes.
             IOperation op = _reach.BodyByDef.TryGetValue(m, out var cached) ? cached
+                : _reach.GenericForeignStaticBodies.TryGetValue(m, out var suppCached) ? suppCached
                 : localFuncSet.Contains(m) ? GetMethodBodyOperation(m)
                 : throw ReachMiss(m);
             var body = (op as ILocalFunctionOperation)?.Body ?? op;
@@ -3893,7 +3899,9 @@ public class UasmEmitter
     /// so it throws rather than silently re-fetching. The only legitimate non-reach body is a local
     /// function discovered during recursion analysis, handled by its own explicit arm in BuildRecursionInfo.</summary>
     IOperation ReachRootBody(IMethodSymbol root)
-        => root != null && _reach.BodyByDef.TryGetValue(root, out var body) ? body : throw ReachMiss(root);
+        => root != null && _reach.BodyByDef.TryGetValue(root, out var body) ? body
+         : root != null && _reach.GenericForeignStaticBodies.TryGetValue(root, out var suppBody) ? suppBody
+         : throw ReachMiss(root);
 
     static System.InvalidOperationException ReachMiss(IMethodSymbol def)
         => new($"ReachableBodies.BodyByDef has no entry for reach definition '{def?.ToDisplayString()}' — "

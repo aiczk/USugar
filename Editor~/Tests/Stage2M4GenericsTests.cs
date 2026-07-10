@@ -49,13 +49,11 @@ public class M4NonTCap : UdonSharpBehaviour {
     // ── §8.2 TypeParamDependent tier survives, distinguishable message, per-definition granularity ──
 
     [Fact]
-    public void MixedGeneric_NonTPlusTDependentClosure_RejectsWithTypeParamMessage()
+    public void MixedGeneric_NonTPlusTDependentClosure_Compiles()
     {
-        // fcd45b shape: f1 captures a non-T int (would be legal alone), f2 references T (`new T[]`) so
-        // it is type-param-dependent. Per §8.2 the whole definition is pinned to one instantiation — no
-        // partial legalization — and the SECOND distinct instantiation is loud with the TypeParamDependent
-        // message (NOT the retired capture message), so it is distinguishable from the fcd45a legalization.
-        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
+        // FLIPPED 2026-07-10 (per-spec closure root fix): fcd45b's mixed shape (non-T capture + T
+        // dependence) duplicates both closures per spec — no pin, no partial legalization needed.
+        TestHelper.CompileToUasm(@"
 using System;
 using UdonSharp;
 public class M4Mixed : UdonSharpBehaviour {
@@ -67,9 +65,7 @@ public class M4Mixed : UdonSharpBehaviour {
         Func<int> f2 = () => { T[] a = new T[1]; return a.Length + cap; };
         return f1() + f2();
     }
-}", "M4Mixed"));
-        Assert.Contains("type parameters", ex.Message);
-        Assert.DoesNotContain("captures locals/parameters", ex.Message);
+}", "M4Mixed");
     }
 
     // ── fcd54: a generic capturing local function referenced ONLY as a method group registers ──

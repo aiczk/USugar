@@ -205,9 +205,11 @@ public class TwoInstUser : UdonSharpBehaviour {
     // pins now, exactly as for an ordinary generic method. ──
 
     [Fact]
-    public void GenericStructMethod_TDependentClosure_SecondInstantiation_ThrowsNotSupported()
+    public void GenericStructMethod_TDependentClosure_SecondInstantiation_Compiles()
     {
-        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
+        // FLIPPED 2026-07-10 (per-spec closure root fix): each struct spec's member carries its own
+        // closure copy — VM oracle: harness PerSpec B70_GenericStruct_TDependentClosure.
+        TestHelper.CompileToUasm(@"
 using UdonSharp;
 using System;
 public struct Box<T> {
@@ -225,8 +227,7 @@ public class GR1User : UdonSharpBehaviour {
         Box<string> b = new Box<string>();
         var y = b.RunWithClosure();
     }
-}", "GR1User"));
-        Assert.Contains("lambda or local function", ex.Message);
+}", "GR1User");
     }
 
     [Fact]

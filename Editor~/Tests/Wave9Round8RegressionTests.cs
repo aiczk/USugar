@@ -353,12 +353,11 @@ public class W9R8GenLambda : UdonSharpBehaviour {
     }
 
     [Fact]
-    public void GenericBody_TypeParamLambda_TwoInstantiations_RejectsLoud()
+    public void GenericBody_TypeParamLambda_TwoInstantiations_Compiles()
     {
-        // W10C8Min12_TwoInstT: the shared hoisted function was emitted with the FIRST spec's map,
-        // so a second distinct instantiation is loud ([X6] widened to type-param-referencing
-        // closures).
-        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
+        // FLIPPED 2026-07-10 (per-spec closure root fix): the lambda is duplicated per spec with its
+        // own T map, so two instantiations are legal — VM oracle: harness PerSpec B70 probes.
+        TestHelper.CompileToUasm(@"
 using System;
 using UdonSharp;
 public class W9R8GenTwoInst : UdonSharpBehaviour {
@@ -371,8 +370,7 @@ public class W9R8GenTwoInst : UdonSharpBehaviour {
         resultI = Id(seed * 3 + 1);
         resultL = Id((long)seed * 7L + 2L);
     }
-}", "W9R8GenTwoInst"));
-        Assert.Contains("type parameters", ex.Message);
+}", "W9R8GenTwoInst");
     }
 
     [Fact]

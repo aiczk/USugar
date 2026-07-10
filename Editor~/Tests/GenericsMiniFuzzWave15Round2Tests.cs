@@ -147,11 +147,11 @@ public class {cls} : UdonSharpBehaviour {{ public int result; void Start(){{ {bo
     }
 
     [Fact]
-    public void B56_StructGenericMethod_DualInstantiation_TDependentLF_StillRejects()
+    public void B56_StructGenericMethod_DualInstantiation_TDependentLF_Compiles()
     {
-        // Two instantiations of a struct generic method whose LF references T → shared hoist would run the
-        // first spec's types → correct pin (same as the class case; the FirstGenericSpec record now exists).
-        Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
+        // FLIPPED 2026-07-10 (per-spec closure root fix): the T-dependent closure is duplicated per
+        // spec, so dual instantiation is legal — VM oracle: harness PerSpec B70_GenericMethod probes.
+        TestHelper.CompileToUasm(@"
 using System; using UdonSharp;
 public struct R2BoxD {
   public int Run<T>(T tv){ Func<int> f = () => { T[] ta = new T[1]; ta[0] = tv; return ta.Length; }; return f(); }
@@ -159,6 +159,6 @@ public struct R2BoxD {
 public class R2Dual : UdonSharpBehaviour {
   public int r1, r2;
   void Start(){ R2BoxD b = new R2BoxD(); r1 = b.Run<int>(1); r2 = b.Run<string>(""x""); }
-}", "R2Dual"));
+}", "R2Dual");
     }
 }

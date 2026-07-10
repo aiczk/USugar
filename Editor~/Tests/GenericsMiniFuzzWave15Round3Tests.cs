@@ -227,18 +227,16 @@ using System; using UdonSharp;
     }
 
     [Fact]
-    public void B70_TwoStructInstantiations_SharedLFUsingStructT_RejectsAliasing()
+    public void B70_TwoStructInstantiations_SharedLFUsingStructT_Compiles()
     {
-        // A15: GS<int>.Run and GS<string>.Run share ONE hoisted LF that uses the struct's T; it is emitted
-        // with the first spec's T (VM-proven divergent: default(T) via GD<int>/GD<string> returned 410 not
-        // 310 — both ran with T=int). So a type-param that varies across the two struct instantiations pins
-        // exactly like a method-instantiation alias (same class as B64). Loud reject, not silent-wrong.
-        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
+        // FLIPPED 2026-07-10 (per-spec closure root fix): the LF is now duplicated per containing-struct
+        // spec, so the A15 shared-hoist alias (410-vs-310) is gone — VM oracle: harness A15/PerSpec
+        // B70_ContainerGenericStatic (divergent default(T), Match). Compile pin only here.
+        TestHelper.CompileToUasm(@"
 using System; using UdonSharp;
 public struct GS70S<T> { public static int Run(int seed){ int Lf<U>(){ object o = default(T); return (o == null ? 100 : 200); } return Lf<int>() + seed; } }
 public class B70S : UdonSharpBehaviour { public int seedA; public int seedB; public int result;
-  void Start(){ int a = GS70S<int>.Run(seedA); int b = GS70S<string>.Run(seedB); result = a + b; } }", "B70S"));
-        Assert.Contains("type parameter", ex.Message);
+  void Start(){ int a = GS70S<int>.Run(seedA); int b = GS70S<string>.Run(seedB); result = a + b; } }", "B70S");
     }
 
     // ── B72: enum→floating/decimal is a real conversion, not a re-typing — the emitter must produce the
@@ -281,12 +279,14 @@ public class B72Bx : UdonSharpBehaviour { public int seed; public int result; vo
 public class B73I : UdonSharpBehaviour { public int result; void Start(){ result = H73I.M<int>() + H73I.M<string>(); } }")]
     [InlineData("B73S", @"public static class H73S { public static int M<T>(){ System.Func<int> f = () => { switch(new object()){ case T t: return 1; default: return 0; } }; return f(); } }
 public class B73S : UdonSharpBehaviour { public int result; void Start(){ result = H73S.M<int>() + H73S.M<string>(); } }")]
-    public void B73_ClosureUsesTypeParamInPattern_TwoInstantiations_Rejects(string cls, string body)
+    public void B73_ClosureUsesTypeParamInPattern_TwoInstantiations_Compiles(string cls, string body)
     {
-        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm($@"
+        // FLIPPED 2026-07-10 (per-spec closure root fix): the pattern's T monomorphizes per spec copy,
+        // so two instantiations are legal (pattern-T collection itself is pinned by the harness's
+        // divergent pattern probes). Compile pin only here.
+        TestHelper.CompileToUasm($@"
 using System; using UdonSharp;
-{body}", cls));
-        Assert.Contains("type parameter", ex.Message);
+{body}", cls);
     }
 
     // ── B74: a property SUBPATTERN member (`c is { enabled: true }`) is the owner funnel's 7th site — an
@@ -344,13 +344,12 @@ public class B64A : UdonSharpBehaviour {
     }
 
     [Fact]
-    public void B64_MultiInstantiation_VaryingClosureUsedParam_Rejects()
+    public void B64_MultiInstantiation_VaryingClosureUsedParam_Compiles()
     {
-        // H.Run<T,U>'s closure returns U (uses U) AND captures the parameter `u`. Since the 2026-07-10
-        // safety stop, the capture alone rejects at FIRST registration (flat capture cell aliases across
-        // ACTIVATIONS, not just instantiations — VM-proven single-spec 58058-vs-8058), so that tier fires
-        // before the [Y2] varying-used-param tier this pin originally targeted. Either way: must reject.
-        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
+        // FLIPPED 2026-07-10 (per-spec closure root fix): each instantiation owns its closure copy and
+        // env record, so both the varying-used-param bake and the capture alias are gone — VM oracle:
+        // harness PerSpec B64_* (divergent captures, Match). Compile pin only here.
+        TestHelper.CompileToUasm(@"
 using System; using UdonSharp;
 public static class H64B {
   public static U Run<T, U>(T t, U u) { System.Func<U> inner = () => u; return inner(); }
@@ -358,19 +357,16 @@ public static class H64B {
 public class B64B : UdonSharpBehaviour {
   public int result;
   void Start(){ var a = H64B.Run<int, string>(3, ""x""); var b = H64B.Run<int, bool>(4, true); result = a.Length + (b ? 1 : 0); }
-}", "B64B"));
-        Assert.Contains("captures locals/parameters", ex.Message);
+}", "B64B");
     }
 
     [Fact]
-    public void B64_MultiInstantiation_StaticCapturingClosure_Rejects()
+    public void B64_MultiInstantiation_StaticCapturingClosure_Compiles()
     {
-        // Soundness: H64C.Run is a STATIC generic method whose closure captures the parameter `t`. Even
-        // though the closure-used T is constant (int in both calls) and only U varies, a static method's
-        // inlined specializations share one hoisted closure with no per-activation env record, so the
-        // capture cell aliases across the two instantiations (VM-proven: it returns 3+3, not 3+4). Must
-        // reject. (The analogous INSTANCE-method shape de-aliases and stays legal — M4NonTCap.)
-        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
+        // FLIPPED 2026-07-10 (per-spec closure root fix): static generic captures now ride per-spec
+        // closures with per-activation env records (3+4, not 3+3) — VM oracle: harness PerSpec
+        // B64_StaticForeignGeneric_DivergentCaptures_DeAlias. Compile pin only here.
+        TestHelper.CompileToUasm(@"
 using System; using UdonSharp;
 public static class H64C {
   public static T Run<T, U>(T t, U u) { System.Func<T> inner = () => t; return inner(); }
@@ -378,8 +374,7 @@ public static class H64C {
 public class B64C : UdonSharpBehaviour {
   public int result;
   void Start(){ int a = H64C.Run<int, string>(3, ""x""); int b = H64C.Run<int, bool>(4, true); result = a + b; }
-}", "B64C"));
-        Assert.Contains("captures locals/parameters", ex.Message);
+}", "B64C");
     }
 
     // ── B65: a type-parameter receiver (T : Behaviour) resolves the inherited-member extern owner through
@@ -501,11 +496,12 @@ public class B78A : UdonSharpBehaviour {
     }
 
     [Fact]
-    public void B78_StaticGeneric_GenuineDefScopeCapture_StillRejects()
+    public void B78_StaticGeneric_GenuineDefScopeCapture_Compiles()
     {
-        // Control against over-widening: the closure genuinely captures the method's own parameter `t`
-        // alongside its deconstruction locals — that aliases across the static specs and must still reject.
-        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
+        // FLIPPED 2026-07-10 (per-spec closure root fix): def-scope captures de-alias via per-spec env
+        // records — VM oracle: harness PerSpec B64 family. Compile pin only here (the B78 point — own
+        // out-var/deconstruction locals are not captures — is pinned by B78A above, unchanged).
+        TestHelper.CompileToUasm(@"
 using System; using UdonSharp;
 public static class H78B {
   public static int Run<T, U>(int t, U u) { System.Func<int> inner = () => { var (a, b) = (2, 3); return a + b + t; }; return inner(); }
@@ -513,7 +509,6 @@ public static class H78B {
 public class B78B : UdonSharpBehaviour {
   public int result;
   void Start(){ int a = H78B.Run<int, string>(3, ""x""); int b = H78B.Run<int, bool>(4, true); result = a + b; }
-}", "B78B"));
-        Assert.Contains("captures locals/parameters", ex.Message);
+}", "B78B");
     }
 }

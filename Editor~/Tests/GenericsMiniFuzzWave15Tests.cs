@@ -46,10 +46,11 @@ public class B53P2 : UdonSharpBehaviour {
     }
 
     [Fact]
-    public void B53_TDependentClosure_StillRejects()
+    public void B53_TDependentClosure_Compiles()
     {
-        // Control (b): a closure genuinely referencing M's own T must STILL pin (two instantiations reject).
-        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
+        // FLIPPED 2026-07-10 (per-spec closure root fix): T-dependent closures duplicate per spec —
+        // VM oracle: harness PerSpec B70_GenericMethod_TDependentClosure (divergent, Match).
+        TestHelper.CompileToUasm(@"
 using System; using UdonSharp;
 public class B53Ctrl : UdonSharpBehaviour {
   public int r1, r2;
@@ -58,8 +59,7 @@ public class B53Ctrl : UdonSharpBehaviour {
     return f();
   }
   void Start(){ r1 = M<int>(10); r2 = M<string>(20); }
-}", "B53Ctrl"));
-        Assert.Contains("type parameters", ex.Message);
+}", "B53Ctrl");
     }
 
     // ── B51: a nested generic local function must resolve the ENCLOSING generic's type parameters ──
@@ -187,11 +187,11 @@ public class B52A : UdonSharpBehaviour {
     }
 
     [Fact]
-    public void B53_MultiSpecCapturingGenericLocalFunction_StillRejects()
+    public void B53_MultiSpecCapturingGenericLocalFunction_Compiles()
     {
-        // Control (c): a generic LF's OWN U in its OWN escaping closure across 2 of its OWN specs is the
-        // roadmap M4 'unverified' scenario — a correct clean reject (not a false positive on the ENCLOSING).
-        Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
+        // FLIPPED 2026-07-10 (per-spec closure root fix, M2b): a generic LF's own specs each carry
+        // their own nested-closure copies (composite key = own args + enclosing spec args).
+        TestHelper.CompileToUasm(@"
 using System; using UdonSharp;
 public class B53MultiSpec : UdonSharpBehaviour {
   public int r1, r2;
@@ -202,6 +202,6 @@ public class B53MultiSpec : UdonSharpBehaviour {
     var f2 = Inner<string>();
     r1 = f1(); r2 = f2();
   }
-}", "B53MultiSpec"));
+}", "B53MultiSpec");
     }
 }
