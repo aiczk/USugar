@@ -2159,64 +2159,11 @@ public class UasmEmitter
 
             var bodyOp = model.GetOperation(syntax);
 
-            // Round-9 [Y8]: a LOCAL FUNCTION's method symbol compares EQUAL across operation-tree
-            // walks, but its TYPE PARAMETER symbols do NOT (fresh per-walk instances with
-            // reference equality) — so the spec map keyed by the CALL SITE walk's T misses every
-            // body-walk reference and the body type-checks as raw 'T' (CReturn ICE on a single
-            // legal instantiation). Re-key the instantiation map with the body symbol's own
-            // type parameters; class-level generic methods share symbols and are unaffected.
-            // SS2B (M3): the same freshness applies to ANY closure nested under a generic LOCAL
-            // FUNCTION — the nested closure's own emission re-walks its syntax, freshening the LF's
-            // type params yet again, and no LF-spec rekey runs for it (a lambda is never isSpec). So
-            // the rekey runs for every hoisted-closure emission too, resolving each body-walk
-            // enclosing owner against the record's OwnerSpecs chain.
-            var bodyWalkSym = bodyOp switch
-            {
-                ILocalFunctionOperation lfDefOp => lfDefOp.Symbol,
-                IAnonymousFunctionOperation anonDefOp => anonDefOp.Symbol,
-                _ => null,
-            };
-            if (bodyWalkSym != null && (isSpec || closureSpec != null))
-            {
-                // old ∪ rekeyed: the body-walk's fresh type-param symbols are added (newWins), the
-                // call-site symbols already in the map are RETAINED — never a replacing composition.
-                var rekey = new List<(IReadOnlyList<ITypeParameterSymbol>, IReadOnlyList<ITypeSymbol>)>();
-                if (isSpec && bodyWalkSym.TypeParameters.Length == method.TypeArguments.Length
-                    && bodyWalkSym.TypeParameters.Length > 0)
-                    rekey.Add((bodyWalkSym.TypeParameters, method.TypeArguments));
-                // B51: the generic LF's OriginalDefinition body-walk freshens the ENCLOSING generic's
-                // type params too (not only the LF's own), so the closure-compose keys (owner-def
-                // symbols) miss the body-walk references — `new T[]` / default(T) / (T)x on the enclosing
-                // T then resolve as raw 'T' (bogus TArray extern). Re-key each enclosing owner's params
-                // under the body-walk symbols (the containing chain of the body-walk's own symbol), same
-                // walk the body's T references come from, mapped to the same owner-spec type arguments.
-                for (var s = bodyWalkSym.ContainingSymbol; s is IMethodSymbol enclBw; s = enclBw.ContainingSymbol)
-                {
-                    // SS2B: prefer the record's own owner chain (per-spec T) over first-wins.
-                    IMethodSymbol ownerSpec = null;
-                    if (closureSpec != null)
-                        foreach (var os in closureSpec.OwnerSpecs)
-                            if (SymbolEqualityComparer.Default.Equals(os.OriginalDefinition, enclBw.OriginalDefinition))
-                            { ownerSpec = os; break; }
-                    if (ownerSpec != null
-                        || _ctx.Generics.FirstSpecByDefinition.TryGetValue(enclBw.OriginalDefinition, out ownerSpec))
-                    {
-                        if (enclBw.TypeParameters.Length == ownerSpec.TypeArguments.Length)
-                            rekey.Add((enclBw.TypeParameters, ownerSpec.TypeArguments));
-                        // B70 (A14/A15): the enclosing owner may be a member of a GENERIC STRUCT — the
-                        // body-walk freshens the struct's OWN type params (T) too, not just the method's, so
-                        // re-key the enclosing CONTAINING-TYPE params under the body-walk symbols as well.
-                        // Otherwise `new T[]` on the struct's T resolves as raw 'T' → bogus TArray extern.
-                        if (enclBw.ContainingType.IsGenericType
-                            && enclBw.ContainingType.OriginalDefinition.TypeParameters.Length
-                                == ownerSpec.ContainingType.TypeArguments.Length)
-                            rekey.Add((enclBw.ContainingType.OriginalDefinition.TypeParameters,
-                                ownerSpec.ContainingType.TypeArguments));
-                    }
-                }
-                if (rekey.Count > 0)
-                    typeMap = TypeParamScope.Compose(typeMap, newWins: true, rekey);
-            }
+            // The former [Y8]/B51/B70 rekey block (re-binding the map under each walk's fresh
+            // type-parameter symbols) is retired: TypeParamScope composes its maps with
+            // TypeParamIdComparer, so per-walk twins of one declared parameter hit one key directly
+            // (design 2026-07-10 symbol-intern v2, T1 — red-proofed: disabling the comparer-era
+            // compensation reproduced the 15 rekey-class failures before this landed).
 
             // Open the depth-1 scope now that the map is fully composed; Dispose (at block end) is the
             // sole clear, running even if body emission throws. Non-generic methods carry a null map

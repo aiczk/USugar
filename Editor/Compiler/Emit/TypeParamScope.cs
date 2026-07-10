@@ -15,7 +15,10 @@ public static class TypeParamScope
         bool newWins,
         IEnumerable<(IReadOnlyList<ITypeParameterSymbol> parms, IReadOnlyList<ITypeSymbol> args)> bindings)
     {
-        var dict = new Dictionary<ITypeParameterSymbol, ITypeSymbol>(SymbolEqualityComparer.Default);
+        // TypeParamId comparer (design 2026-07-10 symbol-intern v2, T1): per-walk fresh twins of one
+        // declared type parameter ([Y8]) hash/compare onto one key, so a body-walk reference hits the
+        // call-site walk's binding directly — the EmitMethod rekey block this replaces is retired.
+        var dict = new Dictionary<ITypeParameterSymbol, ITypeSymbol>(TypeParamIdComparer.Instance);
         if (baseMap != null)
             foreach (var kv in baseMap) dict[kv.Key] = kv.Value;
         foreach (var (parms, args) in bindings)
@@ -25,8 +28,10 @@ public static class TypeParamScope
                 // GetUdonTypeName's resolve-then-recurse into an infinite self-reference (process-killing
                 // stack overflow). Such a binding only arises from an UNCLOSED containing-type spec (the
                 // bug being fixed). Never install it: skip so the key keeps its real base binding (or stays
-                // unmapped) instead of becoming a self-cycle.
-                if (SymbolEqualityComparer.Default.Equals(args[i], parms[i])) continue;
+                // unmapped) instead of becoming a self-cycle. Widened by the comparer: a FRESH TWIN of the
+                // same declared parameter is equally an identity binding (it would self-cycle through the
+                // twin under TypeParamId equality).
+                if (args[i] is ITypeParameterSymbol argTp && TypeParamIdComparer.Instance.Equals(argTp, parms[i])) continue;
                 if (newWins || !dict.ContainsKey(parms[i]))
                     dict[parms[i]] = args[i];
             }

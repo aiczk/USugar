@@ -17,6 +17,7 @@
     <Compile Include="../../Editor/Compiler/Emit/DelegateProtocol.cs" />
     <Compile Include="../../Editor/Compiler/Emit/EmitDiagnostic.cs" />
     <Compile Include="../../Editor/Compiler/Emit/EmitContext.cs" />
+    <Compile Include="../../Editor/Compiler/Emit/TypeParamId.cs" />
     <Compile Include="../../Editor/Compiler/Emit/TypeParamScope.cs" />
     <Compile Include="../../Editor/Compiler/Emit/GenericContext.cs" />
     <Compile Include="../../Editor/Compiler/Emit/EmitPolicy.cs" />
