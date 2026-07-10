@@ -37,6 +37,36 @@ public class EmitContext
     public IDisposable EnterTypeParamScope(IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> map)
         => Generics.EnterScope(map, Methods.CurrentMethod);
 
+    /// <summary>Composite key args for a hoisted-closure registration or lookup (2026-07-11 pre-fuzz
+    /// audit HIGH fix): the closure's own type args ⊕ the args of its LEXICAL enclosing generic
+    /// owners (declaration chain), each resolved against the current emission's owner chain
+    /// (CurrentOwnerSpecs, FirstSpecByDefinition fallback — both sides fall back identically). The
+    /// former composition used the lookup site's AMBIENT spec vector, which keyed the TARGET by the
+    /// REGISTRAR's own spec dimension: a self-recursive / mutually-recursive generic local function
+    /// then re-composed its own args on every hop (key length grew, every lookup missed, the pending
+    /// drain re-registered forever — VM-proven compile hang). The lexical chain is the same from
+    /// every reference site, so registration and lookup can never skew.</summary>
+    public System.Collections.Immutable.ImmutableArray<ITypeSymbol> ComposeClosureKeyArgs(IMethodSymbol closure)
+    {
+        var b = System.Collections.Immutable.ImmutableArray.CreateBuilder<ITypeSymbol>();
+        if (closure.TypeArguments.Length > 0) b.AddRange(closure.TypeArguments);
+        for (var s = closure.OriginalDefinition.ContainingSymbol; s is IMethodSymbol owner; s = owner.ContainingSymbol)
+        {
+            var ownerDef = owner.OriginalDefinition;
+            IMethodSymbol spec = null;
+            foreach (var os in Methods.CurrentOwnerSpecs)
+                if (SymbolEqualityComparer.Default.Equals(os.OriginalDefinition, ownerDef)) { spec = os; break; }
+            if (spec == null) Generics.FirstSpecByDefinition.TryGetValue(ownerDef, out spec);
+            if (spec == null) continue;
+            if (ownerDef.TypeParameters.Length > 0) b.AddRange(spec.TypeArguments);
+            // Containing-type dimension once, at the outermost named method (feature G: a generic
+            // struct/class member's closure binds the container's T too).
+            if (owner.ContainingSymbol is not IMethodSymbol && spec.ContainingType is { IsGenericType: true } ct)
+                b.AddRange(ct.TypeArguments);
+        }
+        return b.ToImmutable();
+    }
+
     // Persistent local symbol → field name mapping (survives scope pop). Holds NON-captured locals
     // only: a captured local has no flat field — its cell lives in the owning scope's env record
     // (Stage 2, TryGetEnvBinding / EnvEmit), so per-activation captures no longer alias.

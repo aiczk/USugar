@@ -1297,7 +1297,7 @@ public abstract partial class HandlerBase
         // (_methodFunctions/_methodSlots/_methodParamVarIds/_methodReturns/envp) are deliberately NOT
         // written for closures: any stale bare-symbol read then fails loud instead of silently using
         // another spec's function (the pre-fix failure mode).
-        var keyArgs = _ctx.Methods.CurrentSpecArgs;
+        var keyArgs = _ctx.ComposeClosureKeyArgs(localFunc);
         if (_ctx.Methods.TryGetClosureSpec(localFunc, keyArgs, out _)) return;
         EmitPolicy.RejectInParameters(localFunc); // round-7 follow-up [Q3]
         var funcName = string.IsNullOrEmpty(localFunc.Name) ? "lambda" : localFunc.Name;
@@ -1381,7 +1381,7 @@ public abstract partial class HandlerBase
     protected IMethodSymbol HoistLambdaToMethod(IAnonymousFunctionOperation lambda)
     {
         var symbol = lambda.Symbol;
-        if (_ctx.Methods.TryGetClosureSpec(symbol, _ctx.Methods.CurrentSpecArgs, out _)) return symbol;
+        if (_ctx.Methods.TryGetClosureSpec(symbol, _ctx.ComposeClosureKeyArgs(symbol), out _)) return symbol;
         RegisterLocalFunction(symbol);
         return symbol;
     }
@@ -1632,7 +1632,7 @@ public abstract partial class HandlerBase
         // level down). Named generic specs keep their constructed-symbol maps.
         bool closureKind = constructed.MethodKind is MethodKind.LambdaMethod or MethodKind.LocalFunction;
         var closureKeyArgs = closureKind
-            ? _ctx.Methods.ComposeKeyArgs(constructed)
+            ? _ctx.ComposeClosureKeyArgs(constructed)
             : System.Collections.Immutable.ImmutableArray<ITypeSymbol>.Empty;
         if (closureKind ? _ctx.Methods.TryGetClosureSpec(constructed, closureKeyArgs, out _)
                         : _methodFunctions.ContainsKey(constructed)) return;
@@ -1903,7 +1903,7 @@ public abstract partial class HandlerBase
             // constructed-symbol registration above.
             MethodContext.ClosureSpec bridgeClosure = null;
             EmitContext.MethodSlot targetSlot;
-            if (_ctx.Methods.TryGetClosureSpec(targetMethod, _ctx.Methods.ComposeKeyArgs(targetMethod), out bridgeClosure))
+            if (_ctx.Methods.TryGetClosureSpec(targetMethod, _ctx.ComposeClosureKeyArgs(targetMethod), out bridgeClosure))
                 targetSlot = bridgeClosure.Slot;
             else if (!_methodSlots.TryGetValue(targetMethod, out targetSlot))
                 throw new System.InvalidOperationException($"Lambda/local function '{targetMethod.Name}' not registered.");
@@ -2277,7 +2277,7 @@ public abstract partial class HandlerBase
     {
         // SS2B: a hoisted closure callee (generic LF specs included) resolves through the registry.
         if (target.MethodKind is MethodKind.LambdaMethod or MethodKind.LocalFunction
-            && _ctx.Methods.TryGetClosureSpec(target, _ctx.Methods.ComposeKeyArgs(target), out var calleeClosure))
+            && _ctx.Methods.TryGetClosureSpec(target, _ctx.ComposeClosureKeyArgs(target), out var calleeClosure))
             return (calleeClosure.Slot.VarPrefix, calleeClosure.ParamVarIds,
                 calleeClosure.ReturnSlots is { Length: 1 } ? calleeClosure.ReturnSlots[0].Id : null);
         if (_methodParamVarIds.TryGetValue(target, out var localParamIds))
@@ -2316,7 +2316,7 @@ public abstract partial class HandlerBase
     {
         // SS2B: a hoisted closure callee (generic LF specs included) resolves through the registry.
         if (target.MethodKind is MethodKind.LambdaMethod or MethodKind.LocalFunction
-            && _ctx.Methods.TryGetClosureSpec(target, _ctx.Methods.ComposeKeyArgs(target), out var retClosure))
+            && _ctx.Methods.TryGetClosureSpec(target, _ctx.ComposeClosureKeyArgs(target), out var retClosure))
             return retClosure.ReturnSlots;
         if (_methodReturns.TryGetValue(target, out var slots))
         {
@@ -2344,7 +2344,7 @@ public abstract partial class HandlerBase
         // SS2B: non-generic hoisted closures resolve per-spec (ambient args) with throw-on-miss —
         // a bare-symbol fallback here would silently call another spec's copy.
         if (target.MethodKind is MethodKind.LambdaMethod or MethodKind.LocalFunction)
-            func = _ctx.Methods.GetClosureSpec(target, _ctx.Methods.ComposeKeyArgs(target)).Func;
+            func = _ctx.Methods.GetClosureSpec(target, _ctx.ComposeClosureKeyArgs(target)).Func;
         else if (!_methodFunctions.TryGetValue(target, out func))
             throw new InvalidOperationException($"No CFunction registered for method '{target.Name}'");
         var retType = func.ReturnType ?? "SystemVoid";

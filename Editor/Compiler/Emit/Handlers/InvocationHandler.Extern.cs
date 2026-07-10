@@ -801,7 +801,7 @@ public partial class InvocationHandler
             // GetCalleeLayout/EmitCallToMethod — the definition-keyed map no longer holds closures).
             string[] paramIds;
             if (target.MethodKind is MethodKind.LambdaMethod or MethodKind.LocalFunction
-                && _ctx.Methods.TryGetClosureSpec(target, _ctx.Methods.ComposeKeyArgs(target), out var refClosure))
+                && _ctx.Methods.TryGetClosureSpec(target, _ctx.ComposeClosureKeyArgs(target), out var refClosure))
                 paramIds = refClosure.ParamVarIds;
             else
                 paramIds = _methodParamVarIds[target]; // loud (KeyNotFound) if unregistered

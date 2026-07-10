@@ -108,24 +108,9 @@ public sealed class MethodContext
     /// this — a bare read under multi-spec is the silent under-spill / wrong-env class (F3/F4).</summary>
     public ClosureSpec CurrentClosureSpec;
 
-    /// <summary>The flattened enclosing-spec type arguments of the CURRENT emission context:
-    /// a named spec's own (method + containing-type) args, an emitting closure's KeyArgs, else
-    /// empty. This is the ambient key-args component every closure registration and closure
-    /// lookup uses.</summary>
-    public ImmutableArray<ITypeSymbol> CurrentSpecArgs = ImmutableArray<ITypeSymbol>.Empty;
-
     /// <summary>The enclosing constructed specs of the current emission context (a named spec =
     /// itself; an emitting closure = its record's chain; else empty).</summary>
     public ImmutableArray<IMethodSymbol> CurrentOwnerSpecs = ImmutableArray<IMethodSymbol>.Empty;
-
-    /// <summary>Composite lookup key args for a hoisted closure reference: the CONSTRUCTED symbol's
-    /// own type args (a generic LF spec; empty for a plain lambda/LF) prepended to the ambient
-    /// enclosing-spec args. Registration and every lookup compose through this one helper so the two
-    /// sides can never skew.</summary>
-    public ImmutableArray<ITypeSymbol> ComposeKeyArgs(IMethodSymbol closure)
-        => closure.TypeArguments.Length == 0
-            ? CurrentSpecArgs
-            : closure.TypeArguments.AddRange(CurrentSpecArgs);
 
     public bool TryGetClosureSpec(IMethodSymbol def, ImmutableArray<ITypeSymbol> keyArgs, out ClosureSpec spec)
     {

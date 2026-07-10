@@ -2091,9 +2091,8 @@ public class UasmEmitter
             typeMap = TypeParamScope.Compose(null, newWins: true, bindings);
         }
 
-        // SS2B ambient spec identity: closures registered/looked up during THIS emission key on it.
-        _ctx.Methods.CurrentSpecArgs = closureSpec?.KeyArgs
-            ?? (isSpec ? FlattenSpecArgs(method) : System.Collections.Immutable.ImmutableArray<ITypeSymbol>.Empty);
+        // SS2B ambient owner chain: closure key composition during THIS emission resolves its
+        // lexical owners' args against this chain (ComposeClosureKeyArgs).
         _ctx.Methods.CurrentOwnerSpecs = closureSpec?.OwnerSpecs
             ?? (isSpec ? System.Collections.Immutable.ImmutableArray.Create(method)
                        : System.Collections.Immutable.ImmutableArray<IMethodSymbol>.Empty);
@@ -3564,16 +3563,6 @@ public class UasmEmitter
     // the shape IsCollectibleStructMember skips. It is registered on demand at its closed call site
     // (InvocationHandler's foreign-static-on-generic arm). Genuinely closed foreign statics (incl.
     // non-generic Helper.Boost, or Helper<int>.Boost from a concretely-typed context) are collected.
-    /// <summary>SS2B: the flattened enclosing-spec type arguments of a constructed spec (method args
-    /// then containing-type args) — the ambient key-args component for per-spec closure keying.</summary>
-    static System.Collections.Immutable.ImmutableArray<ITypeSymbol> FlattenSpecArgs(IMethodSymbol m)
-    {
-        var b = System.Collections.Immutable.ImmutableArray.CreateBuilder<ITypeSymbol>();
-        if (m.IsGenericMethod) b.AddRange(m.TypeArguments);
-        if (m.ContainingType is { IsGenericType: true } ct) b.AddRange(ct.TypeArguments);
-        return b.ToImmutable();
-    }
-
     static bool IsClosedForeignStaticTarget(IMethodSymbol m)
         => !(m.ContainingType is INamedTypeSymbol ct && ct.IsGenericType
              && ct.TypeArguments.Any(ta => ta is ITypeParameterSymbol));
