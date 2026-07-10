@@ -112,6 +112,103 @@ public class DelegateAbiTagHost : UdonSharpBehaviour {
             "A delegate ABI mint writes Kind, Target, Method, Addr, and Env slots.");
     }
 
+    [Fact]
+    public void PublicDelegateField_DeconstructionWithClassCapturingLambda_Rejects()
+    {
+        // Phase-6 boundary sweep: a deconstruction store into cross-program delegate storage goes
+        // through the same BoundaryChecker choke point as a plain assignment.
+        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public class Foo { public int v; }
+public class DeconDlgHost : UdonSharpBehaviour {
+    public Action pub;
+    int k;
+    void Start() { var f = new Foo(); (pub, k) = ((Action)(() => { f.v++; }), 1); }
+}", "DeconDlgHost"));
+        Assert.Contains("cross-program field 'pub'", ex.Message);
+    }
+
+    [Fact]
+    public void CrossBehaviourDelegateProperty_SetWithClassCapturingLambda_Rejects()
+    {
+        // Phase-6 boundary sweep: the Stage-1.75 cross-behaviour property SET transports the bundle
+        // via SetProgramVariable — same surface as a cross-behaviour delegate field write.
+        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public class Foo { public int v; }
+public class PropOther : UdonSharpBehaviour { public Action Dlg { get; set; } }
+public class PropWriter : UdonSharpBehaviour {
+    public PropOther o;
+    void Start() { var f = new Foo(); o.Dlg = () => { f.v++; }; }
+}", "PropWriter"));
+        Assert.Contains("cross-program property 'Dlg'", ex.Message);
+    }
+
+    [Fact]
+    public void OwnClassPublicDelegateAutoProperty_SetWithClassCapturingLambda_Rejects()
+    {
+        // Phase-6 boundary sweep: a public auto-property's accessors are exported and its backing
+        // symbol is name-addressable — cross-program storage like a public field.
+        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public class Foo { public int v; }
+public class OwnPropHost : UdonSharpBehaviour {
+    public Action Dlg { get; set; }
+    void Start() { var f = new Foo(); Dlg = () => { f.v++; }; }
+}", "OwnPropHost"));
+        Assert.Contains("cross-program property 'Dlg'", ex.Message);
+    }
+
+    [Fact]
+    public void PublicDelegateField_CoalesceAssignClassCapturingLambda_Rejects()
+    {
+        // Phase-6 boundary sweep: `??=` stores through the shared write-back machinery and must
+        // report to the same choke point.
+        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public class Foo { public int v; }
+public class CoalesceHost : UdonSharpBehaviour {
+    public Action pub;
+    void Start() { var f = new Foo(); pub ??= (Action)(() => { f.v++; }); }
+}", "CoalesceHost"));
+        Assert.Contains("cross-program field 'pub'", ex.Message);
+    }
+
+    [Fact]
+    public void OwnClassPublicDelegateAutoProperty_ClassFreeDirectLambda_Compiles()
+    {
+        // Accept boundary: a direct, class-free lambda is provably safe at the write site.
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public class SafePropHost : UdonSharpBehaviour {
+    public Action Dlg { get; set; }
+    int n;
+    void Start() { Dlg = () => { n++; }; }
+}", "SafePropHost");
+        Assert.NotNull(uasm);
+    }
+
+    [Fact]
+    public void PrivateDelegateProperty_ClassCapturingLambda_Compiles()
+    {
+        // Accept boundary: a non-public property's backing storage is never exported —
+        // program-local storage stays legal for class-capturing closures.
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public class Foo { public int v; }
+public class PrivatePropHost : UdonSharpBehaviour {
+    Action Dlg { get; set; }
+    void Start() { var f = new Foo(); Dlg = () => { f.v++; }; }
+}", "PrivatePropHost");
+        Assert.NotNull(uasm);
+    }
+
     static int Count(string haystack, string needle)
     {
         var count = 0;

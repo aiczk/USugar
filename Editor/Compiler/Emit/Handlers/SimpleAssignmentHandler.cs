@@ -68,7 +68,10 @@ public class SimpleAssignmentHandler : AssignmentHandlerBase, IExpressionHandler
         // shared with the deconstruction lvalue path. Wave-9 round-5 [X2]: evaluation order is
         // receiver → index args → value (C# order); the old inline arm evaluated the RHS first.
         if (assign.Target is IPropertyReferenceOperation propRef)
+        {
+            RejectUnsafeCrossProgramDelegateWrite(propRef, _ctx.Boundary.ClassifyValue(assign.Value));
             return EmitPropertySet(propRef, () => VisitExpression(assign.Value));
+        }
 
         // Direct store: local variable or this.field. Delegate assignments (field and local, including
         // `d = null` and `a = b` reference copy) ride this path now: VisitExpression yields the

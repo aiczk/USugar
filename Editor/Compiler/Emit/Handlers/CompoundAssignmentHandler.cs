@@ -117,8 +117,8 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
         var lv = CaptureLValue(op.Target);
         var leftVal = lv.Value;
         var right = VisitEmittedValue(op.Value);
-        if (op.OperatorKind == BinaryOperatorKind.Add && op.Target is IFieldReferenceOperation dlgFieldTarget)
-            RejectUnsafeCrossProgramDelegateWrite(dlgFieldTarget, right.Info);
+        if (op.OperatorKind == BinaryOperatorKind.Add)
+            RejectUnsafeCrossProgramDelegateWrite(op.Target, right.Info);
         var rightVal = right.Leaf;
 
         var sigPart = DelegateAbi.BuildSigPart(invoke, _ctx.TypeParamMap);

@@ -1736,7 +1736,7 @@ public abstract partial class HandlerBase
         return EnvEmit.Leaf(_builder, _ctx, closureScope.BindingScope);
     }
 
-    protected void RejectUnsafeCrossProgramDelegateWrite(IFieldReferenceOperation target, ValueInfo value)
+    protected void RejectUnsafeCrossProgramDelegateWrite(IOperation target, ValueInfo value)
         => _ctx.Boundary.RequireCanStoreCrossProgramDelegate(target, value);
 
     protected void RejectUnsafeCrossProgramEventHandler(IEventSymbol evt, ValueInfo value)

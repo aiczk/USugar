@@ -49,32 +49,44 @@ public sealed class BoundaryChecker
         return false;
     }
 
-    public void RequireCanStoreCrossProgramDelegate(IFieldReferenceOperation target, ValueInfo info)
+    /// <summary>Report any delegate store target here; non-cross-program targets (locals, private
+    /// this-fields, struct/class members, declarations) are ignored. The handler only names the
+    /// syntax — whether the surface crosses a program boundary is decided here.</summary>
+    public void RequireCanStoreCrossProgramDelegate(IOperation target, ValueInfo info)
     {
-        if (!IsCrossProgramDelegateFieldTarget(target)) return;
-        if (info.Kind == ValueKind.Null || ValueClassifier.IsDirectProgramLocalSafeDelegate(info)) return;
-        if (!info.DelegateCapturesProgramLocalPayload && !CurrentMethodBodyMentionsProgramLocalPayload())
-            return;
-        throw new NotSupportedException(
-            $"A delegate stored in the cross-program field '{target.Field.Name}' must be created directly "
-            + "from a capture-safe lambda or method group at the write site. Delegate values copied from "
-            + "locals, parameters, fields, calls, or other unclassified sources may carry a v1 user class "
-            + "through their closure environment, and cannot cross a program boundary. Keep the delegate "
-            + "field private, or assign a direct class-free lambda/method group.");
+        switch (target)
+        {
+            case IFieldReferenceOperation f when IsCrossProgramDelegateFieldTarget(f):
+                RequireDelegateValueSafeForCrossProgramStore(info,
+                    $"the cross-program field '{f.Field.Name}'", "the write site",
+                    "Keep the delegate field private, or assign a direct class-free lambda/method group.");
+                break;
+            case IPropertyReferenceOperation p when IsCrossProgramDelegatePropertyTarget(p):
+                RequireDelegateValueSafeForCrossProgramStore(info,
+                    $"the cross-program property '{p.Property.Name}'", "the write site",
+                    "Keep the property non-public, or assign a direct class-free lambda/method group.");
+                break;
+        }
     }
 
     public void RequireCanStorePublicEventHandler(IEventSymbol evt, ValueInfo info)
     {
         if (evt.DeclaredAccessibility != Accessibility.Public) return;
-        if (info.Kind == ValueKind.Null || ValueClassifier.IsDirectProgramLocalSafeDelegate(info))
-            return;
+        RequireDelegateValueSafeForCrossProgramStore(info,
+            $"the public event '{evt.Name}'", "the add/remove site", null);
+    }
+
+    void RequireDelegateValueSafeForCrossProgramStore(ValueInfo info, string surface, string site, string advice)
+    {
+        if (info.Kind == ValueKind.Null || ValueClassifier.IsDirectProgramLocalSafeDelegate(info)) return;
         if (!info.DelegateCapturesProgramLocalPayload && !CurrentMethodBodyMentionsProgramLocalPayload())
             return;
         throw new NotSupportedException(
-            $"A handler stored in the public event '{evt.Name}' must be created directly from a capture-safe "
-            + "lambda or method group at the add/remove site. Delegate values copied from locals, parameters, "
-            + "fields, calls, or other unclassified sources may carry a v1 user class through their closure "
-            + "environment, and cannot cross a program boundary.");
+            $"A delegate stored in {surface} must be created directly from a capture-safe lambda or "
+            + $"method group at {site}. Delegate values copied from locals, parameters, fields, calls, "
+            + "or other unclassified sources may carry a v1 user class through their closure environment, "
+            + "and cannot cross a program boundary."
+            + (advice == null ? "" : " " + advice));
     }
 
     public void RequireCanEraseProgramLocalPayload(IConversionOperation conversion,
@@ -100,6 +112,22 @@ public sealed class BoundaryChecker
         return fieldRef.Field.DeclaredAccessibility == Accessibility.Public
             || fieldRef.Field.GetAttributes().Any(a =>
                 a.AttributeClass?.Name is "SerializeField" or "SerializeFieldAttribute" or "UdonSyncedAttribute");
+    }
+
+    /// <summary>A delegate-typed property whose storage is cross-program addressable: any property on
+    /// another behaviour/interface instance (the set lands via SetProgramVariable / SendCustomEvent),
+    /// or a public property on this behaviour (exported accessors + name-addressable backing symbol).
+    /// Struct/class (object[]-emulated) containers are program-local slot writes and never match.</summary>
+    public bool IsCrossProgramDelegatePropertyTarget(IPropertyReferenceOperation propRef)
+    {
+        if (propRef.Property.Type is not INamedTypeSymbol dpt || dpt.DelegateInvokeMethod == null) return false;
+        var containing = propRef.Property.ContainingType;
+        if (containing == null || EmitPolicy.IsObjectArrayEmulated(containing)) return false;
+        if (propRef.Instance is not null and not IInstanceReferenceOperation)
+            return ExternResolver.IsUdonSharpBehaviour(containing)
+                || (containing.TypeKind == TypeKind.Interface && containing.SpecialType == SpecialType.None);
+        return ExternResolver.IsUdonSharpBehaviour(containing)
+            && propRef.Property.DeclaredAccessibility == Accessibility.Public;
     }
 
     static bool IsProgramLocalEqualityPosition(IConversionOperation conv)

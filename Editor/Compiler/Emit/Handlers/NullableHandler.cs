@@ -75,6 +75,7 @@ public class NullableHandler : AssignmentHandlerBase, IExpressionHandler
         // once — re-used for the null check — and EmitWriteBack stores exactly like a plain `x = expr` for every
         // lvalue form. The old inline if/else-if chain silently dropped cross-behaviour field/property and
         // aggregate-member (tuple/struct) write-backs and built a bogus __set_X extern for user auto-properties.
+        RejectUnsafeCrossProgramDelegateWrite(op.Target, _ctx.Boundary.ClassifyValue(op.Value));
         var lv = CaptureLValue(op.Target);
         var targetType = GetUdonType(op.Target.Type);
         return NullableAbi.EmitCoalesceAssignment(_builder, lv.Value, targetType,

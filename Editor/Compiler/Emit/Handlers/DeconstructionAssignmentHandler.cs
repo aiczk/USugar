@@ -76,6 +76,11 @@ public class DeconstructionAssignmentHandler : AssignmentHandlerBase, IOperation
             // branches too — C# evaluates each target's component expressions first, then the RHS.
             var prepared = PrepareDeconstructionTargets(targetTuple);
 
+            // Call/unpack RHS components have no per-component operation to classify — report each
+            // cross-program delegate target with an Unknown value (rejects on the same conservative
+            // body-mentions rule as an unclassified field copy).
+            GuardDeconstructionDelegateTargets(targetTuple);
+
             // Tuple-return delegate invocation (`var (a,b) = f(...)` where f is Action/Func-shaped):
             // route through the SAME unified dispatch every other delegate call site uses (guard
             // ladder, self/cross routing) — VisitExpression already returns the dispatched conv-ret,
@@ -236,6 +241,16 @@ public class DeconstructionAssignmentHandler : AssignmentHandlerBase, IOperation
     /// target paired with a nested LITERAL assigns each leaf directly from its snapshot (the leaves
     /// were evaluated individually — there is no intermediate tuple aggregate to element-read); a
     /// nested target paired with a non-literal component keeps the AssignToLValue element-read path.</summary>
+    void GuardDeconstructionDelegateTargets(ITupleOperation targets)
+    {
+        foreach (var element in targets.Elements)
+        {
+            var target = UnwrapDeclaration(element);
+            if (target is ITupleOperation nested) GuardDeconstructionDelegateTargets(nested);
+            else RejectUnsafeCrossProgramDelegateWrite(target, default);
+        }
+    }
+
     void AssignPairedComponents(ITupleOperation targets, ITupleOperation values,
         Dictionary<IOperation, CLeaf> snapshots, Dictionary<IOperation, System.Action<CLeaf>> prepared)
     {
@@ -246,7 +261,11 @@ public class DeconstructionAssignmentHandler : AssignmentHandlerBase, IOperation
                 && MatchNestedLiteral(nestedTarget, component) is { } nestedLiteral)
                 AssignPairedComponents(nestedTarget, nestedLiteral, snapshots, prepared);
             else
+            {
+                RejectUnsafeCrossProgramDelegateWrite(
+                    UnwrapDeclaration(targets.Elements[i]), _ctx.Boundary.ClassifyValue(component));
                 AssignToLValue(targets.Elements[i], snapshots[component], prepared);
+            }
         }
     }
 
