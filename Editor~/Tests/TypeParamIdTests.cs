@@ -72,6 +72,33 @@ public class TpCls : UdonSharpBehaviour {
                     Assert.NotEqual(TypeParamId.For(all[i]), TypeParamId.For(all[j]));
     }
 
+    // S2 spec-dimension preservation (design v2 §gates-3): symbol-equal constructed methods give
+    // equal SpecKeys; distinct instantiations of ONE definition give UNEQUAL SpecKeys. This is the
+    // key-level gate for the B89 class (a spec-dependent value filed under a def that collapses
+    // across instantiations).
+    [Fact]
+    public void SpecKey_PreservesSpecDimension()
+    {
+        var (comp, model, root) = Compile();
+        var runDef = comp.GetTypeByMetadataName("GBox`1").GetMembers("Run")
+            .OfType<IMethodSymbol>().Single();
+        var intType = comp.GetSpecialType(SpecialType.System_Int32);
+        var strType = comp.GetSpecialType(SpecialType.System_String);
+
+        var runInt = runDef.Construct(intType);
+        var runIntTwin = runDef.Construct(intType);
+        var runStr = runDef.Construct(strType);
+
+        var keyInt = new MethodContext.SpecKey(runInt, runInt.TypeArguments.CastArray<ITypeSymbol>());
+        var keyIntTwin = new MethodContext.SpecKey(runIntTwin, runIntTwin.TypeArguments.CastArray<ITypeSymbol>());
+        var keyStr = new MethodContext.SpecKey(runStr, runStr.TypeArguments.CastArray<ITypeSymbol>());
+
+        Assert.Equal(keyInt, keyIntTwin);                       // symbol-equal ⟹ SpecKey-equal
+        Assert.Equal(keyInt.GetHashCode(), keyIntTwin.GetHashCode());
+        Assert.NotEqual(keyInt, keyStr);                        // same def, different args ⟹ unequal
+        Assert.True(SymbolEqualityComparer.Default.Equals(keyInt.Def, keyStr.Def)); // …despite one def
+    }
+
     // S3 freshness erasure (the load-bearing direction, [Y8]): a local function's type-parameter
     // symbols obtained from TWO independent operation walks must intern to ONE id — this is exactly
     // the equivalence the retired rekey block compensated for. The assert deliberately does NOT

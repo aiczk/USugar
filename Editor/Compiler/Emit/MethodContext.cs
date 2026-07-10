@@ -61,7 +61,44 @@ public sealed class MethodContext
         public string EnvpFieldId;
     }
 
-    readonly Dictionary<IMethodSymbol, List<ClosureSpec>> _closureSpecs = new(SymbolEqualityComparer.Default);
+    /// <summary>Per-spec identity as a TYPE (design 2026-07-10 symbol-intern v2, T2 pilot): one
+    /// definition + the composed enclosing-spec type-argument vector. A def-keyed map and a
+    /// spec-keyed map now differ in KEY TYPE, so filing a spec-dependent value under a bare
+    /// definition key — the B89 first-wins class — no longer type-checks. Args compare element-wise
+    /// by CLR symbol identity (absorbs the former ArgsEqual; Udon type-name strings stay banned,
+    /// B66/B76).</summary>
+    public readonly struct SpecKey : IEquatable<SpecKey>
+    {
+        public readonly IMethodSymbol Def;                // OriginalDefinition
+        public readonly ImmutableArray<ITypeSymbol> Args; // own args ⊕ ambient enclosing args
+
+        public SpecKey(IMethodSymbol def, ImmutableArray<ITypeSymbol> args)
+        { Def = def?.OriginalDefinition; Args = args; }
+
+        public bool Equals(SpecKey other)
+        {
+            if (!SymbolEqualityComparer.Default.Equals(Def, other.Def)) return false;
+            if (Args.Length != other.Args.Length) return false;
+            for (int i = 0; i < Args.Length; i++)
+                if (!SymbolEqualityComparer.Default.Equals(Args[i], other.Args[i])) return false;
+            return true;
+        }
+
+        public override bool Equals(object obj) => obj is SpecKey other && Equals(other);
+
+        public override int GetHashCode()
+        {
+            unchecked
+            {
+                int h = Def != null ? SymbolEqualityComparer.Default.GetHashCode(Def) : 0;
+                foreach (var a in Args)
+                    h = h * 31 + (a != null ? SymbolEqualityComparer.Default.GetHashCode(a) : 0);
+                return h;
+            }
+        }
+    }
+
+    readonly Dictionary<SpecKey, ClosureSpec> _closureSpecs = new();
 
     public readonly List<ClosureSpec> PendingClosures = new();
 
@@ -81,14 +118,6 @@ public sealed class MethodContext
     /// itself; an emitting closure = its record's chain; else empty).</summary>
     public ImmutableArray<IMethodSymbol> CurrentOwnerSpecs = ImmutableArray<IMethodSymbol>.Empty;
 
-    static bool ArgsEqual(ImmutableArray<ITypeSymbol> a, ImmutableArray<ITypeSymbol> b)
-    {
-        if (a.Length != b.Length) return false;
-        for (int i = 0; i < a.Length; i++)
-            if (!SymbolEqualityComparer.Default.Equals(a[i], b[i])) return false;
-        return true;
-    }
-
     /// <summary>Composite lookup key args for a hoisted closure reference: the CONSTRUCTED symbol's
     /// own type args (a generic LF spec; empty for a plain lambda/LF) prepended to the ambient
     /// enclosing-spec args. Registration and every lookup compose through this one helper so the two
@@ -102,10 +131,7 @@ public sealed class MethodContext
     {
         spec = null;
         if (def == null) return false;
-        if (!_closureSpecs.TryGetValue(def.OriginalDefinition, out var list)) return false;
-        foreach (var s in list)
-            if (ArgsEqual(s.KeyArgs, keyArgs)) { spec = s; return true; }
-        return false;
+        return _closureSpecs.TryGetValue(new SpecKey(def, keyArgs), out spec);
     }
 
     /// <summary>Throw-on-miss twin (design v3 §2B: a multi-spec context must never silently fall
@@ -119,9 +145,5 @@ public sealed class MethodContext
                 + "per-spec closure lookup fell outside its registration context (per-spec keying bug).");
 
     public void AddClosureSpec(ClosureSpec spec)
-    {
-        if (!_closureSpecs.TryGetValue(spec.Def.OriginalDefinition, out var list))
-            _closureSpecs[spec.Def.OriginalDefinition] = list = new List<ClosureSpec>();
-        list.Add(spec);
-    }
+        => _closureSpecs.Add(new SpecKey(spec.Def, spec.KeyArgs), spec);
 }
