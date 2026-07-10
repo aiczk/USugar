@@ -446,8 +446,7 @@ public partial class InvocationHandler
     {
         var layout = _ctx.Aggregates.GetLayout(classTy);
         return ClassAbi.EmitMint(
-            _builder, _compilation, classTy, layout,
-            _ctx.Builder.AllocScratch, EmitAssign, SlotRef, VisitExpression,
+            _builder, _compilation, classTy, layout, VisitExpression,
             instance => AggregateAbi.DefaultInitialize(_builder, instance, layout, _ctx.Aggregates.GetLayout, GetUdonType),
             instance =>
             {

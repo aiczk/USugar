@@ -82,8 +82,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
             // d1 == d2 → element-wise (target, method) value equality with null legs (fcd07).
             if (DelegateAbi.IsDelegateType(op.LeftOperand.Type) && DelegateAbi.IsDelegateType(op.RightOperand.Type))
                 return DelegateAbi.CompareDelegates(_builder,
-                    VisitExpression(op.LeftOperand), VisitExpression(op.RightOperand), isNotEquals,
-                    _ctx.Builder.AllocScratch, EmitAssign, SlotRef);
+                    VisitExpression(op.LeftOperand), VisitExpression(op.RightOperand), isNotEquals);
         }
 
         // wave-13 multishapes lens (2026-07-04): a PLAIN `d1 + d2` / `d1 - d2` on delegate-typed VALUES
@@ -266,7 +265,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
     CLeaf EmitLiftedBoolLogic(IBinaryOperation op)
         => NullableAbi.EmitLiftedBoolLogic(_builder,
             VisitExpression(op.LeftOperand), VisitExpression(op.RightOperand),
-            op.OperatorKind, _ctx.Builder.AllocScratch, EmitAssign, SlotRef);
+            op.OperatorKind);
 
     // Lifted binary operator on Nullable<T> (null propagation) — see HandlerBase.EmitLiftedBinaryCore.
     CLeaf EmitLiftedBinary(IBinaryOperation op)
@@ -395,8 +394,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
         return NullableAbi.EmitLiftedUnary(_builder, VisitExpression(op.Operand),
             opUnderlying, resUnderlying, op.OperatorKind, GetUdonType,
             (boxed, underlying) => NullableAbi.PromoteBoxedToInt32(_builder, boxed, underlying,
-                _compilation.GetSpecialType(SpecialType.System_Int32), GetUdonType),
-            _ctx.Builder.AllocScratch, EmitAssign, SlotRef);
+                _compilation.GetSpecialType(SpecialType.System_Int32), GetUdonType));
     }
 
     CLeaf VisitBitwiseNot(IUnaryOperation op)
@@ -466,7 +464,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
         // requires HasValue, then matches against the unboxed underlying value (Udon unboxes transparently).
         if (EmitPolicy.IsNullableT(valueType, out var patUnderlying))
             return NullableAbi.EmitPatternCheck(_builder, valueVal, patUnderlying, pattern,
-                EmitPatternCheckImpl, _ctx.Builder.AllocScratch, EmitAssign, SlotRef);
+                EmitPatternCheckImpl);
 
         switch (pattern)
         {

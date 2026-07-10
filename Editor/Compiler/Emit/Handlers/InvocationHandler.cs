@@ -56,8 +56,7 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
                 return true;
             }
             result = DelegateAbi.CompareDelegates(_builder,
-                VisitExpression(op.Instance), VisitExpression(eqArg), isNotEquals: false,
-                _ctx.Builder.AllocScratch, EmitAssign, SlotRef);
+                VisitExpression(op.Instance), VisitExpression(eqArg), isNotEquals: false);
             return true;
         }
 
@@ -82,8 +81,7 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
                 return true;
             }
             result = DelegateAbi.CompareDelegates(_builder,
-                VisitExpression(lhs), VisitExpression(rhs), isNotEquals: false,
-                _ctx.Builder.AllocScratch, EmitAssign, SlotRef);
+                VisitExpression(lhs), VisitExpression(rhs), isNotEquals: false);
             return true;
         }
 
@@ -125,8 +123,7 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
                     ? AggregateAbi.MintDefault(_builder, _ctx.Aggregates.GetLayout(aggType), _ctx.Aggregates.GetLayout, GetUdonType)
                     : EmitValueTypeDefault(uType));
             return NullableAbi.EmitGetValueOrDefault(_builder, nv, uType, fallback,
-                present => aggResult ? AggregateAbi.DeepClone(_builder, present, aggType, _ctx.Aggregates.GetLayout) : present,
-                _ctx.Builder.AllocScratch, EmitAssign, SlotRef);
+                present => aggResult ? AggregateAbi.DeepClone(_builder, present, aggType, _ctx.Aggregates.GetLayout) : present);
         }
 
         // Virtual dispatch through `this`: a call to a virtual/override/abstract method must bind to the
@@ -706,8 +703,7 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
     /// §2.5) for the synthetic combine/remove helpers' LastContiguousMatch search — reused verbatim,
     /// never re-derived, so the `-=` removal semantics can never drift from `==`'s element leg.</summary>
     internal CLeaf EmitDelegateElementEquals(CLeaf a, CLeaf b)
-        => DelegateAbi.CompareDelegates(_builder, a, b, isNotEquals: false,
-            _ctx.Builder.AllocScratch, EmitAssign, SlotRef);
+        => DelegateAbi.CompareDelegates(_builder, a, b, isNotEquals: false);
 
     /// <summary>default(T) constant for the dispatch retSlot pre-init (§2.6). Non-primitive Udon types
     /// (objects, arrays, bundles, SDK structs) approximate with null — only observable on the

@@ -384,7 +384,7 @@ public abstract partial class HandlerBase
             leftVal, leftNullable, ltUnderlying,
             rightVal, rightNullable, rtUnderlying,
             kind, operatorMethod, resultType, _compilation.GetSpecialType(SpecialType.System_Int32),
-            _ctx.Builder.AllocScratch, EmitAssign, SlotRef, GetUdonType, ResolveType,
+            GetUdonType, ResolveType,
             (boxed, underlying) => NullableAbi.PromoteBoxedToInt32(_builder, boxed, underlying,
                 _compilation.GetSpecialType(SpecialType.System_Int32), GetUdonType),
             EmitNarrowingConvert);

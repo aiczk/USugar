@@ -259,8 +259,7 @@ public static class DelegateAbi
                     "SystemString")
             });
 
-    public static CLeaf CompareDelegates(CoreBuilder builder, CLeaf left, CLeaf right, bool isNotEquals,
-        Func<string, int> allocTemp, Action<int, CValue> emitAssign, Func<int, CLeaf> slotRef)
+    public static CLeaf CompareDelegates(CoreBuilder builder, CLeaf left, CLeaf right, bool isNotEquals)
     {
         var nullValue = builder.Const(null, "SystemObject");
         var leftNull = builder.ExternCall(
@@ -273,9 +272,9 @@ public static class DelegateAbi
             "SystemBoolean.__op_LogicalOr__SystemBoolean_SystemBoolean__SystemBoolean",
             new List<CLeaf> { leftNull, rightNull }, "SystemBoolean");
 
-        var resultSlot = allocTemp("SystemBoolean");
+        var resultSlot = builder.AllocScratch("SystemBoolean");
         builder.EmitIf(anyNull,
-            _ => emitAssign(resultSlot, builder.ExternCall(
+            _ => builder.EmitAssign(resultSlot, builder.ExternCall(
                 "SystemBoolean.__op_Equality__SystemBoolean_SystemBoolean__SystemBoolean",
                 new List<CLeaf> { leftNull, rightNull }, "SystemBoolean")),
             _ =>
@@ -301,12 +300,12 @@ public static class DelegateAbi
                 var targetMethodEq = builder.ExternCall(
                     "SystemBoolean.__op_LogicalAnd__SystemBoolean_SystemBoolean__SystemBoolean",
                     new List<CLeaf> { targetEq, methodEq }, "SystemBoolean");
-                emitAssign(resultSlot, builder.ExternCall(
+                builder.EmitAssign(resultSlot, builder.ExternCall(
                     "SystemBoolean.__op_LogicalAnd__SystemBoolean_SystemBoolean__SystemBoolean",
                     new List<CLeaf> { targetMethodEq, envEq }, "SystemBoolean"));
             });
 
-        CLeaf result = slotRef(resultSlot);
+        CLeaf result = builder.SlotRef(resultSlot);
         if (isNotEquals)
             result = builder.ExternCall(
                 "SystemBoolean.__op_UnaryNegation__SystemBoolean__SystemBoolean",

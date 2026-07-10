@@ -266,14 +266,13 @@ public static class ClassAbi
     /// <summary>Emit the complete class instance mint sequence for a supported v1 user class.</summary>
     public static CLeaf EmitMint(CoreBuilder builder, Compilation compilation,
         INamedTypeSymbol classTy, AggregateLayout layout,
-        Func<string, int> allocTemp, Action<int, CValue> emitAssign, Func<int, CLeaf> slotRef,
         Func<IOperation, CLeaf> emitValue, Action<CLeaf> emitDefaultInitialize,
         Action<CLeaf> emitConstructor, Action<CLeaf> emitObjectInitializer)
     {
         RejectUnsupportedMembers(classTy);
-        var slot = allocTemp(AggregateAbi.ArrayType);
-        emitAssign(slot, AggregateAbi.Allocate(builder, layout.SlotCount));
-        var instance = slotRef(slot);
+        var slot = builder.AllocScratch(AggregateAbi.ArrayType);
+        builder.EmitAssign(slot, AggregateAbi.Allocate(builder, layout.SlotCount));
+        var instance = builder.SlotRef(slot);
         emitDefaultInitialize(instance);
         EmitInstanceFieldInitializers(builder, compilation, instance, classTy, layout, emitValue);
         emitConstructor(instance);

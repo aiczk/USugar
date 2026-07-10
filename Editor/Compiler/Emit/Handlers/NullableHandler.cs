@@ -43,7 +43,7 @@ public class NullableHandler : AssignmentHandlerBase, IExpressionHandler
             {
                 _conditionalAccessStack.Pop();
             }
-        }, _ctx.Builder.AllocScratch, EmitAssign, SlotRef);
+        });
     }
 
     CLeaf VisitCoalesce(ICoalesceOperation op)
@@ -63,8 +63,7 @@ public class NullableHandler : AssignmentHandlerBase, IExpressionHandler
                 var rightVal = VisitExpression(op.WhenNull);
                 return aggResult ? AggregateAbi.DeepClone(_builder, rightVal, aggType, _ctx.Aggregates.GetLayout) : rightVal;
             },
-            aggResult ? present => AggregateAbi.DeepClone(_builder, present, aggType, _ctx.Aggregates.GetLayout) : null,
-            _ctx.Builder.AllocScratch, EmitAssign, SlotRef);
+            aggResult ? present => AggregateAbi.DeepClone(_builder, present, aggType, _ctx.Aggregates.GetLayout) : null);
     }
 
     CLeaf VisitCoalesceAssignment(ICoalesceAssignmentOperation op)
@@ -80,7 +79,6 @@ public class NullableHandler : AssignmentHandlerBase, IExpressionHandler
         var targetType = GetUdonType(op.Target.Type);
         return NullableAbi.EmitCoalesceAssignment(_builder, lv.Value, targetType,
             () => VisitExpression(op.Value),
-            rightVal => EmitWriteBack(op.Target, rightVal, lv),
-            _ctx.Builder.AllocScratch, EmitAssign, SlotRef);
+            rightVal => EmitWriteBack(op.Target, rightVal, lv));
     }
 }

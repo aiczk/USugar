@@ -501,7 +501,7 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
                 (ExternResolver.IsIntegerType(liftedSrcU) || liftedSrcU.SpecialType == SpecialType.System_Char)
                 && (ExternResolver.IsIntegerType(liftedDstU) || liftedDstU.SpecialType == SpecialType.System_Char);
             return NullableAbi.EmitLiftedNumericConversion(_builder, srcVal, dstU, liftedDstMethod,
-                liftedIntToInt, EmitNarrowingConvert, _ctx.Builder.AllocScratch, EmitAssign, SlotRef);
+                liftedIntToInt, EmitNarrowingConvert);
         }
 
         // Lifted numeric conversion with a BARE source and a Nullable<numeric> dest (e.g. `(byte?)(intExpr)`):
