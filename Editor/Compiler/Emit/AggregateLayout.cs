@@ -310,7 +310,17 @@ public static class ClassAbi
             EmitImplicitCtorChain(builder, compilation, instance, bt, getLayout, emitValue);
     }
 
-    /// <summary>CA-M1: user classes have reference semantics and no inheritance/interface dispatch.</summary>
+    // Walks the OverriddenMethod chain to confirm the root is a System.Object virtual (not a user-class
+    // virtual that merely happens to be named ToString/Equals/GetHashCode).
+    static bool IsObjectMethodOverride(IMethodSymbol m)
+    {
+        for (var o = m.OverriddenMethod; o != null; o = o.OverriddenMethod)
+            if (o.ContainingType?.SpecialType == SpecialType.System_Object) return true;
+        return false;
+    }
+
+    /// <summary>CA-M1: user classes have reference semantics and no interface dispatch. CA-v2 M1 adds
+    /// non-virtual inheritance; M3 adds a SEALED-class Object-method override (ToString/Equals/GetHashCode).</summary>
     public static void RejectUnsupportedMembers(INamedTypeSymbol classTy)
     {
         if (classTy.Interfaces.Length > 0)
@@ -324,11 +334,20 @@ public static class ClassAbi
             if (m is IMethodSymbol { MethodKind: MethodKind.Ordinary or MethodKind.PropertyGet or MethodKind.PropertySet }
                 || m is IPropertySymbol)
             {
-                if (m.IsVirtual || m.IsAbstract || m.IsOverride)
+                // CA-v2 M3: an override of an Object virtual (ToString/Equals/GetHashCode) on a SEALED
+                // class is dispatch-safe — a sealed class has no derived type, so static dispatch always
+                // resolves to this exact declaration. Non-sealed overrides and all other virtual/abstract/
+                // override members still need typeobj/virtual dispatch (M4b).
+                bool sealedObjectOverride = m is IMethodSymbol { IsOverride: true } om
+                    && classTy.IsSealed
+                    && (om.Name == "ToString" || om.Name == "Equals" || om.Name == "GetHashCode")
+                    && IsObjectMethodOverride(om);
+                if ((m.IsVirtual || m.IsAbstract || m.IsOverride) && !sealedObjectOverride)
                     throw new NotSupportedException(
-                        $"Member '{classTy.Name}.{m.Name}' is virtual/abstract/override: class ABI v1 has no "
-                        + "inheritance or virtual dispatch, so declare it non-virtual, or call a named method "
-                        + "directly instead of dispatching through a base type.");
+                        $"Member '{classTy.Name}.{m.Name}' is virtual/abstract/override: class ABI v2 M1/M3 "
+                        + "supports only non-virtual members plus an Object-method override "
+                        + "(ToString/Equals/GetHashCode) on a SEALED class. Seal the class, declare the "
+                        + "member non-virtual, or call a named method directly.");
             }
         }
     }
@@ -351,6 +370,19 @@ public static class ClassAbi
                 $"Static property '{classTy.Name}.{property.Name}' on a v1 user class is not "
                 + "supported (only `const` and static methods are): move it to a static method, or to "
                 + "a field on the UdonSharpBehaviour class.");
+    }
+
+    /// <summary>CA-v2 M3: the user ToString() override callable for a v1 class value, or null. Only a
+    /// SEALED class qualifies (no derived type -> static dispatch is exact); a non-sealed override needs
+    /// virtual dispatch (M4b) and falls through to RejectImplicitToString.</summary>
+    public static IMethodSymbol TryGetUserToString(ITypeSymbol type)
+    {
+        if (type is not INamedTypeSymbol ct || !EmitPolicy.IsUserClassType(ct) || !ct.IsSealed) return null;
+        for (var t = ct; t != null && EmitPolicy.IsUserClassType(t); t = t.BaseType)
+            foreach (var m in t.GetMembers("ToString"))
+                if (m is IMethodSymbol { IsStatic: false } ts && ts.Parameters.Length == 0 && IsObjectMethodOverride(ts))
+                    return ts;
+        return null;
     }
 
     /// <summary>Reject implicit stringification of a v1 class reference bundle.</summary>

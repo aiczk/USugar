@@ -3809,12 +3809,12 @@ public class UasmEmitter
             ?? (op as ICompoundAssignmentOperation)?.OperatorMethod
             ?? (op as IIncrementOrDecrementOperation)?.OperatorMethod;
         if (opMethod is { MethodKind: MethodKind.UserDefinedOperator }
-            && opMethod.ContainingType is INamedTypeSymbol ot && EmitPolicy.IsUserStruct(ot))
+            && opMethod.ContainingType is INamedTypeSymbol ot && EmitPolicy.IsObjectArrayEmulated(ot))
             yield return opMethod;
         // User-struct CONVERSION operator (implicit/explicit). MethodKind is Conversion (not UserDefinedOperator),
         // so it needs its own arm — invoked implicitly by an IConversionOperation, routed to the method on emit.
         if (op is IConversionOperation convOp && convOp.OperatorMethod is { MethodKind: MethodKind.Conversion } convM
-            && convM.ContainingType is INamedTypeSymbol convCt && EmitPolicy.IsUserStruct(convCt))
+            && convM.ContainingType is INamedTypeSymbol convCt && EmitPolicy.IsObjectArrayEmulated(convCt))
             yield return convM;
     }
 

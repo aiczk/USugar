@@ -45,7 +45,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
 
         // ── User-defined struct operator: v1 + v2 → static operator method call ──
         if (op.OperatorMethod is { MethodKind: MethodKind.UserDefinedOperator } binOpM
-            && binOpM.ContainingType is INamedTypeSymbol binOpCt && EmitPolicy.IsUserStruct(binOpCt))
+            && binOpM.ContainingType is INamedTypeSymbol binOpCt && EmitPolicy.IsObjectArrayEmulated(binOpCt))
         {
             var lhs = VisitExpression(op.LeftOperand);
             var rhs = VisitExpression(op.RightOperand);
@@ -322,7 +322,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
         // type and throws "Bitwise NOT not supported on SystemObjectArray". Only fires for a user operator
         // (a built-in lifted ~ has OperatorMethod null → falls through to the BitwiseNegation handling). ──
         if (op.OperatorMethod is { MethodKind: MethodKind.UserDefinedOperator } unOpM
-            && unOpM.ContainingType is INamedTypeSymbol unOpCt && EmitPolicy.IsUserStruct(unOpCt))
+            && unOpM.ContainingType is INamedTypeSymbol unOpCt && EmitPolicy.IsObjectArrayEmulated(unOpCt))
         {
             var operand = VisitExpression(op.Operand);
             return EmitCallToMethod(ResolveStructMember(unOpM), new List<CLeaf> { operand });

@@ -376,6 +376,15 @@ public partial class InvocationHandler
                     }
                     placeholder.Append('}');
                     formatParts.Add(placeholder.ToString());
+                    // CA-v2 M3: a v1 class with a SEALED user ToString override stringifies through it.
+                    var interpTs = ClassAbi.TryGetUserToString(interpolation.Expression.Type);
+                    if (interpTs != null)
+                    {
+                        var recv = VisitExpression(interpolation.Expression);
+                        argVals.Add(EmitCallToMethod(ResolveStructMember(interpTs), new List<CLeaf> { recv }));
+                        argIndex++;
+                        break;
+                    }
                     // B67: a user enum in an interpolation hole would be boxed and Format-ToString'd to its
                     // underlying number — pre-convert it to the C#-correct name string instead.
                     ClassAbi.RejectImplicitToString(interpolation.Expression.Type);

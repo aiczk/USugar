@@ -325,7 +325,13 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
         // an in-program `object o = classInstance` is the documented over-rejection (E1 shape). Closure-env
         // capture stores the ref via a compiler-emitted EnvEmit.Write, not a user conversion — it never lands
         // here (the F1 execution-locality pin stays green).
-        if (ResolveType(conv.Operand.Type) is { } b82Src && ResolveType(conv.Type) is { } b82Dst)
+        // CA-v2 M3: a USER conversion operator on a v1 class consumes the class value through the
+        // operator (C# forbids user conversions to object/a base type, so the destination is always a
+        // concrete non-erasing type) — it is a real value conversion, not a laundering erasure.
+        bool userClassConversion = conv.OperatorMethod is { MethodKind: MethodKind.Conversion }
+            && conv.OperatorMethod.ContainingType is INamedTypeSymbol ucct && EmitPolicy.IsObjectArrayEmulated(ucct);
+        if (!userClassConversion
+            && ResolveType(conv.Operand.Type) is { } b82Src && ResolveType(conv.Type) is { } b82Dst)
             RejectProgramLocalErasure(conv, b82Src, b82Dst);
 
         var srcVal = VisitExpression(conv.Operand);
@@ -574,7 +580,7 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
         {
             // A user STRUCT conversion operator is an emitted method, not an extern: route to it (its containing
             // type is SystemObjectArray-backed, so ResolveConversionExtern would build a non-existent extern).
-            if (conv.OperatorMethod.ContainingType is INamedTypeSymbol convOpCt && EmitPolicy.IsUserStruct(convOpCt))
+            if (conv.OperatorMethod.ContainingType is INamedTypeSymbol convOpCt && EmitPolicy.IsObjectArrayEmulated(convOpCt))
                 return EmitCallToMethod(ResolveStructMember(conv.OperatorMethod), new List<CLeaf> { srcVal });
             ClassAbi.RejectUserOperator(conv.OperatorMethod);
 

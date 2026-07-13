@@ -37,7 +37,7 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
         // User-defined struct operator (s += t uses the struct's operator +): static method call, then write
         // back. The struct's Udon type is SystemObjectArray, so ResolveBinaryExtern would build a bogus extern.
         if (op.OperatorMethod is { MethodKind: MethodKind.UserDefinedOperator } cuOpM
-            && cuOpM.ContainingType is INamedTypeSymbol cuOpCt && EmitPolicy.IsUserStruct(cuOpCt))
+            && cuOpM.ContainingType is INamedTypeSymbol cuOpCt && EmitPolicy.IsObjectArrayEmulated(cuOpCt))
         {
             var res = EmitCallToMethod(ResolveStructMember(cuOpM), new List<CLeaf> { leftVal, rightVal });
             EmitWriteBack(op.Target, res, lv);
@@ -196,7 +196,7 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
         // write back. Postfix returns the captured OLD value; the built-in op_Addition path below would build
         // a bogus extern on the struct's SystemObjectArray type and use the wrong (value, 1) shape.
         if (op.OperatorMethod is { MethodKind: MethodKind.UserDefinedOperator } iuOpM
-            && iuOpM.ContainingType is INamedTypeSymbol iuOpCt && EmitPolicy.IsUserStruct(iuOpCt))
+            && iuOpM.ContainingType is INamedTypeSymbol iuOpCt && EmitPolicy.IsObjectArrayEmulated(iuOpCt))
         {
             var res = EmitCallToMethod(ResolveStructMember(iuOpM), new List<CLeaf> { targetVal });
             EmitWriteBack(op.Target, res, lv);
