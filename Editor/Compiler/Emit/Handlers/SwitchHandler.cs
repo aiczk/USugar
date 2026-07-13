@@ -180,11 +180,14 @@ public class SwitchHandler : HandlerBase, IOperationHandler
                 var cond = EmitPatternCheck(patValue, switchValueType, patternCase.Pattern);
                 if (patternCase.Guard != null)
                 {
-                    var guardVal = VisitExpression(patternCase.Guard);
-                    cond = ExternCall(
-                        "SystemBoolean.__op_ConditionalAnd__SystemBoolean_SystemBoolean__SystemBoolean",
-                        new List<CLeaf> { cond, guardVal },
-                        "SystemBoolean");
+                    // `when` short-circuits on the type check: a strict AND extern would evaluate the
+                    // guard even when the pattern did not match, and the guard reads the pattern-bound
+                    // variable (e.g. `d.id` where `d` is only validly bound on a match) → a null-bundle
+                    // read → VmFault. Evaluate the guard ONLY inside the matched branch.
+                    var guarded = _ctx.Builder.AllocScratch("SystemBoolean");
+                    EmitAssign(guarded, Const(false, "SystemBoolean"));
+                    _builder.EmitIf(cond, _ => EmitAssign(guarded, VisitExpression(patternCase.Guard)));
+                    cond = SlotRef(guarded);
                 }
                 return cond;
             }
