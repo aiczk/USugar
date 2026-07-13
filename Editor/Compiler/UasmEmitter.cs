@@ -2834,9 +2834,15 @@ public class UasmEmitter
                 if (allInScc.Count > 0) cycleEdges[caller] = allInScc;
                 // Only edges with a NON-tail call need spilling: a tail call (`return Callee(..)`) reads
                 // nothing after the call, so flat-heap clobbering is harmless — and spilling deep tail
-                // recursion would needlessly exhaust the stack.
+                // recursion would needlessly exhaust the stack. CA-v2b-2: a CONSTRUCTOR has no tail-return
+                // call — its `: base(...)` init runs BEFORE the field inits and body, and the body's calls
+                // precede the (value-less) return — so every intra-SCC edge of a ctor is non-tail. The
+                // tail-call analysis walks the ctor's block body only and misses the initializer call, which
+                // would leave a ctor recursive through base construction (ctor-time object spawning) unspilled
+                // and its params (`t` in `Der(int d, int t) : base(d)`) clobbered by the re-entrant call.
+                bool callerIsCtor = caller.MethodKind == MethodKind.Constructor;
                 var inScc = new HashSet<IMethodSymbol>(
-                    edges[caller].Where(c => sccSet.Contains(c) && HasNonTailCallTo(callerBody, c)),
+                    edges[caller].Where(c => sccSet.Contains(c) && (callerIsCtor || HasNonTailCallTo(callerBody, c))),
                     SymbolEqualityComparer.Default);
                 if (inScc.Count > 0) recursive[caller] = inScc;
 
@@ -3324,12 +3330,15 @@ public class UasmEmitter
                 if (IsCrossDispatchReceiver(inv.Instance, inv.TargetMethod)
                     && CrossDispatchLocalTarget(inv.TargetMethod) is { } crossT)
                     yield return crossT;
-                // CA-v2b-2: a base-typed polymorphic call (not `this`/`base`, handled by LeafCallTarget)
-                // dispatches to EVERY override in its closed-world set — yield each so the recursion-graph
-                // edge walk AND the per-site non-tail spill classifier (both read this one enumerator) see a
-                // recursive override (Branch.Sum → Branch.Sum). Over-yield only ever over-spills (sound).
+                // CA-v2b-2: a polymorphic call (a base-typed variable OR `this`, matching the emission
+                // branch — `base` excluded, it is a non-virtual direct call) dispatches to EVERY override in
+                // its closed-world set. Yield each so the recursion-graph edge walk AND the per-site non-tail
+                // spill classifier (both read this one enumerator) see a recursive override — including a
+                // `this.M()` that re-enters through a spawned object's ctor (Rb..ctor -> Rd.Make -> new Rd ->
+                // Rb..ctor). Over-yield only ever over-spills (sound).
                 if (VirtualDispatch.IsVirtualCall(inv.TargetMethod)
-                    && inv.Instance is not IInstanceReferenceOperation
+                    && !(inv.Instance is IInstanceReferenceOperation baseInst
+                         && baseInst.Syntax is Microsoft.CodeAnalysis.CSharp.Syntax.BaseExpressionSyntax)
                     && inv.Instance?.Type is INamedTypeSymbol vrecv && EmitPolicy.IsUserClassType(vrecv))
                     foreach (var vt in _ctx.VirtualDispatch.ResolveTargets(vrecv, inv.TargetMethod))
                         yield return vt.Impl.OriginalDefinition;
@@ -3556,14 +3565,24 @@ public class UasmEmitter
                 // slot method, never this concrete override, so it would register on demand in Phase-2 AFTER
                 // BuildRecursionInfo (no graph node → polymorphic recursion under-spills, the MG-arm twin at
                 // EnumerateStructMemberRefs). Seed each here as a struct-member reach root + node.
-                foreach (var vm in ct.GetMembers().OfType<IMethodSymbol>())
-                    if ((vm.IsVirtual || vm.IsOverride) && !vm.IsAbstract
-                        && vm.MethodKind == MethodKind.Ordinary && IsCollectibleStructMember(vm))
-                    {
-                        structMemberDefs.Add(vm.OriginalDefinition); // recursion-root set (feeds BuildRecursionInfo)
-                        if (structMembers.Add(vm))                   // emit-registration set + body walk
-                            Walk(GetMethodBodyOperation(vm.OriginalDefinition));
-                    }
+                // For each virtual SLOT reachable on this minted class, seed the class's most-derived impl —
+                // which may be an INHERITED-not-overridden virtual declared in a non-minted base (e.g.
+                // RecBse.Compute reached only through a RecDer instance). It is the actual dispatch target, so
+                // it must be a recursion node or a cycle through it (ctor-spawn recursion) is missed and the
+                // frame corrupts. Seeding by slot (most-derived first) avoids phantom-minting shadowed base
+                // methods (a base Spawn that `new`s the base type is never dispatched for this class).
+                var seededSlots = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
+                for (var vt = (ITypeSymbol)ct; vt is INamedTypeSymbol vtn && EmitPolicy.IsUserClassType(vtn); vt = vtn.BaseType)
+                    foreach (var vm in vt.GetMembers().OfType<IMethodSymbol>())
+                        if ((vm.IsVirtual || vm.IsOverride || vm.IsAbstract) && vm.MethodKind == MethodKind.Ordinary
+                            && seededSlots.Add(VirtualDispatch.SlotIntroducer(vm))
+                            && VirtualDispatch.MostDerivedImpl(ct, VirtualDispatch.SlotIntroducer(vm)) is { } impl
+                            && IsCollectibleStructMember(impl))
+                        {
+                            structMemberDefs.Add(impl.OriginalDefinition); // recursion-root set
+                            if (structMembers.Add(impl))                  // emit-registration set + body walk
+                                Walk(GetMethodBodyOperation(impl.OriginalDefinition));
+                        }
                 // CA-v2b-2: a base class's EXPLICIT parameterless ctor is called by this minted class's
                 // implicit ctor chain (EmitImplicitCtorChain), but no `: base()` invocation node exists to
                 // collect it — register each up the chain (and walk its body) so the derived chain's call

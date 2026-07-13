@@ -67,7 +67,7 @@ public sealed class VirtualDispatch
     /// <summary>Walk `concrete` and its base chain from most-derived up; return the first NON-abstract method
     /// that participates in `slotDef`'s virtual slot (its <c>SlotIntroducer</c> is slotDef). A <c>new</c> /
     /// <c>new virtual</c> method roots a different slot, so it is skipped for this slot (member hiding).</summary>
-    static IMethodSymbol MostDerivedImpl(INamedTypeSymbol concrete, IMethodSymbol slotDef)
+    public static IMethodSymbol MostDerivedImpl(INamedTypeSymbol concrete, IMethodSymbol slotDef)
     {
         for (var t = concrete; t != null; t = t.BaseType)
             foreach (var member in t.GetMembers(slotDef.Name))
