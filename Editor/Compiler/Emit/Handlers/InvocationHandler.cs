@@ -184,6 +184,23 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
         if (!target.IsStatic && target.MethodKind == MethodKind.Ordinary
             && target.ContainingType is INamedTypeSymbol structRecv && EmitPolicy.IsObjectArrayEmulated(structRecv))
         {
+            // CA-v2b-2: a runtime-polymorphic call on a base-typed receiver (NOT `this`/`base` — those are
+            // resolved at compile time by the ResolveMostDerivedOverride arm above / stay non-virtual base
+            // calls) lowers to an inline typeobj-ReferenceEquals chain of direct calls. A sealed receiver or
+            // a singleton dispatch set devirtualizes to one direct call to the concrete impl.
+            if (VirtualDispatch.IsVirtualCall(target)
+                && op.Instance is not IInstanceReferenceOperation
+                && op.Instance?.Type is INamedTypeSymbol
+                && ResolveType(op.Instance.Type) is INamedTypeSymbol recvTy
+                && EmitPolicy.IsUserClassType(recvTy))
+            {
+                var targets = _ctx.VirtualDispatch.ResolveTargets(recvTy, target);
+                if (!recvTy.IsSealed && targets.Count >= 2)
+                    return EmitVirtualChain(op, targets);
+                if (targets.Count >= 1)
+                    target = targets[0].Impl; // devirt: singleton/sealed → direct call to the one impl
+            }
+
             // CA-M1: a v1 class instance method rides the SAME param0-receiver path. The receiver bundle
             // flows by reference (EmitStructInstanceCall's defensive copy stays gated on IsAggregateType,
             // which is false for a class — so mutations through the receiver are visible to every alias).
@@ -429,6 +446,47 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
 
     // User-struct instance method call: receiver object[] passed (uncloned) as synthetic param0
     // so `this`-field mutations reflect back to the caller's local (value-type by-ref `this` semantics).
+    /// <summary>CA-v2b-2: inline typeobj-dispatch for a runtime-polymorphic call with ≥2 concrete targets.
+    /// Evaluate the receiver and args ONCE (C# semantics), read the receiver's typeobj (bundle[0]), then emit
+    /// an `if (ReferenceEquals(typeobj, typeobj_T)) dest = T.Impl(recv, args)` per target. Each arm is an
+    /// ordinary direct call, so the call graph / recursion analysis sees precise edges (charter #5) and there
+    /// is no shared conv-var / bridge (charter #1/#3 N/A). A covariant override stores its narrower result
+    /// into the single static-typed dest — Udon heap slots are dynamically typed, so no conv-ret desync.</summary>
+    CLeaf EmitVirtualChain(IInvocationOperation op, List<VDispatchTarget> targets)
+    {
+        var recvSlot = _ctx.Builder.AllocScratch(AggregateAbi.ArrayType);
+        EmitAssign(recvSlot, LoadInstanceRaw(op.Instance));
+
+        var argRefs = new List<CLeaf>();
+        foreach (var a in op.Arguments)
+        {
+            var s = _ctx.Builder.AllocScratch(GetUdonType(a.Value.Type));
+            EmitAssign(s, VisitExpression(a.Value));
+            argRefs.Add(SlotRef(s));
+        }
+
+        var typeObjSlot = _ctx.Builder.AllocScratch(AggregateAbi.ArrayType);
+        EmitAssign(typeObjSlot, AggregateAbi.ReadSlot(_builder, SlotRef(recvSlot), 0, AggregateAbi.ArrayType));
+
+        bool isVoid = op.Type == null || op.Type.SpecialType == SpecialType.System_Void;
+        int destSlot = isVoid ? -1 : _ctx.Builder.AllocScratch(GetUdonType(op.Type));
+
+        foreach (var t in targets)
+        {
+            var eq = ExternCall("SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean",
+                new List<CLeaf> { SlotRef(typeObjSlot), LoadField(t.TypeObjVar, AggregateAbi.ArrayType) }, "SystemBoolean");
+            var callArgs = new List<CLeaf> { SlotRef(recvSlot) };
+            callArgs.AddRange(argRefs);
+            _builder.EmitIf(eq, _ =>
+            {
+                var call = EmitCallToMethod(ResolveStructMember(t.Impl), callArgs);
+                if (isVoid) EmitExprStmt(call);
+                else EmitAssign(destSlot, call);
+            }, null);
+        }
+        return isVoid ? Const(null, "SystemObject") : SlotRef(destSlot);
+    }
+
     CLeaf EmitStructInstanceCall(IInvocationOperation op, IMethodSymbol target)
     {
         GuardRefOutArguments(op, target); // round-8 [R5]: Q2/Q5/R4 parity with EmitUserMethodCall

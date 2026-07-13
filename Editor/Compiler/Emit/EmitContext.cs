@@ -19,6 +19,10 @@ public class EmitContext
     public readonly ClosureContext Closures = new ClosureContext();
     public readonly AggregateContext Aggregates = new AggregateContext();
     public readonly ClassTypeObjectContext ClassTypes = new ClassTypeObjectContext();
+
+    /// <summary>CA-v2b-2: virtual-call lowering authority (dispatch set + devirt). Set by UasmEmitter after
+    /// ClassTypes is seeded and before EmitMethods/BuildRecursionInfo, which both consume it.</summary>
+    public VirtualDispatch VirtualDispatch;
     public readonly SyntheticContext Synthetics = new SyntheticContext();
     public readonly ControlFlowContext ControlFlow = new ControlFlowContext();
     public readonly InitializationContext Initializers = new InitializationContext();

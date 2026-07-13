@@ -162,6 +162,7 @@ public class UasmEmitter
         _ctx.Closures.SetCaptureScope(CaptureScopeAnalysis.Build(_compilation, _classSymbol,
             plan.CaptureRoots, captureBodies, plan.FieldInitOps));
         _ctx.ClassTypes.Seed(plan.Reach.MintedClasses); // CA-v2b-1: typeobj registry
+        _ctx.VirtualDispatch = new VirtualDispatch(_ctx.ClassTypes); // CA-v2b-2: virtual-call lowering
         EmitMethods(plan);
         OnIrPass?.Invoke("after-emit", _module);
         // Handlers build Core IR; the pipeline (verify/optimize/flatten) runs on Core directly.
