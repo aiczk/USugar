@@ -842,10 +842,12 @@ public partial class InvocationHandler
         var target = UnwrapConversions(arg.Value);
         switch (target)
         {
-            // `out _` — the value is thrown away, so both legs are trivial no-ops (read is never
-            // invoked for an Out param; kept for symmetry with the leg-bearing cases above).
-            case IDiscardOperation:
-                return (() => (CLeaf)null, _ => { });
+            // `out _` — the value is thrown away, so the store leg is a no-op. The read leg must
+            // still produce a WELL-TYPED placeholder: an INTERNAL call stages it positionally into
+            // the callee's param field (a null CValue is a CoreVerify ICE — M4 wave L1s_r2_c11), and
+            // the callee overwrites an out param before any read, so a fresh scratch is sound.
+            case IDiscardOperation discard:
+                return (() => SlotRef(_ctx.Builder.AllocScratch(GetUdonType(discard.Type))), _ => { });
             // N-dim array element (design 2026-07-04 §2): lift the single-index exclusion below —
             // PrepareNdimRefOutArg evaluates every index once and caches the bounds/backing/flat-index
             // plan, mirroring the single-index arm's (arrayVal, indexVal) caching.
