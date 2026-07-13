@@ -3755,6 +3755,16 @@ public class UasmEmitter
             && tm.MethodKind == MethodKind.Ordinary && !tm.IsImplicitlyDeclared
             && tm.ContainingType is INamedTypeSymbol it && EmitPolicy.IsObjectArrayEmulated(it))
             yield return tm;
+        // MG auto-wrap (2026-07-11 wave-lite): a class/struct instance member reached ONLY as a METHOD
+        // GROUP (`o.M` -> a receiver-bridge delegate) is otherwise invisible to this collector (which
+        // sees invocations), so it registered on demand at emit time AFTER BuildRecursionInfo -> no
+        // graph node, no reentrancy spill when the bundle re-enters it ([Z1]/[Y7] class, VM-proven
+        // under-spill: a self-recursive class MG returned 25025 vs the CLR's 40025). Seed it here so
+        // it becomes a reach root + graph node + escape target.
+        if (op is IMethodReferenceOperation mgr && mgr.Method is { IsStatic: false } mgm
+            && mgm.MethodKind == MethodKind.Ordinary && !mgm.IsImplicitlyDeclared
+            && mgm.ContainingType is INamedTypeSymbol mgit && EmitPolicy.IsObjectArrayEmulated(mgit))
+            yield return mgm;
         // Computed (non-auto) user-struct property: v.Prop (read) or v.Prop = x (write). Auto-properties use
         // their backing-field slot directly (no method), but a computed accessor must be inlined as a struct
         // instance method. Yield both accessors (the reference alone doesn't reveal read-vs-write context).
