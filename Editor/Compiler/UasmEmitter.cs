@@ -3324,6 +3324,15 @@ public class UasmEmitter
                 if (IsCrossDispatchReceiver(inv.Instance, inv.TargetMethod)
                     && CrossDispatchLocalTarget(inv.TargetMethod) is { } crossT)
                     yield return crossT;
+                // CA-v2b-2: a base-typed polymorphic call (not `this`/`base`, handled by LeafCallTarget)
+                // dispatches to EVERY override in its closed-world set — yield each so the recursion-graph
+                // edge walk AND the per-site non-tail spill classifier (both read this one enumerator) see a
+                // recursive override (Branch.Sum → Branch.Sum). Over-yield only ever over-spills (sound).
+                if (VirtualDispatch.IsVirtualCall(inv.TargetMethod)
+                    && inv.Instance is not IInstanceReferenceOperation
+                    && inv.Instance?.Type is INamedTypeSymbol vrecv && EmitPolicy.IsUserClassType(vrecv))
+                    foreach (var vt in _ctx.VirtualDispatch.ResolveTargets(vrecv, inv.TargetMethod))
+                        yield return vt.Impl.OriginalDefinition;
                 break;
             case IObjectCreationOperation { Constructor: { } ctor }:
                 yield return ctor.OriginalDefinition;
@@ -3542,6 +3551,19 @@ public class UasmEmitter
                 foreach (var initOp in EnumerateClassFieldInitOps(ct)) Walk(initOp);
                 if (oc.Constructor is { IsImplicitlyDeclared: false } ctor)
                     Walk(GetMethodBodyOperation(ctor.OriginalDefinition));
+                // CA-v2b-2: a virtual/override method of a minted class is a virtual-dispatch target reached
+                // ONLY through the inline typeobj chain — the invocation collector sees the abstract/static
+                // slot method, never this concrete override, so it would register on demand in Phase-2 AFTER
+                // BuildRecursionInfo (no graph node → polymorphic recursion under-spills, the MG-arm twin at
+                // EnumerateStructMemberRefs). Seed each here as a struct-member reach root + node.
+                foreach (var vm in ct.GetMembers().OfType<IMethodSymbol>())
+                    if ((vm.IsVirtual || vm.IsOverride) && !vm.IsAbstract
+                        && vm.MethodKind == MethodKind.Ordinary && IsCollectibleStructMember(vm))
+                    {
+                        structMemberDefs.Add(vm.OriginalDefinition); // recursion-root set (feeds BuildRecursionInfo)
+                        if (structMembers.Add(vm))                   // emit-registration set + body walk
+                            Walk(GetMethodBodyOperation(vm.OriginalDefinition));
+                    }
             }
             foreach (var child in op.ChildOps()) CollectClassMintReach(child);
         }
