@@ -184,12 +184,16 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
         if (!target.IsStatic && target.MethodKind == MethodKind.Ordinary
             && target.ContainingType is INamedTypeSymbol structRecv && EmitPolicy.IsObjectArrayEmulated(structRecv))
         {
-            // CA-v2b-2: a runtime-polymorphic call on a base-typed receiver (NOT `this`/`base` — those are
-            // resolved at compile time by the ResolveMostDerivedOverride arm above / stay non-virtual base
-            // calls) lowers to an inline typeobj-ReferenceEquals chain of direct calls. A sealed receiver or
-            // a singleton dispatch set devirtualizes to one direct call to the concrete impl.
+            // CA-v2b-2: a runtime-polymorphic call on a user-class receiver lowers to an inline typeobj-
+            // ReferenceEquals chain of direct calls (a sealed/singleton dispatch set devirtualizes to one
+            // direct call). This fires for a base-typed variable AND for `this` — an inherited/base-ctor
+            // method's `this.M()` must dispatch on the RUNTIME type (bundle[0], written before the ctor
+            // chain: charter #6), not the compile-time containing type. `base.M()` is EXCLUDED (it is a
+            // non-virtual call to a specific base impl); a UdonSharpBehaviour receiver is excluded by
+            // IsUserClassType and keeps the existing cross-behaviour dispatch.
             if (VirtualDispatch.IsVirtualCall(target)
-                && op.Instance is not IInstanceReferenceOperation
+                && !(op.Instance is IInstanceReferenceOperation baseRef
+                     && baseRef.Syntax is Microsoft.CodeAnalysis.CSharp.Syntax.BaseExpressionSyntax)
                 && op.Instance?.Type is INamedTypeSymbol
                 && ResolveType(op.Instance.Type) is INamedTypeSymbol recvTy
                 && EmitPolicy.IsUserClassType(recvTy))
