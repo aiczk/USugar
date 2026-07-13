@@ -167,6 +167,13 @@ public class StatementHandler : HandlerBase, IOperationHandler
         if (op.ReturnedValue is IInvocationOperation tailCall
             && _currentMethod != null
             && SymbolEqualityComparer.Default.Equals(tailCall.TargetMethod, _currentMethod)
+            // CA-v2b-2: TCO rebinds only the explicit params, NOT the receiver (param0), so the receiver must
+            // be unchanged — either a static self-call (no receiver) or a `this`/base receiver. A non-`this`
+            // instance receiver (`return other.Self(args)`, e.g. a polymorphic tail recursion
+            // `return next.Step(n-1)`) would need param0 rebound to the new object; EmitTailCall does not, so
+            // fall through to normal (virtual) dispatch. (A `this` virtual self-call stays correct: executing
+            // _currentMethod means this's most-derived override IS _currentMethod, so it re-dispatches to it.)
+            && (tailCall.Instance == null || tailCall.Instance is IInstanceReferenceOperation)
             && (tailCall.Instance is not IInstanceReferenceOperation
                 || tailCall.TargetMethod.IsStatic
                 || !(tailCall.TargetMethod.IsVirtual || tailCall.TargetMethod.IsOverride
