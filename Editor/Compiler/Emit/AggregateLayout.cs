@@ -72,21 +72,36 @@ public class AggregateLayout
             // starts at `reserved`=1, slot 0 held for the future type-object reference). Auto-property backing
             // fields are implicitly declared but carry the property as AssociatedSymbol; map them by the
             // property name so `get`/`set`/`init` resolve to the same object[] element.
+            // CA-v2 M1 (inheritance): a v1 class walks its BASE CHAIN root→derived so a base field owns the
+            // SAME index in the derived layout — the derived object[] is usable AS the base with no
+            // conversion (up-conversion = no-op). Structs have no user base (System.ValueType), so the
+            // chain is a single frame for them.
             int i = reserved;
-            foreach (var member in type.GetMembers())
-            {
-                if (member is not IFieldSymbol { IsStatic: false, IsConst: false } f) continue;
-                if (!f.IsImplicitlyDeclared)
+            var chain = new List<INamedTypeSymbol>();
+            for (var t = type; t is { } && (t.TypeKind == TypeKind.Struct
+                     ? SymbolEqualityComparer.Default.Equals(t, type)
+                     : EmitPolicy.IsUserClassType(t)); t = t.BaseType)
+                chain.Add(t);
+            chain.Reverse(); // root base first, most-derived last
+            foreach (var frame in chain)
+                foreach (var member in frame.GetMembers())
                 {
-                    fields.Add(new FieldInfo(f.Name, i, f.Type));
-                    nameToIndex[f.Name] = i++;
+                    if (member is not IFieldSymbol { IsStatic: false, IsConst: false } f) continue;
+                    var logicalName = f.IsImplicitlyDeclared
+                        ? (f.AssociatedSymbol as IPropertySymbol)?.Name
+                        : f.Name;
+                    if (logicalName == null) continue;
+                    // charter/M1: a `new`-hidden field (same logical name in base AND derived) needs
+                    // distinct slots + declaring-type-qualified resolution the flat map cannot hold —
+                    // loud reject in M1 (qualified keying is a later v2 step).
+                    if (nameToIndex.ContainsKey(logicalName))
+                        throw new NotSupportedException(
+                            $"Field '{logicalName}' on '{type.Name}' hides a same-named base field (`new`): "
+                            + "class ABI v2 M1 cannot give two same-named fields distinct storage yet. Rename "
+                            + "one of the fields.");
+                    fields.Add(new FieldInfo(logicalName, i, f.Type));
+                    nameToIndex[logicalName] = i++;
                 }
-                else if (f.AssociatedSymbol is IPropertySymbol prop)
-                {
-                    fields.Add(new FieldInfo(prop.Name, i, f.Type));
-                    nameToIndex[prop.Name] = i++;
-                }
-            }
         }
         else
         {
@@ -274,10 +289,25 @@ public static class ClassAbi
         builder.EmitAssign(slot, AggregateAbi.Allocate(builder, layout.SlotCount));
         var instance = builder.SlotRef(slot);
         emitDefaultInitialize(instance);
-        EmitInstanceFieldInitializers(builder, compilation, instance, classTy, layout, emitValue);
+        // CA-v2 M1: field initializers moved INTO the ctor chain (charter #6: each class runs its own
+        // field inits at ctor entry, derived->base, before the base call; bodies run base->derived).
+        // emitConstructor now runs either the explicit ctor function or the implicit chain.
         emitConstructor(instance);
         emitObjectInitializer(instance);
         return instance;
+    }
+
+    /// <summary>CA-v2 M1: the implicit (compiler-generated parameterless) ctor chain — run this class's
+    /// field initializers, then recurse into a user-class base (derived->base init order, empty bodies).
+    /// Used by the mint for a class with no explicit ctor, and by an explicit ctor whose base ctor is
+    /// itself implicit.</summary>
+    public static void EmitImplicitCtorChain(CoreBuilder builder, Compilation compilation,
+        CLeaf instance, INamedTypeSymbol classTy, Func<INamedTypeSymbol, AggregateLayout> getLayout,
+        Func<IOperation, CLeaf> emitValue)
+    {
+        EmitInstanceFieldInitializers(builder, compilation, instance, classTy, getLayout(classTy), emitValue);
+        if (classTy.BaseType is { } bt && EmitPolicy.IsUserClassType(bt))
+            EmitImplicitCtorChain(builder, compilation, instance, bt, getLayout, emitValue);
     }
 
     /// <summary>CA-M1: user classes have reference semantics and no inheritance/interface dispatch.</summary>

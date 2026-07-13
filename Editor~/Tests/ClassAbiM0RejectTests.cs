@@ -98,18 +98,15 @@ public class F3Rec : UdonSharpBehaviour { PlainRec79 r; void Start(){ } }", "F3R
         Assert.Contains("ecord", ex.Message); // "record" / "Record"
     }
 
-    // ── Face 4: a source class whose base is anything but System.Object ──
+    // ── Face 4: a NATIVE base still rejects; a USER-CLASS base is now supported (CA-v2 M1). ──
 
     [Fact]
-    public void Face4_UserBase_RejectsWithBaseMessage()
-    {
-        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
+    public void Face4_UserBase_Compiles()  // FLIPPED 2026-07-11 (CA-v2 M1 inheritance)
+        => TestHelper.CompileToUasm(@"
 using UdonSharp;
 public class Base79 { public int A; }
 public class Derived79 : Base79 { public int B; }
-public class F4Usr : UdonSharpBehaviour { Derived79 d; void Start(){ } }", "F4Usr"));
-        Assert.Contains("base", ex.Message, StringComparison.OrdinalIgnoreCase);
-    }
+public class F4Usr : UdonSharpBehaviour { Derived79 d; void Start(){ d = new Derived79(); d.A = 1; d.B = 2; } }", "F4Usr");
 
     [Fact]
     public void Face4_NativeBase_RejectsWithBaseMessage()

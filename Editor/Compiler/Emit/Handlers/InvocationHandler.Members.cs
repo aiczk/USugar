@@ -442,6 +442,81 @@ public partial class InvocationHandler
     /// Order (C# semantics): allocate object[SlotCount] → default-init fields (slot 0 stays the ctor's null) →
     /// run instance field initializers in declaration order → run the ctor body (ctor-as-CFunction, receiver =
     /// param0) → apply any object-initializer. NO defensive copies — the same bundle reference flows through.</summary>
+    /// <summary>CA-v2 M1 ctor prologue (charter #6): before a v1 class ctor's body runs, either
+    /// redirect to a `: this(...)` target (suppressing own field inits) or run own field inits then the
+    /// base ctor (explicit `: base(...)` function, or the implicit base chain). Emitted from EmitMethod
+    /// which owns the ctor function; this handler owns EmitCallToMethod/field-init helpers.</summary>
+    // True if any instance field / auto-property of THIS class tier declares an initializer (drives the
+    // ctor-prologue zero-work fast path — a plain single class with no initializers stays byte-identical).
+    static bool ClassHasFieldInitializers(INamedTypeSymbol classTy)
+    {
+        foreach (var member in classTy.GetMembers())
+        {
+            if (member is not IFieldSymbol { IsStatic: false, IsConst: false } f) continue;
+            var holder = f.IsImplicitlyDeclared && f.AssociatedSymbol is IPropertySymbol prop ? (ISymbol)prop : f;
+            var syntax = holder.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax();
+            bool hasInit = syntax switch
+            {
+                Microsoft.CodeAnalysis.CSharp.Syntax.VariableDeclaratorSyntax vd => vd.Initializer != null,
+                Microsoft.CodeAnalysis.CSharp.Syntax.PropertyDeclarationSyntax pd => pd.Initializer != null,
+                _ => false,
+            };
+            if (hasInit) return true;
+        }
+        return false;
+    }
+
+    public void EmitClassCtorPrologue(IMethodSymbol ctor, IConstructorBodyOperation body, string receiverParamId)
+    {
+        var classTy = (INamedTypeSymbol)ctor.ContainingType;
+
+        // Roslyn wraps `: base(...)` / `: this(...)` as an IExpressionStatementOperation over the
+        // ctor IInvocationOperation.
+        var initInv = body.Initializer switch
+        {
+            IInvocationOperation d => d,
+            IExpressionStatementOperation { Operation: IInvocationOperation w } => w,
+            _ => null,
+        };
+
+        // Zero-work fast path (byte-identical to pre-M1 for a plain single class): nothing to do unless
+        // this class has field initializers, a user-class base chain, or an EXPLICIT this/base call.
+        bool baseIsUserClass = classTy.BaseType is INamedTypeSymbol bt0 && EmitPolicy.IsUserClassType(bt0);
+        bool explicitChainCall = initInv != null && !initInv.TargetMethod.IsImplicitlyDeclared;
+        if (!ClassHasFieldInitializers(classTy) && !baseIsUserClass && !explicitChainCall)
+            return;
+
+        var inst = LoadField(receiverParamId, AggregateAbi.ArrayType);
+        if (initInv is { } init
+            && init.TargetMethod is { MethodKind: MethodKind.Constructor } target)
+        {
+            bool isThisChain = SymbolEqualityComparer.Default.Equals(target.ContainingType, classTy);
+            if (!isThisChain)
+                ClassAbi.EmitInstanceFieldInitializers(_builder, _compilation, inst, classTy,
+                    _ctx.Aggregates.GetLayout(classTy), VisitExpression);
+            if (target.IsImplicitlyDeclared)
+            {
+                if (target.ContainingType is INamedTypeSymbol implBase && EmitPolicy.IsUserClassType(implBase))
+                    ClassAbi.EmitImplicitCtorChain(_builder, _compilation, inst, implBase,
+                        _ctx.Aggregates.GetLayout, VisitExpression);
+            }
+            else
+            {
+                var chainArgs = new List<CLeaf> { inst };
+                foreach (var a in init.Arguments) chainArgs.Add(VisitExpression(a.Value));
+                EmitExprStmt(EmitCallToMethod(ResolveStructMember(target), chainArgs));
+            }
+            return;
+        }
+
+        // No initializer node = implicit `: base()`: own field inits then the implicit base chain.
+        ClassAbi.EmitInstanceFieldInitializers(_builder, _compilation, inst, classTy,
+            _ctx.Aggregates.GetLayout(classTy), VisitExpression);
+        if (classTy.BaseType is INamedTypeSymbol cbt && EmitPolicy.IsUserClassType(cbt))
+            ClassAbi.EmitImplicitCtorChain(_builder, _compilation, inst, cbt,
+                _ctx.Aggregates.GetLayout, VisitExpression);
+    }
+
     CLeaf EmitClassInstanceMint(IObjectCreationOperation op, INamedTypeSymbol classTy)
     {
         var layout = _ctx.Aggregates.GetLayout(classTy);
@@ -450,7 +525,15 @@ public partial class InvocationHandler
             instance => AggregateAbi.DefaultInitialize(_builder, instance, layout, _ctx.Aggregates.GetLayout, GetUdonType),
             instance =>
             {
-                if (op.Constructor == null || op.Constructor.IsImplicitlyDeclared) return;
+                // CA-v2 M1: an explicit ctor runs the full chain (field inits + base call + body) inside
+                // its own function; a class with no explicit ctor runs the implicit chain (field inits
+                // derived->base) inline here.
+                if (op.Constructor == null || op.Constructor.IsImplicitlyDeclared)
+                {
+                    ClassAbi.EmitImplicitCtorChain(_builder, _compilation, instance, classTy,
+                        _ctx.Aggregates.GetLayout, VisitExpression);
+                    return;
+                }
                 var ctorArgs = new List<CLeaf> { instance };
                 foreach (var arg in op.Arguments) ctorArgs.Add(VisitExpression(arg.Value));
                 EmitExprStmt(EmitCallToMethod(ResolveStructMember(op.Constructor), ctorArgs));

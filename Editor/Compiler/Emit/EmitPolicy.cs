@@ -201,7 +201,17 @@ public static class EmitPolicy
         if (type is not INamedTypeSymbol n) return false;
         if (!ExternResolver.IsPlainUserClass(n)) return false;
         if (n.IsRecord) return false;
-        if (n.BaseType != null && n.BaseType.SpecialType != SpecialType.System_Object) return false;
+        // CA-v2 M1: a user-class base is allowed (inheritance). Walk to the root: every intermediate
+        // base must itself be a plain user class ending at System.Object (a native/SDK base is not a
+        // v1 bundle). Recursion terminates at Object (BaseType null-or-Object).
+        if (n.BaseType != null && n.BaseType.SpecialType != SpecialType.System_Object)
+        {
+            var b = n.BaseType;
+            if (!ExternResolver.IsPlainUserClass(b) || b.IsRecord
+                || ExternResolver.ClassHasRegisteredExterns(b)) return false;
+            // Recurse into the base (its own base must also be a valid user-class chain).
+            if (!IsUserClassType(b)) return false;
+        }
         // A foreign type modelled as a source stub (registered externs — DisposableResource, and real SDK
         // types) is NOT a v1 user class: it keeps its real Udon extern type, not the object[] bundle ABI.
         if (ExternResolver.ClassHasRegisteredExterns(n)) return false;

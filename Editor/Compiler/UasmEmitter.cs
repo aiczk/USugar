@@ -2286,7 +2286,13 @@ public class UasmEmitter
             }
             else if (bodyOp is IConstructorBodyOperation ctorBodyOp)
             {
-                // Struct ctor: body mutates the receiver object[] (this.field = …) in place.
+                // CA-v2 M1: a v1 CLASS ctor orchestrates its own chain (charter #6, field inits + base
+                // call, in InvocationHandler which owns EmitCallToMethod/ResolveStructMember). A STRUCT
+                // ctor has no base — just its body.
+                if (method.ContainingType is INamedTypeSymbol cctClass && EmitPolicy.IsUserClassType(cctClass)
+                    && _ctx.Methods.CurrentStructReceiverParamId != null)
+                    new InvocationHandler(_ctx).EmitClassCtorPrologue(method, ctorBodyOp,
+                        _ctx.Methods.CurrentStructReceiverParamId);
                 if (ctorBodyOp.BlockBody != null)
                     VisitOperation(ctorBodyOp.BlockBody);
             }
@@ -3755,6 +3761,15 @@ public class UasmEmitter
             && tm.MethodKind == MethodKind.Ordinary && !tm.IsImplicitlyDeclared
             && tm.ContainingType is INamedTypeSymbol it && EmitPolicy.IsObjectArrayEmulated(it))
             yield return tm;
+        // CA-v2 M1: a `: base(...)` / `: this(...)` ctor initializer is an IInvocationOperation whose
+        // target is a CONSTRUCTOR (MethodKind.Constructor, missed by the Ordinary arm above). The base
+        // ctor function is otherwise never registered at Phase 1 -> its on-demand emission from the
+        // derived ctor prologue lands mid-drain but its reach/recursion node is absent (VM-faulted:
+        // the derived ctor jumped to an unemitted base ctor). Collect the explicit-ctor target here.
+        if (op is IInvocationOperation cinv && cinv.TargetMethod is { MethodKind: MethodKind.Constructor } ctm
+            && !ctm.IsImplicitlyDeclared
+            && ctm.ContainingType is INamedTypeSymbol cit && EmitPolicy.IsObjectArrayEmulated(cit))
+            yield return ctm;
         // MG auto-wrap (2026-07-11 wave-lite): a class/struct instance member reached ONLY as a METHOD
         // GROUP (`o.M` -> a receiver-bridge delegate) is otherwise invisible to this collector (which
         // sees invocations), so it registered on demand at emit time AFTER BuildRecursionInfo -> no
