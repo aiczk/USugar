@@ -33,6 +33,7 @@ public class LanguageSurfaceTests
         OperationKind.FieldInitializer,         // EmitFieldInitializers
         OperationKind.VariableInitializer,      // within declarations
         OperationKind.Argument,                 // consumed by invocation staging
+        OperationKind.TypeParameterObjectCreation, // new T() -> concrete mint (InvocationHandler)
         // sub-nodes consumed by their parent's handler (verified by corpus green + code grep):
         OperationKind.ArrayInitializer,         // ArrayHandler / AggregateLayout
         OperationKind.ObjectOrCollectionInitializer, OperationKind.MemberInitializer, // aggregate init
@@ -102,7 +103,6 @@ public class LanguageSurfaceTests
         // return type — pinned in IteratorRejectTests). Sub-kind gaps (e.g. specific operators)
         // are guarded by the loud per-arm rejects instead.
         OperationKind.AnonymousObjectCreation,      // anonymous types (records-family structification)
-        OperationKind.TypeParameterObjectCreation,  // new T() (closable: monomorphized T is concrete per spec)
     };
 
     [Fact]

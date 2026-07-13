@@ -168,8 +168,10 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
         // Aggregate / v1-class field access: result.Item1, point.x, node.Val → object[] slot indexing.
         // Triggered by the containing type being object[]-emulated, regardless of instance kind (the clone at
         // the element read below stays IsAggregateType so a class-typed element is returned by reference).
+        // ResolveType: a receiver typed as a type parameter (T c = new T(); c.v) resolves to the
+        // concrete aggregate through the monomorphization map (new T() member-access, 2026-07-11).
         if (fieldRef.Instance != null
-            && fieldRef.Instance.Type is INamedTypeSymbol aggContaining
+            && ResolveType(fieldRef.Instance.Type) is INamedTypeSymbol aggContaining
             && EmitPolicy.IsObjectArrayEmulated(aggContaining))
         {
             var layout = _ctx.Aggregates.GetLayout(aggContaining);

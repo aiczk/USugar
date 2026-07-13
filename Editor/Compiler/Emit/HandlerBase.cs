@@ -963,7 +963,7 @@ public abstract partial class HandlerBase
         if (fieldRef.Instance is not IInstanceReferenceOperation) return true; // variable receiver — always a prepared arm
         return fieldRef.Field.ContainingType.IsValueType                   // struct `this.v` (emulated receiver)
             || (AggregateAbi.TryGetMemberTarget(fieldRef, out var inst, out var name)
-                && inst.Type is INamedTypeSymbol agg && EmitPolicy.IsObjectArrayEmulated(agg)
+                && ResolveType(inst.Type) is INamedTypeSymbol agg && EmitPolicy.IsObjectArrayEmulated(agg)
                 && _ctx.Aggregates.GetLayout(agg).TryGetIndex(name, out _));
     }
 
@@ -979,7 +979,7 @@ public abstract partial class HandlerBase
     {
         // Aggregate (struct/tuple) OR v1-class member → layout slot write on the backing object[].
         if (AggregateAbi.TryGetMemberTarget(fieldRef, out var aggInstance, out var aggMemberName)
-            && aggInstance.Type is INamedTypeSymbol aggContaining && EmitPolicy.IsObjectArrayEmulated(aggContaining)
+            && ResolveType(aggInstance.Type) is INamedTypeSymbol aggContaining && EmitPolicy.IsObjectArrayEmulated(aggContaining)
             && _ctx.Aggregates.GetLayout(aggContaining).TryGetIndex(aggMemberName, out var fieldIndex))
         {
             RejectStaticReadonlyWriteThrough(aggInstance); // §3.3, R5

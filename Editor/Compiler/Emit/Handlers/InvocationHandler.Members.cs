@@ -550,6 +550,36 @@ public partial class InvocationHandler
             instance => AggregateAbi.EmitObjectInitializer(_builder, instance, layout, op.Initializer, VisitExpression));
     }
 
+    /// <summary>`new T()` (kind-level census gap, 2026-07-11): monomorphization has substituted T to a
+    /// concrete type in the type-param map, so this mints exactly as `new ConcreteType()` would — a v1
+    /// class bundle (implicit parameterless ctor chain), a default-initialized struct aggregate, or a
+    /// primitive/SDK default. `new()` is always parameterless; only an object initializer can follow.</summary>
+    CLeaf VisitTypeParameterObjectCreation(ITypeParameterObjectCreationOperation op)
+    {
+        var concrete = ResolveType(op.Type);
+        var udon = GetUdonType(concrete);
+        if (concrete is INamedTypeSymbol classTy && EmitPolicy.IsUserClassType(classTy))
+        {
+            var layout = _ctx.Aggregates.GetLayout(classTy);
+            return ClassAbi.EmitMint(_builder, _compilation, classTy, layout, VisitExpression,
+                inst => AggregateAbi.DefaultInitialize(_builder, inst, layout, _ctx.Aggregates.GetLayout, GetUdonType),
+                inst => ClassAbi.EmitImplicitCtorChain(_builder, _compilation, inst, classTy,
+                    _ctx.Aggregates.GetLayout, VisitExpression),
+                inst => AggregateAbi.EmitObjectInitializer(_builder, inst, layout, op.Initializer, VisitExpression));
+        }
+        if (concrete is INamedTypeSymbol structTy && EmitPolicy.IsAggregateType(structTy))
+        {
+            var inst = AggregateAbi.MintDefault(_builder, _ctx.Aggregates.GetLayout(structTy),
+                _ctx.Aggregates.GetLayout, GetUdonType);
+            if (op.Initializer != null)
+                AggregateAbi.EmitObjectInitializer(_builder, inst, _ctx.Aggregates.GetLayout(structTy),
+                    op.Initializer, VisitExpression);
+            return inst;
+        }
+        // Primitive / SDK value type: `new T()` is the type's default value.
+        return DefaultConst(udon);
+    }
+
     CLeaf VisitObjectCreation(IObjectCreationOperation op)
     {
         var resultType = GetUdonType(op.Type);

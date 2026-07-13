@@ -125,7 +125,7 @@ public abstract class AssignmentHandlerBase : HandlerBase
             }
             case IFieldReferenceOperation aggFieldRef
                 when aggFieldRef.Instance != null
-                && aggFieldRef.Instance.Type is INamedTypeSymbol aggCapType
+                && ResolveType(aggFieldRef.Instance.Type) is INamedTypeSymbol aggCapType
                 && EmitPolicy.IsObjectArrayEmulated(aggCapType):
             {
                 var layout = _ctx.Aggregates.GetLayout(aggCapType);
@@ -208,7 +208,7 @@ public abstract class AssignmentHandlerBase : HandlerBase
         {
             case IFieldReferenceOperation aggFieldRef
                 when aggFieldRef.Instance != null
-                && aggFieldRef.Instance.Type is INamedTypeSymbol aggWbType
+                && ResolveType(aggFieldRef.Instance.Type) is INamedTypeSymbol aggWbType
                 && EmitPolicy.IsObjectArrayEmulated(aggWbType):
             {
                 var layout = _ctx.Aggregates.GetLayout(aggWbType);
