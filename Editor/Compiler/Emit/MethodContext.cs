@@ -131,4 +131,8 @@ public sealed class MethodContext
 
     public void AddClosureSpec(ClosureSpec spec)
         => _closureSpecs.Add(new SpecKey(spec.Def, spec.KeyArgs), spec);
+
+    /// <summary>Census surface (read-only): every registered per-spec closure key. Harness
+    /// instrumentation only — emission never enumerates the registry.</summary>
+    public IEnumerable<SpecKey> ClosureSpecKeys => _closureSpecs.Keys;
 }
