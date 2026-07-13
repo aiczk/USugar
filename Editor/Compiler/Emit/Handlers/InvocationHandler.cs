@@ -186,17 +186,13 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
         {
             // CA-v2b-2: a runtime-polymorphic call on a user-class receiver lowers to an inline typeobj-
             // ReferenceEquals chain of direct calls (a sealed/singleton dispatch set devirtualizes to one
-            // direct call). This fires for a base-typed variable AND for `this` — an inherited/base-ctor
-            // method's `this.M()` must dispatch on the RUNTIME type (bundle[0], written before the ctor
-            // chain: charter #6), not the compile-time containing type. `base.M()` is EXCLUDED (it is a
-            // non-virtual call to a specific base impl); a UdonSharpBehaviour receiver is excluded by
-            // IsUserClassType and keeps the existing cross-behaviour dispatch.
-            if (VirtualDispatch.IsVirtualCall(target)
-                && !(op.Instance is IInstanceReferenceOperation baseRef
-                     && baseRef.Syntax is Microsoft.CodeAnalysis.CSharp.Syntax.BaseExpressionSyntax)
-                && op.Instance?.Type is INamedTypeSymbol
-                && ResolveType(op.Instance.Type) is INamedTypeSymbol recvTy
-                && EmitPolicy.IsUserClassType(recvTy))
+            // direct call). Fires for a base-typed variable AND for `this` (an inherited/base-ctor method's
+            // `this.M()` must dispatch on the RUNTIME type — bundle[0], written before the ctor chain, charter
+            // #6); `base.M()` and non-user-class receivers are excluded. The predicate is shared with the
+            // recursion-graph enumerator (VirtualDispatch.IsDispatchSite) so spilling can never drift from
+            // dispatch. The receiver's type is resolved through the monomorphization map here.
+            if (ResolveType(op.Instance?.Type) is INamedTypeSymbol recvTy
+                && VirtualDispatch.IsDispatchSite(target, op.Instance, recvTy))
             {
                 var targets = _ctx.VirtualDispatch.ResolveTargets(recvTy, target);
                 if (!recvTy.IsSealed && targets.Count >= 2)

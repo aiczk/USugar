@@ -2834,15 +2834,10 @@ public class UasmEmitter
                 if (allInScc.Count > 0) cycleEdges[caller] = allInScc;
                 // Only edges with a NON-tail call need spilling: a tail call (`return Callee(..)`) reads
                 // nothing after the call, so flat-heap clobbering is harmless — and spilling deep tail
-                // recursion would needlessly exhaust the stack. CA-v2b-2: a CONSTRUCTOR has no tail-return
-                // call — its `: base(...)` init runs BEFORE the field inits and body, and the body's calls
-                // precede the (value-less) return — so every intra-SCC edge of a ctor is non-tail. The
-                // tail-call analysis walks the ctor's block body only and misses the initializer call, which
-                // would leave a ctor recursive through base construction (ctor-time object spawning) unspilled
-                // and its params (`t` in `Der(int d, int t) : base(d)`) clobbered by the re-entrant call.
-                bool callerIsCtor = caller.MethodKind == MethodKind.Constructor;
+                // recursion would needlessly exhaust the stack. (A constructor's `: base(...)` initializer is
+                // always non-tail; TailCallAnalysis walks the ctor initializer so it is seen here.)
                 var inScc = new HashSet<IMethodSymbol>(
-                    edges[caller].Where(c => sccSet.Contains(c) && (callerIsCtor || HasNonTailCallTo(callerBody, c))),
+                    edges[caller].Where(c => sccSet.Contains(c) && HasNonTailCallTo(callerBody, c)),
                     SymbolEqualityComparer.Default);
                 if (inScc.Count > 0) recursive[caller] = inScc;
 
@@ -3330,16 +3325,15 @@ public class UasmEmitter
                 if (IsCrossDispatchReceiver(inv.Instance, inv.TargetMethod)
                     && CrossDispatchLocalTarget(inv.TargetMethod) is { } crossT)
                     yield return crossT;
-                // CA-v2b-2: a polymorphic call (a base-typed variable OR `this`, matching the emission
-                // branch — `base` excluded, it is a non-virtual direct call) dispatches to EVERY override in
-                // its closed-world set. Yield each so the recursion-graph edge walk AND the per-site non-tail
-                // spill classifier (both read this one enumerator) see a recursive override — including a
-                // `this.M()` that re-enters through a spawned object's ctor (Rb..ctor -> Rd.Make -> new Rd ->
-                // Rb..ctor). Over-yield only ever over-spills (sound).
-                if (VirtualDispatch.IsVirtualCall(inv.TargetMethod)
-                    && !(inv.Instance is IInstanceReferenceOperation baseInst
-                         && baseInst.Syntax is Microsoft.CodeAnalysis.CSharp.Syntax.BaseExpressionSyntax)
-                    && inv.Instance?.Type is INamedTypeSymbol vrecv && EmitPolicy.IsUserClassType(vrecv))
+                // CA-v2b-2: a polymorphic call dispatches to EVERY override in its closed-world set. Yield
+                // each so the recursion-graph edge walk AND the per-site non-tail spill classifier (both read
+                // this one enumerator) see a recursive override — including a `this.M()` that re-enters
+                // through a spawned object's ctor (Rb..ctor -> Rd.Make -> new Rd -> Rb..ctor). The dispatch-
+                // site predicate is SHARED with the emission branch (VirtualDispatch.IsDispatchSite) so the
+                // two cannot drift; the receiver's declared type is used here (Phase-1, no monomorphization
+                // map). Over-yield only ever over-spills (sound).
+                if (inv.Instance?.Type is INamedTypeSymbol vrecv
+                    && VirtualDispatch.IsDispatchSite(inv.TargetMethod, inv.Instance, vrecv))
                     foreach (var vt in _ctx.VirtualDispatch.ResolveTargets(vrecv, inv.TargetMethod))
                         yield return vt.Impl.OriginalDefinition;
                 break;
@@ -3826,7 +3820,13 @@ public class UasmEmitter
         // there, so this is byte-identical for them.
         if (op is IInvocationOperation inv && inv.TargetMethod is { IsStatic: false } tm
             && tm.MethodKind == MethodKind.Ordinary && !tm.IsImplicitlyDeclared
-            && tm.ContainingType is INamedTypeSymbol it && EmitPolicy.IsObjectArrayEmulated(it))
+            && tm.ContainingType is INamedTypeSymbol it && EmitPolicy.IsObjectArrayEmulated(it)
+            // CA-v2b-2: at a virtual dispatch site the STATIC target (a base method) is not the runtime
+            // callee — the inline chain calls the resolved override. Collecting the static base here walked a
+            // never-dispatched base body (e.g. `RecBse.Spawn`'s `new RecBse()`) and phantom-minted a class no
+            // live site ever creates. The real dispatch targets (the most-derived impl per minted class) are
+            // seeded by CollectClassMintReach's virtual-slot walk, so skip the static base at dispatch sites.
+            && !VirtualDispatch.IsDispatchSite(tm, inv.Instance, inv.Instance?.Type as INamedTypeSymbol))
             yield return tm;
         // CA-v2 M1: a `: base(...)` / `: this(...)` ctor initializer is an IInvocationOperation whose
         // target is a CONSTRUCTOR (MethodKind.Constructor, missed by the Ordinary arm above). The base

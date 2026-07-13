@@ -66,6 +66,16 @@ static class TailCallAnalysis
         {
             switch (op)
             {
+                // A constructor body carries a `: base(...)`/`: this(...)` INITIALIZER that runs BEFORE the
+                // field inits and body — never a tail call. The base IMethodBodyBaseOperation case walks only
+                // BlockBody/ExpressionBody, so without this arm the initializer's recursive edge (a ctor that
+                // re-enters itself through object spawning) is invisible to the spill analysis and the ctor's
+                // params get clobbered. Must precede the IMethodBodyBaseOperation case (more specific).
+                case IConstructorBodyOperation cb:
+                    if (cb.Initializer != null && Walk(cb.Initializer, isMatch, matchesAccessor,
+                            checkReturnInstanceLeg, ternaryPreciseReturn, tail: false)) return true;
+                    return Walk(cb.BlockBody, isMatch, matchesAccessor, checkReturnInstanceLeg, ternaryPreciseReturn, tail: true)
+                        || Walk(cb.ExpressionBody, isMatch, matchesAccessor, checkReturnInstanceLeg, ternaryPreciseReturn, tail: true);
                 // Method/accessor bodies arrive as IMethodBodyOperation (block XOR expression body).
                 case IMethodBodyBaseOperation mb:
                     return Walk(mb.BlockBody, isMatch, matchesAccessor, checkReturnInstanceLeg, ternaryPreciseReturn, tail: true)

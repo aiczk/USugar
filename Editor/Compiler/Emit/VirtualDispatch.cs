@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.Operations;
 
 /// <summary>CA-v2b-2 (inline typeobj-dispatch): the single authority for lowering a virtual call. Given a
 /// call's receiver STATIC type and the slot method, it enumerates the closed-world set of minted concrete
@@ -26,6 +27,19 @@ public sealed class VirtualDispatch
     public static bool IsVirtualCall(IMethodSymbol target)
         => (target.IsVirtual || target.IsAbstract || target.IsOverride)
            && target.MethodKind == MethodKind.Ordinary && !target.IsGenericMethod;
+
+    /// <summary>The SINGLE predicate for "this invocation is a runtime-polymorphic dispatch site on a v1
+    /// user-class receiver": a virtual call whose receiver is a base-typed variable OR <c>this</c> — NOT
+    /// <c>base</c> (a non-virtual direct call to a specific base impl). The receiver's static type is passed
+    /// in because the caller resolves it differently by phase (through the monomorphization map at emit, or
+    /// the declared type in Phase-1 reach). Both the emission branch (InvocationHandler) and the
+    /// recursion-graph enumerator (EnumerateInternalCallTargets) call this, so the two can never drift — a
+    /// drift silently mis-spills polymorphic recursion.</summary>
+    public static bool IsDispatchSite(IMethodSymbol target, IOperation instance, INamedTypeSymbol receiverType)
+        => IsVirtualCall(target)
+           && !(instance is IInstanceReferenceOperation ir
+                && ir.Syntax is Microsoft.CodeAnalysis.CSharp.Syntax.BaseExpressionSyntax)
+           && receiverType != null && EmitPolicy.IsUserClassType(receiverType);
 
     /// <summary>generic-virtual: virtual-shaped but the method carries its own type parameters — the
     /// backlog case the layout reject keeps rejecting.</summary>
