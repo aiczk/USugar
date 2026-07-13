@@ -164,6 +164,21 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
         {
             var lOp = UnwrapConversions(op.LeftOperand);
             var rOp = UnwrapConversions(op.RightOperand);
+            // CA-v2 M3: a v1 class operand with a SEALED user ToString stringifies through it (same
+            // routing as an interpolation hole). Emit the object/object concat with the ToString result.
+            var lTs = ClassAbi.TryGetUserToString(lOp.Type);
+            var rTs = ClassAbi.TryGetUserToString(rOp.Type);
+            if (lTs != null || rTs != null)
+            {
+                var l = VisitExpression(lOp);
+                if (lTs != null) l = EmitCallToMethod(ResolveStructMember(lTs), new List<CLeaf> { l });
+                else l = TryEmitEnumToString(l, lOp.Type) ?? l;
+                var r = VisitExpression(rOp);
+                if (rTs != null) r = EmitCallToMethod(ResolveStructMember(rTs), new List<CLeaf> { r });
+                else r = TryEmitEnumToString(r, rOp.Type) ?? r;
+                return ExternCall("SystemString.__Concat__SystemObject_SystemObject__SystemString",
+                    new List<CLeaf> { l, r }, "SystemString");
+            }
             ClassAbi.RejectImplicitToString(lOp.Type);
             ClassAbi.RejectImplicitToString(rOp.Type);
             if (ExternResolver.IsUserEnum(ResolveType(lOp.Type)) || ExternResolver.IsUserEnum(ResolveType(rOp.Type)))
