@@ -320,19 +320,20 @@ public static class ClassAbi
         CLeaf instance, INamedTypeSymbol classTy, Func<INamedTypeSymbol, AggregateLayout> getLayout,
         Func<IOperation, CLeaf> emitValue, Action<IMethodSymbol, CLeaf> callBaseCtor)
     {
+        // If this class has an EXPLICIT parameterless ctor, its BODY must run (its own field inits, base
+        // chain, and statements — e.g. a base ctor calling a virtual method, charter #6). CALL it rather than
+        // inlining field inits, which would skip the body. A class with only an implicit ctor has no body:
+        // inline its field inits and chain to the base (which applies the same rule).
+        var ownCtor = classTy.InstanceConstructors.FirstOrDefault(
+            c => c.Parameters.Length == 0 && !c.IsImplicitlyDeclared);
+        if (ownCtor != null && callBaseCtor != null)
+        {
+            callBaseCtor(ownCtor, instance);
+            return;
+        }
         EmitInstanceFieldInitializers(builder, compilation, instance, classTy, getLayout(classTy), emitValue);
         if (classTy.BaseType is { } bt && EmitPolicy.IsUserClassType(bt))
-        {
-            // A base with an EXPLICIT parameterless ctor must run its BODY (its own field inits, its base
-            // chain, and its statements — e.g. a base ctor calling a virtual method, charter #6), so CALL it.
-            // A base with only an implicit ctor has no body: inline its field inits and recurse.
-            var baseCtor = bt.InstanceConstructors.FirstOrDefault(
-                c => c.Parameters.Length == 0 && !c.IsImplicitlyDeclared);
-            if (baseCtor != null && callBaseCtor != null)
-                callBaseCtor(baseCtor, instance);
-            else
-                EmitImplicitCtorChain(builder, compilation, instance, bt, getLayout, emitValue, callBaseCtor);
-        }
+            EmitImplicitCtorChain(builder, compilation, instance, bt, getLayout, emitValue, callBaseCtor);
     }
 
     // Walks the OverriddenMethod chain to confirm the root is a System.Object virtual (not a user-class
