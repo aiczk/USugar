@@ -31,6 +31,7 @@
     <Compile Include="../../Editor/Compiler/Emit/ReachableBodies.cs" />
     <Compile Include="../../Editor/Compiler/Emit/ClassCompilePlan.cs" />
     <Compile Include="../../Editor/Compiler/Emit/ClassCompilePlanBuilder.cs" />
+    <Compile Include="../../Editor/Compiler/Emit/ClassTypeObjectContext.cs" />
     <Compile Include="../../Editor/Compiler/Emit/AggregateLayout.cs" />
     <Compile Include="../../Editor/Compiler/Emit/NullableAbi.cs" />
     <Compile Include="../../Editor/Compiler/Emit/NdimArrayAbi.cs" />

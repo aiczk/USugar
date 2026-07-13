@@ -293,13 +293,17 @@ public static class ClassAbi
     public static CLeaf EmitMint(CoreBuilder builder, Compilation compilation,
         INamedTypeSymbol classTy, AggregateLayout layout,
         Func<IOperation, CLeaf> emitValue, Action<CLeaf> emitDefaultInitialize,
-        Action<CLeaf> emitConstructor, Action<CLeaf> emitObjectInitializer)
+        Action<CLeaf> emitConstructor, Action<CLeaf> emitObjectInitializer,
+        Action<CLeaf> emitTypeObj = null)
     {
         RejectUnsupportedMembers(classTy);
         var slot = builder.AllocScratch(AggregateAbi.ArrayType);
         builder.EmitAssign(slot, AggregateAbi.Allocate(builder, layout.SlotCount));
         var instance = builder.SlotRef(slot);
         emitDefaultInitialize(instance);
+        // CA-v2b-1 (charter #6): write bundle[0]=typeobj BEFORE the ctor chain so a stored reference is
+        // type-identifiable even during partial initialization (matches C# base-ctor virtual-dispatch timing).
+        emitTypeObj?.Invoke(instance);
         // CA-v2 M1: field initializers moved INTO the ctor chain (charter #6: each class runs its own
         // field inits at ctor entry, derived->base, before the base call; bodies run base->derived).
         // emitConstructor now runs either the explicit ctor function or the implicit chain.

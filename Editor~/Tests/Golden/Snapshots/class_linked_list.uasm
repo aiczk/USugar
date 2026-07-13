@@ -10,6 +10,7 @@
     __1_this__param: %SystemObjectArray, null
     __1_v__param: %SystemInt32, null
     __2_this__param: %SystemObjectArray, null
+    __typeobj_LlNode: %SystemObjectArray, null
     __lcl_a_SystemObjectArray_0: %SystemObjectArray, null
     __lcl_b_SystemObjectArray_0: %SystemObjectArray, null
     __lcl_s_SystemInt32_0: %SystemInt32, null
@@ -22,10 +23,10 @@
     __intnl_SystemObjectArray_c1: %SystemObjectArray, null
     __const_SystemInt32_1: %SystemInt32, null
     __const_SystemInt32_2: %SystemInt32, null
+    __intnl_SystemObjectArray_c2: %SystemObjectArray, null
     __intnl_SystemInt32_c0: %SystemInt32, null
     __intnl_SystemInt32_c1: %SystemInt32, null
     __const_SystemInt32_3: %SystemInt32, null
-    __intnl_SystemObjectArray_c2: %SystemObjectArray, null
     __intnl_SystemObjectArray_c3: %SystemObjectArray, null
     __intnl_SystemObjectArray_c4: %SystemObjectArray, null
     __intnl_SystemInt32_c2: %SystemInt32, null
@@ -86,14 +87,34 @@
         PUSH, __intnl_SystemObjectArray_c1
         COPY
         PUSH, __intnl_SystemObjectArray_c1
-        PUSH, __intnl_SystemObjectArray_c0
+        PUSH, __typeobj_LlNode
         COPY
-        PUSH, __intnl_SystemObjectArray_c0
-        PUSH, __intnl_SystemObjectArray_c1
-        COPY
-        PUSH, __intnl_SystemObjectArray_c1
+    __goto__start___tco__start:
         PUSH, __const_SystemInt32_1
+        PUSH, __intnl_SystemObjectArray_c0
+        EXTERN, "SystemObjectArray.__ctor__SystemInt32__SystemObjectArray"
+        PUSH, __intnl_SystemObjectArray_c0
+        PUSH, __intnl_SystemObjectArray_c1
+        COPY
+        PUSH, __intnl_SystemObjectArray_c1
+        PUSH, __intnl_SystemObjectArray_c0
+        COPY
+        PUSH, __intnl_SystemObjectArray_c0
+        PUSH, __intnl_SystemObjectArray_c1
+        COPY
+        PUSH, __intnl_SystemObjectArray_c1
+        PUSH, __const_SystemInt32_0
         PUSH, __const_SystemInt32_2
+        EXTERN, "SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid"
+        PUSH, __typeobj_LlNode
+        PUSH, __intnl_SystemObjectArray_c1
+        COPY
+        PUSH, __intnl_SystemObjectArray_c1
+        PUSH, __intnl_SystemObjectArray_c2
+        COPY
+        PUSH, __intnl_SystemObjectArray_c0
+        PUSH, __const_SystemInt32_2
+        PUSH, __intnl_SystemObjectArray_c2
         EXTERN, "SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid"
         PUSH, seed
         PUSH, __intnl_SystemInt32_c0
@@ -108,12 +129,12 @@
         PUSH, __1_v__param
         COPY
         PUSH, __const_retaddr_SystemUInt32_0
-        JUMP, 0x00000340
+        JUMP, 0x00000410
     ___start__callret_0:
         PUSH, __intnl_SystemObjectArray_c0
         PUSH, __lcl_a_SystemObjectArray_0
         COPY
-        PUSH, __const_SystemInt32_0
+        PUSH, __const_SystemInt32_1
         PUSH, __intnl_SystemObjectArray_c0
         EXTERN, "SystemObjectArray.__ctor__SystemInt32__SystemObjectArray"
         PUSH, __intnl_SystemObjectArray_c0
@@ -126,8 +147,18 @@
         PUSH, __intnl_SystemObjectArray_c1
         COPY
         PUSH, __intnl_SystemObjectArray_c1
-        PUSH, __const_SystemInt32_1
+        PUSH, __const_SystemInt32_0
         PUSH, __const_SystemInt32_2
+        EXTERN, "SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid"
+        PUSH, __typeobj_LlNode
+        PUSH, __intnl_SystemObjectArray_c1
+        COPY
+        PUSH, __intnl_SystemObjectArray_c1
+        PUSH, __intnl_SystemObjectArray_c2
+        COPY
+        PUSH, __intnl_SystemObjectArray_c0
+        PUSH, __const_SystemInt32_2
+        PUSH, __intnl_SystemObjectArray_c2
         EXTERN, "SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid"
         PUSH, seed
         PUSH, __intnl_SystemInt32_c0
@@ -149,7 +180,7 @@
         PUSH, __1_v__param
         COPY
         PUSH, __const_retaddr_SystemUInt32_1
-        JUMP, 0x00000340
+        JUMP, 0x00000410
     ___start__callret_1:
         PUSH, __intnl_SystemObjectArray_c0
         PUSH, __lcl_b_SystemObjectArray_0
@@ -180,7 +211,7 @@
         PUSH, __2_this__param
         COPY
         PUSH, __const_retaddr_SystemUInt32_2
-        JUMP, 0x000003c4
+        JUMP, 0x00000494
     ___start__callret_2:
         PUSH, __2_Sum__ret
         PUSH, __intnl_SystemInt32_c0
@@ -214,7 +245,7 @@
         PUSH, __intnl_SystemInt32_c3
         COPY
         PUSH, __intnl_SystemObjectArray_c4
-        PUSH, __const_SystemInt32_1
+        PUSH, __const_SystemInt32_0
         PUSH, __intnl_SystemInt32_c3
         EXTERN, "SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid"
         PUSH, __intnl_returnJump_SystemUInt32_0
@@ -228,7 +259,7 @@
         PUSH, __intnl_SystemObjectArray_c6
         COPY
         PUSH, __intnl_SystemObjectArray_c6
-        PUSH, __const_SystemInt32_1
+        PUSH, __const_SystemInt32_0
         PUSH, __intnl_SystemObject_c0
         EXTERN, "SystemObjectArray.__Get__SystemInt32__SystemObject"
         PUSH, __intnl_SystemObject_c0
@@ -258,10 +289,10 @@
         PUSH, __intnl_SystemBoolean_c1
         COPY
         PUSH, __intnl_SystemBoolean_c1
-        JUMP_IF_FALSE, 0x000004dc
-        JUMP, 0x000004e4
+        JUMP_IF_FALSE, 0x000005ac
+        JUMP, 0x000005b4
     ____2_Sum_bb3:
-        JUMP, 0x000009c0
+        JUMP, 0x00000a90
     ____2_Sum_bb2:
         PUSH, __lcl_s_SystemInt32_0
         PUSH, __intnl_SystemInt32_c4
@@ -299,7 +330,7 @@
         PUSH, __intnl_SystemInt32_c7
         COPY
         PUSH, __intnl_SystemInt32_c7
-        PUSH, __const_SystemInt32_1
+        PUSH, __const_SystemInt32_0
         PUSH, __intnl_SystemInt32_c8
         EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
         PUSH, __intnl_SystemInt32_c8
@@ -322,7 +353,7 @@
         PUSH, __intnl_SystemInt32_c11
         COPY
         PUSH, __intnl_SystemInt32_c11
-        PUSH, __const_SystemInt32_1
+        PUSH, __const_SystemInt32_0
         PUSH, __intnl_SystemInt32_c12
         EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
         PUSH, __intnl_SystemInt32_c12
@@ -342,7 +373,7 @@
         PUSH, __intnl_SystemInt32_c14
         COPY
         PUSH, __intnl_SystemInt32_c14
-        PUSH, __const_SystemInt32_1
+        PUSH, __const_SystemInt32_0
         PUSH, __intnl_SystemInt32_c15
         EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
         PUSH, __intnl_SystemInt32_c15
@@ -352,7 +383,7 @@
         PUSH, __2_this__param
         COPY
         PUSH, __const_retaddr_SystemUInt32_3
-        JUMP, 0x000003c4
+        JUMP, 0x00000494
     ____2_Sum__callret_3:
         PUSH, __2_Sum__ret
         PUSH, __intnl_SystemInt32_c4
@@ -361,7 +392,7 @@
         PUSH, __intnl_SystemInt32_c16
         COPY
         PUSH, __intnl_SystemInt32_c16
-        PUSH, __const_SystemInt32_1
+        PUSH, __const_SystemInt32_0
         PUSH, __intnl_SystemInt32_c17
         EXTERN, "SystemInt32.__op_Subtraction__SystemInt32_SystemInt32__SystemInt32"
         PUSH, __intnl_SystemInt32_c17
@@ -384,7 +415,7 @@
         PUSH, __intnl_SystemInt32_c19
         COPY
         PUSH, __intnl_SystemInt32_c19
-        PUSH, __const_SystemInt32_1
+        PUSH, __const_SystemInt32_0
         PUSH, __intnl_SystemInt32_c20
         EXTERN, "SystemInt32.__op_Subtraction__SystemInt32_SystemInt32__SystemInt32"
         PUSH, __intnl_SystemInt32_c20
@@ -407,7 +438,7 @@
         PUSH, __intnl_SystemInt32_c22
         COPY
         PUSH, __intnl_SystemInt32_c22
-        PUSH, __const_SystemInt32_1
+        PUSH, __const_SystemInt32_0
         PUSH, __intnl_SystemInt32_c23
         EXTERN, "SystemInt32.__op_Subtraction__SystemInt32_SystemInt32__SystemInt32"
         PUSH, __intnl_SystemInt32_c23

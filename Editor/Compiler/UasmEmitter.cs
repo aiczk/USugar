@@ -161,6 +161,7 @@ public class UasmEmitter
         }
         _ctx.Closures.SetCaptureScope(CaptureScopeAnalysis.Build(_compilation, _classSymbol,
             plan.CaptureRoots, captureBodies, plan.FieldInitOps));
+        _ctx.ClassTypes.Seed(plan.Reach.MintedClasses); // CA-v2b-1: typeobj registry
         EmitMethods(plan);
         OnIrPass?.Invoke("after-emit", _module);
         // Handlers build Core IR; the pipeline (verify/optimize/flatten) runs on Core directly.
@@ -2384,6 +2385,15 @@ public class UasmEmitter
         // registers against this clean ambient.
         _ctx.Methods.CurrentClosureSpec = null;
         _ctx.Methods.CurrentOwnerSpecs = System.Collections.Immutable.ImmutableArray<IMethodSymbol>.Empty;
+        // CA-v2b-1 (charter #6): allocate each minted class's per-program typeobj BEFORE field inits and
+        // any instance mint, so bundle[0] can point at it. A typeobj is a fresh object[1] whose reference
+        // identity distinguishes the runtime type (v2b-2 will size it to the vtable and back-patch slots).
+        foreach (var mc in _ctx.ClassTypes.MintedClasses)
+        {
+            var tv = _ctx.ClassTypes.TryGetTypeObjVar(mc);
+            _ctx.Storage.TryDeclareVar(tv, AggregateAbi.ArrayType);
+            BridgeStore(tv, AggregateAbi.Allocate(_builder, 1));
+        }
         // Default-init aggregate (struct/tuple) fields with no explicit initializer FIRST, so any explicit
         // initializer that references one sees a non-null backing array (C# default-then-initializer order).
         foreach (var (fieldId, aggType) in _ctx.Aggregates.FieldDefaults)
@@ -3527,6 +3537,7 @@ public class UasmEmitter
             if (op is IObjectCreationOperation oc && oc.Type is INamedTypeSymbol ct
                 && EmitPolicy.IsUserClassType(ct) && mintWalked.Add(ct))
             {
+                result.MintedClasses.Add(ct); // CA-v2b-1: this concrete class needs a typeobj
                 foreach (var initOp in EnumerateClassFieldInitOps(ct)) Walk(initOp);
                 if (oc.Constructor is { IsImplicitlyDeclared: false } ctor)
                     Walk(GetMethodBodyOperation(ctor.OriginalDefinition));

@@ -107,6 +107,41 @@ public abstract partial class HandlerBase
     // SDK/native types stay distinguishable and compile.
     protected CLeaf EmitTypeCheck(CLeaf valueVal, ITypeSymbol targetType)
     {
+        // CA-v2b-1 (charter #2): a runtime type test against a v1 user-class FAMILY is answered by
+        // hop-zero ReferenceEquals of the value's bundle[0] against the compile-time-enumerated typeobjs
+        // of every MINTED class that is-or-derives-from the target (closed-world). A laundered value's
+        // slot 0 (delegate KindTag / env Kind / struct first field / tuple / Foo[] element) is never a
+        // family typeobj, so this stays sound for the laundered five without a per-node guard (charter #7).
+        if (ResolveType(targetType) is INamedTypeSymbol targetClass && EmitPolicy.IsUserClassType(targetClass))
+        {
+            var vars = _ctx.ClassTypes.TypeObjVarsAssignableTo(targetClass).ToList();
+            if (vars.Count == 0) return Const(false, "SystemBoolean"); // no minted class satisfies it
+            // Charter #7 soundness: read bundle[0] ONLY when the value is actually a SystemObjectArray
+            // (a class bundle — also structs/tuples/delegates/env/Foo[], whose [0] is never a family
+            // typeobj, so the compare is false for them). An `object`-typed value holding a scalar or a
+            // typed array (int[]) is NOT an object[] → the read would fault, so the read and the whole
+            // ReferenceEquals chain live INSIDE the guard. IsInstanceOfType(null,·) is false → null too.
+            var isBundle = ExternCall("SystemType.__IsInstanceOfType__SystemObject__SystemBoolean",
+                new List<CLeaf> { ConstTypeToken(_compilation.CreateArrayTypeSymbol(
+                    _compilation.GetSpecialType(SpecialType.System_Object))), valueVal }, "SystemBoolean");
+            var guarded = _ctx.Builder.AllocScratch("SystemBoolean");
+            EmitAssign(guarded, Const(false, "SystemBoolean"));
+            _builder.EmitIf(isBundle, _ =>
+            {
+                var typeSlot = AggregateAbi.ReadSlot(_builder, valueVal, 0, AggregateAbi.ArrayType);
+                CLeaf test = null;
+                foreach (var v in vars)
+                {
+                    var eq = ExternCall("SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean",
+                        new List<CLeaf> { typeSlot, LoadField(v, AggregateAbi.ArrayType) }, "SystemBoolean");
+                    test = test == null ? eq
+                        : ExternCall("SystemBoolean.__op_LogicalOr__SystemBoolean_SystemBoolean__SystemBoolean",
+                            new List<CLeaf> { test, eq }, "SystemBoolean");
+                }
+                EmitAssign(guarded, test);
+            }, null);
+            return SlotRef(guarded);
+        }
         if (!ExternResolver.IsRuntimeDistinguishable(targetType, _ctx.Generics.TypeParamMap))
         {
             var resolvedTarget = ResolveType(targetType);

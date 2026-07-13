@@ -17,34 +17,25 @@ public class ClassAbiM0RejectTests
     // ── Face 1: is / as / switch on a plain user class ──
 
     [Fact]
-    public void Face1_IsTest_PlainClass_Rejects()
-    {
-        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
+    public void Face1_IsTest_PlainClass_Compiles()  // FLIPPED 2026-07-11 (CA-v2b-1 is/cast)
+        => TestHelper.CompileToUasm(@"
 using UdonSharp;
 public class PlainFoo79 { public int V; }
-public class F1Is : UdonSharpBehaviour { public object o; public bool r; void Start(){ r = o is PlainFoo79; } }", "F1Is"));
-        Assert.Contains("PlainFoo79", ex.Message);
-    }
+public class F1Is : UdonSharpBehaviour { public object o; public bool r; void Start(){ r = o is PlainFoo79; } }", "F1Is");
 
     [Fact]
-    public void Face1_AsCast_PlainClass_Rejects()
-    {
-        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
+    public void Face1_AsCast_PlainClass_Compiles()  // FLIPPED 2026-07-11 (CA-v2b-1 is/cast)
+        => TestHelper.CompileToUasm(@"
 using UdonSharp;
 public class PlainFoo79 { public int V; }
-public class F1As : UdonSharpBehaviour { public object o; public int r; void Start(){ PlainFoo79 f = o as PlainFoo79; r = (f == null) ? 0 : 1; } }", "F1As"));
-        Assert.Contains("PlainFoo79", ex.Message);
-    }
+public class F1As : UdonSharpBehaviour { public object o; public int r; void Start(){ PlainFoo79 f = o as PlainFoo79; r = (f == null) ? 0 : 1; } }", "F1As");
 
     [Fact]
-    public void Face1_SwitchPattern_PlainClass_Rejects()
-    {
-        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
+    public void Face1_SwitchPattern_PlainClass_Compiles()  // FLIPPED 2026-07-11 (CA-v2b-1 is/cast)
+        => TestHelper.CompileToUasm(@"
 using UdonSharp;
 public class PlainFoo79 { public int V; }
-public class F1Sw : UdonSharpBehaviour { public object o; public int r; void Start(){ switch(o){ case PlainFoo79 p: r = 1; break; default: r = 0; break; } } }", "F1Sw"));
-        Assert.Contains("PlainFoo79", ex.Message);
-    }
+public class F1Sw : UdonSharpBehaviour { public object o; public int r; void Start(){ switch(o){ case PlainFoo79 p: r = 1; break; default: r = 0; break; } } }", "F1Sw");
 
     // ── Face 2: class-typed heap-var declarations (field / local / param / return). CA-M1 FLIP: a v1
     //    supported class now declares as a SystemObjectArray heap var (object[1+F] bundle) rather than

@@ -18,6 +18,7 @@ public class EmitContext
     public readonly RecursionContext RecursionContext = new RecursionContext();
     public readonly ClosureContext Closures = new ClosureContext();
     public readonly AggregateContext Aggregates = new AggregateContext();
+    public readonly ClassTypeObjectContext ClassTypes = new ClassTypeObjectContext();
     public readonly SyntheticContext Synthetics = new SyntheticContext();
     public readonly ControlFlowContext ControlFlow = new ControlFlowContext();
     public readonly InitializationContext Initializers = new InitializationContext();

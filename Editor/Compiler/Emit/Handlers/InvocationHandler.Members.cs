@@ -547,7 +547,17 @@ public partial class InvocationHandler
                 foreach (var arg in op.Arguments) ctorArgs.Add(VisitExpression(arg.Value));
                 EmitExprStmt(EmitCallToMethod(ResolveStructMember(op.Constructor), ctorArgs));
             },
-            instance => AggregateAbi.EmitObjectInitializer(_builder, instance, layout, op.Initializer, VisitExpression));
+            instance => AggregateAbi.EmitObjectInitializer(_builder, instance, layout, op.Initializer, VisitExpression),
+            TypeObjWrite(classTy));
+    }
+
+    /// <summary>CA-v2b-1: the bundle[0]=typeobj write action for a minted concrete class (null if the
+    /// class has no typeobj — never minted, so no is-test can observe it).</summary>
+    System.Action<CLeaf> TypeObjWrite(INamedTypeSymbol classTy)
+    {
+        var tv = _ctx.ClassTypes.TryGetTypeObjVar(classTy);
+        return tv == null ? null
+            : inst => AggregateAbi.WriteSlot(_builder, inst, 0, LoadField(tv, AggregateAbi.ArrayType));
     }
 
     /// <summary>`new T()` (kind-level census gap, 2026-07-11): monomorphization has substituted T to a
@@ -565,7 +575,8 @@ public partial class InvocationHandler
                 inst => AggregateAbi.DefaultInitialize(_builder, inst, layout, _ctx.Aggregates.GetLayout, GetUdonType),
                 inst => ClassAbi.EmitImplicitCtorChain(_builder, _compilation, inst, classTy,
                     _ctx.Aggregates.GetLayout, VisitExpression),
-                inst => AggregateAbi.EmitObjectInitializer(_builder, inst, layout, op.Initializer, VisitExpression));
+                inst => AggregateAbi.EmitObjectInitializer(_builder, inst, layout, op.Initializer, VisitExpression),
+                TypeObjWrite(classTy));
         }
         if (concrete is INamedTypeSymbol structTy && EmitPolicy.IsAggregateType(structTy))
         {
