@@ -318,11 +318,21 @@ public static class ClassAbi
     /// itself implicit.</summary>
     public static void EmitImplicitCtorChain(CoreBuilder builder, Compilation compilation,
         CLeaf instance, INamedTypeSymbol classTy, Func<INamedTypeSymbol, AggregateLayout> getLayout,
-        Func<IOperation, CLeaf> emitValue)
+        Func<IOperation, CLeaf> emitValue, Action<IMethodSymbol, CLeaf> callBaseCtor)
     {
         EmitInstanceFieldInitializers(builder, compilation, instance, classTy, getLayout(classTy), emitValue);
         if (classTy.BaseType is { } bt && EmitPolicy.IsUserClassType(bt))
-            EmitImplicitCtorChain(builder, compilation, instance, bt, getLayout, emitValue);
+        {
+            // A base with an EXPLICIT parameterless ctor must run its BODY (its own field inits, its base
+            // chain, and its statements — e.g. a base ctor calling a virtual method, charter #6), so CALL it.
+            // A base with only an implicit ctor has no body: inline its field inits and recurse.
+            var baseCtor = bt.InstanceConstructors.FirstOrDefault(
+                c => c.Parameters.Length == 0 && !c.IsImplicitlyDeclared);
+            if (baseCtor != null && callBaseCtor != null)
+                callBaseCtor(baseCtor, instance);
+            else
+                EmitImplicitCtorChain(builder, compilation, instance, bt, getLayout, emitValue, callBaseCtor);
+        }
     }
 
     // Walks the OverriddenMethod chain to confirm the root is a System.Object virtual (not a user-class

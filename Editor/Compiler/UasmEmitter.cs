@@ -3564,6 +3564,20 @@ public class UasmEmitter
                         if (structMembers.Add(vm))                   // emit-registration set + body walk
                             Walk(GetMethodBodyOperation(vm.OriginalDefinition));
                     }
+                // CA-v2b-2: a base class's EXPLICIT parameterless ctor is called by this minted class's
+                // implicit ctor chain (EmitImplicitCtorChain), but no `: base()` invocation node exists to
+                // collect it — register each up the chain (and walk its body) so the derived chain's call
+                // lands on an emitted function and the base ctor's body reach (e.g. a virtual call) is seen.
+                for (var bt = ct.BaseType; bt is INamedTypeSymbol && EmitPolicy.IsUserClassType(bt); bt = bt.BaseType)
+                {
+                    var baseCtor = bt.InstanceConstructors.FirstOrDefault(
+                        c => c.Parameters.Length == 0 && !c.IsImplicitlyDeclared);
+                    if (baseCtor != null && IsCollectibleStructMember(baseCtor) && structMembers.Add(baseCtor))
+                    {
+                        structMemberDefs.Add(baseCtor.OriginalDefinition);
+                        Walk(GetMethodBodyOperation(baseCtor.OriginalDefinition));
+                    }
+                }
             }
             foreach (var child in op.ChildOps()) CollectClassMintReach(child);
         }

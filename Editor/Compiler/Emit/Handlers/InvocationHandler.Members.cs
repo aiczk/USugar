@@ -507,7 +507,7 @@ public partial class InvocationHandler
             {
                 if (target.ContainingType is INamedTypeSymbol implBase && EmitPolicy.IsUserClassType(implBase))
                     ClassAbi.EmitImplicitCtorChain(_builder, _compilation, inst, implBase,
-                        _ctx.Aggregates.GetLayout, VisitExpression);
+                        _ctx.Aggregates.GetLayout, VisitExpression, CallBaseCtor);
             }
             else
             {
@@ -523,8 +523,14 @@ public partial class InvocationHandler
             _ctx.Aggregates.GetLayout(classTy), VisitExpression);
         if (classTy.BaseType is INamedTypeSymbol cbt && EmitPolicy.IsUserClassType(cbt))
             ClassAbi.EmitImplicitCtorChain(_builder, _compilation, inst, cbt,
-                _ctx.Aggregates.GetLayout, VisitExpression);
+                _ctx.Aggregates.GetLayout, VisitExpression, CallBaseCtor);
     }
+
+    /// <summary>CA-v2b-2: emit a direct call to an explicit parameterless base ctor from an implicit derived
+    /// ctor chain — the base ctor runs its own field inits, base chain, and body (needed for a base ctor with
+    /// side effects, e.g. a virtual call under charter #6).</summary>
+    void CallBaseCtor(IMethodSymbol ctorSym, CLeaf inst)
+        => EmitExprStmt(EmitCallToMethod(ResolveStructMember(ctorSym), new List<CLeaf> { inst }));
 
     CLeaf EmitClassInstanceMint(IObjectCreationOperation op, INamedTypeSymbol classTy)
     {
@@ -540,7 +546,7 @@ public partial class InvocationHandler
                 if (op.Constructor == null || op.Constructor.IsImplicitlyDeclared)
                 {
                     ClassAbi.EmitImplicitCtorChain(_builder, _compilation, instance, classTy,
-                        _ctx.Aggregates.GetLayout, VisitExpression);
+                        _ctx.Aggregates.GetLayout, VisitExpression, CallBaseCtor);
                     return;
                 }
                 var ctorArgs = new List<CLeaf> { instance };
@@ -574,7 +580,7 @@ public partial class InvocationHandler
             return ClassAbi.EmitMint(_builder, _compilation, classTy, layout, VisitExpression,
                 inst => AggregateAbi.DefaultInitialize(_builder, inst, layout, _ctx.Aggregates.GetLayout, GetUdonType),
                 inst => ClassAbi.EmitImplicitCtorChain(_builder, _compilation, inst, classTy,
-                    _ctx.Aggregates.GetLayout, VisitExpression),
+                    _ctx.Aggregates.GetLayout, VisitExpression, CallBaseCtor),
                 inst => AggregateAbi.EmitObjectInitializer(_builder, inst, layout, op.Initializer, VisitExpression),
                 TypeObjWrite(classTy));
         }
