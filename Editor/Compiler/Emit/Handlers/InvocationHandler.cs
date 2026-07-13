@@ -10,7 +10,7 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
     public OperationKind[] HandledKinds { get; } = new[]
     {
         OperationKind.Invocation, OperationKind.ObjectCreation, OperationKind.PropertyReference, OperationKind.InterpolatedString,
-        OperationKind.TypeParameterObjectCreation,
+        OperationKind.TypeParameterObjectCreation, OperationKind.AnonymousObjectCreation,
     };
 
     public CLeaf Handle(IOperation expression) => expression switch
@@ -20,6 +20,7 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
         IPropertyReferenceOperation op => VisitPropertyReference(op),
         IInterpolatedStringOperation op => VisitInterpolatedString(op),
         ITypeParameterObjectCreationOperation op => VisitTypeParameterObjectCreation(op),
+        IAnonymousObjectCreationOperation op => VisitAnonymousObjectCreation(op),
         _ => throw new System.NotSupportedException(expression.GetType().Name),
     };
 

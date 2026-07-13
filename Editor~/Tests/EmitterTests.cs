@@ -924,10 +924,15 @@ public class BareArrTest : UdonSharpBehaviour {
     [Fact]
     public void FieldInitializer_UnsupportedExpression_ThrowsInsteadOfDefaulting()
     {
+        // A [Flags] enum ToString in a field initializer is a loud NotSupported (Udon cannot synthesize
+        // the flag-name string); it reaches field-init emission and must re-wrap, not default. (was
+        // `new { X = 1 }` before anonymous types became supported, 2026-07-11.)
         var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
+using System;
 using UdonSharp;
+[Flags] public enum FIFl { A = 1, B = 2 }
 public class FIUnsupportedTest : UdonSharpBehaviour {
-    object value = new { X = 1 };
+    string value = FIFl.A.ToString();
     void Start() { }
 }
 "));

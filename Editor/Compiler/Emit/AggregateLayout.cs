@@ -103,6 +103,17 @@ public class AggregateLayout
                     nameToIndex[logicalName] = i++;
                 }
         }
+        else if (type.IsAnonymousType)
+        {
+            // Anonymous type: its read-only properties map to slots in declaration order (no reserved
+            // slot). Member access (p.X) resolves through this map exactly like a tuple element.
+            int i = 0;
+            foreach (var prop in type.GetMembers().OfType<IPropertySymbol>())
+            {
+                fields.Add(new FieldInfo(prop.Name, i, prop.Type));
+                nameToIndex[prop.Name] = i++;
+            }
+        }
         else
         {
             throw new InvalidOperationException(

@@ -178,7 +178,9 @@ public static class EmitPolicy
         // ride the aggregate clone-on-read machinery (a clone would break reference identity and
         // (target, method) equality). Single choke point for every clone path.
         if (named.TypeKind == TypeKind.Delegate) return false;
-        return named.IsTupleType || IsUserStruct(named);
+        // Anonymous types (`new { X = 1 }`) are immutable value-shaped records — treated as an
+        // object[] aggregate (properties -> slots), same as a tuple (2026-07-11).
+        return named.IsTupleType || named.IsAnonymousType || IsUserStruct(named);
     }
 
     /// <summary>Source-defined value struct (object[]-emulated). Excludes SDK/native structs
@@ -199,6 +201,7 @@ public static class EmitPolicy
     public static bool IsUserClassType(ITypeSymbol type)
     {
         if (type is not INamedTypeSymbol n) return false;
+        if (n.IsAnonymousType) return false; // anon types are aggregates (IsAggregateType), not v1 classes
         if (!ExternResolver.IsPlainUserClass(n)) return false;
         if (n.IsRecord) return false;
         // CA-v2 M1: a user-class base is allowed (inheritance). Walk to the root: every intermediate

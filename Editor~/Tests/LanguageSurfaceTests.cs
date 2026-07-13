@@ -34,6 +34,7 @@ public class LanguageSurfaceTests
         OperationKind.VariableInitializer,      // within declarations
         OperationKind.Argument,                 // consumed by invocation staging
         OperationKind.TypeParameterObjectCreation, // new T() -> concrete mint (InvocationHandler)
+        OperationKind.AnonymousObjectCreation,     // new { X = .. } -> aggregate mint (InvocationHandler)
         // sub-nodes consumed by their parent's handler (verified by corpus green + code grep):
         OperationKind.ArrayInitializer,         // ArrayHandler / AggregateLayout
         OperationKind.ObjectOrCollectionInitializer, OperationKind.MemberInitializer, // aggregate init
@@ -97,12 +98,11 @@ public class LanguageSurfaceTests
     // this list to EMPTY is the machine-checkable definition of "complete outside VM constraints".
     static readonly OperationKind[] KnownGaps =
     {
-        // The complete honest to-do list for "everything outside VM constraints" (2026-07-11).
-        // NOTE kind-level census granularity: ref locals/returns and iterator METHODS are not
-        // OperationKinds (ref-ness is a flag; iterators reject loudly upstream at the IEnumerator
-        // return type — pinned in IteratorRejectTests). Sub-kind gaps (e.g. specific operators)
-        // are guarded by the loud per-arm rejects instead.
-        OperationKind.AnonymousObjectCreation,      // anonymous types (records-family structification)
+        // EMPTY (2026-07-11): every C# 9 OperationKind is now HANDLED, VM_FUNDAMENTAL, DOCUMENTED_REJECT,
+        // or OUT_OF_SCOPE. "Everything outside VM constraints is writable" is now machine-checked at the
+        // kind level. Remaining capability holes are SUB-kind (guarded by loud per-arm rejects): v2b
+        // (typeobj/is-cast/virtual), interface method groups. flag-level (ref locals, iterators) are
+        // pinned separately (FlagLevelBoundaryTests / IteratorRejectTests).
     };
 
     [Fact]

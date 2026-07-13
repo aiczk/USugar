@@ -580,6 +580,24 @@ public partial class InvocationHandler
         return DefaultConst(udon);
     }
 
+    /// <summary>`new { X = a, Y = b }` (kind-level census gap, 2026-07-11): an anonymous type is an
+    /// immutable value-shaped aggregate — allocate the object[] and write each initializer value to its
+    /// property's slot (declaration order = layout order). Member reads route through the ordinary
+    /// aggregate property path once IsAggregateType admits anonymous types.</summary>
+    CLeaf VisitAnonymousObjectCreation(IAnonymousObjectCreationOperation op)
+    {
+        var anonTy = (INamedTypeSymbol)op.Type;
+        var layout = _ctx.Aggregates.GetLayout(anonTy);
+        var inst = AggregateAbi.Allocate(_builder, layout.SlotCount);
+        foreach (var init in op.Initializers)
+        {
+            if (init is ISimpleAssignmentOperation { Target: IPropertyReferenceOperation propRef } sa
+                && layout.TryGetIndex(propRef.Property.Name, out var idx))
+                AggregateAbi.WriteSlot(_builder, inst, idx, VisitExpression(sa.Value));
+        }
+        return inst;
+    }
+
     CLeaf VisitObjectCreation(IObjectCreationOperation op)
     {
         var resultType = GetUdonType(op.Type);
