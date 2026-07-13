@@ -35,6 +35,21 @@ public sealed class ClassTypeObjectContext
             if (IsAssignable(kv.Key, targetType)) yield return kv.Value;
     }
 
+    /// <summary>True when some MINTED class of the same generic family as `target` was registered as an
+    /// OPEN spec (its type arguments still carry a type parameter). That happens when a generic user class
+    /// is constructed inside a generic method body (`new Box&lt;T&gt;()` in `M&lt;T&gt;()`): the reach walk sees
+    /// the open `Box&lt;T&gt;`, so every closed spec flowing through that method shares one open typeobj and the
+    /// runtime type identity is NOT spec-distinct. A runtime type test against any one closed spec then cannot
+    /// be answered soundly — reject at the choke point (charter: conservative-reject over silent-wrong).</summary>
+    public bool HasOpenGenericSiblingOf(INamedTypeSymbol target)
+    {
+        foreach (var m in _vars.Keys)
+            if (SymbolEqualityComparer.Default.Equals(m.OriginalDefinition, target.OriginalDefinition)
+                && m.TypeArguments.Any(ta => ta is ITypeParameterSymbol))
+                return true;
+        return false;
+    }
+
     static bool IsAssignable(INamedTypeSymbol concrete, INamedTypeSymbol target)
     {
         for (var t = concrete; t != null; t = t.BaseType)

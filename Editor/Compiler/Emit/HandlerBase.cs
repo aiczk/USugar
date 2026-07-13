@@ -114,6 +114,19 @@ public abstract partial class HandlerBase
         // family typeobj, so this stays sound for the laundered five without a per-node guard (charter #7).
         if (ResolveType(targetType) is INamedTypeSymbol targetClass && EmitPolicy.IsUserClassType(targetClass))
         {
+            // Charter (type-tag collapse closed at the choke point): if this generic class family is minted
+            // through an OPEN construction site (a `new Box<T>()` inside a generic method), every closed spec
+            // shares one open typeobj, so `is Box<int>` cannot be told apart from `is Box<string>`. Reject
+            // loudly rather than silently answer false. (Constructing at a CLOSED site — `new Box<int>()` in
+            // non-generic code — registers a distinct typeobj and stays supported.)
+            if (targetClass.IsGenericType && _ctx.ClassTypes.HasOpenGenericSiblingOf(targetClass))
+                throw new NotSupportedException(
+                    $"Runtime type test against generic class '{targetClass.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}' "
+                    + "is not supported when an instance of its family is created inside a generic method "
+                    + "(`new " + targetClass.OriginalDefinition.Name + "<T>()`): all closed specializations built there "
+                    + "share one runtime type identity, so 'is'/'as'/cast cannot distinguish them. Construct the "
+                    + "value at a concrete type (`new " + targetClass.OriginalDefinition.Name + "<int>()`) instead, or keep it "
+                    + "typed as its static type without a runtime type test.");
             var vars = _ctx.ClassTypes.TypeObjVarsAssignableTo(targetClass).ToList();
             if (vars.Count == 0) return Const(false, "SystemBoolean"); // no minted class satisfies it
             // Charter #7 soundness: read bundle[0] ONLY when the value is actually a SystemObjectArray
