@@ -349,20 +349,15 @@ public static class ClassAbi
             if (m is IMethodSymbol { MethodKind: MethodKind.Ordinary or MethodKind.PropertyGet or MethodKind.PropertySet }
                 || m is IPropertySymbol)
             {
-                // CA-v2 M3: an override of an Object virtual (ToString/Equals/GetHashCode) on a SEALED
-                // class is dispatch-safe — a sealed class has no derived type, so static dispatch always
-                // resolves to this exact declaration. Non-sealed overrides and all other virtual/abstract/
-                // override members still need typeobj/virtual dispatch (M4b).
-                bool sealedObjectOverride = m is IMethodSymbol { IsOverride: true } om
-                    && classTy.IsSealed
-                    && (om.Name == "ToString" || om.Name == "Equals" || om.Name == "GetHashCode")
-                    && IsObjectMethodOverride(om);
-                if ((m.IsVirtual || m.IsAbstract || m.IsOverride) && !sealedObjectOverride)
+                // CA-v2b-2: non-generic virtual/abstract/override members dispatch at runtime through the
+                // inline typeobj-ReferenceEquals chain (a sealed/singleton receiver devirtualizes to a direct
+                // call). A GENERIC virtual method would need per-call monomorphized dispatch slots, which the
+                // inline scheme does not model — reject it loudly (backlog).
+                if (m is IMethodSymbol vm0 && VirtualDispatch.IsGenericVirtual(vm0))
                     throw new NotSupportedException(
-                        $"Member '{classTy.Name}.{m.Name}' is virtual/abstract/override: class ABI v2 M1/M3 "
-                        + "supports only non-virtual members plus an Object-method override "
-                        + "(ToString/Equals/GetHashCode) on a SEALED class. Seal the class, declare the "
-                        + "member non-virtual, or call a named method directly.");
+                        $"Member '{classTy.Name}.{m.Name}' is a generic virtual method: v2b-2 inline "
+                        + "typeobj-dispatch does not support per-call monomorphized virtual slots. Make the "
+                        + "method non-generic, or call a named method directly.");
             }
         }
     }

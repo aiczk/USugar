@@ -80,6 +80,28 @@ public class UseHide : UdonSharpBehaviour { public int seed; public int result;
     }
 
     [Fact]
+    public void NonGenericVirtualClass_Compiles()
+    {
+        var src = @"using UdonSharp;
+public class Base2 { public virtual int M() => 1; }
+public class Der2 : Base2 { public override int M() => 2; }
+public class UseV : UdonSharpBehaviour { public int seed; public int result;
+  void Start(){ Base2 b = new Der2(); result = b.M() + seed; } }";
+        TestHelper.CompileToUasm(src, "UseV"); // must not throw (reject lifted)
+    }
+
+    [Fact]
+    public void GenericVirtualMethod_StillRejected()
+    {
+        var src = @"using UdonSharp;
+public class GBase { public virtual T Id<T>(T x) => x; }
+public class UseGV : UdonSharpBehaviour { public int seed; public int result;
+  void Start(){ var b = new GBase(); result = b.Id<int>(seed); } }";
+        var ex = Assert.ThrowsAny<System.Exception>(() => TestHelper.CompileToUasm(src, "UseGV"));
+        Assert.Contains("generic", ex.Message.ToLowerInvariant());
+    }
+
+    [Fact]
     public void NewVirtual_FormsSeparateSlot()
     {
         // `new virtual int M()` on Der starts a fresh slot; a Base-typed call must NOT dispatch to Der.M.
