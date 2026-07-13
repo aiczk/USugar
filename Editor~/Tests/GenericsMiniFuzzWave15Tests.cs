@@ -139,23 +139,19 @@ public class B55g : UdonSharpBehaviour {
 }", "B55g");
     }
 
-    // ── B54: a struct instance method as a delegate target is a clean loud reject (by-value capture
-    // divergence), not a frozen-planner ICE. A static struct method (no receiver) stays legal. ──
+    // ── B54 (FLIPPED 2026-07-11, MG auto-wrap v2): a struct instance method group now binds via a
+    // receiver-bridge with a DeepClone'd receiver riding DelegateAbi.Env — the by-value capture
+    // divergence B54 rejected is matched exactly (VM oracle: MgAutoWrapVmTests.B1/B2/B3). ──
 
     [Fact]
-    public void B54_StructInstanceMethodDelegate_RejectsWithSemanticMessage()
-    {
-        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
+    public void B54_StructInstanceMethodDelegate_Compiles()
+        => TestHelper.CompileToUasm(@"
 using System; using UdonSharp;
 public struct S54 { public int v; public int Val() => v + 1; }
 public class B54 : UdonSharpBehaviour {
   public int r;
   void Start(){ S54 s = new S54(); s.v = 41; Func<int> f = s.Val; r = f(); }
-}", "B54"));
-        Assert.Contains("struct instance method", ex.Message);
-        Assert.Contains("by value", ex.Message);
-        Assert.DoesNotContain("not pre-planned", ex.Message);
-    }
+}", "B54");
 
     [Fact]
     public void B54_StructStaticMethodDelegate_StillCompiles()

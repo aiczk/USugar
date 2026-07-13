@@ -1819,21 +1819,32 @@ public abstract partial class HandlerBase
         if (targetMethod == null)
             throw new System.NotSupportedException($"Unsupported delegate target: {op.Target.GetType().Name}");
 
-        // B54: a struct INSTANCE method bound as a delegate. C# copies the struct receiver BY VALUE at
-        // bind time; USugar represents a struct as a shared object[], so the bound delegate would alias
-        // the live receiver and observe (or leak) later mutations — a silent value divergence, not a
-        // clean feature gap. Reject loudly (design §8-3: loud over silent-wrong) instead of hitting the
-        // frozen-planner ICE. A static struct method (no receiver) is unaffected and stays legal.
+        // MG auto-wrap (design 2026-07-11 v2, replacing the B54 struct reject and the v1 class MG
+        // reject): a class/struct INSTANCE method group binds via a RECEIVER-BRIDGE — the receiver
+        // object[] rides DelegateAbi.Env (the slot a closure env uses), and the bridge re-dispatches
+        // env as the member's param0 (CA-M1 receiver ABI). A STRUCT receiver is DeepCloned at mint:
+        // C# copies the struct receiver by value at bind time (nested structs deep, arrays/references
+        // shared) — B54's aliasing failure mode is gone by construction. Mint shape: Target=this /
+        // Addr=real funcaddr (selfFast JUMP_INDIRECT); cross-program escape of the bundle is rejected
+        // by the classifier's receiver arm (ValueClassifier — program-local payload).
         if (op.Target is IMethodReferenceOperation && !targetMethod.IsStatic
-            && targetMethod.ContainingType is INamedTypeSymbol structCt && EmitPolicy.IsUserStruct(structCt))
-            throw new System.NotSupportedException(
-                $"A delegate cannot be created from struct instance method '{structCt.Name}.{targetMethod.Name}': "
-                + "C# captures the struct receiver by value at bind time, but USugar represents a struct as a "
-                + "shared object[], so the delegate would alias the live receiver and observe its later mutations "
-                + "(a silent value divergence). Wrap the call in a behaviour method and bind that instead.");
-
-        if (op.Target is IMethodReferenceOperation)
-            ClassAbi.RejectDelegateBindingToInstanceMethod(targetMethod);
+            && targetMethod.MethodKind is not (MethodKind.LambdaMethod or MethodKind.LocalFunction)
+            && targetMethod.ContainingType is INamedTypeSymbol recvCt0
+            && EmitPolicy.IsObjectArrayEmulated(recvCt0))
+        {
+            var member = ResolveStructMember(targetMethod); // ensure-registered (a MG may be the member's only reference)
+            var memberFunc = _methodFunctions[member];
+            var recvLeaf = targetInstance
+                ?? (_ctx.Methods.CurrentStructReceiverParamId is { } rid
+                    ? LoadField(rid, AggregateAbi.ArrayType)
+                    : throw new System.NotSupportedException(
+                        $"Method group '{targetMethod.Name}' has no receiver in this context."));
+            if (member.ContainingType is INamedTypeSymbol cloneCt && EmitPolicy.IsUserStruct(cloneCt))
+                recvLeaf = AggregateAbi.DeepClone(_builder, recvLeaf, cloneCt, _ctx.Aggregates.GetLayout);
+            var recvBridgeName = DelegateAbi.BridgeName(memberFunc.Name) + "_rcv";
+            _ctx.Synthetics.ReceiverBridges.Add((member, recvBridgeName));
+            return (recvBridgeName, FuncRef(recvBridgeName), null, recvLeaf);
+        }
 
         // Wave-12 r4 [W3]: a method group bound to an INTERFACE member (`cb = iface.Get`) previously
         // ICEd in GetDelegateBridgeLayout ('No delegate bridge'). It cannot compile correctly today:

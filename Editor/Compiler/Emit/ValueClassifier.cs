@@ -187,6 +187,15 @@ public static class ValueClassifier
         TypeClassifierContext typeCtx)
     {
         if (target == null || captureScope == null) return (false, false);
+        // MG auto-wrap (design 2026-07-11 v2, FATAL amendment): a class/struct-INSTANCE method group
+        // carries its RECEIVER object[] in DelegateAbi.Env — program-local payload the capture walk
+        // below cannot see (the target is a named member, not a hoisted closure with a receiver key).
+        // Without this arm the bundle classifies direct-safe and the receiver silently crosses the
+        // program boundary. Conservative for structs too (widening is a separate decision).
+        if (!target.IsStatic
+            && target.MethodKind is not (MethodKind.LambdaMethod or MethodKind.LocalFunction)
+            && target.ContainingType is INamedTypeSymbol recvCt && EmitPolicy.IsObjectArrayEmulated(recvCt))
+            return (true, true);
         if (!captureScope.ClosureScopes.TryGetValue(target.OriginalDefinition, out var closureScope)
             || closureScope?.BindingScope == null)
             return (false, false);

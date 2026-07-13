@@ -1205,6 +1205,7 @@ public class UasmEmitter
 
         // Emit pending delegate bridges for hoisted lambdas/local functions
         EmitPendingDelegateBridges();
+        EmitPendingReceiverBridges();
 
         // Variance design (2026-07-04 §2.2/§2.3) T-M2: sig adapters (B-1) + wrapper-with-payload
         // bridges (B-2), for every variant method-group binding / third-party-variant hinge / variant
@@ -1406,6 +1407,68 @@ public class UasmEmitter
     // differences are which signature drives the conv-var names/types (sig-S/delegateInvoke here, the
     // target method's own sig there — the same symbol as the plain bridge's target) and the synthesized
     // bridge name (DelegateAbi.SigAdapterName).
+
+    // MG auto-wrap (design 2026-07-11 v2): receiver-bridge drain. A receiver-bridge is the 5th
+    // bridge flavor — it reads the member's conv args PLUS the staged conv env as the RECEIVER
+    // (leading param0), guarded only by env-null (a class aggregate's slot 0 is reserved/null, so
+    // the closure bridge's KindTag check is inapplicable). Null receiver = LogError + default —
+    // C# throws NRE at BIND time, USugar reports at DISPATCH time (documented timing deviation;
+    // Udon has no exceptions).
+    void EmitPendingReceiverBridges()
+    {
+        var emitted = new HashSet<string>();
+        foreach (var (member, bridgeName) in _ctx.Synthetics.ReceiverBridges)
+        {
+            if (!emitted.Add(bridgeName)) continue;
+            DelegateAbi.ValidateNoRefOutParams(member);
+            var func = _ctx.Methods.Functions[member];
+            var retTypeStr = member.ReturnsVoid ? "SystemVoid" : GetUdonType(member.ReturnType);
+            EmitReceiverBridgeBody(bridgeName, member, func, retTypeStr);
+        }
+    }
+
+    void EmitReceiverBridgeBody(string bridgeName, IMethodSymbol member, CFunction targetFunc, string targetRetTypeStr)
+    {
+        var sigPart = DelegateAbi.BuildSigPart(member, null);
+        var retType = DeclareConvSigFields(sigPart, member, null);
+
+        var bridgeFunc = _module.AddFunction(bridgeName, bridgeName);
+        var prevFunc = _builder.CurrentFunction;
+        _builder.SetFunction(bridgeFunc);
+
+        var envConv = DelegateAbi.ConvEnvName(sigPart);
+        _ctx.Storage.TryDeclareVar(envConv, EnvEmit.EnvType);
+        var recvLeaf = BridgeLoad(envConv, EnvEmit.EnvType);
+
+        var callArgs = new List<CLeaf> { recvLeaf }; // CA-M1: receiver is the member's param0
+        for (int i = 0; i < member.Parameters.Length; i++)
+            callArgs.Add(BridgeLoad(DelegateAbi.ConvArgName(sigPart, i),
+                ExternResolver.GetUdonTypeName(member.Parameters[i].Type)));
+
+        var convRet = retType != null ? DelegateAbi.ConvRetName(sigPart) : null;
+        var recvOk = BridgeCallExtern("SystemBoolean",
+            "SystemObject.__op_Inequality__SystemObject_SystemObject__SystemBoolean",
+            new[] { recvLeaf, (CLeaf)_builder.Const(null, "SystemObject") });
+        _builder.EmitIf(recvOk,
+            _ =>
+            {
+                var callResult = _builder.InternalCall(targetFunc.Name, callArgs, targetRetTypeStr);
+                if (convRet != null) BridgeStore(convRet, callResult);
+                else _builder.EmitExprStmt(callResult);
+            },
+            _ =>
+            {
+                BridgeCallExternVoid("UnityEngineDebug.__LogError__SystemObject__SystemVoid",
+                    new[] { (CLeaf)_builder.Const(
+                        $"USugar: null receiver — invoked a method-group delegate whose receiver is null ({member.ContainingType.Name}.{member.Name})",
+                        "SystemString") });
+                if (convRet != null)
+                    BridgeStore(convRet, InvocationHandler.DefaultConst(_builder, retType));
+            });
+
+        _builder.EmitReturn();
+        _builder.SetFunction(prevFunc);
+    }
 
     void EmitPendingSigAdapterBridges()
     {

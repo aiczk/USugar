@@ -13,6 +13,10 @@ public sealed class SyntheticContext
     // definition-symbol lookup cannot distinguish specs).
     public readonly Dictionary<string, CFunction> ClosureBridgeFuncs = new();
 
+    // MG auto-wrap (design 2026-07-11 v2): pending receiver-bridges — a class/struct instance method
+    // group's bridge re-dispatches DelegateAbi.Env as the member's param0 (CA-M1 receiver ABI).
+    public readonly List<(IMethodSymbol Member, string BridgeName)> ReceiverBridges = new();
+
     // Pending delegate bridges for dynamically hoisted lambdas/local functions. The carried map is
     // the creating method's immutable TypeParamMap by REFERENCE (per-EmitMethod fresh, never mutated,
     // so no snapshot copy is needed even though the drain runs after emission when the ambient map
