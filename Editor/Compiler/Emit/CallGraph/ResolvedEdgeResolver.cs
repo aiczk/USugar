@@ -27,6 +27,20 @@ public sealed class ResolvedEdgeResolver
         foreach (var m in _emitter.EnumerateInternalCallTargets(op))
             yield return new ResolvedTarget(m.OriginalDefinition, TargetRole.CallEdge);
 
+        // Reach roles (registration/recursion frontier). The mint arm walks off-body field-init trees, so
+        // thread a per-call minted-class set to bound its transitive recursion.
+        foreach (var t in ReachEdges(op, new HashSet<INamedTypeSymbol>(SymbolEqualityComparer.Default)))
+            yield return t;
+    }
+
+    // The reach-role targets of a SINGLE op — no CallEdge, no child recursion, EXCEPT the mint arm, which
+    // reaches C's field-init / base-ctor / virtual-impl bodies that live off the walked op tree (so the
+    // worklist never sees them) and must therefore be discovered here.
+    //   Facet coverage (M0): EscapeTarget (delegate/method-group escape) is deferred with the delegate
+    //   precise-resolution work the owner postponed; open/generic foreign-static + open base-generic drops
+    //   feed capture roots (a supplementary facet) and are not reach targets here.
+    IEnumerable<ResolvedTarget> ReachEdges(IOperation op, HashSet<INamedTypeSymbol> minted)
+    {
         // ReachStructMember: the per-op user-struct/class member enumerator (ctor / instance method /
         // computed property / subpattern / operator / conversion) plus the implicit using-Dispose.
         foreach (var m in UasmEmitter.EnumerateStructMemberRefs(op))
@@ -35,14 +49,57 @@ public sealed class ResolvedEdgeResolver
             yield return new ResolvedTarget(m.OriginalDefinition, TargetRole.ReachStructMember);
 
         // ReachForeignStatic: a closed, non-generic foreign static reached by call / method-group / static
-        // computed-property. (Open/generic drops feed capture roots — a supplementary facet deferred to the
-        // capture-consumer cutover, not a reach target.)
+        // computed-property.
         foreach (var m in EnumerateForeignStaticReach(op))
             yield return new ResolvedTarget(m.OriginalDefinition, TargetRole.ReachForeignStatic);
 
         // ReachBaseInstance: a base instance method/accessor copy reached through `base.` or an inherited call.
         foreach (var m in EnumerateBaseInstanceReach(op))
             yield return new ResolvedTarget(m.OriginalDefinition, TargetRole.ReachBaseInstance);
+
+        // Instantiation reach: minting a user class runs its field initializers, its explicit ctor, its
+        // implicit base-ctor chain, and its virtual-slot impls — bodies that live in the class declaration,
+        // not the walked op tree. Faithful port of CollectClassMintReach's direct seeding, deduped by
+        // `minted` (bounds transitive nested mints inside field initializers).
+        if (op is IObjectCreationOperation oc && oc.Type is INamedTypeSymbol ct
+            && EmitPolicy.IsUserClassType(ct) && minted.Add(ct))
+        {
+            // C's own explicit ctor (incl. the parameterless one EnumerateStructMemberRefs skips at
+            // Arguments.Length==0) — a reach root whose body is emitted at mint.
+            if (oc.Constructor is { IsImplicitlyDeclared: false } ownCtor)
+                yield return new ResolvedTarget(ownCtor.OriginalDefinition, TargetRole.ReachStructMember);
+            // field-init member refs (off-body — transitive through nested mints, deduped by `minted`).
+            foreach (var initOp in _emitter.EnumerateClassFieldInitOps(ct))
+                foreach (var t in ReachWalk(initOp, minted))
+                    yield return t;
+            // base explicit parameterless ctors called by the implicit ctor chain.
+            for (var bt = ct.BaseType; bt is INamedTypeSymbol && EmitPolicy.IsUserClassType(bt); bt = bt.BaseType)
+            {
+                var baseCtor = bt.InstanceConstructors.FirstOrDefault(
+                    c => c.Parameters.Length == 0 && !c.IsImplicitlyDeclared);
+                if (baseCtor != null)
+                    yield return new ResolvedTarget(baseCtor.OriginalDefinition, TargetRole.ReachStructMember);
+            }
+            // virtual-slot most-derived impls reachable only through the inline typeobj dispatch chain
+            // (seed by slot, most-derived first, to avoid phantom-minting shadowed base methods).
+            var seededSlots = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
+            for (var vt = (ITypeSymbol)ct; vt is INamedTypeSymbol vtn && EmitPolicy.IsUserClassType(vtn); vt = vtn.BaseType)
+                foreach (var vm in vt.GetMembers().OfType<IMethodSymbol>())
+                    if ((vm.IsVirtual || vm.IsOverride || vm.IsAbstract) && vm.MethodKind == MethodKind.Ordinary
+                        && seededSlots.Add(VirtualDispatch.SlotIntroducer(vm))
+                        && VirtualDispatch.MostDerivedImpl(ct, VirtualDispatch.SlotIntroducer(vm)) is { } impl)
+                        yield return new ResolvedTarget(impl.OriginalDefinition, TargetRole.ReachStructMember);
+        }
+    }
+
+    // Transitively yield the reach edges over an off-body op tree (a field initializer): a field-init call
+    // is a reach, not a synthetic caller edge, so CallEdge is excluded (mirrors CollectClassMintReach's
+    // Walk routing field inits through the reach collectors only).
+    IEnumerable<ResolvedTarget> ReachWalk(IOperation op, HashSet<INamedTypeSymbol> minted)
+    {
+        foreach (var t in ReachEdges(op, minted)) yield return t;
+        foreach (var child in op.ChildOps())
+            foreach (var t in ReachWalk(child, minted)) yield return t;
     }
 
     // ── per-op reach cores (the iteration structure the recursive collectors lack; predicates delegate to

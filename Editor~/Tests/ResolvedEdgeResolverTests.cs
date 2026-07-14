@@ -106,6 +106,26 @@ public class A : BaseB { public int result;
             && t.Method.ContainingType.Name == "BaseB" && t.Role == TargetRole.ReachBaseInstance);
     }
 
+    [Fact]
+    public void ClassMint_YieldsInstantiationReach()
+    {
+        // `new Dc()` reaches: Dc's field-initializer foreign static, Bc's explicit base ctor (implicit
+        // chain), and Dc's virtual override — bodies that live off the walked op tree.
+        var src = @"using UdonSharp;
+public static class Sh { public static int G()=>7; }
+public class Bc { public Bc(){} public virtual int Val()=>1; }
+public class Dc : Bc { public int f = Sh.G(); public override int Val()=>f; }
+public class A : UdonSharpBehaviour { public int result;
+  void Start(){ Dc d = new Dc(); result = d.Val(); } }";
+        var targets = TestHelper.ResolveEdgesForFirstOp(src, "A", o => o is IObjectCreationOperation);
+        Assert.Contains(targets, t => t.Method.MethodKind == Microsoft.CodeAnalysis.MethodKind.Constructor
+            && t.Method.ContainingType.Name == "Bc" && t.Role == TargetRole.ReachStructMember);   // base ctor
+        Assert.Contains(targets, t => t.Method.Name == "Val" && t.Method.ContainingType.Name == "Dc"
+            && t.Role == TargetRole.ReachStructMember);                                            // virtual impl
+        Assert.Contains(targets, t => t.Method.Name == "G" && t.Method.ContainingType.Name == "Sh"
+            && t.Role == TargetRole.ReachForeignStatic);                                           // field-init reach
+    }
+
     static string Names(System.Collections.Generic.IEnumerable<Microsoft.CodeAnalysis.IMethodSymbol> ms)
         => "{" + string.Join(", ", ms.Select(m => m.ContainingType.Name + "." + m.Name)) + "}";
 }

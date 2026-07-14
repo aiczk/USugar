@@ -3681,7 +3681,7 @@ public class UasmEmitter
     /// declaration order — the reach-side twin of HandlerBase.EmitInstanceFieldInitializers (which emits
     /// them at mint). Static/const fields are excluded (const folds; statics reject). Used to Phase-1-walk
     /// a minted class's initializer expressions for foreign-static / struct-member collection.</summary>
-    IEnumerable<IOperation> EnumerateClassFieldInitOps(INamedTypeSymbol classTy)
+    internal IEnumerable<IOperation> EnumerateClassFieldInitOps(INamedTypeSymbol classTy)
     {
         foreach (var member in classTy.GetMembers())
         {
