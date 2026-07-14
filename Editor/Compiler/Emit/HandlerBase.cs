@@ -1348,6 +1348,7 @@ public abstract partial class HandlerBase
                     && _planner.GetLayout(propRef.Property.ContainingType).Methods.TryGetValue(ifaceSetter, out var ifaceSetterMl))
                 {
                     GuardInterfaceHasBehaviourImplementor(propRef.Property.ContainingType, propRef.Property.Name);
+                    RejectProgramLocalCrossBehaviourPropertyWrite(propRef.Property); // CW22
                     // Wave-12 r2 [V1]: a reentrant setter dispatch pulls its value copy-in inside the
                     // spill window (preSpillStmts: 1 — the SetProgramVariable emitted just above).
                     bool ifaceSetReentrant = TryMarkReentrantCrossDispatch(propRef, ifaceSetter);
@@ -1359,6 +1360,7 @@ public abstract partial class HandlerBase
                 }
                 else if (ExternResolver.IsUdonSharpBehaviour(propRef.Property.ContainingType) && propRef.Instance is not IInstanceReferenceOperation)
                 {
+                    RejectProgramLocalCrossBehaviourPropertyWrite(propRef.Property); // CW22 (field-write twin)
                     // Delegate-typed cross-behaviour property SET (Stage 1.75 design 2026-07-04 §3):
                     // the bundle is an opaque object[] reference — it transports through the EXISTING
                     // cross property machinery below with no special casing (P6 cross-boundary
@@ -1906,6 +1908,15 @@ public abstract partial class HandlerBase
     protected void RejectProgramLocalCrossBehaviourArgument(ITypeSymbol argType)
         => _ctx.Boundary.RequireCanPassCrossBehaviourArgument(argType);
 
+    protected void RejectProgramLocalCrossBehaviourPropertyWrite(IPropertySymbol prop)
+        => _ctx.Boundary.RequireCanWriteCrossBehaviourProperty(prop);
+
+    protected void RejectProgramLocalCrossBehaviourPropertyRead(IPropertySymbol prop)
+        => _ctx.Boundary.RequireCanReadCrossBehaviourProperty(prop);
+
+    protected void RejectProgramLocalCrossBehaviourAccessor(IMethodSymbol accessor)
+        => _ctx.Boundary.RequireCanDispatchCrossBehaviourAccessor(accessor);
+
     protected void RejectUnsafeCrossProgramDelegateArgument(IArgumentOperation arg)
         => _ctx.Boundary.RequireCanPassCrossProgramDelegateArgument(arg);
 
@@ -2241,6 +2252,7 @@ public abstract partial class HandlerBase
                 $"Indexer of '{accessor.ContainingType.Name}' is accessed through a variable receiver, "
                 + "which dispatches cross-program (SetProgramVariable + SendCustomEvent) and so needs a "
                 + "public accessor. Make the accessor public, or access the indexer through 'this'.");
+        RejectProgramLocalCrossBehaviourAccessor(accessor); // CW22
         var (exportName, paramIds, _) = GetCalleeLayout(accessor);
         var pairs = new List<(string, CLeaf)>();
         for (int i = 0; i < orderedArgs.Count && i < paramIds.Length; i++)
@@ -2350,6 +2362,7 @@ public abstract partial class HandlerBase
     protected CLeaf EmitInterfaceAccessorCall(IMethodSymbol accessor, MethodLayout ml, CLeaf instanceVal,
         List<CLeaf> orderedArgs, bool reentrant = false)
     {
+        RejectProgramLocalCrossBehaviourAccessor(accessor); // CW22
         var pairs = new List<(string, CLeaf)>();
         for (int i = 0; i < orderedArgs.Count && i < ml.ParamIds.Count; i++)
             pairs.Add((ml.ParamIds[i], orderedArgs[i]));

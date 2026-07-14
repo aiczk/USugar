@@ -311,6 +311,7 @@ public abstract class AssignmentHandlerBase : HandlerBase
             // Cross-behaviour UdonSharpBehaviour property → SetProgramVariable / SendCustomEvent
             case IPropertyReferenceOperation propRef when ExternResolver.IsUdonSharpBehaviour(propRef.Property.ContainingType) && propRef.Instance is not IInstanceReferenceOperation:
             {
+                RejectProgramLocalCrossBehaviourPropertyWrite(propRef.Property); // CW22 (compound/`??=` leg)
                 var instanceVal = VisitExpression(propRef.Instance);
                 // Wave-12 [V2]: non-public autos write the declared backing symbol directly (their
                 // accessors are never exported); see IsNonPublicAutoCrossProperty.

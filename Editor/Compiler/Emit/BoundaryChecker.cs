@@ -8,6 +8,8 @@ public enum BoundarySite
     CrossBehaviourFieldWrite,
     CrossBehaviourFieldRead,
     CrossBehaviourArgument,
+    CrossBehaviourPropertyWrite,
+    CrossBehaviourPropertyRead,
 }
 
 /// <summary>
@@ -235,6 +237,36 @@ public sealed class BoundaryChecker
     public void RequireCanPassCrossBehaviourArgument(ITypeSymbol argType)
         => RequireNoProgramLocalPayload(BoundarySite.CrossBehaviourArgument, argType, null);
 
+    /// <summary>CW22: a cross-behaviour property SET/GET is the same SetProgramVariable /
+    /// GetProgramVariable transport as the field twin one syntax over — same payload polarity.
+    /// (The delegate axis stays with IsCrossProgramDelegatePropertyTarget: a clean-signature
+    /// delegate type carries no payload and passes here untouched.)</summary>
+    public void RequireCanWriteCrossBehaviourProperty(IPropertySymbol prop)
+        => RequireNoProgramLocalPayload(BoundarySite.CrossBehaviourPropertyWrite, prop.Type, prop.Name);
+
+    public void RequireCanReadCrossBehaviourProperty(IPropertySymbol prop)
+        => RequireNoProgramLocalPayload(BoundarySite.CrossBehaviourPropertyRead, prop.Type, prop.Name);
+
+    /// <summary>CW22: a cross-program accessor dispatch (variable-receiver behaviour indexer,
+    /// interface property/indexer accessor) SPVs every parameter and GPVs the return — the same
+    /// transport as a cross method call, so each parameter and the returned value run the payload
+    /// check CrossCallArgPairs applies per-arg. The setter's trailing parameter IS the stored
+    /// value, so it reports as a property write.</summary>
+    public void RequireCanDispatchCrossBehaviourAccessor(IMethodSymbol accessor)
+    {
+        var propName = (accessor.AssociatedSymbol as IPropertySymbol)?.Name ?? accessor.Name;
+        for (int i = 0; i < accessor.Parameters.Length; i++)
+        {
+            var isSetterValue = accessor.MethodKind == MethodKind.PropertySet
+                && i == accessor.Parameters.Length - 1;
+            RequireNoProgramLocalPayload(
+                isSetterValue ? BoundarySite.CrossBehaviourPropertyWrite : BoundarySite.CrossBehaviourArgument,
+                accessor.Parameters[i].Type, propName);
+        }
+        if (!accessor.ReturnsVoid)
+            RequireNoProgramLocalPayload(BoundarySite.CrossBehaviourPropertyRead, accessor.ReturnType, propName);
+    }
+
     void RequireNoProgramLocalPayload(BoundarySite site, ITypeSymbol type, string memberName)
     {
         if (!TypeClassifier.ContainsProgramLocalPayload(type, TypeCtx)) return;
@@ -256,6 +288,13 @@ public sealed class BoundaryChecker
                 return "A v1 user class cannot be passed to a cross-behaviour (SendCustomEvent) call: a class "
                        + "value is a program-local object[] bundle and cannot cross a program boundary. Pass "
                        + "plain data instead and rebuild the object on the receiving side.";
+            case BoundarySite.CrossBehaviourPropertyWrite:
+                return $"A v1 user class cannot be written to another behaviour's property '{memberName}': a class "
+                       + "value is a program-local object[] bundle and cannot cross a program boundary.";
+            case BoundarySite.CrossBehaviourPropertyRead:
+                return $"Reading another behaviour's property '{memberName}' that carries a v1 user class "
+                       + "is not supported: a class value is a program-local object[] bundle and cannot cross a "
+                       + "program boundary.";
             default:
                 throw new ArgumentOutOfRangeException(nameof(site), site, null);
         }

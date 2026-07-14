@@ -151,6 +151,7 @@ public partial class InvocationHandler
         if (op.Instance != null && ExternResolver.IsUdonSharpBehaviour(op.Property.ContainingType)
             && !(op.Instance is IInstanceReferenceOperation))
         {
+            RejectProgramLocalCrossBehaviourPropertyRead(op.Property); // CW22 (field-read twin)
             var instanceVal = VisitExpression(op.Instance);
             // Wave-12 [V2]: non-public autos read the declared backing symbol directly (their
             // accessors are never exported); see IsNonPublicAutoCrossProperty.
@@ -191,6 +192,7 @@ public partial class InvocationHandler
             && _planner.GetLayout(op.Property.ContainingType).Methods.TryGetValue(ifaceGetter, out var ifaceGetterMl))
         {
             GuardInterfaceHasBehaviourImplementor(op.Property.ContainingType, op.Property.Name);
+            RejectProgramLocalCrossBehaviourPropertyRead(op.Property); // CW22
             var ifaceInst = VisitExpression(op.Instance);
             return CrossCall(ifaceInst, LayoutPlanner.InterfaceDispatchName(ifaceGetter, ifaceGetterMl),
                 new List<(string, CLeaf)>(), ifaceGetterMl.Returns.ToArray(), returnType,

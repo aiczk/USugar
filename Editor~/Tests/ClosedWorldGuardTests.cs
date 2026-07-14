@@ -948,6 +948,104 @@ public class CwUnboxNblNull : UdonSharpBehaviour {
         Assert.NotNull(uasm);
     }
 
+    // ── CW22: cross-behaviour property/indexer/interface-accessor surfaces skipped the payload reject ──
+
+    [Fact]
+    public void CrossBehaviourProperty_ClassPayloadSet_LoudRejects()  // CW22
+    {
+        // The field twin `o.node = n` loud-rejects through RequireCanWriteCrossBehaviourField, but
+        // PreparePropertySet's cross arms SPV'd the same bundle with no payload test — the foreign
+        // program's is/cast/virtual dispatch then compares bundle[0] against ITS OWN typeobj
+        // instances (silent base-impl call / false `is`). Same choke, property syntax.
+        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
+using UdonSharp;
+public class CwNode22 { public int v; }
+public class CwHolder22 : UdonSharpBehaviour {
+    public CwNode22 NodeProp { get; set; }
+}
+public class CwPropEscape : UdonSharpBehaviour {
+    public CwHolder22 o;
+    void Start() { var n = new CwNode22(); o.NodeProp = n; }
+}", "CwPropEscape"));
+        Assert.Contains("property 'NodeProp'", ex.Message);
+    }
+
+    [Fact]
+    public void CrossBehaviourProperty_ClassPayloadGet_LoudRejects()  // CW22 read leg
+    {
+        // The read direction of the same surface: the field twin runs
+        // RequireCanReadCrossBehaviourField, the property GET arm ran nothing.
+        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
+using UdonSharp;
+public class CwNode22g { public int v; }
+public class CwHolder22g : UdonSharpBehaviour {
+    public CwNode22g NodeProp { get; set; }
+}
+public class CwPropRead : UdonSharpBehaviour {
+    public CwHolder22g o;
+    public int r;
+    void Start() { CwNode22g n = o.NodeProp; r = n != null ? 1 : 0; }
+}", "CwPropRead"));
+        Assert.Contains("property 'NodeProp'", ex.Message);
+    }
+
+    [Fact]
+    public void CrossBehaviourIndexer_ClassIndexArg_LoudRejects()  // CW22 indexer leg
+    {
+        // EmitCrossIndexerCall SPVs every index arg (and the setter value) into the foreign
+        // program — the same transport CrossCallArgPairs fences per-arg for method calls.
+        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
+using UdonSharp;
+public class CwNode22i { public int v; }
+public class CwIdxHost22 : UdonSharpBehaviour {
+    public int this[CwNode22i k] { get { return 1; } set { } }
+}
+public class CwIdxEscape : UdonSharpBehaviour {
+    public CwIdxHost22 o;
+    void Start() { var n = new CwNode22i(); o[n] = 5; }
+}", "CwIdxEscape"));
+        Assert.Contains("cannot cross a program boundary", ex.Message);
+    }
+
+    [Fact]
+    public void InterfaceProperty_ClassPayloadSet_LoudRejects()  // CW22 interface-accessor leg
+    {
+        // The interface set arm SPVs the value straight into whichever behaviour implements the
+        // interface — same boundary, one dispatch layer over.
+        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
+using UdonSharp;
+public class CwNode22f { public int v; }
+public interface ICwProp22 { CwNode22f NodeProp { get; set; } }
+public class CwIfaceHost22 : UdonSharpBehaviour, ICwProp22 {
+    public CwNode22f NodeProp { get; set; }
+}
+public class CwIfacePropEscape : UdonSharpBehaviour {
+    public ICwProp22 o;
+    void Start() { var n = new CwNode22f(); o.NodeProp = n; }
+}", "CwIfacePropEscape"));
+        Assert.Contains("property 'NodeProp'", ex.Message);
+    }
+
+    [Fact]
+    public void CrossBehaviourProperty_ScalarAndSdkTyped_Compiles()  // CW22 accept control
+    {
+        // The designed cross-property feature stays open: scalar and SDK-typed values carry no
+        // program-local bundle, so set/get through another behaviour's property stays legal.
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+using UnityEngine;
+public class CwHolder22c : UdonSharpBehaviour {
+    public int Count { get; set; }
+    public GameObject Go { get; set; }
+}
+public class CwPropClean : UdonSharpBehaviour {
+    public CwHolder22c o;
+    public int r;
+    void Start() { o.Count = 5; o.Go = gameObject; r = o.Count; }
+}", "CwPropClean");
+        Assert.NotNull(uasm);
+    }
+
     // A source-element read whose bundle is deep-cloned before any further extern runs: the element
     // __Get__ is followed (PUSH/COPY only, same block) by a fresh-bundle allocation. The alias bugs
     // (CW25/CW26) copied the raw element reference, so no allocation sat between the read and the write.
