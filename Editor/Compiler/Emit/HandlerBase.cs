@@ -1665,11 +1665,7 @@ public abstract partial class HandlerBase
     // registers the spec itself but NOT through RegisterGenericSpecialization — so this must run there too
     // (B56), else a nested LF referencing the method's T finds no owner and CoreVerify ICEs on raw 'T'.
     protected void RegisterFirstGenericSpec(IMethodSymbol constructed)
-    {
-        var genericDef = constructed.OriginalDefinition;
-        if (!_ctx.Generics.FirstSpecByDefinition.ContainsKey(genericDef))
-            _ctx.Generics.FirstSpecByDefinition[genericDef] = constructed;
-    }
+        => _ctx.Generics.SeedFirstSpec(constructed);
 
     protected void RegisterGenericSpecialization(IMethodSymbol constructed)
     {

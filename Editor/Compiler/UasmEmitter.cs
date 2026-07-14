@@ -1021,9 +1021,7 @@ public class UasmEmitter
             // which GS15<int>/GS15<string> exercises).
             if (fm.ContainingType.IsGenericType && !fm.IsDefinition)
             {
-                var fmGenericDef = fm.OriginalDefinition;
-                if (!_ctx.Generics.FirstSpecByDefinition.ContainsKey(fmGenericDef))
-                    _ctx.Generics.FirstSpecByDefinition[fmGenericDef] = fm;
+                _ctx.Generics.SeedFirstSpec(fm);
             }
 
             var slot = _ctx.Methods.Register(fm, i => i.ToString());
@@ -1069,9 +1067,7 @@ public class UasmEmitter
             string typeArgSuffix = "";
             if (sm.ContainingType.IsGenericType)
             {
-                var genericDef = sm.OriginalDefinition;
-                if (!_ctx.Generics.FirstSpecByDefinition.ContainsKey(genericDef))
-                    _ctx.Generics.FirstSpecByDefinition[genericDef] = sm;
+                _ctx.Generics.SeedFirstSpec(sm);
 
                 var containingArgPart = string.Join("_", sm.ContainingType.TypeArguments.Select(ExternResolver.GetUdonTypeName));
                 var methodArgPart = sm.IsGenericMethod
@@ -1131,9 +1127,7 @@ public class UasmEmitter
             // with the same second-distinct-instantiation guard ([X6] r5, widened in round 8).
             if (bm.IsGenericMethod && !bm.IsDefinition)
             {
-                var bmDef = bm.OriginalDefinition;
-                if (!_ctx.Generics.FirstSpecByDefinition.ContainsKey(bmDef))
-                    _ctx.Generics.FirstSpecByDefinition[bmDef] = bm;
+                _ctx.Generics.SeedFirstSpec(bm);
             }
             var slot = _ctx.Methods.Register(bm, i => i.ToString());
             var idx = slot.Index;

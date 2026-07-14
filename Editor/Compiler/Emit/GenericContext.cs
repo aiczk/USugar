@@ -22,6 +22,17 @@ public sealed class GenericContext
     public readonly Dictionary<IMethodSymbol, IMethodSymbol> FirstSpecByDefinition
         = new(SymbolEqualityComparer.Default);
 
+    /// <summary>First-wins seed: record the FIRST specialization seen per generic definition. Single-sourced
+    /// so every registration path (HandlerBase.RegisterFirstGenericSpec + the emitter's foreign-static /
+    /// struct-member / base-copy registration loops, which cannot call the protected HandlerBase method)
+    /// seeds identically — a past open-coded loop forgot to seed and shipped a bogus TArray (B70).</summary>
+    public void SeedFirstSpec(IMethodSymbol constructed)
+    {
+        var genericDef = constructed.OriginalDefinition;
+        if (!FirstSpecByDefinition.ContainsKey(genericDef))
+            FirstSpecByDefinition[genericDef] = constructed;
+    }
+
     public IDisposable EnterScope(IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> map, IMethodSymbol currentMethod)
     {
         if (TypeParamMap != null)
