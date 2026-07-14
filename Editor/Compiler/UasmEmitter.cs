@@ -132,43 +132,6 @@ public class UasmEmitter
         => EnumerateInternalCallTargets(op);
     internal ResolvedEdgeResolver DebugBuildResolver() => new ResolvedEdgeResolver(this);
 
-    // CA rewrite (M5a): the legacy reach result vs the resolver-driven worklist over the SAME emit state,
-    // for the offline facet-equivalence measurement. Call after Emit() (needs _plan). Nothing consumes the
-    // worklist output — it runs alongside the frozen _plan.Reach purely to diff.
-    // CA rewrite (M5b/M5c experiment): does the recursion-graph root set (registered functions + the 4
-    // compensation concats: own-generic / open-base-generic / generic-foreign-static / struct-member-defs)
-    // EQUAL the reach-derived root set (every walked body def + the supplementary generic-foreign-static
-    // bodies)? If so, the compensation arms are provably redundant — the reach fixpoint already reaches every
-    // node — and the recursion node source can be unified to the reach result, deleting the arms. Call after
-    // Emit(). Empty list = equal. (Recursion is Phase-2, so _methodFunctions/_openGenericBaseDefs are populated.)
-    internal List<string> DebugRecursionRootDiff()
-    {
-        var cmp = SymbolEqualityComparer.Default;
-        bool Syntaxed(IMethodSymbol m) => m.DeclaringSyntaxReferences.Length > 0;
-        var currentRoots = _methodFunctions.Keys.Select(m => m.OriginalDefinition)
-            .Concat(_classSymbol.GetMembers().OfType<IMethodSymbol>().Where(IsOwnGenericSeed)
-                .Select(m => (IMethodSymbol)m.OriginalDefinition))
-            .Concat(_openGenericBaseDefs)
-            .Concat(_reach.GenericForeignStaticBodies.Keys)
-            .Concat(_reach.StructMemberDefs)
-            .Where(Syntaxed).ToHashSet(cmp);
-        var reachRoots = _reach.BodyByDef.Keys
-            .Concat(_reach.GenericForeignStaticBodies.Keys)
-            .Where(Syntaxed).ToHashSet(cmp);
-        var diffs = new List<string>();
-        foreach (var m in currentRoots) if (!reachRoots.Contains(m)) diffs.Add("only-current " + m.ToDisplayString());
-        foreach (var m in reachRoots) if (!currentRoots.Contains(m)) diffs.Add("only-reach " + m.ToDisplayString());
-        return diffs;
-    }
-
-    internal ReachableBodies DebugPlanReach() => _plan.Reach;
-    // The LEGACY 5-collector reach, run standalone as the independent oracle for the M5a equivalence tests
-    // (since M5a swapped _plan.Reach to the worklist, DebugPlanReach is no longer the legacy reference).
-    internal ReachableBodies DebugBuildLegacyReach() => BuildReachableBodies(_plan.Methods);
-    internal ReachableBodies DebugRunResolverDrivenReach()
-        => new ResolverDrivenReach(DebugBuildResolver(), GetMethodBodyOperation,
-            () => _plan.FieldInitOps, IsCollectibleStructMember, StableOrdinalKey).Build(_plan.Methods);
-
     /// <summary>Called after handler emission, before optimization. Set for IR debugging.</summary>
     public Action<string, CModule> OnIrPass;
 
@@ -233,16 +196,12 @@ public class UasmEmitter
     // CA call-graph rewrite (M5a cutover): the reach fixpoint now runs through the unified resolver-driven
     // worklist instead of the legacy 5-collector BuildReachableBodies. Byte-neutral — M4's stable ordinal
     // decouples emit order from the worklist's (different) discovery order, and the worklist reproduces every
-    // ReachableBodies facet (proven by the def-granularity equivalence probes + golden + DiffFuzz). The one
-    // legacy side effect (_openGenericBaseDefs, consumed by BuildRecursionInfo) is reproduced from the
-    // worklist result. BuildReachableBodies is retained until M5b/M5c prove-and-remove it.
+    // ReachableBodies facet (proven by golden + DiffFuzz). The open-base-generic defs ride the reach result
+    // (ReachableBodies.OpenGenericBaseDefs) and reach the recursion graph through BodyByDef, so the former
+    // legacy _openGenericBaseDefs side-effect field is gone — the recursion node source is the reach result.
     ReachableBodies BuildReachableBodiesViaResolver(IMethodSymbol[] methods)
-    {
-        var reach = new ResolverDrivenReach(new ResolvedEdgeResolver(this), GetMethodBodyOperation,
+        => new ResolverDrivenReach(new ResolvedEdgeResolver(this), GetMethodBodyOperation,
             () => _fieldInitOps.Select(fi => fi.initOp), IsCollectibleStructMember, StableOrdinalKey).Build(methods);
-        foreach (var d in reach.OpenGenericBaseDefs) _openGenericBaseDefs.Add(d);
-        return reach;
-    }
 
     void SetReflectionValues()
     {
@@ -3532,183 +3491,6 @@ public class UasmEmitter
 
     // ── Static collection helpers ──
 
-    /// <summary>Design §1: the single provenance-tagged ReachableBodies fixpoint. ONE queue+visited
-    /// (keyed by definition) and ONE GetOperation per body replace the three separate Phase-1 collector
-    /// fixpoints (CollectForeignStaticMethods / CollectStructMethods / CollectBaseInstanceMethods) and the
-    /// duplicated body fetches. Seeds = own+inherited method bodies (<paramref name="methods"/>) + field
-    /// initializers (instance + static). Transitions = the UNION of the three current per-operation rules,
-    /// reusing the existing collectors verbatim (no new shape-switch): CollectForeignStaticCallsInOperation,
-    /// CollectStructMethodsInOperation, CollectBaseInstanceCallsInOperation, plus the ungated
-    /// CollectStructMemberDefinitions. Propagation is UNGATED (walks open self/cross-struct bodies too, per
-    /// the shared classifier), so the recursion/capture DEFINITION projection (StructMemberDefs) subsumes
-    /// the former BuildRecursionInfo.structDefRoots and CaptureScope.structQueue expansions; the REGISTRATION
-    /// projections keep their existing gates (IsCollectibleStructMember / IsClosedForeignStaticTarget). The
-    /// union-of-rules can widen reach vs the former staged seeding (design §5-3) — that surfaces in the census.
-    /// F1 (R-M3): each definition's body is fetched ONCE and retained in the result (BodyByDef), so
-    /// BuildRecursionInfo and CaptureScopeAnalysis read bodies from here instead of re-fetching.</summary>
-    ReachableBodies BuildReachableBodies(IMethodSymbol[] methods)
-    {
-        var result = new ReachableBodies();
-        var foreignStatics = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
-        var structMembers = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
-        var baseCopies = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
-        var structMemberDefs = result.StructMemberDefs;
-
-        var visited = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default); // definitions walked
-        var queue = new Queue<IMethodSymbol>();                                    // definitions to walk
-
-        var mintWalked = new HashSet<INamedTypeSymbol>(SymbolEqualityComparer.Default);
-
-        var suppCaptureDefs = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
-
-        void Walk(IOperation body)
-        {
-            if (body == null) return;
-            CollectForeignStaticCallsInOperation(body, foreignStatics, suppCaptureDefs); // gated: closed, non-generic
-            CollectStructMethodsInOperation(body, structMembers);       // gated: IsCollectibleStructMember
-            CollectBaseInstanceCallsInOperation(body, baseCopies);      // + populates _openGenericBaseDefs
-            CollectStructMemberDefinitions(body, structMemberDefs);     // ungated: definition-keyed
-            CollectClassMintReach(body);                                // B81: v1-class field-inits + ctor bodies
-        }
-
-        // B81 (B50's foreign-static twin on the reach side): a v1 class's field-INITIALIZER expressions and
-        // ctor BODY run at `new C()` mint, so any foreign-static / struct-member they call must be Phase-1
-        // registered too — but they live in the class declaration, not in the walked body tree, so the
-        // collectors never reach them. On seeing a minted v1 class (deduped by constructed type), walk its
-        // field-init ops and ctor body through the same Walk (recurses into nested mints; the parameterless
-        // ctor the struct-member collector skips at Arguments.Length==0 is covered here directly).
-        void CollectClassMintReach(IOperation op)
-        {
-            if (op == null) return;
-            if (op is IObjectCreationOperation oc && oc.Type is INamedTypeSymbol ct
-                && EmitPolicy.IsUserClassType(ct) && mintWalked.Add(ct))
-            {
-                result.MintedClasses.Add(ct); // CA-v2b-1: this concrete class needs a typeobj
-                foreach (var initOp in EnumerateClassFieldInitOps(ct)) Walk(initOp);
-                if (oc.Constructor is { IsImplicitlyDeclared: false } ctor)
-                    Walk(GetMethodBodyOperation(ctor.OriginalDefinition));
-                // CA-v2b-2: a virtual/override method of a minted class is a virtual-dispatch target reached
-                // ONLY through the inline typeobj chain — the invocation collector sees the abstract/static
-                // slot method, never this concrete override, so it would register on demand in Phase-2 AFTER
-                // BuildRecursionInfo (no graph node → polymorphic recursion under-spills, the MG-arm twin at
-                // EnumerateStructMemberRefs). Seed each here as a struct-member reach root + node.
-                // For each virtual SLOT reachable on this minted class, seed the class's most-derived impl —
-                // which may be an INHERITED-not-overridden virtual declared in a non-minted base (e.g.
-                // RecBse.Compute reached only through a RecDer instance). It is the actual dispatch target, so
-                // it must be a recursion node or a cycle through it (ctor-spawn recursion) is missed and the
-                // frame corrupts. Seeding by slot (most-derived first) avoids phantom-minting shadowed base
-                // methods (a base Spawn that `new`s the base type is never dispatched for this class).
-                var seededSlots = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
-                for (var vt = (ITypeSymbol)ct; vt is INamedTypeSymbol vtn && EmitPolicy.IsUserClassType(vtn); vt = vtn.BaseType)
-                    foreach (var vm in vt.GetMembers().OfType<IMethodSymbol>())
-                        if ((vm.IsVirtual || vm.IsOverride || vm.IsAbstract) && vm.MethodKind == MethodKind.Ordinary
-                            && seededSlots.Add(VirtualDispatch.SlotIntroducer(vm))
-                            && VirtualDispatch.MostDerivedImpl(ct, VirtualDispatch.SlotIntroducer(vm)) is { } impl
-                            && IsCollectibleStructMember(impl))
-                        {
-                            structMemberDefs.Add(impl.OriginalDefinition); // recursion-root set
-                            if (structMembers.Add(impl))                  // emit-registration set + body walk
-                                Walk(GetMethodBodyOperation(impl.OriginalDefinition));
-                        }
-                // CA-v2b-2: a base class's EXPLICIT parameterless ctor is called by this minted class's
-                // implicit ctor chain (EmitImplicitCtorChain), but no `: base()` invocation node exists to
-                // collect it — register each up the chain (and walk its body) so the derived chain's call
-                // lands on an emitted function and the base ctor's body reach (e.g. a virtual call) is seen.
-                for (var bt = ct.BaseType; bt is INamedTypeSymbol && EmitPolicy.IsUserClassType(bt); bt = bt.BaseType)
-                {
-                    var baseCtor = bt.InstanceConstructors.FirstOrDefault(
-                        c => c.Parameters.Length == 0 && !c.IsImplicitlyDeclared);
-                    if (baseCtor != null && IsCollectibleStructMember(baseCtor) && structMembers.Add(baseCtor))
-                    {
-                        structMemberDefs.Add(baseCtor.OriginalDefinition);
-                        Walk(GetMethodBodyOperation(baseCtor.OriginalDefinition));
-                    }
-                }
-            }
-            foreach (var child in op.ChildOps()) CollectClassMintReach(child);
-        }
-
-        void EnqueueDiscovered()
-        {
-            foreach (var m in foreignStatics) TryEnqueue(m);
-            foreach (var m in structMembers) TryEnqueue(m);
-            foreach (var m in baseCopies) TryEnqueue(m);
-            foreach (var m in _openGenericBaseDefs) TryEnqueue(m);
-            foreach (var m in structMemberDefs) TryEnqueue(m);
-        }
-        void TryEnqueue(IMethodSymbol m)
-        {
-            if (m.DeclaringSyntaxReferences.Length > 0 && visited.Add(m.OriginalDefinition))
-                queue.Enqueue(m.OriginalDefinition);
-        }
-
-        foreach (var m in methods) TryEnqueue(m);
-        // F1 double-seed fix: EmitFields has already spliced _staticFieldInitOps into the FRONT of
-        // _fieldInitOps (§3.6, runs before this in Emit()), so _fieldInitOps covers BOTH tiers — walk it
-        // once. (Walking _staticFieldInitOps as well only re-discovered the same reach, deduped by visited.)
-        foreach (var (_, initOp, _) in _fieldInitOps) Walk(initOp);
-        EnqueueDiscovered();
-
-        while (queue.Count > 0)
-        {
-            var def = queue.Dequeue();
-            var body = GetMethodBodyOperation(def);
-            result.BodyByDef[def] = body; // fetch once, retained for every consumer
-            Walk(body);
-            EnqueueDiscovered();
-        }
-
-        // Design 2026-07-10 v3 SS2A (B89 leg A), widened 2026-07-11 (pre-fuzz audit): SUPPLEMENTARY
-        // fixpoint over dropped generic-foreign-static definitions. The generic DEFINITIONS themselves
-        // stay registration-free (GenericForeignStaticBodies feeds capture analysis + recursion nodes
-        // only — F1/F2), but their bodies are walked with the REAL collectors and alternate with the
-        // main queue until both dry: a foreign static / struct member / base copy / class mint
-        // reachable ONLY through a generic-foreign-static body registers like any other reach (it
-        // previously reached emission with no CFunction — loud W17D reject; the struct-member leg was
-        // the same hole). Byte-neutral for programs without the shape: they have no supp-only members,
-        // so the registration sets are unchanged.
-        var suppQueue = new Queue<IMethodSymbol>();
-        void EnqueueSupp()
-        {
-            foreach (var d in suppCaptureDefs)
-                if (d.DeclaringSyntaxReferences.Length > 0
-                    && !visited.Contains(d)
-                    && !result.GenericForeignStaticBodies.ContainsKey(d))
-                    suppQueue.Enqueue(d);
-            suppCaptureDefs.Clear();
-        }
-        EnqueueSupp();
-        while (suppQueue.Count > 0)
-        {
-            var def = suppQueue.Dequeue();
-            if (result.GenericForeignStaticBodies.ContainsKey(def)) continue;
-            var suppBody = GetMethodBodyOperation(def);
-            result.GenericForeignStaticBodies[def] = suppBody;
-            Walk(suppBody);
-            EnqueueDiscovered();
-            while (queue.Count > 0)
-            {
-                var mainDef = queue.Dequeue();
-                var mainBody = GetMethodBodyOperation(mainDef);
-                result.BodyByDef[mainDef] = mainBody;
-                Walk(mainBody);
-                EnqueueDiscovered();
-            }
-            EnqueueSupp();
-        }
-
-        // CA call-graph rewrite (M4): the registration ordinal is assigned by a traversal-INDEPENDENT
-        // stable key (the symbol's documentation-comment id), NOT the reach walk's emergent discovery
-        // order. This decouples export/var/typeobj byte order from HOW the reach set is discovered, so the
-        // M5 worklist fuse (which cannot reproduce the 5-collector emergent order) stays byte-neutral. The
-        // one-time reorder this introduces is a justified golden regen (order-only: same set, DiffFuzz
-        // confirms semantics — a method export block / typeobj dispatch arm is position-independent).
-        result.ForeignStatics = foreignStatics.OrderBy(StableOrdinalKey, StringComparer.Ordinal).ToArray();
-        result.StructMembers = structMembers.OrderBy(StableOrdinalKey, StringComparer.Ordinal).ToArray();
-        result.BaseCopies = baseCopies.OrderBy(StableOrdinalKey, StringComparer.Ordinal).ToArray();
-        return result;
-    }
-
     // CA call-graph rewrite (M4): the stable, traversal-independent ordinal key. GetDocumentationCommentId
     // is a unique deterministic per-symbol id ("M:Ns.Type.Method(args)" / "T:Ns.Type"); OriginalDefinition
     // normalizes generic specs to their definition (the graph is def-keyed). Ordinal string comparison keeps
@@ -3748,61 +3530,6 @@ public class UasmEmitter
     internal static bool IsClosedForeignStaticTarget(IMethodSymbol m)
         => !(m.ContainingType is INamedTypeSymbol ct && ct.IsGenericType
              && ct.TypeArguments.Any(ta => ta is ITypeParameterSymbol));
-
-    void CollectForeignStaticCallsInOperation(IOperation op, HashSet<IMethodSymbol> result,
-        HashSet<IMethodSymbol> suppCaptureDefs = null)
-    {
-        if (op == null) return;
-        // Design 2026-07-10 v3 SS2A (B89 leg A): the arms below deliberately DROP generic /
-        // open-container foreign statics from the registration set - but their closures still need
-        // capture analysis. Report the dropped definitions to the supplementary capture-roots set.
-        void SuppDef(IMethodSymbol original)
-            => suppCaptureDefs?.Add(original.OriginalDefinition);
-        if (op is IInvocationOperation inv && IsForeignStatic(inv.TargetMethod))
-        {
-            var original = inv.TargetMethod.ReducedFrom ?? inv.TargetMethod;
-            if (!original.IsGenericMethod && IsClosedForeignStaticTarget(original))
-                result.Add(original);
-            else
-                SuppDef(original);
-        }
-        // wave-13 staticro lens (2026-07-04): a delegate/method-group reference to a foreign static
-        // method (`Func<int,int> f = Helper.M;`) is itself a call site the collector must see — the
-        // ONLY prior collection route was IInvocationOperation, so a method referenced exclusively via
-        // delegate creation never got a CFunction registered at all, and ResolveDelegateBridge's
-        // fallback to the frozen LayoutPlanner (which never pre-plans non-UdonSharpBehaviour types)
-        // crashed with "was not pre-planned" on legal C#.
-        if (op is IMethodReferenceOperation mref && IsForeignStatic(mref.Method))
-        {
-            var original = mref.Method.ReducedFrom ?? mref.Method;
-            if (!original.IsGenericMethod && IsClosedForeignStaticTarget(original))
-                result.Add(original);
-            else
-                SuppDef(original);
-        }
-        // B47 (wave-14 r6): a STATIC COMPUTED property on a user struct/class (StaticPropHelper<T>.Doubled)
-        // is referenced as an IPropertyReferenceOperation, never an invocation/method-ref, so the two arms
-        // above never saw it — its accessor fell through to a bogus SystemObjectArray.__get_Doubled__
-        // extern (the B46 shape, one node kind over). Collect the computed accessor(s) as foreign statics
-        // (they ARE static "methods" — get_X/set_X); auto-properties (backed by a field) are excluded by
-        // IsComputedProperty, BCL statics by IsForeignStatic's extern-namespace filter, and an open
-        // generic containing type by the closed guard (registered on demand at its closed call site).
-        if (op is IPropertyReferenceOperation spr && spr.Property.IsStatic && IsComputedProperty(spr.Property))
-        {
-            if (spr.Property.GetMethod is { } sg && IsForeignStatic(sg))
-            {
-                if (!sg.IsGenericMethod && IsClosedForeignStaticTarget(sg)) result.Add(sg);
-                else SuppDef(sg);
-            }
-            if (spr.Property.SetMethod is { } ss && IsForeignStatic(ss))
-            {
-                if (!ss.IsGenericMethod && IsClosedForeignStaticTarget(ss)) result.Add(ss);
-                else SuppDef(ss);
-            }
-        }
-        foreach (var child in op.ChildOps())
-            CollectForeignStaticCallsInOperation(child, result, suppCaptureDefs);
-    }
 
     // A property is auto-implemented iff the compiler synthesized a backing field associated with it.
     // Computed (expression-bodied or block-bodied) properties have no such field and must be inlined.
@@ -3931,71 +3658,6 @@ public class UasmEmitter
             yield return convM;
     }
 
-    void CollectStructMethodsInOperation(IOperation op, HashSet<IMethodSymbol> result)
-    {
-        if (op == null) return;
-        foreach (var m in EnumerateStructMemberRefs(op))
-            if (IsCollectibleStructMember(m)) result.Add(m);
-        // `using` resource: the Dispose() is invoked IMPLICITLY (no IInvocationOperation in the tree), so
-        // collect a user-struct disposable's Dispose so it is registered as a struct method and the using
-        // lowering can JUMP to it instead of emitting a non-existent SystemObjectArray.__Dispose__ extern.
-        if (op is IUsingOperation uo) CollectUsingDispose(uo.Resources, result);
-        if (op is IUsingDeclarationOperation ud) CollectUsingDispose(ud.DeclarationGroup, result);
-        foreach (var child in op.ChildOps())
-            CollectStructMethodsInOperation(child, result);
-    }
-
-    /// <summary>The ungated definition-side counterpart of CollectStructMethodsInOperation — same node
-    /// shapes (ctor/instance-method/computed-property/operator/conversion on a user struct), but collects
-    /// the method's OriginalDEFINITION unfiltered (no IsCollectibleStructMember gate) instead of a
-    /// constructed CFunction-ready symbol. Definition-keyed regardless of instantiation (mirroring
-    /// "_methodFunctions.Keys.Select(OriginalDefinition)"), so it discovers a struct member that Phase-1
-    /// registration deliberately skipped (the open self/cross-struct-method form) but that the emitted
-    /// program can still recursively re-enter or capture into.</summary>
-    // internal: the ungated struct-member DEFINITION transition of the single ReachableBodies fixpoint
-    // (BuildReachableBodies). Its StructMemberDefs projection feeds BOTH BuildRecursionInfo roots and
-    // CaptureScope roots — one set, one definition, one walk (design §1, consumers 2 & 3).
-    internal static void CollectStructMemberDefinitions(IOperation op, HashSet<IMethodSymbol> defs)
-    {
-        if (op == null) return;
-        foreach (var m in EnumerateStructMemberRefs(op))
-            defs.Add(m.OriginalDefinition);
-        if (op is IUsingOperation or IUsingDeclarationOperation)
-        {
-            var resources = op is IUsingOperation uo2 ? uo2.Resources : ((IUsingDeclarationOperation)op).DeclarationGroup;
-            if (resources is IVariableDeclarationGroupOperation g)
-                foreach (var decl in g.Declarations)
-                    foreach (var declarator in decl.Declarators)
-                        if (declarator.Symbol.Type is INamedTypeSymbol dnt
-                            && EmitPolicy.FindStructDisposeMethod(dnt) is { } dispose)
-                            defs.Add(dispose.OriginalDefinition);
-        }
-        foreach (var child in op.ChildOps())
-            CollectStructMemberDefinitions(child, defs);
-    }
-
-    static void CollectUsingDispose(IOperation resources, HashSet<IMethodSymbol> result)
-    {
-        if (resources is IVariableDeclarationGroupOperation g)
-        {
-            foreach (var decl in g.Declarations)
-                foreach (var declarator in decl.Declarators)
-                    AddStructDispose(declarator.Symbol.Type, result);
-        }
-        else if (resources != null)
-        {
-            AddStructDispose(resources.Type, result);
-        }
-    }
-
-    static void AddStructDispose(ITypeSymbol type, HashSet<IMethodSymbol> result)
-    {
-        if (type is INamedTypeSymbol nt && EmitPolicy.IsUserStruct(nt)
-            && EmitPolicy.FindStructDisposeMethod(nt) is { } dispose
-            && IsCollectibleStructMember(dispose))
-            result.Add(dispose);
-    }
-
     internal bool IsBaseInstanceMethod(IMethodSymbol method)
     {
         if (method.IsStatic) return false;
@@ -4019,12 +3681,6 @@ public class UasmEmitter
         }
         return false;
     }
-
-    /// <summary>Wave-9 round-9 [Y5]/[Y6]: definitions of base-declared generic methods called with
-    /// OPEN type args (the round-8 [Y11] on-demand-spec family). Their bodies are emitted on demand
-    /// per closed call site, so the DEFINITION seeds the collectors and the recursion graph exactly
-    /// like an eagerly registered base copy. Populated by CollectBaseInstanceCallsInOperation.</summary>
-    readonly HashSet<IMethodSymbol> _openGenericBaseDefs = new(SymbolEqualityComparer.Default);
 
     /// <summary>The single ReachableBodies fixpoint result (design §1), built once in Emit() before
     /// CaptureScopeAnalysis and consumed by the Phase-1 registration regimes, BuildRecursionInfo roots,
@@ -4052,68 +3708,6 @@ public class UasmEmitter
     static System.InvalidOperationException ReachMiss(IMethodSymbol def)
         => new($"ReachableBodies.BodyByDef has no entry for reach definition '{def?.ToDisplayString()}' — "
              + "the reach fixpoint did not walk it (BodyByDef authoritativeness invariant violation).");
-
-    void CollectBaseInstanceCallsInOperation(IOperation op, HashSet<IMethodSymbol> result)
-    {
-        if (op == null) return;
-        // Wave-9 round-8 [Y11]: skip OPEN-constructed generic targets (`P2<T>(x)` inside a generic
-        // body — the type args are the ENCLOSING method's type params). The copy registration would
-        // be keyed by a symbol no emission-time lookup ever produces (the invocation handler
-        // substitutes the enclosing spec's map first), leaving a dead function whose param/return
-        // types cannot resolve; the closed specialization registers lazily at the call site instead.
-        // Wave-9 round-9 [Y5]/[Y6]: the skipped target's DEFINITION is still tracked — the on-demand
-        // spec emits that definition's body, so it must seed the foreign-static/struct collectors
-        // (using/Dispose inside it ICEd "No CFunction registered for method 'Dispose'") and join
-        // BuildRecursionInfo's roots (a self-recursive base generic had no graph node, no self-edge,
-        // and no spills — live locals clobbered per frame, VM-proven 63 where the CLR gives 234).
-        if (op is IInvocationOperation inv && IsBaseInstanceMethod(inv.TargetMethod))
-        {
-            if (!(inv.TargetMethod.IsGenericMethod
-                  && inv.TargetMethod.TypeArguments.Any(ta => ta is ITypeParameterSymbol)))
-                result.Add(inv.TargetMethod);
-            else
-                _openGenericBaseDefs.Add(inv.TargetMethod.OriginalDefinition);
-        }
-        // base.Prop / base[i]: a property/indexer reference invokes an accessor implicitly (it is not an
-        // IInvocationOperation), so collect the base accessor too — else the read/write handler emits a
-        // bogus SystemX.__get_Prop__ extern instead of a JUMP to the registered base getter/setter.
-        // ONLY actual `base.` receivers (round 7): a this/implicit reference to an OVERRIDDEN base
-        // accessor must dispatch the chain-leaf override (ResolveDispatchProperty at the lookup sites),
-        // not a base-instance copy — registering it here made the this-path lookups direct-call the
-        // copy, which runs the base accessor body (manual, pre-chain-dispatch behavior) or reads the base
-        // declaration's `__basebk` storage (auto, post-917d99c). Non-overridden base accessors are
-        // already registered as inherited methods and never needed this arm.
-        if (op is IPropertyReferenceOperation pr
-            && pr.Instance is IInstanceReferenceOperation { Syntax: BaseExpressionSyntax })
-        {
-            if (pr.Property.GetMethod is { } g && IsBaseInstanceMethod(g)) result.Add(g);
-            if (pr.Property.SetMethod is { } s && IsBaseInstanceMethod(s)) result.Add(s);
-        }
-        // Wave-9 [W3]: a `base.M` METHOD GROUP (delegate conversion) is a non-virtual binding of the
-        // BASE implementation, exactly like a `base.M()` call (C# ldftn semantics) — register the
-        // base-instance copy so ResolveDelegateBridge can bridge the base BODY instead of the
-        // chain-root export (which is the most-derived override in this program, VM-proven 6 vs 103).
-        if (op is IMethodReferenceOperation mref
-            && mref.Instance is IInstanceReferenceOperation { Syntax: BaseExpressionSyntax }
-            && IsBaseInstanceMethod(mref.Method))
-            result.Add(mref.Method);
-        // Wave-10 round-10 [Z1]: a method GROUP of an INHERITED generic method through `this`
-        // (implicit or explicit). The [Y7] bridge registers the constructed spec at EMIT time —
-        // AFTER BuildRecursionInfo ran — so a self-recursive base generic referenced ONLY through
-        // a delegate had no graph node, no self-edge, and no spill machinery (VM-proven r=17 where
-        // the CLR gives 47: every unwinding frame replayed the innermost frame's local). Seed the
-        // DEFINITION exactly like an open-T call site ([Y5] — closed and open MG flavors alike,
-        // the spec lookup reduces both ends to OriginalDefinition); a non-recursive body gains a
-        // trivially cycle-free node. `base.` and variable receivers stay uncollected — the [Y7]
-        // creation gate rejects them loudly.
-        if (op is IMethodReferenceOperation gmref && gmref.Method.IsGenericMethod
-            && IsBaseInstanceMethod(gmref.Method)
-            && (gmref.Instance == null
-                || gmref.Instance is IInstanceReferenceOperation { Syntax: not BaseExpressionSyntax }))
-            _openGenericBaseDefs.Add(gmref.Method.OriginalDefinition);
-        foreach (var child in op.ChildOps())
-            CollectBaseInstanceCallsInOperation(child, result);
-    }
 
     internal bool IsForeignStatic(IMethodSymbol method)
     {
