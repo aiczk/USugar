@@ -125,6 +125,14 @@ public class UasmEmitter
     public Compilation Compilation => _ctx.Compilation;
     public INamedTypeSymbol ClassSymbol => _ctx.ClassSymbol;
 
+    // CA call-graph rewrite (M0): test-only accessors exposing the live current classifier and a
+    // ResolvedEdgeResolver built from this emitter's context (post-Emit, so VirtualDispatch is seeded),
+    // so the equivalence gate diffs new-vs-old on identical state. Unused by production emission.
+    internal IEnumerable<IMethodSymbol> DebugEnumerateInternalCallTargets(IOperation op)
+        => EnumerateInternalCallTargets(op);
+    internal ResolvedEdgeResolver DebugBuildResolver()
+        => new ResolvedEdgeResolver(t => t, _ctx.VirtualDispatch, _classSymbol);
+
     /// <summary>Called after handler emission, before optimization. Set for IR debugging.</summary>
     public Action<string, CModule> OnIrPass;
 
