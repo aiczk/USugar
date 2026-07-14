@@ -517,6 +517,16 @@ namespace TestStubs
         throw new System.Exception("no matching op found in " + cls);
     }
 
+    /// <summary>CA rewrite (M5b/M5c): diff the recursion-graph root set (registered + compensation arms)
+    /// against the reach-derived root set. Empty list = the compensation arms are redundant (removable).</summary>
+    public static List<string> RecursionRootDiff(string src, string cls)
+    {
+        var comp = BuildCompilation(src, cls, out var classSymbol);
+        var emitter = new UasmEmitter(comp, classSymbol);
+        emitter.Emit();
+        return emitter.DebugRecursionRootDiff();
+    }
+
     /// <summary>CA rewrite (M5a): diff the legacy BuildReachableBodies output against the resolver-driven
     /// worklist over the same emit state, at OriginalDefinition granularity, facet by facet. Empty list =
     /// def-granularity equivalent. Per-spec (constructed) differences vanish under the def projection.</summary>

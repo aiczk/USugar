@@ -135,6 +135,32 @@ public class UasmEmitter
     // CA rewrite (M5a): the legacy reach result vs the resolver-driven worklist over the SAME emit state,
     // for the offline facet-equivalence measurement. Call after Emit() (needs _plan). Nothing consumes the
     // worklist output — it runs alongside the frozen _plan.Reach purely to diff.
+    // CA rewrite (M5b/M5c experiment): does the recursion-graph root set (registered functions + the 4
+    // compensation concats: own-generic / open-base-generic / generic-foreign-static / struct-member-defs)
+    // EQUAL the reach-derived root set (every walked body def + the supplementary generic-foreign-static
+    // bodies)? If so, the compensation arms are provably redundant — the reach fixpoint already reaches every
+    // node — and the recursion node source can be unified to the reach result, deleting the arms. Call after
+    // Emit(). Empty list = equal. (Recursion is Phase-2, so _methodFunctions/_openGenericBaseDefs are populated.)
+    internal List<string> DebugRecursionRootDiff()
+    {
+        var cmp = SymbolEqualityComparer.Default;
+        bool Syntaxed(IMethodSymbol m) => m.DeclaringSyntaxReferences.Length > 0;
+        var currentRoots = _methodFunctions.Keys.Select(m => m.OriginalDefinition)
+            .Concat(_classSymbol.GetMembers().OfType<IMethodSymbol>().Where(IsOwnGenericSeed)
+                .Select(m => (IMethodSymbol)m.OriginalDefinition))
+            .Concat(_openGenericBaseDefs)
+            .Concat(_reach.GenericForeignStaticBodies.Keys)
+            .Concat(_reach.StructMemberDefs)
+            .Where(Syntaxed).ToHashSet(cmp);
+        var reachRoots = _reach.BodyByDef.Keys
+            .Concat(_reach.GenericForeignStaticBodies.Keys)
+            .Where(Syntaxed).ToHashSet(cmp);
+        var diffs = new List<string>();
+        foreach (var m in currentRoots) if (!reachRoots.Contains(m)) diffs.Add("only-current " + m.ToDisplayString());
+        foreach (var m in reachRoots) if (!currentRoots.Contains(m)) diffs.Add("only-reach " + m.ToDisplayString());
+        return diffs;
+    }
+
     internal ReachableBodies DebugPlanReach() => _plan.Reach;
     internal ReachableBodies DebugRunResolverDrivenReach()
         => new ResolverDrivenReach(DebugBuildResolver(), GetMethodBodyOperation,
@@ -2565,47 +2591,20 @@ public class UasmEmitter
     // tail dispatch sites are spared so bundle-driven deep tail recursion never spills (§4.4).
     void BuildRecursionInfo()
     {
-        // Generic method definitions are monomorphized per call-site and thus skipped in registration, so
-        // they are absent from _methodFunctions. Add them explicitly — otherwise a recursive generic method
-        // (e.g. `int Fact<T>(int n) => n * Fact<T>(n-1)`) has no graph node and its frame is never spilled.
-        var roots = _methodFunctions.Keys
-            .Select(m => m.OriginalDefinition)
-            // C3: SAME own-generic MethodKind set as ComputeMethods's reach seed (IsOwnGenericSeed) — a
-            // recursive generic method of any user kind needs a graph node or its frame is never spilled.
-            .Concat(_classSymbol.GetMembers().OfType<IMethodSymbol>()
-                .Where(IsOwnGenericSeed)
-                .Select(m => (IMethodSymbol)m.OriginalDefinition))
-            // Wave-9 round-9 [Y5]: base-declared generic definitions called with OPEN type args —
-            // their on-demand specs (round-8 [Y11]) emit the base definition's body, so the
-            // definition needs a graph node exactly like a same-class generic definition; without
-            // it a self-recursive inherited generic had no self-edge and never spilled (VM-proven
-            // 63 where the CLR gives 234 — live locals clobbered per frame).
-            .Concat(_openGenericBaseDefs)
-            // SS2A/M3 (F8): generic foreign-static definitions — emitted on demand like open base
-            // generics, so they need graph nodes the same way (armor + self-recursion spill).
+        // CA rewrite (M5c): the recursion node source is UNIFIED to the single reach fixpoint result — every
+        // walked body DEFINITION (BodyByDef) plus the supplementary generic-foreign-static bodies. This
+        // DELETES the four former compensation concats — the registered-functions base (_methodFunctions),
+        // the own-generic seed, the open-base-generic defs (_openGenericBaseDefs), and the struct-member defs
+        // — that each patched the Phase-2-registration / Phase-1-reach temporal gap (own-generic monomorphized
+        // out of registration; base/foreign generics emitted on demand after this pass; generic struct members
+        // registered on demand; each formerly missing a graph node → silent under-spill, VM-proven). The one
+        // reach fixpoint already reaches every one of those nodes, so the arms are redundant — proven
+        // byte-neutral by RecursionRootUnificationTests (the exact old-vs-reach root diff is empty for every
+        // shape each arm targeted) + golden + DiffFuzz. GenericForeignStaticBodies is kept: its bodies ride a
+        // SEPARATE supplementary dict, not BodyByDef. Order-independent — the facets are SCC/fixpoint/set
+        // invariants, so the reach walk's different discovery order is byte-neutral.
+        var roots = _reach.BodyByDef.Keys
             .Concat(_reach.GenericForeignStaticBodies.Keys)
-            .Where(m => m.DeclaringSyntaxReferences.Length > 0)
-            .Distinct(SymbolEqualityComparer.Default)
-            .Cast<IMethodSymbol>()
-            .ToList();
-
-        // Wave-14: a generic struct member reached ONLY via internal self/cross-struct-method
-        // reference (Box<T>'s own body, or mutual recursion between two DIFFERENT generic struct
-        // types — APart<T> <-> BPart<T>) is registered ON DEMAND during Phase-2 body emission
-        // (HandlerBase.ResolveStructMember/RegisterGenericSpecialization), which runs AFTER this
-        // analysis — so it has no graph node yet and _methodFunctions above never sees it (Phase-1's
-        // struct collector walks the SAME open/shared body and, correctly, skips exactly this
-        // open-form reference to avoid a ghost CFunction — IsCollectibleStructMember). Without a node,
-        // IsRecursiveEdge silently returns false for the edge and the software-stack spill never wraps
-        // it (VM-proven: mutual recursion between two generic struct types clobbered shared frame
-        // fields — 7 instead of the CLR's 21).
-        //
-        // ReachableBodies definition projection (design §1, consumer 2): the ungated struct-member
-        // DEFINITION set from the single reach fixpoint (_reachStructMemberDefs) replaces this method's
-        // former private structDefRoots BFS — the same "every user-struct member DEFINITION transitively
-        // reachable" set (both propagate via CollectStructMemberDefinitions, ignoring open/closed so
-        // instantiations collapse onto one node), with the duplicate semantic-model body walk removed.
-        roots = roots.Concat(_reach.StructMemberDefs)
             .Where(m => m.DeclaringSyntaxReferences.Length > 0)
             .Distinct(SymbolEqualityComparer.Default)
             .Cast<IMethodSymbol>()
