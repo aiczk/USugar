@@ -696,20 +696,20 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
                                 {
                                     var argType = ExternResolver.GetUdonTypeName(invoke.Parameters[i].Type, typeParamMap);
                                     EmitExternVoid(
-                                        "VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid",
+                                        ExternResolver.EventReceiverSetProgramVariable,
                                         new List<CLeaf> { tgt, Const(convArgs[i], "SystemString"), LoadField(convArgs[i], argType) });
                                 }
                                 // Stage 2 §5.1: forward the staged env to the receiver alongside the conv args
                                 // (a missing-symbol SPV on a capture-free receiver is a proven silent no-op).
                                 EmitExternVoid(
-                                    "VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid",
+                                    ExternResolver.EventReceiverSetProgramVariable,
                                     new List<CLeaf> { tgt, Const(convEnv, "SystemString"), LoadField(convEnv, EnvEmit.EnvType) });
                                 EmitExternVoid(
-                                    "VRCUdonCommonInterfacesIUdonEventReceiver.__SendCustomEvent__SystemString__SystemVoid",
+                                    ExternResolver.EventReceiverSendCustomEvent,
                                     new List<CLeaf> { tgt, mtd }, reentrant);
                                 if (retType != null)
                                     EmitAssign(retSlot, ExternCall(
-                                        "VRCUdonCommonInterfacesIUdonEventReceiver.__GetProgramVariable__SystemString__SystemObject",
+                                        ExternResolver.EventReceiverGetProgramVariable,
                                         new List<CLeaf> { tgt, Const(convRet, "SystemString") }, "SystemObject"));
                             }, failArm);
                         });

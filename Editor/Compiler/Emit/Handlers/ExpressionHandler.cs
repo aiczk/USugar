@@ -200,7 +200,7 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
             var instanceVal = VisitExpression(fieldRef.Instance);
             var nameConst = Const(fieldRef.Field.Name, "SystemString");
             return ExternCall(
-                "VRCUdonCommonInterfacesIUdonEventReceiver.__GetProgramVariable__SystemString__SystemObject",
+                ExternResolver.EventReceiverGetProgramVariable,
                 new List<CLeaf> { instanceVal, nameConst },
                 "SystemObject");
         }

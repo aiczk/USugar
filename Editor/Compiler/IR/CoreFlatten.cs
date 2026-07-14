@@ -318,7 +318,7 @@ public static class CoreFlatten
         foreach (var (paramName, value) in cc.Params)
         {
             ctx.Current.Stmts.Add(new CExprStmt(new CExternCall(
-                "VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid",
+                ExternResolver.EventReceiverSetProgramVariable,
                 new List<CLeaf> { inst, new CConst(paramName, "SystemString"), value }, "SystemVoid", null)));
         }
 
@@ -328,7 +328,7 @@ public static class CoreFlatten
         // would be captured post-clobber). The copy-ins above are emitted back-to-back into the same
         // flat block, so the count is exact by construction.
         ctx.Current.Stmts.Add(new CExprStmt(new CExternCall(
-            "VRCUdonCommonInterfacesIUdonEventReceiver.__SendCustomEvent__SystemString__SystemVoid",
+            ExternResolver.EventReceiverSendCustomEvent,
             new List<CLeaf> { inst, new CConst(cc.EventName, "SystemString") }, "SystemVoid", null,
             cc.Reentrant, cc.Reentrant ? cc.Params.Count : 0)));
 
@@ -337,7 +337,7 @@ public static class CoreFlatten
             var ret = cc.Returns[0];
             var dest = ctx.AllocScratch(cc.Type);
             ctx.Current.Stmts.Add(new CExprStmt(new CExternCall(
-                "VRCUdonCommonInterfacesIUdonEventReceiver.__GetProgramVariable__SystemString__SystemObject",
+                ExternResolver.EventReceiverGetProgramVariable,
                 new List<CLeaf> { inst, new CConst(ret.Id, "SystemString") }, cc.Type, dest)));
             return new CSlotRef(dest, cc.Type);
         }
@@ -348,7 +348,7 @@ public static class CoreFlatten
             {
                 var dest = ctx.AllocScratch("SystemObject");
                 ctx.Current.Stmts.Add(new CExprStmt(new CExternCall(
-                    "VRCUdonCommonInterfacesIUdonEventReceiver.__GetProgramVariable__SystemString__SystemObject",
+                    ExternResolver.EventReceiverGetProgramVariable,
                     new List<CLeaf> { inst, new CConst(ret.Id, "SystemString") }, "SystemObject", dest)));
             }
         }

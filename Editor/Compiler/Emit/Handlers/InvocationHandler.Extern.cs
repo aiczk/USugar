@@ -399,7 +399,7 @@ public partial class InvocationHandler
 
                 // idValue = behaviour.GetProgramVariable("__refl_typeid" or "__refl_typeids")
                 var idValueVal = ExternCall(
-                    "VRCUdonCommonInterfacesIUdonEventReceiver.__GetProgramVariable__SystemString__SystemObject",
+                    ExternResolver.EventReceiverGetProgramVariable,
                     new List<CLeaf> { elementVal, reflKeyConst },
                     "SystemObject");
 
@@ -507,7 +507,7 @@ public partial class InvocationHandler
 
                 // Type check
                 var idValueVal = ExternCall(
-                    "VRCUdonCommonInterfacesIUdonEventReceiver.__GetProgramVariable__SystemString__SystemObject",
+                    ExternResolver.EventReceiverGetProgramVariable,
                     new List<CLeaf> { elementVal, reflKeyConst },
                     "SystemObject");
 
@@ -598,7 +598,7 @@ public partial class InvocationHandler
 
         // idValue = behaviour.GetProgramVariable(reflKey)
         var idValueVal = ExternCall(
-            "VRCUdonCommonInterfacesIUdonEventReceiver.__GetProgramVariable__SystemString__SystemObject",
+            ExternResolver.EventReceiverGetProgramVariable,
             new List<CLeaf> { elementVal, reflKeyConst },
             "SystemObject");
 
@@ -909,10 +909,10 @@ public partial class InvocationHandler
                 var instRef = SlotRef(instSlot);
                 var nameConst = Const(behField.Field.Name, "SystemString");
                 return (() => ExternCall(
-                    "VRCUdonCommonInterfacesIUdonEventReceiver.__GetProgramVariable__SystemString__SystemObject",
+                    ExternResolver.EventReceiverGetProgramVariable,
                     new List<CLeaf> { instRef, nameConst }, "SystemObject"),
                     v => EmitExternVoid(
-                        "VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid",
+                        ExternResolver.EventReceiverSetProgramVariable,
                         new List<CLeaf> { instRef, nameConst, v }));
             }
             // Captured local/parameter: no flat heap address (Stage 2 §4.1 — ResolveOutRefFieldName

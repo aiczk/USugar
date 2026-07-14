@@ -159,7 +159,7 @@ public partial class InvocationHandler
                 // Auto-property: direct GetProgramVariable("PropertyName")
                 var nameConst = Const(op.Property.Name, "SystemString");
                 return ExternCall(
-                    "VRCUdonCommonInterfacesIUdonEventReceiver.__GetProgramVariable__SystemString__SystemObject",
+                    ExternResolver.EventReceiverGetProgramVariable,
                     new List<CLeaf> { instanceVal, nameConst },
                     returnType);
             }

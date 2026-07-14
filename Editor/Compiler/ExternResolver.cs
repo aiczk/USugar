@@ -457,6 +457,17 @@ public static class ExternResolver
                        .Replace("<", "").Replace(">", "").Replace("?", "");
     }
 
+    // The IUdonEventReceiver cross-program marshalling externs — the single source for the
+    // SetProgramVariable / SendCustomEvent / GetProgramVariable signatures shared by every copy-in / dispatch
+    // producer (CoreFlatten + the handlers) and the FlatVerify recognizer, which formerly substring-matched
+    // the literal and would silently stop matching if the format drifted.
+    public const string EventReceiverSetProgramVariable =
+        "VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid";
+    public const string EventReceiverSendCustomEvent =
+        "VRCUdonCommonInterfacesIUdonEventReceiver.__SendCustomEvent__SystemString__SystemVoid";
+    public const string EventReceiverGetProgramVariable =
+        "VRCUdonCommonInterfacesIUdonEventReceiver.__GetProgramVariable__SystemString__SystemObject";
+
     public static string BuildMethodSignature(string containingType, string methodName, string[] paramTypes, string returnType)
     {
         var sanitizedType = RemapExternType(SanitizeTypeName(containingType));

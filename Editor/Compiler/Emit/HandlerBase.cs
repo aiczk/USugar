@@ -1104,7 +1104,7 @@ public abstract partial class HandlerBase
         RejectProgramLocalCrossBehaviourFieldWrite(field);
         var nameConst = Const(field.Name, "SystemString");
         EmitExternVoid(
-            "VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid",
+            ExternResolver.EventReceiverSetProgramVariable,
             new List<CLeaf> { instanceVal, nameConst, value });
     }
 
@@ -1284,8 +1284,8 @@ public abstract partial class HandlerBase
                     // spill window (preSpillStmts: 1 — the SetProgramVariable emitted just above).
                     bool ifaceSetReentrant = TryMarkReentrantCrossDispatch(propRef, ifaceSetter);
                     var paramNameConst = Const(ifaceSetterMl.ParamIds[0], "SystemString");
-                    EmitExternVoid("VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid", new List<CLeaf> { instanceVal, paramNameConst, srcVal });
-                    EmitExternVoid("VRCUdonCommonInterfacesIUdonEventReceiver.__SendCustomEvent__SystemString__SystemVoid",
+                    EmitExternVoid(ExternResolver.EventReceiverSetProgramVariable, new List<CLeaf> { instanceVal, paramNameConst, srcVal });
+                    EmitExternVoid(ExternResolver.EventReceiverSendCustomEvent,
                         new List<CLeaf> { instanceVal, Const(LayoutPlanner.InterfaceDispatchName(ifaceSetter, ifaceSetterMl), "SystemString") },
                         ifaceSetReentrant, ifaceSetReentrant ? 1 : 0);
                 }
@@ -1305,7 +1305,7 @@ public abstract partial class HandlerBase
                     {
                         // Auto-property or read-only: direct SetProgramVariable("PropertyName")
                         var nameConst = Const(propRef.Property.Name, "SystemString");
-                        EmitExternVoid("VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid", new List<CLeaf> { instanceVal, nameConst, srcVal });
+                        EmitExternVoid(ExternResolver.EventReceiverSetProgramVariable, new List<CLeaf> { instanceVal, nameConst, srcVal });
                     }
                     else
                     {
@@ -1317,11 +1317,11 @@ public abstract partial class HandlerBase
 
                         // SetProgramVariable for the value parameter
                         var paramNameConst = Const(setParamIds[0], "SystemString");
-                        EmitExternVoid("VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid", new List<CLeaf> { instanceVal, paramNameConst, srcVal });
+                        EmitExternVoid(ExternResolver.EventReceiverSetProgramVariable, new List<CLeaf> { instanceVal, paramNameConst, srcVal });
 
                         // SendCustomEvent to invoke setter
                         var eventConst = Const(exportName, "SystemString");
-                        EmitExternVoid("VRCUdonCommonInterfacesIUdonEventReceiver.__SendCustomEvent__SystemString__SystemVoid", new List<CLeaf> { instanceVal, eventConst },
+                        EmitExternVoid(ExternResolver.EventReceiverSendCustomEvent, new List<CLeaf> { instanceVal, eventConst },
                             setReentrant, setReentrant ? 1 : 0);
                     }
                 }

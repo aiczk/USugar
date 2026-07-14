@@ -177,7 +177,7 @@ public abstract class AssignmentHandlerBase : HandlerBase
                 // Read via GetProgramVariable
                 var nameConst = Const(fieldRef.Field.Name, "SystemString");
                 var valResult = ExternCall(
-                    "VRCUdonCommonInterfacesIUdonEventReceiver.__GetProgramVariable__SystemString__SystemObject",
+                    ExternResolver.EventReceiverGetProgramVariable,
                     new List<CLeaf> { instanceVal, nameConst },
                     "SystemObject");
                 return new LValueCapture { Value = valResult, InstanceVal = instanceVal };
@@ -316,7 +316,7 @@ public abstract class AssignmentHandlerBase : HandlerBase
                 if (isAutoSet)
                 {
                     var nameConst = Const(propRef.Property.Name, "SystemString");
-                    EmitExternVoid("VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid", new List<CLeaf> { instanceVal, nameConst, valueVal });
+                    EmitExternVoid(ExternResolver.EventReceiverSetProgramVariable, new List<CLeaf> { instanceVal, nameConst, valueVal });
                 }
                 else
                 {
@@ -325,9 +325,9 @@ public abstract class AssignmentHandlerBase : HandlerBase
                     bool wbReentrant = TryMarkReentrantCrossDispatch(propRef, propRef.Property.SetMethod);
                     var (exportName, setParamIds, _) = GetCalleeLayout(propRef.Property.SetMethod);
                     var paramNameConst = Const(setParamIds[0], "SystemString");
-                    EmitExternVoid("VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid", new List<CLeaf> { instanceVal, paramNameConst, valueVal });
+                    EmitExternVoid(ExternResolver.EventReceiverSetProgramVariable, new List<CLeaf> { instanceVal, paramNameConst, valueVal });
                     var eventConst = Const(exportName, "SystemString");
-                    EmitExternVoid("VRCUdonCommonInterfacesIUdonEventReceiver.__SendCustomEvent__SystemString__SystemVoid", new List<CLeaf> { instanceVal, eventConst },
+                    EmitExternVoid(ExternResolver.EventReceiverSendCustomEvent, new List<CLeaf> { instanceVal, eventConst },
                         wbReentrant, wbReentrant ? 1 : 0);
                 }
                 return;

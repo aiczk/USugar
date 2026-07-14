@@ -315,14 +315,14 @@ public class DeconstructionAssignmentHandler : AssignmentHandlerBase, IOperation
         {
             var nameConst = Const(paramId, "SystemString");
             EmitExternVoid(
-                "VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid",
+                ExternResolver.EventReceiverSetProgramVariable,
                 new List<CLeaf> { instanceVal, nameConst, argVal });
         }
 
         // SendCustomEvent
         var eventConst = Const(exportName, "SystemString");
         EmitExternVoid(
-            "VRCUdonCommonInterfacesIUdonEventReceiver.__SendCustomEvent__SystemString__SystemVoid",
+            ExternResolver.EventReceiverSendCustomEvent,
             new List<CLeaf> { instanceVal, eventConst });
 
         // GetProgramVariable for return value and deconstruct
@@ -331,7 +331,7 @@ public class DeconstructionAssignmentHandler : AssignmentHandlerBase, IOperation
             // Single SystemObjectArray return: get the array, then index into it
             var retNameConst = Const(callReturns[0].Id, "SystemString");
             var arrVal = ExternCall(
-                "VRCUdonCommonInterfacesIUdonEventReceiver.__GetProgramVariable__SystemString__SystemObject",
+                ExternResolver.EventReceiverGetProgramVariable,
                 new List<CLeaf> { instanceVal, retNameConst },
                 AggregateAbi.ArrayType);
             for (int i = 0; i < targetTuple.Elements.Length; i++)
