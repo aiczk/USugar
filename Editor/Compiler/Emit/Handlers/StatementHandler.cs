@@ -557,7 +557,8 @@ public class StatementHandler : HandlerBase, IOperationHandler
         }
         else if (value is IObjectCreationOperation ocCtor && ocCtor.Arguments.Length > 0
                  && EmitPolicy.IsUserStruct(aggregateType) && ocCtor.Constructor != null
-                 && _methodFunctions.ContainsKey(ocCtor.Constructor))
+                 && _methodFunctions.ContainsKey(ocCtor.Constructor)
+                 && CtorArgsArePositionalByValue(ocCtor))
         {
             // new V(args): default-init the already-allocated array, then run the registered ctor
             // (receiver = this array, mutated in place via this.field = … in the ctor body).
@@ -586,4 +587,18 @@ public class StatementHandler : HandlerBase, IOperationHandler
         }
     }
 
+    /// <summary>CW4: the in-place ctor fast arm above stages args positionally with no ref/out guard or
+    /// copy-back, which is sound only for in-order by-value args. Named/reordered or ref/out ctor args
+    /// fall to the generic arm, whose VisitObjectCreation path marshals by parameter ordinal and copies
+    /// ref/out back (the fresh mint is then reference-stored into the local; the pre-allocated array is
+    /// simply orphaned).</summary>
+    static bool CtorArgsArePositionalByValue(IObjectCreationOperation oc)
+    {
+        for (int i = 0; i < oc.Arguments.Length; i++)
+        {
+            var p = oc.Arguments[i].Parameter;
+            if (p == null || p.Ordinal != i || p.RefKind != RefKind.None) return false;
+        }
+        return true;
+    }
 }

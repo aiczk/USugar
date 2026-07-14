@@ -709,6 +709,11 @@ public partial class InvocationHandler
     /// <summary>Round-7 [Q2]/[Q5] + round-8 [R4] ref/out ARGUMENT guards, shared by the user-method,
     /// struct-instance ([R5]) and foreign-static ([R6]) call paths. Runs BEFORE argument evaluation.</summary>
     void GuardRefOutArguments(IInvocationOperation op, IMethodSymbol target)
+        => GuardRefOutArguments(op.Arguments, target);
+
+    // CW3/CW4: argument-list form — ctor sites (IObjectCreationOperation, `: base/this(...)` chain
+    // initializers) and the virtual chain share the same guards as ordinary calls.
+    void GuardRefOutArguments(IReadOnlyList<IArgumentOperation> arguments, IMethodSymbol target)
     {
         // Round-7 follow-up [Q2]: ref/out params are deliberately EXCLUDED from the recursion spill
         // set (a recursive call THREADING ITS OWN ref/out param must keep its mutations across the
@@ -723,11 +728,11 @@ public partial class InvocationHandler
         // tail (no new spills).
         bool recursiveEdge = _ctx.RecursionContext.IsCycleEdge(_currentMethod, target);
         List<ISymbol> refRoots = null;
-        for (int i = 0; i < op.Arguments.Length; i++)
+        for (int i = 0; i < arguments.Count; i++)
         {
-            var p = op.Arguments[i].Parameter ?? target.Parameters[i];
+            var p = arguments[i].Parameter ?? target.Parameters[i];
             if (p.RefKind != RefKind.Ref && p.RefKind != RefKind.Out) continue;
-            var a = UnwrapConversions(op.Arguments[i].Value);
+            var a = UnwrapConversions(arguments[i].Value);
             if (recursiveEdge)
             {
                 // Round-9: a cycle edge between DIFFERENT methods (override <-> base copy)
@@ -798,10 +803,15 @@ public partial class InvocationHandler
     /// ordinals onto the original definition's params (the receiver occupies ordinal 0).</summary>
     void EmitRefOutCopyBack(IInvocationOperation op, IMethodSymbol target, int ordinalOffset = 0,
         Dictionary<int, System.Action<CLeaf>> preparedStores = null)
+        => EmitRefOutCopyBack(op.Arguments, target, ordinalOffset, preparedStores);
+
+    // CW3/CW4: argument-list form — shared with the ctor arms and the virtual chain's per-arm copy-back.
+    void EmitRefOutCopyBack(IReadOnlyList<IArgumentOperation> arguments, IMethodSymbol target,
+        int ordinalOffset = 0, Dictionary<int, System.Action<CLeaf>> preparedStores = null)
     {
-        for (int i = 0; i < op.Arguments.Length; i++)
+        for (int i = 0; i < arguments.Count; i++)
         {
-            var param = op.Arguments[i].Parameter ?? target.Parameters[i];
+            var param = arguments[i].Parameter ?? target.Parameters[i];
             if (param.RefKind != RefKind.Out && param.RefKind != RefKind.Ref) continue;
             // Index the param field by the argument's parameter ordinal, not its call-site position
             // (named/reordered args), matching the by-ordinal copy-in.
@@ -813,7 +823,7 @@ public partial class InvocationHandler
                 paramIds = refClosure.ParamVarIds;
             else
                 paramIds = _methodParamVarIds[target]; // loud (KeyNotFound) if unregistered
-            var argTarget = op.Arguments[i].Value;
+            var argTarget = arguments[i].Value;
             var paramId = paramIds[param.Ordinal + ordinalOffset];
             var paramType = _ctx.Storage.GetFieldType(paramId);
             var paramVal = LoadField(paramId, paramType);
@@ -962,10 +972,10 @@ public partial class InvocationHandler
     /// later argument's write to that location is visible (VM-proven stale copy-in: plain array
     /// element, struct-array-element field leaf, and behaviour this-field flavors, all c0 ref=55
     /// vs 6). Side-effect-free later arguments keep the immediate read — byte-identical.</summary>
-    static bool HasLaterEffectfulArg(IInvocationOperation op, int argIndex)
+    static bool HasLaterEffectfulArg(IReadOnlyList<IArgumentOperation> arguments, int argIndex)
     {
-        for (int j = argIndex + 1; j < op.Arguments.Length; j++)
-            if (IsPotentiallyEffectful(op.Arguments[j].Value))
+        for (int j = argIndex + 1; j < arguments.Count; j++)
+            if (IsPotentiallyEffectful(arguments[j].Value))
                 return true;
         return false;
     }
@@ -987,15 +997,15 @@ public partial class InvocationHandler
     /// Leg-bearing ref/out lvalue legs evaluate once ([Y12]); effectful value reads defer past later arguments
     /// ([Y16]) then patch into <paramref name="args"/> in order. This append-order marshalling is shared by
     /// every positional internal-call arm — formerly copy-pasted 4x, and a past copy dropped the copy-back
-    /// (DiffFuzz ref=9 vs VM 1; ref=136 vs 106). The named/reordered path (EmitUserMethodCall) is a distinct
-    /// parameter-ORDINAL placement and is deliberately not folded in here.</summary>
+    /// (DiffFuzz ref=9 vs VM 1; ref=136 vs 106). The named/reordered path (MarshalArgumentsByOrdinal) is a
+    /// distinct parameter-ORDINAL placement and is deliberately not folded in here.</summary>
     Dictionary<int, System.Action<CLeaf>> MarshalArguments(IInvocationOperation op, List<CLeaf> args)
     {
         Dictionary<int, System.Action<CLeaf>> prepared = null;
         List<(int slot, System.Func<CLeaf> read)> deferred = null;
         for (var i = 0; i < op.Arguments.Length; i++)
         {
-            var (val, deferredRead, store) = EvaluateCallArgument(op, i);
+            var (val, deferredRead, store) = EvaluateCallArgument(op.Arguments, i);
             if (store != null)
                 (prepared ??= new Dictionary<int, System.Action<CLeaf>>())[i] = store;
             if (deferredRead != null)
@@ -1017,19 +1027,57 @@ public partial class InvocationHandler
     /// defers past later effectful arguments ([Y16]), and the prepared copy-back store rides along.
     /// Exactly one of <c>value</c>/<c>deferredRead</c> is non-null.</summary>
     (CLeaf value, System.Func<CLeaf> deferredRead, System.Action<CLeaf> store) EvaluateCallArgument(
-        IInvocationOperation op, int i)
+        IReadOnlyList<IArgumentOperation> arguments, int i)
     {
-        var argOp = op.Arguments[i].Value;
-        var param = op.Arguments[i].Parameter;
+        var argOp = arguments[i].Value;
+        var param = arguments[i].Parameter;
         bool refOut = param != null && (param.RefKind == RefKind.Ref || param.RefKind == RefKind.Out);
         if (!refOut)
             return (VisitExpression(argOp), null, null);
-        bool defer = HasLaterEffectfulArg(op, i);
-        if (TryPrepareRefOutArg(op.Arguments[i]) is { } pre)
+        bool defer = HasLaterEffectfulArg(arguments, i);
+        if (TryPrepareRefOutArg(arguments[i]) is { } pre)
             return defer ? (null, pre.read, pre.store) : (pre.read(), null, pre.store);
         return defer
             ? ((CLeaf)null, () => VisitExpression(argOp), (System.Action<CLeaf>)null)
             : (VisitExpression(argOp), null, null);
+    }
+
+    /// <summary>Evaluate arguments in TEXTUAL order (C# evaluation order) but place each value at its
+    /// PARAMETER's ordinal — IInvocationOperation/IObjectCreationOperation.Arguments can be in call-site
+    /// (syntax) order for named/reordered calls, so positional append mis-routes them (diff-fuzz w4; the
+    /// CW4 ctor twin silently swapped fields). Rides EvaluateCallArgument's [Y12] one-evaluation and
+    /// [Y16] deferred-read contracts; a delegate-typed argument is an ordinary bundle value (design §2.4,
+    /// no per-call-site convention rebinding) and aggregates clone on read. Returns the prepared ref/out
+    /// stores (keyed by argument index) for EmitRefOutCopyBack. <paramref name="stage"/> materializes each
+    /// value as it lands — the virtual chain stages to scratch so every dispatch arm re-reads one slot.</summary>
+    Dictionary<int, System.Action<CLeaf>> MarshalArgumentsByOrdinal(
+        IReadOnlyList<IArgumentOperation> arguments, IMethodSymbol target, List<CLeaf> args,
+        System.Func<CLeaf, IArgumentOperation, CLeaf> stage = null)
+    {
+        var argSlots = new CLeaf[target.Parameters.Length];
+        Dictionary<int, System.Action<CLeaf>> prepared = null;
+        List<(int ordinal, int index, System.Func<CLeaf> read)> deferredReads = null;
+        for (int i = 0; i < arguments.Count; i++)
+        {
+            var param = arguments[i].Parameter ?? target.Parameters[i];
+            var (val, deferredRead, store) = EvaluateCallArgument(arguments, i);
+            if (store != null)
+                (prepared ??= new Dictionary<int, System.Action<CLeaf>>())[i] = store;
+            if (deferredRead != null)
+                (deferredReads ??= new List<(int, int, System.Func<CLeaf>)>()).Add((param.Ordinal, i, deferredRead));
+            else if (param.Ordinal >= 0 && param.Ordinal < argSlots.Length)
+                argSlots[param.Ordinal] = stage == null ? val : stage(val, arguments[i]);
+        }
+        // [Y16]: deferred ref/out reads run AFTER every argument evaluation, just before the call.
+        if (deferredReads != null)
+            foreach (var (ordinal, index, read) in deferredReads)
+                if (ordinal >= 0 && ordinal < argSlots.Length)
+                {
+                    var val = read();
+                    argSlots[ordinal] = stage == null ? val : stage(val, arguments[index]);
+                }
+        args.AddRange(argSlots);
+        return prepared;
     }
 
     CLeaf EmitUserMethodCall(IInvocationOperation op, IMethodSymbol target)
@@ -1038,38 +1086,8 @@ public partial class InvocationHandler
 
         // Recursion is handled centrally in EmitCallToMethod (software-stack spill/reload around the call).
 
-        // Build args in PARAMETER order. IInvocationOperation.Arguments can be in call-site (syntax) order for
-        // named/reordered calls, so place each argument at its parameter's ordinal rather than assuming
-        // op.Arguments[i] ↔ Parameters[i] (which mis-routed a struct arg into another param's slot). (diff-fuzz w4)
-        var argSlots = new CLeaf[target.Parameters.Length];
-        Dictionary<int, System.Action<CLeaf>> preparedRefOut = null;
-        List<(int ordinal, System.Func<CLeaf> read)> deferredReads = null;
-        for (int i = 0; i < op.Arguments.Length; i++)
-        {
-            var param = op.Arguments[i].Parameter ?? target.Parameters[i];
-
-            // A delegate-typed argument is an ordinary SystemObjectArray bundle value (design §2.4): a
-            // lambda literal / method group rides VisitDelegateCreation, a delegate local/param/field is
-            // a plain reference copy into the callee's bundle param. The callee dispatches it through
-            // EmitDelegateDispatch, so no per-call-site convention rebinding exists anymore.
-            // VisitExpression clones aggregate locals/params automatically (Clone-on-read).
-            // Wave-9 round-8 [Y12]: leg-bearing ref/out lvalues evaluate their legs ONCE here; the
-            // copy-back stores through the SAME legs instead of re-evaluating them after the call.
-            // Round-9 [Y16]: the ref/out VALUE READ defers past later effectful arguments.
-            var (val, deferredRead, store) = EvaluateCallArgument(op, i);
-            if (store != null)
-                (preparedRefOut ??= new Dictionary<int, System.Action<CLeaf>>())[i] = store;
-            if (deferredRead != null)
-                (deferredReads ??= new List<(int, System.Func<CLeaf>)>()).Add((param.Ordinal, deferredRead));
-            else if (param.Ordinal >= 0 && param.Ordinal < argSlots.Length)
-                argSlots[param.Ordinal] = val;
-        }
-        // [Y16]: deferred ref/out reads run AFTER every argument evaluation, just before the call.
-        if (deferredReads != null)
-            foreach (var (ordinal, read) in deferredReads)
-                if (ordinal >= 0 && ordinal < argSlots.Length)
-                    argSlots[ordinal] = read();
-        var args = new List<CLeaf>(argSlots);
+        var args = new List<CLeaf>();
+        var preparedRefOut = MarshalArgumentsByOrdinal(op.Arguments, target, args);
 
         // Stage 2 §5.6: a same-program CAPTURING local function called by NAME receives its env as a
         // trailing REAL argument (positional copy-in binds it to the callee's __envp param field) —

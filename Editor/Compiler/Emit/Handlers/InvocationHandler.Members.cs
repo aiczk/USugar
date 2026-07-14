@@ -511,9 +511,13 @@ public partial class InvocationHandler
             }
             else
             {
+                // CW4: same by-ordinal + ref/out discipline as the mint arm (EmitClassInstanceMint).
+                var chainCtor = SubstituteMethodTypeArgs(target);
+                GuardRefOutArguments(init.Arguments, chainCtor);
                 var chainArgs = new List<CLeaf> { inst };
-                foreach (var a in init.Arguments) chainArgs.Add(VisitExpression(a.Value));
+                var chainPrepared = MarshalArgumentsByOrdinal(init.Arguments, chainCtor, chainArgs);
                 EmitExprStmt(EmitCallToMethod(ResolveStructMember(target), chainArgs));
+                EmitRefOutCopyBack(init.Arguments, chainCtor, 0, chainPrepared);
             }
             return;
         }
@@ -549,9 +553,18 @@ public partial class InvocationHandler
                         _ctx.Aggregates.GetLayout, VisitExpression, CallBaseCtor);
                     return;
                 }
+                // CW4: ctor args were staged positionally (IObjectCreationOperation.Arguments arrives in
+                // SOURCE order for named args, the same Roslyn fact behind the w4 invocation fix — so
+                // `new C(b: 2, a: 1)` silently swapped fields) with no ref/out guard or copy-back. Same
+                // by-ordinal + guard + copy-back discipline as EmitUserMethodCall; the substituted symbol
+                // equals ResolveStructMember's result minus its on-demand registration side effect, which
+                // stays at the call (after argument evaluation, as before).
+                var ctor = SubstituteMethodTypeArgs(op.Constructor);
+                GuardRefOutArguments(op.Arguments, ctor);
                 var ctorArgs = new List<CLeaf> { instance };
-                foreach (var arg in op.Arguments) ctorArgs.Add(VisitExpression(arg.Value));
+                var ctorPrepared = MarshalArgumentsByOrdinal(op.Arguments, ctor, ctorArgs);
                 EmitExprStmt(EmitCallToMethod(ResolveStructMember(op.Constructor), ctorArgs));
+                EmitRefOutCopyBack(op.Arguments, ctor, 0, ctorPrepared);
             },
             instance => AggregateAbi.EmitObjectInitializer(_builder, instance, layout, op.Initializer, VisitExpression),
             TypeObjWrite(classTy));
@@ -687,10 +700,13 @@ public partial class InvocationHandler
             var slot = _ctx.Builder.AllocScratch(AggregateAbi.ArrayType);
             EmitAssign(slot, AggregateAbi.Allocate(_builder, layout.Count));
             AggregateAbi.DefaultInitialize(_builder, SlotRef(slot), layout, _ctx.Aggregates.GetLayout, GetUdonType);
+            // CW4: same by-ordinal + ref/out discipline as the class mint arm (EmitClassInstanceMint).
+            var structCtor = SubstituteMethodTypeArgs(op.Constructor);
+            GuardRefOutArguments(op.Arguments, structCtor);
             var ctorArgs = new List<CLeaf> { SlotRef(slot) };
-            foreach (var arg in op.Arguments)
-                ctorArgs.Add(VisitExpression(arg.Value));
+            var ctorPrepared = MarshalArgumentsByOrdinal(op.Arguments, structCtor, ctorArgs);
             EmitExprStmt(EmitCallToMethod(ResolveStructMember(op.Constructor), ctorArgs));
+            EmitRefOutCopyBack(op.Arguments, structCtor, 0, ctorPrepared);
             // ctor + object-initializer combo (`new V(1,2) { Y = 3 }`): apply the initializer AFTER the
             // ctor runs, same order C# gives the fields (roadmap B41 (d)).
             AggregateAbi.EmitObjectInitializer(_builder, SlotRef(slot), layout, op.Initializer, VisitExpression);

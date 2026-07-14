@@ -398,23 +398,32 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
     // User-struct instance method call: receiver object[] passed (uncloned) as synthetic param0
     // so `this`-field mutations reflect back to the caller's local (value-type by-ref `this` semantics).
     /// <summary>CA-v2b-2: inline typeobj-dispatch for a runtime-polymorphic call with ≥2 concrete targets.
-    /// Evaluate the receiver and args ONCE (C# semantics), read the receiver's typeobj (bundle[0]), then emit
-    /// an `if (ReferenceEquals(typeobj, typeobj_T)) dest = T.Impl(recv, args)` per target. Each arm is an
-    /// ordinary direct call, so the call graph / recursion analysis sees precise edges (charter #5) and there
-    /// is no shared conv-var / bridge (charter #1/#3 N/A). A covariant override stores its narrower result
-    /// into the single static-typed dest — Udon heap slots are dynamically typed, so no conv-ret desync.</summary>
+    /// Evaluate the receiver and args ONCE (C# semantics) into scratch slots, placed by parameter ORDINAL
+    /// (named/reordered args bound positionally, the w4 family — CW3), read the receiver's typeobj
+    /// (bundle[0]), then emit an `if (ReferenceEquals(typeobj, typeobj_T)) dest = T.Impl(recv, args)` per
+    /// target. Each arm is an ordinary direct call, so the call graph / recursion analysis sees precise
+    /// edges (charter #5) and there is no shared conv-var / bridge (charter #1/#3 N/A). A covariant
+    /// override stores its narrower result into the single static-typed dest — Udon heap slots are
+    /// dynamically typed, so no conv-ret desync. CW3 ref/out parity with the devirt sibling
+    /// (EmitStructInstanceCall): guard per impl (cycle edges are per-override) and copy back inside the
+    /// executed arm — the arms are mutually exclusive, so the per-arm stores never race.</summary>
     CLeaf EmitVirtualChain(IInvocationOperation op, List<VDispatchTarget> targets)
     {
+        // Pure analysis (throws only): the substituted symbol equals ResolveStructMember's result minus
+        // its on-demand registration side effect, which stays inside the arms (registration order intact).
+        foreach (var t in targets)
+            GuardRefOutArguments(op.Arguments, SubstituteMethodTypeArgs(t.Impl));
+
         var recvSlot = _ctx.Builder.AllocScratch(AggregateAbi.ArrayType);
         EmitAssign(recvSlot, LoadInstanceRaw(op.Instance));
 
         var argRefs = new List<CLeaf>();
-        foreach (var a in op.Arguments)
+        var chainPrepared = MarshalArgumentsByOrdinal(op.Arguments, op.TargetMethod, argRefs, (val, arg) =>
         {
-            var s = _ctx.Builder.AllocScratch(GetUdonType(a.Value.Type));
-            EmitAssign(s, VisitExpression(a.Value));
-            argRefs.Add(SlotRef(s));
-        }
+            var s = _ctx.Builder.AllocScratch(GetUdonType(arg.Value.Type));
+            EmitAssign(s, val);
+            return SlotRef(s);
+        });
 
         var typeObjSlot = _ctx.Builder.AllocScratch(AggregateAbi.ArrayType);
         EmitAssign(typeObjSlot, AggregateAbi.ReadSlot(_builder, SlotRef(recvSlot), 0, AggregateAbi.ArrayType));
@@ -436,9 +445,11 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
             _builder.EmitIf(eq, _ =>
             {
                 EmitAssign(matched, Const(true, "SystemBoolean"));
-                var call = EmitCallToMethod(ResolveStructMember(t.Impl), callArgs);
+                var impl = ResolveStructMember(t.Impl);
+                var call = EmitCallToMethod(impl, callArgs);
                 if (isVoid) EmitExprStmt(call);
                 else EmitAssign(destSlot, call);
+                EmitRefOutCopyBack(op.Arguments, impl, 0, chainPrepared);
             }, null);
         }
 
