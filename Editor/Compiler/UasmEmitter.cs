@@ -168,7 +168,9 @@ public class UasmEmitter
         }
         _ctx.Closures.SetCaptureScope(CaptureScopeAnalysis.Build(_compilation, _classSymbol,
             plan.CaptureRoots, captureBodies, plan.FieldInitOps));
-        _ctx.ClassTypes.Seed(plan.Reach.MintedClasses); // CA-v2b-1: typeobj registry
+        // CA rewrite (M4): seed the typeobj registry in stable-key order (not mint-walk discovery order),
+        // so typeobj alloc / is-chain / virtual-dispatch-chain byte order is traversal-independent.
+        _ctx.ClassTypes.Seed(plan.Reach.MintedClasses.OrderBy(StableOrdinalKey, StringComparer.Ordinal)); // CA-v2b-1: typeobj registry
         _ctx.VirtualDispatch = new VirtualDispatch(_ctx.ClassTypes); // CA-v2b-2: virtual-call lowering
         EmitMethods(plan);
         OnIrPass?.Invoke("after-emit", _module);
@@ -3671,11 +3673,24 @@ public class UasmEmitter
             EnqueueSupp();
         }
 
-        result.ForeignStatics = foreignStatics.ToArray();
-        result.StructMembers = structMembers.ToArray();
-        result.BaseCopies = baseCopies.ToArray();
+        // CA call-graph rewrite (M4): the registration ordinal is assigned by a traversal-INDEPENDENT
+        // stable key (the symbol's documentation-comment id), NOT the reach walk's emergent discovery
+        // order. This decouples export/var/typeobj byte order from HOW the reach set is discovered, so the
+        // M5 worklist fuse (which cannot reproduce the 5-collector emergent order) stays byte-neutral. The
+        // one-time reorder this introduces is a justified golden regen (order-only: same set, DiffFuzz
+        // confirms semantics — a method export block / typeobj dispatch arm is position-independent).
+        result.ForeignStatics = foreignStatics.OrderBy(StableOrdinalKey, StringComparer.Ordinal).ToArray();
+        result.StructMembers = structMembers.OrderBy(StableOrdinalKey, StringComparer.Ordinal).ToArray();
+        result.BaseCopies = baseCopies.OrderBy(StableOrdinalKey, StringComparer.Ordinal).ToArray();
         return result;
     }
+
+    // CA call-graph rewrite (M4): the stable, traversal-independent ordinal key. GetDocumentationCommentId
+    // is a unique deterministic per-symbol id ("M:Ns.Type.Method(args)" / "T:Ns.Type"); OriginalDefinition
+    // normalizes generic specs to their definition (the graph is def-keyed). Ordinal string comparison keeps
+    // it culture-independent.
+    internal static string StableOrdinalKey(ISymbol s)
+        => s.OriginalDefinition.GetDocumentationCommentId() ?? s.OriginalDefinition.ToDisplayString();
 
     /// <summary>B81: the instance field-/auto-property-INITIALIZER value operations of a v1 class, in
     /// declaration order — the reach-side twin of HandlerBase.EmitInstanceFieldInitializers (which emits
