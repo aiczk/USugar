@@ -18,6 +18,8 @@
     <Compile Include="../../Editor/Compiler/Emit/EmitDiagnostic.cs" />
     <Compile Include="../../Editor/Compiler/Emit/EmitContext.cs" />
     <Compile Include="../../Editor/Compiler/Emit/VirtualDispatch.cs" />
+    <Compile Include="../../Editor/Compiler/Emit/CallGraph/ResolvedTarget.cs" />
+    <Compile Include="../../Editor/Compiler/Emit/CallGraph/ResolvedEdgeResolver.cs" />
     <Compile Include="../../Editor/Compiler/Emit/TypeParamId.cs" />
     <Compile Include="../../Editor/Compiler/Emit/TypeParamScope.cs" />
     <Compile Include="../../Editor/Compiler/Emit/GenericContext.cs" />

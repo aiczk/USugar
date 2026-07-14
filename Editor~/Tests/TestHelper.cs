@@ -463,6 +463,44 @@ namespace TestStubs
         return compilation;
     }
 
+    /// <summary>CA call-graph rewrite (M0): resolve the edges of the first `calleeName` invocation inside
+    /// `callInMethod` of `cls` via the ResolvedEdgeResolver — the per-shape equivalence-gate bridge.</summary>
+    public static List<ResolvedTarget> ResolveEdgesForFirstCall(
+        string src, string cls, string callInMethod, string calleeName)
+    {
+        var comp = BuildCompilation(src, cls, out _);
+        var tree = comp.SyntaxTrees.Last();
+        var model = comp.GetSemanticModel(tree);
+        var methodDecl = tree.GetRoot().DescendantNodes()
+            .OfType<Microsoft.CodeAnalysis.CSharp.Syntax.MethodDeclarationSyntax>()
+            .First(m => m.Identifier.Text == callInMethod);
+        var body = model.GetOperation(methodDecl);
+        var inv = DescendantOps(body)
+            .OfType<Microsoft.CodeAnalysis.Operations.IInvocationOperation>()
+            .First(i => i.TargetMethod.Name == calleeName);
+        var typeObjs = new ClassTypeObjectContext();
+        typeObjs.Seed(comp.GlobalNamespace.GetMembers().OfType<INamedTypeSymbol>()
+            .Where(t => t.TypeKind == TypeKind.Class && !t.IsAbstract && !IsBehaviourType(t)));
+        var resolver = new ResolvedEdgeResolver(t => t, new VirtualDispatch(typeObjs));
+        return resolver.ResolveEdges(inv).ToList();
+    }
+
+    static IEnumerable<Microsoft.CodeAnalysis.IOperation> DescendantOps(Microsoft.CodeAnalysis.IOperation op)
+    {
+        foreach (var c in op.ChildOps())
+        {
+            yield return c;
+            foreach (var d in DescendantOps(c)) yield return d;
+        }
+    }
+
+    static bool IsBehaviourType(INamedTypeSymbol t)
+    {
+        for (var b = t; b != null; b = b.BaseType)
+            if (b.Name == "UdonSharpBehaviour") return true;
+        return false;
+    }
+
     public static string CompileToUasm(string source, string className, out UasmEmitter outEmitter)
     {
         var trees = new Microsoft.CodeAnalysis.SyntaxTree[]
