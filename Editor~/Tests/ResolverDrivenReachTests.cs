@@ -38,18 +38,61 @@ public class A : UdonSharpBehaviour { public int ri; public float rf;
     }
 
     [Fact]
-    public void GenericForeignStatic_GapIsExactlyTheDeferredSupplementaryFacet()
+    public void GenericForeignStatic_MatchesLegacyReach()
     {
         // A generic foreign static (Helper.Id<int>) lands in the legacy SS2A supplementary set
-        // (GenericForeignStaticBodies), which the worklist does not yet reproduce. This test PINS that the
-        // remaining reach gap is EXACTLY that one deferred facet — nothing else diverges — so closing it is
-        // the only reach work left before the M5b recursion facet + the cutover.
+        // (GenericForeignStaticBodies). The worklist's supplementary fixpoint now reproduces it — 0 divergence.
         var src = @"using UdonSharp;
 public static class Helper { public static T Id<T>(T x)=>x; }
 public class A : UdonSharpBehaviour { public int r;
   void Start(){ r = Helper.Id<int>(5); } }";
         var diffs = TestHelper.ReachFacetDiff(src, "A");
-        Assert.All(diffs, d => Assert.StartsWith("GenericForeignStaticBodies:", d));
-        Assert.Contains(diffs, d => d.Contains("only-legacy") && d.Contains("Id"));
+        Assert.True(diffs.Count == 0, "reach facet divergence:\n" + string.Join("\n", diffs));
+    }
+
+    [Fact]
+    public void GenericForeignStaticReachingStructMember_MatchesLegacyReach()
+    {
+        // The SS2A body itself reaches a struct member — exercises the supp→main alternation (a struct member
+        // reachable ONLY through a generic-foreign-static body must still register).
+        var src = @"using UdonSharp;
+public struct V { public int s; public int Compute()=>s*s; }
+public static class Helper { public static int Run<T>(T x){ V v = default; return v.Compute(); } }
+public class A : UdonSharpBehaviour { public int r;
+  void Start(){ r = Helper.Run<int>(5); } }";
+        var diffs = TestHelper.ReachFacetDiff(src, "A");
+        Assert.True(diffs.Count == 0, "reach facet divergence:\n" + string.Join("\n", diffs));
+    }
+
+    [Fact]
+    public void MixedFeatures_MatchesLegacyReach()
+    {
+        // class mint + generic struct + plain-class virtual dispatch (base-typed var) + self-recursion + array.
+        var src = @"using UdonSharp;
+public struct Box<T> { public T v; public T Get()=>v; }
+public class VBase { public virtual int Kind()=>0; }
+public class VDer : VBase { public override int Kind()=>1; }
+public class A : UdonSharpBehaviour { public int seed; public int result;
+  int Recur(int n)=>n<=0?0:Recur(n-1)+n;
+  void Start(){
+    Box<int> b = default;
+    VBase v = new VDer();
+    int[] arr = new int[2];
+    result = b.Get() + Recur(3) + v.Kind() + arr[0] + seed;
+  } }";
+        var diffs = TestHelper.ReachFacetDiff(src, "A");
+        Assert.True(diffs.Count == 0, "reach facet divergence:\n" + string.Join("\n", diffs));
+    }
+
+    [Fact]
+    public void ClosureCapturingForeignStatic_MatchesLegacyReach()
+    {
+        // a lambda body reaches a foreign static — the capture-root / closure reach path.
+        var src = @"using UdonSharp;
+public static class Util { public static int Twice(int x)=>x+x; }
+public class A : UdonSharpBehaviour { public int seed; public int result;
+  void Start(){ System.Func<int,int> f = x => Util.Twice(x) + seed; result = f(2); } }";
+        var diffs = TestHelper.ReachFacetDiff(src, "A");
+        Assert.True(diffs.Count == 0, "reach facet divergence:\n" + string.Join("\n", diffs));
     }
 }

@@ -61,6 +61,52 @@ public sealed class ResolvedEdgeResolver
             foreach (var m in MintedTypesWalk(child, seen)) yield return m;
     }
 
+    /// <summary>CA rewrite (M5a SS2A): the DROPPED generic / open-container foreign statics — the `SuppDef`
+    /// leg of CollectForeignStaticCallsInOperation (the complement of <see cref="EnumerateForeignStaticReach"/>).
+    /// These stay registration-free, but their bodies host closures and are recursion nodes, so the worklist
+    /// walks them in a supplementary fixpoint into ReachableBodies.GenericForeignStaticBodies. Yields
+    /// OriginalDefinitions (the supplementary sets are def-keyed).</summary>
+    public IEnumerable<IMethodSymbol> ResolveForeignStaticSuppDefs(IOperation op)
+    {
+        if (op is IInvocationOperation inv && _emitter.IsForeignStatic(inv.TargetMethod))
+        {
+            var original = inv.TargetMethod.ReducedFrom ?? inv.TargetMethod;
+            if (original.IsGenericMethod || !UasmEmitter.IsClosedForeignStaticTarget(original))
+                yield return original.OriginalDefinition;
+        }
+        if (op is IMethodReferenceOperation mref && _emitter.IsForeignStatic(mref.Method))
+        {
+            var original = mref.Method.ReducedFrom ?? mref.Method;
+            if (original.IsGenericMethod || !UasmEmitter.IsClosedForeignStaticTarget(original))
+                yield return original.OriginalDefinition;
+        }
+        if (op is IPropertyReferenceOperation spr && spr.Property.IsStatic && UasmEmitter.IsComputedProperty(spr.Property))
+        {
+            if (spr.Property.GetMethod is { } sg && _emitter.IsForeignStatic(sg)
+                && (sg.IsGenericMethod || !UasmEmitter.IsClosedForeignStaticTarget(sg)))
+                yield return sg.OriginalDefinition;
+            if (spr.Property.SetMethod is { } ss && _emitter.IsForeignStatic(ss)
+                && (ss.IsGenericMethod || !UasmEmitter.IsClosedForeignStaticTarget(ss)))
+                yield return ss.OriginalDefinition;
+        }
+    }
+
+    /// <summary>CA rewrite (M5a): open-constructed generic base-instance targets — the `_openGenericBaseDefs`
+    /// leg of CollectBaseInstanceCallsInOperation (an open generic base call, or a generic base method group
+    /// through `this`). Registration-free but a MAIN-fixpoint recursion/reach root. Yields OriginalDefinitions.</summary>
+    public IEnumerable<IMethodSymbol> ResolveOpenBaseGenericDefs(IOperation op)
+    {
+        if (op is IInvocationOperation inv && _emitter.IsBaseInstanceMethod(inv.TargetMethod)
+            && inv.TargetMethod.IsGenericMethod
+            && inv.TargetMethod.TypeArguments.Any(ta => ta is ITypeParameterSymbol))
+            yield return inv.TargetMethod.OriginalDefinition;
+        if (op is IMethodReferenceOperation gmref && gmref.Method.IsGenericMethod
+            && _emitter.IsBaseInstanceMethod(gmref.Method)
+            && (gmref.Instance == null
+                || gmref.Instance is IInstanceReferenceOperation { Syntax: not BaseExpressionSyntax }))
+            yield return gmref.Method.OriginalDefinition;
+    }
+
     // The reach-role targets of a SINGLE op — no CallEdge, no child recursion, EXCEPT the mint arm, which
     // reaches C's field-init / base-ctor / virtual-impl bodies that live off the walked op tree (so the
     // worklist never sees them) and must therefore be discovered here.

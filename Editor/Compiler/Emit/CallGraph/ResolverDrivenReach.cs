@@ -43,6 +43,8 @@ internal sealed class ResolverDrivenReach
         var foreignStatics = new HashSet<IMethodSymbol>(cmp);
         var structMembers = new HashSet<IMethodSymbol>(cmp);
         var baseCopies = new HashSet<IMethodSymbol>(cmp);
+        var openBaseGenericDefs = new HashSet<IMethodSymbol>(cmp);  // main-fixpoint roots (open base generics)
+        var suppCaptureDefs = new HashSet<IMethodSymbol>(cmp);      // SS2A: dropped generic foreign statics
         var visited = new HashSet<IMethodSymbol>(cmp);
         var queue = new Queue<IMethodSymbol>();
 
@@ -69,6 +71,8 @@ internal sealed class ResolverDrivenReach
                     }
                 }
                 foreach (var mc in _resolver.ResolveMintedTypes(op)) result.MintedClasses.Add(mc);
+                foreach (var d in _resolver.ResolveOpenBaseGenericDefs(op)) openBaseGenericDefs.Add(d);
+                foreach (var d in _resolver.ResolveForeignStaticSuppDefs(op)) suppCaptureDefs.Add(d);
             }
         }
 
@@ -83,6 +87,7 @@ internal sealed class ResolverDrivenReach
             foreach (var m in foreignStatics) TryEnqueue(m);
             foreach (var m in structMembers) TryEnqueue(m);
             foreach (var m in baseCopies) TryEnqueue(m);
+            foreach (var m in openBaseGenericDefs) TryEnqueue(m);
             foreach (var m in result.StructMemberDefs) TryEnqueue(m);
         }
 
@@ -90,13 +95,43 @@ internal sealed class ResolverDrivenReach
         foreach (var initOp in _fieldInitOps()) Walk(initOp);
         EnqueueDiscovered();
 
-        while (queue.Count > 0)
+        void DrainMain()
         {
-            var def = queue.Dequeue();
-            var body = _bodyOf(def);
-            result.BodyByDef[def] = body;
-            Walk(body);
+            while (queue.Count > 0)
+            {
+                var def = queue.Dequeue();
+                var body = _bodyOf(def);
+                result.BodyByDef[def] = body;
+                Walk(body);
+                EnqueueDiscovered();
+            }
+        }
+        DrainMain();
+
+        // SS2A supplementary fixpoint: the dropped generic foreign statics stay registration-free, but their
+        // bodies are walked (into GenericForeignStaticBodies) and any reach they surface registers normally,
+        // alternating with the main queue until both dry. Faithful port of BuildReachableBodies' supp loop.
+        var suppQueue = new Queue<IMethodSymbol>();
+        void EnqueueSupp()
+        {
+            foreach (var d in suppCaptureDefs)
+                if (d.DeclaringSyntaxReferences.Length > 0
+                    && !visited.Contains(d)
+                    && !result.GenericForeignStaticBodies.ContainsKey(d))
+                    suppQueue.Enqueue(d);
+            suppCaptureDefs.Clear();
+        }
+        EnqueueSupp();
+        while (suppQueue.Count > 0)
+        {
+            var def = suppQueue.Dequeue();
+            if (result.GenericForeignStaticBodies.ContainsKey(def)) continue;
+            var suppBody = _bodyOf(def);
+            result.GenericForeignStaticBodies[def] = suppBody;
+            Walk(suppBody);
             EnqueueDiscovered();
+            DrainMain();
+            EnqueueSupp();
         }
 
         result.ForeignStatics = foreignStatics.OrderBy(m => _stableKey(m), StringComparer.Ordinal).ToArray();
