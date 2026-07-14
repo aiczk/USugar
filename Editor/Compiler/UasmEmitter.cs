@@ -162,6 +162,9 @@ public class UasmEmitter
     }
 
     internal ReachableBodies DebugPlanReach() => _plan.Reach;
+    // The LEGACY 5-collector reach, run standalone as the independent oracle for the M5a equivalence tests
+    // (since M5a swapped _plan.Reach to the worklist, DebugPlanReach is no longer the legacy reference).
+    internal ReachableBodies DebugBuildLegacyReach() => BuildReachableBodies(_plan.Methods);
     internal ReachableBodies DebugRunResolverDrivenReach()
         => new ResolverDrivenReach(DebugBuildResolver(), GetMethodBodyOperation,
             () => _plan.FieldInitOps, IsCollectibleStructMember, StableOrdinalKey).Build(_plan.Methods);

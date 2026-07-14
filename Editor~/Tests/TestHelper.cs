@@ -535,7 +535,7 @@ namespace TestStubs
         var comp = BuildCompilation(src, cls, out var classSymbol);
         var emitter = new UasmEmitter(comp, classSymbol);
         emitter.Emit();
-        var oldR = emitter.DebugPlanReach();
+        var oldR = emitter.DebugBuildLegacyReach();       // independent legacy oracle (not the swapped plan)
         var newR = emitter.DebugRunResolverDrivenReach();
         var diffs = new List<string>();
         var cmp = (IEqualityComparer<IMethodSymbol>)SymbolEqualityComparer.Default;
