@@ -101,9 +101,12 @@ public abstract class AssignmentHandlerBase : HandlerBase
             // RHS (wrong element + legs twice; VM-proven ref trace=12/result=803 vs 121/283). The read
             // mirrors VisitPropertyReference verbatim: auto-prop → layout slot; computed → user getter
             // with the receiver as param0 (struct-typed results deep-clone, value semantics).
+            // CW6: gate on IsObjectArrayEmulated, not IsAggregateType — a v1 CLASS receiver routes
+            // through the same layout-slot/getter read as PreparePropertySet's set twin (the deep-clone
+            // sub-conditions below gate on the PROPERTY type, so class reference semantics are kept).
             case IPropertyReferenceOperation { Property: { IsIndexer: false } } aggCapPropRef
                 when aggCapPropRef.Instance?.Type is INamedTypeSymbol aggCapPropType
-                && EmitPolicy.IsAggregateType(aggCapPropType):
+                && EmitPolicy.IsObjectArrayEmulated(aggCapPropType):
             {
                 if (_ctx.Aggregates.GetLayout(aggCapPropType).TryGetIndex(aggCapPropRef.Property.Name, out var capSlotIdx))
                 {
@@ -332,11 +335,15 @@ public abstract class AssignmentHandlerBase : HandlerBase
                 }
                 return;
             }
-            // Property on an aggregate (struct) instance — e.g. compound `p.X += 1` / `p.Computed += 1`,
-            // which routes through CaptureLValue + EmitWriteBack. Auto-property → write the backing-field
-            // slot by layout index; computed (non-auto) → call the user setter with the receiver as param0.
+            // Property on an object[]-emulated (struct/tuple/v1-class) instance — e.g. compound `p.X += 1`
+            // / `c.Computed += 1`, which routes through CaptureLValue + EmitWriteBack. Auto-property →
+            // write the backing-field slot by layout index; computed (non-auto) → call the user setter
+            // with the receiver as param0. CW6: gated on IsObjectArrayEmulated so a class receiver takes
+            // the setter-call path PreparePropertySet already implements for the simple set — the old
+            // IsAggregateType gate dropped classes through to the generic extern arm below (bogus
+            // SystemObjectArray.__set_P__ extern, loud validator crash on legal C#).
             case IPropertyReferenceOperation { Property: { IsIndexer: false } } aggPropRef
-                when aggPropRef.Instance?.Type is INamedTypeSymbol aggPropType && EmitPolicy.IsAggregateType(aggPropType):
+                when aggPropRef.Instance?.Type is INamedTypeSymbol aggPropType && EmitPolicy.IsObjectArrayEmulated(aggPropType):
             {
                 if (_ctx.Aggregates.GetLayout(aggPropType).TryGetIndex(aggPropRef.Property.Name, out var propIdx))
                 {
@@ -354,11 +361,12 @@ public abstract class AssignmentHandlerBase : HandlerBase
                 }
                 break;
             }
-            // User-defined indexer on a user STRUCT instance (`s[i] = v` / `s[i] += v`) → call the setter with
-            // the struct receiver (object[]) as param0, the index args, then the value. Reuse the receiver/args
-            // cached by CaptureLValue (compound assignment); without this it falls to a bogus __set_Item extern.
+            // User-defined indexer on an object[]-emulated instance (`s[i] = v` / `s[i] += v`) → call the
+            // setter with the receiver (object[]) as param0, the index args, then the value. Reuse the
+            // receiver/args cached by CaptureLValue (compound assignment); without this it falls to a bogus
+            // __set_Item extern. CW6: IsObjectArrayEmulated so class receivers ride the same arm.
             case IPropertyReferenceOperation { Property: { IsIndexer: true, SetMethod: { } aggIdxSetter } } aggIdxRef
-                when aggIdxRef.Instance?.Type is INamedTypeSymbol aggIdxType && EmitPolicy.IsAggregateType(aggIdxType)
+                when aggIdxRef.Instance?.Type is INamedTypeSymbol aggIdxType && EmitPolicy.IsObjectArrayEmulated(aggIdxType)
                 && _methodFunctions.ContainsKey(aggIdxSetter):
             {
                 var setterArgs = new List<CLeaf> { lv.ArrayVal ?? LoadInstanceRaw(aggIdxRef.Instance) };
@@ -371,6 +379,10 @@ public abstract class AssignmentHandlerBase : HandlerBase
             // Resolve containing type and instance
             case IPropertyReferenceOperation propRef:
             {
+                // CW6 armor: a user-struct/class property whose write-back reaches this generic extern
+                // arm was not routed by the object[]-emulated arms above — fail with the collector-drift
+                // diagnosis instead of minting a bogus SystemObjectArray.__set_<Name>__ extern.
+                GuardUserStructMemberReachedExtern(propRef.Property.ContainingType, propRef.Property.Name);
                 // B55 setter door: the property-SET write-back resolves its extern owner through the same
                 // inherited-member choke point as the getter (subsumes the former Behaviour fixup). Static
                 // (Instance null) → declaring type; inherited instance member → receiver's static type.

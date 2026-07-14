@@ -361,6 +361,77 @@ public class CwStructCtor : UdonSharpBehaviour {
     }
 
     [Fact]
+    public void GenericReceiverDispatch_SpillsRecursionFrame()  // CW5
+    {
+        // Emission resolves the receiver through the monomorphization map, so `n.Visit(...)` on a
+        // generic-T receiver IS a typeobj dispatch — but the recursion enumerator pattern-matched
+        // INamedTypeSymbol only, so the T-receiver site yielded ZERO virtual edges: the Go ↔ Visit
+        // cycle was missed and Go's locals never spilled around the dispatch (VM-proven 37 vs CLR 67,
+        // `keep` clobbered on re-entry; the named-receiver twin returns 67). The def-keyed walk has no
+        // type-param map, so it must over-approximate: every minted impl of the slot (over-spill only).
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public class NodG { public virtual int Visit(int d) { return 0; } }
+public class LfG : NodG { public override int Visit(int d) { if (d <= 0) return 7; return HelpG.Go(this, d); } }
+public static class HelpG {
+    public static int Go<T>(T n, int d) where T : NodG { int keep = d * 10; int r = n.Visit(d - 1); return keep + r; }
+}
+public class CwGenRecv : UdonSharpBehaviour {
+    public int result;
+    void Start() { result = HelpG.Go(new LfG(), 3); }
+}", "CwGenRecv");
+        Assert.Contains("__recurStack", uasm);
+    }
+
+    [Fact]
+    public void ClassProperty_CompoundAssign_CallsSetter()  // CW6
+    {
+        // EmitWriteBack's aggregate property arms gated on IsAggregateType (deliberately FALSE for a
+        // class), so `c.P += 1` on a class receiver fell through to the generic extern arm and minted
+        // a nonexistent SystemObjectArray.__set_P__ extern (loud validator crash on legal C#, with an
+        // extern-registry diagnosis instead of the collector-drift one). The compound write-back must
+        // route through the same setter-call path the simple set (PreparePropertySet) already takes.
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public class CpBox { int v; public int P { get { return v; } set { v = value; } } }
+public class CwClassPropCompound : UdonSharpBehaviour {
+    public int result;
+    void Start() { CpBox c = new CpBox(); c.P += 1; result = c.P; }
+}", "CwClassPropCompound");
+        Assert.DoesNotContain("SystemObjectArray.__set_", uasm);
+        Assert.Matches(@"__\d+_set_P", uasm);
+    }
+
+    [Fact]
+    public void ClassAutoProperty_CompoundAssign_WritesLayoutSlot()  // CW6 auto-prop leg
+    {
+        // The auto-prop slot-write sub-arm sits inside the same IsAggregateType-gated case, so
+        // `c.AutoP += 1` broke identically (SystemObjectArray.__set_AutoP__ extern).
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public class CaBox { public int AutoP { get; set; } }
+public class CwClassAutoCompound : UdonSharpBehaviour {
+    public int result;
+    void Start() { CaBox c = new CaBox(); c.AutoP += 1; result = c.AutoP; }
+}", "CwClassAutoCompound");
+        Assert.DoesNotContain("SystemObjectArray.__set_", uasm);
+    }
+
+    [Fact]
+    public void ClassProperty_IncrementDecrement_CallsSetter()  // CW6 inc-dec leg
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public class CiBox { int v; public int P { get { return v; } set { v = value; } } }
+public class CwClassPropIncDec : UdonSharpBehaviour {
+    public int result;
+    void Start() { CiBox c = new CiBox(); c.P++; result = c.P; }
+}", "CwClassPropIncDec");
+        Assert.DoesNotContain("SystemObjectArray.__set_", uasm);
+        Assert.Matches(@"__\d+_set_P", uasm);
+    }
+
+    [Fact]
     public void StructCtorLocalDecl_NamedArgs_BindByParameterOrdinal()  // CW4 local-decl leg
     {
         // The StatementHandler in-place fast arm staged positionally too (a 4th arm the audit's three

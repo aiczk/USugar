@@ -3318,7 +3318,28 @@ public class UasmEmitter
                 // site predicate is SHARED with the emission branch (VirtualDispatch.IsDispatchSite) so the
                 // two cannot drift; the receiver's declared type is used here (Phase-1, no monomorphization
                 // map). Over-yield only ever over-spills (sound).
-                if (inv.Instance?.Type is INamedTypeSymbol vrecv
+                //
+                // CW5: this def-keyed walk has no type-param map, so a receiver whose DECLARED type still
+                // carries a type parameter (a `T n` constrained to a user class, or an open `Box<T>` this)
+                // cannot be resolved the way emission resolves it (ResolveType) — yet emission DOES lower
+                // the site to a typeobj chain. Pattern-matching INamedTypeSymbol alone yielded ZERO edges
+                // there, hiding the cycle from the SCC analysis and under-spilling polymorphic recursion
+                // (VM-proven 37 vs CLR 67: the frame clobbered on re-entry). Over-approximate instead:
+                // yield the slot's most-derived impl for EVERY minted class (same base exclusion as
+                // IsDispatchSite; over-yield only ever over-spills).
+                if (ClassTypeObjectContext.ContainsTypeParameter(inv.Instance?.Type))
+                {
+                    if (VirtualDispatch.IsVirtualCall(inv.TargetMethod)
+                        && !(inv.Instance is IInstanceReferenceOperation gir
+                             && gir.Syntax is BaseExpressionSyntax))
+                    {
+                        var slotDef = VirtualDispatch.SlotIntroducer(inv.TargetMethod);
+                        foreach (var concrete in _ctx.ClassTypes.MintedClasses)
+                            if (VirtualDispatch.MostDerivedImpl(concrete, slotDef) is { } genImpl)
+                                yield return genImpl.OriginalDefinition;
+                    }
+                }
+                else if (inv.Instance?.Type is INamedTypeSymbol vrecv
                     && VirtualDispatch.IsDispatchSite(inv.TargetMethod, inv.Instance, vrecv))
                     foreach (var vt in _ctx.VirtualDispatch.ResolveTargets(vrecv, inv.TargetMethod))
                         yield return vt.Impl.OriginalDefinition;
