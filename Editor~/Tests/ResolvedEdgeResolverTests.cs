@@ -126,6 +126,19 @@ public class A : UdonSharpBehaviour { public int result;
             && t.Role == TargetRole.ReachForeignStatic);                                           // field-init reach
     }
 
+    [Fact]
+    public void ResolveMintedTypes_YieldsDirectAndFieldInitNested()
+    {
+        // `new Dc()` mints Dc directly, and E transitively through Dc's field initializer (off-body).
+        var src = @"using UdonSharp;
+public class E { public int v; }
+public class Dc { public E e = new E(); public int tag; }
+public class A : UdonSharpBehaviour { void Start(){ Dc d = new Dc(); } }";
+        var minted = TestHelper.ResolveMintedTypesForFirstNew(src, "A");
+        Assert.Contains(minted, t => t.Name == "Dc");
+        Assert.Contains(minted, t => t.Name == "E");   // transitive via field initializer
+    }
+
     static string Names(System.Collections.Generic.IEnumerable<Microsoft.CodeAnalysis.IMethodSymbol> ms)
         => "{" + string.Join(", ", ms.Select(m => m.ContainingType.Name + "." + m.Name)) + "}";
 }

@@ -517,6 +517,27 @@ namespace TestStubs
         throw new System.Exception("no matching op found in " + cls);
     }
 
+    /// <summary>CA rewrite (M5 prerequisite): the minted user classes the resolver reports for the first
+    /// object-creation op anywhere in `cls`'s methods.</summary>
+    public static List<INamedTypeSymbol> ResolveMintedTypesForFirstNew(string src, string cls)
+    {
+        var comp = BuildCompilation(src, cls, out var classSymbol);
+        var emitter = new UasmEmitter(comp, classSymbol);
+        emitter.Emit();
+        var tree = comp.SyntaxTrees.Last();
+        var model = comp.GetSemanticModel(tree);
+        foreach (var mdecl in tree.GetRoot().DescendantNodes()
+                     .OfType<Microsoft.CodeAnalysis.CSharp.Syntax.MethodDeclarationSyntax>())
+        {
+            var body = model.GetOperation(mdecl);
+            if (body == null) continue;
+            foreach (var o in DescendantOps(body))
+                if (o is Microsoft.CodeAnalysis.Operations.IObjectCreationOperation)
+                    return emitter.DebugBuildResolver().ResolveMintedTypes(o).ToList();
+        }
+        throw new System.Exception("no object-creation op found in " + cls);
+    }
+
     static Microsoft.CodeAnalysis.IOperation FindFirstInvocationOp(
         Microsoft.CodeAnalysis.Compilation comp, string callInMethod, string calleeName)
     {

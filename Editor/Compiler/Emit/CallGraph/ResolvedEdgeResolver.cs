@@ -33,6 +33,34 @@ public sealed class ResolvedEdgeResolver
             yield return t;
     }
 
+    /// <summary>CA rewrite (M5 prerequisite): the concrete user classes `op` instantiates at runtime — a
+    /// direct `new C()` plus any class minted transitively inside C's field initializers (which live off the
+    /// walked body tree). The `minted` dedup bounds cyclic field-init mints. This is the instantiation-set
+    /// the worklist unions into ReachableBodies.MintedClasses (the typeobj registry seed); the ctor/virtual/
+    /// base bodies host their own nested mints, which the worklist discovers when it walks them as reach
+    /// targets. Mirrors CollectClassMintReach's `result.MintedClasses.Add(ct)` provenance at def granularity.</summary>
+    public IEnumerable<INamedTypeSymbol> ResolveMintedTypes(IOperation op)
+        => MintedTypes(op, new HashSet<INamedTypeSymbol>(SymbolEqualityComparer.Default));
+
+    IEnumerable<INamedTypeSymbol> MintedTypes(IOperation op, HashSet<INamedTypeSymbol> seen)
+    {
+        if (op is IObjectCreationOperation oc && oc.Type is INamedTypeSymbol ct
+            && EmitPolicy.IsUserClassType(ct) && seen.Add(ct))
+        {
+            yield return ct;
+            foreach (var initOp in _emitter.EnumerateClassFieldInitOps(ct))
+                foreach (var m in MintedTypesWalk(initOp, seen))
+                    yield return m;
+        }
+    }
+
+    IEnumerable<INamedTypeSymbol> MintedTypesWalk(IOperation op, HashSet<INamedTypeSymbol> seen)
+    {
+        foreach (var m in MintedTypes(op, seen)) yield return m;
+        foreach (var child in op.ChildOps())
+            foreach (var m in MintedTypesWalk(child, seen)) yield return m;
+    }
+
     // The reach-role targets of a SINGLE op — no CallEdge, no child recursion, EXCEPT the mint arm, which
     // reaches C's field-init / base-ctor / virtual-impl bodies that live off the walked op tree (so the
     // worklist never sees them) and must therefore be discovered here.
