@@ -50,8 +50,13 @@ public static class CoreVerify
             if (expected == actual) return;
             // SystemObject is compatible with any type (Udon VM boxing/unboxing)
             if (expected == "SystemObject" || actual == "SystemObject") return;
-            // Reference types are compatible via COPY in Udon VM (no type enforcement)
-            if (IsReferenceUdonType(expected) && IsReferenceUdonType(actual)) return;
+            // Reference types are compatible via COPY in Udon VM (no type enforcement).
+            // Phase-B shadow: this arm is a NAME HEURISTIC — audit the pass against minted facts.
+            if (IsReferenceUdonType(expected) && IsReferenceUdonType(actual))
+            {
+                StrictVerifyLedger.AuditReferenceCopy(expected, actual, context, Func.Name);
+                return;
+            }
             // Nullable<T> erased to T in Udon VM — SystemNullableX ↔ X are compatible
             if (expected.StartsWith("SystemNullable") && expected.Substring("SystemNullable".Length) == actual) return;
             if (actual.StartsWith("SystemNullable") && actual.Substring("SystemNullable".Length) == expected) return;
@@ -64,14 +69,28 @@ public static class CoreVerify
         {
             if (slotType == valueType) return;
             if (slotType == "SystemObject" || valueType == "SystemObject") return;
-            if (IsReferenceUdonType(slotType) && IsReferenceUdonType(valueType)) return;
+            // Phase-B shadow: the ref-copy and enum arms below are NAME GUESSES — audit each pass
+            // against minted facts (measurement only; behavior unchanged until the Phase-D flip).
+            if (IsReferenceUdonType(slotType) && IsReferenceUdonType(valueType))
+            {
+                StrictVerifyLedger.AuditReferenceCopy(slotType, valueType, context, Func.Name);
+                return;
+            }
             // Nullable<T> erased to T in Udon VM
             if (slotType.StartsWith("SystemNullable") && slotType.Substring("SystemNullable".Length) == valueType) return;
             if (valueType.StartsWith("SystemNullable") && valueType.Substring("SystemNullable".Length) == slotType) return;
             // Enum types use Int32 underlying type in Udon VM.
             // Allow Int32 ↔ non-primitive types (potential enums).
-            if (slotType == "SystemInt32" && !IsKnownNonEnumType(valueType)) return;
-            if (valueType == "SystemInt32" && !IsKnownNonEnumType(slotType)) return;
+            if (slotType == "SystemInt32" && !IsKnownNonEnumType(valueType))
+            {
+                StrictVerifyLedger.AuditEnumInterop(valueType, context, Func.Name);
+                return;
+            }
+            if (valueType == "SystemInt32" && !IsKnownNonEnumType(slotType))
+            {
+                StrictVerifyLedger.AuditEnumInterop(slotType, context, Func.Name);
+                return;
+            }
             throw new VerificationException(
                 $"Type mismatch in {context}: expected '{slotType}', got '{valueType}' (function '{Func.Name}')");
         }

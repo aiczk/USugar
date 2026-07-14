@@ -327,6 +327,10 @@ public static class ExternResolver
     {
         var name = ComputeUdonTypeName(type);
         RejectIfUnsupportedUserClass(type, name);
+        // Phase-B shadow: this is the single choke where Udon type names are minted — record the name's
+        // facts (enum? value type?) so CoreVerify's strict shadow can audit its name-heuristic passes.
+        // Fold tags are skipped inside Record (their runtime representation is fixed by the fold).
+        UdonTypeFacts.Record(name, type);
         return name;
     }
 

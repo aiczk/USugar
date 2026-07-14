@@ -78,6 +78,7 @@
     <Compile Include="../../Editor/Compiler/IR/FlatVerify.cs" />
     <Compile Include="../../Editor/Compiler/IR/CoreBuilder.cs" />
     <Compile Include="../../Editor/Compiler/IR/CoreVerify.cs" />
+    <Compile Include="../../Editor/Compiler/IR/StrictVerify.cs" />
     <Compile Include="../../Editor/Compiler/IR/CoreToUasm.cs" />
     <Compile Include="../../Editor/Compiler/IR/CoreFlatOptimizer.cs" />
   </ItemGroup>
