@@ -1,4 +1,5 @@
 using System.Linq;
+using Microsoft.CodeAnalysis.Operations;
 using Xunit;
 
 namespace USugar.Tests;
@@ -61,6 +62,48 @@ public class A : UdonSharpBehaviour { public int seed; public int result;
         Assert.True(old.SetEquals(@new), $"old={Names(old)} new={Names(@new)}");
         Assert.Single(@new);
         Assert.Contains(@new, m => m.Name == "Helper");
+    }
+
+    // ── reach-arm shape gates: each probe resolves the shape's op and asserts the target lands under the
+    // expected role. (The reach arms are per-op cores whose predicates delegate to the emitter.) ──
+
+    [Fact]
+    public void StructMethodCall_YieldsStructMemberReach()
+    {
+        var src = @"using UdonSharp;
+public struct V { public int side; public int Compute()=>side*side; }
+public class A : UdonSharpBehaviour { public int seed; public int result;
+  void Start(){ V v = default; v.side = seed; result = v.Compute(); } }";
+        var targets = TestHelper.ResolveEdgesForFirstOp(src, "A",
+            o => o is IInvocationOperation inv && inv.TargetMethod.Name == "Compute");
+        Assert.Contains(targets, t => t.Method.Name == "Compute"
+            && t.Method.ContainingType.Name == "V" && t.Role == TargetRole.ReachStructMember);
+    }
+
+    [Fact]
+    public void ForeignStaticCall_YieldsForeignStaticReach()
+    {
+        var src = @"using UdonSharp;
+public static class H { public static int M(int x)=>x+1; }
+public class A : UdonSharpBehaviour { public int seed; public int result;
+  void Start(){ result = H.M(seed); } }";
+        var targets = TestHelper.ResolveEdgesForFirstOp(src, "A",
+            o => o is IInvocationOperation inv && inv.TargetMethod.Name == "M");
+        Assert.Contains(targets, t => t.Method.Name == "M"
+            && t.Method.ContainingType.Name == "H" && t.Role == TargetRole.ReachForeignStatic);
+    }
+
+    [Fact]
+    public void BaseInstanceCall_YieldsBaseInstanceReach()
+    {
+        var src = @"using UdonSharp;
+public class BaseB : UdonSharpBehaviour { public int Helper()=>1; }
+public class A : BaseB { public int result;
+  void Start(){ result = base.Helper(); } }";
+        var targets = TestHelper.ResolveEdgesForFirstOp(src, "A",
+            o => o is IInvocationOperation inv && inv.TargetMethod.Name == "Helper");
+        Assert.Contains(targets, t => t.Method.Name == "Helper"
+            && t.Method.ContainingType.Name == "BaseB" && t.Role == TargetRole.ReachBaseInstance);
     }
 
     static string Names(System.Collections.Generic.IEnumerable<Microsoft.CodeAnalysis.IMethodSymbol> ms)

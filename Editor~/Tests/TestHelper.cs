@@ -469,12 +469,10 @@ namespace TestStubs
         string src, string cls, string callInMethod, string calleeName)
     {
         var comp = BuildCompilation(src, cls, out var classSymbol);
-        var inv = FindFirstInvocationOp(comp, callInMethod, calleeName);
-        var typeObjs = new ClassTypeObjectContext();
-        typeObjs.Seed(comp.GlobalNamespace.GetMembers().OfType<INamedTypeSymbol>()
-            .Where(t => t.TypeKind == TypeKind.Class && !t.IsAbstract && !IsBehaviourType(t)));
-        var resolver = new ResolvedEdgeResolver(t => t, new VirtualDispatch(typeObjs), classSymbol);
-        return resolver.ResolveEdges(inv).ToList();
+        var emitter = new UasmEmitter(comp, classSymbol);
+        emitter.Emit();
+        var op = FindFirstInvocationOp(comp, callInMethod, calleeName);
+        return emitter.DebugBuildResolver().ResolveEdges(op).ToList();
     }
 
     /// <summary>CA call-graph rewrite (M0 Task 2+): the differential gate — build+emit the emitter for
@@ -498,6 +496,27 @@ namespace TestStubs
         return (oldSet, newSet);
     }
 
+    /// <summary>CA call-graph rewrite (M0 Task 3+): resolve all edges of the first operation anywhere in
+    /// `cls`'s method bodies satisfying `match` — the per-op shape gate for the reach arms.</summary>
+    public static List<ResolvedTarget> ResolveEdgesForFirstOp(
+        string src, string cls, System.Func<Microsoft.CodeAnalysis.IOperation, bool> match)
+    {
+        var comp = BuildCompilation(src, cls, out var classSymbol);
+        var emitter = new UasmEmitter(comp, classSymbol);
+        emitter.Emit();
+        var tree = comp.SyntaxTrees.Last();
+        var model = comp.GetSemanticModel(tree);
+        foreach (var mdecl in tree.GetRoot().DescendantNodes()
+                     .OfType<Microsoft.CodeAnalysis.CSharp.Syntax.MethodDeclarationSyntax>())
+        {
+            var body = model.GetOperation(mdecl);
+            if (body == null) continue;
+            foreach (var o in DescendantOps(body))
+                if (match(o)) return emitter.DebugBuildResolver().ResolveEdges(o).ToList();
+        }
+        throw new System.Exception("no matching op found in " + cls);
+    }
+
     static Microsoft.CodeAnalysis.IOperation FindFirstInvocationOp(
         Microsoft.CodeAnalysis.Compilation comp, string callInMethod, string calleeName)
     {
@@ -519,13 +538,6 @@ namespace TestStubs
             yield return c;
             foreach (var d in DescendantOps(c)) yield return d;
         }
-    }
-
-    static bool IsBehaviourType(INamedTypeSymbol t)
-    {
-        for (var b = t; b != null; b = b.BaseType)
-            if (b.Name == "UdonSharpBehaviour") return true;
-        return false;
     }
 
     public static string CompileToUasm(string source, string className, out UasmEmitter outEmitter)

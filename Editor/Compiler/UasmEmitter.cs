@@ -130,8 +130,7 @@ public class UasmEmitter
     // so the equivalence gate diffs new-vs-old on identical state. Unused by production emission.
     internal IEnumerable<IMethodSymbol> DebugEnumerateInternalCallTargets(IOperation op)
         => EnumerateInternalCallTargets(op);
-    internal ResolvedEdgeResolver DebugBuildResolver()
-        => new ResolvedEdgeResolver(t => t, _ctx.VirtualDispatch, _classSymbol);
+    internal ResolvedEdgeResolver DebugBuildResolver() => new ResolvedEdgeResolver(this);
 
     /// <summary>Called after handler emission, before optimization. Set for IR debugging.</summary>
     public Action<string, CModule> OnIrPass;
@@ -3323,7 +3322,7 @@ public class UasmEmitter
     /// lived only in CollectInternalCallees, so IsInternalCallTo could not see it and a recursive struct
     /// operator was never frame-spilled (VM-proven ref=15/usugar=0); routing it through here makes both
     /// consumers agree and fixes the spill.</summary>
-    IEnumerable<IMethodSymbol> EnumerateInternalCallTargets(IOperation op)
+    internal IEnumerable<IMethodSymbol> EnumerateInternalCallTargets(IOperation op)
     {
         switch (op)
         {
@@ -3707,7 +3706,7 @@ public class UasmEmitter
     // the shape IsCollectibleStructMember skips. It is registered on demand at its closed call site
     // (InvocationHandler's foreign-static-on-generic arm). Genuinely closed foreign statics (incl.
     // non-generic Helper.Boost, or Helper<int>.Boost from a concretely-typed context) are collected.
-    static bool IsClosedForeignStaticTarget(IMethodSymbol m)
+    internal static bool IsClosedForeignStaticTarget(IMethodSymbol m)
         => !(m.ContainingType is INamedTypeSymbol ct && ct.IsGenericType
              && ct.TypeArguments.Any(ta => ta is ITypeParameterSymbol));
 
@@ -3768,7 +3767,7 @@ public class UasmEmitter
 
     // A property is auto-implemented iff the compiler synthesized a backing field associated with it.
     // Computed (expression-bodied or block-bodied) properties have no such field and must be inlined.
-    static bool IsComputedProperty(IPropertySymbol prop)
+    internal static bool IsComputedProperty(IPropertySymbol prop)
         => !prop.ContainingType.GetMembers().OfType<IFieldSymbol>()
             .Any(f => SymbolEqualityComparer.Default.Equals(f.AssociatedSymbol, prop));
 
@@ -3813,7 +3812,7 @@ public class UasmEmitter
     /// (recursion/capture-scope root expansion: ungated, projects .OriginalDefinition). `using`-resource
     /// dispose is NOT included here — the two callers handle it with different resource shapes (see
     /// each caller) and must not be merged.</summary>
-    static IEnumerable<IMethodSymbol> EnumerateStructMemberRefs(IOperation op)
+    internal static IEnumerable<IMethodSymbol> EnumerateStructMemberRefs(IOperation op)
     {
         // Parameterized user-struct / v1-class constructor: new V(...) / new C(...).
         if (op is IObjectCreationOperation oc && oc.Constructor != null
@@ -3958,7 +3957,7 @@ public class UasmEmitter
             result.Add(dispose);
     }
 
-    bool IsBaseInstanceMethod(IMethodSymbol method)
+    internal bool IsBaseInstanceMethod(IMethodSymbol method)
     {
         if (method.IsStatic) return false;
         // Round-9 [Y10]: a LOCAL FUNCTION declared inside a base method's body has
@@ -4077,7 +4076,7 @@ public class UasmEmitter
             CollectBaseInstanceCallsInOperation(child, result);
     }
 
-    bool IsForeignStatic(IMethodSymbol method)
+    internal bool IsForeignStatic(IMethodSymbol method)
     {
         var resolved = method.ReducedFrom ?? method;
         if (!resolved.IsStatic) return false;
