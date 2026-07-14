@@ -69,21 +69,27 @@ public sealed class ResolvedEdgeResolver
     //   feed capture roots (a supplementary facet) and are not reach targets here.
     IEnumerable<ResolvedTarget> ReachEdges(IOperation op, HashSet<INamedTypeSymbol> minted)
     {
+        // Reach targets carry the classifier's CONSTRUCTED symbol (per-spec) — NOT its OriginalDefinition:
+        // the struct-member registration gate (IsCollectibleStructMember) and per-spec registration need the
+        // constructed identity (Box<int>.Get, not the open Box<T>.Get). Def-keyed consumers (recursion/reach
+        // roots, BodyByDef) project to OriginalDefinition themselves. CallEdge above is already def-keyed by
+        // its classifier (the recursion graph is def-keyed).
+        //
         // ReachStructMember: the per-op user-struct/class member enumerator (ctor / instance method /
         // computed property / subpattern / operator / conversion) plus the implicit using-Dispose.
         foreach (var m in UasmEmitter.EnumerateStructMemberRefs(op))
-            yield return new ResolvedTarget(m.OriginalDefinition, TargetRole.ReachStructMember);
+            yield return new ResolvedTarget(m, TargetRole.ReachStructMember);
         foreach (var m in EnumerateUsingDispose(op))
-            yield return new ResolvedTarget(m.OriginalDefinition, TargetRole.ReachStructMember);
+            yield return new ResolvedTarget(m, TargetRole.ReachStructMember);
 
         // ReachForeignStatic: a closed, non-generic foreign static reached by call / method-group / static
         // computed-property.
         foreach (var m in EnumerateForeignStaticReach(op))
-            yield return new ResolvedTarget(m.OriginalDefinition, TargetRole.ReachForeignStatic);
+            yield return new ResolvedTarget(m, TargetRole.ReachForeignStatic);
 
         // ReachBaseInstance: a base instance method/accessor copy reached through `base.` or an inherited call.
         foreach (var m in EnumerateBaseInstanceReach(op))
-            yield return new ResolvedTarget(m.OriginalDefinition, TargetRole.ReachBaseInstance);
+            yield return new ResolvedTarget(m, TargetRole.ReachBaseInstance);
 
         // Instantiation reach: minting a user class runs its field initializers, its explicit ctor, its
         // implicit base-ctor chain, and its virtual-slot impls — bodies that live in the class declaration,
@@ -95,7 +101,7 @@ public sealed class ResolvedEdgeResolver
             // C's own explicit ctor (incl. the parameterless one EnumerateStructMemberRefs skips at
             // Arguments.Length==0) — a reach root whose body is emitted at mint.
             if (oc.Constructor is { IsImplicitlyDeclared: false } ownCtor)
-                yield return new ResolvedTarget(ownCtor.OriginalDefinition, TargetRole.ReachStructMember);
+                yield return new ResolvedTarget(ownCtor, TargetRole.ReachStructMember);
             // field-init member refs (off-body — transitive through nested mints, deduped by `minted`).
             foreach (var initOp in _emitter.EnumerateClassFieldInitOps(ct))
                 foreach (var t in ReachWalk(initOp, minted))
@@ -106,7 +112,7 @@ public sealed class ResolvedEdgeResolver
                 var baseCtor = bt.InstanceConstructors.FirstOrDefault(
                     c => c.Parameters.Length == 0 && !c.IsImplicitlyDeclared);
                 if (baseCtor != null)
-                    yield return new ResolvedTarget(baseCtor.OriginalDefinition, TargetRole.ReachStructMember);
+                    yield return new ResolvedTarget(baseCtor, TargetRole.ReachStructMember);
             }
             // virtual-slot most-derived impls reachable only through the inline typeobj dispatch chain
             // (seed by slot, most-derived first, to avoid phantom-minting shadowed base methods).
@@ -116,7 +122,7 @@ public sealed class ResolvedEdgeResolver
                     if ((vm.IsVirtual || vm.IsOverride || vm.IsAbstract) && vm.MethodKind == MethodKind.Ordinary
                         && seededSlots.Add(VirtualDispatch.SlotIntroducer(vm))
                         && VirtualDispatch.MostDerivedImpl(ct, VirtualDispatch.SlotIntroducer(vm)) is { } impl)
-                        yield return new ResolvedTarget(impl.OriginalDefinition, TargetRole.ReachStructMember);
+                        yield return new ResolvedTarget(impl, TargetRole.ReachStructMember);
         }
     }
 

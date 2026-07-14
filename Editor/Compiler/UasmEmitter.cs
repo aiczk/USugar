@@ -132,6 +132,14 @@ public class UasmEmitter
         => EnumerateInternalCallTargets(op);
     internal ResolvedEdgeResolver DebugBuildResolver() => new ResolvedEdgeResolver(this);
 
+    // CA rewrite (M5a): the legacy reach result vs the resolver-driven worklist over the SAME emit state,
+    // for the offline facet-equivalence measurement. Call after Emit() (needs _plan). Nothing consumes the
+    // worklist output — it runs alongside the frozen _plan.Reach purely to diff.
+    internal ReachableBodies DebugPlanReach() => _plan.Reach;
+    internal ReachableBodies DebugRunResolverDrivenReach()
+        => new ResolverDrivenReach(DebugBuildResolver(), GetMethodBodyOperation,
+            () => _plan.FieldInitOps, IsCollectibleStructMember, StableOrdinalKey).Build(_plan.Methods);
+
     /// <summary>Called after handler emission, before optimization. Set for IR debugging.</summary>
     public Action<string, CModule> OnIrPass;
 
@@ -3813,7 +3821,7 @@ public class UasmEmitter
     // containing-type shape above. Left collectible it registers a dead second CFunction whose body is
     // emitted mapless (no isSpec map) → `new T[]` → bogus `TArray` (the closed Lf<int> spec is registered
     // separately via SubstituteMethodTypeArgs + on-demand RegisterGenericSpecialization). Reject it too.
-    static bool IsCollectibleStructMember(IMethodSymbol m)
+    internal static bool IsCollectibleStructMember(IMethodSymbol m)
         => m != null
             && !(m.ContainingType.IsGenericType
                 && m.ContainingType.TypeArguments.Any(ta => ta is ITypeParameterSymbol))

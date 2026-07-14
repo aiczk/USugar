@@ -517,6 +517,38 @@ namespace TestStubs
         throw new System.Exception("no matching op found in " + cls);
     }
 
+    /// <summary>CA rewrite (M5a): diff the legacy BuildReachableBodies output against the resolver-driven
+    /// worklist over the same emit state, at OriginalDefinition granularity, facet by facet. Empty list =
+    /// def-granularity equivalent. Per-spec (constructed) differences vanish under the def projection.</summary>
+    public static List<string> ReachFacetDiff(string src, string cls)
+    {
+        var comp = BuildCompilation(src, cls, out var classSymbol);
+        var emitter = new UasmEmitter(comp, classSymbol);
+        emitter.Emit();
+        var oldR = emitter.DebugPlanReach();
+        var newR = emitter.DebugRunResolverDrivenReach();
+        var diffs = new List<string>();
+        var cmp = (IEqualityComparer<IMethodSymbol>)SymbolEqualityComparer.Default;
+        void Cmp(string facet, IEnumerable<IMethodSymbol> o, IEnumerable<IMethodSymbol> n)
+        {
+            var os = o.Select(m => m.OriginalDefinition).ToHashSet(cmp);
+            var ns = n.Select(m => m.OriginalDefinition).ToHashSet(cmp);
+            foreach (var m in os) if (!ns.Contains(m)) diffs.Add($"{facet}: only-legacy {m.ToDisplayString()}");
+            foreach (var m in ns) if (!os.Contains(m)) diffs.Add($"{facet}: only-worklist {m.ToDisplayString()}");
+        }
+        Cmp("BodyByDef", oldR.BodyByDef.Keys, newR.BodyByDef.Keys);
+        Cmp("StructMembers", oldR.StructMembers, newR.StructMembers);
+        Cmp("ForeignStatics", oldR.ForeignStatics, newR.ForeignStatics);
+        Cmp("BaseCopies", oldR.BaseCopies, newR.BaseCopies);
+        Cmp("StructMemberDefs", oldR.StructMemberDefs, newR.StructMemberDefs);
+        var cmpT = (IEqualityComparer<INamedTypeSymbol>)SymbolEqualityComparer.Default;
+        var otm = oldR.MintedClasses.ToHashSet(cmpT);
+        var ntm = newR.MintedClasses.ToHashSet(cmpT);
+        foreach (var t in otm) if (!ntm.Contains(t)) diffs.Add($"MintedClasses: only-legacy {t.Name}");
+        foreach (var t in ntm) if (!otm.Contains(t)) diffs.Add($"MintedClasses: only-worklist {t.Name}");
+        return diffs;
+    }
+
     /// <summary>CA rewrite (M5 prerequisite): the minted user classes the resolver reports for the first
     /// object-creation op anywhere in `cls`'s methods.</summary>
     public static List<INamedTypeSymbol> ResolveMintedTypesForFirstNew(string src, string cls)
