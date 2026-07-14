@@ -480,6 +480,14 @@ public sealed class CaptureScopeAnalysis
                     if (declPat.DeclaredSymbol != null) Declare(declPat.DeclaredSymbol, scope);
                     return;
 
+                case IRecursivePatternOperation recPat:
+                    // Property/positional pattern designator (`is { X: 5 } q` / `is Point(1,2) q`) — the
+                    // declaration-pattern twin the sister walkers (LambdaCaptureAnalyzer, OperatorHandler)
+                    // already cover. Its subpatterns can declare further designators, so recurse through them.
+                    if (recPat.DeclaredSymbol != null) Declare(recPat.DeclaredSymbol, scope);
+                    foreach (var child in recPat.ChildOps()) Walk(child, scope);
+                    return;
+
                 default:
                     foreach (var child in op.ChildOps()) Walk(child, scope);
                     return;
