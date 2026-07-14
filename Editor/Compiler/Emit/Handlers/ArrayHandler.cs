@@ -153,8 +153,14 @@ public class ArrayHandler : HandlerBase, IExpressionHandler
                     new List<CLeaf> { startVal, SlotRef(iSlot) }, "SystemInt32");
 
                 // val = arr[srcIdx]
-                var valVal = ExternCall(ExternResolver.BuildArrayGetSignature(arrayType, elementType),
+                CLeaf valVal = ExternCall(ExternResolver.BuildArrayGetSignature(arrayType, elementType),
                     new List<CLeaf> { arrayVal, srcIdxVal }, udonElemType);
+
+                // CW25 (closed-world audit): a struct/tuple element crossing into the slice is a VALUE
+                // copy in C# (GetSubArray copies element values) — clone the bundle exactly like the
+                // single-element read above, or the slice's elements alias the source array's.
+                if (ResolveType(arrSymbol.ElementType) is INamedTypeSymbol sliceElemAggT && EmitPolicy.IsAggregateType(sliceElemAggT))
+                    valVal = AggregateAbi.DeepClone(_builder, valVal, sliceElemAggT, _ctx.Aggregates.GetLayout);
 
                 // result[i] = val
                 EmitExternVoid(ExternResolver.BuildArraySetSignature(arrayType, elementType),

@@ -32,6 +32,15 @@ public partial class InvocationHandler
             }
         }
 
+        // CW26 (closed-world audit): a rank-1 struct/tuple-element array stores one object[] bundle
+        // REFERENCE per element, and the registry-valid SystemArray Clone/CopyTo/Copy externs copy
+        // those references — the destination's elements would alias the source's where C# copies
+        // struct VALUES (the N-R4 intercept above fences the same members for Rank>1 only). Lower the
+        // alias-producing members to per-element AggregateAbi.DeepClone; scalar/class-element arrays
+        // keep the extern (shallow IS C# semantics there: class elements ARE references).
+        if (TryEmitAggregateArrayCopyMember(op, target, out var aggCopyResult))
+            return aggCopyResult;
+
         // Generic GetComponent<T>() / GetComponentInChildren<T>() / GetComponentsInChildren<T>() etc.
         // Udon VM uses non-generic form with typeof(T) parameter.
         if (target.IsGenericMethod && target.Name.StartsWith("GetComponent")
@@ -201,6 +210,163 @@ public partial class InvocationHandler
 
         return result;
     }
+
+    // ── CW26: rank-1 aggregate-element array Clone/CopyTo/Array.Copy (value-semantics lowering) ──
+
+    /// <summary>Rank-1 array whose element is a value-semantic aggregate (user struct / tuple), else null.
+    /// N-dim arrays never get here (the Rank>1 intercept runs first); class/scalar elements return null so
+    /// their shallow externs stay untouched (shallow IS C# semantics for them).</summary>
+    INamedTypeSymbol AggregateArrayElement(ITypeSymbol type)
+        => type is IArrayTypeSymbol { Rank: 1 } arr
+           && ResolveType(arr.ElementType) is INamedTypeSymbol elem && EmitPolicy.IsAggregateType(elem)
+            ? elem : null;
+
+    bool TryEmitAggregateArrayCopyMember(IInvocationOperation op, IMethodSymbol target, out CLeaf result)
+    {
+        result = null;
+        if (!target.IsStatic && op.Instance != null
+            && AggregateArrayElement(op.Instance.Type) is INamedTypeSymbol recvElem)
+        {
+            var recvArr = (IArrayTypeSymbol)op.Instance.Type;
+            var arrType = GetArrayType(recvArr);
+            var elemType = GetArrayElemType(recvArr);
+            if (target.Name == "Clone" && target.Parameters.Length == 0)
+            {
+                var srcVal = VisitExpression(op.Instance);
+                var lenVal = ExternCall($"{arrType}.__get_Length__SystemInt32", new List<CLeaf> { srcVal }, "SystemInt32");
+                var dstVal = ExternCall(ExternResolver.BuildArrayCtorSignature(arrType), new List<CLeaf> { lenVal }, arrType);
+                EmitAggregateElementCopy(srcVal, null, dstVal, null, lenVal, recvElem, arrType, elemType,
+                    bufferAgainstOverlap: false); // dst is fresh — cannot overlap the source
+                result = dstVal;
+                return true;
+            }
+            if (target.Name == "CopyTo")
+            {
+                if (target.Parameters.Length != 2 || target.Parameters[1].Type.SpecialType != SpecialType.System_Int32)
+                    throw new System.NotSupportedException(
+                        $"'{target.Name}' with a non-Int32 index on a struct/tuple-element array is not supported; "
+                        + "use the System.Int32 overload.");
+                var srcVal = VisitExpression(op.Instance);
+                var argVals = EvaluateArgsByOrdinal(op);
+                var lenVal = ExternCall($"{arrType}.__get_Length__SystemInt32", new List<CLeaf> { srcVal }, "SystemInt32");
+                EmitAggregateElementCopy(srcVal, null, argVals[0], argVals[1], lenVal, recvElem, arrType, elemType,
+                    bufferAgainstOverlap: true);
+                return true;
+            }
+            return false; // other Array members keep their existing behavior
+        }
+
+        if (target.IsStatic && target.ContainingType?.SpecialType == SpecialType.System_Array
+            && (target.Name == "Copy" || target.Name == "ConstrainedCopy"))
+        {
+            bool ranged = target.Parameters.Length == 5;
+            var srcOp = UnwrapConversions(ArgByOrdinal(op, 0));
+            var dstOp = UnwrapConversions(ArgByOrdinal(op, ranged ? 2 : 1));
+            var srcElem = AggregateArrayElement(srcOp.Type);
+            var dstElem = AggregateArrayElement(dstOp.Type);
+            if (srcElem == null && dstElem == null)
+                return false; // scalar/class-element arrays: the shallow extern is C#-consistent
+            if (srcElem == null || dstElem == null || !SymbolEqualityComparer.Default.Equals(srcElem, dstElem))
+                throw new System.NotSupportedException(
+                    $"'Array.{target.Name}' between a struct/tuple-element array and a differently-typed array "
+                    + "is not supported: the per-element value copy cannot be typed. Copy the elements in an "
+                    + "explicit loop instead.");
+            if (target.Parameters[target.Parameters.Length - 1].Type.SpecialType != SpecialType.System_Int32)
+                throw new System.NotSupportedException(
+                    $"the System.Int64 overload of 'Array.{target.Name}' on a struct/tuple-element array is not "
+                    + "supported; use the System.Int32 overload.");
+            var srcArrSym = (IArrayTypeSymbol)srcOp.Type;
+            var arrType = GetArrayType(srcArrSym);
+            var elemType = GetArrayElemType(srcArrSym);
+            var argVals = EvaluateArgsByOrdinal(op);
+            if (ranged)
+                EmitAggregateElementCopy(argVals[0], argVals[1], argVals[2], argVals[3], argVals[4],
+                    srcElem, arrType, elemType, bufferAgainstOverlap: true);
+            else
+                EmitAggregateElementCopy(argVals[0], null, argVals[1], null, argVals[2],
+                    srcElem, arrType, elemType, bufferAgainstOverlap: true);
+            return true;
+        }
+        return false;
+    }
+
+    IOperation ArgByOrdinal(IInvocationOperation op, int ordinal)
+    {
+        foreach (var a in op.Arguments)
+            if (a.Parameter != null && a.Parameter.Ordinal == ordinal)
+                return a.Value;
+        throw new System.InvalidOperationException(
+            $"missing argument for parameter ordinal {ordinal} of '{op.TargetMethod.Name}'");
+    }
+
+    /// <summary>Evaluate every argument in syntax (evaluation) order, binding the leaves by parameter
+    /// ordinal — the w4 discipline (IInvocationOperation.Arguments can be syntax-ordered for named args).</summary>
+    CLeaf[] EvaluateArgsByOrdinal(IInvocationOperation op)
+    {
+        var vals = new CLeaf[op.Arguments.Length];
+        foreach (var a in op.Arguments)
+            vals[a.Parameter.Ordinal] = VisitExpression(a.Value);
+        return vals;
+    }
+
+    /// <summary>dst[dstStart+i] = DeepClone(src[srcStart+i]) for i in [0, len); a null start means 0.
+    /// bufferAgainstOverlap stages the clones in a fresh temp array first (every source read completes
+    /// before any destination write), so a same-array overlapping Copy/CopyTo behaves like C#'s buffered
+    /// Array.Copy — the temp's elements are fresh bundles nothing else references, so the second leg's
+    /// reference copy is safe.</summary>
+    void EmitAggregateElementCopy(CLeaf srcVal, CLeaf srcStartVal, CLeaf dstVal, CLeaf dstStartVal, CLeaf lenVal,
+        INamedTypeSymbol elemAgg, string arrType, string elemType, bool bufferAgainstOverlap)
+    {
+        var getSig = ExternResolver.BuildArrayGetSignature(arrType, elemType);
+        var setSig = ExternResolver.BuildArraySetSignature(arrType, elemType);
+        if (bufferAgainstOverlap)
+        {
+            var tempVal = ExternCall(ExternResolver.BuildArrayCtorSignature(arrType), new List<CLeaf> { lenVal }, arrType);
+            EmitIndexedLoop(lenVal, iVal =>
+            {
+                var elemVal = ExternCall(getSig, new List<CLeaf> { srcVal, OffsetIndex(srcStartVal, iVal) }, AggregateAbi.ArrayType);
+                EmitExternVoid(setSig, new List<CLeaf>
+                    { tempVal, iVal, AggregateAbi.DeepClone(_builder, elemVal, elemAgg, _ctx.Aggregates.GetLayout) });
+            });
+            EmitIndexedLoop(lenVal, iVal =>
+            {
+                var elemVal = ExternCall(getSig, new List<CLeaf> { tempVal, iVal }, AggregateAbi.ArrayType);
+                EmitExternVoid(setSig, new List<CLeaf> { dstVal, OffsetIndex(dstStartVal, iVal), elemVal });
+            });
+        }
+        else
+        {
+            EmitIndexedLoop(lenVal, iVal =>
+            {
+                var elemVal = ExternCall(getSig, new List<CLeaf> { srcVal, OffsetIndex(srcStartVal, iVal) }, AggregateAbi.ArrayType);
+                EmitExternVoid(setSig, new List<CLeaf>
+                    { dstVal, OffsetIndex(dstStartVal, iVal), AggregateAbi.DeepClone(_builder, elemVal, elemAgg, _ctx.Aggregates.GetLayout) });
+            });
+        }
+    }
+
+    void EmitIndexedLoop(CLeaf lenVal, System.Action<CLeaf> body)
+    {
+        var iSlot = _ctx.Builder.AllocScratch("SystemInt32");
+        _builder.EmitFor(
+            b => { EmitAssign(iSlot, Const(0, "SystemInt32")); },
+            // cond MUST be the Func overload so it re-evaluates each iteration (the CLeaf overload
+            // evaluates once, silently skipping the loop).
+            () => ExternCall("SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean",
+                new List<CLeaf> { SlotRef(iSlot), lenVal }, "SystemBoolean"),
+            b =>
+            {
+                EmitAssign(iSlot, ExternCall("SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32",
+                    new List<CLeaf> { SlotRef(iSlot), Const(1, "SystemInt32") }, "SystemInt32"));
+            },
+            b => body(SlotRef(iSlot)));
+    }
+
+    CLeaf OffsetIndex(CLeaf startVal, CLeaf iVal)
+        => startVal == null
+            ? iVal
+            : ExternCall("SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32",
+                new List<CLeaf> { startVal, iVal }, "SystemInt32");
 
     // ── GetComponent<T> ──
 

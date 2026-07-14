@@ -947,4 +947,223 @@ public class CwUnboxNblNull : UdonSharpBehaviour {
 }", "CwUnboxNblNull");
         Assert.NotNull(uasm);
     }
+
+    // A source-element read whose bundle is deep-cloned before any further extern runs: the element
+    // __Get__ is followed (PUSH/COPY only, same block) by a fresh-bundle allocation. The alias bugs
+    // (CW25/CW26) copied the raw element reference, so no allocation sat between the read and the write.
+    const string GetThenCloneCtor =
+        @"__Get__SystemInt32__SystemObject""((?!EXTERN|JUMP)[^:])*EXTERN, ""SystemObjectArray\.__ctor__";
+
+    [Fact]
+    public void StructThis_ReturnAsValue_Clones()  // CW24
+    {
+        // The IInstanceReferenceOperation value-read arm returned the receiver bundle RAW while every
+        // sibling value-read arm (locals/env locals/params/env params) DeepClones aggregates: the
+        // receiver is the caller's LIVE storage, so `var t = s.Copy(); t.x = 1;` mutated s.x
+        // (VM-proven 1 vs CLR: s.x stays 3). The struct method must clone `this` escaping as a value.
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public struct SThisRet { public int x; public SThisRet Copy() { return this; } }
+public class CwThisRet : UdonSharpBehaviour {
+    public int result;
+    void Start() { var s = new SThisRet(); s.x = 3; var t = s.Copy(); t.x = 1; result = s.x; }
+}", "CwThisRet");
+        Assert.Matches(@"____\d+_Copy:((?!JUMP_INDIRECT)[\s\S])*SystemObjectArray\.__ctor__", uasm);
+    }
+
+    [Fact]
+    public void StructThis_LocalCopy_Clones()  // CW24 local-init leg
+    {
+        // `var c = this; c.x = 5;` inside a struct method mutated the caller's variable (VM 5 vs
+        // CLR 2): aggregate local init relies on VisitExpression cloning, and the `this` arm didn't.
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public struct SThisLoc { public int x; public int Probe() { var c = this; c.x = 5; return x; } }
+public class CwThisLoc : UdonSharpBehaviour {
+    public int result;
+    void Start() { var s = new SThisLoc(); s.x = 2; result = s.Probe(); }
+}", "CwThisLoc");
+        // The local-decl default init already allocates an (empty) bundle, so a bare __ctor__ pin
+        // false-greens — the clone's signature is the per-slot copy: a __Get__ from the receiver
+        // followed (PUSH/COPY only) by a __Set__ into the fresh bundle, inside Probe's body.
+        Assert.Matches(@"____\d+_Probe:((?!JUMP_INDIRECT)[\s\S])*__Get__SystemInt32__SystemObject""((?!EXTERN|JUMP)[^:])*EXTERN, ""SystemObjectArray\.__Set__", uasm);
+    }
+
+    [Fact]
+    public void StructThis_PassAsArgument_Clones()  // CW24 argument leg
+    {
+        // `Take(this)` handed the callee the live receiver bundle, so the callee's param writes landed
+        // in the caller's struct (VM 9 vs CLR 3). A non-ref argument is a plain value read — clone.
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public struct SThisArg {
+    public int x;
+    public static int Take(SThisArg s) { s.x = 9; return s.x; }
+    public int Go() { int r = Take(this); return x + r; }
+}
+public class CwThisArg : UdonSharpBehaviour {
+    public int result;
+    void Start() { var s = new SThisArg(); s.x = 3; result = s.Go(); }
+}", "CwThisArg");
+        Assert.Matches(@"____\d+_Go:((?!JUMP_INDIRECT)[\s\S])*SystemObjectArray\.__ctor__", uasm);
+    }
+
+    [Fact]
+    public void ClassThis_ReturnAsValue_StaysReference()  // CW24 accept control
+    {
+        // CA-M1: a v1 CLASS shares the same receiver param0 convention but has reference semantics —
+        // `return this` must stay a raw bundle passthrough (no clone); only the struct half clones.
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public class CSelfRef { public int x; public CSelfRef Self() { return this; } }
+public class CwClassSelf : UdonSharpBehaviour {
+    public int result;
+    void Start() { CSelfRef c = new CSelfRef(); CSelfRef d = c.Self(); d.x = 7; result = c.x; }
+}", "CwClassSelf");
+        Assert.DoesNotMatch(@"____\d+_Self:((?!JUMP_INDIRECT)[\s\S])*SystemObjectArray\.__ctor__", uasm);
+    }
+
+    [Fact]
+    public void StructArraySlice_ElementsCloned()  // CW25
+    {
+        // VisitRangeSlice's copy loop did raw __Get__/__Set__ while the single-element read of the SAME
+        // array clones (ArrayHandler's value-semantics rule): `var sl = arr[0..2]; sl[0].x = 9;` wrote
+        // through the shared element bundle into arr[0] (C# GetSubArray copies struct values).
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public struct SSl { public int x; }
+public class CwSliceStruct : UdonSharpBehaviour {
+    public int result;
+    void Start() { SSl[] arr = new SSl[3]; var sl = arr[0..2]; sl[0].x = 9; result = arr[0].x; }
+}", "CwSliceStruct");
+        Assert.Matches(GetThenCloneCtor, uasm);
+    }
+
+    [Fact]
+    public void TupleArraySlice_ElementsCloned()  // CW25 tuple leg
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public class CwSliceTuple : UdonSharpBehaviour {
+    public int result;
+    void Start() { (int a, int b)[] arr = new (int, int)[3]; var sl = arr[1..3]; result = sl.Length; }
+}", "CwSliceTuple");
+        Assert.Matches(GetThenCloneCtor, uasm);
+    }
+
+    [Fact]
+    public void StructArray_CopyTo_DeepClonesElements()  // CW26
+    {
+        // Rank-1 aggregate-element arrays fell past the N-R4 intercept (Rank>1 only) to the registry-
+        // valid shallow externs: CopyTo copied the element bundle REFERENCES, so b[0] and a[0] were one
+        // bundle and `b[0].x = 1` silently became a[0].x = 1 (C# copies struct VALUES). Must lower to a
+        // per-element DeepClone loop; the shallow extern must be gone.
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public struct SCt { public int x; }
+public class CwAggCopyTo : UdonSharpBehaviour {
+    public int result;
+    void Start() { SCt[] a = new SCt[3]; SCt[] b = new SCt[3]; a.CopyTo(b, 0); b[0].x = 1; result = a[0].x; }
+}", "CwAggCopyTo");
+        Assert.DoesNotContain("SystemArray.__CopyTo__", uasm);
+        Assert.Matches(GetThenCloneCtor, uasm);
+    }
+
+    [Fact]
+    public void StructArray_Clone_DeepClonesElements()  // CW26 Clone leg
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public struct SCl { public int x; }
+public class CwAggClone : UdonSharpBehaviour {
+    public int result;
+    void Start() { SCl[] a = new SCl[2]; SCl[] c = (SCl[])a.Clone(); c[0].x = 2; result = a[0].x; }
+}", "CwAggClone");
+        Assert.DoesNotContain("SystemArray.__Clone__", uasm);
+        Assert.Matches(GetThenCloneCtor, uasm);
+    }
+
+    [Fact]
+    public void StructArray_ArrayCopy_DeepClonesElements()  // CW26 static Copy leg (3-arg + ranged)
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public struct SAc { public int x; }
+public class CwAggArrayCopy : UdonSharpBehaviour {
+    public int result;
+    void Start() {
+        SAc[] a = new SAc[3]; SAc[] b = new SAc[3];
+        System.Array.Copy(a, b, 2);
+        System.Array.Copy(a, 1, b, 0, 2);
+        b[1].x = 4; result = a[1].x;
+    }
+}", "CwAggArrayCopy");
+        Assert.DoesNotContain("SystemArray.__Copy__", uasm);
+        Assert.Matches(GetThenCloneCtor, uasm);
+    }
+
+    [Fact]
+    public void TupleArray_CopyTo_DeepClonesElements()  // CW26 tuple leg
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public class CwAggCopyToTuple : UdonSharpBehaviour {
+    public int result;
+    void Start() {
+        (int a, int b)[] x = new (int, int)[2]; (int a, int b)[] y = new (int, int)[2];
+        x.CopyTo(y, 0); result = y[0].a;
+    }
+}", "CwAggCopyToTuple");
+        Assert.DoesNotContain("SystemArray.__CopyTo__", uasm);
+        Assert.Matches(GetThenCloneCtor, uasm);
+    }
+
+    [Fact]
+    public void ScalarAndClassElementArray_Clone_StaysExtern()  // CW26 accept controls
+    {
+        // Shallow IS C# semantics for these: int elements are values inside a real SystemInt32Array,
+        // and class elements ARE references (C# Clone copies the references) — both stay on the extern.
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public class CElCtl { public int v; }
+public class CwAggCloneCtl : UdonSharpBehaviour {
+    public int result;
+    void Start() {
+        int[] a = new int[3];
+        int[] b = (int[])a.Clone();
+        CElCtl[] c = new CElCtl[2];
+        CElCtl[] d = (CElCtl[])c.Clone();
+        result = b[0] + (d[0] == null ? 1 : 0);
+    }
+}", "CwAggCloneCtl");
+        Assert.Equal(2, Regex.Matches(uasm, @"SystemArray\.__Clone__SystemObject").Count);
+    }
+
+    [Fact]
+    public void MixedElementArrayCopy_LoudRejects()  // CW26 reject leg
+    {
+        // object[] → S[] is an unboxing Array.Copy on the CLR; the bundle representation cannot type
+        // the per-element value copy, so the shape rejects loudly instead of aliasing or faulting.
+        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
+using UdonSharp;
+public struct SMx { public int x; }
+public class CwAggCopyMixed : UdonSharpBehaviour {
+    public int result;
+    void Start() { object[] o = new object[2]; SMx[] b = new SMx[2]; System.Array.Copy(o, b, 2); result = b[0].x; }
+}", "CwAggCopyMixed"));
+        Assert.Contains("struct/tuple-element array", ex.Message);
+    }
+
+    [Fact]
+    public void AggregateArrayCopy_LongOverload_LoudRejects()  // CW26 reject leg
+    {
+        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
+using UdonSharp;
+public struct SLg { public int x; }
+public class CwAggCopyLong : UdonSharpBehaviour {
+    public int result;
+    void Start() { SLg[] a = new SLg[2]; SLg[] b = new SLg[2]; System.Array.Copy(a, b, 2L); result = b[0].x; }
+}", "CwAggCopyLong"));
+        Assert.Contains("Int32 overload", ex.Message);
+    }
 }

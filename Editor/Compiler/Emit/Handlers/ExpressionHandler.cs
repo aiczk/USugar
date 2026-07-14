@@ -42,8 +42,16 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
                                                      ? AggregateAbi.DeepClone(_builder, LoadParam(paramRef.Parameter),
                                                          paggT, _ctx.Aggregates.GetLayout)
                                                      : LoadParam(paramRef.Parameter),
-        IInstanceReferenceOperation when _ctx.Methods.CurrentStructReceiverParamId != null
-            => LoadField(_ctx.Methods.CurrentStructReceiverParamId, AggregateAbi.ArrayType),
+        // CW24 (closed-world audit): `this` read AS A VALUE (`return this` / `var c = this` / `M(this)`)
+        // clones like every sibling value-read arm above — the receiver bundle is the caller's LIVE
+        // storage (EmitStructInstanceCall passes it raw). A v1 CLASS receiver shares the same param0
+        // convention but stays raw (CA-M1 reference semantics); receiver-position `this` never gets
+        // here (LoadInstanceRaw has its own IInstanceReference arm).
+        IInstanceReferenceOperation when _ctx.Methods.CurrentStructReceiverParamId is { } recvPid
+            => _ctx.Methods.CurrentMethod?.ContainingType is INamedTypeSymbol thisStructT && EmitPolicy.IsUserStruct(thisStructT)
+                   ? AggregateAbi.DeepClone(_builder, LoadField(recvPid, AggregateAbi.ArrayType),
+                       thisStructT, _ctx.Aggregates.GetLayout)
+                   : LoadField(recvPid, AggregateAbi.ArrayType),
         // Class receiver capture (design 2026-07-10 v2 §1.4, the SINGLE new resolution arm): inside
         // a hoisted closure hosted by a v1-class member, `this` is the receiver bundle in the env
         // chain (synthetic capture keyed by the member's OriginalDefinition). Every access shape —
