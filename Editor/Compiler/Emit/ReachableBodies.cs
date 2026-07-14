@@ -36,4 +36,10 @@ sealed class ReachableBodies
     // CA-v2b-1: concrete user classes instantiated (new C()) in this program — each needs a per-program
     // typeobj (its instances carry it in bundle slot 0; is/cast enumerates the assignable subset).
     public readonly HashSet<INamedTypeSymbol> MintedClasses = new(SymbolEqualityComparer.Default);
+
+    // CA rewrite (M5a): the open-constructed generic base-instance definitions (the legacy
+    // UasmEmitter._openGenericBaseDefs side effect). The resolver-driven worklist populates this so the swap
+    // can reproduce that side effect for BuildRecursionInfo; the legacy builder writes the field directly and
+    // leaves this empty.
+    public readonly HashSet<IMethodSymbol> OpenGenericBaseDefs = new(SymbolEqualityComparer.Default);
 }

@@ -43,8 +43,8 @@ internal sealed class ResolverDrivenReach
         var foreignStatics = new HashSet<IMethodSymbol>(cmp);
         var structMembers = new HashSet<IMethodSymbol>(cmp);
         var baseCopies = new HashSet<IMethodSymbol>(cmp);
-        var openBaseGenericDefs = new HashSet<IMethodSymbol>(cmp);  // main-fixpoint roots (open base generics)
         var suppCaptureDefs = new HashSet<IMethodSymbol>(cmp);      // SS2A: dropped generic foreign statics
+        // result.OpenGenericBaseDefs holds the open-base-generic main-fixpoint roots (exposed for the swap).
         var visited = new HashSet<IMethodSymbol>(cmp);
         var queue = new Queue<IMethodSymbol>();
 
@@ -53,7 +53,7 @@ internal sealed class ResolverDrivenReach
             if (body == null) return;
             foreach (var op in SelfAndDescendants(body))
             {
-                foreach (var t in _resolver.ResolveEdges(op))
+                foreach (var t in _resolver.ResolveReachEdges(op))
                 {
                     switch (t.Role)
                     {
@@ -71,7 +71,7 @@ internal sealed class ResolverDrivenReach
                     }
                 }
                 foreach (var mc in _resolver.ResolveMintedTypes(op)) result.MintedClasses.Add(mc);
-                foreach (var d in _resolver.ResolveOpenBaseGenericDefs(op)) openBaseGenericDefs.Add(d);
+                foreach (var d in _resolver.ResolveOpenBaseGenericDefs(op)) result.OpenGenericBaseDefs.Add(d);
                 foreach (var d in _resolver.ResolveForeignStaticSuppDefs(op)) suppCaptureDefs.Add(d);
             }
         }
@@ -87,7 +87,7 @@ internal sealed class ResolverDrivenReach
             foreach (var m in foreignStatics) TryEnqueue(m);
             foreach (var m in structMembers) TryEnqueue(m);
             foreach (var m in baseCopies) TryEnqueue(m);
-            foreach (var m in openBaseGenericDefs) TryEnqueue(m);
+            foreach (var m in result.OpenGenericBaseDefs) TryEnqueue(m);
             foreach (var m in result.StructMemberDefs) TryEnqueue(m);
         }
 

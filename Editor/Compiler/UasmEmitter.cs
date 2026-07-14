@@ -197,8 +197,22 @@ public class UasmEmitter
         // BuildRecursionInfo roots, and CaptureScope roots (all in EmitMethods / injected below).
         return new ClassCompilePlanBuilder(
             ComputeMethods,
-            BuildReachableBodies,
+            BuildReachableBodiesViaResolver,
             () => _fieldInitOps.Select(fi => fi.initOp)).Build();
+    }
+
+    // CA call-graph rewrite (M5a cutover): the reach fixpoint now runs through the unified resolver-driven
+    // worklist instead of the legacy 5-collector BuildReachableBodies. Byte-neutral — M4's stable ordinal
+    // decouples emit order from the worklist's (different) discovery order, and the worklist reproduces every
+    // ReachableBodies facet (proven by the def-granularity equivalence probes + golden + DiffFuzz). The one
+    // legacy side effect (_openGenericBaseDefs, consumed by BuildRecursionInfo) is reproduced from the
+    // worklist result. BuildReachableBodies is retained until M5b/M5c prove-and-remove it.
+    ReachableBodies BuildReachableBodiesViaResolver(IMethodSymbol[] methods)
+    {
+        var reach = new ResolverDrivenReach(new ResolvedEdgeResolver(this), GetMethodBodyOperation,
+            () => _fieldInitOps.Select(fi => fi.initOp), IsCollectibleStructMember, StableOrdinalKey).Build(methods);
+        foreach (var d in reach.OpenGenericBaseDefs) _openGenericBaseDefs.Add(d);
+        return reach;
     }
 
     void SetReflectionValues()

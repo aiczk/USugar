@@ -26,12 +26,16 @@ public sealed class ResolvedEdgeResolver
         // including the v2b-2 virtual override set — a synthetic caller edge.
         foreach (var m in _emitter.EnumerateInternalCallTargets(op))
             yield return new ResolvedTarget(m.OriginalDefinition, TargetRole.CallEdge);
-
-        // Reach roles (registration/recursion frontier). The mint arm walks off-body field-init trees, so
-        // thread a per-call minted-class set to bound its transitive recursion.
-        foreach (var t in ReachEdges(op, new HashSet<INamedTypeSymbol>(SymbolEqualityComparer.Default)))
+        foreach (var t in ResolveReachEdges(op))
             yield return t;
     }
+
+    /// <summary>The reach-role targets only (no CallEdge). The reach worklist runs in Phase-1, BEFORE the
+    /// VirtualDispatch INSTANCE is seeded (Emit seeds it after the compile-plan build); the reach roles use
+    /// only STATIC VirtualDispatch helpers (IsDispatchSite / SlotIntroducer / MostDerivedImpl), so this stays
+    /// callable at reach time, whereas the CallEdge arm's EnumerateInternalCallTargets touches the instance.</summary>
+    public IEnumerable<ResolvedTarget> ResolveReachEdges(IOperation op)
+        => ReachEdges(op, new HashSet<INamedTypeSymbol>(SymbolEqualityComparer.Default));
 
     /// <summary>CA rewrite (M5 prerequisite): the concrete user classes `op` instantiates at runtime — a
     /// direct `new C()` plus any class minted transitively inside C's field initializers (which live off the
