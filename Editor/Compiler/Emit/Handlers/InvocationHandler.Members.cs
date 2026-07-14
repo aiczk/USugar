@@ -568,7 +568,7 @@ public partial class InvocationHandler
                 EmitExprStmt(EmitCallToMethod(ResolveStructMember(op.Constructor), ctorArgs));
                 EmitRefOutCopyBack(op.Arguments, ctor, 0, ctorPrepared);
             },
-            instance => AggregateAbi.EmitObjectInitializer(_builder, instance, layout, op.Initializer, VisitExpression),
+            instance => EmitAggregateObjectInitializer(instance, layout, op.Initializer),
             TypeObjWrite(classTy));
     }
 
@@ -605,16 +605,14 @@ public partial class InvocationHandler
                 inst => AggregateAbi.DefaultInitialize(_builder, inst, layout, _ctx.Aggregates.GetLayout, GetUdonType),
                 inst => ClassAbi.EmitImplicitCtorChain(_builder, _compilation, inst, classTy,
                     _ctx.Aggregates.GetLayout, VisitExpression, CallBaseCtor),
-                inst => AggregateAbi.EmitObjectInitializer(_builder, inst, layout, op.Initializer, VisitExpression),
+                inst => EmitAggregateObjectInitializer(inst, layout, op.Initializer),
                 TypeObjWrite(classTy));
         }
         if (concrete is INamedTypeSymbol structTy && EmitPolicy.IsAggregateType(structTy))
         {
             var inst = AggregateAbi.MintDefault(_builder, _ctx.Aggregates.GetLayout(structTy),
                 _ctx.Aggregates.GetLayout, GetUdonType);
-            if (op.Initializer != null)
-                AggregateAbi.EmitObjectInitializer(_builder, inst, _ctx.Aggregates.GetLayout(structTy),
-                    op.Initializer, VisitExpression);
+            EmitAggregateObjectInitializer(inst, _ctx.Aggregates.GetLayout(structTy), op.Initializer);
             return inst;
         }
         // Primitive / SDK value type: `new T()` is the type's default value.
@@ -711,7 +709,7 @@ public partial class InvocationHandler
             EmitRefOutCopyBack(op.Arguments, structCtor, 0, ctorPrepared);
             // ctor + object-initializer combo (`new V(1,2) { Y = 3 }`): apply the initializer AFTER the
             // ctor runs, same order C# gives the fields (roadmap B41 (d)).
-            AggregateAbi.EmitObjectInitializer(_builder, SlotRef(slot), layout, op.Initializer, VisitExpression);
+            EmitAggregateObjectInitializer(SlotRef(slot), layout, op.Initializer);
             return SlotRef(slot);
         }
 
@@ -724,7 +722,7 @@ public partial class InvocationHandler
         {
             var layout = _ctx.Aggregates.GetLayout(aggInitType);
             var aggVal = AggregateAbi.MintDefault(_builder, layout, _ctx.Aggregates.GetLayout, GetUdonType);
-            AggregateAbi.EmitObjectInitializer(_builder, aggVal, layout, op.Initializer, VisitExpression);
+            EmitAggregateObjectInitializer(aggVal, layout, op.Initializer);
             return aggVal;
         }
 
@@ -761,7 +759,13 @@ public partial class InvocationHandler
         {
             foreach (var init in op.Initializer.Initializers)
             {
-                if (init is not ISimpleAssignmentOperation assign) continue;
+                // CW27 polarity: the SDK path lowers members to native setter externs — anything else
+                // (nested member initializers, collection adds) has no extern lowering; loud, not dropped.
+                if (init is not ISimpleAssignmentOperation assign)
+                    throw new System.NotSupportedException(
+                        $"Object initializer member '{init.Syntax}' ({init.Kind}) on '{op.Type.Name}' is not "
+                        + "supported: an SDK type lowers only simple member assignments (a nested member "
+                        + "initializer has no per-field extern path). Assign the member a whole value instead.");
                 var valueVal = VisitExpression(assign.Value);
                 EmitMemberSet(resultVal, assign.Target, valueVal);
             }
@@ -809,6 +813,13 @@ public partial class InvocationHandler
         {
             // Non-struct field assignment (class fields via SetProgramVariable or direct)
             EmitStoreField(fieldRef2.Field.Name, valueVal);
+        }
+        else
+        {
+            // CW27 polarity: an initializer target this method cannot lower must be loud, not a no-op.
+            throw new System.NotSupportedException(
+                $"Object initializer target '{target.Syntax}' ({target.Kind}) cannot be lowered to an "
+                + "extern member set. Assign the member in a separate statement after construction.");
         }
     }
 

@@ -989,16 +989,16 @@ public abstract partial class HandlerBase
 
     /// <summary>Assign a nested deconstruction target tuple from its object[]-emulated value: read each element
     /// via __Get and delegate to AssignToLValue (which recurses for deeper tuples / handles the leaf lvalues).
-    /// A struct (non-tuple aggregate) leaf is deep-cloned for value semantics; a nested tuple recurses instead.</summary>
+    /// CW29: element reads route through the single CloneIfAggregate rule — the old `!IsTupleType` carve-out
+    /// left a tuple-typed LEAF local aliasing the source bundle whenever the incoming value was not fresh.</summary>
     void AssignNestedTupleElements(ITupleOperation tuple, CLeaf arrValue,
         Dictionary<IOperation, System.Action<CLeaf>> preparedStores = null)
     {
         for (int i = 0; i < tuple.Elements.Length; i++)
         {
             var elemVal = AggregateAbi.ReadSlot(_builder, arrValue, i, "SystemObject");
-            var toAssign = tuple.Elements[i].Type is INamedTypeSymbol et
-                && EmitPolicy.IsAggregateType(et) && !et.IsTupleType
-                ? AggregateAbi.DeepClone(_builder, elemVal, et, _ctx.Aggregates.GetLayout) : elemVal;
+            var toAssign = AggregateAbi.CloneIfAggregate(_builder, elemVal,
+                ResolveType(tuple.Elements[i].Type), _ctx.Aggregates.GetLayout);
             AssignToLValue(tuple.Elements[i], toAssign, preparedStores);
         }
     }
@@ -1154,6 +1154,26 @@ public abstract partial class HandlerBase
         EmitExternVoid(
             ExternResolver.EventReceiverSetProgramVariable,
             new List<CLeaf> { instanceVal, nameConst, value });
+    }
+
+    /// <summary>CW27: the one aggregate object-initializer entry — every mint site routes through
+    /// this wrapper so AggregateAbi.EmitObjectInitializer gets the layout recursion and the
+    /// computed/indexer setter-call capability (and can therefore be loud about anything else).</summary>
+    protected void EmitAggregateObjectInitializer(CLeaf instance, AggregateLayout layout,
+        IObjectOrCollectionInitializerOperation initializer)
+        => AggregateAbi.EmitObjectInitializer(_builder, instance, layout, initializer, VisitExpression,
+            _ctx.Aggregates.GetLayout, EmitInitializerSetterAssignment);
+
+    /// <summary>CW27: computed-property / indexer member in an aggregate object initializer — call
+    /// the user setter with the fresh instance as synthetic param0 (index args by ordinal, then the
+    /// value: the C# order), the same lowering PreparePropertySet gives plain assignment.</summary>
+    void EmitInitializerSetterAssignment(CLeaf instance, IPropertyReferenceOperation propRef, IOperation valueOp)
+    {
+        var setter = ResolveStructMember(propRef.Property.SetMethod);
+        var args = new List<CLeaf> { instance };
+        if (propRef.Property.IsIndexer) args.AddRange(EvaluateIndexerArgs(propRef));
+        args.Add(VisitExpression(valueOp));
+        EmitExprStmt(EmitCallToMethod(setter, args));
     }
 
     /// <summary>Wave-9 round-5 [X2]/[X13]: the single property/indexer SET path, shared by simple

@@ -212,10 +212,11 @@ public static class ValueClassifier
 
     // A capture of this TYPE can carry arbitrary hidden payload (a delegate's env, a boxed value,
     // an object[] cell) that the static type walk cannot see - classification cannot prove it clean.
+    // CW28: both legs recurse aggregate fields — the delegate leg always did, but the object/object[]
+    // legs tested only the capture's top-level type, so `struct Box { object o; }` laundered the same
+    // payload its unwrapped `object` twin loudly trips on (probe-proven struct-wrapping smuggle).
     static bool IsUnclassifiableCarrierType(ITypeSymbol t)
-        => EmitPolicy.ContainsDelegateType(t)
-           || t.SpecialType == SpecialType.System_Object
-           || (t is IArrayTypeSymbol arr && arr.ElementType.SpecialType == SpecialType.System_Object);
+        => EmitPolicy.ContainsDelegateType(t) || EmitPolicy.ContainsOpaqueObjectType(t);
 
     static ITypeSymbol CapturedSymbolType(ISymbol symbol)
         => symbol switch

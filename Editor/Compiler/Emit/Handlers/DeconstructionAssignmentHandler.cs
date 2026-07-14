@@ -96,8 +96,8 @@ public class DeconstructionAssignmentHandler : AssignmentHandlerBase, IOperation
                 for (int i = 0; i < targetTuple.Elements.Length; i++)
                 {
                     var raw = AggregateAbi.ReadSlot(_builder, dlgResult, i, "SystemObject");
-                    dlgSnaps.Add(targetTuple.Elements[i].Type is INamedTypeSymbol det && EmitPolicy.IsAggregateType(det)
-                        ? AggregateAbi.DeepClone(_builder, raw, det, _ctx.Aggregates.GetLayout) : raw);
+                    dlgSnaps.Add(AggregateAbi.CloneIfAggregate(_builder, raw,
+                        ResolveType(targetTuple.Elements[i].Type), _ctx.Aggregates.GetLayout));
                 }
                 for (int i = 0; i < targetTuple.Elements.Length; i++)
                     AssignToLValue(targetTuple.Elements[i], dlgSnaps[i], prepared);
@@ -116,8 +116,8 @@ public class DeconstructionAssignmentHandler : AssignmentHandlerBase, IOperation
                 for (int i = 0; i < targetTuple.Elements.Length; i++)
                 {
                     var raw = AggregateAbi.ReadSlot(_builder, arrVal, i, "SystemObject");
-                    snaps.Add(targetTuple.Elements[i].Type is INamedTypeSymbol et && EmitPolicy.IsAggregateType(et)
-                        ? AggregateAbi.DeepClone(_builder, raw, et, _ctx.Aggregates.GetLayout) : raw);
+                    snaps.Add(AggregateAbi.CloneIfAggregate(_builder, raw,
+                        ResolveType(targetTuple.Elements[i].Type), _ctx.Aggregates.GetLayout));
                 }
                 for (int i = 0; i < targetTuple.Elements.Length; i++)
                     AssignToLValue(targetTuple.Elements[i], snaps[i], prepared);
@@ -168,7 +168,11 @@ public class DeconstructionAssignmentHandler : AssignmentHandlerBase, IOperation
                     var arrExpr = LoadField(callReturns[0].Id, AggregateAbi.ArrayType);
                     for (int i = 0; i < targetTuple.Elements.Length; i++)
                     {
-                        var elemVal = AggregateAbi.ReadSlot(_builder, arrExpr, i, "SystemObject");
+                        // CW29: same clone rule as the sibling arms — this arm relied on every
+                        // return-site materialization being fresh, an invariant enforced nowhere.
+                        var elemVal = AggregateAbi.CloneIfAggregate(_builder,
+                            AggregateAbi.ReadSlot(_builder, arrExpr, i, "SystemObject"),
+                            ResolveType(targetTuple.Elements[i].Type), _ctx.Aggregates.GetLayout);
                         AssignToLValue(targetTuple.Elements[i], elemVal, prepared);
                     }
                 }
@@ -336,7 +340,10 @@ public class DeconstructionAssignmentHandler : AssignmentHandlerBase, IOperation
                 AggregateAbi.ArrayType);
             for (int i = 0; i < targetTuple.Elements.Length; i++)
             {
-                var elemVal = AggregateAbi.ReadSlot(_builder, arrVal, i, "SystemObject");
+                // CW29: same clone rule as the sibling arms (see the same-class call arm).
+                var elemVal = AggregateAbi.CloneIfAggregate(_builder,
+                    AggregateAbi.ReadSlot(_builder, arrVal, i, "SystemObject"),
+                    ResolveType(targetTuple.Elements[i].Type), _ctx.Aggregates.GetLayout);
                 AssignToLValue(targetTuple.Elements[i], elemVal, prepared);
             }
         }

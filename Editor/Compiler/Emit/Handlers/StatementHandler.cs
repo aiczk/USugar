@@ -555,7 +555,10 @@ public class StatementHandler : HandlerBase, IOperationHandler
         {
             AggregateAbi.DefaultInitializeField(_builder, localId, layout, _ctx.Aggregates.GetLayout, GetUdonType);
         }
+        // CW27: `new V(args) { … }` must NOT take this arm — it never applied op.Initializer, silently
+        // dropping the member writes; the generic arm's VisitObjectCreation applies it after the ctor.
         else if (value is IObjectCreationOperation ocCtor && ocCtor.Arguments.Length > 0
+                 && ocCtor.Initializer == null
                  && EmitPolicy.IsUserStruct(aggregateType) && ocCtor.Constructor != null
                  && _methodFunctions.ContainsKey(ocCtor.Constructor)
                  && CtorArgsArePositionalByValue(ocCtor))
@@ -575,8 +578,7 @@ public class StatementHandler : HandlerBase, IOperationHandler
             // struct ctor's VisitObjectCreation returns a null placeholder, so handle creation here.)
             AggregateAbi.DefaultInitializeField(_builder, localId, layout, _ctx.Aggregates.GetLayout, GetUdonType);
             if (oc.Initializer != null)
-                AggregateAbi.EmitObjectInitializer(_builder, LoadField(localId, AggregateAbi.ArrayType),
-                    layout, oc.Initializer, VisitExpression);
+                EmitAggregateObjectInitializer(LoadField(localId, AggregateAbi.ArrayType), layout, oc.Initializer);
         }
         else
         {

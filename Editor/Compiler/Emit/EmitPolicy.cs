@@ -129,6 +129,25 @@ public static class EmitPolicy
         return false;
     }
 
+    /// <summary>CW28: System.Object (or an array whose element chain reaches it) proper, or one
+    /// reachable through a struct/tuple field. The SS2(a) carrier gate must see a LAUNDERED carrier
+    /// too — `struct Box { object o; }` hides the same arbitrary payload its raw `object` twin
+    /// declares — so this walks aggregate fields exactly like <see cref="ContainsDelegateType"/>
+    /// (visited set guards a type that transitively contains itself).</summary>
+    public static bool ContainsOpaqueObjectType(ITypeSymbol type)
+        => ContainsOpaqueObjectType(type, new HashSet<ITypeSymbol>(SymbolEqualityComparer.Default));
+
+    static bool ContainsOpaqueObjectType(ITypeSymbol type, HashSet<ITypeSymbol> visited)
+    {
+        if (type.SpecialType == SpecialType.System_Object) return true;
+        if (type is IArrayTypeSymbol a) return ContainsOpaqueObjectType(a.ElementType, visited);
+        if (type is INamedTypeSymbol agg && IsAggregateType(agg) && visited.Add(agg))
+            foreach (var m in agg.GetMembers())
+                if (m is IFieldSymbol f && !f.IsStatic && ContainsOpaqueObjectType(f.Type, visited))
+                    return true;
+        return false;
+    }
+
     /// <summary>CA-M1 §2-1: a v1 user class proper, or one reachable through an array element, a
     /// struct/tuple field, a generic type argument, or a delegate's parameter/return signature. A class
     /// value is a program-local object[] bundle — like a delegate, its reference is meaningless in any

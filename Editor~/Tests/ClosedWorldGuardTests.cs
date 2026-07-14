@@ -1166,4 +1166,214 @@ public class CwAggCopyLong : UdonSharpBehaviour {
 }", "CwAggCopyLong"));
         Assert.Contains("Int32 overload", ex.Message);
     }
+
+    // ── CW27: EmitObjectInitializer silently dropped members it could not lower ──
+
+    [Fact]
+    public void ObjectInitializer_NestedMemberInit_WritesNestedField()  // CW27
+    {
+        // `Inner = { X = 7 }` is an IMemberInitializerOperation — the `is not ISimpleAssignment`
+        // filter skipped it, so the program compiled clean with Inner.X never written (the constant
+        // 7 existed nowhere). C# writes 7 into the fresh value's nested field.
+        var (uasm, consts) = TestHelper.CompileWithConsts(@"
+using UdonSharp;
+public struct InnerNi { public int X; }
+public struct OuterNi { public InnerNi Inner; public int Y; }
+public class CwNestedInit : UdonSharpBehaviour {
+    public int result;
+    void Start() { var s = new OuterNi { Inner = { X = 7 }, Y = 2 }; result = s.Inner.X * 100 + s.Y; }
+}", "CwNestedInit");
+        Assert.NotNull(uasm);
+        Assert.Contains(consts, c => c.UdonType == "SystemInt32" && Equals(c.Value, 7));
+    }
+
+    [Fact]
+    public void ObjectInitializer_ClassNestedMemberInit_WritesNestedField()  // CW27 class leg
+    {
+        // Same skip on a v1-class member: the ctor-initialized Inner bundle is live in the slot, so
+        // the nested initializer is a read-slot + recurse (C#: read the member, assign into it).
+        var (uasm, consts) = TestHelper.CompileWithConsts(@"
+using UdonSharp;
+public class InnerNc { public int X; }
+public class WrapNc { public InnerNc Inner = new InnerNc(); }
+public class CwNestedInitCls : UdonSharpBehaviour {
+    public int result;
+    void Start() { var w = new WrapNc { Inner = { X = 37 } }; result = w.Inner.X; }
+}", "CwNestedInitCls");
+        Assert.NotNull(uasm);
+        Assert.Contains(consts, c => c.UdonType == "SystemInt32" && Equals(c.Value, 37));
+    }
+
+    [Fact]
+    public void ObjectInitializer_ComputedProperty_CallsSetter()  // CW27
+    {
+        // A computed property never gets a layout slot, so `Comp = 5` resolved no index and was
+        // silently dropped — though PLAIN assignment to the same property runs the user setter
+        // (PreparePropertySet's IsObjectArrayEmulated arm). The initializer must take the same path.
+        // (The accessor label ____N_set_Comp exists regardless — the Phase-1 collector registers it —
+        // so the pin is the VALUE: the dropped member never evaluated `5` into the const pool.)
+        var (uasm, consts) = TestHelper.CompileWithConsts(@"
+using UdonSharp;
+public struct CompIn { public int back; public int Comp { get { return back; } set { back = value * 2; } } }
+public class CwCompInit : UdonSharpBehaviour {
+    public int result;
+    void Start() { var s = new CompIn { Comp = 5 }; result = s.back; }
+}", "CwCompInit");
+        Assert.Contains("set_Comp", uasm);
+        Assert.Contains(consts, c => c.UdonType == "SystemInt32" && Equals(c.Value, 5));
+    }
+
+    [Fact]
+    public void ObjectInitializer_IndexInitializer_CallsSetter()  // CW27 indexer leg
+    {
+        // `new S { [1] = 5 }` targets the indexer ("this[]" resolves no layout slot) — silently
+        // dropped; must call the user indexer setter (index args by ordinal, then the value).
+        var (uasm, consts) = TestHelper.CompileWithConsts(@"
+using UdonSharp;
+public struct IdxIn { public int a0; public int a1;
+    public int this[int i] { get { return i == 0 ? a0 : a1; } set { if (i == 0) a0 = value; else a1 = value; } } }
+public class CwIdxInit : UdonSharpBehaviour {
+    public int result;
+    void Start() { var s = new IdxIn { [1] = 5 }; result = s.a1; }
+}", "CwIdxInit");
+        Assert.Contains("set_Item", uasm);
+        Assert.Contains(consts, c => c.UdonType == "SystemInt32" && Equals(c.Value, 5));
+    }
+
+    [Fact]
+    public void ObjectInitializer_SdkTypedMemberNestedInit_LoudRejects()  // CW27 reject leg
+    {
+        // A nested member initializer on an SDK value-type member (boxed scalar slot, no object[]
+        // layout to recurse into) cannot be lowered in place — loud reject, never a silent drop.
+        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
+using UdonSharp;
+using UnityEngine;
+public struct HoldV { public Vector3 V; }
+public class CwSdkNested : UdonSharpBehaviour {
+    public float result;
+    void Start() { var h = new HoldV { V = { x = 1f } }; result = h.V.x; }
+}", "CwSdkNested"));
+        Assert.Contains("nested member initializer", ex.Message);
+    }
+
+    [Fact]
+    public void LocalDecl_CtorWithObjectInitializer_AppliesInitializer()  // CW27 ctor+init leg
+    {
+        // The local-decl in-place ctor fast arm never applied op.Initializer, silently dropping
+        // `{ Y = 31 }` after `new CtInit(4)` (the VisitObjectCreation path applies it post-ctor).
+        var (uasm, consts) = TestHelper.CompileWithConsts(@"
+using UdonSharp;
+public struct CtInit { public int a; public int Y; public CtInit(int a) { this.a = a; Y = 0; } }
+public class CwCtorInit : UdonSharpBehaviour {
+    public int result;
+    void Start() { var s = new CtInit(4) { Y = 31 }; result = s.a * 100 + s.Y; }
+}", "CwCtorInit");
+        Assert.NotNull(uasm);
+        Assert.Contains(consts, c => c.UdonType == "SystemInt32" && Equals(c.Value, 31));
+    }
+
+    // ── CW28: SS2(a) unclassifiable-carrier gate must recurse into aggregate object/object[] fields ──
+
+    [Fact]
+    public void CrossProgramStore_StructWrappedObjectCapture_LoudRejects()  // CW28
+    {
+        // `struct Box { object o; }` hides the same arbitrary payload its raw `object` twin declares:
+        // the delegate leg of the carrier gate recurses aggregate fields (ContainsDelegateType) but
+        // the object/object[] legs tested only the capture's top-level type, so wrapping the object
+        // in a struct laundered a class-capturing delegate past the cross-program store guard.
+        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
+using UdonSharp;
+public class PayCls28 { public int v; }
+public struct ObjBox28 { public object o; }
+public class Recv28 : UdonSharpBehaviour { public System.Action cb; }
+public class CwObjCarrier : UdonSharpBehaviour {
+    public Recv28 other;
+    void Start() {
+        ObjBox28 b = default;
+        {
+            PayCls28 f = new PayCls28();
+            System.Action inner = () => { f.v = f.v + 1; };
+            b.o = inner;
+        }
+        other.cb = () => { b.o = null; };
+    }
+}", "CwObjCarrier"));
+        Assert.Contains("cross-program field 'cb'", ex.Message);
+    }
+
+    [Fact]
+    public void CrossProgramStore_StructWrappedObjectArrayCapture_LoudRejects()  // CW28 object[] leg
+    {
+        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
+using UdonSharp;
+public class PayCls28b { public int v; }
+public struct CellBox28 { public object[] cells; }
+public class Recv28b : UdonSharpBehaviour { public System.Action cb; }
+public class CwObjArrCarrier : UdonSharpBehaviour {
+    public Recv28b other;
+    void Start() {
+        CellBox28 b = default;
+        PayCls28b f = new PayCls28b(); f.v = 1;
+        other.cb = () => { b.cells = null; };
+    }
+}", "CwObjArrCarrier"));
+        Assert.Contains("cross-program field 'cb'", ex.Message);
+    }
+
+    [Fact]
+    public void CrossProgramStore_CleanStructCapture_Compiles()  // CW28 accept control
+    {
+        // A capture whose type walk proves it payload- and carrier-free stays direct-safe even when
+        // the surrounding body mentions program-local payload — the widening must not over-reject.
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public class PayCls28c { public int v; }
+public struct CleanBox28 { public int n; }
+public class Recv28c : UdonSharpBehaviour { public System.Action cb; }
+public class CwCleanCapture : UdonSharpBehaviour {
+    public Recv28c other;
+    void Start() {
+        CleanBox28 b = default; b.n = 1;
+        PayCls28c f = new PayCls28c(); f.v = 2;
+        other.cb = () => { b.n = b.n + 1; };
+    }
+}", "CwCleanCapture");
+        Assert.NotNull(uasm);
+    }
+
+    // ── CW29: ONE deconstruction element-read clone rule (was 5 divergent sibling arms) ──
+
+    [Fact]
+    public void DeconFromSameClassCall_AggregateElement_Clones()  // CW29
+    {
+        // The same-class call-return arm assigned the return-array element RAW while its siblings
+        // (delegate-invoke return, aggregate-value RHS) DeepClone aggregate elements — its safety
+        // rested on the unstated every-return-materialization-is-fresh invariant. One rule: a
+        // deconstruction element read is a VALUE read — clone every struct/tuple element.
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public struct SDe { public int x; public (int, SDe) Pair() { return (1, this); } }
+public class CwDeconCall : UdonSharpBehaviour {
+    public int result;
+    void Start() { var s = new SDe(); s.x = 10; var (n, sv) = s.Pair(); sv.x = 99; result = s.x + n; }
+}", "CwDeconCall");
+        Assert.Matches(GetThenCloneCtor, uasm);
+    }
+
+    [Fact]
+    public void DeconFromCrossBehaviourCall_AggregateElement_Clones()  // CW29 cross-behaviour leg
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public struct SXd { public int x; }
+public class XdCallee : UdonSharpBehaviour {
+    public (int, SXd) Make() { SXd s = new SXd(); s.x = 5; return (1, s); }
+}
+public class CwDeconXb : UdonSharpBehaviour {
+    public XdCallee other;
+    public int result;
+    void Start() { var (n, sv) = other.Make(); result = n + sv.x; }
+}", "CwDeconXb");
+        Assert.Matches(GetThenCloneCtor, uasm);
+    }
 }

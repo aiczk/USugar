@@ -225,21 +225,90 @@ public static class AggregateAbi
         return builder.SlotRef(slot);
     }
 
+    /// <summary>CW29: the single deconstruction element-read clone rule. An element read out of a
+    /// tuple bundle that feeds an lvalue store is a VALUE read in C# — struct/tuple/anonymous
+    /// elements are deep-copied, scalars are immutable boxes, and v1 classes keep reference
+    /// semantics (IsAggregateType is false for them). Every sibling deconstruction arm routes its
+    /// element reads through this one gate instead of open-coding the predicate.</summary>
+    public static CLeaf CloneIfAggregate(CoreBuilder builder, CLeaf value, ITypeSymbol elementType,
+        Func<INamedTypeSymbol, AggregateLayout> getLayout)
+        => elementType is INamedTypeSymbol agg && EmitPolicy.IsAggregateType(agg)
+            ? DeepClone(builder, value, agg, getLayout)
+            : value;
+
+    /// <summary>CW27: every initializer member is lowered or throws — the old loop silently skipped
+    /// anything that was not a slot-resolvable simple assignment (nested member initializers,
+    /// computed-property and indexer members), leaving fields at their defaults with no diagnostic.
+    /// <paramref name="emitSetterAssignment"/> is the handler-side computed/indexer setter call
+    /// (the same lowering PreparePropertySet gives plain assignment).</summary>
     public static void EmitObjectInitializer(CoreBuilder builder, CLeaf instanceValue, AggregateLayout layout,
-        IObjectOrCollectionInitializerOperation initializer, Func<IOperation, CLeaf> emitValue)
+        IObjectOrCollectionInitializerOperation initializer, Func<IOperation, CLeaf> emitValue,
+        Func<INamedTypeSymbol, AggregateLayout> getLayout,
+        Action<CLeaf, IPropertyReferenceOperation, IOperation> emitSetterAssignment)
     {
         if (initializer == null) return;
         foreach (var member in initializer.Initializers)
         {
-            if (member is not ISimpleAssignmentOperation assignment) continue;
-            var memberName = assignment.Target switch
+            switch (member)
             {
-                IFieldReferenceOperation fieldRef => fieldRef.Field.Name,
-                IPropertyReferenceOperation propertyRef => propertyRef.Property.Name,
-                _ => null,
-            };
-            if (memberName != null && layout.TryGetIndex(memberName, out var idx))
-                WriteSlot(builder, instanceValue, idx, emitValue(assignment.Value));
+                case ISimpleAssignmentOperation assignment:
+                {
+                    var memberName = assignment.Target switch
+                    {
+                        IFieldReferenceOperation fieldRef => fieldRef.Field.Name,
+                        IPropertyReferenceOperation { Property: { IsIndexer: false } } propertyRef
+                            => propertyRef.Property.Name,
+                        _ => null,
+                    };
+                    if (memberName != null && layout.TryGetIndex(memberName, out var idx))
+                    {
+                        WriteSlot(builder, instanceValue, idx, emitValue(assignment.Value));
+                        break;
+                    }
+                    // Computed property / indexer: no layout slot — call the user setter with the
+                    // fresh instance as param0, exactly like plain assignment to the same member.
+                    if (assignment.Target is IPropertyReferenceOperation { Property: { SetMethod: { } } } setterRef)
+                    {
+                        emitSetterAssignment(instanceValue, setterRef, assignment.Value);
+                        break;
+                    }
+                    throw new NotSupportedException(
+                        $"Object initializer member '{assignment.Target.Syntax}' cannot be lowered: it "
+                        + "resolves neither a layout slot nor a callable user setter. Assign the member "
+                        + "in a separate statement after construction instead.");
+                }
+                case IMemberInitializerOperation memberInit:
+                {
+                    // Nested member initializer (`Inner = { X = 1 }`): C# reads the member and assigns
+                    // into it. For an object[]-emulated member the live nested bundle sits in the slot
+                    // (structs/tuples are allocated by DefaultInitialize, a class bundle by its ctor
+                    // chain), so read it raw and recurse — writes land in the fresh instance's storage.
+                    var (name, memberType) = memberInit.InitializedMember switch
+                    {
+                        IFieldReferenceOperation f => (f.Field.Name, f.Field.Type),
+                        IPropertyReferenceOperation p => (p.Property.Name, p.Property.Type),
+                        _ => ((string)null, (ITypeSymbol)null),
+                    };
+                    if (name != null && layout.TryGetIndex(name, out var slotIdx)
+                        && memberType is INamedTypeSymbol nested && EmitPolicy.IsObjectArrayEmulated(nested))
+                    {
+                        var nestedVal = ReadSlot(builder, instanceValue, slotIdx, ElementType);
+                        EmitObjectInitializer(builder, nestedVal, getLayout(nested), memberInit.Initializer,
+                            emitValue, getLayout, emitSetterAssignment);
+                        break;
+                    }
+                    throw new NotSupportedException(
+                        $"A nested member initializer on '{name ?? memberInit.InitializedMember.Syntax.ToString()}' "
+                        + "is not supported: only a struct/tuple/v1-class member backed by an object[] slot "
+                        + "can be initialized in place. Assign the member a whole value, or set its members "
+                        + "in separate statements after construction.");
+                }
+                default:
+                    throw new NotSupportedException(
+                        $"Object initializer member '{member.Syntax}' ({member.Kind}) is not supported on an "
+                        + "object[]-emulated aggregate: only member assignments and nested member initializers "
+                        + "can be lowered. Initialize via separate statements after construction.");
+            }
         }
     }
 
