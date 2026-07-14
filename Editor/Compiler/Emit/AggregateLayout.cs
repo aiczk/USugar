@@ -406,14 +406,22 @@ public static class ClassAbi
         return null;
     }
 
-    /// <summary>Reject implicit stringification of a v1 class reference bundle.</summary>
+    /// <summary>Reject implicit stringification of a v1 class reference bundle — and of a multi-dimensional
+    /// array bundle (CW14/CW15): both stringify to "System.Object[]" instead of the C# type name, and the
+    /// interpolation/concat Format externs bypass the N-R1 argument choke.</summary>
     public static void RejectImplicitToString(ITypeSymbol type)
     {
-        if (type != null && EmitPolicy.IsUserClassType(type))
+        if (type == null) return;
+        if (EmitPolicy.IsUserClassType(type))
             throw new NotSupportedException(
                 $"A v1 user class '{type.Name}' cannot be converted to a string (interpolation / concat): a "
                 + "class ABI v1 reference bundle has no member-name synthesis, so it would stringify to "
                 + "\"System.Object[]\". Format the class's fields directly instead.");
+        if (NdimArrayAbi.IsNdimArray(type))
+            throw new NotSupportedException(
+                $"A multi-dimensional array ('{type.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}') cannot be "
+                + "converted to a string (interpolation / concat): its runtime value is an object[] bundle, so it would "
+                + "stringify to \"System.Object[]\". Format the elements directly instead.");
     }
 
     /// <summary>Reject user-defined operators and conversions on v1 user classes.</summary>

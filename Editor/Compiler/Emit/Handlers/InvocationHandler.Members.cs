@@ -720,10 +720,16 @@ public partial class InvocationHandler
         }
         else
         {
-            // Evaluate all args first
+            // Evaluate all args first. CW13: this is the same extern boundary as EmitExternMethodCall's
+            // argument loop — mirror its N-R1 per-argument check (an ndim bundle bound to an object-typed
+            // ctor param would silently become the wrapper payload, e.g. new DataToken(ndim)).
             var argVals = new List<CLeaf>();
             for (int i = 0; i < op.Arguments.Length; i++)
+            {
+                if (NdimArrayAbi.IsNdimArray(UnwrapConversions(op.Arguments[i].Value).Type))
+                    throw new System.NotSupportedException(ExternResolver.MultidimExternArgMessage);
                 argVals.Add(VisitExpression(op.Arguments[i].Value));
+            }
             var paramTypes = op.Arguments.Select(a => GetUdonType(a.Value.Type)).ToArray();
             var paramPart = string.Join("_", paramTypes);
             resultVal = ExternCall(

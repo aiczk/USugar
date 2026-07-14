@@ -130,6 +130,54 @@ public class NdSmuggle2 : UdonSharpBehaviour {
     }
 
     [Fact]
+    public void NdimArray_ArrayTypedAlias_LoudRejects()  // CW11
+    {
+        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
+using UdonSharp;
+public class NdAlias : UdonSharpBehaviour {
+    public int r;
+    void Start() { int[,] a = new int[2,10]; System.Array x = a; r = x.Length; }
+}", "NdAlias"));
+        Assert.Contains("multi-dimensional", ex.Message);
+    }
+
+    [Fact]
+    public void NdimArray_ExplicitObjectArrayElement_LoudRejects()  // CW12 array-form leg
+    {
+        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
+using UdonSharp;
+public class NdArrForm : UdonSharpBehaviour {
+    public string s;
+    void Start() { int[,] a = new int[2,2]; s = string.Format(""{0}{1}"", new object[] { 1, a }); }
+}", "NdArrForm"));
+        Assert.Contains("multi-dimensional", ex.Message);
+    }
+
+    [Fact]
+    public void NdimArray_InterpolationHole_LoudRejects()  // CW14
+    {
+        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
+using UdonSharp;
+public class NdInterp : UdonSharpBehaviour {
+    public string s;
+    void Start() { int[,] a = new int[2,2]; s = $""grid={a}""; }
+}", "NdInterp"));
+        Assert.Contains("multi-dimensional", ex.Message);
+    }
+
+    [Fact]
+    public void NdimArray_StringConcatOperand_LoudRejects()  // CW15
+    {
+        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
+using UdonSharp;
+public class NdConcat : UdonSharpBehaviour {
+    public string s;
+    void Start() { int[,] a = new int[2,2]; s = ""grid="" + a; }
+}", "NdConcat"));
+        Assert.Contains("multi-dimensional", ex.Message);
+    }
+
+    [Fact]
     public void NewT_MintWithoutRegisteredTypeObj_LoudRejects()
     {
         // `new T()` monomorphizes to a concrete class the Phase-1 reach census never saw minted (no direct
