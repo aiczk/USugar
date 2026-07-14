@@ -632,6 +632,39 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
             return SlotRef(tmpSlot);
         }
 
+        // CW2 (CA-v2b-1 design step 4, panel Q1 house deviation): an explicit reference downcast to a v1
+        // user class — (Derived)baseVar, (T)objectVar — runs the same typeobj test as `is`/`as`. C# throws
+        // InvalidCastException; Udon has no exceptions, so a mismatch is LogError + null, never the former
+        // identity passthrough (a sibling-class bundle reinterprets field slots; a shorter base bundle
+        // faults far from the cast). An upcast/identity conversion (destination assignable from the
+        // resolved source) is an object[]-shared no-op and stays passthrough; a statically-null operand
+        // casts to null with no check (C#: casting null never throws).
+        if (ResolveType(conv.Type) is INamedTypeSymbol castDst && EmitPolicy.IsUserClassType(castDst)
+            && !(ResolveType(conv.Operand.Type) is INamedTypeSymbol castSrc && VirtualDispatch.IsAssignable(castSrc, castDst)))
+        {
+            var castOperand = conv.Operand;
+            while (castOperand is IConversionOperation innerCast) castOperand = innerCast.Operand;
+            var castsNull = castOperand is IDefaultValueOperation
+                || (castOperand?.ConstantValue.HasValue == true && castOperand.ConstantValue.Value == null);
+            if (!castsNull)
+            {
+                var castUdon = GetUdonType(conv.Type);
+                var castSlot = _ctx.Builder.AllocScratch(castUdon);
+                var castOk = EmitTypeCheck(srcVal, conv.Type);
+                _builder.EmitIf(castOk,
+                    _ => EmitAssign(castSlot, srcVal),
+                    _ =>
+                    {
+                        EmitExternVoid("UnityEngineDebug.__LogError__SystemObject__SystemVoid",
+                            new List<CLeaf> { Const(
+                                $"USugar: InvalidCastException — cast to '{castDst.Name}' on a value that is not a '{castDst.Name}' ({_classSymbol.Name}). Returning null.",
+                                "SystemString") });
+                        EmitAssign(castSlot, Const(null, castUdon));
+                    });
+                return SlotRef(castSlot);
+            }
+        }
+
         // Identity conversion: pass through
         return srcVal;
     }

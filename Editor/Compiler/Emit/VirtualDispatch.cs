@@ -91,7 +91,9 @@ public sealed class VirtualDispatch
         return null;
     }
 
-    static bool IsAssignable(INamedTypeSymbol concrete, INamedTypeSymbol target)
+    /// <summary>`concrete` is-or-derives-from `target` (base-chain walk). Also the CW2 cast arm's
+    /// upcast/identity test (an assignable source needs no runtime typeobj check).</summary>
+    public static bool IsAssignable(INamedTypeSymbol concrete, INamedTypeSymbol target)
     {
         for (var t = concrete; t != null; t = t.BaseType)
             if (SymbolEqualityComparer.Default.Equals(t, target)) return true;

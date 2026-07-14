@@ -178,6 +178,56 @@ public class NdConcat : UdonSharpBehaviour {
     }
 
     [Fact]
+    public void VirtualProperty_BaseTypedRead_LoudRejects()  // CW1
+    {
+        // The v2b-2 dispatch chain fires only for MethodKind.Ordinary, so every accessor site binds the
+        // receiver's STATIC property symbol: `s.Area` on a base-typed receiver silently ran the base
+        // getter (USugar 1, C# 42). Layout-level loud reject; a virtual METHOD wrapper does dispatch.
+        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
+using UdonSharp;
+public class ShapeVp { public virtual int Area { get { return 1; } } }
+public class CircleVp : ShapeVp { public override int Area { get { return 42; } } }
+public class CwVProp : UdonSharpBehaviour {
+    public int r;
+    void Start() { ShapeVp s = new CircleVp(); r = s.Area; }
+}", "CwVProp"));
+        Assert.Contains("property", ex.Message);
+    }
+
+    [Fact]
+    public void VirtualIndexer_BaseTypedRead_LoudRejects()  // CW1 indexer leg
+    {
+        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
+using UdonSharp;
+public class IdxVBase { public virtual int this[int i] { get { return 1; } } }
+public class IdxVDer : IdxVBase { public override int this[int i] { get { return 42; } } }
+public class CwVIdx : UdonSharpBehaviour {
+    public int r;
+    void Start() { IdxVBase b = new IdxVDer(); r = b[0]; }
+}", "CwVIdx"));
+        Assert.Contains("indexer", ex.Message);
+    }
+
+    [Fact]
+    public void ClassDowncast_SiblingReinterpret_EmitsTypeObjGuard()  // CW2
+    {
+        // A direct `(T)o` cast was an identity passthrough while `is`/`as` ran the typeobj check, so a
+        // base-held sibling value reinterpreted the bundle (b.bx read PA's ax slot, silently 42). Design
+        // step-4 (Q1 house deviation): is-test ? passthrough : LogError + null.
+        var (uasm, consts) = TestHelper.CompileWithConsts(@"
+using UdonSharp;
+public class PBase { public int p; }
+public class PA : PBase { public int ax; }
+public class PB : PBase { public int bx; }
+public class CwCast : UdonSharpBehaviour {
+    public int result;
+    void Start() { PBase o = new PA(); ((PA)o).ax = 42; PB b = (PB)o; result = b != null ? b.bx : -1; }
+}", "CwCast");
+        Assert.Contains("UnityEngineDebug.__LogError__SystemObject__SystemVoid", uasm);
+        Assert.Contains(consts, c => c.Value is string s && s.Contains("InvalidCastException"));
+    }
+
+    [Fact]
     public void NewT_MintWithoutRegisteredTypeObj_LoudRejects()
     {
         // `new T()` monomorphizes to a concrete class the Phase-1 reach census never saw minted (no direct

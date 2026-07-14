@@ -360,7 +360,7 @@ public static class ClassAbi
             if (m is IMethodSymbol { MethodKind: MethodKind.Ordinary or MethodKind.PropertyGet or MethodKind.PropertySet }
                 || m is IPropertySymbol)
             {
-                // CA-v2b-2: non-generic virtual/abstract/override members dispatch at runtime through the
+                // CA-v2b-2: non-generic virtual/abstract/override METHODS dispatch at runtime through the
                 // inline typeobj-ReferenceEquals chain (a sealed/singleton receiver devirtualizes to a direct
                 // call). A GENERIC virtual method would need per-call monomorphized dispatch slots, which the
                 // inline scheme does not model — reject it loudly (backlog).
@@ -369,6 +369,17 @@ public static class ClassAbi
                         $"Member '{classTy.Name}.{m.Name}' is a generic virtual method: v2b-2 inline "
                         + "typeobj-dispatch does not support per-call monomorphized virtual slots. Make the "
                         + "method non-generic, or call a named method directly.");
+                // CW1: the dispatch chain exists ONLY for MethodKind.Ordinary — every property/indexer
+                // accessor site binds the receiver's STATIC symbol, so a virtual/override/abstract accessor
+                // on a base-typed receiver would silently run the base accessor. Same polarity as the
+                // generic-virtual reject: loud over silent-wrong (accessor dispatch is backlog).
+                if (m is IPropertySymbol vp && (vp.IsVirtual || vp.IsAbstract || vp.IsOverride))
+                    throw new NotSupportedException(
+                        $"Member '{classTy.Name}.{vp.Name}' is a virtual {(vp.IsIndexer ? "indexer" : "property")}: "
+                        + "v2b-2 inline typeobj-dispatch covers ordinary methods only, so an accessor on a "
+                        + "base-typed receiver would silently run the base accessor. Wrap the accessor in a "
+                        + "virtual method (methods DO dispatch), or make the "
+                        + (vp.IsIndexer ? "indexer" : "property") + " non-virtual.");
             }
         }
     }
