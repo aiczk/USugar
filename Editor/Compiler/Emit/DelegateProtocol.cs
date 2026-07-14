@@ -279,30 +279,47 @@ public static class DelegateAbi
                 new List<CLeaf> { leftNull, rightNull }, "SystemBoolean")),
             _ =>
             {
-                var leftTarget = ReadSlot(builder, left, Target, "SystemObject");
-                var rightTarget = ReadSlot(builder, right, Target, "SystemObject");
-                var targetEq = builder.ExternCall(
-                    "SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean",
-                    new List<CLeaf> { leftTarget, rightTarget }, "SystemBoolean");
-
-                var leftMethod = ReadSlot(builder, left, Method, "SystemString");
-                var rightMethod = ReadSlot(builder, right, Method, "SystemString");
-                var methodEq = builder.ExternCall(
-                    "SystemString.__op_Equality__SystemString_SystemString__SystemBoolean",
-                    new List<CLeaf> { leftMethod, rightMethod }, "SystemBoolean");
-
-                var leftEnv = ReadSlot(builder, left, Env, "SystemObject");
-                var rightEnv = ReadSlot(builder, right, Env, "SystemObject");
-                var envEq = builder.ExternCall(
-                    "SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean",
-                    new List<CLeaf> { leftEnv, rightEnv }, "SystemBoolean");
-
-                var targetMethodEq = builder.ExternCall(
+                // CW10 (2026-07-15): dispatch reads bundle slots only inside IsTaggedBundle (hand-rolled
+                // object[] cast back to a delegate, §2.6; security-filter interference) — this twin read
+                // slots 1/2/4 bare, so `d == handler` faulted (OOB __Get / string-equality cast) where
+                // invoking the same value LogErrors and continues. Either operand untagged → plain
+                // reference equality of the two bundle refs (C#-consistent for identical laundered refs).
+                var leftTagged = IsTaggedBundle(builder, left);
+                var rightTagged = IsTaggedBundle(builder, right);
+                var bothTagged = builder.ExternCall(
                     "SystemBoolean.__op_LogicalAnd__SystemBoolean_SystemBoolean__SystemBoolean",
-                    new List<CLeaf> { targetEq, methodEq }, "SystemBoolean");
-                builder.EmitAssign(resultSlot, builder.ExternCall(
-                    "SystemBoolean.__op_LogicalAnd__SystemBoolean_SystemBoolean__SystemBoolean",
-                    new List<CLeaf> { targetMethodEq, envEq }, "SystemBoolean"));
+                    new List<CLeaf> { leftTagged, rightTagged }, "SystemBoolean");
+                builder.EmitIf(bothTagged,
+                    _ =>
+                    {
+                        var leftTarget = ReadSlot(builder, left, Target, "SystemObject");
+                        var rightTarget = ReadSlot(builder, right, Target, "SystemObject");
+                        var targetEq = builder.ExternCall(
+                            "SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean",
+                            new List<CLeaf> { leftTarget, rightTarget }, "SystemBoolean");
+
+                        var leftMethod = ReadSlot(builder, left, Method, "SystemString");
+                        var rightMethod = ReadSlot(builder, right, Method, "SystemString");
+                        var methodEq = builder.ExternCall(
+                            "SystemString.__op_Equality__SystemString_SystemString__SystemBoolean",
+                            new List<CLeaf> { leftMethod, rightMethod }, "SystemBoolean");
+
+                        var leftEnv = ReadSlot(builder, left, Env, "SystemObject");
+                        var rightEnv = ReadSlot(builder, right, Env, "SystemObject");
+                        var envEq = builder.ExternCall(
+                            "SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean",
+                            new List<CLeaf> { leftEnv, rightEnv }, "SystemBoolean");
+
+                        var targetMethodEq = builder.ExternCall(
+                            "SystemBoolean.__op_LogicalAnd__SystemBoolean_SystemBoolean__SystemBoolean",
+                            new List<CLeaf> { targetEq, methodEq }, "SystemBoolean");
+                        builder.EmitAssign(resultSlot, builder.ExternCall(
+                            "SystemBoolean.__op_LogicalAnd__SystemBoolean_SystemBoolean__SystemBoolean",
+                            new List<CLeaf> { targetMethodEq, envEq }, "SystemBoolean"));
+                    },
+                    _ => builder.EmitAssign(resultSlot, builder.ExternCall(
+                        "SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean",
+                        new List<CLeaf> { left, right }, "SystemBoolean")));
             });
 
         CLeaf result = builder.SlotRef(resultSlot);

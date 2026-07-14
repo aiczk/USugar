@@ -599,4 +599,74 @@ public class CwStructCtorDecl : UdonSharpBehaviour {
         Assert.Matches($@"PUSH, {Regex.Escape(one)}\s+PUSH, __\d+_a__param\s+COPY", uasm);
         Assert.Matches($@"PUSH, {Regex.Escape(two)}\s+PUSH, __\d+_b__param\s+COPY", uasm);
     }
+
+    const string MulticastSrc = @"
+using UdonSharp;
+using System;
+public class CwMulti9 : UdonSharpBehaviour {
+    Action d;
+    public int n;
+    void A() { n += 1; }
+    void B() { n += 10; }
+    void Start() { d = A; d += B; d(); }
+}";
+
+    [Fact]
+    public void MulticastFanout_NullInvocationList_LogsAndReturnsDefault()  // CW9/CW21
+    {
+        // __dlg_fanout_{sig} is an EXPORTED entry: a direct SendCustomEvent (foreign program, or
+        // by-name) reaches it with the env global at its initial null, and the unguarded get_Length
+        // faulted the VM — the only Env-payload consumer of four with zero armor, despite its own
+        // doc comment (and the 2026-07-03 design §1.2) promising "empty/null list → default".
+        // Mirror the closure bridge's env-null arm: LogError + conv-ret default.
+        var (uasm, consts) = TestHelper.CompileWithConsts(MulticastSrc, "CwMulti9");
+        Assert.Contains(consts, c => c.Value is string s && s.Contains("missing invocation list"));
+        // The null test must sit BEFORE the length read inside the fan-out body.
+        var fanout = uasm.Substring(uasm.IndexOf(".export __dlg_fanout_", StringComparison.Ordinal));
+        var nullCmp = fanout.IndexOf("SystemObject.__op_Inequality__SystemObject_SystemObject__SystemBoolean", StringComparison.Ordinal);
+        var lenRead = fanout.IndexOf("SystemArray.__get_Length__SystemInt32", StringComparison.Ordinal);
+        Assert.True(nullCmp >= 0 && nullCmp < lenRead,
+            "fan-out reads the invocation list length before any null guard");
+    }
+
+    [Fact]
+    public void MulticastFlattenOperand_TagAndNullListGuards()  // CW10 flatten leg + CW9/CW21 corrupted-list leg
+    {
+        // The combine/remove flatten read Method (slot 2) with neither tag nor null-list guard: an
+        // untagged foreign object[] `+=` operand faulted the slot read, and a fan-out-named bundle
+        // whose Env is null faulted get_Length. Untagged / null-list operands must fall back to the
+        // single-cast wrap — their own dispatch LogErrors downstream.
+        var (uasm, consts) = TestHelper.CompileWithConsts(MulticastSrc, "CwMulti9");
+        var kindTag = consts.First(c => Equals(c.Value, DelegateAbi.KindTag)).Id;
+        var combineStart = uasm.IndexOf("____dlg_combine_", StringComparison.Ordinal);
+        var removeStart = uasm.IndexOf("____dlg_remove_", StringComparison.Ordinal);
+        var combine = uasm.Substring(combineStart, removeStart - combineStart);
+        // 2 flatten tag guards + the re-minted multicast bundle's own tag write.
+        Assert.Equal(3, Regex.Matches(combine, $@"PUSH, {Regex.Escape(kindTag)}\b").Count);
+        // One env-null inequality guard per flatten arm.
+        Assert.Equal(2, Regex.Matches(combine,
+            @"SystemObject\.__op_Inequality__SystemObject_SystemObject__SystemBoolean").Count);
+    }
+
+    [Fact]
+    public void DelegateEquality_UntaggedOperand_ReferenceEqualityFallback()  // CW10
+    {
+        // CompareDelegates read slots 1/2/4 behind only null checks while its dispatch twin reads
+        // them only inside IsTaggedBundle: `d == handler` on a foreign-written untagged object[]
+        // faulted the VM (OOB __Get / string-equality cast) where invoking the same value LogErrors
+        // and continues. Both operands now tag-check first; either untagged → plain reference
+        // equality of the two bundle refs (C#-consistent for the identical laundered ref).
+        var (uasm, consts) = TestHelper.CompileWithConsts(@"
+using UdonSharp;
+using System;
+public class CwDlgEq10 : UdonSharpBehaviour {
+    Action a; Action b;
+    public bool eq;
+    void M1() { }
+    void Start() { a = M1; b = M1; eq = (a == b); }
+}", "CwDlgEq10");
+        var kindTag = consts.First(c => Equals(c.Value, DelegateAbi.KindTag)).Id;
+        // 2 mints write the tag; the equality's both-non-null leg reads it on BOTH operands.
+        Assert.Equal(4, Regex.Matches(uasm, $@"PUSH, {Regex.Escape(kindTag)}\b").Count);
+    }
 }

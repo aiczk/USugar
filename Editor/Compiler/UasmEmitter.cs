@@ -1780,27 +1780,45 @@ public class UasmEmitter
     /// is reserved and can never collide with a real user method/bridge export name).</summary>
     void EmitMulticastFlattenOperand(CLeaf operand, string fanoutName, out int listSlot, out int lenSlot)
     {
-        var tag = DelegateAbi.ReadSlot(_builder, operand, DelegateAbi.Method, "SystemString");
-        var isMulticast = BridgeCallExtern("SystemBoolean",
-            "SystemString.__op_Equality__SystemString_SystemString__SystemBoolean",
-            new CLeaf[] { tag, _builder.Const(fanoutName, "SystemString") });
-
         var lSlot = _ctx.Builder.AllocScratch("SystemObjectArray");
         var nSlot = _ctx.Builder.AllocScratch("SystemInt32");
-        _builder.EmitIf(isMulticast,
+
+        void EmitSingleCastWrap(CoreBuilder _)
+        {
+            _builder.EmitAssign(lSlot, BridgeCallExtern("SystemObjectArray", MulticastArrCtor,
+                new CLeaf[] { BridgeConstInt(1) }));
+            BridgeCallExternVoid(MulticastArrSet, new CLeaf[] { _builder.SlotRef(lSlot), BridgeConstInt(0), operand });
+            _builder.EmitAssign(nSlot, BridgeConstInt(1));
+        }
+
+        // CW10 (2026-07-15): the Method read is a bare slot-2 __Get — on an untagged foreign object[]
+        // laundered into a delegate slot it faulted exactly where dispatch survives via IsTaggedBundle.
+        // Same tag gate, same polarity: an untagged operand is a single-cast element (its own dispatch
+        // LogErrors downstream). CW9/CW21 leg: a fan-out-named bundle whose Env is null (foreign
+        // corruption) must not fault the length read — it too falls back to the single-cast wrap.
+        var tagOk = DelegateAbi.IsTaggedBundle(_builder, operand);
+        _builder.EmitIf(tagOk,
             _ =>
             {
-                _builder.EmitAssign(lSlot, DelegateAbi.ReadSlot(_builder, operand, DelegateAbi.Env, "SystemObjectArray"));
-                _builder.EmitAssign(nSlot, BridgeCallExtern("SystemInt32", "SystemArray.__get_Length__SystemInt32",
-                    new CLeaf[] { _builder.SlotRef(lSlot) }));
+                var tag = DelegateAbi.ReadSlot(_builder, operand, DelegateAbi.Method, "SystemString");
+                var isMulticast = BridgeCallExtern("SystemBoolean",
+                    "SystemString.__op_Equality__SystemString_SystemString__SystemBoolean",
+                    new CLeaf[] { tag, _builder.Const(fanoutName, "SystemString") });
+                _builder.EmitIf(isMulticast,
+                    _ =>
+                    {
+                        _builder.EmitAssign(lSlot, DelegateAbi.ReadSlot(_builder, operand, DelegateAbi.Env, "SystemObjectArray"));
+                        var listOk = BridgeCallExtern("SystemBoolean",
+                            "SystemObject.__op_Inequality__SystemObject_SystemObject__SystemBoolean",
+                            new CLeaf[] { _builder.SlotRef(lSlot), _builder.Const(null, "SystemObject") });
+                        _builder.EmitIf(listOk,
+                            _ => _builder.EmitAssign(nSlot, BridgeCallExtern("SystemInt32", "SystemArray.__get_Length__SystemInt32",
+                                new CLeaf[] { _builder.SlotRef(lSlot) })),
+                            EmitSingleCastWrap);
+                    },
+                    EmitSingleCastWrap);
             },
-            _ =>
-            {
-                _builder.EmitAssign(lSlot, BridgeCallExtern("SystemObjectArray", MulticastArrCtor,
-                    new CLeaf[] { BridgeConstInt(1) }));
-                BridgeCallExternVoid(MulticastArrSet, new CLeaf[] { _builder.SlotRef(lSlot), BridgeConstInt(0), operand });
-                _builder.EmitAssign(nSlot, BridgeConstInt(1));
-            });
+            EmitSingleCastWrap);
         listSlot = lSlot;
         lenSlot = nSlot;
     }
@@ -2043,33 +2061,50 @@ public class UasmEmitter
             _builder.EmitAssign(retSlot, InvocationHandler.DefaultConst(_builder, retType));
         }
 
-        var nSlot = _ctx.Builder.AllocScratch("SystemInt32");
-        _builder.EmitAssign(nSlot, BridgeCallExtern("SystemInt32", "SystemArray.__get_Length__SystemInt32",
-            new CLeaf[] { _builder.SlotRef(listSlot) }));
-
-        var iSlot = _ctx.Builder.AllocScratch("SystemInt32");
         var dispatch = new InvocationHandler(_ctx);
 
-        _builder.EmitFor(
-            _ => _builder.EmitAssign(iSlot, BridgeConstInt(0)),
-            () => BridgeCallExtern("SystemBoolean", "SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean",
-                new CLeaf[] { _builder.SlotRef(iSlot), _builder.SlotRef(nSlot) }),
-            _ => _builder.EmitAssign(iSlot, BridgeCallExtern("SystemInt32",
-                "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32",
-                new CLeaf[] { _builder.SlotRef(iSlot), BridgeConstInt(1) })),
+        // CW9/CW21 (2026-07-15): this is an EXPORTED entry — a direct SendCustomEvent (foreign
+        // program or by-name) reaches it with the env global at its initial null, and the doc
+        // comment's "null list → default" promise had only its empty half implemented: get_Length
+        // faulted where every sibling bridge LogErrors + returns default. Mirror the closure
+        // bridge's env-null arm; retSlot is already default-initialized, so the conv-ret store
+        // below the guard IS the default return.
+        var listOk = BridgeCallExtern("SystemBoolean",
+            "SystemObject.__op_Inequality__SystemObject_SystemObject__SystemBoolean",
+            new CLeaf[] { _builder.SlotRef(listSlot), _builder.Const(null, "SystemObject") });
+        _builder.EmitIf(listOk,
             _ =>
             {
-                var elemSlot = _ctx.Builder.AllocScratch("SystemObjectArray");
-                _builder.EmitAssign(elemSlot, BridgeCallExtern("SystemObjectArray", MulticastArrGet,
-                    new CLeaf[] { _builder.SlotRef(listSlot), _builder.SlotRef(iSlot) }));
+                var nSlot = _ctx.Builder.AllocScratch("SystemInt32");
+                _builder.EmitAssign(nSlot, BridgeCallExtern("SystemInt32", "SystemArray.__get_Length__SystemInt32",
+                    new CLeaf[] { _builder.SlotRef(listSlot) }));
 
-                var argLeaves = new CLeaf[argSlots.Length];
-                for (int k = 0; k < argSlots.Length; k++) argLeaves[k] = _builder.SlotRef(argSlots[k]);
+                var iSlot = _ctx.Builder.AllocScratch("SystemInt32");
+                _builder.EmitFor(
+                    _ => _builder.EmitAssign(iSlot, BridgeConstInt(0)),
+                    () => BridgeCallExtern("SystemBoolean", "SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean",
+                        new CLeaf[] { _builder.SlotRef(iSlot), _builder.SlotRef(nSlot) }),
+                    _ => _builder.EmitAssign(iSlot, BridgeCallExtern("SystemInt32",
+                        "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32",
+                        new CLeaf[] { _builder.SlotRef(iSlot), BridgeConstInt(1) })),
+                    _ =>
+                    {
+                        var elemSlot = _ctx.Builder.AllocScratch("SystemObjectArray");
+                        _builder.EmitAssign(elemSlot, BridgeCallExtern("SystemObjectArray", MulticastArrGet,
+                            new CLeaf[] { _builder.SlotRef(listSlot), _builder.SlotRef(iSlot) }));
 
-                var elemRet = dispatch.EmitFanoutElementDispatch(_builder.SlotRef(elemSlot), invoke, typeParamMap, argLeaves);
-                if (retSlot >= 0 && elemRet != null)
-                    _builder.EmitAssign(retSlot, elemRet);
-            });
+                        var argLeaves = new CLeaf[argSlots.Length];
+                        for (int k = 0; k < argSlots.Length; k++) argLeaves[k] = _builder.SlotRef(argSlots[k]);
+
+                        var elemRet = dispatch.EmitFanoutElementDispatch(_builder.SlotRef(elemSlot), invoke, typeParamMap, argLeaves);
+                        if (retSlot >= 0 && elemRet != null)
+                            _builder.EmitAssign(retSlot, elemRet);
+                    });
+            },
+            _ => BridgeCallExternVoid("UnityEngineDebug.__LogError__SystemObject__SystemVoid",
+                new[] { (CLeaf)_builder.Const(
+                    $"USugar: missing invocation list — multicast fan-out invoked with a null list ({fanoutName})",
+                    "SystemString") }));
 
         if (retSlot >= 0)
             BridgeStore(DelegateAbi.ConvRetName(sigPart), _builder.SlotRef(retSlot));
