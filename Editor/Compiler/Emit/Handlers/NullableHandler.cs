@@ -57,13 +57,21 @@ public class NullableHandler : AssignmentHandlerBase, IExpressionHandler
         var aggType = ResolveType(op.Type) as INamedTypeSymbol;
         bool aggResult = aggType != null && EmitPolicy.IsAggregateType(aggType);
         var leftVal = VisitExpression(op.Value);
+        System.Func<CLeaf, CLeaf> presentValue = null;
+        if (aggResult)
+            presentValue = present => AggregateAbi.DeepClone(_builder, present, aggType, _ctx.Aggregates.GetLayout);
+        // CW18: a small-underlying nullable left coalescing into a strict underlying-typed slot — the
+        // present box may carry a plain-int tag (the drift the lifted-operator/pattern consumers already
+        // tolerate), and the raw copy left a mistyped value that faults the next strict extern read.
+        else if (EmitPolicy.IsNullableT(op.Value.Type, out _) && ExternResolver.IsSmallIntOrChar(resultType))
+            presentValue = present => RetagSmallNullablePresent(present, op.Type);
         return NullableAbi.EmitCoalesce(_builder, leftVal, resultType,
             () =>
             {
                 var rightVal = VisitExpression(op.WhenNull);
                 return aggResult ? AggregateAbi.DeepClone(_builder, rightVal, aggType, _ctx.Aggregates.GetLayout) : rightVal;
             },
-            aggResult ? present => AggregateAbi.DeepClone(_builder, present, aggType, _ctx.Aggregates.GetLayout) : null);
+            presentValue);
     }
 
     CLeaf VisitCoalesceAssignment(ICoalesceAssignmentOperation op)

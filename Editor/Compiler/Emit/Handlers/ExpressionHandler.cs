@@ -498,14 +498,24 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
         // `int? -> byte` conversion (nullable SOURCE, BARE byte dest) wrapped by an outer byte->byte?. Accept a
         // bare numeric dest too, so the narrow+rebox below still runs — otherwise the boxed int falls through to
         // the identity passthrough and a later `.Value`'s strict ToInt32(SystemByte) InvalidCasts on the boxed int.
+        // CW18 (producer): a USER-enum side converts as its bare underlying numeric tag (a user enum is STORED
+        // as that tag — GetUdonTypeName), so resolve enum facets before the numeric tests. Without this,
+        // (E?)intExpr / (int?)enumNbl fell through BOTH arms to the identity passthrough and minted a
+        // plain-int-tagged box inside a small-underlying E? — the drifted box whose strict accessor reads
+        // HeapTypeMismatch-fault the VM. SDK enums keep their own registered Udon tag and stay on the
+        // enum↔numeric arm below.
+        static ITypeSymbol NumericFacet(ITypeSymbol t)
+            => t is INamedTypeSymbol en && ExternResolver.IsUserEnum(en) ? en.EnumUnderlyingType : t;
         var liftedDstU = EmitPolicy.IsNullableT(conv.Type, out var dstNblU) ? dstNblU : conv.Type;
+        var liftedDstN = liftedDstU == null ? null : NumericFacet(liftedDstU);
         if (conv.Conversion.IsNullable
             && EmitPolicy.IsNullableT(conv.Operand.Type, out var liftedSrcU)
-            && ExternResolver.IsNumericType(liftedSrcU) && liftedDstU != null && ExternResolver.IsNumericType(liftedDstU)
-            && !SymbolEqualityComparer.Default.Equals(liftedSrcU, liftedDstU)
-            && ExternResolver.GetConvertMethodName(liftedDstU) is { } liftedDstMethod)
+            && NumericFacet(liftedSrcU) is { } liftedSrcN && ExternResolver.IsNumericType(liftedSrcN)
+            && liftedDstN != null && ExternResolver.IsNumericType(liftedDstN)
+            && !SymbolEqualityComparer.Default.Equals(liftedSrcN, liftedDstN)
+            && ExternResolver.GetConvertMethodName(liftedDstN) is { } liftedDstMethod)
         {
-            var dstU = GetUdonType(liftedDstU);
+            var dstU = GetUdonType(liftedDstN);
             // C# integer narrowing is UNCHECKED (wrap); Convert.To{Small} is CHECKED and throws. For an
             // integer→integer lifted conversion, promote the boxed source to int64 (tolerates any boxed integer
             // tag, never overflows) and wrap/reinterpret via EmitNarrowingConvert. Float-involved conversions
@@ -514,8 +524,8 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
             // ExternResolver.IsIntegerType excludes it; treat char as integral here so a lifted int?→char?
             // narrowing WRAPS instead of taking the CHECKED Convert.ToChar branch (which throws > 65535).
             bool liftedIntToInt =
-                (ExternResolver.IsIntegerType(liftedSrcU) || liftedSrcU.SpecialType == SpecialType.System_Char)
-                && (ExternResolver.IsIntegerType(liftedDstU) || liftedDstU.SpecialType == SpecialType.System_Char);
+                (ExternResolver.IsIntegerType(liftedSrcN) || liftedSrcN.SpecialType == SpecialType.System_Char)
+                && (ExternResolver.IsIntegerType(liftedDstN) || liftedDstN.SpecialType == SpecialType.System_Char);
             return NullableAbi.EmitLiftedNumericConversion(_builder, srcVal, dstU, liftedDstMethod,
                 liftedIntToInt, EmitNarrowingConvert);
         }
@@ -524,11 +534,13 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
         // the value is always present, so narrow numerically (C#-unchecked wrap) and let it box into the
         // nullable's SystemObject slot with the right tag, so a later `.Value`'s strict small-int extern reads it.
         if (conv.Conversion.IsNullable
-            && conv.Operand.Type != null && ExternResolver.IsNumericType(conv.Operand.Type)
-            && EmitPolicy.IsNullableT(conv.Type, out var bareDstU) && ExternResolver.IsNumericType(bareDstU)
-            && !SymbolEqualityComparer.Default.Equals(conv.Operand.Type, bareDstU))
+            && conv.Operand.Type != null && NumericFacet(conv.Operand.Type) is { } bareSrcN
+            && ExternResolver.IsNumericType(bareSrcN)
+            && EmitPolicy.IsNullableT(conv.Type, out var bareDstU) && NumericFacet(bareDstU) is { } bareDstN
+            && ExternResolver.IsNumericType(bareDstN)
+            && !SymbolEqualityComparer.Default.Equals(bareSrcN, bareDstN))
         {
-            return EmitNarrowingConvert(srcVal, GetUdonType(conv.Operand.Type), GetUdonType(bareDstU));
+            return EmitNarrowingConvert(srcVal, GetUdonType(bareSrcN), GetUdonType(bareDstN));
         }
 
         // Numeric conversions (int→float, etc.) via System.Convert

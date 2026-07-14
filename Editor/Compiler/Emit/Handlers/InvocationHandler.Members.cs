@@ -23,9 +23,11 @@ public partial class InvocationHandler
             var nv = VisitExpression(op.Instance);
             if (op.Property.Name == "HasValue") return NullableAbi.HasValue(_builder, nv);
             // Value of a nullable AGGREGATE (e.g. (int,int)? / V?) copies the struct out (value semantics).
+            // A small-underlying box is re-tagged tolerantly (CW18 — see RetagSmallNullablePresent).
             if (op.Property.Name == "Value")
                 return nblUnder is INamedTypeSymbol nblAgg && EmitPolicy.IsAggregateType(nblAgg)
-                    ? AggregateAbi.DeepClone(_builder, nv, nblAgg, _ctx.Aggregates.GetLayout) : nv;
+                    ? AggregateAbi.DeepClone(_builder, nv, nblAgg, _ctx.Aggregates.GetLayout)
+                    : RetagSmallNullablePresent(nv, nblUnder);
         }
 
         // Auto-property on an aggregate (struct/tuple) OR v1 class → object[] element (the backing field's

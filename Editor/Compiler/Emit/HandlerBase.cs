@@ -279,6 +279,24 @@ public abstract partial class HandlerBase
             new List<CLeaf> { value }, toUdonType);
     }
 
+    /// <summary>CW18: tolerant re-tag of a small-underlying nullable's boxed value. The boxed-object ABI
+    /// admits a plain-int tag inside a small-int/char (or small-underlying user-enum) nullable box — the
+    /// lifted-operator/pattern consumers tolerate it via <see cref="NullableAbi.PromoteBoxedToInt32"/>, but
+    /// the value accessors (.Value / GetValueOrDefault / ??) copied the raw box into a strict
+    /// underlying-typed slot, and the next strict-typed extern read HeapTypeMismatch-faulted the VM.
+    /// Promote with the same ToInt32(SystemObject) tolerance, then narrow back to the underlying tag (a
+    /// null box keeps the B18 deviation: Convert.ToInt32(null) is 0 → default). Non-small underlyings
+    /// return the box untouched.</summary>
+    protected CLeaf RetagSmallNullablePresent(CLeaf boxedValue, ITypeSymbol underlying)
+    {
+        var uType = GetUdonType(underlying);
+        if (!ExternResolver.IsSmallIntOrChar(uType))
+            return boxedValue;
+        var promoted = NullableAbi.PromoteBoxedToInt32(_builder, boxedValue, underlying,
+            _compilation.GetSpecialType(SpecialType.System_Int32), GetUdonType).Value;
+        return EmitNarrowingConvert(promoted, "SystemInt32", uType);
+    }
+
     /// <summary>Low 32 bits of an integer value as a SIGNED int32 (C# unchecked reinterpret). Sources wider than
     /// int32 are reduced by a 64-bit sign-extending shift; ≤32-bit sources widen losslessly to int64 first.</summary>
     CLeaf LowInt32Bits(CLeaf value, string fromUdonType)

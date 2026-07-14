@@ -126,7 +126,55 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
                     ? AggregateAbi.MintDefault(_builder, _ctx.Aggregates.GetLayout(aggType), _ctx.Aggregates.GetLayout, GetUdonType)
                     : EmitValueTypeDefault(uType));
             return NullableAbi.EmitGetValueOrDefault(_builder, nv, uType, fallback,
-                present => aggResult ? AggregateAbi.DeepClone(_builder, present, aggType, _ctx.Aggregates.GetLayout) : present);
+                present => aggResult
+                    ? AggregateAbi.DeepClone(_builder, present, aggType, _ctx.Aggregates.GetLayout)
+                    // CW18: the present box may carry a plain-int tag (small-underlying drift) — a raw
+                    // copy into the strict uType slot faults the next typed read; re-tag tolerantly.
+                    : RetagSmallNullablePresent(present, govUnderlying));
+        }
+
+        // CW17: Nullable<T> OVERRIDES ToString/Equals/GetHashCode, so the bound target's ContainingType is
+        // Nullable<T> — escaping the [V3]/B59/B60 Object-method re-routes (keyed on SpecialType) and falling
+        // through to an INSTANCE SystemObject extern on the raw box, which NREs the VM on the null
+        // representation. Lower the C# semantics over the boxed ABI: ToString() is "" when null,
+        // GetHashCode() is 0 when null, and Equals(object) is exactly the null-safe STATIC
+        // object.Equals(box, arg) — both-null true, one-null false, else boxed value equality.
+        if (op.Instance != null && EmitPolicy.IsNullableT(target.ContainingType, out var nulUnder)
+            && target.Name is "ToString" or "Equals" or "GetHashCode")
+        {
+            // An aggregate underlying boxes as its object[] bundle: the SystemObject extern would print/
+            // hash/compare the ARRAY REFERENCE, not the value (C#: the struct's own semantics) — loud
+            // reject, mirroring the bare user-struct receiver's object-method polarity.
+            if (ResolveType(nulUnder) is INamedTypeSymbol nulAgg && EmitPolicy.IsAggregateType(nulAgg))
+                throw new System.NotSupportedException(
+                    $"'{target.Name}' on a nullable of struct/tuple type "
+                    + $"'{nulUnder.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}' is not supported: "
+                    + "the value boxes as its object[] bundle, so the object-method extern would use the array "
+                    + "reference, not the value. Test HasValue and use the unwrapped value's members instead.");
+
+            var nulBox = VisitExpression(op.Instance);
+            switch (target.Name)
+            {
+                case "ToString":
+                    // A user enum prints its member NAME (B67) — route the present value through the same
+                    // synthesized helper as the bare receiver (re-tagged: the helper's param is strict-typed).
+                    if (ExternResolver.IsUserEnum(ResolveType(nulUnder)))
+                        return NullableAbi.EmitGetValueOrDefault(_builder, nulBox, "SystemString",
+                            Const("", "SystemString"),
+                            present => TryEmitEnumToString(RetagSmallNullablePresent(present, nulUnder), nulUnder));
+                    return NullableAbi.EmitGetValueOrDefault(_builder, nulBox, "SystemString",
+                        Const("", "SystemString"),
+                        present => ExternCall("SystemObject.__ToString__SystemString",
+                            new List<CLeaf> { present }, "SystemString"));
+                case "GetHashCode":
+                    return NullableAbi.EmitGetValueOrDefault(_builder, nulBox, "SystemInt32",
+                        Const(0, "SystemInt32"),
+                        present => ExternCall("SystemObject.__GetHashCode__SystemInt32",
+                            new List<CLeaf> { present }, "SystemInt32"));
+                default: // Equals(object)
+                    return ExternCall("SystemObject.__Equals__SystemObject_SystemObject__SystemBoolean",
+                        new List<CLeaf> { nulBox, VisitExpression(op.Arguments[0].Value) }, "SystemBoolean");
+            }
         }
 
         // Virtual dispatch through `this`: a call to a virtual/override/abstract method must bind to the

@@ -669,4 +669,140 @@ public class CwDlgEq10 : UdonSharpBehaviour {
         // 2 mints write the tag; the equality's both-non-null leg reads it on BOTH operands.
         Assert.Equal(4, Regex.Matches(uasm, $@"PUSH, {Regex.Escape(kindTag)}\b").Count);
     }
+
+    [Fact]
+    public void NullableToString_NullSafeWithEmptyFallback()  // CW17
+    {
+        // Nullable<T> OVERRIDES ToString, so the bound target's ContainingType is Nullable<int> —
+        // escaping the [V3]/B59/B60 Object-method re-routes (keyed on SpecialType) — and the erased
+        // SystemObject INSTANCE extern ran on the raw box: a null int? NRE'd inside the extern and
+        // halted the program where C# defines "". The lowering must gate on HasValue with an
+        // empty-string fallback.
+        var (uasm, consts) = TestHelper.CompileWithConsts(@"
+using UdonSharp;
+public class CwNblToStr : UdonSharpBehaviour {
+    public int seed;
+    public string s;
+    void Start() { int? x = seed > 0 ? (int?)seed : null; s = x.ToString(); }
+}", "CwNblToStr");
+        Assert.Contains(consts, c => c.Value is string str && str.Length == 0);
+        var nullCmp = uasm.IndexOf("SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean", StringComparison.Ordinal);
+        var toStr = uasm.IndexOf("SystemObject.__ToString__SystemString", StringComparison.Ordinal);
+        Assert.True(nullCmp >= 0 && nullCmp < toStr,
+            "ToString extern runs on the raw box before any null guard");
+    }
+
+    [Fact]
+    public void NullableEquals_NullSafeStaticForm()  // CW17
+    {
+        // x.Equals(5) emitted the INSTANCE SystemObject.__Equals extern on the raw box (NRE on a
+        // null int?, where C# defines false); Nullable<T>.Equals(object) is exactly the null-safe
+        // STATIC object.Equals(box, arg): both-null true, one-null false, else boxed value equality.
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public class CwNblEq : UdonSharpBehaviour {
+    public int seed;
+    public bool eq;
+    void Start() { int? x = seed > 0 ? (int?)seed : null; eq = x.Equals(5); }
+}", "CwNblEq");
+        Assert.Contains("SystemObject.__Equals__SystemObject_SystemObject__SystemBoolean", uasm);
+        Assert.DoesNotContain("SystemObject.__Equals__SystemObject__SystemBoolean", uasm);
+    }
+
+    [Fact]
+    public void NullableGetHashCode_NullSafeWithZeroFallback()  // CW17
+    {
+        // Same fall-through as ToString: the instance GetHashCode extern NRE'd on the null
+        // representation where C# defines 0. HasValue-gated underlying hash, 0 fallback.
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public class CwNblHash : UdonSharpBehaviour {
+    public int seed;
+    public int r;
+    void Start() { int? x = seed > 0 ? (int?)seed : null; r = x.GetHashCode(); }
+}", "CwNblHash");
+        var nullCmp = uasm.IndexOf("SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean", StringComparison.Ordinal);
+        var hash = uasm.IndexOf("SystemObject.__GetHashCode__SystemInt32", StringComparison.Ordinal);
+        Assert.True(nullCmp >= 0 && nullCmp < hash,
+            "GetHashCode extern runs on the raw box before any null guard");
+    }
+
+    [Fact]
+    public void NullableUserEnumToString_UsesNameHelper()  // CW17 user-enum leg
+    {
+        // A user enum prints its member NAME in C# (the B67 rule); the nullable receiver must route
+        // the present value through the same synthesized helper — the boxed number's ToString would
+        // silently print the underlying integer.
+        var (uasm, consts) = TestHelper.CompileWithConsts(@"
+using UdonSharp;
+public enum EcName : byte { Alpha, Beta }
+public class CwNblEnumStr : UdonSharpBehaviour {
+    public int seed;
+    public string s;
+    void Start() { EcName? e = seed > 0 ? (EcName?)EcName.Beta : null; s = e.ToString(); }
+}", "CwNblEnumStr");
+        Assert.Contains(consts, c => c.Value is string str && str == "Beta");
+        Assert.Contains(consts, c => c.Value is string str && str.Length == 0);
+        Assert.NotNull(uasm);
+    }
+
+    [Fact]
+    public void NullableAggregate_ObjectMethod_LoudRejects()  // CW17 aggregate leg
+    {
+        // An aggregate underlying boxes as its object[] bundle: the SystemObject extern would print/
+        // hash/compare the ARRAY REFERENCE, not the value (C#: the struct's own semantics) — loud
+        // reject, mirroring the bare user-struct receiver's object-method polarity.
+        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
+using UdonSharp;
+public class CwNblAgg : UdonSharpBehaviour {
+    public string s;
+    void Start() { (int, int)? t = (1, 2); s = t.ToString(); }
+}", "CwNblAgg"));
+        Assert.Contains("HasValue", ex.Message);
+    }
+
+    [Fact]
+    public void NullableEnumConversion_NarrowsToUnderlyingTag()  // CW18 producer leg
+    {
+        // (Ec?)intExpr fell through BOTH lifted numeric arms (IsNumericType excludes enums) to the
+        // identity passthrough, minting a plain-int-tagged box inside a byte-underlying Ec? — the
+        // drifted box every strict-typed accessor read HeapTypeMismatch-faults on (VM-proven). A
+        // user enum is STORED as its bare underlying tag, so the mint must narrow+rebox exactly
+        // like (byte?)intExpr does.
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public enum EcCv : byte { A, B }
+public class CwNblEnumCv : UdonSharpBehaviour {
+    public int seed;
+    public int r;
+    void Start() { EcCv? e = (EcCv?)seed; r = e.HasValue ? 1 : 0; }
+}", "CwNblEnumCv");
+        Assert.Contains("SystemConvert.__ToByte__SystemInt32__SystemByte", uasm);
+    }
+
+    [Fact]
+    public void NullableEnumAccessors_TolerateDriftedBoxTag()  // CW18
+    {
+        // .Value / GetValueOrDefault / ?? copied the raw box into a strict underlying-typed slot, so
+        // the small-underlying-enum tag drift the lifted-operator/pattern consumers already tolerate
+        // (PromoteBoxedToInt32) faulted at exactly these three accessors while `e == Ec.B` on the
+        // SAME box passed. Mirror the tolerance: promote via ToInt32(SystemObject), then narrow back
+        // to the underlying tag.
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public enum EcAc : byte { A, B }
+public class CwNblEnumAcc : UdonSharpBehaviour {
+    public int seed;
+    public int r;
+    void Start() {
+        EcAc? e = (EcAc?)seed;
+        int a = (int)e.Value;
+        EcAc k = e ?? EcAc.A;
+        int c = (int)e.GetValueOrDefault();
+        r = a + (int)k + c;
+    }
+}", "CwNblEnumAcc");
+        Assert.True(Regex.Matches(uasm, @"SystemConvert\.__ToInt32__SystemObject__SystemInt32").Count >= 3,
+            "value accessors copy the raw box without the sibling consumers' tag tolerance");
+    }
 }
