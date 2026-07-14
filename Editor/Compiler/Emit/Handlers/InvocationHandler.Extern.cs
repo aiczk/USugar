@@ -974,6 +974,36 @@ public partial class InvocationHandler
         return false;
     }
 
+    /// <summary>Evaluate op's POSITIONAL arguments, appending each into <paramref name="args"/> (after any
+    /// pre-seeded receiver), and return the ref/out write-back stores keyed by argument index (null if none).
+    /// Leg-bearing ref/out lvalue legs evaluate once ([Y12]); effectful value reads defer past later arguments
+    /// ([Y16]) then patch into <paramref name="args"/> in order. This append-order marshalling is shared by
+    /// every positional internal-call arm — formerly copy-pasted 4x, and a past copy dropped the copy-back
+    /// (DiffFuzz ref=9 vs VM 1; ref=136 vs 106). The named/reordered path (EmitUserMethodCall) is a distinct
+    /// parameter-ORDINAL placement and is deliberately not folded in here.</summary>
+    Dictionary<int, System.Action<CLeaf>> MarshalArguments(IInvocationOperation op, List<CLeaf> args)
+    {
+        Dictionary<int, System.Action<CLeaf>> prepared = null;
+        List<(int slot, System.Func<CLeaf> read)> deferred = null;
+        for (var i = 0; i < op.Arguments.Length; i++)
+        {
+            var (val, deferredRead, store) = EvaluateCallArgument(op, i);
+            if (store != null)
+                (prepared ??= new Dictionary<int, System.Action<CLeaf>>())[i] = store;
+            if (deferredRead != null)
+            {
+                (deferred ??= new List<(int, System.Func<CLeaf>)>()).Add((args.Count, deferredRead));
+                args.Add(null);
+            }
+            else
+                args.Add(val);
+        }
+        if (deferred != null)
+            foreach (var (slot, read) in deferred)
+                args[slot] = read();
+        return prepared;
+    }
+
     /// <summary>Evaluate ONE internal-call argument: ref/out lvalue legs evaluate now (C# computes
     /// the location at argument position; round-8 [Y12] one-evaluation contract), the value read
     /// defers past later effectful arguments ([Y16]), and the prepared copy-back store rides along.

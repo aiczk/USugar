@@ -305,26 +305,7 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
             {
                 args.Add(VisitExpression(op.Instance));
             }
-            Dictionary<int, System.Action<CLeaf>> genPrepared = null;
-            List<(int slot, System.Func<CLeaf> read)> genDeferred = null;
-            for (var i = 0; i < op.Arguments.Length; i++)
-            {
-                // Wave-9 round-8 [Y12]: evaluate leg-bearing ref/out lvalue legs once (copy-back
-                // reuses them). Round-9 [Y16]: defer the value read past later effectful args.
-                var (val, deferredRead, store) = EvaluateCallArgument(op, i);
-                if (store != null)
-                    (genPrepared ??= new Dictionary<int, System.Action<CLeaf>>())[i] = store;
-                if (deferredRead != null)
-                {
-                    (genDeferred ??= new List<(int, System.Func<CLeaf>)>()).Add((args.Count, deferredRead));
-                    args.Add(null);
-                }
-                else
-                    args.Add(val);
-            }
-            if (genDeferred != null)
-                foreach (var (slot, read) in genDeferred)
-                    args[slot] = read();
+            var genPrepared = MarshalArguments(op, args);
             var genResult = EmitCallToMethod(constructed, args);
             // Round-8 [R6]: this arm used to drop the ref/out copy-back (DiffFuzz: ref=9 vs VM 1).
             // Reduced-extension argument ordinals shift by 1 onto the original's params (this=0).
@@ -345,26 +326,7 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
                 {
                     args.Add(VisitExpression(op.Instance));
                 }
-                Dictionary<int, System.Action<CLeaf>> fsPrepared = null;
-                List<(int slot, System.Func<CLeaf> read)> fsDeferred = null;
-                for (var i = 0; i < op.Arguments.Length; i++)
-                {
-                    // Wave-9 round-8 [Y12]: evaluate leg-bearing ref/out lvalue legs once (copy-back
-                    // reuses them). Round-9 [Y16]: defer the value read past later effectful args.
-                    var (val, deferredRead, store) = EvaluateCallArgument(op, i);
-                    if (store != null)
-                        (fsPrepared ??= new Dictionary<int, System.Action<CLeaf>>())[i] = store;
-                    if (deferredRead != null)
-                    {
-                        (fsDeferred ??= new List<(int, System.Func<CLeaf>)>()).Add((args.Count, deferredRead));
-                        args.Add(null);
-                    }
-                    else
-                        args.Add(val);
-                }
-                if (fsDeferred != null)
-                    foreach (var (slot, read) in fsDeferred)
-                        args[slot] = read();
+                var fsPrepared = MarshalArguments(op, args);
                 var fsResult = EmitCallToMethod(original, args);
                 // Round-8 [R6]: this arm used to drop the ref/out copy-back (DiffFuzz: ref=6 vs VM 1).
                 EmitRefOutCopyBack(op, original,
@@ -390,24 +352,7 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
             GuardRefOutArguments(op, target);
             RegisterGenericSpecialization(target);
             var args = new List<CLeaf>();
-            Dictionary<int, System.Action<CLeaf>> gsPrepared = null;
-            List<(int slot, System.Func<CLeaf> read)> gsDeferred = null;
-            for (var i = 0; i < op.Arguments.Length; i++)
-            {
-                var (val, deferredRead, store) = EvaluateCallArgument(op, i);
-                if (store != null)
-                    (gsPrepared ??= new Dictionary<int, System.Action<CLeaf>>())[i] = store;
-                if (deferredRead != null)
-                {
-                    (gsDeferred ??= new List<(int, System.Func<CLeaf>)>()).Add((args.Count, deferredRead));
-                    args.Add(null);
-                }
-                else
-                    args.Add(val);
-            }
-            if (gsDeferred != null)
-                foreach (var (slot, read) in gsDeferred)
-                    args[slot] = read();
+            var gsPrepared = MarshalArguments(op, args);
             var gsResult = EmitCallToMethod(target, args);
             EmitRefOutCopyBack(op, target, 0, gsPrepared);
             return gsResult;
@@ -504,26 +449,7 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
             && op.Instance?.Type is INamedTypeSymbol recvAgg && EmitPolicy.IsAggregateType(recvAgg))
             recv = AggregateAbi.DeepClone(_builder, recv, recvAgg, _ctx.Aggregates.GetLayout);
         var args = new List<CLeaf> { recv };
-        Dictionary<int, System.Action<CLeaf>> structPrepared = null;
-        List<(int slot, System.Func<CLeaf> read)> structDeferred = null;
-        for (var i = 0; i < op.Arguments.Length; i++)
-        {
-            // Wave-9 round-8 [Y12]: evaluate leg-bearing ref/out lvalue legs once (copy-back
-            // reuses them). Round-9 [Y16]: defer the value read past later effectful args.
-            var (val, deferredRead, store) = EvaluateCallArgument(op, i);
-            if (store != null)
-                (structPrepared ??= new Dictionary<int, System.Action<CLeaf>>())[i] = store;
-            if (deferredRead != null)
-            {
-                (structDeferred ??= new List<(int, System.Func<CLeaf>)>()).Add((args.Count, deferredRead));
-                args.Add(null);
-            }
-            else
-                args.Add(val);
-        }
-        if (structDeferred != null)
-            foreach (var (slot, read) in structDeferred)
-                args[slot] = read();
+        var structPrepared = MarshalArguments(op, args);
         var result = EmitCallToMethod(target, args);
         // Round-8 [R5]: this path used to drop the ref/out copy-back entirely (DiffFuzz: ref-arg
         // ref=136 vs VM 106, out-arg ref=10 vs 0). Param ids are ordinal-indexed (receiver separate).
