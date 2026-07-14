@@ -49,6 +49,9 @@ public class SimpleAssignmentHandler : AssignmentHandlerBase, IExpressionHandler
         if (assign.Target is IArrayElementReferenceOperation arrayElem)
         {
             RejectStaticReadonlyWriteThrough(arrayElem.ArrayReference); // §3.3, R5
+            // CW8: an element of a cross-program delegate array field is the same exported storage
+            // as the scalar delegate field the arms above/below already report.
+            RejectUnsafeCrossProgramDelegateWrite(arrayElem, _ctx.Boundary.ClassifyValue(assign.Value));
             if (arrayElem.Indices.Length > 1)
             {
                 var ndimStore = PrepareNdimElementSet(arrayElem);

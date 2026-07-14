@@ -1838,6 +1838,9 @@ public abstract partial class HandlerBase
     protected void RejectProgramLocalCrossBehaviourArgument(ITypeSymbol argType)
         => _ctx.Boundary.RequireCanPassCrossBehaviourArgument(argType);
 
+    protected void RejectUnsafeCrossProgramDelegateArgument(IArgumentOperation arg)
+        => _ctx.Boundary.RequireCanPassCrossProgramDelegateArgument(arg);
+
     protected void RejectProgramLocalErasure(IConversionOperation conversion,
         ITypeSymbol sourceType, ITypeSymbol destinationType)
         => _ctx.Boundary.RequireCanEraseProgramLocalPayload(conversion, sourceType, destinationType);
@@ -2309,6 +2312,10 @@ public abstract partial class HandlerBase
         {
             if (args[i].Value.Type is { } argTy)
                 RejectProgramLocalCrossBehaviourArgument(argTy);
+            // CW7/CW23: a delegate-carrying argument crosses by VALUE — classify it through the
+            // same ladder as the store surfaces (the static-type check above sees only the
+            // signature, never the captured env).
+            RejectUnsafeCrossProgramDelegateArgument(args[i]);
             var p = args[i].Parameter;
             var ordinal = p != null && p.Ordinal >= 0 && p.Ordinal < byOrdinal.Length ? p.Ordinal : i;
             byOrdinal[ordinal] = VisitExpression(args[i].Value);

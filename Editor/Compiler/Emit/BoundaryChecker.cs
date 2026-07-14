@@ -70,6 +70,51 @@ public sealed class BoundaryChecker
                     $"the cross-program property '{p.Property.Name}'", "the write site",
                     "Keep the property non-public, or assign a direct class-free lambda/method group.");
                 break;
+            // CW8: an element write stores through the array reference into the root field's exported
+            // storage — same surface as assigning the scalar twin, one index deeper.
+            case IArrayElementReferenceOperation e when ArrayRootFieldReference(e) is { } rootF
+                && IsCrossProgramDelegateFieldTarget(rootF):
+                RequireDelegateValueSafeForCrossProgramStore(info,
+                    $"an element of the cross-program array field '{rootF.Field.Name}'", "the write site",
+                    "Keep the delegate array private, or assign a direct class-free lambda/method group.");
+                break;
+        }
+    }
+
+    /// <summary>CW7/CW23: a cross-program call argument IS a delegate store — the pair becomes a
+    /// SetProgramVariable into the foreign program's param var — so the argument surface runs the
+    /// same value-classification ladder as the store surfaces (the MG-autowrap design pins "class
+    /// payload cross-program stays rejected"). Type-only checking saw a clean Action signature,
+    /// let a class-capturing env cross, and the callee-side re-store classified Parameter/
+    /// unclassifiable — laundering the bundle back into the guarded fields one hop later.</summary>
+    public void RequireCanPassCrossProgramDelegateArgument(IArgumentOperation arg)
+    {
+        var argType = arg.Value?.Type ?? arg.Parameter?.Type;
+        if (argType == null || !EmitPolicy.ContainsDelegateType(argType)) return;
+        RequireDelegateValueSafeForCrossProgramStore(ClassifyValue(arg.Value),
+            $"the cross-program argument '{arg.Parameter?.Name ?? "?"}'", "the call site",
+            "Pass a direct class-free lambda/method group, or keep the call within this behaviour.");
+    }
+
+    /// <summary>Walks nested element/conversion links to the array's root field (the
+    /// TryGetStaticReadonlyWriteThroughRoot walk, field-reference flavor); null when the array is
+    /// not rooted at a field (local/param/fresh value — program-local storage, no hazard).</summary>
+    static IFieldReferenceOperation ArrayRootFieldReference(IArrayElementReferenceOperation elem)
+    {
+        IOperation op = elem.ArrayReference;
+        while (true)
+        {
+            switch (op)
+            {
+                case IConversionOperation c:
+                    op = c.Operand; continue;
+                case IArrayElementReferenceOperation ae:
+                    op = ae.ArrayReference; continue;
+                case IFieldReferenceOperation fr:
+                    return fr;
+                default:
+                    return null;
+            }
         }
     }
 
@@ -125,7 +170,11 @@ public sealed class BoundaryChecker
 
     public bool IsCrossProgramDelegateFieldTarget(IFieldReferenceOperation fieldRef)
     {
-        if (fieldRef.Field.Type is not INamedTypeSymbol dft || dft.DelegateInvokeMethod == null) return false;
+        // CW8: an ARRAY of delegates is the same exported SystemObjectArray surface as a scalar
+        // delegate field (DeclareDelegateField intercepts only direct delegate types, so Action[]
+        // declares as an ordinary exported var a foreign program GetProgramVariable-reads and
+        // invokes element-wise) — walk the element chain so the array flavor fences like its twin.
+        if (!IsDelegateCarryingStorageType(fieldRef.Field.Type)) return false;
         // Only a BEHAVIOUR's storage is a program surface — a v1 class / struct field is program-local
         // regardless of accessibility (a class is not a program; its bundle has no exported symbols).
         // Without this gate, `F = lambda` inside a class member treats the class's own public delegate
@@ -136,6 +185,13 @@ public sealed class BoundaryChecker
         return fieldRef.Field.DeclaredAccessibility == Accessibility.Public
             || fieldRef.Field.GetAttributes().Any(a =>
                 a.AttributeClass?.Name is "SerializeField" or "SerializeFieldAttribute" or "UdonSyncedAttribute");
+    }
+
+    static bool IsDelegateCarryingStorageType(ITypeSymbol type)
+    {
+        var t = type;
+        while (t is IArrayTypeSymbol arr) t = arr.ElementType;
+        return t is INamedTypeSymbol named && named.DelegateInvokeMethod != null;
     }
 
     /// <summary>A delegate-typed property whose storage is cross-program addressable: any property on

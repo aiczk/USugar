@@ -432,6 +432,156 @@ public class CwClassPropIncDec : UdonSharpBehaviour {
     }
 
     [Fact]
+    public void CrossBehaviourCallArg_ClassCapturingLambda_LoudRejects()  // CW7
+    {
+        // CrossCallArgPairs checked only the STATIC type (ContainsUserClassType sees a clean Action
+        // signature), so the exact value the store twin `o.Handler = ...` loudly rejects crossed via
+        // the argument syntax and SPV'd the class-carrying env bundle into the foreign program —
+        // then laundered back into the guarded field via the callee's unclassifiable param provenance
+        // (CW23). The argument IS a store: the pair becomes a SetProgramVariable into the callee's
+        // param var, so it must run the same value-classification ladder as the store surfaces.
+        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public class CwFoo7 { public int v; }
+public class CwReg7 : UdonSharpBehaviour {
+    public Action Handler;
+    public void Register(Action h) { Handler = h; }
+}
+public class CwArgEscape : UdonSharpBehaviour {
+    public CwReg7 o;
+    void Start() { var f = new CwFoo7(); o.Register(() => { f.v++; }); }
+}", "CwArgEscape"));
+        Assert.Contains("cross-program argument 'h'", ex.Message);
+    }
+
+    [Fact]
+    public void CrossBehaviourCallArg_ClassReceiverMethodGroup_LoudRejects()  // CW7 receiver-bridge leg
+    {
+        // MG autowrap carries the class receiver in DelegateAbi.Env (the FATAL-amendment shape the
+        // scalar store surface rejects) — the argument surface must not hand it a bypass.
+        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public class CwFoo7b { public int v; public void M() { v++; } }
+public class CwReg7b : UdonSharpBehaviour {
+    public Action Handler;
+    public void Register(Action h) { Handler = h; }
+}
+public class CwArgEscapeMg : UdonSharpBehaviour {
+    public CwReg7b o;
+    void Start() { var f = new CwFoo7b(); o.Register(f.M); }
+}", "CwArgEscapeMg"));
+        Assert.Contains("cross-program argument 'h'", ex.Message);
+    }
+
+    [Fact]
+    public void InterfaceCallArg_ClassCapturingLambda_LoudRejects()  // CW7/CW23 interface-dispatch leg
+    {
+        // EmitInterfaceCall shares the CrossCallArgPairs choke — the interface flavor of the same
+        // cross-program SPV store must reject with the same polarity.
+        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public interface ICwReg { void Register(Action h); }
+public class CwFoo7i { public int v; }
+public class CwReg7i : UdonSharpBehaviour, ICwReg {
+    public Action Handler;
+    public void Register(Action h) { Handler = h; }
+}
+public class CwArgEscapeIf : UdonSharpBehaviour {
+    public ICwReg o;
+    void Start() { var f = new CwFoo7i(); o.Register(() => { f.v++; }); }
+}", "CwArgEscapeIf"));
+        Assert.Contains("cross-program argument 'h'", ex.Message);
+    }
+
+    [Fact]
+    public void CrossBehaviourCallArg_DirectClassFreeLambda_Compiles()  // CW7/CW23 accept control
+    {
+        // The designed feature stays open: a direct capture-safe lambda (and null) pass the same
+        // ladder legs the store surfaces accept — dispatch executes in the minter's program.
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public class CwReg7c : UdonSharpBehaviour {
+    public Action Handler;
+    public void Register(Action h) { Handler = h; }
+}
+public class CwArgClean : UdonSharpBehaviour {
+    public CwReg7c o;
+    void Start() { int x = 1; o.Register(() => { x++; }); o.Register(null); }
+}", "CwArgClean");
+        Assert.NotNull(uasm);
+    }
+
+    [Fact]
+    public void PublicDelegateArrayField_ElementWrite_LoudRejects()  // CW8
+    {
+        // The array-element assignment arm never reported to the boundary checker, and the
+        // field-target test bailed on IArrayTypeSymbol — `handlers[0] = classCapturingLambda` into
+        // a public Action[] (declared as an ordinary EXPORTED var: DeclareDelegateField intercepts
+        // only direct delegate types) compiled clean where the scalar twin rejects.
+        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public class CwFoo8 { public int v; }
+public class CwDlgArrElem : UdonSharpBehaviour {
+    public Action[] handlers;
+    void Init() { handlers = new Action[1]; }
+    void Start() { Init(); var f = new CwFoo8(); handlers[0] = () => { f.v++; }; }
+}", "CwDlgArrElem"));
+        Assert.Contains("cross-program array field 'handlers'", ex.Message);
+    }
+
+    [Fact]
+    public void PublicDelegateArrayField_WholeArrayAssign_LoudRejects()  // CW8 whole-array leg
+    {
+        // The whole-array assign DID report, but IsCrossProgramDelegateFieldTarget returned false
+        // for Action[] (`is not INamedTypeSymbol` bail) and the switch silently ate it.
+        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public class CwFoo8b { public int v; }
+public class CwDlgArrWhole : UdonSharpBehaviour {
+    public Action[] handlers;
+    void Start() { var f = new CwFoo8b(); handlers = new Action[] { () => { f.v++; } }; }
+}", "CwDlgArrWhole"));
+        Assert.Contains("cross-program field 'handlers'", ex.Message);
+    }
+
+    [Fact]
+    public void CrossBehaviourDelegateArrayField_Assign_LoudRejects()  // CW8 cross-behaviour leg
+    {
+        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public class CwFoo8c { public int v; }
+public class CwArrOther : UdonSharpBehaviour { public Action[] handlers; }
+public class CwDlgArrCross : UdonSharpBehaviour {
+    public CwArrOther o;
+    void Start() { var f = new CwFoo8c(); o.handlers = new Action[] { () => { f.v++; } }; }
+}", "CwDlgArrCross"));
+        Assert.Contains("cross-program field 'handlers'", ex.Message);
+    }
+
+    [Fact]
+    public void PrivateDelegateArrayField_SameValues_Compiles()  // CW8 accept control
+    {
+        // A private delegate array is never exported — program-local storage stays legal for the
+        // identical class-capturing values (the scalar private twin is pinned the same way).
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public class CwFoo8p { public int v; }
+public class CwDlgArrPriv : UdonSharpBehaviour {
+    Action[] handlers;
+    void Start() { var f = new CwFoo8p(); handlers = new Action[] { () => { f.v++; } }; handlers[0] = () => { f.v++; }; }
+}", "CwDlgArrPriv");
+        Assert.NotNull(uasm);
+    }
+
+    [Fact]
     public void StructCtorLocalDecl_NamedArgs_BindByParameterOrdinal()  // CW4 local-decl leg
     {
         // The StatementHandler in-place fast arm staged positionally too (a 4th arm the audit's three
