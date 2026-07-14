@@ -117,19 +117,62 @@ public static class NullableAbi
         return resultSlot >= 0 ? builder.SlotRef(resultSlot) : null;
     }
 
-    public static CLeaf EmitPatternCheck(CoreBuilder builder, CValue value, ITypeSymbol underlyingType,
-        IPatternOperation pattern, Func<CLeaf, ITypeSymbol, IPatternOperation, CLeaf> matchUnderlying)
+    /// <summary>CW16/CW19: null-gated match over the boxed nullable ABI. Seeds the result with the
+    /// statically-known null answer, then overwrites it with the present-value match inside the
+    /// HasValue gate. Shared by the pattern lowering below and the switch single-value clause.</summary>
+    public static CLeaf EmitNullGatedMatch(CoreBuilder builder, CValue value, bool matchesNull,
+        Func<CLeaf, CLeaf> matchPresent)
     {
         var nullableSlot = builder.AllocScratch(StorageType);
         builder.EmitAssign(nullableSlot, value);
-        if (pattern is IConstantPatternOperation cpn && cpn.Value.ConstantValue is { HasValue: true, Value: null })
-            return IsNull(builder, builder.SlotRef(nullableSlot));
-
         var matchSlot = builder.AllocScratch("SystemBoolean");
-        builder.EmitAssign(matchSlot, builder.Const(false, "SystemBoolean"));
+        builder.EmitAssign(matchSlot, builder.Const(matchesNull, "SystemBoolean"));
         builder.EmitIf(HasValue(builder, builder.SlotRef(nullableSlot)),
-            _ => builder.EmitAssign(matchSlot, matchUnderlying(builder.SlotRef(nullableSlot), underlyingType, pattern)));
+            _ => builder.EmitAssign(matchSlot, matchPresent(builder.SlotRef(nullableSlot))));
         return builder.SlotRef(matchSlot);
+    }
+
+    /// <summary>CW16: C#'s static null answer of a pattern over a nullable scrutinee. Only a null
+    /// constant, var/discard, and the not/and/or combinators over those can match the null
+    /// representation; every other shape (type / relational / recursive / non-null constant) answers
+    /// false on null. Total over the pattern kinds Roslyn binds on a Nullable&lt;T&gt; scrutinee, so
+    /// no shape needs a reject.</summary>
+    public static bool PatternMatchesNull(IPatternOperation pattern) => pattern switch
+    {
+        IConstantPatternOperation cp => cp.Value.ConstantValue is { HasValue: true, Value: null },
+        INegatedPatternOperation neg => !PatternMatchesNull(neg.Pattern),
+        IBinaryPatternOperation bin => bin.OperatorKind == BinaryOperatorKind.Or
+            ? PatternMatchesNull(bin.LeftPattern) || PatternMatchesNull(bin.RightPattern)
+            : PatternMatchesNull(bin.LeftPattern) && PatternMatchesNull(bin.RightPattern),
+        IDeclarationPatternOperation decl => decl.MatchedType == null || decl.MatchesNull,
+        IDiscardPatternOperation => true,
+        _ => false
+    };
+
+    public static CLeaf EmitPatternCheck(CoreBuilder builder, CValue value, ITypeSymbol underlyingType,
+        IPatternOperation pattern, Func<CLeaf, ITypeSymbol, IPatternOperation, CLeaf> matchUnderlying)
+    {
+        if (pattern is IConstantPatternOperation cpn && cpn.Value.ConstantValue is { HasValue: true, Value: null })
+        {
+            var nullableSlot = builder.AllocScratch(StorageType);
+            builder.EmitAssign(nullableSlot, value);
+            return IsNull(builder, builder.SlotRef(nullableSlot));
+        }
+        // CW16: a top-level var/discard matches the null representation and (for var) binds the raw
+        // box — run it UNGATED so a null scrutinee still answers true and REBINDS (C#: `x is var y`
+        // → true, y = null; a HasValue-gated bind would leave a stale value from a previous pass).
+        if (pattern is IDiscardPatternOperation
+            || (pattern is IDeclarationPatternOperation dpn && (dpn.MatchedType == null || dpn.MatchesNull)))
+        {
+            var nullableSlot = builder.AllocScratch(StorageType);
+            builder.EmitAssign(nullableSlot, value);
+            return matchUnderlying(builder.SlotRef(nullableSlot), underlyingType, pattern);
+        }
+        // CW16: the seed is the pattern's statically-computed null answer — presetting FALSE silently
+        // flipped every null-matching shape (`x is not 5` / `x is null or 5` are TRUE on null in C#);
+        // the HasValue-gated matchUnderlying only answers the present-value case.
+        return EmitNullGatedMatch(builder, value, PatternMatchesNull(pattern),
+            boxed => matchUnderlying(boxed, underlyingType, pattern));
     }
 
     public static CLeaf EmitLiftedBoolLogic(CoreBuilder builder, CValue leftValue, CValue rightValue,

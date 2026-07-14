@@ -543,6 +543,34 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
             return EmitNarrowingConvert(srcVal, GetUdonType(bareSrcN), GetUdonType(bareDstN));
         }
 
+        // CW20: a HARD cast from a reference-typed source (object / interface / ValueType) to
+        // Nullable<T> is C#'s unboxing conversion — it needs a runtime type check of the box, and the
+        // `as T?` twin loud-rejects through EmitTypeCheck for exactly this shape (a Nullable box is not
+        // runtime-distinguishable). The identity passthrough below instead laundered ANY box into the
+        // nullable slot: a mismatched box (C#: InvalidCastException) silently minted a drifted-tag
+        // nullable that mis-compares on the tolerant lifted paths and HeapTypeMismatch-faults on the
+        // strict accessors. Mirror the as-form's polarity: loud reject. A statically-null operand stays
+        // a passthrough (C#: unboxing null into T? is legal and yields null), and a user conversion
+        // operator is a real value conversion, not an unbox.
+        if (conv.OperatorMethod == null
+            && EmitPolicy.IsNullableT(convDstType, out _)
+            && convSrcType is { IsValueType: false })
+        {
+            var unboxOperand = conv.Operand;
+            while (unboxOperand is IConversionOperation innerUnbox) unboxOperand = innerUnbox.Operand;
+            var unboxesNull = unboxOperand is IDefaultValueOperation
+                || (unboxOperand?.ConstantValue.HasValue == true && unboxOperand.ConstantValue.Value == null);
+            if (!unboxesNull)
+                throw new System.NotSupportedException(
+                    $"Cast from '{convSrcType.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}' "
+                    + $"to '{convDstType.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}' is not supported: "
+                    + "unboxing into a nullable needs a runtime type check, but Udon collapses the box onto a "
+                    + "non-injective runtime type tag (the same reason the `as` form rejects), so a mismatched "
+                    + "box (C#: InvalidCastException) would pass through silently and mis-compare or fault at a "
+                    + "later use. Keep the value typed as its nullable type instead of routing it through "
+                    + $"'{convSrcType.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}'.");
+        }
+
         // Numeric conversions (int→float, etc.) via System.Convert
         if (conv.Operand.Type != null && conv.Type != null
             && ExternResolver.IsNumericType(conv.Operand.Type)

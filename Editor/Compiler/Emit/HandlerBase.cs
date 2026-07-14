@@ -297,6 +297,36 @@ public abstract partial class HandlerBase
         return EmitNarrowingConvert(promoted, "SystemInt32", uType);
     }
 
+    /// <summary>Shared scrutinee-vs-constant equality lowering (the constant-pattern arm and the CW19
+    /// nullable switch single-value clause): enum operands compare on the underlying type; a null
+    /// constant compares with SystemObject equality; a small-int/char (or small-underlying enum) pair
+    /// promotes BOTH sides to int32 — the scrutinee box may carry a boxed plain int rather than the
+    /// strict small-int tag, and ToInt32(SystemObject) tolerates any boxed numeric — then compares
+    /// with the int32 extern, like the binary path.</summary>
+    protected CLeaf EmitConstantEquality(CLeaf valueVal, ITypeSymbol valueType, CLeaf constVal, bool constIsNull)
+    {
+        var convertedValueVal = EmitEnumToUnderlying(valueVal, valueType);
+        constVal = EmitEnumToUnderlying(constVal, valueType);
+        var underlyingSym = valueType is INamedTypeSymbol named && named.TypeKind == TypeKind.Enum
+            ? named.EnumUnderlyingType : valueType;
+        var eqType = GetUdonType(underlyingSym);
+        if (constIsNull)
+            eqType = "SystemObject"; // null comparisons use SystemObject equality
+        else if (ExternResolver.IsSmallIntOrChar(eqType))
+        {
+            convertedValueVal = NullableAbi.PromoteBoxedToInt32(_builder, convertedValueVal, underlyingSym,
+                _compilation.GetSpecialType(SpecialType.System_Int32), GetUdonType).Value;
+            constVal = NullableAbi.PromoteBoxedToInt32(_builder, constVal, underlyingSym,
+                _compilation.GetSpecialType(SpecialType.System_Int32), GetUdonType).Value;
+            eqType = "SystemInt32";
+        }
+        return ExternCall(
+            ExternResolver.BuildMethodSignature(
+                eqType, "__op_Equality", new[] { eqType, eqType }, "SystemBoolean"),
+            new List<CLeaf> { convertedValueVal, constVal },
+            "SystemBoolean");
+    }
+
     /// <summary>Low 32 bits of an integer value as a SIGNED int32 (C# unchecked reinterpret). Sources wider than
     /// int32 are reduced by a 64-bit sign-extending shift; ≤32-bit sources widen losslessly to int64 first.</summary>
     CLeaf LowInt32Bits(CLeaf value, string fromUdonType)

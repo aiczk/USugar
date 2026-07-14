@@ -805,4 +805,146 @@ public class CwNblEnumAcc : UdonSharpBehaviour {
         Assert.True(Regex.Matches(uasm, @"SystemConvert\.__ToInt32__SystemObject__SystemInt32").Count >= 3,
             "value accessors copy the raw box without the sibling consumers' tag tolerance");
     }
+
+    [Fact]
+    public void NullablePattern_NotConstant_SeedsNullMatchTrue()  // CW16
+    {
+        // NullableAbi.EmitPatternCheck preset matchSlot to FALSE and answered every non-`is null`
+        // shape only inside the HasValue gate, so shapes whose C# semantics MATCH null silently
+        // flipped: `((int?)null) is not 5` is TRUE in C#, USugar answered false. The seed must be
+        // the pattern's statically-computed null answer (not: !inner; or: either; and: both).
+        var (uasm, consts) = TestHelper.CompileWithConsts(@"
+using UdonSharp;
+public class CwNblNot : UdonSharpBehaviour {
+    public int seed;
+    public bool r;
+    void Start() { int? x = seed > 0 ? (int?)seed : null; r = x is not 5; }
+}", "CwNblNot");
+        Assert.Contains(consts, c => c.UdonType == "SystemBoolean" && Equals(c.Value, true));
+        var trueId = consts.First(c => c.UdonType == "SystemBoolean" && Equals(c.Value, true)).Id;
+        // The TRUE seed is written before the HasValue gate's null compare — the null path keeps it.
+        var seedWrite = Regex.Match(uasm, $@"PUSH, {Regex.Escape(trueId)}\b");
+        var nullCmp = uasm.IndexOf("SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean", StringComparison.Ordinal);
+        Assert.True(seedWrite.Success && seedWrite.Index < nullCmp,
+            "null-matching pattern seeds FALSE — a null scrutinee answers false where C# says true");
+    }
+
+    [Fact]
+    public void NullablePattern_OrNull_SeedsNullMatchTrue()  // CW16 or-combinator leg
+    {
+        // `x is null or 7` wraps the null constant in a binary pattern, so the bare-`is null`
+        // special case never fired and the null scrutinee fell to the false seed (C#: true).
+        var (uasm, consts) = TestHelper.CompileWithConsts(@"
+using UdonSharp;
+public class CwNblOrNull : UdonSharpBehaviour {
+    public int seed;
+    public bool r;
+    void Start() { int? x = seed > 0 ? (int?)seed : null; r = x is null or 7; }
+}", "CwNblOrNull");
+        Assert.Contains(consts, c => c.UdonType == "SystemBoolean" && Equals(c.Value, true));
+        Assert.NotNull(uasm);
+    }
+
+    [Fact]
+    public void NullablePattern_VarPattern_BindsUngated()  // CW16 var leg
+    {
+        // `x is var y` matches ANY value including null (C#: true, y = null) — the HasValue-gated
+        // lowering answered false on null and left y's binding stale. A top-level var/discard runs
+        // UNGATED: no HasValue gate at all, unconditional bind of the raw (possibly null) box.
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public class CwNblVar : UdonSharpBehaviour {
+    public int seed;
+    public bool r;
+    void Start() { int? x = seed > 0 ? (int?)seed : null; r = x is var y; }
+}", "CwNblVar");
+        Assert.DoesNotContain("SystemBoolean.__op_UnaryNegation__SystemBoolean__SystemBoolean", uasm);
+    }
+
+    [Fact]
+    public void NullableSwitch_PatternCaseNot_SeedsNullMatchTrue()  // CW16 switch-statement leg
+    {
+        // The same false seed was reachable from a switch STATEMENT's pattern clause
+        // (SwitchHandler → EmitPatternCheck): `case not 5:` must take a null scrutinee.
+        var (uasm, consts) = TestHelper.CompileWithConsts(@"
+using UdonSharp;
+public class CwNblSwNot : UdonSharpBehaviour {
+    public int seed;
+    public int r;
+    void Start() { int? x = seed > 0 ? (int?)seed : null; switch (x) { case not 5: r = 1; break; default: r = 2; break; } }
+}", "CwNblSwNot");
+        Assert.Contains(consts, c => c.UdonType == "SystemBoolean" && Equals(c.Value, true));
+        Assert.NotNull(uasm);
+    }
+
+    [Fact]
+    public void NullableSwitch_SingleValueClause_ComparesUnderlying()  // CW19
+    {
+        // The single-value clause set eqType = GetUdonType(Nullable<T>) = SystemObject and compared
+        // the raw scrutinee box against a boxed label const — but SystemObject.__op_Equality is
+        // REFERENCE equality (runtime differential harness), so EVERY non-null constant case on ANY
+        // nullable scrutinee silently fell to default while the pattern twin `x is 5` answered true.
+        // Mirror the pattern clause: HasValue gate + underlying-typed equality; `case null:` keeps
+        // the object null check.
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public class CwNblSwitch : UdonSharpBehaviour {
+    public int seed;
+    public int r;
+    void Start() { int? x = seed > 0 ? (int?)seed : null; switch (x) { case 5: r = 1; break; case null: r = 2; break; default: r = 3; break; } }
+}", "CwNblSwitch");
+        Assert.Contains("SystemInt32.__op_Equality__SystemInt32_SystemInt32__SystemBoolean", uasm);
+        // The HasValue gate (IsNull + negation) must guard the typed compare.
+        Assert.Contains("SystemBoolean.__op_UnaryNegation__SystemBoolean__SystemBoolean", uasm);
+    }
+
+    [Fact]
+    public void NullableSwitch_SmallUnderlying_PromotesBothSides()  // CW19 small-int leg
+    {
+        // A small-int underlying additionally needs the sibling pattern clause's box-tag tolerance:
+        // promote scrutinee AND label const to int32 (ToInt32(SystemObject)) before the typed extern,
+        // exactly like the constant-pattern arm — a strict SystemByte equality would InvalidCast on
+        // the plain-int tag the ABI admits.
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public class CwNblSwByte : UdonSharpBehaviour {
+    public int seed;
+    public int r;
+    void Start() { byte? b = (byte?)seed; switch (b) { case 5: r = 1; break; default: r = 2; break; } }
+}", "CwNblSwByte");
+        Assert.True(Regex.Matches(uasm, @"SystemConvert\.__ToInt32__SystemObject__SystemInt32").Count >= 2,
+            "nullable switch label compare skips the pattern arm's two-sided int32 promotion");
+        Assert.Contains("SystemInt32.__op_Equality__SystemInt32_SystemInt32__SystemBoolean", uasm);
+    }
+
+    [Fact]
+    public void HardCast_ObjectToNullable_LoudRejects()  // CW20
+    {
+        // `(byte?)o` from object matched no VisitConversion arm and fell to the identity passthrough
+        // with no unbox check, minting a drifted-tag box (C#: InvalidCastException) that mis-compares
+        // on the tolerant lifted paths and faults on the strict accessors — while the SAME shape as
+        // `o as byte?` loud-rejects through the EmitTypeCheck choke. Mirror the as-form's polarity.
+        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
+using UdonSharp;
+public class CwUnboxNbl : UdonSharpBehaviour {
+    public int seed;
+    public int r;
+    void Start() { object o = seed; byte? b = (byte?)o; r = b == 5 ? 1 : 0; }
+}", "CwUnboxNbl"));
+        Assert.Contains("unbox", ex.Message);
+    }
+
+    [Fact]
+    public void HardCast_StaticNullToNullable_Compiles()  // CW20 accept control
+    {
+        // C#: unboxing null into T? is legal and yields null — a statically-null operand stays a
+        // passthrough (same null carve-out as the delegate and class cast arms).
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public class CwUnboxNblNull : UdonSharpBehaviour {
+    public int r;
+    void Start() { int? x = (int?)(object)null; r = x.HasValue ? 1 : 0; }
+}", "CwUnboxNblNull");
+        Assert.NotNull(uasm);
+    }
 }

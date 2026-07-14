@@ -151,6 +151,21 @@ public class SwitchHandler : HandlerBase, IOperationHandler
         {
             case ISingleValueCaseClauseOperation singleValue:
             {
+                // CW19: a Nullable<T> scrutinee is a boxed SystemObject, and SystemObject.__op_Equality
+                // is REFERENCE equality — the raw box never equals a freshly-boxed label const, so every
+                // non-null constant case silently fell to default while the sibling pattern clause
+                // (`x is 5`) answered true. Mirror the pattern clause's lowering: `case null:` is the
+                // object null check; any other label gates on HasValue and compares on the underlying
+                // type through the shared constant-equality lowering (int32-promoted small tags).
+                if (EmitPolicy.IsNullableT(switchValueType, out var nblUnderlying))
+                {
+                    if (singleValue.Value.ConstantValue is { HasValue: true, Value: null })
+                        return NullableAbi.IsNull(_builder, origValueVal);
+                    return NullableAbi.EmitNullGatedMatch(_builder, origValueVal, false,
+                        boxed => EmitConstantEquality(boxed, nblUnderlying,
+                            VisitExpression(singleValue.Value), false));
+                }
+
                 var eqType = valueType;
                 if (switchValueType is INamedTypeSymbol named && named.TypeKind == TypeKind.Enum)
                     eqType = GetUdonType(named.EnumUnderlyingType);

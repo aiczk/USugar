@@ -484,33 +484,10 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
         switch (pattern)
         {
             case IConstantPatternOperation constPat:
-            {
-                var constVal = VisitExpression(constPat.Value);
-                // Enum comparison → convert operands and use underlying type
-                var convertedValueVal = EmitEnumToUnderlying(valueVal, valueType);
-                constVal = EmitEnumToUnderlying(constVal, valueType);
-                var underlyingSym = valueType is INamedTypeSymbol named && named.TypeKind == TypeKind.Enum
-                    ? named.EnumUnderlyingType : valueType;
-                var eqType = GetUdonType(underlyingSym);
-                if (constPat.Value.ConstantValue is { HasValue: true, Value: null })
-                    eqType = "SystemObject"; // null comparisons use SystemObject equality
-                else if (ExternResolver.IsSmallIntOrChar(eqType))
-                {
-                    // A nullable small-int/char (or small-underlying enum) scrutinee may carry a boxed plain int
-                    // rather than the strict small-int tag; promote both sides to int32 (ToInt32(SystemObject)
-                    // tolerates any boxed numeric) and compare with the int32 extern, like the binary path.
-                    convertedValueVal = NullableAbi.PromoteBoxedToInt32(_builder, convertedValueVal, underlyingSym,
-                        _compilation.GetSpecialType(SpecialType.System_Int32), GetUdonType).Value;
-                    constVal = NullableAbi.PromoteBoxedToInt32(_builder, constVal, underlyingSym,
-                        _compilation.GetSpecialType(SpecialType.System_Int32), GetUdonType).Value;
-                    eqType = "SystemInt32";
-                }
-                return ExternCall(
-                    ExternResolver.BuildMethodSignature(
-                        eqType, "__op_Equality", new[] { eqType, eqType }, "SystemBoolean"),
-                    new List<CLeaf> { convertedValueVal, constVal },
-                    "SystemBoolean");
-            }
+                // Shared with the nullable switch single-value clause (CW19) — enum-underlying
+                // conversion, null → SystemObject equality, small-int/char two-sided int32 promotion.
+                return EmitConstantEquality(valueVal, valueType, VisitExpression(constPat.Value),
+                    constPat.Value.ConstantValue is { HasValue: true, Value: null });
             case INegatedPatternOperation negated:
             {
                 var innerVal = EmitPatternCheckImpl(valueVal, valueType, negated.Pattern);
