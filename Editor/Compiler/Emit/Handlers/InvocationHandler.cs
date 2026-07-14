@@ -195,10 +195,16 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
                 && VirtualDispatch.IsDispatchSite(target, op.Instance, recvTy))
             {
                 var targets = _ctx.VirtualDispatch.ResolveTargets(recvTy, target);
+                GuardOpenVirtualDispatch(recvTy, targets, target);
                 if (!recvTy.IsSealed && targets.Count >= 2)
                     return EmitVirtualChain(op, targets);
                 if (targets.Count >= 1)
                     target = targets[0].Impl; // devirt: singleton/sealed → direct call to the one impl
+                else
+                    // Closed-world: no minted class implements the slot, so no instance can exist and the
+                    // receiver must be null (CLR: NRE). Falling through to a direct base-impl call would
+                    // silently EXECUTE code on the null bundle — LogError + default instead (§2.6 polarity).
+                    return EmitUnreachableVirtualCall(op, recvTy, target);
             }
 
             // CA-M1: a v1 class instance method rides the SAME param0-receiver path. The receiver bundle
@@ -416,6 +422,11 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
         bool isVoid = op.Type == null || op.Type.SpecialType == SpecialType.System_Void;
         int destSlot = isVoid ? -1 : _ctx.Builder.AllocScratch(GetUdonType(op.Type));
 
+        // Phase-A armor: a null receiver or a laundered non-bundle value matches no arm. is/cast guards
+        // that case to `false`; the chain must be equally loud — LogError + default, never silent.
+        var matched = _ctx.Builder.AllocScratch("SystemBoolean");
+        EmitAssign(matched, Const(false, "SystemBoolean"));
+
         foreach (var t in targets)
         {
             var eq = ExternCall("SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean",
@@ -424,12 +435,64 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
             callArgs.AddRange(argRefs);
             _builder.EmitIf(eq, _ =>
             {
+                EmitAssign(matched, Const(true, "SystemBoolean"));
                 var call = EmitCallToMethod(ResolveStructMember(t.Impl), callArgs);
                 if (isVoid) EmitExprStmt(call);
                 else EmitAssign(destSlot, call);
             }, null);
         }
+
+        var noMatch = ExternCall("SystemBoolean.__op_UnaryNegation__SystemBoolean__SystemBoolean",
+            new List<CLeaf> { SlotRef(matched) }, "SystemBoolean");
+        _builder.EmitIf(noMatch, _ =>
+            EmitExternVoid("UnityEngineDebug.__LogError__SystemObject__SystemVoid",
+                new List<CLeaf> { Const(
+                    $"USugar: NullReferenceException — virtual call '{op.TargetMethod.ContainingType.Name}.{op.TargetMethod.Name}' on a null or non-class receiver ({_classSymbol.Name}). Returning default.",
+                    "SystemString") }), null);
+
         return isVoid ? Const(null, "SystemObject") : SlotRef(destSlot);
+    }
+
+    /// <summary>Phase-A armor: virtual dispatch answers through runtime type identity (typeobj) or the
+    /// minted-set enumeration, and neither is spec-sound when the receiver's static type still carries a
+    /// type parameter or when the family was minted through an OPEN construction site — every closed spec
+    /// there shares one typeobj, and cross-context mints are invisible to exact-symbol assignability.
+    /// Same choke-point polarity as EmitTypeCheck's family reject (HandlerBase): loud over a silent
+    /// base-impl call / cross-spec dispatch.</summary>
+    void GuardOpenVirtualDispatch(INamedTypeSymbol recvTy, List<VDispatchTarget> targets, IMethodSymbol target)
+    {
+        bool hazard = ClassTypeObjectContext.ContainsTypeParameter(recvTy)
+            || recvTy.IsGenericType && _ctx.ClassTypes.HasOpenGenericSiblingOf(recvTy)
+            || targets.Any(t => t.Concrete.IsGenericType && _ctx.ClassTypes.HasOpenGenericSiblingOf(t.Concrete))
+            || targets.Count == 0 && _ctx.ClassTypes.HasOpenMintedFamilyAssignableTo(recvTy);
+        if (!hazard) return;
+        throw new System.NotSupportedException(
+            $"Virtual call '{recvTy.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}.{target.Name}' cannot be dispatched: "
+            + "the receiver type or an implementor of its family involves a generic class constructed inside a generic method "
+            + "(open construction site), so the closed-world override set / runtime type identity is not spec-distinct. "
+            + "Construct and dispatch at a concrete type (e.g. `new "
+            + (targets.Count > 0 ? targets[0].Concrete.OriginalDefinition.Name : recvTy.OriginalDefinition.Name)
+            + "<int>()` outside the generic method), or call the method non-virtually on the concrete type.");
+    }
+
+    /// <summary>Phase-A armor: the empty-target lowering — evaluate receiver and args for side-effect
+    /// parity (CLR evaluates them before the NRE), then LogError + default (§2.6 null-invoke polarity).</summary>
+    CLeaf EmitUnreachableVirtualCall(IInvocationOperation op, INamedTypeSymbol recvTy, IMethodSymbol target)
+    {
+        var recvSlot = _ctx.Builder.AllocScratch(AggregateAbi.ArrayType);
+        EmitAssign(recvSlot, LoadInstanceRaw(op.Instance));
+        foreach (var a in op.Arguments)
+        {
+            var s = _ctx.Builder.AllocScratch(GetUdonType(a.Value.Type));
+            EmitAssign(s, VisitExpression(a.Value));
+        }
+        EmitExternVoid("UnityEngineDebug.__LogError__SystemObject__SystemVoid",
+            new List<CLeaf> { Const(
+                $"USugar: NullReferenceException — virtual call '{recvTy.Name}.{target.Name}' has no minted implementor, so the receiver must be null ({_classSymbol.Name}). Returning default.",
+                "SystemString") });
+        bool isVoid = op.Type == null || op.Type.SpecialType == SpecialType.System_Void;
+        if (isVoid) return Const(null, "SystemObject");
+        return SlotRef(_ctx.Builder.AllocScratch(GetUdonType(op.Type)));
     }
 
     CLeaf EmitStructInstanceCall(IInvocationOperation op, IMethodSymbol target)

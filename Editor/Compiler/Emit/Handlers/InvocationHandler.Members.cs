@@ -557,13 +557,22 @@ public partial class InvocationHandler
             TypeObjWrite(classTy));
     }
 
-    /// <summary>CA-v2b-1: the bundle[0]=typeobj write action for a minted concrete class (null if the
-    /// class has no typeobj — never minted, so no is-test can observe it).</summary>
+    /// <summary>CA-v2b-1: the bundle[0]=typeobj write action for a minted concrete class. We are AT a mint
+    /// site, so the class IS minted — a missing registry entry means the Phase-1 minted-class census and
+    /// the emitter disagree (typically a `new T()` whose concrete type is never constructed directly).
+    /// Skipping the write would leave bundle[0] null and every downstream `is`/`as`/virtual dispatch
+    /// silently mis-answering (the GenBoxFactoryIdentity family) — throw instead (Phase-A census-hole
+    /// sensor, loud over silent).</summary>
     System.Action<CLeaf> TypeObjWrite(INamedTypeSymbol classTy)
     {
         var tv = _ctx.ClassTypes.TryGetTypeObjVar(classTy);
-        return tv == null ? null
-            : inst => AggregateAbi.WriteSlot(_builder, inst, 0, LoadField(tv, AggregateAbi.ArrayType));
+        if (tv == null)
+            throw new System.NotSupportedException(
+                $"'{classTy.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}' is minted here but is not in the compile-time minted-class census "
+                + "(typically a `new T()` whose type argument is never constructed directly). Its instances would carry no runtime "
+                + "type identity, so `is`/`as`/casts and virtual calls against them would silently mis-answer. Construct the type "
+                + $"directly somewhere in this behaviour (`new {classTy.Name}()`), or avoid `new T()` for user classes.");
+        return inst => AggregateAbi.WriteSlot(_builder, inst, 0, LoadField(tv, AggregateAbi.ArrayType));
     }
 
     /// <summary>`new T()` (kind-level census gap, 2026-07-11): monomorphization has substituted T to a

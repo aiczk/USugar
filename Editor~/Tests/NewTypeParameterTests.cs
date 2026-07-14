@@ -14,12 +14,26 @@ public struct SP2 { public int x; }
 public static class F1 { public static int M<T>() where T : struct { T v = new T(); return 0; } }
 public class NtP1 : UdonSharpBehaviour { public int result; void Start(){ result = F1.M<SP2>(); } }", "NtP1");
 
+    // FLIPPED 2026-07-14 (Phase-A closed-world armor): a user-class `new T()` whose concrete type is never
+    // constructed directly is invisible to the Phase-1 minted census — the mint left bundle[0] null and every
+    // downstream `is`/`as`/virtual dispatch silently mis-answered. Loud reject until the substitution-threaded
+    // mint census (generic typeobj milestone) lifts it; workaround = mint the concrete type directly once.
     [Fact]
-    public void NewT_ClassNewConstraint_MemberAccess_Compiles()
+    public void NewT_ClassNeverMintedDirectly_LoudRejects()
+    {
+        var ex = Assert.Throws<System.NotSupportedException>(() => TestHelper.CompileToUasm(@"using UdonSharp;
+public class Cel { public int v; }
+public static class F2 { public static int M<T>(int n) where T : Cel, new() { T c = new T(); c.v = n; return c.v; } }
+public class NtP2 : UdonSharpBehaviour { public int result; void Start(){ result = F2.M<Cel>(7); } }", "NtP2"));
+        Assert.Contains("minted", ex.Message);
+    }
+
+    [Fact]
+    public void NewT_ClassAlsoMintedDirectly_MemberAccess_Compiles()
         => TestHelper.CompileToUasm(@"using UdonSharp;
 public class Cel { public int v; }
 public static class F2 { public static int M<T>(int n) where T : Cel, new() { T c = new T(); c.v = n; return c.v; } }
-public class NtP2 : UdonSharpBehaviour { public int result; void Start(){ result = F2.M<Cel>(7); } }", "NtP2");
+public class NtP2b : UdonSharpBehaviour { public int result; void Start(){ Cel k = new Cel(); k.v = 1; result = F2.M<Cel>(7) + k.v; } }", "NtP2b");
 
     [Fact]
     public void TypeParamTypedMember_Access_Compiles()

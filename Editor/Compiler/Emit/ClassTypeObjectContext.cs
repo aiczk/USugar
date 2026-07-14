@@ -45,10 +45,37 @@ public sealed class ClassTypeObjectContext
     {
         foreach (var m in _vars.Keys)
             if (SymbolEqualityComparer.Default.Equals(m.OriginalDefinition, target.OriginalDefinition)
-                && m.TypeArguments.Any(ta => ta is ITypeParameterSymbol))
+                && m.TypeArguments.Any(ContainsTypeParameter))
                 return true;
         return false;
     }
+
+    /// <summary>True when some minted class is an OPEN spec whose base chain passes through `target`'s
+    /// generic family. The dispatch-side census matches minted classes by exact constructed symbol, so an
+    /// open mint in another generic context is INVISIBLE to it — an empty/partial target set is then
+    /// ambiguity, not proof of unreachability, and must reject rather than fall through (Phase-A armor,
+    /// same polarity as <see cref="HasOpenGenericSiblingOf"/>).</summary>
+    public bool HasOpenMintedFamilyAssignableTo(INamedTypeSymbol target)
+    {
+        foreach (var m in _vars.Keys)
+        {
+            if (!m.TypeArguments.Any(ContainsTypeParameter)) continue;
+            for (var t = m; t != null; t = t.BaseType)
+                if (SymbolEqualityComparer.Default.Equals(t.OriginalDefinition, target.OriginalDefinition))
+                    return true;
+        }
+        return false;
+    }
+
+    /// <summary>Deep type-parameter test: `Box&lt;T&gt;` nested as `Outer&lt;Box&lt;T&gt;&gt;`'s argument is just as
+    /// open as a bare `T` — the shallow `is ITypeParameterSymbol` test misses it.</summary>
+    public static bool ContainsTypeParameter(ITypeSymbol t) => t switch
+    {
+        ITypeParameterSymbol => true,
+        IArrayTypeSymbol a => ContainsTypeParameter(a.ElementType),
+        INamedTypeSymbol n => n.TypeArguments.Any(ContainsTypeParameter),
+        _ => false,
+    };
 
     static bool IsAssignable(INamedTypeSymbol concrete, INamedTypeSymbol target)
     {
