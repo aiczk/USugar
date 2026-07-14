@@ -537,6 +537,7 @@ namespace TestStubs
             foreach (var m in ns) if (!os.Contains(m)) diffs.Add($"{facet}: only-worklist {m.ToDisplayString()}");
         }
         Cmp("BodyByDef", oldR.BodyByDef.Keys, newR.BodyByDef.Keys);
+        Cmp("GenericForeignStaticBodies", oldR.GenericForeignStaticBodies.Keys, newR.GenericForeignStaticBodies.Keys);
         Cmp("StructMembers", oldR.StructMembers, newR.StructMembers);
         Cmp("ForeignStatics", oldR.ForeignStatics, newR.ForeignStatics);
         Cmp("BaseCopies", oldR.BaseCopies, newR.BaseCopies);

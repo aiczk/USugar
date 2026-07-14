@@ -36,4 +36,20 @@ public class A : UdonSharpBehaviour { public int ri; public float rf;
         var diffs = TestHelper.ReachFacetDiff(src, "A");
         Assert.True(diffs.Count == 0, "reach facet divergence:\n" + string.Join("\n", diffs));
     }
+
+    [Fact]
+    public void GenericForeignStatic_GapIsExactlyTheDeferredSupplementaryFacet()
+    {
+        // A generic foreign static (Helper.Id<int>) lands in the legacy SS2A supplementary set
+        // (GenericForeignStaticBodies), which the worklist does not yet reproduce. This test PINS that the
+        // remaining reach gap is EXACTLY that one deferred facet — nothing else diverges — so closing it is
+        // the only reach work left before the M5b recursion facet + the cutover.
+        var src = @"using UdonSharp;
+public static class Helper { public static T Id<T>(T x)=>x; }
+public class A : UdonSharpBehaviour { public int r;
+  void Start(){ r = Helper.Id<int>(5); } }";
+        var diffs = TestHelper.ReachFacetDiff(src, "A");
+        Assert.All(diffs, d => Assert.StartsWith("GenericForeignStaticBodies:", d));
+        Assert.Contains(diffs, d => d.Contains("only-legacy") && d.Contains("Id"));
+    }
 }
