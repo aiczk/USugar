@@ -96,6 +96,21 @@ public sealed class BoundaryChecker
     public void RequireCanEraseProgramLocalPayload(IConversionOperation conversion,
         ITypeSymbol sourceType, ITypeSymbol destinationType)
     {
+        // Phase-A armor (B82 mirror for N-R1): a Rank>1 array's runtime value is an object[] bundle, and
+        // the extern-boundary choke keys on the ARGUMENT's unwrapped static type — erasing the T[,] to
+        // object/Array first launders the bundle past externs the direct form loudly rejects. Contain at
+        // the erasure. Cross-behaviour transport is compiler-generated typed member access (never a user
+        // conversion), cast-BACK (object → T[,]) does not erase, and the equality position compares
+        // bundle references exactly like array references — all stay legal.
+        if (NdimArrayAbi.IsNdimArray(sourceType) && !NdimArrayAbi.IsNdimArray(destinationType)
+            && !IsProgramLocalEqualityPosition(conversion))
+            throw new NotSupportedException(
+                $"Erasing the multi-dimensional array '{sourceType.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}' "
+                + $"to '{destinationType.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}' is not supported: "
+                + "its runtime value is an object[] bundle, not a real array, so once widened to object/Array it "
+                + "reaches extern calls (Debug.Log, string.Format, Array statics, …) that would silently receive "
+                + "the wrong shape. Keep the value typed as its T[,] type, or use a jagged array.");
+
         if (!TypeClassifier.ContainsProgramLocalPayload(sourceType, TypeCtx)
             || TypeClassifier.ContainsProgramLocalPayload(destinationType, TypeCtx)
             || IsProgramLocalEqualityPosition(conversion))

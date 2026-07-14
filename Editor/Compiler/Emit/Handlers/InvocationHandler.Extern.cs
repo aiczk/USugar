@@ -122,9 +122,17 @@ public partial class InvocationHandler
             var param = target.Parameters[i];
             if (param.IsParams && paramsElems != null)
             {
-                // Box each variadic element as a discrete SystemObject argument.
+                // Box each variadic element as a discrete SystemObject argument. Phase-A armor: the
+                // N-R1 check above sees only the params ARRAY argument (static type object[]), so a
+                // T[,] element smuggled through the expansion bypassed the choke — re-check per element
+                // (the erasure choke in BoundaryChecker also contains the implicit element→object
+                // conversion; this keeps the extern boundary sound on its own).
                 foreach (var elem in paramsElems)
+                {
+                    if (NdimArrayAbi.IsNdimArray(UnwrapConversions(elem).Type))
+                        throw new System.NotSupportedException(ExternResolver.MultidimExternArgMessage);
                     argVals.Add(VisitExpression(elem));
+                }
                 continue;
             }
             if (param.RefKind == RefKind.Out || param.RefKind == RefKind.Ref)

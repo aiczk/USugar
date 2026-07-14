@@ -85,6 +85,51 @@ public class VdChain : UdonSharpBehaviour {
     }
 
     [Fact]
+    public void NdimArray_ErasingConversion_LoudRejects()
+    {
+        // N-R1 checks the extern ARGUMENT's unwrapped static type, so `object o = a;` laundered the
+        // bundle past the choke the direct `Debug.Log(a)` form loudly rejects (B82 mirror: contain at
+        // the erasure). Cross-behaviour transport is compiler-generated typed member access and the
+        // cast-BACK direction (object → T[,]) stays legal.
+        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
+using UdonSharp;
+using UnityEngine;
+public class NdLaunder : UdonSharpBehaviour {
+    public int r;
+    void Start() { int[,] a = new int[2,3]; a[0,0] = 4; object o = a; Debug.Log(o); r = 1; }
+}", "NdLaunder"));
+        Assert.Contains("multi-dimensional", ex.Message);
+    }
+
+    [Fact]
+    public void NdimArray_ParamsExpansionSmuggle_LoudRejects()
+    {
+        // N-R1 checked only the params ARRAY argument (static type object[]), so a T[,] element rode the
+        // expansion past the extern choke (audit finding, 2026-07-14): 4-arg string.Format has no per-arity
+        // extern, so only the params overload applies. Both the per-element N-R1 re-check and the erasure
+        // choke must stop it.
+        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
+using UdonSharp;
+public class NdSmuggle : UdonSharpBehaviour {
+    public string s;
+    void Start() { int[,] a = new int[2,2]; s = string.Format(""{0}{1}{2}{3}"", 1, 2, 3, a); }
+}", "NdSmuggle"));
+        Assert.Contains("multi-dimensional", ex.Message);
+    }
+
+    [Fact]
+    public void NdimArray_ParamsPerArityExpansionSmuggle_LoudRejects()
+    {
+        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
+using UdonSharp;
+using VRC.Udon.Common.Interfaces;
+public class NdSmuggle2 : UdonSharpBehaviour {
+    void Start() { int[,] a = new int[2,2]; SendCustomNetworkEvent(NetworkEventTarget.All, ""Evt"", a); }
+}", "NdSmuggle2"));
+        Assert.Contains("multi-dimensional", ex.Message);
+    }
+
+    [Fact]
     public void NewT_MintWithoutRegisteredTypeObj_LoudRejects()
     {
         // `new T()` monomorphizes to a concrete class the Phase-1 reach census never saw minted (no direct
