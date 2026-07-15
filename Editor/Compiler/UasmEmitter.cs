@@ -2996,6 +2996,9 @@ public class UasmEmitter
     // future registration path escaped the reentrancy analysis: fail loud at compile time, never emit
     // silently-unprotected. Non-capturing bridges (named methods, capture-free lambdas) carry no env and
     // are intentionally skipped — they have no reentrancy-sensitive frame state to lose.
+    // NOT dischargeable by the M5b node-by-construction walk (C2 audit, 2026-07-15): bridge sets are
+    // Phase-2 emission-registered, and the multicast fan-out's graph-node registration is deliberately
+    // unwired (A-M3 scope, §1.6) — so a registration path outside the walk can still appear.
     void VerifyBridgeTargetsAreNodes()
     {
         if (_ctx.Closures.CaptureScope == null || _ctx.RecursionContext.Info.RecursionGraphNodes == null) return;

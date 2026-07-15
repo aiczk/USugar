@@ -68,11 +68,9 @@ internal sealed class RecursionNodeWalk
         // fixpoint by construction. GenericForeignStaticBodies is read only as a membership gate + body
         // cache, so the F1/F2 registration-ordinal guard (ReachableBodies.cs) — which protects the
         // Phase-1 REGISTRATION projections — is untouched by this Phase-2 read.
-        var roots = _reach.BodyByDef.Keys
-            .Where(m => m.DeclaringSyntaxReferences.Length > 0)
-            .Distinct(cmp)
-            .Cast<IMethodSymbol>()
-            .ToList();
+        // No syntax filter / Distinct here: BodyByDef keys are enqueue-gated on having syntax and are
+        // unique by dictionary construction — both legs only ever served the deleted supp-key concat.
+        var roots = _reach.BodyByDef.Keys.ToList();
 
         var bodies = new Dictionary<IMethodSymbol, IOperation>(cmp);
         var rawTargets = new Dictionary<IMethodSymbol, HashSet<IMethodSymbol>>(cmp);
