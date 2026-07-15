@@ -1,0 +1,11 @@
+[nodes]
+FacetLocalFuncRec.Start() @94..199
+Sum(int) @112..174
+[recursive-edges]
+Sum(int) @112..174 -> Sum(int) @112..174
+[cycle-edges]
+Sum(int) @112..174 -> Sum(int) @112..174
+[this-field-touches]
+FacetLocalFuncRec.Start() @94..199 -> FacetLocalFuncRec.result
+[reentrant-dispatch-sites]
+[tail-spared-direct-call-sites]

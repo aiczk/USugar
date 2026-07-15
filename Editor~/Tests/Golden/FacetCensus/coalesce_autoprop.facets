@@ -1,0 +1,9 @@
+[nodes]
+CoalesceAutoProp.Name.get @94..98
+CoalesceAutoProp.Name.set @99..103
+CoalesceAutoProp.Start() @109..138
+[recursive-edges]
+[cycle-edges]
+[this-field-touches]
+[reentrant-dispatch-sites]
+[tail-spared-direct-call-sites]

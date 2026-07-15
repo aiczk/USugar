@@ -1,0 +1,11 @@
+[nodes]
+CrossBehaviourDelegatePropertyCaller.Start() @299..404
+lambda expression @335..356
+[recursive-edges]
+[cycle-edges]
+[this-field-touches]
+CrossBehaviourDelegatePropertyCaller.Start() @299..404 -> CrossBehaviourDelegatePropertyCaller.owner
+CrossBehaviourDelegatePropertyCaller.Start() @299..404 -> CrossBehaviourDelegatePropertyCaller.result
+lambda expression @335..356 -> CrossBehaviourDelegatePropertyCaller.result
+[reentrant-dispatch-sites]
+[tail-spared-direct-call-sites]

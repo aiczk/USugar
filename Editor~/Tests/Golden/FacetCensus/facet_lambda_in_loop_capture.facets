@@ -1,0 +1,10 @@
+[nodes]
+FacetLambdaLoopCapture.Start() @122..275
+lambda expression @231..238
+[recursive-edges]
+[cycle-edges]
+[this-field-touches]
+FacetLambdaLoopCapture.Start() @122..275 -> FacetLambdaLoopCapture.a
+FacetLambdaLoopCapture.Start() @122..275 -> FacetLambdaLoopCapture.b
+[reentrant-dispatch-sites]
+[tail-spared-direct-call-sites]

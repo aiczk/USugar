@@ -1,0 +1,8 @@
+[nodes]
+WhileCount.Start() @84..139
+[recursive-edges]
+[cycle-edges]
+[this-field-touches]
+WhileCount.Start() @84..139 -> WhileCount.n
+[reentrant-dispatch-sites]
+[tail-spared-direct-call-sites]

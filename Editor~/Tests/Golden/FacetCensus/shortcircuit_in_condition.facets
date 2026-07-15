@@ -1,0 +1,9 @@
+[nodes]
+ShortCircuitInCondition.Start() @119..216
+[recursive-edges]
+[cycle-edges]
+[this-field-touches]
+ShortCircuitInCondition.Start() @119..216 -> ShortCircuitInCondition.data
+ShortCircuitInCondition.Start() @119..216 -> ShortCircuitInCondition.hits
+[reentrant-dispatch-sites]
+[tail-spared-direct-call-sites]

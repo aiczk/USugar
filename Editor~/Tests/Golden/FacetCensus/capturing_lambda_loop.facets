@@ -1,0 +1,10 @@
+[nodes]
+CapturingLambdaLoop.Start() @121..279
+lambda expression @233..240
+[recursive-edges]
+[cycle-edges]
+[this-field-touches]
+CapturingLambdaLoop.Start() @121..279 -> CapturingLambdaLoop.a
+CapturingLambdaLoop.Start() @121..279 -> CapturingLambdaLoop.b
+[reentrant-dispatch-sites]
+[tail-spared-direct-call-sites]

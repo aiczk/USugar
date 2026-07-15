@@ -1,0 +1,10 @@
+[nodes]
+LambdaLocal.Start() @99..143
+lambda expression @124..135
+[recursive-edges]
+[cycle-edges]
+[this-field-touches]
+LambdaLocal.Start() @99..143 -> LambdaLocal.v
+lambda expression @124..135 -> LambdaLocal.v
+[reentrant-dispatch-sites]
+[tail-spared-direct-call-sites]

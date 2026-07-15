@@ -1,0 +1,21 @@
+[nodes]
+FacetBaseCtorRec.Start() @390..445
+FbcBase.FbcBase(int) @54..91
+FbcDer.FbcDer(int) @172..206
+FbcDer.Make(int) @209..311
+[recursive-edges]
+FbcBase.FbcBase(int) @54..91 -> FbcDer.Make(int) @209..311
+FbcDer.FbcDer(int) @172..206 -> FbcBase.FbcBase(int) @54..91
+FbcDer.Make(int) @209..311 -> FbcDer.FbcDer(int) @172..206
+[cycle-edges]
+FbcBase.FbcBase(int) @54..91 -> FbcDer.Make(int) @209..311
+FbcDer.FbcDer(int) @172..206 -> FbcBase.FbcBase(int) @54..91
+FbcDer.Make(int) @209..311 -> FbcDer.FbcDer(int) @172..206
+[this-field-touches]
+FacetBaseCtorRec.Start() @390..445 -> FacetBaseCtorRec.result
+FacetBaseCtorRec.Start() @390..445 -> FbcBase.v
+FbcBase.FbcBase(int) @54..91 -> FbcBase.v
+FbcDer.FbcDer(int) @172..206 -> FbcBase.v
+FbcDer.Make(int) @209..311 -> FbcBase.v
+[reentrant-dispatch-sites]
+[tail-spared-direct-call-sites]

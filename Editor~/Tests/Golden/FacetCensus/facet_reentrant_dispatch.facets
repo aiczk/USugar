@@ -1,0 +1,16 @@
+[nodes]
+FacetReentrantDispatch.Start() @228..292
+FacetReentrantDispatch.Walk(int) @136..225
+lambda expression @253..265
+[recursive-edges]
+[cycle-edges]
+FacetReentrantDispatch.Walk(int) @136..225 -> lambda expression @253..265
+lambda expression @253..265 -> FacetReentrantDispatch.Walk(int) @136..225
+[this-field-touches]
+FacetReentrantDispatch.Start() @228..292 -> FacetReentrantDispatch.hook
+FacetReentrantDispatch.Start() @228..292 -> FacetReentrantDispatch.result
+FacetReentrantDispatch.Walk(int) @136..225 -> FacetReentrantDispatch.hook
+lambda expression @253..265 -> FacetReentrantDispatch.hook
+[reentrant-dispatch-sites]
+hook(n - 1) @191..202
+[tail-spared-direct-call-sites]

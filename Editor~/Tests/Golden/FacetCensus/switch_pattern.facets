@@ -1,0 +1,9 @@
+[nodes]
+SwitchPattern.Start() @109..179
+[recursive-edges]
+[cycle-edges]
+[this-field-touches]
+SwitchPattern.Start() @109..179 -> SwitchPattern.grade
+SwitchPattern.Start() @109..179 -> SwitchPattern.score
+[reentrant-dispatch-sites]
+[tail-spared-direct-call-sites]

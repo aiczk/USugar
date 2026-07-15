@@ -23,6 +23,9 @@ public static class TestPaths
     /// <summary>Committed baseline UASM snapshots: Editor~/Tests/Golden/Snapshots.</summary>
     public static string SnapshotDir => Path.Combine(TestsDir, "Golden", "Snapshots");
 
+    /// <summary>Committed recursion-facet census fixtures (M5b scaffolding): Editor~/Tests/Golden/FacetCensus.</summary>
+    public static string FacetCensusDir => Path.Combine(TestsDir, "Golden", "FacetCensus");
+
     /// <summary>The compiler source under audit: USugar/Editor/Compiler.</summary>
     public static string EditorCompilerDir =>
         Path.GetFullPath(Path.Combine(TestsDir, "..", "..", "Editor", "Compiler"));

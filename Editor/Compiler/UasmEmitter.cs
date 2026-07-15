@@ -132,6 +132,13 @@ public class UasmEmitter
         => EnumerateInternalCallTargets(op);
     internal ResolvedEdgeResolver DebugBuildResolver() => new ResolvedEdgeResolver(this);
 
+    // CA call-graph rewrite (M5b prerequisite): test-only accessor exposing the populated RecursionInfo
+    // (all six facets: RecursionGraphNodes, per-node RecursiveCallees/CycleCallees edge sets,
+    // ThisFieldTouches, ReentrantDispatchSites, TailSparedDirectCallSites) post-Emit, so
+    // RecursionFacetEquivalenceTests can census the legacy BuildRecursionInfo product and diff it
+    // against the worklist-produced facets before the M5b swap. Unused by production emission.
+    internal RecursionInfo DebugRecursionInfo => _ctx.RecursionContext.Info;
+
     /// <summary>Called after handler emission, before optimization. Set for IR debugging.</summary>
     public Action<string, CModule> OnIrPass;
 

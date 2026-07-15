@@ -1,0 +1,12 @@
+[nodes]
+FacetTailSparedMix.Mix(int) @95..221
+FacetTailSparedMix.Start() @224..256
+[recursive-edges]
+FacetTailSparedMix.Mix(int) @95..221 -> FacetTailSparedMix.Mix(int) @95..221
+[cycle-edges]
+FacetTailSparedMix.Mix(int) @95..221 -> FacetTailSparedMix.Mix(int) @95..221
+[this-field-touches]
+FacetTailSparedMix.Start() @224..256 -> FacetTailSparedMix.result
+[reentrant-dispatch-sites]
+[tail-spared-direct-call-sites]
+Mix(n - 1) @206..216

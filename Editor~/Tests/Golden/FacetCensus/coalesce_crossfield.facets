@@ -1,0 +1,8 @@
+[nodes]
+CoalesceCrossField.Start() @178..210
+[recursive-edges]
+[cycle-edges]
+[this-field-touches]
+CoalesceCrossField.Start() @178..210 -> CoalesceCrossField.other
+[reentrant-dispatch-sites]
+[tail-spared-direct-call-sites]

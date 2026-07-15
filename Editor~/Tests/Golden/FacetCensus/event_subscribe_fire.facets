@@ -1,0 +1,15 @@
+[nodes]
+EventSubscribeFire.Start() @162..264
+lambda expression @188..207
+lambda expression @221..245
+[recursive-edges]
+[cycle-edges]
+[this-field-touches]
+EventSubscribeFire.Start() @162..264 -> EventSubscribeFire.n
+EventSubscribeFire.Start() @162..264 -> EventSubscribeFire.trace
+lambda expression @188..207 -> EventSubscribeFire.n
+lambda expression @188..207 -> EventSubscribeFire.trace
+lambda expression @221..245 -> EventSubscribeFire.n
+lambda expression @221..245 -> EventSubscribeFire.trace
+[reentrant-dispatch-sites]
+[tail-spared-direct-call-sites]

@@ -1,0 +1,9 @@
+[nodes]
+StaticReadonlyArrayTable.Start() @188..234
+[recursive-edges]
+[cycle-edges]
+[this-field-touches]
+StaticReadonlyArrayTable.Start() @188..234 -> StaticReadonlyArrayTable.fromTable
+StaticReadonlyArrayTable.Start() @188..234 -> StaticReadonlyArrayTable.result
+[reentrant-dispatch-sites]
+[tail-spared-direct-call-sites]

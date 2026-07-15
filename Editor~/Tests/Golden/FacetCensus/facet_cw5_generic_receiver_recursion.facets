@@ -1,0 +1,14 @@
+[nodes]
+FacetCw5GenRecv.Start() @435..489
+FcwHelp.Go<T>(T, int) @240..357
+FcwLeaf.Visit(int) @120..205
+FcwNode.Visit(int) @40..84
+[recursive-edges]
+FcwHelp.Go<T>(T, int) @240..357 -> FcwLeaf.Visit(int) @120..205
+[cycle-edges]
+FcwHelp.Go<T>(T, int) @240..357 -> FcwLeaf.Visit(int) @120..205
+FcwLeaf.Visit(int) @120..205 -> FcwHelp.Go<T>(T, int) @240..357
+[this-field-touches]
+FacetCw5GenRecv.Start() @435..489 -> FacetCw5GenRecv.result
+[reentrant-dispatch-sites]
+[tail-spared-direct-call-sites]

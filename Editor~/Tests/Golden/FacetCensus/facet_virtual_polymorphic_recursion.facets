@@ -1,0 +1,21 @@
+[nodes]
+FacetVirtualPolyRec.Start() @438..535
+FvA.Step(int) @133..229
+FvB.Step(int) @260..356
+[recursive-edges]
+FvA.Step(int) @133..229 -> FvA.Step(int) @133..229
+FvA.Step(int) @133..229 -> FvB.Step(int) @260..356
+FvB.Step(int) @260..356 -> FvA.Step(int) @133..229
+FvB.Step(int) @260..356 -> FvB.Step(int) @260..356
+[cycle-edges]
+FvA.Step(int) @133..229 -> FvA.Step(int) @133..229
+FvA.Step(int) @133..229 -> FvB.Step(int) @260..356
+FvB.Step(int) @260..356 -> FvA.Step(int) @133..229
+FvB.Step(int) @260..356 -> FvB.Step(int) @260..356
+[this-field-touches]
+FacetVirtualPolyRec.Start() @438..535 -> FacetVirtualPolyRec.result
+FacetVirtualPolyRec.Start() @438..535 -> FvBase.next
+FvA.Step(int) @133..229 -> FvBase.next
+FvB.Step(int) @260..356 -> FvBase.next
+[reentrant-dispatch-sites]
+[tail-spared-direct-call-sites]

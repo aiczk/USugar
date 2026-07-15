@@ -1,0 +1,12 @@
+[nodes]
+ClassDataCrud.Start() @199..290
+DataRec.DataRec(int) @69..100
+[recursive-edges]
+[cycle-edges]
+[this-field-touches]
+ClassDataCrud.Start() @199..290 -> ClassDataCrud.result
+ClassDataCrud.Start() @199..290 -> ClassDataCrud.seed
+ClassDataCrud.Start() @199..290 -> DataRec.A
+DataRec.DataRec(int) @69..100 -> DataRec.A
+[reentrant-dispatch-sites]
+[tail-spared-direct-call-sites]

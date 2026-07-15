@@ -1,0 +1,14 @@
+[nodes]
+FacetMutualRec.Ev(int) @125..185
+FacetMutualRec.Od(int) @188..248
+FacetMutualRec.Start() @91..122
+[recursive-edges]
+FacetMutualRec.Ev(int) @125..185 -> FacetMutualRec.Od(int) @188..248
+FacetMutualRec.Od(int) @188..248 -> FacetMutualRec.Ev(int) @125..185
+[cycle-edges]
+FacetMutualRec.Ev(int) @125..185 -> FacetMutualRec.Od(int) @188..248
+FacetMutualRec.Od(int) @188..248 -> FacetMutualRec.Ev(int) @125..185
+[this-field-touches]
+FacetMutualRec.Start() @91..122 -> FacetMutualRec.result
+[reentrant-dispatch-sites]
+[tail-spared-direct-call-sites]

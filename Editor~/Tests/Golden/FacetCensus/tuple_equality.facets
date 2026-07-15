@@ -1,0 +1,8 @@
+[nodes]
+TupleEquality.Start() @89..171
+[recursive-edges]
+[cycle-edges]
+[this-field-touches]
+TupleEquality.Start() @89..171 -> TupleEquality.eq
+[reentrant-dispatch-sites]
+[tail-spared-direct-call-sites]

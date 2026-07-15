@@ -1,0 +1,12 @@
+[nodes]
+ClassGenericNode.Start() @215..362
+GenNode<T>.GenNode(T) @82..113
+[recursive-edges]
+[cycle-edges]
+[this-field-touches]
+ClassGenericNode.Start() @215..362 -> ClassGenericNode.result
+ClassGenericNode.Start() @215..362 -> ClassGenericNode.seed
+ClassGenericNode.Start() @215..362 -> GenNode<T>.Val
+GenNode<T>.GenNode(T) @82..113 -> GenNode<T>.Val
+[reentrant-dispatch-sites]
+[tail-spared-direct-call-sites]

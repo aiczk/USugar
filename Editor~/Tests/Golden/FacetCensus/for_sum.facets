@@ -1,0 +1,8 @@
+[nodes]
+ForSum.Start() @84..147
+[recursive-edges]
+[cycle-edges]
+[this-field-touches]
+ForSum.Start() @84..147 -> ForSum.total
+[reentrant-dispatch-sites]
+[tail-spared-direct-call-sites]

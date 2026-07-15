@@ -1,0 +1,11 @@
+[nodes]
+FacetRecBox.Rec(int) @47..127
+FacetStructMemberRec.Start() @210..279
+[recursive-edges]
+FacetRecBox.Rec(int) @47..127 -> FacetRecBox.Rec(int) @47..127
+[cycle-edges]
+FacetRecBox.Rec(int) @47..127 -> FacetRecBox.Rec(int) @47..127
+[this-field-touches]
+FacetStructMemberRec.Start() @210..279 -> FacetStructMemberRec.result
+[reentrant-dispatch-sites]
+[tail-spared-direct-call-sites]

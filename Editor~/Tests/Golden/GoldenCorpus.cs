@@ -408,6 +408,45 @@ public class ClassGenericNode : UdonSharpBehaviour {
   void Start(){ GenNode<int> a = new GenNode<int>(seed); GenNode<int> b = new GenNode<int>(seed * 3);
     a.Next = b; result = a.Val + a.Next.Val; }
 }"),
+        // CA-v2b-2 canonical baseline (call-graph rewrite M5 prerequisite): the virtual-dispatch arm had
+        // no byte gate. One case pins every lowering the arm owns: a base-typed 2-target typeobj-
+        // ReferenceEquals chain including the no-match LogError guard, a singleton-devirt direct call
+        // (derived-typed receiver), a this-receiver virtual call inside an inherited base method
+        // (runtime-type dispatch from a base body), and the explicit `: base(...)` ctor chain writing a
+        // base field. An ADDED baseline, not a regeneration.
+        ("virtual_dispatch_chain", "VirtualDispatchChain",
+@"using UdonSharp;
+public abstract class VdShape {
+  public int tag;
+  public VdShape(int t){ tag = t; }
+  public abstract int Area();
+  public int Doubled(){ return Area() * 2; }
+}
+public class VdSq : VdShape {
+  public int s;
+  public VdSq(int side) : base(1) { s = side; }
+  public override int Area(){ return s * s; }
+}
+public class VdRc : VdShape {
+  public int w; public int h;
+  public VdRc(int w0, int h0) : base(2) { w = w0; h = h0; }
+  public override int Area(){ return w * h; }
+}
+public class VirtualDispatchChain : UdonSharpBehaviour {
+  public int pick;
+  public int result;
+  void Start(){
+    VdShape a = new VdSq(3);
+    VdShape b = new VdRc(4, 5);
+    VdShape c;
+    if (pick > 0) c = a; else c = b;
+    int viaChain = c.Area();
+    VdSq d = new VdSq(6);
+    int viaDevirt = d.Area();
+    int viaBase = b.Doubled();
+    result = viaChain + viaDevirt + viaBase + a.tag + b.tag + d.s;
+  }
+}"),
     };
 
     public static (string Name, string ClassName, string Source) ByName(string name)

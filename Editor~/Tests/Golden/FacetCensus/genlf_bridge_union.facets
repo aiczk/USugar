@@ -1,0 +1,12 @@
+[nodes]
+Inner<U>() @224..316
+LatticeGenLfBridge.Helper() @132..150
+LatticeGenLfBridge.M<T>(int) @196..347
+LatticeGenLfBridge.Start() @154..192
+[recursive-edges]
+[cycle-edges]
+[this-field-touches]
+LatticeGenLfBridge.Start() @154..192 -> LatticeGenLfBridge.result
+LatticeGenLfBridge.Start() @154..192 -> LatticeGenLfBridge.seed
+[reentrant-dispatch-sites]
+[tail-spared-direct-call-sites]

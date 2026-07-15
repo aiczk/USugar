@@ -1,0 +1,14 @@
+[nodes]
+MulticastLoopCombineFanout.Start() @176..343
+lambda expression @261..310
+[recursive-edges]
+[cycle-edges]
+[this-field-touches]
+MulticastLoopCombineFanout.Start() @176..343 -> MulticastLoopCombineFanout.d
+MulticastLoopCombineFanout.Start() @176..343 -> MulticastLoopCombineFanout.lastRet
+MulticastLoopCombineFanout.Start() @176..343 -> MulticastLoopCombineFanout.n
+MulticastLoopCombineFanout.Start() @176..343 -> MulticastLoopCombineFanout.trace
+lambda expression @261..310 -> MulticastLoopCombineFanout.n
+lambda expression @261..310 -> MulticastLoopCombineFanout.trace
+[reentrant-dispatch-sites]
+[tail-spared-direct-call-sites]

@@ -1,0 +1,11 @@
+[nodes]
+StructPerFrameRecBox.Rec(System.Func<int>[], int) @72..242
+StructRecursionPerFrameClosure.Start() @336..515
+lambda expression @167..181
+[recursive-edges]
+[cycle-edges]
+StructPerFrameRecBox.Rec(System.Func<int>[], int) @72..242 -> StructPerFrameRecBox.Rec(System.Func<int>[], int) @72..242
+[this-field-touches]
+StructRecursionPerFrameClosure.Start() @336..515 -> StructRecursionPerFrameClosure.sum
+[reentrant-dispatch-sites]
+[tail-spared-direct-call-sites]

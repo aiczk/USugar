@@ -1,0 +1,31 @@
+[nodes]
+VdRc.Area() @459..502
+VdRc.VdRc(int, int) @398..455
+VdShape.Doubled() @140..182
+VdShape.VdShape(int) @72..105
+VdSq.Area() @286..329
+VdSq.VdSq(int) @237..282
+VirtualDispatchChain.Start() @609..932
+[recursive-edges]
+[cycle-edges]
+[this-field-touches]
+VdRc.Area() @459..502 -> VdRc.h
+VdRc.Area() @459..502 -> VdRc.w
+VdRc.VdRc(int, int) @398..455 -> VdRc.h
+VdRc.VdRc(int, int) @398..455 -> VdRc.w
+VdRc.VdRc(int, int) @398..455 -> VdShape.tag
+VdShape.Doubled() @140..182 -> VdRc.h
+VdShape.Doubled() @140..182 -> VdRc.w
+VdShape.Doubled() @140..182 -> VdSq.s
+VdShape.VdShape(int) @72..105 -> VdShape.tag
+VdSq.Area() @286..329 -> VdSq.s
+VdSq.VdSq(int) @237..282 -> VdShape.tag
+VdSq.VdSq(int) @237..282 -> VdSq.s
+VirtualDispatchChain.Start() @609..932 -> VdRc.h
+VirtualDispatchChain.Start() @609..932 -> VdRc.w
+VirtualDispatchChain.Start() @609..932 -> VdShape.tag
+VirtualDispatchChain.Start() @609..932 -> VdSq.s
+VirtualDispatchChain.Start() @609..932 -> VirtualDispatchChain.pick
+VirtualDispatchChain.Start() @609..932 -> VirtualDispatchChain.result
+[reentrant-dispatch-sites]
+[tail-spared-direct-call-sites]

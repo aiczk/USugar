@@ -1,0 +1,11 @@
+[nodes]
+FacetNonTailRec.F(int) @125..194
+FacetNonTailRec.Start() @92..122
+[recursive-edges]
+FacetNonTailRec.F(int) @125..194 -> FacetNonTailRec.F(int) @125..194
+[cycle-edges]
+FacetNonTailRec.F(int) @125..194 -> FacetNonTailRec.F(int) @125..194
+[this-field-touches]
+FacetNonTailRec.Start() @92..122 -> FacetNonTailRec.result
+[reentrant-dispatch-sites]
+[tail-spared-direct-call-sites]
