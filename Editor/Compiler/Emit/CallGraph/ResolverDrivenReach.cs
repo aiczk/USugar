@@ -3,17 +3,13 @@ using System.Collections.Generic;
 using System.Linq;
 using Microsoft.CodeAnalysis;
 
-/// <summary>CA rewrite (M5a): the reach facet of the unified, resolver-driven worklist — the eventual
-/// replacement for UasmEmitter.BuildReachableBodies. It walks each reachable body's ops through the single
-/// <see cref="ResolvedEdgeResolver"/> and buckets the yielded reach targets by role, running one queue+visited
-/// fixpoint keyed by OriginalDefinition. Built ALONGSIDE the legacy collector in M5a and diffed against it
-/// (def granularity) to measure the facet gap before any cutover — nothing consumes it yet.
-///
-/// Deliberately NOT covered yet (measured gaps, closed before the swap): the SS2A supplementary
-/// generic-foreign-static fixpoint (<see cref="ReachableBodies.GenericForeignStaticBodies"/>) and the
-/// open-base-generic recursion roots (_openGenericBaseDefs). Per-spec (constructed generic-struct members):
-/// this worklist is def-keyed, so its StructMembers carry OriginalDefinitions where the legacy set carries
-/// constructed specs — equal under OriginalDefinition projection, reconciled at the per-spec (M6) layer.</summary>
+/// <summary>CA rewrite (M5a cutover): the reach facet of the unified, resolver-driven worklist — the
+/// PRODUCTION reach fixpoint behind UasmEmitter.BuildReachableBodiesViaResolver since M5a replaced the
+/// legacy 5-collector BuildReachableBodies. It walks each reachable body's ops through the single
+/// <see cref="ResolvedEdgeResolver"/> and buckets the yielded reach targets by role, running one
+/// queue+visited fixpoint keyed by OriginalDefinition plus the SS2A supplementary generic-foreign-static
+/// fixpoint (<see cref="ReachableBodies.GenericForeignStaticBodies"/>) and the open-base-generic roots
+/// (<see cref="ReachableBodies.OpenGenericBaseDefs"/>).</summary>
 internal sealed class ResolverDrivenReach
 {
     readonly ResolvedEdgeResolver _resolver;

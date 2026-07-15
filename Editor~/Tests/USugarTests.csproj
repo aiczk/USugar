@@ -21,6 +21,7 @@
     <Compile Include="../../Editor/Compiler/Emit/CallGraph/ResolvedTarget.cs" />
     <Compile Include="../../Editor/Compiler/Emit/CallGraph/ResolvedEdgeResolver.cs" />
     <Compile Include="../../Editor/Compiler/Emit/CallGraph/ResolverDrivenReach.cs" />
+    <Compile Include="../../Editor/Compiler/Emit/CallGraph/RecursionNodeWalk.cs" />
     <Compile Include="../../Editor/Compiler/Emit/TypeParamId.cs" />
     <Compile Include="../../Editor/Compiler/Emit/TypeParamScope.cs" />
     <Compile Include="../../Editor/Compiler/Emit/GenericContext.cs" />

@@ -9,16 +9,16 @@ using Xunit;
 namespace USugar.Tests;
 
 /// <summary>
-/// CA call-graph rewrite, M5b differential scaffolding (the M5a-analogue oracle deleted in 640fe51):
-/// for every battery source, compute the six RecursionInfo facets BOTH ways and assert set-equality,
-/// then compare the canonical serialization against a committed fixture (the facet census). In THIS
-/// stage both ways read the legacy BuildRecursionInfo product — the harness pins the CURRENT facet
-/// sets as byte-stable expectations, so the M5b swap can (1) repoint <see cref="NewFacets"/> at the
-/// worklist-produced facets and assert old==new live per shape, and (2) diff against the committed
-/// census after the legacy builder is deleted. Battery = every GoldenCorpus source + targeted
-/// recursion shapes (non-tail, mutual, local-function, lambda-in-loop capture, struct-member,
-/// virtual-dispatch polymorphic incl. the CW5 generic-T-receiver form, base-ctor chain).
-/// Regenerate fixtures with UPDATE_SNAPSHOTS=1. Delete this file after the M5b swap is proven.
+/// CA call-graph rewrite, M5b differential harness (the M5a-analogue oracle deleted in 640fe51):
+/// for every battery source, compute the six RecursionInfo facets BOTH ways — the production
+/// resolver-driven pass (RecursionNodeWalk, via <see cref="NewFacets"/>) and the retained legacy
+/// private walks (<see cref="LegacyFacets"/>, via DebugComputeLegacyRecursionInfo) — assert
+/// set-equality, then compare the canonical serialization against a committed fixture (the facet
+/// census pinned BEFORE the swap). Battery = every GoldenCorpus source + targeted recursion shapes
+/// (non-tail, mutual, local-function, lambda-in-loop capture, struct-member, virtual-dispatch
+/// polymorphic incl. the CW5 generic-T-receiver form, base-ctor chain, reentrant-dispatch,
+/// tail-spared mixed). Regenerate fixtures with UPDATE_SNAPSHOTS=1. Delete this file with the
+/// legacy walks after C2/C4 prove the remaining arms.
 /// </summary>
 public class RecursionFacetEquivalenceTests
 {
@@ -26,10 +26,11 @@ public class RecursionFacetEquivalenceTests
         Environment.GetEnvironmentVariable("UPDATE_SNAPSHOTS") == "1";
 
     // ── the two "ways" (the M5b seam) ──
-    // Stage 1: both read the legacy BuildRecursionInfo product through the Debug hook. Stage 2
-    // repoints NewFacets at the worklist facets while LegacyFacets keeps the old builder, so the
-    // equality below becomes the live old-vs-new differential gate for the swap.
-    static string LegacyFacets(UasmEmitter emitter) => Serialize(emitter.DebugRecursionInfo);
+    // Stage 2 (swap landed): production BuildRecursionInfo consumes the shared resolver-driven pass
+    // (RecursionNodeWalk — NewFacets reads it via DebugRecursionInfo); LegacyFacets recomputes the
+    // facets from the retained legacy private walks on demand, so the equality below is the LIVE
+    // old-vs-new differential guarding the swap until C2/C4 delete the legacy arms.
+    static string LegacyFacets(UasmEmitter emitter) => Serialize(emitter.DebugComputeLegacyRecursionInfo());
     static string NewFacets(UasmEmitter emitter) => Serialize(emitter.DebugRecursionInfo);
 
     public static IEnumerable<object[]> Battery()
