@@ -11,8 +11,9 @@ using Microsoft.CodeAnalysis.Operations;
 /// oracle, deleted after C2/C4 prove the arms).</summary>
 internal sealed class RecursionWalkResult
 {
-    /// <summary>The reach-root definitions (BodyByDef + GenericForeignStaticBodies, syntax-having) — the
-    /// escape trio walks THESE bodies (full descent covers nested-function subtrees).</summary>
+    /// <summary>The reach-root definitions (BodyByDef seeds plus the supplementary generic-foreign-static
+    /// defs the walk derives at their reference sites, syntax-having) — the escape trio walks THESE bodies
+    /// (full descent covers nested-function subtrees).</summary>
     public List<IMethodSymbol> Roots;
     /// <summary>Roots + local functions — the membership filter for named internal-call edges (lambdas are
     /// excluded: they are dispatched, never called by name).</summary>
@@ -32,8 +33,10 @@ internal sealed class RecursionWalkResult
 /// (TargetRole.CallEdge's production consumer) plus walk-local collection of this-field touches, accessor
 /// edges, and nested-function declarations.
 ///
-/// Node set = the reach fixpoint's definitions (BodyByDef + GenericForeignStaticBodies — the M5c-unified
-/// node source) plus every local function and lambda the walk discovers transitively, node-by-construction:
+/// Node set = the main reach fixpoint's definitions (BodyByDef) plus every supplementary
+/// generic-foreign-static def, local function, and lambda the walk discovers transitively,
+/// node-by-construction (supp defs at their reference sites via ResolveForeignStaticSuppDefs, gated on
+/// GenericForeignStaticBodies membership — the C2-derived replacement for the former root concat):
 /// an LF/lambda body is walked IN THE TREE WHERE IT WAS FOUND (no re-fetch — the legacy walk's one explicit
 /// GetMethodBodyOperation arm is gone; red syntax is shared across trees, so the syntax-keyed facets are
 /// unaffected). Attribution stops at LF/lambda boundaries — each is its own node — exactly like the legacy
@@ -59,12 +62,13 @@ internal sealed class RecursionNodeWalk
     public RecursionWalkResult Run()
     {
         var cmp = SymbolEqualityComparer.Default;
-        // The recursion node source is the single reach fixpoint result (M5c): every walked body
-        // DEFINITION plus the supplementary generic-foreign-static bodies — proven byte-neutral against
-        // the four former compensation concats by the (deleted) M5c differential + golden + DiffFuzz;
-        // the live guard is now the RecursionFacetEquivalenceTests legacy-vs-shared differential.
+        // C2 (M5c residual): the seed node source is the MAIN reach fixpoint only. The supplementary
+        // generic-foreign-static defs are no longer pre-seeded by a root concat — the walk derives them
+        // at their reference sites (the supp-discovery arm in Visit), reproducing the reach-side supp
+        // fixpoint by construction. GenericForeignStaticBodies is read only as a membership gate + body
+        // cache, so the F1/F2 registration-ordinal guard (ReachableBodies.cs) — which protects the
+        // Phase-1 REGISTRATION projections — is untouched by this Phase-2 read.
         var roots = _reach.BodyByDef.Keys
-            .Concat(_reach.GenericForeignStaticBodies.Keys)
             .Where(m => m.DeclaringSyntaxReferences.Length > 0)
             .Distinct(cmp)
             .Cast<IMethodSymbol>()
@@ -98,6 +102,21 @@ internal sealed class RecursionNodeWalk
         void Visit(IOperation op, IMethodSymbol node)
         {
             if (op == null) return;
+            // C2 (M5c residual): supplementary generic-foreign-static roots are DERIVED here — the same
+            // resolver leg that fed the reach-side supp fixpoint, gated on membership in its result —
+            // instead of pre-seeded by a GenericForeignStaticBodies.Keys root concat. Runs in EVERY
+            // visit mode (declaration-discovery included): the reach walk discovered supp defs from
+            // field-initializer trees too, so the derivation must match that op coverage exactly.
+            foreach (var d in _resolver.ResolveForeignStaticSuppDefs(op))
+                if (!bodies.ContainsKey(d) && _reach.GenericForeignStaticBodies.TryGetValue(d, out var suppBody))
+                {
+                    roots.Add(d);
+                    // Unwrap for the same corner the seed loop pins: a generic STATIC local function in
+                    // a foreign static lands in the supp dict as an ILocalFunctionOperation; discovered
+                    // use-before-declaration it would otherwise seed wrapped and lose its edges.
+                    // Pinned by facet_foreign_generic_static_local_function.
+                    AddNode(d, (suppBody as ILocalFunctionOperation)?.Body ?? suppBody);
+                }
             if (op is ILocalFunctionOperation lf)
             {
                 if (lf.Symbol != null)
@@ -140,9 +159,13 @@ internal sealed class RecursionNodeWalk
 
         foreach (var m in roots)
         {
-            var body = _reach.BodyByDef.TryGetValue(m, out var cached) ? cached
-                : _reach.GenericForeignStaticBodies.TryGetValue(m, out var supp) ? supp
-                : null; // unreachable: roots are drawn from exactly those key sets
+            // C2-proven load-bearing (2026-07-15): the tracked gates stayed green without the unwrap
+            // (coverage hole) but the targeted probe went red — a STATIC local function declared inside
+            // a foreign static rides the ForeignStatics reach leg into BodyByDef with an
+            // ILocalFunctionOperation body; seeded wrapped, Visit's LF arm dedups against the node's own
+            // key and returns without walking, silently dropping the LF's edges (a self-recursive local
+            // function lost its spill edge). Pinned by facet_foreign_static_local_function.
+            var body = _reach.BodyByDef[m]; // seed roots are exactly BodyByDef keys
             AddNode(m, (body as ILocalFunctionOperation)?.Body ?? body);
         }
         foreach (var initOp in _fieldInitOps)

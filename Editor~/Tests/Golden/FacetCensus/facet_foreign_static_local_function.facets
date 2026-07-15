@@ -1,0 +1,12 @@
+[nodes]
+FacetForeignStaticLf.Start() @270..310
+FfsHelp.Run(int) @49..187
+Twice(int) @84..158
+[recursive-edges]
+Twice(int) @84..158 -> Twice(int) @84..158
+[cycle-edges]
+Twice(int) @84..158 -> Twice(int) @84..158
+[this-field-touches]
+FacetForeignStaticLf.Start() @270..310 -> FacetForeignStaticLf.result
+[reentrant-dispatch-sites]
+[tail-spared-direct-call-sites]

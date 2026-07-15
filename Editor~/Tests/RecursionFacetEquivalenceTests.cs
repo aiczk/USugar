@@ -240,6 +240,38 @@ public class FacetTailSparedMix : UdonSharpBehaviour {
   }
   void Start(){ result = Mix(5); }
 }"),
+        // C2 kept-arm pin: a STATIC local function declared inside a FOREIGN static rides the
+        // ForeignStatics reach leg into BodyByDef with an ILocalFunctionOperation body — the
+        // RecursionNodeWalk seed-loop unwrap is what keeps its edges (removal silently dropped the
+        // self-recursive spill edge while every other gate stayed green).
+        ("facet_foreign_static_local_function", "FacetForeignStaticLf",
+@"using UdonSharp;
+public static class FfsHelp {
+  public static int Run(int n) {
+    static int Twice(int x) { if (x <= 0) return 0; return Twice(x - 1) + 2; }
+    return Twice(n) + 1;
+  }
+}
+public class FacetForeignStaticLf : UdonSharpBehaviour {
+  public int result;
+  void Start(){ result = FfsHelp.Run(5); }
+}"),
+        // C2 kept-arm pin, generic leg: a generic STATIC local function in a foreign static lands in
+        // GenericForeignStaticBodies as an ILocalFunctionOperation; declared AFTER its use so the
+        // walk's supp-discovery arm (not the in-tree LF arm) seeds it and must unwrap.
+        ("facet_foreign_generic_static_local_function", "FacetForeignGenStaticLf",
+@"using UdonSharp;
+public static class FgsHelp {
+  public static int Run(int n) {
+    int r = Twice<int>(n);
+    return r + 1;
+    static int Twice<T>(int x) { if (x <= 0) return 0; return Twice<T>(x - 1) + 2; }
+  }
+}
+public class FacetForeignGenStaticLf : UdonSharpBehaviour {
+  public int result;
+  void Start(){ result = FgsHelp.Run(5); }
+}"),
         // Base-ctor chain recursion (the v2b-2 comment's Rb..ctor -> Rd.Make -> new Rd -> Rb..ctor
         // form): the cycle runs through the explicit ctor chain and a this-receiver virtual call
         // inside the base ctor; a ctor inside a cycle is always non-tail.

@@ -1,0 +1,12 @@
+[nodes]
+FacetForeignGenStaticLf.Start() @299..339
+FgsHelp.Run(int) @49..213
+Twice<T>(int) @129..209
+[recursive-edges]
+Twice<T>(int) @129..209 -> Twice<T>(int) @129..209
+[cycle-edges]
+Twice<T>(int) @129..209 -> Twice<T>(int) @129..209
+[this-field-touches]
+FacetForeignGenStaticLf.Start() @299..339 -> FacetForeignGenStaticLf.result
+[reentrant-dispatch-sites]
+[tail-spared-direct-call-sites]
