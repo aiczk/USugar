@@ -228,13 +228,18 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
         // bound DIRECTLY to object.ToString is non-virtual in C# yet still prints the RUNTIME type name
         // (Object.ToString reads GetType()), so it takes the same chain with the override arms disabled;
         // a base.ToString() bound to a USER override falls through to the ordinary direct-call path.
-        if (ClassAbi.IsObjectToStringSlot(target) && op.Instance != null
-            && ResolveType(op.Instance.Type) is INamedTypeSymbol tsRecvTy
-            && EmitPolicy.IsUserClassType(tsRecvTy))
+        // WaveJoint R2 [A02]: when the enclosing class's parent IS System.Object, `base` carries the
+        // static type object — the receiver family is the ENCLOSING class (the method body being
+        // emitted), so resolve the dispatch family from _currentMethod there; the user-base form keeps
+        // reading the receiver's own type (byte-identical path).
+        if (ClassAbi.IsObjectToStringSlot(target) && op.Instance != null)
         {
             bool tsBase = op.Instance is IInstanceReferenceOperation
                 { Syntax: Microsoft.CodeAnalysis.CSharp.Syntax.BaseExpressionSyntax };
-            if (!tsBase || target.ContainingType.SpecialType == SpecialType.System_Object)
+            var tsFamily = tsBase && op.Instance.Type?.SpecialType == SpecialType.System_Object
+                ? _currentMethod?.ContainingType : op.Instance.Type;
+            if (ResolveType(tsFamily) is INamedTypeSymbol tsRecvTy && EmitPolicy.IsUserClassType(tsRecvTy)
+                && (!tsBase || target.ContainingType.SpecialType == SpecialType.System_Object))
                 return EmitClassToStringDispatch(tsRecvTy, LoadInstanceRaw(op.Instance),
                     nullIsError: true, useOverrides: !tsBase);
         }
