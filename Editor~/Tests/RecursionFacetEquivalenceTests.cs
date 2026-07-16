@@ -336,5 +336,22 @@ public class FacetBaseCtorRec : UdonSharpBehaviour {
   public int result;
   void Start(){ FbcDer d = new FbcDer(3); result = d.v; }
 }"),
+        // M4b instruments: recursion THROUGH ToString dispatch — the override calls Fmt, whose
+        // base-typed CONCAT operand re-enters the override (the Fmt → FtsDer.ToString cycle edge
+        // exists only via the classifier's concat arm), and Start's interpolation hole exercises the
+        // interpolation arm (`keep` is live across the dispatched stringify, so Fmt's frame must
+        // spill around the re-entry). Both classes minted keeps the chain ≥2-target — the base arm
+        // is the type-name constant (no callee), the derived arm the recursive override.
+        ("facet_tostring_dispatch_recursion", "FacetToStringRec",
+@"using UdonSharp;
+public class FtsBase { public int budget; }
+public class FtsDer : FtsBase {
+  public override string ToString(){ if (budget <= 0) return ""leaf""; budget = budget - 1; return Fmt(this); }
+  public string Fmt(FtsBase b){ int keep = budget * 10; return ""<"" + b + "">"" + keep; }
+}
+public class FacetToStringRec : UdonSharpBehaviour {
+  public int result;
+  void Start(){ FtsBase t = new FtsDer(); FtsBase u = new FtsBase(); t.budget = 2; result = $""{t}|{u}"".Length; }
+}"),
     };
 }

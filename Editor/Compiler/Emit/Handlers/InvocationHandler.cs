@@ -221,6 +221,24 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
                 return EmitUserMethodCall(op, target);
         }
 
+        // M4b: a direct .ToString() rooted at the System.Object slot on a v1 class receiver — the third
+        // lifted surface (with the interpolation hole and the concat operand), one shared lowering
+        // (EmitClassToStringDispatch): override arms direct-call, no-override arms print the runtime
+        // type-name constant, null is the LogError + "" deviation (C# would NRE). A base.ToString()
+        // bound DIRECTLY to object.ToString is non-virtual in C# yet still prints the RUNTIME type name
+        // (Object.ToString reads GetType()), so it takes the same chain with the override arms disabled;
+        // a base.ToString() bound to a USER override falls through to the ordinary direct-call path.
+        if (ClassAbi.IsObjectToStringSlot(target) && op.Instance != null
+            && ResolveType(op.Instance.Type) is INamedTypeSymbol tsRecvTy
+            && EmitPolicy.IsUserClassType(tsRecvTy))
+        {
+            bool tsBase = op.Instance is IInstanceReferenceOperation
+                { Syntax: Microsoft.CodeAnalysis.CSharp.Syntax.BaseExpressionSyntax };
+            if (!tsBase || target.ContainingType.SpecialType == SpecialType.System_Object)
+                return EmitClassToStringDispatch(tsRecvTy, LoadInstanceRaw(op.Instance),
+                    nullIsError: true, useOverrides: !tsBase);
+        }
+
         // User-struct instance method: v.Method(...) — receiver object[] passed as synthetic param0.
         // Feature G: dispatch by the CONSTRUCTED symbol (Box<int>.Get(), not Box<T>.Get()) — target is
         // already the right constructed spec here, whether from an outer call site (Roslyn hands us
@@ -267,11 +285,10 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
             return EmitStructInstanceCall(op, structTarget);
         }
 
-        // CA-M1: Object-inherited method on a v1 class receiver (target owner = System.Object, i.e. the
-        // method is NOT overridden — an override carries the `override` keyword and is rejected at the
-        // declaration). Equals(object) → reference compare on the two object[] bundles (unoverridden
-        // object.Equals IS reference equality for a class). GetHashCode / ToString / GetType → loud reject
-        // (no stable hash, no member-name synthesis, no runtime type identity for a reference bundle in v1).
+        // CA-M1: Object-inherited method on a v1 class receiver (target owner = System.Object).
+        // Equals(object) → reference compare on the two object[] bundles (unoverridden object.Equals IS
+        // reference equality for a class). ToString never reaches here (the M4b slot intercept above).
+        // GetHashCode / GetType → loud reject (no stable hash, no System.Type identity for a bundle).
         if (ClassAbi.IsObjectMethodOnUserClass(target, op.Instance?.Type))
         {
             var clsRecv = (INamedTypeSymbol)op.Instance.Type;

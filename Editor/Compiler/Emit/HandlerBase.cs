@@ -2395,6 +2395,107 @@ public abstract partial class HandlerBase
             ? AggregateAbi.DeepClone(_builder, ret, retAgg, _ctx.Aggregates.GetLayout) : ret;
     }
 
+    // ── M4b: ToString dispatch on v1-class receivers (the object.ToString slot) ──
+
+    IMethodSymbol _objectToString;
+    IMethodSymbol ObjectToStringSlot()
+        => _objectToString ??= _compilation.GetSpecialType(SpecialType.System_Object)
+            .GetMembers("ToString").OfType<IMethodSymbol>()
+            .First(m => !m.IsStatic && m.Parameters.Length == 0);
+
+    /// <summary>M4b: stringify a v1-class receiver through the object.ToString dispatch slot — the third
+    /// lowering built on the v2b-2 machinery (ResolveTargets closed-world set, GuardOpenVirtualDispatch
+    /// armor, typeobj-ReferenceEquals chain, sealed/singleton devirt). Three surfaces share it: the
+    /// interpolation hole, the string-concat operand, and the direct .ToString() call. An arm whose
+    /// most-derived impl is a user override direct-calls it (receiver as param0); an arm whose impl is
+    /// BCL object.ToString itself assigns the C#-parity runtime type-name CONSTANT
+    /// (<see cref="ClassAbi.RuntimeTypeName"/>). <paramref name="useOverrides"/> false = the
+    /// base.ToString()-bound-to-object.ToString form: C# calls Object.ToString non-virtually, which still
+    /// prints the RUNTIME type name (it reads GetType()), so every arm is a type-name constant there.
+    /// Null parity: an explicit null guard runs BEFORE the bundle[0] typeobj read — C# yields "" for a
+    /// null interpolation hole / concat operand (silent, <paramref name="nullIsError"/> false), while a
+    /// direct null.ToString() would NRE (the established null-invoke deviation: LogError + "",
+    /// <paramref name="nullIsError"/> true). A NON-null no-match (laundered value) is always
+    /// LogError + "" (the chain-armor polarity).</summary>
+    protected CLeaf EmitClassToStringDispatch(INamedTypeSymbol recvTy, CLeaf recv,
+        bool nullIsError, bool useOverrides)
+    {
+        var slot = ObjectToStringSlot();
+        var targets = _ctx.VirtualDispatch.ResolveTargets(recvTy, slot);
+        GuardOpenVirtualDispatch(recvTy, targets, slot);
+
+        var recvSlot = _ctx.Builder.AllocScratch(AggregateAbi.ArrayType);
+        EmitAssign(recvSlot, recv);
+        var destSlot = _ctx.Builder.AllocScratch("SystemString");
+
+        void EmitNoMatch()
+        {
+            EmitExternVoid("UnityEngineDebug.__LogError__SystemObject__SystemVoid",
+                new List<CLeaf> { Const(
+                    $"USugar: ToString dispatch on '{recvTy.Name}' matched no minted class — non-class "
+                    + $"receiver ({_classSymbol.Name}). Returning \"\".",
+                    "SystemString") });
+            EmitAssign(destSlot, Const("", "SystemString"));
+        }
+
+        _builder.EmitIf(NullableAbi.IsNull(_builder, SlotRef(recvSlot)), _ =>
+        {
+            if (nullIsError)
+                EmitExternVoid("UnityEngineDebug.__LogError__SystemObject__SystemVoid",
+                    new List<CLeaf> { Const(
+                        $"USugar: NullReferenceException — ToString() on a null '{recvTy.Name}' receiver "
+                        + $"({_classSymbol.Name}). Returning \"\".",
+                        "SystemString") });
+            EmitAssign(destSlot, Const("", "SystemString"));
+        }, _ =>
+        {
+            if (targets.Count == 0)
+            {
+                // Closed-world: no minted implementor means the receiver had to be null (handled above) —
+                // a non-null value here is laundered, never a silent fall-through.
+                EmitNoMatch();
+                return;
+            }
+            if (recvTy.IsSealed || targets.Count == 1)
+            {
+                EmitAssign(destSlot, ClassToStringArmValue(targets[0], SlotRef(recvSlot), useOverrides));
+                return;
+            }
+
+            var typeObjSlot = _ctx.Builder.AllocScratch(AggregateAbi.ArrayType);
+            EmitAssign(typeObjSlot, AggregateAbi.ReadSlot(_builder, SlotRef(recvSlot), 0, AggregateAbi.ArrayType));
+            var matched = _ctx.Builder.AllocScratch("SystemBoolean");
+            EmitAssign(matched, Const(false, "SystemBoolean"));
+
+            foreach (var t in targets)
+            {
+                var eq = ExternCall("SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean",
+                    new List<CLeaf> { SlotRef(typeObjSlot), LoadField(t.TypeObjVar, AggregateAbi.ArrayType) },
+                    "SystemBoolean");
+                _builder.EmitIf(eq, _ =>
+                {
+                    EmitAssign(matched, Const(true, "SystemBoolean"));
+                    EmitAssign(destSlot, ClassToStringArmValue(t, SlotRef(recvSlot), useOverrides));
+                }, null);
+            }
+
+            var noMatch = ExternCall("SystemBoolean.__op_UnaryNegation__SystemBoolean__SystemBoolean",
+                new List<CLeaf> { SlotRef(matched) }, "SystemBoolean");
+            _builder.EmitIf(noMatch, _ => EmitNoMatch(), null);
+        });
+
+        return SlotRef(destSlot);
+    }
+
+    /// <summary>One ToString dispatch arm's value: a user-override impl is an ordinary direct call
+    /// (recursion spill/reload rides EmitCallToMethod, so the call graph sees a precise edge); a BCL
+    /// object.ToString impl — or any impl under a base-bound non-virtual form — is the concrete type's
+    /// runtime-name constant.</summary>
+    CLeaf ClassToStringArmValue(VDispatchTarget t, CLeaf recvRef, bool useOverrides)
+        => useOverrides && EmitPolicy.IsUserClassType(t.Impl.ContainingType)
+            ? EmitCallToMethod(ResolveStructMember(t.Impl), new List<CLeaf> { recvRef })
+            : Const(ClassAbi.RuntimeTypeName(t.Concrete), "SystemString");
+
     // ── Call helpers ──
 
     /// <summary>Wave-12 [V2]: a NON-auto property accessor dispatched through a variable receiver

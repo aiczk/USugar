@@ -164,18 +164,22 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
         {
             var lOp = UnwrapConversions(op.LeftOperand);
             var rOp = UnwrapConversions(op.RightOperand);
-            // CA-v2 M3: a v1 class operand with a SEALED user ToString stringifies through it (same
-            // routing as an interpolation hole). Emit the object/object concat with the ToString result.
-            var lTs = ClassAbi.TryGetUserToString(lOp.Type);
-            var rTs = ClassAbi.TryGetUserToString(rOp.Type);
-            if (lTs != null || rTs != null)
+            // M4b: a v1 class operand stringifies through the object.ToString dispatch slot (same
+            // lowering as an interpolation hole; the M3 sealed-only fast path dissolved into the
+            // helper's devirt arm). Both operand VALUES evaluate first — C# order: Concat's operands
+            // are fully evaluated before either ToString runs — then each class operand dispatches.
+            var lCls = ResolveType(lOp.Type) as INamedTypeSymbol;
+            var rCls = ResolveType(rOp.Type) as INamedTypeSymbol;
+            bool lIsClass = lCls != null && EmitPolicy.IsUserClassType(lCls);
+            bool rIsClass = rCls != null && EmitPolicy.IsUserClassType(rCls);
+            if (lIsClass || rIsClass)
             {
                 var l = VisitExpression(lOp);
-                if (lTs != null) l = EmitCallToMethod(ResolveStructMember(lTs), new List<CLeaf> { l });
-                else l = TryEmitEnumToString(l, lOp.Type) ?? l;
                 var r = VisitExpression(rOp);
-                if (rTs != null) r = EmitCallToMethod(ResolveStructMember(rTs), new List<CLeaf> { r });
-                else r = TryEmitEnumToString(r, rOp.Type) ?? r;
+                l = lIsClass ? EmitClassToStringDispatch(lCls, l, nullIsError: false, useOverrides: true)
+                             : TryEmitEnumToString(l, lOp.Type) ?? l;
+                r = rIsClass ? EmitClassToStringDispatch(rCls, r, nullIsError: false, useOverrides: true)
+                             : TryEmitEnumToString(r, rOp.Type) ?? r;
                 return ExternCall("SystemString.__Concat__SystemObject_SystemObject__SystemString",
                     new List<CLeaf> { l, r }, "SystemString");
             }

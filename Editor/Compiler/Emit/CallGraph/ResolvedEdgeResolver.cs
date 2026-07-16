@@ -372,6 +372,24 @@ public sealed class ResolvedEdgeResolver
             case IObjectCreationOperation { Constructor: { } ctor }:
                 yield return ctor.OriginalDefinition;
                 break;
+            // M4b: an interpolation hole holding a v1-class value dispatches the object.ToString slot
+            // (EmitClassToStringDispatch) — yield every override impl the chain can direct-call so a
+            // cycle closed through stringification is visible to the SCC/spill analysis (the dispatch
+            // fan-out mirrors emission's ResolveTargets; type-name arms call nothing and yield nothing).
+            case IInterpolationOperation interpPart:
+                foreach (var impl in ClassToStringImplDefs(interpPart.Expression))
+                    yield return impl;
+                break;
+            // M4b: a string-concat operand holding a v1-class value dispatches the same slot — the
+            // emission side unwraps the boxing conversion Concat(object,object) wraps operands in,
+            // so the enumerator unwraps identically (the two must not drift).
+            case IBinaryOperation { OperatorKind: BinaryOperatorKind.Add } concat
+                when concat.Type?.SpecialType == SpecialType.System_String:
+                foreach (var impl in ClassToStringImplDefs(UnwrapConversionOps(concat.LeftOperand)))
+                    yield return impl;
+                foreach (var impl in ClassToStringImplDefs(UnwrapConversionOps(concat.RightOperand)))
+                    yield return impl;
+                break;
             case IPropertyReferenceOperation pr:
                 // this-receiver accessor call (both accessors + the emission-faithful leaf override).
                 if (pr.Instance is IInstanceReferenceOperation)
@@ -446,6 +464,43 @@ public sealed class ResolvedEdgeResolver
                  && VirtualDispatch.IsDispatchSite(acc, pr.Instance, arecv))
             foreach (var vt in _emitter.VirtualDispatchInstance.ResolveTargets(arecv, acc))
                 yield return vt.Impl.OriginalDefinition;
+    }
+
+    /// <summary>M4b: the runtime USER-override definitions a v1-class stringify site (interpolation hole /
+    /// concat operand) can dispatch to through the object.ToString slot — the stringify twin of
+    /// <see cref="AccessorDispatchImplDefs"/>, shared by the classifier's interpolation and concat arms.
+    /// Empty when the value is not a v1 class (or no minted implementor overrides the slot: the type-name
+    /// constant arms call nothing). The CW5 over-yield polarity applies to a value whose DECLARED type
+    /// still carries a type parameter (emission resolves it through the monomorphization map this
+    /// def-keyed walk lacks): yield the slot's most-derived user impl for EVERY minted class —
+    /// over-yield only ever over-spills.</summary>
+    IEnumerable<IMethodSymbol> ClassToStringImplDefs(IOperation valueOp)
+    {
+        if (valueOp?.Type is not { } t) yield break;
+        var slotDef = ObjectToStringSlotDef();
+        if (ClassTypeObjectContext.ContainsTypeParameter(t))
+        {
+            foreach (var concrete in _emitter.ClassTypes.MintedClasses)
+                if (VirtualDispatch.MostDerivedImpl(concrete, slotDef) is { } genImpl
+                    && EmitPolicy.IsUserClassType(genImpl.ContainingType))
+                    yield return genImpl.OriginalDefinition;
+        }
+        else if (t is INamedTypeSymbol nts && EmitPolicy.IsUserClassType(nts))
+            foreach (var vt in _emitter.VirtualDispatchInstance.ResolveTargets(nts, slotDef))
+                if (EmitPolicy.IsUserClassType(vt.Impl.ContainingType))
+                    yield return vt.Impl.OriginalDefinition;
+    }
+
+    IMethodSymbol _objectToStringDef;
+    IMethodSymbol ObjectToStringSlotDef()
+        => _objectToStringDef ??= _emitter.Compilation.GetSpecialType(SpecialType.System_Object)
+            .GetMembers("ToString").OfType<IMethodSymbol>()
+            .First(m => !m.IsStatic && m.Parameters.Length == 0);
+
+    static IOperation UnwrapConversionOps(IOperation op)
+    {
+        while (op is IConversionOperation conv) op = conv.Operand;
+        return op;
     }
 
     /// <summary>Named-callee matcher over <see cref="EnumerateInternalCallTargets"/> — feeds the

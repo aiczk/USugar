@@ -405,13 +405,38 @@ public static class ClassAbi
             EmitImplicitCtorChain(builder, compilation, instance, bt, getLayout, emitValue, callBaseCtor);
     }
 
-    // Walks the OverriddenMethod chain to confirm the root is a System.Object virtual (not a user-class
-    // virtual that merely happens to be named ToString/Equals/GetHashCode).
-    static bool IsObjectMethodOverride(IMethodSymbol m)
+    /// <summary>M4b: `method` occupies the System.Object.ToString dispatch slot — object.ToString itself,
+    /// or a user override whose OverriddenMethod chain roots there (a `new`/`new virtual` ToString roots
+    /// its OWN slot and is excluded, so member hiding keeps C# semantics: the hidden method is never
+    /// dispatched by an object-typed stringify).</summary>
+    public static bool IsObjectToStringSlot(IMethodSymbol method)
     {
-        for (var o = m.OverriddenMethod; o != null; o = o.OverriddenMethod)
-            if (o.ContainingType?.SpecialType == SpecialType.System_Object) return true;
-        return false;
+        if (method is not { Name: "ToString", IsStatic: false } || method.Parameters.Length != 0)
+            return false;
+        return VirtualDispatch.SlotIntroducer(method).ContainingType?.SpecialType == SpecialType.System_Object;
+    }
+
+    /// <summary>M4b: what CLR Object.ToString() prints for an instance of `t` — Type.ToString() format:
+    /// namespace-qualified, nested types joined with '+', a generic type as backtick-arity plus the
+    /// constructed arguments' own full names in brackets (args flattened outer-to-inner, the reflection
+    /// convention). This is the no-override dispatch arm's constant.</summary>
+    public static string RuntimeTypeName(ITypeSymbol t)
+    {
+        if (t is IArrayTypeSymbol arr) return RuntimeTypeName(arr.ElementType) + "[]";
+        if (t is not INamedTypeSymbol n) return t.ToDisplayString();
+        var args = new List<ITypeSymbol>();
+        var skeleton = ClrTypeSkeleton(n, args);
+        if (args.Count == 0) return skeleton;
+        return skeleton + "[" + string.Join(",", args.Select(RuntimeTypeName)) + "]";
+    }
+
+    static string ClrTypeSkeleton(INamedTypeSymbol n, List<ITypeSymbol> args)
+    {
+        var prefix = n.ContainingType is { } outer
+            ? ClrTypeSkeleton(outer, args) + "+"
+            : n.ContainingNamespace is { IsGlobalNamespace: false } ns ? ns.ToDisplayString() + "." : "";
+        args.AddRange(n.TypeArguments);
+        return prefix + n.Name + (n.Arity > 0 ? "`" + n.Arity : "");
     }
 
     /// <summary>CA-M1: user classes have reference semantics and no interface dispatch. CA-v2 M1 adds
@@ -458,30 +483,13 @@ public static class ClassAbi
                 + "a field on the UdonSharpBehaviour class.");
     }
 
-    /// <summary>CA-v2 M3: the user ToString() override callable for a v1 class value, or null. Only a
-    /// SEALED class qualifies (no derived type -> static dispatch is exact); a non-sealed override needs
-    /// virtual dispatch (M4b) and falls through to RejectImplicitToString.</summary>
-    public static IMethodSymbol TryGetUserToString(ITypeSymbol type)
-    {
-        if (type is not INamedTypeSymbol ct || !EmitPolicy.IsUserClassType(ct) || !ct.IsSealed) return null;
-        for (var t = ct; t != null && EmitPolicy.IsUserClassType(t); t = t.BaseType)
-            foreach (var m in t.GetMembers("ToString"))
-                if (m is IMethodSymbol { IsStatic: false } ts && ts.Parameters.Length == 0 && IsObjectMethodOverride(ts))
-                    return ts;
-        return null;
-    }
-
-    /// <summary>Reject implicit stringification of a v1 class reference bundle — and of a multi-dimensional
-    /// array bundle (CW14/CW15): both stringify to "System.Object[]" instead of the C# type name, and the
-    /// interpolation/concat Format externs bypass the N-R1 argument choke.</summary>
+    /// <summary>Reject implicit stringification of a multi-dimensional array bundle (CW14/CW15): it
+    /// stringifies to "System.Object[]" instead of the C# type name, and the interpolation/concat Format
+    /// externs bypass the N-R1 argument choke. (The former v1-class arm was replaced by the M4b
+    /// object.ToString-slot dispatch at both implicit consumers.)</summary>
     public static void RejectImplicitToString(ITypeSymbol type)
     {
         if (type == null) return;
-        if (EmitPolicy.IsUserClassType(type))
-            throw new NotSupportedException(
-                $"A v1 user class '{type.Name}' cannot be converted to a string (interpolation / concat): a "
-                + "class ABI v1 reference bundle has no member-name synthesis, so it would stringify to "
-                + "\"System.Object[]\". Format the class's fields directly instead.");
         if (NdimArrayAbi.IsNdimArray(type))
             throw new NotSupportedException(
                 $"A multi-dimensional array ('{type.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}') cannot be "
@@ -523,8 +531,8 @@ public static class ClassAbi
 
     public static string UnsupportedObjectMethodMessage(INamedTypeSymbol classTy, IMethodSymbol method)
         => $"'{classTy.Name}.{method.Name}()' is not supported on a v1 user class: class ABI v1 gives a "
-           + "reference bundle no stable hash, no member-name synthesis, and no runtime type identity. "
-           + "Use reference equality (== / Equals) or format the class's fields directly.";
+           + "reference bundle no stable hash and no System.Type identity. Use reference equality "
+           + "(== / Equals), or ToString/interpolation for a printable form.";
 
     public static void RejectRuntimeTypeTest(ITypeSymbol targetType)
     {

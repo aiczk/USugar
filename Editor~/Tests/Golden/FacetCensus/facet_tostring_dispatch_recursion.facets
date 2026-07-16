@@ -1,0 +1,16 @@
+[nodes]
+FacetToStringRec.Start() @368..478
+FtsDer.Fmt(FtsBase) @205..289
+FtsDer.ToString() @95..202
+[recursive-edges]
+FtsDer.Fmt(FtsBase) @205..289 -> FtsDer.ToString() @95..202
+[cycle-edges]
+FtsDer.Fmt(FtsBase) @205..289 -> FtsDer.ToString() @95..202
+FtsDer.ToString() @95..202 -> FtsDer.Fmt(FtsBase) @205..289
+[this-field-touches]
+FacetToStringRec.Start() @368..478 -> FacetToStringRec.result
+FacetToStringRec.Start() @368..478 -> FtsBase.budget
+FtsDer.Fmt(FtsBase) @205..289 -> FtsBase.budget
+FtsDer.ToString() @95..202 -> FtsBase.budget
+[reentrant-dispatch-sites]
+[tail-spared-direct-call-sites]

@@ -402,12 +402,16 @@ public partial class InvocationHandler
                     }
                     placeholder.Append('}');
                     formatParts.Add(placeholder.ToString());
-                    // CA-v2 M3: a v1 class with a SEALED user ToString override stringifies through it.
-                    var interpTs = ClassAbi.TryGetUserToString(interpolation.Expression.Type);
-                    if (interpTs != null)
+                    // M4b: a v1 class hole stringifies through the object.ToString dispatch slot —
+                    // override arm = direct call, no-override arm = the runtime type-name constant,
+                    // null = "" (C# Format semantics). Replaces the M3 sealed-only fast path (a
+                    // sealed/singleton set devirtualizes inside the dispatch helper).
+                    if (ResolveType(interpolation.Expression.Type) is INamedTypeSymbol interpCls
+                        && EmitPolicy.IsUserClassType(interpCls))
                     {
                         var recv = VisitExpression(interpolation.Expression);
-                        argVals.Add(EmitCallToMethod(ResolveStructMember(interpTs), new List<CLeaf> { recv }));
+                        argVals.Add(EmitClassToStringDispatch(interpCls, recv,
+                            nullIsError: false, useOverrides: true));
                         argIndex++;
                         break;
                     }
