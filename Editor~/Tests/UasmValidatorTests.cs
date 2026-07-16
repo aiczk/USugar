@@ -198,6 +198,55 @@ public class UasmValidatorTests
         UasmValidator.Validate(uasm); // should not throw
     }
 
+    // ── COPY declared-type consistency (B72 axis) ──
+    // Every 2-push COPY between vars with declared UASM types must be compatible under the SAME
+    // DeclaredRelaxations predicate CoreVerify enforces — the table exists once, not twice.
+
+    [Fact]
+    public void CopyBetweenIncompatibleDeclaredTypes_Throws()
+    {
+        var uasm = @".data_start
+    __refl_typeid: %SystemInt64, null
+    __intnl_returnJump_SystemUInt32_0: %SystemUInt32, 0xFFFFFFFF
+    f: %SystemSingle, null
+    i: %SystemInt32, null
+.data_end
+.code_start
+    .export _start
+    _start:
+        PUSH, i
+        PUSH, f
+        COPY
+        JUMP_INDIRECT, __intnl_returnJump_SystemUInt32_0
+.code_end
+";
+        var ex = Assert.Throws<UasmValidationException>(() => UasmValidator.Validate(uasm));
+        Assert.Contains("COPY", ex.Message);
+        Assert.Contains("SystemSingle", ex.Message);
+    }
+
+    [Fact]
+    public void CopyFactEnumToInt32_Passes() // declared relaxation: fact-enums are stored as Int32
+    {
+        UdonTypeFacts.RecordForTest("UvFakeSdkEnum", isEnum: true, isValueType: true);
+        var uasm = @".data_start
+    __refl_typeid: %SystemInt64, null
+    __intnl_returnJump_SystemUInt32_0: %SystemUInt32, 0xFFFFFFFF
+    e: %UvFakeSdkEnum, null
+    i: %SystemInt32, null
+.data_end
+.code_start
+    .export _start
+    _start:
+        PUSH, e
+        PUSH, i
+        COPY
+        JUMP_INDIRECT, __intnl_returnJump_SystemUInt32_0
+.code_end
+";
+        UasmValidator.Validate(uasm); // should not throw
+    }
+
     // ── Duplicate variable validation tests ──
 
     [Fact]

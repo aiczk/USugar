@@ -45,89 +45,17 @@ public static class CoreVerify
                     $"Undeclared slot{slotId} in {context} (function '{Func.Name}')");
         }
 
+        // Phase-D flip (2026-07-16): the reference-prefix-list and unknown-means-enum heuristics are
+        // deleted. Two types may differ only under DeclaredRelaxations (exact / SystemObject wildcard /
+        // Nullable erasure / fact-enum↔Int32 / both-fact-reference COPY) — anything else, including a
+        // name with no minted fact, throws with the reason. The relaxations are position-independent VM
+        // representation truths, so the former CAssign-only enum arm now applies to every check site.
         public void AssertType(string expected, string actual, string context)
         {
-            if (expected == actual) return;
-            // SystemObject is compatible with any type (Udon VM boxing/unboxing)
-            if (expected == "SystemObject" || actual == "SystemObject") return;
-            // Reference types are compatible via COPY in Udon VM (no type enforcement).
-            // Phase-B shadow: this arm is a NAME HEURISTIC — audit the pass against minted facts.
-            if (IsReferenceUdonType(expected) && IsReferenceUdonType(actual))
-            {
-                StrictVerifyLedger.AuditReferenceCopy(expected, actual, context, Func.Name);
-                return;
-            }
-            // Nullable<T> erased to T in Udon VM — SystemNullableX ↔ X are compatible
-            if (expected.StartsWith("SystemNullable") && expected.Substring("SystemNullable".Length) == actual) return;
-            if (actual.StartsWith("SystemNullable") && actual.Substring("SystemNullable".Length) == expected) return;
+            var why = DeclaredRelaxations.WhyIncompatible(expected, actual);
+            if (why == null) return;
             throw new VerificationException(
-                $"Type mismatch in {context}: expected '{expected}', got '{actual}' (function '{Func.Name}')");
-        }
-
-        /// <summary>Type check for CAssign — more relaxed because Udon VM stores enums as Int32.</summary>
-        public void AssertAssignType(string slotType, string valueType, string context)
-        {
-            if (slotType == valueType) return;
-            if (slotType == "SystemObject" || valueType == "SystemObject") return;
-            // Phase-B shadow: the ref-copy and enum arms below are NAME GUESSES — audit each pass
-            // against minted facts (measurement only; behavior unchanged until the Phase-D flip).
-            if (IsReferenceUdonType(slotType) && IsReferenceUdonType(valueType))
-            {
-                StrictVerifyLedger.AuditReferenceCopy(slotType, valueType, context, Func.Name);
-                return;
-            }
-            // Nullable<T> erased to T in Udon VM
-            if (slotType.StartsWith("SystemNullable") && slotType.Substring("SystemNullable".Length) == valueType) return;
-            if (valueType.StartsWith("SystemNullable") && valueType.Substring("SystemNullable".Length) == slotType) return;
-            // Enum types use Int32 underlying type in Udon VM.
-            // Allow Int32 ↔ non-primitive types (potential enums).
-            if (slotType == "SystemInt32" && !IsKnownNonEnumType(valueType))
-            {
-                StrictVerifyLedger.AuditEnumInterop(valueType, context, Func.Name);
-                return;
-            }
-            if (valueType == "SystemInt32" && !IsKnownNonEnumType(slotType))
-            {
-                StrictVerifyLedger.AuditEnumInterop(slotType, context, Func.Name);
-                return;
-            }
-            throw new VerificationException(
-                $"Type mismatch in {context}: expected '{slotType}', got '{valueType}' (function '{Func.Name}')");
-        }
-
-        /// <summary>
-        /// Known non-enum types that should NOT be allowed to interop with Int32.
-        /// Unrecognized types are assumed to be potential enums (which use Int32 underlying type).
-        /// </summary>
-        static bool IsKnownNonEnumType(string type) => type is
-            "SystemSingle" or "SystemDouble" or "SystemBoolean" or "SystemString"
-            or "SystemByte" or "SystemSByte" or "SystemInt16" or "SystemUInt16"
-            or "SystemInt64" or "SystemUInt64" or "SystemChar" or "SystemDecimal"
-            or "SystemObject" or "SystemType";
-
-        /// <summary>
-        /// Heuristic: a Udon type name that does NOT end with known value-type suffixes
-        /// and is not a known primitive is treated as a reference type.
-        /// Udon VM COPY on reference types just copies heap addresses; no type tag enforcement.
-        /// </summary>
-        static bool IsReferenceUdonType(string udonType)
-        {
-            return udonType switch
-            {
-                "SystemBoolean" or "SystemByte" or "SystemSByte"
-                    or "SystemInt16" or "SystemUInt16"
-                    or "SystemInt32" or "SystemUInt32"
-                    or "SystemInt64" or "SystemUInt64"
-                    or "SystemSingle" or "SystemDouble" or "SystemDecimal"
-                    or "SystemChar" => false,
-                _ when udonType.StartsWith("UnityEngineVector")
-                    || udonType.StartsWith("UnityEngineQuaternion")
-                    || udonType.StartsWith("UnityEngineColor")
-                    || udonType.StartsWith("UnityEngineMatrix")
-                    || udonType.StartsWith("UnityEngineRect")
-                    || udonType.StartsWith("UnityEngineRay") => false,
-                _ => true,
-            };
+                $"Type mismatch in {context}: expected '{expected}', got '{actual}' — {why} (function '{Func.Name}')");
         }
     }
 
@@ -146,7 +74,7 @@ public static class CoreVerify
                 VerifyExpr(assign.Value, ctx);
                 // Type check: assigned value must match slot type
                 var slotType = ctx.Func.Slots[assign.DestSlot].Type;
-                ctx.AssertAssignType(slotType, assign.Value.Type, $"CAssign to slot{assign.DestSlot}");
+                ctx.AssertType(slotType, assign.Value.Type, $"CAssign to slot{assign.DestSlot}");
                 break;
 
             case CStoreField store:

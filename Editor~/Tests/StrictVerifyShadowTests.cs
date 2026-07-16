@@ -3,10 +3,12 @@ using Xunit;
 
 namespace USugar.Tests;
 
-// Phase-B instrument check: the strict shadow must log exactly the GUESS-dependent passes of CoreVerify's
-// relaxed type checks — and stay silent for fact-backed ones. The ledger is process-global (xUnit runs
-// classes in parallel), so every assertion filters by this file's unique function names. The shared
-// SelfTestFuncPrefix keeps these deliberate entries out of a mirrored measurement window.
+// Phase-D enforcement pins (the Phase-B shadow's successor): CoreVerify's relaxed-arm GUESSES are gone —
+// a slot/value type pair may differ only under DeclaredRelaxations (SystemObject wildcard, Nullable
+// erasure, fact-enum↔Int32, both-fact-reference COPY). These tests pin the flipped polarity: fact-backed
+// pairs still pass (accept controls), while no-fact and fact-contradicted pairs throw loudly, naming the
+// missing fact. The kept ledger infrastructure retains one smoke test; its SelfTestFuncPrefix keeps that
+// deliberate entry out of any USUGAR_STRICT_SHADOW mirror window.
 public class StrictVerifyShadowTests
 {
     static string Fn(string name) => StrictVerifyLedger.SelfTestFuncPrefix + name;
@@ -20,47 +22,47 @@ public class StrictVerifyShadowTests
         return func;
     }
 
-    static string[] EntriesFor(string funcName)
-        => StrictVerifyLedger.DrainForTest().Where(e => e.Contains("\"func\":\"" + funcName + "\"")).ToArray();
-
     [Fact]
-    public void EnumGuess_UnknownName_IsLogged()
+    public void EnumInterop_NoFactName_Throws()
     {
-        VerifyAssign(Fn("enumguess_unknown"), "FooMysteryType", new CConst(1, "SystemInt32"));
-        var mine = EntriesFor(Fn("enumguess_unknown"));
-        Assert.Contains(mine, e => e.Contains("\"arm\":\"enum-int32\"") && e.Contains("no-fact:FooMysteryType"));
+        var ex = Assert.Throws<VerificationException>(
+            () => VerifyAssign(Fn("enumguess_unknown"), "FooMysteryType", new CConst(1, "SystemInt32")));
+        Assert.Contains("no fact recorded for 'FooMysteryType'", ex.Message);
     }
 
     [Fact]
-    public void EnumGuess_FactEnum_IsSilent()
+    public void EnumInterop_FactEnum_Passes() // accept control
     {
         UdonTypeFacts.RecordForTest("SsvFakeSdkEnum", isEnum: true, isValueType: true);
-        VerifyAssign(Fn("enumguess_fact"), "SsvFakeSdkEnum", new CConst(1, "SystemInt32"));
-        Assert.Empty(EntriesFor(Fn("enumguess_fact")));
+        VerifyAssign(Fn("enumguess_fact"), "SsvFakeSdkEnum", new CConst(1, "SystemInt32")); // no throw
     }
 
     [Fact]
-    public void RefCopyGuess_FactValueType_IsLogged()
+    public void RefCopy_FactValueType_Throws()
     {
-        // The relaxed prefix-list heuristic calls any unlisted non-primitive a reference — an SDK struct
-        // like Bounds slips through as COPY-compatible with a real reference. The registry knows better.
+        // The deleted prefix-list heuristic called any unlisted non-primitive a reference — an SDK struct
+        // like Bounds slipped through as COPY-compatible with a real reference. The facts know better.
         UdonTypeFacts.RecordForTest("SsvFakeBounds", isEnum: false, isValueType: true);
         UdonTypeFacts.RecordForTest("SsvFakeGameObject", isEnum: false, isValueType: false);
-        VerifyAssign(Fn("refguess_valuetype"), "SsvFakeBounds", new CConst(null, "SsvFakeGameObject"));
-        var mine = EntriesFor(Fn("refguess_valuetype"));
-        Assert.Contains(mine, e => e.Contains("\"arm\":\"ref-copy\"")
-            && e.Contains("fact-contradicts:SsvFakeBounds is a value type"));
+        var ex = Assert.Throws<VerificationException>(
+            () => VerifyAssign(Fn("refguess_valuetype"), "SsvFakeBounds", new CConst(null, "SsvFakeGameObject")));
+        Assert.Contains("'SsvFakeBounds' is a fact value type", ex.Message);
     }
 
     [Fact]
-    public void RefCopyGuess_BothFactReferences_IsSilent()
+    public void RefCopy_BothFactReferences_Passes() // accept control
     {
         UdonTypeFacts.RecordForTest("SsvFakeTransform", isEnum: false, isValueType: false);
         UdonTypeFacts.RecordForTest("SsvFakeCollider", isEnum: false, isValueType: false);
-        var func = new CFunction(Fn("refguess_bothref"));
-        func.Slots.Add(new SlotDecl(0, "SsvFakeTransform", SlotClass.Frame));
-        func.Body.Stmts.Add(new CAssign(0, new CConst(null, "SsvFakeCollider")));
-        CoreVerify.VerifyFunction(func);
-        Assert.Empty(EntriesFor(Fn("refguess_bothref")));
+        VerifyAssign(Fn("refguess_bothref"), "SsvFakeTransform", new CConst(null, "SsvFakeCollider")); // no throw
+    }
+
+    [Fact]
+    public void Ledger_RecordGuess_StaysDrainable() // kept infrastructure (future verifiers) must not rot
+    {
+        StrictVerifyLedger.RecordGuess("smoke", "A", "B", "ctx", Fn("ledger_smoke"), "kept-infrastructure");
+        var mine = StrictVerifyLedger.DrainForTest()
+            .Where(e => e.Contains("\"func\":\"" + Fn("ledger_smoke") + "\"")).ToArray();
+        Assert.Contains(mine, e => e.Contains("\"arm\":\"smoke\""));
     }
 }

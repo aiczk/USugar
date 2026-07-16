@@ -3,16 +3,14 @@ using System.Collections.Concurrent;
 using System.IO;
 using Microsoft.CodeAnalysis;
 
-/// <summary>Phase-B strict-verification shadow (2026-07-14): CoreVerify's relaxed type checks contain two
-/// GUESSES — "an unrecognized type name may be an enum" (Int32 interop allowed) and "a non-primitive name
-/// is a reference type" (COPY compat allowed) — that can wave real type mismatches through to the VM
-/// (B72 family). This shadow changes NO verification behavior: it collects type FACTS at the single choke
-/// where Udon type names are minted (ExternResolver.GetUdonTypeName) and logs every relaxed-check pass
-/// that depended on a guess about an unregistered or fact-contradicted name. The ledger feeds the Phase-D
-/// polarity flip (strict-with-declared-relaxations); until then this is measurement only.
-/// Phase-D stage-1 measurement (2026-07-16): the full tracked suite plus the full local harness produced
-/// ZERO production-path entries — every relaxed-arm pass in production is fact-backed, so the declared
-/// relaxation set is intentionally just the structural rules below plus the minted registry.</summary>
+/// <summary>Type FACTS recorded at the single choke where Udon type names are minted
+/// (ExternResolver.GetUdonTypeName), plus structural rules for names whose runtime representation is
+/// fixed by construction. History: Phase-B (2026-07-14) collected these as a measurement shadow of
+/// CoreVerify's two relaxed-arm GUESSES ("unknown name may be an enum", "non-primitive name is a
+/// reference"); Phase-D stage 1 (2026-07-16) measured ZERO production-path guess-dependent passes across
+/// the full suite plus the full local harness; Phase-D stage 2 (2026-07-16) ENFORCED the flip — the
+/// heuristics are deleted and <see cref="DeclaredRelaxations"/>, backed by these facts, is now the only
+/// way two slot/COPY types may legally differ (CoreVerify and the test-side UasmValidator COPY check).</summary>
 public static class UdonTypeFacts
 {
     public readonly struct TypeFact
@@ -82,6 +80,11 @@ public static class UdonTypeFacts
             case "SystemString":
             case "SystemType":
             case "VRCUdonCommonInterfacesIUdonEventReceiver":
+            // Hardcoded by StorageContext.DeclareThis as the `this` heap var's concrete component type.
+            // RemapUdonType folds this name to IUdonEventReceiver at the minting choke, so it can never
+            // be fact-recorded — but it IS VRC.Udon.UdonBehaviour, a component class, a reference by
+            // construction (its COPY into IUdonEventReceiver-typed vars is the this-upcast).
+            case "VRCUdonUdonBehaviour":
                 return true;
         }
         if (name != null && name.EndsWith("Array")) return true;
@@ -89,9 +92,52 @@ public static class UdonTypeFacts
     }
 }
 
+/// <summary>Phase-D declared-relaxation rules: the single predicate deciding when two Udon slot/COPY
+/// types may legally differ — shared by CoreVerify (structured-IR slot checks) and the test-side
+/// UasmValidator COPY check (B72 axis), so the relaxation table exists exactly once. Declared:
+/// (1) SystemObject wildcard — Udon heap slots are dynamically typed; (2) Nullable erasure — NullableAbi
+/// boxes Nullable&lt;T&gt; as object-or-boxed-T; (3) enum↔Int32 — ONLY for names with a recorded enum
+/// fact (Udon stores enums as their underlying Int32); (4) reference COPY — ONLY when BOTH names are
+/// fact references (a reference COPY copies a heap address; the VM enforces no type tag). Stage-1
+/// measured the remaining declared table EMPTY (zero production guess-dependent passes), so anything
+/// else — including a name with no minted fact — is incompatible, loudly.</summary>
+public static class DeclaredRelaxations
+{
+    /// <summary>Null when the pair is compatible; otherwise the reason, naming the missing fact when
+    /// the failure is an unminted name (a no-fact name at verify time never passed the minting choke
+    /// of the same compile — itself suspicious).</summary>
+    public static string WhyIncompatible(string expected, string actual)
+    {
+        if (expected == actual) return null;
+        if (expected == "SystemObject" || actual == "SystemObject") return null;
+        if (IsNullableErasure(expected, actual) || IsNullableErasure(actual, expected)) return null;
+        if (expected == "SystemInt32" && UdonTypeFacts.IsEnumFact(actual) == true) return null;
+        if (actual == "SystemInt32" && UdonTypeFacts.IsEnumFact(expected) == true) return null;
+        var e = UdonTypeFacts.IsReferenceFact(expected);
+        var a = UdonTypeFacts.IsReferenceFact(actual);
+        if (e == true && a == true) return null;
+        if (e == null) return NoFact(expected);
+        if (a == null) return NoFact(actual);
+        return $"facts deny every declared relaxation ({Describe(expected, e)}; {Describe(actual, a)})";
+    }
+
+    static bool IsNullableErasure(string boxed, string bare) =>
+        boxed.StartsWith("SystemNullable", StringComparison.Ordinal)
+        && boxed.Substring("SystemNullable".Length) == bare;
+
+    static string NoFact(string name) =>
+        $"no fact recorded for '{name}' (the name never passed ExternResolver.GetUdonTypeName's minting"
+        + " choke, so no declared relaxation can vouch for it)";
+
+    static string Describe(string name, bool? isRef) =>
+        $"'{name}' is a fact {(isRef == true ? "reference" : "value type")}";
+}
+
 /// <summary>Append-only ledger of guess-dependent relaxed-check passes. In-memory always (drainable by
-/// tests); mirrored to a file when <c>USUGAR_STRICT_SHADOW</c> names a path (set by the owner's test
-/// invocations during the Phase-C measurement window). Never throws, never alters compilation.</summary>
+/// tests); mirrored to a file when <c>USUGAR_STRICT_SHADOW</c> names a path. The Phase-D flip deleted
+/// its CoreVerify audit hooks (the arms now enforce via <see cref="DeclaredRelaxations"/>); the ledger
+/// stays as the shared instrument for future relaxed-arm measurements. Never throws, never alters
+/// compilation.</summary>
 public static class StrictVerifyLedger
 {
     static readonly ConcurrentQueue<string> _entries = new();
@@ -113,29 +159,6 @@ public static class StrictVerifyLedger
             || funcName?.StartsWith(SelfTestFuncPrefix, StringComparison.Ordinal) == true) return;
         try { lock (_flushLock) File.AppendAllText(_filePath, line + "\n"); }
         catch (IOException) { /* measurement must never break a compile */ }
-    }
-
-    /// <summary>The relaxed ref-copy arm passed for (expected, actual): log unless BOTH names are
-    /// fact-references.</summary>
-    public static void AuditReferenceCopy(string expected, string actual, string context, string funcName)
-    {
-        var e = UdonTypeFacts.IsReferenceFact(expected);
-        var a = UdonTypeFacts.IsReferenceFact(actual);
-        if (e == true && a == true) return;
-        RecordGuess("ref-copy", expected, actual, context, funcName,
-            e == null ? "no-fact:" + expected
-            : a == null ? "no-fact:" + actual
-            : e == false ? "fact-contradicts:" + expected + " is a value type"
-            : "fact-contradicts:" + actual + " is a value type");
-    }
-
-    /// <summary>The relaxed enum↔Int32 arm passed for `name`: log unless the name is a fact-enum.</summary>
-    public static void AuditEnumInterop(string name, string context, string funcName)
-    {
-        var isEnum = UdonTypeFacts.IsEnumFact(name);
-        if (isEnum == true) return;
-        RecordGuess("enum-int32", "SystemInt32", name, context, funcName,
-            isEnum == null ? "no-fact:" + name : "fact-contradicts:" + name + " is not an enum");
     }
 
     internal static string[] DrainForTest()

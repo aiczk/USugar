@@ -557,6 +557,14 @@ public static class ExternResolver
     public static bool IsNumericType(ITypeSymbol type)
         => type != null && NumericSpecialTypes.Contains(type.SpecialType);
 
+    /// <summary>Numeric for CONVERSION purposes — the System.Convert extern surface includes Decimal,
+    /// unlike the operator-oriented <see cref="IsNumericType"/> set (Udon's Decimal operators are named
+    /// and gated per-site). Conversion guards must use this one: gating on IsNumericType lets a
+    /// decimal↔numeric cast fall through to the identity passthrough as a raw COPY into a mistyped slot
+    /// (B72 family, caught by the UasmValidator COPY declared-type axis).</summary>
+    public static bool IsConvertibleNumericType(ITypeSymbol type)
+        => IsNumericType(type) || type?.SpecialType == SpecialType.System_Decimal;
+
     static readonly HashSet<SpecialType> FloatSpecialTypes = new()
     {
         SpecialType.System_Single, SpecialType.System_Double, SpecialType.System_Decimal
@@ -607,6 +615,7 @@ public static class ExternResolver
         [SpecialType.System_UInt64] = "ToUInt64",
         [SpecialType.System_Single] = "ToSingle",
         [SpecialType.System_Double] = "ToDouble",
+        [SpecialType.System_Decimal] = "ToDecimal",
         [SpecialType.System_Char] = "ToChar",
     };
 

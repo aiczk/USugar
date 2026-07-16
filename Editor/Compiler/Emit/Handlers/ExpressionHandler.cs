@@ -518,8 +518,8 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
         var liftedDstN = liftedDstU == null ? null : NumericFacet(liftedDstU);
         if (conv.Conversion.IsNullable
             && EmitPolicy.IsNullableT(conv.Operand.Type, out var liftedSrcU)
-            && NumericFacet(liftedSrcU) is { } liftedSrcN && ExternResolver.IsNumericType(liftedSrcN)
-            && liftedDstN != null && ExternResolver.IsNumericType(liftedDstN)
+            && NumericFacet(liftedSrcU) is { } liftedSrcN && ExternResolver.IsConvertibleNumericType(liftedSrcN)
+            && liftedDstN != null && ExternResolver.IsConvertibleNumericType(liftedDstN)
             && !SymbolEqualityComparer.Default.Equals(liftedSrcN, liftedDstN)
             && ExternResolver.GetConvertMethodName(liftedDstN) is { } liftedDstMethod)
         {
@@ -543,9 +543,9 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
         // nullable's SystemObject slot with the right tag, so a later `.Value`'s strict small-int extern reads it.
         if (conv.Conversion.IsNullable
             && conv.Operand.Type != null && NumericFacet(conv.Operand.Type) is { } bareSrcN
-            && ExternResolver.IsNumericType(bareSrcN)
+            && ExternResolver.IsConvertibleNumericType(bareSrcN)
             && EmitPolicy.IsNullableT(conv.Type, out var bareDstU) && NumericFacet(bareDstU) is { } bareDstN
-            && ExternResolver.IsNumericType(bareDstN)
+            && ExternResolver.IsConvertibleNumericType(bareDstN)
             && !SymbolEqualityComparer.Default.Equals(bareSrcN, bareDstN))
         {
             return EmitNarrowingConvert(srcVal, GetUdonType(bareSrcN), GetUdonType(bareDstN));
@@ -579,10 +579,10 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
                     + $"'{convSrcType.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}'.");
         }
 
-        // Numeric conversions (int→float, etc.) via System.Convert
+        // Numeric conversions (int→float, decimal↔numeric, etc.) via System.Convert
         if (conv.Operand.Type != null && conv.Type != null
-            && ExternResolver.IsNumericType(conv.Operand.Type)
-            && ExternResolver.IsNumericType(conv.Type)
+            && ExternResolver.IsConvertibleNumericType(conv.Operand.Type)
+            && ExternResolver.IsConvertibleNumericType(conv.Type)
             && !SymbolEqualityComparer.Default.Equals(conv.Operand.Type, conv.Type))
         {
             var methodName = ExternResolver.GetConvertMethodName(conv.Type);
@@ -796,11 +796,9 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
     // identity pass-through (B61). B72: a FLOATING/DECIMAL target must be included — `(double)enumVal` is a
     // real numeric conversion (SystemConvert.ToDouble), not a re-typing; the former integral-only guard let it
     // fall through to identity, COPY'ing the raw underlying int into a %SystemDouble slot with no convert
-    // (silent-wrong, invisible to both extern-name gates). IsNumericType lacks Decimal, so add it explicitly.
+    // (silent-wrong, invisible to both extern-name gates).
     static bool IsEnumOrNumeric(ITypeSymbol t) =>
-        t.TypeKind == TypeKind.Enum
-        || ExternResolver.IsNumericType(t)
-        || t.SpecialType == SpecialType.System_Decimal;
+        t.TypeKind == TypeKind.Enum || ExternResolver.IsConvertibleNumericType(t);
 
     // ── Default Value ──
 

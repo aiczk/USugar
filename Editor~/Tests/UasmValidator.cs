@@ -19,11 +19,14 @@ public static class UasmValidator
         ValidateExterns(uasm);
         ValidateNoDuplicateVars(uasm);
         ValidateStackBalance(uasm);
+        ValidateCopyTypes(uasm, declaredVars);
     }
 
-    static HashSet<string> ParseDeclaredVariables(string uasm)
+    /// <summary>Declared heap vars: name → declared UASM type (`name: %Type, value`), null when the
+    /// declaration carries no `%Type` marker.</summary>
+    static Dictionary<string, string> ParseDeclaredVariables(string uasm)
     {
-        var vars = new HashSet<string>();
+        var vars = new Dictionary<string, string>();
         var inData = false;
         foreach (var line in uasm.Split('\n'))
         {
@@ -35,12 +38,21 @@ public static class UasmValidator
 
             var colonIdx = trimmed.IndexOf(':');
             if (colonIdx > 0)
-                vars.Add(trimmed.Substring(0, colonIdx));
+            {
+                var rest = trimmed.Substring(colonIdx + 1).TrimStart();
+                string type = null;
+                if (rest.StartsWith("%"))
+                {
+                    var comma = rest.IndexOf(',');
+                    type = comma > 0 ? rest.Substring(1, comma - 1) : rest.Substring(1);
+                }
+                vars[trimmed.Substring(0, colonIdx)] = type;
+            }
         }
         return vars;
     }
 
-    static void ValidateVariableReferences(string uasm, HashSet<string> declaredVars)
+    static void ValidateVariableReferences(string uasm, Dictionary<string, string> declaredVars)
     {
         var errors = new List<string>();
         var inCode = false;
@@ -54,13 +66,13 @@ public static class UasmValidator
             if (trimmed.StartsWith("PUSH, "))
             {
                 var varId = trimmed.Substring("PUSH, ".Length);
-                if (!declaredVars.Contains(varId))
+                if (!declaredVars.ContainsKey(varId))
                     errors.Add($"Undeclared variable in PUSH: {varId}");
             }
             else if (trimmed.StartsWith("JUMP_INDIRECT, "))
             {
                 var varId = trimmed.Substring("JUMP_INDIRECT, ".Length);
-                if (!declaredVars.Contains(varId))
+                if (!declaredVars.ContainsKey(varId))
                     errors.Add($"Undeclared variable in JUMP_INDIRECT: {varId}");
             }
         }
@@ -360,5 +372,53 @@ public static class UasmValidator
 
         var staticCount = paramCount + returnPush;
         return (staticCount, staticCount + 1 + (genericReturn ? 1 : 0));
+    }
+
+    // COPY/slot declared-type consistency (B72 axis): a 2-push COPY moves src's heap value into dst
+    // verbatim (conversions go through externs), so the two declared types must be compatible under the
+    // SAME DeclaredRelaxations predicate CoreVerify enforces on IR slots — one shared rule table, no
+    // duplicate. The cross-boundary return-pattern COPY (1 local push; src is the caller's pushed return
+    // address) has no declared src var and is skipped, as stack-balance already pins its shape.
+    static void ValidateCopyTypes(string uasm, Dictionary<string, string> varTypes)
+    {
+        var errors = new List<string>();
+        var pushes = new List<string>();
+        var inCode = false;
+        var allLines = uasm.Split('\n');
+
+        for (int i = 0; i < allLines.Length; i++)
+        {
+            var trimmed = allLines[i].Trim();
+            if (trimmed == ".code_start") { inCode = true; pushes.Clear(); continue; }
+            if (trimmed == ".code_end") { inCode = false; continue; }
+            if (!inCode) continue;
+            if (trimmed.Length == 0 || trimmed.StartsWith(".export") || trimmed.StartsWith("#")) continue;
+
+            if (IsLabel(trimmed)) { pushes.Clear(); continue; }
+            if (trimmed.StartsWith("PUSH, ")) { pushes.Add(trimmed.Substring("PUSH, ".Length)); continue; }
+            if (trimmed == "COPY")
+            {
+                if (pushes.Count >= 2)
+                {
+                    var src = pushes[pushes.Count - 2];
+                    var dst = pushes[pushes.Count - 1];
+                    if (varTypes.TryGetValue(src, out var srcType) && srcType != null
+                        && varTypes.TryGetValue(dst, out var dstType) && dstType != null)
+                    {
+                        var why = DeclaredRelaxations.WhyIncompatible(dstType, srcType);
+                        if (why != null)
+                            errors.Add($"Line {i + 1}: COPY {src} (%{srcType}) -> {dst} (%{dstType}): {why}");
+                    }
+                }
+                pushes.Clear();
+                continue;
+            }
+            // Any other instruction consumes or invalidates the pending operand pushes.
+            pushes.Clear();
+        }
+
+        if (errors.Count > 0)
+            throw new UasmValidationException(
+                $"UASM COPY declared-type errors:\n{string.Join("\n", errors)}");
     }
 }
