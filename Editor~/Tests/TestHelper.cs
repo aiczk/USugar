@@ -475,25 +475,22 @@ namespace TestStubs
         return emitter.DebugBuildResolver().ResolveEdges(op).ToList();
     }
 
-    /// <summary>CA call-graph rewrite (M0 Task 2+): the differential gate — build+emit the emitter for
-    /// `cls` (so VirtualDispatch is seeded identically for both sides), then compare the resolver's CallEdge
-    /// set for the first `calleeName` invocation inside `callInMethod` against the live
-    /// EnumerateInternalCallTargets. Both project to OriginalDefinition; equality proves the faithful port.</summary>
-    public static (HashSet<IMethodSymbol> old, HashSet<IMethodSymbol> @new) CompareInvocationCallEdges(
+    /// <summary>C4 (M5d): the resolver's CallEdge set for the first `calleeName` invocation inside
+    /// `callInMethod` of `cls`, OriginalDefinition-projected — the direct-fact successor of the M0
+    /// old-vs-new differential (CompareInvocationCallEdges), which became a self-diff once the
+    /// classifier core relocated into the resolver. Builds+emits first so VirtualDispatch is seeded
+    /// (the CallEdge arm fails loud pre-seed).</summary>
+    public static HashSet<IMethodSymbol> ResolveInvocationCallEdges(
         string src, string cls, string callInMethod, string calleeName)
     {
         var comp = BuildCompilation(src, cls, out var classSymbol);
         var emitter = new UasmEmitter(comp, classSymbol);
-        emitter.Emit(); // seeds _ctx.VirtualDispatch, shared by DebugBuildResolver and the live classifier
+        emitter.Emit();
         var op = FindFirstInvocationOp(comp, callInMethod, calleeName);
-        var resolver = emitter.DebugBuildResolver();
-        var cmp = (IEqualityComparer<IMethodSymbol>)SymbolEqualityComparer.Default;
-        var oldSet = emitter.DebugEnumerateInternalCallTargets(op)
-            .Select(m => m.OriginalDefinition).ToHashSet(cmp);
-        var newSet = resolver.ResolveEdges(op)
+        return emitter.DebugBuildResolver().ResolveEdges(op)
             .Where(t => t.Role == TargetRole.CallEdge)
-            .Select(t => t.Method.OriginalDefinition).ToHashSet(cmp);
-        return (oldSet, newSet);
+            .Select(t => t.Method.OriginalDefinition)
+            .ToHashSet((IEqualityComparer<IMethodSymbol>)SymbolEqualityComparer.Default);
     }
 
     /// <summary>CA call-graph rewrite (M0 Task 3+): resolve all edges of the first operation anywhere in

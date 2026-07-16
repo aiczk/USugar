@@ -17,12 +17,15 @@ public class A : UdonSharpBehaviour { public int seed; public int result;
         Assert.Contains(targets, t => t.Method.Name == "Helper" && t.Role == TargetRole.CallEdge);
     }
 
-    // ── Task 2: invocation-arm differential gate. Each probe builds+emits the emitter (so VirtualDispatch
-    // is seeded), then asserts the resolver's CallEdge set equals the live EnumerateInternalCallTargets,
-    // AND that the probe's arm actually fired (non-vacuous). ──
+    // ── C4 (M5d): direct-fact CallEdge classifier gates. Formerly old-vs-new differentials against the
+    // emitter's classifier copy — that copy was deleted when the core relocated into the resolver, so a
+    // diff would compare the classifier against itself. The expected sets below are the EXACT sets both
+    // sides yielded at the last green differential run (captured 2026-07-16, pre-relocation), pinned as
+    // fixed facts. Each probe builds+emits the emitter first so VirtualDispatch is seeded (the CallEdge
+    // arm requires the seeded context and fails loud pre-seed). ──
 
     [Fact]
-    public void VirtualOverrideSet_MatchesOldClassifier()
+    public void VirtualOverrideSet_YieldsStaticAndOverrideTargets()
     {
         // Base-typed variable virtual call → the v2b-2 closed-world override set.
         var src = @"using UdonSharp;
@@ -30,14 +33,14 @@ public class Shape { public virtual int Area()=>0; }
 public class Sq : Shape { public int side; public override int Area()=>side*side; }
 public class A : UdonSharpBehaviour { public int seed; public int result;
   void Start(){ Shape s = new Sq(); result = s.Area() + seed; } }";
-        var (old, @new) = TestHelper.CompareInvocationCallEdges(src, "A", "Start", "Area");
-        Assert.True(old.SetEquals(@new), $"old={Names(old)} new={Names(@new)}");
-        Assert.Contains(@new, m => m.Name == "Area" && m.ContainingType.Name == "Sq");   // virtual override arm
-        Assert.Contains(@new, m => m.Name == "Area" && m.ContainingType.Name == "Shape"); // static target
+        var targets = TestHelper.ResolveInvocationCallEdges(src, "A", "Start", "Area");
+        Assert.Equal(new[] { "Shape.Area", "Sq.Area" }, SortedNames(targets)); // fixed set (captured)
+        Assert.Contains(targets, m => m.Name == "Area" && m.ContainingType.Name == "Sq");   // virtual override arm
+        Assert.Contains(targets, m => m.Name == "Area" && m.ContainingType.Name == "Shape"); // static target
     }
 
     [Fact]
-    public void InterfaceCrossDispatch_MatchesOldClassifier()
+    public void InterfaceCrossDispatch_YieldsLocalImplTarget()
     {
         // `this` as an interface-typed variable → cross-dispatch lands back on this program's impl.
         var src = @"using UdonSharp;
@@ -45,9 +48,9 @@ public interface IFoo { int Bar(); }
 public class A : UdonSharpBehaviour, IFoo { public int seed; public int result;
   public int Bar()=>seed+1;
   void Start(){ IFoo f = this; result = f.Bar(); } }";
-        var (old, @new) = TestHelper.CompareInvocationCallEdges(src, "A", "Start", "Bar");
-        Assert.True(old.SetEquals(@new), $"old={Names(old)} new={Names(@new)}");
-        Assert.Contains(@new, m => m.Name == "Bar" && m.ContainingType.Name == "A"); // cross-dispatch impl arm
+        var targets = TestHelper.ResolveInvocationCallEdges(src, "A", "Start", "Bar");
+        Assert.Equal(new[] { "A.Bar", "IFoo.Bar" }, SortedNames(targets)); // fixed set (captured)
+        Assert.Contains(targets, m => m.Name == "Bar" && m.ContainingType.Name == "A"); // cross-dispatch impl arm
     }
 
     [Fact]
@@ -58,10 +61,10 @@ public class A : UdonSharpBehaviour, IFoo { public int seed; public int result;
 public class A : UdonSharpBehaviour { public int seed; public int result;
   int Helper(int x) => x + 1;
   void Start(){ result = Helper(seed); } }";
-        var (old, @new) = TestHelper.CompareInvocationCallEdges(src, "A", "Start", "Helper");
-        Assert.True(old.SetEquals(@new), $"old={Names(old)} new={Names(@new)}");
-        Assert.Single(@new);
-        Assert.Contains(@new, m => m.Name == "Helper");
+        var targets = TestHelper.ResolveInvocationCallEdges(src, "A", "Start", "Helper");
+        Assert.Equal(new[] { "A.Helper" }, SortedNames(targets)); // fixed set (captured)
+        Assert.Single(targets);
+        Assert.Contains(targets, m => m.Name == "Helper");
     }
 
     // ── reach-arm shape gates: each probe resolves the shape's op and asserts the target lands under the
@@ -139,6 +142,7 @@ public class A : UdonSharpBehaviour { void Start(){ Dc d = new Dc(); } }";
         Assert.Contains(minted, t => t.Name == "E");   // transitive via field initializer
     }
 
-    static string Names(System.Collections.Generic.IEnumerable<Microsoft.CodeAnalysis.IMethodSymbol> ms)
-        => "{" + string.Join(", ", ms.Select(m => m.ContainingType.Name + "." + m.Name)) + "}";
+    static string[] SortedNames(System.Collections.Generic.IEnumerable<Microsoft.CodeAnalysis.IMethodSymbol> ms)
+        => ms.Select(m => m.ContainingType.Name + "." + m.Name)
+            .OrderBy(n => n, System.StringComparer.Ordinal).ToArray();
 }

@@ -125,12 +125,17 @@ public class UasmEmitter
     public Compilation Compilation => _ctx.Compilation;
     public INamedTypeSymbol ClassSymbol => _ctx.ClassSymbol;
 
-    // CA call-graph rewrite (M0): test-only accessors exposing the live current classifier and a
-    // ResolvedEdgeResolver built from this emitter's context (post-Emit, so VirtualDispatch is seeded),
-    // so the equivalence gate diffs new-vs-old on identical state. Unused by production emission.
-    internal IEnumerable<IMethodSymbol> DebugEnumerateInternalCallTargets(IOperation op)
-        => EnumerateInternalCallTargets(op);
-    internal ResolvedEdgeResolver DebugBuildResolver() => new ResolvedEdgeResolver(this);
+    // C4 (M5d): the one per-class ResolvedEdgeResolver instance — the relocated classifier core plus
+    // the reach cores; stateless beyond this emitter, so every consumer (reach worklist, recursion
+    // walk, tail matchers, legacy oracle, tests) shares it.
+    ResolvedEdgeResolver _edgeResolver;
+    internal ResolvedEdgeResolver EdgeResolver => _edgeResolver ??= new ResolvedEdgeResolver(this);
+    internal ResolvedEdgeResolver DebugBuildResolver() => EdgeResolver; // test entry (post-Emit state)
+
+    // C4: the seeded-context reads the relocated CallEdge classifier consumes (null/empty before Emit
+    // seeds them at the compile-plan build — the resolver fails loud on a pre-seed CallEdge call).
+    internal VirtualDispatch VirtualDispatchInstance => _ctx.VirtualDispatch;
+    internal ClassTypeObjectContext ClassTypes => _ctx.ClassTypes;
 
     // CA call-graph rewrite (M5b prerequisite): test-only accessor exposing the populated RecursionInfo
     // (all six facets: RecursionGraphNodes, per-node RecursiveCallees/CycleCallees edge sets,
@@ -207,7 +212,7 @@ public class UasmEmitter
     // (ReachableBodies.OpenGenericBaseDefs) and reach the recursion graph through BodyByDef, so the former
     // legacy _openGenericBaseDefs side-effect field is gone — the recursion node source is the reach result.
     ReachableBodies BuildReachableBodiesViaResolver(IMethodSymbol[] methods)
-        => new ResolverDrivenReach(new ResolvedEdgeResolver(this), GetMethodBodyOperation,
+        => new ResolverDrivenReach(EdgeResolver, GetMethodBodyOperation,
             () => _fieldInitOps.Select(fi => fi.initOp), IsCollectibleStructMember, StableOrdinalKey).Build(methods);
 
     void SetReflectionValues()
@@ -2598,7 +2603,7 @@ public class UasmEmitter
         // (DebugComputeLegacyRecursionInfo, diffed per battery shape by RecursionFacetEquivalenceTests)
         // until C2/C4 prove the remaining arms and delete them.
         var facets = AssembleRecursionFacets(
-            new RecursionNodeWalk(new ResolvedEdgeResolver(this), _reach,
+            new RecursionNodeWalk(EdgeResolver, _reach,
                 _fieldInitOps.Select(fi => fi.initOp)).Run());
         // Write-once populate of every analysis artifact.
         _ctx.RecursionContext.Info.Populate(facets.Recursive, facets.CycleEdges, facets.ThisTouches,
@@ -2949,7 +2954,7 @@ public class UasmEmitter
                         if (site.Syntax == null) continue;
                         bool toRecursiveCallee = false;
                         foreach (var c in inScc)
-                            if (IsInternalCallTo(site, c, out var matched) && ReferenceEquals(matched, site))
+                            if (EdgeResolver.IsInternalCallTo(site, c, out var matched) && ReferenceEquals(matched, site))
                             { toRecursiveCallee = true; break; }
                         if (toRecursiveCallee && !EmitPolicy.IsNonTailDispatchSite(callerBody, site))
                             tailSparedSites.Add(site.Syntax);
@@ -3091,7 +3096,7 @@ public class UasmEmitter
             {
                 var t = mr.Method.OriginalDefinition;
                 if (internalMethods.Contains(t)) result.Add(t);
-                if (LeafMethodRefTarget(mr) is { } leafT && internalMethods.Contains(leafT))
+                if (EdgeResolver.LeafMethodRefTarget(mr) is { } leafT && internalMethods.Contains(leafT))
                     result.Add(leafT);
             }
             else if (dc.Target is IAnonymousFunctionOperation af && af.Symbol != null)
@@ -3175,7 +3180,7 @@ public class UasmEmitter
                     return true;
                 case IMethodReferenceOperation mr when mr.Method != null:
                     found.Add(mr.Method.OriginalDefinition);
-                    if (LeafMethodRefTarget(mr) is { } leafT) found.Add(leafT);
+                    if (EdgeResolver.LeafMethodRefTarget(mr) is { } leafT) found.Add(leafT);
                     return true;
                 default:
                     // null / default contribute no callee; anything else breaks provenance.
@@ -3257,258 +3262,19 @@ public class UasmEmitter
         }
     }
 
-    // ── Wave-9 round-3 [W1]/[W2]/[W3]: emission-faithful leaf-override resolution for the graph ──
-    // Emission resolves a this-receiver virtual call to the most-derived override visible from the
-    // compiled class (HandlerBase.ResolveMostDerivedOverride / ResolveDispatchProperty, sharing this
-    // file's HandlerBase.FindOverrideMethodInChain/FindOverridePropertyInChain walkers), but the
-    // recursion graph recorded only the STATIC binding — so a runtime cycle closed through an
-    // override (base body's virtual call/property read dispatching the leaf, or an override calling
-    // base.M whose body virtual-calls back) had no static counterpart and its frames were never spilled
-    // (VM-proven: 305 where the CLR gives 605; override<->base-copy 14 vs 12; fb=base.M bundle 17 vs 21).
-    // These mirrors return the leaf's ORIGINAL DEFINITION (graph nodes are definition-keyed) or null
-    // when the site keeps its static binding (no override visible / base. receiver / non-virtual).
-
-    IMethodSymbol LeafCallTarget(IInvocationOperation inv)
-    {
-        var tm = inv.TargetMethod;
-        if (!(tm.IsVirtual || tm.IsOverride || tm.IsAbstract) || tm.MethodKind != MethodKind.Ordinary)
-            return null;
-        if (inv.Instance is not IInstanceReferenceOperation iref
-            || iref.Syntax is BaseExpressionSyntax) return null;
-        var def = tm.OriginalDefinition;
-        var leaf = ResolveLeafOverrideDef(def);
-        return SymbolEqualityComparer.Default.Equals(leaf, def) ? null : leaf;
-    }
-
-    /// <summary>Wave-9 round-5 [X1]: leaf resolution for a this-receiver virtual METHOD-GROUP
-    /// conversion (delegate creation), gated identically to LeafCallTarget — emission's bridge
-    /// resolves these to the chain-root export running the leaf body, so the escape set mirrors it.
-    /// Internal for the resolver's EscapeTarget arm (C3), delegated like the other emitter deps.</summary>
-    internal IMethodSymbol LeafMethodRefTarget(IMethodReferenceOperation mr)
-    {
-        var m = mr.Method;
-        if (m == null || !(m.IsVirtual || m.IsOverride || m.IsAbstract) || m.MethodKind != MethodKind.Ordinary)
-            return null;
-        if (mr.Instance is not IInstanceReferenceOperation iref
-            || iref.Syntax is BaseExpressionSyntax) return null;
-        var def = m.OriginalDefinition;
-        var leaf = ResolveLeafOverrideDef(def);
-        return SymbolEqualityComparer.Default.Equals(leaf, def) ? null : leaf;
-    }
-
-    IPropertySymbol LeafPropertyTarget(IPropertyReferenceOperation pr)
-    {
-        var p = pr.Property;
-        if (!(p.IsVirtual || p.IsOverride || p.IsAbstract)) return null;
-        if (pr.Instance is not IInstanceReferenceOperation iref
-            || iref.Syntax is BaseExpressionSyntax) return null;
-        var def = p.OriginalDefinition;
-        var cand = HandlerBase.FindOverridePropertyInChain(_classSymbol, def, p.Name);
-        if (cand == null) return null;
-        return SymbolEqualityComparer.Default.Equals(cand.OriginalDefinition, def) ? null : cand.OriginalDefinition;
-    }
-
-    // Definition-keyed twin of HandlerBase.ResolveMostDerivedOverride, sharing its
-    // FindOverrideMethodInChain walker: the graph is keyed by OriginalDefinition, so unlike the emission
-    // side there is no generic re-Construct here — just normalize the found override to its definition.
-    IMethodSymbol ResolveLeafOverrideDef(IMethodSymbol def)
-        => HandlerBase.FindOverrideMethodInChain(_classSymbol, def, def.Name)?.OriginalDefinition ?? def;
-
-    // ── Wave-12 r2 [V1]: cross-dispatch landing target for the recursion graph ──
-    // A method/accessor dispatched through a VARIABLE receiver (same-typed field/local, base-typed
-    // reference) or an INTERFACE-typed receiver emits SetProgramVariable + SendCustomEvent — and when
-    // the receiver holds `this` at runtime, the event re-enters THIS program synchronously, exactly
-    // like a direct recursive call. These edges were invisible to the SCC analysis (the interface
-    // flavor entirely; the class flavor had the static edge but no spill site at emission), so a
-    // live local/param after the reentrant self-call was silently clobbered (VM-proven ref=36 vs 0
-    // field/local/base flavors, 180 vs 0 interface, 75 vs 60 property accessor, 69 vs 27 mutual).
-    // Returns the ORIGINAL DEFINITION of the local method the dispatch lands on when the receiver is
-    // this program (the class family's most-derived override — mirroring the chain-root export
-    // normalization the emission dispatches), or null when it can never land here (foreign class,
-    // unimplemented interface, static). HandlerBase.CrossDispatchLocalCallee mirrors this for the
-    // per-site Reentrant marking at emission.
-    IMethodSymbol CrossDispatchLocalTarget(IMethodSymbol target)
-    {
-        if (target == null || target.IsStatic) return null;
-        if (target.ContainingType?.TypeKind == TypeKind.Interface)
-        {
-            var impl = (_classSymbol.FindImplementationForInterfaceMember(target)
-                        ?? _classSymbol.FindImplementationForInterfaceMember(target.OriginalDefinition))
-                       as IMethodSymbol;
-            // FindImplementationForInterfaceMember returns the chain ROOT ([W5]) — the dispatch runs
-            // the receiver program's most-derived override, so leaf-resolve like the class flavor.
-            return impl == null ? null : ResolveLeafOverrideDef(impl.OriginalDefinition);
-        }
-        for (var t = _classSymbol; t != null; t = t.BaseType)
-            if (SymbolEqualityComparer.Default.Equals(t, target.ContainingType))
-                return ResolveLeafOverrideDef(target.OriginalDefinition);
-        return null;
-    }
-
-    /// <summary>[V1] arm shared by CollectInternalCallees / IsInternalCallTo / PropertyAccessorMatches:
-    /// true when <paramref name="op"/> is a variable-receiver (or interface-typed) member access whose
-    /// cross dispatch can land back on this program. Interface members dispatch cross for EVERY
-    /// receiver shape (a `(IFace)this` cast wraps the instance reference in a conversion).</summary>
-    static bool IsCrossDispatchReceiver(IOperation instance, ISymbol member)
-        => instance != null
-           && (instance is not IInstanceReferenceOperation
-               || member.ContainingType?.TypeKind == TypeKind.Interface);
-
     // True if the caller body contains a call to callee that is NOT in tail position (its result is used
     // by something after the call, so the caller's live values would be clobbered by a recursive re-entry).
     // The walk itself lives in TailCallAnalysis (shared with EmitPolicy.IsNonTailDispatchSite); this is
-    // the named-callee matcher's parameterization of it — `checkReturnInstanceLeg: true` and
-    // `ternaryPreciseReturn: false` reproduce this classifier's own return-position behavior exactly
-    // (see TailCallAnalysis's file header for what those two differences from the dispatch-site
-    // classifier actually are).
+    // the named-callee matcher's parameterization of it — the matchers are the resolver's classifier
+    // surface (C4), and `checkReturnInstanceLeg: true` / `ternaryPreciseReturn: false` reproduce this
+    // classifier's own return-position behavior exactly (see TailCallAnalysis's file header for what
+    // those two differences from the dispatch-site classifier actually are).
     bool HasNonTailCallTo(IOperation op, IMethodSymbol callee)
         => TailCallAnalysis.HasNonTailCall(op,
-            (IOperation o, out IOperation matched) => IsInternalCallTo(o, callee, out matched),
-            (pr, getter) => PropertyAccessorMatches(pr, callee, getter),
+            (IOperation o, out IOperation matched) => EdgeResolver.IsInternalCallTo(o, callee, out matched),
+            (pr, getter) => EdgeResolver.PropertyAccessorMatches(pr, callee, getter),
             checkReturnInstanceLeg: true,
             ternaryPreciseReturn: false);
-
-    // [Y5]/[Y6]/[Y13]: accessor-SPECIFIC twin of IsInternalCallTo's property arm — true when the
-    // chosen accessor (static binding OR the emission-faithful leaf override) IS the callee. The
-    // either-accessor match is correct for simple SET (only the setter runs) but too coarse for
-    // compound/inc-dec, where the getter runs first and its result is read afterwards.
-    bool PropertyAccessorMatches(IPropertyReferenceOperation pr, IMethodSymbol callee, bool getter)
-    {
-        var acc = getter ? pr.Property.GetMethod : pr.Property.SetMethod;
-        // Wave-12 r2 [V1]: variable-receiver / interface accessor dispatch — match the local method
-        // the cross dispatch can land on (same rationale as IsInternalCallTo's cross arms).
-        if (IsCrossDispatchReceiver(pr.Instance, pr.Property))
-            return CrossDispatchLocalTarget(acc) is { } xacc
-                && SymbolEqualityComparer.Default.Equals(xacc, callee);
-        // Wave-14 r4: struct accessor on a fresh instance (a `next[d-1] += ..` / `next.P--` compound or
-        // inc-dec through a struct-typed local) — the specific get/set accessor on a user-struct receiver
-        // is the callee, independent of a `this` receiver (mirrors the IsInternalCallTo struct arm).
-        if (pr.Property is { IsStatic: false } && pr.Property.ContainingType is INamedTypeSymbol saCt
-            && EmitPolicy.IsObjectArrayEmulated(saCt)
-            && acc != null && SymbolEqualityComparer.Default.Equals(acc.OriginalDefinition, callee))
-            return true;
-        if (pr.Instance is not IInstanceReferenceOperation) return false;
-        if (acc != null && SymbolEqualityComparer.Default.Equals(acc.OriginalDefinition, callee))
-            return true;
-        if (LeafPropertyTarget(pr) is { } lp)
-        {
-            var leafAcc = getter ? lp.GetMethod : lp.SetMethod;
-            if (leafAcc != null && SymbolEqualityComparer.Default.Equals(leafAcc.OriginalDefinition, callee))
-                return true;
-        }
-        return false;
-    }
-
-    /// <summary>[V1 unification] The per-NODE call-target classifier shared by the recursion-graph edge
-    /// walk (<see cref="CollectInternalCallees"/>) and the per-site non-tail classifier
-    /// (<see cref="IsInternalCallTo"/>). Yields every method (OriginalDefinition, or the emission-faithful
-    /// leaf/cross target) that a SINGLE operation node can dispatch to: an invocation's static /
-    /// this-virtual-leaf-override / variable-or-interface-cross targets; a ctor; and a property or indexer
-    /// reference's this / leaf-override / variable-or-interface-cross / user-struct accessor pairs (both
-    /// get and set, conservatively — a write-position reference yielding the getter only over-spills,
-    /// §8-3, never corrupts). Each arm was VM-proven necessary (wave-9 r2/r3 [W1..W3], wave-12 r2 [V1],
-    /// wave-14 r4): recursion threaded through leaf-override / variable-receiver / fresh-struct-instance
-    /// accessors was invisible to the SCC analysis and the accessor frame never spilled (e.g. 5 vs CLR 11,
-    /// 305 vs 605, computed-property factorial 1 vs 120). Extracting the two formerly hand-mirrored switches
-    /// into ONE enumerator removes the drift that caused those wave-14 r4 miscompiles — the arms can no
-    /// longer fall out of lockstep. Includes the user-defined OPERATOR edge (binary / unary /
-    /// compound-assignment / increment-decrement forms all carry an OperatorMethod) — B49: it formerly
-    /// lived only in CollectInternalCallees, so IsInternalCallTo could not see it and a recursive struct
-    /// operator was never frame-spilled (VM-proven ref=15/usugar=0); routing it through here makes both
-    /// consumers agree and fixes the spill.</summary>
-    internal IEnumerable<IMethodSymbol> EnumerateInternalCallTargets(IOperation op)
-    {
-        switch (op)
-        {
-            case IInvocationOperation inv:
-                yield return inv.TargetMethod.OriginalDefinition;
-                if (LeafCallTarget(inv) is { } leafT) yield return leafT;
-                if (IsCrossDispatchReceiver(inv.Instance, inv.TargetMethod)
-                    && CrossDispatchLocalTarget(inv.TargetMethod) is { } crossT)
-                    yield return crossT;
-                // CA-v2b-2: a polymorphic call dispatches to EVERY override in its closed-world set. Yield
-                // each so the recursion-graph edge walk AND the per-site non-tail spill classifier (both read
-                // this one enumerator) see a recursive override — including a `this.M()` that re-enters
-                // through a spawned object's ctor (Rb..ctor -> Rd.Make -> new Rd -> Rb..ctor). The dispatch-
-                // site predicate is SHARED with the emission branch (VirtualDispatch.IsDispatchSite) so the
-                // two cannot drift; the receiver's declared type is used here (Phase-1, no monomorphization
-                // map). Over-yield only ever over-spills (sound).
-                //
-                // CW5: this def-keyed walk has no type-param map, so a receiver whose DECLARED type still
-                // carries a type parameter (a `T n` constrained to a user class, or an open `Box<T>` this)
-                // cannot be resolved the way emission resolves it (ResolveType) — yet emission DOES lower
-                // the site to a typeobj chain. Pattern-matching INamedTypeSymbol alone yielded ZERO edges
-                // there, hiding the cycle from the SCC analysis and under-spilling polymorphic recursion
-                // (VM-proven 37 vs CLR 67: the frame clobbered on re-entry). Over-approximate instead:
-                // yield the slot's most-derived impl for EVERY minted class (same base exclusion as
-                // IsDispatchSite; over-yield only ever over-spills).
-                if (ClassTypeObjectContext.ContainsTypeParameter(inv.Instance?.Type))
-                {
-                    if (VirtualDispatch.IsVirtualCall(inv.TargetMethod)
-                        && !(inv.Instance is IInstanceReferenceOperation gir
-                             && gir.Syntax is BaseExpressionSyntax))
-                    {
-                        var slotDef = VirtualDispatch.SlotIntroducer(inv.TargetMethod);
-                        foreach (var concrete in _ctx.ClassTypes.MintedClasses)
-                            if (VirtualDispatch.MostDerivedImpl(concrete, slotDef) is { } genImpl)
-                                yield return genImpl.OriginalDefinition;
-                    }
-                }
-                else if (inv.Instance?.Type is INamedTypeSymbol vrecv
-                    && VirtualDispatch.IsDispatchSite(inv.TargetMethod, inv.Instance, vrecv))
-                    foreach (var vt in _ctx.VirtualDispatch.ResolveTargets(vrecv, inv.TargetMethod))
-                        yield return vt.Impl.OriginalDefinition;
-                break;
-            case IObjectCreationOperation { Constructor: { } ctor }:
-                yield return ctor.OriginalDefinition;
-                break;
-            case IPropertyReferenceOperation pr:
-                // this-receiver accessor call (both accessors + the emission-faithful leaf override).
-                if (pr.Instance is IInstanceReferenceOperation)
-                {
-                    if (pr.Property.GetMethod is { } pg) yield return pg.OriginalDefinition;
-                    if (pr.Property.SetMethod is { } ps) yield return ps.OriginalDefinition;
-                    if (LeafPropertyTarget(pr) is { } lp)
-                    {
-                        if (lp.GetMethod is { } lg) yield return lg.OriginalDefinition;
-                        if (lp.SetMethod is { } ls) yield return ls.OriginalDefinition;
-                    }
-                }
-                // variable-receiver / interface-typed accessor dispatch that can land back on this program.
-                if (IsCrossDispatchReceiver(pr.Instance, pr.Property))
-                {
-                    if (CrossDispatchLocalTarget(pr.Property.GetMethod) is { } cg) yield return cg;
-                    if (CrossDispatchLocalTarget(pr.Property.SetMethod) is { } cs) yield return cs;
-                }
-                // computed property / indexer on a USER-STRUCT receiver — `this` OR a fresh struct
-                // instance (structs compile into this program's accessor functions).
-                if (pr.Property is { IsStatic: false } sprop
-                    && sprop.ContainingType is INamedTypeSymbol sprct && EmitPolicy.IsObjectArrayEmulated(sprct))
-                {
-                    if (sprop.GetMethod is { } sg) yield return sg.OriginalDefinition;
-                    if (sprop.SetMethod is { } ss) yield return ss.OriginalDefinition;
-                }
-                break;
-        }
-        // User-defined operator call — every form that resolves one carries the OperatorMethod: a plain
-        // `a + b` (IBinaryOperation) / `-a` (IUnaryOperation), a `a += b` (ICompoundAssignmentOperation),
-        // and a `a++`/`--a` (IIncrementOrDecrementOperation). A BCL operator has a null OperatorMethod and
-        // is naturally excluded; the consumers' internalMethods / callee filter restricts to registered
-        // struct operators. (B49 — see the summary above.)
-        var opMethod = (op as IBinaryOperation)?.OperatorMethod
-            ?? (op as IUnaryOperation)?.OperatorMethod
-            ?? (op as ICompoundAssignmentOperation)?.OperatorMethod
-            ?? (op as IIncrementOrDecrementOperation)?.OperatorMethod;
-        if (opMethod != null) yield return opMethod.OriginalDefinition;
-    }
-
-    bool IsInternalCallTo(IOperation op, IMethodSymbol callee, out IOperation call)
-    {
-        call = null;
-        foreach (var t in EnumerateInternalCallTargets(op))
-            if (SymbolEqualityComparer.Default.Equals(t, callee)) { call = op; return true; }
-        return false;
-    }
 
     // M5b legacy oracle — deleted after C2 proves the arms (production: RecursionNodeWalk).
     // Collect every local function declared anywhere in an operation tree (transitive: nested too).
@@ -3555,8 +3321,9 @@ public class UasmEmitter
         if (op == null) return;
         // Every call-target shape (invocation static/leaf/cross, ctor, property this/leaf/cross/user-struct,
         // and the user-defined operator) is enumerated by the shared classifier, so this walk and
-        // IsInternalCallTo cannot drift (see EnumerateInternalCallTargets).
-        foreach (var t in EnumerateInternalCallTargets(op))
+        // IsInternalCallTo cannot drift (see ResolvedEdgeResolver.EnumerateInternalCallTargets — the
+        // classifier core relocated there at C4; this legacy walk reads the same single source).
+        foreach (var t in EdgeResolver.EnumerateInternalCallTargets(op))
             if (internalMethods.Contains(t)) result.Add(t);
         foreach (var child in op.ChildOps())
         {
@@ -3703,93 +3470,6 @@ public class UasmEmitter
                 && m.ContainingType.TypeArguments.Any(ta => ta is ITypeParameterSymbol))
             && !(m.IsGenericMethod
                 && m.TypeArguments.Any(ta => ta is ITypeParameterSymbol));
-
-    /// <summary>The six non-using node shapes referencing a user-struct member (ctor/instance-method/
-    /// computed-property/subpattern-property/operator/conversion), yielded as-observed (constructed
-    /// symbol, ungated) — shared by CollectStructMethodsInOperation (registration: gates with
-    /// IsCollectibleStructMember, keeps the constructed symbol) and CollectStructMemberDefinitions
-    /// (recursion/capture-scope root expansion: ungated, projects .OriginalDefinition). `using`-resource
-    /// dispose is NOT included here — the two callers handle it with different resource shapes (see
-    /// each caller) and must not be merged.</summary>
-    internal static IEnumerable<IMethodSymbol> EnumerateStructMemberRefs(IOperation op)
-    {
-        // Parameterized user-struct / v1-class constructor: new V(...) / new C(...).
-        if (op is IObjectCreationOperation oc && oc.Constructor != null
-            && oc.Type is INamedTypeSymbol nt && EmitPolicy.IsObjectArrayEmulated(nt)
-            && oc.Arguments.Length > 0 && !oc.Constructor.IsImplicitlyDeclared)
-            yield return oc.Constructor;
-        // User-struct instance method: v.Method(...). Feature G: yield the CONSTRUCTED symbol
-        // (roadmap B36 residue — a struct declaring its OWN type parameter used to be collected by
-        // OriginalDefinition and rejected loudly here; now the receiver's concrete T is carried
-        // through, mirroring RegisterGenericSpecialization's per-spec discipline for the
-        // containing-type dimension). Non-generic structs are unaffected: tm == tm.OriginalDefinition
-        // there, so this is byte-identical for them.
-        if (op is IInvocationOperation inv && inv.TargetMethod is { IsStatic: false } tm
-            && tm.MethodKind == MethodKind.Ordinary && !tm.IsImplicitlyDeclared
-            && tm.ContainingType is INamedTypeSymbol it && EmitPolicy.IsObjectArrayEmulated(it)
-            // CA-v2b-2: at a virtual dispatch site the STATIC target (a base method) is not the runtime
-            // callee — the inline chain calls the resolved override. Collecting the static base here walked a
-            // never-dispatched base body (e.g. `RecBse.Spawn`'s `new RecBse()`) and phantom-minted a class no
-            // live site ever creates. The real dispatch targets (the most-derived impl per minted class) are
-            // seeded by CollectClassMintReach's virtual-slot walk, so skip the static base at dispatch sites.
-            && !VirtualDispatch.IsDispatchSite(tm, inv.Instance, inv.Instance?.Type as INamedTypeSymbol))
-            yield return tm;
-        // CA-v2 M1: a `: base(...)` / `: this(...)` ctor initializer is an IInvocationOperation whose
-        // target is a CONSTRUCTOR (MethodKind.Constructor, missed by the Ordinary arm above). The base
-        // ctor function is otherwise never registered at Phase 1 -> its on-demand emission from the
-        // derived ctor prologue lands mid-drain but its reach/recursion node is absent (VM-faulted:
-        // the derived ctor jumped to an unemitted base ctor). Collect the explicit-ctor target here.
-        if (op is IInvocationOperation cinv && cinv.TargetMethod is { MethodKind: MethodKind.Constructor } ctm
-            && !ctm.IsImplicitlyDeclared
-            && ctm.ContainingType is INamedTypeSymbol cit && EmitPolicy.IsObjectArrayEmulated(cit))
-            yield return ctm;
-        // MG auto-wrap (2026-07-11 wave-lite): a class/struct instance member reached ONLY as a METHOD
-        // GROUP (`o.M` -> a receiver-bridge delegate) is otherwise invisible to this collector (which
-        // sees invocations), so it registered on demand at emit time AFTER BuildRecursionInfo -> no
-        // graph node, no reentrancy spill when the bundle re-enters it ([Z1]/[Y7] class, VM-proven
-        // under-spill: a self-recursive class MG returned 25025 vs the CLR's 40025). Seed it here so
-        // it becomes a reach root + graph node + escape target.
-        if (op is IMethodReferenceOperation mgr && mgr.Method is { IsStatic: false } mgm
-            && mgm.MethodKind == MethodKind.Ordinary && !mgm.IsImplicitlyDeclared
-            && mgm.ContainingType is INamedTypeSymbol mgit && EmitPolicy.IsObjectArrayEmulated(mgit))
-            yield return mgm;
-        // Computed (non-auto) user-struct property: v.Prop (read) or v.Prop = x (write). Auto-properties use
-        // their backing-field slot directly (no method), but a computed accessor must be inlined as a struct
-        // instance method. Yield both accessors (the reference alone doesn't reveal read-vs-write context).
-        // A user-struct indexer (s[i]) is just a parameterized computed property (never auto-backed), so it
-        // is collected the same way — its accessors carry the index args after the synthetic receiver.
-        if (op is IPropertyReferenceOperation pr
-            && pr.Property is { IsStatic: false } prop
-            && pr.Property.ContainingType is INamedTypeSymbol pit && EmitPolicy.IsObjectArrayEmulated(pit)
-            && IsComputedProperty(prop))
-        {
-            if (prop.GetMethod != null) yield return prop.GetMethod;
-            if (prop.SetMethod != null) yield return prop.SetMethod;
-        }
-        // Property-pattern subpattern: `p is { Doubled: ... }` reads Doubled via an IMPLICIT getter call,
-        // not an explicit IPropertyReferenceOperation, so yield a computed user-struct property's getter
-        // here too — else the pattern lowering emits a bogus accessor extern for an unregistered getter.
-        if (op is IPropertySubpatternOperation sub && sub.Member is IPropertyReferenceOperation spr
-            && spr.Property is { IsStatic: false } sprop
-            && spr.Property.ContainingType is INamedTypeSymbol spit && EmitPolicy.IsObjectArrayEmulated(spit)
-            && IsComputedProperty(sprop) && sprop.GetMethod != null)
-            yield return sprop.GetMethod;
-        // User-struct operator: v1 + v2, -v, s += t, c++ (static operator methods). Compound-assignment and
-        // increment/decrement carry their operator method too, so yield those so the emit side can JUMP to
-        // the user operator instead of a bogus SystemObjectArray.__op_* extern.
-        var opMethod = (op as IBinaryOperation)?.OperatorMethod
-            ?? (op as IUnaryOperation)?.OperatorMethod
-            ?? (op as ICompoundAssignmentOperation)?.OperatorMethod
-            ?? (op as IIncrementOrDecrementOperation)?.OperatorMethod;
-        if (opMethod is { MethodKind: MethodKind.UserDefinedOperator }
-            && opMethod.ContainingType is INamedTypeSymbol ot && EmitPolicy.IsObjectArrayEmulated(ot))
-            yield return opMethod;
-        // User-struct CONVERSION operator (implicit/explicit). MethodKind is Conversion (not UserDefinedOperator),
-        // so it needs its own arm — invoked implicitly by an IConversionOperation, routed to the method on emit.
-        if (op is IConversionOperation convOp && convOp.OperatorMethod is { MethodKind: MethodKind.Conversion } convM
-            && convM.ContainingType is INamedTypeSymbol convCt && EmitPolicy.IsObjectArrayEmulated(convCt))
-            yield return convM;
-    }
 
     internal bool IsBaseInstanceMethod(IMethodSymbol method)
     {

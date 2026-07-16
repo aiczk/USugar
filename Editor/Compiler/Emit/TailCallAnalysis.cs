@@ -13,9 +13,10 @@ using Microsoft.CodeAnalysis.Operations;
 //
 // The two callers differ in two genuine ways, both expressed as parameters rather than forked code:
 //   - MATCHER SHAPE: EmitContext's delegate-dispatch-site matcher only ever matches a specific
-//     IInvocationOperation by reference equality; UasmEmitter's named-callee matcher (IsInternalCallTo)
-//     can also match a constructor call or a this-property accessor, and needs getter/setter
-//     disambiguation for the compound-assignment / inc-dec statement forms (PropertyAccessorMatches).
+//     IInvocationOperation by reference equality; UasmEmitter's named-callee matcher
+//     (ResolvedEdgeResolver.IsInternalCallTo, C4) can also match a constructor call or a this-property
+//     accessor, and needs getter/setter disambiguation for the compound-assignment / inc-dec statement
+//     forms (ResolvedEdgeResolver.PropertyAccessorMatches).
 //     A matcher that structurally cannot produce a property-shaped match (the dispatch-site one) just
 //     leaves those arms permanently inert — same effect as never having had them.
 //   - RETURN-POSITION PRECISION: EmitContext's classifier always resolves `return expr;` through a

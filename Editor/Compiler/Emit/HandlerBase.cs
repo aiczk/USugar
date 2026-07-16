@@ -1612,10 +1612,10 @@ public abstract partial class HandlerBase
     // The "walk _classSymbol's BaseType chain; for each same-named member, walk its
     // Overridden{Method,Property} chain looking for a match on the target's OriginalDefinition" search
     // was independently copy-pasted four times (this file's method/property flavors, plus
-    // UasmEmitter.ResolveLeafOverrideDef/LeafPropertyTarget for the recursion-graph's emission-faithful
-    // mirror of this same dispatch) — the two walker methods below are the single shared core; each of
-    // the four call sites differs only in what it does with the raw match (generic re-Construct here,
-    // OriginalDefinition-normalization in UasmEmitter) and its own guards.
+    // ResolvedEdgeResolver.ResolveLeafOverrideDef/LeafPropertyTarget for the recursion-graph's
+    // emission-faithful mirror of this same dispatch) — the two walker methods below are the single
+    // shared core; each of the four call sites differs only in what it does with the raw match (generic
+    // re-Construct here, OriginalDefinition-normalization in the resolver) and its own guards.
 
     /// <summary>Search <paramref name="classSymbol"/>'s BaseType chain for a same-named method whose
     /// OverriddenMethod chain reaches <paramref name="def"/> (an OriginalDefinition). Returns the found
@@ -2563,7 +2563,7 @@ public abstract partial class HandlerBase
     /// override of the target (the chain-root export the dispatch names runs the receiver
     /// program's own override), or the interface member's local implementation. Null when the
     /// dispatch can never land on this program (foreign class, unimplemented interface, static).
-    /// Mirrors UasmEmitter.CrossDispatchLocalTarget (the analysis side that adds the graph edge).</summary>
+    /// Mirrors ResolvedEdgeResolver.CrossDispatchLocalTarget (the analysis side that adds the graph edge).</summary>
     protected IMethodSymbol CrossDispatchLocalCallee(IMethodSymbol target)
     {
         if (target == null || target.IsStatic) return null;
