@@ -1020,7 +1020,14 @@ public class UasmEmitter
         // IsClosedForeignStaticTarget / methodSet exclusion) stay on the projection side — meaning preserved.
         var baseInstanceMethods = plan.BaseInstanceMethods;
         var structMethods = plan.StructMethods;
-        var foreignStatics = plan.ForeignStatics;
+        // C4 retirement (the C2-incidental duplicate): a static LOCAL FUNCTION declared inside a foreign
+        // static classifies as a foreign static itself (IsForeignStatic has no MethodKind filter — its
+        // reach leg seeding BodyByDef is the C2-proven recursion-node arm and stays), but local functions
+        // register on demand at their declaration statement (or the [Y9] forward-reference arm), which
+        // overwrote this eager Phase-1 copy in _methodFunctions and left it emitted-but-unreachable (a
+        // dead __N_ duplicate body + heap vars, probe-proven __2_Twice/__3_Twice). Gate the REGISTRATION
+        // projection only.
+        var foreignStatics = plan.ForeignStatics.Where(fm => fm.MethodKind != MethodKind.LocalFunction).ToArray();
         foreach (var fm in foreignStatics)
         {
             EmitPolicy.RejectInParameters(fm); // round-7 follow-up [Q3]
@@ -2594,14 +2601,12 @@ public class UasmEmitter
     // tail dispatch sites are spared so bundle-driven deep tail recursion never spills (§4.4).
     void BuildRecursionInfo()
     {
-        // M5b: the four private per-op walks (CollectInternalCallees / CollectThisFieldTouches /
-        // CollectLocalFunctions / CollectLambdaNodes) are replaced by ONE resolver-driven pass over the
-        // recursion node set's bodies (RecursionNodeWalk — TargetRole.CallEdge's production consumer);
-        // AssembleRecursionFacets consumes its products unchanged. Runs HERE (post VirtualDispatch seed
-        // at Emit's head) — the CallEdge virtual arm needs the seeded instance, so the pass must not
-        // move into the Phase-1 reach walk. The legacy walks stay compiled as the differential oracle
-        // (DebugComputeLegacyRecursionInfo, diffed per battery shape by RecursionFacetEquivalenceTests)
-        // until C2/C4 prove the remaining arms and delete them.
+        // M5b: ONE resolver-driven pass over the recursion node set's bodies (RecursionNodeWalk —
+        // TargetRole.CallEdge's production consumer); AssembleRecursionFacets consumes its products.
+        // Runs HERE (post VirtualDispatch seed at Emit's head) — the CallEdge virtual arm needs the
+        // seeded instance, so the pass must not move into the Phase-1 reach walk. The committed facet
+        // census fixtures (RecursionFacetEquivalenceTests, Golden/FacetCensus) are the permanent
+        // oracle; the legacy private walks they were diffed against were deleted at C4 retirement.
         var facets = AssembleRecursionFacets(
             new RecursionNodeWalk(EdgeResolver, _reach,
                 _fieldInitOps.Select(fi => fi.initOp)).Run());
@@ -2610,142 +2615,9 @@ public class UasmEmitter
             facets.ReentrantSites, facets.TailSparedSites, facets.Nodes);
     }
 
-    // M5b legacy oracle — deleted after C2 proves the arms. Recomputes the six facets from the legacy
-    // private walks on demand (post-Emit, from RecursionFacetEquivalenceTests) so the old-vs-new
-    // differential keeps guarding the swap; the back half (AssembleRecursionFacets) is shared, so a
-    // facet diff isolates the walk.
-    internal RecursionInfo DebugComputeLegacyRecursionInfo()
-    {
-        var f = AssembleRecursionFacets(LegacyRecursionWalk());
-        var info = new RecursionInfo();
-        info.Populate(f.Recursive, f.CycleEdges, f.ThisTouches, f.ReentrantSites, f.TailSparedSites, f.Nodes);
-        return info;
-    }
-
-    // M5b legacy oracle — deleted after C2 proves the arms. The PRIVATE recursive walks
-    // (CollectLocalFunctions / CollectInternalCallees / CollectLambdaNodes / CollectThisFieldTouches)
-    // BuildRecursionInfo consumed before the resolver-driven RecursionNodeWalk, producing the same
-    // walk-level products so RecursionFacetEquivalenceTests can diff legacy vs production per shape.
-    // The node source is the M5c-unified reach fixpoint (BodyByDef + GenericForeignStaticBodies);
-    // order-independent — the facets are SCC/fixpoint/set invariants.
-    RecursionWalkResult LegacyRecursionWalk()
-    {
-        var roots = _reach.BodyByDef.Keys
-            .Concat(_reach.GenericForeignStaticBodies.Keys)
-            .Where(m => m.DeclaringSyntaxReferences.Length > 0)
-            .Distinct(SymbolEqualityComparer.Default)
-            .Cast<IMethodSymbol>()
-            .ToList();
-
-        // Local functions are registered lazily during emission (after this pass), so discover them now by
-        // walking the bodies — otherwise a recursive local function would not be detected and would corrupt
-        // the flat heap. Transitive: a local function may contain nested local functions. F1: every root is
-        // a reach definition, so its body comes from the reach result (BodyByDef) — no re-fetch.
-        var localFuncs = new List<IMethodSymbol>();
-        foreach (var m in roots)
-        {
-            var op = ReachRootBody(m); // C2: a root's body is authoritative in BodyByDef (loud on miss)
-            if (op != null) CollectLocalFunctions(op, localFuncs);
-        }
-
-        var internalMethods = roots.Concat(localFuncs)
-            .Distinct(SymbolEqualityComparer.Default).Cast<IMethodSymbol>().ToArray();
-        var methodSet = new HashSet<IMethodSymbol>(internalMethods, SymbolEqualityComparer.Default);
-        var localFuncSet = new HashSet<IMethodSymbol>(localFuncs, SymbolEqualityComparer.Default);
-
-        var bodies = new Dictionary<IMethodSymbol, IOperation>(SymbolEqualityComparer.Default);
-        var edges = new Dictionary<IMethodSymbol, HashSet<IMethodSymbol>>(SymbolEqualityComparer.Default);
-        foreach (var m in internalMethods)
-        {
-            var callees = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
-            // C2: a reach root's body is authoritative in BodyByDef (LOUD on miss — a missing root is a
-            // fixpoint invariant violation, not a fetch to paper over). A LOCAL FUNCTION is discovered
-            // during THIS analysis and is legitimately NOT a reach entry — that is the ONE explicit fetch
-            // arm. Every internalMethod has syntax, so it becomes a graph node UNCONDITIONALLY — an
-            // auto-property accessor's operation is a bodyless null yet must still be a node
-            // (CollectInternalCallees no-ops on null); dropping null-body nodes would lose them from
-            // RecursionGraphNodes.
-            IOperation op = _reach.BodyByDef.TryGetValue(m, out var cached) ? cached
-                : _reach.GenericForeignStaticBodies.TryGetValue(m, out var suppCached) ? suppCached
-                : localFuncSet.Contains(m) ? GetMethodBodyOperation(m)
-                : throw ReachMiss(m);
-            var body = (op as ILocalFunctionOperation)?.Body ?? op;
-            bodies[m] = body;
-            CollectInternalCallees(body, methodSet, callees);
-            edges[m] = callees;
-        }
-
-        // Lambda nodes (§4.2a). Collected from the ROOT-method bodies and the field-initializer operations
-        // so each lambda is keyed in exactly one operation-tree family (local-function bodies are
-        // separate GetOperation trees, so collecting from them too would yield duplicate-but-distinct
-        // instances). Emit-time matching is value-based for symbols (Roslyn lambda/local-function
-        // symbols compare by syntax + container) and red-syntax-based for dispatch sites.
-        var lambdaNodes = new List<(IMethodSymbol Sym, IOperation Body, IAnonymousFunctionOperation Op)>();
-        foreach (var m in roots)
-            if (bodies.TryGetValue(m, out var rootBody))
-                CollectLambdaNodes(rootBody, lambdaNodes);
-        foreach (var (_, initOp, _) in _fieldInitOps)
-            CollectLambdaNodes(initOp, lambdaNodes);
-
-        foreach (var (sym, body, _) in lambdaNodes)
-        {
-            if (edges.ContainsKey(sym)) continue;
-            bodies[sym] = body;
-            var lambdaCallees = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
-            CollectInternalCallees(body, methodSet, lambdaCallees);
-            edges[sym] = lambdaCallees;
-        }
-
-        var allNodes = internalMethods.Concat(lambdaNodes.Select(l => l.Sym))
-            .Distinct(SymbolEqualityComparer.Default).Cast<IMethodSymbol>().ToArray();
-
-        // Round-7 follow-up [Q5]: per-node DIRECT this-field touch sets + accessor edges (the transitive
-        // closure runs in AssembleRecursionFacets, over the synthetic-edge-augmented graph).
-        var thisTouches = new Dictionary<IMethodSymbol, HashSet<IFieldSymbol>>(SymbolEqualityComparer.Default);
-        var accessorEdges = new Dictionary<IMethodSymbol, HashSet<IMethodSymbol>>(SymbolEqualityComparer.Default);
-        foreach (var node in allNodes)
-        {
-            var touch = new HashSet<IFieldSymbol>(SymbolEqualityComparer.Default);
-            var acc = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
-            if (bodies.TryGetValue(node, out var touchBody) && touchBody != null)
-                CollectThisFieldTouches(touchBody, touch, acc);
-            thisTouches[node] = touch;
-            accessorEdges[node] = acc;
-        }
-
-        // M5b legacy oracle — the escape facet, recomputed by the legacy full-descent collectors over
-        // the root bodies + field-initializer trees (production: RecursionNodeWalk's per-op resolver
-        // consumption during the one pass; C3 moved these calls here from AssembleRecursionFacets so
-        // the escape collection stays inside the walk-level differential).
-        var escaped = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
-        foreach (var m in roots)
-            if (bodies.TryGetValue(m, out var escBody))
-                CollectEscapedDelegateTargets(escBody, methodSet, escaped);
-        foreach (var (_, initOp, _) in _fieldInitOps)
-            CollectEscapedDelegateTargets(initOp, methodSet, escaped);
-        var variantEscapeSigs = new List<(IMethodSymbol Method, string Sig)>();
-        foreach (var m in roots)
-            if (bodies.TryGetValue(m, out var vBody))
-                CollectVariantEscapeSigs(vBody, methodSet, variantEscapeSigs);
-        foreach (var (_, initOp, _) in _fieldInitOps)
-            CollectVariantEscapeSigs(initOp, methodSet, variantEscapeSigs);
-
-        return new RecursionWalkResult
-        {
-            AllNodes = allNodes,
-            Bodies = bodies,
-            Edges = edges,
-            DirectThisTouches = thisTouches,
-            AccessorEdges = accessorEdges,
-            EscapedTargets = escaped,
-            VariantEscapeSigs = variantEscapeSigs,
-        };
-    }
-
     // The walk-independent back half: escape sets, synthetic dispatch edges, the this-field-touch
     // closure, Tarjan SCC, and the per-site Reentrant/TailSpared marking — consumes the walk-level
-    // products (RecursionWalkResult) and returns the six RecursionInfo facets. Shared verbatim by the
-    // production pass and the legacy differential oracle, so a facet diff isolates the WALK.
+    // products (RecursionWalkResult) and returns the six RecursionInfo facets.
     (Dictionary<IMethodSymbol, HashSet<IMethodSymbol>> Recursive,
         Dictionary<IMethodSymbol, HashSet<IMethodSymbol>> CycleEdges,
         Dictionary<IMethodSymbol, HashSet<IFieldSymbol>> ThisTouches,
@@ -3065,79 +2937,6 @@ public class UasmEmitter
         return false;
     }
 
-    // M5b legacy oracle — deleted after C2 proves the arms (production: RecursionNodeWalk).
-    // Collect every lambda (anonymous function) with its body — each becomes its own SCC node (§4.2).
-    // Descends everywhere (nested lambdas / lambdas inside local functions are nodes too).
-    static void CollectLambdaNodes(IOperation op,
-        List<(IMethodSymbol Sym, IOperation Body, IAnonymousFunctionOperation Op)> result)
-    {
-        if (op == null) return;
-        if (op is IAnonymousFunctionOperation af && af.Symbol != null && af.Body != null)
-            result.Add((af.Symbol, af.Body, af));
-        foreach (var child in op.ChildOps())
-            CollectLambdaNodes(child, result);
-    }
-
-    // M5b legacy oracle — deleted after C2 proves the arms (production: the resolver's EscapeTarget
-    // arm, consumed by RecursionNodeWalk).
-    // EscapeSet collection (§4.1): targets of every IDelegateCreationOperation that resolve to an
-    // internal function — same-class method groups (incl. local functions) and lambdas. Full descent.
-    // Wave-9 round-5 [X1]: a this-receiver VIRTUAL method-group conversion in an inherited base body
-    // statically binds the BASE declaration, but the planner's bridge layout normalizes to the
-    // chain-root export whose body is the LEAF override (ResolveDelegateBridge) — so the escape set
-    // must contain the leaf's definition too, or a delegate-dispatch cycle through the override never
-    // gets a synthetic edge and its frames are never spilled (VM-proven 66 vs 6).
-    void CollectEscapedDelegateTargets(IOperation op, HashSet<IMethodSymbol> internalMethods, HashSet<IMethodSymbol> result)
-    {
-        if (op == null) return;
-        if (op is IDelegateCreationOperation dc)
-        {
-            if (dc.Target is IMethodReferenceOperation mr && mr.Method != null)
-            {
-                var t = mr.Method.OriginalDefinition;
-                if (internalMethods.Contains(t)) result.Add(t);
-                if (EdgeResolver.LeafMethodRefTarget(mr) is { } leafT && internalMethods.Contains(leafT))
-                    result.Add(leafT);
-            }
-            else if (dc.Target is IAnonymousFunctionOperation af && af.Symbol != null)
-                result.Add(af.Symbol);
-        }
-        foreach (var child in op.ChildOps())
-            CollectEscapedDelegateTargets(child, internalMethods, result);
-    }
-
-    /// <summary>M5b legacy oracle — deleted after C2 proves the arms (production:
-    /// ResolvedEdgeResolver.ResolveVariantEscapeSigs, consumed by RecursionNodeWalk).
-    /// Variance design (2026-07-04 §2.2): collect (target, declared sig-S) pairs for every
-    /// VARIANT method-group delegate-creation site — a target reached through a sig adapter is escaped
-    /// under the ADAPTER's protocol sig (sig-S = the delegate type's OWN Invoke signature), not its own,
-    /// so the widened synthetic edge / SCC-reentrancy check must key on sig-S here (§5.4
-    /// SigFilterCoupledToVarianceReject). Mirrors CollectEscapedDelegateTargets's method-group arm but
-    /// omits its [X1] leaf-target resolution — an omission the PRODUCTION classifier CLOSED at C3
-    /// stage 2 (2026-07-16, see ResolveVariantEscapeSigs; VM-proven 205 vs CLR 715): this frozen
-    /// oracle deliberately RETAINS it, and the facet_variant_leaf_override_reentry census shape
-    /// asserts the exact production-minus-legacy delta instead of equality. The lambda arm stays
-    /// omitted in both (a lambda's sig is inferred from the delegate type, so it can never be
-    /// variant).</summary>
-    void CollectVariantEscapeSigs(IOperation op, HashSet<IMethodSymbol> internalMethods,
-        List<(IMethodSymbol Method, string Sig)> result)
-    {
-        if (op == null) return;
-        if (op is IDelegateCreationOperation { Target: IMethodReferenceOperation { Method: { } mr } } variantDc
-            && variantDc.Type is INamedTypeSymbol vDlgType && vDlgType.DelegateInvokeMethod is { } vInvoke)
-        {
-            var t = mr.OriginalDefinition;
-            if (internalMethods.Contains(t))
-            {
-                var sigS = DelegateAbi.BuildSigPart(vInvoke);
-                if (sigS != DelegateAbi.BuildSigPart(t))
-                    result.Add((t, sigS));
-            }
-        }
-        foreach (var child in op.ChildOps())
-            CollectVariantEscapeSigs(child, internalMethods, result);
-    }
-
     // ── Wave-12 [V1]: per-site dispatch-target provenance ──
     // A dispatch that reads a LOCAL whose every write (declaration initializer / simple assignment,
     // anywhere in the body tree, nested closures included) is a delegate CREATION has a provably
@@ -3275,62 +3074,6 @@ public class UasmEmitter
             (pr, getter) => EdgeResolver.PropertyAccessorMatches(pr, callee, getter),
             checkReturnInstanceLeg: true,
             ternaryPreciseReturn: false);
-
-    // M5b legacy oracle — deleted after C2 proves the arms (production: RecursionNodeWalk).
-    // Collect every local function declared anywhere in an operation tree (transitive: nested too).
-    static void CollectLocalFunctions(IOperation op, List<IMethodSymbol> result)
-    {
-        if (op == null) return;
-        if (op is ILocalFunctionOperation lf && lf.Symbol != null)
-            result.Add(lf.Symbol.OriginalDefinition);
-        foreach (var child in op.ChildOps())
-            CollectLocalFunctions(child, result);
-    }
-
-    // M5b legacy oracle — deleted after C2 proves the arms (production: RecursionNodeWalk).
-    // Round-7 follow-up [Q5]: direct this-FIELD touches (field reference through an implicit/
-    // explicit this/base receiver) + this-property ACCESSOR edges of one graph node. Nested local
-    // functions / lambdas are skipped like CollectInternalCallees — each is its own node, and the
-    // touch closure unions callee sets over the call graph (real + accessor + synthetic edges).
-    static void CollectThisFieldTouches(IOperation op, HashSet<IFieldSymbol> touch, HashSet<IMethodSymbol> accessorEdges)
-    {
-        if (op == null) return;
-        switch (op)
-        {
-            case IFieldReferenceOperation { Instance: IInstanceReferenceOperation } fr when !fr.Field.IsStatic:
-                touch.Add(fr.Field.OriginalDefinition);
-                break;
-            case IPropertyReferenceOperation { Instance: IInstanceReferenceOperation } pr:
-                if (pr.Property.GetMethod != null) accessorEdges.Add(pr.Property.GetMethod.OriginalDefinition);
-                if (pr.Property.SetMethod != null) accessorEdges.Add(pr.Property.SetMethod.OriginalDefinition);
-                break;
-        }
-        foreach (var child in op.ChildOps())
-        {
-            if (child is ILocalFunctionOperation || child is IAnonymousFunctionOperation) continue; // own nodes
-            CollectThisFieldTouches(child, touch, accessorEdges);
-        }
-    }
-
-    // M5b legacy oracle — deleted after C2 proves the arms (production: RecursionNodeWalk).
-    // Collect call targets that resolve to a registered internal method (same program, JUMP-based).
-    // Nested local functions are skipped — each is analysed as its own graph node, so their internal
-    // calls are not attributed to the enclosing method.
-    void CollectInternalCallees(IOperation op, HashSet<IMethodSymbol> internalMethods, HashSet<IMethodSymbol> result)
-    {
-        if (op == null) return;
-        // Every call-target shape (invocation static/leaf/cross, ctor, property this/leaf/cross/user-struct,
-        // and the user-defined operator) is enumerated by the shared classifier, so this walk and
-        // IsInternalCallTo cannot drift (see ResolvedEdgeResolver.EnumerateInternalCallTargets — the
-        // classifier core relocated there at C4; this legacy walk reads the same single source).
-        foreach (var t in EdgeResolver.EnumerateInternalCallTargets(op))
-            if (internalMethods.Contains(t)) result.Add(t);
-        foreach (var child in op.ChildOps())
-        {
-            if (child is ILocalFunctionOperation || child is IAnonymousFunctionOperation) continue; // own nodes
-            CollectInternalCallees(child, internalMethods, result);
-        }
-    }
 
     // Tarjan's strongly-connected-components algorithm (iterative, to avoid deep recursion on large graphs).
     static List<List<IMethodSymbol>> TarjanScc(IMethodSymbol[] nodes, Dictionary<IMethodSymbol, HashSet<IMethodSymbol>> edges)
@@ -3471,7 +3214,10 @@ public class UasmEmitter
             && !(m.IsGenericMethod
                 && m.TypeArguments.Any(ta => ta is ITypeParameterSymbol));
 
-    internal bool IsBaseInstanceMethod(IMethodSymbol method)
+    // C4 retirement dedup: the ONE IsBaseInstanceMethod (InvocationHandler carried an open-coded copy
+    // WITHOUT the [Y10] guard) — static, parameterized by the compiled class, so the handler, the
+    // resolver, and the emitter all read the same guarded predicate.
+    internal static bool IsBaseInstanceMethod(IMethodSymbol method, INamedTypeSymbol classSymbol)
     {
         if (method.IsStatic) return false;
         // Round-9 [Y10]: a LOCAL FUNCTION declared inside a base method's body has
@@ -3483,10 +3229,10 @@ public class UasmEmitter
         // [Y9] forward-reference arm), where the instantiation map is active.
         if (method.MethodKind == MethodKind.LocalFunction) return false;
         if (method.ContainingType.DeclaringSyntaxReferences.Length == 0) return false;
-        if (SymbolEqualityComparer.Default.Equals(method.ContainingType, _classSymbol)) return false;
+        if (SymbolEqualityComparer.Default.Equals(method.ContainingType, classSymbol)) return false;
         if (USugarCompilerHelper.IsFrameworkNamespace(method.ContainingType.ContainingNamespace)) return false;
         if (method.ContainingType.Name == "UdonSharpBehaviour") return false;
-        var bt = _classSymbol.BaseType;
+        var bt = classSymbol.BaseType;
         while (bt != null)
         {
             if (SymbolEqualityComparer.Default.Equals(bt, method.ContainingType)) return true;
@@ -3509,28 +3255,17 @@ public class UasmEmitter
         return _compilation.GetSemanticModel(syntax.SyntaxTree).GetOperation(syntax);
     }
 
-    /// <summary>M5b legacy oracle — deleted after C2 proves the arms (reachable from LegacyRecursionWalk
-    /// only). C2: the authoritative body of a REACH definition — from BodyByDef, fetched once by the
-    /// fixpoint. A miss is an invariant violation (the fixpoint was supposed to walk every reach root),
-    /// so it throws rather than silently re-fetching. The only legitimate non-reach body is a local
-    /// function discovered during recursion analysis, handled by LegacyRecursionWalk's explicit arm.</summary>
-    IOperation ReachRootBody(IMethodSymbol root)
-        => root != null && _reach.BodyByDef.TryGetValue(root, out var body) ? body
-         : root != null && _reach.GenericForeignStaticBodies.TryGetValue(root, out var suppBody) ? suppBody
-         : throw ReachMiss(root);
-
-    static System.InvalidOperationException ReachMiss(IMethodSymbol def)
-        => new($"ReachableBodies.BodyByDef has no entry for reach definition '{def?.ToDisplayString()}' — "
-             + "the reach fixpoint did not walk it (BodyByDef authoritativeness invariant violation).");
-
-    internal bool IsForeignStatic(IMethodSymbol method)
+    // C4 retirement dedup: the ONE IsForeignStatic (InvocationHandler carried a byte-identical
+    // open-coded copy) — static, parameterized by the compiled class. Extension methods: ReducedFrom
+    // holds the original static definition.
+    internal static bool IsForeignStatic(IMethodSymbol method, INamedTypeSymbol classSymbol)
     {
         var resolved = method.ReducedFrom ?? method;
         if (!resolved.IsStatic) return false;
         if (resolved.ContainingType.DeclaringSyntaxReferences.Length == 0) return false;
         // Static methods on a user UdonSharpBehaviour subclass are inlinable (no instance ⇒ no cross-program
         // SendCustomEvent path); the syntax-less base/SDK behaviours are already excluded above.
-        if (SymbolEqualityComparer.Default.Equals(resolved.ContainingType, _classSymbol)) return false;
+        if (SymbolEqualityComparer.Default.Equals(resolved.ContainingType, classSymbol)) return false;
         if (IsExternNamespace(resolved.ContainingType.ContainingNamespace)) return false;
         return true;
     }

@@ -11,9 +11,9 @@ using Microsoft.CodeAnalysis.Operations;
 /// C4 (M5d) completed the M0 plan: the CallEdge classifier core (EnumerateInternalCallTargets + the
 /// leaf/cross helpers) and EnumerateStructMemberRefs now LIVE here — the emitter keeps no copy of the
 /// classification logic and delegates its per-site consumers (HasNonTailCallTo's matchers, TailSpared
-/// marking, precise-dispatch provenance, the frozen legacy oracle) back to this class. Remaining
-/// emitter reads are context predicates/state only (IsForeignStatic / IsBaseInstanceMethod /
-/// EnumerateClassFieldInitOps / ClassSymbol / the seeded VirtualDispatch+ClassTypes).
+/// marking, precise-dispatch provenance) back to this class. Remaining
+/// emitter reads are context predicates/state only (the static IsForeignStatic / IsBaseInstanceMethod
+/// keyed by _emitter.ClassSymbol, EnumerateClassFieldInitOps, the seeded VirtualDispatch+ClassTypes).
 /// Built per-class — thread-safe (no shared mutable state beyond the emitter it reads).</summary>
 public sealed class ResolvedEdgeResolver
 {
@@ -90,13 +90,13 @@ public sealed class ResolvedEdgeResolver
     /// OriginalDefinitions (the supplementary sets are def-keyed).</summary>
     public IEnumerable<IMethodSymbol> ResolveForeignStaticSuppDefs(IOperation op)
     {
-        if (op is IInvocationOperation inv && _emitter.IsForeignStatic(inv.TargetMethod))
+        if (op is IInvocationOperation inv && UasmEmitter.IsForeignStatic(inv.TargetMethod, _emitter.ClassSymbol))
         {
             var original = inv.TargetMethod.ReducedFrom ?? inv.TargetMethod;
             if (original.IsGenericMethod || !UasmEmitter.IsClosedForeignStaticTarget(original))
                 yield return original.OriginalDefinition;
         }
-        if (op is IMethodReferenceOperation mref && _emitter.IsForeignStatic(mref.Method))
+        if (op is IMethodReferenceOperation mref && UasmEmitter.IsForeignStatic(mref.Method, _emitter.ClassSymbol))
         {
             var original = mref.Method.ReducedFrom ?? mref.Method;
             if (original.IsGenericMethod || !UasmEmitter.IsClosedForeignStaticTarget(original))
@@ -104,10 +104,10 @@ public sealed class ResolvedEdgeResolver
         }
         if (op is IPropertyReferenceOperation spr && spr.Property.IsStatic && UasmEmitter.IsComputedProperty(spr.Property))
         {
-            if (spr.Property.GetMethod is { } sg && _emitter.IsForeignStatic(sg)
+            if (spr.Property.GetMethod is { } sg && UasmEmitter.IsForeignStatic(sg, _emitter.ClassSymbol)
                 && (sg.IsGenericMethod || !UasmEmitter.IsClosedForeignStaticTarget(sg)))
                 yield return sg.OriginalDefinition;
-            if (spr.Property.SetMethod is { } ss && _emitter.IsForeignStatic(ss)
+            if (spr.Property.SetMethod is { } ss && UasmEmitter.IsForeignStatic(ss, _emitter.ClassSymbol)
                 && (ss.IsGenericMethod || !UasmEmitter.IsClosedForeignStaticTarget(ss)))
                 yield return ss.OriginalDefinition;
         }
@@ -147,12 +147,12 @@ public sealed class ResolvedEdgeResolver
     /// through `this`). Registration-free but a MAIN-fixpoint recursion/reach root. Yields OriginalDefinitions.</summary>
     public IEnumerable<IMethodSymbol> ResolveOpenBaseGenericDefs(IOperation op)
     {
-        if (op is IInvocationOperation inv && _emitter.IsBaseInstanceMethod(inv.TargetMethod)
+        if (op is IInvocationOperation inv && UasmEmitter.IsBaseInstanceMethod(inv.TargetMethod, _emitter.ClassSymbol)
             && inv.TargetMethod.IsGenericMethod
             && inv.TargetMethod.TypeArguments.Any(ta => ta is ITypeParameterSymbol))
             yield return inv.TargetMethod.OriginalDefinition;
         if (op is IMethodReferenceOperation gmref && gmref.Method.IsGenericMethod
-            && _emitter.IsBaseInstanceMethod(gmref.Method)
+            && UasmEmitter.IsBaseInstanceMethod(gmref.Method, _emitter.ClassSymbol)
             && (gmref.Instance == null
                 || gmref.Instance is IInstanceReferenceOperation { Syntax: not BaseExpressionSyntax }))
             yield return gmref.Method.OriginalDefinition;
@@ -239,13 +239,13 @@ public sealed class ResolvedEdgeResolver
 
     IEnumerable<IMethodSymbol> EnumerateForeignStaticReach(IOperation op)
     {
-        if (op is IInvocationOperation inv && _emitter.IsForeignStatic(inv.TargetMethod))
+        if (op is IInvocationOperation inv && UasmEmitter.IsForeignStatic(inv.TargetMethod, _emitter.ClassSymbol))
         {
             var original = inv.TargetMethod.ReducedFrom ?? inv.TargetMethod;
             if (!original.IsGenericMethod && UasmEmitter.IsClosedForeignStaticTarget(original))
                 yield return original;
         }
-        if (op is IMethodReferenceOperation mref && _emitter.IsForeignStatic(mref.Method))
+        if (op is IMethodReferenceOperation mref && UasmEmitter.IsForeignStatic(mref.Method, _emitter.ClassSymbol))
         {
             var original = mref.Method.ReducedFrom ?? mref.Method;
             if (!original.IsGenericMethod && UasmEmitter.IsClosedForeignStaticTarget(original))
@@ -253,10 +253,10 @@ public sealed class ResolvedEdgeResolver
         }
         if (op is IPropertyReferenceOperation spr && spr.Property.IsStatic && UasmEmitter.IsComputedProperty(spr.Property))
         {
-            if (spr.Property.GetMethod is { } sg && _emitter.IsForeignStatic(sg)
+            if (spr.Property.GetMethod is { } sg && UasmEmitter.IsForeignStatic(sg, _emitter.ClassSymbol)
                 && !sg.IsGenericMethod && UasmEmitter.IsClosedForeignStaticTarget(sg))
                 yield return sg;
-            if (spr.Property.SetMethod is { } ss && _emitter.IsForeignStatic(ss)
+            if (spr.Property.SetMethod is { } ss && UasmEmitter.IsForeignStatic(ss, _emitter.ClassSymbol)
                 && !ss.IsGenericMethod && UasmEmitter.IsClosedForeignStaticTarget(ss))
                 yield return ss;
         }
@@ -264,19 +264,19 @@ public sealed class ResolvedEdgeResolver
 
     IEnumerable<IMethodSymbol> EnumerateBaseInstanceReach(IOperation op)
     {
-        if (op is IInvocationOperation inv && _emitter.IsBaseInstanceMethod(inv.TargetMethod)
+        if (op is IInvocationOperation inv && UasmEmitter.IsBaseInstanceMethod(inv.TargetMethod, _emitter.ClassSymbol)
             && !(inv.TargetMethod.IsGenericMethod
                  && inv.TargetMethod.TypeArguments.Any(ta => ta is ITypeParameterSymbol)))
             yield return inv.TargetMethod;
         if (op is IPropertyReferenceOperation pr
             && pr.Instance is IInstanceReferenceOperation { Syntax: BaseExpressionSyntax })
         {
-            if (pr.Property.GetMethod is { } g && _emitter.IsBaseInstanceMethod(g)) yield return g;
-            if (pr.Property.SetMethod is { } s && _emitter.IsBaseInstanceMethod(s)) yield return s;
+            if (pr.Property.GetMethod is { } g && UasmEmitter.IsBaseInstanceMethod(g, _emitter.ClassSymbol)) yield return g;
+            if (pr.Property.SetMethod is { } s && UasmEmitter.IsBaseInstanceMethod(s, _emitter.ClassSymbol)) yield return s;
         }
         if (op is IMethodReferenceOperation mref
             && mref.Instance is IInstanceReferenceOperation { Syntax: BaseExpressionSyntax }
-            && _emitter.IsBaseInstanceMethod(mref.Method))
+            && UasmEmitter.IsBaseInstanceMethod(mref.Method, _emitter.ClassSymbol))
             yield return mref.Method;
     }
 
@@ -300,8 +300,7 @@ public sealed class ResolvedEdgeResolver
     // no virtual/cross targets (pre-seed the census is empty and the dispatch instance null). ──
 
     /// <summary>[V1 unification] The per-NODE call-target classifier shared by the recursion-graph edge
-    /// walk (RecursionNodeWalk, via <see cref="ResolveEdges"/>'s CallEdge arm; legacy oracle:
-    /// UasmEmitter.CollectInternalCallees) and the per-site non-tail classifier
+    /// walk (RecursionNodeWalk, via <see cref="ResolveEdges"/>'s CallEdge arm) and the per-site non-tail classifier
     /// (<see cref="IsInternalCallTo"/>). Yields every method (OriginalDefinition, or the emission-faithful
     /// leaf/cross target) that a SINGLE operation node can dispatch to: an invocation's static /
     /// this-virtual-leaf-override / variable-or-interface-cross targets; a ctor; and a property or indexer
@@ -314,9 +313,9 @@ public sealed class ResolvedEdgeResolver
     /// into ONE enumerator removes the drift that caused those wave-14 r4 miscompiles — the arms can no
     /// longer fall out of lockstep. Includes the user-defined OPERATOR edge (binary / unary /
     /// compound-assignment / increment-decrement forms all carry an OperatorMethod) — B49: it formerly
-    /// lived only in CollectInternalCallees, so IsInternalCallTo could not see it and a recursive struct
-    /// operator was never frame-spilled (VM-proven ref=15/usugar=0); routing it through here makes both
-    /// consumers agree and fixes the spill.</summary>
+    /// lived only in the recursion-graph edge walk, so IsInternalCallTo could not see it and a recursive
+    /// struct operator was never frame-spilled (VM-proven ref=15/usugar=0); routing it through here makes
+    /// both consumers agree and fixes the spill.</summary>
     internal IEnumerable<IMethodSymbol> EnumerateInternalCallTargets(IOperation op)
     {
         if (_emitter.VirtualDispatchInstance == null)
@@ -475,8 +474,7 @@ public sealed class ResolvedEdgeResolver
     /// <summary>Wave-9 round-5 [X1]: leaf resolution for a this-receiver virtual METHOD-GROUP
     /// conversion (delegate creation), gated identically to LeafCallTarget — emission's bridge
     /// resolves these to the chain-root export running the leaf body, so the escape set mirrors it.
-    /// Internal for the emitter's precise-dispatch provenance (TryResolvePreciseDispatchTargets) and
-    /// the frozen legacy escape oracle (CollectEscapedDelegateTargets).</summary>
+    /// Internal for the emitter's precise-dispatch provenance (TryResolvePreciseDispatchTargets).</summary>
     internal IMethodSymbol LeafMethodRefTarget(IMethodReferenceOperation mr)
     {
         var m = mr.Method;

@@ -301,7 +301,7 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
             && ExternResolver.IsUdonSharpBehaviour(target.ContainingType)
             && target.ContainingType.Name != "UdonSharpBehaviour"
             && (SymbolEqualityComparer.Default.Equals(target.ContainingType, _classSymbol)
-                || IsBaseInstanceMethod(target)))
+                || UasmEmitter.IsBaseInstanceMethod(target, _classSymbol)))
         {
             if (target.IsGenericMethod || target.Parameters.Any(p => p.RefKind != RefKind.None)
                 || (target.DeclaredAccessibility != Accessibility.Public
@@ -328,7 +328,7 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
         }
 
         // Base class instance method (emitted locally)
-        if (_methodFunctions.ContainsKey(target) && IsBaseInstanceMethod(target))
+        if (_methodFunctions.ContainsKey(target) && UasmEmitter.IsBaseInstanceMethod(target, _classSymbol))
             return EmitUserMethodCall(op, target);
 
         // Wave-9 round-8 [Y11]: INHERITED generic callee whose call site carries OPEN type args
@@ -340,14 +340,14 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
         // the call fell through to the cross-class/extern arms (decon: 'Method P2 not found in
         // layout for MB1Base'; direct: bogus IUdonEventReceiver extern — loud ICE on legal C#).
         if (target.IsGenericMethod && !target.TypeArguments.Any(ta => ta is ITypeParameterSymbol)
-            && IsBaseInstanceMethod(target))
+            && UasmEmitter.IsBaseInstanceMethod(target, _classSymbol))
         {
             RegisterGenericSpecialization(target);
             return EmitUserMethodCall(op, target);
         }
 
         // Generic foreign static method → monomorphize and emit as internal call
-        if (target.IsGenericMethod && IsForeignStatic(target))
+        if (target.IsGenericMethod && UasmEmitter.IsForeignStatic(target, _classSymbol))
         {
             GuardRefOutArguments(op, target); // round-8 [R6]: Q2/Q5/R4 parity
             var constructed = target.ReducedFrom != null
@@ -371,7 +371,7 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
         // Foreign static method → inlined as internal call (resolve extension method original form)
         {
             var original = target.ReducedFrom ?? target;
-            if (IsForeignStatic(target) && _methodFunctions.ContainsKey(original))
+            if (UasmEmitter.IsForeignStatic(target, _classSymbol) && _methodFunctions.ContainsKey(original))
             {
                 GuardRefOutArguments(op, target); // round-8 [R6]: Q2/Q5/R4 parity
                 var args = new List<CLeaf>();
@@ -399,7 +399,7 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
         // extern. Register the closed spec on demand (RegisterGenericSpecialization composes the containing
         // type's type-arg map in EmitMethod, so a T-dependent body monomorphizes correctly) and JUMP to it
         // — static, so no receiver and argument ordinals start at 0.
-        if (IsForeignStatic(target) && target.ReducedFrom == null && !target.IsGenericMethod
+        if (UasmEmitter.IsForeignStatic(target, _classSymbol) && target.ReducedFrom == null && !target.IsGenericMethod
             && target.ContainingType is INamedTypeSymbol fsGenCt && fsGenCt.IsGenericType
             && !fsGenCt.TypeArguments.Any(ta => ta is ITypeParameterSymbol))
         {
@@ -854,51 +854,10 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
     }
 
     // ── Classification helpers ──
-
-    bool IsForeignStatic(IMethodSymbol method)
-    {
-        // Extension methods: ReducedFrom holds the original static definition
-        var resolved = method.ReducedFrom ?? method;
-        if (!resolved.IsStatic) return false;
-        if (resolved.ContainingType.DeclaringSyntaxReferences.Length == 0) return false;
-        // A static method has no instance, so a call to one on another user UdonSharpBehaviour subclass cannot
-        // be a cross-program SendCustomEvent — it must be inlined like any other foreign static. (The base
-        // UdonSharpBehaviour and SDK behaviours have no syntax and are already excluded above.)
-        if (SymbolEqualityComparer.Default.Equals(resolved.ContainingType, _classSymbol)) return false;
-        if (IsExternNamespace(resolved.ContainingType.ContainingNamespace)) return false;
-        return true;
-    }
-
-    bool IsBaseInstanceMethod(IMethodSymbol method)
-    {
-        if (method.IsStatic) return false;
-        if (method.ContainingType.DeclaringSyntaxReferences.Length == 0) return false;
-        if (SymbolEqualityComparer.Default.Equals(method.ContainingType, _classSymbol)) return false;
-        if (USugarCompilerHelper.IsFrameworkNamespace(method.ContainingType.ContainingNamespace)) return false;
-        if (method.ContainingType.Name == "UdonSharpBehaviour") return false;
-        // Check ancestor chain
-        var bt = _classSymbol.BaseType;
-        while (bt != null)
-        {
-            if (SymbolEqualityComparer.Default.Equals(bt, method.ContainingType)) return true;
-            bt = bt.BaseType;
-        }
-        return false;
-    }
+    // IsForeignStatic / IsBaseInstanceMethod: this handler's open-coded copies were deleted at C4
+    // retirement — call the single-source statics on UasmEmitter (whose IsBaseInstanceMethod carries
+    // the [Y10] MethodKind.LocalFunction exclusion the copy lacked).
 
     // IsResolvedConcreteNonBehaviour moved to HandlerBase (wave-9 round-4 [X4]/[X5]/[X9]: the
     // interface-receiver accessor gates in the assignment handlers share it).
-
-    /// <summary>
-    /// Like IsFrameworkNamespace but excludes UdonSharp — types in UdonSharp.* that are not
-    /// UdonSharpBehaviour may be user-defined helper classes with generic methods to inline.
-    /// </summary>
-    static bool IsExternNamespace(INamespaceSymbol ns)
-    {
-        if (ns == null || ns.IsGlobalNamespace) return false;
-        var root = ns;
-        while (root.ContainingNamespace is { IsGlobalNamespace: false })
-            root = root.ContainingNamespace;
-        return root.Name is "UnityEngine" or "VRC" or "TMPro" or "System";
-    }
 }

@@ -117,7 +117,7 @@ public partial class InvocationHandler
             // foreign-static-on-generic method arm). Auto/BCL/const-foldable statics are excluded: the
             // const-fold arm below owns the BCL foldables, and IsUserComputedStaticProperty gates out autos.
             if (op.Property.IsStatic && op.Property.GetMethod is { } sPropGetter
-                && IsForeignStatic(sPropGetter) && IsUserComputedStaticProperty(op.Property))
+                && UasmEmitter.IsForeignStatic(sPropGetter, _classSymbol) && IsUserComputedStaticProperty(op.Property))
             {
                 // ResolveStructMember substitutes the containing type's type args from the current map
                 // (SP<T>.get_Doubled → SP<int>.get_Doubled inside a Box<int> spec) and registers the closed

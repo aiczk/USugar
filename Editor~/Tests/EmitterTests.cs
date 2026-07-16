@@ -6103,4 +6103,29 @@ public class CrossTupleWriteTest : UdonSharpBehaviour {
         Assert.Contains("SetProgramVariable", uasm);
     }
 
+    // C4 retirement (the C2-incidental duplicate): a static local function declared inside a foreign
+    // static used to emit TWICE — an eager Phase-1 ForeignStatics registration copy plus the live
+    // declaration-site LF copy; the eager copy was overwritten in _methodFunctions and stayed as a dead
+    // unreachable body (__2_Twice + __3_Twice). The registration projection now skips LocalFunction
+    // targets, so exactly ONE Twice function is emitted (and the self-recursive call binds to it).
+    [Fact]
+    public void ForeignStatic_StaticLocalFunction_EmitsSingleCopy()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public static class FsLfHelp {
+  public static int Run(int n) {
+    static int Twice(int x) { if (x <= 0) return 0; return Twice(x - 1) + 2; }
+    return Twice(n) + 1;
+  }
+}
+public class FsLfSingleCopyTest : UdonSharpBehaviour {
+  public int result;
+  void Start(){ result = FsLfHelp.Run(5); }
+}", "FsLfSingleCopyTest");
+        var twiceFuncs = System.Text.RegularExpressions.Regex.Matches(uasm, @"^    ____\d+_Twice:",
+            System.Text.RegularExpressions.RegexOptions.Multiline);
+        Assert.Equal(1, twiceFuncs.Count);
+    }
+
 }

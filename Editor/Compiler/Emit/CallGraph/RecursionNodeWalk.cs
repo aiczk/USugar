@@ -8,8 +8,7 @@ using Microsoft.CodeAnalysis.Operations;
 /// the named-call membership set), its DIRECT this-field touches / accessor edges (the transitive
 /// closure runs downstream, over the synthetic-edge-augmented graph), and the C3 escape facet (the §4.1
 /// escaped-target set + the variant sig-S pairs, membership-filtered). Produced by
-/// <see cref="RecursionNodeWalk"/> (production) and by UasmEmitter.LegacyRecursionWalk (the M5b differential
-/// oracle, deleted after C2/C4 prove the arms).</summary>
+/// <see cref="RecursionNodeWalk"/>.</summary>
 internal sealed class RecursionWalkResult
 {
     /// <summary>Every recursion-graph node (roots, local functions, lambdas), deduped.</summary>
@@ -30,8 +29,8 @@ internal sealed class RecursionWalkResult
 }
 
 /// <summary>CA rewrite (M5b): the recursion facet of the unified resolver-driven traversal — ONE pass over
-/// the recursion node set's bodies replacing BuildRecursionInfo's four private per-op walks
-/// (CollectInternalCallees / CollectThisFieldTouches / CollectLocalFunctions / CollectLambdaNodes). Each op
+/// the recursion node set's bodies (it replaced BuildRecursionInfo's four private per-op walks, whose
+/// frozen legacy-oracle copies were deleted at C4 retirement). Each op
 /// is visited once, dispatching to <see cref="ResolvedEdgeResolver.ResolveEdges"/> for CallEdge targets
 /// (TargetRole.CallEdge's production consumer) and EscapeTarget / variant escape-sig collection (C3 —
 /// TargetRole.EscapeTarget's production consumer, absorbing the separate escape walks), plus walk-local

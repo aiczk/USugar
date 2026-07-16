@@ -11,8 +11,8 @@ namespace USugar.Tests;
 ///
 /// [X1]  Escape set recorded the STATIC binding for this-receiver virtual method-group conversions
 ///       in inherited base bodies — leaf-override delegate-dispatch cycles never spilled (ref=66
-///       vs 6). CollectEscapedDelegateTargets now adds the leaf override definition
-///       (LeafMethodRefTarget, gated like LeafCallTarget).
+///       vs 6). The escape collection (ResolvedEdgeResolver's EscapeTarget arm) now adds the leaf
+///       override definition (LeafMethodRefTarget, gated like LeafCallTarget).
 /// [X2]  User indexer SET evaluated the RHS BEFORE the receiver/index args (C#: receiver → args →
 ///       value). The whole property/indexer SET path is factored into HandlerBase.EmitPropertySet
 ///       with the C# order; the value arrives through a Func factory.
