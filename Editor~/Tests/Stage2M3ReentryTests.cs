@@ -179,7 +179,7 @@ public class M3CrossSig : UdonSharpBehaviour {
     {
         // Stage 1.75 (design 2026-07-04 §2.2): variance is no longer rejected at creation — the §5.4
         // sig-filter now widens correctly: a variant target is escaped under its ADAPTER's protocol sig
-        // (sig-S), not its own (UasmEmitter.CollectVariantEscapeSigs). Bare compile pin; the reentrancy
+        // (sig-S), not its own (ResolvedEdgeResolver.ResolveVariantEscapeSigs). Bare compile pin; the reentrancy
         // gate itself is pinned below (SigFilter_VariantAdapterTarget_GetsReentrantSpill).
         var uasm = TestHelper.CompileToUasm(@"
 using System;

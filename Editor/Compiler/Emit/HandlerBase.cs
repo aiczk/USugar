@@ -2159,7 +2159,18 @@ public abstract partial class HandlerBase
                     // the adapter drain resolves by name, so alias it under the adapter name too.
                     if (_ctx.Synthetics.ClosureBridgeFuncs.TryGetValue(bridgeExportName, out var closureTargetFunc))
                         _ctx.Synthetics.ClosureBridgeFuncs[adapterName] = closureTargetFunc;
-                    _ctx.Synthetics.SigAdapterBridges.Add((targetMethod, delegateInvoke, adapterName, _ctx.Generics.TypeParamMap));
+                    // [X1] leaf mapping, adapter flavor (C3 stage 2): a this-receiver VIRTUAL method
+                    // group statically binds the BASE declaration, but the adapter's InternalCall must
+                    // run the most-derived override visible from the compiled class — exactly like the
+                    // plain chain-root bridge's body ([W1] ResolveMostDerivedOverride). Registering the
+                    // base def either DANGLED the adapter FuncRef (base def never in _methodFunctions —
+                    // loud CFuncRef reject) or, with a base-instance copy registered by a base.M call,
+                    // silently InternalCalled the BASE body instead of the leaf. `base.M` keeps its
+                    // static binding (non-virtual by C# ldftn semantics — the copy IS the target).
+                    var adapterTarget = !baseReceiver && targetMethod.MethodKind == MethodKind.Ordinary
+                        && (targetMethod.IsVirtual || targetMethod.IsOverride || targetMethod.IsAbstract)
+                        ? ResolveMostDerivedOverride(targetMethod) : targetMethod;
+                    _ctx.Synthetics.SigAdapterBridges.Add((adapterTarget, delegateInvoke, adapterName, _ctx.Generics.TypeParamMap));
                     return (adapterName, FuncRef(adapterName), targetInstance, envLeaf);
                 }
 

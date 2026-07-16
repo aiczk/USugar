@@ -117,20 +117,27 @@ public sealed class ResolvedEdgeResolver
     /// (sig-S = the sig adapter's protocol sig, Stage 1.75 §2.2). A Sig payload has no place on
     /// ResolvedTarget, so this is a dedicated per-op entry point (precedent:
     /// <see cref="ResolveForeignStaticSuppDefs"/>). Ungated like the EscapeTarget arm — the
-    /// internal-method membership filter stays consumer-side. Deliberately OMITS the [X1]
-    /// base-override leaf-target resolution the EscapeTarget arm carries (base.M variance is an
-    /// unexercised compounding edge case outside the variance design's tested scope; closing that
-    /// gap is a separately gated change, not this relocation) and the lambda arm (a lambda's sig is
-    /// inferred from the delegate type, so it can never be variant).</summary>
+    /// internal-method membership filter stays consumer-side. Applies the SAME [X1] leaf-override
+    /// mapping as the EscapeTarget arm (the former deliberate omission was CLOSED at C3 stage 2,
+    /// 2026-07-16): a variant binding of a this-receiver virtual method escapes the LEAF definition
+    /// under the adapter's sig-S too — the base def is typically not even a graph node, so keying
+    /// sig-S off it alone left a delegate-dispatch cycle through the override's body without its
+    /// synthetic edge/reenterSig and under-spilled its frames (the [Z1] family; VM-proven 205 vs
+    /// CLR 715). The frozen legacy oracle RETAINS the omission — the census shape
+    /// facet_variant_leaf_override_reentry asserts the exact production-minus-legacy delta. The
+    /// lambda arm stays omitted (a lambda's sig is inferred from the delegate type, so it can never
+    /// be variant).</summary>
     public IEnumerable<(IMethodSymbol Method, string Sig)> ResolveVariantEscapeSigs(IOperation op)
     {
-        if (op is IDelegateCreationOperation { Target: IMethodReferenceOperation { Method: { } mr } } variantDc
+        if (op is IDelegateCreationOperation { Target: IMethodReferenceOperation { Method: { } } mrOp } variantDc
             && variantDc.Type is INamedTypeSymbol vDlgType && vDlgType.DelegateInvokeMethod is { } vInvoke)
         {
-            var t = mr.OriginalDefinition;
+            var t = mrOp.Method.OriginalDefinition;
             var sigS = DelegateAbi.BuildSigPart(vInvoke);
             if (sigS != DelegateAbi.BuildSigPart(t))
                 yield return (t, sigS);
+            if (_emitter.LeafMethodRefTarget(mrOp) is { } leafT && sigS != DelegateAbi.BuildSigPart(leafT))
+                yield return (leafT, sigS);
         }
     }
 

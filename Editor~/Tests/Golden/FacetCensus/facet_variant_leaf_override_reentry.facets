@@ -1,0 +1,23 @@
+[nodes]
+FacetVariantLeafReentry.Go(int) @411..535
+FacetVariantLeafReentry.Start() @538..583
+FacetVariantLeafReentry.Step(object) @307..408
+FvlBase.Seed() @160..194
+[recursive-edges]
+[cycle-edges]
+FacetVariantLeafReentry.Go(int) @411..535 -> FacetVariantLeafReentry.Go(int) @411..535
+FacetVariantLeafReentry.Go(int) @411..535 -> FacetVariantLeafReentry.Step(object) @307..408
+FacetVariantLeafReentry.Step(object) @307..408 -> FacetVariantLeafReentry.Go(int) @411..535
+[this-field-touches]
+FacetVariantLeafReentry.Go(int) @411..535 -> FvlBase.acc
+FacetVariantLeafReentry.Go(int) @411..535 -> FvlBase.hop
+FacetVariantLeafReentry.Start() @538..583 -> FvlBase.acc
+FacetVariantLeafReentry.Start() @538..583 -> FvlBase.hop
+FacetVariantLeafReentry.Start() @538..583 -> FvlBase.n
+FacetVariantLeafReentry.Start() @538..583 -> FvlBase.result
+FacetVariantLeafReentry.Step(object) @307..408 -> FvlBase.acc
+FacetVariantLeafReentry.Step(object) @307..408 -> FvlBase.hop
+FvlBase.Seed() @160..194 -> FvlBase.hop
+[reentrant-dispatch-sites]
+hop("xy") @480..489
+[tail-spared-direct-call-sites]

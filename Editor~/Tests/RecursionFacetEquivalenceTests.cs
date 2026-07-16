@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text;
+using System.Text.RegularExpressions;
 using Microsoft.CodeAnalysis;
 using Xunit;
 
@@ -19,6 +20,13 @@ namespace USugar.Tests;
 /// polymorphic incl. the CW5 generic-T-receiver form, base-ctor chain, reentrant-dispatch,
 /// tail-spared mixed). Regenerate fixtures with UPDATE_SNAPSHOTS=1. Delete this file with the
 /// legacy walks after C2/C4 prove the remaining arms.
+///
+/// ONE deliberate exception (C3 stage 2, 2026-07-16): facet_variant_leaf_override_reentry is the
+/// closed [X1] variant-leaf gap's compounding shape — the frozen legacy oracle RETAINS the
+/// omission, so instead of equality the differential asserts the PRECISE production-minus-legacy
+/// delta: production ⊇ legacy per section, and the extra lines are exactly the leaf-def sig-S
+/// entries' downstream effect (the Go↔Step synthetic cycle membership + the reentrant dispatch
+/// site they imply) — nothing else; its fixture pins the PRODUCTION census.
 /// </summary>
 public class RecursionFacetEquivalenceTests
 {
@@ -42,6 +50,10 @@ public class RecursionFacetEquivalenceTests
     static (string Name, string ClassName, string Source) ByName(string name)
         => AllCases().First(c => c.Name == name);
 
+    // C3 stage 2: the one shape whose legacy-vs-production differential is a pinned DELTA, not
+    // equality (the frozen legacy oracle retains the closed [X1] variant-leaf omission).
+    const string VariantLeafDeltaShape = "facet_variant_leaf_override_reentry";
+
     [Theory]
     [MemberData(nameof(Battery))]
     public void FacetCensus_BothWaysEqual_AndMatchFixture(string name)
@@ -52,26 +64,96 @@ public class RecursionFacetEquivalenceTests
         // Determinism gate (mirrors the snapshot oracle): the census must be byte-stable across
         // compiles, or the fixture compare below would flake instead of gating the M5b swap.
         TestHelper.CompileToUasm(c.Source, c.ClassName, out var emitter2);
-        Assert.True(LegacyFacets(emitter) == LegacyFacets(emitter2),
-            $"Nondeterministic facet census for '{name}': two compiles differ.");
 
         var legacy = LegacyFacets(emitter);
         var fused = NewFacets(emitter);
-        Assert.True(legacy == fused,
-            $"Recursion facet sets diverge between the legacy builder and the worklist for '{name}':\n"
-            + FirstDiffLine(legacy, fused));
+        string pinned;
+        if (name == VariantLeafDeltaShape)
+        {
+            Assert.True(fused == NewFacets(emitter2),
+                $"Nondeterministic facet census for '{name}': two compiles differ.");
+            AssertVariantLeafOverrideDelta(legacy, fused);
+            pinned = fused; // the fixture pins the PRODUCTION (gap-closed) census
+        }
+        else
+        {
+            Assert.True(legacy == LegacyFacets(emitter2),
+                $"Nondeterministic facet census for '{name}': two compiles differ.");
+            Assert.True(legacy == fused,
+                $"Recursion facet sets diverge between the legacy builder and the worklist for '{name}':\n"
+                + FirstDiffLine(legacy, fused));
+            pinned = legacy;
+        }
 
         var path = Path.Combine(TestPaths.FacetCensusDir, name + ".facets");
         if (UpdateMode)
         {
             Directory.CreateDirectory(TestPaths.FacetCensusDir);
-            File.WriteAllText(path, legacy);
+            File.WriteAllText(path, pinned);
             return;
         }
 
         Assert.True(File.Exists(path),
             $"Missing facet census '{path}'. Run with UPDATE_SNAPSHOTS=1 to capture.");
-        Assert.Equal(Lf(File.ReadAllText(path)), legacy);
+        Assert.Equal(Lf(File.ReadAllText(path)), pinned);
+    }
+
+    // ── C3 stage 2: the precise expected delta on the compounding shape ──
+    // The production classifier additionally yields (Step-leaf-def, sig-S); the leaf IS a graph node,
+    // so escapeSig gains the pair, the sig-S dispatch in Go gains the synthetic edge Go→Step (closing
+    // the SCC {Go, Step} with Step's real edge Step→Go — both UNFILTERED cycle-edge lines), and
+    // reenterSigs gains sig-S so the non-tail `hop("xy")` dispatch is marked Reentrant. Named-call
+    // spills (recursive-edges) are self-filtering for synthetic edges and both direct calls are
+    // statement-form tail, so every other section must be EXACTLY equal.
+    static void AssertVariantLeafOverrideDelta(string legacy, string fused)
+    {
+        var l = ParseSections(legacy);
+        var f = ParseSections(fused);
+        Assert.Equal(l.Keys.ToArray(), f.Keys.ToArray());
+        foreach (var key in l.Keys)
+        {
+            var missing = l[key].Except(f[key]).ToList();
+            Assert.True(missing.Count == 0,
+                $"production census must be a superset of legacy; {key} lost: {string.Join(" | ", missing)}");
+            var extra = f[key].Except(l[key]).OrderBy(s => s, StringComparer.Ordinal).ToList();
+            switch (key)
+            {
+                case "[cycle-edges]":
+                    Assert.True(extra.Count == 2 &&
+                        extra.Any(s => Regex.IsMatch(s,
+                            @"^FacetVariantLeafReentry\.Go\(int\) @\d+\.\.\d+ -> FacetVariantLeafReentry\.Step\(object\) @\d+\.\.\d+$")) &&
+                        extra.Any(s => Regex.IsMatch(s,
+                            @"^FacetVariantLeafReentry\.Step\(object\) @\d+\.\.\d+ -> FacetVariantLeafReentry\.Go\(int\) @\d+\.\.\d+$")),
+                        $"cycle-edges delta must be exactly Go→Step and Step→Go, got: {string.Join(" | ", extra)}");
+                    break;
+                case "[reentrant-dispatch-sites]":
+                    Assert.True(extra.Count == 1 && extra[0].StartsWith("hop(\"xy\") @", StringComparison.Ordinal),
+                        $"reentrant-dispatch-sites delta must be exactly the hop(\"xy\") site, got: {string.Join(" | ", extra)}");
+                    break;
+                default:
+                    Assert.True(extra.Count == 0, $"unexpected facet delta in {key}: {string.Join(" | ", extra)}");
+                    break;
+            }
+        }
+    }
+
+    static Dictionary<string, HashSet<string>> ParseSections(string census)
+    {
+        var sections = new Dictionary<string, HashSet<string>>();
+        HashSet<string> cur = null;
+        foreach (var raw in census.Split('\n'))
+        {
+            var line = raw.TrimEnd('\r');
+            if (line.Length == 0) continue;
+            if (line.StartsWith("[", StringComparison.Ordinal) && line.EndsWith("]", StringComparison.Ordinal))
+                sections[line] = cur = new HashSet<string>(StringComparer.Ordinal);
+            else
+            {
+                Assert.NotNull(cur);
+                cur.Add(line);
+            }
+        }
+        return sections;
     }
 
     [Fact]
@@ -271,6 +353,35 @@ public static class FgsHelp {
 public class FacetForeignGenStaticLf : UdonSharpBehaviour {
   public int result;
   void Start(){ result = FgsHelp.Run(5); }
+}"),
+        // C3 stage 2 delta shape (closed [X1] variant-leaf omission; probe twin: local harness
+        // C3VariantLeafOverrideProbes, VM staircase reject → 205-vs-715 under-spill → Match): a
+        // VARIANT method-group binding (`Action<string> hop = Step(object)`) created in the BASE
+        // behaviour body statically binds the base def, the bridge/adapter runs the LEAF override,
+        // and the leaf re-enters the dispatching cycle — the variant escape-sig facet must carry
+        // (leafDef, sig-S) or the `hop("xy")` dispatch in Go is never marked Reentrant. The legacy
+        // oracle retains the omission, so this shape is asserted as an EXACT delta, not equality.
+        ("facet_variant_leaf_override_reentry", "FacetVariantLeafReentry",
+@"using System; using UdonSharp;
+public class FvlBase : UdonSharpBehaviour {
+  protected Action<string> hop;
+  public int acc; public int n; public int result;
+  public void Seed() { hop = Step; }
+  public virtual void Step(object o) { acc = acc + 1000; }
+}
+public class FacetVariantLeafReentry : FvlBase {
+  public override void Step(object o) {
+    acc = acc + ((string)o).Length;
+    if (acc < 4) Go(1);
+  }
+  void Go(int d) {
+    if (d <= 0) return;
+    int keep = d * 100;
+    hop(""xy"");
+    acc = acc + keep + d;
+    Go(d - 1);
+  }
+  void Start() { Seed(); Go(n); result = acc; }
 }"),
         // Base-ctor chain recursion (the v2b-2 comment's Rb..ctor -> Rd.Make -> new Rd -> Rb..ctor
         // form): the cycle runs through the explicit ctor chain and a this-receiver virtual call

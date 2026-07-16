@@ -3108,9 +3108,12 @@ public class UasmEmitter
     /// under the ADAPTER's protocol sig (sig-S = the delegate type's OWN Invoke signature), not its own,
     /// so the widened synthetic edge / SCC-reentrancy check must key on sig-S here (§5.4
     /// SigFilterCoupledToVarianceReject). Mirrors CollectEscapedDelegateTargets's method-group arm but
-    /// omits the base-override leaf-target resolution (base.M variance is an unexercised compounding
-    /// edge case, not part of this design's tested scope) and the lambda arm (a lambda's sig is inferred
-    /// from the delegate type, so it can never be variant).</summary>
+    /// omits its [X1] leaf-target resolution — an omission the PRODUCTION classifier CLOSED at C3
+    /// stage 2 (2026-07-16, see ResolveVariantEscapeSigs; VM-proven 205 vs CLR 715): this frozen
+    /// oracle deliberately RETAINS it, and the facet_variant_leaf_override_reentry census shape
+    /// asserts the exact production-minus-legacy delta instead of equality. The lambda arm stays
+    /// omitted in both (a lambda's sig is inferred from the delegate type, so it can never be
+    /// variant).</summary>
     void CollectVariantEscapeSigs(IOperation op, HashSet<IMethodSymbol> internalMethods,
         List<(IMethodSymbol Method, string Sig)> result)
     {
