@@ -41,6 +41,9 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
         if (op.OperatorKind == BinaryOperatorKind.Add && GetUdonType(op.Type) == "SystemString")
         {
             var vOp = UnwrapConversions(op.Value);
+            // Same choke as the binary-concat and interpolation surfaces: an ndim or object[]-emulated
+            // value-type operand (user struct / tuple / anonymous type) would launder to "System.Object[]".
+            ClassAbi.RejectImplicitToString(vOp.Type);
             if (ResolveType(vOp.Type) is INamedTypeSymbol vt
                 && (EmitPolicy.IsUserClassType(vt) || ExternResolver.IsUserEnum(vt)))
             {

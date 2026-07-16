@@ -483,10 +483,11 @@ public static class ClassAbi
                 + "a field on the UdonSharpBehaviour class.");
     }
 
-    /// <summary>Reject implicit stringification of a multi-dimensional array bundle (CW14/CW15): it
-    /// stringifies to "System.Object[]" instead of the C# type name, and the interpolation/concat Format
-    /// externs bypass the N-R1 argument choke. (The former v1-class arm was replaced by the M4b
-    /// object.ToString-slot dispatch at both implicit consumers.)</summary>
+    /// <summary>Reject implicit stringification of a multi-dimensional array bundle (CW14/CW15) or an
+    /// object[]-emulated value type (user struct / tuple / anonymous type — WaveJoint R1 D02): both
+    /// stringify to "System.Object[]" instead of running ToString / printing the C# form, and the
+    /// interpolation/concat Format externs bypass the N-R1 argument choke. (The former v1-class arm was
+    /// replaced by the M4b object.ToString-slot dispatch at the implicit consumers.)</summary>
     public static void RejectImplicitToString(ITypeSymbol type)
     {
         if (type == null) return;
@@ -495,6 +496,12 @@ public static class ClassAbi
                 $"A multi-dimensional array ('{type.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}') cannot be "
                 + "converted to a string (interpolation / concat): its runtime value is an object[] bundle, so it would "
                 + "stringify to \"System.Object[]\". Format the elements directly instead.");
+        if (EmitPolicy.IsAggregateType(type))
+            throw new NotSupportedException(
+                $"'{type.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}' cannot be converted to a string "
+                + "implicitly (interpolation / concat): its runtime value is an object[] bundle, so it would stringify "
+                + "to \"System.Object[]\" instead of running ToString. Call ToString() explicitly (a struct override "
+                + "is a supported direct call), or format the fields/elements directly.");
     }
 
     /// <summary>Reject user-defined operators and conversions on v1 user classes.</summary>
