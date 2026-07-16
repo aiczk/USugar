@@ -1,0 +1,17 @@
+[nodes]
+FacetThisAccRec.Start() @440..563
+FthBase.Depth.get @86..190
+FthDer.Depth.get @255..360
+[recursive-edges]
+FthBase.Depth.get @86..190 -> FthBase.Depth.get @86..190
+FthDer.Depth.get @255..360 -> FthDer.Depth.get @255..360
+[cycle-edges]
+FthBase.Depth.get @86..190 -> FthBase.Depth.get @86..190
+FthDer.Depth.get @255..360 -> FthDer.Depth.get @255..360
+[this-field-touches]
+FacetThisAccRec.Start() @440..563 -> FacetThisAccRec.result
+FacetThisAccRec.Start() @440..563 -> FthBase.budget
+FthBase.Depth.get @86..190 -> FthBase.budget
+FthDer.Depth.get @255..360 -> FthBase.budget
+[reentrant-dispatch-sites]
+[tail-spared-direct-call-sites]

@@ -1,0 +1,21 @@
+[nodes]
+FacetAccMedCycle.Start() @423..625
+FamBase.Level.get @107..124
+FamBase.Probe() @129..204
+FamDer.Level.get @267..342
+[recursive-edges]
+FamBase.Probe() @129..204 -> FamDer.Level.get @267..342
+FamDer.Level.get @267..342 -> FamBase.Probe() @129..204
+[cycle-edges]
+FamBase.Probe() @129..204 -> FamDer.Level.get @267..342
+FamDer.Level.get @267..342 -> FamBase.Probe() @129..204
+[this-field-touches]
+FacetAccMedCycle.Start() @423..625 -> FacetAccMedCycle.result
+FacetAccMedCycle.Start() @423..625 -> FamBase.budget
+FacetAccMedCycle.Start() @423..625 -> FamBase.peer
+FamBase.Probe() @129..204 -> FamBase.budget
+FamBase.Probe() @129..204 -> FamBase.peer
+FamDer.Level.get @267..342 -> FamBase.budget
+FamDer.Level.get @267..342 -> FamBase.peer
+[reentrant-dispatch-sites]
+[tail-spared-direct-call-sites]

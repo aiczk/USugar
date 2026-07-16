@@ -17,7 +17,9 @@ namespace USugar.Tests;
 /// Editor~/Tests/Golden/FacetCensus. Battery = every GoldenCorpus source +
 /// targeted recursion shapes (non-tail, mutual, local-function, lambda-in-loop capture,
 /// struct-member, virtual-dispatch polymorphic incl. the CW5 generic-T-receiver form, base-ctor
-/// chain, reentrant-dispatch, tail-spared mixed, foreign-static LF, variant-leaf reentry).
+/// chain, reentrant-dispatch, tail-spared mixed, foreign-static LF, variant-leaf reentry,
+/// virtual-accessor recursion in three polarities: mutual getter cycle, method-mediated cycle,
+/// this-receiver getter recursion).
 /// Regenerate fixtures with UPDATE_SNAPSHOTS=1 — never silently (a diff here is an analysis-facet
 /// regression until proven otherwise).
 /// </summary>
@@ -291,6 +293,34 @@ public class FvaB : FvaBase { public override int Depth { get { if (budget <= 0)
 public class FacetVAccRec : UdonSharpBehaviour {
   public int result;
   void Start(){ FvaA a = new FvaA(); FvaB b = new FvaB(); a.next = b; b.next = a; a.budget = 2; b.budget = 3; result = a.Depth; }
+}"),
+        // CW1 instruments: ACCESSOR-MEDIATED cycle — the override getter calls back into an ordinary
+        // method whose base-typed `peer.Level` read re-enters the getter, so the Probe↔get_Level SCC
+        // exists only through the accessor fan-out (the re-entrant read site surfaces as the
+        // Probe → FamDer.get_Level cycle edge; [reentrant-dispatch-sites] stays a delegate-only facet
+        // and is pinned empty here). Both classes minted keeps the chain ≥2-target; `keep` is live
+        // across the dispatched read, so Probe's frame must spill around the re-entry.
+        ("facet_accessor_mediated_cycle", "FacetAccMedCycle",
+@"using UdonSharp;
+public class FamBase { public FamBase peer; public int budget; public virtual int Level { get { return 0; } }
+  public int Probe(){ int keep = budget * 10; return peer.Level + keep + 1; } }
+public class FamDer : FamBase { public override int Level { get { if (budget <= 0) return 3; budget = budget - 1; return Probe() + 2; } } }
+public class FacetAccMedCycle : UdonSharpBehaviour {
+  public int result;
+  void Start(){ FamBase b = new FamBase(); FamDer d = new FamDer(); FamDer e = new FamDer(); d.peer = e; e.peer = d; b.peer = d; d.budget = 2; e.budget = 3; b.budget = 4; result = d.Probe() + b.Probe(); }
+}"),
+        // CW1 instruments: THIS-receiver accessor recursion — `Depth` inside each getter body is a
+        // this-receiver dispatch site (IsDispatchSite includes `this`, excludes `base` syntax), so the
+        // getters are self-recursive THROUGH the dispatch fan-out: the base getter's read fans out to
+        // both minted impls (base self-loop + base→derived cross edge) while the derived getter's
+        // fans out to the derived impl only (its `this` is declared FthDer).
+        ("facet_this_accessor_recursion", "FacetThisAccRec",
+@"using UdonSharp;
+public class FthBase { public int budget; public virtual int Depth { get { if (budget <= 0) return 5; budget = budget - 1; int keep = budget * 10; return Depth + keep + 1; } } }
+public class FthDer : FthBase { public override int Depth { get { if (budget <= 0) return 9; budget = budget - 1; int keep = budget * 100; return Depth + keep + 2; } } }
+public class FacetThisAccRec : UdonSharpBehaviour {
+  public int result;
+  void Start(){ FthBase b = new FthBase(); FthDer d = new FthDer(); b.budget = 2; d.budget = 3; result = b.Depth + d.Depth; }
 }"),
         // Base-ctor chain recursion (the v2b-2 comment's Rb..ctor -> Rd.Make -> new Rd -> Rb..ctor
         // form): the cycle runs through the explicit ctor chain and a this-receiver virtual call

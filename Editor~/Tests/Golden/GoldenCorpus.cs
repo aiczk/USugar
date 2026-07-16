@@ -447,6 +447,55 @@ public class VirtualDispatchChain : UdonSharpBehaviour {
     result = viaChain + viaDevirt + viaBase + a.tag + b.tag + d.s;
   }
 }"),
+        // CW1 lift: the accessor twin of virtual_dispatch_chain — every dispatched accessor surface in
+        // one snapshot: computed virtual property + virtual indexer + auto-prop/computed-override mixed
+        // chain (two derived overrides ⇒ ≥2-target typeobj chains with no-match armor, reads AND
+        // writes), compound assignment through a dispatched property, a this-receiver accessor read
+        // inside an inherited base method body, and a singleton-implementor devirtualized accessor.
+        ("virtual_accessor_chain", "VirtualAccessorChain",
+@"using UdonSharp;
+public class VacBase {
+  public int v;
+  protected int[] cells;
+  public VacBase(){ cells = new int[4]; }
+  public virtual int Score { get { return v; } set { v = value; } }
+  public virtual int this[int i] { get { return cells[i]; } set { cells[i] = value; } }
+  public virtual int Tag { get; set; }
+  public int Snap(){ return Score + 100; }
+}
+public class VacA : VacBase {
+  public override int Score { get { return v * 10; } set { v = value + 1; } }
+  public override int this[int i] { get { return cells[i] * 2; } set { cells[i] = value + 3; } }
+  public override int Tag { get { return v + 7; } set { v = value * 2; } }
+}
+public class VacB : VacBase {
+  public override int Score { get { return v * 100; } set { v = value + 2; } }
+  public override int this[int i] { get { return cells[i] * 3; } set { cells[i] = value + 4; } }
+}
+public class VdvBase { public virtual int K { get { return 1; } } }
+public class VdvOnly : VdvBase { public override int K { get { return 7; } } }
+public class VirtualAccessorChain : UdonSharpBehaviour {
+  public int pick;
+  public int result;
+  void Start(){
+    VacBase a = new VacA();
+    VacBase b = new VacB();
+    VacBase c;
+    if (pick > 0) c = a; else c = b;
+    c.Score = pick + 3;
+    int viaRead = c.Score;
+    a[1] = pick + 5;
+    b[2] = pick + 6;
+    int viaIdx = a[1] + b[2];
+    a.Tag = pick + 2;
+    int viaTag = a.Tag + b.Tag;
+    c.Score += 4;
+    int viaThis = a.Snap() + b.Snap();
+    VdvBase s = new VdvOnly();
+    int viaDevirt = s.K;
+    result = viaRead + viaIdx + viaTag + viaThis + viaDevirt + c.Score;
+  }
+}"),
     };
 
     public static (string Name, string ClassName, string Source) ByName(string name)
