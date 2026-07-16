@@ -1200,6 +1200,22 @@ public abstract partial class HandlerBase
     /// order and landed writes in the wrong cell when the legs read state the RHS mutates).</summary>
     protected System.Action<CLeaf> PreparePropertySet(IPropertyReferenceOperation propRef)
     {
+        // CW1 lift: a runtime-polymorphic property/indexer WRITE on a v1-class receiver dispatches the
+        // setter through the typeobj machinery — legs staged NOW (C# order: receiver, index args), the
+        // value staged inside the deferred store (it arrives later, and the chain consumes it once per
+        // arm). The static arms below bind the receiver's STATIC setter; `base.P` keeps them.
+        if (VirtualDispatch.FindAccessor(propRef.Property, getter: false) is { } vsSetter
+            && IsAccessorDispatchSite(propRef, vsSetter, out var vsRecvTy))
+        {
+            var (vsRecv, vsIdx) = StageAccessorDispatchLegs(propRef);
+            return vsVal =>
+            {
+                var vSlot = _ctx.Builder.AllocScratch(GetUdonType(propRef.Property.Type));
+                EmitAssign(vSlot, vsVal);
+                EmitAccessorDispatch(propRef.Property, vsRecvTy, vsSetter, vsRecv, vsIdx, SlotRef(vSlot));
+            };
+        }
+
         // Aggregate (struct/tuple) OR v1-class auto-property → layout slot write on the backing object[].
         if (propRef.Instance is { Type: INamedTypeSymbol aggContaining } aggInst
             && EmitPolicy.IsObjectArrayEmulated(aggContaining)
@@ -2209,6 +2225,174 @@ public abstract partial class HandlerBase
         if (iref.Syntax is Microsoft.CodeAnalysis.CSharp.Syntax.BaseExpressionSyntax) return prop;
         var def = prop.OriginalDefinition;
         return FindOverridePropertyInChain(_classSymbol, def, prop.Name) ?? prop;
+    }
+
+    // ── CW1 lift: runtime-polymorphic PROPERTY/INDEXER accessor dispatch on v1-class receivers ──
+    // The accessor twin of InvocationHandler's v2b-2 method arm: the SAME VirtualDispatch machinery
+    // (IsDispatchSite gate shared with the recursion enumerator, ResolveTargets closed-world set,
+    // GuardOpenVirtualDispatch armor) lowers a virtual/override/abstract accessor reference to an
+    // inline typeobj-ReferenceEquals chain / devirtualized direct access / empty-set null lowering.
+    // Lives in HandlerBase because four emission surfaces share it: the property/indexer READ arms
+    // (InvocationHandler.Members), the SET path (PreparePropertySet), the compound read/write-back
+    // (AssignmentHandlerBase.CaptureLValue/EmitWriteBack), and the property-subpattern read
+    // (OperatorHandler's pattern lowering).
+
+    /// <summary>Phase-A armor: virtual dispatch answers through runtime type identity (typeobj) or the
+    /// minted-set enumeration, and neither is spec-sound when the receiver's static type still carries a
+    /// type parameter or when the family was minted through an OPEN construction site — every closed spec
+    /// there shares one typeobj, and cross-context mints are invisible to exact-symbol assignability.
+    /// Same choke-point polarity as EmitTypeCheck's family reject: loud over a silent
+    /// base-impl call / cross-spec dispatch.</summary>
+    protected void GuardOpenVirtualDispatch(INamedTypeSymbol recvTy, List<VDispatchTarget> targets, IMethodSymbol target)
+    {
+        bool hazard = ClassTypeObjectContext.ContainsTypeParameter(recvTy)
+            || recvTy.IsGenericType && _ctx.ClassTypes.HasOpenGenericSiblingOf(recvTy)
+            || targets.Any(t => t.Concrete.IsGenericType && _ctx.ClassTypes.HasOpenGenericSiblingOf(t.Concrete))
+            || targets.Count == 0 && _ctx.ClassTypes.HasOpenMintedFamilyAssignableTo(recvTy);
+        if (!hazard) return;
+        throw new NotSupportedException(
+            $"Virtual call '{recvTy.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}.{target.Name}' cannot be dispatched: "
+            + "the receiver type or an implementor of its family involves a generic class constructed inside a generic method "
+            + "(open construction site), so the closed-world override set / runtime type identity is not spec-distinct. "
+            + "Construct and dispatch at a concrete type (e.g. `new "
+            + (targets.Count > 0 ? targets[0].Concrete.OriginalDefinition.Name : recvTy.OriginalDefinition.Name)
+            + "<int>()` outside the generic method), or call the method non-virtually on the concrete type.");
+    }
+
+    /// <summary>The accessor-arm gate: true when <paramref name="accessor"/> at this property/indexer
+    /// reference is a runtime-polymorphic dispatch site on a v1 user-class receiver. The receiver's
+    /// type resolves through the monomorphization map, mirroring the method arm; the predicate itself
+    /// is VirtualDispatch.IsDispatchSite — shared with the recursion enumerator, so the two can never
+    /// drift (`base.P` and non-user-class receivers stay statically bound).</summary>
+    protected bool IsAccessorDispatchSite(IPropertyReferenceOperation op, IMethodSymbol accessor, out INamedTypeSymbol recvTy)
+    {
+        recvTy = null;
+        if (accessor == null || op.Instance == null) return false;
+        if (ResolveType(op.Instance.Type) is not INamedTypeSymbol rt) return false;
+        if (!VirtualDispatch.IsDispatchSite(accessor, op.Instance, rt)) return false;
+        recvTy = rt;
+        return true;
+    }
+
+    /// <summary>Stage the dispatch legs ONCE in the C# order — receiver, then ordinal-slotted index
+    /// args — into scratch slots: the typeobj chain consumes each leg once per arm, so raw leaves must
+    /// be materialized (mirrors EmitVirtualChain's staging; indexer parameters can never be ref/out,
+    /// so no copy-back protocol exists here).</summary>
+    protected (CLeaf Recv, List<CLeaf> IndexArgs) StageAccessorDispatchLegs(IPropertyReferenceOperation op)
+    {
+        var recvSlot = _ctx.Builder.AllocScratch(AggregateAbi.ArrayType);
+        EmitAssign(recvSlot, LoadInstanceRaw(op.Instance));
+        var staged = new List<CLeaf>();
+        if (op.Property.IsIndexer)
+        {
+            var ordered = EvaluateIndexerArgs(op);
+            for (int i = 0; i < ordered.Count; i++)
+            {
+                var argType = i < op.Property.Parameters.Length
+                    ? GetUdonType(op.Property.Parameters[i].Type) : "SystemObject";
+                var s = _ctx.Builder.AllocScratch(argType);
+                EmitAssign(s, ordered[i]);
+                staged.Add(SlotRef(s));
+            }
+        }
+        return (SlotRef(recvSlot), staged);
+    }
+
+    /// <summary>CW1 lift: lower a runtime-polymorphic accessor access through the SAME closed-world
+    /// machinery as the v2b-2 method arm — ResolveTargets, GuardOpenVirtualDispatch, then ≥2 targets →
+    /// inline typeobj-ReferenceEquals chain; singleton/sealed → devirtualized direct access; empty →
+    /// LogError + default for a read / LogError + skip for a write (closed-world: no minted implementor
+    /// means the receiver must be null; CLR NREs — §2.6 polarity, legs already evaluated for
+    /// side-effect parity). <paramref name="setValue"/> null ⇒ GET (returns the value leaf); non-null ⇒
+    /// SET (returns null). Legs arrive STAGED (<see cref="StageAccessorDispatchLegs"/>).</summary>
+    protected CLeaf EmitAccessorDispatch(IPropertySymbol prop, INamedTypeSymbol recvTy,
+        IMethodSymbol accessor, CLeaf recv, List<CLeaf> indexArgs, CLeaf setValue)
+    {
+        var targets = _ctx.VirtualDispatch.ResolveTargets(recvTy, accessor);
+        GuardOpenVirtualDispatch(recvTy, targets, accessor);
+        bool isSet = setValue != null;
+        string memberKind = prop.IsIndexer ? "indexer" : "property";
+
+        if (targets.Count == 0)
+        {
+            EmitExternVoid("UnityEngineDebug.__LogError__SystemObject__SystemVoid",
+                new List<CLeaf> { Const(
+                    $"USugar: NullReferenceException — virtual {memberKind} '{prop.ContainingType.Name}.{prop.Name}' has no minted implementor, so the receiver must be null ({_classSymbol.Name}). "
+                    + (isSet ? "Skipping the write." : "Returning default."),
+                    "SystemString") });
+            return isSet ? null : SlotRef(_ctx.Builder.AllocScratch(GetUdonType(prop.Type)));
+        }
+
+        if (recvTy.IsSealed || targets.Count == 1)
+            return EmitAccessorImplAccess(targets[0], prop, recv, indexArgs, setValue);
+
+        var typeObjSlot = _ctx.Builder.AllocScratch(AggregateAbi.ArrayType);
+        EmitAssign(typeObjSlot, AggregateAbi.ReadSlot(_builder, recv, 0, AggregateAbi.ArrayType));
+        int destSlot = isSet ? -1 : _ctx.Builder.AllocScratch(GetUdonType(prop.Type));
+
+        // Phase-A armor: a null receiver or a laundered non-bundle value matches no arm — LogError +
+        // default(read)/skip(write), never silent (mirrors EmitVirtualChain's matched flag).
+        var matched = _ctx.Builder.AllocScratch("SystemBoolean");
+        EmitAssign(matched, Const(false, "SystemBoolean"));
+
+        foreach (var t in targets)
+        {
+            var eq = ExternCall("SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean",
+                new List<CLeaf> { SlotRef(typeObjSlot), LoadField(t.TypeObjVar, AggregateAbi.ArrayType) }, "SystemBoolean");
+            _builder.EmitIf(eq, _ =>
+            {
+                EmitAssign(matched, Const(true, "SystemBoolean"));
+                var val = EmitAccessorImplAccess(t, prop, recv, indexArgs, setValue);
+                if (!isSet) EmitAssign(destSlot, val);
+            }, null);
+        }
+
+        var noMatch = ExternCall("SystemBoolean.__op_UnaryNegation__SystemBoolean__SystemBoolean",
+            new List<CLeaf> { SlotRef(matched) }, "SystemBoolean");
+        _builder.EmitIf(noMatch, _ =>
+            EmitExternVoid("UnityEngineDebug.__LogError__SystemObject__SystemVoid",
+                new List<CLeaf> { Const(
+                    $"USugar: NullReferenceException — virtual {memberKind} '{prop.ContainingType.Name}.{prop.Name}' accessed on a null or non-class receiver ({_classSymbol.Name}). "
+                    + (isSet ? "Skipping the write." : "Returning default."),
+                    "SystemString") }), null);
+
+        return isSet ? null : SlotRef(destSlot);
+    }
+
+    /// <summary>One dispatch arm's impl access. A COMPUTED accessor impl is a direct CFunction call
+    /// (receiver + index args [+ value] — the same convention as the static arms); an AUTO accessor
+    /// impl has no body, so it lowers to a layout-slot read/write against the CONCRETE target's layout
+    /// (an auto OVERRIDE's backing slot exists only in the concrete layout; a base auto slot keeps its
+    /// chain-walk index there). A struct-typed getter result deep-clones (C# getters return by value);
+    /// a class-typed result stays a reference (IsAggregateType is false for classes).</summary>
+    CLeaf EmitAccessorImplAccess(VDispatchTarget t, IPropertySymbol prop, CLeaf recv, List<CLeaf> indexArgs, CLeaf setValue)
+    {
+        if (t.Impl.AssociatedSymbol is IPropertySymbol implProp && !UasmEmitter.IsComputedProperty(implProp))
+        {
+            var layout = _ctx.Aggregates.GetLayout(t.Concrete);
+            if (!layout.TryGetIndex(implProp.Name, out var slotIdx))
+                throw new InvalidOperationException(
+                    $"Auto-property '{implProp.ContainingType.Name}.{implProp.Name}' has no layout slot on '{t.Concrete.Name}'.");
+            if (setValue != null)
+            {
+                AggregateAbi.WriteSlot(_builder, recv, slotIdx, setValue);
+                return null;
+            }
+            var slotVal = AggregateAbi.ReadSlot(_builder, recv, slotIdx, "SystemObject");
+            return prop.Type is INamedTypeSymbol slotAgg && EmitPolicy.IsAggregateType(slotAgg)
+                ? AggregateAbi.DeepClone(_builder, slotVal, slotAgg, _ctx.Aggregates.GetLayout) : slotVal;
+        }
+        var args = new List<CLeaf> { recv };
+        args.AddRange(indexArgs);
+        if (setValue != null)
+        {
+            args.Add(setValue);
+            EmitExprStmt(EmitCallToMethod(ResolveStructMember(t.Impl), args));
+            return null;
+        }
+        var ret = EmitCallToMethod(ResolveStructMember(t.Impl), args);
+        return prop.Type is INamedTypeSymbol retAgg && EmitPolicy.IsAggregateType(retAgg)
+            ? AggregateAbi.DeepClone(_builder, ret, retAgg, _ctx.Aggregates.GetLayout) : ret;
     }
 
     // ── Call helpers ──

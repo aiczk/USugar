@@ -30,6 +30,18 @@ public partial class InvocationHandler
                     : RetagSmallNullablePresent(nv, nblUnder);
         }
 
+        // CW1 lift: a runtime-polymorphic property READ on a v1-class receiver dispatches through the
+        // same typeobj machinery as the method arm (chain / devirt / empty lowering) — BEFORE the
+        // static auto-slot and computed-getter arms below, which bind the receiver's STATIC symbol.
+        // Fires for base-typed variables AND `this` inside an inherited base body; `base.P` keeps the
+        // static binding (IsDispatchSite excludes it).
+        if (VirtualDispatch.FindAccessor(op.Property, getter: true) is { } vpGetter
+            && IsAccessorDispatchSite(op, vpGetter, out var vpRecvTy))
+        {
+            var (vpRecv, vpIdx) = StageAccessorDispatchLegs(op);
+            return EmitAccessorDispatch(op.Property, vpRecvTy, vpGetter, vpRecv, vpIdx, null);
+        }
+
         // Auto-property on an aggregate (struct/tuple) OR v1 class → object[] element (the backing field's
         // slot). The clone at the return stays IsAggregateType, so a class-typed property returns by reference.
         if (op.Instance != null && op.Instance.Type is INamedTypeSymbol aggProp && EmitPolicy.IsObjectArrayEmulated(aggProp)
@@ -238,6 +250,16 @@ public partial class InvocationHandler
 
     CLeaf VisitIndexerGet(IPropertyReferenceOperation op)
     {
+        // CW1 lift: a runtime-polymorphic indexer READ on a v1-class receiver dispatches through the
+        // typeobj machinery (see the property-read twin above); the static arms below bind the
+        // receiver's STATIC accessor. `base[i]` and struct receivers keep their static arms.
+        if (VirtualDispatch.FindAccessor(op.Property, getter: true) is { } viGetter
+            && IsAccessorDispatchSite(op, viGetter, out var viRecvTy))
+        {
+            var (viRecv, viIdx) = StageAccessorDispatchLegs(op);
+            return EmitAccessorDispatch(op.Property, viRecvTy, viGetter, viRecv, viIdx, null);
+        }
+
         // User-defined indexer on this/base class → internal getter call (`this[i]` reads this-fields
         // directly). ResolveDispatchProperty (round 7): `this[i]` inside an inherited base body binds
         // the BASE indexer — dispatch the chain-leaf override; `base[i]` keeps the static binding.

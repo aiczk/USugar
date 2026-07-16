@@ -1,0 +1,24 @@
+[nodes]
+FacetVAccRec.Start() @546..673
+FvaA.Depth.get @187..296
+FvaB.Depth.get @359..469
+[recursive-edges]
+FvaA.Depth.get @187..296 -> FvaA.Depth.get @187..296
+FvaA.Depth.get @187..296 -> FvaB.Depth.get @359..469
+FvaB.Depth.get @359..469 -> FvaA.Depth.get @187..296
+FvaB.Depth.get @359..469 -> FvaB.Depth.get @359..469
+[cycle-edges]
+FvaA.Depth.get @187..296 -> FvaA.Depth.get @187..296
+FvaA.Depth.get @187..296 -> FvaB.Depth.get @359..469
+FvaB.Depth.get @359..469 -> FvaA.Depth.get @187..296
+FvaB.Depth.get @359..469 -> FvaB.Depth.get @359..469
+[this-field-touches]
+FacetVAccRec.Start() @546..673 -> FacetVAccRec.result
+FacetVAccRec.Start() @546..673 -> FvaBase.budget
+FacetVAccRec.Start() @546..673 -> FvaBase.next
+FvaA.Depth.get @187..296 -> FvaBase.budget
+FvaA.Depth.get @187..296 -> FvaBase.next
+FvaB.Depth.get @359..469 -> FvaBase.budget
+FvaB.Depth.get @359..469 -> FvaBase.next
+[reentrant-dispatch-sites]
+[tail-spared-direct-call-sites]

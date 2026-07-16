@@ -695,7 +695,25 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
                                     + "(only System/Unity properties and fields).");
                         }
                         CLeaf memberVal;
-                        if (isAgg && _ctx.Aggregates.GetLayout(aggMatchType).TryGetIndex(memberName, out var aggMemberIdx))
+                        // CW1 lift: a virtual property in a subpattern dispatches on the scrutinee's
+                        // RUNTIME type — the type guard above narrows only to `matchType`, so a
+                        // further-derived override still wins (the static slot/getter arms below would
+                        // silently read the base declaration's storage/body). The receiver is the
+                        // already-staged valSlot; a subpattern member read has no `base.` form.
+                        if (isAgg && EmitPolicy.IsUserClassType(aggMatchType)
+                            && sub.Member is IPropertyReferenceOperation vSubRef
+                            && VirtualDispatch.FindAccessor(vSubRef.Property, getter: true) is { } vSubGetter
+                            && VirtualDispatch.IsVirtualCall(vSubGetter))
+                        {
+                            var dispatched = EmitAccessorDispatch(vSubRef.Property, aggMatchType, vSubGetter,
+                                SlotRef(valSlot), new List<CLeaf>(), null);
+                            // Materialize into a typed temp (Udon COPY unboxes) so the sub-pattern
+                            // compares with the correct type tag, like the slot arm below.
+                            var vSubSlot = _ctx.Builder.AllocScratch(GetUdonType(memberType));
+                            EmitAssign(vSubSlot, dispatched);
+                            memberVal = SlotRef(vSubSlot);
+                        }
+                        else if (isAgg && _ctx.Aggregates.GetLayout(aggMatchType).TryGetIndex(memberName, out var aggMemberIdx))
                         {
                             // Aggregate member: read the boxed object[] slot, then materialize into a typed temp
                             // (Udon COPY unboxes) so the sub-pattern compares with the correct type tag.

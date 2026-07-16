@@ -33,6 +33,19 @@ public abstract class AssignmentHandlerBase : HandlerBase
 
     protected LValueCapture CaptureLValue(IOperation target)
     {
+        // CW1 lift: compound/inc-dec READ of a runtime-polymorphic accessor on a v1-class receiver —
+        // dispatch the getter through the typeobj machinery and cache the STAGED legs so
+        // EmitWriteBack's dispatch twin stores through the same cell (receiver/index side effects run
+        // exactly once). The static arms below bind the receiver's STATIC accessor.
+        if (target is IPropertyReferenceOperation vCapRef
+            && VirtualDispatch.FindAccessor(vCapRef.Property, getter: true) is { } vCapGetter
+            && IsAccessorDispatchSite(vCapRef, vCapGetter, out var vCapRecvTy))
+        {
+            var (vCapRecv, vCapIdx) = StageAccessorDispatchLegs(vCapRef);
+            var current = EmitAccessorDispatch(vCapRef.Property, vCapRecvTy, vCapGetter, vCapRecv, vCapIdx, null);
+            return new LValueCapture { Value = current, ArrayVal = vCapRecv, IndexArgs = vCapIdx };
+        }
+
         switch (target)
         {
             // User-defined indexer on this: cache the (possibly side-effecting) index args ONCE, so a
@@ -207,6 +220,24 @@ public abstract class AssignmentHandlerBase : HandlerBase
 
     protected void EmitWriteBack(IOperation target, CLeaf valueVal, LValueCapture lv = default)
     {
+        // CW1 lift: compound/inc-dec WRITE-BACK of a runtime-polymorphic accessor on a v1-class
+        // receiver — dispatch the setter, reusing the legs CaptureLValue's dispatch twin staged
+        // (fresh legs only on the capture-less paths, mirroring the static arms' `??` fallbacks).
+        if (target is IPropertyReferenceOperation vWbRef
+            && VirtualDispatch.FindAccessor(vWbRef.Property, getter: false) is { } vWbSetter
+            && IsAccessorDispatchSite(vWbRef, vWbSetter, out var vWbRecvTy))
+        {
+            var vWbRecv = lv.ArrayVal;
+            var vWbIdx = lv.IndexArgs;
+            if (vWbRecv == null)
+                (vWbRecv, vWbIdx) = StageAccessorDispatchLegs(vWbRef);
+            var vWbSlot = _ctx.Builder.AllocScratch(GetUdonType(vWbRef.Property.Type));
+            EmitAssign(vWbSlot, valueVal);
+            EmitAccessorDispatch(vWbRef.Property, vWbRecvTy, vWbSetter, vWbRecv,
+                vWbIdx ?? new List<CLeaf>(), SlotRef(vWbSlot));
+            return;
+        }
+
         switch (target)
         {
             case IFieldReferenceOperation aggFieldRef

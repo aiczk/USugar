@@ -23,13 +23,16 @@ public sealed class VirtualDispatch
 
     public VirtualDispatch(ClassTypeObjectContext typeObjs) { _typeObjs = typeObjs; }
 
-    /// <summary>A runtime-polymorphic ordinary call (excludes generic-virtual, which is rejected).</summary>
+    /// <summary>A runtime-polymorphic ordinary call OR property/indexer accessor call (CW1 lift) —
+    /// excludes generic-virtual, which stays rejected (an accessor is never generic, so the guard is
+    /// vacuous there but keeps the predicate honest).</summary>
     public static bool IsVirtualCall(IMethodSymbol target)
         => (target.IsVirtual || target.IsAbstract || target.IsOverride)
-           && target.MethodKind == MethodKind.Ordinary && !target.IsGenericMethod;
+           && target.MethodKind is MethodKind.Ordinary or MethodKind.PropertyGet or MethodKind.PropertySet
+           && !target.IsGenericMethod;
 
-    /// <summary>The SINGLE predicate for "this invocation is a runtime-polymorphic dispatch site on a v1
-    /// user-class receiver": a virtual call whose receiver is a base-typed variable OR <c>this</c> — NOT
+    /// <summary>The SINGLE predicate for "this invocation OR property/indexer accessor reference is a
+    /// runtime-polymorphic dispatch site on a v1 user-class receiver": a virtual call whose receiver is a base-typed variable OR <c>this</c> — NOT
     /// <c>base</c> (a non-virtual direct call to a specific base impl). The receiver's static type is passed
     /// in because the caller resolves it differently by phase (through the monomorphization map at emit, or
     /// the declared type in Phase-1 reach). Both the emission branch (InvocationHandler) and the
@@ -47,9 +50,22 @@ public sealed class VirtualDispatch
         => (target.IsVirtual || target.IsAbstract || target.IsOverride)
            && target.MethodKind == MethodKind.Ordinary && target.IsGenericMethod;
 
+    /// <summary>CW1 lift: the accessor a property reference dispatches — the property's own accessor,
+    /// or the nearest base declaration's when a partial-accessor override omits it (C#: `override int P
+    /// { set … }` inherits the base getter; Roslyn leaves the override's GetMethod null).</summary>
+    public static IMethodSymbol FindAccessor(IPropertySymbol prop, bool getter)
+    {
+        for (var cur = prop; cur != null; cur = cur.OverriddenProperty)
+            if ((getter ? cur.GetMethod : cur.SetMethod) is { } acc)
+                return acc;
+        return null;
+    }
+
     /// <summary>The root virtual declaration that owns the dispatch slot for m (the deepest
     /// <c>OverriddenMethod</c>). A non-override virtual (incl. <c>new virtual</c>) is its own root, so it
-    /// forms a distinct slot from any base method it hides.</summary>
+    /// forms a distinct slot from any base method it hides. Accessor symbols chain through
+    /// <c>OverriddenMethod</c> exactly like ordinary methods, so property/indexer slots need no extra
+    /// rules (a `new`/`new virtual` property's accessors root their own distinct slots).</summary>
     public static IMethodSymbol SlotIntroducer(IMethodSymbol m)
     {
         var cur = m.OriginalDefinition;

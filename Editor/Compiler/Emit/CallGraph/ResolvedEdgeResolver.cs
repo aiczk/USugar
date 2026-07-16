@@ -213,12 +213,17 @@ public sealed class ResolvedEdgeResolver
             }
             // virtual-slot most-derived impls reachable only through the inline typeobj dispatch chain
             // (seed by slot, most-derived first, to avoid phantom-minting shadowed base methods).
+            // CW1 lift: accessor slots seed too — but only COMPUTED accessor impls (an AUTO accessor
+            // impl has no body; its dispatch arm is a layout-slot access, nothing to register).
             var seededSlots = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
             for (var vt = (ITypeSymbol)ct; vt is INamedTypeSymbol vtn && EmitPolicy.IsUserClassType(vtn); vt = vtn.BaseType)
                 foreach (var vm in vt.GetMembers().OfType<IMethodSymbol>())
-                    if ((vm.IsVirtual || vm.IsOverride || vm.IsAbstract) && vm.MethodKind == MethodKind.Ordinary
+                    if ((vm.IsVirtual || vm.IsOverride || vm.IsAbstract)
+                        && vm.MethodKind is MethodKind.Ordinary or MethodKind.PropertyGet or MethodKind.PropertySet
                         && seededSlots.Add(VirtualDispatch.SlotIntroducer(vm))
-                        && VirtualDispatch.MostDerivedImpl(ct, VirtualDispatch.SlotIntroducer(vm)) is { } impl)
+                        && VirtualDispatch.MostDerivedImpl(ct, VirtualDispatch.SlotIntroducer(vm)) is { } impl
+                        && (impl.MethodKind == MethodKind.Ordinary
+                            || impl.AssociatedSymbol is IPropertySymbol implProp && UasmEmitter.IsComputedProperty(implProp)))
                         yield return new ResolvedTarget(impl, TargetRole.ReachStructMember);
         }
     }
@@ -393,6 +398,13 @@ public sealed class ResolvedEdgeResolver
                     if (sprop.GetMethod is { } sg) yield return sg.OriginalDefinition;
                     if (sprop.SetMethod is { } ss) yield return ss.OriginalDefinition;
                 }
+                // CW1 lift: accessor dispatch fan-out — the accessor twin of the invocation arm's
+                // v2b-2/CW5 arms. Both accessors yield conservatively (a reference alone doesn't
+                // reveal read-vs-write context; over-yield only ever over-spills, §8-3).
+                foreach (var impl in AccessorDispatchImplDefs(pr, VirtualDispatch.FindAccessor(pr.Property, getter: true)))
+                    yield return impl;
+                foreach (var impl in AccessorDispatchImplDefs(pr, VirtualDispatch.FindAccessor(pr.Property, getter: false)))
+                    yield return impl;
                 break;
         }
         // User-defined operator call — every form that resolves one carries the OperatorMethod: a plain
@@ -405,6 +417,35 @@ public sealed class ResolvedEdgeResolver
             ?? (op as ICompoundAssignmentOperation)?.OperatorMethod
             ?? (op as IIncrementOrDecrementOperation)?.OperatorMethod;
         if (opMethod != null) yield return opMethod.OriginalDefinition;
+    }
+
+    /// <summary>CW1 lift: the runtime impl-accessor DEFINITIONS a property/indexer reference can
+    /// dispatch to — the accessor twin of the invocation arm's v2b-2/CW5 virtual arms, shared by
+    /// <see cref="EnumerateInternalCallTargets"/>'s property arm and
+    /// <see cref="PropertyAccessorMatches"/> so the two matchers cannot drift. Empty when the site is
+    /// not a dispatch site. The CW5 over-yield polarity applies to a receiver whose DECLARED type
+    /// still carries a type parameter AND to an instance-less reference on a user class (a property
+    /// SUBPATTERN's member read — its receiver is the narrowed scrutinee, whose runtime type can be
+    /// any minted subtype): both yield the slot's most-derived impl for EVERY minted class
+    /// (over-yield only ever over-spills).</summary>
+    IEnumerable<IMethodSymbol> AccessorDispatchImplDefs(IPropertyReferenceOperation pr, IMethodSymbol acc)
+    {
+        if (acc == null || !VirtualDispatch.IsVirtualCall(acc)) yield break;
+        if (pr.Instance is IInstanceReferenceOperation ir && ir.Syntax is BaseExpressionSyntax) yield break;
+        bool overYield = ClassTypeObjectContext.ContainsTypeParameter(pr.Instance?.Type)
+            || pr.Instance == null && !pr.Property.IsStatic
+               && pr.Property.ContainingType is INamedTypeSymbol ict && EmitPolicy.IsUserClassType(ict);
+        if (overYield)
+        {
+            var slotDef = VirtualDispatch.SlotIntroducer(acc);
+            foreach (var concrete in _emitter.ClassTypes.MintedClasses)
+                if (VirtualDispatch.MostDerivedImpl(concrete, slotDef) is { } genImpl)
+                    yield return genImpl.OriginalDefinition;
+        }
+        else if (pr.Instance?.Type is INamedTypeSymbol arecv
+                 && VirtualDispatch.IsDispatchSite(acc, pr.Instance, arecv))
+            foreach (var vt in _emitter.VirtualDispatchInstance.ResolveTargets(arecv, acc))
+                yield return vt.Impl.OriginalDefinition;
     }
 
     /// <summary>Named-callee matcher over <see cref="EnumerateInternalCallTargets"/> — feeds the
@@ -424,6 +465,13 @@ public sealed class ResolvedEdgeResolver
     internal bool PropertyAccessorMatches(IPropertyReferenceOperation pr, IMethodSymbol callee, bool getter)
     {
         var acc = getter ? pr.Property.GetMethod : pr.Property.SetMethod;
+        // CW1 lift: at an accessor DISPATCH site the runtime callee is a resolved impl of the matching
+        // kind, not the statically-bound accessor — match through the same fan-out the classifier's
+        // property arm yields (BEFORE the cross arm below, which early-returns for the base-typed
+        // variable receivers dispatch sites live on).
+        foreach (var impl in AccessorDispatchImplDefs(pr, VirtualDispatch.FindAccessor(pr.Property, getter)))
+            if (SymbolEqualityComparer.Default.Equals(impl, callee))
+                return true;
         // Wave-12 r2 [V1]: variable-receiver / interface accessor dispatch — match the local method
         // the cross dispatch can land on (same rationale as IsInternalCallTo's cross arms).
         if (IsCrossDispatchReceiver(pr.Instance, pr.Property))
@@ -603,8 +651,17 @@ public sealed class ResolvedEdgeResolver
             && pr.Property.ContainingType is INamedTypeSymbol pit && EmitPolicy.IsObjectArrayEmulated(pit)
             && UasmEmitter.IsComputedProperty(prop))
         {
-            if (prop.GetMethod != null) yield return prop.GetMethod;
-            if (prop.SetMethod != null) yield return prop.SetMethod;
+            // CW1 lift: at an accessor dispatch site the STATIC accessor is not the runtime callee —
+            // the real targets (the most-derived impl per minted class) are seeded by the
+            // instantiation-reach virtual-slot walk, so skip the static accessor there (the exact
+            // mirror of the method arm's CA-v2b-2 dispatch-site skip above; collecting it would
+            // phantom-walk a never-dispatched base accessor body).
+            if (prop.GetMethod is { } pg
+                && !VirtualDispatch.IsDispatchSite(pg, pr.Instance, pr.Instance?.Type as INamedTypeSymbol))
+                yield return pg;
+            if (prop.SetMethod is { } ps
+                && !VirtualDispatch.IsDispatchSite(ps, pr.Instance, pr.Instance?.Type as INamedTypeSymbol))
+                yield return ps;
         }
         // Property-pattern subpattern: `p is { Doubled: ... }` reads Doubled via an IMPLICIT getter call,
         // not an explicit IPropertyReferenceOperation, so yield a computed user-struct property's getter

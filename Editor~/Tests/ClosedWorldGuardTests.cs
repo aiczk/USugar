@@ -180,34 +180,47 @@ public class NdConcat : UdonSharpBehaviour {
     }
 
     [Fact]
-    public void VirtualProperty_BaseTypedRead_LoudRejects()  // CW1
+    public void VirtualProperty_BaseTypedRead_DispatchesOverride()  // CW1 lift (flipped 1c72d4b pin)
     {
-        // The v2b-2 dispatch chain fires only for MethodKind.Ordinary, so every accessor site binds the
-        // receiver's STATIC property symbol: `s.Area` on a base-typed receiver silently ran the base
-        // getter (USugar 1, C# 42). Layout-level loud reject; a virtual METHOD wrapper does dispatch.
-        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
+        // Pre-lift this loud-rejected at layout: every accessor site bound the receiver's STATIC
+        // property symbol, so `s.Area` on a base-typed receiver silently ran the base getter
+        // (USugar 1, C# 42). Now the accessor rides the v2b-2 typeobj chain: both minted classes'
+        // getters are emitted, dispatched through a typeobj-ReferenceEquals chain, and the override's
+        // const 42 is reachable through its arm.
+        var (uasm, consts) = TestHelper.CompileWithConsts(@"
 using UdonSharp;
 public class ShapeVp { public virtual int Area { get { return 1; } } }
 public class CircleVp : ShapeVp { public override int Area { get { return 42; } } }
 public class CwVProp : UdonSharpBehaviour {
     public int r;
-    void Start() { ShapeVp s = new CircleVp(); r = s.Area; }
-}", "CwVProp"));
-        Assert.Contains("property", ex.Message);
+    void Start() { ShapeVp s = new CircleVp(); ShapeVp t = new ShapeVp(); r = s.Area + t.Area; }
+}", "CwVProp");
+        Assert.Contains("__typeobj_ShapeVp", uasm);
+        Assert.Contains("__typeobj_CircleVp", uasm);
+        Assert.Contains(consts, c => c.UdonType == "SystemInt32" && Equals(c.Value, 42)); // override arm
+        Assert.Contains(consts, c => c.UdonType == "SystemInt32" && Equals(c.Value, 1));  // base arm
+        Assert.True(Regex.Matches(uasm, @"__\d+_get_Area").Count >= 2,
+            "both slot impls' getters must be emitted and dispatched");
+        // The chain carries the no-match armor (null/laundered receiver → LogError, never silent).
+        Assert.Contains("UnityEngineDebug.__LogError__SystemObject__SystemVoid", uasm);
     }
 
     [Fact]
-    public void VirtualIndexer_BaseTypedRead_LoudRejects()  // CW1 indexer leg
+    public void VirtualIndexer_BaseTypedRead_DispatchesOverride()  // CW1 lift (flipped 1c72d4b pin)
     {
-        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
+        var (uasm, consts) = TestHelper.CompileWithConsts(@"
 using UdonSharp;
 public class IdxVBase { public virtual int this[int i] { get { return 1; } } }
 public class IdxVDer : IdxVBase { public override int this[int i] { get { return 42; } } }
 public class CwVIdx : UdonSharpBehaviour {
     public int r;
-    void Start() { IdxVBase b = new IdxVDer(); r = b[0]; }
-}", "CwVIdx"));
-        Assert.Contains("indexer", ex.Message);
+    void Start() { IdxVBase b = new IdxVDer(); IdxVBase c = new IdxVBase(); r = b[0] + c[0]; }
+}", "CwVIdx");
+        Assert.Contains("__typeobj_IdxVBase", uasm);
+        Assert.Contains("__typeobj_IdxVDer", uasm);
+        Assert.Contains(consts, c => c.UdonType == "SystemInt32" && Equals(c.Value, 42));
+        Assert.True(Regex.Matches(uasm, @"__\d+_get_Item").Count >= 2,
+            "both slot impls' indexer getters must be emitted and dispatched");
     }
 
     [Fact]

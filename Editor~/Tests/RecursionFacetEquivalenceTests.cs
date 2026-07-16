@@ -279,6 +279,19 @@ public class FacetVariantLeafReentry : FvlBase {
   }
   void Start() { Seed(); Go(n); result = acc; }
 }"),
+        // CW1 lift: polymorphic recursion through a virtual PROPERTY accessor on a base-typed field —
+        // the FvaA.get_Depth ↔ FvaB.get_Depth cycle exists only via the accessor dispatch fan-out
+        // (AccessorDispatchImplDefs, the accessor twin of the v2b-2 invocation arm); without it the
+        // getters' frames are never spilled around the mutual re-entry.
+        ("facet_virtual_accessor_recursion", "FacetVAccRec",
+@"using UdonSharp;
+public class FvaBase { public FvaBase next; public int budget; public virtual int Depth { get { return 0; } } }
+public class FvaA : FvaBase { public override int Depth { get { if (budget <= 0) return 1; budget = budget - 1; int keep = budget * 10; return next.Depth + keep + 1; } } }
+public class FvaB : FvaBase { public override int Depth { get { if (budget <= 0) return 2; budget = budget - 1; int keep = budget * 100; return next.Depth + keep + 2; } } }
+public class FacetVAccRec : UdonSharpBehaviour {
+  public int result;
+  void Start(){ FvaA a = new FvaA(); FvaB b = new FvaB(); a.next = b; b.next = a; a.budget = 2; b.budget = 3; result = a.Depth; }
+}"),
         // Base-ctor chain recursion (the v2b-2 comment's Rb..ctor -> Rd.Make -> new Rd -> Rb..ctor
         // form): the cycle runs through the explicit ctor chain and a this-receiver virtual call
         // inside the base ctor; a ctor inside a cycle is always non-tail.

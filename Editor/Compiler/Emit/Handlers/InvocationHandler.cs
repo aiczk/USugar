@@ -512,27 +512,8 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
         return isVoid ? Const(null, "SystemObject") : SlotRef(destSlot);
     }
 
-    /// <summary>Phase-A armor: virtual dispatch answers through runtime type identity (typeobj) or the
-    /// minted-set enumeration, and neither is spec-sound when the receiver's static type still carries a
-    /// type parameter or when the family was minted through an OPEN construction site — every closed spec
-    /// there shares one typeobj, and cross-context mints are invisible to exact-symbol assignability.
-    /// Same choke-point polarity as EmitTypeCheck's family reject (HandlerBase): loud over a silent
-    /// base-impl call / cross-spec dispatch.</summary>
-    void GuardOpenVirtualDispatch(INamedTypeSymbol recvTy, List<VDispatchTarget> targets, IMethodSymbol target)
-    {
-        bool hazard = ClassTypeObjectContext.ContainsTypeParameter(recvTy)
-            || recvTy.IsGenericType && _ctx.ClassTypes.HasOpenGenericSiblingOf(recvTy)
-            || targets.Any(t => t.Concrete.IsGenericType && _ctx.ClassTypes.HasOpenGenericSiblingOf(t.Concrete))
-            || targets.Count == 0 && _ctx.ClassTypes.HasOpenMintedFamilyAssignableTo(recvTy);
-        if (!hazard) return;
-        throw new System.NotSupportedException(
-            $"Virtual call '{recvTy.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}.{target.Name}' cannot be dispatched: "
-            + "the receiver type or an implementor of its family involves a generic class constructed inside a generic method "
-            + "(open construction site), so the closed-world override set / runtime type identity is not spec-distinct. "
-            + "Construct and dispatch at a concrete type (e.g. `new "
-            + (targets.Count > 0 ? targets[0].Concrete.OriginalDefinition.Name : recvTy.OriginalDefinition.Name)
-            + "<int>()` outside the generic method), or call the method non-virtually on the concrete type.");
-    }
+    // GuardOpenVirtualDispatch moved to HandlerBase (CW1 lift: the accessor dispatch arms in
+    // PreparePropertySet / CaptureLValue / the pattern lowering share the same open-family armor).
 
     /// <summary>Phase-A armor: the empty-target lowering — evaluate receiver and args for side-effect
     /// parity (CLR evaluates them before the NRE), then LogError + default (§2.6 null-invoke polarity).</summary>

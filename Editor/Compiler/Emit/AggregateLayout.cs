@@ -415,7 +415,11 @@ public static class ClassAbi
     }
 
     /// <summary>CA-M1: user classes have reference semantics and no interface dispatch. CA-v2 M1 adds
-    /// non-virtual inheritance; M3 adds a SEALED-class Object-method override (ToString/Equals/GetHashCode).</summary>
+    /// non-virtual inheritance; M3 adds a SEALED-class Object-method override (ToString/Equals/GetHashCode);
+    /// v2b-2 adds virtual METHOD dispatch and the CW1 lift adds virtual property/indexer ACCESSOR dispatch
+    /// (both through the inline typeobj chain), leaving only generic-virtual rejected here (backlog: a
+    /// generic virtual method would need per-call monomorphized dispatch slots the inline scheme does not
+    /// model — an accessor is never generic, so accessors are fully covered).</summary>
     public static void RejectUnsupportedMembers(INamedTypeSymbol classTy)
     {
         if (classTy.Interfaces.Length > 0)
@@ -426,30 +430,11 @@ public static class ClassAbi
         foreach (var m in classTy.GetMembers())
         {
             if (m.IsImplicitlyDeclared) continue;
-            if (m is IMethodSymbol { MethodKind: MethodKind.Ordinary or MethodKind.PropertyGet or MethodKind.PropertySet }
-                || m is IPropertySymbol)
-            {
-                // CA-v2b-2: non-generic virtual/abstract/override METHODS dispatch at runtime through the
-                // inline typeobj-ReferenceEquals chain (a sealed/singleton receiver devirtualizes to a direct
-                // call). A GENERIC virtual method would need per-call monomorphized dispatch slots, which the
-                // inline scheme does not model — reject it loudly (backlog).
-                if (m is IMethodSymbol vm0 && VirtualDispatch.IsGenericVirtual(vm0))
-                    throw new NotSupportedException(
-                        $"Member '{classTy.Name}.{m.Name}' is a generic virtual method: v2b-2 inline "
-                        + "typeobj-dispatch does not support per-call monomorphized virtual slots. Make the "
-                        + "method non-generic, or call a named method directly.");
-                // CW1: the dispatch chain exists ONLY for MethodKind.Ordinary — every property/indexer
-                // accessor site binds the receiver's STATIC symbol, so a virtual/override/abstract accessor
-                // on a base-typed receiver would silently run the base accessor. Same polarity as the
-                // generic-virtual reject: loud over silent-wrong (accessor dispatch is backlog).
-                if (m is IPropertySymbol vp && (vp.IsVirtual || vp.IsAbstract || vp.IsOverride))
-                    throw new NotSupportedException(
-                        $"Member '{classTy.Name}.{vp.Name}' is a virtual {(vp.IsIndexer ? "indexer" : "property")}: "
-                        + "v2b-2 inline typeobj-dispatch covers ordinary methods only, so an accessor on a "
-                        + "base-typed receiver would silently run the base accessor. Wrap the accessor in a "
-                        + "virtual method (methods DO dispatch), or make the "
-                        + (vp.IsIndexer ? "indexer" : "property") + " non-virtual.");
-            }
+            if (m is IMethodSymbol vm0 && VirtualDispatch.IsGenericVirtual(vm0))
+                throw new NotSupportedException(
+                    $"Member '{classTy.Name}.{m.Name}' is a generic virtual method: v2b-2 inline "
+                    + "typeobj-dispatch does not support per-call monomorphized virtual slots. Make the "
+                    + "method non-generic, or call a named method directly.");
         }
     }
 
