@@ -37,10 +37,12 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
         // a user-enum operand must synthesize its name (this path Concat'd the raw number: CLR "xSpades"
         // vs VM "x2") and a v1-class operand must dispatch ToString like the binary form. Unwrap BEFORE
         // evaluating: the class operand arrives boxed and the erasure choke would loud-reject the
-        // wrapped visit. Plain operands fall through untouched (byte-neutral for every prior shape).
+        // wrapped visit — but only through the value-preserving conversions (WjR3 A11: the full strip ate
+        // the user's inline `(Suit)(k % 4)` cast and Concat'd the raw number). Plain operands fall
+        // through untouched (byte-neutral for every prior shape).
         if (op.OperatorKind == BinaryOperatorKind.Add && GetUdonType(op.Type) == "SystemString")
         {
-            var vOp = UnwrapConversions(op.Value);
+            var vOp = UnwrapConcatOperand(op.Value);
             // Same choke as the binary-concat and interpolation surfaces: an ndim or object[]-emulated
             // value-type operand (user struct / tuple / anonymous type) would launder to "System.Object[]".
             ClassAbi.RejectImplicitToString(vOp.Type);

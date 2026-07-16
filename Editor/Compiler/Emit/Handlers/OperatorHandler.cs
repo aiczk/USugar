@@ -157,13 +157,15 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
 
         // B67: string concat with a user enum operand. C# boxes each operand to object for
         // string.Concat(object,object), so the enum operand arrives wrapped in a Suit→object conversion; look
-        // THROUGH it. Left as-is the enum would be Concat-ToString'd to its underlying number, so convert that
-        // operand to the C#-correct name string first and emit the object/object concat directly (routing it
-        // back through the generic path would re-select the extern by the now-string operand types).
+        // THROUGH it — but only through the value-preserving conversions (WjR3 A11: the full strip ate the
+        // user's inline `(Suit)(k % 4)` cast and Concat'd the raw number). Left as-is the enum would be
+        // Concat-ToString'd to its underlying number, so convert that operand to the C#-correct name string
+        // first and emit the object/object concat directly (routing it back through the generic path would
+        // re-select the extern by the now-string operand types).
         if (op.OperatorKind == BinaryOperatorKind.Add && GetUdonType(op.Type) == "SystemString")
         {
-            var lOp = UnwrapConversions(op.LeftOperand);
-            var rOp = UnwrapConversions(op.RightOperand);
+            var lOp = UnwrapConcatOperand(op.LeftOperand);
+            var rOp = UnwrapConcatOperand(op.RightOperand);
             // M4b: a v1 class operand stringifies through the object.ToString dispatch slot (same
             // lowering as an interpolation hole; the M3 sealed-only fast path dissolved into the
             // helper's devirt arm). Both operand VALUES evaluate first — C# order: Concat's operands

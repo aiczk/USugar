@@ -530,6 +530,23 @@ public abstract partial class HandlerBase
         return op;
     }
 
+    /// <summary>Unwrap a string-concat operand to its C#-semantic type: strip only VALUE-PRESERVING
+    /// conversions (identity / boxing / reference — including the compiler-inserted boxing to object
+    /// for string.Concat(object,object)), stopping at any value conversion. A user's inline cast IS
+    /// the operand's concat type (WjR3 A11): the full UnwrapConversions strip landed
+    /// `s += (Suit)(k % 4)` on the int and Concat'd the raw number, and landed `"" + (int)e` on the
+    /// enum and name-stringified where C# prints the number.</summary>
+    protected static IOperation UnwrapConcatOperand(IOperation op)
+    {
+        while (op is IConversionOperation conv)
+        {
+            var c = Microsoft.CodeAnalysis.CSharp.CSharpExtensions.GetConversion(conv);
+            if (!c.IsIdentity && !c.IsBoxing && !c.IsReference) break;
+            op = conv.Operand;
+        }
+        return op;
+    }
+
     protected static string SanitizeId(string name) => name.Replace('.', '_');
     protected static string ToInvariantString(object value)
         => value is IFormattable fmt ? fmt.ToString(null, CultureInfo.InvariantCulture)
