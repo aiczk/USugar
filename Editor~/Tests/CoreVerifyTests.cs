@@ -123,11 +123,14 @@ public class CoreVerifyTests
     [Fact]
     public void Verifier_Int32ToEnumSlot_Passes()
     {
-        // Enum types use Int32 underlying type — unknown types treated as potential enums
+        // Enum slots interop with Int32 (Udon stores enums as their underlying type). Fact-backed like
+        // every production slot type: only SDK enums keep their tag past the GetUdonTypeName minting
+        // choke (user enums fold to the underlying type), and the choke records them as enum facts.
+        UdonTypeFacts.RecordForTest("CvFakeSdkEnum", isEnum: true, isValueType: true);
         var module = new CModule();
         var builder = new CoreBuilder(module);
         builder.BeginFunction("test");
-        var slot = builder.AllocFrame("MyCustomEnum");
+        var slot = builder.AllocFrame("CvFakeSdkEnum");
         builder.EmitAssign(slot, builder.Const(1, "SystemInt32"));
 
         CoreVerify.Verify(module); // should not throw

@@ -9,7 +9,10 @@ using Microsoft.CodeAnalysis;
 /// (B72 family). This shadow changes NO verification behavior: it collects type FACTS at the single choke
 /// where Udon type names are minted (ExternResolver.GetUdonTypeName) and logs every relaxed-check pass
 /// that depended on a guess about an unregistered or fact-contradicted name. The ledger feeds the Phase-D
-/// polarity flip (strict-with-declared-relaxations); until then this is measurement only.</summary>
+/// polarity flip (strict-with-declared-relaxations); until then this is measurement only.
+/// Phase-D stage-1 measurement (2026-07-16): the full tracked suite plus the full local harness produced
+/// ZERO production-path entries — every relaxed-arm pass in production is fact-backed, so the declared
+/// relaxation set is intentionally just the structural rules below plus the minted registry.</summary>
 public static class UdonTypeFacts
 {
     public readonly struct TypeFact
@@ -95,13 +98,19 @@ public static class StrictVerifyLedger
     static readonly object _flushLock = new();
     static readonly string _filePath = Environment.GetEnvironmentVariable("USUGAR_STRICT_SHADOW");
 
+    /// <summary>Func-name prefix reserved for the shadow's own self-checks (StrictVerifyShadowTests):
+    /// they prove the logging path via the in-memory queue, so mirroring them would put permanent
+    /// non-measurement noise in a measurement window whose goal state is zero entries.</summary>
+    internal const string SelfTestFuncPrefix = "ssv_";
+
     public static void RecordGuess(string arm, string expected, string actual, string context,
         string funcName, string reason)
     {
         var line = "{\"arm\":\"" + arm + "\",\"expected\":\"" + expected + "\",\"actual\":\"" + actual
             + "\",\"context\":\"" + context + "\",\"func\":\"" + funcName + "\",\"reason\":\"" + reason + "\"}";
         _entries.Enqueue(line);
-        if (string.IsNullOrEmpty(_filePath)) return;
+        if (string.IsNullOrEmpty(_filePath)
+            || funcName?.StartsWith(SelfTestFuncPrefix, StringComparison.Ordinal) == true) return;
         try { lock (_flushLock) File.AppendAllText(_filePath, line + "\n"); }
         catch (IOException) { /* measurement must never break a compile */ }
     }
