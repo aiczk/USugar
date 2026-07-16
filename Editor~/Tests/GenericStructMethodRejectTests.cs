@@ -321,12 +321,15 @@ public class GR1NonCapturing : UdonSharpBehaviour {
     [Fact]
     public void GenericStructIsType_ThrowsNotSupported()
     {
+        // WaveJoint R2 [D10]: boxing the struct itself now rejects at the erasure choke, so the box
+        // here is an int — the pin isolates the runtime-type-test choke on the generic-struct TARGET.
         var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
 using UdonSharp;
 public struct Box<T> { public T value; }
 public class GR2User : UdonSharpBehaviour {
+    public int seed;
     void Start() {
-        object box = new Box<int>();
+        object box = seed;
         bool b = box is Box<int>;
     }
 }", "GR2User"));

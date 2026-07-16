@@ -1738,13 +1738,15 @@ public class TupleDlg : UdonSharpBehaviour {
     [Fact]
     public void TupleLocal_WholeValueUse_CompilesSuccessfully()
     {
-        // Whole-value tuple use is now supported with object[] representation
+        // Whole-value tuple use is now supported with object[] representation. The consumer takes the
+        // TUPLE type — an object-typed parameter would be the WaveJoint R2 [D10] erasure (the bundle
+        // launders past the stringify/cast chokes once boxed), which rejects loudly.
         var uasm = TestHelper.CompileToUasm(@"
 using UdonSharp;
 [UdonBehaviourSyncMode(BehaviourSyncMode.None)]
 public class TupleWholeTest : UdonSharpBehaviour {
     (int, int) GetPair() { return (1, 2); }
-    void Foo(object o) {}
+    void Foo((int, int) o) {}
     void Start() {
         var t = GetPair();
         Foo(t);

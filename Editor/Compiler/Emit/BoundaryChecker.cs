@@ -158,6 +158,24 @@ public sealed class BoundaryChecker
                 + "reaches extern calls (Debug.Log, string.Format, Array statics, …) that would silently receive "
                 + "the wrong shape. Keep the value typed as its T[,] type, or use a jagged array.");
 
+        // WaveJoint R2 [D10]: an object[]-emulated VALUE type (user struct / tuple / anonymous type)
+        // erased to object launders exactly like its ndim and v1-class twins — the box's runtime tag is
+        // a plain object[], so a later stringify silently prints "System.Object[]" and a cast back to a
+        // DIFFERENT bundle type reinterprets silently. No downstream surface can tell the laundered
+        // bundle from a real object[], so the erasure conversion is the only sound reject point. The
+        // equality/Equals positions stay legal (the class arm's carve-out), and T → T? is a WRAP whose
+        // static type still names the aggregate, not an erasure.
+        if (EmitPolicy.IsAggregateType(sourceType)
+            && !EmitPolicy.IsObjectArrayEmulated(destinationType)
+            && !(EmitPolicy.IsNullableT(destinationType, out var wrapped) && EmitPolicy.IsObjectArrayEmulated(wrapped))
+            && !IsProgramLocalEqualityPosition(conversion))
+            throw new NotSupportedException(
+                $"Erasing the value type '{sourceType.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}' "
+                + $"to '{destinationType.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}' is not supported: "
+                + "its runtime value is an object[] bundle with no runtime type identity, so once boxed to object it "
+                + "launders past the cast / ToString / extern boundary checks and would stringify as \"System.Object[]\" "
+                + "or silently reinterpret when cast back. Keep the value typed as its struct/tuple type.");
+
         if (!TypeClassifier.ContainsProgramLocalPayload(sourceType, TypeCtx)
             || TypeClassifier.ContainsProgramLocalPayload(destinationType, TypeCtx)
             || IsProgramLocalEqualityPosition(conversion))

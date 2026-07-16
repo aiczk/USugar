@@ -120,13 +120,15 @@ public class L2RFunc : UdonSharpBehaviour {
     [Fact]
     public void IsUserStruct_Throws()
     {
+        // WaveJoint R2 [D10]: boxing the struct itself now rejects at the erasure choke, so the box
+        // here is an int — the pin isolates the runtime-type-test choke on the aggregate TARGET.
         var ex = Assert.Throws<System.NotSupportedException>(() => TestHelper.CompileToUasm(@"
 using UdonSharp;
 public struct L2S { public int v; }
 public class L2RStruct : UdonSharpBehaviour {
     public int seed; public int result;
     object boxed;
-    void Start() { L2S s; s.v = seed; boxed = s; result = boxed is L2S ? 1 : 0; }
+    void Start() { boxed = seed; result = boxed is L2S ? 1 : 0; }
 }", "L2RStruct"));
         Assert.Contains("Runtime type test against", ex.Message);
     }
@@ -134,13 +136,15 @@ public class L2RStruct : UdonSharpBehaviour {
     [Fact]
     public void IsTuple_Throws()
     {
+        // WaveJoint R2 [D10]: boxing the tuple itself now rejects at the erasure choke, so the box
+        // here is an int — the pin isolates the runtime-type-test choke on the aggregate TARGET.
         var ex = Assert.Throws<System.NotSupportedException>(() => TestHelper.CompileToUasm(@"
 using System;
 using UdonSharp;
 public class L2RTuple : UdonSharpBehaviour {
     public int seed; public int result;
     object boxed;
-    void Start() { boxed = (seed, seed); result = boxed is ValueTuple<int, int> ? 1 : 0; }
+    void Start() { boxed = seed; result = boxed is ValueTuple<int, int> ? 1 : 0; }
 }", "L2RTuple"));
         Assert.Contains("Runtime type test against", ex.Message);
     }

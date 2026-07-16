@@ -32,6 +32,8 @@ public class ProgramLocalStructErasureHost : UdonSharpBehaviour {
     object Erase<T>(Box<T> box) { object o = box; return o; }
     void Start() { Box<Foo> box = default; Erase(box); }
 }", "ProgramLocalStructErasureHost"));
-        Assert.Contains("Erasing the v1 user class", ex.Message);
+        // WaveJoint R2 [D10]: the aggregate erasure arm now owns this shape (the source IS an
+        // aggregate) — it fires before the class-payload walk, and names the immediate source type.
+        Assert.Contains("Erasing the value type 'Box<", ex.Message);
     }
 }
