@@ -126,6 +126,35 @@ public class Wj3G : UdonSharpBehaviour {
         Assert.Contains("get_Item", uasm);
     }
 
+    // ── C07: const-folded decimal (negative literal / compile-time decimal arithmetic) ──
+    // ParseConstValue had no SystemDecimal arm: the folded value fell to the integer default arm,
+    // failed both parses, and silently became null → 0 on the heap (surfaced by closing the
+    // harness's decimal-remainder extern gap — the ExternMissing category was masking it).
+
+    [Fact]
+    public void NegativeDecimalConstFold_MintsDecimalConstant()
+    {
+        var (_, consts) = TestHelper.CompileWithConsts(@"
+using UdonSharp;
+public class Wj3I : UdonSharpBehaviour {
+    public int seed; public decimal d;
+    void Start(){ d = -12.5m + seed; }
+}", "Wj3I");
+        Assert.Contains(consts, c => c.UdonType == "SystemDecimal" && Equals(c.Value, -12.5m));
+    }
+
+    [Fact]
+    public void FoldedDecimalArithmetic_MintsDecimalConstant()
+    {
+        var (_, consts) = TestHelper.CompileWithConsts(@"
+using UdonSharp;
+public class Wj3J : UdonSharpBehaviour {
+    public int seed; public decimal d;
+    void Start(){ d = (2.5m + 1.25m) * 2m + seed; }
+}", "Wj3J");
+        Assert.Contains(consts, c => c.UdonType == "SystemDecimal" && Equals(c.Value, 7.5m));
+    }
+
     [Fact]
     public void ThisComputedPropertyCompound_InsideV1ClassBody_Compiles()
     {

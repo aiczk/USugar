@@ -371,6 +371,9 @@ public static class EmitPolicy
             "SystemSByte" => sbyte.Parse(value),
             "SystemSingle" => float.Parse(value, System.Globalization.CultureInfo.InvariantCulture),
             "SystemDouble" => double.Parse(value, System.Globalization.CultureInfo.InvariantCulture),
+            // WjR3 C07: without this arm a const-folded decimal (`-12.5m` folds through unary minus,
+            // `2m + 3m` through the binary fold) fell to the integer default arm and became null → 0.
+            "SystemDecimal" => decimal.Parse(value, System.Globalization.CultureInfo.InvariantCulture),
             "SystemBoolean" => bool.Parse(value),
             "SystemString" => value,
             "SystemByte" => byte.Parse(value),
