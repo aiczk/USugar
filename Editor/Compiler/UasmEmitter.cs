@@ -2708,15 +2708,32 @@ public class UasmEmitter
             accessorEdges[node] = acc;
         }
 
+        // M5b legacy oracle — the escape facet, recomputed by the legacy full-descent collectors over
+        // the root bodies + field-initializer trees (production: RecursionNodeWalk's per-op resolver
+        // consumption during the one pass; C3 moved these calls here from AssembleRecursionFacets so
+        // the escape collection stays inside the walk-level differential).
+        var escaped = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
+        foreach (var m in roots)
+            if (bodies.TryGetValue(m, out var escBody))
+                CollectEscapedDelegateTargets(escBody, methodSet, escaped);
+        foreach (var (_, initOp, _) in _fieldInitOps)
+            CollectEscapedDelegateTargets(initOp, methodSet, escaped);
+        var variantEscapeSigs = new List<(IMethodSymbol Method, string Sig)>();
+        foreach (var m in roots)
+            if (bodies.TryGetValue(m, out var vBody))
+                CollectVariantEscapeSigs(vBody, methodSet, variantEscapeSigs);
+        foreach (var (_, initOp, _) in _fieldInitOps)
+            CollectVariantEscapeSigs(initOp, methodSet, variantEscapeSigs);
+
         return new RecursionWalkResult
         {
-            Roots = roots,
-            MethodSet = methodSet,
             AllNodes = allNodes,
             Bodies = bodies,
             Edges = edges,
             DirectThisTouches = thisTouches,
             AccessorEdges = accessorEdges,
+            EscapedTargets = escaped,
+            VariantEscapeSigs = variantEscapeSigs,
         };
     }
 
@@ -2732,8 +2749,6 @@ public class UasmEmitter
         HashSet<IMethodSymbol> Nodes)
         AssembleRecursionFacets(RecursionWalkResult w)
     {
-        var roots = w.Roots;
-        var methodSet = w.MethodSet;
         var allNodes = w.AllNodes;
         var bodies = w.Bodies;
         var edges = w.Edges;                   // mutated in place below (synthetic dispatch edges)
@@ -2742,25 +2757,22 @@ public class UasmEmitter
 
         // (b) EscapeSet E (§4.1 + §5.4 widening): conservative approximation of every function whose
         // bridge address can end up inside a dispatched bundle. Two sources:
-        //   1. Same-class delegate-creation targets (method groups incl. local functions, and lambdas).
+        //   1. Same-class delegate-creation targets (method groups incl. local functions, and lambdas)
+        //      — the walk's escape facet (C3: collected per-op by the resolver's EscapeTarget arm
+        //      during the one pass, membership-filtered walk-side).
         //   2. §5.4 widening — every BRIDGE-BEARING method. A bundle can be minted in ANOTHER program
         //      (foreign-wired self-callback, fcd47 form; or SetProgramVariable-delivered) whose creation
-        //      site is invisible to CollectEscapedDelegateTargets, yet dispatched here re-enters THIS
+        //      site is invisible to the walk's escape collection, yet dispatched here re-enters THIS
         //      program's method. The planner emits a speculative bridge per non-event user method, and
         //      each such method is already a graph node (a root), so it is an escape target too. The
         //      resulting SCC growth is contained by the sig-filter on the synthetic edges (c): a typed
         //      dispatch can only enter a bridge of the SAME signature. Variance (Stage 1.75 §2.2) keeps
         //      this sound WITHOUT rejecting the binding: a variant method-group target is escaped under
-        //      its ADAPTER's protocol sig (sig-S), not its own — see the variantEscapeSigs collection
-        //      below (was previously "sound only while variance is rejected," the tracked coupling pin
+        //      its ADAPTER's protocol sig (sig-S), not its own — see variantEscapeSigs below (was
+        //      previously "sound only while variance is rejected," the tracked coupling pin
         //      SigFilterCoupledToVarianceReject; that pin now asserts the widened-not-rejected form).
         // MEMBERSHIP-ONLY (§1.5): never drives emission order.
-        var escape = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
-        foreach (var m in roots)
-            if (bodies.TryGetValue(m, out var rootBody))
-                CollectEscapedDelegateTargets(rootBody, methodSet, escape);
-        foreach (var (_, initOp, _) in _fieldInitOps)
-            CollectEscapedDelegateTargets(initOp, methodSet, escape);
+        var escape = w.EscapedTargets;
         foreach (var m in _planner.GetLayout(_classSymbol).DelegateBridges.Keys)
         {
             var def = m.OriginalDefinition;
@@ -2772,12 +2784,7 @@ public class UasmEmitter
         // separately since a single target may be BOTH an exact-sig escape target (elsewhere) AND a
         // variant one (multiple entries per method, hence a list rather than the single-valued dict
         // below used for the exact-sig case).
-        var variantEscapeSigs = new List<(IMethodSymbol Method, string Sig)>();
-        foreach (var m in roots)
-            if (bodies.TryGetValue(m, out var rootBody))
-                CollectVariantEscapeSigs(rootBody, methodSet, variantEscapeSigs);
-        foreach (var (_, initOp, _) in _fieldInitOps)
-            CollectVariantEscapeSigs(initOp, methodSet, variantEscapeSigs);
+        var variantEscapeSigs = w.VariantEscapeSigs;
 
         // (c) Synthetic SIG-FILTERED edges m→{e ∈ E : sig(e) == sig(one of m's dispatches)}: an indirect
         // dispatch of a delegate type T can only start an escaped function whose signature matches T's
@@ -3066,6 +3073,8 @@ public class UasmEmitter
             CollectLambdaNodes(child, result);
     }
 
+    // M5b legacy oracle — deleted after C2 proves the arms (production: the resolver's EscapeTarget
+    // arm, consumed by RecursionNodeWalk).
     // EscapeSet collection (§4.1): targets of every IDelegateCreationOperation that resolve to an
     // internal function — same-class method groups (incl. local functions) and lambdas. Full descent.
     // Wave-9 round-5 [X1]: a this-receiver VIRTUAL method-group conversion in an inherited base body
@@ -3092,7 +3101,9 @@ public class UasmEmitter
             CollectEscapedDelegateTargets(child, internalMethods, result);
     }
 
-    /// <summary>Variance design (2026-07-04 §2.2): collect (target, declared sig-S) pairs for every
+    /// <summary>M5b legacy oracle — deleted after C2 proves the arms (production:
+    /// ResolvedEdgeResolver.ResolveVariantEscapeSigs, consumed by RecursionNodeWalk).
+    /// Variance design (2026-07-04 §2.2): collect (target, declared sig-S) pairs for every
     /// VARIANT method-group delegate-creation site — a target reached through a sig adapter is escaped
     /// under the ADAPTER's protocol sig (sig-S = the delegate type's OWN Invoke signature), not its own,
     /// so the widened synthetic edge / SCC-reentrancy check must key on sig-S here (§5.4
@@ -3136,7 +3147,7 @@ public class UasmEmitter
     // dispatched inside a hoisted closure keeps the blanket treatment — its defs live outside this
     // tree); no ref/out use, no compound/increment/deconstruction target anywhere; at least one
     // write exists; and every write's RHS resolves to a delegate creation (or null). Targets mirror
-    // CollectEscapedDelegateTargets' mapping (OriginalDefinition + the [X1] leaf override).
+    // the resolver's EscapeTarget mapping (OriginalDefinition + the [X1] leaf override).
     bool TryResolvePreciseDispatchTargets(IOperation callerBody, IInvocationOperation site,
         out HashSet<IMethodSymbol> targets)
     {
@@ -3268,8 +3279,9 @@ public class UasmEmitter
 
     /// <summary>Wave-9 round-5 [X1]: leaf resolution for a this-receiver virtual METHOD-GROUP
     /// conversion (delegate creation), gated identically to LeafCallTarget — emission's bridge
-    /// resolves these to the chain-root export running the leaf body, so the escape set mirrors it.</summary>
-    IMethodSymbol LeafMethodRefTarget(IMethodReferenceOperation mr)
+    /// resolves these to the chain-root export running the leaf body, so the escape set mirrors it.
+    /// Internal for the resolver's EscapeTarget arm (C3), delegated like the other emitter deps.</summary>
+    internal IMethodSymbol LeafMethodRefTarget(IMethodReferenceOperation mr)
     {
         var m = mr.Method;
         if (m == null || !(m.IsVirtual || m.IsOverride || m.IsAbstract) || m.MethodKind != MethodKind.Ordinary)

@@ -5,33 +5,37 @@ using Microsoft.CodeAnalysis.Operations;
 
 /// <summary>The walk-level products BuildRecursionInfo's facet assembly consumes: the recursion node set
 /// (reach roots + local functions + lambdas) with each node's body, its internal-call edge set (filtered to
-/// the named-call membership set), and its DIRECT this-field touches / accessor edges (the transitive
-/// closure runs downstream, over the synthetic-edge-augmented graph). Produced by
+/// the named-call membership set), its DIRECT this-field touches / accessor edges (the transitive
+/// closure runs downstream, over the synthetic-edge-augmented graph), and the C3 escape facet (the §4.1
+/// escaped-target set + the variant sig-S pairs, membership-filtered). Produced by
 /// <see cref="RecursionNodeWalk"/> (production) and by UasmEmitter.LegacyRecursionWalk (the M5b differential
 /// oracle, deleted after C2/C4 prove the arms).</summary>
 internal sealed class RecursionWalkResult
 {
-    /// <summary>The reach-root definitions (BodyByDef seeds plus the supplementary generic-foreign-static
-    /// defs the walk derives at their reference sites, syntax-having) — the escape trio walks THESE bodies
-    /// (full descent covers nested-function subtrees).</summary>
-    public List<IMethodSymbol> Roots;
-    /// <summary>Roots + local functions — the membership filter for named internal-call edges (lambdas are
-    /// excluded: they are dispatched, never called by name).</summary>
-    public HashSet<IMethodSymbol> MethodSet;
     /// <summary>Every recursion-graph node (roots, local functions, lambdas), deduped.</summary>
     public IMethodSymbol[] AllNodes;
     public Dictionary<IMethodSymbol, IOperation> Bodies;
     public Dictionary<IMethodSymbol, HashSet<IMethodSymbol>> Edges;
     public Dictionary<IMethodSymbol, HashSet<IFieldSymbol>> DirectThisTouches;
     public Dictionary<IMethodSymbol, HashSet<IMethodSymbol>> AccessorEdges;
+    /// <summary>§4.1 escape set BEFORE the §5.4 planner-bridge widening (which stays downstream in
+    /// AssembleRecursionFacets): named method-group / [X1] leaf targets filtered to internal methods
+    /// (roots + local functions), plus every delegate-created lambda symbol UNCONDITIONALLY — the
+    /// legacy collector's lambda arm had no membership gate; a non-node lambda falls to the
+    /// downstream escapeSig edges.ContainsKey gate.</summary>
+    public HashSet<IMethodSymbol> EscapedTargets;
+    /// <summary>Variance §2.2: (internal target, adapter protocol sig-S) pairs for variant
+    /// method-group creations — one target may appear under several sig-S values, hence a list.</summary>
+    public List<(IMethodSymbol Method, string Sig)> VariantEscapeSigs;
 }
 
 /// <summary>CA rewrite (M5b): the recursion facet of the unified resolver-driven traversal — ONE pass over
 /// the recursion node set's bodies replacing BuildRecursionInfo's four private per-op walks
 /// (CollectInternalCallees / CollectThisFieldTouches / CollectLocalFunctions / CollectLambdaNodes). Each op
 /// is visited once, dispatching to <see cref="ResolvedEdgeResolver.ResolveEdges"/> for CallEdge targets
-/// (TargetRole.CallEdge's production consumer) plus walk-local collection of this-field touches, accessor
-/// edges, and nested-function declarations.
+/// (TargetRole.CallEdge's production consumer) and EscapeTarget / variant escape-sig collection (C3 —
+/// TargetRole.EscapeTarget's production consumer, absorbing the separate escape walks), plus walk-local
+/// collection of this-field touches, accessor edges, and nested-function declarations.
 ///
 /// Node set = the main reach fixpoint's definitions (BodyByDef) plus every supplementary
 /// generic-foreign-static def, local function, and lambda the walk discovers transitively,
@@ -41,8 +45,9 @@ internal sealed class RecursionWalkResult
 /// GetMethodBodyOperation arm is gone; red syntax is shared across trees, so the syntax-keyed facets are
 /// unaffected). Attribution stops at LF/lambda boundaries — each is its own node — exactly like the legacy
 /// walks' child-skip. Field-initializer trees are walked in declaration-discovery-only mode (a field init is
-/// not a node; its lambdas are). Raw call targets are filtered against the final MethodSet only after the
-/// worklist dries (a call to a local function discovered later must still become an edge).
+/// not a node; its lambdas are). Raw call targets and raw escape targets are filtered against the final
+/// method set only after the worklist dries (a call to — or an escape of — a local function discovered
+/// later must still count).
 ///
 /// Runs INSIDE BuildRecursionInfo (post VirtualDispatch seed — the CallEdge virtual arm needs the seeded
 /// instance), per class in Phase 2; no shared mutable state, thread-safe.</summary>
@@ -74,6 +79,8 @@ internal sealed class RecursionNodeWalk
 
         var bodies = new Dictionary<IMethodSymbol, IOperation>(cmp);
         var rawTargets = new Dictionary<IMethodSymbol, HashSet<IMethodSymbol>>(cmp);
+        var rawEscapes = new HashSet<IMethodSymbol>(cmp);
+        var rawVariantSigs = new List<(IMethodSymbol Method, string Sig)>();
         var touches = new Dictionary<IMethodSymbol, HashSet<IFieldSymbol>>(cmp);
         var accessors = new Dictionary<IMethodSymbol, HashSet<IMethodSymbol>>(cmp);
         var localFuncs = new HashSet<IMethodSymbol>(cmp);
@@ -135,21 +142,34 @@ internal sealed class RecursionNodeWalk
                 }
                 node = null;
             }
-            else if (node != null)
+            else
             {
+                // One ResolveEdges dispatch serves both roles. CallEdge attribution is node-gated
+                // (a field-init call is a reach, not a caller edge — the legacy walks never ran the
+                // callee collector over field-initializer trees), but EscapeTarget / variant escape-sig
+                // collection (C3) runs in EVERY visit mode: the legacy escape walks descended the
+                // field-initializer trees too (a field init `Action f = M;` escapes M). Raw escapes are
+                // membership-filtered after the worklist dries, exactly like rawTargets.
                 foreach (var t in _resolver.ResolveEdges(op))
-                    if (t.Role == TargetRole.CallEdge)
-                        rawTargets[node].Add(t.Method);
-                switch (op)
                 {
-                    case IFieldReferenceOperation { Instance: IInstanceReferenceOperation } fr when !fr.Field.IsStatic:
-                        touches[node].Add(fr.Field.OriginalDefinition);
-                        break;
-                    case IPropertyReferenceOperation { Instance: IInstanceReferenceOperation } pr:
-                        if (pr.Property.GetMethod != null) accessors[node].Add(pr.Property.GetMethod.OriginalDefinition);
-                        if (pr.Property.SetMethod != null) accessors[node].Add(pr.Property.SetMethod.OriginalDefinition);
-                        break;
+                    if (t.Role == TargetRole.CallEdge && node != null)
+                        rawTargets[node].Add(t.Method);
+                    else if (t.Role == TargetRole.EscapeTarget)
+                        rawEscapes.Add(t.Method);
                 }
+                foreach (var p in _resolver.ResolveVariantEscapeSigs(op))
+                    rawVariantSigs.Add(p);
+                if (node != null)
+                    switch (op)
+                    {
+                        case IFieldReferenceOperation { Instance: IInstanceReferenceOperation } fr when !fr.Field.IsStatic:
+                            touches[node].Add(fr.Field.OriginalDefinition);
+                            break;
+                        case IPropertyReferenceOperation { Instance: IInstanceReferenceOperation } pr:
+                            if (pr.Property.GetMethod != null) accessors[node].Add(pr.Property.GetMethod.OriginalDefinition);
+                            if (pr.Property.SetMethod != null) accessors[node].Add(pr.Property.SetMethod.OriginalDefinition);
+                            break;
+                    }
             }
             foreach (var child in op.ChildOps())
                 Visit(child, node);
@@ -187,15 +207,29 @@ internal sealed class RecursionNodeWalk
             edges[node] = filtered;
         }
 
+        // C3: the consumer-side membership filter for the resolver's UNGATED EscapeTarget yields —
+        // named method-group / [X1] leaf targets must be internal methods (roots + local functions),
+        // while a delegate-created lambda escapes unconditionally, reproducing the legacy collector's
+        // ungated lambda arm (a lambda is never called by name, so it is never in methodSet; a
+        // non-node lambda is dropped downstream by the escapeSig edges.ContainsKey gate).
+        var escaped = new HashSet<IMethodSymbol>(cmp);
+        foreach (var t in rawEscapes)
+            if (t.MethodKind == MethodKind.AnonymousFunction || methodSet.Contains(t))
+                escaped.Add(t);
+        var variantSigs = new List<(IMethodSymbol Method, string Sig)>();
+        foreach (var p in rawVariantSigs)
+            if (methodSet.Contains(p.Method))
+                variantSigs.Add(p);
+
         return new RecursionWalkResult
         {
-            Roots = roots,
-            MethodSet = methodSet,
             AllNodes = order.ToArray(),
             Bodies = bodies,
             Edges = edges,
             DirectThisTouches = touches,
             AccessorEdges = accessors,
+            EscapedTargets = escaped,
+            VariantEscapeSigs = variantSigs,
         };
     }
 }

@@ -26,6 +26,23 @@ public sealed class ResolvedEdgeResolver
         // including the v2b-2 virtual override set — a synthetic caller edge.
         foreach (var m in _emitter.EnumerateInternalCallTargets(op))
             yield return new ResolvedTarget(m.OriginalDefinition, TargetRole.CallEdge);
+        // EscapeTarget (C3): the per-op delegate-creation classification — every function whose bridge
+        // address this op can mint into a bundle (§4.1). Three mappings: the method group's static
+        // OriginalDefinition; the [X1] leaf-override definition whose body the planner's bridge actually
+        // runs (LeafMethodRefTarget, delegated like the other emitter deps); and a lambda's own symbol.
+        // Yielded UNGATED — the internal-method membership set exists only after the recursion worklist
+        // dries, so the filter stays consumer-side, like the reach roles' registration-gate bucketing.
+        if (op is IDelegateCreationOperation dc)
+        {
+            if (dc.Target is IMethodReferenceOperation mr && mr.Method != null)
+            {
+                yield return new ResolvedTarget(mr.Method.OriginalDefinition, TargetRole.EscapeTarget);
+                if (_emitter.LeafMethodRefTarget(mr) is { } leafT)
+                    yield return new ResolvedTarget(leafT, TargetRole.EscapeTarget);
+            }
+            else if (dc.Target is IAnonymousFunctionOperation af && af.Symbol != null)
+                yield return new ResolvedTarget(af.Symbol, TargetRole.EscapeTarget);
+        }
         foreach (var t in ResolveReachEdges(op))
             yield return t;
     }
@@ -95,6 +112,28 @@ public sealed class ResolvedEdgeResolver
         }
     }
 
+    /// <summary>C3: the VARIANT escape facet — (target, declared sig-S) pairs for a method-group
+    /// delegate-creation site whose target's own sig differs from the delegate type's Invoke sig
+    /// (sig-S = the sig adapter's protocol sig, Stage 1.75 §2.2). A Sig payload has no place on
+    /// ResolvedTarget, so this is a dedicated per-op entry point (precedent:
+    /// <see cref="ResolveForeignStaticSuppDefs"/>). Ungated like the EscapeTarget arm — the
+    /// internal-method membership filter stays consumer-side. Deliberately OMITS the [X1]
+    /// base-override leaf-target resolution the EscapeTarget arm carries (base.M variance is an
+    /// unexercised compounding edge case outside the variance design's tested scope; closing that
+    /// gap is a separately gated change, not this relocation) and the lambda arm (a lambda's sig is
+    /// inferred from the delegate type, so it can never be variant).</summary>
+    public IEnumerable<(IMethodSymbol Method, string Sig)> ResolveVariantEscapeSigs(IOperation op)
+    {
+        if (op is IDelegateCreationOperation { Target: IMethodReferenceOperation { Method: { } mr } } variantDc
+            && variantDc.Type is INamedTypeSymbol vDlgType && vDlgType.DelegateInvokeMethod is { } vInvoke)
+        {
+            var t = mr.OriginalDefinition;
+            var sigS = DelegateAbi.BuildSigPart(vInvoke);
+            if (sigS != DelegateAbi.BuildSigPart(t))
+                yield return (t, sigS);
+        }
+    }
+
     /// <summary>CA rewrite (M5a): open-constructed generic base-instance targets — the `_openGenericBaseDefs`
     /// leg of CollectBaseInstanceCallsInOperation (an open generic base call, or a generic base method group
     /// through `this`). Registration-free but a MAIN-fixpoint recursion/reach root. Yields OriginalDefinitions.</summary>
@@ -114,9 +153,9 @@ public sealed class ResolvedEdgeResolver
     // The reach-role targets of a SINGLE op — no CallEdge, no child recursion, EXCEPT the mint arm, which
     // reaches C's field-init / base-ctor / virtual-impl bodies that live off the walked op tree (so the
     // worklist never sees them) and must therefore be discovered here.
-    //   Facet coverage (M0): EscapeTarget (delegate/method-group escape) is deferred with the delegate
-    //   precise-resolution work the owner postponed; open/generic foreign-static + open base-generic drops
-    //   feed capture roots (a supplementary facet) and are not reach targets here.
+    //   Facet coverage: EscapeTarget lives in ResolveEdges (C3), not here — escape is a recursion-phase
+    //   facet, not a reach target; open/generic foreign-static + open base-generic drops feed capture
+    //   roots (a supplementary facet) and are not reach targets here.
     IEnumerable<ResolvedTarget> ReachEdges(IOperation op, HashSet<INamedTypeSymbol> minted)
     {
         // Reach targets carry the classifier's CONSTRUCTED symbol (per-spec) — NOT its OriginalDefinition:
