@@ -48,12 +48,16 @@ public abstract class AssignmentHandlerBase : HandlerBase
 
         switch (target)
         {
-            // User-defined indexer on this: cache the (possibly side-effecting) index args ONCE, so a
-            // compound assignment (`this[Idx()] += x`) does not evaluate the index twice.
+            // User-defined indexer on this/base BEHAVIOUR: cache the (possibly side-effecting) index args
+            // ONCE, so a compound assignment (`this[Idx()] += x`) does not evaluate the index twice.
             // ResolveDispatchProperty (round 7): `this[i]` inside an inherited base body binds the BASE
             // indexer — read through the chain-leaf override's getter; `base[i]` keeps the static binding.
+            // WjR3 (B48 twin): an object[]-emulated containing type (user struct OR v1 class) must NOT
+            // take this behaviour-only no-receiver arm — its accessor expects the receiver object[] as
+            // param0 (CInternalCall arity skew); it falls through to the receiver-as-param0 arm below.
             case IPropertyReferenceOperation { Instance: IInstanceReferenceOperation, Property: { IsIndexer: true } } idxRef
-                when ResolveDispatchProperty(idxRef).GetMethod is { } idxDispatchGetter
+                when !EmitPolicy.IsObjectArrayEmulated(idxRef.Property.ContainingType)
+                && ResolveDispatchProperty(idxRef).GetMethod is { } idxDispatchGetter
                 && _methodFunctions.ContainsKey(idxDispatchGetter):
             {
                 // Each VisitExpression(arg) is bound to a scratch leaf once under ANF — the index side effect
@@ -64,11 +68,13 @@ public abstract class AssignmentHandlerBase : HandlerBase
                 var currentVal = EmitCallToMethod(idxDispatchGetter, new List<CLeaf>(cachedArgs));
                 return new LValueCapture { Value = currentVal, IndexArgs = cachedArgs };
             }
-            // User-defined indexer on a user STRUCT instance (`s[i] += x`): cache the struct receiver and the
-            // (possibly side-effecting) index args ONCE, then read via the getter with the receiver as param0.
-            // The same receiver/args are reused by the setter in EmitWriteBack. Mirrors VisitIndexerGet.
+            // User-defined indexer on an object[]-emulated instance (`s[i] += x`, and this/base inside a
+            // struct or v1-class body): cache the receiver and the (possibly side-effecting) index args
+            // ONCE, then read via the getter with the receiver as param0. The same receiver/args are
+            // reused by the setter in EmitWriteBack. Mirrors VisitIndexerGet. WjR3: gate on
+            // IsObjectArrayEmulated, not IsAggregateType — the CW6 polarity of the property arm below.
             case IPropertyReferenceOperation { Property: { IsIndexer: true } } sIdxRef
-                when sIdxRef.Instance?.Type is INamedTypeSymbol sIdxType && EmitPolicy.IsAggregateType(sIdxType)
+                when sIdxRef.Instance?.Type is INamedTypeSymbol sIdxType && EmitPolicy.IsObjectArrayEmulated(sIdxType)
                 && sIdxRef.Property.GetMethod is { } sIdxGetterRaw:
             {
                 var recv = LoadInstanceRaw(sIdxRef.Instance);
@@ -290,10 +296,14 @@ public abstract class AssignmentHandlerBase : HandlerBase
                 && ExternResolver.IsUdonSharpBehaviour(autoDispatchProp.ContainingType)
                 && autoDispatchProp.ContainingType.Name != "UdonSharpBehaviour":
                 return;
-            // User-defined indexer on this → call setter with the index args followed by the value. Reuse
-            // the index args cached by CaptureLValue (compound assignment) to avoid re-evaluating them.
+            // User-defined indexer on this/base BEHAVIOUR → call setter with the index args followed by
+            // the value (no receiver param). Reuse the index args cached by CaptureLValue (compound
+            // assignment) to avoid re-evaluating them. WjR3 (B48 twin): an object[]-emulated containing
+            // type must NOT take this no-receiver arm — it falls through to the receiver-as-param0
+            // object[]-emulated indexer arm below.
             case IPropertyReferenceOperation { Instance: IInstanceReferenceOperation, Property: { IsIndexer: true } } idxRef
-                when ResolveDispatchProperty(idxRef).SetMethod is { } idxDispatchSetter
+                when !EmitPolicy.IsObjectArrayEmulated(idxRef.Property.ContainingType)
+                && ResolveDispatchProperty(idxRef).SetMethod is { } idxDispatchSetter
                 && _methodFunctions.TryGetValue(idxDispatchSetter, out _):
             {
                 // Wave-9 round-4: the uncached path slots by parameter ordinal too (named args).
@@ -302,9 +312,15 @@ public abstract class AssignmentHandlerBase : HandlerBase
                 EmitExprStmt(EmitCallToMethod(idxDispatchSetter, setterArgs));
                 return;
             }
-            // User-defined property on this → call setter
-            case IPropertyReferenceOperation { Instance: IInstanceReferenceOperation } propRef
-                when ResolveDispatchProperty(propRef).SetMethod is { } dispatchSetter
+            // User-defined property on this/base BEHAVIOUR → call setter (value only, no receiver
+            // param). WjR3: an object[]-emulated containing type must NOT take this arm — its setter
+            // expects the receiver object[] as param0 (a v1-class/struct `this.P += 1` skewed the
+            // CInternalCall arity); it falls through to the object[]-emulated property arm below. An
+            // INDEXER never belongs here either (the value-only call drops the index legs) — it rides
+            // the indexer arms above/below.
+            case IPropertyReferenceOperation { Instance: IInstanceReferenceOperation, Property: { IsIndexer: false } } propRef
+                when !EmitPolicy.IsObjectArrayEmulated(propRef.Property.ContainingType)
+                && ResolveDispatchProperty(propRef).SetMethod is { } dispatchSetter
                 && _methodFunctions.TryGetValue(dispatchSetter, out _):
                 EmitExprStmt(EmitCallToMethod(dispatchSetter, new List<CLeaf> { valueVal }));
                 return;

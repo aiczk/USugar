@@ -260,17 +260,17 @@ public partial class InvocationHandler
             return EmitAccessorDispatch(op.Property, viRecvTy, viGetter, viRecv, viIdx, null);
         }
 
-        // User-defined indexer on this/base class → internal getter call (`this[i]` reads this-fields
-        // directly). ResolveDispatchProperty (round 7): `this[i]` inside an inherited base body binds
-        // the BASE indexer — dispatch the chain-leaf override; `base[i]` keeps the static binding.
-        // B48: a struct's `this[i]` (implicit-`this` receiver whose type is a user struct) must NOT take
-        // this class-receiver arm — the struct getter is a CFunction expecting the receiver object[] as
-        // param0, and calling it with only the index args slots the index into the receiver slot
-        // (HeapTypeMismatch 'Int32' as 'Object[]' inside the getter's field read). It falls through to
-        // the struct arm below, which passes LoadInstanceRaw(this) = the receiver param — mirroring how
-        // a struct's `this.Method()` self-call routes through EmitStructInstanceCall (struct-first).
+        // User-defined indexer on this/base BEHAVIOUR → internal getter call (`this[i]` reads this-fields
+        // directly, no receiver param). ResolveDispatchProperty (round 7): `this[i]` inside an inherited
+        // base body binds the BASE indexer — dispatch the chain-leaf override; `base[i]` keeps the static
+        // binding. B48/WjR3: an object[]-emulated containing type (user struct OR v1 class) must NOT take
+        // this behaviour-only arm — its accessor is a CFunction expecting the receiver object[] as param0,
+        // and calling it with only the index args skews the arity (`base[i]` / non-virtual `this[i]` in a
+        // v1-class body hit the CInternalCall arity gate on legal C#). It falls through to the
+        // object[]-emulated arm below, which passes LoadInstanceRaw(this/base) = the receiver param —
+        // mirroring how a struct's `this.Method()` self-call routes through EmitStructInstanceCall.
         if (op.Instance is IInstanceReferenceOperation
-            && !EmitPolicy.IsAggregateType(op.Property.ContainingType)
+            && !EmitPolicy.IsObjectArrayEmulated(op.Property.ContainingType)
             && ResolveDispatchProperty(op) is { GetMethod: { } idxDispatchGetter }
             && _methodFunctions.ContainsKey(idxDispatchGetter))
         {
