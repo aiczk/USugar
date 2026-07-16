@@ -705,6 +705,13 @@ public static class ExternResolver
         {
             var underlying = GetUdonTypeName(((INamedTypeSymbol)leftType).EnumUnderlyingType);
             var opName2 = BinaryOperatorNames[operatorKind];
+            // Value-producing bitwise ops (&/|/^) promote a small underlying through int32: Udon's small-int
+            // value ops all return SystemInt32 (SystemByte.__op_LogicalOr__SystemByte_SystemByte__SystemByte
+            // does not exist), and every emit path computes small ops in Int32-promoted slots, so the
+            // signature must be the full-Int32 one. The bool-producing comparisons keep the underlying
+            // width — SystemByte/SystemInt16 equality/relational externs exist and their operands stay small.
+            if (operatorKind is BinaryOperatorKind.And or BinaryOperatorKind.Or or BinaryOperatorKind.ExclusiveOr)
+                PromoteSmallInt(ref underlying);
             // Bitwise ops on enums return the enum type in C#, but Udon uses the underlying type
             var resultUnderlying = resultType?.TypeKind == TypeKind.Enum
                 ? underlying : result;
