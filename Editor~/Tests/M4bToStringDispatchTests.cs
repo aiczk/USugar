@@ -265,4 +265,43 @@ public class M4bGt : UdonSharpBehaviour {
 }", "M4bGt"));
         Assert.Contains("GetType", ex2.Message);
     }
+
+    // ── Compound-concat parity (B67/M4b twin found by the M4b DiffFuzz sweep): `s += x` is
+    //    string.Concat one surface over — a user-enum operand must synthesize its name (was: silent
+    //    number, CLR "xSpades" vs VM "x2") and a v1-class operand must dispatch ToString (was: loud
+    //    erasure reject where the binary form dispatches). ──
+
+    [Fact]
+    public void CompoundConcat_UserEnum_SynthesizesName()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public enum CcSuit { Hearts, Spades }
+public class M4bCcEnum : UdonSharpBehaviour {
+    public CcSuit suit;
+    public string s;
+    void Start(){ s = ""x""; s += suit; }
+}", "M4bCcEnum");
+        // The B67 value→name helper is synthesized and called (name VALUES live in the data table,
+        // pinned on the real VM) — pre-fix this path Concat'd the raw underlying number.
+        Assert.Contains("__enumstr_TCcSuit", uasm);
+        Assert.Contains("SystemString.__Concat__SystemObject_SystemObject__SystemString", uasm);
+    }
+
+    [Fact]
+    public void CompoundConcat_ClassOperand_DispatchesToString()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public class CcB { public int v; public override string ToString(){ return ""b"" + v; } }
+public class CcD : CcB { public override string ToString(){ return ""d"" + v; } }
+public class M4bCcCls : UdonSharpBehaviour {
+    public int seed;
+    public string s;
+    void Start(){ CcB c = seed > 0 ? (CcB)new CcD() : new CcB(); s = ""x""; s += c; }
+}", "M4bCcCls");
+        Assert.Contains("__typeobj_CcB", uasm);
+        Assert.Contains("__typeobj_CcD", uasm);
+        Assert.Contains("SystemString.__Concat__SystemObject_SystemObject__SystemString", uasm);
+    }
 }

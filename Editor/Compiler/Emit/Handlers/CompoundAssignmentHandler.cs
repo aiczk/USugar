@@ -32,6 +32,26 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
         // Capture lvalue sub-expressions once to avoid double evaluation
         var lv = CaptureLValue(op.Target);
         var leftVal = lv.Value;
+
+        // B67/M4b parity (found by the M4b DiffFuzz sweep): `s += x` is string.Concat one surface over —
+        // a user-enum operand must synthesize its name (this path Concat'd the raw number: CLR "xSpades"
+        // vs VM "x2") and a v1-class operand must dispatch ToString like the binary form. Unwrap BEFORE
+        // evaluating: the class operand arrives boxed and the erasure choke would loud-reject the
+        // wrapped visit. Plain operands fall through untouched (byte-neutral for every prior shape).
+        if (op.OperatorKind == BinaryOperatorKind.Add && GetUdonType(op.Type) == "SystemString")
+        {
+            var vOp = UnwrapConversions(op.Value);
+            if (ResolveType(vOp.Type) is INamedTypeSymbol vt
+                && (EmitPolicy.IsUserClassType(vt) || ExternResolver.IsUserEnum(vt)))
+            {
+                var converted = ConvertConcatOperand(VisitExpression(vOp), vOp);
+                var concat = ExternCall("SystemString.__Concat__SystemObject_SystemObject__SystemString",
+                    new List<CLeaf> { leftVal, converted }, "SystemString");
+                EmitWriteBack(op.Target, concat, lv);
+                return concat;
+            }
+        }
+
         var rightVal = VisitExpression(op.Value);
 
         // User-defined struct operator (s += t uses the struct's operator +): static method call, then write

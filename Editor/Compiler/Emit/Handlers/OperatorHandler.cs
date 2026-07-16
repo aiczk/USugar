@@ -176,10 +176,8 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
             {
                 var l = VisitExpression(lOp);
                 var r = VisitExpression(rOp);
-                l = lIsClass ? EmitClassToStringDispatch(lCls, l, nullIsError: false, useOverrides: true)
-                             : TryEmitEnumToString(l, lOp.Type) ?? l;
-                r = rIsClass ? EmitClassToStringDispatch(rCls, r, nullIsError: false, useOverrides: true)
-                             : TryEmitEnumToString(r, rOp.Type) ?? r;
+                l = ConvertConcatOperand(l, lOp);
+                r = ConvertConcatOperand(r, rOp);
                 return ExternCall("SystemString.__Concat__SystemObject_SystemObject__SystemString",
                     new List<CLeaf> { l, r }, "SystemString");
             }
@@ -188,9 +186,9 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
             if (ExternResolver.IsUserEnum(ResolveType(lOp.Type)) || ExternResolver.IsUserEnum(ResolveType(rOp.Type)))
             {
                 var l = VisitExpression(lOp);
-                l = TryEmitEnumToString(l, lOp.Type) ?? l;
+                l = ConvertConcatOperand(l, lOp);
                 var r = VisitExpression(rOp);
-                r = TryEmitEnumToString(r, rOp.Type) ?? r;
+                r = ConvertConcatOperand(r, rOp);
                 return ExternCall("SystemString.__Concat__SystemObject_SystemObject__SystemString",
                     new List<CLeaf> { l, r }, "SystemString");
             }

@@ -2403,6 +2403,21 @@ public abstract partial class HandlerBase
             .GetMembers("ToString").OfType<IMethodSymbol>()
             .First(m => !m.IsStatic && m.Parameters.Length == 0);
 
+    /// <summary>One string.Concat(object,object) operand, already evaluated from its UNWRAPPED node:
+    /// dispatches a v1-class value through the object.ToString slot (M4b), rejects a type that cannot
+    /// stringify honestly (v1-class-free ndim per CW15 — the class case is handled above, not rejected),
+    /// and synthesizes a user enum's name string (B67); everything else passes through. Shared by the
+    /// binary concat arms (OperatorHandler) and the compound `s += x` arm (CompoundAssignmentHandler)
+    /// so the three conversions cannot drift per surface — and so an ndim operand rejects even when it
+    /// sits beside a class operand (the pre-share class arm returned before the reject ran).</summary>
+    protected CLeaf ConvertConcatOperand(CLeaf value, IOperation unwrapped)
+    {
+        if (ResolveType(unwrapped.Type) is INamedTypeSymbol cls && EmitPolicy.IsUserClassType(cls))
+            return EmitClassToStringDispatch(cls, value, nullIsError: false, useOverrides: true);
+        ClassAbi.RejectImplicitToString(unwrapped.Type);
+        return TryEmitEnumToString(value, unwrapped.Type) ?? value;
+    }
+
     /// <summary>M4b: stringify a v1-class receiver through the object.ToString dispatch slot — the third
     /// lowering built on the v2b-2 machinery (ResolveTargets closed-world set, GuardOpenVirtualDispatch
     /// armor, typeobj-ReferenceEquals chain, sealed/singleton devirt). Three surfaces share it: the
