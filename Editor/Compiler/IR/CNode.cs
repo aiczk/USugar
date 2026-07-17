@@ -155,7 +155,21 @@ public sealed class CLoadField : CStmt
 // ── Flat-block terminators (flat role only) ──
 
 /// <summary>Base for flat basic-block terminators.</summary>
-public abstract class CTerminator { }
+public abstract class CTerminator
+{
+    /// <summary>THE successor enumeration of the flat CFG — the single shared edge source for
+    /// CoreFlatOptimizer's liveness/RPO and CoreToUasm's RPO linearization (formerly two hand-kept
+    /// copies). Exhaustive over the terminator kinds; an unknown kind throws rather than silently
+    /// yielding no edges, which would truncate liveness and let CoalesceSlots merge live slots.</summary>
+    public static int[] GetSuccessors(CTerminator term) => term switch
+    {
+        CJump j => new[] { j.TargetBlockId },
+        CBranch b => new[] { b.TrueBlockId, b.FalseBlockId },
+        CRet => Array.Empty<int>(), // function exit — no successors
+        _ => throw new VerificationException(
+            $"Unknown CTerminator kind in CTerminator.GetSuccessors: {(term == null ? "null" : term.GetType().Name)}"),
+    };
+}
 
 /// <summary>Unconditional jump.</summary>
 public sealed class CJump : CTerminator

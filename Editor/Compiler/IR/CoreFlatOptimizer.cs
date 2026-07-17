@@ -131,7 +131,7 @@ public static class CoreFlatOptimizer
         var outSet = new HashSet<int>();
         if (b.Terminator != null)
         {
-            foreach (var s in GetSuccessors(b.Terminator))
+            foreach (var s in CTerminator.GetSuccessors(b.Terminator))
                 if (blockLiveIn.TryGetValue(s, out var li)) outSet.UnionWith(li);
             foreach (var r in GetReadSlotsTerm(b.Terminator)) outSet.Add(r);
         }
@@ -199,28 +199,42 @@ public static class CoreFlatOptimizer
     // frame reads nothing after it, so it is exempt from the per-callee-name wrap (one non-tail
     // site used to make every site of that callee spill, overflowing the stack on deep mixed
     // tail/non-tail recursion; the dispatch arm has always been per-site via Reentrant).
-    static bool IsRecursiveCall(CStmt inst, HashSet<string> names) => inst switch
+    internal static bool IsRecursiveCall(CStmt inst, HashSet<string> names) => inst switch
     {
         CExprStmt { Expr: CInternalCall ic } => !ic.TailSpared && names.Contains(ic.FuncName),
         CAssign { Value: CInternalCall ic } => !ic.TailSpared && names.Contains(ic.FuncName),
-        _ => false,
+        CExprStmt { Expr: CExternCall } => false, // extern call — never an internal recursive edge
+        CAssign => false,                         // leaf-valued copy
+        CStoreField => false,
+        CLoadField => false,
+        _ => throw new VerificationException(
+            $"Unknown flat CStmt kind in CoreFlatOptimizer.IsRecursiveCall: {StmtKind(inst)}"),
     };
 
-    static bool IsReentrantFlagged(CStmt inst) => inst switch
+    internal static bool IsReentrantFlagged(CStmt inst) => inst switch
     {
         CExprStmt { Expr: CInternalCall ic } => ic.Reentrant,
         CExprStmt { Expr: CExternCall ec } => ec.Reentrant,
         CAssign { Value: CInternalCall ic } => ic.Reentrant,
         CAssign { Value: CExternCall ec } => ec.Reentrant,
-        _ => false,
+        CAssign => false, // leaf-valued copy
+        CStoreField => false,
+        CLoadField => false,
+        _ => throw new VerificationException(
+            $"Unknown flat CStmt kind in CoreFlatOptimizer.IsReentrantFlagged: {StmtKind(inst)}"),
     };
 
     // Wave-12 r2 [V1]: statements to pull inside the spill window ahead of a flagged cross-dispatch
     // SendCustomEvent (its SetProgramVariable copy-ins — see CExternCall.PreSpillStmts).
-    static int PreSpillStmtCount(CStmt inst) => inst switch
+    internal static int PreSpillStmtCount(CStmt inst) => inst switch
     {
         CExprStmt { Expr: CExternCall ec } => ec.PreSpillStmts,
-        _ => 0,
+        CExprStmt { Expr: CInternalCall } => 0, // pre-spill window is a cross-dispatch extern concept
+        CAssign => 0,
+        CStoreField => 0,
+        CLoadField => 0,
+        _ => throw new VerificationException(
+            $"Unknown flat CStmt kind in CoreFlatOptimizer.PreSpillStmtCount: {StmtKind(inst)}"),
     };
 
     // Push order: fields then slots (reload pops in reverse → LIFO balanced).
@@ -422,7 +436,13 @@ public static class CoreFlatOptimizer
     /// approximation — it guards the interval-derivation code. The intervals are a strict superset of the
     /// per-instruction live sets (every slot in liveOut(p) has p inside its interval), so this checker can
     /// never fire on a map the derivation produces; if it DOES, that is a derivation bug. Internal (not
-    /// private) so tests can drive it directly with a hand-built bad mapping.</summary>
+    /// private) so tests can drive it directly with a hand-built bad mapping.
+    /// Self-shadowing note (audit 2026-07-17 ①): this checker consumes the same
+    /// GetWrittenSlot / GetReadSlotsInst / GetReadSlotsTerm / CTerminator.GetSuccessors family the
+    /// intervals are built from, so a silently-defaulting arm there used to blind BOTH sides at once —
+    /// a new flat kind read/wrote nothing, the intervals shrank, and the checker agreed. Those switches
+    /// now throw <see cref="VerificationException"/> on any unknown kind (pinned by
+    /// FlatRoleSwitchCensusTests), so the shared-enumeration gap is loud before either side can be wrong.</summary>
     internal static void VerifyNoInterference(CFunction func, Dictionary<int, int> mapping, Dictionary<int, HashSet<int>> blockLiveIn = null)
     {
         if (mapping.Count == 0) return;
@@ -490,7 +510,7 @@ public static class CoreFlatOptimizer
             // live-out of the terminator = union of successor block live-ins.
             var live = new HashSet<int>();
             if (block.Terminator != null)
-                foreach (var succ in GetSuccessors(block.Terminator))
+                foreach (var succ in CTerminator.GetSuccessors(block.Terminator))
                     if (blockLiveIn.TryGetValue(succ, out var li)) live.UnionWith(li);
 
             foreach (var slot in live) Mark(slot, termPos);        // live across the terminator
@@ -526,7 +546,7 @@ public static class CoreFlatOptimizer
             if (!visited.Add(blockId)) return;
             if (!blockMap.TryGetValue(blockId, out var block)) return;
             if (block.Terminator == null) { postOrder.Add(block); return; }
-            foreach (var succ in GetSuccessors(block.Terminator))
+            foreach (var succ in CTerminator.GetSuccessors(block.Terminator))
                 Dfs(succ);
             postOrder.Add(block);
         }
@@ -538,16 +558,23 @@ public static class CoreFlatOptimizer
         return postOrder;
     }
 
-    static int? GetWrittenSlot(CStmt inst) => inst switch
+    // The switches below are EXHAUSTIVE over the flat-role kinds (FlatVerify.VerifyInstruction /
+    // VerifyTerminator's arms are the domain): kinds that legitimately read/write/remap NOTHING get
+    // explicit arms, and the default throws — a silently-defaulting arm here corrupts liveness, and
+    // VerifyNoInterference (derived from these same functions) would stay green while it happened.
+
+    internal static int? GetWrittenSlot(CStmt inst) => inst switch
     {
         CAssign m => m.DestSlot,
         CLoadField lf => lf.DestSlot,
+        CStoreField => null, // writes a heap field, never a slot
         CExprStmt { Expr: CExternCall ce } => ce.DestSlot,
         CExprStmt { Expr: CInternalCall ci } => ci.DestSlot,
-        _ => null,
+        _ => throw new VerificationException(
+            $"Unknown flat CStmt kind in CoreFlatOptimizer.GetWrittenSlot: {StmtKind(inst)}"),
     };
 
-    static IEnumerable<int> GetReadSlotsInst(CStmt inst)
+    internal static IEnumerable<int> GetReadSlotsInst(CStmt inst)
     {
         switch (inst)
         {
@@ -557,6 +584,8 @@ public static class CoreFlatOptimizer
             case CStoreField sf:
                 if (sf.Value is CSlotRef sr2) yield return sr2.SlotId;
                 break;
+            case CLoadField:
+                break; // reads a heap field, never a slot
             case CExprStmt { Expr: CExternCall ce }:
                 foreach (var arg in ce.Args)
                     if (arg is CSlotRef sr3) yield return sr3.SlotId;
@@ -565,19 +594,27 @@ public static class CoreFlatOptimizer
                 foreach (var arg in ci.Args)
                     if (arg is CSlotRef sr4) yield return sr4.SlotId;
                 break;
+            default:
+                throw new VerificationException(
+                    $"Unknown flat CStmt kind in CoreFlatOptimizer.GetReadSlotsInst: {StmtKind(inst)}");
         }
     }
 
-    static IEnumerable<int> GetReadSlotsTerm(CTerminator term)
+    internal static IEnumerable<int> GetReadSlotsTerm(CTerminator term)
     {
         switch (term)
         {
+            case CJump:
+                break; // no slot operands
             case CBranch br:
                 if (br.Cond is CSlotRef sr) yield return sr.SlotId;
                 break;
             case CRet ret:
                 if (ret.Value is CSlotRef sr2) yield return sr2.SlotId;
                 break;
+            default:
+                throw new VerificationException(
+                    $"Unknown CTerminator kind in CoreFlatOptimizer.GetReadSlotsTerm: {TermKind(term)}");
         }
     }
 
@@ -610,7 +647,7 @@ public static class CoreFlatOptimizer
         return result;
     }
 
-    static CStmt RemapInst(CStmt inst, Dictionary<int, int> mapping) => inst switch
+    internal static CStmt RemapInst(CStmt inst, Dictionary<int, int> mapping) => inst switch
     {
         CAssign m => new CAssign(RemapSlotId(m.DestSlot, mapping), RemapOperand(m.Value, mapping)),
         CLoadField lf => new CLoadField(RemapSlotId(lf.DestSlot, mapping), lf.FieldName, lf.Type),
@@ -620,27 +657,29 @@ public static class CoreFlatOptimizer
         // checks Reentrant conservation after the pass.
         CExprStmt { Expr: CExternCall ce } => new CExprStmt(ce.With(RemapArgs(ce.Args, mapping), RemapSlotIdNullable(ce.DestSlot, mapping))),
         CExprStmt { Expr: CInternalCall ci } => new CExprStmt(ci.With(RemapArgs(ci.Args, mapping), RemapSlotIdNullable(ci.DestSlot, mapping))),
-        _ => inst,
+        _ => throw new VerificationException(
+            $"Unknown flat CStmt kind in CoreFlatOptimizer.RemapInst: {StmtKind(inst)}"),
     };
 
-    static CTerminator RemapTerminator(CTerminator term, Dictionary<int, int> mapping) => term switch
+    internal static CTerminator RemapTerminator(CTerminator term, Dictionary<int, int> mapping) => term switch
     {
+        CJump => term, // no slot operands
         CBranch br => new CBranch(RemapLeaf(br.Cond, mapping), br.TrueBlockId, br.FalseBlockId),
         CRet ret when ret.Value != null => new CRet(RemapLeaf(ret.Value, mapping)),
-        _ => term,
+        CRet => term,  // void return
+        _ => throw new VerificationException(
+            $"Unknown CTerminator kind in CoreFlatOptimizer.RemapTerminator: {TermKind(term)}"),
     };
 
-    // ========================================================================
-    // Helpers
-    // ========================================================================
-
-
-    static IEnumerable<int> GetSuccessors(CTerminator term) => term switch
+    // Kind naming for the loud defaults above (mirrors CoreVerify's "Unknown CStmt type" voice; a
+    // CExprStmt names its payload too, since the flat arms discriminate on it).
+    static string StmtKind(CStmt inst) => inst switch
     {
-        CJump j => new[] { j.TargetBlockId },
-        CBranch b => new[] { b.TrueBlockId, b.FalseBlockId },
-        CRet => Array.Empty<int>(),
-        _ => Array.Empty<int>(),
+        null => "null",
+        CExprStmt es => $"CExprStmt({es.Expr.GetType().Name})",
+        _ => inst.GetType().Name,
     };
+
+    static string TermKind(CTerminator term) => term == null ? "null" : term.GetType().Name;
 
 }

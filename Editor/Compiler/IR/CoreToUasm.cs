@@ -334,21 +334,11 @@ public static class CoreToUasm
                 if (!visited.Add(block.Id)) return;
                 if (block.Terminator != null)
                 {
-                    foreach (var succId in GetSuccessors(block.Terminator))
+                    foreach (var succId in CTerminator.GetSuccessors(block.Terminator))
                         if (blockById.TryGetValue(succId, out var succ))
                             Visit(succ, blockById, visited, postorder);
                 }
                 postorder.Add(block);
-            }
-
-            static IEnumerable<int> GetSuccessors(CTerminator term)
-            {
-                switch (term)
-                {
-                    case CJump j: yield return j.TargetBlockId; break;
-                    case CBranch b: yield return b.TrueBlockId; yield return b.FalseBlockId; break;
-                    case CRet: break;
-                }
             }
         }
 
