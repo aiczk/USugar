@@ -480,35 +480,33 @@ public static class ExternResolver
     public const string EventReceiverGetProgramVariable =
         "VRCUdonCommonInterfacesIUdonEventReceiver.__GetProgramVariable__SystemString__SystemObject";
 
+    // The signature builders route the receiver type through the SAME remap table as GetUdonTypeName
+    // (RemapUdonType). A private 1-arm twin (RemapExternType) used to live here carrying only the
+    // VRCUdonUdonBehaviour→IUdonEventReceiver arm; callers that pass GetUdonTypeName output arrive
+    // already remapped, so the fold is a no-op there, and a raw display name now gets the full table.
     public static string BuildMethodSignature(string containingType, string methodName, string[] paramTypes, string returnType)
     {
-        var sanitizedType = RemapExternType(SanitizeTypeName(containingType));
+        var sanitizedType = RemapUdonType(SanitizeTypeName(containingType));
         var sanitizedParams = string.Join("_", paramTypes.Select(SanitizeTypeName));
         var sanitizedReturn = SanitizeTypeName(returnType);
         var paramPart = paramTypes.Length > 0 ? $"__{sanitizedParams}" : "";
         return $"{sanitizedType}.{methodName}{paramPart}__{sanitizedReturn}";
     }
 
-    static string RemapExternType(string sanitizedType) => sanitizedType switch
-    {
-        "VRCUdonUdonBehaviour" => "VRCUdonCommonInterfacesIUdonEventReceiver",
-        _ => sanitizedType
-    };
-
     public static string BuildPropertyGetSignature(string containingType, string propertyName, string returnType)
     {
-        return $"{RemapExternType(SanitizeTypeName(containingType))}.__get_{propertyName}__{SanitizeTypeName(returnType)}";
+        return $"{RemapUdonType(SanitizeTypeName(containingType))}.__get_{propertyName}__{SanitizeTypeName(returnType)}";
     }
 
     public static string BuildPropertySetSignature(string containingType, string propertyName, string valueType)
     {
-        return $"{RemapExternType(SanitizeTypeName(containingType))}.__set_{propertyName}__{SanitizeTypeName(valueType)}__SystemVoid";
+        return $"{RemapUdonType(SanitizeTypeName(containingType))}.__set_{propertyName}__{SanitizeTypeName(valueType)}__SystemVoid";
     }
 
     public static string BuildFieldSetSignature(string containingType, string fieldName, string valueType, bool isValueType = true)
     {
         var sanitized = SanitizeTypeName(containingType);
-        var prefix = isValueType ? sanitized : RemapExternType(sanitized);
+        var prefix = isValueType ? sanitized : RemapUdonType(sanitized);
         var suffix = isValueType ? "" : "__SystemVoid";
         return $"{prefix}.__set_{fieldName}__{SanitizeTypeName(valueType)}{suffix}";
     }
@@ -732,8 +730,17 @@ public static class ExternResolver
         PromoteSmallInt(ref right);
         PromoteSmallInt(ref result);
 
-        // Built-in operator
-        var opName = BinaryOperatorNames.TryGetValue(operatorKind, out var name) ? name : operatorKind.ToString();
+        // Built-in operator. A kind outside the table must fail loudly: the old fallback minted
+        // "{left}.__{kind}__…" from ToString() — a bogus extern name only the extern gate could catch,
+        // opaque in a production SDK assembly. Every unlisted kind is unreachable from the handler
+        // layer today: ConditionalAnd/ConditionalOr are lowered to short-circuit control flow in
+        // OperatorHandler.VisitBinary before any extern resolution (so neither the plain, lifted, nor
+        // compound paths can pass them here), and Power/IntegerDivide/ObjectValueEquals/
+        // ObjectValueNotEquals/Like/Concatenate are VB-only kinds a C# IOperation tree never produces
+        // — this throw is a backstop for a new kind, not a live path.
+        if (!BinaryOperatorNames.TryGetValue(operatorKind, out var opName))
+            throw new NotSupportedException(
+                $"Binary operator kind '{operatorKind}' has no Udon extern operator-name mapping.");
         // Decimal uses C# method names: op_Multiply (not op_Multiplication), op_Modulus (not op_Remainder)
         if (left == "SystemDecimal")
             opName = operatorKind switch

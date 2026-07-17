@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.Operations;
 using Xunit;
 
 namespace USugar.Tests;
@@ -52,6 +53,37 @@ public class ExternResolverTests
         var sig = ExternResolver.BuildPropertyGetSignature(
             "UnityEngine.Transform", "position", "UnityEngine.Vector3");
         Assert.Equal("UnityEngineTransform.__get_position__UnityEngineVector3", sig);
+    }
+
+    // The signature builders route the receiver through the single RemapUdonType table (the former
+    // private 1-arm RemapExternType twin carried only this arm — pin that the fold kept its semantics).
+    [Fact]
+    public void BuildMethodSignature_UdonBehaviourReceiver_RemapsToEventReceiver()
+    {
+        var sig = ExternResolver.BuildMethodSignature(
+            "VRC.Udon.UdonBehaviour", "__SendCustomEvent", new[] { "System.String" }, "System.Void");
+        Assert.Equal(
+            "VRCUdonCommonInterfacesIUdonEventReceiver.__SendCustomEvent__SystemString__SystemVoid", sig);
+    }
+
+    // Hand-enumeration audit Tier-2: BinaryOperatorNames' miss used to silently mint a bogus
+    // "{type}.__{kind}__…" extern from ToString(); the default is now a loud throw naming the kind.
+    // Every kind outside the table is unreachable from the handler layer (ConditionalAnd/Or are
+    // lowered to short-circuit control flow before extern resolution; the rest are VB-only kinds).
+    [Theory]
+    [InlineData(BinaryOperatorKind.Power)]
+    [InlineData(BinaryOperatorKind.IntegerDivide)]
+    [InlineData(BinaryOperatorKind.ObjectValueEquals)]
+    [InlineData(BinaryOperatorKind.ObjectValueNotEquals)]
+    [InlineData(BinaryOperatorKind.ConditionalAnd)]
+    [InlineData(BinaryOperatorKind.ConditionalOr)]
+    public void ResolveBinaryExtern_UnmappedOperatorKind_ThrowsNamingTheKind(BinaryOperatorKind kind)
+    {
+        var comp = CSharpCompilation.Create("OpKindCensus", references: TestHelper.StandardRefs);
+        var int32 = comp.GetSpecialType(SpecialType.System_Int32);
+        var ex = Assert.Throws<System.NotSupportedException>(
+            () => ExternResolver.ResolveBinaryExtern(kind, null, int32, int32, int32));
+        Assert.Contains(kind.ToString(), ex.Message);
     }
 
     // ── Task 22: Type remapping ──

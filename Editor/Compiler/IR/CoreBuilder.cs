@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Globalization;
 
 // ============================================================================
 // CoreBuilder — the Core IR construction API targeted by the emit handlers. Builds the structured
@@ -53,7 +52,7 @@ public sealed class CoreBuilder
 
     public CConst Const(object value, string type)
     {
-        var key = FormatConstKey(value, type);
+        var key = ConstFormat.Key(type, value);
         if (_constPool.TryGetValue(key, out var existing))
             return existing;
         var c = new CConst(value, type);
@@ -62,14 +61,6 @@ public sealed class CoreBuilder
     }
 
     public CConst Null(string type) => Const(null, type);
-
-    static string FormatConstKey(object value, string type)
-    {
-        if (value == null) return $"{type}_null";
-        if (value is float f) return $"{type}_{f.ToString("R", CultureInfo.InvariantCulture)}";
-        if (value is double d) return $"{type}_{d.ToString("R", CultureInfo.InvariantCulture)}";
-        return $"{type}_{value}";
-    }
 
     // ── Statement emission ──
 

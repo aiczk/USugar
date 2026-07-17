@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Text;
 
 // ============================================================================
@@ -77,6 +78,28 @@ public sealed class FieldDecl
         if ((Flags & FieldFlags.Sync) != 0) sb.Append($" [sync:{SyncMode ?? "none"}]");
         if (DefaultValue != null) sb.Append($" = {DefaultValue}");
         return sb.ToString();
+    }
+}
+
+/// <summary>Single source for constant-pool keying, shared by CoreBuilder (CConst dedup at IR build
+/// time) and CoreToUasm.GetConstVar (UASM __const_ variable dedup). Both pools MUST partition values
+/// identically: the key decides which constants share a variable and hence the deterministic
+/// __const_{type}_{n} data-section names — a drift between the two formats reshuffles golden UASM.
+/// Culture-invariant throughout ("R" for float/double so distinct values never collide on a lossy
+/// rendering; the raw object, not this string, is what reaches the data section).</summary>
+public static class ConstFormat
+{
+    public static string Key(string type, object value) => $"{type}_{Value(value)}";
+
+    public static string Value(object value)
+    {
+        if (value == null) return "null";
+        if (value is float f) return f.ToString("R", CultureInfo.InvariantCulture);
+        if (value is double d) return d.ToString("R", CultureInfo.InvariantCulture);
+        if (value is bool b) return b ? "True" : "False";
+        if (value is string s) return s;
+        if (value is IFormattable fmt) return fmt.ToString(null, CultureInfo.InvariantCulture);
+        return value.ToString();
     }
 }
 

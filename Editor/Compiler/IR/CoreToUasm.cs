@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Globalization;
 using System.Text;
 
 /// <summary>
@@ -242,8 +241,7 @@ public static class CoreToUasm
 
         string GetConstVar(CConst c)
         {
-            var valueStr = FormatConstValue(c.Value);
-            var key = $"{c.Type}_{valueStr}";
+            var key = ConstFormat.Key(c.Type, c.Value);
             if (_constPool.TryGetValue(key, out var existing))
                 return existing;
             var id = $"__const_{c.Type}_{_constIdx++}";
@@ -277,17 +275,6 @@ public static class CoreToUasm
             for (int i = 0; i < _module.Functions.Count; i++)
                 if (_module.Functions[i] == func) return i;
             throw new InvalidOperationException($"Function not found in module: {func.Name}");
-        }
-
-        static string FormatConstValue(object value)
-        {
-            if (value == null) return "null";
-            if (value is float f) return f.ToString("R", CultureInfo.InvariantCulture);
-            if (value is double d) return d.ToString("R", CultureInfo.InvariantCulture);
-            if (value is bool b) return b ? "True" : "False";
-            if (value is string s) return s;
-            if (value is IFormattable fmt) return fmt.ToString(null, CultureInfo.InvariantCulture);
-            return value.ToString();
         }
 
         // ── Function preparation ──
