@@ -110,82 +110,84 @@ public static class EmitPolicy
                 + "value is a program-local object[] bundle and cannot cross a network call.");
     }
 
-    /// <summary>Delegate proper, an array (of arrays…) of delegates, or a delegate reachable through
-    /// a struct/tuple field. A delegate smuggled inside a struct/tuple param is the same program-local
-    /// object[] bundle and equally cannot cross the network — recurse aggregate fields so it rejects too
-    /// (visited set guards a struct that transitively contains itself). Still NARROW on object / bare
-    /// type params: [NetworkCallable] methods with plain object params stay outside this policy.</summary>
+    // ── Contains* walker family (hand-enumeration audit 2026-07-17, Tier-2 / Matrix 3) ──
+    // ONE descent body behind the three "does this type transitively contain X?" predicates; only the
+    // leaf test varies. The former three hand-copied walkers had diverging descent (the delegate and
+    // opaque-object twins were missing the generic-type-argument and delegate-signature arms the
+    // user-class walker had), the same per-copy missing-arm family as f6ebdae/8cb0962 — a single
+    // parameterized body makes reintroducing a hole per-walker impossible. All consumers of the
+    // delegate/opaque predicates are reject-polarity gates, so the descent widening can only add
+    // rejects (behavior-neutral on the tracked suite; the census pin lives in
+    // ContainsWalkerCensusTests). NOTE: ExpressionHandler.StructurallyContainsDelegate deliberately
+    // stays a NARROW mirror — its source-side consumer has ACCEPT polarity (srcCarriesDelegate=true
+    // allows the cast), so widening it would flip rejects to accepts.
+
+    /// <summary>Delegate proper, or one reachable through the shared descent
+    /// (<see cref="ContainsMatchingType"/>). A delegate smuggled inside a struct/tuple/generic wrapper
+    /// is the same program-local object[] bundle and equally cannot cross the network. Still NARROW on
+    /// object / bare type params: [NetworkCallable] methods with plain object params stay outside this
+    /// policy.</summary>
     public static bool ContainsDelegateType(ITypeSymbol type)
-        => ContainsDelegateType(type, new HashSet<ITypeSymbol>(SymbolEqualityComparer.Default));
+        => ContainsMatchingType(type, DelegateLeaf, null, NewVisitedSet());
 
-    static bool ContainsDelegateType(ITypeSymbol type, HashSet<ITypeSymbol> visited)
-    {
-        if (type is INamedTypeSymbol n && n.DelegateInvokeMethod != null) return true;
-        if (type is IArrayTypeSymbol a) return ContainsDelegateType(a.ElementType, visited);
-        if (type is INamedTypeSymbol agg && IsAggregateType(agg) && visited.Add(agg))
-            foreach (var m in agg.GetMembers())
-                if (m is IFieldSymbol f && !f.IsStatic && ContainsDelegateType(f.Type, visited))
-                    return true;
-        return false;
-    }
-
-    /// <summary>CW28: System.Object (or an array whose element chain reaches it) proper, or one
-    /// reachable through a struct/tuple field. The SS2(a) carrier gate must see a LAUNDERED carrier
+    /// <summary>CW28: System.Object proper, or one reachable through the shared descent
+    /// (<see cref="ContainsMatchingType"/>). The SS2(a) carrier gate must see a LAUNDERED carrier
     /// too — `struct Box { object o; }` hides the same arbitrary payload its raw `object` twin
-    /// declares — so this walks aggregate fields exactly like <see cref="ContainsDelegateType"/>
-    /// (visited set guards a type that transitively contains itself).</summary>
+    /// declares.</summary>
     public static bool ContainsOpaqueObjectType(ITypeSymbol type)
-        => ContainsOpaqueObjectType(type, new HashSet<ITypeSymbol>(SymbolEqualityComparer.Default));
+        => ContainsMatchingType(type, OpaqueObjectLeaf, null, NewVisitedSet());
 
-    static bool ContainsOpaqueObjectType(ITypeSymbol type, HashSet<ITypeSymbol> visited)
-    {
-        if (type.SpecialType == SpecialType.System_Object) return true;
-        if (type is IArrayTypeSymbol a) return ContainsOpaqueObjectType(a.ElementType, visited);
-        if (type is INamedTypeSymbol agg && IsAggregateType(agg) && visited.Add(agg))
-            foreach (var m in agg.GetMembers())
-                if (m is IFieldSymbol f && !f.IsStatic && ContainsOpaqueObjectType(f.Type, visited))
-                    return true;
-        return false;
-    }
-
-    /// <summary>CA-M1 §2-1: a v1 user class proper, or one reachable through an array element, a
-    /// struct/tuple field, a generic type argument, or a delegate's parameter/return signature. A class
-    /// value is a program-local object[] bundle — like a delegate, its reference is meaningless in any
-    /// other client's program, so it can never cross a network sync / cross-behaviour call / delegate
-    /// __dlgc_ channel / GetProgramVariable surface. Mirror of <see cref="ContainsDelegateType"/> (the
-    /// visited set guards a type that transitively contains itself, e.g. a self-referential Node).</summary>
+    /// <summary>CA-M1 §2-1: a v1 user class proper, or one reachable through the shared descent
+    /// (<see cref="ContainsMatchingType"/>). A class value is a program-local object[] bundle — like a
+    /// delegate, its reference is meaningless in any other client's program, so it can never cross a
+    /// network sync / cross-behaviour call / delegate __dlgc_ channel / GetProgramVariable surface.</summary>
     public static bool ContainsUserClassType(ITypeSymbol type)
         => ContainsUserClassType(type, null);
 
     public static bool ContainsUserClassType(ITypeSymbol type,
         IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeParamMap)
-        => ContainsUserClassType(type, typeParamMap, new HashSet<ITypeSymbol>(SymbolEqualityComparer.Default));
+        => ContainsMatchingType(type, UserClassLeaf, typeParamMap, NewVisitedSet());
 
-    static bool ContainsUserClassType(ITypeSymbol type,
+    static readonly Func<ITypeSymbol, bool> DelegateLeaf =
+        t => t is INamedTypeSymbol n && n.DelegateInvokeMethod != null;
+    static readonly Func<ITypeSymbol, bool> OpaqueObjectLeaf =
+        t => t.SpecialType == SpecialType.System_Object;
+    static readonly Func<ITypeSymbol, bool> UserClassLeaf = IsUserClassType;
+
+    static HashSet<ITypeSymbol> NewVisitedSet() => new HashSet<ITypeSymbol>(SymbolEqualityComparer.Default);
+
+    /// <summary>The shared descent: type-param substitution, then the leaf test, then array elements,
+    /// a delegate's parameter/return signature (a payload smuggled through Action&lt;Foo&gt; across
+    /// the __dlgc_ byte contract), aggregate (struct/tuple/anonymous-type) instance fields, and a
+    /// constructed generic's type arguments (tuple elements, Nullable&lt;T&gt;, any generic wrapper).
+    /// The visited set on named types guards self-referential shapes (e.g. a Node with a Node[] field).
+    /// A v1 class's OWN fields are deliberately not descended: the class is itself the user-class leaf,
+    /// and for the other predicates its fields are program-local bundle slots, not part of the
+    /// crossing type's surface.</summary>
+    static bool ContainsMatchingType(ITypeSymbol type, Func<ITypeSymbol, bool> isLeaf,
         IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeParamMap,
         HashSet<ITypeSymbol> visited)
     {
         if (type is ITypeParameterSymbol tp && typeParamMap != null
             && typeParamMap.TryGetValue(tp, out var resolved))
             type = resolved;
-        if (IsUserClassType(type)) return true;
-        if (type is IArrayTypeSymbol a) return ContainsUserClassType(a.ElementType, typeParamMap, visited);
+        if (type == null) return false;
+        if (isLeaf(type)) return true;
+        if (type is IArrayTypeSymbol a) return ContainsMatchingType(a.ElementType, isLeaf, typeParamMap, visited);
         if (type is not INamedTypeSymbol n || !visited.Add(n)) return false;
-        // A delegate smuggling a class through Action<Foo> across the __dlgc_ byte contract.
         if (n.DelegateInvokeMethod is { } inv)
         {
             foreach (var p in inv.Parameters)
-                if (ContainsUserClassType(p.Type, typeParamMap, visited)) return true;
-            if (ContainsUserClassType(inv.ReturnType, typeParamMap, visited)) return true;
+                if (ContainsMatchingType(p.Type, isLeaf, typeParamMap, visited)) return true;
+            if (ContainsMatchingType(inv.ReturnType, isLeaf, typeParamMap, visited)) return true;
         }
-        // A class reachable through a struct/tuple field.
         if (IsAggregateType(n))
             foreach (var m in n.GetMembers())
-                if (m is IFieldSymbol { IsStatic: false } f && ContainsUserClassType(f.Type, typeParamMap, visited))
+                if (m is IFieldSymbol { IsStatic: false } f
+                    && ContainsMatchingType(f.Type, isLeaf, typeParamMap, visited))
                     return true;
-        // A constructed generic's type arguments (covers tuple elements and any other generic wrapper).
         foreach (var ta in n.TypeArguments)
-            if (ContainsUserClassType(ta, typeParamMap, visited)) return true;
+            if (ContainsMatchingType(ta, isLeaf, typeParamMap, visited)) return true;
         return false;
     }
 

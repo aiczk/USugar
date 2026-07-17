@@ -274,9 +274,11 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
 
     // A delegate proper, or one reachable through an array element / tuple element / user-struct field —
     // the "delegate-carrying" shape. Resolves each level through the type-param map so a monomorphized
-    // generic T (e.g. Func<object>[]) is classified as the concrete type it becomes. Mirrors
-    // EmitPolicy.ContainsDelegateType but with type-param resolution (the [NetworkCallable] guard's
-    // source shows concrete field types, so it needs no resolution; the conversion site can see a raw T).
+    // generic T (e.g. Func<object>[]) is classified as the concrete type it becomes. Deliberately NOT
+    // unified onto EmitPolicy's shared Contains* descent (2026-07-17 walker unification): the source-side
+    // consumer below has ACCEPT polarity (srcCarriesDelegate=true ALLOWS the cast), so adopting the wider
+    // generic-argument/delegate-signature descent would flip rejects to accepts — this walker must stay
+    // exactly as narrow as the reject rule it implements.
     static bool StructurallyContainsDelegate(ITypeSymbol t,
         IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeParamMap,
         HashSet<ITypeSymbol> visited)
