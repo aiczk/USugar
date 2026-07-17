@@ -521,7 +521,7 @@ public class LayoutPlanner
                     else
                     {
                         // Fallback for parameters beyond fixedNames (SDK mismatch)
-                        var key = method.Parameters[i].Name + "__param";
+                        var key = NameAllocator.ParamKey(method.Parameters[i].Name);
                         paramIds[i] = NameAllocator.FormatId(key, alloc.Allocate(key));
                     }
                 }
@@ -531,14 +531,14 @@ public class LayoutPlanner
                 // Regular parameters: go through NameAllocator
                 for (int i = 0; i < method.Parameters.Length; i++)
                 {
-                    var key = method.Parameters[i].Name + "__param";
+                    var key = NameAllocator.ParamKey(method.Parameters[i].Name);
                     paramIds[i] = NameAllocator.FormatId(key, alloc.Allocate(key));
                 }
             }
 
             var returns = BuildReturnSlots(method, exportName, alloc);
 
-            var bodyLabel = exportName + "__body";
+            var bodyLabel = NameAllocator.BodyLabel(exportName);
             methods[method] = new MethodLayout(exportName, bodyLabel, paramIds, returns);
         }
 
@@ -587,10 +587,10 @@ public class LayoutPlanner
                         var newReturns = new List<ReturnSlot>();
                         foreach (var rs in baseMl.Returns)
                         {
-                            var rk = ue + "__ret";
+                            var rk = NameAllocator.RetKey(ue);
                             newReturns.Add(new ReturnSlot(NameAllocator.FormatId(rk, alloc.Allocate(rk)), rs.UdonType));
                         }
-                        ml = new MethodLayout(ue, ue + "__body", baseMl.ParamIds, newReturns);
+                        ml = new MethodLayout(ue, NameAllocator.BodyLabel(ue), baseMl.ParamIds, newReturns);
                     }
                     if (methods.TryAdd(bm, ml))
                     {
@@ -659,13 +659,13 @@ public class LayoutPlanner
             var paramIds = new string[method.Parameters.Length];
             for (int i = 0; i < method.Parameters.Length; i++)
             {
-                var key = method.Parameters[i].Name + "__param";
+                var key = NameAllocator.ParamKey(method.Parameters[i].Name);
                 paramIds[i] = NameAllocator.FormatId(key, alloc.Allocate(key));
             }
 
             var returns = BuildReturnSlots(method, exportName, alloc);
 
-            methods[method] = new MethodLayout(exportName, exportName + "__body", paramIds, returns);
+            methods[method] = new MethodLayout(exportName, NameAllocator.BodyLabel(exportName), paramIds, returns);
         }
 
         return new TypeLayout(methods, new Dictionary<IFieldSymbol, FieldLayout>(SymbolEqualityComparer.Default));
@@ -743,7 +743,7 @@ public class LayoutPlanner
         var returns = new List<ReturnSlot>();
         if (method.ReturnsVoid) return returns;
 
-        var retKey = exportName + "__ret";
+        var retKey = NameAllocator.RetKey(exportName);
         var id = NameAllocator.FormatId(retKey, alloc.Allocate(retKey));
 
         if (EmitPolicy.IsAggregateType(method.ReturnType))

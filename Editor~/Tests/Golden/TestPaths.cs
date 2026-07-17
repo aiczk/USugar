@@ -26,7 +26,10 @@ public static class TestPaths
     /// <summary>Committed recursion-facet census fixtures (M5b scaffolding): Editor~/Tests/Golden/FacetCensus.</summary>
     public static string FacetCensusDir => Path.Combine(TestsDir, "Golden", "FacetCensus");
 
+    /// <summary>The whole Editor source tree (compiler + orchestration): USugar/Editor.</summary>
+    public static string EditorDir =>
+        Path.GetFullPath(Path.Combine(TestsDir, "..", "..", "Editor"));
+
     /// <summary>The compiler source under audit: USugar/Editor/Compiler.</summary>
-    public static string EditorCompilerDir =>
-        Path.GetFullPath(Path.Combine(TestsDir, "..", "..", "Editor", "Compiler"));
+    public static string EditorCompilerDir => Path.Combine(EditorDir, "Compiler");
 }

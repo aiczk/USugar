@@ -44,6 +44,28 @@ public class NameAllocator
     /// <summary>Format a key + counter into "__N_key" form.</summary>
     public static string FormatId(string key, int counter) => $"__{counter}_{key}";
 
+    // The method-layout naming contract (LayoutPlanner exports + every synthetic bridge): allocator
+    // keys "{name}__param"/"{name}__ret", counter-qualified slot ids "__N_{name}__param"/
+    // "__N_{name}__ret", and the "{function}__body" entry label (past the sentinel push). These
+    // formatters are the ONLY producers of the __param/__ret/__body shapes (census-pinned by
+    // NamingContractCensusTests) — a one-byte re-spelling at a bridge site silently unbinds the
+    // param/ret/label it was meant to address.
+
+    /// <summary>Allocator key / bare id for a parameter slot: "{name}__param".</summary>
+    public static string ParamKey(string name) => name + "__param";
+
+    /// <summary>Allocator key / bare id for a return slot: "{name}__ret".</summary>
+    public static string RetKey(string name) => name + "__ret";
+
+    /// <summary>Counter-qualified parameter slot id: "__N_{name}__param".</summary>
+    public static string ParamId(string name, int counter) => FormatId(ParamKey(name), counter);
+
+    /// <summary>Counter-qualified return slot id: "__N_{name}__ret".</summary>
+    public static string RetId(string name, int counter) => FormatId(RetKey(name), counter);
+
+    /// <summary>Entry label of an exported function's body: "{functionName}__body".</summary>
+    public static string BodyLabel(string functionName) => functionName + "__body";
+
     /// <summary>Parse "__N_key" back into (counter, key). Returns null if format doesn't match.</summary>
     public static (int counter, string key)? ParseId(string id)
     {

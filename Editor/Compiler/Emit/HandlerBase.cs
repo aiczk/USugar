@@ -1465,7 +1465,7 @@ public abstract partial class HandlerBase
         for (int pi = 0; pi < localFunc.Parameters.Length; pi++)
         {
             var param = localFunc.Parameters[pi];
-            var paramId = $"__{idx}_{param.Name}__param";
+            var paramId = NameAllocator.ParamId(param.Name, idx);
             _ctx.Storage.DeclareVar(paramId, GetUdonType(param.Type));
             lfParamIds[pi] = paramId;
         }
@@ -1495,7 +1495,7 @@ public abstract partial class HandlerBase
         {
             var retType = GetUdonType(localFunc.ReturnType);
             func.ReturnType = retType;
-            var retId = $"__{idx}_{funcName}__ret";
+            var retId = NameAllocator.RetId(funcName, idx);
             func.ReturnSlots.Add(new ReturnSlot(retId, retType));
             retSlots = new[] { new ReturnSlot(retId, retType) };
         }
@@ -1817,7 +1817,7 @@ public abstract partial class HandlerBase
             && constructed.ContainingType is INamedTypeSymbol structRecvCt && EmitPolicy.IsObjectArrayEmulated(structRecvCt)
             && constructed.MethodKind is not (MethodKind.LambdaMethod or MethodKind.LocalFunction))
         {
-            var receiverId = $"__{idx}_this__param";
+            var receiverId = NameAllocator.ParamId("this", idx);
             _ctx.Storage.DeclareVar(receiverId, "SystemObjectArray");
             func.ParamFieldNames.Add(receiverId);
         }
@@ -1826,7 +1826,7 @@ public abstract partial class HandlerBase
         for (int pi = 0; pi < constructed.Parameters.Length; pi++)
         {
             var param = constructed.Parameters[pi];
-            var paramId = $"__{idx}_{param.Name}__param";
+            var paramId = NameAllocator.ParamId(param.Name, idx);
             _ctx.Storage.DeclareVar(paramId, GetUdonType(param.Type));
             gsParamIds[pi] = paramId;
         }
@@ -1850,7 +1850,7 @@ public abstract partial class HandlerBase
         if (!constructed.ReturnsVoid)
         {
             var retType = GetUdonType(constructed.ReturnType);
-            var retId = $"__{idx}_{SanitizeId(constructed.Name)}__ret";
+            var retId = NameAllocator.RetId(SanitizeId(constructed.Name), idx);
             _ctx.Storage.DeclareVar(retId, retType);
             func.ReturnType = retType;
             func.ReturnSlots.Add(new ReturnSlot(retId, retType));
@@ -2185,8 +2185,7 @@ public abstract partial class HandlerBase
             {
                 if (targetInstance == null)
                 {
-                    var targetKey = bridgeExportName.StartsWith("__dlg_")
-                        ? bridgeExportName.Substring("__dlg_".Length) : bridgeExportName;
+                    var targetKey = DelegateAbi.BridgeTargetKey(bridgeExportName);
                     var adapterName = DelegateAbi.SigAdapterName(targetKey, sigS);
                     // SS2B: a closure target's func was registered under the plain bridge name above;
                     // the adapter drain resolves by name, so alias it under the adapter name too.

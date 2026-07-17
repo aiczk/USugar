@@ -264,7 +264,7 @@ public static class CoreToUasm
 
             // For exported functions, jump to body label (skip sentinel)
             var targetLabel = target.ExportName != null
-                ? $"{target.Name}__body"
+                ? NameAllocator.BodyLabel(target.Name)
                 : _blockLabels[(FindFuncIndex(target), target.Entry.Id)];
 
             _funcRefConsts.Add((varName, targetLabel));
@@ -394,7 +394,7 @@ public static class CoreToUasm
                 var sentinelVar = "__const_SystemUInt32_sentinel";
                 DeclareVar(sentinelVar, "SystemUInt32", null, FieldFlags.None, constValue: 0xFFFFFFFF);
                 AddPush(sentinelVar);
-                AddLabel($"{func.Name}__body");
+                AddLabel(NameAllocator.BodyLabel(func.Name));
             }
             else
             {
@@ -500,7 +500,7 @@ public static class CoreToUasm
 
             var targetFuncIdx = FindFuncIndex(target);
             var bodyLabel = target.ExportName != null
-                ? $"{target.Name}__body"
+                ? NameAllocator.BodyLabel(target.Name)
                 : _blockLabels[(targetFuncIdx, target.Entry.Id)];
             AddJump(bodyLabel);
 

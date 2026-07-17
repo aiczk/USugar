@@ -1053,7 +1053,7 @@ public class UasmEmitter
             for (int pi = 0; pi < fm.Parameters.Length; pi++)
             {
                 var param = fm.Parameters[pi];
-                var paramId = $"__{idx}_{param.Name}__param";
+                var paramId = NameAllocator.ParamId(param.Name, idx);
                 _ctx.Storage.DeclareVar(paramId, GetUdonType(param.Type));
                 fmParamIds[pi] = paramId;
             }
@@ -1063,7 +1063,7 @@ public class UasmEmitter
             if (!fm.ReturnsVoid)
             {
                 var retType = GetUdonType(fm.ReturnType);
-                var retId = $"__{idx}_{SanitizeId(fm.Name)}__ret";
+                var retId = NameAllocator.RetId(SanitizeId(fm.Name), idx);
                 func.ReturnType = retType;
                 func.ReturnSlots.Add(new ReturnSlot(retId, retType));
                 _methodReturns[fm] = new[] { new ReturnSlot(retId, retType) };
@@ -1108,7 +1108,7 @@ public class UasmEmitter
             // reflects back to the caller's local). Static operator methods have no receiver.
             if (!sm.IsStatic)
             {
-                var receiverId = $"__{idx}_this__param";
+                var receiverId = NameAllocator.ParamId("this", idx);
                 _ctx.Storage.DeclareVar(receiverId, "SystemObjectArray");
                 func.ParamFieldNames.Add(receiverId);
             }
@@ -1117,7 +1117,7 @@ public class UasmEmitter
             for (int pi = 0; pi < sm.Parameters.Length; pi++)
             {
                 var p = sm.Parameters[pi];
-                var pid = $"__{idx}_{p.Name}__param";
+                var pid = NameAllocator.ParamId(p.Name, idx);
                 _ctx.Storage.DeclareVar(pid, GetUdonType(p.Type));
                 smParamIds[pi] = pid;
                 func.ParamFieldNames.Add(pid);
@@ -1127,7 +1127,7 @@ public class UasmEmitter
             if (!sm.ReturnsVoid) // ctors are void (mutate in place); instance methods may return
             {
                 var retType = GetUdonType(sm.ReturnType);
-                var retId = $"__{idx}_{SanitizeId(sm.Name)}__ret";
+                var retId = NameAllocator.RetId(SanitizeId(sm.Name), idx);
                 func.ReturnType = retType;
                 func.ReturnSlots.Add(new ReturnSlot(retId, retType));
                 _methodReturns[sm] = new[] { new ReturnSlot(retId, retType) };
@@ -1158,7 +1158,7 @@ public class UasmEmitter
             for (int pi = 0; pi < bm.Parameters.Length; pi++)
             {
                 var param = bm.Parameters[pi];
-                var paramId = $"__{idx}_{param.Name}__param";
+                var paramId = NameAllocator.ParamId(param.Name, idx);
                 _ctx.Storage.DeclareVar(paramId, GetUdonType(param.Type));
                 bmParamIds[pi] = paramId;
             }
@@ -1168,7 +1168,7 @@ public class UasmEmitter
             if (!bm.ReturnsVoid)
             {
                 var retType = GetUdonType(bm.ReturnType);
-                var retId = $"__{idx}_{SanitizeId(bm.Name)}__ret";
+                var retId = NameAllocator.RetId(SanitizeId(bm.Name), idx);
                 func.ReturnType = retType;
                 func.ReturnSlots.Add(new ReturnSlot(retId, retType));
                 _methodReturns[bm] = new[] { new ReturnSlot(retId, retType) };
@@ -1746,7 +1746,7 @@ public class UasmEmitter
             var helperName = HandlerBase.EnumToStringHelperName(enumType);
             var underlyingUdon = ExternResolver.GetUdonTypeName(enumType.EnumUnderlyingType);
             var vId = $"{helperName}__v";
-            var retId = $"{helperName}__ret";
+            var retId = NameAllocator.RetKey(helperName);
             _ctx.Storage.TryDeclareVar(vId, underlyingUdon);
             _ctx.Storage.TryDeclareVar(retId, "SystemString");
 
@@ -1847,7 +1847,7 @@ public class UasmEmitter
     void EmitMulticastCombineHelper(string sigPart)
     {
         var helperName = DelegateAbi.MulticastCombineName(sigPart);
-        var xId = $"{helperName}__x"; var yId = $"{helperName}__y"; var retId = $"{helperName}__ret";
+        var xId = $"{helperName}__x"; var yId = $"{helperName}__y"; var retId = NameAllocator.RetKey(helperName);
         _ctx.Storage.TryDeclareVar(xId, "SystemObjectArray");
         _ctx.Storage.TryDeclareVar(yId, "SystemObjectArray");
         _ctx.Storage.TryDeclareVar(retId, "SystemObjectArray");
@@ -1899,7 +1899,7 @@ public class UasmEmitter
     void EmitMulticastRemoveHelper(string sigPart)
     {
         var helperName = DelegateAbi.MulticastRemoveName(sigPart);
-        var xId = $"{helperName}__x"; var yId = $"{helperName}__y"; var retId = $"{helperName}__ret";
+        var xId = $"{helperName}__x"; var yId = $"{helperName}__y"; var retId = NameAllocator.RetKey(helperName);
         _ctx.Storage.TryDeclareVar(xId, "SystemObjectArray");
         _ctx.Storage.TryDeclareVar(yId, "SystemObjectArray");
         _ctx.Storage.TryDeclareVar(retId, "SystemObjectArray");

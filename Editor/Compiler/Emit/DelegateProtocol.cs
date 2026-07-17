@@ -114,9 +114,20 @@ public static class DelegateAbi
                 + "object[] bundle and cannot cross the delegate convention channel.");
     }
 
+    /// <summary>The bridge-name prefix owned by <see cref="BridgeName"/>/<see cref="BridgeTargetKey"/> —
+    /// never re-spell it at a use site (census-pinned by NamingContractCensusTests).</summary>
+    public const string BridgePrefix = "__dlg_";
+
     /// <summary>The ONLY name source for a plain per-method delegate bridge (a same-program target's
     /// own exact-sig entry point — every other bridge flavor below is keyed by signature instead).</summary>
-    public static string BridgeName(string key) => $"__dlg_{key}";
+    public static string BridgeName(string key) => BridgePrefix + key;
+
+    /// <summary>Inverse of <see cref="BridgeName"/>: strip the bridge prefix back to the target key,
+    /// passing a plain export name (a named method's own export) through unchanged.</summary>
+    public static string BridgeTargetKey(string bridgeOrExportName)
+        => bridgeOrExportName.StartsWith(BridgePrefix)
+            ? bridgeOrExportName.Substring(BridgePrefix.Length)
+            : bridgeOrExportName;
 
     /// <summary>
     /// Multicast design (2026-07-03 §1.1): the ONLY name source for the per-sig synthetic fan-out
