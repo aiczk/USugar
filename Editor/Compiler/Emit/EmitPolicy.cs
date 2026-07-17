@@ -379,9 +379,16 @@ public static class EmitPolicy
             "SystemByte" => byte.Parse(value),
             "SystemChar" => value[0],
             "SystemType" => value, // Udon type name, resolved to CLR Type at apply time
+            // Default arm: an SDK enum constant reaches here under its registered Udon type name with
+            // an integral raw value. Anything that fails BOTH integer parses has no arm at all — loud,
+            // not null (a silent null reads back as 0 at apply time, the be04dd6 SystemDecimal bug).
             _ => long.TryParse(value, out var longVal)
                 ? (longVal is >= int.MinValue and <= int.MaxValue ? (object)(int)longVal : longVal)
-                : ulong.TryParse(value, out var ulongVal) ? (object)ulongVal : null,
+                : ulong.TryParse(value, out var ulongVal)
+                    ? (object)ulongVal
+                    : throw new NotSupportedException(
+                        $"ParseConstValue has no parse arm for Udon type '{udonType}' "
+                        + $"(raw constant '{value}') — a silent null would read back as 0."),
         };
     }
 }

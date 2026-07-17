@@ -411,7 +411,7 @@ public static class ExternResolver
         return RemapUdonType(SanitizeTypeName(full));
     }
 
-    static string GetSpecialTypeName(SpecialType st) => st switch
+    internal static string GetSpecialTypeName(SpecialType st) => st switch
     {
         SpecialType.System_Boolean => "System.Boolean",
         SpecialType.System_Byte => "System.Byte",
