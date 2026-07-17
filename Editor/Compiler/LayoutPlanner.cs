@@ -117,6 +117,11 @@ public class LayoutPlanner
     public bool InterfaceHasStructImplementor(INamedTypeSymbol iface)
         => _interfacesWithStructImplementor.Contains(iface);
 
+    // C# event method name → Udon export name ("_" + lowerFirst). Regenerated from the SDK's Event_*
+    // node definitions — the same source stock UdonSharp derives from (CompilerUdonInterface.CacheInit).
+    // Pinned bidirectionally against Editor~/Tests/Fixtures/udon_event_registry.txt by
+    // EventRegistryCensusTests (regenerate the fixture via USugarCompiler.DumpEventRegistry after an
+    // SDK update). A miss here silently compiles a new SDK event as an inert ordinary method.
     public static readonly Dictionary<string, string> UdonEventNames = new()
     {
         // Lifecycle
@@ -154,7 +159,9 @@ public class LayoutPlanner
         ["OnOwnershipRequest"] = "_onOwnershipRequest",
         // Station
         ["OnStationEntered"] = "_onStationEntered", ["OnStationExited"] = "_onStationExited",
-        // Video
+        // Video — OnVideoPlay/OnVideoPause have NO Event_* node in the SDK registry (client fires them
+        // as _onVideoPlay/_onVideoPause; graph programs subscribe via a literal custom event). They are
+        // the census exempt-list (EventRegistryCensusTests.RegistryLessEvents); keep in sync.
         ["OnVideoError"] = "_onVideoError", ["OnVideoReady"] = "_onVideoReady",
         ["OnVideoStart"] = "_onVideoStart", ["OnVideoPlay"] = "_onVideoPlay",
         ["OnVideoPause"] = "_onVideoPause", ["OnVideoEnd"] = "_onVideoEnd",
@@ -172,14 +179,30 @@ public class LayoutPlanner
         // Collision / Trigger (non-player)
         ["OnTriggerEnter"] = "_onTriggerEnter", ["OnTriggerExit"] = "_onTriggerExit",
         ["OnTriggerStay"] = "_onTriggerStay",
+        ["OnTriggerEnter2D"] = "_onTriggerEnter2D", ["OnTriggerExit2D"] = "_onTriggerExit2D",
+        ["OnTriggerStay2D"] = "_onTriggerStay2D",
         ["OnCollisionEnter"] = "_onCollisionEnter", ["OnCollisionExit"] = "_onCollisionExit",
         ["OnCollisionStay"] = "_onCollisionStay",
+        ["OnCollisionEnter2D"] = "_onCollisionEnter2D", ["OnCollisionExit2D"] = "_onCollisionExit2D",
+        ["OnCollisionStay2D"] = "_onCollisionStay2D",
+        ["OnControllerColliderHit"] = "_onControllerColliderHit",
+        ["OnJointBreak"] = "_onJointBreak", ["OnJointBreak2D"] = "_onJointBreak2D",
+        // Mouse
+        ["OnMouseDown"] = "_onMouseDown", ["OnMouseDrag"] = "_onMouseDrag",
+        ["OnMouseEnter"] = "_onMouseEnter", ["OnMouseExit"] = "_onMouseExit",
+        ["OnMouseOver"] = "_onMouseOver", ["OnMouseUp"] = "_onMouseUp",
+        ["OnMouseUpAsButton"] = "_onMouseUpAsButton",
+        // Transform
+        ["OnTransformChildrenChanged"] = "_onTransformChildrenChanged",
+        ["OnTransformParentChanged"] = "_onTransformParentChanged",
         // Drone
         ["OnDroneTriggerEnter"] = "_onDroneTriggerEnter",
         ["OnDroneTriggerExit"] = "_onDroneTriggerExit",
         ["OnDroneTriggerStay"] = "_onDroneTriggerStay",
         // Rendering
         ["OnPostRender"] = "_onPostRender", ["OnPreRender"] = "_onPreRender",
+        ["OnPreCull"] = "_onPreCull", ["OnRenderImage"] = "_onRenderImage",
+        ["OnRenderObject"] = "_onRenderObject",
         ["OnWillRenderObject"] = "_onWillRenderObject",
         ["OnBecameVisible"] = "_onBecameVisible", ["OnBecameInvisible"] = "_onBecameInvisible",
         ["OnVRCCameraSettingsChanged"] = "_onVRCCameraSettingsChanged",
@@ -189,6 +212,7 @@ public class LayoutPlanner
         ["OnAnimatorIK"] = "_onAnimatorIK", ["OnAnimatorMove"] = "_onAnimatorMove",
         // Particle
         ["OnParticleCollision"] = "_onParticleCollision",
+        ["OnParticleTrigger"] = "_onParticleTrigger",
         // GPU readback
         ["OnAsyncGpuReadbackComplete"] = "_onAsyncGpuReadbackComplete",
         // MIDI
@@ -226,9 +250,13 @@ public class LayoutPlanner
     // Cache of Udon event export names for O(1) collision checks
     public static readonly HashSet<string> UdonEventExportNames = new(UdonEventNames.Values);
 
-    // Fixed parameter names for Udon events (from Udon node definitions).
-    // Format: {lowerCasedEventName}{UpperCasedParamName}
-    // These do NOT go through NameAllocator — they are hardcoded by the Udon runtime.
+    // Fixed parameter names for Udon events: {lowerCasedEventName}{UpperCasedParamName}, where the
+    // param name is the Event_* node definition's OUT-param name (NOT the C# parameter name on
+    // UdonSharpBehaviour — e.g. OnVRCCameraSettingsChanged's node param is "camera" while the C#
+    // signature says "cameraSettings"). The runtime writes exactly these heap vars
+    // (UdonBehaviour.GetEventParameterName), so a wrong row silently unbinds the parameter.
+    // Regenerated from the registry; pinned against Editor~/Tests/Fixtures/udon_event_registry.txt
+    // by EventRegistryCensusTests. These do NOT go through NameAllocator.
     public static readonly Dictionary<string, string[]> UdonEventParamNames = new()
     {
         // Player
@@ -254,7 +282,7 @@ public class LayoutPlanner
         ["OnMasterTransferred"] = new[] { "onMasterTransferredNewMaster" },
         // Ownership
         ["OnOwnershipTransferred"] = new[] { "onOwnershipTransferredPlayer" },
-        ["OnOwnershipRequest"] = new[] { "onOwnershipRequestRequestingPlayer", "onOwnershipRequestRequestedOwner" },
+        ["OnOwnershipRequest"] = new[] { "onOwnershipRequestRequester", "onOwnershipRequestNewOwner" },
         // Station
         ["OnStationEntered"] = new[] { "onStationEnteredPlayer" },
         ["OnStationExited"] = new[] { "onStationExitedPlayer" },
@@ -263,18 +291,27 @@ public class LayoutPlanner
         ["OnPostSerialization"] = new[] { "onPostSerializationResult" },
         // Video
         ["OnVideoError"] = new[] { "onVideoErrorVideoError" },
-        // Network download
-        ["OnStringLoadSuccess"] = new[] { "onStringLoadSuccessResult" },
-        ["OnStringLoadError"] = new[] { "onStringLoadErrorResult" },
-        ["OnImageLoadSuccess"] = new[] { "onImageLoadSuccessResult" },
-        ["OnImageLoadError"] = new[] { "onImageLoadErrorResult" },
+        // Network download — the node param name is literally the interface name
+        ["OnStringLoadSuccess"] = new[] { "onStringLoadSuccessIVRCStringDownload" },
+        ["OnStringLoadError"] = new[] { "onStringLoadErrorIVRCStringDownload" },
+        ["OnImageLoadSuccess"] = new[] { "onImageLoadSuccessIVRCImageDownload" },
+        ["OnImageLoadError"] = new[] { "onImageLoadErrorIVRCImageDownload" },
         // Collision / Trigger (non-player)
         ["OnTriggerEnter"] = new[] { "onTriggerEnterOther" },
         ["OnTriggerExit"] = new[] { "onTriggerExitOther" },
         ["OnTriggerStay"] = new[] { "onTriggerStayOther" },
+        ["OnTriggerEnter2D"] = new[] { "onTriggerEnter2DOther" },
+        ["OnTriggerExit2D"] = new[] { "onTriggerExit2DOther" },
+        ["OnTriggerStay2D"] = new[] { "onTriggerStay2DOther" },
         ["OnCollisionEnter"] = new[] { "onCollisionEnterOther" },
         ["OnCollisionExit"] = new[] { "onCollisionExitOther" },
         ["OnCollisionStay"] = new[] { "onCollisionStayOther" },
+        ["OnCollisionEnter2D"] = new[] { "onCollisionEnter2DOther" },
+        ["OnCollisionExit2D"] = new[] { "onCollisionExit2DOther" },
+        ["OnCollisionStay2D"] = new[] { "onCollisionStay2DOther" },
+        ["OnControllerColliderHit"] = new[] { "onControllerColliderHitHit" },
+        ["OnJointBreak"] = new[] { "onJointBreakBreakForce" },
+        ["OnJointBreak2D"] = new[] { "onJointBreak2DBrokenJoint" },
         // Drone
         ["OnDroneTriggerEnter"] = new[] { "onDroneTriggerEnterDrone" },
         ["OnDroneTriggerExit"] = new[] { "onDroneTriggerExitDrone" },
@@ -286,21 +323,22 @@ public class LayoutPlanner
         // GPU readback
         ["OnAsyncGpuReadbackComplete"] = new[] { "onAsyncGpuReadbackCompleteRequest" },
         // Rendering
-        ["OnVRCCameraSettingsChanged"] = new[] { "onVRCCameraSettingsChangedCameraSettings" },
+        ["OnRenderImage"] = new[] { "onRenderImageSrc", "onRenderImageDest" },
+        ["OnVRCCameraSettingsChanged"] = new[] { "onVRCCameraSettingsChangedCamera" },
         ["OnScreenUpdate"] = new[] { "onScreenUpdateData" },
         // MIDI
         ["MidiNoteOn"] = new[] { "midiNoteOnChannel", "midiNoteOnNumber", "midiNoteOnVelocity" },
         ["MidiNoteOff"] = new[] { "midiNoteOffChannel", "midiNoteOffNumber", "midiNoteOffVelocity" },
         ["MidiControlChange"] = new[] { "midiControlChangeChannel", "midiControlChangeNumber", "midiControlChangeValue" },
-        // Input
-        ["InputJump"] = new[] { "inputJumpValue", "inputJumpArgs" },
-        ["InputUse"] = new[] { "inputUseValue", "inputUseArgs" },
-        ["InputGrab"] = new[] { "inputGrabValue", "inputGrabArgs" },
-        ["InputDrop"] = new[] { "inputDropValue", "inputDropArgs" },
-        ["InputMoveHorizontal"] = new[] { "inputMoveHorizontalValue", "inputMoveHorizontalArgs" },
-        ["InputMoveVertical"] = new[] { "inputMoveVerticalValue", "inputMoveVerticalArgs" },
-        ["InputLookHorizontal"] = new[] { "inputLookHorizontalValue", "inputLookHorizontalArgs" },
-        ["InputLookVertical"] = new[] { "inputLookVerticalValue", "inputLookVerticalArgs" },
+        // Input — button events carry "boolValue", axis events "floatValue" (UdonBehaviour.RunInputEvent)
+        ["InputJump"] = new[] { "inputJumpBoolValue", "inputJumpArgs" },
+        ["InputUse"] = new[] { "inputUseBoolValue", "inputUseArgs" },
+        ["InputGrab"] = new[] { "inputGrabBoolValue", "inputGrabArgs" },
+        ["InputDrop"] = new[] { "inputDropBoolValue", "inputDropArgs" },
+        ["InputMoveHorizontal"] = new[] { "inputMoveHorizontalFloatValue", "inputMoveHorizontalArgs" },
+        ["InputMoveVertical"] = new[] { "inputMoveVerticalFloatValue", "inputMoveVerticalArgs" },
+        ["InputLookHorizontal"] = new[] { "inputLookHorizontalFloatValue", "inputLookHorizontalArgs" },
+        ["InputLookVertical"] = new[] { "inputLookVerticalFloatValue", "inputLookVerticalArgs" },
         ["OnInputMethodChanged"] = new[] { "onInputMethodChangedInputMethod" },
         ["OnLanguageChanged"] = new[] { "onLanguageChangedLanguage" },
         // PhysBone / Contact
@@ -318,15 +356,15 @@ public class LayoutPlanner
         ["OnPlayerDataStorageWarning"] = new[] { "onPlayerDataStorageWarningPlayer" },
         ["OnPlayerObjectStorageExceeded"] = new[] { "onPlayerObjectStorageExceededPlayer" },
         ["OnPlayerObjectStorageWarning"] = new[] { "onPlayerObjectStorageWarningPlayer" },
-        // Creator Economy
-        ["OnPurchaseConfirmed"] = new[] { "onPurchaseConfirmedProduct", "onPurchaseConfirmedPlayer", "onPurchaseConfirmedPurchasedNow" },
-        ["OnPurchaseConfirmedMultiple"] = new[] { "onPurchaseConfirmedMultipleProduct", "onPurchaseConfirmedMultiplePlayer", "onPurchaseConfirmedMultiplePurchasedNow", "onPurchaseConfirmedMultipleQuantity" },
-        ["OnPurchaseExpired"] = new[] { "onPurchaseExpiredProduct", "onPurchaseExpiredPlayer" },
-        ["OnPurchasesLoaded"] = new[] { "onPurchasesLoadedProducts", "onPurchasesLoadedPlayer" },
-        ["OnProductEvent"] = new[] { "onProductEventProduct", "onProductEventPlayer" },
-        ["OnListPurchases"] = new[] { "onListPurchasesProducts", "onListPurchasesPlayer" },
-        ["OnListAvailableProducts"] = new[] { "onListAvailableProductsProducts" },
-        ["OnListProductOwners"] = new[] { "onListProductOwnersProduct", "onListProductOwnersOwners" },
+        // Creator Economy — the node's product param is named "result" (ClientSimStoreManager dispatch)
+        ["OnPurchaseConfirmed"] = new[] { "onPurchaseConfirmedResult", "onPurchaseConfirmedPlayer", "onPurchaseConfirmedPurchasedNow" },
+        ["OnPurchaseConfirmedMultiple"] = new[] { "onPurchaseConfirmedMultipleResult", "onPurchaseConfirmedMultiplePlayer", "onPurchaseConfirmedMultiplePurchasedNow", "onPurchaseConfirmedMultipleQuantity" },
+        ["OnPurchaseExpired"] = new[] { "onPurchaseExpiredResult", "onPurchaseExpiredPlayer" },
+        ["OnPurchasesLoaded"] = new[] { "onPurchasesLoadedResult", "onPurchasesLoadedPlayer" },
+        ["OnProductEvent"] = new[] { "onProductEventResult", "onProductEventPlayer" },
+        ["OnListPurchases"] = new[] { "onListPurchasesResult", "onListPurchasesPlayer" },
+        ["OnListAvailableProducts"] = new[] { "onListAvailableProductsResult" },
+        ["OnListProductOwners"] = new[] { "onListProductOwnersResult", "onListProductOwnersOwners" },
     };
 
     public LayoutPlanner(Compilation compilation)
