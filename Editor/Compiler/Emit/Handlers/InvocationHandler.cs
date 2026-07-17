@@ -109,6 +109,28 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
             && ExternResolver.IsUserEnum(ResolveType(op.Instance.Type)))
             return TryEmitEnumToString(VisitExpression(op.Instance), op.Instance.Type);
 
+        // Tier-2 equality cell (audit 2026-07-17): SDK-enum instance .Equals(object). The inherited
+        // Object/ValueType/Enum owner resolves (B59 concrete / [V3] type-param) to the receiver's own
+        // Udon type (UnityEngineKeyCode …), which has NO registered __Equals extern, and ResolveExtern's
+        // Component-owner fallback then silently adopted UnityEngineComponent.__Equals — whose wrapper
+        // reads the receiver as UnityEngine.Object, so the real VM throws HeapTypeMismatchException at
+        // runtime on legal C# (runtime differential tests), laundered past the
+        // extern census because the adopted extern IS registered. An SDK enum's box keeps its REAL type
+        // identity on the VM heap, so the null-safe STATIC object.Equals extern IS C#'s Enum.Equals
+        // (same type AND same value) for every argument shape, including cross-type — route it there.
+        // (EmitEnumToUnderlying + underlying equality would erase the type check here and answer true
+        // for equal-valued DIFFERENT SDK enums.) User enums stay on their pinned underlying-primitive
+        // extern (erased tag; VM-verified Match — EqualityMatrixCellTests / EqMatrixCellsVmTests).
+        if (target.Name == "Equals" && !target.IsStatic && target.Parameters.Length == 1
+            && op.Instance != null
+            && target.ContainingType.SpecialType is SpecialType.System_Object
+                or SpecialType.System_ValueType or SpecialType.System_Enum
+            && ResolveType(op.Instance.Type) is INamedTypeSymbol sdkEnumRecv
+            && sdkEnumRecv.TypeKind == TypeKind.Enum && !ExternResolver.IsUserEnum(sdkEnumRecv))
+            return ExternCall("SystemObject.__Equals__SystemObject_SystemObject__SystemBoolean",
+                new List<CLeaf> { VisitExpression(op.Instance), VisitExpression(op.Arguments[0].Value) },
+                "SystemBoolean");
+
         // Nullable<T>.GetValueOrDefault() / GetValueOrDefault(fallback) → the value, else the fallback/default.
         if (op.Instance != null && target.Name == "GetValueOrDefault"
             && EmitPolicy.IsNullableT(target.ContainingType, out var govUnderlying))
