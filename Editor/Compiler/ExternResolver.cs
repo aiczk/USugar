@@ -443,14 +443,22 @@ public static class ExternResolver
         _ => throw new System.NotSupportedException($"Unsupported SpecialType: {st}")
     };
 
-    // SDK namespaces whose enums are registered in Udon's type system.
-    // In tests, these enums are source-defined stubs (DeclaringSyntaxReferences non-empty),
-    // so namespace check is needed in addition to the syntax-reference check.
-    static bool IsSdkNamespace(INamespaceSymbol ns)
+    // THE single SDK-namespace predicate (hand-enumeration audit 2026-07-17, item ③) — every
+    // enum/struct/class classification (here and in EmitPolicy) routes through it, so the SDK
+    // boundary cannot diverge per consumer. Chain-walk with EXACT segment match, never a
+    // display-string prefix: a namespace named "SystemFoo" is a USER namespace, while ANY segment
+    // named after an SDK root (Outer.System.Inner) marks the chain SDK. In tests these SDK types
+    // are source-defined stubs (DeclaringSyntaxReferences non-empty), so the namespace check is
+    // needed in addition to the syntax-reference check.
+    internal static bool IsSdkNamespace(INamespaceSymbol ns)
     {
-        var s = ns?.ToDisplayString();
-        return s != null && (s.StartsWith("UnityEngine") || s.StartsWith("VRC")
-            || s.StartsWith("TMPro") || s.StartsWith("System"));
+        for (var n = ns; n != null && !n.IsGlobalNamespace; n = n.ContainingNamespace)
+        {
+            if (n.Name is "System" or "UnityEngine" or "VRC" or "Cinemachine"
+                or "TMPro" or "Unity" or "Microsoft")
+                return true;
+        }
+        return false;
     }
 
     public static string SanitizeTypeName(string fullName)

@@ -209,7 +209,7 @@ public static class EmitPolicy
     {
         if (type.TypeKind != TypeKind.Struct || type.SpecialType != SpecialType.None) return false;
         if (type.DeclaringSyntaxReferences.Length == 0) return false; // from a referenced assembly = native
-        return !IsSdkNamespace(type.ContainingNamespace);
+        return !ExternResolver.IsSdkNamespace(type.ContainingNamespace);
     }
 
     /// <summary>Class ABI v1 (CA-M1): a plain user class the compiler represents as a reference-semantics
@@ -341,17 +341,6 @@ public static class EmitPolicy
                     || m.ExplicitInterfaceImplementations.Any(e => e.Name == "Dispose")))
                 return m;
         return null;
-    }
-
-    static bool IsSdkNamespace(INamespaceSymbol ns)
-    {
-        for (var n = ns; n != null && !n.IsGlobalNamespace; n = n.ContainingNamespace)
-        {
-            if (n.Name is "System" or "UnityEngine" or "VRC" or "Cinemachine"
-                or "TMPro" or "Unity" or "Microsoft")
-                return true;
-        }
-        return false;
     }
 
     // ── Constant parsing (moved from VariableTable) ──
