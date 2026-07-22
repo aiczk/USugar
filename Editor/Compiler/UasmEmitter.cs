@@ -433,6 +433,9 @@ public partial class UasmEmitter
             if (isAuto && prop.ExplicitInterfaceImplementations.Length > 0)
                 throw new NotSupportedException(ExplicitInterfaceAutoPropError(prop));
             if (!isAuto && prop.DeclaredAccessibility != Accessibility.Public) continue;
+            if (prop.Type is INamedTypeSymbol propertyDelegate
+                && propertyDelegate.DelegateInvokeMethod != null)
+                RejectProgramLocalDelegateSurface(prop, propertyDelegate);
             var udonType = GetStorageTypeName(prop.Type);
             var flags = FieldFlags.None;
             if (prop.DeclaredAccessibility == Accessibility.Public) flags |= FieldFlags.Export;
@@ -768,6 +771,7 @@ public partial class UasmEmitter
                 + "method as a remotely-invokable entry point, which does not apply to a delegate value.");
         // §3.4-1: ref/out delegate signatures are rejected at the convention-var declaration side too.
         DelegateAbi.ValidateNoRefOutParams(delegateType.DelegateInvokeMethod);
+        RejectProgramLocalDelegateSurface(member, delegateType);
 
         _ctx.Storage.DeclareField(member.Name, StorageTypes.ObjectArray, FieldFlags.None);
         _ctx.Synthetics.DelegateFields.Add(member.Name);
@@ -948,6 +952,18 @@ public partial class UasmEmitter
         EmitRegisteredBodies(plan, registration);
     }
 
+    static void RejectProgramLocalDelegateSurface(ISymbol member, INamedTypeSymbol delegateType)
+    {
+        if (!DelegateAbi.IsProgramLocalSignature(delegateType.DelegateInvokeMethod)) return;
+        var externallyVisible = member.DeclaredAccessibility == Accessibility.Public
+            || member.GetAttributes().Any(a => a.AttributeClass?.Name is
+                "SerializeField" or "SerializeFieldAttribute");
+        if (externallyVisible)
+            throw new NotSupportedException(
+                $"Delegate '{member.Name}' has a user-class parameter or return type and must remain "
+                + "private: its convention is valid only inside this Udon program.");
+    }
+
     ProgramRegistration RegisterProgram(ClassCompilePlan plan)
     {
         var methods = plan.Methods;
@@ -959,6 +975,7 @@ public partial class UasmEmitter
         {
             EmitPolicy.RejectInParameters(method); // round-7 follow-up [Q3], declaration-side
             EmitPolicy.RejectNetworkCallableDelegates(method); // M4 [T1], declaration-side
+            EmitPolicy.RejectPublicProgramLocalDelegateSignature(method);
             if (method.IsGenericMethod) continue;
 
             var ml = typeLayout.Methods[method];

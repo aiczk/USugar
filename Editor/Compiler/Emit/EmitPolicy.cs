@@ -110,6 +110,25 @@ public static class EmitPolicy
                 + "value is a program-local object[] bundle and cannot cross a network call.");
     }
 
+    /// <summary>A public behaviour method is callable by another Udon program. A delegate whose
+    /// signature carries a user class is deliberately self-dispatch-only, so exposing such a bundle
+    /// as a parameter or return would create an unusable cross-program surface.</summary>
+    public static void RejectPublicProgramLocalDelegateSignature(IMethodSymbol method)
+    {
+        if (method.DeclaredAccessibility != Accessibility.Public) return;
+        foreach (var p in method.Parameters)
+            if (p.Type is INamedTypeSymbol d && d.DelegateInvokeMethod is { } invoke
+                && DelegateAbi.IsProgramLocalSignature(invoke))
+                throw new NotSupportedException(
+                    $"Public method '{method.Name}' cannot expose delegate parameter '{p.Name}' because "
+                    + "its user-class signature is valid only inside this Udon program.");
+        if (method.ReturnType is INamedTypeSymbol rd && rd.DelegateInvokeMethod is { } returnInvoke
+            && DelegateAbi.IsProgramLocalSignature(returnInvoke))
+            throw new NotSupportedException(
+                $"Public method '{method.Name}' cannot expose a delegate return with a user-class "
+                + "signature because it is valid only inside this Udon program.");
+    }
+
     // ── Contains* walker family (hand-enumeration audit 2026-07-17, Tier-2 / Matrix 3) ──
     // ONE descent body behind the three "does this type transitively contain X?" predicates; only the
     // leaf test varies. The former three hand-copied walkers had diverging descent (the delegate and

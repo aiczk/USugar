@@ -103,7 +103,6 @@ public partial class InvocationHandler
         // elsewhere (param/field/cast-back) never went through this class's creation-site validation,
         // and a copy-in-only conv protocol would silently drop ref/out write-backs.
         DelegateAbi.ValidateNoRefOutParams(invoke);
-        DelegateAbi.ValidateNoUserClassSignature(invoke); // §2-1: a class cannot ride the __dlgc_ channel
         var (convArgs, convRet, convEnv) = GetConventionFieldNames(delegateType, _typeParamMap);
 
         // The __dlgc_ conv vars are a signature-keyed cross-program byte contract (§3.2). Bridges declare

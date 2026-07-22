@@ -43,6 +43,7 @@ public sealed class DelegateDispatchEmitter
         StorageType? retType, IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeParamMap,
         CLeaf[] argExprs, bool isConditional, bool reentrant, string receiverDescription)
     {
+        var localSignature = DelegateAbi.IsProgramLocalSignature(invoke);
         // retSlot pre-initialized to default(T): every guard-failure arm falls through with it (§2.6).
         int retSlot = -1;
         if (retType != null)
@@ -103,6 +104,13 @@ public sealed class DelegateDispatchEmitter
                         },
                         _ =>
                         {
+                            if (localSignature)
+                            {
+                                if (!isConditional)
+                                    DelegateAbi.EmitInvalidBundleLog(_builder, _ctx.ClassSymbol.Name,
+                                        receiverDescription + " (program-local signature)");
+                                return;
+                            }
                             // CROSS — includes a foreign-minted bundle with target==this && addr==0, which
                             // correctly falls to a self-addressed SendCustomEvent.
                             // method-null guard: hand-rolled object[] bundles cast back to a delegate (§2.6).

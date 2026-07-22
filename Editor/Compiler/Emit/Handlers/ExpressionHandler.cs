@@ -883,6 +883,12 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
     CLeaf VisitDelegateCreation(IDelegateCreationOperation op)
     {
         var (bridgeName, funcRef, thirdParty, envLeaf) = ResolveDelegateBridge(op);
+        var delegateInvoke = (op.Type as INamedTypeSymbol)?.DelegateInvokeMethod;
+        if (delegateInvoke != null && DelegateAbi.IsProgramLocalSignature(delegateInvoke)
+            && thirdParty != null)
+            throw new System.NotSupportedException(
+                "A delegate with a user-class parameter or return type cannot bind a cross-program "
+                + "target. Keep the target in this behaviour so the class bundle remains program-local.");
         // Stage 1.75 §2.2: a variant method-group binding was already resolved (adapter- or
         // wrapper-minted) by ResolveDelegateBridge above — recompute the same sig comparison to tell
         // ValidateDelegateBinding this mismatch is handled, not a reject (its throw stays armor for a
