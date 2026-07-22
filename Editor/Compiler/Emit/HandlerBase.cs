@@ -1861,7 +1861,7 @@ public abstract partial class HandlerBase
         ITypeSymbol sourceType, ITypeSymbol destinationType)
         => _ctx.Boundary.RequireCanEraseProgramLocalPayload(conversion, sourceType, destinationType);
 
-    protected DelegateBindingPlan ResolveDelegateBridge(IDelegateCreationOperation op)
+    protected MaterializedDelegateBinding ResolveDelegateBridge(IDelegateCreationOperation op)
     {
         IMethodSymbol targetMethod = null;
         CLeaf targetInstance = null;
@@ -1906,8 +1906,9 @@ public abstract partial class HandlerBase
                 recvLeaf = AggregateAbi.DeepClone(_builder, recvLeaf, cloneCt, _ctx.Aggregates.GetLayout);
             var recvBridgeName = DelegateAbi.BridgeName(memberFunc.Name) + "_rcv";
             _ctx.Synthetics.RegisterReceiverBridge(member, recvBridgeName);
-            return new DelegateBindingPlan(DelegateBindingKind.Receiver, member,
-                recvBridgeName, FuncRef(recvBridgeName), null, recvLeaf);
+            return new MaterializedDelegateBinding(
+                new DelegateBindingPlan(DelegateBindingKind.Receiver, member, recvBridgeName),
+                FuncRef(recvBridgeName), null, recvLeaf);
         }
 
         // A local user-class interface carries its object[] receiver in DelegateAbi.Env and dispatches
@@ -1922,8 +1923,9 @@ public abstract partial class HandlerBase
             var localBridge = DelegateAbi.BridgeName(
                 LayoutPlanner.InterfaceDispatchName(targetMethod, interfaceLayout));
             _ctx.Synthetics.RegisterReceiverBridge(targetMethod, localBridge);
-            return new DelegateBindingPlan(DelegateBindingKind.Receiver, targetMethod,
-                localBridge, FuncRef(localBridge), null, targetInstance);
+            return new MaterializedDelegateBinding(
+                new DelegateBindingPlan(DelegateBindingKind.Receiver, targetMethod, localBridge),
+                FuncRef(localBridge), null, targetInstance);
         }
 
         if (targetMethod.ContainingType is INamedTypeSymbol { TypeKind: TypeKind.Interface } iface)
@@ -1934,9 +1936,9 @@ public abstract partial class HandlerBase
             var interfaceLayout = _planner.GetLayout(iface).Methods[targetMethod];
             var bridgeName = DelegateAbi.BridgeName(
                 LayoutPlanner.InterfaceDispatchName(targetMethod, interfaceLayout));
-            return new DelegateBindingPlan(DelegateBindingKind.CrossProgram, targetMethod,
-                bridgeName, Const(0u, StorageTypes.UInt32), targetInstance,
-                Const(null, StorageTypes.Object));
+            return new MaterializedDelegateBinding(
+                new DelegateBindingPlan(DelegateBindingKind.CrossProgram, targetMethod, bridgeName),
+                Const(0u, StorageTypes.UInt32), targetInstance, Const(null, StorageTypes.Object));
         }
 
         // Stage 2 §3.7: DelegateAbi.Env for a capturing closure target (null for named methods / base.M
@@ -2121,8 +2123,9 @@ public abstract partial class HandlerBase
                         ? ResolveMostDerivedOverride(targetMethod) : targetMethod;
                     _ctx.Synthetics.RegisterSigAdapter(
                         adapterTarget, delegateInvoke, adapterName, _ctx.Generics.TypeParamMap);
-                    return new DelegateBindingPlan(DelegateBindingKind.SignatureAdapter, targetMethod,
-                        adapterName, FuncRef(adapterName), targetInstance, envLeaf);
+                    return new MaterializedDelegateBinding(
+                        new DelegateBindingPlan(DelegateBindingKind.SignatureAdapter, targetMethod, adapterName),
+                        FuncRef(adapterName), targetInstance, envLeaf);
                 }
 
                 var innerBundle = DelegateAbi.EmitBundleMint(_builder, () => targetInstance,
@@ -2134,16 +2137,18 @@ public abstract partial class HandlerBase
                 // FOREIGN class per its speculative-bridge policy), which reads/writes sig-T's conv
                 // vars — staging under sig-S would silently drop values across the dispatch.
                 var wrapperName = RegisterWrapperSig(delegateInvoke, targetMethod, _ctx.Generics.TypeParamMap);
-                return new DelegateBindingPlan(DelegateBindingKind.Wrapper, targetMethod,
-                    wrapperName, FuncRef(wrapperName), null, innerBundle);
+                return new MaterializedDelegateBinding(
+                    new DelegateBindingPlan(DelegateBindingKind.Wrapper, targetMethod, wrapperName),
+                    FuncRef(wrapperName), null, innerBundle);
             }
         }
 
         var funcRef = FuncRef(bridgeExportName);
         var bindingKind = targetMethod.MethodKind is MethodKind.LambdaMethod or MethodKind.LocalFunction
             ? DelegateBindingKind.Closure : DelegateBindingKind.Direct;
-        return new DelegateBindingPlan(bindingKind, targetMethod,
-            bridgeExportName, funcRef, targetInstance, envLeaf);
+        return new MaterializedDelegateBinding(
+            new DelegateBindingPlan(bindingKind, targetMethod, bridgeExportName),
+            funcRef, targetInstance, envLeaf);
     }
 
     /// <summary>Virtual dispatch through `this` for PROPERTY/INDEXER accessors (round 7): a property

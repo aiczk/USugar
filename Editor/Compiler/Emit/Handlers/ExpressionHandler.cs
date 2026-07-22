@@ -899,7 +899,7 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
     CLeaf VisitDelegateCreation(IDelegateCreationOperation op)
     {
         var binding = ResolveDelegateBridge(op);
-        var bridgeName = binding.BridgeName;
+        var bridgeName = binding.Plan.BridgeName;
         var funcRef = binding.FunctionReference;
         var thirdParty = binding.TargetInstance;
         var envLeaf = binding.Environment;
