@@ -146,18 +146,19 @@ different result.
 - **Collections** — `foreach` is array-only. `List<T>`/`IEnumerable` cannot be iterated with
   `foreach` because Udon exposes no compatible enumerator protocol.
 - **Types** — records and runtime `new` of an `UdonSharpBehaviour` are unsupported. User classes
-  support allocation, inheritance, virtual dispatch, generics, and runtime type tests, but not
-  interface implementation, generic virtual methods, static storage, user-defined operators or
-  conversions, `GetHashCode()`, or `GetType()`.
-- **Program boundaries** — user classes, structs/tuples, delegates, and multidimensional arrays use
-  program-local `object[]` representations. Values containing those representations cannot always
-  be erased to `object`, stored on another behaviour, or sent through `[NetworkCallable]`; USugar
-  rejects the unsafe boundary instead of leaking an untyped bundle.
+  support allocation, inheritance, virtual and interface dispatch, generics, runtime type tests,
+  and per-program static storage. Generic virtual methods, user-class operators or conversions,
+  `GetHashCode()`, and `GetType()` remain unsupported.
+- **Program boundaries** — user classes have a portable tagged `object[]` ABI and can cross behaviour
+  program boundaries through typed fields, calls, and interfaces. Structs/tuples, delegates, and
+  multidimensional arrays also use `object[]`, but have different identity and transport rules.
+  Erasure to `object`, network sync, `[NetworkCallable]`, and delegates whose signatures contain a
+  user class remain restricted where the VM cannot preserve the source semantics.
 - **Delegates and events** — closures, delegate values, multicast (`+=`/`-=`), delegate
-  fields/properties, tuple returns, and field-like events are supported. Delegate signatures with
-  `ref`/`out`, direct method-group binding to a user-class instance method, custom-accessor events,
-  static events, and cross-behaviour event subscription are not. Wrap a user-class method call in a
-  lambda when a delegate is required.
+  fields/properties, tuple returns, and field-like events (including static field-like events) are
+  supported. Delegate signatures with `ref`/`out`, direct method-group binding to a user-class
+  instance method, custom-accessor events, and cross-behaviour event subscription are not. Wrap a
+  user-class method call in a lambda when a delegate is required.
 - **Multidimensional arrays** — creation, indexing, `Length`, `Rank`, `GetLength`, and
   `GetUpperBound` are supported. They use an `object[]` bundle rather than a native Udon array, so
   general `Array` APIs, erasure to `object`/`Array`, and implicit string formatting are restricted.

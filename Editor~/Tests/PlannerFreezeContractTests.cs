@@ -28,18 +28,8 @@ public class PlannedB : UdonSharp.UdonSharpBehaviour, IPlanned { public int Read
             .Where(t => t != null && t.Name.StartsWith("Planned", StringComparison.Ordinal)
                 && ExternResolver.IsUdonSharpBehaviour(t))
             .ToArray();
-        var iface = compilation.GetTypeByMetadataName("IPlanned");
-
         var planner = new LayoutPlanner(compilation);
-        foreach (var type in classes)
-        {
-            foreach (var implemented in type.AllInterfaces)
-                planner.RegisterClassImplementedInterface(implemented, true);
-            planner.Plan(type);
-            foreach (var implemented in type.AllInterfaces) planner.Plan(implemented);
-        }
-        planner.Plan(iface);
-        planner.Freeze();
+        planner.PrepareCompilation();
         var plannedCount = planner.AllLayouts.Count;
 
         var outputs = new ConcurrentBag<string>();

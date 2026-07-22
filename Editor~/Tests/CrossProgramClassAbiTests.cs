@@ -1,3 +1,5 @@
+using System;
+using System.Linq;
 using Xunit;
 
 namespace USugar.Tests;
@@ -102,5 +104,14 @@ public class PortableDerivedReceiver : PortableBaseReceiver {
         Assert.Contains("__typeobj_PortableLeafDerived", uasm);
         Assert.Contains("__typeobj_PortableEnvelope_PortableLeaf", uasm);
         Assert.Contains("SystemString.__op_Equality__SystemString_SystemString__SystemBoolean", uasm);
+
+        var typeObjectDeclarations = uasm.Split('\n').Count(line =>
+            line.TrimStart().StartsWith("__typeobj_", StringComparison.Ordinal)
+            && line.Contains(": %SystemString", StringComparison.Ordinal));
+        var dispatchComparisons = uasm.Split(
+            "SystemString.__op_Equality__SystemString_SystemString__SystemBoolean",
+            StringSplitOptions.None).Length - 1;
+        Assert.InRange(typeObjectDeclarations, 3, 6);
+        Assert.InRange(dispatchComparisons, 1, 8);
     }
 }
