@@ -30,22 +30,22 @@ public readonly struct RuntimeShape
     public readonly RuntimeIdentityKind Identity;
     public readonly RuntimeScopeKind Scope;
     public readonly RuntimeTypeIdentityKind RuntimeTypeIdentity;
-    public readonly bool ContainsProgramLocalPayload;
+    public readonly bool ContainsUserClassPayload;
 
     RuntimeShape(RuntimeStorageKind storage, RuntimeBundleKind bundle, RuntimeIdentityKind identity,
-        RuntimeScopeKind scope, RuntimeTypeIdentityKind runtimeTypeIdentity, bool containsProgramLocalPayload)
+        RuntimeScopeKind scope, RuntimeTypeIdentityKind runtimeTypeIdentity, bool containsUserClassPayload)
     {
         Storage = storage;
         Bundle = bundle;
         Identity = identity;
         Scope = scope;
         RuntimeTypeIdentity = runtimeTypeIdentity;
-        ContainsProgramLocalPayload = containsProgramLocalPayload;
+        ContainsUserClassPayload = containsUserClassPayload;
     }
 
     public bool IsBundle => Storage == RuntimeStorageKind.ObjectArrayBundle;
     public bool CanCrossProgram => Scope == RuntimeScopeKind.Portable;
-    public bool CanEraseToObject => !ContainsProgramLocalPayload
+    public bool CanEraseToObject => !ContainsUserClassPayload
         && (!IsBundle || RuntimeTypeIdentity != RuntimeTypeIdentityKind.Collapsed);
 
     public static RuntimeShape Class(bool containsPayload = true)
@@ -82,8 +82,8 @@ public static class TypeClassifier
         return RuntimeShape.Native(containsPayload);
     }
 
-    public static bool ContainsProgramLocalPayload(ITypeSymbol type, TypeClassifierContext ctx)
-        => ShapeOf(type, ctx).ContainsProgramLocalPayload;
+    public static bool ContainsUserClassPayload(ITypeSymbol type, TypeClassifierContext ctx)
+        => ShapeOf(type, ctx).ContainsUserClassPayload;
 
     public static bool IsUserClass(ITypeSymbol type)
         => ShapeOf(type, new TypeClassifierContext(null)).Bundle == RuntimeBundleKind.Class;

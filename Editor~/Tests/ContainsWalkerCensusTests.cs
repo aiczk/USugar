@@ -167,8 +167,8 @@ public class WalkerCensusCarrier
         var types = BuildCensusTypes();
         var ctx = new TypeClassifierContext(null);
         foreach (var (field, cls, _, _, shape) in Battery)
-            Assert.True(TypeClassifier.ContainsProgramLocalPayload(types[field], ctx) == cls,
-                $"facade drift [{shape}]: ContainsProgramLocalPayload({field}) expected {cls}");
+            Assert.True(TypeClassifier.ContainsUserClassPayload(types[field], ctx) == cls,
+                $"facade drift [{shape}]: ContainsUserClassPayload({field}) expected {cls}");
     }
 
     [Fact]
@@ -181,7 +181,7 @@ public class WalkerCensusCarrier
         Assert.Equal(RuntimeBundleKind.Class, cls.Bundle);
         Assert.Equal(RuntimeIdentityKind.Reference, cls.Identity);
         Assert.Equal(RuntimeScopeKind.Portable, cls.Scope);
-        Assert.True(cls.ContainsProgramLocalPayload);
+        Assert.True(cls.ContainsUserClassPayload);
 
         var aggregate = TypeClassifier.ShapeOf(types["cTup"], ctx);
         Assert.Equal(RuntimeBundleKind.Aggregate, aggregate.Bundle);

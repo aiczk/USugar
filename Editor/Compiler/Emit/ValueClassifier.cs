@@ -104,7 +104,7 @@ public static class ValueClassifier
         if (staticType == null)
             return Create(unwrapped, staticType, ValueKind.Unknown, ProvenanceOf(unwrapped), false, false, false, false);
         var shape = TypeClassifier.ShapeOf(staticType, typeCtx);
-        if (shape.ContainsProgramLocalPayload)
+        if (shape.ContainsUserClassPayload)
             return Create(unwrapped, staticType, ValueKind.ProgramLocalPayload, ProvenanceOf(unwrapped), true, false, false, false);
         if (shape.Bundle == RuntimeBundleKind.Aggregate)
             return Create(unwrapped, staticType, ValueKind.Aggregate, ProvenanceOf(unwrapped), false, false, false, false);
@@ -205,7 +205,7 @@ public static class ValueClassifier
             foreach (var cap in s.OwnedCaptures)
             {
                 if (CapturedSymbolType(cap) is not { } t) continue;
-                if (TypeClassifier.ContainsProgramLocalPayload(t, typeCtx)) payload = true;
+                if (TypeClassifier.ContainsUserClassPayload(t, typeCtx)) payload = true;
                 if (IsUnclassifiableCarrierType(t)) unclassifiable = true;
             }
         return (payload, unclassifiable);

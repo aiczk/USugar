@@ -157,9 +157,8 @@ public static class EmitPolicy
         => ContainsMatchingType(type, OpaqueObjectLeaf, null, NewVisitedSet());
 
     /// <summary>CA-M1 §2-1: a v1 user class proper, or one reachable through the shared descent
-    /// (<see cref="ContainsMatchingType"/>). A class value is a program-local object[] bundle — like a
-    /// delegate, its reference is meaningless in any other client's program, so it can never cross a
-    /// network sync / cross-behaviour call / delegate __dlgc_ channel / GetProgramVariable surface.</summary>
+    /// (<see cref="ContainsMatchingType"/>). A class value has a portable tagged object[] ABI, but this
+    /// predicate remains relevant to object erasure, delegate signatures, and unsupported sync surfaces.</summary>
     public static bool ContainsUserClassType(ITypeSymbol type)
         => ContainsUserClassType(type, null);
 

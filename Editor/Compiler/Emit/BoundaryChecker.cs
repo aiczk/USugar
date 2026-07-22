@@ -48,7 +48,7 @@ public sealed class BoundaryChecker
             : null;
     }
 
-    public bool CurrentMethodBodyMentionsProgramLocalPayload()
+    public bool CurrentMethodBodyMentionsUserClassPayload()
     {
         // Receiver-capture design v2 SS2(b): inside a v1-class instance member the receiver itself is
         // a program-local payload in scope - an unclassifiable delegate store from here cannot be
@@ -57,7 +57,7 @@ public sealed class BoundaryChecker
         var analysis = _ctx.MethodAnalyses.Get(_ctx.Methods.CurrentMethod);
         if (analysis == null) return false;
         foreach (var type in analysis.ReferencedTypes)
-            if (type != null && TypeClassifier.ContainsProgramLocalPayload(type, TypeCtx))
+            if (type != null && TypeClassifier.ContainsUserClassPayload(type, TypeCtx))
                 return true;
         return false;
     }
@@ -151,7 +151,7 @@ public sealed class BoundaryChecker
                 + $"method group at {site}. The copied {info.Provenance.ToString().ToLowerInvariant()} value "
                 + "has no creation-site capture proof and may carry a program-local payload."
                 + (advice == null ? "" : " " + advice));
-        if (!info.DelegateCapturesProgramLocalPayload && !CurrentMethodBodyMentionsProgramLocalPayload()) return;
+        if (!info.DelegateCapturesProgramLocalPayload && !CurrentMethodBodyMentionsUserClassPayload()) return;
         throw new NotSupportedException(
             $"A delegate stored in {surface} must be created directly from a capture-safe lambda or "
             + $"method group at {site}. Delegate values copied from locals, parameters, fields, calls, "
@@ -206,8 +206,8 @@ public sealed class BoundaryChecker
                 + "launders past the cast / ToString / extern boundary checks and would stringify as \"System.Object[]\" "
                 + "or silently reinterpret when cast back. Keep the value typed as its struct/tuple type.");
 
-        if (!sourceShape.ContainsProgramLocalPayload
-            || destinationShape.ContainsProgramLocalPayload
+        if (!sourceShape.ContainsUserClassPayload
+            || destinationShape.ContainsUserClassPayload
             || IsProgramLocalEqualityPosition(conversion)
             || IsProvablyLocalClassErasure(conversion, sourceType, destinationType))
             return;
