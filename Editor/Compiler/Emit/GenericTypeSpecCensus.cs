@@ -43,9 +43,9 @@ internal sealed class GenericTypeSpecCensus
     public HashSet<INamedTypeSymbol> Build(ClassCompilePlan plan)
     {
         foreach (var m in plan.Methods) EnqueueIfClosed(m, null, null);
-        foreach (var m in plan.ForeignStatics) EnqueueIfClosed(m, null, null);
-        foreach (var m in plan.StructMethods) EnqueueIfClosed(m, null, null);
-        foreach (var m in plan.BaseInstanceMethods) EnqueueIfClosed(m, null, null);
+        foreach (var m in plan.Registration.ForeignStatics) EnqueueIfClosed(m, null, null);
+        foreach (var m in plan.Registration.StructMethods) EnqueueIfClosed(m, null, null);
+        foreach (var m in plan.Registration.BaseInstanceMethods) EnqueueIfClosed(m, null, null);
         foreach (var op in plan.FieldInitOps) Walk(op, null, null, null);
 
         while (_queue.Count > 0 || _fieldQueue.Count > 0)

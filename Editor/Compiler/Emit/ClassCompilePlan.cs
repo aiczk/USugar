@@ -11,26 +11,20 @@ sealed class ClassCompilePlan
 {
     public readonly IMethodSymbol[] Methods;
     public readonly ReachableBodies Reach;
-    public readonly IMethodSymbol[] ForeignStatics;
-    public readonly IMethodSymbol[] StructMethods;
-    public readonly IMethodSymbol[] BaseInstanceMethods;
+    public readonly CallableRegistrationPlan Registration;
     public readonly List<IMethodSymbol> CaptureRoots;
     public readonly List<IOperation> FieldInitOps;
 
     public ClassCompilePlan(
         IMethodSymbol[] methods,
         ReachableBodies reach,
-        IMethodSymbol[] foreignStatics,
-        IMethodSymbol[] structMethods,
-        IMethodSymbol[] baseInstanceMethods,
+        CallableRegistrationPlan registration,
         List<IMethodSymbol> captureRoots,
         List<IOperation> fieldInitOps)
     {
         Methods = methods;
         Reach = reach;
-        ForeignStatics = foreignStatics;
-        StructMethods = structMethods;
-        BaseInstanceMethods = baseInstanceMethods;
+        Registration = registration;
         CaptureRoots = captureRoots;
         FieldInitOps = fieldInitOps;
     }

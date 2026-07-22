@@ -1022,12 +1022,12 @@ public partial class UasmEmitter
 
     void EmitMethods(ClassCompilePlan plan)
     {
-        var registration = RegisterProgram(plan);
+        RegisterProgram(plan);
         BuildRecursionInfo();
-        EmitRegisteredBodies(plan, registration);
+        EmitRegisteredBodies(plan);
     }
 
-    ProgramRegistration RegisterProgram(ClassCompilePlan plan)
+    void RegisterProgram(ClassCompilePlan plan)
     {
         var methods = plan.Methods;
         var typeLayout = _planner.GetLayout(_classSymbol);
@@ -1115,8 +1115,8 @@ public partial class UasmEmitter
         // base, struct, foreign, field-init) once and applies all three per-operation rules to each, so a
         // struct/foreign/using call inside any reached body is seen. Gates (IsCollectibleStructMember /
         // IsClosedForeignStaticTarget / methodSet exclusion) stay on the projection side — meaning preserved.
-        var baseInstanceMethods = plan.BaseInstanceMethods;
-        var structMethods = plan.StructMethods;
+        var baseInstanceMethods = plan.Registration.BaseInstanceMethods;
+        var structMethods = plan.Registration.StructMethods;
         // C4 retirement (the C2-incidental duplicate): a static LOCAL FUNCTION declared inside a foreign
         // static classifies as a foreign static itself (IsForeignStatic has no MethodKind filter — its
         // reach leg seeding BodyByDef is the C2-proven recursion-node arm and stays), but local functions
@@ -1124,7 +1124,7 @@ public partial class UasmEmitter
         // overwrote this eager Phase-1 copy in _methodFunctions and left it emitted-but-unreachable (a
         // dead __N_ duplicate body + heap vars, probe-proven __2_Twice/__3_Twice). Gate the REGISTRATION
         // projection only.
-        var foreignStatics = plan.ForeignStatics.Where(fm => fm.MethodKind != MethodKind.LocalFunction).ToArray();
+        var foreignStatics = plan.Registration.ForeignStatics;
         foreach (var fm in foreignStatics)
         {
             EmitPolicy.RejectInParameters(fm); // round-7 follow-up [Q3]
@@ -1261,7 +1261,6 @@ public partial class UasmEmitter
             }
         }
 
-        return new ProgramRegistration(foreignStatics, structMethods, baseInstanceMethods);
     }
 
     static HashSet<IMethodSymbol> CollectCrossDispatchExports(ClassCompilePlan plan)
@@ -1308,12 +1307,12 @@ public partial class UasmEmitter
         return false;
     }
 
-    void EmitRegisteredBodies(ClassCompilePlan plan, ProgramRegistration registration)
+    void EmitRegisteredBodies(ClassCompilePlan plan)
     {
         var methods = plan.Methods;
-        var foreignStatics = registration.ForeignStatics;
-        var structMethods = registration.StructMethods;
-        var baseInstanceMethods = registration.BaseInstanceMethods;
+        var foreignStatics = plan.Registration.ForeignStatics;
+        var structMethods = plan.Registration.StructMethods;
+        var baseInstanceMethods = plan.Registration.BaseInstanceMethods;
 
         // Second pass: emit bodies (skip generic definitions)
         foreach (var method in methods)

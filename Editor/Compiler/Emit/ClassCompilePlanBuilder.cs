@@ -30,6 +30,12 @@ sealed class ClassCompilePlanBuilder
         var reach = _buildReachableBodies(methods);
         var methodSet = new HashSet<IMethodSymbol>(methods, SymbolEqualityComparer.Default);
         var baseInstanceMethods = reach.BaseCopies.Where(bm => !methodSet.Contains(bm)).ToArray();
+        // Local functions register at their declaration/forward-reference site. Keeping them in the
+        // eager foreign-static projection used to create a dead duplicate CFunction.
+        var foreignStatics = reach.ForeignStatics
+            .Where(fm => fm.MethodKind != MethodKind.LocalFunction).ToArray();
+        var registration = new CallableRegistrationPlan(
+            foreignStatics, reach.StructMembers, baseInstanceMethods);
         var captureRoots = reach.BodyByDef.Keys.Where(m => m.DeclaringSyntaxReferences.Length > 0).ToList();
         // Design 2026-07-10 v3 SS2A: supplementary capture roots (generic foreign statics) join the
         // root set; their bodies ride reach.GenericForeignStaticBodies into the Build call.
@@ -38,9 +44,7 @@ sealed class ClassCompilePlanBuilder
         return new ClassCompilePlan(
             methods,
             reach,
-            reach.ForeignStatics,
-            reach.StructMembers,
-            baseInstanceMethods,
+            registration,
             captureRoots,
             _fieldInitOps().ToList());
     }
