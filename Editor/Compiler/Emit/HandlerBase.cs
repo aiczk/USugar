@@ -1588,7 +1588,7 @@ public abstract partial class HandlerBase
     /// <summary>Multicast design (2026-07-03 §1.4): register the sig this `+=`/`-=` site needs a
     /// combine/remove helper (and fan-out bridge) for. Keyed on sig content (first registration wins) —
     /// a second `+=` site sharing the signature is a no-op here, same class of dedup as
-    /// EmitPendingDelegateBridges' `emitted.Add`. Snapshots the type-param map for the same reason
+    /// DelegateBridgeEmitter's emitted-name set. Snapshots the type-param map for the same reason
     /// ResolveDelegateBridge does (§7 A-M1): synthetic emission runs after body emission, when the
     /// ambient map may already be cleared.</summary>
     protected void RegisterMulticastSig(string sigPart, IMethodSymbol invoke)

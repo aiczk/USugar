@@ -125,7 +125,7 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
     /// Multicast design (2026-07-03 §1.4/§7 A-M1): `d += h` / `d -= h` lowers to
     /// `d = __dlg_combine_{sig}(d, h)` / `d = __dlg_remove_{sig}(d, h)`. The helper is a per-class
     /// synthetic function (UasmEmitter.EmitMulticastCombineRemoveHelpers, sibling of
-    /// EmitPendingDelegateBridges) minted lazily via RegisterMulticastSig — a class with no `+=`/`-=`
+    /// DelegateBridgeEmitter) minted lazily via RegisterMulticastSig — a class with no `+=`/`-=`
     /// on a delegate emits none of this (single-cast golden stays byte-identical, §6 gate).
     /// </summary>
     CLeaf VisitDelegateCompoundAssignment(ICompoundAssignmentOperation op, INamedTypeSymbol delegateType)

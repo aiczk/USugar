@@ -691,7 +691,7 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
     /// <paramref name="reentrant"/> is decided by the caller (the fan-out element-dispatch site always
     /// passes false — reentrancy wiring is A-M3 scope, §1.6). <paramref name="typeParamMap"/> is used
     /// explicitly (never the ambient ctx map) so this stays correct when called from post-body-emission
-    /// synthetic passes, mirroring EmitPendingDelegateBridges' resolvedTypeParamMap snapshot use.
+    /// synthetic passes, mirroring DelegateBridgeEmitter's resolved type-parameter snapshot use.
     /// </summary>
     CLeaf EmitDelegateDispatchCore(CLeaf bundle, IMethodSymbol invoke, string[] convArgs, string convRet, string convEnv,
         string retType, IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeParamMap,
