@@ -264,54 +264,7 @@ public sealed class CaptureScopeAnalysis
     /// GetLocalFunctionCaptures call so the lambda-side cache is never pinned pre-fixpoint.</summary>
     static void SeedLocalFunctionCaptureFixpoint(IEnumerable<IOperation> roots, LambdaCaptureAnalyzer captureAnalyzer)
     {
-        var lfCaptures = new Dictionary<IMethodSymbol, HashSet<ISymbol>>(SymbolEqualityComparer.Default);
-        var lfInside = new Dictionary<IMethodSymbol, HashSet<ISymbol>>(SymbolEqualityComparer.Default);
-        var lfRefs = new Dictionary<IMethodSymbol, HashSet<IMethodSymbol>>(SymbolEqualityComparer.Default);
-
-        void CollectLocalFunctions(IOperation op, List<IOperation> into)
-        {
-            if (op == null) return;
-            if (op is ILocalFunctionOperation lf && lf.Body != null) into.Add(op);
-            foreach (var child in op.ChildOps()) CollectLocalFunctions(child, into);
-        }
-
-        var lfOps = new List<IOperation>();
-        foreach (var root in roots) CollectLocalFunctions(root, lfOps);
-
-        foreach (var lfOp in lfOps)
-        {
-            var lf = (ILocalFunctionOperation)lfOp;
-            var direct = new HashSet<ISymbol>(SymbolEqualityComparer.Default);
-            var inside = new HashSet<ISymbol>(SymbolEqualityComparer.Default);
-            var refs = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
-            LambdaCaptureAnalyzer.AnalyzeLocalFunction(lf.Symbol, lf.Body, direct, inside, refs);
-            lfCaptures[lf.Symbol] = direct;
-            lfInside[lf.Symbol] = inside;
-            lfRefs[lf.Symbol] = refs;
-        }
-
-        bool changed = true;
-        while (changed)
-        {
-            changed = false;
-            foreach (var kv in lfRefs)
-            {
-                var mySet = lfCaptures[kv.Key];
-                var myInside = lfInside[kv.Key];
-                foreach (var callee in kv.Value)
-                {
-                    if (!lfCaptures.TryGetValue(callee, out var calleeSet)) continue;
-                    if (ReferenceEquals(calleeSet, mySet)) continue;
-                    foreach (var s in calleeSet)
-                        if (!myInside.Contains(s) && mySet.Add(s)) changed = true;
-                }
-            }
-        }
-
-        var final = new Dictionary<IMethodSymbol, System.Collections.Immutable.ImmutableArray<ISymbol>>(SymbolEqualityComparer.Default);
-        foreach (var kv in lfCaptures)
-            if (kv.Value.Count > 0) final[kv.Key] = kv.Value.ToImmutableArray();
-        captureAnalyzer.SetLocalFunctionCaptures(final);
+        captureAnalyzer.SetLocalFunctionCaptures(LocalFunctionCaptureGraph.Build(roots));
     }
 
     /// <summary>Owns the recursive scope-tree walk. One instance per <see cref="Build"/> call — not
