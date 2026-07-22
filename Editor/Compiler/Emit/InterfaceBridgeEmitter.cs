@@ -40,21 +40,33 @@ public sealed class InterfaceBridgeEmitter
 
             var plan = new BridgePlan($"__bridge_{exportName}", exportName, interfaceMethod,
                 implementation, BridgeReceiverKind.None, BridgeDispatchKind.Direct,
-                interfaceLayout.ReturnId == null ? BridgeReturnKind.None : BridgeReturnKind.Field);
+                BuildArgumentAdapters(interfaceMethod, interfaceLayout),
+                BuildReturnAdapter(interfaceLayout, classLayout));
             _bridge.Emit(_context, plan, () =>
             {
-            var arguments = new List<CLeaf>();
-            for (int i = 0; i < interfaceMethod.Parameters.Length; i++)
-                arguments.Add(_bridge.Load(interfaceLayout.ParamIds[i],
-                    _context.ResolveStorageType(interfaceMethod.Parameters[i].Type)));
+            var arguments = _bridge.LoadArguments(plan);
 
             var result = _bridge.CallInternal(implementation, arguments.ToArray());
-            if (result != null && interfaceLayout.ReturnId != null
-                && classLayout.ReturnId != null
-                && interfaceLayout.ReturnId != classLayout.ReturnId)
-                _bridge.Store(interfaceLayout.ReturnId, result);
+            _bridge.StoreReturn(plan, result);
 
             });
         }
     }
+
+    List<BridgeArgumentAdapter> BuildArgumentAdapters(
+        Microsoft.CodeAnalysis.IMethodSymbol method, MethodLayout layout)
+    {
+        var adapters = new List<BridgeArgumentAdapter>();
+        for (int i = 0; i < method.Parameters.Length; i++)
+            adapters.Add(new BridgeArgumentAdapter(layout.ParamIds[i],
+                _context.ResolveStorageType(method.Parameters[i].Type)));
+        return adapters;
+    }
+
+    static BridgeReturnAdapter BuildReturnAdapter(MethodLayout interfaceLayout, MethodLayout classLayout)
+        => interfaceLayout.ReturnId != null
+            && classLayout.ReturnId != null
+            && interfaceLayout.ReturnId != classLayout.ReturnId
+                ? new BridgeReturnAdapter(BridgeReturnKind.Field, interfaceLayout.ReturnId)
+                : BridgeReturnAdapter.None;
 }

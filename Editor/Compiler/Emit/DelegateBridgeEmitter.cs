@@ -87,22 +87,25 @@ public sealed class DelegateBridgeEmitter
         var conventionReturn = returnType != null ? DelegateAbi.ConvRetName(signaturePart) : null;
         var capturing = _context.Closures.CaptureScope != null
             && _context.Closures.CaptureScope.IsCapturingClosure(closureCheckMethod);
+        var argumentAdapters = new List<BridgeArgumentAdapter>();
+        for (int i = 0; i < signatureMethod.Parameters.Length; i++)
+            argumentAdapters.Add(new BridgeArgumentAdapter(
+                DelegateAbi.ConvArgName(signaturePart, i),
+                _context.ResolveStorageType(signatureMethod.Parameters[i].Type, typeParameterMap)));
+        var returnAdapter = conventionReturn == null
+            ? BridgeReturnAdapter.None
+            : new BridgeReturnAdapter(BridgeReturnKind.Convention, conventionReturn);
         var plan = new BridgePlan(bridgeName, bridgeName, signatureMethod, target,
             capturing ? BridgeReceiverKind.Environment : BridgeReceiverKind.None,
-            BridgeDispatchKind.Direct,
-            conventionReturn == null ? BridgeReturnKind.None : BridgeReturnKind.Convention);
+            BridgeDispatchKind.Direct, argumentAdapters, returnAdapter);
         _bridge.Emit(_context, plan, () =>
         {
-            var arguments = new List<CLeaf>();
-            for (int i = 0; i < signatureMethod.Parameters.Length; i++)
-                arguments.Add(_bridge.Load(DelegateAbi.ConvArgName(signaturePart, i),
-                    _context.ResolveStorageType(signatureMethod.Parameters[i].Type, typeParameterMap)));
+            var arguments = _bridge.LoadArguments(plan);
 
             void EmitCall()
             {
                 var result = builder.InternalCall(target.Name, arguments, targetReturnType);
-                if (conventionReturn != null) _bridge.Store(conventionReturn, result);
-                else builder.EmitExprStmt(result);
+                if (!_bridge.StoreReturn(plan, result)) builder.EmitExprStmt(result);
             }
 
             if (capturing)

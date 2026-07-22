@@ -29,6 +29,30 @@ public sealed class SyntheticBridgeBuilder
     public CLeaf Load(string fieldName, StorageType type) => _builder.LoadField(fieldName, type);
     public void Store(string fieldName, CLeaf value) => _builder.EmitStoreField(fieldName, value);
 
+    public List<CLeaf> LoadArguments(BridgePlan plan)
+    {
+        var arguments = new List<CLeaf>(plan.Arguments.Count);
+        foreach (var adapter in plan.Arguments)
+        {
+            var value = Load(adapter.SourceField, adapter.Type);
+            if (adapter.Materialize)
+            {
+                var slot = _builder.AllocScratch(adapter.Type);
+                _builder.EmitAssign(slot, value);
+                value = _builder.SlotRef(slot);
+            }
+            arguments.Add(value);
+        }
+        return arguments;
+    }
+
+    public bool StoreReturn(BridgePlan plan, CLeaf value)
+    {
+        if (plan.Return.Kind == BridgeReturnKind.None || value == null) return false;
+        Store(plan.Return.DestinationField, value);
+        return true;
+    }
+
     public CLeaf CallExtern(StorageType returnType, ExternSignature signature, params CLeaf[] args)
         => _builder.ExternCall(signature, new List<CLeaf>(args), returnType);
 

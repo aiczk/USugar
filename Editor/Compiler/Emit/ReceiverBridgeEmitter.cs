@@ -38,21 +38,23 @@ public sealed class ReceiverBridgeEmitter
         var targetReturnType = member.ReturnsVoid
             ? StorageTypes.Void
             : _context.ResolveStorageType(member.ReturnType);
+        var argumentAdapters = BuildArgumentAdapters(member, signaturePart);
+        var conventionReturn = returnType != null ? DelegateAbi.ConvRetName(signaturePart) : null;
+        var returnAdapter = conventionReturn == null
+            ? BridgeReturnAdapter.None
+            : new BridgeReturnAdapter(BridgeReturnKind.Convention, conventionReturn);
         var plan = new BridgePlan(bridgeName, bridgeName, member, null,
             BridgeReceiverKind.Environment, BridgeDispatchKind.Runtime,
-            returnType == null ? BridgeReturnKind.None : BridgeReturnKind.Convention);
+            argumentAdapters, returnAdapter);
         _bridge.Emit(_context, plan, () =>
         {
         var environmentName = DelegateAbi.ConvEnvName(signaturePart);
         var environmentType = new StorageType(EnvEmit.EnvType);
         _context.Storage.TryDeclareVar(environmentName, environmentType);
         var receiver = _bridge.Load(environmentName, environmentType);
-        var arguments = new List<CLeaf> { receiver };
-        for (int i = 0; i < member.Parameters.Length; i++)
-            arguments.Add(_bridge.Load(DelegateAbi.ConvArgName(signaturePart, i),
-                _context.ResolveStorageType(member.Parameters[i].Type)));
+        var arguments = _bridge.LoadArguments(plan);
+        arguments.Insert(0, receiver);
 
-        var conventionReturn = returnType != null ? DelegateAbi.ConvRetName(signaturePart) : null;
         var site = new CallableSite(CallableSiteKind.Method, member, null);
         var targets = _context.VirtualDispatch.Resolve(site, member.ContainingType).RuntimeTargets;
         var matched = builder.AllocScratch(StorageTypes.Boolean);
@@ -68,8 +70,7 @@ public sealed class ReceiverBridgeEmitter
                 builder.EmitAssign(matched, builder.Const(true, StorageTypes.Boolean));
                 var result = builder.InternalCall(_context.Methods.Functions[target.Impl].Name,
                     arguments, targetReturnType);
-                if (conventionReturn != null) _bridge.Store(conventionReturn, result);
-                else builder.EmitExprStmt(result);
+                if (!_bridge.StoreReturn(plan, result)) builder.EmitExprStmt(result);
             });
         }
         var missing = _bridge.CallExtern(StorageTypes.Boolean,
@@ -95,9 +96,14 @@ public sealed class ReceiverBridgeEmitter
             ? StorageTypes.Void
             : _context.ResolveStorageType(member.ReturnType);
 
+        var argumentAdapters = BuildArgumentAdapters(member, signaturePart);
+        var conventionReturn = returnType != null ? DelegateAbi.ConvRetName(signaturePart) : null;
+        var returnAdapter = conventionReturn == null
+            ? BridgeReturnAdapter.None
+            : new BridgeReturnAdapter(BridgeReturnKind.Convention, conventionReturn);
         var plan = new BridgePlan(bridgeName, bridgeName, member, targetFunction,
             BridgeReceiverKind.Environment, BridgeDispatchKind.Direct,
-            returnType == null ? BridgeReturnKind.None : BridgeReturnKind.Convention);
+            argumentAdapters, returnAdapter);
         _bridge.Emit(_context, plan, () =>
         {
         var environmentName = DelegateAbi.ConvEnvName(signaturePart);
@@ -105,12 +111,9 @@ public sealed class ReceiverBridgeEmitter
         _context.Storage.TryDeclareVar(environmentName, environmentType);
         var receiver = _bridge.Load(environmentName, environmentType);
 
-        var arguments = new List<CLeaf> { receiver };
-        for (int i = 0; i < member.Parameters.Length; i++)
-            arguments.Add(_bridge.Load(DelegateAbi.ConvArgName(signaturePart, i),
-                _context.ResolveStorageType(member.Parameters[i].Type)));
+        var arguments = _bridge.LoadArguments(plan);
+        arguments.Insert(0, receiver);
 
-        var conventionReturn = returnType != null ? DelegateAbi.ConvRetName(signaturePart) : null;
         var receiverPresent = _bridge.CallExtern(StorageTypes.Boolean,
             "SystemObject.__op_Inequality__SystemObject_SystemObject__SystemBoolean",
             receiver, builder.Const(null, StorageTypes.Object));
@@ -118,8 +121,7 @@ public sealed class ReceiverBridgeEmitter
             _ =>
             {
                 var result = builder.InternalCall(targetFunction.Name, arguments, targetReturnType);
-                if (conventionReturn != null) _bridge.Store(conventionReturn, result);
-                else builder.EmitExprStmt(result);
+                if (!_bridge.StoreReturn(plan, result)) builder.EmitExprStmt(result);
             },
             _ =>
             {
@@ -133,5 +135,14 @@ public sealed class ReceiverBridgeEmitter
             });
 
         });
+    }
+
+    List<BridgeArgumentAdapter> BuildArgumentAdapters(IMethodSymbol method, string signaturePart)
+    {
+        var adapters = new List<BridgeArgumentAdapter>();
+        for (int i = 0; i < method.Parameters.Length; i++)
+            adapters.Add(new BridgeArgumentAdapter(DelegateAbi.ConvArgName(signaturePart, i),
+                _context.ResolveStorageType(method.Parameters[i].Type)));
+        return adapters;
     }
 }

@@ -34,24 +34,24 @@ public sealed class WrapperBridgeEmitter
         _context.Storage.TryDeclareVar(
             DelegateAbi.ConvEnvName(outerSignature), new StorageType(EnvEmit.EnvType));
 
+        var argumentAdapters = new List<BridgeArgumentAdapter>();
+        for (int i = 0; i < outerInvoke.Parameters.Length; i++)
+            argumentAdapters.Add(new BridgeArgumentAdapter(
+                DelegateAbi.ConvArgName(outerSignature, i), argumentTypes[i], true));
+        var returnAdapter = returnType == null
+            ? BridgeReturnAdapter.None
+            : new BridgeReturnAdapter(BridgeReturnKind.Convention,
+                DelegateAbi.ConvRetName(outerSignature));
         var plan = new BridgePlan(name, name, outerInvoke, null,
             BridgeReceiverKind.Payload, BridgeDispatchKind.DelegatePayload,
-            returnType == null ? BridgeReturnKind.None : BridgeReturnKind.Convention);
+            argumentAdapters, returnAdapter);
         _bridge.Emit(_context, plan, () =>
         {
         var innerSlot = builder.AllocScratch(StorageTypes.ObjectArray);
         builder.EmitAssign(innerSlot,
             _bridge.Load(DelegateAbi.ConvEnvName(outerSignature), StorageTypes.ObjectArray));
 
-        var argumentSlots = new int[outerInvoke.Parameters.Length];
-        var arguments = new CLeaf[argumentSlots.Length];
-        for (int i = 0; i < argumentSlots.Length; i++)
-        {
-            argumentSlots[i] = builder.AllocScratch(argumentTypes[i]);
-            builder.EmitAssign(argumentSlots[i],
-                _bridge.Load(DelegateAbi.ConvArgName(outerSignature, i), argumentTypes[i]));
-            arguments[i] = builder.SlotRef(argumentSlots[i]);
-        }
+        var arguments = _bridge.LoadArguments(plan).ToArray();
 
         var innerSignature = DelegateAbi.BuildSigPart(innerInvoke, typeParameterMap);
         _convention.Declare(innerSignature, innerInvoke, typeParameterMap);
@@ -60,8 +60,7 @@ public sealed class WrapperBridgeEmitter
 
         var result = new InvocationHandler(_context).EmitFanoutElementDispatch(
             builder.SlotRef(innerSlot), innerInvoke, typeParameterMap, arguments);
-        if (returnType != null && result != null)
-            _bridge.Store(DelegateAbi.ConvRetName(outerSignature), result);
+        _bridge.StoreReturn(plan, result);
 
         });
     }
