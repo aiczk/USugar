@@ -479,7 +479,13 @@ public partial class UasmEmitter
                 // readonly fields are name-keyed heap vars too, so this applies to them identically;
                 // static MUTABLE fields carry no storage and were never tracked into declaredMemberSyms.)
                 if (declaredMemberSyms.TryGetValue(member.Name, out var fieldShadower))
-                    throw new NotSupportedException(ShadowedStorageError(member, fieldShadower));
+                {
+                    var externallyVisible = member.DeclaredAccessibility == Accessibility.Public
+                        || member.GetAttributes().Any(a => a.AttributeClass?.Name is
+                            "SerializeField" or "SerializeFieldAttribute");
+                    if (externallyVisible)
+                        throw new NotSupportedException(ShadowedStorageError(member, fieldShadower));
+                }
                 if (member.IsStatic)
                 {
                     EmitStaticReadonlyField(member);
@@ -514,7 +520,7 @@ public partial class UasmEmitter
                         {
                             constValue = TryEvaluateFieldInitForHeap(initOp, member.Type);
                             if (constValue == null)
-                                _fieldInitOps.Add((member.Name, initOp, member.Type));
+                                _fieldInitOps.Add((_ctx.SourceStorageName(member), initOp, member.Type));
                         }
                     }
                 }
@@ -528,15 +534,16 @@ public partial class UasmEmitter
                 // the field compiled clean but shipped unsynced (networking silently dead on device).
                 var baseSyncMode = ReadFieldSyncMode(member, udonType, ref baseFlags);
 
-                _ctx.Storage.DeclareField(member.Name, new StorageType(udonType), baseFlags, constValue, baseSyncMode);
+                var memberStorageName = _ctx.SourceStorageName(member);
+                _ctx.Storage.DeclareField(memberStorageName, new StorageType(udonType), baseFlags, constValue, baseSyncMode);
 
                 var baseFcbAttr = member.GetAttributes()
                     .FirstOrDefault(a => a.AttributeClass?.Name == "FieldChangeCallbackAttribute");
                 if (baseFcbAttr != null && baseFcbAttr.ConstructorArguments.Length > 0
                     && baseFcbAttr.ConstructorArguments[0].Value is string basePropName)
                 {
-                    _fieldChangeCallbacks[member.Name] = basePropName;
-                    _ctx.Storage.DeclareGeneratedField($"__old_{member.Name}", new StorageType(udonType));
+                    _fieldChangeCallbacks[memberStorageName] = basePropName;
+                    _ctx.Storage.DeclareGeneratedField($"__old_{memberStorageName}", new StorageType(udonType));
                 }
             }
             // Field-like events inherited from a user base class (design §2.1, A-M2) — same
@@ -579,7 +586,8 @@ public partial class UasmEmitter
                     // accessors are real functions; the planner already disambiguates their export
                     // names on collision), so `new`-shadowing it stays legal (wave-7 pinned).
                     if (isAuto)
-                        throw new NotSupportedException(ShadowedStorageError(prop, propShadower));
+                        _ctx.Storage.DeclareGeneratedField(_ctx.SourceStorageName(prop), GetStorageType(prop.Type),
+                            ResolveAutoPropInitializer(_ctx.SourceStorageName(prop), prop));
                     continue;
                 }
                 if (isAuto && prop.ExplicitInterfaceImplementations.Length > 0)
@@ -1022,7 +1030,7 @@ public partial class UasmEmitter
             foreach (var p in t.GetMembers(autoProp.Name).OfType<IPropertySymbol>())
                 if (IsOverrideChainAncestor(p, autoProp))
                     return BaseAutoPropBackingName(autoProp);
-        return autoProp.Name;
+        return _ctx.SourceStorageName(autoProp);
     }
 
     /// <summary>Round-8 [R2]: auto-property initializers (IPropertyInitializerOperation) were

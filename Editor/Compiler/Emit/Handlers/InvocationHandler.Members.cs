@@ -866,7 +866,7 @@ public partial class InvocationHandler
         else if (target is IFieldReferenceOperation fieldRef2)
         {
             // Non-struct field assignment (class fields via SetProgramVariable or direct)
-            EmitStoreField(fieldRef2.Field.Name, valueVal);
+            EmitStoreField(_ctx.SourceStorageName(fieldRef2.Field), valueVal);
         }
         else
         {

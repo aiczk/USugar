@@ -858,7 +858,7 @@ public abstract partial class HandlerBase
             && _ctx.Aggregates.GetLayout(cont).TryGetIndex(fr.Field, out var idx))
             return AggregateAbi.ReadSlot(_builder, LoadInstanceRaw(fr.Instance), idx, StorageTypes.Object);
         if (fr.Instance is IInstanceReferenceOperation)
-            return LoadField(fr.Field.Name, StorageTypes.ObjectArray);
+            return LoadField(_ctx.SourceStorageName(fr.Field), StorageTypes.ObjectArray);
         return VisitExpression(fr); // cross-behaviour aggregate field etc. — rare
     }
 
@@ -936,7 +936,7 @@ public abstract partial class HandlerBase
 
             // Behaviour this-field (no legs; TryPrepareFieldSet returns null for it).
             case IFieldReferenceOperation { Instance: IInstanceReferenceOperation } fieldRef:
-                EmitStoreField(fieldRef.Field.Name, value);
+                EmitStoreField(_ctx.SourceStorageName(fieldRef.Field), value);
                 break;
 
             case IParameterReferenceOperation paramRef:

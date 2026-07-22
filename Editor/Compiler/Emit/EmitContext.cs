@@ -54,6 +54,23 @@ public class EmitContext
         return ExternResolver.GetStorageType(new RuntimeType(type), map);
     }
 
+    public string SourceStorageName(ISymbol member)
+    {
+        if (member == null || member.ContainingType == null
+            || SymbolEqualityComparer.Default.Equals(member.ContainingType, ClassSymbol))
+            return member?.Name;
+        for (var type = ClassSymbol; type != null
+             && !SymbolEqualityComparer.Default.Equals(type, member.ContainingType); type = type.BaseType)
+            if (type.GetMembers(member.Name).Any(candidate => candidate is IFieldSymbol or IPropertySymbol
+                && !candidate.IsStatic))
+                return member is IPropertySymbol
+                    ? "__baseprop_" + NameAllocator.Sanitize(ClassTypeObjectContext.SpecKey(member.ContainingType))
+                      + "_" + NameAllocator.Sanitize(member.MetadataName)
+                    : "__basefield_" + NameAllocator.Sanitize(ClassTypeObjectContext.SpecKey(member.ContainingType))
+                      + "_" + NameAllocator.Sanitize(member.MetadataName);
+        return member.Name;
+    }
+
     /// <summary>Composite key args for a hoisted-closure registration or lookup (2026-07-11 pre-fuzz
     /// audit HIGH fix): the closure's own type args ⊕ the args of its LEXICAL enclosing generic
     /// owners (declaration chain), each resolved against the current emission's owner chain

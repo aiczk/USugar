@@ -520,7 +520,7 @@ public abstract class AssignmentHandlerBase : HandlerBase
                 throw new System.InvalidOperationException(
                     $"Cannot resolve local variable '{localRef.Local.Name}' for assignment.");
             case IFieldReferenceOperation { Instance: IInstanceReferenceOperation } fieldRef:
-                return fieldRef.Field.Name;
+                return _ctx.SourceStorageName(fieldRef.Field);
             case IFieldReferenceOperation { Instance: null } staticField
                 when StaticOwnerAbi.IsSourceStatic(staticField.Field) && !staticField.Field.IsReadOnly:
                 return StaticOwnerAbi.FieldName(staticField.Field,

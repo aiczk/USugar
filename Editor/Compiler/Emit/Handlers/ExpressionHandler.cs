@@ -223,9 +223,9 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
         // this.field → direct variable name → LoadField (struct-typed field copied on value read)
         if (fieldRef.Instance is IInstanceReferenceOperation)
             return fieldRef.Field.Type is INamedTypeSymbol thisFieldAgg && TypeClassifier.IsAggregateValue(thisFieldAgg)
-                ? AggregateAbi.DeepClone(_builder, LoadField(fieldRef.Field.Name, new StorageType(AggregateAbi.ArrayType)),
+                ? AggregateAbi.DeepClone(_builder, LoadField(_ctx.SourceStorageName(fieldRef.Field), new StorageType(AggregateAbi.ArrayType)),
                     thisFieldAgg, _ctx.Aggregates.GetLayout)
-                : LoadField(fieldRef.Field.Name, GetStorageType(fieldRef.Field.Type));
+                : LoadField(_ctx.SourceStorageName(fieldRef.Field), GetStorageType(fieldRef.Field.Type));
         // cross-behaviour field → GetProgramVariable
         if (ExternResolver.IsUdonSharpBehaviour(fieldRef.Field.ContainingType))
         {

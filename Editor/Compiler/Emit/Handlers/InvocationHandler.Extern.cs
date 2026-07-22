@@ -58,7 +58,7 @@ public partial class InvocationHandler
                      && fieldRef.Field.Type.IsValueType && !fieldRef.Field.IsStatic)
             {
                 // Value-type field on this: pass heap address directly so extern can modify in-place
-                instanceVal = FieldAddr(fieldRef.Field.Name, GetStorageType(fieldRef.Field.Type));
+                instanceVal = FieldAddr(_ctx.SourceStorageName(fieldRef.Field), GetStorageType(fieldRef.Field.Type));
             }
             // Local variable — value type: pass heap address directly so extern can modify in-place
             else if (op.Instance is ILocalReferenceOperation localRef
@@ -1302,7 +1302,7 @@ public partial class InvocationHandler
                 if (_ctx.Closures.TryGetEnvBinding(localRef.Local, out _)) return null;
                 return _localBindings.TryGetValue(localRef.Local, out var rb) ? rb.Id : null;
             case IFieldReferenceOperation { Instance: IInstanceReferenceOperation } fieldRef:
-                return fieldRef.Field.Name;
+                return _ctx.SourceStorageName(fieldRef.Field);
             case IParameterReferenceOperation paramRef:
                 if (_ctx.Closures.TryGetEnvBinding(paramRef.Parameter, out _)) return null;
                 return GetParamVarId(paramRef.Parameter);

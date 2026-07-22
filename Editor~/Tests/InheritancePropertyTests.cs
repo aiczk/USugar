@@ -135,11 +135,11 @@ public class J3Priv : UdonSharp.UdonSharpBehaviour {
     // ── round-6 [J1]: `new`-shadowed storage collision ──
 
     [Fact]
-    public void NewShadowedField_Throws()
+    public void NewShadowedNonPublicField_UsesDistinctStorage()
     {
         // [J1] Base.cb and Derived.cb are distinct CLR storages; the name-keyed heap model would
         // collapse both onto one var (VM 40 vs CLR 2 for the delegate flavor, 55 vs 57 for ints).
-        var ex = Assert.ThrowsAny<System.Exception>(() => TestHelper.CompileToUasm(@"
+        var uasm = TestHelper.CompileToUasm(@"
 public class J1Base : UdonSharp.UdonSharpBehaviour {
     protected int x;
     public void SetBase() { x = 5; }
@@ -149,24 +149,24 @@ public class J1Drv : J1Base {
     public int sum;
     protected new int x;
     void Start() { x = 7; SetBase(); sum = GetBase() * 10 + x; }
-}", "J1Drv"));
-        Assert.Contains("shadow", ex.Message);
+}", "J1Drv");
+        Assert.Contains("__basefield_", uasm);
     }
 
     [Fact]
-    public void NewShadowedAutoProp_Throws()
+    public void NewShadowedAutoProp_UsesDistinctStorage()
     {
         // [J1] auto-prop flavor — also covers the type-conflicting shadow that used to HALT the VM
         // at runtime (HeapTypeMismatchException) instead of rejecting at compile time.
-        var ex = Assert.ThrowsAny<System.Exception>(() => TestHelper.CompileToUasm(@"
+        var uasm = TestHelper.CompileToUasm(@"
 public class J1PBase : UdonSharp.UdonSharpBehaviour { public int P { get; set; } }
 public class J1PDrv : J1PBase {
     public int sum;
     new System.Func<int> P { get; set; }
     int M() { return 6; }
     void Start() { P = M; sum = P(); }
-}", "J1PDrv"));
-        Assert.Contains("shadow", ex.Message);
+}", "J1PDrv");
+        Assert.Contains("__baseprop_", uasm);
     }
 
     [Fact]
