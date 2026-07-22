@@ -56,6 +56,11 @@ public class EmitContext
 
     public string SourceStorageName(ISymbol member)
     {
+        if (member is IPropertySymbol explicitProperty
+            && explicitProperty.ExplicitInterfaceImplementations.Length > 0)
+            return "__ifaceprop_"
+                + NameAllocator.Sanitize(ClassTypeObjectContext.SpecKey(explicitProperty.ContainingType))
+                + "_" + NameAllocator.Sanitize(explicitProperty.MetadataName);
         if (member == null || member.ContainingType == null
             || SymbolEqualityComparer.Default.Equals(member.ContainingType, ClassSymbol))
             return member?.Name;

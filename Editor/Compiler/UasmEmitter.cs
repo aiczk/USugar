@@ -388,11 +388,6 @@ public partial class UasmEmitter
             // accessors, so a PRIVATE auto-property was never detected and its backing field went undeclared.
             var isAuto = prop.ContainingType.GetMembers().OfType<IFieldSymbol>()
                 .Any(f => f.IsImplicitlyDeclared && SymbolEqualityComparer.Default.Equals(f.AssociatedSymbol, prop));
-            // An explicit interface implementation auto-property's metadata name is DOTTED
-            // ("IFoo.P"), which is not a valid UASM identifier — the backing-var declaration used to
-            // crash the assembler (UAssemblyParser ParseException, an ICE). Loud diagnostic instead.
-            if (isAuto && prop.ExplicitInterfaceImplementations.Length > 0)
-                throw new NotSupportedException(ExplicitInterfaceAutoPropError(prop));
             if (!isAuto && prop.DeclaredAccessibility != Accessibility.Public) continue;
             if (prop.Type is INamedTypeSymbol propertyDelegate
                 && propertyDelegate.DelegateInvokeMethod != null)
@@ -400,8 +395,9 @@ public partial class UasmEmitter
             var udonType = GetStorageTypeName(prop.Type);
             var flags = FieldFlags.None;
             if (prop.DeclaredAccessibility == Accessibility.Public) flags |= FieldFlags.Export;
-            _ctx.Storage.DeclareField(prop.Name, new StorageType(udonType), flags,
-                isAuto ? ResolveAutoPropInitializer(prop.Name, prop) : null);
+            var storageName = _ctx.SourceStorageName(prop);
+            _ctx.Storage.DeclareField(storageName, new StorageType(udonType), flags,
+                isAuto ? ResolveAutoPropInitializer(storageName, prop) : null);
         }
 
         // Record count of derived-class field init ops; base class init ops added below
@@ -556,15 +552,14 @@ public partial class UasmEmitter
                             ResolveAutoPropInitializer(_ctx.SourceStorageName(prop), prop));
                     continue;
                 }
-                if (isAuto && prop.ExplicitInterfaceImplementations.Length > 0)
-                    throw new NotSupportedException(ExplicitInterfaceAutoPropError(prop));
                 if (!isAuto && prop.DeclaredAccessibility != Accessibility.Public) continue;
                 var udonType = GetStorageTypeName(prop.Type);
                 var flags = FieldFlags.None;
                 if (prop.DeclaredAccessibility == Accessibility.Public) flags |= FieldFlags.Export;
                 declaredMemberSyms[prop.Name] = prop;
-                _ctx.Storage.DeclareField(prop.Name, new StorageType(udonType), flags,
-                    isAuto ? ResolveAutoPropInitializer(prop.Name, prop) : null);
+                var storageName = _ctx.SourceStorageName(prop);
+                _ctx.Storage.DeclareField(storageName, new StorageType(udonType), flags,
+                    isAuto ? ResolveAutoPropInitializer(storageName, prop) : null);
             }
             baseType = baseType.BaseType;
         }
@@ -961,11 +956,6 @@ public partial class UasmEmitter
          + "onto one heap var (wrong values, or a runtime heap-type mismatch for type-conflicting "
          + "shadows). Shadowing an inherited field/property is not supported by the current storage ABI — rename the "
          + "member, or use virtual/override.";
-
-    static string ExplicitInterfaceAutoPropError(IPropertySymbol prop)
-        => $"Explicit interface implementation auto-property '{prop.Name}' is not supported in "
-         + "the current storage ABI: its backing storage name contains '.' and is not a valid Udon identifier. "
-         + "Implement the property implicitly (public auto-property) or with manual accessors.";
 
     // ── EmitMethods ──
 

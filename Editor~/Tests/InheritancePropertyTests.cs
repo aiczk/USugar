@@ -318,17 +318,17 @@ public class P1BDrv : P1BMid {
     // ── round-6 [G4]: explicit interface implementation auto-property ──
 
     [Fact]
-    public void ExplicitInterfaceAutoProp_ProperDiagnostic()
+    public void ExplicitInterfaceAutoProp_UsesInternalStorage()
     {
-        // The dotted backing name ('IExp.P') used to crash the ASSEMBLER (ParseException — an
-        // ICE-class failure). It must be a proper compile-time diagnostic instead.
-        var ex = Assert.ThrowsAny<System.Exception>(() => TestHelper.CompileToUasm(@"
+        var uasm = TestHelper.CompileToUasm(@"
 public interface IExp { int P { get; set; } }
 public class ExpCls : UdonSharp.UdonSharpBehaviour, IExp {
     public int sum;
     int IExp.P { get; set; }
     void Start() { IExp h = this; h.P = 4; sum = h.P; }
-}", "ExpCls"));
-        Assert.Contains("Explicit interface implementation auto-property", ex.Message);
+}", "ExpCls");
+        Assert.Contains("__ifaceprop_", uasm);
+        Assert.Contains("_IExp_P: %SystemInt32", uasm);
+        Assert.DoesNotContain("IExp.P: %SystemInt32", uasm);
     }
 }
