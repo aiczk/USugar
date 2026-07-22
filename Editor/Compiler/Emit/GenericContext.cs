@@ -2,11 +2,7 @@ using System;
 using System.Collections.Generic;
 using Microsoft.CodeAnalysis;
 
-/// <summary>
-/// Owns the active generic type-parameter substitution map for a single emitter. The current model is
-/// deliberately depth-1: EmitMethod is drained serially, and nested closure methods get their own later
-/// EmitMethod entry with a freshly composed map.
-/// </summary>
+/// <summary>Owns the active generic substitution map and specialization plan for one emitter.</summary>
 public sealed class GenericContext
 {
     public IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> TypeParamMap { get; private set; }
@@ -28,20 +24,13 @@ public sealed class GenericContext
 
     public void BeginBodyEmission() => BodyEmissionStarted = true;
 
-    // First registered specialization per generic DEFINITION (first-wins record; historical [X6]
-    // origin). Since the per-spec closure separation, closures are NOT shared across specs and no
-    // second-instantiation reject exists — the sole remaining read is ComposeClosureKeyArgs' owner
-    // fallback for owners outside the current chain. LOOKUP-ONLY.
-    /// <summary>First-wins seed: record the FIRST specialization seen per generic definition. Single-sourced
-    /// so every registration path (HandlerBase.RegisterFirstGenericSpec + the emitter's foreign-static /
-    /// struct-member / base-copy registration loops, which cannot call the protected HandlerBase method)
-    /// seeds identically — a past open-coded loop forgot to seed and shipped a bogus TArray (B70).</summary>
-    public IDisposable EnterScope(IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> map, IMethodSymbol currentMethod)
+    public IDisposable EnterScope(IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> map,
+        IMethodSymbol currentMethod)
     {
         if (TypeParamMap != null)
             throw new InvalidOperationException(
                 $"EnterTypeParamScope: a type-param map is already active on entry to "
-                + $"'{currentMethod?.ToDisplayString() ?? "(none)"}' — a prior scope was not disposed.");
+                + $"'{currentMethod?.ToDisplayString() ?? "(none)"}'; a prior scope was not disposed.");
         TypeParamMap = map;
         return new TypeParamScopeToken(this, null);
     }
