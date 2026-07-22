@@ -1778,13 +1778,12 @@ public abstract partial class HandlerBase
             slot = new EmitContext.MethodSlot(ci, ci.ToString());
         }
         else
-            slot = _ctx.Methods.Register(constructed, i => i.ToString());
+            slot = _ctx.Methods.Reserve(i => i.ToString());
         var idx = slot.Index;
 
         var typeArgPart = string.Join("_", constructed.TypeArguments.Select(ExternResolver.GetUdonTypeName));
         var name = $"__{idx}_{SanitizeId(constructed.Name)}_{typeArgPart}";
         var func = _module.AddFunction(name);
-        if (!closureKind) _methodFunctions[constructed] = func;
 
         // Feature G residual gap (wave-14): a member of a CONSTRUCTED generic struct carries the same
         // synthetic receiver object[] as param0 that the Phase-1 struct-method registration gives every
@@ -1825,7 +1824,6 @@ public abstract partial class HandlerBase
             gsParamIds = withEnvp;
             specEnvpFieldId = envpId;
         }
-        if (!closureKind) _methodParamVarIds[constructed] = gsParamIds;
         foreach (var pid in gsParamIds) func.ParamFieldNames.Add(pid);
 
         var specRetSlots = System.Array.Empty<ReturnSlot>();
@@ -1837,7 +1835,6 @@ public abstract partial class HandlerBase
             func.ReturnType = new StorageType(retType);
             func.ReturnSlots.Add(new ReturnSlot(retId, new StorageType(retType)));
             specRetSlots = new[] { new ReturnSlot(retId, new StorageType(retType)) };
-            if (!closureKind) _methodReturns[constructed] = specRetSlots;
         }
 
         if (closureKind)
@@ -1859,7 +1856,15 @@ public abstract partial class HandlerBase
             _pendingGenericSpecs.Add((constructed, record));
         }
         else
+        {
+            var receiverAbi = !constructed.IsStatic
+                && constructed.ContainingType is INamedTypeSymbol receiverType
+                && TypeClassifier.IsObjectArrayEmulated(receiverType)
+                ? MethodContext.ReceiverAbi.ObjectArray : MethodContext.ReceiverAbi.None;
+            _ctx.Methods.AddCallable(
+                constructed, func, slot, gsParamIds, specRetSlots, receiverAbi);
             _pendingGenericSpecs.Add((constructed, null));
+        }
     }
 
     /// <summary>Feature G residual gap (wave-14): a struct-member reference (computed property/indexer

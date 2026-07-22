@@ -9,6 +9,21 @@ using Microsoft.CodeAnalysis;
 /// </summary>
 public sealed class MethodContext
 {
+    public enum ReceiverAbi { None, ObjectArray }
+
+    public sealed class RegisteredCallable
+    {
+        public IMethodSymbol Definition;
+        public CFunction Function;
+        public EmitContext.MethodSlot Slot;
+        public string[] ParamVarIds;
+        public ReturnSlot[] ReturnSlots;
+        public MethodLayout Layout;
+        public ReceiverAbi Receiver;
+    }
+
+    public readonly Dictionary<IMethodSymbol, RegisteredCallable> Callables =
+        new(SymbolEqualityComparer.Default);
     public readonly Dictionary<IMethodSymbol, CFunction> Functions = new(SymbolEqualityComparer.Default);
 
     public readonly Dictionary<IMethodSymbol, EmitContext.MethodSlot> Slots = new(SymbolEqualityComparer.Default);
@@ -25,12 +40,34 @@ public sealed class MethodContext
 
     public int NextMethodIndex;
 
-    public EmitContext.MethodSlot Register(IMethodSymbol method, Func<int, string> prefixFactory)
+    public EmitContext.MethodSlot Reserve(Func<int, string> prefixFactory)
     {
         var idx = NextMethodIndex++;
-        var slot = new EmitContext.MethodSlot(idx, prefixFactory(idx));
-        Slots[method] = slot;
-        return slot;
+        return new EmitContext.MethodSlot(idx, prefixFactory(idx));
+    }
+
+    public RegisteredCallable AddCallable(IMethodSymbol method, CFunction function,
+        EmitContext.MethodSlot slot, string[] paramVarIds, ReturnSlot[] returnSlots,
+        ReceiverAbi receiver = ReceiverAbi.None, MethodLayout layout = null)
+    {
+        if (method == null || function == null || paramVarIds == null || returnSlots == null)
+            throw new ArgumentNullException("A registered callable requires method, function, params, and returns.");
+        var callable = new RegisteredCallable
+        {
+            Definition = method,
+            Function = function,
+            Slot = slot,
+            ParamVarIds = paramVarIds,
+            ReturnSlots = returnSlots,
+            Layout = layout,
+            Receiver = receiver,
+        };
+        Callables.Add(method, callable);
+        Functions.Add(method, function);
+        Slots.Add(method, slot);
+        ParamVarIds.Add(method, paramVarIds);
+        if (returnSlots.Length > 0) Returns.Add(method, returnSlots);
+        return callable;
     }
 
     // ── Per-spec hoisted closures (design 2026-07-10 v3 §2B, B64/B70 root fix) ──

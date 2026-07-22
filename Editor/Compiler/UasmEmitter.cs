@@ -1047,7 +1047,7 @@ public partial class UasmEmitter
                 : typeLayout;
             var ml = methodLayout.Methods[method];
             var exportName = ml.ExportName;
-            var slot = _ctx.Methods.Register(method, _ => exportName);
+            var slot = _ctx.Methods.Reserve(_ => exportName);
             var idx = slot.Index;
 
             // Determine if this method should be exported
@@ -1067,7 +1067,6 @@ public partial class UasmEmitter
 
             // Create CFunction with or without ExportName
             var func = _module.AddFunction(exportName, shouldExport ? exportName : null);
-            _methodFunctions[method] = func;
 
             if (_userClassDefaultMethods.Contains(method))
             {
@@ -1085,10 +1084,10 @@ public partial class UasmEmitter
                 _ctx.Storage.DeclareVar(ml.ParamIds[i], GetStorageType(method.Parameters[i].Type));
                 paramVarIds[i] = ml.ParamIds[i];
             }
-            _methodParamVarIds[method] = paramVarIds;
             foreach (var pid in paramVarIds) func.ParamFieldNames.Add(pid);
 
             // Declare return var(s) from unified Returns
+            var returnSlots = ml.Returns.ToArray();
             if (ml.Returns.Count > 0)
             {
                 foreach (var ret in ml.Returns)
@@ -1102,8 +1101,11 @@ public partial class UasmEmitter
                 foreach (var ret in ml.Returns)
                     func.ReturnSlots.Add(ret);
 
-                _methodReturns[method] = ml.Returns.ToArray();
             }
+            _ctx.Methods.AddCallable(method, func, slot, paramVarIds, returnSlots,
+                _userClassDefaultMethods.Contains(method)
+                    ? MethodContext.ReceiverAbi.ObjectArray : MethodContext.ReceiverAbi.None,
+                ml);
         }
 
         // ReachableBodies (design §1): ONE reach fixpoint replaces the three separate Phase-1 collector
@@ -1135,31 +1137,7 @@ public partial class UasmEmitter
             // closureBindings walk at EmitMethod misses the owner), so `new T[]` emitted a bogus TArray. Seed
             // it the same way the struct-methods loop does (including the two-instantiation aliasing guard,
             // which GS15<int>/GS15<string> exercises).
-            var slot = _ctx.Methods.Register(fm, i => i.ToString());
-            var idx = slot.Index;
-            var funcName = $"__{idx}_{SanitizeId(fm.Name)}";
-            var func = _module.AddFunction(funcName);
-            _methodFunctions[fm] = func;
-
-            var fmParamIds = new string[fm.Parameters.Length];
-            for (int pi = 0; pi < fm.Parameters.Length; pi++)
-            {
-                var param = fm.Parameters[pi];
-                var paramId = NameAllocator.ParamId(param.Name, idx);
-                _ctx.Storage.DeclareVar(paramId, GetStorageType(param.Type));
-                fmParamIds[pi] = paramId;
-            }
-            _methodParamVarIds[fm] = fmParamIds;
-            foreach (var pid in fmParamIds) func.ParamFieldNames.Add(pid);
-
-            if (!fm.ReturnsVoid)
-            {
-                var retType = GetStorageTypeName(fm.ReturnType);
-                var retId = NameAllocator.RetId(SanitizeId(fm.Name), idx);
-                    func.ReturnType = new StorageType(retType);
-                func.ReturnSlots.Add(new ReturnSlot(retId, new StorageType(retType)));
-                _methodReturns[fm] = new[] { new ReturnSlot(retId, new StorageType(retType)) };
-            }
+            RegisterInternalCallable(fm, idx => $"__{idx}_{SanitizeId(fm.Name)}");
         }
 
         // Register user-struct constructors + instance methods (object[]-emulated; synthetic receiver = param0).
@@ -1185,43 +1163,11 @@ public partial class UasmEmitter
                 typeArgSuffix = $"_{containingArgPart}{methodArgPart}";
             }
 
-            var slot = _ctx.Methods.Register(sm, i => i.ToString());
-            var idx = slot.Index;
             var isCtor = sm.MethodKind == MethodKind.Constructor;
-            var funcName = isCtor
-                ? $"__{idx}_{SanitizeId(sm.ContainingType.Name)}__ctor{typeArgSuffix}"
-                : $"__{idx}_{SanitizeId(sm.Name)}{typeArgSuffix}";
-            var func = _module.AddFunction(funcName);
-            _methodFunctions[sm] = func;
-
-            // param0 = receiver object[] for instance methods/ctors (passed uncloned so in-place mutation
-            // reflects back to the caller's local). Static operator methods have no receiver.
-            if (!sm.IsStatic)
-            {
-                var receiverId = NameAllocator.ParamId("this", idx);
-                _ctx.Storage.DeclareVar(receiverId, StorageTypes.ObjectArray);
-                func.ParamFieldNames.Add(receiverId);
-            }
-
-            var smParamIds = new string[sm.Parameters.Length];
-            for (int pi = 0; pi < sm.Parameters.Length; pi++)
-            {
-                var p = sm.Parameters[pi];
-                var pid = NameAllocator.ParamId(p.Name, idx);
-                _ctx.Storage.DeclareVar(pid, GetStorageType(p.Type));
-                smParamIds[pi] = pid;
-                func.ParamFieldNames.Add(pid);
-            }
-            _methodParamVarIds[sm] = smParamIds; // Ordinal-indexed; receiver tracked separately
-
-            if (!sm.ReturnsVoid) // ctors are void (mutate in place); instance methods may return
-            {
-                var retType = GetStorageTypeName(sm.ReturnType);
-                var retId = NameAllocator.RetId(SanitizeId(sm.Name), idx);
-                func.ReturnType = new StorageType(retType);
-                func.ReturnSlots.Add(new ReturnSlot(retId, new StorageType(retType)));
-                _methodReturns[sm] = new[] { new ReturnSlot(retId, new StorageType(retType)) };
-            }
+            RegisterInternalCallable(sm, idx => isCtor
+                    ? $"__{idx}_{SanitizeId(sm.ContainingType.Name)}__ctor{typeArgSuffix}"
+                    : $"__{idx}_{SanitizeId(sm.Name)}{typeArgSuffix}",
+                sm.IsStatic ? MethodContext.ReceiverAbi.None : MethodContext.ReceiverAbi.ObjectArray);
         }
 
         // Register base class instance copies (collected above, before the [X5] collector seeds).
@@ -1234,33 +1180,42 @@ public partial class UasmEmitter
             // and a hoisted closure inside the base generic body could not resolve the enclosing
             // method's params (loud "Cannot resolve parameter") or its type-param map. Seed it here,
             // with the same second-distinct-instantiation guard ([X6] r5, widened in round 8).
-            var slot = _ctx.Methods.Register(bm, i => i.ToString());
-            var idx = slot.Index;
-            var funcName = $"__{idx}_{SanitizeId(bm.Name)}";
-            var func = _module.AddFunction(funcName);
-            _methodFunctions[bm] = func;
-
-            var bmParamIds = new string[bm.Parameters.Length];
-            for (int pi = 0; pi < bm.Parameters.Length; pi++)
-            {
-                var param = bm.Parameters[pi];
-                var paramId = NameAllocator.ParamId(param.Name, idx);
-                _ctx.Storage.DeclareVar(paramId, GetStorageType(param.Type));
-                bmParamIds[pi] = paramId;
-            }
-            _methodParamVarIds[bm] = bmParamIds;
-            foreach (var pid in bmParamIds) func.ParamFieldNames.Add(pid);
-
-            if (!bm.ReturnsVoid)
-            {
-                var retType = GetStorageTypeName(bm.ReturnType);
-                var retId = NameAllocator.RetId(SanitizeId(bm.Name), idx);
-                func.ReturnType = new StorageType(retType);
-                func.ReturnSlots.Add(new ReturnSlot(retId, new StorageType(retType)));
-                _methodReturns[bm] = new[] { new ReturnSlot(retId, new StorageType(retType)) };
-            }
+            RegisterInternalCallable(bm, idx => $"__{idx}_{SanitizeId(bm.Name)}");
         }
 
+    }
+
+    MethodContext.RegisteredCallable RegisterInternalCallable(IMethodSymbol method,
+        Func<int, string> functionName, MethodContext.ReceiverAbi receiver = MethodContext.ReceiverAbi.None)
+    {
+        var slot = _ctx.Methods.Reserve(i => i.ToString());
+        var idx = slot.Index;
+        var func = _module.AddFunction(functionName(idx));
+        if (receiver == MethodContext.ReceiverAbi.ObjectArray)
+        {
+            var receiverId = NameAllocator.ParamId("this", idx);
+            _ctx.Storage.DeclareVar(receiverId, StorageTypes.ObjectArray);
+            func.ParamFieldNames.Add(receiverId);
+        }
+        var paramIds = new string[method.Parameters.Length];
+        for (int i = 0; i < method.Parameters.Length; i++)
+        {
+            var parameter = method.Parameters[i];
+            var paramId = NameAllocator.ParamId(parameter.Name, idx);
+            _ctx.Storage.DeclareVar(paramId, GetStorageType(parameter.Type));
+            paramIds[i] = paramId;
+            func.ParamFieldNames.Add(paramId);
+        }
+        var returns = Array.Empty<ReturnSlot>();
+        if (!method.ReturnsVoid)
+        {
+            var returnType = new StorageType(GetStorageTypeName(method.ReturnType));
+            var returnId = NameAllocator.RetId(SanitizeId(method.Name), idx);
+            func.ReturnType = returnType;
+            func.ReturnSlots.Add(new ReturnSlot(returnId, returnType));
+            returns = new[] { new ReturnSlot(returnId, returnType) };
+        }
+        return _ctx.Methods.AddCallable(method, func, slot, paramIds, returns, receiver);
     }
 
     static HashSet<IMethodSymbol> CollectCrossDispatchExports(ClassCompilePlan plan)
