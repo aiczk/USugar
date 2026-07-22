@@ -79,7 +79,8 @@ public sealed class SyntheticContext
     public bool IsFrozen { get; private set; }
     public bool DemandsSealed { get; private set; }
     HashSet<string> _expectedDelegateSites;
-    readonly Dictionary<string, DelegateBindingPlan> _boundDelegateSites = new(StringComparer.Ordinal);
+    readonly Dictionary<string, DelegateBindingPlan> _plannedDelegateSites = new(StringComparer.Ordinal);
+    readonly HashSet<string> _emittedDelegateSites = new(StringComparer.Ordinal);
 
     public void SetExpectedDelegateSites(IEnumerable<string> sites)
     {
@@ -90,23 +91,34 @@ public sealed class SyntheticContext
             sites ?? throw new ArgumentNullException(nameof(sites)), StringComparer.Ordinal);
     }
 
-    public void RecordDelegateBinding(string key, DelegateBindingPlan binding)
+    public void PlanDelegateBinding(string key, DelegateBindingPlan binding)
     {
         RequireMutable();
         if (string.IsNullOrEmpty(key)) throw new ArgumentException("Delegate site key is required.", nameof(key));
         if (_expectedDelegateSites == null || !_expectedDelegateSites.Contains(key))
             throw new InvalidOperationException(
-                $"Delegate binding at '{key}' was absent from the pre-emission demand census.");
-        if (_boundDelegateSites.TryGetValue(key, out var existing))
+                $"Delegate binding plan at '{key}' was absent from the pre-emission demand census.");
+        if (_plannedDelegateSites.TryGetValue(key, out var existing))
         {
-            if (SameDemandMethod(existing.TargetMethod, binding.TargetMethod)
-                && existing.Kind == binding.Kind && existing.BridgeName == binding.BridgeName)
-                return;
+            if (SameBinding(existing, binding)) return;
             throw new InvalidOperationException(
-                $"Delegate site '{key}' resolved to conflicting bindings "
+                $"Delegate site '{key}' planned conflicting bindings "
                 + $"'{existing.BridgeName}' and '{binding.BridgeName}'.");
         }
-        _boundDelegateSites.Add(key, binding);
+        _plannedDelegateSites.Add(key, binding);
+    }
+
+    public void RecordDelegateBinding(string key, DelegateBindingPlan binding)
+    {
+        RequireMutable();
+        if (!_plannedDelegateSites.TryGetValue(key, out var planned))
+            throw new InvalidOperationException(
+                $"Delegate binding at '{key}' was absent from the pre-emission binding plan.");
+        if (!SameBinding(planned, binding))
+            throw new InvalidOperationException(
+                $"Delegate site '{key}' emitted binding '{binding.BridgeName}' but planned "
+                + $"'{planned.BridgeName}'.");
+        _emittedDelegateSites.Add(key);
     }
 
     public void SealDemands()
@@ -114,6 +126,10 @@ public sealed class SyntheticContext
         RequireMutable();
         if (DemandsSealed)
             throw new InvalidOperationException("Synthetic demand plan was sealed twice.");
+        foreach (var site in _expectedDelegateSites)
+            if (!_plannedDelegateSites.ContainsKey(site))
+                throw new InvalidOperationException(
+                    $"Delegate site '{site}' was not bound during synthetic demand planning.");
         DemandsSealed = true;
     }
 
@@ -207,9 +223,9 @@ public sealed class SyntheticContext
         if (_expectedDelegateSites == null)
             throw new InvalidOperationException("Synthetic demand plan has no delegate-site census.");
         foreach (var site in _expectedDelegateSites)
-            if (!_boundDelegateSites.ContainsKey(site))
+            if (!_emittedDelegateSites.Contains(site))
                 throw new InvalidOperationException(
-                    $"Delegate site '{site}' was not bound during body emission.");
+                    $"Planned delegate site '{site}' was not emitted during body emission.");
         IsFrozen = true;
     }
 
@@ -239,4 +255,10 @@ public sealed class SyntheticContext
               && left.MethodKind is MethodKind.LambdaMethod or MethodKind.LocalFunction
               && right.MethodKind is MethodKind.LambdaMethod or MethodKind.LocalFunction
               && ClosureIdentityPlan.SameSourceDefinition(left, right);
+
+    static bool SameBinding(DelegateBindingPlan left, DelegateBindingPlan right)
+        => left != null && right != null
+           && left.Kind == right.Kind
+           && left.BridgeName == right.BridgeName
+           && SameDemandMethod(left.TargetMethod, right.TargetMethod);
 }

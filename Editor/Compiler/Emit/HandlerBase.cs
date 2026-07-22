@@ -1890,7 +1890,12 @@ public abstract partial class HandlerBase
     }
 
     protected DelegateBindingPlan PlanDelegateBridge(IDelegateCreationOperation op)
-        => ResolveDelegateBridgeCore(op, true).Plan;
+    {
+        var binding = ResolveDelegateBridgeCore(op, true).Plan;
+        _ctx.Synthetics.PlanDelegateBinding(
+            DelegateDemandCensus.SiteKey(op.Syntax, _ctx.Methods.CurrentOwnerSpecs), binding);
+        return binding;
+    }
 
     MaterializedDelegateBinding ResolveDelegateBridgeCore(IDelegateCreationOperation op, bool planning)
     {
