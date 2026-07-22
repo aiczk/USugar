@@ -84,32 +84,33 @@ public sealed class DelegateBridgeEmitter
             ? StorageTypes.Void
             : _context.ResolveStorageType(closureCheckMethod.ReturnType, typeParameterMap);
 
-        var bridgeFunction = _context.Module.AddFunction(bridgeName, bridgeName);
-        var previousFunction = builder.CurrentFunction;
-        builder.SetFunction(bridgeFunction);
-
-        var arguments = new List<CLeaf>();
-        for (int i = 0; i < signatureMethod.Parameters.Length; i++)
-            arguments.Add(_bridge.Load(DelegateAbi.ConvArgName(signaturePart, i),
-                _context.ResolveStorageType(signatureMethod.Parameters[i].Type, typeParameterMap)));
-
         var conventionReturn = returnType != null ? DelegateAbi.ConvRetName(signaturePart) : null;
-        void EmitCall()
+        var capturing = _context.Closures.CaptureScope != null
+            && _context.Closures.CaptureScope.IsCapturingClosure(closureCheckMethod);
+        var plan = new BridgePlan(bridgeName, bridgeName, signatureMethod, target,
+            capturing ? BridgeReceiverKind.Environment : BridgeReceiverKind.None,
+            BridgeDispatchKind.Direct,
+            conventionReturn == null ? BridgeReturnKind.None : BridgeReturnKind.Convention);
+        _bridge.Emit(_context, plan, () =>
         {
-            var result = builder.InternalCall(target.Name, arguments, targetReturnType);
-            if (conventionReturn != null) _bridge.Store(conventionReturn, result);
-            else builder.EmitExprStmt(result);
-        }
+            var arguments = new List<CLeaf>();
+            for (int i = 0; i < signatureMethod.Parameters.Length; i++)
+                arguments.Add(_bridge.Load(DelegateAbi.ConvArgName(signaturePart, i),
+                    _context.ResolveStorageType(signatureMethod.Parameters[i].Type, typeParameterMap)));
 
-        if (_context.Closures.CaptureScope != null
-            && _context.Closures.CaptureScope.IsCapturingClosure(closureCheckMethod))
-            EmitGuardedClosureCall(signaturePart, closureCheckMethod, arguments, conventionReturn,
-                returnType, EmitCall);
-        else
-            EmitCall();
+            void EmitCall()
+            {
+                var result = builder.InternalCall(target.Name, arguments, targetReturnType);
+                if (conventionReturn != null) _bridge.Store(conventionReturn, result);
+                else builder.EmitExprStmt(result);
+            }
 
-        builder.EmitReturn();
-        if (previousFunction != null) builder.SetFunction(previousFunction);
+            if (capturing)
+                EmitGuardedClosureCall(signaturePart, closureCheckMethod, arguments, conventionReturn,
+                    returnType, EmitCall);
+            else
+                EmitCall();
+        });
     }
 
     void EmitGuardedClosureCall(string signaturePart, IMethodSymbol closureMethod,

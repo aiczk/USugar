@@ -38,10 +38,11 @@ public sealed class ReceiverBridgeEmitter
         var targetReturnType = member.ReturnsVoid
             ? StorageTypes.Void
             : _context.ResolveStorageType(member.ReturnType);
-        var bridgeFunction = _context.Module.AddFunction(bridgeName, bridgeName);
-        var previousFunction = builder.CurrentFunction;
-        builder.SetFunction(bridgeFunction);
-
+        var plan = new BridgePlan(bridgeName, bridgeName, member, null,
+            BridgeReceiverKind.Environment, BridgeDispatchKind.Runtime,
+            returnType == null ? BridgeReturnKind.None : BridgeReturnKind.Convention);
+        _bridge.Emit(_context, plan, () =>
+        {
         var environmentName = DelegateAbi.ConvEnvName(signaturePart);
         var environmentType = new StorageType(EnvEmit.EnvType);
         _context.Storage.TryDeclareVar(environmentName, environmentType);
@@ -82,8 +83,7 @@ public sealed class ReceiverBridgeEmitter
             if (conventionReturn != null && returnType != null)
                 _bridge.Store(conventionReturn, InvocationHandler.DefaultConst(builder, returnType.Value));
         });
-        builder.EmitReturn();
-        if (previousFunction != null) builder.SetFunction(previousFunction);
+        });
     }
 
     void EmitBody(string bridgeName, Microsoft.CodeAnalysis.IMethodSymbol member, CFunction targetFunction)
@@ -95,10 +95,11 @@ public sealed class ReceiverBridgeEmitter
             ? StorageTypes.Void
             : _context.ResolveStorageType(member.ReturnType);
 
-        var bridgeFunction = _context.Module.AddFunction(bridgeName, bridgeName);
-        var previousFunction = builder.CurrentFunction;
-        builder.SetFunction(bridgeFunction);
-
+        var plan = new BridgePlan(bridgeName, bridgeName, member, targetFunction,
+            BridgeReceiverKind.Environment, BridgeDispatchKind.Direct,
+            returnType == null ? BridgeReturnKind.None : BridgeReturnKind.Convention);
+        _bridge.Emit(_context, plan, () =>
+        {
         var environmentName = DelegateAbi.ConvEnvName(signaturePart);
         var environmentType = new StorageType(EnvEmit.EnvType);
         _context.Storage.TryDeclareVar(environmentName, environmentType);
@@ -131,7 +132,6 @@ public sealed class ReceiverBridgeEmitter
                         InvocationHandler.DefaultConst(builder, returnType.Value));
             });
 
-        builder.EmitReturn();
-        if (previousFunction != null) builder.SetFunction(previousFunction);
+        });
     }
 }

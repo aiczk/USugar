@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 
 /// <summary>Core IR operations shared by synthetic delegate, receiver, and multicast bridges.</summary>
@@ -6,6 +7,24 @@ public sealed class SyntheticBridgeBuilder
     readonly CoreBuilder _builder;
 
     public SyntheticBridgeBuilder(CoreBuilder builder) => _builder = builder;
+
+    public void Emit(EmitContext context, BridgePlan plan, Action body)
+    {
+        if (context == null) throw new ArgumentNullException(nameof(context));
+        if (plan == null) throw new ArgumentNullException(nameof(plan));
+        if (body == null) throw new ArgumentNullException(nameof(body));
+        var previousFunction = _builder.CurrentFunction;
+        _builder.SetFunction(context.Module.AddFunction(plan.FunctionName, plan.ExportName));
+        try
+        {
+            body();
+            _builder.EmitReturn();
+        }
+        finally
+        {
+            if (previousFunction != null) _builder.SetFunction(previousFunction);
+        }
+    }
 
     public CLeaf Load(string fieldName, StorageType type) => _builder.LoadField(fieldName, type);
     public void Store(string fieldName, CLeaf value) => _builder.EmitStoreField(fieldName, value);

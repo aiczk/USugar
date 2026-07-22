@@ -16,7 +16,6 @@ public sealed class InterfaceBridgeEmitter
     public void Emit()
     {
         var builder = _context.Builder;
-        var previousFunction = builder.CurrentFunction;
         foreach (var (interfaceMethod, interfaceLayout, implementationMethod, classLayout)
             in _context.Planner.ComputeBridges(_context.ClassSymbol))
         {
@@ -33,14 +32,17 @@ public sealed class InterfaceBridgeEmitter
                     _context.ResolveStorageType(interfaceMethod.ReturnType));
 
             var exportName = LayoutPlanner.InterfaceDispatchName(interfaceMethod, interfaceLayout);
-            builder.SetFunction(_context.Module.AddFunction($"__bridge_{exportName}", exportName));
-
             if (implementationMethod == null
                 || !_context.Methods.Functions.TryGetValue(implementationMethod, out var implementation))
                 throw new InvalidOperationException(
                     $"Interface bridge for '{interfaceLayout.ExportName}': "
                     + $"no function found for implementation of '{interfaceMethod.Name}'.");
 
+            var plan = new BridgePlan($"__bridge_{exportName}", exportName, interfaceMethod,
+                implementation, BridgeReceiverKind.None, BridgeDispatchKind.Direct,
+                interfaceLayout.ReturnId == null ? BridgeReturnKind.None : BridgeReturnKind.Field);
+            _bridge.Emit(_context, plan, () =>
+            {
             var arguments = new List<CLeaf>();
             for (int i = 0; i < interfaceMethod.Parameters.Length; i++)
                 arguments.Add(_bridge.Load(interfaceLayout.ParamIds[i],
@@ -52,9 +54,7 @@ public sealed class InterfaceBridgeEmitter
                 && interfaceLayout.ReturnId != classLayout.ReturnId)
                 _bridge.Store(interfaceLayout.ReturnId, result);
 
-            builder.EmitReturn();
+            });
         }
-
-        if (previousFunction != null) builder.SetFunction(previousFunction);
     }
 }

@@ -34,10 +34,11 @@ public sealed class WrapperBridgeEmitter
         _context.Storage.TryDeclareVar(
             DelegateAbi.ConvEnvName(outerSignature), new StorageType(EnvEmit.EnvType));
 
-        var wrapperFunction = _context.Module.AddFunction(name, name);
-        var previousFunction = builder.CurrentFunction;
-        builder.SetFunction(wrapperFunction);
-
+        var plan = new BridgePlan(name, name, outerInvoke, null,
+            BridgeReceiverKind.Payload, BridgeDispatchKind.DelegatePayload,
+            returnType == null ? BridgeReturnKind.None : BridgeReturnKind.Convention);
+        _bridge.Emit(_context, plan, () =>
+        {
         var innerSlot = builder.AllocScratch(StorageTypes.ObjectArray);
         builder.EmitAssign(innerSlot,
             _bridge.Load(DelegateAbi.ConvEnvName(outerSignature), StorageTypes.ObjectArray));
@@ -62,7 +63,6 @@ public sealed class WrapperBridgeEmitter
         if (returnType != null && result != null)
             _bridge.Store(DelegateAbi.ConvRetName(outerSignature), result);
 
-        builder.EmitReturn();
-        if (previousFunction != null) builder.SetFunction(previousFunction);
+        });
     }
 }
