@@ -9,6 +9,64 @@ namespace USugar.Tests;
 public class GenericTypeObjectTests
 {
     [Fact]
+    public void NestedTypeSpecKey_IncludesConstructedOwner()
+    {
+        var compilation = TestHelper.BuildCompilation(@"
+class Owner<T> { public class Inner<U> { } }
+class NestedKeys {
+  public Owner<int>.Inner<string> a;
+  public Owner<float>.Inner<string> b;
+}", "NestedKeys", out var classSymbol);
+        var fields = classSymbol.GetMembers().OfType<Microsoft.CodeAnalysis.IFieldSymbol>().ToArray();
+
+        Assert.NotEqual(ClassTypeObjectContext.SpecKey(fields[0].Type),
+            ClassTypeObjectContext.SpecKey(fields[1].Type));
+    }
+
+    [Fact]
+    public void CloseType_ClosesGenericOwnerOfNestedType()
+    {
+        var compilation = TestHelper.BuildCompilation(@"
+class Owner<T> { public class Inner<U> { } public class Leaf { } }
+class NestedClose<T> {
+  public Owner<T>.Inner<string> inner;
+  public Owner<T>.Leaf leaf;
+}", "NestedClose", out var classSymbol);
+        var parameter = classSymbol.TypeParameters[0];
+        var intType = compilation.GetSpecialType(Microsoft.CodeAnalysis.SpecialType.System_Int32);
+#pragma warning disable RS1024 // TypeParamIdComparer intentionally preserves declaration identity.
+        var map = new System.Collections.Generic.Dictionary<Microsoft.CodeAnalysis.ITypeParameterSymbol,
+            Microsoft.CodeAnalysis.ITypeSymbol>(TypeParamIdComparer.Instance) { [parameter] = intType };
+#pragma warning restore RS1024
+
+        foreach (var field in classSymbol.GetMembers().OfType<Microsoft.CodeAnalysis.IFieldSymbol>())
+        {
+            var closed = (Microsoft.CodeAnalysis.INamedTypeSymbol)TypeEnvironment.CloseType(
+                compilation, field.Type, map);
+            Assert.Equal(intType, closed.ContainingType.TypeArguments[0],
+                Microsoft.CodeAnalysis.SymbolEqualityComparer.Default);
+            Assert.False(ClassTypeObjectContext.ContainsTypeParameter(closed));
+        }
+    }
+
+    [Fact]
+    public void NestedGenericOwners_MintDistinctTypeObjects()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public class GtoOwner<T> { public class Inner<U> { public T owner; public U value; } }
+public class GtoOwnerIdentity : UdonSharpBehaviour {
+  void Start() {
+    var a = new GtoOwner<int>.Inner<string>();
+    var b = new GtoOwner<float>.Inner<string>();
+  }
+}", "GtoOwnerIdentity");
+
+        Assert.True(Regex.Matches(uasm, @"__typeobj_[ON][^: ]+").Cast<Match>()
+            .Select(m => m.Value).Distinct().Count() >= 2);
+    }
+
+    [Fact]
     public void GenericMethodMint_RegistersEachClosedSpecialization()
     {
         var uasm = TestHelper.CompileToUasm(@"

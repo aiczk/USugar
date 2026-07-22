@@ -58,7 +58,8 @@ public sealed class ClassTypeObjectContext
     {
         ITypeParameterSymbol => true,
         IArrayTypeSymbol a => ContainsTypeParameter(a.ElementType),
-        INamedTypeSymbol n => n.TypeArguments.Any(ContainsTypeParameter),
+        INamedTypeSymbol n => ContainsTypeParameter(n.ContainingType)
+            || n.TypeArguments.Any(ContainsTypeParameter),
         _ => false,
     };
 
@@ -102,6 +103,11 @@ public sealed class ClassTypeObjectContext
                 AppendSegment(b, p.Name);
                 return;
             case INamedTypeSymbol n:
+                if (n.ContainingType != null)
+                {
+                    b.Append('O');
+                    AppendTypeKey(b, n.ContainingType);
+                }
                 b.Append('N');
                 AppendSegment(b, n.OriginalDefinition.GetDocumentationCommentId()
                     ?? n.OriginalDefinition.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat));

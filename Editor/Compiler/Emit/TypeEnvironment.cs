@@ -16,11 +16,26 @@ public static class TypeEnvironment
         }
         if (type is IArrayTypeSymbol array)
             return compilation.CreateArrayTypeSymbol(CloseType(compilation, array.ElementType, map), array.Rank);
-        if (type is INamedTypeSymbol named && named.IsGenericType
-            && named.TypeArguments.Any(ClassTypeObjectContext.ContainsTypeParameter))
-            return named.OriginalDefinition.Construct(
-                named.TypeArguments.Select(t => CloseType(compilation, t, map)).ToArray());
+        if (type is INamedTypeSymbol named && ClassTypeObjectContext.ContainsTypeParameter(named))
+            return CloseNamedType(compilation, named, map);
         return type;
+    }
+
+    static INamedTypeSymbol CloseNamedType(Compilation compilation, INamedTypeSymbol named,
+        IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> map)
+    {
+        var definition = named.OriginalDefinition;
+        INamedTypeSymbol relocated = definition;
+        if (named.ContainingType != null)
+        {
+            var closedOwner = (INamedTypeSymbol)CloseType(compilation, named.ContainingType, map);
+            relocated = closedOwner.GetTypeMembers(definition.Name, definition.Arity)
+                .First(t => SymbolEqualityComparer.Default.Equals(t.OriginalDefinition, definition));
+        }
+
+        if (definition.Arity == 0) return relocated;
+        return relocated.Construct(named.TypeArguments
+            .Select(t => CloseType(compilation, t, map)).ToArray());
     }
 
     public static IMethodSymbol CloseMethod(Compilation compilation, IMethodSymbol method,
@@ -29,16 +44,14 @@ public static class TypeEnvironment
         if (method == null || map == null) return method;
         var definition = method.OriginalDefinition;
         bool closeOwner = method.MethodKind is not (MethodKind.LocalFunction or MethodKind.LambdaMethod)
-            && method.ContainingType.IsGenericType
-            && method.ContainingType.TypeArguments.Any(ClassTypeObjectContext.ContainsTypeParameter);
+            && ClassTypeObjectContext.ContainsTypeParameter(method.ContainingType);
         bool closeMethod = method.IsGenericMethod
             && method.TypeArguments.Any(ClassTypeObjectContext.ContainsTypeParameter);
         if (!closeOwner && !closeMethod) return method;
         IMethodSymbol relocated = definition;
         if (closeOwner)
         {
-            var owner = method.ContainingType.OriginalDefinition.Construct(method.ContainingType.TypeArguments
-                .Select(t => CloseType(compilation, t, map)).ToArray());
+            var owner = (INamedTypeSymbol)CloseType(compilation, method.ContainingType, map);
             relocated = owner.GetMembers(definition.Name).OfType<IMethodSymbol>()
                 .First(m => SymbolEqualityComparer.Default.Equals(m.OriginalDefinition, definition));
         }
