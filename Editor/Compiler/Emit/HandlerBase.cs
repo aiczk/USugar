@@ -465,7 +465,7 @@ public abstract partial class HandlerBase
         "UnityEngineMonoBehaviour", "UnityEngineObject",
     };
 
-    static ExternSignature ResolveExtern(ExternSignature signature)
+    internal static ExternSignature ResolveExtern(ExternSignature signature)
     {
         var externSig = signature.Text;
         var isValid = ExternResolver.IsExternValid;
