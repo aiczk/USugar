@@ -14,6 +14,7 @@ public class EmitContext
     public readonly LayoutPlanner Planner;
     public readonly StorageContext Storage;
     public readonly BoundaryChecker Boundary;
+    public readonly MethodAnalysisCache MethodAnalyses;
     public readonly GenericContext Generics = new GenericContext();
     public readonly RecursionContext RecursionContext = new RecursionContext();
     public readonly ClosureContext Closures = new ClosureContext();
@@ -118,6 +119,7 @@ public class EmitContext
         Builder = new CoreBuilder(Module);
         Planner = planner;
         Storage = new StorageContext(Module);
+        MethodAnalyses = new MethodAnalysisCache(compilation);
         Boundary = new BoundaryChecker(this);
     }
 
