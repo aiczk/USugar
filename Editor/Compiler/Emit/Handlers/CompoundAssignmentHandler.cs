@@ -30,7 +30,7 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
             return VisitDelegateCompoundAssignment(op, nt);
 
         // Capture lvalue sub-expressions once to avoid double evaluation
-        var lv = CaptureLValue(op.Target);
+        var lv = PrepareLValue(op.Target);
         var leftVal = lv.Value;
 
         // B67/M4b parity (found by the M4b DiffFuzz sweep): `s += x` is string.Concat one surface over —
@@ -52,7 +52,7 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
                 var converted = ConvertConcatOperand(VisitExpression(vOp), vOp);
                 var concat = ExternCall("SystemString.__Concat__SystemObject_SystemObject__SystemString",
                     new List<CLeaf> { leftVal, converted }, "SystemString");
-                EmitWriteBack(op.Target, concat, lv);
+                lv.Write(concat);
                 return concat;
             }
         }
@@ -65,7 +65,7 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
             && cuOpM.ContainingType is INamedTypeSymbol cuOpCt && TypeClassifier.IsObjectArrayEmulated(cuOpCt))
         {
             var res = EmitCallToMethod(ResolveStructMember(cuOpM), new List<CLeaf> { leftVal, rightVal });
-            EmitWriteBack(op.Target, res, lv);
+            lv.Write(res);
             return res;
         }
         ClassAbi.RejectUserOperator(op.OperatorMethod);
@@ -78,7 +78,7 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
                 leftVal, true, tUnderlying,
                 rightVal, rNullable, rNullable ? vUnderlying : op.Value.Type,
                 op.OperatorKind, op.OperatorMethod, op.Type);
-            EmitWriteBack(op.Target, lifted, lv);
+            lv.Write(lifted);
             return lifted;
         }
 
@@ -88,7 +88,7 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
         if (op.OperatorKind == BinaryOperatorKind.Remainder && RemainderNeedsPolyfill(resultType))
         {
             var rem = EmitRemainderViaDivision(leftVal, rightVal, resultType);
-            EmitWriteBack(op.Target, rem, lv);
+            lv.Write(rem);
             return rem;
         }
 
@@ -117,7 +117,7 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
         if (opResultType != resultType)
             resultVal = EmitNarrowingConvert(resultVal, opResultType, resultType);
 
-        EmitWriteBack(op.Target, resultVal, lv);
+        lv.Write(resultVal);
         return resultVal;
     }
 
@@ -139,7 +139,7 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
         // a delegate value from a foreign source never passed creation-site validation.
         DelegateAbi.ValidateNoRefOutParams(invoke);
 
-        var lv = CaptureLValue(op.Target);
+        var lv = PrepareLValue(op.Target);
         var leftVal = lv.Value;
         var right = VisitEmittedValue(op.Value);
         if (op.OperatorKind == BinaryOperatorKind.Add)
@@ -154,7 +154,7 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
             : DelegateAbi.MulticastRemoveName(sigPart);
 
         var resultVal = _builder.InternalCall(helperName, new List<CLeaf> { leftVal, rightVal }, DelegateAbi.BundleType);
-        EmitWriteBack(op.Target, resultVal, lv);
+        lv.Write(resultVal);
         return resultVal;
     }
 
@@ -214,7 +214,7 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
     CLeaf VisitIncrementDecrement(IIncrementOrDecrementOperation op)
     {
         // Capture lvalue sub-expressions once to avoid double evaluation
-        var lv = CaptureLValue(op.Target);
+        var lv = PrepareLValue(op.Target);
         var targetVal = lv.Value;
 
         // User-defined struct operator ++/-- (a single-operand static method returning the new struct), then
@@ -224,7 +224,7 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
             && iuOpM.ContainingType is INamedTypeSymbol iuOpCt && TypeClassifier.IsObjectArrayEmulated(iuOpCt))
         {
             var res = EmitCallToMethod(ResolveStructMember(iuOpM), new List<CLeaf> { targetVal });
-            EmitWriteBack(op.Target, res, lv);
+            lv.Write(res);
             return op.IsPostfix ? lv.Value : res;
         }
         ClassAbi.RejectUserOperator(op.OperatorMethod);
@@ -237,7 +237,7 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
                 targetVal, true, incUnderlying,
                 Const(1, GetUdonType(incUnderlying)), false, incUnderlying,
                 kind, null, op.Type);
-            EmitWriteBack(op.Target, lifted, lv);
+            lv.Write(lifted);
             // Postfix returns the OLD value: targetVal (= lv.Value) is a single-assignment scratch leaf bound
             // before the write-back, which stores to the target's heap id and never touches this scratch.
             return op.IsPostfix ? targetVal : lifted;
@@ -268,7 +268,7 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
         if (opType != udonType)
             resultVal = EmitNarrowingConvert(resultVal, opType, udonType);
 
-        EmitWriteBack(op.Target, resultVal, lv);
+        lv.Write(resultVal);
 
         // Postfix returns the OLD un-promoted value. lv.Value is the single-assignment scratch leaf bound by
         // CaptureLValue (NOT `targetVal`, which PromoteToInt32 may have overwritten above); the write-back

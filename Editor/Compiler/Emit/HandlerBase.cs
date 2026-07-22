@@ -867,7 +867,7 @@ public abstract partial class HandlerBase
     /// first, then delegate to this method for the common cases.
     /// </summary>
     protected void AssignToLValue(IOperation target, CLeaf value,
-        Dictionary<IOperation, System.Action<CLeaf>> preparedStores = null)
+        Dictionary<IOperation, LValuePlan> preparedStores = null)
     {
         switch (target)
         {
@@ -924,7 +924,7 @@ public abstract partial class HandlerBase
             // were a loud "Unsupported l-value target" before this arm.
             case IFieldReferenceOperation prepFieldRef
                 when preparedStores != null && preparedStores.TryGetValue(prepFieldRef, out var preparedFieldStore):
-                preparedFieldStore(value);
+                preparedFieldStore.Write(value);
                 break;
 
             case IFieldReferenceOperation lateFieldRef when TryPrepareFieldSet(lateFieldRef) is { } lateFieldStore:
@@ -948,7 +948,7 @@ public abstract partial class HandlerBase
                 // left-to-right BEFORE the RHS, so a store-time `VisitExpression(Indices[0])` that reads state
                 // the RHS mutated lands the write in the WRONG CELL (VM-proven ref=806 vs 86).
                 if (preparedStores != null && preparedStores.TryGetValue(arrayElem, out var arrStore))
-                    arrStore(value);
+                    arrStore.Write(value);
                 else
                     PrepareArrayElementSet(arrayElem)(value);
                 break;
@@ -963,9 +963,9 @@ public abstract partial class HandlerBase
             // when supplied (same wrong-cell family as the array arm above).
             case IPropertyReferenceOperation propLValue:
                 if (preparedStores != null && preparedStores.TryGetValue(propLValue, out var propStore))
-                    propStore(value);
+                    propStore.Write(value);
                 else
-                    EmitPropertySet(propLValue, () => value);
+                    TryPrepareWriteLValue(propLValue).Value.Write(value);
                 break;
 
             default:
@@ -979,7 +979,7 @@ public abstract partial class HandlerBase
     /// CW29: element reads route through the single CloneIfAggregate rule — the old `!IsTupleType` carve-out
     /// left a tuple-typed LEAF local aliasing the source bundle whenever the incoming value was not fresh.</summary>
     void AssignNestedTupleElements(ITupleOperation tuple, CLeaf arrValue,
-        Dictionary<IOperation, System.Action<CLeaf>> preparedStores = null)
+        Dictionary<IOperation, LValuePlan> preparedStores = null)
     {
         for (int i = 0; i < tuple.Elements.Length; i++)
         {
@@ -996,9 +996,9 @@ public abstract partial class HandlerBase
     /// expressions left-to-right, then the RHS, then the stores left-to-right". Returns a deferred store
     /// per prepared target (keyed by the target operation, consumed by AssignToLValue), or null when no
     /// target carries legs (plain locals/fields/discards — byte-identical to the pre-round-6 emission).</summary>
-    protected Dictionary<IOperation, System.Action<CLeaf>> PrepareDeconstructionTargets(ITupleOperation targetTuple)
+    protected Dictionary<IOperation, LValuePlan> PrepareDeconstructionTargets(ITupleOperation targetTuple)
     {
-        Dictionary<IOperation, System.Action<CLeaf>> prepared = null;
+        Dictionary<IOperation, LValuePlan> prepared = null;
         void Walk(IOperation element)
         {
             switch (element)
@@ -1010,12 +1010,12 @@ public abstract partial class HandlerBase
                     foreach (var e in nested.Elements) Walk(e);
                     break;
                 case IPropertyReferenceOperation propTarget:
-                    prepared ??= new Dictionary<IOperation, System.Action<CLeaf>>();
-                    prepared[propTarget] = PreparePropertySet(propTarget);
+                    prepared ??= new Dictionary<IOperation, LValuePlan>();
+                    prepared[propTarget] = TryPrepareWriteLValue(propTarget).Value;
                     break;
                 case IArrayElementReferenceOperation arrayElem:
-                    prepared ??= new Dictionary<IOperation, System.Action<CLeaf>>();
-                    prepared[arrayElem] = PrepareArrayElementSet(arrayElem);
+                    prepared ??= new Dictionary<IOperation, LValuePlan>();
+                    prepared[arrayElem] = TryPrepareWriteLValue(arrayElem).Value;
                     break;
                 // Wave-9 round-7 [Y2]/[Y4]/[Y6]/[Y8]/[Y10]: FIELD targets with receiver legs
                 // (struct-array-element receivers `arr[i].v`, member chains, cross-behaviour
@@ -1024,10 +1024,10 @@ public abstract partial class HandlerBase
                 // leg read state the RHS mutates; VM-proven ref=702 vs 72). Behaviour this-fields
                 // return null (no legs) and keep the plain store.
                 case IFieldReferenceOperation fieldTarget:
-                    if (TryPrepareFieldSet(fieldTarget) is { } fieldStore)
+                    if (TryPrepareWriteLValue(fieldTarget) is { } fieldPlan)
                     {
-                        prepared ??= new Dictionary<IOperation, System.Action<CLeaf>>();
-                        prepared[fieldTarget] = fieldStore;
+                        prepared ??= new Dictionary<IOperation, LValuePlan>();
+                        prepared[fieldTarget] = fieldPlan;
                     }
                     break;
             }
@@ -1040,6 +1040,37 @@ public abstract partial class HandlerBase
     /// TryPrepareFieldSet would return a store (aggregate member slot, cross-behaviour field,
     /// extern value-type / reference-type field), false for behaviour this-fields and static
     /// fields. Lets callers decide evaluation ORDER before any legs are emitted.</summary>
+    protected struct LValuePlan
+    {
+        System.Action<CLeaf> _write;
+        public CLeaf Value;
+        public CLeaf ArrayVal;
+        public CLeaf IndexVal;
+        public CLeaf InstanceVal;
+        public List<CLeaf> IndexArgs;
+        public NdimArrayAbi.AccessPlan? NdimPlan;
+        public LValuePlan(System.Action<CLeaf> write)
+        {
+            this = default;
+            _write = write ?? throw new System.ArgumentNullException(nameof(write));
+        }
+        public void SetWriter(System.Action<CLeaf> write)
+            => _write = write ?? throw new System.ArgumentNullException(nameof(write));
+        public void Write(CLeaf value) => _write(value);
+    }
+
+    protected LValuePlan? TryPrepareWriteLValue(IOperation target)
+    {
+        System.Action<CLeaf> write = target switch
+        {
+            IFieldReferenceOperation field => TryPrepareFieldSet(field),
+            IPropertyReferenceOperation property => PreparePropertySet(property),
+            IArrayElementReferenceOperation element => PrepareArrayElementSet(element),
+            _ => null,
+        };
+        return write == null ? null : new LValuePlan(write);
+    }
+
     enum FieldSetKind { AggregateSlot, CrossBehaviour, ExternValueType, ExternReferenceType }
 
     readonly struct FieldSetPlan
@@ -1069,17 +1100,13 @@ public abstract partial class HandlerBase
             ? FieldSetKind.ExternValueType : FieldSetKind.ExternReferenceType, fieldRef.Instance);
     }
 
-    protected bool IsPreparableFieldSetTarget(IFieldReferenceOperation fieldRef)
-        => DescribeFieldSet(fieldRef).HasValue;
-
     /// <summary>Wave-9 round-7 [Y2]/[Y4]-[Y10]: the single field SET path, shared by simple
     /// assignment and deconstruction lvalues (the field twin of PreparePropertySet /
     /// PrepareArrayElementSet). Evaluates the target's receiver legs NOW (C# order: the lvalue's
     /// component expressions run BEFORE the RHS) and returns the deferred store: aggregate member
     /// slot → cross-behaviour SetProgramVariable → extern value-type field → extern reference-type
     /// field. Returns null for behaviour this-fields and static fields (no legs) — callers keep
-    /// their direct-store path. Keep the arm dispatch in lockstep with IsPreparableFieldSetTarget
-    /// above.</summary>
+    /// their direct-store path. DescribeFieldSet is the single dispatch table for these cases.</summary>
     protected System.Action<CLeaf> TryPrepareFieldSet(IFieldReferenceOperation fieldRef)
     {
         var plan = DescribeFieldSet(fieldRef);
@@ -1138,8 +1165,8 @@ public abstract partial class HandlerBase
     }
 
     /// <summary>Emit an array element Set extern from already-evaluated array/index/value leaves.
-    /// Shared by PrepareArrayElementSet (single write) and AssignmentHandlerBase.EmitWriteBack's
-    /// read-modify-write array arm (which reuses CaptureLValue's cached array/index leaves instead
+    /// Shared by PrepareArrayElementSet (single write) and the read-modify-write lvalue plan's
+    /// array arm (which reuses the plan's cached array/index leaves instead
     /// of re-evaluating them).</summary>
     protected void EmitArrayElementSet(IArrayTypeSymbol arrSymbol, CLeaf arrayVal, CLeaf indexVal, CLeaf value)
     {
@@ -1150,8 +1177,8 @@ public abstract partial class HandlerBase
     }
 
     /// <summary>Emit a cross-behaviour field Set via SetProgramVariable from an already-evaluated
-    /// instance leaf. Shared by TryPrepareFieldSet (single write) and AssignmentHandlerBase.EmitWriteBack's
-    /// read-modify-write field arm (which reuses CaptureLValue's cached instance leaf instead of
+    /// instance leaf. Shared by TryPrepareFieldSet (single write) and the read-modify-write lvalue plan's
+    /// field arm (which reuses the plan's cached instance leaf instead of
     /// re-evaluating it).</summary>
     protected void EmitCrossBehaviourFieldSet(IFieldSymbol field, CLeaf instanceVal, CLeaf value)
     {
@@ -1190,17 +1217,9 @@ public abstract partial class HandlerBase
     /// Wave-9 round-6 [X2]-[X5]: split into PreparePropertySet (receiver/index legs, evaluated NOW)
     /// + a deferred store, so deconstruction can evaluate every target's legs BEFORE the RHS.
     /// Returns the stored value (the assignment-expression result).</summary>
-    protected CLeaf EmitPropertySet(IPropertyReferenceOperation propRef, System.Func<CLeaf> valueFactory)
-    {
-        var store = PreparePropertySet(propRef);
-        var val = valueFactory();
-        store(val);
-        return val;
-    }
-
     /// <summary>Evaluate a property/indexer SET target's receiver and index-argument legs NOW (in the
     /// C# receiver → index args order) and return the deferred store that emits the actual SET with a
-    /// later-evaluated value. The single-assignment path (EmitPropertySet) runs legs → value → store,
+    /// later-evaluated value. The single-assignment path runs legs → value → store,
     /// byte-identical to the pre-split emission; the deconstruction path runs ALL targets' legs, then
     /// the RHS, then the stores (wave-9 round-6 [X2]-[X5] — store-time leg evaluation inverted the C#
     /// order and landed writes in the wrong cell when the legs read state the RHS mutates).</summary>

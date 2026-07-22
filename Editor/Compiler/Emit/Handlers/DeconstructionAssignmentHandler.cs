@@ -256,7 +256,7 @@ public class DeconstructionAssignmentHandler : AssignmentHandlerBase, IOperation
     }
 
     void AssignPairedComponents(ITupleOperation targets, ITupleOperation values,
-        Dictionary<IOperation, CLeaf> snapshots, Dictionary<IOperation, System.Action<CLeaf>> prepared)
+        Dictionary<IOperation, CLeaf> snapshots, Dictionary<IOperation, LValuePlan> prepared)
     {
         for (int i = 0; i < targets.Elements.Length; i++)
         {
@@ -280,7 +280,7 @@ public class DeconstructionAssignmentHandler : AssignmentHandlerBase, IOperation
     /// </summary>
     void EmitCrossBehaviourTupleDeconstruction(IInvocationOperation invocation, IMethodSymbol callTarget,
         ITupleOperation targetTuple, bool isCrossBehaviour,
-        Dictionary<IOperation, System.Action<CLeaf>> prepared)
+        Dictionary<IOperation, LValuePlan> prepared)
     {
         // Get layout for the target method
         ReturnSlot[] callReturns;

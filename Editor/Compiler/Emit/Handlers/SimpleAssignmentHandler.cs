@@ -37,43 +37,12 @@ public class SimpleAssignmentHandler : AssignmentHandlerBase, IExpressionHandler
         // target's component expressions BEFORE the RHS; the old arms evaluated the RHS first, so
         // `arr[idx].v = Mut()` with Mut() bumping idx wrote the WRONG element (VM-proven ref=701
         // vs 71). Behaviour this-fields ride the fallback below (no receiver legs).
-        if (assign.Target is IFieldReferenceOperation fieldLValue && IsPreparableFieldSetTarget(fieldLValue))
+        if (TryPrepareWriteLValue(assign.Target) is { } writePlan)
         {
-            var fieldStore = TryPrepareFieldSet(fieldLValue);
             var srcValue = VisitEmittedValue(assign.Value);
-            RejectUnsafeCrossProgramDelegateWrite(fieldLValue, srcValue.Info);
-            fieldStore(srcValue.Leaf);
+            RejectUnsafeCrossProgramDelegateWrite(assign.Target, srcValue.Info);
+            writePlan.Write(srcValue.Leaf);
             return srcValue.Leaf;
-        }
-
-        if (assign.Target is IArrayElementReferenceOperation arrayElem)
-        {
-            RejectStaticReadonlyWriteThrough(arrayElem.ArrayReference); // §3.3, R5
-            // CW8: an element of a cross-program delegate array field is the same exported storage
-            // as the scalar delegate field the arms above/below already report.
-            RejectUnsafeCrossProgramDelegateWrite(arrayElem, _ctx.Boundary.ClassifyValue(assign.Value));
-            if (arrayElem.Indices.Length > 1)
-            {
-                var ndimStore = PrepareNdimElementSet(arrayElem);
-                var ndimSrcVal = VisitExpression(assign.Value);
-                ndimStore(ndimSrcVal);
-                return ndimSrcVal;
-            }
-            var arrayVal = VisitExpression(arrayElem.ArrayReference);
-            var arrSymbol = arrayElem.ArrayReference.Type as IArrayTypeSymbol;
-            var indexVal = ResolveArrayIndex(arrayVal, GetArrayType(arrSymbol), arrayElem.Indices[0]);
-            var srcVal = VisitExpression(assign.Value);
-            EmitArrayElementSet(arrSymbol, arrayVal, indexVal, srcVal);
-            return srcVal;
-        }
-
-        // Property/indexer SET (struct, this/base, static, variable-receiver, interface, extern) —
-        // shared with the deconstruction lvalue path. Wave-9 round-5 [X2]: evaluation order is
-        // receiver → index args → value (C# order); the old inline arm evaluated the RHS first.
-        if (assign.Target is IPropertyReferenceOperation propRef)
-        {
-            RejectUnsafeCrossProgramDelegateWrite(propRef, _ctx.Boundary.ClassifyValue(assign.Value));
-            return EmitPropertySet(propRef, () => VisitExpression(assign.Value));
         }
 
         // Direct store: local variable or this.field. Delegate assignments (field and local, including

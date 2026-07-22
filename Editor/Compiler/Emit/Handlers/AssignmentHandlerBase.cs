@@ -4,11 +4,11 @@ using Microsoft.CodeAnalysis.Operations;
 
 /// <summary>
 /// Base for the assignment-family handlers (SimpleAssignmentHandler, CompoundAssignmentHandler,
-/// DeconstructionAssignmentHandler, NullableHandler). LValueCapture/CaptureLValue and EmitWriteBack
-/// — capture an l-value's sub-expressions once, then write back after computing the new value — are
-/// used by CompoundAssignmentHandler and NullableHandler for their read-modify-write targets;
+/// DeconstructionAssignmentHandler, NullableHandler). LValuePlan captures an l-value's
+/// sub-expressions once, then writes back after computing the new value. It is shared by simple,
+/// compound, coalesce, and deconstruction assignment.
 /// GetAssignTargetFieldName is used by SimpleAssignmentHandler. EmitWriteBack's array-element and
-/// cross-behaviour-field arms only evaluate the receiver/index legs (or reuse CaptureLValue's cached
+/// cross-behaviour-field arms reuse CaptureLValue's cached receiver/index legs
 /// ones) — the actual Set emission is HandlerBase.EmitArrayElementSet / EmitCrossBehaviourFieldSet,
 /// shared with HandlerBase's single-write path (PrepareArrayElementSet / TryPrepareFieldSet) so the
 /// two mechanisms can't drift on the emitted extern.
@@ -21,17 +21,15 @@ public abstract class AssignmentHandlerBase : HandlerBase
     // Evaluates and caches sub-expressions of an l-value (array ref, index, instance)
     // to avoid re-evaluating side-effecting expressions during write-back.
 
-    protected struct LValueCapture
+    protected LValuePlan PrepareLValue(IOperation target)
     {
-        public CLeaf Value;          // The evaluated l-value value
-        public CLeaf ArrayVal;       // Cached array reference (for array elements)
-        public CLeaf IndexVal;       // Cached index (for array elements)
-        public CLeaf InstanceVal;    // Cached instance (for cross-behaviour fields/properties)
-        public List<CLeaf> IndexArgs; // Cached index args (for user indexers — avoid re-evaluating side effects)
-        public NdimArrayAbi.AccessPlan? NdimPlan; // Cached N-dim bounds/backing/flat-index plan (rank>1 array elements)
+        var plan = CaptureLValue(target);
+        var captured = plan;
+        plan.SetWriter(value => EmitWriteBack(target, value, captured));
+        return plan;
     }
 
-    protected LValueCapture CaptureLValue(IOperation target)
+    LValuePlan CaptureLValue(IOperation target)
     {
         // CW1 lift: compound/inc-dec READ of a runtime-polymorphic accessor on a v1-class receiver —
         // dispatch the getter through the typeobj machinery and cache the STAGED legs so
@@ -43,7 +41,7 @@ public abstract class AssignmentHandlerBase : HandlerBase
         {
             var (vCapRecv, vCapIdx) = StageAccessorDispatchLegs(vCapRef);
             var current = EmitAccessorDispatch(vCapRef.Property, vCapRecvTy, vCapGetter, vCapRecv, vCapIdx, null);
-            return new LValueCapture { Value = current, ArrayVal = vCapRecv, IndexArgs = vCapIdx };
+            return new LValuePlan { Value = current, ArrayVal = vCapRecv, IndexArgs = vCapIdx };
         }
 
         switch (target)
@@ -66,7 +64,7 @@ public abstract class AssignmentHandlerBase : HandlerBase
                 // Wave-9 round-4: slotted by parameter ordinal (named/reordered index args bind by name).
                 var cachedArgs = EvaluateIndexerArgs(idxRef);
                 var currentVal = EmitCallToMethod(idxDispatchGetter, new List<CLeaf>(cachedArgs));
-                return new LValueCapture { Value = currentVal, IndexArgs = cachedArgs };
+                return new LValuePlan { Value = currentVal, IndexArgs = cachedArgs };
             }
             // User-defined indexer on an object[]-emulated instance (`s[i] += x`, and this/base inside a
             // struct or v1-class body): cache the receiver and the (possibly side-effecting) index args
@@ -82,7 +80,7 @@ public abstract class AssignmentHandlerBase : HandlerBase
                 var getterArgs = new List<CLeaf> { recv };
                 getterArgs.AddRange(cachedArgs);
                 var currentVal = EmitCallToMethod(ResolveStructMember(sIdxGetterRaw), getterArgs);
-                return new LValueCapture { Value = currentVal, ArrayVal = recv, IndexArgs = cachedArgs };
+                return new LValuePlan { Value = currentVal, ArrayVal = recv, IndexArgs = cachedArgs };
             }
             // Wave-9 round-2 [W6]: user indexer COMPOUND assignment through a VARIABLE receiver
             // (`s[i] += x` where s is an own-typed copy / base-typed ref / another behaviour): read via
@@ -95,7 +93,7 @@ public abstract class AssignmentHandlerBase : HandlerBase
                 var cachedArgs = EvaluateIndexerArgs(vIdxRef);
                 var currentVal = EmitCrossIndexerCall(vIdxGetter, recvVal, cachedArgs,
                     TryMarkReentrantCrossDispatch(vIdxRef, vIdxGetter)); // wave-12 r2 [V1]
-                return new LValueCapture { Value = currentVal, InstanceVal = recvVal, IndexArgs = cachedArgs };
+                return new LValuePlan { Value = currentVal, InstanceVal = recvVal, IndexArgs = cachedArgs };
             }
             // Wave-9 round-4 [X4]: user indexer COMPOUND assignment (and inc-dec) through an
             // INTERFACE-typed receiver: read via the interface getter bridge; the receiver and the
@@ -110,7 +108,7 @@ public abstract class AssignmentHandlerBase : HandlerBase
                 var cachedArgs = EvaluateIndexerArgs(iIdxRef);
                 var currentVal = EmitInterfaceAccessorCall(iIdxRef.Property.GetMethod, iIdxGetMl, recvVal, cachedArgs,
                     TryMarkReentrantCrossDispatch(iIdxRef, iIdxRef.Property.GetMethod)); // wave-12 r2 [V1]
-                return new LValueCapture { Value = currentVal, InstanceVal = recvVal, IndexArgs = cachedArgs };
+                return new LValuePlan { Value = currentVal, InstanceVal = recvVal, IndexArgs = cachedArgs };
             }
             // Wave-11 round-11 [Z1]: NON-indexer property on an aggregate (struct/tuple) receiver —
             // compound assignment and inc-dec (`ss[Ix()].P += Mut()`, `arr[i].X++`). Evaluate the
@@ -133,7 +131,7 @@ public abstract class AssignmentHandlerBase : HandlerBase
                     CLeaf slotVal = AggregateAbi.ReadSlot(_builder, recv, capSlotIdx, "SystemObject");
                     if (aggCapPropRef.Property.Type is INamedTypeSymbol capSlotAgg && TypeClassifier.IsAggregateValue(capSlotAgg))
                         slotVal = AggregateAbi.DeepClone(_builder, slotVal, capSlotAgg, _ctx.Aggregates.GetLayout);
-                    return new LValueCapture { Value = slotVal, ArrayVal = recv, IndexVal = Const(capSlotIdx, "SystemInt32") };
+                    return new LValuePlan { Value = slotVal, ArrayVal = recv, IndexVal = Const(capSlotIdx, "SystemInt32") };
                 }
                 if (aggCapPropRef.Property.GetMethod is { } capGetterRaw)
                 {
@@ -141,7 +139,7 @@ public abstract class AssignmentHandlerBase : HandlerBase
                     CLeaf getVal = EmitCallToMethod(ResolveStructMember(capGetterRaw), new List<CLeaf> { recv });
                     if (aggCapPropRef.Property.Type is INamedTypeSymbol capGetAgg && TypeClassifier.IsAggregateValue(capGetAgg))
                         getVal = AggregateAbi.DeepClone(_builder, getVal, capGetAgg, _ctx.Aggregates.GetLayout);
-                    return new LValueCapture { Value = getVal, ArrayVal = recv };
+                    return new LValuePlan { Value = getVal, ArrayVal = recv };
                 }
                 goto default;
             }
@@ -157,7 +155,7 @@ public abstract class AssignmentHandlerBase : HandlerBase
                     var arrVal = LoadInstanceRaw(aggFieldRef.Instance);
                     var idxVal = Const(elemIdx, "SystemInt32");
                     var currentVal = AggregateAbi.ReadSlot(_builder, arrVal, elemIdx, "SystemObject");
-                    return new LValueCapture { Value = currentVal, ArrayVal = arrVal, IndexVal = idxVal };
+                    return new LValuePlan { Value = currentVal, ArrayVal = arrVal, IndexVal = idxVal };
                 }
                 goto default;
             }
@@ -168,7 +166,7 @@ public abstract class AssignmentHandlerBase : HandlerBase
                 var elemUdonType = GetUdonType(ndimType.ElementType);
                 var plan = PrepareNdimAccess(ndimCapElem.ArrayReference, ndimCapElem.Indices, ndimType);
                 var ndimCurrentVal = EmitNdimReadFromPlan(ndimCapElem, plan, elemUdonType);
-                return new LValueCapture { Value = ndimCurrentVal, NdimPlan = plan };
+                return new LValuePlan { Value = ndimCurrentVal, NdimPlan = plan };
             }
             case IArrayElementReferenceOperation arrayElem:
             {
@@ -190,7 +188,7 @@ public abstract class AssignmentHandlerBase : HandlerBase
                     ExternResolver.BuildArrayGetSignature(arrayType, elemAccessorType),
                     new List<CLeaf> { arrayVal, indexVal },
                     GetUdonType(arrayElem.Type));
-                return new LValueCapture { Value = valResult, ArrayVal = arrayVal, IndexVal = indexVal };
+                return new LValuePlan { Value = valResult, ArrayVal = arrayVal, IndexVal = indexVal };
             }
             case IFieldReferenceOperation { Instance: not null and not IInstanceReferenceOperation } fieldRef
                 when ExternResolver.IsUdonSharpBehaviour(fieldRef.Field.ContainingType):
@@ -202,7 +200,7 @@ public abstract class AssignmentHandlerBase : HandlerBase
                     ExternResolver.EventReceiverGetProgramVariable,
                     new List<CLeaf> { instanceVal, nameConst },
                     "SystemObject");
-                return new LValueCapture { Value = valResult, InstanceVal = instanceVal };
+                return new LValuePlan { Value = valResult, InstanceVal = instanceVal };
             }
             case IFieldReferenceOperation { Instance: not null and not IInstanceReferenceOperation } fieldRef2
                 when fieldRef2.Field.ContainingType.IsValueType:
@@ -212,11 +210,11 @@ public abstract class AssignmentHandlerBase : HandlerBase
                 var valueType = GetUdonType(fieldRef2.Field.Type);
                 var sig = ExternResolver.BuildPropertyGetSignature(containingType, fieldRef2.Field.Name, valueType);
                 var valResult = ExternCall(sig, new List<CLeaf> { instanceVal }, valueType);
-                return new LValueCapture { Value = valResult, InstanceVal = instanceVal };
+                return new LValuePlan { Value = valResult, InstanceVal = instanceVal };
             }
             default:
                 // Simple l-value (local, field on this): just evaluate normally
-                return new LValueCapture { Value = VisitExpression(target) };
+                return new LValuePlan { Value = VisitExpression(target) };
         }
     }
 
@@ -224,7 +222,7 @@ public abstract class AssignmentHandlerBase : HandlerBase
     // Write back a computed value to non-trivial l-value targets (array elements, properties).
     // For local/field variables, also writes back via EmitStoreField.
 
-    protected void EmitWriteBack(IOperation target, CLeaf valueVal, LValueCapture lv = default)
+    void EmitWriteBack(IOperation target, CLeaf valueVal, LValuePlan lv)
     {
         // CW1 lift: compound/inc-dec WRITE-BACK of a runtime-polymorphic accessor on a v1-class
         // receiver — dispatch the setter, reusing the legs CaptureLValue's dispatch twin staged
