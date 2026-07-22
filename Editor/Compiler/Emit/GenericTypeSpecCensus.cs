@@ -99,8 +99,8 @@ internal sealed class GenericTypeSpecCensus
         if (root == null) return;
         foreach (var op in SelfAndDescendants(root))
         {
-            foreach (var target in OperationMethodFacts.ConstructedTargets(op))
-                EnqueueIfClosed(target, map, methodTrace);
+            foreach (var site in CallableSites.FromOperation(op))
+                EnqueueIfClosed(site.Target, map, methodTrace);
             switch (op)
             {
                 case IObjectCreationOperation oc when oc.Type is INamedTypeSymbol ct:

@@ -550,7 +550,7 @@ public sealed class ResolvedEdgeResolver
         // and a `a++`/`--a` (IIncrementOrDecrementOperation). A BCL operator has a null OperatorMethod and
         // is naturally excluded; the consumers' internalMethods / callee filter restricts to registered
         // struct operators. (B49 — see the summary above.)
-        var opMethod = OperationMethodFacts.OperatorMethod(op);
+        var opMethod = CallableSites.OperatorMethod(op);
         if (opMethod != null) yield return opMethod.OriginalDefinition;
     }
 

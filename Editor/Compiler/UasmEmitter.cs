@@ -1269,29 +1269,11 @@ public partial class UasmEmitter
         foreach (var root in plan.Reach.BodyByDef.Values.Concat(plan.FieldInitOps))
             foreach (var operation in root.DescendantsAndSelf())
             {
-                if (operation is IInvocationOperation invocation
-                    && invocation.Instance != null
-                    && invocation.Instance is not IInstanceReferenceOperation)
-                    exports.Add(invocation.TargetMethod.OriginalDefinition);
-                if (operation is IPropertyReferenceOperation property
-                    && property.Instance != null
-                    && property.Instance is not IInstanceReferenceOperation)
-                {
-                    if (property.Property.GetMethod != null)
-                        exports.Add(property.Property.GetMethod.OriginalDefinition);
-                    if (property.Property.SetMethod != null)
-                        exports.Add(property.Property.SetMethod.OriginalDefinition);
-                }
-                if (operation is IEventAssignmentOperation eventAssignment
-                    && eventAssignment.EventReference is IEventReferenceOperation eventReference)
-                {
-                    var accessor = eventAssignment.Adds
-                        ? eventReference.Event.AddMethod
-                        : eventReference.Event.RemoveMethod;
-                    if (accessor != null && !accessor.IsImplicitlyDeclared
-                        && eventReference.Instance is not IInstanceReferenceOperation)
-                        exports.Add(accessor.OriginalDefinition);
-                }
+                foreach (var site in CallableSites.FromOperation(operation))
+                    if (site.Receiver != null && site.Receiver is not IInstanceReferenceOperation
+                        && (site.Kind is not CallableSiteKind.EventAdd and not CallableSiteKind.EventRemove
+                            || !site.Target.IsImplicitlyDeclared))
+                        exports.Add(site.Target.OriginalDefinition);
             }
         return exports;
     }

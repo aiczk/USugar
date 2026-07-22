@@ -15,7 +15,7 @@ public class CallableSitePlanTests
         var plan = CallableSitePlan.Direct(null, site, recursiveEdge: true,
             Recursion(tailSpared: site));
 
-        Assert.Equal(CallableSiteKind.Direct, plan.Kind);
+        Assert.Equal(CallExecutionKind.Direct, plan.Kind);
         Assert.True(plan.RecursiveEdge);
         Assert.True(plan.TailSpared);
         Assert.False(plan.RequiresFrameSpill);
@@ -27,7 +27,7 @@ public class CallableSitePlanTests
         var site = Site();
         var plan = CallableSitePlan.Delegate(site, Recursion(reentrant: site));
 
-        Assert.Equal(CallableSiteKind.DelegateDispatch, plan.Kind);
+        Assert.Equal(CallExecutionKind.DelegateDispatch, plan.Kind);
         Assert.True(plan.Reentrant);
         Assert.True(plan.RequiresFrameSpill);
     }
@@ -39,7 +39,7 @@ public class CallableSitePlanTests
         var plan = CallableSitePlan.Cross(null, default, site, recursiveEdge: true,
             Recursion(tailSpared: site));
 
-        Assert.Equal(CallableSiteKind.CrossDispatch, plan.Kind);
+        Assert.Equal(CallExecutionKind.CrossDispatch, plan.Kind);
         Assert.True(plan.TailSpared);
         Assert.False(plan.Reentrant);
         Assert.False(plan.RequiresFrameSpill);

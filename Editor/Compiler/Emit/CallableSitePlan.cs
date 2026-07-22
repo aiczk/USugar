@@ -3,7 +3,7 @@ using Microsoft.CodeAnalysis;
 /// <summary>The normalized call-site facts consumed by emission. Direct calls, delegate dispatch,
 /// and cross-program dispatch differ in transport, but recursion protection must use the same
 /// vocabulary so syntax-keyed tail/re-entry decisions cannot drift between their emitters.</summary>
-public enum CallableSiteKind
+public enum CallExecutionKind
 {
     Direct,
     DelegateDispatch,
@@ -12,7 +12,7 @@ public enum CallableSiteKind
 
 public readonly struct CallableSitePlan
 {
-    public readonly CallableSiteKind Kind;
+    public readonly CallExecutionKind Kind;
     public readonly IMethodSymbol StaticTarget;
     public readonly IMethodSymbol LocalTarget;
     public readonly bool RecursiveEdge;
@@ -21,7 +21,7 @@ public readonly struct CallableSitePlan
 
     public bool RequiresFrameSpill => (RecursiveEdge && !TailSpared) || Reentrant;
 
-    CallableSitePlan(CallableSiteKind kind, IMethodSymbol staticTarget, IMethodSymbol localTarget,
+    CallableSitePlan(CallExecutionKind kind, IMethodSymbol staticTarget, IMethodSymbol localTarget,
         bool recursiveEdge, bool reentrant, bool tailSpared)
     {
         Kind = kind;
@@ -36,7 +36,7 @@ public readonly struct CallableSitePlan
         bool recursiveEdge, RecursionInfo recursion)
     {
         var tailSpared = recursiveEdge && IsTailSpared(site, recursion);
-        return new CallableSitePlan(CallableSiteKind.Direct, target, target,
+        return new CallableSitePlan(CallExecutionKind.Direct, target, target,
             recursiveEdge, reentrant: false, tailSpared);
     }
 
@@ -44,7 +44,7 @@ public readonly struct CallableSitePlan
     {
         var reentrant = site != null && recursion?.ReentrantDispatchSites != null
             && recursion.ReentrantDispatchSites.Contains(site);
-        return new CallableSitePlan(CallableSiteKind.DelegateDispatch, null, null,
+        return new CallableSitePlan(CallExecutionKind.DelegateDispatch, null, null,
             recursiveEdge: false, reentrant, tailSpared: false);
     }
 
@@ -52,7 +52,7 @@ public readonly struct CallableSitePlan
         SyntaxNode site, bool recursiveEdge, RecursionInfo recursion)
     {
         var tailSpared = recursiveEdge && IsTailSpared(site, recursion);
-        return new CallableSitePlan(CallableSiteKind.CrossDispatch, staticTarget, landing.LocalTarget,
+        return new CallableSitePlan(CallExecutionKind.CrossDispatch, staticTarget, landing.LocalTarget,
             recursiveEdge, reentrant: recursiveEdge && !tailSpared, tailSpared);
     }
 
