@@ -1422,8 +1422,6 @@ public partial class UasmEmitter
 
     void EmitMethod(IMethodSymbol method, MethodContext.ClosureSpec closureSpec = null)
     {
-        _currentMethod = method;
-        _ctx.Methods.CurrentClosureSpec = closureSpec;
         var func = closureSpec?.Func ?? _methodFunctions[method];
 
         // Struct instance methods/ctors carry the receiver object[] as synthetic param0; make `this`
@@ -1435,7 +1433,7 @@ public partial class UasmEmitter
         // indexing ParamFieldNames[0] for it read past an empty list.
         // CA-M1: a v1 class instance member uses the SAME param0 object[] receiver as a user struct member
         // (reference semantics — no clone; the bundle flows through by reference).
-        _ctx.Methods.CurrentStructReceiverParamId =
+        var receiverParamId =
             (method.ContainingType is INamedTypeSymbol structCt && TypeClassifier.IsObjectArrayEmulated(structCt) && !method.IsStatic
                 && method.MethodKind is not (MethodKind.LambdaMethod or MethodKind.LocalFunction))
                 ? func.ParamFieldNames[0] : null;
@@ -1445,6 +1443,12 @@ public partial class UasmEmitter
         // both. IsGenericMethod alone under-fires for the containing-type-generic case (Box<T>.Get()
         // is not itself a generic method), which is exactly the G-M0-4 gap this predicate closes.
         bool isSpec = !method.IsDefinition;
+
+        var ownerSpecs = closureSpec?.OwnerSpecs
+            ?? (isSpec ? System.Collections.Immutable.ImmutableArray.Create(method)
+                       : System.Collections.Immutable.ImmutableArray<IMethodSymbol>.Empty);
+        using var _methodScope = _ctx.Methods.EnterEmission(
+            method, closureSpec, receiverParamId, ownerSpecs);
 
         // FieldChangeCallback: check if this setter has an associated callback field
         string fcbFieldName = null;
@@ -1498,10 +1502,6 @@ public partial class UasmEmitter
 
         // SS2B ambient owner chain: closure key composition during THIS emission resolves its
         // lexical owners' args against this chain (ComposeClosureKeyArgs).
-        _ctx.Methods.CurrentOwnerSpecs = closureSpec?.OwnerSpecs
-            ?? (isSpec ? System.Collections.Immutable.ImmutableArray.Create(method)
-                       : System.Collections.Immutable.ImmutableArray<IMethodSymbol>.Empty);
-
         // Wave-9 round-8 [Y2]: a hoisted closure (lambda / local function) declared inside a GENERIC
         // method body — its operation tree is the generic DEFINITION's, so T-typed expressions need
         // the instantiation's type-param map during body emission (registration already substituted
@@ -1710,7 +1710,6 @@ public partial class UasmEmitter
 
         // Method epilogue: return
         _builder.EmitReturn();
-        _currentMethod = null;
     }
 
     // ── Field Initializers ──

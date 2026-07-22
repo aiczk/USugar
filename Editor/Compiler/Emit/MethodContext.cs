@@ -112,6 +112,47 @@ public sealed class MethodContext
     /// itself; an emitting closure = its record's chain; else empty).</summary>
     public ImmutableArray<IMethodSymbol> CurrentOwnerSpecs = ImmutableArray<IMethodSymbol>.Empty;
 
+    public IDisposable EnterEmission(IMethodSymbol method, ClosureSpec closureSpec,
+        string structReceiverParamId, ImmutableArray<IMethodSymbol> ownerSpecs)
+    {
+        var scope = new EmissionScope(this);
+        CurrentMethod = method;
+        CurrentClosureSpec = closureSpec;
+        CurrentStructReceiverParamId = structReceiverParamId;
+        CurrentOwnerSpecs = ownerSpecs;
+        return scope;
+    }
+
+    sealed class EmissionScope : IDisposable
+    {
+        readonly MethodContext _context;
+        readonly IMethodSymbol _method;
+        readonly ClosureSpec _closureSpec;
+        readonly string _receiverParamId;
+        readonly ImmutableArray<IMethodSymbol> _ownerSpecs;
+        bool _disposed;
+
+        public EmissionScope(MethodContext context)
+        {
+            _context = context;
+            _method = context.CurrentMethod;
+            _closureSpec = context.CurrentClosureSpec;
+            _receiverParamId = context.CurrentStructReceiverParamId;
+            _ownerSpecs = context.CurrentOwnerSpecs;
+        }
+
+        public void Dispose()
+        {
+            if (_disposed)
+                throw new InvalidOperationException("Method emission scope disposed twice.");
+            _disposed = true;
+            _context.CurrentMethod = _method;
+            _context.CurrentClosureSpec = _closureSpec;
+            _context.CurrentStructReceiverParamId = _receiverParamId;
+            _context.CurrentOwnerSpecs = _ownerSpecs;
+        }
+    }
+
     public bool TryGetClosureSpec(IMethodSymbol def, ImmutableArray<ITypeSymbol> keyArgs, out ClosureSpec spec)
     {
         spec = null;
