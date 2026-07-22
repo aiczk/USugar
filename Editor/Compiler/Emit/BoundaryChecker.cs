@@ -63,11 +63,13 @@ public sealed class BoundaryChecker
         switch (target)
         {
             case IFieldReferenceOperation f when IsCrossProgramDelegateFieldTarget(f):
+                if (IsEmptyDelegateArrayCreation(info)) break;
                 RequireDelegateValueSafeForCrossProgramStore(info,
                     $"the cross-program field '{f.Field.Name}'", "the write site",
                     "Keep the delegate field private, or assign a direct class-free lambda/method group.");
                 break;
             case IPropertyReferenceOperation p when IsCrossProgramDelegatePropertyTarget(p):
+                if (IsEmptyDelegateArrayCreation(info)) break;
                 RequireDelegateValueSafeForCrossProgramStore(info,
                     $"the cross-program property '{p.Property.Name}'", "the write site",
                     "Keep the property non-public, or assign a direct class-free lambda/method group.");
@@ -82,6 +84,10 @@ public sealed class BoundaryChecker
                 break;
         }
     }
+
+    static bool IsEmptyDelegateArrayCreation(ValueInfo info)
+        => ValueClassifier.UnwrapConversions(info.Operation) is IArrayCreationOperation array
+           && (array.Initializer == null || array.Initializer.ElementValues.Length == 0);
 
     /// <summary>CW7/CW23: a cross-program call argument IS a delegate store — the pair becomes a
     /// SetProgramVariable into the foreign program's param var — so the argument surface runs the
@@ -130,11 +136,10 @@ public sealed class BoundaryChecker
     void RequireDelegateValueSafeForCrossProgramStore(ValueInfo info, string surface, string site, string advice)
     {
         if (info.Kind == ValueKind.Null || ValueClassifier.IsDirectProgramLocalSafeDelegate(info)) return;
-        // A copied delegate has lost its creation-site capture proof. Inspecting only this method's body
-        // is unsound: a caller can pass a class-capturing lambda through a clean Action parameter and the
-        // helper can then publish it. Until value-flow carries capture taint across calls, only a direct
-        // creation at the boundary is provably transport-safe.
-        if (!info.IsDirectDelegateValue)
+        // Parameters/call results/field reads can originate in another method or behaviour, so this
+        // method's body cannot prove their capture payload. Locals retain the existing bounded body scan:
+        // it preserves capture-free local bindings while rejecting methods that mention local class payload.
+        if (!info.IsDirectDelegateValue && info.Provenance != ValueProvenance.Local)
             throw new NotSupportedException(
                 $"A delegate stored in {surface} must be created directly from a capture-safe lambda or "
                 + $"method group at {site}. The copied {info.Provenance.ToString().ToLowerInvariant()} value "
