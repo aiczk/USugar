@@ -22,8 +22,8 @@ public abstract partial class HandlerBase
     protected IReadOnlyDictionary<IMethodSymbol, ReturnSlot[]> _methodReturns => _ctx.Methods.Returns;
     protected IReadOnlyDictionary<IMethodSymbol, string[]> _methodParamVarIds => _ctx.Methods.ParamVarIds;
     protected IMethodSymbol _currentMethod { get => _ctx.Methods.CurrentMethod; set => _ctx.Methods.CurrentMethod = value; }
-    protected List<MethodContext.ClosureSpec> _pendingClosures => _ctx.Methods.PendingClosures;
-    protected List<(IMethodSymbol Method, MethodContext.ClosureSpec Spec)> _pendingGenericSpecs => _ctx.Generics.PendingSpecs;
+    protected List<(IMethodSymbol Method, MethodContext.ClosureSpec Spec)> _pendingCallableBodies
+        => _ctx.Methods.PendingBodies;
     protected IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> _typeParamMap => _ctx.Generics.TypeParamMap;
     protected Dictionary<ILocalSymbol, EmitContext.LocalBinding> _localBindings => _ctx.Storage.LocalBindings;
     protected List<(string fieldName, IOperation initOp, ITypeSymbol fieldType)> _fieldInitOps => _ctx.Initializers.FieldInitOps;
@@ -1491,18 +1491,12 @@ public abstract partial class HandlerBase
         var capturing = _ctx.Closures.CaptureScope != null
             && _ctx.Closures.CaptureScope.IsCapturingClosure(localFunc);
         var record = (MethodContext.ClosureSpec)new CallableRegistrar(_ctx).Register(
-            new CallableLayoutPlan
-            {
-                Method = localFunc,
-                FunctionName = index => $"__{index}_{funcName}",
-                SlotPrefix = index => $"__{index}_{funcName}",
-                Parameters = parameters,
-                Returns = returns,
-                ClosureKeyArgs = keyArgs,
-                ClosureOwnerSpecs = identity.OwnerSpecs,
-                EnvironmentId = capturing ? index => $"__{index}_{funcName}__envp" : null,
-            });
-        _pendingClosures.Add(record);
+            new CallableLayoutPlan(localFunc, index => $"__{index}_{funcName}",
+                slotPrefix: index => $"__{index}_{funcName}",
+                parameters: parameters, returns: returns,
+                closureKeyArgs: keyArgs, closureOwnerSpecs: identity.OwnerSpecs,
+                environmentId: capturing ? index => $"__{index}_{funcName}__envp" : null));
+        _pendingCallableBodies.Add((localFunc, record));
     }
 
     /// <summary>
@@ -1746,18 +1740,14 @@ public abstract partial class HandlerBase
         var capturing = _ctx.Closures.CaptureScope != null
             && _ctx.Closures.CaptureScope.IsCapturingClosure(constructed);
         var record = (MethodContext.ClosureSpec)new CallableRegistrar(_ctx).Register(
-            new CallableLayoutPlan
-            {
-                Method = constructed,
-                FunctionName = index => $"__{index}_{SanitizeId(constructed.Name)}_{typeArgPart}",
-                Parameters = parameters,
-                Returns = returns,
-                ClosureKeyArgs = closureKeyArgs,
-                ClosureOwnerSpecs = closureIdentity.OwnerSpecs.Add(constructed),
-                EnvironmentId = capturing
-                    ? index => $"__{index}_{SanitizeId(constructed.Name)}__envp" : null,
-            });
-        _pendingGenericSpecs.Add((constructed, record));
+            new CallableLayoutPlan(constructed,
+                index => $"__{index}_{SanitizeId(constructed.Name)}_{typeArgPart}",
+                parameters: parameters, returns: returns,
+                closureKeyArgs: closureKeyArgs,
+                closureOwnerSpecs: closureIdentity.OwnerSpecs.Add(constructed),
+                environmentId: capturing
+                    ? index => $"__{index}_{SanitizeId(constructed.Name)}__envp" : null));
+        _pendingCallableBodies.Add((constructed, record));
     }
 
     void RegisterNamedSpecialization(IMethodSymbol method)
@@ -1774,17 +1764,14 @@ public abstract partial class HandlerBase
             new CallableReturnPlan(index => NameAllocator.RetId(SanitizeId(method.Name), index),
                 new StorageType(GetStorageTypeName(method.ReturnType)))
         };
-        new CallableRegistrar(_ctx).Register(new CallableLayoutPlan
-        {
-            Method = method,
-            FunctionName = index => $"__{index}_{SanitizeId(method.Name)}_{typeArgPart}",
-            Receiver = receiver,
-            ReceiverId = receiver == MethodContext.ReceiverAbi.ObjectArray
+        new CallableRegistrar(_ctx).Register(new CallableLayoutPlan(method,
+            index => $"__{index}_{SanitizeId(method.Name)}_{typeArgPart}",
+            receiver: receiver,
+            receiverId: receiver == MethodContext.ReceiverAbi.ObjectArray
                 ? index => NameAllocator.ParamId("this", index) : null,
-            Parameters = parameters,
-            Returns = returns,
-        });
-        _pendingGenericSpecs.Add((method, null));
+            parameters: parameters,
+            returns: returns));
+        _pendingCallableBodies.Add((method, null));
     }
 
     /// <summary>Feature G residual gap (wave-14): a struct-member reference (computed property/indexer

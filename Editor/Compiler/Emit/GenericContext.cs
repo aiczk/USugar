@@ -11,9 +11,6 @@ public sealed class GenericContext
 {
     public IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> TypeParamMap { get; private set; }
 
-    // SS2B (M2b): a pending GENERIC LOCAL FUNCTION spec rides with its per-spec closure record (one
-    // constructed symbol can pend once per enclosing spec); named specs carry null.
-    public readonly List<(IMethodSymbol Method, MethodContext.ClosureSpec Spec)> PendingSpecs = new();
     readonly HashSet<IMethodSymbol> _plannedSpecializations =
         new(SymbolEqualityComparer.Default);
     public bool BodyEmissionStarted { get; private set; }

@@ -30,18 +30,42 @@ internal sealed class CallableReturnPlan
 /// <summary>Complete function/storage ABI for one named callable registration.</summary>
 internal sealed class CallableLayoutPlan
 {
-    public IMethodSymbol Method;
-    public Func<int, string> FunctionName;
-    public string ExportName;
-    public Func<int, string> SlotPrefix = index => index.ToString();
-    public Func<int, string> ReceiverId;
-    public MethodContext.ReceiverAbi Receiver;
-    public IReadOnlyList<CallableParameterPlan> Parameters = Array.Empty<CallableParameterPlan>();
-    public IReadOnlyList<CallableReturnPlan> Returns = Array.Empty<CallableReturnPlan>();
-    public MethodLayout Layout;
-    public ImmutableArray<ITypeSymbol> ClosureKeyArgs;
-    public ImmutableArray<IMethodSymbol> ClosureOwnerSpecs;
-    public Func<int, string> EnvironmentId;
+    public readonly IMethodSymbol Method;
+    public readonly Func<int, string> FunctionName;
+    public readonly string ExportName;
+    public readonly Func<int, string> SlotPrefix;
+    public readonly Func<int, string> ReceiverId;
+    public readonly MethodContext.ReceiverAbi Receiver;
+    public readonly IReadOnlyList<CallableParameterPlan> Parameters;
+    public readonly IReadOnlyList<CallableReturnPlan> Returns;
+    public readonly MethodLayout Layout;
+    public readonly ImmutableArray<ITypeSymbol> ClosureKeyArgs;
+    public readonly ImmutableArray<IMethodSymbol> ClosureOwnerSpecs;
+    public readonly Func<int, string> EnvironmentId;
+
+    public CallableLayoutPlan(IMethodSymbol method, Func<int, string> functionName,
+        string exportName = null, Func<int, string> slotPrefix = null,
+        Func<int, string> receiverId = null,
+        MethodContext.ReceiverAbi receiver = MethodContext.ReceiverAbi.None,
+        IReadOnlyList<CallableParameterPlan> parameters = null,
+        IReadOnlyList<CallableReturnPlan> returns = null, MethodLayout layout = null,
+        ImmutableArray<ITypeSymbol> closureKeyArgs = default,
+        ImmutableArray<IMethodSymbol> closureOwnerSpecs = default,
+        Func<int, string> environmentId = null)
+    {
+        Method = method ?? throw new ArgumentNullException(nameof(method));
+        FunctionName = functionName ?? throw new ArgumentNullException(nameof(functionName));
+        ExportName = exportName;
+        SlotPrefix = slotPrefix ?? (index => index.ToString());
+        ReceiverId = receiverId;
+        Receiver = receiver;
+        Parameters = parameters ?? Array.Empty<CallableParameterPlan>();
+        Returns = returns ?? Array.Empty<CallableReturnPlan>();
+        Layout = layout;
+        ClosureKeyArgs = closureKeyArgs;
+        ClosureOwnerSpecs = closureOwnerSpecs;
+        EnvironmentId = environmentId;
+    }
 
     public bool IsClosure => !ClosureKeyArgs.IsDefault;
 }

@@ -27,8 +27,8 @@ public partial class UasmEmitter
     IReadOnlyDictionary<IMethodSymbol, ReturnSlot[]> _methodReturns => _ctx.Methods.Returns;
     IReadOnlyDictionary<IMethodSymbol, string[]> _methodParamVarIds => _ctx.Methods.ParamVarIds;
     IMethodSymbol _currentMethod { get => _ctx.Methods.CurrentMethod; set => _ctx.Methods.CurrentMethod = value; }
-    List<MethodContext.ClosureSpec> _pendingClosures => _ctx.Methods.PendingClosures;
-    List<(IMethodSymbol Method, MethodContext.ClosureSpec Spec)> _pendingGenericSpecs => _ctx.Generics.PendingSpecs;
+    List<(IMethodSymbol Method, MethodContext.ClosureSpec Spec)> _pendingCallableBodies
+        => _ctx.Methods.PendingBodies;
     IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> _typeParamMap => _ctx.Generics.TypeParamMap;
     HashSet<IMethodSymbol> _inheritedMethods = new(SymbolEqualityComparer.Default);
     HashSet<IMethodSymbol> _userClassDefaultMethods = new(SymbolEqualityComparer.Default);
@@ -1075,22 +1075,19 @@ public partial class UasmEmitter
                 new CallableParameterPlan(_ => ml.ParamIds[index], GetStorageType(parameter.Type))).ToArray();
             var returns = ml.Returns.Select(result =>
                 new CallableReturnPlan(_ => result.Id, result.StorageType)).ToArray();
-            new CallableRegistrar(_ctx).Register(new CallableLayoutPlan
-            {
-                Method = method,
-                FunctionName = _ => exportName,
-                ExportName = shouldExport ? exportName : null,
-                SlotPrefix = _ => exportName,
-                Receiver = isDefaultMethod
+            new CallableRegistrar(_ctx).Register(new CallableLayoutPlan(
+                method, _ => exportName,
+                exportName: shouldExport ? exportName : null,
+                slotPrefix: _ => exportName,
+                receiver: isDefaultMethod
                     ? MethodContext.ReceiverAbi.ObjectArray : MethodContext.ReceiverAbi.None,
-                ReceiverId = isDefaultMethod
+                receiverId: isDefaultMethod
                     ? _ => "__dimrcv_" + SanitizeId(ClassTypeObjectContext.SpecKey(method.ContainingType))
                         + "_" + SanitizeId(method.MetadataName)
                     : null,
-                Parameters = parameters,
-                Returns = returns,
-                Layout = ml,
-            });
+                parameters: parameters,
+                returns: returns,
+                layout: ml));
         }
 
         // ReachableBodies (design §1): ONE reach fixpoint replaces the three separate Phase-1 collector
@@ -1180,16 +1177,13 @@ public partial class UasmEmitter
             new CallableReturnPlan(index => NameAllocator.RetId(SanitizeId(method.Name), index),
                 new StorageType(GetStorageTypeName(method.ReturnType)))
         };
-        return new CallableRegistrar(_ctx).Register(new CallableLayoutPlan
-        {
-            Method = method,
-            FunctionName = functionName,
-            Receiver = receiver,
-            ReceiverId = receiver == MethodContext.ReceiverAbi.ObjectArray
+        return new CallableRegistrar(_ctx).Register(new CallableLayoutPlan(
+            method, functionName,
+            receiver: receiver,
+            receiverId: receiver == MethodContext.ReceiverAbi.ObjectArray
                 ? index => NameAllocator.ParamId("this", index) : null,
-            Parameters = parameters,
-            Returns = returns,
-        });
+            parameters: parameters,
+            returns: returns));
     }
 
     static HashSet<IMethodSymbol> CollectCrossDispatchExports(ClassCompilePlan plan)
@@ -1267,22 +1261,12 @@ public partial class UasmEmitter
         new DelegateBridgeEmitter(_ctx, _bridge, _delegateConvention).EmitLayoutBridges();
 
         // Emit pending local functions and generic specializations (may chain)
-        while (_pendingClosures.Count > 0 || _pendingGenericSpecs.Count > 0)
+        while (_pendingCallableBodies.Count > 0)
         {
-            if (_pendingClosures.Count > 0)
-            {
-                var batch = _pendingClosures.ToList();
-                _pendingClosures.Clear();
-                foreach (var closureSpec in batch)
-                    EmitMethod(closureSpec.Definition, closureSpec);
-            }
-            if (_pendingGenericSpecs.Count > 0)
-            {
-                var batch = _pendingGenericSpecs.ToList();
-                _pendingGenericSpecs.Clear();
-                foreach (var (specSym, specRecord) in batch)
-                    EmitMethod(specSym, specRecord);
-            }
+            var batch = _pendingCallableBodies.ToList();
+            _pendingCallableBodies.Clear();
+            foreach (var (method, spec) in batch)
+                EmitMethod(method, spec);
         }
 
         _ctx.Synthetics.Freeze();

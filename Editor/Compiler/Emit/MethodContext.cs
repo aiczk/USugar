@@ -14,16 +14,33 @@ public sealed class MethodContext
 
     public class RegisteredCallable
     {
-        public IMethodSymbol Definition;
-        public CFunction Function;
-        public EmitContext.MethodSlot Slot;
-        public string[] ParamVarIds;
-        public ReturnSlot[] ReturnSlots;
-        public MethodLayout Layout;
-        public ReceiverAbi Receiver;
-        public CallableKind Kind;
-        public string Name;
-        public IMethodSymbol TargetDefinition;
+        public readonly IMethodSymbol Definition;
+        public readonly CFunction Function;
+        public readonly EmitContext.MethodSlot Slot;
+        public readonly string[] ParamVarIds;
+        public readonly ReturnSlot[] ReturnSlots;
+        public readonly MethodLayout Layout;
+        public readonly ReceiverAbi Receiver;
+        public readonly CallableKind Kind;
+        public readonly string Name;
+        public readonly IMethodSymbol TargetDefinition;
+
+        public RegisteredCallable(IMethodSymbol definition, CFunction function,
+            EmitContext.MethodSlot slot, string[] paramVarIds, ReturnSlot[] returnSlots,
+            ReceiverAbi receiver, CallableKind kind, string name,
+            MethodLayout layout = null, IMethodSymbol targetDefinition = null)
+        {
+            Definition = definition;
+            Function = function;
+            Slot = slot;
+            ParamVarIds = paramVarIds ?? throw new ArgumentNullException(nameof(paramVarIds));
+            ReturnSlots = returnSlots ?? throw new ArgumentNullException(nameof(returnSlots));
+            Receiver = receiver;
+            Kind = kind;
+            Name = name ?? throw new ArgumentNullException(nameof(name));
+            Layout = layout;
+            TargetDefinition = targetDefinition?.OriginalDefinition;
+        }
     }
 
     readonly Dictionary<IMethodSymbol, RegisteredCallable> _callables =
@@ -65,18 +82,8 @@ public sealed class MethodContext
     {
         if (method == null || function == null || paramVarIds == null || returnSlots == null)
             throw new ArgumentNullException("A registered callable requires method, function, params, and returns.");
-        var callable = new RegisteredCallable
-        {
-            Definition = method,
-            Function = function,
-            Slot = slot,
-            ParamVarIds = paramVarIds,
-            ReturnSlots = returnSlots,
-            Layout = layout,
-            Receiver = receiver,
-            Kind = CallableKind.Method,
-            Name = function.Name,
-        };
+        var callable = new RegisteredCallable(method, function, slot, paramVarIds, returnSlots,
+            receiver, CallableKind.Method, function.Name, layout);
         _callables.Add(method, callable);
         return callable;
     }
@@ -145,9 +152,20 @@ public sealed class MethodContext
     /// fallback lookup), and the composite key args.</summary>
     public sealed class ClosureSpec : RegisteredCallable
     {
-        public ImmutableArray<ITypeSymbol> KeyArgs;
-        public ImmutableArray<IMethodSymbol> OwnerSpecs;
-        public string EnvpFieldId;
+        public readonly ImmutableArray<ITypeSymbol> KeyArgs;
+        public readonly ImmutableArray<IMethodSymbol> OwnerSpecs;
+        public readonly string EnvpFieldId;
+
+        public ClosureSpec(IMethodSymbol definition, CFunction function, EmitContext.MethodSlot slot,
+            string[] paramVarIds, ReturnSlot[] returnSlots, ImmutableArray<ITypeSymbol> keyArgs,
+            ImmutableArray<IMethodSymbol> ownerSpecs, string envpFieldId)
+            : base(definition, function, slot, paramVarIds, returnSlots, ReceiverAbi.None,
+                CallableKind.Closure, function.Name)
+        {
+            KeyArgs = keyArgs;
+            OwnerSpecs = ownerSpecs;
+            EnvpFieldId = envpFieldId;
+        }
     }
 
     /// <summary>Per-spec identity as a TYPE (design 2026-07-10 symbol-intern v2, T2 pilot): one
@@ -189,7 +207,7 @@ public sealed class MethodContext
 
     readonly Dictionary<SpecKey, ClosureSpec> _closureSpecs = new();
 
-    public readonly List<ClosureSpec> PendingClosures = new();
+    public readonly List<(IMethodSymbol Method, ClosureSpec Spec)> PendingBodies = new();
 
     /// <summary>The closure spec currently being emitted (set by EmitMethod for pending-closure
     /// drains), or null when emitting a named method. Consumers that used to read the bare
@@ -267,20 +285,8 @@ public sealed class MethodContext
         if (definition == null || function == null || paramVarIds == null || returnSlots == null)
             throw new ArgumentNullException(
                 "A registered closure requires method, function, params, and returns.");
-        var spec = new ClosureSpec
-        {
-            Definition = definition,
-            KeyArgs = keyArgs,
-            OwnerSpecs = ownerSpecs,
-            Function = function,
-            Slot = slot,
-            ParamVarIds = paramVarIds,
-            ReturnSlots = returnSlots,
-            Receiver = ReceiverAbi.None,
-            Kind = CallableKind.Closure,
-            Name = function.Name,
-            EnvpFieldId = envpFieldId,
-        };
+        var spec = new ClosureSpec(definition, function, slot, paramVarIds, returnSlots,
+            keyArgs, ownerSpecs, envpFieldId);
         _closureSpecs.Add(new SpecKey(definition, keyArgs), spec);
         return spec;
     }
@@ -291,17 +297,9 @@ public sealed class MethodContext
     {
         if (string.IsNullOrEmpty(name) || function == null)
             throw new ArgumentException("A synthetic callable requires a name and function.");
-        var callable = new RegisteredCallable
-        {
-            Definition = signatureMethod,
-            TargetDefinition = targetMethod?.OriginalDefinition,
-            Function = function,
-            ParamVarIds = paramVarIds ?? Array.Empty<string>(),
-            ReturnSlots = returnSlots ?? Array.Empty<ReturnSlot>(),
-            Receiver = ReceiverAbi.None,
-            Kind = kind,
-            Name = name,
-        };
+        var callable = new RegisteredCallable(signatureMethod, function, default,
+            paramVarIds ?? Array.Empty<string>(), returnSlots ?? Array.Empty<ReturnSlot>(),
+            ReceiverAbi.None, kind, name, targetDefinition: targetMethod);
         _syntheticCallables.Add(name, callable);
         return callable;
     }
