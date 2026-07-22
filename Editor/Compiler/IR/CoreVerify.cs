@@ -9,18 +9,30 @@ public static class CoreVerify
 {
     public static void Verify(CModule module)
     {
+        var fields = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var field in module.Fields)
+            if (!fields.TryAdd(field.Name, field.Type))
+                throw new VerificationException($"Duplicate field declaration '{field.Name}'");
+        foreach (var function in module.Functions)
+            foreach (var returnSlot in function.ReturnSlots)
+                if (!fields.TryAdd(returnSlot.Id, returnSlot.UdonType)
+                    && fields[returnSlot.Id] != returnSlot.UdonType)
+                    throw new VerificationException(
+                        $"Return field '{returnSlot.Id}' has conflicting types '{fields[returnSlot.Id]}' and '{returnSlot.UdonType}'");
         foreach (var func in module.Functions)
-            VerifyFunction(func, module.TypeFacts);
+            VerifyFunction(func, module.TypeFacts, fields);
     }
 
-    public static void VerifyFunction(CFunction func, UdonTypeFactRegistry typeFacts = null)
+    public static void VerifyFunction(CFunction func, UdonTypeFactRegistry typeFacts = null,
+        IReadOnlyDictionary<string, string> fields = null)
     {
         if (func.Shape != Shape.Structured)
             throw new VerificationException(
                 $"CoreVerify requires Shape=Structured, got {func.Shape} for function '{func.Name}' " +
                 "(func.Body is stale after CoreFlatten — verify before flattening, or use FlatVerify after)");
 
-        var ctx = new VerifyContext(func, typeFacts ?? new UdonTypeFactRegistry());
+        var ctx = new VerifyContext(func, typeFacts ?? new UdonTypeFactRegistry(),
+            fields ?? new Dictionary<string, string>());
         VerifyBlock(func.Body, ctx);
         VerifyGotoLabels(func);
     }
@@ -29,13 +41,16 @@ public static class CoreVerify
     {
         public readonly CFunction Func;
         public readonly UdonTypeFactRegistry TypeFacts;
+        public readonly IReadOnlyDictionary<string, string> Fields;
         public readonly HashSet<int> DeclaredSlots = new();
         public int LoopDepth;
 
-        public VerifyContext(CFunction func, UdonTypeFactRegistry typeFacts)
+        public VerifyContext(CFunction func, UdonTypeFactRegistry typeFacts,
+            IReadOnlyDictionary<string, string> fields)
         {
             Func = func;
             TypeFacts = typeFacts;
+            Fields = fields;
             for (int i = 0; i < func.Slots.Count; i++)
                 DeclaredSlots.Add(i);
         }
@@ -59,6 +74,14 @@ public static class CoreVerify
             throw new VerificationException(
                 $"Type mismatch in {context}: expected '{expected}', got '{actual}' — {why} (function '{Func.Name}')");
         }
+
+        public void AssertField(string fieldName, string actualType, string context)
+        {
+            if (!Fields.TryGetValue(fieldName, out var declaredType))
+                throw new VerificationException(
+                    $"Undeclared field '{fieldName}' in {context} (function '{Func.Name}')");
+            AssertType(declaredType, actualType, $"{context} field '{fieldName}'");
+        }
     }
 
     static void VerifyBlock(CBlock block, VerifyContext ctx)
@@ -81,6 +104,7 @@ public static class CoreVerify
 
             case CStoreField store:
                 VerifyExpr(store.Value, ctx);
+                ctx.AssertField(store.FieldName, store.Value.Type, "CStoreField");
                 break;
 
             case CIf ifStmt:
@@ -126,11 +150,18 @@ public static class CoreVerify
                 break;
 
             case CReturn ret:
+                var returnsVoid = string.IsNullOrEmpty(ctx.Func.ReturnType)
+                    || ctx.Func.ReturnType == "SystemVoid";
+                if (returnsVoid && ret.Value != null)
+                    throw new VerificationException(
+                        $"Void function '{ctx.Func.Name}' returns a value of type '{ret.Value.Type}'");
+                if (!returnsVoid && ret.Value == null && ctx.Func.ReturnSlots.Count == 0)
+                    throw new VerificationException(
+                        $"Non-void function '{ctx.Func.Name}' returns without a value (expected '{ctx.Func.ReturnType}')");
                 if (ret.Value != null)
                 {
                     VerifyExpr(ret.Value, ctx);
-                    if (ctx.Func.ReturnType != null)
-                        ctx.AssertType(ctx.Func.ReturnType, ret.Value.Type, "CReturn");
+                    ctx.AssertType(ctx.Func.ReturnType, ret.Value.Type, "CReturn");
                 }
                 break;
 
@@ -180,7 +211,9 @@ public static class CoreVerify
         switch (stmt)
         {
             case CLabel lbl:
-                labels.Add(lbl.Label);
+                if (!labels.Add(lbl.Label))
+                    throw new VerificationException(
+                        $"Duplicate label '{lbl.Label}' (function label names must be unique)");
                 break;
             case CGoto gt:
                 gotos.Add(gt.Label);
@@ -224,10 +257,12 @@ public static class CoreVerify
                 ctx.AssertType(declaredType, slotRef.Type, $"CSlotRef slot{slotRef.SlotId}");
                 break;
 
-            case CFieldLoad:
-                break; // producer (CAssign/CExprStmt RHS only); field existence checked at a higher level
+            case CFieldLoad fieldLoad:
+                ctx.AssertField(fieldLoad.FieldName, fieldLoad.Type, "CFieldLoad");
+                break;
 
             case CFieldAddr fa:
+                ctx.AssertField(fa.FieldName, fa.Type, "CFieldAddr");
                 if (!allowAddr)
                     throw new VerificationException(
                         $"CFieldAddr '[{fa.FieldName}]' (heap address) is only valid as an extern/internal " +

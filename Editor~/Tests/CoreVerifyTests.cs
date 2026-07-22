@@ -121,6 +121,63 @@ public class CoreVerifyTests
     }
 
     [Fact]
+    public void Verifier_NonVoidReturnWithoutValue_Throws()
+    {
+        var module = new CModule();
+        var func = module.AddFunction("test");
+        func.ReturnType = "SystemInt32";
+        func.Body.Stmts.Add(new CReturn());
+
+        Assert.Throws<VerificationException>(() => CoreVerify.Verify(module));
+    }
+
+    [Fact]
+    public void Verifier_VoidReturnWithValue_Throws()
+    {
+        var module = new CModule();
+        var func = module.AddFunction("test");
+        func.ReturnType = "SystemVoid";
+        func.Body.Stmts.Add(new CReturn(new CConst(1, "SystemInt32")));
+
+        Assert.Throws<VerificationException>(() => CoreVerify.Verify(module));
+    }
+
+    [Fact]
+    public void Verifier_UndeclaredFieldLoad_Throws()
+    {
+        var module = new CModule();
+        var builder = new CoreBuilder(module);
+        builder.BeginFunction("test");
+        var slot = builder.AllocFrame("SystemInt32");
+        builder.EmitAssign(slot, builder.LoadField("missing", "SystemInt32"));
+
+        Assert.Throws<VerificationException>(() => CoreVerify.Verify(module));
+    }
+
+    [Fact]
+    public void Verifier_FieldStoreTypeMismatch_Throws()
+    {
+        var module = new CModule();
+        module.Fields.Add(new FieldDecl("value", "SystemSingle"));
+        var builder = new CoreBuilder(module);
+        builder.BeginFunction("test");
+        builder.EmitStoreField("value", builder.Const("bad", "SystemString"));
+
+        Assert.Throws<VerificationException>(() => CoreVerify.Verify(module));
+    }
+
+    [Fact]
+    public void Verifier_DuplicateLabel_Throws()
+    {
+        var module = new CModule();
+        var func = module.AddFunction("test");
+        func.Body.Stmts.Add(new CLabel("same"));
+        func.Body.Stmts.Add(new CLabel("same"));
+
+        Assert.Throws<VerificationException>(() => CoreVerify.Verify(module));
+    }
+
+    [Fact]
     public void Verifier_Int32ToEnumSlot_Passes()
     {
         // Enum slots interop with Int32 (Udon stores enums as their underlying type). Fact-backed like
@@ -190,6 +247,8 @@ public class CoreVerifyTests
     public void Verifier_FieldAddrAsStoreValue_Throws()
     {
         var module = new CModule();
+        module.Fields.Add(new FieldDecl("x", "SystemInt32"));
+        module.Fields.Add(new FieldDecl("y", "SystemInt32"));
         var func = module.AddFunction("test");
         // field = &otherField  — storing a heap address as a value is invalid
         func.Body.Stmts.Add(new CStoreField("x", new CFieldAddr("y", "SystemInt32")));
@@ -201,6 +260,7 @@ public class CoreVerifyTests
     public void Verifier_FieldAddrAsReturnValue_Throws()
     {
         var module = new CModule();
+        module.Fields.Add(new FieldDecl("y", "SystemInt32"));
         var func = module.AddFunction("test");
         func.ReturnType = "SystemInt32";
         func.Body.Stmts.Add(new CReturn(new CFieldAddr("y", "SystemInt32")));
@@ -212,6 +272,7 @@ public class CoreVerifyTests
     public void Verifier_FieldAddrInSelectArm_Throws()
     {
         var module = new CModule();
+        module.Fields.Add(new FieldDecl("y", "SystemInt32"));
         var builder = new CoreBuilder(module);
         builder.BeginFunction("test");
         var cond = builder.AllocFrame("SystemBoolean");
@@ -228,6 +289,7 @@ public class CoreVerifyTests
     public void Verifier_FieldAddrAsExternArg_Passes()
     {
         var module = new CModule();
+        module.Fields.Add(new FieldDecl("y", "SystemInt32"));
         var func = module.AddFunction("test");
         // SomeType.TryGet(out y) — a CFieldAddr IS valid as an out/ref extern argument
         func.Body.Stmts.Add(new CExprStmt(new CExternCall(

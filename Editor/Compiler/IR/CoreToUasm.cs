@@ -589,7 +589,8 @@ public static class CoreToUasm
                 line.Address = addr;
                 _code[i] = line;
                 if (line.Kind == CodeKind.Label && line.LabelName != null)
-                    _labelAddrs[line.LabelName] = addr;
+                    if (!_labelAddrs.TryAdd(line.LabelName, addr))
+                        throw new InvalidOperationException($"Duplicate UASM label '{line.LabelName}'");
                 addr += GetSize(line.Kind);
             }
         }
