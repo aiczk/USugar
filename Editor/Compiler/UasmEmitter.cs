@@ -1014,6 +1014,7 @@ public partial class UasmEmitter
     {
         var methods = plan.Methods;
         var typeLayout = _planner.GetLayout(_classSymbol);
+        var crossDispatchExports = CollectCrossDispatchExports(plan);
 
         // First pass: create IrFunctions, assign params, return vars (skip generic definitions)
         _ctx.Methods.NextMethodIndex = 0;
@@ -1033,14 +1034,6 @@ public partial class UasmEmitter
             bool isOwnOrInherited = SymbolEqualityComparer.Default.Equals(method.ContainingType, _classSymbol)
                 || _inheritedMethods.Contains(method);
 
-            string fcbFieldName = null;
-            if (method.MethodKind == MethodKind.PropertySet
-                && method.AssociatedSymbol is IPropertySymbol setProp)
-            {
-                foreach (var kvp in _fieldChangeCallbacks)
-                    if (kvp.Value == setProp.Name) { fcbFieldName = kvp.Key; break; }
-            }
-
             bool shouldExport = !method.IsGenericMethod
                 && isOwnOrInherited
                 && (method.MethodKind == MethodKind.Ordinary
@@ -1048,7 +1041,7 @@ public partial class UasmEmitter
                     || method.MethodKind == MethodKind.PropertySet)
                 && (method.DeclaredAccessibility == Accessibility.Public
                     || UdonEventNames.ContainsKey(method.Name)
-                    || fcbFieldName != null);
+                    || crossDispatchExports.Any(target => SameVirtualSlot(method, target)));
 
             // Create CFunction with or without ExportName
             var func = _module.AddFunction(exportName, shouldExport ? exportName : null);
@@ -1239,6 +1232,40 @@ public partial class UasmEmitter
         }
 
         return new ProgramRegistration(foreignStatics, structMethods, baseInstanceMethods);
+    }
+
+    static HashSet<IMethodSymbol> CollectCrossDispatchExports(ClassCompilePlan plan)
+    {
+        var exports = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
+        foreach (var root in plan.Reach.BodyByDef.Values.Concat(plan.FieldInitOps))
+            foreach (var operation in root.DescendantsAndSelf())
+            {
+                if (operation is IInvocationOperation invocation
+                    && invocation.Instance != null
+                    && invocation.Instance is not IInstanceReferenceOperation)
+                    exports.Add(invocation.TargetMethod.OriginalDefinition);
+                if (operation is IPropertyReferenceOperation property
+                    && property.Instance != null
+                    && property.Instance is not IInstanceReferenceOperation)
+                {
+                    if (property.Property.GetMethod != null)
+                        exports.Add(property.Property.GetMethod.OriginalDefinition);
+                    if (property.Property.SetMethod != null)
+                        exports.Add(property.Property.SetMethod.OriginalDefinition);
+                }
+            }
+        return exports;
+    }
+
+    static bool SameVirtualSlot(IMethodSymbol left, IMethodSymbol right)
+    {
+        for (var method = left; method != null; method = method.OverriddenMethod)
+            if (SymbolEqualityComparer.Default.Equals(method.OriginalDefinition, right.OriginalDefinition))
+                return true;
+        for (var method = right; method != null; method = method.OverriddenMethod)
+            if (SymbolEqualityComparer.Default.Equals(method.OriginalDefinition, left.OriginalDefinition))
+                return true;
+        return false;
     }
 
     void EmitRegisteredBodies(ClassCompilePlan plan, ProgramRegistration registration)

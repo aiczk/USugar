@@ -1442,7 +1442,6 @@ public abstract partial class HandlerBase
                     else
                     {
                         // Non-auto property setter: call via SendCustomEvent
-                        RejectNonPublicCrossAccessor(propRef.Property.SetMethod, propRef.Property); // wave-12 [V2]
                         // Wave-12 r2 [V1]: reentrant setter — value copy-in inside the spill window.
                         bool setReentrant = TryMarkReentrantCrossDispatch(propRef, propRef.Property.SetMethod);
                         var (exportName, setParamIds, _) = GetCalleeLayout(propRef.Property.SetMethod);
@@ -2518,33 +2517,12 @@ public abstract partial class HandlerBase
 
     // ── Call helpers ──
 
-    /// <summary>Wave-12 [V2]: a NON-auto property accessor dispatched through a variable receiver
-    /// needs an exported entry point (SetProgramVariable + SendCustomEvent), but EmitMethods only
-    /// exports PUBLIC accessors — the dispatch of a non-public one targets an event name matching no
-    /// .export, a silent no-op on device (VM-proven: the setter body never ran, the cross write was
-    /// lost and the getter read a stale return var). Loud per design §8-3, mirroring the
-    /// EmitCrossIndexerCall gate and the [J2] non-this method reject. Auto-properties are exempt:
-    /// they route through SetProgramVariable/GetProgramVariable on the backing symbol, which needs no
-    /// entry point.</summary>
-    protected static void RejectNonPublicCrossAccessor(IMethodSymbol accessor, IPropertySymbol prop)
-    {
-        if (accessor.DeclaredAccessibility != Accessibility.Public)
-            throw new System.NotSupportedException(
-                $"Property '{prop.Name}' of '{prop.ContainingType.Name}' is accessed through a "
-                + "variable receiver, which dispatches cross-program (SetProgramVariable + "
-                + "SendCustomEvent) and so needs a public "
-                + (accessor.MethodKind == MethodKind.PropertySet ? "setter" : "getter")
-                + ". Make the accessor public, or access the property through 'this'.");
-    }
-
     /// <summary>Wave-12 [V2]: TRUE auto-property detection — a compiler-generated backing field is
     /// associated with the property. The cross-arm `DeclaringSyntaxReferences.IsEmpty` checks were
     /// always FALSE for source `{ get; set; }` accessors (same trap UasmEmitter's field-declaration
     /// pass documents), so the SetProgramVariable/GetProgramVariable direct arms were dead and every
-    /// cross property access dispatched accessor functions — a silent no-op for NON-public autos,
-    /// whose accessors are never exported yet whose backing symbol IS declared on the receiver's
-    /// heap. Non-public autos now take the direct-symbol arm (needs no entry point); public
-    /// accessors keep the dispatch path byte-for-byte.</summary>
+    /// cross property access dispatched accessor functions. Non-public autos take the cheaper
+    /// direct-symbol arm because their backing symbol is present on the receiver heap.</summary>
     protected static bool IsNonPublicAutoCrossProperty(IMethodSymbol accessor, IPropertySymbol prop)
         => accessor != null
            && accessor.DeclaredAccessibility != Accessibility.Public
@@ -2558,16 +2536,11 @@ public abstract partial class HandlerBase
     /// `IUdonEventReceiver.__get_Item` (assembler/validator crash on legal C#). Dispatch the accessor
     /// cross-program like a non-auto property: SetProgramVariable each index (and the value, for the
     /// setter — its LAST parameter) + SendCustomEvent the chain-ROOT export (GetCalleeLayout
-    /// normalization), which runs the receiver program's most-derived override. A non-public accessor
-    /// has no exported entry point — loud per design §8-3 (mirrors the [J2] non-this method reject).</summary>
+    /// normalization), which runs the receiver program's most-derived override. Reachable non-public
+    /// accessors use an internal entry point registered with the program.</summary>
     protected CLeaf EmitCrossIndexerCall(IMethodSymbol accessor, CLeaf instanceVal, List<CLeaf> orderedArgs,
         bool reentrant = false)
     {
-        if (accessor.DeclaredAccessibility != Accessibility.Public)
-            throw new System.NotSupportedException(
-                $"Indexer of '{accessor.ContainingType.Name}' is accessed through a variable receiver, "
-                + "which dispatches cross-program (SetProgramVariable + SendCustomEvent) and so needs a "
-                + "public accessor. Make the accessor public, or access the indexer through 'this'.");
         RejectProgramLocalCrossBehaviourAccessor(accessor); // CW22
         var (exportName, paramIds, _) = GetCalleeLayout(accessor);
         var pairs = new List<(string, CLeaf)>();

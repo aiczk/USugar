@@ -323,18 +323,18 @@ public class W9R2IdxBaseRecv : IdxBase9 {
     }
 
     [Fact]
-    public void Indexer_VariableReceiver_NonPublicAccessor_Rejects()
+    public void Indexer_VariableReceiver_NonPublicAccessor_Dispatches()
     {
-        var ex = Record.Exception(() => TestHelper.CompileToUasm(@"
+        var uasm = TestHelper.CompileToUasm(@"
 using System;
 using UdonSharp;
 public class IdxPrivate : UdonSharpBehaviour {
     public int seed; public int acc;
     int this[int i] { get { return i * 3; } }
     void Start() { IdxPrivate s = this; acc = s[seed]; }
-}", "IdxPrivate"));
-        Assert.NotNull(ex);
-        Assert.Contains("public accessor", ex.ToString());
+}", "IdxPrivate");
+        Assert.Contains(".export __0_get_Item", uasm);
+        Assert.Contains("__SendCustomEvent__SystemString__SystemVoid", uasm);
     }
 
     // ── [W7] generic method groups ──

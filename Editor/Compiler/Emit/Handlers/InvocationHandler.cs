@@ -270,9 +270,9 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
         // of the override (VM 3/0 vs CLR 5). Route through the cross-behaviour path: SetProgramVariable
         // + SendCustomEvent executes on the RECEIVER's program, and the override-chain-ROOT export name
         // (GetCalleeLayout normalization) dispatches that program's own most-derived override — true
-        // virtual dispatch. Non-public targets have no exported entry point (SendCustomEvent would
-        // silently no-op), generic targets have no per-specialization layout, and ref/out params cannot
-        // round-trip through SetProgramVariable — all loud per design §8-3.
+        // virtual dispatch. Reachable non-public targets receive an internal entry point during program
+        // registration. Generic targets have no per-specialization layout, and ref/out params cannot
+        // round-trip through SetProgramVariable, so those shapes remain loud rejects.
         if (!target.IsStatic && target.MethodKind == MethodKind.Ordinary
             && op.Instance != null && op.Instance is not IInstanceReferenceOperation
             && ExternResolver.IsUdonSharpBehaviour(target.ContainingType)
@@ -280,14 +280,11 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
             && (SymbolEqualityComparer.Default.Equals(target.ContainingType, _classSymbol)
                 || UasmEmitter.IsBaseInstanceMethod(target, _classSymbol)))
         {
-            if (target.IsGenericMethod || target.Parameters.Any(p => p.RefKind != RefKind.None)
-                || (target.DeclaredAccessibility != Accessibility.Public
-                    && !LayoutPlanner.UdonEventNames.ContainsKey(target.Name)))
+            if (target.IsGenericMethod || target.Parameters.Any(p => p.RefKind != RefKind.None))
                 throw new System.NotSupportedException(
                     $"Instance method '{target.Name}' of the compiled class family is called through a "
                     + "non-this receiver, which dispatches cross-program (SetProgramVariable + "
-                    + "SendCustomEvent) and so needs a public, non-generic target without ref/out "
-                    + "parameters. Make the method public, or call it through 'this'.");
+                    + "SendCustomEvent) and so needs a non-generic target without ref/out parameters.");
             return EmitCrossClassCall(op, target);
 
         }

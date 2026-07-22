@@ -118,18 +118,17 @@ public class J3Cls : UdonSharp.UdonSharpBehaviour {
     }
 
     [Fact]
-    public void SameClassCall_NonThisReceiver_PrivateTarget_Throws()
+    public void SameClassCall_NonThisReceiver_PrivateTarget_Dispatches()
     {
-        // [J3] a PRIVATE method has no exported entry point, so the receiver-correct cross dispatch
-        // cannot reach it — loud, never a silent self-executing JUMP.
-        var ex = Assert.ThrowsAny<System.Exception>(() => TestHelper.CompileToUasm(@"
+        var uasm = TestHelper.CompileToUasm(@"
 public class J3Priv : UdonSharp.UdonSharpBehaviour {
     public J3Priv other;
     public int sum;
     int GetN() { return 3; }
     void Start() { sum = other.GetN(); }
-}", "J3Priv"));
-        Assert.Contains("non-this receiver", ex.Message);
+}", "J3Priv");
+        Assert.Contains(".export GetN", uasm);
+        Assert.Contains("__SendCustomEvent__SystemString__SystemVoid", uasm);
     }
 
     // ── round-6 [J1]: `new`-shadowed storage collision ──

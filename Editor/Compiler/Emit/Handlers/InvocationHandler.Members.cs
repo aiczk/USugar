@@ -192,7 +192,6 @@ public partial class InvocationHandler
                 // Non-auto property getter: a single-return cross-behaviour call. CrossCall binds it to a
                 // scratch slot at this point (A-normal form), so the SendCustomEvent fires exactly once in
                 // program order — inside the branch block when this getter is a ternary arm.
-                RejectNonPublicCrossAccessor(op.Property.GetMethod, op.Property); // wave-12 [V2]
                 var (getExportName, _, getRetId) = GetCalleeLayout(op.Property.GetMethod);
                 var getReturns = getRetId != null
                     ? new[] { new ReturnSlot(getRetId, new StorageType(returnType)) }

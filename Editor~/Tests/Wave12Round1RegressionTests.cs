@@ -133,31 +133,33 @@ public class W12ErDPoison : UdonSharpBehaviour {
     // ── [V2] non-public property accessor through a variable receiver ──
 
     [Fact]
-    public void PrivateNonAutoSetter_VariableReceiver_RejectsLoudly()
+    public void PrivateNonAutoSetter_VariableReceiver_Dispatches()
     {
-        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
+        var uasm = TestHelper.CompileToUasm(@"
 using UdonSharp;
 public class W12PrivSet : UdonSharpBehaviour {
     public int seed; public int result;
     W12PrivSet other; int _store;
     int Seed { get { return _store; } set { _store = value * 3; } }
     void Start() { other = this; other.Seed = seed; result = other.Seed; }
-}", "W12PrivSet"));
-        Assert.Contains("needs a public setter", ex.Message);
+}", "W12PrivSet");
+        Assert.Contains(".export get_Seed", uasm);
+        Assert.Contains("__SendCustomEvent__SystemString__SystemVoid", uasm);
     }
 
     [Fact]
-    public void PrivateNonAutoGetter_VariableReceiver_RejectsLoudly()
+    public void PrivateNonAutoGetter_VariableReceiver_Dispatches()
     {
-        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
+        var uasm = TestHelper.CompileToUasm(@"
 using UdonSharp;
 public class W12PrivGet : UdonSharpBehaviour {
     public int seed; public int result;
     W12PrivGet other; int _store;
     int Seed { get { return _store + seed; } }
     void Start() { other = this; result = other.Seed; }
-}", "W12PrivGet"));
-        Assert.Contains("needs a public getter", ex.Message);
+}", "W12PrivGet");
+        Assert.Contains(".export get_Seed", uasm);
+        Assert.Contains("__SendCustomEvent__SystemString__SystemVoid", uasm);
     }
 
     [Fact]

@@ -369,7 +369,6 @@ public abstract class AssignmentHandlerBase : HandlerBase
                 }
                 else
                 {
-                    RejectNonPublicCrossAccessor(propRef.Property.SetMethod, propRef.Property); // wave-12 [V2]
                     // Wave-12 r2 [V1]: reentrant setter — value copy-in inside the spill window.
                     bool wbReentrant = TryMarkReentrantCrossDispatch(propRef, propRef.Property.SetMethod);
                     var (exportName, setParamIds, _) = GetCalleeLayout(propRef.Property.SetMethod);
