@@ -14,6 +14,7 @@ internal sealed class GenericTypeSpecCensus
     readonly HashSet<INamedTypeSymbol> _minted = new(SymbolEqualityComparer.Default);
     readonly HashSet<INamedTypeSymbol> _dispatchTypes = new(SymbolEqualityComparer.Default);
     readonly Dictionary<string, IMethodSymbol> _specializations = new(StringComparer.Ordinal);
+    readonly Dictionary<string, ClosureSpecializationCandidate> _closures = new(StringComparer.Ordinal);
     readonly HashSet<string> _seenMethods = new(StringComparer.Ordinal);
     readonly HashSet<string> _seenFieldInits = new(StringComparer.Ordinal);
     readonly Queue<(IMethodSymbol Method, IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> Map, SpecTrace Trace)> _queue = new();
@@ -64,25 +65,34 @@ internal sealed class GenericTypeSpecCensus
             var (type, fieldMap, mintTrace, methodTrace) = _fieldQueue.Dequeue();
             foreach (var init in _fieldInits(type)) Walk(init, fieldMap, methodTrace, mintTrace);
         }
-        return new Result(_minted, _specializations.Values.ToArray());
+        return new Result(_minted, _specializations.Values.ToArray(), _closures.Values.ToArray());
     }
 
     void EnqueueIfClosed(IMethodSymbol method, IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> ambient,
         SpecTrace parent)
     {
-        if (method == null || method.DeclaringSyntaxReferences.Length == 0) return;
+        if (method == null) return;
+        var closureKind = method.MethodKind is MethodKind.LocalFunction
+            or MethodKind.LambdaMethod or MethodKind.AnonymousFunction;
+        if (!closureKind && method.DeclaringSyntaxReferences.Length == 0) return;
         var closed = TypeEnvironment.CloseMethod(_compilation, method, ambient);
         var map = TypeEnvironment.ForMethod(closed, ambient);
         if (ContainsOpen(closed.ContainingType) || closed.IsGenericMethod && closed.TypeArguments.Any(ContainsOpen))
             return;
         RejectExpandingCycle(closed, parent);
-        var key = MethodKey(closed, map);
+        var lexicalOwners = closureKind ? LexicalOwners(closed, parent)
+            : System.Collections.Immutable.ImmutableArray<IMethodSymbol>.Empty;
+        var key = MethodKey(closed, map) + (closureKind
+            ? "|source:" + SourceKey(closed)
+              + "|owners:" + string.Join(">", lexicalOwners.Select(method => MethodKey(method, null)))
+            : "");
         if (!_seenMethods.Add(key)) return;
         var hasEmittableBody = _bodyOf(closed.OriginalDefinition) != null;
         if (!closed.IsDefinition
-            && closed.MethodKind is not (MethodKind.LocalFunction or MethodKind.LambdaMethod
-                or MethodKind.AnonymousFunction) && hasEmittableBody)
+            && !closureKind && hasEmittableBody)
             _specializations.Add(key, closed);
+        if (closureKind)
+            _closures.Add(key, new ClosureSpecializationCandidate(closed, TraceMethods(parent)));
         _queue.Enqueue((closed, map, new SpecTrace(closed, parent)));
     }
 
@@ -113,6 +123,15 @@ internal sealed class GenericTypeSpecCensus
         if (root == null) return;
         foreach (var op in SelfAndDescendants(root))
         {
+            if (op is ILocalFunctionOperation local
+                && !SameDefinition(local.Symbol, methodTrace?.Method))
+                EnqueueIfClosed(local.Symbol, map, methodTrace);
+            else if (op is IAnonymousFunctionOperation lambda
+                && !SameDefinition(lambda.Symbol, methodTrace?.Method))
+                EnqueueIfClosed(lambda.Symbol, map, methodTrace);
+            else if (op is IDelegateCreationOperation
+                     { Target: IAnonymousFunctionOperation delegateLambda })
+                EnqueueIfClosed(delegateLambda.Symbol, map, methodTrace);
             foreach (var site in CallableSites.FromOperation(op))
             {
                 EnqueueIfClosed(site.Target, map, methodTrace);
@@ -175,6 +194,10 @@ internal sealed class GenericTypeSpecCensus
             : VirtualDispatch.IsAssignable(concrete, owner);
 
     static bool ContainsOpen(ITypeSymbol type) => ClassTypeObjectContext.ContainsTypeParameter(type);
+
+    static bool SameDefinition(IMethodSymbol left, IMethodSymbol right)
+        => left != null && right != null && SymbolEqualityComparer.Default.Equals(
+            left.OriginalDefinition, right.OriginalDefinition);
 
     static void RejectExpandingCycle(IMethodSymbol current, SpecTrace trace)
     {
@@ -246,22 +269,71 @@ internal sealed class GenericTypeSpecCensus
            + "|" + ClassTypeObjectContext.SpecKey(method.ContainingType)
            + "|" + string.Join("|", method.TypeArguments.Select(ClassTypeObjectContext.SpecKey));
 
-    static IEnumerable<IOperation> SelfAndDescendants(IOperation op)
+    static string SourceKey(IMethodSymbol method)
+    {
+        if (method.DeclaringSyntaxReferences.Length == 0) return method.ToDisplayString();
+        var syntax = method.DeclaringSyntaxReferences[0];
+        return syntax.SyntaxTree.FilePath + ":" + syntax.Span.Start + ":" + syntax.Span.Length;
+    }
+
+    static System.Collections.Immutable.ImmutableArray<IMethodSymbol> LexicalOwners(
+        IMethodSymbol closure, SpecTrace trace)
+    {
+        var result = System.Collections.Immutable.ImmutableArray.CreateBuilder<IMethodSymbol>();
+        for (var symbol = closure.OriginalDefinition.ContainingSymbol;
+             symbol is IMethodSymbol owner;
+             symbol = owner.ContainingSymbol)
+            for (var current = trace; current != null; current = current.Parent)
+                if (SymbolEqualityComparer.Default.Equals(
+                    current.Method.OriginalDefinition, owner.OriginalDefinition))
+                {
+                    result.Add(current.Method);
+                    break;
+                }
+        return result.ToImmutable();
+    }
+
+    static System.Collections.Immutable.ImmutableArray<IMethodSymbol> TraceMethods(SpecTrace trace)
+    {
+        var result = System.Collections.Immutable.ImmutableArray.CreateBuilder<IMethodSymbol>();
+        for (; trace != null; trace = trace.Parent) result.Add(trace.Method);
+        return result.ToImmutable();
+    }
+
+    static IEnumerable<IOperation> SelfAndDescendants(IOperation op, bool root = true)
     {
         yield return op;
+        if (!root && op is ILocalFunctionOperation or IAnonymousFunctionOperation)
+            yield break;
         foreach (var child in op.ChildOps())
-            foreach (var nested in SelfAndDescendants(child)) yield return nested;
+            foreach (var nested in SelfAndDescendants(child, false)) yield return nested;
     }
 
     internal sealed class Result
     {
         public readonly HashSet<INamedTypeSymbol> MintedClasses;
         public readonly IMethodSymbol[] MethodSpecializations;
+        public readonly ClosureSpecializationCandidate[] ClosureSpecializations;
 
-        public Result(HashSet<INamedTypeSymbol> mintedClasses, IMethodSymbol[] methodSpecializations)
+        public Result(HashSet<INamedTypeSymbol> mintedClasses, IMethodSymbol[] methodSpecializations,
+            ClosureSpecializationCandidate[] closureSpecializations)
         {
             MintedClasses = mintedClasses;
             MethodSpecializations = methodSpecializations;
+            ClosureSpecializations = closureSpecializations;
         }
+    }
+}
+
+internal readonly struct ClosureSpecializationCandidate
+{
+    public readonly IMethodSymbol Method;
+    public readonly System.Collections.Immutable.ImmutableArray<IMethodSymbol> OwnerSpecs;
+
+    public ClosureSpecializationCandidate(IMethodSymbol method,
+        System.Collections.Immutable.ImmutableArray<IMethodSymbol> ownerSpecs)
+    {
+        Method = method;
+        OwnerSpecs = ownerSpecs;
     }
 }

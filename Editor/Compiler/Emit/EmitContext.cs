@@ -106,7 +106,7 @@ public class EmitContext
         {
             IMethodSymbol spec = null;
             foreach (var os in Methods.CurrentOwnerSpecs)
-                if (SymbolEqualityComparer.Default.Equals(os.OriginalDefinition, ownerDef)) { spec = os; break; }
+                if (ClosureIdentityPlan.SameSourceDefinition(os, ownerDef)) { spec = os; break; }
             if (spec == null)
             {
                 if (ownerDef.TypeParameters.Length > 0

@@ -42,6 +42,26 @@ public sealed class ClosureIdentityPlan
             $"Closure '{closure.ToDisplayString()}' was not present in the frozen callable body graph.");
     }
 
+    public IMethodSymbol CanonicalDefinition(IMethodSymbol closure)
+    {
+        if (closure == null) throw new ArgumentNullException(nameof(closure));
+        foreach (var definition in _owners.Keys)
+            if (SameSourceDefinition(definition, closure)) return definition;
+        throw new InvalidOperationException(
+            $"Closure '{closure.ToDisplayString()}' was not present in the frozen callable body graph.");
+    }
+
+    public static bool SameSourceDefinition(IMethodSymbol left, IMethodSymbol right)
+    {
+        if (left == null || right == null) return false;
+        if (SymbolEqualityComparer.Default.Equals(left.OriginalDefinition, right.OriginalDefinition))
+            return true;
+        var l = left.DeclaringSyntaxReferences.Length > 0 ? left.DeclaringSyntaxReferences[0] : null;
+        var r = right.DeclaringSyntaxReferences.Length > 0 ? right.DeclaringSyntaxReferences[0] : null;
+        return l != null && r != null && ReferenceEquals(l.SyntaxTree, r.SyntaxTree)
+            && l.Span.Equals(r.Span);
+    }
+
     static bool IsClosure(IMethodSymbol method)
         => method.MethodKind is MethodKind.LocalFunction
             or MethodKind.LambdaMethod or MethodKind.AnonymousFunction;

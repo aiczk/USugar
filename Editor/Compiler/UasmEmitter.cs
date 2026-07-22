@@ -1028,6 +1028,16 @@ public partial class UasmEmitter
         var specializationRegistrar = new SpecializationRegistrar(_ctx);
         foreach (var specialization in plan.Callables.Specializations)
             specializationRegistrar.Register(specialization);
+        foreach (var closure in plan.Callables.ClosureSpecializations)
+        {
+            var definition = _ctx.Closures.IdentityPlan.CanonicalDefinition(closure.Method);
+            var method = closure.Method.IsGenericMethod
+                && !closure.Method.TypeArguments.Any(ClassTypeObjectContext.ContainsTypeParameter)
+                ? definition.Construct(closure.Method.TypeArguments.ToArray())
+                : definition;
+            specializationRegistrar.Register(
+                new ClosureSpecializationCandidate(method, closure.OwnerSpecs));
+        }
         BuildRecursionInfo(bodyGraph);
         _ctx.Generics.BeginBodyEmission();
         EmitRegisteredBodies(plan);

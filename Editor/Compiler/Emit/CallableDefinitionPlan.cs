@@ -15,9 +15,12 @@ internal sealed class CallableDefinitionPlan
     readonly HashSet<IMethodSymbol> _specializationCandidates =
         new(SymbolEqualityComparer.Default);
     IMethodSymbol[] _specializations;
+    ClosureSpecializationCandidate[] _closureSpecializations = Array.Empty<ClosureSpecializationCandidate>();
     internal IEnumerable<IMethodSymbol> SpecializationCandidates => _specializationCandidates;
     public IReadOnlyList<IMethodSymbol> Specializations => _specializations
         ?? throw new InvalidOperationException("Callable specialization plan has not been frozen.");
+    public IReadOnlyList<ClosureSpecializationCandidate> ClosureSpecializations
+        => _closureSpecializations;
 
     public CallableDefinitionPlan(IMethodSymbol[] programMethods, IMethodSymbol[] foreignStatics,
         IMethodSymbol[] structMethods, IMethodSymbol[] baseInstanceMethods,
@@ -45,4 +48,8 @@ internal sealed class CallableDefinitionPlan
         _specializations = _specializationCandidates.ToArray();
         _specializationCandidates.Clear();
     }
+
+    internal void SetClosureSpecializations(IEnumerable<ClosureSpecializationCandidate> closures)
+        => _closureSpecializations = closures?.ToArray()
+            ?? Array.Empty<ClosureSpecializationCandidate>();
 }
