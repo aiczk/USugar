@@ -66,7 +66,7 @@ public sealed class CFieldAddr : CLeaf
 public sealed class CFuncRef : CLeaf
 {
     public readonly string FuncName;
-    public CFuncRef(string funcName) : base("SystemUInt32")
+    public CFuncRef(string funcName) : base(new StorageType("SystemUInt32"))
         => FuncName = funcName ?? throw new ArgumentNullException(nameof(funcName));
     public override string ToString() => $"funcref({FuncName})";
 }

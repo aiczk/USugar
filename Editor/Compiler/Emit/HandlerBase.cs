@@ -114,7 +114,7 @@ public abstract partial class HandlerBase
         {
             ClassAbiPolicy.AssertClosed(targetClass, "runtime type test");
             var vars = _ctx.ClassTypes.TypeObjVarsAssignableTo(targetClass).ToList();
-            if (vars.Count == 0) return Const(false, "SystemBoolean"); // no minted class satisfies it
+            if (vars.Count == 0) return Const(false, new StorageType("SystemBoolean")); // no minted class satisfies it
             // Charter #7 soundness: read bundle[0] ONLY when the value is actually a SystemObjectArray
             // (a class bundle — also structs/tuples/delegates/env/Foo[], whose [0] is never a family
             // typeobj, so the compare is false for them). An `object`-typed value holding a scalar or a
@@ -122,20 +122,20 @@ public abstract partial class HandlerBase
             // ReferenceEquals chain live INSIDE the guard. IsInstanceOfType(null,·) is false → null too.
             var isBundle = ExternCall("SystemType.__IsInstanceOfType__SystemObject__SystemBoolean",
                 new List<CLeaf> { ConstTypeToken(_compilation.CreateArrayTypeSymbol(
-                    _compilation.GetSpecialType(SpecialType.System_Object))), valueVal }, "SystemBoolean");
-            var guarded = _ctx.Builder.AllocScratch("SystemBoolean");
-            EmitAssign(guarded, Const(false, "SystemBoolean"));
+                    _compilation.GetSpecialType(SpecialType.System_Object))), valueVal }, new StorageType("SystemBoolean"));
+            var guarded = _ctx.Builder.AllocScratch(new StorageType("SystemBoolean"));
+            EmitAssign(guarded, Const(false, new StorageType("SystemBoolean")));
             _builder.EmitIf(isBundle, _ =>
             {
-                var typeSlot = AggregateAbi.ReadSlot(_builder, valueVal, 0, AggregateAbi.ArrayType);
+                var typeSlot = AggregateAbi.ReadSlot(_builder, valueVal, 0, new StorageType(AggregateAbi.ArrayType));
                 CLeaf test = null;
                 foreach (var v in vars)
                 {
                     var eq = ExternCall("SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean",
-                        new List<CLeaf> { typeSlot, LoadField(v, AggregateAbi.ArrayType) }, "SystemBoolean");
+                        new List<CLeaf> { typeSlot, LoadField(v, new StorageType(AggregateAbi.ArrayType)) }, new StorageType("SystemBoolean"));
                     test = test == null ? eq
                         : ExternCall("SystemBoolean.__op_LogicalOr__SystemBoolean_SystemBoolean__SystemBoolean",
-                            new List<CLeaf> { test, eq }, "SystemBoolean");
+                            new List<CLeaf> { test, eq }, new StorageType("SystemBoolean"));
                 }
                 EmitAssign(guarded, test);
             }, null);
@@ -147,7 +147,7 @@ public abstract partial class HandlerBase
         return ExternCall(
             "SystemType.__IsInstanceOfType__SystemObject__SystemBoolean",
             new List<CLeaf> { ConstTypeToken(targetType), valueVal },
-            "SystemBoolean");
+            new StorageType("SystemBoolean"));
     }
 
     // The single place a System.Type CONSTANT (type token) is baked — `o is T`, `typeof(T)`, and the
@@ -164,7 +164,7 @@ public abstract partial class HandlerBase
                 + "would bake a null System.Type constant and fault at runtime.");
         var name = GetStorageTypeName(typeSymbol);
         if (name == "VRCUdonCommonInterfacesIUdonEventReceiver") name = "VRCUdonUdonBehaviour";
-        return Const(name, "SystemType");
+        return Const(name, new StorageType("SystemType"));
     }
 
     // ── Core IR convenience methods ──
@@ -212,10 +212,10 @@ public abstract partial class HandlerBase
             || (fromUdonType == "SystemUInt64" && toUdonType == "SystemInt64"))
         {
             var bytes = ExternCall($"SystemBitConverter.__GetBytes__{fromUdonType}__SystemByteArray",
-                new List<CLeaf> { value }, "SystemByteArray");
+                new List<CLeaf> { value }, new StorageType("SystemByteArray"));
             var toMethod = toUdonType == "SystemUInt64" ? "ToUInt64" : "ToInt64";
             return ExternCall($"SystemBitConverter.__{toMethod}__SystemByteArray_SystemInt32__{toUdonType}",
-                new List<CLeaf> { bytes, Const(0, "SystemInt32") }, toUdonType);
+                new List<CLeaf> { bytes, Const(0, new StorageType("SystemInt32")) }, new StorageType(toUdonType));
         }
 
         // Other ulong conversions are UNCHECKED bit ops in C# but SystemConvert.To{U}Int* are CHECKED and
@@ -232,7 +232,7 @@ public abstract partial class HandlerBase
         if (!IsIntegerUdon(fromUdonType) || !IsIntegerUdon(toUdonType)
             || IsLosslessIntegerWiden(fromUdonType, toUdonType))
             return ExternCall(ExternResolver.BuildConvertSignature(fromUdonType, toUdonType),
-                new List<CLeaf> { value }, toUdonType);
+                new List<CLeaf> { value }, new StorageType(toUdonType));
 
         // Reduce the source to its low 32 bits as a SIGNED int32, then wrap / reinterpret to the target width.
         var lowSigned = LowInt32Bits(value, fromUdonType);
@@ -248,7 +248,7 @@ public abstract partial class HandlerBase
         }
         // Unreachable for the supported integer target set; defensive default.
         return ExternCall(ExternResolver.BuildConvertSignature(fromUdonType, toUdonType),
-            new List<CLeaf> { value }, toUdonType);
+            new List<CLeaf> { value }, new StorageType(toUdonType));
     }
 
     /// <summary>CW18: tolerant re-tag of a small-underlying nullable's boxed value. The boxed-object ABI
@@ -296,7 +296,7 @@ public abstract partial class HandlerBase
             ExternResolver.BuildMethodSignature(
                 eqType, "__op_Equality", new[] { eqType, eqType }, "SystemBoolean"),
             new List<CLeaf> { convertedValueVal, constVal },
-            "SystemBoolean");
+            new StorageType("SystemBoolean"));
     }
 
     /// <summary>Low 32 bits of an integer value as a SIGNED int32 (C# unchecked reinterpret). Sources wider than
@@ -308,28 +308,28 @@ public abstract partial class HandlerBase
         var asLong = fromUdonType == "SystemInt64"
             ? value
             : ExternCall(ExternResolver.BuildConvertSignature(fromUdonType, "SystemInt64"),
-                new List<CLeaf> { value }, "SystemInt64");
+                new List<CLeaf> { value }, new StorageType("SystemInt64"));
         // (x << 32) >> 32 : arithmetic right shift sign-extends bit 31 → value in [-2^31, 2^31), safe to ToInt32.
         var shl = ExternCall("SystemInt64.__op_LeftShift__SystemInt64_SystemInt32__SystemInt64",
-            new List<CLeaf> { asLong, Const(32, "SystemInt32") }, "SystemInt64");
+            new List<CLeaf> { asLong, Const(32, new StorageType("SystemInt32")) }, new StorageType("SystemInt64"));
         var sar = ExternCall("SystemInt64.__op_RightShift__SystemInt64_SystemInt32__SystemInt64",
-            new List<CLeaf> { shl, Const(32, "SystemInt32") }, "SystemInt64");
+            new List<CLeaf> { shl, Const(32, new StorageType("SystemInt32")) }, new StorageType("SystemInt64"));
         return ExternCall("SystemConvert.__ToInt32__SystemInt64__SystemInt32",
-            new List<CLeaf> { sar }, "SystemInt32");
+            new List<CLeaf> { sar }, new StorageType("SystemInt32"));
     }
 
     /// <summary>Reinterpret an int32 bit pattern as uint32 (C# unchecked (uint)int): negatives map to +2^32.</summary>
     CLeaf Int32BitsToUInt32(CLeaf int32Val)
     {
         var asLong = ExternCall("SystemConvert.__ToInt64__SystemInt32__SystemInt64",
-            new List<CLeaf> { int32Val }, "SystemInt64");
+            new List<CLeaf> { int32Val }, new StorageType("SystemInt64"));
         var isNeg = ExternCall("SystemInt64.__op_LessThan__SystemInt64_SystemInt64__SystemBoolean",
-            new List<CLeaf> { asLong, Const(0L, "SystemInt64") }, "SystemBoolean");
+            new List<CLeaf> { asLong, Const(0L, new StorageType("SystemInt64")) }, new StorageType("SystemBoolean"));
         var plus = ExternCall("SystemInt64.__op_Addition__SystemInt64_SystemInt64__SystemInt64",
-            new List<CLeaf> { asLong, Const(4294967296L, "SystemInt64") }, "SystemInt64");
-        var wrapped = Select(isNeg, plus, asLong, "SystemInt64");
+            new List<CLeaf> { asLong, Const(4294967296L, new StorageType("SystemInt64")) }, new StorageType("SystemInt64"));
+        var wrapped = Select(isNeg, plus, asLong, new StorageType("SystemInt64"));
         return ExternCall("SystemConvert.__ToUInt32__SystemInt64__SystemUInt32",
-            new List<CLeaf> { wrapped }, "SystemUInt32");
+            new List<CLeaf> { wrapped }, new StorageType("SystemUInt32"));
     }
 
     static bool IsIntegerUdon(string t) => ExternResolver.IntInfo(t).rank > 0;
@@ -348,27 +348,27 @@ public abstract partial class HandlerBase
 
     CLeaf ConvertInRange(CLeaf inRangeInt, string toUdonType)
         => ExternCall(ExternResolver.BuildConvertSignature("SystemInt32", toUdonType),
-            new List<CLeaf> { inRangeInt }, toUdonType);
+            new List<CLeaf> { inRangeInt }, new StorageType(toUdonType));
 
     // ((x % mod) + mod) % mod  →  [0, mod)  : C# unsigned narrowing wrap
     CLeaf ModWrap(CLeaf x, int mod)
     {
         var add = ExternCall("SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32",
-            new List<CLeaf> { Rem(x, mod), Const(mod, "SystemInt32") }, "SystemInt32");
+            new List<CLeaf> { Rem(x, mod), Const(mod, new StorageType("SystemInt32")) }, new StorageType("SystemInt32"));
         return Rem(add, mod);
     }
 
     CLeaf Rem(CLeaf x, int mod)
         => ExternCall("SystemInt32.__op_Remainder__SystemInt32_SystemInt32__SystemInt32",
-            new List<CLeaf> { x, Const(mod, "SystemInt32") }, "SystemInt32");
+            new List<CLeaf> { x, Const(mod, new StorageType("SystemInt32")) }, new StorageType("SystemInt32"));
 
     // (x << s) >> s  →  signed (32-s)-bit truncation with sign extension
     CLeaf ShiftTruncate(CLeaf x, int shift)
     {
         var left = ExternCall("SystemInt32.__op_LeftShift__SystemInt32_SystemInt32__SystemInt32",
-            new List<CLeaf> { x, Const(shift, "SystemInt32") }, "SystemInt32");
+            new List<CLeaf> { x, Const(shift, new StorageType("SystemInt32")) }, new StorageType("SystemInt32"));
         return ExternCall("SystemInt32.__op_RightShift__SystemInt32_SystemInt32__SystemInt32",
-            new List<CLeaf> { left, Const(shift, "SystemInt32") }, "SystemInt32");
+            new List<CLeaf> { left, Const(shift, new StorageType("SystemInt32")) }, new StorageType("SystemInt32"));
     }
 
     /// <summary>True for the integer Udon types whose op_Remainder extern does not exist (Int64/UInt64, and
@@ -385,11 +385,11 @@ public abstract partial class HandlerBase
         // left/right are CLeaf params — stable single-assignment leaves under ANF; the intermediate
         // ExternCall results each bind their own fresh scratch, so neither operand is mutated here.
         var quot = ExternCall($"{t}.__op_Division__{t}_{t}__{t}",
-            new List<CLeaf> { left, right }, t);
+            new List<CLeaf> { left, right }, new StorageType(t));
         var prod = ExternCall($"{t}.__op_Multiplication__{t}_{t}__{t}",
-            new List<CLeaf> { quot, right }, t);
+            new List<CLeaf> { quot, right }, new StorageType(t));
         return ExternCall($"{t}.__op_Subtraction__{t}_{t}__{t}",
-            new List<CLeaf> { left, prod }, t);
+            new List<CLeaf> { left, prod }, new StorageType(t));
     }
 
     /// <summary>Emit a void extern call as a statement. <paramref name="reentrant"/> marks a
@@ -439,7 +439,7 @@ public abstract partial class HandlerBase
 
     /// <summary>Default value for a Udon value type (0 / false). Used for `default(T)`-style fills.</summary>
     protected CLeaf EmitValueTypeDefault(string udonType)
-        => Const(EmitPolicy.ParseConstValue(udonType, udonType == "SystemBoolean" ? "False" : "0"), udonType);
+        => Const(EmitPolicy.ParseConstValue(udonType, udonType == "SystemBoolean" ? "False" : "0"), new StorageType(udonType));
 
     /// <summary>Lifted binary operator on Nullable&lt;T&gt; (null propagation), from already-evaluated operand
     /// values. Arithmetic yields T? (null unless both present); relational yields bool (false if either null);
@@ -565,7 +565,7 @@ public abstract partial class HandlerBase
     protected CLeaf LoadParam(IParameterSymbol param)
     {
         var fieldName = GetParamVarId(param);
-        return LoadField(fieldName, GetStorageTypeName(param.Type));
+        return LoadField(fieldName, new StorageType(GetStorageTypeName(param.Type)));
     }
 
     protected CLeaf EmitEnumToUnderlying(CLeaf operand, ITypeSymbol type)
@@ -579,7 +579,7 @@ public abstract partial class HandlerBase
         return ExternCall(
             $"SystemConvert.__{convertMethod}__SystemObject__{underlyingUdon}",
             new List<CLeaf> { operand },
-            underlyingUdon);
+            new StorageType(underlyingUdon));
     }
 
 
@@ -599,17 +599,17 @@ public abstract partial class HandlerBase
             // the env cell directly so mutation hits the live storage.
             ILocalReferenceOperation lr when _ctx.Closures.TryGetEnvBinding(lr.Local, out _)
                 => EnvEmit.Read(_builder, _ctx, lr.Local,
-                       TypeClassifier.IsAggregateValue(lr.Type) ? "SystemObjectArray" : GetStorageTypeName(lr.Type)),
+                       new StorageType(TypeClassifier.IsAggregateValue(lr.Type) ? "SystemObjectArray" : GetStorageTypeName(lr.Type))),
             ILocalReferenceOperation lr when _localBindings.TryGetValue(lr.Local, out var b)
-                => LoadField(b.Id, TypeClassifier.IsAggregateValue(lr.Type) ? "SystemObjectArray" : GetStorageTypeName(lr.Type)),
+                => LoadField(b.Id, new StorageType(TypeClassifier.IsAggregateValue(lr.Type) ? "SystemObjectArray" : GetStorageTypeName(lr.Type))),
             IParameterReferenceOperation pr when _ctx.Closures.TryGetEnvBinding(pr.Parameter, out _)
                 => EnvEmit.Read(_builder, _ctx, pr.Parameter,
-                       TypeClassifier.IsAggregateValue(pr.Type) ? "SystemObjectArray" : GetStorageTypeName(pr.Type)),
+                       new StorageType(TypeClassifier.IsAggregateValue(pr.Type) ? "SystemObjectArray" : GetStorageTypeName(pr.Type))),
             IParameterReferenceOperation pr
                 => LoadParam(pr.Parameter),
             // Inside a struct method/ctor, `this` is the receiver object[] param, not the Behaviour.
             IInstanceReferenceOperation when _ctx.Methods.CurrentStructReceiverParamId != null
-                => LoadField(_ctx.Methods.CurrentStructReceiverParamId, "SystemObjectArray"),
+                => LoadField(_ctx.Methods.CurrentStructReceiverParamId, new StorageType("SystemObjectArray")),
             // Aggregate field as a RECEIVER (e.g. `o.inner.x`, `this.structField.x`) must NOT be cloned —
             // the access/mutation has to hit the live storage. (Value reads clone in VisitFieldReference.)
             IFieldReferenceOperation fr when TypeClassifier.IsAggregateValue(fr.Type)
@@ -634,7 +634,7 @@ public abstract partial class HandlerBase
             flatId = null;
             return false;
         }
-        flatId = _ctx.Storage.DeclareLocal(local.Name, udonType);
+        flatId = _ctx.Storage.DeclareLocal(local.Name, new StorageType(udonType));
         _localBindings[local] = new EmitContext.LocalBinding(flatId);
         return true;
     }
@@ -820,7 +820,7 @@ public abstract partial class HandlerBase
         var arrType = GetArrayType(arrSym);
         var elemType = GetArrayElemType(arrSym);
         var idxVal = ResolveArrayIndex(arrayVal, arrType, ae.Indices[0]);
-        return ExternCall(ExternResolver.BuildArrayGetSignature(arrType, elemType), new List<CLeaf> { arrayVal, idxVal }, "SystemObject");
+        return ExternCall(ExternResolver.BuildArrayGetSignature(arrType, elemType), new List<CLeaf> { arrayVal, idxVal }, new StorageType("SystemObject"));
     }
 
     /// <summary>Lower a single array-element index operand to its resolved SystemInt32 position,
@@ -841,9 +841,9 @@ public abstract partial class HandlerBase
     /// single-assignment scratch leaf (read once here); <paramref name="operand"/> is the `k` in `^k`.</summary>
     protected CLeaf EmitIndexFromEnd(CLeaf arrayVal, string arrayType, IOperation operand)
     {
-        var lenVal = ExternCall($"{arrayType}.__get_Length__SystemInt32", new List<CLeaf> { arrayVal }, "SystemInt32");
+        var lenVal = ExternCall($"{arrayType}.__get_Length__SystemInt32", new List<CLeaf> { arrayVal }, new StorageType("SystemInt32"));
         var nVal = VisitExpression(operand);
-        return ExternCall("SystemInt32.__op_Subtraction__SystemInt32_SystemInt32__SystemInt32", new List<CLeaf> { lenVal, nVal }, "SystemInt32");
+        return ExternCall("SystemInt32.__op_Subtraction__SystemInt32_SystemInt32__SystemInt32", new List<CLeaf> { lenVal, nVal }, new StorageType("SystemInt32"));
     }
 
     /// <summary>Read an aggregate-typed field as the raw stored object[] (no clone): a nested element via
@@ -856,9 +856,9 @@ public abstract partial class HandlerBase
         // (Category-A: object[] slot resolution); the caller only asks for a raw receiver, never a value read.
         if (fr.Instance != null && fr.Instance.Type is INamedTypeSymbol cont && TypeClassifier.IsObjectArrayEmulated(cont)
             && _ctx.Aggregates.GetLayout(cont).TryGetIndex(fr.Field, out var idx))
-            return AggregateAbi.ReadSlot(_builder, LoadInstanceRaw(fr.Instance), idx, "SystemObject");
+            return AggregateAbi.ReadSlot(_builder, LoadInstanceRaw(fr.Instance), idx, new StorageType("SystemObject"));
         if (fr.Instance is IInstanceReferenceOperation)
-            return LoadField(fr.Field.Name, "SystemObjectArray");
+            return LoadField(fr.Field.Name, new StorageType("SystemObjectArray"));
         return VisitExpression(fr); // cross-behaviour aggregate field etc. — rare
     }
 
@@ -884,7 +884,7 @@ public abstract partial class HandlerBase
                         break;
                     }
                     var udonType = GetStorageTypeName(localRef.Type);
-                    var localId = _ctx.Storage.DeclareLocal(localRef.Local.Name, udonType);
+                    var localId = _ctx.Storage.DeclareLocal(localRef.Local.Name, new StorageType(udonType));
                     _localBindings[localRef.Local] = new EmitContext.LocalBinding(localId);
                     EmitStoreField(localId, value);
                 }
@@ -911,7 +911,7 @@ public abstract partial class HandlerBase
                 else
                 {
                     var udonType = GetStorageTypeName(existingLocal.Type);
-                    var newId = _ctx.Storage.DeclareLocal(existingLocal.Local.Name, udonType);
+                    var newId = _ctx.Storage.DeclareLocal(existingLocal.Local.Name, new StorageType(udonType));
                     _localBindings[existingLocal.Local] = new EmitContext.LocalBinding(newId);
                     EmitStoreField(newId, value);
                 }
@@ -986,7 +986,7 @@ public abstract partial class HandlerBase
     {
         for (int i = 0; i < tuple.Elements.Length; i++)
         {
-            var elemVal = AggregateAbi.ReadSlot(_builder, arrValue, i, "SystemObject");
+            var elemVal = AggregateAbi.ReadSlot(_builder, arrValue, i, new StorageType("SystemObject"));
             var toAssign = AggregateAbi.CloneIfAggregate(_builder, elemVal,
                 ResolveType(tuple.Elements[i].Type), _ctx.Aggregates.GetLayout);
             AssignToLValue(tuple.Elements[i], toAssign, preparedStores);
@@ -1135,7 +1135,7 @@ public abstract partial class HandlerBase
         {
             var vtContainingType = GetStorageTypeName(fieldRef.Field.ContainingType);
             var vtInstanceVal = plan.Value.Instance is IInstanceReferenceOperation
-                ? LoadField(_ctx.Storage.DeclareThisOnce(vtContainingType), vtContainingType)
+                ? LoadField(_ctx.Storage.DeclareThisOnce(new StorageType(vtContainingType)), new StorageType(vtContainingType))
                 : VisitExpression(plan.Value.Instance);
             var vtSig = ExternResolver.BuildFieldSetSignature(
                 vtContainingType, fieldRef.Field.Name, GetStorageTypeName(fieldRef.Field.Type));
@@ -1186,7 +1186,7 @@ public abstract partial class HandlerBase
     protected void EmitCrossBehaviourFieldSet(IFieldSymbol field, CLeaf instanceVal, CLeaf value)
     {
         RejectProgramLocalCrossBehaviourFieldWrite(field);
-        var nameConst = Const(field.Name, "SystemString");
+        var nameConst = Const(field.Name, new StorageType("SystemString"));
         EmitExternVoid(
             ExternResolver.EventReceiverSetProgramVariable,
             new List<CLeaf> { instanceVal, nameConst, value });
@@ -1238,7 +1238,7 @@ public abstract partial class HandlerBase
             var (vsRecv, vsIdx) = StageAccessorDispatchLegs(propRef);
             return vsVal =>
             {
-                var vSlot = _ctx.Builder.AllocScratch(GetStorageTypeName(propRef.Property.Type));
+                var vSlot = _ctx.Builder.AllocScratch(new StorageType(GetStorageTypeName(propRef.Property.Type)));
                 EmitAssign(vSlot, vsVal);
                 EmitAccessorDispatch(propRef.Property, vsRecvTy, vsSetter, vsRecv, vsIdx, SlotRef(vSlot));
             };
@@ -1314,7 +1314,7 @@ public abstract partial class HandlerBase
         }
 
         var instanceVal = propRef.Instance is IInstanceReferenceOperation
-            ? LoadField(_ctx.Storage.DeclareThisOnce(propContainingUdon), propContainingUdon)
+            ? LoadField(_ctx.Storage.DeclareThisOnce(new StorageType(propContainingUdon)), new StorageType(propContainingUdon))
             : VisitExpression(propRef.Instance);
         var containingType = propContainingUdon;
         var valueType = GetStorageTypeName(propRef.Property.Type);
@@ -1396,10 +1396,10 @@ public abstract partial class HandlerBase
                     // Wave-12 r2 [V1]: a reentrant setter dispatch pulls its value copy-in inside the
                     // spill window (preSpillStmts: 1 — the SetProgramVariable emitted just above).
                     bool ifaceSetReentrant = TryMarkReentrantCrossDispatch(propRef, ifaceSetter);
-                    var paramNameConst = Const(ifaceSetterMl.ParamIds[0], "SystemString");
+                    var paramNameConst = Const(ifaceSetterMl.ParamIds[0], new StorageType("SystemString"));
                     EmitExternVoid(ExternResolver.EventReceiverSetProgramVariable, new List<CLeaf> { instanceVal, paramNameConst, srcVal });
                     EmitExternVoid(ExternResolver.EventReceiverSendCustomEvent,
-                        new List<CLeaf> { instanceVal, Const(LayoutPlanner.InterfaceDispatchName(ifaceSetter, ifaceSetterMl), "SystemString") },
+                        new List<CLeaf> { instanceVal, Const(LayoutPlanner.InterfaceDispatchName(ifaceSetter, ifaceSetterMl), new StorageType("SystemString")) },
                         ifaceSetReentrant, ifaceSetReentrant ? 1 : 0);
                 }
                 else if (ExternResolver.IsUdonSharpBehaviour(propRef.Property.ContainingType) && propRef.Instance is not IInstanceReferenceOperation)
@@ -1418,7 +1418,7 @@ public abstract partial class HandlerBase
                     if (isAutoSet)
                     {
                         // Auto-property or read-only: direct SetProgramVariable("PropertyName")
-                        var nameConst = Const(propRef.Property.Name, "SystemString");
+                        var nameConst = Const(propRef.Property.Name, new StorageType("SystemString"));
                         EmitExternVoid(ExternResolver.EventReceiverSetProgramVariable, new List<CLeaf> { instanceVal, nameConst, srcVal });
                     }
                     else
@@ -1430,11 +1430,11 @@ public abstract partial class HandlerBase
                         var (exportName, setParamIds, _) = GetCalleeLayout(propRef.Property.SetMethod);
 
                         // SetProgramVariable for the value parameter
-                        var paramNameConst = Const(setParamIds[0], "SystemString");
+                        var paramNameConst = Const(setParamIds[0], new StorageType("SystemString"));
                         EmitExternVoid(ExternResolver.EventReceiverSetProgramVariable, new List<CLeaf> { instanceVal, paramNameConst, srcVal });
 
                         // SendCustomEvent to invoke setter
-                        var eventConst = Const(exportName, "SystemString");
+                        var eventConst = Const(exportName, new StorageType("SystemString"));
                         EmitExternVoid(ExternResolver.EventReceiverSendCustomEvent, new List<CLeaf> { instanceVal, eventConst },
                             setReentrant, setReentrant ? 1 : 0);
                     }
@@ -1478,7 +1478,7 @@ public abstract partial class HandlerBase
         {
             var param = localFunc.Parameters[pi];
             var paramId = NameAllocator.ParamId(param.Name, idx);
-            _ctx.Storage.DeclareVar(paramId, GetStorageTypeName(param.Type));
+            _ctx.Storage.DeclareVar(paramId, new StorageType(GetStorageTypeName(param.Type)));
             lfParamIds[pi] = paramId;
         }
         // Stage 2 §1.3/§6: a CAPTURING hoisted closure carries a hidden trailing __envp param — the
@@ -1491,7 +1491,7 @@ public abstract partial class HandlerBase
         if (_ctx.Closures.CaptureScope != null && _ctx.Closures.CaptureScope.IsCapturingClosure(localFunc))
         {
             var envpId = $"__{idx}_{funcName}__envp";
-            _ctx.Storage.DeclareVar(envpId, EnvEmit.EnvType);
+            _ctx.Storage.DeclareVar(envpId, new StorageType(EnvEmit.EnvType));
             var withEnvp = new string[lfParamIds.Length + 1];
             System.Array.Copy(lfParamIds, withEnvp, lfParamIds.Length);
             withEnvp[lfParamIds.Length] = envpId;
@@ -1506,10 +1506,10 @@ public abstract partial class HandlerBase
         if (!localFunc.ReturnsVoid)
         {
             var retType = GetStorageTypeName(localFunc.ReturnType);
-            func.ReturnType = retType;
+            func.ReturnType = new StorageType(retType);
             var retId = NameAllocator.RetId(funcName, idx);
-            func.ReturnSlots.Add(new ReturnSlot(retId, retType));
-            retSlots = new[] { new ReturnSlot(retId, retType) };
+            func.ReturnSlots.Add(new ReturnSlot(retId, new StorageType(retType)));
+            retSlots = new[] { new ReturnSlot(retId, new StorageType(retType)) };
         }
 
         var record = new MethodContext.ClosureSpec
@@ -1633,7 +1633,7 @@ public abstract partial class HandlerBase
         _ctx.Synthetics.EnumToString.Add(e);
         // `value` is already the enum's underlying-typed leaf (GetStorageTypeName(enum) == underlying), which the
         // helper's parameter type matches — pass it straight through.
-        return InternalCall(EnumToStringHelperName(e), new List<CLeaf> { value }, "SystemString");
+        return InternalCall(EnumToStringHelperName(e), new List<CLeaf> { value }, new StorageType("SystemString"));
     }
 
     /// <summary>Variance design (2026-07-04 §2.3, B-2): register the (outer sig-S, inner sig-T) pair a
@@ -1778,7 +1778,7 @@ public abstract partial class HandlerBase
             && constructed.MethodKind is not (MethodKind.LambdaMethod or MethodKind.LocalFunction))
         {
             var receiverId = NameAllocator.ParamId("this", idx);
-            _ctx.Storage.DeclareVar(receiverId, "SystemObjectArray");
+            _ctx.Storage.DeclareVar(receiverId, new StorageType("SystemObjectArray"));
             func.ParamFieldNames.Add(receiverId);
         }
 
@@ -1787,7 +1787,7 @@ public abstract partial class HandlerBase
         {
             var param = constructed.Parameters[pi];
             var paramId = NameAllocator.ParamId(param.Name, idx);
-            _ctx.Storage.DeclareVar(paramId, GetStorageTypeName(param.Type));
+            _ctx.Storage.DeclareVar(paramId, new StorageType(GetStorageTypeName(param.Type)));
             gsParamIds[pi] = paramId;
         }
         string specEnvpFieldId = null;
@@ -1796,7 +1796,7 @@ public abstract partial class HandlerBase
         if (_ctx.Closures.CaptureScope != null && _ctx.Closures.CaptureScope.IsCapturingClosure(constructed))
         {
             var envpId = $"__{idx}_{SanitizeId(constructed.Name)}__envp";
-            _ctx.Storage.DeclareVar(envpId, EnvEmit.EnvType);
+            _ctx.Storage.DeclareVar(envpId, new StorageType(EnvEmit.EnvType));
             var withEnvp = new string[gsParamIds.Length + 1];
             System.Array.Copy(gsParamIds, withEnvp, gsParamIds.Length);
             withEnvp[gsParamIds.Length] = envpId;
@@ -1811,10 +1811,10 @@ public abstract partial class HandlerBase
         {
             var retType = GetStorageTypeName(constructed.ReturnType);
             var retId = NameAllocator.RetId(SanitizeId(constructed.Name), idx);
-            _ctx.Storage.DeclareVar(retId, retType);
-            func.ReturnType = retType;
-            func.ReturnSlots.Add(new ReturnSlot(retId, retType));
-            specRetSlots = new[] { new ReturnSlot(retId, retType) };
+            _ctx.Storage.DeclareVar(retId, new StorageType(retType));
+            func.ReturnType = new StorageType(retType);
+            func.ReturnSlots.Add(new ReturnSlot(retId, new StorageType(retType)));
+            specRetSlots = new[] { new ReturnSlot(retId, new StorageType(retType)) };
             if (!closureKind) _methodReturns[constructed] = specRetSlots;
         }
 
@@ -1878,7 +1878,7 @@ public abstract partial class HandlerBase
     {
         if (targetMethod == null || _ctx.Closures.CaptureScope == null
             || !_ctx.Closures.CaptureScope.IsCapturingClosure(targetMethod.OriginalDefinition))
-            return Const(null, "SystemObject");
+            return Const(null, new StorageType("SystemObject"));
         if (!_ctx.Closures.CaptureScope.ClosureScopes.TryGetValue(targetMethod.OriginalDefinition, out var closureScope)
             || closureScope.BindingScope == null)
             throw new System.InvalidOperationException(
@@ -1955,7 +1955,7 @@ public abstract partial class HandlerBase
             var memberFunc = _methodFunctions[member];
             var recvLeaf = targetInstance
                 ?? (_ctx.Methods.CurrentStructReceiverParamId is { } rid
-                    ? LoadField(rid, AggregateAbi.ArrayType)
+                    ? LoadField(rid, new StorageType(AggregateAbi.ArrayType))
                     : throw new System.NotSupportedException(
                         $"Method group '{targetMethod.Name}' has no receiver in this context."));
             if (member.ContainingType is INamedTypeSymbol cloneCt && TypeClassifier.IsUserStruct(cloneCt))
@@ -2167,7 +2167,7 @@ public abstract partial class HandlerBase
                 }
 
                 var innerBundle = DelegateAbi.EmitBundleMint(_builder, () => targetInstance,
-                    Const(bridgeExportName, "SystemString"), Const(0u, "SystemUInt32"), Const(null, "SystemObject"));
+                    Const(bridgeExportName, new StorageType("SystemString")), Const(0u, new StorageType("SystemUInt32")), Const(null, new StorageType("SystemObject")));
 
                 // The wrapper's INNER dispatch must speak the inner bundle's OWN protocol — here, the
                 // third-party target's OWN signature (targetMethod, sig-T), never sig-S: DelegateAbi.Method names
@@ -2247,7 +2247,7 @@ public abstract partial class HandlerBase
     /// so no copy-back protocol exists here).</summary>
     protected (CLeaf Recv, List<CLeaf> IndexArgs) StageAccessorDispatchLegs(IPropertyReferenceOperation op)
     {
-        var recvSlot = _ctx.Builder.AllocScratch(AggregateAbi.ArrayType);
+        var recvSlot = _ctx.Builder.AllocScratch(new StorageType(AggregateAbi.ArrayType));
         EmitAssign(recvSlot, LoadInstanceRaw(op.Instance));
         var staged = new List<CLeaf>();
         if (op.Property.IsIndexer)
@@ -2257,7 +2257,7 @@ public abstract partial class HandlerBase
             {
                 var argType = i < op.Property.Parameters.Length
                     ? GetStorageTypeName(op.Property.Parameters[i].Type) : "SystemObject";
-                var s = _ctx.Builder.AllocScratch(argType);
+                var s = _ctx.Builder.AllocScratch(new StorageType(argType));
                 EmitAssign(s, ordered[i]);
                 staged.Add(SlotRef(s));
             }
@@ -2286,42 +2286,42 @@ public abstract partial class HandlerBase
                 new List<CLeaf> { Const(
                     $"USugar: NullReferenceException — virtual {memberKind} '{prop.ContainingType.Name}.{prop.Name}' has no minted implementor, so the receiver must be null ({_classSymbol.Name}). "
                     + (isSet ? "Skipping the write." : "Returning default."),
-                    "SystemString") });
-            return isSet ? null : SlotRef(_ctx.Builder.AllocScratch(GetStorageTypeName(prop.Type)));
+                    new StorageType("SystemString")) });
+            return isSet ? null : SlotRef(_ctx.Builder.AllocScratch(new StorageType(GetStorageTypeName(prop.Type))));
         }
 
         if (recvTy.IsSealed || targets.Count == 1)
             return EmitAccessorImplAccess(targets[0], prop, recv, indexArgs, setValue);
 
-        var typeObjSlot = _ctx.Builder.AllocScratch(AggregateAbi.ArrayType);
-        EmitAssign(typeObjSlot, AggregateAbi.ReadSlot(_builder, recv, 0, AggregateAbi.ArrayType));
-        int destSlot = isSet ? -1 : _ctx.Builder.AllocScratch(GetStorageTypeName(prop.Type));
+        var typeObjSlot = _ctx.Builder.AllocScratch(new StorageType(AggregateAbi.ArrayType));
+        EmitAssign(typeObjSlot, AggregateAbi.ReadSlot(_builder, recv, 0, new StorageType(AggregateAbi.ArrayType)));
+        int destSlot = isSet ? -1 : _ctx.Builder.AllocScratch(new StorageType(GetStorageTypeName(prop.Type)));
 
         // Phase-A armor: a null receiver or a laundered non-bundle value matches no arm — LogError +
         // default(read)/skip(write), never silent (mirrors EmitVirtualChain's matched flag).
-        var matched = _ctx.Builder.AllocScratch("SystemBoolean");
-        EmitAssign(matched, Const(false, "SystemBoolean"));
+        var matched = _ctx.Builder.AllocScratch(new StorageType("SystemBoolean"));
+        EmitAssign(matched, Const(false, new StorageType("SystemBoolean")));
 
         foreach (var t in targets)
         {
             var eq = ExternCall("SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean",
-                new List<CLeaf> { SlotRef(typeObjSlot), LoadField(t.TypeObjVar, AggregateAbi.ArrayType) }, "SystemBoolean");
+                new List<CLeaf> { SlotRef(typeObjSlot), LoadField(t.TypeObjVar, new StorageType(AggregateAbi.ArrayType)) }, new StorageType("SystemBoolean"));
             _builder.EmitIf(eq, _ =>
             {
-                EmitAssign(matched, Const(true, "SystemBoolean"));
+                EmitAssign(matched, Const(true, new StorageType("SystemBoolean")));
                 var val = EmitAccessorImplAccess(t, prop, recv, indexArgs, setValue);
                 if (!isSet) EmitAssign(destSlot, val);
             }, null);
         }
 
         var noMatch = ExternCall("SystemBoolean.__op_UnaryNegation__SystemBoolean__SystemBoolean",
-            new List<CLeaf> { SlotRef(matched) }, "SystemBoolean");
+            new List<CLeaf> { SlotRef(matched) }, new StorageType("SystemBoolean"));
         _builder.EmitIf(noMatch, _ =>
             EmitExternVoid("UnityEngineDebug.__LogError__SystemObject__SystemVoid",
                 new List<CLeaf> { Const(
                     $"USugar: NullReferenceException — virtual {memberKind} '{prop.ContainingType.Name}.{prop.Name}' accessed on a null or non-class receiver ({_classSymbol.Name}). "
                     + (isSet ? "Skipping the write." : "Returning default."),
-                    "SystemString") }), null);
+                    new StorageType("SystemString")) }), null);
 
         return isSet ? null : SlotRef(destSlot);
     }
@@ -2345,7 +2345,7 @@ public abstract partial class HandlerBase
                 AggregateAbi.WriteSlot(_builder, recv, slotIdx, setValue);
                 return null;
             }
-            var slotVal = AggregateAbi.ReadSlot(_builder, recv, slotIdx, "SystemObject");
+            var slotVal = AggregateAbi.ReadSlot(_builder, recv, slotIdx, new StorageType("SystemObject"));
             return prop.Type is INamedTypeSymbol slotAgg && TypeClassifier.IsAggregateValue(slotAgg)
                 ? AggregateAbi.DeepClone(_builder, slotVal, slotAgg, _ctx.Aggregates.GetLayout) : slotVal;
         }
@@ -2406,9 +2406,9 @@ public abstract partial class HandlerBase
         var targets = _ctx.VirtualDispatch.ResolveTargets(recvTy, slot);
         AssertClosedVirtualDispatch(recvTy, targets, slot);
 
-        var recvSlot = _ctx.Builder.AllocScratch(AggregateAbi.ArrayType);
+        var recvSlot = _ctx.Builder.AllocScratch(new StorageType(AggregateAbi.ArrayType));
         EmitAssign(recvSlot, recv);
-        var destSlot = _ctx.Builder.AllocScratch("SystemString");
+        var destSlot = _ctx.Builder.AllocScratch(new StorageType("SystemString"));
 
         void EmitNoMatch()
         {
@@ -2416,8 +2416,8 @@ public abstract partial class HandlerBase
                 new List<CLeaf> { Const(
                     $"USugar: ToString dispatch on '{recvTy.Name}' matched no minted class — non-class "
                     + $"receiver ({_classSymbol.Name}). Returning \"\".",
-                    "SystemString") });
-            EmitAssign(destSlot, Const("", "SystemString"));
+                    new StorageType("SystemString")) });
+            EmitAssign(destSlot, Const("", new StorageType("SystemString")));
         }
 
         _builder.EmitIf(NullableAbi.IsNull(_builder, SlotRef(recvSlot)), _ =>
@@ -2427,8 +2427,8 @@ public abstract partial class HandlerBase
                     new List<CLeaf> { Const(
                         $"USugar: NullReferenceException — ToString() on a null '{recvTy.Name}' receiver "
                         + $"({_classSymbol.Name}). Returning \"\".",
-                        "SystemString") });
-            EmitAssign(destSlot, Const("", "SystemString"));
+                        new StorageType("SystemString")) });
+            EmitAssign(destSlot, Const("", new StorageType("SystemString")));
         }, _ =>
         {
             if (targets.Count == 0)
@@ -2444,25 +2444,25 @@ public abstract partial class HandlerBase
                 return;
             }
 
-            var typeObjSlot = _ctx.Builder.AllocScratch(AggregateAbi.ArrayType);
-            EmitAssign(typeObjSlot, AggregateAbi.ReadSlot(_builder, SlotRef(recvSlot), 0, AggregateAbi.ArrayType));
-            var matched = _ctx.Builder.AllocScratch("SystemBoolean");
-            EmitAssign(matched, Const(false, "SystemBoolean"));
+            var typeObjSlot = _ctx.Builder.AllocScratch(new StorageType(AggregateAbi.ArrayType));
+            EmitAssign(typeObjSlot, AggregateAbi.ReadSlot(_builder, SlotRef(recvSlot), 0, new StorageType(AggregateAbi.ArrayType)));
+            var matched = _ctx.Builder.AllocScratch(new StorageType("SystemBoolean"));
+            EmitAssign(matched, Const(false, new StorageType("SystemBoolean")));
 
             foreach (var t in targets)
             {
                 var eq = ExternCall("SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean",
-                    new List<CLeaf> { SlotRef(typeObjSlot), LoadField(t.TypeObjVar, AggregateAbi.ArrayType) },
-                    "SystemBoolean");
+                    new List<CLeaf> { SlotRef(typeObjSlot), LoadField(t.TypeObjVar, new StorageType(AggregateAbi.ArrayType)) },
+                    new StorageType("SystemBoolean"));
                 _builder.EmitIf(eq, _ =>
                 {
-                    EmitAssign(matched, Const(true, "SystemBoolean"));
+                    EmitAssign(matched, Const(true, new StorageType("SystemBoolean")));
                     EmitAssign(destSlot, ClassToStringArmValue(t, SlotRef(recvSlot), useOverrides));
                 }, null);
             }
 
             var noMatch = ExternCall("SystemBoolean.__op_UnaryNegation__SystemBoolean__SystemBoolean",
-                new List<CLeaf> { SlotRef(matched) }, "SystemBoolean");
+                new List<CLeaf> { SlotRef(matched) }, new StorageType("SystemBoolean"));
             _builder.EmitIf(noMatch, _ => EmitNoMatch(), null);
         });
 
@@ -2476,7 +2476,7 @@ public abstract partial class HandlerBase
     CLeaf ClassToStringArmValue(VDispatchTarget t, CLeaf recvRef, bool useOverrides)
         => useOverrides && TypeClassifier.IsUserClass(t.Impl.ContainingType)
             ? EmitCallToMethod(ResolveStructMember(t.Impl), new List<CLeaf> { recvRef })
-            : Const(ClassAbi.RuntimeTypeName(t.Concrete), "SystemString");
+            : Const(ClassAbi.RuntimeTypeName(t.Concrete), new StorageType("SystemString"));
 
     // ── Call helpers ──
 
@@ -2537,7 +2537,7 @@ public abstract partial class HandlerBase
             pairs.Add((paramIds[i], orderedArgs[i]));
         var returns = accessor.ReturnsVoid ? System.Array.Empty<ReturnSlot>() : GetCalleeReturns(accessor);
         var retType = accessor.ReturnsVoid ? "SystemVoid" : GetStorageTypeName(accessor.ReturnType);
-        return CrossCall(instanceVal, exportName, pairs, returns, retType, reentrant);
+        return CrossCall(instanceVal, exportName, pairs, returns, new StorageType(retType), reentrant);
     }
 
     /// <summary>[W6] gate shared by the read/write/compound indexer sites: a user-behaviour indexer
@@ -2646,11 +2646,11 @@ public abstract partial class HandlerBase
             pairs.Add((ml.ParamIds[i], orderedArgs[i]));
         var rets = ml.Returns.ToArray();
         if (rets.Length > 1)
-            return CrossCall(instanceVal, ml.ExportName, pairs, rets, "SystemVoid", reentrant);
+            return CrossCall(instanceVal, ml.ExportName, pairs, rets, new StorageType("SystemVoid"), reentrant);
         var dispatchName = LayoutPlanner.InterfaceDispatchName(accessor, ml);
         var retType = accessor.ReturnsVoid ? "SystemVoid" : GetStorageTypeName(accessor.ReturnType);
         return CrossCall(instanceVal, dispatchName, pairs,
-            accessor.ReturnsVoid ? System.Array.Empty<ReturnSlot>() : rets, retType, reentrant);
+            accessor.ReturnsVoid ? System.Array.Empty<ReturnSlot>() : rets, new StorageType(retType), reentrant);
     }
 
     // ── Delegate value comparison (design §2.5; shared by OperatorHandler `==`/`!=` and the
@@ -2760,7 +2760,7 @@ public abstract partial class HandlerBase
             func = _ctx.Methods.GetClosureSpec(target, _ctx.ComposeClosureKeyArgs(target)).Func;
         else if (!_methodFunctions.TryGetValue(target, out func))
             throw new InvalidOperationException($"No CFunction registered for method '{target.Name}'");
-        var retType = func.ReturnType ?? "SystemVoid";
+        var retType = func.ReturnType ?? new StorageType("SystemVoid");
 
         // Recursion-cycle edge: the callee can re-enter the current method and clobber its param/local fields
         // and shared scratch slots (Udon's flat heap shares them across frames). Record the edge + the named

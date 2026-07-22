@@ -17,7 +17,7 @@ public class StrictVerifyShadowTests
         UdonTypeFactRegistry typeFacts = null)
     {
         var func = new CFunction(funcName);
-        func.Slots.Add(new SlotDecl(0, slotType, SlotClass.Frame));
+        func.Slots.Add(new SlotDecl(0, new StorageType(slotType), SlotClass.Frame));
         func.Body.Stmts.Add(new CAssign(0, value));
         CoreVerify.VerifyFunction(func, typeFacts);
         return func;
@@ -27,7 +27,7 @@ public class StrictVerifyShadowTests
     public void EnumInterop_NoFactName_Throws()
     {
         var ex = Assert.Throws<VerificationException>(
-            () => VerifyAssign(Fn("enumguess_unknown"), "FooMysteryType", new CConst(1, "SystemInt32")));
+            () => VerifyAssign(Fn("enumguess_unknown"), "FooMysteryType", new CConst(1, new StorageType("SystemInt32"))));
         Assert.Contains("no fact recorded for 'FooMysteryType'", ex.Message);
     }
 
@@ -36,7 +36,7 @@ public class StrictVerifyShadowTests
     {
         var facts = new UdonTypeFactRegistry();
         facts.RecordForTest("SsvFakeSdkEnum", isEnum: true, isValueType: true);
-        VerifyAssign(Fn("enumguess_fact"), "SsvFakeSdkEnum", new CConst(1, "SystemInt32"), facts); // no throw
+        VerifyAssign(Fn("enumguess_fact"), "SsvFakeSdkEnum", new CConst(1, new StorageType("SystemInt32")), facts); // no throw
     }
 
     [Fact]
@@ -49,7 +49,7 @@ public class StrictVerifyShadowTests
         facts.RecordForTest("SsvFakeGameObject", isEnum: false, isValueType: false);
         var ex = Assert.Throws<VerificationException>(
             () => VerifyAssign(Fn("refguess_valuetype"), "SsvFakeBounds",
-                new CConst(null, "SsvFakeGameObject"), facts));
+                new CConst(null, new StorageType("SsvFakeGameObject")), facts));
         Assert.Contains("'SsvFakeBounds' is a fact value type", ex.Message);
     }
 
@@ -60,7 +60,7 @@ public class StrictVerifyShadowTests
         facts.RecordForTest("SsvFakeTransform", isEnum: false, isValueType: false);
         facts.RecordForTest("SsvFakeCollider", isEnum: false, isValueType: false);
         VerifyAssign(Fn("refguess_bothref"), "SsvFakeTransform",
-            new CConst(null, "SsvFakeCollider"), facts); // no throw
+            new CConst(null, new StorageType("SsvFakeCollider")), facts); // no throw
     }
 
     [Fact]

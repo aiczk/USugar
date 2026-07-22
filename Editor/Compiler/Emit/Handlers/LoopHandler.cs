@@ -154,7 +154,7 @@ public class LoopHandler : HandlerBase, IOperationHandler
         string loopVarId = null;
         if (!loopVarCaptured)
         {
-            loopVarId = _ctx.Storage.DeclareLocal(loopLocal.Name, elemType);
+            loopVarId = _ctx.Storage.DeclareLocal(loopLocal.Name, new StorageType(elemType));
             _localBindings[loopLocal] = new EmitContext.LocalBinding(loopVarId);
         }
         // [Q4]/[R1] the iteration variable is READONLY in C# — struct method receivers reaching it
@@ -163,32 +163,32 @@ public class LoopHandler : HandlerBase, IOperationHandler
         _ctx.ForeachIterationLocals.Add(loopLocal);
 
         // Index variable
-        var idxSlot = _ctx.Builder.AllocScratch("SystemInt32");
+        var idxSlot = _ctx.Builder.AllocScratch(new StorageType("SystemInt32"));
 
         // Cache array length before the loop
-        var lenSlot = _ctx.Builder.AllocScratch("SystemInt32");
+        var lenSlot = _ctx.Builder.AllocScratch(new StorageType("SystemInt32"));
         EmitAssign(lenSlot, ExternCall("SystemArray.__get_Length__SystemInt32",
-            new List<CLeaf> { collVal }, "SystemInt32"));
+            new List<CLeaf> { collVal }, new StorageType("SystemInt32")));
 
         _builder.EmitFor(
             _ =>
             {
                 // Init: idx = 0
-                EmitAssign(idxSlot, Const(0, "SystemInt32"));
+                EmitAssign(idxSlot, Const(0, new StorageType("SystemInt32")));
             },
             // Condition: idx < cachedLen — built via a factory so A-normal form re-materializes it inside the
             // loop's cond block (re-evaluated each iteration), not bound once before the loop.
             () => ExternCall(
                 "SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean",
                 new List<CLeaf> { SlotRef(idxSlot), SlotRef(lenSlot) },
-                "SystemBoolean"),
+                new StorageType("SystemBoolean")),
             _ =>
             {
                 // Update: idx++
                 var nextIdx = ExternCall(
                     "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32",
-                    new List<CLeaf> { SlotRef(idxSlot), Const(1, "SystemInt32") },
-                    "SystemInt32");
+                    new List<CLeaf> { SlotRef(idxSlot), Const(1, new StorageType("SystemInt32")) },
+                    new StorageType("SystemInt32"));
                 EmitAssign(idxSlot, nextIdx);
             },
             _ =>
@@ -200,7 +200,7 @@ public class LoopHandler : HandlerBase, IOperationHandler
                 CLeaf elemVal = ExternCall(
                     ExternResolver.BuildArrayGetSignature(arrayType, elemAccessorType),
                     new List<CLeaf> { collVal, SlotRef(idxSlot) },
-                    elemType);
+                    new StorageType(elemType));
                 // foreach yields a by-value COPY of the element. For an aggregate (struct/tuple) element the
                 // raw __Get__ returns the LIVE backing object[]; deep-clone it so mutating the loop variable
                 // does not write through to the array (C# value-copy semantics; mirrors VisitArrayElementReference).

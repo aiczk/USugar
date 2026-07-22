@@ -136,19 +136,19 @@ public static class AggregateAbi
     public static CLeaf Allocate(CoreBuilder builder, int slotCount)
         => builder.ExternCall(
             ExternResolver.BuildArrayCtorSignature(ArrayType),
-            new List<CLeaf> { builder.Const(slotCount, "SystemInt32") },
-            ArrayType);
+            new List<CLeaf> { builder.Const(slotCount, new StorageType("SystemInt32")) },
+            new StorageType(ArrayType));
 
-    public static CLeaf ReadSlot(CoreBuilder builder, CLeaf instance, int index, string udonType)
+    public static CLeaf ReadSlot(CoreBuilder builder, CLeaf instance, int index, StorageType udonType)
         => builder.ExternCall(
             ExternResolver.BuildArrayGetSignature(ArrayType, ElementType),
-            new List<CLeaf> { instance, builder.Const(index, "SystemInt32") },
+            new List<CLeaf> { instance, builder.Const(index, new StorageType("SystemInt32")) },
             udonType);
 
     public static void WriteSlot(CoreBuilder builder, CLeaf instance, int index, CLeaf value)
         => builder.EmitExternVoid(
             ExternResolver.BuildArraySetSignature(ArrayType, ElementType),
-            new List<CLeaf> { instance, builder.Const(index, "SystemInt32"), value });
+            new List<CLeaf> { instance, builder.Const(index, new StorageType("SystemInt32")), value });
 
     public static CLeaf MintTupleLiteral(CoreBuilder builder, ITupleOperation tuple,
         Func<IOperation, CLeaf> emitValue)
@@ -164,7 +164,7 @@ public static class AggregateAbi
     public static void DefaultInitialize(CoreBuilder builder, CValue arrayVal, AggregateLayout layout,
         Func<INamedTypeSymbol, AggregateLayout> getLayout, Func<ITypeSymbol, string> getUdonType)
     {
-        var slot = builder.AllocScratch(ArrayType);
+        var slot = builder.AllocScratch(new StorageType(ArrayType));
         builder.EmitAssign(slot, arrayVal);
         foreach (var fi in layout.Fields)
         {
@@ -173,7 +173,7 @@ public static class AggregateAbi
             if (fieldType is INamedTypeSymbol nested && TypeClassifier.IsAggregateValue(nested))
             {
                 var nestedLayout = getLayout(nested);
-                var subSlot = builder.AllocScratch(ArrayType);
+                var subSlot = builder.AllocScratch(new StorageType(ArrayType));
                 builder.EmitAssign(subSlot, Allocate(builder, nestedLayout.SlotCount));
                 WriteSlot(builder, builder.SlotRef(slot), i, builder.SlotRef(subSlot));
                 DefaultInitialize(builder, builder.SlotRef(subSlot), nestedLayout, getLayout, getUdonType);
@@ -182,7 +182,7 @@ public static class AggregateAbi
 
             var defVal = DefaultScalarValue(fieldType);
             if (defVal != null)
-                WriteSlot(builder, builder.SlotRef(slot), i, builder.Const(defVal, getUdonType(fieldType)));
+                WriteSlot(builder, builder.SlotRef(slot), i, builder.Const(defVal, new StorageType(getUdonType(fieldType))));
         }
     }
 
@@ -191,18 +191,18 @@ public static class AggregateAbi
 
     public static void DefaultInitializeField(CoreBuilder builder, string fieldName, AggregateLayout layout,
         Func<INamedTypeSymbol, AggregateLayout> getLayout, Func<ITypeSymbol, string> getUdonType)
-        => DefaultInitialize(builder, builder.LoadField(fieldName, ArrayType), layout, getLayout, getUdonType);
+        => DefaultInitialize(builder, builder.LoadField(fieldName, new StorageType(ArrayType)), layout, getLayout, getUdonType);
 
     /// <summary>Deep value-copy of an object[]-backed struct/tuple aggregate. Nested aggregate elements
     /// are recursively cloned; scalar boxed elements are copied by reference.</summary>
     public static CLeaf DeepClone(CoreBuilder builder, CLeaf source, AggregateLayout layout,
         Func<INamedTypeSymbol, AggregateLayout> getLayout)
     {
-        var dstSlot = builder.AllocScratch(ArrayType);
+        var dstSlot = builder.AllocScratch(new StorageType(ArrayType));
         builder.EmitAssign(dstSlot, Allocate(builder, layout.Count));
         for (int i = 0; i < layout.Count; i++)
         {
-            var elem = ReadSlot(builder, source, i, ElementType);
+            var elem = ReadSlot(builder, source, i, new StorageType(ElementType));
             CLeaf copy = layout.Fields[i].Type is INamedTypeSymbol nested && TypeClassifier.IsAggregateValue(nested)
                 ? DeepClone(builder, elem, getLayout(nested), getLayout)
                 : elem;
@@ -219,7 +219,7 @@ public static class AggregateAbi
     public static CLeaf MintDefault(CoreBuilder builder, AggregateLayout layout,
         Func<INamedTypeSymbol, AggregateLayout> getLayout, Func<ITypeSymbol, string> getUdonType)
     {
-        var slot = builder.AllocScratch(ArrayType);
+        var slot = builder.AllocScratch(new StorageType(ArrayType));
         builder.EmitAssign(slot, Allocate(builder, layout.SlotCount));
         DefaultInitialize(builder, builder.SlotRef(slot), layout, getLayout, getUdonType);
         return builder.SlotRef(slot);
@@ -292,7 +292,7 @@ public static class AggregateAbi
                     if (name != null && layout.TryGetIndex(name, out var slotIdx)
                         && memberType is INamedTypeSymbol nested && TypeClassifier.IsObjectArrayEmulated(nested))
                     {
-                        var nestedVal = ReadSlot(builder, instanceValue, slotIdx, ElementType);
+                        var nestedVal = ReadSlot(builder, instanceValue, slotIdx, new StorageType(ElementType));
                         EmitObjectInitializer(builder, nestedVal, getLayout(nested), memberInit.Initializer,
                             emitValue, getLayout, emitSetterAssignment);
                         break;
@@ -366,7 +366,7 @@ public static class ClassAbi
         Action<CLeaf> emitTypeObj = null)
     {
         RejectUnsupportedMembers(classTy);
-        var slot = builder.AllocScratch(AggregateAbi.ArrayType);
+        var slot = builder.AllocScratch(new StorageType(AggregateAbi.ArrayType));
         builder.EmitAssign(slot, AggregateAbi.Allocate(builder, layout.SlotCount));
         var instance = builder.SlotRef(slot);
         emitDefaultInitialize(instance);
@@ -524,7 +524,7 @@ public static class ClassAbi
         var signature = kind == BinaryOperatorKind.NotEquals
             ? "SystemObject.__op_Inequality__SystemObject_SystemObject__SystemBoolean"
             : "SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean";
-        return builder.ExternCall(signature, new List<CLeaf> { left, right }, "SystemBoolean");
+        return builder.ExternCall(signature, new List<CLeaf> { left, right }, new StorageType("SystemBoolean"));
     }
 
     public static bool IsObjectMethodOnUserClass(IMethodSymbol method, ITypeSymbol receiverType)

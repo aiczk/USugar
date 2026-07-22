@@ -18,7 +18,9 @@ public static class TypeParamScope
         // TypeParamId comparer (design 2026-07-10 symbol-intern v2, T1): per-walk fresh twins of one
         // declared type parameter ([Y8]) hash/compare onto one key, so a body-walk reference hits the
         // call-site walk's binding directly — the EmitMethod rekey block this replaces is retired.
+#pragma warning disable RS1024 // Fresh symbol twins require declaration-identity comparison here.
         var dict = new Dictionary<ITypeParameterSymbol, ITypeSymbol>(TypeParamIdComparer.Instance);
+#pragma warning restore RS1024
         if (baseMap != null)
             foreach (var kv in baseMap) dict[kv.Key] = kv.Value;
         foreach (var (parms, args) in bindings)

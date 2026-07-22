@@ -23,7 +23,7 @@ public class CoreFlatOptimizerTests
     static CFunction MakeFunc(string name = "test") => new(name) { Shape = Shape.Flat };
 
     static CExprStmt Call(int? dest, string sig, List<CLeaf> args, string retType) =>
-        new(new CExternCall(sig, args, retType, dest));
+        new(new CExternCall(sig, args, new StorageType(retType), dest));
 
     // ========================================================================
     // Slot Coalescing
@@ -36,14 +36,14 @@ public class CoreFlatOptimizerTests
         // slot1 (Scratch, Int32): def at inst 2, used at inst 3
         // Non-overlapping → merged to same ID
         var func = MakeFunc();
-        func.Slots.Add(new SlotDecl(0, "SystemInt32", SlotClass.Scratch));
-        func.Slots.Add(new SlotDecl(1, "SystemInt32", SlotClass.Scratch));
+        func.Slots.Add(new SlotDecl(0, new StorageType("SystemInt32"), SlotClass.Scratch));
+        func.Slots.Add(new SlotDecl(1, new StorageType("SystemInt32"), SlotClass.Scratch));
 
         var bb0 = func.NewBlock();
-        bb0.Stmts.Add(new CAssign(0, new CConst(10, "SystemInt32")));            // pos 0: def slot0
-        bb0.Stmts.Add(new CStoreField("f1", new CSlotRef(0, "SystemInt32")));    // pos 1: use slot0 (last use)
-        bb0.Stmts.Add(new CAssign(1, new CConst(20, "SystemInt32")));            // pos 2: def slot1
-        bb0.Stmts.Add(new CStoreField("f2", new CSlotRef(1, "SystemInt32")));    // pos 3: use slot1 (last use)
+        bb0.Stmts.Add(new CAssign(0, new CConst(10, new StorageType("SystemInt32"))));            // pos 0: def slot0
+        bb0.Stmts.Add(new CStoreField("f1", new CSlotRef(0, new StorageType("SystemInt32"))));    // pos 1: use slot0 (last use)
+        bb0.Stmts.Add(new CAssign(1, new CConst(20, new StorageType("SystemInt32"))));            // pos 2: def slot1
+        bb0.Stmts.Add(new CStoreField("f2", new CSlotRef(1, new StorageType("SystemInt32"))));    // pos 3: use slot1 (last use)
         bb0.Terminator = new CRet();
 
         var module = MakeModule(func);
@@ -68,14 +68,14 @@ public class CoreFlatOptimizerTests
     {
         // slot0 and slot1 are both live at the same time → must not merge
         var func = MakeFunc();
-        func.Slots.Add(new SlotDecl(0, "SystemInt32", SlotClass.Scratch));
-        func.Slots.Add(new SlotDecl(1, "SystemInt32", SlotClass.Scratch));
+        func.Slots.Add(new SlotDecl(0, new StorageType("SystemInt32"), SlotClass.Scratch));
+        func.Slots.Add(new SlotDecl(1, new StorageType("SystemInt32"), SlotClass.Scratch));
 
         var bb0 = func.NewBlock();
-        bb0.Stmts.Add(new CAssign(0, new CConst(10, "SystemInt32")));            // pos 0: def slot0
-        bb0.Stmts.Add(new CAssign(1, new CConst(20, "SystemInt32")));            // pos 1: def slot1 (slot0 still live)
+        bb0.Stmts.Add(new CAssign(0, new CConst(10, new StorageType("SystemInt32"))));            // pos 0: def slot0
+        bb0.Stmts.Add(new CAssign(1, new CConst(20, new StorageType("SystemInt32"))));            // pos 1: def slot1 (slot0 still live)
         bb0.Stmts.Add(Call(null, "Foo__SystemVoid",
-            new List<CLeaf> { new CSlotRef(0, "SystemInt32"), new CSlotRef(1, "SystemInt32") },
+            new List<CLeaf> { new CSlotRef(0, new StorageType("SystemInt32")), new CSlotRef(1, new StorageType("SystemInt32")) },
             "SystemVoid"));                                                       // pos 2: use both
         bb0.Terminator = new CRet();
 
@@ -97,14 +97,14 @@ public class CoreFlatOptimizerTests
     {
         // slot0 (Int32) and slot1 (Boolean): non-overlapping but different types → separate
         var func = MakeFunc();
-        func.Slots.Add(new SlotDecl(0, "SystemInt32", SlotClass.Scratch));
-        func.Slots.Add(new SlotDecl(1, "SystemBoolean", SlotClass.Scratch));
+        func.Slots.Add(new SlotDecl(0, new StorageType("SystemInt32"), SlotClass.Scratch));
+        func.Slots.Add(new SlotDecl(1, new StorageType("SystemBoolean"), SlotClass.Scratch));
 
         var bb0 = func.NewBlock();
-        bb0.Stmts.Add(new CAssign(0, new CConst(42, "SystemInt32")));
-        bb0.Stmts.Add(new CStoreField("f1", new CSlotRef(0, "SystemInt32")));
-        bb0.Stmts.Add(new CAssign(1, new CConst(true, "SystemBoolean")));
-        bb0.Stmts.Add(new CStoreField("f2", new CSlotRef(1, "SystemBoolean")));
+        bb0.Stmts.Add(new CAssign(0, new CConst(42, new StorageType("SystemInt32"))));
+        bb0.Stmts.Add(new CStoreField("f1", new CSlotRef(0, new StorageType("SystemInt32"))));
+        bb0.Stmts.Add(new CAssign(1, new CConst(true, new StorageType("SystemBoolean"))));
+        bb0.Stmts.Add(new CStoreField("f2", new CSlotRef(1, new StorageType("SystemBoolean"))));
         bb0.Terminator = new CRet();
 
         var module = MakeModule(func);
@@ -119,14 +119,14 @@ public class CoreFlatOptimizerTests
     {
         // Two Pinned slots with non-overlapping lifetimes → never coalesced
         var func = MakeFunc();
-        func.Slots.Add(new SlotDecl(0, "SystemInt32", SlotClass.Pinned, "__param_x"));
-        func.Slots.Add(new SlotDecl(1, "SystemInt32", SlotClass.Pinned, "__param_y"));
+        func.Slots.Add(new SlotDecl(0, new StorageType("SystemInt32"), SlotClass.Pinned, "__param_x"));
+        func.Slots.Add(new SlotDecl(1, new StorageType("SystemInt32"), SlotClass.Pinned, "__param_y"));
 
         var bb0 = func.NewBlock();
-        bb0.Stmts.Add(new CAssign(0, new CConst(10, "SystemInt32")));
-        bb0.Stmts.Add(new CStoreField("f1", new CSlotRef(0, "SystemInt32")));
-        bb0.Stmts.Add(new CAssign(1, new CConst(20, "SystemInt32")));
-        bb0.Stmts.Add(new CStoreField("f2", new CSlotRef(1, "SystemInt32")));
+        bb0.Stmts.Add(new CAssign(0, new CConst(10, new StorageType("SystemInt32"))));
+        bb0.Stmts.Add(new CStoreField("f1", new CSlotRef(0, new StorageType("SystemInt32"))));
+        bb0.Stmts.Add(new CAssign(1, new CConst(20, new StorageType("SystemInt32"))));
+        bb0.Stmts.Add(new CStoreField("f2", new CSlotRef(1, new StorageType("SystemInt32"))));
         bb0.Terminator = new CRet();
 
         var module = MakeModule(func);
@@ -158,20 +158,20 @@ public class CoreFlatOptimizerTests
         // loop-carried. The genuinely-loop-carried hazard is pinned separately by
         // Coalesce_LoopCarriedSlot_LiveAcrossBody_DoesNotMerge below.)
         var func = MakeFunc();
-        func.Slots.Add(new SlotDecl(0, "SystemInt32", SlotClass.Scratch));
-        func.Slots.Add(new SlotDecl(1, "SystemInt32", SlotClass.Scratch));
+        func.Slots.Add(new SlotDecl(0, new StorageType("SystemInt32"), SlotClass.Scratch));
+        func.Slots.Add(new SlotDecl(1, new StorageType("SystemInt32"), SlotClass.Scratch));
 
         var header = func.NewBlock(); // bb0
         var body = func.NewBlock();   // bb1
         var exit = func.NewBlock();   // bb2
 
         // header: slot0 = condition, branch on slot0
-        header.Stmts.Add(new CLoadField(0, "cond", "SystemInt32"));
-        header.Terminator = new CBranch(new CSlotRef(0, "SystemInt32"), body.Id, exit.Id);
+        header.Stmts.Add(new CLoadField(0, "cond", new StorageType("SystemInt32")));
+        header.Terminator = new CBranch(new CSlotRef(0, new StorageType("SystemInt32")), body.Id, exit.Id);
 
         // body: slot1 = 42, use slot1, jump back to header
-        body.Stmts.Add(new CAssign(1, new CConst(42, "SystemInt32")));
-        body.Stmts.Add(new CStoreField("result", new CSlotRef(1, "SystemInt32")));
+        body.Stmts.Add(new CAssign(1, new CConst(42, new StorageType("SystemInt32"))));
+        body.Stmts.Add(new CStoreField("result", new CSlotRef(1, new StorageType("SystemInt32"))));
         body.Terminator = new CJump(header.Id); // back-edge
 
         // exit: return
@@ -194,9 +194,9 @@ public class CoreFlatOptimizerTests
         // (slot1 = 42, before slot0 is read at "b"). slot0 and slot1 are therefore simultaneously live and
         // must NOT be coalesced onto one physical slot — merging would clobber the carried value.
         var func = MakeFunc();
-        func.Slots.Add(new SlotDecl(0, "SystemInt32", SlotClass.Scratch));
-        func.Slots.Add(new SlotDecl(1, "SystemInt32", SlotClass.Scratch));
-        func.Slots.Add(new SlotDecl(2, "SystemBoolean", SlotClass.Scratch));
+        func.Slots.Add(new SlotDecl(0, new StorageType("SystemInt32"), SlotClass.Scratch));
+        func.Slots.Add(new SlotDecl(1, new StorageType("SystemInt32"), SlotClass.Scratch));
+        func.Slots.Add(new SlotDecl(2, new StorageType("SystemBoolean"), SlotClass.Scratch));
 
         var pre = func.NewBlock();    // bb0 preheader
         var header = func.NewBlock(); // bb1
@@ -204,17 +204,17 @@ public class CoreFlatOptimizerTests
         var exit = func.NewBlock();   // bb3
 
         // preheader: slot0 = base (defined once, never redefined)
-        pre.Stmts.Add(new CLoadField(0, "base", "SystemInt32"));
+        pre.Stmts.Add(new CLoadField(0, "base", new StorageType("SystemInt32")));
         pre.Terminator = new CJump(header.Id);
 
         // header: slot2 = cond; branch
-        header.Stmts.Add(new CLoadField(2, "cond", "SystemBoolean"));
-        header.Terminator = new CBranch(new CSlotRef(2, "SystemBoolean"), body.Id, exit.Id);
+        header.Stmts.Add(new CLoadField(2, "cond", new StorageType("SystemBoolean")));
+        header.Terminator = new CBranch(new CSlotRef(2, new StorageType("SystemBoolean")), body.Id, exit.Id);
 
         // body: slot1 = 42; use slot1; then READ slot0 (carried) → both live at once; back-edge
-        body.Stmts.Add(new CAssign(1, new CConst(42, "SystemInt32")));
-        body.Stmts.Add(new CStoreField("a", new CSlotRef(1, "SystemInt32")));
-        body.Stmts.Add(new CStoreField("b", new CSlotRef(0, "SystemInt32")));
+        body.Stmts.Add(new CAssign(1, new CConst(42, new StorageType("SystemInt32"))));
+        body.Stmts.Add(new CStoreField("a", new CSlotRef(1, new StorageType("SystemInt32"))));
+        body.Stmts.Add(new CStoreField("b", new CSlotRef(0, new StorageType("SystemInt32"))));
         body.Terminator = new CJump(header.Id); // back-edge → slot0 live across body
 
         exit.Terminator = new CRet();
@@ -236,25 +236,25 @@ public class CoreFlatOptimizerTests
         // slot1 defined and used only after loop
         // These should still merge even with a loop present
         var func = MakeFunc();
-        func.Slots.Add(new SlotDecl(0, "SystemInt32", SlotClass.Scratch));
-        func.Slots.Add(new SlotDecl(1, "SystemInt32", SlotClass.Scratch));
-        func.Slots.Add(new SlotDecl(2, "SystemBoolean", SlotClass.Scratch));
+        func.Slots.Add(new SlotDecl(0, new StorageType("SystemInt32"), SlotClass.Scratch));
+        func.Slots.Add(new SlotDecl(1, new StorageType("SystemInt32"), SlotClass.Scratch));
+        func.Slots.Add(new SlotDecl(2, new StorageType("SystemBoolean"), SlotClass.Scratch));
 
         var header = func.NewBlock();
         var body = func.NewBlock();
         var exit = func.NewBlock();
 
-        header.Stmts.Add(new CLoadField(2, "flag", "SystemBoolean"));
-        header.Terminator = new CBranch(new CSlotRef(2, "SystemBoolean"), body.Id, exit.Id);
+        header.Stmts.Add(new CLoadField(2, "flag", new StorageType("SystemBoolean")));
+        header.Terminator = new CBranch(new CSlotRef(2, new StorageType("SystemBoolean")), body.Id, exit.Id);
 
         // body: use slot0 entirely within body
-        body.Stmts.Add(new CAssign(0, new CConst(10, "SystemInt32")));
-        body.Stmts.Add(new CStoreField("x", new CSlotRef(0, "SystemInt32")));
+        body.Stmts.Add(new CAssign(0, new CConst(10, new StorageType("SystemInt32"))));
+        body.Stmts.Add(new CStoreField("x", new CSlotRef(0, new StorageType("SystemInt32"))));
         body.Terminator = new CJump(header.Id);
 
         // exit: use slot1 entirely after loop
-        exit.Stmts.Add(new CAssign(1, new CConst(20, "SystemInt32")));
-        exit.Stmts.Add(new CStoreField("y", new CSlotRef(1, "SystemInt32")));
+        exit.Stmts.Add(new CAssign(1, new CConst(20, new StorageType("SystemInt32"))));
+        exit.Stmts.Add(new CStoreField("y", new CSlotRef(1, new StorageType("SystemInt32"))));
         exit.Terminator = new CRet();
 
         var module = MakeModule(func);
@@ -273,29 +273,29 @@ public class CoreFlatOptimizerTests
     {
         // Verify all instruction types get operands remapped after coalescing
         var func = MakeFunc();
-        func.Slots.Add(new SlotDecl(0, "SystemInt32", SlotClass.Scratch));
-        func.Slots.Add(new SlotDecl(1, "SystemInt32", SlotClass.Scratch));
-        func.Slots.Add(new SlotDecl(2, "SystemBoolean", SlotClass.Scratch));
+        func.Slots.Add(new SlotDecl(0, new StorageType("SystemInt32"), SlotClass.Scratch));
+        func.Slots.Add(new SlotDecl(1, new StorageType("SystemInt32"), SlotClass.Scratch));
+        func.Slots.Add(new SlotDecl(2, new StorageType("SystemBoolean"), SlotClass.Scratch));
 
         var bb0 = func.NewBlock();
         var bb1 = func.NewBlock();
 
         // slot0: def and last use in first two instructions
-        bb0.Stmts.Add(new CAssign(0, new CConst(10, "SystemInt32")));            // def slot0
-        bb0.Stmts.Add(new CStoreField("f1", new CSlotRef(0, "SystemInt32")));    // last use slot0
+        bb0.Stmts.Add(new CAssign(0, new CConst(10, new StorageType("SystemInt32"))));            // def slot0
+        bb0.Stmts.Add(new CStoreField("f1", new CSlotRef(0, new StorageType("SystemInt32"))));    // last use slot0
 
         // slot1: def after slot0 is dead → should coalesce to slot0
-        bb0.Stmts.Add(new CAssign(1, new CConst(20, "SystemInt32")));            // def slot1
+        bb0.Stmts.Add(new CAssign(1, new CConst(20, new StorageType("SystemInt32"))));            // def slot1
         bb0.Stmts.Add(Call(null, "Bar__SystemVoid",
-            new List<CLeaf> { new CSlotRef(1, "SystemInt32") },
+            new List<CLeaf> { new CSlotRef(1, new StorageType("SystemInt32")) },
             "SystemVoid"));                                                       // use slot1 as arg
 
         // slot2 (Boolean): used in branch
-        bb0.Stmts.Add(new CAssign(2, new CConst(true, "SystemBoolean")));
-        bb0.Terminator = new CBranch(new CSlotRef(2, "SystemBoolean"), bb1.Id, bb1.Id);
+        bb0.Stmts.Add(new CAssign(2, new CConst(true, new StorageType("SystemBoolean"))));
+        bb0.Terminator = new CBranch(new CSlotRef(2, new StorageType("SystemBoolean")), bb1.Id, bb1.Id);
 
         // slot1 also used in return value in bb1
-        bb1.Terminator = new CRet(new CSlotRef(1, "SystemInt32"));
+        bb1.Terminator = new CRet(new CSlotRef(1, new StorageType("SystemInt32")));
 
         var module = MakeModule(func);
         CoreFlatOptimizer.CoalesceSlots(module);
@@ -337,14 +337,14 @@ public class CoreFlatOptimizerTests
         // slot0 and slot1 are both read by the same call — genuinely, simultaneously live. A merge map
         // that (incorrectly) coalesces slot1 into slot0 must be rejected.
         var func = MakeFunc();
-        func.Slots.Add(new SlotDecl(0, "SystemInt32", SlotClass.Scratch));
-        func.Slots.Add(new SlotDecl(1, "SystemInt32", SlotClass.Scratch));
+        func.Slots.Add(new SlotDecl(0, new StorageType("SystemInt32"), SlotClass.Scratch));
+        func.Slots.Add(new SlotDecl(1, new StorageType("SystemInt32"), SlotClass.Scratch));
 
         var bb0 = func.NewBlock();
-        bb0.Stmts.Add(new CAssign(0, new CConst(10, "SystemInt32")));
-        bb0.Stmts.Add(new CAssign(1, new CConst(20, "SystemInt32")));
+        bb0.Stmts.Add(new CAssign(0, new CConst(10, new StorageType("SystemInt32"))));
+        bb0.Stmts.Add(new CAssign(1, new CConst(20, new StorageType("SystemInt32"))));
         bb0.Stmts.Add(Call(null, "Foo__SystemVoid",
-            new List<CLeaf> { new CSlotRef(0, "SystemInt32"), new CSlotRef(1, "SystemInt32") },
+            new List<CLeaf> { new CSlotRef(0, new StorageType("SystemInt32")), new CSlotRef(1, new StorageType("SystemInt32")) },
             "SystemVoid"));
         bb0.Terminator = new CRet();
 
@@ -358,14 +358,14 @@ public class CoreFlatOptimizerTests
     public void VerifyNoInterference_NonOverlappingSlotsMappedToSamePhysical_Passes()
     {
         var func = MakeFunc();
-        func.Slots.Add(new SlotDecl(0, "SystemInt32", SlotClass.Scratch));
-        func.Slots.Add(new SlotDecl(1, "SystemInt32", SlotClass.Scratch));
+        func.Slots.Add(new SlotDecl(0, new StorageType("SystemInt32"), SlotClass.Scratch));
+        func.Slots.Add(new SlotDecl(1, new StorageType("SystemInt32"), SlotClass.Scratch));
 
         var bb0 = func.NewBlock();
-        bb0.Stmts.Add(new CAssign(0, new CConst(10, "SystemInt32")));
-        bb0.Stmts.Add(new CStoreField("f1", new CSlotRef(0, "SystemInt32")));
-        bb0.Stmts.Add(new CAssign(1, new CConst(20, "SystemInt32")));
-        bb0.Stmts.Add(new CStoreField("f2", new CSlotRef(1, "SystemInt32")));
+        bb0.Stmts.Add(new CAssign(0, new CConst(10, new StorageType("SystemInt32"))));
+        bb0.Stmts.Add(new CStoreField("f1", new CSlotRef(0, new StorageType("SystemInt32"))));
+        bb0.Stmts.Add(new CAssign(1, new CConst(20, new StorageType("SystemInt32"))));
+        bb0.Stmts.Add(new CStoreField("f2", new CSlotRef(1, new StorageType("SystemInt32"))));
         bb0.Terminator = new CRet();
 
         var mapping = new Dictionary<int, int> { { 1, 0 } };
@@ -397,11 +397,11 @@ public class CoreFlatOptimizerTests
         //   bb5 (inner exit): outerAcc = outerAcc + innerAcc; i++              -> bb1 (back-edge)
         //   bb6 (exit): return outerAcc
         var func = MakeFunc();
-        func.Slots.Add(new SlotDecl(0, "SystemInt32", SlotClass.Scratch)); // outerAcc
-        func.Slots.Add(new SlotDecl(1, "SystemInt32", SlotClass.Scratch)); // i
-        func.Slots.Add(new SlotDecl(2, "SystemInt32", SlotClass.Scratch)); // innerAcc
-        func.Slots.Add(new SlotDecl(3, "SystemInt32", SlotClass.Scratch)); // j
-        func.Slots.Add(new SlotDecl(4, "SystemInt32", SlotClass.Scratch)); // per-iteration temp
+        func.Slots.Add(new SlotDecl(0, new StorageType("SystemInt32"), SlotClass.Scratch)); // outerAcc
+        func.Slots.Add(new SlotDecl(1, new StorageType("SystemInt32"), SlotClass.Scratch)); // i
+        func.Slots.Add(new SlotDecl(2, new StorageType("SystemInt32"), SlotClass.Scratch)); // innerAcc
+        func.Slots.Add(new SlotDecl(3, new StorageType("SystemInt32"), SlotClass.Scratch)); // j
+        func.Slots.Add(new SlotDecl(4, new StorageType("SystemInt32"), SlotClass.Scratch)); // per-iteration temp
 
         var bb0 = func.NewBlock();
         var bb1 = func.NewBlock();
@@ -411,41 +411,41 @@ public class CoreFlatOptimizerTests
         var bb5 = func.NewBlock();
         var bb6 = func.NewBlock();
 
-        bb0.Stmts.Add(new CAssign(0, new CConst(0, "SystemInt32")));
-        bb0.Stmts.Add(new CAssign(1, new CConst(0, "SystemInt32")));
+        bb0.Stmts.Add(new CAssign(0, new CConst(0, new StorageType("SystemInt32"))));
+        bb0.Stmts.Add(new CAssign(1, new CConst(0, new StorageType("SystemInt32"))));
         bb0.Terminator = new CJump(bb1.Id);
 
         bb1.Stmts.Add(Call(5, "SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean",
-            new List<CLeaf> { new CSlotRef(1, "SystemInt32"), new CConst(4, "SystemInt32") }, "SystemBoolean"));
-        bb1.Terminator = new CBranch(new CSlotRef(5, "SystemBoolean"), bb2.Id, bb6.Id);
+            new List<CLeaf> { new CSlotRef(1, new StorageType("SystemInt32")), new CConst(4, new StorageType("SystemInt32")) }, "SystemBoolean"));
+        bb1.Terminator = new CBranch(new CSlotRef(5, new StorageType("SystemBoolean")), bb2.Id, bb6.Id);
 
-        bb2.Stmts.Add(new CAssign(2, new CConst(0, "SystemInt32")));
-        bb2.Stmts.Add(new CAssign(3, new CConst(0, "SystemInt32")));
+        bb2.Stmts.Add(new CAssign(2, new CConst(0, new StorageType("SystemInt32"))));
+        bb2.Stmts.Add(new CAssign(3, new CConst(0, new StorageType("SystemInt32"))));
         bb2.Terminator = new CJump(bb3.Id);
 
         bb3.Stmts.Add(Call(6, "SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean",
-            new List<CLeaf> { new CSlotRef(3, "SystemInt32"), new CConst(3, "SystemInt32") }, "SystemBoolean"));
-        bb3.Terminator = new CBranch(new CSlotRef(6, "SystemBoolean"), bb4.Id, bb5.Id);
+            new List<CLeaf> { new CSlotRef(3, new StorageType("SystemInt32")), new CConst(3, new StorageType("SystemInt32")) }, "SystemBoolean"));
+        bb3.Terminator = new CBranch(new CSlotRef(6, new StorageType("SystemBoolean")), bb4.Id, bb5.Id);
 
         bb4.Stmts.Add(Call(4, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32",
-            new List<CLeaf> { new CSlotRef(1, "SystemInt32"), new CSlotRef(3, "SystemInt32") }, "SystemInt32"));
+            new List<CLeaf> { new CSlotRef(1, new StorageType("SystemInt32")), new CSlotRef(3, new StorageType("SystemInt32")) }, "SystemInt32"));
         bb4.Stmts.Add(Call(7, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32",
-            new List<CLeaf> { new CSlotRef(2, "SystemInt32"), new CSlotRef(4, "SystemInt32") }, "SystemInt32"));
-        bb4.Stmts.Add(new CAssign(2, new CSlotRef(7, "SystemInt32")));
+            new List<CLeaf> { new CSlotRef(2, new StorageType("SystemInt32")), new CSlotRef(4, new StorageType("SystemInt32")) }, "SystemInt32"));
+        bb4.Stmts.Add(new CAssign(2, new CSlotRef(7, new StorageType("SystemInt32"))));
         bb4.Stmts.Add(Call(8, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32",
-            new List<CLeaf> { new CSlotRef(3, "SystemInt32"), new CConst(1, "SystemInt32") }, "SystemInt32"));
-        bb4.Stmts.Add(new CAssign(3, new CSlotRef(8, "SystemInt32")));
+            new List<CLeaf> { new CSlotRef(3, new StorageType("SystemInt32")), new CConst(1, new StorageType("SystemInt32")) }, "SystemInt32"));
+        bb4.Stmts.Add(new CAssign(3, new CSlotRef(8, new StorageType("SystemInt32"))));
         bb4.Terminator = new CJump(bb3.Id); // inner back-edge
 
         bb5.Stmts.Add(Call(9, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32",
-            new List<CLeaf> { new CSlotRef(0, "SystemInt32"), new CSlotRef(2, "SystemInt32") }, "SystemInt32"));
-        bb5.Stmts.Add(new CAssign(0, new CSlotRef(9, "SystemInt32")));
+            new List<CLeaf> { new CSlotRef(0, new StorageType("SystemInt32")), new CSlotRef(2, new StorageType("SystemInt32")) }, "SystemInt32"));
+        bb5.Stmts.Add(new CAssign(0, new CSlotRef(9, new StorageType("SystemInt32"))));
         bb5.Stmts.Add(Call(10, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32",
-            new List<CLeaf> { new CSlotRef(1, "SystemInt32"), new CConst(1, "SystemInt32") }, "SystemInt32"));
-        bb5.Stmts.Add(new CAssign(1, new CSlotRef(10, "SystemInt32")));
+            new List<CLeaf> { new CSlotRef(1, new StorageType("SystemInt32")), new CConst(1, new StorageType("SystemInt32")) }, "SystemInt32"));
+        bb5.Stmts.Add(new CAssign(1, new CSlotRef(10, new StorageType("SystemInt32"))));
         bb5.Terminator = new CJump(bb1.Id); // outer back-edge
 
-        bb6.Terminator = new CRet(new CSlotRef(0, "SystemInt32"));
+        bb6.Terminator = new CRet(new CSlotRef(0, new StorageType("SystemInt32")));
 
         var module = MakeModule(func);
         CoreFlatOptimizer.CoalesceSlots(module); // must not throw (interference self-check runs inside)
@@ -486,9 +486,9 @@ public class CoreFlatOptimizerTests
         // visiting bb3, so bb3 precedes bb2 in RPO — exactly the ordering that let the real bug's
         // "found" block's write look later than a use it doesn't dominate.
         var func = MakeFunc();
-        func.Slots.Add(new SlotDecl(0, "SystemInt32", SlotClass.Scratch));  // used-before-def
-        func.Slots.Add(new SlotDecl(1, "SystemInt32", SlotClass.Scratch)); // earlier, naively non-overlapping
-        func.Slots.Add(new SlotDecl(2, "SystemBoolean", SlotClass.Scratch)); // branch condition
+        func.Slots.Add(new SlotDecl(0, new StorageType("SystemInt32"), SlotClass.Scratch));  // used-before-def
+        func.Slots.Add(new SlotDecl(1, new StorageType("SystemInt32"), SlotClass.Scratch)); // earlier, naively non-overlapping
+        func.Slots.Add(new SlotDecl(2, new StorageType("SystemBoolean"), SlotClass.Scratch)); // branch condition
 
         var bb0 = func.NewBlock();
         var bb1 = func.NewBlock();
@@ -496,19 +496,19 @@ public class CoreFlatOptimizerTests
         var bb3 = func.NewBlock();
         var bb4 = func.NewBlock();
 
-        bb0.Stmts.Add(new CAssign(2, new CConst(true, "SystemBoolean")));
-        bb0.Stmts.Add(new CAssign(1, new CConst(5, "SystemInt32")));
-        bb0.Stmts.Add(new CStoreField("f1", new CSlotRef(1, "SystemInt32"))); // slot1 dead right here
+        bb0.Stmts.Add(new CAssign(2, new CConst(true, new StorageType("SystemBoolean"))));
+        bb0.Stmts.Add(new CAssign(1, new CConst(5, new StorageType("SystemInt32"))));
+        bb0.Stmts.Add(new CStoreField("f1", new CSlotRef(1, new StorageType("SystemInt32")))); // slot1 dead right here
         bb0.Terminator = new CJump(bb1.Id);
 
-        bb1.Terminator = new CBranch(new CSlotRef(2, "SystemBoolean"), bb2.Id, bb3.Id);
+        bb1.Terminator = new CBranch(new CSlotRef(2, new StorageType("SystemBoolean")), bb2.Id, bb3.Id);
 
-        bb2.Stmts.Add(new CAssign(0, new CConst(42, "SystemInt32")));
+        bb2.Stmts.Add(new CAssign(0, new CConst(42, new StorageType("SystemInt32"))));
         bb2.Terminator = new CJump(bb4.Id);
 
         bb3.Terminator = new CJump(bb4.Id); // never assigns slot0
 
-        bb4.Stmts.Add(new CStoreField("result", new CSlotRef(0, "SystemInt32")));
+        bb4.Stmts.Add(new CStoreField("result", new CSlotRef(0, new StorageType("SystemInt32"))));
         bb4.Terminator = new CRet();
 
         var module = MakeModule(func);

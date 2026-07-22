@@ -128,10 +128,10 @@ public abstract class AssignmentHandlerBase : HandlerBase
                 if (_ctx.Aggregates.GetLayout(aggCapPropType).TryGetIndex(aggCapPropRef.Property.Name, out var capSlotIdx))
                 {
                     var recv = LoadInstanceRaw(aggCapPropRef.Instance);
-                    CLeaf slotVal = AggregateAbi.ReadSlot(_builder, recv, capSlotIdx, "SystemObject");
+                    CLeaf slotVal = AggregateAbi.ReadSlot(_builder, recv, capSlotIdx, new StorageType("SystemObject"));
                     if (aggCapPropRef.Property.Type is INamedTypeSymbol capSlotAgg && TypeClassifier.IsAggregateValue(capSlotAgg))
                         slotVal = AggregateAbi.DeepClone(_builder, slotVal, capSlotAgg, _ctx.Aggregates.GetLayout);
-                    return new LValuePlan { Value = slotVal, ArrayVal = recv, IndexVal = Const(capSlotIdx, "SystemInt32") };
+                    return new LValuePlan { Value = slotVal, ArrayVal = recv, IndexVal = Const(capSlotIdx, new StorageType("SystemInt32")) };
                 }
                 if (aggCapPropRef.Property.GetMethod is { } capGetterRaw)
                 {
@@ -153,8 +153,8 @@ public abstract class AssignmentHandlerBase : HandlerBase
                 {
                     RejectStaticReadonlyWriteThrough(aggFieldRef.Instance); // §3.3, R5 (compound/inc-dec write-back)
                     var arrVal = LoadInstanceRaw(aggFieldRef.Instance);
-                    var idxVal = Const(elemIdx, "SystemInt32");
-                    var currentVal = AggregateAbi.ReadSlot(_builder, arrVal, elemIdx, "SystemObject");
+                    var idxVal = Const(elemIdx, new StorageType("SystemInt32"));
+                    var currentVal = AggregateAbi.ReadSlot(_builder, arrVal, elemIdx, new StorageType("SystemObject"));
                     return new LValuePlan { Value = currentVal, ArrayVal = arrVal, IndexVal = idxVal };
                 }
                 goto default;
@@ -187,7 +187,7 @@ public abstract class AssignmentHandlerBase : HandlerBase
                 var valResult = ExternCall(
                     ExternResolver.BuildArrayGetSignature(arrayType, elemAccessorType),
                     new List<CLeaf> { arrayVal, indexVal },
-                    GetStorageTypeName(arrayElem.Type));
+                    new StorageType(GetStorageTypeName(arrayElem.Type)));
                 return new LValuePlan { Value = valResult, ArrayVal = arrayVal, IndexVal = indexVal };
             }
             case IFieldReferenceOperation { Instance: not null and not IInstanceReferenceOperation } fieldRef
@@ -195,11 +195,11 @@ public abstract class AssignmentHandlerBase : HandlerBase
             {
                 var instanceVal = VisitExpression(fieldRef.Instance);
                 // Read via GetProgramVariable
-                var nameConst = Const(fieldRef.Field.Name, "SystemString");
+                var nameConst = Const(fieldRef.Field.Name, new StorageType("SystemString"));
                 var valResult = ExternCall(
                     ExternResolver.EventReceiverGetProgramVariable,
                     new List<CLeaf> { instanceVal, nameConst },
-                    "SystemObject");
+                    new StorageType("SystemObject"));
                 return new LValuePlan { Value = valResult, InstanceVal = instanceVal };
             }
             case IFieldReferenceOperation { Instance: not null and not IInstanceReferenceOperation } fieldRef2
@@ -209,7 +209,7 @@ public abstract class AssignmentHandlerBase : HandlerBase
                 var containingType = GetStorageTypeName(ResolveExternOwnerType(fieldRef2.Field.ContainingType, fieldRef2.Instance?.Type, fieldRef2.Field.Name));
                 var valueType = GetStorageTypeName(fieldRef2.Field.Type);
                 var sig = ExternResolver.BuildPropertyGetSignature(containingType, fieldRef2.Field.Name, valueType);
-                var valResult = ExternCall(sig, new List<CLeaf> { instanceVal }, valueType);
+                var valResult = ExternCall(sig, new List<CLeaf> { instanceVal }, new StorageType(valueType));
                 return new LValuePlan { Value = valResult, InstanceVal = instanceVal };
             }
             default:
@@ -235,7 +235,7 @@ public abstract class AssignmentHandlerBase : HandlerBase
             var vWbIdx = lv.IndexArgs;
             if (vWbRecv == null)
                 (vWbRecv, vWbIdx) = StageAccessorDispatchLegs(vWbRef);
-            var vWbSlot = _ctx.Builder.AllocScratch(GetStorageTypeName(vWbRef.Property.Type));
+            var vWbSlot = _ctx.Builder.AllocScratch(new StorageType(GetStorageTypeName(vWbRef.Property.Type)));
             EmitAssign(vWbSlot, valueVal);
             EmitAccessorDispatch(vWbRef.Property, vWbRecvTy, vWbSetter, vWbRecv,
                 vWbIdx ?? new List<CLeaf>(), SlotRef(vWbSlot));
@@ -364,7 +364,7 @@ public abstract class AssignmentHandlerBase : HandlerBase
                     || IsNonPublicAutoCrossProperty(propRef.Property.SetMethod, propRef.Property);
                 if (isAutoSet)
                 {
-                    var nameConst = Const(propRef.Property.Name, "SystemString");
+                    var nameConst = Const(propRef.Property.Name, new StorageType("SystemString"));
                     EmitExternVoid(ExternResolver.EventReceiverSetProgramVariable, new List<CLeaf> { instanceVal, nameConst, valueVal });
                 }
                 else
@@ -373,9 +373,9 @@ public abstract class AssignmentHandlerBase : HandlerBase
                     // Wave-12 r2 [V1]: reentrant setter — value copy-in inside the spill window.
                     bool wbReentrant = TryMarkReentrantCrossDispatch(propRef, propRef.Property.SetMethod);
                     var (exportName, setParamIds, _) = GetCalleeLayout(propRef.Property.SetMethod);
-                    var paramNameConst = Const(setParamIds[0], "SystemString");
+                    var paramNameConst = Const(setParamIds[0], new StorageType("SystemString"));
                     EmitExternVoid(ExternResolver.EventReceiverSetProgramVariable, new List<CLeaf> { instanceVal, paramNameConst, valueVal });
-                    var eventConst = Const(exportName, "SystemString");
+                    var eventConst = Const(exportName, new StorageType("SystemString"));
                     EmitExternVoid(ExternResolver.EventReceiverSendCustomEvent, new List<CLeaf> { instanceVal, eventConst },
                         wbReentrant, wbReentrant ? 1 : 0);
                 }
@@ -436,7 +436,7 @@ public abstract class AssignmentHandlerBase : HandlerBase
 
                 CLeaf wbInstanceVal;
                 if (propRef.Instance is IInstanceReferenceOperation)
-                    wbInstanceVal = LoadField(_ctx.Storage.DeclareThisOnce(containingType), containingType);
+                    wbInstanceVal = LoadField(_ctx.Storage.DeclareThisOnce(new StorageType(containingType)), new StorageType(containingType));
                 else if (propRef.Instance != null)
                     wbInstanceVal = VisitExpression(propRef.Instance);
                 else

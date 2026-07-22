@@ -109,7 +109,7 @@ public static class CoreVerify
 
             case CIf ifStmt:
                 VerifyExpr(ifStmt.Cond, ctx);
-                ctx.AssertType("SystemBoolean", ifStmt.Cond.Type, "CIf condition");
+                ctx.AssertType(new StorageType("SystemBoolean"), ifStmt.Cond.Type, "CIf condition");
                 VerifyBlock(ifStmt.Then, ctx);
                 VerifyBlock(ifStmt.Else, ctx);
                 break;
@@ -117,7 +117,7 @@ public static class CoreVerify
             case CWhile whileStmt:
                 VerifyBlock(whileStmt.CondBlock, ctx);
                 VerifyExpr(whileStmt.Cond, ctx);
-                ctx.AssertType("SystemBoolean", whileStmt.Cond.Type, "CWhile condition");
+                ctx.AssertType(new StorageType("SystemBoolean"), whileStmt.Cond.Type, "CWhile condition");
                 ctx.LoopDepth++;
                 VerifyBlock(whileStmt.Body, ctx);
                 ctx.LoopDepth--;
@@ -129,7 +129,7 @@ public static class CoreVerify
                 if (forStmt.Cond != null)
                 {
                     VerifyExpr(forStmt.Cond, ctx);
-                    ctx.AssertType("SystemBoolean", forStmt.Cond.Type, "CFor condition");
+                    ctx.AssertType(new StorageType("SystemBoolean"), forStmt.Cond.Type, "CFor condition");
                 }
                 ctx.LoopDepth++;
                 VerifyBlock(forStmt.Body, ctx);
@@ -281,7 +281,7 @@ public static class CoreVerify
 
             case CSelect sel:
                 VerifyExpr(sel.Cond, ctx); // value operands — addresses rejected
-                ctx.AssertType("SystemBoolean", sel.Cond.Type, "CSelect condition");
+                ctx.AssertType(new StorageType("SystemBoolean"), sel.Cond.Type, "CSelect condition");
                 VerifyExpr(sel.TrueVal, ctx);
                 VerifyExpr(sel.FalseVal, ctx);
                 // Branch types may differ from result type due to inheritance

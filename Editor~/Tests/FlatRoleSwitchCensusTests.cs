@@ -48,27 +48,27 @@ public class FlatRoleSwitchCensusTests
     // The flat-role CStmt domain — FlatVerify.VerifyInstruction's arms, one instance per shape.
     static IEnumerable<CStmt> KnownFlatStmts()
     {
-        yield return new CAssign(0, new CConst(1, "SystemInt32"));
-        yield return new CAssign(0, new CSlotRef(1, "SystemInt32"));
-        yield return new CStoreField("f", new CSlotRef(0, "SystemInt32"));
-        yield return new CLoadField(0, "f", "SystemInt32");
+        yield return new CAssign(0, new CConst(1, new StorageType("SystemInt32")));
+        yield return new CAssign(0, new CSlotRef(1, new StorageType("SystemInt32")));
+        yield return new CStoreField("f", new CSlotRef(0, new StorageType("SystemInt32")));
+        yield return new CLoadField(0, "f", new StorageType("SystemInt32"));
         yield return new CExprStmt(new CExternCall("Foo.__Bar__SystemVoid",
-            new List<CLeaf> { new CSlotRef(0, "SystemInt32") }, "SystemVoid"));
+            new List<CLeaf> { new CSlotRef(0, new StorageType("SystemInt32")) }, new StorageType("SystemVoid")));
         yield return new CExprStmt(new CExternCall("Foo.__Baz__SystemInt32",
-            new List<CLeaf> { new CSlotRef(0, "SystemInt32") }, "SystemInt32", 1));
+            new List<CLeaf> { new CSlotRef(0, new StorageType("SystemInt32")) }, new StorageType("SystemInt32"), 1));
         yield return new CExprStmt(new CInternalCall("bar",
-            new List<CLeaf> { new CSlotRef(0, "SystemInt32") }, "SystemVoid"));
+            new List<CLeaf> { new CSlotRef(0, new StorageType("SystemInt32")) }, new StorageType("SystemVoid")));
         yield return new CExprStmt(new CInternalCall("baz",
-            new List<CLeaf> { new CSlotRef(0, "SystemInt32") }, "SystemInt32", 1));
+            new List<CLeaf> { new CSlotRef(0, new StorageType("SystemInt32")) }, new StorageType("SystemInt32"), 1));
     }
 
     // The flat-role CTerminator domain — FlatVerify.VerifyTerminator's arms.
     static IEnumerable<CTerminator> KnownTerminators()
     {
         yield return new CJump(0);
-        yield return new CBranch(new CSlotRef(0, "SystemBoolean"), 1, 2);
+        yield return new CBranch(new CSlotRef(0, new StorageType("SystemBoolean")), 1, 2);
         yield return new CRet();
-        yield return new CRet(new CSlotRef(0, "SystemInt32"));
+        yield return new CRet(new CSlotRef(0, new StorageType("SystemInt32")));
     }
 
     [Theory]

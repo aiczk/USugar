@@ -107,7 +107,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
             var helperName = op.OperatorKind == BinaryOperatorKind.Add
                 ? DelegateAbi.MulticastCombineName(sigPart)
                 : DelegateAbi.MulticastRemoveName(sigPart);
-            return _builder.InternalCall(helperName, new List<CLeaf> { combineLeftVal, combineRightVal }, DelegateAbi.BundleType);
+            return _builder.InternalCall(helperName, new List<CLeaf> { combineLeftVal, combineRightVal }, new StorageType(DelegateAbi.BundleType));
         }
 
         // ── Nullable (boxed object) compared to null literal → object reference null check ──
@@ -152,7 +152,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
         if (op.ConstantValue.HasValue)
         {
             var constType = GetStorageTypeName(op.Type);
-            return Const(EmitPolicy.ParseConstValue(constType, ToInvariantString(op.ConstantValue.Value)), constType);
+            return Const(EmitPolicy.ParseConstValue(constType, ToInvariantString(op.ConstantValue.Value)), new StorageType(constType));
         }
 
         // B67: string concat with a user enum operand. C# boxes each operand to object for
@@ -181,7 +181,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
                 l = ConvertConcatOperand(l, lOp);
                 r = ConvertConcatOperand(r, rOp);
                 return ExternCall("SystemString.__Concat__SystemObject_SystemObject__SystemString",
-                    new List<CLeaf> { l, r }, "SystemString");
+                    new List<CLeaf> { l, r }, new StorageType("SystemString"));
             }
             ClassAbi.RejectImplicitToString(lOp.Type);
             ClassAbi.RejectImplicitToString(rOp.Type);
@@ -192,7 +192,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
                 var r = VisitExpression(rOp);
                 r = ConvertConcatOperand(r, rOp);
                 return ExternCall("SystemString.__Concat__SystemObject_SystemObject__SystemString",
-                    new List<CLeaf> { l, r }, "SystemString");
+                    new List<CLeaf> { l, r }, new StorageType("SystemString"));
             }
         }
 
@@ -224,7 +224,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
             var raw = ExternCall(
                 ExternResolver.ResolveBinaryExtern(op.OperatorKind, op.OperatorMethod,
                     ResolveType(int32), ResolveType(int32), ResolveType(int32)),
-                new List<CLeaf> { li, ri }, "SystemInt32");
+                new List<CLeaf> { li, ri }, new StorageType("SystemInt32"));
             return EmitNarrowingConvert(raw, "SystemInt32", resultType);
         }
 
@@ -238,14 +238,14 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
             && (op.OperatorKind == BinaryOperatorKind.Equals
                 || op.OperatorKind == BinaryOperatorKind.NotEquals))
         {
-            var objLeftSlot = _ctx.Builder.AllocScratch("UnityEngineObject");
+            var objLeftSlot = _ctx.Builder.AllocScratch(new StorageType("UnityEngineObject"));
             EmitAssign(objLeftSlot, leftVal);
-            var objRightSlot = _ctx.Builder.AllocScratch("UnityEngineObject");
+            var objRightSlot = _ctx.Builder.AllocScratch(new StorageType("UnityEngineObject"));
             EmitAssign(objRightSlot, rightVal);
-            return ExternCall(sig, new List<CLeaf> { SlotRef(objLeftSlot), SlotRef(objRightSlot) }, resultType);
+            return ExternCall(sig, new List<CLeaf> { SlotRef(objLeftSlot), SlotRef(objRightSlot) }, new StorageType(resultType));
         }
 
-        return ExternCall(sig, new List<CLeaf> { leftVal, rightVal }, resultType);
+        return ExternCall(sig, new List<CLeaf> { leftVal, rightVal }, new StorageType(resultType));
     }
 
     // The effective Udon storage type of an operand: an enum is stored as (and operates on) its underlying type.
@@ -306,8 +306,8 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
         // enum conversions, UnityEngineObject casts). Those statements must live inside
         // the conditional branch so they don't execute unconditionally.
         var leftVal = VisitExpression(op.LeftOperand);
-        var resultSlot = _ctx.Builder.AllocScratch("SystemBoolean");
-        EmitAssign(resultSlot, Const(false, "SystemBoolean"));
+        var resultSlot = _ctx.Builder.AllocScratch(new StorageType("SystemBoolean"));
+        EmitAssign(resultSlot, Const(false, new StorageType("SystemBoolean")));
         _builder.EmitIf(leftVal, _ =>
         {
             var rightVal = VisitExpression(op.RightOperand);
@@ -320,8 +320,8 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
     {
         // a || b: evaluate b only when a is false (short-circuit).
         var leftVal = VisitExpression(op.LeftOperand);
-        var resultSlot = _ctx.Builder.AllocScratch("SystemBoolean");
-        EmitAssign(resultSlot, Const(true, "SystemBoolean"));
+        var resultSlot = _ctx.Builder.AllocScratch(new StorageType("SystemBoolean"));
+        EmitAssign(resultSlot, Const(true, new StorageType("SystemBoolean")));
         _builder.EmitIf(leftVal, null, _ =>
         {
             var rightVal = VisitExpression(op.RightOperand);
@@ -362,7 +362,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
         if (op.ConstantValue.HasValue)
         {
             var constType = GetStorageTypeName(op.Type);
-            return Const(EmitPolicy.ParseConstValue(constType, ToInvariantString(op.ConstantValue.Value)), constType);
+            return Const(EmitPolicy.ParseConstValue(constType, ToInvariantString(op.ConstantValue.Value)), new StorageType(constType));
         }
 
         // Lifted unary on Nullable<T> (null propagation): null stays null, else apply the op to the unwrapped
@@ -379,7 +379,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
         else
             sig = BuildBuiltinUnarySignature(op);
 
-        return ExternCall(sig, new List<CLeaf> { operandVal }, resultType);
+        return ExternCall(sig, new List<CLeaf> { operandVal }, new StorageType(resultType));
     }
 
     // Lifted unary minus / logical-not on Nullable<T>: null-preserving. A small-int operand is promoted to
@@ -406,7 +406,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
             };
             return EmitLiftedBinaryCore(
                 VisitExpression(op.Operand), true, opUnderlying,
-                Const(allBitsValue, resU), false, resUnderlying,
+                Const(allBitsValue, new StorageType(resU)), false, resUnderlying,
                 BinaryOperatorKind.ExclusiveOr, null, op.Type);
         }
 
@@ -436,7 +436,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
         {
             var asInt = operandType == "SystemInt32" ? operandVal : EmitNarrowingConvert(operandVal, operandType, "SystemInt32");
             var xored = ExternCall("SystemInt32.__op_LogicalXor__SystemInt32_SystemInt32__SystemInt32",
-                new List<CLeaf> { asInt, Const(-1, "SystemInt32") }, "SystemInt32");
+                new List<CLeaf> { asInt, Const(-1, new StorageType("SystemInt32")) }, new StorageType("SystemInt32"));
             return resultType == "SystemInt32" ? xored : EmitNarrowingConvert(xored, "SystemInt32", resultType);
         }
 
@@ -449,14 +449,14 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
             _ => throw new System.NotSupportedException(
                 $"Bitwise NOT (~) is not supported on type {operandType}")
         };
-        var allBitsConst = Const(allBitsValue, operandType);
+        var allBitsConst = Const(allBitsValue, new StorageType(operandType));
 
         return ExternCall(
             ExternResolver.ResolveBinaryExtern(
                 BinaryOperatorKind.ExclusiveOr, null,
                 ResolveType(op.Operand.Type), ResolveType(op.Operand.Type), ResolveType(op.Type)),
             new List<CLeaf> { operandVal, allBitsConst },
-            resultType);
+            new StorageType(resultType));
     }
 
     // ── Is-type / Is-pattern ──
@@ -498,7 +498,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
                 return ExternCall(
                     "SystemBoolean.__op_UnaryNegation__SystemBoolean__SystemBoolean",
                     new List<CLeaf> { innerVal },
-                    "SystemBoolean");
+                    new StorageType("SystemBoolean"));
             }
             case ITypePatternOperation typePat:
                 return EmitTypeCheck(valueVal, typePat.MatchedType);
@@ -507,7 +507,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
             {
                 // `var x` (no explicit MatchedType / MatchesNull) matches any value — no type check.
                 var isVar = declPat.MatchedType == null || declPat.MatchesNull;
-                var checkVal = isVar ? (CLeaf)Const(true, "SystemBoolean") : EmitTypeCheck(valueVal, declPat.MatchedType);
+                var checkVal = isVar ? (CLeaf)Const(true, new StorageType("SystemBoolean")) : EmitTypeCheck(valueVal, declPat.MatchedType);
                 if (declPat.DeclaredSymbol is ILocalSymbol local)
                 {
                     // Stage 2 §4.1: captured pattern variable → env cell (its owning scope's env is
@@ -521,7 +521,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
                         return checkVal;
                     }
                     var localType = GetStorageTypeName(local.Type);
-                    var localId = _ctx.Storage.DeclareLocal(local.Name, localType);
+                    var localId = _ctx.Storage.DeclareLocal(local.Name, new StorageType(localType));
                     _localBindings[local] = new EmitContext.LocalBinding(localId);
                     if (isVar)
                         EmitStoreField(localId, valueVal); // always matches → bind unconditionally
@@ -532,7 +532,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
                 return checkVal;
             }
             case IDiscardPatternOperation:
-                return Const(true, "SystemBoolean");
+                return Const(true, new StorageType("SystemBoolean"));
 
             case IRelationalPatternOperation relPat:
             {
@@ -566,7 +566,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
                     ExternResolver.BuildMethodSignature(
                         valType, opName, new[] { valType, valType }, "SystemBoolean"),
                     new List<CLeaf> { scrut, constVal },
-                    "SystemBoolean");
+                    new StorageType("SystemBoolean"));
             }
             case IBinaryPatternOperation binPat:
             {
@@ -580,12 +580,12 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
                     && binPat.LeftPattern.NarrowedType is { } narrowedType
                     && !SymbolEqualityComparer.Default.Equals(narrowedType, valueType))
                 {
-                    var resultSlot = _ctx.Builder.AllocScratch("SystemBoolean");
-                    EmitAssign(resultSlot, Const(false, "SystemBoolean"));
+                    var resultSlot = _ctx.Builder.AllocScratch(new StorageType("SystemBoolean"));
+                    EmitAssign(resultSlot, Const(false, new StorageType("SystemBoolean")));
                     var matched = EmitPatternCheckImpl(valueVal, valueType, binPat.LeftPattern);
                     _builder.EmitIf(matched, b =>
                     {
-                        var nt = _ctx.Builder.AllocScratch(GetStorageTypeName(narrowedType));
+                        var nt = _ctx.Builder.AllocScratch(new StorageType(GetStorageTypeName(narrowedType)));
                         EmitAssign(nt, valueVal);
                         EmitAssign(resultSlot, EmitPatternCheckImpl(SlotRef(nt), narrowedType, binPat.RightPattern));
                     });
@@ -596,7 +596,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
                 var opName = binPat.OperatorKind == BinaryOperatorKind.And
                     ? "SystemBoolean.__op_ConditionalAnd__SystemBoolean_SystemBoolean__SystemBoolean"
                     : "SystemBoolean.__op_ConditionalOr__SystemBoolean_SystemBoolean__SystemBoolean";
-                return ExternCall(opName, new List<CLeaf> { leftVal, rightVal }, "SystemBoolean");
+                return ExternCall(opName, new List<CLeaf> { leftVal, rightVal }, new StorageType("SystemBoolean"));
             }
 
             case IRecursivePatternOperation rec when rec.DeconstructionSubpatterns.Length > 0:
@@ -612,22 +612,22 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
                         $"Positional pattern element count ({rec.DeconstructionSubpatterns.Length}) "
                         + $"does not match tuple arity ({layout.Count}).");
 
-                var aggSlot = _ctx.Builder.AllocScratch(AggregateAbi.ArrayType);
+                var aggSlot = _ctx.Builder.AllocScratch(new StorageType(AggregateAbi.ArrayType));
                 EmitAssign(aggSlot, valueVal);
 
-                CLeaf result = Const(true, "SystemBoolean");
+                CLeaf result = Const(true, new StorageType("SystemBoolean"));
                 for (int i = 0; i < rec.DeconstructionSubpatterns.Length; i++)
                 {
                     var elemType = layout.Fields[i].Type;
-                    var elemRaw = AggregateAbi.ReadSlot(_builder, SlotRef(aggSlot), i, "SystemObject");
+                    var elemRaw = AggregateAbi.ReadSlot(_builder, SlotRef(aggSlot), i, new StorageType("SystemObject"));
                     // Materialize into a typed temp (Udon COPY unboxes) so the sub-pattern compares
                     // with the correct type tag, exactly as tuple deconstruction extracts elements.
-                    var elemSlot = _ctx.Builder.AllocScratch(GetStorageTypeName(elemType));
+                    var elemSlot = _ctx.Builder.AllocScratch(new StorageType(GetStorageTypeName(elemType)));
                     EmitAssign(elemSlot, elemRaw);
                     var subResult = EmitPatternCheckImpl(SlotRef(elemSlot), elemType, rec.DeconstructionSubpatterns[i]);
                     result = ExternCall(
                         "SystemBoolean.__op_ConditionalAnd__SystemBoolean_SystemBoolean__SystemBoolean",
-                        new List<CLeaf> { result, subResult }, "SystemBoolean");
+                        new List<CLeaf> { result, subResult }, new StorageType("SystemBoolean"));
                 }
                 return result;
             }
@@ -638,8 +638,8 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
                 //   ≡  x passes the (optional) type/null guard  &&  x.P is subpat  &&  ...
                 // Member reads are emitted INSIDE the guard's then-block so a null or type-mismatched
                 // receiver short-circuits to false without dereferencing (extern AND does not short-circuit).
-                var resultSlot = _ctx.Builder.AllocScratch("SystemBoolean");
-                EmitAssign(resultSlot, Const(false, "SystemBoolean"));
+                var resultSlot = _ctx.Builder.AllocScratch(new StorageType("SystemBoolean"));
+                EmitAssign(resultSlot, Const(false, new StorageType("SystemBoolean")));
 
                 CLeaf guard;
                 if (rec.MatchedType != null && !SymbolEqualityComparer.Default.Equals(rec.MatchedType, valueType))
@@ -647,14 +647,14 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
                 else if (!valueType.IsValueType)
                     guard = ExternCall(
                         "SystemObject.__op_Inequality__SystemObject_SystemObject__SystemBoolean",
-                        new List<CLeaf> { valueVal, Const(null, "SystemObject") }, "SystemBoolean");
+                        new List<CLeaf> { valueVal, Const(null, new StorageType("SystemObject")) }, new StorageType("SystemBoolean"));
                 else
-                    guard = Const(true, "SystemBoolean");
+                    guard = Const(true, new StorageType("SystemBoolean"));
 
                 _builder.EmitIf(guard, _ =>
                 {
                     var matchType = rec.MatchedType ?? valueType;
-                    var valSlot = _ctx.Builder.AllocScratch(GetStorageTypeName(matchType));
+                    var valSlot = _ctx.Builder.AllocScratch(new StorageType(GetStorageTypeName(matchType)));
                     EmitAssign(valSlot, valueVal);
 
                     if (rec.DeclaredSymbol is ILocalSymbol bound)
@@ -667,13 +667,13 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
                         }
                         else
                         {
-                            var boundId = _ctx.Storage.DeclareLocal(bound.Name, GetStorageTypeName(bound.Type));
+                            var boundId = _ctx.Storage.DeclareLocal(bound.Name, new StorageType(GetStorageTypeName(bound.Type)));
                             _localBindings[bound] = new EmitContext.LocalBinding(boundId);
                             EmitStoreField(boundId, SlotRef(valSlot));
                         }
                     }
 
-                    CLeaf acc = Const(true, "SystemBoolean");
+                    CLeaf acc = Const(true, new StorageType("SystemBoolean"));
                     // For a user struct / tuple scrutinee, members live as object[] indices — there is no Udon
                     // property getter (SystemObjectArray.__get_X does not exist) — so read via the layout __Get.
                     var aggMatchType = matchType as INamedTypeSymbol;
@@ -713,7 +713,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
                                 SlotRef(valSlot), new List<CLeaf>(), null);
                             // Materialize into a typed temp (Udon COPY unboxes) so the sub-pattern
                             // compares with the correct type tag, like the slot arm below.
-                            var vSubSlot = _ctx.Builder.AllocScratch(GetStorageTypeName(memberType));
+                            var vSubSlot = _ctx.Builder.AllocScratch(new StorageType(GetStorageTypeName(memberType)));
                             EmitAssign(vSubSlot, dispatched);
                             memberVal = SlotRef(vSubSlot);
                         }
@@ -721,8 +721,8 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
                         {
                             // Aggregate member: read the boxed object[] slot, then materialize into a typed temp
                             // (Udon COPY unboxes) so the sub-pattern compares with the correct type tag.
-                            var rawMember = AggregateAbi.ReadSlot(_builder, SlotRef(valSlot), aggMemberIdx, "SystemObject");
-                            var memberSlot = _ctx.Builder.AllocScratch(GetStorageTypeName(memberType));
+                            var rawMember = AggregateAbi.ReadSlot(_builder, SlotRef(valSlot), aggMemberIdx, new StorageType("SystemObject"));
+                            var memberSlot = _ctx.Builder.AllocScratch(new StorageType(GetStorageTypeName(memberType)));
                             EmitAssign(memberSlot, rawMember);
                             memberVal = SlotRef(memberSlot);
                         }
@@ -743,12 +743,12 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
                             var memberOwner = GetStorageTypeName(ResolveExternOwnerType(memberContainingType, matchType, memberName));
                             memberVal = ExternCall(
                                 ExternResolver.BuildPropertyGetSignature(memberOwner, memberName, GetStorageTypeName(memberType)),
-                                new List<CLeaf> { SlotRef(valSlot) }, GetStorageTypeName(memberType));
+                                new List<CLeaf> { SlotRef(valSlot) }, new StorageType(GetStorageTypeName(memberType)));
                         }
                         var subResult = EmitPatternCheckImpl(memberVal, memberType, sub.Pattern);
                         acc = ExternCall(
                             "SystemBoolean.__op_ConditionalAnd__SystemBoolean_SystemBoolean__SystemBoolean",
-                            new List<CLeaf> { acc, subResult }, "SystemBoolean");
+                            new List<CLeaf> { acc, subResult }, new StorageType("SystemBoolean"));
                     }
                     EmitAssign(resultSlot, acc);
                 });
@@ -765,10 +765,10 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
     CLeaf VisitSwitchExpression(ISwitchExpressionOperation op)
     {
         var resultType = GetStorageTypeName(op.Type);
-        var resultSlot = _ctx.Builder.AllocScratch(resultType);
+        var resultSlot = _ctx.Builder.AllocScratch(new StorageType(resultType));
         // Initialize result to default in case no arm matches (non-exhaustive)
         EmitAssign(resultSlot, Const(
-            EmitPolicy.ParseConstValue(resultType, GetDefaultConstValue(resultType)), resultType));
+            EmitPolicy.ParseConstValue(resultType, GetDefaultConstValue(resultType)), new StorageType(resultType)));
         var valueVal = VisitExpression(op.Value);
 
         // Separate default arm from pattern arms to build proper if/else-if/else chain
@@ -804,7 +804,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
                 EmitExternVoid("UnityEngineDebug.__LogError__SystemObject__SystemVoid",
                     new List<CLeaf> { Const(
                         $"USugar: SwitchExpressionException — no arm matched in switch expression ({_classSymbol.Name})",
-                        "SystemString") });
+                        new StorageType("SystemString")) });
         }
 
         for (int i = patternArms.Count - 1; i >= 0; i--)
@@ -852,7 +852,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
         // cond ? a : b: evaluate branches only on the taken path.
         var condVal = VisitExpression(op.Condition);
         var resultType = GetStorageTypeName(op.Type);
-        var resultSlot = _ctx.Builder.AllocScratch(resultType);
+        var resultSlot = _ctx.Builder.AllocScratch(new StorageType(resultType));
         _builder.EmitIf(condVal,
             _ => EmitAssign(resultSlot, VisitExpression(op.WhenTrue)),
             _ => EmitAssign(resultSlot, VisitExpression(op.WhenFalse)));
@@ -920,7 +920,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
         var result = EmitAggregateElementsEqual(leftArr, rightArr, aggType);
         if (isNotEquals)
             result = ExternCall("SystemBoolean.__op_UnaryNegation__SystemBoolean__SystemBoolean",
-                new List<CLeaf> { result }, "SystemBoolean");
+                new List<CLeaf> { result }, new StorageType("SystemBoolean"));
         return result;
     }
 
@@ -931,22 +931,22 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
     CLeaf EmitAggregateElementsEqual(CValue leftArr, CValue rightArr, INamedTypeSymbol aggType)
     {
         var layout = _ctx.Aggregates.GetLayout(aggType);
-        var leftSlot = _ctx.Builder.AllocScratch(AggregateAbi.ArrayType); EmitAssign(leftSlot, leftArr);
-        var rightSlot = _ctx.Builder.AllocScratch(AggregateAbi.ArrayType); EmitAssign(rightSlot, rightArr);
+        var leftSlot = _ctx.Builder.AllocScratch(new StorageType(AggregateAbi.ArrayType)); EmitAssign(leftSlot, leftArr);
+        var rightSlot = _ctx.Builder.AllocScratch(new StorageType(AggregateAbi.ArrayType)); EmitAssign(rightSlot, rightArr);
 
-        CLeaf result = Const(true, "SystemBoolean");
+        CLeaf result = Const(true, new StorageType("SystemBoolean"));
         for (int i = 0; i < layout.Count; i++)
         {
-            var leftElem = AggregateAbi.ReadSlot(_builder, SlotRef(leftSlot), i, "SystemObject");
-            var rightElem = AggregateAbi.ReadSlot(_builder, SlotRef(rightSlot), i, "SystemObject");
+            var leftElem = AggregateAbi.ReadSlot(_builder, SlotRef(leftSlot), i, new StorageType("SystemObject"));
+            var rightElem = AggregateAbi.ReadSlot(_builder, SlotRef(rightSlot), i, new StorageType("SystemObject"));
 
             CLeaf elemEq = layout.Fields[i].Type is INamedTypeSymbol nested && nested.IsTupleType
                 ? EmitAggregateElementsEqual(leftElem, rightElem, nested) // nested tuple → recurse
                 : ExternCall("SystemObject.__Equals__SystemObject_SystemObject__SystemBoolean",
-                    new List<CLeaf> { leftElem, rightElem }, "SystemBoolean");
+                    new List<CLeaf> { leftElem, rightElem }, new StorageType("SystemBoolean"));
 
             result = ExternCall("SystemBoolean.__op_LogicalAnd__SystemBoolean_SystemBoolean__SystemBoolean",
-                new List<CLeaf> { result, elemEq }, "SystemBoolean");
+                new List<CLeaf> { result, elemEq }, new StorageType("SystemBoolean"));
         }
         return result;
     }

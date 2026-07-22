@@ -17,15 +17,15 @@ public class CoreToUasmTests
         module.Functions.Add(func);
 
         // slot0 is used, slot1 is unused (coalesced away)
-        func.Slots.Add(new SlotDecl(0, "SystemInt32", SlotClass.Frame));
-        func.Slots.Add(new SlotDecl(1, "SystemString", SlotClass.Scratch));
+        func.Slots.Add(new SlotDecl(0, new StorageType("SystemInt32"), SlotClass.Frame));
+        func.Slots.Add(new SlotDecl(1, new StorageType("SystemString"), SlotClass.Scratch));
 
         var block = func.NewBlock();
         // Only reference slot0
-        block.Stmts.Add(new CAssign(0, new CConst(42, "SystemInt32")));
-        block.Terminator = new CRet(new CSlotRef(0, "SystemInt32"));
-        func.ReturnSlots.Add(new ReturnSlot("__retval", "SystemInt32"));
-        func.ReturnType = "SystemInt32";
+        block.Stmts.Add(new CAssign(0, new CConst(42, new StorageType("SystemInt32"))));
+        block.Terminator = new CRet(new CSlotRef(0, new StorageType("SystemInt32")));
+        func.ReturnSlots.Add(new ReturnSlot("__retval", new StorageType("SystemInt32")));
+        func.ReturnType = new StorageType("SystemInt32");
 
         var result = CoreToUasm.Generate(module);
         var uasm = result.Uasm;
@@ -64,10 +64,10 @@ public class CoreToUasmTests
     public void CoreBuilder_DoesNotDeduplicateCollidingObjectRenderings()
     {
         var builder = new CoreBuilder(new CModule { ClassName = "ConstCollision" });
-        var nullValue = builder.Const(null, "SystemObject");
-        var nullString = builder.Const("null", "SystemObject");
-        var boxedOne = builder.Const(1, "SystemObject");
-        var stringOne = builder.Const("1", "SystemObject");
+        var nullValue = builder.Const(null, new StorageType("SystemObject"));
+        var nullString = builder.Const("null", new StorageType("SystemObject"));
+        var boxedOne = builder.Const(1, new StorageType("SystemObject"));
+        var stringOne = builder.Const("1", new StorageType("SystemObject"));
 
         Assert.NotSame(nullValue, nullString);
         Assert.NotSame(boxedOne, stringOne);

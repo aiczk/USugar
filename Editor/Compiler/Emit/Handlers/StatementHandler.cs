@@ -81,8 +81,8 @@ public class StatementHandler : HandlerBase, IOperationHandler
                         // Stage 2 §4.1: captured using-local → read the disposable ref from its env
                         // cell (using-locals are readonly, so the read-now leaf stays valid).
                         var dispRef = _ctx.Closures.TryGetEnvBinding(declarator.Symbol, out _)
-                            ? EnvEmit.Read(_builder, _ctx, declarator.Symbol, localType)
-                            : LoadField(_localBindings.TryGetValue(declarator.Symbol, out var ub) ? ub.Id : declarator.Symbol.Name, localType);
+                            ? EnvEmit.Read(_builder, _ctx, declarator.Symbol, new StorageType(localType))
+                            : LoadField(_localBindings.TryGetValue(declarator.Symbol, out var ub) ? ub.Id : declarator.Symbol.Name, new StorageType(localType));
                         _usingDisposableStack.Peek().Add((dispRef, declarator.Symbol.Type));
                     }
                 }
@@ -194,7 +194,7 @@ public class StatementHandler : HandlerBase, IOperationHandler
             var srcVal = VisitExpression(op.ReturnedValue);
             if (_currentMethod.Name == "OnOwnershipRequest")
             {
-                _ctx.Storage.TryDeclareVar("__returnValue", "SystemBoolean");
+                _ctx.Storage.TryDeclareVar("__returnValue", new StorageType("SystemBoolean"));
                 EmitStoreField("__returnValue", srcVal);
             }
             EmitPendingDispose();
@@ -237,7 +237,7 @@ public class StatementHandler : HandlerBase, IOperationHandler
         for (int i = 0; i < tailCall.Arguments.Length; i++)
         {
             var argVal = VisitExpression(tailCall.Arguments[i].Value);
-            var slot = _ctx.Builder.AllocScratch(GetStorageTypeName(tailCall.Arguments[i].Value.Type));
+            var slot = _ctx.Builder.AllocScratch(new StorageType(GetStorageTypeName(tailCall.Arguments[i].Value.Type)));
             EmitAssign(slot, argVal);
             argSlots[i] = slot;
         }
@@ -252,7 +252,7 @@ public class StatementHandler : HandlerBase, IOperationHandler
         // EnvAlloc after the __tco_ label re-runs per logical activation for freshness).
         var tcoEnvp = _ctx.Methods.CurrentClosureSpec?.EnvpFieldId;
         if (tcoEnvp != null)
-            EmitStoreField(tcoEnvp, LoadField(tcoEnvp, EnvEmit.EnvType));
+            EmitStoreField(tcoEnvp, LoadField(tcoEnvp, new StorageType(EnvEmit.EnvType)));
 
         // Jump back to method entry via goto label
         var func = _ctx.Methods.CurrentClosureSpec?.Func ?? _methodFunctions[_currentMethod];
@@ -410,8 +410,8 @@ public class StatementHandler : HandlerBase, IOperationHandler
                     var localType = GetStorageTypeName(declarator.Symbol.Type);
                     // Stage 2 §4.1: captured using-statement local → env cell read (readonly, so safe).
                     var dispRef2 = _ctx.Closures.TryGetEnvBinding(declarator.Symbol, out _)
-                        ? EnvEmit.Read(_builder, _ctx, declarator.Symbol, localType)
-                        : LoadField(_localBindings.TryGetValue(declarator.Symbol, out var ub2) ? ub2.Id : declarator.Symbol.Name, localType);
+                        ? EnvEmit.Read(_builder, _ctx, declarator.Symbol, new StorageType(localType))
+                        : LoadField(_localBindings.TryGetValue(declarator.Symbol, out var ub2) ? ub2.Id : declarator.Symbol.Name, new StorageType(localType));
                     disposableVars.Add((dispRef2, declarator.Symbol.Type));
                 }
             }
@@ -500,7 +500,7 @@ public class StatementHandler : HandlerBase, IOperationHandler
             // Delegate-typed locals are SystemObjectArray bundle references via the type-map delegate arm
             // (design §2.1); the initializer's VisitDelegateCreation hoists any lambda and builds the bundle.
             var udonType = GetStorageTypeName(local.Type);
-            var id = _ctx.Storage.DeclareLocal(local.Name, udonType);
+            var id = _ctx.Storage.DeclareLocal(local.Name, new StorageType(udonType));
             _localBindings[local] = new EmitContext.LocalBinding(id);
 
             var init = declarator.Initializer;
@@ -523,7 +523,7 @@ public class StatementHandler : HandlerBase, IOperationHandler
         // declaration and the object[] ctor — every spec-2 activation then aliased spec-1's one
         // array and per-frame struct locals broke under recursion (wave-9 round-5 [X7], VM-proven
         // 183 vs 126 in the second instantiation).
-        var id = _ctx.Storage.DeclareLocal(local.Name, AggregateAbi.ArrayType);
+        var id = _ctx.Storage.DeclareLocal(local.Name, new StorageType(AggregateAbi.ArrayType));
         _localBindings[local] = new EmitContext.LocalBinding(id);
 
         // Create object[] of correct size
@@ -547,7 +547,7 @@ public class StatementHandler : HandlerBase, IOperationHandler
             // Tuple literal: set each element via __Set__
             for (int i = 0; i < tupleLit.Elements.Length && i < layout.Count; i++)
             {
-                AggregateAbi.WriteSlot(_builder, LoadField(localId, AggregateAbi.ArrayType),
+                AggregateAbi.WriteSlot(_builder, LoadField(localId, new StorageType(AggregateAbi.ArrayType)),
                     i, VisitExpression(tupleLit.Elements[i]));
             }
         }
@@ -566,7 +566,7 @@ public class StatementHandler : HandlerBase, IOperationHandler
             // new V(args): default-init the already-allocated array, then run the registered ctor
             // (receiver = this array, mutated in place via this.field = … in the ctor body).
             AggregateAbi.DefaultInitializeField(_builder, localId, layout, _ctx.Aggregates.GetLayout, GetStorageTypeName);
-            var ctorArgs = new List<CLeaf> { LoadField(localId, AggregateAbi.ArrayType) };
+            var ctorArgs = new List<CLeaf> { LoadField(localId, new StorageType(AggregateAbi.ArrayType)) };
             foreach (var arg in ocCtor.Arguments)
                 ctorArgs.Add(VisitExpression(arg.Value));
             EmitExprStmt(EmitCallToMethod(ocCtor.Constructor, ctorArgs));
@@ -578,7 +578,7 @@ public class StatementHandler : HandlerBase, IOperationHandler
             // struct ctor's VisitObjectCreation returns a null placeholder, so handle creation here.)
             AggregateAbi.DefaultInitializeField(_builder, localId, layout, _ctx.Aggregates.GetLayout, GetStorageTypeName);
             if (oc.Initializer != null)
-                EmitAggregateObjectInitializer(LoadField(localId, AggregateAbi.ArrayType), layout, oc.Initializer);
+                EmitAggregateObjectInitializer(LoadField(localId, new StorageType(AggregateAbi.ArrayType)), layout, oc.Initializer);
         }
         else
         {

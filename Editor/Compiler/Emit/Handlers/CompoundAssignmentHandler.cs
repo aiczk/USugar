@@ -51,7 +51,7 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
             {
                 var converted = ConvertConcatOperand(VisitExpression(vOp), vOp);
                 var concat = ExternCall("SystemString.__Concat__SystemObject_SystemObject__SystemString",
-                    new List<CLeaf> { leftVal, converted }, "SystemString");
+                    new List<CLeaf> { leftVal, converted }, new StorageType("SystemString"));
                 lv.Write(concat);
                 return concat;
             }
@@ -111,7 +111,7 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
         var sig = ExternResolver.ResolveBinaryExtern(
             op.OperatorKind, op.OperatorMethod,
             ResolveType(op.Target.Type), ResolveType(op.Value.Type), ResolveType(op.Type));
-        CLeaf resultVal = ExternCall(sig, new List<CLeaf> { leftVal, rightVal }, opResultType);
+        CLeaf resultVal = ExternCall(sig, new List<CLeaf> { leftVal, rightVal }, new StorageType(opResultType));
 
         // Narrow back to original type if promoted (C#-unchecked wrap, not checked Convert)
         if (opResultType != resultType)
@@ -153,7 +153,7 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
             ? DelegateAbi.MulticastCombineName(sigPart)
             : DelegateAbi.MulticastRemoveName(sigPart);
 
-        var resultVal = _builder.InternalCall(helperName, new List<CLeaf> { leftVal, rightVal }, DelegateAbi.BundleType);
+        var resultVal = _builder.InternalCall(helperName, new List<CLeaf> { leftVal, rightVal }, new StorageType(DelegateAbi.BundleType));
         lv.Write(resultVal);
         return resultVal;
     }
@@ -189,7 +189,7 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
         var delegateType = (INamedTypeSymbol)evt.Type;
         var invoke = delegateType.DelegateInvokeMethod;
         DelegateAbi.ValidateNoRefOutParams(invoke);
-        var currentVal = LoadField(evt.Name, DelegateAbi.BundleType);
+        var currentVal = LoadField(evt.Name, new StorageType(DelegateAbi.BundleType));
         var handler = VisitEmittedValue(op.HandlerValue);
         if (op.Adds)
             RejectUnsafeCrossProgramEventHandler(evt, handler.Info);
@@ -202,14 +202,14 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
             ? DelegateAbi.MulticastCombineName(sigPart)
             : DelegateAbi.MulticastRemoveName(sigPart);
 
-        var resultVal = _builder.InternalCall(helperName, new List<CLeaf> { currentVal, handlerVal }, DelegateAbi.BundleType);
+        var resultVal = _builder.InternalCall(helperName, new List<CLeaf> { currentVal, handlerVal }, new StorageType(DelegateAbi.BundleType));
         EmitStoreField(evt.Name, resultVal);
         return null; // event add/remove is a void-shaped statement expression
     }
 
     CLeaf PromoteToInt32(CLeaf value, string srcUdonType)
         => ExternCall($"SystemConvert.__ToInt32__{srcUdonType}__SystemInt32",
-            new List<CLeaf> { value }, "SystemInt32");
+            new List<CLeaf> { value }, new StorageType("SystemInt32"));
 
     CLeaf VisitIncrementDecrement(IIncrementOrDecrementOperation op)
     {
@@ -235,7 +235,7 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
             var kind = op.Kind == OperationKind.Increment ? BinaryOperatorKind.Add : BinaryOperatorKind.Subtract;
             var lifted = EmitLiftedBinaryCore(
                 targetVal, true, incUnderlying,
-                Const(1, GetStorageTypeName(incUnderlying)), false, incUnderlying,
+                Const(1, new StorageType(GetStorageTypeName(incUnderlying))), false, incUnderlying,
                 kind, null, op.Type);
             lv.Write(lifted);
             // Postfix returns the OLD value: targetVal (= lv.Value) is a single-assignment scratch leaf bound
@@ -250,7 +250,7 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
         if (ExternResolver.IsSmallIntOrChar(opType))
             opType = "SystemInt32";
 
-        var oneConst = Const(1, opType);
+        var oneConst = Const(1, new StorageType(opType));
 
         // Explicit operand promotion to match the int extern signature.
         if (ExternResolver.IsSmallIntOrChar(udonType))
@@ -262,7 +262,7 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
             opType, ExternResolver.GetOperatorExternName(externName),
             new[] { opType, opType }, opType);
 
-        CLeaf resultVal = ExternCall(sig, new List<CLeaf> { targetVal, oneConst }, opType);
+        CLeaf resultVal = ExternCall(sig, new List<CLeaf> { targetVal, oneConst }, new StorageType(opType));
 
         // Narrow back to original type if promoted (C#-unchecked wrap, not checked Convert)
         if (opType != udonType)

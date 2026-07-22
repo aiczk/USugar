@@ -139,7 +139,7 @@ public class SwitchHandler : HandlerBase, IOperationHandler
                 : ExternCall(
                     "SystemBoolean.__op_ConditionalOr__SystemBoolean_SystemBoolean__SystemBoolean",
                     new List<CLeaf> { caseCond, clauseCond },
-                    "SystemBoolean");
+                    new StorageType("SystemBoolean"));
         }
         return caseCond;
     }
@@ -175,7 +175,7 @@ public class SwitchHandler : HandlerBase, IOperationHandler
                 // Avoids runtime SystemConvert.__ToInt32__SystemObject__SystemInt32 per case.
                 if (singleValue.Value.ConstantValue.HasValue)
                 {
-                    caseValueVal = Const(singleValue.Value.ConstantValue.Value, eqType);
+                    caseValueVal = Const(singleValue.Value.ConstantValue.Value, new StorageType(eqType));
                 }
                 else
                 {
@@ -187,7 +187,7 @@ public class SwitchHandler : HandlerBase, IOperationHandler
                     eqType, "__op_Equality", new[] { eqType, eqType }, "SystemBoolean");
 
                 var lhs = convertedValueVal;
-                return ExternCall(eqSig, new List<CLeaf> { lhs, caseValueVal }, "SystemBoolean");
+                return ExternCall(eqSig, new List<CLeaf> { lhs, caseValueVal }, new StorageType("SystemBoolean"));
             }
             case IPatternCaseClauseOperation patternCase:
             {
@@ -199,8 +199,8 @@ public class SwitchHandler : HandlerBase, IOperationHandler
                     // guard even when the pattern did not match, and the guard reads the pattern-bound
                     // variable (e.g. `d.id` where `d` is only validly bound on a match) → a null-bundle
                     // read → VmFault. Evaluate the guard ONLY inside the matched branch.
-                    var guarded = _ctx.Builder.AllocScratch("SystemBoolean");
-                    EmitAssign(guarded, Const(false, "SystemBoolean"));
+                    var guarded = _ctx.Builder.AllocScratch(new StorageType("SystemBoolean"));
+                    EmitAssign(guarded, Const(false, new StorageType("SystemBoolean")));
                     _builder.EmitIf(cond, _ => EmitAssign(guarded, VisitExpression(patternCase.Guard)));
                     cond = SlotRef(guarded);
                 }

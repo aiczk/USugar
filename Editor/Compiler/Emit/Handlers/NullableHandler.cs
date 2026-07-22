@@ -30,7 +30,8 @@ public class NullableHandler : AssignmentHandlerBase, IExpressionHandler
         // The null check is type-agnostic (SystemObject), so no retype is needed.
         CLeaf targetVal = VisitExpression(op.Operation);
 
-        return NullableAbi.EmitConditionalAccess(_builder, targetVal, isVoid, isVoid ? null : GetStorageTypeName(op.Type),
+        return NullableAbi.EmitConditionalAccess(_builder, targetVal, isVoid,
+            isVoid ? (StorageType?)null : new StorageType(GetStorageTypeName(op.Type)),
             target =>
         {
             // target is not null → evaluate WhenNotNull with target as the instance
@@ -65,7 +66,7 @@ public class NullableHandler : AssignmentHandlerBase, IExpressionHandler
         // tolerate), and the raw copy left a mistyped value that faults the next strict extern read.
         else if (EmitPolicy.IsNullableT(op.Value.Type, out _) && ExternResolver.IsSmallIntOrChar(resultType))
             presentValue = present => RetagSmallNullablePresent(present, op.Type);
-        return NullableAbi.EmitCoalesce(_builder, leftVal, resultType,
+        return NullableAbi.EmitCoalesce(_builder, leftVal, new StorageType(resultType),
             () =>
             {
                 var rightVal = VisitExpression(op.WhenNull);
@@ -85,7 +86,7 @@ public class NullableHandler : AssignmentHandlerBase, IExpressionHandler
         RejectUnsafeCrossProgramDelegateWrite(op.Target, _ctx.Boundary.ClassifyValue(op.Value));
         var lv = PrepareLValue(op.Target);
         var targetType = GetStorageTypeName(op.Target.Type);
-        return NullableAbi.EmitCoalesceAssignment(_builder, lv.Value, targetType,
+        return NullableAbi.EmitCoalesceAssignment(_builder, lv.Value, new StorageType(targetType),
             () => VisitExpression(op.Value),
             rightVal => lv.Write(rightVal));
     }

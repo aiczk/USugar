@@ -48,7 +48,7 @@ public partial class InvocationHandler
             && _ctx.Aggregates.GetLayout(aggProp).TryGetIndex(op.Property.Name, out var aggPropIdx))
         {
             var arrExpr = LoadInstanceRaw(op.Instance);
-            var getVal = AggregateAbi.ReadSlot(_builder, arrExpr, aggPropIdx, "SystemObject");
+            var getVal = AggregateAbi.ReadSlot(_builder, arrExpr, aggPropIdx, new StorageType("SystemObject"));
             // A struct-typed property returns a COPY (C# getters return by value; you cannot mutate through it).
             return op.Property.Type is INamedTypeSymbol propAgg && TypeClassifier.IsAggregateValue(propAgg)
                 ? AggregateAbi.DeepClone(_builder, getVal, propAgg, _ctx.Aggregates.GetLayout) : getVal;
@@ -90,7 +90,7 @@ public partial class InvocationHandler
                 && ExternResolver.IsUdonSharpBehaviour(thisProp.ContainingType)
                 && thisProp.ContainingType.Name != "UdonSharpBehaviour")
             {
-                var bv = LoadField(thisProp.Name, GetStorageTypeName(thisProp.Type));
+                var bv = LoadField(thisProp.Name, new StorageType(GetStorageTypeName(thisProp.Type)));
                 return thisProp.Type is INamedTypeSymbol thisAutoAgg && TypeClassifier.IsAggregateValue(thisAutoAgg)
                     ? AggregateAbi.DeepClone(_builder, bv, thisAutoAgg, _ctx.Aggregates.GetLayout) : bv;
             }
@@ -99,17 +99,17 @@ public partial class InvocationHandler
             if (propName == "gameObject" || propName == "transform")
             {
                 var propType = GetStorageTypeName(op.Property.Type);
-                return LoadField(_ctx.Storage.DeclareThisOnce(propType), propType);
+                return LoadField(_ctx.Storage.DeclareThisOnce(new StorageType(propType)), new StorageType(propType));
             }
             // Other this.property → extern getter with this instance
             var thisType = GetStorageTypeName(_classSymbol);
-            var thisVal = LoadField(_ctx.Storage.DeclareThisOnce(thisType), thisType);
+            var thisVal = LoadField(_ctx.Storage.DeclareThisOnce(new StorageType(thisType)), new StorageType(thisType));
             var cType = GetStorageTypeName(ResolveExternOwnerType(op.Property.ContainingType, op.Instance?.Type, op.Property.Name));
             var rType = GetStorageTypeName(op.Property.Type);
             return ExternCall(
                 ExternResolver.BuildPropertyGetSignature(cType, propName, rType),
                 new List<CLeaf> { thisVal },
-                rType);
+                new StorageType(rType));
         }
 
         var containingType = GetStorageTypeName(op.Property.ContainingType);
@@ -145,7 +145,7 @@ public partial class InvocationHandler
             {
                 var value = TryGetStaticPropertyValue(containingType, op.Property.Name);
                 if (value != null)
-                    return LoadField(_ctx.Storage.DeclareStructConst(returnType, value), returnType);
+                    return LoadField(_ctx.Storage.DeclareStructConst(new StorageType(returnType), value), new StorageType(returnType));
             }
 
             // Armor: a user-struct static property reaching here (the B47 on-demand arm above did not
@@ -156,7 +156,7 @@ public partial class InvocationHandler
             return ExternCall(
                 ExternResolver.BuildPropertyGetSignature(containingType, op.Property.Name, returnType),
                 new List<CLeaf>(),
-                returnType);
+                new StorageType(returnType));
         }
 
         // Cross-behaviour property get
@@ -172,11 +172,11 @@ public partial class InvocationHandler
             if (isAuto)
             {
                 // Auto-property: direct GetProgramVariable("PropertyName")
-                var nameConst = Const(op.Property.Name, "SystemString");
+                var nameConst = Const(op.Property.Name, new StorageType("SystemString"));
                 return ExternCall(
                     ExternResolver.EventReceiverGetProgramVariable,
                     new List<CLeaf> { instanceVal, nameConst },
-                    returnType);
+                    new StorageType(returnType));
             }
             else
             {
@@ -186,10 +186,10 @@ public partial class InvocationHandler
                 RejectNonPublicCrossAccessor(op.Property.GetMethod, op.Property); // wave-12 [V2]
                 var (getExportName, _, getRetId) = GetCalleeLayout(op.Property.GetMethod);
                 var getReturns = getRetId != null
-                    ? new[] { new ReturnSlot(getRetId, returnType) }
+                    ? new[] { new ReturnSlot(getRetId, new StorageType(returnType)) }
                     : System.Array.Empty<ReturnSlot>();
                 return CrossCall(instanceVal, getExportName,
-                    new List<(string, CLeaf)>(), getReturns, returnType,
+                    new List<(string, CLeaf)>(), getReturns, new StorageType(returnType),
                     TryMarkReentrantCrossDispatch(op, op.Property.GetMethod)); // wave-12 r2 [V1]
             }
         }
@@ -207,7 +207,7 @@ public partial class InvocationHandler
             RejectProgramLocalCrossBehaviourPropertyRead(op.Property); // CW22
             var ifaceInst = VisitExpression(op.Instance);
             return CrossCall(ifaceInst, LayoutPlanner.InterfaceDispatchName(ifaceGetter, ifaceGetterMl),
-                new List<(string, CLeaf)>(), ifaceGetterMl.Returns.ToArray(), returnType,
+                new List<(string, CLeaf)>(), ifaceGetterMl.Returns.ToArray(), new StorageType(returnType),
                 TryMarkReentrantCrossDispatch(op, ifaceGetter)); // wave-12 r2 [V1]
         }
 
@@ -243,7 +243,7 @@ public partial class InvocationHandler
         else if (op.Instance.Type is not IArrayTypeSymbol)
             containingType = GetStorageTypeName(ResolveExternOwnerType(op.Property.ContainingType, op.Instance.Type, op.Property.Name));
         var sig = ExternResolver.BuildPropertyGetSignature(containingType, op.Property.Name, returnType);
-        return ExternCall(sig, new List<CLeaf> { instVal }, returnType);
+        return ExternCall(sig, new List<CLeaf> { instVal }, new StorageType(returnType));
     }
 
     // ── Indexer Get ──
@@ -325,24 +325,24 @@ public partial class InvocationHandler
         if (cType == "SystemString")
         {
             CLeaf inst = op.Instance is IInstanceReferenceOperation
-                ? LoadField(_ctx.Storage.DeclareThisOnce(GetStorageTypeName(_classSymbol)), GetStorageTypeName(_classSymbol))
+                ? LoadField(_ctx.Storage.DeclareThisOnce(new StorageType(GetStorageTypeName(_classSymbol))), new StorageType(GetStorageTypeName(_classSymbol)))
                 : VisitExpression(op.Instance);
             var indexVal = VisitExpression(op.Arguments[0].Value);
-            var oneConst = Const(1, "SystemInt32");
+            var oneConst = Const(1, new StorageType("SystemInt32"));
             var charArr = ExternCall(
                 "SystemString.__ToCharArray__SystemInt32_SystemInt32__SystemCharArray",
                 new List<CLeaf> { inst, indexVal, oneConst },
-                "SystemCharArray");
-            var zeroConst = Const(0, "SystemInt32");
+                new StorageType("SystemCharArray"));
+            var zeroConst = Const(0, new StorageType("SystemInt32"));
             return ExternCall(
                 ExternResolver.BuildArrayGetSignature("SystemCharArray", "SystemChar"),
                 new List<CLeaf> { charArr, zeroConst },
-                "SystemChar");
+                new StorageType("SystemChar"));
         }
 
         CLeaf instVal;
         if (op.Instance is IInstanceReferenceOperation)
-            instVal = LoadField(_ctx.Storage.DeclareThisOnce(GetStorageTypeName(_classSymbol)), GetStorageTypeName(_classSymbol));
+            instVal = LoadField(_ctx.Storage.DeclareThisOnce(new StorageType(GetStorageTypeName(_classSymbol))), new StorageType(GetStorageTypeName(_classSymbol)));
         else
             instVal = VisitExpression(op.Instance);
 
@@ -359,7 +359,7 @@ public partial class InvocationHandler
         return ExternCall(
             $"{cType}.__get_{op.Property.MetadataName}__{string.Join("_", idxTypes)}__{rType}",
             externArgs,
-            rType);
+            new StorageType(rType));
     }
 
     // ── Interpolated String ──
@@ -426,7 +426,7 @@ public partial class InvocationHandler
         }
 
         var formatStr = string.Join("", formatParts);
-        var formatConst = Const(formatStr, "SystemString");
+        var formatConst = Const(formatStr, new StorageType("SystemString"));
 
         if (argVals.Count == 0)
         {
@@ -443,26 +443,26 @@ public partial class InvocationHandler
             return ExternCall(
                 $"SystemString.__Format__SystemString_{argTypes}__SystemString",
                 externArgs,
-                "SystemString");
+                new StorageType("SystemString"));
         }
         else
         {
             // 4+ args: pack into SystemObjectArray, use Format(string, object[])
-            var sizeConst = Const(argVals.Count, "SystemInt32");
+            var sizeConst = Const(argVals.Count, new StorageType("SystemInt32"));
             var arrVal = ExternCall(
                 ExternResolver.BuildArrayCtorSignature("SystemObjectArray"),
                 new List<CLeaf> { sizeConst },
-                "SystemObjectArray");
+                new StorageType("SystemObjectArray"));
             for (int i = 0; i < argVals.Count; i++)
             {
-                var idxConst = Const(i, "SystemInt32");
+                var idxConst = Const(i, new StorageType("SystemInt32"));
                 EmitExternVoid(ExternResolver.BuildArraySetSignature("SystemObjectArray", "SystemObject"),
                     new List<CLeaf> { arrVal, idxConst, argVals[i] });
             }
             return ExternCall(
                 "SystemString.__Format__SystemString_SystemObjectArray__SystemString",
                 new List<CLeaf> { formatConst, arrVal },
-                "SystemString");
+                new StorageType("SystemString"));
         }
     }
 
@@ -525,7 +525,7 @@ public partial class InvocationHandler
         if (!ClassHasFieldInitializers(classTy) && !baseIsUserClass && !explicitChainCall)
             return;
 
-        var inst = LoadField(receiverParamId, AggregateAbi.ArrayType);
+        var inst = LoadField(receiverParamId, new StorageType(AggregateAbi.ArrayType));
         if (initInv is { } init
             && init.TargetMethod is { MethodKind: MethodKind.Constructor } target)
         {
@@ -631,7 +631,7 @@ public partial class InvocationHandler
                 $"'{classTy.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}' is minted here but is not in the compile-time minted-class census "
                 + "even though the closed-specialization census must contain every live mint. This is a compiler bug; report the "
                 + "instantiation chain and source location. Emission stopped before producing a class bundle without runtime type identity.");
-        return inst => AggregateAbi.WriteSlot(_builder, inst, 0, LoadField(tv, AggregateAbi.ArrayType));
+        return inst => AggregateAbi.WriteSlot(_builder, inst, 0, LoadField(tv, new StorageType(AggregateAbi.ArrayType)));
     }
 
     /// <summary>`new T()` (kind-level census gap, 2026-07-11): monomorphization has substituted T to a
@@ -705,7 +705,7 @@ public partial class InvocationHandler
                 Line = lineSpan.StartLinePosition.Line + 1,
                 Character = lineSpan.StartLinePosition.Character + 1,
             });
-            return Const(null, resultType);
+            return Const(null, new StorageType(resultType));
         }
 
         // Class ABI v1 (CA-M1): a supported user class mints via the single ClassAbi bundle sequence. An
@@ -721,7 +721,7 @@ public partial class InvocationHandler
             return concreteType is INamedTypeSymbol structTy && TypeClassifier.IsAggregateValue(structTy)
                 ? AggregateAbi.MintDefault(_builder, _ctx.Aggregates.GetLayout(structTy),
                     _ctx.Aggregates.GetLayout, GetStorageTypeName)
-                : Const(null, resultType);
+                : Const(null, new StorageType(resultType));
 
         // Constant folding: struct ctor with all-constant args
         if (op.Type.IsValueType && op.Initializer == null && op.Arguments.Length > 0
@@ -730,7 +730,7 @@ public partial class InvocationHandler
         {
             var value = TryConstructAtCompileTime(resultType, op.Arguments);
             if (value != null)
-                return LoadField(_ctx.Storage.DeclareStructConst(resultType, value), resultType);
+                return LoadField(_ctx.Storage.DeclareStructConst(new StorageType(resultType), value), new StorageType(resultType));
         }
 
         // User struct with a user-defined ctor, used AS A VALUE (e.g. an operator body `return new V(x,y)`):
@@ -742,7 +742,7 @@ public partial class InvocationHandler
             && op.Constructor != null)
         {
             var layout = _ctx.Aggregates.GetLayout(userStruct);
-            var slot = _ctx.Builder.AllocScratch(AggregateAbi.ArrayType);
+            var slot = _ctx.Builder.AllocScratch(new StorageType(AggregateAbi.ArrayType));
             EmitAssign(slot, AggregateAbi.Allocate(_builder, layout.Count));
             AggregateAbi.DefaultInitialize(_builder, SlotRef(slot), layout, _ctx.Aggregates.GetLayout, GetStorageTypeName);
             // CW4: same by-ordinal + ref/out discipline as the class mint arm (EmitClassInstanceMint).
@@ -775,8 +775,8 @@ public partial class InvocationHandler
         if (op.Arguments.Length == 0 && op.Type.IsValueType)
         {
             // Struct with initializer but no ctor args: need a mutable temp
-            var resultSlot = _ctx.Builder.AllocScratch(resultType);
-            EmitAssign(resultSlot, Const(null, resultType));
+            var resultSlot = _ctx.Builder.AllocScratch(new StorageType(resultType));
+            EmitAssign(resultSlot, Const(null, new StorageType(resultType)));
             resultVal = SlotRef(resultSlot);
         }
         else
@@ -796,7 +796,7 @@ public partial class InvocationHandler
             resultVal = ExternCall(
                 $"{resultType}.__ctor__{paramPart}__{resultType}",
                 argVals,
-                resultType);
+                new StorageType(resultType));
         }
 
         // Object initializer: new T { Prop = val, ... }

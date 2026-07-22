@@ -13,20 +13,20 @@ public static class NullableAbi
     public static CLeaf IsNull(CoreBuilder builder, CLeaf nullableValue)
         => builder.ExternCall(
             "SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean",
-            new List<CLeaf> { nullableValue, builder.Const(null, StorageType) },
-            "SystemBoolean");
+            new List<CLeaf> { nullableValue, builder.Const(null, new StorageType(StorageType)) },
+            new StorageType("SystemBoolean"));
 
     public static CLeaf HasValue(CoreBuilder builder, CLeaf nullableValue)
         => builder.ExternCall(
             "SystemBoolean.__op_UnaryNegation__SystemBoolean__SystemBoolean",
             new List<CLeaf> { IsNull(builder, nullableValue) },
-            "SystemBoolean");
+            new StorageType("SystemBoolean"));
 
     public static CLeaf IsNotNull(CoreBuilder builder, CLeaf nullableValue)
         => builder.ExternCall(
             "SystemObject.__op_Inequality__SystemObject_SystemObject__SystemBoolean",
-            new List<CLeaf> { nullableValue, builder.Const(null, StorageType) },
-            "SystemBoolean");
+            new List<CLeaf> { nullableValue, builder.Const(null, new StorageType(StorageType)) },
+            new StorageType("SystemBoolean"));
 
     public static (CLeaf Value, ITypeSymbol EffectiveType) PromoteBoxedToInt32(CoreBuilder builder,
         CLeaf boxed, ITypeSymbol underlying, ITypeSymbol int32Type, Func<ITypeSymbol, string> getUdonType)
@@ -34,12 +34,12 @@ public static class NullableAbi
         if (ExternResolver.IsSmallIntOrChar(getUdonType(underlying)))
         {
             return (builder.ExternCall("SystemConvert.__ToInt32__SystemObject__SystemInt32",
-                new List<CLeaf> { boxed }, "SystemInt32"), int32Type);
+                new List<CLeaf> { boxed }, new StorageType("SystemInt32")), int32Type);
         }
         return (boxed, underlying);
     }
 
-    public static CLeaf EmitGetValueOrDefault(CoreBuilder builder, CLeaf nullableValue, string resultType,
+    public static CLeaf EmitGetValueOrDefault(CoreBuilder builder, CLeaf nullableValue, StorageType resultType,
         CLeaf fallbackValue, Func<CLeaf, CLeaf> presentValue)
     {
         var resultSlot = builder.AllocScratch(resultType);
@@ -50,26 +50,26 @@ public static class NullableAbi
     }
 
     public static CLeaf EmitLiftedNumericConversion(CoreBuilder builder, CLeaf sourceValue,
-        string destinationUdonType, string convertMethodName, bool integerToInteger,
+        StorageType destinationUdonType, string convertMethodName, bool integerToInteger,
         Func<CLeaf, string, string, CLeaf> narrowConvert)
     {
-        var resultSlot = builder.AllocScratch(StorageType);
-        builder.EmitAssign(resultSlot, builder.Const(null, StorageType));
+        var resultSlot = builder.AllocScratch(new StorageType(StorageType));
+        builder.EmitAssign(resultSlot, builder.Const(null, new StorageType(StorageType)));
         builder.EmitIf(HasValue(builder, sourceValue), _ =>
         {
             CValue converted = integerToInteger
                 ? narrowConvert(
                     builder.ExternCall("SystemConvert.__ToInt64__SystemObject__SystemInt64",
-                        new List<CLeaf> { sourceValue }, "SystemInt64"),
-                    "SystemInt64", destinationUdonType)
-                : builder.ExternCall($"SystemConvert.__{convertMethodName}__SystemObject__{destinationUdonType}",
+                        new List<CLeaf> { sourceValue }, new StorageType("SystemInt64")),
+                    "SystemInt64", destinationUdonType.Name)
+                : builder.ExternCall($"SystemConvert.__{convertMethodName}__SystemObject__{destinationUdonType.Name}",
                     new List<CLeaf> { sourceValue }, destinationUdonType);
             builder.EmitAssign(resultSlot, converted);
         });
         return builder.SlotRef(resultSlot);
     }
 
-    public static CLeaf EmitCoalesce(CoreBuilder builder, CValue leftValue, string resultType,
+    public static CLeaf EmitCoalesce(CoreBuilder builder, CValue leftValue, StorageType resultType,
         Func<CLeaf> whenNullValue, Func<CLeaf, CLeaf> presentValue)
     {
         var resultSlot = builder.AllocScratch(resultType);
@@ -83,7 +83,7 @@ public static class NullableAbi
         return builder.SlotRef(resultSlot);
     }
 
-    public static CLeaf EmitCoalesceAssignment(CoreBuilder builder, CValue currentValue, string resultType,
+    public static CLeaf EmitCoalesceAssignment(CoreBuilder builder, CValue currentValue, StorageType resultType,
         Func<CLeaf> whenNullValue, Action<CLeaf> writeBack)
     {
         var resultSlot = builder.AllocScratch(resultType);
@@ -97,14 +97,15 @@ public static class NullableAbi
         return builder.SlotRef(resultSlot);
     }
 
-    public static CLeaf EmitConditionalAccess(CoreBuilder builder, CLeaf targetValue, bool isVoid, string resultType,
+    public static CLeaf EmitConditionalAccess(CoreBuilder builder, CLeaf targetValue, bool isVoid, StorageType? resultType,
         Func<CLeaf, CLeaf> whenNotNull)
     {
         int resultSlot = -1;
         if (!isVoid)
         {
-            resultSlot = builder.AllocScratch(resultType);
-            builder.EmitAssign(resultSlot, builder.Const(null, resultType));
+            var valueType = resultType ?? throw new ArgumentNullException(nameof(resultType));
+            resultSlot = builder.AllocScratch(valueType);
+            builder.EmitAssign(resultSlot, builder.Const(null, valueType));
         }
 
         builder.EmitIf(IsNotNull(builder, targetValue), _ =>
@@ -123,10 +124,10 @@ public static class NullableAbi
     public static CLeaf EmitNullGatedMatch(CoreBuilder builder, CValue value, bool matchesNull,
         Func<CLeaf, CLeaf> matchPresent)
     {
-        var nullableSlot = builder.AllocScratch(StorageType);
+        var nullableSlot = builder.AllocScratch(new StorageType(StorageType));
         builder.EmitAssign(nullableSlot, value);
-        var matchSlot = builder.AllocScratch("SystemBoolean");
-        builder.EmitAssign(matchSlot, builder.Const(matchesNull, "SystemBoolean"));
+        var matchSlot = builder.AllocScratch(new StorageType("SystemBoolean"));
+        builder.EmitAssign(matchSlot, builder.Const(matchesNull, new StorageType("SystemBoolean")));
         builder.EmitIf(HasValue(builder, builder.SlotRef(nullableSlot)),
             _ => builder.EmitAssign(matchSlot, matchPresent(builder.SlotRef(nullableSlot))));
         return builder.SlotRef(matchSlot);
@@ -154,7 +155,7 @@ public static class NullableAbi
     {
         if (pattern is IConstantPatternOperation cpn && cpn.Value.ConstantValue is { HasValue: true, Value: null })
         {
-            var nullableSlot = builder.AllocScratch(StorageType);
+            var nullableSlot = builder.AllocScratch(new StorageType(StorageType));
             builder.EmitAssign(nullableSlot, value);
             return IsNull(builder, builder.SlotRef(nullableSlot));
         }
@@ -164,7 +165,7 @@ public static class NullableAbi
         if (pattern is IDiscardPatternOperation
             || (pattern is IDeclarationPatternOperation dpn && (dpn.MatchedType == null || dpn.MatchesNull)))
         {
-            var nullableSlot = builder.AllocScratch(StorageType);
+            var nullableSlot = builder.AllocScratch(new StorageType(StorageType));
             builder.EmitAssign(nullableSlot, value);
             return matchUnderlying(builder.SlotRef(nullableSlot), underlyingType, pattern);
         }
@@ -178,9 +179,9 @@ public static class NullableAbi
     public static CLeaf EmitLiftedBoolLogic(CoreBuilder builder, CValue leftValue, CValue rightValue,
         BinaryOperatorKind kind)
     {
-        var aSlot = builder.AllocScratch(StorageType);
+        var aSlot = builder.AllocScratch(new StorageType(StorageType));
         builder.EmitAssign(aSlot, leftValue);
-        var bSlot = builder.AllocScratch(StorageType);
+        var bSlot = builder.AllocScratch(new StorageType(StorageType));
         builder.EmitAssign(bSlot, rightValue);
 
         void IfBool(int slot, bool wantTrue, Action<CoreBuilder> body)
@@ -188,18 +189,18 @@ public static class NullableAbi
             CLeaf boolCond = wantTrue
                 ? builder.SlotRef(slot)
                 : builder.ExternCall("SystemBoolean.__op_UnaryNegation__SystemBoolean__SystemBoolean",
-                    new List<CLeaf> { builder.SlotRef(slot) }, "SystemBoolean");
+                    new List<CLeaf> { builder.SlotRef(slot) }, new StorageType("SystemBoolean"));
             builder.EmitIf(HasValue(builder, builder.SlotRef(slot)), _ => builder.EmitIf(boolCond, body));
         }
 
-        var resultSlot = builder.AllocScratch(StorageType);
-        builder.EmitAssign(resultSlot, builder.Const(null, StorageType));
+        var resultSlot = builder.AllocScratch(new StorageType(StorageType));
+        builder.EmitAssign(resultSlot, builder.Const(null, new StorageType(StorageType)));
         bool isAnd = kind == BinaryOperatorKind.And;
         // Dominating value: false for &, true for |.
-        IfBool(aSlot, !isAnd, _ => builder.EmitAssign(resultSlot, builder.Const(!isAnd, "SystemBoolean")));
-        IfBool(bSlot, !isAnd, _ => builder.EmitAssign(resultSlot, builder.Const(!isAnd, "SystemBoolean")));
+        IfBool(aSlot, !isAnd, _ => builder.EmitAssign(resultSlot, builder.Const(!isAnd, new StorageType("SystemBoolean"))));
+        IfBool(bSlot, !isAnd, _ => builder.EmitAssign(resultSlot, builder.Const(!isAnd, new StorageType("SystemBoolean"))));
         // Both non-dominating values: both true for &, both false for |.
-        IfBool(aSlot, isAnd, _ => IfBool(bSlot, isAnd, __ => builder.EmitAssign(resultSlot, builder.Const(isAnd, "SystemBoolean"))));
+        IfBool(aSlot, isAnd, _ => IfBool(bSlot, isAnd, __ => builder.EmitAssign(resultSlot, builder.Const(isAnd, new StorageType("SystemBoolean")))));
         return builder.SlotRef(resultSlot);
     }
 
@@ -213,9 +214,9 @@ public static class NullableAbi
     {
         var resultNullable = EmitPolicy.IsNullableT(resultType, out var resultUnderlying);
 
-        var aSlot = builder.AllocScratch(StorageType);
+        var aSlot = builder.AllocScratch(new StorageType(StorageType));
         builder.EmitAssign(aSlot, leftValue);
-        var bSlot = builder.AllocScratch(StorageType);
+        var bSlot = builder.AllocScratch(new StorageType(StorageType));
         builder.EmitAssign(bSlot, rightValue);
 
         void IfBothPresent(Action<CoreBuilder> body)
@@ -237,7 +238,7 @@ public static class NullableAbi
             var raw = builder.ExternCall(
                 ExternResolver.ResolveBinaryExtern(opKind, operatorMethod,
                     resolveType(leftEffective), resolveType(rightEffective), resolveType(resultEffective)),
-                new List<CLeaf> { leftOperand, rightOperand }, getUdonType(resultEffective));
+                new List<CLeaf> { leftOperand, rightOperand }, new StorageType(getUdonType(resultEffective)));
             return resultPromotes && getUdonType(resultUnder) != "SystemInt32"
                 ? narrowConvert(raw, "SystemInt32", getUdonType(resultUnder))
                 : raw;
@@ -245,29 +246,29 @@ public static class NullableAbi
 
         if (resultNullable)
         {
-            var resultSlot = builder.AllocScratch(StorageType);
-            builder.EmitAssign(resultSlot, builder.Const(null, StorageType));
+            var resultSlot = builder.AllocScratch(new StorageType(StorageType));
+            builder.EmitAssign(resultSlot, builder.Const(null, new StorageType(StorageType)));
             IfBothPresent(_ => builder.EmitAssign(resultSlot, ValueOp(kind)));
             return builder.SlotRef(resultSlot);
         }
 
         if (kind is BinaryOperatorKind.Equals or BinaryOperatorKind.NotEquals)
         {
-            var eqSlot = builder.AllocScratch("SystemBoolean");
-            builder.EmitAssign(eqSlot, builder.Const(false, "SystemBoolean"));
+            var eqSlot = builder.AllocScratch(new StorageType("SystemBoolean"));
+            builder.EmitAssign(eqSlot, builder.Const(false, new StorageType("SystemBoolean")));
             if (leftNullable && rightNullable)
                 builder.EmitIf(IsNull(builder, builder.SlotRef(aSlot)),
                     _ => builder.EmitIf(IsNull(builder, builder.SlotRef(bSlot)),
-                        __ => builder.EmitAssign(eqSlot, builder.Const(true, "SystemBoolean"))));
+                        __ => builder.EmitAssign(eqSlot, builder.Const(true, new StorageType("SystemBoolean")))));
             IfBothPresent(_ => builder.EmitAssign(eqSlot, ValueOp(BinaryOperatorKind.Equals)));
             if (kind == BinaryOperatorKind.NotEquals)
                 return builder.ExternCall("SystemBoolean.__op_UnaryNegation__SystemBoolean__SystemBoolean",
-                    new List<CLeaf> { builder.SlotRef(eqSlot) }, "SystemBoolean");
+                    new List<CLeaf> { builder.SlotRef(eqSlot) }, new StorageType("SystemBoolean"));
             return builder.SlotRef(eqSlot);
         }
 
-        var relSlot = builder.AllocScratch("SystemBoolean");
-        builder.EmitAssign(relSlot, builder.Const(false, "SystemBoolean"));
+        var relSlot = builder.AllocScratch(new StorageType("SystemBoolean"));
+        builder.EmitAssign(relSlot, builder.Const(false, new StorageType("SystemBoolean")));
         IfBothPresent(_ => builder.EmitAssign(relSlot, ValueOp(kind)));
         return builder.SlotRef(relSlot);
     }
@@ -285,16 +286,16 @@ public static class NullableAbi
             _ => throw new NotSupportedException($"Unsupported lifted unary operator: {kind}")
         };
 
-        var nullableSlot = builder.AllocScratch(StorageType);
+        var nullableSlot = builder.AllocScratch(new StorageType(StorageType));
         builder.EmitAssign(nullableSlot, operandValue);
-        var resultSlot = builder.AllocScratch(StorageType);
-        builder.EmitAssign(resultSlot, builder.Const(null, StorageType));
+        var resultSlot = builder.AllocScratch(new StorageType(StorageType));
+        builder.EmitAssign(resultSlot, builder.Const(null, new StorageType(StorageType)));
         builder.EmitIf(HasValue(builder, builder.SlotRef(nullableSlot)), _ =>
         {
             var (value, _) = promoteBoxed(builder.SlotRef(nullableSlot), operandUnderlying);
             var computed = builder.ExternCall(
                 ExternResolver.BuildMethodSignature(resultUdonType, $"__{opName}", new[] { resultUdonType }, resultUdonType),
-                new List<CLeaf> { value }, resultUdonType);
+                new List<CLeaf> { value }, new StorageType(resultUdonType));
             builder.EmitAssign(resultSlot, computed);
         });
         return builder.SlotRef(resultSlot);

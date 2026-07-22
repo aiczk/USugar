@@ -29,7 +29,7 @@ public class FlatVerifyTests
     [Fact]
     public void WellFormed_Passes()
     {
-        var f = Flat(Block(0, new List<CStmt> { new CAssign(0, new CConst(1, "SystemInt32")) }, new CRet()));
+        var f = Flat(Block(0, new List<CStmt> { new CAssign(0, new CConst(1, new StorageType("SystemInt32"))) }, new CRet()));
         FlatVerify.Verify(f); // no throw
     }
 
@@ -55,7 +55,7 @@ public class FlatVerifyTests
     public void AddrFieldRef_AsAssignValue_Throws_OnlyValidAsCallArg()
     {
         var f = Flat(Block(0,
-            new List<CStmt> { new CAssign(0, new CFieldAddr("y", "SystemInt32")) },
+            new List<CStmt> { new CAssign(0, new CFieldAddr("y", new StorageType("SystemInt32"))) },
             new CRet()));
         Assert.ThrowsAny<System.Exception>(() => FlatVerify.Verify(f));
     }
@@ -63,7 +63,7 @@ public class FlatVerifyTests
     [Fact]
     public void StructuredStatementInFlatBlock_Throws()
     {
-        var leaked = new CIf(new CSlotRef(0, "SystemBoolean"), new CBlock(), new CBlock());
+        var leaked = new CIf(new CSlotRef(0, new StorageType("SystemBoolean")), new CBlock(), new CBlock());
         var f = Flat(Block(0, new List<CStmt> { leaked }, new CRet()));
         Assert.ThrowsAny<System.Exception>(() => FlatVerify.Verify(f));
     }
@@ -86,7 +86,7 @@ public class FlatVerifyTests
         // the signature of a rebuild pass that forgot to copy the flag.
         var f = Flat(Block(0,
             new List<CStmt> { new CExprStmt(new CInternalCall("__indirect",
-                new List<CLeaf> { new CSlotRef(0, "SystemUInt32") }, "SystemVoid")) },
+                new List<CLeaf> { new CSlotRef(0, new StorageType("SystemUInt32")) }, new StorageType("SystemVoid"))) },
             new CRet()));
         f.ReentrantSiteCount = 1;
         var ex = Assert.ThrowsAny<System.Exception>(() => FlatVerify.Verify(f));
@@ -99,7 +99,7 @@ public class FlatVerifyTests
         // The inverse imbalance (more flags than registered sites) is equally a verifier error.
         var f = Flat(Block(0,
             new List<CStmt> { new CExprStmt(new CInternalCall("__indirect",
-                new List<CLeaf> { new CSlotRef(0, "SystemUInt32") }, "SystemVoid", null, reentrant: true)) },
+                new List<CLeaf> { new CSlotRef(0, new StorageType("SystemUInt32")) }, new StorageType("SystemVoid"), null, reentrant: true)) },
             new CRet()));
         f.ReentrantSiteCount = 0;
         Assert.ThrowsAny<System.Exception>(() => FlatVerify.Verify(f));
@@ -113,11 +113,11 @@ public class FlatVerifyTests
             new List<CStmt>
             {
                 new CExprStmt(new CInternalCall("__indirect",
-                    new List<CLeaf> { new CSlotRef(0, "SystemUInt32") }, "SystemVoid", null, reentrant: true)),
+                    new List<CLeaf> { new CSlotRef(0, new StorageType("SystemUInt32")) }, new StorageType("SystemVoid"), null, reentrant: true)),
                 new CExprStmt(new CExternCall(
                     "VRCUdonCommonInterfacesIUdonEventReceiver.__SendCustomEvent__SystemString__SystemVoid",
-                    new List<CLeaf> { new CSlotRef(1, "SystemObject"), new CSlotRef(2, "SystemString") },
-                    "SystemVoid", null, reentrant: true)),
+                    new List<CLeaf> { new CSlotRef(1, new StorageType("SystemObject")), new CSlotRef(2, new StorageType("SystemString")) },
+                    new StorageType("SystemVoid"), null, reentrant: true)),
             },
             new CRet()));
         f.ReentrantSiteCount = 2;
@@ -132,13 +132,13 @@ public class FlatVerifyTests
 
     static CExprStmt SetVar(int recvSlot, int strSlot) => new(new CExternCall(
         "VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid",
-        new List<CLeaf> { new CSlotRef(recvSlot, "SystemObject"), new CConst("p", "SystemString"), new CSlotRef(strSlot, "SystemObject") },
-        "SystemVoid"));
+        new List<CLeaf> { new CSlotRef(recvSlot, new StorageType("SystemObject")), new CConst("p", new StorageType("SystemString")), new CSlotRef(strSlot, new StorageType("SystemObject")) },
+        new StorageType("SystemVoid")));
 
     static CExprStmt SendEvent(int recvSlot, int nameSlot, int preSpillStmts) => new(new CExternCall(
         "VRCUdonCommonInterfacesIUdonEventReceiver.__SendCustomEvent__SystemString__SystemVoid",
-        new List<CLeaf> { new CSlotRef(recvSlot, "SystemObject"), new CSlotRef(nameSlot, "SystemString") },
-        "SystemVoid", null, reentrant: true, preSpillStmts: preSpillStmts));
+        new List<CLeaf> { new CSlotRef(recvSlot, new StorageType("SystemObject")), new CSlotRef(nameSlot, new StorageType("SystemString")) },
+        new StorageType("SystemVoid"), null, reentrant: true, preSpillStmts: preSpillStmts));
 
     [Fact]
     public void PreSpillStmts_ExceedsAvailablePrecedingStatements_Throws()
@@ -159,7 +159,7 @@ public class FlatVerifyTests
         var f = Flat(Block(0,
             new List<CStmt>
             {
-                new CAssign(2, new CConst(1, "SystemInt32")),
+                new CAssign(2, new CConst(1, new StorageType("SystemInt32"))),
                 SendEvent(0, 1, preSpillStmts: 1),
             },
             new CRet()));
@@ -178,8 +178,8 @@ public class FlatVerifyTests
             {
                 new CExprStmt(new CExternCall(
                     "VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid",
-                    new List<CLeaf> { new CSlotRef(0, "SystemObject"), new CConst("p", "SystemString"), new CSlotRef(1, "SystemObject") },
-                    "SystemVoid", destSlot: 5)),
+                    new List<CLeaf> { new CSlotRef(0, new StorageType("SystemObject")), new CConst("p", new StorageType("SystemString")), new CSlotRef(1, new StorageType("SystemObject")) },
+                    new StorageType("SystemVoid"), destSlot: 5)),
                 SendEvent(0, 1, preSpillStmts: 1),
             },
             new CRet()));
