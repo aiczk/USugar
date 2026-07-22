@@ -94,16 +94,16 @@ public sealed class SyntheticContext
         RequireMutable();
         if (binding.Kind != DelegateBindingKind.Receiver)
             throw new ArgumentException("Receiver bridge demand requires a receiver binding.", nameof(binding));
-        _receiverBridges.TryAdd(binding.BridgeName,
-            new DelegateBridgeDemand(binding, binding.TargetMethod, null));
+        RegisterUnique(_receiverBridges,
+            new DelegateBridgeDemand(binding, binding.TargetMethod, null), "receiver bridge");
     }
 
     public void RegisterDelegateBridge(DelegateBindingPlan binding,
         IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeParamMap)
     {
         RequireMutable();
-        _delegateBridges.TryAdd(binding.BridgeName,
-            new DelegateBridgeDemand(binding, binding.TargetMethod, typeParamMap));
+        RegisterUnique(_delegateBridges,
+            new DelegateBridgeDemand(binding, binding.TargetMethod, typeParamMap), "delegate bridge");
     }
 
     public void RegisterSigAdapter(DelegateBindingPlan binding, IMethodSymbol invoke,
@@ -112,8 +112,8 @@ public sealed class SyntheticContext
         RequireMutable();
         if (binding.Kind != DelegateBindingKind.SignatureAdapter)
             throw new ArgumentException("Signature adapter demand requires an adapter binding.", nameof(binding));
-        _sigAdapterBridges.TryAdd(binding.BridgeName,
-            new DelegateBridgeDemand(binding, invoke, typeParamMap));
+        RegisterUnique(_sigAdapterBridges,
+            new DelegateBridgeDemand(binding, invoke, typeParamMap), "signature adapter");
     }
 
     public void RegisterMulticast(string signature, IMethodSymbol invoke,
@@ -147,4 +147,28 @@ public sealed class SyntheticContext
         if (IsFrozen) throw new InvalidOperationException("Synthetic demand plan was frozen twice.");
         IsFrozen = true;
     }
+
+    static void RegisterUnique(Dictionary<string, DelegateBridgeDemand> demands,
+        DelegateBridgeDemand demand, string category)
+    {
+        var name = demand.Binding.BridgeName;
+        if (!demands.TryGetValue(name, out var existing))
+        {
+            demands.Add(name, demand);
+            return;
+        }
+        if (SameDemandMethod(existing.Binding.TargetMethod, demand.Binding.TargetMethod)
+            && SameDemandMethod(existing.SignatureMethod, demand.SignatureMethod))
+            return;
+        throw new InvalidOperationException(
+            $"Synthetic {category} name '{name}' maps to both "
+            + $"'{existing.Binding.TargetMethod}' and '{demand.Binding.TargetMethod}'.");
+    }
+
+    static bool SameDemandMethod(IMethodSymbol left, IMethodSymbol right)
+        => SymbolEqualityComparer.Default.Equals(left, right)
+           || left != null && right != null
+              && left.MethodKind is MethodKind.LambdaMethod or MethodKind.LocalFunction
+              && right.MethodKind is MethodKind.LambdaMethod or MethodKind.LocalFunction
+              && ClosureIdentityPlan.SameSourceDefinition(left, right);
 }
