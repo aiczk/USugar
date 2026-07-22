@@ -29,7 +29,9 @@ public readonly struct StorageType : IEquatable<StorageType>
     // Transitional source boundary: producers still mint Udon names as strings. RuntimeType has no
     // such conversion, so semantic runtime identity cannot accidentally enter storage APIs.
     public static implicit operator StorageType(string name) => new StorageType(name);
-    public static explicit operator string(StorageType type) => type.Name;
+    // UASM signatures and serializers are string protocols, so leaving the storage domain is safe;
+    // the guarded direction is RuntimeType -> StorageType, which remains explicit and centralized.
+    public static implicit operator string(StorageType type) => type.Name;
     public static bool operator ==(StorageType left, StorageType right) => left.Equals(right);
     public static bool operator !=(StorageType left, StorageType right) => !left.Equals(right);
 }
@@ -72,15 +74,15 @@ public enum SlotClass
 public sealed class SlotDecl
 {
     public readonly int Id;
-    public readonly string Type;
+    public readonly StorageType Type;
     public readonly SlotClass Class;
     /// <summary>Non-null for Pinned slots — the fixed UASM variable name.</summary>
     public readonly string FixedName;
 
-    public SlotDecl(int id, string type, SlotClass slotClass, string fixedName = null)
+    public SlotDecl(int id, StorageType type, SlotClass slotClass, string fixedName = null)
     {
         Id = id;
-        Type = type ?? throw new ArgumentNullException(nameof(type));
+        Type = type;
         Class = slotClass;
         FixedName = fixedName;
     }
@@ -106,15 +108,15 @@ public enum FieldFlags
 public sealed class FieldDecl
 {
     public readonly string Name;
-    public readonly string Type;
+    public readonly StorageType Type;
     public object DefaultValue;
     public FieldFlags Flags;
     public string SyncMode; // "none", "linear", "smooth" (null = not synced)
 
-    public FieldDecl(string name, string type)
+    public FieldDecl(string name, StorageType type)
     {
         Name = name ?? throw new ArgumentNullException(nameof(name));
-        Type = type ?? throw new ArgumentNullException(nameof(type));
+        Type = type;
     }
 
     public override string ToString()

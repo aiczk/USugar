@@ -39,20 +39,20 @@ public sealed class CoreBuilder
 
     // ── Slot allocation ──
 
-    public int AllocPinned(string type, string fixedName)
+    public int AllocPinned(StorageType type, string fixedName)
         => _currentFunc.NewSlot(type, SlotClass.Pinned, fixedName);
 
-    public int AllocFrame(string type)
+    public int AllocFrame(StorageType type)
         => _currentFunc.NewSlot(type, SlotClass.Frame);
 
-    public int AllocScratch(string type)
+    public int AllocScratch(StorageType type)
         => _currentFunc.NewSlot(type, SlotClass.Scratch);
 
     // ── Constant deduplication ──
 
-    public CConst Const(object value, string type)
+    public CConst Const(object value, StorageType type)
     {
-        var key = ConstFormat.Key(type, value);
+        var key = ConstFormat.Key(type.Name, value);
         if (_constPool.TryGetValue(key, out var existing))
             return existing;
         var c = new CConst(value, type);
@@ -60,7 +60,7 @@ public sealed class CoreBuilder
         return c;
     }
 
-    public CConst Null(string type) => Const(null, type);
+    public CConst Null(StorageType type) => Const(null, type);
 
     // ── Statement emission ──
 
@@ -169,7 +169,7 @@ public sealed class CoreBuilder
     // ── Expression helpers ──
 
     public CSlotRef SlotRef(int slotId) => new CSlotRef(slotId, _currentFunc.Slots[slotId].Type);
-    public CFieldAddr FieldAddr(string fieldName, string type) => new CFieldAddr(fieldName, type);
+    public CFieldAddr FieldAddr(string fieldName, StorageType type) => new CFieldAddr(fieldName, type);
     public CFuncRef FuncRef(string funcName) => new CFuncRef(funcName);
 
     // ── Value producers (A-normal form) ──

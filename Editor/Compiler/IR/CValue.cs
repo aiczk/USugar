@@ -13,8 +13,8 @@ using System.Collections.Generic;
 /// <summary>Base class for all Core IR values. Every value has a result type.</summary>
 public abstract class CValue
 {
-    public readonly string Type;
-    protected CValue(string type) => Type = type ?? throw new ArgumentNullException(nameof(type));
+    public readonly StorageType Type;
+    protected CValue(StorageType type) => Type = type;
 }
 
 /// <summary>A value safe to use as an operand: pure, side-effect-free, order-stable (re-reading it
@@ -23,14 +23,14 @@ public abstract class CValue
 /// it must first be bound to a slot. Leaves: CSlotRef / CConst / CFuncRef / CFieldAddr.</summary>
 public abstract class CLeaf : CValue
 {
-    protected CLeaf(string type) : base(type) { }
+    protected CLeaf(StorageType type) : base(type) { }
 }
 
 /// <summary>Reference to a virtual slot. Scratch slots are single-assignment under ANF → stable leaf.</summary>
 public sealed class CSlotRef : CLeaf
 {
     public readonly int SlotId;
-    public CSlotRef(int slotId, string type) : base(type) => SlotId = slotId;
+    public CSlotRef(int slotId, StorageType type) : base(type) => SlotId = slotId;
     public override string ToString() => $"slot{SlotId}:{Type}";
 }
 
@@ -38,7 +38,7 @@ public sealed class CSlotRef : CLeaf
 public sealed class CConst : CLeaf
 {
     public readonly object Value; // null for default/null literal
-    public CConst(object value, string type) : base(type) => Value = value;
+    public CConst(object value, StorageType type) : base(type) => Value = value;
     public override string ToString() => $"const({Value ?? "null"}):{Type}";
 }
 
@@ -47,7 +47,7 @@ public sealed class CConst : CLeaf
 public sealed class CFieldLoad : CValue
 {
     public readonly string FieldName;
-    public CFieldLoad(string fieldName, string type) : base(type)
+    public CFieldLoad(string fieldName, StorageType type) : base(type)
         => FieldName = fieldName ?? throw new ArgumentNullException(nameof(fieldName));
     public override string ToString() => $"load [{FieldName}]:{Type}";
 }
@@ -57,7 +57,7 @@ public sealed class CFieldLoad : CValue
 public sealed class CFieldAddr : CLeaf
 {
     public readonly string FieldName;
-    public CFieldAddr(string fieldName, string type) : base(type)
+    public CFieldAddr(string fieldName, StorageType type) : base(type)
         => FieldName = fieldName ?? throw new ArgumentNullException(nameof(fieldName));
     public override string ToString() => $"addr [{FieldName}]:{Type}";
 }

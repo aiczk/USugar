@@ -143,12 +143,12 @@ public sealed class CLoadField : CStmt
 {
     public readonly int DestSlot;
     public readonly string FieldName;
-    public readonly string Type;
-    public CLoadField(int destSlot, string fieldName, string type)
+    public readonly StorageType Type;
+    public CLoadField(int destSlot, string fieldName, StorageType type)
     {
         DestSlot = destSlot;
         FieldName = fieldName ?? throw new ArgumentNullException(nameof(fieldName));
-        Type = type ?? throw new ArgumentNullException(nameof(type));
+        Type = type;
     }
 }
 
@@ -240,7 +240,7 @@ public sealed class CFunction
     }
 
     /// <summary>Allocate a new slot and return its ID.</summary>
-    public int NewSlot(string type, SlotClass slotClass, string fixedName = null)
+    public int NewSlot(StorageType type, SlotClass slotClass, string fixedName = null)
     {
         var id = Slots.Count;
         Slots.Add(new SlotDecl(id, type, slotClass, fixedName));
