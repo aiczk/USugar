@@ -30,7 +30,7 @@ public class NullableHandler : AssignmentHandlerBase, IExpressionHandler
         // The null check is type-agnostic (SystemObject), so no retype is needed.
         CLeaf targetVal = VisitExpression(op.Operation);
 
-        return NullableAbi.EmitConditionalAccess(_builder, targetVal, isVoid, isVoid ? null : GetUdonType(op.Type),
+        return NullableAbi.EmitConditionalAccess(_builder, targetVal, isVoid, isVoid ? null : GetStorageTypeName(op.Type),
             target =>
         {
             // target is not null → evaluate WhenNotNull with target as the instance
@@ -49,7 +49,7 @@ public class NullableHandler : AssignmentHandlerBase, IExpressionHandler
     CLeaf VisitCoalesce(ICoalesceOperation op)
     {
         // a ?? b → var r = a; if (r == null) r = b;
-        var resultType = GetUdonType(op.Type);
+        var resultType = GetStorageTypeName(op.Type);
         // For an aggregate (struct/tuple) result both branches yield a boxed object[] that aliases the
         // nullable's internal storage; deep-clone so the copied-out value has independent value semantics.
         // When op.Type is the aggregate, the right side has the non-nullable aggregate type → always non-null,
@@ -84,7 +84,7 @@ public class NullableHandler : AssignmentHandlerBase, IExpressionHandler
         // aggregate-member (tuple/struct) write-backs and built a bogus __set_X extern for user auto-properties.
         RejectUnsafeCrossProgramDelegateWrite(op.Target, _ctx.Boundary.ClassifyValue(op.Value));
         var lv = PrepareLValue(op.Target);
-        var targetType = GetUdonType(op.Target.Type);
+        var targetType = GetStorageTypeName(op.Target.Type);
         return NullableAbi.EmitCoalesceAssignment(_builder, lv.Value, targetType,
             () => VisitExpression(op.Value),
             rightVal => lv.Write(rightVal));

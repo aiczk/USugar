@@ -37,7 +37,7 @@ public class DeconstructionAssignmentHandler : AssignmentHandlerBase, IOperation
         if (value is IConversionOperation vconv && vconv.Operand is ITupleOperation innerTuple
             && innerTuple.Elements.Length == targetTuple.Elements.Length
             && Enumerable.Range(0, innerTuple.Elements.Length).All(
-                i => GetUdonType(innerTuple.Elements[i].Type) == GetUdonType(targetTuple.Elements[i].Type)))
+                i => GetStorageTypeName(innerTuple.Elements[i].Type) == GetStorageTypeName(targetTuple.Elements[i].Type)))
             value = innerTuple;
 
         if (value is ITupleOperation valueTuple)
@@ -201,7 +201,7 @@ public class DeconstructionAssignmentHandler : AssignmentHandlerBase, IOperation
         if (v is IConversionOperation conv && conv.Operand is ITupleOperation inner
             && inner.Elements.Length == nestedTarget.Elements.Length
             && Enumerable.Range(0, inner.Elements.Length).All(
-                i => GetUdonType(inner.Elements[i].Type) == GetUdonType(nestedTarget.Elements[i].Type)))
+                i => GetStorageTypeName(inner.Elements[i].Type) == GetStorageTypeName(nestedTarget.Elements[i].Type)))
             v = inner;
         return v is ITupleOperation lit && lit.Elements.Length == nestedTarget.Elements.Length ? lit : null;
     }

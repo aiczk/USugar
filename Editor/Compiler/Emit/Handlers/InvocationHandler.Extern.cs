@@ -53,26 +53,26 @@ public partial class InvocationHandler
         if (!target.IsStatic)
         {
             if (op.Instance is IInstanceReferenceOperation)
-                instanceVal = LoadField(_ctx.Storage.DeclareThisOnce(GetUdonType(target.ContainingType)), GetUdonType(target.ContainingType));
+                instanceVal = LoadField(_ctx.Storage.DeclareThisOnce(GetStorageTypeName(target.ContainingType)), GetStorageTypeName(target.ContainingType));
             else if (op.Instance is IFieldReferenceOperation { Instance: IInstanceReferenceOperation } fieldRef
                      && fieldRef.Field.Type.IsValueType && !fieldRef.Field.IsStatic)
             {
                 // Value-type field on this: pass heap address directly so extern can modify in-place
-                instanceVal = FieldAddr(fieldRef.Field.Name, GetUdonType(fieldRef.Field.Type));
+                instanceVal = FieldAddr(fieldRef.Field.Name, GetStorageTypeName(fieldRef.Field.Type));
             }
             // Local variable — value type: pass heap address directly so extern can modify in-place
             else if (op.Instance is ILocalReferenceOperation localRef
                      && localRef.Type.IsValueType
                      && _localBindings.TryGetValue(localRef.Local, out var localBind))
             {
-                instanceVal = FieldAddr(localBind.Id, GetUdonType(localRef.Type));
+                instanceVal = FieldAddr(localBind.Id, GetStorageTypeName(localRef.Type));
             }
             // Parameter — value type: pass heap address directly so extern can modify in-place
             else if (op.Instance is IParameterReferenceOperation paramRef
                      && paramRef.Type.IsValueType)
             {
                 var paramId = GetParamVarId(paramRef.Parameter);
-                instanceVal = FieldAddr(paramId, GetUdonType(paramRef.Type));
+                instanceVal = FieldAddr(paramId, GetStorageTypeName(paramRef.Type));
             }
             else if (op.Instance != null)
                 instanceVal = VisitExpression(op.Instance);
@@ -99,7 +99,7 @@ public partial class InvocationHandler
                     ? (System.Collections.Generic.IReadOnlyList<IOperation>)pac.Initializer.ElementValues
                     : System.Array.Empty<IOperation>();
                 var pts = new List<string>();
-                for (int i = 0; i < lastParamIdx; i++) pts.Add(GetUdonType(target.Parameters[i].Type));
+                for (int i = 0; i < lastParamIdx; i++) pts.Add(GetStorageTypeName(target.Parameters[i].Type));
                 for (int k = 0; k < elems.Count; k++) pts.Add("SystemObject");
                 var candidate = BuildExternCallSignature(target, op.Instance?.Type, pts.ToArray());
                 if (ExternResolver.IsExternValid == null || ExternResolver.IsExternValid(candidate))
@@ -149,7 +149,7 @@ public partial class InvocationHandler
                 var fieldName = ResolveOutRefFieldName(op.Arguments[i].Value);
                 if (fieldName != null)
                 {
-                    argVals.Add(FieldAddr(fieldName, GetUdonType(param.Type)));
+                    argVals.Add(FieldAddr(fieldName, GetStorageTypeName(param.Type)));
                     continue;
                 }
                 // Complex lvalue: evaluate the receiver/index legs ONCE via the hardened
@@ -159,7 +159,7 @@ public partial class InvocationHandler
                 // compiles today is covered by TryPrepareRefOutArg (array element, aggregate
                 // member, cross-behaviour field, captured env local/param) — anything it declines
                 // is loud-rejected below instead of falling through a second, un-audited path.
-                var paramType = GetUdonType(param.Type);
+                var paramType = GetStorageTypeName(param.Type);
                 var tempField = _ctx.Storage.DeclareLocal("outref", paramType);
                 var prepared = TryPrepareRefOutArg(op.Arguments[i]) ?? throw new System.NotSupportedException(
                     $"'{(param.RefKind == RefKind.Ref ? "ref" : "out")} {param.Name}' of '{target.Name}' cannot "
@@ -188,7 +188,7 @@ public partial class InvocationHandler
         CLeaf result;
         if (!target.ReturnsVoid)
         {
-            var returnType = GetUdonType(target.ReturnType);
+            var returnType = GetStorageTypeName(target.ReturnType);
             // result is already a single-assignment scratch leaf (ExternCall binds it under ANF); the out/ref
             // copy-back below writes only the user's target lvalues, never this slot, so it survives unchanged.
             result = ExternCall(sig, externArgs, returnType);
@@ -203,7 +203,7 @@ public partial class InvocationHandler
         // evaluated at copy-in (never a re-evaluating fallback).
         foreach (var (argIdx, tempField, store) in outCopyBacks)
         {
-            var paramType = GetUdonType(target.Parameters[argIdx].Type);
+            var paramType = GetStorageTypeName(target.Parameters[argIdx].Type);
             var val = LoadField(tempField, paramType);
             store(val);
         }
@@ -409,7 +409,7 @@ public partial class InvocationHandler
 
         // Result type — typed as T for __T externs
         var isPlural = target.Name.StartsWith("GetComponents");
-        var typeArgUdon = GetUdonType(target.TypeArguments[0]);
+        var typeArgUdon = GetStorageTypeName(target.TypeArguments[0]);
         string tempType;
         if (isPlural && typeArgUdon == "VRCUdonCommonInterfacesIUdonEventReceiver")
             tempType = "UnityEngineComponentArray";
@@ -424,7 +424,7 @@ public partial class InvocationHandler
         string externSig;
         if (explicitParams.Length > 0)
         {
-            var paramStr = string.Join("_", explicitParams.Select(p => GetUdonType(p.Type)));
+            var paramStr = string.Join("_", explicitParams.Select(p => GetStorageTypeName(p.Type)));
             externSig = $"{containingType}.__{methodName}__{paramStr}{retPlaceholder}";
         }
         else
@@ -498,7 +498,7 @@ public partial class InvocationHandler
     {
         if (instanceVal == null || instanceOp == null)
             return instanceVal;
-        var instanceUdon = GetUdonType(instanceOp.Type);
+        var instanceUdon = GetStorageTypeName(instanceOp.Type);
         if (instanceUdon != "UnityEngineGameObject")
             return instanceVal;
         return ExternCall(
@@ -838,7 +838,7 @@ public partial class InvocationHandler
         // Non-tuple: dispatch the canonical interface-qualified bridge name (matches the emitted bridge export
         // and stays collision-free across overloads / multiple interfaces / explicit impls).
         var dispatchName = LayoutPlanner.InterfaceDispatchName(target, ifaceMl);
-        var returnType = target.ReturnsVoid ? "SystemVoid" : GetUdonType(target.ReturnType);
+        var returnType = target.ReturnsVoid ? "SystemVoid" : GetStorageTypeName(target.ReturnType);
         return CrossCall(instanceVal, dispatchName, paramPairs,
             target.ReturnsVoid ? System.Array.Empty<ReturnSlot>() : ifaceReturns, returnType, ifaceReentrant);
     }
@@ -865,7 +865,7 @@ public partial class InvocationHandler
         if (callReturns.Length > 1)
             return CrossCall(instanceVal, exportName, paramPairs, callReturns, "SystemVoid", crossReentrant);
 
-        var returnType = target.ReturnsVoid ? "SystemVoid" : GetUdonType(target.ReturnType);
+        var returnType = target.ReturnsVoid ? "SystemVoid" : GetStorageTypeName(target.ReturnType);
         return CrossCall(instanceVal, exportName, paramPairs,
             target.ReturnsVoid ? System.Array.Empty<ReturnSlot>() : callReturns, returnType, crossReentrant);
     }
@@ -1031,7 +1031,7 @@ public partial class InvocationHandler
             // the callee's param field (a null CValue is a CoreVerify ICE — M4 wave L1s_r2_c11), and
             // the callee overwrites an out param before any read, so a fresh scratch is sound.
             case IDiscardOperation discard:
-                return (() => SlotRef(_ctx.Builder.AllocScratch(GetUdonType(discard.Type))), _ => { });
+                return (() => SlotRef(_ctx.Builder.AllocScratch(GetStorageTypeName(discard.Type))), _ => { });
             // N-dim array element (design 2026-07-04 §2): lift the single-index exclusion below —
             // PrepareNdimRefOutArg evaluates every index once and caches the bounds/backing/flat-index
             // plan, mirroring the single-index arm's (arrayVal, indexVal) caching.
@@ -1052,7 +1052,7 @@ public partial class InvocationHandler
                 return (() =>
                 {
                     CLeaf elemVal = ExternCall(ExternResolver.BuildArrayGetSignature(arrayType, elementType),
-                        new List<CLeaf> { arrayVal, indexVal }, GetUdonType(arrayElem.Type));
+                        new List<CLeaf> { arrayVal, indexVal }, GetStorageTypeName(arrayElem.Type));
                     if (arrayElem.Type is INamedTypeSymbol elemAgg && TypeClassifier.IsAggregateValue(elemAgg))
                         elemVal = AggregateAbi.DeepClone(_builder, elemVal, elemAgg, _ctx.Aggregates.GetLayout);
                     return elemVal;
@@ -1088,7 +1088,7 @@ public partial class InvocationHandler
                      && ExternResolver.IsUdonSharpBehaviour(behField.Field.ContainingType):
             {
                 var instanceVal = VisitExpression(behField.Instance);
-                var instSlot = _ctx.Builder.AllocScratch(GetUdonType(behField.Instance.Type));
+                var instSlot = _ctx.Builder.AllocScratch(GetStorageTypeName(behField.Instance.Type));
                 EmitAssign(instSlot, instanceVal);
                 var instRef = SlotRef(instSlot);
                 var nameConst = Const(behField.Field.Name, "SystemString");
@@ -1106,13 +1106,13 @@ public partial class InvocationHandler
             // instead of a second read-then-AssignToLValue path.
             case ILocalReferenceOperation envLocalRef when _ctx.Closures.TryGetEnvBinding(envLocalRef.Local, out _):
             {
-                var envType = GetUdonType(envLocalRef.Type);
+                var envType = GetStorageTypeName(envLocalRef.Type);
                 return (() => EnvEmit.Read(_builder, _ctx, envLocalRef.Local, envType),
                     v => EnvEmit.Write(_builder, _ctx, envLocalRef.Local, v));
             }
             case IParameterReferenceOperation envParamRef when _ctx.Closures.TryGetEnvBinding(envParamRef.Parameter, out _):
             {
-                var envType = GetUdonType(envParamRef.Type);
+                var envType = GetStorageTypeName(envParamRef.Type);
                 return (() => EnvEmit.Read(_builder, _ctx, envParamRef.Parameter, envType),
                     v => EnvEmit.Write(_builder, _ctx, envParamRef.Parameter, v));
             }
@@ -1122,7 +1122,7 @@ public partial class InvocationHandler
                 when declExpr.Expression is ILocalReferenceOperation declLocal
                      && _ctx.Closures.TryGetEnvBinding(declLocal.Local, out _):
             {
-                var envType = GetUdonType(declLocal.Type);
+                var envType = GetStorageTypeName(declLocal.Type);
                 return (() => EnvEmit.Read(_builder, _ctx, declLocal.Local, envType),
                     v => EnvEmit.Write(_builder, _ctx, declLocal.Local, v));
             }
@@ -1310,7 +1310,7 @@ public partial class InvocationHandler
                 if (declExpr.Expression is ILocalReferenceOperation declLocal)
                 {
                     if (_ctx.Closures.TryGetEnvBinding(declLocal.Local, out _)) return null;
-                    var type = GetUdonType(declLocal.Type);
+                    var type = GetStorageTypeName(declLocal.Type);
                     var localId = _ctx.Storage.DeclareLocal(declLocal.Local.Name, type);
                     _localBindings[declLocal.Local] = new EmitContext.LocalBinding(localId);
                     return localId;
@@ -1374,7 +1374,7 @@ public partial class InvocationHandler
         // any future uncovered call shape.
         GuardUserStructMemberReachedExtern(containingTypeSym, method.Name);
 
-        var containingType = GetUdonType(containingTypeSym);
+        var containingType = GetStorageTypeName(containingTypeSym);
 
         // Object.Instantiate → VRCInstantiate (Udon VM redirect)
         if (containingType == "UnityEngineObject" && method.Name == "Instantiate")
@@ -1386,12 +1386,12 @@ public partial class InvocationHandler
         {
             var pts = paramTypeOverride ?? m.Parameters.Select(p =>
             {
-                var tn = GetUdonType(p.Type);
+                var tn = GetStorageTypeName(p.Type);
                 if (p.RefKind == RefKind.Out || p.RefKind == RefKind.Ref)
                     tn += "Ref";
                 return tn;
             }).ToArray();
-            var rt = GetUdonType(m.ReturnType);
+            var rt = GetStorageTypeName(m.ReturnType);
             return ExternResolver.BuildMethodSignature(containingType, methodName, pts, rt);
         }
 
@@ -1412,11 +1412,11 @@ public partial class InvocationHandler
                     case IArrayTypeSymbol { ElementType: ITypeParameterSymbol }:
                         return "SystemArray";
                 }
-                var tn = GetUdonType(t);
+                var tn = GetStorageTypeName(t);
                 if (p.RefKind is RefKind.Out or RefKind.Ref) tn += "Ref";
                 return tn;
             }).ToArray();
-            var rt = GetUdonType(method.ReturnType);
+            var rt = GetStorageTypeName(method.ReturnType);
             sig = ExternResolver.BuildMethodSignature(containingType, methodName, nonGenericPts, rt);
         }
         // Other generic extern methods: try concrete types first, fall back to OriginalDefinition
@@ -1444,12 +1444,12 @@ public partial class InvocationHandler
                 var coercedPts = method.Parameters.Select(p =>
                 {
                     var tn = (p.Type.IsReferenceType && p.Type.TypeKind != TypeKind.Array)
-                        ? "SystemObject" : GetUdonType(p.Type);
+                        ? "SystemObject" : GetStorageTypeName(p.Type);
                     if (p.RefKind is RefKind.Out or RefKind.Ref) tn += "Ref";
                     return tn;
                 }).ToArray();
                 var coercedSig = ExternResolver.BuildMethodSignature(
-                    containingType, methodName, coercedPts, GetUdonType(method.ReturnType));
+                    containingType, methodName, coercedPts, GetStorageTypeName(method.ReturnType));
                 if (isValid(coercedSig))
                     sig = coercedSig;
             }

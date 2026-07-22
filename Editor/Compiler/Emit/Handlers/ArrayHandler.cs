@@ -19,7 +19,7 @@ public class ArrayHandler : HandlerBase, IExpressionHandler
     {
         if (NdimArrayAbi.IsNdimArray(op.Type)) return EmitNdimArrayCreation(op);
 
-        var arrayType = GetUdonType(op.Type);
+        var arrayType = GetStorageTypeName(op.Type);
         var elementType = GetArrayElemType((IArrayTypeSymbol)op.Type);
         var elemSym = ((IArrayTypeSymbol)op.Type).ElementType;
         bool aggElem = elemSym is INamedTypeSymbol && TypeClassifier.IsAggregateValue(elemSym);
@@ -51,7 +51,7 @@ public class ArrayHandler : HandlerBase, IExpressionHandler
                     EmitExternVoid(ExternResolver.BuildArraySetSignature(arrayType, elementType),
                         new List<CLeaf> { SlotRef(arrSlot), SlotRef(iSlot),
                             AggregateAbi.MintDefault(_builder, _ctx.Aggregates.GetLayout((INamedTypeSymbol)elemSym),
-                                _ctx.Aggregates.GetLayout, GetUdonType) });
+                                _ctx.Aggregates.GetLayout, GetStorageTypeName) });
                     EmitAssign(iSlot, ExternCall("SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32",
                         new List<CLeaf> { SlotRef(iSlot), Const(1, "SystemInt32") }, "SystemInt32"));
                 });
@@ -78,7 +78,7 @@ public class ArrayHandler : HandlerBase, IExpressionHandler
         // Index from end: arr[^1] → arr[arr.Length - 1]
         var indexVal = ResolveArrayIndex(arrayVal, arrayType, index);
 
-        var resultVal = ExternCall(ExternResolver.BuildArrayGetSignature(arrayType, elementType), new List<CLeaf> { arrayVal, indexVal }, GetUdonType(op.Type));
+        var resultVal = ExternCall(ExternResolver.BuildArrayGetSignature(arrayType, elementType), new List<CLeaf> { arrayVal, indexVal }, GetStorageTypeName(op.Type));
         // A struct/tuple element read AS A VALUE is copied (value semantics). Receiver access (arr[i].x =)
         // goes through LoadInstanceRaw → ReadArrayElementRaw, which does NOT clone.
         return op.Type is INamedTypeSymbol elemAggT && TypeClassifier.IsAggregateValue(elemAggT)
@@ -110,8 +110,8 @@ public class ArrayHandler : HandlerBase, IExpressionHandler
         var arrSymbol = arrayRef.Type as IArrayTypeSymbol;
         var elementType = GetArrayElemType(arrSymbol);
         var arrayType = GetArrayType(arrSymbol);
-        var udonElemType = GetUdonType(arrSymbol.ElementType);
-        var udonArrType = GetUdonType(arrayRef.Type);
+        var udonElemType = GetStorageTypeName(arrSymbol.ElementType);
+        var udonArrType = GetStorageTypeName(arrayRef.Type);
 
         // arrayVal / startVal / lenVal / resultVal are already single-assignment scratch leaves under ANF,
         // stable across the loop — no extra snapshot slot needed.

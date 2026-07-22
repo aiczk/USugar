@@ -421,7 +421,7 @@ public static class CoreToUasm
                 AddPush(ResolveOperand(arg, funcIdx, func));
             if (call.DestSlot.HasValue)
                 AddPush(GetSlotVar(funcIdx, call.DestSlot.Value, func));
-            AddExtern(call.Sig);
+            AddExtern(call.Sig.Text);
         }
 
         void EmitCallInternal(CInternalCall call, int funcIdx, CFunction func)

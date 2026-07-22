@@ -58,11 +58,11 @@ public abstract partial class HandlerBase
     // ── Type resolution ──
     protected StorageType GetStorageType(ITypeSymbol type)
         => ExternResolver.GetStorageType(new RuntimeType(type), _ctx.Generics.TypeParamMap);
-    protected string GetUdonType(ITypeSymbol type) => GetStorageType(type).Name;
+    protected string GetStorageTypeName(ITypeSymbol type) => GetStorageType(type).Name;
     protected TypeClassifierContext TypeCtx => new TypeClassifierContext(_ctx.Generics.TypeParamMap);
     protected ITypeSymbol ResolveType(ITypeSymbol type)
         => TypeEnvironment.CloseType(_compilation, type, _ctx.Generics.TypeParamMap);
-    protected string GetArrayType(IArrayTypeSymbol arrType) => GetUdonType(arrType);
+    protected string GetArrayType(IArrayTypeSymbol arrType) => GetStorageTypeName(arrType);
     protected string GetArrayElemType(IArrayTypeSymbol arrType)
     {
         var t = GetArrayType(arrType);
@@ -162,7 +162,7 @@ public abstract partial class HandlerBase
                 $"A System.Type token for unresolved type parameter '{unresolvedTp.Name}' cannot be emitted: "
                 + "its type argument did not reach this emit site (a generic-instantiation map gap). The token "
                 + "would bake a null System.Type constant and fault at runtime.");
-        var name = GetUdonType(typeSymbol);
+        var name = GetStorageTypeName(typeSymbol);
         if (name == "VRCUdonCommonInterfacesIUdonEventReceiver") name = "VRCUdonUdonBehaviour";
         return Const(name, "SystemType");
     }
@@ -191,7 +191,7 @@ public abstract partial class HandlerBase
     protected CFieldAddr FieldAddr(string fieldName, StorageType type) => _builder.FieldAddr(fieldName, type);
 
     /// <summary>Emit an extern call, materialized to a scratch slot (returns the leaf; null for void).</summary>
-    protected CSlotRef ExternCall(string sig, List<CLeaf> args, StorageType retType)
+    protected CSlotRef ExternCall(ExternSignature sig, List<CLeaf> args, StorageType retType)
         => _builder.ExternCall(ResolveExtern(sig), args, retType);
 
     /// <summary>
@@ -261,11 +261,11 @@ public abstract partial class HandlerBase
     /// return the box untouched.</summary>
     protected CLeaf RetagSmallNullablePresent(CLeaf boxedValue, ITypeSymbol underlying)
     {
-        var uType = GetUdonType(underlying);
+        var uType = GetStorageTypeName(underlying);
         if (!ExternResolver.IsSmallIntOrChar(uType))
             return boxedValue;
         var promoted = NullableAbi.PromoteBoxedToInt32(_builder, boxedValue, underlying,
-            _compilation.GetSpecialType(SpecialType.System_Int32), GetUdonType).Value;
+            _compilation.GetSpecialType(SpecialType.System_Int32), GetStorageTypeName).Value;
         return EmitNarrowingConvert(promoted, "SystemInt32", uType);
     }
 
@@ -281,15 +281,15 @@ public abstract partial class HandlerBase
         constVal = EmitEnumToUnderlying(constVal, valueType);
         var underlyingSym = valueType is INamedTypeSymbol named && named.TypeKind == TypeKind.Enum
             ? named.EnumUnderlyingType : valueType;
-        var eqType = GetUdonType(underlyingSym);
+        var eqType = GetStorageTypeName(underlyingSym);
         if (constIsNull)
             eqType = "SystemObject"; // null comparisons use SystemObject equality
         else if (ExternResolver.IsSmallIntOrChar(eqType))
         {
             convertedValueVal = NullableAbi.PromoteBoxedToInt32(_builder, convertedValueVal, underlyingSym,
-                _compilation.GetSpecialType(SpecialType.System_Int32), GetUdonType).Value;
+                _compilation.GetSpecialType(SpecialType.System_Int32), GetStorageTypeName).Value;
             constVal = NullableAbi.PromoteBoxedToInt32(_builder, constVal, underlyingSym,
-                _compilation.GetSpecialType(SpecialType.System_Int32), GetUdonType).Value;
+                _compilation.GetSpecialType(SpecialType.System_Int32), GetStorageTypeName).Value;
             eqType = "SystemInt32";
         }
         return ExternCall(
@@ -395,7 +395,7 @@ public abstract partial class HandlerBase
     /// <summary>Emit a void extern call as a statement. <paramref name="reentrant"/> marks a
     /// delegate-dispatch arm that can re-enter the containing function (design §4.3). preSpillStmts:
     /// wave-12 r2 [V1], see CExternCall.PreSpillStmts (cross setter copy-ins inside the wrap).</summary>
-    protected void EmitExternVoid(string sig, List<CLeaf> args, bool reentrant = false, int preSpillStmts = 0)
+    protected void EmitExternVoid(ExternSignature sig, List<CLeaf> args, bool reentrant = false, int preSpillStmts = 0)
         => _builder.EmitExternVoid(ResolveExtern(sig), args, reentrant, preSpillStmts);
 
     /// <summary>Create an internal call expression.</summary>
@@ -452,9 +452,9 @@ public abstract partial class HandlerBase
             leftVal, leftNullable, ltUnderlying,
             rightVal, rightNullable, rtUnderlying,
             kind, operatorMethod, resultType, _compilation.GetSpecialType(SpecialType.System_Int32),
-            GetUdonType, ResolveType,
+            GetStorageTypeName, ResolveType,
             (boxed, underlying) => NullableAbi.PromoteBoxedToInt32(_builder, boxed, underlying,
-                _compilation.GetSpecialType(SpecialType.System_Int32), GetUdonType),
+                _compilation.GetSpecialType(SpecialType.System_Int32), GetStorageTypeName),
             EmitNarrowingConvert);
 
     // ── Extern resolution ──
@@ -465,8 +465,9 @@ public abstract partial class HandlerBase
         "UnityEngineMonoBehaviour", "UnityEngineObject",
     };
 
-    static string ResolveExtern(string externSig)
+    static ExternSignature ResolveExtern(ExternSignature signature)
     {
+        var externSig = signature.Text;
         var isValid = ExternResolver.IsExternValid;
         if (isValid == null || isValid(externSig))
             return externSig;
@@ -564,7 +565,7 @@ public abstract partial class HandlerBase
     protected CLeaf LoadParam(IParameterSymbol param)
     {
         var fieldName = GetParamVarId(param);
-        return LoadField(fieldName, GetUdonType(param.Type));
+        return LoadField(fieldName, GetStorageTypeName(param.Type));
     }
 
     protected CLeaf EmitEnumToUnderlying(CLeaf operand, ITypeSymbol type)
@@ -574,7 +575,7 @@ public abstract partial class HandlerBase
         var underlyingType = named.EnumUnderlyingType;
         var convertMethod = ExternResolver.GetConvertMethodName(underlyingType);
         if (convertMethod == null) return operand;
-        var underlyingUdon = GetUdonType(underlyingType);
+        var underlyingUdon = GetStorageTypeName(underlyingType);
         return ExternCall(
             $"SystemConvert.__{convertMethod}__SystemObject__{underlyingUdon}",
             new List<CLeaf> { operand },
@@ -598,12 +599,12 @@ public abstract partial class HandlerBase
             // the env cell directly so mutation hits the live storage.
             ILocalReferenceOperation lr when _ctx.Closures.TryGetEnvBinding(lr.Local, out _)
                 => EnvEmit.Read(_builder, _ctx, lr.Local,
-                       TypeClassifier.IsAggregateValue(lr.Type) ? "SystemObjectArray" : GetUdonType(lr.Type)),
+                       TypeClassifier.IsAggregateValue(lr.Type) ? "SystemObjectArray" : GetStorageTypeName(lr.Type)),
             ILocalReferenceOperation lr when _localBindings.TryGetValue(lr.Local, out var b)
-                => LoadField(b.Id, TypeClassifier.IsAggregateValue(lr.Type) ? "SystemObjectArray" : GetUdonType(lr.Type)),
+                => LoadField(b.Id, TypeClassifier.IsAggregateValue(lr.Type) ? "SystemObjectArray" : GetStorageTypeName(lr.Type)),
             IParameterReferenceOperation pr when _ctx.Closures.TryGetEnvBinding(pr.Parameter, out _)
                 => EnvEmit.Read(_builder, _ctx, pr.Parameter,
-                       TypeClassifier.IsAggregateValue(pr.Type) ? "SystemObjectArray" : GetUdonType(pr.Type)),
+                       TypeClassifier.IsAggregateValue(pr.Type) ? "SystemObjectArray" : GetStorageTypeName(pr.Type)),
             IParameterReferenceOperation pr
                 => LoadParam(pr.Parameter),
             // Inside a struct method/ctor, `this` is the receiver object[] param, not the Behaviour.
@@ -812,7 +813,7 @@ public abstract partial class HandlerBase
         {
             var ndimType = (IArrayTypeSymbol)ae.ArrayReference.Type;
             var plan = PrepareNdimAccess(ae.ArrayReference, ae.Indices, ndimType);
-            return EmitNdimReadFromPlan(ae, plan, GetUdonType(ndimType.ElementType));
+            return EmitNdimReadFromPlan(ae, plan, GetStorageTypeName(ndimType.ElementType));
         }
         var arrayVal = VisitExpression(ae.ArrayReference);
         var arrSym = ae.ArrayReference.Type as IArrayTypeSymbol;
@@ -882,7 +883,7 @@ public abstract partial class HandlerBase
                         EnvEmit.Write(_builder, _ctx, localRef.Local, value);
                         break;
                     }
-                    var udonType = GetUdonType(localRef.Type);
+                    var udonType = GetStorageTypeName(localRef.Type);
                     var localId = _ctx.Storage.DeclareLocal(localRef.Local.Name, udonType);
                     _localBindings[localRef.Local] = new EmitContext.LocalBinding(localId);
                     EmitStoreField(localId, value);
@@ -909,7 +910,7 @@ public abstract partial class HandlerBase
                 }
                 else
                 {
-                    var udonType = GetUdonType(existingLocal.Type);
+                    var udonType = GetStorageTypeName(existingLocal.Type);
                     var newId = _ctx.Storage.DeclareLocal(existingLocal.Local.Name, udonType);
                     _localBindings[existingLocal.Local] = new EmitContext.LocalBinding(newId);
                     EmitStoreField(newId, value);
@@ -1132,12 +1133,12 @@ public abstract partial class HandlerBase
         // Extern value-type field (e.g. a Vector3 component) → extern field setter.
         if (plan.Value.Kind == FieldSetKind.ExternValueType)
         {
-            var vtContainingType = GetUdonType(fieldRef.Field.ContainingType);
+            var vtContainingType = GetStorageTypeName(fieldRef.Field.ContainingType);
             var vtInstanceVal = plan.Value.Instance is IInstanceReferenceOperation
                 ? LoadField(_ctx.Storage.DeclareThisOnce(vtContainingType), vtContainingType)
                 : VisitExpression(plan.Value.Instance);
             var vtSig = ExternResolver.BuildFieldSetSignature(
-                vtContainingType, fieldRef.Field.Name, GetUdonType(fieldRef.Field.Type));
+                vtContainingType, fieldRef.Field.Name, GetStorageTypeName(fieldRef.Field.Type));
             return value => EmitExternVoid(vtSig, new List<CLeaf> { vtInstanceVal, value });
         }
 
@@ -1146,8 +1147,8 @@ public abstract partial class HandlerBase
         {
             var refInstanceVal = VisitExpression(plan.Value.Instance);
             var refSig = ExternResolver.BuildFieldSetSignature(
-                GetUdonType(fieldRef.Field.ContainingType), fieldRef.Field.Name,
-                GetUdonType(fieldRef.Field.Type), isValueType: false);
+                GetStorageTypeName(fieldRef.Field.ContainingType), fieldRef.Field.Name,
+                GetStorageTypeName(fieldRef.Field.Type), isValueType: false);
             return value => EmitExternVoid(refSig, new List<CLeaf> { refInstanceVal, value });
         }
 
@@ -1237,7 +1238,7 @@ public abstract partial class HandlerBase
             var (vsRecv, vsIdx) = StageAccessorDispatchLegs(propRef);
             return vsVal =>
             {
-                var vSlot = _ctx.Builder.AllocScratch(GetUdonType(propRef.Property.Type));
+                var vSlot = _ctx.Builder.AllocScratch(GetStorageTypeName(propRef.Property.Type));
                 EmitAssign(vSlot, vsVal);
                 EmitAccessorDispatch(propRef.Property, vsRecvTy, vsSetter, vsRecv, vsIdx, SlotRef(vSlot));
             };
@@ -1287,7 +1288,7 @@ public abstract partial class HandlerBase
         // the receiver's own static type, not its declaring base) — replaces the old Behaviour/MonoBehaviour-
         // only string fixup below. A null instance (static setter) leaves the owner unchanged.
         var propOwnerReceiver = propRef.Instance is IInstanceReferenceOperation ? _classSymbol : propRef.Instance?.Type;
-        var propContainingUdon = GetUdonType(ResolveExternOwnerType(propRef.Property.ContainingType, propOwnerReceiver, propRef.Property.Name));
+        var propContainingUdon = GetStorageTypeName(ResolveExternOwnerType(propRef.Property.ContainingType, propOwnerReceiver, propRef.Property.Name));
 
         // User-defined indexer on this/base → internal setter call (index args followed by the value).
         if (dispatchProp.IsIndexer && propRef.Instance is IInstanceReferenceOperation
@@ -1306,7 +1307,7 @@ public abstract partial class HandlerBase
         // Static property setter (no instance) — e.g. Time.timeScale = 1.0f
         if (propRef.Instance == null)
         {
-            var staticValType = GetUdonType(propRef.Property.Type);
+            var staticValType = GetStorageTypeName(propRef.Property.Type);
             return staticVal => EmitExternVoid(
                 ExternResolver.BuildPropertySetSignature(propContainingUdon, propRef.Property.Name, staticValType),
                 new List<CLeaf> { staticVal });
@@ -1316,7 +1317,7 @@ public abstract partial class HandlerBase
             ? LoadField(_ctx.Storage.DeclareThisOnce(propContainingUdon), propContainingUdon)
             : VisitExpression(propRef.Instance);
         var containingType = propContainingUdon;
-        var valueType = GetUdonType(propRef.Property.Type);
+        var valueType = GetStorageTypeName(propRef.Property.Type);
         if (propRef.Property.IsIndexer)
         {
             // Wave-9 round-2 [W6]: user indexer WRITE through a VARIABLE receiver → cross-program
@@ -1352,7 +1353,7 @@ public abstract partial class HandlerBase
             foreach (var arg in propRef.Arguments)
             {
                 indexArgs.Add(VisitExpression(arg.Value));
-                indexTypes.Add(GetUdonType(arg.Value.Type));
+                indexTypes.Add(GetStorageTypeName(arg.Value.Type));
             }
             var indexParamStr = string.Join("_", indexTypes);
             return externIdxVal =>
@@ -1477,7 +1478,7 @@ public abstract partial class HandlerBase
         {
             var param = localFunc.Parameters[pi];
             var paramId = NameAllocator.ParamId(param.Name, idx);
-            _ctx.Storage.DeclareVar(paramId, GetUdonType(param.Type));
+            _ctx.Storage.DeclareVar(paramId, GetStorageTypeName(param.Type));
             lfParamIds[pi] = paramId;
         }
         // Stage 2 §1.3/§6: a CAPTURING hoisted closure carries a hidden trailing __envp param — the
@@ -1504,7 +1505,7 @@ public abstract partial class HandlerBase
         ReturnSlot[] retSlots = System.Array.Empty<ReturnSlot>();
         if (!localFunc.ReturnsVoid)
         {
-            var retType = GetUdonType(localFunc.ReturnType);
+            var retType = GetStorageTypeName(localFunc.ReturnType);
             func.ReturnType = retType;
             var retId = NameAllocator.RetId(funcName, idx);
             func.ReturnSlots.Add(new ReturnSlot(retId, retType));
@@ -1630,7 +1631,7 @@ public abstract partial class HandlerBase
                 + "synthesize the comma-separated flag decomposition. Format the individual flag bits manually "
                 + "(e.g. compare against each flag and build the string yourself).");
         _ctx.Synthetics.EnumToString.Add(e);
-        // `value` is already the enum's underlying-typed leaf (GetUdonType(enum) == underlying), which the
+        // `value` is already the enum's underlying-typed leaf (GetStorageTypeName(enum) == underlying), which the
         // helper's parameter type matches — pass it straight through.
         return InternalCall(EnumToStringHelperName(e), new List<CLeaf> { value }, "SystemString");
     }
@@ -1786,7 +1787,7 @@ public abstract partial class HandlerBase
         {
             var param = constructed.Parameters[pi];
             var paramId = NameAllocator.ParamId(param.Name, idx);
-            _ctx.Storage.DeclareVar(paramId, GetUdonType(param.Type));
+            _ctx.Storage.DeclareVar(paramId, GetStorageTypeName(param.Type));
             gsParamIds[pi] = paramId;
         }
         string specEnvpFieldId = null;
@@ -1808,7 +1809,7 @@ public abstract partial class HandlerBase
         var specRetSlots = System.Array.Empty<ReturnSlot>();
         if (!constructed.ReturnsVoid)
         {
-            var retType = GetUdonType(constructed.ReturnType);
+            var retType = GetStorageTypeName(constructed.ReturnType);
             var retId = NameAllocator.RetId(SanitizeId(constructed.Name), idx);
             _ctx.Storage.DeclareVar(retId, retType);
             func.ReturnType = retType;
@@ -2255,7 +2256,7 @@ public abstract partial class HandlerBase
             for (int i = 0; i < ordered.Count; i++)
             {
                 var argType = i < op.Property.Parameters.Length
-                    ? GetUdonType(op.Property.Parameters[i].Type) : "SystemObject";
+                    ? GetStorageTypeName(op.Property.Parameters[i].Type) : "SystemObject";
                 var s = _ctx.Builder.AllocScratch(argType);
                 EmitAssign(s, ordered[i]);
                 staged.Add(SlotRef(s));
@@ -2286,7 +2287,7 @@ public abstract partial class HandlerBase
                     $"USugar: NullReferenceException — virtual {memberKind} '{prop.ContainingType.Name}.{prop.Name}' has no minted implementor, so the receiver must be null ({_classSymbol.Name}). "
                     + (isSet ? "Skipping the write." : "Returning default."),
                     "SystemString") });
-            return isSet ? null : SlotRef(_ctx.Builder.AllocScratch(GetUdonType(prop.Type)));
+            return isSet ? null : SlotRef(_ctx.Builder.AllocScratch(GetStorageTypeName(prop.Type)));
         }
 
         if (recvTy.IsSealed || targets.Count == 1)
@@ -2294,7 +2295,7 @@ public abstract partial class HandlerBase
 
         var typeObjSlot = _ctx.Builder.AllocScratch(AggregateAbi.ArrayType);
         EmitAssign(typeObjSlot, AggregateAbi.ReadSlot(_builder, recv, 0, AggregateAbi.ArrayType));
-        int destSlot = isSet ? -1 : _ctx.Builder.AllocScratch(GetUdonType(prop.Type));
+        int destSlot = isSet ? -1 : _ctx.Builder.AllocScratch(GetStorageTypeName(prop.Type));
 
         // Phase-A armor: a null receiver or a laundered non-bundle value matches no arm — LogError +
         // default(read)/skip(write), never silent (mirrors EmitVirtualChain's matched flag).
@@ -2535,7 +2536,7 @@ public abstract partial class HandlerBase
         for (int i = 0; i < orderedArgs.Count && i < paramIds.Length; i++)
             pairs.Add((paramIds[i], orderedArgs[i]));
         var returns = accessor.ReturnsVoid ? System.Array.Empty<ReturnSlot>() : GetCalleeReturns(accessor);
-        var retType = accessor.ReturnsVoid ? "SystemVoid" : GetUdonType(accessor.ReturnType);
+        var retType = accessor.ReturnsVoid ? "SystemVoid" : GetStorageTypeName(accessor.ReturnType);
         return CrossCall(instanceVal, exportName, pairs, returns, retType, reentrant);
     }
 
@@ -2647,7 +2648,7 @@ public abstract partial class HandlerBase
         if (rets.Length > 1)
             return CrossCall(instanceVal, ml.ExportName, pairs, rets, "SystemVoid", reentrant);
         var dispatchName = LayoutPlanner.InterfaceDispatchName(accessor, ml);
-        var retType = accessor.ReturnsVoid ? "SystemVoid" : GetUdonType(accessor.ReturnType);
+        var retType = accessor.ReturnsVoid ? "SystemVoid" : GetStorageTypeName(accessor.ReturnType);
         return CrossCall(instanceVal, dispatchName, pairs,
             accessor.ReturnsVoid ? System.Array.Empty<ReturnSlot>() : rets, retType, reentrant);
     }

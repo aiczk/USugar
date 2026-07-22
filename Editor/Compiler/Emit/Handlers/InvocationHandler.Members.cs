@@ -90,7 +90,7 @@ public partial class InvocationHandler
                 && ExternResolver.IsUdonSharpBehaviour(thisProp.ContainingType)
                 && thisProp.ContainingType.Name != "UdonSharpBehaviour")
             {
-                var bv = LoadField(thisProp.Name, GetUdonType(thisProp.Type));
+                var bv = LoadField(thisProp.Name, GetStorageTypeName(thisProp.Type));
                 return thisProp.Type is INamedTypeSymbol thisAutoAgg && TypeClassifier.IsAggregateValue(thisAutoAgg)
                     ? AggregateAbi.DeepClone(_builder, bv, thisAutoAgg, _ctx.Aggregates.GetLayout) : bv;
             }
@@ -98,22 +98,22 @@ public partial class InvocationHandler
             var propName = op.Property.Name;
             if (propName == "gameObject" || propName == "transform")
             {
-                var propType = GetUdonType(op.Property.Type);
+                var propType = GetStorageTypeName(op.Property.Type);
                 return LoadField(_ctx.Storage.DeclareThisOnce(propType), propType);
             }
             // Other this.property → extern getter with this instance
-            var thisType = GetUdonType(_classSymbol);
+            var thisType = GetStorageTypeName(_classSymbol);
             var thisVal = LoadField(_ctx.Storage.DeclareThisOnce(thisType), thisType);
-            var cType = GetUdonType(ResolveExternOwnerType(op.Property.ContainingType, op.Instance?.Type, op.Property.Name));
-            var rType = GetUdonType(op.Property.Type);
+            var cType = GetStorageTypeName(ResolveExternOwnerType(op.Property.ContainingType, op.Instance?.Type, op.Property.Name));
+            var rType = GetStorageTypeName(op.Property.Type);
             return ExternCall(
                 ExternResolver.BuildPropertyGetSignature(cType, propName, rType),
                 new List<CLeaf> { thisVal },
                 rType);
         }
 
-        var containingType = GetUdonType(op.Property.ContainingType);
-        var returnType = GetUdonType(op.Property.Type);
+        var containingType = GetStorageTypeName(op.Property.ContainingType);
+        var returnType = GetStorageTypeName(op.Property.Type);
 
         // Static property: no instance
         if (op.Instance == null)
@@ -195,7 +195,7 @@ public partial class InvocationHandler
         }
 
         // Interface property get → dispatch the getter through its interface bridge (SendCustomEvent),
-        // like an interface method call. Without this, GetUdonType(interface) yields IUdonEventReceiver and
+        // like an interface method call. Without this, GetStorageTypeName(interface) yields IUdonEventReceiver and
         // the fall-through emits a non-existent __get_Value extern on it.
         if (op.Property.GetMethod is { } ifaceGetter
             && op.Property.ContainingType.TypeKind == TypeKind.Interface
@@ -236,12 +236,12 @@ public partial class InvocationHandler
         var instVal = VisitExpression(op.Instance);
         // Array .Length → use SystemArray (not the concrete array type) to match UdonSharp
         if (op.Instance.Type is IArrayTypeSymbol && op.Property.Name != "Length")
-            containingType = GetUdonType((IArrayTypeSymbol)op.Instance.Type);
+            containingType = GetStorageTypeName((IArrayTypeSymbol)op.Instance.Type);
         // An inherited member (incl. Behaviour/MonoBehaviour/BCL-base) registers under the RECEIVER's
         // static type, not the declaring base — resolve through the shared owner choke point (B55/B59).
         // Array receivers keep the fixup above (SystemArray for .Length, element-typed otherwise).
         else if (op.Instance.Type is not IArrayTypeSymbol)
-            containingType = GetUdonType(ResolveExternOwnerType(op.Property.ContainingType, op.Instance.Type, op.Property.Name));
+            containingType = GetStorageTypeName(ResolveExternOwnerType(op.Property.ContainingType, op.Instance.Type, op.Property.Name));
         var sig = ExternResolver.BuildPropertyGetSignature(containingType, op.Property.Name, returnType);
         return ExternCall(sig, new List<CLeaf> { instVal }, returnType);
     }
@@ -317,15 +317,15 @@ public partial class InvocationHandler
                 TryMarkReentrantCrossDispatch(op, op.Property.GetMethod)); // wave-12 r2 [V1]
         }
 
-        var cType = GetUdonType(ResolveExternOwnerType(op.Property.ContainingType, op.Instance?.Type, op.Property.Name));
-        var rType = GetUdonType(op.Property.Type);
+        var cType = GetStorageTypeName(ResolveExternOwnerType(op.Property.ContainingType, op.Instance?.Type, op.Property.Name));
+        var rType = GetStorageTypeName(op.Property.Type);
 
         // string[i] → str.ToCharArray(i, 1)[0]
         // Udon VM has no string indexer; mirror UdonSharp's BoundStringAccessExpression
         if (cType == "SystemString")
         {
             CLeaf inst = op.Instance is IInstanceReferenceOperation
-                ? LoadField(_ctx.Storage.DeclareThisOnce(GetUdonType(_classSymbol)), GetUdonType(_classSymbol))
+                ? LoadField(_ctx.Storage.DeclareThisOnce(GetStorageTypeName(_classSymbol)), GetStorageTypeName(_classSymbol))
                 : VisitExpression(op.Instance);
             var indexVal = VisitExpression(op.Arguments[0].Value);
             var oneConst = Const(1, "SystemInt32");
@@ -342,7 +342,7 @@ public partial class InvocationHandler
 
         CLeaf instVal;
         if (op.Instance is IInstanceReferenceOperation)
-            instVal = LoadField(_ctx.Storage.DeclareThisOnce(GetUdonType(_classSymbol)), GetUdonType(_classSymbol));
+            instVal = LoadField(_ctx.Storage.DeclareThisOnce(GetStorageTypeName(_classSymbol)), GetStorageTypeName(_classSymbol));
         else
             instVal = VisitExpression(op.Instance);
 
@@ -352,7 +352,7 @@ public partial class InvocationHandler
         foreach (var arg in op.Arguments)
         {
             externArgs.Add(VisitExpression(arg.Value));
-            idxTypes.Add(GetUdonType(arg.Value.Type));
+            idxTypes.Add(GetStorageTypeName(arg.Value.Type));
         }
         // Use the indexer's metadata name, not a hardcoded "Item": most indexers are "Item", but a type with
         // [IndexerName(...)] differs (e.g. StringBuilder's indexer is "Chars" → __get_Chars__, not __get_Item__).
@@ -588,7 +588,7 @@ public partial class InvocationHandler
         var layout = _ctx.Aggregates.GetLayout(classTy);
         return ClassAbi.EmitMint(
             _builder, _compilation, classTy, layout, VisitExpression,
-            instance => AggregateAbi.DefaultInitialize(_builder, instance, layout, _ctx.Aggregates.GetLayout, GetUdonType),
+            instance => AggregateAbi.DefaultInitialize(_builder, instance, layout, _ctx.Aggregates.GetLayout, GetStorageTypeName),
             instance =>
             {
                 // CA-v2 M1: an explicit ctor runs the full chain (field inits + base call + body) inside
@@ -641,12 +641,12 @@ public partial class InvocationHandler
     CLeaf VisitTypeParameterObjectCreation(ITypeParameterObjectCreationOperation op)
     {
         var concrete = ResolveType(op.Type);
-        var udon = GetUdonType(concrete);
+        var udon = GetStorageTypeName(concrete);
         if (concrete is INamedTypeSymbol classTy && TypeClassifier.IsUserClass(classTy))
         {
             var layout = _ctx.Aggregates.GetLayout(classTy);
             return ClassAbi.EmitMint(_builder, _compilation, classTy, layout, VisitExpression,
-                inst => AggregateAbi.DefaultInitialize(_builder, inst, layout, _ctx.Aggregates.GetLayout, GetUdonType),
+                inst => AggregateAbi.DefaultInitialize(_builder, inst, layout, _ctx.Aggregates.GetLayout, GetStorageTypeName),
                 inst => ClassAbi.EmitImplicitCtorChain(_builder, _compilation, inst, classTy,
                     _ctx.Aggregates.GetLayout, value => VisitClassInitializerExpression(value, classTy), CallBaseCtor),
                 inst => EmitAggregateObjectInitializer(inst, layout, op.Initializer),
@@ -655,7 +655,7 @@ public partial class InvocationHandler
         if (concrete is INamedTypeSymbol structTy && TypeClassifier.IsAggregateValue(structTy))
         {
             var inst = AggregateAbi.MintDefault(_builder, _ctx.Aggregates.GetLayout(structTy),
-                _ctx.Aggregates.GetLayout, GetUdonType);
+                _ctx.Aggregates.GetLayout, GetStorageTypeName);
             EmitAggregateObjectInitializer(inst, _ctx.Aggregates.GetLayout(structTy), op.Initializer);
             return inst;
         }
@@ -683,7 +683,7 @@ public partial class InvocationHandler
 
     CLeaf VisitObjectCreation(IObjectCreationOperation op)
     {
-        var resultType = GetUdonType(op.Type);
+        var resultType = GetStorageTypeName(op.Type);
         var concreteType = ResolveType(op.Type);
 
         // UdonSharpBehaviour subclasses cannot be instantiated at runtime —
@@ -710,7 +710,7 @@ public partial class InvocationHandler
 
         // Class ABI v1 (CA-M1): a supported user class mints via the single ClassAbi bundle sequence. An
         // unsupported class (record / non-Object base / extern-backed foreign) already threw at the resultType
-        // GetUdonType above (B79); nothing unsupported lands here.
+        // GetStorageTypeName above (B79); nothing unsupported lands here.
         if (concreteType is INamedTypeSymbol classTy && TypeClassifier.IsUserClass(classTy))
             return EmitClassInstanceMint(op, classTy);
 
@@ -720,7 +720,7 @@ public partial class InvocationHandler
         if (op.Arguments.Length == 0 && concreteType.IsValueType && op.Initializer == null)
             return concreteType is INamedTypeSymbol structTy && TypeClassifier.IsAggregateValue(structTy)
                 ? AggregateAbi.MintDefault(_builder, _ctx.Aggregates.GetLayout(structTy),
-                    _ctx.Aggregates.GetLayout, GetUdonType)
+                    _ctx.Aggregates.GetLayout, GetStorageTypeName)
                 : Const(null, resultType);
 
         // Constant folding: struct ctor with all-constant args
@@ -744,7 +744,7 @@ public partial class InvocationHandler
             var layout = _ctx.Aggregates.GetLayout(userStruct);
             var slot = _ctx.Builder.AllocScratch(AggregateAbi.ArrayType);
             EmitAssign(slot, AggregateAbi.Allocate(_builder, layout.Count));
-            AggregateAbi.DefaultInitialize(_builder, SlotRef(slot), layout, _ctx.Aggregates.GetLayout, GetUdonType);
+            AggregateAbi.DefaultInitialize(_builder, SlotRef(slot), layout, _ctx.Aggregates.GetLayout, GetStorageTypeName);
             // CW4: same by-ordinal + ref/out discipline as the class mint arm (EmitClassInstanceMint).
             var structCtor = SubstituteMethodTypeArgs(op.Constructor);
             GuardRefOutArguments(op.Arguments, structCtor);
@@ -766,7 +766,7 @@ public partial class InvocationHandler
             && op.Type is INamedTypeSymbol aggInitType && TypeClassifier.IsAggregateValue(aggInitType))
         {
             var layout = _ctx.Aggregates.GetLayout(aggInitType);
-            var aggVal = AggregateAbi.MintDefault(_builder, layout, _ctx.Aggregates.GetLayout, GetUdonType);
+            var aggVal = AggregateAbi.MintDefault(_builder, layout, _ctx.Aggregates.GetLayout, GetStorageTypeName);
             EmitAggregateObjectInitializer(aggVal, layout, op.Initializer);
             return aggVal;
         }
@@ -791,7 +791,7 @@ public partial class InvocationHandler
                     throw new System.NotSupportedException(ExternResolver.MultidimExternArgMessage);
                 argVals.Add(VisitExpression(op.Arguments[i].Value));
             }
-            var paramTypes = op.Arguments.Select(a => GetUdonType(a.Value.Type)).ToArray();
+            var paramTypes = op.Arguments.Select(a => GetStorageTypeName(a.Value.Type)).ToArray();
             var paramPart = string.Join("_", paramTypes);
             resultVal = ExternCall(
                 $"{resultType}.__ctor__{paramPart}__{resultType}",
@@ -823,15 +823,15 @@ public partial class InvocationHandler
     {
         if (target is IFieldReferenceOperation fieldRef && fieldRef.Field.ContainingType.IsValueType)
         {
-            var containingType = GetUdonType(ResolveExternOwnerType(fieldRef.Field.ContainingType, fieldRef.Instance?.Type, fieldRef.Field.Name));
-            var valueType = GetUdonType(fieldRef.Field.Type);
+            var containingType = GetStorageTypeName(ResolveExternOwnerType(fieldRef.Field.ContainingType, fieldRef.Instance?.Type, fieldRef.Field.Name));
+            var valueType = GetStorageTypeName(fieldRef.Field.Type);
             var sig = ExternResolver.BuildFieldSetSignature(containingType, fieldRef.Field.Name, valueType);
             EmitExternVoid(sig, new List<CLeaf> { instanceVal, valueVal });
         }
         else if (target is IPropertyReferenceOperation propRef)
         {
-            var containingType = GetUdonType(ResolveExternOwnerType(propRef.Property.ContainingType, propRef.Instance?.Type, propRef.Property.Name));
-            var valueType = GetUdonType(propRef.Property.Type);
+            var containingType = GetStorageTypeName(ResolveExternOwnerType(propRef.Property.ContainingType, propRef.Instance?.Type, propRef.Property.Name));
+            var valueType = GetStorageTypeName(propRef.Property.Type);
             if (propRef.Property.IsIndexer)
             {
                 var externArgs = new List<CLeaf>();
@@ -840,7 +840,7 @@ public partial class InvocationHandler
                 foreach (var arg in propRef.Arguments)
                 {
                     externArgs.Add(VisitExpression(arg.Value));
-                    indexTypes.Add(GetUdonType(arg.Value.Type));
+                    indexTypes.Add(GetStorageTypeName(arg.Value.Type));
                 }
                 externArgs.Add(valueVal);
                 var indexParamStr = string.Join("_", indexTypes);

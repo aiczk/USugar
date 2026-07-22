@@ -151,7 +151,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
         // Constant folding: compile-time evaluable binary expressions
         if (op.ConstantValue.HasValue)
         {
-            var constType = GetUdonType(op.Type);
+            var constType = GetStorageTypeName(op.Type);
             return Const(EmitPolicy.ParseConstValue(constType, ToInvariantString(op.ConstantValue.Value)), constType);
         }
 
@@ -162,7 +162,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
         // Concat-ToString'd to its underlying number, so convert that operand to the C#-correct name string
         // first and emit the object/object concat directly (routing it back through the generic path would
         // re-select the extern by the now-string operand types).
-        if (op.OperatorKind == BinaryOperatorKind.Add && GetUdonType(op.Type) == "SystemString")
+        if (op.OperatorKind == BinaryOperatorKind.Add && GetStorageTypeName(op.Type) == "SystemString")
         {
             var lOp = UnwrapConcatOperand(op.LeftOperand);
             var rOp = UnwrapConcatOperand(op.RightOperand);
@@ -203,7 +203,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
         leftVal = EmitEnumToUnderlying(leftVal, op.LeftOperand.Type);
         rightVal = EmitEnumToUnderlying(rightVal, op.RightOperand.Type);
 
-        var resultType = GetUdonType(op.Type);
+        var resultType = GetStorageTypeName(op.Type);
 
         // long/ulong/uint % : Udon has no op_Remainder extern for these; lower to a - (a / b) * b via the
         // shared polyfill (uint included — it has Division/Multiplication/Subtraction but no Remainder).
@@ -234,7 +234,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
 
         // UnityEngineObject equality/inequality: cast operands to UnityEngineObject temps
         if (op.OperatorMethod != null
-            && GetUdonType(op.OperatorMethod.ContainingType) == "UnityEngineObject"
+            && GetStorageTypeName(op.OperatorMethod.ContainingType) == "UnityEngineObject"
             && (op.OperatorKind == BinaryOperatorKind.Equals
                 || op.OperatorKind == BinaryOperatorKind.NotEquals))
         {
@@ -251,7 +251,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
     // The effective Udon storage type of an operand: an enum is stored as (and operates on) its underlying type.
     string UnderlyingUdon(ITypeSymbol t) =>
         t is INamedTypeSymbol n && n.TypeKind == TypeKind.Enum
-            ? GetUdonType(n.EnumUnderlyingType) : GetUdonType(t);
+            ? GetStorageTypeName(n.EnumUnderlyingType) : GetStorageTypeName(t);
 
     // B63 redundant armor: reject a direct `typeof(A) ==/!= typeof(B)` where A,B are distinct C# types that
     // fold onto one Udon tag (the mint-site immediate-use gate already catches this — kept as defence-in-depth).
@@ -263,13 +263,13 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
         var b = AsTypeofOperand(op.RightOperand);
         if (a == null || b == null || SymbolEqualityComparer.Default.Equals(a, b))
             return;
-        if (GetUdonType(a) != GetUdonType(b))
+        if (GetStorageTypeName(a) != GetStorageTypeName(b))
             return;
         throw new System.NotSupportedException(
             $"typeof('{(ResolveType(a) ?? a).ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}') "
             + $"==/!= typeof('{(ResolveType(b) ?? b).ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}') "
             + "is unsound: these are distinct C# types but Udon folds both onto one runtime type tag "
-            + $"('{GetUdonType(a)}'), so the comparison is silently true where C# says false.");
+            + $"('{GetStorageTypeName(a)}'), so the comparison is silently true where C# says false.");
     }
 
     // The type operand of a typeof, seeing through an identity/boxing conversion wrapper; null if not a typeof.
@@ -361,7 +361,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
         // Constant folding: compile-time evaluable unary expressions (e.g., -5)
         if (op.ConstantValue.HasValue)
         {
-            var constType = GetUdonType(op.Type);
+            var constType = GetStorageTypeName(op.Type);
             return Const(EmitPolicy.ParseConstValue(constType, ToInvariantString(op.ConstantValue.Value)), constType);
         }
 
@@ -371,7 +371,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
             return EmitLiftedUnary(op, unaryResU);
 
         var operandVal = VisitExpression(op.Operand);
-        var resultType = GetUdonType(op.Type);
+        var resultType = GetStorageTypeName(op.Type);
 
         string sig;
         if (op.OperatorMethod != null && !ExternResolver.IsNumericType(op.Operand.Type))
@@ -388,7 +388,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
     CLeaf EmitLiftedUnary(IUnaryOperation op, ITypeSymbol resUnderlying)
     {
         EmitPolicy.IsNullableT(op.Operand.Type, out var opUnderlying);
-        var resU = GetUdonType(resUnderlying);
+        var resU = GetStorageTypeName(resUnderlying);
 
         // Lifted bitwise NOT: ~x ≡ x ^ allBits — reuse the lifted-binary machinery (promotion / narrowing /
         // null-propagation). ~ promotes a small int to int, so allBits is built in the RESULT underlying domain.
@@ -411,19 +411,19 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
         }
 
         return NullableAbi.EmitLiftedUnary(_builder, VisitExpression(op.Operand),
-            opUnderlying, resUnderlying, op.OperatorKind, GetUdonType,
+            opUnderlying, resUnderlying, op.OperatorKind, GetStorageTypeName,
             (boxed, underlying) => NullableAbi.PromoteBoxedToInt32(_builder, boxed, underlying,
-                _compilation.GetSpecialType(SpecialType.System_Int32), GetUdonType));
+                _compilation.GetSpecialType(SpecialType.System_Int32), GetStorageTypeName));
     }
 
     CLeaf VisitBitwiseNot(IUnaryOperation op)
     {
         var operandVal = VisitExpression(op.Operand);
-        var operandType = GetUdonType(op.Operand.Type);
-        var resultType = GetUdonType(op.Type);
+        var operandType = GetStorageTypeName(op.Operand.Type);
+        var resultType = GetStorageTypeName(op.Type);
 
         // An enum operand has SpecialType None; ~ operates on (and narrows back to) the underlying type, so key
-        // off the underlying. operandType/resultType already resolve to it via GetUdonType.
+        // off the underlying. operandType/resultType already resolve to it via GetStorageTypeName.
         var effSpecial = op.Operand.Type is INamedTypeSymbol enumOperand && enumOperand.TypeKind == TypeKind.Enum
             ? enumOperand.EnumUnderlyingType.SpecialType
             : op.Operand.Type.SpecialType;
@@ -520,7 +520,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
                             _builder.EmitIf(checkVal, b => EnvEmit.Write(_builder, _ctx, local, valueVal));
                         return checkVal;
                     }
-                    var localType = GetUdonType(local.Type);
+                    var localType = GetStorageTypeName(local.Type);
                     var localId = _ctx.Storage.DeclareLocal(local.Name, localType);
                     _localBindings[local] = new EmitContext.LocalBinding(localId);
                     if (isVar)
@@ -542,15 +542,15 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
                 constVal = EmitEnumToUnderlying(constVal, valueType);
                 var underlyingSym = valueType is INamedTypeSymbol relEnum && relEnum.TypeKind == TypeKind.Enum
                     ? relEnum.EnumUnderlyingType : valueType;
-                var valType = GetUdonType(underlyingSym);
+                var valType = GetStorageTypeName(underlyingSym);
                 if (ExternResolver.IsSmallIntOrChar(valType))
                 {
                     // A nullable small-int/char (or small-underlying enum) scrutinee may be boxed as a plain int;
                     // promote both sides to int32 so the strict small-int extern's box-tag fetch cannot InvalidCast.
                     scrut = NullableAbi.PromoteBoxedToInt32(_builder, scrut, underlyingSym,
-                        _compilation.GetSpecialType(SpecialType.System_Int32), GetUdonType).Value;
+                        _compilation.GetSpecialType(SpecialType.System_Int32), GetStorageTypeName).Value;
                     constVal = NullableAbi.PromoteBoxedToInt32(_builder, constVal, underlyingSym,
-                        _compilation.GetSpecialType(SpecialType.System_Int32), GetUdonType).Value;
+                        _compilation.GetSpecialType(SpecialType.System_Int32), GetStorageTypeName).Value;
                     valType = "SystemInt32";
                 }
                 var opName = relPat.OperatorKind switch
@@ -585,7 +585,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
                     var matched = EmitPatternCheckImpl(valueVal, valueType, binPat.LeftPattern);
                     _builder.EmitIf(matched, b =>
                     {
-                        var nt = _ctx.Builder.AllocScratch(GetUdonType(narrowedType));
+                        var nt = _ctx.Builder.AllocScratch(GetStorageTypeName(narrowedType));
                         EmitAssign(nt, valueVal);
                         EmitAssign(resultSlot, EmitPatternCheckImpl(SlotRef(nt), narrowedType, binPat.RightPattern));
                     });
@@ -622,7 +622,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
                     var elemRaw = AggregateAbi.ReadSlot(_builder, SlotRef(aggSlot), i, "SystemObject");
                     // Materialize into a typed temp (Udon COPY unboxes) so the sub-pattern compares
                     // with the correct type tag, exactly as tuple deconstruction extracts elements.
-                    var elemSlot = _ctx.Builder.AllocScratch(GetUdonType(elemType));
+                    var elemSlot = _ctx.Builder.AllocScratch(GetStorageTypeName(elemType));
                     EmitAssign(elemSlot, elemRaw);
                     var subResult = EmitPatternCheckImpl(SlotRef(elemSlot), elemType, rec.DeconstructionSubpatterns[i]);
                     result = ExternCall(
@@ -654,7 +654,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
                 _builder.EmitIf(guard, _ =>
                 {
                     var matchType = rec.MatchedType ?? valueType;
-                    var valSlot = _ctx.Builder.AllocScratch(GetUdonType(matchType));
+                    var valSlot = _ctx.Builder.AllocScratch(GetStorageTypeName(matchType));
                     EmitAssign(valSlot, valueVal);
 
                     if (rec.DeclaredSymbol is ILocalSymbol bound)
@@ -667,7 +667,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
                         }
                         else
                         {
-                            var boundId = _ctx.Storage.DeclareLocal(bound.Name, GetUdonType(bound.Type));
+                            var boundId = _ctx.Storage.DeclareLocal(bound.Name, GetStorageTypeName(bound.Type));
                             _localBindings[bound] = new EmitContext.LocalBinding(boundId);
                             EmitStoreField(boundId, SlotRef(valSlot));
                         }
@@ -713,7 +713,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
                                 SlotRef(valSlot), new List<CLeaf>(), null);
                             // Materialize into a typed temp (Udon COPY unboxes) so the sub-pattern
                             // compares with the correct type tag, like the slot arm below.
-                            var vSubSlot = _ctx.Builder.AllocScratch(GetUdonType(memberType));
+                            var vSubSlot = _ctx.Builder.AllocScratch(GetStorageTypeName(memberType));
                             EmitAssign(vSubSlot, dispatched);
                             memberVal = SlotRef(vSubSlot);
                         }
@@ -722,7 +722,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
                             // Aggregate member: read the boxed object[] slot, then materialize into a typed temp
                             // (Udon COPY unboxes) so the sub-pattern compares with the correct type tag.
                             var rawMember = AggregateAbi.ReadSlot(_builder, SlotRef(valSlot), aggMemberIdx, "SystemObject");
-                            var memberSlot = _ctx.Builder.AllocScratch(GetUdonType(memberType));
+                            var memberSlot = _ctx.Builder.AllocScratch(GetStorageTypeName(memberType));
                             EmitAssign(memberSlot, rawMember);
                             memberVal = SlotRef(memberSlot);
                         }
@@ -740,10 +740,10 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
                             // (`c is { enabled: true }` where enabled is declared on the abstract Behaviour)
                             // must resolve its extern owner to the SCRUTINEE's own static type, not the
                             // declaring base — else it mints an unknown UnityEngineBehaviour.__get_enabled__.
-                            var memberOwner = GetUdonType(ResolveExternOwnerType(memberContainingType, matchType, memberName));
+                            var memberOwner = GetStorageTypeName(ResolveExternOwnerType(memberContainingType, matchType, memberName));
                             memberVal = ExternCall(
-                                ExternResolver.BuildPropertyGetSignature(memberOwner, memberName, GetUdonType(memberType)),
-                                new List<CLeaf> { SlotRef(valSlot) }, GetUdonType(memberType));
+                                ExternResolver.BuildPropertyGetSignature(memberOwner, memberName, GetStorageTypeName(memberType)),
+                                new List<CLeaf> { SlotRef(valSlot) }, GetStorageTypeName(memberType));
                         }
                         var subResult = EmitPatternCheckImpl(memberVal, memberType, sub.Pattern);
                         acc = ExternCall(
@@ -764,7 +764,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
 
     CLeaf VisitSwitchExpression(ISwitchExpressionOperation op)
     {
-        var resultType = GetUdonType(op.Type);
+        var resultType = GetStorageTypeName(op.Type);
         var resultSlot = _ctx.Builder.AllocScratch(resultType);
         // Initialize result to default in case no arm matches (non-exhaustive)
         EmitAssign(resultSlot, Const(
@@ -851,7 +851,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
     {
         // cond ? a : b: evaluate branches only on the taken path.
         var condVal = VisitExpression(op.Condition);
-        var resultType = GetUdonType(op.Type);
+        var resultType = GetStorageTypeName(op.Type);
         var resultSlot = _ctx.Builder.AllocScratch(resultType);
         _builder.EmitIf(condVal,
             _ => EmitAssign(resultSlot, VisitExpression(op.WhenTrue)),
@@ -869,11 +869,11 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
 
     string BuildBuiltinUnarySignature(IUnaryOperation op)
     {
-        var operandType = GetUdonType(op.Operand.Type);
-        var returnType = GetUdonType(op.Type);
+        var operandType = GetStorageTypeName(op.Operand.Type);
+        var returnType = GetStorageTypeName(op.Type);
         if (!UnaryOpNames.TryGetValue(op.OperatorKind, out var opName))
             throw new System.NotSupportedException(
-                $"Unsupported unary operator: {op.OperatorKind} on type {GetUdonType(op.Operand.Type)}");
+                $"Unsupported unary operator: {op.OperatorKind} on type {GetStorageTypeName(op.Operand.Type)}");
         // Decimal uses C# method name: op_UnaryNegation (not op_UnaryMinus)
         if (operandType == "SystemDecimal" && op.OperatorKind == UnaryOperatorKind.Minus)
             opName = "op_UnaryNegation";
@@ -882,10 +882,10 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
 
     string BuildExternSignature(IMethodSymbol method)
     {
-        var containingType = GetUdonType(method.ContainingType);
+        var containingType = GetStorageTypeName(method.ContainingType);
         var methodName = ExternResolver.GetOperatorExternName(method.Name);
-        var paramTypes = method.Parameters.Select(p => GetUdonType(p.Type)).ToArray();
-        var returnType = GetUdonType(method.ReturnType);
+        var paramTypes = method.Parameters.Select(p => GetStorageTypeName(p.Type)).ToArray();
+        var returnType = GetStorageTypeName(method.ReturnType);
         return ExternResolver.BuildMethodSignature(containingType, methodName, paramTypes, returnType);
     }
 

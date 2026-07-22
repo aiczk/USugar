@@ -40,7 +40,7 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
         // wrapped visit — but only through the value-preserving conversions (WjR3 A11: the full strip ate
         // the user's inline `(Suit)(k % 4)` cast and Concat'd the raw number). Plain operands fall
         // through untouched (byte-neutral for every prior shape).
-        if (op.OperatorKind == BinaryOperatorKind.Add && GetUdonType(op.Type) == "SystemString")
+        if (op.OperatorKind == BinaryOperatorKind.Add && GetStorageTypeName(op.Type) == "SystemString")
         {
             var vOp = UnwrapConcatOperand(op.Value);
             // Same choke as the binary-concat and interpolation surfaces: an ndim or object[]-emulated
@@ -82,7 +82,7 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
             return lifted;
         }
 
-        var resultType = GetUdonType(op.Type);
+        var resultType = GetStorageTypeName(op.Type);
 
         // long/ulong/uint %= : no Udon op_Remainder extern; polyfill a - (a/b)*b (shared with the binary path).
         if (op.OperatorKind == BinaryOperatorKind.Remainder && RemainderNeedsPolyfill(resultType))
@@ -101,10 +101,10 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
         // Explicit operand promotion: byte slot pushed to int extern requires ToInt32 conversion
         // (matches ExpressionHandler.VisitConversion behaviour for byte+byte). Without this we
         // rely on Udon VM's implicit boxed-value coercion, which is fragile across SDK updates.
-        var leftType = GetUdonType(op.Target.Type);
+        var leftType = GetStorageTypeName(op.Target.Type);
         if (ExternResolver.IsSmallIntOrChar(leftType))
             leftVal = PromoteToInt32(leftVal, leftType);
-        var rightType = GetUdonType(op.Value.Type);
+        var rightType = GetStorageTypeName(op.Value.Type);
         if (ExternResolver.IsSmallIntOrChar(rightType))
             rightVal = PromoteToInt32(rightVal, rightType);
 
@@ -235,7 +235,7 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
             var kind = op.Kind == OperationKind.Increment ? BinaryOperatorKind.Add : BinaryOperatorKind.Subtract;
             var lifted = EmitLiftedBinaryCore(
                 targetVal, true, incUnderlying,
-                Const(1, GetUdonType(incUnderlying)), false, incUnderlying,
+                Const(1, GetStorageTypeName(incUnderlying)), false, incUnderlying,
                 kind, null, op.Type);
             lv.Write(lifted);
             // Postfix returns the OLD value: targetVal (= lv.Value) is a single-assignment scratch leaf bound
@@ -243,7 +243,7 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
             return op.IsPostfix ? targetVal : lifted;
         }
 
-        var udonType = GetUdonType(op.Type);
+        var udonType = GetStorageTypeName(op.Type);
 
         // Promote small integers: Udon VM has no byte/sbyte/short/ushort operators
         var opType = udonType;

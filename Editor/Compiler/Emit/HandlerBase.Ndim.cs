@@ -89,7 +89,7 @@ public abstract partial class HandlerBase
     protected CLeaf EmitNdimElementRead(IArrayElementReferenceOperation ae)
     {
         var ndimType = (IArrayTypeSymbol)ae.ArrayReference.Type;
-        var elemUdonType = GetUdonType(ndimType.ElementType);
+        var elemUdonType = GetStorageTypeName(ndimType.ElementType);
         var plan = PrepareNdimAccess(ae.ArrayReference, ae.Indices, ndimType);
         var resultLeaf = EmitNdimReadFromPlan(ae, plan, elemUdonType);
         return ndimType.ElementType is INamedTypeSymbol elemAggT && TypeClassifier.IsAggregateValue(elemAggT)
@@ -114,7 +114,7 @@ public abstract partial class HandlerBase
     protected (System.Func<CLeaf> read, System.Action<CLeaf> store) PrepareNdimRefOutArg(IArrayElementReferenceOperation ae)
     {
         var ndimType = (IArrayTypeSymbol)ae.ArrayReference.Type;
-        var elemUdonType = GetUdonType(ndimType.ElementType);
+        var elemUdonType = GetStorageTypeName(ndimType.ElementType);
         var plan = PrepareNdimAccess(ae.ArrayReference, ae.Indices, ndimType);
         return (() => EmitNdimReadFromPlan(ae, plan, elemUdonType), value => EmitNdimWriteFromPlan(ae, plan, value));
     }
@@ -176,7 +176,7 @@ public abstract partial class HandlerBase
                     EmitExternVoid(ExternResolver.BuildArraySetSignature(backingUdonType, elemUdonType),
                         new List<CLeaf> { SlotRef(backingSlot), SlotRef(iSlot),
                             AggregateAbi.MintDefault(_builder, _ctx.Aggregates.GetLayout((INamedTypeSymbol)elemSym),
-                                _ctx.Aggregates.GetLayout, GetUdonType) });
+                                _ctx.Aggregates.GetLayout, GetStorageTypeName) });
                     EmitAssign(iSlot, ExternCall("SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32",
                         new List<CLeaf> { SlotRef(iSlot), Const(1, "SystemInt32") }, "SystemInt32"));
                 });

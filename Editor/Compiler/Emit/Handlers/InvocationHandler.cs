@@ -135,7 +135,7 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
         if (op.Instance != null && target.Name == "GetValueOrDefault"
             && EmitPolicy.IsNullableT(target.ContainingType, out var govUnderlying))
         {
-            var uType = GetUdonType(govUnderlying);
+            var uType = GetStorageTypeName(govUnderlying);
             // For an aggregate (struct/tuple) underlying, the present value is a boxed object[] aliasing the
             // nullable's storage — deep-clone it out (value semantics). default(T) for an aggregate is a fresh
             // zero-initialized struct, NOT null, so mint through AggregateAbi rather than using scalar default.
@@ -145,7 +145,7 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
             var fallback = op.Arguments.Length > 0
                 ? VisitExpression(op.Arguments[0].Value)
                 : (aggResult
-                    ? AggregateAbi.MintDefault(_builder, _ctx.Aggregates.GetLayout(aggType), _ctx.Aggregates.GetLayout, GetUdonType)
+                    ? AggregateAbi.MintDefault(_builder, _ctx.Aggregates.GetLayout(aggType), _ctx.Aggregates.GetLayout, GetStorageTypeName)
                     : EmitValueTypeDefault(uType));
             return NullableAbi.EmitGetValueOrDefault(_builder, nv, uType, fallback,
                 present => aggResult
@@ -510,7 +510,7 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
         var argRefs = new List<CLeaf>();
         var chainPrepared = MarshalArgumentsByOrdinal(op.Arguments, op.TargetMethod, argRefs, (val, arg) =>
         {
-            var s = _ctx.Builder.AllocScratch(GetUdonType(arg.Value.Type));
+            var s = _ctx.Builder.AllocScratch(GetStorageTypeName(arg.Value.Type));
             EmitAssign(s, val);
             return SlotRef(s);
         });
@@ -519,7 +519,7 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
         EmitAssign(typeObjSlot, AggregateAbi.ReadSlot(_builder, SlotRef(recvSlot), 0, AggregateAbi.ArrayType));
 
         bool isVoid = op.Type == null || op.Type.SpecialType == SpecialType.System_Void;
-        int destSlot = isVoid ? -1 : _ctx.Builder.AllocScratch(GetUdonType(op.Type));
+        int destSlot = isVoid ? -1 : _ctx.Builder.AllocScratch(GetStorageTypeName(op.Type));
 
         // Phase-A armor: a null receiver or a laundered non-bundle value matches no arm. is/cast guards
         // that case to `false`; the chain must be equally loud — LogError + default, never silent.
@@ -565,7 +565,7 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
         EmitAssign(recvSlot, LoadInstanceRaw(op.Instance));
         foreach (var a in op.Arguments)
         {
-            var s = _ctx.Builder.AllocScratch(GetUdonType(a.Value.Type));
+            var s = _ctx.Builder.AllocScratch(GetStorageTypeName(a.Value.Type));
             EmitAssign(s, VisitExpression(a.Value));
         }
         EmitExternVoid("UnityEngineDebug.__LogError__SystemObject__SystemVoid",
@@ -574,7 +574,7 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
                 "SystemString") });
         bool isVoid = op.Type == null || op.Type.SpecialType == SpecialType.System_Void;
         if (isVoid) return Const(null, "SystemObject");
-        return SlotRef(_ctx.Builder.AllocScratch(GetUdonType(op.Type)));
+        return SlotRef(_ctx.Builder.AllocScratch(GetStorageTypeName(op.Type)));
     }
 
     CLeaf EmitStructInstanceCall(IInvocationOperation op, IMethodSymbol target)
@@ -642,11 +642,11 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
         // The __dlgc_ conv vars are a signature-keyed cross-program byte contract (§3.2). Bridges declare
         // the same names for their own sigs; the dispatch site declares-on-first-use for foreign sigs.
         for (int i = 0; i < convArgs.Length; i++)
-            _ctx.Storage.TryDeclareVar(convArgs[i], GetUdonType(invoke.Parameters[i].Type));
+            _ctx.Storage.TryDeclareVar(convArgs[i], GetStorageTypeName(invoke.Parameters[i].Type));
         string retType = null;
         if (!invoke.ReturnsVoid)
         {
-            retType = GetUdonType(invoke.ReturnType);
+            retType = GetStorageTypeName(invoke.ReturnType);
             _ctx.Storage.TryDeclareVar(convRet, retType);
         }
         // Stage 2 §5.1: every dispatch site unconditionally stages DelegateAbi.Env → __dlgc_{sig}__env, so
@@ -736,7 +736,7 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
 
                     var adr = DelegateAbi.ReadSlot(_builder, bundle, DelegateAbi.Addr, "SystemUInt32");
                     var mtd = DelegateAbi.ReadSlot(_builder, bundle, DelegateAbi.Method, "SystemString");
-                    var thisType = GetUdonType(_classSymbol);
+                    var thisType = GetStorageTypeName(_classSymbol);
                     var thisRef = LoadField(_ctx.Storage.DeclareThisOnce(thisType), thisType);
                     // Self/cross is decided by TARGET IDENTITY only (P6) — addr≠0 merely qualifies the
                     // fast path (addr is meaningless across program boundaries; 0-addr JUMP_INDIRECT would

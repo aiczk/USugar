@@ -77,7 +77,7 @@ public class StatementHandler : HandlerBase, IOperationHandler
                     VisitVariableDeclaration(decl);
                     foreach (var declarator in decl.Declarators)
                     {
-                        var localType = GetUdonType(declarator.Symbol.Type);
+                        var localType = GetStorageTypeName(declarator.Symbol.Type);
                         // Stage 2 §4.1: captured using-local → read the disposable ref from its env
                         // cell (using-locals are readonly, so the read-now leaf stays valid).
                         var dispRef = _ctx.Closures.TryGetEnvBinding(declarator.Symbol, out _)
@@ -237,7 +237,7 @@ public class StatementHandler : HandlerBase, IOperationHandler
         for (int i = 0; i < tailCall.Arguments.Length; i++)
         {
             var argVal = VisitExpression(tailCall.Arguments[i].Value);
-            var slot = _ctx.Builder.AllocScratch(GetUdonType(tailCall.Arguments[i].Value.Type));
+            var slot = _ctx.Builder.AllocScratch(GetStorageTypeName(tailCall.Arguments[i].Value.Type));
             EmitAssign(slot, argVal);
             argSlots[i] = slot;
         }
@@ -407,7 +407,7 @@ public class StatementHandler : HandlerBase, IOperationHandler
                 VisitVariableDeclaration(decl);
                 foreach (var declarator in decl.Declarators)
                 {
-                    var localType = GetUdonType(declarator.Symbol.Type);
+                    var localType = GetStorageTypeName(declarator.Symbol.Type);
                     // Stage 2 §4.1: captured using-statement local → env cell read (readonly, so safe).
                     var dispRef2 = _ctx.Closures.TryGetEnvBinding(declarator.Symbol, out _)
                         ? EnvEmit.Read(_builder, _ctx, declarator.Symbol, localType)
@@ -449,7 +449,7 @@ public class StatementHandler : HandlerBase, IOperationHandler
             EmitCallToMethod(ResolveStructMember(dispose), new List<CLeaf> { val });
             return;
         }
-        EmitExternVoid($"{GetUdonType(type)}.__Dispose__SystemVoid", new List<CLeaf> { val });
+        EmitExternVoid($"{GetStorageTypeName(type)}.__Dispose__SystemVoid", new List<CLeaf> { val });
     }
 
     void VisitVariableDeclaration(IVariableDeclarationOperation decl)
@@ -485,7 +485,7 @@ public class StatementHandler : HandlerBase, IOperationHandler
                 {
                     var envAggLayout = _ctx.Aggregates.GetLayout(envAggT);
                     EnvEmit.Write(_builder, _ctx, local,
-                        AggregateAbi.MintDefault(_builder, envAggLayout, _ctx.Aggregates.GetLayout, GetUdonType));
+                        AggregateAbi.MintDefault(_builder, envAggLayout, _ctx.Aggregates.GetLayout, GetStorageTypeName));
                 }
                 continue;
             }
@@ -499,7 +499,7 @@ public class StatementHandler : HandlerBase, IOperationHandler
 
             // Delegate-typed locals are SystemObjectArray bundle references via the type-map delegate arm
             // (design §2.1); the initializer's VisitDelegateCreation hoists any lambda and builds the bundle.
-            var udonType = GetUdonType(local.Type);
+            var udonType = GetStorageTypeName(local.Type);
             var id = _ctx.Storage.DeclareLocal(local.Name, udonType);
             _localBindings[local] = new EmitContext.LocalBinding(id);
 
@@ -536,7 +536,7 @@ public class StatementHandler : HandlerBase, IOperationHandler
             // The flat array allocated above is NOT enough for a NESTED struct — its inner struct-typed
             // fields must be recursively allocated (exactly like default(T)/new T()), or a write to a
             // nested field (`n.inner.x = …`) hits a null sub-array and faults the real VM. (diff-fuzz w2)
-            AggregateAbi.DefaultInitializeField(_builder, localId, layout, _ctx.Aggregates.GetLayout, GetUdonType);
+            AggregateAbi.DefaultInitializeField(_builder, localId, layout, _ctx.Aggregates.GetLayout, GetStorageTypeName);
             return;
         }
 
@@ -553,7 +553,7 @@ public class StatementHandler : HandlerBase, IOperationHandler
         }
         else if (value is IDefaultValueOperation)
         {
-            AggregateAbi.DefaultInitializeField(_builder, localId, layout, _ctx.Aggregates.GetLayout, GetUdonType);
+            AggregateAbi.DefaultInitializeField(_builder, localId, layout, _ctx.Aggregates.GetLayout, GetStorageTypeName);
         }
         // CW27: `new V(args) { … }` must NOT take this arm — it never applied op.Initializer, silently
         // dropping the member writes; the generic arm's VisitObjectCreation applies it after the ctor.
@@ -565,7 +565,7 @@ public class StatementHandler : HandlerBase, IOperationHandler
         {
             // new V(args): default-init the already-allocated array, then run the registered ctor
             // (receiver = this array, mutated in place via this.field = … in the ctor body).
-            AggregateAbi.DefaultInitializeField(_builder, localId, layout, _ctx.Aggregates.GetLayout, GetUdonType);
+            AggregateAbi.DefaultInitializeField(_builder, localId, layout, _ctx.Aggregates.GetLayout, GetStorageTypeName);
             var ctorArgs = new List<CLeaf> { LoadField(localId, AggregateAbi.ArrayType) };
             foreach (var arg in ocCtor.Arguments)
                 ctorArgs.Add(VisitExpression(arg.Value));
@@ -576,7 +576,7 @@ public class StatementHandler : HandlerBase, IOperationHandler
             // new V() / new V { field = ... }: the array is already allocated above; value-type
             // fields need 0/false/etc., then apply any object-initializer assignments. (A parameterless
             // struct ctor's VisitObjectCreation returns a null placeholder, so handle creation here.)
-            AggregateAbi.DefaultInitializeField(_builder, localId, layout, _ctx.Aggregates.GetLayout, GetUdonType);
+            AggregateAbi.DefaultInitializeField(_builder, localId, layout, _ctx.Aggregates.GetLayout, GetStorageTypeName);
             if (oc.Initializer != null)
                 EmitAggregateObjectInitializer(LoadField(localId, AggregateAbi.ArrayType), layout, oc.Initializer);
         }

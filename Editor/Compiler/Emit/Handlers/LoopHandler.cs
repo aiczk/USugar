@@ -127,7 +127,7 @@ public class LoopHandler : HandlerBase, IOperationHandler
                 $"foreach over '{collectionOp.Type?.ToDisplayString() ?? "unknown"}' is not supported. Only arrays are supported.");
 
         var arrayTypeSymbol = (IArrayTypeSymbol)collectionOp.Type;
-        var elemType = GetUdonType(arrayTypeSymbol.ElementType);
+        var elemType = GetStorageTypeName(arrayTypeSymbol.ElementType);
 
         // N-dim array (design 2026-07-04 §2): foreach visits the FLAT BACKING, not the bundle wrapper
         // — C# row-major order over all elements falls out of iterating the backing in flat-index

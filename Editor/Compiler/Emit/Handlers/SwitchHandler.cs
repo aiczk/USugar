@@ -25,7 +25,7 @@ public class SwitchHandler : HandlerBase, IOperationHandler
 
     void VisitSwitch(ISwitchOperation op)
     {
-        var valueType = GetUdonType(op.Value.Type);
+        var valueType = GetStorageTypeName(op.Value.Type);
         // Under ANF VisitExpression binds a side-effecting governor (`switch(Next())`) to a fresh scratch
         // exactly once, so the resulting leaf can be re-read across every case arm with no re-evaluation.
         var valueVal = VisitExpression(op.Value);
@@ -168,7 +168,7 @@ public class SwitchHandler : HandlerBase, IOperationHandler
 
                 var eqType = valueType;
                 if (switchValueType is INamedTypeSymbol named && named.TypeKind == TypeKind.Enum)
-                    eqType = GetUdonType(named.EnumUnderlyingType);
+                    eqType = GetStorageTypeName(named.EnumUnderlyingType);
 
                 CLeaf caseValueVal;
                 // Compile-time fold for enum / numeric constant case labels.

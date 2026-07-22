@@ -76,7 +76,7 @@ public static class FlatVerify
     static bool IsVoidSetProgramVariableCopyIn(CStmt stmt)
         => stmt is CExprStmt { Expr: CExternCall { DestSlot: null } call }
            && call.Type.Name == "SystemVoid"
-           && call.Sig == ExternResolver.EventReceiverSetProgramVariable;
+           && call.Sig.Text == ExternResolver.EventReceiverSetProgramVariable;
 
     /// <summary>Reentrant-flag conservation (design §4.3): CoreFlatten and CoalesceSlots/RemapInst both
     /// REBUILD call instructions, so a rebuild that forgets to copy the flag silently loses the

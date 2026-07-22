@@ -189,7 +189,7 @@ public sealed class CoreBuilder
     public CSlotRef Select(CLeaf cond, CLeaf trueVal, CLeaf falseVal, StorageType type)
         => Bind(new CSelect(cond, trueVal, falseVal, type), type);
 
-    public CSlotRef ExternCall(string sig, List<CLeaf> args, StorageType retType)
+    public CSlotRef ExternCall(ExternSignature sig, List<CLeaf> args, StorageType retType)
     {
         if (retType == "SystemVoid") { Emit(new CExprStmt(new CExternCall(sig, args, retType))); return null; }
         return Bind(new CExternCall(sig, args, retType), retType);
@@ -223,7 +223,7 @@ public sealed class CoreBuilder
     // function; the count increment here is the single creation choke point FlatVerify's conservation
     // check is balanced against. preSpillStmts (wave-12 r2 [V1]): see CExternCall.PreSpillStmts — used
     // by the raw cross property-setter pairs whose SetProgramVariable copy-in must sit inside the wrap.
-    public void EmitExternVoid(string sig, List<CLeaf> args, bool reentrant = false, int preSpillStmts = 0)
+    public void EmitExternVoid(ExternSignature sig, List<CLeaf> args, bool reentrant = false, int preSpillStmts = 0)
     {
         if (reentrant) CurrentFunction.ReentrantSiteCount++;
         Emit(new CExprStmt(new CExternCall(sig, args, "SystemVoid", null, reentrant, preSpillStmts)));

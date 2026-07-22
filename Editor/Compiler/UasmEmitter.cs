@@ -94,8 +94,8 @@ public class UasmEmitter
     // Type name resolution helper
     StorageType GetStorageType(ITypeSymbol type)
         => ExternResolver.GetStorageType(new RuntimeType(type), _typeParamMap);
-    string GetUdonType(ITypeSymbol type) => GetStorageType(type).Name;
-    string GetArrayType(IArrayTypeSymbol arrType) => GetUdonType(arrType);
+    string GetStorageTypeName(ITypeSymbol type) => GetStorageType(type).Name;
+    string GetArrayType(IArrayTypeSymbol arrType) => GetStorageTypeName(arrType);
     string GetArrayElemType(IArrayTypeSymbol arrType)
     {
         var t = GetArrayType(arrType);
@@ -106,9 +106,9 @@ public class UasmEmitter
 
     CLeaf BridgeLoad(string fieldName, StorageType type) => _builder.LoadField(fieldName, type);
     void BridgeStore(string fieldName, CLeaf value) => _builder.EmitStoreField(fieldName, value);
-    CLeaf BridgeCallExtern(StorageType retType, string sig, CLeaf[] args)
+    CLeaf BridgeCallExtern(StorageType retType, ExternSignature sig, CLeaf[] args)
         => _builder.ExternCall(sig, new List<CLeaf>(args), retType);
-    void BridgeCallExternVoid(string sig, CLeaf[] args)
+    void BridgeCallExternVoid(ExternSignature sig, CLeaf[] args)
         => _builder.EmitExternVoid(sig, new List<CLeaf>(args));
     CLeaf BridgeCallInternal(CFunction func, CLeaf[] args)
     {
@@ -357,7 +357,7 @@ public class UasmEmitter
                         + "store plain data.");
             }
 
-            var udonType = GetUdonType(member.Type);
+            var udonType = GetStorageTypeName(member.Type);
             var flags = FieldFlags.None;
             if (member.DeclaredAccessibility == Accessibility.Public
                 || member.GetAttributes().Any(a => a.AttributeClass?.Name is "SerializeField" or "SerializeFieldAttribute"))
@@ -433,7 +433,7 @@ public class UasmEmitter
             if (isAuto && prop.ExplicitInterfaceImplementations.Length > 0)
                 throw new NotSupportedException(ExplicitInterfaceAutoPropError(prop));
             if (!isAuto && prop.DeclaredAccessibility != Accessibility.Public) continue;
-            var udonType = GetUdonType(prop.Type);
+            var udonType = GetStorageTypeName(prop.Type);
             var flags = FieldFlags.None;
             if (prop.DeclaredAccessibility == Accessibility.Public) flags |= FieldFlags.Export;
             _ctx.Storage.DeclareField(prop.Name, udonType, flags,
@@ -500,7 +500,7 @@ public class UasmEmitter
                     continue;
                 }
 
-                var udonType = GetUdonType(member.Type);
+                var udonType = GetStorageTypeName(member.Type);
                 object constValue = null;
                 var syntaxRef2 = member.DeclaringSyntaxReferences.FirstOrDefault();
                 if (syntaxRef2?.GetSyntax() is VariableDeclaratorSyntax { Initializer: not null } decl)
@@ -572,7 +572,7 @@ public class UasmEmitter
                         // Round-8 [R2]: C# runs the BASE declaration's initializer into THIS backing
                         // (the leaf's stays default — DiffFuzz: base.P*10+P ref=50).
                         if (isAuto)
-                            _ctx.Storage.DeclareField(BaseAutoPropBackingName(prop), GetUdonType(prop.Type), FieldFlags.None,
+                            _ctx.Storage.DeclareField(BaseAutoPropBackingName(prop), GetStorageTypeName(prop.Type), FieldFlags.None,
                                 ResolveAutoPropInitializer(BaseAutoPropBackingName(prop), prop));
                         continue;
                     }
@@ -587,7 +587,7 @@ public class UasmEmitter
                 if (isAuto && prop.ExplicitInterfaceImplementations.Length > 0)
                     throw new NotSupportedException(ExplicitInterfaceAutoPropError(prop));
                 if (!isAuto && prop.DeclaredAccessibility != Accessibility.Public) continue;
-                var udonType = GetUdonType(prop.Type);
+                var udonType = GetStorageTypeName(prop.Type);
                 var flags = FieldFlags.None;
                 if (prop.DeclaredAccessibility == Accessibility.Public) flags |= FieldFlags.Export;
                 declaredMemberSyms[prop.Name] = prop;
@@ -655,7 +655,7 @@ public class UasmEmitter
             syncMode = "none";
 
         var syncCheckType = (member.Type is INamedTypeSymbol nt && nt.TypeKind == TypeKind.Enum)
-            ? GetUdonType(nt.EnumUnderlyingType)
+            ? GetStorageTypeName(nt.EnumUnderlyingType)
             : udonType;
         if (!ExternResolver.IsSyncableType(syncCheckType))
             throw new NotSupportedException(
@@ -720,7 +720,7 @@ public class UasmEmitter
             return true;
         }
 
-        var udonType = GetUdonType(member.Type);
+        var udonType = GetStorageTypeName(member.Type);
         object constValue = null;
         if (initOp != null)
         {
@@ -999,7 +999,7 @@ public class UasmEmitter
             var paramVarIds = new string[method.Parameters.Length];
             for (int i = 0; i < method.Parameters.Length; i++)
             {
-                _ctx.Storage.DeclareVar(ml.ParamIds[i], GetUdonType(method.Parameters[i].Type));
+                _ctx.Storage.DeclareVar(ml.ParamIds[i], GetStorageTypeName(method.Parameters[i].Type));
                 paramVarIds[i] = ml.ParamIds[i];
             }
             _methodParamVarIds[method] = paramVarIds;
@@ -1063,7 +1063,7 @@ public class UasmEmitter
             {
                 var param = fm.Parameters[pi];
                 var paramId = NameAllocator.ParamId(param.Name, idx);
-                _ctx.Storage.DeclareVar(paramId, GetUdonType(param.Type));
+                _ctx.Storage.DeclareVar(paramId, GetStorageTypeName(param.Type));
                 fmParamIds[pi] = paramId;
             }
             _methodParamVarIds[fm] = fmParamIds;
@@ -1071,7 +1071,7 @@ public class UasmEmitter
 
             if (!fm.ReturnsVoid)
             {
-                var retType = GetUdonType(fm.ReturnType);
+                var retType = GetStorageTypeName(fm.ReturnType);
                 var retId = NameAllocator.RetId(SanitizeId(fm.Name), idx);
                 func.ReturnType = retType;
                 func.ReturnSlots.Add(new ReturnSlot(retId, retType));
@@ -1125,7 +1125,7 @@ public class UasmEmitter
             {
                 var p = sm.Parameters[pi];
                 var pid = NameAllocator.ParamId(p.Name, idx);
-                _ctx.Storage.DeclareVar(pid, GetUdonType(p.Type));
+                _ctx.Storage.DeclareVar(pid, GetStorageTypeName(p.Type));
                 smParamIds[pi] = pid;
                 func.ParamFieldNames.Add(pid);
             }
@@ -1133,7 +1133,7 @@ public class UasmEmitter
 
             if (!sm.ReturnsVoid) // ctors are void (mutate in place); instance methods may return
             {
-                var retType = GetUdonType(sm.ReturnType);
+                var retType = GetStorageTypeName(sm.ReturnType);
                 var retId = NameAllocator.RetId(SanitizeId(sm.Name), idx);
                 func.ReturnType = retType;
                 func.ReturnSlots.Add(new ReturnSlot(retId, retType));
@@ -1162,7 +1162,7 @@ public class UasmEmitter
             {
                 var param = bm.Parameters[pi];
                 var paramId = NameAllocator.ParamId(param.Name, idx);
-                _ctx.Storage.DeclareVar(paramId, GetUdonType(param.Type));
+                _ctx.Storage.DeclareVar(paramId, GetStorageTypeName(param.Type));
                 bmParamIds[pi] = paramId;
             }
             _methodParamVarIds[bm] = bmParamIds;
@@ -1170,7 +1170,7 @@ public class UasmEmitter
 
             if (!bm.ReturnsVoid)
             {
-                var retType = GetUdonType(bm.ReturnType);
+                var retType = GetStorageTypeName(bm.ReturnType);
                 var retId = NameAllocator.RetId(SanitizeId(bm.Name), idx);
                 func.ReturnType = retType;
                 func.ReturnSlots.Add(new ReturnSlot(retId, retType));
@@ -1282,13 +1282,13 @@ public class UasmEmitter
             {
                 if (ifaceMl.ParamIds[i] != classMl.ParamIds[i])
                 {
-                    var udonType = GetUdonType(ifaceMethod.Parameters[i].Type);
+                    var udonType = GetStorageTypeName(ifaceMethod.Parameters[i].Type);
                     _ctx.Storage.TryDeclareVar(ifaceMl.ParamIds[i], udonType);
                 }
             }
             if (ifaceMl.ReturnId != null && ifaceMl.ReturnId != classMl.ReturnId)
             {
-                var retType = GetUdonType(ifaceMethod.ReturnType);
+                var retType = GetStorageTypeName(ifaceMethod.ReturnType);
                 _ctx.Storage.TryDeclareVar(ifaceMl.ReturnId, retType);
             }
 
@@ -1311,7 +1311,7 @@ public class UasmEmitter
             var args = new List<CLeaf>();
             for (int i = 0; i < ifaceMethod.Parameters.Length; i++)
             {
-                var paramType = GetUdonType(ifaceMethod.Parameters[i].Type);
+                var paramType = GetStorageTypeName(ifaceMethod.Parameters[i].Type);
                 args.Add(BridgeLoad(ifaceMl.ParamIds[i], paramType));
             }
 
@@ -1466,7 +1466,7 @@ public class UasmEmitter
             if (!emitted.Add(bridgeName)) continue;
             DelegateAbi.ValidateNoRefOutParams(member);
             var func = _ctx.Methods.Functions[member];
-            var retTypeStr = member.ReturnsVoid ? "SystemVoid" : GetUdonType(member.ReturnType);
+            var retTypeStr = member.ReturnsVoid ? "SystemVoid" : GetStorageTypeName(member.ReturnType);
             EmitReceiverBridgeBody(bridgeName, member, func, retTypeStr);
         }
     }
@@ -2186,7 +2186,7 @@ public class UasmEmitter
                 if (kvp.Value == setterProp.Name)
                 {
                     fcbFieldName = kvp.Key;
-                    fcbFieldType = GetUdonType(setterProp.Type);
+                    fcbFieldType = GetStorageTypeName(setterProp.Type);
                     break;
                 }
         }
@@ -2329,7 +2329,7 @@ public class UasmEmitter
                 foreach (var p in method.Parameters)
                     if (p.Ordinal < entryParamIds.Length && _ctx.Closures.TryGetEnvBinding(p, out _))
                         EnvEmit.Write(_builder, _ctx, p,
-                            BridgeLoad(entryParamIds[p.Ordinal], GetUdonType(p.Type)));
+                            BridgeLoad(entryParamIds[p.Ordinal], GetStorageTypeName(p.Type)));
 
             // Class receiver capture (design 2026-07-10 v2 §1.3): consume the receiver param0 into its
             // env cell exactly like a captured parameter — after __tco_ + EnvAlloc, so a self-tail
@@ -2403,7 +2403,7 @@ public class UasmEmitter
                     // Per-DECLARATION backing (AutoPropBackingVar): the chain leaf owns the bare
                     // name; an overridden base declaration's copies use their own storage (base.P).
                     var backingVar = AutoPropBackingVar(autoProp);
-                    var propType = GetUdonType(autoProp.Type);
+                    var propType = GetStorageTypeName(autoProp.Type);
                     if (method.MethodKind == MethodKind.PropertyGet
                         && _methodReturns.TryGetValue(method, out var autoRets) && autoRets.Length == 1)
                     {
@@ -2466,7 +2466,7 @@ public class UasmEmitter
         // initializer that references one sees a non-null backing array (C# default-then-initializer order).
         foreach (var (fieldId, aggType) in _ctx.Aggregates.FieldDefaults)
             BridgeStore(fieldId, AggregateAbi.MintDefault(_builder, _ctx.Aggregates.GetLayout(aggType),
-                _ctx.Aggregates.GetLayout, GetUdonType));
+                _ctx.Aggregates.GetLayout, GetStorageTypeName));
 
         foreach (var (fieldId, initOp, fieldType) in _fieldInitOps)
         {
@@ -2476,7 +2476,7 @@ public class UasmEmitter
                 if (initOp is IArrayInitializerOperation arrayInit)
                 {
                     var arrTypeSym = (IArrayTypeSymbol)fieldType;
-                    var arrayType = GetUdonType(arrTypeSym);
+                    var arrayType = GetStorageTypeName(arrTypeSym);
                     var elementType = GetArrayElemType(arrTypeSym);
                     var sizeConst = BridgeConstInt(arrayInit.ElementValues.Length);
                     var arrVal = BridgeCallExtern(arrayType,
@@ -2506,8 +2506,8 @@ public class UasmEmitter
                     var methodName = ExternResolver.GetConvertMethodName(fieldType);
                     if (methodName != null)
                     {
-                        var srcType = GetUdonType(initOp.Type);
-                        var dstType = GetUdonType(fieldType);
+                        var srcType = GetStorageTypeName(initOp.Type);
+                        var dstType = GetStorageTypeName(fieldType);
                         var converted = BridgeCallExtern(dstType,
                             $"SystemConvert.__{methodName}__{srcType}__{dstType}",
                             new CLeaf[] { valueVal });
