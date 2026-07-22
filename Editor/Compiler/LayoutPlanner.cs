@@ -417,7 +417,7 @@ public class LayoutPlanner
     }
 
     // Explicit interface implementations produce names with dots — invalid in UASM.
-    static string SanitizeId(string name) => name.Replace('.', '_');
+    static string SanitizeId(string name) => NameAllocator.Sanitize(name);
 
     /// <summary>R-M2 (design §2): a method excluded from SPECULATIVE delegate-bridge planning because no
     /// third-party program can bind it (C# accessibility) — private and private protected

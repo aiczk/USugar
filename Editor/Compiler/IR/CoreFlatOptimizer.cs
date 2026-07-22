@@ -482,7 +482,7 @@ public static class CoreFlatOptimizer
     static (Dictionary<int, int> Written, Dictionary<int, int> LastUsed) ComputeLivenessIntervals(
         CFunction func, Dictionary<int, HashSet<int>> blockLiveIn)
     {
-        var rpo = ComputeRPO(func);
+        var rpo = FlatCfgOrder.ComputeRpo(func);
 
         // Positional scheme identical to the flat CFG's: each statement one position, the terminator one
         // position after the block's statements.
@@ -532,30 +532,6 @@ public static class CoreFlatOptimizer
         }
 
         return (start, end);
-    }
-
-    static List<CBlock> ComputeRPO(CFunction func)
-    {
-        var visited = new HashSet<int>();
-        var postOrder = new List<CBlock>();
-        var blockMap = new Dictionary<int, CBlock>();
-        foreach (var b in func.FlatBlocks) blockMap[b.Id] = b;
-
-        void Dfs(int blockId)
-        {
-            if (!visited.Add(blockId)) return;
-            if (!blockMap.TryGetValue(blockId, out var block)) return;
-            if (block.Terminator == null) { postOrder.Add(block); return; }
-            foreach (var succ in CTerminator.GetSuccessors(block.Terminator))
-                Dfs(succ);
-            postOrder.Add(block);
-        }
-
-        if (func.Entry != null)
-            Dfs(func.Entry.Id);
-
-        postOrder.Reverse();
-        return postOrder;
     }
 
     // The switches below are EXHAUSTIVE over the flat-role kinds (FlatVerify.VerifyInstruction /

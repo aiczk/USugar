@@ -285,3 +285,28 @@ public sealed class CModule
         return func;
     }
 }
+
+/// <summary>Canonical traversal order for reachable blocks in flat Core IR.</summary>
+public static class FlatCfgOrder
+{
+    public static List<CBlock> ComputeRpo(CFunction function)
+    {
+        var blocks = new Dictionary<int, CBlock>();
+        foreach (var block in function.FlatBlocks) blocks[block.Id] = block;
+
+        var visited = new HashSet<int>();
+        var postorder = new List<CBlock>();
+        void Visit(CBlock block)
+        {
+            if (block == null || !visited.Add(block.Id)) return;
+            if (block.Terminator != null)
+                foreach (var successor in CTerminator.GetSuccessors(block.Terminator))
+                    if (blocks.TryGetValue(successor, out var next)) Visit(next);
+            postorder.Add(block);
+        }
+
+        Visit(function.Entry);
+        postorder.Reverse();
+        return postorder;
+    }
+}

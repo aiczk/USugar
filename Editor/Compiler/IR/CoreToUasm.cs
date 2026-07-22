@@ -304,31 +304,6 @@ public static class CoreToUasm
 
         // ── Block linearization (RPO) ──
 
-        static List<CBlock> ComputeRPO(CFunction func)
-        {
-            var blockById = new Dictionary<int, CBlock>();
-            foreach (var b in func.FlatBlocks) blockById[b.Id] = b;
-
-            var visited = new HashSet<int>();
-            var postorder = new List<CBlock>();
-            Visit(func.Entry, blockById, visited, postorder);
-            postorder.Reverse();
-            return postorder;
-
-            static void Visit(CBlock block, Dictionary<int, CBlock> blockById,
-                HashSet<int> visited, List<CBlock> postorder)
-            {
-                if (!visited.Add(block.Id)) return;
-                if (block.Terminator != null)
-                {
-                    foreach (var succId in CTerminator.GetSuccessors(block.Terminator))
-                        if (blockById.TryGetValue(succId, out var succ))
-                            Visit(succ, blockById, visited, postorder);
-                }
-                postorder.Add(block);
-            }
-        }
-
         // ── Code entry helpers ──
 
         void AddPush(string varId) =>
@@ -370,7 +345,7 @@ public static class CoreToUasm
 
         void EmitFunction(int funcIdx, CFunction func)
         {
-            var rpo = ComputeRPO(func);
+            var rpo = FlatCfgOrder.ComputeRpo(func);
 
             if (func.ExportName != null)
             {

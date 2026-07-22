@@ -44,6 +44,9 @@ public class NameAllocator
     /// <summary>Format a key + counter into "__N_key" form.</summary>
     public static string FormatId(string key, int counter) => $"__{counter}_{key}";
 
+    /// <summary>Normalize a source symbol name for use as a UASM identifier.</summary>
+    public static string Sanitize(string name) => name.Replace('.', '_');
+
     // The method-layout naming contract (LayoutPlanner exports + every synthetic bridge): allocator
     // keys "{name}__param"/"{name}__ret", counter-qualified slot ids "__N_{name}__param"/
     // "__N_{name}__ret", and the "{function}__body" entry label (past the sentinel push). These

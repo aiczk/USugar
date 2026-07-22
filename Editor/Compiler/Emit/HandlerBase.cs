@@ -517,7 +517,7 @@ public abstract partial class HandlerBase
         return op;
     }
 
-    protected static string SanitizeId(string name) => name.Replace('.', '_');
+    protected static string SanitizeId(string name) => NameAllocator.Sanitize(name);
     protected static string ToInvariantString(object value)
         => value is IFormattable fmt ? fmt.ToString(null, CultureInfo.InvariantCulture)
          : value?.ToString() ?? "null";

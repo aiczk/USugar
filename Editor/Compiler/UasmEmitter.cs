@@ -2147,7 +2147,7 @@ public class UasmEmitter
         if (prevFunc != null) _builder.SetFunction(prevFunc);
     }
 
-    static string SanitizeId(string name) => name.Replace('.', '_');
+    static string SanitizeId(string name) => NameAllocator.Sanitize(name);
 
     static bool IsHoistedClosureMethod(IMethodSymbol method)
         => method.MethodKind is MethodKind.LocalFunction
