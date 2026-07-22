@@ -211,7 +211,7 @@ public sealed class CFunction
     public CBlock Body = new CBlock();                            // structured form
     public readonly List<CBlock> FlatBlocks = new List<CBlock>(); // flat form (post-flatten)
     public readonly List<SlotDecl> Slots = new List<SlotDecl>();
-    public string ReturnType;
+    public StorageType? ReturnType;
     public readonly List<string> ParamFieldNames = new List<string>();
     public readonly List<ReturnSlot> ReturnSlots = new List<ReturnSlot>();
     public Shape Shape = Shape.Structured;
@@ -223,7 +223,7 @@ public sealed class CFunction
     // listed here — they are computed per call site from post-coalesce liveness (only slots live across the
     // call), which is what keeps the spill bounded under A-normal form.
     public readonly HashSet<string> RecursiveCalleeNames = new HashSet<string>();
-    public readonly List<(string Name, string Type)> RecursionSpillFields = new List<(string, string)>();
+    public readonly List<(string Name, StorageType Type)> RecursionSpillFields = new List<(string, StorageType)>();
 
     /// <summary>Number of Reentrant-flagged call instructions this function must carry (design §4.3).
     /// Incremented by CoreBuilder when a flagged dispatch arm is emitted; decremented by CoreFlatten

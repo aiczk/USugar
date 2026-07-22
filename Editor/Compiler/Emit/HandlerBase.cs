@@ -2887,15 +2887,15 @@ public abstract partial class HandlerBase
     // because a dispatch can re-enter that function and re-seed the one flat slot (fresh-environment
     // semantics). The SLOTS to spill are computed per call site from post-coalesce liveness by
     // InsertRecursionSpills, so they are not collected here.
-    List<(string Name, string Type)> CollectRecursionSpillFields()
+    List<(string Name, StorageType Type)> CollectRecursionSpillFields()
     {
-        var fields = new List<(string, string)>();
+        var fields = new List<(string, StorageType)>();
         var seen = new HashSet<string>();
         void AddField(string id)
         {
             if (id == null || !seen.Add(id)) return;
             var t = _ctx.Storage.GetFieldType(id);
-            if (t != null) fields.Add((id, t));
+            if (t.HasValue) fields.Add((id, t.Value));
         }
         var pids = _ctx.Methods.CurrentClosureSpec?.ParamVarIds;
         if (pids == null && _currentMethod != null) _methodParamVarIds.TryGetValue(_currentMethod, out pids);

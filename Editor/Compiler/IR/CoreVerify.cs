@@ -150,8 +150,8 @@ public static class CoreVerify
                 break;
 
             case CReturn ret:
-                var returnsVoid = string.IsNullOrEmpty(ctx.Func.ReturnType)
-                    || ctx.Func.ReturnType == "SystemVoid";
+                var returnsVoid = !ctx.Func.ReturnType.HasValue
+                    || ctx.Func.ReturnType.Value.Name == "SystemVoid";
                 if (returnsVoid && ret.Value != null)
                     throw new VerificationException(
                         $"Void function '{ctx.Func.Name}' returns a value of type '{ret.Value.Type}'");
@@ -161,7 +161,7 @@ public static class CoreVerify
                 if (ret.Value != null)
                 {
                     VerifyExpr(ret.Value, ctx);
-                    ctx.AssertType(ctx.Func.ReturnType, ret.Value.Type, "CReturn");
+                    ctx.AssertType(ctx.Func.ReturnType.Value, ret.Value.Type, "CReturn");
                 }
                 break;
 

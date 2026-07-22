@@ -238,7 +238,7 @@ public static class CoreFlatOptimizer
     };
 
     // Push order: fields then slots (reload pops in reverse → LIFO balanced).
-    static void EmitSpill(CFunction func, List<CStmt> output, List<(string Name, string Type)> fields, List<SlotDecl> slots)
+    static void EmitSpill(CFunction func, List<CStmt> output, List<(string Name, StorageType Type)> fields, List<SlotDecl> slots)
     {
         foreach (var f in fields)
         {
@@ -250,7 +250,7 @@ public static class CoreFlatOptimizer
             SpillValue(func, output, new CSlotRef(slot.Id, slot.Type));
     }
 
-    static void EmitReload(CFunction func, List<CStmt> output, List<(string Name, string Type)> fields, List<SlotDecl> slots)
+    static void EmitReload(CFunction func, List<CStmt> output, List<(string Name, StorageType Type)> fields, List<SlotDecl> slots)
     {
         for (int i = slots.Count - 1; i >= 0; i--)
             ReloadValue(func, output, slots[i].Id, slots[i].Type, null);
@@ -272,7 +272,7 @@ public static class CoreFlatOptimizer
         SpDelta(func, output, +1);
     }
 
-    static void ReloadValue(CFunction func, List<CStmt> output, int slotId, string type, string fieldName)
+    static void ReloadValue(CFunction func, List<CStmt> output, int slotId, StorageType type, string fieldName)
     {
         // __recurSp--; value = __recurStack[__recurSp]  (Udon unboxes the object[] element on typed COPY)
         SpDelta(func, output, -1);

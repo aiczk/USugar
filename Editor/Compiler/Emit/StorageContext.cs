@@ -113,6 +113,6 @@ public sealed class StorageContext
         return id;
     }
 
-    public string GetFieldType(string id)
-        => _module.Fields.FirstOrDefault(f => f.Name == id)?.Type.Name;
+    public StorageType? GetFieldType(string id)
+        => _module.Fields.FirstOrDefault(f => f.Name == id)?.Type;
 }
