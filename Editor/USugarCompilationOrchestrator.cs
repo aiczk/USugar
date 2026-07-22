@@ -181,7 +181,9 @@ static class USugarCompilationOrchestrator
                     .OfType<Microsoft.CodeAnalysis.CSharp.Syntax.ClassDeclarationSyntax>())
                 {
                     var symbol = model.GetDeclaredSymbol(classDecl) as INamedTypeSymbol;
-                    if (symbol == null || !IsUdonSharpBehaviour(symbol)) continue;
+                    if (symbol == null) continue;
+                    var isBehaviour = IsUdonSharpBehaviour(symbol);
+                    if (!isBehaviour) continue;
                     if (!seenClassSymbols.Add(symbol)) continue;
                     classList.Add((symbol, model, tree));
                 }
@@ -190,11 +192,34 @@ static class USugarCompilationOrchestrator
 
             // Pre-plan all layouts (serial, populates cache)
             var planner = new LayoutPlanner(compilation);
+            foreach (var tree in compilation.SyntaxTrees)
+            {
+                var model = compilation.GetSemanticModel(tree);
+                foreach (var classDecl in tree.GetRoot().DescendantNodes()
+                    .OfType<Microsoft.CodeAnalysis.CSharp.Syntax.ClassDeclarationSyntax>())
+                {
+                    var symbol = model.GetDeclaredSymbol(classDecl) as INamedTypeSymbol;
+                    if (symbol == null) continue;
+                    var isBehaviour = IsUdonSharpBehaviour(symbol);
+                    foreach (var iface in symbol.AllInterfaces)
+                        planner.RegisterClassImplementedInterface(iface, isBehaviour);
+                }
+            }
             foreach (var (symbol, _, _) in classList)
             {
                 planner.Plan(symbol);
                 foreach (var iface in symbol.AllInterfaces)
                     planner.Plan(iface);
+            }
+            foreach (var tree in compilation.SyntaxTrees)
+            {
+                var model = compilation.GetSemanticModel(tree);
+                foreach (var ifaceDecl in tree.GetRoot().DescendantNodes()
+                    .OfType<Microsoft.CodeAnalysis.CSharp.Syntax.InterfaceDeclarationSyntax>())
+                {
+                    var iface = model.GetDeclaredSymbol(ifaceDecl) as INamedTypeSymbol;
+                    if (iface != null) planner.Plan(iface);
+                }
             }
             // Wave-14 r3: record every interface a user STRUCT implements — see LayoutPlanner's
             // InterfaceHasStructImplementor doc comment. Struct declarations aren't in classList (that

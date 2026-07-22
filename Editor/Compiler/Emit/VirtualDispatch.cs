@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Linq;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.Operations;
 
@@ -90,6 +91,23 @@ public sealed class VirtualDispatch
             }
             var v = _typeObjs.TryGetTypeObjVar(concrete);
             if (v != null) outp.Add(new VDispatchTarget(concrete, v, impl));
+        }
+        return outp;
+    }
+
+    public List<VDispatchTarget> ResolveInterfaceTargets(INamedTypeSymbol interfaceType, IMethodSymbol member)
+    {
+        var outp = new List<VDispatchTarget>();
+        foreach (var concrete in _typeObjs.MintedClasses)
+        {
+            if (!concrete.AllInterfaces.Any(i => SymbolEqualityComparer.Default.Equals(i, interfaceType)))
+                continue;
+            var impl = concrete.FindImplementationForInterfaceMember(member) as IMethodSymbol;
+            if (impl == null || impl.IsAbstract) continue;
+            if (impl.IsVirtual || impl.IsOverride)
+                impl = MostDerivedImpl(concrete, SlotIntroducer(impl)) ?? impl;
+            var typeObj = _typeObjs.TryGetTypeObjVar(concrete);
+            if (typeObj != null) outp.Add(new VDispatchTarget(concrete, typeObj, impl));
         }
         return outp;
     }

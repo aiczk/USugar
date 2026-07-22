@@ -165,6 +165,10 @@ public sealed class BoundaryChecker
     {
         var sourceShape = TypeClassifier.ShapeOf(sourceType, TypeCtx);
         var destinationShape = TypeClassifier.ShapeOf(destinationType, TypeCtx);
+        if (TypeClassifier.IsUserClass(sourceType)
+            && destinationType is INamedTypeSymbol { TypeKind: TypeKind.Interface } localInterface
+            && _ctx.Planner.InterfaceIsLocalUserClassOnly(localInterface))
+            return;
         // Phase-A armor (B82 mirror for N-R1): a Rank>1 array's runtime value is an object[] bundle, and
         // the extern-boundary choke keys on the ARGUMENT's unwrapped static type — erasing the T[,] to
         // object/Array first launders the bundle past externs the direct form loudly rejects. Contain at

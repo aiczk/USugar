@@ -57,7 +57,13 @@ public abstract partial class HandlerBase
 
     // ── Type resolution ──
     protected StorageType GetStorageType(ITypeSymbol type)
-        => ExternResolver.GetStorageType(new RuntimeType(type), _ctx.Generics.TypeParamMap);
+    {
+        var resolved = ResolveType(type);
+        if (resolved is INamedTypeSymbol { TypeKind: TypeKind.Interface } iface
+            && _planner.InterfaceIsLocalUserClassOnly(iface))
+            return new StorageType(AggregateAbi.ArrayType);
+        return ExternResolver.GetStorageType(new RuntimeType(type), _ctx.Generics.TypeParamMap);
+    }
     protected string GetStorageTypeName(ITypeSymbol type) => GetStorageType(type).Name;
     protected TypeClassifierContext TypeCtx => new TypeClassifierContext(_ctx.Generics.TypeParamMap);
     protected ITypeSymbol ResolveType(ITypeSymbol type)
@@ -1974,6 +1980,18 @@ public abstract partial class HandlerBase
         // silent/ICE; same rationale as the variable-receiver generic method-group reject below).
         // The lambda wrapping IS supported (VM-proven Match): it captures the receiver and dispatches
         // through the interface-call convention.
+        if (targetMethod.ContainingType is INamedTypeSymbol { TypeKind: TypeKind.Interface } localIface
+            && _planner.InterfaceIsLocalUserClassOnly(localIface))
+        {
+            if (targetInstance == null)
+                throw new System.NotSupportedException(
+                    $"Interface method group '{localIface.Name}.{targetMethod.Name}' has no receiver.");
+            var localBridge = DelegateAbi.BridgeName(
+                "iface_" + SanitizeId(localIface.ToDisplayString()) + "_" + SanitizeId(targetMethod.Name));
+            _ctx.Synthetics.ReceiverBridges.Add((targetMethod, localBridge));
+            return (localBridge, FuncRef(localBridge), null, targetInstance);
+        }
+
         if (targetMethod.ContainingType?.TypeKind == TypeKind.Interface)
             throw new System.NotSupportedException(
                 $"A delegate cannot be created from interface member "
@@ -2236,6 +2254,11 @@ public abstract partial class HandlerBase
         recvTy = null;
         if (accessor == null || op.Instance == null) return false;
         if (ResolveType(op.Instance.Type) is not INamedTypeSymbol rt) return false;
+        if (rt.TypeKind == TypeKind.Interface && _planner.InterfaceIsLocalUserClassOnly(rt))
+        {
+            recvTy = rt;
+            return true;
+        }
         if (!VirtualDispatch.IsDispatchSite(accessor, op.Instance, rt)) return false;
         recvTy = rt;
         return true;
@@ -2275,8 +2298,11 @@ public abstract partial class HandlerBase
     protected CLeaf EmitAccessorDispatch(IPropertySymbol prop, INamedTypeSymbol recvTy,
         IMethodSymbol accessor, CLeaf recv, List<CLeaf> indexArgs, CLeaf setValue)
     {
-        var targets = _ctx.VirtualDispatch.ResolveTargets(recvTy, accessor);
-        AssertClosedVirtualDispatch(recvTy, targets, accessor);
+        var interfaceDispatch = recvTy.TypeKind == TypeKind.Interface;
+        var targets = interfaceDispatch
+            ? _ctx.VirtualDispatch.ResolveInterfaceTargets(recvTy, accessor)
+            : _ctx.VirtualDispatch.ResolveTargets(recvTy, accessor);
+        if (!interfaceDispatch) AssertClosedVirtualDispatch(recvTy, targets, accessor);
         bool isSet = setValue != null;
         string memberKind = prop.IsIndexer ? "indexer" : "property";
 

@@ -468,7 +468,7 @@ public static class ClassAbi
         return prefix + n.Name + (n.Arity > 0 ? "`" + n.Arity : "");
     }
 
-    /// <summary>CA-M1: user classes have reference semantics and no interface dispatch. CA-v2 M1 adds
+    /// <summary>CA-M1: user classes have reference semantics. CA-v2 M1 adds
     /// non-virtual inheritance; M3 adds a SEALED-class Object-method override (ToString/Equals/GetHashCode);
     /// v2b-2 adds virtual METHOD dispatch and the CW1 lift adds virtual property/indexer ACCESSOR dispatch
     /// (both through the inline typeobj chain), leaving only generic-virtual rejected here (backlog: a
@@ -476,11 +476,6 @@ public static class ClassAbi
     /// model — an accessor is never generic, so accessors are fully covered).</summary>
     public static void RejectUnsupportedMembers(INamedTypeSymbol classTy)
     {
-        if (classTy.Interfaces.Length > 0)
-            throw new NotSupportedException(
-                $"Class '{classTy.Name}' implements interface '{classTy.Interfaces[0].Name}': class ABI v1 "
-                + "does not support interface implementation on a user class. Call the method directly, or "
-                + "use a UdonSharpBehaviour interface for dispatch.");
         foreach (var m in classTy.GetMembers())
         {
             if (m.IsImplicitlyDeclared) continue;

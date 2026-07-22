@@ -289,6 +289,7 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
                     + "SendCustomEvent) and so needs a public, non-generic target without ref/out "
                     + "parameters. Make the method public, or call it through 'this'.");
             return EmitCrossClassCall(op, target);
+
         }
 
         // User-defined generic method → monomorphize
@@ -402,6 +403,17 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
         // Interface method call → SendCustomEvent dispatch
         // Skip when instance is a type parameter resolved to a concrete non-UdonBehaviour type
         // (e.g., IComparable<T>.CompareTo with T=int → use extern, not SendCustomEvent)
+        if (target.ContainingType is INamedTypeSymbol { TypeKind: TypeKind.Interface } localInterface
+            && _planner.InterfaceIsLocalUserClassOnly(localInterface))
+        {
+            var targets = _ctx.VirtualDispatch.ResolveInterfaceTargets(localInterface, target);
+            if (targets.Count >= 2)
+                return EmitVirtualChain(op, targets);
+            if (targets.Count == 1)
+                return EmitStructInstanceCall(op, ResolveStructMember(targets[0].Impl));
+            return EmitUnreachableVirtualCall(op, localInterface, target);
+        }
+
         if (target.ContainingType.TypeKind == TypeKind.Interface
             && op.Instance != null
             && !IsResolvedConcreteNonBehaviour(op.Instance?.Type))

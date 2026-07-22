@@ -172,6 +172,41 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
             throw new System.NotSupportedException("Unsupported event assignment target.");
         var evt = evtRef.Event;
 
+        if (evt.ContainingType is INamedTypeSymbol { TypeKind: TypeKind.Interface } localInterface
+            && _planner.InterfaceIsLocalUserClassOnly(localInterface))
+        {
+            var accessor = op.Adds ? evt.AddMethod : evt.RemoveMethod;
+            if (accessor == null)
+                throw new System.NotSupportedException($"Event '{evt.Name}' has no accessor.");
+            var recvSlot = _builder.AllocScratch(new StorageType(AggregateAbi.ArrayType));
+            EmitAssign(recvSlot, LoadInstanceRaw(evtRef.Instance));
+            var handlerSlot = _builder.AllocScratch(GetStorageType(evt.Type));
+            EmitAssign(handlerSlot, VisitExpression(op.HandlerValue));
+            var targets = _ctx.VirtualDispatch.ResolveInterfaceTargets(localInterface, accessor);
+            if (targets.Count == 0)
+                throw new System.NotSupportedException(
+                    $"Interface event '{localInterface.Name}.{evt.Name}' has no minted implementation.");
+            if (targets.Count == 1)
+            {
+                EmitExprStmt(EmitCallToMethod(ResolveStructMember(targets[0].Impl),
+                    new List<CLeaf> { SlotRef(recvSlot), SlotRef(handlerSlot) }, op.Syntax));
+                return null;
+            }
+            var typeObj = AggregateAbi.ReadSlot(_builder, SlotRef(recvSlot), 0,
+                new StorageType(AggregateAbi.ArrayType));
+            foreach (var target in targets)
+            {
+                var match = ExternCall(
+                    "SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean",
+                    new List<CLeaf> { typeObj, LoadField(target.TypeObjVar, new StorageType(AggregateAbi.ArrayType)) },
+                    StorageTypes.Boolean);
+                _builder.EmitIf(match, _ => EmitExprStmt(EmitCallToMethod(
+                    ResolveStructMember(target.Impl),
+                    new List<CLeaf> { SlotRef(recvSlot), SlotRef(handlerSlot) }, op.Syntax)), null);
+            }
+            return null;
+        }
+
         // R1 armor: custom-accessor events never get backing storage (UasmEmitter.DeclareEvent already
         // loud-rejects them at declaration) — if one somehow reached here, fail loud rather than write
         // to nonexistent storage.

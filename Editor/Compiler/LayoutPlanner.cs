@@ -107,6 +107,8 @@ public class LayoutPlanner
     // present in a narrow test compile) is unaffected: that is the pre-existing, working cross-behaviour
     // dispatch feature, and must NOT be rejected just because no CLASS implementor happens to be visible.
     readonly HashSet<INamedTypeSymbol> _interfacesWithStructImplementor = new(SymbolEqualityComparer.Default);
+    readonly HashSet<INamedTypeSymbol> _interfacesWithUserClassImplementor = new(SymbolEqualityComparer.Default);
+    readonly HashSet<INamedTypeSymbol> _interfacesWithBehaviourImplementor = new(SymbolEqualityComparer.Default);
 
     public void RegisterStructImplementedInterface(INamedTypeSymbol iface)
         => _interfacesWithStructImplementor.Add(iface);
@@ -116,6 +118,18 @@ public class LayoutPlanner
     /// above) and must be rejected loudly rather than emitted.</summary>
     public bool InterfaceHasStructImplementor(INamedTypeSymbol iface)
         => _interfacesWithStructImplementor.Contains(iface);
+
+    public void RegisterClassImplementedInterface(INamedTypeSymbol iface, bool isBehaviour)
+    {
+        if (isBehaviour) _interfacesWithBehaviourImplementor.Add(iface);
+        else _interfacesWithUserClassImplementor.Add(iface);
+    }
+
+    public bool InterfaceIsLocalUserClassOnly(INamedTypeSymbol iface)
+        => iface != null
+           && _interfacesWithUserClassImplementor.Contains(iface)
+           && !_interfacesWithBehaviourImplementor.Contains(iface)
+           && !_interfacesWithStructImplementor.Contains(iface);
 
     // C# event method name → Udon export name ("_" + lowerFirst). Regenerated from the SDK's Event_*
     // node definitions — the same source stock UdonSharp derives from (CompilerUdonInterface.CacheInit).

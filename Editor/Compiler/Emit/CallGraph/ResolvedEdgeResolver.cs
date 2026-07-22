@@ -39,6 +39,10 @@ public sealed class ResolvedEdgeResolver
             if (dc.Target is IMethodReferenceOperation mr && mr.Method != null)
             {
                 yield return new ResolvedTarget(mr.Method.OriginalDefinition, TargetRole.EscapeTarget);
+                if (mr.Method.ContainingType is INamedTypeSymbol { TypeKind: TypeKind.Interface } escapeIface
+                    && _emitter.Planner.InterfaceIsLocalUserClassOnly(escapeIface))
+                    foreach (var vt in _emitter.VirtualDispatchInstance.ResolveInterfaceTargets(escapeIface, mr.Method))
+                        yield return new ResolvedTarget(vt.Impl.OriginalDefinition, TargetRole.EscapeTarget);
                 if (LeafMethodRefTarget(mr) is { } leafT)
                     yield return new ResolvedTarget(leafT, TargetRole.EscapeTarget);
             }
@@ -204,6 +208,19 @@ public sealed class ResolvedEdgeResolver
             foreach (var initOp in _emitter.EnumerateClassFieldInitOps(ct))
                 foreach (var t in ReachWalk(initOp, minted))
                     yield return t;
+            foreach (var iface in ct.AllInterfaces)
+            {
+                var ifaceLayout = _emitter.Planner.GetLayout(iface);
+                foreach (var ifaceMethod in ifaceLayout.Methods.Keys)
+                    if (ct.FindImplementationForInterfaceMember(ifaceMethod) is IMethodSymbol impl
+                        && impl.ContainingType?.TypeKind != TypeKind.Interface)
+                    {
+                        if (impl.AssociatedSymbol is IPropertySymbol autoProperty
+                            && !UasmEmitter.IsComputedProperty(autoProperty))
+                            continue;
+                        yield return new ResolvedTarget(impl, TargetRole.ReachStructMember);
+                    }
+            }
             // base explicit parameterless ctors called by the implicit ctor chain.
             for (var bt = ct.BaseType; bt is INamedTypeSymbol && TypeClassifier.IsUserClass(bt); bt = bt.BaseType)
             {
@@ -369,6 +386,10 @@ public sealed class ResolvedEdgeResolver
                     && VirtualDispatch.IsDispatchSite(inv.TargetMethod, inv.Instance, vrecv))
                     foreach (var vt in _emitter.VirtualDispatchInstance.ResolveTargets(vrecv, inv.TargetMethod))
                         yield return vt.Impl.OriginalDefinition;
+                if (inv.TargetMethod.ContainingType is INamedTypeSymbol { TypeKind: TypeKind.Interface } iface
+                    && _emitter.Planner.InterfaceIsLocalUserClassOnly(iface))
+                    foreach (var vt in _emitter.VirtualDispatchInstance.ResolveInterfaceTargets(iface, inv.TargetMethod))
+                        yield return vt.Impl.OriginalDefinition;
                 break;
             case IObjectCreationOperation { Constructor: { } ctor }:
                 yield return ctor.OriginalDefinition;
@@ -434,6 +455,16 @@ public sealed class ResolvedEdgeResolver
                     yield return impl;
                 foreach (var impl in AccessorDispatchImplDefs(pr, VirtualDispatch.FindAccessor(pr.Property, getter: false)))
                     yield return impl;
+                if (pr.Property.ContainingType is INamedTypeSymbol { TypeKind: TypeKind.Interface } propIface
+                    && _emitter.Planner.InterfaceIsLocalUserClassOnly(propIface))
+                {
+                    if (pr.Property.GetMethod is { } ig)
+                        foreach (var vt in _emitter.VirtualDispatchInstance.ResolveInterfaceTargets(propIface, ig))
+                            yield return vt.Impl.OriginalDefinition;
+                    if (pr.Property.SetMethod is { } ise)
+                        foreach (var vt in _emitter.VirtualDispatchInstance.ResolveInterfaceTargets(propIface, ise))
+                            yield return vt.Impl.OriginalDefinition;
+                }
                 break;
             case IEventAssignmentOperation eventAssignment
                 when eventAssignment.EventReference is IEventReferenceOperation eventReference:
@@ -441,7 +472,13 @@ public sealed class ResolvedEdgeResolver
                 var accessor = eventAssignment.Adds
                     ? eventReference.Event.AddMethod
                     : eventReference.Event.RemoveMethod;
-                if (accessor != null && !accessor.IsImplicitlyDeclared)
+                if (accessor?.ContainingType is INamedTypeSymbol { TypeKind: TypeKind.Interface } eventIface
+                    && _emitter.Planner.InterfaceIsLocalUserClassOnly(eventIface))
+                {
+                    foreach (var vt in _emitter.VirtualDispatchInstance.ResolveInterfaceTargets(eventIface, accessor))
+                        yield return vt.Impl.OriginalDefinition;
+                }
+                else if (accessor != null && !accessor.IsImplicitlyDeclared)
                     yield return accessor.OriginalDefinition;
                 break;
             }

@@ -97,7 +97,13 @@ public partial class UasmEmitter
 
     // Type name resolution helper
     StorageType GetStorageType(ITypeSymbol type)
-        => ExternResolver.GetStorageType(new RuntimeType(type), _typeParamMap);
+        => ResolveInterfaceStorage(type) ?? ExternResolver.GetStorageType(new RuntimeType(type), _typeParamMap);
+    StorageType? ResolveInterfaceStorage(ITypeSymbol type)
+        => ResolveTypeForStorage(type) is INamedTypeSymbol { TypeKind: TypeKind.Interface } iface
+           && _planner.InterfaceIsLocalUserClassOnly(iface)
+            ? new StorageType(AggregateAbi.ArrayType) : (StorageType?)null;
+    ITypeSymbol ResolveTypeForStorage(ITypeSymbol type)
+        => TypeEnvironment.CloseType(_compilation, type, _typeParamMap);
     string GetStorageTypeName(ITypeSymbol type) => GetStorageType(type).Name;
     string GetArrayType(IArrayTypeSymbol arrType) => GetStorageTypeName(arrType);
     string GetArrayElemType(IArrayTypeSymbol arrType)
@@ -130,6 +136,7 @@ public partial class UasmEmitter
     // seeds them at the compile-plan build — the resolver fails loud on a pre-seed CallEdge call).
     internal VirtualDispatch VirtualDispatchInstance => _ctx.VirtualDispatch;
     internal ClassTypeObjectContext ClassTypes => _ctx.ClassTypes;
+    internal LayoutPlanner Planner => _planner;
 
     // CA call-graph rewrite (M5b prerequisite): test-only accessor exposing the populated RecursionInfo
     // (all six facets: RecursionGraphNodes, per-node RecursiveCallees/CycleCallees edge sets,
@@ -278,7 +285,11 @@ public partial class UasmEmitter
                 .OfType<ClassDeclarationSyntax>())
             {
                 var symbol = model.GetDeclaredSymbol(classDecl) as INamedTypeSymbol;
-                if (symbol == null || !ExternResolver.IsUdonSharpBehaviour(symbol)) continue;
+                if (symbol == null) continue;
+                var isBehaviour = ExternResolver.IsUdonSharpBehaviour(symbol);
+                foreach (var iface in symbol.AllInterfaces)
+                    _planner.RegisterClassImplementedInterface(iface, isBehaviour);
+                if (!isBehaviour) continue;
                 _planner.Plan(symbol);
                 foreach (var iface in symbol.AllInterfaces)
                     _planner.Plan(iface);
