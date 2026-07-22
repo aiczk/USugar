@@ -28,6 +28,8 @@ class C
         var n = new C();
         var p = c.P;
         c.P = 1;
+        c.P += 2;
+        c.P++;
         c.E += null;
         c.E -= null;
         var sum = c + c;
@@ -55,5 +57,19 @@ class C
         Assert.Contains(CallableSiteKind.EventRemove, kinds);
         Assert.Contains(CallableSiteKind.Operator, kinds);
         Assert.Contains(CallableSiteKind.Conversion, kinds);
+
+        var properties = operation.DescendantsAndSelf().OfType<IPropertyReferenceOperation>().ToArray();
+        var read = properties.Single(p => p.Parent is IVariableInitializerOperation);
+        var write = properties.Single(p => p.Parent is ISimpleAssignmentOperation);
+        var compound = properties.Single(p => p.Parent is ICompoundAssignmentOperation);
+        var increment = properties.Single(p => p.Parent is IIncrementOrDecrementOperation);
+        Assert.Equal(new[] { CallableSiteKind.PropertyGet },
+            CallableSites.FromOperation(read).Select(s => s.Kind));
+        Assert.Equal(new[] { CallableSiteKind.PropertySet },
+            CallableSites.FromOperation(write).Select(s => s.Kind));
+        Assert.Equal(new[] { CallableSiteKind.PropertyGet, CallableSiteKind.PropertySet },
+            CallableSites.FromOperation(compound).Select(s => s.Kind));
+        Assert.Equal(new[] { CallableSiteKind.PropertyGet, CallableSiteKind.PropertySet },
+            CallableSites.FromOperation(increment).Select(s => s.Kind));
     }
 }

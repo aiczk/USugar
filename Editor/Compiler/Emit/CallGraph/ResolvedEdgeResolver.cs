@@ -484,47 +484,52 @@ public sealed class ResolvedEdgeResolver
                     yield return impl;
                 break;
             case IPropertyReferenceOperation pr:
+                var propertySites = CallableSites.FromOperation(pr).ToArray();
+                var readsProperty = propertySites.Any(s => s.Kind == CallableSiteKind.PropertyGet);
+                var writesProperty = propertySites.Any(s => s.Kind == CallableSiteKind.PropertySet);
                 // this-receiver accessor call (both accessors + the emission-faithful leaf override).
                 if (pr.Instance is IInstanceReferenceOperation)
                 {
-                    if (pr.Property.GetMethod is { } pg) yield return pg.OriginalDefinition;
-                    if (pr.Property.SetMethod is { } ps) yield return ps.OriginalDefinition;
+                    if (readsProperty && pr.Property.GetMethod is { } pg) yield return pg.OriginalDefinition;
+                    if (writesProperty && pr.Property.SetMethod is { } ps) yield return ps.OriginalDefinition;
                     if (LeafPropertyTarget(pr) is { } lp)
                     {
-                        if (lp.GetMethod is { } lg) yield return lg.OriginalDefinition;
-                        if (lp.SetMethod is { } ls) yield return ls.OriginalDefinition;
+                        if (readsProperty && lp.GetMethod is { } lg) yield return lg.OriginalDefinition;
+                        if (writesProperty && lp.SetMethod is { } ls) yield return ls.OriginalDefinition;
                     }
                 }
                 // variable-receiver / interface-typed accessor dispatch that can land back on this program.
                 if (IsCrossDispatchReceiver(pr.Instance, pr.Property))
                 {
-                    if (ResolveCrossDispatchLocalTarget(pr.Property.GetMethod) is { } cg) yield return cg;
-                    if (ResolveCrossDispatchLocalTarget(pr.Property.SetMethod) is { } cs) yield return cs;
+                    if (readsProperty && ResolveCrossDispatchLocalTarget(pr.Property.GetMethod) is { } cg) yield return cg;
+                    if (writesProperty && ResolveCrossDispatchLocalTarget(pr.Property.SetMethod) is { } cs) yield return cs;
                 }
                 // computed property / indexer on a USER-STRUCT receiver — `this` OR a fresh struct
                 // instance (structs compile into this program's accessor functions).
                 if (pr.Property is { IsStatic: false } sprop
                     && sprop.ContainingType is INamedTypeSymbol sprct && TypeClassifier.IsObjectArrayEmulated(sprct))
                 {
-                    if (sprop.GetMethod is { } sg) yield return sg.OriginalDefinition;
-                    if (sprop.SetMethod is { } ss) yield return ss.OriginalDefinition;
+                    if (readsProperty && sprop.GetMethod is { } sg) yield return sg.OriginalDefinition;
+                    if (writesProperty && sprop.SetMethod is { } ss) yield return ss.OriginalDefinition;
                 }
                 // CW1 lift: accessor dispatch fan-out — the accessor twin of the invocation arm's
                 // v2b-2/CW5 arms. Both accessors yield conservatively (a reference alone doesn't
                 // reveal read-vs-write context; over-yield only ever over-spills, §8-3).
-                foreach (var impl in AccessorDispatchImplDefs(pr, VirtualDispatch.FindAccessor(pr.Property, getter: true)))
-                    yield return impl;
-                foreach (var impl in AccessorDispatchImplDefs(pr, VirtualDispatch.FindAccessor(pr.Property, getter: false)))
-                    yield return impl;
+                if (readsProperty)
+                    foreach (var impl in AccessorDispatchImplDefs(pr, VirtualDispatch.FindAccessor(pr.Property, getter: true)))
+                        yield return impl;
+                if (writesProperty)
+                    foreach (var impl in AccessorDispatchImplDefs(pr, VirtualDispatch.FindAccessor(pr.Property, getter: false)))
+                        yield return impl;
                 if (pr.Property.ContainingType is INamedTypeSymbol { TypeKind: TypeKind.Interface } propIface
                     && _emitter.Planner.InterfaceIsLocalUserClassOnly(propIface))
                 {
-                    if (pr.Property.GetMethod is { } ig)
+                    if (readsProperty && pr.Property.GetMethod is { } ig)
                         foreach (var vt in _emitter.VirtualDispatchInstance.Resolve(
                             new CallableSite(CallableSiteKind.PropertyGet, ig, pr, pr.Instance),
                             propIface).RuntimeTargets)
                             yield return vt.Impl.OriginalDefinition;
-                    if (pr.Property.SetMethod is { } ise)
+                    if (writesProperty && pr.Property.SetMethod is { } ise)
                         foreach (var vt in _emitter.VirtualDispatchInstance.Resolve(
                             new CallableSite(CallableSiteKind.PropertySet, ise, pr, pr.Instance),
                             propIface).RuntimeTargets)

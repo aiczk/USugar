@@ -35,9 +35,8 @@ internal readonly struct CallableSite
 
 internal static class CallableSites
 {
-    /// <summary>Normalize explicit callable-bearing operation shapes. Property references yield both
-    /// accessors conservatively because a standalone Roslyn node does not encode its read/write context;
-    /// consumers that know the context select the appropriate kind.</summary>
+    /// <summary>Normalize explicit callable-bearing operation shapes. Property context is classified
+    /// once here: reads use get, simple writes use set, and read-modify-write forms use both.</summary>
     public static IEnumerable<CallableSite> FromOperation(IOperation operation)
     {
         switch (operation)
@@ -57,13 +56,18 @@ internal static class CallableSites
                     CallableSiteKind.Method, methodReference.Method, operation, methodReference.Instance);
                 yield break;
             case IPropertyReferenceOperation property:
-                if (property.Property.GetMethod != null)
+            {
+                var access = PropertyAccessOf(property);
+                var getter = VirtualDispatch.FindAccessor(property.Property, getter: true);
+                var setter = VirtualDispatch.FindAccessor(property.Property, getter: false);
+                if ((access & PropertyAccess.Get) != 0 && getter != null)
                     yield return new CallableSite(
-                        CallableSiteKind.PropertyGet, property.Property.GetMethod, operation, property.Instance);
-                if (property.Property.SetMethod != null)
+                        CallableSiteKind.PropertyGet, getter, operation, property.Instance);
+                if ((access & PropertyAccess.Set) != 0 && setter != null)
                     yield return new CallableSite(
-                        CallableSiteKind.PropertySet, property.Property.SetMethod, operation, property.Instance);
+                        CallableSiteKind.PropertySet, setter, operation, property.Instance);
                 yield break;
+            }
             case IEventAssignmentOperation assignment
                 when assignment.EventReference is IEventReferenceOperation eventReference:
             {
@@ -91,4 +95,24 @@ internal static class CallableSites
            ?? (operation as ICompoundAssignmentOperation)?.OperatorMethod
            ?? (operation as IIncrementOrDecrementOperation)?.OperatorMethod
            ?? (operation as IConversionOperation)?.OperatorMethod;
+
+    [System.Flags]
+    enum PropertyAccess { Get = 1, Set = 2 }
+
+    static PropertyAccess PropertyAccessOf(IPropertyReferenceOperation property)
+    {
+        switch (property.Parent)
+        {
+            case ISimpleAssignmentOperation assignment when ReferenceEquals(assignment.Target, property):
+                return PropertyAccess.Set;
+            case ICompoundAssignmentOperation assignment when ReferenceEquals(assignment.Target, property):
+                return PropertyAccess.Get | PropertyAccess.Set;
+            case IIncrementOrDecrementOperation increment when ReferenceEquals(increment.Target, property):
+                return PropertyAccess.Get | PropertyAccess.Set;
+            case ICoalesceAssignmentOperation coalesce when ReferenceEquals(coalesce.Target, property):
+                return PropertyAccess.Get | PropertyAccess.Set;
+            default:
+                return PropertyAccess.Get;
+        }
+    }
 }
