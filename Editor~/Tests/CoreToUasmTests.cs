@@ -45,6 +45,16 @@ public class CoreToUasmTests
         Assert.Equal(ConstFormat.Key("SystemObject", "same"), ConstFormat.Key("SystemObject", "same"));
     }
 
+    [Fact]
+    public void ConstKey_ReferenceConstantsUseExactIdentity()
+    {
+        var first = new object();
+        var second = new object();
+
+        Assert.Equal(ConstFormat.Key("SystemObject", first), ConstFormat.Key("SystemObject", first));
+        Assert.NotEqual(ConstFormat.Key("SystemObject", first), ConstFormat.Key("SystemObject", second));
+    }
+
     [Theory]
     [InlineData(null, "null")]
     [InlineData(1.5f, "1.5")]

@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Linq;
 using Xunit;
 
 namespace USugar.Tests;
@@ -212,6 +213,23 @@ public class CoreVerifyTests
 
         var ex = Assert.Throws<VerificationException>(() => CoreVerify.Verify(second));
         Assert.Contains("no fact recorded for 'CvCompilationLocalEnum'", ex.Message);
+    }
+
+    [Fact]
+    public void TypeFacts_ConflictingSymbolsForOneUdonName_Throw()
+    {
+        TestHelper.BuildCompilation("class RefType { } struct ValueType { } class FactHost { }",
+            "FactHost", out var host);
+        var types = host.ContainingAssembly.GlobalNamespace.GetTypeMembers();
+        var reference = types.Single(t => t.Name == "RefType");
+        var value = types.Single(t => t.Name == "ValueType");
+        var facts = new UdonTypeFactRegistry();
+
+        facts.Record("CollidingUdonName", reference);
+        var ex = Assert.Throws<System.InvalidOperationException>(
+            () => facts.Record("CollidingUdonName", value));
+
+        Assert.Contains("conflicting facts", ex.Message);
     }
 
     [Fact]

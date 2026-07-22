@@ -14,11 +14,14 @@ using Microsoft.CodeAnalysis;
 /// way two slot/COPY types may legally differ (CoreVerify and the test-side UasmValidator COPY check).</summary>
 public sealed class UdonTypeFactRegistry
 {
-    public readonly struct TypeFact
+    public readonly struct TypeFact : IEquatable<TypeFact>
     {
         public readonly bool IsEnum;
         public readonly bool IsValueType;
         public TypeFact(bool isEnum, bool isValueType) { IsEnum = isEnum; IsValueType = isValueType; }
+        public bool Equals(TypeFact other) => IsEnum == other.IsEnum && IsValueType == other.IsValueType;
+        public override bool Equals(object obj) => obj is TypeFact other && Equals(other);
+        public override int GetHashCode() => (IsEnum ? 1 : 0) | (IsValueType ? 2 : 0);
     }
 
     // Values are deterministic per name (SDK name ↔ symbol is 1:1 for every name that reaches the
@@ -33,7 +36,21 @@ public sealed class UdonTypeFactRegistry
     {
         if (string.IsNullOrEmpty(udonName) || symbol == null) return;
         if (StructuralIsReference(udonName) != null) return;
-        _facts.TryAdd(udonName, new TypeFact(symbol.TypeKind == TypeKind.Enum, symbol.IsValueType));
+        var requested = new TypeFact(symbol.TypeKind == TypeKind.Enum, symbol.IsValueType);
+        while (true)
+        {
+            if (_facts.TryGetValue(udonName, out var existing))
+            {
+                if (!existing.Equals(requested))
+                    throw new InvalidOperationException(
+                        $"Udon type name '{udonName}' has conflicting facts: existing "
+                        + $"enum={existing.IsEnum}, valueType={existing.IsValueType}; requested "
+                        + $"enum={requested.IsEnum}, valueType={requested.IsValueType} for "
+                        + $"'{symbol.ToDisplayString()}'.");
+                return;
+            }
+            if (_facts.TryAdd(udonName, requested)) return;
+        }
     }
 
     internal void RecordForTest(string udonName, bool isEnum, bool isValueType)

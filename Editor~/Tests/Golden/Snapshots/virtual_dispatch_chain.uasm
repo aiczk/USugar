@@ -48,8 +48,9 @@
     __intnl_SystemBoolean_c2: %SystemBoolean, null
     __const_SystemBoolean_7: %SystemBoolean, null
     __intnl_SystemInt32_c2: %SystemInt32, null
-    __const_SystemString_8: %SystemString, null
-    __const_SystemInt32_9: %SystemInt32, null
+    __const_SystemBoolean_8: %SystemBoolean, null
+    __const_SystemString_9: %SystemString, null
+    __const_SystemInt32_10: %SystemInt32, null
     __intnl_SystemObject_c0: %SystemObject, null
     __intnl_SystemObject_c1: %SystemObject, null
     __intnl_SystemObjectArray_c4: %SystemObjectArray, null
@@ -70,13 +71,16 @@
     __intnl_SystemObjectArray_c10: %SystemObjectArray, null
     __intnl_SystemObjectArray_c11: %SystemObjectArray, null
     __intnl_SystemObjectArray_c12: %SystemObjectArray, null
+    __const_SystemBoolean_11: %SystemBoolean, null
     __intnl_SystemBoolean_c3: %SystemBoolean, null
     __intnl_SystemObjectArray_c13: %SystemObjectArray, null
     __intnl_SystemBoolean_c4: %SystemBoolean, null
     __intnl_SystemBoolean_c5: %SystemBoolean, null
+    __const_SystemBoolean_12: %SystemBoolean, null
     __intnl_SystemInt32_c9: %SystemInt32, null
     __intnl_SystemInt32_c10: %SystemInt32, null
     __intnl_SystemInt32_c11: %SystemInt32, null
+    __const_SystemBoolean_13: %SystemBoolean, null
     __intnl_SystemObjectArray_c14: %SystemObjectArray, null
     __intnl_SystemObjectArray_c15: %SystemObjectArray, null
     __intnl_SystemInt32_c12: %SystemInt32, null
@@ -344,7 +348,7 @@
     ___start_bb9:
         JUMP, 0x000006c8
     ___start_bb8:
-        PUSH, __const_SystemBoolean_7
+        PUSH, __const_SystemBoolean_8
         PUSH, __intnl_SystemBoolean_c0
         COPY
         PUSH, __intnl_SystemObjectArray_c0
@@ -375,7 +379,7 @@
     ___start_bb12:
         JUMP, 0x00000724
     ___start_bb11:
-        PUSH, __const_SystemString_8
+        PUSH, __const_SystemString_9
         EXTERN, "UnityEngineDebug.__LogError__SystemObject__SystemVoid"
     ___start_bb13:
         PUSH, __intnl_SystemInt32_c2
@@ -414,7 +418,7 @@
         PUSH, __intnl_SystemObjectArray_c0
         PUSH, __5_this__param
         COPY
-        PUSH, __const_SystemInt32_9
+        PUSH, __const_SystemInt32_10
         PUSH, __5_side__param
         COPY
         PUSH, __const_retaddr_SystemUInt32_4
@@ -700,7 +704,7 @@
         PUSH, __intnl_SystemObjectArray_c12
         PUSH, __intnl_SystemObjectArray_c11
         COPY
-        PUSH, __const_SystemBoolean_6
+        PUSH, __const_SystemBoolean_11
         PUSH, __intnl_SystemBoolean_c3
         COPY
         PUSH, __typeobj_VdRc
@@ -722,7 +726,7 @@
     ____4_Doubled_bb3:
         JUMP, 0x000010c4
     ____4_Doubled_bb2:
-        PUSH, __const_SystemBoolean_7
+        PUSH, __const_SystemBoolean_12
         PUSH, __intnl_SystemBoolean_c3
         COPY
         PUSH, __intnl_SystemObjectArray_c10
@@ -760,7 +764,7 @@
     ____4_Doubled_bb6:
         JUMP, 0x000011b4
     ____4_Doubled_bb5:
-        PUSH, __const_SystemBoolean_7
+        PUSH, __const_SystemBoolean_13
         PUSH, __intnl_SystemBoolean_c3
         COPY
         PUSH, __intnl_SystemObjectArray_c10
@@ -791,7 +795,7 @@
     ____4_Doubled_bb9:
         JUMP, 0x00001210
     ____4_Doubled_bb8:
-        PUSH, __const_SystemString_8
+        PUSH, __const_SystemString_9
         EXTERN, "UnityEngineDebug.__LogError__SystemObject__SystemVoid"
     ____4_Doubled_bb10:
         PUSH, __intnl_SystemInt32_c11

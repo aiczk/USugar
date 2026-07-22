@@ -198,18 +198,22 @@ public readonly struct ConstKey : IEquatable<ConstKey>
     public readonly string UdonType;
     public readonly string ValueKind;
     public readonly string CanonicalValue;
+    readonly object _identityValue;
 
     public ConstKey(string udonType, object value)
     {
         UdonType = udonType ?? throw new ArgumentNullException(nameof(udonType));
         ValueKind = value?.GetType().FullName ?? "<null>";
         CanonicalValue = ConstFormat.CanonicalValue(value);
+        _identityValue = ConstFormat.UsesReferenceIdentity(value) ? value : null;
     }
 
     public bool Equals(ConstKey other)
         => string.Equals(UdonType, other.UdonType, StringComparison.Ordinal)
            && string.Equals(ValueKind, other.ValueKind, StringComparison.Ordinal)
-           && string.Equals(CanonicalValue, other.CanonicalValue, StringComparison.Ordinal);
+           && string.Equals(CanonicalValue, other.CanonicalValue, StringComparison.Ordinal)
+           && (_identityValue == null && other._identityValue == null
+               || ReferenceEquals(_identityValue, other._identityValue));
 
     public override bool Equals(object obj) => obj is ConstKey other && Equals(other);
 
@@ -221,6 +225,8 @@ public readonly struct ConstKey : IEquatable<ConstKey>
             hash = hash * 31 + StringComparer.Ordinal.GetHashCode(UdonType);
             hash = hash * 31 + StringComparer.Ordinal.GetHashCode(ValueKind);
             hash = hash * 31 + StringComparer.Ordinal.GetHashCode(CanonicalValue);
+            if (_identityValue != null)
+                hash = hash * 31 + System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(_identityValue);
             return hash;
         }
     }
@@ -250,6 +256,12 @@ public static class ConstFormat
         return System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(value)
             .ToString("X8", CultureInfo.InvariantCulture);
     }
+
+    internal static bool UsesReferenceIdentity(object value)
+        => value != null
+           && value is not string
+           && value is not IFormattable
+           && !value.GetType().IsEnum;
 
     public static string Value(object value)
     {
