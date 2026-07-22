@@ -30,7 +30,7 @@ public sealed class ReceiverBridgeEmitter
     {
         var builder = _context.Builder;
         var signaturePart = DelegateAbi.BuildSigPart(member, null);
-        var returnTypeName = _convention.Declare(signaturePart, member, null);
+        var returnType = _convention.Declare(signaturePart, member, null);
         var targetReturnType = member.ReturnsVoid
             ? StorageTypes.Void
             : ExternResolver.GetStorageType(new RuntimeType(member.ReturnType), _context.Generics.TypeParamMap);
@@ -50,7 +50,7 @@ public sealed class ReceiverBridgeEmitter
                 ExternResolver.GetStorageType(
                     new RuntimeType(member.Parameters[i].Type), _context.Generics.TypeParamMap)));
 
-        var conventionReturn = returnTypeName != null ? DelegateAbi.ConvRetName(signaturePart) : null;
+        var conventionReturn = returnType != null ? DelegateAbi.ConvRetName(signaturePart) : null;
         var receiverPresent = _bridge.CallExtern(StorageTypes.Boolean,
             "SystemObject.__op_Inequality__SystemObject_SystemObject__SystemBoolean",
             receiver, builder.Const(null, StorageTypes.Object));
@@ -67,9 +67,9 @@ public sealed class ReceiverBridgeEmitter
                     builder.Const(
                         $"USugar: null receiver \u2014 invoked a method-group delegate whose receiver is null ({member.ContainingType.Name}.{member.Name})",
                         StorageTypes.String));
-                if (conventionReturn != null)
+                if (conventionReturn != null && returnType != null)
                     _bridge.Store(conventionReturn,
-                        InvocationHandler.DefaultConst(builder, returnTypeName));
+                        InvocationHandler.DefaultConst(builder, returnType.Value));
             });
 
         builder.EmitReturn();

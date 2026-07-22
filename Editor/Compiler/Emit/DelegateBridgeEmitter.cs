@@ -67,7 +67,7 @@ public sealed class DelegateBridgeEmitter
     {
         var builder = _context.Builder;
         var signaturePart = DelegateAbi.BuildSigPart(signatureMethod, typeParameterMap);
-        var returnTypeName = _convention.Declare(signaturePart, signatureMethod, typeParameterMap);
+        var returnType = _convention.Declare(signaturePart, signatureMethod, typeParameterMap);
         var targetReturnType = closureCheckMethod.ReturnsVoid
             ? StorageTypes.Void
             : ExternResolver.GetStorageType(
@@ -83,7 +83,7 @@ public sealed class DelegateBridgeEmitter
                 ExternResolver.GetStorageType(
                     new RuntimeType(signatureMethod.Parameters[i].Type), typeParameterMap)));
 
-        var conventionReturn = returnTypeName != null ? DelegateAbi.ConvRetName(signaturePart) : null;
+        var conventionReturn = returnType != null ? DelegateAbi.ConvRetName(signaturePart) : null;
         void EmitCall()
         {
             var result = builder.InternalCall(target.Name, arguments, targetReturnType);
@@ -94,7 +94,7 @@ public sealed class DelegateBridgeEmitter
         if (_context.Closures.CaptureScope != null
             && _context.Closures.CaptureScope.IsCapturingClosure(closureCheckMethod))
             EmitGuardedClosureCall(signaturePart, closureCheckMethod, arguments, conventionReturn,
-                returnTypeName, EmitCall);
+                returnType, EmitCall);
         else
             EmitCall();
 
@@ -103,7 +103,7 @@ public sealed class DelegateBridgeEmitter
     }
 
     void EmitGuardedClosureCall(string signaturePart, IMethodSymbol closureMethod,
-        List<CLeaf> arguments, string conventionReturn, string returnTypeName, System.Action emitCall)
+        List<CLeaf> arguments, string conventionReturn, StorageType? returnType, System.Action emitCall)
     {
         var builder = _context.Builder;
         var environmentName = DelegateAbi.ConvEnvName(signaturePart);
@@ -125,31 +125,31 @@ public sealed class DelegateBridgeEmitter
                     "SystemString.__op_Equality__SystemString_SystemString__SystemBoolean",
                     kind, builder.Const(EnvAbi.KindTag, StorageTypes.String));
                 builder.EmitIf(kindValid, _ => emitCall(),
-                    _ => EmitInvalidEnvironment(closureMethod, conventionReturn, returnTypeName));
+                    _ => EmitInvalidEnvironment(closureMethod, conventionReturn, returnType));
             },
-            _ => EmitMissingEnvironment(closureMethod, conventionReturn, returnTypeName));
+            _ => EmitMissingEnvironment(closureMethod, conventionReturn, returnType));
     }
 
-    void EmitInvalidEnvironment(IMethodSymbol method, string conventionReturn, string returnTypeName)
+    void EmitInvalidEnvironment(IMethodSymbol method, string conventionReturn, StorageType? returnType)
     {
         EmitEnvironmentError(
             $"USugar: invalid closure environment \u2014 invoked a captured delegate with a non-env payload ({method.Name})",
-            conventionReturn, returnTypeName);
+            conventionReturn, returnType);
     }
 
-    void EmitMissingEnvironment(IMethodSymbol method, string conventionReturn, string returnTypeName)
+    void EmitMissingEnvironment(IMethodSymbol method, string conventionReturn, StorageType? returnType)
     {
         EmitEnvironmentError(
             $"USugar: missing closure environment \u2014 invoked a captured delegate whose bundle carries no env ({method.Name})",
-            conventionReturn, returnTypeName);
+            conventionReturn, returnType);
     }
 
-    void EmitEnvironmentError(string message, string conventionReturn, string returnTypeName)
+    void EmitEnvironmentError(string message, string conventionReturn, StorageType? returnType)
     {
         _bridge.CallExternVoid("UnityEngineDebug.__LogError__SystemObject__SystemVoid",
             _context.Builder.Const(message, StorageTypes.String));
-        if (conventionReturn != null)
+        if (conventionReturn != null && returnType != null)
             _bridge.Store(conventionReturn,
-                InvocationHandler.DefaultConst(_context.Builder, returnTypeName));
+                InvocationHandler.DefaultConst(_context.Builder, returnType.Value));
     }
 }

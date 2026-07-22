@@ -70,7 +70,7 @@ public abstract partial class HandlerBase
         var backingUdonType = GetArrayType(plan.BackingType);
         var backingElemUdonType = GetArrayElemType(plan.BackingType);
         return NdimArrayAbi.ReadFromPlan(_builder, plan, new StorageType(elemUdonType), new StorageType(backingUdonType), new StorageType(backingElemUdonType),
-            ae.Syntax.ToString(), type => InvocationHandler.DefaultConst(_builder, type));
+            ae.Syntax.ToString(), type => InvocationHandler.DefaultConst(_builder, new StorageType(type)));
     }
 
     /// <summary>Shared in-bounds Set from an already-prepared plan: in-bounds branch Sets on the flat

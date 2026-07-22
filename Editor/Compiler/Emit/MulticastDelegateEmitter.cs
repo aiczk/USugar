@@ -360,8 +360,8 @@ public sealed class MulticastDelegateEmitter
         int retSlot = -1;
         if (retType != null)
         {
-            retSlot = _ctx.Builder.AllocScratch(new StorageType(retType));
-            _builder.EmitAssign(retSlot, InvocationHandler.DefaultConst(_builder, retType));
+            retSlot = _ctx.Builder.AllocScratch(retType.Value);
+            _builder.EmitAssign(retSlot, InvocationHandler.DefaultConst(_builder, retType.Value));
         }
 
         var dispatch = new InvocationHandler(_ctx);

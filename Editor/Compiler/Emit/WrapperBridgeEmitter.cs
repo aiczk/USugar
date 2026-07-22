@@ -29,7 +29,7 @@ public sealed class WrapperBridgeEmitter
         var builder = _context.Builder;
         var outerSignature = DelegateAbi.BuildSigPart(outerInvoke, typeParameterMap);
         _context.Storage.EnsureRecursionStack();
-        var returnTypeName = _convention.Declare(
+        var returnType = _convention.Declare(
             outerSignature, outerInvoke, typeParameterMap, out var argumentTypes);
         _context.Storage.TryDeclareVar(
             DelegateAbi.ConvEnvName(outerSignature), new StorageType(EnvEmit.EnvType));
@@ -59,7 +59,7 @@ public sealed class WrapperBridgeEmitter
 
         var result = new InvocationHandler(_context).EmitFanoutElementDispatch(
             builder.SlotRef(innerSlot), innerInvoke, typeParameterMap, arguments);
-        if (returnTypeName != null && result != null)
+        if (returnType != null && result != null)
             _bridge.Store(DelegateAbi.ConvRetName(outerSignature), result);
 
         builder.EmitReturn();

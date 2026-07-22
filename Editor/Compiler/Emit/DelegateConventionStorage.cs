@@ -8,11 +8,11 @@ public sealed class DelegateConventionStorage
 
     public DelegateConventionStorage(StorageContext storage) => _storage = storage;
 
-    public string Declare(string signaturePart, IMethodSymbol invoke,
+    public StorageType? Declare(string signaturePart, IMethodSymbol invoke,
         IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeParameterMap)
         => Declare(signaturePart, invoke, typeParameterMap, out _);
 
-    public string Declare(string signaturePart, IMethodSymbol invoke,
+    public StorageType? Declare(string signaturePart, IMethodSymbol invoke,
         IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeParameterMap,
         out StorageType[] argumentTypes)
     {
@@ -27,6 +27,6 @@ public sealed class DelegateConventionStorage
         if (invoke.ReturnsVoid) return null;
         var returnType = ExternResolver.GetStorageType(new RuntimeType(invoke.ReturnType), typeParameterMap);
         _storage.TryDeclareVar(DelegateAbi.ConvRetName(signaturePart), returnType);
-        return returnType.Name;
+        return returnType;
     }
 }
