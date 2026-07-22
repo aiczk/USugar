@@ -1479,6 +1479,11 @@ public abstract partial class HandlerBase
         var identity = _ctx.ResolveClosureIdentity(localFunc);
         var keyArgs = identity.KeyArgs;
         if (_ctx.Methods.TryGetClosureSpec(localFunc, keyArgs, out _)) return;
+        if (_ctx.Generics.BodyEmissionStarted)
+            throw new InvalidOperationException(
+                $"USugar internal error: closure '{localFunc}' was first discovered during body emission "
+                + $"(key: {string.Join(",", keyArgs.Select(ClassTypeObjectContext.SpecKey))}; "
+                + $"owners: {string.Join(" > ", identity.OwnerSpecs.Select(m => m.ToDisplayString()))}).");
         EmitPolicy.RejectInParameters(localFunc); // round-7 follow-up [Q3]
         var funcName = string.IsNullOrEmpty(localFunc.Name) ? "lambda" : localFunc.Name;
         var parameters = localFunc.Parameters.Select(parameter => new CallableParameterPlan(
@@ -1713,6 +1718,11 @@ public abstract partial class HandlerBase
             ? closureIdentity.KeyArgs : System.Collections.Immutable.ImmutableArray<ITypeSymbol>.Empty;
         if (closureKind ? _ctx.Methods.TryGetClosureSpec(constructed, closureKeyArgs, out _)
                         : _methodFunctions.ContainsKey(constructed)) return;
+        if (closureKind && _ctx.Generics.BodyEmissionStarted)
+            throw new InvalidOperationException(
+                $"USugar internal error: closure specialization '{constructed}' was first discovered "
+                + $"during body emission (key: {string.Join(",", closureKeyArgs.Select(ClassTypeObjectContext.SpecKey))}; "
+                + $"owners: {string.Join(" > ", closureIdentity.OwnerSpecs.Select(m => m.ToDisplayString()))}).");
         if (!closureKind && _ctx.Generics.BodyEmissionStarted
             && !_ctx.Generics.IsPlannedSpecialization(constructed))
             throw new InvalidOperationException(

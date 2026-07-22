@@ -264,7 +264,29 @@ public sealed class MethodContext
     {
         spec = null;
         if (def == null) return false;
-        return _closureSpecs.TryGetValue(new SpecKey(def, keyArgs), out spec);
+        if (_closureSpecs.TryGetValue(new SpecKey(def, keyArgs), out spec)) return true;
+
+        // Roslyn can materialize a different local-function/lambda symbol when the same source body is
+        // obtained through a constructed containing type. Pre-emission planning stores the body-graph's
+        // canonical symbol, while emission sees the operation-tree symbol. They are one definition even
+        // when SymbolEqualityComparer does not relate them, so use the frozen source identity as the
+        // secondary definition comparison. The specialization arguments remain exact.
+        foreach (var pair in _closureSpecs)
+        {
+            if (!ClosureIdentityPlan.SameSourceDefinition(pair.Key.Def, def)
+                || pair.Key.Args.Length != keyArgs.Length) continue;
+            var sameArgs = true;
+            for (var i = 0; i < keyArgs.Length; i++)
+                if (!SymbolEqualityComparer.Default.Equals(pair.Key.Args[i], keyArgs[i]))
+                {
+                    sameArgs = false;
+                    break;
+                }
+            if (!sameArgs) continue;
+            spec = pair.Value;
+            return true;
+        }
+        return false;
     }
 
     /// <summary>Throw-on-miss twin (design v3 §2B: a multi-spec context must never silently fall

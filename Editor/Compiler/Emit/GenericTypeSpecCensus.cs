@@ -76,8 +76,13 @@ internal sealed class GenericTypeSpecCensus
             or MethodKind.LambdaMethod or MethodKind.AnonymousFunction;
         if (!closureKind && method.DeclaringSyntaxReferences.Length == 0) return;
         var closed = TypeEnvironment.CloseMethod(_compilation, method, ambient);
-        var map = TypeEnvironment.ForMethod(closed, ambient);
-        if (ContainsOpen(closed.ContainingType) || closed.IsGenericMethod && closed.TypeArguments.Any(ContainsOpen))
+        var map = closureKind ? ForClosure(closed, ambient) : TypeEnvironment.ForMethod(closed, ambient);
+        // A closure symbol remains lexically attached to the open declaration type even while its
+        // enclosing method trace is closed (for example Box<int>.Run's lambda still reports Box<T>).
+        // Its containing-type arguments therefore come from the owner trace, not from this symbol.
+        if ((!closureKind && ContainsOpen(closed.ContainingType))
+            || closed.IsGenericMethod && closed.TypeArguments.Any(t => ContainsOpen(TypeEnvironment.CloseType(
+                _compilation, t, ambient))))
             return;
         RejectExpandingCycle(closed, parent);
         var lexicalOwners = closureKind ? LexicalOwners(closed, parent)
@@ -95,6 +100,14 @@ internal sealed class GenericTypeSpecCensus
             _closures.Add(key, new ClosureSpecializationCandidate(closed, TraceMethods(parent)));
         _queue.Enqueue((closed, map, new SpecTrace(closed, parent)));
     }
+
+    static IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> ForClosure(IMethodSymbol method,
+        IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> parent)
+        => !method.IsGenericMethod ? parent : TypeParamScope.Compose(parent, true, new[]
+        {
+            ((IReadOnlyList<ITypeParameterSymbol>)method.OriginalDefinition.TypeParameters,
+             (IReadOnlyList<ITypeSymbol>)method.TypeArguments)
+        });
 
     void AddMint(INamedTypeSymbol raw, IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> map,
         SpecTrace methodTrace, MintTrace parentMint)
@@ -284,8 +297,7 @@ internal sealed class GenericTypeSpecCensus
              symbol is IMethodSymbol owner;
              symbol = owner.ContainingSymbol)
             for (var current = trace; current != null; current = current.Parent)
-                if (SymbolEqualityComparer.Default.Equals(
-                    current.Method.OriginalDefinition, owner.OriginalDefinition))
+                if (ClosureIdentityPlan.SameSourceDefinition(current.Method, owner))
                 {
                     result.Add(current.Method);
                     break;
