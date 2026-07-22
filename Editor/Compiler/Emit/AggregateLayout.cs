@@ -47,7 +47,7 @@ public class AggregateLayout
         var fields = new List<FieldInfo>();
         var nameToIndex = new Dictionary<string, int>();
         // Class ABI v1: reserve slot 0, fields start at index 1. Struct/tuple: no reservation.
-        int reserved = EmitPolicy.IsUserClassType(type) ? 1 : 0;
+        int reserved = TypeClassifier.IsUserClass(type) ? 1 : 0;
 
         if (type.IsTupleType)
         {
@@ -80,7 +80,7 @@ public class AggregateLayout
             var chain = new List<INamedTypeSymbol>();
             for (var t = type; t is { } && (t.TypeKind == TypeKind.Struct
                      ? SymbolEqualityComparer.Default.Equals(t, type)
-                     : EmitPolicy.IsUserClassType(t)); t = t.BaseType)
+                     : TypeClassifier.IsUserClass(t)); t = t.BaseType)
                 chain.Add(t);
             chain.Reverse(); // root base first, most-derived last
             foreach (var frame in chain)
@@ -170,7 +170,7 @@ public static class AggregateAbi
         {
             int i = fi.Index;
             var fieldType = fi.Type;
-            if (fieldType is INamedTypeSymbol nested && EmitPolicy.IsAggregateType(nested))
+            if (fieldType is INamedTypeSymbol nested && TypeClassifier.IsAggregateValue(nested))
             {
                 var nestedLayout = getLayout(nested);
                 var subSlot = builder.AllocScratch(ArrayType);
@@ -203,7 +203,7 @@ public static class AggregateAbi
         for (int i = 0; i < layout.Count; i++)
         {
             var elem = ReadSlot(builder, source, i, ElementType);
-            CLeaf copy = layout.Fields[i].Type is INamedTypeSymbol nested && EmitPolicy.IsAggregateType(nested)
+            CLeaf copy = layout.Fields[i].Type is INamedTypeSymbol nested && TypeClassifier.IsAggregateValue(nested)
                 ? DeepClone(builder, elem, getLayout(nested), getLayout)
                 : elem;
             WriteSlot(builder, builder.SlotRef(dstSlot), i, copy);
@@ -228,11 +228,11 @@ public static class AggregateAbi
     /// <summary>CW29: the single deconstruction element-read clone rule. An element read out of a
     /// tuple bundle that feeds an lvalue store is a VALUE read in C# — struct/tuple/anonymous
     /// elements are deep-copied, scalars are immutable boxes, and v1 classes keep reference
-    /// semantics (IsAggregateType is false for them). Every sibling deconstruction arm routes its
+    /// semantics (IsAggregateValue is false for them). Every sibling deconstruction arm routes its
     /// element reads through this one gate instead of open-coding the predicate.</summary>
     public static CLeaf CloneIfAggregate(CoreBuilder builder, CLeaf value, ITypeSymbol elementType,
         Func<INamedTypeSymbol, AggregateLayout> getLayout)
-        => elementType is INamedTypeSymbol agg && EmitPolicy.IsAggregateType(agg)
+        => elementType is INamedTypeSymbol agg && TypeClassifier.IsAggregateValue(agg)
             ? DeepClone(builder, value, agg, getLayout)
             : value;
 
@@ -290,7 +290,7 @@ public static class AggregateAbi
                         _ => ((string)null, (ITypeSymbol)null),
                     };
                     if (name != null && layout.TryGetIndex(name, out var slotIdx)
-                        && memberType is INamedTypeSymbol nested && EmitPolicy.IsObjectArrayEmulated(nested))
+                        && memberType is INamedTypeSymbol nested && TypeClassifier.IsObjectArrayEmulated(nested))
                     {
                         var nestedVal = ReadSlot(builder, instanceValue, slotIdx, ElementType);
                         EmitObjectInitializer(builder, nestedVal, getLayout(nested), memberInit.Initializer,
@@ -401,7 +401,7 @@ public static class ClassAbi
             return;
         }
         EmitInstanceFieldInitializers(builder, compilation, instance, classTy, getLayout(classTy), emitValue);
-        if (classTy.BaseType is { } bt && EmitPolicy.IsUserClassType(bt))
+        if (classTy.BaseType is { } bt && TypeClassifier.IsUserClass(bt))
             EmitImplicitCtorChain(builder, compilation, instance, bt, getLayout, emitValue, callBaseCtor);
     }
 
@@ -466,7 +466,7 @@ public static class ClassAbi
     /// <summary>Reject static field storage on a v1 user class, except consts folded before this point.</summary>
     public static void RejectStaticField(IFieldSymbol field)
     {
-        if (field.IsStatic && field.ContainingType is INamedTypeSymbol classTy && EmitPolicy.IsUserClassType(classTy))
+        if (field.IsStatic && field.ContainingType is INamedTypeSymbol classTy && TypeClassifier.IsUserClass(classTy))
             throw new NotSupportedException(
                 $"Static field '{classTy.Name}.{field.Name}' on a v1 user class is not "
                 + "supported (only `const` is): a class has no per-type static storage yet. Move the data "
@@ -476,7 +476,7 @@ public static class ClassAbi
     /// <summary>Reject static properties on a v1 user class.</summary>
     public static void RejectStaticProperty(IPropertySymbol property)
     {
-        if (property.IsStatic && property.ContainingType is INamedTypeSymbol classTy && EmitPolicy.IsUserClassType(classTy))
+        if (property.IsStatic && property.ContainingType is INamedTypeSymbol classTy && TypeClassifier.IsUserClass(classTy))
             throw new NotSupportedException(
                 $"Static property '{classTy.Name}.{property.Name}' on a v1 user class is not "
                 + "supported (only `const` and static methods are): move it to a static method, or to "
@@ -496,7 +496,7 @@ public static class ClassAbi
                 $"A multi-dimensional array ('{type.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}') cannot be "
                 + "converted to a string (interpolation / concat): its runtime value is an object[] bundle, so it would "
                 + "stringify to \"System.Object[]\". Format the elements directly instead.");
-        if (EmitPolicy.IsAggregateType(type))
+        if (TypeClassifier.IsAggregateValue(type))
             throw new NotSupportedException(
                 $"'{type.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}' cannot be converted to a string "
                 + "implicitly (interpolation / concat): its runtime value is an object[] bundle, so it would stringify "
@@ -508,7 +508,7 @@ public static class ClassAbi
     public static void RejectUserOperator(IMethodSymbol method)
     {
         if (method is { MethodKind: MethodKind.UserDefinedOperator or MethodKind.Conversion }
-            && method.ContainingType is INamedTypeSymbol classTy && EmitPolicy.IsUserClassType(classTy))
+            && method.ContainingType is INamedTypeSymbol classTy && TypeClassifier.IsUserClass(classTy))
             throw new NotSupportedException(
                 $"User-defined operator '{classTy.Name}.{method.Name}' on a v1 user class is not supported: "
                 + "a class has reference semantics (== / != compare object identity) and no user operator or "
@@ -517,7 +517,7 @@ public static class ClassAbi
 
     public static bool IsReferenceEquality(BinaryOperatorKind kind, ITypeSymbol leftType, ITypeSymbol rightType)
         => kind is BinaryOperatorKind.Equals or BinaryOperatorKind.NotEquals
-           && (EmitPolicy.IsUserClassType(leftType) || EmitPolicy.IsUserClassType(rightType));
+           && (TypeClassifier.IsUserClass(leftType) || TypeClassifier.IsUserClass(rightType));
 
     public static CLeaf EmitReferenceEquality(CoreBuilder builder, BinaryOperatorKind kind, CLeaf left, CLeaf right)
     {
@@ -530,7 +530,7 @@ public static class ClassAbi
     public static bool IsObjectMethodOnUserClass(IMethodSymbol method, ITypeSymbol receiverType)
         => !method.IsStatic
            && receiverType is INamedTypeSymbol classTy
-           && EmitPolicy.IsUserClassType(classTy)
+           && TypeClassifier.IsUserClass(classTy)
            && method.ContainingType.SpecialType == SpecialType.System_Object;
 
     public static CLeaf EmitObjectEquals(CoreBuilder builder, CLeaf left, CLeaf right)
@@ -568,7 +568,7 @@ public static class ClassAbi
         if (targetMethod.MethodKind is MethodKind.LambdaMethod or MethodKind.LocalFunction) return;
         if (!targetMethod.IsStatic
             && targetMethod.ContainingType is INamedTypeSymbol classTy
-            && EmitPolicy.IsUserClassType(classTy))
+            && TypeClassifier.IsUserClass(classTy))
             throw new NotSupportedException(
                 $"A delegate cannot be created from v1 class instance method '{classTy.Name}.{targetMethod.Name}': "
                 + "a user class is not a dispatch target for the delegate ABI. Wrap the call in a lambda instead "

@@ -25,7 +25,7 @@ public partial class InvocationHandler
             // Value of a nullable AGGREGATE (e.g. (int,int)? / V?) copies the struct out (value semantics).
             // A small-underlying box is re-tagged tolerantly (CW18 — see RetagSmallNullablePresent).
             if (op.Property.Name == "Value")
-                return nblUnder is INamedTypeSymbol nblAgg && EmitPolicy.IsAggregateType(nblAgg)
+                return nblUnder is INamedTypeSymbol nblAgg && TypeClassifier.IsAggregateValue(nblAgg)
                     ? AggregateAbi.DeepClone(_builder, nv, nblAgg, _ctx.Aggregates.GetLayout)
                     : RetagSmallNullablePresent(nv, nblUnder);
         }
@@ -43,27 +43,27 @@ public partial class InvocationHandler
         }
 
         // Auto-property on an aggregate (struct/tuple) OR v1 class → object[] element (the backing field's
-        // slot). The clone at the return stays IsAggregateType, so a class-typed property returns by reference.
-        if (op.Instance != null && op.Instance.Type is INamedTypeSymbol aggProp && EmitPolicy.IsObjectArrayEmulated(aggProp)
+        // slot). The clone at the return stays IsAggregateValue, so a class-typed property returns by reference.
+        if (op.Instance != null && op.Instance.Type is INamedTypeSymbol aggProp && TypeClassifier.IsObjectArrayEmulated(aggProp)
             && _ctx.Aggregates.GetLayout(aggProp).TryGetIndex(op.Property.Name, out var aggPropIdx))
         {
             var arrExpr = LoadInstanceRaw(op.Instance);
             var getVal = AggregateAbi.ReadSlot(_builder, arrExpr, aggPropIdx, "SystemObject");
             // A struct-typed property returns a COPY (C# getters return by value; you cannot mutate through it).
-            return op.Property.Type is INamedTypeSymbol propAgg && EmitPolicy.IsAggregateType(propAgg)
+            return op.Property.Type is INamedTypeSymbol propAgg && TypeClassifier.IsAggregateValue(propAgg)
                 ? AggregateAbi.DeepClone(_builder, getVal, propAgg, _ctx.Aggregates.GetLayout) : getVal;
         }
 
         // Computed (non-auto) property on an aggregate (struct) OR v1 class: no backing-field slot, so
         // inline-call the user getter with the receiver object[] as synthetic param0 (same convention as
         // EmitStructInstanceCall). The getter only reads, so the receiver is passed uncloned. The return
-        // clone stays IsAggregateType, so a class-typed getter result is returned by reference.
-        if (op.Instance != null && op.Instance.Type is INamedTypeSymbol aggGet && EmitPolicy.IsObjectArrayEmulated(aggGet)
+        // clone stays IsAggregateValue, so a class-typed getter result is returned by reference.
+        if (op.Instance != null && op.Instance.Type is INamedTypeSymbol aggGet && TypeClassifier.IsObjectArrayEmulated(aggGet)
             && op.Property.GetMethod is { } aggGetterRaw)
         {
             var ret = EmitCallToMethod(ResolveStructMember(aggGetterRaw),
                 new List<CLeaf> { LoadInstanceRaw(op.Instance) });
-            return op.Property.Type is INamedTypeSymbol getRetAgg && EmitPolicy.IsAggregateType(getRetAgg)
+            return op.Property.Type is INamedTypeSymbol getRetAgg && TypeClassifier.IsAggregateValue(getRetAgg)
                 ? AggregateAbi.DeepClone(_builder, ret, getRetAgg, _ctx.Aggregates.GetLayout) : ret;
         }
 
@@ -80,7 +80,7 @@ public partial class InvocationHandler
                 && _methodFunctions.ContainsKey(thisProp.GetMethod))
             {
                 var gv = EmitCallToMethod(thisProp.GetMethod, new List<CLeaf>());
-                return thisProp.Type is INamedTypeSymbol thisGetAgg && EmitPolicy.IsAggregateType(thisGetAgg)
+                return thisProp.Type is INamedTypeSymbol thisGetAgg && TypeClassifier.IsAggregateValue(thisGetAgg)
                     ? AggregateAbi.DeepClone(_builder, gv, thisGetAgg, _ctx.Aggregates.GetLayout) : gv;
             }
 
@@ -91,7 +91,7 @@ public partial class InvocationHandler
                 && thisProp.ContainingType.Name != "UdonSharpBehaviour")
             {
                 var bv = LoadField(thisProp.Name, GetUdonType(thisProp.Type));
-                return thisProp.Type is INamedTypeSymbol thisAutoAgg && EmitPolicy.IsAggregateType(thisAutoAgg)
+                return thisProp.Type is INamedTypeSymbol thisAutoAgg && TypeClassifier.IsAggregateValue(thisAutoAgg)
                     ? AggregateAbi.DeepClone(_builder, bv, thisAutoAgg, _ctx.Aggregates.GetLayout) : bv;
             }
 
@@ -136,7 +136,7 @@ public partial class InvocationHandler
                 // spec on demand; an already-closed getter (a class-body call site) is returned unchanged
                 // and was pre-registered by the collection layer.
                 var sgv = EmitCallToMethod(ResolveStructMember(sPropGetter), new List<CLeaf>());
-                return op.Property.Type is INamedTypeSymbol sgAgg && EmitPolicy.IsAggregateType(sgAgg)
+                return op.Property.Type is INamedTypeSymbol sgAgg && TypeClassifier.IsAggregateValue(sgAgg)
                     ? AggregateAbi.DeepClone(_builder, sgv, sgAgg, _ctx.Aggregates.GetLayout) : sgv;
             }
 
@@ -270,7 +270,7 @@ public partial class InvocationHandler
         // object[]-emulated arm below, which passes LoadInstanceRaw(this/base) = the receiver param —
         // mirroring how a struct's `this.Method()` self-call routes through EmitStructInstanceCall.
         if (op.Instance is IInstanceReferenceOperation
-            && !EmitPolicy.IsObjectArrayEmulated(op.Property.ContainingType)
+            && !TypeClassifier.IsObjectArrayEmulated(op.Property.ContainingType)
             && ResolveDispatchProperty(op) is { GetMethod: { } idxDispatchGetter }
             && _methodFunctions.ContainsKey(idxDispatchGetter))
         {
@@ -282,14 +282,14 @@ public partial class InvocationHandler
         // User-defined indexer on a user STRUCT or v1-class instance (`s[i]`) → call the getter with the
         // receiver (object[]) as param0 plus the index args, like a computed property. Without this it falls
         // to a bogus SystemObjectArray.__get_Item extern the validator rejects. (diff-fuzz wave 4) The return
-        // clone stays IsAggregateType, so a class-typed indexer result is returned by reference.
-        if (op.Instance != null && op.Instance.Type is INamedTypeSymbol aggIdx && EmitPolicy.IsObjectArrayEmulated(aggIdx)
+        // clone stays IsAggregateValue, so a class-typed indexer result is returned by reference.
+        if (op.Instance != null && op.Instance.Type is INamedTypeSymbol aggIdx && TypeClassifier.IsObjectArrayEmulated(aggIdx)
             && op.Property.GetMethod is { } idxGetterRaw)
         {
             var sargs = new List<CLeaf> { LoadInstanceRaw(op.Instance) };
             sargs.AddRange(EvaluateIndexerArgs(op)); // wave-9 round-4: named index args bind by ordinal
             var ret = EmitCallToMethod(ResolveStructMember(idxGetterRaw), sargs);
-            return op.Property.Type is INamedTypeSymbol idxRetAgg && EmitPolicy.IsAggregateType(idxRetAgg)
+            return op.Property.Type is INamedTypeSymbol idxRetAgg && TypeClassifier.IsAggregateValue(idxRetAgg)
                 ? AggregateAbi.DeepClone(_builder, ret, idxRetAgg, _ctx.Aggregates.GetLayout) : ret;
         }
 
@@ -407,7 +407,7 @@ public partial class InvocationHandler
                     // null = "" (C# Format semantics). Replaces the M3 sealed-only fast path (a
                     // sealed/singleton set devirtualizes inside the dispatch helper).
                     if (ResolveType(interpolation.Expression.Type) is INamedTypeSymbol interpCls
-                        && EmitPolicy.IsUserClassType(interpCls))
+                        && TypeClassifier.IsUserClass(interpCls))
                     {
                         var recv = VisitExpression(interpolation.Expression);
                         argVals.Add(EmitClassToStringDispatch(interpCls, recv,
@@ -520,7 +520,7 @@ public partial class InvocationHandler
 
         // Zero-work fast path (byte-identical to pre-M1 for a plain single class): nothing to do unless
         // this class has field initializers, a user-class base chain, or an EXPLICIT this/base call.
-        bool baseIsUserClass = classTy.BaseType is INamedTypeSymbol bt0 && EmitPolicy.IsUserClassType(bt0);
+        bool baseIsUserClass = classTy.BaseType is INamedTypeSymbol bt0 && TypeClassifier.IsUserClass(bt0);
         bool explicitChainCall = initInv != null && !initInv.TargetMethod.IsImplicitlyDeclared;
         if (!ClassHasFieldInitializers(classTy) && !baseIsUserClass && !explicitChainCall)
             return;
@@ -535,7 +535,7 @@ public partial class InvocationHandler
                     _ctx.Aggregates.GetLayout(classTy), VisitExpression);
             if (target.IsImplicitlyDeclared)
             {
-                if (target.ContainingType is INamedTypeSymbol implBase && EmitPolicy.IsUserClassType(implBase))
+                if (target.ContainingType is INamedTypeSymbol implBase && TypeClassifier.IsUserClass(implBase))
                     ClassAbi.EmitImplicitCtorChain(_builder, _compilation, inst, implBase,
                         _ctx.Aggregates.GetLayout, VisitExpression, CallBaseCtor);
             }
@@ -555,7 +555,7 @@ public partial class InvocationHandler
         // No initializer node = implicit `: base()`: own field inits then the implicit base chain.
         ClassAbi.EmitInstanceFieldInitializers(_builder, _compilation, inst, classTy,
             _ctx.Aggregates.GetLayout(classTy), VisitExpression);
-        if (classTy.BaseType is INamedTypeSymbol cbt && EmitPolicy.IsUserClassType(cbt))
+        if (classTy.BaseType is INamedTypeSymbol cbt && TypeClassifier.IsUserClass(cbt))
             ClassAbi.EmitImplicitCtorChain(_builder, _compilation, inst, cbt,
                 _ctx.Aggregates.GetLayout, VisitExpression, CallBaseCtor);
     }
@@ -642,7 +642,7 @@ public partial class InvocationHandler
     {
         var concrete = ResolveType(op.Type);
         var udon = GetUdonType(concrete);
-        if (concrete is INamedTypeSymbol classTy && EmitPolicy.IsUserClassType(classTy))
+        if (concrete is INamedTypeSymbol classTy && TypeClassifier.IsUserClass(classTy))
         {
             var layout = _ctx.Aggregates.GetLayout(classTy);
             return ClassAbi.EmitMint(_builder, _compilation, classTy, layout, VisitExpression,
@@ -652,7 +652,7 @@ public partial class InvocationHandler
                 inst => EmitAggregateObjectInitializer(inst, layout, op.Initializer),
                 TypeObjWrite(classTy));
         }
-        if (concrete is INamedTypeSymbol structTy && EmitPolicy.IsAggregateType(structTy))
+        if (concrete is INamedTypeSymbol structTy && TypeClassifier.IsAggregateValue(structTy))
         {
             var inst = AggregateAbi.MintDefault(_builder, _ctx.Aggregates.GetLayout(structTy),
                 _ctx.Aggregates.GetLayout, GetUdonType);
@@ -666,7 +666,7 @@ public partial class InvocationHandler
     /// <summary>`new { X = a, Y = b }` (kind-level census gap, 2026-07-11): an anonymous type is an
     /// immutable value-shaped aggregate — allocate the object[] and write each initializer value to its
     /// property's slot (declaration order = layout order). Member reads route through the ordinary
-    /// aggregate property path once IsAggregateType admits anonymous types.</summary>
+    /// aggregate property path once IsAggregateValue admits anonymous types.</summary>
     CLeaf VisitAnonymousObjectCreation(IAnonymousObjectCreationOperation op)
     {
         var anonTy = (INamedTypeSymbol)op.Type;
@@ -711,14 +711,14 @@ public partial class InvocationHandler
         // Class ABI v1 (CA-M1): a supported user class mints via the single ClassAbi bundle sequence. An
         // unsupported class (record / non-Object base / extern-backed foreign) already threw at the resultType
         // GetUdonType above (B79); nothing unsupported lands here.
-        if (concreteType is INamedTypeSymbol classTy && EmitPolicy.IsUserClassType(classTy))
+        if (concreteType is INamedTypeSymbol classTy && TypeClassifier.IsUserClass(classTy))
             return EmitClassInstanceMint(op, classTy);
 
         // Parameterless struct ctor. A user struct used AS A VALUE (e.g. `_field = new V()`, `Foo(new V())`)
         // must allocate + default-init a fresh object[]; the local-declaration path already does this, but
         // other contexts reach here. SDK value types fall through to the null placeholder.
         if (op.Arguments.Length == 0 && concreteType.IsValueType && op.Initializer == null)
-            return concreteType is INamedTypeSymbol structTy && EmitPolicy.IsAggregateType(structTy)
+            return concreteType is INamedTypeSymbol structTy && TypeClassifier.IsAggregateValue(structTy)
                 ? AggregateAbi.MintDefault(_builder, _ctx.Aggregates.GetLayout(structTy),
                     _ctx.Aggregates.GetLayout, GetUdonType)
                 : Const(null, resultType);
@@ -738,7 +738,7 @@ public partial class InvocationHandler
         // path. The SDK extern-ctor path below is only for SDK value types (Vector3, …) — for a user struct it
         // would emit a bogus SystemObjectArray.__ctor__<args>__ extern that the validator rejects. (diff-fuzz w3)
         if (op.Type.IsValueType && op.Arguments.Length > 0
-            && op.Type is INamedTypeSymbol userStruct && EmitPolicy.IsUserStruct(userStruct)
+            && op.Type is INamedTypeSymbol userStruct && TypeClassifier.IsUserStruct(userStruct)
             && op.Constructor != null)
         {
             var layout = _ctx.Aggregates.GetLayout(userStruct);
@@ -763,7 +763,7 @@ public partial class InvocationHandler
         // layout-INDEX writes. The SDK extern initializer path below assumes a native per-field setter extern (SDK
         // value types like Vector3), which object[]-emulated aggregates don't have (roadmap B41).
         if (op.Arguments.Length == 0 && op.Type.IsValueType && op.Initializer != null
-            && op.Type is INamedTypeSymbol aggInitType && EmitPolicy.IsAggregateType(aggInitType))
+            && op.Type is INamedTypeSymbol aggInitType && TypeClassifier.IsAggregateValue(aggInitType))
         {
             var layout = _ctx.Aggregates.GetLayout(aggInitType);
             var aggVal = AggregateAbi.MintDefault(_builder, layout, _ctx.Aggregates.GetLayout, GetUdonType);

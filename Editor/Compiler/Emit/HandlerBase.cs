@@ -86,7 +86,7 @@ public abstract partial class HandlerBase
         if (receiverType is not INamedTypeSymbol recv
             || SymbolEqualityComparer.Default.Equals(memberContainingType, recv))
             return memberContainingType;
-        if (EmitPolicy.IsAggregateType(recv))
+        if (TypeClassifier.IsAggregateValue(recv))
             throw new NotSupportedException(
                 $"'{memberName}' on user-defined struct '{recv.Name}' is not supported: Udon has no extern "
                 + "for it and C#'s ValueType semantics (field-wise Equals, type-name ToString) cannot be "
@@ -108,7 +108,7 @@ public abstract partial class HandlerBase
         // of every MINTED class that is-or-derives-from the target (closed-world). A laundered value's
         // slot 0 (delegate KindTag / env Kind / struct first field / tuple / Foo[] element) is never a
         // family typeobj, so this stays sound for the laundered five without a per-node guard (charter #7).
-        if (ResolveType(targetType) is INamedTypeSymbol targetClass && EmitPolicy.IsUserClassType(targetClass))
+        if (ResolveType(targetType) is INamedTypeSymbol targetClass && TypeClassifier.IsUserClass(targetClass))
         {
             ClassAbiPolicy.AssertClosed(targetClass, "runtime type test");
             var vars = _ctx.ClassTypes.TypeObjVarsAssignableTo(targetClass).ToList();
@@ -596,12 +596,12 @@ public abstract partial class HandlerBase
             // the env cell directly so mutation hits the live storage.
             ILocalReferenceOperation lr when _ctx.Closures.TryGetEnvBinding(lr.Local, out _)
                 => EnvEmit.Read(_builder, _ctx, lr.Local,
-                       EmitPolicy.IsAggregateType(lr.Type) ? "SystemObjectArray" : GetUdonType(lr.Type)),
+                       TypeClassifier.IsAggregateValue(lr.Type) ? "SystemObjectArray" : GetUdonType(lr.Type)),
             ILocalReferenceOperation lr when _localBindings.TryGetValue(lr.Local, out var b)
-                => LoadField(b.Id, EmitPolicy.IsAggregateType(lr.Type) ? "SystemObjectArray" : GetUdonType(lr.Type)),
+                => LoadField(b.Id, TypeClassifier.IsAggregateValue(lr.Type) ? "SystemObjectArray" : GetUdonType(lr.Type)),
             IParameterReferenceOperation pr when _ctx.Closures.TryGetEnvBinding(pr.Parameter, out _)
                 => EnvEmit.Read(_builder, _ctx, pr.Parameter,
-                       EmitPolicy.IsAggregateType(pr.Type) ? "SystemObjectArray" : GetUdonType(pr.Type)),
+                       TypeClassifier.IsAggregateValue(pr.Type) ? "SystemObjectArray" : GetUdonType(pr.Type)),
             IParameterReferenceOperation pr
                 => LoadParam(pr.Parameter),
             // Inside a struct method/ctor, `this` is the receiver object[] param, not the Behaviour.
@@ -609,10 +609,10 @@ public abstract partial class HandlerBase
                 => LoadField(_ctx.Methods.CurrentStructReceiverParamId, "SystemObjectArray"),
             // Aggregate field as a RECEIVER (e.g. `o.inner.x`, `this.structField.x`) must NOT be cloned —
             // the access/mutation has to hit the live storage. (Value reads clone in VisitFieldReference.)
-            IFieldReferenceOperation fr when EmitPolicy.IsAggregateType(fr.Type)
+            IFieldReferenceOperation fr when TypeClassifier.IsAggregateValue(fr.Type)
                 => ReadAggregateFieldRaw(fr),
             // Aggregate array element as a RECEIVER (`arr[i].x = …`) likewise hits live storage, no clone.
-            IArrayElementReferenceOperation ae when EmitPolicy.IsAggregateType(ae.Type)
+            IArrayElementReferenceOperation ae when TypeClassifier.IsAggregateValue(ae.Type)
                 => ReadArrayElementRaw(ae),
             _ => VisitExpression(instance), // method return, field on this, etc. — fresh or already raw
         };
@@ -796,7 +796,7 @@ public abstract partial class HandlerBase
     protected CLeaf ReadArrayElementRaw(IArrayElementReferenceOperation ae)
     {
         // Wave-14 ndimaccess lens: an N-dim aggregate-array element used as a RECEIVER (`arr[i,j].X += 1`,
-        // `arr[i,j].Item1`) reaches this method (EmitPolicy.IsAggregateType(ae.Type) at the
+        // `arr[i,j].Item1`) reaches this method (TypeClassifier.IsAggregateValue(ae.Type) at the
         // LoadInstanceRaw dispatch site), but this method was written before feature N and always used
         // Indices[0] alone against the BUNDLE array directly — every OTHER array-index site
         // (ArrayHandler.VisitArrayElementReference, HandlerBase.PrepareArrayElementSet,
@@ -851,7 +851,7 @@ public abstract partial class HandlerBase
         // struct-field slot RAW yields the LIVE nested object[] stored in the class bundle (no clone), so a
         // chained write lands in the class's storage, not a discarded copy. Gated on IsObjectArrayEmulated
         // (Category-A: object[] slot resolution); the caller only asks for a raw receiver, never a value read.
-        if (fr.Instance != null && fr.Instance.Type is INamedTypeSymbol cont && EmitPolicy.IsObjectArrayEmulated(cont)
+        if (fr.Instance != null && fr.Instance.Type is INamedTypeSymbol cont && TypeClassifier.IsObjectArrayEmulated(cont)
             && _ctx.Aggregates.GetLayout(cont).TryGetIndex(fr.Field, out var idx))
             return AggregateAbi.ReadSlot(_builder, LoadInstanceRaw(fr.Instance), idx, "SystemObject");
         if (fr.Instance is IInstanceReferenceOperation)
@@ -1046,7 +1046,7 @@ public abstract partial class HandlerBase
         if (fieldRef.Instance is not IInstanceReferenceOperation) return true; // variable receiver — always a prepared arm
         return fieldRef.Field.ContainingType.IsValueType                   // struct `this.v` (emulated receiver)
             || (AggregateAbi.TryGetMemberTarget(fieldRef, out var inst, out var name)
-                && ResolveType(inst.Type) is INamedTypeSymbol agg && EmitPolicy.IsObjectArrayEmulated(agg)
+                && ResolveType(inst.Type) is INamedTypeSymbol agg && TypeClassifier.IsObjectArrayEmulated(agg)
                 && _ctx.Aggregates.GetLayout(agg).TryGetIndex(name, out _));
     }
 
@@ -1062,7 +1062,7 @@ public abstract partial class HandlerBase
     {
         // Aggregate (struct/tuple) OR v1-class member → layout slot write on the backing object[].
         if (AggregateAbi.TryGetMemberTarget(fieldRef, out var aggInstance, out var aggMemberName)
-            && ResolveType(aggInstance.Type) is INamedTypeSymbol aggContaining && EmitPolicy.IsObjectArrayEmulated(aggContaining)
+            && ResolveType(aggInstance.Type) is INamedTypeSymbol aggContaining && TypeClassifier.IsObjectArrayEmulated(aggContaining)
             && _ctx.Aggregates.GetLayout(aggContaining).TryGetIndex(aggMemberName, out var fieldIndex))
         {
             RejectStaticReadonlyWriteThrough(aggInstance); // §3.3, R5
@@ -1205,7 +1205,7 @@ public abstract partial class HandlerBase
 
         // Aggregate (struct/tuple) OR v1-class auto-property → layout slot write on the backing object[].
         if (propRef.Instance is { Type: INamedTypeSymbol aggContaining } aggInst
-            && EmitPolicy.IsObjectArrayEmulated(aggContaining)
+            && TypeClassifier.IsObjectArrayEmulated(aggContaining)
             && _ctx.Aggregates.GetLayout(aggContaining).TryGetIndex(propRef.Property.Name, out var aggSlotIndex))
         {
             var arrExpr = LoadInstanceRaw(aggInst);
@@ -1215,7 +1215,7 @@ public abstract partial class HandlerBase
         // Computed (non-auto) struct property setter: p.Both = v → call the user setter with the receiver
         // object[] as synthetic param0 (mutates this-fields through the shared backing array).
         if (propRef.Property is { IsIndexer: false, SetMethod: { } aggSetterRaw }
-            && propRef.Instance?.Type is INamedTypeSymbol aggSetType && EmitPolicy.IsObjectArrayEmulated(aggSetType))
+            && propRef.Instance?.Type is INamedTypeSymbol aggSetType && TypeClassifier.IsObjectArrayEmulated(aggSetType))
         {
             var aggSetter = ResolveStructMember(aggSetterRaw);
             var aggRecv = LoadInstanceRaw(propRef.Instance);
@@ -1227,7 +1227,7 @@ public abstract partial class HandlerBase
         // receiver object[] as param0, the index args, then the value. Mirrors the GET routing in
         // VisitIndexerGet; without it this falls to a bogus SystemObjectArray.__set_Item extern. (diff-fuzz wave 4)
         if (propRef.Property is { IsIndexer: true, SetMethod: { } aggIdxSetterRaw }
-            && propRef.Instance?.Type is INamedTypeSymbol aggIdxSetType && EmitPolicy.IsObjectArrayEmulated(aggIdxSetType))
+            && propRef.Instance?.Type is INamedTypeSymbol aggIdxSetType && TypeClassifier.IsObjectArrayEmulated(aggIdxSetType))
         {
             var aggIdxSetter = ResolveStructMember(aggIdxSetterRaw);
             var setterArgs = new List<CLeaf> { LoadInstanceRaw(propRef.Instance) };
@@ -1736,7 +1736,7 @@ public abstract partial class HandlerBase
         // ONLY via internal self-reference (never pre-collected) got no receiver slot and EmitMethod's
         // ParamFieldNames[0] read threw IndexOutOfRange.
         if (!constructed.IsStatic
-            && constructed.ContainingType is INamedTypeSymbol structRecvCt && EmitPolicy.IsObjectArrayEmulated(structRecvCt)
+            && constructed.ContainingType is INamedTypeSymbol structRecvCt && TypeClassifier.IsObjectArrayEmulated(structRecvCt)
             && constructed.MethodKind is not (MethodKind.LambdaMethod or MethodKind.LocalFunction))
         {
             var receiverId = NameAllocator.ParamId("this", idx);
@@ -1911,7 +1911,7 @@ public abstract partial class HandlerBase
         if (op.Target is IMethodReferenceOperation && !targetMethod.IsStatic
             && targetMethod.MethodKind is not (MethodKind.LambdaMethod or MethodKind.LocalFunction)
             && targetMethod.ContainingType is INamedTypeSymbol recvCt0
-            && EmitPolicy.IsObjectArrayEmulated(recvCt0))
+            && TypeClassifier.IsObjectArrayEmulated(recvCt0))
         {
             var member = ResolveStructMember(targetMethod); // ensure-registered (a MG may be the member's only reference)
             var memberFunc = _methodFunctions[member];
@@ -1920,7 +1920,7 @@ public abstract partial class HandlerBase
                     ? LoadField(rid, AggregateAbi.ArrayType)
                     : throw new System.NotSupportedException(
                         $"Method group '{targetMethod.Name}' has no receiver in this context."));
-            if (member.ContainingType is INamedTypeSymbol cloneCt && EmitPolicy.IsUserStruct(cloneCt))
+            if (member.ContainingType is INamedTypeSymbol cloneCt && TypeClassifier.IsUserStruct(cloneCt))
                 recvLeaf = AggregateAbi.DeepClone(_builder, recvLeaf, cloneCt, _ctx.Aggregates.GetLayout);
             var recvBridgeName = DelegateAbi.BridgeName(memberFunc.Name) + "_rcv";
             _ctx.Synthetics.ReceiverBridges.Add((member, recvBridgeName));
@@ -2293,7 +2293,7 @@ public abstract partial class HandlerBase
     /// impl has no body, so it lowers to a layout-slot read/write against the CONCRETE target's layout
     /// (an auto OVERRIDE's backing slot exists only in the concrete layout; a base auto slot keeps its
     /// chain-walk index there). A struct-typed getter result deep-clones (C# getters return by value);
-    /// a class-typed result stays a reference (IsAggregateType is false for classes).</summary>
+    /// a class-typed result stays a reference (IsAggregateValue is false for classes).</summary>
     CLeaf EmitAccessorImplAccess(VDispatchTarget t, IPropertySymbol prop, CLeaf recv, List<CLeaf> indexArgs, CLeaf setValue)
     {
         if (t.Impl.AssociatedSymbol is IPropertySymbol implProp && !UasmEmitter.IsComputedProperty(implProp))
@@ -2308,7 +2308,7 @@ public abstract partial class HandlerBase
                 return null;
             }
             var slotVal = AggregateAbi.ReadSlot(_builder, recv, slotIdx, "SystemObject");
-            return prop.Type is INamedTypeSymbol slotAgg && EmitPolicy.IsAggregateType(slotAgg)
+            return prop.Type is INamedTypeSymbol slotAgg && TypeClassifier.IsAggregateValue(slotAgg)
                 ? AggregateAbi.DeepClone(_builder, slotVal, slotAgg, _ctx.Aggregates.GetLayout) : slotVal;
         }
         var args = new List<CLeaf> { recv };
@@ -2320,7 +2320,7 @@ public abstract partial class HandlerBase
             return null;
         }
         var ret = EmitCallToMethod(ResolveStructMember(t.Impl), args);
-        return prop.Type is INamedTypeSymbol retAgg && EmitPolicy.IsAggregateType(retAgg)
+        return prop.Type is INamedTypeSymbol retAgg && TypeClassifier.IsAggregateValue(retAgg)
             ? AggregateAbi.DeepClone(_builder, ret, retAgg, _ctx.Aggregates.GetLayout) : ret;
     }
 
@@ -2341,7 +2341,7 @@ public abstract partial class HandlerBase
     /// sits beside a class operand (the pre-share class arm returned before the reject ran).</summary>
     protected CLeaf ConvertConcatOperand(CLeaf value, IOperation unwrapped)
     {
-        if (ResolveType(unwrapped.Type) is INamedTypeSymbol cls && EmitPolicy.IsUserClassType(cls))
+        if (ResolveType(unwrapped.Type) is INamedTypeSymbol cls && TypeClassifier.IsUserClass(cls))
             return EmitClassToStringDispatch(cls, value, nullIsError: false, useOverrides: true);
         ClassAbi.RejectImplicitToString(unwrapped.Type);
         return TryEmitEnumToString(value, unwrapped.Type) ?? value;
@@ -2436,7 +2436,7 @@ public abstract partial class HandlerBase
     /// object.ToString impl — or any impl under a base-bound non-virtual form — is the concrete type's
     /// runtime-name constant.</summary>
     CLeaf ClassToStringArmValue(VDispatchTarget t, CLeaf recvRef, bool useOverrides)
-        => useOverrides && EmitPolicy.IsUserClassType(t.Impl.ContainingType)
+        => useOverrides && TypeClassifier.IsUserClass(t.Impl.ContainingType)
             ? EmitCallToMethod(ResolveStructMember(t.Impl), new List<CLeaf> { recvRef })
             : Const(ClassAbi.RuntimeTypeName(t.Concrete), "SystemString");
 
@@ -2757,7 +2757,7 @@ public abstract partial class HandlerBase
     /// silently minted a bogus <c>SystemObjectArray.__&lt;Name&gt;__…</c> extern that only UasmValidator
     /// or the VM caught, with a message that never named the root cause (this exact shape recurred as
     /// roadmap B41/B46/B47). Fail HERE, where the bogus extern would be born, with a diagnosis instead.
-    /// Sound: <see cref="EmitPolicy.IsUserStruct"/> is false for every SDK/native/BCL type, so this can
+    /// Sound: <see cref="TypeClassifier.IsUserStruct"/> is false for every SDK/native/BCL type, so this can
     /// never fire on a legitimate extern call. The source location and operation kind are appended
     /// automatically by UasmEmitter.TagLocation (the statement/expression dispatch wraps every handler).</summary>
     protected void GuardUserStructMemberReachedExtern(ITypeSymbol containingType, string memberName)
@@ -2765,7 +2765,7 @@ public abstract partial class HandlerBase
         // CA-M1: the same armor covers a v1 class member (object[]-emulated) — a class instance member
         // that reached the extern path was not routed to its CFunction (collector-scope drift), which
         // would otherwise mint a bogus SystemObjectArray.__<Name>__ extern.
-        if (containingType is INamedTypeSymbol ct && EmitPolicy.IsObjectArrayEmulated(ct))
+        if (containingType is INamedTypeSymbol ct && TypeClassifier.IsObjectArrayEmulated(ct))
             throw new InvalidOperationException(
                 $"user struct/class member '{ct.Name}.{memberName}' reached emission without a registered "
                 + "CFunction — a Phase-1 collector or on-demand registration arm does not cover this "

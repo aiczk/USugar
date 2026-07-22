@@ -398,7 +398,7 @@ public class CwGenRecv : UdonSharpBehaviour {
     [Fact]
     public void ClassProperty_CompoundAssign_CallsSetter()  // CW6
     {
-        // EmitWriteBack's aggregate property arms gated on IsAggregateType (deliberately FALSE for a
+        // EmitWriteBack's aggregate property arms gated on IsAggregateValue (deliberately FALSE for a
         // class), so `c.P += 1` on a class receiver fell through to the generic extern arm and minted
         // a nonexistent SystemObjectArray.__set_P__ extern (loud validator crash on legal C#, with an
         // extern-registry diagnosis instead of the collector-drift one). The compound write-back must
@@ -417,7 +417,7 @@ public class CwClassPropCompound : UdonSharpBehaviour {
     [Fact]
     public void ClassAutoProperty_CompoundAssign_WritesLayoutSlot()  // CW6 auto-prop leg
     {
-        // The auto-prop slot-write sub-arm sits inside the same IsAggregateType-gated case, so
+        // The auto-prop slot-write sub-arm sits inside the same IsAggregateValue-gated case, so
         // `c.AutoP += 1` broke identically (SystemObjectArray.__set_AutoP__ extern).
         var uasm = TestHelper.CompileToUasm(@"
 using UdonSharp;

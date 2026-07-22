@@ -22,7 +22,7 @@ public class ArrayHandler : HandlerBase, IExpressionHandler
         var arrayType = GetUdonType(op.Type);
         var elementType = GetArrayElemType((IArrayTypeSymbol)op.Type);
         var elemSym = ((IArrayTypeSymbol)op.Type).ElementType;
-        bool aggElem = elemSym is INamedTypeSymbol && EmitPolicy.IsAggregateType(elemSym);
+        bool aggElem = elemSym is INamedTypeSymbol && TypeClassifier.IsAggregateValue(elemSym);
 
         var sizeVal = VisitExpression(op.DimensionSizes[0]);
         var arrSlot = _ctx.Builder.AllocScratch(arrayType);
@@ -81,7 +81,7 @@ public class ArrayHandler : HandlerBase, IExpressionHandler
         var resultVal = ExternCall(ExternResolver.BuildArrayGetSignature(arrayType, elementType), new List<CLeaf> { arrayVal, indexVal }, GetUdonType(op.Type));
         // A struct/tuple element read AS A VALUE is copied (value semantics). Receiver access (arr[i].x =)
         // goes through LoadInstanceRaw → ReadArrayElementRaw, which does NOT clone.
-        return op.Type is INamedTypeSymbol elemAggT && EmitPolicy.IsAggregateType(elemAggT)
+        return op.Type is INamedTypeSymbol elemAggT && TypeClassifier.IsAggregateValue(elemAggT)
             ? AggregateAbi.DeepClone(_builder, resultVal, elemAggT, _ctx.Aggregates.GetLayout) : resultVal;
     }
 
@@ -159,7 +159,7 @@ public class ArrayHandler : HandlerBase, IExpressionHandler
                 // CW25 (closed-world audit): a struct/tuple element crossing into the slice is a VALUE
                 // copy in C# (GetSubArray copies element values) — clone the bundle exactly like the
                 // single-element read above, or the slice's elements alias the source array's.
-                if (ResolveType(arrSymbol.ElementType) is INamedTypeSymbol sliceElemAggT && EmitPolicy.IsAggregateType(sliceElemAggT))
+                if (ResolveType(arrSymbol.ElementType) is INamedTypeSymbol sliceElemAggT && TypeClassifier.IsAggregateValue(sliceElemAggT))
                     valVal = AggregateAbi.DeepClone(_builder, valVal, sliceElemAggT, _ctx.Aggregates.GetLayout);
 
                 // result[i] = val

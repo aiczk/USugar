@@ -56,7 +56,7 @@ public abstract class AssignmentHandlerBase : HandlerBase
             // take this behaviour-only no-receiver arm — its accessor expects the receiver object[] as
             // param0 (CInternalCall arity skew); it falls through to the receiver-as-param0 arm below.
             case IPropertyReferenceOperation { Instance: IInstanceReferenceOperation, Property: { IsIndexer: true } } idxRef
-                when !EmitPolicy.IsObjectArrayEmulated(idxRef.Property.ContainingType)
+                when !TypeClassifier.IsObjectArrayEmulated(idxRef.Property.ContainingType)
                 && ResolveDispatchProperty(idxRef).GetMethod is { } idxDispatchGetter
                 && _methodFunctions.ContainsKey(idxDispatchGetter):
             {
@@ -72,9 +72,9 @@ public abstract class AssignmentHandlerBase : HandlerBase
             // struct or v1-class body): cache the receiver and the (possibly side-effecting) index args
             // ONCE, then read via the getter with the receiver as param0. The same receiver/args are
             // reused by the setter in EmitWriteBack. Mirrors VisitIndexerGet. WjR3: gate on
-            // IsObjectArrayEmulated, not IsAggregateType — the CW6 polarity of the property arm below.
+            // IsObjectArrayEmulated, not IsAggregateValue — the CW6 polarity of the property arm below.
             case IPropertyReferenceOperation { Property: { IsIndexer: true } } sIdxRef
-                when sIdxRef.Instance?.Type is INamedTypeSymbol sIdxType && EmitPolicy.IsObjectArrayEmulated(sIdxType)
+                when sIdxRef.Instance?.Type is INamedTypeSymbol sIdxType && TypeClassifier.IsObjectArrayEmulated(sIdxType)
                 && sIdxRef.Property.GetMethod is { } sIdxGetterRaw:
             {
                 var recv = LoadInstanceRaw(sIdxRef.Instance);
@@ -120,18 +120,18 @@ public abstract class AssignmentHandlerBase : HandlerBase
             // RHS (wrong element + legs twice; VM-proven ref trace=12/result=803 vs 121/283). The read
             // mirrors VisitPropertyReference verbatim: auto-prop → layout slot; computed → user getter
             // with the receiver as param0 (struct-typed results deep-clone, value semantics).
-            // CW6: gate on IsObjectArrayEmulated, not IsAggregateType — a v1 CLASS receiver routes
+            // CW6: gate on IsObjectArrayEmulated, not IsAggregateValue — a v1 CLASS receiver routes
             // through the same layout-slot/getter read as PreparePropertySet's set twin (the deep-clone
             // sub-conditions below gate on the PROPERTY type, so class reference semantics are kept).
             case IPropertyReferenceOperation { Property: { IsIndexer: false } } aggCapPropRef
                 when aggCapPropRef.Instance?.Type is INamedTypeSymbol aggCapPropType
-                && EmitPolicy.IsObjectArrayEmulated(aggCapPropType):
+                && TypeClassifier.IsObjectArrayEmulated(aggCapPropType):
             {
                 if (_ctx.Aggregates.GetLayout(aggCapPropType).TryGetIndex(aggCapPropRef.Property.Name, out var capSlotIdx))
                 {
                     var recv = LoadInstanceRaw(aggCapPropRef.Instance);
                     CLeaf slotVal = AggregateAbi.ReadSlot(_builder, recv, capSlotIdx, "SystemObject");
-                    if (aggCapPropRef.Property.Type is INamedTypeSymbol capSlotAgg && EmitPolicy.IsAggregateType(capSlotAgg))
+                    if (aggCapPropRef.Property.Type is INamedTypeSymbol capSlotAgg && TypeClassifier.IsAggregateValue(capSlotAgg))
                         slotVal = AggregateAbi.DeepClone(_builder, slotVal, capSlotAgg, _ctx.Aggregates.GetLayout);
                     return new LValueCapture { Value = slotVal, ArrayVal = recv, IndexVal = Const(capSlotIdx, "SystemInt32") };
                 }
@@ -139,7 +139,7 @@ public abstract class AssignmentHandlerBase : HandlerBase
                 {
                     var recv = LoadInstanceRaw(aggCapPropRef.Instance);
                     CLeaf getVal = EmitCallToMethod(ResolveStructMember(capGetterRaw), new List<CLeaf> { recv });
-                    if (aggCapPropRef.Property.Type is INamedTypeSymbol capGetAgg && EmitPolicy.IsAggregateType(capGetAgg))
+                    if (aggCapPropRef.Property.Type is INamedTypeSymbol capGetAgg && TypeClassifier.IsAggregateValue(capGetAgg))
                         getVal = AggregateAbi.DeepClone(_builder, getVal, capGetAgg, _ctx.Aggregates.GetLayout);
                     return new LValueCapture { Value = getVal, ArrayVal = recv };
                 }
@@ -148,7 +148,7 @@ public abstract class AssignmentHandlerBase : HandlerBase
             case IFieldReferenceOperation aggFieldRef
                 when aggFieldRef.Instance != null
                 && ResolveType(aggFieldRef.Instance.Type) is INamedTypeSymbol aggCapType
-                && EmitPolicy.IsObjectArrayEmulated(aggCapType):
+                && TypeClassifier.IsObjectArrayEmulated(aggCapType):
             {
                 var layout = _ctx.Aggregates.GetLayout(aggCapType);
                 if (layout.TryGetIndex(aggFieldRef.Field, out var elemIdx))
@@ -249,7 +249,7 @@ public abstract class AssignmentHandlerBase : HandlerBase
             case IFieldReferenceOperation aggFieldRef
                 when aggFieldRef.Instance != null
                 && ResolveType(aggFieldRef.Instance.Type) is INamedTypeSymbol aggWbType
-                && EmitPolicy.IsObjectArrayEmulated(aggWbType):
+                && TypeClassifier.IsObjectArrayEmulated(aggWbType):
             {
                 var layout = _ctx.Aggregates.GetLayout(aggWbType);
                 if (layout.TryGetIndex(aggFieldRef.Field, out var elemIdx))
@@ -302,7 +302,7 @@ public abstract class AssignmentHandlerBase : HandlerBase
             // type must NOT take this no-receiver arm — it falls through to the receiver-as-param0
             // object[]-emulated indexer arm below.
             case IPropertyReferenceOperation { Instance: IInstanceReferenceOperation, Property: { IsIndexer: true } } idxRef
-                when !EmitPolicy.IsObjectArrayEmulated(idxRef.Property.ContainingType)
+                when !TypeClassifier.IsObjectArrayEmulated(idxRef.Property.ContainingType)
                 && ResolveDispatchProperty(idxRef).SetMethod is { } idxDispatchSetter
                 && _methodFunctions.TryGetValue(idxDispatchSetter, out _):
             {
@@ -319,7 +319,7 @@ public abstract class AssignmentHandlerBase : HandlerBase
             // INDEXER never belongs here either (the value-only call drops the index legs) — it rides
             // the indexer arms above/below.
             case IPropertyReferenceOperation { Instance: IInstanceReferenceOperation, Property: { IsIndexer: false } } propRef
-                when !EmitPolicy.IsObjectArrayEmulated(propRef.Property.ContainingType)
+                when !TypeClassifier.IsObjectArrayEmulated(propRef.Property.ContainingType)
                 && ResolveDispatchProperty(propRef).SetMethod is { } dispatchSetter
                 && _methodFunctions.TryGetValue(dispatchSetter, out _):
                 EmitExprStmt(EmitCallToMethod(dispatchSetter, new List<CLeaf> { valueVal }));
@@ -388,10 +388,10 @@ public abstract class AssignmentHandlerBase : HandlerBase
             // write the backing-field slot by layout index; computed (non-auto) → call the user setter
             // with the receiver as param0. CW6: gated on IsObjectArrayEmulated so a class receiver takes
             // the setter-call path PreparePropertySet already implements for the simple set — the old
-            // IsAggregateType gate dropped classes through to the generic extern arm below (bogus
+            // IsAggregateValue gate dropped classes through to the generic extern arm below (bogus
             // SystemObjectArray.__set_P__ extern, loud validator crash on legal C#).
             case IPropertyReferenceOperation { Property: { IsIndexer: false } } aggPropRef
-                when aggPropRef.Instance?.Type is INamedTypeSymbol aggPropType && EmitPolicy.IsObjectArrayEmulated(aggPropType):
+                when aggPropRef.Instance?.Type is INamedTypeSymbol aggPropType && TypeClassifier.IsObjectArrayEmulated(aggPropType):
             {
                 if (_ctx.Aggregates.GetLayout(aggPropType).TryGetIndex(aggPropRef.Property.Name, out var propIdx))
                 {
@@ -414,7 +414,7 @@ public abstract class AssignmentHandlerBase : HandlerBase
             // receiver/args cached by CaptureLValue (compound assignment); without this it falls to a bogus
             // __set_Item extern. CW6: IsObjectArrayEmulated so class receivers ride the same arm.
             case IPropertyReferenceOperation { Property: { IsIndexer: true, SetMethod: { } aggIdxSetter } } aggIdxRef
-                when aggIdxRef.Instance?.Type is INamedTypeSymbol aggIdxType && EmitPolicy.IsObjectArrayEmulated(aggIdxType)
+                when aggIdxRef.Instance?.Type is INamedTypeSymbol aggIdxType && TypeClassifier.IsObjectArrayEmulated(aggIdxType)
                 && _methodFunctions.ContainsKey(aggIdxSetter):
             {
                 var setterArgs = new List<CLeaf> { lv.ArrayVal ?? LoadInstanceRaw(aggIdxRef.Instance) };

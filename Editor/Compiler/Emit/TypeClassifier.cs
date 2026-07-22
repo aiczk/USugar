@@ -75,10 +75,10 @@ public static class TypeClassifier
     {
         type = Resolve(type, ctx);
         var containsPayload = EmitPolicy.ContainsUserClassType(type, ctx.TypeParamMap);
-        if (EmitPolicy.IsUserClassType(type)) return RuntimeShape.Class();
+        if (IsUserClassLeaf(type)) return RuntimeShape.Class();
         if (NdimArrayAbi.IsNdimArray(type)) return RuntimeShape.MultiDimensionalArray(containsPayload);
         if (type is INamedTypeSymbol { DelegateInvokeMethod: not null }) return RuntimeShape.Delegate(containsPayload);
-        if (EmitPolicy.IsAggregateType(type)) return RuntimeShape.Aggregate(containsPayload);
+        if (IsAggregateValueLeaf(type)) return RuntimeShape.Aggregate(containsPayload);
         return RuntimeShape.Native(containsPayload);
     }
 
@@ -86,13 +86,42 @@ public static class TypeClassifier
         => ShapeOf(type, ctx).ContainsProgramLocalPayload;
 
     public static bool IsUserClass(ITypeSymbol type)
-        => EmitPolicy.IsUserClassType(type);
+        => ShapeOf(type, new TypeClassifierContext(null)).Bundle == RuntimeBundleKind.Class;
+
+    internal static bool IsUserClassLeaf(ITypeSymbol type)
+    {
+        if (type is not INamedTypeSymbol named) return false;
+        if (named.IsAnonymousType || !ExternResolver.IsPlainUserClass(named) || named.IsRecord) return false;
+        if (named.BaseType != null && named.BaseType.SpecialType != SpecialType.System_Object)
+        {
+            var baseType = named.BaseType;
+            if (!ExternResolver.IsPlainUserClass(baseType) || baseType.IsRecord
+                || ExternResolver.ClassHasRegisteredExterns(baseType) || !IsUserClassLeaf(baseType)) return false;
+        }
+        return !ExternResolver.ClassHasRegisteredExterns(named);
+    }
 
     public static bool IsAggregateValue(ITypeSymbol type)
-        => EmitPolicy.IsAggregateType(type);
+        => ShapeOf(type, new TypeClassifierContext(null)).Bundle == RuntimeBundleKind.Aggregate;
+
+    internal static bool IsAggregateValueLeaf(ITypeSymbol type)
+    {
+        if (type is not INamedTypeSymbol named || named.TypeKind == TypeKind.Delegate) return false;
+        return named.IsTupleType || named.IsAnonymousType || IsUserStruct(named);
+    }
+
+    public static bool IsUserStruct(INamedTypeSymbol type)
+    {
+        if (type.TypeKind != TypeKind.Struct || type.SpecialType != SpecialType.None) return false;
+        if (type.DeclaringSyntaxReferences.Length == 0) return false;
+        return !ExternResolver.IsSdkNamespace(type.ContainingNamespace);
+    }
 
     public static bool IsObjectArrayEmulated(ITypeSymbol type)
-        => type is INamedTypeSymbol named && EmitPolicy.IsObjectArrayEmulated(named);
+    {
+        var bundle = ShapeOf(type, new TypeClassifierContext(null)).Bundle;
+        return bundle is RuntimeBundleKind.Aggregate or RuntimeBundleKind.Class;
+    }
 
     static ITypeSymbol Resolve(ITypeSymbol type, TypeClassifierContext ctx)
         => type is ITypeParameterSymbol tp && ctx.TypeParamMap != null

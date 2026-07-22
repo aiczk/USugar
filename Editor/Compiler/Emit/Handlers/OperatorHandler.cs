@@ -45,7 +45,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
 
         // ── User-defined struct operator: v1 + v2 → static operator method call ──
         if (op.OperatorMethod is { MethodKind: MethodKind.UserDefinedOperator } binOpM
-            && binOpM.ContainingType is INamedTypeSymbol binOpCt && EmitPolicy.IsObjectArrayEmulated(binOpCt))
+            && binOpM.ContainingType is INamedTypeSymbol binOpCt && TypeClassifier.IsObjectArrayEmulated(binOpCt))
         {
             var lhs = VisitExpression(op.LeftOperand);
             var rhs = VisitExpression(op.RightOperand);
@@ -142,7 +142,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
 
         // ── Aggregate (tuple) structural equality ──
         if (op.OperatorKind is BinaryOperatorKind.Equals or BinaryOperatorKind.NotEquals
-            && EmitPolicy.IsAggregateType(op.LeftOperand.Type)
+            && TypeClassifier.IsAggregateValue(op.LeftOperand.Type)
             && op.LeftOperand.Type is INamedTypeSymbol aggType)
         {
             return EmitAggregateEquality(op, aggType);
@@ -172,8 +172,8 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
             // are fully evaluated before either ToString runs — then each class operand dispatches.
             var lCls = ResolveType(lOp.Type) as INamedTypeSymbol;
             var rCls = ResolveType(rOp.Type) as INamedTypeSymbol;
-            bool lIsClass = lCls != null && EmitPolicy.IsUserClassType(lCls);
-            bool rIsClass = rCls != null && EmitPolicy.IsUserClassType(rCls);
+            bool lIsClass = lCls != null && TypeClassifier.IsUserClass(lCls);
+            bool rIsClass = rCls != null && TypeClassifier.IsUserClass(rCls);
             if (lIsClass || rIsClass)
             {
                 var l = VisitExpression(lOp);
@@ -341,7 +341,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
         // type and throws "Bitwise NOT not supported on SystemObjectArray". Only fires for a user operator
         // (a built-in lifted ~ has OperatorMethod null → falls through to the BitwiseNegation handling). ──
         if (op.OperatorMethod is { MethodKind: MethodKind.UserDefinedOperator } unOpM
-            && unOpM.ContainingType is INamedTypeSymbol unOpCt && EmitPolicy.IsObjectArrayEmulated(unOpCt))
+            && unOpM.ContainingType is INamedTypeSymbol unOpCt && TypeClassifier.IsObjectArrayEmulated(unOpCt))
         {
             var operand = VisitExpression(op.Operand);
             return EmitCallToMethod(ResolveStructMember(unOpM), new List<CLeaf> { operand });
@@ -603,7 +603,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
             {
                 // Positional/deconstruction pattern — tuple-typed only (reuse the aggregate object[]
                 // machinery; user-defined Deconstruct is out of scope).
-                if (valueType is not INamedTypeSymbol aggType || !EmitPolicy.IsAggregateType(valueType))
+                if (valueType is not INamedTypeSymbol aggType || !TypeClassifier.IsAggregateValue(valueType))
                     throw new System.NotSupportedException(
                         "Positional pattern is only supported on tuple types (user Deconstruct is not supported).");
                 var layout = _ctx.Aggregates.GetLayout(aggType);
@@ -680,7 +680,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
                     // CA-M1: a v1 class scrutinee is also object[]-backed (no Udon property getter), so its
                     // subpattern members read via the layout __Get / computed-getter arms too. The receiver
                     // was null-guarded above (line ~689, reference-type guard), so the slot read is safe.
-                    bool isAgg = aggMatchType != null && EmitPolicy.IsObjectArrayEmulated(aggMatchType);
+                    bool isAgg = aggMatchType != null && TypeClassifier.IsObjectArrayEmulated(aggMatchType);
                     foreach (var sub in rec.PropertySubpatterns)
                     {
                         ITypeSymbol memberType, memberContainingType;
@@ -704,7 +704,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
                         // further-derived override still wins (the static slot/getter arms below would
                         // silently read the base declaration's storage/body). The receiver is the
                         // already-staged valSlot; a subpattern member read has no `base.` form.
-                        if (isAgg && EmitPolicy.IsUserClassType(aggMatchType)
+                        if (isAgg && TypeClassifier.IsUserClass(aggMatchType)
                             && sub.Member is IPropertyReferenceOperation vSubRef
                             && VirtualDispatch.FindAccessor(vSubRef.Property, getter: true) is { } vSubGetter
                             && VirtualDispatch.IsVirtualCall(vSubGetter))
@@ -727,7 +727,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
                             memberVal = SlotRef(memberSlot);
                         }
                         else if (isAgg && sub.Member is IPropertyReferenceOperation cpr
-                            && EmitPolicy.IsObjectArrayEmulated(aggMatchType) && cpr.Property.GetMethod is { } cgetter)
+                            && TypeClassifier.IsObjectArrayEmulated(aggMatchType) && cpr.Property.GetMethod is { } cgetter)
                         {
                             // Computed user-struct property (no object[] storage slot): JUMP to its registered
                             // getter with the struct as the receiver, not a non-existent SystemObjectArray.__get_X

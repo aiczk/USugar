@@ -129,7 +129,7 @@ public sealed class LambdaCaptureAnalyzer
         while (m != null && m.MethodKind is MethodKind.LambdaMethod or MethodKind.LocalFunction)
             m = m.ContainingSymbol as IMethodSymbol;
         if (m == null || m.IsStatic) return null;
-        return m.ContainingType is INamedTypeSymbol ct && EmitPolicy.IsUserClassType(ct)
+        return m.ContainingType is INamedTypeSymbol ct && TypeClassifier.IsUserClass(ct)
             ? m.OriginalDefinition
             : null;
     }

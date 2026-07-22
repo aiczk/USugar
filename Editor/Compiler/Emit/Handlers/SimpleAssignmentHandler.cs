@@ -94,7 +94,7 @@ public class SimpleAssignmentHandler : AssignmentHandlerBase, IExpressionHandler
                 ? elr.Local
                 : ((IParameterReferenceOperation)assign.Target).Parameter;
             var envLoaded = EnvEmit.Read(_builder, _ctx, envSym, GetUdonType(assign.Target.Type));
-            return assign.Target.Type is INamedTypeSymbol eAgg && EmitPolicy.IsAggregateType(eAgg)
+            return assign.Target.Type is INamedTypeSymbol eAgg && TypeClassifier.IsAggregateValue(eAgg)
                 ? AggregateAbi.DeepClone(_builder, envLoaded, eAgg, _ctx.Aggregates.GetLayout) : envLoaded;
         }
         var targetFieldName = GetAssignTargetFieldName(assign.Target);
@@ -109,7 +109,7 @@ public class SimpleAssignmentHandler : AssignmentHandlerBase, IExpressionHandler
         // When the assignment is USED AS A VALUE (e.g. chained `z = y = x`) and the target is an aggregate,
         // that value must be an independent COPY (struct value semantics) — otherwise z aliases y. (diff-fuzz w4)
         return assign.Parent is not IExpressionStatementOperation
-               && assign.Target.Type is INamedTypeSymbol tAgg && EmitPolicy.IsAggregateType(tAgg)
+               && assign.Target.Type is INamedTypeSymbol tAgg && TypeClassifier.IsAggregateValue(tAgg)
             ? AggregateAbi.DeepClone(_builder, loaded, tAgg, _ctx.Aggregates.GetLayout) : loaded;
     }
 

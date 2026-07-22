@@ -109,7 +109,7 @@ public class DeconstructionAssignmentHandler : AssignmentHandlerBase, IOperation
             // before any store (value semantics + swap safety), deep-cloning aggregate elements so a later
             // mutation of a target does not alias the source tuple.
             if (callValue is not IInvocationOperation
-                && callValue.Type is INamedTypeSymbol valAggType && EmitPolicy.IsAggregateType(valAggType))
+                && callValue.Type is INamedTypeSymbol valAggType && TypeClassifier.IsAggregateValue(valAggType))
             {
                 var arrVal = LoadInstanceRaw(callValue);
                 var snaps = new List<CLeaf>(targetTuple.Elements.Length);
@@ -155,7 +155,7 @@ public class DeconstructionAssignmentHandler : AssignmentHandlerBase, IOperation
                 ReturnSlot[] callReturns = null;
                 if (_methodReturns.TryGetValue(callTarget, out var localReturns))
                     callReturns = localReturns;
-                else if (callTarget.ReturnType.IsTupleType || EmitPolicy.IsAggregateType(callTarget.ReturnType))
+                else if (callTarget.ReturnType.IsTupleType || TypeClassifier.IsAggregateValue(callTarget.ReturnType))
                     callReturns = GetCalleeReturns(callTarget);
 
                 if (callReturns == null || callReturns.Length == 0)

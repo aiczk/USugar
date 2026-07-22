@@ -64,7 +64,7 @@ internal sealed class GenericTypeSpecCensus
     void AddMint(INamedTypeSymbol raw, IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> map, SpecTrace trace)
     {
         var closed = TypeEnvironment.CloseType(_compilation, raw, map) as INamedTypeSymbol;
-        if (closed == null || !EmitPolicy.IsUserClassType(closed) || ContainsOpen(closed)) return;
+        if (closed == null || !TypeClassifier.IsUserClass(closed) || ContainsOpen(closed)) return;
         if (!_minted.Add(closed)) return;
 
         var classMap = TypeEnvironment.ForContainingType(closed, map);

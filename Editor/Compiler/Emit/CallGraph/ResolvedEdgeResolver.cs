@@ -67,7 +67,7 @@ public sealed class ResolvedEdgeResolver
     IEnumerable<INamedTypeSymbol> MintedTypes(IOperation op, HashSet<INamedTypeSymbol> seen)
     {
         if (op is IObjectCreationOperation oc && oc.Type is INamedTypeSymbol ct
-            && EmitPolicy.IsUserClassType(ct) && seen.Add(ct))
+            && TypeClassifier.IsUserClass(ct) && seen.Add(ct))
         {
             yield return ct;
             foreach (var initOp in _emitter.EnumerateClassFieldInitOps(ct))
@@ -193,7 +193,7 @@ public sealed class ResolvedEdgeResolver
         // not the walked op tree. Faithful port of CollectClassMintReach's direct seeding, deduped by
         // `minted` (bounds transitive nested mints inside field initializers).
         if (op is IObjectCreationOperation oc && oc.Type is INamedTypeSymbol ct
-            && EmitPolicy.IsUserClassType(ct) && minted.Add(ct))
+            && TypeClassifier.IsUserClass(ct) && minted.Add(ct))
         {
             // C's own explicit ctor (incl. the parameterless one EnumerateStructMemberRefs skips at
             // Arguments.Length==0) — a reach root whose body is emitted at mint.
@@ -204,7 +204,7 @@ public sealed class ResolvedEdgeResolver
                 foreach (var t in ReachWalk(initOp, minted))
                     yield return t;
             // base explicit parameterless ctors called by the implicit ctor chain.
-            for (var bt = ct.BaseType; bt is INamedTypeSymbol && EmitPolicy.IsUserClassType(bt); bt = bt.BaseType)
+            for (var bt = ct.BaseType; bt is INamedTypeSymbol && TypeClassifier.IsUserClass(bt); bt = bt.BaseType)
             {
                 var baseCtor = bt.InstanceConstructors.FirstOrDefault(
                     c => c.Parameters.Length == 0 && !c.IsImplicitlyDeclared);
@@ -216,7 +216,7 @@ public sealed class ResolvedEdgeResolver
             // CW1 lift: accessor slots seed too — but only COMPUTED accessor impls (an AUTO accessor
             // impl has no body; its dispatch arm is a layout-slot access, nothing to register).
             var seededSlots = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
-            for (var vt = (ITypeSymbol)ct; vt is INamedTypeSymbol vtn && EmitPolicy.IsUserClassType(vtn); vt = vtn.BaseType)
+            for (var vt = (ITypeSymbol)ct; vt is INamedTypeSymbol vtn && TypeClassifier.IsUserClass(vtn); vt = vtn.BaseType)
                 foreach (var vm in vt.GetMembers().OfType<IMethodSymbol>())
                     if ((vm.IsVirtual || vm.IsOverride || vm.IsAbstract)
                         && vm.MethodKind is MethodKind.Ordinary or MethodKind.PropertyGet or MethodKind.PropertySet
@@ -421,7 +421,7 @@ public sealed class ResolvedEdgeResolver
                 // computed property / indexer on a USER-STRUCT receiver — `this` OR a fresh struct
                 // instance (structs compile into this program's accessor functions).
                 if (pr.Property is { IsStatic: false } sprop
-                    && sprop.ContainingType is INamedTypeSymbol sprct && EmitPolicy.IsObjectArrayEmulated(sprct))
+                    && sprop.ContainingType is INamedTypeSymbol sprct && TypeClassifier.IsObjectArrayEmulated(sprct))
                 {
                     if (sprop.GetMethod is { } sg) yield return sg.OriginalDefinition;
                     if (sprop.SetMethod is { } ss) yield return ss.OriginalDefinition;
@@ -459,7 +459,7 @@ public sealed class ResolvedEdgeResolver
         if (pr.Instance is IInstanceReferenceOperation ir && ir.Syntax is BaseExpressionSyntax) yield break;
         bool overYield = ClassTypeObjectContext.ContainsTypeParameter(pr.Instance?.Type)
             || pr.Instance == null && !pr.Property.IsStatic
-               && pr.Property.ContainingType is INamedTypeSymbol ict && EmitPolicy.IsUserClassType(ict);
+               && pr.Property.ContainingType is INamedTypeSymbol ict && TypeClassifier.IsUserClass(ict);
         if (overYield)
         {
             var slotDef = VirtualDispatch.SlotIntroducer(acc);
@@ -489,12 +489,12 @@ public sealed class ResolvedEdgeResolver
         {
             foreach (var concrete in _emitter.ClassTypes.MintedClasses)
                 if (VirtualDispatch.MostDerivedImpl(concrete, slotDef) is { } genImpl
-                    && EmitPolicy.IsUserClassType(genImpl.ContainingType))
+                    && TypeClassifier.IsUserClass(genImpl.ContainingType))
                     yield return genImpl.OriginalDefinition;
         }
-        else if (t is INamedTypeSymbol nts && EmitPolicy.IsUserClassType(nts))
+        else if (t is INamedTypeSymbol nts && TypeClassifier.IsUserClass(nts))
             foreach (var vt in _emitter.VirtualDispatchInstance.ResolveTargets(nts, slotDef))
-                if (EmitPolicy.IsUserClassType(vt.Impl.ContainingType))
+                if (TypeClassifier.IsUserClass(vt.Impl.ContainingType))
                     yield return vt.Impl.OriginalDefinition;
     }
 
@@ -543,7 +543,7 @@ public sealed class ResolvedEdgeResolver
         // inc-dec through a struct-typed local) — the specific get/set accessor on a user-struct receiver
         // is the callee, independent of a `this` receiver (mirrors the IsInternalCallTo struct arm).
         if (pr.Property is { IsStatic: false } && pr.Property.ContainingType is INamedTypeSymbol saCt
-            && EmitPolicy.IsObjectArrayEmulated(saCt)
+            && TypeClassifier.IsObjectArrayEmulated(saCt)
             && acc != null && SymbolEqualityComparer.Default.Equals(acc.OriginalDefinition, callee))
             return true;
         if (pr.Instance is not IInstanceReferenceOperation) return false;
@@ -665,7 +665,7 @@ public sealed class ResolvedEdgeResolver
     {
         // Parameterized user-struct / v1-class constructor: new V(...) / new C(...).
         if (op is IObjectCreationOperation oc && oc.Constructor != null
-            && oc.Type is INamedTypeSymbol nt && EmitPolicy.IsObjectArrayEmulated(nt)
+            && oc.Type is INamedTypeSymbol nt && TypeClassifier.IsObjectArrayEmulated(nt)
             && oc.Arguments.Length > 0 && !oc.Constructor.IsImplicitlyDeclared)
             yield return oc.Constructor;
         // User-struct instance method: v.Method(...). Feature G: yield the CONSTRUCTED symbol
@@ -676,7 +676,7 @@ public sealed class ResolvedEdgeResolver
         // there, so this is byte-identical for them.
         if (op is IInvocationOperation inv && inv.TargetMethod is { IsStatic: false } tm
             && tm.MethodKind == MethodKind.Ordinary && !tm.IsImplicitlyDeclared
-            && tm.ContainingType is INamedTypeSymbol it && EmitPolicy.IsObjectArrayEmulated(it)
+            && tm.ContainingType is INamedTypeSymbol it && TypeClassifier.IsObjectArrayEmulated(it)
             // CA-v2b-2: at a virtual dispatch site the STATIC target (a base method) is not the runtime
             // callee — the inline chain calls the resolved override. Collecting the static base here walked a
             // never-dispatched base body (e.g. `RecBse.Spawn`'s `new RecBse()`) and phantom-minted a class no
@@ -691,7 +691,7 @@ public sealed class ResolvedEdgeResolver
         // the derived ctor jumped to an unemitted base ctor). Collect the explicit-ctor target here.
         if (op is IInvocationOperation cinv && cinv.TargetMethod is { MethodKind: MethodKind.Constructor } ctm
             && !ctm.IsImplicitlyDeclared
-            && ctm.ContainingType is INamedTypeSymbol cit && EmitPolicy.IsObjectArrayEmulated(cit))
+            && ctm.ContainingType is INamedTypeSymbol cit && TypeClassifier.IsObjectArrayEmulated(cit))
             yield return ctm;
         // MG auto-wrap (2026-07-11 wave-lite): a class/struct instance member reached ONLY as a METHOD
         // GROUP (`o.M` -> a receiver-bridge delegate) is otherwise invisible to this collector (which
@@ -701,7 +701,7 @@ public sealed class ResolvedEdgeResolver
         // it becomes a reach root + graph node + escape target.
         if (op is IMethodReferenceOperation mgr && mgr.Method is { IsStatic: false } mgm
             && mgm.MethodKind == MethodKind.Ordinary && !mgm.IsImplicitlyDeclared
-            && mgm.ContainingType is INamedTypeSymbol mgit && EmitPolicy.IsObjectArrayEmulated(mgit))
+            && mgm.ContainingType is INamedTypeSymbol mgit && TypeClassifier.IsObjectArrayEmulated(mgit))
             yield return mgm;
         // Computed (non-auto) user-struct property: v.Prop (read) or v.Prop = x (write). Auto-properties use
         // their backing-field slot directly (no method), but a computed accessor must be inlined as a struct
@@ -710,7 +710,7 @@ public sealed class ResolvedEdgeResolver
         // is collected the same way — its accessors carry the index args after the synthetic receiver.
         if (op is IPropertyReferenceOperation pr
             && pr.Property is { IsStatic: false } prop
-            && pr.Property.ContainingType is INamedTypeSymbol pit && EmitPolicy.IsObjectArrayEmulated(pit)
+            && pr.Property.ContainingType is INamedTypeSymbol pit && TypeClassifier.IsObjectArrayEmulated(pit)
             && UasmEmitter.IsComputedProperty(prop))
         {
             // CW1 lift: at an accessor dispatch site the STATIC accessor is not the runtime callee —
@@ -730,7 +730,7 @@ public sealed class ResolvedEdgeResolver
         // here too — else the pattern lowering emits a bogus accessor extern for an unregistered getter.
         if (op is IPropertySubpatternOperation sub && sub.Member is IPropertyReferenceOperation spr
             && spr.Property is { IsStatic: false } sprop
-            && spr.Property.ContainingType is INamedTypeSymbol spit && EmitPolicy.IsObjectArrayEmulated(spit)
+            && spr.Property.ContainingType is INamedTypeSymbol spit && TypeClassifier.IsObjectArrayEmulated(spit)
             && UasmEmitter.IsComputedProperty(sprop) && sprop.GetMethod != null)
             yield return sprop.GetMethod;
         // User-struct operator: v1 + v2, -v, s += t, c++ (static operator methods). Compound-assignment and
@@ -741,12 +741,12 @@ public sealed class ResolvedEdgeResolver
             ?? (op as ICompoundAssignmentOperation)?.OperatorMethod
             ?? (op as IIncrementOrDecrementOperation)?.OperatorMethod;
         if (opMethod is { MethodKind: MethodKind.UserDefinedOperator }
-            && opMethod.ContainingType is INamedTypeSymbol ot && EmitPolicy.IsObjectArrayEmulated(ot))
+            && opMethod.ContainingType is INamedTypeSymbol ot && TypeClassifier.IsObjectArrayEmulated(ot))
             yield return opMethod;
         // User-struct CONVERSION operator (implicit/explicit). MethodKind is Conversion (not UserDefinedOperator),
         // so it needs its own arm — invoked implicitly by an IConversionOperation, routed to the method on emit.
         if (op is IConversionOperation convOp && convOp.OperatorMethod is { MethodKind: MethodKind.Conversion } convM
-            && convM.ContainingType is INamedTypeSymbol convCt && EmitPolicy.IsObjectArrayEmulated(convCt))
+            && convM.ContainingType is INamedTypeSymbol convCt && TypeClassifier.IsObjectArrayEmulated(convCt))
             yield return convM;
     }
 }

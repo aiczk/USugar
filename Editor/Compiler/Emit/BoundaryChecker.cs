@@ -170,7 +170,7 @@ public sealed class BoundaryChecker
         // static type still names the aggregate, not an erasure.
         if (sourceShape.Bundle == RuntimeBundleKind.Aggregate
             && !destinationShape.IsBundle
-            && !(EmitPolicy.IsNullableT(destinationType, out var wrapped) && EmitPolicy.IsObjectArrayEmulated(wrapped))
+            && !(EmitPolicy.IsNullableT(destinationType, out var wrapped) && TypeClassifier.IsObjectArrayEmulated(wrapped))
             && !IsProgramLocalEqualityPosition(conversion))
             throw new NotSupportedException(
                 $"Erasing the value type '{sourceType.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}' "
@@ -225,7 +225,7 @@ public sealed class BoundaryChecker
     {
         if (propRef.Property.Type is not INamedTypeSymbol dpt || dpt.DelegateInvokeMethod == null) return false;
         var containing = propRef.Property.ContainingType;
-        if (containing == null || EmitPolicy.IsObjectArrayEmulated(containing)) return false;
+        if (containing == null || TypeClassifier.IsObjectArrayEmulated(containing)) return false;
         if (propRef.Instance is not null and not IInstanceReferenceOperation)
             return ExternResolver.IsUdonSharpBehaviour(containing)
                 || (containing.TypeKind == TypeKind.Interface && containing.SpecialType == SpecialType.None);

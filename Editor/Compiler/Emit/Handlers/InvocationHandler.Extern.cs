@@ -218,7 +218,7 @@ public partial class InvocationHandler
     /// their shallow externs stay untouched (shallow IS C# semantics for them).</summary>
     INamedTypeSymbol AggregateArrayElement(ITypeSymbol type)
         => type is IArrayTypeSymbol { Rank: 1 } arr
-           && ResolveType(arr.ElementType) is INamedTypeSymbol elem && EmitPolicy.IsAggregateType(elem)
+           && ResolveType(arr.ElementType) is INamedTypeSymbol elem && TypeClassifier.IsAggregateValue(elem)
             ? elem : null;
 
     bool TryEmitAggregateArrayCopyMember(IInvocationOperation op, IMethodSymbol target, out CLeaf result)
@@ -1053,7 +1053,7 @@ public partial class InvocationHandler
                 {
                     CLeaf elemVal = ExternCall(ExternResolver.BuildArrayGetSignature(arrayType, elementType),
                         new List<CLeaf> { arrayVal, indexVal }, GetUdonType(arrayElem.Type));
-                    if (arrayElem.Type is INamedTypeSymbol elemAgg && EmitPolicy.IsAggregateType(elemAgg))
+                    if (arrayElem.Type is INamedTypeSymbol elemAgg && TypeClassifier.IsAggregateValue(elemAgg))
                         elemVal = AggregateAbi.DeepClone(_builder, elemVal, elemAgg, _ctx.Aggregates.GetLayout);
                     return elemVal;
                 }, v => EmitExternVoid(
@@ -1063,14 +1063,14 @@ public partial class InvocationHandler
             case IFieldReferenceOperation fieldRef
                 when AggregateAbi.TryGetMemberTarget(fieldRef, out var aggInstance, out var aggMemberName)
                      && aggInstance.Type is INamedTypeSymbol aggContaining
-                     && EmitPolicy.IsAggregateType(aggContaining)
+                     && TypeClassifier.IsAggregateValue(aggContaining)
                      && _ctx.Aggregates.GetLayout(aggContaining).TryGetIndex(aggMemberName, out var memberIndex):
             {
                 var arrExpr = LoadInstanceRaw(aggInstance);
                 return (() =>
                 {
                     CLeaf memberVal = AggregateAbi.ReadSlot(_builder, arrExpr, memberIndex, "SystemObject");
-                    if (fieldRef.Field.Type is INamedTypeSymbol memberAgg && EmitPolicy.IsAggregateType(memberAgg))
+                    if (fieldRef.Field.Type is INamedTypeSymbol memberAgg && TypeClassifier.IsAggregateValue(memberAgg))
                         memberVal = AggregateAbi.DeepClone(_builder, memberVal, memberAgg, _ctx.Aggregates.GetLayout);
                     return memberVal;
                 }, v => AggregateAbi.WriteSlot(_builder, arrExpr, memberIndex, v));
@@ -1350,7 +1350,7 @@ public partial class InvocationHandler
             && method.ContainingType.SpecialType is SpecialType.System_Object
                 or SpecialType.System_ValueType or SpecialType.System_Enum)
         {
-            if (vConcrete is INamedTypeSymbol vAgg && EmitPolicy.IsAggregateType(vAgg))
+            if (vConcrete is INamedTypeSymbol vAgg && TypeClassifier.IsAggregateValue(vAgg))
                 throw new System.NotSupportedException(
                     $"'{method.Name}' on type parameter '{vtp.Name}' instantiated with user-defined "
                     + $"struct '{vConcrete.Name}' is not supported: Udon has no extern for it and C#'s "

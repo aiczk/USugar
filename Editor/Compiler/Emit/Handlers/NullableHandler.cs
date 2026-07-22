@@ -55,7 +55,7 @@ public class NullableHandler : AssignmentHandlerBase, IExpressionHandler
         // When op.Type is the aggregate, the right side has the non-nullable aggregate type → always non-null,
         // and the non-null left is cloned in the else branch, so AggregateAbi.DeepClone never sees null.
         var aggType = ResolveType(op.Type) as INamedTypeSymbol;
-        bool aggResult = aggType != null && EmitPolicy.IsAggregateType(aggType);
+        bool aggResult = aggType != null && TypeClassifier.IsAggregateValue(aggType);
         var leftVal = VisitExpression(op.Value);
         System.Func<CLeaf, CLeaf> presentValue = null;
         if (aggResult)

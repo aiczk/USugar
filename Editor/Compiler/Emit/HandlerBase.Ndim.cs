@@ -92,7 +92,7 @@ public abstract partial class HandlerBase
         var elemUdonType = GetUdonType(ndimType.ElementType);
         var plan = PrepareNdimAccess(ae.ArrayReference, ae.Indices, ndimType);
         var resultLeaf = EmitNdimReadFromPlan(ae, plan, elemUdonType);
-        return ndimType.ElementType is INamedTypeSymbol elemAggT && EmitPolicy.IsAggregateType(elemAggT)
+        return ndimType.ElementType is INamedTypeSymbol elemAggT && TypeClassifier.IsAggregateValue(elemAggT)
             ? AggregateAbi.DeepClone(_builder, resultLeaf, elemAggT, _ctx.Aggregates.GetLayout) : resultLeaf;
     }
 
@@ -134,7 +134,7 @@ public abstract partial class HandlerBase
         var backingUdonType = GetArrayType(backingType);
         var elemUdonType = GetArrayElemType(backingType);
         var elemSym = ndimType.ElementType;
-        bool aggElem = elemSym is INamedTypeSymbol && EmitPolicy.IsAggregateType(elemSym);
+        bool aggElem = elemSym is INamedTypeSymbol && TypeClassifier.IsAggregateValue(elemSym);
 
         var dimSlots = new int[rank];
         for (int d = 0; d < rank; d++)

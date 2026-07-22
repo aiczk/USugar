@@ -195,7 +195,7 @@ public static class ValueClassifier
         // program boundary. Conservative for structs too (widening is a separate decision).
         if (!target.IsStatic
             && target.MethodKind is not (MethodKind.LambdaMethod or MethodKind.LocalFunction)
-            && target.ContainingType is INamedTypeSymbol recvCt && EmitPolicy.IsObjectArrayEmulated(recvCt))
+            && target.ContainingType is INamedTypeSymbol recvCt && TypeClassifier.IsObjectArrayEmulated(recvCt))
             return (true, true);
         if (!captureScope.ClosureScopes.TryGetValue(target.OriginalDefinition, out var closureScope)
             || closureScope?.BindingScope == null)

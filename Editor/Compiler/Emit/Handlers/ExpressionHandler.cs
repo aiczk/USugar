@@ -21,12 +21,12 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
         // Stage 2 §4.1: a captured local/param has NO flat storage — reads route through the owning
         // scope's env record (aggregate captures keep clone-on-read value semantics on the way out).
         ILocalReferenceOperation localRef when _ctx.Closures.TryGetEnvBinding(localRef.Local, out _)
-            => ResolveType(localRef.Type) is INamedTypeSymbol eaggT && EmitPolicy.IsAggregateType(eaggT)
+            => ResolveType(localRef.Type) is INamedTypeSymbol eaggT && TypeClassifier.IsAggregateValue(eaggT)
                    ? AggregateAbi.DeepClone(_builder, EnvEmit.Read(_builder, _ctx, localRef.Local, AggregateAbi.ArrayType),
                        eaggT, _ctx.Aggregates.GetLayout)
                    : EnvEmit.Read(_builder, _ctx, localRef.Local, GetUdonType(localRef.Type)),
         ILocalReferenceOperation localRef => _localBindings.TryGetValue(localRef.Local, out var localBinding)
-                                                 ? ResolveType(localRef.Type) is INamedTypeSymbol laggT && EmitPolicy.IsAggregateType(laggT)
+                                                 ? ResolveType(localRef.Type) is INamedTypeSymbol laggT && TypeClassifier.IsAggregateValue(laggT)
                                                      ? AggregateAbi.DeepClone(_builder, LoadField(localBinding.Id, AggregateAbi.ArrayType),
                                                          laggT, _ctx.Aggregates.GetLayout)
                                                      : LoadField(localBinding.Id, GetUdonType(localRef.Type))
@@ -34,11 +34,11 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
         IFieldReferenceOperation op => VisitFieldReference(op),
         IEventReferenceOperation op => VisitEventReference(op),
         IParameterReferenceOperation paramRef when _ctx.Closures.TryGetEnvBinding(paramRef.Parameter, out _)
-            => ResolveType(paramRef.Type) is INamedTypeSymbol epaggT && EmitPolicy.IsAggregateType(epaggT)
+            => ResolveType(paramRef.Type) is INamedTypeSymbol epaggT && TypeClassifier.IsAggregateValue(epaggT)
                    ? AggregateAbi.DeepClone(_builder, EnvEmit.Read(_builder, _ctx, paramRef.Parameter, AggregateAbi.ArrayType),
                        epaggT, _ctx.Aggregates.GetLayout)
                    : EnvEmit.Read(_builder, _ctx, paramRef.Parameter, GetUdonType(paramRef.Type)),
-        IParameterReferenceOperation paramRef => ResolveType(paramRef.Type) is INamedTypeSymbol paggT && EmitPolicy.IsAggregateType(paggT)
+        IParameterReferenceOperation paramRef => ResolveType(paramRef.Type) is INamedTypeSymbol paggT && TypeClassifier.IsAggregateValue(paggT)
                                                      ? AggregateAbi.DeepClone(_builder, LoadParam(paramRef.Parameter),
                                                          paggT, _ctx.Aggregates.GetLayout)
                                                      : LoadParam(paramRef.Parameter),
@@ -48,7 +48,7 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
         // convention but stays raw (CA-M1 reference semantics); receiver-position `this` never gets
         // here (LoadInstanceRaw has its own IInstanceReference arm).
         IInstanceReferenceOperation when _ctx.Methods.CurrentStructReceiverParamId is { } recvPid
-            => _ctx.Methods.CurrentMethod?.ContainingType is INamedTypeSymbol thisStructT && EmitPolicy.IsUserStruct(thisStructT)
+            => _ctx.Methods.CurrentMethod?.ContainingType is INamedTypeSymbol thisStructT && TypeClassifier.IsUserStruct(thisStructT)
                    ? AggregateAbi.DeepClone(_builder, LoadField(recvPid, AggregateAbi.ArrayType),
                        thisStructT, _ctx.Aggregates.GetLayout)
                    : LoadField(recvPid, AggregateAbi.ArrayType),
@@ -123,7 +123,7 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
             // (StgSampler<int>.Table and StgSampler<string>.Table are C#-distinct) — which needs its own
             // materialization design (mirroring feature S but keyed by constructed struct type), not a
             // one-line patch. Reject loudly instead of emitting an assembler-crashing extern.
-            if (fieldRef.Field.ContainingType is INamedTypeSymbol structFieldCt && EmitPolicy.IsUserStruct(structFieldCt))
+            if (fieldRef.Field.ContainingType is INamedTypeSymbol structFieldCt && TypeClassifier.IsUserStruct(structFieldCt))
                 throw new NotSupportedException(
                     $"Static field '{fieldRef.Field.ContainingType.Name}.{fieldRef.Field.Name}' on a "
                     + "user-defined struct is not supported: static storage for a struct type (per closed "
@@ -140,7 +140,7 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
                 if (fieldRef.Field.IsReadOnly)
                 {
                     if (IsDeclaredInOwnHierarchy(_classSymbol, fieldRef.Field.ContainingType))
-                        return fieldRef.Field.Type is INamedTypeSymbol staticFieldAgg && EmitPolicy.IsAggregateType(staticFieldAgg)
+                        return fieldRef.Field.Type is INamedTypeSymbol staticFieldAgg && TypeClassifier.IsAggregateValue(staticFieldAgg)
                             ? AggregateAbi.DeepClone(_builder, LoadField(fieldRef.Field.Name, AggregateAbi.ArrayType),
                                 staticFieldAgg, _ctx.Aggregates.GetLayout)
                             : LoadField(fieldRef.Field.Name, GetUdonType(fieldRef.Field.Type));
@@ -170,17 +170,17 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
                 fldType);
         }
         // Delegate field read as a value: a plain SystemObjectArray load of the bundle reference (the
-        // single-var ABI, design §2.1/§2.3 — the this.field arm below handles it; IsAggregateType's
+        // single-var ABI, design §2.1/§2.3 — the this.field arm below handles it; IsAggregateValue's
         // delegate armor guarantees no clone).
 
         // Aggregate / v1-class field access: result.Item1, point.x, node.Val → object[] slot indexing.
         // Triggered by the containing type being object[]-emulated, regardless of instance kind (the clone at
-        // the element read below stays IsAggregateType so a class-typed element is returned by reference).
+        // the element read below stays IsAggregateValue so a class-typed element is returned by reference).
         // ResolveType: a receiver typed as a type parameter (T c = new T(); c.v) resolves to the
         // concrete aggregate through the monomorphization map (new T() member-access, 2026-07-11).
         if (fieldRef.Instance != null
             && ResolveType(fieldRef.Instance.Type) is INamedTypeSymbol aggContaining
-            && EmitPolicy.IsObjectArrayEmulated(aggContaining))
+            && TypeClassifier.IsObjectArrayEmulated(aggContaining))
         {
             var layout = _ctx.Aggregates.GetLayout(aggContaining);
             if (layout.TryGetIndex(fieldRef.Field, out var elemIndex))
@@ -188,7 +188,7 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
                 var arrExpr = LoadInstanceRaw(fieldRef.Instance);
                 var getVal = AggregateAbi.ReadSlot(_builder, arrExpr, elemIndex, "SystemObject");
                 // A struct-typed element read AS A VALUE is copied (value semantics); scalar elements are immutable boxes.
-                return fieldRef.Field.Type is INamedTypeSymbol elemAgg && EmitPolicy.IsAggregateType(elemAgg)
+                return fieldRef.Field.Type is INamedTypeSymbol elemAgg && TypeClassifier.IsAggregateValue(elemAgg)
                     ? AggregateAbi.DeepClone(_builder, getVal, elemAgg, _ctx.Aggregates.GetLayout) : getVal;
             }
             throw new System.NotSupportedException(
@@ -197,7 +197,7 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
 
         // this.field → direct variable name → LoadField (struct-typed field copied on value read)
         if (fieldRef.Instance is IInstanceReferenceOperation)
-            return fieldRef.Field.Type is INamedTypeSymbol thisFieldAgg && EmitPolicy.IsAggregateType(thisFieldAgg)
+            return fieldRef.Field.Type is INamedTypeSymbol thisFieldAgg && TypeClassifier.IsAggregateValue(thisFieldAgg)
                 ? AggregateAbi.DeepClone(_builder, LoadField(fieldRef.Field.Name, AggregateAbi.ArrayType),
                     thisFieldAgg, _ctx.Aggregates.GetLayout)
                 : LoadField(fieldRef.Field.Name, GetUdonType(fieldRef.Field.Type));
@@ -287,7 +287,7 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
         if (t == null) return false;
         if (t is INamedTypeSymbol n && n.DelegateInvokeMethod != null) return true;
         if (t is IArrayTypeSymbol a) return StructurallyContainsDelegate(a.ElementType, typeParamMap, visited);
-        if (t is INamedTypeSymbol agg && EmitPolicy.IsAggregateType(agg) && visited.Add(agg))
+        if (t is INamedTypeSymbol agg && TypeClassifier.IsAggregateValue(agg) && visited.Add(agg))
             foreach (var m in agg.GetMembers())
                 if (m is IFieldSymbol f && !f.IsStatic
                     && StructurallyContainsDelegate(f.Type, typeParamMap, visited))
@@ -341,7 +341,7 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
         // operator (C# forbids user conversions to object/a base type, so the destination is always a
         // concrete non-erasing type) — it is a real value conversion, not a laundering erasure.
         bool userClassConversion = conv.OperatorMethod is { MethodKind: MethodKind.Conversion }
-            && conv.OperatorMethod.ContainingType is INamedTypeSymbol ucct && EmitPolicy.IsObjectArrayEmulated(ucct);
+            && conv.OperatorMethod.ContainingType is INamedTypeSymbol ucct && TypeClassifier.IsObjectArrayEmulated(ucct);
         if (!userClassConversion
             && ResolveType(conv.Operand.Type) is { } b82Src && ResolveType(conv.Type) is { } b82Dst)
             RejectProgramLocalErasure(conv, b82Src, b82Dst);
@@ -632,7 +632,7 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
         {
             // A user STRUCT conversion operator is an emitted method, not an extern: route to it (its containing
             // type is SystemObjectArray-backed, so ResolveConversionExtern would build a non-existent extern).
-            if (conv.OperatorMethod.ContainingType is INamedTypeSymbol convOpCt && EmitPolicy.IsObjectArrayEmulated(convOpCt))
+            if (conv.OperatorMethod.ContainingType is INamedTypeSymbol convOpCt && TypeClassifier.IsObjectArrayEmulated(convOpCt))
                 return EmitCallToMethod(ResolveStructMember(conv.OperatorMethod), new List<CLeaf> { srcVal });
             ClassAbi.RejectUserOperator(conv.OperatorMethod);
 
@@ -689,7 +689,7 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
         // faults far from the cast). An upcast/identity conversion (destination assignable from the
         // resolved source) is an object[]-shared no-op and stays passthrough; a statically-null operand
         // casts to null with no check (C#: casting null never throws).
-        if (ResolveType(conv.Type) is INamedTypeSymbol castDst && EmitPolicy.IsUserClassType(castDst)
+        if (ResolveType(conv.Type) is INamedTypeSymbol castDst && TypeClassifier.IsUserClass(castDst)
             && !(ResolveType(conv.Operand.Type) is INamedTypeSymbol castSrc && VirtualDispatch.IsAssignable(castSrc, castDst)))
         {
             var castOperand = conv.Operand;
@@ -810,7 +810,7 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
         // access on the default does not NRE. ResolveType is required for `default(T)` inside a generic method
         // where T is a struct type arg: defaultVal.Type is then the open type parameter, which a directly-named
         // INamedTypeSymbol check would miss — leaving the default as null and crashing on the first field read.
-        if (ResolveType(defaultVal.Type) is INamedTypeSymbol aggDef && EmitPolicy.IsAggregateType(aggDef))
+        if (ResolveType(defaultVal.Type) is INamedTypeSymbol aggDef && TypeClassifier.IsAggregateValue(aggDef))
             return AggregateAbi.MintDefault(_builder, _ctx.Aggregates.GetLayout(aggDef),
                 _ctx.Aggregates.GetLayout, GetUdonType);
 

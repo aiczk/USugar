@@ -386,7 +386,7 @@ public class UasmEmitter
             // zeroed struct. In the object[] emulation that requires a fresh default array; without it the heap
             // var stays null and `f.x = …` faults (NRE on __Set__). Reference-type/array fields stay null (correct).
             if (syntaxRef?.GetSyntax() is not VariableDeclaratorSyntax { Initializer: not null }
-                && member.Type is INamedTypeSymbol aggFieldType && EmitPolicy.IsAggregateType(aggFieldType))
+                && member.Type is INamedTypeSymbol aggFieldType && TypeClassifier.IsAggregateValue(aggFieldType))
             {
                 _ctx.Aggregates.FieldDefaults.Add((member.Name, aggFieldType));
             }
@@ -723,7 +723,7 @@ public class UasmEmitter
         }
         _ctx.Storage.DeclareField(member.Name, udonType, FieldFlags.None, constValue);
 
-        if (initOp == null && member.Type is INamedTypeSymbol aggFieldType && EmitPolicy.IsAggregateType(aggFieldType))
+        if (initOp == null && member.Type is INamedTypeSymbol aggFieldType && TypeClassifier.IsAggregateValue(aggFieldType))
             _ctx.Aggregates.FieldDefaults.Add((member.Name, aggFieldType));
 
         return true;
@@ -2170,7 +2170,7 @@ public class UasmEmitter
         // CA-M1: a v1 class instance member uses the SAME param0 object[] receiver as a user struct member
         // (reference semantics — no clone; the bundle flows through by reference).
         _ctx.Methods.CurrentStructReceiverParamId =
-            (method.ContainingType is INamedTypeSymbol structCt && EmitPolicy.IsObjectArrayEmulated(structCt) && !method.IsStatic
+            (method.ContainingType is INamedTypeSymbol structCt && TypeClassifier.IsObjectArrayEmulated(structCt) && !method.IsStatic
                 && method.MethodKind is not (MethodKind.LambdaMethod or MethodKind.LocalFunction))
                 ? func.ParamFieldNames[0] : null;
 
@@ -2365,7 +2365,7 @@ public class UasmEmitter
                 // CA-v2 M1: a v1 CLASS ctor orchestrates its own chain (charter #6, field inits + base
                 // call, in InvocationHandler which owns EmitCallToMethod/ResolveStructMember). A STRUCT
                 // ctor has no base — just its body.
-                if (method.ContainingType is INamedTypeSymbol cctClass && EmitPolicy.IsUserClassType(cctClass)
+                if (method.ContainingType is INamedTypeSymbol cctClass && TypeClassifier.IsUserClass(cctClass)
                     && _ctx.Methods.CurrentStructReceiverParamId != null)
                     new InvocationHandler(_ctx).EmitClassCtorPrologue(method, ctorBodyOp,
                         _ctx.Methods.CurrentStructReceiverParamId);

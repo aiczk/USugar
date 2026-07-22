@@ -10,7 +10,7 @@ namespace USugar.Tests;
 /// (so a namespace literally named "SystemFoo" or "VRChat" was mis-classified SDK), while EmitPolicy
 /// chain-walked EXACT segment names over {System, UnityEngine, VRC, Cinemachine, TMPro, Unity,
 /// Microsoft} — so enum classification (ExternResolver.IsUserEnum / GetUdonTypeName's enum fold) and
-/// struct classification (EmitPolicy.IsUserStruct) disagreed at the SDK boundary. Owner ruling:
+/// struct classification (TypeClassifier.IsUserStruct) disagreed at the SDK boundary. Owner ruling:
 /// ONE predicate, chain-walk exact-name semantics over the union list, homed in ExternResolver;
 /// EmitPolicy delegates. These tests pin the unified boundary through the public consumer surfaces.
 /// </summary>
@@ -55,7 +55,7 @@ public class NsBoundaryCarrier
 }";
 
     // ns label, enum field, struct field, SDK verdict. The enum verdict is pinned through
-    // ExternResolver.IsUserEnum, the struct verdict through EmitPolicy.IsUserStruct — the two
+    // ExternResolver.IsUserEnum, the struct verdict through TypeClassifier.IsUserStruct — the two
     // consumers that formerly sat on the two diverging copies. isSdk == !isUser on both.
     static readonly (string Ns, string EnumField, string StructField, bool Sdk)[] BoundaryBattery =
     {
@@ -95,7 +95,7 @@ public class NsBoundaryCarrier
         foreach (var (ns, enumField, structField, sdk) in BoundaryBattery)
         {
             var isUserEnum = ExternResolver.IsUserEnum(types[enumField]);
-            var isUserStruct = EmitPolicy.IsUserStruct((INamedTypeSymbol)types[structField]);
+            var isUserStruct = TypeClassifier.IsUserStruct((INamedTypeSymbol)types[structField]);
             Assert.True(isUserEnum == !sdk,
                 $"enum boundary drift: namespace '{ns}' pinned {(sdk ? "SDK" : "USER")} but IsUserEnum == {isUserEnum}");
             Assert.True(isUserStruct == !sdk,
@@ -111,7 +111,7 @@ public class NsBoundaryCarrier
         var types = BuildBoundaryTypes();
         Assert.False(ExternResolver.IsUserEnum(types["fKeyCode"]));
         Assert.Equal("UnityEngineKeyCode", ExternResolver.GetUdonTypeName(types["fKeyCode"]));
-        Assert.False(EmitPolicy.IsUserStruct((INamedTypeSymbol)types["fVector3"]));
+        Assert.False(TypeClassifier.IsUserStruct((INamedTypeSymbol)types["fVector3"]));
         Assert.Equal("UnityEngineVector3", ExternResolver.GetUdonTypeName(types["fVector3"]));
     }
 

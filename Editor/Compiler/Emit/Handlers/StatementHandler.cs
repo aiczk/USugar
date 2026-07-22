@@ -443,7 +443,7 @@ public class StatementHandler : HandlerBase, IOperationHandler
     /// Dispose method (collected in CollectStructMethodsInOperation). Real Udon disposables keep the extern.</summary>
     void EmitDispose(CLeaf val, ITypeSymbol type)
     {
-        if (type is INamedTypeSymbol nt && EmitPolicy.IsUserStruct(nt)
+        if (type is INamedTypeSymbol nt && TypeClassifier.IsUserStruct(nt)
             && EmitPolicy.FindStructDisposeMethod(nt) is { } dispose)
         {
             EmitCallToMethod(ResolveStructMember(dispose), new List<CLeaf> { val });
@@ -481,7 +481,7 @@ public class StatementHandler : HandlerBase, IOperationHandler
                 {
                     EnvEmit.Write(_builder, _ctx, local, VisitExpression(envInit.Value));
                 }
-                else if (local.Type is INamedTypeSymbol envAggT && EmitPolicy.IsAggregateType(envAggT))
+                else if (local.Type is INamedTypeSymbol envAggT && TypeClassifier.IsAggregateValue(envAggT))
                 {
                     var envAggLayout = _ctx.Aggregates.GetLayout(envAggT);
                     EnvEmit.Write(_builder, _ctx, local,
@@ -491,7 +491,7 @@ public class StatementHandler : HandlerBase, IOperationHandler
             }
 
             // Aggregate-typed local (tuple / user-defined struct) → object[] emulation
-            if (local.Type is INamedTypeSymbol namedType && EmitPolicy.IsAggregateType(namedType))
+            if (local.Type is INamedTypeSymbol namedType && TypeClassifier.IsAggregateValue(namedType))
             {
                 VisitAggregateLocalDeclaration(local, namedType, declarator.Initializer);
                 continue;
@@ -559,7 +559,7 @@ public class StatementHandler : HandlerBase, IOperationHandler
         // dropping the member writes; the generic arm's VisitObjectCreation applies it after the ctor.
         else if (value is IObjectCreationOperation ocCtor && ocCtor.Arguments.Length > 0
                  && ocCtor.Initializer == null
-                 && EmitPolicy.IsUserStruct(aggregateType) && ocCtor.Constructor != null
+                 && TypeClassifier.IsUserStruct(aggregateType) && ocCtor.Constructor != null
                  && _methodFunctions.ContainsKey(ocCtor.Constructor)
                  && CtorArgsArePositionalByValue(ocCtor))
         {

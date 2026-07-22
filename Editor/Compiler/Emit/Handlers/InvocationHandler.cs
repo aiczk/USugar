@@ -140,7 +140,7 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
             // nullable's storage — deep-clone it out (value semantics). default(T) for an aggregate is a fresh
             // zero-initialized struct, NOT null, so mint through AggregateAbi rather than using scalar default.
             var aggType = ResolveType(govUnderlying) as INamedTypeSymbol;
-            bool aggResult = aggType != null && EmitPolicy.IsAggregateType(aggType);
+            bool aggResult = aggType != null && TypeClassifier.IsAggregateValue(aggType);
             var nv = VisitExpression(op.Instance);
             var fallback = op.Arguments.Length > 0
                 ? VisitExpression(op.Arguments[0].Value)
@@ -167,7 +167,7 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
             // An aggregate underlying boxes as its object[] bundle: the SystemObject extern would print/
             // hash/compare the ARRAY REFERENCE, not the value (C#: the struct's own semantics) — loud
             // reject, mirroring the bare user-struct receiver's object-method polarity.
-            if (ResolveType(nulUnder) is INamedTypeSymbol nulAgg && EmitPolicy.IsAggregateType(nulAgg))
+            if (ResolveType(nulUnder) is INamedTypeSymbol nulAgg && TypeClassifier.IsAggregateValue(nulAgg))
                 throw new System.NotSupportedException(
                     $"'{target.Name}' on a nullable of struct/tuple type "
                     + $"'{nulUnder.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}' is not supported: "
@@ -260,7 +260,7 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
                 { Syntax: Microsoft.CodeAnalysis.CSharp.Syntax.BaseExpressionSyntax };
             var tsFamily = tsBase && op.Instance.Type?.SpecialType == SpecialType.System_Object
                 ? _currentMethod?.ContainingType : op.Instance.Type;
-            if (ResolveType(tsFamily) is INamedTypeSymbol tsRecvTy && EmitPolicy.IsUserClassType(tsRecvTy)
+            if (ResolveType(tsFamily) is INamedTypeSymbol tsRecvTy && TypeClassifier.IsUserClass(tsRecvTy)
                 && (!tsBase || target.ContainingType.SpecialType == SpecialType.System_Object))
                 return EmitClassToStringDispatch(tsRecvTy, LoadInstanceRaw(op.Instance),
                     nullIsError: true, useOverrides: !tsBase);
@@ -275,7 +275,7 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
         // (CollectStructMethodsInOperation deliberately skips the open form) — register it on demand,
         // like a generic method's own on-demand arm below (wave-14 residual gap).
         if (!target.IsStatic && target.MethodKind == MethodKind.Ordinary
-            && target.ContainingType is INamedTypeSymbol structRecv && EmitPolicy.IsObjectArrayEmulated(structRecv))
+            && target.ContainingType is INamedTypeSymbol structRecv && TypeClassifier.IsObjectArrayEmulated(structRecv))
         {
             // CA-v2b-2: a runtime-polymorphic call on a user-class receiver lowers to an inline typeobj-
             // ReferenceEquals chain of direct calls (a sealed/singleton dispatch set devirtualizes to one
@@ -301,7 +301,7 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
             }
 
             // CA-M1: a v1 class instance method rides the SAME param0-receiver path. The receiver bundle
-            // flows by reference (EmitStructInstanceCall's defensive copy stays gated on IsAggregateType,
+            // flows by reference (EmitStructInstanceCall's defensive copy stays gated on IsAggregateValue,
             // which is false for a class — so mutations through the receiver are visible to every alias).
             var structTarget = ResolveStructMember(target);
             // B56: a struct-hosted generic method must record its instantiation so a nested closure/LF
@@ -593,7 +593,7 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
         // readonly rs.Bump();rs.Bump() ref=0 vs the live-storage 20). Chains through array
         // elements keep live storage (the helper stops there, reference semantics, CLR-equal).
         if (!target.IsReadOnly && ReceiverNeedsDefensiveCopy(op.Instance)
-            && op.Instance?.Type is INamedTypeSymbol recvAgg && EmitPolicy.IsAggregateType(recvAgg))
+            && op.Instance?.Type is INamedTypeSymbol recvAgg && TypeClassifier.IsAggregateValue(recvAgg))
             recv = AggregateAbi.DeepClone(_builder, recv, recvAgg, _ctx.Aggregates.GetLayout);
         var args = new List<CLeaf> { recv };
         var structPrepared = MarshalArguments(op, args);

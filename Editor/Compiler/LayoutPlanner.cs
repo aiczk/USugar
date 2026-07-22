@@ -784,7 +784,7 @@ public class LayoutPlanner
         var retKey = NameAllocator.RetKey(exportName);
         var id = NameAllocator.FormatId(retKey, alloc.Allocate(retKey));
 
-        if (EmitPolicy.IsAggregateType(method.ReturnType))
+        if (TypeClassifier.IsAggregateValue(method.ReturnType))
             returns.Add(new ReturnSlot(id, "SystemObjectArray"));
         else
             returns.Add(new ReturnSlot(id, ExternResolver.GetUdonTypeName(method.ReturnType)));

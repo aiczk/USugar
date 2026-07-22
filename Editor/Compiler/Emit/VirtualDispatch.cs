@@ -42,7 +42,7 @@ public sealed class VirtualDispatch
         => IsVirtualCall(target)
            && !(instance is IInstanceReferenceOperation ir
                 && ir.Syntax is Microsoft.CodeAnalysis.CSharp.Syntax.BaseExpressionSyntax)
-           && receiverType != null && EmitPolicy.IsUserClassType(receiverType);
+           && receiverType != null && TypeClassifier.IsUserClass(receiverType);
 
     /// <summary>generic-virtual: virtual-shaped but the method carries its own type parameters — the
     /// backlog case the layout reject keeps rejecting.</summary>

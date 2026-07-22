@@ -152,7 +152,7 @@ public static class EmitPolicy
         t => t is INamedTypeSymbol n && n.DelegateInvokeMethod != null;
     static readonly Func<ITypeSymbol, bool> OpaqueObjectLeaf =
         t => t.SpecialType == SpecialType.System_Object;
-    static readonly Func<ITypeSymbol, bool> UserClassLeaf = IsUserClassType;
+    static readonly Func<ITypeSymbol, bool> UserClassLeaf = TypeClassifier.IsUserClassLeaf;
 
     static HashSet<ITypeSymbol> NewVisitedSet() => new HashSet<ITypeSymbol>(SymbolEqualityComparer.Default);
 
@@ -181,7 +181,7 @@ public static class EmitPolicy
                 if (ContainsMatchingType(p.Type, isLeaf, typeParamMap, visited)) return true;
             if (ContainsMatchingType(inv.ReturnType, isLeaf, typeParamMap, visited)) return true;
         }
-        if (IsAggregateType(n))
+        if (TypeClassifier.IsAggregateValueLeaf(n))
             foreach (var m in n.GetMembers())
                 if (m is IFieldSymbol { IsStatic: false } f
                     && ContainsMatchingType(f.Type, isLeaf, typeParamMap, visited))
@@ -190,64 +190,6 @@ public static class EmitPolicy
             if (ContainsMatchingType(ta, isLeaf, typeParamMap, visited)) return true;
         return false;
     }
-
-    // Aggregate type support — tuples and user-defined structs share the object[] emulation.
-    public static bool IsAggregateType(ITypeSymbol type)
-    {
-        if (type is not INamedTypeSymbol named) return false;
-        // Armor (design §1.2): a delegate value is an object[] BUNDLE copied by reference — it must never
-        // ride the aggregate clone-on-read machinery (a clone would break reference identity and
-        // (target, method) equality). Single choke point for every clone path.
-        if (named.TypeKind == TypeKind.Delegate) return false;
-        // Anonymous types (`new { X = 1 }`) are immutable value-shaped records — treated as an
-        // object[] aggregate (properties -> slots), same as a tuple (2026-07-11).
-        return named.IsTupleType || named.IsAnonymousType || IsUserStruct(named);
-    }
-
-    /// <summary>Source-defined value struct (object[]-emulated). Excludes SDK/native structs
-    /// (Vector3, Color, …) — which have native Udon extern types — by namespace, since in the test
-    /// environment SDK types are source stubs (so syntax-refs alone can't tell them apart).</summary>
-    public static bool IsUserStruct(INamedTypeSymbol type)
-    {
-        if (type.TypeKind != TypeKind.Struct || type.SpecialType != SpecialType.None) return false;
-        if (type.DeclaringSyntaxReferences.Length == 0) return false; // from a referenced assembly = native
-        return !ExternResolver.IsSdkNamespace(type.ContainingNamespace);
-    }
-
-    /// <summary>Class ABI v1 (CA-M1): a plain user class the compiler represents as a reference-semantics
-    /// object[1+F] bundle (slot 0 reserved). The single semantic entry for class support — a supported v1
-    /// class has no explicit base (System.Object only) and is not a record; those excluded shapes stay
-    /// B79-rejected. Distinct from IsAggregateType (which stays FALSE for a class) so the ~30 clone-on-read
-    /// sites keyed on IsAggregateType automatically give a class REFERENCE semantics.</summary>
-    public static bool IsUserClassType(ITypeSymbol type)
-    {
-        if (type is not INamedTypeSymbol n) return false;
-        if (n.IsAnonymousType) return false; // anon types are aggregates (IsAggregateType), not v1 classes
-        if (!ExternResolver.IsPlainUserClass(n)) return false;
-        if (n.IsRecord) return false;
-        // CA-v2 M1: a user-class base is allowed (inheritance). Walk to the root: every intermediate
-        // base must itself be a plain user class ending at System.Object (a native/SDK base is not a
-        // v1 bundle). Recursion terminates at Object (BaseType null-or-Object).
-        if (n.BaseType != null && n.BaseType.SpecialType != SpecialType.System_Object)
-        {
-            var b = n.BaseType;
-            if (!ExternResolver.IsPlainUserClass(b) || b.IsRecord
-                || ExternResolver.ClassHasRegisteredExterns(b)) return false;
-            // Recurse into the base (its own base must also be a valid user-class chain).
-            if (!IsUserClassType(b)) return false;
-        }
-        // A foreign type modelled as a source stub (registered externs — DisposableResource, and real SDK
-        // types) is NOT a v1 user class: it keeps its real Udon extern type, not the object[] bundle ABI.
-        if (ExternResolver.ClassHasRegisteredExterns(n)) return false;
-        return true;
-    }
-
-    /// <summary>A named type whose runtime value is an object[] the VM tags SystemObjectArray — a user
-    /// struct/tuple OR a v1 user class. The "is this object[]-emulated?" test for Category-A sites (layout,
-    /// mint, field-slot resolution, size); clone-on-read (Category-B) sites keep IsAggregateType alone so a
-    /// class stays reference-semantics.</summary>
-    public static bool IsObjectArrayEmulated(ITypeSymbol type)
-        => IsAggregateType(type) || IsUserClassType(type);
 
     /// <summary>Evaluates a field's initializer syntax to a compile-time constant (primitives/enums/
     /// string). A `static readonly` field has no ConstantValue of its own (only `const` does), so this
