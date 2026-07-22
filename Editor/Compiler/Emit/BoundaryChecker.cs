@@ -356,23 +356,28 @@ public sealed class BoundaryChecker
     }
 
     public void RequireCanWriteCrossBehaviourField(IFieldSymbol field)
-        => RequireNoProgramLocalPayload(BoundarySite.CrossBehaviourFieldWrite, field.Type, field.Name);
+        => RequireTransport(BoundarySite.CrossBehaviourFieldWrite, field.Type, field.Name,
+            TransportCapabilities.TypedProgramChannel);
 
     public void RequireCanReadCrossBehaviourField(IFieldSymbol field)
-        => RequireNoProgramLocalPayload(BoundarySite.CrossBehaviourFieldRead, field.Type, field.Name);
+        => RequireTransport(BoundarySite.CrossBehaviourFieldRead, field.Type, field.Name,
+            TransportCapabilities.TypedProgramChannel);
 
     public void RequireCanPassCrossBehaviourArgument(ITypeSymbol argType)
-        => RequireNoProgramLocalPayload(BoundarySite.CrossBehaviourArgument, argType, null);
+        => RequireTransport(BoundarySite.CrossBehaviourArgument, argType, null,
+            TransportCapabilities.TypedProgramChannel);
 
     /// <summary>CW22: a cross-behaviour property SET/GET is the same SetProgramVariable /
     /// GetProgramVariable transport as the field twin one syntax over — same payload polarity.
     /// (The delegate axis stays with IsCrossProgramDelegatePropertyTarget: a clean-signature
     /// delegate type carries no payload and passes here untouched.)</summary>
     public void RequireCanWriteCrossBehaviourProperty(IPropertySymbol prop)
-        => RequireNoProgramLocalPayload(BoundarySite.CrossBehaviourPropertyWrite, prop.Type, prop.Name);
+        => RequireTransport(BoundarySite.CrossBehaviourPropertyWrite, prop.Type, prop.Name,
+            TransportCapabilities.TypedProgramChannel);
 
     public void RequireCanReadCrossBehaviourProperty(IPropertySymbol prop)
-        => RequireNoProgramLocalPayload(BoundarySite.CrossBehaviourPropertyRead, prop.Type, prop.Name);
+        => RequireTransport(BoundarySite.CrossBehaviourPropertyRead, prop.Type, prop.Name,
+            TransportCapabilities.TypedProgramChannel);
 
     /// <summary>CW22: a cross-program accessor dispatch (variable-receiver behaviour indexer,
     /// interface property/indexer accessor) SPVs every parameter and GPVs the return — the same
@@ -386,42 +391,41 @@ public sealed class BoundaryChecker
         {
             var isSetterValue = accessor.MethodKind == MethodKind.PropertySet
                 && i == accessor.Parameters.Length - 1;
-            RequireNoProgramLocalPayload(
+            RequireTransport(
                 isSetterValue ? BoundarySite.CrossBehaviourPropertyWrite : BoundarySite.CrossBehaviourArgument,
-                accessor.Parameters[i].Type, propName);
+                accessor.Parameters[i].Type, propName, TransportCapabilities.TypedProgramChannel);
         }
         if (!accessor.ReturnsVoid)
-            RequireNoProgramLocalPayload(BoundarySite.CrossBehaviourPropertyRead, accessor.ReturnType, propName);
+            RequireTransport(BoundarySite.CrossBehaviourPropertyRead, accessor.ReturnType, propName,
+                TransportCapabilities.TypedProgramChannel);
     }
 
-    void RequireNoProgramLocalPayload(BoundarySite site, ITypeSymbol type, string memberName)
+    void RequireTransport(BoundarySite site, ITypeSymbol type, string memberName,
+        TransportCapabilities capability)
     {
-        if (TypeClassifier.ShapeOf(type, TypeCtx).CanCrossProgram) return;
-        throw new NotSupportedException(ProgramLocalPayloadMessage(site, memberName));
+        if (TypeClassifier.ShapeOf(type, TypeCtx).Supports(capability)) return;
+        throw new NotSupportedException(UnsupportedTransportMessage(site, memberName));
     }
 
-    static string ProgramLocalPayloadMessage(BoundarySite site, string memberName)
+    static string UnsupportedTransportMessage(BoundarySite site, string memberName)
     {
         switch (site)
         {
             case BoundarySite.CrossBehaviourFieldWrite:
-                return $"A v1 user class cannot be written to another behaviour's field '{memberName}': a class "
-                       + "value is a program-local object[] bundle and cannot cross a program boundary.";
+                return $"Field '{memberName}' cannot be written across behaviours because its type contains "
+                       + "a value representation without a portable typed-program ABI.";
             case BoundarySite.CrossBehaviourFieldRead:
-                return $"Reading another behaviour's field '{memberName}' that carries a v1 user class "
-                       + "is not supported: a class value is a program-local object[] bundle and cannot cross a "
-                       + "program boundary.";
+                return $"Field '{memberName}' cannot be read across behaviours because its type contains "
+                       + "a value representation without a portable typed-program ABI.";
             case BoundarySite.CrossBehaviourArgument:
-                return "A v1 user class cannot be passed to a cross-behaviour (SendCustomEvent) call: a class "
-                       + "value is a program-local object[] bundle and cannot cross a program boundary. Pass "
-                       + "plain data instead and rebuild the object on the receiving side.";
+                return "The argument cannot be passed to a cross-behaviour (SendCustomEvent) call because "
+                       + "its type contains a value representation without a portable typed-program ABI.";
             case BoundarySite.CrossBehaviourPropertyWrite:
-                return $"A v1 user class cannot be written to another behaviour's property '{memberName}': a class "
-                       + "value is a program-local object[] bundle and cannot cross a program boundary.";
+                return $"Property '{memberName}' cannot be written across behaviours because its type contains "
+                       + "a value representation without a portable typed-program ABI.";
             case BoundarySite.CrossBehaviourPropertyRead:
-                return $"Reading another behaviour's property '{memberName}' that carries a v1 user class "
-                       + "is not supported: a class value is a program-local object[] bundle and cannot cross a "
-                       + "program boundary.";
+                return $"Property '{memberName}' cannot be read across behaviours because its type contains "
+                       + "a value representation without a portable typed-program ABI.";
             default:
                 throw new ArgumentOutOfRangeException(nameof(site), site, null);
         }

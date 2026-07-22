@@ -6,7 +6,6 @@ public enum ValueKind
     Unknown,
     Null,
     Native,
-    ProgramLocalPayload,
     Aggregate,
     ObjectArray,
     Delegate,
@@ -32,7 +31,6 @@ public readonly struct ValueInfo
     public readonly ITypeSymbol StaticType;
     public readonly ValueKind Kind;
     public readonly ValueProvenance Provenance;
-    public readonly bool ContainsProgramLocalPayload;
     public readonly bool DelegateCapturesProgramLocalPayload;
     // Receiver-capture design v2 SS2(a): the delegate captures a value whose TYPE can hide arbitrary
     // payload from the static walk (delegate / object / object[] / delegate-containing aggregate) -
@@ -45,7 +43,6 @@ public readonly struct ValueInfo
         ITypeSymbol staticType,
         ValueKind kind,
         ValueProvenance provenance,
-        bool containsProgramLocalPayload,
         bool delegateCapturesProgramLocalPayload,
         bool capturesUnclassifiablePayload,
         bool isDirectDelegateValue)
@@ -54,7 +51,6 @@ public readonly struct ValueInfo
         StaticType = staticType;
         Kind = kind;
         Provenance = provenance;
-        ContainsProgramLocalPayload = containsProgramLocalPayload;
         DelegateCapturesProgramLocalPayload = delegateCapturesProgramLocalPayload;
         CapturesUnclassifiablePayload = capturesUnclassifiablePayload;
         IsDirectDelegateValue = isDirectDelegateValue;
@@ -71,10 +67,10 @@ public static class ValueClassifier
         var unwrapped = UnwrapConversions(value);
         var staticType = unwrapped?.Type ?? value?.Type;
         if (unwrapped == null)
-            return Create(null, staticType, ValueKind.Unknown, ValueProvenance.Unknown, false, false, false, false);
+            return Create(null, staticType, ValueKind.Unknown, ValueProvenance.Unknown, false, false, false);
 
         if (unwrapped.ConstantValue.HasValue && unwrapped.ConstantValue.Value == null)
-            return Create(unwrapped, staticType, ValueKind.Null, ValueProvenance.LiteralNull, false, false, false, false);
+            return Create(unwrapped, staticType, ValueKind.Null, ValueProvenance.LiteralNull, false, false, false);
 
         if (TryGetDelegateTarget(unwrapped, out var target, out var provenance))
         {
@@ -84,7 +80,6 @@ public static class ValueClassifier
                 staticType,
                 ValueKind.Delegate,
                 provenance,
-                capturesPayload,
                 capturesPayload,
                 capturesUnclassifiable,
                 IsDirectDelegateProvenance(provenance));
@@ -98,20 +93,17 @@ public static class ValueClassifier
                 ProvenanceOf(unwrapped),
                 false,
                 false,
-                false,
                 false);
 
         if (staticType == null)
-            return Create(unwrapped, staticType, ValueKind.Unknown, ProvenanceOf(unwrapped), false, false, false, false);
+            return Create(unwrapped, staticType, ValueKind.Unknown, ProvenanceOf(unwrapped), false, false, false);
         var shape = TypeClassifier.ShapeOf(staticType, typeCtx);
-        if (shape.ContainsUserClassPayload)
-            return Create(unwrapped, staticType, ValueKind.ProgramLocalPayload, ProvenanceOf(unwrapped), true, false, false, false);
         if (shape.Bundle == RuntimeBundleKind.Aggregate)
-            return Create(unwrapped, staticType, ValueKind.Aggregate, ProvenanceOf(unwrapped), false, false, false, false);
+            return Create(unwrapped, staticType, ValueKind.Aggregate, ProvenanceOf(unwrapped), false, false, false);
         if (shape.IsBundle)
-            return Create(unwrapped, staticType, ValueKind.ObjectArray, ProvenanceOf(unwrapped), false, false, false, false);
+            return Create(unwrapped, staticType, ValueKind.ObjectArray, ProvenanceOf(unwrapped), false, false, false);
 
-        return Create(unwrapped, staticType, ValueKind.Native, ProvenanceOf(unwrapped), false, false, false, false);
+        return Create(unwrapped, staticType, ValueKind.Native, ProvenanceOf(unwrapped), false, false, false);
     }
 
     public static bool IsDirectProgramLocalSafeDelegate(ValueInfo info)
@@ -134,7 +126,6 @@ public static class ValueClassifier
         ITypeSymbol staticType,
         ValueKind kind,
         ValueProvenance provenance,
-        bool containsProgramLocalPayload,
         bool delegateCapturesProgramLocalPayload,
         bool capturesUnclassifiablePayload,
         bool isDirectDelegateValue)
@@ -143,7 +134,6 @@ public static class ValueClassifier
             staticType,
             kind,
             provenance,
-            containsProgramLocalPayload,
             delegateCapturesProgramLocalPayload,
             capturesUnclassifiablePayload,
             isDirectDelegateValue);

@@ -17,8 +17,18 @@ public readonly struct TypeClassifierContext
 public enum RuntimeStorageKind { Native, ObjectArrayBundle }
 public enum RuntimeBundleKind { None, Class, Aggregate, Delegate, MultiDimensionalArray }
 public enum RuntimeIdentityKind { Value, Reference }
-public enum RuntimeScopeKind { Portable, ProgramLocal }
 public enum RuntimeTypeIdentityKind { Exact, Tagged, Collapsed }
+
+[System.Flags]
+public enum TransportCapabilities
+{
+    None = 0,
+    TypedProgramChannel = 1 << 0,
+    ObjectErasure = 1 << 1,
+    ExternCall = 1 << 2,
+    Network = 1 << 3,
+    DelegateEnvironment = 1 << 4,
+}
 
 /// <summary>Compiler-side description of a value's Udon representation. Several source types erase to
 /// SystemObjectArray, so policy must consume these semantic facts rather than rediscovering meaning from
@@ -28,45 +38,51 @@ public readonly struct RuntimeShape
     public readonly RuntimeStorageKind Storage;
     public readonly RuntimeBundleKind Bundle;
     public readonly RuntimeIdentityKind Identity;
-    public readonly RuntimeScopeKind Scope;
     public readonly RuntimeTypeIdentityKind RuntimeTypeIdentity;
+    public readonly TransportCapabilities Transport;
     public readonly bool ContainsUserClassPayload;
 
     RuntimeShape(RuntimeStorageKind storage, RuntimeBundleKind bundle, RuntimeIdentityKind identity,
-        RuntimeScopeKind scope, RuntimeTypeIdentityKind runtimeTypeIdentity, bool containsUserClassPayload)
+        RuntimeTypeIdentityKind runtimeTypeIdentity, TransportCapabilities transport,
+        bool containsUserClassPayload)
     {
         Storage = storage;
         Bundle = bundle;
         Identity = identity;
-        Scope = scope;
         RuntimeTypeIdentity = runtimeTypeIdentity;
+        Transport = transport;
         ContainsUserClassPayload = containsUserClassPayload;
     }
 
     public bool IsBundle => Storage == RuntimeStorageKind.ObjectArrayBundle;
-    public bool CanCrossProgram => Scope == RuntimeScopeKind.Portable;
-    public bool CanEraseToObject => !ContainsUserClassPayload
-        && (!IsBundle || RuntimeTypeIdentity != RuntimeTypeIdentityKind.Collapsed);
+    public bool Supports(TransportCapabilities capability) => (Transport & capability) == capability;
 
     public static RuntimeShape Class(bool containsPayload = true)
         => new(RuntimeStorageKind.ObjectArrayBundle, RuntimeBundleKind.Class, RuntimeIdentityKind.Reference,
-            RuntimeScopeKind.Portable, RuntimeTypeIdentityKind.Tagged, containsPayload);
+            RuntimeTypeIdentityKind.Tagged,
+            TransportCapabilities.TypedProgramChannel | TransportCapabilities.DelegateEnvironment,
+            containsPayload);
     public static RuntimeShape Aggregate(bool containsPayload)
         => new(RuntimeStorageKind.ObjectArrayBundle, RuntimeBundleKind.Aggregate, RuntimeIdentityKind.Value,
-            RuntimeScopeKind.Portable,
-            RuntimeTypeIdentityKind.Collapsed, containsPayload);
+            RuntimeTypeIdentityKind.Collapsed, TransportCapabilities.TypedProgramChannel, containsPayload);
     public static RuntimeShape Delegate(bool containsPayload)
         => new(RuntimeStorageKind.ObjectArrayBundle, RuntimeBundleKind.Delegate, RuntimeIdentityKind.Reference,
-            containsPayload ? RuntimeScopeKind.ProgramLocal : RuntimeScopeKind.Portable,
-            RuntimeTypeIdentityKind.Collapsed, containsPayload);
+            RuntimeTypeIdentityKind.Collapsed,
+            containsPayload ? TransportCapabilities.None : TransportCapabilities.TypedProgramChannel,
+            containsPayload);
     public static RuntimeShape MultiDimensionalArray(bool containsPayload)
         => new(RuntimeStorageKind.ObjectArrayBundle, RuntimeBundleKind.MultiDimensionalArray,
-            RuntimeIdentityKind.Reference, RuntimeScopeKind.Portable,
-            RuntimeTypeIdentityKind.Collapsed, containsPayload);
+            RuntimeIdentityKind.Reference, RuntimeTypeIdentityKind.Collapsed,
+            TransportCapabilities.TypedProgramChannel, containsPayload);
     public static RuntimeShape Native(bool containsPayload)
         => new(RuntimeStorageKind.Native, RuntimeBundleKind.None, RuntimeIdentityKind.Value,
-            containsPayload ? RuntimeScopeKind.ProgramLocal : RuntimeScopeKind.Portable,
-            RuntimeTypeIdentityKind.Exact, containsPayload);
+            RuntimeTypeIdentityKind.Exact,
+            containsPayload
+                ? TransportCapabilities.None
+                : TransportCapabilities.TypedProgramChannel | TransportCapabilities.ObjectErasure
+                  | TransportCapabilities.ExternCall | TransportCapabilities.Network
+                  | TransportCapabilities.DelegateEnvironment,
+            containsPayload);
 }
 
 public static class TypeClassifier
