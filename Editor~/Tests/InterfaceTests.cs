@@ -196,17 +196,18 @@ public class DimPropNoImpl : UdonSharpBehaviour, IDimP {
     }
 
     [Fact]
-    public void UserClass_DefaultInterfaceMethod_RejectsReceiverAbi()
+    public void UserClass_DefaultInterfaceMethod_UsesReceiverAbi()
     {
-        var ex = Assert.Throws<System.NotSupportedException>(() => TestHelper.CompileToUasm(@"
+        var uasm = TestHelper.CompileToUasm(@"
 using UdonSharp;
 public interface IClassDim { int F() { return 5; } }
 public class ClassDimValue : IClassDim { }
 public class ClassDimHost : UdonSharpBehaviour {
     public int sum;
     void Start() { IClassDim value = new ClassDimValue(); sum = value.F(); }
-}", "ClassDimHost"));
-        Assert.Contains("object[] receiver", ex.Message);
+}", "ClassDimHost");
+        Assert.Contains("__dimrcv_", uasm);
+        Assert.Contains("__typeobj_ClassDimValue", uasm);
     }
 
     [Fact]

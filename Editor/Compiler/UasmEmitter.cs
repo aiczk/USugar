@@ -31,6 +31,7 @@ public partial class UasmEmitter
     List<(IMethodSymbol Method, MethodContext.ClosureSpec Spec)> _pendingGenericSpecs => _ctx.Generics.PendingSpecs;
     IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> _typeParamMap => _ctx.Generics.TypeParamMap;
     HashSet<IMethodSymbol> _inheritedMethods = new(SymbolEqualityComparer.Default);
+    HashSet<IMethodSymbol> _userClassDefaultMethods = new(SymbolEqualityComparer.Default);
     List<(string fieldName, IOperation initOp, ITypeSymbol fieldType)> _fieldInitOps => _ctx.Initializers.FieldInitOps;
     List<(string fieldName, IOperation initOp, ITypeSymbol fieldType)> _staticFieldInitOps => _ctx.Initializers.StaticFieldInitOps;
     Dictionary<string, string> _fieldChangeCallbacks => _ctx.Initializers.FieldChangeCallbacks;
@@ -992,7 +993,16 @@ public partial class UasmEmitter
                 && SymbolEqualityComparer.Default.Equals(
                     _classSymbol.FindImplementationForInterfaceMember(method), method));
 
-        return planned.Concat(ownGenerics).Concat(defaultInterfaceMethods)
+        _userClassDefaultMethods = new HashSet<IMethodSymbol>(
+            _planner.Census.Classes
+                .Where(type => TypeClassifier.IsUserClass(type))
+                .SelectMany(type => type.AllInterfaces.SelectMany(iface => _planner.GetLayout(iface).Methods.Keys)
+                    .Where(method => !method.IsAbstract
+                        && SymbolEqualityComparer.Default.Equals(
+                            type.FindImplementationForInterfaceMember(method), method))),
+            SymbolEqualityComparer.Default);
+
+        return planned.Concat(ownGenerics).Concat(defaultInterfaceMethods).Concat(_userClassDefaultMethods)
             .Distinct<IMethodSymbol>(SymbolEqualityComparer.Default).ToArray();
     }
 
@@ -1056,6 +1066,14 @@ public partial class UasmEmitter
             // Create CFunction with or without ExportName
             var func = _module.AddFunction(exportName, shouldExport ? exportName : null);
             _methodFunctions[method] = func;
+
+            if (_userClassDefaultMethods.Contains(method))
+            {
+                var receiverId = "__dimrcv_" + SanitizeId(ClassTypeObjectContext.SpecKey(method.ContainingType))
+                    + "_" + SanitizeId(method.MetadataName);
+                _ctx.Storage.TryDeclareVar(receiverId, StorageTypes.ObjectArray);
+                func.ParamFieldNames.Add(receiverId);
+            }
 
             // Declare params using LayoutPlanner IDs (delegate-typed params are SystemObjectArray bundle
             // references via the type-map delegate arm — design §2.1).
@@ -1389,7 +1407,8 @@ public partial class UasmEmitter
         // CA-M1: a v1 class instance member uses the SAME param0 object[] receiver as a user struct member
         // (reference semantics — no clone; the bundle flows through by reference).
         var receiverParamId =
-            (method.ContainingType is INamedTypeSymbol structCt && TypeClassifier.IsObjectArrayEmulated(structCt) && !method.IsStatic
+            (_userClassDefaultMethods.Contains(method)
+                || method.ContainingType is INamedTypeSymbol structCt && TypeClassifier.IsObjectArrayEmulated(structCt) && !method.IsStatic
                 && method.MethodKind is not (MethodKind.LambdaMethod or MethodKind.LocalFunction))
                 ? func.ParamFieldNames[0] : null;
 
