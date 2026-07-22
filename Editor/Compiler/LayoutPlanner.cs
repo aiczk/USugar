@@ -784,18 +784,14 @@ public class LayoutPlanner
             foreach (var (ifaceMethod, ifaceMl) in ifaceLayout.Methods)
             {
                 var impl = classType.FindImplementationForInterfaceMember(ifaceMethod) as IMethodSymbol;
-                // Round-7 follow-up [Q1]: a DEFAULT interface member with no class-level implementation
-                // resolves to the interface member ITSELF here. Skipping it silently (the pre-fix
-                // behavior) ships a call site that SendCustomEvents the canonical dispatch name with no
-                // entry point in any implementer's program — a silent no-op + stale 0/null return on a
-                // real client (unbounded self-reentry in the local harness). Neither LOUD nor CORRECT
-                // (design §8-3): reject at the implementing class.
+                // A default interface member is emitted as an internal function in each implementing
+                // program; the canonical interface bridge targets that function like a class method.
                 if (impl != null && impl.ContainingType?.TypeKind == TypeKind.Interface)
-                    throw new System.NotSupportedException(
-                        $"Interface member '{ifaceMethod.ContainingType.Name}.{ifaceMethod.Name}' has a "
-                        + $"default implementation and no implementation in '{classType.Name}'. A default "
-                        + "interface body has no dispatch entry point on the implementing program "
-                        + "(SendCustomEvent would silently no-op) — implement the member in the class.");
+                {
+                    if (ifaceMl.Returns.Count <= 1)
+                        bridges.Add((ifaceMethod, ifaceMl, impl, ifaceMl));
+                    continue;
+                }
                 if (impl == null) continue;
                 // Wave-9 round-2 [W5]: when the implicit implementation is a base-class VIRTUAL with an
                 // override anywhere in the chain, FindImplementationForInterfaceMember returns the chain

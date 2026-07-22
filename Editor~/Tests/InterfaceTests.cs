@@ -166,34 +166,47 @@ public class ScoreCaller : UdonSharpBehaviour {
     }
 
     // ── Round-7 follow-up [Q1]: default interface members (DIM) ──
-    // A DIM with no class-level implementation resolves FindImplementationForInterfaceMember to the
-    // interface member itself; the bridge was silently skipped while the call site dispatched the
-    // canonical name — a never-exported event (silent no-op + stale return on device, VM-proven).
+    // A DIM with no class-level implementation is emitted inside the implementing program and reached
+    // through the same canonical interface bridge as an explicit class implementation.
 
     [Fact]
-    public void Interface_DefaultMethod_NoClassImpl_Throws()
+    public void Interface_DefaultMethod_NoClassImpl_Compiles()
     {
-        var ex = Assert.ThrowsAny<System.Exception>(() => TestHelper.CompileToUasm(@"
+        var uasm = TestHelper.CompileToUasm(@"
 using UdonSharp;
 public interface IDimM { int F() { return 3; } }
 public class DimNoImpl : UdonSharpBehaviour, IDimM {
     public int sum;
     void Start() { IDimM i = this; sum = i.F(); }
-}", "DimNoImpl"));
-        Assert.Contains("default implementation", ex.Message);
+}", "DimNoImpl");
+        Assert.Contains(".export __iface_IDimM_F", uasm);
     }
 
     [Fact]
-    public void Interface_DefaultProperty_NoClassImpl_Throws()
+    public void Interface_DefaultProperty_NoClassImpl_Compiles()
     {
-        var ex = Assert.ThrowsAny<System.Exception>(() => TestHelper.CompileToUasm(@"
+        var uasm = TestHelper.CompileToUasm(@"
 using UdonSharp;
 public interface IDimP { int Q => 4; }
 public class DimPropNoImpl : UdonSharpBehaviour, IDimP {
     public int sum;
     void Start() { IDimP i = this; sum = i.Q; }
-}", "DimPropNoImpl"));
-        Assert.Contains("default implementation", ex.Message);
+}", "DimPropNoImpl");
+        Assert.Contains(".export __iface_IDimP_get_Q", uasm);
+    }
+
+    [Fact]
+    public void UserClass_DefaultInterfaceMethod_RejectsReceiverAbi()
+    {
+        var ex = Assert.Throws<System.NotSupportedException>(() => TestHelper.CompileToUasm(@"
+using UdonSharp;
+public interface IClassDim { int F() { return 5; } }
+public class ClassDimValue : IClassDim { }
+public class ClassDimHost : UdonSharpBehaviour {
+    public int sum;
+    void Start() { IClassDim value = new ClassDimValue(); sum = value.F(); }
+}", "ClassDimHost"));
+        Assert.Contains("object[] receiver", ex.Message);
     }
 
     [Fact]

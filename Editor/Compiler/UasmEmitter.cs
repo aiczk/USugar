@@ -986,7 +986,14 @@ public partial class UasmEmitter
         // Emitter-only projection: own generic user-method DEFINITIONS (see summary).
         var ownGenerics = _classSymbol.GetMembers().OfType<IMethodSymbol>().Where(IsOwnGenericSeed);
 
-        return planned.Concat(ownGenerics).ToArray();
+        var defaultInterfaceMethods = _classSymbol.AllInterfaces
+            .SelectMany(iface => _planner.GetLayout(iface).Methods.Keys)
+            .Where(method => !method.IsAbstract
+                && SymbolEqualityComparer.Default.Equals(
+                    _classSymbol.FindImplementationForInterfaceMember(method), method));
+
+        return planned.Concat(ownGenerics).Concat(defaultInterfaceMethods)
+            .Distinct<IMethodSymbol>(SymbolEqualityComparer.Default).ToArray();
     }
 
     /// <summary>C3: the own-generic method-DEFINITION projection, single-sourced so the ComputeMethods reach
@@ -1025,7 +1032,10 @@ public partial class UasmEmitter
             EmitPolicy.RejectPublicProgramLocalDelegateSignature(method);
             if (method.IsGenericMethod) continue;
 
-            var ml = typeLayout.Methods[method];
+            var methodLayout = method.ContainingType.TypeKind == TypeKind.Interface
+                ? _planner.GetLayout(method.ContainingType)
+                : typeLayout;
+            var ml = methodLayout.Methods[method];
             var exportName = ml.ExportName;
             var slot = _ctx.Methods.Register(method, _ => exportName);
             var idx = slot.Index;

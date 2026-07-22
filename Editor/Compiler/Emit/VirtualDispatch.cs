@@ -98,6 +98,11 @@ public sealed class VirtualDispatch
                 continue;
             var impl = concrete.FindImplementationForInterfaceMember(member) as IMethodSymbol;
             if (impl == null || impl.IsAbstract) continue;
+            if (impl.ContainingType?.TypeKind == TypeKind.Interface)
+                throw new System.NotSupportedException(
+                    $"Default interface member '{member.ContainingType.Name}.{member.Name}' cannot be "
+                    + $"used by user class '{concrete.Name}': its object[] receiver requires a distinct "
+                    + "default-body ABI. Implement the member in the class.");
             if (impl.IsVirtual || impl.IsOverride)
                 impl = MostDerivedImpl(concrete, SlotIntroducer(impl)) ?? impl;
             var typeObj = _typeObjs.TryGetTypeObjVar(concrete);
