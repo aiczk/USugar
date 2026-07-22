@@ -751,6 +751,17 @@ public sealed class ResolvedEdgeResolver
             && spr.Property.ContainingType is INamedTypeSymbol spit && TypeClassifier.IsObjectArrayEmulated(spit)
             && UasmEmitter.IsComputedProperty(sprop) && sprop.GetMethod != null)
             yield return sprop.GetMethod;
+        if (op is IEventAssignmentOperation eventAssignment
+            && eventAssignment.EventReference is IEventReferenceOperation eventReference)
+        {
+            var accessor = eventAssignment.Adds
+                ? eventReference.Event.AddMethod
+                : eventReference.Event.RemoveMethod;
+            if (accessor is { IsImplicitlyDeclared: false }
+                && accessor.ContainingType is INamedTypeSymbol eventOwner
+                && TypeClassifier.IsObjectArrayEmulated(eventOwner))
+                yield return accessor;
+        }
         if (op is IDeconstructionAssignmentOperation deconstruction
             && ResolveUserDeconstruct(deconstruction) is { } deconstruct)
             yield return deconstruct;

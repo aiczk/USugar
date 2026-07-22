@@ -178,12 +178,24 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
         if (evt.AddMethod == null || !evt.AddMethod.IsImplicitlyDeclared
             || evt.RemoveMethod == null || !evt.RemoveMethod.IsImplicitlyDeclared)
         {
+            var accessor = op.Adds ? evt.AddMethod : evt.RemoveMethod;
+            var handlerValue = VisitExpression(op.HandlerValue);
+            if (evt.ContainingType is INamedTypeSymbol owner && TypeClassifier.IsObjectArrayEmulated(owner))
+            {
+                var receiver = evtRef.Instance is IInstanceReferenceOperation
+                    ? (_ctx.Methods.CurrentStructReceiverParamId is { } receiverId
+                        ? LoadField(receiverId, new StorageType(AggregateAbi.ArrayType))
+                        : throw new System.NotSupportedException(
+                            $"Custom event '{evt.Name}' has no class receiver in this context."))
+                    : LoadInstanceRaw(evtRef.Instance);
+                EmitExprStmt(EmitCallToMethod(ResolveStructMember(accessor),
+                    new List<CLeaf> { receiver, handlerValue }, op.Syntax));
+                return null;
+            }
             if (evtRef.Instance is not IInstanceReferenceOperation)
                 throw new System.NotSupportedException(
                     "cross-behaviour custom event subscription is not supported; invoke it from within "
                     + "the declaring behaviour.");
-            var accessor = op.Adds ? evt.AddMethod : evt.RemoveMethod;
-            var handlerValue = VisitExpression(op.HandlerValue);
             EmitExprStmt(EmitCallToMethod(accessor, new List<CLeaf> { handlerValue }, op.Syntax));
             return null;
         }
