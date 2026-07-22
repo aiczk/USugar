@@ -72,6 +72,21 @@ public class EvtCustom : UdonSharpBehaviour {
         Assert.Contains("_backing", uasm);
     }
 
+    [Fact]
+    public void StaticCustomAccessorEvent_CompilesAndCallsAccessors()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public class EvtStaticCustom : UdonSharpBehaviour {
+    static Action _backing;
+    public static event Action Foo { add { _backing += value; } remove { _backing -= value; } }
+    void Handler() { }
+    void Start() { Foo += Handler; Foo -= Handler; }
+}", "EvtStaticCustom");
+        Assert.Contains("_backing", uasm);
+    }
+
     // ── R2: cross-behaviour field-like event subscription ──
 
     [Fact]
@@ -101,9 +116,9 @@ public class EvtSubscriberX : UdonSharpBehaviour {
     }
 
     [Fact]
-    public void CrossBehaviourCustomEventSubscribe_ThrowsClearly()
+    public void CrossBehaviourCustomEventSubscribe_CallsAccessors()
     {
-        var ex = Assert.ThrowsAny<Exception>(() => TestHelper.CompileToUasm(new[]
+        var uasm = TestHelper.CompileToUasm(new[]
         {
             @"
 using UdonSharp;
@@ -118,10 +133,10 @@ using System;
 public class EvtCustomSubscriberX : UdonSharpBehaviour {
     public EvtCustomTargetX other;
     void Handler() { }
-    void Start() { other.Foo += Handler; }
+    void Start() { other.Foo += Handler; other.Foo -= Handler; }
 }",
-        }, "EvtCustomSubscriberX"));
-        Assert.Contains("cross-behaviour custom event subscription is not supported", ex.Message);
+        }, "EvtCustomSubscriberX");
+        Assert.Contains("__SendCustomEvent__", uasm);
     }
 
     // ── R4: [UdonSynced] / [NetworkCallable] on an event ──

@@ -209,30 +209,55 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
             return null;
         }
 
-        // R1 armor: custom-accessor events never get backing storage (UasmEmitter.DeclareEvent already
-        // loud-rejects them at declaration) — if one somehow reached here, fail loud rather than write
-        // to nonexistent storage.
+        // Custom-accessor events have no synthesized backing storage; invoke their add/remove body.
         if (evt.AddMethod == null || !evt.AddMethod.IsImplicitlyDeclared
             || evt.RemoveMethod == null || !evt.RemoveMethod.IsImplicitlyDeclared)
         {
             var accessor = op.Adds ? evt.AddMethod : evt.RemoveMethod;
-            var handlerValue = VisitExpression(op.HandlerValue);
-            if (evt.ContainingType is INamedTypeSymbol owner && TypeClassifier.IsObjectArrayEmulated(owner))
+            if (accessor == null)
+                throw new System.NotSupportedException($"Event '{evt.Name}' has no accessor.");
+            var objectArrayOwner = evt.ContainingType is INamedTypeSymbol owner
+                && TypeClassifier.IsObjectArrayEmulated(owner);
+            var crossBehaviourCustom = !evt.IsStatic
+                && evtRef.Instance is not IInstanceReferenceOperation;
+            CLeaf stagedReceiver = null;
+            if (crossBehaviourCustom)
+                stagedReceiver = objectArrayOwner
+                    ? LoadInstanceRaw(evtRef.Instance)
+                    : VisitExpression(evtRef.Instance);
+            var emittedHandler = VisitEmittedValue(op.HandlerValue);
+            var handlerValue = emittedHandler.Leaf;
+            if (objectArrayOwner)
             {
+                if (accessor.IsStatic)
+                {
+                    EmitExprStmt(EmitCallToMethod(ResolveStructMember(accessor),
+                        new List<CLeaf> { handlerValue }, op.Syntax));
+                    return null;
+                }
                 var receiver = evtRef.Instance is IInstanceReferenceOperation
                     ? (_ctx.Methods.CurrentStructReceiverParamId is { } receiverId
                         ? LoadField(receiverId, new StorageType(AggregateAbi.ArrayType))
                         : throw new System.NotSupportedException(
                             $"Custom event '{evt.Name}' has no class receiver in this context."))
-                    : LoadInstanceRaw(evtRef.Instance);
+                    : stagedReceiver;
                 EmitExprStmt(EmitCallToMethod(ResolveStructMember(accessor),
                     new List<CLeaf> { receiver, handlerValue }, op.Syntax));
                 return null;
             }
-            if (evtRef.Instance is not IInstanceReferenceOperation)
-                throw new System.NotSupportedException(
-                    "cross-behaviour custom event subscription is not supported; invoke it from within "
-                    + "the declaring behaviour.");
+            if (crossBehaviourCustom)
+            {
+                RejectUnsafeCrossProgramEventHandler(evt, emittedHandler.Info);
+                var (exportName, paramIds, _) = GetCalleeLayout(accessor);
+                if (paramIds.Length != 1)
+                    throw new System.InvalidOperationException(
+                        $"Event accessor '{accessor.Name}' has {paramIds.Length} parameters; expected one.");
+                CrossCall(stagedReceiver, exportName,
+                    new List<(string, CLeaf)> { (paramIds[0], handlerValue) },
+                    System.Array.Empty<ReturnSlot>(), StorageTypes.Void,
+                    TryMarkReentrantCrossDispatch(op, accessor));
+                return null;
+            }
             EmitExprStmt(EmitCallToMethod(accessor, new List<CLeaf> { handlerValue }, op.Syntax));
             return null;
         }

@@ -1058,7 +1058,9 @@ public partial class UasmEmitter
                 && isOwnOrInherited
                 && (method.MethodKind == MethodKind.Ordinary
                     || method.MethodKind == MethodKind.PropertyGet
-                    || method.MethodKind == MethodKind.PropertySet)
+                    || method.MethodKind == MethodKind.PropertySet
+                    || method.MethodKind == MethodKind.EventAdd
+                    || method.MethodKind == MethodKind.EventRemove)
                 && (method.DeclaredAccessibility == Accessibility.Public
                     || UdonEventNames.ContainsKey(method.Name)
                     || crossDispatchExports.Any(target => SameVirtualSlot(method, target)));
@@ -1280,6 +1282,16 @@ public partial class UasmEmitter
                         exports.Add(property.Property.GetMethod.OriginalDefinition);
                     if (property.Property.SetMethod != null)
                         exports.Add(property.Property.SetMethod.OriginalDefinition);
+                }
+                if (operation is IEventAssignmentOperation eventAssignment
+                    && eventAssignment.EventReference is IEventReferenceOperation eventReference)
+                {
+                    var accessor = eventAssignment.Adds
+                        ? eventReference.Event.AddMethod
+                        : eventReference.Event.RemoveMethod;
+                    if (accessor != null && !accessor.IsImplicitlyDeclared
+                        && eventReference.Instance is not IInstanceReferenceOperation)
+                        exports.Add(accessor.OriginalDefinition);
                 }
             }
         return exports;
