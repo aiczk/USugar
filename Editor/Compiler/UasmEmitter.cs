@@ -615,7 +615,6 @@ public partial class UasmEmitter
 
     void ValidateStaticInitializerCycles()
     {
-        var ownerByOp = new Dictionary<IOperation, ISymbol>();
         var opByOwner = new Dictionary<ISymbol, IOperation>(SymbolEqualityComparer.Default);
         foreach (var (_, op, _) in _staticFieldInitOps)
         {
@@ -624,8 +623,40 @@ public partial class UasmEmitter
             if (declaration == null) continue;
             var owner = _compilation.GetSemanticModel(declaration.SyntaxTree).GetDeclaredSymbol(declaration);
             if (owner == null) continue;
-            ownerByOp[op] = owner;
             opByOwner[owner] = op;
+        }
+
+        IEnumerable<ISymbol> Dependencies(IOperation root)
+        {
+            var dependencies = new HashSet<ISymbol>(SymbolEqualityComparer.Default);
+            var visitedMethods = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
+            void Walk(IOperation body)
+            {
+                if (body == null) return;
+                foreach (var child in body.DescendantsAndSelf())
+                {
+                    ISymbol referenced = child switch
+                    {
+                        IFieldReferenceOperation f => f.Field,
+                        IPropertyReferenceOperation p => p.Property,
+                        _ => null,
+                    };
+                    if (referenced != null && opByOwner.ContainsKey(referenced))
+                        dependencies.Add(referenced);
+
+                    IMethodSymbol called = child switch
+                    {
+                        IInvocationOperation invocation => invocation.TargetMethod,
+                        IPropertyReferenceOperation property => property.Property.GetMethod,
+                        _ => null,
+                    };
+                    if (called is { IsStatic: true } && called.DeclaringSyntaxReferences.Length > 0
+                        && visitedMethods.Add(called.OriginalDefinition))
+                        Walk(GetMethodBodyOperation(called));
+                }
+            }
+            Walk(root);
+            return dependencies;
         }
 
         var visiting = new HashSet<ISymbol>(SymbolEqualityComparer.Default);
@@ -645,17 +676,7 @@ public partial class UasmEmitter
                     + ". Initialize one member explicitly from Start() to break the cycle.");
             }
             path.Add(owner);
-            var op = opByOwner[owner];
-            foreach (var child in op.DescendantsAndSelf())
-            {
-                ISymbol dependency = child switch
-                {
-                    IFieldReferenceOperation f => f.Field,
-                    IPropertyReferenceOperation p => p.Property,
-                    _ => null,
-                };
-                if (dependency != null && opByOwner.ContainsKey(dependency)) Visit(dependency);
-            }
+            foreach (var dependency in Dependencies(opByOwner[owner])) Visit(dependency);
             path.RemoveAt(path.Count - 1);
             visiting.Remove(owner);
             visited.Add(owner);

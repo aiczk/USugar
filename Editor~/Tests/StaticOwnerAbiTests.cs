@@ -199,4 +199,38 @@ public class StaticCycleHost : UdonSharpBehaviour {
         Assert.Contains("StaticCycleHost.A", ex.Message);
         Assert.Contains("StaticCycleHost.B", ex.Message);
     }
+
+    [Fact]
+    public void StaticInitializerCycleThroughMethods_Throws()
+    {
+        var ex = Assert.ThrowsAny<System.Exception>(() => TestHelper.CompileToUasm(@"
+using UdonSharp;
+public class StaticMethodCycleHost : UdonSharpBehaviour {
+    static int A = ReadB();
+    static int B = ReadA();
+    static int ReadA() { return A; }
+    static int ReadB() { return B; }
+}
+", "StaticMethodCycleHost"));
+
+        Assert.Contains("Static initializer cycle", ex.Message);
+        Assert.Contains("StaticMethodCycleHost.A", ex.Message);
+        Assert.Contains("StaticMethodCycleHost.B", ex.Message);
+    }
+
+    [Fact]
+    public void StaticInitializerCycleThroughComputedProperties_Throws()
+    {
+        var ex = Assert.ThrowsAny<System.Exception>(() => TestHelper.CompileToUasm(@"
+using UdonSharp;
+public class StaticPropertyCycleHost : UdonSharpBehaviour {
+    static int A = ReadB;
+    static int B = ReadA;
+    static int ReadA { get { return A; } }
+    static int ReadB { get { return B; } }
+}
+", "StaticPropertyCycleHost"));
+
+        Assert.Contains("Static initializer cycle", ex.Message);
+    }
 }
