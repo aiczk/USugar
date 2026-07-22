@@ -25,7 +25,6 @@
     __const_SystemInt32_5: %SystemInt32, null
     __const_SystemInt32_6: %SystemInt32, null
     __intnl_SystemObject_c0: %SystemObject, null
-    __intnl_SystemObject_c1: %SystemObject, null
     __intnl_SystemInt32_c4: %SystemInt32, null
     __intnl_SystemBoolean_c0: %SystemBoolean, null
     __intnl_SystemBoolean_c1: %SystemBoolean, null
@@ -69,16 +68,10 @@
         PUSH, __intnl_SystemInt32_c3
         COPY
         PUSH, __intnl_SystemInt32_c3
-        PUSH, __intnl_SystemInt32_c2
-        COPY
-        PUSH, __intnl_SystemInt32_c2
         PUSH, __intnl_SystemInt32Array_c0
         EXTERN, "SystemInt32Array.__ctor__SystemInt32__SystemInt32Array"
         PUSH, __intnl_SystemInt32Array_c0
         PUSH, __intnl_SystemInt32Array_c1
-        COPY
-        PUSH, __intnl_SystemInt32Array_c1
-        PUSH, __intnl_SystemInt32Array_c0
         COPY
         PUSH, __const_SystemInt32_1
         PUSH, __intnl_SystemObjectArray_c0
@@ -87,45 +80,42 @@
         PUSH, __intnl_SystemObjectArray_c1
         COPY
         PUSH, __intnl_SystemObjectArray_c1
-        PUSH, __intnl_SystemObjectArray_c0
-        COPY
-        PUSH, __intnl_SystemObjectArray_c0
         PUSH, __const_SystemInt32_2
-        PUSH, __intnl_SystemInt32Array_c0
+        PUSH, __intnl_SystemInt32Array_c1
         EXTERN, "SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid"
-        PUSH, __intnl_SystemObjectArray_c0
+        PUSH, __intnl_SystemObjectArray_c1
         PUSH, __const_SystemInt32_3
         PUSH, __intnl_SystemInt32_c0
         EXTERN, "SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid"
-        PUSH, __intnl_SystemObjectArray_c0
+        PUSH, __intnl_SystemObjectArray_c1
         PUSH, __const_SystemInt32_0
         PUSH, __intnl_SystemInt32_c1
         EXTERN, "SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid"
-        PUSH, __intnl_SystemInt32Array_c0
+        PUSH, __intnl_SystemInt32Array_c1
         PUSH, __const_SystemInt32_2
         PUSH, __const_SystemInt32_3
         EXTERN, "SystemInt32Array.__Set__SystemInt32_SystemInt32__SystemVoid"
-        PUSH, __intnl_SystemInt32Array_c0
+        PUSH, __intnl_SystemInt32Array_c1
         PUSH, __const_SystemInt32_3
         PUSH, __const_SystemInt32_0
         EXTERN, "SystemInt32Array.__Set__SystemInt32_SystemInt32__SystemVoid"
-        PUSH, __intnl_SystemInt32Array_c0
+        PUSH, __intnl_SystemInt32Array_c1
         PUSH, __const_SystemInt32_0
         PUSH, __const_SystemInt32_1
         EXTERN, "SystemInt32Array.__Set__SystemInt32_SystemInt32__SystemVoid"
-        PUSH, __intnl_SystemInt32Array_c0
+        PUSH, __intnl_SystemInt32Array_c1
         PUSH, __const_SystemInt32_1
         PUSH, __const_SystemInt32_4
         EXTERN, "SystemInt32Array.__Set__SystemInt32_SystemInt32__SystemVoid"
-        PUSH, __intnl_SystemInt32Array_c0
+        PUSH, __intnl_SystemInt32Array_c1
         PUSH, __const_SystemInt32_4
         PUSH, __const_SystemInt32_5
         EXTERN, "SystemInt32Array.__Set__SystemInt32_SystemInt32__SystemVoid"
-        PUSH, __intnl_SystemInt32Array_c0
+        PUSH, __intnl_SystemInt32Array_c1
         PUSH, __const_SystemInt32_5
         PUSH, __const_SystemInt32_6
         EXTERN, "SystemInt32Array.__Set__SystemInt32_SystemInt32__SystemVoid"
-        PUSH, __intnl_SystemObjectArray_c0
+        PUSH, __intnl_SystemObjectArray_c1
         PUSH, __lcl_a_SystemObjectArray_0
         COPY
         PUSH, __lcl_a_SystemObjectArray_0
@@ -133,9 +123,6 @@
         COPY
         PUSH, __intnl_SystemObjectArray_c0
         PUSH, __intnl_SystemObjectArray_c1
-        COPY
-        PUSH, __intnl_SystemObjectArray_c1
-        PUSH, __intnl_SystemObjectArray_c0
         COPY
         PUSH, __const_SystemInt32_2
         PUSH, __intnl_SystemInt32_c0
@@ -143,27 +130,21 @@
         PUSH, __const_SystemInt32_2
         PUSH, __intnl_SystemInt32_c1
         COPY
-        PUSH, __intnl_SystemObjectArray_c0
+        PUSH, __intnl_SystemObjectArray_c1
         PUSH, __const_SystemInt32_3
         PUSH, __intnl_SystemObject_c0
         EXTERN, "SystemObjectArray.__Get__SystemInt32__SystemObject"
         PUSH, __intnl_SystemObject_c0
-        PUSH, __intnl_SystemObject_c1
-        COPY
-        PUSH, __intnl_SystemObject_c1
         PUSH, __intnl_SystemInt32_c2
         COPY
         PUSH, __intnl_SystemInt32_c2
         PUSH, __intnl_SystemInt32_c3
         COPY
-        PUSH, __intnl_SystemObjectArray_c0
+        PUSH, __intnl_SystemObjectArray_c1
         PUSH, __const_SystemInt32_0
         PUSH, __intnl_SystemObject_c0
         EXTERN, "SystemObjectArray.__Get__SystemInt32__SystemObject"
         PUSH, __intnl_SystemObject_c0
-        PUSH, __intnl_SystemObject_c1
-        COPY
-        PUSH, __intnl_SystemObject_c1
         PUSH, __intnl_SystemInt32_c2
         COPY
         PUSH, __intnl_SystemInt32_c2
@@ -173,73 +154,43 @@
         PUSH, __const_SystemInt32_2
         PUSH, __intnl_SystemBoolean_c0
         EXTERN, "SystemInt32.__op_GreaterThanOrEqual__SystemInt32_SystemInt32__SystemBoolean"
-        PUSH, __intnl_SystemBoolean_c0
-        PUSH, __intnl_SystemBoolean_c1
-        COPY
         PUSH, __intnl_SystemInt32_c0
         PUSH, __intnl_SystemInt32_c3
-        PUSH, __intnl_SystemBoolean_c0
+        PUSH, __intnl_SystemBoolean_c1
         EXTERN, "SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean"
         PUSH, __intnl_SystemBoolean_c0
-        PUSH, __intnl_SystemBoolean_c2
-        COPY
         PUSH, __intnl_SystemBoolean_c1
         PUSH, __intnl_SystemBoolean_c2
-        PUSH, __intnl_SystemBoolean_c0
         EXTERN, "SystemBoolean.__op_ConditionalAnd__SystemBoolean_SystemBoolean__SystemBoolean"
-        PUSH, __intnl_SystemBoolean_c0
-        PUSH, __intnl_SystemBoolean_c1
-        COPY
         PUSH, __intnl_SystemInt32_c1
         PUSH, __const_SystemInt32_2
         PUSH, __intnl_SystemBoolean_c0
         EXTERN, "SystemInt32.__op_GreaterThanOrEqual__SystemInt32_SystemInt32__SystemBoolean"
-        PUSH, __intnl_SystemBoolean_c0
-        PUSH, __intnl_SystemBoolean_c2
-        COPY
         PUSH, __intnl_SystemInt32_c1
         PUSH, __intnl_SystemInt32_c4
-        PUSH, __intnl_SystemBoolean_c0
+        PUSH, __intnl_SystemBoolean_c1
         EXTERN, "SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean"
         PUSH, __intnl_SystemBoolean_c0
+        PUSH, __intnl_SystemBoolean_c1
         PUSH, __intnl_SystemBoolean_c3
-        COPY
+        EXTERN, "SystemBoolean.__op_ConditionalAnd__SystemBoolean_SystemBoolean__SystemBoolean"
         PUSH, __intnl_SystemBoolean_c2
         PUSH, __intnl_SystemBoolean_c3
         PUSH, __intnl_SystemBoolean_c0
         EXTERN, "SystemBoolean.__op_ConditionalAnd__SystemBoolean_SystemBoolean__SystemBoolean"
-        PUSH, __intnl_SystemBoolean_c0
-        PUSH, __intnl_SystemBoolean_c2
-        COPY
-        PUSH, __intnl_SystemBoolean_c1
-        PUSH, __intnl_SystemBoolean_c2
-        PUSH, __intnl_SystemBoolean_c0
-        EXTERN, "SystemBoolean.__op_ConditionalAnd__SystemBoolean_SystemBoolean__SystemBoolean"
-        PUSH, __intnl_SystemBoolean_c0
-        PUSH, __intnl_SystemBoolean_c1
-        COPY
         PUSH, __intnl_SystemInt32_c0
         PUSH, __intnl_SystemInt32_c4
         PUSH, __intnl_SystemInt32_c2
         EXTERN, "SystemInt32.__op_Multiplication__SystemInt32_SystemInt32__SystemInt32"
         PUSH, __intnl_SystemInt32_c2
-        PUSH, __intnl_SystemInt32_c5
-        COPY
-        PUSH, __intnl_SystemInt32_c5
         PUSH, __intnl_SystemInt32_c1
-        PUSH, __intnl_SystemInt32_c2
-        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
-        PUSH, __intnl_SystemInt32_c2
         PUSH, __intnl_SystemInt32_c5
-        COPY
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
         PUSH, __lcl_a_SystemObjectArray_0
-        PUSH, __intnl_SystemObjectArray_c1
+        PUSH, __intnl_SystemObjectArray_c0
         COPY
-        PUSH, __intnl_SystemObjectArray_c1
+        PUSH, __intnl_SystemObjectArray_c0
         PUSH, __intnl_SystemObjectArray_c2
-        COPY
-        PUSH, __intnl_SystemObjectArray_c2
-        PUSH, __intnl_SystemObjectArray_c1
         COPY
         PUSH, __const_SystemInt32_3
         PUSH, __intnl_SystemInt32_c2
@@ -247,27 +198,21 @@
         PUSH, __const_SystemInt32_0
         PUSH, __intnl_SystemInt32_c6
         COPY
-        PUSH, __intnl_SystemObjectArray_c1
+        PUSH, __intnl_SystemObjectArray_c2
         PUSH, __const_SystemInt32_3
         PUSH, __intnl_SystemObject_c0
         EXTERN, "SystemObjectArray.__Get__SystemInt32__SystemObject"
         PUSH, __intnl_SystemObject_c0
-        PUSH, __intnl_SystemObject_c1
-        COPY
-        PUSH, __intnl_SystemObject_c1
         PUSH, __intnl_SystemInt32_c7
         COPY
         PUSH, __intnl_SystemInt32_c7
         PUSH, __intnl_SystemInt32_c8
         COPY
-        PUSH, __intnl_SystemObjectArray_c1
+        PUSH, __intnl_SystemObjectArray_c2
         PUSH, __const_SystemInt32_0
         PUSH, __intnl_SystemObject_c0
         EXTERN, "SystemObjectArray.__Get__SystemInt32__SystemObject"
         PUSH, __intnl_SystemObject_c0
-        PUSH, __intnl_SystemObject_c1
-        COPY
-        PUSH, __intnl_SystemObject_c1
         PUSH, __intnl_SystemInt32_c7
         COPY
         PUSH, __intnl_SystemInt32_c7
@@ -275,180 +220,108 @@
         COPY
         PUSH, __intnl_SystemInt32_c2
         PUSH, __const_SystemInt32_2
-        PUSH, __intnl_SystemBoolean_c0
+        PUSH, __intnl_SystemBoolean_c1
         EXTERN, "SystemInt32.__op_GreaterThanOrEqual__SystemInt32_SystemInt32__SystemBoolean"
-        PUSH, __intnl_SystemBoolean_c0
-        PUSH, __intnl_SystemBoolean_c2
-        COPY
         PUSH, __intnl_SystemInt32_c2
         PUSH, __intnl_SystemInt32_c8
-        PUSH, __intnl_SystemBoolean_c0
+        PUSH, __intnl_SystemBoolean_c2
         EXTERN, "SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean"
-        PUSH, __intnl_SystemBoolean_c0
-        PUSH, __intnl_SystemBoolean_c3
-        COPY
+        PUSH, __intnl_SystemBoolean_c1
         PUSH, __intnl_SystemBoolean_c2
         PUSH, __intnl_SystemBoolean_c3
-        PUSH, __intnl_SystemBoolean_c0
         EXTERN, "SystemBoolean.__op_ConditionalAnd__SystemBoolean_SystemBoolean__SystemBoolean"
-        PUSH, __intnl_SystemBoolean_c0
-        PUSH, __intnl_SystemBoolean_c2
-        COPY
         PUSH, __intnl_SystemInt32_c6
         PUSH, __const_SystemInt32_2
-        PUSH, __intnl_SystemBoolean_c0
+        PUSH, __intnl_SystemBoolean_c1
         EXTERN, "SystemInt32.__op_GreaterThanOrEqual__SystemInt32_SystemInt32__SystemBoolean"
-        PUSH, __intnl_SystemBoolean_c0
-        PUSH, __intnl_SystemBoolean_c3
-        COPY
         PUSH, __intnl_SystemInt32_c6
         PUSH, __intnl_SystemInt32_c9
-        PUSH, __intnl_SystemBoolean_c0
+        PUSH, __intnl_SystemBoolean_c2
         EXTERN, "SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean"
-        PUSH, __intnl_SystemBoolean_c0
-        PUSH, __intnl_SystemBoolean_c4
-        COPY
-        PUSH, __intnl_SystemBoolean_c3
-        PUSH, __intnl_SystemBoolean_c4
-        PUSH, __intnl_SystemBoolean_c0
-        EXTERN, "SystemBoolean.__op_ConditionalAnd__SystemBoolean_SystemBoolean__SystemBoolean"
-        PUSH, __intnl_SystemBoolean_c0
-        PUSH, __intnl_SystemBoolean_c3
-        COPY
+        PUSH, __intnl_SystemBoolean_c1
         PUSH, __intnl_SystemBoolean_c2
-        PUSH, __intnl_SystemBoolean_c3
-        PUSH, __intnl_SystemBoolean_c0
+        PUSH, __intnl_SystemBoolean_c4
         EXTERN, "SystemBoolean.__op_ConditionalAnd__SystemBoolean_SystemBoolean__SystemBoolean"
-        PUSH, __intnl_SystemBoolean_c0
-        PUSH, __intnl_SystemBoolean_c2
-        COPY
+        PUSH, __intnl_SystemBoolean_c3
+        PUSH, __intnl_SystemBoolean_c4
+        PUSH, __intnl_SystemBoolean_c1
+        EXTERN, "SystemBoolean.__op_ConditionalAnd__SystemBoolean_SystemBoolean__SystemBoolean"
         PUSH, __intnl_SystemInt32_c2
         PUSH, __intnl_SystemInt32_c9
         PUSH, __intnl_SystemInt32_c7
         EXTERN, "SystemInt32.__op_Multiplication__SystemInt32_SystemInt32__SystemInt32"
         PUSH, __intnl_SystemInt32_c7
-        PUSH, __intnl_SystemInt32_c10
-        COPY
-        PUSH, __intnl_SystemInt32_c10
         PUSH, __intnl_SystemInt32_c6
-        PUSH, __intnl_SystemInt32_c7
-        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
-        PUSH, __intnl_SystemInt32_c7
         PUSH, __intnl_SystemInt32_c10
-        COPY
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
         PUSH, __const_SystemInt32_2
         PUSH, __intnl_SystemInt32_c7
         COPY
-        PUSH, __intnl_SystemBoolean_c2
-        JUMP_IF_FALSE, 0x00000838
-        JUMP, 0x00000b08
+        PUSH, __intnl_SystemBoolean_c1
+        JUMP_IF_FALSE, 0x0000061c
+        JUMP, 0x000007d4
     ___start_bb3:
         PUSH, __const_SystemString_7
         PUSH, __const_SystemString_8
         PUSH, __intnl_SystemString_c0
         EXTERN, "SystemString.__op_Addition__SystemString_SystemString__SystemString"
-        PUSH, __intnl_SystemString_c0
-        PUSH, __intnl_SystemString_c1
-        COPY
         PUSH, __intnl_SystemInt32_c2
-        PUSH, __intnl_SystemString_c0
+        PUSH, __intnl_SystemString_c1
         EXTERN, "SystemInt32.__ToString__SystemString"
         PUSH, __intnl_SystemString_c0
-        PUSH, __intnl_SystemString_c2
-        COPY
         PUSH, __intnl_SystemString_c1
         PUSH, __intnl_SystemString_c2
-        PUSH, __intnl_SystemString_c0
         EXTERN, "SystemString.__op_Addition__SystemString_SystemString__SystemString"
-        PUSH, __intnl_SystemString_c0
-        PUSH, __intnl_SystemString_c1
-        COPY
-        PUSH, __intnl_SystemString_c1
+        PUSH, __intnl_SystemString_c2
         PUSH, __const_SystemString_9
         PUSH, __intnl_SystemString_c0
         EXTERN, "SystemString.__op_Addition__SystemString_SystemString__SystemString"
-        PUSH, __intnl_SystemString_c0
-        PUSH, __intnl_SystemString_c1
-        COPY
         PUSH, __intnl_SystemInt32_c8
-        PUSH, __intnl_SystemString_c0
+        PUSH, __intnl_SystemString_c1
         EXTERN, "SystemInt32.__ToString__SystemString"
         PUSH, __intnl_SystemString_c0
-        PUSH, __intnl_SystemString_c2
-        COPY
         PUSH, __intnl_SystemString_c1
         PUSH, __intnl_SystemString_c2
-        PUSH, __intnl_SystemString_c0
         EXTERN, "SystemString.__op_Addition__SystemString_SystemString__SystemString"
-        PUSH, __intnl_SystemString_c0
-        PUSH, __intnl_SystemString_c1
-        COPY
-        PUSH, __intnl_SystemString_c1
+        PUSH, __intnl_SystemString_c2
         PUSH, __const_SystemString_10
         PUSH, __intnl_SystemString_c0
         EXTERN, "SystemString.__op_Addition__SystemString_SystemString__SystemString"
         PUSH, __intnl_SystemString_c0
-        PUSH, __intnl_SystemString_c1
-        COPY
-        PUSH, __intnl_SystemString_c1
         PUSH, __const_SystemString_11
-        PUSH, __intnl_SystemString_c0
-        EXTERN, "SystemString.__op_Addition__SystemString_SystemString__SystemString"
-        PUSH, __intnl_SystemString_c0
         PUSH, __intnl_SystemString_c1
-        COPY
+        EXTERN, "SystemString.__op_Addition__SystemString_SystemString__SystemString"
         PUSH, __intnl_SystemInt32_c6
         PUSH, __intnl_SystemString_c0
         EXTERN, "SystemInt32.__ToString__SystemString"
-        PUSH, __intnl_SystemString_c0
-        PUSH, __intnl_SystemString_c2
-        COPY
         PUSH, __intnl_SystemString_c1
-        PUSH, __intnl_SystemString_c2
         PUSH, __intnl_SystemString_c0
+        PUSH, __intnl_SystemString_c2
         EXTERN, "SystemString.__op_Addition__SystemString_SystemString__SystemString"
-        PUSH, __intnl_SystemString_c0
-        PUSH, __intnl_SystemString_c1
-        COPY
-        PUSH, __intnl_SystemString_c1
+        PUSH, __intnl_SystemString_c2
         PUSH, __const_SystemString_9
         PUSH, __intnl_SystemString_c0
         EXTERN, "SystemString.__op_Addition__SystemString_SystemString__SystemString"
-        PUSH, __intnl_SystemString_c0
-        PUSH, __intnl_SystemString_c1
-        COPY
         PUSH, __intnl_SystemInt32_c9
-        PUSH, __intnl_SystemString_c0
+        PUSH, __intnl_SystemString_c1
         EXTERN, "SystemInt32.__ToString__SystemString"
         PUSH, __intnl_SystemString_c0
-        PUSH, __intnl_SystemString_c2
-        COPY
         PUSH, __intnl_SystemString_c1
         PUSH, __intnl_SystemString_c2
-        PUSH, __intnl_SystemString_c0
         EXTERN, "SystemString.__op_Addition__SystemString_SystemString__SystemString"
-        PUSH, __intnl_SystemString_c0
-        PUSH, __intnl_SystemString_c1
-        COPY
-        PUSH, __intnl_SystemString_c1
+        PUSH, __intnl_SystemString_c2
         PUSH, __const_SystemString_10
         PUSH, __intnl_SystemString_c0
         EXTERN, "SystemString.__op_Addition__SystemString_SystemString__SystemString"
         PUSH, __intnl_SystemString_c0
-        PUSH, __intnl_SystemString_c1
-        COPY
-        PUSH, __intnl_SystemString_c1
         EXTERN, "UnityEngineDebug.__LogError__SystemObject__SystemVoid"
-        JUMP, 0x00000b98
+        JUMP, 0x0000083c
     ___start_bb2:
-        PUSH, __intnl_SystemObjectArray_c1
+        PUSH, __intnl_SystemObjectArray_c2
         PUSH, __const_SystemInt32_2
         PUSH, __intnl_SystemObject_c0
         EXTERN, "SystemObjectArray.__Get__SystemInt32__SystemObject"
         PUSH, __intnl_SystemObject_c0
-        PUSH, __intnl_SystemObject_c1
-        COPY
-        PUSH, __intnl_SystemObject_c1
         PUSH, __intnl_SystemInt32Array_c0
         COPY
         PUSH, __intnl_SystemInt32Array_c0
@@ -456,122 +329,74 @@
         PUSH, __intnl_SystemInt32_c2
         EXTERN, "SystemInt32Array.__Get__SystemInt32__SystemInt32"
         PUSH, __intnl_SystemInt32_c2
-        PUSH, __intnl_SystemInt32_c6
-        COPY
-        PUSH, __intnl_SystemInt32_c6
         PUSH, __intnl_SystemInt32_c7
         COPY
     ___start_bb4:
-        PUSH, __intnl_SystemBoolean_c1
-        JUMP_IF_FALSE, 0x00000bb0
-        JUMP, 0x00000e80
+        PUSH, __intnl_SystemBoolean_c0
+        JUMP_IF_FALSE, 0x00000854
+        JUMP, 0x00000a0c
     ___start_bb6:
         PUSH, __const_SystemString_12
         PUSH, __const_SystemString_8
         PUSH, __intnl_SystemString_c0
         EXTERN, "SystemString.__op_Addition__SystemString_SystemString__SystemString"
-        PUSH, __intnl_SystemString_c0
-        PUSH, __intnl_SystemString_c1
-        COPY
         PUSH, __intnl_SystemInt32_c0
-        PUSH, __intnl_SystemString_c0
+        PUSH, __intnl_SystemString_c1
         EXTERN, "SystemInt32.__ToString__SystemString"
         PUSH, __intnl_SystemString_c0
-        PUSH, __intnl_SystemString_c2
-        COPY
         PUSH, __intnl_SystemString_c1
         PUSH, __intnl_SystemString_c2
-        PUSH, __intnl_SystemString_c0
         EXTERN, "SystemString.__op_Addition__SystemString_SystemString__SystemString"
-        PUSH, __intnl_SystemString_c0
-        PUSH, __intnl_SystemString_c1
-        COPY
-        PUSH, __intnl_SystemString_c1
+        PUSH, __intnl_SystemString_c2
         PUSH, __const_SystemString_9
         PUSH, __intnl_SystemString_c0
         EXTERN, "SystemString.__op_Addition__SystemString_SystemString__SystemString"
-        PUSH, __intnl_SystemString_c0
-        PUSH, __intnl_SystemString_c1
-        COPY
         PUSH, __intnl_SystemInt32_c3
-        PUSH, __intnl_SystemString_c0
+        PUSH, __intnl_SystemString_c1
         EXTERN, "SystemInt32.__ToString__SystemString"
         PUSH, __intnl_SystemString_c0
-        PUSH, __intnl_SystemString_c2
-        COPY
         PUSH, __intnl_SystemString_c1
         PUSH, __intnl_SystemString_c2
-        PUSH, __intnl_SystemString_c0
         EXTERN, "SystemString.__op_Addition__SystemString_SystemString__SystemString"
-        PUSH, __intnl_SystemString_c0
-        PUSH, __intnl_SystemString_c1
-        COPY
-        PUSH, __intnl_SystemString_c1
+        PUSH, __intnl_SystemString_c2
         PUSH, __const_SystemString_10
         PUSH, __intnl_SystemString_c0
         EXTERN, "SystemString.__op_Addition__SystemString_SystemString__SystemString"
         PUSH, __intnl_SystemString_c0
-        PUSH, __intnl_SystemString_c1
-        COPY
-        PUSH, __intnl_SystemString_c1
         PUSH, __const_SystemString_11
-        PUSH, __intnl_SystemString_c0
-        EXTERN, "SystemString.__op_Addition__SystemString_SystemString__SystemString"
-        PUSH, __intnl_SystemString_c0
         PUSH, __intnl_SystemString_c1
-        COPY
+        EXTERN, "SystemString.__op_Addition__SystemString_SystemString__SystemString"
         PUSH, __intnl_SystemInt32_c1
         PUSH, __intnl_SystemString_c0
         EXTERN, "SystemInt32.__ToString__SystemString"
-        PUSH, __intnl_SystemString_c0
-        PUSH, __intnl_SystemString_c2
-        COPY
         PUSH, __intnl_SystemString_c1
-        PUSH, __intnl_SystemString_c2
         PUSH, __intnl_SystemString_c0
+        PUSH, __intnl_SystemString_c2
         EXTERN, "SystemString.__op_Addition__SystemString_SystemString__SystemString"
-        PUSH, __intnl_SystemString_c0
-        PUSH, __intnl_SystemString_c1
-        COPY
-        PUSH, __intnl_SystemString_c1
+        PUSH, __intnl_SystemString_c2
         PUSH, __const_SystemString_9
         PUSH, __intnl_SystemString_c0
         EXTERN, "SystemString.__op_Addition__SystemString_SystemString__SystemString"
-        PUSH, __intnl_SystemString_c0
-        PUSH, __intnl_SystemString_c1
-        COPY
         PUSH, __intnl_SystemInt32_c4
-        PUSH, __intnl_SystemString_c0
+        PUSH, __intnl_SystemString_c1
         EXTERN, "SystemInt32.__ToString__SystemString"
         PUSH, __intnl_SystemString_c0
-        PUSH, __intnl_SystemString_c2
-        COPY
         PUSH, __intnl_SystemString_c1
         PUSH, __intnl_SystemString_c2
-        PUSH, __intnl_SystemString_c0
         EXTERN, "SystemString.__op_Addition__SystemString_SystemString__SystemString"
-        PUSH, __intnl_SystemString_c0
-        PUSH, __intnl_SystemString_c1
-        COPY
-        PUSH, __intnl_SystemString_c1
+        PUSH, __intnl_SystemString_c2
         PUSH, __const_SystemString_10
         PUSH, __intnl_SystemString_c0
         EXTERN, "SystemString.__op_Addition__SystemString_SystemString__SystemString"
         PUSH, __intnl_SystemString_c0
-        PUSH, __intnl_SystemString_c1
-        COPY
-        PUSH, __intnl_SystemString_c1
         EXTERN, "UnityEngineDebug.__LogError__SystemObject__SystemVoid"
-        JUMP, 0x00000ee8
+        JUMP, 0x00000a60
     ___start_bb5:
-        PUSH, __intnl_SystemObjectArray_c0
+        PUSH, __intnl_SystemObjectArray_c1
         PUSH, __const_SystemInt32_2
         PUSH, __intnl_SystemObject_c0
         EXTERN, "SystemObjectArray.__Get__SystemInt32__SystemObject"
         PUSH, __intnl_SystemObject_c0
-        PUSH, __intnl_SystemObject_c1
-        COPY
-        PUSH, __intnl_SystemObject_c1
         PUSH, __intnl_SystemInt32Array_c0
         COPY
         PUSH, __intnl_SystemInt32Array_c0
@@ -582,24 +407,15 @@
         PUSH, __lcl_a_SystemObjectArray_0
         PUSH, __intnl_SystemObjectArray_c0
         COPY
-        PUSH, __intnl_SystemObjectArray_c0
-        PUSH, __intnl_SystemObjectArray_c1
-        COPY
         PUSH, __const_SystemInt32_2
         PUSH, __const_SystemInt32_3
         PUSH, __intnl_SystemInt32_c0
         EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __intnl_SystemObjectArray_c0
         PUSH, __intnl_SystemInt32_c0
-        PUSH, __intnl_SystemInt32_c1
-        COPY
-        PUSH, __intnl_SystemObjectArray_c1
-        PUSH, __intnl_SystemInt32_c1
         PUSH, __intnl_SystemObject_c0
         EXTERN, "SystemObjectArray.__Get__SystemInt32__SystemObject"
         PUSH, __intnl_SystemObject_c0
-        PUSH, __intnl_SystemObject_c1
-        COPY
-        PUSH, __intnl_SystemObject_c1
         PUSH, __intnl_SystemInt32_c0
         COPY
         PUSH, __intnl_SystemInt32_c0
@@ -608,24 +424,15 @@
         PUSH, __lcl_a_SystemObjectArray_0
         PUSH, __intnl_SystemObjectArray_c0
         COPY
-        PUSH, __intnl_SystemObjectArray_c0
-        PUSH, __intnl_SystemObjectArray_c1
-        COPY
         PUSH, __const_SystemInt32_3
         PUSH, __const_SystemInt32_3
         PUSH, __intnl_SystemInt32_c0
         EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __intnl_SystemObjectArray_c0
         PUSH, __intnl_SystemInt32_c0
-        PUSH, __intnl_SystemInt32_c1
-        COPY
-        PUSH, __intnl_SystemObjectArray_c1
-        PUSH, __intnl_SystemInt32_c1
         PUSH, __intnl_SystemObject_c0
         EXTERN, "SystemObjectArray.__Get__SystemInt32__SystemObject"
         PUSH, __intnl_SystemObject_c0
-        PUSH, __intnl_SystemObject_c1
-        COPY
-        PUSH, __intnl_SystemObject_c1
         PUSH, __intnl_SystemInt32_c0
         COPY
         PUSH, __intnl_SystemInt32_c0
@@ -637,36 +444,27 @@
         PUSH, __intnl_SystemObjectArray_c0
         PUSH, __intnl_SystemObjectArray_c1
         COPY
-        PUSH, __intnl_SystemObjectArray_c1
-        PUSH, __intnl_SystemObjectArray_c0
-        COPY
         PUSH, __const_SystemInt32_2
         PUSH, __intnl_SystemInt32_c0
         COPY
         PUSH, __const_SystemInt32_2
         PUSH, __intnl_SystemInt32_c1
         COPY
-        PUSH, __intnl_SystemObjectArray_c0
+        PUSH, __intnl_SystemObjectArray_c1
         PUSH, __const_SystemInt32_3
         PUSH, __intnl_SystemObject_c0
         EXTERN, "SystemObjectArray.__Get__SystemInt32__SystemObject"
         PUSH, __intnl_SystemObject_c0
-        PUSH, __intnl_SystemObject_c1
-        COPY
-        PUSH, __intnl_SystemObject_c1
         PUSH, __intnl_SystemInt32_c2
         COPY
         PUSH, __intnl_SystemInt32_c2
         PUSH, __intnl_SystemInt32_c3
         COPY
-        PUSH, __intnl_SystemObjectArray_c0
+        PUSH, __intnl_SystemObjectArray_c1
         PUSH, __const_SystemInt32_0
         PUSH, __intnl_SystemObject_c0
         EXTERN, "SystemObjectArray.__Get__SystemInt32__SystemObject"
         PUSH, __intnl_SystemObject_c0
-        PUSH, __intnl_SystemObject_c1
-        COPY
-        PUSH, __intnl_SystemObject_c1
         PUSH, __intnl_SystemInt32_c2
         COPY
         PUSH, __intnl_SystemInt32_c2
@@ -676,178 +474,106 @@
         PUSH, __const_SystemInt32_2
         PUSH, __intnl_SystemBoolean_c0
         EXTERN, "SystemInt32.__op_GreaterThanOrEqual__SystemInt32_SystemInt32__SystemBoolean"
-        PUSH, __intnl_SystemBoolean_c0
-        PUSH, __intnl_SystemBoolean_c1
-        COPY
         PUSH, __intnl_SystemInt32_c0
         PUSH, __intnl_SystemInt32_c3
-        PUSH, __intnl_SystemBoolean_c0
+        PUSH, __intnl_SystemBoolean_c1
         EXTERN, "SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean"
         PUSH, __intnl_SystemBoolean_c0
-        PUSH, __intnl_SystemBoolean_c2
-        COPY
         PUSH, __intnl_SystemBoolean_c1
         PUSH, __intnl_SystemBoolean_c2
-        PUSH, __intnl_SystemBoolean_c0
         EXTERN, "SystemBoolean.__op_ConditionalAnd__SystemBoolean_SystemBoolean__SystemBoolean"
-        PUSH, __intnl_SystemBoolean_c0
-        PUSH, __intnl_SystemBoolean_c1
-        COPY
         PUSH, __intnl_SystemInt32_c1
         PUSH, __const_SystemInt32_2
         PUSH, __intnl_SystemBoolean_c0
         EXTERN, "SystemInt32.__op_GreaterThanOrEqual__SystemInt32_SystemInt32__SystemBoolean"
-        PUSH, __intnl_SystemBoolean_c0
-        PUSH, __intnl_SystemBoolean_c2
-        COPY
         PUSH, __intnl_SystemInt32_c1
         PUSH, __intnl_SystemInt32_c4
-        PUSH, __intnl_SystemBoolean_c0
+        PUSH, __intnl_SystemBoolean_c1
         EXTERN, "SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean"
         PUSH, __intnl_SystemBoolean_c0
+        PUSH, __intnl_SystemBoolean_c1
         PUSH, __intnl_SystemBoolean_c3
-        COPY
+        EXTERN, "SystemBoolean.__op_ConditionalAnd__SystemBoolean_SystemBoolean__SystemBoolean"
         PUSH, __intnl_SystemBoolean_c2
         PUSH, __intnl_SystemBoolean_c3
         PUSH, __intnl_SystemBoolean_c0
         EXTERN, "SystemBoolean.__op_ConditionalAnd__SystemBoolean_SystemBoolean__SystemBoolean"
-        PUSH, __intnl_SystemBoolean_c0
-        PUSH, __intnl_SystemBoolean_c2
-        COPY
-        PUSH, __intnl_SystemBoolean_c1
-        PUSH, __intnl_SystemBoolean_c2
-        PUSH, __intnl_SystemBoolean_c0
-        EXTERN, "SystemBoolean.__op_ConditionalAnd__SystemBoolean_SystemBoolean__SystemBoolean"
-        PUSH, __intnl_SystemBoolean_c0
-        PUSH, __intnl_SystemBoolean_c1
-        COPY
         PUSH, __intnl_SystemInt32_c0
         PUSH, __intnl_SystemInt32_c4
         PUSH, __intnl_SystemInt32_c2
         EXTERN, "SystemInt32.__op_Multiplication__SystemInt32_SystemInt32__SystemInt32"
         PUSH, __intnl_SystemInt32_c2
-        PUSH, __intnl_SystemInt32_c5
-        COPY
-        PUSH, __intnl_SystemInt32_c5
         PUSH, __intnl_SystemInt32_c1
-        PUSH, __intnl_SystemInt32_c2
-        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
-        PUSH, __intnl_SystemInt32_c2
         PUSH, __intnl_SystemInt32_c5
-        COPY
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
         PUSH, __const_SystemInt32_2
         PUSH, __intnl_SystemInt32_c2
         COPY
-        PUSH, __intnl_SystemBoolean_c1
-        JUMP_IF_FALSE, 0x00001374
-        JUMP, 0x00001644
+        PUSH, __intnl_SystemBoolean_c0
+        JUMP_IF_FALSE, 0x00000d84
+        JUMP, 0x00000f3c
     ___start_bb9:
         PUSH, __const_SystemString_13
         PUSH, __const_SystemString_8
         PUSH, __intnl_SystemString_c0
         EXTERN, "SystemString.__op_Addition__SystemString_SystemString__SystemString"
-        PUSH, __intnl_SystemString_c0
-        PUSH, __intnl_SystemString_c1
-        COPY
         PUSH, __intnl_SystemInt32_c0
-        PUSH, __intnl_SystemString_c0
+        PUSH, __intnl_SystemString_c1
         EXTERN, "SystemInt32.__ToString__SystemString"
         PUSH, __intnl_SystemString_c0
-        PUSH, __intnl_SystemString_c2
-        COPY
         PUSH, __intnl_SystemString_c1
         PUSH, __intnl_SystemString_c2
-        PUSH, __intnl_SystemString_c0
         EXTERN, "SystemString.__op_Addition__SystemString_SystemString__SystemString"
-        PUSH, __intnl_SystemString_c0
-        PUSH, __intnl_SystemString_c1
-        COPY
-        PUSH, __intnl_SystemString_c1
+        PUSH, __intnl_SystemString_c2
         PUSH, __const_SystemString_9
         PUSH, __intnl_SystemString_c0
         EXTERN, "SystemString.__op_Addition__SystemString_SystemString__SystemString"
-        PUSH, __intnl_SystemString_c0
-        PUSH, __intnl_SystemString_c1
-        COPY
         PUSH, __intnl_SystemInt32_c3
-        PUSH, __intnl_SystemString_c0
+        PUSH, __intnl_SystemString_c1
         EXTERN, "SystemInt32.__ToString__SystemString"
         PUSH, __intnl_SystemString_c0
-        PUSH, __intnl_SystemString_c2
-        COPY
         PUSH, __intnl_SystemString_c1
         PUSH, __intnl_SystemString_c2
-        PUSH, __intnl_SystemString_c0
         EXTERN, "SystemString.__op_Addition__SystemString_SystemString__SystemString"
-        PUSH, __intnl_SystemString_c0
-        PUSH, __intnl_SystemString_c1
-        COPY
-        PUSH, __intnl_SystemString_c1
+        PUSH, __intnl_SystemString_c2
         PUSH, __const_SystemString_10
         PUSH, __intnl_SystemString_c0
         EXTERN, "SystemString.__op_Addition__SystemString_SystemString__SystemString"
         PUSH, __intnl_SystemString_c0
-        PUSH, __intnl_SystemString_c1
-        COPY
-        PUSH, __intnl_SystemString_c1
         PUSH, __const_SystemString_11
-        PUSH, __intnl_SystemString_c0
-        EXTERN, "SystemString.__op_Addition__SystemString_SystemString__SystemString"
-        PUSH, __intnl_SystemString_c0
         PUSH, __intnl_SystemString_c1
-        COPY
+        EXTERN, "SystemString.__op_Addition__SystemString_SystemString__SystemString"
         PUSH, __intnl_SystemInt32_c1
         PUSH, __intnl_SystemString_c0
         EXTERN, "SystemInt32.__ToString__SystemString"
-        PUSH, __intnl_SystemString_c0
-        PUSH, __intnl_SystemString_c2
-        COPY
         PUSH, __intnl_SystemString_c1
-        PUSH, __intnl_SystemString_c2
         PUSH, __intnl_SystemString_c0
+        PUSH, __intnl_SystemString_c2
         EXTERN, "SystemString.__op_Addition__SystemString_SystemString__SystemString"
-        PUSH, __intnl_SystemString_c0
-        PUSH, __intnl_SystemString_c1
-        COPY
-        PUSH, __intnl_SystemString_c1
+        PUSH, __intnl_SystemString_c2
         PUSH, __const_SystemString_9
         PUSH, __intnl_SystemString_c0
         EXTERN, "SystemString.__op_Addition__SystemString_SystemString__SystemString"
-        PUSH, __intnl_SystemString_c0
-        PUSH, __intnl_SystemString_c1
-        COPY
         PUSH, __intnl_SystemInt32_c4
-        PUSH, __intnl_SystemString_c0
+        PUSH, __intnl_SystemString_c1
         EXTERN, "SystemInt32.__ToString__SystemString"
         PUSH, __intnl_SystemString_c0
-        PUSH, __intnl_SystemString_c2
-        COPY
         PUSH, __intnl_SystemString_c1
         PUSH, __intnl_SystemString_c2
-        PUSH, __intnl_SystemString_c0
         EXTERN, "SystemString.__op_Addition__SystemString_SystemString__SystemString"
-        PUSH, __intnl_SystemString_c0
-        PUSH, __intnl_SystemString_c1
-        COPY
-        PUSH, __intnl_SystemString_c1
+        PUSH, __intnl_SystemString_c2
         PUSH, __const_SystemString_10
         PUSH, __intnl_SystemString_c0
         EXTERN, "SystemString.__op_Addition__SystemString_SystemString__SystemString"
         PUSH, __intnl_SystemString_c0
-        PUSH, __intnl_SystemString_c1
-        COPY
-        PUSH, __intnl_SystemString_c1
         EXTERN, "UnityEngineDebug.__LogError__SystemObject__SystemVoid"
-        JUMP, 0x000016d4
+        JUMP, 0x00000fa4
     ___start_bb8:
-        PUSH, __intnl_SystemObjectArray_c0
+        PUSH, __intnl_SystemObjectArray_c1
         PUSH, __const_SystemInt32_2
         PUSH, __intnl_SystemObject_c0
         EXTERN, "SystemObjectArray.__Get__SystemInt32__SystemObject"
         PUSH, __intnl_SystemObject_c0
-        PUSH, __intnl_SystemObject_c1
-        COPY
-        PUSH, __intnl_SystemObject_c1
         PUSH, __intnl_SystemInt32Array_c0
         COPY
         PUSH, __intnl_SystemInt32Array_c0
@@ -855,46 +581,28 @@
         PUSH, __intnl_SystemInt32_c0
         EXTERN, "SystemInt32Array.__Get__SystemInt32__SystemInt32"
         PUSH, __intnl_SystemInt32_c0
-        PUSH, __intnl_SystemInt32_c1
-        COPY
-        PUSH, __intnl_SystemInt32_c1
         PUSH, __intnl_SystemInt32_c2
         COPY
     ___start_bb10:
         PUSH, __lcl_len0_SystemInt32_0
         PUSH, __intnl_SystemInt32_c0
         COPY
-        PUSH, __intnl_SystemInt32_c0
-        PUSH, __intnl_SystemInt32_c1
-        COPY
         PUSH, __intnl_SystemInt32_c2
-        PUSH, __intnl_SystemInt32_c1
         PUSH, __intnl_SystemInt32_c0
+        PUSH, __intnl_SystemInt32_c1
         EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
-        PUSH, __intnl_SystemInt32_c0
-        PUSH, __intnl_SystemInt32_c1
-        COPY
         PUSH, __lcl_len1_SystemInt32_0
         PUSH, __intnl_SystemInt32_c0
         COPY
-        PUSH, __intnl_SystemInt32_c0
-        PUSH, __intnl_SystemInt32_c2
-        COPY
         PUSH, __intnl_SystemInt32_c1
-        PUSH, __intnl_SystemInt32_c2
         PUSH, __intnl_SystemInt32_c0
+        PUSH, __intnl_SystemInt32_c2
         EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
-        PUSH, __intnl_SystemInt32_c0
-        PUSH, __intnl_SystemInt32_c1
-        COPY
-        PUSH, __intnl_SystemInt32_c1
+        PUSH, __intnl_SystemInt32_c2
         PUSH, result
         COPY
         PUSH, result
         PUSH, __intnl_SystemInt32_c0
-        COPY
-        PUSH, __intnl_SystemInt32_c0
-        PUSH, __intnl_SystemInt32_c1
         COPY
         PUSH, __intnl_returnJump_SystemUInt32_0
         COPY

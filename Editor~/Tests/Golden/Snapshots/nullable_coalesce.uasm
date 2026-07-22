@@ -9,13 +9,10 @@
     __refl_typename: %SystemString, null
     __const_SystemUInt32_sentinel: %SystemUInt32, null
     __intnl_UnityEngineTransform_c0: %UnityEngineTransform, null
-    __intnl_UnityEngineTransform_c1: %UnityEngineTransform, null
     __const_SystemObject_0: %SystemObject, null
     __intnl_SystemBoolean_c0: %SystemBoolean, null
-    __intnl_SystemBoolean_c1: %SystemBoolean, null
     __intnl_UnityEngineVector3_c0: %UnityEngineVector3, null
     __intnl_UnityEngineVector3_c1: %UnityEngineVector3, null
-    __intnl_UnityEngineVector3_c2: %UnityEngineVector3, null
 .data_end
 .code_start
     .export _start
@@ -26,53 +23,35 @@
         PUSH, __intnl_UnityEngineTransform_c0
         COPY
         PUSH, __intnl_UnityEngineTransform_c0
-        PUSH, __intnl_UnityEngineTransform_c1
-        COPY
-        PUSH, __intnl_UnityEngineTransform_c1
         PUSH, __const_SystemObject_0
         PUSH, __intnl_SystemBoolean_c0
         EXTERN, "SystemObject.__op_Inequality__SystemObject_SystemObject__SystemBoolean"
         PUSH, __intnl_SystemBoolean_c0
-        PUSH, __intnl_SystemBoolean_c1
-        COPY
-        PUSH, __intnl_SystemBoolean_c1
-        JUMP_IF_FALSE, 0x0000007c
-        JUMP, 0x000000bc
+        JUMP_IF_FALSE, 0x00000054
+        JUMP, 0x00000080
     ___start_bb3:
         PUSH, __intnl_UnityEngineVector3_c0
         EXTERN, "UnityEngineVector3.__get_zero__UnityEngineVector3"
         PUSH, __intnl_UnityEngineVector3_c0
         PUSH, __intnl_UnityEngineVector3_c1
         COPY
-        PUSH, __intnl_UnityEngineVector3_c1
-        PUSH, __intnl_UnityEngineVector3_c0
-        COPY
-        JUMP, 0x00000124
+        JUMP, 0x000000c0
     ___start_bb2:
         PUSH, target
         PUSH, __intnl_UnityEngineTransform_c0
         COPY
         PUSH, __intnl_UnityEngineTransform_c0
-        PUSH, __intnl_UnityEngineTransform_c1
-        COPY
-        PUSH, __intnl_UnityEngineTransform_c1
-        PUSH, __intnl_UnityEngineVector3_c1
-        EXTERN, "UnityEngineTransform.__get_position__UnityEngineVector3"
-        PUSH, __intnl_UnityEngineVector3_c1
-        PUSH, __intnl_UnityEngineVector3_c2
-        COPY
-        PUSH, __intnl_UnityEngineVector3_c2
         PUSH, __intnl_UnityEngineVector3_c0
+        EXTERN, "UnityEngineTransform.__get_position__UnityEngineVector3"
+        PUSH, __intnl_UnityEngineVector3_c0
+        PUSH, __intnl_UnityEngineVector3_c1
         COPY
     ___start_bb4:
-        PUSH, __intnl_UnityEngineVector3_c0
-        PUSH, p
-        COPY
-        PUSH, p
-        PUSH, __intnl_UnityEngineVector3_c0
-        COPY
-        PUSH, __intnl_UnityEngineVector3_c0
         PUSH, __intnl_UnityEngineVector3_c1
+        PUSH, p
+        COPY
+        PUSH, p
+        PUSH, __intnl_UnityEngineVector3_c0
         COPY
         PUSH, __intnl_returnJump_SystemUInt32_0
         COPY

@@ -13,7 +13,6 @@
     __intnl_SystemInt32_c1: %SystemInt32, null
     __intnl_SystemInt32_c2: %SystemInt32, null
     __intnl_SystemInt32_c3: %SystemInt32, null
-    __intnl_SystemInt32_c4: %SystemInt32, null
     __const_retaddr_SystemUInt32_0: %SystemUInt32, null
 .data_end
 .code_start
@@ -25,46 +24,31 @@
         PUSH, __1_n__param
         COPY
         PUSH, __const_retaddr_SystemUInt32_0
-        JUMP, 0x000000a4
+        JUMP, 0x0000007c
     ___start__callret_0:
         PUSH, __1_Square__ret
         PUSH, __intnl_SystemInt32_c0
         COPY
         PUSH, __intnl_SystemInt32_c0
-        PUSH, __intnl_SystemInt32_c1
-        COPY
-        PUSH, __intnl_SystemInt32_c1
         PUSH, r
         COPY
         PUSH, r
         PUSH, __intnl_SystemInt32_c0
-        COPY
-        PUSH, __intnl_SystemInt32_c0
-        PUSH, __intnl_SystemInt32_c1
         COPY
         PUSH, __intnl_returnJump_SystemUInt32_0
         COPY
         JUMP_INDIRECT, __intnl_returnJump_SystemUInt32_0
     ____1_Square:
         PUSH, __1_n__param
-        PUSH, __intnl_SystemInt32_c2
-        COPY
-        PUSH, __intnl_SystemInt32_c2
-        PUSH, __intnl_SystemInt32_c3
+        PUSH, __intnl_SystemInt32_c1
         COPY
         PUSH, __1_n__param
         PUSH, __intnl_SystemInt32_c2
         COPY
+        PUSH, __intnl_SystemInt32_c1
         PUSH, __intnl_SystemInt32_c2
-        PUSH, __intnl_SystemInt32_c4
-        COPY
         PUSH, __intnl_SystemInt32_c3
-        PUSH, __intnl_SystemInt32_c4
-        PUSH, __intnl_SystemInt32_c2
         EXTERN, "SystemInt32.__op_Multiplication__SystemInt32_SystemInt32__SystemInt32"
-        PUSH, __intnl_SystemInt32_c2
-        PUSH, __intnl_SystemInt32_c3
-        COPY
         PUSH, __intnl_SystemInt32_c3
         PUSH, __1_Square__ret
         COPY

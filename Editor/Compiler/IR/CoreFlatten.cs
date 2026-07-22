@@ -130,6 +130,28 @@ public static class CoreFlatten
 
     static void LowerAssign(CAssign a, Ctx ctx)
     {
+        // Bind already allocated the producer's logical result slot. Simple producers can write it
+        // directly; allocating another scratch here only to COPY it back inflated the flat IR and
+        // made correctness depend on the later coalescer removing that redundant pair.
+        switch (a.Value)
+        {
+            case CFieldLoad fl:
+                ctx.Current.Stmts.Add(new CLoadField(a.DestSlot, fl.FieldName, fl.Type));
+                return;
+            case CExternCall ec:
+                ctx.Current.Stmts.Add(new CExprStmt(ec.With(new List<CLeaf>(ec.Args), a.DestSlot)));
+                return;
+            case CInternalCall ic:
+                ctx.Current.Stmts.Add(new CExprStmt(ic.With(new List<CLeaf>(ic.Args), a.DestSlot)));
+                return;
+            case CCrossCall cc when cc.Returns.Count == 1:
+                LowerCrossCall(cc, ctx, a.DestSlot);
+                return;
+            case CSelect sel:
+                LowerSelect(sel, ctx, a.DestSlot);
+                return;
+        }
+
         var src = LowerExpr(a.Value, ctx);
         ctx.Current.Stmts.Add(new CAssign(a.DestSlot, src));
     }
@@ -302,15 +324,15 @@ public static class CoreFlatten
                 return dest.HasValue ? new CSlotRef(dest.Value, ic.Type) : new CConst(null, StorageTypes.Void);
             }
 
-            case CCrossCall cc: return LowerCrossCall(cc, ctx);
-            case CSelect sel: return LowerSelect(sel, ctx);
+            case CCrossCall cc: return LowerCrossCall(cc, ctx, null);
+            case CSelect sel: return LowerSelect(sel, ctx, null);
 
             default:
                 throw new InvalidOperationException($"Unknown CValue: {expr.GetType().Name}");
         }
     }
 
-    static CLeaf LowerCrossCall(CCrossCall cc, Ctx ctx)
+    static CLeaf LowerCrossCall(CCrossCall cc, Ctx ctx, int? destination)
     {
         // Instance, param values, and the string-constant operands are all CLeaf — already flat.
         var inst = cc.Instance;
@@ -335,7 +357,7 @@ public static class CoreFlatten
         if (cc.Returns.Count == 1)
         {
             var ret = cc.Returns[0];
-            var dest = ctx.AllocScratch(cc.Type);
+            var dest = destination ?? ctx.AllocScratch(cc.Type);
             ctx.Current.Stmts.Add(new CExprStmt(new CExternCall(
                 ExternResolver.EventReceiverGetProgramVariable,
                 new List<CLeaf> { inst, new CConst(ret.Id, StorageTypes.String) }, cc.Type, dest)));
@@ -356,9 +378,9 @@ public static class CoreFlatten
         return new CConst(null, StorageTypes.Void);
     }
 
-    static CLeaf LowerSelect(CSelect sel, Ctx ctx)
+    static CLeaf LowerSelect(CSelect sel, Ctx ctx, int? destination)
     {
-        var resultSlot = ctx.AllocScratch(sel.Type);
+        var resultSlot = destination ?? ctx.AllocScratch(sel.Type);
         // Cond/TrueVal/FalseVal are CLeaf operands (ANF) bound before the select — already flat. CSelect is
         // used only for PURE branches, so eagerly assigning the pre-bound branch leaf in each arm is correct.
         var trueBlock = ctx.NewBlock();

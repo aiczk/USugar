@@ -10,11 +10,9 @@
     __const_SystemUInt32_sentinel: %SystemUInt32, null
     __const_SystemInt32_0: %SystemInt32, null
     __intnl_SystemInt32_c0: %SystemInt32, null
-    __intnl_SystemInt32_c1: %SystemInt32, null
     __const_SystemInt32_1: %SystemInt32, null
-    __intnl_SystemInt32_c2: %SystemInt32, null
+    __intnl_SystemInt32_c1: %SystemInt32, null
     __intnl_SystemBoolean_c0: %SystemBoolean, null
-    __intnl_SystemBoolean_c1: %SystemBoolean, null
 .data_end
 .code_start
     .export _start
@@ -27,55 +25,34 @@
         PUSH, i
         PUSH, __intnl_SystemInt32_c0
         COPY
-        PUSH, __intnl_SystemInt32_c0
-        PUSH, __intnl_SystemInt32_c1
-        COPY
     ___start_bb3:
         PUSH, i
         PUSH, __intnl_SystemInt32_c0
         COPY
         PUSH, __intnl_SystemInt32_c0
-        PUSH, __intnl_SystemInt32_c1
-        COPY
-        PUSH, __intnl_SystemInt32_c1
         PUSH, __const_SystemInt32_1
-        PUSH, __intnl_SystemInt32_c0
+        PUSH, __intnl_SystemInt32_c1
         EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
-        PUSH, __intnl_SystemInt32_c0
-        PUSH, __intnl_SystemInt32_c1
-        COPY
         PUSH, __intnl_SystemInt32_c1
         PUSH, i
         COPY
         PUSH, i
         PUSH, __intnl_SystemInt32_c0
-        COPY
-        PUSH, __intnl_SystemInt32_c0
-        PUSH, __intnl_SystemInt32_c1
         COPY
     ___start_bb2:
         PUSH, i
         PUSH, __intnl_SystemInt32_c0
         COPY
-        PUSH, __intnl_SystemInt32_c0
-        PUSH, __intnl_SystemInt32_c1
-        COPY
         PUSH, n
-        PUSH, __intnl_SystemInt32_c0
-        COPY
-        PUSH, __intnl_SystemInt32_c0
-        PUSH, __intnl_SystemInt32_c2
-        COPY
         PUSH, __intnl_SystemInt32_c1
-        PUSH, __intnl_SystemInt32_c2
+        COPY
+        PUSH, __intnl_SystemInt32_c0
+        PUSH, __intnl_SystemInt32_c1
         PUSH, __intnl_SystemBoolean_c0
         EXTERN, "SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean"
         PUSH, __intnl_SystemBoolean_c0
-        PUSH, __intnl_SystemBoolean_c1
-        COPY
-        PUSH, __intnl_SystemBoolean_c1
-        JUMP_IF_FALSE, 0x00000178
-        JUMP, 0x00000044
+        JUMP_IF_FALSE, 0x000000ec
+        JUMP, 0x00000030
     ___start_bb4:
         PUSH, __intnl_returnJump_SystemUInt32_0
         COPY
