@@ -96,7 +96,9 @@ public sealed class ResolvedEdgeResolver
                 yield return new ResolvedTarget(mr.Method.OriginalDefinition, TargetRole.EscapeTarget);
                 if (mr.Method.ContainingType is INamedTypeSymbol { TypeKind: TypeKind.Interface } escapeIface
                     && _emitter.Planner.InterfaceIsLocalUserClassOnly(escapeIface))
-                    foreach (var vt in _emitter.VirtualDispatchInstance.ResolveInterfaceTargets(escapeIface, mr.Method))
+                    foreach (var vt in _emitter.VirtualDispatchInstance.Resolve(
+                        new CallableSite(CallableSiteKind.Method, mr.Method, mr, mr.Instance),
+                        escapeIface, interfaceDispatch: true).RuntimeTargets)
                         yield return new ResolvedTarget(vt.Impl.OriginalDefinition, TargetRole.EscapeTarget);
                 if (LeafMethodRefTarget(mr) is { } leafT)
                     yield return new ResolvedTarget(leafT, TargetRole.EscapeTarget);
@@ -439,11 +441,15 @@ public sealed class ResolvedEdgeResolver
                 }
                 else if (inv.Instance?.Type is INamedTypeSymbol vrecv
                     && VirtualDispatch.IsDispatchSite(inv.TargetMethod, inv.Instance, vrecv))
-                    foreach (var vt in _emitter.VirtualDispatchInstance.ResolveTargets(vrecv, inv.TargetMethod))
+                    foreach (var vt in _emitter.VirtualDispatchInstance.Resolve(
+                        new CallableSite(CallableSiteKind.Method, inv.TargetMethod, inv, inv.Instance),
+                        vrecv, interfaceDispatch: false).RuntimeTargets)
                         yield return vt.Impl.OriginalDefinition;
                 if (inv.TargetMethod.ContainingType is INamedTypeSymbol { TypeKind: TypeKind.Interface } iface
                     && _emitter.Planner.InterfaceIsLocalUserClassOnly(iface))
-                    foreach (var vt in _emitter.VirtualDispatchInstance.ResolveInterfaceTargets(iface, inv.TargetMethod))
+                    foreach (var vt in _emitter.VirtualDispatchInstance.Resolve(
+                        new CallableSite(CallableSiteKind.Method, inv.TargetMethod, inv, inv.Instance),
+                        iface, interfaceDispatch: true).RuntimeTargets)
                         yield return vt.Impl.OriginalDefinition;
                 break;
             case IObjectCreationOperation { Constructor: { } ctor }:
@@ -514,10 +520,14 @@ public sealed class ResolvedEdgeResolver
                     && _emitter.Planner.InterfaceIsLocalUserClassOnly(propIface))
                 {
                     if (pr.Property.GetMethod is { } ig)
-                        foreach (var vt in _emitter.VirtualDispatchInstance.ResolveInterfaceTargets(propIface, ig))
+                        foreach (var vt in _emitter.VirtualDispatchInstance.Resolve(
+                            new CallableSite(CallableSiteKind.PropertyGet, ig, pr, pr.Instance),
+                            propIface, interfaceDispatch: true).RuntimeTargets)
                             yield return vt.Impl.OriginalDefinition;
                     if (pr.Property.SetMethod is { } ise)
-                        foreach (var vt in _emitter.VirtualDispatchInstance.ResolveInterfaceTargets(propIface, ise))
+                        foreach (var vt in _emitter.VirtualDispatchInstance.Resolve(
+                            new CallableSite(CallableSiteKind.PropertySet, ise, pr, pr.Instance),
+                            propIface, interfaceDispatch: true).RuntimeTargets)
                             yield return vt.Impl.OriginalDefinition;
                 }
                 break;
@@ -530,7 +540,10 @@ public sealed class ResolvedEdgeResolver
                 if (accessor?.ContainingType is INamedTypeSymbol { TypeKind: TypeKind.Interface } eventIface
                     && _emitter.Planner.InterfaceIsLocalUserClassOnly(eventIface))
                 {
-                    foreach (var vt in _emitter.VirtualDispatchInstance.ResolveInterfaceTargets(eventIface, accessor))
+                    foreach (var vt in _emitter.VirtualDispatchInstance.Resolve(
+                        new CallableSite(eventAssignment.Adds ? CallableSiteKind.EventAdd : CallableSiteKind.EventRemove,
+                            accessor, eventAssignment, eventReference.Instance),
+                        eventIface, interfaceDispatch: true).RuntimeTargets)
                         yield return vt.Impl.OriginalDefinition;
                 }
                 else if (accessor != null && !accessor.IsImplicitlyDeclared)
@@ -579,7 +592,10 @@ public sealed class ResolvedEdgeResolver
         }
         else if (pr.Instance?.Type is INamedTypeSymbol arecv
                  && VirtualDispatch.IsDispatchSite(acc, pr.Instance, arecv))
-            foreach (var vt in _emitter.VirtualDispatchInstance.ResolveTargets(arecv, acc))
+            foreach (var vt in _emitter.VirtualDispatchInstance.Resolve(
+                new CallableSite(acc.MethodKind == MethodKind.PropertyGet
+                        ? CallableSiteKind.PropertyGet : CallableSiteKind.PropertySet,
+                    acc, pr, pr.Instance), arecv, interfaceDispatch: false).RuntimeTargets)
                 yield return vt.Impl.OriginalDefinition;
     }
 
@@ -603,7 +619,9 @@ public sealed class ResolvedEdgeResolver
                     yield return genImpl.OriginalDefinition;
         }
         else if (t is INamedTypeSymbol nts && TypeClassifier.IsUserClass(nts))
-            foreach (var vt in _emitter.VirtualDispatchInstance.ResolveTargets(nts, slotDef))
+            foreach (var vt in _emitter.VirtualDispatchInstance.Resolve(
+                new CallableSite(CallableSiteKind.Method, slotDef, valueOp, valueOp),
+                nts, interfaceDispatch: false).RuntimeTargets)
                 if (TypeClassifier.IsUserClass(vt.Impl.ContainingType))
                     yield return vt.Impl.OriginalDefinition;
     }

@@ -222,7 +222,8 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
             if (ResolveType(op.Instance?.Type) is INamedTypeSymbol recvTy
                 && VirtualDispatch.IsDispatchSite(target, op.Instance, recvTy))
             {
-                var targets = _ctx.VirtualDispatch.ResolveTargets(recvTy, target);
+                var site = new CallableSite(CallableSiteKind.Method, target, op, op.Instance);
+                var targets = _ctx.VirtualDispatch.Resolve(site, recvTy, interfaceDispatch: false).RuntimeTargets;
                 AssertClosedVirtualDispatch(recvTy, targets, target);
                 if (!recvTy.IsSealed && targets.Count >= 2)
                     return EmitVirtualChain(op, targets);
@@ -403,7 +404,8 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
         if (target.ContainingType is INamedTypeSymbol { TypeKind: TypeKind.Interface } localInterface
             && _planner.InterfaceIsLocalUserClassOnly(localInterface))
         {
-            var targets = _ctx.VirtualDispatch.ResolveInterfaceTargets(localInterface, target);
+            var site = new CallableSite(CallableSiteKind.Method, target, op, op.Instance);
+            var targets = _ctx.VirtualDispatch.Resolve(site, localInterface, interfaceDispatch: true).RuntimeTargets;
             if (targets.Count >= 2)
                 return EmitVirtualChain(op, targets);
             if (targets.Count == 1)
@@ -441,7 +443,7 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
     /// dynamically typed, so no conv-ret desync. CW3 ref/out parity with the devirt sibling
     /// (EmitStructInstanceCall): guard per impl (cycle edges are per-override) and copy back inside the
     /// executed arm — the arms are mutually exclusive, so the per-arm stores never race.</summary>
-    CLeaf EmitVirtualChain(IInvocationOperation op, List<VDispatchTarget> targets)
+    CLeaf EmitVirtualChain(IInvocationOperation op, IReadOnlyList<VDispatchTarget> targets)
     {
         // Pure analysis (throws only): the substituted symbol equals ResolveStructMember's result minus
         // its on-demand registration side effect, which stays inside the arms (registration order intact).

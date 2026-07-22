@@ -29,11 +29,53 @@ public readonly struct CrossDispatchPlan
     public CrossDispatchPlan(IMethodSymbol localTarget) => LocalTarget = localTarget;
 }
 
+internal enum DispatchPrecision
+{
+    Static,
+    ClosedWorld,
+}
+
+/// <summary>One normalized callable site's dispatch targets. Emission consumes RuntimeTargets;
+/// recursion/reachability consume the same implementations and the optional local cross landing.</summary>
+internal readonly struct DispatchPlan
+{
+    public readonly CallableSite Site;
+    public readonly IReadOnlyList<VDispatchTarget> RuntimeTargets;
+    public readonly CrossDispatchPlan Cross;
+    public readonly DispatchPrecision Precision;
+
+    public DispatchPlan(CallableSite site, IReadOnlyList<VDispatchTarget> runtimeTargets,
+        CrossDispatchPlan cross, DispatchPrecision precision)
+    {
+        Site = site;
+        RuntimeTargets = runtimeTargets;
+        Cross = cross;
+        Precision = precision;
+    }
+}
+
 public sealed class VirtualDispatch
 {
     readonly ClassTypeObjectContext _typeObjs;
 
     public VirtualDispatch(ClassTypeObjectContext typeObjs) { _typeObjs = typeObjs; }
+
+    /// <summary>Single target-resolution entry for normalized callable sites. The caller states whether
+    /// the receiver uses interface dispatch; every consumer then receives the same closed-world target
+    /// list instead of selecting one of two resolver APIs independently.</summary>
+    internal DispatchPlan Resolve(CallableSite site, INamedTypeSymbol receiverType,
+        bool interfaceDispatch, INamedTypeSymbol compiledClass = null)
+    {
+        var runtimeTargets = interfaceDispatch
+            ? ResolveInterfaceTargets(receiverType, site.Target)
+            : IsDispatchSite(site.Target, site.Receiver, receiverType)
+                ? ResolveTargets(receiverType, site.Target)
+                : new List<VDispatchTarget>();
+        var cross = compiledClass == null
+            ? default : ResolveCrossProgramLocalTarget(compiledClass, site.Target);
+        return new DispatchPlan(site, runtimeTargets, cross,
+            runtimeTargets.Count == 0 ? DispatchPrecision.Static : DispatchPrecision.ClosedWorld);
+    }
 
     /// <summary>Resolve where a variable/interface receiver dispatch lands if it points back to the
     /// program currently being compiled. Shared by emission re-entry marking and SCC analysis.</summary>
@@ -115,7 +157,7 @@ public sealed class VirtualDispatch
 
     /// <summary>The closed-world set of (minted concrete subtype of staticType, its most-derived impl of the
     /// slot). Empty if no minted subtype implements it; singleton ⇒ devirtualizable; ≥2 ⇒ ReferenceEquals-chain.</summary>
-    public List<VDispatchTarget> ResolveTargets(INamedTypeSymbol staticType, IMethodSymbol slotMethod)
+    List<VDispatchTarget> ResolveTargets(INamedTypeSymbol staticType, IMethodSymbol slotMethod)
     {
         var slotDef = SlotIntroducer(slotMethod);
         var outp = new List<VDispatchTarget>();
@@ -136,7 +178,7 @@ public sealed class VirtualDispatch
         return outp;
     }
 
-    public List<VDispatchTarget> ResolveInterfaceTargets(INamedTypeSymbol interfaceType, IMethodSymbol member)
+    List<VDispatchTarget> ResolveInterfaceTargets(INamedTypeSymbol interfaceType, IMethodSymbol member)
     {
         var outp = new List<VDispatchTarget>();
         foreach (var concrete in _typeObjs.MintedClasses)

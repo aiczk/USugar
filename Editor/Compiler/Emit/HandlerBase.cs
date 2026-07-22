@@ -2251,7 +2251,7 @@ public abstract partial class HandlerBase
     /// there shares one typeobj, and cross-context mints are invisible to exact-symbol assignability.
     /// Same choke-point polarity as EmitTypeCheck's family reject: loud over a silent
     /// base-impl call / cross-spec dispatch.</summary>
-    protected void AssertClosedVirtualDispatch(INamedTypeSymbol recvTy, List<VDispatchTarget> targets, IMethodSymbol target)
+    protected void AssertClosedVirtualDispatch(INamedTypeSymbol recvTy, IReadOnlyList<VDispatchTarget> targets, IMethodSymbol target)
     {
         ClassAbiPolicy.AssertClosed(recvTy, $"virtual call '{target.Name}' receiver");
         foreach (var dispatchTarget in targets)
@@ -2313,9 +2313,9 @@ public abstract partial class HandlerBase
         IMethodSymbol accessor, CLeaf recv, List<CLeaf> indexArgs, CLeaf setValue)
     {
         var interfaceDispatch = recvTy.TypeKind == TypeKind.Interface;
-        var targets = interfaceDispatch
-            ? _ctx.VirtualDispatch.ResolveInterfaceTargets(recvTy, accessor)
-            : _ctx.VirtualDispatch.ResolveTargets(recvTy, accessor);
+        var site = new CallableSite(setValue == null ? CallableSiteKind.PropertyGet : CallableSiteKind.PropertySet,
+            accessor, null);
+        var targets = _ctx.VirtualDispatch.Resolve(site, recvTy, interfaceDispatch).RuntimeTargets;
         if (!interfaceDispatch) AssertClosedVirtualDispatch(recvTy, targets, accessor);
         bool isSet = setValue != null;
         string memberKind = prop.IsIndexer ? "indexer" : "property";
@@ -2443,7 +2443,8 @@ public abstract partial class HandlerBase
         bool nullIsError, bool useOverrides)
     {
         var slot = ObjectToStringSlot();
-        var targets = _ctx.VirtualDispatch.ResolveTargets(recvTy, slot);
+        var site = new CallableSite(CallableSiteKind.Method, slot, null);
+        var targets = _ctx.VirtualDispatch.Resolve(site, recvTy, interfaceDispatch: false).RuntimeTargets;
         AssertClosedVirtualDispatch(recvTy, targets, slot);
 
         var recvSlot = _ctx.Builder.AllocScratch(new StorageType(AggregateAbi.ArrayType));

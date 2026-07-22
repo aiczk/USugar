@@ -188,7 +188,9 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
             EmitAssign(recvSlot, LoadInstanceRaw(evtRef.Instance));
             var handlerSlot = _builder.AllocScratch(GetStorageType(evt.Type));
             EmitAssign(handlerSlot, VisitExpression(op.HandlerValue));
-            var targets = _ctx.VirtualDispatch.ResolveInterfaceTargets(localInterface, accessor);
+            var kind = op.Adds ? CallableSiteKind.EventAdd : CallableSiteKind.EventRemove;
+            var site = new CallableSite(kind, accessor, op, evtRef.Instance);
+            var targets = _ctx.VirtualDispatch.Resolve(site, localInterface, interfaceDispatch: true).RuntimeTargets;
             if (targets.Count == 0)
                 throw new System.NotSupportedException(
                     $"Interface event '{localInterface.Name}.{evt.Name}' has no minted implementation.");

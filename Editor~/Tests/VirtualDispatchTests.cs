@@ -16,7 +16,7 @@ public class VirtualDispatchTests
     // Build a VirtualDispatch over a source, seeding the typeobj registry with every concrete (non-abstract,
     // non-UdonSharpBehaviour) user class — the stand-in for the frozen minted set — then resolve the dispatch
     // targets for `methodName` at receiver static type `staticTypeName`.
-    static System.Collections.Generic.List<VDispatchTarget> Resolve(
+    static System.Collections.Generic.IReadOnlyList<VDispatchTarget> Resolve(
         string src, string behaviour, string staticTypeName, string methodName)
     {
         var comp = TestHelper.BuildCompilation(src, behaviour, out _);
@@ -34,7 +34,9 @@ public class VirtualDispatchTests
 
         var staticTy = Find(staticTypeName);
         var slot = staticTy.GetMembers(methodName).OfType<IMethodSymbol>().First();
-        return new VirtualDispatch(typeObjs).ResolveTargets(staticTy, slot);
+        var site = new CallableSite(CallableSiteKind.Method, slot, null);
+        return new VirtualDispatch(typeObjs).Resolve(
+            site, staticTy, interfaceDispatch: false).RuntimeTargets;
     }
 
     static bool IsBehaviour(INamedTypeSymbol t)
