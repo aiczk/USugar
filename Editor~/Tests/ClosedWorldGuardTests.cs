@@ -895,7 +895,7 @@ public class CwNblSwNot : UdonSharpBehaviour {
     {
         // The single-value clause set eqType = GetUdonType(Nullable<T>) = SystemObject and compared
         // the raw scrutinee box against a boxed label const — but SystemObject.__op_Equality is
-        // REFERENCE equality (runtime differential harness), so EVERY non-null constant case on ANY
+        // REFERENCE equality (confirmed by the runtime differential harness), so EVERY non-null constant case on ANY
         // nullable scrutinee silently fell to default while the pattern twin `x is 5` answered true.
         // Mirror the pattern clause: HasValue gate + underlying-typed equality; `case null:` keeps
         // the object null check.

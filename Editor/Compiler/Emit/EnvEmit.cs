@@ -11,8 +11,8 @@ using Microsoft.CodeAnalysis;
 //   scope was allocated here, else a __envp + parent-slot walk (EffectiveParent hops, never raw
 //   .Parent).
 // - Read/Write: captured-variable access through SystemObjectArray __Get/__Set on the owning
-//   scope's env. Typed __Get destinations are safe for every value type (M1 gating probe P-A:
-//   UdonHeap retypes the dest StrongBox and typed reads match on boxed runtime type).
+//   scope's env. The supported value-type matrix is pinned by the typed __Get runtime probe: each
+//   boxed value can be read into its matching typed destination.
 // Static + stateless: all state lives on EmitContext, so HandlerBase-derived handlers and
 // UasmEmitter's method-entry hook share one implementation.
 // (C# 9.0 only — Unity compiles Editor/ at the 2022.3 language level.)

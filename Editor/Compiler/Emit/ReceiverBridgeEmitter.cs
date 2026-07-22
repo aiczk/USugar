@@ -50,7 +50,6 @@ public sealed class ReceiverBridgeEmitter
         {
         var environmentName = DelegateAbi.ConvEnvName(signaturePart);
         var environmentType = new StorageType(EnvEmit.EnvType);
-        _context.Storage.TryDeclareVar(environmentName, environmentType);
         var receiver = _bridge.Load(environmentName, environmentType);
         var arguments = _bridge.LoadArguments(plan);
         arguments.Insert(0, receiver);
@@ -112,7 +111,6 @@ public sealed class ReceiverBridgeEmitter
         {
         var environmentName = DelegateAbi.ConvEnvName(signaturePart);
         var environmentType = new StorageType(EnvEmit.EnvType);
-        _context.Storage.TryDeclareVar(environmentName, environmentType);
         var receiver = _bridge.Load(environmentName, environmentType);
 
         var arguments = _bridge.LoadArguments(plan);

@@ -315,6 +315,7 @@ public class DlgInit : UdonSharpBehaviour {
         Assert.Contains("cb: %SystemObjectArray, null", uasm);
         Assert.Contains("SystemObjectArray.__ctor__SystemInt32__SystemObjectArray", uasm);
         Assert.Contains("__dlg_", uasm);
+        Assert.Matches(@"__dlgc_[^:\r\n]+__env: %SystemObjectArray", uasm);
     }
 
     [Fact]

@@ -10,6 +10,7 @@
     __this_VRCUdonUdonBehaviour_0: %VRCUdonUdonBehaviour, this
     __dlgc_Void__SystemObject__ret: %SystemObject, null
     __dlgc_Void__SystemObject__env: %SystemObjectArray, null
+    __dlgc_Void__SystemString__env: %SystemObjectArray, null
     __dlgc_Void__SystemString__ret: %SystemString, null
     __const_SystemString_0: %SystemString, null
     __const_SystemUInt32_sentinel: %SystemUInt32, null

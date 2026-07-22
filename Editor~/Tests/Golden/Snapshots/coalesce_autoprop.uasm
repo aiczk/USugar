@@ -7,7 +7,9 @@
     __refl_typename: %SystemString, null
     __0_get_Name__ret: %SystemString, null
     __0_value__param: %SystemString, null
+    __dlgc_Void__SystemString__env: %SystemObjectArray, null
     __dlgc_Void__SystemString__ret: %SystemString, null
+    __dlgc_SystemString__Void__env: %SystemObjectArray, null
     __dlgc_SystemString__Void__a0: %SystemString, null
     __const_SystemUInt32_sentinel: %SystemUInt32, null
     __intnl_SystemString_c0: %SystemString, null

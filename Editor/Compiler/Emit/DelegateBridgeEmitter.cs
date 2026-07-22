@@ -121,7 +121,6 @@ public sealed class DelegateBridgeEmitter
         var builder = _context.Builder;
         var environmentName = DelegateAbi.ConvEnvName(signaturePart);
         var environmentType = new StorageType(EnvEmit.EnvType);
-        _context.Storage.TryDeclareVar(environmentName, environmentType);
         var environment = _bridge.Load(environmentName, environmentType);
         arguments.Add(environment);
 

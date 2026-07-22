@@ -20,7 +20,7 @@ namespace USugar.Tests;
 ///     registered __Equals extern, and ResolveExtern's Component-owner fallback silently adopted
 ///     UnityEngineComponent.__Equals__SystemObject__SystemBoolean — whose wrapper reads the receiver
 ///     as UnityEngine.Object, so the real VM throws HeapTypeMismatchException at runtime on legal C#
-///     (runtime differential harness), laundered past the extern
+///     (confirmed by the runtime differential harness), laundered past the extern
 ///     census because the adopted extern IS registered. Fixed: an SDK-enum receiver's .Equals lowers
 ///     to the null-safe STATIC object.Equals extern — an SDK enum's box keeps its real type identity
 ///     on the VM heap, so static object.Equals IS C#'s Enum.Equals (same type AND same value) for

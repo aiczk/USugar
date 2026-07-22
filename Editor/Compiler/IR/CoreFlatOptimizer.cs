@@ -45,8 +45,8 @@ public static class CoreFlatOptimizer
 
     // Wave-9 round-5 [X4]: spill-temp coalesce trigger. Spill/reload wraps allocate ~10 fresh
     // scratch slots per spilled value per site AFTER CoalesceSlots has run, so a many-site /
-    // many-value function can mint hundreds of never-merged heap symbols and push the program past
-    // the SDK assembler's 512-entry UdonHeap (VmFault on legal C#). Above this threshold the fresh
+    // many-value function can mint hundreds of never-merged data symbols and exceed the program-size
+    // limit observed through the SDK assembler/runtime boundary. Above this threshold the fresh
     // temps are interval-coalesced among THEMSELVES (identity below it — byte-stable for every
     // pinned shape: nontail_recursion.uasm, the only committed snapshot with __recurStack, has 29
     // __intnl_ vars in total).

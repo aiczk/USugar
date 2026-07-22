@@ -48,8 +48,8 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
         // Object/ValueType/Enum owner resolves (B59 concrete / [V3] type-param) to the receiver's own
         // Udon type (UnityEngineKeyCode …), which has NO registered __Equals extern, and ResolveExtern's
         // Component-owner fallback then silently adopted UnityEngineComponent.__Equals — whose wrapper
-        // reads the receiver as UnityEngine.Object, so the real VM throws HeapTypeMismatchException at
-        // runtime on legal C# (runtime differential tests), laundered past the
+        // expects a UnityEngine.Object receiver. Runtime differential tests show that invoking it with
+        // a boxed SDK enum faults instead of producing the C# value-equality result, laundered past the
         // extern census because the adopted extern IS registered. An SDK enum's box keeps its REAL type
         // identity on the VM heap, so the null-safe STATIC object.Equals extern IS C#'s Enum.Equals
         // (same type AND same value) for every argument shape, including cross-type — route it there.

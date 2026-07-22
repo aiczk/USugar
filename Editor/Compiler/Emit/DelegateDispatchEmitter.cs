@@ -67,7 +67,8 @@ public sealed class DelegateDispatchEmitter
             {
                 // tgt is a SystemObject temp fed to externs directly — no Convert needed (P1/P5a).
                 var tgt = DelegateAbi.ReadSlot(_builder, bundle, DelegateAbi.Target, "SystemObject");
-                // target-null guard: unset element, or the in-game security filter nulling DelegateAbi.Target.
+                // A bundle without a target is not invokable, regardless of whether it was default-created
+                // or arrived through an external boundary that did not preserve the target reference.
                 var tOk = DelegateAbi.HasTarget(_builder, tgt);
                 _builder.EmitIf(tOk, _ =>
                 {
@@ -125,8 +126,8 @@ public sealed class DelegateDispatchEmitter
                                         ExternResolver.EventReceiverSetProgramVariable,
                                         new List<CLeaf> { tgt, Const(convArgs[i], StorageTypes.String), LoadField(convArgs[i], argType) });
                                 }
-                                // Stage 2 §5.1: forward the staged env to the receiver alongside the conv args
-                                // (a missing-symbol SPV on a capture-free receiver is a proven silent no-op).
+                                // Forward the staged env alongside the convention arguments. Every bridge-bearing
+                                // receiver declares this field, including capture-free receivers.
                                 EmitExternVoid(
                                     ExternResolver.EventReceiverSetProgramVariable,
                                     new List<CLeaf> { tgt, Const(convEnv, StorageTypes.String), LoadField(convEnv, new StorageType(EnvEmit.EnvType)) });

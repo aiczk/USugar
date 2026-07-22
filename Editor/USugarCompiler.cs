@@ -157,10 +157,9 @@ public static class USugarCompiler
         USugarLog.Info($"Dumped {defs.Length} node definitions → {outputPath}");
     }
 
-    // Debug utility: uncomment [MenuItem] to dump the SDK's Event_* node definitions (name + OUT params).
-    // After an SDK update, replace Editor~/Tests/Fixtures/udon_event_registry.txt with the output —
+    // Regenerates the tracked Event_* snapshot exclusively from the public SDK editor registry.
     // EventRegistryCensusTests validates LayoutPlanner's event tables bidirectionally against it.
-    //[MenuItem("USugar/Dump Udon Event Registry")]
+
     public static void DumpEventRegistry()
     {
         var header = new[]
@@ -185,7 +184,7 @@ public static class USugarCompiler
                 : d.fullName + "|" + string.Join(",", d.Outputs.Select(p => $"{p.name}:{p.type.FullName}")))
             .ToArray();
 
-        var outputPath = "Library/USugarCache/udon_event_registry.txt";
+        var outputPath = "Assets/USugar/Editor~/Tests/Fixtures/udon_event_registry.txt";
         Directory.CreateDirectory(Path.GetDirectoryName(outputPath));
         File.WriteAllLines(outputPath, header.Concat(rows));
         USugarLog.Info($"Dumped {rows.Length} event node definitions → {outputPath}");

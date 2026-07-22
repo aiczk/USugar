@@ -21,7 +21,8 @@ namespace USugar.Tests;
 ///       closure environments are Stage-2). Re-pin lives in Wave9Round4RegressionTests
 ///       (LambdaCycleMember_WrittenCaptureCell_RejectsLoudly + non-cycle control).
 /// [X4]  Recursion spill temps were allocated AFTER CoalesceSlots and never merged — ~500 heap
-///       symbols pushed past the SDK assembler's 512-entry UdonHeap (VmFault). InsertRecursionSpills
+///       symbols exceeded the program-size limit observed at the SDK assembler/runtime boundary.
+///       InsertRecursionSpills
 ///       now interval-coalesces the fresh temps among themselves above a 64-temp threshold.
 /// [X5]  using/Dispose (or any struct/foreign-static call) inside a BASE-INSTANCE COPY body ICEd
 ///       ("No CFunction registered for method 'Dispose'") — the collectors are now seeded with the
@@ -107,8 +108,8 @@ public class W9R5EvalOrder : UdonSharpBehaviour {
     public void RecursionSpills_ManyLiveValues_SpillTempsCoalesce()
     {
         // The a14-bisect cliff shape (getter with 11 live locals + long, reentrant dispatch):
-        // pre-fix ~500 data-section symbols (+24 extern strings > the SDK's 512-entry UdonHeap →
-        // VmFault on load). Post-fix the fresh spill temps coalesce among themselves.
+        // pre-fix ~500 data-section symbols plus extern strings failed at the SDK program load
+        // boundary. Post-fix the fresh spill temps coalesce among themselves.
         var uasm = TestHelper.CompileToUasm(@"
 using System;
 using UdonSharp;

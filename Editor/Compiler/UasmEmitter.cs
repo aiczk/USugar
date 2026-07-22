@@ -820,8 +820,8 @@ public partial class UasmEmitter
     void DeclareDelegateField(ISymbol member, INamedTypeSymbol delegateType, string storageName = null)
     {
         storageName ??= member.Name;
-        // M4 [T2]: Udon sync cannot carry the object[] bundle (the on-game security filter over
-        // synced vars is the unverified design §8-7 risk) — loud on BOTH declaration paths.
+        // M4 [T2]: delegate bundles are outside the supported Udon sync-type surface, so reject them
+        // consistently on both declaration paths.
         if (member.GetAttributes().Any(a => a.AttributeClass?.Name == "UdonSyncedAttribute"))
             throw new NotSupportedException(
                 $"[UdonSynced] delegate field '{member.Name}' cannot be synced: a delegate value is a "
@@ -844,9 +844,9 @@ public partial class UasmEmitter
 
         // Declare the signature-keyed __dlgc_ convention vars for this delegate signature (§3.2).
         var invoke = delegateType.DelegateInvokeMethod;
-        // envName is intentionally ignored here: a delegate FIELD declaration is not a dispatch site
-        // or capturing bridge, so declaring __dlgc_{sig}__env unconditionally would break the
-        // capture-free byte invariant (§1.3). It is declared on-first-use at the dispatch/bridge site.
+        // A delegate field alone does not expose a callable bridge, so its declaration only needs
+        // argument/return convention storage. DelegateConventionStorage declares the complete surface,
+        // including env, when an actual bridge is emitted.
         var (convArgs, convRet, _) = HandlerBase.GetConventionFieldNames(delegateType);
         for (int ci = 0; ci < convArgs.Length; ci++)
             _ctx.Storage.TryDeclareVar(convArgs[ci], ExternResolver.GetStorageType(new RuntimeType(invoke.Parameters[ci].Type), _typeParamMap));

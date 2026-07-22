@@ -1,7 +1,7 @@
 using System.Collections.Generic;
 using Microsoft.CodeAnalysis;
 
-/// <summary>Declares signature-keyed delegate convention argument and return fields.</summary>
+/// <summary>Declares the complete signature-keyed delegate convention surface.</summary>
 public sealed class DelegateConventionStorage
 {
     readonly EmitContext _context;
@@ -17,6 +17,11 @@ public sealed class DelegateConventionStorage
         IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeParameterMap,
         out StorageType[] argumentTypes)
     {
+        // Every program that exposes a bridge for this signature accepts the environment field,
+        // including capture-free targets. Cross-program dispatch therefore never depends on how
+        // SetProgramVariable handles an unknown symbol.
+        Storage.TryDeclareVar(DelegateAbi.ConvEnvName(signaturePart), new StorageType(EnvEmit.EnvType));
+
         argumentTypes = new StorageType[invoke.Parameters.Length];
         for (int i = 0; i < invoke.Parameters.Length; i++)
         {

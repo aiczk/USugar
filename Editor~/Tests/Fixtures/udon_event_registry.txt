@@ -6,10 +6,6 @@
 # UdonSharp's CompilerUdonInterface.CacheInit; EventRegistryCensusTests pins LayoutPlanner's tables
 # bidirectionally against this file.
 # Source: UdonEditorManager.Instance.GetNodeDefinitions() — regenerate via USugarCompiler.DumpEventRegistry.
-# Snapshot source: UdonEditorManager.Instance.GetNodeDefinitions().
-
-
-
 Event_FixedUpdate
 Event_InputDrop|boolValue:System.Boolean,args:VRC.Udon.Common.UdonInputEventArgs
 Event_InputGrab|boolValue:System.Boolean,args:VRC.Udon.Common.UdonInputEventArgs

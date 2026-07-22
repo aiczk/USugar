@@ -12,6 +12,7 @@
     __lcl_ta_SystemInt32Array_0: %SystemInt32Array, null
     __dlgc_Void__SystemObject__ret: %SystemObject, null
     __dlgc_Void__SystemObject__env: %SystemObjectArray, null
+    __dlgc_Void__SystemString__env: %SystemObjectArray, null
     __dlgc_Void__SystemString__ret: %SystemString, null
     __const_SystemString_0: %SystemString, null
     __const_SystemUInt32_sentinel: %SystemUInt32, null
