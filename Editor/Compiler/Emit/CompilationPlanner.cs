@@ -31,7 +31,9 @@ internal sealed class CompilationPlanner
     {
         var plan = new ClassCompilePlanBuilder(_methods, _reach, _fieldInits).Build();
         var closedMints = new GenericTypeSpecCensus(_compilation, _bodyOf, _classFieldInits).Build(plan);
-        plan.Reach.MintedClasses.Clear();
+        // Keep portable non-generic classes seeded by reach: they may enter from another Udon program
+        // without a local mint. The census contributes closed generic instantiations on top.
+        plan.Reach.MintedClasses.RemoveWhere(ClassTypeObjectContext.ContainsTypeParameter);
         plan.Reach.MintedClasses.UnionWith(closedMints);
         return plan;
     }

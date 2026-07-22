@@ -22,6 +22,102 @@ public sealed class ResolvedEdgeResolver
 
     public ResolvedEdgeResolver(UasmEmitter emitter) { _emitter = emitter; }
 
+    internal IEnumerable<INamedTypeSymbol> EnumeratePortableClassTypes()
+    {
+        var seen = new HashSet<INamedTypeSymbol>(SymbolEqualityComparer.Default);
+        var behaviourTypes = new List<INamedTypeSymbol>();
+        var candidates = new List<INamedTypeSymbol>();
+        foreach (var tree in _emitter.Compilation.SyntaxTrees)
+        {
+            var model = _emitter.Compilation.GetSemanticModel(tree);
+            foreach (var declaration in tree.GetRoot().DescendantNodes().OfType<TypeDeclarationSyntax>())
+            {
+                if (model.GetDeclaredSymbol(declaration) is not INamedTypeSymbol type) continue;
+                if (ExternResolver.IsUdonSharpBehaviour(type)) behaviourTypes.Add(type);
+                if (!type.IsAbstract && !ClassTypeObjectContext.ContainsTypeParameter(type)
+                    && TypeClassifier.IsUserClass(type))
+                    candidates.Add(type);
+            }
+        }
+
+        var roots = new HashSet<INamedTypeSymbol>(SymbolEqualityComparer.Default);
+        foreach (var surface in behaviourTypes.SelectMany(PortableSurfaceTypes).OfType<INamedTypeSymbol>())
+            if (!ClassTypeObjectContext.ContainsTypeParameter(surface) && TypeClassifier.IsUserClass(surface))
+                roots.Add(surface);
+        foreach (var root in roots)
+            if (!root.IsAbstract && seen.Add(root)) yield return root;
+        foreach (var candidate in candidates)
+            if (roots.Any(root => VirtualDispatch.IsAssignable(candidate, root)) && seen.Add(candidate))
+                yield return candidate;
+
+    }
+
+    static IEnumerable<ITypeSymbol> PortableSurfaceTypes(INamedTypeSymbol behaviour)
+    {
+        foreach (var field in behaviour.GetMembers().OfType<IFieldSymbol>())
+            if (!field.IsStatic && (field.DeclaredAccessibility == Accessibility.Public
+                || field.GetAttributes().Any(a => a.AttributeClass?.Name is
+                    "SerializeField" or "SerializeFieldAttribute")))
+                yield return field.Type;
+        foreach (var property in behaviour.GetMembers().OfType<IPropertySymbol>())
+            if (!property.IsStatic && property.DeclaredAccessibility == Accessibility.Public)
+                yield return property.Type;
+        foreach (var method in behaviour.GetMembers().OfType<IMethodSymbol>())
+            if (!method.IsStatic && method.DeclaredAccessibility == Accessibility.Public)
+            {
+                if (!method.ReturnsVoid) yield return method.ReturnType;
+                foreach (var parameter in method.Parameters) yield return parameter.Type;
+            }
+    }
+
+    internal IEnumerable<IMethodSymbol> ResolvePortableDispatchMethods(
+        IOperation operation, IReadOnlyCollection<INamedTypeSymbol> portableClasses)
+    {
+        IMethodSymbol target = null;
+        IOperation instance = null;
+        INamedTypeSymbol receiverType = null;
+        switch (operation)
+        {
+            case IInvocationOperation invocation:
+                target = invocation.TargetMethod;
+                instance = invocation.Instance;
+                receiverType = instance?.Type as INamedTypeSymbol;
+                break;
+            case IPropertyReferenceOperation property:
+                target = VirtualDispatch.FindAccessor(property.Property, getter: true)
+                         ?? VirtualDispatch.FindAccessor(property.Property, getter: false);
+                instance = property.Instance;
+                receiverType = instance?.Type as INamedTypeSymbol;
+                break;
+        }
+        if (target == null || receiverType == null) yield break;
+
+        if (receiverType.TypeKind == TypeKind.Interface)
+        {
+            foreach (var concrete in portableClasses)
+            {
+                if (!concrete.AllInterfaces.Any(i => SymbolEqualityComparer.Default.Equals(i, receiverType)))
+                    continue;
+                if (concrete.FindImplementationForInterfaceMember(target) is IMethodSymbol impl && !impl.IsAbstract
+                    && !(impl.AssociatedSymbol is IPropertySymbol autoProperty
+                         && !UasmEmitter.IsComputedProperty(autoProperty)))
+                    yield return impl;
+            }
+            yield break;
+        }
+        if (!VirtualDispatch.IsDispatchSite(target, instance, receiverType)) yield break;
+        var slot = VirtualDispatch.SlotIntroducer(target);
+        foreach (var concrete in portableClasses)
+            if (VirtualDispatch.IsAssignable(concrete, receiverType)
+                && VirtualDispatch.MostDerivedImpl(concrete, slot) is { } impl)
+            {
+                if (impl.AssociatedSymbol is IPropertySymbol autoProperty
+                    && !UasmEmitter.IsComputedProperty(autoProperty))
+                    continue;
+                yield return impl;
+            }
+    }
+
     public IEnumerable<ResolvedTarget> ResolveEdges(IOperation op)
     {
         // CallEdge: the per-op internal-call classifier (invocation / ctor / property accessor / operator),

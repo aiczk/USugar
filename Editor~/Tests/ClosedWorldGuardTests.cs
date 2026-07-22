@@ -55,9 +55,7 @@ public class VdOpenClosedRecv : UdonSharpBehaviour {
     [Fact]
     public void VirtualDispatch_NoMintedImplementor_EmitsRuntimeGuard()
     {
-        // BaseNoMint is never minted anywhere: closed-world says no instance can exist, so the receiver
-        // must be null (CLR: NRE). The lowering must be LogError + default — never a silent call to the
-        // base impl on a null bundle.
+        // BaseNoMint is never minted or exposed on a public class surface.
         var uasm = TestHelper.CompileToUasm(@"
 using UdonSharp;
 public class BaseNoMint { public virtual int M() => 1; }
@@ -964,13 +962,13 @@ public class CwUnboxNblNull : UdonSharpBehaviour {
     // ── CW22: cross-behaviour property/indexer/interface-accessor surfaces skipped the payload reject ──
 
     [Fact]
-    public void CrossBehaviourProperty_ClassPayloadSet_LoudRejects()  // CW22
+    public void CrossBehaviourProperty_ClassPayloadSet_Compiles()
     {
         // The field twin `o.node = n` loud-rejects through RequireCanWriteCrossBehaviourField, but
         // PreparePropertySet's cross arms SPV'd the same bundle with no payload test — the foreign
         // program's is/cast/virtual dispatch then compares bundle[0] against ITS OWN typeobj
         // instances (silent base-impl call / false `is`). Same choke, property syntax.
-        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
+        var uasm = TestHelper.CompileToUasm(@"
 using UdonSharp;
 public class CwNode22 { public int v; }
 public class CwHolder22 : UdonSharpBehaviour {
@@ -979,16 +977,16 @@ public class CwHolder22 : UdonSharpBehaviour {
 public class CwPropEscape : UdonSharpBehaviour {
     public CwHolder22 o;
     void Start() { var n = new CwNode22(); o.NodeProp = n; }
-}", "CwPropEscape"));
-        Assert.Contains("property 'NodeProp'", ex.Message);
+}", "CwPropEscape");
+        Assert.Contains("SetProgramVariable", uasm);
     }
 
     [Fact]
-    public void CrossBehaviourProperty_ClassPayloadGet_LoudRejects()  // CW22 read leg
+    public void CrossBehaviourProperty_ClassPayloadGet_Compiles()
     {
         // The read direction of the same surface: the field twin runs
         // RequireCanReadCrossBehaviourField, the property GET arm ran nothing.
-        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
+        var uasm = TestHelper.CompileToUasm(@"
 using UdonSharp;
 public class CwNode22g { public int v; }
 public class CwHolder22g : UdonSharpBehaviour {
@@ -998,16 +996,16 @@ public class CwPropRead : UdonSharpBehaviour {
     public CwHolder22g o;
     public int r;
     void Start() { CwNode22g n = o.NodeProp; r = n != null ? 1 : 0; }
-}", "CwPropRead"));
-        Assert.Contains("property 'NodeProp'", ex.Message);
+}", "CwPropRead");
+        Assert.Contains("GetProgramVariable", uasm);
     }
 
     [Fact]
-    public void CrossBehaviourIndexer_ClassIndexArg_LoudRejects()  // CW22 indexer leg
+    public void CrossBehaviourIndexer_ClassIndexArg_Compiles()
     {
         // EmitCrossIndexerCall SPVs every index arg (and the setter value) into the foreign
         // program — the same transport CrossCallArgPairs fences per-arg for method calls.
-        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
+        var uasm = TestHelper.CompileToUasm(@"
 using UdonSharp;
 public class CwNode22i { public int v; }
 public class CwIdxHost22 : UdonSharpBehaviour {
@@ -1016,16 +1014,16 @@ public class CwIdxHost22 : UdonSharpBehaviour {
 public class CwIdxEscape : UdonSharpBehaviour {
     public CwIdxHost22 o;
     void Start() { var n = new CwNode22i(); o[n] = 5; }
-}", "CwIdxEscape"));
-        Assert.Contains("cannot cross a program boundary", ex.Message);
+}", "CwIdxEscape");
+        Assert.Contains("SetProgramVariable", uasm);
     }
 
     [Fact]
-    public void InterfaceProperty_ClassPayloadSet_LoudRejects()  // CW22 interface-accessor leg
+    public void InterfaceProperty_ClassPayloadSet_Compiles()
     {
         // The interface set arm SPVs the value straight into whichever behaviour implements the
         // interface — same boundary, one dispatch layer over.
-        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
+        var uasm = TestHelper.CompileToUasm(@"
 using UdonSharp;
 public class CwNode22f { public int v; }
 public interface ICwProp22 { CwNode22f NodeProp { get; set; } }
@@ -1035,8 +1033,8 @@ public class CwIfaceHost22 : UdonSharpBehaviour, ICwProp22 {
 public class CwIfacePropEscape : UdonSharpBehaviour {
     public ICwProp22 o;
     void Start() { var n = new CwNode22f(); o.NodeProp = n; }
-}", "CwIfacePropEscape"));
-        Assert.Contains("property 'NodeProp'", ex.Message);
+}", "CwIfacePropEscape");
+        Assert.Contains("SetProgramVariable", uasm);
     }
 
     [Fact]

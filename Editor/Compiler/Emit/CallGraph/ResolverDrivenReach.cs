@@ -43,6 +43,7 @@ internal sealed class ResolverDrivenReach
         // result.OpenGenericBaseDefs holds the open-base-generic main-fixpoint roots (exposed for the swap).
         var visited = new HashSet<IMethodSymbol>(cmp);
         var queue = new Queue<IMethodSymbol>();
+        var portableClasses = _resolver.EnumeratePortableClassTypes().ToArray();
 
         void Walk(IOperation body)
         {
@@ -67,6 +68,8 @@ internal sealed class ResolverDrivenReach
                     }
                 }
                 foreach (var mc in _resolver.ResolveMintedTypes(op)) result.MintedClasses.Add(mc);
+                foreach (var method in _resolver.ResolvePortableDispatchMethods(op, portableClasses))
+                    if (_isCollectibleStructMember(method)) structMembers.Add(method);
                 foreach (var d in _resolver.ResolveOpenBaseGenericDefs(op)) result.OpenGenericBaseDefs.Add(d);
                 foreach (var d in _resolver.ResolveForeignStaticSuppDefs(op)) suppCaptureDefs.Add(d);
             }
@@ -85,6 +88,14 @@ internal sealed class ResolverDrivenReach
             foreach (var m in baseCopies) TryEnqueue(m);
             foreach (var m in result.OpenGenericBaseDefs) TryEnqueue(m);
             foreach (var m in result.StructMemberDefs) TryEnqueue(m);
+        }
+
+        // Cross-program class values can enter this behaviour without a local `new`. Seed every closed
+        // source class into the wire-type registry and register its bodies, so incoming virtual/interface
+        // dispatch has the same complete target set as locally minted values.
+        foreach (var portableClass in portableClasses)
+        {
+            result.MintedClasses.Add(portableClass);
         }
 
         foreach (var m in entryMethods) TryEnqueue(m);

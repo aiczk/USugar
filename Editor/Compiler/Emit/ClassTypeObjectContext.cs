@@ -4,11 +4,8 @@ using System.Linq;
 using System.Text;
 using Microsoft.CodeAnalysis;
 
-/// <summary>CA-v2b-1 (typeobj identity + is/cast): owns the per-program type-object registry for a
-/// class-emit. Each MINTED concrete user class gets one per-program object[] typeobj whose REFERENCE
-/// identity distinguishes the runtime type (charter #2: hop-zero ReferenceEquals; #4: constructed-spec
-/// keyed). A v1 class instance's bundle slot 0 holds its concrete type's typeobj; `o is T` enumerates
-/// the typeobjs of every minted class that is T-or-derived and ReferenceEquals slot 0 against them.</summary>
+/// <summary>Owns the stable runtime type-id registry for user classes. Bundle slot 0 stores an
+/// injective structural string key, so identity survives transport between Udon programs.</summary>
 public sealed class ClassTypeObjectContext
 {
     readonly Dictionary<INamedTypeSymbol, string> _vars = new(SymbolEqualityComparer.Default);
@@ -80,6 +77,8 @@ public sealed class ClassTypeObjectContext
         AppendTypeKey(b, type);
         return b.ToString();
     }
+
+    public static string RuntimeTypeId(INamedTypeSymbol type) => "usugar-class:" + SpecKey(type);
 
     static string LegacyName(INamedTypeSymbol type)
     {

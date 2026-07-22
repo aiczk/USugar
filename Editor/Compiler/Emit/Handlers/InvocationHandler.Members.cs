@@ -631,7 +631,7 @@ public partial class InvocationHandler
                 $"'{classTy.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}' is minted here but is not in the compile-time minted-class census "
                 + "even though the closed-specialization census must contain every live mint. This is a compiler bug; report the "
                 + "instantiation chain and source location. Emission stopped before producing a class bundle without runtime type identity.");
-        return inst => AggregateAbi.WriteSlot(_builder, inst, 0, LoadField(tv, new StorageType(AggregateAbi.ArrayType)));
+        return inst => AggregateAbi.WriteSlot(_builder, inst, 0, LoadField(tv, StorageTypes.String));
     }
 
     /// <summary>`new T()` (kind-level census gap, 2026-07-11): monomorphization has substituted T to a

@@ -133,12 +133,12 @@ public abstract partial class HandlerBase
             EmitAssign(guarded, Const(false, StorageTypes.Boolean));
             _builder.EmitIf(isBundle, _ =>
             {
-                var typeSlot = AggregateAbi.ReadSlot(_builder, valueVal, 0, new StorageType(AggregateAbi.ArrayType));
+                var typeSlot = AggregateAbi.ReadSlot(_builder, valueVal, 0, StorageTypes.String);
                 CLeaf test = null;
                 foreach (var v in vars)
                 {
-                    var eq = ExternCall("SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean",
-                        new List<CLeaf> { typeSlot, LoadField(v, new StorageType(AggregateAbi.ArrayType)) }, StorageTypes.Boolean);
+                    var eq = ExternCall("SystemString.__op_Equality__SystemString_SystemString__SystemBoolean",
+                        new List<CLeaf> { typeSlot, LoadField(v, StorageTypes.String) }, StorageTypes.Boolean);
                     test = test == null ? eq
                         : ExternCall("SystemBoolean.__op_LogicalOr__SystemBoolean_SystemBoolean__SystemBoolean",
                             new List<CLeaf> { test, eq }, StorageTypes.Boolean);
@@ -2319,8 +2319,8 @@ public abstract partial class HandlerBase
         if (recvTy.IsSealed || targets.Count == 1)
             return EmitAccessorImplAccess(targets[0], prop, recv, indexArgs, setValue);
 
-        var typeObjSlot = _ctx.Builder.AllocScratch(new StorageType(AggregateAbi.ArrayType));
-        EmitAssign(typeObjSlot, AggregateAbi.ReadSlot(_builder, recv, 0, new StorageType(AggregateAbi.ArrayType)));
+        var typeObjSlot = _ctx.Builder.AllocScratch(StorageTypes.String);
+        EmitAssign(typeObjSlot, AggregateAbi.ReadSlot(_builder, recv, 0, StorageTypes.String));
         int destSlot = isSet ? -1 : _ctx.Builder.AllocScratch(GetStorageType(prop.Type));
 
         // Phase-A armor: a null receiver or a laundered non-bundle value matches no arm — LogError +
@@ -2330,8 +2330,8 @@ public abstract partial class HandlerBase
 
         foreach (var t in targets)
         {
-            var eq = ExternCall("SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean",
-                new List<CLeaf> { SlotRef(typeObjSlot), LoadField(t.TypeObjVar, new StorageType(AggregateAbi.ArrayType)) }, StorageTypes.Boolean);
+            var eq = ExternCall("SystemString.__op_Equality__SystemString_SystemString__SystemBoolean",
+                new List<CLeaf> { SlotRef(typeObjSlot), LoadField(t.TypeObjVar, StorageTypes.String) }, StorageTypes.Boolean);
             _builder.EmitIf(eq, _ =>
             {
                 EmitAssign(matched, Const(true, StorageTypes.Boolean));
@@ -2470,15 +2470,15 @@ public abstract partial class HandlerBase
                 return;
             }
 
-            var typeObjSlot = _ctx.Builder.AllocScratch(new StorageType(AggregateAbi.ArrayType));
-            EmitAssign(typeObjSlot, AggregateAbi.ReadSlot(_builder, SlotRef(recvSlot), 0, new StorageType(AggregateAbi.ArrayType)));
+            var typeObjSlot = _ctx.Builder.AllocScratch(StorageTypes.String);
+            EmitAssign(typeObjSlot, AggregateAbi.ReadSlot(_builder, SlotRef(recvSlot), 0, StorageTypes.String));
             var matched = _ctx.Builder.AllocScratch(StorageTypes.Boolean);
             EmitAssign(matched, Const(false, StorageTypes.Boolean));
 
             foreach (var t in targets)
             {
-                var eq = ExternCall("SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean",
-                    new List<CLeaf> { SlotRef(typeObjSlot), LoadField(t.TypeObjVar, new StorageType(AggregateAbi.ArrayType)) },
+                var eq = ExternCall("SystemString.__op_Equality__SystemString_SystemString__SystemBoolean",
+                    new List<CLeaf> { SlotRef(typeObjSlot), LoadField(t.TypeObjVar, StorageTypes.String) },
                     StorageTypes.Boolean);
                 _builder.EmitIf(eq, _ =>
                 {

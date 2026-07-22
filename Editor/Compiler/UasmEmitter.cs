@@ -339,22 +339,16 @@ public partial class UasmEmitter
                 continue; // Skip normal field declaration
             }
 
-            // CA-M1 §2-1: a v1 class value is a program-local object[] bundle, so a class-carrying field must
-            // not be a cross-program surface. A public / [SerializeField] / [UdonSynced] field is exposed via
-            // GetProgramVariable, network sync, or the Inspector — none can carry the bundle. A PRIVATE,
-            // non-synced class field stays legal (in-program storage, e.g. a linked-list root).
+            // Class bundles have a stable cross-program ABI, but Udon network sync still cannot serialize
+            // the object[] representation.
             if (EmitPolicy.ContainsUserClassType(member.Type))
             {
-                bool exported = member.DeclaredAccessibility == Accessibility.Public
-                    || member.GetAttributes().Any(a => a.AttributeClass?.Name is "SerializeField" or "SerializeFieldAttribute");
                 bool synced = member.GetAttributes().Any(a => a.AttributeClass?.Name == "UdonSyncedAttribute");
-                if (exported || synced)
+                if (synced)
                     throw new NotSupportedException(
-                        $"Field '{member.Name}' carries a v1 user class and is "
-                        + (synced ? "[UdonSynced]" : "public/[SerializeField]")
-                        + ": a class value is a program-local object[] bundle that cannot cross the "
-                        + "GetProgramVariable / network-sync / Inspector surface. Make the field private, or "
-                        + "store plain data.");
+                        $"Field '{member.Name}' carries a user class and is [UdonSynced]: the class object[] "
+                        + "ABI can cross between programs on one client, but cannot be network-serialized. "
+                        + "Sync plain data and reconstruct the class locally.");
             }
 
             var udonType = GetStorageTypeName(member.Type);
@@ -1227,7 +1221,8 @@ public partial class UasmEmitter
         // EmitFieldInitializers runs during the body pass — so an initializer that hoists a lambda
         // (delegate-field initializer) gets its CFunction body and __dlg_ bridge emitted instead of
         // landing in never-drained pending lists (CoreToUasm 'CFuncRef references unknown function').
-        if ((_fieldInitOps.Count > 0 || _fieldChangeCallbacks.Count > 0 || _ctx.Aggregates.FieldDefaults.Count > 0)
+        if ((_fieldInitOps.Count > 0 || _fieldChangeCallbacks.Count > 0
+             || _ctx.Aggregates.FieldDefaults.Count > 0 || _ctx.ClassTypes.MintedClasses.Count > 0)
             && !methods.Any(m => UdonEventNames.TryGetValue(m.Name, out var en) && en == "_start"))
         {
             var startFunc = _module.AddFunction("_start", "_start");
@@ -1594,14 +1589,12 @@ public partial class UasmEmitter
         // registers against this clean ambient.
         _ctx.Methods.CurrentClosureSpec = null;
         _ctx.Methods.CurrentOwnerSpecs = System.Collections.Immutable.ImmutableArray<IMethodSymbol>.Empty;
-        // CA-v2b-1 (charter #6): allocate each minted class's per-program typeobj BEFORE field inits and
-        // any instance mint, so bundle[0] can point at it. A typeobj is a fresh object[1] whose reference
-        // identity distinguishes the runtime type (v2b-2 will size it to the vtable and back-patch slots).
+        // Stable wire type ids are initialized before any instance mint.
         foreach (var mc in _ctx.ClassTypes.MintedClasses)
         {
             var tv = _ctx.ClassTypes.TryGetTypeObjVar(mc);
-            _ctx.Storage.TryDeclareVar(tv, new StorageType(AggregateAbi.ArrayType));
-            _bridge.Store(tv, AggregateAbi.Allocate(_builder, 1));
+            _ctx.Storage.TryDeclareVar(tv, StorageTypes.String);
+            _bridge.Store(tv, _builder.Const(ClassTypeObjectContext.RuntimeTypeId(mc), StorageTypes.String));
         }
         // Default-init aggregate (struct/tuple) fields with no explicit initializer FIRST, so any explicit
         // initializer that references one sees a non-null backing array (C# default-then-initializer order).

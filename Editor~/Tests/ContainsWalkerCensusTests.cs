@@ -180,7 +180,7 @@ public class WalkerCensusCarrier
         var cls = TypeClassifier.ShapeOf(types["dCls"], ctx);
         Assert.Equal(RuntimeBundleKind.Class, cls.Bundle);
         Assert.Equal(RuntimeIdentityKind.Reference, cls.Identity);
-        Assert.Equal(RuntimeScopeKind.ProgramLocal, cls.Scope);
+        Assert.Equal(RuntimeScopeKind.Portable, cls.Scope);
         Assert.True(cls.ContainsProgramLocalPayload);
 
         var aggregate = TypeClassifier.ShapeOf(types["cTup"], ctx);

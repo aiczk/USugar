@@ -56,12 +56,12 @@ public sealed class ReceiverBridgeEmitter
         var targets = _context.VirtualDispatch.ResolveInterfaceTargets(member.ContainingType, member);
         var matched = builder.AllocScratch(StorageTypes.Boolean);
         builder.EmitAssign(matched, builder.Const(false, StorageTypes.Boolean));
-        var typeObj = AggregateAbi.ReadSlot(builder, receiver, 0, new StorageType(AggregateAbi.ArrayType));
+        var typeObj = AggregateAbi.ReadSlot(builder, receiver, 0, StorageTypes.String);
         foreach (var target in targets)
         {
             var isTarget = _bridge.CallExtern(StorageTypes.Boolean,
-                "SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean",
-                typeObj, _bridge.Load(target.TypeObjVar, new StorageType(AggregateAbi.ArrayType)));
+                "SystemString.__op_Equality__SystemString_SystemString__SystemBoolean",
+                typeObj, _bridge.Load(target.TypeObjVar, StorageTypes.String));
             builder.EmitIf(isTarget, _ =>
             {
                 builder.EmitAssign(matched, builder.Const(true, StorageTypes.Boolean));

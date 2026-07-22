@@ -44,16 +44,16 @@ public readonly struct RuntimeShape
     }
 
     public bool IsBundle => Storage == RuntimeStorageKind.ObjectArrayBundle;
-    public bool CanCrossProgram => !ContainsProgramLocalPayload;
+    public bool CanCrossProgram => Scope == RuntimeScopeKind.Portable;
     public bool CanEraseToObject => !ContainsProgramLocalPayload
         && (!IsBundle || RuntimeTypeIdentity != RuntimeTypeIdentityKind.Collapsed);
 
     public static RuntimeShape Class(bool containsPayload = true)
         => new(RuntimeStorageKind.ObjectArrayBundle, RuntimeBundleKind.Class, RuntimeIdentityKind.Reference,
-            RuntimeScopeKind.ProgramLocal, RuntimeTypeIdentityKind.Tagged, containsPayload);
+            RuntimeScopeKind.Portable, RuntimeTypeIdentityKind.Tagged, containsPayload);
     public static RuntimeShape Aggregate(bool containsPayload)
         => new(RuntimeStorageKind.ObjectArrayBundle, RuntimeBundleKind.Aggregate, RuntimeIdentityKind.Value,
-            containsPayload ? RuntimeScopeKind.ProgramLocal : RuntimeScopeKind.Portable,
+            RuntimeScopeKind.Portable,
             RuntimeTypeIdentityKind.Collapsed, containsPayload);
     public static RuntimeShape Delegate(bool containsPayload)
         => new(RuntimeStorageKind.ObjectArrayBundle, RuntimeBundleKind.Delegate, RuntimeIdentityKind.Reference,
@@ -61,7 +61,7 @@ public readonly struct RuntimeShape
             RuntimeTypeIdentityKind.Collapsed, containsPayload);
     public static RuntimeShape MultiDimensionalArray(bool containsPayload)
         => new(RuntimeStorageKind.ObjectArrayBundle, RuntimeBundleKind.MultiDimensionalArray,
-            RuntimeIdentityKind.Reference, containsPayload ? RuntimeScopeKind.ProgramLocal : RuntimeScopeKind.Portable,
+            RuntimeIdentityKind.Reference, RuntimeScopeKind.Portable,
             RuntimeTypeIdentityKind.Collapsed, containsPayload);
     public static RuntimeShape Native(bool containsPayload)
         => new(RuntimeStorageKind.Native, RuntimeBundleKind.None, RuntimeIdentityKind.Value,

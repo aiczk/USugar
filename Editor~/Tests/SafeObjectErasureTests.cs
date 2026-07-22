@@ -21,7 +21,7 @@ public class SafeErasureHost : UdonSharpBehaviour {
 }
 ", "SafeErasureHost");
 
-        Assert.Contains("SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean", uasm);
+        Assert.Contains("SystemString.__op_Equality__SystemString_SystemString__SystemBoolean", uasm);
     }
 
     [Fact]

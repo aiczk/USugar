@@ -462,8 +462,8 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
             return SlotRef(s);
         });
 
-        var typeObjSlot = _ctx.Builder.AllocScratch(new StorageType(AggregateAbi.ArrayType));
-        EmitAssign(typeObjSlot, AggregateAbi.ReadSlot(_builder, SlotRef(recvSlot), 0, new StorageType(AggregateAbi.ArrayType)));
+        var typeObjSlot = _ctx.Builder.AllocScratch(StorageTypes.String);
+        EmitAssign(typeObjSlot, AggregateAbi.ReadSlot(_builder, SlotRef(recvSlot), 0, StorageTypes.String));
 
         bool isVoid = op.Type == null || op.Type.SpecialType == SpecialType.System_Void;
         int destSlot = isVoid ? -1 : _ctx.Builder.AllocScratch(GetStorageType(op.Type));
@@ -475,8 +475,8 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
 
         foreach (var t in targets)
         {
-            var eq = ExternCall("SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean",
-                new List<CLeaf> { SlotRef(typeObjSlot), LoadField(t.TypeObjVar, new StorageType(AggregateAbi.ArrayType)) }, StorageTypes.Boolean);
+            var eq = ExternCall("SystemString.__op_Equality__SystemString_SystemString__SystemBoolean",
+                new List<CLeaf> { SlotRef(typeObjSlot), LoadField(t.TypeObjVar, StorageTypes.String) }, StorageTypes.Boolean);
             var callArgs = new List<CLeaf> { SlotRef(recvSlot) };
             callArgs.AddRange(argRefs);
             _builder.EmitIf(eq, _ =>

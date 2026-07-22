@@ -192,13 +192,12 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
                     new List<CLeaf> { SlotRef(recvSlot), SlotRef(handlerSlot) }, op.Syntax));
                 return null;
             }
-            var typeObj = AggregateAbi.ReadSlot(_builder, SlotRef(recvSlot), 0,
-                new StorageType(AggregateAbi.ArrayType));
+            var typeObj = AggregateAbi.ReadSlot(_builder, SlotRef(recvSlot), 0, StorageTypes.String);
             foreach (var target in targets)
             {
                 var match = ExternCall(
-                    "SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean",
-                    new List<CLeaf> { typeObj, LoadField(target.TypeObjVar, new StorageType(AggregateAbi.ArrayType)) },
+                    "SystemString.__op_Equality__SystemString_SystemString__SystemBoolean",
+                    new List<CLeaf> { typeObj, LoadField(target.TypeObjVar, StorageTypes.String) },
                     StorageTypes.Boolean);
                 _builder.EmitIf(match, _ => EmitExprStmt(EmitCallToMethod(
                     ResolveStructMember(target.Impl),

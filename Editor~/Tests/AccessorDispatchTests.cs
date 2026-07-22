@@ -59,8 +59,7 @@ public class CwVAbs : UdonSharpBehaviour {
     [Fact]
     public void SingletonImplementor_DevirtualizesToDirectCall()
     {
-        // Only the sealed derived class is minted: the accessor devirtualizes to a direct call —
-        // no typeobj chain, no no-match armor (the chain's LogError const never appears).
+        // Only the sealed derived class is minted: the accessor devirtualizes to a direct call.
         var (uasm, consts) = TestHelper.CompileWithConsts(@"
 using UdonSharp;
 public class SvB { public virtual int P { get { return 1; } } }
@@ -192,8 +191,7 @@ public class CwVThisBase : UdonSharpBehaviour {
     [Fact]
     public void VirtualAccessor_NoMintedImplementor_EmitsRuntimeGuards()
     {
-        // Closed-world empty-target lowering: reads LogError + default, writes LogError + skip —
-        // never a silent static-accessor call on the necessarily-null receiver.
+        // With no local mint or public class surface, the receiver can only be null.
         var (uasm, consts) = TestHelper.CompileWithConsts(@"
 using UdonSharp;
 public class EvB { public virtual int Q { get { return 1; } set { } } }
