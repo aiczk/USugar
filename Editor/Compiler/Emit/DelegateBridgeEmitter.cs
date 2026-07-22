@@ -47,25 +47,28 @@ public sealed class DelegateBridgeEmitter
     void EmitPlainBridges()
     {
         var emitted = new HashSet<string>();
-        foreach (var (method, bridgeName, typeParameterMap) in _context.Synthetics.DelegateBridges)
+        foreach (var demand in _context.Synthetics.DelegateBridges)
         {
+            var method = demand.Binding.TargetMethod;
+            var bridgeName = demand.Binding.BridgeName;
             if (!emitted.Add(bridgeName)) continue;
             if (!TryResolveTarget(method, bridgeName, out var target)) continue;
             DelegateAbi.ValidateNoRefOutParams(method);
-            EmitBody(bridgeName, method, typeParameterMap, target, method);
+            EmitBody(bridgeName, demand.SignatureMethod, demand.TypeParameterMap, target, method);
         }
     }
 
     void EmitSignatureAdapters()
     {
         var emitted = new HashSet<string>();
-        foreach (var (targetMethod, delegateInvoke, adapterName, typeParameterMap)
-            in _context.Synthetics.SigAdapterBridges)
+        foreach (var demand in _context.Synthetics.SigAdapterBridges)
         {
+            var targetMethod = demand.Binding.TargetMethod;
+            var adapterName = demand.Binding.BridgeName;
             if (!emitted.Add(adapterName)) continue;
             if (!TryResolveTarget(targetMethod, adapterName, out var target)) continue;
             DelegateAbi.ValidateNoRefOutParams(targetMethod);
-            EmitBody(adapterName, delegateInvoke, typeParameterMap, target, targetMethod);
+            EmitBody(adapterName, demand.SignatureMethod, demand.TypeParameterMap, target, targetMethod);
         }
     }
 

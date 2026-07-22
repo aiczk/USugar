@@ -18,9 +18,9 @@ public sealed class WrapperBridgeEmitter
 
     public void EmitPending()
     {
-        foreach (var (name, (outerInvoke, innerInvoke, typeParameterMap))
-            in _context.Synthetics.WrapperSigs)
-            Emit(name, outerInvoke, innerInvoke, typeParameterMap);
+        foreach (var demand in _context.Synthetics.WrapperSigs.Values)
+            Emit(demand.Binding.BridgeName, demand.OuterInvoke, demand.InnerInvoke,
+                demand.TypeParameterMap);
     }
 
     void Emit(string name, IMethodSymbol outerInvoke, IMethodSymbol innerInvoke,

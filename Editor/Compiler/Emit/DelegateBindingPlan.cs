@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using Microsoft.CodeAnalysis;
 
 public enum DelegateBindingKind
@@ -43,5 +44,38 @@ public sealed class MaterializedDelegateBinding
             ?? throw new ArgumentNullException(nameof(functionReference));
         TargetInstance = targetInstance;
         Environment = environment;
+    }
+}
+
+public sealed class DelegateBridgeDemand
+{
+    public DelegateBindingPlan Binding { get; }
+    public IMethodSymbol SignatureMethod { get; }
+    public IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> TypeParameterMap { get; }
+
+    public DelegateBridgeDemand(DelegateBindingPlan binding, IMethodSymbol signatureMethod,
+        IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeParameterMap)
+    {
+        Binding = binding ?? throw new ArgumentNullException(nameof(binding));
+        SignatureMethod = signatureMethod ?? binding.TargetMethod;
+        TypeParameterMap = typeParameterMap;
+    }
+}
+
+public sealed class DelegateWrapperDemand
+{
+    public DelegateBindingPlan Binding { get; }
+    public IMethodSymbol OuterInvoke { get; }
+    public IMethodSymbol InnerInvoke { get; }
+    public IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> TypeParameterMap { get; }
+
+    public DelegateWrapperDemand(DelegateBindingPlan binding, IMethodSymbol outerInvoke,
+        IMethodSymbol innerInvoke,
+        IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeParameterMap)
+    {
+        Binding = binding ?? throw new ArgumentNullException(nameof(binding));
+        OuterInvoke = outerInvoke ?? throw new ArgumentNullException(nameof(outerInvoke));
+        InnerInvoke = innerInvoke ?? throw new ArgumentNullException(nameof(innerInvoke));
+        TypeParameterMap = typeParameterMap;
     }
 }
