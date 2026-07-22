@@ -1875,13 +1875,16 @@ public abstract partial class HandlerBase
 
     protected MaterializedDelegateBinding ResolveDelegateBridge(IDelegateCreationOperation op)
     {
-        var binding = ResolveDelegateBridgeCore(op);
+        var binding = ResolveDelegateBridgeCore(op, false);
         _ctx.Synthetics.RecordDelegateBinding(
             DelegateDemandCensus.SiteKey(op.Syntax, _ctx.Methods.CurrentOwnerSpecs), binding.Plan);
         return binding;
     }
 
-    MaterializedDelegateBinding ResolveDelegateBridgeCore(IDelegateCreationOperation op)
+    protected DelegateBindingPlan PlanDelegateBridge(IDelegateCreationOperation op)
+        => ResolveDelegateBridgeCore(op, true).Plan;
+
+    MaterializedDelegateBinding ResolveDelegateBridgeCore(IDelegateCreationOperation op, bool planning)
     {
         IMethodSymbol targetMethod = null;
         CLeaf targetInstance = null;
@@ -1896,7 +1899,9 @@ public abstract partial class HandlerBase
                 baseReceiver = methodRef.Instance is IInstanceReferenceOperation
                     { Syntax: Microsoft.CodeAnalysis.CSharp.Syntax.BaseExpressionSyntax };
                 if (methodRef.Instance != null && methodRef.Instance is not IInstanceReferenceOperation)
-                    targetInstance = VisitExpression(methodRef.Instance);
+                    targetInstance = planning
+                        ? Const(null, StorageTypes.Object)
+                        : VisitExpression(methodRef.Instance);
                 break;
         }
         if (targetMethod == null)
@@ -1917,12 +1922,12 @@ public abstract partial class HandlerBase
         {
             var member = ResolveStructMember(targetMethod); // ensure-registered (a MG may be the member's only reference)
             var memberFunc = _methodFunctions[member];
-            var recvLeaf = targetInstance
+            var recvLeaf = planning ? Const(null, StorageTypes.ObjectArray) : targetInstance
                 ?? (_ctx.Methods.CurrentStructReceiverParamId is { } rid
                     ? LoadField(rid, new StorageType(AggregateAbi.ArrayType))
                     : throw new System.NotSupportedException(
                         $"Method group '{targetMethod.Name}' has no receiver in this context."));
-            if (member.ContainingType is INamedTypeSymbol cloneCt && TypeClassifier.IsUserStruct(cloneCt))
+            if (!planning && member.ContainingType is INamedTypeSymbol cloneCt && TypeClassifier.IsUserStruct(cloneCt))
                 recvLeaf = AggregateAbi.DeepClone(_builder, recvLeaf, cloneCt, _ctx.Aggregates.GetLayout);
             var recvBridgeName = DelegateAbi.BridgeName(memberFunc.Name) + "_rcv";
             var binding = new DelegateBindingPlan(DelegateBindingKind.Receiver, member, recvBridgeName);
@@ -1965,7 +1970,7 @@ public abstract partial class HandlerBase
 
         // Stage 2 §3.7: DelegateAbi.Env for a capturing closure target (null for named methods / base.M
         // / capture-free lambdas). Resolved here in the creation site's frame.
-        var envLeaf = ClosureEnvLeaf(targetMethod);
+        var envLeaf = planning ? Const(null, StorageTypes.Object) : ClosureEnvLeaf(targetMethod);
 
         // Wave-9 [W3]: `base.M` binds the BASE implementation NON-virtually (C# ldftn). When the
         // compiled class (or an intermediate) overrides M, the locally registered function for the
@@ -2152,8 +2157,10 @@ public abstract partial class HandlerBase
                         FuncRef(adapterName), targetInstance, envLeaf);
                 }
 
-                var innerBundle = DelegateAbi.EmitBundleMint(_builder, () => targetInstance,
-                    Const(bridgeExportName, StorageTypes.String), Const(0u, StorageTypes.UInt32), Const(null, StorageTypes.Object));
+                var innerBundle = planning ? Const(null, StorageTypes.ObjectArray)
+                    : DelegateAbi.EmitBundleMint(_builder, () => targetInstance,
+                        Const(bridgeExportName, StorageTypes.String), Const(0u, StorageTypes.UInt32),
+                        Const(null, StorageTypes.Object));
 
                 // The wrapper's INNER dispatch must speak the inner bundle's OWN protocol — here, the
                 // third-party target's OWN signature (targetMethod, sig-T), never sig-S: DelegateAbi.Method names

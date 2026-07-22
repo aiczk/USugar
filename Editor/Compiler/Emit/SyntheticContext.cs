@@ -77,6 +77,7 @@ public sealed class SyntheticContext
     public IReadOnlyDictionary<string, DelegateWrapperDemand> WrapperSigs => _wrapperSigs;
 
     public bool IsFrozen { get; private set; }
+    public bool DelegateDemandsSealed { get; private set; }
     HashSet<string> _expectedDelegateSites;
     readonly Dictionary<string, DelegateBindingPlan> _boundDelegateSites = new(StringComparer.Ordinal);
 
@@ -106,6 +107,14 @@ public sealed class SyntheticContext
                 + $"'{existing.BridgeName}' and '{binding.BridgeName}'.");
         }
         _boundDelegateSites.Add(key, binding);
+    }
+
+    public void SealDelegateDemands()
+    {
+        RequireMutable();
+        if (DelegateDemandsSealed)
+            throw new InvalidOperationException("Delegate demand plan was sealed twice.");
+        DelegateDemandsSealed = true;
     }
 
     void RequireMutable()
@@ -184,12 +193,15 @@ public sealed class SyntheticContext
         IsFrozen = true;
     }
 
-    static void RegisterUnique(Dictionary<string, DelegateBridgeDemand> demands,
+    void RegisterUnique(Dictionary<string, DelegateBridgeDemand> demands,
         DelegateBridgeDemand demand, string category)
     {
         var name = demand.Binding.BridgeName;
         if (!demands.TryGetValue(name, out var existing))
         {
+            if (DelegateDemandsSealed)
+                throw new InvalidOperationException(
+                    $"Synthetic {category} '{name}' was first discovered during body emission.");
             demands.Add(name, demand);
             return;
         }
