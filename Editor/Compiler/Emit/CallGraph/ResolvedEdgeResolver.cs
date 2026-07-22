@@ -41,13 +41,22 @@ public sealed class ResolvedEdgeResolver
         }
 
         var roots = new HashSet<INamedTypeSymbol>(SymbolEqualityComparer.Default);
+        var interfaceRoots = new HashSet<INamedTypeSymbol>(SymbolEqualityComparer.Default);
         foreach (var surface in behaviourTypes.SelectMany(PortableSurfaceTypes).OfType<INamedTypeSymbol>())
-            if (!ClassTypeObjectContext.ContainsTypeParameter(surface) && TypeClassifier.IsUserClass(surface))
-                roots.Add(surface);
+        {
+            if (ClassTypeObjectContext.ContainsTypeParameter(surface)) continue;
+            if (TypeClassifier.IsUserClass(surface)) roots.Add(surface);
+            else if (surface.TypeKind == TypeKind.Interface
+                     && _emitter.Planner.InterfaceIsLocalUserClassOnly(surface))
+                interfaceRoots.Add(surface);
+        }
         foreach (var root in roots)
             if (!root.IsAbstract && seen.Add(root)) yield return root;
         foreach (var candidate in candidates)
-            if (roots.Any(root => VirtualDispatch.IsAssignable(candidate, root)) && seen.Add(candidate))
+            if ((roots.Any(root => VirtualDispatch.IsAssignable(candidate, root))
+                 || interfaceRoots.Any(iface => candidate.AllInterfaces.Any(i =>
+                     SymbolEqualityComparer.Default.Equals(i, iface))))
+                && seen.Add(candidate))
                 yield return candidate;
 
     }

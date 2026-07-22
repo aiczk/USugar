@@ -29,6 +29,26 @@ public class InterfaceConsumer : UdonSharpBehaviour {
     }
 
     [Fact]
+    public void IncomingInterfaceWithoutLocalMint_SeedsPortableImplementations()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public interface IIncomingRead { int Read(); }
+public class IncomingReadA : IIncomingRead { public int Read() => 1; }
+public class IncomingReadB : IIncomingRead { public int Read() => 2; }
+public class IncomingInterfaceReceiver : UdonSharpBehaviour {
+  public IIncomingRead Value;
+  public int Result;
+  public void ReadNow() { Result = Value.Read(); }
+}
+", "IncomingInterfaceReceiver");
+
+        Assert.Contains("__typeobj_IncomingReadA", uasm);
+        Assert.Contains("__typeobj_IncomingReadB", uasm);
+        Assert.Contains("SystemString.__op_Equality__SystemString_SystemString__SystemBoolean", uasm);
+    }
+
+    [Fact]
     public void LocalInterfaceVariable_DispatchesToUserClass()
         => TestHelper.CompileToUasm(@"
 using UdonSharp;
