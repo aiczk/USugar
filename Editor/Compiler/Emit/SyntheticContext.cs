@@ -77,6 +77,36 @@ public sealed class SyntheticContext
     public IReadOnlyDictionary<string, DelegateWrapperDemand> WrapperSigs => _wrapperSigs;
 
     public bool IsFrozen { get; private set; }
+    HashSet<string> _expectedDelegateSites;
+    readonly Dictionary<string, DelegateBindingPlan> _boundDelegateSites = new(StringComparer.Ordinal);
+
+    public void SetExpectedDelegateSites(IEnumerable<string> sites)
+    {
+        RequireMutable();
+        if (_expectedDelegateSites != null)
+            throw new InvalidOperationException("Delegate demand census was set twice.");
+        _expectedDelegateSites = new HashSet<string>(
+            sites ?? throw new ArgumentNullException(nameof(sites)), StringComparer.Ordinal);
+    }
+
+    public void RecordDelegateBinding(string key, DelegateBindingPlan binding)
+    {
+        RequireMutable();
+        if (string.IsNullOrEmpty(key)) throw new ArgumentException("Delegate site key is required.", nameof(key));
+        if (_expectedDelegateSites == null || !_expectedDelegateSites.Contains(key))
+            throw new InvalidOperationException(
+                $"Delegate binding at '{key}' was absent from the pre-emission demand census.");
+        if (_boundDelegateSites.TryGetValue(key, out var existing))
+        {
+            if (SameDemandMethod(existing.TargetMethod, binding.TargetMethod)
+                && existing.Kind == binding.Kind && existing.BridgeName == binding.BridgeName)
+                return;
+            throw new InvalidOperationException(
+                $"Delegate site '{key}' resolved to conflicting bindings "
+                + $"'{existing.BridgeName}' and '{binding.BridgeName}'.");
+        }
+        _boundDelegateSites.Add(key, binding);
+    }
 
     void RequireMutable()
     {
@@ -145,6 +175,12 @@ public sealed class SyntheticContext
     public void Freeze()
     {
         if (IsFrozen) throw new InvalidOperationException("Synthetic demand plan was frozen twice.");
+        if (_expectedDelegateSites == null)
+            throw new InvalidOperationException("Synthetic demand plan has no delegate-site census.");
+        foreach (var site in _expectedDelegateSites)
+            if (!_boundDelegateSites.ContainsKey(site))
+                throw new InvalidOperationException(
+                    $"Delegate site '{site}' was not bound during body emission.");
         IsFrozen = true;
     }
 

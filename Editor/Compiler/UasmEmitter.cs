@@ -1038,6 +1038,8 @@ public partial class UasmEmitter
             specializationRegistrar.Register(
                 new ClosureSpecializationCandidate(method, closure.OwnerSpecs));
         }
+        _ctx.Synthetics.SetExpectedDelegateSites(DelegateDemandCensus.Collect(
+            _ctx.Methods.RegisteredBodies, GetMethodBodyOperation, plan.FieldInitOps));
         BuildRecursionInfo(bodyGraph);
         _ctx.Generics.BeginBodyEmission();
         EmitRegisteredBodies(plan);

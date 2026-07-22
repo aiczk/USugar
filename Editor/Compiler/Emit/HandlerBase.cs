@@ -1875,6 +1875,14 @@ public abstract partial class HandlerBase
 
     protected MaterializedDelegateBinding ResolveDelegateBridge(IDelegateCreationOperation op)
     {
+        var binding = ResolveDelegateBridgeCore(op);
+        _ctx.Synthetics.RecordDelegateBinding(
+            DelegateDemandCensus.SiteKey(op.Syntax, _ctx.Methods.CurrentOwnerSpecs), binding.Plan);
+        return binding;
+    }
+
+    MaterializedDelegateBinding ResolveDelegateBridgeCore(IDelegateCreationOperation op)
+    {
         IMethodSymbol targetMethod = null;
         CLeaf targetInstance = null;
         bool baseReceiver = false;

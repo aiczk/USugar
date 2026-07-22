@@ -168,6 +168,33 @@ public sealed class MethodContext
         }
     }
 
+    /// <summary>One registered source body with the exact specialization scope used by emission.</summary>
+    public sealed class RegisteredCallableBody
+    {
+        public RegisteredCallable Callable { get; }
+        public IMethodSymbol Method => Callable.Definition;
+        public ClosureSpec Closure { get; }
+        public ImmutableArray<IMethodSymbol> OwnerSpecs { get; }
+        public IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> TypeParameterMap { get; }
+
+        internal RegisteredCallableBody(RegisteredCallable callable, ClosureSpec closure)
+        {
+            Callable = callable ?? throw new ArgumentNullException(nameof(callable));
+            Closure = closure;
+            OwnerSpecs = closure?.OwnerSpecs
+                ?? (!callable.Definition.IsDefinition
+                    ? ImmutableArray.Create(callable.Definition)
+                    : ImmutableArray<IMethodSymbol>.Empty);
+
+            IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> map = null;
+            for (var i = OwnerSpecs.Length - 1; i >= 0; i--)
+                map = TypeEnvironment.ForMethod(OwnerSpecs[i], map);
+            if (closure != null)
+                map = TypeEnvironment.ForMethod(closure.Definition, map);
+            TypeParameterMap = map;
+        }
+    }
+
     /// <summary>Per-spec identity as a TYPE (design 2026-07-10 symbol-intern v2, T2 pilot): one
     /// definition + the composed enclosing-spec type-argument vector. A def-keyed map and a
     /// spec-keyed map now differ in KEY TYPE, so filing a spec-dependent value under a bare
@@ -331,4 +358,16 @@ public sealed class MethodContext
     public IEnumerable<SpecKey> ClosureSpecKeys => _closureSpecs.Keys;
     /// <summary>Read-only callable records used to validate the frozen pre-emission definition set.</summary>
     public IEnumerable<ClosureSpec> ClosureSpecs => _closureSpecs.Values;
+
+    /// <summary>Frozen-body census input. Synthetic callables have no source body and are excluded.</summary>
+    public IEnumerable<RegisteredCallableBody> RegisteredBodies
+    {
+        get
+        {
+            foreach (var callable in _callables.Values)
+                yield return new RegisteredCallableBody(callable, null);
+            foreach (var closure in _closureSpecs.Values)
+                yield return new RegisteredCallableBody(closure, closure);
+        }
+    }
 }
