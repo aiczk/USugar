@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.Operations;
@@ -25,7 +26,63 @@ public sealed class BoundaryChecker
     TypeClassifierContext TypeCtx => new TypeClassifierContext(_ctx.Generics.TypeParamMap);
 
     public ValueInfo ClassifyValue(IOperation value)
-        => ValueClassifier.Classify(value, TypeCtx, _ctx.Closures.CaptureScope);
+        => ClassifyValue(value, new HashSet<ISymbol>(SymbolEqualityComparer.Default));
+
+    ValueInfo ClassifyValue(IOperation value, HashSet<ISymbol> tracing)
+    {
+        var unwrapped = ValueClassifier.UnwrapConversions(value);
+        if (unwrapped is ILocalReferenceOperation local && tracing.Add(local.Local))
+        {
+            var initializer = FindStableLocalInitializer(local.Local);
+            if (initializer != null)
+                return ClassifyValue(initializer, tracing);
+        }
+        return ValueClassifier.Classify(value, TypeCtx, _ctx.Closures.CaptureScope);
+    }
+
+    IOperation FindStableLocalInitializer(ILocalSymbol local)
+    {
+        var body = CurrentMethodBody();
+        if (body == null) return null;
+        IOperation initializer = null;
+        foreach (var op in body.DescendantsAndSelf())
+        {
+            if (op is IVariableDeclaratorOperation declarator
+                && SymbolEqualityComparer.Default.Equals(declarator.Symbol, local))
+            {
+                if (initializer != null || declarator.Initializer?.Value == null) return null;
+                initializer = declarator.Initializer.Value;
+                continue;
+            }
+            if (WritesLocal(op, local)) return null;
+        }
+        return initializer;
+    }
+
+    static bool WritesLocal(IOperation op, ILocalSymbol local)
+    {
+        static bool IsLocal(IOperation candidate, ILocalSymbol expected)
+            => ValueClassifier.UnwrapConversions(candidate) is ILocalReferenceOperation reference
+               && SymbolEqualityComparer.Default.Equals(reference.Local, expected);
+
+        return op switch
+        {
+            ISimpleAssignmentOperation assignment => IsLocal(assignment.Target, local),
+            ICompoundAssignmentOperation assignment => IsLocal(assignment.Target, local),
+            IIncrementOrDecrementOperation increment => IsLocal(increment.Target, local),
+            IArgumentOperation argument when argument.Parameter?.RefKind is RefKind.Ref or RefKind.Out
+                => IsLocal(argument.Value, local),
+            _ => false,
+        };
+    }
+
+    IOperation CurrentMethodBody()
+    {
+        var syntaxRef = _ctx.Methods.CurrentMethod?.DeclaringSyntaxReferences.FirstOrDefault();
+        if (syntaxRef == null) return null;
+        var syntax = syntaxRef.GetSyntax();
+        return _ctx.Compilation.GetSemanticModel(syntax.SyntaxTree).GetOperation(syntax);
+    }
 
     public bool CurrentMethodBodyMentionsProgramLocalPayload()
     {
@@ -33,11 +90,7 @@ public sealed class BoundaryChecker
         // a program-local payload in scope - an unclassifiable delegate store from here cannot be
         // proven class-free (bounded conservative polarity; over-reject is the accepted trade).
         if (LambdaCaptureAnalyzer.ReceiverCaptureKey(_ctx.Methods.CurrentMethod) != null) return true;
-        var syntaxRef = _ctx.Methods.CurrentMethod?.DeclaringSyntaxReferences.FirstOrDefault();
-        if (syntaxRef == null) return false;
-        var syntax = syntaxRef.GetSyntax();
-        var model = _ctx.Compilation.GetSemanticModel(syntax.SyntaxTree);
-        var bodyOp = model.GetOperation(syntax);
+        var bodyOp = CurrentMethodBody();
         if (bodyOp == null) return false;
         foreach (var op in bodyOp.DescendantsAndSelf())
         {
@@ -136,10 +189,9 @@ public sealed class BoundaryChecker
     void RequireDelegateValueSafeForCrossProgramStore(ValueInfo info, string surface, string site, string advice)
     {
         if (info.Kind == ValueKind.Null || ValueClassifier.IsDirectProgramLocalSafeDelegate(info)) return;
-        // Parameters/call results/field reads can originate in another method or behaviour, so this
-        // method's body cannot prove their capture payload. Locals retain the existing bounded body scan:
-        // it preserves capture-free local bindings while rejecting methods that mention local class payload.
-        if (!info.IsDirectDelegateValue && info.Provenance != ValueProvenance.Local)
+        // Stable locals have already been traced to their initializer by ClassifyValue. Anything still
+        // indirect here is mutable or originates outside this method, so its capture payload is unknown.
+        if (!info.IsDirectDelegateValue)
             throw new NotSupportedException(
                 $"A delegate stored in {surface} must be created directly from a capture-safe lambda or "
                 + $"method group at {site}. The copied {info.Provenance.ToString().ToLowerInvariant()} value "

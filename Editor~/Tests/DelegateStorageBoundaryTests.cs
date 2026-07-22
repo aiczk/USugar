@@ -91,6 +91,44 @@ public class LaunderHost : UdonSharpBehaviour {
     }
 
     [Fact]
+    public void CrossProgramStore_DelegateParameterCopiedToLocalStillRejects()
+    {
+        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(new[] { @"
+using UdonSharp;
+using System;
+public class LocalLaunderTarget : UdonSharpBehaviour { public Action Callback; }
+", @"
+using UdonSharp;
+using System;
+public class LocalLaunderPayload { public int Value; }
+public class LocalLaunderHost : UdonSharpBehaviour {
+    public LocalLaunderTarget Target;
+    void Publish(Action callback) { Action copy = callback; Target.Callback = copy; }
+    void Start() {
+        var payload = new LocalLaunderPayload();
+        Publish(() => { payload.Value++; });
+    }
+}
+" }, "LocalLaunderHost"));
+        Assert.Contains("copied parameter value", ex.Message);
+    }
+
+    [Fact]
+    public void CrossProgramStore_StableCaptureFreeLocalRetainsCreationProof()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public class StableLocalDelegateHost : UdonSharpBehaviour {
+    public Action Callback;
+    void Handler() { }
+    void Start() { Action copy = Handler; Callback = copy; }
+}
+", "StableLocalDelegateHost");
+        Assert.Contains("Callback: %SystemObjectArray", uasm);
+    }
+
+    [Fact]
     public void PublicDelegateField_DirectClassFreeLambda_Compiles()
     {
         var uasm = TestHelper.CompileToUasm(@"
