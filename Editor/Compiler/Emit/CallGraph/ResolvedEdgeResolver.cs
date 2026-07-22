@@ -394,56 +394,14 @@ public sealed class ResolvedEdgeResolver
         switch (op)
         {
             case IInvocationOperation inv:
-                yield return inv.TargetMethod.OriginalDefinition;
-                if (LeafCallTarget(inv) is { } leafT) yield return leafT;
-                if (IsCrossDispatchReceiver(inv.Instance, inv.TargetMethod))
-                {
-                    var cross = ResolveDispatch(inv, inv.TargetMethod).Cross;
-                    if (cross.HasLocalTarget) yield return cross.LocalTargetDefinition;
-                }
-                // CA-v2b-2: a polymorphic call dispatches to EVERY override in its closed-world set. Yield
-                // each so the recursion-graph edge walk AND the per-site non-tail spill classifier (both read
-                // this one enumerator) see a recursive override — including a `this.M()` that re-enters
-                // through a spawned object's ctor (Rb..ctor -> Rd.Make -> new Rd -> Rb..ctor). The dispatch-
-                // site predicate is SHARED with the emission branch (VirtualDispatch.IsDispatchSite) so the
-                // two cannot drift; the receiver's declared type is used here (Phase-1, no monomorphization
-                // map). Over-yield only ever over-spills (sound).
-                //
-                // CW5: this def-keyed walk has no type-param map, so a receiver whose DECLARED type still
-                // carries a type parameter (a `T n` constrained to a user class, or an open `Box<T>` this)
-                // cannot be resolved the way emission resolves it (ResolveType) — yet emission DOES lower
-                // the site to a typeobj chain. Pattern-matching INamedTypeSymbol alone yielded ZERO edges
-                // there, hiding the cycle from the SCC analysis and under-spilling polymorphic recursion
-                // (VM-proven 37 vs CLR 67: the frame clobbered on re-entry). Over-approximate instead:
-                // yield the slot's most-derived impl for EVERY minted class (same base exclusion as
-                // IsDispatchSite; over-yield only ever over-spills).
-                if (ClassTypeObjectContext.ContainsTypeParameter(inv.Instance?.Type))
-                {
-                    if (VirtualDispatch.IsVirtualCall(inv.TargetMethod)
-                        && !(inv.Instance is IInstanceReferenceOperation gir
-                             && gir.Syntax is BaseExpressionSyntax))
-                    {
-                        var slotDef = VirtualDispatch.SlotIntroducer(inv.TargetMethod);
-                        foreach (var concrete in _emitter.ClassTypes.MintedClasses)
-                            if (VirtualDispatch.MostDerivedImpl(concrete, slotDef) is { } genImpl)
-                                yield return genImpl.OriginalDefinition;
-                    }
-                }
-                else if (inv.Instance?.Type is INamedTypeSymbol vrecv
-                    && VirtualDispatch.IsDispatchSite(inv.TargetMethod, inv.Instance, vrecv))
-                    foreach (var vt in _emitter.VirtualDispatchInstance.Resolve(
-                        CallableSites.Require(inv, inv.TargetMethod),
-                        vrecv).RuntimeTargets)
-                        yield return vt.Impl.OriginalDefinition;
-                if (inv.TargetMethod.ContainingType is INamedTypeSymbol { TypeKind: TypeKind.Interface } iface
-                    && _emitter.Planner.InterfaceIsLocalUserClassOnly(iface))
-                    foreach (var vt in _emitter.VirtualDispatchInstance.Resolve(
-                        CallableSites.Require(inv, inv.TargetMethod),
-                        iface).RuntimeTargets)
-                        yield return vt.Impl.OriginalDefinition;
+                foreach (var target in ResolveCallableSite(
+                             CallableSites.Require(inv, inv.TargetMethod)).Targets)
+                    yield return target;
                 break;
             case IObjectCreationOperation { Constructor: { } ctor }:
-                yield return ctor.OriginalDefinition;
+                foreach (var target in ResolveCallableSite(
+                             CallableSites.Require(op, ctor)).Targets)
+                    yield return target;
                 break;
             case ITypeParameterObjectCreationOperation:
                 // The operation tree retains `new T()` while emission is per closed specialization.
@@ -475,7 +433,7 @@ public sealed class ResolvedEdgeResolver
                 break;
             case IPropertyReferenceOperation pr:
                 foreach (var propertySite in CallableSites.FromOperation(pr))
-                    foreach (var target in ResolvePropertyTargets(pr, propertySite))
+                    foreach (var target in ResolveCallableSite(propertySite).Targets)
                         yield return target;
                 break;
             case IEventAssignmentOperation eventAssignment
@@ -484,16 +442,10 @@ public sealed class ResolvedEdgeResolver
                 var accessor = eventAssignment.Adds
                     ? eventReference.Event.AddMethod
                     : eventReference.Event.RemoveMethod;
-                if (accessor?.ContainingType is INamedTypeSymbol { TypeKind: TypeKind.Interface } eventIface
-                    && _emitter.Planner.InterfaceIsLocalUserClassOnly(eventIface))
-                {
-                    foreach (var vt in _emitter.VirtualDispatchInstance.Resolve(
-                        CallableSites.Require(eventAssignment, accessor),
-                        eventIface).RuntimeTargets)
-                        yield return vt.Impl.OriginalDefinition;
-                }
-                else if (accessor != null && !accessor.IsImplicitlyDeclared)
-                    yield return accessor.OriginalDefinition;
+                if (accessor != null)
+                    foreach (var target in ResolveCallableSite(
+                                 CallableSites.Require(eventAssignment, accessor)).Targets)
+                        yield return target;
                 break;
             }
             case IDeconstructionAssignmentOperation deconstruction
@@ -510,7 +462,80 @@ public sealed class ResolvedEdgeResolver
         // is naturally excluded; the consumers' internalMethods / callee filter restricts to registered
         // struct operators. (B49 — see the summary above.)
         var opMethod = CallableSites.OperatorMethod(op);
-        if (opMethod != null) yield return opMethod.OriginalDefinition;
+        if (opMethod != null)
+            foreach (var target in ResolveCallableSite(CallableSites.Require(op, opMethod)).Targets)
+                yield return target;
+    }
+
+    internal ResolvedCallableSite ResolveCallableSite(CallableSite site)
+        => new ResolvedCallableSite(site, ResolveCallableTargets(site));
+
+    IEnumerable<IMethodSymbol> ResolveCallableTargets(CallableSite site)
+    {
+        switch (site.Kind)
+        {
+            case CallableSiteKind.Method when site.Operation is IInvocationOperation invocation:
+                foreach (var target in ResolveInvocationTargets(invocation, site)) yield return target;
+                yield break;
+            case CallableSiteKind.Constructor:
+            case CallableSiteKind.Operator:
+            case CallableSiteKind.Conversion:
+                yield return site.Target.OriginalDefinition;
+                yield break;
+            case CallableSiteKind.PropertyGet:
+            case CallableSiteKind.PropertySet:
+                if (site.Operation is IPropertyReferenceOperation property)
+                    foreach (var target in ResolvePropertyTargets(property, site)) yield return target;
+                yield break;
+            case CallableSiteKind.EventAdd:
+            case CallableSiteKind.EventRemove:
+                foreach (var target in ResolveEventTargets(site)) yield return target;
+                yield break;
+        }
+    }
+
+    IEnumerable<IMethodSymbol> ResolveInvocationTargets(IInvocationOperation invocation, CallableSite site)
+    {
+        yield return site.Target.OriginalDefinition;
+        if (LeafCallTarget(invocation) is { } leaf) yield return leaf;
+        if (IsCrossDispatchReceiver(site.Receiver, site.Target))
+        {
+            var cross = ResolveDispatch(invocation, site.Target).Cross;
+            if (cross.HasLocalTarget) yield return cross.LocalTargetDefinition;
+        }
+        if (ClassTypeObjectContext.ContainsTypeParameter(site.Receiver?.Type))
+        {
+            if (VirtualDispatch.IsVirtualCall(site.Target)
+                && !(site.Receiver is IInstanceReferenceOperation receiver
+                     && receiver.Syntax is BaseExpressionSyntax))
+            {
+                var slot = VirtualDispatch.SlotIntroducer(site.Target);
+                foreach (var concrete in _emitter.ClassTypes.MintedClasses)
+                    if (VirtualDispatch.MostDerivedImpl(concrete, slot) is { } implementation)
+                        yield return implementation.OriginalDefinition;
+            }
+        }
+        else if (site.Receiver?.Type is INamedTypeSymbol receiverType
+                 && VirtualDispatch.IsDispatchSite(site.Target, site.Receiver, receiverType))
+            foreach (var target in _emitter.VirtualDispatchInstance.Resolve(site, receiverType).RuntimeTargets)
+                yield return target.Impl.OriginalDefinition;
+
+        if (site.Target.ContainingType is INamedTypeSymbol { TypeKind: TypeKind.Interface } iface
+            && _emitter.Planner.InterfaceIsLocalUserClassOnly(iface))
+            foreach (var target in _emitter.VirtualDispatchInstance.Resolve(site, iface).RuntimeTargets)
+                yield return target.Impl.OriginalDefinition;
+    }
+
+    IEnumerable<IMethodSymbol> ResolveEventTargets(CallableSite site)
+    {
+        if (site.Target.ContainingType is INamedTypeSymbol { TypeKind: TypeKind.Interface } iface
+            && _emitter.Planner.InterfaceIsLocalUserClassOnly(iface))
+        {
+            foreach (var target in _emitter.VirtualDispatchInstance.Resolve(site, iface).RuntimeTargets)
+                yield return target.Impl.OriginalDefinition;
+            yield break;
+        }
+        if (!site.Target.IsImplicitlyDeclared) yield return site.Target.OriginalDefinition;
     }
 
     /// <summary>Resolve one normalized property accessor to the graph targets consumed by SCC
@@ -637,7 +662,7 @@ public sealed class ResolvedEdgeResolver
         var kind = getter ? CallableSiteKind.PropertyGet : CallableSiteKind.PropertySet;
         foreach (var site in CallableSites.FromOperation(pr))
             if (site.Kind == kind)
-                foreach (var target in ResolvePropertyTargets(pr, site))
+                foreach (var target in ResolveCallableSite(site).Targets)
                     if (SymbolEqualityComparer.Default.Equals(target, callee)) return true;
         return false;
     }

@@ -33,6 +33,26 @@ internal readonly struct CallableSite
     }
 }
 
+/// <summary>A normalized callable site paired with the complete definition-keyed target set used by
+/// reachability, recursion, and tail analysis. Resolution happens once; consumers do not reinterpret
+/// the Roslyn operation.</summary>
+internal sealed class ResolvedCallableSite
+{
+    public CallableSite Site { get; }
+    public IReadOnlyList<IMethodSymbol> Targets { get; }
+
+    public ResolvedCallableSite(CallableSite site, IEnumerable<IMethodSymbol> targets)
+    {
+        Site = site;
+        if (targets == null) throw new System.ArgumentNullException(nameof(targets));
+        var frozen = new List<IMethodSymbol>();
+        var seen = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
+        foreach (var target in targets)
+            if (target != null && seen.Add(target)) frozen.Add(target);
+        Targets = frozen.AsReadOnly();
+    }
+}
+
 internal static class CallableSites
 {
     public static CallableSite Require(IOperation operation, IMethodSymbol target)
