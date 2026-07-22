@@ -2778,15 +2778,14 @@ public abstract partial class HandlerBase
         // frame after the call, so it is flagged TailSpared instead of wrapped; ONE non-tail site used to
         // make EVERY site of the callee spill and deep mixed tail/non-tail recursion overflowed the
         // 8192-entry __recurStack (compile-clean VmFault on legal C#).
-        if (IsRecursiveEdge(_currentMethod, target))
+        var sitePlan = CallableSitePlan.Direct(target, callSite,
+            IsRecursiveEdge(_currentMethod, target), _ctx.RecursionContext.Info);
+        if (sitePlan.RecursiveEdge)
         {
-            bool tailSpared = callSite != null && _ctx.RecursionContext.Info.TailSparedDirectCallSites != null
-                && _ctx.RecursionContext.Info.TailSparedDirectCallSites.Contains(callSite);
-            if (tailSpared)
+            if (sitePlan.TailSpared)
                 return InternalCall(func.Name, args, retType, tailSpared: true);
-            _ctx.Storage.EnsureRecursionStack();
+            RegisterCallableSiteSpill(sitePlan);
             _builder.CurrentFunction.RecursiveCalleeNames.Add(func.Name);
-            AccumulateRecursionSpillFields(_builder.CurrentFunction);
         }
 
         return InternalCall(func.Name, args, retType);
@@ -2823,12 +2822,9 @@ public abstract partial class HandlerBase
     /// so InsertRecursionSpills wraps the flagged dispatch arms with the spill/reload.</summary>
     protected bool MarkReentrantDispatch(IOperation dispatchOp)
     {
-        if (_ctx.RecursionContext.Info.ReentrantDispatchSites == null || dispatchOp?.Syntax == null
-            || !_ctx.RecursionContext.Info.ReentrantDispatchSites.Contains(dispatchOp.Syntax))
-            return false;
-        _ctx.Storage.EnsureRecursionStack();
-        AccumulateRecursionSpillFields(_builder.CurrentFunction);
-        return true;
+        var plan = CallableSitePlan.Delegate(dispatchOp?.Syntax, _ctx.RecursionContext.Info);
+        RegisterCallableSiteSpill(plan);
+        return plan.Reentrant;
     }
 
     /// <summary>Wave-12 r2 [V1]: true when the cross dispatch at <paramref name="site"/> (a method
@@ -2842,14 +2838,20 @@ public abstract partial class HandlerBase
     protected bool TryMarkReentrantCrossDispatch(IOperation site, IMethodSymbol staticCallee)
     {
         if (_currentMethod == null) return false;
-        var local = VirtualDispatch.ResolveCrossProgramLocalTarget(_classSymbol, staticCallee).LocalTarget;
-        if (local == null || !_ctx.RecursionContext.IsRecursiveEdge(_currentMethod, local)) return false;
-        if (site?.Syntax != null && _ctx.RecursionContext.Info.TailSparedDirectCallSites != null
-            && _ctx.RecursionContext.Info.TailSparedDirectCallSites.Contains(site.Syntax))
-            return false;
+        var landing = VirtualDispatch.ResolveCrossProgramLocalTarget(_classSymbol, staticCallee);
+        var recursive = landing.HasLocalTarget
+            && _ctx.RecursionContext.IsRecursiveEdge(_currentMethod, landing.LocalTarget);
+        var plan = CallableSitePlan.Cross(staticCallee, landing, site?.Syntax, recursive,
+            _ctx.RecursionContext.Info);
+        RegisterCallableSiteSpill(plan);
+        return plan.Reentrant;
+    }
+
+    void RegisterCallableSiteSpill(CallableSitePlan plan)
+    {
+        if (!plan.RequiresFrameSpill) return;
         _ctx.Storage.EnsureRecursionStack();
         AccumulateRecursionSpillFields(_builder.CurrentFunction);
-        return true;
     }
 
     /// <summary>Accumulate the UNION of in-scope frame fields across every spill site: a later site has
