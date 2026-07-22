@@ -138,7 +138,6 @@ internal sealed class GenericTypeSpecCensus
         IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> map, SpecTrace trace,
         INamedTypeSymbol concrete)
     {
-        if (!rawTarget.IsGenericMethod && !rawTarget.ContainingType.IsGenericType) return;
         var target = TypeEnvironment.CloseMethod(_compilation, rawTarget, map);
         var owner = target.ContainingType;
         if (owner == null || !IsDispatchCompatible(concrete, owner)) return;
@@ -162,7 +161,12 @@ internal sealed class GenericTypeSpecCensus
         if (target.IsGenericMethod && implementation.IsGenericMethod
             && implementation.TypeArguments.Any(ClassTypeObjectContext.ContainsTypeParameter))
             implementation = implementation.Construct(target.TypeArguments.ToArray());
-        EnqueueIfClosed(implementation, TypeEnvironment.ForContainingType(concrete, map), trace);
+        var implementationMap = TypeEnvironment.ForContainingType(concrete, map);
+        EnqueueIfClosed(implementation, implementationMap, trace);
+        if (target.MethodKind is MethodKind.EventAdd or MethodKind.EventRemove
+            && implementation.DeclaringSyntaxReferences.Length > 0
+            && _bodyOf(implementation.OriginalDefinition) != null)
+            _specializations.TryAdd(MethodKey(implementation, implementationMap), implementation);
     }
 
     static bool IsDispatchCompatible(INamedTypeSymbol concrete, INamedTypeSymbol owner)

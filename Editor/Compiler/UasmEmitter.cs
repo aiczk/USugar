@@ -177,7 +177,7 @@ public partial class UasmEmitter
             .OrderBy(StableOrdinalKey, StringComparer.Ordinal)
             .ThenBy(ClassTypeObjectContext.SpecKey, StringComparer.Ordinal));
         _ctx.VirtualDispatch = new VirtualDispatch(_ctx.ClassTypes); // CA-v2b-2: virtual-call lowering
-        plan.Callables.FreezeSpecializations(new RuntimeSpecializationPlanner(_ctx).Build(plan));
+        plan.Callables.FreezeSpecializations(Array.Empty<IMethodSymbol>());
         var bodyGraph = new RecursionNodeWalk(
             EdgeResolver, plan.Reach, plan.FieldInitOps, plan.Callables.Definitions).Run();
         _ctx.Closures.SetIdentityPlan(ClosureIdentityPlan.Build(bodyGraph.AllNodes));
