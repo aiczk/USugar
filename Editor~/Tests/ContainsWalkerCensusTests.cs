@@ -36,6 +36,7 @@ public class WalkerCensusCarrier
     public int cInt;
     public string cStr;
     public int[] cIntArr;
+    public int[,] cNdim;
     public (int, string) cTup;
     public Wrap<int> cWrapInt;
     public Wrap<int>? cWrapIntN;
@@ -82,6 +83,7 @@ public class WalkerCensusCarrier
         ("cInt",     false, false, false, "int"),
         ("cStr",     false, false, false, "string"),
         ("cIntArr",  false, false, false, "int[]"),
+        ("cNdim",    false, false, false, "int[,]"),
         ("cTup",     false, false, false, "(int, string)"),
         ("cWrapInt", false, false, false, "Wrap<int>"),
         ("cWrapIntN",false, false, false, "Wrap<int>?"),
@@ -160,12 +162,42 @@ public class WalkerCensusCarrier
     [Fact]
     public void TypeClassifierDelegation_MatchesUserClassWalker_OnEveryBatteryShape()
     {
-        // TypeClassifier.ContainsProgramLocalPayload is a pure delegation to ContainsUserClassType —
-        // pin that the facade never grows its own diverging copy of the walk.
+        // RuntimeShape owns the public classification; pin that its recursive payload fact stays
+        // identical to the shared ContainsUserClassType walker.
         var types = BuildCensusTypes();
         var ctx = new TypeClassifierContext(null);
         foreach (var (field, cls, _, _, shape) in Battery)
             Assert.True(TypeClassifier.ContainsProgramLocalPayload(types[field], ctx) == cls,
                 $"facade drift [{shape}]: ContainsProgramLocalPayload({field}) expected {cls}");
+    }
+
+    [Fact]
+    public void RuntimeShape_DistinguishesObjectArrayMeanings()
+    {
+        var types = BuildCensusTypes();
+        var ctx = new TypeClassifierContext(null);
+
+        var cls = TypeClassifier.ShapeOf(types["dCls"], ctx);
+        Assert.Equal(RuntimeBundleKind.Class, cls.Bundle);
+        Assert.Equal(RuntimeIdentityKind.Reference, cls.Identity);
+        Assert.Equal(RuntimeScopeKind.ProgramLocal, cls.Scope);
+        Assert.True(cls.ContainsProgramLocalPayload);
+
+        var aggregate = TypeClassifier.ShapeOf(types["cTup"], ctx);
+        Assert.Equal(RuntimeBundleKind.Aggregate, aggregate.Bundle);
+        Assert.Equal(RuntimeIdentityKind.Value, aggregate.Identity);
+        Assert.Equal(RuntimeTypeIdentityKind.Collapsed, aggregate.RuntimeTypeIdentity);
+
+        var dlg = TypeClassifier.ShapeOf(types["dDel"], ctx);
+        Assert.Equal(RuntimeBundleKind.Delegate, dlg.Bundle);
+        Assert.Equal(RuntimeScopeKind.Portable, dlg.Scope);
+
+        var ndim = TypeClassifier.ShapeOf(types["cNdim"], ctx);
+        Assert.Equal(RuntimeBundleKind.MultiDimensionalArray, ndim.Bundle);
+        Assert.Equal(RuntimeIdentityKind.Reference, ndim.Identity);
+
+        var native = TypeClassifier.ShapeOf(types["cIntArr"], ctx);
+        Assert.Equal(RuntimeStorageKind.Native, native.Storage);
+        Assert.Equal(RuntimeTypeIdentityKind.Exact, native.RuntimeTypeIdentity);
     }
 }

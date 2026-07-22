@@ -14,10 +14,76 @@ public readonly struct TypeClassifierContext
         => TypeParamMap = typeParamMap;
 }
 
+public enum RuntimeStorageKind { Native, ObjectArrayBundle }
+public enum RuntimeBundleKind { None, Class, Aggregate, Delegate, MultiDimensionalArray }
+public enum RuntimeIdentityKind { Value, Reference }
+public enum RuntimeScopeKind { Portable, ProgramLocal }
+public enum RuntimeTypeIdentityKind { Exact, Tagged, Collapsed }
+
+/// <summary>Compiler-side description of a value's Udon representation. Several source types erase to
+/// SystemObjectArray, so policy must consume these semantic facts rather than rediscovering meaning from
+/// the emitted Udon type name.</summary>
+public readonly struct RuntimeShape
+{
+    public readonly RuntimeStorageKind Storage;
+    public readonly RuntimeBundleKind Bundle;
+    public readonly RuntimeIdentityKind Identity;
+    public readonly RuntimeScopeKind Scope;
+    public readonly RuntimeTypeIdentityKind RuntimeTypeIdentity;
+    public readonly bool ContainsProgramLocalPayload;
+
+    RuntimeShape(RuntimeStorageKind storage, RuntimeBundleKind bundle, RuntimeIdentityKind identity,
+        RuntimeScopeKind scope, RuntimeTypeIdentityKind runtimeTypeIdentity, bool containsProgramLocalPayload)
+    {
+        Storage = storage;
+        Bundle = bundle;
+        Identity = identity;
+        Scope = scope;
+        RuntimeTypeIdentity = runtimeTypeIdentity;
+        ContainsProgramLocalPayload = containsProgramLocalPayload;
+    }
+
+    public bool IsBundle => Storage == RuntimeStorageKind.ObjectArrayBundle;
+    public bool CanCrossProgram => !ContainsProgramLocalPayload;
+    public bool CanEraseToObject => !ContainsProgramLocalPayload
+        && (!IsBundle || RuntimeTypeIdentity != RuntimeTypeIdentityKind.Collapsed);
+
+    public static RuntimeShape Class(bool containsPayload = true)
+        => new(RuntimeStorageKind.ObjectArrayBundle, RuntimeBundleKind.Class, RuntimeIdentityKind.Reference,
+            RuntimeScopeKind.ProgramLocal, RuntimeTypeIdentityKind.Tagged, containsPayload);
+    public static RuntimeShape Aggregate(bool containsPayload)
+        => new(RuntimeStorageKind.ObjectArrayBundle, RuntimeBundleKind.Aggregate, RuntimeIdentityKind.Value,
+            containsPayload ? RuntimeScopeKind.ProgramLocal : RuntimeScopeKind.Portable,
+            RuntimeTypeIdentityKind.Collapsed, containsPayload);
+    public static RuntimeShape Delegate(bool containsPayload)
+        => new(RuntimeStorageKind.ObjectArrayBundle, RuntimeBundleKind.Delegate, RuntimeIdentityKind.Reference,
+            containsPayload ? RuntimeScopeKind.ProgramLocal : RuntimeScopeKind.Portable,
+            RuntimeTypeIdentityKind.Collapsed, containsPayload);
+    public static RuntimeShape MultiDimensionalArray(bool containsPayload)
+        => new(RuntimeStorageKind.ObjectArrayBundle, RuntimeBundleKind.MultiDimensionalArray,
+            RuntimeIdentityKind.Reference, containsPayload ? RuntimeScopeKind.ProgramLocal : RuntimeScopeKind.Portable,
+            RuntimeTypeIdentityKind.Collapsed, containsPayload);
+    public static RuntimeShape Native(bool containsPayload)
+        => new(RuntimeStorageKind.Native, RuntimeBundleKind.None, RuntimeIdentityKind.Value,
+            containsPayload ? RuntimeScopeKind.ProgramLocal : RuntimeScopeKind.Portable,
+            RuntimeTypeIdentityKind.Exact, containsPayload);
+}
+
 public static class TypeClassifier
 {
+    public static RuntimeShape ShapeOf(ITypeSymbol type, TypeClassifierContext ctx)
+    {
+        type = Resolve(type, ctx);
+        var containsPayload = EmitPolicy.ContainsUserClassType(type, ctx.TypeParamMap);
+        if (EmitPolicy.IsUserClassType(type)) return RuntimeShape.Class();
+        if (NdimArrayAbi.IsNdimArray(type)) return RuntimeShape.MultiDimensionalArray(containsPayload);
+        if (type is INamedTypeSymbol { DelegateInvokeMethod: not null }) return RuntimeShape.Delegate(containsPayload);
+        if (EmitPolicy.IsAggregateType(type)) return RuntimeShape.Aggregate(containsPayload);
+        return RuntimeShape.Native(containsPayload);
+    }
+
     public static bool ContainsProgramLocalPayload(ITypeSymbol type, TypeClassifierContext ctx)
-        => EmitPolicy.ContainsUserClassType(type, ctx.TypeParamMap);
+        => ShapeOf(type, ctx).ContainsProgramLocalPayload;
 
     public static bool IsUserClass(ITypeSymbol type)
         => EmitPolicy.IsUserClassType(type);
@@ -27,4 +93,8 @@ public static class TypeClassifier
 
     public static bool IsObjectArrayEmulated(ITypeSymbol type)
         => type is INamedTypeSymbol named && EmitPolicy.IsObjectArrayEmulated(named);
+
+    static ITypeSymbol Resolve(ITypeSymbol type, TypeClassifierContext ctx)
+        => type is ITypeParameterSymbol tp && ctx.TypeParamMap != null
+            && ctx.TypeParamMap.TryGetValue(tp, out var resolved) ? resolved : type;
 }

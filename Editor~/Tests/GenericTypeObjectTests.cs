@@ -1,5 +1,7 @@
 using System.Linq;
 using System.Text.RegularExpressions;
+using System.Text;
+using System;
 using Xunit;
 
 namespace USugar.Tests;
@@ -112,5 +114,37 @@ public class GtoDeterminism : UdonSharpBehaviour {
         var first = TestHelper.CompileToUasm(source, "GtoDeterminism");
         var second = TestHelper.CompileToUasm(source, "GtoDeterminism");
         Assert.Equal(first, second);
+    }
+
+    [Fact]
+    public void MoreThan256FiniteSpecializations_AreAllowed()
+    {
+        var source = new StringBuilder("using UdonSharp;\n");
+        for (var i = 0; i < 257; i++) source.Append("public class ManyArg").Append(i).Append(" {}\n");
+        source.Append("public class ManyBox<T> { public T value; }\n")
+            .Append("public class ManySpecs : UdonSharpBehaviour {\n")
+            .Append("  ManyBox<T> Make<T>() { return new ManyBox<T>(); }\n")
+            .Append("  void Start() {\n");
+        for (var i = 0; i < 257; i++)
+            source.Append("    var v").Append(i).Append(" = Make<ManyArg").Append(i).Append(">();\n");
+        source.Append("  }\n}");
+
+        var uasm = TestHelper.CompileToUasm(source.ToString(), "ManySpecs");
+        Assert.Contains("__typeobj_ManyBox_ManyArg256", uasm);
+    }
+
+    [Fact]
+    public void RecursivelyGrowingSpecialization_IsRejectedWithoutNumericLimit()
+    {
+        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
+using UdonSharp;
+public class GrowNode<T> { }
+public class GrowingSpecs : UdonSharpBehaviour {
+  void Grow<T>() { Grow<GrowNode<T>>(); }
+  void Start() { Grow<int>(); }
+}", "GrowingSpecs"));
+        Assert.Contains("Generic specialization expands recursively", ex.Message);
+        Assert.Contains("Grow<int>", ex.Message);
+        Assert.Contains("Grow<GrowNode<int>>", ex.Message);
     }
 }

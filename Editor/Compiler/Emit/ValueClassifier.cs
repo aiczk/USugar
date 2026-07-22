@@ -103,11 +103,12 @@ public static class ValueClassifier
 
         if (staticType == null)
             return Create(unwrapped, staticType, ValueKind.Unknown, ProvenanceOf(unwrapped), false, false, false, false);
-        if (TypeClassifier.ContainsProgramLocalPayload(staticType, typeCtx))
+        var shape = TypeClassifier.ShapeOf(staticType, typeCtx);
+        if (shape.ContainsProgramLocalPayload)
             return Create(unwrapped, staticType, ValueKind.ProgramLocalPayload, ProvenanceOf(unwrapped), true, false, false, false);
-        if (TypeClassifier.IsAggregateValue(staticType))
+        if (shape.Bundle == RuntimeBundleKind.Aggregate)
             return Create(unwrapped, staticType, ValueKind.Aggregate, ProvenanceOf(unwrapped), false, false, false, false);
-        if (TypeClassifier.IsObjectArrayEmulated(staticType))
+        if (shape.IsBundle)
             return Create(unwrapped, staticType, ValueKind.ObjectArray, ProvenanceOf(unwrapped), false, false, false, false);
 
         return Create(unwrapped, staticType, ValueKind.Native, ProvenanceOf(unwrapped), false, false, false, false);

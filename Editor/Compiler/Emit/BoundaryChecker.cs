@@ -143,13 +143,16 @@ public sealed class BoundaryChecker
     public void RequireCanEraseProgramLocalPayload(IConversionOperation conversion,
         ITypeSymbol sourceType, ITypeSymbol destinationType)
     {
+        var sourceShape = TypeClassifier.ShapeOf(sourceType, TypeCtx);
+        var destinationShape = TypeClassifier.ShapeOf(destinationType, TypeCtx);
         // Phase-A armor (B82 mirror for N-R1): a Rank>1 array's runtime value is an object[] bundle, and
         // the extern-boundary choke keys on the ARGUMENT's unwrapped static type — erasing the T[,] to
         // object/Array first launders the bundle past externs the direct form loudly rejects. Contain at
         // the erasure. Cross-behaviour transport is compiler-generated typed member access (never a user
         // conversion), cast-BACK (object → T[,]) does not erase, and the equality position compares
         // bundle references exactly like array references — all stay legal.
-        if (NdimArrayAbi.IsNdimArray(sourceType) && !NdimArrayAbi.IsNdimArray(destinationType)
+        if (sourceShape.Bundle == RuntimeBundleKind.MultiDimensionalArray
+            && destinationShape.Bundle != RuntimeBundleKind.MultiDimensionalArray
             && !IsProgramLocalEqualityPosition(conversion))
             throw new NotSupportedException(
                 $"Erasing the multi-dimensional array '{sourceType.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}' "
@@ -165,8 +168,8 @@ public sealed class BoundaryChecker
         // bundle from a real object[], so the erasure conversion is the only sound reject point. The
         // equality/Equals positions stay legal (the class arm's carve-out), and T → T? is a WRAP whose
         // static type still names the aggregate, not an erasure.
-        if (EmitPolicy.IsAggregateType(sourceType)
-            && !EmitPolicy.IsObjectArrayEmulated(destinationType)
+        if (sourceShape.Bundle == RuntimeBundleKind.Aggregate
+            && !destinationShape.IsBundle
             && !(EmitPolicy.IsNullableT(destinationType, out var wrapped) && EmitPolicy.IsObjectArrayEmulated(wrapped))
             && !IsProgramLocalEqualityPosition(conversion))
             throw new NotSupportedException(
@@ -176,8 +179,8 @@ public sealed class BoundaryChecker
                 + "launders past the cast / ToString / extern boundary checks and would stringify as \"System.Object[]\" "
                 + "or silently reinterpret when cast back. Keep the value typed as its struct/tuple type.");
 
-        if (!TypeClassifier.ContainsProgramLocalPayload(sourceType, TypeCtx)
-            || TypeClassifier.ContainsProgramLocalPayload(destinationType, TypeCtx)
+        if (!sourceShape.ContainsProgramLocalPayload
+            || destinationShape.ContainsProgramLocalPayload
             || IsProgramLocalEqualityPosition(conversion))
             return;
         throw new NotSupportedException(
@@ -287,7 +290,7 @@ public sealed class BoundaryChecker
 
     void RequireNoProgramLocalPayload(BoundarySite site, ITypeSymbol type, string memberName)
     {
-        if (!TypeClassifier.ContainsProgramLocalPayload(type, TypeCtx)) return;
+        if (TypeClassifier.ShapeOf(type, TypeCtx).CanCrossProgram) return;
         throw new NotSupportedException(ProgramLocalPayloadMessage(site, memberName));
     }
 
