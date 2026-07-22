@@ -271,6 +271,54 @@ public class PrivatePropHost : UdonSharpBehaviour {
         Assert.NotNull(uasm);
     }
 
+    [Fact]
+    public void CrossBehaviourDelegateArrayProperty_ClassCapturingLambda_Rejects()
+    {
+        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(new[] { @"
+using UdonSharp;
+using System;
+public class DelegateArrayTarget : UdonSharpBehaviour {
+    public Action[] Callbacks { get; set; }
+}
+", @"
+using UdonSharp;
+using System;
+public class DelegateArrayPayload { public int Value; }
+public class DelegateArrayWriter : UdonSharpBehaviour {
+    public DelegateArrayTarget Target;
+    void Start() {
+        var payload = new DelegateArrayPayload();
+        Target.Callbacks = new Action[] { () => payload.Value++ };
+    }
+}
+" }, "DelegateArrayWriter"));
+        Assert.Contains("cross-program property 'Callbacks'", ex.Message);
+    }
+
+    [Fact]
+    public void CrossBehaviourDelegateArrayProperty_ElementWriteRejects()
+    {
+        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(new[] { @"
+using UdonSharp;
+using System;
+public class DelegateArrayElementTarget : UdonSharpBehaviour {
+    public Action[] Callbacks { get; set; }
+}
+", @"
+using UdonSharp;
+using System;
+public class DelegateArrayElementPayload { public int Value; }
+public class DelegateArrayElementWriter : UdonSharpBehaviour {
+    public DelegateArrayElementTarget Target;
+    void Start() {
+        var payload = new DelegateArrayElementPayload();
+        Target.Callbacks[0] = () => payload.Value++;
+    }
+}
+" }, "DelegateArrayElementWriter"));
+        Assert.Contains("array property 'Callbacks'", ex.Message);
+    }
+
     static int Count(string haystack, string needle)
     {
         var count = 0;

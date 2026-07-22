@@ -92,6 +92,12 @@ public sealed class BoundaryChecker
                     $"an element of the cross-program array field '{rootF.Field.Name}'", "the write site",
                     "Keep the delegate array private, or assign a direct class-free lambda/method group.");
                 break;
+            case IArrayElementReferenceOperation e when ArrayRootPropertyReference(e) is { } rootP
+                && IsCrossProgramDelegatePropertyTarget(rootP):
+                RequireDelegateValueSafeForCrossProgramStore(info,
+                    $"an element of the cross-program array property '{rootP.Property.Name}'", "the write site",
+                    "Keep the delegate array property private, or assign a direct class-free lambda/method group.");
+                break;
         }
     }
 
@@ -300,6 +306,25 @@ public sealed class BoundaryChecker
         }
     }
 
+    static IPropertyReferenceOperation ArrayRootPropertyReference(IArrayElementReferenceOperation elem)
+    {
+        IOperation op = elem.ArrayReference;
+        while (true)
+        {
+            switch (op)
+            {
+                case IConversionOperation c:
+                    op = c.Operand; continue;
+                case IArrayElementReferenceOperation ae:
+                    op = ae.ArrayReference; continue;
+                case IPropertyReferenceOperation pr:
+                    return pr;
+                default:
+                    return null;
+            }
+        }
+    }
+
     public bool IsCrossProgramDelegateFieldTarget(IFieldReferenceOperation fieldRef)
     {
         // CW8: an ARRAY of delegates is the same exported SystemObjectArray surface as a scalar
@@ -332,7 +357,7 @@ public sealed class BoundaryChecker
     /// Struct/class (object[]-emulated) containers are program-local slot writes and never match.</summary>
     public bool IsCrossProgramDelegatePropertyTarget(IPropertyReferenceOperation propRef)
     {
-        if (propRef.Property.Type is not INamedTypeSymbol dpt || dpt.DelegateInvokeMethod == null) return false;
+        if (!IsDelegateCarryingStorageType(propRef.Property.Type)) return false;
         var containing = propRef.Property.ContainingType;
         if (containing == null || TypeClassifier.IsObjectArrayEmulated(containing)) return false;
         if (propRef.Instance is not null and not IInstanceReferenceOperation)
