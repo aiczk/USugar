@@ -89,30 +89,31 @@ public sealed class SyntheticContext
     public bool TryGetClosureBridge(string name, out CFunction function)
         => _closureBridgeFuncs.TryGetValue(name, out function);
 
-    public void RegisterReceiverBridge(IMethodSymbol member, string name)
+    public void RegisterReceiverBridge(DelegateBindingPlan binding)
     {
         RequireMutable();
-        _receiverBridges.TryAdd(name, new DelegateBridgeDemand(
-            new DelegateBindingPlan(DelegateBindingKind.Receiver, member, name), member, null));
+        if (binding.Kind != DelegateBindingKind.Receiver)
+            throw new ArgumentException("Receiver bridge demand requires a receiver binding.", nameof(binding));
+        _receiverBridges.TryAdd(binding.BridgeName,
+            new DelegateBridgeDemand(binding, binding.TargetMethod, null));
     }
 
-    public void RegisterDelegateBridge(IMethodSymbol method, string name,
+    public void RegisterDelegateBridge(DelegateBindingPlan binding,
         IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeParamMap)
     {
         RequireMutable();
-        var kind = method.MethodKind is MethodKind.LambdaMethod or MethodKind.LocalFunction
-            ? DelegateBindingKind.Closure : DelegateBindingKind.Direct;
-        _delegateBridges.TryAdd(name, new DelegateBridgeDemand(
-            new DelegateBindingPlan(kind, method, name), method, typeParamMap));
+        _delegateBridges.TryAdd(binding.BridgeName,
+            new DelegateBridgeDemand(binding, binding.TargetMethod, typeParamMap));
     }
 
-    public void RegisterSigAdapter(IMethodSymbol target, IMethodSymbol invoke, string name,
+    public void RegisterSigAdapter(DelegateBindingPlan binding, IMethodSymbol invoke,
         IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeParamMap)
     {
         RequireMutable();
-        _sigAdapterBridges.TryAdd(name, new DelegateBridgeDemand(
-            new DelegateBindingPlan(DelegateBindingKind.SignatureAdapter, target, name),
-            invoke, typeParamMap));
+        if (binding.Kind != DelegateBindingKind.SignatureAdapter)
+            throw new ArgumentException("Signature adapter demand requires an adapter binding.", nameof(binding));
+        _sigAdapterBridges.TryAdd(binding.BridgeName,
+            new DelegateBridgeDemand(binding, invoke, typeParamMap));
     }
 
     public void RegisterMulticast(string signature, IMethodSymbol invoke,
@@ -128,13 +129,16 @@ public sealed class SyntheticContext
     public void RegisterEnumToString(INamedTypeSymbol enumType)
     { RequireMutable(); _enumToString.Add(enumType); }
 
-    public void RegisterWrapper(string name, IMethodSymbol outerInvoke, IMethodSymbol innerInvoke,
+    public void RegisterWrapper(DelegateBindingPlan binding, IMethodSymbol outerInvoke,
+        IMethodSymbol innerInvoke,
         IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeParamMap)
     {
         RequireMutable();
-        if (!_wrapperSigs.ContainsKey(name))
-            _wrapperSigs.Add(name, new DelegateWrapperDemand(
-                new DelegateBindingPlan(DelegateBindingKind.Wrapper, innerInvoke, name),
+        if (binding.Kind != DelegateBindingKind.Wrapper)
+            throw new ArgumentException("Wrapper demand requires a wrapper binding.", nameof(binding));
+        if (!_wrapperSigs.ContainsKey(binding.BridgeName))
+            _wrapperSigs.Add(binding.BridgeName, new DelegateWrapperDemand(
+                binding,
                 outerInvoke, innerInvoke, typeParamMap));
     }
 

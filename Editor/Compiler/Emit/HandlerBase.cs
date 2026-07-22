@@ -1622,8 +1622,20 @@ public abstract partial class HandlerBase
     {
         var wrapperName = DelegateAbi.WrapperName(
             DelegateAbi.BuildSigPart(outerInvoke, typeParamMap), DelegateAbi.BuildSigPart(innerInvoke, typeParamMap));
-        _ctx.Synthetics.RegisterWrapper(wrapperName, outerInvoke, innerInvoke, typeParamMap);
+        _ctx.Synthetics.RegisterWrapper(
+            new DelegateBindingPlan(DelegateBindingKind.Wrapper, innerInvoke, wrapperName),
+            outerInvoke, innerInvoke, typeParamMap);
         return wrapperName;
+    }
+
+    DelegateBindingPlan RegisterDelegateDemand(IMethodSymbol method, string bridgeName,
+        IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeParamMap)
+    {
+        var kind = method.MethodKind is MethodKind.LambdaMethod or MethodKind.LocalFunction
+            ? DelegateBindingKind.Closure : DelegateBindingKind.Direct;
+        var binding = new DelegateBindingPlan(kind, method, bridgeName);
+        _ctx.Synthetics.RegisterDelegateBridge(binding, typeParamMap);
+        return binding;
     }
 
     // ── Override-chain resolution (shared core) ──
@@ -1905,9 +1917,10 @@ public abstract partial class HandlerBase
             if (member.ContainingType is INamedTypeSymbol cloneCt && TypeClassifier.IsUserStruct(cloneCt))
                 recvLeaf = AggregateAbi.DeepClone(_builder, recvLeaf, cloneCt, _ctx.Aggregates.GetLayout);
             var recvBridgeName = DelegateAbi.BridgeName(memberFunc.Name) + "_rcv";
-            _ctx.Synthetics.RegisterReceiverBridge(member, recvBridgeName);
+            var binding = new DelegateBindingPlan(DelegateBindingKind.Receiver, member, recvBridgeName);
+            _ctx.Synthetics.RegisterReceiverBridge(binding);
             return new MaterializedDelegateBinding(
-                new DelegateBindingPlan(DelegateBindingKind.Receiver, member, recvBridgeName),
+                binding,
                 FuncRef(recvBridgeName), null, recvLeaf);
         }
 
@@ -1922,9 +1935,10 @@ public abstract partial class HandlerBase
             var interfaceLayout = _planner.GetLayout(localIface).Methods[targetMethod];
             var localBridge = DelegateAbi.BridgeName(
                 LayoutPlanner.InterfaceDispatchName(targetMethod, interfaceLayout));
-            _ctx.Synthetics.RegisterReceiverBridge(targetMethod, localBridge);
+            var binding = new DelegateBindingPlan(DelegateBindingKind.Receiver, targetMethod, localBridge);
+            _ctx.Synthetics.RegisterReceiverBridge(binding);
             return new MaterializedDelegateBinding(
-                new DelegateBindingPlan(DelegateBindingKind.Receiver, targetMethod, localBridge),
+                binding,
                 FuncRef(localBridge), null, targetInstance);
         }
 
@@ -1957,7 +1971,7 @@ public abstract partial class HandlerBase
             && baseCopy.ExportName == null)
         {
             bridgeExportName = DelegateAbi.BridgeName(baseCopy.Name);
-            _ctx.Synthetics.RegisterDelegateBridge(targetMethod, bridgeExportName, _ctx.Generics.TypeParamMap);
+            RegisterDelegateDemand(targetMethod, bridgeExportName, _ctx.Generics.TypeParamMap);
         }
         // For hoisted lambdas/local functions, create a pending bridge dynamically
         // since they aren't part of the TypeLayout's pre-computed bridges.
@@ -1993,7 +2007,7 @@ public abstract partial class HandlerBase
                 _ctx.Synthetics.RegisterClosureBridge(bridgeExportName, bridgeClosure.Function);
             // Carry the current type-param map by reference — it is immutable and per-EmitMethod fresh, so
             // it stays valid for the drain (which runs after generic-method emit clears the ambient map).
-            _ctx.Synthetics.RegisterDelegateBridge(targetMethod, bridgeExportName, _ctx.Generics.TypeParamMap);
+            RegisterDelegateDemand(targetMethod, bridgeExportName, _ctx.Generics.TypeParamMap);
         }
         else if (targetMethod.IsGenericMethod)
         {
@@ -2037,7 +2051,7 @@ public abstract partial class HandlerBase
                     + "(the specialization's bridge must live in this program).");
             RegisterGenericSpecialization(constructed);
             bridgeExportName = DelegateAbi.BridgeName(_methodFunctions[constructed].Name);
-            _ctx.Synthetics.RegisterDelegateBridge(constructed, bridgeExportName, _ctx.Generics.TypeParamMap);
+            RegisterDelegateDemand(constructed, bridgeExportName, _ctx.Generics.TypeParamMap);
             // B52: advance targetMethod to the registered specialization (mirroring the local-function
             // arm) so the variance/adapter block below enqueues the ADAPTER against the spec that is
             // actually emitted — otherwise the adapter names the raw generic definition, EmitPending-
@@ -2055,7 +2069,7 @@ public abstract partial class HandlerBase
             && !ExternResolver.IsUdonSharpBehaviour(targetMethod.ContainingType))
         {
             bridgeExportName = DelegateAbi.BridgeName(foreignFunc.Name);
-            _ctx.Synthetics.RegisterDelegateBridge(targetMethod, bridgeExportName, _ctx.Generics.TypeParamMap);
+            RegisterDelegateDemand(targetMethod, bridgeExportName, _ctx.Generics.TypeParamMap);
         }
         // R-M2 (design §2): a method-group binding of a THIS-CLASS private / private-protected method. The
         // planner no longer plans a speculative bridge for it (LayoutPlanner.IsExcludedFromSpeculativeBridge),
@@ -2077,7 +2091,7 @@ public abstract partial class HandlerBase
                  && SymbolEqualityComparer.Default.Equals(targetMethod.ContainingType, _classSymbol))
         {
             bridgeExportName = DelegateAbi.BridgeName(privFunc.Name);
-            _ctx.Synthetics.RegisterDelegateBridge(targetMethod, bridgeExportName, _ctx.Generics.TypeParamMap);
+            RegisterDelegateDemand(targetMethod, bridgeExportName, _ctx.Generics.TypeParamMap);
         }
         else
         {
@@ -2121,10 +2135,12 @@ public abstract partial class HandlerBase
                     var adapterTarget = !baseReceiver && targetMethod.MethodKind == MethodKind.Ordinary
                         && (targetMethod.IsVirtual || targetMethod.IsOverride || targetMethod.IsAbstract)
                         ? ResolveMostDerivedOverride(targetMethod) : targetMethod;
+                    var adapterBinding = new DelegateBindingPlan(
+                        DelegateBindingKind.SignatureAdapter, adapterTarget, adapterName);
                     _ctx.Synthetics.RegisterSigAdapter(
-                        adapterTarget, delegateInvoke, adapterName, _ctx.Generics.TypeParamMap);
+                        adapterBinding, delegateInvoke, _ctx.Generics.TypeParamMap);
                     return new MaterializedDelegateBinding(
-                        new DelegateBindingPlan(DelegateBindingKind.SignatureAdapter, targetMethod, adapterName),
+                        adapterBinding,
                         FuncRef(adapterName), targetInstance, envLeaf);
                 }
 
