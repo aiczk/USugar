@@ -110,11 +110,11 @@ public partial class InvocationHandler
         // the same names for their own sigs; the dispatch site declares-on-first-use for foreign sigs.
         for (int i = 0; i < convArgs.Length; i++)
             _ctx.Storage.TryDeclareVar(convArgs[i], GetStorageType(invoke.Parameters[i].Type));
-        string retType = null;
+        StorageType? retType = null;
         if (!invoke.ReturnsVoid)
         {
-            retType = GetStorageTypeName(invoke.ReturnType);
-            _ctx.Storage.TryDeclareVar(convRet, new StorageType(retType));
+            retType = GetStorageType(invoke.ReturnType);
+            _ctx.Storage.TryDeclareVar(convRet, retType.Value);
         }
         // Stage 2 §5.1: every dispatch site unconditionally stages DelegateAbi.Env → __dlgc_{sig}__env, so
         // declare it on first use here (a capture-free target sends null; the bridge's null guard is
@@ -161,15 +161,15 @@ public partial class InvocationHandler
     /// synthetic passes, mirroring DelegateBridgeEmitter's resolved type-parameter snapshot use.
     /// </summary>
     CLeaf EmitDelegateDispatchCore(CLeaf bundle, IMethodSymbol invoke, string[] convArgs, string convRet, string convEnv,
-        string retType, IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeParamMap,
+        StorageType? retType, IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeParamMap,
         CLeaf[] argExprs, bool isConditional, bool reentrant, string receiverDescription)
     {
         // retSlot pre-initialized to default(T): every guard-failure arm falls through with it (§2.6).
         int retSlot = -1;
         if (retType != null)
         {
-            retSlot = _ctx.Builder.AllocScratch(new StorageType(retType));
-            EmitAssign(retSlot, DefaultConst(retType));
+            retSlot = _ctx.Builder.AllocScratch(retType.Value);
+            EmitAssign(retSlot, DefaultConst(_builder, retType.Value));
         }
 
         // Guard-failure arm: LogError (NRE deviation, exact message per §2.6) — or silent for ?.Invoke.
@@ -203,8 +203,8 @@ public partial class InvocationHandler
 
                     var adr = DelegateAbi.ReadSlot(_builder, bundle, DelegateAbi.Addr, "SystemUInt32");
                     var mtd = DelegateAbi.ReadSlot(_builder, bundle, DelegateAbi.Method, "SystemString");
-                    var thisType = GetStorageTypeName(_classSymbol);
-                    var thisRef = LoadField(_ctx.Storage.DeclareThisOnce(new StorageType(thisType)), new StorageType(thisType));
+                    var thisType = GetStorageType(_classSymbol);
+                    var thisRef = LoadField(_ctx.Storage.DeclareThisOnce(thisType), thisType);
                     // Self/cross is decided by TARGET IDENTITY only (P6) — addr≠0 merely qualifies the
                     // fast path (addr is meaningless across program boundaries; 0-addr JUMP_INDIRECT would
                     // silently jump to bytecode 0, P5d — addr is only ever read inside this guard).
@@ -220,7 +220,7 @@ public partial class InvocationHandler
                             EmitInternalVoid("__indirect", new List<CLeaf> { adr }, reentrant);
                             // Immediate conv-ret materialization (§3.3-4, fcd11/12 invariant).
                             if (retType != null)
-                                EmitAssign(retSlot, LoadField(convRet, new StorageType(retType)));
+                                EmitAssign(retSlot, LoadField(convRet, retType.Value));
                         },
                         _ =>
                         {
@@ -232,10 +232,11 @@ public partial class InvocationHandler
                             {
                                 for (int i = 0; i < convArgs.Length; i++)
                                 {
-                                    var argType = ExternResolver.GetUdonTypeName(invoke.Parameters[i].Type, typeParamMap);
+                                    var argType = ExternResolver.GetStorageType(
+                                        new RuntimeType(invoke.Parameters[i].Type), typeParamMap);
                                     EmitExternVoid(
                                         ExternResolver.EventReceiverSetProgramVariable,
-                                        new List<CLeaf> { tgt, Const(convArgs[i], StorageTypes.String), LoadField(convArgs[i], new StorageType(argType)) });
+                                        new List<CLeaf> { tgt, Const(convArgs[i], StorageTypes.String), LoadField(convArgs[i], argType) });
                                 }
                                 // Stage 2 §5.1: forward the staged env to the receiver alongside the conv args
                                 // (a missing-symbol SPV on a capture-free receiver is a proven silent no-op).
@@ -293,7 +294,9 @@ public partial class InvocationHandler
         // delegate Invoke method. Byte-identical for the pre-existing fan-out caller (invoke there
         // already IS the delegate's own Invoke method, so the old round-trip was a no-op derivation).
         var (convArgs, convRet, convEnv) = GetConventionFieldNames(invoke, typeParamMap);
-        string retType = invoke.ReturnsVoid ? null : ExternResolver.GetUdonTypeName(invoke.ReturnType, typeParamMap);
+        StorageType? retType = invoke.ReturnsVoid
+            ? null
+            : ExternResolver.GetStorageType(new RuntimeType(invoke.ReturnType), typeParamMap);
         return EmitDelegateDispatchCore(bundle, invoke, convArgs, convRet, convEnv, retType, typeParamMap,
             argExprsByOrdinal, isConditional: false, reentrant: true, receiverDescription: "multicast fan-out");
     }
