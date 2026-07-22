@@ -134,14 +134,33 @@ Enable **USugar > Dump IR** to write UASM output on every compile to `Library/US
 
 ## Limitations
 
-Udon's VM has no exceptions, no runtime allocation of user-defined types, and no real function pointers, so some C# can't be translated:
+USugar rejects constructs whose C# semantics cannot be preserved by the Udon VM or by its
+serialized program boundary. These rejects are intentional; they do not silently compile to a
+different result.
 
-- **No exceptions** — `try`/`catch`/`finally` and `throw` are unsupported.
-- **No** `async`/`await`, `yield`, `event`, or `unsafe`/`stackalloc`/`Span`.
-- **No `record` types**, no `static` fields on a UdonSharpBehaviour (use `const` or an instance field), and no runtime `new` of a UdonSharpBehaviour.
-- **`foreach` is array-only** — `List<T>`/`IEnumerable` can't be iterated with `foreach`.
-- **No multidimensional arrays** (`int[,]`); jagged arrays (`int[][]`) are fine.
-- **Delegates** — local-variable lambdas, delegate parameters, and delegate fields (`Action`/`Func`, public or private) work *within a single behaviour*. A cross-behaviour delegate field can be assigned but not invoked; and multicast (`+=`/`-=`), delegate *properties*, tuple-returning delegates, and using a delegate field as a value (passing, returning, or storing it) are unsupported.
+- **VM limits** — no `try`/`catch`/`finally`/`throw`, `async`/`await`, iterator `yield`, `lock`,
+  `unsafe` pointers, `stackalloc`, function pointers, or dynamic dispatch. `checked` overflow is
+  also rejected because Udon has no overflow trap.
+- **Alias limits** — `ref`/`out` parameters work, but ref locals and `in` parameters do not preserve
+  C# aliasing semantics and are rejected.
+- **Collections** — `foreach` is array-only. `List<T>`/`IEnumerable` cannot be iterated with
+  `foreach` because Udon exposes no compatible enumerator protocol.
+- **Types** — records and runtime `new` of an `UdonSharpBehaviour` are unsupported. User classes
+  support allocation, inheritance, virtual dispatch, generics, and runtime type tests, but not
+  interface implementation, generic virtual methods, static storage, user-defined operators or
+  conversions, `GetHashCode()`, or `GetType()`.
+- **Program boundaries** — user classes, structs/tuples, delegates, and multidimensional arrays use
+  program-local `object[]` representations. Values containing those representations cannot always
+  be erased to `object`, stored on another behaviour, or sent through `[NetworkCallable]`; USugar
+  rejects the unsafe boundary instead of leaking an untyped bundle.
+- **Delegates and events** — closures, delegate values, multicast (`+=`/`-=`), delegate
+  fields/properties, tuple returns, and field-like events are supported. Delegate signatures with
+  `ref`/`out`, direct method-group binding to a user-class instance method, custom-accessor events,
+  static events, and cross-behaviour event subscription are not. Wrap a user-class method call in a
+  lambda when a delegate is required.
+- **Multidimensional arrays** — creation, indexing, `Length`, `Rank`, `GetLength`, and
+  `GetUpperBound` are supported. They use an `object[]` bundle rather than a native Udon array, so
+  general `Array` APIs, erasure to `object`/`Array`, and implicit string formatting are restricted.
 
 Not tested against every UdonSharp-compatible C# pattern. If something compiles with standard UdonSharp but fails with USugar, that's a bug — [open an issue](https://github.com/aiczk/USugar/issues).
 
