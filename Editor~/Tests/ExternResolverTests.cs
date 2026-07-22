@@ -208,6 +208,26 @@ public class C : UdonSharp.UdonSharpBehaviour { G<int> g; }
     }
 
     [Fact]
+    public void GetStorageType_LowersDistinctRuntimeTypesExplicitly()
+    {
+        var compilation = CSharpCompilation.Create("Test",
+            options: new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary),
+            references: TestHelper.StandardRefs);
+        var intType = compilation.GetSpecialType(SpecialType.System_Int32);
+        var nullableDefinition = compilation.GetSpecialType(SpecialType.System_Nullable_T);
+        var nullableIntType = nullableDefinition.Construct(intType);
+
+        var runtimeInt = new RuntimeType(intType);
+        var runtimeNullableInt = new RuntimeType(nullableIntType);
+        var storageInt = ExternResolver.GetStorageType(runtimeInt);
+        var storageNullableInt = ExternResolver.GetStorageType(runtimeNullableInt);
+
+        Assert.NotEqual(runtimeInt, runtimeNullableInt);
+        Assert.Equal(new StorageType("SystemInt32"), storageInt);
+        Assert.Equal(new StorageType("SystemObject"), storageNullableInt);
+    }
+
+    [Fact]
     public void IsUdonSharpBehaviour_WithExplicitMap_ResolvesTypeParameter()
     {
         var source = @"

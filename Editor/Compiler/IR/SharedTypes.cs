@@ -3,10 +3,56 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using System.Text;
+using Microsoft.CodeAnalysis;
 
 // ============================================================================
 // Shared types used across the Core IR and UASM generation.
 // ============================================================================
+
+/// <summary>A concrete Udon heap/operand type. This is deliberately distinct from a Roslyn
+/// runtime type: several C# types may share one storage representation.</summary>
+public readonly struct StorageType : IEquatable<StorageType>
+{
+    public readonly string Name;
+
+    public StorageType(string name)
+        => Name = !string.IsNullOrEmpty(name)
+            ? name
+            : throw new ArgumentException("A storage type name is required.", nameof(name));
+
+    public bool Equals(StorageType other)
+        => string.Equals(Name, other.Name, StringComparison.Ordinal);
+    public override bool Equals(object obj) => obj is StorageType other && Equals(other);
+    public override int GetHashCode() => StringComparer.Ordinal.GetHashCode(Name ?? "");
+    public override string ToString() => Name;
+
+    // Transitional source boundary: producers still mint Udon names as strings. RuntimeType has no
+    // such conversion, so semantic runtime identity cannot accidentally enter storage APIs.
+    public static implicit operator StorageType(string name) => new StorageType(name);
+    public static explicit operator string(StorageType type) => type.Name;
+    public static bool operator ==(StorageType left, StorageType right) => left.Equals(right);
+    public static bool operator !=(StorageType left, StorageType right) => !left.Equals(right);
+}
+
+/// <summary>A closed C# runtime type identity. It must be lowered explicitly before entering Udon
+/// storage because that lowering is non-injective for aggregates, delegates, nullable values, and
+/// user classes.</summary>
+public readonly struct RuntimeType : IEquatable<RuntimeType>
+{
+    public readonly ITypeSymbol Symbol;
+
+    public RuntimeType(ITypeSymbol symbol)
+        => Symbol = symbol ?? throw new ArgumentNullException(nameof(symbol));
+
+    public bool Equals(RuntimeType other)
+        => SymbolEqualityComparer.Default.Equals(Symbol, other.Symbol);
+    public override bool Equals(object obj) => obj is RuntimeType other && Equals(other);
+    public override int GetHashCode()
+        => Symbol == null ? 0 : SymbolEqualityComparer.Default.GetHashCode(Symbol);
+    public override string ToString() => Symbol?.ToDisplayString() ?? "<default>";
+    public static bool operator ==(RuntimeType left, RuntimeType right) => left.Equals(right);
+    public static bool operator !=(RuntimeType left, RuntimeType right) => !left.Equals(right);
+}
 
 /// <summary>
 /// Slot classification for variable lifetime management.

@@ -10,7 +10,7 @@ public sealed class StorageContext
     readonly CModule _module;
     readonly Dictionary<string, int> _counters = new();
     readonly HashSet<string> _declaredFieldNames = new();
-    readonly Dictionary<string, string> _thisVars = new();
+    readonly Dictionary<StorageType, string> _thisVars = new();
     readonly Dictionary<string, string> _structConstIds = new();
     bool _recurStackDeclared;
 
@@ -25,52 +25,52 @@ public sealed class StorageContext
         return n;
     }
 
-    public string DeclareField(string name, string type, FieldFlags flags = FieldFlags.None,
+    public string DeclareField(string name, StorageType type, FieldFlags flags = FieldFlags.None,
         object defaultValue = null, string syncMode = null)
     {
         if (_declaredFieldNames.Contains(name)) return name;
-        var field = new FieldDecl(name, type) { Flags = flags, DefaultValue = defaultValue, SyncMode = syncMode };
+        var field = new FieldDecl(name, type.Name) { Flags = flags, DefaultValue = defaultValue, SyncMode = syncMode };
         _module.Fields.Add(field);
         _declaredFieldNames.Add(name);
         return name;
     }
 
-    public string DeclareVar(string id, string type)
+    public string DeclareVar(string id, StorageType type)
     {
         if (_declaredFieldNames.Contains(id)) return id;
-        _module.Fields.Add(new FieldDecl(id, type));
+        _module.Fields.Add(new FieldDecl(id, type.Name));
         _declaredFieldNames.Add(id);
         return id;
     }
 
-    public bool TryDeclareVar(string id, string type)
+    public bool TryDeclareVar(string id, StorageType type)
     {
         if (_declaredFieldNames.Contains(id)) return false;
-        _module.Fields.Add(new FieldDecl(id, type));
+        _module.Fields.Add(new FieldDecl(id, type.Name));
         _declaredFieldNames.Add(id);
         return true;
     }
 
-    public string DeclareLocal(string name, string type)
+    public string DeclareLocal(string name, StorageType type)
     {
-        var idx = NextIndex($"lcl_{name}_{type}");
-        var id = $"__lcl_{name}_{type}_{idx}";
-        _module.Fields.Add(new FieldDecl(id, type));
+        var idx = NextIndex($"lcl_{name}_{type.Name}");
+        var id = $"__lcl_{name}_{type.Name}_{idx}";
+        _module.Fields.Add(new FieldDecl(id, type.Name));
         _declaredFieldNames.Add(id);
         return id;
     }
 
-    public string DeclareThis(string udonType)
+    public string DeclareThis(StorageType udonType)
     {
-        var heapType = SupportedThisTypes.Contains(udonType) ? udonType : "VRCUdonUdonBehaviour";
+        StorageType heapType = SupportedThisTypes.Contains(udonType) ? udonType : "VRCUdonUdonBehaviour";
         var idx = NextIndex($"this_{heapType}");
         var id = $"__this_{heapType}_{idx}";
-        _module.Fields.Add(new FieldDecl(id, heapType) { DefaultValue = "this" });
+        _module.Fields.Add(new FieldDecl(id, heapType.Name) { DefaultValue = "this" });
         _declaredFieldNames.Add(id);
         return id;
     }
 
-    public string DeclareThisOnce(string udonType)
+    public string DeclareThisOnce(StorageType udonType)
     {
         if (_thisVars.TryGetValue(udonType, out var existing)) return existing;
         var id = DeclareThis(udonType);
@@ -78,7 +78,7 @@ public sealed class StorageContext
         return id;
     }
 
-    static readonly HashSet<string> SupportedThisTypes = new()
+    static readonly HashSet<StorageType> SupportedThisTypes = new()
     {
         "UnityEngineGameObject", "UnityEngineTransform", "VRCUdonUdonBehaviour",
     };
@@ -101,13 +101,13 @@ public sealed class StorageContext
 
     public bool IsFieldDeclared(string name) => _declaredFieldNames.Contains(name);
 
-    public string DeclareStructConst(string type, object value)
+    public string DeclareStructConst(StorageType type, object value)
     {
-        var key = $"{type}_{value}";
+        var key = $"{type.Name}_{value}";
         if (_structConstIds.TryGetValue(key, out var existing)) return existing;
-        var idx = NextIndex($"structconst_{type}");
-        var id = $"__const_{type}_{idx}";
-        _module.Fields.Add(new FieldDecl(id, type) { DefaultValue = value });
+        var idx = NextIndex($"structconst_{type.Name}");
+        var id = $"__const_{type.Name}_{idx}";
+        _module.Fields.Add(new FieldDecl(id, type.Name) { DefaultValue = value });
         _declaredFieldNames.Add(id);
         _structConstIds[key] = id;
         return id;

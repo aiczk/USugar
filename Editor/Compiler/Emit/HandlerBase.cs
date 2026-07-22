@@ -56,7 +56,9 @@ public abstract partial class HandlerBase
 
 
     // ── Type resolution ──
-    protected string GetUdonType(ITypeSymbol type) => ExternResolver.GetUdonTypeName(type, _ctx.Generics.TypeParamMap);
+    protected StorageType GetStorageType(ITypeSymbol type)
+        => ExternResolver.GetStorageType(new RuntimeType(type), _ctx.Generics.TypeParamMap);
+    protected string GetUdonType(ITypeSymbol type) => GetStorageType(type).Name;
     protected TypeClassifierContext TypeCtx => new TypeClassifierContext(_ctx.Generics.TypeParamMap);
     protected ITypeSymbol ResolveType(ITypeSymbol type)
         => TypeEnvironment.CloseType(_compilation, type, _ctx.Generics.TypeParamMap);

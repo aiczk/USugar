@@ -92,7 +92,9 @@ public class UasmEmitter
     }
 
     // Type name resolution helper
-    string GetUdonType(ITypeSymbol type) => ExternResolver.GetUdonTypeName(type, _typeParamMap);
+    StorageType GetStorageType(ITypeSymbol type)
+        => ExternResolver.GetStorageType(new RuntimeType(type), _typeParamMap);
+    string GetUdonType(ITypeSymbol type) => GetStorageType(type).Name;
     string GetArrayType(IArrayTypeSymbol arrType) => GetUdonType(arrType);
     string GetArrayElemType(IArrayTypeSymbol arrType)
     {
