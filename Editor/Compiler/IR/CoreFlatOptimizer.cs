@@ -261,14 +261,14 @@ public static class CoreFlatOptimizer
     static void SpillValue(CFunction func, List<CStmt> output, CLeaf valueLeaf)
     {
         // __recurStack[__recurSp] = value (Udon boxes the typed value into the object[] element); __recurSp++
-        var tStack = func.NewSlot(new StorageType("SystemObjectArray"), SlotClass.Scratch);
-        output.Add(new CLoadField(tStack, RecurStackId, new StorageType("SystemObjectArray")));
-        var tSp = func.NewSlot(new StorageType("SystemInt32"), SlotClass.Scratch);
-        output.Add(new CLoadField(tSp, RecurSpId, new StorageType("SystemInt32")));
+        var tStack = func.NewSlot(StorageTypes.ObjectArray, SlotClass.Scratch);
+        output.Add(new CLoadField(tStack, RecurStackId, StorageTypes.ObjectArray));
+        var tSp = func.NewSlot(StorageTypes.Int32, SlotClass.Scratch);
+        output.Add(new CLoadField(tSp, RecurSpId, StorageTypes.Int32));
         output.Add(new CExprStmt(new CExternCall(
             ExternResolver.BuildArraySetSignature("SystemObjectArray", "SystemObject"),
-            new List<CLeaf> { new CSlotRef(tStack, new StorageType("SystemObjectArray")), new CSlotRef(tSp, new StorageType("SystemInt32")), valueLeaf },
-            new StorageType("SystemVoid"))));
+            new List<CLeaf> { new CSlotRef(tStack, StorageTypes.ObjectArray), new CSlotRef(tSp, StorageTypes.Int32), valueLeaf },
+            StorageTypes.Void)));
         SpDelta(func, output, +1);
     }
 
@@ -276,33 +276,33 @@ public static class CoreFlatOptimizer
     {
         // __recurSp--; value = __recurStack[__recurSp]  (Udon unboxes the object[] element on typed COPY)
         SpDelta(func, output, -1);
-        var tStack = func.NewSlot(new StorageType("SystemObjectArray"), SlotClass.Scratch);
-        output.Add(new CLoadField(tStack, RecurStackId, new StorageType("SystemObjectArray")));
-        var tSp = func.NewSlot(new StorageType("SystemInt32"), SlotClass.Scratch);
-        output.Add(new CLoadField(tSp, RecurSpId, new StorageType("SystemInt32")));
-        var tGet = func.NewSlot(new StorageType("SystemObject"), SlotClass.Scratch);
+        var tStack = func.NewSlot(StorageTypes.ObjectArray, SlotClass.Scratch);
+        output.Add(new CLoadField(tStack, RecurStackId, StorageTypes.ObjectArray));
+        var tSp = func.NewSlot(StorageTypes.Int32, SlotClass.Scratch);
+        output.Add(new CLoadField(tSp, RecurSpId, StorageTypes.Int32));
+        var tGet = func.NewSlot(StorageTypes.Object, SlotClass.Scratch);
         output.Add(new CExprStmt(new CExternCall(
             ExternResolver.BuildArrayGetSignature("SystemObjectArray", "SystemObject"),
-            new List<CLeaf> { new CSlotRef(tStack, new StorageType("SystemObjectArray")), new CSlotRef(tSp, new StorageType("SystemInt32")) },
-            new StorageType("SystemObject"), tGet)));
+            new List<CLeaf> { new CSlotRef(tStack, StorageTypes.ObjectArray), new CSlotRef(tSp, StorageTypes.Int32) },
+            StorageTypes.Object, tGet)));
         if (fieldName != null)
-            output.Add(new CStoreField(fieldName, new CSlotRef(tGet, new StorageType("SystemObject"))));
+            output.Add(new CStoreField(fieldName, new CSlotRef(tGet, StorageTypes.Object)));
         else
-            output.Add(new CAssign(slotId, new CSlotRef(tGet, new StorageType("SystemObject"))));
+            output.Add(new CAssign(slotId, new CSlotRef(tGet, StorageTypes.Object)));
     }
 
     static void SpDelta(CFunction func, List<CStmt> output, int delta)
     {
-        var tSp = func.NewSlot(new StorageType("SystemInt32"), SlotClass.Scratch);
-        output.Add(new CLoadField(tSp, RecurSpId, new StorageType("SystemInt32")));
-        var tNew = func.NewSlot(new StorageType("SystemInt32"), SlotClass.Scratch);
+        var tSp = func.NewSlot(StorageTypes.Int32, SlotClass.Scratch);
+        output.Add(new CLoadField(tSp, RecurSpId, StorageTypes.Int32));
+        var tNew = func.NewSlot(StorageTypes.Int32, SlotClass.Scratch);
         var sig = delta >= 0
             ? "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
             : "SystemInt32.__op_Subtraction__SystemInt32_SystemInt32__SystemInt32";
         output.Add(new CExprStmt(new CExternCall(sig,
-            new List<CLeaf> { new CSlotRef(tSp, new StorageType("SystemInt32")), new CConst(System.Math.Abs(delta), new StorageType("SystemInt32")) },
-            new StorageType("SystemInt32"), tNew)));
-        output.Add(new CStoreField(RecurSpId, new CSlotRef(tNew, new StorageType("SystemInt32"))));
+            new List<CLeaf> { new CSlotRef(tSp, StorageTypes.Int32), new CConst(System.Math.Abs(delta), StorageTypes.Int32) },
+            StorageTypes.Int32, tNew)));
+        output.Add(new CStoreField(RecurSpId, new CSlotRef(tNew, StorageTypes.Int32)));
     }
 
     /// <summary>Interval-coalesce a function's slots. <paramref name="minSlotId"/> restricts the

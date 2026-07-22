@@ -24,12 +24,12 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
             => ResolveType(localRef.Type) is INamedTypeSymbol eaggT && TypeClassifier.IsAggregateValue(eaggT)
                    ? AggregateAbi.DeepClone(_builder, EnvEmit.Read(_builder, _ctx, localRef.Local, new StorageType(AggregateAbi.ArrayType)),
                        eaggT, _ctx.Aggregates.GetLayout)
-                   : EnvEmit.Read(_builder, _ctx, localRef.Local, new StorageType(GetStorageTypeName(localRef.Type))),
+                   : EnvEmit.Read(_builder, _ctx, localRef.Local, GetStorageType(localRef.Type)),
         ILocalReferenceOperation localRef => _localBindings.TryGetValue(localRef.Local, out var localBinding)
                                                  ? ResolveType(localRef.Type) is INamedTypeSymbol laggT && TypeClassifier.IsAggregateValue(laggT)
                                                      ? AggregateAbi.DeepClone(_builder, LoadField(localBinding.Id, new StorageType(AggregateAbi.ArrayType)),
                                                          laggT, _ctx.Aggregates.GetLayout)
-                                                     : LoadField(localBinding.Id, new StorageType(GetStorageTypeName(localRef.Type)))
+                                                     : LoadField(localBinding.Id, GetStorageType(localRef.Type))
                                                  : throw new InvalidOperationException($"Cannot resolve local variable '{localRef.Local.Name}' in method '{_currentMethod?.Name ?? "(none)"}'."),
         IFieldReferenceOperation op => VisitFieldReference(op),
         IEventReferenceOperation op => VisitEventReference(op),
@@ -37,7 +37,7 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
             => ResolveType(paramRef.Type) is INamedTypeSymbol epaggT && TypeClassifier.IsAggregateValue(epaggT)
                    ? AggregateAbi.DeepClone(_builder, EnvEmit.Read(_builder, _ctx, paramRef.Parameter, new StorageType(AggregateAbi.ArrayType)),
                        epaggT, _ctx.Aggregates.GetLayout)
-                   : EnvEmit.Read(_builder, _ctx, paramRef.Parameter, new StorageType(GetStorageTypeName(paramRef.Type))),
+                   : EnvEmit.Read(_builder, _ctx, paramRef.Parameter, GetStorageType(paramRef.Type)),
         IParameterReferenceOperation paramRef => ResolveType(paramRef.Type) is INamedTypeSymbol paggT && TypeClassifier.IsAggregateValue(paggT)
                                                      ? AggregateAbi.DeepClone(_builder, LoadParam(paramRef.Parameter),
                                                          paggT, _ctx.Aggregates.GetLayout)
@@ -60,13 +60,13 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
         IInstanceReferenceOperation when LambdaCaptureAnalyzer.ReceiverCaptureKey(_ctx.Methods.CurrentMethod) is { } rcvKey
                                          && _ctx.Closures.TryGetEnvBinding(rcvKey, out _)
             => EnvEmit.Read(_builder, _ctx, rcvKey, new StorageType(AggregateAbi.ArrayType)),
-        IInstanceReferenceOperation => LoadField(_ctx.Storage.DeclareThisOnce(new StorageType(GetStorageTypeName(_classSymbol))), new StorageType(GetStorageTypeName(_classSymbol))),
+        IInstanceReferenceOperation => LoadField(_ctx.Storage.DeclareThisOnce(GetStorageType(_classSymbol)), GetStorageType(_classSymbol)),
         IConversionOperation op => VisitConversion(op),
         IDefaultValueOperation op => VisitDefaultValue(op),
         ITypeOfOperation typeOf => EmitTypeofToken(typeOf),
-        INameOfOperation nameOf => Const(nameOf.ConstantValue.Value.ToString(), new StorageType("SystemString")),
+        INameOfOperation nameOf => Const(nameOf.ConstantValue.Value.ToString(), StorageTypes.String),
         IDeclarationExpressionOperation op => VisitDeclarationExpression(op),
-        IDiscardOperation discard => SlotRef(_ctx.Builder.AllocScratch(new StorageType(GetStorageTypeName(discard.Type)))),
+        IDiscardOperation discard => SlotRef(_ctx.Builder.AllocScratch(GetStorageType(discard.Type))),
         IDelegateCreationOperation op => VisitDelegateCreation(op),
         ITupleOperation op => VisitTupleLiteral(op),
         _ => throw new NotSupportedException(expression.GetType().Name),
@@ -78,7 +78,7 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
     {
         // null literal has no type
         if (lit.Type == null)
-            return Const(null, new StorageType("SystemObject"));
+            return Const(null, StorageTypes.Object);
         var udonType = GetStorageTypeName(lit.Type);
         if (!lit.ConstantValue.HasValue)
             return Const(null, new StorageType(udonType));
@@ -143,7 +143,7 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
                         return fieldRef.Field.Type is INamedTypeSymbol staticFieldAgg && TypeClassifier.IsAggregateValue(staticFieldAgg)
                             ? AggregateAbi.DeepClone(_builder, LoadField(fieldRef.Field.Name, new StorageType(AggregateAbi.ArrayType)),
                                 staticFieldAgg, _ctx.Aggregates.GetLayout)
-                            : LoadField(fieldRef.Field.Name, new StorageType(GetStorageTypeName(fieldRef.Field.Type)));
+                            : LoadField(fieldRef.Field.Name, GetStorageType(fieldRef.Field.Type));
 
                     var crossMsg = $"cannot read a non-constant static readonly field "
                         + $"'{fieldRef.Field.ContainingType.Name}.{fieldRef.Field.Name}' from another behaviour; "
@@ -186,7 +186,7 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
             if (layout.TryGetIndex(fieldRef.Field, out var elemIndex))
             {
                 var arrExpr = LoadInstanceRaw(fieldRef.Instance);
-                var getVal = AggregateAbi.ReadSlot(_builder, arrExpr, elemIndex, new StorageType("SystemObject"));
+                var getVal = AggregateAbi.ReadSlot(_builder, arrExpr, elemIndex, StorageTypes.Object);
                 // A struct-typed element read AS A VALUE is copied (value semantics); scalar elements are immutable boxes.
                 return fieldRef.Field.Type is INamedTypeSymbol elemAgg && TypeClassifier.IsAggregateValue(elemAgg)
                     ? AggregateAbi.DeepClone(_builder, getVal, elemAgg, _ctx.Aggregates.GetLayout) : getVal;
@@ -200,17 +200,17 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
             return fieldRef.Field.Type is INamedTypeSymbol thisFieldAgg && TypeClassifier.IsAggregateValue(thisFieldAgg)
                 ? AggregateAbi.DeepClone(_builder, LoadField(fieldRef.Field.Name, new StorageType(AggregateAbi.ArrayType)),
                     thisFieldAgg, _ctx.Aggregates.GetLayout)
-                : LoadField(fieldRef.Field.Name, new StorageType(GetStorageTypeName(fieldRef.Field.Type)));
+                : LoadField(fieldRef.Field.Name, GetStorageType(fieldRef.Field.Type));
         // cross-behaviour field → GetProgramVariable
         if (ExternResolver.IsUdonSharpBehaviour(fieldRef.Field.ContainingType))
         {
             RejectProgramLocalCrossBehaviourFieldRead(fieldRef.Field);
             var instanceVal = VisitExpression(fieldRef.Instance);
-            var nameConst = Const(fieldRef.Field.Name, new StorageType("SystemString"));
+            var nameConst = Const(fieldRef.Field.Name, StorageTypes.String);
             return ExternCall(
                 ExternResolver.EventReceiverGetProgramVariable,
                 new List<CLeaf> { instanceVal, nameConst },
-                new StorageType("SystemObject"));
+                StorageTypes.Object);
         }
         // other.field → extern getter (same pattern as VisitPropertyReference)
         {
@@ -444,13 +444,13 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
                 // below): srcVal may be a variable whose null-ness is unknown at compile time.
                 var wrapResultSlot = _ctx.Builder.AllocScratch(new StorageType(DelegateAbi.BundleType));
                 var srcNotNull = ExternCall("SystemObject.__op_Inequality__SystemObject_SystemObject__SystemBoolean",
-                    new List<CLeaf> { srcVal, Const(null, new StorageType("SystemObject")) }, new StorageType("SystemBoolean"));
+                    new List<CLeaf> { srcVal, Const(null, StorageTypes.Object) }, StorageTypes.Boolean);
                 _builder.EmitIf(srcNotNull,
                     _ =>
                     {
                         var wThisType = GetStorageTypeName(_classSymbol);
                         var wrapperBundle = DelegateAbi.EmitBundleMint(_builder, () => LoadField(_ctx.Storage.DeclareThisOnce(new StorageType(wThisType)), new StorageType(wThisType)),
-                            Const(wrapperName, new StorageType("SystemString")), FuncRef(wrapperName), srcVal);
+                            Const(wrapperName, StorageTypes.String), FuncRef(wrapperName), srcVal);
                         EmitAssign(wrapResultSlot, wrapperBundle);
                     },
                     _ => EmitAssign(wrapResultSlot, Const(null, new StorageType(DelegateAbi.BundleType))));
@@ -602,7 +602,7 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
                         srcVal = ExternCall(
                             "SystemConvert.__ToDouble__SystemSingle__SystemDouble",
                             new List<CLeaf> { srcVal },
-                            new StorageType("SystemDouble"));
+                            StorageTypes.Double);
                     }
 
                     // Math.Truncate(double) or Math.Truncate(decimal)
@@ -708,7 +708,7 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
                         EmitExternVoid("UnityEngineDebug.__LogError__SystemObject__SystemVoid",
                             new List<CLeaf> { Const(
                                 $"USugar: InvalidCastException — cast to '{castDst.Name}' on a value that is not a '{castDst.Name}' ({_classSymbol.Name}). Returning null.",
-                                new StorageType("SystemString")) });
+                                StorageTypes.String) });
                         EmitAssign(castSlot, Const(null, new StorageType(castUdon)));
                     });
                 return SlotRef(castSlot);
@@ -888,12 +888,12 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
         // (boxed UInt32) or Const(0u). A third-party method group's local funcaddr is meaningless in the
         // target program, so it carries 0u; a same-this target carries the REAL funcaddr — even when the
         // bundle is later handed cross-Behaviour (the invoke-side target-identity guard is the only gate).
-        var addr = thirdParty != null ? (CLeaf)Const(0u, new StorageType("SystemUInt32")) : funcRef;
+        var addr = thirdParty != null ? (CLeaf)Const(0u, StorageTypes.UInt32) : funcRef;
 
         // Stage 2 §3.7: DelegateAbi.Env carries the binding-scope env for a CAPTURING closure target, else
         // a null const (capture-free lambda / named method / base.M) = byte-identical to Stage 1.
         var bundle = DelegateAbi.EmitBundleMint(_builder, () => thirdParty ?? LoadField(_ctx.Storage.DeclareThisOnce(new StorageType(thisType)), new StorageType(thisType)),
-            Const(bridgeName, new StorageType("SystemString")), addr, envLeaf);
+            Const(bridgeName, StorageTypes.String), addr, envLeaf);
 
         return bundle;
     }

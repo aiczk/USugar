@@ -112,12 +112,12 @@ public class UasmEmitter
         => _builder.EmitExternVoid(sig, new List<CLeaf>(args));
     CLeaf BridgeCallInternal(CFunction func, CLeaf[] args)
     {
-        var retType = func.ReturnType ?? new StorageType("SystemVoid");
+        var retType = func.ReturnType ?? StorageTypes.Void;
         var call = _builder.InternalCall(func.Name, new List<CLeaf>(args), retType);
-        if (retType == new StorageType("SystemVoid")) { _builder.EmitExprStmt(call); return null; }
+        if (retType == StorageTypes.Void) { _builder.EmitExprStmt(call); return null; }
         return call;
     }
-    CLeaf BridgeConstInt(int value) => _builder.Const(value, new StorageType("SystemInt32"));
+    CLeaf BridgeConstInt(int value) => _builder.Const(value, StorageTypes.Int32);
 
     // ── Emit ──
 
@@ -226,8 +226,8 @@ public class UasmEmitter
     {
         var typeName = _classSymbol.ToDisplayString();
         long typeId = ComputeTypeId(typeName);
-        _ctx.Storage.DeclareField(EmitContext.ReflTypeIdField, new StorageType("SystemInt64"), defaultValue: typeId);
-        _ctx.Storage.DeclareField(EmitContext.ReflTypeNameField, new StorageType("SystemString"), defaultValue: typeName);
+        _ctx.Storage.DeclareField(EmitContext.ReflTypeIdField, StorageTypes.Int64, defaultValue: typeId);
+        _ctx.Storage.DeclareField(EmitContext.ReflTypeNameField, StorageTypes.String, defaultValue: typeName);
 
         var ancestorIds = CollectAncestorTypeIds(_classSymbol);
         if (ancestorIds.Length > 1)
@@ -572,7 +572,7 @@ public class UasmEmitter
                         // Round-8 [R2]: C# runs the BASE declaration's initializer into THIS backing
                         // (the leaf's stays default — DiffFuzz: base.P*10+P ref=50).
                         if (isAuto)
-                            _ctx.Storage.DeclareField(BaseAutoPropBackingName(prop), new StorageType(GetStorageTypeName(prop.Type)), FieldFlags.None,
+                            _ctx.Storage.DeclareField(BaseAutoPropBackingName(prop), GetStorageType(prop.Type), FieldFlags.None,
                                 ResolveAutoPropInitializer(BaseAutoPropBackingName(prop), prop));
                         continue;
                     }
@@ -769,7 +769,7 @@ public class UasmEmitter
         // §3.4-1: ref/out delegate signatures are rejected at the convention-var declaration side too.
         DelegateAbi.ValidateNoRefOutParams(delegateType.DelegateInvokeMethod);
 
-        _ctx.Storage.DeclareField(member.Name, new StorageType("SystemObjectArray"), FieldFlags.None);
+        _ctx.Storage.DeclareField(member.Name, StorageTypes.ObjectArray, FieldFlags.None);
         _ctx.Synthetics.DelegateFields.Add(member.Name);
 
         // Declare the signature-keyed __dlgc_ convention vars for this delegate signature (§3.2).
@@ -779,9 +779,9 @@ public class UasmEmitter
         // capture-free byte invariant (§1.3). It is declared on-first-use at the dispatch/bridge site.
         var (convArgs, convRet, _) = HandlerBase.GetConventionFieldNames(delegateType);
         for (int ci = 0; ci < convArgs.Length; ci++)
-            _ctx.Storage.TryDeclareVar(convArgs[ci], new StorageType(ExternResolver.GetUdonTypeName(invoke.Parameters[ci].Type)));
+            _ctx.Storage.TryDeclareVar(convArgs[ci], ExternResolver.GetStorageType(new RuntimeType(invoke.Parameters[ci].Type), _typeParamMap));
         if (convRet != null)
-            _ctx.Storage.TryDeclareVar(convRet, new StorageType(ExternResolver.GetUdonTypeName(invoke.ReturnType)));
+            _ctx.Storage.TryDeclareVar(convRet, ExternResolver.GetStorageType(new RuntimeType(invoke.ReturnType), _typeParamMap));
 
         if (member.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
             is VariableDeclaratorSyntax { Initializer: not null } dlgDeclarator)
@@ -999,7 +999,7 @@ public class UasmEmitter
             var paramVarIds = new string[method.Parameters.Length];
             for (int i = 0; i < method.Parameters.Length; i++)
             {
-                _ctx.Storage.DeclareVar(ml.ParamIds[i], new StorageType(GetStorageTypeName(method.Parameters[i].Type)));
+                _ctx.Storage.DeclareVar(ml.ParamIds[i], GetStorageType(method.Parameters[i].Type));
                 paramVarIds[i] = ml.ParamIds[i];
             }
             _methodParamVarIds[method] = paramVarIds;
@@ -1014,7 +1014,7 @@ public class UasmEmitter
                 if (ml.Returns.Count == 1)
                     func.ReturnType = ml.Returns[0].StorageType;
                 else
-                    func.ReturnType = new StorageType("SystemVoid"); // tuple: no single return value
+                    func.ReturnType = StorageTypes.Void; // tuple: no single return value
 
                 foreach (var ret in ml.Returns)
                     func.ReturnSlots.Add(ret);
@@ -1063,7 +1063,7 @@ public class UasmEmitter
             {
                 var param = fm.Parameters[pi];
                 var paramId = NameAllocator.ParamId(param.Name, idx);
-                _ctx.Storage.DeclareVar(paramId, new StorageType(GetStorageTypeName(param.Type)));
+                _ctx.Storage.DeclareVar(paramId, GetStorageType(param.Type));
                 fmParamIds[pi] = paramId;
             }
             _methodParamVarIds[fm] = fmParamIds;
@@ -1116,7 +1116,7 @@ public class UasmEmitter
             if (!sm.IsStatic)
             {
                 var receiverId = NameAllocator.ParamId("this", idx);
-                _ctx.Storage.DeclareVar(receiverId, new StorageType("SystemObjectArray"));
+                _ctx.Storage.DeclareVar(receiverId, StorageTypes.ObjectArray);
                 func.ParamFieldNames.Add(receiverId);
             }
 
@@ -1125,7 +1125,7 @@ public class UasmEmitter
             {
                 var p = sm.Parameters[pi];
                 var pid = NameAllocator.ParamId(p.Name, idx);
-                _ctx.Storage.DeclareVar(pid, new StorageType(GetStorageTypeName(p.Type)));
+                _ctx.Storage.DeclareVar(pid, GetStorageType(p.Type));
                 smParamIds[pi] = pid;
                 func.ParamFieldNames.Add(pid);
             }
@@ -1162,7 +1162,7 @@ public class UasmEmitter
             {
                 var param = bm.Parameters[pi];
                 var paramId = NameAllocator.ParamId(param.Name, idx);
-                _ctx.Storage.DeclareVar(paramId, new StorageType(GetStorageTypeName(param.Type)));
+                _ctx.Storage.DeclareVar(paramId, GetStorageType(param.Type));
                 bmParamIds[pi] = paramId;
             }
             _methodParamVarIds[bm] = bmParamIds;
@@ -1487,12 +1487,12 @@ public class UasmEmitter
         var callArgs = new List<CLeaf> { recvLeaf }; // CA-M1: receiver is the member's param0
         for (int i = 0; i < member.Parameters.Length; i++)
             callArgs.Add(BridgeLoad(DelegateAbi.ConvArgName(sigPart, i),
-                new StorageType(ExternResolver.GetUdonTypeName(member.Parameters[i].Type))));
+                ExternResolver.GetStorageType(new RuntimeType(member.Parameters[i].Type), _typeParamMap)));
 
         var convRet = retType != null ? DelegateAbi.ConvRetName(sigPart) : null;
-        var recvOk = BridgeCallExtern(new StorageType("SystemBoolean"),
+        var recvOk = BridgeCallExtern(StorageTypes.Boolean,
             "SystemObject.__op_Inequality__SystemObject_SystemObject__SystemBoolean",
-            new[] { recvLeaf, (CLeaf)_builder.Const(null, new StorageType("SystemObject")) });
+            new[] { recvLeaf, (CLeaf)_builder.Const(null, StorageTypes.Object) });
         _builder.EmitIf(recvOk,
             _ =>
             {
@@ -1505,7 +1505,7 @@ public class UasmEmitter
                 BridgeCallExternVoid("UnityEngineDebug.__LogError__SystemObject__SystemVoid",
                     new[] { (CLeaf)_builder.Const(
                         $"USugar: null receiver — invoked a method-group delegate whose receiver is null ({member.ContainingType.Name}.{member.Name})",
-                        new StorageType("SystemString")) });
+                        StorageTypes.String) });
                 if (convRet != null)
                     BridgeStore(convRet, InvocationHandler.DefaultConst(_builder, retType));
             });
@@ -1580,18 +1580,18 @@ public class UasmEmitter
             _ctx.Storage.TryDeclareVar(envConv, new StorageType(EnvEmit.EnvType));
             var envLeaf = BridgeLoad(envConv, new StorageType(EnvEmit.EnvType));
             callArgs.Add(envLeaf);
-            var envOk = BridgeCallExtern(new StorageType("SystemBoolean"),
+            var envOk = BridgeCallExtern(StorageTypes.Boolean,
                 "SystemObject.__op_Inequality__SystemObject_SystemObject__SystemBoolean",
-                new[] { envLeaf, _builder.Const(null, new StorageType("SystemObject")) });
+                new[] { envLeaf, _builder.Const(null, StorageTypes.Object) });
             _builder.EmitIf(envOk,
                 _ =>
                 {
-                    var envKind = BridgeCallExtern(new StorageType("SystemString"),
+                    var envKind = BridgeCallExtern(StorageTypes.String,
                         ExternResolver.BuildArrayGetSignature("SystemObjectArray", "SystemObject"),
-                        new[] { envLeaf, _builder.Const(EnvAbi.Kind, new StorageType("SystemInt32")) });
-                    var envKindOk = BridgeCallExtern(new StorageType("SystemBoolean"),
+                        new[] { envLeaf, _builder.Const(EnvAbi.Kind, StorageTypes.Int32) });
+                    var envKindOk = BridgeCallExtern(StorageTypes.Boolean,
                         "SystemString.__op_Equality__SystemString_SystemString__SystemBoolean",
-                        new[] { envKind, _builder.Const(EnvAbi.KindTag, new StorageType("SystemString")) });
+                        new[] { envKind, _builder.Const(EnvAbi.KindTag, StorageTypes.String) });
                     _builder.EmitIf(envKindOk,
                         _ => EmitBridgeCall(callArgs),
                         _ =>
@@ -1599,7 +1599,7 @@ public class UasmEmitter
                             BridgeCallExternVoid("UnityEngineDebug.__LogError__SystemObject__SystemVoid",
                                 new[] { (CLeaf)_builder.Const(
                                     $"USugar: invalid closure environment — invoked a captured delegate with a non-env payload ({closureCheckMethod.Name})",
-                                    new StorageType("SystemString")) });
+                                    StorageTypes.String) });
                             if (convRet != null)
                                 BridgeStore(convRet, InvocationHandler.DefaultConst(_builder, retType));
                         });
@@ -1609,7 +1609,7 @@ public class UasmEmitter
                     BridgeCallExternVoid("UnityEngineDebug.__LogError__SystemObject__SystemVoid",
                         new[] { (CLeaf)_builder.Const(
                             $"USugar: missing closure environment — invoked a captured delegate whose bundle carries no env ({closureCheckMethod.Name})",
-                            new StorageType("SystemString")) });
+                            StorageTypes.String) });
                     if (convRet != null)
                         BridgeStore(convRet, InvocationHandler.DefaultConst(_builder, retType));
                 });
@@ -1662,8 +1662,8 @@ public class UasmEmitter
         _builder.SetFunction(wrapperFunc);
 
         // INV-A: snapshot the inner bundle + every OUTER conv arg to LOCAL SLOTS before dispatching.
-        var innerSlot = _ctx.Builder.AllocScratch(new StorageType("SystemObjectArray"));
-        _builder.EmitAssign(innerSlot, BridgeLoad(DelegateAbi.ConvEnvName(outerSigPart), new StorageType("SystemObjectArray")));
+        var innerSlot = _ctx.Builder.AllocScratch(StorageTypes.ObjectArray);
+        _builder.EmitAssign(innerSlot, BridgeLoad(DelegateAbi.ConvEnvName(outerSigPart), StorageTypes.ObjectArray));
 
         var argSlots = new int[outerInvoke.Parameters.Length];
         for (int i = 0; i < outerInvoke.Parameters.Length; i++)
@@ -1715,21 +1715,21 @@ public class UasmEmitter
     /// Same semantics as Array.Copy(src, srcStart, dst, dstStart, len), one extra loop per copy.</summary>
     void EmitMulticastArrayBlit(int srcSlot, CLeaf srcStart, int dstSlot, CLeaf dstStart, int lenSlot)
     {
-        var kSlot = _ctx.Builder.AllocScratch(new StorageType("SystemInt32"));
+        var kSlot = _ctx.Builder.AllocScratch(StorageTypes.Int32);
         _builder.EmitFor(
             _ => _builder.EmitAssign(kSlot, BridgeConstInt(0)),
-            () => BridgeCallExtern(new StorageType("SystemBoolean"), "SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean",
+            () => BridgeCallExtern(StorageTypes.Boolean, "SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean",
                 new CLeaf[] { _builder.SlotRef(kSlot), _builder.SlotRef(lenSlot) }),
-            _ => _builder.EmitAssign(kSlot, BridgeCallExtern(new StorageType("SystemInt32"),
+            _ => _builder.EmitAssign(kSlot, BridgeCallExtern(StorageTypes.Int32,
                 "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32",
                 new CLeaf[] { _builder.SlotRef(kSlot), BridgeConstInt(1) })),
             _ =>
             {
-                var srcIdx = BridgeCallExtern(new StorageType("SystemInt32"), "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32",
+                var srcIdx = BridgeCallExtern(StorageTypes.Int32, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32",
                     new CLeaf[] { srcStart, _builder.SlotRef(kSlot) });
-                var dstIdx = BridgeCallExtern(new StorageType("SystemInt32"), "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32",
+                var dstIdx = BridgeCallExtern(StorageTypes.Int32, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32",
                     new CLeaf[] { dstStart, _builder.SlotRef(kSlot) });
-                var elem = BridgeCallExtern(new StorageType("SystemObject"), MulticastArrGet, new CLeaf[] { _builder.SlotRef(srcSlot), srcIdx });
+                var elem = BridgeCallExtern(StorageTypes.Object, MulticastArrGet, new CLeaf[] { _builder.SlotRef(srcSlot), srcIdx });
                 BridgeCallExternVoid(MulticastArrSet, new CLeaf[] { _builder.SlotRef(dstSlot), dstIdx, elem });
             });
     }
@@ -1758,12 +1758,12 @@ public class UasmEmitter
             var vId = $"{helperName}__v";
             var retId = NameAllocator.RetKey(helperName);
             _ctx.Storage.TryDeclareVar(vId, new StorageType(underlyingUdon));
-            _ctx.Storage.TryDeclareVar(retId, new StorageType("SystemString"));
+            _ctx.Storage.TryDeclareVar(retId, StorageTypes.String);
 
             var func = _module.AddFunction(helperName);
             func.ParamFieldNames.Add(vId);
-            func.ReturnType = new StorageType("SystemString");
-            func.ReturnSlots.Add(new ReturnSlot(retId, new StorageType("SystemString")));
+            func.ReturnType = StorageTypes.String;
+            func.ReturnSlots.Add(new ReturnSlot(retId, StorageTypes.String));
 
             var prevFunc = _builder.CurrentFunction;
             _builder.SetFunction(func);
@@ -1776,11 +1776,11 @@ public class UasmEmitter
                 var constLeaf = _builder.Const(
                     EmitPolicy.ParseConstValue(underlyingUdon, System.Convert.ToString(
                         member.ConstantValue, System.Globalization.CultureInfo.InvariantCulture)), new StorageType(underlyingUdon));
-                var isMatch = BridgeCallExtern(new StorageType("SystemBoolean"), eqExtern, new CLeaf[] { vLeaf, constLeaf });
-                _builder.EmitIf(isMatch, _ => _builder.EmitReturn(_builder.Const(member.Name, new StorageType("SystemString"))));
+                var isMatch = BridgeCallExtern(StorageTypes.Boolean, eqExtern, new CLeaf[] { vLeaf, constLeaf });
+                _builder.EmitIf(isMatch, _ => _builder.EmitReturn(_builder.Const(member.Name, StorageTypes.String)));
             }
             // Default: an undefined value formats as the underlying number (C#-parity).
-            _builder.EmitReturn(BridgeCallExtern(new StorageType("SystemString"), $"{underlyingUdon}.__ToString__SystemString",
+            _builder.EmitReturn(BridgeCallExtern(StorageTypes.String, $"{underlyingUdon}.__ToString__SystemString",
                 new CLeaf[] { vLeaf }));
 
             if (prevFunc != null) _builder.SetFunction(prevFunc);
@@ -1793,11 +1793,11 @@ public class UasmEmitter
     CLeaf EmitMulticastMintBundle(string sigPart, CLeaf listLeaf)
     {
         var fanoutName = DelegateAbi.MulticastFanoutName(sigPart);
-        var mSlot = _ctx.Builder.AllocScratch(new StorageType("SystemObjectArray"));
+        var mSlot = _ctx.Builder.AllocScratch(StorageTypes.ObjectArray);
         var thisType = ExternResolver.GetUdonTypeName(_classSymbol);
         return DelegateAbi.EmitBundleMintToSlot(_builder, mSlot,
             () => BridgeLoad(_ctx.Storage.DeclareThisOnce(new StorageType(thisType)), new StorageType(thisType)),
-            _builder.Const(fanoutName, new StorageType("SystemString")),
+            _builder.Const(fanoutName, StorageTypes.String),
             _builder.FuncRef(fanoutName),
             listLeaf);
     }
@@ -1809,12 +1809,12 @@ public class UasmEmitter
     /// is reserved and can never collide with a real user method/bridge export name).</summary>
     void EmitMulticastFlattenOperand(CLeaf operand, string fanoutName, out int listSlot, out int lenSlot)
     {
-        var lSlot = _ctx.Builder.AllocScratch(new StorageType("SystemObjectArray"));
-        var nSlot = _ctx.Builder.AllocScratch(new StorageType("SystemInt32"));
+        var lSlot = _ctx.Builder.AllocScratch(StorageTypes.ObjectArray);
+        var nSlot = _ctx.Builder.AllocScratch(StorageTypes.Int32);
 
         void EmitSingleCastWrap(CoreBuilder _)
         {
-            _builder.EmitAssign(lSlot, BridgeCallExtern(new StorageType("SystemObjectArray"), MulticastArrCtor,
+            _builder.EmitAssign(lSlot, BridgeCallExtern(StorageTypes.ObjectArray, MulticastArrCtor,
                 new CLeaf[] { BridgeConstInt(1) }));
             BridgeCallExternVoid(MulticastArrSet, new CLeaf[] { _builder.SlotRef(lSlot), BridgeConstInt(0), operand });
             _builder.EmitAssign(nSlot, BridgeConstInt(1));
@@ -1830,18 +1830,18 @@ public class UasmEmitter
             _ =>
             {
                 var tag = DelegateAbi.ReadSlot(_builder, operand, DelegateAbi.Method, "SystemString");
-                var isMulticast = BridgeCallExtern(new StorageType("SystemBoolean"),
+                var isMulticast = BridgeCallExtern(StorageTypes.Boolean,
                     "SystemString.__op_Equality__SystemString_SystemString__SystemBoolean",
-                    new CLeaf[] { tag, _builder.Const(fanoutName, new StorageType("SystemString")) });
+                    new CLeaf[] { tag, _builder.Const(fanoutName, StorageTypes.String) });
                 _builder.EmitIf(isMulticast,
                     _ =>
                     {
                         _builder.EmitAssign(lSlot, DelegateAbi.ReadSlot(_builder, operand, DelegateAbi.Env, "SystemObjectArray"));
-                        var listOk = BridgeCallExtern(new StorageType("SystemBoolean"),
+                        var listOk = BridgeCallExtern(StorageTypes.Boolean,
                             "SystemObject.__op_Inequality__SystemObject_SystemObject__SystemBoolean",
-                            new CLeaf[] { _builder.SlotRef(lSlot), _builder.Const(null, new StorageType("SystemObject")) });
+                            new CLeaf[] { _builder.SlotRef(lSlot), _builder.Const(null, StorageTypes.Object) });
                         _builder.EmitIf(listOk,
-                            _ => _builder.EmitAssign(nSlot, BridgeCallExtern(new StorageType("SystemInt32"), "SystemArray.__get_Length__SystemInt32",
+                            _ => _builder.EmitAssign(nSlot, BridgeCallExtern(StorageTypes.Int32, "SystemArray.__get_Length__SystemInt32",
                                 new CLeaf[] { _builder.SlotRef(lSlot) })),
                             EmitSingleCastWrap);
                     },
@@ -1858,41 +1858,41 @@ public class UasmEmitter
     {
         var helperName = DelegateAbi.MulticastCombineName(sigPart);
         var xId = $"{helperName}__x"; var yId = $"{helperName}__y"; var retId = NameAllocator.RetKey(helperName);
-        _ctx.Storage.TryDeclareVar(xId, new StorageType("SystemObjectArray"));
-        _ctx.Storage.TryDeclareVar(yId, new StorageType("SystemObjectArray"));
-        _ctx.Storage.TryDeclareVar(retId, new StorageType("SystemObjectArray"));
+        _ctx.Storage.TryDeclareVar(xId, StorageTypes.ObjectArray);
+        _ctx.Storage.TryDeclareVar(yId, StorageTypes.ObjectArray);
+        _ctx.Storage.TryDeclareVar(retId, StorageTypes.ObjectArray);
 
         var func = _module.AddFunction(helperName);
         func.ParamFieldNames.Add(xId);
         func.ParamFieldNames.Add(yId);
-        func.ReturnType = new StorageType("SystemObjectArray");
-        func.ReturnSlots.Add(new ReturnSlot(retId, new StorageType("SystemObjectArray")));
+        func.ReturnType = StorageTypes.ObjectArray;
+        func.ReturnSlots.Add(new ReturnSlot(retId, StorageTypes.ObjectArray));
 
         var prevFunc = _builder.CurrentFunction;
         _builder.SetFunction(func);
 
-        var xLeaf = BridgeLoad(xId, new StorageType("SystemObjectArray"));
-        var yLeaf = BridgeLoad(yId, new StorageType("SystemObjectArray"));
+        var xLeaf = BridgeLoad(xId, StorageTypes.ObjectArray);
+        var yLeaf = BridgeLoad(yId, StorageTypes.ObjectArray);
 
-        var xNull = BridgeCallExtern(new StorageType("SystemBoolean"), "SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean",
-            new CLeaf[] { xLeaf, _builder.Const(null, new StorageType("SystemObject")) });
+        var xNull = BridgeCallExtern(StorageTypes.Boolean, "SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean",
+            new CLeaf[] { xLeaf, _builder.Const(null, StorageTypes.Object) });
         _builder.EmitIf(xNull, _ => _builder.EmitReturn(yLeaf)); // null + y = y
 
-        var yNull = BridgeCallExtern(new StorageType("SystemBoolean"), "SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean",
-            new CLeaf[] { yLeaf, _builder.Const(null, new StorageType("SystemObject")) });
+        var yNull = BridgeCallExtern(StorageTypes.Boolean, "SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean",
+            new CLeaf[] { yLeaf, _builder.Const(null, StorageTypes.Object) });
         _builder.EmitIf(yNull, _ => _builder.EmitReturn(xLeaf)); // x + null = x
 
         var fanoutName = DelegateAbi.MulticastFanoutName(sigPart);
         EmitMulticastFlattenOperand(xLeaf, fanoutName, out var lxSlot, out var lenLxSlot);
         EmitMulticastFlattenOperand(yLeaf, fanoutName, out var lySlot, out var lenLySlot);
 
-        var catLenSlot = _ctx.Builder.AllocScratch(new StorageType("SystemInt32"));
-        _builder.EmitAssign(catLenSlot, BridgeCallExtern(new StorageType("SystemInt32"),
+        var catLenSlot = _ctx.Builder.AllocScratch(StorageTypes.Int32);
+        _builder.EmitAssign(catLenSlot, BridgeCallExtern(StorageTypes.Int32,
             "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32",
             new CLeaf[] { _builder.SlotRef(lenLxSlot), _builder.SlotRef(lenLySlot) }));
 
-        var catSlot = _ctx.Builder.AllocScratch(new StorageType("SystemObjectArray"));
-        _builder.EmitAssign(catSlot, BridgeCallExtern(new StorageType("SystemObjectArray"), MulticastArrCtor,
+        var catSlot = _ctx.Builder.AllocScratch(StorageTypes.ObjectArray);
+        _builder.EmitAssign(catSlot, BridgeCallExtern(StorageTypes.ObjectArray, MulticastArrCtor,
             new CLeaf[] { _builder.SlotRef(catLenSlot) }));
         EmitMulticastArrayBlit(lxSlot, BridgeConstInt(0), catSlot, BridgeConstInt(0), lenLxSlot);
         EmitMulticastArrayBlit(lySlot, BridgeConstInt(0), catSlot, _builder.SlotRef(lenLxSlot), lenLySlot);
@@ -1910,28 +1910,28 @@ public class UasmEmitter
     {
         var helperName = DelegateAbi.MulticastRemoveName(sigPart);
         var xId = $"{helperName}__x"; var yId = $"{helperName}__y"; var retId = NameAllocator.RetKey(helperName);
-        _ctx.Storage.TryDeclareVar(xId, new StorageType("SystemObjectArray"));
-        _ctx.Storage.TryDeclareVar(yId, new StorageType("SystemObjectArray"));
-        _ctx.Storage.TryDeclareVar(retId, new StorageType("SystemObjectArray"));
+        _ctx.Storage.TryDeclareVar(xId, StorageTypes.ObjectArray);
+        _ctx.Storage.TryDeclareVar(yId, StorageTypes.ObjectArray);
+        _ctx.Storage.TryDeclareVar(retId, StorageTypes.ObjectArray);
 
         var func = _module.AddFunction(helperName);
         func.ParamFieldNames.Add(xId);
         func.ParamFieldNames.Add(yId);
-        func.ReturnType = new StorageType("SystemObjectArray");
-        func.ReturnSlots.Add(new ReturnSlot(retId, new StorageType("SystemObjectArray")));
+        func.ReturnType = StorageTypes.ObjectArray;
+        func.ReturnSlots.Add(new ReturnSlot(retId, StorageTypes.ObjectArray));
 
         var prevFunc = _builder.CurrentFunction;
         _builder.SetFunction(func);
 
-        var xLeaf = BridgeLoad(xId, new StorageType("SystemObjectArray"));
-        var yLeaf = BridgeLoad(yId, new StorageType("SystemObjectArray"));
+        var xLeaf = BridgeLoad(xId, StorageTypes.ObjectArray);
+        var yLeaf = BridgeLoad(yId, StorageTypes.ObjectArray);
 
-        var xNull = BridgeCallExtern(new StorageType("SystemBoolean"), "SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean",
-            new CLeaf[] { xLeaf, _builder.Const(null, new StorageType("SystemObject")) });
-        _builder.EmitIf(xNull, _ => _builder.EmitReturn(_builder.Const(null, new StorageType("SystemObjectArray")))); // null - y = null
+        var xNull = BridgeCallExtern(StorageTypes.Boolean, "SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean",
+            new CLeaf[] { xLeaf, _builder.Const(null, StorageTypes.Object) });
+        _builder.EmitIf(xNull, _ => _builder.EmitReturn(_builder.Const(null, StorageTypes.ObjectArray))); // null - y = null
 
-        var yNull = BridgeCallExtern(new StorageType("SystemBoolean"), "SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean",
-            new CLeaf[] { yLeaf, _builder.Const(null, new StorageType("SystemObject")) });
+        var yNull = BridgeCallExtern(StorageTypes.Boolean, "SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean",
+            new CLeaf[] { yLeaf, _builder.Const(null, StorageTypes.Object) });
         _builder.EmitIf(yNull, _ => _builder.EmitReturn(xLeaf)); // x - null = x
 
         var fanoutName = DelegateAbi.MulticastFanoutName(sigPart);
@@ -1942,52 +1942,52 @@ public class UasmEmitter
 
         // LastContiguousMatch: search the candidate start index DOWNWARD from (lenLx-lenLy) to 0 — the
         // first full match found this way is the RIGHTMOST (= last) one, per Delegate.Remove semantics.
-        var startSlot = _ctx.Builder.AllocScratch(new StorageType("SystemInt32"));
-        _builder.EmitAssign(startSlot, BridgeCallExtern(new StorageType("SystemInt32"),
+        var startSlot = _ctx.Builder.AllocScratch(StorageTypes.Int32);
+        _builder.EmitAssign(startSlot, BridgeCallExtern(StorageTypes.Int32,
             "SystemInt32.__op_Subtraction__SystemInt32_SystemInt32__SystemInt32",
             new CLeaf[] { _builder.SlotRef(lenLxSlot), _builder.SlotRef(lenLySlot) }));
-        var foundSlot = _ctx.Builder.AllocScratch(new StorageType("SystemBoolean"));
-        _builder.EmitAssign(foundSlot, _builder.Const(false, new StorageType("SystemBoolean")));
-        var matchIdxSlot = _ctx.Builder.AllocScratch(new StorageType("SystemInt32"));
+        var foundSlot = _ctx.Builder.AllocScratch(StorageTypes.Boolean);
+        _builder.EmitAssign(foundSlot, _builder.Const(false, StorageTypes.Boolean));
+        var matchIdxSlot = _ctx.Builder.AllocScratch(StorageTypes.Int32);
         _builder.EmitAssign(matchIdxSlot, BridgeConstInt(-1));
 
         _builder.EmitWhile(() =>
             {
-                var notFound = BridgeCallExtern(new StorageType("SystemBoolean"), "SystemBoolean.__op_UnaryNegation__SystemBoolean__SystemBoolean",
+                var notFound = BridgeCallExtern(StorageTypes.Boolean, "SystemBoolean.__op_UnaryNegation__SystemBoolean__SystemBoolean",
                     new CLeaf[] { _builder.SlotRef(foundSlot) });
-                var startOk = BridgeCallExtern(new StorageType("SystemBoolean"),
+                var startOk = BridgeCallExtern(StorageTypes.Boolean,
                     "SystemInt32.__op_GreaterThanOrEqual__SystemInt32_SystemInt32__SystemBoolean",
                     new CLeaf[] { _builder.SlotRef(startSlot), BridgeConstInt(0) });
-                return BridgeCallExtern(new StorageType("SystemBoolean"), "SystemBoolean.__op_LogicalAnd__SystemBoolean_SystemBoolean__SystemBoolean",
+                return BridgeCallExtern(StorageTypes.Boolean, "SystemBoolean.__op_LogicalAnd__SystemBoolean_SystemBoolean__SystemBoolean",
                     new CLeaf[] { notFound, startOk });
             },
             _ =>
             {
-                var allMatchSlot = _ctx.Builder.AllocScratch(new StorageType("SystemBoolean"));
-                _builder.EmitAssign(allMatchSlot, _builder.Const(true, new StorageType("SystemBoolean")));
-                var kSlot = _ctx.Builder.AllocScratch(new StorageType("SystemInt32"));
+                var allMatchSlot = _ctx.Builder.AllocScratch(StorageTypes.Boolean);
+                _builder.EmitAssign(allMatchSlot, _builder.Const(true, StorageTypes.Boolean));
+                var kSlot = _ctx.Builder.AllocScratch(StorageTypes.Int32);
                 _builder.EmitAssign(kSlot, BridgeConstInt(0));
 
                 _builder.EmitWhile(() =>
                     {
-                        var kOk = BridgeCallExtern(new StorageType("SystemBoolean"), "SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean",
+                        var kOk = BridgeCallExtern(StorageTypes.Boolean, "SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean",
                             new CLeaf[] { _builder.SlotRef(kSlot), _builder.SlotRef(lenLySlot) });
-                        return BridgeCallExtern(new StorageType("SystemBoolean"), "SystemBoolean.__op_LogicalAnd__SystemBoolean_SystemBoolean__SystemBoolean",
+                        return BridgeCallExtern(StorageTypes.Boolean, "SystemBoolean.__op_LogicalAnd__SystemBoolean_SystemBoolean__SystemBoolean",
                             new CLeaf[] { _builder.SlotRef(allMatchSlot), kOk });
                     },
                     _ =>
                     {
-                        var lxIdx = BridgeCallExtern(new StorageType("SystemInt32"), "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32",
+                        var lxIdx = BridgeCallExtern(StorageTypes.Int32, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32",
                             new CLeaf[] { _builder.SlotRef(startSlot), _builder.SlotRef(kSlot) });
-                        var lxElem = BridgeCallExtern(new StorageType("SystemObjectArray"), MulticastArrGet,
+                        var lxElem = BridgeCallExtern(StorageTypes.ObjectArray, MulticastArrGet,
                             new CLeaf[] { _builder.SlotRef(lxSlot), lxIdx });
-                        var lyElem = BridgeCallExtern(new StorageType("SystemObjectArray"), MulticastArrGet,
+                        var lyElem = BridgeCallExtern(StorageTypes.ObjectArray, MulticastArrGet,
                             new CLeaf[] { _builder.SlotRef(lySlot), _builder.SlotRef(kSlot) });
                         var eq = elementEquals.EmitDelegateElementEquals(lxElem, lyElem);
-                        var notEq = BridgeCallExtern(new StorageType("SystemBoolean"), "SystemBoolean.__op_UnaryNegation__SystemBoolean__SystemBoolean",
+                        var notEq = BridgeCallExtern(StorageTypes.Boolean, "SystemBoolean.__op_UnaryNegation__SystemBoolean__SystemBoolean",
                             new CLeaf[] { eq });
-                        _builder.EmitIf(notEq, _ => _builder.EmitAssign(allMatchSlot, _builder.Const(false, new StorageType("SystemBoolean"))));
-                        _builder.EmitAssign(kSlot, BridgeCallExtern(new StorageType("SystemInt32"),
+                        _builder.EmitIf(notEq, _ => _builder.EmitAssign(allMatchSlot, _builder.Const(false, StorageTypes.Boolean)));
+                        _builder.EmitAssign(kSlot, BridgeCallExtern(StorageTypes.Int32,
                             "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32",
                             new CLeaf[] { _builder.SlotRef(kSlot), BridgeConstInt(1) }));
                     });
@@ -1995,40 +1995,40 @@ public class UasmEmitter
                 _builder.EmitIf(_builder.SlotRef(allMatchSlot),
                     _ =>
                     {
-                        _builder.EmitAssign(foundSlot, _builder.Const(true, new StorageType("SystemBoolean")));
+                        _builder.EmitAssign(foundSlot, _builder.Const(true, StorageTypes.Boolean));
                         _builder.EmitAssign(matchIdxSlot, _builder.SlotRef(startSlot));
                     },
-                    _ => _builder.EmitAssign(startSlot, BridgeCallExtern(new StorageType("SystemInt32"),
+                    _ => _builder.EmitAssign(startSlot, BridgeCallExtern(StorageTypes.Int32,
                         "SystemInt32.__op_Subtraction__SystemInt32_SystemInt32__SystemInt32",
                         new CLeaf[] { _builder.SlotRef(startSlot), BridgeConstInt(1) })));
             });
 
         _builder.EmitIf(_builder.SlotRef(foundSlot), null, _ => _builder.EmitReturn(xLeaf)); // no match → x unchanged
 
-        var rLenSlot = _ctx.Builder.AllocScratch(new StorageType("SystemInt32"));
-        _builder.EmitAssign(rLenSlot, BridgeCallExtern(new StorageType("SystemInt32"),
+        var rLenSlot = _ctx.Builder.AllocScratch(StorageTypes.Int32);
+        _builder.EmitAssign(rLenSlot, BridgeCallExtern(StorageTypes.Int32,
             "SystemInt32.__op_Subtraction__SystemInt32_SystemInt32__SystemInt32",
             new CLeaf[] { _builder.SlotRef(lenLxSlot), _builder.SlotRef(lenLySlot) }));
 
-        var rLenIsZero = BridgeCallExtern(new StorageType("SystemBoolean"), "SystemInt32.__op_Equality__SystemInt32_SystemInt32__SystemBoolean",
+        var rLenIsZero = BridgeCallExtern(StorageTypes.Boolean, "SystemInt32.__op_Equality__SystemInt32_SystemInt32__SystemBoolean",
             new CLeaf[] { _builder.SlotRef(rLenSlot), BridgeConstInt(0) });
-        _builder.EmitIf(rLenIsZero, _ => _builder.EmitReturn(_builder.Const(null, new StorageType("SystemObjectArray")))); // full removal → null
+        _builder.EmitIf(rLenIsZero, _ => _builder.EmitReturn(_builder.Const(null, StorageTypes.ObjectArray))); // full removal → null
 
-        var rSlot = _ctx.Builder.AllocScratch(new StorageType("SystemObjectArray"));
-        _builder.EmitAssign(rSlot, BridgeCallExtern(new StorageType("SystemObjectArray"), MulticastArrCtor, new CLeaf[] { _builder.SlotRef(rLenSlot) }));
+        var rSlot = _ctx.Builder.AllocScratch(StorageTypes.ObjectArray);
+        _builder.EmitAssign(rSlot, BridgeCallExtern(StorageTypes.ObjectArray, MulticastArrCtor, new CLeaf[] { _builder.SlotRef(rLenSlot) }));
         EmitMulticastArrayBlit(lxSlot, BridgeConstInt(0), rSlot, BridgeConstInt(0), matchIdxSlot);
-        var tailStartSlot = _ctx.Builder.AllocScratch(new StorageType("SystemInt32"));
-        _builder.EmitAssign(tailStartSlot, BridgeCallExtern(new StorageType("SystemInt32"), "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32",
+        var tailStartSlot = _ctx.Builder.AllocScratch(StorageTypes.Int32);
+        _builder.EmitAssign(tailStartSlot, BridgeCallExtern(StorageTypes.Int32, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32",
             new CLeaf[] { _builder.SlotRef(matchIdxSlot), _builder.SlotRef(lenLySlot) }));
-        var tailLenSlot = _ctx.Builder.AllocScratch(new StorageType("SystemInt32"));
-        _builder.EmitAssign(tailLenSlot, BridgeCallExtern(new StorageType("SystemInt32"), "SystemInt32.__op_Subtraction__SystemInt32_SystemInt32__SystemInt32",
+        var tailLenSlot = _ctx.Builder.AllocScratch(StorageTypes.Int32);
+        _builder.EmitAssign(tailLenSlot, BridgeCallExtern(StorageTypes.Int32, "SystemInt32.__op_Subtraction__SystemInt32_SystemInt32__SystemInt32",
             new CLeaf[] { _builder.SlotRef(lenLxSlot), _builder.SlotRef(tailStartSlot) }));
         EmitMulticastArrayBlit(lxSlot, _builder.SlotRef(tailStartSlot), rSlot, _builder.SlotRef(matchIdxSlot), tailLenSlot);
 
-        var rLenIsOne = BridgeCallExtern(new StorageType("SystemBoolean"), "SystemInt32.__op_Equality__SystemInt32_SystemInt32__SystemBoolean",
+        var rLenIsOne = BridgeCallExtern(StorageTypes.Boolean, "SystemInt32.__op_Equality__SystemInt32_SystemInt32__SystemBoolean",
             new CLeaf[] { _builder.SlotRef(rLenSlot), BridgeConstInt(1) });
         _builder.EmitIf(rLenIsOne, _ => _builder.EmitReturn( // single collapse → bare bundle, not re-wrapped
-            BridgeCallExtern(new StorageType("SystemObjectArray"), MulticastArrGet, new CLeaf[] { _builder.SlotRef(rSlot), BridgeConstInt(0) })));
+            BridgeCallExtern(StorageTypes.ObjectArray, MulticastArrGet, new CLeaf[] { _builder.SlotRef(rSlot), BridgeConstInt(0) })));
 
         _builder.EmitReturn(EmitMulticastMintBundle(sigPart, _builder.SlotRef(rSlot)));
 
@@ -2098,28 +2098,28 @@ public class UasmEmitter
         // faulted where every sibling bridge LogErrors + returns default. Mirror the closure
         // bridge's env-null arm; retSlot is already default-initialized, so the conv-ret store
         // below the guard IS the default return.
-        var listOk = BridgeCallExtern(new StorageType("SystemBoolean"),
+        var listOk = BridgeCallExtern(StorageTypes.Boolean,
             "SystemObject.__op_Inequality__SystemObject_SystemObject__SystemBoolean",
-            new CLeaf[] { _builder.SlotRef(listSlot), _builder.Const(null, new StorageType("SystemObject")) });
+            new CLeaf[] { _builder.SlotRef(listSlot), _builder.Const(null, StorageTypes.Object) });
         _builder.EmitIf(listOk,
             _ =>
             {
-                var nSlot = _ctx.Builder.AllocScratch(new StorageType("SystemInt32"));
-                _builder.EmitAssign(nSlot, BridgeCallExtern(new StorageType("SystemInt32"), "SystemArray.__get_Length__SystemInt32",
+                var nSlot = _ctx.Builder.AllocScratch(StorageTypes.Int32);
+                _builder.EmitAssign(nSlot, BridgeCallExtern(StorageTypes.Int32, "SystemArray.__get_Length__SystemInt32",
                     new CLeaf[] { _builder.SlotRef(listSlot) }));
 
-                var iSlot = _ctx.Builder.AllocScratch(new StorageType("SystemInt32"));
+                var iSlot = _ctx.Builder.AllocScratch(StorageTypes.Int32);
                 _builder.EmitFor(
                     _ => _builder.EmitAssign(iSlot, BridgeConstInt(0)),
-                    () => BridgeCallExtern(new StorageType("SystemBoolean"), "SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean",
+                    () => BridgeCallExtern(StorageTypes.Boolean, "SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean",
                         new CLeaf[] { _builder.SlotRef(iSlot), _builder.SlotRef(nSlot) }),
-                    _ => _builder.EmitAssign(iSlot, BridgeCallExtern(new StorageType("SystemInt32"),
+                    _ => _builder.EmitAssign(iSlot, BridgeCallExtern(StorageTypes.Int32,
                         "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32",
                         new CLeaf[] { _builder.SlotRef(iSlot), BridgeConstInt(1) })),
                     _ =>
                     {
-                        var elemSlot = _ctx.Builder.AllocScratch(new StorageType("SystemObjectArray"));
-                        _builder.EmitAssign(elemSlot, BridgeCallExtern(new StorageType("SystemObjectArray"), MulticastArrGet,
+                        var elemSlot = _ctx.Builder.AllocScratch(StorageTypes.ObjectArray);
+                        _builder.EmitAssign(elemSlot, BridgeCallExtern(StorageTypes.ObjectArray, MulticastArrGet,
                             new CLeaf[] { _builder.SlotRef(listSlot), _builder.SlotRef(iSlot) }));
 
                         var argLeaves = new CLeaf[argSlots.Length];
@@ -2133,7 +2133,7 @@ public class UasmEmitter
             _ => BridgeCallExternVoid("UnityEngineDebug.__LogError__SystemObject__SystemVoid",
                 new[] { (CLeaf)_builder.Const(
                     $"USugar: missing invocation list — multicast fan-out invoked with a null list ({fanoutName})",
-                    new StorageType("SystemString")) }));
+                    StorageTypes.String) }));
 
         if (retSlot >= 0)
             BridgeStore(DelegateAbi.ConvRetName(sigPart), _builder.SlotRef(retSlot));
@@ -2329,7 +2329,7 @@ public class UasmEmitter
                 foreach (var p in method.Parameters)
                     if (p.Ordinal < entryParamIds.Length && _ctx.Closures.TryGetEnvBinding(p, out _))
                         EnvEmit.Write(_builder, _ctx, p,
-                            BridgeLoad(entryParamIds[p.Ordinal], new StorageType(GetStorageTypeName(p.Type))));
+                            BridgeLoad(entryParamIds[p.Ordinal], GetStorageType(p.Type)));
 
             // Class receiver capture (design 2026-07-10 v2 §1.3): consume the receiver param0 into its
             // env cell exactly like a captured parameter — after __tco_ + EnvAlloc, so a self-tail

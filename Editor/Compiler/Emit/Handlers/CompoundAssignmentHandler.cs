@@ -51,7 +51,7 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
             {
                 var converted = ConvertConcatOperand(VisitExpression(vOp), vOp);
                 var concat = ExternCall("SystemString.__Concat__SystemObject_SystemObject__SystemString",
-                    new List<CLeaf> { leftVal, converted }, new StorageType("SystemString"));
+                    new List<CLeaf> { leftVal, converted }, StorageTypes.String);
                 lv.Write(concat);
                 return concat;
             }
@@ -209,7 +209,7 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
 
     CLeaf PromoteToInt32(CLeaf value, string srcUdonType)
         => ExternCall($"SystemConvert.__ToInt32__{srcUdonType}__SystemInt32",
-            new List<CLeaf> { value }, new StorageType("SystemInt32"));
+            new List<CLeaf> { value }, StorageTypes.Int32);
 
     CLeaf VisitIncrementDecrement(IIncrementOrDecrementOperation op)
     {
@@ -235,7 +235,7 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
             var kind = op.Kind == OperationKind.Increment ? BinaryOperatorKind.Add : BinaryOperatorKind.Subtract;
             var lifted = EmitLiftedBinaryCore(
                 targetVal, true, incUnderlying,
-                Const(1, new StorageType(GetStorageTypeName(incUnderlying))), false, incUnderlying,
+                Const(1, GetStorageType(incUnderlying)), false, incUnderlying,
                 kind, null, op.Type);
             lv.Write(lifted);
             // Postfix returns the OLD value: targetVal (= lv.Value) is a single-assignment scratch leaf bound

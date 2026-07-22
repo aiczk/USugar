@@ -173,7 +173,7 @@ public class EmitContext
     /// <summary>Declare reflection type IDs array.</summary>
     public void DeclareReflTypeIds(long[] typeIds)
     {
-        Storage.DeclareField(ReflTypeIdsField, new StorageType("SystemInt64Array"), defaultValue: typeIds);
+        Storage.DeclareField(ReflTypeIdsField, StorageTypes.Int64Array, defaultValue: typeIds);
     }
 
 }

@@ -40,16 +40,16 @@ public abstract partial class HandlerBase
         var idxSlots = new int[rank];
         for (int d = 0; d < rank; d++)
         {
-            idxSlots[d] = _ctx.Builder.AllocScratch(new StorageType("SystemInt32"));
+            idxSlots[d] = _ctx.Builder.AllocScratch(StorageTypes.Int32);
             EmitAssign(idxSlots[d], VisitExpression(indexOps[d]));
         }
 
         var dimSlots = new int[rank];
         for (int d = 0; d < rank; d++)
         {
-            dimSlots[d] = _ctx.Builder.AllocScratch(new StorageType("SystemInt32"));
+            dimSlots[d] = _ctx.Builder.AllocScratch(StorageTypes.Int32);
             EmitAssign(dimSlots[d], NdimArrayAbi.ReadDimLength(_builder, bundleVal,
-                Const(NdimArrayAbi.DimSlotIndex(d), new StorageType("SystemInt32"))));
+                Const(NdimArrayAbi.DimSlotIndex(d), StorageTypes.Int32)));
         }
 
         var inBounds = NdimArrayAbi.BuildInBounds(_builder, idxSlots, dimSlots);
@@ -139,12 +139,12 @@ public abstract partial class HandlerBase
         var dimSlots = new int[rank];
         for (int d = 0; d < rank; d++)
         {
-            dimSlots[d] = _ctx.Builder.AllocScratch(new StorageType("SystemInt32"));
+            dimSlots[d] = _ctx.Builder.AllocScratch(StorageTypes.Int32);
             EmitAssign(dimSlots[d], VisitExpression(op.DimensionSizes[d]));
         }
 
         var totalSize = NdimArrayAbi.BuildTotalElementCount(_builder, dimSlots);
-        var totalSlot = _ctx.Builder.AllocScratch(new StorageType("SystemInt32"));
+        var totalSlot = _ctx.Builder.AllocScratch(StorageTypes.Int32);
         EmitAssign(totalSlot, totalSize);
 
         var backingSlot = _ctx.Builder.AllocScratch(new StorageType(backingUdonType));
@@ -160,17 +160,17 @@ public abstract partial class HandlerBase
             NdimArrayAbi.FlattenInitializer(op.Initializer, leaves);
             for (int i = 0; i < leaves.Count; i++)
                 EmitExternVoid(ExternResolver.BuildArraySetSignature(backingUdonType, elemUdonType),
-                    new List<CLeaf> { SlotRef(backingSlot), Const(i, new StorageType("SystemInt32")), VisitExpression(leaves[i]) });
+                    new List<CLeaf> { SlotRef(backingSlot), Const(i, StorageTypes.Int32), VisitExpression(leaves[i]) });
         }
         else if (aggElem)
         {
             // struct[]/tuple[] zero-init: each flat slot gets a fresh default struct (mirrors the rank-1 path
             // in ArrayHandler.VisitArrayCreation — `arr[i,j].field = x` must work on a freshly allocated array).
-            var iSlot = _ctx.Builder.AllocScratch(new StorageType("SystemInt32"));
-            EmitAssign(iSlot, Const(0, new StorageType("SystemInt32")));
+            var iSlot = _ctx.Builder.AllocScratch(StorageTypes.Int32);
+            EmitAssign(iSlot, Const(0, StorageTypes.Int32));
             _builder.EmitWhile(
                 () => ExternCall("SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean",
-                    new List<CLeaf> { SlotRef(iSlot), SlotRef(totalSlot) }, new StorageType("SystemBoolean")),
+                    new List<CLeaf> { SlotRef(iSlot), SlotRef(totalSlot) }, StorageTypes.Boolean),
                 _ =>
                 {
                     EmitExternVoid(ExternResolver.BuildArraySetSignature(backingUdonType, elemUdonType),
@@ -178,7 +178,7 @@ public abstract partial class HandlerBase
                             AggregateAbi.MintDefault(_builder, _ctx.Aggregates.GetLayout((INamedTypeSymbol)elemSym),
                                 _ctx.Aggregates.GetLayout, GetStorageTypeName) });
                     EmitAssign(iSlot, ExternCall("SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32",
-                        new List<CLeaf> { SlotRef(iSlot), Const(1, new StorageType("SystemInt32")) }, new StorageType("SystemInt32")));
+                        new List<CLeaf> { SlotRef(iSlot), Const(1, StorageTypes.Int32) }, StorageTypes.Int32));
                 });
         }
 
@@ -194,7 +194,7 @@ public abstract partial class HandlerBase
     protected CLeaf EmitNdimLength(CLeaf bundleVal, IArrayTypeSymbol ndimType)
     {
         var backing = EmitNdimGetBacking(bundleVal, NdimArrayAbi.BackingType(_compilation, ndimType));
-        return ExternCall("SystemArray.__get_Length__SystemInt32", new List<CLeaf> { backing }, new StorageType("SystemInt32"));
+        return ExternCall("SystemArray.__get_Length__SystemInt32", new List<CLeaf> { backing }, StorageTypes.Int32);
     }
 
     /// <summary>`ndimArr.GetLength(d)` — bundle[1+d] unboxed. <paramref name="dimArg"/> need not be a
@@ -209,7 +209,7 @@ public abstract partial class HandlerBase
 
     /// <summary>`ndimArr.Rank` — the static rank is known at compile time from the declared type; no
     /// runtime code at all.</summary>
-    protected CLeaf EmitNdimRank(IArrayTypeSymbol ndimType) => Const(ndimType.Rank, new StorageType("SystemInt32"));
+    protected CLeaf EmitNdimRank(IArrayTypeSymbol ndimType) => Const(ndimType.Rank, StorageTypes.Int32);
 
     /// <summary>`ndimArr.GetUpperBound(d)` = `GetLength(d) - 1`.</summary>
     protected CLeaf EmitNdimGetUpperBound(CLeaf bundleVal, CLeaf dimArg)

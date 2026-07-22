@@ -788,9 +788,9 @@ public class LayoutPlanner
         var id = NameAllocator.FormatId(retKey, alloc.Allocate(retKey));
 
         if (TypeClassifier.IsAggregateValue(method.ReturnType))
-            returns.Add(new ReturnSlot(id, new StorageType("SystemObjectArray")));
+            returns.Add(new ReturnSlot(id, StorageTypes.ObjectArray));
         else
-            returns.Add(new ReturnSlot(id, new StorageType(ExternResolver.GetUdonTypeName(method.ReturnType))));
+            returns.Add(new ReturnSlot(id, ExternResolver.GetStorageType(new RuntimeType(method.ReturnType))));
 
         return returns;
     }

@@ -288,18 +288,18 @@ public static class CoreFlatten
                 // ec.Args are CLeaf operands (ANF) — already flat leaves, no per-arg lowering needed.
                 // Reentrant MUST be copied: this rebuild is one of the two sites (with RemapInst) where
                 // object-identity marking would silently die (design §4.3) — FlatVerify checks conservation.
-                int? dest = ec.Type != new StorageType("SystemVoid") ? ctx.AllocScratch(ec.Type) : (int?)null;
+                int? dest = ec.Type != StorageTypes.Void ? ctx.AllocScratch(ec.Type) : (int?)null;
                 ctx.Current.Stmts.Add(new CExprStmt(ec.With(new List<CLeaf>(ec.Args), dest)));
-                return dest.HasValue ? new CSlotRef(dest.Value, ec.Type) : new CConst(null, new StorageType("SystemVoid"));
+                return dest.HasValue ? new CSlotRef(dest.Value, ec.Type) : new CConst(null, StorageTypes.Void);
             }
 
             case CInternalCall ic:
             {
                 // Reentrant AND TailSpared MUST be copied (see the CExternCall note above; TailSpared
                 // is the round-9 [Y3] per-site spill exemption).
-                int? dest = ic.Type != new StorageType("SystemVoid") ? ctx.AllocScratch(ic.Type) : (int?)null;
+                int? dest = ic.Type != StorageTypes.Void ? ctx.AllocScratch(ic.Type) : (int?)null;
                 ctx.Current.Stmts.Add(new CExprStmt(ic.With(new List<CLeaf>(ic.Args), dest)));
-                return dest.HasValue ? new CSlotRef(dest.Value, ic.Type) : new CConst(null, new StorageType("SystemVoid"));
+                return dest.HasValue ? new CSlotRef(dest.Value, ic.Type) : new CConst(null, StorageTypes.Void);
             }
 
             case CCrossCall cc: return LowerCrossCall(cc, ctx);
@@ -319,7 +319,7 @@ public static class CoreFlatten
         {
             ctx.Current.Stmts.Add(new CExprStmt(new CExternCall(
                 ExternResolver.EventReceiverSetProgramVariable,
-                new List<CLeaf> { inst, new CConst(paramName, new StorageType("SystemString")), value }, new StorageType("SystemVoid"), null)));
+                new List<CLeaf> { inst, new CConst(paramName, StorageTypes.String), value }, StorageTypes.Void, null)));
         }
 
         // Wave-12 r2 [V1]: a reentrant cross dispatch flags its SendCustomEvent as the §4.3 spill
@@ -329,7 +329,7 @@ public static class CoreFlatten
         // flat block, so the count is exact by construction.
         ctx.Current.Stmts.Add(new CExprStmt(new CExternCall(
             ExternResolver.EventReceiverSendCustomEvent,
-            new List<CLeaf> { inst, new CConst(cc.EventName, new StorageType("SystemString")) }, new StorageType("SystemVoid"), null,
+            new List<CLeaf> { inst, new CConst(cc.EventName, StorageTypes.String) }, StorageTypes.Void, null,
             cc.Reentrant, cc.Reentrant ? cc.Params.Count : 0)));
 
         if (cc.Returns.Count == 1)
@@ -338,7 +338,7 @@ public static class CoreFlatten
             var dest = ctx.AllocScratch(cc.Type);
             ctx.Current.Stmts.Add(new CExprStmt(new CExternCall(
                 ExternResolver.EventReceiverGetProgramVariable,
-                new List<CLeaf> { inst, new CConst(ret.Id, new StorageType("SystemString")) }, cc.Type, dest)));
+                new List<CLeaf> { inst, new CConst(ret.Id, StorageTypes.String) }, cc.Type, dest)));
             return new CSlotRef(dest, cc.Type);
         }
 
@@ -346,14 +346,14 @@ public static class CoreFlatten
         {
             foreach (var ret in cc.Returns)
             {
-                var dest = ctx.AllocScratch(new StorageType("SystemObject"));
+                var dest = ctx.AllocScratch(StorageTypes.Object);
                 ctx.Current.Stmts.Add(new CExprStmt(new CExternCall(
                     ExternResolver.EventReceiverGetProgramVariable,
-                    new List<CLeaf> { inst, new CConst(ret.Id, new StorageType("SystemString")) }, new StorageType("SystemObject"), dest)));
+                    new List<CLeaf> { inst, new CConst(ret.Id, StorageTypes.String) }, StorageTypes.Object, dest)));
             }
         }
 
-        return new CConst(null, new StorageType("SystemVoid"));
+        return new CConst(null, StorageTypes.Void);
     }
 
     static CLeaf LowerSelect(CSelect sel, Ctx ctx)

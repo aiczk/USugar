@@ -34,18 +34,18 @@ public class ArrayHandler : HandlerBase, IExpressionHandler
             for (int i = 0; i < op.Initializer.ElementValues.Length; i++)
             {
                 EmitExternVoid(ExternResolver.BuildArraySetSignature(arrayType, elementType),
-                    new List<CLeaf> { SlotRef(arrSlot), Const(i, new StorageType("SystemInt32")), VisitExpression(op.Initializer.ElementValues[i]) });
+                    new List<CLeaf> { SlotRef(arrSlot), Const(i, StorageTypes.Int32), VisitExpression(op.Initializer.ElementValues[i]) });
             }
         }
         else if (aggElem)
         {
             // struct[]/tuple[]: C# zero-init means each element is a fresh default struct (not a null slot),
             // so `arr[i].field = x` works on a freshly allocated array. Fill via a runtime loop.
-            var iSlot = _ctx.Builder.AllocScratch(new StorageType("SystemInt32"));
-            EmitAssign(iSlot, Const(0, new StorageType("SystemInt32")));
+            var iSlot = _ctx.Builder.AllocScratch(StorageTypes.Int32);
+            EmitAssign(iSlot, Const(0, StorageTypes.Int32));
             _builder.EmitWhile(
                 () => ExternCall("SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean",
-                    new List<CLeaf> { SlotRef(iSlot), sizeVal }, new StorageType("SystemBoolean")),
+                    new List<CLeaf> { SlotRef(iSlot), sizeVal }, StorageTypes.Boolean),
                 _ =>
                 {
                     EmitExternVoid(ExternResolver.BuildArraySetSignature(arrayType, elementType),
@@ -53,7 +53,7 @@ public class ArrayHandler : HandlerBase, IExpressionHandler
                             AggregateAbi.MintDefault(_builder, _ctx.Aggregates.GetLayout((INamedTypeSymbol)elemSym),
                                 _ctx.Aggregates.GetLayout, GetStorageTypeName) });
                     EmitAssign(iSlot, ExternCall("SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32",
-                        new List<CLeaf> { SlotRef(iSlot), Const(1, new StorageType("SystemInt32")) }, new StorageType("SystemInt32")));
+                        new List<CLeaf> { SlotRef(iSlot), Const(1, StorageTypes.Int32) }, StorageTypes.Int32));
                 });
         }
 
@@ -78,7 +78,7 @@ public class ArrayHandler : HandlerBase, IExpressionHandler
         // Index from end: arr[^1] → arr[arr.Length - 1]
         var indexVal = ResolveArrayIndex(arrayVal, arrayType, index);
 
-        var resultVal = ExternCall(ExternResolver.BuildArrayGetSignature(arrayType, elementType), new List<CLeaf> { arrayVal, indexVal }, new StorageType(GetStorageTypeName(op.Type)));
+        var resultVal = ExternCall(ExternResolver.BuildArrayGetSignature(arrayType, elementType), new List<CLeaf> { arrayVal, indexVal }, GetStorageType(op.Type));
         // A struct/tuple element read AS A VALUE is copied (value semantics). Receiver access (arr[i].x =)
         // goes through LoadInstanceRaw → ReadArrayElementRaw, which does NOT clone.
         return op.Type is INamedTypeSymbol elemAggT && TypeClassifier.IsAggregateValue(elemAggT)
@@ -88,7 +88,7 @@ public class ArrayHandler : HandlerBase, IExpressionHandler
     CLeaf ResolveRangeOperand(CLeaf arrayVal, string arrayType, IOperation operand, bool isEnd)
     {
         if (operand == null)
-            return isEnd ? EmitArrayLength(arrayVal, arrayType) : Const(0, new StorageType("SystemInt32"));
+            return isEnd ? EmitArrayLength(arrayVal, arrayType) : Const(0, StorageTypes.Int32);
         // Unwrap conversion (int → System.Index)
         var inner = operand;
         while (inner is IConversionOperation conv) inner = conv.Operand;
@@ -100,7 +100,7 @@ public class ArrayHandler : HandlerBase, IExpressionHandler
 
     CLeaf EmitArrayLength(CLeaf arrayVal, string arrayType)
     {
-        var lenVal = ExternCall($"{arrayType}.__get_Length__SystemInt32", new List<CLeaf> { arrayVal }, new StorageType("SystemInt32"));
+        var lenVal = ExternCall($"{arrayType}.__get_Length__SystemInt32", new List<CLeaf> { arrayVal }, StorageTypes.Int32);
         return lenVal;
     }
 
@@ -121,28 +121,28 @@ public class ArrayHandler : HandlerBase, IExpressionHandler
 
         // len = end - start
         var lenVal = ExternCall("SystemInt32.__op_Subtraction__SystemInt32_SystemInt32__SystemInt32",
-            new List<CLeaf> { endVal, startVal }, new StorageType("SystemInt32"));
+            new List<CLeaf> { endVal, startVal }, StorageTypes.Int32);
 
         // result = new T[len]
         var resultVal = ExternCall(ExternResolver.BuildArrayCtorSignature(udonArrType),
             new List<CLeaf> { lenVal }, new StorageType(udonArrType));
 
         // for (i = 0; i < len; i++) result[i] = arr[start + i]
-        var iSlot = _ctx.Builder.AllocScratch(new StorageType("SystemInt32"));
+        var iSlot = _ctx.Builder.AllocScratch(StorageTypes.Int32);
 
         _builder.EmitFor(
             // init: i = 0
-            b => { EmitAssign(iSlot, Const(0, new StorageType("SystemInt32"))); },
+            b => { EmitAssign(iSlot, Const(0, StorageTypes.Int32)); },
             // cond: i < len — MUST use the Func overload so it re-evaluates each iteration. The CLeaf overload
             // evaluates the comparison once (before init runs, with i uninitialized), so the copy loop never
             // iterates and the slice returns a correct-length but all-zero array.
             () => ExternCall("SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean",
-                new List<CLeaf> { SlotRef(iSlot), lenVal }, new StorageType("SystemBoolean")),
+                new List<CLeaf> { SlotRef(iSlot), lenVal }, StorageTypes.Boolean),
             // update: i++
             b =>
             {
                 var nextVal = ExternCall("SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32",
-                    new List<CLeaf> { SlotRef(iSlot), Const(1, new StorageType("SystemInt32")) }, new StorageType("SystemInt32"));
+                    new List<CLeaf> { SlotRef(iSlot), Const(1, StorageTypes.Int32) }, StorageTypes.Int32);
                 EmitAssign(iSlot, nextVal);
             },
             // body
@@ -150,7 +150,7 @@ public class ArrayHandler : HandlerBase, IExpressionHandler
             {
                 // srcIdx = start + i
                 var srcIdxVal = ExternCall("SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32",
-                    new List<CLeaf> { startVal, SlotRef(iSlot) }, new StorageType("SystemInt32"));
+                    new List<CLeaf> { startVal, SlotRef(iSlot) }, StorageTypes.Int32);
 
                 // val = arr[srcIdx]
                 CLeaf valVal = ExternCall(ExternResolver.BuildArrayGetSignature(arrayType, elementType),

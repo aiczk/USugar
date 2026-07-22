@@ -136,19 +136,19 @@ public static class AggregateAbi
     public static CLeaf Allocate(CoreBuilder builder, int slotCount)
         => builder.ExternCall(
             ExternResolver.BuildArrayCtorSignature(ArrayType),
-            new List<CLeaf> { builder.Const(slotCount, new StorageType("SystemInt32")) },
+            new List<CLeaf> { builder.Const(slotCount, StorageTypes.Int32) },
             new StorageType(ArrayType));
 
     public static CLeaf ReadSlot(CoreBuilder builder, CLeaf instance, int index, StorageType udonType)
         => builder.ExternCall(
             ExternResolver.BuildArrayGetSignature(ArrayType, ElementType),
-            new List<CLeaf> { instance, builder.Const(index, new StorageType("SystemInt32")) },
+            new List<CLeaf> { instance, builder.Const(index, StorageTypes.Int32) },
             udonType);
 
     public static void WriteSlot(CoreBuilder builder, CLeaf instance, int index, CLeaf value)
         => builder.EmitExternVoid(
             ExternResolver.BuildArraySetSignature(ArrayType, ElementType),
-            new List<CLeaf> { instance, builder.Const(index, new StorageType("SystemInt32")), value });
+            new List<CLeaf> { instance, builder.Const(index, StorageTypes.Int32), value });
 
     public static CLeaf MintTupleLiteral(CoreBuilder builder, ITupleOperation tuple,
         Func<IOperation, CLeaf> emitValue)
@@ -524,7 +524,7 @@ public static class ClassAbi
         var signature = kind == BinaryOperatorKind.NotEquals
             ? "SystemObject.__op_Inequality__SystemObject_SystemObject__SystemBoolean"
             : "SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean";
-        return builder.ExternCall(signature, new List<CLeaf> { left, right }, new StorageType("SystemBoolean"));
+        return builder.ExternCall(signature, new List<CLeaf> { left, right }, StorageTypes.Boolean);
     }
 
     public static bool IsObjectMethodOnUserClass(IMethodSymbol method, ITypeSymbol receiverType)

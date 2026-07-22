@@ -55,7 +55,7 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
             {
                 VisitExpression(op.Instance);
                 VisitExpression(eqArg);
-                result = Const(false, new StorageType("SystemBoolean"));
+                result = Const(false, StorageTypes.Boolean);
                 return true;
             }
             result = DelegateAbi.CompareDelegates(_builder,
@@ -80,7 +80,7 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
             {
                 VisitExpression(lhs);
                 VisitExpression(rhs);
-                result = Const(false, new StorageType("SystemBoolean"));
+                result = Const(false, StorageTypes.Boolean);
                 return true;
             }
             result = DelegateAbi.CompareDelegates(_builder,
@@ -129,7 +129,7 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
             && sdkEnumRecv.TypeKind == TypeKind.Enum && !ExternResolver.IsUserEnum(sdkEnumRecv))
             return ExternCall("SystemObject.__Equals__SystemObject_SystemObject__SystemBoolean",
                 new List<CLeaf> { VisitExpression(op.Instance), VisitExpression(op.Arguments[0].Value) },
-                new StorageType("SystemBoolean"));
+                StorageTypes.Boolean);
 
         // Nullable<T>.GetValueOrDefault() / GetValueOrDefault(fallback) → the value, else the fallback/default.
         if (op.Instance != null && target.Name == "GetValueOrDefault"
@@ -181,21 +181,21 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
                     // A user enum prints its member NAME (B67) — route the present value through the same
                     // synthesized helper as the bare receiver (re-tagged: the helper's param is strict-typed).
                     if (ExternResolver.IsUserEnum(ResolveType(nulUnder)))
-                        return NullableAbi.EmitGetValueOrDefault(_builder, nulBox, new StorageType("SystemString"),
-                            Const("", new StorageType("SystemString")),
+                        return NullableAbi.EmitGetValueOrDefault(_builder, nulBox, StorageTypes.String,
+                            Const("", StorageTypes.String),
                             present => TryEmitEnumToString(RetagSmallNullablePresent(present, nulUnder), nulUnder));
-                    return NullableAbi.EmitGetValueOrDefault(_builder, nulBox, new StorageType("SystemString"),
-                        Const("", new StorageType("SystemString")),
+                    return NullableAbi.EmitGetValueOrDefault(_builder, nulBox, StorageTypes.String,
+                        Const("", StorageTypes.String),
                         present => ExternCall("SystemObject.__ToString__SystemString",
-                            new List<CLeaf> { present }, new StorageType("SystemString")));
+                            new List<CLeaf> { present }, StorageTypes.String));
                 case "GetHashCode":
-                    return NullableAbi.EmitGetValueOrDefault(_builder, nulBox, new StorageType("SystemInt32"),
-                        Const(0, new StorageType("SystemInt32")),
+                    return NullableAbi.EmitGetValueOrDefault(_builder, nulBox, StorageTypes.Int32,
+                        Const(0, StorageTypes.Int32),
                         present => ExternCall("SystemObject.__GetHashCode__SystemInt32",
-                            new List<CLeaf> { present }, new StorageType("SystemInt32")));
+                            new List<CLeaf> { present }, StorageTypes.Int32));
                 default: // Equals(object)
                     return ExternCall("SystemObject.__Equals__SystemObject_SystemObject__SystemBoolean",
-                        new List<CLeaf> { nulBox, VisitExpression(op.Arguments[0].Value) }, new StorageType("SystemBoolean"));
+                        new List<CLeaf> { nulBox, VisitExpression(op.Arguments[0].Value) }, StorageTypes.Boolean);
             }
         }
 
@@ -510,7 +510,7 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
         var argRefs = new List<CLeaf>();
         var chainPrepared = MarshalArgumentsByOrdinal(op.Arguments, op.TargetMethod, argRefs, (val, arg) =>
         {
-            var s = _ctx.Builder.AllocScratch(new StorageType(GetStorageTypeName(arg.Value.Type)));
+            var s = _ctx.Builder.AllocScratch(GetStorageType(arg.Value.Type));
             EmitAssign(s, val);
             return SlotRef(s);
         });
@@ -519,22 +519,22 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
         EmitAssign(typeObjSlot, AggregateAbi.ReadSlot(_builder, SlotRef(recvSlot), 0, new StorageType(AggregateAbi.ArrayType)));
 
         bool isVoid = op.Type == null || op.Type.SpecialType == SpecialType.System_Void;
-        int destSlot = isVoid ? -1 : _ctx.Builder.AllocScratch(new StorageType(GetStorageTypeName(op.Type)));
+        int destSlot = isVoid ? -1 : _ctx.Builder.AllocScratch(GetStorageType(op.Type));
 
         // Phase-A armor: a null receiver or a laundered non-bundle value matches no arm. is/cast guards
         // that case to `false`; the chain must be equally loud — LogError + default, never silent.
-        var matched = _ctx.Builder.AllocScratch(new StorageType("SystemBoolean"));
-        EmitAssign(matched, Const(false, new StorageType("SystemBoolean")));
+        var matched = _ctx.Builder.AllocScratch(StorageTypes.Boolean);
+        EmitAssign(matched, Const(false, StorageTypes.Boolean));
 
         foreach (var t in targets)
         {
             var eq = ExternCall("SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean",
-                new List<CLeaf> { SlotRef(typeObjSlot), LoadField(t.TypeObjVar, new StorageType(AggregateAbi.ArrayType)) }, new StorageType("SystemBoolean"));
+                new List<CLeaf> { SlotRef(typeObjSlot), LoadField(t.TypeObjVar, new StorageType(AggregateAbi.ArrayType)) }, StorageTypes.Boolean);
             var callArgs = new List<CLeaf> { SlotRef(recvSlot) };
             callArgs.AddRange(argRefs);
             _builder.EmitIf(eq, _ =>
             {
-                EmitAssign(matched, Const(true, new StorageType("SystemBoolean")));
+                EmitAssign(matched, Const(true, StorageTypes.Boolean));
                 var impl = ResolveStructMember(t.Impl);
                 var call = EmitCallToMethod(impl, callArgs);
                 if (isVoid) EmitExprStmt(call);
@@ -544,14 +544,14 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
         }
 
         var noMatch = ExternCall("SystemBoolean.__op_UnaryNegation__SystemBoolean__SystemBoolean",
-            new List<CLeaf> { SlotRef(matched) }, new StorageType("SystemBoolean"));
+            new List<CLeaf> { SlotRef(matched) }, StorageTypes.Boolean);
         _builder.EmitIf(noMatch, _ =>
             EmitExternVoid("UnityEngineDebug.__LogError__SystemObject__SystemVoid",
                 new List<CLeaf> { Const(
                     $"USugar: NullReferenceException — virtual call '{op.TargetMethod.ContainingType.Name}.{op.TargetMethod.Name}' on a null or non-class receiver ({_classSymbol.Name}). Returning default.",
-                    new StorageType("SystemString")) }), null);
+                    StorageTypes.String) }), null);
 
-        return isVoid ? Const(null, new StorageType("SystemObject")) : SlotRef(destSlot);
+        return isVoid ? Const(null, StorageTypes.Object) : SlotRef(destSlot);
     }
 
     // AssertClosedVirtualDispatch lives in HandlerBase (CW1 lift: the accessor dispatch arms in
@@ -565,16 +565,16 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
         EmitAssign(recvSlot, LoadInstanceRaw(op.Instance));
         foreach (var a in op.Arguments)
         {
-            var s = _ctx.Builder.AllocScratch(new StorageType(GetStorageTypeName(a.Value.Type)));
+            var s = _ctx.Builder.AllocScratch(GetStorageType(a.Value.Type));
             EmitAssign(s, VisitExpression(a.Value));
         }
         EmitExternVoid("UnityEngineDebug.__LogError__SystemObject__SystemVoid",
             new List<CLeaf> { Const(
                 $"USugar: NullReferenceException — virtual call '{recvTy.Name}.{target.Name}' has no minted implementor, so the receiver must be null ({_classSymbol.Name}). Returning default.",
-                new StorageType("SystemString")) });
+                StorageTypes.String) });
         bool isVoid = op.Type == null || op.Type.SpecialType == SpecialType.System_Void;
-        if (isVoid) return Const(null, new StorageType("SystemObject"));
-        return SlotRef(_ctx.Builder.AllocScratch(new StorageType(GetStorageTypeName(op.Type))));
+        if (isVoid) return Const(null, StorageTypes.Object);
+        return SlotRef(_ctx.Builder.AllocScratch(GetStorageType(op.Type)));
     }
 
     CLeaf EmitStructInstanceCall(IInvocationOperation op, IMethodSymbol target)
@@ -642,7 +642,7 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
         // The __dlgc_ conv vars are a signature-keyed cross-program byte contract (§3.2). Bridges declare
         // the same names for their own sigs; the dispatch site declares-on-first-use for foreign sigs.
         for (int i = 0; i < convArgs.Length; i++)
-            _ctx.Storage.TryDeclareVar(convArgs[i], new StorageType(GetStorageTypeName(invoke.Parameters[i].Type)));
+            _ctx.Storage.TryDeclareVar(convArgs[i], GetStorageType(invoke.Parameters[i].Type));
         string retType = null;
         if (!invoke.ReturnsVoid)
         {
@@ -742,10 +742,10 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
                     // fast path (addr is meaningless across program boundaries; 0-addr JUMP_INDIRECT would
                     // silently jump to bytecode 0, P5d — addr is only ever read inside this guard).
                     var isSelf = ExternCall("UnityEngineObject.__op_Equality__UnityEngineObject_UnityEngineObject__SystemBoolean",
-                        new List<CLeaf> { tgt, thisRef }, new StorageType("SystemBoolean"));
+                        new List<CLeaf> { tgt, thisRef }, StorageTypes.Boolean);
                     var hasAddr = DelegateAbi.HasAddress(_builder, adr);
                     var selfFast = ExternCall("SystemBoolean.__op_LogicalAnd__SystemBoolean_SystemBoolean__SystemBoolean",
-                        new List<CLeaf> { isSelf, hasAddr }, new StorageType("SystemBoolean"));
+                        new List<CLeaf> { isSelf, hasAddr }, StorageTypes.Boolean);
                     _builder.EmitIf(selfFast,
                         _ =>
                         {
@@ -768,20 +768,20 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
                                     var argType = ExternResolver.GetUdonTypeName(invoke.Parameters[i].Type, typeParamMap);
                                     EmitExternVoid(
                                         ExternResolver.EventReceiverSetProgramVariable,
-                                        new List<CLeaf> { tgt, Const(convArgs[i], new StorageType("SystemString")), LoadField(convArgs[i], new StorageType(argType)) });
+                                        new List<CLeaf> { tgt, Const(convArgs[i], StorageTypes.String), LoadField(convArgs[i], new StorageType(argType)) });
                                 }
                                 // Stage 2 §5.1: forward the staged env to the receiver alongside the conv args
                                 // (a missing-symbol SPV on a capture-free receiver is a proven silent no-op).
                                 EmitExternVoid(
                                     ExternResolver.EventReceiverSetProgramVariable,
-                                    new List<CLeaf> { tgt, Const(convEnv, new StorageType("SystemString")), LoadField(convEnv, new StorageType(EnvEmit.EnvType)) });
+                                    new List<CLeaf> { tgt, Const(convEnv, StorageTypes.String), LoadField(convEnv, new StorageType(EnvEmit.EnvType)) });
                                 EmitExternVoid(
                                     ExternResolver.EventReceiverSendCustomEvent,
                                     new List<CLeaf> { tgt, mtd }, reentrant);
                                 if (retType != null)
                                     EmitAssign(retSlot, ExternCall(
                                         ExternResolver.EventReceiverGetProgramVariable,
-                                        new List<CLeaf> { tgt, Const(convRet, new StorageType("SystemString")) }, new StorageType("SystemObject")));
+                                        new List<CLeaf> { tgt, Const(convRet, StorageTypes.String) }, StorageTypes.Object));
                             }, failArm);
                         });
                 }, failArm);

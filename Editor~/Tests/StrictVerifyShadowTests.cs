@@ -27,7 +27,7 @@ public class StrictVerifyShadowTests
     public void EnumInterop_NoFactName_Throws()
     {
         var ex = Assert.Throws<VerificationException>(
-            () => VerifyAssign(Fn("enumguess_unknown"), "FooMysteryType", new CConst(1, new StorageType("SystemInt32"))));
+            () => VerifyAssign(Fn("enumguess_unknown"), "FooMysteryType", new CConst(1, StorageTypes.Int32)));
         Assert.Contains("no fact recorded for 'FooMysteryType'", ex.Message);
     }
 
@@ -36,7 +36,7 @@ public class StrictVerifyShadowTests
     {
         var facts = new UdonTypeFactRegistry();
         facts.RecordForTest("SsvFakeSdkEnum", isEnum: true, isValueType: true);
-        VerifyAssign(Fn("enumguess_fact"), "SsvFakeSdkEnum", new CConst(1, new StorageType("SystemInt32")), facts); // no throw
+        VerifyAssign(Fn("enumguess_fact"), "SsvFakeSdkEnum", new CConst(1, StorageTypes.Int32), facts); // no throw
     }
 
     [Fact]

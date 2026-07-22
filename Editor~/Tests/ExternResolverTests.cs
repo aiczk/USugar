@@ -223,8 +223,8 @@ public class C : UdonSharp.UdonSharpBehaviour { G<int> g; }
         var storageNullableInt = ExternResolver.GetStorageType(runtimeNullableInt);
 
         Assert.NotEqual(runtimeInt, runtimeNullableInt);
-        Assert.Equal(new StorageType("SystemInt32"), storageInt);
-        Assert.Equal(new StorageType("SystemObject"), storageNullableInt);
+        Assert.Equal(StorageTypes.Int32, storageInt);
+        Assert.Equal(StorageTypes.Object, storageNullableInt);
     }
 
     [Fact]

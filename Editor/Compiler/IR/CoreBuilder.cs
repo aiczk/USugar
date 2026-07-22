@@ -191,13 +191,13 @@ public sealed class CoreBuilder
 
     public CSlotRef ExternCall(ExternSignature sig, List<CLeaf> args, StorageType retType)
     {
-        if (retType == new StorageType("SystemVoid")) { Emit(new CExprStmt(new CExternCall(sig, args, retType))); return null; }
+        if (retType == StorageTypes.Void) { Emit(new CExprStmt(new CExternCall(sig, args, retType))); return null; }
         return Bind(new CExternCall(sig, args, retType), retType);
     }
 
     public CSlotRef InternalCall(string funcName, List<CLeaf> args, StorageType retType, bool tailSpared = false)
     {
-        if (retType == new StorageType("SystemVoid")) { Emit(new CExprStmt(new CInternalCall(funcName, args, retType, tailSpared: tailSpared))); return null; }
+        if (retType == StorageTypes.Void) { Emit(new CExprStmt(new CInternalCall(funcName, args, retType, tailSpared: tailSpared))); return null; }
         return Bind(new CInternalCall(funcName, args, retType, tailSpared: tailSpared), retType);
     }
 
@@ -215,7 +215,7 @@ public sealed class CoreBuilder
         // (creation choke point) and materialized on the SendCustomEvent by CoreFlatten.LowerCrossCall.
         if (reentrant) CurrentFunction.ReentrantSiteCount++;
         var cc = new CCrossCall(instance, eventName, parameters, returns, retType, reentrant);
-        if (retType == new StorageType("SystemVoid")) { Emit(new CExprStmt(cc)); return null; }
+        if (retType == StorageTypes.Void) { Emit(new CExprStmt(cc)); return null; }
         return Bind(cc, retType);
     }
 
@@ -226,12 +226,12 @@ public sealed class CoreBuilder
     public void EmitExternVoid(ExternSignature sig, List<CLeaf> args, bool reentrant = false, int preSpillStmts = 0)
     {
         if (reentrant) CurrentFunction.ReentrantSiteCount++;
-        Emit(new CExprStmt(new CExternCall(sig, args, new StorageType("SystemVoid"), null, reentrant, preSpillStmts)));
+        Emit(new CExprStmt(new CExternCall(sig, args, StorageTypes.Void, null, reentrant, preSpillStmts)));
     }
 
     public void EmitInternalVoid(string funcName, List<CLeaf> args, bool reentrant = false)
     {
         if (reentrant) CurrentFunction.ReentrantSiteCount++;
-        Emit(new CExprStmt(new CInternalCall(funcName, args, new StorageType("SystemVoid"), null, reentrant)));
+        Emit(new CExprStmt(new CInternalCall(funcName, args, StorageTypes.Void, null, reentrant)));
     }
 }

@@ -64,7 +64,7 @@ public sealed class StorageContext
     {
         StorageType heapType = SupportedThisTypes.Contains(udonType)
             ? udonType
-            : new StorageType("VRCUdonUdonBehaviour");
+            : StorageTypes.UdonBehaviour;
         var idx = NextIndex($"this_{heapType}");
         var id = $"__this_{heapType}_{idx}";
         _module.Fields.Add(new FieldDecl(id, new StorageType(heapType.Name)) { DefaultValue = "this" });
@@ -82,17 +82,17 @@ public sealed class StorageContext
 
     static readonly HashSet<StorageType> SupportedThisTypes = new()
     {
-        new StorageType("UnityEngineGameObject"), new StorageType("UnityEngineTransform"),
-        new StorageType("VRCUdonUdonBehaviour"),
+        StorageTypes.GameObject, StorageTypes.Transform,
+        StorageTypes.UdonBehaviour,
     };
 
     public void EnsureRecursionStack()
     {
         if (_recurStackDeclared) return;
         _recurStackDeclared = true;
-        _module.Fields.Add(new FieldDecl(EmitContext.RecurStackId, new StorageType("SystemObjectArray")) { DefaultValue = new object[EmitContext.RecurStackSize] });
+        _module.Fields.Add(new FieldDecl(EmitContext.RecurStackId, StorageTypes.ObjectArray) { DefaultValue = new object[EmitContext.RecurStackSize] });
         _declaredFieldNames.Add(EmitContext.RecurStackId);
-        _module.Fields.Add(new FieldDecl(EmitContext.RecurSpId, new StorageType("SystemInt32")) { DefaultValue = 0 });
+        _module.Fields.Add(new FieldDecl(EmitContext.RecurSpId, StorageTypes.Int32) { DefaultValue = 0 });
         _declaredFieldNames.Add(EmitContext.RecurSpId);
     }
 

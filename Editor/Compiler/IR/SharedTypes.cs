@@ -33,6 +33,35 @@ public readonly struct StorageType : IEquatable<StorageType>
     public static bool operator !=(StorageType left, StorageType right) => !left.Equals(right);
 }
 
+/// <summary>Canonical storage types used by the Udon ABI.</summary>
+public static class StorageTypes
+{
+    public static readonly StorageType Void = new StorageType("SystemVoid");
+    public static readonly StorageType Boolean = new StorageType("SystemBoolean");
+    public static readonly StorageType Byte = new StorageType("SystemByte");
+    public static readonly StorageType Char = new StorageType("SystemChar");
+    public static readonly StorageType Int32 = new StorageType("SystemInt32");
+    public static readonly StorageType UInt32 = new StorageType("SystemUInt32");
+    public static readonly StorageType Int64 = new StorageType("SystemInt64");
+    public static readonly StorageType UInt64 = new StorageType("SystemUInt64");
+    public static readonly StorageType Single = new StorageType("SystemSingle");
+    public static readonly StorageType Double = new StorageType("SystemDouble");
+    public static readonly StorageType String = new StorageType("SystemString");
+    public static readonly StorageType Object = new StorageType("SystemObject");
+    public static readonly StorageType Type = new StorageType("SystemType");
+    public static readonly StorageType ObjectArray = new StorageType("SystemObjectArray");
+    public static readonly StorageType ByteArray = new StorageType("SystemByteArray");
+    public static readonly StorageType CharArray = new StorageType("SystemCharArray");
+    public static readonly StorageType Int64Array = new StorageType("SystemInt64Array");
+    public static readonly StorageType UnityObject = new StorageType("UnityEngineObject");
+    public static readonly StorageType Component = new StorageType("UnityEngineComponent");
+    public static readonly StorageType ComponentArray = new StorageType("UnityEngineComponentArray");
+    public static readonly StorageType GameObject = new StorageType("UnityEngineGameObject");
+    public static readonly StorageType Transform = new StorageType("UnityEngineTransform");
+    public static readonly StorageType UdonBehaviour = new StorageType("VRCUdonUdonBehaviour");
+    public static readonly StorageType UdonEventReceiver = new StorageType("VRCUdonCommonInterfacesIUdonEventReceiver");
+}
+
 /// <summary>An Udon VM extern signature. Kept distinct from storage type names so IR APIs cannot
 /// accidentally accept one protocol in place of the other.</summary>
 public readonly struct ExternSignature : IEquatable<ExternSignature>

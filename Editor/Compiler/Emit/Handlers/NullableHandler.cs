@@ -31,7 +31,7 @@ public class NullableHandler : AssignmentHandlerBase, IExpressionHandler
         CLeaf targetVal = VisitExpression(op.Operation);
 
         return NullableAbi.EmitConditionalAccess(_builder, targetVal, isVoid,
-            isVoid ? (StorageType?)null : new StorageType(GetStorageTypeName(op.Type)),
+            isVoid ? (StorageType?)null : GetStorageType(op.Type),
             target =>
         {
             // target is not null → evaluate WhenNotNull with target as the instance

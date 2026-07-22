@@ -40,13 +40,13 @@ static class EnvEmit
     {
         if (scope == null || !scope.IsCaptureBearing) return;
         var env = b.ExternCall(CtorSig,
-            new List<CLeaf> { new CConst(EnvAbi.RecordSize(scope.OwnedCaptures.Count), new StorageType("SystemInt32")) }, new StorageType(EnvType));
+            new List<CLeaf> { new CConst(EnvAbi.RecordSize(scope.OwnedCaptures.Count), StorageTypes.Int32) }, new StorageType(EnvType));
         var parent = ctx.Closures.CaptureScope.EffectiveParent(scope);
         var parentLeaf = parent != null
             ? Leaf(b, ctx, parent)
-            : (CLeaf)new CConst(null, new StorageType("SystemObject"));
-        b.EmitExternVoid(SetSig, new List<CLeaf> { env, new CConst(EnvAbi.Kind, new StorageType("SystemInt32")), new CConst(EnvAbi.KindTag, new StorageType("SystemString")) });
-        b.EmitExternVoid(SetSig, new List<CLeaf> { env, new CConst(EnvAbi.Parent, new StorageType("SystemInt32")), parentLeaf });
+            : (CLeaf)new CConst(null, StorageTypes.Object);
+        b.EmitExternVoid(SetSig, new List<CLeaf> { env, new CConst(EnvAbi.Kind, StorageTypes.Int32), new CConst(EnvAbi.KindTag, StorageTypes.String) });
+        b.EmitExternVoid(SetSig, new List<CLeaf> { env, new CConst(EnvAbi.Parent, StorageTypes.Int32), parentLeaf });
         ctx.Closures.ScopeEnvSlots[(b.CurrentFunction, scope.Id)] = env.SlotId;
     }
 
@@ -78,7 +78,7 @@ static class EnvEmit
         var hops = ctx.Closures.CaptureScope.HopDistance(ownScope.BindingScope, scope);
         CLeaf cur = b.LoadField(envpField, new StorageType(EnvType));
         for (int i = 0; i < hops; i++)
-            cur = b.ExternCall(GetSig, new List<CLeaf> { cur, new CConst(EnvAbi.Parent, new StorageType("SystemInt32")) }, new StorageType(EnvType));
+            cur = b.ExternCall(GetSig, new List<CLeaf> { cur, new CConst(EnvAbi.Parent, StorageTypes.Int32) }, new StorageType(EnvType));
         return cur;
     }
 
@@ -89,7 +89,7 @@ static class EnvEmit
             throw new InvalidOperationException($"'{symbol.Name}' has no env binding.");
         var env = Leaf(b, ctx, binding.Scope);
         return b.ExternCall(GetSig,
-            new List<CLeaf> { env, new CConst(EnvAbi.CaptureSlot(binding.Slot), new StorageType("SystemInt32")) }, udonType);
+            new List<CLeaf> { env, new CConst(EnvAbi.CaptureSlot(binding.Slot), StorageTypes.Int32) }, udonType);
     }
 
     /// <summary>Write a value into a captured variable's env cell.</summary>
@@ -99,7 +99,7 @@ static class EnvEmit
             throw new InvalidOperationException($"'{symbol.Name}' has no env binding.");
         var env = Leaf(b, ctx, binding.Scope);
         b.EmitExternVoid(SetSig,
-            new List<CLeaf> { env, new CConst(EnvAbi.CaptureSlot(binding.Slot), new StorageType("SystemInt32")), value });
+            new List<CLeaf> { env, new CConst(EnvAbi.CaptureSlot(binding.Slot), StorageTypes.Int32), value });
     }
 }
 

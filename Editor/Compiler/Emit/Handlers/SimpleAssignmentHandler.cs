@@ -62,7 +62,7 @@ public class SimpleAssignmentHandler : AssignmentHandlerBase, IExpressionHandler
             ISymbol envSym = assign.Target is ILocalReferenceOperation elr
                 ? elr.Local
                 : ((IParameterReferenceOperation)assign.Target).Parameter;
-            var envLoaded = EnvEmit.Read(_builder, _ctx, envSym, new StorageType(GetStorageTypeName(assign.Target.Type)));
+            var envLoaded = EnvEmit.Read(_builder, _ctx, envSym, GetStorageType(assign.Target.Type));
             return assign.Target.Type is INamedTypeSymbol eAgg && TypeClassifier.IsAggregateValue(eAgg)
                 ? AggregateAbi.DeepClone(_builder, envLoaded, eAgg, _ctx.Aggregates.GetLayout) : envLoaded;
         }

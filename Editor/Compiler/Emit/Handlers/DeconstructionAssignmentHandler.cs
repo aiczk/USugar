@@ -95,7 +95,7 @@ public class DeconstructionAssignmentHandler : AssignmentHandlerBase, IOperation
                 var dlgSnaps = new List<CLeaf>(targetTuple.Elements.Length);
                 for (int i = 0; i < targetTuple.Elements.Length; i++)
                 {
-                    var raw = AggregateAbi.ReadSlot(_builder, dlgResult, i, new StorageType("SystemObject"));
+                    var raw = AggregateAbi.ReadSlot(_builder, dlgResult, i, StorageTypes.Object);
                     dlgSnaps.Add(AggregateAbi.CloneIfAggregate(_builder, raw,
                         ResolveType(targetTuple.Elements[i].Type), _ctx.Aggregates.GetLayout));
                 }
@@ -115,7 +115,7 @@ public class DeconstructionAssignmentHandler : AssignmentHandlerBase, IOperation
                 var snaps = new List<CLeaf>(targetTuple.Elements.Length);
                 for (int i = 0; i < targetTuple.Elements.Length; i++)
                 {
-                    var raw = AggregateAbi.ReadSlot(_builder, arrVal, i, new StorageType("SystemObject"));
+                    var raw = AggregateAbi.ReadSlot(_builder, arrVal, i, StorageTypes.Object);
                     snaps.Add(AggregateAbi.CloneIfAggregate(_builder, raw,
                         ResolveType(targetTuple.Elements[i].Type), _ctx.Aggregates.GetLayout));
                 }
@@ -171,7 +171,7 @@ public class DeconstructionAssignmentHandler : AssignmentHandlerBase, IOperation
                         // CW29: same clone rule as the sibling arms — this arm relied on every
                         // return-site materialization being fresh, an invariant enforced nowhere.
                         var elemVal = AggregateAbi.CloneIfAggregate(_builder,
-                            AggregateAbi.ReadSlot(_builder, arrExpr, i, new StorageType("SystemObject")),
+                            AggregateAbi.ReadSlot(_builder, arrExpr, i, StorageTypes.Object),
                             ResolveType(targetTuple.Elements[i].Type), _ctx.Aggregates.GetLayout);
                         AssignToLValue(targetTuple.Elements[i], elemVal, prepared);
                     }
@@ -317,14 +317,14 @@ public class DeconstructionAssignmentHandler : AssignmentHandlerBase, IOperation
         // (wave-9 round-3 [W4]: named/reordered args used to bind positionally on this path too).
         foreach (var (paramId, argVal) in CrossCallArgPairs(invocation.Arguments, paramIds))
         {
-            var nameConst = Const(paramId, new StorageType("SystemString"));
+            var nameConst = Const(paramId, StorageTypes.String);
             EmitExternVoid(
                 ExternResolver.EventReceiverSetProgramVariable,
                 new List<CLeaf> { instanceVal, nameConst, argVal });
         }
 
         // SendCustomEvent
-        var eventConst = Const(exportName, new StorageType("SystemString"));
+        var eventConst = Const(exportName, StorageTypes.String);
         EmitExternVoid(
             ExternResolver.EventReceiverSendCustomEvent,
             new List<CLeaf> { instanceVal, eventConst });
@@ -333,7 +333,7 @@ public class DeconstructionAssignmentHandler : AssignmentHandlerBase, IOperation
         if (callReturns.Length == 1 && callReturns[0].StorageType.Name == AggregateAbi.ArrayType)
         {
             // Single SystemObjectArray return: get the array, then index into it
-            var retNameConst = Const(callReturns[0].Id, new StorageType("SystemString"));
+            var retNameConst = Const(callReturns[0].Id, StorageTypes.String);
             var arrVal = ExternCall(
                 ExternResolver.EventReceiverGetProgramVariable,
                 new List<CLeaf> { instanceVal, retNameConst },
@@ -342,7 +342,7 @@ public class DeconstructionAssignmentHandler : AssignmentHandlerBase, IOperation
             {
                 // CW29: same clone rule as the sibling arms (see the same-class call arm).
                 var elemVal = AggregateAbi.CloneIfAggregate(_builder,
-                    AggregateAbi.ReadSlot(_builder, arrVal, i, new StorageType("SystemObject")),
+                    AggregateAbi.ReadSlot(_builder, arrVal, i, StorageTypes.Object),
                     ResolveType(targetTuple.Elements[i].Type), _ctx.Aggregates.GetLayout);
                 AssignToLValue(targetTuple.Elements[i], elemVal, prepared);
             }

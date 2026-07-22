@@ -139,7 +139,7 @@ public class SwitchHandler : HandlerBase, IOperationHandler
                 : ExternCall(
                     "SystemBoolean.__op_ConditionalOr__SystemBoolean_SystemBoolean__SystemBoolean",
                     new List<CLeaf> { caseCond, clauseCond },
-                    new StorageType("SystemBoolean"));
+                    StorageTypes.Boolean);
         }
         return caseCond;
     }
@@ -187,7 +187,7 @@ public class SwitchHandler : HandlerBase, IOperationHandler
                     eqType, "__op_Equality", new[] { eqType, eqType }, "SystemBoolean");
 
                 var lhs = convertedValueVal;
-                return ExternCall(eqSig, new List<CLeaf> { lhs, caseValueVal }, new StorageType("SystemBoolean"));
+                return ExternCall(eqSig, new List<CLeaf> { lhs, caseValueVal }, StorageTypes.Boolean);
             }
             case IPatternCaseClauseOperation patternCase:
             {
@@ -199,8 +199,8 @@ public class SwitchHandler : HandlerBase, IOperationHandler
                     // guard even when the pattern did not match, and the guard reads the pattern-bound
                     // variable (e.g. `d.id` where `d` is only validly bound on a match) → a null-bundle
                     // read → VmFault. Evaluate the guard ONLY inside the matched branch.
-                    var guarded = _ctx.Builder.AllocScratch(new StorageType("SystemBoolean"));
-                    EmitAssign(guarded, Const(false, new StorageType("SystemBoolean")));
+                    var guarded = _ctx.Builder.AllocScratch(StorageTypes.Boolean);
+                    EmitAssign(guarded, Const(false, StorageTypes.Boolean));
                     _builder.EmitIf(cond, _ => EmitAssign(guarded, VisitExpression(patternCase.Guard)));
                     cond = SlotRef(guarded);
                 }

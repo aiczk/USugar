@@ -194,7 +194,7 @@ public class StatementHandler : HandlerBase, IOperationHandler
             var srcVal = VisitExpression(op.ReturnedValue);
             if (_currentMethod.Name == "OnOwnershipRequest")
             {
-                _ctx.Storage.TryDeclareVar("__returnValue", new StorageType("SystemBoolean"));
+                _ctx.Storage.TryDeclareVar("__returnValue", StorageTypes.Boolean);
                 EmitStoreField("__returnValue", srcVal);
             }
             EmitPendingDispose();
@@ -237,7 +237,7 @@ public class StatementHandler : HandlerBase, IOperationHandler
         for (int i = 0; i < tailCall.Arguments.Length; i++)
         {
             var argVal = VisitExpression(tailCall.Arguments[i].Value);
-            var slot = _ctx.Builder.AllocScratch(new StorageType(GetStorageTypeName(tailCall.Arguments[i].Value.Type)));
+            var slot = _ctx.Builder.AllocScratch(GetStorageType(tailCall.Arguments[i].Value.Type));
             EmitAssign(slot, argVal);
             argSlots[i] = slot;
         }

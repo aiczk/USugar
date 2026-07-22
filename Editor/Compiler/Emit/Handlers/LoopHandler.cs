@@ -163,32 +163,32 @@ public class LoopHandler : HandlerBase, IOperationHandler
         _ctx.ForeachIterationLocals.Add(loopLocal);
 
         // Index variable
-        var idxSlot = _ctx.Builder.AllocScratch(new StorageType("SystemInt32"));
+        var idxSlot = _ctx.Builder.AllocScratch(StorageTypes.Int32);
 
         // Cache array length before the loop
-        var lenSlot = _ctx.Builder.AllocScratch(new StorageType("SystemInt32"));
+        var lenSlot = _ctx.Builder.AllocScratch(StorageTypes.Int32);
         EmitAssign(lenSlot, ExternCall("SystemArray.__get_Length__SystemInt32",
-            new List<CLeaf> { collVal }, new StorageType("SystemInt32")));
+            new List<CLeaf> { collVal }, StorageTypes.Int32));
 
         _builder.EmitFor(
             _ =>
             {
                 // Init: idx = 0
-                EmitAssign(idxSlot, Const(0, new StorageType("SystemInt32")));
+                EmitAssign(idxSlot, Const(0, StorageTypes.Int32));
             },
             // Condition: idx < cachedLen — built via a factory so A-normal form re-materializes it inside the
             // loop's cond block (re-evaluated each iteration), not bound once before the loop.
             () => ExternCall(
                 "SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean",
                 new List<CLeaf> { SlotRef(idxSlot), SlotRef(lenSlot) },
-                new StorageType("SystemBoolean")),
+                StorageTypes.Boolean),
             _ =>
             {
                 // Update: idx++
                 var nextIdx = ExternCall(
                     "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32",
-                    new List<CLeaf> { SlotRef(idxSlot), Const(1, new StorageType("SystemInt32")) },
-                    new StorageType("SystemInt32"));
+                    new List<CLeaf> { SlotRef(idxSlot), Const(1, StorageTypes.Int32) },
+                    StorageTypes.Int32);
                 EmitAssign(idxSlot, nextIdx);
             },
             _ =>
