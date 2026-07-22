@@ -898,7 +898,11 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
     // Capture-escape registration is pre-emit analysis (§4.1) — nothing is marked here.
     CLeaf VisitDelegateCreation(IDelegateCreationOperation op)
     {
-        var (bridgeName, funcRef, thirdParty, envLeaf) = ResolveDelegateBridge(op);
+        var binding = ResolveDelegateBridge(op);
+        var bridgeName = binding.BridgeName;
+        var funcRef = binding.FunctionReference;
+        var thirdParty = binding.TargetInstance;
+        var envLeaf = binding.Environment;
         var delegateInvoke = (op.Type as INamedTypeSymbol)?.DelegateInvokeMethod;
         if (delegateInvoke != null && DelegateAbi.IsProgramLocalSignature(delegateInvoke)
             && thirdParty != null)
