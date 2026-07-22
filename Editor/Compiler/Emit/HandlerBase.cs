@@ -1313,6 +1313,24 @@ public abstract partial class HandlerBase
         // Static property setter (no instance) — e.g. Time.timeScale = 1.0f
         if (propRef.Instance == null)
         {
+            if (propRef.Property.SetMethod?.DeclaringSyntaxReferences.Length > 0
+                && !USugarCompilerHelper.IsFrameworkNamespace(propRef.Property.ContainingNamespace)
+                && !UasmEmitter.IsComputedProperty(propRef.Property))
+            {
+                var owner = ResolveType(propRef.Property.ContainingType) as INamedTypeSymbol
+                            ?? propRef.Property.ContainingType;
+                var id = StaticOwnerAbi.PropertyName(propRef.Property, owner);
+                return staticVal => EmitStoreField(id, staticVal);
+            }
+            if (propRef.Property.SetMethod is { } sourceSetter
+                && sourceSetter.DeclaringSyntaxReferences.Length > 0
+                && !USugarCompilerHelper.IsFrameworkNamespace(sourceSetter.ContainingNamespace)
+                && UasmEmitter.IsComputedProperty(propRef.Property))
+            {
+                var resolvedSetter = ResolveStructMember(sourceSetter);
+                return staticVal => EmitExprStmt(
+                    EmitCallToMethod(resolvedSetter, new List<CLeaf> { staticVal }));
+            }
             var staticValType = GetStorageTypeName(propRef.Property.Type);
             return staticVal => EmitExternVoid(
                 ExternResolver.BuildPropertySetSignature(propContainingUdon, propRef.Property.Name, staticValType),

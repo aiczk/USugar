@@ -323,7 +323,8 @@ public partial class UasmEmitter
             if (member.IsImplicitlyDeclared) continue;
             if (member.IsStatic)
             {
-                EmitStaticReadonlyField(member);
+                if (!EmitStaticReadonlyField(member) && !member.HasConstantValue)
+                    EmitStaticOwnerField(member);
                 continue;
             }
 
@@ -411,6 +412,8 @@ public partial class UasmEmitter
         // so it never double-declares.
         foreach (var evt in _classSymbol.GetMembers().OfType<IEventSymbol>())
             DeclareEvent(evt);
+
+        EmitExternalStaticOwnerFields();
 
         // Properties → declare as heap variables
         foreach (var prop in _classSymbol.GetMembers().OfType<IPropertySymbol>())
@@ -731,6 +734,95 @@ public partial class UasmEmitter
             _ctx.Aggregates.FieldDefaults.Add((member.Name, aggFieldType));
 
         return true;
+    }
+
+    void EmitExternalStaticOwnerFields()
+    {
+        var ownHierarchy = new HashSet<INamedTypeSymbol>(SymbolEqualityComparer.Default);
+        for (var type = _classSymbol; type != null; type = type.BaseType) ownHierarchy.Add(type);
+        var fields = new HashSet<IFieldSymbol>(SymbolEqualityComparer.Default);
+        var properties = new HashSet<IPropertySymbol>(SymbolEqualityComparer.Default);
+        foreach (var tree in _compilation.SyntaxTrees)
+        {
+            var model = _compilation.GetSemanticModel(tree);
+            foreach (var declaration in tree.GetRoot().DescendantNodes().OfType<VariableDeclaratorSyntax>())
+                if (model.GetDeclaredSymbol(declaration) is IFieldSymbol field
+                    && StaticOwnerAbi.IsSourceStatic(field)
+                    && !ClassTypeObjectContext.ContainsTypeParameter(field.ContainingType)
+                    && !ownHierarchy.Contains(field.ContainingType))
+                    fields.Add(field);
+            foreach (var access in tree.GetRoot().DescendantNodes().OfType<MemberAccessExpressionSyntax>())
+            {
+                var symbol = model.GetSymbolInfo(access).Symbol;
+                if (symbol is IFieldSymbol field
+                    && StaticOwnerAbi.IsSourceStatic(field)
+                    && !ClassTypeObjectContext.ContainsTypeParameter(field.ContainingType)
+                    && !ownHierarchy.Contains(field.ContainingType))
+                    fields.Add(field);
+                if (symbol?.ContainingType is INamedTypeSymbol owner
+                    && !ClassTypeObjectContext.ContainsTypeParameter(owner))
+                    foreach (var ownerField in owner.GetMembers().OfType<IFieldSymbol>())
+                        if (StaticOwnerAbi.IsSourceStatic(ownerField) && !ownHierarchy.Contains(owner))
+                            fields.Add(ownerField);
+                if (symbol is IPropertySymbol property && IsStaticAutoProperty(property)
+                    && !USugarCompilerHelper.IsFrameworkNamespace(property.ContainingNamespace)
+                    && !ClassTypeObjectContext.ContainsTypeParameter(property.ContainingType))
+                    properties.Add(property);
+            }
+            foreach (var declaration in tree.GetRoot().DescendantNodes().OfType<PropertyDeclarationSyntax>())
+                if (model.GetDeclaredSymbol(declaration) is IPropertySymbol property
+                    && IsStaticAutoProperty(property)
+                    && !USugarCompilerHelper.IsFrameworkNamespace(property.ContainingNamespace)
+                    && !ClassTypeObjectContext.ContainsTypeParameter(property.ContainingType))
+                    properties.Add(property);
+        }
+        foreach (var field in fields.OrderBy(f => StaticOwnerAbi.FieldName(f), StringComparer.Ordinal))
+            EmitStaticOwnerField(field);
+        foreach (var property in properties.OrderBy(
+                     p => StaticOwnerAbi.PropertyName(p, p.ContainingType), StringComparer.Ordinal))
+            EmitStaticOwnerProperty(property);
+    }
+
+    static bool IsStaticAutoProperty(IPropertySymbol property)
+        => property.IsStatic && !IsComputedProperty(property);
+
+    void EmitStaticOwnerProperty(IPropertySymbol property)
+    {
+        var id = StaticOwnerAbi.PropertyName(property, property.ContainingType);
+        _ctx.Storage.DeclareGeneratedField(id, GetStorageType(property.Type));
+        if (property.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
+            is PropertyDeclarationSyntax { Initializer: not null } declaration)
+        {
+            var model = _compilation.GetSemanticModel(declaration.SyntaxTree);
+            if (model.GetOperation(declaration.Initializer.Value) is { } init)
+                _staticFieldInitOps.Add((id, init, property.Type));
+        }
+        else if (property.Type is INamedTypeSymbol aggregate && TypeClassifier.IsAggregateValue(aggregate))
+            _ctx.Aggregates.FieldDefaults.Add((id, aggregate));
+    }
+
+    void EmitStaticOwnerField(IFieldSymbol field)
+    {
+        if (field.GetAttributes().Any(a => a.AttributeClass?.Name == "UdonSyncedAttribute"))
+            throw new NotSupportedException(
+                $"[UdonSynced] static field '{field.ContainingType.Name}.{field.Name}' is not supported: "
+                + "static-owner storage is local to one Udon program instance.");
+        if (field.Type is INamedTypeSymbol { DelegateInvokeMethod: not null })
+            throw new NotSupportedException(
+                $"Static delegate field '{field.ContainingType.Name}.{field.Name}' is not supported yet.");
+
+        var id = StaticOwnerAbi.FieldName(field);
+        var storageType = GetStorageType(field.Type);
+        _ctx.Storage.DeclareGeneratedField(id, storageType);
+        var syntax = field.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax();
+        if (syntax is VariableDeclaratorSyntax { Initializer: not null } declarator)
+        {
+            var model = _compilation.GetSemanticModel(declarator.SyntaxTree);
+            if (model.GetOperation(declarator.Initializer.Value) is { } init)
+                _staticFieldInitOps.Add((id, init, field.Type));
+        }
+        else if (field.Type is INamedTypeSymbol aggregate && TypeClassifier.IsAggregateValue(aggregate))
+            _ctx.Aggregates.FieldDefaults.Add((id, aggregate));
     }
 
     /// <summary>

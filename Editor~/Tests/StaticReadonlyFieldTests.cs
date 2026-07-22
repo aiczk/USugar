@@ -218,14 +218,14 @@ public class SR_ImpureExtern : UdonSharpBehaviour {
     // ── §3.5, R7: cross-class non-const read rejected loudly; const/foldable still folds ──
 
     [Fact]
-    public void CrossClass_NonConstStaticReadonlyRead_Rejects()
+    public void CrossClass_NonConstStaticReadonlyRead_UsesStaticOwner()
     {
-        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(new[]
+        var uasm = TestHelper.CompileToUasm(new[]
         {
             @"using UdonSharp; public class SR_Other : UdonSharpBehaviour { public static readonly int[] Table = { 1, 2, 3 }; }",
             @"using UdonSharp; public class SR_CrossReader : UdonSharpBehaviour { public int result; void Start(){ result = SR_Other.Table[0]; } }",
-        }, "SR_CrossReader"));
-        Assert.Contains("cannot read a non-constant static readonly field", ex.Message);
+        }, "SR_CrossReader");
+        Assert.Contains("__static_", uasm);
     }
 
     [Fact]
@@ -245,16 +245,16 @@ public class SR_ImpureExtern : UdonSharpBehaviour {
     // ── §3.7, R8: static mutable field message sharpened ──
 
     [Fact]
-    public void StaticMutableField_RejectsWithSharpenedMessage()
+    public void StaticMutableField_UsesStaticOwner()
     {
-        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
+        var uasm = TestHelper.CompileToUasm(@"
 using UdonSharp;
 public class SR_Mutable : UdonSharpBehaviour {
     static int counter;
     public int result;
     void Start(){ result = counter; }
-}", "SR_Mutable"));
-        Assert.Contains("'static readonly' IS supported", ex.Message);
+}", "SR_Mutable");
+        Assert.Contains("__static_", uasm);
     }
 
     // ── §3.6: init order — instance field initialized FROM a static readonly must see the value ──

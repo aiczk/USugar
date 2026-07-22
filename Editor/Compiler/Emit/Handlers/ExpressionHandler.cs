@@ -124,6 +124,19 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
         }
         if (fieldRef.Field.IsStatic)
         {
+            if (StaticOwnerAbi.IsSourceStatic(fieldRef.Field))
+            {
+                var id = fieldRef.Field.IsReadOnly
+                    && ExternResolver.IsUdonSharpBehaviour(fieldRef.Field.ContainingType)
+                    && IsDeclaredInOwnHierarchy(_classSymbol, fieldRef.Field.ContainingType)
+                    ? fieldRef.Field.Name
+                    : StaticOwnerAbi.FieldName(fieldRef.Field,
+                        ResolveType(fieldRef.Field.ContainingType) as INamedTypeSymbol ?? fieldRef.Field.ContainingType);
+                var value = LoadField(id, GetStorageType(fieldRef.Field.Type));
+                return fieldRef.Field.Type is INamedTypeSymbol aggregate && TypeClassifier.IsAggregateValue(aggregate)
+                    ? AggregateAbi.DeepClone(_builder, value, aggregate, _ctx.Aggregates.GetLayout)
+                    : value;
+            }
             // Wave-14 crossfeature lens: a static field on a USER STRUCT (readonly or not; generic or
             // not) is NOT materialized anywhere — feature S's per-program static-readonly storage
             // (design S-M1) only walks the compiled UdonSharpBehaviour class's own hierarchy. Left

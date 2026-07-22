@@ -425,6 +425,21 @@ public abstract class AssignmentHandlerBase : HandlerBase
             // Resolve containing type and instance
             case IPropertyReferenceOperation propRef:
             {
+                if (propRef.Instance == null
+                    && propRef.Property.SetMethod?.DeclaringSyntaxReferences.Length > 0
+                    && !USugarCompilerHelper.IsFrameworkNamespace(propRef.Property.ContainingNamespace))
+                {
+                    if (!UasmEmitter.IsComputedProperty(propRef.Property))
+                    {
+                        var owner = ResolveType(propRef.Property.ContainingType) as INamedTypeSymbol
+                                    ?? propRef.Property.ContainingType;
+                        EmitStoreField(StaticOwnerAbi.PropertyName(propRef.Property, owner), valueVal);
+                        return;
+                    }
+                    var setter = ResolveStructMember(propRef.Property.SetMethod);
+                    EmitExprStmt(EmitCallToMethod(setter, new List<CLeaf> { valueVal }));
+                    return;
+                }
                 // CW6 armor: a user-struct/class property whose write-back reaches this generic extern
                 // arm was not routed by the object[]-emulated arms above — fail with the collector-drift
                 // diagnosis instead of minting a bogus SystemObjectArray.__set_<Name>__ extern.
@@ -506,6 +521,11 @@ public abstract class AssignmentHandlerBase : HandlerBase
                     $"Cannot resolve local variable '{localRef.Local.Name}' for assignment.");
             case IFieldReferenceOperation { Instance: IInstanceReferenceOperation } fieldRef:
                 return fieldRef.Field.Name;
+            case IFieldReferenceOperation { Instance: null } staticField
+                when StaticOwnerAbi.IsSourceStatic(staticField.Field) && !staticField.Field.IsReadOnly:
+                return StaticOwnerAbi.FieldName(staticField.Field,
+                    ResolveType(staticField.Field.ContainingType) as INamedTypeSymbol
+                    ?? staticField.Field.ContainingType);
             case IParameterReferenceOperation paramRef:
                 return GetParamVarId(paramRef.Parameter);
             default:

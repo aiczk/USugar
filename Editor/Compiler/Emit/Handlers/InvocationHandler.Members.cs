@@ -118,8 +118,6 @@ public partial class InvocationHandler
         // Static property: no instance
         if (op.Instance == null)
         {
-            ClassAbi.RejectStaticProperty(op.Property);
-
             // B47 (wave-14 r6): a STATIC COMPUTED property on a user struct/class (StaticPropHelper<T>.Doubled)
             // is a foreign-static accessor CALL, not a real extern — inline-call its getter (the B46
             // static-method pattern, one node kind over). Without this the fall-through emits a bogus
@@ -129,7 +127,9 @@ public partial class InvocationHandler
             // foreign-static-on-generic method arm). Auto/BCL/const-foldable statics are excluded: the
             // const-fold arm below owns the BCL foldables, and IsUserComputedStaticProperty gates out autos.
             if (op.Property.IsStatic && op.Property.GetMethod is { } sPropGetter
-                && UasmEmitter.IsForeignStatic(sPropGetter, _classSymbol) && IsUserComputedStaticProperty(op.Property))
+                && sPropGetter.DeclaringSyntaxReferences.Length > 0
+                && !USugarCompilerHelper.IsFrameworkNamespace(sPropGetter.ContainingNamespace)
+                && IsUserComputedStaticProperty(op.Property))
             {
                 // ResolveStructMember substitutes the containing type's type args from the current map
                 // (SP<T>.get_Doubled → SP<int>.get_Doubled inside a Box<int> spec) and registers the closed
@@ -138,6 +138,15 @@ public partial class InvocationHandler
                 var sgv = EmitCallToMethod(ResolveStructMember(sPropGetter), new List<CLeaf>());
                 return op.Property.Type is INamedTypeSymbol sgAgg && TypeClassifier.IsAggregateValue(sgAgg)
                     ? AggregateAbi.DeepClone(_builder, sgv, sgAgg, _ctx.Aggregates.GetLayout) : sgv;
+            }
+            if (op.Property.GetMethod?.DeclaringSyntaxReferences.Length > 0
+                && !USugarCompilerHelper.IsFrameworkNamespace(op.Property.ContainingNamespace)
+                && !IsUserComputedStaticProperty(op.Property))
+            {
+                var owner = ResolveType(op.Property.ContainingType) as INamedTypeSymbol
+                            ?? op.Property.ContainingType;
+                return LoadField(StaticOwnerAbi.PropertyName(op.Property, owner),
+                    GetStorageType(op.Property.Type));
             }
 
             // Constant folding: static properties on foldable struct types (e.g., Vector3.zero)
