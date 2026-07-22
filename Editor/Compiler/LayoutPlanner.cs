@@ -93,6 +93,7 @@ public class TypeLayout
 public class LayoutPlanner
 {
     readonly Compilation _compilation;
+    public CompilationTypeCensus Census { get; }
     readonly Dictionary<INamedTypeSymbol, TypeLayout> _cache = new(SymbolEqualityComparer.Default);
     bool _frozen;
 
@@ -389,6 +390,7 @@ public class LayoutPlanner
     public LayoutPlanner(Compilation compilation)
     {
         _compilation = compilation;
+        Census = CompilationTypeCensus.For(compilation);
     }
 
     public UdonTypeFactRegistry TypeFacts { get; } = new UdonTypeFactRegistry();

@@ -24,88 +24,9 @@ public sealed class ResolvedEdgeResolver
 
     internal IEnumerable<INamedTypeSymbol> EnumeratePortableClassTypes()
     {
-        var seen = new HashSet<INamedTypeSymbol>(SymbolEqualityComparer.Default);
-        var behaviourTypes = new List<INamedTypeSymbol>();
-        var candidates = new List<INamedTypeSymbol>();
-        foreach (var tree in _emitter.Compilation.SyntaxTrees)
-        {
-            var model = _emitter.Compilation.GetSemanticModel(tree);
-            foreach (var declaration in tree.GetRoot().DescendantNodes().OfType<TypeDeclarationSyntax>())
-            {
-                if (model.GetDeclaredSymbol(declaration) is not INamedTypeSymbol type) continue;
-                if (ExternResolver.IsUdonSharpBehaviour(type)) behaviourTypes.Add(type);
-                if (!type.IsAbstract && !ClassTypeObjectContext.ContainsTypeParameter(type)
-                    && TypeClassifier.IsUserClass(type))
-                    candidates.Add(type);
-            }
-        }
-
-        var roots = new HashSet<INamedTypeSymbol>(SymbolEqualityComparer.Default);
-        var interfaceRoots = new HashSet<INamedTypeSymbol>(SymbolEqualityComparer.Default);
-        foreach (var surface in behaviourTypes.SelectMany(PortableSurfaceTypes)
-                     .SelectMany(ExpandPortableTypes).OfType<INamedTypeSymbol>())
-        {
-            if (ClassTypeObjectContext.ContainsTypeParameter(surface)) continue;
-            if (TypeClassifier.IsUserClass(surface)) roots.Add(surface);
-            else if (surface.TypeKind == TypeKind.Interface
-                     && _emitter.Planner.InterfaceIsLocalUserClassOnly(surface))
-                interfaceRoots.Add(surface);
-        }
-        foreach (var root in roots)
-            if (!root.IsAbstract && seen.Add(root)) yield return root;
-        foreach (var candidate in candidates)
-            if ((roots.Any(root => VirtualDispatch.IsAssignable(candidate, root))
-                 || interfaceRoots.Any(iface => candidate.AllInterfaces.Any(i =>
-                     SymbolEqualityComparer.Default.Equals(i, iface))))
-                && seen.Add(candidate))
+        foreach (var candidate in _emitter.Planner.Census.PortableClassCandidates)
+            if (candidate.AllInterfaces.All(i => !_emitter.Planner.InterfaceHasMixedRuntimeRepresentations(i)))
                 yield return candidate;
-
-    }
-
-    static IEnumerable<ITypeSymbol> PortableSurfaceTypes(INamedTypeSymbol behaviour)
-    {
-        for (var owner = behaviour; owner != null && owner.DeclaringSyntaxReferences.Length > 0;
-             owner = owner.BaseType)
-        {
-            foreach (var field in owner.GetMembers().OfType<IFieldSymbol>())
-                if (!field.IsStatic && (field.DeclaredAccessibility == Accessibility.Public
-                    || field.GetAttributes().Any(a => a.AttributeClass?.Name is
-                        "SerializeField" or "SerializeFieldAttribute")))
-                    yield return field.Type;
-            foreach (var property in owner.GetMembers().OfType<IPropertySymbol>())
-                if (!property.IsStatic && property.DeclaredAccessibility == Accessibility.Public)
-                    yield return property.Type;
-            foreach (var method in owner.GetMembers().OfType<IMethodSymbol>())
-                if (!method.IsStatic && method.DeclaredAccessibility == Accessibility.Public)
-                {
-                    if (!method.ReturnsVoid) yield return method.ReturnType;
-                    foreach (var parameter in method.Parameters) yield return parameter.Type;
-                }
-        }
-    }
-
-    static IEnumerable<ITypeSymbol> ExpandPortableTypes(ITypeSymbol root)
-    {
-        var seen = new HashSet<ITypeSymbol>(SymbolEqualityComparer.Default);
-        var pending = new Stack<ITypeSymbol>();
-        pending.Push(root);
-        while (pending.Count > 0)
-        {
-            var type = pending.Pop();
-            if (type == null || ClassTypeObjectContext.ContainsTypeParameter(type) || !seen.Add(type))
-                continue;
-            yield return type;
-            if (type is IArrayTypeSymbol array)
-            {
-                pending.Push(array.ElementType);
-                continue;
-            }
-            if (type is not INamedTypeSymbol named) continue;
-            foreach (var argument in named.TypeArguments) pending.Push(argument);
-            if (!TypeClassifier.IsUserClass(named)) continue;
-            foreach (var field in named.GetMembers().OfType<IFieldSymbol>())
-                if (!field.IsStatic) pending.Push(field.Type);
-        }
     }
 
     internal IEnumerable<IMethodSymbol> ResolvePortableDispatchMethods(
