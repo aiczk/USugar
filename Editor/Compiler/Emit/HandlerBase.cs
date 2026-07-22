@@ -1982,34 +1982,32 @@ public abstract partial class HandlerBase
             return (recvBridgeName, FuncRef(recvBridgeName), null, recvLeaf);
         }
 
-        // Wave-12 r4 [W3]: a method group bound to an INTERFACE member (`cb = iface.Get`) previously
-        // ICEd in GetDelegateBridgeLayout ('No delegate bridge'). It cannot compile correctly today:
-        // DelegateAbi.Method is SendCustomEvent'd on the RUNTIME receiver, so it must name a __dlgc_-convention
-        // bridge export derivable from the interface member alone, and implementers only export
-        // bridges named by their own implementing methods — a canonical per-interface-member bridge
-        // family in every implementer is a feature-scale ABI addition, not a fix (§8-3: loud over
-        // silent/ICE; same rationale as the variable-receiver generic method-group reject below).
-        // The lambda wrapping IS supported (VM-proven Match): it captures the receiver and dispatches
-        // through the interface-call convention.
+        // A local user-class interface carries its object[] receiver in DelegateAbi.Env and dispatches
+        // through the local closed-world receiver bridge.
         if (targetMethod.ContainingType is INamedTypeSymbol { TypeKind: TypeKind.Interface } localIface
             && _planner.InterfaceIsLocalUserClassOnly(localIface))
         {
             if (targetInstance == null)
                 throw new System.NotSupportedException(
                     $"Interface method group '{localIface.Name}.{targetMethod.Name}' has no receiver.");
+            var interfaceLayout = _planner.GetLayout(localIface).Methods[targetMethod];
             var localBridge = DelegateAbi.BridgeName(
-                "iface_" + SanitizeId(localIface.ToDisplayString()) + "_" + SanitizeId(targetMethod.Name));
+                LayoutPlanner.InterfaceDispatchName(targetMethod, interfaceLayout));
             _ctx.Synthetics.ReceiverBridges.Add((targetMethod, localBridge));
             return (localBridge, FuncRef(localBridge), null, targetInstance);
         }
 
-        if (targetMethod.ContainingType?.TypeKind == TypeKind.Interface)
-            throw new System.NotSupportedException(
-                $"A delegate cannot be created from interface member "
-                + $"'{targetMethod.ContainingType.Name}.{targetMethod.Name}': the receiver's concrete "
-                + "program is not known at compile time, so no bridge entry point exists for the "
-                + "delegate dispatch. Wrap the call in a lambda instead ('() => receiver."
-                + $"{targetMethod.Name}(...)'), or bind the implementing class's method directly.");
+        if (targetMethod.ContainingType is INamedTypeSymbol { TypeKind: TypeKind.Interface } iface)
+        {
+            if (targetInstance == null)
+                throw new System.NotSupportedException(
+                    $"Interface method group '{iface.Name}.{targetMethod.Name}' has no receiver.");
+            var interfaceLayout = _planner.GetLayout(iface).Methods[targetMethod];
+            var bridgeName = DelegateAbi.BridgeName(
+                LayoutPlanner.InterfaceDispatchName(targetMethod, interfaceLayout));
+            return (bridgeName, Const(0u, StorageTypes.UInt32), targetInstance,
+                Const(null, StorageTypes.Object));
+        }
 
         // Stage 2 §3.7: DelegateAbi.Env for a capturing closure target (null for named methods / base.M
         // / capture-free lambdas). Resolved here in the creation site's frame.

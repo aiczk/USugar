@@ -174,11 +174,9 @@ public class W12R4ObjArr : UdonSharpBehaviour {
     // ── [W3] interface method group off a variable receiver: clean loud reject, not an ICE ──
 
     [Fact]
-    public void InterfaceMethodGroup_VariableReceiver_RejectsLoudly()
+    public void InterfaceMethodGroup_VariableReceiver_UsesCanonicalBridge()
     {
-        // Pre-fix this threw a raw InvalidOperationException ('No delegate bridge for 'Get' on
-        // 'W12R4IProv'') from the planner — this pin fails on the exception TYPE until the fix.
-        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
+        var uasm = TestHelper.CompileToUasm(@"
 using System;
 using UdonSharp;
 public interface W12R4IProv { int Get(); }
@@ -192,9 +190,9 @@ public class W12R4IfaceMg : UdonSharpBehaviour, W12R4IProv {
         cb = iface.Get;
         result = cb();
     }
-}", "W12R4IfaceMg"));
-        Assert.Contains("interface member 'W12R4IProv.Get'", ex.Message);
-        Assert.Contains("lambda", ex.Message);
+}", "W12R4IfaceMg");
+        Assert.Contains(".export __dlg___iface_W12R4IProv_Get", uasm);
+        Assert.Contains("__SendCustomEvent__SystemString__SystemVoid", uasm);
     }
 
     // ── [W3] controls: class-receiver method groups and the lambda wrapping stay legal ──

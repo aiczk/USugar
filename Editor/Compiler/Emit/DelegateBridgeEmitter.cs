@@ -30,6 +30,18 @@ public sealed class DelegateBridgeEmitter
             if (!_context.Methods.Functions.TryGetValue(method, out var target)) continue;
             EmitBody(bridge.BridgeExportName, method, null, target, method);
         }
+
+        foreach (var (interfaceMethod, interfaceLayout, implementationMethod, _)
+            in _context.Planner.ComputeBridges(_context.ClassSymbol))
+        {
+            if (interfaceMethod.MethodKind != MethodKind.Ordinary
+                || implementationMethod == null
+                || !_context.Methods.Functions.TryGetValue(implementationMethod, out var target))
+                continue;
+            var bridgeName = DelegateAbi.BridgeName(
+                LayoutPlanner.InterfaceDispatchName(interfaceMethod, interfaceLayout));
+            EmitBody(bridgeName, interfaceMethod, null, target, implementationMethod);
+        }
     }
 
     void EmitPlainBridges()
