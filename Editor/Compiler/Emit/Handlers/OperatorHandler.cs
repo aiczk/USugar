@@ -52,9 +52,6 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
             return EmitCallToMethod(ResolveStructMember(binOpM), new List<CLeaf> { lhs, rhs });
         }
 
-        // CA-M1: a v1 class defines NO user operators (design §2 "ユーザー演算子なし") — reject a user-defined
-        // binary operator loudly BEFORE the reference-equality arm below would silently ignore a user `==`.
-        ClassAbi.RejectUserOperator(op.OperatorMethod);
 
         // ── User class (v1) reference equality: c1 == c2 / c == null → reference compare on the object[]
         // bundle (the bundle reference IS the identity; an unoverridden Equals/== is reference equality). ──
@@ -346,7 +343,6 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
             var operand = VisitExpression(op.Operand);
             return EmitCallToMethod(ResolveStructMember(unOpM), new List<CLeaf> { operand });
         }
-        ClassAbi.RejectUserOperator(op.OperatorMethod);
 
         // Bitwise NOT (~): Udon VM has no unary complement extern → synthesize as XOR with all-bits-set
         if (op.OperatorKind == UnaryOperatorKind.BitwiseNegation)

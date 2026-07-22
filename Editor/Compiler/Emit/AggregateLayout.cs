@@ -508,17 +508,6 @@ public static class ClassAbi
                 + "is a supported direct call), or format the fields/elements directly.");
     }
 
-    /// <summary>Reject user-defined operators and conversions on v1 user classes.</summary>
-    public static void RejectUserOperator(IMethodSymbol method)
-    {
-        if (method is { MethodKind: MethodKind.UserDefinedOperator or MethodKind.Conversion }
-            && method.ContainingType is INamedTypeSymbol classTy && TypeClassifier.IsUserClass(classTy))
-            throw new NotSupportedException(
-                $"User-defined operator '{classTy.Name}.{method.Name}' on a v1 user class is not supported: "
-                + "a class has reference semantics (== / != compare object identity) and no user operator or "
-                + "conversion is emitted. Call a named method instead.");
-    }
-
     public static bool IsReferenceEquality(BinaryOperatorKind kind, ITypeSymbol leftType, ITypeSymbol rightType)
         => kind is BinaryOperatorKind.Equals or BinaryOperatorKind.NotEquals
            && (TypeClassifier.IsUserClass(leftType) || TypeClassifier.IsUserClass(rightType));

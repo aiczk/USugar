@@ -663,7 +663,6 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
             // type is SystemObjectArray-backed, so ResolveConversionExtern would build a non-existent extern).
             if (conv.OperatorMethod.ContainingType is INamedTypeSymbol convOpCt && TypeClassifier.IsObjectArrayEmulated(convOpCt))
                 return EmitCallToMethod(ResolveStructMember(conv.OperatorMethod), new List<CLeaf> { srcVal });
-            ClassAbi.RejectUserOperator(conv.OperatorMethod);
 
             var dstType = GetStorageTypeName(conv.Type);
             return ExternCall(

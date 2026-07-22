@@ -31,6 +31,8 @@ public class DailyNumber {
   public int value;
   public static DailyNumber operator +(DailyNumber a, DailyNumber b)
     => new DailyNumber { value = a.value + b.value };
+  public static DailyNumber operator -(DailyNumber n)
+    => new DailyNumber { value = -n.value };
   public static implicit operator int(DailyNumber n) => n.value;
 }
 public class DailyOperators : UdonSharpBehaviour {
@@ -38,7 +40,7 @@ public class DailyOperators : UdonSharpBehaviour {
   void Start() {
     var a = new DailyNumber { value = 2 };
     var b = new DailyNumber { value = 5 };
-    result = a + b;
+    result = (a + b) + (-a);
   }
 }
 ", "DailyOperators");
