@@ -29,7 +29,7 @@ public sealed class StorageContext
         object defaultValue = null, string syncMode = null)
     {
         if (_declaredFieldNames.Contains(name)) return name;
-        var field = new FieldDecl(name, new StorageType(type.Name)) { Flags = flags, DefaultValue = defaultValue, SyncMode = syncMode };
+        var field = new FieldDecl(name, type) { Flags = flags, DefaultValue = defaultValue, SyncMode = syncMode };
         _module.Fields.Add(field);
         _declaredFieldNames.Add(name);
         return name;
@@ -38,7 +38,7 @@ public sealed class StorageContext
     public string DeclareVar(string id, StorageType type)
     {
         if (_declaredFieldNames.Contains(id)) return id;
-        _module.Fields.Add(new FieldDecl(id, new StorageType(type.Name)));
+        _module.Fields.Add(new FieldDecl(id, type));
         _declaredFieldNames.Add(id);
         return id;
     }
@@ -46,7 +46,7 @@ public sealed class StorageContext
     public bool TryDeclareVar(string id, StorageType type)
     {
         if (_declaredFieldNames.Contains(id)) return false;
-        _module.Fields.Add(new FieldDecl(id, new StorageType(type.Name)));
+        _module.Fields.Add(new FieldDecl(id, type));
         _declaredFieldNames.Add(id);
         return true;
     }
@@ -55,7 +55,7 @@ public sealed class StorageContext
     {
         var idx = NextIndex($"lcl_{name}_{type.Name}");
         var id = $"__lcl_{name}_{type.Name}_{idx}";
-        _module.Fields.Add(new FieldDecl(id, new StorageType(type.Name)));
+        _module.Fields.Add(new FieldDecl(id, type));
         _declaredFieldNames.Add(id);
         return id;
     }
@@ -67,7 +67,7 @@ public sealed class StorageContext
             : StorageTypes.UdonBehaviour;
         var idx = NextIndex($"this_{heapType}");
         var id = $"__this_{heapType}_{idx}";
-        _module.Fields.Add(new FieldDecl(id, new StorageType(heapType.Name)) { DefaultValue = "this" });
+        _module.Fields.Add(new FieldDecl(id, heapType) { DefaultValue = "this" });
         _declaredFieldNames.Add(id);
         return id;
     }
@@ -110,7 +110,7 @@ public sealed class StorageContext
         if (_structConstIds.TryGetValue(key, out var existing)) return existing;
         var idx = NextIndex($"structconst_{type.Name}");
         var id = $"__const_{type.Name}_{idx}";
-        _module.Fields.Add(new FieldDecl(id, new StorageType(type.Name)) { DefaultValue = value });
+        _module.Fields.Add(new FieldDecl(id, type) { DefaultValue = value });
         _declaredFieldNames.Add(id);
         _structConstIds[key] = id;
         return id;
