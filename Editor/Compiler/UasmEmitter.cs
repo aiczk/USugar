@@ -742,6 +742,7 @@ public partial class UasmEmitter
         for (var type = _classSymbol; type != null; type = type.BaseType) ownHierarchy.Add(type);
         var fields = new HashSet<IFieldSymbol>(SymbolEqualityComparer.Default);
         var properties = new HashSet<IPropertySymbol>(SymbolEqualityComparer.Default);
+        var events = new HashSet<IEventSymbol>(SymbolEqualityComparer.Default);
         foreach (var tree in _compilation.SyntaxTrees)
         {
             var model = _compilation.GetSemanticModel(tree);
@@ -768,6 +769,10 @@ public partial class UasmEmitter
                     && !USugarCompilerHelper.IsFrameworkNamespace(property.ContainingNamespace)
                     && !ClassTypeObjectContext.ContainsTypeParameter(property.ContainingType))
                     properties.Add(property);
+                if (symbol is IEventSymbol { IsStatic: true } evt
+                    && !USugarCompilerHelper.IsFrameworkNamespace(evt.ContainingNamespace)
+                    && !ClassTypeObjectContext.ContainsTypeParameter(evt.ContainingType))
+                    events.Add(evt);
             }
             foreach (var declaration in tree.GetRoot().DescendantNodes().OfType<PropertyDeclarationSyntax>())
                 if (model.GetDeclaredSymbol(declaration) is IPropertySymbol property
@@ -781,6 +786,9 @@ public partial class UasmEmitter
         foreach (var property in properties.OrderBy(
                      p => StaticOwnerAbi.PropertyName(p, p.ContainingType), StringComparer.Ordinal))
             EmitStaticOwnerProperty(property);
+        foreach (var evt in events.OrderBy(
+                     e => StaticOwnerAbi.EventName(e, e.ContainingType), StringComparer.Ordinal))
+            DeclareEvent(evt);
     }
 
     static bool IsStaticAutoProperty(IPropertySymbol property)
@@ -807,11 +815,12 @@ public partial class UasmEmitter
             throw new NotSupportedException(
                 $"[UdonSynced] static field '{field.ContainingType.Name}.{field.Name}' is not supported: "
                 + "static-owner storage is local to one Udon program instance.");
-        if (field.Type is INamedTypeSymbol { DelegateInvokeMethod: not null })
-            throw new NotSupportedException(
-                $"Static delegate field '{field.ContainingType.Name}.{field.Name}' is not supported yet.");
-
         var id = StaticOwnerAbi.FieldName(field);
+        if (field.Type is INamedTypeSymbol { DelegateInvokeMethod: not null } delegateType)
+        {
+            DeclareDelegateField(field, delegateType, id);
+            return;
+        }
         var storageType = GetStorageType(field.Type);
         _ctx.Storage.DeclareGeneratedField(id, storageType);
         var syntax = field.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax();
@@ -838,8 +847,9 @@ public partial class UasmEmitter
     /// uses (GetAttributes/Name/DeclaringSyntaxReferences — the delegate TYPE is passed separately by
     /// every caller), so widening from IFieldSymbol to ISymbol is behavior-neutral for existing callers.
     /// </summary>
-    void DeclareDelegateField(ISymbol member, INamedTypeSymbol delegateType)
+    void DeclareDelegateField(ISymbol member, INamedTypeSymbol delegateType, string storageName = null)
     {
+        storageName ??= member.Name;
         // M4 [T2]: Udon sync cannot carry the object[] bundle (the on-game security filter over
         // synced vars is the unverified design §8-7 risk) — loud on BOTH declaration paths.
         if (member.GetAttributes().Any(a => a.AttributeClass?.Name == "UdonSyncedAttribute"))
@@ -859,8 +869,8 @@ public partial class UasmEmitter
         DelegateAbi.ValidateNoRefOutParams(delegateType.DelegateInvokeMethod);
         RejectProgramLocalDelegateSurface(member, delegateType);
 
-        _ctx.Storage.DeclareField(member.Name, StorageTypes.ObjectArray, FieldFlags.None);
-        _ctx.Synthetics.DelegateFields.Add(member.Name);
+        _ctx.Storage.DeclareField(storageName, StorageTypes.ObjectArray, FieldFlags.None);
+        _ctx.Synthetics.DelegateFields.Add(storageName);
 
         // Declare the signature-keyed __dlgc_ convention vars for this delegate signature (§3.2).
         var invoke = delegateType.DelegateInvokeMethod;
@@ -885,7 +895,7 @@ public partial class UasmEmitter
             var initOp = (model.GetOperation(dlgDeclarator.Initializer) as ISymbolInitializerOperation)?.Value
                          ?? model.GetOperation(dlgDeclarator.Initializer.Value);
             if (initOp != null)
-                _fieldInitOps.Add((member.Name, initOp, delegateType)); // delegateType == member.Type (caller-supplied)
+                _fieldInitOps.Add((storageName, initOp, delegateType)); // delegateType == member.Type (caller-supplied)
         }
     }
 
@@ -899,10 +909,6 @@ public partial class UasmEmitter
     /// </summary>
     void DeclareEvent(IEventSymbol evt)
     {
-        if (evt.IsStatic)
-            throw new NotSupportedException(
-                $"Static event '{evt.Name}' is not supported: the Udon VM has no shared static storage "
-                + "(same reason static mutable fields are unsupported). Use an instance event.");
         // Field-like events get compiler-synthesized (IsImplicitlyDeclared) add/remove accessors; a
         // custom accessor body means the user wrote add{...}/remove{...} explicitly.
         if (evt.AddMethod == null || !evt.AddMethod.IsImplicitlyDeclared
@@ -910,7 +916,10 @@ public partial class UasmEmitter
             return;
         if (evt.Type is not INamedTypeSymbol delegateType || delegateType.DelegateInvokeMethod == null)
             throw new NotSupportedException($"Event '{evt.Name}' has a non-delegate type.");
-        DeclareDelegateField(evt, delegateType);
+        var storageName = evt.IsStatic
+            ? StaticOwnerAbi.EventName(evt, evt.ContainingType)
+            : evt.Name;
+        DeclareDelegateField(evt, delegateType, storageName);
     }
 
     /// <summary>True when <paramref name="ancestor"/> is reachable from <paramref name="leaf"/> via

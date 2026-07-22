@@ -265,6 +265,10 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
     /// </summary>
     CLeaf VisitEventReference(IEventReferenceOperation eventRef)
     {
+        if (eventRef.Event.IsStatic)
+            return LoadField(StaticOwnerAbi.EventName(eventRef.Event,
+                ResolveType(eventRef.Event.ContainingType) as INamedTypeSymbol
+                ?? eventRef.Event.ContainingType), new StorageType(DelegateAbi.BundleType));
         if (eventRef.Instance is not IInstanceReferenceOperation)
             throw new NotSupportedException(
                 $"Cannot reference event '{eventRef.Event.Name}' through a non-this receiver; only "

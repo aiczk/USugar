@@ -20,6 +20,10 @@ public static class StaticOwnerAbi
         => "__static_" + Sanitize(ClassTypeObjectContext.SpecKey(owner))
            + "_prop_" + Sanitize(property.MetadataName);
 
+    public static string EventName(IEventSymbol evt, INamedTypeSymbol owner)
+        => "__static_" + Sanitize(ClassTypeObjectContext.SpecKey(owner))
+           + "_event_" + Sanitize(evt.MetadataName);
+
     static string Sanitize(string value)
     {
         var b = new StringBuilder(value.Length);

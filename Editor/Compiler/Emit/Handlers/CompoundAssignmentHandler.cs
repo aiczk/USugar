@@ -171,6 +171,10 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
         if (op.EventReference is not IEventReferenceOperation evtRef)
             throw new System.NotSupportedException("Unsupported event assignment target.");
         var evt = evtRef.Event;
+        var storageName = evt.IsStatic
+            ? StaticOwnerAbi.EventName(evt,
+                ResolveType(evt.ContainingType) as INamedTypeSymbol ?? evt.ContainingType)
+            : evt.Name;
 
         if (evt.ContainingType is INamedTypeSymbol { TypeKind: TypeKind.Interface } localInterface
             && _planner.InterfaceIsLocalUserClassOnly(localInterface))
@@ -235,7 +239,7 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
         }
 
         // §2.2 R2: cross-behaviour subscribe. A this-receiver is the ONLY supported shape.
-        if (evtRef.Instance is not IInstanceReferenceOperation)
+        if (!evt.IsStatic && evtRef.Instance is not IInstanceReferenceOperation)
             throw new System.NotSupportedException(
                 "cross-behaviour event subscription is not supported; combine into a delegate field the "
                 + "target exposes, or subscribe from within the declaring behaviour.");
@@ -243,7 +247,7 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
         var delegateType = (INamedTypeSymbol)evt.Type;
         var invoke = delegateType.DelegateInvokeMethod;
         DelegateAbi.ValidateNoRefOutParams(invoke);
-        var currentVal = LoadField(evt.Name, new StorageType(DelegateAbi.BundleType));
+        var currentVal = LoadField(storageName, new StorageType(DelegateAbi.BundleType));
         var handler = VisitEmittedValue(op.HandlerValue);
         if (op.Adds)
             RejectUnsafeCrossProgramEventHandler(evt, handler.Info);
@@ -257,7 +261,7 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
             : DelegateAbi.MulticastRemoveName(sigPart);
 
         var resultVal = _builder.InternalCall(helperName, new List<CLeaf> { currentVal, handlerVal }, new StorageType(DelegateAbi.BundleType));
-        EmitStoreField(evt.Name, resultVal);
+        EmitStoreField(storageName, resultVal);
         return null; // event add/remove is a void-shaped statement expression
     }
 

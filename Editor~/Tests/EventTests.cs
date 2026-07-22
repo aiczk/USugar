@@ -128,15 +128,18 @@ public class EvtNetCallable : UdonSharpBehaviour {
     // ── static event: no shared-static storage on Udon ──
 
     [Fact]
-    public void StaticEvent_Throws()
+    public void StaticEvent_UsesOwnerScopedStorage()
     {
-        var ex = Assert.ThrowsAny<Exception>(() => TestHelper.CompileToUasm(@"
+        var uasm = TestHelper.CompileToUasm(@"
 using UdonSharp;
 using System;
 public class EvtStatic : UdonSharpBehaviour {
     public static event Action Foo;
-}", "EvtStatic"));
-        Assert.Contains("Static event", ex.Message);
+    public int Result;
+    void Mark() { Result++; }
+    void Start() { Foo += Mark; Foo(); Foo -= Mark; }
+}", "EvtStatic");
+        Assert.Contains("_event_Foo", uasm);
     }
 
     // ── tuple-return delegate event (Stage 1.75 design 2026-07-04 §1): SUPPORTED ──

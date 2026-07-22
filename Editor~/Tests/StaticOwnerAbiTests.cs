@@ -145,4 +145,24 @@ public class StaticAutoHost : UdonSharpBehaviour {
 
         Assert.Contains("_prop_Value", uasm);
     }
+
+    [Fact]
+    public void StaticDelegateField_UsesOwnerScopedStorage()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public static class StaticCallbacks {
+    public static Action Callback;
+}
+public class StaticDelegateHost : UdonSharpBehaviour {
+    public int Result;
+    void Mark() { Result++; }
+    void Start() { StaticCallbacks.Callback = Mark; StaticCallbacks.Callback(); }
+}
+", "StaticDelegateHost");
+
+        Assert.Contains("__static_", uasm);
+        Assert.Contains("_Callback", uasm);
+    }
 }
