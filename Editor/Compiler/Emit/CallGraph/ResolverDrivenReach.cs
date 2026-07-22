@@ -9,7 +9,7 @@ using Microsoft.CodeAnalysis;
 /// <see cref="ResolvedEdgeResolver"/> and buckets the yielded reach targets by role, running one
 /// queue+visited fixpoint keyed by OriginalDefinition plus the SS2A supplementary generic-foreign-static
 /// fixpoint (<see cref="ReachableBodies.GenericForeignStaticBodies"/>) and the open-base-generic roots
-/// (<see cref="ReachableBodies.OpenGenericBaseDefs"/>).</summary>
+/// (<see cref="ReachableBodies.OpenGenericBaseRoots"/>).</summary>
 internal sealed class ResolverDrivenReach
 {
     readonly ResolvedEdgeResolver _resolver;
@@ -40,7 +40,6 @@ internal sealed class ResolverDrivenReach
         var structMembers = new HashSet<IMethodSymbol>(cmp);
         var baseCopies = new HashSet<IMethodSymbol>(cmp);
         var suppCaptureDefs = new HashSet<IMethodSymbol>(cmp);      // SS2A: dropped generic foreign statics
-        // result.OpenGenericBaseDefs holds the open-base-generic main-fixpoint roots (exposed for the swap).
         var visited = new HashSet<IMethodSymbol>(cmp);
         var queue = new Queue<IMethodSymbol>();
         var portableClasses = _resolver.EnumeratePortableClassTypes().ToArray();
@@ -70,7 +69,7 @@ internal sealed class ResolverDrivenReach
                 foreach (var mc in _resolver.ResolveMintedTypes(op)) result.MintedClasses.Add(mc);
                 foreach (var method in _resolver.ResolvePortableDispatchMethods(op, portableClasses))
                     if (_isCollectibleStructMember(method)) structMembers.Add(method);
-                foreach (var d in _resolver.ResolveOpenBaseGenericDefs(op)) result.OpenGenericBaseDefs.Add(d);
+                foreach (var d in _resolver.ResolveOpenBaseGenericRoots(op)) result.OpenGenericBaseRoots.Add(d);
                 foreach (var d in _resolver.ResolveForeignStaticSuppDefs(op)) suppCaptureDefs.Add(d);
             }
         }
@@ -86,7 +85,7 @@ internal sealed class ResolverDrivenReach
             foreach (var m in foreignStatics) TryEnqueue(m);
             foreach (var m in structMembers) TryEnqueue(m);
             foreach (var m in baseCopies) TryEnqueue(m);
-            foreach (var m in result.OpenGenericBaseDefs) TryEnqueue(m);
+            foreach (var m in result.OpenGenericBaseRoots) TryEnqueue(m);
             foreach (var m in result.StructMemberDefs) TryEnqueue(m);
         }
 

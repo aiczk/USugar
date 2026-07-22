@@ -195,7 +195,7 @@ public sealed class ResolvedEdgeResolver
     /// <summary>CA rewrite (M5a): open-constructed generic base-instance targets — the `_openGenericBaseDefs`
     /// leg of CollectBaseInstanceCallsInOperation (an open generic base call, or a generic base method group
     /// through `this`). Registration-free but a MAIN-fixpoint recursion/reach root. Yields OriginalDefinitions.</summary>
-    public IEnumerable<IMethodSymbol> ResolveOpenBaseGenericDefs(IOperation op)
+    public IEnumerable<IMethodSymbol> ResolveOpenBaseGenericRoots(IOperation op)
     {
         if (op is IInvocationOperation inv && UasmEmitter.IsBaseInstanceMethod(inv.TargetMethod, _emitter.ClassSymbol)
             && inv.TargetMethod.IsGenericMethod

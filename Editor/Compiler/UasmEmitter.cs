@@ -212,7 +212,7 @@ public partial class UasmEmitter
     // worklist instead of the legacy 5-collector BuildReachableBodies. Byte-neutral — M4's stable ordinal
     // decouples emit order from the worklist's (different) discovery order, and the worklist reproduces every
     // ReachableBodies facet (proven by golden + DiffFuzz). The open-base-generic defs ride the reach result
-    // (ReachableBodies.OpenGenericBaseDefs) and reach the recursion graph through BodyByDef, so the former
+    // (ReachableBodies.OpenGenericBaseRoots) and reach the recursion graph through BodyByDef, so the former
     // legacy _openGenericBaseDefs side-effect field is gone — the recursion node source is the reach result.
     ReachableBodies BuildReachableBodiesViaResolver(IMethodSymbol[] methods)
         => new ResolverDrivenReach(EdgeResolver, GetMethodBodyOperation,
