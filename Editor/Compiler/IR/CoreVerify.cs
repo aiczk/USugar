@@ -9,22 +9,22 @@ public static class CoreVerify
 {
     public static void Verify(CModule module)
     {
-        var fields = new Dictionary<string, string>(StringComparer.Ordinal);
+        var fields = new Dictionary<string, StorageType>(StringComparer.Ordinal);
         foreach (var field in module.Fields)
             if (!fields.TryAdd(field.Name, field.Type))
                 throw new VerificationException($"Duplicate field declaration '{field.Name}'");
         foreach (var function in module.Functions)
             foreach (var returnSlot in function.ReturnSlots)
-                if (!fields.TryAdd(returnSlot.Id, returnSlot.UdonType)
-                    && fields[returnSlot.Id] != returnSlot.UdonType)
+                if (!fields.TryAdd(returnSlot.Id, returnSlot.StorageType)
+                    && fields[returnSlot.Id] != returnSlot.StorageType)
                     throw new VerificationException(
-                        $"Return field '{returnSlot.Id}' has conflicting types '{fields[returnSlot.Id]}' and '{returnSlot.UdonType}'");
+                        $"Return field '{returnSlot.Id}' has conflicting types '{fields[returnSlot.Id]}' and '{returnSlot.StorageType}'");
         foreach (var func in module.Functions)
             VerifyFunction(func, module.TypeFacts, fields);
     }
 
     public static void VerifyFunction(CFunction func, UdonTypeFactRegistry typeFacts = null,
-        IReadOnlyDictionary<string, string> fields = null)
+        IReadOnlyDictionary<string, StorageType> fields = null)
     {
         if (func.Shape != Shape.Structured)
             throw new VerificationException(
@@ -32,7 +32,7 @@ public static class CoreVerify
                 "(func.Body is stale after CoreFlatten — verify before flattening, or use FlatVerify after)");
 
         var ctx = new VerifyContext(func, typeFacts ?? new UdonTypeFactRegistry(),
-            fields ?? new Dictionary<string, string>());
+            fields ?? new Dictionary<string, StorageType>());
         VerifyBlock(func.Body, ctx);
         VerifyGotoLabels(func);
     }
@@ -41,12 +41,12 @@ public static class CoreVerify
     {
         public readonly CFunction Func;
         public readonly UdonTypeFactRegistry TypeFacts;
-        public readonly IReadOnlyDictionary<string, string> Fields;
+        public readonly IReadOnlyDictionary<string, StorageType> Fields;
         public readonly HashSet<int> DeclaredSlots = new();
         public int LoopDepth;
 
         public VerifyContext(CFunction func, UdonTypeFactRegistry typeFacts,
-            IReadOnlyDictionary<string, string> fields)
+            IReadOnlyDictionary<string, StorageType> fields)
         {
             Func = func;
             TypeFacts = typeFacts;
@@ -67,15 +67,15 @@ public static class CoreVerify
         // Nullable erasure / fact-enum↔Int32 / both-fact-reference COPY) — anything else, including a
         // name with no minted fact, throws with the reason. The relaxations are position-independent VM
         // representation truths, so the former CAssign-only enum arm now applies to every check site.
-        public void AssertType(string expected, string actual, string context)
+        public void AssertType(StorageType expected, StorageType actual, string context)
         {
-            var why = DeclaredRelaxations.WhyIncompatible(expected, actual, TypeFacts);
+            var why = DeclaredRelaxations.WhyIncompatible(expected.Name, actual.Name, TypeFacts);
             if (why == null) return;
             throw new VerificationException(
                 $"Type mismatch in {context}: expected '{expected}', got '{actual}' — {why} (function '{Func.Name}')");
         }
 
-        public void AssertField(string fieldName, string actualType, string context)
+        public void AssertField(string fieldName, StorageType actualType, string context)
         {
             if (!Fields.TryGetValue(fieldName, out var declaredType))
                 throw new VerificationException(

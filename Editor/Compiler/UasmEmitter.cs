@@ -1009,10 +1009,10 @@ public class UasmEmitter
             if (ml.Returns.Count > 0)
             {
                 foreach (var ret in ml.Returns)
-                    _ctx.Storage.DeclareVar(ret.Id, ret.UdonType);
+                    _ctx.Storage.DeclareVar(ret.Id, ret.StorageType);
 
                 if (ml.Returns.Count == 1)
-                    func.ReturnType = ml.Returns[0].UdonType;
+                    func.ReturnType = ml.Returns[0].StorageType;
                 else
                     func.ReturnType = "SystemVoid"; // tuple: no single return value
 

@@ -299,7 +299,7 @@ public static class CoreToUasm
 
             // Declare return field variable(s) if needed (may not be in module Fields)
             foreach (var ret in func.ReturnSlots)
-                DeclareVar(ret.Id, ret.UdonType, null, FieldFlags.None);
+                DeclareVar(ret.Id, ret.StorageType, null, FieldFlags.None);
         }
 
         // ── Block linearization (RPO) ──

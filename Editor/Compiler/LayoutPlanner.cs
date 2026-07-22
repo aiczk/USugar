@@ -7,8 +7,8 @@ using Microsoft.CodeAnalysis;
 public sealed class ReturnSlot
 {
     public readonly string Id;
-    public readonly string UdonType;
-    public ReturnSlot(string id, string udonType) { Id = id; UdonType = udonType; }
+    public readonly StorageType StorageType;
+    public ReturnSlot(string id, StorageType storageType) { Id = id; StorageType = storageType; }
 }
 
 /// <summary>Immutable layout for a single method's UASM naming.</summary>
@@ -629,7 +629,7 @@ public class LayoutPlanner
                         foreach (var rs in baseMl.Returns)
                         {
                             var rk = NameAllocator.RetKey(ue);
-                            newReturns.Add(new ReturnSlot(NameAllocator.FormatId(rk, alloc.Allocate(rk)), rs.UdonType));
+                            newReturns.Add(new ReturnSlot(NameAllocator.FormatId(rk, alloc.Allocate(rk)), rs.StorageType));
                         }
                         ml = new MethodLayout(ue, NameAllocator.BodyLabel(ue), baseMl.ParamIds, newReturns);
                     }
