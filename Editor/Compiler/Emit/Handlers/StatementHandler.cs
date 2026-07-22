@@ -255,7 +255,7 @@ public class StatementHandler : HandlerBase, IOperationHandler
             EmitStoreField(tcoEnvp, LoadField(tcoEnvp, new StorageType(EnvEmit.EnvType)));
 
         // Jump back to method entry via goto label
-        var func = _ctx.Methods.CurrentClosureSpec?.Func ?? _methodFunctions[_currentMethod];
+        var func = _ctx.Methods.CurrentClosureSpec?.Function ?? _methodFunctions[_currentMethod];
         _builder.EmitGoto($"__tco_{func.Name}");
     }
 

@@ -532,7 +532,7 @@ public abstract partial class HandlerBase
         // SS2B: a closure's own parameter lives in its per-spec record, not the definition-keyed map.
         if (_ctx.Methods.CurrentClosureSpec is { } pcs
             && param.ContainingSymbol is IMethodSymbol pcm
-            && SymbolEqualityComparer.Default.Equals(pcm.OriginalDefinition, pcs.Def.OriginalDefinition)
+            && SymbolEqualityComparer.Default.Equals(pcm.OriginalDefinition, pcs.Definition.OriginalDefinition)
             && param.Ordinal < pcs.ParamVarIds.Length)
             return pcs.ParamVarIds[param.Ordinal];
         if (param.ContainingSymbol is IMethodSymbol method
@@ -1529,18 +1529,8 @@ public abstract partial class HandlerBase
             retSlots = new[] { new ReturnSlot(retId, new StorageType(retType)) };
         }
 
-        var record = new MethodContext.ClosureSpec
-        {
-            Def = localFunc,
-            KeyArgs = keyArgs,
-            OwnerSpecs = identity.OwnerSpecs,
-            Func = func,
-            Slot = slot,
-            ParamVarIds = lfParamIds,
-            ReturnSlots = retSlots,
-            EnvpFieldId = envpFieldId,
-        };
-        _ctx.Methods.AddClosureSpec(record);
+        var record = _ctx.Methods.AddClosureCallable(localFunc, keyArgs, identity.OwnerSpecs,
+            func, slot, lfParamIds, retSlots, envpFieldId);
         _pendingClosures.Add(record);
     }
 
@@ -1839,20 +1829,11 @@ public abstract partial class HandlerBase
 
         if (closureKind)
         {
-            var record = new MethodContext.ClosureSpec
-            {
-                Def = constructed,
-                KeyArgs = closureKeyArgs,
-                // The spec itself joins its owner chain so a NESTED closure inherits the LF's own
-                // T binding through the record channel (F7 - consistent supply at any depth).
-                OwnerSpecs = closureIdentity.OwnerSpecs.Add(constructed),
-                Func = func,
-                Slot = slot,
-                ParamVarIds = gsParamIds,
-                ReturnSlots = specRetSlots,
-                EnvpFieldId = specEnvpFieldId,
-            };
-            _ctx.Methods.AddClosureSpec(record);
+            // The spec itself joins its owner chain so a nested closure inherits the local
+            // function's own type binding through the record channel.
+            var record = _ctx.Methods.AddClosureCallable(constructed, closureKeyArgs,
+                closureIdentity.OwnerSpecs.Add(constructed), func, slot, gsParamIds,
+                specRetSlots, specEnvpFieldId);
             _pendingGenericSpecs.Add((constructed, record));
         }
         else
@@ -2068,7 +2049,7 @@ public abstract partial class HandlerBase
                 throw new System.InvalidOperationException($"Lambda/local function '{targetMethod.Name}' not registered.");
             bridgeExportName = DelegateAbi.BridgeName(targetSlot.VarPrefix);
             if (bridgeClosure != null)
-                _ctx.Synthetics.ClosureBridgeFuncs[bridgeExportName] = bridgeClosure.Func;
+                _ctx.Synthetics.ClosureBridgeFuncs[bridgeExportName] = bridgeClosure.Function;
             // Carry the current type-param map by reference — it is immutable and per-EmitMethod fresh, so
             // it stays valid for the drain (which runs after generic-method emit clears the ambient map).
             _ctx.Synthetics.DelegateBridges.Add((targetMethod, bridgeExportName, _ctx.Generics.TypeParamMap));
@@ -2769,7 +2750,7 @@ public abstract partial class HandlerBase
         // SS2B: non-generic hoisted closures resolve per-spec (ambient args) with throw-on-miss —
         // a bare-symbol fallback here would silently call another spec's copy.
         if (target.MethodKind is MethodKind.LambdaMethod or MethodKind.LocalFunction)
-            func = _ctx.Methods.GetClosureSpec(target, _ctx.ComposeClosureKeyArgs(target)).Func;
+            func = _ctx.Methods.GetClosureSpec(target, _ctx.ComposeClosureKeyArgs(target)).Function;
         else if (!_methodFunctions.TryGetValue(target, out func))
             throw new InvalidOperationException($"No CFunction registered for method '{target.Name}'");
         var retType = func.ReturnType ?? StorageTypes.Void;

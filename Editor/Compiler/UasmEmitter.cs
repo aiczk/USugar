@@ -1300,7 +1300,7 @@ public partial class UasmEmitter
                 var batch = _pendingClosures.ToList();
                 _pendingClosures.Clear();
                 foreach (var closureSpec in batch)
-                    EmitMethod(closureSpec.Def, closureSpec);
+                    EmitMethod(closureSpec.Definition, closureSpec);
             }
             if (_pendingGenericSpecs.Count > 0)
             {
@@ -1343,7 +1343,7 @@ public partial class UasmEmitter
 
     void EmitMethod(IMethodSymbol method, MethodContext.ClosureSpec closureSpec = null)
     {
-        var func = closureSpec?.Func ?? _methodFunctions[method];
+        var func = closureSpec?.Function ?? _methodFunctions[method];
 
         // Struct instance methods/ctors carry the receiver object[] as synthetic param0; make `this`
         // resolve to it for the body. Static (operator) struct methods have no receiver. B44: a hoisted

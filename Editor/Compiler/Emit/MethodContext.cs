@@ -11,7 +11,7 @@ public sealed class MethodContext
 {
     public enum ReceiverAbi { None, ObjectArray }
 
-    public sealed class RegisteredCallable
+    public class RegisteredCallable
     {
         public IMethodSymbol Definition;
         public CFunction Function;
@@ -86,15 +86,10 @@ public sealed class MethodContext
     /// ids, its hidden __envp field id (null for capture-free), the enclosing constructed specs it
     /// was registered under (drives the type-param compose at its own emission — replacing the
     /// fallback lookup), and the composite key args.</summary>
-    public sealed class ClosureSpec
+    public sealed class ClosureSpec : RegisteredCallable
     {
-        public IMethodSymbol Def;
         public ImmutableArray<ITypeSymbol> KeyArgs;
         public ImmutableArray<IMethodSymbol> OwnerSpecs;
-        public CFunction Func;
-        public EmitContext.MethodSlot Slot;
-        public string[] ParamVarIds;
-        public ReturnSlot[] ReturnSlots;
         public string EnvpFieldId;
     }
 
@@ -207,8 +202,29 @@ public sealed class MethodContext
                 + $"args [{string.Join(", ", keyArgs.Select(a => a?.ToDisplayString() ?? "?"))}] — a "
                 + "per-spec closure lookup fell outside its registration context (per-spec keying bug).");
 
-    public void AddClosureSpec(ClosureSpec spec)
-        => _closureSpecs.Add(new SpecKey(spec.Def, spec.KeyArgs), spec);
+    public ClosureSpec AddClosureCallable(IMethodSymbol definition,
+        ImmutableArray<ITypeSymbol> keyArgs, ImmutableArray<IMethodSymbol> ownerSpecs,
+        CFunction function, EmitContext.MethodSlot slot, string[] paramVarIds,
+        ReturnSlot[] returnSlots, string envpFieldId)
+    {
+        if (definition == null || function == null || paramVarIds == null || returnSlots == null)
+            throw new ArgumentNullException(
+                "A registered closure requires method, function, params, and returns.");
+        var spec = new ClosureSpec
+        {
+            Definition = definition,
+            KeyArgs = keyArgs,
+            OwnerSpecs = ownerSpecs,
+            Function = function,
+            Slot = slot,
+            ParamVarIds = paramVarIds,
+            ReturnSlots = returnSlots,
+            Receiver = ReceiverAbi.None,
+            EnvpFieldId = envpFieldId,
+        };
+        _closureSpecs.Add(new SpecKey(definition, keyArgs), spec);
+        return spec;
+    }
 
     /// <summary>Census surface (read-only): every registered per-spec closure key. Harness
     /// instrumentation only — emission never enumerates the registry.</summary>
