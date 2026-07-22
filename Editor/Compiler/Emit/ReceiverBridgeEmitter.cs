@@ -18,12 +18,10 @@ public sealed class ReceiverBridgeEmitter
 
     public void EmitPending()
     {
-        var emitted = new HashSet<string>();
         foreach (var demand in _context.Synthetics.ReceiverBridges)
         {
             var member = demand.Binding.TargetMethod;
             var bridgeName = demand.Binding.BridgeName;
-            if (!emitted.Add(bridgeName)) continue;
             DelegateAbi.ValidateNoRefOutParams(member);
             if (member.ContainingType?.TypeKind == TypeKind.Interface)
                 EmitInterfaceBody(bridgeName, member);

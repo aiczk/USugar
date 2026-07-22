@@ -44,15 +44,15 @@ public sealed class SyntheticContext
 
     // MG auto-wrap (design 2026-07-11 v2): pending receiver-bridges — a class/struct instance method
     // group's bridge re-dispatches DelegateAbi.Env as the member's param0 (CA-M1 receiver ABI).
-    readonly List<DelegateBridgeDemand> _receiverBridges = new();
-    public IReadOnlyList<DelegateBridgeDemand> ReceiverBridges => _receiverBridges;
+    readonly Dictionary<string, DelegateBridgeDemand> _receiverBridges = new();
+    public IReadOnlyCollection<DelegateBridgeDemand> ReceiverBridges => _receiverBridges.Values;
 
     // Pending delegate bridges for dynamically hoisted lambdas/local functions. The carried map is
     // the creating method's immutable TypeParamMap by REFERENCE (per-EmitMethod fresh, never mutated,
     // so no snapshot copy is needed even though the drain runs after emission when the ambient map
     // is null).
-    readonly List<DelegateBridgeDemand> _delegateBridges = new();
-    public IReadOnlyList<DelegateBridgeDemand> DelegateBridges => _delegateBridges;
+    readonly Dictionary<string, DelegateBridgeDemand> _delegateBridges = new();
+    public IReadOnlyCollection<DelegateBridgeDemand> DelegateBridges => _delegateBridges.Values;
 
     // Multicast: sig-part -> signature plus the exact combine/remove operations used by this class.
     // Sites sharing a signature merge their flags; the drain emits one fan-out and only the helpers
@@ -67,8 +67,8 @@ public sealed class SyntheticContext
     // Variance (2026-07-04 design 2.2, B-1): per-(target, sig-S) sig adapter bridges. DelegateInvoke
     // is the DESTINATION delegate's own Invoke (conv-var declarations), distinct from TargetMethod
     // (the real callee, InternalCall only). Dedup-by-name at emission.
-    readonly List<DelegateBridgeDemand> _sigAdapterBridges = new();
-    public IReadOnlyList<DelegateBridgeDemand> SigAdapterBridges => _sigAdapterBridges;
+    readonly Dictionary<string, DelegateBridgeDemand> _sigAdapterBridges = new();
+    public IReadOnlyCollection<DelegateBridgeDemand> SigAdapterBridges => _sigAdapterBridges.Values;
 
     // Variance (2026-07-04 design 2.3, B-2): wrapper name -> (outer sig-S Invoke, inner sig-T
     // Invoke-or-method, resolved map). Keyed by WRAPPER NAME (unique per (outer,inner) sig pair) -
@@ -92,7 +92,7 @@ public sealed class SyntheticContext
     public void RegisterReceiverBridge(IMethodSymbol member, string name)
     {
         RequireMutable();
-        _receiverBridges.Add(new DelegateBridgeDemand(
+        _receiverBridges.TryAdd(name, new DelegateBridgeDemand(
             new DelegateBindingPlan(DelegateBindingKind.Receiver, member, name), member, null));
     }
 
@@ -102,7 +102,7 @@ public sealed class SyntheticContext
         RequireMutable();
         var kind = method.MethodKind is MethodKind.LambdaMethod or MethodKind.LocalFunction
             ? DelegateBindingKind.Closure : DelegateBindingKind.Direct;
-        _delegateBridges.Add(new DelegateBridgeDemand(
+        _delegateBridges.TryAdd(name, new DelegateBridgeDemand(
             new DelegateBindingPlan(kind, method, name), method, typeParamMap));
     }
 
@@ -110,7 +110,7 @@ public sealed class SyntheticContext
         IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeParamMap)
     {
         RequireMutable();
-        _sigAdapterBridges.Add(new DelegateBridgeDemand(
+        _sigAdapterBridges.TryAdd(name, new DelegateBridgeDemand(
             new DelegateBindingPlan(DelegateBindingKind.SignatureAdapter, target, name),
             invoke, typeParamMap));
     }
