@@ -12,6 +12,7 @@ public class UasmEmitter
     readonly Dictionary<OperationKind, IOperationHandler> _stmtDispatch;
     readonly Dictionary<OperationKind, IExpressionHandler> _exprDispatch;
     readonly SyntheticBridgeBuilder _bridge;
+    readonly DelegateConventionStorage _delegateConvention;
 
     public bool DumpEnabled;
 
@@ -54,6 +55,7 @@ public class UasmEmitter
         _ownsPlanner = planner == null;
         _ctx = new EmitContext(compilation, classSymbol, planner ?? new LayoutPlanner(compilation));
         _bridge = new SyntheticBridgeBuilder(_ctx.Builder);
+        _delegateConvention = new DelegateConventionStorage(_ctx.Storage);
 
         var stmtHandler = new StatementHandler(_ctx);
         var loopHandler = new LoopHandler(_ctx);
@@ -1251,7 +1253,7 @@ public class UasmEmitter
         // untouched (§6 gate). Reentrancy graph-node registration for the fan-out is A-M3 scope (§1.6),
         // deliberately not wired here.
         EmitMulticastSynthetics();
-        EmitEnumToStringSynthetics();
+        new EnumToStringSyntheticEmitter(_ctx, _bridge).Emit();
 
         // §5.5 (graft #2): now that every capturing bridge is registered, assert each has a graph node.
         VerifyBridgeTargetsAreNodes();
@@ -1390,26 +1392,6 @@ public class UasmEmitter
     /// <summary>Declare a sig's `__dlgc_` conv arg/ret fields — the preamble shared by every delegate
     /// bridge flavor (plain bridge, sig adapter, wrapper, fan-out). Returns the ret Udon type string,
     /// or null when the sig is void.</summary>
-    string DeclareConvSigFields(string sigPart, IMethodSymbol invoke,
-        IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeParamMap)
-        => DeclareConvSigFields(sigPart, invoke, typeParamMap, out _);
-
-    /// <summary>Overload exposing the per-parameter Udon type array (fan-out/wrapper need it afterward
-    /// to allocate typed argument slots) alongside the same declaration preamble.</summary>
-    string DeclareConvSigFields(string sigPart, IMethodSymbol invoke,
-        IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeParamMap, out string[] argTypes)
-    {
-        argTypes = new string[invoke.Parameters.Length];
-        for (int i = 0; i < invoke.Parameters.Length; i++)
-        {
-            argTypes[i] = ExternResolver.GetUdonTypeName(invoke.Parameters[i].Type, typeParamMap);
-            _ctx.Storage.TryDeclareVar(DelegateAbi.ConvArgName(sigPart, i), new StorageType(argTypes[i]));
-        }
-        string retType = invoke.ReturnsVoid ? null : ExternResolver.GetUdonTypeName(invoke.ReturnType, typeParamMap);
-        if (retType != null) _ctx.Storage.TryDeclareVar(DelegateAbi.ConvRetName(sigPart), new StorageType(retType));
-        return retType;
-    }
-
     void EmitPendingDelegateBridges()
     {
         var emitted = new HashSet<string>();
@@ -1461,7 +1443,7 @@ public class UasmEmitter
     void EmitReceiverBridgeBody(string bridgeName, IMethodSymbol member, CFunction targetFunc, string targetRetTypeStr)
     {
         var sigPart = DelegateAbi.BuildSigPart(member, null);
-        var retType = DeclareConvSigFields(sigPart, member, null);
+        var retType = _delegateConvention.Declare(sigPart, member, null);
 
         var bridgeFunc = _module.AddFunction(bridgeName, bridgeName);
         var prevFunc = _builder.CurrentFunction;
@@ -1534,7 +1516,7 @@ public class UasmEmitter
         string targetRetTypeStr, IMethodSymbol closureCheckMethod)
     {
         var sigPart = DelegateAbi.BuildSigPart(sigMethod, resolvedMap);
-        var retType = DeclareConvSigFields(sigPart, sigMethod, resolvedMap);
+        var retType = _delegateConvention.Declare(sigPart, sigMethod, resolvedMap);
 
         var bridgeFunc = _module.AddFunction(bridgeName, bridgeName);
         var prevFunc = _builder.CurrentFunction;
@@ -1641,7 +1623,7 @@ public class UasmEmitter
         // sig-S bundle's [1]/[2] can point at this wrapper by construction).
         _ctx.Storage.EnsureRecursionStack();
 
-        var retType = DeclareConvSigFields(outerSigPart, outerInvoke, typeParamMap, out var argTypes);
+        var retType = _delegateConvention.Declare(outerSigPart, outerInvoke, typeParamMap, out var argTypes);
         _ctx.Storage.TryDeclareVar(DelegateAbi.ConvEnvName(outerSigPart), new StorageType(EnvEmit.EnvType));
 
         var wrapperFunc = _module.AddFunction(wrapperName, wrapperName);
@@ -1655,8 +1637,8 @@ public class UasmEmitter
         var argSlots = new int[outerInvoke.Parameters.Length];
         for (int i = 0; i < outerInvoke.Parameters.Length; i++)
         {
-            argSlots[i] = _ctx.Builder.AllocScratch(new StorageType(argTypes[i]));
-            _builder.EmitAssign(argSlots[i], _bridge.Load(DelegateAbi.ConvArgName(outerSigPart, i), new StorageType(argTypes[i])));
+            argSlots[i] = _ctx.Builder.AllocScratch(argTypes[i]);
+            _builder.EmitAssign(argSlots[i], _bridge.Load(DelegateAbi.ConvArgName(outerSigPart, i), argTypes[i]));
         }
         var argLeaves = new CLeaf[argSlots.Length];
         for (int i = 0; i < argSlots.Length; i++) argLeaves[i] = _builder.SlotRef(argSlots[i]);
@@ -1671,7 +1653,7 @@ public class UasmEmitter
         // THIS program is the "caller" for the inner dispatch (stages args / reads ret), regardless of
         // whether any method of sig-T exists locally.
         var innerSigPart = DelegateAbi.BuildSigPart(innerInvoke, typeParamMap);
-        DeclareConvSigFields(innerSigPart, innerInvoke, typeParamMap);
+        _delegateConvention.Declare(innerSigPart, innerInvoke, typeParamMap);
         _ctx.Storage.TryDeclareVar(DelegateAbi.ConvEnvName(innerSigPart), new StorageType(EnvEmit.EnvType));
 
         var dispatch = new InvocationHandler(_ctx);
@@ -1728,49 +1710,6 @@ public class UasmEmitter
             EmitMulticastCombineHelper(sigPart);
             EmitMulticastRemoveHelper(sigPart);
             EmitMulticastFanoutBridge(sigPart, invoke, typeParamMap);
-        }
-    }
-
-    // B67: one value→name helper per user enum whose ToString/concat/interpolation was reached. The Udon tag
-    // of a user enum is its bare underlying integer, so ToString on it prints the number — C# prints the
-    // member name. The member list is compile-time known, so emit `string __enumstr_{Enum}(underlying v)`
-    // as a value→name chain; the default arm is the underlying .ToString(), which matches C# for a value
-    // with no defined member (e.g. (Suit)99 → "99").
-    void EmitEnumToStringSynthetics()
-    {
-        foreach (var enumType in _ctx.Synthetics.EnumToString)
-        {
-            var helperName = HandlerBase.EnumToStringHelperName(enumType);
-            var underlyingUdon = ExternResolver.GetUdonTypeName(enumType.EnumUnderlyingType);
-            var vId = $"{helperName}__v";
-            var retId = NameAllocator.RetKey(helperName);
-            _ctx.Storage.TryDeclareVar(vId, new StorageType(underlyingUdon));
-            _ctx.Storage.TryDeclareVar(retId, StorageTypes.String);
-
-            var func = _module.AddFunction(helperName);
-            func.ParamFieldNames.Add(vId);
-            func.ReturnType = StorageTypes.String;
-            func.ReturnSlots.Add(new ReturnSlot(retId, StorageTypes.String));
-
-            var prevFunc = _builder.CurrentFunction;
-            _builder.SetFunction(func);
-
-            var vLeaf = _bridge.Load(vId, new StorageType(underlyingUdon));
-            var eqExtern = $"{underlyingUdon}.__op_Equality__{underlyingUdon}_{underlyingUdon}__SystemBoolean";
-            foreach (var member in enumType.GetMembers().OfType<IFieldSymbol>())
-            {
-                if (!member.HasConstantValue) continue;
-                var constLeaf = _builder.Const(
-                    EmitPolicy.ParseConstValue(underlyingUdon, System.Convert.ToString(
-                        member.ConstantValue, System.Globalization.CultureInfo.InvariantCulture)), new StorageType(underlyingUdon));
-                var isMatch = _bridge.CallExtern(StorageTypes.Boolean, eqExtern, new CLeaf[] { vLeaf, constLeaf });
-                _builder.EmitIf(isMatch, _ => _builder.EmitReturn(_builder.Const(member.Name, StorageTypes.String)));
-            }
-            // Default: an undefined value formats as the underlying number (C#-parity).
-            _builder.EmitReturn(_bridge.CallExtern(StorageTypes.String, $"{underlyingUdon}.__ToString__SystemString",
-                new CLeaf[] { vLeaf }));
-
-            if (prevFunc != null) _builder.SetFunction(prevFunc);
         }
     }
 
@@ -2053,7 +1992,7 @@ public class UasmEmitter
         // post-coalesce liveness pass, not by the named-field mechanism.
         _ctx.Storage.EnsureRecursionStack();
 
-        var retType = DeclareConvSigFields(sigPart, invoke, typeParamMap, out var argTypes);
+        var retType = _delegateConvention.Declare(sigPart, invoke, typeParamMap, out var argTypes);
         _ctx.Storage.TryDeclareVar(DelegateAbi.ConvEnvName(sigPart), new StorageType(EnvEmit.EnvType));
 
         var fanoutFunc = _module.AddFunction(fanoutName, fanoutName);
@@ -2066,8 +2005,8 @@ public class UasmEmitter
         var argSlots = new int[invoke.Parameters.Length];
         for (int i = 0; i < invoke.Parameters.Length; i++)
         {
-            argSlots[i] = _ctx.Builder.AllocScratch(new StorageType(argTypes[i]));
-            _builder.EmitAssign(argSlots[i], _bridge.Load(DelegateAbi.ConvArgName(sigPart, i), new StorageType(argTypes[i])));
+            argSlots[i] = _ctx.Builder.AllocScratch(argTypes[i]);
+            _builder.EmitAssign(argSlots[i], _bridge.Load(DelegateAbi.ConvArgName(sigPart, i), argTypes[i]));
         }
 
         int retSlot = -1;
