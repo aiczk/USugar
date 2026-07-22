@@ -11,15 +11,16 @@ public class UasmValidationException : Exception
 
 public static class UasmValidator
 {
-    public static void Validate(string uasm)
+    public static void Validate(string uasm, UdonTypeFactRegistry typeFacts = null)
     {
+        typeFacts ??= new UdonTypeFactRegistry();
         var declaredVars = ParseDeclaredVariables(uasm);
         ValidateVariableReferences(uasm, declaredVars);
         ValidateJumpTargets(uasm);
         ValidateExterns(uasm);
         ValidateNoDuplicateVars(uasm);
         ValidateStackBalance(uasm);
-        ValidateCopyTypes(uasm, declaredVars);
+        ValidateCopyTypes(uasm, declaredVars, typeFacts);
     }
 
     /// <summary>Declared heap vars: name → declared UASM type (`name: %Type, value`), null when the
@@ -379,7 +380,8 @@ public static class UasmValidator
     // SAME DeclaredRelaxations predicate CoreVerify enforces on IR slots — one shared rule table, no
     // duplicate. The cross-boundary return-pattern COPY (1 local push; src is the caller's pushed return
     // address) has no declared src var and is skipped, as stack-balance already pins its shape.
-    static void ValidateCopyTypes(string uasm, Dictionary<string, string> varTypes)
+    static void ValidateCopyTypes(string uasm, Dictionary<string, string> varTypes,
+        UdonTypeFactRegistry typeFacts)
     {
         var errors = new List<string>();
         var pushes = new List<string>();
@@ -405,7 +407,7 @@ public static class UasmValidator
                     if (varTypes.TryGetValue(src, out var srcType) && srcType != null
                         && varTypes.TryGetValue(dst, out var dstType) && dstType != null)
                     {
-                        var why = DeclaredRelaxations.WhyIncompatible(dstType, srcType);
+                        var why = DeclaredRelaxations.WhyIncompatible(dstType, srcType, typeFacts);
                         if (why != null)
                             errors.Add($"Line {i + 1}: COPY {src} (%{srcType}) -> {dst} (%{dstType}): {why}");
                     }

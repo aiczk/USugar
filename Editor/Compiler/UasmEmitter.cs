@@ -149,6 +149,7 @@ public class UasmEmitter
 
     public string Emit()
     {
+        using var typeFactScope = UdonTypeFacts.RecordInto(_module.TypeFacts);
         // Record types cannot work in Udon: no heap allocation for user types, no inheritance from UdonSharpBehaviour
         if (_classSymbol.IsRecord)
             throw new NotSupportedException(

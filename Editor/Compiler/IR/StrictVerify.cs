@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Concurrent;
 using System.IO;
+using System.Threading;
 using Microsoft.CodeAnalysis;
 
 /// <summary>Type FACTS recorded at the single choke where Udon type names are minted
@@ -11,7 +12,7 @@ using Microsoft.CodeAnalysis;
 /// the full suite plus the full local harness; Phase-D stage 2 (2026-07-16) ENFORCED the flip — the
 /// heuristics are deleted and <see cref="DeclaredRelaxations"/>, backed by these facts, is now the only
 /// way two slot/COPY types may legally differ (CoreVerify and the test-side UasmValidator COPY check).</summary>
-public static class UdonTypeFacts
+public sealed class UdonTypeFactRegistry
 {
     public readonly struct TypeFact
     {
@@ -22,26 +23,26 @@ public static class UdonTypeFacts
 
     // Values are deterministic per name (SDK name ↔ symbol is 1:1 for every name that reaches the
     // registry), so concurrent TryAdd races during Phase-2 parallel emit are benign.
-    static readonly ConcurrentDictionary<string, TypeFact> _facts = new();
+    readonly ConcurrentDictionary<string, TypeFact> _facts = new(StringComparer.Ordinal);
 
     /// <summary>Record the minted name's facts. Names covered by a STRUCTURAL rule (primitives, arrays,
     /// the fold tags) are skipped: a folded name's runtime representation is fixed by the fold itself,
     /// not by whichever source symbol happened to mint it first (a struct folding to SystemObjectArray
     /// must not poison the registry with IsValueType=true).</summary>
-    public static void Record(string udonName, ITypeSymbol symbol)
+    public void Record(string udonName, ITypeSymbol symbol)
     {
         if (string.IsNullOrEmpty(udonName) || symbol == null) return;
         if (StructuralIsReference(udonName) != null) return;
         _facts.TryAdd(udonName, new TypeFact(symbol.TypeKind == TypeKind.Enum, symbol.IsValueType));
     }
 
-    internal static void RecordForTest(string udonName, bool isEnum, bool isValueType)
+    internal void RecordForTest(string udonName, bool isEnum, bool isValueType)
         => _facts[udonName] = new TypeFact(isEnum, isValueType);
 
     /// <summary>FACT: is the name an enum tag (Int32-compatible)? true/false when known, null when the
     /// name never passed the minting choke — an unknown name is exactly what the relaxed check guesses
     /// about.</summary>
-    public static bool? IsEnumFact(string udonName)
+    public bool? IsEnumFact(string udonName)
     {
         if (StructuralIsReference(udonName) != null) return false; // primitives/arrays/fold tags are never enums
         return _facts.TryGetValue(udonName, out var f) ? f.IsEnum : (bool?)null;
@@ -51,7 +52,7 @@ public static class UdonTypeFacts
     /// "…Array" IS a .NET array; the fold tags are object[]/component references by construction), then
     /// the registry (an SDK struct like UnityEngineBounds is a value type even though the relaxed
     /// prefix-list heuristic calls it a reference).</summary>
-    public static bool? IsReferenceFact(string udonName)
+    public bool? IsReferenceFact(string udonName)
     {
         var structural = StructuralIsReference(udonName);
         if (structural != null) return structural;
@@ -92,6 +93,39 @@ public static class UdonTypeFacts
     }
 }
 
+/// <summary>Routes the type-name minting choke into the registry owned by the active compilation.
+/// Async-local scoping keeps parallel class emits isolated while avoiding a registry parameter on every
+/// recursive type-name helper.</summary>
+public static class UdonTypeFacts
+{
+    static readonly AsyncLocal<UdonTypeFactRegistry> _current = new();
+
+    public static IDisposable RecordInto(UdonTypeFactRegistry registry)
+    {
+        if (registry == null) throw new ArgumentNullException(nameof(registry));
+        var previous = _current.Value;
+        _current.Value = registry;
+        return new RecordingScope(previous);
+    }
+
+    public static void Record(string udonName, ITypeSymbol symbol) => _current.Value?.Record(udonName, symbol);
+
+    sealed class RecordingScope : IDisposable
+    {
+        readonly UdonTypeFactRegistry _previous;
+        bool _disposed;
+
+        public RecordingScope(UdonTypeFactRegistry previous) => _previous = previous;
+
+        public void Dispose()
+        {
+            if (_disposed) return;
+            _current.Value = _previous;
+            _disposed = true;
+        }
+    }
+}
+
 /// <summary>Phase-D declared-relaxation rules: the single predicate deciding when two Udon slot/COPY
 /// types may legally differ — shared by CoreVerify (structured-IR slot checks) and the test-side
 /// UasmValidator COPY check (B72 axis), so the relaxation table exists exactly once. Declared:
@@ -106,15 +140,16 @@ public static class DeclaredRelaxations
     /// <summary>Null when the pair is compatible; otherwise the reason, naming the missing fact when
     /// the failure is an unminted name (a no-fact name at verify time never passed the minting choke
     /// of the same compile — itself suspicious).</summary>
-    public static string WhyIncompatible(string expected, string actual)
+    public static string WhyIncompatible(string expected, string actual, UdonTypeFactRegistry facts)
     {
+        if (facts == null) throw new ArgumentNullException(nameof(facts));
         if (expected == actual) return null;
         if (expected == "SystemObject" || actual == "SystemObject") return null;
         if (IsNullableErasure(expected, actual) || IsNullableErasure(actual, expected)) return null;
-        if (expected == "SystemInt32" && UdonTypeFacts.IsEnumFact(actual) == true) return null;
-        if (actual == "SystemInt32" && UdonTypeFacts.IsEnumFact(expected) == true) return null;
-        var e = UdonTypeFacts.IsReferenceFact(expected);
-        var a = UdonTypeFacts.IsReferenceFact(actual);
+        if (expected == "SystemInt32" && facts.IsEnumFact(actual) == true) return null;
+        if (actual == "SystemInt32" && facts.IsEnumFact(expected) == true) return null;
+        var e = facts.IsReferenceFact(expected);
+        var a = facts.IsReferenceFact(actual);
         if (e == true && a == true) return null;
         if (e == null) return NoFact(expected);
         if (a == null) return NoFact(actual);

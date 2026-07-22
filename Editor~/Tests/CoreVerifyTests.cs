@@ -126,14 +126,35 @@ public class CoreVerifyTests
         // Enum slots interop with Int32 (Udon stores enums as their underlying type). Fact-backed like
         // every production slot type: only SDK enums keep their tag past the GetUdonTypeName minting
         // choke (user enums fold to the underlying type), and the choke records them as enum facts.
-        UdonTypeFacts.RecordForTest("CvFakeSdkEnum", isEnum: true, isValueType: true);
         var module = new CModule();
+        module.TypeFacts.RecordForTest("CvFakeSdkEnum", isEnum: true, isValueType: true);
         var builder = new CoreBuilder(module);
         builder.BeginFunction("test");
         var slot = builder.AllocFrame("CvFakeSdkEnum");
         builder.EmitAssign(slot, builder.Const(1, "SystemInt32"));
 
         CoreVerify.Verify(module); // should not throw
+    }
+
+    [Fact]
+    public void Verifier_TypeFactsDoNotLeakBetweenModules()
+    {
+        var first = new CModule();
+        first.TypeFacts.RecordForTest("CvCompilationLocalEnum", isEnum: true, isValueType: true);
+        var firstBuilder = new CoreBuilder(first);
+        firstBuilder.BeginFunction("first");
+        firstBuilder.EmitAssign(firstBuilder.AllocFrame("CvCompilationLocalEnum"),
+            firstBuilder.Const(1, "SystemInt32"));
+        CoreVerify.Verify(first);
+
+        var second = new CModule();
+        var secondBuilder = new CoreBuilder(second);
+        secondBuilder.BeginFunction("second");
+        secondBuilder.EmitAssign(secondBuilder.AllocFrame("CvCompilationLocalEnum"),
+            secondBuilder.Const(1, "SystemInt32"));
+
+        var ex = Assert.Throws<VerificationException>(() => CoreVerify.Verify(second));
+        Assert.Contains("no fact recorded for 'CvCompilationLocalEnum'", ex.Message);
     }
 
     [Fact]

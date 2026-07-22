@@ -372,6 +372,8 @@ public class LayoutPlanner
         _compilation = compilation;
     }
 
+    public UdonTypeFactRegistry TypeFacts { get; } = new UdonTypeFactRegistry();
+
     /// <summary>
     /// Compute or retrieve cached TypeLayout for the given type.
     /// This is the ONLY place naming decisions are made.
@@ -382,6 +384,7 @@ public class LayoutPlanner
 
     public TypeLayout Plan(INamedTypeSymbol type)
     {
+        using var typeFactScope = UdonTypeFacts.RecordInto(TypeFacts);
         if (_cache.TryGetValue(type, out var cached))
             return cached;
         if (_frozen)

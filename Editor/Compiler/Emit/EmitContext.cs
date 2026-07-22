@@ -114,7 +114,7 @@ public class EmitContext
     {
         Compilation = compilation;
         ClassSymbol = classSymbol;
-        Module = new CModule { ClassName = classSymbol.ToDisplayString() };
+        Module = new CModule(planner.TypeFacts) { ClassName = classSymbol.ToDisplayString() };
         Builder = new CoreBuilder(Module);
         Planner = planner;
         Storage = new StorageContext(Module);

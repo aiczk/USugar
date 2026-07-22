@@ -13,12 +13,13 @@ public class StrictVerifyShadowTests
 {
     static string Fn(string name) => StrictVerifyLedger.SelfTestFuncPrefix + name;
 
-    static CFunction VerifyAssign(string funcName, string slotType, CValue value)
+    static CFunction VerifyAssign(string funcName, string slotType, CValue value,
+        UdonTypeFactRegistry typeFacts = null)
     {
         var func = new CFunction(funcName);
         func.Slots.Add(new SlotDecl(0, slotType, SlotClass.Frame));
         func.Body.Stmts.Add(new CAssign(0, value));
-        CoreVerify.VerifyFunction(func);
+        CoreVerify.VerifyFunction(func, typeFacts);
         return func;
     }
 
@@ -33,8 +34,9 @@ public class StrictVerifyShadowTests
     [Fact]
     public void EnumInterop_FactEnum_Passes() // accept control
     {
-        UdonTypeFacts.RecordForTest("SsvFakeSdkEnum", isEnum: true, isValueType: true);
-        VerifyAssign(Fn("enumguess_fact"), "SsvFakeSdkEnum", new CConst(1, "SystemInt32")); // no throw
+        var facts = new UdonTypeFactRegistry();
+        facts.RecordForTest("SsvFakeSdkEnum", isEnum: true, isValueType: true);
+        VerifyAssign(Fn("enumguess_fact"), "SsvFakeSdkEnum", new CConst(1, "SystemInt32"), facts); // no throw
     }
 
     [Fact]
@@ -42,19 +44,23 @@ public class StrictVerifyShadowTests
     {
         // The deleted prefix-list heuristic called any unlisted non-primitive a reference — an SDK struct
         // like Bounds slipped through as COPY-compatible with a real reference. The facts know better.
-        UdonTypeFacts.RecordForTest("SsvFakeBounds", isEnum: false, isValueType: true);
-        UdonTypeFacts.RecordForTest("SsvFakeGameObject", isEnum: false, isValueType: false);
+        var facts = new UdonTypeFactRegistry();
+        facts.RecordForTest("SsvFakeBounds", isEnum: false, isValueType: true);
+        facts.RecordForTest("SsvFakeGameObject", isEnum: false, isValueType: false);
         var ex = Assert.Throws<VerificationException>(
-            () => VerifyAssign(Fn("refguess_valuetype"), "SsvFakeBounds", new CConst(null, "SsvFakeGameObject")));
+            () => VerifyAssign(Fn("refguess_valuetype"), "SsvFakeBounds",
+                new CConst(null, "SsvFakeGameObject"), facts));
         Assert.Contains("'SsvFakeBounds' is a fact value type", ex.Message);
     }
 
     [Fact]
     public void RefCopy_BothFactReferences_Passes() // accept control
     {
-        UdonTypeFacts.RecordForTest("SsvFakeTransform", isEnum: false, isValueType: false);
-        UdonTypeFacts.RecordForTest("SsvFakeCollider", isEnum: false, isValueType: false);
-        VerifyAssign(Fn("refguess_bothref"), "SsvFakeTransform", new CConst(null, "SsvFakeCollider")); // no throw
+        var facts = new UdonTypeFactRegistry();
+        facts.RecordForTest("SsvFakeTransform", isEnum: false, isValueType: false);
+        facts.RecordForTest("SsvFakeCollider", isEnum: false, isValueType: false);
+        VerifyAssign(Fn("refguess_bothref"), "SsvFakeTransform",
+            new CConst(null, "SsvFakeCollider"), facts); // no throw
     }
 
     [Fact]

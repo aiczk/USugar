@@ -402,7 +402,7 @@ namespace TestStubs
 
         var emitter = new UasmEmitter(compilation, classSymbol);
         var uasm = emitter.Emit();
-        UasmValidator.Validate(uasm);
+        UasmValidator.Validate(uasm, emitter.Module.TypeFacts);
         UasmValidator.ValidateHeapConsistency(uasm, emitter.GetHeapSize());
         return uasm;
     }
@@ -431,7 +431,7 @@ namespace TestStubs
 
         var emitter = new UasmEmitter(compilation, classSymbol);
         var uasm = emitter.Emit();
-        UasmValidator.Validate(uasm);
+        UasmValidator.Validate(uasm, emitter.Module.TypeFacts);
         UasmValidator.ValidateHeapConsistency(uasm, emitter.GetHeapSize());
         return uasm;
     }
@@ -582,7 +582,7 @@ namespace TestStubs
 
         var emitter = new UasmEmitter(compilation, classSymbol);
         var uasm = emitter.Emit();
-        UasmValidator.Validate(uasm);
+        UasmValidator.Validate(uasm, emitter.Module.TypeFacts);
         UasmValidator.ValidateHeapConsistency(uasm, emitter.GetHeapSize());
         outEmitter = emitter;
         return uasm;
@@ -623,7 +623,7 @@ namespace TestStubs
 
         var emitter = new UasmEmitter(compilation, classSymbol);
         var uasm = emitter.Emit();
-        UasmValidator.Validate(uasm);
+        UasmValidator.Validate(uasm, emitter.Module.TypeFacts);
         UasmValidator.ValidateHeapConsistency(uasm, emitter.GetHeapSize());
         return uasm;
     }
@@ -652,7 +652,7 @@ namespace TestStubs
 
         var emitter = new UasmEmitter(compilation, classSymbol);
         var uasm = emitter.Emit();
-        UasmValidator.Validate(uasm);
+        UasmValidator.Validate(uasm, emitter.Module.TypeFacts);
         UasmValidator.ValidateHeapConsistency(uasm, emitter.GetHeapSize());
         return (uasm, emitter.CodeGenResult.Constants);
     }

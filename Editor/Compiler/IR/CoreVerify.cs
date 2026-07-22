@@ -10,17 +10,17 @@ public static class CoreVerify
     public static void Verify(CModule module)
     {
         foreach (var func in module.Functions)
-            VerifyFunction(func);
+            VerifyFunction(func, module.TypeFacts);
     }
 
-    public static void VerifyFunction(CFunction func)
+    public static void VerifyFunction(CFunction func, UdonTypeFactRegistry typeFacts = null)
     {
         if (func.Shape != Shape.Structured)
             throw new VerificationException(
                 $"CoreVerify requires Shape=Structured, got {func.Shape} for function '{func.Name}' " +
                 "(func.Body is stale after CoreFlatten — verify before flattening, or use FlatVerify after)");
 
-        var ctx = new VerifyContext(func);
+        var ctx = new VerifyContext(func, typeFacts ?? new UdonTypeFactRegistry());
         VerifyBlock(func.Body, ctx);
         VerifyGotoLabels(func);
     }
@@ -28,12 +28,14 @@ public static class CoreVerify
     sealed class VerifyContext
     {
         public readonly CFunction Func;
+        public readonly UdonTypeFactRegistry TypeFacts;
         public readonly HashSet<int> DeclaredSlots = new();
         public int LoopDepth;
 
-        public VerifyContext(CFunction func)
+        public VerifyContext(CFunction func, UdonTypeFactRegistry typeFacts)
         {
             Func = func;
+            TypeFacts = typeFacts;
             for (int i = 0; i < func.Slots.Count; i++)
                 DeclaredSlots.Add(i);
         }
@@ -52,7 +54,7 @@ public static class CoreVerify
         // representation truths, so the former CAssign-only enum arm now applies to every check site.
         public void AssertType(string expected, string actual, string context)
         {
-            var why = DeclaredRelaxations.WhyIncompatible(expected, actual);
+            var why = DeclaredRelaxations.WhyIncompatible(expected, actual, TypeFacts);
             if (why == null) return;
             throw new VerificationException(
                 $"Type mismatch in {context}: expected '{expected}', got '{actual}' — {why} (function '{Func.Name}')");

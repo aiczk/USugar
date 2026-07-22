@@ -270,7 +270,13 @@ public sealed class CModule
 {
     public readonly List<CFunction> Functions = new List<CFunction>();
     public readonly List<FieldDecl> Fields = new List<FieldDecl>();
+    public readonly UdonTypeFactRegistry TypeFacts;
     public string ClassName;
+
+    public CModule(UdonTypeFactRegistry typeFacts = null)
+    {
+        TypeFacts = typeFacts ?? new UdonTypeFactRegistry();
+    }
 
     public CFunction AddFunction(string name, string exportName = null)
     {
