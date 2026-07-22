@@ -5,6 +5,30 @@ namespace USugar.Tests;
 public class UserClassInterfaceTests
 {
     [Fact]
+    public void CrossProgramInterfaceField_UsesClassWireTypeIdForDispatch()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public interface IWireRead { int Read(); }
+public class WireRead : IWireRead { public int value; public int Read() => value; }
+public class WireReadB : IWireRead { public int value; public int Read() => value + 1; }
+public class InterfaceProvider : UdonSharpBehaviour { public IWireRead Value; }
+public class InterfaceConsumer : UdonSharpBehaviour {
+  public InterfaceProvider provider;
+  public bool choose;
+  public int result;
+  void Start() {
+    provider.Value = choose ? (IWireRead)new WireRead { value = 17 } : new WireReadB { value = 16 };
+    result = provider.Value.Read();
+  }
+}
+", "InterfaceConsumer");
+
+        Assert.Contains("__typeobj_WireRead", uasm);
+        Assert.Contains("SystemString.__op_Equality__SystemString_SystemString__SystemBoolean", uasm);
+    }
+
+    [Fact]
     public void LocalInterfaceVariable_DispatchesToUserClass()
         => TestHelper.CompileToUasm(@"
 using UdonSharp;
