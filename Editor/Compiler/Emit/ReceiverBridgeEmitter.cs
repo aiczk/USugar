@@ -37,7 +37,7 @@ public sealed class ReceiverBridgeEmitter
         var returnType = _convention.Declare(signaturePart, member, null);
         var targetReturnType = member.ReturnsVoid
             ? StorageTypes.Void
-            : ExternResolver.GetStorageType(new RuntimeType(member.ReturnType), _context.Generics.TypeParamMap);
+            : _context.ResolveStorageType(member.ReturnType);
         var bridgeFunction = _context.Module.AddFunction(bridgeName, bridgeName);
         var previousFunction = builder.CurrentFunction;
         builder.SetFunction(bridgeFunction);
@@ -49,8 +49,7 @@ public sealed class ReceiverBridgeEmitter
         var arguments = new List<CLeaf> { receiver };
         for (int i = 0; i < member.Parameters.Length; i++)
             arguments.Add(_bridge.Load(DelegateAbi.ConvArgName(signaturePart, i),
-                ExternResolver.GetStorageType(new RuntimeType(member.Parameters[i].Type),
-                    _context.Generics.TypeParamMap)));
+                _context.ResolveStorageType(member.Parameters[i].Type)));
 
         var conventionReturn = returnType != null ? DelegateAbi.ConvRetName(signaturePart) : null;
         var targets = _context.VirtualDispatch.ResolveInterfaceTargets(member.ContainingType, member);
@@ -93,7 +92,7 @@ public sealed class ReceiverBridgeEmitter
         var returnType = _convention.Declare(signaturePart, member, null);
         var targetReturnType = member.ReturnsVoid
             ? StorageTypes.Void
-            : ExternResolver.GetStorageType(new RuntimeType(member.ReturnType), _context.Generics.TypeParamMap);
+            : _context.ResolveStorageType(member.ReturnType);
 
         var bridgeFunction = _context.Module.AddFunction(bridgeName, bridgeName);
         var previousFunction = builder.CurrentFunction;
@@ -107,8 +106,7 @@ public sealed class ReceiverBridgeEmitter
         var arguments = new List<CLeaf> { receiver };
         for (int i = 0; i < member.Parameters.Length; i++)
             arguments.Add(_bridge.Load(DelegateAbi.ConvArgName(signaturePart, i),
-                ExternResolver.GetStorageType(
-                    new RuntimeType(member.Parameters[i].Type), _context.Generics.TypeParamMap)));
+                _context.ResolveStorageType(member.Parameters[i].Type)));
 
         var conventionReturn = returnType != null ? DelegateAbi.ConvRetName(signaturePart) : null;
         var receiverPresent = _bridge.CallExtern(StorageTypes.Boolean,

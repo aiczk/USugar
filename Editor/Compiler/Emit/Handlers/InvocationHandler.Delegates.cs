@@ -173,7 +173,7 @@ public partial class InvocationHandler
         var (convArgs, convRet, convEnv) = GetConventionFieldNames(invoke, typeParamMap);
         StorageType? retType = invoke.ReturnsVoid
             ? null
-            : ExternResolver.GetStorageType(new RuntimeType(invoke.ReturnType), typeParamMap);
+            : _ctx.ResolveStorageType(invoke.ReturnType, typeParamMap);
         return new DelegateDispatchEmitter(_ctx).Emit(bundle, invoke, convArgs, convRet, convEnv, retType, typeParamMap,
             argExprsByOrdinal, isConditional: false, reentrant: true, receiverDescription: "multicast fan-out");
     }

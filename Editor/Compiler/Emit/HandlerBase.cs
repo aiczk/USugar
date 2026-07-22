@@ -57,13 +57,7 @@ public abstract partial class HandlerBase
 
     // ── Type resolution ──
     protected StorageType GetStorageType(ITypeSymbol type)
-    {
-        var resolved = ResolveType(type);
-        if (resolved is INamedTypeSymbol { TypeKind: TypeKind.Interface } iface
-            && _planner.InterfaceIsLocalUserClassOnly(iface))
-            return new StorageType(AggregateAbi.ArrayType);
-        return ExternResolver.GetStorageType(new RuntimeType(type), _ctx.Generics.TypeParamMap);
-    }
+        => _ctx.ResolveStorageType(type);
     protected string GetStorageTypeName(ITypeSymbol type) => GetStorageType(type).Name;
     protected TypeClassifierContext TypeCtx => new TypeClassifierContext(_ctx.Generics.TypeParamMap);
     protected ITypeSymbol ResolveType(ITypeSymbol type)

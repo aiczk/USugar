@@ -4,9 +4,10 @@ using Microsoft.CodeAnalysis;
 /// <summary>Declares signature-keyed delegate convention argument and return fields.</summary>
 public sealed class DelegateConventionStorage
 {
-    readonly StorageContext _storage;
+    readonly EmitContext _context;
+    StorageContext Storage => _context.Storage;
 
-    public DelegateConventionStorage(StorageContext storage) => _storage = storage;
+    public DelegateConventionStorage(EmitContext context) => _context = context;
 
     public StorageType? Declare(string signaturePart, IMethodSymbol invoke,
         IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeParameterMap)
@@ -19,14 +20,13 @@ public sealed class DelegateConventionStorage
         argumentTypes = new StorageType[invoke.Parameters.Length];
         for (int i = 0; i < invoke.Parameters.Length; i++)
         {
-            argumentTypes[i] = ExternResolver.GetStorageType(
-                new RuntimeType(invoke.Parameters[i].Type), typeParameterMap);
-            _storage.TryDeclareVar(DelegateAbi.ConvArgName(signaturePart, i), argumentTypes[i]);
+            argumentTypes[i] = _context.ResolveStorageType(invoke.Parameters[i].Type, typeParameterMap);
+            Storage.TryDeclareVar(DelegateAbi.ConvArgName(signaturePart, i), argumentTypes[i]);
         }
 
         if (invoke.ReturnsVoid) return null;
-        var returnType = ExternResolver.GetStorageType(new RuntimeType(invoke.ReturnType), typeParameterMap);
-        _storage.TryDeclareVar(DelegateAbi.ConvRetName(signaturePart), returnType);
+        var returnType = _context.ResolveStorageType(invoke.ReturnType, typeParameterMap);
+        Storage.TryDeclareVar(DelegateAbi.ConvRetName(signaturePart), returnType);
         return returnType;
     }
 }

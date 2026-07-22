@@ -49,6 +49,24 @@ public class IncomingInterfaceReceiver : UdonSharpBehaviour {
     }
 
     [Fact]
+    public void InterfaceBridge_InterfaceTypedParameterAndReturnUseClassBundleStorage()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public interface IBridgeValue { int Read(); }
+public class BridgeValue : IBridgeValue { public int Read() => 3; }
+public interface IBridgeEcho { IBridgeValue Echo(IBridgeValue value); }
+public class InterfaceBridgeStorageHost : UdonSharpBehaviour, IBridgeEcho {
+  public IBridgeValue Echo(IBridgeValue value) { return value; }
+}
+", "InterfaceBridgeStorageHost");
+
+        Assert.Contains("__iface_", uasm);
+        Assert.Contains("%SystemObjectArray", uasm);
+        Assert.DoesNotContain("IUdonEventReceiver.__Echo", uasm);
+    }
+
+    [Fact]
     public void LocalInterfaceVariable_DispatchesToUserClass()
         => TestHelper.CompileToUasm(@"
 using UdonSharp;

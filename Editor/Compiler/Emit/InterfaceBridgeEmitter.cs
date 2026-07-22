@@ -24,13 +24,13 @@ public sealed class InterfaceBridgeEmitter
             {
                 if (interfaceLayout.ParamIds[i] == classLayout.ParamIds[i]) continue;
                 _context.Storage.TryDeclareVar(interfaceLayout.ParamIds[i],
-                    ExternResolver.GetStorageType(new RuntimeType(interfaceMethod.Parameters[i].Type)));
+                    _context.ResolveStorageType(interfaceMethod.Parameters[i].Type));
             }
 
             if (interfaceLayout.ReturnId != null
                 && interfaceLayout.ReturnId != classLayout.ReturnId)
                 _context.Storage.TryDeclareVar(interfaceLayout.ReturnId,
-                    ExternResolver.GetStorageType(new RuntimeType(interfaceMethod.ReturnType)));
+                    _context.ResolveStorageType(interfaceMethod.ReturnType));
 
             var exportName = LayoutPlanner.InterfaceDispatchName(interfaceMethod, interfaceLayout);
             builder.SetFunction(_context.Module.AddFunction($"__bridge_{exportName}", exportName));
@@ -44,8 +44,7 @@ public sealed class InterfaceBridgeEmitter
             var arguments = new List<CLeaf>();
             for (int i = 0; i < interfaceMethod.Parameters.Length; i++)
                 arguments.Add(_bridge.Load(interfaceLayout.ParamIds[i],
-                    ExternResolver.GetStorageType(
-                        new RuntimeType(interfaceMethod.Parameters[i].Type))));
+                    _context.ResolveStorageType(interfaceMethod.Parameters[i].Type)));
 
             var result = _bridge.CallInternal(implementation, arguments.ToArray());
             if (result != null && interfaceLayout.ReturnId != null

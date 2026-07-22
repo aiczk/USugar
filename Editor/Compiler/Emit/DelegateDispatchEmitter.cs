@@ -25,7 +25,7 @@ public sealed class DelegateDispatchEmitter
     void EmitInternalVoid(string name, List<CLeaf> args, bool reentrant = false)
         => _builder.EmitInternalVoid(name, args, reentrant);
     StorageType GetStorageType(ITypeSymbol type)
-        => ExternResolver.GetStorageType(new RuntimeType(type), _ctx.Generics.TypeParamMap);
+        => _ctx.ResolveStorageType(type);
 
     /// <summary>
     /// Multicast design (2026-07-03 §1.2/§1.6) shared guard-ladder core, extracted from
@@ -119,8 +119,8 @@ public sealed class DelegateDispatchEmitter
                             {
                                 for (int i = 0; i < convArgs.Length; i++)
                                 {
-                                    var argType = ExternResolver.GetStorageType(
-                                        new RuntimeType(invoke.Parameters[i].Type), typeParamMap);
+                                    var argType = _ctx.ResolveStorageType(
+                                        invoke.Parameters[i].Type, typeParamMap);
                                     EmitExternVoid(
                                         ExternResolver.EventReceiverSetProgramVariable,
                                         new List<CLeaf> { tgt, Const(convArgs[i], StorageTypes.String), LoadField(convArgs[i], argType) });

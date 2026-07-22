@@ -43,6 +43,17 @@ public class EmitContext
     public IDisposable EnterTypeParamScope(IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> map)
         => Generics.EnterScope(map, Methods.CurrentMethod);
 
+    public StorageType ResolveStorageType(ITypeSymbol type,
+        IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeParameterMap = null)
+    {
+        var map = typeParameterMap ?? Generics.TypeParamMap;
+        var resolved = TypeEnvironment.CloseType(Compilation, type, map);
+        if (resolved is INamedTypeSymbol { TypeKind: TypeKind.Interface } iface
+            && Planner.InterfaceIsLocalUserClassOnly(iface))
+            return StorageTypes.ObjectArray;
+        return ExternResolver.GetStorageType(new RuntimeType(type), map);
+    }
+
     /// <summary>Composite key args for a hoisted-closure registration or lookup (2026-07-11 pre-fuzz
     /// audit HIGH fix): the closure's own type args ⊕ the args of its LEXICAL enclosing generic
     /// owners (declaration chain), each resolved against the current emission's owner chain

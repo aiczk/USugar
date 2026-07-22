@@ -19,7 +19,7 @@ public sealed class EnumToStringSyntheticEmitter
         foreach (var enumType in _context.Synthetics.EnumToString)
         {
             var helperName = HandlerBase.EnumToStringHelperName(enumType);
-            var underlyingType = ExternResolver.GetStorageType(new RuntimeType(enumType.EnumUnderlyingType));
+            var underlyingType = _context.ResolveStorageType(enumType.EnumUnderlyingType);
             var vId = $"{helperName}__v";
             var retId = NameAllocator.RetKey(helperName);
             _context.Storage.TryDeclareVar(vId, underlyingType);

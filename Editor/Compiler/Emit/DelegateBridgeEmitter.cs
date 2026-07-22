@@ -70,8 +70,7 @@ public sealed class DelegateBridgeEmitter
         var returnType = _convention.Declare(signaturePart, signatureMethod, typeParameterMap);
         var targetReturnType = closureCheckMethod.ReturnsVoid
             ? StorageTypes.Void
-            : ExternResolver.GetStorageType(
-                new RuntimeType(closureCheckMethod.ReturnType), typeParameterMap);
+            : _context.ResolveStorageType(closureCheckMethod.ReturnType, typeParameterMap);
 
         var bridgeFunction = _context.Module.AddFunction(bridgeName, bridgeName);
         var previousFunction = builder.CurrentFunction;
@@ -80,8 +79,7 @@ public sealed class DelegateBridgeEmitter
         var arguments = new List<CLeaf>();
         for (int i = 0; i < signatureMethod.Parameters.Length; i++)
             arguments.Add(_bridge.Load(DelegateAbi.ConvArgName(signaturePart, i),
-                ExternResolver.GetStorageType(
-                    new RuntimeType(signatureMethod.Parameters[i].Type), typeParameterMap)));
+                _context.ResolveStorageType(signatureMethod.Parameters[i].Type, typeParameterMap)));
 
         var conventionReturn = returnType != null ? DelegateAbi.ConvRetName(signaturePart) : null;
         void EmitCall()

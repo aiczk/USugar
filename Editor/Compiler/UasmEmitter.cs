@@ -55,7 +55,7 @@ public partial class UasmEmitter
         _ownsPlanner = planner == null;
         _ctx = new EmitContext(compilation, classSymbol, planner ?? new LayoutPlanner(compilation));
         _bridge = new SyntheticBridgeBuilder(_ctx.Builder);
-        _delegateConvention = new DelegateConventionStorage(_ctx.Storage);
+        _delegateConvention = new DelegateConventionStorage(_ctx);
 
         var stmtHandler = new StatementHandler(_ctx);
         var loopHandler = new LoopHandler(_ctx);
@@ -97,11 +97,7 @@ public partial class UasmEmitter
 
     // Type name resolution helper
     StorageType GetStorageType(ITypeSymbol type)
-        => ResolveInterfaceStorage(type) ?? ExternResolver.GetStorageType(new RuntimeType(type), _typeParamMap);
-    StorageType? ResolveInterfaceStorage(ITypeSymbol type)
-        => ResolveTypeForStorage(type) is INamedTypeSymbol { TypeKind: TypeKind.Interface } iface
-           && _planner.InterfaceIsLocalUserClassOnly(iface)
-            ? new StorageType(AggregateAbi.ArrayType) : (StorageType?)null;
+        => _ctx.ResolveStorageType(type);
     ITypeSymbol ResolveTypeForStorage(ITypeSymbol type)
         => TypeEnvironment.CloseType(_compilation, type, _typeParamMap);
     string GetStorageTypeName(ITypeSymbol type) => GetStorageType(type).Name;
