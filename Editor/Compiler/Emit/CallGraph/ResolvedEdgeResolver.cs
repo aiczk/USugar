@@ -32,49 +32,37 @@ public sealed class ResolvedEdgeResolver
     internal IEnumerable<IMethodSymbol> ResolvePortableDispatchMethods(
         IOperation operation, IReadOnlyCollection<INamedTypeSymbol> portableClasses)
     {
-        IMethodSymbol target = null;
-        IOperation instance = null;
-        INamedTypeSymbol receiverType = null;
-        switch (operation)
+        foreach (var site in CallableSites.FromOperation(operation))
         {
-            case IInvocationOperation invocation:
-                target = invocation.TargetMethod;
-                instance = invocation.Instance;
-                receiverType = instance?.Type as INamedTypeSymbol;
-                break;
-            case IPropertyReferenceOperation property:
-                target = VirtualDispatch.FindAccessor(property.Property, getter: true)
-                         ?? VirtualDispatch.FindAccessor(property.Property, getter: false);
-                instance = property.Instance;
-                receiverType = instance?.Type as INamedTypeSymbol;
-                break;
-        }
-        if (target == null || receiverType == null) yield break;
+            var target = site.Target;
+            var instance = site.Receiver;
+            if (instance?.Type is not INamedTypeSymbol receiverType) continue;
 
-        if (receiverType.TypeKind == TypeKind.Interface)
-        {
+            if (receiverType.TypeKind == TypeKind.Interface)
+            {
+                foreach (var concrete in portableClasses)
+                {
+                    if (!concrete.AllInterfaces.Any(i => SymbolEqualityComparer.Default.Equals(i, receiverType)))
+                        continue;
+                    if (concrete.FindImplementationForInterfaceMember(target) is IMethodSymbol impl && !impl.IsAbstract
+                        && !(impl.AssociatedSymbol is IPropertySymbol autoProperty
+                             && !UasmEmitter.IsComputedProperty(autoProperty)))
+                        yield return impl;
+                }
+                continue;
+            }
+            if (!VirtualDispatch.IsDispatchSite(target, instance, receiverType)) continue;
+            var slot = VirtualDispatch.SlotIntroducer(target);
             foreach (var concrete in portableClasses)
-            {
-                if (!concrete.AllInterfaces.Any(i => SymbolEqualityComparer.Default.Equals(i, receiverType)))
-                    continue;
-                if (concrete.FindImplementationForInterfaceMember(target) is IMethodSymbol impl && !impl.IsAbstract
-                    && !(impl.AssociatedSymbol is IPropertySymbol autoProperty
-                         && !UasmEmitter.IsComputedProperty(autoProperty)))
+                if (VirtualDispatch.IsAssignable(concrete, receiverType)
+                    && VirtualDispatch.MostDerivedImpl(concrete, slot) is { } impl)
+                {
+                    if (impl.AssociatedSymbol is IPropertySymbol autoProperty
+                        && !UasmEmitter.IsComputedProperty(autoProperty))
+                        continue;
                     yield return impl;
-            }
-            yield break;
+                }
         }
-        if (!VirtualDispatch.IsDispatchSite(target, instance, receiverType)) yield break;
-        var slot = VirtualDispatch.SlotIntroducer(target);
-        foreach (var concrete in portableClasses)
-            if (VirtualDispatch.IsAssignable(concrete, receiverType)
-                && VirtualDispatch.MostDerivedImpl(concrete, slot) is { } impl)
-            {
-                if (impl.AssociatedSymbol is IPropertySymbol autoProperty
-                    && !UasmEmitter.IsComputedProperty(autoProperty))
-                    continue;
-                yield return impl;
-            }
     }
 
     public IEnumerable<ResolvedTarget> ResolveEdges(IOperation op)

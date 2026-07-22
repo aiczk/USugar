@@ -12,6 +12,26 @@ namespace USugar.Tests;
 public class PlannerFreezeContractTests
 {
     [Fact]
+    public void GenericInterfaceDispatch_ClosedImplementationIsPlannedBeforeEmission()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public interface IClosedMap { U Map<U>(U value); }
+public class ClosedMap : IClosedMap {
+    public int marker;
+    public U Map<U>(U value) { marker = 713; return value; }
+}
+public class ClosedMapHost : UdonSharpBehaviour {
+    public int result;
+    int Run(IClosedMap map, int value) { return map.Map<int>(value); }
+    void Start() { result = Run(new ClosedMap(), 7); }
+}
+", "ClosedMapHost");
+
+        Assert.Contains("Map_SystemInt32", uasm);
+    }
+
+    [Fact]
     public void FrozenSharedPlanner_ParallelEmitDoesNotRegisterLayouts()
     {
         var tree = CSharpSyntaxTree.ParseText(TestHelper.StubSource + @"

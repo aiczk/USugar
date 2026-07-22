@@ -462,4 +462,26 @@ public class W9R5DeconProp : UdonSharpBehaviour {
         Assert.Contains("P: %SystemInt32", uasm);   // auto-prop backing store written directly
         Assert.Contains("_set_Item", uasm);         // this-indexer routed to the internal setter
     }
+
+    [Fact]
+    public void Deconstruction_IntoRecursiveSetter_IsRecursionProtected()
+    {
+        // A property nested under the deconstruction target tuple must contribute a SET edge to the
+        // recursion graph. Without it, emission still called Sink recursively but no frame was spilled.
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public class W9R5DeconRecursiveSetter : UdonSharpBehaviour {
+    public int result;
+    int Sink {
+        set {
+            int before = value;
+            if (value > 0) (Sink, result) = (value - 1, result);
+            result += before;
+        }
+    }
+    void Start() { Sink = 3; }
+}", "W9R5DeconRecursiveSetter");
+        Assert.Contains("_set_Sink", uasm);
+        Assert.Contains("__recurStack", uasm);
+    }
 }

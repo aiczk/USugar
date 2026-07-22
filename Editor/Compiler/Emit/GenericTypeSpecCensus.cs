@@ -141,11 +141,11 @@ internal sealed class GenericTypeSpecCensus
         if (!rawTarget.IsGenericMethod && !rawTarget.ContainingType.IsGenericType) return;
         var target = TypeEnvironment.CloseMethod(_compilation, rawTarget, map);
         var owner = target.ContainingType;
-        if (owner == null || !VirtualDispatch.IsAssignable(concrete, owner)) return;
+        if (owner == null || !IsDispatchCompatible(concrete, owner)) return;
 
         IMethodSymbol implementation = null;
         if (owner.TypeKind == TypeKind.Interface)
-            implementation = FindInterfaceImplementation(concrete, target);
+            implementation = VirtualDispatch.FindInterfaceMethodImplementation(concrete, target);
         else if (VirtualDispatch.IsVirtualCall(target))
             implementation = VirtualDispatch.MostDerivedImpl(
                 concrete, VirtualDispatch.SlotIntroducer(target));
@@ -159,27 +159,16 @@ internal sealed class GenericTypeSpecCensus
                 ? eventImpl?.AddMethod : eventImpl?.RemoveMethod;
         }
         if (implementation == null || implementation.IsAbstract) return;
-        if (target.IsGenericMethod && implementation.IsGenericMethod)
+        if (target.IsGenericMethod && implementation.IsGenericMethod
+            && implementation.TypeArguments.Any(ClassTypeObjectContext.ContainsTypeParameter))
             implementation = implementation.Construct(target.TypeArguments.ToArray());
         EnqueueIfClosed(implementation, TypeEnvironment.ForContainingType(concrete, map), trace);
     }
 
-    static IMethodSymbol FindInterfaceImplementation(INamedTypeSymbol concrete, IMethodSymbol target)
-    {
-        if (concrete.FindImplementationForInterfaceMember(target) is IMethodSymbol method)
-            return method;
-        if (target.AssociatedSymbol == null) return null;
-        var member = concrete.FindImplementationForInterfaceMember(target.AssociatedSymbol);
-        return member switch
-        {
-            IMethodSymbol accessor => accessor,
-            IPropertySymbol property when target.MethodKind == MethodKind.PropertyGet => property.GetMethod,
-            IPropertySymbol property when target.MethodKind == MethodKind.PropertySet => property.SetMethod,
-            IEventSymbol evt when target.MethodKind == MethodKind.EventAdd => evt.AddMethod,
-            IEventSymbol evt when target.MethodKind == MethodKind.EventRemove => evt.RemoveMethod,
-            _ => null,
-        };
-    }
+    static bool IsDispatchCompatible(INamedTypeSymbol concrete, INamedTypeSymbol owner)
+        => owner.TypeKind == TypeKind.Interface
+            ? concrete.AllInterfaces.Any(i => SymbolEqualityComparer.Default.Equals(i, owner))
+            : VirtualDispatch.IsAssignable(concrete, owner);
 
     static bool ContainsOpen(ITypeSymbol type) => ClassTypeObjectContext.ContainsTypeParameter(type);
 

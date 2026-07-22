@@ -35,6 +35,26 @@ public class CwVSet : UdonSharpBehaviour {
     }
 
     [Fact]
+    public void PortablePropertySetter_WriteOnly_RegistersSetterBodies()
+    {
+        // No local mint supplies the receiver: it can only arrive through the public program field.
+        // Portable reach must therefore preserve the property's write access kind instead of selecting
+        // the getter merely because the property exposes both accessors.
+        var (uasm, consts) = TestHelper.CompileWithConsts(@"
+using UdonSharp;
+public class PwB { protected int v; public virtual int P { get { return v; } set { v = value + 701; } } }
+public class PwD : PwB { public override int P { get { return v; } set { v = value + 1702; } } }
+public class CwPortableWrite : UdonSharpBehaviour {
+    public PwB target;
+    void Start() { if (target != null) target.P = 5; }
+}", "CwPortableWrite");
+        Assert.True(Regex.Matches(uasm, @"__\d+_set_P").Count >= 2,
+            "portable base and override setter bodies must both be registered");
+        Assert.Contains(consts, c => c.UdonType == "SystemInt32" && Equals(c.Value, 701));
+        Assert.Contains(consts, c => c.UdonType == "SystemInt32" && Equals(c.Value, 1702));
+    }
+
+    [Fact]
     public void AbstractPropertyAccessor_ImplsOnlyChain()
     {
         // An abstract accessor has no base impl and the abstract base is never minted: the chain is

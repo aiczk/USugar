@@ -186,7 +186,7 @@ public sealed class VirtualDispatch
         {
             if (!concrete.AllInterfaces.Any(i => SymbolEqualityComparer.Default.Equals(i, interfaceType)))
                 continue;
-            var impl = concrete.FindImplementationForInterfaceMember(member) as IMethodSymbol;
+            var impl = FindInterfaceMethodImplementation(concrete, member);
             if (impl == null || impl.IsAbstract) continue;
             if (impl.IsVirtual || impl.IsOverride)
                 impl = MostDerivedImpl(concrete, SlotIntroducer(impl)) ?? impl;
@@ -194,6 +194,33 @@ public sealed class VirtualDispatch
             if (typeObj != null) outp.Add(new VDispatchTarget(concrete, typeObj, impl));
         }
         return outp;
+    }
+
+    /// <summary>Resolve an interface method/accessor on a concrete class. Roslyn does not reliably
+    /// accept a constructed generic method in FindImplementationForInterfaceMember, so lookup uses
+    /// the definition and reapplies the call-site method arguments exactly once.</summary>
+    public static IMethodSymbol FindInterfaceMethodImplementation(
+        INamedTypeSymbol concrete, IMethodSymbol target)
+    {
+        if (concrete == null || target == null) return null;
+        var member = concrete.FindImplementationForInterfaceMember(target)
+            ?? concrete.FindImplementationForInterfaceMember(target.OriginalDefinition);
+        if (member == null && target.AssociatedSymbol != null)
+            member = concrete.FindImplementationForInterfaceMember(target.AssociatedSymbol)
+                ?? concrete.FindImplementationForInterfaceMember(target.AssociatedSymbol.OriginalDefinition);
+        var method = member switch
+        {
+            IMethodSymbol m => m,
+            IPropertySymbol property when target.MethodKind == MethodKind.PropertyGet => property.GetMethod,
+            IPropertySymbol property when target.MethodKind == MethodKind.PropertySet => property.SetMethod,
+            IEventSymbol evt when target.MethodKind == MethodKind.EventAdd => evt.AddMethod,
+            IEventSymbol evt when target.MethodKind == MethodKind.EventRemove => evt.RemoveMethod,
+            _ => null,
+        };
+        if (method?.IsGenericMethod == true && target.IsGenericMethod
+            && !target.TypeArguments.Any(ClassTypeObjectContext.ContainsTypeParameter))
+            method = method.OriginalDefinition.Construct(target.TypeArguments.ToArray());
+        return method;
     }
 
     /// <summary>Walk `concrete` and its base chain from most-derived up; return the first NON-abstract method
