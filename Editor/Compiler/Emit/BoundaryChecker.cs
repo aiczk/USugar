@@ -216,6 +216,18 @@ public sealed class BoundaryChecker
             + "references directly, or keep the value class-typed / use Foo[].");
     }
 
+    public void RequireCanDeclareDelegateSurface(ISymbol member, INamedTypeSymbol delegateType)
+    {
+        if (!DelegateAbi.IsProgramLocalSignature(delegateType.DelegateInvokeMethod)) return;
+        var externallyVisible = member.DeclaredAccessibility == Accessibility.Public
+            || member.GetAttributes().Any(a => a.AttributeClass?.Name is
+                "SerializeField" or "SerializeFieldAttribute");
+        if (externallyVisible)
+            throw new NotSupportedException(
+                $"Delegate '{member.Name}' has a user-class parameter or return type and must remain "
+                + "private: its convention is valid only inside this Udon program.");
+    }
+
     /// <summary>Allows the useful class -> object -> class pattern without reopening object laundering.
     /// The erased value must be a single-declaration local and every reference must immediately perform
     /// a runtime class test/cast or reference equality. This is deliberately a whole-body proof: one
