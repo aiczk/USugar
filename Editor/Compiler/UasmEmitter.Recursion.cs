@@ -19,17 +19,15 @@ public partial class UasmEmitter
     // (an indirect dispatch can start any escaped function). Cycle members' NON-TAIL dispatch sites are
     // recorded syntax-keyed in EmitContext.Recursion.ReentrantDispatchSites for the §4.3 Reentrant-flag marking;
     // tail dispatch sites are spared so bundle-driven deep tail recursion never spills (§4.4).
-    void BuildRecursionInfo()
+    void BuildRecursionInfo(CallableBodyGraph bodyGraph)
     {
-        // M5b: ONE resolver-driven pass over the recursion node set's bodies (RecursionNodeWalk —
-        // TargetRole.CallEdge's production consumer); AssembleRecursionFacets consumes its products.
+        // M5b: consume the resolver-driven callable graph frozen before emission. Capture analysis
+        // consumes the same bodies; this phase only derives recursion-specific facets.
         // Runs HERE (post VirtualDispatch seed at Emit's head) — the CallEdge virtual arm needs the
         // seeded instance, so the pass must not move into the Phase-1 reach walk. The committed facet
         // census fixtures (RecursionFacetEquivalenceTests, Golden/FacetCensus) are the permanent
         // oracle; the legacy private walks they were diffed against were deleted at C4 retirement.
-        var facets = AssembleRecursionFacets(
-            new RecursionNodeWalk(EdgeResolver, _reach,
-                _fieldInitOps.Select(fi => fi.initOp)).Run());
+        var facets = AssembleRecursionFacets(bodyGraph);
         // Write-once populate of every analysis artifact.
         _ctx.RecursionContext.Info.Populate(facets.Recursive, facets.CycleEdges, facets.ThisTouches,
             facets.ReentrantSites, facets.TailSparedSites, facets.Nodes);
@@ -37,19 +35,27 @@ public partial class UasmEmitter
 
     // The walk-independent back half: escape sets, synthetic dispatch edges, the this-field-touch
     // closure, Tarjan SCC, and the per-site Reentrant/TailSpared marking — consumes the walk-level
-    // products (RecursionWalkResult) and returns the six RecursionInfo facets.
+    // products (CallableBodyGraph) and returns the six RecursionInfo facets.
     (Dictionary<IMethodSymbol, HashSet<IMethodSymbol>> Recursive,
         Dictionary<IMethodSymbol, HashSet<IMethodSymbol>> CycleEdges,
         Dictionary<IMethodSymbol, HashSet<IFieldSymbol>> ThisTouches,
         HashSet<SyntaxNode> ReentrantSites,
         HashSet<SyntaxNode> TailSparedSites,
         HashSet<IMethodSymbol> Nodes)
-        AssembleRecursionFacets(RecursionWalkResult w)
+        AssembleRecursionFacets(CallableBodyGraph w)
     {
         var allNodes = w.AllNodes;
         var bodies = w.Bodies;
-        var edges = w.Edges;                   // mutated in place below (synthetic dispatch edges)
-        var thisTouches = w.DirectThisTouches; // closed transitively below
+        var edges = new Dictionary<IMethodSymbol, HashSet<IMethodSymbol>>(
+            SymbolEqualityComparer.Default);
+        foreach (var pair in w.Edges)
+            edges.Add(pair.Key,
+                new HashSet<IMethodSymbol>(pair.Value, SymbolEqualityComparer.Default));
+        var thisTouches = new Dictionary<IMethodSymbol, HashSet<IFieldSymbol>>(
+            SymbolEqualityComparer.Default);
+        foreach (var pair in w.DirectThisTouches)
+            thisTouches.Add(pair.Key,
+                new HashSet<IFieldSymbol>(pair.Value, SymbolEqualityComparer.Default));
         var accessorEdges = w.AccessorEdges;
 
         // (b) EscapeSet E (§4.1 + §5.4 widening): conservative approximation of every function whose
@@ -69,7 +75,7 @@ public partial class UasmEmitter
         //      previously "sound only while variance is rejected," the tracked coupling pin
         //      SigFilterCoupledToVarianceReject; that pin now asserts the widened-not-rejected form).
         // MEMBERSHIP-ONLY (§1.5): never drives emission order.
-        var escape = w.EscapedTargets;
+        var escape = new HashSet<IMethodSymbol>(w.EscapedTargets, SymbolEqualityComparer.Default);
         foreach (var m in _planner.GetLayout(_classSymbol).DelegateBridges.Keys)
         {
             var def = m.OriginalDefinition;
@@ -550,5 +556,15 @@ public partial class UasmEmitter
             }
         }
         return sccs;
+    }
+
+    void VerifyRegisteredCallablesAreNodes(CallableBodyGraph graph)
+    {
+        foreach (var callable in _ctx.Methods.Callables.Values.Concat<MethodContext.RegisteredCallable>(
+                     _ctx.Methods.ClosureSpecs))
+            if (!graph.CallableDefinitions.Contains(callable.Definition.OriginalDefinition))
+                throw new InvalidOperationException(
+                    $"USugar internal error: callable '{callable.Definition}' was registered during "
+                    + "emission but was absent from the pre-emission callable body graph.");
     }
 }

@@ -166,29 +166,29 @@ public partial class UasmEmitter
         // Stage 2: closure-scope analysis feeding real codegen — EnvEmit's alloc/read/write and every
         // IsCapturingClosure call site (HandlerBase, InvocationHandler.Extern, this file) key off it.
         // Its roots are the reach definition projection (ComputeCaptureRoots); root bodies come from the
-        // reach result (BodyByDef) — no re-fetch (F1).
+        // shared pre-emission callable graph — no re-fetch or second body walk (F1).
         // C1 fix: roots = the FULL reach artifact (all provenances); field inits = the emitter's own
         // _fieldInitOps (own + base + auto-property + static, already collected + spliced by EmitFields),
         // NOT CaptureScopeAnalysis's own own-class-instance-only re-collection which missed base field and
         // auto-property initializers.
-        IReadOnlyDictionary<IMethodSymbol, IOperation> captureBodies = plan.Reach.BodyByDef;
-        if (plan.Reach.GenericForeignStaticBodies.Count > 0)
-        {
-            // SS2A: merge the supplementary bodies for the authoritative Build lookup (reach itself
-            // stays untouched - registration consumers never see these).
-            var mergedBodies = new Dictionary<IMethodSymbol, IOperation>(plan.Reach.BodyByDef, SymbolEqualityComparer.Default);
-            foreach (var kv in plan.Reach.GenericForeignStaticBodies) mergedBodies[kv.Key] = kv.Value;
-            captureBodies = mergedBodies;
-        }
-        _ctx.Closures.SetCaptureScope(CaptureScopeAnalysis.Build(_compilation, _classSymbol,
-            plan.CaptureRoots, captureBodies, plan.FieldInitOps));
         // CA rewrite (M4): seed the typeobj registry in stable-key order (not mint-walk discovery order),
         // so typeobj alloc / is-chain / virtual-dispatch-chain byte order is traversal-independent.
         _ctx.ClassTypes.Seed(plan.Reach.MintedClasses
             .OrderBy(StableOrdinalKey, StringComparer.Ordinal)
             .ThenBy(ClassTypeObjectContext.SpecKey, StringComparer.Ordinal));
         _ctx.VirtualDispatch = new VirtualDispatch(_ctx.ClassTypes); // CA-v2b-2: virtual-call lowering
-        EmitMethods(plan);
+        var plannedCallables = plan.Methods
+            .Concat(plan.Registration.ForeignStatics)
+            .Concat(plan.Registration.StructMethods)
+            .Concat(plan.Registration.BaseInstanceMethods)
+            .Concat(_planner.Census.Classes
+                .Where(TypeClassifier.IsUserClass)
+                .SelectMany(type => type.GetMembers().OfType<IMethodSymbol>()));
+        var bodyGraph = new RecursionNodeWalk(
+            EdgeResolver, plan.Reach, plan.FieldInitOps, plannedCallables).Run();
+        _ctx.Closures.SetCaptureScope(CaptureScopeAnalysis.Build(_compilation, _classSymbol,
+            plan.CaptureRoots, bodyGraph.Bodies, plan.FieldInitOps));
+        EmitMethods(plan, bodyGraph);
         OnIrPass?.Invoke("after-emit", _module);
         // Handlers build Core IR; the pipeline (verify/optimize/flatten) runs on Core directly.
         var result = IrPipeline.GenerateUasmFromCore(_module, DumpEnabled);
@@ -1020,11 +1020,12 @@ public partial class UasmEmitter
            && m.MethodKind is MethodKind.Ordinary or MethodKind.ExplicitInterfaceImplementation
               or MethodKind.PropertyGet or MethodKind.PropertySet;
 
-    void EmitMethods(ClassCompilePlan plan)
+    void EmitMethods(ClassCompilePlan plan, CallableBodyGraph bodyGraph)
     {
         RegisterProgram(plan);
-        BuildRecursionInfo();
+        BuildRecursionInfo(bodyGraph);
         EmitRegisteredBodies(plan);
+        VerifyRegisteredCallablesAreNodes(bodyGraph);
     }
 
     void RegisterProgram(ClassCompilePlan plan)

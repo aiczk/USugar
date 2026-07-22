@@ -9,8 +9,10 @@ using Microsoft.CodeAnalysis.Operations;
 /// closure runs downstream, over the synthetic-edge-augmented graph), and the C3 escape facet (the §4.1
 /// escaped-target set + the variant sig-S pairs, membership-filtered). Produced by
 /// <see cref="RecursionNodeWalk"/>.</summary>
-internal sealed class RecursionWalkResult
+internal sealed class CallableBodyGraph
 {
+    /// <summary>Every callable definition known before emission, including declarations without a body.</summary>
+    public HashSet<IMethodSymbol> CallableDefinitions;
     /// <summary>Every recursion-graph node (roots, local functions, lambdas), deduped.</summary>
     public IMethodSymbol[] AllNodes;
     public Dictionary<IMethodSymbol, IOperation> Bodies;
@@ -55,15 +57,18 @@ internal sealed class RecursionNodeWalk
     readonly ResolvedEdgeResolver _resolver;
     readonly ReachableBodies _reach;
     readonly IEnumerable<IOperation> _fieldInitOps;
+    readonly IEnumerable<IMethodSymbol> _plannedCallables;
 
-    public RecursionNodeWalk(ResolvedEdgeResolver resolver, ReachableBodies reach, IEnumerable<IOperation> fieldInitOps)
+    public RecursionNodeWalk(ResolvedEdgeResolver resolver, ReachableBodies reach,
+        IEnumerable<IOperation> fieldInitOps, IEnumerable<IMethodSymbol> plannedCallables)
     {
         _resolver = resolver;
         _reach = reach;
         _fieldInitOps = fieldInitOps;
+        _plannedCallables = plannedCallables;
     }
 
-    public RecursionWalkResult Run()
+    public CallableBodyGraph Run()
     {
         var cmp = SymbolEqualityComparer.Default;
         // C2 (M5c residual): the seed node source is the MAIN reach fixpoint only. The supplementary
@@ -220,8 +225,14 @@ internal sealed class RecursionNodeWalk
             if (methodSet.Contains(p.Method))
                 variantSigs.Add(p);
 
-        return new RecursionWalkResult
+        var callableDefinitions = new HashSet<IMethodSymbol>(
+            _plannedCallables.Select(method => method.OriginalDefinition), cmp);
+        foreach (var node in order)
+            callableDefinitions.Add(node.OriginalDefinition);
+
+        return new CallableBodyGraph
         {
+            CallableDefinitions = callableDefinitions,
             AllNodes = order.ToArray(),
             Bodies = bodies,
             Edges = edges,

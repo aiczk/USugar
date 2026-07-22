@@ -278,4 +278,6 @@ public sealed class MethodContext
     /// <summary>Census surface (read-only): every registered per-spec closure key. Harness
     /// instrumentation only — emission never enumerates the registry.</summary>
     public IEnumerable<SpecKey> ClosureSpecKeys => _closureSpecs.Keys;
+    /// <summary>Read-only callable records used to validate the frozen pre-emission definition set.</summary>
+    public IEnumerable<ClosureSpec> ClosureSpecs => _closureSpecs.Values;
 }
