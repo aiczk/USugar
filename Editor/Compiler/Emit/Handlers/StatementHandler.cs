@@ -443,13 +443,28 @@ public class StatementHandler : HandlerBase, IOperationHandler
     /// Dispose method (collected in CollectStructMethodsInOperation). Real Udon disposables keep the extern.</summary>
     void EmitDispose(CLeaf val, ITypeSymbol type)
     {
-        if (type is INamedTypeSymbol nt && TypeClassifier.IsUserStruct(nt)
+        var resolvedType = ResolveType(type);
+        if (resolvedType is INamedTypeSymbol nt && TypeClassifier.IsUserStruct(nt)
             && EmitPolicy.FindStructDisposeMethod(nt) is { } dispose)
         {
             EmitCallToMethod(ResolveStructMember(dispose), new List<CLeaf> { val });
             return;
         }
-        EmitExternVoid($"{GetStorageTypeName(type)}.__Dispose__SystemVoid", new List<CLeaf> { val });
+
+        void EmitCall()
+            => EmitExternVoid($"{GetStorageTypeName(resolvedType)}.__Dispose__SystemVoid",
+                new List<CLeaf> { val });
+
+        if (resolvedType?.IsReferenceType == true
+            || resolvedType?.TypeKind == TypeKind.TypeParameter)
+        {
+            var present = ExternCall(
+                "SystemObject.__op_Inequality__SystemObject_SystemObject__SystemBoolean",
+                new List<CLeaf> { val, Const(null, StorageTypes.Object) }, StorageTypes.Boolean);
+            _builder.EmitIf(present, _ => EmitCall());
+            return;
+        }
+        EmitCall();
     }
 
     void VisitVariableDeclaration(IVariableDeclarationOperation decl)

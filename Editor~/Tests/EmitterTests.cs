@@ -4659,6 +4659,25 @@ public class UsingExprTest : UdonSharpBehaviour {
         Assert.Contains("TestStubsDisposableResource.__Dispose__SystemVoid", uasm);
     }
 
+    [Fact]
+    public void UsingStatement_NullReference_GuardsDispose()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+using TestStubs;
+[UdonBehaviourSyncMode(BehaviourSyncMode.None)]
+public class UsingNullTest : UdonSharpBehaviour {
+    void Start() {
+        DisposableResource r = null;
+        using (r) { }
+    }
+}
+");
+        Assert.Contains(
+            "SystemObject.__op_Inequality__SystemObject_SystemObject__SystemBoolean", uasm);
+        Assert.Contains("TestStubsDisposableResource.__Dispose__SystemVoid", uasm);
+    }
+
     // ── jagged array ──
 
     [Fact]
