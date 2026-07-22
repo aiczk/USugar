@@ -165,4 +165,38 @@ public class StaticDelegateHost : UdonSharpBehaviour {
         Assert.Contains("__static_", uasm);
         Assert.Contains("_Callback", uasm);
     }
+
+    [Fact]
+    public void StaticInitializers_PreserveDeclarationOrder()
+    {
+        TestHelper.CompileToUasm(@"
+using UdonSharp;
+public class StaticOrderHost : UdonSharpBehaviour {
+    static int First = Make(1);
+    static int Second = Make(2);
+    static int Make(int value) { return value; }
+}
+", "StaticOrderHost", out var emitter);
+
+        Assert.Collection(emitter.DebugStaticInitializerOrder,
+            name => Assert.EndsWith("_First", name),
+            name => Assert.EndsWith("_Second", name));
+    }
+
+    [Fact]
+    public void StaticInitializerCycle_ThrowsWithDependencyPath()
+    {
+        var ex = Assert.ThrowsAny<System.Exception>(() => TestHelper.CompileToUasm(@"
+using UdonSharp;
+public class StaticCycleHost : UdonSharpBehaviour {
+    static int A = B + Read();
+    static int B = A + Read();
+    static int Read() { return 1; }
+}
+", "StaticCycleHost"));
+
+        Assert.Contains("Static initializer cycle", ex.Message);
+        Assert.Contains("StaticCycleHost.A", ex.Message);
+        Assert.Contains("StaticCycleHost.B", ex.Message);
+    }
 }

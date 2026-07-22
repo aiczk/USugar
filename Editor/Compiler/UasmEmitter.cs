@@ -144,6 +144,8 @@ public partial class UasmEmitter
     // RecursionFacetEquivalenceTests can census the legacy BuildRecursionInfo product and diff it
     // against the worklist-produced facets before the M5b swap. Unused by production emission.
     internal RecursionInfo DebugRecursionInfo => _ctx.RecursionContext.Info;
+    internal IReadOnlyList<string> DebugStaticInitializerOrder
+        => _staticFieldInitOps.Select(x => x.fieldName).ToArray();
 
     /// <summary>Called after handler emission, before optimization. Set for IR debugging.</summary>
     public Action<string, CModule> OnIrPass;
@@ -606,8 +608,60 @@ public partial class UasmEmitter
         // the instance tier above (they were collected into separate lists), then splices in FRONT of
         // it — base static → derived static → base instance → derived instance.
         ReorderBaseFirst(_staticFieldInitOps, baseStaticInitBoundaries, derivedStaticFieldInitCount);
+        ValidateStaticInitializerCycles();
         if (_staticFieldInitOps.Count > 0)
             _fieldInitOps.InsertRange(0, _staticFieldInitOps);
+    }
+
+    void ValidateStaticInitializerCycles()
+    {
+        var ownerByOp = new Dictionary<IOperation, ISymbol>();
+        var opByOwner = new Dictionary<ISymbol, IOperation>(SymbolEqualityComparer.Default);
+        foreach (var (_, op, _) in _staticFieldInitOps)
+        {
+            SyntaxNode declaration = op.Syntax.FirstAncestorOrSelf<VariableDeclaratorSyntax>()
+                ?? (SyntaxNode)op.Syntax.FirstAncestorOrSelf<PropertyDeclarationSyntax>();
+            if (declaration == null) continue;
+            var owner = _compilation.GetSemanticModel(declaration.SyntaxTree).GetDeclaredSymbol(declaration);
+            if (owner == null) continue;
+            ownerByOp[op] = owner;
+            opByOwner[owner] = op;
+        }
+
+        var visiting = new HashSet<ISymbol>(SymbolEqualityComparer.Default);
+        var visited = new HashSet<ISymbol>(SymbolEqualityComparer.Default);
+        var path = new List<ISymbol>();
+        void Visit(ISymbol owner)
+        {
+            if (visited.Contains(owner)) return;
+            if (!visiting.Add(owner))
+            {
+                var start = path.FindIndex(x => SymbolEqualityComparer.Default.Equals(x, owner));
+                var cycle = path.Skip(start).Concat(new[] { owner })
+                    .Select(x => x.ContainingType.Name + "." + x.Name);
+                throw new NotSupportedException(
+                    "Static initializer cycle is not supported by the per-program static owner ABI: "
+                    + string.Join(" -> ", cycle)
+                    + ". Initialize one member explicitly from Start() to break the cycle.");
+            }
+            path.Add(owner);
+            var op = opByOwner[owner];
+            foreach (var child in op.DescendantsAndSelf())
+            {
+                ISymbol dependency = child switch
+                {
+                    IFieldReferenceOperation f => f.Field,
+                    IPropertyReferenceOperation p => p.Property,
+                    _ => null,
+                };
+                if (dependency != null && opByOwner.ContainsKey(dependency)) Visit(dependency);
+            }
+            path.RemoveAt(path.Count - 1);
+            visiting.Remove(owner);
+            visited.Add(owner);
+        }
+
+        foreach (var owner in opByOwner.Keys.ToArray()) Visit(owner);
     }
 
     /// <summary>Base-first reorder shared by the instance and static field-initializer tiers (§3.6):
