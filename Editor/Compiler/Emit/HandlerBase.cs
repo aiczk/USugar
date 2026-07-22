@@ -1415,7 +1415,7 @@ public abstract partial class HandlerBase
                     && propRef.Instance is not IInstanceReferenceOperation
                     && _planner.GetLayout(propRef.Property.ContainingType).Methods.TryGetValue(ifaceSetter, out var ifaceSetterMl))
                 {
-                    GuardInterfaceHasBehaviourImplementor(propRef.Property.ContainingType, propRef.Property.Name);
+                    GuardInterfaceDispatchRepresentation(propRef.Property.ContainingType, propRef.Property.Name);
                     RejectProgramLocalCrossBehaviourPropertyWrite(propRef.Property); // CW22
                     // Wave-12 r2 [V1]: a reentrant setter dispatch pulls its value copy-in inside the
                     // spill window (preSpillStmts: 1 — the SetProgramVariable emitted just above).
@@ -2640,16 +2640,8 @@ public abstract partial class HandlerBase
     /// rejectable just because no class implementor happens to be visible here). Call this from every
     /// gate that currently reads `!IsResolvedConcreteNonBehaviour(...)` to route to interface dispatch.
     /// </summary>
-    protected void GuardInterfaceHasBehaviourImplementor(INamedTypeSymbol ifaceType, string memberName)
-    {
-        if (ifaceType != null && _planner.InterfaceHasStructImplementor(ifaceType))
-            throw new System.NotSupportedException(
-                $"Interface member '{ifaceType.Name}.{memberName}' is invoked through an interface-typed "
-              + $"receiver, but a struct in this compilation implements '{ifaceType.Name}'. USugar's "
-              + "interface dispatch is a cross-behaviour SendCustomEvent bridge with no struct-vtable "
-              + "equivalent; calling a struct-implemented interface through an interface-typed reference "
-              + "is not supported.");
-    }
+    protected void GuardInterfaceDispatchRepresentation(INamedTypeSymbol ifaceType, string memberName)
+        => _ctx.Boundary.RequireInterfaceDispatchRepresentation(ifaceType, memberName);
 
     /// <summary>Wave-9 round-4 [X4]/[X5]/[X9]: gate + layout lookup for a USER-INTERFACE property or
     /// indexer accessor reached through an interface-typed receiver. The [W6] cross-indexer gate
@@ -2671,7 +2663,7 @@ public abstract partial class HandlerBase
             && !IsResolvedConcreteNonBehaviour(op.Instance.Type)
             && _planner.GetLayout(ifaceType).Methods.TryGetValue(accessor, out ml);
         if (matched)
-            GuardInterfaceHasBehaviourImplementor((INamedTypeSymbol)op.Property.ContainingType, accessor.Name);
+            GuardInterfaceDispatchRepresentation((INamedTypeSymbol)op.Property.ContainingType, accessor.Name);
         return matched;
     }
 

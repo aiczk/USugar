@@ -212,7 +212,7 @@ public partial class InvocationHandler
             && !IsResolvedConcreteNonBehaviour(op.Instance.Type)
             && _planner.GetLayout(op.Property.ContainingType).Methods.TryGetValue(ifaceGetter, out var ifaceGetterMl))
         {
-            GuardInterfaceHasBehaviourImplementor(op.Property.ContainingType, op.Property.Name);
+            GuardInterfaceDispatchRepresentation(op.Property.ContainingType, op.Property.Name);
             RejectProgramLocalCrossBehaviourPropertyRead(op.Property); // CW22
             var ifaceInst = VisitExpression(op.Instance);
             return CrossCall(ifaceInst, LayoutPlanner.InterfaceDispatchName(ifaceGetter, ifaceGetterMl),

@@ -165,6 +165,9 @@ public sealed class BoundaryChecker
     {
         var sourceShape = TypeClassifier.ShapeOf(sourceType, TypeCtx);
         var destinationShape = TypeClassifier.ShapeOf(destinationType, TypeCtx);
+        if (destinationType is INamedTypeSymbol { TypeKind: TypeKind.Interface } mixedInterface
+            && _ctx.Planner.InterfaceHasMixedRuntimeRepresentations(mixedInterface))
+            RequireInterfaceDispatchRepresentation(mixedInterface, "conversion");
         if (TypeClassifier.IsUserClass(sourceType)
             && destinationType is INamedTypeSymbol { TypeKind: TypeKind.Interface } localInterface
             && _ctx.Planner.InterfaceIsLocalUserClassOnly(localInterface))
@@ -214,6 +217,16 @@ public sealed class BoundaryChecker
             + "a class value is a program-local object[] bundle with no runtime type identity, so once boxed "
             + "to object it launders past the cross-program / cast / ToString boundary checks. Compare class "
             + "references directly, or keep the value class-typed / use Foo[].");
+    }
+
+    public void RequireInterfaceDispatchRepresentation(INamedTypeSymbol ifaceType, string memberName)
+    {
+        if (ifaceType == null || !_ctx.Planner.InterfaceHasMixedRuntimeRepresentations(ifaceType)) return;
+        throw new NotSupportedException(
+            $"Interface member '{ifaceType.Name}.{memberName}' uses an interface with different runtime "
+            + "representations in this compilation (a UdonBehaviour reference, a user-class object[] "
+            + "bundle, or a user struct bundle). Keep one representation per interface; USugar cannot "
+            + "safely dispatch a single interface value across mixed representations.");
     }
 
     public void RequireCanDeclareDelegateSurface(ISymbol member, INamedTypeSymbol delegateType)

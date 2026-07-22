@@ -131,6 +131,11 @@ public class LayoutPlanner
            && !_interfacesWithBehaviourImplementor.Contains(iface)
            && !_interfacesWithStructImplementor.Contains(iface);
 
+    public bool InterfaceHasMixedRuntimeRepresentations(INamedTypeSymbol iface)
+        => iface != null && (_interfacesWithStructImplementor.Contains(iface)
+            || _interfacesWithUserClassImplementor.Contains(iface)
+               && _interfacesWithBehaviourImplementor.Contains(iface));
+
     // C# event method name → Udon export name ("_" + lowerFirst). Regenerated from the SDK's Event_*
     // node definitions — the same source stock UdonSharp derives from (CompilerUdonInterface.CacheInit).
     // Pinned bidirectionally against Editor~/Tests/Fixtures/udon_event_registry.txt by
