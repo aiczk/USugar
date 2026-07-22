@@ -35,8 +35,7 @@ public class VirtualDispatchTests
         var staticTy = Find(staticTypeName);
         var slot = staticTy.GetMembers(methodName).OfType<IMethodSymbol>().First();
         var site = new CallableSite(CallableSiteKind.Method, slot, null);
-        return new VirtualDispatch(typeObjs).Resolve(
-            site, staticTy, interfaceDispatch: false).RuntimeTargets;
+        return new VirtualDispatch(typeObjs).Resolve(site, staticTy).RuntimeTargets;
     }
 
     static bool IsBehaviour(INamedTypeSymbol t)

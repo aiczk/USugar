@@ -53,8 +53,7 @@ public sealed class ReceiverBridgeEmitter
 
         var conventionReturn = returnType != null ? DelegateAbi.ConvRetName(signaturePart) : null;
         var site = new CallableSite(CallableSiteKind.Method, member, null);
-        var targets = _context.VirtualDispatch.Resolve(
-            site, member.ContainingType, interfaceDispatch: true).RuntimeTargets;
+        var targets = _context.VirtualDispatch.Resolve(site, member.ContainingType).RuntimeTargets;
         var matched = builder.AllocScratch(StorageTypes.Boolean);
         builder.EmitAssign(matched, builder.Const(false, StorageTypes.Boolean));
         var typeObj = AggregateAbi.ReadSlot(builder, receiver, 0, StorageTypes.String);

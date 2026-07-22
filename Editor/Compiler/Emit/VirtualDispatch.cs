@@ -64,8 +64,9 @@ public sealed class VirtualDispatch
     /// the receiver uses interface dispatch; every consumer then receives the same closed-world target
     /// list instead of selecting one of two resolver APIs independently.</summary>
     internal DispatchPlan Resolve(CallableSite site, INamedTypeSymbol receiverType,
-        bool interfaceDispatch, INamedTypeSymbol compiledClass = null)
+        INamedTypeSymbol compiledClass = null)
     {
+        var interfaceDispatch = receiverType?.TypeKind == TypeKind.Interface;
         var runtimeTargets = interfaceDispatch
             ? ResolveInterfaceTargets(receiverType, site.Target)
             : IsDispatchSite(site.Target, site.Receiver, receiverType)

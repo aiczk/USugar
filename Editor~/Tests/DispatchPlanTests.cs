@@ -30,8 +30,7 @@ class C : I { public int M() => 1; void Use(I value) { value.M(); } }");
         var types = new ClassTypeObjectContext();
         types.Seed(new[] { concrete });
 
-        var plan = new VirtualDispatch(types).Resolve(
-            site, iface, interfaceDispatch: true, compiledClass: concrete);
+        var plan = new VirtualDispatch(types).Resolve(site, iface, compiledClass: concrete);
 
         var runtime = Assert.Single(plan.RuntimeTargets);
         Assert.True(SymbolEqualityComparer.Default.Equals(concrete, runtime.Concrete));

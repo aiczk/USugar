@@ -2315,7 +2315,7 @@ public abstract partial class HandlerBase
         var interfaceDispatch = recvTy.TypeKind == TypeKind.Interface;
         var site = new CallableSite(setValue == null ? CallableSiteKind.PropertyGet : CallableSiteKind.PropertySet,
             accessor, null);
-        var targets = _ctx.VirtualDispatch.Resolve(site, recvTy, interfaceDispatch).RuntimeTargets;
+        var targets = _ctx.VirtualDispatch.Resolve(site, recvTy).RuntimeTargets;
         if (!interfaceDispatch) AssertClosedVirtualDispatch(recvTy, targets, accessor);
         bool isSet = setValue != null;
         string memberKind = prop.IsIndexer ? "indexer" : "property";
@@ -2444,7 +2444,7 @@ public abstract partial class HandlerBase
     {
         var slot = ObjectToStringSlot();
         var site = new CallableSite(CallableSiteKind.Method, slot, null);
-        var targets = _ctx.VirtualDispatch.Resolve(site, recvTy, interfaceDispatch: false).RuntimeTargets;
+        var targets = _ctx.VirtualDispatch.Resolve(site, recvTy).RuntimeTargets;
         AssertClosedVirtualDispatch(recvTy, targets, slot);
 
         var recvSlot = _ctx.Builder.AllocScratch(new StorageType(AggregateAbi.ArrayType));
