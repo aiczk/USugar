@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Linq;
 using System.Text;
 
 // ============================================================================
@@ -87,9 +88,63 @@ public sealed class FieldDecl
 /// __const_{type}_{n} data-section names — a drift between the two formats reshuffles golden UASM.
 /// Culture-invariant throughout ("R" for float/double so distinct values never collide on a lossy
 /// rendering; the raw object, not this string, is what reaches the data section).</summary>
+public readonly struct ConstKey : IEquatable<ConstKey>
+{
+    public readonly string UdonType;
+    public readonly string ValueKind;
+    public readonly string CanonicalValue;
+
+    public ConstKey(string udonType, object value)
+    {
+        UdonType = udonType ?? throw new ArgumentNullException(nameof(udonType));
+        ValueKind = value?.GetType().FullName ?? "<null>";
+        CanonicalValue = ConstFormat.CanonicalValue(value);
+    }
+
+    public bool Equals(ConstKey other)
+        => string.Equals(UdonType, other.UdonType, StringComparison.Ordinal)
+           && string.Equals(ValueKind, other.ValueKind, StringComparison.Ordinal)
+           && string.Equals(CanonicalValue, other.CanonicalValue, StringComparison.Ordinal);
+
+    public override bool Equals(object obj) => obj is ConstKey other && Equals(other);
+
+    public override int GetHashCode()
+    {
+        unchecked
+        {
+            var hash = 17;
+            hash = hash * 31 + StringComparer.Ordinal.GetHashCode(UdonType);
+            hash = hash * 31 + StringComparer.Ordinal.GetHashCode(ValueKind);
+            hash = hash * 31 + StringComparer.Ordinal.GetHashCode(CanonicalValue);
+            return hash;
+        }
+    }
+
+    public override string ToString() => $"{UdonType}:{ValueKind}:{CanonicalValue}";
+}
+
 public static class ConstFormat
 {
-    public static string Key(string type, object value) => $"{type}_{Value(value)}";
+    public static ConstKey Key(string type, object value) => new(type, value);
+
+    internal static string CanonicalValue(object value)
+    {
+        if (value == null) return "";
+        if (value is float f) return BitConverter.SingleToInt32Bits(f).ToString("X8", CultureInfo.InvariantCulture);
+        if (value is double d) return BitConverter.DoubleToInt64Bits(d).ToString("X16", CultureInfo.InvariantCulture);
+        if (value is decimal dec) return string.Join(":", decimal.GetBits(dec).Select(
+            bit => bit.ToString("X8", CultureInfo.InvariantCulture)));
+        if (value is char ch) return ((int)ch).ToString("X4", CultureInfo.InvariantCulture);
+        if (value is bool b) return b ? "1" : "0";
+        if (value is string s) return s;
+        if (value.GetType().IsEnum)
+            return ((IFormattable)value).ToString("D", CultureInfo.InvariantCulture);
+        if (value is IFormattable fmt) return fmt.ToString(null, CultureInfo.InvariantCulture);
+        // Constants outside the scalar families are reference values. Identity is the only sound
+        // partition: two distinct Unity objects may share the same name/ToString representation.
+        return System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(value)
+            .ToString("X8", CultureInfo.InvariantCulture);
+    }
 
     public static string Value(object value)
     {

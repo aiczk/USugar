@@ -12,7 +12,7 @@ public sealed class CoreBuilder
     readonly CModule _module;
     CFunction _currentFunc;
     readonly Stack<List<CStmt>> _stmtStack = new Stack<List<CStmt>>();
-    readonly Dictionary<string, CConst> _constPool = new Dictionary<string, CConst>();
+    readonly Dictionary<ConstKey, CConst> _constPool = new Dictionary<ConstKey, CConst>();
 
     public CoreBuilder(CModule module)
         => _module = module ?? throw new ArgumentNullException(nameof(module));

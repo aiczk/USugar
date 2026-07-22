@@ -36,22 +36,40 @@ public class CoreToUasmTests
         Assert.DoesNotContain("SystemString", uasm);
     }
 
-    // ConstFormat is the single source for constant-pool keys (hand-enumeration audit Tier-2: it
-    // replaced three per-site copies in CoreBuilder.Const and CoreToUasm.GetConstVar). The key
-    // decides pool partitioning and therefore the deterministic __const_{type}_{n} data-section
-    // names — pin the format per value family so a drift shows up here before it reshuffles goldens.
-    [Theory]
-    [InlineData(null, "SystemObject", "SystemObject_null")]
-    [InlineData(1.5f, "SystemSingle", "SystemSingle_1.5")]
-    [InlineData(2.25, "SystemDouble", "SystemDouble_2.25")]
-    [InlineData(true, "SystemBoolean", "SystemBoolean_True")]
-    [InlineData("hi", "SystemString", "SystemString_hi")]
-    [InlineData(-42, "SystemInt32", "SystemInt32_-42")]
-    [InlineData(200, "SystemByte", "SystemByte_200")]
-    [InlineData('A', "SystemChar", "SystemChar_A")]
-    [InlineData(ulong.MaxValue, "SystemUInt64", "SystemUInt64_18446744073709551615")]
-    public void ConstFormat_Key_PinsThePoolPartitioningFormat(object value, string type, string expected)
+    [Fact]
+    public void ConstKey_DistinguishesClrKindsCollapsedToSystemObject()
     {
-        Assert.Equal(expected, ConstFormat.Key(type, value));
+        Assert.NotEqual(ConstFormat.Key("SystemObject", null), ConstFormat.Key("SystemObject", "null"));
+        Assert.NotEqual(ConstFormat.Key("SystemObject", 1), ConstFormat.Key("SystemObject", "1"));
+        Assert.NotEqual(ConstFormat.Key("SystemSingle", 0f), ConstFormat.Key("SystemSingle", -0f));
+        Assert.Equal(ConstFormat.Key("SystemObject", "same"), ConstFormat.Key("SystemObject", "same"));
+    }
+
+    [Theory]
+    [InlineData(null, "null")]
+    [InlineData(1.5f, "1.5")]
+    [InlineData(2.25, "2.25")]
+    [InlineData(true, "True")]
+    [InlineData("hi", "hi")]
+    [InlineData(-42, "-42")]
+    [InlineData(200, "200")]
+    [InlineData('A', "A")]
+    [InlineData(ulong.MaxValue, "18446744073709551615")]
+    public void ConstFormat_Value_PinsUasmSerializationFormat(object value, string expected)
+    {
+        Assert.Equal(expected, ConstFormat.Value(value));
+    }
+
+    [Fact]
+    public void CoreBuilder_DoesNotDeduplicateCollidingObjectRenderings()
+    {
+        var builder = new CoreBuilder(new CModule { ClassName = "ConstCollision" });
+        var nullValue = builder.Const(null, "SystemObject");
+        var nullString = builder.Const("null", "SystemObject");
+        var boxedOne = builder.Const(1, "SystemObject");
+        var stringOne = builder.Const("1", "SystemObject");
+
+        Assert.NotSame(nullValue, nullString);
+        Assert.NotSame(boxedOne, stringOne);
     }
 }

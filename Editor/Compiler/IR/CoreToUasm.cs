@@ -55,7 +55,7 @@ public static class CoreToUasm
         readonly List<VarDecl> _vars = new();
         readonly Dictionary<string, string> _declaredVarTypes = new();  // id → udonType
         readonly HashSet<string> _externs = new();
-        readonly Dictionary<string, string> _constPool = new();     // "type_value" → varId
+        readonly Dictionary<ConstKey, string> _constPool = new();
         readonly Dictionary<string, CFunction> _funcByName = new();
 
         // Slot → UASM variable name: keyed by (funcIndex, slotId) for global uniqueness.
