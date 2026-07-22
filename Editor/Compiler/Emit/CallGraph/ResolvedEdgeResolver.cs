@@ -474,65 +474,9 @@ public sealed class ResolvedEdgeResolver
                     yield return impl;
                 break;
             case IPropertyReferenceOperation pr:
-                var propertySites = CallableSites.FromOperation(pr).ToArray();
-                var readsProperty = propertySites.Any(s => s.Kind == CallableSiteKind.PropertyGet);
-                var writesProperty = propertySites.Any(s => s.Kind == CallableSiteKind.PropertySet);
-                // this-receiver accessor call (both accessors + the emission-faithful leaf override).
-                if (pr.Instance is IInstanceReferenceOperation)
-                {
-                    if (readsProperty && pr.Property.GetMethod is { } pg) yield return pg.OriginalDefinition;
-                    if (writesProperty && pr.Property.SetMethod is { } ps) yield return ps.OriginalDefinition;
-                    if (LeafPropertyTarget(pr) is { } lp)
-                    {
-                        if (readsProperty && lp.GetMethod is { } lg) yield return lg.OriginalDefinition;
-                        if (writesProperty && lp.SetMethod is { } ls) yield return ls.OriginalDefinition;
-                    }
-                }
-                // variable-receiver / interface-typed accessor dispatch that can land back on this program.
-                if (IsCrossDispatchReceiver(pr.Instance, pr.Property))
-                {
-                    if (readsProperty && pr.Property.GetMethod is { } crossGetter)
-                    {
-                        var cross = ResolveDispatch(pr, crossGetter).Cross;
-                        if (cross.HasLocalTarget) yield return cross.LocalTargetDefinition;
-                    }
-                    if (writesProperty && pr.Property.SetMethod is { } crossSetter)
-                    {
-                        var cross = ResolveDispatch(pr, crossSetter).Cross;
-                        if (cross.HasLocalTarget) yield return cross.LocalTargetDefinition;
-                    }
-                }
-                // computed property / indexer on a USER-STRUCT receiver — `this` OR a fresh struct
-                // instance (structs compile into this program's accessor functions).
-                if (pr.Property is { IsStatic: false } sprop
-                    && sprop.ContainingType is INamedTypeSymbol sprct && TypeClassifier.IsObjectArrayEmulated(sprct))
-                {
-                    if (readsProperty && sprop.GetMethod is { } sg) yield return sg.OriginalDefinition;
-                    if (writesProperty && sprop.SetMethod is { } ss) yield return ss.OriginalDefinition;
-                }
-                // CW1 lift: accessor dispatch fan-out — the accessor twin of the invocation arm's
-                // v2b-2/CW5 arms. Both accessors yield conservatively (a reference alone doesn't
-                // reveal read-vs-write context; over-yield only ever over-spills, §8-3).
-                if (readsProperty)
-                    foreach (var impl in AccessorDispatchImplDefs(pr, VirtualDispatch.FindAccessor(pr.Property, getter: true)))
-                        yield return impl;
-                if (writesProperty)
-                    foreach (var impl in AccessorDispatchImplDefs(pr, VirtualDispatch.FindAccessor(pr.Property, getter: false)))
-                        yield return impl;
-                if (pr.Property.ContainingType is INamedTypeSymbol { TypeKind: TypeKind.Interface } propIface
-                    && _emitter.Planner.InterfaceIsLocalUserClassOnly(propIface))
-                {
-                    if (readsProperty && pr.Property.GetMethod is { } ig)
-                        foreach (var vt in _emitter.VirtualDispatchInstance.Resolve(
-                            CallableSites.Require(pr, ig),
-                            propIface).RuntimeTargets)
-                            yield return vt.Impl.OriginalDefinition;
-                    if (writesProperty && pr.Property.SetMethod is { } ise)
-                        foreach (var vt in _emitter.VirtualDispatchInstance.Resolve(
-                            CallableSites.Require(pr, ise),
-                            propIface).RuntimeTargets)
-                            yield return vt.Impl.OriginalDefinition;
-                }
+                foreach (var propertySite in CallableSites.FromOperation(pr))
+                    foreach (var target in ResolvePropertyTargets(pr, propertySite))
+                        yield return target;
                 break;
             case IEventAssignmentOperation eventAssignment
                 when eventAssignment.EventReference is IEventReferenceOperation eventReference:
@@ -567,6 +511,42 @@ public sealed class ResolvedEdgeResolver
         // struct operators. (B49 — see the summary above.)
         var opMethod = CallableSites.OperatorMethod(op);
         if (opMethod != null) yield return opMethod.OriginalDefinition;
+    }
+
+    /// <summary>Resolve one normalized property accessor to the graph targets consumed by SCC
+    /// construction and accessor-specific tail analysis.</summary>
+    IEnumerable<IMethodSymbol> ResolvePropertyTargets(IPropertyReferenceOperation property, CallableSite site)
+    {
+        if (site.Kind is not (CallableSiteKind.PropertyGet or CallableSiteKind.PropertySet)) yield break;
+        var accessor = site.Target;
+        var getter = site.Kind == CallableSiteKind.PropertyGet;
+
+        if (property.Instance is IInstanceReferenceOperation)
+        {
+            yield return accessor.OriginalDefinition;
+            if (LeafPropertyTarget(property) is { } leaf)
+            {
+                var leafAccessor = getter ? leaf.GetMethod : leaf.SetMethod;
+                if (leafAccessor != null) yield return leafAccessor.OriginalDefinition;
+            }
+        }
+        if (IsCrossDispatchReceiver(property.Instance, property.Property))
+        {
+            var cross = ResolveDispatch(property, accessor).Cross;
+            if (cross.HasLocalTarget) yield return cross.LocalTargetDefinition;
+        }
+        if (!property.Property.IsStatic
+            && property.Property.ContainingType is INamedTypeSymbol aggregate
+            && TypeClassifier.IsObjectArrayEmulated(aggregate))
+            yield return accessor.OriginalDefinition;
+
+        foreach (var implementation in AccessorDispatchImplDefs(property, accessor))
+            yield return implementation;
+
+        if (property.Property.ContainingType is INamedTypeSymbol { TypeKind: TypeKind.Interface } iface
+            && _emitter.Planner.InterfaceIsLocalUserClassOnly(iface))
+            foreach (var target in _emitter.VirtualDispatchInstance.Resolve(site, iface).RuntimeTargets)
+                yield return target.Impl.OriginalDefinition;
     }
 
     /// <summary>CW1 lift: the runtime impl-accessor DEFINITIONS a property/indexer reference can
@@ -654,38 +634,11 @@ public sealed class ResolvedEdgeResolver
     // compound/inc-dec, where the getter runs first and its result is read afterwards.
     internal bool PropertyAccessorMatches(IPropertyReferenceOperation pr, IMethodSymbol callee, bool getter)
     {
-        var acc = getter ? pr.Property.GetMethod : pr.Property.SetMethod;
-        // CW1 lift: at an accessor DISPATCH site the runtime callee is a resolved impl of the matching
-        // kind, not the statically-bound accessor — match through the same fan-out the classifier's
-        // property arm yields (BEFORE the cross arm below, which early-returns for the base-typed
-        // variable receivers dispatch sites live on).
-        foreach (var impl in AccessorDispatchImplDefs(pr, VirtualDispatch.FindAccessor(pr.Property, getter)))
-            if (SymbolEqualityComparer.Default.Equals(impl, callee))
-                return true;
-        // Wave-12 r2 [V1]: variable-receiver / interface accessor dispatch — match the local method
-        // the cross dispatch can land on (same rationale as IsInternalCallTo's cross arms).
-        if (IsCrossDispatchReceiver(pr.Instance, pr.Property))
-        {
-            var cross = ResolveDispatch(pr, acc).Cross;
-            return cross.HasLocalTarget
-                && SymbolEqualityComparer.Default.Equals(cross.LocalTargetDefinition, callee);
-        }
-        // Wave-14 r4: struct accessor on a fresh instance (a `next[d-1] += ..` / `next.P--` compound or
-        // inc-dec through a struct-typed local) — the specific get/set accessor on a user-struct receiver
-        // is the callee, independent of a `this` receiver (mirrors the IsInternalCallTo struct arm).
-        if (pr.Property is { IsStatic: false } && pr.Property.ContainingType is INamedTypeSymbol saCt
-            && TypeClassifier.IsObjectArrayEmulated(saCt)
-            && acc != null && SymbolEqualityComparer.Default.Equals(acc.OriginalDefinition, callee))
-            return true;
-        if (pr.Instance is not IInstanceReferenceOperation) return false;
-        if (acc != null && SymbolEqualityComparer.Default.Equals(acc.OriginalDefinition, callee))
-            return true;
-        if (LeafPropertyTarget(pr) is { } lp)
-        {
-            var leafAcc = getter ? lp.GetMethod : lp.SetMethod;
-            if (leafAcc != null && SymbolEqualityComparer.Default.Equals(leafAcc.OriginalDefinition, callee))
-                return true;
-        }
+        var kind = getter ? CallableSiteKind.PropertyGet : CallableSiteKind.PropertySet;
+        foreach (var site in CallableSites.FromOperation(pr))
+            if (site.Kind == kind)
+                foreach (var target in ResolvePropertyTargets(pr, site))
+                    if (SymbolEqualityComparer.Default.Equals(target, callee)) return true;
         return false;
     }
 
