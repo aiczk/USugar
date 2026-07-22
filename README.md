@@ -157,8 +157,8 @@ different result.
 - **Delegates and events** — closures, delegate values, multicast (`+=`/`-=`), delegate
   fields/properties, tuple returns, and field-like events (including static field-like events) are
   supported. Delegate signatures with `ref`/`out`, direct method-group binding to a user-class
-  instance method, custom-accessor events, and cross-behaviour event subscription are not. Wrap a
-  user-class method call in a lambda when a delegate is required.
+  instance method and cross-behaviour custom-accessor events are not. Field-like events support
+  cross-behaviour subscription. Wrap a user-class method call in a lambda when a delegate is required.
 - **Multidimensional arrays** — creation, indexing, `Length`, `Rank`, `GetLength`, and
   `GetUpperBound` are supported. They use an `object[]` bundle rather than a native Udon array, so
   general `Array` APIs, erasure to `object`/`Array`, and implicit string formatting are restricted.
