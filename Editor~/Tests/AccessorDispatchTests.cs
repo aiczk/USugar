@@ -8,7 +8,7 @@ namespace USugar.Tests;
 // CW1 lift (2026-07-16): virtual/override/abstract PROPERTY and INDEXER accessors on v1 user-class
 // receivers dispatch at runtime through the SAME single-sourced v2b-2 machinery as method dispatch
 // (VirtualDispatch.IsDispatchSite shared with the recursion enumerator, ResolveTargets closed-world
-// set, GuardOpenVirtualDispatch armor). These pin the dispatched STRUCTURE per lowering; runtime
+// set, closed-typeobj invariant). These pin the dispatched STRUCTURE per lowering; runtime
 // values are pinned by the local DiffFuzz harness (CLR-oracle probes). The two 1c72d4b reject pins
 // were flipped in ClosedWorldGuardTests (VirtualProperty/VirtualIndexer_BaseTypedRead_DispatchesOverride).
 public class AccessorDispatchTests
@@ -75,11 +75,11 @@ public class CwVDevirt : UdonSharpBehaviour {
     }
 
     [Fact]
-    public void OpenGenericFamilyAccessor_StillRejectedByGuard()
+    public void OpenGenericFamilyAccessor_UsesClosedSpec()
     {
-        // GuardOpenVirtualDispatch is shared with the method arm: an accessor dispatch whose family
-        // is minted through an OPEN construction site has no spec-distinct runtime identity — loud.
-        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
+        // The specialization census turns the open syntax site into a closed GBVp<int> mint before
+        // accessor target enumeration, so the ordinary typeobj dispatch path applies.
+        var uasm = TestHelper.CompileToUasm(@"
 using UdonSharp;
 public class GAVp<T> { public virtual int P { get { return 1; } } }
 public class GBVp<T> : GAVp<T> { public override int P { get { return 2; } } }
@@ -87,8 +87,9 @@ public class CwVOpenGen : UdonSharpBehaviour {
     public int r;
     int Make<T>() { GAVp<T> g = new GBVp<T>(); return g.P; }
     void Start() { r = Make<int>(); }
-}", "CwVOpenGen"));
-        Assert.Contains("generic method", ex.Message);
+}", "CwVOpenGen");
+        Assert.Contains("__typeobj_GBVp_Int32", uasm);
+        Assert.Matches(@"__\d+_get_P", uasm);
     }
 
     [Fact]

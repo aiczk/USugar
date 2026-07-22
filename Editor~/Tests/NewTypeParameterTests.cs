@@ -16,16 +16,16 @@ public class NtP1 : UdonSharpBehaviour { public int result; void Start(){ result
 
     // FLIPPED 2026-07-14 (Phase-A closed-world armor): a user-class `new T()` whose concrete type is never
     // constructed directly is invisible to the Phase-1 minted census — the mint left bundle[0] null and every
-    // downstream `is`/`as`/virtual dispatch silently mis-answered. Loud reject until the substitution-threaded
-    // mint census (generic typeobj milestone) lifts it; workaround = mint the concrete type directly once.
+    // The substitution-threaded mint census closes `new T()` to the call-site class specialization, so
+    // bundle[0] receives the same typeobj as a direct concrete construction.
     [Fact]
-    public void NewT_ClassNeverMintedDirectly_LoudRejects()
+    public void NewT_ClassNeverMintedDirectly_CompilesWithTypeObj()
     {
-        var ex = Assert.Throws<System.NotSupportedException>(() => TestHelper.CompileToUasm(@"using UdonSharp;
+        var uasm = TestHelper.CompileToUasm(@"using UdonSharp;
 public class Cel { public int v; }
 public static class F2 { public static int M<T>(int n) where T : Cel, new() { T c = new T(); c.v = n; return c.v; } }
-public class NtP2 : UdonSharpBehaviour { public int result; void Start(){ result = F2.M<Cel>(7); } }", "NtP2"));
-        Assert.Contains("minted", ex.Message);
+public class NtP2 : UdonSharpBehaviour { public int result; void Start(){ result = F2.M<Cel>(7); } }", "NtP2");
+        Assert.Contains("__typeobj_Cel", uasm);
     }
 
     [Fact]

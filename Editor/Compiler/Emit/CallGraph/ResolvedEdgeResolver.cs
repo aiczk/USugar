@@ -372,6 +372,16 @@ public sealed class ResolvedEdgeResolver
             case IObjectCreationOperation { Constructor: { } ctor }:
                 yield return ctor.OriginalDefinition;
                 break;
+            case ITypeParameterObjectCreationOperation:
+                // The operation tree retains `new T()` while emission is per closed specialization.
+                // The typeobj census is already seeded here; conservatively connect the site to every
+                // minted parameterless user-class ctor. Over-yield may spill more, under-yield is wrong.
+                foreach (var concrete in _emitter.ClassTypes.MintedClasses)
+                {
+                    var ctor = concrete.InstanceConstructors.FirstOrDefault(c => c.Parameters.Length == 0);
+                    if (ctor != null) yield return ctor.OriginalDefinition;
+                }
+                break;
             // M4b: an interpolation hole holding a v1-class value dispatches the object.ToString slot
             // (EmitClassToStringDispatch) — yield every override impl the chain can direct-call so a
             // cycle closed through stringification is visible to the SCC/spill analysis (the dispatch
@@ -430,10 +440,7 @@ public sealed class ResolvedEdgeResolver
         // and a `a++`/`--a` (IIncrementOrDecrementOperation). A BCL operator has a null OperatorMethod and
         // is naturally excluded; the consumers' internalMethods / callee filter restricts to registered
         // struct operators. (B49 — see the summary above.)
-        var opMethod = (op as IBinaryOperation)?.OperatorMethod
-            ?? (op as IUnaryOperation)?.OperatorMethod
-            ?? (op as ICompoundAssignmentOperation)?.OperatorMethod
-            ?? (op as IIncrementOrDecrementOperation)?.OperatorMethod;
+        var opMethod = OperationMethodFacts.OperatorMethod(op);
         if (opMethod != null) yield return opMethod.OriginalDefinition;
     }
 

@@ -40,22 +40,35 @@ public sealed class GenericContext
                 $"EnterTypeParamScope: a type-param map is already active on entry to "
                 + $"'{currentMethod?.ToDisplayString() ?? "(none)"}' — a prior scope was not disposed.");
         TypeParamMap = map;
-        return new TypeParamScopeToken(this);
+        return new TypeParamScopeToken(this, null);
+    }
+
+    public IDisposable EnterOverlayScope(IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> map)
+    {
+        var previous = TypeParamMap;
+        TypeParamMap = map;
+        return new TypeParamScopeToken(this, previous);
     }
 
     sealed class TypeParamScopeToken : IDisposable
     {
         readonly GenericContext _ctx;
+        readonly IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> _previous;
         bool _disposed;
 
-        public TypeParamScopeToken(GenericContext ctx) => _ctx = ctx;
+        public TypeParamScopeToken(GenericContext ctx,
+            IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> previous)
+        {
+            _ctx = ctx;
+            _previous = previous;
+        }
 
         public void Dispose()
         {
             if (_disposed)
                 throw new InvalidOperationException("TypeParamScopeToken disposed twice.");
             _disposed = true;
-            _ctx.TypeParamMap = null;
+            _ctx.TypeParamMap = _previous;
         }
     }
 }

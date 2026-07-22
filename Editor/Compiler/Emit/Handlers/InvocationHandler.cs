@@ -288,7 +288,7 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
                 && VirtualDispatch.IsDispatchSite(target, op.Instance, recvTy))
             {
                 var targets = _ctx.VirtualDispatch.ResolveTargets(recvTy, target);
-                GuardOpenVirtualDispatch(recvTy, targets, target);
+                AssertClosedVirtualDispatch(recvTy, targets, target);
                 if (!recvTy.IsSealed && targets.Count >= 2)
                     return EmitVirtualChain(op, targets);
                 if (targets.Count >= 1)
@@ -556,7 +556,7 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
         return isVoid ? Const(null, "SystemObject") : SlotRef(destSlot);
     }
 
-    // GuardOpenVirtualDispatch moved to HandlerBase (CW1 lift: the accessor dispatch arms in
+    // AssertClosedVirtualDispatch lives in HandlerBase (CW1 lift: the accessor dispatch arms in
     // PreparePropertySet / CaptureLValue / the pattern lowering share the same open-family armor).
 
     /// <summary>Phase-A armor: the empty-target lowering — evaluate receiver and args for side-effect

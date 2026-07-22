@@ -59,11 +59,7 @@ public abstract partial class HandlerBase
     protected string GetUdonType(ITypeSymbol type) => ExternResolver.GetUdonTypeName(type, _ctx.Generics.TypeParamMap);
     protected TypeClassifierContext TypeCtx => new TypeClassifierContext(_ctx.Generics.TypeParamMap);
     protected ITypeSymbol ResolveType(ITypeSymbol type)
-    {
-        if (type is ITypeParameterSymbol tp && _ctx.Generics.TypeParamMap != null && _ctx.Generics.TypeParamMap.TryGetValue(tp, out var resolved))
-            return resolved;
-        return type;
-    }
+        => TypeEnvironment.CloseType(_compilation, type, _ctx.Generics.TypeParamMap);
     protected string GetArrayType(IArrayTypeSymbol arrType) => GetUdonType(arrType);
     protected string GetArrayElemType(IArrayTypeSymbol arrType)
     {
@@ -114,19 +110,7 @@ public abstract partial class HandlerBase
         // family typeobj, so this stays sound for the laundered five without a per-node guard (charter #7).
         if (ResolveType(targetType) is INamedTypeSymbol targetClass && EmitPolicy.IsUserClassType(targetClass))
         {
-            // Charter (type-tag collapse closed at the choke point): if this generic class family is minted
-            // through an OPEN construction site (a `new Box<T>()` inside a generic method), every closed spec
-            // shares one open typeobj, so `is Box<int>` cannot be told apart from `is Box<string>`. Reject
-            // loudly rather than silently answer false. (Constructing at a CLOSED site — `new Box<int>()` in
-            // non-generic code — registers a distinct typeobj and stays supported.)
-            if (targetClass.IsGenericType && _ctx.ClassTypes.HasOpenGenericSiblingOf(targetClass))
-                throw new NotSupportedException(
-                    $"Runtime type test against generic class '{targetClass.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}' "
-                    + "is not supported when an instance of its family is created inside a generic method "
-                    + "(`new " + targetClass.OriginalDefinition.Name + "<T>()`): all closed specializations built there "
-                    + "share one runtime type identity, so 'is'/'as'/cast cannot distinguish them. Construct the "
-                    + "value at a concrete type (`new " + targetClass.OriginalDefinition.Name + "<int>()`) instead, or keep it "
-                    + "typed as its static type without a runtime type test.");
+            ClassAbiPolicy.AssertClosed(targetClass, "runtime type test");
             var vars = _ctx.ClassTypes.TypeObjVarsAssignableTo(targetClass).ToList();
             if (vars.Count == 0) return Const(false, "SystemBoolean"); // no minted class satisfies it
             // Charter #7 soundness: read bundle[0] ONLY when the value is actually a SystemObjectArray
@@ -155,21 +139,7 @@ public abstract partial class HandlerBase
             }, null);
             return SlotRef(guarded);
         }
-        if (!ExternResolver.IsRuntimeDistinguishable(targetType, _ctx.Generics.TypeParamMap))
-        {
-            var resolvedTarget = ResolveType(targetType);
-            ClassAbi.RejectRuntimeTypeTest(resolvedTarget);
-            var disp = resolvedTarget.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat);
-            var hint = resolvedTarget is INamedTypeSymbol dlgTarget && dlgTarget.DelegateInvokeMethod != null
-                ? " (Udon represents every delegate as one runtime type, so it cannot tell delegate signatures "
-                  + "apart and would match any delegate, then read the wrong argument/return channel)"
-                : "";
-            throw new NotSupportedException(
-                $"Runtime type test against '{disp}' is not supported: Udon collapses it and several distinct "
-                + "types onto one runtime type tag, so an 'is'/'switch'/'as' test cannot tell them apart and "
-                + "would match the wrong value" + hint + ". Keep the value typed as its static type instead of "
-                + "recovering it with a runtime type test.");
-        }
+        ClassAbiPolicy.ValidateRuntimeTypeTest(ResolveType(targetType), _ctx.Generics.TypeParamMap);
         // The type token is baked through the shared choke point (B51 silent-class armor: an unresolved
         // type parameter would bake a null System.Type constant no validator catches → loud reject there).
         return ExternCall(
@@ -1708,55 +1678,7 @@ public abstract partial class HandlerBase
     /// closed containing type before (if the method is itself ALSO generic) re-applying the method's
     /// own type-arg substitution on top — the two dimensions are independent and compose.</summary>
     protected IMethodSymbol SubstituteMethodTypeArgs(IMethodSymbol target)
-    {
-        if (_typeParamMap == null) return target;
-
-        bool ContainsOpenParam(IEnumerable<ITypeSymbol> args) =>
-            args.Any(ta => ta is ITypeParameterSymbol tp && _typeParamMap.ContainsKey(tp));
-
-        // Wave-14 r3: a local function/lambda's ContainingType is the enclosing generic struct/method's
-        // type (e.g. Helper's ContainingType is Box<T> when Helper is declared inside Box<T>.Compute), so
-        // it also looks "containingNeedsSub" — but a local function/lambda is lexically scoped, never a
-        // MEMBER of that type, so INamedTypeSymbol.GetMembers(name) below can never find it (empty
-        // sequence, LINQ .First() throws "Sequence contains no matching element"). The shared/unconstructed
-        // operation tree already carries the correct symbol identity for these (RegisterLocalFunction keys
-        // on it directly) — skip relocation for them entirely.
-        bool containingNeedsSub = target.ContainingType.IsGenericType
-            && target.MethodKind is not (MethodKind.LocalFunction or MethodKind.LambdaMethod)
-            && ContainsOpenParam(target.ContainingType.TypeArguments);
-        bool methodNeedsSub = target.IsGenericMethod && ContainsOpenParam(target.TypeArguments);
-        if (!containingNeedsSub && !methodNeedsSub) return target;
-
-        var memberDef = target.OriginalDefinition;
-        var relocated = memberDef;
-        if (containingNeedsSub)
-        {
-            var newContainingArgs = target.ContainingType.TypeArguments
-                .Select(ta => ta is ITypeParameterSymbol tp && _typeParamMap.TryGetValue(tp, out var sub) ? sub : ta)
-                .ToArray();
-            var closedContaining = target.ContainingType.OriginalDefinition.Construct(newContainingArgs);
-            relocated = closedContaining.GetMembers(memberDef.Name).OfType<IMethodSymbol>()
-                .First(m => SymbolEqualityComparer.Default.Equals(m.OriginalDefinition, memberDef));
-        }
-
-        if (methodNeedsSub)
-        {
-            var newMethodArgs = target.TypeArguments
-                .Select(ta => ta is ITypeParameterSymbol tp2 && _typeParamMap.TryGetValue(tp2, out var sub2) ? sub2 : ta)
-                .ToArray();
-            // Wave-14 r3: Construct() on relocated.OriginalDefinition RESETS the containing type back to
-            // fully open (Box<T>, not Box<int>) when containingNeedsSub already closed it above — a
-            // generic METHOD on a generic STRUCT (Box<T>.RepeatGen<U>) then loses its T substitution on
-            // this second dimension (VM-proven: emitted UASM referenced the unresolved type parameter
-            // 'U' — actually T resurfacing as the containing type — "Type referenced by 'U' could not be
-            // resolved", SelfRecursiveGenericMethod). `relocated` is already method-dimension-open with
-            // the CORRECT (possibly-closed) containing type from the branch above (or straight from
-            // `target.OriginalDefinition` when containingNeedsSub was false) — construct directly on it.
-            relocated = relocated.Construct(newMethodArgs);
-        }
-
-        return relocated;
-    }
+        => TypeEnvironment.CloseMethod(_compilation, target, _typeParamMap);
 
     /// <summary>Register a monomorphized generic specialization: CFunction + ordinal param vars +
     /// return slot, queued on PendingGenericSpecs for the post-body emission drain. Idempotent per
@@ -2246,7 +2168,7 @@ public abstract partial class HandlerBase
     // ── CW1 lift: runtime-polymorphic PROPERTY/INDEXER accessor dispatch on v1-class receivers ──
     // The accessor twin of InvocationHandler's v2b-2 method arm: the SAME VirtualDispatch machinery
     // (IsDispatchSite gate shared with the recursion enumerator, ResolveTargets closed-world set,
-    // GuardOpenVirtualDispatch armor) lowers a virtual/override/abstract accessor reference to an
+    // closed-typeobj invariant) lowers a virtual/override/abstract accessor reference to an
     // inline typeobj-ReferenceEquals chain / devirtualized direct access / empty-set null lowering.
     // Lives in HandlerBase because four emission surfaces share it: the property/indexer READ arms
     // (InvocationHandler.Members), the SET path (PreparePropertySet), the compound read/write-back
@@ -2259,20 +2181,11 @@ public abstract partial class HandlerBase
     /// there shares one typeobj, and cross-context mints are invisible to exact-symbol assignability.
     /// Same choke-point polarity as EmitTypeCheck's family reject: loud over a silent
     /// base-impl call / cross-spec dispatch.</summary>
-    protected void GuardOpenVirtualDispatch(INamedTypeSymbol recvTy, List<VDispatchTarget> targets, IMethodSymbol target)
+    protected void AssertClosedVirtualDispatch(INamedTypeSymbol recvTy, List<VDispatchTarget> targets, IMethodSymbol target)
     {
-        bool hazard = ClassTypeObjectContext.ContainsTypeParameter(recvTy)
-            || recvTy.IsGenericType && _ctx.ClassTypes.HasOpenGenericSiblingOf(recvTy)
-            || targets.Any(t => t.Concrete.IsGenericType && _ctx.ClassTypes.HasOpenGenericSiblingOf(t.Concrete))
-            || targets.Count == 0 && _ctx.ClassTypes.HasOpenMintedFamilyAssignableTo(recvTy);
-        if (!hazard) return;
-        throw new NotSupportedException(
-            $"Virtual call '{recvTy.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}.{target.Name}' cannot be dispatched: "
-            + "the receiver type or an implementor of its family involves a generic class constructed inside a generic method "
-            + "(open construction site), so the closed-world override set / runtime type identity is not spec-distinct. "
-            + "Construct and dispatch at a concrete type (e.g. `new "
-            + (targets.Count > 0 ? targets[0].Concrete.OriginalDefinition.Name : recvTy.OriginalDefinition.Name)
-            + "<int>()` outside the generic method), or call the method non-virtually on the concrete type.");
+        ClassAbiPolicy.AssertClosed(recvTy, $"virtual call '{target.Name}' receiver");
+        foreach (var dispatchTarget in targets)
+            ClassAbiPolicy.AssertClosed(dispatchTarget.Concrete, $"virtual call '{target.Name}' target");
     }
 
     /// <summary>The accessor-arm gate: true when <paramref name="accessor"/> at this property/indexer
@@ -2315,7 +2228,7 @@ public abstract partial class HandlerBase
     }
 
     /// <summary>CW1 lift: lower a runtime-polymorphic accessor access through the SAME closed-world
-    /// machinery as the v2b-2 method arm — ResolveTargets, GuardOpenVirtualDispatch, then ≥2 targets →
+    /// machinery as the v2b-2 method arm — ResolveTargets, closed invariant, then ≥2 targets →
     /// inline typeobj-ReferenceEquals chain; singleton/sealed → devirtualized direct access; empty →
     /// LogError + default for a read / LogError + skip for a write (closed-world: no minted implementor
     /// means the receiver must be null; CLR NREs — §2.6 polarity, legs already evaluated for
@@ -2325,7 +2238,7 @@ public abstract partial class HandlerBase
         IMethodSymbol accessor, CLeaf recv, List<CLeaf> indexArgs, CLeaf setValue)
     {
         var targets = _ctx.VirtualDispatch.ResolveTargets(recvTy, accessor);
-        GuardOpenVirtualDispatch(recvTy, targets, accessor);
+        AssertClosedVirtualDispatch(recvTy, targets, accessor);
         bool isSet = setValue != null;
         string memberKind = prop.IsIndexer ? "indexer" : "property";
 
@@ -2435,7 +2348,7 @@ public abstract partial class HandlerBase
     }
 
     /// <summary>M4b: stringify a v1-class receiver through the object.ToString dispatch slot — the third
-    /// lowering built on the v2b-2 machinery (ResolveTargets closed-world set, GuardOpenVirtualDispatch
+    /// lowering built on the v2b-2 machinery (ResolveTargets closed-world set, closed-typeobj invariant
     /// armor, typeobj-ReferenceEquals chain, sealed/singleton devirt). Three surfaces share it: the
     /// interpolation hole, the string-concat operand, and the direct .ToString() call. An arm whose
     /// most-derived impl is a user override direct-calls it (receiver as param0); an arm whose impl is
@@ -2453,7 +2366,7 @@ public abstract partial class HandlerBase
     {
         var slot = ObjectToStringSlot();
         var targets = _ctx.VirtualDispatch.ResolveTargets(recvTy, slot);
-        GuardOpenVirtualDispatch(recvTy, targets, slot);
+        AssertClosedVirtualDispatch(recvTy, targets, slot);
 
         var recvSlot = _ctx.Builder.AllocScratch(AggregateAbi.ArrayType);
         EmitAssign(recvSlot, recv);

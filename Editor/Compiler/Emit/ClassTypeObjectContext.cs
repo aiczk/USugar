@@ -1,5 +1,7 @@
+using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text;
 using Microsoft.CodeAnalysis;
 
 /// <summary>CA-v2b-1 (typeobj identity + is/cast): owns the per-program type-object registry for a
@@ -17,9 +19,24 @@ public sealed class ClassTypeObjectContext
 
     public void Seed(IEnumerable<INamedTypeSymbol> mintedClasses)
     {
+        var unique = new HashSet<INamedTypeSymbol>(SymbolEqualityComparer.Default);
         foreach (var c in mintedClasses)
+            if (c != null && !c.IsImplicitlyDeclared && c.Name != "<Module>"
+                && c.Name != "<PrivateImplementationDetails>") unique.Add(c);
+        var classes = unique.ToList();
+        var legacyCounts = classes.GroupBy(LegacyName, StringComparer.Ordinal)
+            .ToDictionary(g => g.Key, g => g.Count(), StringComparer.Ordinal);
+        foreach (var c in classes)
             if (!_vars.ContainsKey(c))
-                _vars[c] = "__typeobj_" + Sanitize(c);
+            {
+                ClassAbiPolicy.AssertClosed(c, "typeobj registry seed");
+                var legacy = LegacyName(c);
+                var name = "__typeobj_" + (legacyCounts[legacy] == 1 ? legacy : SpecKey(c));
+                if (_vars.Values.Contains(name))
+                    throw new System.InvalidOperationException(
+                        $"Typeobj key collision for '{c.ToDisplayString()}': '{name}'.");
+                _vars[c] = name;
+            }
     }
 
     /// <summary>The heap-var name holding this class's typeobj, or null if the class is never minted in
@@ -33,38 +50,6 @@ public sealed class ClassTypeObjectContext
     {
         foreach (var kv in _vars)
             if (IsAssignable(kv.Key, targetType)) yield return kv.Value;
-    }
-
-    /// <summary>True when some MINTED class of the same generic family as `target` was registered as an
-    /// OPEN spec (its type arguments still carry a type parameter). That happens when a generic user class
-    /// is constructed inside a generic method body (`new Box&lt;T&gt;()` in `M&lt;T&gt;()`): the reach walk sees
-    /// the open `Box&lt;T&gt;`, so every closed spec flowing through that method shares one open typeobj and the
-    /// runtime type identity is NOT spec-distinct. A runtime type test against any one closed spec then cannot
-    /// be answered soundly — reject at the choke point (charter: conservative-reject over silent-wrong).</summary>
-    public bool HasOpenGenericSiblingOf(INamedTypeSymbol target)
-    {
-        foreach (var m in _vars.Keys)
-            if (SymbolEqualityComparer.Default.Equals(m.OriginalDefinition, target.OriginalDefinition)
-                && m.TypeArguments.Any(ContainsTypeParameter))
-                return true;
-        return false;
-    }
-
-    /// <summary>True when some minted class is an OPEN spec whose base chain passes through `target`'s
-    /// generic family. The dispatch-side census matches minted classes by exact constructed symbol, so an
-    /// open mint in another generic context is INVISIBLE to it — an empty/partial target set is then
-    /// ambiguity, not proof of unreachability, and must reject rather than fall through (Phase-A armor,
-    /// same polarity as <see cref="HasOpenGenericSiblingOf"/>).</summary>
-    public bool HasOpenMintedFamilyAssignableTo(INamedTypeSymbol target)
-    {
-        foreach (var m in _vars.Keys)
-        {
-            if (!m.TypeArguments.Any(ContainsTypeParameter)) continue;
-            for (var t = m; t != null; t = t.BaseType)
-                if (SymbolEqualityComparer.Default.Equals(t.OriginalDefinition, target.OriginalDefinition))
-                    return true;
-        }
-        return false;
     }
 
     /// <summary>Deep type-parameter test: `Box&lt;T&gt;` nested as `Outer&lt;Box&lt;T&gt;&gt;`'s argument is just as
@@ -87,11 +72,54 @@ public sealed class ClassTypeObjectContext
         return false;
     }
 
-    static string Sanitize(INamedTypeSymbol t)
+    /// <summary>Traversal-independent, injective structural key used for typeobj names and ordering.</summary>
+    public static string SpecKey(ITypeSymbol type)
     {
-        var name = t.Name;
-        if (t.IsGenericType)
-            name += "_" + string.Join("_", t.TypeArguments.Select(a => a.Name));
+        var b = new StringBuilder();
+        AppendTypeKey(b, type);
+        return b.ToString();
+    }
+
+    static string LegacyName(INamedTypeSymbol type)
+    {
+        var name = type.Name;
+        if (type.IsGenericType)
+            name += "_" + string.Join("_", type.TypeArguments.Select(a => a.Name));
         return name;
+    }
+
+    static void AppendTypeKey(StringBuilder b, ITypeSymbol type)
+    {
+        switch (type)
+        {
+            case IArrayTypeSymbol a:
+                b.Append('A').Append(a.Rank).Append('_');
+                AppendTypeKey(b, a.ElementType);
+                return;
+            case ITypeParameterSymbol p:
+                b.Append('P');
+                AppendSegment(b, p.ContainingSymbol?.GetDocumentationCommentId() ?? "");
+                AppendSegment(b, p.Name);
+                return;
+            case INamedTypeSymbol n:
+                b.Append('N');
+                AppendSegment(b, n.OriginalDefinition.GetDocumentationCommentId()
+                    ?? n.OriginalDefinition.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat));
+                b.Append(n.TypeArguments.Length).Append('_');
+                foreach (var arg in n.TypeArguments) AppendTypeKey(b, arg);
+                return;
+            default:
+                b.Append('T');
+                AppendSegment(b, type?.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat) ?? "null");
+                return;
+        }
+    }
+
+    static void AppendSegment(StringBuilder b, string value)
+    {
+        var bytes = Encoding.UTF8.GetBytes(value);
+        b.Append(bytes.Length).Append('_');
+        foreach (var x in bytes) b.Append(x.ToString("x2"));
+        b.Append('_');
     }
 }

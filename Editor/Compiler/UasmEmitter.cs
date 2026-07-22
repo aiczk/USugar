@@ -182,7 +182,9 @@ public class UasmEmitter
             plan.CaptureRoots, captureBodies, plan.FieldInitOps));
         // CA rewrite (M4): seed the typeobj registry in stable-key order (not mint-walk discovery order),
         // so typeobj alloc / is-chain / virtual-dispatch-chain byte order is traversal-independent.
-        _ctx.ClassTypes.Seed(plan.Reach.MintedClasses.OrderBy(StableOrdinalKey, StringComparer.Ordinal)); // CA-v2b-1: typeobj registry
+        _ctx.ClassTypes.Seed(plan.Reach.MintedClasses
+            .OrderBy(StableOrdinalKey, StringComparer.Ordinal)
+            .ThenBy(ClassTypeObjectContext.SpecKey, StringComparer.Ordinal));
         _ctx.VirtualDispatch = new VirtualDispatch(_ctx.ClassTypes); // CA-v2b-2: virtual-call lowering
         EmitMethods(plan);
         OnIrPass?.Invoke("after-emit", _module);
@@ -199,10 +201,8 @@ public class UasmEmitter
         // Design §1: build the single ReachableBodies fixpoint ONCE here — after EmitFields (field
         // initializers are seeds) and before its consumers. Its projections feed Phase-1 registration,
         // BuildRecursionInfo roots, and CaptureScope roots (all in EmitMethods / injected below).
-        return new ClassCompilePlanBuilder(
-            ComputeMethods,
-            BuildReachableBodiesViaResolver,
-            () => _fieldInitOps.Select(fi => fi.initOp)).Build();
+        return new CompilationPlanner(_compilation, ComputeMethods, BuildReachableBodiesViaResolver,
+            () => _fieldInitOps.Select(fi => fi.initOp), GetMethodBodyOperation, EnumerateClassFieldInitOps).Build();
     }
 
     // CA call-graph rewrite (M5a cutover): the reach fixpoint now runs through the unified resolver-driven
@@ -939,6 +939,13 @@ public class UasmEmitter
 
     void EmitMethods(ClassCompilePlan plan)
     {
+        var registration = RegisterProgram(plan);
+        BuildRecursionInfo();
+        EmitRegisteredBodies(plan, registration);
+    }
+
+    ProgramRegistration RegisterProgram(ClassCompilePlan plan)
+    {
         var methods = plan.Methods;
         var typeLayout = _planner.GetLayout(_classSymbol);
 
@@ -1175,8 +1182,15 @@ public class UasmEmitter
             }
         }
 
-        // Analyze the internal-call graph for recursion cycles (after all methods are registered).
-        BuildRecursionInfo();
+        return new ProgramRegistration(foreignStatics, structMethods, baseInstanceMethods);
+    }
+
+    void EmitRegisteredBodies(ClassCompilePlan plan, ProgramRegistration registration)
+    {
+        var methods = plan.Methods;
+        var foreignStatics = registration.ForeignStatics;
+        var structMethods = registration.StructMethods;
+        var baseInstanceMethods = registration.BaseInstanceMethods;
 
         // Second pass: emit bodies (skip generic definitions)
         foreach (var method in methods)
@@ -2214,14 +2228,7 @@ public class UasmEmitter
         // emission (below). Nothing between here and the scope reads the ambient map.
         IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeMap = null;
         if (isSpec)
-        {
-            var bindings = new List<(IReadOnlyList<ITypeParameterSymbol>, IReadOnlyList<ITypeSymbol>)>(2);
-            if (method.IsGenericMethod)
-                bindings.Add((method.OriginalDefinition.TypeParameters, method.TypeArguments));
-            if (method.ContainingType.IsGenericType)
-                bindings.Add((method.ContainingType.OriginalDefinition.TypeParameters, method.ContainingType.TypeArguments));
-            typeMap = TypeParamScope.Compose(null, newWins: true, bindings);
-        }
+            typeMap = TypeEnvironment.ForMethod(method);
 
         // SS2B ambient owner chain: closure key composition during THIS emission resolves its
         // lexical owners' args against this chain (ComposeClosureKeyArgs).

@@ -20,9 +20,9 @@ namespace USugar.Tests;
 public class ClosedWorldGuardTests
 {
     [Fact]
-    public void VirtualDispatch_OpenGenericFamily_LoudRejects()
+    public void VirtualDispatch_OpenGenericFamily_UsesClosedSpec()
     {
-        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
+        var uasm = TestHelper.CompileToUasm(@"
 using UdonSharp;
 public class GBaseVd<T> { public virtual int M() => 1; }
 public class GDerVd<T> : GBaseVd<T> { public override int M() => 2; }
@@ -30,17 +30,17 @@ public class VdOpen : UdonSharpBehaviour {
     public int r;
     int Make<T>() { GBaseVd<T> g = new GDerVd<T>(); return g.M(); }
     void Start() { r = Make<int>(); }
-}", "VdOpen"));
-        Assert.Contains("generic method", ex.Message);
+}", "VdOpen");
+        Assert.Contains("__typeobj_GDerVd_Int32", uasm);
+        Assert.Matches(@"__\d+_M", uasm);
     }
 
     [Fact]
-    public void VirtualDispatch_OpenMintClosedReceiver_LoudRejects()
+    public void VirtualDispatch_OpenMintClosedReceiver_UsesClosedSpec()
     {
-        // The mint is open (inside Make<T>) but the dispatch receiver is fully closed (GBaseVd<int>):
-        // exact-symbol assignability cannot see the open mint, so the target set is empty — silently
-        // direct-calling the base impl today. Must reject: the family is open-minted.
-        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
+        // The mint syntax is open, but the census observes Make<int> and registers GDerVd<int>, so the
+        // fully closed receiver resolves the derived implementation without an open-family fallback.
+        var uasm = TestHelper.CompileToUasm(@"
 using UdonSharp;
 public class GBaseVd<T> { public virtual int M() => 1; }
 public class GDerVd<T> : GBaseVd<T> { public override int M() => 2; }
@@ -48,8 +48,8 @@ public class VdOpenClosedRecv : UdonSharpBehaviour {
     public int r;
     GBaseVd<T> Make<T>() { return new GDerVd<T>(); }
     void Start() { GBaseVd<int> g = Make<int>(); r = g.M(); }
-}", "VdOpenClosedRecv"));
-        Assert.Contains("generic method", ex.Message);
+}", "VdOpenClosedRecv");
+        Assert.Contains("__typeobj_GDerVd_Int32", uasm);
     }
 
     [Fact]
@@ -243,20 +243,19 @@ public class CwCast : UdonSharpBehaviour {
     }
 
     [Fact]
-    public void NewT_MintWithoutRegisteredTypeObj_LoudRejects()
+    public void NewT_MintRegistersClosedTypeObj()
     {
-        // `new T()` monomorphizes to a concrete class the Phase-1 reach census never saw minted (no direct
-        // `new NewTOnly()` anywhere), so the typeobj registry has no entry. Writing no bundle[0] would make
-        // every downstream `is`/`as`/virtual dispatch silently mis-answer — reject at the mint instead.
-        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
+        // `new T()` contributes its call-site concrete class to the closed census even when no direct
+        // `new NewTOnly()` occurs, so the mint receives a valid bundle[0] typeobj.
+        var uasm = TestHelper.CompileToUasm(@"
 using UdonSharp;
 public class NewTOnly { public int V; }
 public class VdNewT : UdonSharpBehaviour {
     public int r;
     T Make<T>() where T : class, new() { return new T(); }
     void Start() { NewTOnly c = Make<NewTOnly>(); r = c.V; }
-}", "VdNewT"));
-        Assert.Contains("minted", ex.Message);
+}", "VdNewT");
+        Assert.Contains("__typeobj_NewTOnly", uasm);
     }
 
     [Fact]

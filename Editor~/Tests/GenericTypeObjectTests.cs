@@ -1,0 +1,116 @@
+using System.Linq;
+using System.Text.RegularExpressions;
+using Xunit;
+
+namespace USugar.Tests;
+
+public class GenericTypeObjectTests
+{
+    [Fact]
+    public void GenericMethodMint_RegistersEachClosedSpecialization()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public class GtoBox<T> { public T value; }
+public class GtoMulti : UdonSharpBehaviour {
+  GtoBox<T> Make<T>() { return new GtoBox<T>(); }
+  void Start() { GtoBox<int> a = Make<int>(); GtoBox<string> b = Make<string>(); }
+}", "GtoMulti");
+        Assert.Contains("__typeobj_GtoBox_Int32", uasm);
+        Assert.Contains("__typeobj_GtoBox_String", uasm);
+    }
+
+    [Fact]
+    public void NestedGenericLegacyNameCollision_GetsDistinctStructuralKeys()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public class GtoNest<T> { public T value; }
+public class GtoNested : UdonSharpBehaviour {
+  void Start() { var a = new GtoNest<GtoNest<int>>(); var b = new GtoNest<GtoNest<string>>(); }
+}", "GtoNested");
+        Assert.True(Regex.Matches(uasm, @"__typeobj_N[^: ]+").Cast<Match>()
+            .Select(m => m.Value).Distinct().Count() >= 2);
+    }
+
+    [Fact]
+    public void ArrayArgumentLegacyNameCollision_GetsDistinctStructuralKeys()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public class GtoArray<T> { public T value; }
+public class GtoArrays : UdonSharpBehaviour {
+  void Start() { var a = new GtoArray<int[]>(); var b = new GtoArray<string[]>(); }
+}", "GtoArrays");
+        Assert.True(Regex.Matches(uasm, @"__typeobj_N[^: ]+").Cast<Match>()
+            .Select(m => m.Value).Distinct().Count() >= 2);
+    }
+
+    [Fact]
+    public void NamespaceArgumentLegacyNameCollision_GetsDistinctStructuralKeys()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+namespace A { public class Item { } }
+namespace B { public class Item { } }
+public class GtoNs<T> { public T value; }
+public class GtoNamespaces : UdonSharpBehaviour {
+  void Start() { var a = new GtoNs<A.Item>(); var b = new GtoNs<B.Item>(); }
+}", "GtoNamespaces");
+        Assert.True(Regex.Matches(uasm, @"__typeobj_N[^: ]+").Cast<Match>()
+            .Select(m => m.Value).Distinct().Count() >= 2);
+    }
+
+    [Fact]
+    public void GenericClassFieldInitializer_ClosesTransitiveMint()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public class GtoInner<T> { public T value; }
+public class GtoOuter<T> { public GtoInner<T> child = new GtoInner<T>(); }
+public class GtoFieldInit : UdonSharpBehaviour {
+  GtoOuter<T> Make<T>() { return new GtoOuter<T>(); }
+  void Start() { GtoOuter<int> a = Make<int>(); GtoOuter<string> b = Make<string>(); }
+}", "GtoFieldInit");
+        Assert.Contains("__typeobj_GtoOuter_Int32", uasm);
+        Assert.Contains("__typeobj_GtoOuter_String", uasm);
+        Assert.Contains("__typeobj_GtoInner_Int32", uasm);
+        Assert.Contains("__typeobj_GtoInner_String", uasm);
+    }
+
+    [Fact]
+    public void MixedSpecs_TypeTestCastAndDispatch_CompileTogether()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public class GtoBase { public virtual int Read() { return 1; } }
+public class GtoLeaf<T> : GtoBase { public T value; public override int Read() { return 2; } }
+public class GtoMixed : UdonSharpBehaviour {
+  public int result;
+  GtoBase Make<T>() { return new GtoLeaf<T>(); }
+  void Start() {
+    GtoBase a = Make<int>(); GtoBase b = Make<string>();
+    if (a is GtoLeaf<int>) result += ((GtoLeaf<int>)a).Read();
+    if (b is GtoLeaf<string>) result += b.Read();
+  }
+}", "GtoMixed");
+        Assert.Contains("__typeobj_GtoLeaf_Int32", uasm);
+        Assert.Contains("__typeobj_GtoLeaf_String", uasm);
+        Assert.Matches(@"__\d+_Read", uasm);
+    }
+
+    [Fact]
+    public void MultiSpecOutput_IsDeterministic()
+    {
+        const string source = @"
+using UdonSharp;
+public class GtoDet<T> { public T value; }
+public class GtoDeterminism : UdonSharpBehaviour {
+  GtoDet<T> Make<T>() { return new GtoDet<T>(); }
+  void Start() { GtoDet<string> b = Make<string>(); GtoDet<int> a = Make<int>(); }
+}";
+        var first = TestHelper.CompileToUasm(source, "GtoDeterminism");
+        var second = TestHelper.CompileToUasm(source, "GtoDeterminism");
+        Assert.Equal(first, second);
+    }
+}

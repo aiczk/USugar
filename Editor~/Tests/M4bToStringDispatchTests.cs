@@ -229,19 +229,18 @@ public class M4bBase : UdonSharpBehaviour {
     }
 
     [Fact]
-    public void OpenGenericFamily_StillRejectedByGuard()
+    public void OpenGenericFamily_UsesClosedSpec()
     {
-        // GuardOpenVirtualDispatch is shared with the method/accessor arms: a stringify whose family is
-        // minted through an OPEN construction site has no spec-distinct runtime identity — loud.
-        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
+        // Stringification consumes the same closed GTs<int> typeobj produced for the generic mint.
+        var uasm = TestHelper.CompileToUasm(@"
 using UdonSharp;
 public class GTs<T> { public T v; }
 public class M4bOpenGen : UdonSharpBehaviour {
     public int r;
     int Make<T>() { GTs<T> g = new GTs<T>(); return $""{g}"".Length; }
     void Start(){ r = Make<int>(); }
-}", "M4bOpenGen"));
-        Assert.Contains("generic method", ex.Message);
+}", "M4bOpenGen");
+        Assert.Contains("__typeobj_GTs_Int32", uasm);
     }
 
     [Fact]

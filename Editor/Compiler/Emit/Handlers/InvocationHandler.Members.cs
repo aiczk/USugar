@@ -566,6 +566,23 @@ public partial class InvocationHandler
     void CallBaseCtor(IMethodSymbol ctorSym, CLeaf inst)
         => EmitExprStmt(EmitCallToMethod(ResolveStructMember(ctorSym), new List<CLeaf> { inst }));
 
+    CLeaf VisitClassInitializerExpression(IOperation value, INamedTypeSymbol mintedType)
+    {
+        var declaredOwner = _compilation.GetSemanticModel(value.Syntax.SyntaxTree)
+            .GetEnclosingSymbol(value.Syntax.SpanStart)?.ContainingType;
+        INamedTypeSymbol closedOwner = null;
+        for (var current = mintedType; current != null; current = current.BaseType)
+            if (declaredOwner != null && SymbolEqualityComparer.Default.Equals(
+                    current.OriginalDefinition, declaredOwner.OriginalDefinition))
+            {
+                closedOwner = current;
+                break;
+            }
+        if (closedOwner == null || !closedOwner.IsGenericType) return VisitExpression(value);
+        var overlay = TypeEnvironment.ForContainingType(closedOwner, _ctx.Generics.TypeParamMap);
+        using (_ctx.Generics.EnterOverlayScope(overlay)) return VisitExpression(value);
+    }
+
     CLeaf EmitClassInstanceMint(IObjectCreationOperation op, INamedTypeSymbol classTy)
     {
         var layout = _ctx.Aggregates.GetLayout(classTy);
@@ -580,7 +597,7 @@ public partial class InvocationHandler
                 if (op.Constructor == null || op.Constructor.IsImplicitlyDeclared)
                 {
                     ClassAbi.EmitImplicitCtorChain(_builder, _compilation, instance, classTy,
-                        _ctx.Aggregates.GetLayout, VisitExpression, CallBaseCtor);
+                        _ctx.Aggregates.GetLayout, value => VisitClassInitializerExpression(value, classTy), CallBaseCtor);
                     return;
                 }
                 // CW4: ctor args were staged positionally (IObjectCreationOperation.Arguments arrives in
@@ -612,9 +629,8 @@ public partial class InvocationHandler
         if (tv == null)
             throw new System.NotSupportedException(
                 $"'{classTy.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}' is minted here but is not in the compile-time minted-class census "
-                + "(typically a `new T()` whose type argument is never constructed directly). Its instances would carry no runtime "
-                + "type identity, so `is`/`as`/casts and virtual calls against them would silently mis-answer. Construct the type "
-                + $"directly somewhere in this behaviour (`new {classTy.Name}()`), or avoid `new T()` for user classes.");
+                + "even though the closed-specialization census must contain every live mint. This is a compiler bug; report the "
+                + "instantiation chain and source location. Emission stopped before producing a class bundle without runtime type identity.");
         return inst => AggregateAbi.WriteSlot(_builder, inst, 0, LoadField(tv, AggregateAbi.ArrayType));
     }
 
@@ -632,7 +648,7 @@ public partial class InvocationHandler
             return ClassAbi.EmitMint(_builder, _compilation, classTy, layout, VisitExpression,
                 inst => AggregateAbi.DefaultInitialize(_builder, inst, layout, _ctx.Aggregates.GetLayout, GetUdonType),
                 inst => ClassAbi.EmitImplicitCtorChain(_builder, _compilation, inst, classTy,
-                    _ctx.Aggregates.GetLayout, VisitExpression, CallBaseCtor),
+                    _ctx.Aggregates.GetLayout, value => VisitClassInitializerExpression(value, classTy), CallBaseCtor),
                 inst => EmitAggregateObjectInitializer(inst, layout, op.Initializer),
                 TypeObjWrite(classTy));
         }
@@ -668,12 +684,13 @@ public partial class InvocationHandler
     CLeaf VisitObjectCreation(IObjectCreationOperation op)
     {
         var resultType = GetUdonType(op.Type);
+        var concreteType = ResolveType(op.Type);
 
         // UdonSharpBehaviour subclasses cannot be instantiated at runtime —
         // Udon VM has no heap allocation for user-defined types.
         // Emit a diagnostic error instead of generating invalid UASM.
-        if (!op.Type.IsValueType
-            && op.Type is INamedTypeSymbol namedCtor
+        if (!concreteType.IsValueType
+            && concreteType is INamedTypeSymbol namedCtor
             && ExternResolver.IsUdonSharpBehaviour(namedCtor))
         {
             var loc = op.Syntax.GetLocation();
@@ -694,14 +711,14 @@ public partial class InvocationHandler
         // Class ABI v1 (CA-M1): a supported user class mints via the single ClassAbi bundle sequence. An
         // unsupported class (record / non-Object base / extern-backed foreign) already threw at the resultType
         // GetUdonType above (B79); nothing unsupported lands here.
-        if (op.Type is INamedTypeSymbol classTy && EmitPolicy.IsUserClassType(classTy))
+        if (concreteType is INamedTypeSymbol classTy && EmitPolicy.IsUserClassType(classTy))
             return EmitClassInstanceMint(op, classTy);
 
         // Parameterless struct ctor. A user struct used AS A VALUE (e.g. `_field = new V()`, `Foo(new V())`)
         // must allocate + default-init a fresh object[]; the local-declaration path already does this, but
         // other contexts reach here. SDK value types fall through to the null placeholder.
-        if (op.Arguments.Length == 0 && op.Type.IsValueType && op.Initializer == null)
-            return op.Type is INamedTypeSymbol structTy && EmitPolicy.IsAggregateType(structTy)
+        if (op.Arguments.Length == 0 && concreteType.IsValueType && op.Initializer == null)
+            return concreteType is INamedTypeSymbol structTy && EmitPolicy.IsAggregateType(structTy)
                 ? AggregateAbi.MintDefault(_builder, _ctx.Aggregates.GetLayout(structTy),
                     _ctx.Aggregates.GetLayout, GetUdonType)
                 : Const(null, resultType);
