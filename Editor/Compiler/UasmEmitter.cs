@@ -1052,7 +1052,7 @@ public class UasmEmitter
             // which GS15<int>/GS15<string> exercises).
             if (fm.ContainingType.IsGenericType && !fm.IsDefinition)
             {
-                _ctx.Generics.SeedFirstSpec(fm);
+                _ctx.Generics.RegisterSpec(fm);
             }
 
             var slot = _ctx.Methods.Register(fm, i => i.ToString());
@@ -1098,7 +1098,7 @@ public class UasmEmitter
             string typeArgSuffix = "";
             if (sm.ContainingType.IsGenericType)
             {
-                _ctx.Generics.SeedFirstSpec(sm);
+                _ctx.Generics.RegisterSpec(sm);
 
                 var containingArgPart = string.Join("_", sm.ContainingType.TypeArguments.Select(ExternResolver.GetUdonTypeName));
                 var methodArgPart = sm.IsGenericMethod
@@ -1158,7 +1158,7 @@ public class UasmEmitter
             // with the same second-distinct-instantiation guard ([X6] r5, widened in round 8).
             if (bm.IsGenericMethod && !bm.IsDefinition)
             {
-                _ctx.Generics.SeedFirstSpec(bm);
+                _ctx.Generics.RegisterSpec(bm);
             }
             var slot = _ctx.Methods.Register(bm, i => i.ToString());
             var idx = slot.Index;
@@ -2276,7 +2276,7 @@ public class UasmEmitter
                 // No IsGenericMethod pre-filter: FirstGenericSpec is keyed by OriginalDefinition
                 // regardless of WHY a method is a spec (generic method, generic-struct member, or
                 // both — feature G), so the dictionary lookup alone is the correct, sufficient gate.
-                if (_ctx.Generics.FirstSpecByDefinition.TryGetValue(enclosing.OriginalDefinition, out var ownerSpec))
+                if (_ctx.Generics.TryGetUniqueSpec(enclosing.OriginalDefinition, out var ownerSpec))
                 {
                     closureBindings ??= new();
                     closureBindings.Add((ownerSpec.OriginalDefinition.TypeParameters, ownerSpec.TypeArguments));

@@ -1708,8 +1708,8 @@ public abstract partial class HandlerBase
     // multi-instantiation pin). Struct-hosted generic methods route through EmitStructInstanceCall, which
     // registers the spec itself but NOT through RegisterGenericSpecialization — so this must run there too
     // (B56), else a nested LF referencing the method's T finds no owner and CoreVerify ICEs on raw 'T'.
-    protected void RegisterFirstGenericSpec(IMethodSymbol constructed)
-        => _ctx.Generics.SeedFirstSpec(constructed);
+    protected void RegisterGenericSpecCandidate(IMethodSymbol constructed)
+        => _ctx.Generics.RegisterSpec(constructed);
 
     protected void RegisterGenericSpecialization(IMethodSymbol constructed)
     {
@@ -1729,7 +1729,7 @@ public abstract partial class HandlerBase
         // First-wins spec record (feeds ComposeClosureKeyArgs' owner fallback). The former [X6]/[Y2]
         // second-instantiation rejects are retired: closures duplicate per spec.
 
-        RegisterFirstGenericSpec(constructed);
+        RegisterGenericSpecCandidate(constructed);
 
         EmitContext.MethodSlot slot;
         if (closureKind)

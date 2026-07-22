@@ -308,7 +308,7 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
             // referencing the method's T finds the owner in the closure-compose (the class arm does this
             // via RegisterGenericSpecialization; the struct path registers the spec separately).
             if (structTarget.IsGenericMethod)
-                RegisterFirstGenericSpec(structTarget);
+                RegisterGenericSpecCandidate(structTarget);
             return EmitStructInstanceCall(op, structTarget);
         }
 

@@ -61,7 +61,7 @@ public class EmitContext
             IMethodSymbol spec = null;
             foreach (var os in Methods.CurrentOwnerSpecs)
                 if (SymbolEqualityComparer.Default.Equals(os.OriginalDefinition, ownerDef)) { spec = os; break; }
-            if (spec == null) Generics.FirstSpecByDefinition.TryGetValue(ownerDef, out spec);
+            if (spec == null) Generics.TryGetUniqueSpec(ownerDef, out spec);
             if (spec == null) continue;
             if (ownerDef.TypeParameters.Length > 0) b.AddRange(spec.TypeArguments);
             // Containing-type dimension once, at the outermost named method (feature G: a generic
