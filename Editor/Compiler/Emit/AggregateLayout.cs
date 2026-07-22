@@ -9,14 +9,16 @@ public class AggregateLayout
     public readonly struct FieldInfo
     {
         public readonly string Name;
+        public readonly ISymbol Symbol;
         public readonly int Index;
         public readonly ITypeSymbol Type;
-        public FieldInfo(string name, int index, ITypeSymbol type)
-        { Name = name; Index = index; Type = type; }
+        public FieldInfo(string name, ISymbol symbol, int index, ITypeSymbol type)
+        { Name = name; Symbol = symbol; Index = index; Type = type; }
     }
 
     public readonly IReadOnlyList<FieldInfo> Fields;
     readonly Dictionary<string, int> _nameToIndex;
+    readonly Dictionary<ISymbol, int> _symbolToIndex;
 
     // Class ABI v1: a user class reserves object[] slot 0 (null placeholder for the future type-object
     // reference); its fields live at 1..F. A struct/tuple reserves nothing (fields at 0..F-1). SlotCount is
@@ -32,20 +34,37 @@ public class AggregateLayout
 
     public bool TryGetIndex(IFieldSymbol field, out int index)
     {
-        if (_nameToIndex.TryGetValue(field.Name, out index)) return true;
-        if (field.CorrespondingTupleField != null
-            && _nameToIndex.TryGetValue(field.CorrespondingTupleField.Name, out index)) return true;
-        // Reverse: check if any layout field's CorrespondingTupleField matches
-        return false;
+        if (_symbolToIndex.TryGetValue(field, out index)) return true;
+        if (_symbolToIndex.TryGetValue(field.OriginalDefinition, out index)) return true;
+        return field.CorrespondingTupleField != null
+            && _symbolToIndex.TryGetValue(field.CorrespondingTupleField, out index);
     }
 
-    AggregateLayout(IReadOnlyList<FieldInfo> fields, Dictionary<string, int> nameToIndex, int reservedLeadingSlots)
-    { Fields = fields; _nameToIndex = nameToIndex; _reservedLeadingSlots = reservedLeadingSlots; }
+    public bool TryGetIndex(IPropertySymbol property, out int index)
+        => _symbolToIndex.TryGetValue(property, out index)
+           || _symbolToIndex.TryGetValue(property.OriginalDefinition, out index);
+
+    public bool TryGetIndex(ISymbol member, out int index)
+    {
+        if (_symbolToIndex.TryGetValue(member, out index)) return true;
+        return member switch
+        {
+            IFieldSymbol field => _symbolToIndex.TryGetValue(field.OriginalDefinition, out index),
+            IPropertySymbol property => _symbolToIndex.TryGetValue(property.OriginalDefinition, out index),
+            _ => false,
+        };
+    }
+
+    AggregateLayout(IReadOnlyList<FieldInfo> fields, Dictionary<string, int> nameToIndex,
+        Dictionary<ISymbol, int> symbolToIndex, int reservedLeadingSlots)
+    { Fields = fields; _nameToIndex = nameToIndex; _symbolToIndex = symbolToIndex; _reservedLeadingSlots = reservedLeadingSlots; }
 
     public static AggregateLayout Build(INamedTypeSymbol type)
     {
         var fields = new List<FieldInfo>();
         var nameToIndex = new Dictionary<string, int>();
+        var symbolToIndex = new Dictionary<ISymbol, int>(SymbolEqualityComparer.Default);
+        var ambiguousNames = new HashSet<string>();
         // Class ABI v1: reserve slot 0, fields start at index 1. Struct/tuple: no reservation.
         int reserved = TypeClassifier.IsUserClass(type) ? 1 : 0;
 
@@ -55,7 +74,8 @@ public class AggregateLayout
             for (int i = 0; i < elements.Length; i++)
             {
                 var name = elements[i].Name;
-                fields.Add(new FieldInfo(name, i, elements[i].Type));
+                fields.Add(new FieldInfo(name, elements[i], i, elements[i].Type));
+                symbolToIndex[elements[i]] = i;
                 nameToIndex[name] = i;
                 var itemName = $"Item{i + 1}";
                 if (name != itemName) nameToIndex[itemName] = i;
@@ -63,6 +83,7 @@ public class AggregateLayout
                 {
                     var corrName = elements[i].CorrespondingTupleField.Name;
                     if (!nameToIndex.ContainsKey(corrName)) nameToIndex[corrName] = i;
+                    symbolToIndex[elements[i].CorrespondingTupleField] = i;
                 }
             }
         }
@@ -94,13 +115,20 @@ public class AggregateLayout
                     // charter/M1: a `new`-hidden field (same logical name in base AND derived) needs
                     // distinct slots + declaring-type-qualified resolution the flat map cannot hold —
                     // loud reject in M1 (qualified keying is a later v2 step).
-                    if (nameToIndex.ContainsKey(logicalName))
-                        throw new NotSupportedException(
-                            $"Field '{logicalName}' on '{type.Name}' hides a same-named base field (`new`): "
-                            + "class ABI v2 M1 cannot give two same-named fields distinct storage yet. Rename "
-                            + "one of the fields.");
-                    fields.Add(new FieldInfo(logicalName, i, f.Type));
-                    nameToIndex[logicalName] = i++;
+                    var slot = i++;
+                    fields.Add(new FieldInfo(logicalName, f, slot, f.Type));
+                    symbolToIndex[f] = slot;
+                    symbolToIndex[f.OriginalDefinition] = slot;
+                    if (f.AssociatedSymbol is IPropertySymbol property)
+                    {
+                        symbolToIndex[property] = slot;
+                        symbolToIndex[property.OriginalDefinition] = slot;
+                    }
+                    if (!ambiguousNames.Contains(logicalName) && !nameToIndex.TryAdd(logicalName, slot))
+                    {
+                        nameToIndex.Remove(logicalName);
+                        ambiguousNames.Add(logicalName);
+                    }
                 }
         }
         else if (type.IsAnonymousType)
@@ -110,7 +138,8 @@ public class AggregateLayout
             int i = 0;
             foreach (var prop in type.GetMembers().OfType<IPropertySymbol>())
             {
-                fields.Add(new FieldInfo(prop.Name, i, prop.Type));
+                fields.Add(new FieldInfo(prop.Name, prop, i, prop.Type));
+                symbolToIndex[prop] = i;
                 nameToIndex[prop.Name] = i++;
             }
         }
@@ -120,7 +149,7 @@ public class AggregateLayout
                 $"AggregateLayout.Build called on non-aggregate type '{type.Name}'");
         }
 
-        return new AggregateLayout(fields.AsReadOnly(), nameToIndex, reserved);
+        return new AggregateLayout(fields.AsReadOnly(), nameToIndex, symbolToIndex, reserved);
     }
 }
 
@@ -253,14 +282,14 @@ public static class AggregateAbi
             {
                 case ISimpleAssignmentOperation assignment:
                 {
-                    var memberName = assignment.Target switch
+                    var memberSymbol = assignment.Target switch
                     {
-                        IFieldReferenceOperation fieldRef => fieldRef.Field.Name,
+                        IFieldReferenceOperation fieldRef => (ISymbol)fieldRef.Field,
                         IPropertyReferenceOperation { Property: { IsIndexer: false } } propertyRef
-                            => propertyRef.Property.Name,
+                            => propertyRef.Property,
                         _ => null,
                     };
-                    if (memberName != null && layout.TryGetIndex(memberName, out var idx))
+                    if (memberSymbol != null && layout.TryGetIndex(memberSymbol, out var idx))
                     {
                         WriteSlot(builder, instanceValue, idx, emitValue(assignment.Value));
                         break;
@@ -283,13 +312,13 @@ public static class AggregateAbi
                     // into it. For an object[]-emulated member the live nested bundle sits in the slot
                     // (structs/tuples are allocated by DefaultInitialize, a class bundle by its ctor
                     // chain), so read it raw and recurse — writes land in the fresh instance's storage.
-                    var (name, memberType) = memberInit.InitializedMember switch
+                    var (memberSymbol, name, memberType) = memberInit.InitializedMember switch
                     {
-                        IFieldReferenceOperation f => (f.Field.Name, f.Field.Type),
-                        IPropertyReferenceOperation p => (p.Property.Name, p.Property.Type),
-                        _ => ((string)null, (ITypeSymbol)null),
+                        IFieldReferenceOperation f => ((ISymbol)f.Field, f.Field.Name, f.Field.Type),
+                        IPropertyReferenceOperation p => (p.Property, p.Property.Name, p.Property.Type),
+                        _ => ((ISymbol)null, (string)null, (ITypeSymbol)null),
                     };
-                    if (name != null && layout.TryGetIndex(name, out var slotIdx)
+                    if (memberSymbol != null && layout.TryGetIndex(memberSymbol, out var slotIdx)
                         && memberType is INamedTypeSymbol nested && TypeClassifier.IsObjectArrayEmulated(nested))
                     {
                         var nestedVal = ReadSlot(builder, instanceValue, slotIdx, new StorageType(ElementType));
@@ -312,21 +341,21 @@ public static class AggregateAbi
         }
     }
 
-    public static bool TryGetMemberTarget(IOperation target, out IOperation instance, out string memberName)
+    public static bool TryGetMemberTarget(IOperation target, out IOperation instance, out ISymbol member)
     {
         switch (target)
         {
             case IFieldReferenceOperation { Instance: not null } fieldRef:
                 instance = fieldRef.Instance;
-                memberName = fieldRef.Field.Name;
+                member = fieldRef.Field;
                 return true;
             case IPropertyReferenceOperation { Instance: not null } propertyRef:
                 instance = propertyRef.Instance;
-                memberName = propertyRef.Property.Name;
+                member = propertyRef.Property;
                 return true;
             default:
                 instance = null;
-                memberName = null;
+                member = null;
                 return false;
         }
     }
@@ -582,10 +611,9 @@ public static class ClassAbi
         foreach (var member in classTy.GetMembers())
         {
             if (member is not IFieldSymbol { IsStatic: false, IsConst: false } f) continue;
-            var (slotName, initHolder) = f.IsImplicitlyDeclared && f.AssociatedSymbol is IPropertySymbol prop
-                ? (prop.Name, (ISymbol)prop)
-                : (f.Name, f);
-            if (!layout.TryGetIndex(slotName, out var idx)) continue;
+            var initHolder = f.IsImplicitlyDeclared && f.AssociatedSymbol is IPropertySymbol prop
+                ? (ISymbol)prop : f;
+            if (!layout.TryGetIndex(f, out var idx)) continue;
             var syntax = initHolder.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax();
             var initValue = syntax switch
             {

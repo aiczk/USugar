@@ -125,7 +125,7 @@ public abstract class AssignmentHandlerBase : HandlerBase
                 when aggCapPropRef.Instance?.Type is INamedTypeSymbol aggCapPropType
                 && TypeClassifier.IsObjectArrayEmulated(aggCapPropType):
             {
-                if (_ctx.Aggregates.GetLayout(aggCapPropType).TryGetIndex(aggCapPropRef.Property.Name, out var capSlotIdx))
+                if (_ctx.Aggregates.GetLayout(aggCapPropType).TryGetIndex(aggCapPropRef.Property, out var capSlotIdx))
                 {
                     var recv = LoadInstanceRaw(aggCapPropRef.Instance);
                     CLeaf slotVal = AggregateAbi.ReadSlot(_builder, recv, capSlotIdx, StorageTypes.Object);
@@ -391,7 +391,7 @@ public abstract class AssignmentHandlerBase : HandlerBase
             case IPropertyReferenceOperation { Property: { IsIndexer: false } } aggPropRef
                 when aggPropRef.Instance?.Type is INamedTypeSymbol aggPropType && TypeClassifier.IsObjectArrayEmulated(aggPropType):
             {
-                if (_ctx.Aggregates.GetLayout(aggPropType).TryGetIndex(aggPropRef.Property.Name, out var propIdx))
+                if (_ctx.Aggregates.GetLayout(aggPropType).TryGetIndex(aggPropRef.Property, out var propIdx))
                 {
                     var arrVal = lv.ArrayVal ?? LoadInstanceRaw(aggPropRef.Instance);
                     AggregateAbi.WriteSlot(_builder, arrVal, propIdx, valueVal);

@@ -1061,10 +1061,10 @@ public partial class InvocationHandler
                     new List<CLeaf> { arrayVal, indexVal, v }));
             }
             case IFieldReferenceOperation fieldRef
-                when AggregateAbi.TryGetMemberTarget(fieldRef, out var aggInstance, out var aggMemberName)
+                when AggregateAbi.TryGetMemberTarget(fieldRef, out var aggInstance, out var aggMember)
                      && aggInstance.Type is INamedTypeSymbol aggContaining
                      && TypeClassifier.IsAggregateValue(aggContaining)
-                     && _ctx.Aggregates.GetLayout(aggContaining).TryGetIndex(aggMemberName, out var memberIndex):
+                     && _ctx.Aggregates.GetLayout(aggContaining).TryGetIndex(aggMember, out var memberIndex):
             {
                 var arrExpr = LoadInstanceRaw(aggInstance);
                 return (() =>

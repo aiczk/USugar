@@ -45,7 +45,7 @@ public partial class InvocationHandler
         // Auto-property on an aggregate (struct/tuple) OR v1 class → object[] element (the backing field's
         // slot). The clone at the return stays IsAggregateValue, so a class-typed property returns by reference.
         if (op.Instance != null && op.Instance.Type is INamedTypeSymbol aggProp && TypeClassifier.IsObjectArrayEmulated(aggProp)
-            && _ctx.Aggregates.GetLayout(aggProp).TryGetIndex(op.Property.Name, out var aggPropIdx))
+            && _ctx.Aggregates.GetLayout(aggProp).TryGetIndex(op.Property, out var aggPropIdx))
         {
             var arrExpr = LoadInstanceRaw(op.Instance);
             var getVal = AggregateAbi.ReadSlot(_builder, arrExpr, aggPropIdx, StorageTypes.Object);
@@ -675,7 +675,7 @@ public partial class InvocationHandler
         foreach (var init in op.Initializers)
         {
             if (init is ISimpleAssignmentOperation { Target: IPropertyReferenceOperation propRef } sa
-                && layout.TryGetIndex(propRef.Property.Name, out var idx))
+                && layout.TryGetIndex(propRef.Property, out var idx))
                 AggregateAbi.WriteSlot(_builder, inst, idx, VisitExpression(sa.Value));
         }
         return inst;

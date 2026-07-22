@@ -1088,10 +1088,10 @@ public abstract partial class HandlerBase
     FieldSetPlan? DescribeFieldSet(IFieldReferenceOperation fieldRef)
     {
         if (fieldRef.Instance == null) return null;
-        if (AggregateAbi.TryGetMemberTarget(fieldRef, out var instance, out var memberName)
+        if (AggregateAbi.TryGetMemberTarget(fieldRef, out var instance, out var member)
             && ResolveType(instance.Type) is INamedTypeSymbol aggregateType
             && TypeClassifier.IsObjectArrayEmulated(aggregateType)
-            && _ctx.Aggregates.GetLayout(aggregateType).TryGetIndex(memberName, out var fieldIndex))
+            && _ctx.Aggregates.GetLayout(aggregateType).TryGetIndex(member, out var fieldIndex))
             return new FieldSetPlan(FieldSetKind.AggregateSlot, instance, fieldIndex);
         if (fieldRef.Instance is IInstanceReferenceOperation)
             return fieldRef.Field.ContainingType.IsValueType
@@ -1247,7 +1247,7 @@ public abstract partial class HandlerBase
         // Aggregate (struct/tuple) OR v1-class auto-property → layout slot write on the backing object[].
         if (propRef.Instance is { Type: INamedTypeSymbol aggContaining } aggInst
             && TypeClassifier.IsObjectArrayEmulated(aggContaining)
-            && _ctx.Aggregates.GetLayout(aggContaining).TryGetIndex(propRef.Property.Name, out var aggSlotIndex))
+            && _ctx.Aggregates.GetLayout(aggContaining).TryGetIndex(propRef.Property, out var aggSlotIndex))
         {
             var arrExpr = LoadInstanceRaw(aggInst);
             return aggVal => AggregateAbi.WriteSlot(_builder, arrExpr, aggSlotIndex, aggVal);
@@ -2337,7 +2337,7 @@ public abstract partial class HandlerBase
         if (t.Impl.AssociatedSymbol is IPropertySymbol implProp && !UasmEmitter.IsComputedProperty(implProp))
         {
             var layout = _ctx.Aggregates.GetLayout(t.Concrete);
-            if (!layout.TryGetIndex(implProp.Name, out var slotIdx))
+            if (!layout.TryGetIndex(implProp, out var slotIdx))
                 throw new InvalidOperationException(
                     $"Auto-property '{implProp.ContainingType.Name}.{implProp.Name}' has no layout slot on '{t.Concrete.Name}'.");
             if (setValue != null)
