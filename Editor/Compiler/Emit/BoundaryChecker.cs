@@ -205,7 +205,8 @@ public sealed class BoundaryChecker
 
         if (!sourceShape.ContainsProgramLocalPayload
             || destinationShape.ContainsProgramLocalPayload
-            || IsProgramLocalEqualityPosition(conversion))
+            || IsProgramLocalEqualityPosition(conversion)
+            || IsProvablyLocalClassErasure(conversion, sourceType, destinationType))
             return;
         throw new NotSupportedException(
             $"Erasing the v1 user class '{sourceType.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}' "
@@ -213,6 +214,62 @@ public sealed class BoundaryChecker
             + "a class value is a program-local object[] bundle with no runtime type identity, so once boxed "
             + "to object it launders past the cross-program / cast / ToString boundary checks. Compare class "
             + "references directly, or keep the value class-typed / use Foo[].");
+    }
+
+    /// <summary>Allows the useful class -> object -> class pattern without reopening object laundering.
+    /// The erased value must be a single-declaration local and every reference must immediately perform
+    /// a runtime class test/cast or reference equality. This is deliberately a whole-body proof: one
+    /// opaque use makes the originating erasure loud again.</summary>
+    static bool IsProvablyLocalClassErasure(IConversionOperation conversion,
+        ITypeSymbol sourceType, ITypeSymbol destinationType)
+    {
+        if (!TypeClassifier.IsUserClass(sourceType)
+            || destinationType.SpecialType != SpecialType.System_Object)
+            return false;
+
+        IOperation cursor = conversion;
+        while (cursor.Parent is IConversionOperation parentConversion) cursor = parentConversion;
+        if (cursor.Parent is not IVariableInitializerOperation { Parent: IVariableDeclaratorOperation declarator })
+            return false;
+
+        var local = declarator.Symbol;
+        IOperation root = declarator;
+        while (root.Parent != null) root = root.Parent;
+        foreach (var operation in root.DescendantsAndSelf())
+        {
+            if (operation is not ILocalReferenceOperation localRef
+                || !SymbolEqualityComparer.Default.Equals(localRef.Local, local))
+                continue;
+            if (!IsSafeErasedClassUse(localRef)) return false;
+        }
+        return true;
+    }
+
+    static bool IsSafeErasedClassUse(ILocalReferenceOperation localRef)
+    {
+        switch (localRef.Parent)
+        {
+            case IConversionOperation conversion
+                when TypeClassifier.IsUserClass(conversion.Type):
+                return true;
+            case IIsTypeOperation isType when TypeClassifier.IsUserClass(isType.TypeOperand):
+                return true;
+            case IIsPatternOperation { Pattern: IDeclarationPatternOperation declaration }
+                when TypeClassifier.IsUserClass(declaration.MatchedType):
+                return true;
+            case IIsPatternOperation { Pattern: ITypePatternOperation typePattern }
+                when TypeClassifier.IsUserClass(typePattern.MatchedType):
+                return true;
+            case IBinaryOperation { OperatorKind: BinaryOperatorKind.Equals or BinaryOperatorKind.NotEquals }:
+                return true;
+            case IArgumentOperation { Parent: IInvocationOperation invocation }
+                when invocation.TargetMethod.Name == "Equals"
+                     && invocation.TargetMethod.ContainingType.SpecialType
+                         is SpecialType.System_Object or SpecialType.System_ValueType:
+                return true;
+            default:
+                return false;
+        }
     }
 
     public bool IsCrossProgramDelegateFieldTarget(IFieldReferenceOperation fieldRef)
