@@ -1212,10 +1212,10 @@ public class UasmEmitter
         }
 
         // Emit interface bridge exports
-        EmitInterfaceBridges();
+        new InterfaceBridgeEmitter(_ctx, _bridge).Emit();
 
         // Emit delegate bridge exports
-        EmitDelegateBridges();
+        new DelegateBridgeEmitter(_ctx, _bridge, _delegateConvention).EmitLayoutBridges();
 
         // Emit pending local functions and generic specializations (may chain)
         while (_pendingClosures.Count > 0 || _pendingGenericSpecs.Count > 0)
@@ -1257,136 +1257,6 @@ public class UasmEmitter
         // §5.5 (graft #2): now that every capturing bridge is registered, assert each has a graph node.
         VerifyBridgeTargetsAreNodes();
     }
-
-    // ── Interface Bridges ──
-
-    void EmitInterfaceBridges()
-    {
-        var bridges = _planner.ComputeBridges(_classSymbol);
-        foreach (var (ifaceMethod, ifaceMl, implMethod, classMl) in bridges)
-        {
-            // Declare interface param/return variables
-            for (int i = 0; i < ifaceMethod.Parameters.Length; i++)
-            {
-                if (ifaceMl.ParamIds[i] != classMl.ParamIds[i])
-                {
-                    var udonType = GetStorageTypeName(ifaceMethod.Parameters[i].Type);
-                    _ctx.Storage.TryDeclareVar(ifaceMl.ParamIds[i], new StorageType(udonType));
-                }
-            }
-            if (ifaceMl.ReturnId != null && ifaceMl.ReturnId != classMl.ReturnId)
-            {
-                var retType = GetStorageTypeName(ifaceMethod.ReturnType);
-                _ctx.Storage.TryDeclareVar(ifaceMl.ReturnId, new StorageType(retType));
-            }
-
-            // Export the bridge under the canonical interface-qualified name (unique vs class methods and
-            // other bridges); the function name carries it too so each bridge gets a distinct __body label.
-            var bridgeName = LayoutPlanner.InterfaceDispatchName(ifaceMethod, ifaceMl);
-            var bridgeFunc = _module.AddFunction($"__bridge_{bridgeName}", bridgeName);
-            _builder.SetFunction(bridgeFunc);
-
-            // Class implementation: the planner already resolved it through the override chain
-            // (wave-9 round-2 [W5] — FindImplementationForInterfaceMember returns the chain ROOT,
-            // which the [W4] folding removes from both the layout and _methodFunctions, so a
-            // re-resolution here would miss the registered chain leaf and throw).
-            if (implMethod == null || !_methodFunctions.TryGetValue(implMethod, out var classFunc))
-                throw new InvalidOperationException(
-                    $"Interface bridge for '{ifaceMl.ExportName}': "
-                  + $"no function found for implementation of '{ifaceMethod.Name}'.");
-
-            // Load interface params
-            var args = new List<CLeaf>();
-            for (int i = 0; i < ifaceMethod.Parameters.Length; i++)
-            {
-                var paramType = GetStorageTypeName(ifaceMethod.Parameters[i].Type);
-                args.Add(_bridge.Load(ifaceMl.ParamIds[i], new StorageType(paramType)));
-            }
-
-            // Call class implementation
-            var result = _bridge.CallInternal(classFunc, args.ToArray());
-
-            // Copy return value to interface return field if needed
-            if (result != null && ifaceMl.ReturnId != null
-                && classMl.ReturnId != null && ifaceMl.ReturnId != classMl.ReturnId)
-            {
-                _bridge.Store(ifaceMl.ReturnId, result);
-            }
-
-            _builder.EmitReturn();
-        }
-    }
-
-    // ── Delegate Bridge Exports ──
-
-    void EmitDelegateBridges()
-    {
-        var classLayout = _planner.GetLayout(_classSymbol);
-        foreach (var (method, bridge) in classLayout.DelegateBridges)
-        {
-            if (!_methodFunctions.TryGetValue(method, out var realFunc)) continue;
-            // Tuple returns (design 2026-07-04 §1.2): the bridge InternalCalls the real method and
-            // stores its result straight into conv-ret — no special casing, since a tuple return is
-            // already the same single SystemObjectArray aggregate slot a struct return uses.
-
-            // §3.4-1 NOTE: ValidateNoRefOutParams deliberately does NOT run here. This loop emits a
-            // speculative bridge for EVERY non-event user method (planner DelegateBridges), so a throw
-            // would reject any class merely CONTAINING a ref/out method, and a skip would change the
-            // struct_ref_param byte-identity sentinel. A ref/out method's bridge is unreachable as a
-            // delegate target: ValidateDelegateBinding rejects every creation and EmitDelegateDispatch
-            // re-validates at every dispatch site, so no USugar-built bundle can ever name it.
-
-            // Build canonical convention key using the unified ABI builder (design §3.2)
-            var sigPart = DelegateAbi.BuildSigPart(method);
-
-            // Declare convention fields (if not already declared)
-            for (int i = 0; i < method.Parameters.Length; i++)
-            {
-                var argType = ExternResolver.GetUdonTypeName(method.Parameters[i].Type);
-                _ctx.Storage.TryDeclareVar(DelegateAbi.ConvArgName(sigPart, i), new StorageType(argType));
-            }
-            if (!method.ReturnsVoid)
-            {
-                var retType = ExternResolver.GetUdonTypeName(method.ReturnType);
-                _ctx.Storage.TryDeclareVar(DelegateAbi.ConvRetName(sigPart), new StorageType(retType));
-            }
-
-            // Build bridge function
-            var bridgeFunc = _module.AddFunction(bridge.BridgeExportName, bridge.BridgeExportName);
-
-            var prevFunc = _builder.CurrentFunction;
-            _builder.SetFunction(bridgeFunc);
-
-            // Copy convention fields → real param fields, then call real method
-            var callArgs = new List<CLeaf>();
-            for (int i = 0; i < method.Parameters.Length; i++)
-            {
-                var argType = ExternResolver.GetUdonTypeName(method.Parameters[i].Type);
-                var convName = DelegateAbi.ConvArgName(sigPart, i);
-                callArgs.Add(_bridge.Load(convName, new StorageType(argType)));
-            }
-
-            var retTypeStr = method.ReturnsVoid ? "SystemVoid" : ExternResolver.GetUdonTypeName(method.ReturnType);
-            var callResult = _builder.InternalCall(realFunc.Name, callArgs, new StorageType(retTypeStr));
-
-            if (!method.ReturnsVoid)
-            {
-                var convRet = DelegateAbi.ConvRetName(sigPart);
-                _bridge.Store(convRet, callResult);
-            }
-            else
-            {
-                _builder.EmitExprStmt(callResult);
-            }
-
-            _builder.EmitReturn();
-
-            if (prevFunc != null)
-                _builder.SetFunction(prevFunc);
-        }
-    }
-
-    // Multicast delegate synthetics
 
     static string SanitizeId(string name) => NameAllocator.Sanitize(name);
 

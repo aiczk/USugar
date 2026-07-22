@@ -22,6 +22,16 @@ public sealed class DelegateBridgeEmitter
         EmitSignatureAdapters();
     }
 
+    public void EmitLayoutBridges()
+    {
+        var classLayout = _context.Planner.GetLayout(_context.ClassSymbol);
+        foreach (var (method, bridge) in classLayout.DelegateBridges)
+        {
+            if (!_context.Methods.Functions.TryGetValue(method, out var target)) continue;
+            EmitBody(bridge.BridgeExportName, method, null, target, method);
+        }
+    }
+
     void EmitPlainBridges()
     {
         var emitted = new HashSet<string>();

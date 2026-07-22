@@ -1,0 +1,61 @@
+using System;
+using System.Collections.Generic;
+
+/// <summary>Emits exports that adapt interface layout fields to class implementations.</summary>
+public sealed class InterfaceBridgeEmitter
+{
+    readonly EmitContext _context;
+    readonly SyntheticBridgeBuilder _bridge;
+
+    public InterfaceBridgeEmitter(EmitContext context, SyntheticBridgeBuilder bridge)
+    {
+        _context = context;
+        _bridge = bridge;
+    }
+
+    public void Emit()
+    {
+        var builder = _context.Builder;
+        var previousFunction = builder.CurrentFunction;
+        foreach (var (interfaceMethod, interfaceLayout, implementationMethod, classLayout)
+            in _context.Planner.ComputeBridges(_context.ClassSymbol))
+        {
+            for (int i = 0; i < interfaceMethod.Parameters.Length; i++)
+            {
+                if (interfaceLayout.ParamIds[i] == classLayout.ParamIds[i]) continue;
+                _context.Storage.TryDeclareVar(interfaceLayout.ParamIds[i],
+                    ExternResolver.GetStorageType(new RuntimeType(interfaceMethod.Parameters[i].Type)));
+            }
+
+            if (interfaceLayout.ReturnId != null
+                && interfaceLayout.ReturnId != classLayout.ReturnId)
+                _context.Storage.TryDeclareVar(interfaceLayout.ReturnId,
+                    ExternResolver.GetStorageType(new RuntimeType(interfaceMethod.ReturnType)));
+
+            var exportName = LayoutPlanner.InterfaceDispatchName(interfaceMethod, interfaceLayout);
+            builder.SetFunction(_context.Module.AddFunction($"__bridge_{exportName}", exportName));
+
+            if (implementationMethod == null
+                || !_context.Methods.Functions.TryGetValue(implementationMethod, out var implementation))
+                throw new InvalidOperationException(
+                    $"Interface bridge for '{interfaceLayout.ExportName}': "
+                    + $"no function found for implementation of '{interfaceMethod.Name}'.");
+
+            var arguments = new List<CLeaf>();
+            for (int i = 0; i < interfaceMethod.Parameters.Length; i++)
+                arguments.Add(_bridge.Load(interfaceLayout.ParamIds[i],
+                    ExternResolver.GetStorageType(
+                        new RuntimeType(interfaceMethod.Parameters[i].Type))));
+
+            var result = _bridge.CallInternal(implementation, arguments.ToArray());
+            if (result != null && interfaceLayout.ReturnId != null
+                && classLayout.ReturnId != null
+                && interfaceLayout.ReturnId != classLayout.ReturnId)
+                _bridge.Store(interfaceLayout.ReturnId, result);
+
+            builder.EmitReturn();
+        }
+
+        if (previousFunction != null) builder.SetFunction(previousFunction);
+    }
+}
