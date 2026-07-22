@@ -222,7 +222,7 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
             if (ResolveType(op.Instance?.Type) is INamedTypeSymbol recvTy
                 && VirtualDispatch.IsDispatchSite(target, op.Instance, recvTy))
             {
-                var site = new CallableSite(CallableSiteKind.Method, target, op, op.Instance);
+                var site = CallableSites.Require(op, target);
                 var targets = _ctx.VirtualDispatch.Resolve(site, recvTy).RuntimeTargets;
                 AssertClosedVirtualDispatch(recvTy, targets, target);
                 if (!recvTy.IsSealed && targets.Count >= 2)
@@ -404,7 +404,7 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
         if (target.ContainingType is INamedTypeSymbol { TypeKind: TypeKind.Interface } localInterface
             && _planner.InterfaceIsLocalUserClassOnly(localInterface))
         {
-            var site = new CallableSite(CallableSiteKind.Method, target, op, op.Instance);
+            var site = CallableSites.Require(op, target);
             var targets = _ctx.VirtualDispatch.Resolve(site, localInterface).RuntimeTargets;
             if (targets.Count >= 2)
                 return EmitVirtualChain(op, targets);

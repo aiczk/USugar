@@ -23,7 +23,7 @@ internal readonly struct CallableSite
     public readonly IOperation Operation;
     public readonly IOperation Receiver;
 
-    public CallableSite(CallableSiteKind kind, IMethodSymbol target, IOperation operation,
+    internal CallableSite(CallableSiteKind kind, IMethodSymbol target, IOperation operation,
         IOperation receiver = null)
     {
         Kind = kind;
@@ -35,6 +35,24 @@ internal readonly struct CallableSite
 
 internal static class CallableSites
 {
+    public static CallableSite Require(IOperation operation, IMethodSymbol target)
+    {
+        if (operation == null) throw new System.ArgumentNullException(nameof(operation));
+        if (target == null) throw new System.ArgumentNullException(nameof(target));
+        foreach (var site in FromOperation(operation))
+            if (SymbolEqualityComparer.Default.Equals(site.Target, target)
+                || SymbolEqualityComparer.Default.Equals(
+                    site.Target.OriginalDefinition, target.OriginalDefinition))
+                return site;
+        throw new System.InvalidOperationException(
+            $"Operation '{operation.Kind}' does not normalize to callable '{target}'.");
+    }
+
+    public static CallableSite Synthetic(CallableSiteKind kind, IMethodSymbol target,
+        IOperation receiver = null)
+        => new CallableSite(kind,
+            target ?? throw new System.ArgumentNullException(nameof(target)), null, receiver);
+
     /// <summary>Normalize explicit callable-bearing operation shapes. Property context is classified
     /// once here: reads use get, simple writes use set, and read-modify-write forms use both.</summary>
     public static IEnumerable<CallableSite> FromOperation(IOperation operation)

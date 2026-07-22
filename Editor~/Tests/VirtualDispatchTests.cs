@@ -34,7 +34,7 @@ public class VirtualDispatchTests
 
         var staticTy = Find(staticTypeName);
         var slot = staticTy.GetMembers(methodName).OfType<IMethodSymbol>().First();
-        var site = new CallableSite(CallableSiteKind.Method, slot, null);
+        var site = CallableSites.Synthetic(CallableSiteKind.Method, slot);
         return new VirtualDispatch(typeObjs).Resolve(site, staticTy).RuntimeTargets;
     }
 

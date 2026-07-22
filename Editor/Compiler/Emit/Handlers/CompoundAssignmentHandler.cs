@@ -188,8 +188,7 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
             EmitAssign(recvSlot, LoadInstanceRaw(evtRef.Instance));
             var handlerSlot = _builder.AllocScratch(GetStorageType(evt.Type));
             EmitAssign(handlerSlot, VisitExpression(op.HandlerValue));
-            var kind = op.Adds ? CallableSiteKind.EventAdd : CallableSiteKind.EventRemove;
-            var site = new CallableSite(kind, accessor, op, evtRef.Instance);
+            var site = CallableSites.Require(op, accessor);
             var targets = _ctx.VirtualDispatch.Resolve(site, localInterface).RuntimeTargets;
             if (targets.Count == 0)
                 throw new System.NotSupportedException(

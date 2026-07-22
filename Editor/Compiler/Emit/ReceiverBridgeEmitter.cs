@@ -57,7 +57,7 @@ public sealed class ReceiverBridgeEmitter
 
         _bridge.Dispatch(plan, arguments, runtime: () =>
         {
-            var site = new CallableSite(CallableSiteKind.Method, member, null);
+            var site = CallableSites.Synthetic(CallableSiteKind.Method, member);
             var targets = _context.VirtualDispatch.Resolve(site, member.ContainingType).RuntimeTargets;
             var matched = builder.AllocScratch(StorageTypes.Boolean);
             builder.EmitAssign(matched, builder.Const(false, StorageTypes.Boolean));
