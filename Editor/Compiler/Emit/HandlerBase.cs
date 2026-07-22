@@ -1961,8 +1961,8 @@ public abstract partial class HandlerBase
         // env as the member's param0 (CA-M1 receiver ABI). A STRUCT receiver is DeepCloned at mint:
         // C# copies the struct receiver by value at bind time (nested structs deep, arrays/references
         // shared) — B54's aliasing failure mode is gone by construction. Mint shape: Target=this /
-        // Addr=real funcaddr (selfFast JUMP_INDIRECT); cross-program escape of the bundle is rejected
-        // by the classifier's receiver arm (ValueClassifier — program-local payload).
+        // Addr=real funcaddr (selfFast JUMP_INDIRECT). Portable tagged class receivers may cross a
+        // program boundary with the bundle; collapsed aggregate struct receivers remain rejected.
         if (op.Target is IMethodReferenceOperation && !targetMethod.IsStatic
             && targetMethod.MethodKind is not (MethodKind.LambdaMethod or MethodKind.LocalFunction)
             && targetMethod.ContainingType is INamedTypeSymbol recvCt0

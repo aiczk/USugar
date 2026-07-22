@@ -466,11 +466,10 @@ public class CwArgEscape : UdonSharpBehaviour {
     }
 
     [Fact]
-    public void CrossBehaviourCallArg_ClassReceiverMethodGroup_LoudRejects()  // CW7 receiver-bridge leg
+    public void CrossBehaviourCallArg_ClassReceiverMethodGroup_Compiles()  // portable receiver-bridge leg
     {
-        // MG autowrap carries the class receiver in DelegateAbi.Env (the FATAL-amendment shape the
-        // scalar store surface rejects) — the argument surface must not hand it a bypass.
-        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
+        // The receiver bridge carries a portable tagged class reference in DelegateAbi.Env.
+        var uasm = TestHelper.CompileToUasm(@"
 using UdonSharp;
 using System;
 public class CwFoo7b { public int v; public void M() { v++; } }
@@ -481,8 +480,9 @@ public class CwReg7b : UdonSharpBehaviour {
 public class CwArgEscapeMg : UdonSharpBehaviour {
     public CwReg7b o;
     void Start() { var f = new CwFoo7b(); o.Register(f.M); }
-}", "CwArgEscapeMg"));
-        Assert.Contains("cross-program argument 'h'", ex.Message);
+}", "CwArgEscapeMg");
+        Assert.Contains("__SendCustomEvent__", uasm);
+        Assert.Contains("_rcv", uasm);
     }
 
     [Fact]

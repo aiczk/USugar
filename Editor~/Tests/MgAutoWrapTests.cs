@@ -3,9 +3,8 @@ using Xunit;
 namespace USugar.Tests;
 
 // MG auto-wrap A/B pins (design 2026-07-11 v2). Real-VM value gates live in the harness
-// (MgAutoWrapVmTests); these pin compile acceptance, the cross-program boundary reject (the FATAL
-// amendment - revert-red verified: disabling the classifier receiver arm makes CrossProgram fail),
-// and the null-receiver timing deviation (C# binds-time NRE vs USugar dispatch-time LogError+default).
+// (MgAutoWrapVmTests); these pin compile acceptance, portable class-receiver crossing, the remaining
+// struct-receiver boundary reject, and the null-receiver timing deviation.
 public class MgAutoWrapTests
 {
     [Fact]
@@ -35,17 +34,30 @@ public class MgP3 : UdonSharpBehaviour {
     void Start(){ NodeN n = null; System.Func<int> f = n.M; result = f(); }
 }", "MgP3");
 
-    // FATAL-amendment pin: a receiver-carrying MG delegate must NOT cross the program boundary.
     [Fact]
-    public void ClassMg_CrossProgramStore_Rejects()
+    public void ClassMg_CrossProgramStore_Compiles()
     {
-        var ex = Record.Exception(() => TestHelper.CompileToUasm(@"using UdonSharp;
+        var uasm = TestHelper.CompileToUasm(@"using UdonSharp;
 public class NodeX { public int W; public int M(){ return W; } }
 public class MgP4 : UdonSharpBehaviour {
     public MgP4 other;
     public System.Func<int> d;
     void Start(){ var n = new NodeX(); other.d = n.M; }
-}", "MgP4"));
-        Assert.NotNull(ex);
+}", "MgP4");
+        Assert.Contains("__SetProgramVariable__", uasm);
+        Assert.Contains("_rcv", uasm);
+    }
+
+    [Fact]
+    public void StructMg_CrossProgramStore_Rejects()
+    {
+        var ex = Assert.ThrowsAny<System.Exception>(() => TestHelper.CompileToUasm(@"using UdonSharp;
+public struct StructNodeX { public int W; public int M(){ return W; } }
+public class MgP5 : UdonSharpBehaviour {
+    public MgP5 other;
+    public System.Func<int> d;
+    void Start(){ var n = new StructNodeX(); other.d = n.M; }
+}", "MgP5"));
+        Assert.Contains("cross-program field", ex.Message);
     }
 }

@@ -156,9 +156,8 @@ different result.
   user class remain restricted where the VM cannot preserve the source semantics.
 - **Delegates and events** — closures, delegate values, multicast (`+=`/`-=`), delegate
   fields/properties, tuple returns, and field-like events (including static field-like events) are
-  supported. Delegate signatures with `ref`/`out`, direct method-group binding to a user-class
-  instance method is not. Both field-like and custom-accessor events support cross-behaviour
-  subscription. Wrap a user-class method call in a lambda when a delegate is required.
+  supported. Delegate signatures with `ref`/`out` remain unsupported. User-class instance method
+  groups and both field-like and custom-accessor cross-behaviour event subscriptions are supported.
 - **Multidimensional arrays** — creation, indexing, `Length`, `Rank`, `GetLength`, and
   `GetUpperBound` are supported. They use an `object[]` bundle rather than a native Udon array, so
   general `Array` APIs, erasure to `object`/`Array`, and implicit string formatting are restricted.
