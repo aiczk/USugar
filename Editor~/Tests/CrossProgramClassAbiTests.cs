@@ -79,4 +79,28 @@ public class WireGenericReceiver : UdonSharpBehaviour {
         Assert.Contains("__typeobj_WireBox_Int32", uasm);
         Assert.Contains("SystemString.__op_Equality__SystemString_SystemString__SystemBoolean", uasm);
     }
+
+    [Fact]
+    public void PortableSurface_ExpandsBaseArrayAndNestedClassFields()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public class PortableLeaf { public virtual int Read() => 1; }
+public class PortableLeafDerived : PortableLeaf { public override int Read() => 2; }
+public class PortableEnvelope<T> { public T Item; }
+public class PortableBaseReceiver : UdonSharpBehaviour {
+    public PortableLeaf[] Values;
+    public PortableEnvelope<PortableLeaf> Envelope;
+}
+public class PortableDerivedReceiver : PortableBaseReceiver {
+    public int Result;
+    public void ReadIncoming() { Result = Values[0].Read() * 10 + Envelope.Item.Read(); }
+}
+", "PortableDerivedReceiver");
+
+        Assert.Contains("__typeobj_PortableLeaf", uasm);
+        Assert.Contains("__typeobj_PortableLeafDerived", uasm);
+        Assert.Contains("__typeobj_PortableEnvelope_PortableLeaf", uasm);
+        Assert.Contains("SystemString.__op_Equality__SystemString_SystemString__SystemBoolean", uasm);
+    }
 }
