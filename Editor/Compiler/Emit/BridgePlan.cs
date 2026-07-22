@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using Microsoft.CodeAnalysis;
 
-public enum BridgeReceiverKind { None, Environment, Payload }
 public enum BridgeDispatchKind { Direct, Runtime, DelegatePayload }
 public enum BridgeReturnKind { None, Convention, Field }
 
@@ -70,14 +69,13 @@ public sealed class BridgePlan
     public string FunctionName { get; }
     public string ExportName { get; }
     public IMethodSymbol SignatureMethod { get; }
-    public BridgeReceiverKind Receiver { get; }
     public BridgeDispatchAdapter Dispatch { get; }
     public IReadOnlyList<BridgeArgumentAdapter> Arguments { get; }
     public BridgeReturnAdapter Return { get; }
     public IMethodSymbol TargetMethod { get; }
 
     public BridgePlan(string functionName, string exportName, IMethodSymbol signatureMethod,
-        BridgeReceiverKind receiver, BridgeDispatchAdapter dispatch,
+        BridgeDispatchAdapter dispatch,
         IReadOnlyList<BridgeArgumentAdapter> arguments, BridgeReturnAdapter returnAdapter,
         IMethodSymbol targetMethod = null)
     {
@@ -87,7 +85,6 @@ public sealed class BridgePlan
             ? exportName : throw new ArgumentException("Bridge export name is required.", nameof(exportName));
         SignatureMethod = signatureMethod
             ?? throw new ArgumentNullException(nameof(signatureMethod));
-        Receiver = receiver;
         Dispatch = dispatch ?? throw new ArgumentNullException(nameof(dispatch));
         if (arguments == null) throw new ArgumentNullException(nameof(arguments));
         var frozenArguments = new List<BridgeArgumentAdapter>(arguments.Count);

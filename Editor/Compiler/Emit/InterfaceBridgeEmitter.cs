@@ -39,7 +39,7 @@ public sealed class InterfaceBridgeEmitter
                     + $"no function found for implementation of '{interfaceMethod.Name}'.");
 
             var plan = new BridgePlan($"__bridge_{exportName}", exportName, interfaceMethod,
-                BridgeReceiverKind.None, BridgeDispatchAdapter.Direct(implementation,
+                BridgeDispatchAdapter.Direct(implementation,
                     implementation.ReturnType ?? StorageTypes.Void),
                 BuildArgumentAdapters(interfaceMethod, interfaceLayout),
                 BuildReturnAdapter(interfaceLayout, classLayout), implementationMethod);

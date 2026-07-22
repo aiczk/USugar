@@ -44,7 +44,7 @@ public sealed class ReceiverBridgeEmitter
             ? BridgeReturnAdapter.None
             : new BridgeReturnAdapter(BridgeReturnKind.Convention, conventionReturn);
         var plan = new BridgePlan(bridgeName, bridgeName, member,
-            BridgeReceiverKind.Environment, BridgeDispatchAdapter.Runtime(targetReturnType),
+            BridgeDispatchAdapter.Runtime(targetReturnType),
             argumentAdapters, returnAdapter, member);
         _bridge.Emit(_context, plan, () =>
         {
@@ -106,7 +106,6 @@ public sealed class ReceiverBridgeEmitter
             ? BridgeReturnAdapter.None
             : new BridgeReturnAdapter(BridgeReturnKind.Convention, conventionReturn);
         var plan = new BridgePlan(bridgeName, bridgeName, member,
-            BridgeReceiverKind.Environment,
             BridgeDispatchAdapter.Direct(targetFunction, targetReturnType),
             argumentAdapters, returnAdapter, member);
         _bridge.Emit(_context, plan, () =>

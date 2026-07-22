@@ -43,7 +43,7 @@ public sealed class WrapperBridgeEmitter
             : new BridgeReturnAdapter(BridgeReturnKind.Convention,
                 DelegateAbi.ConvRetName(outerSignature));
         var plan = new BridgePlan(name, name, outerInvoke,
-            BridgeReceiverKind.Payload, BridgeDispatchAdapter.DelegatePayload(
+            BridgeDispatchAdapter.DelegatePayload(
                 returnType ?? StorageTypes.Void),
             argumentAdapters, returnAdapter);
         _bridge.Emit(_context, plan, () =>
