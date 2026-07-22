@@ -130,8 +130,17 @@ public sealed class BoundaryChecker
     void RequireDelegateValueSafeForCrossProgramStore(ValueInfo info, string surface, string site, string advice)
     {
         if (info.Kind == ValueKind.Null || ValueClassifier.IsDirectProgramLocalSafeDelegate(info)) return;
-        if (!info.DelegateCapturesProgramLocalPayload && !CurrentMethodBodyMentionsProgramLocalPayload())
-            return;
+        // A copied delegate has lost its creation-site capture proof. Inspecting only this method's body
+        // is unsound: a caller can pass a class-capturing lambda through a clean Action parameter and the
+        // helper can then publish it. Until value-flow carries capture taint across calls, only a direct
+        // creation at the boundary is provably transport-safe.
+        if (!info.IsDirectDelegateValue)
+            throw new NotSupportedException(
+                $"A delegate stored in {surface} must be created directly from a capture-safe lambda or "
+                + $"method group at {site}. The copied {info.Provenance.ToString().ToLowerInvariant()} value "
+                + "has no creation-site capture proof and may carry a program-local payload."
+                + (advice == null ? "" : " " + advice));
+        if (!info.DelegateCapturesProgramLocalPayload && !CurrentMethodBodyMentionsProgramLocalPayload()) return;
         throw new NotSupportedException(
             $"A delegate stored in {surface} must be created directly from a capture-safe lambda or "
             + $"method group at {site}. Delegate values copied from locals, parameters, fields, calls, "

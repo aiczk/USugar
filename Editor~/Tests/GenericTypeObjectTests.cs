@@ -147,4 +147,18 @@ public class GrowingSpecs : UdonSharpBehaviour {
         Assert.Contains("Grow<int>", ex.Message);
         Assert.Contains("Grow<GrowNode<int>>", ex.Message);
     }
+
+    [Fact]
+    public void FieldInitializerGrowingTypeSpecialization_IsRejectedWithoutRecursing()
+    {
+        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
+using UdonSharp;
+public class FieldGrow<T> { public FieldGrow<FieldGrow<T>> next = new FieldGrow<FieldGrow<T>>(); }
+public class FieldGrowingSpecs : UdonSharpBehaviour {
+  void Start() { var root = new FieldGrow<int>(); }
+}", "FieldGrowingSpecs"));
+        Assert.Contains("expands recursively through field initializers", ex.Message);
+        Assert.Contains("FieldGrow<int>", ex.Message);
+        Assert.Contains("FieldGrow<FieldGrow<int>>", ex.Message);
+    }
 }

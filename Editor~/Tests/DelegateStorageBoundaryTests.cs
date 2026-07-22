@@ -67,6 +67,30 @@ public class PublicDelegateCopyHost : UdonSharpBehaviour {
     }
 
     [Fact]
+    public void CrossProgramStore_DelegateParameterCannotLaunderClassCapture()
+    {
+        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(new[] { @"
+using UdonSharp;
+using System;
+public class LaunderTarget : UdonSharpBehaviour { public Action Callback; }
+", @"
+using UdonSharp;
+using System;
+public class LaunderPayload { public int Value; }
+public class LaunderHost : UdonSharpBehaviour {
+    public LaunderTarget Target;
+    void Publish(Action callback) { Target.Callback = callback; }
+    void Start() {
+        var payload = new LaunderPayload();
+        Publish(() => { payload.Value++; });
+    }
+}
+" }, "LaunderHost"));
+        Assert.Contains("copied parameter value", ex.Message);
+        Assert.Contains("no creation-site capture proof", ex.Message);
+    }
+
+    [Fact]
     public void PublicDelegateField_DirectClassFreeLambda_Compiles()
     {
         var uasm = TestHelper.CompileToUasm(@"

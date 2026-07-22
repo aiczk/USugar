@@ -543,7 +543,8 @@ public class CwDlgArrElem : UdonSharpBehaviour {
     void Init() { handlers = new Action[1]; }
     void Start() { Init(); var f = new CwFoo8(); handlers[0] = () => { f.v++; }; }
 }", "CwDlgArrElem"));
-        Assert.Contains("cross-program array field 'handlers'", ex.Message);
+        Assert.Contains("cross-program", ex.Message);
+        Assert.Contains("handlers", ex.Message);
     }
 
     [Fact]

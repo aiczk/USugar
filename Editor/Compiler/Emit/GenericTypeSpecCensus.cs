@@ -15,12 +15,21 @@ internal sealed class GenericTypeSpecCensus
     readonly HashSet<string> _seenMethods = new(StringComparer.Ordinal);
     readonly HashSet<string> _seenFieldInits = new(StringComparer.Ordinal);
     readonly Queue<(IMethodSymbol Method, IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> Map, SpecTrace Trace)> _queue = new();
+    readonly Queue<(INamedTypeSymbol Type, IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> Map,
+        MintTrace MintTrace, SpecTrace MethodTrace)> _fieldQueue = new();
 
     sealed class SpecTrace
     {
         public readonly IMethodSymbol Method;
         public readonly SpecTrace Parent;
         public SpecTrace(IMethodSymbol method, SpecTrace parent) { Method = method; Parent = parent; }
+    }
+
+    sealed class MintTrace
+    {
+        public readonly INamedTypeSymbol Type;
+        public readonly MintTrace Parent;
+        public MintTrace(INamedTypeSymbol type, MintTrace parent) { Type = type; Parent = parent; }
     }
 
     public GenericTypeSpecCensus(Compilation compilation, Func<IMethodSymbol, IOperation> bodyOf,
@@ -37,12 +46,18 @@ internal sealed class GenericTypeSpecCensus
         foreach (var m in plan.ForeignStatics) EnqueueIfClosed(m, null, null);
         foreach (var m in plan.StructMethods) EnqueueIfClosed(m, null, null);
         foreach (var m in plan.BaseInstanceMethods) EnqueueIfClosed(m, null, null);
-        foreach (var op in plan.FieldInitOps) Walk(op, null, null);
+        foreach (var op in plan.FieldInitOps) Walk(op, null, null, null);
 
-        while (_queue.Count > 0)
+        while (_queue.Count > 0 || _fieldQueue.Count > 0)
         {
-            var (method, map, trace) = _queue.Dequeue();
-            Walk(_bodyOf(method.OriginalDefinition), map, trace);
+            if (_queue.Count > 0)
+            {
+                var (method, map, trace) = _queue.Dequeue();
+                Walk(_bodyOf(method.OriginalDefinition), map, trace, null);
+                continue;
+            }
+            var (type, fieldMap, mintTrace, methodTrace) = _fieldQueue.Dequeue();
+            foreach (var init in _fieldInits(type)) Walk(init, fieldMap, methodTrace, mintTrace);
         }
         return _minted;
     }
@@ -61,35 +76,39 @@ internal sealed class GenericTypeSpecCensus
         _queue.Enqueue((closed, map, new SpecTrace(closed, parent)));
     }
 
-    void AddMint(INamedTypeSymbol raw, IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> map, SpecTrace trace)
+    void AddMint(INamedTypeSymbol raw, IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> map,
+        SpecTrace methodTrace, MintTrace parentMint)
     {
         var closed = TypeEnvironment.CloseType(_compilation, raw, map) as INamedTypeSymbol;
         if (closed == null || !TypeClassifier.IsUserClass(closed) || ContainsOpen(closed)) return;
+        RejectExpandingMint(closed, parentMint);
         if (!_minted.Add(closed)) return;
 
         var classMap = TypeEnvironment.ForContainingType(closed, map);
         var fieldKey = ClassTypeObjectContext.SpecKey(closed);
         if (_seenFieldInits.Add(fieldKey))
-            foreach (var init in _fieldInits(closed)) Walk(init, classMap, trace);
+            _fieldQueue.Enqueue((closed, classMap, new MintTrace(closed, parentMint), methodTrace));
 
         var ctor = closed.InstanceConstructors.FirstOrDefault(c => c.Parameters.Length == 0);
-        EnqueueIfClosed(ctor, classMap, trace);
+        EnqueueIfClosed(ctor, classMap, methodTrace);
     }
 
-    void Walk(IOperation root, IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> map, SpecTrace trace)
+    void Walk(IOperation root, IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> map,
+        SpecTrace methodTrace, MintTrace mintTrace)
     {
         if (root == null) return;
         foreach (var op in SelfAndDescendants(root))
         {
             foreach (var target in OperationMethodFacts.ConstructedTargets(op))
-                EnqueueIfClosed(target, map, trace);
+                EnqueueIfClosed(target, map, methodTrace);
             switch (op)
             {
                 case IObjectCreationOperation oc when oc.Type is INamedTypeSymbol ct:
-                    AddMint(ct, map, trace);
+                    AddMint(ct, map, methodTrace, mintTrace);
                     break;
                 case ITypeParameterObjectCreationOperation tp:
-                    if (TypeEnvironment.CloseType(_compilation, tp.Type, map) is INamedTypeSymbol concrete) AddMint(concrete, map, trace);
+                    if (TypeEnvironment.CloseType(_compilation, tp.Type, map) is INamedTypeSymbol concrete)
+                        AddMint(concrete, map, methodTrace, mintTrace);
                     break;
             }
         }
@@ -108,6 +127,22 @@ internal sealed class GenericTypeSpecCensus
             if (before.Count != after.Count || !StrictlyEmbeds(after, before)) continue;
             throw new NotSupportedException(
                 $"Generic specialization expands recursively: '{Display(ancestor.Method)}' -> '{Display(current)}'. "
+                + "The closed-specialization set would be infinite.");
+        }
+    }
+
+    static void RejectExpandingMint(INamedTypeSymbol current, MintTrace trace)
+    {
+        for (var ancestor = trace; ancestor != null; ancestor = ancestor.Parent)
+        {
+            if (!SymbolEqualityComparer.Default.Equals(
+                    current.OriginalDefinition, ancestor.Type.OriginalDefinition)) continue;
+            if (!ContainsType(current, ancestor.Type)
+                || SymbolEqualityComparer.Default.Equals(current, ancestor.Type)) continue;
+            throw new NotSupportedException(
+                $"Generic type specialization expands recursively through field initializers: "
+                + $"'{ancestor.Type.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}' -> "
+                + $"'{current.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}'. "
                 + "The closed-specialization set would be infinite.");
         }
     }
