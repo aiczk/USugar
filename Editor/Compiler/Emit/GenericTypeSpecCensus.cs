@@ -84,7 +84,7 @@ internal sealed class GenericTypeSpecCensus
             || closed.IsGenericMethod && closed.TypeArguments.Any(t => ContainsOpen(TypeEnvironment.CloseType(
                 _compilation, t, ambient))))
             return;
-        RejectExpandingCycle(closed, parent);
+        SpecializationExpansionPolicy.RequireFinite(closed, TraceMethods(parent));
         var lexicalOwners = closureKind ? LexicalOwners(closed, parent)
             : System.Collections.Immutable.ImmutableArray<IMethodSymbol>.Empty;
         var key = MethodKey(closed, map) + (closureKind
@@ -114,7 +114,7 @@ internal sealed class GenericTypeSpecCensus
     {
         var closed = TypeEnvironment.CloseType(_compilation, raw, map) as INamedTypeSymbol;
         if (closed == null || !TypeClassifier.IsUserClass(closed) || ContainsOpen(closed)) return;
-        RejectExpandingMint(closed, parentMint);
+        SpecializationExpansionPolicy.RequireFinite(closed, TraceTypes(parentMint));
         if (!_minted.Add(closed)) return;
         _dispatchTypes.Add(closed);
 
@@ -212,71 +212,6 @@ internal sealed class GenericTypeSpecCensus
         => left != null && right != null && SymbolEqualityComparer.Default.Equals(
             left.OriginalDefinition, right.OriginalDefinition);
 
-    static void RejectExpandingCycle(IMethodSymbol current, SpecTrace trace)
-    {
-        for (var ancestor = trace; ancestor != null; ancestor = ancestor.Parent)
-        {
-            if (!SymbolEqualityComparer.Default.Equals(
-                    current.OriginalDefinition, ancestor.Method.OriginalDefinition)) continue;
-            var before = SpecializationArguments(ancestor.Method);
-            var after = SpecializationArguments(current);
-            if (before.Count != after.Count || !StrictlyEmbeds(after, before)) continue;
-            throw new NotSupportedException(
-                $"Generic specialization expands recursively: '{Display(ancestor.Method)}' -> '{Display(current)}'. "
-                + "The closed-specialization set would be infinite.");
-        }
-    }
-
-    static void RejectExpandingMint(INamedTypeSymbol current, MintTrace trace)
-    {
-        for (var ancestor = trace; ancestor != null; ancestor = ancestor.Parent)
-        {
-            if (!SymbolEqualityComparer.Default.Equals(
-                    current.OriginalDefinition, ancestor.Type.OriginalDefinition)) continue;
-            if (!ContainsType(current, ancestor.Type)
-                || SymbolEqualityComparer.Default.Equals(current, ancestor.Type)) continue;
-            throw new NotSupportedException(
-                $"Generic type specialization expands recursively through field initializers: "
-                + $"'{ancestor.Type.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}' -> "
-                + $"'{current.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}'. "
-                + "The closed-specialization set would be infinite.");
-        }
-    }
-
-    static IReadOnlyList<ITypeSymbol> SpecializationArguments(IMethodSymbol method)
-    {
-        var result = new List<ITypeSymbol>();
-        var owners = new Stack<INamedTypeSymbol>();
-        for (var type = method.ContainingType; type != null; type = type.ContainingType) owners.Push(type);
-        while (owners.Count > 0) result.AddRange(owners.Pop().TypeArguments);
-        if (method.IsGenericMethod) result.AddRange(method.TypeArguments);
-        return result;
-    }
-
-    static bool StrictlyEmbeds(IReadOnlyList<ITypeSymbol> containers, IReadOnlyList<ITypeSymbol> values)
-    {
-        var strict = false;
-        for (var i = 0; i < containers.Count; i++)
-        {
-            if (!ContainsType(containers[i], values[i])) return false;
-            if (!SymbolEqualityComparer.Default.Equals(containers[i], values[i])) strict = true;
-        }
-        return strict;
-    }
-
-    static bool ContainsType(ITypeSymbol container, ITypeSymbol value)
-    {
-        if (SymbolEqualityComparer.Default.Equals(container, value)) return true;
-        if (container is IArrayTypeSymbol array) return ContainsType(array.ElementType, value);
-        if (container is not INamedTypeSymbol named) return false;
-        foreach (var argument in named.TypeArguments)
-            if (ContainsType(argument, value)) return true;
-        return named.ContainingType != null && ContainsType(named.ContainingType, value);
-    }
-
-    static string Display(IMethodSymbol method)
-        => method.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat);
-
     static string MethodKey(IMethodSymbol method, IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> map)
         => (method.OriginalDefinition.GetDocumentationCommentId() ?? method.OriginalDefinition.ToDisplayString())
            + "|" + ClassTypeObjectContext.SpecKey(method.ContainingType)
@@ -309,6 +244,13 @@ internal sealed class GenericTypeSpecCensus
     {
         var result = System.Collections.Immutable.ImmutableArray.CreateBuilder<IMethodSymbol>();
         for (; trace != null; trace = trace.Parent) result.Add(trace.Method);
+        return result.ToImmutable();
+    }
+
+    static System.Collections.Immutable.ImmutableArray<INamedTypeSymbol> TraceTypes(MintTrace trace)
+    {
+        var result = System.Collections.Immutable.ImmutableArray.CreateBuilder<INamedTypeSymbol>();
+        for (; trace != null; trace = trace.Parent) result.Add(trace.Type);
         return result.ToImmutable();
     }
 
