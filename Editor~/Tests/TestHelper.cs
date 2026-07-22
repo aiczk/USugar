@@ -7,11 +7,8 @@ namespace USugar.Tests;
 
 public static class TestHelper
 {
-    static TestHelper()
-    {
-        ExternResolver.IsExternValid = ExternRegistry.IsValid;
-        ExternResolver.HasAnyExternForType = ExternRegistry.HasExternForType;
-    }
+    public static readonly ExternRegistryFacts RegistryFacts
+        = new(ExternRegistry.IsValid, ExternRegistry.HasExternForType);
 
     public static string StubSource => Stubs;
 
@@ -400,7 +397,7 @@ namespace TestStubs
             .First(c => c is not Microsoft.CodeAnalysis.CSharp.Syntax.InterfaceDeclarationSyntax);
         var classSymbol = model.GetDeclaredSymbol(classDecl) as INamedTypeSymbol;
 
-        var emitter = new UasmEmitter(compilation, classSymbol);
+        var emitter = new UasmEmitter(compilation, classSymbol, externRegistry: RegistryFacts);
         var uasm = emitter.Emit();
         UasmValidator.Validate(uasm, emitter.Module.TypeFacts);
         UasmValidator.ValidateHeapConsistency(uasm, emitter.GetHeapSize());
@@ -429,7 +426,7 @@ namespace TestStubs
             .First(c => c.Identifier.Text == className && c is not Microsoft.CodeAnalysis.CSharp.Syntax.InterfaceDeclarationSyntax);
         var classSymbol = model.GetDeclaredSymbol(classDecl) as INamedTypeSymbol;
 
-        var emitter = new UasmEmitter(compilation, classSymbol);
+        var emitter = new UasmEmitter(compilation, classSymbol, externRegistry: RegistryFacts);
         var uasm = emitter.Emit();
         UasmValidator.Validate(uasm, emitter.Module.TypeFacts);
         UasmValidator.ValidateHeapConsistency(uasm, emitter.GetHeapSize());
@@ -469,7 +466,7 @@ namespace TestStubs
         string src, string cls, string callInMethod, string calleeName)
     {
         var comp = BuildCompilation(src, cls, out var classSymbol);
-        var emitter = new UasmEmitter(comp, classSymbol);
+        var emitter = new UasmEmitter(comp, classSymbol, externRegistry: RegistryFacts);
         emitter.Emit();
         var op = FindFirstInvocationOp(comp, callInMethod, calleeName);
         return emitter.DebugBuildResolver().ResolveEdges(op).ToList();
@@ -484,7 +481,7 @@ namespace TestStubs
         string src, string cls, string callInMethod, string calleeName)
     {
         var comp = BuildCompilation(src, cls, out var classSymbol);
-        var emitter = new UasmEmitter(comp, classSymbol);
+        var emitter = new UasmEmitter(comp, classSymbol, externRegistry: RegistryFacts);
         emitter.Emit();
         var op = FindFirstInvocationOp(comp, callInMethod, calleeName);
         return emitter.DebugBuildResolver().ResolveEdges(op)
@@ -499,7 +496,7 @@ namespace TestStubs
         string src, string cls, System.Func<Microsoft.CodeAnalysis.IOperation, bool> match)
     {
         var comp = BuildCompilation(src, cls, out var classSymbol);
-        var emitter = new UasmEmitter(comp, classSymbol);
+        var emitter = new UasmEmitter(comp, classSymbol, externRegistry: RegistryFacts);
         emitter.Emit();
         var tree = comp.SyntaxTrees.Last();
         var model = comp.GetSemanticModel(tree);
@@ -519,7 +516,7 @@ namespace TestStubs
     public static List<INamedTypeSymbol> ResolveMintedTypesForFirstNew(string src, string cls)
     {
         var comp = BuildCompilation(src, cls, out var classSymbol);
-        var emitter = new UasmEmitter(comp, classSymbol);
+        var emitter = new UasmEmitter(comp, classSymbol, externRegistry: RegistryFacts);
         emitter.Emit();
         var tree = comp.SyntaxTrees.Last();
         var model = comp.GetSemanticModel(tree);
@@ -580,7 +577,7 @@ namespace TestStubs
             .First(c => c.Identifier.Text == className && c is not Microsoft.CodeAnalysis.CSharp.Syntax.InterfaceDeclarationSyntax);
         var classSymbol = model.GetDeclaredSymbol(classDecl) as INamedTypeSymbol;
 
-        var emitter = new UasmEmitter(compilation, classSymbol);
+        var emitter = new UasmEmitter(compilation, classSymbol, externRegistry: RegistryFacts);
         var uasm = emitter.Emit();
         UasmValidator.Validate(uasm, emitter.Module.TypeFacts);
         UasmValidator.ValidateHeapConsistency(uasm, emitter.GetHeapSize());
@@ -621,7 +618,7 @@ namespace TestStubs
 
         var classSymbol = model.GetDeclaredSymbol(classDecl) as INamedTypeSymbol;
 
-        var emitter = new UasmEmitter(compilation, classSymbol);
+        var emitter = new UasmEmitter(compilation, classSymbol, externRegistry: RegistryFacts);
         var uasm = emitter.Emit();
         UasmValidator.Validate(uasm, emitter.Module.TypeFacts);
         UasmValidator.ValidateHeapConsistency(uasm, emitter.GetHeapSize());
@@ -650,7 +647,7 @@ namespace TestStubs
             .First(c => c.Identifier.Text == className && c is not Microsoft.CodeAnalysis.CSharp.Syntax.InterfaceDeclarationSyntax);
         var classSymbol = model.GetDeclaredSymbol(classDecl) as INamedTypeSymbol;
 
-        var emitter = new UasmEmitter(compilation, classSymbol);
+        var emitter = new UasmEmitter(compilation, classSymbol, externRegistry: RegistryFacts);
         var uasm = emitter.Emit();
         UasmValidator.Validate(uasm, emitter.Module.TypeFacts);
         UasmValidator.ValidateHeapConsistency(uasm, emitter.GetHeapSize());

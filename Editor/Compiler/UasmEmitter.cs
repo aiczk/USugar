@@ -8,6 +8,7 @@ using Microsoft.CodeAnalysis.Operations;
 public class UasmEmitter
 {
     readonly EmitContext _ctx;
+    readonly ExternRegistryFacts _externRegistry;
     readonly Dictionary<OperationKind, IOperationHandler> _stmtDispatch;
     readonly Dictionary<OperationKind, IExpressionHandler> _exprDispatch;
 
@@ -45,8 +46,10 @@ public class UasmEmitter
     // a SHARED planner reaching EnsurePlannerReady unfrozen is the parallel-emit race the guard rejects.
     readonly bool _ownsPlanner;
 
-    public UasmEmitter(Compilation compilation, INamedTypeSymbol classSymbol, LayoutPlanner planner = null)
+    public UasmEmitter(Compilation compilation, INamedTypeSymbol classSymbol, LayoutPlanner planner = null,
+        ExternRegistryFacts externRegistry = null)
     {
+        _externRegistry = externRegistry;
         _ownsPlanner = planner == null;
         _ctx = new EmitContext(compilation, classSymbol, planner ?? new LayoutPlanner(compilation));
 
@@ -149,6 +152,7 @@ public class UasmEmitter
 
     public string Emit()
     {
+        using var externScope = _externRegistry == null ? null : ExternResolver.UseRegistry(_externRegistry);
         using var typeFactScope = UdonTypeFacts.RecordInto(_module.TypeFacts);
         // Record types cannot work in Udon: no heap allocation for user types, no inheritance from UdonSharpBehaviour
         if (_classSymbol.IsRecord)

@@ -140,10 +140,10 @@ static class USugarCompilationOrchestrator
                 UdonEditorManager.Instance.GetNodeDefinitions()
                     .Select(d => d.fullName)
                     .Where(n => !string.IsNullOrEmpty(n)));
-            ExternResolver.IsExternValid = validExterns.Contains;
             // CA-M0 B79: registry-truth for class support — the set of udon type names that carry any extern.
             var externTypePrefixes = new HashSet<string>(validExterns.Select(ExternResolver.ExternTypePrefix));
-            ExternResolver.HasAnyExternForType = externTypePrefixes.Contains;
+            var externRegistry = new ExternRegistryFacts(validExterns.Contains, externTypePrefixes.Contains);
+            using var externScope = ExternResolver.UseRegistry(externRegistry);
             Mark("extern-set");
 
             var compilation = BuildCompilation(sourcePaths);
@@ -228,11 +228,6 @@ static class USugarCompilationOrchestrator
             // Registry hooks MUST be wired before parallel emit — the class-support (B79) and extern-validity
             // gates both read them off the ambient ExternResolver, and a future embedding that forgets to wire
             // one would silently fall to the permissive arm. Fail loud here instead (armor; unreachable today).
-            if (ExternResolver.IsExternValid == null || ExternResolver.HasAnyExternForType == null)
-                throw new InvalidOperationException(
-                    "ExternResolver.IsExternValid and HasAnyExternForType must be wired before Phase-2 emit "
-                    + "(extern-validity and class-support gates depend on them).");
-
             // ── Phase 2: Parallel emit ──
             var emitResults = new System.Collections.Concurrent.ConcurrentBag<EmitResult>();
             System.Threading.Tasks.Parallel.ForEach(classList, classInfo =>
@@ -254,7 +249,7 @@ static class USugarCompilationOrchestrator
                         return;
                     }
 
-                    var emitter = new UasmEmitter(compilation, symbol, planner) { DumpEnabled = dumpEnabled };
+                    var emitter = new UasmEmitter(compilation, symbol, planner, externRegistry) { DumpEnabled = dumpEnabled };
                     var uasm = emitter.Emit();
                     // Round-3 item 0: hard per-class extern-validation gate before Phase-3 assembly — a bogus
                     // extern becomes a named USugar diagnostic here instead of an opaque SDK assembler error.

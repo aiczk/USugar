@@ -11,8 +11,8 @@ public class GenericsMiniFuzzWave15Round3Tests
     [Fact]
     public void ProductionExternGate_RejectsBogusExtern()
     {
-        ExternResolver.IsExternValid = ExternRegistry.IsValid;
         var bogus = ".code_start\n        EXTERN, \"SystemEnum.__Equals__SystemObject__SystemBoolean\"\n.code_end";
+        using var scope = ExternResolver.UseRegistry(TestHelper.RegistryFacts);
         var ex = Assert.Throws<NotSupportedException>(() => ExternResolver.AssertEmittedExternsValid(bogus));
         Assert.Contains("SystemEnum.__Equals", ex.Message);
     }
@@ -20,8 +20,8 @@ public class GenericsMiniFuzzWave15Round3Tests
     [Fact]
     public void ProductionExternGate_AcceptsValidExtern()
     {
-        ExternResolver.IsExternValid = ExternRegistry.IsValid;
         var valid = ".code_start\n        EXTERN, \"SystemInt32.__Equals__SystemObject__SystemBoolean\"\n.code_end";
+        using var scope = ExternResolver.UseRegistry(TestHelper.RegistryFacts);
         ExternResolver.AssertEmittedExternsValid(valid); // must not throw
     }
 

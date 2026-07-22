@@ -5,27 +5,51 @@ using System.Threading;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.Operations;
 
+public sealed class ExternRegistryFacts
+{
+    public readonly Func<string, bool> IsExternValid;
+    public readonly Func<string, bool> HasAnyExternForType;
+
+    public ExternRegistryFacts(Func<string, bool> isExternValid, Func<string, bool> hasAnyExternForType)
+    {
+        IsExternValid = isExternValid ?? throw new ArgumentNullException(nameof(isExternValid));
+        HasAnyExternForType = hasAnyExternForType ?? throw new ArgumentNullException(nameof(hasAnyExternForType));
+    }
+}
+
 public static class ExternResolver
 {
     // Optional extern existence check (set by test harness or Unity editor).
     // Used to resolve ambiguous containing types for conversion operators.
-    static Func<string, bool> _isExternValid;
-    public static Func<string, bool> IsExternValid
-    {
-        get => Volatile.Read(ref _isExternValid);
-        set => Volatile.Write(ref _isExternValid, value);
-    }
+    static readonly AsyncLocal<ExternRegistryFacts> RegistryScope = new();
+    public static Func<string, bool> IsExternValid => RegistryScope.Value?.IsExternValid;
 
     // CA-M0 B79 (registry-truth): does the Udon extern registry hold ANY extern under a given udon TYPE name?
     // "Supported class type" has always meant "Udon has externs for it" — VRCUrl/DataList are exactly
     // source-shaped classes whose support comes from the registry, indistinguishable from a genuinely
     // unsupported user class by symbol shape alone. Wired alongside IsExternValid (orchestrator + TestHelper);
     // null (unwired) is permissive, mirroring the IsExternValid convention.
-    static Func<string, bool> _hasAnyExternForType;
-    public static Func<string, bool> HasAnyExternForType
+    public static Func<string, bool> HasAnyExternForType => RegistryScope.Value?.HasAnyExternForType;
+
+    public static IDisposable UseRegistry(ExternRegistryFacts facts)
     {
-        get => Volatile.Read(ref _hasAnyExternForType);
-        set => Volatile.Write(ref _hasAnyExternForType, value);
+        if (facts == null) throw new ArgumentNullException(nameof(facts));
+        var previous = RegistryScope.Value;
+        RegistryScope.Value = facts;
+        return new RegistryToken(previous);
+    }
+
+    sealed class RegistryToken : IDisposable
+    {
+        readonly ExternRegistryFacts _previous;
+        bool _disposed;
+        public RegistryToken(ExternRegistryFacts previous) => _previous = previous;
+        public void Dispose()
+        {
+            if (_disposed) throw new InvalidOperationException("Extern registry scope disposed twice.");
+            _disposed = true;
+            RegistryScope.Value = _previous;
+        }
     }
 
     /// <summary>The udon TYPE-name prefix of an extern full name ("SystemInt32.__op_Addition__…" → "SystemInt32").
