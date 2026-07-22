@@ -20,6 +20,8 @@ public enum BoundarySite
 public sealed class BoundaryChecker
 {
     readonly EmitContext _ctx;
+    readonly Dictionary<IMethodSymbol, MethodValueFlow> _methodFlows
+        = new(SymbolEqualityComparer.Default);
 
     public BoundaryChecker(EmitContext ctx) => _ctx = ctx ?? throw new ArgumentNullException(nameof(ctx));
 
@@ -42,46 +44,74 @@ public sealed class BoundaryChecker
 
     IOperation FindStableLocalInitializer(ILocalSymbol local)
     {
-        var body = CurrentMethodBody();
-        if (body == null) return null;
-        IOperation initializer = null;
-        foreach (var op in body.DescendantsAndSelf())
-        {
-            if (op is IVariableDeclaratorOperation declarator
-                && SymbolEqualityComparer.Default.Equals(declarator.Symbol, local))
-            {
-                if (initializer != null || declarator.Initializer?.Value == null) return null;
-                initializer = declarator.Initializer.Value;
-                continue;
-            }
-            if (WritesLocal(op, local)) return null;
-        }
-        return initializer;
+        var flow = CurrentMethodFlow();
+        return flow != null && flow.StableInitializers.TryGetValue(local, out var initializer)
+            ? initializer
+            : null;
     }
 
-    static bool WritesLocal(IOperation op, ILocalSymbol local)
+    static ILocalSymbol WrittenLocal(IOperation op)
     {
-        static bool IsLocal(IOperation candidate, ILocalSymbol expected)
+        static ILocalSymbol Local(IOperation candidate)
             => ValueClassifier.UnwrapConversions(candidate) is ILocalReferenceOperation reference
-               && SymbolEqualityComparer.Default.Equals(reference.Local, expected);
+                ? reference.Local
+                : null;
 
         return op switch
         {
-            ISimpleAssignmentOperation assignment => IsLocal(assignment.Target, local),
-            ICompoundAssignmentOperation assignment => IsLocal(assignment.Target, local),
-            IIncrementOrDecrementOperation increment => IsLocal(increment.Target, local),
+            ISimpleAssignmentOperation assignment => Local(assignment.Target),
+            ICompoundAssignmentOperation assignment => Local(assignment.Target),
+            IIncrementOrDecrementOperation increment => Local(increment.Target),
             IArgumentOperation argument when argument.Parameter?.RefKind is RefKind.Ref or RefKind.Out
-                => IsLocal(argument.Value, local),
-            _ => false,
+                => Local(argument.Value),
+            _ => null,
         };
     }
 
-    IOperation CurrentMethodBody()
+    MethodValueFlow CurrentMethodFlow()
     {
-        var syntaxRef = _ctx.Methods.CurrentMethod?.DeclaringSyntaxReferences.FirstOrDefault();
+        var method = _ctx.Methods.CurrentMethod;
+        if (method == null) return null;
+        if (_methodFlows.TryGetValue(method, out var cached)) return cached;
+
+        var syntaxRef = method.DeclaringSyntaxReferences.FirstOrDefault();
         if (syntaxRef == null) return null;
         var syntax = syntaxRef.GetSyntax();
-        return _ctx.Compilation.GetSemanticModel(syntax.SyntaxTree).GetOperation(syntax);
+        var body = _ctx.Compilation.GetSemanticModel(syntax.SyntaxTree).GetOperation(syntax);
+        if (body == null) return null;
+
+        var initializers = new Dictionary<ILocalSymbol, IOperation>(SymbolEqualityComparer.Default);
+        var unstable = new HashSet<ILocalSymbol>(SymbolEqualityComparer.Default);
+        var referencedTypes = new List<ITypeSymbol>();
+        foreach (var op in body.DescendantsAndSelf())
+        {
+            if (op is IVariableDeclaratorOperation declaration)
+            {
+                referencedTypes.Add(declaration.Symbol.Type);
+                if (declaration.Initializer?.Value == null
+                    || initializers.ContainsKey(declaration.Symbol))
+                    unstable.Add(declaration.Symbol);
+                else
+                    initializers.Add(declaration.Symbol, declaration.Initializer.Value);
+            }
+
+            var written = WrittenLocal(op);
+            if (written != null) unstable.Add(written);
+
+            var referencedType = op switch
+            {
+                ILocalReferenceOperation local => local.Local.Type,
+                IParameterReferenceOperation parameter => parameter.Parameter.Type,
+                IFieldReferenceOperation field => field.Field.Type,
+                _ => null,
+            };
+            if (referencedType != null) referencedTypes.Add(referencedType);
+        }
+        foreach (var local in unstable) initializers.Remove(local);
+
+        var flow = new MethodValueFlow(initializers, referencedTypes);
+        _methodFlows.Add(method, flow);
+        return flow;
     }
 
     public bool CurrentMethodBodyMentionsProgramLocalPayload()
@@ -90,22 +120,26 @@ public sealed class BoundaryChecker
         // a program-local payload in scope - an unclassifiable delegate store from here cannot be
         // proven class-free (bounded conservative polarity; over-reject is the accepted trade).
         if (LambdaCaptureAnalyzer.ReceiverCaptureKey(_ctx.Methods.CurrentMethod) != null) return true;
-        var bodyOp = CurrentMethodBody();
-        if (bodyOp == null) return false;
-        foreach (var op in bodyOp.DescendantsAndSelf())
-        {
-            ITypeSymbol type = op switch
-            {
-                ILocalReferenceOperation lr => lr.Local.Type,
-                IParameterReferenceOperation pr => pr.Parameter.Type,
-                IFieldReferenceOperation fr => fr.Field.Type,
-                IVariableDeclaratorOperation vd => vd.Symbol.Type,
-                _ => null,
-            };
+        var flow = CurrentMethodFlow();
+        if (flow == null) return false;
+        foreach (var type in flow.ReferencedTypes)
             if (type != null && TypeClassifier.ContainsProgramLocalPayload(type, TypeCtx))
                 return true;
-        }
         return false;
+    }
+
+    sealed class MethodValueFlow
+    {
+        public readonly IReadOnlyDictionary<ILocalSymbol, IOperation> StableInitializers;
+        public readonly IReadOnlyList<ITypeSymbol> ReferencedTypes;
+
+        public MethodValueFlow(
+            IReadOnlyDictionary<ILocalSymbol, IOperation> stableInitializers,
+            IReadOnlyList<ITypeSymbol> referencedTypes)
+        {
+            StableInitializers = stableInitializers;
+            ReferencedTypes = referencedTypes;
+        }
     }
 
     /// <summary>Report any delegate store target here; non-cross-program targets (locals, private
