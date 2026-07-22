@@ -11,6 +11,9 @@ public enum BoundarySite
     CrossBehaviourArgument,
     CrossBehaviourPropertyWrite,
     CrossBehaviourPropertyRead,
+    ExternArgument,
+    ExternReturn,
+    DelegateEnvironment,
 }
 
 /// <summary>
@@ -367,6 +370,24 @@ public sealed class BoundaryChecker
         => RequireTransport(BoundarySite.CrossBehaviourArgument, argType, null,
             TransportCapabilities.TypedProgramChannel);
 
+    public void RequireCanPassExternArgument(ITypeSymbol type, string name,
+        bool allowClassReferenceIdentity = false, bool deferAggregateReceiverPolicy = false)
+    {
+        var shape = TypeClassifier.ShapeOf(type, TypeCtx);
+        if (allowClassReferenceIdentity && shape.Bundle == RuntimeBundleKind.Class) return;
+        if (deferAggregateReceiverPolicy && shape.Bundle == RuntimeBundleKind.Aggregate) return;
+        RequireTransport(BoundarySite.ExternArgument, type, name,
+            TransportCapabilities.ExternCall);
+    }
+
+    public void RequireCanReturnFromExtern(ITypeSymbol type, string name)
+        => RequireTransport(BoundarySite.ExternReturn, type, name,
+            TransportCapabilities.ExternCall);
+
+    public void RequireCanStoreDelegateEnvironment(ITypeSymbol type, string name)
+        => RequireTransport(BoundarySite.DelegateEnvironment, type, name,
+            TransportCapabilities.DelegateEnvironment);
+
     /// <summary>CW22: a cross-behaviour property SET/GET is the same SetProgramVariable /
     /// GetProgramVariable transport as the field twin one syntax over — same payload polarity.
     /// (The delegate axis stays with IsCrossProgramDelegatePropertyTarget: a clean-signature
@@ -426,6 +447,15 @@ public sealed class BoundaryChecker
             case BoundarySite.CrossBehaviourPropertyRead:
                 return $"Property '{memberName}' cannot be read across behaviours because its type contains "
                        + "a value representation without a portable typed-program ABI.";
+            case BoundarySite.ExternArgument:
+                return $"'{memberName}' cannot cross an extern call boundary because its type has "
+                       + "no Udon extern-call ABI.";
+            case BoundarySite.ExternReturn:
+                return $"The return value of '{memberName}' cannot cross an Udon extern boundary because "
+                       + "its type has no extern-call ABI.";
+            case BoundarySite.DelegateEnvironment:
+                return $"Captured value '{memberName}' cannot be stored in a delegate environment because "
+                       + "its type has no delegate-environment ABI.";
             default:
                 throw new ArgumentOutOfRangeException(nameof(site), site, null);
         }

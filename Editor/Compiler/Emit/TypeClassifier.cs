@@ -64,21 +64,25 @@ public readonly struct RuntimeShape
             containsPayload);
     public static RuntimeShape Aggregate(bool containsPayload)
         => new(RuntimeStorageKind.ObjectArrayBundle, RuntimeBundleKind.Aggregate, RuntimeIdentityKind.Value,
-            RuntimeTypeIdentityKind.Collapsed, TransportCapabilities.TypedProgramChannel, containsPayload);
+            RuntimeTypeIdentityKind.Collapsed,
+            TransportCapabilities.TypedProgramChannel | TransportCapabilities.DelegateEnvironment,
+            containsPayload);
     public static RuntimeShape Delegate(bool containsPayload)
         => new(RuntimeStorageKind.ObjectArrayBundle, RuntimeBundleKind.Delegate, RuntimeIdentityKind.Reference,
             RuntimeTypeIdentityKind.Collapsed,
-            containsPayload ? TransportCapabilities.None : TransportCapabilities.TypedProgramChannel,
+            (containsPayload ? TransportCapabilities.None : TransportCapabilities.TypedProgramChannel)
+            | TransportCapabilities.DelegateEnvironment,
             containsPayload);
     public static RuntimeShape MultiDimensionalArray(bool containsPayload)
         => new(RuntimeStorageKind.ObjectArrayBundle, RuntimeBundleKind.MultiDimensionalArray,
             RuntimeIdentityKind.Reference, RuntimeTypeIdentityKind.Collapsed,
-            TransportCapabilities.TypedProgramChannel, containsPayload);
+            TransportCapabilities.TypedProgramChannel | TransportCapabilities.DelegateEnvironment,
+            containsPayload);
     public static RuntimeShape Native(bool containsPayload)
         => new(RuntimeStorageKind.Native, RuntimeBundleKind.None, RuntimeIdentityKind.Value,
             RuntimeTypeIdentityKind.Exact,
             containsPayload
-                ? TransportCapabilities.None
+                ? TransportCapabilities.ExternCall | TransportCapabilities.DelegateEnvironment
                 : TransportCapabilities.TypedProgramChannel | TransportCapabilities.ObjectErasure
                   | TransportCapabilities.ExternCall | TransportCapabilities.Network
                   | TransportCapabilities.DelegateEnvironment,

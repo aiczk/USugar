@@ -49,6 +49,16 @@ public partial class InvocationHandler
             return EmitGetComponentGeneric(op, target);
         }
 
+        if (!target.IsStatic && op.Instance?.Type != null)
+            _ctx.Boundary.RequireCanPassExternArgument(op.Instance.Type,
+                $"receiver of {target.Name}", deferAggregateReceiverPolicy: true);
+        if (!target.ReturnsVoid)
+            _ctx.Boundary.RequireCanReturnFromExtern(target.ReturnType, target.Name);
+        var objectIdentityExtern = target.Name == nameof(object.Equals)
+            && target.ContainingType.SpecialType == SpecialType.System_Object;
+        var objectMemberExtern = target.ContainingType.SpecialType
+            is SpecialType.System_Object or SpecialType.System_ValueType;
+
         CLeaf instanceVal = null;
         if (!target.IsStatic)
         {
@@ -128,6 +138,13 @@ public partial class InvocationHandler
             if (NdimArrayAbi.IsNdimArray(UnwrapConversions(op.Arguments[i].Value).Type))
                 throw new System.NotSupportedException(ExternResolver.MultidimExternArgMessage);
 
+            var argumentType = UnwrapConversions(op.Arguments[i].Value).Type
+                ?? op.Arguments[i].Parameter?.Type;
+            if (argumentType != null)
+                _ctx.Boundary.RequireCanPassExternArgument(argumentType,
+                    op.Arguments[i].Parameter?.Name ?? $"argument {i}", objectIdentityExtern,
+                    deferAggregateReceiverPolicy: objectMemberExtern);
+
             var param = target.Parameters[i];
             if (param.IsParams && paramsElems != null)
             {
@@ -140,6 +157,9 @@ public partial class InvocationHandler
                 {
                     if (NdimArrayAbi.IsNdimArray(UnwrapConversions(elem).Type))
                         throw new System.NotSupportedException(ExternResolver.MultidimExternArgMessage);
+                    if (UnwrapConversions(elem).Type is { } elementType)
+                        _ctx.Boundary.RequireCanPassExternArgument(elementType,
+                            $"element of {param.Name}");
                     argVals.Add(VisitExpression(elem));
                 }
                 continue;
