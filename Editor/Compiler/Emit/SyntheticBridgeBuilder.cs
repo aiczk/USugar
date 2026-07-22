@@ -15,8 +15,14 @@ public sealed class SyntheticBridgeBuilder
         if (body == null) throw new ArgumentNullException(nameof(body));
         var previousFunction = _builder.CurrentFunction;
         var function = context.Module.AddFunction(plan.FunctionName, plan.ExportName);
+        var parameterIds = new string[plan.Arguments.Count];
+        for (var i = 0; i < plan.Arguments.Count; i++)
+            parameterIds[i] = plan.Arguments[i].SourceField;
+        var returns = plan.Return.Kind == BridgeReturnKind.None
+            ? Array.Empty<ReturnSlot>()
+            : new[] { new ReturnSlot(plan.Return.DestinationField, plan.Dispatch.ReturnType) };
         context.Methods.AddSyntheticCallable(plan.FunctionName, function, plan.SignatureMethod,
-            plan.TargetMethod, MethodContext.CallableKind.Bridge);
+            plan.TargetMethod, MethodContext.CallableKind.Bridge, parameterIds, returns);
         _builder.SetFunction(function);
         try
         {

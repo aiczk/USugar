@@ -12,8 +12,10 @@
     __1_Run__ret: %SystemInt32, null
     __lcl_d_SystemObjectArray_0: %SystemObjectArray, null
     __2_lambda__envp: %SystemObjectArray, null
+    __2_lambda__ret: %SystemInt32, null
     __this_VRCUdonUdonBehaviour_0: %VRCUdonUdonBehaviour, this
     __3_lambda__envp: %SystemObjectArray, null
+    __3_lambda__ret: %SystemInt32, null
     __dlgc_Void__SystemInt32__ret: %SystemInt32, null
     __dlgc_Void__SystemInt32__env: %SystemObjectArray, null
     __dlg_combine_Void__SystemInt32__x: %SystemObjectArray, null
@@ -21,8 +23,6 @@
     __dlg_combine_Void__SystemInt32__ret: %SystemObjectArray, null
     __recurStack: %SystemObjectArray, null
     __recurSp: %SystemInt32, null
-    __2_lambda__ret: %SystemInt32, null
-    __3_lambda__ret: %SystemInt32, null
     __const_SystemUInt32_sentinel: %SystemUInt32, null
     __intnl_SystemInt32_c0: %SystemInt32, null
     __intnl_SystemInt32_c1: %SystemInt32, null

@@ -1,3 +1,6 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
 using Microsoft.CodeAnalysis;
 
 /// <summary>The complete callable definition universe and eager registration projections. The
@@ -9,7 +12,12 @@ internal sealed class CallableDefinitionPlan
     public readonly IMethodSymbol[] StructMethods;
     public readonly IMethodSymbol[] BaseInstanceMethods;
     public readonly IMethodSymbol[] Definitions;
-    public IMethodSymbol[] Specializations = System.Array.Empty<IMethodSymbol>();
+    readonly HashSet<IMethodSymbol> _specializationCandidates =
+        new(SymbolEqualityComparer.Default);
+    IMethodSymbol[] _specializations;
+    internal IEnumerable<IMethodSymbol> SpecializationCandidates => _specializationCandidates;
+    public IReadOnlyList<IMethodSymbol> Specializations => _specializations
+        ?? throw new InvalidOperationException("Callable specialization plan has not been frozen.");
 
     public CallableDefinitionPlan(IMethodSymbol[] programMethods, IMethodSymbol[] foreignStatics,
         IMethodSymbol[] structMethods, IMethodSymbol[] baseInstanceMethods,
@@ -20,5 +28,21 @@ internal sealed class CallableDefinitionPlan
         StructMethods = structMethods;
         BaseInstanceMethods = baseInstanceMethods;
         Definitions = definitions;
+    }
+
+    internal void AddSpecializationCandidates(IEnumerable<IMethodSymbol> methods)
+    {
+        if (_specializations != null)
+            throw new InvalidOperationException("Callable specialization plan is already frozen.");
+        _specializationCandidates.UnionWith(methods);
+    }
+
+    internal void FreezeSpecializations(IEnumerable<IMethodSymbol> methods)
+    {
+        if (_specializations != null)
+            throw new InvalidOperationException("Callable specialization plan was frozen twice.");
+        _specializationCandidates.UnionWith(methods);
+        _specializations = _specializationCandidates.ToArray();
+        _specializationCandidates.Clear();
     }
 }

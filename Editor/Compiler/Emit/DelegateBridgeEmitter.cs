@@ -70,7 +70,7 @@ public sealed class DelegateBridgeEmitter
     }
 
     bool TryResolveTarget(IMethodSymbol method, string bridgeName, out CFunction target)
-        => _context.Synthetics.ClosureBridgeFuncs.TryGetValue(bridgeName, out target)
+        => _context.Synthetics.TryGetClosureBridge(bridgeName, out target)
             || _context.Methods.Functions.TryGetValue(method, out target);
 
     void EmitBody(string bridgeName, IMethodSymbol signatureMethod,

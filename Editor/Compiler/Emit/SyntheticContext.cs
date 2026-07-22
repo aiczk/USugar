@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using Microsoft.CodeAnalysis;
 
@@ -38,33 +39,91 @@ public sealed class SyntheticContext
     // Per-spec closure bridges (design 2026-07-10 v3 SS2B): bridgeExportName -> the closure's
     // per-spec CFunction. The pending-bridge drain resolves closure targets here (a bare
     // definition-symbol lookup cannot distinguish specs).
-    public readonly Dictionary<string, CFunction> ClosureBridgeFuncs = new();
+    readonly Dictionary<string, CFunction> _closureBridgeFuncs = new();
+    public IReadOnlyDictionary<string, CFunction> ClosureBridgeFuncs => _closureBridgeFuncs;
 
     // MG auto-wrap (design 2026-07-11 v2): pending receiver-bridges — a class/struct instance method
     // group's bridge re-dispatches DelegateAbi.Env as the member's param0 (CA-M1 receiver ABI).
-    public readonly List<(IMethodSymbol Member, string BridgeName)> ReceiverBridges = new();
+    readonly List<(IMethodSymbol Member, string BridgeName)> _receiverBridges = new();
+    public IReadOnlyList<(IMethodSymbol Member, string BridgeName)> ReceiverBridges => _receiverBridges;
 
     // Pending delegate bridges for dynamically hoisted lambdas/local functions. The carried map is
     // the creating method's immutable TypeParamMap by REFERENCE (per-EmitMethod fresh, never mutated,
     // so no snapshot copy is needed even though the drain runs after emission when the ambient map
     // is null).
-    public readonly List<(IMethodSymbol Method, string BridgeExportName, IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> TypeParamMap)> DelegateBridges = new();
+    readonly List<(IMethodSymbol Method, string BridgeExportName, IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> TypeParamMap)> _delegateBridges = new();
+    public IReadOnlyList<(IMethodSymbol Method, string BridgeExportName, IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> TypeParamMap)> DelegateBridges => _delegateBridges;
 
     // Multicast: sig-part -> signature plus the exact combine/remove operations used by this class.
     // Sites sharing a signature merge their flags; the drain emits one fan-out and only the helpers
     // actually referenced by lowering.
-    public readonly Dictionary<string, MulticastSigPlan> MulticastSigs = new();
+    readonly Dictionary<string, MulticastSigPlan> _multicastSigs = new();
+    public IReadOnlyDictionary<string, MulticastSigPlan> MulticastSigs => _multicastSigs;
 
     // B67: user enums whose ToString()/concat/interpolation needs the synthesized __enumstr_ helper.
-    public readonly HashSet<INamedTypeSymbol> EnumToString = new(SymbolEqualityComparer.Default);
+    readonly HashSet<INamedTypeSymbol> _enumToString = new(SymbolEqualityComparer.Default);
+    public IReadOnlyCollection<INamedTypeSymbol> EnumToString => _enumToString;
 
     // Variance (2026-07-04 design 2.2, B-1): per-(target, sig-S) sig adapter bridges. DelegateInvoke
     // is the DESTINATION delegate's own Invoke (conv-var declarations), distinct from TargetMethod
     // (the real callee, InternalCall only). Dedup-by-name at emission.
-    public readonly List<(IMethodSymbol TargetMethod, IMethodSymbol DelegateInvoke, string AdapterName, IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> TypeParamMap)> SigAdapterBridges = new();
+    readonly List<(IMethodSymbol TargetMethod, IMethodSymbol DelegateInvoke, string AdapterName, IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> TypeParamMap)> _sigAdapterBridges = new();
+    public IReadOnlyList<(IMethodSymbol TargetMethod, IMethodSymbol DelegateInvoke, string AdapterName, IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> TypeParamMap)> SigAdapterBridges => _sigAdapterBridges;
 
     // Variance (2026-07-04 design 2.3, B-2): wrapper name -> (outer sig-S Invoke, inner sig-T
     // Invoke-or-method, resolved map). Keyed by WRAPPER NAME (unique per (outer,inner) sig pair) -
     // a wrapper's inner dispatch speaks the INNER bundle's own protocol.
-    public readonly Dictionary<string, (IMethodSymbol OuterInvoke, IMethodSymbol InnerInvoke, IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> TypeParamMap)> WrapperSigs = new();
+    readonly Dictionary<string, (IMethodSymbol OuterInvoke, IMethodSymbol InnerInvoke, IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> TypeParamMap)> _wrapperSigs = new();
+    public IReadOnlyDictionary<string, (IMethodSymbol OuterInvoke, IMethodSymbol InnerInvoke, IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> TypeParamMap)> WrapperSigs => _wrapperSigs;
+
+    public bool IsFrozen { get; private set; }
+
+    void RequireMutable()
+    {
+        if (IsFrozen) throw new InvalidOperationException("Synthetic demand plan is frozen.");
+    }
+
+    public void RegisterClosureBridge(string name, CFunction function)
+    { RequireMutable(); _closureBridgeFuncs[name] = function; }
+
+    public bool TryGetClosureBridge(string name, out CFunction function)
+        => _closureBridgeFuncs.TryGetValue(name, out function);
+
+    public void RegisterReceiverBridge(IMethodSymbol member, string name)
+    { RequireMutable(); _receiverBridges.Add((member, name)); }
+
+    public void RegisterDelegateBridge(IMethodSymbol method, string name,
+        IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeParamMap)
+    { RequireMutable(); _delegateBridges.Add((method, name, typeParamMap)); }
+
+    public void RegisterSigAdapter(IMethodSymbol target, IMethodSymbol invoke, string name,
+        IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeParamMap)
+    { RequireMutable(); _sigAdapterBridges.Add((target, invoke, name, typeParamMap)); }
+
+    public void RegisterMulticast(string signature, IMethodSymbol invoke,
+        IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeParamMap,
+        MulticastOperations operation)
+    {
+        RequireMutable();
+        _multicastSigs[signature] = _multicastSigs.TryGetValue(signature, out var existing)
+            ? existing.With(operation)
+            : new MulticastSigPlan(invoke, typeParamMap, operation);
+    }
+
+    public void RegisterEnumToString(INamedTypeSymbol enumType)
+    { RequireMutable(); _enumToString.Add(enumType); }
+
+    public void RegisterWrapper(string name, IMethodSymbol outerInvoke, IMethodSymbol innerInvoke,
+        IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeParamMap)
+    {
+        RequireMutable();
+        if (!_wrapperSigs.ContainsKey(name))
+            _wrapperSigs.Add(name, (outerInvoke, innerInvoke, typeParamMap));
+    }
+
+    public void Freeze()
+    {
+        if (IsFrozen) throw new InvalidOperationException("Synthetic demand plan was frozen twice.");
+        IsFrozen = true;
+    }
 }

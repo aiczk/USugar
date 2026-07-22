@@ -177,9 +177,10 @@ public partial class UasmEmitter
             .OrderBy(StableOrdinalKey, StringComparer.Ordinal)
             .ThenBy(ClassTypeObjectContext.SpecKey, StringComparer.Ordinal));
         _ctx.VirtualDispatch = new VirtualDispatch(_ctx.ClassTypes); // CA-v2b-2: virtual-call lowering
-        plan.Callables.Specializations = new RuntimeSpecializationPlanner(_ctx).Build(plan);
+        plan.Callables.FreezeSpecializations(new RuntimeSpecializationPlanner(_ctx).Build(plan));
         var bodyGraph = new RecursionNodeWalk(
             EdgeResolver, plan.Reach, plan.FieldInitOps, plan.Callables.Definitions).Run();
+        _ctx.Closures.SetIdentityPlan(ClosureIdentityPlan.Build(bodyGraph.AllNodes));
         _ctx.Closures.SetCaptureScope(CaptureScopeAnalysis.Build(_compilation, _classSymbol,
             plan.CaptureRoots, bodyGraph.Bodies, plan.FieldInitOps));
         EmitMethods(plan, bodyGraph);
@@ -1053,8 +1054,6 @@ public partial class UasmEmitter
                 : typeLayout;
             var ml = methodLayout.Methods[method];
             var exportName = ml.ExportName;
-            var slot = _ctx.Methods.Reserve(_ => exportName);
-            var idx = slot.Index;
 
             // Determine if this method should be exported
             bool isOwnOrInherited = SymbolEqualityComparer.Default.Equals(method.ContainingType, _classSymbol)
@@ -1071,47 +1070,27 @@ public partial class UasmEmitter
                     || UdonEventNames.ContainsKey(method.Name)
                     || crossDispatchExports.Any(target => SameVirtualSlot(method, target)));
 
-            // Create CFunction with or without ExportName
-            var func = _module.AddFunction(exportName, shouldExport ? exportName : null);
-
-            if (_userClassDefaultMethods.Contains(method))
+            var isDefaultMethod = _userClassDefaultMethods.Contains(method);
+            var parameters = method.Parameters.Select((parameter, index) =>
+                new CallableParameterPlan(_ => ml.ParamIds[index], GetStorageType(parameter.Type))).ToArray();
+            var returns = ml.Returns.Select(result =>
+                new CallableReturnPlan(_ => result.Id, result.StorageType)).ToArray();
+            new CallableRegistrar(_ctx).Register(new CallableLayoutPlan
             {
-                var receiverId = "__dimrcv_" + SanitizeId(ClassTypeObjectContext.SpecKey(method.ContainingType))
-                    + "_" + SanitizeId(method.MetadataName);
-                _ctx.Storage.TryDeclareVar(receiverId, StorageTypes.ObjectArray);
-                func.ParamFieldNames.Add(receiverId);
-            }
-
-            // Declare params using LayoutPlanner IDs (delegate-typed params are SystemObjectArray bundle
-            // references via the type-map delegate arm — design §2.1).
-            var paramVarIds = new string[method.Parameters.Length];
-            for (int i = 0; i < method.Parameters.Length; i++)
-            {
-                _ctx.Storage.DeclareVar(ml.ParamIds[i], GetStorageType(method.Parameters[i].Type));
-                paramVarIds[i] = ml.ParamIds[i];
-            }
-            foreach (var pid in paramVarIds) func.ParamFieldNames.Add(pid);
-
-            // Declare return var(s) from unified Returns
-            var returnSlots = ml.Returns.ToArray();
-            if (ml.Returns.Count > 0)
-            {
-                foreach (var ret in ml.Returns)
-                    _ctx.Storage.DeclareVar(ret.Id, ret.StorageType);
-
-                if (ml.Returns.Count == 1)
-                    func.ReturnType = ml.Returns[0].StorageType;
-                else
-                    func.ReturnType = StorageTypes.Void; // tuple: no single return value
-
-                foreach (var ret in ml.Returns)
-                    func.ReturnSlots.Add(ret);
-
-            }
-            _ctx.Methods.AddCallable(method, func, slot, paramVarIds, returnSlots,
-                _userClassDefaultMethods.Contains(method)
+                Method = method,
+                FunctionName = _ => exportName,
+                ExportName = shouldExport ? exportName : null,
+                SlotPrefix = _ => exportName,
+                Receiver = isDefaultMethod
                     ? MethodContext.ReceiverAbi.ObjectArray : MethodContext.ReceiverAbi.None,
-                ml);
+                ReceiverId = isDefaultMethod
+                    ? _ => "__dimrcv_" + SanitizeId(ClassTypeObjectContext.SpecKey(method.ContainingType))
+                        + "_" + SanitizeId(method.MetadataName)
+                    : null,
+                Parameters = parameters,
+                Returns = returns,
+                Layout = ml,
+            });
         }
 
         // ReachableBodies (design §1): ONE reach fixpoint replaces the three separate Phase-1 collector
@@ -1194,34 +1173,23 @@ public partial class UasmEmitter
     MethodContext.RegisteredCallable RegisterInternalCallable(IMethodSymbol method,
         Func<int, string> functionName, MethodContext.ReceiverAbi receiver = MethodContext.ReceiverAbi.None)
     {
-        var slot = _ctx.Methods.Reserve(i => i.ToString());
-        var idx = slot.Index;
-        var func = _module.AddFunction(functionName(idx));
-        if (receiver == MethodContext.ReceiverAbi.ObjectArray)
+        var parameters = method.Parameters.Select(parameter => new CallableParameterPlan(
+            index => NameAllocator.ParamId(parameter.Name, index), GetStorageType(parameter.Type))).ToArray();
+        var returns = method.ReturnsVoid ? Array.Empty<CallableReturnPlan>() : new[]
         {
-            var receiverId = NameAllocator.ParamId("this", idx);
-            _ctx.Storage.DeclareVar(receiverId, StorageTypes.ObjectArray);
-            func.ParamFieldNames.Add(receiverId);
-        }
-        var paramIds = new string[method.Parameters.Length];
-        for (int i = 0; i < method.Parameters.Length; i++)
+            new CallableReturnPlan(index => NameAllocator.RetId(SanitizeId(method.Name), index),
+                new StorageType(GetStorageTypeName(method.ReturnType)))
+        };
+        return new CallableRegistrar(_ctx).Register(new CallableLayoutPlan
         {
-            var parameter = method.Parameters[i];
-            var paramId = NameAllocator.ParamId(parameter.Name, idx);
-            _ctx.Storage.DeclareVar(paramId, GetStorageType(parameter.Type));
-            paramIds[i] = paramId;
-            func.ParamFieldNames.Add(paramId);
-        }
-        var returns = Array.Empty<ReturnSlot>();
-        if (!method.ReturnsVoid)
-        {
-            var returnType = new StorageType(GetStorageTypeName(method.ReturnType));
-            var returnId = NameAllocator.RetId(SanitizeId(method.Name), idx);
-            func.ReturnType = returnType;
-            func.ReturnSlots.Add(new ReturnSlot(returnId, returnType));
-            returns = new[] { new ReturnSlot(returnId, returnType) };
-        }
-        return _ctx.Methods.AddCallable(method, func, slot, paramIds, returns, receiver);
+            Method = method,
+            FunctionName = functionName,
+            Receiver = receiver,
+            ReceiverId = receiver == MethodContext.ReceiverAbi.ObjectArray
+                ? index => NameAllocator.ParamId("this", index) : null,
+            Parameters = parameters,
+            Returns = returns,
+        });
     }
 
     static HashSet<IMethodSymbol> CollectCrossDispatchExports(ClassCompilePlan plan)
@@ -1316,6 +1284,8 @@ public partial class UasmEmitter
                     EmitMethod(specSym, specRecord);
             }
         }
+
+        _ctx.Synthetics.Freeze();
 
         // Emit pending delegate bridges for hoisted lambdas/local functions
         new DelegateBridgeEmitter(_ctx, _bridge, _delegateConvention).EmitPending();

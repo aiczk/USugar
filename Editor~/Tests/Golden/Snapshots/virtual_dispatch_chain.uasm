@@ -11,12 +11,15 @@
     __1_w0__param: %SystemInt32, null
     __1_h0__param: %SystemInt32, null
     __2_this__param: %SystemObjectArray, null
+    __2_Area__ret: %SystemInt32, null
     __3_this__param: %SystemObjectArray, null
     __3_t__param: %SystemInt32, null
     __4_this__param: %SystemObjectArray, null
+    __4_Doubled__ret: %SystemInt32, null
     __5_this__param: %SystemObjectArray, null
     __5_side__param: %SystemInt32, null
     __6_this__param: %SystemObjectArray, null
+    __6_Area__ret: %SystemInt32, null
     __typeobj_VdRc: %SystemString, null
     __typeobj_VdSq: %SystemString, null
     __lcl_a_SystemObjectArray_0: %SystemObjectArray, null
@@ -26,9 +29,6 @@
     __lcl_d_SystemObjectArray_0: %SystemObjectArray, null
     __lcl_viaDevirt_SystemInt32_0: %SystemInt32, null
     __lcl_viaBase_SystemInt32_0: %SystemInt32, null
-    __2_Area__ret: %SystemInt32, null
-    __4_Doubled__ret: %SystemInt32, null
-    __6_Area__ret: %SystemInt32, null
     __const_SystemUInt32_sentinel: %SystemUInt32, null
     __const_SystemString_0: %SystemString, null
     __const_SystemString_1: %SystemString, null

@@ -48,9 +48,9 @@ internal sealed class CompilationPlanner
                 .Concat(plan.Callables.StructMethods)
                 .Concat(plan.Callables.BaseInstanceMethods),
             SymbolEqualityComparer.Default);
-        plan.Callables.Specializations = specializationCensus.MethodSpecializations
+        plan.Callables.AddSpecializationCandidates(specializationCensus.MethodSpecializations
             .Where(method => definitions.Contains(method.OriginalDefinition)
-                && !eagerlyRegistered.Contains(method)).ToArray();
+                && !eagerlyRegistered.Contains(method)));
         // Keep portable non-generic classes seeded by reach: they may enter from another Udon program
         // without a local mint. The census contributes closed generic instantiations on top.
         plan.Reach.MintedClasses.RemoveWhere(ClassTypeObjectContext.ContainsTypeParameter);

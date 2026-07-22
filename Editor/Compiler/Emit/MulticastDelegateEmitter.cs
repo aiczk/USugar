@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Linq;
 using Microsoft.CodeAnalysis;
 
 /// <summary>Emits multicast delegate combine, remove, and fan-out synthetic functions.</summary>
@@ -140,7 +141,8 @@ public sealed class MulticastDelegateEmitter
 
         var func = _module.AddFunction(helperName);
         _ctx.Methods.AddSyntheticCallable(helperName, func, signatureMethod, null,
-            MethodContext.CallableKind.Synthetic);
+            MethodContext.CallableKind.Synthetic, new[] { xId, yId },
+            new[] { new ReturnSlot(retId, StorageTypes.ObjectArray) });
         func.ParamFieldNames.Add(xId);
         func.ParamFieldNames.Add(yId);
         func.ReturnType = StorageTypes.ObjectArray;
@@ -194,7 +196,8 @@ public sealed class MulticastDelegateEmitter
 
         var func = _module.AddFunction(helperName);
         _ctx.Methods.AddSyntheticCallable(helperName, func, signatureMethod, null,
-            MethodContext.CallableKind.Synthetic);
+            MethodContext.CallableKind.Synthetic, new[] { xId, yId },
+            new[] { new ReturnSlot(retId, StorageTypes.ObjectArray) });
         func.ParamFieldNames.Add(xId);
         func.ParamFieldNames.Add(yId);
         func.ReturnType = StorageTypes.ObjectArray;
@@ -350,8 +353,13 @@ public sealed class MulticastDelegateEmitter
         _ctx.Storage.TryDeclareVar(DelegateAbi.ConvEnvName(sigPart), new StorageType(EnvEmit.EnvType));
 
         var fanoutFunc = _module.AddFunction(fanoutName, fanoutName);
+        var fanoutParamIds = Enumerable.Range(0, invoke.Parameters.Length)
+            .Select(index => DelegateAbi.ConvArgName(sigPart, index)).ToArray();
+        var fanoutReturns = retType.HasValue
+            ? new[] { new ReturnSlot(DelegateAbi.ConvRetName(sigPart), retType.Value) }
+            : System.Array.Empty<ReturnSlot>();
         _ctx.Methods.AddSyntheticCallable(fanoutName, fanoutFunc, invoke, null,
-            MethodContext.CallableKind.Bridge);
+            MethodContext.CallableKind.Bridge, fanoutParamIds, fanoutReturns);
         var prevFunc = _builder.CurrentFunction;
         _builder.SetFunction(fanoutFunc);
 

@@ -9,8 +9,11 @@
     __refl_typename: %SystemString, null
     __1_this__param: %SystemObjectArray, null
     __1_i__param: %SystemInt32, null
+    __1_get_Item__ret: %SystemInt32, null
     __2_this__param: %SystemObjectArray, null
+    __2_get_Score__ret: %SystemInt32, null
     __3_this__param: %SystemObjectArray, null
+    __3_get_Tag__ret: %SystemInt32, null
     __4_this__param: %SystemObjectArray, null
     __4_i__param: %SystemInt32, null
     __4_value__param: %SystemInt32, null
@@ -20,7 +23,9 @@
     __6_value__param: %SystemInt32, null
     __7_this__param: %SystemObjectArray, null
     __7_i__param: %SystemInt32, null
+    __7_get_Item__ret: %SystemInt32, null
     __8_this__param: %SystemObjectArray, null
+    __8_get_Score__ret: %SystemInt32, null
     __9_this__param: %SystemObjectArray, null
     __9_i__param: %SystemInt32, null
     __9_value__param: %SystemInt32, null
@@ -28,7 +33,9 @@
     __10_value__param: %SystemInt32, null
     __11_this__param: %SystemObjectArray, null
     __12_this__param: %SystemObjectArray, null
+    __12_Snap__ret: %SystemInt32, null
     __13_this__param: %SystemObjectArray, null
+    __13_get_K__ret: %SystemInt32, null
     __typeobj_VacA: %SystemString, null
     __typeobj_VacB: %SystemString, null
     __typeobj_VdvOnly: %SystemString, null
@@ -41,13 +48,6 @@
     __lcl_viaThis_SystemInt32_0: %SystemInt32, null
     __lcl_s_SystemObjectArray_0: %SystemObjectArray, null
     __lcl_viaDevirt_SystemInt32_0: %SystemInt32, null
-    __1_get_Item__ret: %SystemInt32, null
-    __2_get_Score__ret: %SystemInt32, null
-    __3_get_Tag__ret: %SystemInt32, null
-    __7_get_Item__ret: %SystemInt32, null
-    __8_get_Score__ret: %SystemInt32, null
-    __12_Snap__ret: %SystemInt32, null
-    __13_get_K__ret: %SystemInt32, null
     __const_SystemUInt32_sentinel: %SystemUInt32, null
     __const_SystemString_0: %SystemString, null
     __const_SystemString_1: %SystemString, null

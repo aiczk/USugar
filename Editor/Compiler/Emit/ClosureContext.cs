@@ -8,6 +8,15 @@ using Microsoft.CodeAnalysis;
 public sealed class ClosureContext
 {
     public CaptureScopeAnalysis CaptureScope { get; private set; }
+    public ClosureIdentityPlan IdentityPlan { get; private set; }
+
+    public void SetIdentityPlan(ClosureIdentityPlan value)
+    {
+        if (value == null) throw new ArgumentNullException(nameof(value));
+        if (IdentityPlan != null)
+            throw new InvalidOperationException("ClosureContext.IdentityPlan is write-once.");
+        IdentityPlan = value;
+    }
 
     public void SetCaptureScope(CaptureScopeAnalysis value)
     {

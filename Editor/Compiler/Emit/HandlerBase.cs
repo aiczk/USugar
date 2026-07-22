@@ -1481,56 +1481,27 @@ public abstract partial class HandlerBase
         if (_ctx.Methods.TryGetClosureSpec(localFunc, keyArgs, out _)) return;
         EmitPolicy.RejectInParameters(localFunc); // round-7 follow-up [Q3]
         var funcName = string.IsNullOrEmpty(localFunc.Name) ? "lambda" : localFunc.Name;
-        var idx = _ctx.Methods.NextMethodIndex++;
-        var slot = new EmitContext.MethodSlot(idx, $"__{idx}_{funcName}");
-        var irName = slot.VarPrefix;
-
-        // Create CFunction (internal, no export)
-        var func = _module.AddFunction(irName);
-
-        // Declare params as fields (the Core IR passes parameters as fields). Delegate-typed params are
-        // SystemObjectArray bundle references via the type-map delegate arm (design §2.1).
-        var lfParamIds = new string[localFunc.Parameters.Length];
-        for (int pi = 0; pi < localFunc.Parameters.Length; pi++)
+        var parameters = localFunc.Parameters.Select(parameter => new CallableParameterPlan(
+            index => NameAllocator.ParamId(parameter.Name, index), GetStorageType(parameter.Type))).ToArray();
+        var returns = localFunc.ReturnsVoid ? Array.Empty<CallableReturnPlan>() : new[]
         {
-            var param = localFunc.Parameters[pi];
-            var paramId = NameAllocator.ParamId(param.Name, idx);
-            _ctx.Storage.DeclareVar(paramId, GetStorageType(param.Type));
-            lfParamIds[pi] = paramId;
-        }
-        // Stage 2 §1.3/§6: a CAPTURING hoisted closure carries a hidden trailing __envp param — the
-        // binding-scope env arrives here (bridge conv-consume §5.1 / direct call §5.6 / TCO rebind).
-        // Appended to lfParamIds → _methodParamVarIds (so CollectRecursionSpillFields' param loop
-        // spills it unchanged) and func.ParamFieldNames (so EmitCallInternal's positional copy-in
-        // binds the trailing env arg into it). NOT in the delegate sig / conv-arg count (§1.3). A
-        // capture-free closure and every named method get NO __envp — the capture-free byte invariant.
-        string envpFieldId = null;
-        if (_ctx.Closures.CaptureScope != null && _ctx.Closures.CaptureScope.IsCapturingClosure(localFunc))
-        {
-            var envpId = $"__{idx}_{funcName}__envp";
-            _ctx.Storage.DeclareVar(envpId, new StorageType(EnvEmit.EnvType));
-            var withEnvp = new string[lfParamIds.Length + 1];
-            System.Array.Copy(lfParamIds, withEnvp, lfParamIds.Length);
-            withEnvp[lfParamIds.Length] = envpId;
-            lfParamIds = withEnvp;
-            envpFieldId = envpId;
-            // SS2B: the __envp field lives ONLY on the per-spec record — a definition-keyed
-            // RegisterEnvpField here would be last-spec-wins (the M5 gotcha-3 fault class).
-        }
-        foreach (var pid in lfParamIds) func.ParamFieldNames.Add(pid);
-
-        ReturnSlot[] retSlots = System.Array.Empty<ReturnSlot>();
-        if (!localFunc.ReturnsVoid)
-        {
-            var retType = GetStorageTypeName(localFunc.ReturnType);
-            func.ReturnType = new StorageType(retType);
-            var retId = NameAllocator.RetId(funcName, idx);
-            func.ReturnSlots.Add(new ReturnSlot(retId, new StorageType(retType)));
-            retSlots = new[] { new ReturnSlot(retId, new StorageType(retType)) };
-        }
-
-        var record = _ctx.Methods.AddClosureCallable(localFunc, keyArgs, identity.OwnerSpecs,
-            func, slot, lfParamIds, retSlots, envpFieldId);
+            new CallableReturnPlan(index => NameAllocator.RetId(funcName, index),
+                new StorageType(GetStorageTypeName(localFunc.ReturnType)))
+        };
+        var capturing = _ctx.Closures.CaptureScope != null
+            && _ctx.Closures.CaptureScope.IsCapturingClosure(localFunc);
+        var record = (MethodContext.ClosureSpec)new CallableRegistrar(_ctx).Register(
+            new CallableLayoutPlan
+            {
+                Method = localFunc,
+                FunctionName = index => $"__{index}_{funcName}",
+                SlotPrefix = index => $"__{index}_{funcName}",
+                Parameters = parameters,
+                Returns = returns,
+                ClosureKeyArgs = keyArgs,
+                ClosureOwnerSpecs = identity.OwnerSpecs,
+                EnvironmentId = capturing ? index => $"__{index}_{funcName}__envp" : null,
+            });
         _pendingClosures.Add(record);
     }
 
@@ -1600,14 +1571,8 @@ public abstract partial class HandlerBase
     /// ambient map may already be cleared.</summary>
     protected void RegisterMulticastSig(string sigPart, IMethodSymbol invoke, MulticastOperations operation)
     {
-        if (_ctx.Synthetics.MulticastSigs.TryGetValue(sigPart, out var existing))
-        {
-            _ctx.Synthetics.MulticastSigs[sigPart] = existing.With(operation);
-            return;
-        }
-        // Carry the immutable ambient map by reference — the drain resolves the sig later (ambient map null by then).
-        _ctx.Synthetics.MulticastSigs[sigPart] = new MulticastSigPlan(
-            invoke, _ctx.Generics.TypeParamMap, operation);
+        _ctx.Synthetics.RegisterMulticast(
+            sigPart, invoke, _ctx.Generics.TypeParamMap, operation);
     }
 
     // B67: the synthesized value→name helper's name for a user enum (one per enum, drained in UasmEmitter).
@@ -1642,7 +1607,7 @@ public abstract partial class HandlerBase
                 $"'{e.Name}.ToString()' is not supported: '{e.Name}' is a [Flags] enum and Udon cannot "
                 + "synthesize the comma-separated flag decomposition. Format the individual flag bits manually "
                 + "(e.g. compare against each flag and build the string yourself).");
-        _ctx.Synthetics.EnumToString.Add(e);
+        _ctx.Synthetics.RegisterEnumToString(e);
         // `value` is already the enum's underlying-typed leaf (GetStorageTypeName(enum) == underlying), which the
         // helper's parameter type matches — pass it straight through.
         return InternalCall(EnumToStringHelperName(e), new List<CLeaf> { value }, StorageTypes.String);
@@ -1658,9 +1623,7 @@ public abstract partial class HandlerBase
     {
         var wrapperName = DelegateAbi.WrapperName(
             DelegateAbi.BuildSigPart(outerInvoke, typeParamMap), DelegateAbi.BuildSigPart(innerInvoke, typeParamMap));
-        if (_ctx.Synthetics.WrapperSigs.ContainsKey(wrapperName)) return wrapperName;
-        // Carry the immutable map by reference (callers pass the ambient _ctx.Generics.TypeParamMap).
-        _ctx.Synthetics.WrapperSigs[wrapperName] = (outerInvoke, innerInvoke, typeParamMap);
+        _ctx.Synthetics.RegisterWrapper(wrapperName, outerInvoke, innerInvoke, typeParamMap);
         return wrapperName;
     }
 
@@ -1763,94 +1726,65 @@ public abstract partial class HandlerBase
                 + "body emission and is absent from CallableDefinitionPlan.Specializations.");
         EmitPolicy.RejectInParameters(constructed); // round-7 follow-up [Q3]
 
+        if (!closureKind)
+        {
+            RegisterNamedSpecialization(constructed);
+            return;
+        }
+
         // First-wins spec record (feeds ComposeClosureKeyArgs' owner fallback). The former [X6]/[Y2]
         // second-instantiation rejects are retired: closures duplicate per spec.
 
-        EmitContext.MethodSlot slot;
-        if (closureKind)
-        {
-            var ci = _ctx.Methods.NextMethodIndex++;
-            slot = new EmitContext.MethodSlot(ci, ci.ToString());
-        }
-        else
-            slot = _ctx.Methods.Reserve(i => i.ToString());
-        var idx = slot.Index;
-
         var typeArgPart = string.Join("_", constructed.TypeArguments.Select(ExternResolver.GetUdonTypeName));
-        var name = $"__{idx}_{SanitizeId(constructed.Name)}_{typeArgPart}";
-        var func = _module.AddFunction(name);
+        var parameters = constructed.Parameters.Select(parameter => new CallableParameterPlan(
+            index => NameAllocator.ParamId(parameter.Name, index), GetStorageType(parameter.Type))).ToArray();
+        var returns = constructed.ReturnsVoid ? Array.Empty<CallableReturnPlan>() : new[]
+        {
+            new CallableReturnPlan(index => NameAllocator.RetId(SanitizeId(constructed.Name), index),
+                new StorageType(GetStorageTypeName(constructed.ReturnType)))
+        };
+        var capturing = _ctx.Closures.CaptureScope != null
+            && _ctx.Closures.CaptureScope.IsCapturingClosure(constructed);
+        var record = (MethodContext.ClosureSpec)new CallableRegistrar(_ctx).Register(
+            new CallableLayoutPlan
+            {
+                Method = constructed,
+                FunctionName = index => $"__{index}_{SanitizeId(constructed.Name)}_{typeArgPart}",
+                Parameters = parameters,
+                Returns = returns,
+                ClosureKeyArgs = closureKeyArgs,
+                ClosureOwnerSpecs = closureIdentity.OwnerSpecs.Add(constructed),
+                EnvironmentId = capturing
+                    ? index => $"__{index}_{SanitizeId(constructed.Name)}__envp" : null,
+            });
+        _pendingGenericSpecs.Add((constructed, record));
+    }
 
-        // Feature G residual gap (wave-14): a member of a CONSTRUCTED generic struct carries the same
-        // synthetic receiver object[] as param0 that the Phase-1 struct-method registration gives every
-        // non-static struct instance member (UasmEmitter's structMethods loop, "param0 = receiver
-        // object[]") — EmitMethod's CurrentStructReceiverParamId reads func.ParamFieldNames[0]
-        // unconditionally for one. This on-demand path predates feature G (plain generic METHODS have
-        // no receiver concept — a class instance's `this` is a declared field, not param0; a foreign
-        // static has no receiver at all) and never grew this convention, so a struct member reached
-        // ONLY via internal self-reference (never pre-collected) got no receiver slot and EmitMethod's
-        // ParamFieldNames[0] read threw IndexOutOfRange.
-        if (!constructed.IsStatic
-            && constructed.ContainingType is INamedTypeSymbol structRecvCt && TypeClassifier.IsObjectArrayEmulated(structRecvCt)
-            && constructed.MethodKind is not (MethodKind.LambdaMethod or MethodKind.LocalFunction))
+    void RegisterNamedSpecialization(IMethodSymbol method)
+    {
+        var typeArgPart = string.Join("_", method.TypeArguments.Select(ExternResolver.GetUdonTypeName));
+        var receiver = !method.IsStatic
+            && method.ContainingType is INamedTypeSymbol receiverType
+            && TypeClassifier.IsObjectArrayEmulated(receiverType)
+            ? MethodContext.ReceiverAbi.ObjectArray : MethodContext.ReceiverAbi.None;
+        var parameters = method.Parameters.Select(parameter => new CallableParameterPlan(
+            index => NameAllocator.ParamId(parameter.Name, index), GetStorageType(parameter.Type))).ToArray();
+        var returns = method.ReturnsVoid ? Array.Empty<CallableReturnPlan>() : new[]
         {
-            var receiverId = NameAllocator.ParamId("this", idx);
-            _ctx.Storage.DeclareVar(receiverId, StorageTypes.ObjectArray);
-            func.ParamFieldNames.Add(receiverId);
-        }
-
-        var gsParamIds = new string[constructed.Parameters.Length];
-        for (int pi = 0; pi < constructed.Parameters.Length; pi++)
+            new CallableReturnPlan(index => NameAllocator.RetId(SanitizeId(method.Name), index),
+                new StorageType(GetStorageTypeName(method.ReturnType)))
+        };
+        new CallableRegistrar(_ctx).Register(new CallableLayoutPlan
         {
-            var param = constructed.Parameters[pi];
-            var paramId = NameAllocator.ParamId(param.Name, idx);
-            _ctx.Storage.DeclareVar(paramId, GetStorageType(param.Type));
-            gsParamIds[pi] = paramId;
-        }
-        string specEnvpFieldId = null;
-        // Stage 2 §1.3: __envp twin of RegisterLocalFunction — the id lives on this spec's
-        // ClosureSpec record (per-spec storage; no sharing, no pinning since per-spec separation).
-        if (_ctx.Closures.CaptureScope != null && _ctx.Closures.CaptureScope.IsCapturingClosure(constructed))
-        {
-            var envpId = $"__{idx}_{SanitizeId(constructed.Name)}__envp";
-            _ctx.Storage.DeclareVar(envpId, new StorageType(EnvEmit.EnvType));
-            var withEnvp = new string[gsParamIds.Length + 1];
-            System.Array.Copy(gsParamIds, withEnvp, gsParamIds.Length);
-            withEnvp[gsParamIds.Length] = envpId;
-            gsParamIds = withEnvp;
-            specEnvpFieldId = envpId;
-        }
-        foreach (var pid in gsParamIds) func.ParamFieldNames.Add(pid);
-
-        var specRetSlots = System.Array.Empty<ReturnSlot>();
-        if (!constructed.ReturnsVoid)
-        {
-            var retType = GetStorageTypeName(constructed.ReturnType);
-            var retId = NameAllocator.RetId(SanitizeId(constructed.Name), idx);
-            _ctx.Storage.DeclareVar(retId, new StorageType(retType));
-            func.ReturnType = new StorageType(retType);
-            func.ReturnSlots.Add(new ReturnSlot(retId, new StorageType(retType)));
-            specRetSlots = new[] { new ReturnSlot(retId, new StorageType(retType)) };
-        }
-
-        if (closureKind)
-        {
-            // The spec itself joins its owner chain so a nested closure inherits the local
-            // function's own type binding through the record channel.
-            var record = _ctx.Methods.AddClosureCallable(constructed, closureKeyArgs,
-                closureIdentity.OwnerSpecs.Add(constructed), func, slot, gsParamIds,
-                specRetSlots, specEnvpFieldId);
-            _pendingGenericSpecs.Add((constructed, record));
-        }
-        else
-        {
-            var receiverAbi = !constructed.IsStatic
-                && constructed.ContainingType is INamedTypeSymbol receiverType
-                && TypeClassifier.IsObjectArrayEmulated(receiverType)
-                ? MethodContext.ReceiverAbi.ObjectArray : MethodContext.ReceiverAbi.None;
-            _ctx.Methods.AddCallable(
-                constructed, func, slot, gsParamIds, specRetSlots, receiverAbi);
-            _pendingGenericSpecs.Add((constructed, null));
-        }
+            Method = method,
+            FunctionName = index => $"__{index}_{SanitizeId(method.Name)}_{typeArgPart}",
+            Receiver = receiver,
+            ReceiverId = receiver == MethodContext.ReceiverAbi.ObjectArray
+                ? index => NameAllocator.ParamId("this", index) : null,
+            Parameters = parameters,
+            Returns = returns,
+        });
+        _pendingGenericSpecs.Add((method, null));
     }
 
     /// <summary>Feature G residual gap (wave-14): a struct-member reference (computed property/indexer
@@ -1974,7 +1908,7 @@ public abstract partial class HandlerBase
             if (member.ContainingType is INamedTypeSymbol cloneCt && TypeClassifier.IsUserStruct(cloneCt))
                 recvLeaf = AggregateAbi.DeepClone(_builder, recvLeaf, cloneCt, _ctx.Aggregates.GetLayout);
             var recvBridgeName = DelegateAbi.BridgeName(memberFunc.Name) + "_rcv";
-            _ctx.Synthetics.ReceiverBridges.Add((member, recvBridgeName));
+            _ctx.Synthetics.RegisterReceiverBridge(member, recvBridgeName);
             return (recvBridgeName, FuncRef(recvBridgeName), null, recvLeaf);
         }
 
@@ -1989,7 +1923,7 @@ public abstract partial class HandlerBase
             var interfaceLayout = _planner.GetLayout(localIface).Methods[targetMethod];
             var localBridge = DelegateAbi.BridgeName(
                 LayoutPlanner.InterfaceDispatchName(targetMethod, interfaceLayout));
-            _ctx.Synthetics.ReceiverBridges.Add((targetMethod, localBridge));
+            _ctx.Synthetics.RegisterReceiverBridge(targetMethod, localBridge);
             return (localBridge, FuncRef(localBridge), null, targetInstance);
         }
 
@@ -2021,7 +1955,7 @@ public abstract partial class HandlerBase
             && baseCopy.ExportName == null)
         {
             bridgeExportName = DelegateAbi.BridgeName(baseCopy.Name);
-            _ctx.Synthetics.DelegateBridges.Add((targetMethod, bridgeExportName, _ctx.Generics.TypeParamMap));
+            _ctx.Synthetics.RegisterDelegateBridge(targetMethod, bridgeExportName, _ctx.Generics.TypeParamMap);
         }
         // For hoisted lambdas/local functions, create a pending bridge dynamically
         // since they aren't part of the TypeLayout's pre-computed bridges.
@@ -2054,10 +1988,10 @@ public abstract partial class HandlerBase
                 throw new System.InvalidOperationException($"Lambda/local function '{targetMethod.Name}' not registered.");
             bridgeExportName = DelegateAbi.BridgeName(targetSlot.VarPrefix);
             if (bridgeClosure != null)
-                _ctx.Synthetics.ClosureBridgeFuncs[bridgeExportName] = bridgeClosure.Function;
+                _ctx.Synthetics.RegisterClosureBridge(bridgeExportName, bridgeClosure.Function);
             // Carry the current type-param map by reference — it is immutable and per-EmitMethod fresh, so
             // it stays valid for the drain (which runs after generic-method emit clears the ambient map).
-            _ctx.Synthetics.DelegateBridges.Add((targetMethod, bridgeExportName, _ctx.Generics.TypeParamMap));
+            _ctx.Synthetics.RegisterDelegateBridge(targetMethod, bridgeExportName, _ctx.Generics.TypeParamMap);
         }
         else if (targetMethod.IsGenericMethod)
         {
@@ -2101,7 +2035,7 @@ public abstract partial class HandlerBase
                     + "(the specialization's bridge must live in this program).");
             RegisterGenericSpecialization(constructed);
             bridgeExportName = DelegateAbi.BridgeName(_methodFunctions[constructed].Name);
-            _ctx.Synthetics.DelegateBridges.Add((constructed, bridgeExportName, _ctx.Generics.TypeParamMap));
+            _ctx.Synthetics.RegisterDelegateBridge(constructed, bridgeExportName, _ctx.Generics.TypeParamMap);
             // B52: advance targetMethod to the registered specialization (mirroring the local-function
             // arm) so the variance/adapter block below enqueues the ADAPTER against the spec that is
             // actually emitted — otherwise the adapter names the raw generic definition, EmitPending-
@@ -2119,7 +2053,7 @@ public abstract partial class HandlerBase
             && !ExternResolver.IsUdonSharpBehaviour(targetMethod.ContainingType))
         {
             bridgeExportName = DelegateAbi.BridgeName(foreignFunc.Name);
-            _ctx.Synthetics.DelegateBridges.Add((targetMethod, bridgeExportName, _ctx.Generics.TypeParamMap));
+            _ctx.Synthetics.RegisterDelegateBridge(targetMethod, bridgeExportName, _ctx.Generics.TypeParamMap);
         }
         // R-M2 (design §2): a method-group binding of a THIS-CLASS private / private-protected method. The
         // planner no longer plans a speculative bridge for it (LayoutPlanner.IsExcludedFromSpeculativeBridge),
@@ -2141,7 +2075,7 @@ public abstract partial class HandlerBase
                  && SymbolEqualityComparer.Default.Equals(targetMethod.ContainingType, _classSymbol))
         {
             bridgeExportName = DelegateAbi.BridgeName(privFunc.Name);
-            _ctx.Synthetics.DelegateBridges.Add((targetMethod, bridgeExportName, _ctx.Generics.TypeParamMap));
+            _ctx.Synthetics.RegisterDelegateBridge(targetMethod, bridgeExportName, _ctx.Generics.TypeParamMap);
         }
         else
         {
@@ -2172,8 +2106,8 @@ public abstract partial class HandlerBase
                     var adapterName = DelegateAbi.SigAdapterName(targetKey, sigS);
                     // SS2B: a closure target's func was registered under the plain bridge name above;
                     // the adapter drain resolves by name, so alias it under the adapter name too.
-                    if (_ctx.Synthetics.ClosureBridgeFuncs.TryGetValue(bridgeExportName, out var closureTargetFunc))
-                        _ctx.Synthetics.ClosureBridgeFuncs[adapterName] = closureTargetFunc;
+                    if (_ctx.Synthetics.TryGetClosureBridge(bridgeExportName, out var closureTargetFunc))
+                        _ctx.Synthetics.RegisterClosureBridge(adapterName, closureTargetFunc);
                     // [X1] leaf mapping, adapter flavor (C3 stage 2): a this-receiver VIRTUAL method
                     // group statically binds the BASE declaration, but the adapter's InternalCall must
                     // run the most-derived override visible from the compiled class — exactly like the
@@ -2185,7 +2119,8 @@ public abstract partial class HandlerBase
                     var adapterTarget = !baseReceiver && targetMethod.MethodKind == MethodKind.Ordinary
                         && (targetMethod.IsVirtual || targetMethod.IsOverride || targetMethod.IsAbstract)
                         ? ResolveMostDerivedOverride(targetMethod) : targetMethod;
-                    _ctx.Synthetics.SigAdapterBridges.Add((adapterTarget, delegateInvoke, adapterName, _ctx.Generics.TypeParamMap));
+                    _ctx.Synthetics.RegisterSigAdapter(
+                        adapterTarget, delegateInvoke, adapterName, _ctx.Generics.TypeParamMap);
                     return (adapterName, FuncRef(adapterName), targetInstance, envLeaf);
                 }
 

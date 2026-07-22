@@ -9,12 +9,16 @@
     __refl_typename: %SystemString, null
     __1_this__param: %SystemObjectArray, null
     __1_i__param: %SystemInt32, null
+    __1_Get__ret: %SystemInt32, null
     __2_this__param: %SystemObjectArray, null
     __2_i__param: %SystemInt32, null
+    __2_Get__ret: %SystemString, null
     __3_this__param: %SystemObjectArray, null
     __3_i__param: %SystemInt32, null
+    __3_get_Item__ret: %SystemInt32, null
     __4_this__param: %SystemObjectArray, null
     __4_i__param: %SystemInt32, null
+    __4_get_Item__ret: %SystemString, null
     __5_this__param: %SystemObjectArray, null
     __5_i__param: %SystemInt32, null
     __5_value__param: %SystemInt32, null
@@ -23,10 +27,6 @@
     __6_value__param: %SystemString, null
     __lcl_a_SystemObjectArray_0: %SystemObjectArray, null
     __lcl_b_SystemObjectArray_0: %SystemObjectArray, null
-    __1_Get__ret: %SystemInt32, null
-    __2_Get__ret: %SystemString, null
-    __3_get_Item__ret: %SystemInt32, null
-    __4_get_Item__ret: %SystemString, null
     __const_SystemUInt32_sentinel: %SystemUInt32, null
     __const_SystemInt32_0: %SystemInt32, null
     __intnl_SystemObjectArray_c0: %SystemObjectArray, null

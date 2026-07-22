@@ -10,10 +10,10 @@
     __lcl_fs_SystemObjectArray_0: %SystemObjectArray, null
     __lcl_i_SystemInt32_0: %SystemInt32, null
     __1_lambda__envp: %SystemObjectArray, null
+    __1_lambda__ret: %SystemInt32, null
     __this_VRCUdonUdonBehaviour_0: %VRCUdonUdonBehaviour, this
     __dlgc_Void__SystemInt32__ret: %SystemInt32, null
     __dlgc_Void__SystemInt32__env: %SystemObjectArray, null
-    __1_lambda__ret: %SystemInt32, null
     __const_SystemUInt32_sentinel: %SystemUInt32, null
     __const_SystemInt32_0: %SystemInt32, null
     __intnl_SystemObjectArray_c0: %SystemObjectArray, null

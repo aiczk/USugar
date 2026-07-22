@@ -14,7 +14,7 @@ internal sealed class RuntimeSpecializationPlanner
     public IMethodSymbol[] Build(ClassCompilePlan plan)
     {
         var result = new HashSet<IMethodSymbol>(
-            plan.Callables.Specializations, SymbolEqualityComparer.Default);
+            plan.Callables.SpecializationCandidates, SymbolEqualityComparer.Default);
         var definitions = new HashSet<IMethodSymbol>(
             plan.Callables.Definitions, SymbolEqualityComparer.Default);
         foreach (var root in plan.Reach.BodyByDef.Values.Concat(plan.FieldInitOps))

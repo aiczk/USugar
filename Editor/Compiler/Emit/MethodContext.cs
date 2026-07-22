@@ -286,7 +286,8 @@ public sealed class MethodContext
     }
 
     public RegisteredCallable AddSyntheticCallable(string name, CFunction function,
-        IMethodSymbol signatureMethod, IMethodSymbol targetMethod, CallableKind kind)
+        IMethodSymbol signatureMethod, IMethodSymbol targetMethod, CallableKind kind,
+        string[] paramVarIds = null, ReturnSlot[] returnSlots = null)
     {
         if (string.IsNullOrEmpty(name) || function == null)
             throw new ArgumentException("A synthetic callable requires a name and function.");
@@ -295,8 +296,8 @@ public sealed class MethodContext
             Definition = signatureMethod,
             TargetDefinition = targetMethod?.OriginalDefinition,
             Function = function,
-            ParamVarIds = Array.Empty<string>(),
-            ReturnSlots = Array.Empty<ReturnSlot>(),
+            ParamVarIds = paramVarIds ?? Array.Empty<string>(),
+            ReturnSlots = returnSlots ?? Array.Empty<ReturnSlot>(),
             Receiver = ReceiverAbi.None,
             Kind = kind,
             Name = name,

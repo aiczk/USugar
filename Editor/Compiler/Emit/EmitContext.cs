@@ -100,9 +100,10 @@ public class EmitContext
         var b = System.Collections.Immutable.ImmutableArray.CreateBuilder<ITypeSymbol>();
         var owners = System.Collections.Immutable.ImmutableArray.CreateBuilder<IMethodSymbol>();
         if (closure.TypeArguments.Length > 0) b.AddRange(closure.TypeArguments);
-        for (var s = closure.OriginalDefinition.ContainingSymbol; s is IMethodSymbol owner; s = owner.ContainingSymbol)
+        var identityPlan = Closures.IdentityPlan
+            ?? throw new InvalidOperationException("Closure identity plan was not frozen before emission.");
+        foreach (var ownerDef in identityPlan.GetLexicalOwners(closure))
         {
-            var ownerDef = owner.OriginalDefinition;
             IMethodSymbol spec = null;
             foreach (var os in Methods.CurrentOwnerSpecs)
                 if (SymbolEqualityComparer.Default.Equals(os.OriginalDefinition, ownerDef)) { spec = os; break; }
@@ -120,7 +121,8 @@ public class EmitContext
             if (ownerDef.TypeParameters.Length > 0) b.AddRange(spec.TypeArguments);
             // Containing-type dimension once, at the outermost named method (feature G: a generic
             // struct/class member's closure binds the container's T too).
-            if (owner.ContainingSymbol is not IMethodSymbol && spec.ContainingType is { IsGenericType: true } ct)
+            if (ownerDef.ContainingSymbol is not IMethodSymbol
+                && spec.ContainingType is { IsGenericType: true } ct)
                 b.AddRange(ct.TypeArguments);
         }
         return new ClosureIdentity(b.ToImmutable(), owners.ToImmutable());
