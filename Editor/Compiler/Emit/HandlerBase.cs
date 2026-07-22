@@ -1040,15 +1040,37 @@ public abstract partial class HandlerBase
     /// TryPrepareFieldSet would return a store (aggregate member slot, cross-behaviour field,
     /// extern value-type / reference-type field), false for behaviour this-fields and static
     /// fields. Lets callers decide evaluation ORDER before any legs are emitted.</summary>
-    protected bool IsPreparableFieldSetTarget(IFieldReferenceOperation fieldRef)
+    enum FieldSetKind { AggregateSlot, CrossBehaviour, ExternValueType, ExternReferenceType }
+
+    readonly struct FieldSetPlan
     {
-        if (fieldRef.Instance == null) return false;                       // static — no receiver legs
-        if (fieldRef.Instance is not IInstanceReferenceOperation) return true; // variable receiver — always a prepared arm
-        return fieldRef.Field.ContainingType.IsValueType                   // struct `this.v` (emulated receiver)
-            || (AggregateAbi.TryGetMemberTarget(fieldRef, out var inst, out var name)
-                && ResolveType(inst.Type) is INamedTypeSymbol agg && TypeClassifier.IsObjectArrayEmulated(agg)
-                && _ctx.Aggregates.GetLayout(agg).TryGetIndex(name, out _));
+        public readonly FieldSetKind Kind;
+        public readonly IOperation Instance;
+        public readonly int AggregateIndex;
+        public FieldSetPlan(FieldSetKind kind, IOperation instance, int aggregateIndex = -1)
+        { Kind = kind; Instance = instance; AggregateIndex = aggregateIndex; }
     }
+
+    FieldSetPlan? DescribeFieldSet(IFieldReferenceOperation fieldRef)
+    {
+        if (fieldRef.Instance == null) return null;
+        if (AggregateAbi.TryGetMemberTarget(fieldRef, out var instance, out var memberName)
+            && ResolveType(instance.Type) is INamedTypeSymbol aggregateType
+            && TypeClassifier.IsObjectArrayEmulated(aggregateType)
+            && _ctx.Aggregates.GetLayout(aggregateType).TryGetIndex(memberName, out var fieldIndex))
+            return new FieldSetPlan(FieldSetKind.AggregateSlot, instance, fieldIndex);
+        if (fieldRef.Instance is IInstanceReferenceOperation)
+            return fieldRef.Field.ContainingType.IsValueType
+                ? new FieldSetPlan(FieldSetKind.ExternValueType, fieldRef.Instance)
+                : null;
+        if (ExternResolver.IsUdonSharpBehaviour(fieldRef.Field.ContainingType))
+            return new FieldSetPlan(FieldSetKind.CrossBehaviour, fieldRef.Instance);
+        return new FieldSetPlan(fieldRef.Field.ContainingType.IsValueType
+            ? FieldSetKind.ExternValueType : FieldSetKind.ExternReferenceType, fieldRef.Instance);
+    }
+
+    protected bool IsPreparableFieldSetTarget(IFieldReferenceOperation fieldRef)
+        => DescribeFieldSet(fieldRef).HasValue;
 
     /// <summary>Wave-9 round-7 [Y2]/[Y4]-[Y10]: the single field SET path, shared by simple
     /// assignment and deconstruction lvalues (the field twin of PreparePropertySet /
@@ -1060,43 +1082,40 @@ public abstract partial class HandlerBase
     /// above.</summary>
     protected System.Action<CLeaf> TryPrepareFieldSet(IFieldReferenceOperation fieldRef)
     {
+        var plan = DescribeFieldSet(fieldRef);
+        if (!plan.HasValue) return null;
         // Aggregate (struct/tuple) OR v1-class member → layout slot write on the backing object[].
-        if (AggregateAbi.TryGetMemberTarget(fieldRef, out var aggInstance, out var aggMemberName)
-            && ResolveType(aggInstance.Type) is INamedTypeSymbol aggContaining && TypeClassifier.IsObjectArrayEmulated(aggContaining)
-            && _ctx.Aggregates.GetLayout(aggContaining).TryGetIndex(aggMemberName, out var fieldIndex))
+        if (plan.Value.Kind == FieldSetKind.AggregateSlot)
         {
-            RejectStaticReadonlyWriteThrough(aggInstance); // §3.3, R5
-            var arrExpr = LoadInstanceRaw(aggInstance);
-            return value => AggregateAbi.WriteSlot(_builder, arrExpr, fieldIndex, value);
+            RejectStaticReadonlyWriteThrough(plan.Value.Instance); // §3.3, R5
+            var arrExpr = LoadInstanceRaw(plan.Value.Instance);
+            return value => AggregateAbi.WriteSlot(_builder, arrExpr, plan.Value.AggregateIndex, value);
         }
 
         // Cross-behaviour field → one SetProgramVariable (a delegate field ships the bundle
         // REFERENCE — design §2.3, incl. a tuple-return delegate's SystemObjectArray bundle).
-        if (fieldRef is { Instance: not null and not IInstanceReferenceOperation }
-            && ExternResolver.IsUdonSharpBehaviour(fieldRef.Field.ContainingType))
+        if (plan.Value.Kind == FieldSetKind.CrossBehaviour)
         {
-            var crossInstanceVal = VisitExpression(fieldRef.Instance);
+            var crossInstanceVal = VisitExpression(plan.Value.Instance);
             return value => EmitCrossBehaviourFieldSet(fieldRef.Field, crossInstanceVal, value);
         }
 
         // Extern value-type field (e.g. a Vector3 component) → extern field setter.
-        if (fieldRef.Instance != null && fieldRef.Field.ContainingType.IsValueType)
+        if (plan.Value.Kind == FieldSetKind.ExternValueType)
         {
             var vtContainingType = GetUdonType(fieldRef.Field.ContainingType);
-            var vtInstanceVal = fieldRef.Instance is IInstanceReferenceOperation
+            var vtInstanceVal = plan.Value.Instance is IInstanceReferenceOperation
                 ? LoadField(_ctx.Storage.DeclareThisOnce(vtContainingType), vtContainingType)
-                : VisitExpression(fieldRef.Instance);
+                : VisitExpression(plan.Value.Instance);
             var vtSig = ExternResolver.BuildFieldSetSignature(
                 vtContainingType, fieldRef.Field.Name, GetUdonType(fieldRef.Field.Type));
             return value => EmitExternVoid(vtSig, new List<CLeaf> { vtInstanceVal, value });
         }
 
         // Extern reference-type field through a variable receiver → extern field setter.
-        if (fieldRef is { Instance: not null and not IInstanceReferenceOperation }
-            && !fieldRef.Field.ContainingType.IsValueType
-            && !ExternResolver.IsUdonSharpBehaviour(fieldRef.Field.ContainingType))
+        if (plan.Value.Kind == FieldSetKind.ExternReferenceType)
         {
-            var refInstanceVal = VisitExpression(fieldRef.Instance);
+            var refInstanceVal = VisitExpression(plan.Value.Instance);
             var refSig = ExternResolver.BuildFieldSetSignature(
                 GetUdonType(fieldRef.Field.ContainingType), fieldRef.Field.Name,
                 GetUdonType(fieldRef.Field.Type), isValueType: false);
@@ -1709,6 +1728,7 @@ public abstract partial class HandlerBase
 
         // First-wins spec record (feeds ComposeClosureKeyArgs' owner fallback). The former [X6]/[Y2]
         // second-instantiation rejects are retired: closures duplicate per spec.
+
         RegisterFirstGenericSpec(constructed);
 
         EmitContext.MethodSlot slot;
