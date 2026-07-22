@@ -153,6 +153,12 @@ public enum FieldFlags
     Sync = 1 << 1,
 }
 
+public enum StorageDomain
+{
+    User,
+    Generated,
+}
+
 /// <summary>Module-level field declaration (heap variable).</summary>
 public sealed class FieldDecl
 {
@@ -161,11 +167,13 @@ public sealed class FieldDecl
     public object DefaultValue;
     public FieldFlags Flags;
     public string SyncMode; // "none", "linear", "smooth" (null = not synced)
+    public readonly StorageDomain Domain;
 
-    public FieldDecl(string name, StorageType type)
+    public FieldDecl(string name, StorageType type, StorageDomain domain = StorageDomain.Generated)
     {
         Name = name ?? throw new ArgumentNullException(nameof(name));
         Type = type;
+        Domain = domain;
     }
 
     public override string ToString()

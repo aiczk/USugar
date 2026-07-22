@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using Microsoft.CodeAnalysis;
@@ -9,7 +10,7 @@ public sealed class StorageContext
 {
     readonly CModule _module;
     readonly Dictionary<string, int> _counters = new();
-    readonly HashSet<string> _declaredFieldNames = new();
+    readonly Dictionary<string, FieldDecl> _declarations = new(StringComparer.Ordinal);
     readonly Dictionary<StorageType, string> _thisVars = new();
     readonly Dictionary<string, string> _structConstIds = new();
     bool _recurStackDeclared;
@@ -28,26 +29,32 @@ public sealed class StorageContext
     public string DeclareField(string name, StorageType type, FieldFlags flags = FieldFlags.None,
         object defaultValue = null, string syncMode = null)
     {
-        if (_declaredFieldNames.Contains(name)) return name;
-        var field = new FieldDecl(name, type) { Flags = flags, DefaultValue = defaultValue, SyncMode = syncMode };
-        _module.Fields.Add(field);
-        _declaredFieldNames.Add(name);
+        Declare(new FieldDecl(name, type, StorageDomain.User)
+            { Flags = flags, DefaultValue = defaultValue, SyncMode = syncMode });
+        return name;
+    }
+
+    public string DeclareGeneratedField(string name, StorageType type,
+        object defaultValue = null)
+    {
+        Declare(new FieldDecl(name, type, StorageDomain.Generated) { DefaultValue = defaultValue });
         return name;
     }
 
     public string DeclareVar(string id, StorageType type)
     {
-        if (_declaredFieldNames.Contains(id)) return id;
-        _module.Fields.Add(new FieldDecl(id, type));
-        _declaredFieldNames.Add(id);
+        Declare(new FieldDecl(id, type, StorageDomain.Generated));
         return id;
     }
 
     public bool TryDeclareVar(string id, StorageType type)
     {
-        if (_declaredFieldNames.Contains(id)) return false;
-        _module.Fields.Add(new FieldDecl(id, type));
-        _declaredFieldNames.Add(id);
+        if (_declarations.TryGetValue(id, out var existing))
+        {
+            EnsureCompatible(existing, new FieldDecl(id, type, StorageDomain.Generated));
+            return false;
+        }
+        Declare(new FieldDecl(id, type, StorageDomain.Generated));
         return true;
     }
 
@@ -55,8 +62,7 @@ public sealed class StorageContext
     {
         var idx = NextIndex($"lcl_{name}_{type.Name}");
         var id = $"__lcl_{name}_{type.Name}_{idx}";
-        _module.Fields.Add(new FieldDecl(id, type));
-        _declaredFieldNames.Add(id);
+        Declare(new FieldDecl(id, type, StorageDomain.Generated));
         return id;
     }
 
@@ -67,8 +73,7 @@ public sealed class StorageContext
             : StorageTypes.UdonBehaviour;
         var idx = NextIndex($"this_{heapType}");
         var id = $"__this_{heapType}_{idx}";
-        _module.Fields.Add(new FieldDecl(id, heapType) { DefaultValue = "this" });
-        _declaredFieldNames.Add(id);
+        Declare(new FieldDecl(id, heapType, StorageDomain.Generated) { DefaultValue = "this" });
         return id;
     }
 
@@ -90,10 +95,10 @@ public sealed class StorageContext
     {
         if (_recurStackDeclared) return;
         _recurStackDeclared = true;
-        _module.Fields.Add(new FieldDecl(EmitContext.RecurStackId, StorageTypes.ObjectArray) { DefaultValue = new object[EmitContext.RecurStackSize] });
-        _declaredFieldNames.Add(EmitContext.RecurStackId);
-        _module.Fields.Add(new FieldDecl(EmitContext.RecurSpId, StorageTypes.Int32) { DefaultValue = 0 });
-        _declaredFieldNames.Add(EmitContext.RecurSpId);
+        Declare(new FieldDecl(EmitContext.RecurStackId, StorageTypes.ObjectArray, StorageDomain.Generated)
+            { DefaultValue = new object[EmitContext.RecurStackSize] });
+        Declare(new FieldDecl(EmitContext.RecurSpId, StorageTypes.Int32, StorageDomain.Generated)
+            { DefaultValue = 0 });
     }
 
     public void SetFieldConstValue(string name, object value)
@@ -102,7 +107,7 @@ public sealed class StorageContext
         if (field != null) field.DefaultValue = value;
     }
 
-    public bool IsFieldDeclared(string name) => _declaredFieldNames.Contains(name);
+    public bool IsFieldDeclared(string name) => _declarations.ContainsKey(name);
 
     public string DeclareStructConst(StorageType type, object value)
     {
@@ -110,12 +115,35 @@ public sealed class StorageContext
         if (_structConstIds.TryGetValue(key, out var existing)) return existing;
         var idx = NextIndex($"structconst_{type.Name}");
         var id = $"__const_{type.Name}_{idx}";
-        _module.Fields.Add(new FieldDecl(id, type) { DefaultValue = value });
-        _declaredFieldNames.Add(id);
+        Declare(new FieldDecl(id, type, StorageDomain.Generated) { DefaultValue = value });
         _structConstIds[key] = id;
         return id;
     }
 
     public StorageType? GetFieldType(string id)
-        => _module.Fields.FirstOrDefault(f => f.Name == id)?.Type;
+        => _declarations.TryGetValue(id, out var declaration) ? declaration.Type : null;
+
+    void Declare(FieldDecl declaration)
+    {
+        if (_declarations.TryGetValue(declaration.Name, out var existing))
+        {
+            EnsureCompatible(existing, declaration);
+            return;
+        }
+        _declarations.Add(declaration.Name, declaration);
+        _module.Fields.Add(declaration);
+    }
+
+    static void EnsureCompatible(FieldDecl existing, FieldDecl requested)
+    {
+        if (existing.Domain == requested.Domain
+            && existing.Type == requested.Type
+            && existing.Flags == requested.Flags
+            && string.Equals(existing.SyncMode, requested.SyncMode, StringComparison.Ordinal)
+            && Equals(existing.DefaultValue, requested.DefaultValue))
+            return;
+        throw new InvalidOperationException(
+            $"Storage '{requested.Name}' declaration conflicts: "
+            + $"existing {existing.Domain}/{existing.Type}, requested {requested.Domain}/{requested.Type}.");
+    }
 }

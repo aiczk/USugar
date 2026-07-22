@@ -215,8 +215,8 @@ public partial class UasmEmitter
     {
         var typeName = _classSymbol.ToDisplayString();
         long typeId = ComputeTypeId(typeName);
-        _ctx.Storage.DeclareField(EmitContext.ReflTypeIdField, StorageTypes.Int64, defaultValue: typeId);
-        _ctx.Storage.DeclareField(EmitContext.ReflTypeNameField, StorageTypes.String, defaultValue: typeName);
+        _ctx.Storage.DeclareGeneratedField(EmitContext.ReflTypeIdField, StorageTypes.Int64, typeId);
+        _ctx.Storage.DeclareGeneratedField(EmitContext.ReflTypeNameField, StorageTypes.String, typeName);
 
         var ancestorIds = CollectAncestorTypeIds(_classSymbol);
         if (ancestorIds.Length > 1)
@@ -394,7 +394,7 @@ public partial class UasmEmitter
                 && fcbAttr.ConstructorArguments[0].Value is string propName)
             {
                 _fieldChangeCallbacks[member.Name] = propName;
-                _ctx.Storage.DeclareField($"__old_{member.Name}", new StorageType(udonType));
+                _ctx.Storage.DeclareGeneratedField($"__old_{member.Name}", new StorageType(udonType));
             }
         }
 
@@ -527,7 +527,7 @@ public partial class UasmEmitter
                     && baseFcbAttr.ConstructorArguments[0].Value is string basePropName)
                 {
                     _fieldChangeCallbacks[member.Name] = basePropName;
-                    _ctx.Storage.DeclareField($"__old_{member.Name}", new StorageType(udonType));
+                    _ctx.Storage.DeclareGeneratedField($"__old_{member.Name}", new StorageType(udonType));
                 }
             }
             // Field-like events inherited from a user base class (design §2.1, A-M2) — same
@@ -561,7 +561,7 @@ public partial class UasmEmitter
                         // Round-8 [R2]: C# runs the BASE declaration's initializer into THIS backing
                         // (the leaf's stays default — DiffFuzz: base.P*10+P ref=50).
                         if (isAuto)
-                            _ctx.Storage.DeclareField(BaseAutoPropBackingName(prop), GetStorageType(prop.Type), FieldFlags.None,
+                            _ctx.Storage.DeclareGeneratedField(BaseAutoPropBackingName(prop), GetStorageType(prop.Type),
                                 ResolveAutoPropInitializer(BaseAutoPropBackingName(prop), prop));
                         continue;
                     }

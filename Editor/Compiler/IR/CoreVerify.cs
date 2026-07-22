@@ -33,6 +33,14 @@ public static class CoreVerify
 
         var ctx = new VerifyContext(func, typeFacts ?? new UdonTypeFactRegistry(),
             fields ?? new Dictionary<string, StorageType>());
+        foreach (var slot in func.Slots)
+        {
+            if (slot.Class != SlotClass.Pinned) continue;
+            if (string.IsNullOrEmpty(slot.FixedName))
+                throw new VerificationException(
+                    $"Pinned slot{slot.Id} in function '{func.Name}' has no fixed heap name.");
+            ctx.AssertField(slot.FixedName, slot.Type, $"pinned slot{slot.Id}");
+        }
         VerifyBlock(func.Body, ctx);
         VerifyGotoLabels(func);
     }

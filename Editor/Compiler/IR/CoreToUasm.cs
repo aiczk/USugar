@@ -53,7 +53,7 @@ public static class CoreToUasm
     {
         readonly CModule _module;
         readonly List<VarDecl> _vars = new();
-        readonly Dictionary<string, string> _declaredVarTypes = new();  // id → udonType
+        readonly Dictionary<string, VarDescriptor> _declaredVars = new();
         readonly HashSet<string> _externs = new();
         readonly Dictionary<ConstKey, string> _constPool = new();
         readonly Dictionary<string, CFunction> _funcByName = new();
@@ -82,6 +82,32 @@ public static class CoreToUasm
             public FieldFlags Flags;
             public string SyncMode;
             public object ConstValue;
+        }
+
+        readonly struct VarDescriptor : IEquatable<VarDescriptor>
+        {
+            public readonly string Type;
+            public readonly string DefaultValue;
+            public readonly FieldFlags Flags;
+            public readonly string SyncMode;
+            public readonly object ConstValue;
+            public readonly string Purpose;
+
+            public VarDescriptor(string type, string defaultValue, FieldFlags flags,
+                string syncMode, object constValue, string purpose)
+            {
+                Type = type;
+                DefaultValue = defaultValue;
+                Flags = flags;
+                SyncMode = syncMode;
+                ConstValue = constValue;
+                Purpose = purpose;
+            }
+
+            public bool Equals(VarDescriptor other)
+                => Type == other.Type && DefaultValue == other.DefaultValue
+                    && Flags == other.Flags && SyncMode == other.SyncMode
+                    && Equals(ConstValue, other.ConstValue) && Purpose == other.Purpose;
         }
 
         public Generator(CModule module)
@@ -176,20 +202,23 @@ public static class CoreToUasm
                 constValue = null;
             }
 
-            DeclareVar(field.Name, field.Type.Name, dataDefault, flags, field.SyncMode, constValue);
+            DeclareVar(field.Name, field.Type.Name, dataDefault, flags, field.SyncMode, constValue,
+                $"field:{field.Domain}");
         }
 
         void DeclareVar(string id, string udonType, string defaultValue, FieldFlags flags,
-            string syncMode = null, object constValue = null)
+            string syncMode = null, object constValue = null, string purpose = "internal")
         {
-            if (_declaredVarTypes.TryGetValue(id, out var existingType))
+            var requested = new VarDescriptor(
+                udonType, defaultValue, flags, syncMode, constValue, purpose);
+            if (_declaredVars.TryGetValue(id, out var existing))
             {
-                if (existingType != udonType)
-                    throw new InvalidOperationException(
-                        $"Variable '{id}' declared with conflicting types: '{existingType}' vs '{udonType}'");
+                if (!existing.Equals(requested))
+                    throw new InvalidOperationException($"Variable '{id}' declaration conflicts: "
+                        + $"existing {existing.Purpose}/{existing.Type}, requested {purpose}/{udonType}.");
                 return;
             }
-            _declaredVarTypes[id] = udonType;
+            _declaredVars[id] = requested;
             _vars.Add(new VarDecl
             {
                 Id = id,
@@ -199,6 +228,21 @@ public static class CoreToUasm
                 SyncMode = syncMode,
                 ConstValue = constValue,
             });
+        }
+
+        void DeclareReturnVar(ReturnSlot returnSlot)
+        {
+            if (_declaredVars.TryGetValue(returnSlot.Id, out var existing))
+            {
+                if (existing.Purpose == "field:Generated"
+                    && existing.Type == returnSlot.StorageType.Name)
+                    return;
+                throw new InvalidOperationException(
+                    $"Return variable '{returnSlot.Id}' conflicts with "
+                    + $"{existing.Purpose}/{existing.Type}.");
+            }
+            DeclareVar(returnSlot.Id, returnSlot.StorageType.Name, null, FieldFlags.None,
+                purpose: "return");
         }
 
         // ── Slot → variable name mapping ──
@@ -214,6 +258,12 @@ public static class CoreToUasm
             if (slot.Class == SlotClass.Pinned && slot.FixedName != null)
             {
                 id = slot.FixedName;
+                if (!_declaredVars.TryGetValue(id, out var declaration))
+                    throw new InvalidOperationException(
+                        $"Pinned slot '{id}' has no heap declaration.");
+                if (declaration.Type != slot.Type.Name)
+                    throw new InvalidOperationException(
+                        $"Pinned slot '{id}' type '{slot.Type}' conflicts with heap type '{declaration.Type}'.");
             }
             else
             {
@@ -246,7 +296,8 @@ public static class CoreToUasm
                 return existing;
             var id = $"__const_{c.Type}_{_constIdx++}";
             _constPool[key] = id;
-            DeclareVar(id, c.Type.Name, null, FieldFlags.None, constValue: c.Value);
+            DeclareVar(id, c.Type.Name, null, FieldFlags.None,
+                constValue: c.Value, purpose: "constant");
             return id;
         }
 
@@ -299,7 +350,7 @@ public static class CoreToUasm
 
             // Declare return field variable(s) if needed (may not be in module Fields)
             foreach (var ret in func.ReturnSlots)
-                DeclareVar(ret.Id, ret.StorageType.Name, null, FieldFlags.None);
+                DeclareReturnVar(ret);
         }
 
         // ── Block linearization (RPO) ──
