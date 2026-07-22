@@ -407,7 +407,7 @@ public sealed class ResolvedEdgeResolver
                 yield return inv.TargetMethod.OriginalDefinition;
                 if (LeafCallTarget(inv) is { } leafT) yield return leafT;
                 if (IsCrossDispatchReceiver(inv.Instance, inv.TargetMethod)
-                    && CrossDispatchLocalTarget(inv.TargetMethod) is { } crossT)
+                    && ResolveCrossDispatchLocalTarget(inv.TargetMethod) is { } crossT)
                     yield return crossT;
                 // CA-v2b-2: a polymorphic call dispatches to EVERY override in its closed-world set. Yield
                 // each so the recursion-graph edge walk AND the per-site non-tail spill classifier (both read
@@ -492,8 +492,8 @@ public sealed class ResolvedEdgeResolver
                 // variable-receiver / interface-typed accessor dispatch that can land back on this program.
                 if (IsCrossDispatchReceiver(pr.Instance, pr.Property))
                 {
-                    if (CrossDispatchLocalTarget(pr.Property.GetMethod) is { } cg) yield return cg;
-                    if (CrossDispatchLocalTarget(pr.Property.SetMethod) is { } cs) yield return cs;
+                    if (ResolveCrossDispatchLocalTarget(pr.Property.GetMethod) is { } cg) yield return cg;
+                    if (ResolveCrossDispatchLocalTarget(pr.Property.SetMethod) is { } cs) yield return cs;
                 }
                 // computed property / indexer on a USER-STRUCT receiver — `this` OR a fresh struct
                 // instance (structs compile into this program's accessor functions).
@@ -647,7 +647,7 @@ public sealed class ResolvedEdgeResolver
         // Wave-12 r2 [V1]: variable-receiver / interface accessor dispatch — match the local method
         // the cross dispatch can land on (same rationale as IsInternalCallTo's cross arms).
         if (IsCrossDispatchReceiver(pr.Instance, pr.Property))
-            return CrossDispatchLocalTarget(acc) is { } xacc
+            return ResolveCrossDispatchLocalTarget(acc) is { } xacc
                 && SymbolEqualityComparer.Default.Equals(xacc, callee);
         // Wave-14 r4: struct accessor on a fresh instance (a `next[d-1] += ..` / `next.P--` compound or
         // inc-dec through a struct-typed local) — the specific get/set accessor on a user-struct receiver
@@ -735,26 +735,10 @@ public sealed class ResolvedEdgeResolver
     // field/local/base flavors, 180 vs 0 interface, 75 vs 60 property accessor, 69 vs 27 mutual).
     // Returns the ORIGINAL DEFINITION of the local method the dispatch lands on when the receiver is
     // this program (the class family's most-derived override — mirroring the chain-root export
-    // normalization the emission dispatches), or null when it can never land here (foreign class,
-    // unimplemented interface, static). HandlerBase.CrossDispatchLocalCallee mirrors this for the
-    // per-site Reentrant marking at emission.
-    IMethodSymbol CrossDispatchLocalTarget(IMethodSymbol target)
-    {
-        if (target == null || target.IsStatic) return null;
-        if (target.ContainingType?.TypeKind == TypeKind.Interface)
-        {
-            var impl = (_emitter.ClassSymbol.FindImplementationForInterfaceMember(target)
-                        ?? _emitter.ClassSymbol.FindImplementationForInterfaceMember(target.OriginalDefinition))
-                       as IMethodSymbol;
-            // FindImplementationForInterfaceMember returns the chain ROOT ([W5]) — the dispatch runs
-            // the receiver program's most-derived override, so leaf-resolve like the class flavor.
-            return impl == null ? null : ResolveLeafOverrideDef(impl.OriginalDefinition);
-        }
-        for (var t = _emitter.ClassSymbol; t != null; t = t.BaseType)
-            if (SymbolEqualityComparer.Default.Equals(t, target.ContainingType))
-                return ResolveLeafOverrideDef(target.OriginalDefinition);
-        return null;
-    }
+    // normalization the emission dispatches), or null when it can never land here. Both the graph
+    // and emission consume VirtualDispatch.ResolveCrossProgramLocalTarget.
+    IMethodSymbol ResolveCrossDispatchLocalTarget(IMethodSymbol target)
+        => VirtualDispatch.ResolveCrossProgramLocalTarget(_emitter.ClassSymbol, target).LocalTargetDefinition;
 
     /// <summary>[V1] arm shared by the classifier's invocation/property arms and PropertyAccessorMatches:
     /// true when <paramref name="instance"/> is a variable-receiver (or interface-typed) member access whose

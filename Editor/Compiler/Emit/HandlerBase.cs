@@ -2826,28 +2826,6 @@ public abstract partial class HandlerBase
         return true;
     }
 
-    /// <summary>Wave-12 r2 [V1]: the LOCAL method a variable-receiver / interface cross dispatch
-    /// lands on when the receiver holds `this` at runtime — the class family's most-derived
-    /// override of the target (the chain-root export the dispatch names runs the receiver
-    /// program's own override), or the interface member's local implementation. Null when the
-    /// dispatch can never land on this program (foreign class, unimplemented interface, static).
-    /// Mirrors ResolvedEdgeResolver.CrossDispatchLocalTarget (the analysis side that adds the graph edge).</summary>
-    protected IMethodSymbol CrossDispatchLocalCallee(IMethodSymbol target)
-    {
-        if (target == null || target.IsStatic) return null;
-        if (target.ContainingType?.TypeKind == TypeKind.Interface)
-        {
-            var impl = (_classSymbol.FindImplementationForInterfaceMember(target)
-                        ?? _classSymbol.FindImplementationForInterfaceMember(target.OriginalDefinition))
-                       as IMethodSymbol;
-            return impl == null ? null : ResolveMostDerivedOverride(impl);
-        }
-        for (var t = _classSymbol; t != null; t = t.BaseType)
-            if (SymbolEqualityComparer.Default.Equals(t, target.ContainingType))
-                return ResolveMostDerivedOverride(target);
-        return null;
-    }
-
     /// <summary>Wave-12 r2 [V1]: true when the cross dispatch at <paramref name="site"/> (a method
     /// invocation or property/indexer accessor access through a variable / interface-typed receiver)
     /// can re-enter the containing function: its local landing method is a recursion-cycle edge from
@@ -2859,7 +2837,7 @@ public abstract partial class HandlerBase
     protected bool TryMarkReentrantCrossDispatch(IOperation site, IMethodSymbol staticCallee)
     {
         if (_currentMethod == null) return false;
-        var local = CrossDispatchLocalCallee(staticCallee);
+        var local = VirtualDispatch.ResolveCrossProgramLocalTarget(_classSymbol, staticCallee).LocalTarget;
         if (local == null || !_ctx.RecursionContext.IsRecursiveEdge(_currentMethod, local)) return false;
         if (site?.Syntax != null && _ctx.RecursionContext.Info.TailSparedDirectCallSites != null
             && _ctx.RecursionContext.Info.TailSparedDirectCallSites.Contains(site.Syntax))

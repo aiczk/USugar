@@ -18,11 +18,58 @@ public readonly struct VDispatchTarget
     public VDispatchTarget(INamedTypeSymbol c, string v, IMethodSymbol impl) { Concrete = c; TypeObjVar = v; Impl = impl; }
 }
 
+/// <summary>One cross-program dispatch's possible landing in the program currently being compiled.
+/// Emission consumes the constructed symbol; reachability and recursion consume its definition.</summary>
+public readonly struct CrossDispatchPlan
+{
+    public readonly IMethodSymbol LocalTarget;
+    public IMethodSymbol LocalTargetDefinition => LocalTarget?.OriginalDefinition;
+    public bool HasLocalTarget => LocalTarget != null;
+
+    public CrossDispatchPlan(IMethodSymbol localTarget) => LocalTarget = localTarget;
+}
+
 public sealed class VirtualDispatch
 {
     readonly ClassTypeObjectContext _typeObjs;
 
     public VirtualDispatch(ClassTypeObjectContext typeObjs) { _typeObjs = typeObjs; }
+
+    /// <summary>Resolve where a variable/interface receiver dispatch lands if it points back to the
+    /// program currently being compiled. Shared by emission re-entry marking and SCC analysis.</summary>
+    public static CrossDispatchPlan ResolveCrossProgramLocalTarget(
+        INamedTypeSymbol compiledClass, IMethodSymbol target)
+    {
+        if (compiledClass == null || target == null || target.IsStatic)
+            return default;
+
+        IMethodSymbol localTarget;
+        if (target.ContainingType?.TypeKind == TypeKind.Interface)
+        {
+            localTarget = (compiledClass.FindImplementationForInterfaceMember(target)
+                           ?? compiledClass.FindImplementationForInterfaceMember(target.OriginalDefinition))
+                          as IMethodSymbol;
+            if (localTarget == null) return default;
+        }
+        else
+        {
+            bool belongsToFamily = false;
+            for (var type = compiledClass; type != null; type = type.BaseType)
+                if (SymbolEqualityComparer.Default.Equals(type, target.ContainingType))
+                {
+                    belongsToFamily = true;
+                    break;
+                }
+            if (!belongsToFamily) return default;
+            localTarget = target;
+        }
+
+        var leaf = HandlerBase.FindOverrideMethodInChain(
+            compiledClass, localTarget.OriginalDefinition, localTarget.Name) ?? localTarget;
+        if (target.IsGenericMethod && leaf.IsGenericMethod)
+            leaf = leaf.OriginalDefinition.Construct(target.TypeArguments.ToArray());
+        return new CrossDispatchPlan(leaf);
+    }
 
     /// <summary>A runtime-polymorphic ordinary call OR property/indexer accessor call. Generic virtual
     /// methods use the same slot after closing the selected implementation with call-site type args.</summary>
