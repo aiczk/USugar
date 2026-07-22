@@ -123,13 +123,13 @@ internal static class CallableSites
         {
             switch (ancestor)
             {
-                case ISimpleAssignmentOperation assignment when Contains(assignment.Target, property):
+                case ISimpleAssignmentOperation assignment when ReferenceEquals(assignment.Target, property):
                     return PropertyAccess.Set;
-                case ICompoundAssignmentOperation assignment when Contains(assignment.Target, property):
+                case ICompoundAssignmentOperation assignment when ReferenceEquals(assignment.Target, property):
                     return PropertyAccess.Get | PropertyAccess.Set;
-                case IIncrementOrDecrementOperation increment when Contains(increment.Target, property):
+                case IIncrementOrDecrementOperation increment when ReferenceEquals(increment.Target, property):
                     return PropertyAccess.Get | PropertyAccess.Set;
-                case ICoalesceAssignmentOperation coalesce when Contains(coalesce.Target, property):
+                case ICoalesceAssignmentOperation coalesce when ReferenceEquals(coalesce.Target, property):
                     return PropertyAccess.Get | PropertyAccess.Set;
                 case IDeconstructionAssignmentOperation deconstruction
                     when Contains(deconstruction.Target, property):

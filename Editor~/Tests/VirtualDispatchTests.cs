@@ -45,6 +45,11 @@ public class VirtualDispatchTests
         return false;
     }
 
+    static CrossDispatchPlan ResolveCross(INamedTypeSymbol compiledClass, IMethodSymbol target)
+        => new VirtualDispatch(new ClassTypeObjectContext()).Resolve(
+            CallableSites.Synthetic(CallableSiteKind.Method, target),
+            target.ContainingType, compiledClass).Cross;
+
     [Fact]
     public void CrossDispatchPlan_ClassOverrideSharesConstructedAndDefinitionViews()
     {
@@ -54,7 +59,7 @@ public class PlanDerived : PlanBase { public override int Read() => 2; }", "Plan
         var target = compilation.GetTypeByMetadataName("PlanBase").GetMembers("Read")
             .OfType<IMethodSymbol>().Single();
 
-        var plan = VirtualDispatch.ResolveCrossProgramLocalTarget(compiled, target);
+        var plan = ResolveCross(compiled, target);
 
         Assert.True(plan.HasLocalTarget);
         Assert.Equal("PlanDerived", plan.LocalTarget.ContainingType.Name);
@@ -71,7 +76,7 @@ public class PlanImpl : UdonSharpBehaviour, IPlanRead { public int Read() => 3; 
         var target = compilation.GetTypeByMetadataName("IPlanRead").GetMembers("Read")
             .OfType<IMethodSymbol>().Single();
 
-        var plan = VirtualDispatch.ResolveCrossProgramLocalTarget(compiled, target);
+        var plan = ResolveCross(compiled, target);
 
         Assert.Equal("PlanImpl", plan.LocalTarget.ContainingType.Name);
     }
@@ -85,7 +90,7 @@ public class LocalPlan : UdonSharpBehaviour { }", "LocalPlan");
         var target = compilation.GetTypeByMetadataName("ForeignPlan").GetMembers("Run")
             .OfType<IMethodSymbol>().Single();
 
-        Assert.False(VirtualDispatch.ResolveCrossProgramLocalTarget(compiled, target).HasLocalTarget);
+        Assert.False(ResolveCross(compiled, target).HasLocalTarget);
     }
 
     [Fact]
@@ -99,7 +104,7 @@ public class GenericPlanDerived : GenericPlanBase { public override T Read<T>(T 
             .OfType<IMethodSymbol>().Single();
         var target = definition.Construct(compilation.GetSpecialType(SpecialType.System_Int32));
 
-        var plan = VirtualDispatch.ResolveCrossProgramLocalTarget(compiled, target);
+        var plan = ResolveCross(compiled, target);
 
         Assert.Equal("GenericPlanDerived", plan.LocalTarget.ContainingType.Name);
         Assert.Equal(SpecialType.System_Int32, plan.LocalTarget.TypeArguments.Single().SpecialType);

@@ -43,6 +43,7 @@ internal readonly struct DispatchPlan
     public readonly IReadOnlyList<VDispatchTarget> RuntimeTargets;
     public readonly CrossDispatchPlan Cross;
     public readonly DispatchPrecision Precision;
+    public readonly IReadOnlyList<IMethodSymbol> LocalTargets;
 
     public DispatchPlan(CallableSite site, IReadOnlyList<VDispatchTarget> runtimeTargets,
         CrossDispatchPlan cross, DispatchPrecision precision)
@@ -51,6 +52,12 @@ internal readonly struct DispatchPlan
         RuntimeTargets = runtimeTargets;
         Cross = cross;
         Precision = precision;
+        LocalTargets = runtimeTargets.Select(target => target.Impl.OriginalDefinition)
+            .Concat(cross.HasLocalTarget
+                ? new[] { cross.LocalTargetDefinition }
+                : System.Array.Empty<IMethodSymbol>())
+            .Distinct<IMethodSymbol>(SymbolEqualityComparer.Default)
+            .ToArray();
     }
 }
 
@@ -80,7 +87,7 @@ public sealed class VirtualDispatch
 
     /// <summary>Resolve where a variable/interface receiver dispatch lands if it points back to the
     /// program currently being compiled. Shared by emission re-entry marking and SCC analysis.</summary>
-    public static CrossDispatchPlan ResolveCrossProgramLocalTarget(
+    static CrossDispatchPlan ResolveCrossProgramLocalTarget(
         INamedTypeSymbol compiledClass, IMethodSymbol target)
     {
         if (compiledClass == null || target == null || target.IsStatic)

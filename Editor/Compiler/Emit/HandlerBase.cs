@@ -2765,7 +2765,10 @@ public abstract partial class HandlerBase
     protected bool TryMarkReentrantCrossDispatch(IOperation site, IMethodSymbol staticCallee)
     {
         if (_currentMethod == null) return false;
-        var landing = VirtualDispatch.ResolveCrossProgramLocalTarget(_classSymbol, staticCallee);
+        var callableSite = CallableSites.Require(site, staticCallee);
+        var receiver = ResolveType(callableSite.Receiver?.Type) as INamedTypeSymbol
+            ?? staticCallee.ContainingType;
+        var landing = _ctx.VirtualDispatch.Resolve(callableSite, receiver, _classSymbol).Cross;
         var recursive = landing.HasLocalTarget
             && _ctx.RecursionContext.IsRecursiveEdge(_currentMethod, landing.LocalTarget);
         var plan = CallableSitePlan.Cross(staticCallee, landing, site?.Syntax, recursive,

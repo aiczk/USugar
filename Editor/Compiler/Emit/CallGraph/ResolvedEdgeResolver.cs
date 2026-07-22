@@ -396,9 +396,11 @@ public sealed class ResolvedEdgeResolver
             case IInvocationOperation inv:
                 yield return inv.TargetMethod.OriginalDefinition;
                 if (LeafCallTarget(inv) is { } leafT) yield return leafT;
-                if (IsCrossDispatchReceiver(inv.Instance, inv.TargetMethod)
-                    && ResolveCrossDispatchLocalTarget(inv.TargetMethod) is { } crossT)
-                    yield return crossT;
+                if (IsCrossDispatchReceiver(inv.Instance, inv.TargetMethod))
+                {
+                    var cross = ResolveDispatch(inv, inv.TargetMethod).Cross;
+                    if (cross.HasLocalTarget) yield return cross.LocalTargetDefinition;
+                }
                 // CA-v2b-2: a polymorphic call dispatches to EVERY override in its closed-world set. Yield
                 // each so the recursion-graph edge walk AND the per-site non-tail spill classifier (both read
                 // this one enumerator) see a recursive override — including a `this.M()` that re-enters
@@ -489,8 +491,16 @@ public sealed class ResolvedEdgeResolver
                 // variable-receiver / interface-typed accessor dispatch that can land back on this program.
                 if (IsCrossDispatchReceiver(pr.Instance, pr.Property))
                 {
-                    if (readsProperty && ResolveCrossDispatchLocalTarget(pr.Property.GetMethod) is { } cg) yield return cg;
-                    if (writesProperty && ResolveCrossDispatchLocalTarget(pr.Property.SetMethod) is { } cs) yield return cs;
+                    if (readsProperty && pr.Property.GetMethod is { } crossGetter)
+                    {
+                        var cross = ResolveDispatch(pr, crossGetter).Cross;
+                        if (cross.HasLocalTarget) yield return cross.LocalTargetDefinition;
+                    }
+                    if (writesProperty && pr.Property.SetMethod is { } crossSetter)
+                    {
+                        var cross = ResolveDispatch(pr, crossSetter).Cross;
+                        if (cross.HasLocalTarget) yield return cross.LocalTargetDefinition;
+                    }
                 }
                 // computed property / indexer on a USER-STRUCT receiver — `this` OR a fresh struct
                 // instance (structs compile into this program's accessor functions).
@@ -655,8 +665,11 @@ public sealed class ResolvedEdgeResolver
         // Wave-12 r2 [V1]: variable-receiver / interface accessor dispatch — match the local method
         // the cross dispatch can land on (same rationale as IsInternalCallTo's cross arms).
         if (IsCrossDispatchReceiver(pr.Instance, pr.Property))
-            return ResolveCrossDispatchLocalTarget(acc) is { } xacc
-                && SymbolEqualityComparer.Default.Equals(xacc, callee);
+        {
+            var cross = ResolveDispatch(pr, acc).Cross;
+            return cross.HasLocalTarget
+                && SymbolEqualityComparer.Default.Equals(cross.LocalTargetDefinition, callee);
+        }
         // Wave-14 r4: struct accessor on a fresh instance (a `next[d-1] += ..` / `next.P--` compound or
         // inc-dec through a struct-typed local) — the specific get/set accessor on a user-struct receiver
         // is the callee, independent of a `this` receiver (mirrors the IsInternalCallTo struct arm).
@@ -741,12 +754,12 @@ public sealed class ResolvedEdgeResolver
     // flavor entirely; the class flavor had the static edge but no spill site at emission), so a
     // live local/param after the reentrant self-call was silently clobbered (VM-proven ref=36 vs 0
     // field/local/base flavors, 180 vs 0 interface, 75 vs 60 property accessor, 69 vs 27 mutual).
-    // Returns the ORIGINAL DEFINITION of the local method the dispatch lands on when the receiver is
-    // this program (the class family's most-derived override — mirroring the chain-root export
-    // normalization the emission dispatches), or null when it can never land here. Both the graph
-    // and emission consume VirtualDispatch.ResolveCrossProgramLocalTarget.
-    IMethodSymbol ResolveCrossDispatchLocalTarget(IMethodSymbol target)
-        => VirtualDispatch.ResolveCrossProgramLocalTarget(_emitter.ClassSymbol, target).LocalTargetDefinition;
+    DispatchPlan ResolveDispatch(IOperation operation, IMethodSymbol target)
+    {
+        var site = CallableSites.Require(operation, target);
+        var receiver = site.Receiver?.Type as INamedTypeSymbol ?? target.ContainingType;
+        return _emitter.VirtualDispatchInstance.Resolve(site, receiver, _emitter.ClassSymbol);
+    }
 
     /// <summary>[V1] arm shared by the classifier's invocation/property arms and PropertyAccessorMatches:
     /// true when <paramref name="instance"/> is a variable-receiver (or interface-typed) member access whose
