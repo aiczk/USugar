@@ -456,11 +456,9 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
             // §5.4's sig-filter soundness (SigFilterCoupledToVarianceReject — now the widened-not-
             // rejected form, since the wrapper's own dispatch site is unconditionally Reentrant like the
             // fan-out, sidestepping the sig-filter question entirely for this arm).
-            if (convDstType is INamedTypeSymbol vDst && vDst.DelegateInvokeMethod is { } vDstInvoke
-                && convSrcType is INamedTypeSymbol vSrc && vSrc.DelegateInvokeMethod is { } vSrcInvoke
-                && !SymbolEqualityComparer.Default.Equals(vDst, vSrc)
-                && DelegateAbi.BuildSigPart(vDstInvoke, _ctx.Generics.TypeParamMap)
-                   != DelegateAbi.BuildSigPart(vSrcInvoke, _ctx.Generics.TypeParamMap))
+            if (DelegateDemandPolicy.TryGetVariantConversion(
+                    _compilation, conv, _ctx.Generics.TypeParamMap,
+                    out var vDstInvoke, out var vSrcInvoke))
             {
                 // The wrapper's INNER dispatch must speak srcVal's OWN native protocol — vSrc's Invoke
             // method (sig-T), never vDst's (sig-S): srcVal's DelegateAbi.Method names ITS OWN bridge (under

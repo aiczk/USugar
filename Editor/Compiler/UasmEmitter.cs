@@ -1040,17 +1040,17 @@ public partial class UasmEmitter
         }
         _ctx.Synthetics.SetExpectedDelegateSites(DelegateDemandCensus.Collect(
             _ctx.Methods.RegisteredBodies, GetMethodBodyOperation, plan.FieldInitOps));
-        PlanDelegateDemands(plan);
-        _ctx.Synthetics.SealDelegateDemands();
+        PlanSyntheticDemands(plan);
+        _ctx.Synthetics.SealDemands();
         BuildRecursionInfo(bodyGraph);
         _ctx.Generics.BeginBodyEmission();
         EmitRegisteredBodies(plan);
         VerifyRegisteredCallablesAreNodes(bodyGraph);
     }
 
-    void PlanDelegateDemands(ClassCompilePlan plan)
+    void PlanSyntheticDemands(ClassCompilePlan plan)
     {
-        var planner = new DelegateDemandPlanner(_ctx);
+        var planner = new SyntheticDemandPlanner(_ctx);
         foreach (var body in _ctx.Methods.RegisteredBodies.ToArray())
         {
             var method = body.Method;
@@ -1064,21 +1064,21 @@ public partial class UasmEmitter
             using var methodScope = _ctx.Methods.EnterEmission(
                 method, body.Closure, receiverId, body.OwnerSpecs);
             using var genericScope = _ctx.Generics.EnterOverlayScope(body.TypeParameterMap);
-            PlanDelegateDemands(GetMethodBodyOperation(method.OriginalDefinition), true, planner);
+            PlanSyntheticDemands(GetMethodBodyOperation(method.OriginalDefinition), true, planner);
         }
 
         using var fieldMethodScope = _ctx.Methods.EnterEmission(
             null, null, null, System.Collections.Immutable.ImmutableArray<IMethodSymbol>.Empty);
         foreach (var initializer in plan.FieldInitOps)
-            PlanDelegateDemands(initializer, true, planner);
+            PlanSyntheticDemands(initializer, true, planner);
     }
 
-    static void PlanDelegateDemands(IOperation operation, bool root, DelegateDemandPlanner planner)
+    static void PlanSyntheticDemands(IOperation operation, bool root, SyntheticDemandPlanner planner)
     {
         if (operation == null) return;
         if (!root && operation is ILocalFunctionOperation or IAnonymousFunctionOperation) return;
-        if (operation is IDelegateCreationOperation creation) planner.Plan(creation);
-        foreach (var child in operation.ChildOps()) PlanDelegateDemands(child, false, planner);
+        planner.PlanOperation(operation);
+        foreach (var child in operation.ChildOps()) PlanSyntheticDemands(child, false, planner);
     }
 
     void RegisterProgram(ClassCompilePlan plan)

@@ -30,7 +30,7 @@ public readonly struct MulticastSigPlan
 }
 
 /// <summary>
-/// Owns per-class synthetic emission queues populated during body emission and drained by UasmEmitter.
+/// Owns the per-class synthetic emission plan built before body emission and drained by UasmEmitter.
 /// </summary>
 public sealed class SyntheticContext
 {
@@ -77,7 +77,7 @@ public sealed class SyntheticContext
     public IReadOnlyDictionary<string, DelegateWrapperDemand> WrapperSigs => _wrapperSigs;
 
     public bool IsFrozen { get; private set; }
-    public bool DelegateDemandsSealed { get; private set; }
+    public bool DemandsSealed { get; private set; }
     HashSet<string> _expectedDelegateSites;
     readonly Dictionary<string, DelegateBindingPlan> _boundDelegateSites = new(StringComparer.Ordinal);
 
@@ -109,12 +109,12 @@ public sealed class SyntheticContext
         _boundDelegateSites.Add(key, binding);
     }
 
-    public void SealDelegateDemands()
+    public void SealDemands()
     {
         RequireMutable();
-        if (DelegateDemandsSealed)
-            throw new InvalidOperationException("Delegate demand plan was sealed twice.");
-        DelegateDemandsSealed = true;
+        if (DemandsSealed)
+            throw new InvalidOperationException("Synthetic demand plan was sealed twice.");
+        DemandsSealed = true;
     }
 
     void RequireMutable()
@@ -123,7 +123,13 @@ public sealed class SyntheticContext
     }
 
     public void RegisterClosureBridge(string name, CFunction function)
-    { RequireMutable(); _closureBridgeFuncs[name] = function; }
+    {
+        RequireMutable();
+        if (DemandsSealed && !_closureBridgeFuncs.ContainsKey(name))
+            throw new InvalidOperationException(
+                $"Closure bridge '{name}' was first discovered during body emission.");
+        _closureBridgeFuncs[name] = function;
+    }
 
     public bool TryGetClosureBridge(string name, out CFunction function)
         => _closureBridgeFuncs.TryGetValue(name, out function);
@@ -160,13 +166,24 @@ public sealed class SyntheticContext
         MulticastOperations operation)
     {
         RequireMutable();
+        if (DemandsSealed
+            && (!_multicastSigs.TryGetValue(signature, out var planned)
+                || (planned.Operations & operation) != operation))
+            throw new InvalidOperationException(
+                $"Multicast demand '{signature}' ({operation}) was first discovered during body emission.");
         _multicastSigs[signature] = _multicastSigs.TryGetValue(signature, out var existing)
             ? existing.With(operation)
             : new MulticastSigPlan(invoke, typeParamMap, operation);
     }
 
     public void RegisterEnumToString(INamedTypeSymbol enumType)
-    { RequireMutable(); _enumToString.Add(enumType); }
+    {
+        RequireMutable();
+        if (DemandsSealed && !_enumToString.Contains(enumType))
+            throw new InvalidOperationException(
+                $"Enum ToString helper for '{enumType}' was first discovered during body emission.");
+        _enumToString.Add(enumType);
+    }
 
     public void RegisterWrapper(DelegateBindingPlan binding, IMethodSymbol outerInvoke,
         IMethodSymbol innerInvoke,
@@ -175,6 +192,9 @@ public sealed class SyntheticContext
         RequireMutable();
         if (binding.Kind != DelegateBindingKind.Wrapper)
             throw new ArgumentException("Wrapper demand requires a wrapper binding.", nameof(binding));
+        if (DemandsSealed && !_wrapperSigs.ContainsKey(binding.BridgeName))
+            throw new InvalidOperationException(
+                $"Delegate wrapper '{binding.BridgeName}' was first discovered during body emission.");
         if (!_wrapperSigs.ContainsKey(binding.BridgeName))
             _wrapperSigs.Add(binding.BridgeName, new DelegateWrapperDemand(
                 binding,
@@ -199,7 +219,7 @@ public sealed class SyntheticContext
         var name = demand.Binding.BridgeName;
         if (!demands.TryGetValue(name, out var existing))
         {
-            if (DelegateDemandsSealed)
+            if (DemandsSealed)
                 throw new InvalidOperationException(
                     $"Synthetic {category} '{name}' was first discovered during body emission.");
             demands.Add(name, demand);

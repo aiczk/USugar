@@ -1598,18 +1598,26 @@ public abstract partial class HandlerBase
     /// (Udon cannot synthesize the comma-separated decomposition — that is gold-plating).</summary>
     protected CLeaf TryEmitEnumToString(CLeaf value, ITypeSymbol type)
     {
+        if (RegisterEnumToStringDemand(type) is not { } e)
+            return null;
+        return InternalCall(EnumToStringHelperName(e), new List<CLeaf> { value }, StorageTypes.String);
+    }
+
+    protected INamedTypeSymbol RegisterEnumToStringDemand(ITypeSymbol type, bool rejectFlags = true)
+    {
         var resolved = ResolveType(type);
         if (!ExternResolver.IsUserEnum(resolved) || resolved is not INamedTypeSymbol e)
             return null;
         if (e.GetAttributes().Any(a => a.AttributeClass?.Name == "FlagsAttribute"))
+        {
+            if (!rejectFlags) return null;
             throw new NotSupportedException(
                 $"'{e.Name}.ToString()' is not supported: '{e.Name}' is a [Flags] enum and Udon cannot "
                 + "synthesize the comma-separated flag decomposition. Format the individual flag bits manually "
                 + "(e.g. compare against each flag and build the string yourself).");
+        }
         _ctx.Synthetics.RegisterEnumToString(e);
-        // `value` is already the enum's underlying-typed leaf (GetStorageTypeName(enum) == underlying), which the
-        // helper's parameter type matches — pass it straight through.
-        return InternalCall(EnumToStringHelperName(e), new List<CLeaf> { value }, StorageTypes.String);
+        return e;
     }
 
     /// <summary>Variance design (2026-07-04 §2.3, B-2): register the (outer sig-S, inner sig-T) pair a
