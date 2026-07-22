@@ -41,6 +41,8 @@ public partial class InvocationHandler
         if (TryEmitAggregateArrayCopyMember(op, target, out var aggCopyResult))
             return aggCopyResult;
 
+        RejectUnsafeAggregateArrayExtern(op, target);
+
         // Generic GetComponent<T>() / GetComponentInChildren<T>() / GetComponentsInChildren<T>() etc.
         // Udon VM uses non-generic form with typeof(T) parameter.
         if (target.IsGenericMethod && target.Name.StartsWith("GetComponent")
@@ -240,6 +242,28 @@ public partial class InvocationHandler
         => type is IArrayTypeSymbol { Rank: 1 } arr
            && ResolveType(arr.ElementType) is INamedTypeSymbol elem && TypeClassifier.IsAggregateValue(elem)
             ? elem : null;
+
+    void RejectUnsafeAggregateArrayExtern(IInvocationOperation op, IMethodSymbol target)
+    {
+        if (AggregateArrayElement(op.Instance?.Type) != null)
+        {
+            if (target.Name is "GetLength" or "GetLongLength" or "GetLowerBound" or "GetUpperBound")
+                return;
+            throw new System.NotSupportedException(
+                $"Array member '{target.Name}' is not supported for user-struct or tuple arrays: "
+                + "each element is an object[] value bundle, and the general Array extern would expose "
+                + "or mutate the bundle reference instead of preserving C# value semantics. Use indexing, "
+                + "or copy elements through typed code.");
+        }
+
+        if (target.ContainingType.SpecialType != SpecialType.System_Array) return;
+        foreach (var argument in op.Arguments)
+            if (AggregateArrayElement(UnwrapConversions(argument.Value).Type) != null)
+                throw new System.NotSupportedException(
+                    $"Array.{target.Name} is not supported for user-struct or tuple arrays: each element "
+                    + "is an object[] value bundle and this extern has no aggregate value-semantics adapter. "
+                    + "Use typed indexing or Array.Copy, which has dedicated lowering.");
+    }
 
     bool TryEmitAggregateArrayCopyMember(IInvocationOperation op, IMethodSymbol target, out CLeaf result)
     {

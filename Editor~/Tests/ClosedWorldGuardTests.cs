@@ -1230,6 +1230,48 @@ public class CwAggCopyToTuple : UdonSharpBehaviour {
     }
 
     [Fact]
+    public void StructArray_GetValue_LoudRejects()
+    {
+        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
+using UdonSharp;
+public struct SGetValue { public int x; }
+public class CwAggGetValue : UdonSharpBehaviour {
+    void Start() { SGetValue[] values = new SGetValue[1]; object value = values.GetValue(0); }
+}
+", "CwAggGetValue"));
+        Assert.Contains("general Array extern", ex.Message);
+        Assert.Contains("value semantics", ex.Message);
+    }
+
+    [Fact]
+    public void StructArray_ArrayClear_LoudRejects()
+    {
+        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
+using UdonSharp;
+public struct SClear { public int x; }
+public class CwAggClear : UdonSharpBehaviour {
+    void Start() { SClear[] values = new SClear[1]; System.Array.Clear(values, 0, 1); }
+}
+", "CwAggClear"));
+        Assert.Contains("Array.Clear", ex.Message);
+        Assert.Contains("value-semantics adapter", ex.Message);
+    }
+
+    [Fact]
+    public void StructArray_GetLength_StaysExtern()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public struct SLength { public int x; }
+public class CwAggLength : UdonSharpBehaviour {
+    public int result;
+    void Start() { SLength[] values = new SLength[2]; result = values.GetLength(0); }
+}
+", "CwAggLength");
+        Assert.Contains("SystemArray.__GetLength__SystemInt32__SystemInt32", uasm);
+    }
+
+    [Fact]
     public void ScalarAndClassElementArray_Clone_StaysExtern()  // CW26 accept controls
     {
         // Shallow IS C# semantics for these: int elements are values inside a real SystemInt32Array,
