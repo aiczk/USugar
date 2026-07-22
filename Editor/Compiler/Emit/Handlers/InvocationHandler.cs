@@ -307,8 +307,6 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
             // B56: a struct-hosted generic method must record its instantiation so a nested closure/LF
             // referencing the method's T finds the owner in the closure-compose (the class arm does this
             // via RegisterGenericSpecialization; the struct path registers the spec separately).
-            if (structTarget.IsGenericMethod)
-                RegisterGenericSpecCandidate(structTarget);
             return EmitStructInstanceCall(op, structTarget);
         }
 

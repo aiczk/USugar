@@ -48,7 +48,7 @@ public sealed class MethodContext
     /// <summary>Everything a per-spec hoisted closure owns: its CFunction, flat param/return field
     /// ids, its hidden __envp field id (null for capture-free), the enclosing constructed specs it
     /// was registered under (drives the type-param compose at its own emission — replacing the
-    /// first-wins FirstSpecByDefinition read), and the composite key args.</summary>
+    /// fallback lookup), and the composite key args.</summary>
     public sealed class ClosureSpec
     {
         public IMethodSymbol Def;

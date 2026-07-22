@@ -1050,11 +1050,6 @@ public class UasmEmitter
             // closureBindings walk at EmitMethod misses the owner), so `new T[]` emitted a bogus TArray. Seed
             // it the same way the struct-methods loop does (including the two-instantiation aliasing guard,
             // which GS15<int>/GS15<string> exercises).
-            if (fm.ContainingType.IsGenericType && !fm.IsDefinition)
-            {
-                _ctx.Generics.RegisterSpec(fm);
-            }
-
             var slot = _ctx.Methods.Register(fm, i => i.ToString());
             var idx = slot.Index;
             var funcName = $"__{idx}_{SanitizeId(fm.Name)}";
@@ -1098,8 +1093,6 @@ public class UasmEmitter
             string typeArgSuffix = "";
             if (sm.ContainingType.IsGenericType)
             {
-                _ctx.Generics.RegisterSpec(sm);
-
                 var containingArgPart = string.Join("_", sm.ContainingType.TypeArguments.Select(ExternResolver.GetUdonTypeName));
                 var methodArgPart = sm.IsGenericMethod
                     ? "_" + string.Join("_", sm.TypeArguments.Select(ExternResolver.GetUdonTypeName))
@@ -1156,10 +1149,6 @@ public class UasmEmitter
             // and a hoisted closure inside the base generic body could not resolve the enclosing
             // method's params (loud "Cannot resolve parameter") or its type-param map. Seed it here,
             // with the same second-distinct-instantiation guard ([X6] r5, widened in round 8).
-            if (bm.IsGenericMethod && !bm.IsDefinition)
-            {
-                _ctx.Generics.RegisterSpec(bm);
-            }
             var slot = _ctx.Methods.Register(bm, i => i.ToString());
             var idx = slot.Index;
             var funcName = $"__{idx}_{SanitizeId(bm.Name)}";
@@ -2256,7 +2245,7 @@ public class UasmEmitter
         {
             List<(IReadOnlyList<ITypeParameterSymbol>, IReadOnlyList<ITypeSymbol>)> closureBindings = null;
             // SS2B: a per-spec closure composes from ITS OWN registration-time owner-spec chain — the
-            // first-wins FirstSpecByDefinition read was leg-B's silent first-spec-T bake. Owners not in
+            // the old first-wins fallback was leg-B's silent first-spec-T bake. Owners not in
             // the record's chain (an outer generic beyond the registration ambient — M2b bound) still
             // fall through to the legacy walk below, which SKIPS owners the record already covered.
             var coveredOwners = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
@@ -2276,14 +2265,11 @@ public class UasmEmitter
                 // No IsGenericMethod pre-filter: FirstGenericSpec is keyed by OriginalDefinition
                 // regardless of WHY a method is a spec (generic method, generic-struct member, or
                 // both — feature G), so the dictionary lookup alone is the correct, sufficient gate.
-                if (_ctx.Generics.TryGetUniqueSpec(enclosing.OriginalDefinition, out var ownerSpec))
-                {
-                    closureBindings ??= new();
-                    closureBindings.Add((ownerSpec.OriginalDefinition.TypeParameters, ownerSpec.TypeArguments));
-                    if (ownerSpec.ContainingType.IsGenericType)
-                        closureBindings.Add((ownerSpec.ContainingType.OriginalDefinition.TypeParameters,
-                            ownerSpec.ContainingType.TypeArguments));
-                }
+                if (enclosing.OriginalDefinition.TypeParameters.Length > 0
+                    || enclosing.ContainingType is { IsGenericType: true })
+                    throw new InvalidOperationException(
+                        $"Closure '{method.ToDisplayString()}' was registered without its lexical owner "
+                        + $"specialization '{enclosing.OriginalDefinition.ToDisplayString()}'.");
             }
             // Inherit the owner generic's args but let this method's own map keep colliding keys
             // (newWins:false = add-if-missing, mirroring the former merge).

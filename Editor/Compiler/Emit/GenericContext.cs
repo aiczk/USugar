@@ -19,37 +19,10 @@ public sealed class GenericContext
     // origin). Since the per-spec closure separation, closures are NOT shared across specs and no
     // second-instantiation reject exists — the sole remaining read is ComposeClosureKeyArgs' owner
     // fallback for owners outside the current chain. LOOKUP-ONLY.
-    readonly Dictionary<IMethodSymbol, HashSet<IMethodSymbol>> _specsByDefinition
-        = new(SymbolEqualityComparer.Default);
-
     /// <summary>First-wins seed: record the FIRST specialization seen per generic definition. Single-sourced
     /// so every registration path (HandlerBase.RegisterFirstGenericSpec + the emitter's foreign-static /
     /// struct-member / base-copy registration loops, which cannot call the protected HandlerBase method)
     /// seeds identically — a past open-coded loop forgot to seed and shipped a bogus TArray (B70).</summary>
-    public void RegisterSpec(IMethodSymbol constructed)
-    {
-        var genericDef = constructed.OriginalDefinition;
-        if (!_specsByDefinition.TryGetValue(genericDef, out var specs))
-            _specsByDefinition.Add(genericDef,
-                specs = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default));
-        specs.Add(constructed);
-    }
-
-    public bool TryGetUniqueSpec(IMethodSymbol definition, out IMethodSymbol specialization)
-    {
-        specialization = null;
-        if (!_specsByDefinition.TryGetValue(definition.OriginalDefinition, out var specs)) return false;
-        foreach (var spec in specs)
-        {
-            if (specialization != null)
-                throw new InvalidOperationException(
-                    $"Generic owner '{definition.ToDisplayString()}' has multiple specialization "
-                    + "candidates outside the current lexical owner chain.");
-            specialization = spec;
-        }
-        return specialization != null;
-    }
-
     public IDisposable EnterScope(IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> map, IMethodSymbol currentMethod)
     {
         if (TypeParamMap != null)

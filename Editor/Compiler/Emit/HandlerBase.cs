@@ -545,7 +545,7 @@ public abstract partial class HandlerBase
             && _methodParamVarIds.TryGetValue(_currentMethod, out var specParamIds)
             && param.Ordinal < specParamIds.Length)
             return specParamIds[param.Ordinal];
-        // The former [Y3] arm (closure reads an enclosing generic's param via FirstSpecByDefinition,
+        // The former [Y3] arm (closure reads an enclosing generic's param via the old owner fallback,
         // first-wins) was adjudicated DEAD 2026-07-10: a closure reading an enclosing param is a
         // capture by definition and resolves through its env record before LoadParam, so the arm was
         // unreachable across the full tracked + real-VM corpus (throw-instrumented run). Deleted —
@@ -1437,7 +1437,8 @@ public abstract partial class HandlerBase
         // (_methodFunctions/_methodSlots/_methodParamVarIds/_methodReturns/envp) are deliberately NOT
         // written for closures: any stale bare-symbol read then fails loud instead of silently using
         // another spec's function (the pre-fix failure mode).
-        var keyArgs = _ctx.ComposeClosureKeyArgs(localFunc);
+        var identity = _ctx.ResolveClosureIdentity(localFunc);
+        var keyArgs = identity.KeyArgs;
         if (_ctx.Methods.TryGetClosureSpec(localFunc, keyArgs, out _)) return;
         EmitPolicy.RejectInParameters(localFunc); // round-7 follow-up [Q3]
         var funcName = string.IsNullOrEmpty(localFunc.Name) ? "lambda" : localFunc.Name;
@@ -1493,7 +1494,7 @@ public abstract partial class HandlerBase
         {
             Def = localFunc,
             KeyArgs = keyArgs,
-            OwnerSpecs = _ctx.Methods.CurrentOwnerSpecs,
+            OwnerSpecs = identity.OwnerSpecs,
             Func = func,
             Slot = slot,
             ParamVarIds = lfParamIds,
@@ -1708,9 +1709,6 @@ public abstract partial class HandlerBase
     // multi-instantiation pin). Struct-hosted generic methods route through EmitStructInstanceCall, which
     // registers the spec itself but NOT through RegisterGenericSpecialization — so this must run there too
     // (B56), else a nested LF referencing the method's T finds no owner and CoreVerify ICEs on raw 'T'.
-    protected void RegisterGenericSpecCandidate(IMethodSymbol constructed)
-        => _ctx.Generics.RegisterSpec(constructed);
-
     protected void RegisterGenericSpecialization(IMethodSymbol constructed)
     {
         // SS2B (M2b): a GENERIC local function is a hoisted closure and registers in the per-spec
@@ -1719,17 +1717,15 @@ public abstract partial class HandlerBase
         // share one body across enclosing specs (the B64 first-spec-T bake / capture aliasing, one
         // level down). Named generic specs keep their constructed-symbol maps.
         bool closureKind = constructed.MethodKind is MethodKind.LambdaMethod or MethodKind.LocalFunction;
+        var closureIdentity = closureKind ? _ctx.ResolveClosureIdentity(constructed) : default;
         var closureKeyArgs = closureKind
-            ? _ctx.ComposeClosureKeyArgs(constructed)
-            : System.Collections.Immutable.ImmutableArray<ITypeSymbol>.Empty;
+            ? closureIdentity.KeyArgs : System.Collections.Immutable.ImmutableArray<ITypeSymbol>.Empty;
         if (closureKind ? _ctx.Methods.TryGetClosureSpec(constructed, closureKeyArgs, out _)
                         : _methodFunctions.ContainsKey(constructed)) return;
         EmitPolicy.RejectInParameters(constructed); // round-7 follow-up [Q3]
 
         // First-wins spec record (feeds ComposeClosureKeyArgs' owner fallback). The former [X6]/[Y2]
         // second-instantiation rejects are retired: closures duplicate per spec.
-
-        RegisterGenericSpecCandidate(constructed);
 
         EmitContext.MethodSlot slot;
         if (closureKind)
@@ -1808,7 +1804,7 @@ public abstract partial class HandlerBase
                 KeyArgs = closureKeyArgs,
                 // The spec itself joins its owner chain so a NESTED closure inherits the LF's own
                 // T binding through the record channel (F7 - consistent supply at any depth).
-                OwnerSpecs = _ctx.Methods.CurrentOwnerSpecs.Add(constructed),
+                OwnerSpecs = closureIdentity.OwnerSpecs.Add(constructed),
                 Func = func,
                 Slot = slot,
                 ParamVarIds = gsParamIds,
