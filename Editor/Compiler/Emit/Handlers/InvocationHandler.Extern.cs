@@ -992,7 +992,7 @@ public partial class InvocationHandler
             var argTarget = arguments[i].Value;
             var paramId = paramIds[param.Ordinal + ordinalOffset];
             var paramType = _ctx.Storage.GetFieldType(paramId);
-            var paramVal = LoadField(paramId, paramType);
+            var paramVal = LoadField(paramId, paramType.Value);
             // Wave-9 round-8 [Y12]: a copy-back whose lvalue legs were evaluated at copy-in
             // (TryPrepareRefOutArg) stores through those SAME legs — AssignToTarget would
             // re-evaluate them AFTER the call (side-effecting legs ran twice and the write landed

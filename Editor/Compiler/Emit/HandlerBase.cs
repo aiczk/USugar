@@ -179,19 +179,19 @@ public abstract partial class HandlerBase
     protected void EmitReturn(CLeaf value = null) => _builder.EmitReturn(value);
 
     /// <summary>Create a constant.</summary>
-    protected CConst Const(object value, string type) => _builder.Const(value, type);
+    protected CConst Const(object value, StorageType type) => _builder.Const(value, type);
 
     /// <summary>Create a slot reference expression.</summary>
     protected CSlotRef SlotRef(int slotId) => _builder.SlotRef(slotId);
 
     /// <summary>Read a field's value — materialized to a scratch slot (A-normal form), returns the leaf.</summary>
-    protected CSlotRef LoadField(string fieldName, string type) => _builder.LoadField(fieldName, type);
+    protected CSlotRef LoadField(string fieldName, StorageType type) => _builder.LoadField(fieldName, type);
 
     /// <summary>Create a field address reference (for extern out/ref).</summary>
-    protected CFieldAddr FieldAddr(string fieldName, string type) => _builder.FieldAddr(fieldName, type);
+    protected CFieldAddr FieldAddr(string fieldName, StorageType type) => _builder.FieldAddr(fieldName, type);
 
     /// <summary>Emit an extern call, materialized to a scratch slot (returns the leaf; null for void).</summary>
-    protected CSlotRef ExternCall(string sig, List<CLeaf> args, string retType)
+    protected CSlotRef ExternCall(string sig, List<CLeaf> args, StorageType retType)
         => _builder.ExternCall(ResolveExtern(sig), args, retType);
 
     /// <summary>
@@ -399,19 +399,19 @@ public abstract partial class HandlerBase
         => _builder.EmitExternVoid(ResolveExtern(sig), args, reentrant, preSpillStmts);
 
     /// <summary>Create an internal call expression.</summary>
-    protected CSlotRef InternalCall(string funcName, List<CLeaf> args, string retType, bool tailSpared = false)
+    protected CSlotRef InternalCall(string funcName, List<CLeaf> args, StorageType retType, bool tailSpared = false)
         => _builder.InternalCall(funcName, args, retType, tailSpared);
 
     /// <summary>Emit a cross-behaviour call. Single-return → materialized to a scratch slot (returns the
     /// leaf); void or multi-return → side-effecting statement (returns null). reentrant: wave-12 r2
     /// [V1] — this dispatch can re-enter the containing function (see TryMarkReentrantCrossDispatch).</summary>
     protected CSlotRef CrossCall(CLeaf instance, string eventName,
-        List<(string, CLeaf)> parameters, IReadOnlyList<ReturnSlot> returns, string retType,
+        List<(string, CLeaf)> parameters, IReadOnlyList<ReturnSlot> returns, StorageType retType,
         bool reentrant = false)
         => _builder.CrossCall(instance, eventName, parameters, returns, retType, reentrant);
 
     /// <summary>Create a select (ternary) expression.</summary>
-    protected CSlotRef Select(CLeaf cond, CLeaf trueVal, CLeaf falseVal, string type)
+    protected CSlotRef Select(CLeaf cond, CLeaf trueVal, CLeaf falseVal, StorageType type)
         => _builder.Select(cond, trueVal, falseVal, type);
 
     /// <summary>Create a function reference (for delegate/JUMP_INDIRECT).</summary>

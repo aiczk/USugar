@@ -94,7 +94,7 @@ public sealed class CExternCall : CValue
     /// CCrossCall / cross setter pair; copied by the same rebuild sites as <see cref="Reentrant"/>.</summary>
     public readonly int PreSpillStmts;
 
-    public CExternCall(string sig, List<CLeaf> args, string retType, int? destSlot = null, bool reentrant = false, int preSpillStmts = 0) : base(retType)
+    public CExternCall(string sig, List<CLeaf> args, StorageType retType, int? destSlot = null, bool reentrant = false, int preSpillStmts = 0) : base(retType)
     {
         Sig = sig ?? throw new ArgumentNullException(nameof(sig));
         Args = args ?? new List<CLeaf>();
@@ -132,7 +132,7 @@ public sealed class CInternalCall : CValue
     /// CoreFlatOptimizer.RemapInst), like <see cref="Reentrant"/>.</summary>
     public readonly bool TailSpared;
 
-    public CInternalCall(string funcName, List<CLeaf> args, string retType, int? destSlot = null,
+    public CInternalCall(string funcName, List<CLeaf> args, StorageType retType, int? destSlot = null,
         bool reentrant = false, bool tailSpared = false) : base(retType)
     {
         FuncName = funcName ?? throw new ArgumentNullException(nameof(funcName));
@@ -161,7 +161,7 @@ public sealed class CSelect : CValue
     public readonly CLeaf TrueVal;
     public readonly CLeaf FalseVal;
 
-    public CSelect(CLeaf cond, CLeaf trueVal, CLeaf falseVal, string type) : base(type)
+    public CSelect(CLeaf cond, CLeaf trueVal, CLeaf falseVal, StorageType type) : base(type)
     {
         Cond = cond ?? throw new ArgumentNullException(nameof(cond));
         TrueVal = trueVal ?? throw new ArgumentNullException(nameof(trueVal));
@@ -188,7 +188,7 @@ public sealed class CCrossCall : CValue
     public readonly bool Reentrant;
 
     public CCrossCall(CLeaf instance, string eventName,
-        List<(string, CLeaf)> parameters, IReadOnlyList<ReturnSlot> returns, string retType,
+        List<(string, CLeaf)> parameters, IReadOnlyList<ReturnSlot> returns, StorageType retType,
         bool reentrant = false) : base(retType)
     {
         Instance = instance ?? throw new ArgumentNullException(nameof(instance));

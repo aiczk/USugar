@@ -178,24 +178,24 @@ public sealed class CoreBuilder
     // value: they emit as a side-effecting statement and return null (callers must not use the result).
 
     /// <summary>Bind a value-producing node to a fresh scratch slot and return the slot leaf.</summary>
-    CSlotRef Bind(CValue producer, string type)
+    CSlotRef Bind(CValue producer, StorageType type)
     {
         var t = AllocScratch(type);
         Emit(new CAssign(t, producer));
         return SlotRef(t);
     }
 
-    public CSlotRef LoadField(string fieldName, string type) => Bind(new CFieldLoad(fieldName, type), type);
-    public CSlotRef Select(CLeaf cond, CLeaf trueVal, CLeaf falseVal, string type)
+    public CSlotRef LoadField(string fieldName, StorageType type) => Bind(new CFieldLoad(fieldName, type), type);
+    public CSlotRef Select(CLeaf cond, CLeaf trueVal, CLeaf falseVal, StorageType type)
         => Bind(new CSelect(cond, trueVal, falseVal, type), type);
 
-    public CSlotRef ExternCall(string sig, List<CLeaf> args, string retType)
+    public CSlotRef ExternCall(string sig, List<CLeaf> args, StorageType retType)
     {
         if (retType == "SystemVoid") { Emit(new CExprStmt(new CExternCall(sig, args, retType))); return null; }
         return Bind(new CExternCall(sig, args, retType), retType);
     }
 
-    public CSlotRef InternalCall(string funcName, List<CLeaf> args, string retType, bool tailSpared = false)
+    public CSlotRef InternalCall(string funcName, List<CLeaf> args, StorageType retType, bool tailSpared = false)
     {
         if (retType == "SystemVoid") { Emit(new CExprStmt(new CInternalCall(funcName, args, retType, tailSpared: tailSpared))); return null; }
         return Bind(new CInternalCall(funcName, args, retType, tailSpared: tailSpared), retType);
@@ -208,7 +208,7 @@ public sealed class CoreBuilder
     /// point keeps the SendCustomEvent in program order; ternary branches construct their cross-call inside
     /// the branch block (VisitConditionalExpression uses EmitIf, not CSelect), so the bind is conditional.</summary>
     public CSlotRef CrossCall(CLeaf instance, string eventName,
-        List<(string, CLeaf)> parameters, IReadOnlyList<ReturnSlot> returns, string retType,
+        List<(string, CLeaf)> parameters, IReadOnlyList<ReturnSlot> returns, StorageType retType,
         bool reentrant = false)
     {
         // Wave-12 r2 [V1]: a reentrant cross dispatch is a §4.3 spill site — the flag is counted here

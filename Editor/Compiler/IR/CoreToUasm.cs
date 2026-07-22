@@ -176,7 +176,7 @@ public static class CoreToUasm
                 constValue = null;
             }
 
-            DeclareVar(field.Name, field.Type, dataDefault, flags, field.SyncMode, constValue);
+            DeclareVar(field.Name, field.Type.Name, dataDefault, flags, field.SyncMode, constValue);
         }
 
         void DeclareVar(string id, string udonType, string defaultValue, FieldFlags flags,
@@ -218,7 +218,7 @@ public static class CoreToUasm
             else
             {
                 id = $"__intnl_{slot.Type}_{_intnlIdx++}";
-                DeclareVar(id, slot.Type, null, FieldFlags.None);
+                DeclareVar(id, slot.Type.Name, null, FieldFlags.None);
             }
 
             _slotVars[key] = id;
@@ -241,12 +241,12 @@ public static class CoreToUasm
 
         string GetConstVar(CConst c)
         {
-            var key = ConstFormat.Key(c.Type, c.Value);
+            var key = ConstFormat.Key(c.Type.Name, c.Value);
             if (_constPool.TryGetValue(key, out var existing))
                 return existing;
             var id = $"__const_{c.Type}_{_constIdx++}";
             _constPool[key] = id;
-            DeclareVar(id, c.Type, null, FieldFlags.None, constValue: c.Value);
+            DeclareVar(id, c.Type.Name, null, FieldFlags.None, constValue: c.Value);
             return id;
         }
 
@@ -299,7 +299,7 @@ public static class CoreToUasm
 
             // Declare return field variable(s) if needed (may not be in module Fields)
             foreach (var ret in func.ReturnSlots)
-                DeclareVar(ret.Id, ret.StorageType, null, FieldFlags.None);
+                DeclareVar(ret.Id, ret.StorageType.Name, null, FieldFlags.None);
         }
 
         // ── Block linearization (RPO) ──

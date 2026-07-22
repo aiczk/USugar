@@ -74,7 +74,7 @@ public class SimpleAssignmentHandler : AssignmentHandlerBase, IExpressionHandler
         // statement form is harmless and simply remains (the optimizer has no DCE pass).
         var targetFieldType = _ctx.Storage.GetFieldType(targetFieldName);
         if (targetFieldType == null) return srcLeaf;
-        var loaded = LoadField(targetFieldName, targetFieldType);
+        var loaded = LoadField(targetFieldName, targetFieldType.Value);
         // When the assignment is USED AS A VALUE (e.g. chained `z = y = x`) and the target is an aggregate,
         // that value must be an independent COPY (struct value semantics) — otherwise z aliases y. (diff-fuzz w4)
         return assign.Parent is not IExpressionStatementOperation

@@ -398,7 +398,7 @@ public static class CoreFlatten
             return b;
         }
 
-        public int AllocScratch(string type)
+        public int AllocScratch(StorageType type)
         {
             var id = Func.Slots.Count;
             Func.Slots.Add(new SlotDecl(id, type, SlotClass.Scratch));

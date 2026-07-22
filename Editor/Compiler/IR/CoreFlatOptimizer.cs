@@ -332,7 +332,7 @@ public static class CoreFlatOptimizer
 
         // Step 2 & 3: Build interference graph and greedy color
         // Group by (Type, SlotClass) — only same-group slots can coalesce
-        var groups = new Dictionary<(string Type, SlotClass Class), List<SlotDecl>>();
+        var groups = new Dictionary<(StorageType Type, SlotClass Class), List<SlotDecl>>();
         foreach (var slot in coalesceable)
         {
             var key = (slot.Type, slot.Class);

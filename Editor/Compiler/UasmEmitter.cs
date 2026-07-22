@@ -104,9 +104,9 @@ public class UasmEmitter
 
     // ── CoreBuilder bridge helpers (old IrBuilder API → CoreBuilder) ──
 
-    CLeaf BridgeLoad(string fieldName, string type) => _builder.LoadField(fieldName, type);
+    CLeaf BridgeLoad(string fieldName, StorageType type) => _builder.LoadField(fieldName, type);
     void BridgeStore(string fieldName, CLeaf value) => _builder.EmitStoreField(fieldName, value);
-    CLeaf BridgeCallExtern(string retType, string sig, CLeaf[] args)
+    CLeaf BridgeCallExtern(StorageType retType, string sig, CLeaf[] args)
         => _builder.ExternCall(sig, new List<CLeaf>(args), retType);
     void BridgeCallExternVoid(string sig, CLeaf[] args)
         => _builder.EmitExternVoid(sig, new List<CLeaf>(args));
@@ -2532,7 +2532,7 @@ public class UasmEmitter
             var fcbType = _ctx.Storage.GetFieldType(kvp.Key);
             if (fcbType != null)
             {
-                var fieldVal = BridgeLoad(kvp.Key, fcbType);
+                var fieldVal = BridgeLoad(kvp.Key, fcbType.Value);
                 BridgeStore($"__old_{kvp.Key}", fieldVal);
             }
         }

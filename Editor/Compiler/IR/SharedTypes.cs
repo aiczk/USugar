@@ -31,7 +31,7 @@ public readonly struct StorageType : IEquatable<StorageType>
     public static implicit operator StorageType(string name) => new StorageType(name);
     // UASM signatures and serializers are string protocols, so leaving the storage domain is safe;
     // the guarded direction is RuntimeType -> StorageType, which remains explicit and centralized.
-    public static implicit operator string(StorageType type) => type.Name;
+    public static explicit operator string(StorageType type) => type.Name;
     public static bool operator ==(StorageType left, StorageType right) => left.Equals(right);
     public static bool operator !=(StorageType left, StorageType right) => !left.Equals(right);
 }
