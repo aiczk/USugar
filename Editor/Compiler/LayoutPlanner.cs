@@ -403,6 +403,25 @@ public class LayoutPlanner
     public IReadOnlyDictionary<INamedTypeSymbol, TypeLayout> AllLayouts => _cache;
     public void Freeze() => _frozen = true;
 
+    public void PrepareCompilation()
+    {
+        if (_frozen) return;
+        foreach (var type in Census.Classes)
+        {
+            var isBehaviour = ExternResolver.IsUdonSharpBehaviour(type);
+            foreach (var iface in type.AllInterfaces)
+                RegisterClassImplementedInterface(iface, isBehaviour);
+            if (!isBehaviour) continue;
+            Plan(type);
+            foreach (var iface in type.AllInterfaces) Plan(iface);
+        }
+        foreach (var iface in Census.Interfaces) Plan(iface);
+        foreach (var type in Census.Structs)
+            foreach (var iface in type.AllInterfaces)
+                RegisterStructImplementedInterface(iface);
+        Freeze();
+    }
+
     public TypeLayout Plan(INamedTypeSymbol type)
     {
         using var typeFactScope = UdonTypeFacts.RecordInto(TypeFacts);

@@ -275,41 +275,7 @@ public partial class UasmEmitter
               + "or omit the planner argument to use a private one (the test/standalone lazy path).");
 
         // Private (emitter-owned) planner, unfrozen: the documented test/standalone path — plan, then freeze.
-        foreach (var tree in _compilation.SyntaxTrees)
-        {
-            var model = _compilation.GetSemanticModel(tree);
-            var root = tree.GetRoot();
-            foreach (var classDecl in root.DescendantNodes()
-                .OfType<ClassDeclarationSyntax>())
-            {
-                var symbol = model.GetDeclaredSymbol(classDecl) as INamedTypeSymbol;
-                if (symbol == null) continue;
-                var isBehaviour = ExternResolver.IsUdonSharpBehaviour(symbol);
-                foreach (var iface in symbol.AllInterfaces)
-                    _planner.RegisterClassImplementedInterface(iface, isBehaviour);
-                if (!isBehaviour) continue;
-                _planner.Plan(symbol);
-                foreach (var iface in symbol.AllInterfaces)
-                    _planner.Plan(iface);
-            }
-            foreach (var ifaceDecl in root.DescendantNodes()
-                .OfType<InterfaceDeclarationSyntax>())
-            {
-                var ifaceSymbol = model.GetDeclaredSymbol(ifaceDecl) as INamedTypeSymbol;
-                if (ifaceSymbol != null)
-                    _planner.Plan(ifaceSymbol);
-            }
-            // Wave-14 r3: record every interface a user STRUCT implements (see LayoutPlanner's
-            // InterfaceHasStructImplementor doc comment) — a separate walk since structs aren't classes.
-            foreach (var structDecl in root.DescendantNodes().OfType<StructDeclarationSyntax>())
-            {
-                var structSymbol = model.GetDeclaredSymbol(structDecl) as INamedTypeSymbol;
-                if (structSymbol == null) continue;
-                foreach (var iface in structSymbol.AllInterfaces)
-                    _planner.RegisterStructImplementedInterface(iface);
-            }
-        }
-        _planner.Freeze();
+        _planner.PrepareCompilation();
     }
 
     // ── EmitFields ──
