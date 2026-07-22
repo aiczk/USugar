@@ -394,7 +394,6 @@ public static class ClassAbi
         Action<CLeaf> emitConstructor, Action<CLeaf> emitObjectInitializer,
         Action<CLeaf> emitTypeObj = null)
     {
-        RejectUnsupportedMembers(classTy);
         var slot = builder.AllocScratch(new StorageType(AggregateAbi.ArrayType));
         builder.EmitAssign(slot, AggregateAbi.Allocate(builder, layout.SlotCount));
         var instance = builder.SlotRef(slot);
@@ -466,25 +465,6 @@ public static class ClassAbi
             : n.ContainingNamespace is { IsGlobalNamespace: false } ns ? ns.ToDisplayString() + "." : "";
         args.AddRange(n.TypeArguments);
         return prefix + n.Name + (n.Arity > 0 ? "`" + n.Arity : "");
-    }
-
-    /// <summary>CA-M1: user classes have reference semantics. CA-v2 M1 adds
-    /// non-virtual inheritance; M3 adds a SEALED-class Object-method override (ToString/Equals/GetHashCode);
-    /// v2b-2 adds virtual METHOD dispatch and the CW1 lift adds virtual property/indexer ACCESSOR dispatch
-    /// (both through the inline typeobj chain), leaving only generic-virtual rejected here (backlog: a
-    /// generic virtual method would need per-call monomorphized dispatch slots the inline scheme does not
-    /// model — an accessor is never generic, so accessors are fully covered).</summary>
-    public static void RejectUnsupportedMembers(INamedTypeSymbol classTy)
-    {
-        foreach (var m in classTy.GetMembers())
-        {
-            if (m.IsImplicitlyDeclared) continue;
-            if (m is IMethodSymbol vm0 && VirtualDispatch.IsGenericVirtual(vm0))
-                throw new NotSupportedException(
-                    $"Member '{classTy.Name}.{m.Name}' is a generic virtual method: v2b-2 inline "
-                    + "typeobj-dispatch does not support per-call monomorphized virtual slots. Make the "
-                    + "method non-generic, or call a named method directly.");
-        }
     }
 
     /// <summary>Reject static field storage on a v1 user class, except consts folded before this point.</summary>

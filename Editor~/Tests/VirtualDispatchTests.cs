@@ -91,14 +91,39 @@ public class UseV : UdonSharpBehaviour { public int seed; public int result;
     }
 
     [Fact]
-    public void GenericVirtualMethod_StillRejected()
+    public void GenericVirtualMethod_CompilesClosedSpecialization()
     {
         var src = @"using UdonSharp;
 public class GBase { public virtual T Id<T>(T x) => x; }
 public class UseGV : UdonSharpBehaviour { public int seed; public int result;
   void Start(){ var b = new GBase(); result = b.Id<int>(seed); } }";
-        var ex = Assert.ThrowsAny<System.Exception>(() => TestHelper.CompileToUasm(src, "UseGV"));
-        Assert.Contains("generic", ex.Message.ToLowerInvariant());
+        var uasm = TestHelper.CompileToUasm(src, "UseGV");
+        Assert.Contains("%SystemInt32", uasm);
+        Assert.DoesNotContain("%T", uasm);
+    }
+
+    [Fact]
+    public void GenericVirtualOverrides_DispatchEachClosedSpecialization()
+    {
+        var uasm = TestHelper.CompileToUasm(@"using UdonSharp;
+public abstract class GRoot { public abstract int Kind<T>(T value); }
+public class GLeft : GRoot { public override int Kind<T>(T value) => 1; }
+public class GRight : GRoot { public override int Kind<T>(T value) => 2; }
+public class UseGenericOverrides : UdonSharpBehaviour {
+  public int seed; public int result;
+  void Start() {
+    GRoot value = seed > 0 ? (GRoot)new GLeft() : new GRight();
+    result = value.Kind<int>(seed) * 10 + value.Kind<string>(""x"");
+  }
+}
+", "UseGenericOverrides");
+
+        Assert.Contains("__typeobj_GLeft", uasm);
+        Assert.Contains("__typeobj_GRight", uasm);
+        Assert.Contains("SystemString.__op_Equality__SystemString_SystemString__SystemBoolean", uasm);
+        Assert.Contains("%SystemInt32", uasm);
+        Assert.Contains("%SystemString", uasm);
+        Assert.DoesNotContain("%T", uasm);
     }
 
     [Fact]

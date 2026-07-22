@@ -147,7 +147,7 @@ different result.
   `foreach` because Udon exposes no compatible enumerator protocol.
 - **Types** — records and runtime `new` of an `UdonSharpBehaviour` are unsupported. User classes
   support allocation, inheritance, virtual and interface dispatch, generics, runtime type tests,
-  and per-program static storage. Generic virtual methods, user-class operators or conversions,
+  generic virtual methods, and per-program static storage. User-class operators or conversions,
   `GetHashCode()`, and `GetType()` remain unsupported.
 - **Program boundaries** — user classes have a portable tagged `object[]` ABI and can cross behaviour
   program boundaries through typed fields, calls, and interfaces. Structs/tuples, delegates, and

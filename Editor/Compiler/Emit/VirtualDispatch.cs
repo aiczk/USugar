@@ -24,13 +24,11 @@ public sealed class VirtualDispatch
 
     public VirtualDispatch(ClassTypeObjectContext typeObjs) { _typeObjs = typeObjs; }
 
-    /// <summary>A runtime-polymorphic ordinary call OR property/indexer accessor call (CW1 lift) —
-    /// excludes generic-virtual, which stays rejected (an accessor is never generic, so the guard is
-    /// vacuous there but keeps the predicate honest).</summary>
+    /// <summary>A runtime-polymorphic ordinary call OR property/indexer accessor call. Generic virtual
+    /// methods use the same slot after closing the selected implementation with call-site type args.</summary>
     public static bool IsVirtualCall(IMethodSymbol target)
         => (target.IsVirtual || target.IsAbstract || target.IsOverride)
-           && target.MethodKind is MethodKind.Ordinary or MethodKind.PropertyGet or MethodKind.PropertySet
-           && !target.IsGenericMethod;
+           && target.MethodKind is MethodKind.Ordinary or MethodKind.PropertyGet or MethodKind.PropertySet;
 
     /// <summary>The SINGLE predicate for "this invocation OR property/indexer accessor reference is a
     /// runtime-polymorphic dispatch site on a v1 user-class receiver": a virtual call whose receiver is a base-typed variable OR <c>this</c> — NOT
@@ -44,12 +42,6 @@ public sealed class VirtualDispatch
            && !(instance is IInstanceReferenceOperation ir
                 && ir.Syntax is Microsoft.CodeAnalysis.CSharp.Syntax.BaseExpressionSyntax)
            && receiverType != null && TypeClassifier.IsUserClass(receiverType);
-
-    /// <summary>generic-virtual: virtual-shaped but the method carries its own type parameters — the
-    /// backlog case the layout reject keeps rejecting.</summary>
-    public static bool IsGenericVirtual(IMethodSymbol target)
-        => (target.IsVirtual || target.IsAbstract || target.IsOverride)
-           && target.MethodKind == MethodKind.Ordinary && target.IsGenericMethod;
 
     /// <summary>CW1 lift: the accessor a property reference dispatches — the property's own accessor,
     /// or the nearest base declaration's when a partial-accessor override omits it (C#: `override int P
@@ -89,6 +81,8 @@ public sealed class VirtualDispatch
                 if (slotDef.IsAbstract) continue; // a concrete type with an abstract, unimplemented slot cannot occur
                 impl = slotDef;                    // non-abstract slot not overridden in this type
             }
+            if (slotMethod.IsGenericMethod && impl.IsGenericMethod)
+                impl = impl.Construct(slotMethod.TypeArguments.ToArray());
             var v = _typeObjs.TryGetTypeObjVar(concrete);
             if (v != null) outp.Add(new VDispatchTarget(concrete, v, impl));
         }
