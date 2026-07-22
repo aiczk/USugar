@@ -492,7 +492,9 @@ public class LayoutPlanner
             .Where(m => (m.MethodKind == MethodKind.Ordinary
                       || m.MethodKind == MethodKind.ExplicitInterfaceImplementation
                       || m.MethodKind == MethodKind.PropertyGet
-                      || m.MethodKind == MethodKind.PropertySet)
+                      || m.MethodKind == MethodKind.PropertySet
+                      || m.MethodKind == MethodKind.EventAdd
+                      || m.MethodKind == MethodKind.EventRemove)
                      && m.DeclaringSyntaxReferences.Length > 0)
             .ToArray();
 
@@ -616,7 +618,9 @@ public class LayoutPlanner
                     .Where(m => (m.MethodKind == MethodKind.Ordinary
                               || m.MethodKind == MethodKind.ExplicitInterfaceImplementation
                               || m.MethodKind == MethodKind.PropertyGet
-                              || m.MethodKind == MethodKind.PropertySet)
+                              || m.MethodKind == MethodKind.PropertySet
+                              || m.MethodKind == MethodKind.EventAdd
+                              || m.MethodKind == MethodKind.EventRemove)
                              && m.DeclaringSyntaxReferences.Length > 0 && !m.IsGenericMethod && !m.IsAbstract))
                 {
                     if (overriddenMethods.Contains(bm) || !baseLayout.Methods.TryGetValue(bm, out var baseMl))
@@ -689,7 +693,9 @@ public class LayoutPlanner
         foreach (var method in interfaceType.GetMembers().OfType<IMethodSymbol>()
             .Where(m => (m.MethodKind == MethodKind.Ordinary
                       || m.MethodKind == MethodKind.PropertyGet
-                      || m.MethodKind == MethodKind.PropertySet)
+                      || m.MethodKind == MethodKind.PropertySet
+                      || m.MethodKind == MethodKind.EventAdd
+                      || m.MethodKind == MethodKind.EventRemove)
                      && m.DeclaringSyntaxReferences.Length > 0))
         {
             var safeName = SanitizeId(method.Name);

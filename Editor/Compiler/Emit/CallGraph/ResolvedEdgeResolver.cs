@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using System.Linq;
 using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.Operations;
 
@@ -434,6 +435,23 @@ public sealed class ResolvedEdgeResolver
                 foreach (var impl in AccessorDispatchImplDefs(pr, VirtualDispatch.FindAccessor(pr.Property, getter: false)))
                     yield return impl;
                 break;
+            case IEventAssignmentOperation eventAssignment
+                when eventAssignment.EventReference is IEventReferenceOperation eventReference:
+            {
+                var accessor = eventAssignment.Adds
+                    ? eventReference.Event.AddMethod
+                    : eventReference.Event.RemoveMethod;
+                if (accessor != null && !accessor.IsImplicitlyDeclared)
+                    yield return accessor.OriginalDefinition;
+                break;
+            }
+            case IDeconstructionAssignmentOperation deconstruction
+                when ResolveUserDeconstruct(deconstruction) is { } deconstruct:
+                yield return deconstruct.OriginalDefinition;
+                break;
+            case IRecursivePatternOperation { DeconstructSymbol: IMethodSymbol patternDeconstruct }:
+                yield return patternDeconstruct.OriginalDefinition;
+                break;
         }
         // User-defined operator call — every form that resolves one carries the OperatorMethod: a plain
         // `a + b` (IBinaryOperation) / `-a` (IUnaryOperation), a `a += b` (ICompoundAssignmentOperation),
@@ -661,7 +679,7 @@ public sealed class ResolvedEdgeResolver
     /// IsCollectibleStructMember and the recursion/capture-root .OriginalDefinition projection are
     /// consumer-side). `using`-resource dispose is NOT included here — EnumerateUsingDispose handles
     /// that resource shape separately and the two must not be merged.</summary>
-    static IEnumerable<IMethodSymbol> EnumerateStructMemberRefs(IOperation op)
+    IEnumerable<IMethodSymbol> EnumerateStructMemberRefs(IOperation op)
     {
         // Parameterized user-struct / v1-class constructor: new V(...) / new C(...).
         if (op is IObjectCreationOperation oc && oc.Constructor != null
@@ -733,6 +751,11 @@ public sealed class ResolvedEdgeResolver
             && spr.Property.ContainingType is INamedTypeSymbol spit && TypeClassifier.IsObjectArrayEmulated(spit)
             && UasmEmitter.IsComputedProperty(sprop) && sprop.GetMethod != null)
             yield return sprop.GetMethod;
+        if (op is IDeconstructionAssignmentOperation deconstruction
+            && ResolveUserDeconstruct(deconstruction) is { } deconstruct)
+            yield return deconstruct;
+        if (op is IRecursivePatternOperation { DeconstructSymbol: IMethodSymbol patternDeconstruct })
+            yield return patternDeconstruct;
         // User-struct operator: v1 + v2, -v, s += t, c++ (static operator methods). Compound-assignment and
         // increment/decrement carry their operator method too, so yield those so the emit side can JUMP to
         // the user operator instead of a bogus SystemObjectArray.__op_* extern.
@@ -748,5 +771,12 @@ public sealed class ResolvedEdgeResolver
         if (op is IConversionOperation convOp && convOp.OperatorMethod is { MethodKind: MethodKind.Conversion } convM
             && convM.ContainingType is INamedTypeSymbol convCt && TypeClassifier.IsObjectArrayEmulated(convCt))
             yield return convM;
+    }
+
+    IMethodSymbol ResolveUserDeconstruct(IDeconstructionAssignmentOperation operation)
+    {
+        if (operation.Syntax is not AssignmentExpressionSyntax assignment) return null;
+        return _emitter.Compilation.GetSemanticModel(assignment.SyntaxTree)
+            .GetDeconstructionInfo(assignment).Method;
     }
 }

@@ -604,8 +604,35 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
                 // Positional/deconstruction pattern — tuple-typed only (reuse the aggregate object[]
                 // machinery; user-defined Deconstruct is out of scope).
                 if (valueType is not INamedTypeSymbol aggType || !TypeClassifier.IsAggregateValue(valueType))
-                    throw new System.NotSupportedException(
-                        "Positional pattern is only supported on tuple types (user Deconstruct is not supported).");
+                {
+                    var deconstruct = rec.DeconstructSymbol is not IMethodSymbol deconstructMethod
+                        ? null : ResolveStructMember(SubstituteMethodTypeArgs(deconstructMethod));
+                    if (deconstruct == null
+                        || deconstruct.Parameters.Length != rec.DeconstructionSubpatterns.Length
+                        || deconstruct.Parameters.Any(p => p.RefKind != RefKind.Out))
+                        throw new System.NotSupportedException(
+                            "Positional pattern requires a supported user Deconstruct(out ...) method.");
+
+                    var args = new List<CLeaf> { valueVal };
+                    foreach (var parameter in deconstruct.Parameters)
+                        args.Add(SlotRef(_builder.AllocScratch(GetStorageType(parameter.Type))));
+                    EmitExprStmt(EmitCallToMethod(deconstruct, args, rec.Syntax));
+                    if (!_methodParamVarIds.TryGetValue(deconstruct, out var paramIds))
+                        throw new System.InvalidOperationException(
+                            $"Deconstruct method '{deconstruct.ToDisplayString()}' was not registered.");
+
+                    CLeaf deconstructResult = Const(true, StorageTypes.Boolean);
+                    for (int i = 0; i < rec.DeconstructionSubpatterns.Length; i++)
+                    {
+                        var elemType = deconstruct.Parameters[i].Type;
+                        var elem = LoadField(paramIds[i], GetStorageType(elemType));
+                        var subResult = EmitPatternCheckImpl(elem, elemType, rec.DeconstructionSubpatterns[i]);
+                        deconstructResult = ExternCall(
+                            "SystemBoolean.__op_ConditionalAnd__SystemBoolean_SystemBoolean__SystemBoolean",
+                            new List<CLeaf> { deconstructResult, subResult }, StorageTypes.Boolean);
+                    }
+                    return deconstructResult;
+                }
                 var layout = _ctx.Aggregates.GetLayout(aggType);
                 if (rec.DeconstructionSubpatterns.Length != layout.Count)
                     throw new System.NotSupportedException(

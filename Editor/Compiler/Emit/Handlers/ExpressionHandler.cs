@@ -12,6 +12,7 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
         OperationKind.Literal, OperationKind.LocalReference, OperationKind.FieldReference,
         OperationKind.EventReference, OperationKind.ParameterReference, OperationKind.InstanceReference,
         OperationKind.Conversion, OperationKind.DefaultValue, OperationKind.TypeOf, OperationKind.NameOf,
+        OperationKind.SizeOf,
         OperationKind.DeclarationExpression, OperationKind.Discard, OperationKind.DelegateCreation, OperationKind.Tuple,
     };
 
@@ -64,6 +65,7 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
         IConversionOperation op => VisitConversion(op),
         IDefaultValueOperation op => VisitDefaultValue(op),
         ITypeOfOperation typeOf => EmitTypeofToken(typeOf),
+        ISizeOfOperation sizeOf => EmitSizeOf(sizeOf),
         INameOfOperation nameOf => Const(nameOf.ConstantValue.Value.ToString(), StorageTypes.String),
         IDeclarationExpressionOperation op => VisitDeclarationExpression(op),
         IDiscardOperation discard => SlotRef(_ctx.Builder.AllocScratch(GetStorageType(discard.Type))),
@@ -71,6 +73,16 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
         ITupleOperation op => VisitTupleLiteral(op),
         _ => throw new NotSupportedException(expression.GetType().Name),
     };
+
+    CLeaf EmitSizeOf(ISizeOfOperation sizeOf)
+    {
+        if (sizeOf.ConstantValue is { HasValue: true, Value: int bytes })
+            return Const(bytes, StorageTypes.Int32);
+        throw new NotSupportedException(
+            $"sizeof({sizeOf.TypeOperand.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}) "
+            + "is not a compile-time constant supported by USugar. Only C# built-in unmanaged types "
+            + "with a language-defined size are supported.");
+    }
 
     // ── Literal ──
 

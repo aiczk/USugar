@@ -61,7 +61,6 @@ public class LanguageSurfaceTests
         OperationKind.Await,                    // no continuation scheduling runtime
         OperationKind.AddressOf,                // unsafe pointers
         OperationKind.FunctionPointerInvocation, // no function pointers
-        OperationKind.SizeOf,                   // unsafe (const cases folded by Roslyn upstream)
         OperationKind.DynamicInvocation, OperationKind.DynamicMemberReference,
         OperationKind.DynamicIndexerAccess, OperationKind.DynamicObjectCreation, // no DLR
     };

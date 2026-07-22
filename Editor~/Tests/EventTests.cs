@@ -58,16 +58,18 @@ public class EvtBaseB : EvtBaseA {
     // ── R1: custom-accessor events are field-like only ──
 
     [Fact]
-    public void CustomAccessorEvent_Throws()
+    public void CustomAccessorEvent_CompilesAndCallsAccessors()
     {
-        var ex = Assert.ThrowsAny<Exception>(() => TestHelper.CompileToUasm(@"
+        var uasm = TestHelper.CompileToUasm(@"
 using UdonSharp;
 using System;
 public class EvtCustom : UdonSharpBehaviour {
     Action _backing;
     public event Action Foo { add { _backing += value; } remove { _backing -= value; } }
-}", "EvtCustom"));
-        Assert.Contains("Custom-accessor event", ex.Message);
+    void Handler() { }
+    void Start() { Foo += Handler; Foo -= Handler; }
+}", "EvtCustom");
+        Assert.Contains("_backing", uasm);
     }
 
     // ── R2: cross-behaviour event subscription is rejected ──

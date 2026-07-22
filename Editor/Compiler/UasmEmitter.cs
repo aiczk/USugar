@@ -806,10 +806,7 @@ public partial class UasmEmitter
         // custom accessor body means the user wrote add{...}/remove{...} explicitly.
         if (evt.AddMethod == null || !evt.AddMethod.IsImplicitlyDeclared
             || evt.RemoveMethod == null || !evt.RemoveMethod.IsImplicitlyDeclared)
-            throw new NotSupportedException(
-                $"Custom-accessor event '{evt.Name}' (add{{...}}/remove{{...}}) is not supported; only "
-                + "field-like events ('event Action Foo;') are, since a custom accessor has no "
-                + "well-defined backing storage to materialize.");
+            return;
         if (evt.Type is not INamedTypeSymbol delegateType || delegateType.DelegateInvokeMethod == null)
             throw new NotSupportedException($"Event '{evt.Name}' has a non-delegate type.");
         DeclareDelegateField(evt, delegateType);

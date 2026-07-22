@@ -1179,6 +1179,20 @@ public class CtorTest : UdonSharpBehaviour {
     // ── Task 26: Null guard ──
 
     [Fact]
+    public void SizeOf_BuiltInTypes_FoldsToInt32Constants()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public class SizeOfTest : UdonSharpBehaviour {
+    public int result;
+    void Start() { result = sizeof(byte) + sizeof(short) + sizeof(int) + sizeof(long); }
+}
+", "SizeOfTest");
+
+        Assert.Contains("__const_SystemInt32", uasm);
+    }
+
+    [Fact]
     public void TypeOf_EmitsSystemTypeConst()
     {
         var uasm = TestHelper.CompileToUasm(@"
@@ -3276,6 +3290,51 @@ public class LambdaCaptureTest : UdonSharpBehaviour {
     }
 
     // ── Tuple deconstruction ──
+
+    [Fact]
+    public void UserDefinedDeconstruct_AssignsOutComponents()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public struct DeconstructPair {
+    public int x;
+    public string y;
+    public void Deconstruct(out int a, out string b) { a = x; b = y; }
+}
+public class UserDeconstructTest : UdonSharpBehaviour {
+    public int result;
+    void Start() {
+        var pair = new DeconstructPair { x = 4, y = ""abc"" };
+        var (number, text) = pair;
+        result = number + text.Length;
+    }
+}
+", "UserDeconstructTest");
+
+        Assert.Contains("result: %SystemInt32", uasm);
+    }
+
+    [Fact]
+    public void UserDefinedDeconstruct_PositionalPatternCompiles()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public struct PatternPair {
+    public int x;
+    public int y;
+    public void Deconstruct(out int a, out int b) { a = x; b = y; }
+}
+public class UserPatternTest : UdonSharpBehaviour {
+    public bool result;
+    void Start() {
+        var pair = new PatternPair { x = 4, y = 7 };
+        result = pair is (4, > 5);
+    }
+}
+", "UserPatternTest");
+
+        Assert.Contains("result: %SystemBoolean", uasm);
+    }
 
     [Fact]
     public void TupleDeconstruction_LiteralValues_EmitsAssignments()

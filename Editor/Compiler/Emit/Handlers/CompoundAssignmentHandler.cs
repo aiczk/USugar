@@ -177,8 +177,16 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
         // to nonexistent storage.
         if (evt.AddMethod == null || !evt.AddMethod.IsImplicitlyDeclared
             || evt.RemoveMethod == null || !evt.RemoveMethod.IsImplicitlyDeclared)
-            throw new System.NotSupportedException(
-                $"Custom-accessor event '{evt.Name}' (add{{...}}/remove{{...}}) is not supported.");
+        {
+            if (evtRef.Instance is not IInstanceReferenceOperation)
+                throw new System.NotSupportedException(
+                    "cross-behaviour custom event subscription is not supported; invoke it from within "
+                    + "the declaring behaviour.");
+            var accessor = op.Adds ? evt.AddMethod : evt.RemoveMethod;
+            var handlerValue = VisitExpression(op.HandlerValue);
+            EmitExprStmt(EmitCallToMethod(accessor, new List<CLeaf> { handlerValue }, op.Syntax));
+            return null;
+        }
 
         // §2.2 R2: cross-behaviour subscribe. A this-receiver is the ONLY supported shape.
         if (evtRef.Instance is not IInstanceReferenceOperation)

@@ -1,6 +1,8 @@
 using System.Collections.Generic;
 using System.Linq;
 using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.Operations;
 
 /// <summary>Handles `var (a, b) = ...` and `(a, b) = method()` tuple deconstruction.</summary>
@@ -122,6 +124,46 @@ public class DeconstructionAssignmentHandler : AssignmentHandlerBase, IOperation
                 for (int i = 0; i < targetTuple.Elements.Length; i++)
                     AssignToLValue(targetTuple.Elements[i], snaps[i], prepared);
                 return;
+            }
+
+            // User-defined Deconstruct(out ...): Roslyn represents the RHS as the original value rather
+            // than an invocation node. Resolve the selected Deconstruct symbol from the assignment syntax,
+            // invoke it through the normal user-member ABI, then copy its out parameter fields into the
+            // already-prepared targets. This intentionally handles the flat form here; nested forms are
+            // recursively described by Conversion elements and remain a loud reject until they can preserve
+            // the compiler-defined multi-stage evaluation order.
+            if (op.Syntax is AssignmentExpressionSyntax assignmentSyntax)
+            {
+                var model = _compilation.GetSemanticModel(assignmentSyntax.SyntaxTree);
+                var deconstruct = model.GetDeconstructionInfo(assignmentSyntax).Method;
+                if (deconstruct != null)
+                {
+                    if (targetTuple.Elements.Any(e => e is ITupleOperation
+                        || e is IDeclarationExpressionOperation { Expression: ITupleOperation }))
+                        throw new System.NotSupportedException(
+                            "Nested user-defined Deconstruct targets are not supported yet.");
+                    var method = ResolveStructMember(SubstituteMethodTypeArgs(deconstruct));
+                    if (method.Parameters.Length != targetTuple.Elements.Length
+                        || method.Parameters.Any(p => p.RefKind != RefKind.Out))
+                        throw new System.NotSupportedException(
+                            $"Deconstruct method '{method.ToDisplayString()}' has an unsupported signature.");
+
+                    var receiver = VisitExpression(op.Value);
+                    var args = new List<CLeaf> { receiver };
+                    foreach (var parameter in method.Parameters)
+                        args.Add(SlotRef(_builder.AllocScratch(GetStorageType(parameter.Type))));
+                    EmitExprStmt(EmitCallToMethod(method, args, op.Syntax));
+
+                    if (!_methodParamVarIds.TryGetValue(method, out var paramIds))
+                        throw new System.InvalidOperationException(
+                            $"Deconstruct method '{method.ToDisplayString()}' was not registered.");
+                    for (int i = 0; i < targetTuple.Elements.Length; i++)
+                    {
+                        var valueOut = LoadField(paramIds[i], GetStorageType(method.Parameters[i].Type));
+                        AssignToLValue(targetTuple.Elements[i], valueOut, prepared);
+                    }
+                    return;
+                }
             }
 
             if (callValue is not IInvocationOperation invocation)
