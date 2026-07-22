@@ -10,7 +10,7 @@ namespace USugar.Tests;
 public class RegisteredCallableTests
 {
     [Fact]
-    public void AddCallable_CommitsEveryProjectionTogether()
+    public void AddCallable_ExposesRecordBackedReadOnlyViews()
     {
         var tree = CSharpSyntaxTree.ParseText("class C { int M(int value) => value; }");
         var compilation = CSharpCompilation.Create("RegisteredCallable", new[] { tree },

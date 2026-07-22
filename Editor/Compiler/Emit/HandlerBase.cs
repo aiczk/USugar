@@ -17,10 +17,10 @@ public abstract partial class HandlerBase
     protected CModule _module => _ctx.Module;
     protected CoreBuilder _builder => _ctx.Builder;
     protected LayoutPlanner _planner => _ctx.Planner;
-    protected Dictionary<IMethodSymbol, CFunction> _methodFunctions => _ctx.Methods.Functions;
-    protected Dictionary<IMethodSymbol, EmitContext.MethodSlot> _methodSlots => _ctx.Methods.Slots;
-    protected Dictionary<IMethodSymbol, ReturnSlot[]> _methodReturns => _ctx.Methods.Returns;
-    protected Dictionary<IMethodSymbol, string[]> _methodParamVarIds => _ctx.Methods.ParamVarIds;
+    protected IReadOnlyDictionary<IMethodSymbol, CFunction> _methodFunctions => _ctx.Methods.Functions;
+    protected IReadOnlyDictionary<IMethodSymbol, EmitContext.MethodSlot> _methodSlots => _ctx.Methods.Slots;
+    protected IReadOnlyDictionary<IMethodSymbol, ReturnSlot[]> _methodReturns => _ctx.Methods.Returns;
+    protected IReadOnlyDictionary<IMethodSymbol, string[]> _methodParamVarIds => _ctx.Methods.ParamVarIds;
     protected IMethodSymbol _currentMethod { get => _ctx.Methods.CurrentMethod; set => _ctx.Methods.CurrentMethod = value; }
     protected List<MethodContext.ClosureSpec> _pendingClosures => _ctx.Methods.PendingClosures;
     protected List<(IMethodSymbol Method, MethodContext.ClosureSpec Spec)> _pendingGenericSpecs => _ctx.Generics.PendingSpecs;

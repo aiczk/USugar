@@ -22,10 +22,10 @@ public partial class UasmEmitter
     CModule _module => _ctx.Module;
     CoreBuilder _builder => _ctx.Builder;
     LayoutPlanner _planner => _ctx.Planner;
-    Dictionary<IMethodSymbol, CFunction> _methodFunctions => _ctx.Methods.Functions;
-    Dictionary<IMethodSymbol, EmitContext.MethodSlot> _methodSlots => _ctx.Methods.Slots;
-    Dictionary<IMethodSymbol, ReturnSlot[]> _methodReturns => _ctx.Methods.Returns;
-    Dictionary<IMethodSymbol, string[]> _methodParamVarIds => _ctx.Methods.ParamVarIds;
+    IReadOnlyDictionary<IMethodSymbol, CFunction> _methodFunctions => _ctx.Methods.Functions;
+    IReadOnlyDictionary<IMethodSymbol, EmitContext.MethodSlot> _methodSlots => _ctx.Methods.Slots;
+    IReadOnlyDictionary<IMethodSymbol, ReturnSlot[]> _methodReturns => _ctx.Methods.Returns;
+    IReadOnlyDictionary<IMethodSymbol, string[]> _methodParamVarIds => _ctx.Methods.ParamVarIds;
     IMethodSymbol _currentMethod { get => _ctx.Methods.CurrentMethod; set => _ctx.Methods.CurrentMethod = value; }
     List<MethodContext.ClosureSpec> _pendingClosures => _ctx.Methods.PendingClosures;
     List<(IMethodSymbol Method, MethodContext.ClosureSpec Spec)> _pendingGenericSpecs => _ctx.Generics.PendingSpecs;

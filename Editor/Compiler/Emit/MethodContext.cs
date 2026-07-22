@@ -22,15 +22,22 @@ public sealed class MethodContext
         public ReceiverAbi Receiver;
     }
 
-    public readonly Dictionary<IMethodSymbol, RegisteredCallable> Callables =
+    readonly Dictionary<IMethodSymbol, RegisteredCallable> _callables =
         new(SymbolEqualityComparer.Default);
-    public readonly Dictionary<IMethodSymbol, CFunction> Functions = new(SymbolEqualityComparer.Default);
+    public IReadOnlyDictionary<IMethodSymbol, RegisteredCallable> Callables => _callables;
+    public IReadOnlyDictionary<IMethodSymbol, CFunction> Functions { get; }
+    public IReadOnlyDictionary<IMethodSymbol, EmitContext.MethodSlot> Slots { get; }
+    public IReadOnlyDictionary<IMethodSymbol, ReturnSlot[]> Returns { get; }
+    public IReadOnlyDictionary<IMethodSymbol, string[]> ParamVarIds { get; }
 
-    public readonly Dictionary<IMethodSymbol, EmitContext.MethodSlot> Slots = new(SymbolEqualityComparer.Default);
-
-    public readonly Dictionary<IMethodSymbol, ReturnSlot[]> Returns = new(SymbolEqualityComparer.Default);
-
-    public readonly Dictionary<IMethodSymbol, string[]> ParamVarIds = new(SymbolEqualityComparer.Default);
+    public MethodContext()
+    {
+        Functions = new CallableProjection<CFunction>(_callables, c => c.Function);
+        Slots = new CallableProjection<EmitContext.MethodSlot>(_callables, c => c.Slot);
+        Returns = new CallableProjection<ReturnSlot[]>(_callables, c => c.ReturnSlots,
+            c => c.ReturnSlots.Length > 0);
+        ParamVarIds = new CallableProjection<string[]>(_callables, c => c.ParamVarIds);
+    }
 
     public IMethodSymbol CurrentMethod;
 
@@ -62,12 +69,54 @@ public sealed class MethodContext
             Layout = layout,
             Receiver = receiver,
         };
-        Callables.Add(method, callable);
-        Functions.Add(method, function);
-        Slots.Add(method, slot);
-        ParamVarIds.Add(method, paramVarIds);
-        if (returnSlots.Length > 0) Returns.Add(method, returnSlots);
+        _callables.Add(method, callable);
         return callable;
+    }
+
+    sealed class CallableProjection<T> : IReadOnlyDictionary<IMethodSymbol, T>
+    {
+        readonly IReadOnlyDictionary<IMethodSymbol, RegisteredCallable> _source;
+        readonly Func<RegisteredCallable, T> _select;
+        readonly Func<RegisteredCallable, bool> _include;
+
+        public CallableProjection(IReadOnlyDictionary<IMethodSymbol, RegisteredCallable> source,
+            Func<RegisteredCallable, T> select, Func<RegisteredCallable, bool> include = null)
+        {
+            _source = source;
+            _select = select;
+            _include = include ?? (_ => true);
+        }
+
+        public int Count => _source.Values.Count(_include);
+        public IEnumerable<IMethodSymbol> Keys
+            => _source.Where(pair => _include(pair.Value)).Select(pair => pair.Key);
+        public IEnumerable<T> Values
+            => _source.Values.Where(_include).Select(_select);
+        public T this[IMethodSymbol key]
+            => TryGetValue(key, out var value) ? value : throw new KeyNotFoundException();
+
+        public bool ContainsKey(IMethodSymbol key)
+            => _source.TryGetValue(key, out var callable) && _include(callable);
+
+        public bool TryGetValue(IMethodSymbol key, out T value)
+        {
+            if (_source.TryGetValue(key, out var callable) && _include(callable))
+            {
+                value = _select(callable);
+                return true;
+            }
+            value = default;
+            return false;
+        }
+
+        public IEnumerator<KeyValuePair<IMethodSymbol, T>> GetEnumerator()
+        {
+            foreach (var pair in _source)
+                if (_include(pair.Value))
+                    yield return new KeyValuePair<IMethodSymbol, T>(pair.Key, _select(pair.Value));
+        }
+
+        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
     }
 
     // ── Per-spec hoisted closures (design 2026-07-10 v3 §2B, B64/B70 root fix) ──
