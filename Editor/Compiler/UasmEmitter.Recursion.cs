@@ -300,40 +300,26 @@ public partial class UasmEmitter
     // §5.5 (graft #2): VerifyBridgeTargetsAreNodes — the wave-10 [Z1]-class emit-time-registration
     // hole detector. A CAPTURING delegate bridge carries an env and MUST have its frame protected
     // across reentrant dispatch; that protection is driven by its recursion-graph node (BuildRecursionInfo
-    // above). PendingDelegateBridges is populated DURING body emission (after BuildRecursionInfo), so
-    // this runs AFTER DelegateBridgeEmitter — the design's "end of BuildRecursionInfo" intent, at
-    // the only point where the full capturing-bridge set exists. A capturing target with no node means a
+    // above). Synthetic callables join one registry during body/synthetic emission, so this runs after
+    // every bridge emitter, when the complete target set exists. A capturing target with no node means a
     // future registration path escaped the reentrancy analysis: fail loud at compile time, never emit
     // silently-unprotected. Non-capturing bridges (named methods, capture-free lambdas) carry no env and
     // are intentionally skipped — they have no reentrancy-sensitive frame state to lose.
-    // NOT dischargeable by the M5b node-by-construction walk (C2 audit, 2026-07-15): bridge sets are
-    // Phase-2 emission-registered, and the multicast fan-out's graph-node registration is deliberately
-    // unwired (A-M3 scope, §1.6) — so a registration path outside the walk can still appear.
+    // The callable-body graph cannot discharge this check: synthetic targets are registered later.
     void VerifyBridgeTargetsAreNodes()
     {
         if (_ctx.Closures.CaptureScope == null || _ctx.RecursionContext.Info.RecursionGraphNodes == null) return;
-        foreach (var (method, bridgeExportName, _) in _ctx.Synthetics.DelegateBridges)
+        foreach (var callable in _ctx.Methods.SyntheticCallables.Values)
         {
-            var def = method.OriginalDefinition;
+            var def = callable.TargetDefinition;
+            if (def == null) continue;
             if (!_ctx.Closures.CaptureScope.IsCapturingClosure(def)) continue;
             if (!_ctx.RecursionContext.Info.RecursionGraphNodes.Contains(def))
                 throw new InvalidOperationException(
                     $"USugar internal error (§5.5 bridge-target armor): capturing delegate bridge "
-                  + $"'{bridgeExportName}' targets '{def}', which has no recursion-graph node — its "
+                  + $"'{callable.Name}' targets '{def}', which has no recursion-graph node — its "
                   + "reentrancy spill protection would be silently missing. A registration path added a "
                   + "capturing bridge without seeding the recursion analysis (wave-10 [Z1] class).");
-        }
-        // Variance design (2026-07-04 §2.2): a sig adapter's target is exactly as reachable via
-        // dispatch as a plain bridge's — same armor requirement.
-        foreach (var (targetMethod, _, adapterName, _) in _ctx.Synthetics.SigAdapterBridges)
-        {
-            var def = targetMethod.OriginalDefinition;
-            if (!_ctx.Closures.CaptureScope.IsCapturingClosure(def)) continue;
-            if (!_ctx.RecursionContext.Info.RecursionGraphNodes.Contains(def))
-                throw new InvalidOperationException(
-                    $"USugar internal error (§5.5 bridge-target armor): capturing sig adapter "
-                  + $"'{adapterName}' targets '{def}', which has no recursion-graph node — its "
-                  + "reentrancy spill protection would be silently missing.");
         }
     }
 

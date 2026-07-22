@@ -74,10 +74,12 @@ public sealed class BridgePlan
     public BridgeDispatchAdapter Dispatch { get; }
     public IReadOnlyList<BridgeArgumentAdapter> Arguments { get; }
     public BridgeReturnAdapter Return { get; }
+    public IMethodSymbol TargetMethod { get; }
 
     public BridgePlan(string functionName, string exportName, IMethodSymbol signatureMethod,
         BridgeReceiverKind receiver, BridgeDispatchAdapter dispatch,
-        IReadOnlyList<BridgeArgumentAdapter> arguments, BridgeReturnAdapter returnAdapter)
+        IReadOnlyList<BridgeArgumentAdapter> arguments, BridgeReturnAdapter returnAdapter,
+        IMethodSymbol targetMethod = null)
     {
         FunctionName = !string.IsNullOrEmpty(functionName)
             ? functionName : throw new ArgumentException("Bridge function name is required.", nameof(functionName));
@@ -94,5 +96,6 @@ public sealed class BridgePlan
                 "Bridge arguments cannot contain null adapters.", nameof(arguments)));
         Arguments = frozenArguments.AsReadOnly();
         Return = returnAdapter ?? throw new ArgumentNullException(nameof(returnAdapter));
+        TargetMethod = targetMethod;
     }
 }

@@ -37,4 +37,21 @@ public class RegisteredCallableTests
         Assert.Throws<ArgumentException>(() =>
             context.AddCallable(method, function, slot, parameters, returns));
     }
+
+    [Fact]
+    public void AddSyntheticCallable_UsesSharedCallableRecord()
+    {
+        var context = new MethodContext();
+        var function = new CFunction("__bridge_M");
+
+        var callable = context.AddSyntheticCallable("__bridge_M", function, null, null,
+            MethodContext.CallableKind.Bridge);
+
+        Assert.Same(callable, context.SyntheticCallables["__bridge_M"]);
+        Assert.Same(function, callable.Function);
+        Assert.Equal(MethodContext.CallableKind.Bridge, callable.Kind);
+        Assert.Equal("__bridge_M", callable.Name);
+        Assert.Throws<ArgumentException>(() => context.AddSyntheticCallable(
+            "__bridge_M", function, null, null, MethodContext.CallableKind.Bridge));
+    }
 }

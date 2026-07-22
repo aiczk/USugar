@@ -14,6 +14,22 @@ public sealed class GenericContext
     // SS2B (M2b): a pending GENERIC LOCAL FUNCTION spec rides with its per-spec closure record (one
     // constructed symbol can pend once per enclosing spec); named specs carry null.
     public readonly List<(IMethodSymbol Method, MethodContext.ClosureSpec Spec)> PendingSpecs = new();
+    readonly HashSet<IMethodSymbol> _plannedSpecializations =
+        new(SymbolEqualityComparer.Default);
+    public bool BodyEmissionStarted { get; private set; }
+
+    public void SetPlannedSpecializations(IEnumerable<IMethodSymbol> methods)
+    {
+        if (BodyEmissionStarted)
+            throw new InvalidOperationException("Specialization plan cannot change after body emission starts.");
+        _plannedSpecializations.Clear();
+        foreach (var method in methods) _plannedSpecializations.Add(method);
+    }
+
+    public bool IsPlannedSpecialization(IMethodSymbol method)
+        => _plannedSpecializations.Contains(method);
+
+    public void BeginBodyEmission() => BodyEmissionStarted = true;
 
     // First registered specialization per generic DEFINITION (first-wins record; historical [X6]
     // origin). Since the per-spec closure separation, closures are NOT shared across specs and no

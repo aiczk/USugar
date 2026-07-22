@@ -177,15 +177,9 @@ public partial class UasmEmitter
             .OrderBy(StableOrdinalKey, StringComparer.Ordinal)
             .ThenBy(ClassTypeObjectContext.SpecKey, StringComparer.Ordinal));
         _ctx.VirtualDispatch = new VirtualDispatch(_ctx.ClassTypes); // CA-v2b-2: virtual-call lowering
-        var plannedCallables = plan.Methods
-            .Concat(plan.Registration.ForeignStatics)
-            .Concat(plan.Registration.StructMethods)
-            .Concat(plan.Registration.BaseInstanceMethods)
-            .Concat(_planner.Census.Classes
-                .Where(TypeClassifier.IsUserClass)
-                .SelectMany(type => type.GetMembers().OfType<IMethodSymbol>()));
+        plan.Callables.Specializations = new RuntimeSpecializationPlanner(_ctx).Build(plan);
         var bodyGraph = new RecursionNodeWalk(
-            EdgeResolver, plan.Reach, plan.FieldInitOps, plannedCallables).Run();
+            EdgeResolver, plan.Reach, plan.FieldInitOps, plan.Callables.Definitions).Run();
         _ctx.Closures.SetCaptureScope(CaptureScopeAnalysis.Build(_compilation, _classSymbol,
             plan.CaptureRoots, bodyGraph.Bodies, plan.FieldInitOps));
         EmitMethods(plan, bodyGraph);
@@ -204,8 +198,14 @@ public partial class UasmEmitter
         // initializers are seeds) and before its consumers. Its projections feed Phase-1 registration,
         // BuildRecursionInfo roots, and CaptureScope roots (all in EmitMethods / injected below).
         return new CompilationPlanner(_compilation, ComputeMethods, BuildReachableBodiesViaResolver,
-            () => _fieldInitOps.Select(fi => fi.initOp), GetMethodBodyOperation, EnumerateClassFieldInitOps).Build();
+            () => _fieldInitOps.Select(fi => fi.initOp), GetMethodBodyOperation, EnumerateClassFieldInitOps,
+            EnumerateAdditionalCallableDefinitions, _classSymbol).Build();
     }
+
+    IEnumerable<IMethodSymbol> EnumerateAdditionalCallableDefinitions()
+        => _planner.Census.Classes
+            .Where(TypeClassifier.IsUserClass)
+            .SelectMany(type => type.GetMembers().OfType<IMethodSymbol>());
 
     // CA call-graph rewrite (M5a cutover): the reach fixpoint now runs through the unified resolver-driven
     // worklist instead of the legacy 5-collector BuildReachableBodies. Byte-neutral — M4's stable ordinal
@@ -1023,14 +1023,19 @@ public partial class UasmEmitter
     void EmitMethods(ClassCompilePlan plan, CallableBodyGraph bodyGraph)
     {
         RegisterProgram(plan);
+        _ctx.Generics.SetPlannedSpecializations(plan.Callables.Specializations);
+        var specializationRegistrar = new SpecializationRegistrar(_ctx);
+        foreach (var specialization in plan.Callables.Specializations)
+            specializationRegistrar.Register(specialization);
         BuildRecursionInfo(bodyGraph);
+        _ctx.Generics.BeginBodyEmission();
         EmitRegisteredBodies(plan);
         VerifyRegisteredCallablesAreNodes(bodyGraph);
     }
 
     void RegisterProgram(ClassCompilePlan plan)
     {
-        var methods = plan.Methods;
+        var methods = plan.Callables.ProgramMethods;
         var typeLayout = _planner.GetLayout(_classSymbol);
         var crossDispatchExports = CollectCrossDispatchExports(plan);
 
@@ -1118,8 +1123,8 @@ public partial class UasmEmitter
         // base, struct, foreign, field-init) once and applies all three per-operation rules to each, so a
         // struct/foreign/using call inside any reached body is seen. Gates (IsCollectibleStructMember /
         // IsClosedForeignStaticTarget / methodSet exclusion) stay on the projection side — meaning preserved.
-        var baseInstanceMethods = plan.Registration.BaseInstanceMethods;
-        var structMethods = plan.Registration.StructMethods;
+        var baseInstanceMethods = plan.Callables.BaseInstanceMethods;
+        var structMethods = plan.Callables.StructMethods;
         // C4 retirement (the C2-incidental duplicate): a static LOCAL FUNCTION declared inside a foreign
         // static classifies as a foreign static itself (IsForeignStatic has no MethodKind filter — its
         // reach leg seeding BodyByDef is the C2-proven recursion-node arm and stays), but local functions
@@ -1127,7 +1132,7 @@ public partial class UasmEmitter
         // overwrote this eager Phase-1 copy in _methodFunctions and left it emitted-but-unreachable (a
         // dead __N_ duplicate body + heap vars, probe-proven __2_Twice/__3_Twice). Gate the REGISTRATION
         // projection only.
-        var foreignStatics = plan.Registration.ForeignStatics;
+        var foreignStatics = plan.Callables.ForeignStatics;
         foreach (var fm in foreignStatics)
         {
             EmitPolicy.RejectInParameters(fm); // round-7 follow-up [Q3]
@@ -1247,10 +1252,10 @@ public partial class UasmEmitter
 
     void EmitRegisteredBodies(ClassCompilePlan plan)
     {
-        var methods = plan.Methods;
-        var foreignStatics = plan.Registration.ForeignStatics;
-        var structMethods = plan.Registration.StructMethods;
-        var baseInstanceMethods = plan.Registration.BaseInstanceMethods;
+        var methods = plan.Callables.ProgramMethods;
+        var foreignStatics = plan.Callables.ForeignStatics;
+        var structMethods = plan.Callables.StructMethods;
+        var baseInstanceMethods = plan.Callables.BaseInstanceMethods;
 
         // Second pass: emit bodies (skip generic definitions)
         foreach (var method in methods)

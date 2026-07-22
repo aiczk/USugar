@@ -42,7 +42,7 @@ public sealed class InterfaceBridgeEmitter
                 BridgeReceiverKind.None, BridgeDispatchAdapter.Direct(implementation,
                     implementation.ReturnType ?? StorageTypes.Void),
                 BuildArgumentAdapters(interfaceMethod, interfaceLayout),
-                BuildReturnAdapter(interfaceLayout, classLayout));
+                BuildReturnAdapter(interfaceLayout, classLayout), implementationMethod);
             _bridge.Emit(_context, plan, () =>
             {
             var arguments = _bridge.LoadArguments(plan);

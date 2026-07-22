@@ -97,7 +97,8 @@ public sealed class DelegateBridgeEmitter
             : new BridgeReturnAdapter(BridgeReturnKind.Convention, conventionReturn);
         var plan = new BridgePlan(bridgeName, bridgeName, signatureMethod,
             capturing ? BridgeReceiverKind.Environment : BridgeReceiverKind.None,
-            BridgeDispatchAdapter.Direct(target, targetReturnType), argumentAdapters, returnAdapter);
+            BridgeDispatchAdapter.Direct(target, targetReturnType), argumentAdapters, returnAdapter,
+            closureCheckMethod);
         _bridge.Emit(_context, plan, () =>
         {
             var arguments = _bridge.LoadArguments(plan);

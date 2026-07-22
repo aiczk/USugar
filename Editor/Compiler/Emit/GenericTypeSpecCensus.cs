@@ -12,11 +12,15 @@ internal sealed class GenericTypeSpecCensus
     readonly Func<IMethodSymbol, IOperation> _bodyOf;
     readonly Func<INamedTypeSymbol, IEnumerable<IOperation>> _fieldInits;
     readonly HashSet<INamedTypeSymbol> _minted = new(SymbolEqualityComparer.Default);
+    readonly HashSet<INamedTypeSymbol> _dispatchTypes = new(SymbolEqualityComparer.Default);
+    readonly Dictionary<string, IMethodSymbol> _specializations = new(StringComparer.Ordinal);
     readonly HashSet<string> _seenMethods = new(StringComparer.Ordinal);
     readonly HashSet<string> _seenFieldInits = new(StringComparer.Ordinal);
     readonly Queue<(IMethodSymbol Method, IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> Map, SpecTrace Trace)> _queue = new();
     readonly Queue<(INamedTypeSymbol Type, IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> Map,
         MintTrace MintTrace, SpecTrace MethodTrace)> _fieldQueue = new();
+    readonly List<(IMethodSymbol Target, IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> Map,
+        SpecTrace Trace)> _dispatchSites = new();
 
     sealed class SpecTrace
     {
@@ -33,19 +37,20 @@ internal sealed class GenericTypeSpecCensus
     }
 
     public GenericTypeSpecCensus(Compilation compilation, Func<IMethodSymbol, IOperation> bodyOf,
-        Func<INamedTypeSymbol, IEnumerable<IOperation>> fieldInits)
+        Func<INamedTypeSymbol, IEnumerable<IOperation>> fieldInits, INamedTypeSymbol rootType)
     {
         _compilation = compilation;
         _bodyOf = bodyOf;
         _fieldInits = fieldInits;
+        _dispatchTypes.Add(rootType);
     }
 
-    public HashSet<INamedTypeSymbol> Build(ClassCompilePlan plan)
+    public Result Build(ClassCompilePlan plan)
     {
-        foreach (var m in plan.Methods) EnqueueIfClosed(m, null, null);
-        foreach (var m in plan.Registration.ForeignStatics) EnqueueIfClosed(m, null, null);
-        foreach (var m in plan.Registration.StructMethods) EnqueueIfClosed(m, null, null);
-        foreach (var m in plan.Registration.BaseInstanceMethods) EnqueueIfClosed(m, null, null);
+        foreach (var m in plan.Callables.ProgramMethods) EnqueueIfClosed(m, null, null);
+        foreach (var m in plan.Callables.ForeignStatics) EnqueueIfClosed(m, null, null);
+        foreach (var m in plan.Callables.StructMethods) EnqueueIfClosed(m, null, null);
+        foreach (var m in plan.Callables.BaseInstanceMethods) EnqueueIfClosed(m, null, null);
         foreach (var op in plan.FieldInitOps) Walk(op, null, null, null);
 
         while (_queue.Count > 0 || _fieldQueue.Count > 0)
@@ -59,7 +64,7 @@ internal sealed class GenericTypeSpecCensus
             var (type, fieldMap, mintTrace, methodTrace) = _fieldQueue.Dequeue();
             foreach (var init in _fieldInits(type)) Walk(init, fieldMap, methodTrace, mintTrace);
         }
-        return _minted;
+        return new Result(_minted, _specializations.Values.ToArray());
     }
 
     void EnqueueIfClosed(IMethodSymbol method, IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> ambient,
@@ -73,6 +78,11 @@ internal sealed class GenericTypeSpecCensus
         RejectExpandingCycle(closed, parent);
         var key = MethodKey(closed, map);
         if (!_seenMethods.Add(key)) return;
+        var hasEmittableBody = _bodyOf(closed.OriginalDefinition) != null;
+        if (!closed.IsDefinition
+            && closed.MethodKind is not (MethodKind.LocalFunction or MethodKind.LambdaMethod
+                or MethodKind.AnonymousFunction) && hasEmittableBody)
+            _specializations.Add(key, closed);
         _queue.Enqueue((closed, map, new SpecTrace(closed, parent)));
     }
 
@@ -83,6 +93,10 @@ internal sealed class GenericTypeSpecCensus
         if (closed == null || !TypeClassifier.IsUserClass(closed) || ContainsOpen(closed)) return;
         RejectExpandingMint(closed, parentMint);
         if (!_minted.Add(closed)) return;
+        _dispatchTypes.Add(closed);
+
+        foreach (var site in _dispatchSites)
+            EnqueueDispatchTarget(site.Target, site.Map, site.Trace, closed);
 
         var classMap = TypeEnvironment.ForContainingType(closed, map);
         var fieldKey = ClassTypeObjectContext.SpecKey(closed);
@@ -100,7 +114,12 @@ internal sealed class GenericTypeSpecCensus
         foreach (var op in SelfAndDescendants(root))
         {
             foreach (var site in CallableSites.FromOperation(op))
+            {
                 EnqueueIfClosed(site.Target, map, methodTrace);
+                _dispatchSites.Add((site.Target, map, methodTrace));
+                foreach (var concrete in _dispatchTypes)
+                    EnqueueDispatchTarget(site.Target, map, methodTrace, concrete);
+            }
             switch (op)
             {
                 case IObjectCreationOperation oc when oc.Type is INamedTypeSymbol ct:
@@ -112,6 +131,54 @@ internal sealed class GenericTypeSpecCensus
                     break;
             }
         }
+    }
+
+
+    void EnqueueDispatchTarget(IMethodSymbol rawTarget,
+        IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> map, SpecTrace trace,
+        INamedTypeSymbol concrete)
+    {
+        if (!rawTarget.IsGenericMethod && !rawTarget.ContainingType.IsGenericType) return;
+        var target = TypeEnvironment.CloseMethod(_compilation, rawTarget, map);
+        var owner = target.ContainingType;
+        if (owner == null || !VirtualDispatch.IsAssignable(concrete, owner)) return;
+
+        IMethodSymbol implementation = null;
+        if (owner.TypeKind == TypeKind.Interface)
+            implementation = FindInterfaceImplementation(concrete, target);
+        else if (VirtualDispatch.IsVirtualCall(target))
+            implementation = VirtualDispatch.MostDerivedImpl(
+                concrete, VirtualDispatch.SlotIntroducer(target));
+        if (implementation == null && target.AssociatedSymbol is IEventSymbol targetEvent)
+        {
+            var eventImpl = concrete.GetMembers().OfType<IEventSymbol>().FirstOrDefault(evt =>
+                evt.Name == targetEvent.Name || evt.ExplicitInterfaceImplementations.Any(i =>
+                    SymbolEqualityComparer.Default.Equals(i.OriginalDefinition,
+                        targetEvent.OriginalDefinition)));
+            implementation = target.MethodKind == MethodKind.EventAdd
+                ? eventImpl?.AddMethod : eventImpl?.RemoveMethod;
+        }
+        if (implementation == null || implementation.IsAbstract) return;
+        if (target.IsGenericMethod && implementation.IsGenericMethod)
+            implementation = implementation.Construct(target.TypeArguments.ToArray());
+        EnqueueIfClosed(implementation, TypeEnvironment.ForContainingType(concrete, map), trace);
+    }
+
+    static IMethodSymbol FindInterfaceImplementation(INamedTypeSymbol concrete, IMethodSymbol target)
+    {
+        if (concrete.FindImplementationForInterfaceMember(target) is IMethodSymbol method)
+            return method;
+        if (target.AssociatedSymbol == null) return null;
+        var member = concrete.FindImplementationForInterfaceMember(target.AssociatedSymbol);
+        return member switch
+        {
+            IMethodSymbol accessor => accessor,
+            IPropertySymbol property when target.MethodKind == MethodKind.PropertyGet => property.GetMethod,
+            IPropertySymbol property when target.MethodKind == MethodKind.PropertySet => property.SetMethod,
+            IEventSymbol evt when target.MethodKind == MethodKind.EventAdd => evt.AddMethod,
+            IEventSymbol evt when target.MethodKind == MethodKind.EventRemove => evt.RemoveMethod,
+            _ => null,
+        };
     }
 
     static bool ContainsOpen(ITypeSymbol type) => ClassTypeObjectContext.ContainsTypeParameter(type);
@@ -191,5 +258,17 @@ internal sealed class GenericTypeSpecCensus
         yield return op;
         foreach (var child in op.ChildOps())
             foreach (var nested in SelfAndDescendants(child)) yield return nested;
+    }
+
+    internal sealed class Result
+    {
+        public readonly HashSet<INamedTypeSymbol> MintedClasses;
+        public readonly IMethodSymbol[] MethodSpecializations;
+
+        public Result(HashSet<INamedTypeSymbol> mintedClasses, IMethodSymbol[] methodSpecializations)
+        {
+            MintedClasses = mintedClasses;
+            MethodSpecializations = methodSpecializations;
+        }
     }
 }

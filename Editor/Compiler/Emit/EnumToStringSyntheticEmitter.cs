@@ -26,6 +26,8 @@ public sealed class EnumToStringSyntheticEmitter
             _context.Storage.TryDeclareVar(retId, StorageTypes.String);
 
             var function = _context.Module.AddFunction(helperName);
+            _context.Methods.AddSyntheticCallable(helperName, function, null, null,
+                MethodContext.CallableKind.Synthetic);
             function.ParamFieldNames.Add(vId);
             function.ReturnType = StorageTypes.String;
             function.ReturnSlots.Add(new ReturnSlot(retId, StorageTypes.String));

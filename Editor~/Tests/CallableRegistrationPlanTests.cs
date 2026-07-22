@@ -7,7 +7,7 @@ using Xunit;
 
 namespace USugar.Tests;
 
-public class CallableRegistrationPlanTests
+public class CallableDefinitionPlanTests
 {
     [Fact]
     public void Builder_FreezesRegistrationGatesOnce()
@@ -36,12 +36,14 @@ class C
         };
         var builder = new ClassCompilePlanBuilder(
             () => new[] { methods["Own"] }, _ => reach,
-            () => Array.Empty<IOperation>());
+            () => Array.Empty<IOperation>(),
+            () => new[] { local });
 
         var plan = builder.Build();
 
-        Assert.Equal(new[] { methods["Foreign"] }, plan.Registration.ForeignStatics);
-        Assert.Equal(new[] { methods["StructMember"] }, plan.Registration.StructMethods);
-        Assert.Equal(new[] { methods["BaseCopy"] }, plan.Registration.BaseInstanceMethods);
+        Assert.Equal(new[] { methods["Foreign"] }, plan.Callables.ForeignStatics);
+        Assert.Equal(new[] { methods["StructMember"] }, plan.Callables.StructMethods);
+        Assert.Equal(new[] { methods["BaseCopy"] }, plan.Callables.BaseInstanceMethods);
+        Assert.Contains(local, plan.Callables.Definitions, SymbolEqualityComparer.Default);
     }
 }

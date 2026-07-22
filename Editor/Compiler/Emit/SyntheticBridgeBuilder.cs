@@ -14,7 +14,10 @@ public sealed class SyntheticBridgeBuilder
         if (plan == null) throw new ArgumentNullException(nameof(plan));
         if (body == null) throw new ArgumentNullException(nameof(body));
         var previousFunction = _builder.CurrentFunction;
-        _builder.SetFunction(context.Module.AddFunction(plan.FunctionName, plan.ExportName));
+        var function = context.Module.AddFunction(plan.FunctionName, plan.ExportName);
+        context.Methods.AddSyntheticCallable(plan.FunctionName, function, plan.SignatureMethod,
+            plan.TargetMethod, MethodContext.CallableKind.Bridge);
+        _builder.SetFunction(function);
         try
         {
             body();

@@ -45,7 +45,7 @@ public sealed class ReceiverBridgeEmitter
             : new BridgeReturnAdapter(BridgeReturnKind.Convention, conventionReturn);
         var plan = new BridgePlan(bridgeName, bridgeName, member,
             BridgeReceiverKind.Environment, BridgeDispatchAdapter.Runtime(targetReturnType),
-            argumentAdapters, returnAdapter);
+            argumentAdapters, returnAdapter, member);
         _bridge.Emit(_context, plan, () =>
         {
         var environmentName = DelegateAbi.ConvEnvName(signaturePart);
@@ -108,7 +108,7 @@ public sealed class ReceiverBridgeEmitter
         var plan = new BridgePlan(bridgeName, bridgeName, member,
             BridgeReceiverKind.Environment,
             BridgeDispatchAdapter.Direct(targetFunction, targetReturnType),
-            argumentAdapters, returnAdapter);
+            argumentAdapters, returnAdapter, member);
         _bridge.Emit(_context, plan, () =>
         {
         var environmentName = DelegateAbi.ConvEnvName(signaturePart);

@@ -10,6 +10,7 @@ using Microsoft.CodeAnalysis;
 public sealed class MethodContext
 {
     public enum ReceiverAbi { None, ObjectArray }
+    public enum CallableKind { Method, Closure, Bridge, Synthetic }
 
     public class RegisteredCallable
     {
@@ -20,11 +21,16 @@ public sealed class MethodContext
         public ReturnSlot[] ReturnSlots;
         public MethodLayout Layout;
         public ReceiverAbi Receiver;
+        public CallableKind Kind;
+        public string Name;
+        public IMethodSymbol TargetDefinition;
     }
 
     readonly Dictionary<IMethodSymbol, RegisteredCallable> _callables =
         new(SymbolEqualityComparer.Default);
+    readonly Dictionary<string, RegisteredCallable> _syntheticCallables = new(StringComparer.Ordinal);
     public IReadOnlyDictionary<IMethodSymbol, RegisteredCallable> Callables => _callables;
+    public IReadOnlyDictionary<string, RegisteredCallable> SyntheticCallables => _syntheticCallables;
     public IReadOnlyDictionary<IMethodSymbol, CFunction> Functions { get; }
     public IReadOnlyDictionary<IMethodSymbol, EmitContext.MethodSlot> Slots { get; }
     public IReadOnlyDictionary<IMethodSymbol, ReturnSlot[]> Returns { get; }
@@ -68,6 +74,8 @@ public sealed class MethodContext
             ReturnSlots = returnSlots,
             Layout = layout,
             Receiver = receiver,
+            Kind = CallableKind.Method,
+            Name = function.Name,
         };
         _callables.Add(method, callable);
         return callable;
@@ -269,10 +277,32 @@ public sealed class MethodContext
             ParamVarIds = paramVarIds,
             ReturnSlots = returnSlots,
             Receiver = ReceiverAbi.None,
+            Kind = CallableKind.Closure,
+            Name = function.Name,
             EnvpFieldId = envpFieldId,
         };
         _closureSpecs.Add(new SpecKey(definition, keyArgs), spec);
         return spec;
+    }
+
+    public RegisteredCallable AddSyntheticCallable(string name, CFunction function,
+        IMethodSymbol signatureMethod, IMethodSymbol targetMethod, CallableKind kind)
+    {
+        if (string.IsNullOrEmpty(name) || function == null)
+            throw new ArgumentException("A synthetic callable requires a name and function.");
+        var callable = new RegisteredCallable
+        {
+            Definition = signatureMethod,
+            TargetDefinition = targetMethod?.OriginalDefinition,
+            Function = function,
+            ParamVarIds = Array.Empty<string>(),
+            ReturnSlots = Array.Empty<ReturnSlot>(),
+            Receiver = ReceiverAbi.None,
+            Kind = kind,
+            Name = name,
+        };
+        _syntheticCallables.Add(name, callable);
+        return callable;
     }
 
     /// <summary>Census surface (read-only): every registered per-spec closure key. Harness

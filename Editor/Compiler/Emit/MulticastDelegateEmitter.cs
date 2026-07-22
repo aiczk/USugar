@@ -56,9 +56,9 @@ public sealed class MulticastDelegateEmitter
         foreach (var (sigPart, plan) in _ctx.Synthetics.MulticastSigs)
         {
             if ((plan.Operations & MulticastOperations.Combine) != 0)
-                EmitMulticastCombineHelper(sigPart);
+                EmitMulticastCombineHelper(sigPart, plan.Invoke);
             if ((plan.Operations & MulticastOperations.Remove) != 0)
-                EmitMulticastRemoveHelper(sigPart);
+                EmitMulticastRemoveHelper(sigPart, plan.Invoke);
             EmitMulticastFanoutBridge(sigPart, plan.Invoke, plan.TypeParamMap);
         }
     }
@@ -130,7 +130,7 @@ public sealed class MulticastDelegateEmitter
 
     /// <summary>__dlg_combine_{sig}(x, y) (§1.4): null legs, else flatten both operands and concatenate
     /// (two non-null operands always yield |cat| >= 2 → always mints a multicast).</summary>
-    void EmitMulticastCombineHelper(string sigPart)
+    void EmitMulticastCombineHelper(string sigPart, IMethodSymbol signatureMethod)
     {
         var helperName = DelegateAbi.MulticastCombineName(sigPart);
         var xId = $"{helperName}__x"; var yId = $"{helperName}__y"; var retId = NameAllocator.RetKey(helperName);
@@ -139,6 +139,8 @@ public sealed class MulticastDelegateEmitter
         _ctx.Storage.TryDeclareVar(retId, StorageTypes.ObjectArray);
 
         var func = _module.AddFunction(helperName);
+        _ctx.Methods.AddSyntheticCallable(helperName, func, signatureMethod, null,
+            MethodContext.CallableKind.Synthetic);
         func.ParamFieldNames.Add(xId);
         func.ParamFieldNames.Add(yId);
         func.ReturnType = StorageTypes.ObjectArray;
@@ -182,7 +184,7 @@ public sealed class MulticastDelegateEmitter
     /// LAST contiguous run of lx that elementwise-matches ly (element equality reuses the existing
     /// CompareDelegates leg via InvocationHandler.EmitDelegateElementEquals — never re-derived, §1.4).
     /// No match → x unchanged. Full removal → null. Single survivor → the bare bundle (not re-wrapped).</summary>
-    void EmitMulticastRemoveHelper(string sigPart)
+    void EmitMulticastRemoveHelper(string sigPart, IMethodSymbol signatureMethod)
     {
         var helperName = DelegateAbi.MulticastRemoveName(sigPart);
         var xId = $"{helperName}__x"; var yId = $"{helperName}__y"; var retId = NameAllocator.RetKey(helperName);
@@ -191,6 +193,8 @@ public sealed class MulticastDelegateEmitter
         _ctx.Storage.TryDeclareVar(retId, StorageTypes.ObjectArray);
 
         var func = _module.AddFunction(helperName);
+        _ctx.Methods.AddSyntheticCallable(helperName, func, signatureMethod, null,
+            MethodContext.CallableKind.Synthetic);
         func.ParamFieldNames.Add(xId);
         func.ParamFieldNames.Add(yId);
         func.ReturnType = StorageTypes.ObjectArray;
@@ -346,6 +350,8 @@ public sealed class MulticastDelegateEmitter
         _ctx.Storage.TryDeclareVar(DelegateAbi.ConvEnvName(sigPart), new StorageType(EnvEmit.EnvType));
 
         var fanoutFunc = _module.AddFunction(fanoutName, fanoutName);
+        _ctx.Methods.AddSyntheticCallable(fanoutName, fanoutFunc, invoke, null,
+            MethodContext.CallableKind.Bridge);
         var prevFunc = _builder.CurrentFunction;
         _builder.SetFunction(fanoutFunc);
 

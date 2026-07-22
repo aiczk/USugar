@@ -1756,6 +1756,11 @@ public abstract partial class HandlerBase
             ? closureIdentity.KeyArgs : System.Collections.Immutable.ImmutableArray<ITypeSymbol>.Empty;
         if (closureKind ? _ctx.Methods.TryGetClosureSpec(constructed, closureKeyArgs, out _)
                         : _methodFunctions.ContainsKey(constructed)) return;
+        if (!closureKind && _ctx.Generics.BodyEmissionStarted
+            && !_ctx.Generics.IsPlannedSpecialization(constructed))
+            throw new InvalidOperationException(
+                $"USugar internal error: specialization '{constructed}' was first discovered during "
+                + "body emission and is absent from CallableDefinitionPlan.Specializations.");
         EmitPolicy.RejectInParameters(constructed); // round-7 follow-up [Q3]
 
         // First-wins spec record (feeds ComposeClosureKeyArgs' owner fallback). The former [X6]/[Y2]

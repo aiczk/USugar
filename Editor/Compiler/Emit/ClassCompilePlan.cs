@@ -9,22 +9,19 @@ using Microsoft.CodeAnalysis.Operations;
 /// </summary>
 sealed class ClassCompilePlan
 {
-    public readonly IMethodSymbol[] Methods;
+    public readonly CallableDefinitionPlan Callables;
     public readonly ReachableBodies Reach;
-    public readonly CallableRegistrationPlan Registration;
     public readonly List<IMethodSymbol> CaptureRoots;
     public readonly List<IOperation> FieldInitOps;
 
     public ClassCompilePlan(
-        IMethodSymbol[] methods,
+        CallableDefinitionPlan callables,
         ReachableBodies reach,
-        CallableRegistrationPlan registration,
         List<IMethodSymbol> captureRoots,
         List<IOperation> fieldInitOps)
     {
-        Methods = methods;
+        Callables = callables;
         Reach = reach;
-        Registration = registration;
         CaptureRoots = captureRoots;
         FieldInitOps = fieldInitOps;
     }
