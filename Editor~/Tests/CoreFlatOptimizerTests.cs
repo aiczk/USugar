@@ -464,6 +464,41 @@ public class CoreFlatOptimizerTests
     }
 
     [Fact]
+    public void Coalesce_DoWhile_BackEdgeKeepsCarriedValueDistinctFromBodyTemp()
+    {
+        var func = MakeFunc();
+        func.Slots.Add(new SlotDecl(0, StorageTypes.Int32, SlotClass.Scratch)); // carried accumulator
+        func.Slots.Add(new SlotDecl(1, StorageTypes.Int32, SlotClass.Scratch)); // body temp
+        func.Slots.Add(new SlotDecl(2, StorageTypes.Boolean, SlotClass.Scratch)); // loop condition
+        func.Slots.Add(new SlotDecl(3, StorageTypes.Int32, SlotClass.Scratch)); // addition result
+
+        var entry = func.NewBlock();
+        var body = func.NewBlock();
+        var exit = func.NewBlock();
+
+        entry.Stmts.Add(new CAssign(0, new CConst(0, StorageTypes.Int32)));
+        entry.Terminator = new CJump(body.Id);
+
+        body.Stmts.Add(new CAssign(1, new CConst(1, StorageTypes.Int32)));
+        body.Stmts.Add(Call(3, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32",
+            new List<CLeaf> { new CSlotRef(0, StorageTypes.Int32), new CSlotRef(1, StorageTypes.Int32) },
+            "SystemInt32"));
+        body.Stmts.Add(new CAssign(0, new CSlotRef(3, StorageTypes.Int32)));
+        body.Stmts.Add(Call(2, "SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean",
+            new List<CLeaf> { new CSlotRef(0, StorageTypes.Int32), new CConst(3, StorageTypes.Int32) },
+            "SystemBoolean"));
+        body.Terminator = new CBranch(new CSlotRef(2, StorageTypes.Boolean), body.Id, exit.Id);
+
+        exit.Terminator = new CRet(new CSlotRef(0, StorageTypes.Int32));
+
+        CoreFlatOptimizer.CoalesceSlots(MakeModule(func));
+
+        var accumulator = ((CAssign)entry.Stmts[0]).DestSlot;
+        var temp = ((CAssign)body.Stmts[0]).DestSlot;
+        Assert.NotEqual(accumulator, temp);
+    }
+
+    [Fact]
     public void Coalesce_UsedBeforeDef_NotMergedWithEarlierNaivelyNonOverlappingSlot()
     {
         // Regression for the real bug VerifyNoInterference caught on Compat_GetComponentTest's
