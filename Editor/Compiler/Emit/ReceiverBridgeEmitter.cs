@@ -43,8 +43,8 @@ public sealed class ReceiverBridgeEmitter
         var returnAdapter = conventionReturn == null
             ? BridgeReturnAdapter.None
             : new BridgeReturnAdapter(BridgeReturnKind.Convention, conventionReturn);
-        var plan = new BridgePlan(bridgeName, bridgeName, member, null,
-            BridgeReceiverKind.Environment, BridgeDispatchKind.Runtime,
+        var plan = new BridgePlan(bridgeName, bridgeName, member,
+            BridgeReceiverKind.Environment, BridgeDispatchAdapter.Runtime(targetReturnType),
             argumentAdapters, returnAdapter);
         _bridge.Emit(_context, plan, () =>
         {
@@ -55,34 +55,38 @@ public sealed class ReceiverBridgeEmitter
         var arguments = _bridge.LoadArguments(plan);
         arguments.Insert(0, receiver);
 
-        var site = new CallableSite(CallableSiteKind.Method, member, null);
-        var targets = _context.VirtualDispatch.Resolve(site, member.ContainingType).RuntimeTargets;
-        var matched = builder.AllocScratch(StorageTypes.Boolean);
-        builder.EmitAssign(matched, builder.Const(false, StorageTypes.Boolean));
-        var typeObj = AggregateAbi.ReadSlot(builder, receiver, 0, StorageTypes.String);
-        foreach (var target in targets)
+        _bridge.Dispatch(plan, arguments, runtime: () =>
         {
-            var isTarget = _bridge.CallExtern(StorageTypes.Boolean,
-                "SystemString.__op_Equality__SystemString_SystemString__SystemBoolean",
-                typeObj, _bridge.Load(target.TypeObjVar, StorageTypes.String));
-            builder.EmitIf(isTarget, _ =>
+            var site = new CallableSite(CallableSiteKind.Method, member, null);
+            var targets = _context.VirtualDispatch.Resolve(site, member.ContainingType).RuntimeTargets;
+            var matched = builder.AllocScratch(StorageTypes.Boolean);
+            builder.EmitAssign(matched, builder.Const(false, StorageTypes.Boolean));
+            var typeObj = AggregateAbi.ReadSlot(builder, receiver, 0, StorageTypes.String);
+            foreach (var target in targets)
             {
-                builder.EmitAssign(matched, builder.Const(true, StorageTypes.Boolean));
-                var result = builder.InternalCall(_context.Methods.Functions[target.Impl].Name,
-                    arguments, targetReturnType);
-                if (!_bridge.StoreReturn(plan, result)) builder.EmitExprStmt(result);
+                var isTarget = _bridge.CallExtern(StorageTypes.Boolean,
+                    "SystemString.__op_Equality__SystemString_SystemString__SystemBoolean",
+                    typeObj, _bridge.Load(target.TypeObjVar, StorageTypes.String));
+                builder.EmitIf(isTarget, _ =>
+                {
+                    builder.EmitAssign(matched, builder.Const(true, StorageTypes.Boolean));
+                    var result = builder.InternalCall(_context.Methods.Functions[target.Impl].Name,
+                        arguments, targetReturnType);
+                    if (!_bridge.StoreReturn(plan, result)) builder.EmitExprStmt(result);
+                });
+            }
+            var missing = _bridge.CallExtern(StorageTypes.Boolean,
+                "SystemBoolean.__op_UnaryNegation__SystemBoolean__SystemBoolean", builder.SlotRef(matched));
+            builder.EmitIf(missing, _ =>
+            {
+                _bridge.CallExternVoid("UnityEngineDebug.__LogError__SystemObject__SystemVoid",
+                    builder.Const(
+                        $"USugar: interface method-group receiver has no local implementation ({member.ContainingType.Name}.{member.Name})",
+                        StorageTypes.String));
+                if (conventionReturn != null && returnType != null)
+                    _bridge.Store(conventionReturn, InvocationHandler.DefaultConst(builder, returnType.Value));
             });
-        }
-        var missing = _bridge.CallExtern(StorageTypes.Boolean,
-            "SystemBoolean.__op_UnaryNegation__SystemBoolean__SystemBoolean", builder.SlotRef(matched));
-        builder.EmitIf(missing, _ =>
-        {
-            _bridge.CallExternVoid("UnityEngineDebug.__LogError__SystemObject__SystemVoid",
-                builder.Const(
-                    $"USugar: interface method-group receiver has no local implementation ({member.ContainingType.Name}.{member.Name})",
-                    StorageTypes.String));
-            if (conventionReturn != null && returnType != null)
-                _bridge.Store(conventionReturn, InvocationHandler.DefaultConst(builder, returnType.Value));
+            return null;
         });
         });
     }
@@ -101,8 +105,9 @@ public sealed class ReceiverBridgeEmitter
         var returnAdapter = conventionReturn == null
             ? BridgeReturnAdapter.None
             : new BridgeReturnAdapter(BridgeReturnKind.Convention, conventionReturn);
-        var plan = new BridgePlan(bridgeName, bridgeName, member, targetFunction,
-            BridgeReceiverKind.Environment, BridgeDispatchKind.Direct,
+        var plan = new BridgePlan(bridgeName, bridgeName, member,
+            BridgeReceiverKind.Environment,
+            BridgeDispatchAdapter.Direct(targetFunction, targetReturnType),
             argumentAdapters, returnAdapter);
         _bridge.Emit(_context, plan, () =>
         {
@@ -120,8 +125,8 @@ public sealed class ReceiverBridgeEmitter
         builder.EmitIf(receiverPresent,
             _ =>
             {
-                var result = builder.InternalCall(targetFunction.Name, arguments, targetReturnType);
-                if (!_bridge.StoreReturn(plan, result)) builder.EmitExprStmt(result);
+                var result = _bridge.Dispatch(plan, arguments);
+                _bridge.StoreReturn(plan, result);
             },
             _ =>
             {

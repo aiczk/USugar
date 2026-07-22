@@ -95,17 +95,17 @@ public sealed class DelegateBridgeEmitter
         var returnAdapter = conventionReturn == null
             ? BridgeReturnAdapter.None
             : new BridgeReturnAdapter(BridgeReturnKind.Convention, conventionReturn);
-        var plan = new BridgePlan(bridgeName, bridgeName, signatureMethod, target,
+        var plan = new BridgePlan(bridgeName, bridgeName, signatureMethod,
             capturing ? BridgeReceiverKind.Environment : BridgeReceiverKind.None,
-            BridgeDispatchKind.Direct, argumentAdapters, returnAdapter);
+            BridgeDispatchAdapter.Direct(target, targetReturnType), argumentAdapters, returnAdapter);
         _bridge.Emit(_context, plan, () =>
         {
             var arguments = _bridge.LoadArguments(plan);
 
             void EmitCall()
             {
-                var result = builder.InternalCall(target.Name, arguments, targetReturnType);
-                if (!_bridge.StoreReturn(plan, result)) builder.EmitExprStmt(result);
+                var result = _bridge.Dispatch(plan, arguments);
+                _bridge.StoreReturn(plan, result);
             }
 
             if (capturing)

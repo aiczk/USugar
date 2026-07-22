@@ -42,8 +42,9 @@ public sealed class WrapperBridgeEmitter
             ? BridgeReturnAdapter.None
             : new BridgeReturnAdapter(BridgeReturnKind.Convention,
                 DelegateAbi.ConvRetName(outerSignature));
-        var plan = new BridgePlan(name, name, outerInvoke, null,
-            BridgeReceiverKind.Payload, BridgeDispatchKind.DelegatePayload,
+        var plan = new BridgePlan(name, name, outerInvoke,
+            BridgeReceiverKind.Payload, BridgeDispatchAdapter.DelegatePayload(
+                returnType ?? StorageTypes.Void),
             argumentAdapters, returnAdapter);
         _bridge.Emit(_context, plan, () =>
         {
@@ -58,8 +59,9 @@ public sealed class WrapperBridgeEmitter
         _context.Storage.TryDeclareVar(
             DelegateAbi.ConvEnvName(innerSignature), new StorageType(EnvEmit.EnvType));
 
-        var result = new InvocationHandler(_context).EmitFanoutElementDispatch(
-            builder.SlotRef(innerSlot), innerInvoke, typeParameterMap, arguments);
+        var result = _bridge.Dispatch(plan, new List<CLeaf>(arguments), delegatePayload: () =>
+            new InvocationHandler(_context).EmitFanoutElementDispatch(
+                builder.SlotRef(innerSlot), innerInvoke, typeParameterMap, arguments));
         _bridge.StoreReturn(plan, result);
 
         });

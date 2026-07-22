@@ -53,6 +53,32 @@ public sealed class SyntheticBridgeBuilder
         return true;
     }
 
+    public CLeaf Dispatch(BridgePlan plan, List<CLeaf> arguments,
+        Func<CLeaf> runtime = null, Func<CLeaf> delegatePayload = null)
+    {
+        switch (plan.Dispatch.Kind)
+        {
+            case BridgeDispatchKind.Direct:
+            {
+                var call = _builder.InternalCall(plan.Dispatch.DirectTarget.Name,
+                    arguments, plan.Dispatch.ReturnType);
+                if (plan.Dispatch.ReturnType != StorageTypes.Void) return call;
+                _builder.EmitExprStmt(call);
+                return null;
+            }
+            case BridgeDispatchKind.Runtime:
+                return runtime != null
+                    ? runtime()
+                    : throw new InvalidOperationException("A runtime bridge requires a dispatch emitter.");
+            case BridgeDispatchKind.DelegatePayload:
+                return delegatePayload != null
+                    ? delegatePayload()
+                    : throw new InvalidOperationException("A delegate-payload bridge requires a dispatch emitter.");
+            default:
+                throw new InvalidOperationException($"Unknown bridge dispatch kind: {plan.Dispatch.Kind}.");
+        }
+    }
+
     public CLeaf CallExtern(StorageType returnType, ExternSignature signature, params CLeaf[] args)
         => _builder.ExternCall(signature, new List<CLeaf>(args), returnType);
 

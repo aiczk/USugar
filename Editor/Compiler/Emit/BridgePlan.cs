@@ -6,6 +6,30 @@ public enum BridgeReceiverKind { None, Environment, Payload }
 public enum BridgeDispatchKind { Direct, Runtime, DelegatePayload }
 public enum BridgeReturnKind { None, Convention, Field }
 
+public sealed class BridgeDispatchAdapter
+{
+    public BridgeDispatchKind Kind { get; }
+    public CFunction DirectTarget { get; }
+    public StorageType ReturnType { get; }
+
+    BridgeDispatchAdapter(BridgeDispatchKind kind, CFunction directTarget, StorageType returnType)
+    {
+        Kind = kind;
+        DirectTarget = directTarget;
+        ReturnType = returnType;
+    }
+
+    public static BridgeDispatchAdapter Direct(CFunction target, StorageType returnType)
+        => new BridgeDispatchAdapter(BridgeDispatchKind.Direct,
+            target ?? throw new ArgumentNullException(nameof(target)), returnType);
+
+    public static BridgeDispatchAdapter Runtime(StorageType returnType)
+        => new BridgeDispatchAdapter(BridgeDispatchKind.Runtime, null, returnType);
+
+    public static BridgeDispatchAdapter DelegatePayload(StorageType returnType)
+        => new BridgeDispatchAdapter(BridgeDispatchKind.DelegatePayload, null, returnType);
+}
+
 public sealed class BridgeArgumentAdapter
 {
     public string SourceField { get; }
@@ -46,14 +70,13 @@ public sealed class BridgePlan
     public string FunctionName { get; }
     public string ExportName { get; }
     public IMethodSymbol SignatureMethod { get; }
-    public CFunction DirectTarget { get; }
     public BridgeReceiverKind Receiver { get; }
-    public BridgeDispatchKind Dispatch { get; }
+    public BridgeDispatchAdapter Dispatch { get; }
     public IReadOnlyList<BridgeArgumentAdapter> Arguments { get; }
     public BridgeReturnAdapter Return { get; }
 
     public BridgePlan(string functionName, string exportName, IMethodSymbol signatureMethod,
-        CFunction directTarget, BridgeReceiverKind receiver, BridgeDispatchKind dispatch,
+        BridgeReceiverKind receiver, BridgeDispatchAdapter dispatch,
         IReadOnlyList<BridgeArgumentAdapter> arguments, BridgeReturnAdapter returnAdapter)
     {
         FunctionName = !string.IsNullOrEmpty(functionName)
@@ -62,9 +85,8 @@ public sealed class BridgePlan
             ? exportName : throw new ArgumentException("Bridge export name is required.", nameof(exportName));
         SignatureMethod = signatureMethod
             ?? throw new ArgumentNullException(nameof(signatureMethod));
-        DirectTarget = directTarget;
         Receiver = receiver;
-        Dispatch = dispatch;
+        Dispatch = dispatch ?? throw new ArgumentNullException(nameof(dispatch));
         if (arguments == null) throw new ArgumentNullException(nameof(arguments));
         var frozenArguments = new List<BridgeArgumentAdapter>(arguments.Count);
         foreach (var argument in arguments)
@@ -72,7 +94,5 @@ public sealed class BridgePlan
                 "Bridge arguments cannot contain null adapters.", nameof(arguments)));
         Arguments = frozenArguments.AsReadOnly();
         Return = returnAdapter ?? throw new ArgumentNullException(nameof(returnAdapter));
-        if (dispatch == BridgeDispatchKind.Direct && directTarget == null)
-            throw new ArgumentException("A direct bridge requires a target function.", nameof(directTarget));
     }
 }
