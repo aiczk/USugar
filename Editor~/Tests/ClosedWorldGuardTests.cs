@@ -651,7 +651,9 @@ public class CwMulti9 : UdonSharpBehaviour {
         var kindTag = consts.First(c => Equals(c.Value, DelegateAbi.KindTag)).Id;
         var combineStart = uasm.IndexOf("____dlg_combine_", StringComparison.Ordinal);
         var removeStart = uasm.IndexOf("____dlg_remove_", StringComparison.Ordinal);
-        var combine = uasm.Substring(combineStart, removeStart - combineStart);
+        var fanoutStart = uasm.IndexOf("\n    __dlg_fanout_", combineStart, StringComparison.Ordinal);
+        var combineEnd = removeStart >= 0 ? removeStart : fanoutStart;
+        var combine = uasm.Substring(combineStart, combineEnd - combineStart);
         // 2 flatten tag guards + the re-minted multicast bundle's own tag write.
         Assert.Equal(3, Regex.Matches(combine, $@"PUSH, {Regex.Escape(kindTag)}\b").Count);
         // One env-null inequality guard per flatten arm.

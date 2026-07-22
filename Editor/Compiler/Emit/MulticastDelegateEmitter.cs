@@ -53,11 +53,13 @@ public sealed class MulticastDelegateEmitter
 
     public void EmitPending()
     {
-        foreach (var (sigPart, (invoke, typeParamMap)) in _ctx.Synthetics.MulticastSigs)
+        foreach (var (sigPart, plan) in _ctx.Synthetics.MulticastSigs)
         {
-            EmitMulticastCombineHelper(sigPart);
-            EmitMulticastRemoveHelper(sigPart);
-            EmitMulticastFanoutBridge(sigPart, invoke, typeParamMap);
+            if ((plan.Operations & MulticastOperations.Combine) != 0)
+                EmitMulticastCombineHelper(sigPart);
+            if ((plan.Operations & MulticastOperations.Remove) != 0)
+                EmitMulticastRemoveHelper(sigPart);
+            EmitMulticastFanoutBridge(sigPart, plan.Invoke, plan.TypeParamMap);
         }
     }
 

@@ -146,7 +146,10 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
         var rightVal = right.Leaf;
 
         var sigPart = DelegateAbi.BuildSigPart(invoke, _ctx.Generics.TypeParamMap);
-        RegisterMulticastSig(sigPart, invoke);
+        RegisterMulticastSig(sigPart, invoke,
+            op.OperatorKind == BinaryOperatorKind.Add
+                ? MulticastOperations.Combine
+                : MulticastOperations.Remove);
 
         var helperName = op.OperatorKind == BinaryOperatorKind.Add
             ? DelegateAbi.MulticastCombineName(sigPart)
@@ -288,7 +291,8 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
         var handlerVal = handler.Leaf;
 
         var sigPart = DelegateAbi.BuildSigPart(invoke, _ctx.Generics.TypeParamMap);
-        RegisterMulticastSig(sigPart, invoke);
+        RegisterMulticastSig(sigPart, invoke,
+            op.Adds ? MulticastOperations.Combine : MulticastOperations.Remove);
 
         var helperName = op.Adds
             ? DelegateAbi.MulticastCombineName(sigPart)

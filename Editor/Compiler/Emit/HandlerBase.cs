@@ -1602,17 +1602,22 @@ public abstract partial class HandlerBase
         return (argNames, retName, envName);
     }
 
-    /// <summary>Multicast design (2026-07-03 §1.4): register the sig this `+=`/`-=` site needs a
-    /// combine/remove helper (and fan-out bridge) for. Keyed on sig content (first registration wins) —
-    /// a second `+=` site sharing the signature is a no-op here, same class of dedup as
+    /// <summary>Register the signature and exact multicast operation used by this site. Operations
+    /// sharing a signature merge into one plan, so one-sided use does not emit the opposite helper.
+    /// A duplicate site is otherwise a no-op here, same class of dedup as
     /// DelegateBridgeEmitter's emitted-name set. Snapshots the type-param map for the same reason
     /// ResolveDelegateBridge does (§7 A-M1): synthetic emission runs after body emission, when the
     /// ambient map may already be cleared.</summary>
-    protected void RegisterMulticastSig(string sigPart, IMethodSymbol invoke)
+    protected void RegisterMulticastSig(string sigPart, IMethodSymbol invoke, MulticastOperations operation)
     {
-        if (_ctx.Synthetics.MulticastSigs.ContainsKey(sigPart)) return;
+        if (_ctx.Synthetics.MulticastSigs.TryGetValue(sigPart, out var existing))
+        {
+            _ctx.Synthetics.MulticastSigs[sigPart] = existing.With(operation);
+            return;
+        }
         // Carry the immutable ambient map by reference — the drain resolves the sig later (ambient map null by then).
-        _ctx.Synthetics.MulticastSigs[sigPart] = (invoke, _ctx.Generics.TypeParamMap);
+        _ctx.Synthetics.MulticastSigs[sigPart] = new MulticastSigPlan(
+            invoke, _ctx.Generics.TypeParamMap, operation);
     }
 
     // B67: the synthesized value→name helper's name for a user enum (one per enum, drained in UasmEmitter).

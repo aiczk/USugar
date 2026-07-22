@@ -99,7 +99,10 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
             var combineRightVal = VisitExpression(op.RightOperand);
 
             var sigPart = DelegateAbi.BuildSigPart(invoke, _ctx.Generics.TypeParamMap);
-            RegisterMulticastSig(sigPart, invoke);
+            RegisterMulticastSig(sigPart, invoke,
+                op.OperatorKind == BinaryOperatorKind.Add
+                    ? MulticastOperations.Combine
+                    : MulticastOperations.Remove);
 
             var helperName = op.OperatorKind == BinaryOperatorKind.Add
                 ? DelegateAbi.MulticastCombineName(sigPart)

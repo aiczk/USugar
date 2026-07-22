@@ -27,6 +27,7 @@ public class DlgField : UdonSharpBehaviour {
 }", "DlgField");
         Assert.Contains("__dlg_combine_Void__Void", uasm);
         Assert.Contains("__dlg_fanout_Void__Void", uasm);
+        Assert.DoesNotContain("__dlg_remove_Void__Void", uasm);
         // §1.3: single-cast VisitDelegateCreation is unchanged — the lambda's OWN bridge still mints
         // via the plain __dlg_ prefix, distinct from the sig-level fan-out/combine/remove names.
         Assert.Contains(".export __dlg_fanout_Void__Void", uasm);
@@ -45,6 +46,7 @@ public class DlgFieldMinus : UdonSharpBehaviour {
 }", "DlgFieldMinus");
         Assert.Contains("__dlg_remove_Void__Void", uasm);
         Assert.Contains("__dlg_fanout_Void__Void", uasm);
+        Assert.DoesNotContain("__dlg_combine_Void__Void", uasm);
     }
 
     [Fact]
@@ -104,6 +106,23 @@ public class DlgTwoSites : UdonSharpBehaviour {
         // Each function is declared exactly once: one label + one (for the fan-out) export directive.
         Assert.Equal(1, Count("____dlg_combine_Void__Void:"));
         Assert.Equal(1, Count(".export __dlg_fanout_Void__Void"));
+        Assert.DoesNotContain("__dlg_remove_Void__Void", uasm);
+    }
+
+    [Fact]
+    public void PlusAndMinusSharingSig_EmitBothHelpersAndOneFanout()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public class DlgBothOps : UdonSharpBehaviour {
+    public Action callback;
+    void Handler() { }
+    void Start() { callback += Handler; callback -= Handler; }
+}", "DlgBothOps");
+        Assert.Contains("__dlg_combine_Void__Void", uasm);
+        Assert.Contains("__dlg_remove_Void__Void", uasm);
+        Assert.Contains(".export __dlg_fanout_Void__Void", uasm);
     }
 
     // ── D1 (§1.5/§4): whole-multicast `==` stays reference equality — it must NEVER reference the

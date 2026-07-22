@@ -1,6 +1,33 @@
 using System.Collections.Generic;
 using Microsoft.CodeAnalysis;
 
+[System.Flags]
+public enum MulticastOperations
+{
+    None = 0,
+    Combine = 1,
+    Remove = 2,
+}
+
+public readonly struct MulticastSigPlan
+{
+    public readonly IMethodSymbol Invoke;
+    public readonly IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> TypeParamMap;
+    public readonly MulticastOperations Operations;
+
+    public MulticastSigPlan(IMethodSymbol invoke,
+        IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeParamMap,
+        MulticastOperations operations)
+    {
+        Invoke = invoke;
+        TypeParamMap = typeParamMap;
+        Operations = operations;
+    }
+
+    public MulticastSigPlan With(MulticastOperations operations)
+        => new(Invoke, TypeParamMap, Operations | operations);
+}
+
 /// <summary>
 /// Owns per-class synthetic emission queues populated during body emission and drained by UasmEmitter.
 /// </summary>
@@ -23,10 +50,10 @@ public sealed class SyntheticContext
     // is null).
     public readonly List<(IMethodSymbol Method, string BridgeExportName, IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> TypeParamMap)> DelegateBridges = new();
 
-    // Multicast (2026-07-03 design 1): sig-part -> (Invoke, resolved map) for every delegate signature
-    // this class combines/removes via +=/-=. Keyed on sig content so two sites sharing a signature
-    // dedupe to one fan-out/helper set. Drives the per-class __dlg_fanout_/combine_/remove_ drain.
-    public readonly Dictionary<string, (IMethodSymbol Invoke, IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> TypeParamMap)> MulticastSigs = new();
+    // Multicast: sig-part -> signature plus the exact combine/remove operations used by this class.
+    // Sites sharing a signature merge their flags; the drain emits one fan-out and only the helpers
+    // actually referenced by lowering.
+    public readonly Dictionary<string, MulticastSigPlan> MulticastSigs = new();
 
     // B67: user enums whose ToString()/concat/interpolation needs the synthesized __enumstr_ helper.
     public readonly HashSet<INamedTypeSymbol> EnumToString = new(SymbolEqualityComparer.Default);
