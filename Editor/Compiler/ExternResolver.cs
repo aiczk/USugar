@@ -176,9 +176,24 @@ public static class ExternResolver
         ["VRCSDKBaseVRC_AvatarPedestal"] = "VRCSDK3ComponentsVRCAvatarPedestal",
     };
 
+    // CLR/storage identity and extern ownership are not always the same in the SDK. VRC_Pickup
+    // remains a real return/storage type, but its instance members are registered under VRCPickup.
+    static readonly Dictionary<string, string> ExternOwnerTypeRemap = new()
+    {
+        ["VRCSDKBaseVRC_Pickup"] = "VRCSDK3ComponentsVRCPickup",
+    };
+
     public static string RemapUdonType(string sanitizedType)
     {
         return UdonTypeRemap.TryGetValue(sanitizedType, out var remapped) ? remapped : sanitizedType;
+    }
+
+    public static string RemapExternOwnerType(string sanitizedType)
+    {
+        var runtimeType = RemapUdonType(sanitizedType);
+        return ExternOwnerTypeRemap.TryGetValue(runtimeType, out var remapped)
+            ? remapped
+            : runtimeType;
     }
 
     public static bool IsUdonSharpBehaviour(ITypeSymbol type)
@@ -249,6 +264,12 @@ public static class ExternResolver
         // branch below, which would otherwise fabricate fake names like SystemFuncSystemInt32SystemInt32.
         if (type is INamedTypeSymbol dlgWithMap && dlgWithMap.DelegateInvokeMethod != null)
             return "SystemObjectArray";
+
+        // A constructed generic UdonSharpBehaviour is still represented by its scene
+        // IUdonEventReceiver. This must precede generic-name construction below.
+        if (type.Name != "UdonSharpBehaviour"
+            && IsUdonSharpBehaviour(type, typeParamMap))
+            return "VRCUdonCommonInterfacesIUdonEventReceiver";
 
         // Constructed generic carrying type-param args (e.g. a delegate parameter Func<T,int> of a generic
         // method): the no-map overload's generic branch would resolve the args WITHOUT the map, leaving a
@@ -401,8 +422,7 @@ public static class ExternResolver
             return "VRCUdonCommonInterfacesIUdonEventReceiver";
 
         // User-defined interfaces → IUdonEventReceiver (runtime is always UdonBehaviour)
-        if (type.TypeKind == TypeKind.Interface && type.SpecialType == SpecialType.None
-            && type.ContainingNamespace?.ToDisplayString() is not ("System" or "System.Collections" or "System.Collections.Generic"))
+        if (IsUserInterface(type))
             return "VRCUdonCommonInterfacesIUdonEventReceiver";
 
         // Nullable<T> → SystemObject: Udon has no Nullable type, so a nullable value is emulated as a
@@ -491,6 +511,13 @@ public static class ExternResolver
         return false;
     }
 
+    public static bool IsUserInterface(ITypeSymbol type)
+        => type is INamedTypeSymbol named
+           && named.TypeKind == TypeKind.Interface
+           && named.SpecialType == SpecialType.None
+           && !IsSdkNamespace(named.ContainingNamespace)
+           && !ClassHasRegisteredExterns(named);
+
     public static string SanitizeTypeName(string fullName)
     {
         if (fullName.EndsWith("[]"))
@@ -516,7 +543,7 @@ public static class ExternResolver
     // already remapped, so the fold is a no-op there, and a raw display name now gets the full table.
     public static string BuildMethodSignature(string containingType, string methodName, string[] paramTypes, string returnType)
     {
-        var sanitizedType = RemapUdonType(SanitizeTypeName(containingType));
+        var sanitizedType = RemapExternOwnerType(SanitizeTypeName(containingType));
         var sanitizedParams = string.Join("_", paramTypes.Select(SanitizeTypeName));
         var sanitizedReturn = SanitizeTypeName(returnType);
         var paramPart = paramTypes.Length > 0 ? $"__{sanitizedParams}" : "";
@@ -525,18 +552,24 @@ public static class ExternResolver
 
     public static string BuildPropertyGetSignature(string containingType, string propertyName, string returnType)
     {
-        return $"{RemapUdonType(SanitizeTypeName(containingType))}.__get_{propertyName}__{SanitizeTypeName(returnType)}";
+        return $"{RemapExternOwnerType(SanitizeTypeName(containingType))}.__get_{propertyName}__{SanitizeTypeName(returnType)}";
     }
 
     public static string BuildPropertySetSignature(string containingType, string propertyName, string valueType)
     {
-        return $"{RemapUdonType(SanitizeTypeName(containingType))}.__set_{propertyName}__{SanitizeTypeName(valueType)}__SystemVoid";
+        var prefix = $"{RemapExternOwnerType(SanitizeTypeName(containingType))}"
+                     + $".__set_{propertyName}__{SanitizeTypeName(valueType)}";
+        var withVoid = prefix + "__SystemVoid";
+        var isValid = IsExternValid;
+        if (isValid != null && !isValid(withVoid) && isValid(prefix))
+            return prefix;
+        return withVoid;
     }
 
     public static string BuildFieldSetSignature(string containingType, string fieldName, string valueType, bool isValueType = true)
     {
         var sanitized = SanitizeTypeName(containingType);
-        var prefix = isValueType ? sanitized : RemapUdonType(sanitized);
+        var prefix = isValueType ? sanitized : RemapExternOwnerType(sanitized);
         var suffix = isValueType ? "" : "__SystemVoid";
         return $"{prefix}.__set_{fieldName}__{SanitizeTypeName(valueType)}{suffix}";
     }

@@ -203,8 +203,7 @@ public partial class InvocationHandler
         // like an interface method call. Without this, GetStorageTypeName(interface) yields IUdonEventReceiver and
         // the fall-through emits a non-existent __get_Value extern on it.
         if (op.Property.GetMethod is { } ifaceGetter
-            && op.Property.ContainingType.TypeKind == TypeKind.Interface
-            && op.Property.ContainingType.SpecialType == SpecialType.None
+            && ExternResolver.IsUserInterface(op.Property.ContainingType)
             && !IsResolvedConcreteNonBehaviour(op.Instance.Type)
             && _planner.GetLayout(op.Property.ContainingType).Methods.TryGetValue(ifaceGetter, out var ifaceGetterMl))
         {

@@ -309,7 +309,13 @@ namespace VRC.SDKBase
         public UnityEngine.Vector3 GetBonePosition(UnityEngine.HumanBodyBones bone) => default;
         public UnityEngine.Quaternion GetBoneRotation(UnityEngine.HumanBodyBones bone) => default;
     }
-    public class VRC_Pickup : UnityEngine.Component { public enum PickupHand { None, Left, Right } }
+    public class VRC_Pickup : UnityEngine.Component {
+        public enum PickupHand { None, Left, Right }
+        public string InteractionText { get; set; }
+        public string UseText { get; set; }
+        public void Drop() { }
+    }
+    public struct VRCUrl { public string Get() => null; }
     public class VRCStation : UnityEngine.Component { }
     public static class Utilities { public static bool IsValid(UnityEngine.Object obj) => obj != null; }
 }
@@ -330,6 +336,13 @@ namespace VRC.SDK3.Components {
     public class VRCStation : UnityEngine.Component { }
     public class VRCObjectSync : UnityEngine.Component { }
     public class VRCAvatarPedestal : UnityEngine.Component { }
+    public class VRCPickup : VRC.SDKBase.VRC_Pickup { }
+}
+namespace VRC.SDK3.StringLoading {
+    public interface IVRCStringDownload {
+        string Result { get; }
+        VRC.SDKBase.VRCUrl Url { get; }
+    }
 }
 namespace VRC.SDKBase {
     public class VRC_AvatarPedestal : UnityEngine.Component { }

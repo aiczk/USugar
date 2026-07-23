@@ -362,7 +362,7 @@ public sealed class BoundaryChecker
         if (containing == null || TypeClassifier.IsObjectArrayEmulated(containing)) return false;
         if (propRef.Instance is not null and not IInstanceReferenceOperation)
             return ExternResolver.IsUdonSharpBehaviour(containing)
-                || (containing.TypeKind == TypeKind.Interface && containing.SpecialType == SpecialType.None);
+                || ExternResolver.IsUserInterface(containing);
         return ExternResolver.IsUdonSharpBehaviour(containing)
             && propRef.Property.DeclaredAccessibility == Accessibility.Public;
     }

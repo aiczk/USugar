@@ -1423,8 +1423,7 @@ public abstract partial class HandlerBase
                 // the value, SendCustomEvent the setter), like an interface method call. Without this the
                 // fall-through emits a non-existent __set_Value extern on IUdonEventReceiver.
                 if (propRef.Property.SetMethod is { } ifaceSetter
-                    && propRef.Property.ContainingType.TypeKind == TypeKind.Interface
-                    && propRef.Property.ContainingType.SpecialType == SpecialType.None
+                    && ExternResolver.IsUserInterface(propRef.Property.ContainingType)
                     && propRef.Instance is not IInstanceReferenceOperation
                     && _planner.GetLayout(propRef.Property.ContainingType).Methods.TryGetValue(ifaceSetter, out var ifaceSetterMl))
                 {
@@ -2617,8 +2616,7 @@ public abstract partial class HandlerBase
         ml = null;
         var matched = accessor != null
             && op.Property.ContainingType is INamedTypeSymbol ifaceType
-            && ifaceType.TypeKind == TypeKind.Interface
-            && ifaceType.SpecialType == SpecialType.None
+            && ExternResolver.IsUserInterface(ifaceType)
             && op.Instance != null && op.Instance is not IInstanceReferenceOperation
             && !IsResolvedConcreteNonBehaviour(op.Instance.Type)
             && _planner.GetLayout(ifaceType).Methods.TryGetValue(accessor, out ml);

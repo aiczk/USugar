@@ -413,7 +413,7 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
             return EmitUnreachableVirtualCall(op, localInterface, target);
         }
 
-        if (target.ContainingType.TypeKind == TypeKind.Interface
+        if (ExternResolver.IsUserInterface(target.ContainingType)
             && op.Instance != null
             && !IsResolvedConcreteNonBehaviour(op.Instance?.Type))
             return EmitInterfaceCall(op, target);

@@ -179,7 +179,7 @@ public class DeconstructionAssignmentHandler : AssignmentHandlerBase, IOperation
             var isCrossBehaviour = ExternResolver.IsUdonSharpBehaviour(callTarget.ContainingType)
                 && invocation.Instance is not IInstanceReferenceOperation
                 && callTarget.ContainingType.Name != "UdonSharpBehaviour";
-            var isInterface = callTarget.ContainingType.TypeKind == TypeKind.Interface;
+            var isInterface = ExternResolver.IsUserInterface(callTarget.ContainingType);
 
             if (isCrossBehaviour || isInterface)
             {
