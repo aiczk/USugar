@@ -311,8 +311,9 @@ namespace VRC.SDKBase
     }
     public class VRC_Pickup : UnityEngine.Component {
         public enum PickupHand { None, Left, Right }
-        public string InteractionText { get; set; }
-        public string UseText { get; set; }
+        // Match the real VRCSDKBase metadata: these are fields, not CLR properties.
+        public string InteractionText;
+        public string UseText;
         public void Drop() { }
     }
     public struct VRCUrl { public string Get() => null; }

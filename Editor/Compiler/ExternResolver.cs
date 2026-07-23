@@ -566,12 +566,25 @@ public static class ExternResolver
         return withVoid;
     }
 
-    public static string BuildFieldSetSignature(string containingType, string fieldName, string valueType, bool isValueType = true)
+    public static string BuildFieldSetSignature(
+        string containingType, string fieldName, string valueType, bool isValueType = true)
     {
-        var sanitized = SanitizeTypeName(containingType);
-        var prefix = isValueType ? sanitized : RemapExternOwnerType(sanitized);
-        var suffix = isValueType ? "" : "__SystemVoid";
-        return $"{prefix}.__set_{fieldName}__{SanitizeTypeName(valueType)}{suffix}";
+        // The SDK exposes both shapes. Native value-type fields normally omit the CLR-style void
+        // suffix, while most reference-type members include it; VRCPickup's public fields are a
+        // notable suffix-less reference-type case. Prefer the registered node definition and retain
+        // the historical owner-kind rule only as a fallback when no registry is installed.
+        var prefix = $"{RemapExternOwnerType(SanitizeTypeName(containingType))}"
+                     + $".__set_{fieldName}__{SanitizeTypeName(valueType)}";
+        var withVoid = prefix + "__SystemVoid";
+        var isValid = IsExternValid;
+        if (isValid != null)
+        {
+            var plainValid = isValid(prefix);
+            var voidValid = isValid(withVoid);
+            if (plainValid != voidValid)
+                return plainValid ? prefix : withVoid;
+        }
+        return isValueType ? prefix : withVoid;
     }
 
     public static string BuildConvertSignature(string fromType, string toType)

@@ -32,9 +32,9 @@ public class PickupCompatibility : UdonSharpBehaviour
 ");
 
         Assert.Contains(
-            "VRCSDK3ComponentsVRCPickup.__set_InteractionText__SystemString", uasm);
+            "EXTERN, \"VRCSDK3ComponentsVRCPickup.__set_InteractionText__SystemString\"", uasm);
         Assert.Contains(
-            "VRCSDK3ComponentsVRCPickup.__set_UseText__SystemString", uasm);
+            "EXTERN, \"VRCSDK3ComponentsVRCPickup.__set_UseText__SystemString\"", uasm);
         Assert.Contains(
             "VRCSDK3ComponentsVRCPickup.__Drop__SystemVoid", uasm);
         Assert.Contains("%VRCSDKBaseVRC_Pickup", uasm);
