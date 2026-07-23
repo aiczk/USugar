@@ -63,49 +63,14 @@ static class USugarTypeCacheManager
 
     internal static Type ResolveClrType(ITypeSymbol typeSymbol)
     {
-        if (typeSymbol is IArrayTypeSymbol arrayType)
-        {
-            var elemType = ResolveClrType(arrayType.ElementType);
-            return elemType?.MakeArrayType();
-        }
+        if (typeSymbol == null) return null;
+        var cacheKey = ClrTypeResolver.CacheKey(typeSymbol);
+        if (_clrTypeCache.TryGetValue(cacheKey, out var cached)) return cached;
 
-        switch (typeSymbol.SpecialType)
-        {
-            case SpecialType.System_Boolean: return typeof(bool);
-            case SpecialType.System_Byte: return typeof(byte);
-            case SpecialType.System_SByte: return typeof(sbyte);
-            case SpecialType.System_Int16: return typeof(short);
-            case SpecialType.System_UInt16: return typeof(ushort);
-            case SpecialType.System_Int32: return typeof(int);
-            case SpecialType.System_UInt32: return typeof(uint);
-            case SpecialType.System_Int64: return typeof(long);
-            case SpecialType.System_UInt64: return typeof(ulong);
-            case SpecialType.System_Single: return typeof(float);
-            case SpecialType.System_Double: return typeof(double);
-            case SpecialType.System_String: return typeof(string);
-            case SpecialType.System_Object: return typeof(object);
-            case SpecialType.System_Char: return typeof(char);
-        }
-
-        // Build CLR type name from Roslyn symbol
-        var ns = typeSymbol.ContainingNamespace;
-        var fullName = (ns != null && !ns.IsGlobalNamespace)
-            ? $"{ns.ToDisplayString()}.{typeSymbol.MetadataName}"
-            : typeSymbol.MetadataName;
-
-        if (_clrTypeCache.TryGetValue(fullName, out var cached)) return cached;
-
-        Type result = null;
-        foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
-        {
-            if (asm.IsDynamic) continue;
-            try { var tp = asm.GetType(fullName); if (tp != null) { result = tp; break; } }
-            catch { }
-        }
-
+        var result = ClrTypeResolver.Resolve(typeSymbol);
         // Fall back to Udon type resolution
         result ??= ResolveUdonType(ExternResolver.GetUdonTypeName(typeSymbol));
-        _clrTypeCache[fullName] = result;
+        _clrTypeCache[cacheKey] = result;
         return result;
     }
 
