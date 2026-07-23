@@ -50,6 +50,7 @@ public enum RepresentationCastKind
 {
     ClosedGenericObjectCast,
     EnumRepresentation,
+    VerifiedUdonBehaviourComponent,
 }
 
 /// <summary>

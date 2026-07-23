@@ -637,8 +637,14 @@ public partial class InvocationHandler
 
                     _builder.EmitIf(matchVal, matchB =>
                     {
-                        // Match! result = element, break out of loop
-                        EmitAssign(resultSlot, elementVal);
+                        // The type-id check proves this Component is the requested Udon behaviour.
+                        // Preserve that proof as an explicit representation conversion instead of
+                        // relying on the global reference-type assignment relaxation.
+                        var behaviour = RepresentationCast(
+                            elementVal,
+                            StorageTypes.UdonEventReceiver,
+                            RepresentationCastKind.VerifiedUdonBehaviourComponent);
+                        EmitAssign(resultSlot, behaviour);
                         _builder.EmitBreak();
                     });
                 });

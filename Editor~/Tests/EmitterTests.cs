@@ -2207,7 +2207,7 @@ public class Seat3 : UdonSharpBehaviour { }
 public class ShimTest : UdonSharpBehaviour {
     void Start() { var s = GetComponent<Seat3>(); }
 }
-", "ShimTest");
+", "ShimTest", out var emitter);
         // Shim must use GetComponents(typeof(UdonBehaviour)) to fetch all behaviours
         Assert.Contains("UnityEngineComponent.__GetComponents__SystemType__UnityEngineComponentArray", uasm);
         // Must call GetProgramVariable to read __refl_typeid
@@ -2216,6 +2216,13 @@ public class ShimTest : UdonSharpBehaviour {
         Assert.Contains("SystemConvert.__ToInt64__SystemObject__SystemInt64", uasm);
         // Must NOT use the generic __GetComponent__T extern (that's for Unity types only)
         Assert.DoesNotContain("__GetComponent__T", uasm);
+        Assert.Contains(
+            emitter.Module.Functions.SelectMany(function => function.FlatBlocks)
+                .SelectMany(block => block.Stmts),
+            statement => statement is CRepresentationCopy
+            {
+                Kind: RepresentationCastKind.VerifiedUdonBehaviourComponent,
+            });
     }
 
     [Fact]
