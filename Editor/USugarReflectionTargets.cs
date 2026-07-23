@@ -37,8 +37,16 @@ static class USugarReflectionTargets
     // UdonSharpCompilerV1 (Harmony patch targets + CompileSync invocation)
     internal static readonly Type CompilerType =
         Type.GetType("UdonSharp.Compiler.UdonSharpCompilerV1, UdonSharp.Editor");
+    internal static readonly MethodInfo CompileAllProgramsMethod =
+        typeof(UdonSharpProgramAsset).GetMethod(
+            "CompileAllCsPrograms", BindingFlags.Public | BindingFlags.Static);
+    internal static readonly MethodInfo CompileMethod =
+        CompilerType?.GetMethod("Compile", BindingFlags.Public | BindingFlags.Static);
     internal static readonly MethodInfo CompileSyncMethod =
         CompilerType?.GetMethod("CompileSync", BindingFlags.Public | BindingFlags.Static);
+    internal static readonly MethodInfo AnyScriptHasErrorMethod =
+        typeof(UdonSharpProgramAsset).GetMethod(
+            "AnyUdonSharpScriptHasError", BindingFlags.Public | BindingFlags.Static);
     internal static readonly Type CompileOptionsType =
         CompilerType?.Assembly.GetType("UdonSharp.Compiler.UdonSharpCompileOptions");
 
@@ -53,6 +61,8 @@ static class USugarReflectionTargets
     // Serialization cache types (for InvalidateSerializationCaches)
     internal static readonly Type VarStorageType =
         UdonSharpAsm.GetType("UdonSharp.Serialization.UdonVariableStorageInterface");
+    internal static readonly FieldInfo VariableTypeLookupField =
+        VarStorageType?.GetField("_variableTypeLookup", BindingFlags.NonPublic | BindingFlags.Static);
     internal static readonly Type FormatterEmitterType =
         UdonSharpAsm.GetType("UdonSharp.Serialization.UdonSharpBehaviourFormatterEmitter");
     internal static readonly FieldInfo FormattersField =
@@ -84,8 +94,11 @@ static class USugarReflectionTargets
     // the inspector and stay at Warn.
     static readonly HashSet<string> CriticalBindings = new()
     {
-        nameof(CompilerType), nameof(AssembleMethod), nameof(UdonInterfaceType), nameof(EditorCacheType),
-        nameof(VarStorageType), nameof(FormatterEmitterType), nameof(FormattersField), nameof(EmittedFormatterOpenType),
+        nameof(CompilerType), nameof(CompileAllProgramsMethod), nameof(CompileMethod),
+        nameof(CompileSyncMethod), nameof(AnyScriptHasErrorMethod),
+        nameof(AssembleMethod), nameof(UdonInterfaceType), nameof(EditorCacheType),
+        nameof(VarStorageType), nameof(VariableTypeLookupField), nameof(FormatterEmitterType),
+        nameof(FormattersField), nameof(EmittedFormatterOpenType),
         nameof(IsExternTypeMethod), nameof(HeapStorageBehaviour), nameof(VariableStorageBehaviour),
         nameof(HeapGetElementStorageMethod), nameof(VariableGetElementStorageMethod),
     };

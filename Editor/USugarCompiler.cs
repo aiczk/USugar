@@ -51,24 +51,7 @@ public static class USugarCompiler
     }
     [MenuItem("USugar/Compile/USugar")]
     public static void CompileAndApply() =>
-        USugarCompilationOrchestrator.CompileInternal(applyToAssets: true, force: true);
-
-    // Debug utility: uncomment [MenuItem] to dump all registered Udon externs to a text file.
-    // Useful for checking if a specific extern signature exists in the current SDK version.
-    //[MenuItem("USugar/Dump Udon Extern Registry")]
-    public static void DumpExternRegistry()
-    {
-        var defs = UdonEditorManager.Instance.GetNodeDefinitions()
-            .Select(d => d.fullName)
-            .Where(n => !string.IsNullOrEmpty(n))
-            .OrderBy(n => n)
-            .ToArray();
-
-        var outputPath = "Library/USugarCache/udon_extern_registry.txt";
-        Directory.CreateDirectory(Path.GetDirectoryName(outputPath));
-        File.WriteAllLines(outputPath, defs);
-        USugarLog.Info($"Dumped {defs.Length} node definitions → {outputPath}");
-    }
+        USugarCompilationOrchestrator.CompileSynchronously(force: true);
 
     // Regenerates the tracked Event_* snapshot exclusively from the public SDK editor registry.
     // EventRegistryCensusTests validates LayoutPlanner's event tables bidirectionally against it.

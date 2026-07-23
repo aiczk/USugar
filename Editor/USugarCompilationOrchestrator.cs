@@ -21,14 +21,23 @@ using UnityCompilationAssembly = UnityEditor.Compilation.Assembly;
 /// </summary>
 static class USugarCompilationOrchestrator
 {
-    internal static int RequestedVersion;
-    internal static int CompiledVersion;
+    static readonly USugarCompileRequestState CompileState = new();
     internal static bool IsCompiling;
     internal static bool CompileScheduled;
-    internal static bool LastCompileHadErrors;
+    internal static USugarCompileHealth Health => CompileState.Health;
+    internal static bool LastCompileHadErrors
+    {
+        get => Health != USugarCompileHealth.Clean;
+        set
+        {
+            if (value) CompileState.MarkFailed();
+            else CompileState.MarkClean();
+        }
+    }
 
     const string FingerprintKey = "USugar_LastFingerprint";
     const string AppliedKey = "USugar_LastApplied";
+    const string FingerprintSchema = "editor-integration-v2";
     internal sealed class CompilationUnit
     {
         public UnityCompilationAssembly UnityAssembly { get; }
@@ -93,10 +102,31 @@ static class USugarCompilationOrchestrator
         public NetworkCallingEntrypointMetadata[] PreviousNetworkMetadata;
     }
 
+    sealed class ProgramAssetBinding
+    {
+        public string ProgramAssetGuid;
+        public string ProgramAssetPath;
+        public UdonSharpProgramAsset Asset;
+        public string ScriptGuid;
+        public string ScriptPath;
+        public string NormalizedSourcePath;
+        public string UnityAssemblyName;
+        public Type SourceClass;
+        public bool Matched;
+    }
+
+    internal static void MarkCompileUnknown()
+        => CompileState.MarkUnknown();
+
     internal static void RequestCompile()
     {
-        RequestedVersion++;
-        if (IsCompiling || CompileScheduled) return;
+        CompileState.Request();
+        SchedulePendingCompile();
+    }
+
+    static void SchedulePendingCompile()
+    {
+        if (!CompileState.HasPendingRequest || CompileScheduled) return;
         CompileScheduled = true;
         EditorApplication.delayCall += RunCompile;
     }
@@ -104,32 +134,51 @@ static class USugarCompilationOrchestrator
     internal static void RunCompile()
     {
         CompileScheduled = false;
+        if (!CompileState.HasPendingRequest) return;
         if (EditorApplication.isCompiling || EditorApplication.isUpdating)
         {
-            CompileScheduled = true;
-            EditorApplication.delayCall += RunCompile;
+            SchedulePendingCompile();
             return;
         }
         IsCompiling = true;
-        var versionAtStart = RequestedVersion;
+        var versionAtStart = CompileState.RequestedVersion;
         try
         {
             CompileInternal(applyToAssets: true);
         }
         finally
         {
-            CompiledVersion = versionAtStart;
+            CompileState.Complete(versionAtStart);
             IsCompiling = false;
+            SchedulePendingCompile();
         }
-        if (RequestedVersion > CompiledVersion && !CompileScheduled)
+    }
+
+    internal static void CompileSynchronously(bool force = false)
+    {
+        var versionAtStart = CompileState.Request();
+        if (IsCompiling)
         {
-            CompileScheduled = true;
-            EditorApplication.delayCall += RunCompile;
+            SchedulePendingCompile();
+            return;
+        }
+
+        IsCompiling = true;
+        try
+        {
+            CompileInternal(applyToAssets: true, force: force);
+        }
+        finally
+        {
+            CompileState.Complete(versionAtStart);
+            IsCompiling = false;
+            SchedulePendingCompile();
         }
     }
 
     internal static void CompileInternal(bool applyToAssets, bool force = false)
     {
+        MarkCompileUnknown();
         var sw = System.Diagnostics.Stopwatch.StartNew();
         var collectedDiagnostics = new List<(string file, int line, int character, string message, string severity)>();
         string fingerprint = null;
@@ -149,15 +198,24 @@ static class USugarCompilationOrchestrator
         {
             // ── Phase 1: Serial preparation ──
             var compilationUnits = CollectCompilationUnits();
+            USugarExactSourcePathIndex<ProgramAssetBinding> programAssetIndex = null;
+            List<ProgramAssetBinding> programAssetBindings = null;
+            if (applyToAssets)
+                programAssetIndex = CollectProgramAssetBindings(out programAssetBindings);
             Mark("collect-sources");
             if (compilationUnits.Count == 0)
             {
+                if (programAssetBindings != null && programAssetBindings.Count > 0)
+                    throw new InvalidOperationException(
+                        $"{programAssetBindings.Count} UdonSharpProgramAsset(s) exist, but no player "
+                        + "source assembly containing an UdonSharpBehaviour was collected. Refusing "
+                        + "to leave their previously compiled programs active.");
                 USugarLog.Warn("No UdonSharpBehaviour sources found");
                 LastCompileHadErrors = false;
                 return;
             }
 
-            fingerprint = ComputeFingerprint(compilationUnits);
+            fingerprint = ComputeFingerprint(compilationUnits, programAssetBindings);
             Mark("fingerprint");
             var lastFp = SessionState.GetString(FingerprintKey, "");
             var lastApplied = SessionState.GetBool(AppliedKey, false);
@@ -221,7 +279,8 @@ static class USugarCompilationOrchestrator
             // in one symbol/semantic-model universe.
             var projectSourceAssemblyNames = new HashSet<string>(
                 CompilationPipeline.GetAssemblies(AssembliesType.Player)
-                    .Where(assembly => assembly.sourceFiles.Any(IsAssetPath))
+                    .Where(assembly => assembly.sourceFiles.Any(
+                        USugarEditorIntegrationPolicy.IsCSharpSource))
                     .Select(assembly => assembly.name),
                 StringComparer.OrdinalIgnoreCase);
             var crossAssemblyIssues = compilationUnits
@@ -253,25 +312,6 @@ static class USugarCompilationOrchestrator
                 return;
             }
 
-            Dictionary<string, List<(UdonSharpProgramAsset asset, string scriptPath)>> programAssetLookup = null;
-            if (applyToAssets)
-            {
-                programAssetLookup = new();
-                foreach (var guid in AssetDatabase.FindAssets("t:UdonSharpProgramAsset"))
-                {
-                    var p = AssetDatabase.GUIDToAssetPath(guid);
-                    var asset = AssetDatabase.LoadAssetAtPath<UdonSharpProgramAsset>(p);
-                    if (asset?.sourceCsScript == null) continue;
-                    var cn = asset.sourceCsScript.GetClass()?.Name;
-                    if (cn == null) continue;
-                    if (!programAssetLookup.TryGetValue(cn, out var list))
-                    {
-                        list = new();
-                        programAssetLookup[cn] = list;
-                    }
-                    list.Add((asset, AssetDatabase.GetAssetPath(asset.sourceCsScript)));
-                }
-            }
             Mark("program-asset-lookup");
 
             // Collect all UdonSharpBehaviour classes
@@ -387,19 +427,78 @@ static class USugarCompilationOrchestrator
             {
                 foreach (var result in validResults)
                 {
-                    var programAsset = USugarTypeCacheManager.FindProgramAsset(result.Symbol.Name,
-                        result.Tree.FilePath, programAssetLookup);
-                    if (programAsset == null)
+                    var declarationPaths = result.Symbol.DeclaringSyntaxReferences
+                        .Select(reference => reference.SyntaxTree.FilePath)
+                        .Append(result.Tree.FilePath)
+                        .Where(path => !string.IsNullOrWhiteSpace(path))
+                        .Select(NormalizeUnitySourcePath)
+                        .Distinct(StringComparer.OrdinalIgnoreCase)
+                        .OrderBy(path => path, StringComparer.Ordinal)
+                        .ToArray();
+                    if (!programAssetIndex.TryResolveUnique(
+                            declarationPaths, out var binding, out var bindingError))
                     {
                         // Emitted a behaviour but found no matching UdonSharpProgramAsset (deleted/renamed asset,
                         // or a class<->asset name+path mismatch). The compiled UASM never reaches an asset — a real
                         // failure, not a no-op. Surface it loudly + count it so the run is NOT marked up-to-date.
-                        var miss = $"No UdonSharpProgramAsset found for behaviour '{result.Symbol.Name}'; its compiled program was not applied. Create or relink the program asset, then recompile.";
+                        var miss = $"Cannot bind behaviour '{result.Symbol.ToDisplayString()}' to a "
+                                   + $"UdonSharpProgramAsset: {bindingError}";
                         USugarLog.Error($"{result.Tree.FilePath}: {miss}");
                         collectedDiagnostics.Add((result.Tree.FilePath, 0, 0, miss, "Error"));
                         failures++;
                         continue;
                     }
+                    var emittedAssemblyName = result.Symbol.ContainingAssembly.Identity.Name;
+                    if (!string.Equals(
+                            binding.UnityAssemblyName, emittedAssemblyName,
+                            StringComparison.OrdinalIgnoreCase))
+                    {
+                        var assemblyMismatch =
+                            $"Program asset '{binding.ProgramAssetPath}' belongs to Unity assembly "
+                            + $"'{binding.UnityAssemblyName}', not emitted assembly "
+                            + $"'{emittedAssemblyName}'.";
+                        USugarLog.Error($"{result.Tree.FilePath}: {assemblyMismatch}");
+                        collectedDiagnostics.Add((
+                            result.Tree.FilePath, 0, 0, assemblyMismatch, "Error"));
+                        failures++;
+                        continue;
+                    }
+                    if (binding.Matched)
+                    {
+                        var duplicate = $"Program asset '{binding.ProgramAssetPath}' would receive more "
+                                        + "than one behaviour program. Keep one UdonSharpBehaviour class "
+                                        + "per source script.";
+                        USugarLog.Error($"{result.Tree.FilePath}: {duplicate}");
+                        collectedDiagnostics.Add((
+                            result.Tree.FilePath, 0, 0, duplicate, "Error"));
+                        failures++;
+                        continue;
+                    }
+                    var resolvedBehaviourType = ClrTypeResolver.Resolve(result.Symbol);
+                    if (resolvedBehaviourType == null)
+                    {
+                        var unresolved = $"Could not resolve CLR type for emitted behaviour "
+                                         + $"'{result.Symbol.ToDisplayString()}'; refusing to bind "
+                                         + $"program asset '{binding.ProgramAssetPath}'.";
+                        USugarLog.Error($"{result.Tree.FilePath}: {unresolved}");
+                        collectedDiagnostics.Add((
+                            result.Tree.FilePath, 0, 0, unresolved, "Error"));
+                        failures++;
+                        continue;
+                    }
+                    if (binding.SourceClass != resolvedBehaviourType)
+                    {
+                        var mismatch = $"Program asset '{binding.ProgramAssetPath}' resolves to CLR type "
+                                       + $"'{binding.SourceClass.FullName}', not emitted behaviour "
+                                       + $"'{resolvedBehaviourType.FullName}'.";
+                        USugarLog.Error($"{result.Tree.FilePath}: {mismatch}");
+                        collectedDiagnostics.Add((
+                            result.Tree.FilePath, 0, 0, mismatch, "Error"));
+                        failures++;
+                        continue;
+                    }
+                    binding.Matched = true;
+                    var programAsset = binding.Asset;
 
                     var opSw = System.Diagnostics.Stopwatch.StartNew();
                     var program = USugarConstantApplier.AssembleUasm(result.Uasm, result.HeapSize);
@@ -463,6 +562,19 @@ static class USugarCompilationOrchestrator
                 }
             }
 
+            if (applyToAssets && failures == 0)
+            {
+                foreach (var orphan in programAssetBindings.Where(binding => !binding.Matched))
+                {
+                    var message = $"Program asset '{orphan.ProgramAssetPath}' is not backed by any "
+                                  + "emitted UdonSharpBehaviour. Its stale compiled program will not be "
+                                  + "accepted; delete or relink the asset.";
+                    USugarLog.Error(message);
+                    collectedDiagnostics.Add((orphan.ScriptPath, 0, 0, message, "Error"));
+                    failures++;
+                }
+            }
+
             Mark("apply-preflight");
             var commitSucceeded = false;
             if (applyToAssets && failures == 0)
@@ -488,6 +600,7 @@ static class USugarCompilationOrchestrator
                         storeMs += opSw.Elapsed.TotalMilliseconds;
                     }
                     AssetDatabase.SaveAssets();
+                    InvalidateSerializationCaches();
                     commitSucceeded = true;
                 }
                 catch (Exception ex)
@@ -539,7 +652,6 @@ static class USugarCompilationOrchestrator
             {
                 foreach (var prepared in preparedApplies)
                     PushUasmToEditorCache(prepared.Asset, prepared.Result.Uasm);
-                InvalidateSerializationCaches();
             }
             Mark("apply-and-save");
 
@@ -655,10 +767,18 @@ static class USugarCompilationOrchestrator
         var layout = planner.GetLayout(classSymbol);
         if (layout == null) return Array.Empty<NetworkCallingEntrypointMetadata>();
         var list = new List<NetworkCallingEntrypointMetadata>();
-        foreach (var member in classSymbol.GetMembers())
+        var exports = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var pair in USugarNetworkMetadataPolicy.GetCallableMethods(layout))
         {
-            if (!(member is IMethodSymbol method) || !LayoutPlanner.IsNetworkCallable(method)) continue;
-            if (!layout.Methods.TryGetValue(method, out var ml)) continue;
+            var method = pair.Key;
+            var ml = pair.Value;
+            if (!exports.Add(ml.ExportName))
+                throw new InvalidOperationException(
+                    $"Multiple [NetworkCallable] methods map to export '{ml.ExportName}' "
+                    + $"on '{classSymbol.ToDisplayString()}'.");
+            if (ml.ParamIds.Count != method.Parameters.Length)
+                throw new InvalidOperationException(
+                    $"[NetworkCallable] parameter layout drift for '{method.ToDisplayString()}'.");
 
             var attrData = method.GetAttributes()
                 .FirstOrDefault(a => a.AttributeClass?.Name == "NetworkCallableAttribute");
@@ -668,8 +788,16 @@ static class USugarCompilationOrchestrator
 
             var pmeta = new NetworkCallingParameterMetadata[method.Parameters.Length];
             for (int i = 0; i < method.Parameters.Length; i++)
+            {
+                var parameterType =
+                    USugarTypeCacheManager.ResolveUdonType(
+                        ExternResolver.GetUdonTypeName(method.Parameters[i].Type))
+                    ?? throw new InvalidOperationException(
+                        $"Could not resolve Udon storage type for [NetworkCallable] parameter "
+                        + $"'{method.Parameters[i].Name}' on '{method.ToDisplayString()}'.");
                 pmeta[i] = new NetworkCallingParameterMetadata(
-                    ml.ParamIds[i], USugarTypeCacheManager.ResolveClrType(method.Parameters[i].Type));
+                    ml.ParamIds[i], parameterType);
+            }
 
             list.Add(new NetworkCallingEntrypointMetadata(ml.ExportName, attr, pmeta));
         }
@@ -695,49 +823,148 @@ static class USugarCompilationOrchestrator
 
     static void InvalidateSerializationCaches()
     {
-        ClearStaticDictionary(USugarReflectionTargets.VarStorageType, "_variableTypeLookup");
+        ClearStaticDictionary(
+            USugarReflectionTargets.VariableTypeLookupField, "_variableTypeLookup");
 
-        // Fail loud if the OdinSerializer formatter-cache bindings broke (SDK rename). Without clearing them, a
-        // freshly-compiled program can be (de)serialized by a STALE formatter — a silent runtime-data hazard, far
-        // worse than a missing inspector feature — so surface it instead of no-op'ing quietly.
-        if (USugarReflectionTargets.FormattersField == null || USugarReflectionTargets.EmittedFormatterOpenType == null)
-        {
-            USugarLog.Error("Serialization-cache bindings (_formatters / EmittedFormatter) did not resolve — the OdinSerializer formatter cache could not be cleared after compile; serialized program data may be stale. The UdonSharp SDK may have changed; check USugarReflectionTargets.");
-            return;
-        }
+        var formatterValue = USugarReflectionTargets.FormattersField.GetValue(null);
+        if (formatterValue == null) return;
+        if (formatterValue is not System.Collections.IDictionary formatters)
+            throw new InvalidOperationException(
+                "UdonSharp formatter cache '_formatters' is not an IDictionary.");
 
-        if (USugarReflectionTargets.FormattersField.GetValue(null) is System.Collections.IDictionary formatters)
+        foreach (var rawKey in formatters.Keys.Cast<object>().ToArray())
         {
-            foreach (var key in formatters.Keys.Cast<Type>().ToArray())
-            {
-                try
-                {
-                    var closed = USugarReflectionTargets.EmittedFormatterOpenType.MakeGenericType(key);
-                    var manager = closed.GetNestedType("UdonSharpBehaviourFormatterManager",
-                        BindingFlags.NonPublic);
-                    ClearStaticDictionary(manager, "_heapDataLookup");
-                }
-                catch { }
-            }
-            formatters.Clear();
+            if (rawKey is not Type key)
+                throw new InvalidOperationException(
+                    "UdonSharp formatter cache contains a non-Type key.");
+            var closed = USugarReflectionTargets.EmittedFormatterOpenType.MakeGenericType(key);
+            var manager = closed.GetNestedType(
+                "UdonSharpBehaviourFormatterManager", BindingFlags.NonPublic)
+                ?? throw new MissingMemberException(
+                    closed.FullName, "UdonSharpBehaviourFormatterManager");
+            var heapDataLookup = manager.GetField(
+                "_heapDataLookup", BindingFlags.NonPublic | BindingFlags.Static)
+                ?? throw new MissingFieldException(manager.FullName, "_heapDataLookup");
+            ClearStaticDictionary(heapDataLookup, "_heapDataLookup");
         }
+        formatters.Clear();
     }
 
-    static void ClearStaticDictionary(Type type, string fieldName)
+    static void ClearStaticDictionary(FieldInfo field, string displayName)
     {
-        if (type == null) return;
-        var field = type.GetField(fieldName, BindingFlags.NonPublic | BindingFlags.Static);
-        if (field?.GetValue(null) is System.Collections.IDictionary dict)
-            dict.Clear();
+        if (field == null)
+            throw new MissingFieldException(
+                $"Required serialization cache field '{displayName}' is unavailable.");
+        var value = field.GetValue(null);
+        if (value == null) return;
+        if (value is not System.Collections.IDictionary dictionary)
+            throw new InvalidOperationException(
+                $"Serialization cache '{displayName}' is not an IDictionary.");
+        dictionary.Clear();
     }
 
     // ── Helpers ──
 
-    static string ComputeFingerprint(IReadOnlyList<CompilationUnit> compilationUnits)
+    static USugarExactSourcePathIndex<ProgramAssetBinding> CollectProgramAssetBindings(
+        out List<ProgramAssetBinding> bindings)
+    {
+        bindings = new List<ProgramAssetBinding>();
+        var index = new USugarExactSourcePathIndex<ProgramAssetBinding>();
+        foreach (var guid in AssetDatabase.FindAssets("t:UdonSharpProgramAsset")
+            .OrderBy(value => value, StringComparer.Ordinal))
+        {
+            var programAssetPath = AssetDatabase.GUIDToAssetPath(guid);
+            var asset = AssetDatabase.LoadAssetAtPath<UdonSharpProgramAsset>(programAssetPath);
+            if (asset == null)
+                throw new InvalidOperationException(
+                    $"UdonSharpProgramAsset '{programAssetPath}' could not be loaded.");
+            if (asset.sourceCsScript == null)
+                throw new InvalidOperationException(
+                    $"UdonSharpProgramAsset '{programAssetPath}' has no source MonoScript. "
+                    + "Delete or relink the orphaned asset before compiling.");
+
+            var scriptPath = AssetDatabase.GetAssetPath(asset.sourceCsScript);
+            if (string.IsNullOrEmpty(scriptPath))
+                throw new InvalidOperationException(
+                    $"The source MonoScript for '{programAssetPath}' has no AssetDatabase path.");
+            var scriptGuid = AssetDatabase.AssetPathToGUID(scriptPath);
+            if (string.IsNullOrEmpty(scriptGuid))
+                throw new InvalidOperationException(
+                    $"The source MonoScript '{scriptPath}' for '{programAssetPath}' has no GUID.");
+            var sourceClass = asset.sourceCsScript.GetClass();
+            if (sourceClass == null || !typeof(UdonSharpBehaviour).IsAssignableFrom(sourceClass))
+                throw new InvalidOperationException(
+                    $"The source MonoScript '{scriptPath}' for '{programAssetPath}' does not resolve "
+                    + "to an UdonSharpBehaviour CLR type.");
+
+            var assemblyName = CompilationPipeline.GetAssemblyNameFromScriptPath(scriptPath);
+            if (string.IsNullOrEmpty(assemblyName))
+                throw new InvalidOperationException(
+                    $"Unity did not resolve a player assembly for UdonSharp source '{scriptPath}'.");
+
+            var binding = new ProgramAssetBinding
+            {
+                ProgramAssetGuid = guid,
+                ProgramAssetPath = programAssetPath,
+                Asset = asset,
+                ScriptGuid = scriptGuid,
+                ScriptPath = scriptPath,
+                NormalizedSourcePath = NormalizeUnitySourcePath(scriptPath),
+                UnityAssemblyName = Path.GetFileNameWithoutExtension(assemblyName),
+                SourceClass = sourceClass,
+            };
+            bindings.Add(binding);
+            index.Add(binding.NormalizedSourcePath, binding);
+        }
+        return index;
+    }
+
+    static string NormalizeUnitySourcePath(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+            throw new ArgumentException("Unity source path is required.", nameof(path));
+
+        var assetPath = path.Replace('\\', '/');
+        if (!Path.IsPathRooted(path)
+            && assetPath.StartsWith("Packages/", StringComparison.OrdinalIgnoreCase))
+        {
+            var package = UnityEditor.PackageManager.PackageInfo.FindForAssetPath(assetPath);
+            if (package != null && !string.IsNullOrEmpty(package.resolvedPath)
+                && !string.IsNullOrEmpty(package.assetPath)
+                && assetPath.StartsWith(
+                    package.assetPath + "/", StringComparison.OrdinalIgnoreCase))
+            {
+                var packageRelative = assetPath.Substring(package.assetPath.Length + 1);
+                return USugarEditorIntegrationPolicy.NormalizeSourcePath(
+                    package.resolvedPath, packageRelative);
+            }
+        }
+
+        var projectRoot = Directory.GetParent(UnityEngine.Application.dataPath)?.FullName
+                          ?? throw new InvalidOperationException(
+                              "Unity project root could not be resolved.");
+        return USugarEditorIntegrationPolicy.NormalizeSourcePath(projectRoot, path);
+    }
+
+    static string GetObjectIdentity(UnityEngine.Object value)
+    {
+        if (value == null) return "<null>";
+        if (AssetDatabase.TryGetGUIDAndLocalFileIdentifier(
+                value, out string guid, out long localId))
+            return guid + ":" + localId;
+        return value.GetType().FullName + ":" + value.GetInstanceID();
+    }
+
+    static string ComputeFingerprint(
+        IReadOnlyList<CompilationUnit> compilationUnits,
+        IReadOnlyList<ProgramAssetBinding> programAssetBindings)
     {
         using var sha256 = SHA256.Create();
         using var ms = new MemoryStream();
         using var writer = new BinaryWriter(ms);
+        writer.Write(FingerprintSchema);
+        writer.Write(typeof(USugarCompilationOrchestrator).Assembly.ManifestModule.ModuleVersionId
+            .ToString("N"));
         var referenceIdentities = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         foreach (var unit in compilationUnits.OrderBy(
             unit => unit.UnityAssembly.name, StringComparer.Ordinal))
@@ -751,6 +978,20 @@ static class USugarCompilationOrchestrator
             foreach (var d in BuildPreprocessorDefines(unit.UnityAssembly)
                 .OrderBy(s => s, StringComparer.Ordinal))
                 writer.Write(d);
+            writer.Write(unit.UnityAssembly.compilerOptions.AllowUnsafeCode);
+            writer.Write(unit.UnityAssembly.compilerOptions.ApiCompatibilityLevel.ToString());
+            writer.Write(unit.UnityAssembly.compilerOptions.LanguageVersion ?? "");
+            foreach (var responseFile in (unit.UnityAssembly.compilerOptions.ResponseFiles
+                    ?? Array.Empty<string>())
+                .Where(path => !string.IsNullOrEmpty(path))
+                .Select(NormalizeUnitySourcePath)
+                .OrderBy(path => path, StringComparer.Ordinal))
+            {
+                writer.Write(responseFile);
+                writer.Write(File.Exists(responseFile)
+                    ? ComputeFileContentHash(responseFile)
+                    : "<missing>");
+            }
             foreach (var referencePath in GetMetadataReferencePaths(unit.UnityAssembly))
             {
                 writer.Write(referencePath);
@@ -761,6 +1002,19 @@ static class USugarCompilationOrchestrator
                 }
                 writer.Write(identity);
             }
+        }
+        foreach (var binding in (programAssetBindings ?? Array.Empty<ProgramAssetBinding>())
+            .OrderBy(binding => binding.ProgramAssetGuid, StringComparer.Ordinal)
+            .ThenBy(binding => binding.ProgramAssetPath, StringComparer.Ordinal))
+        {
+            writer.Write(binding.ProgramAssetGuid ?? "");
+            writer.Write(binding.ProgramAssetPath ?? "");
+            writer.Write(binding.ScriptGuid ?? "");
+            writer.Write(binding.ScriptPath ?? "");
+            writer.Write(binding.NormalizedSourcePath ?? "");
+            writer.Write(binding.UnityAssemblyName ?? "");
+            writer.Write(binding.SourceClass?.AssemblyQualifiedName ?? "");
+            writer.Write(GetObjectIdentity(binding.Asset?.SerializedProgramAsset));
         }
         writer.Flush();
         ms.Position = 0;
@@ -811,6 +1065,8 @@ static class USugarCompilationOrchestrator
     {
         var type = symbol as INamedTypeSymbol ?? symbol?.ContainingType;
         if (type == null || type.TypeKind == TypeKind.Enum) return false;
+        if (USugarCompilerHelper.IsFrameworkNamespace(type.ContainingNamespace))
+            return false;
         return !ExternResolver.ClassHasRegisteredExterns(type);
     }
 
@@ -849,9 +1105,9 @@ static class USugarCompilationOrchestrator
         return playerAssemblies
             .Where(assembly => behaviourAssemblyNames.Contains(assembly.name))
             .Select(assembly => new CompilationUnit(assembly, assembly.sourceFiles
-                .Where(path => path.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
-                .Where(IsAssetPath)
-                .Select(Path.GetFullPath)
+                .Where(USugarEditorIntegrationPolicy.IsCSharpSource)
+                .Select(NormalizeUnitySourcePath)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
                 .OrderBy(path => path, StringComparer.Ordinal)
                 .ToArray()))
             .Where(unit => unit.SourcePaths.Count > 0)
@@ -930,18 +1186,6 @@ static class USugarCompilationOrchestrator
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .OrderBy(path => path, StringComparer.Ordinal)
             .ToArray();
-
-    static bool IsAssetPath(string path)
-    {
-        if (string.IsNullOrEmpty(path)) return false;
-        var fullPath = Path.GetFullPath(path)
-            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        var assetsRoot = Path.GetFullPath(UnityEngine.Application.dataPath)
-            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        return fullPath.StartsWith(
-            assetsRoot + Path.DirectorySeparatorChar,
-            StringComparison.OrdinalIgnoreCase);
-    }
 
     static IEnumerable<Type> GetLoadableTypes(System.Reflection.Assembly assembly)
     {
