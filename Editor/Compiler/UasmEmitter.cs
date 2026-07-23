@@ -1305,20 +1305,24 @@ public partial class UasmEmitter
         foreach (var bm in baseInstanceMethods)
             EmitMethod(bm);
 
-        // Synthesize _start if there are field initializers, FCB fields, or default-init aggregate
-        // fields but no user-defined Start(). This MUST run BEFORE the bridge emission and the
-        // pending-local-function/generic-spec drains below — mirroring the user-Start path, where
-        // EmitFieldInitializers runs during the body pass — so an initializer that hoists a lambda
-        // (delegate-field initializer) gets its CFunction body and __dlg_ bridge emitted instead of
-        // landing in never-drained pending lists (CoreToUasm 'CFuncRef references unknown function').
-        if ((_fieldInitOps.Count > 0 || _fieldChangeCallbacks.Count > 0
-             || _ctx.Aggregates.FieldDefaults.Count > 0 || _ctx.ClassTypes.MintedClasses.Count > 0)
-            && !methods.Any(m => UdonEventNames.TryGetValue(m.Name, out var en) && en == "_start"))
+        // A behaviour can receive an exported event before its Start event.  Build one construction
+        // barrier and later prepend it to every export; tying these operations to _start leaves a
+        // receiver observably half-constructed during cross-behaviour startup calls.
+        bool hasProgramInitializers = _fieldInitOps.Count > 0 || _fieldChangeCallbacks.Count > 0
+            || _ctx.Aggregates.FieldDefaults.Count > 0 || _ctx.ClassTypes.MintedClasses.Count > 0;
+        if (hasProgramInitializers)
         {
-            var startFunc = _module.AddFunction("_start", "_start");
-            _builder.SetFunction(startFunc);
-            EmitFieldInitializers();
-            _builder.EmitReturn();
+            var initialization = new ProgramInitializationEmitter(_ctx);
+            initialization.Emit(EmitFieldInitializers);
+
+            // Keep the ordinary Udon lifecycle hook so construction still happens eagerly in the
+            // common case.  Its body is empty because the export guard performs the actual work.
+            if (!methods.Any(m => UdonEventNames.TryGetValue(m.Name, out var en) && en == "_start"))
+            {
+                var startFunc = _module.AddFunction("_start", "_start");
+                _builder.SetFunction(startFunc);
+                _builder.EmitReturn();
+            }
         }
 
         // Emit interface bridge exports
@@ -1355,6 +1359,9 @@ public partial class UasmEmitter
         // deliberately not wired here.
         new MulticastDelegateEmitter(_ctx, _bridge, _delegateConvention).EmitPending();
         new EnumToStringSyntheticEmitter(_ctx, _bridge).Emit();
+
+        if (hasProgramInitializers)
+            new ProgramInitializationEmitter(_ctx).GuardEveryExport();
 
         // §5.5 (graft #2): now that every capturing bridge is registered, assert each has a graph node.
         VerifyBridgeTargetsAreNodes();
@@ -1433,11 +1440,6 @@ public partial class UasmEmitter
 
         // Switch to the method's function for body emission
         _builder.SetFunction(func);
-
-        // Emit field initializers at the start of _start
-        var exportName = (closureSpec?.Slot ?? _methodSlots[method]).VarPrefix;
-        if (exportName == "_start")
-            EmitFieldInitializers();
 
         // Set up type param map for generic specializations. Feature G: compose the method's OWN
         // generic-method type args (if the method itself is generic) with its ContainingType's type
