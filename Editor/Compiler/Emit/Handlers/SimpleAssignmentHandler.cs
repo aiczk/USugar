@@ -39,7 +39,7 @@ public class SimpleAssignmentHandler : AssignmentHandlerBase, IExpressionHandler
         // vs 71). Behaviour this-fields ride the fallback below (no receiver legs).
         if (TryPrepareWriteLValue(assign.Target) is { } writePlan)
         {
-            var srcValue = VisitEmittedValue(assign.Value);
+            var srcValue = VisitLoweredExpression(assign.Value);
             RejectUnsafeCrossProgramDelegateWrite(assign.Target, srcValue.Info);
             writePlan.Write(srcValue.Leaf);
             return srcValue.Leaf;
@@ -50,7 +50,7 @@ public class SimpleAssignmentHandler : AssignmentHandlerBase, IExpressionHandler
         // bundle reference (or null const) and the store is a single reference copy (design §2.3).
 
         // VisitExpression clones aggregate locals/params automatically (Clone-on-read).
-        var directValue = VisitEmittedValue(assign.Value);
+        var directValue = VisitLoweredExpression(assign.Value);
         if (assign.Target is IFieldReferenceOperation dlgFieldTarget)
             RejectUnsafeCrossProgramDelegateWrite(dlgFieldTarget, directValue.Info);
         var srcLeaf = directValue.Leaf;

@@ -142,7 +142,7 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
 
         var lv = PrepareLValue(op.Target);
         var leftVal = lv.Value;
-        var right = VisitEmittedValue(op.Value);
+        var right = VisitLoweredExpression(op.Value);
         if (op.OperatorKind == BinaryOperatorKind.Add)
             RejectUnsafeCrossProgramDelegateWrite(op.Target, right.Info);
         var rightVal = right.Leaf;
@@ -231,7 +231,7 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
                 stagedReceiver = objectArrayOwner
                     ? LoadInstanceRaw(evtRef.Instance)
                     : VisitExpression(evtRef.Instance);
-            var emittedHandler = VisitEmittedValue(op.HandlerValue);
+            var emittedHandler = VisitLoweredExpression(op.HandlerValue);
             var handlerValue = emittedHandler.Leaf;
             if (objectArrayOwner)
             {
@@ -286,7 +286,7 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
         {
             currentVal = LoadField(storageName, new StorageType(DelegateAbi.BundleType));
         }
-        var handler = VisitEmittedValue(op.HandlerValue);
+        var handler = VisitLoweredExpression(op.HandlerValue);
         if (op.Adds)
             RejectUnsafeCrossProgramEventHandler(evt, handler.Info);
         var handlerVal = handler.Leaf;

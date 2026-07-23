@@ -79,7 +79,9 @@ public partial class UasmEmitter
             new ArrayHandler(_ctx),
             new NullableHandler(_ctx));
 
-        _ctx.InitializeDispatchers(VisitOperation, VisitExpression, operatorHandler.EmitPatternCheckImpl);
+        _ctx.InitializeDispatchers(
+            VisitOperation, VisitExpression, VisitLoweredExpression,
+            operatorHandler.EmitPatternCheckImpl);
     }
 
     // Build one kind→handler table from each handler's declared HandledKinds. A kind claimed by two
@@ -1753,13 +1755,20 @@ public partial class UasmEmitter
     // ── Expression visitor (facade — delegates to handlers) ──
 
     CLeaf VisitExpression(IOperation op)
+        => VisitLoweredExpression(op).Leaf;
+
+    LoweredValue VisitLoweredExpression(IOperation op)
     {
         if (op == null)
             throw new NotSupportedException("VisitExpression called with null operation");
         // Unwrap parenthesized expressions (transparent wrapper)
         while (op is IParenthesizedOperation paren) op = paren.Operand;
         if (_exprDispatch.TryGetValue(op.Kind, out var h))
-            try { return h.Handle(op); } catch (System.Exception ex) { throw TagLocation(ex, op); }
+            try
+            {
+                return LoweredValue.Create(_ctx, op, h.Handle(op));
+            }
+            catch (System.Exception ex) { throw TagLocation(ex, op); }
         throw new NotSupportedException(
             $"Unsupported expression: {op.Kind} ({op.GetType().Name})");
     }

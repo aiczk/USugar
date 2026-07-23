@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using Microsoft.CodeAnalysis;
-using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.Operations;
 
 public class ExpressionHandler : HandlerBase, IExpressionHandler
@@ -391,48 +390,31 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
             GetStorageTypeName(destinationType));
     }
 
-    bool TryEmitClosedObjectCast(IConversionOperation conv, CLeaf srcVal,
-        ITypeSymbol semanticSource, ITypeSymbol closedDestination, out CLeaf result)
+    bool TryEmitClosedObjectCast(IConversionOperation conv, LoweredValue source,
+        ITypeSymbol closedDestination, out CLeaf result)
     {
         result = null;
-        if (conv.OperatorMethod != null
-            || semanticSource?.SpecialType != SpecialType.System_Object
-            || closedDestination == null
-            || closedDestination is ITypeParameterSymbol
-            || EmitPolicy.IsNullableT(closedDestination, out _)
-            || TypeClassifier.IsObjectArrayEmulated(closedDestination)
-            || closedDestination is INamedTypeSymbol { DelegateInvokeMethod: not null })
+        var plan = _ctx.Conversions.ClassifyClosedObjectCast(
+            conv, source, closedDestination);
+        if (plan.Kind == ClosedConversionKind.None)
             return false;
 
-        // UdonSharp erases a conversion to object without changing the carried Value.UserType. Mirror
-        // that here: VisitExpression already evaluated the inner conversion once, while this walk only
-        // recovers the concrete source type hidden by `(T)(object)value`. Accept it only when its Udon
-        // storage agrees with the leaf we actually received; otherwise retain the semantic object source.
-        IOperation sourceOperation = conv.Operand;
-        while (sourceOperation is IConversionOperation inner
-               && inner.OperatorMethod == null
-               && ResolveType(inner.Type)?.SpecialType == SpecialType.System_Object)
-            sourceOperation = inner.Operand;
-
-        var effectiveSource = ResolveType(sourceOperation.Type) ?? semanticSource;
-        if (effectiveSource == null
-            || GetStorageTypeName(effectiveSource) != srcVal.Type.Name)
-            effectiveSource = semanticSource;
-
+        // Object erasure changes the semantic type without changing the carried value. LoweredValue
+        // preserves that carrier explicitly, so the closed conversion never has to inspect syntax.
+        var srcVal = source.Leaf;
+        var effectiveSource = plan.SourceType;
         var destinationStorage = GetStorageType(closedDestination);
-        if (srcVal.Type == destinationStorage)
+        if (plan.Kind == ClosedConversionKind.Identity)
         {
             result = srcVal;
             return true;
         }
 
-        var conversion = (_compilation as CSharpCompilation)
-            ?.ClassifyConversion(effectiveSource, closedDestination);
-
         // The outer object cast hides a real operator on the carried source (DataToken→int/string
         // in YamaStream). Reclassify the CLOSED pair and emit that operator exactly as a direct cast.
-        if (conversion is { IsUserDefined: true, MethodSymbol: { } conversionMethod })
+        if (plan.Kind == ClosedConversionKind.UserOperator)
         {
+            var conversionMethod = plan.OperatorMethod;
             if (conversionMethod.ContainingType is INamedTypeSymbol conversionOwner
                 && TypeClassifier.IsObjectArrayEmulated(conversionOwner))
             {
@@ -456,7 +438,7 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
         // A specialization can also reveal an enum conversion hidden by `(T)(object)value`.
         // User enums use their underlying integer storage; SDK enum→numeric follows UdonSharp's
         // object-based Convert path because the registered enum has its own heap tag.
-        if (conversion is { IsEnumeration: true })
+        if (plan.Kind == ClosedConversionKind.Enumeration)
         {
             var sourceEnum = effectiveSource as INamedTypeSymbol;
             if (sourceEnum?.TypeKind != TypeKind.Enum)
@@ -492,21 +474,18 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
 
         // Once T is closed, an object-sourced numeric unbox uses Convert.ToT(object), while a numeric
         // value hidden behind the object erasure keeps C# unchecked numeric semantics.
-        if (ExternResolver.IsConvertibleNumericType(closedDestination))
+        if (plan.Kind == ClosedConversionKind.ObjectNumeric
+            && ExternResolver.GetConvertMethodName(closedDestination) is { } objectConvert)
         {
-            if (effectiveSource.SpecialType == SpecialType.System_Object
-                && ExternResolver.GetConvertMethodName(closedDestination) is { } objectConvert)
-            {
-                result = ExternCall(
-                    $"SystemConvert.__{objectConvert}__SystemObject__{destinationStorage.Name}",
-                    new List<CLeaf> { srcVal }, destinationStorage);
-                return true;
-            }
-            if (ExternResolver.IsConvertibleNumericType(effectiveSource))
-            {
-                result = EmitNumericConversion(srcVal, effectiveSource, closedDestination);
-                return true;
-            }
+            result = ExternCall(
+                $"SystemConvert.__{objectConvert}__SystemObject__{destinationStorage.Name}",
+                new List<CLeaf> { srcVal }, destinationStorage);
+            return true;
+        }
+        if (plan.Kind == ClosedConversionKind.Numeric)
+        {
+            result = EmitNumericConversion(srcVal, effectiveSource, closedDestination);
+            return true;
         }
 
         // UdonSharp's final CastValue fallback is a raw COPY. Represent its destination type explicitly
@@ -538,7 +517,8 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
             && ResolveType(conv.Operand.Type) is { } b82Src && ResolveType(conv.Type) is { } b82Dst)
             RejectProgramLocalErasure(conv, b82Src, b82Dst);
 
-        var srcVal = VisitExpression(conv.Operand);
+        var sourceValue = VisitLoweredExpression(conv.Operand);
+        var srcVal = sourceValue.Leaf;
 
         // B62: `o as T` — mirror the `is` machinery through the same runtime-type-test choke point:
         // (o is T) ? o : null. A non-distinguishable (collapse-set) target hits EmitTypeCheck's loud
@@ -691,7 +671,7 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
         // Closed generic/object-erasure cast. This must run after the delegate protocol guards above
         // and before the raw conversion arms below, whose Roslyn symbols still expose `object` and T.
         if (TryEmitClosedObjectCast(
-                conv, srcVal, convSrcType, convDstType, out var closedObjectCast))
+                conv, sourceValue, convDstType, out var closedObjectCast))
             return closedObjectCast;
 
         // Lifted numeric Nullable<T> conversion (e.g. char?→int? inserted by Roslyn around small-int nullable
@@ -783,44 +763,7 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
             && ExternResolver.IsConvertibleNumericType(conv.Type)
             && !SymbolEqualityComparer.Default.Equals(conv.Operand.Type, conv.Type))
         {
-            var methodName = ExternResolver.GetConvertMethodName(conv.Type);
-            if (methodName != null)
-            {
-                // C# truncates float→int; SystemConvert rounds. Insert Math.Truncate first.
-                if (ExternResolver.IsFloatType(conv.Operand.Type) && ExternResolver.IsIntegerType(conv.Type))
-                {
-                    var isDecimal = conv.Operand.Type.SpecialType == SpecialType.System_Decimal;
-                    var truncType = isDecimal ? "SystemDecimal" : "SystemDouble";
-
-                    if (!isDecimal && conv.Operand.Type.SpecialType == SpecialType.System_Single)
-                    {
-                        // float → double promotion
-                        srcVal = ExternCall(
-                            "SystemConvert.__ToDouble__SystemSingle__SystemDouble",
-                            new List<CLeaf> { srcVal },
-                            StorageTypes.Double);
-                    }
-
-                    // Math.Truncate(double) or Math.Truncate(decimal)
-                    srcVal = ExternCall(
-                        $"SystemMath.__Truncate__{truncType}__{truncType}",
-                        new List<CLeaf> { srcVal },
-                        new StorageType(truncType));
-
-                    // Convert truncated value → target integer type
-                    var dstType = GetStorageTypeName(conv.Type);
-                    return ExternCall(
-                        $"SystemConvert.__{methodName}__{truncType}__{dstType}",
-                        new List<CLeaf> { srcVal },
-                        new StorageType(dstType));
-                }
-
-                // Non-truncation numeric conversions. Integer→small-int narrowing uses C#-unchecked
-                // wrap (EmitNarrowingConvert); widening/other falls back to the plain convert extern.
-                var srcType = GetStorageTypeName(conv.Operand.Type);
-                var dstType2 = GetStorageTypeName(conv.Type);
-                return EmitNarrowingConvert(srcVal, srcType, dstType2);
-            }
+            return EmitNumericConversion(srcVal, conv.Operand.Type, conv.Type);
         }
 
         // User-defined implicit/explicit conversions (e.g. Vector2→Vector3)

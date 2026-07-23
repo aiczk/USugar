@@ -37,8 +37,8 @@ public abstract partial class HandlerBase
     // ── Dispatch (recursive descent into other handlers via UasmEmitter facade) ──
     protected void VisitOperation(IOperation op) => _ctx.VisitOperation(op);
     protected CLeaf VisitExpression(IOperation op) => _ctx.VisitExpression(op);
-    protected EmittedValue VisitEmittedValue(IOperation op)
-        => new EmittedValue(VisitExpression(op), _ctx.Boundary.ClassifyValue(op));
+    protected LoweredValue VisitLoweredExpression(IOperation op)
+        => _ctx.VisitLoweredExpression(op);
     protected CLeaf EmitPatternCheck(CLeaf value, ITypeSymbol valueType, IPatternOperation pattern)
         => _ctx.EmitPatternCheck(value, valueType, pattern);
 

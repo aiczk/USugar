@@ -16,6 +16,7 @@ public class EmitContext
     public readonly LayoutPlanner Planner;
     public readonly StorageContext Storage;
     public readonly BoundaryChecker Boundary;
+    public readonly ConversionLowerer Conversions;
     public readonly MethodAnalysisCache MethodAnalyses;
     public readonly GenericContext Generics = new GenericContext();
     public readonly RecursionContext RecursionContext = new RecursionContext();
@@ -152,11 +153,14 @@ public class EmitContext
     // Dispatch delegates (Core IR-based)
     Action<IOperation> _visitOperation;
     Func<IOperation, CLeaf> _visitExpression;
+    Func<IOperation, LoweredValue> _visitLoweredExpression;
     Func<CLeaf, ITypeSymbol, IPatternOperation, CLeaf> _emitPatternCheck;
 
     public Action<IOperation> VisitOperation => _visitOperation
         ?? throw new InvalidOperationException("EmitContext dispatchers not initialized. Call InitializeDispatchers first.");
     public Func<IOperation, CLeaf> VisitExpression => _visitExpression
+        ?? throw new InvalidOperationException("EmitContext dispatchers not initialized. Call InitializeDispatchers first.");
+    public Func<IOperation, LoweredValue> VisitLoweredExpression => _visitLoweredExpression
         ?? throw new InvalidOperationException("EmitContext dispatchers not initialized. Call InitializeDispatchers first.");
     public Func<CLeaf, ITypeSymbol, IPatternOperation, CLeaf> EmitPatternCheck => _emitPatternCheck
         ?? throw new InvalidOperationException("EmitContext dispatchers not initialized. Call InitializeDispatchers first.");
@@ -164,10 +168,13 @@ public class EmitContext
     public void InitializeDispatchers(
         Action<IOperation> visitOp,
         Func<IOperation, CLeaf> visitExpr,
+        Func<IOperation, LoweredValue> visitLoweredExpr,
         Func<CLeaf, ITypeSymbol, IPatternOperation, CLeaf> emitPattern)
     {
         _visitOperation = visitOp ?? throw new ArgumentNullException(nameof(visitOp));
         _visitExpression = visitExpr ?? throw new ArgumentNullException(nameof(visitExpr));
+        _visitLoweredExpression = visitLoweredExpr
+            ?? throw new ArgumentNullException(nameof(visitLoweredExpr));
         _emitPatternCheck = emitPattern ?? throw new ArgumentNullException(nameof(emitPattern));
     }
 
@@ -184,6 +191,7 @@ public class EmitContext
         Storage = new StorageContext(Module);
         MethodAnalyses = new MethodAnalysisCache(compilation);
         Boundary = new BoundaryChecker(this);
+        Conversions = new ConversionLowerer(this);
     }
 
     // ══════════════════════════════════════════════════════════════════
