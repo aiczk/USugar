@@ -2,6 +2,7 @@ using System.Reflection;
 using HarmonyLib;
 using UnityEditor;
 using UdonSharp;
+using UdonSharp.Serialization;
 
 /// <summary>
 /// Manages Harmony patches that redirect UdonSharp compilation to USugar.
@@ -67,6 +68,22 @@ static class USugarHarmonyPatcher
                 USugarLog.Warn("Harmony patch failed: UdonSharpProgramAsset.AnyUdonSharpScriptHasError");
         }
 
+        var getElementStorage = typeof(UdonHeapStorageInterface)
+            .GetMethod(nameof(UdonHeapStorageInterface.GetElementStorage), BindingFlags.Public | BindingFlags.Instance);
+        if (getElementStorage != null
+            && _harmony.Patch(getElementStorage,
+                prefix: new HarmonyMethod(typeof(USugarHarmonyPatcher), nameof(Prefix_ProxyStorage))) == null)
+            USugarLog.Warn("Harmony patch failed: UdonHeapStorageInterface.GetElementStorage");
+
+        var getVariableStorage = typeof(UdonVariableStorageInterface)
+            .GetMethod(nameof(UdonVariableStorageInterface.GetElementStorage),
+                BindingFlags.Public | BindingFlags.Instance);
+        if (getVariableStorage != null
+            && _harmony.Patch(getVariableStorage,
+                prefix: new HarmonyMethod(typeof(USugarHarmonyPatcher),
+                    nameof(Prefix_VariableProxyStorage))) == null)
+            USugarLog.Warn("Harmony patch failed: UdonVariableStorageInterface.GetElementStorage");
+
         USugarLog.Info("Compiler override applied");
     }
 
@@ -95,6 +112,28 @@ static class USugarHarmonyPatcher
     {
         if (!USugarCompiler.OverrideEnabled) return true;
         __result = USugarCompilationOrchestrator.LastCompileHadErrors;
+        return false;
+    }
+
+    static bool Prefix_ProxyStorage(
+        UdonHeapStorageInterface __instance,
+        string elementKey,
+        ref IValueStorage __result)
+    {
+        if (!USugarProxySerialization.TryCreateStorage(__instance, elementKey, out var storage))
+            return true;
+        __result = storage;
+        return false;
+    }
+
+    static bool Prefix_VariableProxyStorage(
+        UdonVariableStorageInterface __instance,
+        string elementKey,
+        ref IValueStorage __result)
+    {
+        if (!USugarProxySerialization.TryCreateStorage(__instance, elementKey, out var storage))
+            return true;
+        __result = storage;
         return false;
     }
 

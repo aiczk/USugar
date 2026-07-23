@@ -118,11 +118,11 @@ static class USugarTypeCacheManager
         foreach (var member in symbol.GetMembers().OfType<IFieldSymbol>())
         {
             if (member.IsStatic || member.IsImplicitlyDeclared || member.IsConst) continue;
-            // Skip delegate fields — USugar decomposes them into __target/__method/__addr triples
-            if (member.Type is INamedTypeSymbol delegateType && delegateType.DelegateInvokeMethod != null) continue;
 
             var userType = ResolveClrType(member.Type);
-            var systemType = ResolveUdonType(ExternResolver.GetUdonTypeName(member.Type));
+            var systemType = IsDelegate(member.Type)
+                ? typeof(object[])
+                : ResolveUdonType(ExternResolver.GetUdonTypeName(member.Type));
 
             defs[member.Name] = new FieldDefinition(
                 member.Name,
@@ -224,11 +224,10 @@ static class USugarTypeCacheManager
                 BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance))
             {
                 if (field.IsStatic || defs.ContainsKey(field.Name)) continue;
-                // Skip delegate fields — USugar decomposes them into __target/__method/__addr triples
-                if (typeof(Delegate).IsAssignableFrom(field.FieldType)) continue;
-
                 var userType = field.FieldType;
-                var systemType = ResolveUdonStorageType(userType);
+                var systemType = typeof(Delegate).IsAssignableFrom(userType)
+                    ? typeof(object[])
+                    : ResolveUdonStorageType(userType);
 
                 defs[field.Name] = new FieldDefinition(
                     field.Name,
@@ -240,6 +239,9 @@ static class USugarTypeCacheManager
             }
         }
     }
+
+    static bool IsDelegate(ITypeSymbol type)
+        => type is INamedTypeSymbol named && named.DelegateInvokeMethod != null;
 
     // ── Storage type helpers ──
 
