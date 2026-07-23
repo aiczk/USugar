@@ -93,12 +93,8 @@ internal sealed class GenericTypeSpecCensus
             : "");
         if (!_seenMethods.Add(key)) return;
         var hasEmittableBody = _bodyOf(closed.OriginalDefinition) != null;
-        // Keep every discovered named callable, not only constructed generic methods. The reach
-        // pass cannot resolve dispatch against a class type that is minted later in this census.
-        // In that case a non-generic definition (for example a base virtual implementation) is just
-        // as much a late registration as a generic specialization. CompilationPlanner removes the
-        // already-eagerly-registered methods before this projection is frozen.
-        if (!closureKind && hasEmittableBody)
+        if (!closed.IsDefinition
+            && !closureKind && hasEmittableBody)
             _specializations.Add(key, closed);
         if (closureKind)
             _closures.Add(key, new ClosureSpecializationCandidate(closed, TraceMethods(parent)));
@@ -199,8 +195,10 @@ internal sealed class GenericTypeSpecCensus
             implementation = implementation.Construct(target.TypeArguments.ToArray());
         var implementationMap = TypeEnvironment.ForContainingType(concrete, map);
         EnqueueIfClosed(implementation, implementationMap, trace);
-        if (target.MethodKind is MethodKind.EventAdd or MethodKind.EventRemove
-            && implementation.DeclaringSyntaxReferences.Length > 0
+        // The reach pass cannot resolve dispatch against a class type minted later in this census.
+        // Preserve the selected implementation as a late registration even when it is a non-generic
+        // definition; CompilationPlanner removes methods that were already registered eagerly.
+        if (implementation.DeclaringSyntaxReferences.Length > 0
             && _bodyOf(implementation.OriginalDefinition) != null)
             _specializations.TryAdd(MethodKey(implementation, implementationMap), implementation);
     }
