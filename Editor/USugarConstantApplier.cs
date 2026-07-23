@@ -54,10 +54,7 @@ static class USugarConstantApplier
                 {
                     try
                     {
-                        if (clrType.IsEnum)
-                            value = Enum.ToObject(clrType, value);
-                        else
-                            value = Convert.ChangeType(value, clrType);
+                        value = HeapConstantConverter.ConvertTo(value, clrType);
                     }
                     catch (Exception ex)
                     {
