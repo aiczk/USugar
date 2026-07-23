@@ -465,10 +465,11 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
                 && ExternResolver.IsConvertibleNumericType(numericSource)
                 && ExternResolver.IsConvertibleNumericType(numericDestination))
             {
-                result = EmitNumericConversion(srcVal, numericSource, numericDestination);
-                if (result.Type != destinationStorage)
-                    result = TypedView(result, destinationStorage);
-                return true;
+            result = EmitNumericConversion(srcVal, numericSource, numericDestination);
+            if (result.Type != destinationStorage)
+                result = RepresentationCast(
+                    result, destinationStorage, RepresentationCastKind.EnumRepresentation);
+            return true;
             }
         }
 
@@ -490,7 +491,8 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
 
         // UdonSharp's final CastValue fallback is a raw COPY. Represent its destination type explicitly
         // instead of laundering the source leaf and weakening every verifier assignment/return check.
-        result = TypedView(srcVal, destinationStorage);
+        result = RepresentationCast(
+            srcVal, destinationStorage, RepresentationCastKind.ClosedGenericObjectCast);
         return true;
     }
 

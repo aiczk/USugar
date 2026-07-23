@@ -208,6 +208,7 @@ public static class CoreFlatOptimizer
         CAssign { Value: CInternalCall ic } => !ic.TailSpared && names.Contains(ic.FuncName),
         CExprStmt { Expr: CExternCall } => false, // extern call — never an internal recursive edge
         CAssign => false,                         // leaf-valued copy
+        CRepresentationCopy => false,
         CStoreField => false,
         CLoadField => false,
         _ => throw new VerificationException(
@@ -221,6 +222,7 @@ public static class CoreFlatOptimizer
         CAssign { Value: CInternalCall ic } => ic.Reentrant,
         CAssign { Value: CExternCall ec } => ec.Reentrant,
         CAssign => false, // leaf-valued copy
+        CRepresentationCopy => false,
         CStoreField => false,
         CLoadField => false,
         _ => throw new VerificationException(
@@ -234,6 +236,7 @@ public static class CoreFlatOptimizer
         CExprStmt { Expr: CExternCall ec } => ec.PreSpillStmts,
         CExprStmt { Expr: CInternalCall } => 0, // pre-spill window is a cross-dispatch extern concept
         CAssign => 0,
+        CRepresentationCopy => 0,
         CStoreField => 0,
         CLoadField => 0,
         _ => throw new VerificationException(
@@ -552,6 +555,7 @@ public static class CoreFlatOptimizer
     internal static int? GetWrittenSlot(CStmt inst) => inst switch
     {
         CAssign m => m.DestSlot,
+        CRepresentationCopy copy => copy.DestSlot,
         CLoadField lf => lf.DestSlot,
         CStoreField => null, // writes a heap field, never a slot
         CExprStmt { Expr: CExternCall ce } => ce.DestSlot,
@@ -567,6 +571,9 @@ public static class CoreFlatOptimizer
             case CAssign m:
                 if (m.Value is CLeaf assignLeaf)
                     foreach (var slot in GetReadSlotsLeaf(assignLeaf)) yield return slot;
+                break;
+            case CRepresentationCopy copy:
+                foreach (var slot in GetReadSlotsLeaf(copy.Source)) yield return slot;
                 break;
             case CStoreField sf:
                 foreach (var slot in GetReadSlotsLeaf(sf.Value)) yield return slot;
@@ -617,8 +624,6 @@ public static class CoreFlatOptimizer
     {
         if (op is CSlotRef sr && mapping.TryGetValue(sr.SlotId, out var newId) && newId != sr.SlotId)
             return new CSlotRef(newId, sr.Type);
-        if (op is CTypedView view)
-            return new CTypedView(RemapLeaf(view.Source, mapping), view.Type);
         return op;
     }
 
@@ -628,9 +633,6 @@ public static class CoreFlatOptimizer
         {
             case CSlotRef slot:
                 yield return slot.SlotId;
-                break;
-            case CTypedView view:
-                foreach (var slot in GetReadSlotsLeaf(view.Source)) yield return slot;
                 break;
             case CConst:
             case CFieldAddr:
@@ -659,6 +661,11 @@ public static class CoreFlatOptimizer
     internal static CStmt RemapInst(CStmt inst, Dictionary<int, int> mapping) => inst switch
     {
         CAssign m => new CAssign(RemapSlotId(m.DestSlot, mapping), RemapOperand(m.Value, mapping)),
+        CRepresentationCopy copy => new CRepresentationCopy(
+            RemapSlotId(copy.DestSlot, mapping),
+            RemapLeaf(copy.Source, mapping),
+            copy.DestinationType,
+            copy.Kind),
         CLoadField lf => new CLoadField(RemapSlotId(lf.DestSlot, mapping), lf.FieldName, lf.Type),
         CStoreField sf => new CStoreField(sf.FieldName, RemapLeaf(sf.Value, mapping)),
         // Reentrant (and round-9 [Y3] TailSpared) MUST be copied: this rebuild is the second

@@ -65,18 +65,21 @@ public class CoreFlatOptimizerTests
     }
 
     [Fact]
-    public void Coalesce_TypedViewReadPreservesInterference()
+    public void Coalesce_RepresentationCopyReadPreservesInterference()
     {
         var func = MakeFunc();
         func.Slots.Add(new SlotDecl(0, StorageTypes.Int32, SlotClass.Scratch));
         func.Slots.Add(new SlotDecl(1, StorageTypes.Int32, SlotClass.Scratch));
+        func.Slots.Add(new SlotDecl(2, StorageTypes.String, SlotClass.Scratch));
 
         var bb0 = func.NewBlock();
         bb0.Stmts.Add(new CAssign(0, new CConst(10, StorageTypes.Int32)));
         bb0.Stmts.Add(new CAssign(1, new CConst(20, StorageTypes.Int32)));
-        bb0.Stmts.Add(new CStoreField(
-            "text",
-            new CTypedView(new CSlotRef(0, StorageTypes.Int32), StorageTypes.String)));
+        bb0.Stmts.Add(new CRepresentationCopy(
+            2,
+            new CSlotRef(0, StorageTypes.Int32),
+            StorageTypes.String,
+            RepresentationCastKind.ClosedGenericObjectCast));
         bb0.Stmts.Add(new CStoreField("number", new CSlotRef(1, StorageTypes.Int32)));
         bb0.Terminator = new CRet();
 
@@ -88,26 +91,28 @@ public class CoreFlatOptimizerTests
     }
 
     [Fact]
-    public void Coalesce_TypedViewRemapsUnderlyingSlot()
+    public void Coalesce_RepresentationCopyRemapsSourceSlot()
     {
         var func = MakeFunc();
         func.Slots.Add(new SlotDecl(0, StorageTypes.Int32, SlotClass.Scratch));
         func.Slots.Add(new SlotDecl(1, StorageTypes.Int32, SlotClass.Scratch));
+        func.Slots.Add(new SlotDecl(2, StorageTypes.String, SlotClass.Scratch));
 
         var bb0 = func.NewBlock();
         bb0.Stmts.Add(new CAssign(0, new CConst(10, StorageTypes.Int32)));
         bb0.Stmts.Add(new CStoreField("first", new CSlotRef(0, StorageTypes.Int32)));
         bb0.Stmts.Add(new CAssign(1, new CConst(20, StorageTypes.Int32)));
-        bb0.Stmts.Add(new CStoreField(
-            "text",
-            new CTypedView(new CSlotRef(1, StorageTypes.Int32), StorageTypes.String)));
+        bb0.Stmts.Add(new CRepresentationCopy(
+            2,
+            new CSlotRef(1, StorageTypes.Int32),
+            StorageTypes.String,
+            RepresentationCastKind.ClosedGenericObjectCast));
         bb0.Terminator = new CRet();
 
         CoreFlatOptimizer.CoalesceSlots(MakeModule(func));
 
-        var store = Assert.IsType<CStoreField>(bb0.Stmts[3]);
-        var view = Assert.IsType<CTypedView>(store.Value);
-        Assert.Equal(0, Assert.IsType<CSlotRef>(view.Source).SlotId);
+        var copy = Assert.IsType<CRepresentationCopy>(bb0.Stmts[3]);
+        Assert.Equal(0, Assert.IsType<CSlotRef>(copy.Source).SlotId);
     }
 
     [Fact]

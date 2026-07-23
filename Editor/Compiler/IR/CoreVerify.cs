@@ -284,11 +284,12 @@ public static class CoreVerify
                 ctx.AssertType(declaredType, slotRef.Type, $"CSlotRef slot{slotRef.SlotId}");
                 break;
 
-            case CTypedView view:
-                // The destination type is the cast's explicit contract. Verify the underlying value
-                // structurally, but do not apply ordinary assignment compatibility: that distinction
-                // keeps accidental mismatched leaves loud while permitting this one explicit cast node.
-                VerifyExpr(view.Source, ctx);
+            case CRepresentationCast cast:
+                VerifyExpr(cast.Source, ctx);
+                if (cast.Source.Type == cast.Type)
+                    throw new VerificationException(
+                        $"Redundant CRepresentationCast[{cast.Kind}] from '{cast.Source.Type}' to itself "
+                        + $"(function '{ctx.Func.Name}')");
                 break;
 
             case CFieldLoad fieldLoad:

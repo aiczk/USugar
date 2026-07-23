@@ -191,7 +191,8 @@ public abstract partial class HandlerBase
     protected CFieldAddr FieldAddr(string fieldName, StorageType type) => _builder.FieldAddr(fieldName, type);
 
     /// <summary>Create an explicit codegen-free destination-typed view of a materialized value.</summary>
-    protected CTypedView TypedView(CLeaf source, StorageType type) => _builder.TypedView(source, type);
+    protected CLeaf RepresentationCast(CLeaf source, StorageType type, RepresentationCastKind kind)
+        => _builder.RepresentationCast(source, type, kind);
 
     /// <summary>
     /// Materialize an expression value in the exact storage type declared by

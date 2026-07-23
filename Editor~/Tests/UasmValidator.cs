@@ -11,7 +11,8 @@ public class UasmValidationException : Exception
 
 public static class UasmValidator
 {
-    public static void Validate(string uasm, UdonTypeFactRegistry typeFacts = null)
+    public static void Validate(string uasm, UdonTypeFactRegistry typeFacts = null,
+        IReadOnlyCollection<RepresentationCopySite> representationCopies = null)
     {
         typeFacts ??= new UdonTypeFactRegistry();
         var declaredVars = ParseDeclaredVariables(uasm);
@@ -20,7 +21,7 @@ public static class UasmValidator
         ValidateExterns(uasm);
         ValidateNoDuplicateVars(uasm);
         ValidateStackBalance(uasm);
-        ValidateCopyTypes(uasm, declaredVars, typeFacts);
+        ValidateCopyTypes(uasm, declaredVars, typeFacts, representationCopies);
     }
 
     /// <summary>Declared heap vars: name → declared UASM type (`name: %Type, value`), null when the
@@ -381,15 +382,24 @@ public static class UasmValidator
     // table, no duplicate. The cross-boundary return-pattern COPY (1 local push; src is the caller's pushed return
     // address) has no declared src var and is skipped, as stack-balance already pins its shape.
     static void ValidateCopyTypes(string uasm, Dictionary<string, string> varTypes,
-        UdonTypeFactRegistry typeFacts)
+        UdonTypeFactRegistry typeFacts,
+        IReadOnlyCollection<RepresentationCopySite> representationCopies)
     {
         var errors = new List<string>();
         var pushes = new List<string>();
         var inCode = false;
-        string typedViewSourceType = null;
-        string typedViewDestinationType = null;
+        uint address = 0;
+        var representationByAddress = new Dictionary<uint, RepresentationCopySite>();
+        if (representationCopies != null)
+        {
+            foreach (var site in representationCopies)
+            {
+                if (!representationByAddress.TryAdd(site.Address, site))
+                    errors.Add($"Duplicate representation-copy metadata at 0x{site.Address:x8}");
+            }
+        }
+        var seenRepresentationCopies = new HashSet<uint>();
         var allLines = uasm.Split('\n');
-        var typedViewPrefix = "# " + CoreToUasm.TypedViewCopyMarker + " ";
 
         for (int i = 0; i < allLines.Length; i++)
         {
@@ -398,40 +408,24 @@ public static class UasmValidator
             {
                 inCode = true;
                 pushes.Clear();
-                typedViewSourceType = null;
-                typedViewDestinationType = null;
+                address = 0;
                 continue;
             }
             if (trimmed == ".code_end") { inCode = false; continue; }
             if (!inCode) continue;
-            if (trimmed.StartsWith(typedViewPrefix))
-            {
-                var types = trimmed.Substring(typedViewPrefix.Length).Split(
-                    new[] { " -> " },
-                    StringSplitOptions.None);
-                if (types.Length == 2 && types[0].Length > 0 && types[1].Length > 0)
-                {
-                    typedViewSourceType = types[0];
-                    typedViewDestinationType = types[1];
-                }
-                else
-                {
-                    errors.Add($"Line {i + 1}: malformed {CoreToUasm.TypedViewCopyMarker} marker");
-                    typedViewSourceType = null;
-                    typedViewDestinationType = null;
-                }
-                continue;
-            }
             if (trimmed.Length == 0 || trimmed.StartsWith(".export") || trimmed.StartsWith("#")) continue;
 
             if (IsLabel(trimmed))
             {
                 pushes.Clear();
-                typedViewSourceType = null;
-                typedViewDestinationType = null;
                 continue;
             }
-            if (trimmed.StartsWith("PUSH, ")) { pushes.Add(trimmed.Substring("PUSH, ".Length)); continue; }
+            if (trimmed.StartsWith("PUSH, "))
+            {
+                pushes.Add(trimmed.Substring("PUSH, ".Length));
+                address += 8;
+                continue;
+            }
             if (trimmed == "COPY")
             {
                 if (pushes.Count >= 2)
@@ -441,12 +435,13 @@ public static class UasmValidator
                     if (varTypes.TryGetValue(src, out var srcType) && srcType != null
                         && varTypes.TryGetValue(dst, out var dstType) && dstType != null)
                     {
-                        if (typedViewSourceType != null || typedViewDestinationType != null)
+                        if (representationByAddress.TryGetValue(address, out var site))
                         {
-                            if (srcType != typedViewSourceType || dstType != typedViewDestinationType)
+                            seenRepresentationCopies.Add(address);
+                            if (srcType != site.SourceType.Name || dstType != site.DestinationType.Name)
                                 errors.Add(
-                                    $"Line {i + 1}: {CoreToUasm.TypedViewCopyMarker} declares "
-                                    + $"%{typedViewSourceType} -> %{typedViewDestinationType}, but COPY is "
+                                    $"Line {i + 1}: CRepresentationCopy[{site.Kind}] metadata declares "
+                                    + $"%{site.SourceType} -> %{site.DestinationType}, but COPY is "
                                     + $"{src} (%{srcType}) -> {dst} (%{dstType})");
                         }
                         else
@@ -458,18 +453,34 @@ public static class UasmValidator
                     }
                 }
                 pushes.Clear();
-                typedViewSourceType = null;
-                typedViewDestinationType = null;
+                address += 4;
                 continue;
             }
             // Any other instruction consumes or invalidates the pending operand pushes.
             pushes.Clear();
-            typedViewSourceType = null;
-            typedViewDestinationType = null;
+            address += InstructionSize(trimmed);
+        }
+
+        foreach (var site in representationByAddress.Values)
+        {
+            if (!seenRepresentationCopies.Contains(site.Address))
+                errors.Add(
+                    $"CRepresentationCopy[{site.Kind}] metadata at 0x{site.Address:x8} "
+                    + "does not identify a typed two-operand COPY");
         }
 
         if (errors.Count > 0)
             throw new UasmValidationException(
                 $"UASM COPY declared-type errors:\n{string.Join("\n", errors)}");
+    }
+
+    static uint InstructionSize(string instruction)
+    {
+        if (instruction.StartsWith("JUMP, ")
+            || instruction.StartsWith("JUMP_IF_FALSE, ")
+            || instruction.StartsWith("JUMP_INDIRECT, ")
+            || instruction.StartsWith("EXTERN, "))
+            return 8;
+        return 0;
     }
 }

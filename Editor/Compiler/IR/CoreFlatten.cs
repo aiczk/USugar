@@ -137,6 +137,10 @@ public static class CoreFlatten
         // made correctness depend on the later coalescer removing that redundant pair.
         switch (a.Value)
         {
+            case CRepresentationCast cast:
+                ctx.Current.Stmts.Add(new CRepresentationCopy(
+                    a.DestSlot, cast.Source, cast.Type, cast.Kind));
+                return;
             case CFieldLoad fl:
                 ctx.Current.Stmts.Add(new CLoadField(a.DestSlot, fl.FieldName, fl.Type));
                 return;

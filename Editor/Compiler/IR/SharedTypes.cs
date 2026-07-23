@@ -284,10 +284,29 @@ public static class RecurStack
     public const int Size = 8192;
 }
 
+/// <summary>One intentional storage-mismatched COPY retained as typed codegen provenance.</summary>
+public readonly struct RepresentationCopySite
+{
+    public readonly uint Address;
+    public readonly StorageType SourceType;
+    public readonly StorageType DestinationType;
+    public readonly RepresentationCastKind Kind;
+
+    public RepresentationCopySite(uint address, StorageType sourceType,
+        StorageType destinationType, RepresentationCastKind kind)
+    {
+        Address = address;
+        SourceType = sourceType;
+        DestinationType = destinationType;
+        Kind = kind;
+    }
+}
+
 /// <summary>Result of UASM code generation.</summary>
 public struct CodeGenResult
 {
     public string Uasm;
     public uint HeapSize;
     public List<(string Id, string UdonType, object Value)> Constants;
+    public List<RepresentationCopySite> RepresentationCopies;
 }

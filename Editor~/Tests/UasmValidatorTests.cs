@@ -249,7 +249,7 @@ public class UasmValidatorTests
     }
 
     [Fact]
-    public void TypedViewMarkerWithExactCopyTypes_Passes()
+    public void RepresentationCopyMetadataWithExactCopyTypes_Passes()
     {
         var uasm = @".data_start
     __refl_typeid: %SystemInt64, null
@@ -262,16 +262,24 @@ public class UasmValidatorTests
     _start:
         PUSH, source
         PUSH, destination
-        # USUGAR_TYPED_VIEW SystemInt32 -> SystemString
         COPY
         JUMP_INDIRECT, __intnl_returnJump_SystemUInt32_0
 .code_end
 ";
-        UasmValidator.Validate(uasm);
+        UasmValidator.Validate(
+            uasm,
+            representationCopies: new[]
+            {
+                new RepresentationCopySite(
+                    16,
+                    StorageTypes.Int32,
+                    StorageTypes.String,
+                    RepresentationCastKind.ClosedGenericObjectCast),
+            });
     }
 
     [Fact]
-    public void TypedViewMarkerCannotWaiveDifferentCopyTypes()
+    public void RepresentationCopyMetadataCannotWaiveDifferentCopyTypes()
     {
         var uasm = @".data_start
     __refl_typeid: %SystemInt64, null
@@ -284,13 +292,21 @@ public class UasmValidatorTests
     _start:
         PUSH, source
         PUSH, destination
-        # USUGAR_TYPED_VIEW SystemObject -> SystemString
         COPY
         JUMP_INDIRECT, __intnl_returnJump_SystemUInt32_0
 .code_end
 ";
-        var ex = Assert.Throws<UasmValidationException>(() => UasmValidator.Validate(uasm));
-        Assert.Contains(CoreToUasm.TypedViewCopyMarker, ex.Message);
+        var ex = Assert.Throws<UasmValidationException>(() => UasmValidator.Validate(
+            uasm,
+            representationCopies: new[]
+            {
+                new RepresentationCopySite(
+                    16,
+                    StorageTypes.Object,
+                    StorageTypes.String,
+                    RepresentationCastKind.ClosedGenericObjectCast),
+            }));
+        Assert.Contains(nameof(CRepresentationCopy), ex.Message);
         Assert.Contains("SystemInt32", ex.Message);
     }
 

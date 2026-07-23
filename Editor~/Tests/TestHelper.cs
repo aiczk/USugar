@@ -420,7 +420,8 @@ namespace TestStubs
 
         var emitter = new UasmEmitter(compilation, classSymbol, externRegistry: RegistryFacts);
         var uasm = emitter.Emit();
-        UasmValidator.Validate(uasm, emitter.Module.TypeFacts);
+        UasmValidator.Validate(
+            uasm, emitter.Module.TypeFacts, emitter.CodeGenResult.RepresentationCopies);
         UasmValidator.ValidateHeapConsistency(uasm, emitter.GetHeapSize());
         return uasm;
     }
@@ -449,7 +450,8 @@ namespace TestStubs
 
         var emitter = new UasmEmitter(compilation, classSymbol, externRegistry: RegistryFacts);
         var uasm = emitter.Emit();
-        UasmValidator.Validate(uasm, emitter.Module.TypeFacts);
+        UasmValidator.Validate(
+            uasm, emitter.Module.TypeFacts, emitter.CodeGenResult.RepresentationCopies);
         UasmValidator.ValidateHeapConsistency(uasm, emitter.GetHeapSize());
         return uasm;
     }
@@ -600,7 +602,8 @@ namespace TestStubs
 
         var emitter = new UasmEmitter(compilation, classSymbol, externRegistry: RegistryFacts);
         var uasm = emitter.Emit();
-        UasmValidator.Validate(uasm, emitter.Module.TypeFacts);
+        UasmValidator.Validate(
+            uasm, emitter.Module.TypeFacts, emitter.CodeGenResult.RepresentationCopies);
         UasmValidator.ValidateHeapConsistency(uasm, emitter.GetHeapSize());
         outEmitter = emitter;
         return uasm;
@@ -641,7 +644,8 @@ namespace TestStubs
 
         var emitter = new UasmEmitter(compilation, classSymbol, externRegistry: RegistryFacts);
         var uasm = emitter.Emit();
-        UasmValidator.Validate(uasm, emitter.Module.TypeFacts);
+        UasmValidator.Validate(
+            uasm, emitter.Module.TypeFacts, emitter.CodeGenResult.RepresentationCopies);
         UasmValidator.ValidateHeapConsistency(uasm, emitter.GetHeapSize());
         return uasm;
     }
@@ -670,7 +674,8 @@ namespace TestStubs
 
         var emitter = new UasmEmitter(compilation, classSymbol, externRegistry: RegistryFacts);
         var uasm = emitter.Emit();
-        UasmValidator.Validate(uasm, emitter.Module.TypeFacts);
+        UasmValidator.Validate(
+            uasm, emitter.Module.TypeFacts, emitter.CodeGenResult.RepresentationCopies);
         UasmValidator.ValidateHeapConsistency(uasm, emitter.GetHeapSize());
         return (uasm, emitter.CodeGenResult.Constants);
     }

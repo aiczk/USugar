@@ -148,6 +148,18 @@ public static class FlatVerify
                     $"CAssign to slot{assign.DestSlot}");
                 break;
 
+            case CRepresentationCopy copy:
+                VerifyTypedLeaf(copy.Source, ctx, "CRepresentationCopy source");
+                ctx.AssertType(
+                    ctx.SlotType(copy.DestSlot, "CRepresentationCopy"),
+                    copy.DestinationType,
+                    $"CRepresentationCopy destination slot{copy.DestSlot}");
+                if (copy.Source.Type == copy.DestinationType)
+                    throw new VerificationException(
+                        $"Redundant CRepresentationCopy[{copy.Kind}] from '{copy.Source.Type}' to itself "
+                        + $"(function '{ctx.Function.Name}')");
+                break;
+
             case CLoadField load:
                 ctx.AssertType(ctx.SlotType(load.DestSlot, "CLoadField"), load.Type,
                     $"CLoadField destination slot{load.DestSlot}");
@@ -288,9 +300,6 @@ public static class FlatVerify
                 ctx.AssertType(ctx.SlotType(slot.SlotId, context), slot.Type,
                     $"{context} slot{slot.SlotId}");
                 break;
-            case CTypedView view:
-                VerifyTypedLeaf(view.Source, ctx, context + " source");
-                break;
             case CFieldAddr field:
                 ctx.AssertField(field.FieldName, field.Type, context);
                 break;
@@ -365,6 +374,9 @@ public static class FlatVerify
         switch (inst)
         {
             case CAssign a: RequireLeaf(a.Value, fn, "assign value"); break;
+            case CRepresentationCopy copy:
+                RequireLeaf(copy.Source, fn, "representation-copy source");
+                break;
             case CStoreField sf: RequireLeaf(sf.Value, fn, "store value"); break;
             case CLoadField _: break;
             case CExprStmt es:
@@ -412,9 +424,6 @@ public static class FlatVerify
             case CSlotRef _:
             case CConst _:
             case CFuncRef _:
-                break;
-            case CTypedView view:
-                RequireLeaf(view.Source, fn, ctx + " typed-view source");
                 break;
             case CFieldAddr _:
                 if (!allowAddr)

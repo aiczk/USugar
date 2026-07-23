@@ -43,6 +43,28 @@ public sealed class CAssign : CStmt
     }
 }
 
+/// <summary>
+/// Flat-only instruction produced from <see cref="CRepresentationCast"/>. It is intentionally not
+/// an ordinary assignment: source and destination storage types may differ, and this node is the
+/// sole structural proof that the mismatch came from an approved representation-preserving cast.
+/// </summary>
+public sealed class CRepresentationCopy : CStmt
+{
+    public readonly int DestSlot;
+    public readonly CLeaf Source;
+    public readonly StorageType DestinationType;
+    public readonly RepresentationCastKind Kind;
+
+    public CRepresentationCopy(int destSlot, CLeaf source,
+        StorageType destinationType, RepresentationCastKind kind)
+    {
+        DestSlot = destSlot;
+        Source = source ?? throw new ArgumentNullException(nameof(source));
+        DestinationType = destinationType;
+        Kind = kind;
+    }
+}
+
 /// <summary>Store value to a heap field.</summary>
 public sealed class CStoreField : CStmt
 {

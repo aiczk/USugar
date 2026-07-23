@@ -178,17 +178,7 @@ public class BoxedGenericConversionHost : UdonSharpBehaviour
             "SystemMath.__Truncate__SystemDouble__SystemDouble", uasm);
         Assert.Contains(
             "SystemConvert.__ToByte__SystemInt32__SystemByte", uasm);
-        Assert.DoesNotContain(
-            "# USUGAR_TYPED_VIEW SystemInt32 -> SystemByte", uasm);
-        Assert.Contains(
-            "# USUGAR_TYPED_VIEW VRCSDK3DataDataToken -> VRCUdonCommonInterfacesIUdonEventReceiver",
-            uasm);
-        Assert.Contains(
-            "# USUGAR_TYPED_VIEW VRCSDK3DataDataToken -> VRCSDKBaseVRCUrl",
-            uasm);
-        Assert.Contains(
-            "# USUGAR_TYPED_VIEW SystemObject -> VRCUdonCommonInterfacesIUdonEventReceiver",
-            uasm);
+        Assert.DoesNotContain("USUGAR_TYPED_VIEW", uasm);
     }
 
     [Fact]

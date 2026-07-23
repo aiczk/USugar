@@ -2,7 +2,7 @@ using System;
 using System.Collections.Generic;
 
 // ============================================================================
-// Core IR value vocabulary. CLeaf (CSlotRef/CConst/CFuncRef/CFieldAddr/CTypedView) are the operand-safe leaves;
+// Core IR value vocabulary. CLeaf (CSlotRef/CConst/CFuncRef/CFieldAddr) are the operand-safe leaves;
 // the value-producing ops (CFieldLoad/CExternCall/CInternalCall/CSelect/CCrossCall) are bound to a
 // fresh slot at construction (A-normal form), so they appear only as a CAssign RHS or a CExprStmt
 // side-effect — never nested in an operand position.
@@ -20,7 +20,7 @@ public abstract class CValue
 /// <summary>A value safe to use as an operand: pure, side-effect-free, order-stable (re-reading it
 /// yields the same value regardless of intervening writes). THE A-normal-form invariant: every
 /// operand position is typed <see cref="CLeaf"/>, so a value-producing op cannot nest in an operand —
-/// it must first be bound to a slot. Leaves: CSlotRef / CConst / CFuncRef / CFieldAddr / CTypedView.</summary>
+/// it must first be bound to a slot. Leaves: CSlotRef / CConst / CFuncRef / CFieldAddr.</summary>
 public abstract class CLeaf : CValue
 {
     protected CLeaf(StorageType type) : base(type) { }
@@ -43,20 +43,34 @@ public sealed class CConst : CLeaf
 }
 
 /// <summary>
-/// An explicit, codegen-free typed view of an already-materialized leaf. UdonSharp's cast lowering
-/// deliberately uses a raw COPY when no runtime conversion extern exists (notably a closed generic
-/// `(T)(object)value` after object erasure). Keeping that intent in IR lets the verifier distinguish
-/// the user-requested cast from an accidental mismatched CAssign/CReturn without globally relaxing
-/// value/reference type checks. Codegen resolves this node to <see cref="Source"/>'s operand.
+/// Why a raw representation copy is required. This is deliberately a closed vocabulary: adding a
+/// new bypass of ordinary storage compatibility requires an explicit compiler-level decision.
 /// </summary>
-public sealed class CTypedView : CLeaf
+public enum RepresentationCastKind
+{
+    ClosedGenericObjectCast,
+    EnumRepresentation,
+}
+
+/// <summary>
+/// Explicit value producer for a source-language conversion whose runtime representation is copied
+/// verbatim into a differently typed Udon slot. Unlike the old typed-view leaf, this node cannot
+/// masquerade as an operand of its destination type: ANF materializes it at the conversion point,
+/// and the exceptional compatibility rule remains attached to that one copy through codegen.
+/// </summary>
+public sealed class CRepresentationCast : CValue
 {
     public readonly CLeaf Source;
+    public readonly RepresentationCastKind Kind;
 
-    public CTypedView(CLeaf source, StorageType type) : base(type)
-        => Source = source ?? throw new ArgumentNullException(nameof(source));
+    public CRepresentationCast(CLeaf source, StorageType type, RepresentationCastKind kind)
+        : base(type)
+    {
+        Source = source ?? throw new ArgumentNullException(nameof(source));
+        Kind = kind;
+    }
 
-    public override string ToString() => $"typed_view({Source} as {Type})";
+    public override string ToString() => $"representation_cast[{Kind}]({Source} as {Type})";
 }
 
 /// <summary>Read a heap field's value. Producer (NOT a leaf): re-reading after a write to the same

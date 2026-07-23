@@ -252,6 +252,9 @@
         COPY
     ____2_M_SystemInt32_bb13:
         PUSH, __intnl_SystemObject_c0
+        PUSH, __intnl_SystemString_c0
+        COPY
+        PUSH, __intnl_SystemString_c0
         PUSH, __intnl_SystemInt32_c1
         EXTERN, "SystemString.__get_Length__SystemInt32"
         PUSH, __lcl_ta_SystemInt32Array_0
