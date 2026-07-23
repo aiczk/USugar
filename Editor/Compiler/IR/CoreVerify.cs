@@ -9,6 +9,16 @@ public static class CoreVerify
 {
     public static void Verify(CModule module)
     {
+        var fields = BuildFieldIndex(module);
+        foreach (var func in module.Functions)
+            VerifyFunction(func, module.TypeFacts, fields);
+    }
+
+    /// <summary>Build the module's one declared-field index for both structured and flat verification.
+    /// Return slots share the Udon heap namespace with ordinary fields, so a conflicting declaration
+    /// is a verifier error rather than a codegen-order accident.</summary>
+    internal static Dictionary<string, StorageType> BuildFieldIndex(CModule module)
+    {
         var fields = new Dictionary<string, StorageType>(StringComparer.Ordinal);
         foreach (var field in module.Fields)
             if (!fields.TryAdd(field.Name, field.Type))
@@ -19,8 +29,7 @@ public static class CoreVerify
                     && fields[returnSlot.Id] != returnSlot.StorageType)
                     throw new VerificationException(
                         $"Return field '{returnSlot.Id}' has conflicting types '{fields[returnSlot.Id]}' and '{returnSlot.StorageType}'");
-        foreach (var func in module.Functions)
-            VerifyFunction(func, module.TypeFacts, fields);
+        return fields;
     }
 
     public static void VerifyFunction(CFunction func, UdonTypeFactRegistry typeFacts = null,

@@ -11,7 +11,8 @@ using Microsoft.CodeAnalysis;
 /// reference"); Phase-D stage 1 (2026-07-16) measured ZERO production-path guess-dependent passes across
 /// the full suite plus the full local harness; Phase-D stage 2 (2026-07-16) ENFORCED the flip — the
 /// heuristics are deleted and <see cref="DeclaredRelaxations"/>, backed by these facts, is now the only
-/// way two slot/COPY types may legally differ (CoreVerify and the test-side UasmValidator COPY check).</summary>
+/// way two slot/COPY types may legally differ (CoreVerify, production FlatVerify, and the independent
+/// test-side UasmValidator COPY check).</summary>
 public sealed class UdonTypeFactRegistry
 {
     public readonly struct TypeFact : IEquatable<TypeFact>
@@ -144,8 +145,8 @@ public static class UdonTypeFacts
 }
 
 /// <summary>Phase-D declared-relaxation rules: the single predicate deciding when two Udon slot/COPY
-/// types may legally differ — shared by CoreVerify (structured-IR slot checks) and the test-side
-/// UasmValidator COPY check (B72 axis), so the relaxation table exists exactly once. Declared:
+/// types may legally differ — shared by CoreVerify (structured IR), FlatVerify (production flat IR),
+/// and the test-side UasmValidator COPY check (B72 axis), so the relaxation table exists exactly once. Declared:
 /// (1) SystemObject wildcard — Udon heap slots are dynamically typed; (2) Nullable erasure — NullableAbi
 /// boxes Nullable&lt;T&gt; as object-or-boxed-T; (3) enum↔Int32 — ONLY for names with a recorded enum
 /// fact (Udon stores enums as their underlying Int32); (4) reference COPY — ONLY when BOTH names are

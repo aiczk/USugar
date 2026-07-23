@@ -23,10 +23,8 @@ public static class IrPipeline
 
         // Structured → flat (in place): CoreFlatten + FlatVerify post-condition.
         foreach (var cf in coreModule.Functions)
-        {
             CoreFlatten.Lower(cf);
-            FlatVerify.Verify(cf);
-        }
+        FlatVerify.Verify(coreModule);
 
         // Slot coalescing is the only optimization retained: measurement showed it delivers the entire
         // heap-variable reduction (~30–100% fewer vars → smaller serialized program), while the former
@@ -39,8 +37,7 @@ public static class IrPipeline
         // the slots LIVE ACROSS the call (using post-coalesce liveness — the physical slot set is small, so the
         // software stack stays bounded). Runs after coalescing; re-verify the flat shape after the rewrite.
         CoreFlatOptimizer.InsertRecursionSpills(coreModule);
-        foreach (var cf in coreModule.Functions)
-            FlatVerify.Verify(cf);
+        FlatVerify.Verify(coreModule);
 
         return CoreToUasm.Generate(coreModule);
     }
