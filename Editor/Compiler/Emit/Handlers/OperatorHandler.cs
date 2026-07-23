@@ -509,24 +509,11 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
                 var checkVal = isVar ? (CLeaf)Const(true, StorageTypes.Boolean) : EmitTypeCheck(valueVal, declPat.MatchedType);
                 if (declPat.DeclaredSymbol is ILocalSymbol local)
                 {
-                    // Stage 2 §4.1: captured pattern variable → env cell (its owning scope's env is
-                    // live at every point a condition/section hosting this pattern executes).
-                    if (_ctx.Closures.TryGetEnvBinding(local, out _))
-                    {
-                        if (isVar)
-                            EnvEmit.Write(_builder, _ctx, local, valueVal);
-                        else
-                            _builder.EmitIf(checkVal, b => EnvEmit.Write(_builder, _ctx, local, valueVal));
-                        return checkVal;
-                    }
-                    var localType = GetStorageTypeName(local.Type);
-                    var localId = _ctx.Storage.DeclareLocal(local.Name, new StorageType(localType));
-                    _localBindings[local] = new EmitContext.LocalBinding(localId);
                     if (isVar)
-                        EmitStoreField(localId, valueVal); // always matches → bind unconditionally
+                        BindPatternLocal(local, valueVal); // always matches → bind unconditionally
                     else
                         // Only assign when the type check succeeds — avoid invalid type COPY on mismatch
-                        _builder.EmitIf(checkVal, b => EmitStoreField(localId, valueVal));
+                        _builder.EmitIf(checkVal, _ => BindPatternLocal(local, valueVal));
                 }
                 return checkVal;
             }
@@ -598,192 +585,193 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
                 return ExternCall(opName, new List<CLeaf> { leftVal, rightVal }, StorageTypes.Boolean);
             }
 
-            case IRecursivePatternOperation rec when rec.DeconstructionSubpatterns.Length > 0:
-            {
-                // Positional/deconstruction pattern — tuple-typed only (reuse the aggregate object[]
-                // machinery; user-defined Deconstruct is out of scope).
-                if (valueType is not INamedTypeSymbol aggType || !TypeClassifier.IsAggregateValue(valueType))
-                {
-                    var deconstruct = rec.DeconstructSymbol is not IMethodSymbol deconstructMethod
-                        ? null : ResolveStructMember(SubstituteMethodTypeArgs(deconstructMethod));
-                    if (deconstruct == null
-                        || deconstruct.Parameters.Length != rec.DeconstructionSubpatterns.Length
-                        || deconstruct.Parameters.Any(p => p.RefKind != RefKind.Out))
-                        throw new System.NotSupportedException(
-                            "Positional pattern requires a supported user Deconstruct(out ...) method.");
-
-                    var args = new List<CLeaf> { valueVal };
-                    foreach (var parameter in deconstruct.Parameters)
-                        args.Add(SlotRef(_builder.AllocScratch(GetStorageType(parameter.Type))));
-                    EmitExprStmt(EmitCallToMethod(deconstruct, args, rec.Syntax));
-                    if (!_methodParamVarIds.TryGetValue(deconstruct, out var paramIds))
-                        throw new System.InvalidOperationException(
-                            $"Deconstruct method '{deconstruct.ToDisplayString()}' was not registered.");
-
-                    CLeaf deconstructResult = Const(true, StorageTypes.Boolean);
-                    for (int i = 0; i < rec.DeconstructionSubpatterns.Length; i++)
-                    {
-                        var elemType = deconstruct.Parameters[i].Type;
-                        var elem = LoadField(paramIds[i], GetStorageType(elemType));
-                        var subResult = EmitPatternCheckImpl(elem, elemType, rec.DeconstructionSubpatterns[i]);
-                        deconstructResult = ExternCall(
-                            "SystemBoolean.__op_ConditionalAnd__SystemBoolean_SystemBoolean__SystemBoolean",
-                            new List<CLeaf> { deconstructResult, subResult }, StorageTypes.Boolean);
-                    }
-                    return deconstructResult;
-                }
-                var layout = _ctx.Aggregates.GetLayout(aggType);
-                if (rec.DeconstructionSubpatterns.Length != layout.Count)
-                    throw new System.NotSupportedException(
-                        $"Positional pattern element count ({rec.DeconstructionSubpatterns.Length}) "
-                        + $"does not match tuple arity ({layout.Count}).");
-
-                var aggSlot = _ctx.Builder.AllocScratch(new StorageType(AggregateAbi.ArrayType));
-                EmitAssign(aggSlot, valueVal);
-
-                CLeaf result = Const(true, StorageTypes.Boolean);
-                for (int i = 0; i < rec.DeconstructionSubpatterns.Length; i++)
-                {
-                    var elemType = layout.Fields[i].Type;
-                    var elemRaw = AggregateAbi.ReadSlot(_builder, SlotRef(aggSlot), i, StorageTypes.Object);
-                    // Materialize into a typed temp (Udon COPY unboxes) so the sub-pattern compares
-                    // with the correct type tag, exactly as tuple deconstruction extracts elements.
-                    var elemSlot = _ctx.Builder.AllocScratch(GetStorageType(elemType));
-                    EmitAssign(elemSlot, elemRaw);
-                    var subResult = EmitPatternCheckImpl(SlotRef(elemSlot), elemType, rec.DeconstructionSubpatterns[i]);
-                    result = ExternCall(
-                        "SystemBoolean.__op_ConditionalAnd__SystemBoolean_SystemBoolean__SystemBoolean",
-                        new List<CLeaf> { result, subResult }, StorageTypes.Boolean);
-                }
-                return result;
-            }
-
-            case IRecursivePatternOperation rec when rec.PropertySubpatterns.Length > 0:
-            {
-                // Property pattern  x is [Type] { P: subpat, ... }
-                //   ≡  x passes the (optional) type/null guard  &&  x.P is subpat  &&  ...
-                // Member reads are emitted INSIDE the guard's then-block so a null or type-mismatched
-                // receiver short-circuits to false without dereferencing (extern AND does not short-circuit).
-                var resultSlot = _ctx.Builder.AllocScratch(StorageTypes.Boolean);
-                EmitAssign(resultSlot, Const(false, StorageTypes.Boolean));
-
-                CLeaf guard;
-                if (rec.MatchedType != null && !SymbolEqualityComparer.Default.Equals(rec.MatchedType, valueType))
-                    guard = EmitTypeCheck(valueVal, rec.MatchedType);
-                else if (!valueType.IsValueType)
-                    guard = ExternCall(
-                        "SystemObject.__op_Inequality__SystemObject_SystemObject__SystemBoolean",
-                        new List<CLeaf> { valueVal, Const(null, StorageTypes.Object) }, StorageTypes.Boolean);
-                else
-                    guard = Const(true, StorageTypes.Boolean);
-
-                _builder.EmitIf(guard, _ =>
-                {
-                    var matchType = rec.MatchedType ?? valueType;
-                    var valSlot = _ctx.Builder.AllocScratch(GetStorageType(matchType));
-                    EmitAssign(valSlot, valueVal);
-
-                    if (rec.DeclaredSymbol is ILocalSymbol bound)
-                    {
-                        // Stage 2 §4.1: captured recursive-pattern binding → env cell.
-                        // (named out var: the enclosing EmitIf lambda's parameter is `_`.)
-                        if (_ctx.Closures.TryGetEnvBinding(bound, out var envbUnused))
-                        {
-                            EnvEmit.Write(_builder, _ctx, bound, SlotRef(valSlot));
-                        }
-                        else
-                        {
-                            var boundId = _ctx.Storage.DeclareLocal(bound.Name, GetStorageType(bound.Type));
-                            _localBindings[bound] = new EmitContext.LocalBinding(boundId);
-                            EmitStoreField(boundId, SlotRef(valSlot));
-                        }
-                    }
-
-                    CLeaf acc = Const(true, StorageTypes.Boolean);
-                    // For a user struct / tuple scrutinee, members live as object[] indices — there is no Udon
-                    // property getter (SystemObjectArray.__get_X does not exist) — so read via the layout __Get.
-                    var aggMatchType = matchType as INamedTypeSymbol;
-                    // CA-M1: a v1 class scrutinee is also object[]-backed (no Udon property getter), so its
-                    // subpattern members read via the layout __Get / computed-getter arms too. The receiver
-                    // was null-guarded above (line ~689, reference-type guard), so the slot read is safe.
-                    bool isAgg = aggMatchType != null && TypeClassifier.IsObjectArrayEmulated(aggMatchType);
-                    foreach (var sub in rec.PropertySubpatterns)
-                    {
-                        ITypeSymbol memberType, memberContainingType;
-                        string memberName;
-                        switch (sub.Member)
-                        {
-                            case IPropertyReferenceOperation pr:
-                                memberType = pr.Property.Type; memberName = pr.Property.Name;
-                                memberContainingType = pr.Property.ContainingType; break;
-                            case IFieldReferenceOperation fr:
-                                memberType = fr.Field.Type; memberName = fr.Field.Name;
-                                memberContainingType = fr.Field.ContainingType; break;
-                            default:
-                                throw new System.NotSupportedException(
-                                    $"Property pattern member '{sub.Member?.GetType().Name}' is not supported "
-                                    + "(only System/Unity properties and fields).");
-                        }
-                        CLeaf memberVal;
-                        // CW1 lift: a virtual property in a subpattern dispatches on the scrutinee's
-                        // RUNTIME type — the type guard above narrows only to `matchType`, so a
-                        // further-derived override still wins (the static slot/getter arms below would
-                        // silently read the base declaration's storage/body). The receiver is the
-                        // already-staged valSlot; a subpattern member read has no `base.` form.
-                        if (isAgg && TypeClassifier.IsUserClass(aggMatchType)
-                            && sub.Member is IPropertyReferenceOperation vSubRef
-                            && VirtualDispatch.FindAccessor(vSubRef.Property, getter: true) is { } vSubGetter
-                            && VirtualDispatch.IsVirtualCall(vSubGetter))
-                        {
-                            var dispatched = EmitAccessorDispatch(vSubRef.Property, aggMatchType, vSubGetter,
-                                SlotRef(valSlot), new List<CLeaf>(), null);
-                            // Materialize into a typed temp (Udon COPY unboxes) so the sub-pattern
-                            // compares with the correct type tag, like the slot arm below.
-                            var vSubSlot = _ctx.Builder.AllocScratch(GetStorageType(memberType));
-                            EmitAssign(vSubSlot, dispatched);
-                            memberVal = SlotRef(vSubSlot);
-                        }
-                        else if (isAgg && _ctx.Aggregates.GetLayout(aggMatchType).TryGetIndex(memberName, out var aggMemberIdx))
-                        {
-                            // Aggregate member: read the boxed object[] slot, then materialize into a typed temp
-                            // (Udon COPY unboxes) so the sub-pattern compares with the correct type tag.
-                            var rawMember = AggregateAbi.ReadSlot(_builder, SlotRef(valSlot), aggMemberIdx, StorageTypes.Object);
-                            var memberSlot = _ctx.Builder.AllocScratch(GetStorageType(memberType));
-                            EmitAssign(memberSlot, rawMember);
-                            memberVal = SlotRef(memberSlot);
-                        }
-                        else if (isAgg && sub.Member is IPropertyReferenceOperation cpr
-                            && TypeClassifier.IsObjectArrayEmulated(aggMatchType) && cpr.Property.GetMethod is { } cgetter)
-                        {
-                            // Computed user-struct property (no object[] storage slot): JUMP to its registered
-                            // getter with the struct as the receiver, not a non-existent SystemObjectArray.__get_X
-                            // extern. The getter is collected in CollectStructMethodsInOperation's subpattern case.
-                            memberVal = EmitCallToMethod(ResolveStructMember(cgetter), new List<CLeaf> { SlotRef(valSlot) });
-                        }
-                        else
-                        {
-                            // B74 (owner funnel's 7th site): an INHERITED member in a property subpattern
-                            // (`c is { enabled: true }` where enabled is declared on the abstract Behaviour)
-                            // must resolve its extern owner to the SCRUTINEE's own static type, not the
-                            // declaring base — else it mints an unknown UnityEngineBehaviour.__get_enabled__.
-                            var memberOwner = GetStorageTypeName(ResolveExternOwnerType(memberContainingType, matchType, memberName));
-                            memberVal = ExternCall(
-                                ExternResolver.BuildPropertyGetSignature(memberOwner, memberName, GetStorageTypeName(memberType)),
-                                new List<CLeaf> { SlotRef(valSlot) }, GetStorageType(memberType));
-                        }
-                        var subResult = EmitPatternCheckImpl(memberVal, memberType, sub.Pattern);
-                        acc = ExternCall(
-                            "SystemBoolean.__op_ConditionalAnd__SystemBoolean_SystemBoolean__SystemBoolean",
-                            new List<CLeaf> { acc, subResult }, StorageTypes.Boolean);
-                    }
-                    EmitAssign(resultSlot, acc);
-                });
-                return SlotRef(resultSlot);
-            }
+            case IRecursivePatternOperation rec:
+                return EmitRecursivePattern(valueVal, valueType, rec);
 
             default:
                 throw new System.NotSupportedException($"Unsupported pattern: {pattern.GetType().Name}");
         }
+    }
+
+    CLeaf EmitRecursivePattern(CLeaf valueVal, ITypeSymbol valueType, IRecursivePatternOperation rec)
+    {
+        // One guarded lowering owns every recursive-pattern facet. Splitting positional and property
+        // forms into competing switch arms made the first arm silently drop the second facet, the
+        // matched-type/null guard, and the designator for `T(...) { P: ... } v`.
+        var resultSlot = _ctx.Builder.AllocScratch(StorageTypes.Boolean);
+        EmitAssign(resultSlot, Const(false, StorageTypes.Boolean));
+
+        CLeaf guard;
+        if (rec.MatchedType != null && !SymbolEqualityComparer.Default.Equals(rec.MatchedType, valueType))
+            guard = EmitTypeCheck(valueVal, rec.MatchedType);
+        else if (!valueType.IsValueType)
+            guard = ExternCall(
+                "SystemObject.__op_Inequality__SystemObject_SystemObject__SystemBoolean",
+                new List<CLeaf> { valueVal, Const(null, StorageTypes.Object) }, StorageTypes.Boolean);
+        else
+            guard = Const(true, StorageTypes.Boolean);
+
+        _builder.EmitIf(guard, _ =>
+        {
+            var matchType = rec.MatchedType ?? valueType;
+            var valSlot = _ctx.Builder.AllocScratch(GetStorageType(matchType));
+            EmitAssign(valSlot, valueVal);
+
+            var acc = EmitRecursivePositionalChecks(SlotRef(valSlot), matchType, rec);
+            acc = EmitRecursivePropertyChecks(SlotRef(valSlot), matchType, rec, acc);
+            EmitAssign(resultSlot, acc);
+
+            // A recursive-pattern designator is assigned only when every positional/property facet
+            // matched. Keeping the write under the final result also avoids publishing a stale
+            // environment value from a failed pattern.
+            if (rec.DeclaredSymbol is ILocalSymbol bound)
+                _builder.EmitIf(acc, __ => BindPatternLocal(bound, SlotRef(valSlot)));
+        });
+        return SlotRef(resultSlot);
+    }
+
+    CLeaf EmitRecursivePositionalChecks(CLeaf valueVal, ITypeSymbol matchType,
+        IRecursivePatternOperation rec)
+    {
+        if (rec.DeconstructionSubpatterns.Length == 0)
+            return Const(true, StorageTypes.Boolean);
+
+        // Tuple/user-struct positional patterns read their aggregate slots directly. Other supported
+        // types call the registered user Deconstruct(out ...) method.
+        if (matchType is not INamedTypeSymbol aggType || !TypeClassifier.IsAggregateValue(matchType))
+        {
+            var deconstruct = rec.DeconstructSymbol is not IMethodSymbol deconstructMethod
+                ? null : ResolveStructMember(SubstituteMethodTypeArgs(deconstructMethod));
+            if (deconstruct == null
+                || deconstruct.Parameters.Length != rec.DeconstructionSubpatterns.Length
+                || deconstruct.Parameters.Any(p => p.RefKind != RefKind.Out))
+                throw new System.NotSupportedException(
+                    "Positional pattern requires a supported user Deconstruct(out ...) method.");
+
+            var args = new List<CLeaf> { valueVal };
+            foreach (var parameter in deconstruct.Parameters)
+                args.Add(SlotRef(_builder.AllocScratch(GetStorageType(parameter.Type))));
+            EmitExprStmt(EmitCallToMethod(deconstruct, args, rec.Syntax));
+            if (!_methodParamVarIds.TryGetValue(deconstruct, out var paramIds))
+                throw new System.InvalidOperationException(
+                    $"Deconstruct method '{deconstruct.ToDisplayString()}' was not registered.");
+
+            CLeaf deconstructResult = Const(true, StorageTypes.Boolean);
+            for (int i = 0; i < rec.DeconstructionSubpatterns.Length; i++)
+            {
+                var elemType = deconstruct.Parameters[i].Type;
+                var elem = LoadField(paramIds[i], GetStorageType(elemType));
+                var subResult = EmitPatternCheckImpl(elem, elemType, rec.DeconstructionSubpatterns[i]);
+                deconstructResult = CombinePatternChecks(deconstructResult, subResult);
+            }
+            return deconstructResult;
+        }
+
+        var layout = _ctx.Aggregates.GetLayout(aggType);
+        if (rec.DeconstructionSubpatterns.Length != layout.Count)
+            throw new System.NotSupportedException(
+                $"Positional pattern element count ({rec.DeconstructionSubpatterns.Length}) "
+                + $"does not match tuple arity ({layout.Count}).");
+
+        CLeaf result = Const(true, StorageTypes.Boolean);
+        for (int i = 0; i < rec.DeconstructionSubpatterns.Length; i++)
+        {
+            var elemType = layout.Fields[i].Type;
+            var elemRaw = AggregateAbi.ReadSlot(_builder, valueVal, i, StorageTypes.Object);
+            // Materialize into a typed temp (Udon COPY unboxes) so the sub-pattern compares with
+            // the correct type tag.
+            var elemSlot = _ctx.Builder.AllocScratch(GetStorageType(elemType));
+            EmitAssign(elemSlot, elemRaw);
+            var subResult = EmitPatternCheckImpl(SlotRef(elemSlot), elemType,
+                rec.DeconstructionSubpatterns[i]);
+            result = CombinePatternChecks(result, subResult);
+        }
+        return result;
+    }
+
+    CLeaf EmitRecursivePropertyChecks(CLeaf valueVal, ITypeSymbol matchType,
+        IRecursivePatternOperation rec, CLeaf acc)
+    {
+        var aggMatchType = matchType as INamedTypeSymbol;
+        bool isAgg = aggMatchType != null && TypeClassifier.IsObjectArrayEmulated(aggMatchType);
+        foreach (var sub in rec.PropertySubpatterns)
+        {
+            ITypeSymbol memberType, memberContainingType;
+            string memberName;
+            switch (sub.Member)
+            {
+                case IPropertyReferenceOperation pr:
+                    memberType = pr.Property.Type; memberName = pr.Property.Name;
+                    memberContainingType = pr.Property.ContainingType; break;
+                case IFieldReferenceOperation fr:
+                    memberType = fr.Field.Type; memberName = fr.Field.Name;
+                    memberContainingType = fr.Field.ContainingType; break;
+                default:
+                    throw new System.NotSupportedException(
+                        $"Property pattern member '{sub.Member?.GetType().Name}' is not supported "
+                        + "(only System/Unity properties and fields).");
+            }
+
+            CLeaf memberVal;
+            if (isAgg && TypeClassifier.IsUserClass(aggMatchType)
+                && sub.Member is IPropertyReferenceOperation vSubRef
+                && VirtualDispatch.FindAccessor(vSubRef.Property, getter: true) is { } vSubGetter
+                && VirtualDispatch.IsVirtualCall(vSubGetter))
+            {
+                var dispatched = EmitAccessorDispatch(vSubRef.Property, aggMatchType, vSubGetter,
+                    valueVal, new List<CLeaf>(), null);
+                var vSubSlot = _ctx.Builder.AllocScratch(GetStorageType(memberType));
+                EmitAssign(vSubSlot, dispatched);
+                memberVal = SlotRef(vSubSlot);
+            }
+            else if (isAgg
+                     && _ctx.Aggregates.GetLayout(aggMatchType).TryGetIndex(memberName, out var aggMemberIdx))
+            {
+                var rawMember = AggregateAbi.ReadSlot(_builder, valueVal, aggMemberIdx, StorageTypes.Object);
+                var memberSlot = _ctx.Builder.AllocScratch(GetStorageType(memberType));
+                EmitAssign(memberSlot, rawMember);
+                memberVal = SlotRef(memberSlot);
+            }
+            else if (isAgg && sub.Member is IPropertyReferenceOperation cpr
+                     && cpr.Property.GetMethod is { } cgetter)
+            {
+                memberVal = EmitCallToMethod(ResolveStructMember(cgetter),
+                    new List<CLeaf> { valueVal });
+            }
+            else
+            {
+                var memberOwner = GetStorageTypeName(
+                    ResolveExternOwnerType(memberContainingType, matchType, memberName));
+                memberVal = ExternCall(
+                    ExternResolver.BuildPropertyGetSignature(
+                        memberOwner, memberName, GetStorageTypeName(memberType)),
+                    new List<CLeaf> { valueVal }, GetStorageType(memberType));
+            }
+
+            var subResult = EmitPatternCheckImpl(memberVal, memberType, sub.Pattern);
+            acc = CombinePatternChecks(acc, subResult);
+        }
+        return acc;
+    }
+
+    CLeaf CombinePatternChecks(CLeaf left, CLeaf right) =>
+        ExternCall(
+            "SystemBoolean.__op_ConditionalAnd__SystemBoolean_SystemBoolean__SystemBoolean",
+            new List<CLeaf> { left, right }, StorageTypes.Boolean);
+
+    void BindPatternLocal(ILocalSymbol local, CLeaf value)
+    {
+        // Stage 2 §4.1: captured pattern variable → env cell (its owning scope's env is live at
+        // every point a condition/section hosting this pattern executes).
+        if (_ctx.Closures.TryGetEnvBinding(local, out _))
+        {
+            EnvEmit.Write(_builder, _ctx, local, value);
+            return;
+        }
+
+        var localId = _ctx.Storage.DeclareLocal(local.Name, GetStorageType(local.Type));
+        _localBindings[local] = new EmitContext.LocalBinding(localId);
+        EmitStoreField(localId, value);
     }
 
     // ── Switch expression ──
