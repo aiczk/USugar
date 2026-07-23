@@ -253,7 +253,9 @@ public abstract class AssignmentHandlerBase : HandlerBase
                     AggregateAbi.WriteSlot(_builder, arrVal, elemIdx, valueVal);
                     return;
                 }
-                break;
+                throw new System.InvalidOperationException(
+                    $"Object[] field write-back lost layout slot for "
+                    + $"'{aggFieldRef.Field.ToDisplayString()}' in '{aggWbType.ToDisplayString()}'.");
             }
             case IArrayElementReferenceOperation ndimWbElem when ndimWbElem.Indices.Length > 1:
             {
@@ -399,7 +401,9 @@ public abstract class AssignmentHandlerBase : HandlerBase
                         new List<CLeaf> { lv.ArrayVal ?? LoadInstanceRaw(aggPropRef.Instance), valueVal }));
                     return;
                 }
-                break;
+                throw new System.InvalidOperationException(
+                    $"Object[] property write-back resolved neither a layout slot nor a registered setter "
+                    + $"for '{aggPropRef.Property.ToDisplayString()}' in '{aggPropType.ToDisplayString()}'.");
             }
             // User-defined indexer on an object[]-emulated instance (`s[i] = v` / `s[i] += v`) → call the
             // setter with the receiver (object[]) as param0, the index args, then the value. Reuse the
