@@ -555,20 +555,21 @@ public static class CoreFlatOptimizer
         switch (inst)
         {
             case CAssign m:
-                if (m.Value is CSlotRef sr) yield return sr.SlotId;
+                if (m.Value is CLeaf assignLeaf)
+                    foreach (var slot in GetReadSlotsLeaf(assignLeaf)) yield return slot;
                 break;
             case CStoreField sf:
-                if (sf.Value is CSlotRef sr2) yield return sr2.SlotId;
+                foreach (var slot in GetReadSlotsLeaf(sf.Value)) yield return slot;
                 break;
             case CLoadField:
                 break; // reads a heap field, never a slot
             case CExprStmt { Expr: CExternCall ce }:
                 foreach (var arg in ce.Args)
-                    if (arg is CSlotRef sr3) yield return sr3.SlotId;
+                    foreach (var slot in GetReadSlotsLeaf(arg)) yield return slot;
                 break;
             case CExprStmt { Expr: CInternalCall ci }:
                 foreach (var arg in ci.Args)
-                    if (arg is CSlotRef sr4) yield return sr4.SlotId;
+                    foreach (var slot in GetReadSlotsLeaf(arg)) yield return slot;
                 break;
             default:
                 throw new VerificationException(
@@ -583,10 +584,11 @@ public static class CoreFlatOptimizer
             case CJump:
                 break; // no slot operands
             case CBranch br:
-                if (br.Cond is CSlotRef sr) yield return sr.SlotId;
+                foreach (var slot in GetReadSlotsLeaf(br.Cond)) yield return slot;
                 break;
             case CRet ret:
-                if (ret.Value is CSlotRef sr2) yield return sr2.SlotId;
+                if (ret.Value != null)
+                    foreach (var slot in GetReadSlotsLeaf(ret.Value)) yield return slot;
                 break;
             default:
                 throw new VerificationException(
@@ -596,8 +598,7 @@ public static class CoreFlatOptimizer
 
     static CValue RemapOperand(CValue op, Dictionary<int, int> mapping)
     {
-        if (op is CSlotRef sr && mapping.TryGetValue(sr.SlotId, out var newId) && newId != sr.SlotId)
-            return new CSlotRef(newId, sr.Type);
+        if (op is CLeaf leaf) return RemapLeaf(leaf, mapping);
         return op;
     }
 
@@ -606,7 +607,29 @@ public static class CoreFlatOptimizer
     {
         if (op is CSlotRef sr && mapping.TryGetValue(sr.SlotId, out var newId) && newId != sr.SlotId)
             return new CSlotRef(newId, sr.Type);
+        if (op is CTypedView view)
+            return new CTypedView(RemapLeaf(view.Source, mapping), view.Type);
         return op;
+    }
+
+    static IEnumerable<int> GetReadSlotsLeaf(CLeaf leaf)
+    {
+        switch (leaf)
+        {
+            case CSlotRef slot:
+                yield return slot.SlotId;
+                break;
+            case CTypedView view:
+                foreach (var slot in GetReadSlotsLeaf(view.Source)) yield return slot;
+                break;
+            case CConst:
+            case CFieldAddr:
+            case CFuncRef:
+                break;
+            default:
+                throw new VerificationException(
+                    $"Unknown CLeaf kind in CoreFlatOptimizer.GetReadSlotsLeaf: {leaf?.GetType().Name}");
+        }
     }
 
     static int RemapSlotId(int slotId, Dictionary<int, int> mapping)

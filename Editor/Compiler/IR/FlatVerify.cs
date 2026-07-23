@@ -288,6 +288,9 @@ public static class FlatVerify
                 ctx.AssertType(ctx.SlotType(slot.SlotId, context), slot.Type,
                     $"{context} slot{slot.SlotId}");
                 break;
+            case CTypedView view:
+                VerifyTypedLeaf(view.Source, ctx, context + " source");
+                break;
             case CFieldAddr field:
                 ctx.AssertField(field.FieldName, field.Type, context);
                 break;
@@ -409,6 +412,9 @@ public static class FlatVerify
             case CSlotRef _:
             case CConst _:
             case CFuncRef _:
+                break;
+            case CTypedView view:
+                RequireLeaf(view.Source, fn, ctx + " typed-view source");
                 break;
             case CFieldAddr _:
                 if (!allowAddr)

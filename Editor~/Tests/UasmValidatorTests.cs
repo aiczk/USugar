@@ -248,6 +248,52 @@ public class UasmValidatorTests
         UasmValidator.Validate(uasm, facts); // should not throw
     }
 
+    [Fact]
+    public void TypedViewMarkerWithExactCopyTypes_Passes()
+    {
+        var uasm = @".data_start
+    __refl_typeid: %SystemInt64, null
+    __intnl_returnJump_SystemUInt32_0: %SystemUInt32, 0xFFFFFFFF
+    source: %SystemInt32, null
+    destination: %SystemString, null
+.data_end
+.code_start
+    .export _start
+    _start:
+        PUSH, source
+        PUSH, destination
+        # USUGAR_TYPED_VIEW SystemInt32 -> SystemString
+        COPY
+        JUMP_INDIRECT, __intnl_returnJump_SystemUInt32_0
+.code_end
+";
+        UasmValidator.Validate(uasm);
+    }
+
+    [Fact]
+    public void TypedViewMarkerCannotWaiveDifferentCopyTypes()
+    {
+        var uasm = @".data_start
+    __refl_typeid: %SystemInt64, null
+    __intnl_returnJump_SystemUInt32_0: %SystemUInt32, 0xFFFFFFFF
+    source: %SystemInt32, null
+    destination: %SystemString, null
+.data_end
+.code_start
+    .export _start
+    _start:
+        PUSH, source
+        PUSH, destination
+        # USUGAR_TYPED_VIEW SystemObject -> SystemString
+        COPY
+        JUMP_INDIRECT, __intnl_returnJump_SystemUInt32_0
+.code_end
+";
+        var ex = Assert.Throws<UasmValidationException>(() => UasmValidator.Validate(uasm));
+        Assert.Contains(CoreToUasm.TypedViewCopyMarker, ex.Message);
+        Assert.Contains("SystemInt32", ex.Message);
+    }
+
     // ── Duplicate variable validation tests ──
 
     [Fact]

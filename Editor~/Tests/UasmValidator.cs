@@ -386,17 +386,51 @@ public static class UasmValidator
         var errors = new List<string>();
         var pushes = new List<string>();
         var inCode = false;
+        string typedViewSourceType = null;
+        string typedViewDestinationType = null;
         var allLines = uasm.Split('\n');
+        var typedViewPrefix = "# " + CoreToUasm.TypedViewCopyMarker + " ";
 
         for (int i = 0; i < allLines.Length; i++)
         {
             var trimmed = allLines[i].Trim();
-            if (trimmed == ".code_start") { inCode = true; pushes.Clear(); continue; }
+            if (trimmed == ".code_start")
+            {
+                inCode = true;
+                pushes.Clear();
+                typedViewSourceType = null;
+                typedViewDestinationType = null;
+                continue;
+            }
             if (trimmed == ".code_end") { inCode = false; continue; }
             if (!inCode) continue;
+            if (trimmed.StartsWith(typedViewPrefix))
+            {
+                var types = trimmed.Substring(typedViewPrefix.Length).Split(
+                    new[] { " -> " },
+                    StringSplitOptions.None);
+                if (types.Length == 2 && types[0].Length > 0 && types[1].Length > 0)
+                {
+                    typedViewSourceType = types[0];
+                    typedViewDestinationType = types[1];
+                }
+                else
+                {
+                    errors.Add($"Line {i + 1}: malformed {CoreToUasm.TypedViewCopyMarker} marker");
+                    typedViewSourceType = null;
+                    typedViewDestinationType = null;
+                }
+                continue;
+            }
             if (trimmed.Length == 0 || trimmed.StartsWith(".export") || trimmed.StartsWith("#")) continue;
 
-            if (IsLabel(trimmed)) { pushes.Clear(); continue; }
+            if (IsLabel(trimmed))
+            {
+                pushes.Clear();
+                typedViewSourceType = null;
+                typedViewDestinationType = null;
+                continue;
+            }
             if (trimmed.StartsWith("PUSH, ")) { pushes.Add(trimmed.Substring("PUSH, ".Length)); continue; }
             if (trimmed == "COPY")
             {
@@ -407,16 +441,31 @@ public static class UasmValidator
                     if (varTypes.TryGetValue(src, out var srcType) && srcType != null
                         && varTypes.TryGetValue(dst, out var dstType) && dstType != null)
                     {
-                        var why = DeclaredRelaxations.WhyIncompatible(dstType, srcType, typeFacts);
-                        if (why != null)
-                            errors.Add($"Line {i + 1}: COPY {src} (%{srcType}) -> {dst} (%{dstType}): {why}");
+                        if (typedViewSourceType != null || typedViewDestinationType != null)
+                        {
+                            if (srcType != typedViewSourceType || dstType != typedViewDestinationType)
+                                errors.Add(
+                                    $"Line {i + 1}: {CoreToUasm.TypedViewCopyMarker} declares "
+                                    + $"%{typedViewSourceType} -> %{typedViewDestinationType}, but COPY is "
+                                    + $"{src} (%{srcType}) -> {dst} (%{dstType})");
+                        }
+                        else
+                        {
+                            var why = DeclaredRelaxations.WhyIncompatible(dstType, srcType, typeFacts);
+                            if (why != null)
+                                errors.Add($"Line {i + 1}: COPY {src} (%{srcType}) -> {dst} (%{dstType}): {why}");
+                        }
                     }
                 }
                 pushes.Clear();
+                typedViewSourceType = null;
+                typedViewDestinationType = null;
                 continue;
             }
             // Any other instruction consumes or invalidates the pending operand pushes.
             pushes.Clear();
+            typedViewSourceType = null;
+            typedViewDestinationType = null;
         }
 
         if (errors.Count > 0)

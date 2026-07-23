@@ -190,6 +190,9 @@ public abstract partial class HandlerBase
     /// <summary>Create a field address reference (for extern out/ref).</summary>
     protected CFieldAddr FieldAddr(string fieldName, StorageType type) => _builder.FieldAddr(fieldName, type);
 
+    /// <summary>Create an explicit codegen-free destination-typed view of a materialized value.</summary>
+    protected CTypedView TypedView(CLeaf source, StorageType type) => _builder.TypedView(source, type);
+
     /// <summary>Emit an extern call, materialized to a scratch slot (returns the leaf; null for void).</summary>
     protected CSlotRef ExternCall(ExternSignature sig, List<CLeaf> args, StorageType retType)
         => _builder.ExternCall(ResolveExtern(sig), args, retType);

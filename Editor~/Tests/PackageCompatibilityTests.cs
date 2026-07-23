@@ -126,6 +126,72 @@ public class GenericHelperHost : UdonSharpBehaviour
     }
 
     [Fact]
+    public void BoxedGenericConversionsUseClosedTargetAndPreserveTokenSource()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+using VRC.SDK3.Data;
+using VRC.SDKBase;
+
+namespace VRC.SDK3.Data
+{
+    public struct DataToken
+    {
+        public object Reference { get { return null; } }
+        public static explicit operator int(DataToken token) { return 0; }
+        public static explicit operator string(DataToken token) { return null; }
+    }
+}
+
+public enum ByteMode : byte { Zero, One }
+
+public class BoxedGenericConversionHost : UdonSharpBehaviour
+{
+    static T FromToken<T>(DataToken token) { return (T)(object)token; }
+    static T FromReference<T>(DataToken token) { return (T)token.Reference; }
+    static T FromFloat<T>(float value) { return (T)(object)value; }
+    static T FromInt<T>(int value) { return (T)(object)value; }
+
+    void Start()
+    {
+        UdonSharpBehaviour behaviour = FromToken<UdonSharpBehaviour>(default(DataToken));
+        int number = FromToken<int>(default(DataToken));
+        string text = FromToken<string>(default(DataToken));
+        VRCUrl url = FromToken<VRCUrl>(default(DataToken));
+        behaviour = FromReference<UdonSharpBehaviour>(default(DataToken));
+        number = FromReference<int>(default(DataToken));
+        number = FromFloat<int>(1.9f);
+        ByteMode mode = FromInt<ByteMode>(1);
+    }
+}
+", "BoxedGenericConversionHost");
+
+        Assert.Contains(
+            "VRCSDK3DataDataToken.__op_Explicit__VRCSDK3DataDataToken__SystemInt32", uasm);
+        Assert.Contains(
+            "VRCSDK3DataDataToken.__op_Explicit__VRCSDK3DataDataToken__SystemString", uasm);
+        Assert.Contains(
+            "VRCSDK3DataDataToken.__get_Reference__SystemObject", uasm);
+        Assert.Contains(
+            "SystemConvert.__ToInt32__SystemObject__SystemInt32", uasm);
+        Assert.Contains(
+            "SystemMath.__Truncate__SystemDouble__SystemDouble", uasm);
+        Assert.Contains(
+            "SystemConvert.__ToByte__SystemInt32__SystemByte", uasm);
+        Assert.DoesNotContain(
+            "# USUGAR_TYPED_VIEW SystemInt32 -> SystemByte", uasm);
+        Assert.Contains(
+            "# USUGAR_TYPED_VIEW VRCSDK3DataDataToken -> VRCUdonCommonInterfacesIUdonEventReceiver",
+            uasm);
+        Assert.Contains(
+            "# USUGAR_TYPED_VIEW VRCSDK3DataDataToken -> VRCSDKBaseVRCUrl",
+            uasm);
+        Assert.Contains(
+            "# USUGAR_TYPED_VIEW SystemObject -> VRCUdonCommonInterfacesIUdonEventReceiver",
+            uasm);
+    }
+
+    [Fact]
     public void SdkInterfacePropertiesUseRegisteredExterns()
     {
         var uasm = TestHelper.CompileToUasm(@"

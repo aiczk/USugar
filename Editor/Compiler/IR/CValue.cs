@@ -2,7 +2,7 @@ using System;
 using System.Collections.Generic;
 
 // ============================================================================
-// Core IR value vocabulary. CLeaf (CSlotRef/CConst/CFuncRef/CFieldAddr) are the operand-safe leaves;
+// Core IR value vocabulary. CLeaf (CSlotRef/CConst/CFuncRef/CFieldAddr/CTypedView) are the operand-safe leaves;
 // the value-producing ops (CFieldLoad/CExternCall/CInternalCall/CSelect/CCrossCall) are bound to a
 // fresh slot at construction (A-normal form), so they appear only as a CAssign RHS or a CExprStmt
 // side-effect — never nested in an operand position.
@@ -20,7 +20,7 @@ public abstract class CValue
 /// <summary>A value safe to use as an operand: pure, side-effect-free, order-stable (re-reading it
 /// yields the same value regardless of intervening writes). THE A-normal-form invariant: every
 /// operand position is typed <see cref="CLeaf"/>, so a value-producing op cannot nest in an operand —
-/// it must first be bound to a slot. Leaves: CSlotRef / CConst / CFuncRef / CFieldAddr.</summary>
+/// it must first be bound to a slot. Leaves: CSlotRef / CConst / CFuncRef / CFieldAddr / CTypedView.</summary>
 public abstract class CLeaf : CValue
 {
     protected CLeaf(StorageType type) : base(type) { }
@@ -40,6 +40,23 @@ public sealed class CConst : CLeaf
     public readonly object Value; // null for default/null literal
     public CConst(object value, StorageType type) : base(type) => Value = value;
     public override string ToString() => $"const({Value ?? "null"}):{Type}";
+}
+
+/// <summary>
+/// An explicit, codegen-free typed view of an already-materialized leaf. UdonSharp's cast lowering
+/// deliberately uses a raw COPY when no runtime conversion extern exists (notably a closed generic
+/// `(T)(object)value` after object erasure). Keeping that intent in IR lets the verifier distinguish
+/// the user-requested cast from an accidental mismatched CAssign/CReturn without globally relaxing
+/// value/reference type checks. Codegen resolves this node to <see cref="Source"/>'s operand.
+/// </summary>
+public sealed class CTypedView : CLeaf
+{
+    public readonly CLeaf Source;
+
+    public CTypedView(CLeaf source, StorageType type) : base(type)
+        => Source = source ?? throw new ArgumentNullException(nameof(source));
+
+    public override string ToString() => $"typed_view({Source} as {Type})";
 }
 
 /// <summary>Read a heap field's value. Producer (NOT a leaf): re-reading after a write to the same

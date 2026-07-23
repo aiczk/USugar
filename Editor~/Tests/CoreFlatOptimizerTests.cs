@@ -64,6 +64,52 @@ public class CoreFlatOptimizerTests
     }
 
     [Fact]
+    public void Coalesce_TypedViewReadPreservesInterference()
+    {
+        var func = MakeFunc();
+        func.Slots.Add(new SlotDecl(0, StorageTypes.Int32, SlotClass.Scratch));
+        func.Slots.Add(new SlotDecl(1, StorageTypes.Int32, SlotClass.Scratch));
+
+        var bb0 = func.NewBlock();
+        bb0.Stmts.Add(new CAssign(0, new CConst(10, StorageTypes.Int32)));
+        bb0.Stmts.Add(new CAssign(1, new CConst(20, StorageTypes.Int32)));
+        bb0.Stmts.Add(new CStoreField(
+            "text",
+            new CTypedView(new CSlotRef(0, StorageTypes.Int32), StorageTypes.String)));
+        bb0.Stmts.Add(new CStoreField("number", new CSlotRef(1, StorageTypes.Int32)));
+        bb0.Terminator = new CRet();
+
+        CoreFlatOptimizer.CoalesceSlots(MakeModule(func));
+
+        Assert.NotEqual(
+            ((CAssign)bb0.Stmts[0]).DestSlot,
+            ((CAssign)bb0.Stmts[1]).DestSlot);
+    }
+
+    [Fact]
+    public void Coalesce_TypedViewRemapsUnderlyingSlot()
+    {
+        var func = MakeFunc();
+        func.Slots.Add(new SlotDecl(0, StorageTypes.Int32, SlotClass.Scratch));
+        func.Slots.Add(new SlotDecl(1, StorageTypes.Int32, SlotClass.Scratch));
+
+        var bb0 = func.NewBlock();
+        bb0.Stmts.Add(new CAssign(0, new CConst(10, StorageTypes.Int32)));
+        bb0.Stmts.Add(new CStoreField("first", new CSlotRef(0, StorageTypes.Int32)));
+        bb0.Stmts.Add(new CAssign(1, new CConst(20, StorageTypes.Int32)));
+        bb0.Stmts.Add(new CStoreField(
+            "text",
+            new CTypedView(new CSlotRef(1, StorageTypes.Int32), StorageTypes.String)));
+        bb0.Terminator = new CRet();
+
+        CoreFlatOptimizer.CoalesceSlots(MakeModule(func));
+
+        var store = Assert.IsType<CStoreField>(bb0.Stmts[3]);
+        var view = Assert.IsType<CTypedView>(store.Value);
+        Assert.Equal(0, Assert.IsType<CSlotRef>(view.Source).SlotId);
+    }
+
+    [Fact]
     public void Coalesce_Overlapping_Kept()
     {
         // slot0 and slot1 are both live at the same time → must not merge

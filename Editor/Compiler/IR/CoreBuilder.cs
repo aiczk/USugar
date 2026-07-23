@@ -174,6 +174,7 @@ public sealed class CoreBuilder
     public CSlotRef SlotRef(int slotId) => new CSlotRef(slotId, _currentFunc.Slots[slotId].Type);
     public CFieldAddr FieldAddr(string fieldName, StorageType type) => new CFieldAddr(fieldName, type);
     public CFuncRef FuncRef(string funcName) => new CFuncRef(funcName);
+    public CTypedView TypedView(CLeaf source, StorageType type) => new CTypedView(source, type);
 
     // ── Value producers (A-normal form) ──
     // Each binds its producer to a fresh scratch slot at the current insertion point (program order)

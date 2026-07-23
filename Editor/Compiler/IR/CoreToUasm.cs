@@ -10,6 +10,13 @@ using System.Text;
 /// </summary>
 public static class CoreToUasm
 {
+    /// <summary>
+    /// UASM comment emitted immediately before a COPY whose source is an explicit
+    /// <see cref="CTypedView"/>. The VM still performs a raw COPY; the marker
+    /// preserves the compiler's checked intent for post-emission validators.
+    /// </summary>
+    internal const string TypedViewCopyMarker = "USUGAR_TYPED_VIEW";
+
     public static CodeGenResult Generate(CModule module)
     {
         var gen = new Generator(module);
@@ -28,6 +35,7 @@ public static class CoreToUasm
         Extern,         // 8 bytes — operand = extern signature
         Label,          // 0 bytes
         Export,         // 0 bytes
+        Comment,        // 0 bytes
     }
 
     struct CodeLine
@@ -276,6 +284,7 @@ public static class CoreToUasm
             {
                 CSlotRef slot => GetSlotVar(funcIdx, slot.SlotId, func),
                 CConst c => GetConstVar(c),
+                CTypedView view => ResolveOperand(view.Source, funcIdx, func),
                 CFieldAddr f => f.FieldName,
                 CFuncRef fr => GetFuncRefVar(fr),
                 _ => throw new InvalidOperationException($"Unknown CValue type: {op.GetType().Name}")
@@ -377,12 +386,32 @@ public static class CoreToUasm
         void AddExport(string name) =>
             _code.Add(new CodeLine { Kind = CodeKind.Export, LabelName = name });
 
-        void AddCopyPair(string src, string dst)
+        void AddComment(string text) =>
+            _code.Add(new CodeLine { Kind = CodeKind.Comment, Operand = text });
+
+        void AddCopyPair(string src, string dst, CValue sourceValue = null)
         {
             if (src == dst) return;
             AddPush(src);
             AddPush(dst);
+            if (TryGetTypedViewTypes(sourceValue, out var sourceType, out var destinationType))
+                AddComment($"{TypedViewCopyMarker} {sourceType.Name} -> {destinationType.Name}");
             AddCopy();
+        }
+
+        static bool TryGetTypedViewTypes(CValue value, out StorageType sourceType, out StorageType destinationType)
+        {
+            sourceType = default;
+            destinationType = default;
+            if (value is not CTypedView view)
+                return false;
+
+            destinationType = view.Type;
+            CLeaf source = view.Source;
+            while (source is CTypedView nested)
+                source = nested.Source;
+            sourceType = source.Type;
+            return true;
         }
 
         // ── Function emission ──
@@ -436,7 +465,10 @@ public static class CoreToUasm
                     break;
 
                 case CStoreField store:
-                    AddCopyPair(ResolveOperand(store.Value, funcIdx, func), store.FieldName);
+                    AddCopyPair(
+                        ResolveOperand(store.Value, funcIdx, func),
+                        store.FieldName,
+                        store.Value);
                     break;
 
                 case CExprStmt { Expr: CExternCall call }:
@@ -456,7 +488,7 @@ public static class CoreToUasm
         {
             var src = ResolveOperand(move.Value, funcIdx, func);
             var dst = GetSlotVar(funcIdx, move.DestSlot, func);
-            AddCopyPair(src, dst);
+            AddCopyPair(src, dst, move.Value);
         }
 
         void EmitCallExtern(CExternCall call, int funcIdx, CFunction func)
@@ -493,7 +525,10 @@ public static class CoreToUasm
 
             // Copy args to param fields
             for (int i = 0; i < call.Args.Count; i++)
-                AddCopyPair(ResolveOperand(call.Args[i], funcIdx, func), target.ParamFieldNames[i]);
+                AddCopyPair(
+                    ResolveOperand(call.Args[i], funcIdx, func),
+                    target.ParamFieldNames[i],
+                    call.Args[i]);
 
             // Push return address and jump
             var retLabel = $"__{func.Name}__callret_{_retaddrIdx}";
@@ -588,7 +623,10 @@ public static class CoreToUasm
         void EmitReturn(CRet ret, int funcIdx, CFunction func)
         {
             if (ret.Value != null && func.ReturnFieldName != null)
-                AddCopyPair(ResolveOperand(ret.Value, funcIdx, func), func.ReturnFieldName);
+                AddCopyPair(
+                    ResolveOperand(ret.Value, funcIdx, func),
+                    func.ReturnFieldName,
+                    ret.Value);
 
             // Stack-based return protocol: POP return address from stack into returnJump, then jump.
             // The caller (or sentinel preamble) pushed the return address onto the stack.
@@ -632,6 +670,9 @@ public static class CoreToUasm
                     case CodeKind.Copy:
                         sb.Append("        COPY\n");
                         afterExport = false;
+                        break;
+                    case CodeKind.Comment:
+                        sb.Append($"        # {line.Operand}\n");
                         break;
                     case CodeKind.Jump:
                         sb.Append($"        JUMP, 0x{_labelAddrs[line.Operand]:x8}\n");

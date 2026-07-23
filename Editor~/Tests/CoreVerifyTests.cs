@@ -122,6 +122,33 @@ public class CoreVerifyTests
     }
 
     [Fact]
+    public void Verifier_ExplicitTypedViewReturn_Passes()
+    {
+        var module = new CModule();
+        var builder = new CoreBuilder(module);
+        var func = builder.BeginFunction("test");
+        func.ReturnType = StorageTypes.Single;
+        builder.EmitReturn(builder.TypedView(
+            builder.Const("carried", StorageTypes.String),
+            StorageTypes.Single));
+
+        CoreVerify.Verify(module);
+    }
+
+    [Fact]
+    public void Verifier_TypedViewStillVerifiesUnderlyingLeaf()
+    {
+        var module = new CModule();
+        var func = module.AddFunction("test");
+        func.ReturnType = StorageTypes.Single;
+        func.Body.Stmts.Add(new CReturn(new CTypedView(
+            new CSlotRef(99, StorageTypes.String),
+            StorageTypes.Single)));
+
+        Assert.Throws<VerificationException>(() => CoreVerify.Verify(module));
+    }
+
+    [Fact]
     public void Verifier_NonVoidReturnWithoutValue_Throws()
     {
         var module = new CModule();
