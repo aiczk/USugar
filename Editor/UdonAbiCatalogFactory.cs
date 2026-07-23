@@ -11,23 +11,31 @@ using VRC.Udon.Graph;
 static class UdonAbiCatalogFactory
 {
     public static UdonAbiCatalog Create(IEnumerable<UdonNodeDefinition> definitions)
-        => new((definitions ?? throw new ArgumentNullException(nameof(definitions)))
+    {
+        if (definitions == null) throw new ArgumentNullException(nameof(definitions));
+        var typeFacts = new UdonTypeFactRegistry();
+        var prototypes = definitions
             // GetNodeDefinitions also returns graph-control, event, variable,
             // and constant nodes. Those are not CALL_EXTERN targets and may
             // intentionally carry typeless ports.
             .Where(definition => definition != null
                                  && UdonAbiCatalog.IsExternRegistryName(
                                      definition.fullName))
-            .Select(CreatePrototype));
+            .Select(definition => CreatePrototype(definition, typeFacts))
+            .ToArray();
+        return new UdonAbiCatalog(prototypes, typeFacts.Snapshot());
+    }
 
-    static UdonExternPrototype CreatePrototype(UdonNodeDefinition definition)
+    static UdonExternPrototype CreatePrototype(UdonNodeDefinition definition,
+        UdonTypeFactRegistry typeFacts)
     {
-        var owner = ToAbiTypeName(definition.type);
+        var owner = ToAbiTypeNameAndRecord(definition.type, typeFacts);
         var parameters = definition.parameters.Select(parameter =>
             new UdonAbiParameter(
                 parameter.name,
                 ToAbiTypePattern(
-                    parameter.type, definition.fullName, parameter.name),
+                    parameter.type, definition.fullName, parameter.name,
+                    typeFacts),
                 parameter.parameterType switch
                 {
                     UdonNodeParameter.ParameterType.IN => UdonAbiParameterMode.In,
@@ -42,7 +50,8 @@ static class UdonAbiCatalogFactory
     }
 
     static UdonAbiType ToAbiTypePattern(Type type,
-        string registeredName, string parameterName)
+        string registeredName, string parameterName,
+        UdonTypeFactRegistry typeFacts)
     {
         if (type == null)
             throw new InvalidOperationException(
@@ -51,10 +60,19 @@ static class UdonAbiCatalogFactory
         if (type.IsByRef) type = type.GetElementType();
         if (type.IsArray)
             return UdonAbiType.Array(ToAbiTypePattern(
-                type.GetElementType(), registeredName, parameterName));
+                type.GetElementType(), registeredName, parameterName,
+                typeFacts));
         if (type.IsGenericParameter)
             return UdonAbiType.Generic(type.Name);
-        return UdonAbiType.Exact(ToAbiTypeName(type));
+        return UdonAbiType.Exact(ToAbiTypeNameAndRecord(type, typeFacts));
+    }
+
+    static string ToAbiTypeNameAndRecord(Type type,
+        UdonTypeFactRegistry typeFacts)
+    {
+        var name = ToAbiTypeName(type);
+        typeFacts.Record(name, type);
+        return name;
     }
 
     static string ToAbiTypeName(Type type)

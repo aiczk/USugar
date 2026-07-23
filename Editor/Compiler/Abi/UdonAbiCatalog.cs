@@ -206,8 +206,15 @@ public sealed class UdonAbiCatalog
         = new(Array.Empty<UdonExternPrototype>());
 
     readonly Dictionary<string, UdonExternPrototype> _externs;
+    readonly KeyValuePair<string, UdonTypeFactRegistry.TypeFact>[] _typeFacts;
 
     public UdonAbiCatalog(IEnumerable<UdonExternPrototype> prototypes)
+        : this(prototypes, null)
+    {
+    }
+
+    internal UdonAbiCatalog(IEnumerable<UdonExternPrototype> prototypes,
+        IEnumerable<KeyValuePair<string, UdonTypeFactRegistry.TypeFact>> typeFacts)
     {
         if (prototypes == null) throw new ArgumentNullException(nameof(prototypes));
         _externs = new Dictionary<string, UdonExternPrototype>(StringComparer.Ordinal);
@@ -218,6 +225,8 @@ public sealed class UdonAbiCatalog
                 throw new InvalidOperationException(
                     $"Duplicate Udon extern prototype '{prototype.RegisteredName}'.");
         }
+        _typeFacts = typeFacts?.ToArray()
+            ?? Array.Empty<KeyValuePair<string, UdonTypeFactRegistry.TypeFact>>();
     }
 
     internal static UdonAbiCatalog FromNamesForTests(IEnumerable<string> externNames)
@@ -248,6 +257,14 @@ public sealed class UdonAbiCatalog
 
     public IReadOnlyCollection<string> ExternNames => _externs.Keys;
     public IReadOnlyCollection<UdonExternPrototype> Prototypes => _externs.Values;
+
+    /// <summary>Seed one compilation's mutable registry from the immutable SDK ABI snapshot. Source
+    /// lowering then appends Roslyn facts to the same session-owned registry.</summary>
+    internal void SeedTypeFacts(UdonTypeFactRegistry target)
+    {
+        if (target == null) throw new ArgumentNullException(nameof(target));
+        target.Import(_typeFacts, "installed SDK ABI catalog");
+    }
 }
 
 /// <summary>An exact extern proven to exist in a typed SDK ABI catalog.</summary>

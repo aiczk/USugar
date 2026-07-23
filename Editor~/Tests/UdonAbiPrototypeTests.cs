@@ -1,4 +1,6 @@
 using System.Collections.Generic;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
 using Xunit;
 
 namespace USugar.Tests;
@@ -114,6 +116,52 @@ public class UdonAbiPrototypeTests
         var error = Assert.Throws<VerificationException>(
             () => UdonAbiVerifier.VerifyInvocation(bad, facts, "bad"));
         Assert.Contains("already bound to 'SystemInt32'", error.Message);
+    }
+
+    [Theory]
+    [InlineData("UnityEngineComponent", "UnityEngineUIImage")]
+    [InlineData("UnityEngineComponent", "UnityEngineTransform")]
+    [InlineData("UnityEngineObject", "VRCUdonCommonInterfacesIUdonEventReceiver")]
+    public void CompilationSessionSeedsSdkReferenceFactsForExternOperands(
+        string expected, string actual)
+    {
+        var signature = $"Example.__Accept__{expected}__SystemVoid";
+        var sdkFacts = new UdonTypeFactRegistry();
+        sdkFacts.RecordForTest(expected, isEnum: false, isValueType: false);
+        var catalog = new UdonAbiCatalog(new[]
+        {
+            new UdonExternPrototype(signature, "Example", "Accept", new[]
+            {
+                Param("value", expected, UdonAbiParameterMode.In),
+            }),
+        }, sdkFacts.Snapshot());
+        var compilation = CSharpCompilation.Create(
+            "SdkFactSeed",
+            options: new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+        var session = new CompilationSession(compilation, catalog);
+        session.TypeFacts.RecordForTest(actual, isEnum: false, isValueType: false);
+        var call = new CExternCall(
+            catalog.Require(UdonAbiKey.Method(
+                "Example", "Accept", new[] { expected }, "SystemVoid")),
+            new List<CLeaf> { new CConst(null, new StorageType(actual)) },
+            StorageTypes.Void);
+
+        Assert.True(session.TypeFacts.IsReferenceFact(expected));
+        UdonAbiVerifier.VerifyInvocation(call, session.TypeFacts, "reference_operand");
+    }
+
+    [Fact]
+    public void ClrSdkFactsPreserveReferenceValueAndEnumCategories()
+    {
+        var facts = new UdonTypeFactRegistry();
+
+        facts.Record("SdkReference", typeof(System.IDisposable));
+        facts.Record("SdkValue", typeof(System.DateTime));
+        facts.Record("SdkEnum", typeof(System.DayOfWeek));
+
+        Assert.True(facts.IsReferenceFact("SdkReference"));
+        Assert.False(facts.IsReferenceFact("SdkValue"));
+        Assert.True(facts.IsEnumFact("SdkEnum"));
     }
 
     static UdonAbiCatalog Catalog(string signature, params UdonAbiParameter[] parameters)

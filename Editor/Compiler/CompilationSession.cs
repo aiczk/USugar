@@ -26,14 +26,16 @@ public sealed class CompilationSession
         AbiCatalog = abiCatalog
             ?? throw new ArgumentNullException(nameof(abiCatalog));
         TypeFacts = typeFacts ?? throw new ArgumentNullException(nameof(typeFacts));
+        AbiCatalog.SeedTypeFacts(TypeFacts);
         Types = new UdonTypeSystem(TypeFacts);
     }
 }
 
 /// <summary>
-/// Session-bound Roslyn-to-Udon type lowering. This is the only production
-/// entry point that records verifier facts; ExternResolver itself is pure and
-/// can still be used by editor reflection utilities that do not produce IR.
+/// Session-bound Roslyn-to-Udon type lowering. This is the only source-symbol
+/// entry point that records verifier facts; installed-SDK facts arrive with the
+/// ABI catalog, while ExternResolver itself remains pure for editor reflection
+/// utilities that do not produce IR.
 /// </summary>
 public sealed class UdonTypeSystem
 {

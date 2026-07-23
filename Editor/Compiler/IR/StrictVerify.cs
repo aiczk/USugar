@@ -1,10 +1,12 @@
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.IO;
 using Microsoft.CodeAnalysis;
 
-/// <summary>Type FACTS recorded at the single choke where Udon type names are minted
-/// (ExternResolver.GetUdonTypeName), plus structural rules for names whose runtime representation is
+/// <summary>Type FACTS recorded at the two authoritative boundaries where Udon type names enter a
+/// compilation: source symbols through ExternResolver.GetUdonTypeName, and installed-SDK CLR operand
+/// types through UdonAbiCatalogFactory. Structural rules cover names whose runtime representation is
 /// fixed by construction. History: Phase-B (2026-07-14) collected these as a measurement shadow of
 /// CoreVerify's two relaxed-arm GUESSES ("unknown name may be an enum", "non-primitive name is a
 /// reference"); Phase-D stage 1 (2026-07-16) measured ZERO production-path guess-dependent passes across
@@ -24,8 +26,8 @@ public sealed class UdonTypeFactRegistry
         public override int GetHashCode() => (IsEnum ? 1 : 0) | (IsValueType ? 2 : 0);
     }
 
-    // Values are deterministic per name (SDK name ↔ symbol is 1:1 for every name that reaches the
-    // registry), so concurrent TryAdd races during Phase-2 parallel emit are benign.
+    // Values are deterministic per name (Udon storage name ↔ representation category is 1:1), so
+    // installed-SDK seeding and concurrent source-minting races during Phase-2 emit are benign.
     readonly ConcurrentDictionary<string, TypeFact> _facts = new(StringComparer.Ordinal);
 
     /// <summary>Record the minted name's facts. Names covered by a STRUCTURAL rule (primitives, arrays,
@@ -35,8 +37,39 @@ public sealed class UdonTypeFactRegistry
     public void Record(string udonName, ITypeSymbol symbol)
     {
         if (string.IsNullOrEmpty(udonName) || symbol == null) return;
+        Record(udonName,
+            new TypeFact(symbol.TypeKind == TypeKind.Enum, symbol.IsValueType),
+            symbol.ToDisplayString());
+    }
+
+    /// <summary>Record an installed-SDK CLR type before the editor boundary erases it to an Udon
+    /// storage name. SDK ABI operands are verifier authorities too: without this symmetric source of
+    /// facts, a legal derived reference passed to an SDK base-reference operand is rejected merely
+    /// because the expected name did not originate in Roslyn source.</summary>
+    internal void Record(string udonName, Type type)
+    {
+        if (string.IsNullOrEmpty(udonName) || type == null) return;
+        if (type.IsByRef) type = type.GetElementType();
+        if (type == null || type.IsGenericParameter) return;
+        Record(udonName,
+            new TypeFact(type.IsEnum, type.IsValueType),
+            type.FullName ?? type.Name);
+    }
+
+    internal void Import(IEnumerable<KeyValuePair<string, TypeFact>> facts, string source)
+    {
+        if (facts == null) return;
+        foreach (var pair in facts)
+            Record(pair.Key, pair.Value, source);
+    }
+
+    internal KeyValuePair<string, TypeFact>[] Snapshot()
+        => _facts.ToArray();
+
+    void Record(string udonName, TypeFact requested, string source)
+    {
+        if (string.IsNullOrEmpty(udonName)) return;
         if (StructuralIsReference(udonName) != null) return;
-        var requested = new TypeFact(symbol.TypeKind == TypeKind.Enum, symbol.IsValueType);
         while (true)
         {
             if (_facts.TryGetValue(udonName, out var existing))
@@ -46,7 +79,7 @@ public sealed class UdonTypeFactRegistry
                         $"Udon type name '{udonName}' has conflicting facts: existing "
                         + $"enum={existing.IsEnum}, valueType={existing.IsValueType}; requested "
                         + $"enum={requested.IsEnum}, valueType={requested.IsValueType} for "
-                        + $"'{symbol.ToDisplayString()}'.");
+                        + $"'{source}'.");
                 return;
             }
             if (_facts.TryAdd(udonName, requested)) return;
@@ -57,8 +90,8 @@ public sealed class UdonTypeFactRegistry
         => _facts[udonName] = new TypeFact(isEnum, isValueType);
 
     /// <summary>FACT: is the name an enum tag (Int32-compatible)? true/false when known, null when the
-    /// name never passed the minting choke — an unknown name is exactly what the relaxed check guesses
-    /// about.</summary>
+    /// neither authoritative boundary supplied it — an unknown name is exactly what the relaxed check
+    /// would otherwise have to guess about.</summary>
     public bool? IsEnumFact(string udonName)
     {
         if (StructuralIsReference(udonName) != null) return false; // primitives/arrays/fold tags are never enums
@@ -122,8 +155,8 @@ public sealed class UdonTypeFactRegistry
 public static class DeclaredRelaxations
 {
     /// <summary>Null when the pair is compatible; otherwise the reason, naming the missing fact when
-    /// the failure is an unminted name (a no-fact name at verify time never passed the minting choke
-    /// of the same compile — itself suspicious).</summary>
+    /// the failure is an unknown name (a no-fact name at verify time came from neither source minting
+    /// nor the installed SDK ABI snapshot — itself suspicious).</summary>
     public static string WhyIncompatible(string expected, string actual, UdonTypeFactRegistry facts)
     {
         if (facts == null) throw new ArgumentNullException(nameof(facts));
@@ -145,8 +178,8 @@ public static class DeclaredRelaxations
         && boxed.Substring("SystemNullable".Length) == bare;
 
     static string NoFact(string name) =>
-        $"no fact recorded for '{name}' (the name never passed ExternResolver.GetUdonTypeName's minting"
-        + " choke, so no declared relaxation can vouch for it)";
+        $"no fact recorded for '{name}' (neither source type minting nor the installed SDK ABI snapshot"
+        + " classified it, so no declared relaxation can vouch for it)";
 
     static string Describe(string name, bool? isRef) =>
         $"'{name}' is a fact {(isRef == true ? "reference" : "value type")}";
