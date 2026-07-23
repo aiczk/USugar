@@ -597,7 +597,7 @@ static class USugarCompilationOrchestrator
     }
 
     static MetadataReference[] _cachedMetadataRefs;
-    static readonly Dictionary<string, (long ticks, SyntaxTree tree)> _treeCache = new();
+    static readonly Dictionary<string, (string sourceText, string defineKey, SyntaxTree tree)> _treeCache = new();
 
     // Preprocessor symbols for parsing user Udon sources. Mirrors stock UdonSharp's GetProjectDefines with
     // editorBuild:false — the compiled Udon program runs IN-GAME, so honor the project's platform/SDK/custom
@@ -617,23 +617,26 @@ static class USugarCompilationOrchestrator
 
     internal static CSharpCompilation BuildCompilation(List<string> sourcePaths)
     {
+        var defines = BuildPreprocessorDefines();
+        var defineKey = string.Join("\n", defines.OrderBy(d => d, StringComparer.Ordinal));
         var parseOptions = new CSharpParseOptions(LanguageVersion.Latest)
-            .WithPreprocessorSymbols(BuildPreprocessorDefines());
+            .WithPreprocessorSymbols(defines);
 
         var trees = new SyntaxTree[sourcePaths.Count];
         for (int i = 0; i < sourcePaths.Count; i++)
         {
             var path = sourcePaths[i];
-            var ticks = File.GetLastWriteTimeUtc(path).Ticks;
-            if (_treeCache.TryGetValue(path, out var cached) && cached.ticks == ticks)
+            var sourceText = File.ReadAllText(path);
+            if (_treeCache.TryGetValue(path, out var cached)
+                && cached.defineKey == defineKey
+                && string.Equals(cached.sourceText, sourceText, StringComparison.Ordinal))
             {
                 trees[i] = cached.tree;
             }
             else
             {
-                trees[i] = CSharpSyntaxTree.ParseText(
-                    File.ReadAllText(path), parseOptions, path: path);
-                _treeCache[path] = (ticks, trees[i]);
+                trees[i] = CSharpSyntaxTree.ParseText(sourceText, parseOptions, path: path);
+                _treeCache[path] = (sourceText, defineKey, trees[i]);
             }
         }
 
