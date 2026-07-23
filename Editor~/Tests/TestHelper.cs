@@ -82,6 +82,10 @@ namespace UnityEngine
         public static void Destroy(Object obj) { }
         public static void DestroyImmediate(Object obj) { }
         public static T Instantiate<T>(T original) where T : Object => default;
+        public static GameObject Instantiate(GameObject original, Transform parent) => default;
+        public static GameObject Instantiate(GameObject original, Vector3 position, Quaternion rotation) => default;
+        public static GameObject Instantiate(GameObject original, Transform parent, bool worldPositionStays) => default;
+        public static GameObject Instantiate(GameObject original, Vector3 position, Quaternion rotation, Transform parent) => default;
         public static Object Instantiate(Object original) => default;
         public static implicit operator bool(Object o) => o != null;
     }

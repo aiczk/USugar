@@ -205,7 +205,8 @@ public abstract class AssignmentHandlerBase : HandlerBase
                 var instanceVal = VisitExpression(fieldRef2.Instance);
                 var containingType = GetStorageTypeName(ResolveExternOwnerType(fieldRef2.Field.ContainingType, fieldRef2.Instance?.Type, fieldRef2.Field.Name));
                 var valueType = GetStorageTypeName(fieldRef2.Field.Type);
-                var sig = ExternResolver.BuildPropertyGetSignature(containingType, fieldRef2.Field.Name, valueType);
+                var sig = _ctx.Abi.BindPropertyGetter(
+                    containingType, fieldRef2.Field.Name, valueType);
                 var valResult = ExternCall(sig, new List<CLeaf> { instanceVal }, new StorageType(valueType));
                 return new LValuePlan { Value = valResult, InstanceVal = instanceVal };
             }
@@ -456,7 +457,11 @@ public abstract class AssignmentHandlerBase : HandlerBase
                 {
                     // Static property: no instance
                     var valueType = GetStorageTypeName(propRef.Property.Type);
-                    EmitExternVoid(ExternResolver.BuildPropertySetSignature(containingType, propRef.Property.Name, valueType), new List<CLeaf> { valueVal });
+                    EmitExternVoid(
+                        _ctx.Abi.BindPropertySetter(
+                            containingType, propRef.Property.Name, valueType,
+                            hasReceiver: false),
+                        new List<CLeaf> { valueVal });
                     return;
                 }
 
@@ -477,7 +482,10 @@ public abstract class AssignmentHandlerBase : HandlerBase
                 }
                 else
                 {
-                    EmitExternVoid(ExternResolver.BuildPropertySetSignature(containingType, propRef.Property.Name, propValueType), new List<CLeaf> { wbInstanceVal, valueVal });
+                    EmitExternVoid(
+                        _ctx.Abi.BindPropertySetter(
+                            containingType, propRef.Property.Name, propValueType),
+                        new List<CLeaf> { wbInstanceVal, valueVal });
                 }
                 break;
             }
@@ -488,7 +496,8 @@ public abstract class AssignmentHandlerBase : HandlerBase
                 var instanceVal = lv.InstanceVal ?? VisitExpression(fieldRef2.Instance);
                 var containingType = GetStorageTypeName(ResolveExternOwnerType(fieldRef2.Field.ContainingType, fieldRef2.Instance?.Type, fieldRef2.Field.Name));
                 var valueType = GetStorageTypeName(fieldRef2.Field.Type);
-                var sig = ExternResolver.BuildFieldSetSignature(containingType, fieldRef2.Field.Name, valueType);
+                var sig = _ctx.Abi.BindFieldSetter(
+                    containingType, fieldRef2.Field.Name, valueType);
                 EmitExternVoid(sig, new List<CLeaf> { instanceVal, valueVal });
                 break;
             }

@@ -228,9 +228,11 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
             return EmitNarrowingConvert(raw, "SystemInt32", resultType);
         }
 
-        var sig = ExternResolver.ResolveBinaryExtern(
-            op.OperatorKind, op.OperatorMethod,
-            ResolveType(op.LeftOperand.Type), ResolveType(op.RightOperand.Type), ResolveType(op.Type));
+        var sig = op.OperatorMethod != null
+            ? _ctx.Abi.BindOperator(op.OperatorMethod, type => GetStorageTypeName(type))
+            : _ctx.Abi.BindExact(ExternResolver.ResolveBinaryExtern(
+                op.OperatorKind, null,
+                ResolveType(op.LeftOperand.Type), ResolveType(op.RightOperand.Type), ResolveType(op.Type)));
 
         // UnityEngineObject equality/inequality: cast operands to UnityEngineObject temps
         if (op.OperatorMethod != null
@@ -372,11 +374,9 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
         var operandVal = VisitExpression(op.Operand);
         var resultType = GetStorageTypeName(op.Type);
 
-        string sig;
-        if (op.OperatorMethod != null && !ExternResolver.IsNumericType(op.Operand.Type))
-            sig = BuildExternSignature(op.OperatorMethod);
-        else
-            sig = BuildBuiltinUnarySignature(op);
+        var sig = op.OperatorMethod != null && !ExternResolver.IsNumericType(op.Operand.Type)
+            ? _ctx.Abi.BindOperator(op.OperatorMethod, type => GetStorageTypeName(type))
+            : _ctx.Abi.BindExact(BuildBuiltinUnarySignature(op));
 
         return ExternCall(sig, new List<CLeaf> { operandVal }, new StorageType(resultType));
     }
@@ -743,7 +743,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
                 var memberOwner = GetStorageTypeName(
                     ResolveExternOwnerType(memberContainingType, matchType, memberName));
                 memberVal = ExternCall(
-                    ExternResolver.BuildPropertyGetSignature(
+                    _ctx.Abi.BindPropertyGetter(
                         memberOwner, memberName, GetStorageTypeName(memberType)),
                     new List<CLeaf> { valueVal }, GetStorageType(memberType));
             }
@@ -892,15 +892,6 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
         if (operandType == "SystemDecimal" && op.OperatorKind == UnaryOperatorKind.Minus)
             opName = "op_UnaryNegation";
         return ExternResolver.BuildMethodSignature(operandType, $"__{opName}", new[] { operandType }, returnType);
-    }
-
-    string BuildExternSignature(IMethodSymbol method)
-    {
-        var containingType = GetStorageTypeName(method.ContainingType);
-        var methodName = ExternResolver.GetOperatorExternName(method.Name);
-        var paramTypes = method.Parameters.Select(p => GetStorageTypeName(p.Type)).ToArray();
-        var returnType = GetStorageTypeName(method.ReturnType);
-        return ExternResolver.BuildMethodSignature(containingType, methodName, paramTypes, returnType);
     }
 
     static string GetDefaultConstValue(string udonType) => udonType switch

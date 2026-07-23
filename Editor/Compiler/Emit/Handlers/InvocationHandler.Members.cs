@@ -107,7 +107,7 @@ public partial class InvocationHandler
             var cType = GetStorageTypeName(ResolveExternOwnerType(op.Property.ContainingType, op.Instance?.Type, op.Property.Name));
             var rType = GetStorageTypeName(op.Property.Type);
             return ExternCall(
-                ExternResolver.BuildPropertyGetSignature(cType, propName, rType),
+                _ctx.Abi.BindPropertyGetter(cType, propName, rType),
                 new List<CLeaf> { thisVal },
                 new StorageType(rType));
         }
@@ -163,7 +163,8 @@ public partial class InvocationHandler
             GuardUserStructMemberReachedExtern(op.Property.ContainingType, op.Property.Name);
 
             return ExternCall(
-                ExternResolver.BuildPropertyGetSignature(containingType, op.Property.Name, returnType),
+                _ctx.Abi.BindPropertyGetter(
+                    containingType, op.Property.Name, returnType, hasReceiver: false),
                 new List<CLeaf>(),
                 new StorageType(returnType));
         }
@@ -247,7 +248,8 @@ public partial class InvocationHandler
         // Array receivers keep the fixup above (SystemArray for .Length, element-typed otherwise).
         else if (op.Instance.Type is not IArrayTypeSymbol)
             containingType = GetStorageTypeName(ResolveExternOwnerType(op.Property.ContainingType, op.Instance.Type, op.Property.Name));
-        var sig = ExternResolver.BuildPropertyGetSignature(containingType, op.Property.Name, returnType);
+        var sig = _ctx.Abi.BindPropertyGetter(
+            containingType, op.Property.Name, returnType);
         return ExternCall(sig, new List<CLeaf> { instVal }, new StorageType(returnType));
     }
 
@@ -830,7 +832,8 @@ public partial class InvocationHandler
         {
             var containingType = GetStorageTypeName(ResolveExternOwnerType(fieldRef.Field.ContainingType, fieldRef.Instance?.Type, fieldRef.Field.Name));
             var valueType = GetStorageTypeName(fieldRef.Field.Type);
-            var sig = ExternResolver.BuildFieldSetSignature(containingType, fieldRef.Field.Name, valueType);
+            var sig = _ctx.Abi.BindFieldSetter(
+                containingType, fieldRef.Field.Name, valueType);
             EmitExternVoid(sig, new List<CLeaf> { instanceVal, valueVal });
         }
         else if (target is IPropertyReferenceOperation propRef)
@@ -855,7 +858,9 @@ public partial class InvocationHandler
             }
             else
             {
-                EmitExternVoid(ExternResolver.BuildPropertySetSignature(containingType, propRef.Property.Name, valueType),
+                EmitExternVoid(
+                    _ctx.Abi.BindPropertySetter(
+                        containingType, propRef.Property.Name, valueType),
                     new List<CLeaf> { instanceVal, valueVal });
             }
         }

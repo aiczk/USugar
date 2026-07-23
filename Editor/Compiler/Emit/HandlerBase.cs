@@ -193,9 +193,27 @@ public abstract partial class HandlerBase
     /// <summary>Create an explicit codegen-free destination-typed view of a materialized value.</summary>
     protected CTypedView TypedView(CLeaf source, StorageType type) => _builder.TypedView(source, type);
 
+    /// <summary>
+    /// Materialize an expression value in the exact storage type declared by
+    /// an extern parameter. Signature selection and argument adaptation are
+    /// separate concerns: generic erasure may change the expression storage,
+    /// but it must never change the ABI prototype.
+    /// </summary>
+    protected CLeaf AdaptExternArgument(CLeaf value, ITypeSymbol declaredType)
+    {
+        var expected = GetStorageType(declaredType);
+        if (value.Type == expected) return value;
+        var slot = _builder.AllocScratch(expected);
+        EmitAssign(slot, value);
+        return SlotRef(slot);
+    }
+
     /// <summary>Emit an extern call, materialized to a scratch slot (returns the leaf; null for void).</summary>
     protected CSlotRef ExternCall(ExternSignature sig, List<CLeaf> args, StorageType retType)
         => _builder.ExternCall(ResolveExtern(sig), args, retType);
+
+    protected CSlotRef ExternCall(BoundExtern bound, List<CLeaf> args, StorageType retType)
+        => _builder.ExternCall(bound, args, retType);
 
     /// <summary>
     /// Integer conversion matching C# *unchecked* semantics (wrap / bit-reinterpret). Udon's
@@ -400,6 +418,9 @@ public abstract partial class HandlerBase
     /// wave-12 r2 [V1], see CExternCall.PreSpillStmts (cross setter copy-ins inside the wrap).</summary>
     protected void EmitExternVoid(ExternSignature sig, List<CLeaf> args, bool reentrant = false, int preSpillStmts = 0)
         => _builder.EmitExternVoid(ResolveExtern(sig), args, reentrant, preSpillStmts);
+
+    protected void EmitExternVoid(BoundExtern bound, List<CLeaf> args, bool reentrant = false, int preSpillStmts = 0)
+        => _builder.EmitExternVoid(bound, args, reentrant, preSpillStmts);
 
     /// <summary>Create an internal call expression.</summary>
     protected CSlotRef InternalCall(string funcName, List<CLeaf> args, StorageType retType, bool tailSpared = false)
@@ -1162,7 +1183,7 @@ public abstract partial class HandlerBase
             var vtInstanceVal = plan.Value.Instance is IInstanceReferenceOperation
                 ? LoadField(_ctx.Storage.DeclareThisOnce(new StorageType(vtContainingType)), new StorageType(vtContainingType))
                 : VisitExpression(plan.Value.Instance);
-            var vtSig = ExternResolver.BuildFieldSetSignature(
+            var vtSig = _ctx.Abi.BindFieldSetter(
                 vtContainingType, fieldRef.Field.Name, GetStorageTypeName(fieldRef.Field.Type));
             return value => EmitExternVoid(vtSig, new List<CLeaf> { vtInstanceVal, value });
         }
@@ -1171,7 +1192,7 @@ public abstract partial class HandlerBase
         if (plan.Value.Kind == FieldSetKind.ExternReferenceType)
         {
             var refInstanceVal = VisitExpression(plan.Value.Instance);
-            var refSig = ExternResolver.BuildFieldSetSignature(
+            var refSig = _ctx.Abi.BindFieldSetter(
                 GetStorageTypeName(fieldRef.Field.ContainingType), fieldRef.Field.Name,
                 GetStorageTypeName(fieldRef.Field.Type), isValueType: false);
             return value => EmitExternVoid(refSig, new List<CLeaf> { refInstanceVal, value });
@@ -1348,8 +1369,11 @@ public abstract partial class HandlerBase
                     EmitCallToMethod(resolvedSetter, new List<CLeaf> { staticVal }));
             }
             var staticValType = GetStorageTypeName(propRef.Property.Type);
+            var staticSetter = _ctx.Abi.BindPropertySetter(
+                propContainingUdon, propRef.Property.Name, staticValType,
+                hasReceiver: false);
             return staticVal => EmitExternVoid(
-                ExternResolver.BuildPropertySetSignature(propContainingUdon, propRef.Property.Name, staticValType),
+                staticSetter,
                 new List<CLeaf> { staticVal });
         }
 
@@ -1471,7 +1495,10 @@ public abstract partial class HandlerBase
                 }
                 else
                 {
-                    EmitExternVoid(ExternResolver.BuildPropertySetSignature(containingType, propRef.Property.Name, valueType), new List<CLeaf> { instanceVal, srcVal });
+                    EmitExternVoid(
+                        _ctx.Abi.BindPropertySetter(
+                            containingType, propRef.Property.Name, valueType),
+                        new List<CLeaf> { instanceVal, srcVal });
                 }
 
                 break;

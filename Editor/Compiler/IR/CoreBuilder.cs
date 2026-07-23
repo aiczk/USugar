@@ -198,6 +198,12 @@ public sealed class CoreBuilder
     public CSlotRef ExternCall(ExternSignature sig, List<CLeaf> args, StorageType retType)
     {
         var bound = RequireExtern(sig);
+        return ExternCall(bound, args, retType);
+    }
+
+    public CSlotRef ExternCall(BoundExtern bound, List<CLeaf> args, StorageType retType)
+    {
+        if (bound == null) throw new ArgumentNullException(nameof(bound));
         if (retType == StorageTypes.Void) { Emit(new CExprStmt(new CExternCall(bound, args, retType))); return null; }
         return Bind(new CExternCall(bound, args, retType), retType);
     }
@@ -230,10 +236,14 @@ public sealed class CoreBuilder
     // check is balanced against. preSpillStmts remains the generic extern form.
     // Cross-program dispatch uses CCrossCall so CoreFlatten counts its typed copy-ins directly.
     public void EmitExternVoid(ExternSignature sig, List<CLeaf> args, bool reentrant = false, int preSpillStmts = 0)
+        => EmitExternVoid(RequireExtern(sig), args, reentrant, preSpillStmts);
+
+    public void EmitExternVoid(BoundExtern bound, List<CLeaf> args, bool reentrant = false, int preSpillStmts = 0)
     {
+        if (bound == null) throw new ArgumentNullException(nameof(bound));
         if (reentrant) CurrentFunction.ReentrantSiteCount++;
         Emit(new CExprStmt(new CExternCall(
-            RequireExtern(sig), args, StorageTypes.Void, null, reentrant, preSpillStmts)));
+            bound, args, StorageTypes.Void, null, reentrant, preSpillStmts)));
     }
 
     BoundExtern RequireExtern(ExternSignature signature)

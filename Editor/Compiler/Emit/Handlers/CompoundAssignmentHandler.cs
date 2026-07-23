@@ -107,9 +107,11 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
         if (ExternResolver.IsSmallIntOrChar(rightType))
             rightVal = PromoteToInt32(rightVal, rightType);
 
-        var sig = ExternResolver.ResolveBinaryExtern(
-            op.OperatorKind, op.OperatorMethod,
-            ResolveType(op.Target.Type), ResolveType(op.Value.Type), ResolveType(op.Type));
+        var sig = op.OperatorMethod != null
+            ? _ctx.Abi.BindOperator(op.OperatorMethod, type => GetStorageTypeName(type))
+            : _ctx.Abi.BindExact(ExternResolver.ResolveBinaryExtern(
+                op.OperatorKind, null,
+                ResolveType(op.Target.Type), ResolveType(op.Value.Type), ResolveType(op.Type)));
         CLeaf resultVal = ExternCall(sig, new List<CLeaf> { leftVal, rightVal }, new StorageType(opResultType));
 
         // Narrow back to original type if promoted (C#-unchecked wrap, not checked Convert)

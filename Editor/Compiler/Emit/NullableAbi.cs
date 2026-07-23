@@ -235,9 +235,15 @@ public static class NullableAbi
             var (rightOperand, rightEffective) = promoteBoxed(builder.SlotRef(bSlot), rightUnderlying);
             bool resultPromotes = ExternResolver.IsSmallIntOrChar(getUdonType(resultUnder));
             var resultEffective = resultPromotes ? int32Type : resultUnder;
+            var abi = new UdonAbiBinder(builder.Module.AbiCatalog
+                ?? throw new InvalidOperationException(
+                    "Nullable operator lowering requires a Udon ABI catalog."));
+            var bound = operatorMethod != null
+                ? abi.BindOperator(operatorMethod, getUdonType)
+                : abi.BindExact(ExternResolver.ResolveBinaryExtern(opKind, null,
+                    resolveType(leftEffective), resolveType(rightEffective), resolveType(resultEffective)));
             var raw = builder.ExternCall(
-                ExternResolver.ResolveBinaryExtern(opKind, operatorMethod,
-                    resolveType(leftEffective), resolveType(rightEffective), resolveType(resultEffective)),
+                bound,
                 new List<CLeaf> { leftOperand, rightOperand }, new StorageType(getUdonType(resultEffective)));
             return resultPromotes && getUdonType(resultUnder) != "SystemInt32"
                 ? narrowConvert(raw, "SystemInt32", getUdonType(resultUnder))

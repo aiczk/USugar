@@ -12,7 +12,6 @@ public sealed class UdonAbiCatalog
 {
     readonly HashSet<string> _externs;
     readonly HashSet<string> _owners;
-    readonly Dictionary<string, BoundExtern> _bound = new(StringComparer.Ordinal);
 
     public UdonAbiCatalog(IEnumerable<string> externNames)
     {
@@ -34,11 +33,7 @@ public sealed class UdonAbiCatalog
         if (!_externs.Contains(signature.Text))
             throw new NotSupportedException(
                 $"Udon extern '{signature.Text}' is not registered by the installed SDK.");
-        if (_bound.TryGetValue(signature.Text, out var existing))
-            return existing;
-        var bound = new BoundExtern(signature);
-        _bound.Add(signature.Text, bound);
-        return bound;
+        return new BoundExtern(signature);
     }
 
     public BoundExtern Require(string signature) => Require(new ExternSignature(signature));

@@ -10,6 +10,7 @@ public class EmitContext
     public readonly Compilation Compilation;
     public readonly INamedTypeSymbol ClassSymbol;
     public readonly UdonAbiCatalog AbiCatalog;
+    public readonly UdonAbiBinder Abi;
     public readonly CModule Module;
     public readonly CoreBuilder Builder;
     public readonly LayoutPlanner Planner;
@@ -176,6 +177,7 @@ public class EmitContext
         Compilation = compilation;
         ClassSymbol = classSymbol;
         AbiCatalog = abiCatalog ?? throw new ArgumentNullException(nameof(abiCatalog));
+        Abi = new UdonAbiBinder(AbiCatalog);
         Module = new CModule(planner.TypeFacts, abiCatalog) { ClassName = classSymbol.ToDisplayString() };
         Builder = new CoreBuilder(Module);
         Planner = planner;

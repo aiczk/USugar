@@ -9,6 +9,9 @@ public partial class InvocationHandler
 
     CLeaf EmitExternMethodCall(IInvocationOperation op, IMethodSymbol target)
     {
+        if (TryEmitInvocationIntrinsic(op, target, out var intrinsicResult))
+            return intrinsicResult;
+
         // N-dim array (design 2026-07-04 §2/N-R4): Rank>1 array VALUE is an object[] bundle whose Udon
         // type tag (SystemObjectArray) has REAL, valid GetLength/GetUpperBound/Clone/… externs
         // registered — MUST intercept before the generic extern dispatch below, or e.g. `.Clone()`
@@ -97,7 +100,7 @@ public partial class InvocationHandler
         // the per-arity expanded extern actually exists; otherwise keep the array form. (An explicitly-passed
         // array is ArgumentKind.Explicit and is always left as the array.)
         System.Collections.Generic.IReadOnlyList<IOperation> paramsElems = null;
-        string expandedParamsSig = null;
+        BoundExtern expandedParamsExtern = null;
         int lastParamIdx = target.Parameters.Length - 1;
         if (lastParamIdx >= 0 && target.Parameters[lastParamIdx].IsParams
             && op.Arguments.Length == target.Parameters.Length
@@ -113,11 +116,12 @@ public partial class InvocationHandler
                 var pts = new List<string>();
                 for (int i = 0; i < lastParamIdx; i++) pts.Add(GetStorageTypeName(target.Parameters[i].Type));
                 for (int k = 0; k < elems.Count; k++) pts.Add("SystemObject");
-                var candidate = BuildExternCallSignature(target, op.Instance?.Type, pts.ToArray());
-                if (ExternResolver.IsExternValid == null || ExternResolver.IsExternValid(candidate))
+                var candidate = BindExternMethodCall(
+                    target, op.Instance?.Type, pts.ToArray(), allowMissing: true);
+                if (candidate != null)
                 {
                     paramsElems = elems;
-                    expandedParamsSig = candidate;
+                    expandedParamsExtern = candidate;
                 }
             }
         }
@@ -205,7 +209,7 @@ public partial class InvocationHandler
         externArgs.AddRange(argVals);
 
         // Extern signature — the validated expanded form when trailing params were expanded, else the default.
-        var sig = expandedParamsSig ?? BuildExternCallSignature(target, op.Instance?.Type);
+        var sig = expandedParamsExtern ?? BindExternMethodCall(target, op.Instance?.Type);
 
         CLeaf result;
         if (!target.ReturnsVoid)
@@ -1359,7 +1363,8 @@ public partial class InvocationHandler
 
     // ── Extern Signature Helpers ──
 
-    string BuildExternCallSignature(IMethodSymbol method, ITypeSymbol instanceType = null, string[] paramTypeOverride = null)
+    BoundExtern BindExternMethodCall(IMethodSymbol method, ITypeSymbol instanceType = null,
+        string[] paramTypeOverride = null, bool allowMissing = false)
     {
         ITypeSymbol containingTypeSym = method.ContainingType;
 
@@ -1413,26 +1418,6 @@ public partial class InvocationHandler
         var containingType = GetStorageTypeName(containingTypeSym);
 
         // Object.Instantiate → VRCInstantiate (Udon VM redirect)
-        if (containingType == "UnityEngineObject" && method.Name == "Instantiate")
-            containingType = "VRCInstantiate";
-
-        var methodName = $"__{method.Name}";
-
-        string buildSig(IMethodSymbol m)
-        {
-            var pts = paramTypeOverride ?? m.Parameters.Select(p =>
-            {
-                var tn = GetStorageTypeName(p.Type);
-                if (p.RefKind == RefKind.Out || p.RefKind == RefKind.Ref)
-                    tn += "Ref";
-                return tn;
-            }).ToArray();
-            var rt = GetStorageTypeName(m.ReturnType);
-            return ExternResolver.BuildMethodSignature(containingType, methodName, pts, rt);
-        }
-
-        var sig = buildSig(method);
-
         // Generic static Array methods (IndexOf<T>, LastIndexOf<T>, BinarySearch<T>, Reverse<T>):
         // UdonSharp resolves these to the non-generic overload (Array, object) instead of (T[], T).
         // The TArray/T version exists but causes HeapTypeMismatch (reads String[] as Object[]).
@@ -1449,48 +1434,19 @@ public partial class InvocationHandler
                         return "SystemArray";
                 }
                 var tn = GetStorageTypeName(t);
-                if (p.RefKind is RefKind.Out or RefKind.Ref) tn += "Ref";
+                if (p.RefKind != RefKind.None) tn += "Ref";
                 return tn;
             }).ToArray();
-            var rt = GetStorageTypeName(method.ReturnType);
-            sig = ExternResolver.BuildMethodSignature(containingType, methodName, nonGenericPts, rt);
-        }
-        // Other generic extern methods: try concrete types first, fall back to OriginalDefinition
-        else if (method.IsGenericMethod)
-        {
-            var isValid = ExternResolver.IsExternValid;
-            if (isValid != null && !isValid(sig))
-            {
-                var origSig = buildSig(method.OriginalDefinition);
-                if (isValid(origSig))
-                    sig = origSig;
-            }
-        }
-        // Non-generic extern whose built signature is invalid: some Udon nodes name a reference-type parameter
-        // as SystemObject even though the C# parameter is a more specific reference type (e.g. Utilities.IsValid
-        // takes a UnityEngine.Object, but Udon's node is __IsValid__SystemObject__). Gap-fill by retrying with
-        // reference-type (non-array) params coerced to SystemObject; adopt it only if that signature is valid, so
-        // a valid specific signature is never overridden.
-        else
-        {
-            var isValid = ExternResolver.IsExternValid;
-            if (isValid != null && paramTypeOverride == null && !isValid(sig)
-                && method.Parameters.Any(p => p.Type.IsReferenceType && p.Type.TypeKind != TypeKind.Array))
-            {
-                var coercedPts = method.Parameters.Select(p =>
-                {
-                    var tn = (p.Type.IsReferenceType && p.Type.TypeKind != TypeKind.Array)
-                        ? "SystemObject" : GetStorageTypeName(p.Type);
-                    if (p.RefKind is RefKind.Out or RefKind.Ref) tn += "Ref";
-                    return tn;
-                }).ToArray();
-                var coercedSig = ExternResolver.BuildMethodSignature(
-                    containingType, methodName, coercedPts, GetStorageTypeName(method.ReturnType));
-                if (isValid(coercedSig))
-                    sig = coercedSig;
-            }
+            paramTypeOverride = nonGenericPts;
         }
 
-        return sig;
+        if (_ctx.Abi.TryBindMethod(
+                method, containingType, type => GetStorageTypeName(type),
+                paramTypeOverride, out var bound))
+            return bound;
+        if (allowMissing)
+            return null;
+        return _ctx.Abi.BindMethod(
+            method, containingType, type => GetStorageTypeName(type), paramTypeOverride);
     }
 }

@@ -218,4 +218,84 @@ public class StringDownloadCompatibility : UdonSharpBehaviour
         Assert.Contains("%VRCSDK3StringLoadingIVRCStringDownload", uasm);
         Assert.DoesNotContain("__iface_VRCSDK3StringLoadingIVRCStringDownload", uasm);
     }
+
+    [Fact]
+    public void ClosedGenericUnityObjectTruthinessUsesDeclaredOperatorAbi()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+
+public class GenericUnityTruthiness : UdonSharpBehaviour
+{
+    static bool IsAlive<T>(T value) { return (bool)(object)value; }
+    void Start() { bool alive = IsAlive<UdonSharpBehaviour>(this); }
+}
+");
+
+        Assert.Contains(
+            "UnityEngineObject.__op_Implicit__UnityEngineObject__SystemBoolean", uasm);
+        Assert.DoesNotContain(
+            "UnityEngineObject.__op_Implicit__VRCUdonCommonInterfacesIUdonEventReceiver__SystemBoolean",
+            uasm);
+    }
+
+    [Fact]
+    public void DataTokenEqualityPreservesReadonlyRefAbi()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+
+namespace VRC.SDK3.Data
+{
+    public struct DataToken
+    {
+        public static bool operator ==(in DataToken left, in string right) { return false; }
+        public static bool operator !=(in DataToken left, in string right) { return true; }
+    }
+}
+
+public class DataTokenEqualityCompatibility : UdonSharpBehaviour
+{
+    void Start()
+    {
+        VRC.SDK3.Data.DataToken token = default(VRC.SDK3.Data.DataToken);
+        bool live = token == ""LIVE"";
+    }
+}
+", "DataTokenEqualityCompatibility");
+
+        Assert.Contains(
+            "VRCSDK3DataDataToken.__op_Equality__VRCSDK3DataDataTokenRef_SystemStringRef__SystemBoolean",
+            uasm);
+    }
+
+    [Fact]
+    public void InstantiateWithParentLowersThroughRegisteredShimSequence()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+using UnityEngine;
+
+public class InstantiateParentCompatibility : UdonSharpBehaviour
+{
+    public GameObject Template;
+    public Transform Parent;
+
+    void Start()
+    {
+        GameObject clone = Instantiate(Template, Parent);
+    }
+}
+");
+
+        Assert.Contains(
+            "VRCInstantiate.__Instantiate__UnityEngineGameObject__UnityEngineGameObject", uasm);
+        Assert.Contains(
+            "UnityEngineGameObject.__get_transform__UnityEngineTransform", uasm);
+        Assert.Contains(
+            "UnityEngineTransform.__SetParent__UnityEngineTransform_SystemBoolean__SystemVoid", uasm);
+        Assert.DoesNotContain(
+            "VRCInstantiate.__Instantiate__UnityEngineGameObject_UnityEngineTransform__UnityEngineGameObject",
+            uasm);
+    }
 }

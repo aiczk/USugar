@@ -191,7 +191,8 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
             var fldType = GetStorageTypeName(fieldRef.Field.Type);
             var containingType = GetStorageTypeName(fieldRef.Field.ContainingType);
             return ExternCall(
-                ExternResolver.BuildPropertyGetSignature(containingType, fieldRef.Field.Name, fldType),
+                _ctx.Abi.BindPropertyGetter(
+                    containingType, fieldRef.Field.Name, fldType, hasReceiver: false),
                 new List<CLeaf>(),
                 new StorageType(fldType));
         }
@@ -243,7 +244,8 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
             var containingType = GetStorageTypeName(ResolveExternOwnerType(fieldRef.Field.ContainingType, fieldRef.Instance?.Type, fieldRef.Field.Name));
             var instanceVal = VisitExpression(fieldRef.Instance);
             return ExternCall(
-                ExternResolver.BuildPropertyGetSignature(containingType, fieldRef.Field.Name, fldType),
+                _ctx.Abi.BindPropertyGetter(
+                    containingType, fieldRef.Field.Name, fldType),
                 new List<CLeaf> { instanceVal },
                 new StorageType(fldType));
         }
@@ -439,10 +441,14 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
                 return true;
             }
 
+            var conversionExtern = _ctx.Abi.BindConversion(
+                conversionMethod, effectiveSource, closedDestination,
+                type => GetStorageTypeName(type));
             result = ExternCall(
-                ExternResolver.ResolveConversionExtern(
-                    conversionMethod, effectiveSource, closedDestination),
-                new List<CLeaf> { srcVal },
+                conversionExtern,
+                new List<CLeaf> {
+                    AdaptExternArgument(srcVal, conversionMethod.Parameters[0].Type)
+                },
                 destinationStorage);
             return true;
         }
@@ -826,10 +832,14 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
                 return EmitCallToMethod(ResolveStructMember(conv.OperatorMethod), new List<CLeaf> { srcVal });
 
             var dstType = GetStorageTypeName(conv.Type);
+            var conversionExtern = _ctx.Abi.BindConversion(
+                conv.OperatorMethod, ResolveType(conv.Operand.Type), ResolveType(conv.Type),
+                type => GetStorageTypeName(type));
             return ExternCall(
-                ExternResolver.ResolveConversionExtern(
-                    conv.OperatorMethod, ResolveType(conv.Operand.Type), ResolveType(conv.Type)),
-                new List<CLeaf> { srcVal },
+                conversionExtern,
+                new List<CLeaf> {
+                    AdaptExternArgument(srcVal, conv.OperatorMethod.Parameters[0].Type)
+                },
                 new StorageType(dstType));
         }
 
