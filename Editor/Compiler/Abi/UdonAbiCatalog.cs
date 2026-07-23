@@ -222,8 +222,17 @@ public sealed class UdonAbiCatalog
 
     internal static UdonAbiCatalog FromNamesForTests(IEnumerable<string> externNames)
         => new((externNames ?? throw new ArgumentNullException(nameof(externNames)))
-            .Where(name => !string.IsNullOrWhiteSpace(name))
+            .Where(IsExternRegistryName)
             .Select(UdonExternPrototype.UntypedFixture));
+
+    internal static bool IsExternRegistryName(string registeredName)
+    {
+        if (string.IsNullOrWhiteSpace(registeredName)) return false;
+        var memberBoundary = registeredName.IndexOf(
+            ".__", StringComparison.Ordinal);
+        return memberBoundary > 0
+               && memberBoundary + 3 < registeredName.Length;
+    }
 
     public bool Contains(UdonAbiKey key)
         => _externs.ContainsKey(UdonAbiNameSerializer.Serialize(key).Text);

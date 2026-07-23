@@ -6,6 +6,23 @@ namespace USugar.Tests;
 public class UdonAbiPrototypeTests
 {
     [Fact]
+    public void FlatRegistryFixtureIgnoresNonExternGraphNodes()
+    {
+        const string externName =
+            "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32";
+        var catalog = UdonAbiCatalog.FromNamesForTests(new[]
+        {
+            "Block",
+            "Event_Start",
+            "Const_SystemInt32",
+            externName,
+        });
+
+        Assert.Single(catalog.ExternNames);
+        Assert.Contains(externName, catalog.ExternNames);
+    }
+
+    [Fact]
     public void CoreVerifierAcceptsTypedSdkPrototype()
     {
         const string signature = "ExampleMath.__Add__SystemInt32_SystemInt32__SystemInt32";

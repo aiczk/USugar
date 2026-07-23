@@ -12,8 +12,12 @@ static class UdonAbiCatalogFactory
 {
     public static UdonAbiCatalog Create(IEnumerable<UdonNodeDefinition> definitions)
         => new((definitions ?? throw new ArgumentNullException(nameof(definitions)))
+            // GetNodeDefinitions also returns graph-control, event, variable,
+            // and constant nodes. Those are not CALL_EXTERN targets and may
+            // intentionally carry typeless ports.
             .Where(definition => definition != null
-                                 && !string.IsNullOrEmpty(definition.fullName))
+                                 && UdonAbiCatalog.IsExternRegistryName(
+                                     definition.fullName))
             .Select(CreatePrototype));
 
     static UdonExternPrototype CreatePrototype(UdonNodeDefinition definition)
@@ -22,7 +26,8 @@ static class UdonAbiCatalogFactory
         var parameters = definition.parameters.Select(parameter =>
             new UdonAbiParameter(
                 parameter.name,
-                ToAbiTypePattern(parameter.type),
+                ToAbiTypePattern(
+                    parameter.type, definition.fullName, parameter.name),
                 parameter.parameterType switch
                 {
                     UdonNodeParameter.ParameterType.IN => UdonAbiParameterMode.In,
@@ -36,14 +41,17 @@ static class UdonAbiCatalogFactory
             definition.fullName, owner, definition.name, parameters);
     }
 
-    static UdonAbiType ToAbiTypePattern(Type type)
+    static UdonAbiType ToAbiTypePattern(Type type,
+        string registeredName, string parameterName)
     {
         if (type == null)
             throw new InvalidOperationException(
-                "The installed SDK exposed an extern parameter without a CLR type.");
+                $"Installed SDK extern '{registeredName}' parameter "
+                + $"'{parameterName}' has no CLR type.");
         if (type.IsByRef) type = type.GetElementType();
         if (type.IsArray)
-            return UdonAbiType.Array(ToAbiTypePattern(type.GetElementType()));
+            return UdonAbiType.Array(ToAbiTypePattern(
+                type.GetElementType(), registeredName, parameterName));
         if (type.IsGenericParameter)
             return UdonAbiType.Generic(type.Name);
         return UdonAbiType.Exact(ToAbiTypeName(type));
