@@ -149,6 +149,30 @@ static class USugarCompilationOrchestrator
             var compilation = BuildCompilation(sourcePaths);
             Mark("build-compilation");
 
+            // A Roslyn Compilation is the unit of correctness. Checking only the representative
+            // declaration tree of each behaviour misses errors in helper files and in the other parts
+            // of a partial class. Reject the whole run before layout planning or asset mutation.
+            var compilationErrors = compilation.GetDiagnostics()
+                .Where(d => d.Severity == DiagnosticSeverity.Error)
+                .ToArray();
+            Mark("get-diagnostics");
+            if (compilationErrors.Length > 0)
+            {
+                foreach (var diag in compilationErrors)
+                {
+                    var span = diag.Location.IsInSource
+                        ? diag.Location.GetLineSpan() : default;
+                    var file = span.Path ?? "";
+                    var line = diag.Location.IsInSource ? span.StartLinePosition.Line + 1 : 0;
+                    var character = diag.Location.IsInSource ? span.StartLinePosition.Character + 1 : 0;
+                    var message = diag.GetMessage();
+                    USugarLog.Error($"{file}({line},{character}): {message}");
+                    collectedDiagnostics.Add((file, line, character, message, "Error"));
+                }
+                LastCompileHadErrors = true;
+                return;
+            }
+
             Dictionary<string, List<(UdonSharpProgramAsset asset, string scriptPath)>> programAssetLookup = null;
             if (applyToAssets)
             {
@@ -171,7 +195,7 @@ static class USugarCompilationOrchestrator
             Mark("program-asset-lookup");
 
             // Collect all UdonSharpBehaviour classes
-            var classList = new List<(INamedTypeSymbol symbol, SemanticModel model, SyntaxTree tree)>();
+            var classList = new List<(INamedTypeSymbol symbol, SyntaxTree tree)>();
             // A partial class has one declaration node per part but ONE symbol — emit it once, not once per part.
             var seenClassSymbols = new HashSet<INamedTypeSymbol>(SymbolEqualityComparer.Default);
             foreach (var tree in compilation.SyntaxTrees)
@@ -185,7 +209,7 @@ static class USugarCompilationOrchestrator
                     var isBehaviour = IsUdonSharpBehaviour(symbol);
                     if (!isBehaviour) continue;
                     if (!seenClassSymbols.Add(symbol)) continue;
-                    classList.Add((symbol, model, tree));
+                    classList.Add((symbol, tree));
                 }
             }
             Mark("semantic-models");
@@ -195,16 +219,6 @@ static class USugarCompilationOrchestrator
             planner.PrepareCompilation();
             Mark("layout-plan");
 
-            // Pre-compute diagnostics per tree (serial — avoids Roslyn lock contention)
-            var treeDiagnostics = new Dictionary<SyntaxTree, Diagnostic[]>();
-            foreach (var tree in classList.Select(c => c.tree).Distinct())
-            {
-                var model = compilation.GetSemanticModel(tree);
-                treeDiagnostics[tree] = model.GetDiagnostics()
-                    .Where(d => d.Severity == DiagnosticSeverity.Error).ToArray();
-            }
-            Mark("get-diagnostics");
-
             // Registry hooks MUST be wired before parallel emit — the class-support (B79) and extern-validity
             // gates both read them off the ambient ExternResolver, and a future embedding that forgets to wire
             // one would silently fall to the permissive arm. Fail loud here instead (armor; unreachable today).
@@ -212,23 +226,10 @@ static class USugarCompilationOrchestrator
             var emitResults = new System.Collections.Concurrent.ConcurrentBag<EmitResult>();
             System.Threading.Tasks.Parallel.ForEach(classList, classInfo =>
             {
-                var (symbol, model, tree) = classInfo;
+                var (symbol, tree) = classInfo;
                 var classSw = System.Diagnostics.Stopwatch.StartNew();
                 try
                 {
-                    var treeErrors = treeDiagnostics[tree];
-                    if (treeErrors.Length > 0)
-                    {
-                        foreach (var diag in treeErrors.Take(3))
-                        {
-                            var loc = diag.Location.GetLineSpan();
-                            emitResults.Add(EmitResult.Error(symbol, tree,
-                                loc.Path ?? "", loc.StartLinePosition.Line + 1,
-                                loc.StartLinePosition.Character + 1, diag.GetMessage()));
-                        }
-                        return;
-                    }
-
                     var emitter = new UasmEmitter(compilation, symbol, planner, externRegistry);
                     var uasm = emitter.Emit();
                     // Round-3 item 0: hard per-class extern-validation gate before Phase-3 assembly — a bogus
