@@ -52,25 +52,8 @@ public static class USugarCompiler
         return true;
     }
     [MenuItem("USugar/Compile/USugar")]
-    public static void CompileAndApply() => USugarCompilationOrchestrator.CompileInternal(applyToAssets: true, force: true, dumpEnabled: DumpIREnabled);
-
-    static bool DumpIREnabled
-    {
-        get => UnityEditor.EditorPrefs.GetBool("USugar_DumpIR", false);
-        set => UnityEditor.EditorPrefs.SetBool("USugar_DumpIR", value);
-    }
-
-    const string DumpIRMenuPath = "USugar/Dump IR";
-
-    [MenuItem(DumpIRMenuPath)]
-    static void ToggleDumpIR() => DumpIREnabled = !DumpIREnabled;
-
-    [MenuItem(DumpIRMenuPath, true)]
-    static bool ToggleDumpIRValidate()
-    {
-        Menu.SetChecked(DumpIRMenuPath, DumpIREnabled);
-        return true;
-    }
+    public static void CompileAndApply() =>
+        USugarCompilationOrchestrator.CompileInternal(applyToAssets: true, force: true);
 
     [MenuItem("USugar/Compile/UdonSharp")]
     static void ExportReferenceUasm()

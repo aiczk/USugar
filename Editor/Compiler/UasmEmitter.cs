@@ -14,7 +14,6 @@ public partial class UasmEmitter
     readonly SyntheticBridgeBuilder _bridge;
     readonly DelegateConventionStorage _delegateConvention;
 
-    public bool DumpEnabled;
 
     // Property shims → EmitContext
     Compilation _compilation => _ctx.Compilation;
@@ -144,9 +143,6 @@ public partial class UasmEmitter
     internal IReadOnlyList<string> DebugStaticInitializerOrder
         => _staticFieldInitOps.Select(x => x.fieldName).ToArray();
 
-    /// <summary>Called after handler emission, before optimization. Set for IR debugging.</summary>
-    public Action<string, CModule> OnIrPass;
-
     public string Emit()
     {
         using var externScope = _externRegistry == null ? null : ExternResolver.UseRegistry(_externRegistry);
@@ -184,9 +180,8 @@ public partial class UasmEmitter
         _ctx.Closures.SetCaptureScope(CaptureScopeAnalysis.Build(_compilation, _classSymbol,
             plan.CaptureRoots, bodyGraph.Bodies, plan.FieldInitOps));
         EmitMethods(plan, bodyGraph);
-        OnIrPass?.Invoke("after-emit", _module);
         // Handlers build Core IR; the pipeline (verify/optimize/flatten) runs on Core directly.
-        var result = IrPipeline.GenerateUasmFromCore(_module, DumpEnabled);
+        var result = IrPipeline.GenerateUasmFromCore(_module);
         _codeGenResult = result;
         return result.Uasm;
     }

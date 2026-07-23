@@ -17,10 +17,8 @@ public static class IrPipeline
     /// structured→flat gate, asserted by FlatVerify), then run through the flat optimizer and the
     /// Core code generator. HIR and LIR no longer exist on the live path.
     /// </summary>
-    public static CodeGenResult GenerateUasmFromCore(CModule coreModule, bool dumpEnabled = false)
+    public static CodeGenResult GenerateUasmFromCore(CModule coreModule)
     {
-        var className = coreModule.ClassName ?? "unknown";
-
         CoreVerify.Verify(coreModule);
 
         // Structured → flat (in place): CoreFlatten + FlatVerify post-condition.
@@ -44,33 +42,6 @@ public static class IrPipeline
         foreach (var cf in coreModule.Functions)
             FlatVerify.Verify(cf);
 
-        var result = CoreToUasm.Generate(coreModule);
-
-        if (dumpEnabled)
-        {
-            DumpToFile(className, "3_uasm.txt", result.Uasm);
-            if (result.AnnotatedUasm != null)
-                DumpToFile(className, "3_uasm_annotated.txt", result.AnnotatedUasm);
-        }
-
-        return result;
-    }
-
-    static void DumpToFile(string className, string fileName, string content)
-    {
-        try
-        {
-            var dir = System.IO.Path.Combine("Library", "USugarCache", SanitizeName(className));
-            System.IO.Directory.CreateDirectory(dir);
-            System.IO.File.WriteAllText(System.IO.Path.Combine(dir, fileName), content);
-        }
-        catch { /* ignore IO errors during dump */ }
-    }
-
-    static string SanitizeName(string name)
-    {
-        foreach (var c in System.IO.Path.GetInvalidFileNameChars())
-            name = name.Replace(c, '_');
-        return name;
+        return CoreToUasm.Generate(coreModule);
     }
 }

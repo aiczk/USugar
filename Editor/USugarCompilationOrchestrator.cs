@@ -93,7 +93,7 @@ static class USugarCompilationOrchestrator
         }
     }
 
-    internal static void CompileInternal(bool applyToAssets, bool force = false, bool dumpEnabled = false)
+    internal static void CompileInternal(bool applyToAssets, bool force = false)
     {
         var sw = System.Diagnostics.Stopwatch.StartNew();
         var collectedDiagnostics = new List<(string file, int line, int character, string message, string severity)>();
@@ -229,7 +229,7 @@ static class USugarCompilationOrchestrator
                         return;
                     }
 
-                    var emitter = new UasmEmitter(compilation, symbol, planner, externRegistry) { DumpEnabled = dumpEnabled };
+                    var emitter = new UasmEmitter(compilation, symbol, planner, externRegistry);
                     var uasm = emitter.Emit();
                     // Round-3 item 0: hard per-class extern-validation gate before Phase-3 assembly — a bogus
                     // extern becomes a named USugar diagnostic here instead of an opaque SDK assembler error.

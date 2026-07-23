@@ -290,6 +290,4 @@ public struct CodeGenResult
     public string Uasm;
     public uint HeapSize;
     public List<(string Id, string UdonType, object Value)> Constants;
-    /// <summary>UASM with PC address annotations (for debugging). Null unless dump is enabled.</summary>
-    public string AnnotatedUasm;
 }
