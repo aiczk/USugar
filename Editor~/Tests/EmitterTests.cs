@@ -2223,6 +2223,17 @@ public class ShimTest : UdonSharpBehaviour {
             {
                 Kind: RepresentationCastKind.VerifiedUdonBehaviourComponent,
             });
+        var metadataLoads = emitter.Module.Functions.SelectMany(function => function.FlatBlocks)
+            .SelectMany(block => block.Stmts)
+            .OfType<CExprStmt>()
+            .Select(statement => statement.Expr)
+            .OfType<CExternCall>()
+            .Where(call => call.Sig.Text.Contains(".__GetProgramVariable__", StringComparison.Ordinal))
+            .ToArray();
+        Assert.NotEmpty(metadataLoads);
+        Assert.All(
+            metadataLoads,
+            call => Assert.Equal(StorageTypes.UdonEventReceiver, call.Args[0].Type));
     }
 
     [Fact]
@@ -2355,6 +2366,21 @@ public class InheritTest : UdonSharpBehaviour {
         var ids = idsEntry.Value as long[];
         Assert.NotNull(ids);
         Assert.Equal(2, ids.Length); // [hash(DerivedUnit), hash(BaseUnit)]
+    }
+
+    [Fact]
+    public void ReflTypeIds_BaseWithDerivedType_DeclaresExactChain()
+    {
+        TestHelper.CompileToUasm(@"
+using UdonSharp;
+public class ReflBase : UdonSharpBehaviour { }
+public class ReflDerived : ReflBase { }
+", "ReflBase", out var emitter);
+
+        var idsEntry = emitter.CodeGenResult.Constants
+            .FirstOrDefault(entry => entry.Id == "__refl_typeids");
+        var ids = Assert.IsType<long[]>(idsEntry.Value);
+        Assert.Equal(new[] { UasmEmitter.ComputeTypeId("ReflBase") }, ids);
     }
 
     // ── UdonSharpBehaviour array creation type ──

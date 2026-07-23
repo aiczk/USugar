@@ -238,34 +238,18 @@ public partial class UasmEmitter
 
     void SetReflectionValues()
     {
-        var typeName = _classSymbol.ToDisplayString();
-        long typeId = ComputeTypeId(typeName);
+        var typeName = UdonBehaviourTypeMetadata.TypeName(_classSymbol);
+        long typeId = UdonBehaviourTypeMetadata.TypeId(typeName);
         _ctx.Storage.DeclareGeneratedField(EmitContext.ReflTypeIdField, StorageTypes.Int64, typeId);
         _ctx.Storage.DeclareGeneratedField(EmitContext.ReflTypeNameField, StorageTypes.String, typeName);
 
-        var ancestorIds = CollectAncestorTypeIds(_classSymbol);
-        if (ancestorIds.Length > 1)
+        var ancestorIds = UdonBehaviourTypeMetadata.AssignableTypeIds(_classSymbol);
+        if (UdonBehaviourTypeMetadata.ProgramRequiresAssignableIds(_classSymbol, _planner.Census))
             _ctx.DeclareReflTypeIds(ancestorIds);
     }
 
-    static long[] CollectAncestorTypeIds(INamedTypeSymbol type)
-    {
-        var ids = new List<long>();
-        var current = type;
-        while (current != null && current.Name != "UdonSharpBehaviour")
-        {
-            ids.Add(ComputeTypeId(current.ToDisplayString()));
-            current = current.BaseType;
-        }
-        return ids.ToArray();
-    }
-
     internal static long ComputeTypeId(string typeName)
-    {
-        using var sha = System.Security.Cryptography.SHA256.Create();
-        var hash = sha.ComputeHash(System.Text.Encoding.UTF8.GetBytes(typeName));
-        return System.BitConverter.ToInt64(hash, 0);
-    }
+        => UdonBehaviourTypeMetadata.TypeId(typeName);
 
     /// <summary>
     /// Ensure the LayoutPlanner is planned and frozen before emission begins.

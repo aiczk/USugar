@@ -488,12 +488,12 @@ public partial class InvocationHandler
         var allComponents = SlotRef(allComponentsSlot);
 
         // Compute target type ID at compile time
-        var targetTypeName = target.TypeArguments[0].ToDisplayString();
-        long targetTypeId = UasmEmitter.ComputeTypeId(targetTypeName);
+        long targetTypeId = UdonBehaviourTypeMetadata.TypeId(target.TypeArguments[0]);
         var targetIdConst = Const(targetTypeId, StorageTypes.Int64);
 
         // Inheritance: if derived USB types exist, use __refl_typeids + Array.IndexOf
-        bool useTypeIds = HasInheritedUsbTypes(target.TypeArguments[0]);
+        bool useTypeIds = UdonBehaviourTypeMetadata.LookupRequiresAssignableIds(
+            target.TypeArguments[0], _planner.Census);
         var reflKeyConst = useTypeIds
             ? Const(EmitContext.ReflTypeIdsField, StorageTypes.String)
             : Const(EmitContext.ReflTypeIdField, StorageTypes.String);
@@ -519,24 +519,6 @@ public partial class InvocationHandler
             UdonAbiKey.Method("UnityEngineGameObject", "get_transform", "UnityEngineTransform"),
             new List<CLeaf> { instanceVal },
             StorageTypes.Transform);
-    }
-
-    bool HasInheritedUsbTypes(ITypeSymbol targetType)
-    {
-        foreach (var kvp in _planner.AllLayouts)
-        {
-            var typeSymbol = kvp.Key;
-            if (SymbolEqualityComparer.Default.Equals(typeSymbol, targetType))
-                continue;
-            var current = typeSymbol.BaseType;
-            while (current != null)
-            {
-                if (SymbolEqualityComparer.Default.Equals(current, targetType))
-                    return true;
-                current = current.BaseType;
-            }
-        }
-        return false;
     }
 
     static UdonAbiKey ResolveShimFetchExtern(string methodName, bool hasBoolArg)
@@ -586,10 +568,11 @@ public partial class InvocationHandler
                     UdonAbi.ArrayGet("UnityEngineComponentArray", "UnityEngineComponent"),
                     new List<CLeaf> { allComponents, SlotRef(idxSlot) },
                     StorageTypes.Component);
+                var behaviourVal = AsUdonBehaviour(elementVal);
 
                 // idValue = behaviour.GetProgramVariable("__refl_typeid" or "__refl_typeids")
                 var idValueVal = LoadProgramVariable(
-                    elementVal, reflKeyConst, StorageTypes.Object);
+                    behaviourVal, reflKeyConst, StorageTypes.Object);
 
                 // Null check: if (idValue != null)
                 var nullConst = Const(null, StorageTypes.Object);
@@ -608,11 +591,7 @@ public partial class InvocationHandler
                         // The type-id check proves this Component is the requested Udon behaviour.
                         // Preserve that proof as an explicit representation conversion instead of
                         // relying on the global reference-type assignment relaxation.
-                        var behaviour = RepresentationCast(
-                            elementVal,
-                            StorageTypes.UdonEventReceiver,
-                            RepresentationCastKind.VerifiedUdonBehaviourComponent);
-                        EmitAssign(resultSlot, behaviour);
+                        EmitAssign(resultSlot, behaviourVal);
                         _builder.EmitBreak();
                     });
                 });
@@ -698,10 +677,11 @@ public partial class InvocationHandler
                     UdonAbi.ArrayGet("UnityEngineComponentArray", "UnityEngineComponent"),
                     new List<CLeaf> { allComponents, SlotRef(idx2Slot) },
                     StorageTypes.Component);
+                var behaviourVal = AsUdonBehaviour(elementVal);
 
                 // Type check
                 var idValueVal = LoadProgramVariable(
-                    elementVal, reflKeyConst, StorageTypes.Object);
+                    behaviourVal, reflKeyConst, StorageTypes.Object);
 
                 var nullConst = Const(null, StorageTypes.Object);
                 var notNullVal = ExternCall(
@@ -787,10 +767,11 @@ public partial class InvocationHandler
             UdonAbi.ArrayGet("UnityEngineComponentArray", "UnityEngineComponent"),
             new List<CLeaf> { allComponents, SlotRef(idxSlot) },
             StorageTypes.Component);
+        var behaviourVal = AsUdonBehaviour(elementVal);
 
         // idValue = behaviour.GetProgramVariable(reflKey)
         var idValueVal = LoadProgramVariable(
-            elementVal, reflKeyConst, StorageTypes.Object);
+            behaviourVal, reflKeyConst, StorageTypes.Object);
 
         // Null check
         var nullConst = Const(null, StorageTypes.Object);
@@ -809,6 +790,12 @@ public partial class InvocationHandler
             });
         });
     }
+
+    CLeaf AsUdonBehaviour(CLeaf component)
+        => RepresentationCast(
+            component,
+            StorageTypes.UdonEventReceiver,
+            RepresentationCastKind.VerifiedUdonBehaviourComponent);
 
     // ── Interface Call ──
 
