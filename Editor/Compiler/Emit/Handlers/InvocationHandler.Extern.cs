@@ -392,6 +392,11 @@ public partial class InvocationHandler
     CLeaf EmitGetComponentGeneric(IInvocationOperation op, IMethodSymbol target)
     {
         var typeArg = target.TypeArguments[0];
+        if (_ctx.Session.ObjectArrayBehaviourAliases.IsAlias(typeArg, _typeParamMap))
+            throw new System.NotSupportedException(
+                $"GetComponent<{ResolveType(typeArg).ToDisplayString()}> is invalid: this type is used "
+                + "as a legacy object[] nominal alias in the same compilation and therefore has "
+                + "SystemObjectArray storage, not a scene-component representation.");
         return ExternResolver.IsUdonSharpBehaviour(typeArg) ? EmitGetComponentShim(op, target) : EmitGetComponentExtern(op, target);
     }
 
