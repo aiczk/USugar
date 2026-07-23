@@ -387,13 +387,21 @@ public class LayoutPlanner
         ["OnListProductOwners"] = new[] { "onListProductOwnersResult", "onListProductOwnersOwners" },
     };
 
+    public CompilationSession Session { get; }
+
     public LayoutPlanner(Compilation compilation)
+        : this(new CompilationSession(compilation, UdonAbiCatalog.Empty))
     {
-        _compilation = compilation;
-        Census = CompilationTypeCensus.For(compilation);
     }
 
-    public UdonTypeFactRegistry TypeFacts { get; } = new UdonTypeFactRegistry();
+    public LayoutPlanner(CompilationSession session)
+    {
+        Session = session ?? throw new System.ArgumentNullException(nameof(session));
+        _compilation = session.Compilation;
+        Census = CompilationTypeCensus.For(_compilation);
+    }
+
+    public UdonTypeFactRegistry TypeFacts => Session.TypeFacts;
 
     /// <summary>
     /// Compute or retrieve cached TypeLayout for the given type.
@@ -424,7 +432,6 @@ public class LayoutPlanner
 
     public TypeLayout Plan(INamedTypeSymbol type)
     {
-        using var typeFactScope = UdonTypeFacts.RecordInto(TypeFacts);
         if (_cache.TryGetValue(type, out var cached))
             return cached;
         if (_frozen)
@@ -699,7 +706,7 @@ public class LayoutPlanner
             .Where(f => SymbolEqualityComparer.Default.Equals(f.ContainingType, type)))
         {
             if (member.IsStatic || member.IsImplicitlyDeclared) continue;
-            var udonType = ExternResolver.GetUdonTypeName(member.Type);
+            var udonType = Session.Types.GetUdonTypeName(member.Type);
             var flags = FieldFlags.None;
             if (member.DeclaredAccessibility == Accessibility.Public) flags |= FieldFlags.Export;
             if (member.GetAttributes().Any(a => a.AttributeClass?.Name == "UdonSyncedAttribute")) flags |= FieldFlags.Sync;
@@ -821,7 +828,7 @@ public class LayoutPlanner
         return bridges;
     }
 
-    static List<ReturnSlot> BuildReturnSlots(IMethodSymbol method, string exportName, NameAllocator alloc)
+    List<ReturnSlot> BuildReturnSlots(IMethodSymbol method, string exportName, NameAllocator alloc)
     {
         var returns = new List<ReturnSlot>();
         if (method.ReturnsVoid) return returns;
@@ -832,7 +839,7 @@ public class LayoutPlanner
         if (TypeClassifier.IsAggregateValue(method.ReturnType))
             returns.Add(new ReturnSlot(id, StorageTypes.ObjectArray));
         else
-            returns.Add(new ReturnSlot(id, ExternResolver.GetStorageType(new RuntimeType(method.ReturnType))));
+            returns.Add(new ReturnSlot(id, Session.Types.GetStorageType(method.ReturnType)));
 
         return returns;
     }

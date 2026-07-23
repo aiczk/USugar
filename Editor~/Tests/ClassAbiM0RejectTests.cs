@@ -119,7 +119,7 @@ public class F4Nat : UdonSharpBehaviour { NativeBased79 n; void Start(){ } }", "
         // DisposableResource has a real Udon type tag, so `is` against it is a genuine, resolvable test.
         var uasm = TestHelper.CompileToUasm(@"
 using UdonSharp;
-using TestStubs;
+using VRC.TestStubs;
 public class AccIs : UdonSharpBehaviour { public object o; public bool r; void Start(){ r = o is DisposableResource; } }", "AccIs");
         Assert.NotNull(uasm);
     }
@@ -129,7 +129,7 @@ public class AccIs : UdonSharpBehaviour { public object o; public bool r; void S
     {
         var uasm = TestHelper.CompileToUasm(@"
 using UdonSharp;
-using TestStubs;
+using VRC.TestStubs;
 public class AccFld : UdonSharpBehaviour { DisposableResource r; void Start(){ } }", "AccFld");
         Assert.NotNull(uasm);
     }

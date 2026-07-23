@@ -267,7 +267,7 @@ using UdonSharp;
 using UnityEngine;
 public class UsingTest : UdonSharpBehaviour {
     public void Test() {
-        using (var res = new TestStubs.DisposableResource()) {
+        using (var res = new VRC.TestStubs.DisposableResource()) {
             res.Value = 42;
         }
     }

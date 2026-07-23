@@ -43,6 +43,7 @@ static class USugarCompilationOrchestrator
         public UnityCompilationAssembly UnityAssembly { get; }
         public IReadOnlyList<string> SourcePaths { get; }
         public CSharpCompilation Compilation { get; set; }
+        public CompilationSession Session { get; set; }
         public LayoutPlanner Planner { get; set; }
         public IReadOnlyList<(INamedTypeSymbol symbol, SyntaxTree tree)> Behaviours { get; set; }
 
@@ -232,15 +233,14 @@ static class USugarCompilationOrchestrator
                 return;
             }
 
-            // CA-M0 B79: registry-truth for class support — the set of udon type names that carry any extern.
             var externRegistry = UdonAbiCatalogFactory.Create(
                 UdonEditorManager.Instance.GetNodeDefinitions());
-            using var externScope = ExternResolver.UseRegistry(externRegistry);
             Mark("extern-set");
 
             foreach (var unit in compilationUnits)
             {
                 unit.Compilation = BuildCompilation(unit);
+                unit.Session = new CompilationSession(unit.Compilation, externRegistry);
                 unit.Behaviours = CollectBehaviourDeclarations(unit.Compilation);
             }
             PruneTreeCache(compilationUnits.SelectMany(unit => unit.SourcePaths));
@@ -314,7 +314,7 @@ static class USugarCompilationOrchestrator
 
             // Collect all UdonSharpBehaviour classes
             var classList = new List<(INamedTypeSymbol symbol, SyntaxTree tree,
-                CSharpCompilation compilation, LayoutPlanner planner)>();
+                CompilationSession session, LayoutPlanner planner)>();
             var selectedProgramAssets = applyToAssets
                 ? new Dictionary<INamedTypeSymbol, ProgramAssetBinding>(
                     SymbolEqualityComparer.Default)
@@ -329,7 +329,7 @@ static class USugarCompilationOrchestrator
             // A partial class has one declaration node per part but ONE symbol — emit it once, not once per part.
             foreach (var unit in compilationUnits)
             {
-                unit.Planner = new LayoutPlanner(unit.Compilation);
+                unit.Planner = new LayoutPlanner(unit.Session);
                 unit.Planner.PrepareCompilation();
                 foreach (var (symbol, tree) in unit.Behaviours)
                 {
@@ -392,7 +392,7 @@ static class USugarCompilationOrchestrator
                         }
                         selectedProgramAssets.Add(symbol, binding);
                     }
-                    classList.Add((symbol, tree, unit.Compilation, unit.Planner));
+                    classList.Add((symbol, tree, unit.Session, unit.Planner));
                 }
             }
             if (applyToAssets)
@@ -418,11 +418,11 @@ static class USugarCompilationOrchestrator
             var emitResults = new System.Collections.Concurrent.ConcurrentBag<EmitResult>();
             System.Threading.Tasks.Parallel.ForEach(classList, classInfo =>
             {
-                var (symbol, tree, compilation, planner) = classInfo;
+                var (symbol, tree, session, planner) = classInfo;
                 var classSw = System.Diagnostics.Stopwatch.StartNew();
                 try
                 {
-                    var emitter = new UasmEmitter(compilation, symbol, planner, externRegistry);
+                    var emitter = new UasmEmitter(session, symbol, planner);
                     var uasm = emitter.Emit();
                     emitResults.Add(new EmitResult(symbol, tree, uasm,
                         emitter.CodeGenResult.Constants, emitter.GetHeapSize(), emitter.Diagnostics, planner));
@@ -1090,7 +1090,7 @@ static class USugarCompilationOrchestrator
         if (type == null || type.TypeKind == TypeKind.Enum) return false;
         if (USugarCompilerHelper.IsFrameworkNamespace(type.ContainingNamespace))
             return false;
-        return !ExternResolver.ClassHasRegisteredExterns(type);
+        return true;
     }
 
     internal static List<CompilationUnit> CollectCompilationUnits(

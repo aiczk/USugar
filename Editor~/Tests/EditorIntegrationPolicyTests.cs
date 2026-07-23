@@ -173,7 +173,6 @@ public class MetadataBase : UdonSharpBehaviour
 }
 public class MetadataDerived : MetadataBase { }
 ", "MetadataDerived", out var derived);
-        using var registry = ExternResolver.UseRegistry(TestHelper.RegistryFacts);
         var planner = new LayoutPlanner(compilation);
         planner.PrepareCompilation();
 

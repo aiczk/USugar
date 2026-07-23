@@ -1,48 +1,13 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Threading;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.Operations;
 
 public static class ExternResolver
 {
-    // Planning still uses a short-lived ambient scope because type classification runs before
-    // EmitContext exists. Emission itself receives the same catalog explicitly and is fail-closed.
-    static readonly AsyncLocal<UdonAbiCatalog> CatalogScope = new();
-    public static UdonAbiCatalog Catalog => CatalogScope.Value;
-
-    // CA-M0 B79 (registry-truth): does the Udon extern registry hold ANY extern under a given udon TYPE name?
-    // "Supported class type" has always meant "Udon has externs for it" — VRCUrl/DataList are exactly
-    // source-shaped classes whose support comes from the registry, indistinguishable from a genuinely
-    // unsupported user class by symbol shape alone. Null is permissive during catalog-free analysis.
-    public static Func<string, bool> HasAnyExternForType
-        => Catalog == null ? null : new Func<string, bool>(Catalog.HasAnyExternForType);
-
-    public static IDisposable UseRegistry(UdonAbiCatalog catalog)
-    {
-        if (catalog == null) throw new ArgumentNullException(nameof(catalog));
-        var previous = CatalogScope.Value;
-        CatalogScope.Value = catalog;
-        return new RegistryToken(previous);
-    }
-
-    sealed class RegistryToken : IDisposable
-    {
-        readonly UdonAbiCatalog _previous;
-        bool _disposed;
-        public RegistryToken(UdonAbiCatalog previous) => _previous = previous;
-        public void Dispose()
-        {
-            if (_disposed) throw new InvalidOperationException("Extern registry scope disposed twice.");
-            _disposed = true;
-            CatalogScope.Value = _previous;
-        }
-    }
-
     /// <summary>The udon TYPE-name prefix of an extern full name ("SystemInt32.__op_Addition__…" → "SystemInt32").
-    /// Sanitized udon type names carry no '.', so the first '.' is always the type/member boundary. Used to
-    /// build the <see cref="HasAnyExternForType"/> lookup set from a flat extern list.</summary>
+    /// Sanitized Udon type names carry no '.', so the first '.' is always the type/member boundary.</summary>
     public static string ExternTypePrefix(string externFullName)
     {
         if (string.IsNullOrEmpty(externFullName)) return externFullName;
@@ -50,42 +15,21 @@ public static class ExternResolver
         return i < 0 ? externFullName : externFullName.Substring(0, i);
     }
 
-    /// <summary>Does the Udon registry hold any extern under this class's RAW (foreign) udon name? True for a
-    /// foreign type modelled as a source stub (registered externs — VRCUrl/DataList/TestStubs); false for a
-    /// genuine user class. Computes the raw name DIRECTLY (not via ComputeUdonTypeName) to avoid recursion
-    /// with TypeClassifier.IsUserClass. Unwired registry → false (permissive: treat as a genuine class).</summary>
-    public static bool ClassHasRegisteredExterns(INamedTypeSymbol type)
-    {
-        var probe = HasAnyExternForType;
-        if (probe == null) return false;
-        var raw = RemapUdonType(SanitizeTypeName(
-            type.ToDisplayString(SymbolDisplayFormat.CSharpErrorMessageFormat)));
-        return probe(raw);
-    }
-
-    /// <summary>CA-M0 B79: a plain user class the Udon VM cannot represent in class-ABI v1 — a source-defined
-    /// non-behaviour class (<see cref="IsPlainUserClass"/>) with NO registered externs. A foreign type modelled
-    /// as a source stub (registered externs) is supported and returns false; unwired registry stays permissive
-    /// (false), preserving catalog-free analysis.</summary>
+    /// <summary>A source-defined class whose shape is outside class ABI v1.</summary>
     public static bool IsUnsupportedUserClass(ITypeSymbol type)
     {
         if (!IsPlainUserClass(type)) return false;
         if (TypeClassifier.IsUserClass(type)) return false; // CA-M1: a v1 class is now a supported object[] type
-        var probe = HasAnyExternForType;
-        if (probe == null) return false;
-        return !probe(ComputeUdonTypeName(type));
+        return true;
     }
 
-    // Loud reject for a plain user class with no Udon representation (class-ABI v1), tailored per axis: a
-    // non-Object base (user OR native), a record, or a plain class. Shape-passing foreign stubs (registered
-    // externs) and the unwired-permissive case fall through silently. `udonName` is the already-computed name
-    // so the registry probe matches exactly what a declaration would have emitted.
+    // Loud reject for a source class outside class ABI v1: a native base, a record, or another
+    // unsupported source shape. Foreign SDK types are identified semantically by their assembly/namespace,
+    // never by a coincidentally matching extern owner name.
     static void RejectIfUnsupportedUserClass(ITypeSymbol type, string udonName)
     {
         if (!IsPlainUserClass(type)) return;
         if (TypeClassifier.IsUserClass(type)) return; // CA-M1: v1 class is supported (object[1+F] bundle)
-        var probe = HasAnyExternForType;
-        if (probe == null || probe(udonName)) return;
         var named = (INamedTypeSymbol)type;
         if (named.BaseType != null && named.BaseType.SpecialType != SpecialType.System_Object)
             throw new NotSupportedException(
@@ -173,6 +117,11 @@ public static class ExternResolver
 
     public static string GetUdonTypeName(ITypeSymbol type,
         IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeParamMap)
+        => GetUdonTypeName(type, typeParamMap, null);
+
+    public static string GetUdonTypeName(ITypeSymbol type,
+        IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeParamMap,
+        UdonTypeFactRegistry typeFacts)
     {
         if (type is ITypeParameterSymbol tp && typeParamMap != null
             && typeParamMap.TryGetValue(tp, out var resolved))
@@ -186,7 +135,7 @@ public static class ExternResolver
                     $"Type parameter '{tp.Name}' resolves to itself in the monomorphization map — a "
                     + "self-referential binding from an unclosed containing-type specialization. The generic "
                     + "was not fully monomorphized to a concrete type at this emit site.");
-            return GetUdonTypeName(resolved, typeParamMap);
+            return GetUdonTypeName(resolved, typeParamMap, typeFacts);
         }
 
         if (type is IArrayTypeSymbol arrayType)
@@ -216,7 +165,7 @@ public static class ExternResolver
             // struct[] / tuple[] / class[] → object[] of boxed object[] elements (no SystemObjectArrayArray).
             if (TypeClassifier.IsObjectArrayEmulated(elementType))
                 return "SystemObjectArray";
-            var elemTypeName = GetUdonTypeName(elementType, typeParamMap);
+            var elemTypeName = GetUdonTypeName(elementType, typeParamMap, typeFacts);
             if (elemTypeName == "VRCUdonCommonInterfacesIUdonEventReceiver")
                 return "UnityEngineComponentArray";
             return RemapUdonType(elemTypeName) + "Array";
@@ -248,20 +197,25 @@ public static class ExternResolver
             var ns = def.ContainingNamespace?.ToDisplayString();
             var baseName = SanitizeTypeName(string.IsNullOrEmpty(ns) ? def.Name : $"{ns}.{def.Name}");
             foreach (var arg in named.TypeArguments)
-                baseName += GetUdonTypeName(arg, typeParamMap);
+                baseName += GetUdonTypeName(arg, typeParamMap, typeFacts);
             var genericName = RemapUdonType(baseName);
             RejectIfUnsupportedUserClass(type, genericName); // a generic user class (Node<int>) has no externs
             return genericName;
         }
 
-        return GetUdonTypeName(type);
+        return GetUdonTypeNameAndRecord(type, typeFacts);
     }
 
     /// <summary>Explicitly lower a closed C# runtime identity to its Udon storage representation.
     /// This conversion is intentionally named because it is non-injective.</summary>
     public static StorageType GetStorageType(RuntimeType runtimeType,
         IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeParamMap = null)
-        => new StorageType(GetUdonTypeName(runtimeType.Symbol, typeParamMap));
+        => new StorageType(GetUdonTypeName(runtimeType.Symbol, typeParamMap, null));
+
+    public static StorageType GetStorageType(RuntimeType runtimeType,
+        IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeParamMap,
+        UdonTypeFactRegistry typeFacts)
+        => new StorageType(GetUdonTypeName(runtimeType.Symbol, typeParamMap, typeFacts));
 
     public static bool IsUdonSharpBehaviour(ITypeSymbol type,
         IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeParamMap)
@@ -338,17 +292,19 @@ public static class ExternResolver
         && !IsSdkNamespace(e.ContainingNamespace);
 
     public static string GetUdonTypeName(ITypeSymbol type)
+        => GetUdonTypeNameAndRecord(type, null);
+
+    static string GetUdonTypeNameAndRecord(ITypeSymbol type, UdonTypeFactRegistry typeFacts)
     {
-        var name = ComputeUdonTypeName(type);
+        var name = ComputeUdonTypeName(type, typeFacts);
         RejectIfUnsupportedUserClass(type, name);
-        // Phase-B shadow: this is the single choke where Udon type names are minted — record the name's
-        // facts (enum? value type?) so CoreVerify's strict shadow can audit its name-heuristic passes.
-        // Fold tags are skipped inside Record (their runtime representation is fixed by the fold).
-        UdonTypeFacts.Record(name, type);
+        // Session-bound callers provide their fact registry explicitly. Editor reflection helpers
+        // call the pure overload and therefore cannot mutate compiler verification state.
+        typeFacts?.Record(name, type);
         return name;
     }
 
-    static string ComputeUdonTypeName(ITypeSymbol type)
+    static string ComputeUdonTypeName(ITypeSymbol type, UdonTypeFactRegistry typeFacts)
     {
         // Array types
         if (type is IArrayTypeSymbol arrayType)
@@ -368,7 +324,7 @@ public static class ExternResolver
                 return "SystemObjectArray";
             // All types that resolve to IUdonEventReceiver use ComponentArray at runtime:
             // UdonSharpBehaviour[], derived[], UdonBehaviour[], user-interface[]
-            var elemTypeName = GetUdonTypeName(arrayType.ElementType);
+            var elemTypeName = GetUdonTypeNameAndRecord(arrayType.ElementType, typeFacts);
             if (elemTypeName == "VRCUdonCommonInterfacesIUdonEventReceiver")
                 return "UnityEngineComponentArray";
             return RemapUdonType(elemTypeName) + "Array";
@@ -403,7 +359,7 @@ public static class ExternResolver
         if (type.TypeKind == TypeKind.Enum && type is INamedTypeSymbol enumType
             && !type.DeclaringSyntaxReferences.IsEmpty
             && !IsSdkNamespace(type.ContainingNamespace))
-            return GetUdonTypeName(enumType.EnumUnderlyingType);
+            return GetUdonTypeNameAndRecord(enumType.EnumUnderlyingType, typeFacts);
 
         // Generic types: recursively process type arguments
         if (type is INamedTypeSymbol named && named.IsGenericType)
@@ -413,7 +369,7 @@ public static class ExternResolver
             var baseName = string.IsNullOrEmpty(ns) ? def.Name : $"{ns}.{def.Name}";
             baseName = SanitizeTypeName(baseName);
             foreach (var arg in named.TypeArguments)
-                baseName += GetUdonTypeName(arg);
+                baseName += GetUdonTypeNameAndRecord(arg, typeFacts);
             return RemapUdonType(baseName);
         }
 
@@ -478,8 +434,7 @@ public static class ExternResolver
         => type is INamedTypeSymbol named
            && named.TypeKind == TypeKind.Interface
            && named.SpecialType == SpecialType.None
-           && !IsSdkNamespace(named.ContainingNamespace)
-           && !ClassHasRegisteredExterns(named);
+           && !IsSdkNamespace(named.ContainingNamespace);
 
     public static string SanitizeTypeName(string fullName)
     {

@@ -8,6 +8,7 @@ using Microsoft.CodeAnalysis.Operations;
 public partial class UasmEmitter
 {
     readonly EmitContext _ctx;
+    readonly CompilationSession _session;
     readonly UdonAbiCatalog _abiCatalog;
     readonly Dictionary<OperationKind, IOperationHandler> _stmtDispatch;
     readonly Dictionary<OperationKind, IExpressionHandler> _exprDispatch;
@@ -50,13 +51,18 @@ public partial class UasmEmitter
 
     public UasmEmitter(Compilation compilation, INamedTypeSymbol classSymbol, LayoutPlanner planner = null,
         UdonAbiCatalog externRegistry = null)
+        : this(CreateSession(compilation, planner, externRegistry), classSymbol, planner)
     {
-        _abiCatalog = externRegistry
-            ?? throw new ArgumentNullException(nameof(externRegistry),
-                "UasmEmitter requires the installed SDK's Udon ABI catalog.");
+    }
+
+    public UasmEmitter(CompilationSession session, INamedTypeSymbol classSymbol,
+        LayoutPlanner planner = null)
+    {
+        _session = session ?? throw new ArgumentNullException(nameof(session));
+        _abiCatalog = session.AbiCatalog;
         _ownsPlanner = planner == null;
         _ctx = new EmitContext(
-            compilation, classSymbol, planner ?? new LayoutPlanner(compilation), _abiCatalog);
+            session, classSymbol, planner ?? new LayoutPlanner(session));
         _bridge = new SyntheticBridgeBuilder(_ctx.Builder);
         _delegateConvention = new DelegateConventionStorage(_ctx);
 
@@ -82,6 +88,20 @@ public partial class UasmEmitter
         _ctx.InitializeDispatchers(
             VisitOperation, VisitExpression, VisitLoweredExpression,
             operatorHandler.EmitPatternCheckImpl);
+    }
+
+    static CompilationSession CreateSession(Compilation compilation, LayoutPlanner planner,
+        UdonAbiCatalog externRegistry)
+    {
+        if (compilation == null) throw new ArgumentNullException(nameof(compilation));
+        if (externRegistry == null)
+            throw new ArgumentNullException(nameof(externRegistry),
+                "UasmEmitter requires the installed SDK's Udon ABI catalog.");
+        if (planner != null)
+            return ReferenceEquals(planner.Session.AbiCatalog, externRegistry)
+                ? planner.Session
+                : new CompilationSession(compilation, externRegistry, planner.TypeFacts);
+        return new CompilationSession(compilation, externRegistry);
     }
 
     // Build one kind→handler table from each handler's declared HandledKinds. A kind claimed by two
@@ -150,8 +170,6 @@ public partial class UasmEmitter
 
     public string Emit()
     {
-        using var externScope = ExternResolver.UseRegistry(_abiCatalog);
-        using var typeFactScope = UdonTypeFacts.RecordInto(_module.TypeFacts);
         // Record types cannot work in Udon: no heap allocation for user types, no inheritance from UdonSharpBehaviour
         if (_classSymbol.IsRecord)
             throw new NotSupportedException(
@@ -849,9 +867,11 @@ public partial class UasmEmitter
         // including env, when an actual bridge is emitted.
         var (convArgs, convRet, _) = HandlerBase.GetConventionFieldNames(delegateType);
         for (int ci = 0; ci < convArgs.Length; ci++)
-            _ctx.Storage.TryDeclareVar(convArgs[ci], ExternResolver.GetStorageType(new RuntimeType(invoke.Parameters[ci].Type), _typeParamMap));
+            _ctx.Storage.TryDeclareVar(convArgs[ci],
+                _session.Types.GetStorageType(invoke.Parameters[ci].Type, _typeParamMap));
         if (convRet != null)
-            _ctx.Storage.TryDeclareVar(convRet, ExternResolver.GetStorageType(new RuntimeType(invoke.ReturnType), _typeParamMap));
+            _ctx.Storage.TryDeclareVar(convRet,
+                _session.Types.GetStorageType(invoke.ReturnType, _typeParamMap));
 
         if (member.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
             is VariableDeclaratorSyntax { Initializer: not null } dlgDeclarator)

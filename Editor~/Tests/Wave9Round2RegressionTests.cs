@@ -191,7 +191,7 @@ public class W9R2GetterChain : UdonSharpBehaviour {
     {
         var uasm = TestHelper.CompileToUasm(@"
 using UdonSharp;
-using TestStubs;
+using VRC.TestStubs;
 public class UsingGotoTest : UdonSharpBehaviour {
     public int n; public int mark;
     void Start() {
@@ -213,7 +213,7 @@ public class UsingGotoTest : UdonSharpBehaviour {
     {
         var uasm = TestHelper.CompileToUasm(@"
 using UdonSharp;
-using TestStubs;
+using VRC.TestStubs;
 public class UsingGotoNestedTest : UdonSharpBehaviour {
     public int n; public int mark;
     void Start() {
@@ -239,7 +239,7 @@ public class UsingGotoNestedTest : UdonSharpBehaviour {
         // normal-exit Dispose (an extra one would double-dispose on the fall-through path).
         var uasm = TestHelper.CompileToUasm(@"
 using UdonSharp;
-using TestStubs;
+using VRC.TestStubs;
 public class UsingGotoInsideTest : UdonSharpBehaviour {
     public int n; public int mark;
     void Start() {

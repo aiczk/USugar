@@ -151,10 +151,10 @@ public class InterfaceFieldUser : UdonSharpBehaviour {
         // sank the type-lowering-level version of this guard.
         var uasm = TestHelper.CompileToUasm(@"
 using UdonSharp;
-using TestStubs;
+using VRC.TestStubs;
 public class ForeignCtorUser : UdonSharpBehaviour {
     void Start() { using (var r = new DisposableResource()) { r.Value = 1; } }
 }", "ForeignCtorUser");
-        Assert.Contains("TestStubsDisposableResource.__ctor__", uasm);
+        Assert.Contains("VRCTestStubsDisposableResource.__ctor__", uasm);
     }
 }

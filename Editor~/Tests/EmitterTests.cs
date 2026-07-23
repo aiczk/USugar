@@ -4568,7 +4568,7 @@ public class GotoBackTest : UdonSharpBehaviour {
     {
         var uasm = TestHelper.CompileToUasm(@"
 using UdonSharp;
-using TestStubs;
+using VRC.TestStubs;
 [UdonBehaviourSyncMode(BehaviourSyncMode.None)]
 public class UsingTest : UdonSharpBehaviour {
     int _x;
@@ -4579,7 +4579,7 @@ public class UsingTest : UdonSharpBehaviour {
     }
 }
 ");
-        Assert.Contains("EXTERN, \"TestStubsDisposableResource.__Dispose__SystemVoid\"", uasm);
+        Assert.Contains("EXTERN, \"VRCTestStubsDisposableResource.__Dispose__SystemVoid\"", uasm);
     }
 
     [Fact]
@@ -4587,7 +4587,7 @@ public class UsingTest : UdonSharpBehaviour {
     {
         var uasm = TestHelper.CompileToUasm(@"
 using UdonSharp;
-using TestStubs;
+using VRC.TestStubs;
 [UdonBehaviourSyncMode(BehaviourSyncMode.None)]
 public class UsingDeclTest : UdonSharpBehaviour {
     int _x;
@@ -4597,7 +4597,7 @@ public class UsingDeclTest : UdonSharpBehaviour {
     }
 }
 ");
-        Assert.Contains("EXTERN, \"TestStubsDisposableResource.__Dispose__SystemVoid\"", uasm);
+        Assert.Contains("EXTERN, \"VRCTestStubsDisposableResource.__Dispose__SystemVoid\"", uasm);
     }
 
     [Fact]
@@ -4605,7 +4605,7 @@ public class UsingDeclTest : UdonSharpBehaviour {
     {
         var uasm = TestHelper.CompileToUasm(@"
 using UdonSharp;
-using TestStubs;
+using VRC.TestStubs;
 [UdonBehaviourSyncMode(BehaviourSyncMode.None)]
 public class UsingMultiDeclTest : UdonSharpBehaviour {
     int _x;
@@ -4620,7 +4620,7 @@ public class UsingMultiDeclTest : UdonSharpBehaviour {
         var lines = uasm.Split('\n').Select(l => l.Trim()).ToArray();
         var disposeLines = lines
             .Select((l, i) => (l, i))
-            .Where(t => t.l.Contains("TestStubsDisposableResource.__Dispose__SystemVoid"))
+            .Where(t => t.l.Contains("VRCTestStubsDisposableResource.__Dispose__SystemVoid"))
             .ToList();
         Assert.Equal(2, disposeLines.Count);
     }
@@ -4632,7 +4632,7 @@ public class UsingMultiDeclTest : UdonSharpBehaviour {
     {
         var uasm = TestHelper.CompileToUasm(@"
 using UdonSharp;
-using TestStubs;
+using VRC.TestStubs;
 [UdonBehaviourSyncMode(BehaviourSyncMode.None)]
 public class UsingExistingVarTest : UdonSharpBehaviour {
     int _x;
@@ -4644,7 +4644,7 @@ public class UsingExistingVarTest : UdonSharpBehaviour {
     }
 }
 ");
-        Assert.Contains("TestStubsDisposableResource.__Dispose__SystemVoid", uasm);
+        Assert.Contains("VRCTestStubsDisposableResource.__Dispose__SystemVoid", uasm);
     }
 
     [Fact]
@@ -4652,7 +4652,7 @@ public class UsingExistingVarTest : UdonSharpBehaviour {
     {
         var uasm = TestHelper.CompileToUasm(@"
 using UdonSharp;
-using TestStubs;
+using VRC.TestStubs;
 [UdonBehaviourSyncMode(BehaviourSyncMode.None)]
 public class UsingExprTest : UdonSharpBehaviour {
     int _x;
@@ -4663,7 +4663,7 @@ public class UsingExprTest : UdonSharpBehaviour {
     }
 }
 ");
-        Assert.Contains("TestStubsDisposableResource.__Dispose__SystemVoid", uasm);
+        Assert.Contains("VRCTestStubsDisposableResource.__Dispose__SystemVoid", uasm);
     }
 
     [Fact]
@@ -4671,7 +4671,7 @@ public class UsingExprTest : UdonSharpBehaviour {
     {
         var uasm = TestHelper.CompileToUasm(@"
 using UdonSharp;
-using TestStubs;
+using VRC.TestStubs;
 [UdonBehaviourSyncMode(BehaviourSyncMode.None)]
 public class UsingNullTest : UdonSharpBehaviour {
     void Start() {
@@ -4682,7 +4682,7 @@ public class UsingNullTest : UdonSharpBehaviour {
 ");
         Assert.Contains(
             "SystemObject.__op_Inequality__SystemObject_SystemObject__SystemBoolean", uasm);
-        Assert.Contains("TestStubsDisposableResource.__Dispose__SystemVoid", uasm);
+        Assert.Contains("VRCTestStubsDisposableResource.__Dispose__SystemVoid", uasm);
     }
 
     // ── jagged array ──
@@ -5640,7 +5640,7 @@ public class ConstFoldSyncTest : UdonSharpBehaviour {
     {
         var uasm = TestHelper.CompileToUasm(@"
 using UdonSharp;
-using TestStubs;
+using VRC.TestStubs;
 [UdonBehaviourSyncMode(BehaviourSyncMode.None)]
 public class UsingReturnTest : UdonSharpBehaviour {
     void Start() {
@@ -5659,7 +5659,7 @@ public class UsingReturnTest : UdonSharpBehaviour {
     {
         var uasm = TestHelper.CompileToUasm(@"
 using UdonSharp;
-using TestStubs;
+using VRC.TestStubs;
 [UdonBehaviourSyncMode(BehaviourSyncMode.None)]
 public class UsingBreakTest : UdonSharpBehaviour {
     void Start() {
@@ -5679,7 +5679,7 @@ public class UsingBreakTest : UdonSharpBehaviour {
     {
         var uasm = TestHelper.CompileToUasm(@"
 using UdonSharp;
-using TestStubs;
+using VRC.TestStubs;
 [UdonBehaviourSyncMode(BehaviourSyncMode.None)]
 public class UsingContinueTest : UdonSharpBehaviour {
     void Start() {
@@ -5699,7 +5699,7 @@ public class UsingContinueTest : UdonSharpBehaviour {
     {
         var uasm = TestHelper.CompileToUasm(@"
 using UdonSharp;
-using TestStubs;
+using VRC.TestStubs;
 [UdonBehaviourSyncMode(BehaviourSyncMode.None)]
 public class UsingDeclReturnTest : UdonSharpBehaviour {
     void Start() {
@@ -5716,7 +5716,7 @@ public class UsingDeclReturnTest : UdonSharpBehaviour {
     {
         var uasm = TestHelper.CompileToUasm(@"
 using UdonSharp;
-using TestStubs;
+using VRC.TestStubs;
 [UdonBehaviourSyncMode(BehaviourSyncMode.None)]
 public class UsingNestedReturnTest : UdonSharpBehaviour {
     void Start() {

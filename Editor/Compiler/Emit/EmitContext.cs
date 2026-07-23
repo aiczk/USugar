@@ -7,6 +7,7 @@ using Microsoft.CodeAnalysis.Operations;
 public class EmitContext
 {
     // Core dependencies
+    public readonly CompilationSession Session;
     public readonly Compilation Compilation;
     public readonly INamedTypeSymbol ClassSymbol;
     public readonly UdonAbiCatalog AbiCatalog;
@@ -54,7 +55,7 @@ public class EmitContext
         if (resolved is INamedTypeSymbol { TypeKind: TypeKind.Interface } iface
             && Planner.InterfaceIsLocalUserClassOnly(iface))
             return StorageTypes.ObjectArray;
-        return ExternResolver.GetStorageType(new RuntimeType(type), map);
+        return Session.Types.GetStorageType(type, map);
     }
 
     public string SourceStorageName(ISymbol member)
@@ -178,18 +179,23 @@ public class EmitContext
         _emitPatternCheck = emitPattern ?? throw new ArgumentNullException(nameof(emitPattern));
     }
 
-    public EmitContext(Compilation compilation, INamedTypeSymbol classSymbol, LayoutPlanner planner,
-        UdonAbiCatalog abiCatalog)
+    public EmitContext(CompilationSession session, INamedTypeSymbol classSymbol,
+        LayoutPlanner planner)
     {
-        Compilation = compilation;
+        Session = session ?? throw new ArgumentNullException(nameof(session));
+        Compilation = session.Compilation;
         ClassSymbol = classSymbol;
-        AbiCatalog = abiCatalog ?? throw new ArgumentNullException(nameof(abiCatalog));
+        AbiCatalog = session.AbiCatalog;
         Abi = new UdonAbiBinder(AbiCatalog);
-        Module = new CModule(planner.TypeFacts, abiCatalog) { ClassName = classSymbol.ToDisplayString() };
+        if (planner == null) throw new ArgumentNullException(nameof(planner));
+        if (!ReferenceEquals(planner.TypeFacts, session.TypeFacts))
+            throw new InvalidOperationException(
+                "LayoutPlanner and EmitContext must share one compilation session's type facts.");
+        Module = new CModule(session.TypeFacts, AbiCatalog) { ClassName = classSymbol.ToDisplayString() };
         Builder = new CoreBuilder(Module);
         Planner = planner;
         Storage = new StorageContext(Module);
-        MethodAnalyses = new MethodAnalysisCache(compilation);
+        MethodAnalyses = new MethodAnalysisCache(Compilation);
         Boundary = new BoundaryChecker(this);
         Conversions = new ConversionLowerer(this);
     }

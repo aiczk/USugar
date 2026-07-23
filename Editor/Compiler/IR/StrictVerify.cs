@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Concurrent;
 using System.IO;
-using System.Threading;
 using Microsoft.CodeAnalysis;
 
 /// <summary>Type FACTS recorded at the single choke where Udon type names are minted
@@ -108,39 +107,6 @@ public sealed class UdonTypeFactRegistry
         }
         if (name != null && name.EndsWith("Array")) return true;
         return null;
-    }
-}
-
-/// <summary>Routes the type-name minting choke into the registry owned by the active compilation.
-/// Async-local scoping keeps parallel class emits isolated while avoiding a registry parameter on every
-/// recursive type-name helper.</summary>
-public static class UdonTypeFacts
-{
-    static readonly AsyncLocal<UdonTypeFactRegistry> _current = new();
-
-    public static IDisposable RecordInto(UdonTypeFactRegistry registry)
-    {
-        if (registry == null) throw new ArgumentNullException(nameof(registry));
-        var previous = _current.Value;
-        _current.Value = registry;
-        return new RecordingScope(previous);
-    }
-
-    public static void Record(string udonName, ITypeSymbol symbol) => _current.Value?.Record(udonName, symbol);
-
-    sealed class RecordingScope : IDisposable
-    {
-        readonly UdonTypeFactRegistry _previous;
-        bool _disposed;
-
-        public RecordingScope(UdonTypeFactRegistry previous) => _previous = previous;
-
-        public void Dispose()
-        {
-            if (_disposed) return;
-            _current.Value = _previous;
-            _disposed = true;
-        }
     }
 }
 

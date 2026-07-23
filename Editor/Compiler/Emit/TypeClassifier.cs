@@ -116,9 +116,9 @@ public static class TypeClassifier
         {
             var baseType = named.BaseType;
             if (!ExternResolver.IsPlainUserClass(baseType) || baseType.IsRecord
-                || ExternResolver.ClassHasRegisteredExterns(baseType) || !IsUserClassLeaf(baseType)) return false;
+                || !IsUserClassLeaf(baseType)) return false;
         }
-        return !ExternResolver.ClassHasRegisteredExterns(named);
+        return true;
     }
 
     public static bool IsAggregateValue(ITypeSymbol type)

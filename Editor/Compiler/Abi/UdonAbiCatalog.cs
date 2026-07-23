@@ -194,8 +194,10 @@ public sealed class UdonExternPrototype
 /// </summary>
 public sealed class UdonAbiCatalog
 {
+    internal static readonly UdonAbiCatalog Empty
+        = new(Array.Empty<UdonExternPrototype>());
+
     readonly Dictionary<string, UdonExternPrototype> _externs;
-    readonly HashSet<string> _owners;
 
     public UdonAbiCatalog(IEnumerable<UdonExternPrototype> prototypes)
     {
@@ -208,11 +210,6 @@ public sealed class UdonAbiCatalog
                 throw new InvalidOperationException(
                     $"Duplicate Udon extern prototype '{prototype.RegisteredName}'.");
         }
-        _owners = new HashSet<string>(
-            _externs.Values.Select(prototype => !string.IsNullOrEmpty(prototype.Owner)
-                ? prototype.Owner
-                : ExternResolver.ExternTypePrefix(prototype.RegisteredName)),
-            StringComparer.Ordinal);
     }
 
     internal static UdonAbiCatalog FromNamesForTests(IEnumerable<string> externNames)
@@ -223,9 +220,6 @@ public sealed class UdonAbiCatalog
     public bool Contains(ExternSignature signature) => _externs.ContainsKey(signature.Text);
     public bool Contains(string signature)
         => !string.IsNullOrEmpty(signature) && _externs.ContainsKey(signature);
-    public bool HasAnyExternForType(string owner)
-        => !string.IsNullOrEmpty(owner) && _owners.Contains(owner);
-
     public BoundExtern Require(ExternSignature signature)
     {
         if (!_externs.TryGetValue(signature.Text, out var prototype))

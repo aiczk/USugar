@@ -369,11 +369,6 @@ namespace TestStubs
 {
     public interface IToggleable { void Toggle(); }
     public interface IScored { int GetScore(); }
-    public class DisposableResource : System.IDisposable
-    {
-        public int Value;
-        public void Dispose() { }
-    }
     public class BaseEnemy : UdonSharp.UdonSharpBehaviour
     {
         protected int _hp;
@@ -392,6 +387,14 @@ namespace TestStubs
         public float r;
         public float g;
         public float b;
+    }
+}
+namespace VRC.TestStubs
+{
+    public class DisposableResource : System.IDisposable
+    {
+        public int Value;
+        public void Dispose() { }
     }
 }
 ";
