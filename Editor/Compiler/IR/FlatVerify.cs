@@ -175,6 +175,7 @@ public static class FlatVerify
                 foreach (var arg in call.Args)
                     VerifyTypedLeaf(arg, ctx, "extern-call argument");
                 VerifyCallResult(call.Type, call.DestSlot, ctx, $"extern '{call.Sig}'");
+                UdonAbiVerifier.VerifyInvocation(call, ctx.TypeFacts, ctx.Function.Name);
                 break;
 
             case CExprStmt { Expr: CInternalCall call }:

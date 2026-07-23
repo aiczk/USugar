@@ -9,7 +9,8 @@ public class UdonAbiBinderTests
     {
         const string signature =
             "SystemTextStringBuilder.__get_Chars__SystemInt32__SystemChar";
-        var binder = new UdonAbiBinder(new UdonAbiCatalog(new[] { signature }));
+        var binder = new UdonAbiBinder(
+            UdonAbiCatalog.FromNamesForTests(new[] { signature }));
 
         var bound = binder.BindIndexerGetter(
             "SystemTextStringBuilder",
@@ -25,7 +26,8 @@ public class UdonAbiBinderTests
     {
         const string signature =
             "ExampleBuffer.__set_Item__SystemInt32_SystemString";
-        var binder = new UdonAbiBinder(new UdonAbiCatalog(new[] { signature }));
+        var binder = new UdonAbiBinder(
+            UdonAbiCatalog.FromNamesForTests(new[] { signature }));
 
         var bound = binder.BindIndexerSetter(
             "ExampleBuffer",
@@ -39,7 +41,7 @@ public class UdonAbiBinderTests
     [Fact]
     public void ExactBindingRejectsUnregisteredCandidateImmediately()
     {
-        var binder = new UdonAbiBinder(new UdonAbiCatalog(new[]
+        var binder = new UdonAbiBinder(UdonAbiCatalog.FromNamesForTests(new[]
         {
             "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32",
         }));

@@ -314,6 +314,7 @@ public static class CoreVerify
             case CExternCall call:
                 foreach (var arg in call.Args)
                     VerifyExpr(arg, ctx, allowAddr: true); // out/ref params take a CFieldAddr
+                UdonAbiVerifier.VerifyInvocation(call, ctx.TypeFacts, ctx.Func.Name);
                 break;
 
             case CInternalCall call:

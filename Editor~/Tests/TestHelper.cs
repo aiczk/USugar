@@ -8,10 +8,10 @@ namespace USugar.Tests;
 public static class TestHelper
 {
     public static readonly UdonAbiCatalog RegistryFacts
-        = new(ExternRegistry.All);
+        = UdonAbiCatalog.FromNamesForTests(ExternRegistry.All);
 
     public static BoundExtern BindExtern(string signature)
-        => new UdonAbiCatalog(new[] { signature }).Require(signature);
+        => UdonAbiCatalog.FromNamesForTests(new[] { signature }).Require(signature);
 
     public static string StubSource => Stubs;
 

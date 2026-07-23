@@ -232,12 +232,9 @@ static class USugarCompilationOrchestrator
                 return;
             }
 
-            var validExterns = new HashSet<string>(
-                UdonEditorManager.Instance.GetNodeDefinitions()
-                    .Select(d => d.fullName)
-                    .Where(n => !string.IsNullOrEmpty(n)));
             // CA-M0 B79: registry-truth for class support — the set of udon type names that carry any extern.
-            var externRegistry = new UdonAbiCatalog(validExterns);
+            var externRegistry = UdonAbiCatalogFactory.Create(
+                UdonEditorManager.Instance.GetNodeDefinitions());
             using var externScope = ExternResolver.UseRegistry(externRegistry);
             Mark("extern-set");
 
