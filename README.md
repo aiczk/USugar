@@ -73,12 +73,6 @@ Existing UdonSharp scripts are then compiled through USugar.
 
 Disable **USugar > Override Compiler** to return to the standard compiler.
 
-Run **USugar > Compile > UdonSharp** to compile with the standard compiler and export its UASM to `Library/USugarCache/Reference/` for comparison.
-
-### Debugging
-
-Each USugar compilation writes `Library/USugarCache/{ClassName}/uasm.txt`.
-
 ## Limitations
 
 USugar reports a compile error when the Udon VM cannot preserve the source program's C# semantics.

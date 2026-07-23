@@ -110,7 +110,7 @@ static class USugarCompilationOrchestrator
             lastMark = now;
         }
         var classTimes = new System.Collections.Concurrent.ConcurrentBag<(string name, double ms)>();
-        double assembleMs = 0, storeMs = 0, uasmIoMs = 0;
+        double assembleMs = 0, storeMs = 0;
 
         try
         {
@@ -283,16 +283,6 @@ static class USugarCompilationOrchestrator
                 }
                 count++;
 
-                // UASM output goes to same directory as IR dumps
-                var ns = result.Symbol.ContainingNamespace?.IsGlobalNamespace == false
-                    ? result.Symbol.ContainingNamespace.ToDisplayString() + "." : "";
-                var className = $"{ns}{result.Symbol.Name}";
-                var opSw = System.Diagnostics.Stopwatch.StartNew();
-                var classDir = Path.Combine("Library", "USugarCache", className);
-                Directory.CreateDirectory(classDir);
-                File.WriteAllText(Path.Combine(classDir, "uasm.txt"), result.Uasm);
-                uasmIoMs += opSw.Elapsed.TotalMilliseconds;
-
                 // Merge emitter diagnostics. Anything not explicitly "Warning" is treated as an error
                 // (default-deny: a typo'd severity must not silently demote to a shipped program).
                 bool hasEmitError = false;
@@ -332,7 +322,7 @@ static class USugarCompilationOrchestrator
                         continue;
                     }
 
-                    opSw.Restart();
+                    var opSw = System.Diagnostics.Stopwatch.StartNew();
                     var program = USugarConstantApplier.AssembleUasm(result.Uasm, result.HeapSize);
                     assembleMs += opSw.Elapsed.TotalMilliseconds;
                     if (program != null)
@@ -394,7 +384,7 @@ static class USugarCompilationOrchestrator
             USugarLog.Info(
                 "Compile breakdown (ms): "
                 + string.Join(", ", marks.Select(m => $"{m.label}={m.ms:F0}"))
-                + $" | apply detail: uasm-io={uasmIoMs:F0}, assemble={assembleMs:F0}, store={storeMs:F0}"
+                + $" | apply detail: assemble={assembleMs:F0}, store={storeMs:F0}"
                 + $" | emit cpu-sum={emitSum:F0} over {classTimes.Count} classes, slowest: {slowest}");
             var msg = failures > 0
                 ? $"Compile of {count} script{(count != 1 ? "s" : "")} finished in {sw.Elapsed:mm\\:ss\\.fff} ({failures} failed)"
