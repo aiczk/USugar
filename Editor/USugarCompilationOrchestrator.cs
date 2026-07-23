@@ -7,10 +7,12 @@ using System.Security.Cryptography;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using UnityEditor;
+using UnityEditor.Compilation;
 using UdonSharp;
 using UdonSharp.Compiler;
 using VRC.Udon.Editor;
 using VRC.SDK3.UdonNetworkCalling;
+using UnityCompilationAssembly = UnityEditor.Compilation.Assembly;
 
 /// <summary>
 /// Orchestrates the 3-phase compile pipeline: serial preparation, parallel emit, serial apply.
@@ -25,6 +27,7 @@ static class USugarCompilationOrchestrator
 
     const string FingerprintKey = "USugar_LastFingerprint";
     const string AppliedKey = "USugar_LastApplied";
+    const string TargetAssemblyName = "Assembly-CSharp";
 
     internal struct EmitResult
     {
@@ -565,6 +568,16 @@ static class USugarCompilationOrchestrator
         // program built against stale defines. Sorted so a benign reorder is not a false cache miss.
         foreach (var d in BuildPreprocessorDefines().OrderBy(s => s, StringComparer.Ordinal))
             writer.Write(d);
+        // A referenced asmdef can change the semantic model without touching Assembly-CSharp sources.
+        // Fold the exact Unity reference graph and each output identity into the fingerprint so a helper
+        // assembly rebuild cannot reuse programs compiled against stale metadata.
+        foreach (var referencePath in GetMetadataReferencePaths(GetTargetCompilationAssembly()))
+        {
+            writer.Write(referencePath);
+            var file = new FileInfo(referencePath);
+            writer.Write(file.Length);
+            writer.Write(file.LastWriteTimeUtc.Ticks);
+        }
         writer.Flush();
         ms.Position = 0;
         var hash = md5.ComputeHash(ms);
@@ -584,19 +597,16 @@ static class USugarCompilationOrchestrator
 
     internal static List<string> CollectSourcePaths()
     {
-        var paths = new List<string>();
-        foreach (var guid in AssetDatabase.FindAssets("t:MonoScript", new[] { "Assets" }))
-        {
-            var path = AssetDatabase.GUIDToAssetPath(guid);
-            if (!path.EndsWith(".cs")) continue;
-            if (path.Contains("/Editor/") || path.Contains("/Editor~/")
-                || path.Contains("/Tests/") || path.Contains("/Tests~/")) continue;
-            paths.Add(path);
-        }
-        return paths;
+        var target = GetTargetCompilationAssembly();
+        RejectUnsupportedBehaviourAssemblies(target);
+        return target.sourceFiles
+            .Where(path => path.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
+            .Where(IsAssetPath)
+            .Select(Path.GetFullPath)
+            .OrderBy(path => path, StringComparer.Ordinal)
+            .ToList();
     }
 
-    static MetadataReference[] _cachedMetadataRefs;
     static readonly Dictionary<string, (string sourceText, string defineKey, SyntaxTree tree)> _treeCache = new();
 
     // Preprocessor symbols for parsing user Udon sources. Mirrors stock UdonSharp's GetProjectDefines with
@@ -606,8 +616,9 @@ static class USugarCompilationOrchestrator
     // compiled the WRONG #if branch for any platform/SDK/custom-symbol guard the user wrote.
     static string[] BuildPreprocessorDefines()
     {
-        var defines = new List<string>();
-        foreach (var d in UnityEditor.EditorUserBuildSettings.activeScriptCompilationDefines)
+        var target = GetTargetCompilationAssembly();
+        var defines = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var d in target.defines)
             if (!d.StartsWith("UNITY_EDITOR"))
                 defines.Add(d);
         defines.Add("COMPILER_UDONSHARP");
@@ -645,14 +656,87 @@ static class USugarCompilationOrchestrator
             if (!pathSet.Contains(key))
                 _treeCache.Remove(key);
 
-        _cachedMetadataRefs ??= AppDomain.CurrentDomain.GetAssemblies()
-            .Where(a => !a.IsDynamic && !string.IsNullOrEmpty(a.Location))
-            .Where(a => !a.GetName().Name.StartsWith("Assembly-CSharp"))
-            .Select(a => MetadataReference.CreateFromFile(a.Location))
+        var target = GetTargetCompilationAssembly();
+        var referencePaths = GetMetadataReferencePaths(target);
+        var metadataReferences = referencePaths
+            .Select(path => MetadataReference.CreateFromFile(path))
             .Cast<MetadataReference>()
             .ToArray();
 
-        return CSharpCompilation.Create("USugarCompilation", trees, _cachedMetadataRefs,
+        return CSharpCompilation.Create("USugarCompilation", trees, metadataReferences,
             new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+    }
+
+    static string[] GetMetadataReferencePaths(UnityCompilationAssembly assembly)
+        => assembly.compiledAssemblyReferences
+            .Concat(assembly.assemblyReferences.Select(reference => reference.outputPath))
+            .Where(path => !string.IsNullOrEmpty(path))
+            .Select(Path.GetFullPath)
+            .Where(File.Exists)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(path => path, StringComparer.Ordinal)
+            .ToArray();
+
+    static UnityCompilationAssembly GetTargetCompilationAssembly()
+    {
+        var assembly = CompilationPipeline.GetAssemblies(AssembliesType.Player)
+            .FirstOrDefault(candidate => candidate.name == TargetAssemblyName);
+        if (assembly == null)
+            throw new InvalidOperationException(
+                $"Unity player assembly '{TargetAssemblyName}' was not found. "
+                + "USugar compilation requires at least one runtime script outside an asmdef.");
+        return assembly;
+    }
+
+    static bool IsAssetPath(string path)
+    {
+        if (string.IsNullOrEmpty(path)) return false;
+        var fullPath = Path.GetFullPath(path)
+            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var assetsRoot = Path.GetFullPath(UnityEngine.Application.dataPath)
+            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        return fullPath.StartsWith(
+            assetsRoot + Path.DirectorySeparatorChar,
+            StringComparison.OrdinalIgnoreCase);
+    }
+
+    static void RejectUnsupportedBehaviourAssemblies(UnityCompilationAssembly target)
+    {
+        var loadedAssemblies = AppDomain.CurrentDomain.GetAssemblies()
+            .Where(assembly => !assembly.IsDynamic)
+            .GroupBy(assembly => assembly.GetName().Name, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
+        var unsupported = new List<string>();
+
+        foreach (var assembly in CompilationPipeline.GetAssemblies(AssembliesType.Player))
+        {
+            if (assembly.name == target.name || !assembly.sourceFiles.Any(IsAssetPath))
+                continue;
+            if (!loadedAssemblies.TryGetValue(assembly.name, out var loaded))
+                continue;
+
+            foreach (var type in GetLoadableTypes(loaded))
+                if (type != null && type != typeof(UdonSharpBehaviour)
+                    && typeof(UdonSharpBehaviour).IsAssignableFrom(type))
+                    unsupported.Add($"{type.FullName} ({assembly.name})");
+        }
+
+        if (unsupported.Count > 0)
+            throw new NotSupportedException(
+                "UdonSharpBehaviour types in custom asmdefs are not supported by USugar's "
+                + $"single-assembly planner: {string.Join(", ", unsupported.OrderBy(x => x, StringComparer.Ordinal))}. "
+                + $"Move these behaviours to {TargetAssemblyName}; referenced helper asmdefs remain supported as metadata.");
+    }
+
+    static IEnumerable<Type> GetLoadableTypes(System.Reflection.Assembly assembly)
+    {
+        try
+        {
+            return assembly.GetTypes();
+        }
+        catch (ReflectionTypeLoadException ex)
+        {
+            return ex.Types.Where(type => type != null);
+        }
     }
 }
