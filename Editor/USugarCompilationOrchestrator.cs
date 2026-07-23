@@ -10,7 +10,9 @@ using UnityEditor;
 using UnityEditor.Compilation;
 using UdonSharp;
 using UdonSharp.Compiler;
+using VRC.Udon;
 using VRC.Udon.Editor;
+using VRC.Udon.Common.Interfaces;
 using VRC.SDK3.UdonNetworkCalling;
 using UnityCompilationAssembly = UnityEditor.Compilation.Assembly;
 
@@ -33,6 +35,7 @@ static class USugarCompilationOrchestrator
         public IReadOnlyList<string> SourcePaths { get; }
         public CSharpCompilation Compilation { get; set; }
         public LayoutPlanner Planner { get; set; }
+        public IReadOnlyList<(INamedTypeSymbol symbol, SyntaxTree tree)> Behaviours { get; set; }
 
         public CompilationUnit(UnityCompilationAssembly unityAssembly, IReadOnlyList<string> sourcePaths)
         {
@@ -73,6 +76,21 @@ static class USugarCompilationOrchestrator
                 ErrorDiagnostics = new() { (file, line, character, message, "Error") }
             };
         }
+    }
+
+    sealed class PreparedApply
+    {
+        public EmitResult Result;
+        public UdonSharpProgramAsset Asset;
+        public AbstractSerializedUdonProgramAsset SerializedAsset;
+        public IUdonProgram Program;
+        public Dictionary<string, FieldDefinition> FieldDefinitions;
+        public NetworkCallingEntrypointMetadata[] NetworkMetadata;
+        public int SyncMode;
+        public UdonSharpProgramAsset AssetSnapshot;
+        public UnityEngine.Object SerializedAssetSnapshot;
+        public Dictionary<string, FieldDefinition> PreviousFieldDefinitions;
+        public NetworkCallingEntrypointMetadata[] PreviousNetworkMetadata;
     }
 
     internal static void RequestCompile()
@@ -125,6 +143,7 @@ static class USugarCompilationOrchestrator
         }
         var classTimes = new System.Collections.Concurrent.ConcurrentBag<(string name, double ms)>();
         double assembleMs = 0, storeMs = 0;
+        var preparedApplies = new List<PreparedApply>();
 
         try
         {
@@ -164,7 +183,10 @@ static class USugarCompilationOrchestrator
             Mark("extern-set");
 
             foreach (var unit in compilationUnits)
+            {
                 unit.Compilation = BuildCompilation(unit);
+                unit.Behaviours = CollectBehaviourDeclarations(unit.Compilation);
+            }
             PruneTreeCache(compilationUnits.SelectMany(unit => unit.SourcePaths));
             Mark("build-compilation");
 
@@ -188,6 +210,44 @@ static class USugarCompilationOrchestrator
                     var message = diag.GetMessage();
                     USugarLog.Error($"{file}({line},{character}): {message}");
                     collectedDiagnostics.Add((file, line, character, message, "Error"));
+                }
+                LastCompileHadErrors = true;
+                return;
+            }
+
+            // A referenced project asmdef is metadata in this compilation. Its symbols have no
+            // usable source body/layout here, and treating them like SDK externs can silently drop
+            // inherited Udon members. Fail closed until cross-assembly source bodies are represented
+            // in one symbol/semantic-model universe.
+            var projectSourceAssemblyNames = new HashSet<string>(
+                CompilationPipeline.GetAssemblies(AssembliesType.Player)
+                    .Where(assembly => assembly.sourceFiles.Any(IsAssetPath))
+                    .Select(assembly => assembly.name),
+                StringComparer.OrdinalIgnoreCase);
+            var crossAssemblyIssues = compilationUnits
+                .SelectMany(unit => CrossAssemblySourceGuard.FindIssues(
+                    unit.Compilation, projectSourceAssemblyNames,
+                    unit.Behaviours.Select(item => item.symbol))
+                    .Where(issue => RequiresCrossAssemblySource(issue.Symbol))
+                    .Select(issue => (unit, issue)))
+                .GroupBy(item => item.unit.UnityAssembly.name + "|" + item.issue.FilePath
+                    + "|" + item.issue.ReferencedAssembly, StringComparer.Ordinal)
+                .Select(group => group.First())
+                .ToArray();
+            if (crossAssemblyIssues.Length > 0)
+            {
+                foreach (var (unit, issue) in crossAssemblyIssues)
+                {
+                    var message =
+                        $"Runtime user symbol '{issue.SymbolName}' comes from Unity assembly "
+                        + $"'{issue.ReferencedAssembly}', but behaviour assembly "
+                        + $"'{unit.UnityAssembly.name}' cannot inline source bodies/layouts across asmdefs. "
+                        + "Keep each Udon behaviour, its user base classes, and runtime helper types "
+                        + "in the same asmdef.";
+                    USugarLog.Error(
+                        $"{issue.FilePath}({issue.Line},{issue.Character}): {message}");
+                    collectedDiagnostics.Add((
+                        issue.FilePath, issue.Line, issue.Character, message, "Error"));
                 }
                 LastCompileHadErrors = true;
                 return;
@@ -222,21 +282,8 @@ static class USugarCompilationOrchestrator
             {
                 unit.Planner = new LayoutPlanner(unit.Compilation);
                 unit.Planner.PrepareCompilation();
-                var seenClassSymbols = new HashSet<INamedTypeSymbol>(SymbolEqualityComparer.Default);
-                foreach (var tree in unit.Compilation.SyntaxTrees)
-                {
-                    var model = unit.Compilation.GetSemanticModel(tree);
-                    foreach (var classDecl in tree.GetRoot().DescendantNodes()
-                        .OfType<Microsoft.CodeAnalysis.CSharp.Syntax.ClassDeclarationSyntax>())
-                    {
-                        var symbol = model.GetDeclaredSymbol(classDecl) as INamedTypeSymbol;
-                        if (symbol == null) continue;
-                        var isBehaviour = IsUdonSharpBehaviour(symbol);
-                        if (!isBehaviour) continue;
-                        if (!seenClassSymbols.Add(symbol)) continue;
-                        classList.Add((symbol, tree, unit.Compilation, unit.Planner));
-                    }
-                }
+                foreach (var (symbol, tree) in unit.Behaviours)
+                    classList.Add((symbol, tree, unit.Compilation, unit.Planner));
             }
             Mark("semantic-models");
 
@@ -266,18 +313,19 @@ static class USugarCompilationOrchestrator
                 {
                     var inner = ex is TargetInvocationException tie
                         && tie.InnerException != null ? tie.InnerException : ex;
-                    // Use class name + declaration position for error location
-                    var className = symbol.Name;
+                    // Use the declaration's actual source path so editor diagnostics remain clickable.
+                    var filePath = tree.FilePath ?? "";
                     var line = 0;
                     var character = 0;
                     var syntaxRef = symbol.DeclaringSyntaxReferences.FirstOrDefault();
                     if (syntaxRef != null)
                     {
+                        filePath = syntaxRef.SyntaxTree.FilePath ?? filePath;
                         var span = syntaxRef.SyntaxTree.GetLineSpan(syntaxRef.Span);
                         line = span.StartLinePosition.Line + 1;
                         character = span.StartLinePosition.Character + 1;
                     }
-                    emitResults.Add(EmitResult.Error(symbol, tree, planner, className, line, character,
+                    emitResults.Add(EmitResult.Error(symbol, tree, planner, filePath, line, character,
                         $"Failed to compile {symbol.Name}: {inner.Message}"));
                 }
                 finally
@@ -288,11 +336,15 @@ static class USugarCompilationOrchestrator
             Mark("emit-wall");
 
             // ── Phase 3: Serial apply ──
-            // OrderBy class name for deterministic output order (ConcurrentBag yields in arbitrary order).
-            int count = 0, failures = 0;
-            foreach (var result in emitResults
+            // Order by assembly and fully-qualified type for deterministic output
+            // (ConcurrentBag yields in arbitrary order).
+            var orderedResults = emitResults
                 .OrderBy(r => r.Symbol.ContainingAssembly.Identity.Name, StringComparer.Ordinal)
-                .ThenBy(r => r.Symbol.ToDisplayString(), StringComparer.Ordinal))
+                .ThenBy(r => r.Symbol.ToDisplayString(), StringComparer.Ordinal)
+                .ToArray();
+            var validResults = new List<EmitResult>();
+            int count = 0, failures = 0;
+            foreach (var result in orderedResults)
             {
                 if (result.IsError)
                 {
@@ -328,8 +380,12 @@ static class USugarCompilationOrchestrator
                     failures++;
                     continue;
                 }
+                validResults.Add(result);
+            }
 
-                if (applyToAssets)
+            if (applyToAssets && failures == 0)
+            {
+                foreach (var result in validResults)
                 {
                     var programAsset = USugarTypeCacheManager.FindProgramAsset(result.Symbol.Name,
                         result.Tree.FilePath, programAssetLookup);
@@ -348,32 +404,58 @@ static class USugarCompilationOrchestrator
                     var opSw = System.Diagnostics.Stopwatch.StartNew();
                     var program = USugarConstantApplier.AssembleUasm(result.Uasm, result.HeapSize);
                     assembleMs += opSw.Elapsed.TotalMilliseconds;
-                    if (program != null)
+                    if (program == null)
                     {
-                        opSw.Restart();
+                        var failMsg = $"Failed to assemble UASM for {result.Symbol.Name}";
+                        USugarLog.Error(failMsg);
+                        collectedDiagnostics.Add((result.Tree.FilePath, 0, 0, failMsg, "Error"));
+                        failures++;
+                        continue;
+                    }
+                    try
+                    {
                         USugarConstantApplier.ApplyConstantValues(program, result.Constants);
-                        programAsset.fieldDefinitions = USugarTypeCacheManager.BuildFieldDefinitions(result.Symbol);
+                        var fieldDefinitions =
+                            USugarTypeCacheManager.BuildFieldDefinitions(result.Symbol);
                         // [NetworkCallable] entry-point metadata — required for SendCustomNetworkEvent with
                         // parameters (the runtime looks up the event + its param types via this metadata).
                         var netMeta = BuildNetworkCallingMetadata(result.Symbol, result.Planner);
-                        if (netMeta.Length > 0)
+                        var serializedAsset = programAsset.SerializedProgramAsset;
+                        if (serializedAsset == null)
+                            throw new InvalidOperationException(
+                                $"Serialized program asset is missing for {result.Symbol.Name}");
+                        var assetSnapshot = UnityEngine.Object.Instantiate(programAsset);
+                        UnityEngine.Object serializedSnapshot;
+                        try
                         {
-                            programAsset.SetNetworkCallingMetadata(netMeta);
-                            programAsset.SerializedProgramAsset.StoreProgram(program, netMeta);
+                            serializedSnapshot = UnityEngine.Object.Instantiate(serializedAsset);
                         }
-                        else
-                            programAsset.SerializedProgramAsset.StoreProgram(program);
-                        programAsset.CompiledVersion = UdonSharpProgramVersion.CurrentVersion;
-                        var syncMode = USugarCompilerHelper.GetBehaviourSyncMode(result.Symbol);
-                        if (syncMode >= 0)
-                            programAsset.behaviourSyncMode = (BehaviourSyncMode)syncMode;
-                        EditorUtility.SetDirty(programAsset);
-                        PushUasmToEditorCache(programAsset, result.Uasm);
-                        storeMs += opSw.Elapsed.TotalMilliseconds;
+                        catch
+                        {
+                            UnityEngine.Object.DestroyImmediate(assetSnapshot);
+                            throw;
+                        }
+                        preparedApplies.Add(new PreparedApply
+                        {
+                            Result = result,
+                            Asset = programAsset,
+                            SerializedAsset = serializedAsset,
+                            Program = program,
+                            FieldDefinitions = fieldDefinitions,
+                            NetworkMetadata = netMeta,
+                            SyncMode = USugarCompilerHelper.GetBehaviourSyncMode(result.Symbol),
+                            AssetSnapshot = assetSnapshot,
+                            SerializedAssetSnapshot = serializedSnapshot,
+                            PreviousFieldDefinitions = programAsset.fieldDefinitions,
+                            PreviousNetworkMetadata =
+                                serializedAsset.GetNetworkCallingMetadata()?.ToArray()
+                                ?? Array.Empty<NetworkCallingEntrypointMetadata>()
+                        });
                     }
-                    else
+                    catch (Exception ex)
                     {
-                        var failMsg = $"Failed to assemble UASM for {result.Symbol.Name}";
+                        var failMsg =
+                            $"Failed to prepare program asset for {result.Symbol.Name}: {ex.Message}";
                         USugarLog.Error(failMsg);
                         collectedDiagnostics.Add((result.Tree.FilePath, 0, 0, failMsg, "Error"));
                         failures++;
@@ -381,13 +463,85 @@ static class USugarCompilationOrchestrator
                 }
             }
 
-            Mark("apply-loop");
-            if (applyToAssets && count > 0)
+            Mark("apply-preflight");
+            var commitSucceeded = false;
+            if (applyToAssets && failures == 0)
             {
-                InvalidateSerializationCaches();
-                AssetDatabase.SaveAssets();
+                try
+                {
+                    foreach (var prepared in preparedApplies)
+                    {
+                        var opSw = System.Diagnostics.Stopwatch.StartNew();
+                        var programAsset = prepared.Asset;
+                        programAsset.fieldDefinitions = prepared.FieldDefinitions;
+                        programAsset.SetNetworkCallingMetadata(prepared.NetworkMetadata);
+                        if (prepared.NetworkMetadata.Length > 0)
+                            prepared.SerializedAsset.StoreProgram(
+                                prepared.Program, prepared.NetworkMetadata);
+                        else
+                            prepared.SerializedAsset.StoreProgram(prepared.Program);
+                        programAsset.CompiledVersion = UdonSharpProgramVersion.CurrentVersion;
+                        if (prepared.SyncMode >= 0)
+                            programAsset.behaviourSyncMode = (BehaviourSyncMode)prepared.SyncMode;
+                        EditorUtility.SetDirty(programAsset);
+                        EditorUtility.SetDirty(prepared.SerializedAsset);
+                        storeMs += opSw.Elapsed.TotalMilliseconds;
+                    }
+                    AssetDatabase.SaveAssets();
+                    commitSucceeded = true;
+                }
+                catch (Exception ex)
+                {
+                    var message = $"Program asset commit failed and was rolled back: {ex.Message}";
+                    USugarLog.Error(message);
+                    collectedDiagnostics.Add(("", 0, 0, message, "Error"));
+                    failures++;
+                    foreach (var prepared in preparedApplies)
+                    {
+                        try
+                        {
+                            EditorUtility.CopySerialized(
+                                prepared.AssetSnapshot, prepared.Asset);
+                            EditorUtility.CopySerialized(
+                                prepared.SerializedAssetSnapshot, prepared.SerializedAsset);
+                            prepared.Asset.fieldDefinitions = prepared.PreviousFieldDefinitions;
+                            prepared.Asset.SetNetworkCallingMetadata(
+                                prepared.PreviousNetworkMetadata);
+                            EditorUtility.SetDirty(prepared.Asset);
+                            EditorUtility.SetDirty(prepared.SerializedAsset);
+                        }
+                        catch (Exception rollbackEx)
+                        {
+                            var rollbackMessage =
+                                $"Failed to roll back {prepared.Result.Symbol.Name}: "
+                                + rollbackEx.Message;
+                            USugarLog.Error(rollbackMessage);
+                            collectedDiagnostics.Add((
+                                prepared.Result.Tree.FilePath, 0, 0,
+                                rollbackMessage, "Error"));
+                        }
+                    }
+                    try
+                    {
+                        AssetDatabase.SaveAssets();
+                    }
+                    catch (Exception rollbackSaveEx)
+                    {
+                        var rollbackMessage =
+                            "Failed to save rolled-back program assets: "
+                            + rollbackSaveEx.Message;
+                        USugarLog.Error(rollbackMessage);
+                        collectedDiagnostics.Add(("", 0, 0, rollbackMessage, "Error"));
+                    }
+                }
             }
-            Mark("save-assets");
+            if (commitSucceeded && preparedApplies.Count > 0)
+            {
+                foreach (var prepared in preparedApplies)
+                    PushUasmToEditorCache(prepared.Asset, prepared.Result.Uasm);
+                InvalidateSerializationCaches();
+            }
+            Mark("apply-and-save");
 
             sw.Stop();
             LastCompileHadErrors = failures > 0;
@@ -422,7 +576,28 @@ static class USugarCompilationOrchestrator
         }
         finally
         {
+            DestroyApplySnapshots(preparedApplies);
             PushDiagnosticsToEditorCache(collectedDiagnostics);
+        }
+    }
+
+    static void DestroyApplySnapshots(IEnumerable<PreparedApply> preparedApplies)
+    {
+        foreach (var prepared in preparedApplies)
+        {
+            try
+            {
+                if (prepared.AssetSnapshot != null)
+                    UnityEngine.Object.DestroyImmediate(prepared.AssetSnapshot);
+                if (prepared.SerializedAssetSnapshot != null)
+                    UnityEngine.Object.DestroyImmediate(prepared.SerializedAssetSnapshot);
+            }
+            catch (Exception ex)
+            {
+                USugarLog.Warn(
+                    $"Failed to destroy apply snapshot for {prepared.Result.Symbol.Name}: "
+                    + ex.Message);
+            }
         }
     }
 
@@ -581,7 +756,7 @@ static class USugarCompilationOrchestrator
                 writer.Write(referencePath);
                 if (!referenceIdentities.TryGetValue(referencePath, out var identity))
                 {
-                    identity = ComputeFileContentHash(referencePath);
+                    identity = ManagedModuleIdentity.GetIdentity(referencePath);
                     referenceIdentities.Add(referencePath, identity);
                 }
                 writer.Write(identity);
@@ -595,8 +770,6 @@ static class USugarCompilationOrchestrator
 
     static string ComputeFileContentHash(string path)
     {
-        // Byte identity is stronger than size + mtime and covers managed producers that do not
-        // guarantee a content-derived module MVID.
         using var sha256 = SHA256.Create();
         using var stream = File.OpenRead(path);
         return BitConverter.ToString(sha256.ComputeHash(stream));
@@ -611,6 +784,34 @@ static class USugarCompilationOrchestrator
             baseType = baseType.BaseType;
         }
         return false;
+    }
+
+    static IReadOnlyList<(INamedTypeSymbol symbol, SyntaxTree tree)>
+        CollectBehaviourDeclarations(CSharpCompilation compilation)
+    {
+        var declarations = new List<(INamedTypeSymbol symbol, SyntaxTree tree)>();
+        var seen = new HashSet<INamedTypeSymbol>(SymbolEqualityComparer.Default);
+        foreach (var tree in compilation.SyntaxTrees)
+        {
+            var model = compilation.GetSemanticModel(tree);
+            foreach (var declaration in tree.GetRoot().DescendantNodes()
+                .OfType<Microsoft.CodeAnalysis.CSharp.Syntax.ClassDeclarationSyntax>())
+            {
+                if (model.GetDeclaredSymbol(declaration) is not INamedTypeSymbol symbol
+                    || !IsUdonSharpBehaviour(symbol)
+                    || !seen.Add(symbol))
+                    continue;
+                declarations.Add((symbol, tree));
+            }
+        }
+        return declarations;
+    }
+
+    static bool RequiresCrossAssemblySource(ISymbol symbol)
+    {
+        var type = symbol as INamedTypeSymbol ?? symbol?.ContainingType;
+        if (type == null || type.TypeKind == TypeKind.Enum) return false;
+        return !ExternResolver.ClassHasRegisteredExterns(type);
     }
 
     internal static List<CompilationUnit> CollectCompilationUnits()

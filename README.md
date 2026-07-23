@@ -86,6 +86,8 @@ USugar reports a compile error when the Udon VM cannot preserve the source progr
 - User classes can cross program boundaries through typed fields, methods, and interfaces, but erasure to `object`, network sync, and `[NetworkCallable]` are restricted.
 - Delegates whose signatures contain user classes are limited to private, same-program use.
 - Mutable static state belongs to each generated Udon program rather than a global runtime.
+- A behaviour, its user base classes, and runtime helper types must belong to the same asmdef.
+  Metadata-only attributes, enums, and registered Udon extern types may be referenced across asmdefs.
 
 ## Compiler design
 
