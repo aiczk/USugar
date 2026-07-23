@@ -11,20 +11,14 @@ using VRC.Udon;
 /// </summary>
 static class USugarProxySerialization
 {
-    static readonly FieldInfo HeapStorageBehaviour = typeof(UdonHeapStorageInterface)
-        .GetField("behaviour", BindingFlags.Instance | BindingFlags.NonPublic);
-    static readonly FieldInfo VariableStorageBehaviour = typeof(UdonVariableStorageInterface)
-        .GetField("udonBehaviour", BindingFlags.Instance | BindingFlags.NonPublic);
-    static readonly MethodInfo IsExternType = typeof(UdonSharpProgramAsset).Assembly
-        .GetType("UdonSharp.Compiler.Udon.CompilerUdonInterface")
-        ?.GetMethod("IsExternType", BindingFlags.Public | BindingFlags.Static);
-
     internal static bool TryCreateStorage(
         UdonHeapStorageInterface heapStorage,
         string fieldName,
         out IValueStorage storage)
     {
-        var behaviour = HeapStorageBehaviour?.GetValue(heapStorage) as UdonBehaviour;
+        var behaviour = RequireBinding(
+            USugarReflectionTargets.HeapStorageBehaviour,
+            nameof(USugarReflectionTargets.HeapStorageBehaviour)).GetValue(heapStorage) as UdonBehaviour;
         return TryCreateStorage(behaviour, fieldName, out storage);
     }
 
@@ -33,7 +27,9 @@ static class USugarProxySerialization
         string fieldName,
         out IValueStorage storage)
     {
-        var behaviour = VariableStorageBehaviour?.GetValue(variableStorage) as UdonBehaviour;
+        var behaviour = RequireBinding(
+            USugarReflectionTargets.VariableStorageBehaviour,
+            nameof(USugarReflectionTargets.VariableStorageBehaviour)).GetValue(variableStorage) as UdonBehaviour;
         return TryCreateStorage(behaviour, fieldName, out storage);
     }
 
@@ -46,10 +42,13 @@ static class USugarProxySerialization
         if (behaviour?.programSource is not UdonSharpProgramAsset asset
             || asset.fieldDefinitions == null
             || !asset.fieldDefinitions.TryGetValue(fieldName, out var definition)
-            || definition.SystemType != typeof(object[])
-            || !TryGetProxyFieldType(behaviour, fieldName, out var proxyType)
-            || proxyType == typeof(object[])
-            || IsUdonSharpJaggedArray(proxyType))
+            || definition.SystemType != typeof(object[]))
+            return false;
+        if (!TryGetProxyFieldType(behaviour, fieldName, out var proxyType))
+            throw new InvalidOperationException(
+                $"USugar cannot resolve proxy field '{fieldName}' on '{behaviour.name}'. "
+                + "Refusing to pass an object[] ABI field to the stock UdonSharp serializer.");
+        if (proxyType == typeof(object[]) || IsUdonSharpJaggedArray(proxyType))
             return false;
         storage = (IValueStorage)Activator.CreateInstance(
             typeof(OpaqueProxyStorage<>).MakeGenericType(proxyType),
@@ -74,7 +73,10 @@ static class USugarProxySerialization
 
         try
         {
-            return IsExternType?.Invoke(null, new object[] { leaf }) as bool? == true;
+            return RequireBinding(
+                    USugarReflectionTargets.IsExternTypeMethod,
+                    nameof(USugarReflectionTargets.IsExternTypeMethod))
+                .Invoke(null, new object[] { leaf }) as bool? == true;
         }
         catch
         {
@@ -95,15 +97,28 @@ static class USugarProxySerialization
              type != null && type != typeof(UdonSharpBehaviour);
              type = type.BaseType)
         {
-            var field = type.GetField(fieldName,
-                BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic
-                | BindingFlags.DeclaredOnly);
-            if (field == null) continue;
-            fieldType = field.FieldType;
-            return true;
+            const BindingFlags flags = BindingFlags.Instance | BindingFlags.Public
+                | BindingFlags.NonPublic | BindingFlags.DeclaredOnly;
+            var field = type.GetField(fieldName, flags);
+            if (field != null)
+            {
+                fieldType = field.FieldType;
+                return true;
+            }
+            var property = type.GetProperty(fieldName, flags);
+            if (property != null)
+            {
+                fieldType = property.PropertyType;
+                return true;
+            }
         }
         return false;
     }
+
+    static T RequireBinding<T>(T binding, string name) where T : MemberInfo
+        => binding ?? throw new MissingMemberException(
+            $"Required UdonSharp reflection target '{name}' is unavailable. "
+            + "USugar proxy serialization is disabled to protect object[] ABI fields.");
 
     sealed class OpaqueProxyStorage<T> : ValueStorage<T>
     {

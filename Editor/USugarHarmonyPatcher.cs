@@ -15,15 +15,24 @@ static class USugarHarmonyPatcher
 
     internal static void Initialize()
     {
-        USugarReflectionTargets.Validate();
         if (USugarCompiler.OverrideEnabled)
             ApplyPatches();
+        else
+            USugarReflectionTargets.Validate();
         EditorApplication.playModeStateChanged += OnPlayModeChanged;
     }
 
     internal static void ApplyPatches()
     {
         if (_harmony != null) return;
+        if (!USugarReflectionTargets.Validate())
+        {
+            USugarCompiler.OverrideEnabled = false;
+            USugarCompilationOrchestrator.LastCompileHadErrors = true;
+            USugarLog.Error(
+                "Compiler override disabled because required UdonSharp reflection targets are unavailable.");
+            return;
+        }
 
         var compilerType = USugarReflectionTargets.CompilerType;
         if (compilerType == null)
@@ -32,59 +41,73 @@ static class USugarHarmonyPatcher
             return;
         }
 
-        _harmony = new Harmony(HarmonyId);
+        var harmony = new Harmony(HarmonyId);
         var redirect = new HarmonyMethod(typeof(USugarHarmonyPatcher), nameof(Prefix_Redirect));
         var redirectSync = new HarmonyMethod(typeof(USugarHarmonyPatcher), nameof(Prefix_RedirectSync));
 
-        // Redirect CompileAllCsPrograms
-        var compileAll = typeof(UdonSharpProgramAsset)
-            .GetMethod("CompileAllCsPrograms", BindingFlags.Public | BindingFlags.Static);
-        if (compileAll != null)
+        try
         {
-            if (_harmony.Patch(compileAll, prefix: redirect) == null)
-                USugarLog.Warn("Harmony patch failed: UdonSharpProgramAsset.CompileAllCsPrograms");
-        }
+            // Redirect CompileAllCsPrograms
+            var compileAll = typeof(UdonSharpProgramAsset)
+                .GetMethod("CompileAllCsPrograms", BindingFlags.Public | BindingFlags.Static);
+            if (compileAll != null)
+            {
+                if (harmony.Patch(compileAll, prefix: redirect) == null)
+                    USugarLog.Warn("Harmony patch failed: UdonSharpProgramAsset.CompileAllCsPrograms");
+            }
 
-        // Redirect Compile(UdonSharpCompileOptions) and CompileSync(UdonSharpCompileOptions)
-        var compile = compilerType.GetMethod("Compile", BindingFlags.Public | BindingFlags.Static);
-        if (compile != null)
-        {
-            if (_harmony.Patch(compile, prefix: redirect) == null)
-                USugarLog.Warn($"Harmony patch failed: {compilerType.Name}.Compile");
-        }
+            // Redirect Compile(UdonSharpCompileOptions) and CompileSync(UdonSharpCompileOptions)
+            var compile = compilerType.GetMethod("Compile", BindingFlags.Public | BindingFlags.Static);
+            if (compile != null)
+            {
+                if (harmony.Patch(compile, prefix: redirect) == null)
+                    USugarLog.Warn($"Harmony patch failed: {compilerType.Name}.Compile");
+            }
 
-        if (USugarReflectionTargets.CompileSyncMethod != null)
-        {
-            if (_harmony.Patch(USugarReflectionTargets.CompileSyncMethod, prefix: redirectSync) == null)
-                USugarLog.Warn($"Harmony patch failed: {compilerType.Name}.CompileSync");
-        }
+            if (USugarReflectionTargets.CompileSyncMethod != null)
+            {
+                if (harmony.Patch(USugarReflectionTargets.CompileSyncMethod, prefix: redirectSync) == null)
+                    USugarLog.Warn($"Harmony patch failed: {compilerType.Name}.CompileSync");
+            }
 
-        // Override AnyUdonSharpScriptHasError
-        var errorCheck = typeof(UdonSharpProgramAsset)
-            .GetMethod("AnyUdonSharpScriptHasError", BindingFlags.Public | BindingFlags.Static);
-        if (errorCheck != null)
-        {
-            if (_harmony.Patch(errorCheck, prefix: new HarmonyMethod(typeof(USugarHarmonyPatcher), nameof(Prefix_NoError))) == null)
-                USugarLog.Warn("Harmony patch failed: UdonSharpProgramAsset.AnyUdonSharpScriptHasError");
-        }
+            // Override AnyUdonSharpScriptHasError
+            var errorCheck = typeof(UdonSharpProgramAsset)
+                .GetMethod("AnyUdonSharpScriptHasError", BindingFlags.Public | BindingFlags.Static);
+            if (errorCheck != null)
+            {
+                if (harmony.Patch(errorCheck, prefix: new HarmonyMethod(
+                        typeof(USugarHarmonyPatcher), nameof(Prefix_NoError))) == null)
+                    USugarLog.Warn("Harmony patch failed: UdonSharpProgramAsset.AnyUdonSharpScriptHasError");
+            }
 
-        var getElementStorage = typeof(UdonHeapStorageInterface)
-            .GetMethod(nameof(UdonHeapStorageInterface.GetElementStorage), BindingFlags.Public | BindingFlags.Instance);
-        if (getElementStorage != null
-            && _harmony.Patch(getElementStorage,
-                prefix: new HarmonyMethod(typeof(USugarHarmonyPatcher), nameof(Prefix_ProxyStorage))) == null)
-            USugarLog.Warn("Harmony patch failed: UdonHeapStorageInterface.GetElementStorage");
-
-        var getVariableStorage = typeof(UdonVariableStorageInterface)
-            .GetMethod(nameof(UdonVariableStorageInterface.GetElementStorage),
-                BindingFlags.Public | BindingFlags.Instance);
-        if (getVariableStorage != null
-            && _harmony.Patch(getVariableStorage,
+            var heapStoragePatched = harmony.Patch(
+                USugarReflectionTargets.HeapGetElementStorageMethod,
+                prefix: new HarmonyMethod(typeof(USugarHarmonyPatcher), nameof(Prefix_ProxyStorage))) != null;
+            var variableStoragePatched = harmony.Patch(
+                USugarReflectionTargets.VariableGetElementStorageMethod,
                 prefix: new HarmonyMethod(typeof(USugarHarmonyPatcher),
-                    nameof(Prefix_VariableProxyStorage))) == null)
-            USugarLog.Warn("Harmony patch failed: UdonVariableStorageInterface.GetElementStorage");
+                    nameof(Prefix_VariableProxyStorage))) != null;
+            if (!heapStoragePatched || !variableStoragePatched)
+                throw new System.InvalidOperationException(
+                    "The proxy-storage isolation patches could not be applied.");
 
-        USugarLog.Info("Compiler override applied");
+            _harmony = harmony;
+            USugarLog.Info("Compiler override applied");
+        }
+        catch (System.Exception ex)
+        {
+            USugarCompiler.OverrideEnabled = false;
+            USugarCompilationOrchestrator.LastCompileHadErrors = true;
+            try
+            {
+                harmony.UnpatchAll(HarmonyId);
+            }
+            catch (System.Exception cleanupEx)
+            {
+                USugarLog.Error($"Failed to roll back partial Harmony patches: {cleanupEx}");
+            }
+            USugarLog.Error($"Compiler override disabled after an atomic patch failure: {ex}");
+        }
     }
 
     internal static void RemovePatches()

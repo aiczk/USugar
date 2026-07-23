@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Reflection;
 using UdonSharp;
+using UdonSharp.Serialization;
 using UnityEngine;
 
 /// <summary>
@@ -46,6 +47,8 @@ static class USugarReflectionTargets
         UdonSharpAsm.GetType("UdonSharp.Compiler.Udon.CompilerUdonInterface");
     internal static readonly MethodInfo AssembleMethod =
         UdonInterfaceType?.GetMethod("Assemble", BindingFlags.Public | BindingFlags.Static);
+    internal static readonly MethodInfo IsExternTypeMethod =
+        UdonInterfaceType?.GetMethod("IsExternType", BindingFlags.Public | BindingFlags.Static);
 
     // Serialization cache types (for InvalidateSerializationCaches)
     internal static readonly Type VarStorageType =
@@ -57,9 +60,25 @@ static class USugarReflectionTargets
     internal static readonly Type EmittedFormatterOpenType =
         FormatterEmitterType?.GetNestedType("EmittedFormatter`1", BindingFlags.NonPublic);
 
-    // Bindings whose ABSENCE breaks correctness — either no codegen applies at all (CompilerType / AssembleMethod /
-    // UdonInterfaceType / EditorCacheType) or the OdinSerializer formatter cache cannot be cleared, risking STALE
-    // serialized program data (VarStorageType / FormatterEmitterType / FormattersField / EmittedFormatterOpenType).
+    // Proxy storage internals. Missing either behaviour field makes the storage prefix unable to
+    // distinguish a USugar object[] ABI field from stock UdonSharp storage.
+    internal static readonly FieldInfo HeapStorageBehaviour =
+        typeof(UdonHeapStorageInterface).GetField(
+            "behaviour", BindingFlags.Instance | BindingFlags.NonPublic);
+    internal static readonly FieldInfo VariableStorageBehaviour =
+        typeof(UdonVariableStorageInterface).GetField(
+            "udonBehaviour", BindingFlags.Instance | BindingFlags.NonPublic);
+    internal static readonly MethodInfo HeapGetElementStorageMethod =
+        typeof(UdonHeapStorageInterface).GetMethod(
+            nameof(UdonHeapStorageInterface.GetElementStorage),
+            BindingFlags.Public | BindingFlags.Instance);
+    internal static readonly MethodInfo VariableGetElementStorageMethod =
+        typeof(UdonVariableStorageInterface).GetMethod(
+            nameof(UdonVariableStorageInterface.GetElementStorage),
+            BindingFlags.Public | BindingFlags.Instance);
+
+    // Bindings whose ABSENCE breaks correctness — either no codegen applies, the OdinSerializer formatter
+    // cache cannot be cleared, or USugar object[] ABI fields cannot be isolated from proxy serialization.
     // A null critical binding fails LOUD at domain load so an SDK rename is visible immediately, instead of silently
     // no-op'ing the override or stranding stale serialization. The rest (diagnostics / UASM display) merely degrade
     // the inspector and stay at Warn.
@@ -67,19 +86,26 @@ static class USugarReflectionTargets
     {
         nameof(CompilerType), nameof(AssembleMethod), nameof(UdonInterfaceType), nameof(EditorCacheType),
         nameof(VarStorageType), nameof(FormatterEmitterType), nameof(FormattersField), nameof(EmittedFormatterOpenType),
+        nameof(IsExternTypeMethod), nameof(HeapStorageBehaviour), nameof(VariableStorageBehaviour),
+        nameof(HeapGetElementStorageMethod), nameof(VariableGetElementStorageMethod),
     };
 
-    internal static void Validate()
+    internal static bool Validate()
     {
+        var valid = true;
         var fields = typeof(USugarReflectionTargets).GetFields(BindingFlags.Static | BindingFlags.NonPublic);
         foreach (var f in fields)
         {
             if (f.GetValue(null) != null) continue;
             if (CriticalBindings.Contains(f.Name))
+            {
                 USugarLog.Error($"CRITICAL reflection target not found: {f.Name} — the UdonSharp SDK may have changed. USugar codegen will not apply correctly (or serialized data may be stale); check USugarReflectionTargets.");
+                valid = false;
+            }
             else
                 USugarLog.Warn($"Reflection target not found: {f.Name} (a display/diagnostic feature may be degraded)");
         }
+        return valid;
     }
 
     internal static object GetEditorCacheInstance()
