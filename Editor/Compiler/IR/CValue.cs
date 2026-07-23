@@ -174,12 +174,56 @@ public sealed class CSelect : CValue
 /// <summary>Cross-behaviour call (SetProgramVariable* + SendCustomEvent + GetProgramVariable*).
 /// Stays opaque/atomic until expanded in CoreFlatten — never exposed to structured optimizers.
 ///</summary>
+public sealed class CrossCallParameter
+{
+    public readonly int Ordinal;
+    public readonly string Id;
+    public readonly StorageType StorageType;
+    public readonly CLeaf Value;
+
+    public CrossCallParameter(int ordinal, string id, StorageType storageType, CLeaf value)
+    {
+        Ordinal = ordinal;
+        Id = id;
+        StorageType = storageType;
+        Value = value;
+    }
+
+    public override string ToString() => $"{Ordinal}:{Id}:{StorageType}";
+}
+
+/// <summary>
+/// Complete typed heap/event transport ABI for one cross-program call. Keeping this plan in Core
+/// IR lets verification prove copy-in/copy-out types before lowering erases the target signature.
+/// </summary>
+public sealed class CrossCallTransportPlan
+{
+    public readonly string EventName;
+    public readonly IReadOnlyList<CrossCallParameter> Parameters;
+    public readonly IReadOnlyList<ReturnSlot> Returns;
+    public readonly StorageType ResultType;
+
+    public CrossCallTransportPlan(string eventName, IReadOnlyList<CrossCallParameter> parameters,
+        IReadOnlyList<ReturnSlot> returns, StorageType resultType)
+    {
+        EventName = eventName ?? throw new ArgumentNullException(nameof(eventName));
+        Parameters = parameters == null
+            ? Array.Empty<CrossCallParameter>()
+            : new List<CrossCallParameter>(parameters).AsReadOnly();
+        Returns = returns == null
+            ? Array.Empty<ReturnSlot>()
+            : new List<ReturnSlot>(returns).AsReadOnly();
+        ResultType = resultType;
+    }
+}
+
 public sealed class CCrossCall : CValue
 {
     public readonly CLeaf Instance;
-    public readonly string EventName;
-    public readonly List<(string ParamName, CLeaf Value)> Params; // SetProgramVariable pairs
-    public readonly IReadOnlyList<ReturnSlot> Returns;             // empty for void
+    public readonly CrossCallTransportPlan Transport;
+    public string EventName => Transport.EventName;
+    public IReadOnlyList<CrossCallParameter> Params => Transport.Parameters;
+    public IReadOnlyList<ReturnSlot> Returns => Transport.Returns;
     /// <summary>Wave-12 r2 [V1]: this cross dispatch can land back on THIS program's own recursion
     /// cycle (same-typed / base-typed / interface-typed variable receiver holding `this` at runtime)
     /// — LowerCrossCall marks the SendCustomEvent Reentrant (with the param copy-ins inside the
@@ -187,17 +231,15 @@ public sealed class CCrossCall : CValue
     /// CFunction.ReentrantSiteCount at the CoreBuilder.CrossCall creation choke point.</summary>
     public readonly bool Reentrant;
 
-    public CCrossCall(CLeaf instance, string eventName,
-        List<(string, CLeaf)> parameters, IReadOnlyList<ReturnSlot> returns, StorageType retType,
-        bool reentrant = false) : base(retType)
+    public CCrossCall(CLeaf instance, CrossCallTransportPlan transport,
+        bool reentrant = false) : base(transport?.ResultType
+            ?? throw new ArgumentNullException(nameof(transport)))
     {
         Instance = instance ?? throw new ArgumentNullException(nameof(instance));
-        EventName = eventName ?? throw new ArgumentNullException(nameof(eventName));
-        Params = parameters ?? new List<(string, CLeaf)>();
-        Returns = returns ?? Array.Empty<ReturnSlot>();
+        Transport = transport;
         Reentrant = reentrant;
     }
 
     public override string ToString() =>
-        $"cross_call {Instance}.{EventName}({string.Join(", ", Params.ConvertAll(p => p.ParamName))}):{Type}";
+        $"cross_call {Instance}.{EventName}({string.Join(", ", Params)}):{Type}";
 }

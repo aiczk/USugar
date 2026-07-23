@@ -866,7 +866,7 @@ public partial class InvocationHandler
         // (= SetProgramVariable stores of already-evaluated leaves) are emitted in ordinal order so a
         // named call is byte-identical to its declaration-order twin (positional calls unchanged:
         // textual order IS ordinal order).
-        var paramPairs = CrossCallArgPairs(op.Arguments, ifaceMl.ParamIds.ToArray());
+        var paramPairs = CrossCallArguments(op.Arguments, target, ifaceMl.ParamIds);
 
         // Wave-12 r2 [V1]: an interface dispatch whose local implementation is a recursion-cycle
         // edge from the current method re-enters this program when the receiver is `this` — flag
@@ -896,7 +896,7 @@ public partial class InvocationHandler
 
         // Build param pairs for CCrossCall — by parameter ordinal, textual evaluation order
         // (wave-9 round-3 [W4]: named/reordered args used to bind positionally on this path).
-        var paramPairs = CrossCallArgPairs(op.Arguments, paramIds);
+        var paramPairs = CrossCallArguments(op.Arguments, target, paramIds);
 
         // Wave-12 r2 [V1]: a same-family variable-receiver dispatch on a recursion-cycle edge
         // re-enters this program when the receiver is `this` — flag the SendCustomEvent as a spill

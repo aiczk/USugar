@@ -257,7 +257,7 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
                     throw new System.InvalidOperationException(
                         $"Event accessor '{accessor.Name}' has {paramIds.Length} parameters; expected one.");
                 CrossCall(stagedReceiver, exportName,
-                    new List<(string, CLeaf)> { (paramIds[0], handlerValue) },
+                    CrossCallParameters(accessor, paramIds, new[] { handlerValue }),
                     System.Array.Empty<ReturnSlot>(), StorageTypes.Void,
                     TryMarkReentrantCrossDispatch(op, accessor));
                 return null;

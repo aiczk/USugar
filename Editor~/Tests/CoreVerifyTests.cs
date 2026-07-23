@@ -316,4 +316,64 @@ public class CoreVerifyTests
 
         CoreVerify.Verify(module); // should not throw
     }
+
+    [Fact]
+    public void Verifier_CrossCallParameterTypeMismatch_Throws()
+    {
+        var module = new CModule();
+        var func = module.AddFunction("test");
+        var transport = new CrossCallTransportPlan(
+            "Call",
+            new[] {
+                new CrossCallParameter(
+                    0, "value", StorageTypes.Int32, new CConst("bad", StorageTypes.String))
+            },
+            System.Array.Empty<ReturnSlot>(),
+            StorageTypes.Void);
+        func.Body.Stmts.Add(new CExprStmt(new CCrossCall(
+            new CConst(null, StorageTypes.UdonEventReceiver), transport)));
+
+        var ex = Assert.Throws<VerificationException>(() => CoreVerify.Verify(module));
+        Assert.Contains("CCrossCall parameter 0", ex.Message);
+    }
+
+    [Fact]
+    public void Verifier_CrossCallWithTypedTransport_Passes()
+    {
+        var module = new CModule();
+        var func = module.AddFunction("test");
+        var transport = new CrossCallTransportPlan(
+            "Call",
+            new[] {
+                new CrossCallParameter(
+                    0, "value", StorageTypes.Int32, new CConst(42, StorageTypes.Int32))
+            },
+            new[] { new ReturnSlot("result", StorageTypes.String) },
+            StorageTypes.String);
+        func.NewSlot(StorageTypes.String, SlotClass.Scratch);
+        func.Body.Stmts.Add(new CAssign(0, new CCrossCall(
+            new CConst(null, StorageTypes.UdonEventReceiver), transport)));
+
+        CoreVerify.Verify(module);
+    }
+
+    [Fact]
+    public void Verifier_CrossCallNonCanonicalOrdinal_Throws()
+    {
+        var module = new CModule();
+        var func = module.AddFunction("test");
+        var transport = new CrossCallTransportPlan(
+            "Call",
+            new[] {
+                new CrossCallParameter(
+                    1, "value", StorageTypes.Int32, new CConst(42, StorageTypes.Int32))
+            },
+            System.Array.Empty<ReturnSlot>(),
+            StorageTypes.Void);
+        func.Body.Stmts.Add(new CExprStmt(new CCrossCall(
+            new CConst(null, StorageTypes.UdonEventReceiver), transport)));
+
+        var ex = Assert.Throws<VerificationException>(() => CoreVerify.Verify(module));
+        Assert.Contains("expected canonical ordinal 0", ex.Message);
+    }
 }

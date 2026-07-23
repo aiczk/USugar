@@ -357,12 +357,12 @@ public class DeconstructionAssignmentHandler : AssignmentHandlerBase, IOperation
 
         // SetProgramVariable for each param — by parameter ordinal, textual evaluation order
         // (wave-9 round-3 [W4]: named/reordered args used to bind positionally on this path too).
-        foreach (var (paramId, argVal) in CrossCallArgPairs(invocation.Arguments, paramIds))
+        foreach (var parameter in CrossCallArguments(invocation.Arguments, callTarget, paramIds))
         {
-            var nameConst = Const(paramId, StorageTypes.String);
+            var nameConst = Const(parameter.Id, StorageTypes.String);
             EmitExternVoid(
                 ExternResolver.EventReceiverSetProgramVariable,
-                new List<CLeaf> { instanceVal, nameConst, argVal });
+                new List<CLeaf> { instanceVal, nameConst, parameter.Value });
         }
 
         // SendCustomEvent

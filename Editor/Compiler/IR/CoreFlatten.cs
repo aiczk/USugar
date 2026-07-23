@@ -337,11 +337,15 @@ public static class CoreFlatten
         // Instance, param values, and the string-constant operands are all CLeaf — already flat.
         var inst = cc.Instance;
 
-        foreach (var (paramName, value) in cc.Params)
+        foreach (var parameter in cc.Params)
         {
             ctx.Current.Stmts.Add(new CExprStmt(new CExternCall(
                 ExternResolver.EventReceiverSetProgramVariable,
-                new List<CLeaf> { inst, new CConst(paramName, StorageTypes.String), value }, StorageTypes.Void, null)));
+                new List<CLeaf> {
+                    inst,
+                    new CConst(parameter.Id, StorageTypes.String),
+                    parameter.Value
+                }, StorageTypes.Void, null)));
         }
 
         // Wave-12 r2 [V1]: a reentrant cross dispatch flags its SendCustomEvent as the §4.3 spill
@@ -368,10 +372,11 @@ public static class CoreFlatten
         {
             foreach (var ret in cc.Returns)
             {
-                var dest = ctx.AllocScratch(StorageTypes.Object);
+                var dest = ctx.AllocScratch(ret.StorageType);
                 ctx.Current.Stmts.Add(new CExprStmt(new CExternCall(
                     ExternResolver.EventReceiverGetProgramVariable,
-                    new List<CLeaf> { inst, new CConst(ret.Id, StorageTypes.String) }, StorageTypes.Object, dest)));
+                    new List<CLeaf> { inst, new CConst(ret.Id, StorageTypes.String) },
+                    ret.StorageType, dest)));
             }
         }
 

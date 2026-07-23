@@ -406,9 +406,10 @@ public abstract partial class HandlerBase
     /// leaf); void or multi-return → side-effecting statement (returns null). reentrant: wave-12 r2
     /// [V1] — this dispatch can re-enter the containing function (see TryMarkReentrantCrossDispatch).</summary>
     protected CSlotRef CrossCall(CLeaf instance, string eventName,
-        List<(string, CLeaf)> parameters, IReadOnlyList<ReturnSlot> returns, StorageType retType,
+        IReadOnlyList<CrossCallParameter> parameters, IReadOnlyList<ReturnSlot> returns, StorageType retType,
         bool reentrant = false)
-        => _builder.CrossCall(instance, eventName, parameters, returns, retType, reentrant);
+        => _builder.CrossCall(instance,
+            new CrossCallTransportPlan(eventName, parameters, returns, retType), reentrant);
 
     /// <summary>Create a select (ternary) expression.</summary>
     protected CSlotRef Select(CLeaf cond, CLeaf trueVal, CLeaf falseVal, StorageType type)
@@ -2527,12 +2528,10 @@ public abstract partial class HandlerBase
     {
         RejectProgramLocalCrossBehaviourAccessor(accessor); // CW22
         var (exportName, paramIds, _) = GetCalleeLayout(accessor);
-        var pairs = new List<(string, CLeaf)>();
-        for (int i = 0; i < orderedArgs.Count && i < paramIds.Length; i++)
-            pairs.Add((paramIds[i], orderedArgs[i]));
+        var parameters = CrossCallParameters(accessor, paramIds, orderedArgs);
         var returns = accessor.ReturnsVoid ? System.Array.Empty<ReturnSlot>() : GetCalleeReturns(accessor);
         var retType = accessor.ReturnsVoid ? "SystemVoid" : GetStorageTypeName(accessor.ReturnType);
-        return CrossCall(instanceVal, exportName, pairs, returns, new StorageType(retType), reentrant);
+        return CrossCall(instanceVal, exportName, parameters, returns, new StorageType(retType), reentrant);
     }
 
     /// <summary>[W6] gate shared by the read/write/compound indexer sites: a user-behaviour indexer
@@ -2628,15 +2627,13 @@ public abstract partial class HandlerBase
         List<CLeaf> orderedArgs, bool reentrant = false)
     {
         RejectProgramLocalCrossBehaviourAccessor(accessor); // CW22
-        var pairs = new List<(string, CLeaf)>();
-        for (int i = 0; i < orderedArgs.Count && i < ml.ParamIds.Count; i++)
-            pairs.Add((ml.ParamIds[i], orderedArgs[i]));
+        var parameters = CrossCallParameters(accessor, ml.ParamIds, orderedArgs);
         var rets = ml.Returns.ToArray();
         if (rets.Length > 1)
-            return CrossCall(instanceVal, ml.ExportName, pairs, rets, StorageTypes.Void, reentrant);
+            return CrossCall(instanceVal, ml.ExportName, parameters, rets, StorageTypes.Void, reentrant);
         var dispatchName = LayoutPlanner.InterfaceDispatchName(accessor, ml);
         var retType = accessor.ReturnsVoid ? "SystemVoid" : GetStorageTypeName(accessor.ReturnType);
-        return CrossCall(instanceVal, dispatchName, pairs,
+        return CrossCall(instanceVal, dispatchName, parameters,
             accessor.ReturnsVoid ? System.Array.Empty<ReturnSlot>() : rets, new StorageType(retType), reentrant);
     }
 
@@ -2650,10 +2647,17 @@ public abstract partial class HandlerBase
     /// its declaration-order twin). IInvocationOperation.Arguments is call-site-ordered for
     /// named args — pairing by textual index bound names positionally on every cross-dispatch
     /// path (VM-proven ref=54 vs usugar=45). Positional calls are unchanged (textual == ordinal).</summary>
-    protected List<(string, CLeaf)> CrossCallArgPairs(
-        System.Collections.Immutable.ImmutableArray<IArgumentOperation> args, string[] paramIds)
+    protected List<CrossCallParameter> CrossCallArguments(
+        System.Collections.Immutable.ImmutableArray<IArgumentOperation> args, IMethodSymbol target,
+        IReadOnlyList<string> paramIds)
     {
-        var byOrdinal = new CLeaf[paramIds.Length];
+        if (target == null) throw new ArgumentNullException(nameof(target));
+        if (paramIds == null || paramIds.Count != target.Parameters.Length)
+            throw new InvalidOperationException(
+                $"Cross-call ABI for '{target}' has {paramIds?.Count ?? 0} parameter ids; "
+                + $"expected {target.Parameters.Length}.");
+
+        var byOrdinal = new CLeaf[target.Parameters.Length];
         for (int i = 0; i < args.Length; i++)
         {
             if (args[i].Value.Type is { } argTy)
@@ -2666,11 +2670,34 @@ public abstract partial class HandlerBase
             var ordinal = p != null && p.Ordinal >= 0 && p.Ordinal < byOrdinal.Length ? p.Ordinal : i;
             byOrdinal[ordinal] = VisitExpression(args[i].Value);
         }
-        var pairs = new List<(string, CLeaf)>();
+        var parameters = new List<CrossCallParameter>(byOrdinal.Length);
         for (int o = 0; o < byOrdinal.Length; o++)
-            if (byOrdinal[o] != null)
-                pairs.Add((paramIds[o], byOrdinal[o]));
-        return pairs;
+        {
+            if (byOrdinal[o] == null)
+                throw new InvalidOperationException(
+                    $"Cross-call argument {o} for '{target}' was not materialized.");
+            parameters.Add(new CrossCallParameter(
+                o, paramIds[o], GetStorageType(target.Parameters[o].Type), byOrdinal[o]));
+        }
+        return parameters;
+    }
+
+    protected List<CrossCallParameter> CrossCallParameters(IMethodSymbol target,
+        IReadOnlyList<string> paramIds, IReadOnlyList<CLeaf> orderedArguments)
+    {
+        if (target == null) throw new ArgumentNullException(nameof(target));
+        if (paramIds == null || orderedArguments == null
+            || paramIds.Count != target.Parameters.Length
+            || orderedArguments.Count != target.Parameters.Length)
+            throw new InvalidOperationException(
+                $"Cross-call ABI for '{target}' requires {target.Parameters.Length} parameters, got "
+                + $"{paramIds?.Count ?? 0} ids and {orderedArguments?.Count ?? 0} values.");
+
+        var parameters = new List<CrossCallParameter>(target.Parameters.Length);
+        for (int i = 0; i < target.Parameters.Length; i++)
+            parameters.Add(new CrossCallParameter(
+                i, paramIds[i], GetStorageType(target.Parameters[i].Type), orderedArguments[i]));
+        return parameters;
     }
 
     protected (string exportName, string[] paramIds, string retId) GetCalleeLayout(IMethodSymbol target)

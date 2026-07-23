@@ -298,11 +298,43 @@ public static class CoreVerify
 
             case CCrossCall cc:
                 VerifyExpr(cc.Instance, ctx); // SetProgramVariable receiver/values — addresses rejected
-                foreach (var (_, value) in cc.Params)
-                    VerifyExpr(value, ctx);
-                // Note: param value type checking against the target method's parameter types
-                // is not possible here — the Core IR only stores param names, not the target method's
-                // type signature. Type errors will surface at runtime via Udon VM.
+                if (string.IsNullOrEmpty(cc.EventName))
+                    throw new VerificationException(
+                        $"CCrossCall has an empty event name (function '{ctx.Func.Name}')");
+                var parameterIds = new HashSet<string>(StringComparer.Ordinal);
+                for (int i = 0; i < cc.Params.Count; i++)
+                {
+                    var parameter = cc.Params[i];
+                    if (parameter == null)
+                        throw new VerificationException(
+                            $"CCrossCall parameter {i} is null (function '{ctx.Func.Name}')");
+                    if (parameter.Ordinal != i)
+                        throw new VerificationException(
+                            $"CCrossCall parameter '{parameter.Id}' has ordinal {parameter.Ordinal}; "
+                            + $"expected canonical ordinal {i} (function '{ctx.Func.Name}')");
+                    if (string.IsNullOrEmpty(parameter.Id) || !parameterIds.Add(parameter.Id))
+                        throw new VerificationException(
+                            $"CCrossCall has an empty or duplicate parameter id '{parameter.Id}' "
+                            + $"(function '{ctx.Func.Name}')");
+                    VerifyExpr(parameter.Value, ctx);
+                    ctx.AssertType(parameter.StorageType, parameter.Value.Type,
+                        $"CCrossCall parameter {parameter.Ordinal} ('{parameter.Id}')");
+                }
+
+                var returnIds = new HashSet<string>(StringComparer.Ordinal);
+                foreach (var returnSlot in cc.Returns)
+                {
+                    if (returnSlot == null || string.IsNullOrEmpty(returnSlot.Id)
+                        || !returnIds.Add(returnSlot.Id))
+                        throw new VerificationException(
+                            $"CCrossCall has an empty or duplicate return id '{returnSlot?.Id}' "
+                            + $"(function '{ctx.Func.Name}')");
+                }
+                if (cc.Returns.Count == 1)
+                    ctx.AssertType(cc.Returns[0].StorageType, cc.Type, "CCrossCall result");
+                else
+                    ctx.AssertType(StorageTypes.Void, cc.Type,
+                        cc.Returns.Count == 0 ? "CCrossCall void result" : "CCrossCall tuple result");
                 break;
 
             case CFuncRef:

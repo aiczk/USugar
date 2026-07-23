@@ -197,7 +197,7 @@ public partial class InvocationHandler
                     ? new[] { new ReturnSlot(getRetId, new StorageType(returnType)) }
                     : System.Array.Empty<ReturnSlot>();
                 return CrossCall(instanceVal, getExportName,
-                    new List<(string, CLeaf)>(), getReturns, new StorageType(returnType),
+                    System.Array.Empty<CrossCallParameter>(), getReturns, new StorageType(returnType),
                     TryMarkReentrantCrossDispatch(op, op.Property.GetMethod)); // wave-12 r2 [V1]
             }
         }
@@ -215,7 +215,8 @@ public partial class InvocationHandler
             RejectProgramLocalCrossBehaviourPropertyRead(op.Property); // CW22
             var ifaceInst = VisitExpression(op.Instance);
             return CrossCall(ifaceInst, LayoutPlanner.InterfaceDispatchName(ifaceGetter, ifaceGetterMl),
-                new List<(string, CLeaf)>(), ifaceGetterMl.Returns.ToArray(), new StorageType(returnType),
+                System.Array.Empty<CrossCallParameter>(), ifaceGetterMl.Returns.ToArray(),
+                new StorageType(returnType),
                 TryMarkReentrantCrossDispatch(op, ifaceGetter)); // wave-12 r2 [V1]
         }
 

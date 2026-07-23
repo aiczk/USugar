@@ -207,16 +207,15 @@ public sealed class CoreBuilder
     /// side-effecting statement at the current insertion point and return null. Binding at the construction
     /// point keeps the SendCustomEvent in program order; ternary branches construct their cross-call inside
     /// the branch block (VisitConditionalExpression uses EmitIf, not CSelect), so the bind is conditional.</summary>
-    public CSlotRef CrossCall(CLeaf instance, string eventName,
-        List<(string, CLeaf)> parameters, IReadOnlyList<ReturnSlot> returns, StorageType retType,
+    public CSlotRef CrossCall(CLeaf instance, CrossCallTransportPlan transport,
         bool reentrant = false)
     {
         // Wave-12 r2 [V1]: a reentrant cross dispatch is a §4.3 spill site — the flag is counted here
         // (creation choke point) and materialized on the SendCustomEvent by CoreFlatten.LowerCrossCall.
         if (reentrant) CurrentFunction.ReentrantSiteCount++;
-        var cc = new CCrossCall(instance, eventName, parameters, returns, retType, reentrant);
-        if (retType == StorageTypes.Void) { Emit(new CExprStmt(cc)); return null; }
-        return Bind(cc, retType);
+        var cc = new CCrossCall(instance, transport, reentrant);
+        if (transport.ResultType == StorageTypes.Void) { Emit(new CExprStmt(cc)); return null; }
+        return Bind(cc, transport.ResultType);
     }
 
     // The reentrant flag (design §4.3) marks a delegate-dispatch arm that can re-enter the containing

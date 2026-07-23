@@ -85,10 +85,12 @@ public class CoreFlattenTests
     {
         var builder = Begin(out var function);
         var value = builder.CrossCall(
-            builder.Const(null, StorageTypes.UdonEventReceiver), "Call",
-            new List<(string, CLeaf)>(),
-            new[] { new ReturnSlot("result", StorageTypes.Int32) },
-            StorageTypes.Int32);
+            builder.Const(null, StorageTypes.UdonEventReceiver),
+            new CrossCallTransportPlan(
+                "Call",
+                System.Array.Empty<CrossCallParameter>(),
+                new[] { new ReturnSlot("result", StorageTypes.Int32) },
+                StorageTypes.Int32));
         var slotCount = function.Slots.Count;
 
         CoreFlatten.Lower(function);
@@ -102,6 +104,32 @@ public class CoreFlattenTests
                 resultCall = call;
         Assert.NotNull(resultCall);
         Assert.Equal(value.SlotId, resultCall.DestSlot);
+    }
+
+    [Fact]
+    public void TupleCrossCall_LowersEachReturnAtItsDeclaredType()
+    {
+        var builder = Begin(out var function);
+        builder.CrossCall(
+            builder.Const(null, StorageTypes.UdonEventReceiver),
+            new CrossCallTransportPlan(
+                "Call",
+                System.Array.Empty<CrossCallParameter>(),
+                new[] {
+                    new ReturnSlot("number", StorageTypes.Int32),
+                    new ReturnSlot("text", StorageTypes.String)
+                },
+                StorageTypes.Void));
+
+        CoreFlatten.Lower(function);
+
+        var resultTypes = new List<StorageType>();
+        foreach (var block in function.FlatBlocks)
+        foreach (var statement in block.Stmts)
+            if (statement is CExprStmt expr && expr.Expr is CExternCall call
+                && call.Sig == ExternResolver.EventReceiverGetProgramVariable)
+                resultTypes.Add(call.Type);
+        Assert.Equal(new[] { StorageTypes.Int32, StorageTypes.String }, resultTypes);
     }
 
     static int CountAssignmentsTo(CFunction function, int slot)
