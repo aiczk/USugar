@@ -86,6 +86,14 @@ USugar reports a compile error when the Udon VM cannot preserve the source progr
 - User classes can cross program boundaries through typed fields, methods, and interfaces, but erasure to `object`, network sync, and `[NetworkCallable]` are restricted.
 - Delegates whose signatures contain user classes are limited to private, same-program use.
 - Mutable static state belongs to each generated Udon program rather than a global runtime.
+- Non-tail recursion uses a shared software stack with 8,192 object slots. Effective recursion
+  depth depends on the number of values live across each recursive call.
+- User classes, delegates, tuples, and other `object[]`-backed values cannot round-trip through
+  the standard UdonSharp proxy/Inspector. USugar rejects serialized fields with those
+  representations; mark runtime-only fields `[NonSerialized]` and initialize them in code.
+- Each source `MonoScript` must resolve to exactly one `UdonSharpBehaviour` and one
+  `UdonSharpProgramAsset`. Missing, duplicate, renamed, or orphaned bindings fail compilation
+  instead of reusing a program by class name.
 - A behaviour, its user base classes, and runtime helper types must belong to the same asmdef.
   Metadata-only attributes, enums, and registered Udon extern types may be referenced across asmdefs.
 
@@ -101,7 +109,8 @@ C# source
 ```
 
 Each runtime Unity assembly is compiled independently with its own asmdef references and
-preprocessor symbols.
+preprocessor symbols. Source files reported by Unity's compilation pipeline are accepted from
+both `Assets/` and resolved `Packages/` locations.
 
 USugar first builds one per-behaviour compilation plan.
 The plan records reachable bodies, callable definitions, generic specializations, user-class type objects, and field initializers.

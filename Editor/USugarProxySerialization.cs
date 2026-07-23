@@ -48,7 +48,7 @@ static class USugarProxySerialization
             throw new InvalidOperationException(
                 $"USugar cannot resolve proxy field '{fieldName}' on '{behaviour.name}'. "
                 + "Refusing to pass an object[] ABI field to the stock UdonSharp serializer.");
-        if (proxyType == typeof(object[]) || IsUdonSharpJaggedArray(proxyType))
+        if (!RequiresOpaqueStorage(proxyType, definition.SystemType))
             return false;
         storage = (IValueStorage)Activator.CreateInstance(
             typeof(OpaqueProxyStorage<>).MakeGenericType(proxyType),
@@ -56,34 +56,28 @@ static class USugarProxySerialization
         return true;
     }
 
-    static bool IsUdonSharpJaggedArray(Type type)
+    internal static bool RequiresOpaqueStorage(Type proxyType, Type systemType)
     {
-        if (!type.IsArray || type.GetElementType()?.IsArray != true)
-            return false;
-
-        var leaf = type;
-        while (leaf.IsArray)
-            leaf = leaf.GetElementType();
-
-        if (typeof(Delegate).IsAssignableFrom(leaf)
-            || leaf.FullName?.StartsWith("System.ValueTuple`", StringComparison.Ordinal) == true)
-            return false;
-        if (leaf.IsEnum || typeof(UdonSharpBehaviour).IsAssignableFrom(leaf))
-            return true;
-
-        try
-        {
-            return RequireBinding(
+        return USugarEditorIntegrationPolicy.RequiresOpaqueObjectArrayStorage(
+            proxyType,
+            systemType,
+            type =>
+            {
+                try
+                {
+                    return RequireBinding(
                     USugarReflectionTargets.IsExternTypeMethod,
                     nameof(USugarReflectionTargets.IsExternTypeMethod))
-                .Invoke(null, new object[] { leaf }) as bool? == true;
-        }
-        catch
-        {
-            // A failed SDK probe is handled conservatively: isolate the field instead of letting
-            // UdonSharp write CLR objects into an object[] that uses the USugar bundle ABI.
-            return false;
-        }
+                        .Invoke(null, new object[] { type }) as bool? == true;
+                }
+                catch
+                {
+                    // A failed SDK probe is handled conservatively: isolate the field instead of
+                    // letting UdonSharp write CLR objects into a USugar ABI bundle.
+                    return false;
+                }
+            },
+            type => typeof(UdonSharpBehaviour).IsAssignableFrom(type));
     }
 
     static bool TryGetProxyFieldType(

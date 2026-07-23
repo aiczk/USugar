@@ -1,5 +1,4 @@
 using System;
-using UnityEngine;
 using VRC.Udon.Common.Interfaces;
 
 /// <summary>
@@ -29,23 +28,29 @@ static class USugarConstantApplier
     internal static void ApplyConstantValues(IUdonProgram program,
         System.Collections.Generic.List<(string Id, string UdonType, object Value)> constants)
     {
+        if (program == null) throw new ArgumentNullException(nameof(program));
+        if (constants == null) throw new ArgumentNullException(nameof(constants));
+
         foreach (var (id, udonType, constValue) in constants)
         {
-            var addr = program.SymbolTable.GetAddressFromSymbol(id);
+            if (!program.SymbolTable.TryGetAddressFromSymbol(id, out var addr))
+                throw new InvalidOperationException(
+                    $"Assembled program has no symbol for constant '{id}'.");
             if (udonType == "SystemType" && constValue is string udonTypeName)
             {
-                var clrType = USugarTypeCacheManager.ResolveUdonType(udonTypeName);
-                if (clrType != null)
-                    program.Heap.SetHeapVariable(addr, clrType, typeof(Type));
-                else
-                    USugarLog.Warn($"Could not resolve type: {udonTypeName}");
+                var clrType = USugarTypeCacheManager.ResolveUdonType(udonTypeName)
+                    ?? throw new InvalidOperationException(
+                        $"Could not resolve CLR type token '{udonTypeName}' "
+                        + $"for constant '{id}'.");
+                program.Heap.SetHeapVariable(addr, clrType, typeof(Type));
             }
             else
             {
                 var value = constValue;
-                var valueType = value.GetType();
-                var clrType = USugarTypeCacheManager.ResolveUdonType(udonType);
-                if (clrType != null && clrType != valueType)
+                var clrType = USugarTypeCacheManager.ResolveUdonType(udonType)
+                    ?? throw new InvalidOperationException(
+                        $"Could not resolve heap type '{udonType}' for constant '{id}'.");
+                if (value != null && !clrType.IsInstanceOfType(value))
                 {
                     try
                     {
@@ -53,16 +58,16 @@ static class USugarConstantApplier
                             value = Enum.ToObject(clrType, value);
                         else
                             value = Convert.ChangeType(value, clrType);
-                        valueType = clrType;
                     }
                     catch (Exception ex)
                     {
-                        Debug.LogWarning(
-                            $"[USugar] Constant conversion failed for '{id}': "
-                          + $"cannot convert {valueType.Name} to {clrType.Name}. {ex.Message}");
+                        throw new InvalidOperationException(
+                            $"Constant '{id}' cannot be converted from "
+                            + $"'{value.GetType().FullName}' to heap type "
+                            + $"'{clrType.FullName}'.", ex);
                     }
                 }
-                program.Heap.SetHeapVariable(addr, value, valueType);
+                program.Heap.SetHeapVariable(addr, value, clrType);
             }
         }
     }

@@ -15,6 +15,7 @@ static class USugarTypeCacheManager
 {
     // Cached reverse lookup: SanitizeTypeName(FullName) → CLR Type (built once per domain)
     static Dictionary<string, Type> _udonTypeCache;
+    static Dictionary<string, List<Type>> _udonTypeConflicts;
     // Cached CLR type lookups (persists across compiles, assemblies don't change in-session)
     static readonly Dictionary<string, Type> _clrTypeCache = new();
 
@@ -25,20 +26,48 @@ static class USugarTypeCacheManager
         if (_udonTypeCache == null)
         {
             _udonTypeCache = new Dictionary<string, Type>();
+            _udonTypeConflicts = new Dictionary<string, List<Type>>();
             foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
             {
                 if (asm.IsDynamic) continue;
-                try
+                foreach (var type in GetLoadableExportedTypes(asm))
                 {
-                    foreach (var type in asm.GetExportedTypes())
+                    if (type.FullName == null) continue;
+                    var key = ExternResolver.SanitizeTypeName(type.FullName);
+                    if (!_udonTypeCache.TryGetValue(key, out var existing))
                     {
-                        if (type.FullName == null) continue;
-                        var key = ExternResolver.SanitizeTypeName(type.FullName);
-                        _udonTypeCache.TryAdd(key, type);
+                        _udonTypeCache.Add(key, type);
+                        continue;
                     }
+                    if (existing == type) continue;
+                    if (!_udonTypeConflicts.TryGetValue(key, out var conflicts))
+                    {
+                        conflicts = new List<Type> { existing };
+                        _udonTypeConflicts.Add(key, conflicts);
+                    }
+                    if (!conflicts.Contains(type))
+                        conflicts.Add(type);
                 }
-                catch { }
             }
+        }
+        if (_udonTypeConflicts.TryGetValue(udonTypeName, out var ambiguous))
+        {
+            var registered = ambiguous.Where(IsRegisteredUdonType).ToArray();
+            if (registered.Length == 1)
+            {
+                _udonTypeCache[udonTypeName] = registered[0];
+                _udonTypeConflicts.Remove(udonTypeName);
+                return registered[0];
+            }
+            IEnumerable<Type> candidates = registered.Length > 0
+                ? registered
+                : ambiguous;
+            throw new InvalidOperationException(
+                $"Udon type name '{udonTypeName}' maps to multiple "
+                + $"{(registered.Length > 1 ? "registered " : "")}CLR types: "
+                + string.Join(", ", candidates
+                    .Select(type => type.AssemblyQualifiedName)
+                    .OrderBy(name => name, StringComparer.Ordinal)));
         }
         if (_udonTypeCache.TryGetValue(udonTypeName, out var t))
             return t;
@@ -68,9 +97,8 @@ static class USugarTypeCacheManager
         if (_clrTypeCache.TryGetValue(cacheKey, out var cached)) return cached;
 
         var result = ClrTypeResolver.Resolve(typeSymbol);
-        // Fall back to Udon type resolution
-        result ??= ResolveUdonType(ExternResolver.GetUdonTypeName(typeSymbol));
-        _clrTypeCache[cacheKey] = result;
+        if (result != null)
+            _clrTypeCache[cacheKey] = result;
         return result;
     }
 
@@ -83,41 +111,16 @@ static class USugarTypeCacheManager
         foreach (var member in symbol.GetMembers().OfType<IFieldSymbol>())
         {
             if (member.IsStatic || member.IsImplicitlyDeclared || member.IsConst) continue;
-
-            var userType = ResolveClrType(member.Type);
-            var systemType = IsDelegate(member.Type)
-                ? typeof(object[])
-                : ResolveUdonType(ExternResolver.GetUdonTypeName(member.Type));
-
-            defs[member.Name] = new FieldDefinition(
-                member.Name,
-                userType ?? systemType ?? typeof(object),
-                systemType ?? userType ?? typeof(object),
-                GetFieldSyncMode(member),
-                GetIsSerialized(member),
-                new List<Attribute>()
-            );
+            defs[member.Name] = CreateFieldDefinition(member);
         }
 
         // Auto-properties and public properties (mirroring UasmEmitter.EmitFields)
         foreach (var prop in symbol.GetMembers().OfType<IPropertySymbol>())
         {
             if (prop.IsStatic || prop.IsImplicitlyDeclared) continue;
-            var isAuto = prop.GetMethod?.DeclaringSyntaxReferences.IsEmpty == true
-                || prop.SetMethod?.DeclaringSyntaxReferences.IsEmpty == true;
+            var isAuto = !UasmEmitter.IsComputedProperty(prop);
             if (!isAuto && prop.DeclaredAccessibility != Accessibility.Public) continue;
-
-            var userType = ResolveClrType(prop.Type);
-            var systemType = ResolveUdonType(ExternResolver.GetUdonTypeName(prop.Type));
-
-            defs[prop.Name] = new FieldDefinition(
-                prop.Name,
-                userType ?? systemType ?? typeof(object),
-                systemType ?? userType ?? typeof(object),
-                null,
-                prop.DeclaredAccessibility == Accessibility.Public,
-                new List<Attribute>()
-            );
+            defs[prop.Name] = CreatePropertyDefinition(prop);
         }
 
         // Inherited fields and properties from user-defined base classes
@@ -132,32 +135,15 @@ static class USugarTypeCacheManager
             {
                 if (member.IsStatic || member.IsImplicitlyDeclared || member.IsConst) continue;
                 if (!declaredNames.Add(member.Name)) continue;
-                var userType = ResolveClrType(member.Type);
-                var systemType = ResolveUdonType(ExternResolver.GetUdonTypeName(member.Type));
-                defs[member.Name] = new FieldDefinition(
-                    member.Name,
-                    userType ?? systemType ?? typeof(object),
-                    systemType ?? userType ?? typeof(object),
-                    GetFieldSyncMode(member),
-                    GetIsSerialized(member),
-                    new List<Attribute>());
+                defs[member.Name] = CreateFieldDefinition(member);
             }
             foreach (var prop in baseType.GetMembers().OfType<IPropertySymbol>())
             {
                 if (prop.IsStatic || prop.IsImplicitlyDeclared) continue;
                 if (!declaredNames.Add(prop.Name)) continue;
-                var isAuto = prop.GetMethod?.DeclaringSyntaxReferences.IsEmpty == true
-                    || prop.SetMethod?.DeclaringSyntaxReferences.IsEmpty == true;
+                var isAuto = !UasmEmitter.IsComputedProperty(prop);
                 if (!isAuto && prop.DeclaredAccessibility != Accessibility.Public) continue;
-                var userType = ResolveClrType(prop.Type);
-                var systemType = ResolveUdonType(ExternResolver.GetUdonTypeName(prop.Type));
-                defs[prop.Name] = new FieldDefinition(
-                    prop.Name,
-                    userType ?? systemType ?? typeof(object),
-                    systemType ?? userType ?? typeof(object),
-                    null,
-                    prop.DeclaredAccessibility == Accessibility.Public,
-                    new List<Attribute>());
+                defs[prop.Name] = CreatePropertyDefinition(prop);
             }
             baseType = baseType.BaseType;
         }
@@ -168,12 +154,65 @@ static class USugarTypeCacheManager
         return defs;
     }
 
+    static FieldDefinition CreateFieldDefinition(IFieldSymbol field)
+    {
+        var userType = ResolveClrType(field.Type)
+            ?? throw new InvalidOperationException(
+                $"Could not resolve CLR type for field '{field.ToDisplayString()}'.");
+        var systemType = IsDelegate(field.Type)
+            ? typeof(object[])
+            : ResolveUdonType(ExternResolver.GetUdonTypeName(field.Type))
+              ?? throw new InvalidOperationException(
+                  $"Could not resolve Udon storage type for field "
+                  + $"'{field.ToDisplayString()}'.");
+        var isSerialized = GetIsSerialized(field);
+        RejectOpaqueSerializedField(field.ToDisplayString(), userType, systemType, isSerialized);
+        return new FieldDefinition(
+            field.Name,
+            userType,
+            systemType,
+            GetFieldSyncMode(field),
+            isSerialized,
+            GetRuntimeAttributes(field));
+    }
+
+    static FieldDefinition CreatePropertyDefinition(IPropertySymbol property)
+    {
+        var userType = ResolveClrType(property.Type)
+            ?? throw new InvalidOperationException(
+                $"Could not resolve CLR type for property '{property.ToDisplayString()}'.");
+        var systemType = ResolveUdonType(ExternResolver.GetUdonTypeName(property.Type))
+            ?? throw new InvalidOperationException(
+                $"Could not resolve Udon storage type for property "
+                + $"'{property.ToDisplayString()}'.");
+        var isSerialized = property.DeclaredAccessibility == Accessibility.Public;
+        RejectOpaqueSerializedField(
+            property.ToDisplayString(), userType, systemType, isSerialized);
+        return new FieldDefinition(
+            property.Name,
+            userType,
+            systemType,
+            null,
+            isSerialized,
+            GetRuntimeAttributes(property));
+    }
+
     static void SupplementFromClrReflection(Dictionary<string, FieldDefinition> defs, INamedTypeSymbol symbol)
     {
         var clrType = ResolveClrType(symbol);
         if (clrType == null || !typeof(UdonSharpBehaviour).IsAssignableFrom(clrType)) return;
 
-        // Walk hierarchy exactly like the formatter does (base → derived)
+        var symbolByClrType = new Dictionary<Type, INamedTypeSymbol>();
+        for (var currentSymbol = symbol;
+             currentSymbol != null && currentSymbol.Name != "UdonSharpBehaviour";
+             currentSymbol = currentSymbol.BaseType)
+        {
+            var currentClrType = ClrTypeResolver.Resolve(currentSymbol);
+            if (currentClrType != null)
+                symbolByClrType[currentClrType] = currentSymbol;
+        }
+
+        // Walk hierarchy exactly like the formatter does (base -> derived).
         var baseTypes = new Stack<Type>();
         var current = clrType;
         while (current != null && current != typeof(UdonSharpBehaviour))
@@ -186,24 +225,169 @@ static class USugarTypeCacheManager
         {
             current = baseTypes.Pop();
             foreach (var field in current.GetFields(
-                BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance))
+                BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance
+                | BindingFlags.DeclaredOnly))
             {
                 if (field.IsStatic || defs.ContainsKey(field.Name)) continue;
                 var userType = field.FieldType;
-                var systemType = typeof(Delegate).IsAssignableFrom(userType)
-                    ? typeof(object[])
+                symbolByClrType.TryGetValue(current, out var ownerSymbol);
+                var fieldSymbol = ownerSymbol?.GetMembers(field.Name)
+                    .OfType<IFieldSymbol>()
+                    .FirstOrDefault();
+                var systemType = fieldSymbol != null
+                    ? ResolveUdonType(ExternResolver.GetUdonTypeName(fieldSymbol.Type))
                     : ResolveUdonStorageType(userType);
+                if (systemType == null)
+                    throw new InvalidOperationException(
+                        $"Could not resolve Udon storage type for CLR field "
+                        + $"'{current.FullName}.{field.Name}'.");
+                var isSerialized = IsFieldSerializedClr(field);
+                RejectOpaqueSerializedField(
+                    $"{current.FullName}.{field.Name}",
+                    userType,
+                    systemType,
+                    isSerialized);
 
                 defs[field.Name] = new FieldDefinition(
                     field.Name,
                     userType,
                     systemType,
                     GetFieldSyncModeClr(field),
-                    IsFieldSerializedClr(field),
-                    new List<Attribute>());
+                    isSerialized,
+                    field.GetCustomAttributes(false).OfType<Attribute>().ToList());
             }
         }
     }
+
+    static void RejectOpaqueSerializedField(
+        string fieldName,
+        Type userType,
+        Type systemType,
+        bool isSerialized)
+    {
+        if (!isSerialized
+            || !USugarProxySerialization.RequiresOpaqueStorage(userType, systemType))
+            return;
+        throw new InvalidOperationException(
+            $"Serialized field '{fieldName}' uses USugar's opaque object[] ABI and cannot "
+            + "round-trip through the standard UdonSharp proxy/Inspector. Mark it "
+            + "[NonSerialized] and initialize it at runtime.");
+    }
+
+    static List<Attribute> GetRuntimeAttributes(ISymbol symbol)
+    {
+        var containingType = ClrTypeResolver.Resolve(symbol.ContainingType);
+        if (containingType != null)
+        {
+            const BindingFlags flags = BindingFlags.Public | BindingFlags.NonPublic
+                                       | BindingFlags.Instance | BindingFlags.Static
+                                       | BindingFlags.DeclaredOnly;
+            MemberInfo member = symbol switch
+            {
+                IFieldSymbol => containingType.GetField(symbol.Name, flags),
+                IPropertySymbol => containingType.GetProperty(symbol.Name, flags),
+                _ => null,
+            };
+            if (member != null)
+                return member.GetCustomAttributes(false).OfType<Attribute>().ToList();
+        }
+
+        return InstantiateSymbolAttributes(symbol);
+    }
+
+    static List<Attribute> InstantiateSymbolAttributes(ISymbol symbol)
+    {
+        var attributes = new List<Attribute>();
+        foreach (var data in symbol.GetAttributes())
+        {
+            var attributeType = ClrTypeResolver.Resolve(data.AttributeClass);
+            if (attributeType == null || !typeof(Attribute).IsAssignableFrom(attributeType))
+                continue;
+            try
+            {
+                var constructorArgs = data.ConstructorArguments
+                    .Select(ConvertAttributeConstant)
+                    .ToArray();
+                var instance = (Attribute)Activator.CreateInstance(attributeType, constructorArgs);
+                foreach (var named in data.NamedArguments)
+                {
+                    var value = ConvertAttributeConstant(named.Value);
+                    var property = attributeType.GetProperty(
+                        named.Key, BindingFlags.Public | BindingFlags.Instance);
+                    if (property?.CanWrite == true)
+                        property.SetValue(instance, value);
+                    else
+                    {
+                        var field = attributeType.GetField(
+                            named.Key, BindingFlags.Public | BindingFlags.Instance);
+                        field?.SetValue(instance, value);
+                    }
+                }
+                attributes.Add(instance);
+            }
+            catch (Exception ex)
+            {
+                USugarLog.Warn(
+                    $"Could not materialize attribute '{attributeType.FullName}' on "
+                    + $"'{symbol.ToDisplayString()}': {ex.Message}");
+            }
+        }
+        return attributes;
+    }
+
+    static object ConvertAttributeConstant(TypedConstant constant)
+    {
+        if (constant.IsNull) return null;
+        if (constant.Kind == TypedConstantKind.Type)
+            return ClrTypeResolver.Resolve((ITypeSymbol)constant.Value);
+        if (constant.Kind == TypedConstantKind.Array)
+        {
+            var elementType = constant.Type is IArrayTypeSymbol arrayType
+                ? ClrTypeResolver.Resolve(arrayType.ElementType)
+                : null;
+            if (elementType == null)
+                return constant.Values.Select(ConvertAttributeConstant).ToArray();
+            var values = Array.CreateInstance(elementType, constant.Values.Length);
+            for (var i = 0; i < constant.Values.Length; i++)
+                values.SetValue(ConvertAttributeConstant(constant.Values[i]), i);
+            return values;
+        }
+        if (constant.Type?.TypeKind == TypeKind.Enum)
+        {
+            var enumType = ClrTypeResolver.Resolve(constant.Type);
+            if (enumType != null)
+                return Enum.ToObject(enumType, constant.Value);
+        }
+        return constant.Value;
+    }
+
+    static IEnumerable<Type> GetLoadableExportedTypes(Assembly assembly)
+    {
+        try
+        {
+            return assembly.GetExportedTypes();
+        }
+        catch (ReflectionTypeLoadException ex)
+        {
+            return ex.Types.Where(type =>
+                type != null && (type.IsPublic || type.IsNestedPublic));
+        }
+        catch (NotSupportedException)
+        {
+            return Array.Empty<Type>();
+        }
+        catch (Exception ex)
+        {
+            USugarLog.Warn(
+                $"Could not enumerate exported CLR types from "
+                + $"'{assembly.GetName().Name}': {ex.Message}");
+            return Array.Empty<Type>();
+        }
+    }
+
+    static bool IsRegisteredUdonType(Type type)
+        => USugarReflectionTargets.IsExternTypeMethod.Invoke(
+            null, new object[] { type }) as bool? == true;
 
     static bool IsDelegate(ITypeSymbol type)
         => type is INamedTypeSymbol named && named.DelegateInvokeMethod != null;
@@ -212,21 +396,33 @@ static class USugarTypeCacheManager
 
     internal static Type ResolveUdonStorageType(Type clrType)
     {
+        if (clrType == null) throw new ArgumentNullException(nameof(clrType));
+        if (typeof(Delegate).IsAssignableFrom(clrType))
+            return typeof(object[]);
         if (clrType.IsArray)
         {
             var elem = clrType.GetElementType();
             if (elem.IsArray) return typeof(object[]);
             if (typeof(UdonSharpBehaviour).IsAssignableFrom(elem)) return typeof(Component[]);
         }
-        return clrType;
+        if (clrType.IsEnum)
+            return Enum.GetUnderlyingType(clrType);
+        return IsRegisteredUdonType(clrType) ? clrType : typeof(object[]);
     }
 
     static bool IsFieldSerializedClr(FieldInfo field)
     {
         if (field.IsInitOnly || field.IsStatic) return false;
-        if (field.IsDefined(typeof(NonSerializedAttribute), false)) return false;
+        var attributes = field.GetCustomAttributes(false).OfType<Attribute>().ToArray();
+        if (attributes.Any(attribute =>
+                attribute.GetType().Name == "OdinSerializeAttribute"))
+            return true;
+        if (attributes.Any(attribute => attribute is NonSerializedAttribute))
+            return false;
         return field.IsPublic
-            || field.IsDefined(typeof(SerializeField), false);
+            || attributes.Any(attribute =>
+                attribute is SerializeField
+                || attribute.GetType().Name == "SerializeReference");
     }
 
     static UdonSyncMode? GetFieldSyncModeClr(FieldInfo field)
@@ -257,22 +453,4 @@ static class USugarTypeCacheManager
         return UdonSyncMode.None;
     }
 
-    // ── Program asset lookup ──
-
-    internal static UdonSharpProgramAsset FindProgramAsset(string className, string sourceFilePath,
-        Dictionary<string, List<(UdonSharpProgramAsset asset, string scriptPath)>> lookup)
-    {
-        if (lookup == null || !lookup.TryGetValue(className, out var candidates)) return null;
-        UdonSharpProgramAsset fallback = null;
-        foreach (var (asset, scriptPath) in candidates)
-        {
-            if (sourceFilePath != null
-                && sourceFilePath.Replace('\\', '/').EndsWith(scriptPath.Replace('\\', '/')))
-                return asset;
-            fallback ??= asset;
-        }
-        if (candidates.Count > 1 && fallback != null)
-            USugarLog.Warn($"Multiple UdonSharpProgramAssets found for class '{className}'. Using first match. Consider using unique class names.");
-        return fallback;
-    }
 }
