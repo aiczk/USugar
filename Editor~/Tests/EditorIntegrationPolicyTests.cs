@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Linq;
 using Xunit;
 
 namespace USugar.Tests;
@@ -71,6 +72,43 @@ public class EditorIntegrationPolicyTests
             out var error));
         Assert.Equal("program", program);
         Assert.Null(error);
+    }
+
+    [Fact]
+    public void ExactIndexExposesAllCandidatesWithoutFallback()
+    {
+        var index = new USugarExactSourcePathIndex<string>();
+        index.Add(@"C:\Project\Assets\Main.cs", "first");
+        index.Add(@"C:\Project\Assets\Main.cs", "second");
+
+        Assert.Equal(
+            new[] { "first", "second" },
+            index.GetCandidates(new[]
+            {
+                @"C:\Project\Assets\Helper.cs",
+                @"C:\Project\Assets\Main.cs",
+            }).OrderBy(value => value));
+    }
+
+    [Fact]
+    public void ProgramRootPolicyIgnoresHelpersAndRejectsGenericProgramRoots()
+    {
+        var compilation = TestHelper.BuildCompilation(@"
+using UdonSharp;
+public class ConcreteProgram : UdonSharpBehaviour { }
+public class GenericHelper<T> : UdonSharpBehaviour { }
+", "ConcreteProgram", out var concrete);
+        var generic = compilation.GetTypeByMetadataName("GenericHelper`1");
+
+        Assert.False(USugarProgramRootPolicy.ShouldEmit(
+            concrete, hasProgramAsset: false, out var helperError));
+        Assert.Null(helperError);
+        Assert.True(USugarProgramRootPolicy.ShouldEmit(
+            concrete, hasProgramAsset: true, out var concreteError));
+        Assert.Null(concreteError);
+        Assert.False(USugarProgramRootPolicy.ShouldEmit(
+            generic, hasProgramAsset: true, out var genericError));
+        Assert.Contains("Generic UdonSharpBehaviour", genericError);
     }
 
     [Fact]

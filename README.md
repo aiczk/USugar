@@ -91,8 +91,10 @@ USugar reports a compile error when the Udon VM cannot preserve the source progr
 - User classes, delegates, tuples, and other `object[]`-backed values cannot round-trip through
   the standard UdonSharp proxy/Inspector. USugar rejects serialized fields with those
   representations; mark runtime-only fields `[NonSerialized]` and initialize them in code.
-- Each source `MonoScript` must resolve to exactly one `UdonSharpBehaviour` and one
-  `UdonSharpProgramAsset`. Missing, duplicate, renamed, or orphaned bindings fail compilation
+- Each emitted concrete `UdonSharpBehaviour` must resolve to exactly one
+  `UdonSharpProgramAsset` through its source `MonoScript`. Generic, abstract, and other
+  helper behaviours are parsed for semantic context but are not emitted and do not need a
+  program asset. Missing, duplicate, renamed, or orphaned root bindings fail compilation
   instead of reusing a program by class name.
 - A behaviour, its user base classes, and runtime helper types must belong to the same asmdef.
   Metadata-only attributes, enums, and registered Udon extern types may be referenced across asmdefs.
@@ -112,7 +114,7 @@ Each runtime Unity assembly is compiled independently with its own asmdef refere
 preprocessor symbols. Source files reported by Unity's compilation pipeline are accepted from
 both `Assets/` and resolved `Packages/` locations.
 
-USugar first builds one per-behaviour compilation plan.
+USugar first builds one compilation plan per concrete, program-asset-backed behaviour root.
 The plan records reachable bodies, callable definitions, generic specializations, user-class type objects, and field initializers.
 
 The same reachability result feeds method registration, closure capture analysis, and recursion analysis.

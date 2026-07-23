@@ -136,17 +136,8 @@ sealed class USugarExactSourcePathIndex<T>
         out string error)
     {
         item = default;
-        if (normalizedSourcePaths == null)
-            throw new ArgumentNullException(nameof(normalizedSourcePaths));
-
-        var paths = normalizedSourcePaths
-            .Where(path => !string.IsNullOrWhiteSpace(path))
-            .Distinct(_items.Comparer)
-            .ToArray();
-        var candidates = new HashSet<T>(_itemComparer);
-        foreach (var path in paths)
-            if (_items.TryGetValue(path, out var pathCandidates))
-                candidates.UnionWith(pathCandidates);
+        var paths = NormalizePaths(normalizedSourcePaths);
+        var candidates = GetCandidates(paths);
 
         if (candidates.Count == 0)
         {
@@ -165,6 +156,57 @@ sealed class USugarExactSourcePathIndex<T>
 
         item = candidates.Single();
         error = null;
+        return true;
+    }
+
+    public IReadOnlyList<T> GetCandidates(IEnumerable<string> normalizedSourcePaths)
+    {
+        var paths = NormalizePaths(normalizedSourcePaths);
+        var candidates = new HashSet<T>(_itemComparer);
+        foreach (var path in paths)
+            if (_items.TryGetValue(path, out var pathCandidates))
+                candidates.UnionWith(pathCandidates);
+        return candidates.ToArray();
+    }
+
+    string[] NormalizePaths(IEnumerable<string> normalizedSourcePaths)
+    {
+        if (normalizedSourcePaths == null)
+            throw new ArgumentNullException(nameof(normalizedSourcePaths));
+        return normalizedSourcePaths
+            .Where(path => !string.IsNullOrWhiteSpace(path))
+            .Distinct(_items.Comparer)
+            .ToArray();
+    }
+}
+
+/// <summary>
+/// Stock UdonSharp parses every source in an enabled assembly for semantic context, but only emits
+/// a concrete, non-generic behaviour that owns a program asset. Helper behaviours are not roots.
+/// </summary>
+static class USugarProgramRootPolicy
+{
+    public static bool ShouldEmit(
+        INamedTypeSymbol behaviour,
+        bool hasProgramAsset,
+        out string error)
+    {
+        if (behaviour == null) throw new ArgumentNullException(nameof(behaviour));
+        error = null;
+        if (!hasProgramAsset)
+            return false;
+        if (behaviour.IsAbstract)
+        {
+            error = $"Abstract UdonSharpBehaviour '{behaviour.ToDisplayString()}' "
+                    + "cannot own a program asset.";
+            return false;
+        }
+        if (behaviour.IsGenericType)
+        {
+            error = $"Generic UdonSharpBehaviour '{behaviour.ToDisplayString()}' "
+                    + "cannot own a program asset.";
+            return false;
+        }
         return true;
     }
 }

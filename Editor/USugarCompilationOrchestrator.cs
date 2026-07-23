@@ -112,6 +112,7 @@ static class USugarCompilationOrchestrator
         public string NormalizedSourcePath;
         public string UnityAssemblyName;
         public Type SourceClass;
+        public bool Selected;
         public bool Matched;
     }
 
@@ -197,11 +198,12 @@ static class USugarCompilationOrchestrator
         try
         {
             // ── Phase 1: Serial preparation ──
-            var compilationUnits = CollectCompilationUnits();
             USugarExactSourcePathIndex<ProgramAssetBinding> programAssetIndex = null;
             List<ProgramAssetBinding> programAssetBindings = null;
             if (applyToAssets)
                 programAssetIndex = CollectProgramAssetBindings(out programAssetBindings);
+            var compilationUnits = CollectCompilationUnits(
+                programAssetBindings?.Select(binding => binding.UnityAssemblyName));
             Mark("collect-sources");
             if (compilationUnits.Count == 0)
             {
@@ -317,13 +319,96 @@ static class USugarCompilationOrchestrator
             // Collect all UdonSharpBehaviour classes
             var classList = new List<(INamedTypeSymbol symbol, SyntaxTree tree,
                 CSharpCompilation compilation, LayoutPlanner planner)>();
+            var selectedProgramAssets = applyToAssets
+                ? new Dictionary<INamedTypeSymbol, ProgramAssetBinding>(
+                    SymbolEqualityComparer.Default)
+                : null;
+            var rootSelectionFailed = false;
+            void RootSelectionError(string file, string message)
+            {
+                USugarLog.Error($"{file}: {message}");
+                collectedDiagnostics.Add((file, 0, 0, message, "Error"));
+                rootSelectionFailed = true;
+            }
             // A partial class has one declaration node per part but ONE symbol — emit it once, not once per part.
             foreach (var unit in compilationUnits)
             {
                 unit.Planner = new LayoutPlanner(unit.Compilation);
                 unit.Planner.PrepareCompilation();
                 foreach (var (symbol, tree) in unit.Behaviours)
+                {
+                    if (applyToAssets)
+                    {
+                        var declarationPaths = GetDeclarationPaths(symbol, tree);
+                        var pathCandidates = programAssetIndex.GetCandidates(declarationPaths);
+                        if (pathCandidates.Count == 0)
+                            continue;
+
+                        // A source file may legally contain helper behaviours in addition to the
+                        // MonoScript's primary class. The ProgramAsset belongs to the CLR type
+                        // returned by MonoScript.GetClass(), not to every behaviour declaration in
+                        // that file.
+                        var resolvedBehaviourType = ClrTypeResolver.Resolve(symbol);
+                        var candidates = resolvedBehaviourType == null
+                            ? Array.Empty<ProgramAssetBinding>()
+                            : pathCandidates
+                                .Where(candidate => candidate.SourceClass == resolvedBehaviourType)
+                                .ToArray();
+                        if (candidates.Length == 0)
+                            continue;
+                        if (candidates.Length != 1)
+                        {
+                            RootSelectionError(
+                                tree.FilePath,
+                                $"{candidates.Length} UdonSharpProgramAssets are bound to behaviour "
+                                + $"'{symbol.ToDisplayString()}' through declaration sources "
+                                + $"[{string.Join(", ", declarationPaths)}].");
+                            continue;
+                        }
+
+                        var binding = candidates[0];
+                        if (binding.Selected)
+                        {
+                            RootSelectionError(
+                                binding.ScriptPath,
+                                $"Program asset '{binding.ProgramAssetPath}' resolves to more than one "
+                                + "UdonSharpBehaviour declaration.");
+                            continue;
+                        }
+                        binding.Selected = true;
+                        if (!USugarProgramRootPolicy.ShouldEmit(
+                                symbol, hasProgramAsset: true, out var rootError))
+                        {
+                            RootSelectionError(binding.ScriptPath, rootError);
+                            continue;
+                        }
+                        var emittedAssemblyName = symbol.ContainingAssembly.Identity.Name;
+                        if (!string.Equals(
+                                binding.UnityAssemblyName, emittedAssemblyName,
+                                StringComparison.OrdinalIgnoreCase))
+                        {
+                            RootSelectionError(
+                                binding.ScriptPath,
+                                $"Program asset '{binding.ProgramAssetPath}' belongs to Unity assembly "
+                                + $"'{binding.UnityAssemblyName}', not emitted assembly "
+                                + $"'{emittedAssemblyName}'.");
+                            continue;
+                        }
+                        selectedProgramAssets.Add(symbol, binding);
+                    }
                     classList.Add((symbol, tree, unit.Compilation, unit.Planner));
+                }
+            }
+            if (applyToAssets)
+                foreach (var orphan in programAssetBindings.Where(binding => !binding.Selected))
+                    RootSelectionError(
+                        orphan.ScriptPath,
+                        $"Program asset '{orphan.ProgramAssetPath}' is not backed by one concrete, "
+                        + "non-generic UdonSharpBehaviour in its exact source script.");
+            if (rootSelectionFailed)
+            {
+                LastCompileHadErrors = true;
+                return;
             }
             Mark("semantic-models");
 
@@ -427,76 +512,7 @@ static class USugarCompilationOrchestrator
             {
                 foreach (var result in validResults)
                 {
-                    var declarationPaths = result.Symbol.DeclaringSyntaxReferences
-                        .Select(reference => reference.SyntaxTree.FilePath)
-                        .Append(result.Tree.FilePath)
-                        .Where(path => !string.IsNullOrWhiteSpace(path))
-                        .Select(NormalizeUnitySourcePath)
-                        .Distinct(StringComparer.OrdinalIgnoreCase)
-                        .OrderBy(path => path, StringComparer.Ordinal)
-                        .ToArray();
-                    if (!programAssetIndex.TryResolveUnique(
-                            declarationPaths, out var binding, out var bindingError))
-                    {
-                        // Emitted a behaviour but found no matching UdonSharpProgramAsset (deleted/renamed asset,
-                        // or a class<->asset name+path mismatch). The compiled UASM never reaches an asset — a real
-                        // failure, not a no-op. Surface it loudly + count it so the run is NOT marked up-to-date.
-                        var miss = $"Cannot bind behaviour '{result.Symbol.ToDisplayString()}' to a "
-                                   + $"UdonSharpProgramAsset: {bindingError}";
-                        USugarLog.Error($"{result.Tree.FilePath}: {miss}");
-                        collectedDiagnostics.Add((result.Tree.FilePath, 0, 0, miss, "Error"));
-                        failures++;
-                        continue;
-                    }
-                    var emittedAssemblyName = result.Symbol.ContainingAssembly.Identity.Name;
-                    if (!string.Equals(
-                            binding.UnityAssemblyName, emittedAssemblyName,
-                            StringComparison.OrdinalIgnoreCase))
-                    {
-                        var assemblyMismatch =
-                            $"Program asset '{binding.ProgramAssetPath}' belongs to Unity assembly "
-                            + $"'{binding.UnityAssemblyName}', not emitted assembly "
-                            + $"'{emittedAssemblyName}'.";
-                        USugarLog.Error($"{result.Tree.FilePath}: {assemblyMismatch}");
-                        collectedDiagnostics.Add((
-                            result.Tree.FilePath, 0, 0, assemblyMismatch, "Error"));
-                        failures++;
-                        continue;
-                    }
-                    if (binding.Matched)
-                    {
-                        var duplicate = $"Program asset '{binding.ProgramAssetPath}' would receive more "
-                                        + "than one behaviour program. Keep one UdonSharpBehaviour class "
-                                        + "per source script.";
-                        USugarLog.Error($"{result.Tree.FilePath}: {duplicate}");
-                        collectedDiagnostics.Add((
-                            result.Tree.FilePath, 0, 0, duplicate, "Error"));
-                        failures++;
-                        continue;
-                    }
-                    var resolvedBehaviourType = ClrTypeResolver.Resolve(result.Symbol);
-                    if (resolvedBehaviourType == null)
-                    {
-                        var unresolved = $"Could not resolve CLR type for emitted behaviour "
-                                         + $"'{result.Symbol.ToDisplayString()}'; refusing to bind "
-                                         + $"program asset '{binding.ProgramAssetPath}'.";
-                        USugarLog.Error($"{result.Tree.FilePath}: {unresolved}");
-                        collectedDiagnostics.Add((
-                            result.Tree.FilePath, 0, 0, unresolved, "Error"));
-                        failures++;
-                        continue;
-                    }
-                    if (binding.SourceClass != resolvedBehaviourType)
-                    {
-                        var mismatch = $"Program asset '{binding.ProgramAssetPath}' resolves to CLR type "
-                                       + $"'{binding.SourceClass.FullName}', not emitted behaviour "
-                                       + $"'{resolvedBehaviourType.FullName}'.";
-                        USugarLog.Error($"{result.Tree.FilePath}: {mismatch}");
-                        collectedDiagnostics.Add((
-                            result.Tree.FilePath, 0, 0, mismatch, "Error"));
-                        failures++;
-                        continue;
-                    }
+                    var binding = selectedProgramAssets[result.Symbol];
                     binding.Matched = true;
                     var programAsset = binding.Asset;
 
@@ -870,14 +886,18 @@ static class USugarCompilationOrchestrator
     {
         bindings = new List<ProgramAssetBinding>();
         var index = new USugarExactSourcePathIndex<ProgramAssetBinding>();
-        foreach (var guid in AssetDatabase.FindAssets("t:UdonSharpProgramAsset")
-            .OrderBy(value => value, StringComparer.Ordinal))
+        foreach (var asset in UdonSharpProgramAsset.GetAllUdonSharpPrograms()
+            .Where(value => value != null)
+            .OrderBy(AssetDatabase.GetAssetPath, StringComparer.Ordinal))
         {
-            var programAssetPath = AssetDatabase.GUIDToAssetPath(guid);
-            var asset = AssetDatabase.LoadAssetAtPath<UdonSharpProgramAsset>(programAssetPath);
-            if (asset == null)
+            var programAssetPath = AssetDatabase.GetAssetPath(asset);
+            if (string.IsNullOrEmpty(programAssetPath))
                 throw new InvalidOperationException(
-                    $"UdonSharpProgramAsset '{programAssetPath}' could not be loaded.");
+                    $"UdonSharpProgramAsset '{asset.name}' has no AssetDatabase path.");
+            var guid = AssetDatabase.AssetPathToGUID(programAssetPath);
+            if (string.IsNullOrEmpty(guid))
+                throw new InvalidOperationException(
+                    $"UdonSharpProgramAsset '{programAssetPath}' has no GUID.");
             if (asset.sourceCsScript == null)
                 throw new InvalidOperationException(
                     $"UdonSharpProgramAsset '{programAssetPath}' has no source MonoScript. "
@@ -918,6 +938,16 @@ static class USugarCompilationOrchestrator
         }
         return index;
     }
+
+    static string[] GetDeclarationPaths(INamedTypeSymbol symbol, SyntaxTree representativeTree)
+        => symbol.DeclaringSyntaxReferences
+            .Select(reference => reference.SyntaxTree.FilePath)
+            .Append(representativeTree?.FilePath)
+            .Where(path => !string.IsNullOrWhiteSpace(path))
+            .Select(NormalizeUnitySourcePath)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(path => path, StringComparer.Ordinal)
+            .ToArray();
 
     static string NormalizeUnitySourcePath(string path)
     {
@@ -1070,36 +1100,33 @@ static class USugarCompilationOrchestrator
         return !ExternResolver.ClassHasRegisteredExterns(type);
     }
 
-    internal static List<CompilationUnit> CollectCompilationUnits()
+    internal static List<CompilationUnit> CollectCompilationUnits(
+        IEnumerable<string> rootAssemblyNames = null)
     {
         var playerAssemblies = CompilationPipeline.GetAssemblies(AssembliesType.Player);
-        var behaviourAssemblyNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var loadedAssemblies = AppDomain.CurrentDomain.GetAssemblies()
-            .Where(assembly => !assembly.IsDynamic)
-            .GroupBy(assembly => assembly.GetName().Name, StringComparer.OrdinalIgnoreCase)
-            .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
-
-        foreach (var unityAssembly in playerAssemblies)
+        var behaviourAssemblyNames = rootAssemblyNames != null
+            ? new HashSet<string>(
+                rootAssemblyNames.Where(name => !string.IsNullOrWhiteSpace(name)),
+                StringComparer.OrdinalIgnoreCase)
+            : new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (rootAssemblyNames == null)
         {
-            if (!loadedAssemblies.TryGetValue(unityAssembly.name, out var loadedAssembly))
-                continue;
-            if (GetLoadableTypes(loadedAssembly).Any(type =>
-                type != null && type != typeof(UdonSharpBehaviour)
-                && typeof(UdonSharpBehaviour).IsAssignableFrom(type)))
-                behaviourAssemblyNames.Add(unityAssembly.name);
-        }
-
-        // Program assets are also authoritative. This covers an assembly whose behaviour type has
-        // not yet been reflected into the current domain but whose MonoScript is already imported.
-        foreach (var guid in AssetDatabase.FindAssets("t:UdonSharpProgramAsset"))
-        {
-            var assetPath = AssetDatabase.GUIDToAssetPath(guid);
-            var asset = AssetDatabase.LoadAssetAtPath<UdonSharpProgramAsset>(assetPath);
-            if (asset?.sourceCsScript == null) continue;
-            var scriptPath = AssetDatabase.GetAssetPath(asset.sourceCsScript);
-            var assemblyName = CompilationPipeline.GetAssemblyNameFromScriptPath(scriptPath);
-            if (!string.IsNullOrEmpty(assemblyName))
-                behaviourAssemblyNames.Add(Path.GetFileNameWithoutExtension(assemblyName));
+            var loadedAssemblies = AppDomain.CurrentDomain.GetAssemblies()
+                .Where(assembly => !assembly.IsDynamic)
+                .GroupBy(assembly => assembly.GetName().Name, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(
+                    group => group.Key,
+                    group => group.First(),
+                    StringComparer.OrdinalIgnoreCase);
+            foreach (var unityAssembly in playerAssemblies)
+            {
+                if (!loadedAssemblies.TryGetValue(unityAssembly.name, out var loadedAssembly))
+                    continue;
+                if (GetLoadableTypes(loadedAssembly).Any(type =>
+                    type != null && type != typeof(UdonSharpBehaviour)
+                    && typeof(UdonSharpBehaviour).IsAssignableFrom(type)))
+                    behaviourAssemblyNames.Add(unityAssembly.name);
+            }
         }
 
         return playerAssemblies
