@@ -4,6 +4,64 @@ using Microsoft.CodeAnalysis.Operations;
 
 public partial class InvocationHandler
 {
+    static readonly InvocationIntrinsicRegistry InvocationIntrinsics
+        = new(new[]
+        {
+            new InvocationIntrinsicRule(
+                "unity-object-instantiate",
+                new IntrinsicKey(
+                    new[] { "UnityEngine.Object" },
+                    new[] { "Instantiate" },
+                    genericArity: -1,
+                    new IntrinsicParameterShape(1, 4)),
+                (handler, operation, target) =>
+                    handler.EmitInstantiateIntrinsic(operation, target)),
+            new InvocationIntrinsicRule(
+                "multidimensional-array-shape",
+                new IntrinsicKey(
+                    new[] { "System.Array" },
+                    new[] { "GetLength", "GetUpperBound" },
+                    genericArity: 0,
+                    new IntrinsicParameterShape(
+                        1, 1,
+                        new IntrinsicParameterConstraint(0, "System.Int32"))),
+                (handler, operation, target) =>
+                    handler.EmitNdimArrayIntrinsic(operation, target),
+                (handler, operation, target) =>
+                    operation.Instance != null
+                    && NdimArrayAbi.IsNdimArray(operation.Instance.Type)),
+            new InvocationIntrinsicRule(
+                "aggregate-array-value-copy",
+                new IntrinsicKey(
+                    new[] { "System.Array" },
+                    new[] { "Clone", "CopyTo", "Copy", "ConstrainedCopy" },
+                    genericArity: 0,
+                    new IntrinsicParameterShape(0, 5)),
+                (handler, operation, target) =>
+                    handler.EmitAggregateArrayCopyIntrinsic(operation, target),
+                (handler, operation, target) =>
+                    handler.IsAggregateArrayCopyIntrinsic(operation, target)),
+            new InvocationIntrinsicRule(
+                "generic-component-query",
+                new IntrinsicKey(
+                    new[] { "UnityEngine.Component", "UnityEngine.GameObject" },
+                    new[]
+                    {
+                        "GetComponent",
+                        "GetComponents",
+                        "GetComponentInChildren",
+                        "GetComponentsInChildren",
+                        "GetComponentInParent",
+                        "GetComponentsInParent",
+                    },
+                    genericArity: 1,
+                    new IntrinsicParameterShape(
+                        0, 1,
+                        new IntrinsicParameterConstraint(0, "System.Boolean"))),
+                (handler, operation, target) =>
+                    handler.EmitGetComponentGeneric(operation, target)),
+        });
+
     const string InstantiateGameObjectExtern =
         "VRCInstantiate.__Instantiate__UnityEngineGameObject__UnityEngineGameObject";
     const string GameObjectTransformGetter =
@@ -19,20 +77,49 @@ public partial class InvocationHandler
     /// </summary>
     bool TryEmitInvocationIntrinsic(IInvocationOperation operation,
         IMethodSymbol target, out CLeaf result)
+        => InvocationIntrinsics.TryLower(this, operation, target, out result);
+
+    CLeaf EmitNdimArrayIntrinsic(IInvocationOperation operation, IMethodSymbol target)
     {
-        result = null;
-        if (!IsUnityObjectInstantiate(target))
-            return false;
-        result = EmitInstantiateIntrinsic(operation, target);
-        return true;
+        var bundle = VisitExpression(operation.Instance);
+        if (!NdimArrayAbi.TryGetMethod(target.Name, out var methodKind))
+            throw new System.InvalidOperationException(
+                $"Intrinsic registry admitted unknown N-dim array method '{target.Name}'.");
+        var dimension = VisitExpression(operation.Arguments[0].Value);
+        return methodKind switch
+        {
+            NdimArrayAbi.MethodKind.GetLength => EmitNdimGetLength(bundle, dimension),
+            NdimArrayAbi.MethodKind.GetUpperBound => EmitNdimGetUpperBound(bundle, dimension),
+            _ => throw new System.InvalidOperationException(
+                $"Unknown N-dim array method kind: {methodKind}"),
+        };
     }
 
-    static bool IsUnityObjectInstantiate(IMethodSymbol method)
-        => method != null
-           && method.IsStatic
-           && method.Name == "Instantiate"
-           && method.ContainingType?.ToDisplayString(
-               SymbolDisplayFormat.CSharpErrorMessageFormat) == "UnityEngine.Object";
+    bool IsAggregateArrayCopyIntrinsic(
+        IInvocationOperation operation, IMethodSymbol target)
+    {
+        if (!target.IsStatic && operation.Instance != null
+            && AggregateArrayElement(operation.Instance.Type) != null)
+            return target.Name == "Clone" && target.Parameters.Length == 0
+                   || target.Name == "CopyTo";
+        if (!target.IsStatic
+            || target.ContainingType?.SpecialType != SpecialType.System_Array
+            || target.Name is not ("Copy" or "ConstrainedCopy"))
+            return false;
+        foreach (var argument in operation.Arguments)
+            if (AggregateArrayElement(UnwrapConversions(argument.Value).Type) != null)
+                return true;
+        return false;
+    }
+
+    CLeaf EmitAggregateArrayCopyIntrinsic(
+        IInvocationOperation operation, IMethodSymbol target)
+    {
+        if (TryEmitAggregateArrayCopyMember(operation, target, out var result))
+            return result;
+        throw new System.InvalidOperationException(
+            $"Intrinsic registry admitted non-aggregate Array.{target.Name}.");
+    }
 
     CLeaf EmitInstantiateIntrinsic(IInvocationOperation operation, IMethodSymbol target)
     {

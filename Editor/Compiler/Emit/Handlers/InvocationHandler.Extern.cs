@@ -12,48 +12,17 @@ public partial class InvocationHandler
         if (TryEmitInvocationIntrinsic(op, target, out var intrinsicResult))
             return intrinsicResult;
 
-        // N-dim array (design 2026-07-04 §2/N-R4): Rank>1 array VALUE is an object[] bundle whose Udon
-        // type tag (SystemObjectArray) has REAL, valid GetLength/GetUpperBound/Clone/… externs
-        // registered — MUST intercept before the generic extern dispatch below, or e.g. `.Clone()`
-        // would silently shallow-copy the bundle WRAPPER (aliasing the same flat backing) instead of
-        // the logical array, and `.GetLength(d)`/`.GetUpperBound(d)` would read the wrapper's own
-        // (wrong) shape. GetLength(d) = bundle[1+d] unboxed; GetUpperBound(d) = GetLength(d)-1. Every
-        // other Array member (Clone/CopyTo/SetValue/…) is a new loud reject (N-R4).
+        // Supported N-dim members were consumed by the intrinsic registry.
+        // Anything left here would operate on the emulation bundle itself.
         if (op.Instance != null && NdimArrayAbi.IsNdimArray(op.Instance.Type))
         {
-            var bundleVal = VisitExpression(op.Instance);
-            if (!NdimArrayAbi.TryGetMethod(target.Name, out var methodKind))
-            {
-                NdimArrayAbi.RejectMember(target.Name);
-                return null; // unreachable
-            }
-            switch (methodKind)
-            {
-                case NdimArrayAbi.MethodKind.GetLength: return EmitNdimGetLength(bundleVal, VisitExpression(op.Arguments[0].Value));
-                case NdimArrayAbi.MethodKind.GetUpperBound: return EmitNdimGetUpperBound(bundleVal, VisitExpression(op.Arguments[0].Value));
-                default: throw new System.InvalidOperationException($"Unknown N-dim array method kind: {methodKind}");
-            }
+            NdimArrayAbi.RejectMember(target.Name);
+            return null; // unreachable
         }
 
-        // CW26 (closed-world audit): a rank-1 struct/tuple-element array stores one object[] bundle
-        // REFERENCE per element, and the registry-valid SystemArray Clone/CopyTo/Copy externs copy
-        // those references — the destination's elements would alias the source's where C# copies
-        // struct VALUES (the N-R4 intercept above fences the same members for Rank>1 only). Lower the
-        // alias-producing members to per-element AggregateAbi.DeepClone; scalar/class-element arrays
-        // keep the extern (shallow IS C# semantics there: class elements ARE references).
-        if (TryEmitAggregateArrayCopyMember(op, target, out var aggCopyResult))
-            return aggCopyResult;
-
+        // Supported aggregate-array copy operations were consumed by the
+        // intrinsic registry; reject every remaining alias-producing member.
         RejectUnsafeAggregateArrayExtern(op, target);
-
-        // Generic GetComponent<T>() / GetComponentInChildren<T>() / GetComponentsInChildren<T>() etc.
-        // Udon VM uses non-generic form with typeof(T) parameter.
-        if (target.IsGenericMethod && target.Name.StartsWith("GetComponent")
-            && target.TypeArguments.Length == 1)
-        {
-            return EmitGetComponentGeneric(op, target);
-        }
-
         if (!target.IsStatic && op.Instance?.Type != null)
             _ctx.Boundary.RequireCanPassExternArgument(op.Instance.Type,
                 $"receiver of {target.Name}", deferAggregateReceiverPolicy: true);
