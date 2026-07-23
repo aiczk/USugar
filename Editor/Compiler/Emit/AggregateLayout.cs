@@ -164,19 +164,19 @@ public static class AggregateAbi
 
     public static CLeaf Allocate(CoreBuilder builder, int slotCount)
         => builder.ExternCall(
-            ExternResolver.BuildArrayCtorSignature(ArrayType),
+            UdonAbi.ArrayConstructor(ArrayType),
             new List<CLeaf> { builder.Const(slotCount, StorageTypes.Int32) },
             new StorageType(ArrayType));
 
     public static CLeaf ReadSlot(CoreBuilder builder, CLeaf instance, int index, StorageType udonType)
         => builder.ExternCall(
-            ExternResolver.BuildArrayGetSignature(ArrayType, ElementType),
+            UdonAbi.ArrayGet(ArrayType, ElementType),
             new List<CLeaf> { instance, builder.Const(index, StorageTypes.Int32) },
             udonType);
 
     public static void WriteSlot(CoreBuilder builder, CLeaf instance, int index, CLeaf value)
         => builder.EmitExternVoid(
-            ExternResolver.BuildArraySetSignature(ArrayType, ElementType),
+            UdonAbi.ArraySet(ArrayType, ElementType),
             new List<CLeaf> { instance, builder.Const(index, StorageTypes.Int32), value });
 
     public static CLeaf MintTupleLiteral(CoreBuilder builder, ITupleOperation tuple,
@@ -515,8 +515,8 @@ public static class ClassAbi
     public static CLeaf EmitReferenceEquality(CoreBuilder builder, BinaryOperatorKind kind, CLeaf left, CLeaf right)
     {
         var signature = kind == BinaryOperatorKind.NotEquals
-            ? "SystemObject.__op_Inequality__SystemObject_SystemObject__SystemBoolean"
-            : "SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean";
+            ? UdonAbi.ObjectInequality
+            : UdonAbi.ObjectEquality;
         return builder.ExternCall(signature, new List<CLeaf> { left, right }, StorageTypes.Boolean);
     }
 

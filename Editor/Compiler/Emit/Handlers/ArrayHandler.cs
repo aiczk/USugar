@@ -26,14 +26,14 @@ public class ArrayHandler : HandlerBase, IExpressionHandler
 
         var sizeVal = VisitExpression(op.DimensionSizes[0]);
         var arrSlot = _ctx.Builder.AllocScratch(new StorageType(arrayType));
-        EmitAssign(arrSlot, ExternCall(ExternResolver.BuildArrayCtorSignature(arrayType),
+        EmitAssign(arrSlot, ExternCall(UdonAbi.ArrayConstructor(arrayType),
             new List<CLeaf> { sizeVal }, new StorageType(arrayType)));
 
         if (op.Initializer != null)
         {
             for (int i = 0; i < op.Initializer.ElementValues.Length; i++)
             {
-                EmitExternVoid(ExternResolver.BuildArraySetSignature(arrayType, elementType),
+                EmitExternVoid(UdonAbi.ArraySet(arrayType, elementType),
                     new List<CLeaf> { SlotRef(arrSlot), Const(i, StorageTypes.Int32), VisitExpression(op.Initializer.ElementValues[i]) });
             }
         }
@@ -44,15 +44,15 @@ public class ArrayHandler : HandlerBase, IExpressionHandler
             var iSlot = _ctx.Builder.AllocScratch(StorageTypes.Int32);
             EmitAssign(iSlot, Const(0, StorageTypes.Int32));
             _builder.EmitWhile(
-                () => ExternCall("SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean",
+                () => ExternCall(UdonAbi.Int32LessThan,
                     new List<CLeaf> { SlotRef(iSlot), sizeVal }, StorageTypes.Boolean),
                 _ =>
                 {
-                    EmitExternVoid(ExternResolver.BuildArraySetSignature(arrayType, elementType),
+                    EmitExternVoid(UdonAbi.ArraySet(arrayType, elementType),
                         new List<CLeaf> { SlotRef(arrSlot), SlotRef(iSlot),
                             AggregateAbi.MintDefault(_builder, _ctx.Aggregates.GetLayout((INamedTypeSymbol)elemSym),
                                 _ctx.Aggregates.GetLayout, GetStorageTypeName) });
-                    EmitAssign(iSlot, ExternCall("SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32",
+                    EmitAssign(iSlot, ExternCall(UdonAbi.Int32Add,
                         new List<CLeaf> { SlotRef(iSlot), Const(1, StorageTypes.Int32) }, StorageTypes.Int32));
                 });
         }
@@ -78,7 +78,7 @@ public class ArrayHandler : HandlerBase, IExpressionHandler
         // Index from end: arr[^1] → arr[arr.Length - 1]
         var indexVal = ResolveArrayIndex(arrayVal, arrayType, index);
 
-        var resultVal = ExternCall(ExternResolver.BuildArrayGetSignature(arrayType, elementType), new List<CLeaf> { arrayVal, indexVal }, GetStorageType(op.Type));
+        var resultVal = ExternCall(UdonAbi.ArrayGet(arrayType, elementType), new List<CLeaf> { arrayVal, indexVal }, GetStorageType(op.Type));
         // A struct/tuple element read AS A VALUE is copied (value semantics). Receiver access (arr[i].x =)
         // goes through LoadInstanceRaw → ReadArrayElementRaw, which does NOT clone.
         return op.Type is INamedTypeSymbol elemAggT && TypeClassifier.IsAggregateValue(elemAggT)
@@ -100,7 +100,8 @@ public class ArrayHandler : HandlerBase, IExpressionHandler
 
     CLeaf EmitArrayLength(CLeaf arrayVal, string arrayType)
     {
-        var lenVal = ExternCall($"{arrayType}.__get_Length__SystemInt32", new List<CLeaf> { arrayVal }, StorageTypes.Int32);
+        var lenVal = ExternCall(UdonAbi.ArrayLength(arrayType),
+            new List<CLeaf> { arrayVal }, StorageTypes.Int32);
         return lenVal;
     }
 
@@ -120,11 +121,11 @@ public class ArrayHandler : HandlerBase, IExpressionHandler
         var endVal = ResolveRangeOperand(arrayVal, arrayType, rangeOp.RightOperand, true);
 
         // len = end - start
-        var lenVal = ExternCall("SystemInt32.__op_Subtraction__SystemInt32_SystemInt32__SystemInt32",
+        var lenVal = ExternCall(UdonAbi.Int32Subtract,
             new List<CLeaf> { endVal, startVal }, StorageTypes.Int32);
 
         // result = new T[len]
-        var resultVal = ExternCall(ExternResolver.BuildArrayCtorSignature(udonArrType),
+        var resultVal = ExternCall(UdonAbi.ArrayConstructor(udonArrType),
             new List<CLeaf> { lenVal }, new StorageType(udonArrType));
 
         // for (i = 0; i < len; i++) result[i] = arr[start + i]
@@ -136,12 +137,12 @@ public class ArrayHandler : HandlerBase, IExpressionHandler
             // cond: i < len — MUST use the Func overload so it re-evaluates each iteration. The CLeaf overload
             // evaluates the comparison once (before init runs, with i uninitialized), so the copy loop never
             // iterates and the slice returns a correct-length but all-zero array.
-            () => ExternCall("SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean",
+            () => ExternCall(UdonAbi.Int32LessThan,
                 new List<CLeaf> { SlotRef(iSlot), lenVal }, StorageTypes.Boolean),
             // update: i++
             b =>
             {
-                var nextVal = ExternCall("SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32",
+                var nextVal = ExternCall(UdonAbi.Int32Add,
                     new List<CLeaf> { SlotRef(iSlot), Const(1, StorageTypes.Int32) }, StorageTypes.Int32);
                 EmitAssign(iSlot, nextVal);
             },
@@ -149,11 +150,11 @@ public class ArrayHandler : HandlerBase, IExpressionHandler
             b =>
             {
                 // srcIdx = start + i
-                var srcIdxVal = ExternCall("SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32",
+                var srcIdxVal = ExternCall(UdonAbi.Int32Add,
                     new List<CLeaf> { startVal, SlotRef(iSlot) }, StorageTypes.Int32);
 
                 // val = arr[srcIdx]
-                CLeaf valVal = ExternCall(ExternResolver.BuildArrayGetSignature(arrayType, elementType),
+                CLeaf valVal = ExternCall(UdonAbi.ArrayGet(arrayType, elementType),
                     new List<CLeaf> { arrayVal, srcIdxVal }, new StorageType(udonElemType));
 
                 // CW25 (closed-world audit): a struct/tuple element crossing into the slice is a VALUE
@@ -163,7 +164,7 @@ public class ArrayHandler : HandlerBase, IExpressionHandler
                     valVal = AggregateAbi.DeepClone(_builder, valVal, sliceElemAggT, _ctx.Aggregates.GetLayout);
 
                 // result[i] = val
-                EmitExternVoid(ExternResolver.BuildArraySetSignature(arrayType, elementType),
+                EmitExternVoid(UdonAbi.ArraySet(arrayType, elementType),
                     new List<CLeaf> { resultVal, SlotRef(iSlot), valVal });
             }
         );

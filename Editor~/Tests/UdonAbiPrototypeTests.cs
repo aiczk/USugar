@@ -12,7 +12,8 @@ public class UdonAbiPrototypeTests
         var bound = Catalog(signature,
             Param("left", "SystemInt32", UdonAbiParameterMode.In),
             Param("right", "SystemInt32", UdonAbiParameterMode.In),
-            Param("result", "SystemInt32", UdonAbiParameterMode.Out)).Require(signature);
+            Param("result", "SystemInt32", UdonAbiParameterMode.Out))
+            .Require(TestHelper.AbiKey(signature));
         var module = new CModule();
         var builder = new CoreBuilder(module);
         builder.BeginFunction("test");
@@ -33,7 +34,8 @@ public class UdonAbiPrototypeTests
         var bound = Catalog(signature,
             Param("left", "SystemInt32", UdonAbiParameterMode.In),
             Param("right", "SystemInt32", UdonAbiParameterMode.In),
-            Param("result", "SystemInt32", UdonAbiParameterMode.Out)).Require(signature);
+            Param("result", "SystemInt32", UdonAbiParameterMode.Out))
+            .Require(TestHelper.AbiKey(signature));
         var module = new CModule();
         var builder = new CoreBuilder(module);
         builder.BeginFunction("test");
@@ -53,7 +55,8 @@ public class UdonAbiPrototypeTests
         const string signature = "ExampleMath.__Abs__SystemInt32__SystemInt32";
         var bound = Catalog(signature,
             Param("value", "SystemInt32", UdonAbiParameterMode.In),
-            Param("result", "SystemInt32", UdonAbiParameterMode.Out)).Require(signature);
+            Param("result", "SystemInt32", UdonAbiParameterMode.Out))
+            .Require(TestHelper.AbiKey(signature));
         var module = new CModule();
         var builder = new CoreBuilder(module);
         builder.BeginFunction("test");
@@ -78,7 +81,8 @@ public class UdonAbiPrototypeTests
             new UdonAbiParameter("result", UdonAbiType.Generic("T"),
                 UdonAbiParameterMode.Out),
         });
-        var bound = new UdonAbiCatalog(new[] { prototype }).Require(signature);
+        var bound = new UdonAbiCatalog(new[] { prototype })
+            .Require(TestHelper.AbiKey(signature));
         var facts = new UdonTypeFactRegistry();
         var good = new CExternCall(bound, new List<CLeaf>
         {
@@ -98,7 +102,7 @@ public class UdonAbiPrototypeTests
     static UdonAbiCatalog Catalog(string signature, params UdonAbiParameter[] parameters)
         => new(new[]
         {
-            new UdonExternPrototype(signature, ExternResolver.ExternTypePrefix(signature),
+            new UdonExternPrototype(signature, TestHelper.RegistryOwner(signature),
                 "test", parameters),
         });
 

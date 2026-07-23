@@ -277,7 +277,7 @@ public static class CoreFlatOptimizer
         var tSp = func.NewSlot(StorageTypes.Int32, SlotClass.Scratch);
         output.Add(new CLoadField(tSp, RecurSpId, StorageTypes.Int32));
         output.Add(new CExprStmt(new CExternCall(
-            abiCatalog.Require(ExternResolver.BuildArraySetSignature("SystemObjectArray", "SystemObject")),
+            abiCatalog.Require(UdonAbi.ArraySet("SystemObjectArray", "SystemObject")),
             new List<CLeaf> { new CSlotRef(tStack, StorageTypes.ObjectArray), new CSlotRef(tSp, StorageTypes.Int32), valueLeaf },
             StorageTypes.Void)));
         SpDelta(func, output, +1, abiCatalog);
@@ -294,7 +294,7 @@ public static class CoreFlatOptimizer
         output.Add(new CLoadField(tSp, RecurSpId, StorageTypes.Int32));
         var tGet = func.NewSlot(StorageTypes.Object, SlotClass.Scratch);
         output.Add(new CExprStmt(new CExternCall(
-            abiCatalog.Require(ExternResolver.BuildArrayGetSignature("SystemObjectArray", "SystemObject")),
+            abiCatalog.Require(UdonAbi.ArrayGet("SystemObjectArray", "SystemObject")),
             new List<CLeaf> { new CSlotRef(tStack, StorageTypes.ObjectArray), new CSlotRef(tSp, StorageTypes.Int32) },
             StorageTypes.Object, tGet)));
         if (fieldName != null)
@@ -310,8 +310,8 @@ public static class CoreFlatOptimizer
         output.Add(new CLoadField(tSp, RecurSpId, StorageTypes.Int32));
         var tNew = func.NewSlot(StorageTypes.Int32, SlotClass.Scratch);
         var sig = delta >= 0
-            ? "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
-            : "SystemInt32.__op_Subtraction__SystemInt32_SystemInt32__SystemInt32";
+            ? UdonAbi.Int32Add
+            : UdonAbi.Int32Subtract;
         output.Add(new CExprStmt(new CExternCall(abiCatalog.Require(sig),
             new List<CLeaf> { new CSlotRef(tSp, StorageTypes.Int32), new CConst(System.Math.Abs(delta), StorageTypes.Int32) },
             StorageTypes.Int32, tNew)));

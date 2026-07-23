@@ -50,7 +50,7 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
                 && (TypeClassifier.IsUserClass(vt) || ExternResolver.IsUserEnum(vt)))
             {
                 var converted = ConvertConcatOperand(VisitExpression(vOp), vOp);
-                var concat = ExternCall("SystemString.__Concat__SystemObject_SystemObject__SystemString",
+                var concat = ExternCall(UdonAbi.StringConcatObjects,
                     new List<CLeaf> { leftVal, converted }, StorageTypes.String);
                 lv.Write(concat);
                 return concat;
@@ -205,7 +205,7 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
             foreach (var target in targets)
             {
                 var match = ExternCall(
-                    "SystemString.__op_Equality__SystemString_SystemString__SystemBoolean",
+                    UdonAbi.StringEquality,
                     new List<CLeaf> { typeObj, LoadField(target.TypeObjVar, StorageTypes.String) },
                     StorageTypes.Boolean);
                 _builder.EmitIf(match, _ => EmitExprStmt(EmitCallToMethod(
@@ -309,7 +309,8 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
     }
 
     CLeaf PromoteToInt32(CLeaf value, string srcUdonType)
-        => ExternCall($"SystemConvert.__ToInt32__{srcUdonType}__SystemInt32",
+        => ExternCall(UdonAbiKey.Method("SystemConvert", "ToInt32",
+                new[] { srcUdonType }, "SystemInt32"),
             new List<CLeaf> { value }, StorageTypes.Int32);
 
     CLeaf VisitIncrementDecrement(IIncrementOrDecrementOperation op)
@@ -358,8 +359,8 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
 
         var isIncrement = op.Kind == OperationKind.Increment;
         var externName = isIncrement ? "op_Addition" : "op_Subtraction";
-        var sig = ExternResolver.BuildMethodSignature(
-            opType, ExternResolver.GetOperatorExternName(externName),
+        var sig = UdonAbiKey.Method(
+            opType, externName,
             new[] { opType, opType }, opType);
 
         CLeaf resultVal = ExternCall(sig, new List<CLeaf> { targetVal, oneConst }, new StorageType(opType));

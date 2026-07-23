@@ -452,7 +452,7 @@ public static class CoreFlatten
             AbiCatalog = abiCatalog;
         }
 
-        public BoundExtern Bind(ExternSignature signature) => AbiCatalog.Require(signature);
+        public BoundExtern Bind(UdonAbiKey signature) => AbiCatalog.Require(signature);
 
         public CBlock NewBlock()
         {

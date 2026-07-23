@@ -25,18 +25,17 @@ public sealed class UdonAbiBinder
 
     public UdonAbiCatalog Catalog => _catalog;
 
-    public BoundExtern BindExact(ExternSignature signature) => _catalog.Require(signature);
-    public BoundExtern BindExact(string signature) => _catalog.Require(signature);
+    public BoundExtern BindExact(UdonAbiKey key) => _catalog.Require(key);
 
-    public BoundExtern BindFirst(string operation, IEnumerable<ExternSignature> candidates)
+    public BoundExtern BindFirst(string operation, IEnumerable<UdonAbiKey> candidates)
     {
         if (candidates == null) throw new ArgumentNullException(nameof(candidates));
         var attempted = new List<string>();
-        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var seen = new HashSet<UdonAbiKey>();
         foreach (var candidate in candidates)
         {
-            if (!seen.Add(candidate.Text)) continue;
-            attempted.Add(candidate.Text);
+            if (!seen.Add(candidate)) continue;
+            attempted.Add(candidate.ToString());
             if (_catalog.Contains(candidate))
                 return _catalog.Require(candidate);
         }
@@ -57,7 +56,7 @@ public sealed class UdonAbiBinder
         if (getUdonType == null) throw new ArgumentNullException(nameof(getUdonType));
         var parameterTypes = DeclaredParameterTypes(method, getUdonType);
         var returnType = getUdonType(method.ReturnType);
-        var methodName = ExternResolver.GetOperatorExternName(method.Name);
+        var methodName = method.Name;
         var owners = new[]
         {
             getUdonType(method.ContainingType),
@@ -67,7 +66,7 @@ public sealed class UdonAbiBinder
         return BindFirst(
             $"conversion operator '{method.ToDisplayString()}'",
             owners.Where(owner => !string.IsNullOrEmpty(owner))
-                .Select(owner => (ExternSignature)ExternResolver.BuildMethodSignature(
+                .Select(owner => UdonAbiKey.Method(
                     owner, methodName, parameterTypes, returnType)));
     }
 
@@ -80,14 +79,14 @@ public sealed class UdonAbiBinder
     {
         if (method == null) throw new ArgumentNullException(nameof(method));
         if (getUdonType == null) throw new ArgumentNullException(nameof(getUdonType));
-        var signature = ExternResolver.BuildMethodSignature(
+        var signature = UdonAbiKey.Method(
             getUdonType(method.ContainingType),
-            ExternResolver.GetOperatorExternName(method.Name),
+            method.Name,
             DeclaredParameterTypes(method, getUdonType),
             getUdonType(method.ReturnType));
         return BindFirst(
             $"operator '{method.ToDisplayString()}'",
-            new[] { (ExternSignature)signature });
+            new[] { signature });
     }
 
     public BoundExtern BindMethod(IMethodSymbol method, string owner,
@@ -108,14 +107,14 @@ public sealed class UdonAbiBinder
         if (string.IsNullOrEmpty(owner)) throw new ArgumentException("An ABI owner is required.", nameof(owner));
         if (getUdonType == null) throw new ArgumentNullException(nameof(getUdonType));
 
-        var candidates = new List<ExternSignature>();
-        var methodName = $"__{method.Name}";
+        var candidates = new List<UdonAbiKey>();
+        var methodName = method.Name;
         var returnType = getUdonType(method.ReturnType);
 
         void AddShape(IMethodSymbol shape, string[] overrideTypes = null)
         {
             var parameterTypes = overrideTypes ?? DeclaredParameterTypes(shape, getUdonType);
-            var primary = ExternResolver.BuildMethodSignature(
+            var primary = UdonAbiKey.Method(
                 owner, methodName, parameterTypes, returnType);
             candidates.Add(primary);
 
@@ -125,10 +124,9 @@ public sealed class UdonAbiBinder
             if (!mappedOwner.StartsWith("UnityEngine", StringComparison.Ordinal)
                 && mappedOwner != "VRCUdonCommonInterfacesIUdonEventReceiver")
                 return;
-            var rest = primary.Substring(primary.IndexOf(".__", StringComparison.Ordinal));
             foreach (var fallbackOwner in UnityInstanceOwnerFallbacks)
-                if (fallbackOwner != mappedOwner)
-                    candidates.Add(fallbackOwner + rest);
+                if (fallbackOwner != primary.Owner)
+                    candidates.Add(primary.WithOwner(fallbackOwner));
         }
 
         AddShape(method, parameterOverride);
@@ -149,10 +147,10 @@ public sealed class UdonAbiBinder
             AddShape(method, coerced);
         }
 
-        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var seen = new HashSet<UdonAbiKey>();
         foreach (var candidate in candidates)
         {
-            if (!seen.Add(candidate.Text) || !_catalog.Contains(candidate)) continue;
+            if (!seen.Add(candidate) || !_catalog.Contains(candidate)) continue;
             bound = _catalog.Require(candidate);
             return true;
         }
@@ -165,16 +163,14 @@ public sealed class UdonAbiBinder
     {
         var mappedOwner = ExternResolver.RemapExternOwnerType(
             ExternResolver.SanitizeTypeName(owner));
-        var suffix = $".__set_{fieldName}__{ExternResolver.SanitizeTypeName(valueType)}";
-        var prefix = mappedOwner + suffix;
-        var withVoid = prefix + "__SystemVoid";
-        var candidates = new List<string>(isValueType
-            ? new[] { prefix, withVoid }
-            : new[] { withVoid, prefix });
-        AddUnityOwnerFallbacks(candidates, mappedOwner, suffix, hasReceiver, isValueType);
+        var plain = UdonAbiKey.OmittedResult(mappedOwner, "set_" + fieldName, valueType);
+        var withVoid = UdonAbiKey.VoidMethod(mappedOwner, "set_" + fieldName, valueType);
+        var candidates = new List<UdonAbiKey>(isValueType
+            ? new[] { plain, withVoid }
+            : new[] { withVoid, plain });
+        AddUnityOwnerFallbacks(candidates, mappedOwner, hasReceiver);
         return BindFirst(
-            $"field setter '{owner}.{fieldName}'",
-            candidates.Select(candidate => (ExternSignature)candidate));
+            $"field setter '{owner}.{fieldName}'", candidates);
     }
 
     public BoundExtern BindPropertySetter(string owner, string propertyName,
@@ -182,13 +178,14 @@ public sealed class UdonAbiBinder
     {
         var mappedOwner = ExternResolver.RemapExternOwnerType(
             ExternResolver.SanitizeTypeName(owner));
-        var suffix = $".__set_{propertyName}__{ExternResolver.SanitizeTypeName(valueType)}";
-        var prefix = mappedOwner + suffix;
-        var candidates = new List<string> { prefix + "__SystemVoid", prefix };
-        AddUnityOwnerFallbacks(candidates, mappedOwner, suffix, hasReceiver, preferPlain: false);
+        var candidates = new List<UdonAbiKey>
+        {
+            UdonAbiKey.VoidMethod(mappedOwner, "set_" + propertyName, valueType),
+            UdonAbiKey.OmittedResult(mappedOwner, "set_" + propertyName, valueType),
+        };
+        AddUnityOwnerFallbacks(candidates, mappedOwner, hasReceiver);
         return BindFirst(
-            $"property setter '{owner}.{propertyName}'",
-            candidates.Select(candidate => (ExternSignature)candidate));
+            $"property setter '{owner}.{propertyName}'", candidates);
     }
 
     public BoundExtern BindPropertyGetter(string owner, string propertyName,
@@ -196,16 +193,11 @@ public sealed class UdonAbiBinder
     {
         var mappedOwner = ExternResolver.RemapExternOwnerType(
             ExternResolver.SanitizeTypeName(owner));
-        var suffix = $".__get_{propertyName}__{ExternResolver.SanitizeTypeName(returnType)}";
-        var candidates = new List<ExternSignature> { mappedOwner + suffix };
-        if (hasReceiver
-            && (mappedOwner.StartsWith("UnityEngine", StringComparison.Ordinal)
-                || mappedOwner == "VRCUdonCommonInterfacesIUdonEventReceiver"))
+        var candidates = new List<UdonAbiKey>
         {
-            foreach (var fallbackOwner in UnityInstanceOwnerFallbacks)
-                if (fallbackOwner != mappedOwner)
-                    candidates.Add(fallbackOwner + suffix);
-        }
+            UdonAbiKey.Method(mappedOwner, "get_" + propertyName, returnType),
+        };
+        AddUnityOwnerFallbacks(candidates, mappedOwner, hasReceiver);
         return BindFirst(
             $"property getter '{owner}.{propertyName}'", candidates);
     }
@@ -216,14 +208,13 @@ public sealed class UdonAbiBinder
         if (indexTypes == null) throw new ArgumentNullException(nameof(indexTypes));
         var mappedOwner = ExternResolver.RemapExternOwnerType(
             ExternResolver.SanitizeTypeName(owner));
-        var parameters = string.Join("_", indexTypes.Select(ExternResolver.SanitizeTypeName));
-        var suffix = $".__get_{propertyName}__{parameters}__"
-                     + ExternResolver.SanitizeTypeName(returnType);
-        var candidates = new List<string> { mappedOwner + suffix };
-        AddUnityOwnerFallbacks(candidates, mappedOwner, suffix, hasReceiver, preferPlain: true);
+        var candidates = new List<UdonAbiKey>
+        {
+            UdonAbiKey.Method(mappedOwner, "get_" + propertyName, indexTypes, returnType),
+        };
+        AddUnityOwnerFallbacks(candidates, mappedOwner, hasReceiver);
         return BindFirst(
-            $"indexer getter '{owner}.{propertyName}'",
-            candidates.Select(candidate => (ExternSignature)candidate));
+            $"indexer getter '{owner}.{propertyName}'", candidates);
     }
 
     public BoundExtern BindIndexerSetter(string owner, string propertyName,
@@ -232,39 +223,32 @@ public sealed class UdonAbiBinder
         if (indexTypes == null) throw new ArgumentNullException(nameof(indexTypes));
         var mappedOwner = ExternResolver.RemapExternOwnerType(
             ExternResolver.SanitizeTypeName(owner));
-        var parameters = indexTypes
-            .Select(ExternResolver.SanitizeTypeName)
-            .Concat(new[] { ExternResolver.SanitizeTypeName(valueType) });
-        var suffix = $".__set_{propertyName}__{string.Join("_", parameters)}";
-        var prefix = mappedOwner + suffix;
-        var candidates = new List<string> { prefix + "__SystemVoid", prefix };
-        AddUnityOwnerFallbacks(candidates, mappedOwner, suffix, hasReceiver, preferPlain: false);
+        var parameters = indexTypes.Concat(new[] { valueType }).ToArray();
+        var candidates = new List<UdonAbiKey>
+        {
+            UdonAbiKey.Method(mappedOwner, "set_" + propertyName,
+                parameters, "SystemVoid"),
+            UdonAbiKey.OmittedResult(mappedOwner, "set_" + propertyName,
+                parameters),
+        };
+        AddUnityOwnerFallbacks(candidates, mappedOwner, hasReceiver);
         return BindFirst(
-            $"indexer setter '{owner}.{propertyName}'",
-            candidates.Select(candidate => (ExternSignature)candidate));
+            $"indexer setter '{owner}.{propertyName}'", candidates);
     }
 
-    static void AddUnityOwnerFallbacks(List<string> candidates, string mappedOwner,
-        string suffix, bool hasReceiver, bool preferPlain)
+    static void AddUnityOwnerFallbacks(List<UdonAbiKey> candidates,
+        string mappedOwner, bool hasReceiver)
     {
         if (!hasReceiver
             || (!mappedOwner.StartsWith("UnityEngine", StringComparison.Ordinal)
                 && mappedOwner != "VRCUdonCommonInterfacesIUdonEventReceiver"))
             return;
+        var primaryShapes = candidates.ToArray();
         foreach (var fallbackOwner in UnityInstanceOwnerFallbacks)
         {
             if (fallbackOwner == mappedOwner) continue;
-            var prefix = fallbackOwner + suffix;
-            if (preferPlain)
-            {
-                candidates.Add(prefix);
-                candidates.Add(prefix + "__SystemVoid");
-            }
-            else
-            {
-                candidates.Add(prefix + "__SystemVoid");
-                candidates.Add(prefix);
-            }
+            foreach (var shape in primaryShapes)
+                candidates.Add(shape.WithOwner(fallbackOwner));
         }
     }
 

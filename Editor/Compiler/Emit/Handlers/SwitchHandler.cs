@@ -137,7 +137,7 @@ public class SwitchHandler : HandlerBase, IOperationHandler
             caseCond = caseCond == null
                 ? clauseCond
                 : ExternCall(
-                    "SystemBoolean.__op_ConditionalOr__SystemBoolean_SystemBoolean__SystemBoolean",
+                    UdonAbi.BooleanConditionalOr,
                     new List<CLeaf> { caseCond, clauseCond },
                     StorageTypes.Boolean);
         }
@@ -183,8 +183,8 @@ public class SwitchHandler : HandlerBase, IOperationHandler
                     caseValueVal = EmitEnumToUnderlying(caseValueVal, switchValueType);
                 }
 
-                var eqSig = ExternResolver.BuildMethodSignature(
-                    eqType, "__op_Equality", new[] { eqType, eqType }, "SystemBoolean");
+                var eqSig = UdonAbiKey.Method(
+                    eqType, "op_Equality", new[] { eqType, eqType }, "SystemBoolean");
 
                 var lhs = convertedValueVal;
                 return ExternCall(eqSig, new List<CLeaf> { lhs, caseValueVal }, StorageTypes.Boolean);

@@ -9,7 +9,7 @@ public static class ExternRegistry
 {
     static readonly HashSet<string> ValidExterns = LoadRegistry();
     static readonly HashSet<string> ValidTypePrefixes =
-        new(ValidExterns.Select(ExternResolver.ExternTypePrefix));
+        new(ValidExterns.Select(TestHelper.RegistryOwner));
 
     static HashSet<string> LoadRegistry()
     {

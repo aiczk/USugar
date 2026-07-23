@@ -1696,7 +1696,7 @@ public partial class UasmEmitter
                     var elementType = GetArrayElemType(arrTypeSym);
                     var sizeConst = _bridge.ConstInt(arrayInit.ElementValues.Length);
                     var arrVal = _bridge.CallExtern(new StorageType(arrayType),
-                        ExternResolver.BuildArrayCtorSignature(arrayType),
+                        UdonAbi.ArrayConstructor(arrayType),
                         new CLeaf[] { sizeConst });
                     _bridge.Store(fieldId, arrVal);
                     for (int i = 0; i < arrayInit.ElementValues.Length; i++)
@@ -1705,7 +1705,7 @@ public partial class UasmEmitter
                         var idxConst = _bridge.ConstInt(i);
                         var arrLoad = _bridge.Load(fieldId, new StorageType(arrayType));
                         _bridge.CallExternVoid(
-                            ExternResolver.BuildArraySetSignature(arrayType, elementType),
+                            UdonAbi.ArraySet(arrayType, elementType),
                             new CLeaf[] { arrLoad, idxConst, elemVal });
                     }
                     continue;
@@ -1725,7 +1725,8 @@ public partial class UasmEmitter
                         var srcType = GetStorageTypeName(initOp.Type);
                         var dstType = GetStorageTypeName(fieldType);
                         var converted = _bridge.CallExtern(new StorageType(dstType),
-                            $"SystemConvert.__{methodName}__{srcType}__{dstType}",
+                            UdonAbiKey.Method("SystemConvert", methodName,
+                                new[] { srcType }, dstType),
                             new CLeaf[] { valueVal });
                         _bridge.Store(fieldId, converted);
                         continue;

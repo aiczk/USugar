@@ -23,9 +23,9 @@ public sealed class MulticastDelegateEmitter
         _classSymbol = context.ClassSymbol;
     }
 
-    static readonly string MulticastArrGet = ExternResolver.BuildArrayGetSignature("SystemObjectArray", "SystemObject");
-    static readonly string MulticastArrSet = ExternResolver.BuildArraySetSignature("SystemObjectArray", "SystemObject");
-    static readonly string MulticastArrCtor = ExternResolver.BuildArrayCtorSignature("SystemObjectArray");
+    static readonly UdonAbiKey MulticastArrGet = UdonAbi.ArrayGet("SystemObjectArray", "SystemObject");
+    static readonly UdonAbiKey MulticastArrSet = UdonAbi.ArraySet("SystemObjectArray", "SystemObject");
+    static readonly UdonAbiKey MulticastArrCtor = UdonAbi.ArrayConstructor("SystemObjectArray");
 
     /// <summary>Element-by-element object[] blit (§1.4/§9 open item 1, A-M0 finding): the registry lists
     /// `SystemArray.__Copy` by name, but the real Udon VM assembler this harness targets does not resolve
@@ -36,16 +36,16 @@ public sealed class MulticastDelegateEmitter
         var kSlot = _ctx.Builder.AllocScratch(StorageTypes.Int32);
         _builder.EmitFor(
             _ => _builder.EmitAssign(kSlot, _bridge.ConstInt(0)),
-            () => _bridge.CallExtern(StorageTypes.Boolean, "SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean",
+            () => _bridge.CallExtern(StorageTypes.Boolean, UdonAbi.Int32LessThan,
                 new CLeaf[] { _builder.SlotRef(kSlot), _builder.SlotRef(lenSlot) }),
             _ => _builder.EmitAssign(kSlot, _bridge.CallExtern(StorageTypes.Int32,
-                "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32",
+                UdonAbi.Int32Add,
                 new CLeaf[] { _builder.SlotRef(kSlot), _bridge.ConstInt(1) })),
             _ =>
             {
-                var srcIdx = _bridge.CallExtern(StorageTypes.Int32, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32",
+                var srcIdx = _bridge.CallExtern(StorageTypes.Int32, UdonAbi.Int32Add,
                     new CLeaf[] { srcStart, _builder.SlotRef(kSlot) });
-                var dstIdx = _bridge.CallExtern(StorageTypes.Int32, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32",
+                var dstIdx = _bridge.CallExtern(StorageTypes.Int32, UdonAbi.Int32Add,
                     new CLeaf[] { dstStart, _builder.SlotRef(kSlot) });
                 var elem = _bridge.CallExtern(StorageTypes.Object, MulticastArrGet, new CLeaf[] { _builder.SlotRef(srcSlot), srcIdx });
                 _bridge.CallExternVoid(MulticastArrSet, new CLeaf[] { _builder.SlotRef(dstSlot), dstIdx, elem });
@@ -108,17 +108,17 @@ public sealed class MulticastDelegateEmitter
             {
                 var tag = DelegateAbi.ReadSlot(_builder, operand, DelegateAbi.Method, "SystemString");
                 var isMulticast = _bridge.CallExtern(StorageTypes.Boolean,
-                    "SystemString.__op_Equality__SystemString_SystemString__SystemBoolean",
+                    UdonAbi.StringEquality,
                     new CLeaf[] { tag, _builder.Const(fanoutName, StorageTypes.String) });
                 _builder.EmitIf(isMulticast,
                     _ =>
                     {
                         _builder.EmitAssign(lSlot, DelegateAbi.ReadSlot(_builder, operand, DelegateAbi.Env, "SystemObjectArray"));
                         var listOk = _bridge.CallExtern(StorageTypes.Boolean,
-                            "SystemObject.__op_Inequality__SystemObject_SystemObject__SystemBoolean",
+                            UdonAbi.ObjectInequality,
                             new CLeaf[] { _builder.SlotRef(lSlot), _builder.Const(null, StorageTypes.Object) });
                         _builder.EmitIf(listOk,
-                            _ => _builder.EmitAssign(nSlot, _bridge.CallExtern(StorageTypes.Int32, "SystemArray.__get_Length__SystemInt32",
+                            _ => _builder.EmitAssign(nSlot, _bridge.CallExtern(StorageTypes.Int32, UdonAbi.SystemArrayLength,
                                 new CLeaf[] { _builder.SlotRef(lSlot) })),
                             EmitSingleCastWrap);
                     },
@@ -154,11 +154,11 @@ public sealed class MulticastDelegateEmitter
         var xLeaf = _bridge.Load(xId, StorageTypes.ObjectArray);
         var yLeaf = _bridge.Load(yId, StorageTypes.ObjectArray);
 
-        var xNull = _bridge.CallExtern(StorageTypes.Boolean, "SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean",
+        var xNull = _bridge.CallExtern(StorageTypes.Boolean, UdonAbi.ObjectEquality,
             new CLeaf[] { xLeaf, _builder.Const(null, StorageTypes.Object) });
         _builder.EmitIf(xNull, _ => _builder.EmitReturn(yLeaf)); // null + y = y
 
-        var yNull = _bridge.CallExtern(StorageTypes.Boolean, "SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean",
+        var yNull = _bridge.CallExtern(StorageTypes.Boolean, UdonAbi.ObjectEquality,
             new CLeaf[] { yLeaf, _builder.Const(null, StorageTypes.Object) });
         _builder.EmitIf(yNull, _ => _builder.EmitReturn(xLeaf)); // x + null = x
 
@@ -168,7 +168,7 @@ public sealed class MulticastDelegateEmitter
 
         var catLenSlot = _ctx.Builder.AllocScratch(StorageTypes.Int32);
         _builder.EmitAssign(catLenSlot, _bridge.CallExtern(StorageTypes.Int32,
-            "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32",
+            UdonAbi.Int32Add,
             new CLeaf[] { _builder.SlotRef(lenLxSlot), _builder.SlotRef(lenLySlot) }));
 
         var catSlot = _ctx.Builder.AllocScratch(StorageTypes.ObjectArray);
@@ -209,11 +209,11 @@ public sealed class MulticastDelegateEmitter
         var xLeaf = _bridge.Load(xId, StorageTypes.ObjectArray);
         var yLeaf = _bridge.Load(yId, StorageTypes.ObjectArray);
 
-        var xNull = _bridge.CallExtern(StorageTypes.Boolean, "SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean",
+        var xNull = _bridge.CallExtern(StorageTypes.Boolean, UdonAbi.ObjectEquality,
             new CLeaf[] { xLeaf, _builder.Const(null, StorageTypes.Object) });
         _builder.EmitIf(xNull, _ => _builder.EmitReturn(_builder.Const(null, StorageTypes.ObjectArray))); // null - y = null
 
-        var yNull = _bridge.CallExtern(StorageTypes.Boolean, "SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean",
+        var yNull = _bridge.CallExtern(StorageTypes.Boolean, UdonAbi.ObjectEquality,
             new CLeaf[] { yLeaf, _builder.Const(null, StorageTypes.Object) });
         _builder.EmitIf(yNull, _ => _builder.EmitReturn(xLeaf)); // x - null = x
 
@@ -227,7 +227,7 @@ public sealed class MulticastDelegateEmitter
         // first full match found this way is the RIGHTMOST (= last) one, per Delegate.Remove semantics.
         var startSlot = _ctx.Builder.AllocScratch(StorageTypes.Int32);
         _builder.EmitAssign(startSlot, _bridge.CallExtern(StorageTypes.Int32,
-            "SystemInt32.__op_Subtraction__SystemInt32_SystemInt32__SystemInt32",
+            UdonAbi.Int32Subtract,
             new CLeaf[] { _builder.SlotRef(lenLxSlot), _builder.SlotRef(lenLySlot) }));
         var foundSlot = _ctx.Builder.AllocScratch(StorageTypes.Boolean);
         _builder.EmitAssign(foundSlot, _builder.Const(false, StorageTypes.Boolean));
@@ -236,12 +236,12 @@ public sealed class MulticastDelegateEmitter
 
         _builder.EmitWhile(() =>
             {
-                var notFound = _bridge.CallExtern(StorageTypes.Boolean, "SystemBoolean.__op_UnaryNegation__SystemBoolean__SystemBoolean",
+                var notFound = _bridge.CallExtern(StorageTypes.Boolean, UdonAbi.BooleanNot,
                     new CLeaf[] { _builder.SlotRef(foundSlot) });
                 var startOk = _bridge.CallExtern(StorageTypes.Boolean,
-                    "SystemInt32.__op_GreaterThanOrEqual__SystemInt32_SystemInt32__SystemBoolean",
+                    UdonAbiKey.Method("SystemInt32", "op_GreaterThanOrEqual", new[] { "SystemInt32", "SystemInt32" }, "SystemBoolean"),
                     new CLeaf[] { _builder.SlotRef(startSlot), _bridge.ConstInt(0) });
-                return _bridge.CallExtern(StorageTypes.Boolean, "SystemBoolean.__op_LogicalAnd__SystemBoolean_SystemBoolean__SystemBoolean",
+                return _bridge.CallExtern(StorageTypes.Boolean, UdonAbi.BooleanLogicalAnd,
                     new CLeaf[] { notFound, startOk });
             },
             _ =>
@@ -253,25 +253,25 @@ public sealed class MulticastDelegateEmitter
 
                 _builder.EmitWhile(() =>
                     {
-                        var kOk = _bridge.CallExtern(StorageTypes.Boolean, "SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean",
+                        var kOk = _bridge.CallExtern(StorageTypes.Boolean, UdonAbi.Int32LessThan,
                             new CLeaf[] { _builder.SlotRef(kSlot), _builder.SlotRef(lenLySlot) });
-                        return _bridge.CallExtern(StorageTypes.Boolean, "SystemBoolean.__op_LogicalAnd__SystemBoolean_SystemBoolean__SystemBoolean",
+                        return _bridge.CallExtern(StorageTypes.Boolean, UdonAbi.BooleanLogicalAnd,
                             new CLeaf[] { _builder.SlotRef(allMatchSlot), kOk });
                     },
                     _ =>
                     {
-                        var lxIdx = _bridge.CallExtern(StorageTypes.Int32, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32",
+                        var lxIdx = _bridge.CallExtern(StorageTypes.Int32, UdonAbi.Int32Add,
                             new CLeaf[] { _builder.SlotRef(startSlot), _builder.SlotRef(kSlot) });
                         var lxElem = _bridge.CallExtern(StorageTypes.ObjectArray, MulticastArrGet,
                             new CLeaf[] { _builder.SlotRef(lxSlot), lxIdx });
                         var lyElem = _bridge.CallExtern(StorageTypes.ObjectArray, MulticastArrGet,
                             new CLeaf[] { _builder.SlotRef(lySlot), _builder.SlotRef(kSlot) });
                         var eq = elementEquals.EmitDelegateElementEquals(lxElem, lyElem);
-                        var notEq = _bridge.CallExtern(StorageTypes.Boolean, "SystemBoolean.__op_UnaryNegation__SystemBoolean__SystemBoolean",
+                        var notEq = _bridge.CallExtern(StorageTypes.Boolean, UdonAbi.BooleanNot,
                             new CLeaf[] { eq });
                         _builder.EmitIf(notEq, _ => _builder.EmitAssign(allMatchSlot, _builder.Const(false, StorageTypes.Boolean)));
                         _builder.EmitAssign(kSlot, _bridge.CallExtern(StorageTypes.Int32,
-                            "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32",
+                            UdonAbi.Int32Add,
                             new CLeaf[] { _builder.SlotRef(kSlot), _bridge.ConstInt(1) }));
                     });
 
@@ -282,7 +282,7 @@ public sealed class MulticastDelegateEmitter
                         _builder.EmitAssign(matchIdxSlot, _builder.SlotRef(startSlot));
                     },
                     _ => _builder.EmitAssign(startSlot, _bridge.CallExtern(StorageTypes.Int32,
-                        "SystemInt32.__op_Subtraction__SystemInt32_SystemInt32__SystemInt32",
+                        UdonAbi.Int32Subtract,
                         new CLeaf[] { _builder.SlotRef(startSlot), _bridge.ConstInt(1) })));
             });
 
@@ -290,10 +290,10 @@ public sealed class MulticastDelegateEmitter
 
         var rLenSlot = _ctx.Builder.AllocScratch(StorageTypes.Int32);
         _builder.EmitAssign(rLenSlot, _bridge.CallExtern(StorageTypes.Int32,
-            "SystemInt32.__op_Subtraction__SystemInt32_SystemInt32__SystemInt32",
+            UdonAbi.Int32Subtract,
             new CLeaf[] { _builder.SlotRef(lenLxSlot), _builder.SlotRef(lenLySlot) }));
 
-        var rLenIsZero = _bridge.CallExtern(StorageTypes.Boolean, "SystemInt32.__op_Equality__SystemInt32_SystemInt32__SystemBoolean",
+        var rLenIsZero = _bridge.CallExtern(StorageTypes.Boolean, UdonAbiKey.Method("SystemInt32", "op_Equality", new[] { "SystemInt32", "SystemInt32" }, "SystemBoolean"),
             new CLeaf[] { _builder.SlotRef(rLenSlot), _bridge.ConstInt(0) });
         _builder.EmitIf(rLenIsZero, _ => _builder.EmitReturn(_builder.Const(null, StorageTypes.ObjectArray))); // full removal → null
 
@@ -301,14 +301,14 @@ public sealed class MulticastDelegateEmitter
         _builder.EmitAssign(rSlot, _bridge.CallExtern(StorageTypes.ObjectArray, MulticastArrCtor, new CLeaf[] { _builder.SlotRef(rLenSlot) }));
         EmitMulticastArrayBlit(lxSlot, _bridge.ConstInt(0), rSlot, _bridge.ConstInt(0), matchIdxSlot);
         var tailStartSlot = _ctx.Builder.AllocScratch(StorageTypes.Int32);
-        _builder.EmitAssign(tailStartSlot, _bridge.CallExtern(StorageTypes.Int32, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32",
+        _builder.EmitAssign(tailStartSlot, _bridge.CallExtern(StorageTypes.Int32, UdonAbi.Int32Add,
             new CLeaf[] { _builder.SlotRef(matchIdxSlot), _builder.SlotRef(lenLySlot) }));
         var tailLenSlot = _ctx.Builder.AllocScratch(StorageTypes.Int32);
-        _builder.EmitAssign(tailLenSlot, _bridge.CallExtern(StorageTypes.Int32, "SystemInt32.__op_Subtraction__SystemInt32_SystemInt32__SystemInt32",
+        _builder.EmitAssign(tailLenSlot, _bridge.CallExtern(StorageTypes.Int32, UdonAbi.Int32Subtract,
             new CLeaf[] { _builder.SlotRef(lenLxSlot), _builder.SlotRef(tailStartSlot) }));
         EmitMulticastArrayBlit(lxSlot, _builder.SlotRef(tailStartSlot), rSlot, _builder.SlotRef(matchIdxSlot), tailLenSlot);
 
-        var rLenIsOne = _bridge.CallExtern(StorageTypes.Boolean, "SystemInt32.__op_Equality__SystemInt32_SystemInt32__SystemBoolean",
+        var rLenIsOne = _bridge.CallExtern(StorageTypes.Boolean, UdonAbiKey.Method("SystemInt32", "op_Equality", new[] { "SystemInt32", "SystemInt32" }, "SystemBoolean"),
             new CLeaf[] { _builder.SlotRef(rLenSlot), _bridge.ConstInt(1) });
         _builder.EmitIf(rLenIsOne, _ => _builder.EmitReturn( // single collapse → bare bundle, not re-wrapped
             _bridge.CallExtern(StorageTypes.ObjectArray, MulticastArrGet, new CLeaf[] { _builder.SlotRef(rSlot), _bridge.ConstInt(0) })));
@@ -389,22 +389,22 @@ public sealed class MulticastDelegateEmitter
         // bridge's env-null arm; retSlot is already default-initialized, so the conv-ret store
         // below the guard IS the default return.
         var listOk = _bridge.CallExtern(StorageTypes.Boolean,
-            "SystemObject.__op_Inequality__SystemObject_SystemObject__SystemBoolean",
+            UdonAbi.ObjectInequality,
             new CLeaf[] { _builder.SlotRef(listSlot), _builder.Const(null, StorageTypes.Object) });
         _builder.EmitIf(listOk,
             _ =>
             {
                 var nSlot = _ctx.Builder.AllocScratch(StorageTypes.Int32);
-                _builder.EmitAssign(nSlot, _bridge.CallExtern(StorageTypes.Int32, "SystemArray.__get_Length__SystemInt32",
+                _builder.EmitAssign(nSlot, _bridge.CallExtern(StorageTypes.Int32, UdonAbi.SystemArrayLength,
                     new CLeaf[] { _builder.SlotRef(listSlot) }));
 
                 var iSlot = _ctx.Builder.AllocScratch(StorageTypes.Int32);
                 _builder.EmitFor(
                     _ => _builder.EmitAssign(iSlot, _bridge.ConstInt(0)),
-                    () => _bridge.CallExtern(StorageTypes.Boolean, "SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean",
+                    () => _bridge.CallExtern(StorageTypes.Boolean, UdonAbi.Int32LessThan,
                         new CLeaf[] { _builder.SlotRef(iSlot), _builder.SlotRef(nSlot) }),
                     _ => _builder.EmitAssign(iSlot, _bridge.CallExtern(StorageTypes.Int32,
-                        "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32",
+                        UdonAbi.Int32Add,
                         new CLeaf[] { _builder.SlotRef(iSlot), _bridge.ConstInt(1) })),
                     _ =>
                     {
@@ -420,7 +420,7 @@ public sealed class MulticastDelegateEmitter
                             _builder.EmitAssign(retSlot, elemRet);
                     });
             },
-            _ => _bridge.CallExternVoid("UnityEngineDebug.__LogError__SystemObject__SystemVoid",
+            _ => _bridge.CallExternVoid(UdonAbi.DebugLogError,
                 new[] { (CLeaf)_builder.Const(
                     $"USugar: missing invocation list — multicast fan-out invoked with a null list ({fanoutName})",
                     StorageTypes.String) }));

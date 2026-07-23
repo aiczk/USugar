@@ -200,7 +200,7 @@ public sealed class CoreBuilder
     public CSlotRef Select(CLeaf cond, CLeaf trueVal, CLeaf falseVal, StorageType type)
         => Bind(new CSelect(cond, trueVal, falseVal, type), type);
 
-    public CSlotRef ExternCall(ExternSignature sig, List<CLeaf> args, StorageType retType)
+    public CSlotRef ExternCall(UdonAbiKey sig, List<CLeaf> args, StorageType retType)
     {
         var bound = RequireExtern(sig);
         return ExternCall(bound, args, retType);
@@ -240,7 +240,7 @@ public sealed class CoreBuilder
     // function; the count increment here is the single creation choke point FlatVerify's conservation
     // check is balanced against. preSpillStmts remains the generic extern form.
     // Cross-program dispatch uses CCrossCall so CoreFlatten counts its typed copy-ins directly.
-    public void EmitExternVoid(ExternSignature sig, List<CLeaf> args, bool reentrant = false, int preSpillStmts = 0)
+    public void EmitExternVoid(UdonAbiKey sig, List<CLeaf> args, bool reentrant = false, int preSpillStmts = 0)
         => EmitExternVoid(RequireExtern(sig), args, reentrant, preSpillStmts);
 
     public void EmitExternVoid(BoundExtern bound, List<CLeaf> args, bool reentrant = false, int preSpillStmts = 0)
@@ -251,7 +251,7 @@ public sealed class CoreBuilder
             bound, args, StorageTypes.Void, null, reentrant, preSpillStmts)));
     }
 
-    BoundExtern RequireExtern(ExternSignature signature)
+    BoundExtern RequireExtern(UdonAbiKey signature)
         => (_module.AbiCatalog
             ?? throw new InvalidOperationException(
                 "CoreBuilder cannot emit an extern without a Udon ABI catalog."))

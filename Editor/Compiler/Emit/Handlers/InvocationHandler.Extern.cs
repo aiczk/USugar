@@ -250,8 +250,9 @@ public partial class InvocationHandler
             if (target.Name == "Clone" && target.Parameters.Length == 0)
             {
                 var srcVal = VisitExpression(op.Instance);
-                var lenVal = ExternCall($"{arrType}.__get_Length__SystemInt32", new List<CLeaf> { srcVal }, StorageTypes.Int32);
-                var dstVal = ExternCall(ExternResolver.BuildArrayCtorSignature(arrType), new List<CLeaf> { lenVal }, new StorageType(arrType));
+                var lenVal = ExternCall(UdonAbi.ArrayLength(arrType),
+                    new List<CLeaf> { srcVal }, StorageTypes.Int32);
+                var dstVal = ExternCall(UdonAbi.ArrayConstructor(arrType), new List<CLeaf> { lenVal }, new StorageType(arrType));
                 EmitAggregateElementCopy(srcVal, null, dstVal, null, lenVal, recvElem, arrType, elemType,
                     bufferAgainstOverlap: false); // dst is fresh — cannot overlap the source
                 result = dstVal;
@@ -265,7 +266,8 @@ public partial class InvocationHandler
                         + "use the System.Int32 overload.");
                 var srcVal = VisitExpression(op.Instance);
                 var argVals = EvaluateArgsByOrdinal(op);
-                var lenVal = ExternCall($"{arrType}.__get_Length__SystemInt32", new List<CLeaf> { srcVal }, StorageTypes.Int32);
+                var lenVal = ExternCall(UdonAbi.ArrayLength(arrType),
+                    new List<CLeaf> { srcVal }, StorageTypes.Int32);
                 EmitAggregateElementCopy(srcVal, null, argVals[0], argVals[1], lenVal, recvElem, arrType, elemType,
                     bufferAgainstOverlap: true);
                 return true;
@@ -334,11 +336,11 @@ public partial class InvocationHandler
     void EmitAggregateElementCopy(CLeaf srcVal, CLeaf srcStartVal, CLeaf dstVal, CLeaf dstStartVal, CLeaf lenVal,
         INamedTypeSymbol elemAgg, string arrType, string elemType, bool bufferAgainstOverlap)
     {
-        var getSig = ExternResolver.BuildArrayGetSignature(arrType, elemType);
-        var setSig = ExternResolver.BuildArraySetSignature(arrType, elemType);
+        var getSig = UdonAbi.ArrayGet(arrType, elemType);
+        var setSig = UdonAbi.ArraySet(arrType, elemType);
         if (bufferAgainstOverlap)
         {
-            var tempVal = ExternCall(ExternResolver.BuildArrayCtorSignature(arrType), new List<CLeaf> { lenVal }, new StorageType(arrType));
+            var tempVal = ExternCall(UdonAbi.ArrayConstructor(arrType), new List<CLeaf> { lenVal }, new StorageType(arrType));
             EmitIndexedLoop(lenVal, iVal =>
             {
                 var elemVal = ExternCall(getSig, new List<CLeaf> { srcVal, OffsetIndex(srcStartVal, iVal) }, new StorageType(AggregateAbi.ArrayType));
@@ -369,11 +371,11 @@ public partial class InvocationHandler
             b => { EmitAssign(iSlot, Const(0, StorageTypes.Int32)); },
             // cond MUST be the Func overload so it re-evaluates each iteration (the CLeaf overload
             // evaluates once, silently skipping the loop).
-            () => ExternCall("SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean",
+            () => ExternCall(UdonAbi.Int32LessThan,
                 new List<CLeaf> { SlotRef(iSlot), lenVal }, StorageTypes.Boolean),
             b =>
             {
-                EmitAssign(iSlot, ExternCall("SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32",
+                EmitAssign(iSlot, ExternCall(UdonAbi.Int32Add,
                     new List<CLeaf> { SlotRef(iSlot), Const(1, StorageTypes.Int32) }, StorageTypes.Int32));
             },
             b => body(SlotRef(iSlot)));
@@ -382,7 +384,7 @@ public partial class InvocationHandler
     CLeaf OffsetIndex(CLeaf startVal, CLeaf iVal)
         => startVal == null
             ? iVal
-            : ExternCall("SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32",
+            : ExternCall(UdonAbi.Int32Add,
                 new List<CLeaf> { startVal, iVal }, StorageTypes.Int32);
 
     // ── GetComponent<T> ──
@@ -436,18 +438,13 @@ public partial class InvocationHandler
         // Build extern name with __T form
         const string containingType = "UnityEngineComponent";
         var methodName = target.Name;
-        var retPlaceholder = isPlural ? "__TArray" : "__T";
+        var resultPlaceholder = isPlural ? "TArray" : "T";
         var explicitParams = target.OriginalDefinition.Parameters;
-        string externSig;
-        if (explicitParams.Length > 0)
-        {
-            var paramStr = string.Join("_", explicitParams.Select(p => GetStorageTypeName(p.Type)));
-            externSig = $"{containingType}.__{methodName}__{paramStr}{retPlaceholder}";
-        }
-        else
-        {
-            externSig = $"{containingType}.__{methodName}{retPlaceholder}";
-        }
+        var parameterTypes = explicitParams
+            .Select(parameter => GetStorageTypeName(parameter.Type))
+            .ToArray();
+        var externSig = UdonAbiKey.Method(
+            containingType, methodName, parameterTypes, resultPlaceholder);
 
         return ExternCall(externSig, externArgs, new StorageType(tempType));
     }
@@ -519,7 +516,7 @@ public partial class InvocationHandler
         if (instanceUdon != "UnityEngineGameObject")
             return instanceVal;
         return ExternCall(
-            "UnityEngineGameObject.__get_transform__UnityEngineTransform",
+            UdonAbiKey.Method("UnityEngineGameObject", "get_transform", "UnityEngineTransform"),
             new List<CLeaf> { instanceVal },
             StorageTypes.Transform);
     }
@@ -542,7 +539,7 @@ public partial class InvocationHandler
         return false;
     }
 
-    static string ResolveShimFetchExtern(string methodName, bool hasBoolArg)
+    static UdonAbiKey ResolveShimFetchExtern(string methodName, bool hasBoolArg)
     {
         // Map singular→plural, all use non-generic SystemType overload
         var baseName = methodName;
@@ -554,8 +551,10 @@ public partial class InvocationHandler
             baseName = "GetComponentsInParent";
 
         if (hasBoolArg)
-            return $"UnityEngineComponent.__{baseName}__SystemType_SystemBoolean__UnityEngineComponentArray";
-        return $"UnityEngineComponent.__{baseName}__SystemType__UnityEngineComponentArray";
+            return UdonAbiKey.Method("UnityEngineComponent", baseName,
+                new[] { "SystemType", "SystemBoolean" }, "UnityEngineComponentArray");
+        return UdonAbiKey.Method("UnityEngineComponent", baseName,
+            new[] { "SystemType" }, "UnityEngineComponentArray");
     }
 
     CLeaf EmitShimSingular(CLeaf allComponents, CLeaf targetIdConst, CLeaf reflKeyConst, bool useTypeIds)
@@ -563,7 +562,7 @@ public partial class InvocationHandler
         // Get array length (store to slot so it's not re-evaluated each iteration)
         var lenSlot = _ctx.Builder.AllocScratch(StorageTypes.Int32);
         EmitAssign(lenSlot, ExternCall(
-            "UnityEngineComponentArray.__get_Length__SystemInt32",
+            UdonAbiKey.Method("UnityEngineComponentArray", "get_Length", "SystemInt32"),
             new List<CLeaf> { allComponents }, StorageTypes.Int32));
 
         // Loop index (mutable across control flow)
@@ -577,14 +576,14 @@ public partial class InvocationHandler
         // The CLeaf overload evaluates it ONCE (idx still 0), so the loop never advances / never runs.
         _builder.EmitWhile(
             () => ExternCall(
-                "SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean",
+                UdonAbi.Int32LessThan,
                 new List<CLeaf> { SlotRef(idxSlot), SlotRef(lenSlot) },
                 StorageTypes.Boolean),
             b =>
             {
                 // element = allComponents[idx]
                 var elementVal = ExternCall(
-                    ExternResolver.BuildArrayGetSignature("UnityEngineComponentArray", "UnityEngineComponent"),
+                    UdonAbi.ArrayGet("UnityEngineComponentArray", "UnityEngineComponent"),
                     new List<CLeaf> { allComponents, SlotRef(idxSlot) },
                     StorageTypes.Component);
 
@@ -595,7 +594,7 @@ public partial class InvocationHandler
                 // Null check: if (idValue != null)
                 var nullConst = Const(null, StorageTypes.Object);
                 var notNullVal = ExternCall(
-                    "SystemObject.__op_Inequality__SystemObject_SystemObject__SystemBoolean",
+                    UdonAbi.ObjectInequality,
                     new List<CLeaf> { idValueVal, nullConst },
                     StorageTypes.Boolean);
 
@@ -621,7 +620,7 @@ public partial class InvocationHandler
                 // idx++
                 var oneConst = Const(1, StorageTypes.Int32);
                 var nextIdxVal = ExternCall(
-                    "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32",
+                    UdonAbi.Int32Add,
                     new List<CLeaf> { SlotRef(idxSlot), oneConst },
                     StorageTypes.Int32);
                 EmitAssign(idxSlot, nextIdxVal);
@@ -635,7 +634,7 @@ public partial class InvocationHandler
         // Get array length (store to slot so it's not re-evaluated each iteration)
         var lenSlot = _ctx.Builder.AllocScratch(StorageTypes.Int32);
         EmitAssign(lenSlot, ExternCall(
-            "UnityEngineComponentArray.__get_Length__SystemInt32",
+            UdonAbiKey.Method("UnityEngineComponentArray", "get_Length", "SystemInt32"),
             new List<CLeaf> { allComponents }, StorageTypes.Int32));
 
         var zeroConst = Const(0, StorageTypes.Int32);
@@ -650,7 +649,7 @@ public partial class InvocationHandler
         // while (idx1 < len) — Func overload (re-evaluate each iteration); CLeaf would evaluate idx1<len once.
         _builder.EmitWhile(
             () => ExternCall(
-                "SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean",
+                UdonAbi.Int32LessThan,
                 new List<CLeaf> { SlotRef(idx1Slot), SlotRef(lenSlot) },
                 StorageTypes.Boolean),
             b =>
@@ -660,7 +659,7 @@ public partial class InvocationHandler
                     {
                         // count++
                         var newCountVal = ExternCall(
-                            "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32",
+                            UdonAbi.Int32Add,
                             new List<CLeaf> { SlotRef(countSlot), oneConst },
                             StorageTypes.Int32);
                         EmitAssign(countSlot, newCountVal);
@@ -668,7 +667,7 @@ public partial class InvocationHandler
 
                 // idx1++
                 var nextIdx1Val = ExternCall(
-                    "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32",
+                    UdonAbi.Int32Add,
                     new List<CLeaf> { SlotRef(idx1Slot), oneConst },
                     StorageTypes.Int32);
                 EmitAssign(idx1Slot, nextIdx1Val);
@@ -676,7 +675,7 @@ public partial class InvocationHandler
 
         // === Allocate result array ===
         var resultArr = ExternCall(
-            ExternResolver.BuildArrayCtorSignature("UnityEngineComponentArray"),
+            UdonAbi.ArrayConstructor("UnityEngineComponentArray"),
             new List<CLeaf> { SlotRef(countSlot) },
             StorageTypes.ComponentArray);
 
@@ -689,14 +688,14 @@ public partial class InvocationHandler
         // while (idx2 < len) — Func overload (re-evaluate each iteration); CLeaf would evaluate idx2<len once.
         _builder.EmitWhile(
             () => ExternCall(
-                "SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean",
+                UdonAbi.Int32LessThan,
                 new List<CLeaf> { SlotRef(idx2Slot), SlotRef(lenSlot) },
                 StorageTypes.Boolean),
             b =>
             {
                 // element = allComponents[idx2]
                 var elementVal = ExternCall(
-                    ExternResolver.BuildArrayGetSignature("UnityEngineComponentArray", "UnityEngineComponent"),
+                    UdonAbi.ArrayGet("UnityEngineComponentArray", "UnityEngineComponent"),
                     new List<CLeaf> { allComponents, SlotRef(idx2Slot) },
                     StorageTypes.Component);
 
@@ -706,7 +705,7 @@ public partial class InvocationHandler
 
                 var nullConst = Const(null, StorageTypes.Object);
                 var notNullVal = ExternCall(
-                    "SystemObject.__op_Inequality__SystemObject_SystemObject__SystemBoolean",
+                    UdonAbi.ObjectInequality,
                     new List<CLeaf> { idValueVal, nullConst },
                     StorageTypes.Boolean);
 
@@ -717,12 +716,12 @@ public partial class InvocationHandler
                     _builder.EmitIf(matchVal, matchB =>
                     {
                         // result[writeIdx] = element
-                        EmitExternVoid(ExternResolver.BuildArraySetSignature("UnityEngineComponentArray", "UnityEngineComponent"),
+                        EmitExternVoid(UdonAbi.ArraySet("UnityEngineComponentArray", "UnityEngineComponent"),
                             new List<CLeaf> { resultArr, SlotRef(writeIdxSlot), elementVal });
 
                         // writeIdx++
                         var newWriteVal = ExternCall(
-                            "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32",
+                            UdonAbi.Int32Add,
                             new List<CLeaf> { SlotRef(writeIdxSlot), oneConst },
                             StorageTypes.Int32);
                         EmitAssign(writeIdxSlot, newWriteVal);
@@ -731,7 +730,7 @@ public partial class InvocationHandler
 
                 // idx2++
                 var nextIdx2Val = ExternCall(
-                    "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32",
+                    UdonAbi.Int32Add,
                     new List<CLeaf> { SlotRef(idx2Slot), oneConst },
                     StorageTypes.Int32);
                 EmitAssign(idx2Slot, nextIdx2Val);
@@ -750,13 +749,13 @@ public partial class InvocationHandler
         {
             // Array.IndexOf(__refl_typeids, targetId) != -1
             var indexResult = ExternCall(
-                "SystemArray.__IndexOf__SystemArray_SystemObject__SystemInt32",
+                UdonAbiKey.Method("SystemArray", "IndexOf", new[] { "SystemArray", "SystemObject" }, "SystemInt32"),
                 new List<CLeaf> { idValueVal, targetIdConst },
                 StorageTypes.Int32);
 
             var negOneConst = Const(-1, StorageTypes.Int32);
             return ExternCall(
-                "SystemInt32.__op_Inequality__SystemInt32_SystemInt32__SystemBoolean",
+                UdonAbiKey.Method("SystemInt32", "op_Inequality", new[] { "SystemInt32", "SystemInt32" }, "SystemBoolean"),
                 new List<CLeaf> { indexResult, negOneConst },
                 StorageTypes.Boolean);
         }
@@ -764,13 +763,13 @@ public partial class InvocationHandler
         {
             // typeId = Convert.ToInt64(idValue)
             var typeIdVal = ExternCall(
-                "SystemConvert.__ToInt64__SystemObject__SystemInt64",
+                UdonAbiKey.Method("SystemConvert", "ToInt64", new[] { "SystemObject" }, "SystemInt64"),
                 new List<CLeaf> { idValueVal },
                 StorageTypes.Int64);
 
             // typeId == targetId
             return ExternCall(
-                "SystemInt64.__op_Equality__SystemInt64_SystemInt64__SystemBoolean",
+                UdonAbiKey.Method("SystemInt64", "op_Equality", new[] { "SystemInt64", "SystemInt64" }, "SystemBoolean"),
                 new List<CLeaf> { typeIdVal, targetIdConst },
                 StorageTypes.Boolean);
         }
@@ -785,7 +784,7 @@ public partial class InvocationHandler
     {
         // element = allComponents[idx]
         var elementVal = ExternCall(
-            ExternResolver.BuildArrayGetSignature("UnityEngineComponentArray", "UnityEngineComponent"),
+            UdonAbi.ArrayGet("UnityEngineComponentArray", "UnityEngineComponent"),
             new List<CLeaf> { allComponents, SlotRef(idxSlot) },
             StorageTypes.Component);
 
@@ -796,7 +795,7 @@ public partial class InvocationHandler
         // Null check
         var nullConst = Const(null, StorageTypes.Object);
         var notNullVal = ExternCall(
-            "SystemObject.__op_Inequality__SystemObject_SystemObject__SystemBoolean",
+            UdonAbi.ObjectInequality,
             new List<CLeaf> { idValueVal, nullConst },
             StorageTypes.Boolean);
 
@@ -1068,13 +1067,13 @@ public partial class InvocationHandler
                 var elementType = GetArrayElemType(arrSym);
                 return (() =>
                 {
-                    CLeaf elemVal = ExternCall(ExternResolver.BuildArrayGetSignature(arrayType, elementType),
+                    CLeaf elemVal = ExternCall(UdonAbi.ArrayGet(arrayType, elementType),
                         new List<CLeaf> { arrayVal, indexVal }, GetStorageType(arrayElem.Type));
                     if (arrayElem.Type is INamedTypeSymbol elemAgg && TypeClassifier.IsAggregateValue(elemAgg))
                         elemVal = AggregateAbi.DeepClone(_builder, elemVal, elemAgg, _ctx.Aggregates.GetLayout);
                     return elemVal;
                 }, v => EmitExternVoid(
-                    ExternResolver.BuildArraySetSignature(arrayType, elementType),
+                    UdonAbi.ArraySet(arrayType, elementType),
                     new List<CLeaf> { arrayVal, indexVal, v }));
             }
             case IFieldReferenceOperation fieldRef

@@ -32,30 +32,36 @@ public class ExternResolverTests
     }
 
     [Fact]
-    public void BuildMethodSignature_IntAddition()
+    public void AbiKey_IntAddition()
     {
-        var sig = ExternResolver.BuildMethodSignature(
-            "System.Int32", "__op_Addition", new[] { "System.Int32", "System.Int32" }, "System.Int32");
-        Assert.Equal("SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32", sig);
+        var sig = UdonAbiKey.Method(
+            "System.Int32", "op_Addition",
+            new[] { "System.Int32", "System.Int32" }, "System.Int32");
+        Assert.Equal("SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32",
+            sig.ToString());
     }
 
     [Fact]
-    public void BuildMethodSignature_SetActive()
+    public void AbiKey_SetActive()
     {
-        var sig = ExternResolver.BuildMethodSignature(
-            "UnityEngine.GameObject", "__SetActive", new[] { "System.Boolean" }, "System.Void");
-        Assert.Equal("UnityEngineGameObject.__SetActive__SystemBoolean__SystemVoid", sig);
+        var sig = UdonAbiKey.Method(
+            "UnityEngine.GameObject", "SetActive",
+            new[] { "System.Boolean" }, "System.Void");
+        Assert.Equal("UnityEngineGameObject.__SetActive__SystemBoolean__SystemVoid",
+            sig.ToString());
     }
 
     // The signature builders route the receiver through the single RemapUdonType table (the former
     // private 1-arm RemapExternType twin carried only this arm — pin that the fold kept its semantics).
     [Fact]
-    public void BuildMethodSignature_UdonBehaviourReceiver_RemapsToEventReceiver()
+    public void AbiKey_UdonBehaviourReceiver_RemapsToEventReceiver()
     {
-        var sig = ExternResolver.BuildMethodSignature(
-            "VRC.Udon.UdonBehaviour", "__SendCustomEvent", new[] { "System.String" }, "System.Void");
+        var sig = UdonAbiKey.Method(
+            "VRC.Udon.UdonBehaviour", "SendCustomEvent",
+            new[] { "System.String" }, "System.Void");
         Assert.Equal(
-            "VRCUdonCommonInterfacesIUdonEventReceiver.__SendCustomEvent__SystemString__SystemVoid", sig);
+            "VRCUdonCommonInterfacesIUdonEventReceiver.__SendCustomEvent__SystemString__SystemVoid",
+            sig.ToString());
     }
 
     // Hand-enumeration audit Tier-2: BinaryOperatorNames' miss used to silently mint a bogus
@@ -118,18 +124,6 @@ public class FallbackTest : UdonSharpBehaviour {
 }
 ");
         Assert.Contains("UnityEngineVector3", uasm);
-    }
-
-    [Fact]
-    public void BuildOperatorName_Addition()
-    {
-        Assert.Equal("__op_Addition", ExternResolver.GetOperatorExternName("op_Addition"));
-    }
-
-    [Fact]
-    public void BuildOperatorName_Equality()
-    {
-        Assert.Equal("__op_Equality", ExternResolver.GetOperatorExternName("op_Equality"));
     }
 
     // ── Generic type name resolution ──

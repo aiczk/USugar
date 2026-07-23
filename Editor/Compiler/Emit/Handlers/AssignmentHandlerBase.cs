@@ -185,7 +185,7 @@ public abstract class AssignmentHandlerBase : HandlerBase
 
                 // Read current value: arr[idx]
                 var valResult = ExternCall(
-                    ExternResolver.BuildArrayGetSignature(arrayType, elemAccessorType),
+                    UdonAbi.ArrayGet(arrayType, elemAccessorType),
                     new List<CLeaf> { arrayVal, indexVal },
                     GetStorageType(arrayElem.Type));
                 return new LValuePlan { Value = valResult, ArrayVal = arrayVal, IndexVal = indexVal };

@@ -12,19 +12,19 @@ public static class NullableAbi
 
     public static CLeaf IsNull(CoreBuilder builder, CLeaf nullableValue)
         => builder.ExternCall(
-            "SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean",
+            UdonAbi.ObjectEquality,
             new List<CLeaf> { nullableValue, builder.Const(null, new StorageType(StorageType)) },
             StorageTypes.Boolean);
 
     public static CLeaf HasValue(CoreBuilder builder, CLeaf nullableValue)
         => builder.ExternCall(
-            "SystemBoolean.__op_UnaryNegation__SystemBoolean__SystemBoolean",
+            UdonAbi.BooleanNot,
             new List<CLeaf> { IsNull(builder, nullableValue) },
             StorageTypes.Boolean);
 
     public static CLeaf IsNotNull(CoreBuilder builder, CLeaf nullableValue)
         => builder.ExternCall(
-            "SystemObject.__op_Inequality__SystemObject_SystemObject__SystemBoolean",
+            UdonAbi.ObjectInequality,
             new List<CLeaf> { nullableValue, builder.Const(null, new StorageType(StorageType)) },
             StorageTypes.Boolean);
 
@@ -33,7 +33,7 @@ public static class NullableAbi
     {
         if (ExternResolver.IsSmallIntOrChar(getUdonType(underlying)))
         {
-            return (builder.ExternCall("SystemConvert.__ToInt32__SystemObject__SystemInt32",
+            return (builder.ExternCall(UdonAbiKey.Method("SystemConvert", "ToInt32", new[] { "SystemObject" }, "SystemInt32"),
                 new List<CLeaf> { boxed }, StorageTypes.Int32), int32Type);
         }
         return (boxed, underlying);
@@ -59,10 +59,11 @@ public static class NullableAbi
         {
             CValue converted = integerToInteger
                 ? narrowConvert(
-                    builder.ExternCall("SystemConvert.__ToInt64__SystemObject__SystemInt64",
+                    builder.ExternCall(UdonAbiKey.Method("SystemConvert", "ToInt64", new[] { "SystemObject" }, "SystemInt64"),
                         new List<CLeaf> { sourceValue }, StorageTypes.Int64),
                     "SystemInt64", destinationUdonType.Name)
-                : builder.ExternCall($"SystemConvert.__{convertMethodName}__SystemObject__{destinationUdonType.Name}",
+                : builder.ExternCall(UdonAbiKey.Method("SystemConvert",
+                        convertMethodName, new[] { "SystemObject" }, destinationUdonType.Name),
                     new List<CLeaf> { sourceValue }, destinationUdonType);
             builder.EmitAssign(resultSlot, converted);
         });
@@ -188,7 +189,7 @@ public static class NullableAbi
         {
             CLeaf boolCond = wantTrue
                 ? builder.SlotRef(slot)
-                : builder.ExternCall("SystemBoolean.__op_UnaryNegation__SystemBoolean__SystemBoolean",
+                : builder.ExternCall(UdonAbi.BooleanNot,
                     new List<CLeaf> { builder.SlotRef(slot) }, StorageTypes.Boolean);
             builder.EmitIf(HasValue(builder, builder.SlotRef(slot)), _ => builder.EmitIf(boolCond, body));
         }
@@ -268,7 +269,7 @@ public static class NullableAbi
                         __ => builder.EmitAssign(eqSlot, builder.Const(true, StorageTypes.Boolean))));
             IfBothPresent(_ => builder.EmitAssign(eqSlot, ValueOp(BinaryOperatorKind.Equals)));
             if (kind == BinaryOperatorKind.NotEquals)
-                return builder.ExternCall("SystemBoolean.__op_UnaryNegation__SystemBoolean__SystemBoolean",
+                return builder.ExternCall(UdonAbi.BooleanNot,
                     new List<CLeaf> { builder.SlotRef(eqSlot) }, StorageTypes.Boolean);
             return builder.SlotRef(eqSlot);
         }
@@ -300,7 +301,8 @@ public static class NullableAbi
         {
             var (value, _) = promoteBoxed(builder.SlotRef(nullableSlot), operandUnderlying);
             var computed = builder.ExternCall(
-                ExternResolver.BuildMethodSignature(resultUdonType, $"__{opName}", new[] { resultUdonType }, resultUdonType),
+                UdonAbiKey.Method(resultUdonType, opName,
+                    new[] { resultUdonType }, resultUdonType),
                 new List<CLeaf> { value }, new StorageType(resultUdonType));
             builder.EmitAssign(resultSlot, computed);
         });

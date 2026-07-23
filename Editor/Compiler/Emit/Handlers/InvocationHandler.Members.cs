@@ -337,12 +337,12 @@ public partial class InvocationHandler
             var indexVal = VisitExpression(op.Arguments[0].Value);
             var oneConst = Const(1, StorageTypes.Int32);
             var charArr = ExternCall(
-                "SystemString.__ToCharArray__SystemInt32_SystemInt32__SystemCharArray",
+                UdonAbiKey.Method("SystemString", "ToCharArray", new[] { "SystemInt32", "SystemInt32" }, "SystemCharArray"),
                 new List<CLeaf> { inst, indexVal, oneConst },
                 StorageTypes.CharArray);
             var zeroConst = Const(0, StorageTypes.Int32);
             return ExternCall(
-                ExternResolver.BuildArrayGetSignature("SystemCharArray", "SystemChar"),
+                UdonAbi.ArrayGet("SystemCharArray", "SystemChar"),
                 new List<CLeaf> { charArr, zeroConst },
                 StorageTypes.Char);
         }
@@ -447,9 +447,11 @@ public partial class InvocationHandler
             var externArgs = new List<CLeaf>();
             externArgs.Add(formatConst);
             externArgs.AddRange(argVals);
-            var argTypes = string.Join("_", argVals.Select(_ => "SystemObject"));
             return ExternCall(
-                $"SystemString.__Format__SystemString_{argTypes}__SystemString",
+                UdonAbiKey.Method("SystemString", "Format",
+                    new[] { "SystemString" }
+                        .Concat(argVals.Select(_ => "SystemObject")),
+                    "SystemString"),
                 externArgs,
                 StorageTypes.String);
         }
@@ -458,17 +460,17 @@ public partial class InvocationHandler
             // 4+ args: pack into SystemObjectArray, use Format(string, object[])
             var sizeConst = Const(argVals.Count, StorageTypes.Int32);
             var arrVal = ExternCall(
-                ExternResolver.BuildArrayCtorSignature("SystemObjectArray"),
+                UdonAbi.ArrayConstructor("SystemObjectArray"),
                 new List<CLeaf> { sizeConst },
                 StorageTypes.ObjectArray);
             for (int i = 0; i < argVals.Count; i++)
             {
                 var idxConst = Const(i, StorageTypes.Int32);
-                EmitExternVoid(ExternResolver.BuildArraySetSignature("SystemObjectArray", "SystemObject"),
+                EmitExternVoid(UdonAbi.ArraySet("SystemObjectArray", "SystemObject"),
                     new List<CLeaf> { arrVal, idxConst, argVals[i] });
             }
             return ExternCall(
-                "SystemString.__Format__SystemString_SystemObjectArray__SystemString",
+                UdonAbiKey.Method("SystemString", "Format", new[] { "SystemString", "SystemObjectArray" }, "SystemString"),
                 new List<CLeaf> { formatConst, arrVal },
                 StorageTypes.String);
         }
@@ -800,9 +802,8 @@ public partial class InvocationHandler
                 argVals.Add(VisitExpression(op.Arguments[i].Value));
             }
             var paramTypes = op.Arguments.Select(a => GetStorageTypeName(a.Value.Type)).ToArray();
-            var paramPart = string.Join("_", paramTypes);
             resultVal = ExternCall(
-                $"{resultType}.__ctor__{paramPart}__{resultType}",
+                UdonAbiKey.Constructor(resultType, paramTypes, resultType),
                 argVals,
                 new StorageType(resultType));
         }

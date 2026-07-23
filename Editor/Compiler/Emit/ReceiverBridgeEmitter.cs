@@ -64,7 +64,7 @@ public sealed class ReceiverBridgeEmitter
             foreach (var target in targets)
             {
                 var isTarget = _bridge.CallExtern(StorageTypes.Boolean,
-                    "SystemString.__op_Equality__SystemString_SystemString__SystemBoolean",
+                    UdonAbi.StringEquality,
                     typeObj, _bridge.Load(target.TypeObjVar, StorageTypes.String));
                 builder.EmitIf(isTarget, _ =>
                 {
@@ -75,10 +75,10 @@ public sealed class ReceiverBridgeEmitter
                 });
             }
             var missing = _bridge.CallExtern(StorageTypes.Boolean,
-                "SystemBoolean.__op_UnaryNegation__SystemBoolean__SystemBoolean", builder.SlotRef(matched));
+                UdonAbi.BooleanNot, builder.SlotRef(matched));
             builder.EmitIf(missing, _ =>
             {
-                _bridge.CallExternVoid("UnityEngineDebug.__LogError__SystemObject__SystemVoid",
+                _bridge.CallExternVoid(UdonAbi.DebugLogError,
                     builder.Const(
                         $"USugar: interface method-group receiver has no local implementation ({member.ContainingType.Name}.{member.Name})",
                         StorageTypes.String));
@@ -117,7 +117,7 @@ public sealed class ReceiverBridgeEmitter
         arguments.Insert(0, receiver);
 
         var receiverPresent = _bridge.CallExtern(StorageTypes.Boolean,
-            "SystemObject.__op_Inequality__SystemObject_SystemObject__SystemBoolean",
+            UdonAbi.ObjectInequality,
             receiver, builder.Const(null, StorageTypes.Object));
         builder.EmitIf(receiverPresent,
             _ =>
@@ -127,7 +127,7 @@ public sealed class ReceiverBridgeEmitter
             },
             _ =>
             {
-                _bridge.CallExternVoid("UnityEngineDebug.__LogError__SystemObject__SystemVoid",
+                _bridge.CallExternVoid(UdonAbi.DebugLogError,
                     builder.Const(
                         $"USugar: null receiver \u2014 invoked a method-group delegate whose receiver is null ({member.ContainingType.Name}.{member.Name})",
                         StorageTypes.String));

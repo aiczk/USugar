@@ -183,14 +183,22 @@ public sealed class UdonExternPrototype
     /// prototypes from UdonNodeDefinition and is always typed.
     /// </summary>
     internal static UdonExternPrototype UntypedFixture(string registeredName)
-        => new(registeredName, ExternResolver.ExternTypePrefix(registeredName), "",
+        => new(registeredName, RegistryOwner(registeredName), "",
             Array.Empty<UdonAbiParameter>(), hasTypedParameters: false);
+
+    static string RegistryOwner(string registeredName)
+    {
+        var separator = registeredName.IndexOf('.');
+        return separator > 0
+            ? registeredName.Substring(0, separator)
+            : registeredName;
+    }
 }
 
 /// <summary>
 /// Immutable typed view of the extern surface registered by the installed Udon
-/// SDK. An <see cref="ExternSignature"/> is only a candidate name; a
-/// <see cref="BoundExtern"/> carries the SDK prototype that authorized it.
+/// SDK. Compiler code submits a semantic <see cref="UdonAbiKey"/>; only this
+/// boundary serializes it and returns a <see cref="BoundExtern"/>.
 /// </summary>
 public sealed class UdonAbiCatalog
 {
@@ -217,18 +225,17 @@ public sealed class UdonAbiCatalog
             .Where(name => !string.IsNullOrWhiteSpace(name))
             .Select(UdonExternPrototype.UntypedFixture));
 
-    public bool Contains(ExternSignature signature) => _externs.ContainsKey(signature.Text);
-    public bool Contains(string signature)
-        => !string.IsNullOrEmpty(signature) && _externs.ContainsKey(signature);
-    public BoundExtern Require(ExternSignature signature)
+    public bool Contains(UdonAbiKey key)
+        => _externs.ContainsKey(UdonAbiNameSerializer.Serialize(key).Text);
+
+    public BoundExtern Require(UdonAbiKey key)
     {
+        var signature = UdonAbiNameSerializer.Serialize(key);
         if (!_externs.TryGetValue(signature.Text, out var prototype))
             throw new NotSupportedException(
                 $"Udon extern '{signature.Text}' is not registered by the installed SDK.");
-        return new BoundExtern(signature, prototype);
+        return new BoundExtern(key, signature, prototype);
     }
-
-    public BoundExtern Require(string signature) => Require(new ExternSignature(signature));
 
     public IReadOnlyCollection<string> ExternNames => _externs.Keys;
     public IReadOnlyCollection<UdonExternPrototype> Prototypes => _externs.Values;
@@ -237,12 +244,15 @@ public sealed class UdonAbiCatalog
 /// <summary>An exact extern proven to exist in a typed SDK ABI catalog.</summary>
 public sealed class BoundExtern : IEquatable<BoundExtern>
 {
+    public UdonAbiKey Key { get; }
     public ExternSignature Signature { get; }
     public UdonExternPrototype Prototype { get; }
     public string Text => Signature.Text;
 
-    internal BoundExtern(ExternSignature signature, UdonExternPrototype prototype)
+    internal BoundExtern(UdonAbiKey key, ExternSignature signature,
+        UdonExternPrototype prototype)
     {
+        Key = key;
         Signature = signature;
         Prototype = prototype ?? throw new ArgumentNullException(nameof(prototype));
     }

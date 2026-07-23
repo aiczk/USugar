@@ -120,7 +120,7 @@ public abstract partial class HandlerBase
             // typeobj, so the compare is false for them). An `object`-typed value holding a scalar or a
             // typed array (int[]) is NOT an object[] → the read would fault, so the read and the whole
             // ReferenceEquals chain live INSIDE the guard. IsInstanceOfType(null,·) is false → null too.
-            var isBundle = ExternCall("SystemType.__IsInstanceOfType__SystemObject__SystemBoolean",
+            var isBundle = ExternCall(UdonAbiKey.Method("SystemType", "IsInstanceOfType", new[] { "SystemObject" }, "SystemBoolean"),
                 new List<CLeaf> { ConstTypeToken(_compilation.CreateArrayTypeSymbol(
                     _compilation.GetSpecialType(SpecialType.System_Object))), valueVal }, StorageTypes.Boolean);
             var guarded = _ctx.Builder.AllocScratch(StorageTypes.Boolean);
@@ -131,10 +131,10 @@ public abstract partial class HandlerBase
                 CLeaf test = null;
                 foreach (var v in vars)
                 {
-                    var eq = ExternCall("SystemString.__op_Equality__SystemString_SystemString__SystemBoolean",
+                    var eq = ExternCall(UdonAbi.StringEquality,
                         new List<CLeaf> { typeSlot, LoadField(v, StorageTypes.String) }, StorageTypes.Boolean);
                     test = test == null ? eq
-                        : ExternCall("SystemBoolean.__op_LogicalOr__SystemBoolean_SystemBoolean__SystemBoolean",
+                        : ExternCall(UdonAbi.BooleanLogicalOr,
                             new List<CLeaf> { test, eq }, StorageTypes.Boolean);
                 }
                 EmitAssign(guarded, test);
@@ -145,7 +145,7 @@ public abstract partial class HandlerBase
         // The type token is baked through the shared choke point (B51 silent-class armor: an unresolved
         // type parameter would bake a null System.Type constant no validator catches → loud reject there).
         return ExternCall(
-            "SystemType.__IsInstanceOfType__SystemObject__SystemBoolean",
+            UdonAbiKey.Method("SystemType", "IsInstanceOfType", new[] { "SystemObject" }, "SystemBoolean"),
             new List<CLeaf> { ConstTypeToken(targetType), valueVal },
             StorageTypes.Boolean);
     }
@@ -210,7 +210,7 @@ public abstract partial class HandlerBase
     }
 
     /// <summary>Emit an extern call, materialized to a scratch slot (returns the leaf; null for void).</summary>
-    protected CSlotRef ExternCall(ExternSignature sig, List<CLeaf> args, StorageType retType)
+    protected CSlotRef ExternCall(UdonAbiKey sig, List<CLeaf> args, StorageType retType)
         => _builder.ExternCall(sig, args, retType);
 
     protected CSlotRef ExternCall(BoundExtern bound, List<CLeaf> args, StorageType retType)
@@ -233,10 +233,12 @@ public abstract partial class HandlerBase
         if ((fromUdonType == "SystemInt64" && toUdonType == "SystemUInt64")
             || (fromUdonType == "SystemUInt64" && toUdonType == "SystemInt64"))
         {
-            var bytes = ExternCall($"SystemBitConverter.__GetBytes__{fromUdonType}__SystemByteArray",
+            var bytes = ExternCall(UdonAbiKey.Method("SystemBitConverter", "GetBytes",
+                    new[] { fromUdonType }, "SystemByteArray"),
                 new List<CLeaf> { value }, StorageTypes.ByteArray);
             var toMethod = toUdonType == "SystemUInt64" ? "ToUInt64" : "ToInt64";
-            return ExternCall($"SystemBitConverter.__{toMethod}__SystemByteArray_SystemInt32__{toUdonType}",
+            return ExternCall(UdonAbiKey.Method("SystemBitConverter", toMethod,
+                    new[] { "SystemByteArray", "SystemInt32" }, toUdonType),
                 new List<CLeaf> { bytes, Const(0, StorageTypes.Int32) }, new StorageType(toUdonType));
         }
 
@@ -253,7 +255,7 @@ public abstract partial class HandlerBase
         // Non-integer conversions, and lossless integer widenings, never overflow → plain convert is correct.
         if (!IsIntegerUdon(fromUdonType) || !IsIntegerUdon(toUdonType)
             || IsLosslessIntegerWiden(fromUdonType, toUdonType))
-            return ExternCall(ExternResolver.BuildConvertSignature(fromUdonType, toUdonType),
+            return ExternCall(UdonAbi.Convert(fromUdonType, toUdonType),
                 new List<CLeaf> { value }, new StorageType(toUdonType));
 
         // Reduce the source to its low 32 bits as a SIGNED int32, then wrap / reinterpret to the target width.
@@ -269,7 +271,7 @@ public abstract partial class HandlerBase
             case "SystemUInt32": return Int32BitsToUInt32(lowSigned);
         }
         // Unreachable for the supported integer target set; defensive default.
-        return ExternCall(ExternResolver.BuildConvertSignature(fromUdonType, toUdonType),
+        return ExternCall(UdonAbi.Convert(fromUdonType, toUdonType),
             new List<CLeaf> { value }, new StorageType(toUdonType));
     }
 
@@ -315,8 +317,8 @@ public abstract partial class HandlerBase
             eqType = "SystemInt32";
         }
         return ExternCall(
-            ExternResolver.BuildMethodSignature(
-                eqType, "__op_Equality", new[] { eqType, eqType }, "SystemBoolean"),
+            UdonAbiKey.Method(
+                eqType, "op_Equality", new[] { eqType, eqType }, "SystemBoolean"),
             new List<CLeaf> { convertedValueVal, constVal },
             StorageTypes.Boolean);
     }
@@ -329,28 +331,28 @@ public abstract partial class HandlerBase
             return value;
         var asLong = fromUdonType == "SystemInt64"
             ? value
-            : ExternCall(ExternResolver.BuildConvertSignature(fromUdonType, "SystemInt64"),
+            : ExternCall(UdonAbi.Convert(fromUdonType, "SystemInt64"),
                 new List<CLeaf> { value }, StorageTypes.Int64);
         // (x << 32) >> 32 : arithmetic right shift sign-extends bit 31 → value in [-2^31, 2^31), safe to ToInt32.
-        var shl = ExternCall("SystemInt64.__op_LeftShift__SystemInt64_SystemInt32__SystemInt64",
+        var shl = ExternCall(UdonAbiKey.Method("SystemInt64", "op_LeftShift", new[] { "SystemInt64", "SystemInt32" }, "SystemInt64"),
             new List<CLeaf> { asLong, Const(32, StorageTypes.Int32) }, StorageTypes.Int64);
-        var sar = ExternCall("SystemInt64.__op_RightShift__SystemInt64_SystemInt32__SystemInt64",
+        var sar = ExternCall(UdonAbiKey.Method("SystemInt64", "op_RightShift", new[] { "SystemInt64", "SystemInt32" }, "SystemInt64"),
             new List<CLeaf> { shl, Const(32, StorageTypes.Int32) }, StorageTypes.Int64);
-        return ExternCall("SystemConvert.__ToInt32__SystemInt64__SystemInt32",
+        return ExternCall(UdonAbiKey.Method("SystemConvert", "ToInt32", new[] { "SystemInt64" }, "SystemInt32"),
             new List<CLeaf> { sar }, StorageTypes.Int32);
     }
 
     /// <summary>Reinterpret an int32 bit pattern as uint32 (C# unchecked (uint)int): negatives map to +2^32.</summary>
     CLeaf Int32BitsToUInt32(CLeaf int32Val)
     {
-        var asLong = ExternCall("SystemConvert.__ToInt64__SystemInt32__SystemInt64",
+        var asLong = ExternCall(UdonAbiKey.Method("SystemConvert", "ToInt64", new[] { "SystemInt32" }, "SystemInt64"),
             new List<CLeaf> { int32Val }, StorageTypes.Int64);
-        var isNeg = ExternCall("SystemInt64.__op_LessThan__SystemInt64_SystemInt64__SystemBoolean",
+        var isNeg = ExternCall(UdonAbiKey.Method("SystemInt64", "op_LessThan", new[] { "SystemInt64", "SystemInt64" }, "SystemBoolean"),
             new List<CLeaf> { asLong, Const(0L, StorageTypes.Int64) }, StorageTypes.Boolean);
-        var plus = ExternCall("SystemInt64.__op_Addition__SystemInt64_SystemInt64__SystemInt64",
+        var plus = ExternCall(UdonAbiKey.Method("SystemInt64", "op_Addition", new[] { "SystemInt64", "SystemInt64" }, "SystemInt64"),
             new List<CLeaf> { asLong, Const(4294967296L, StorageTypes.Int64) }, StorageTypes.Int64);
         var wrapped = Select(isNeg, plus, asLong, StorageTypes.Int64);
-        return ExternCall("SystemConvert.__ToUInt32__SystemInt64__SystemUInt32",
+        return ExternCall(UdonAbiKey.Method("SystemConvert", "ToUInt32", new[] { "SystemInt64" }, "SystemUInt32"),
             new List<CLeaf> { wrapped }, StorageTypes.UInt32);
     }
 
@@ -369,27 +371,27 @@ public abstract partial class HandlerBase
     }
 
     CLeaf ConvertInRange(CLeaf inRangeInt, string toUdonType)
-        => ExternCall(ExternResolver.BuildConvertSignature("SystemInt32", toUdonType),
+        => ExternCall(UdonAbi.Convert("SystemInt32", toUdonType),
             new List<CLeaf> { inRangeInt }, new StorageType(toUdonType));
 
     // ((x % mod) + mod) % mod  →  [0, mod)  : C# unsigned narrowing wrap
     CLeaf ModWrap(CLeaf x, int mod)
     {
-        var add = ExternCall("SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32",
+        var add = ExternCall(UdonAbi.Int32Add,
             new List<CLeaf> { Rem(x, mod), Const(mod, StorageTypes.Int32) }, StorageTypes.Int32);
         return Rem(add, mod);
     }
 
     CLeaf Rem(CLeaf x, int mod)
-        => ExternCall("SystemInt32.__op_Remainder__SystemInt32_SystemInt32__SystemInt32",
+        => ExternCall(UdonAbiKey.Method("SystemInt32", "op_Remainder", new[] { "SystemInt32", "SystemInt32" }, "SystemInt32"),
             new List<CLeaf> { x, Const(mod, StorageTypes.Int32) }, StorageTypes.Int32);
 
     // (x << s) >> s  →  signed (32-s)-bit truncation with sign extension
     CLeaf ShiftTruncate(CLeaf x, int shift)
     {
-        var left = ExternCall("SystemInt32.__op_LeftShift__SystemInt32_SystemInt32__SystemInt32",
+        var left = ExternCall(UdonAbiKey.Method("SystemInt32", "op_LeftShift", new[] { "SystemInt32", "SystemInt32" }, "SystemInt32"),
             new List<CLeaf> { x, Const(shift, StorageTypes.Int32) }, StorageTypes.Int32);
-        return ExternCall("SystemInt32.__op_RightShift__SystemInt32_SystemInt32__SystemInt32",
+        return ExternCall(UdonAbiKey.Method("SystemInt32", "op_RightShift", new[] { "SystemInt32", "SystemInt32" }, "SystemInt32"),
             new List<CLeaf> { left, Const(shift, StorageTypes.Int32) }, StorageTypes.Int32);
     }
 
@@ -406,18 +408,18 @@ public abstract partial class HandlerBase
     {
         // left/right are CLeaf params — stable single-assignment leaves under ANF; the intermediate
         // ExternCall results each bind their own fresh scratch, so neither operand is mutated here.
-        var quot = ExternCall($"{t}.__op_Division__{t}_{t}__{t}",
+        var quot = ExternCall(UdonAbiKey.Binary(t, "op_Division", t, t, t),
             new List<CLeaf> { left, right }, new StorageType(t));
-        var prod = ExternCall($"{t}.__op_Multiplication__{t}_{t}__{t}",
+        var prod = ExternCall(UdonAbiKey.Binary(t, "op_Multiplication", t, t, t),
             new List<CLeaf> { quot, right }, new StorageType(t));
-        return ExternCall($"{t}.__op_Subtraction__{t}_{t}__{t}",
+        return ExternCall(UdonAbiKey.Binary(t, "op_Subtraction", t, t, t),
             new List<CLeaf> { left, prod }, new StorageType(t));
     }
 
     /// <summary>Emit a void extern call as a statement. <paramref name="reentrant"/> marks a
     /// delegate-dispatch arm that can re-enter the containing function (design §4.3). preSpillStmts:
     /// wave-12 r2 [V1], see CExternCall.PreSpillStmts (cross setter copy-ins inside the wrap).</summary>
-    protected void EmitExternVoid(ExternSignature sig, List<CLeaf> args, bool reentrant = false, int preSpillStmts = 0)
+    protected void EmitExternVoid(UdonAbiKey sig, List<CLeaf> args, bool reentrant = false, int preSpillStmts = 0)
         => _builder.EmitExternVoid(sig, args, reentrant, preSpillStmts);
 
     protected void EmitExternVoid(BoundExtern bound, List<CLeaf> args, bool reentrant = false, int preSpillStmts = 0)
@@ -584,7 +586,8 @@ public abstract partial class HandlerBase
         if (convertMethod == null) return operand;
         var underlyingUdon = GetStorageTypeName(underlyingType);
         return ExternCall(
-            $"SystemConvert.__{convertMethod}__SystemObject__{underlyingUdon}",
+            UdonAbiKey.Method("SystemConvert", convertMethod,
+                new[] { "SystemObject" }, underlyingUdon),
             new List<CLeaf> { operand },
             new StorageType(underlyingUdon));
     }
@@ -827,7 +830,7 @@ public abstract partial class HandlerBase
         var arrType = GetArrayType(arrSym);
         var elemType = GetArrayElemType(arrSym);
         var idxVal = ResolveArrayIndex(arrayVal, arrType, ae.Indices[0]);
-        return ExternCall(ExternResolver.BuildArrayGetSignature(arrType, elemType), new List<CLeaf> { arrayVal, idxVal }, StorageTypes.Object);
+        return ExternCall(UdonAbi.ArrayGet(arrType, elemType), new List<CLeaf> { arrayVal, idxVal }, StorageTypes.Object);
     }
 
     /// <summary>Lower a single array-element index operand to its resolved SystemInt32 position,
@@ -848,9 +851,10 @@ public abstract partial class HandlerBase
     /// single-assignment scratch leaf (read once here); <paramref name="operand"/> is the `k` in `^k`.</summary>
     protected CLeaf EmitIndexFromEnd(CLeaf arrayVal, string arrayType, IOperation operand)
     {
-        var lenVal = ExternCall($"{arrayType}.__get_Length__SystemInt32", new List<CLeaf> { arrayVal }, StorageTypes.Int32);
+        var lenVal = ExternCall(UdonAbi.ArrayLength(arrayType),
+            new List<CLeaf> { arrayVal }, StorageTypes.Int32);
         var nVal = VisitExpression(operand);
-        return ExternCall("SystemInt32.__op_Subtraction__SystemInt32_SystemInt32__SystemInt32", new List<CLeaf> { lenVal, nVal }, StorageTypes.Int32);
+        return ExternCall(UdonAbi.Int32Subtract, new List<CLeaf> { lenVal, nVal }, StorageTypes.Int32);
     }
 
     /// <summary>Read an aggregate-typed field as the raw stored object[] (no clone): a nested element via
@@ -1182,7 +1186,7 @@ public abstract partial class HandlerBase
     {
         var arrayType = GetArrayType(arrSymbol);
         var elementType = GetArrayElemType(arrSymbol);
-        EmitExternVoid(ExternResolver.BuildArraySetSignature(arrayType, elementType),
+        EmitExternVoid(UdonAbi.ArraySet(arrayType, elementType),
             new List<CLeaf> { arrayVal, indexVal, value });
     }
 
@@ -2308,7 +2312,7 @@ public abstract partial class HandlerBase
 
         if (targets.Count == 0)
         {
-            EmitExternVoid("UnityEngineDebug.__LogError__SystemObject__SystemVoid",
+            EmitExternVoid(UdonAbi.DebugLogError,
                 new List<CLeaf> { Const(
                     $"USugar: NullReferenceException — virtual {memberKind} '{prop.ContainingType.Name}.{prop.Name}' has no minted implementor, so the receiver must be null ({_classSymbol.Name}). "
                     + (isSet ? "Skipping the write." : "Returning default."),
@@ -2330,7 +2334,7 @@ public abstract partial class HandlerBase
 
         foreach (var t in targets)
         {
-            var eq = ExternCall("SystemString.__op_Equality__SystemString_SystemString__SystemBoolean",
+            var eq = ExternCall(UdonAbi.StringEquality,
                 new List<CLeaf> { SlotRef(typeObjSlot), LoadField(t.TypeObjVar, StorageTypes.String) }, StorageTypes.Boolean);
             _builder.EmitIf(eq, _ =>
             {
@@ -2340,10 +2344,10 @@ public abstract partial class HandlerBase
             }, null);
         }
 
-        var noMatch = ExternCall("SystemBoolean.__op_UnaryNegation__SystemBoolean__SystemBoolean",
+        var noMatch = ExternCall(UdonAbi.BooleanNot,
             new List<CLeaf> { SlotRef(matched) }, StorageTypes.Boolean);
         _builder.EmitIf(noMatch, _ =>
-            EmitExternVoid("UnityEngineDebug.__LogError__SystemObject__SystemVoid",
+            EmitExternVoid(UdonAbi.DebugLogError,
                 new List<CLeaf> { Const(
                     $"USugar: NullReferenceException — virtual {memberKind} '{prop.ContainingType.Name}.{prop.Name}' accessed on a null or non-class receiver ({_classSymbol.Name}). "
                     + (isSet ? "Skipping the write." : "Returning default."),
@@ -2439,7 +2443,7 @@ public abstract partial class HandlerBase
 
         void EmitNoMatch()
         {
-            EmitExternVoid("UnityEngineDebug.__LogError__SystemObject__SystemVoid",
+            EmitExternVoid(UdonAbi.DebugLogError,
                 new List<CLeaf> { Const(
                     $"USugar: ToString dispatch on '{recvTy.Name}' matched no minted class — non-class "
                     + $"receiver ({_classSymbol.Name}). Returning \"\".",
@@ -2450,7 +2454,7 @@ public abstract partial class HandlerBase
         _builder.EmitIf(NullableAbi.IsNull(_builder, SlotRef(recvSlot)), _ =>
         {
             if (nullIsError)
-                EmitExternVoid("UnityEngineDebug.__LogError__SystemObject__SystemVoid",
+                EmitExternVoid(UdonAbi.DebugLogError,
                     new List<CLeaf> { Const(
                         $"USugar: NullReferenceException — ToString() on a null '{recvTy.Name}' receiver "
                         + $"({_classSymbol.Name}). Returning \"\".",
@@ -2478,7 +2482,7 @@ public abstract partial class HandlerBase
 
             foreach (var t in targets)
             {
-                var eq = ExternCall("SystemString.__op_Equality__SystemString_SystemString__SystemBoolean",
+                var eq = ExternCall(UdonAbi.StringEquality,
                     new List<CLeaf> { SlotRef(typeObjSlot), LoadField(t.TypeObjVar, StorageTypes.String) },
                     StorageTypes.Boolean);
                 _builder.EmitIf(eq, _ =>
@@ -2488,7 +2492,7 @@ public abstract partial class HandlerBase
                 }, null);
             }
 
-            var noMatch = ExternCall("SystemBoolean.__op_UnaryNegation__SystemBoolean__SystemBoolean",
+            var noMatch = ExternCall(UdonAbi.BooleanNot,
                 new List<CLeaf> { SlotRef(matched) }, StorageTypes.Boolean);
             _builder.EmitIf(noMatch, _ => EmitNoMatch(), null);
         });

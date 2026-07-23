@@ -20,9 +20,9 @@ using Microsoft.CodeAnalysis;
 static class EnvEmit
 {
     public const string EnvType = "SystemObjectArray";
-    static readonly string CtorSig = ExternResolver.BuildArrayCtorSignature(EnvType);
-    static readonly string SetSig = ExternResolver.BuildArraySetSignature(EnvType, "SystemObject");
-    static readonly string GetSig = ExternResolver.BuildArrayGetSignature(EnvType, "SystemObject");
+    static readonly UdonAbiKey CtorSig = UdonAbi.ArrayConstructor(EnvType);
+    static readonly UdonAbiKey SetSig = UdonAbi.ArraySet(EnvType, "SystemObject");
+    static readonly UdonAbiKey GetSig = UdonAbi.ArrayGet(EnvType, "SystemObject");
 
     /// <summary>The hoisted closure whose body is being emitted right now, or null when emission is
     /// inside an ordinary method / field initializer (then every env scope must be frame-local).</summary>

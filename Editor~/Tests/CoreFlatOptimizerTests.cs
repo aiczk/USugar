@@ -126,7 +126,8 @@ public class CoreFlatOptimizerTests
         var bb0 = func.NewBlock();
         bb0.Stmts.Add(new CAssign(0, new CConst(10, StorageTypes.Int32)));            // pos 0: def slot0
         bb0.Stmts.Add(new CAssign(1, new CConst(20, StorageTypes.Int32)));            // pos 1: def slot1 (slot0 still live)
-        bb0.Stmts.Add(Call(null, "Foo__SystemVoid",
+        bb0.Stmts.Add(Call(null,
+            "TestFixture.__Foo__SystemInt32_SystemInt32__SystemVoid",
             new List<CLeaf> { new CSlotRef(0, StorageTypes.Int32), new CSlotRef(1, StorageTypes.Int32) },
             "SystemVoid"));                                                       // pos 2: use both
         bb0.Terminator = new CRet();
@@ -338,7 +339,8 @@ public class CoreFlatOptimizerTests
 
         // slot1: def after slot0 is dead → should coalesce to slot0
         bb0.Stmts.Add(new CAssign(1, new CConst(20, StorageTypes.Int32)));            // def slot1
-        bb0.Stmts.Add(Call(null, "Bar__SystemVoid",
+        bb0.Stmts.Add(Call(null,
+            "TestFixture.__Bar__SystemInt32__SystemVoid",
             new List<CLeaf> { new CSlotRef(1, StorageTypes.Int32) },
             "SystemVoid"));                                                       // use slot1 as arg
 
@@ -395,7 +397,8 @@ public class CoreFlatOptimizerTests
         var bb0 = func.NewBlock();
         bb0.Stmts.Add(new CAssign(0, new CConst(10, StorageTypes.Int32)));
         bb0.Stmts.Add(new CAssign(1, new CConst(20, StorageTypes.Int32)));
-        bb0.Stmts.Add(Call(null, "Foo__SystemVoid",
+        bb0.Stmts.Add(Call(null,
+            "TestFixture.__Foo__SystemInt32_SystemInt32__SystemVoid",
             new List<CLeaf> { new CSlotRef(0, StorageTypes.Int32), new CSlotRef(1, StorageTypes.Int32) },
             "SystemVoid"));
         bb0.Terminator = new CRet();

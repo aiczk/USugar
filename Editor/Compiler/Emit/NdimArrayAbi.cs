@@ -54,13 +54,13 @@ public static class NdimArrayAbi
 
     public static int DimSlotIndex(int dim) => 1 + dim;
 
-    public static string BundleCtorSignature() => ExternResolver.BuildArrayCtorSignature(BundleUdonType);
+    public static UdonAbiKey BundleConstructorKey() => UdonAbi.ArrayConstructor(BundleUdonType);
 
-    public static string BundleGetSignature()
-        => ExternResolver.BuildArrayGetSignature(BundleUdonType, BoxedElementUdonType);
+    public static UdonAbiKey BundleGetKey()
+        => UdonAbi.ArrayGet(BundleUdonType, BoxedElementUdonType);
 
-    public static string BundleSetSignature()
-        => ExternResolver.BuildArraySetSignature(BundleUdonType, BoxedElementUdonType);
+    public static UdonAbiKey BundleSetKey()
+        => UdonAbi.ArraySet(BundleUdonType, BoxedElementUdonType);
 
     public static CLeaf ReadBacking(CoreBuilder builder, CLeaf bundleVal, StorageType backingUdonType)
         => ReadBoxedSlot(builder, bundleVal, builder.Const(BackingSlotIndex, StorageTypes.Int32), backingUdonType);
@@ -79,7 +79,7 @@ public static class NdimArrayAbi
             {
                 var backing = ReadBacking(builder, plan.BundleVal, backingUdonType);
                 var elemVal = builder.ExternCall(
-                    ExternResolver.BuildArrayGetSignature(backingUdonType.Name, backingElemUdonType.Name),
+                    UdonAbi.ArrayGet(backingUdonType.Name, backingElemUdonType.Name),
                     new List<CLeaf> { backing, plan.FlatIndex }, elemUdonType);
                 builder.EmitAssign(resultSlot, elemVal);
             },
@@ -95,7 +95,7 @@ public static class NdimArrayAbi
             {
                 var backing = ReadBacking(builder, plan.BundleVal, backingUdonType);
                 builder.EmitExternVoid(
-                    ExternResolver.BuildArraySetSignature(backingUdonType.Name, backingElemUdonType.Name),
+                    UdonAbi.ArraySet(backingUdonType.Name, backingElemUdonType.Name),
                     new List<CLeaf> { backing, plan.FlatIndex, value });
             },
             _ => EmitBoundsLogError(builder, arrayExprSyntax, "write", plan));
@@ -103,19 +103,19 @@ public static class NdimArrayAbi
 
     public static void MintBundleToSlot(CoreBuilder builder, int bundleSlot, int backingSlot, int[] dimSlots)
     {
-        builder.EmitAssign(bundleSlot, builder.ExternCall(BundleCtorSignature(),
+        builder.EmitAssign(bundleSlot, builder.ExternCall(BundleConstructorKey(),
             new List<CLeaf> { builder.Const(BundleLength(dimSlots.Length), StorageTypes.Int32) }, new StorageType(BundleUdonType)));
         var bundle = builder.SlotRef(bundleSlot);
-        builder.EmitExternVoid(BundleSetSignature(),
+        builder.EmitExternVoid(BundleSetKey(),
             new List<CLeaf> { bundle, builder.Const(BackingSlotIndex, StorageTypes.Int32), builder.SlotRef(backingSlot) });
         for (int d = 0; d < dimSlots.Length; d++)
-            builder.EmitExternVoid(BundleSetSignature(),
+            builder.EmitExternVoid(BundleSetKey(),
                 new List<CLeaf> { bundle, builder.Const(DimSlotIndex(d), StorageTypes.Int32), builder.SlotRef(dimSlots[d]) });
     }
 
     static CLeaf ReadBoxedSlot(CoreBuilder builder, CLeaf bundleVal, CLeaf bundleIndex, StorageType targetUdonType)
     {
-        var boxed = builder.ExternCall(BundleGetSignature(),
+        var boxed = builder.ExternCall(BundleGetKey(),
             new List<CLeaf> { bundleVal, bundleIndex }, new StorageType(BoxedElementUdonType));
         var slot = builder.AllocScratch(targetUdonType);
         builder.EmitAssign(slot, boxed);
@@ -127,14 +127,14 @@ public static class NdimArrayAbi
         CLeaf inBounds = null;
         for (int d = 0; d < idxSlots.Length; d++)
         {
-            var geZero = builder.ExternCall("SystemInt32.__op_GreaterThanOrEqual__SystemInt32_SystemInt32__SystemBoolean",
+            var geZero = builder.ExternCall(UdonAbiKey.Method("SystemInt32", "op_GreaterThanOrEqual", new[] { "SystemInt32", "SystemInt32" }, "SystemBoolean"),
                 new List<CLeaf> { builder.SlotRef(idxSlots[d]), builder.Const(0, StorageTypes.Int32) }, StorageTypes.Boolean);
-            var ltDim = builder.ExternCall("SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean",
+            var ltDim = builder.ExternCall(UdonAbi.Int32LessThan,
                 new List<CLeaf> { builder.SlotRef(idxSlots[d]), builder.SlotRef(dimSlots[d]) }, StorageTypes.Boolean);
-            var dimOk = builder.ExternCall("SystemBoolean.__op_ConditionalAnd__SystemBoolean_SystemBoolean__SystemBoolean",
+            var dimOk = builder.ExternCall(UdonAbi.BooleanConditionalAnd,
                 new List<CLeaf> { geZero, ltDim }, StorageTypes.Boolean);
             inBounds = inBounds == null ? dimOk
-                : builder.ExternCall("SystemBoolean.__op_ConditionalAnd__SystemBoolean_SystemBoolean__SystemBoolean",
+                : builder.ExternCall(UdonAbi.BooleanConditionalAnd,
                     new List<CLeaf> { inBounds, dimOk }, StorageTypes.Boolean);
         }
         return inBounds;
@@ -145,9 +145,9 @@ public static class NdimArrayAbi
         CLeaf flatIndex = builder.SlotRef(idxSlots[0]);
         for (int d = 1; d < idxSlots.Length; d++)
         {
-            var mul = builder.ExternCall("SystemInt32.__op_Multiplication__SystemInt32_SystemInt32__SystemInt32",
+            var mul = builder.ExternCall(UdonAbi.Int32Multiply,
                 new List<CLeaf> { flatIndex, builder.SlotRef(dimSlots[d]) }, StorageTypes.Int32);
-            flatIndex = builder.ExternCall("SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32",
+            flatIndex = builder.ExternCall(UdonAbi.Int32Add,
                 new List<CLeaf> { mul, builder.SlotRef(idxSlots[d]) }, StorageTypes.Int32);
         }
         return flatIndex;
@@ -157,17 +157,17 @@ public static class NdimArrayAbi
     {
         CLeaf totalSize = builder.SlotRef(dimSlots[0]);
         for (int d = 1; d < dimSlots.Length; d++)
-            totalSize = builder.ExternCall("SystemInt32.__op_Multiplication__SystemInt32_SystemInt32__SystemInt32",
+            totalSize = builder.ExternCall(UdonAbi.Int32Multiply,
                 new List<CLeaf> { totalSize, builder.SlotRef(dimSlots[d]) }, StorageTypes.Int32);
         return totalSize;
     }
 
     public static CLeaf BuildRuntimeDimSlotIndex(CoreBuilder builder, CLeaf dimArg)
-        => builder.ExternCall("SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32",
+        => builder.ExternCall(UdonAbi.Int32Add,
             new List<CLeaf> { dimArg, builder.Const(DimSlotIndex(0), StorageTypes.Int32) }, StorageTypes.Int32);
 
     public static CLeaf BuildUpperBound(CoreBuilder builder, CLeaf length)
-        => builder.ExternCall("SystemInt32.__op_Subtraction__SystemInt32_SystemInt32__SystemInt32",
+        => builder.ExternCall(UdonAbi.Int32Subtract,
             new List<CLeaf> { length, builder.Const(1, StorageTypes.Int32) }, StorageTypes.Int32);
 
     public static void EmitBoundsLogError(CoreBuilder builder, string arrayExprSyntax, string verb, AccessPlan plan)
@@ -181,14 +181,14 @@ public static class NdimArrayAbi
             msg = ConcatString(builder, msg, IntToString(builder, builder.SlotRef(plan.DimSlots[d])));
             msg = ConcatString(builder, msg, builder.Const("]", StorageTypes.String));
         }
-        builder.EmitExternVoid("UnityEngineDebug.__LogError__SystemObject__SystemVoid", new List<CLeaf> { msg });
+        builder.EmitExternVoid(UdonAbi.DebugLogError, new List<CLeaf> { msg });
     }
 
     static CLeaf IntToString(CoreBuilder builder, CLeaf intVal)
-        => builder.ExternCall("SystemInt32.__ToString__SystemString", new List<CLeaf> { intVal }, StorageTypes.String);
+        => builder.ExternCall(UdonAbiKey.Method("SystemInt32", "ToString", "SystemString"), new List<CLeaf> { intVal }, StorageTypes.String);
 
     static CLeaf ConcatString(CoreBuilder builder, CLeaf a, CLeaf b)
-        => builder.ExternCall("SystemString.__op_Addition__SystemString_SystemString__SystemString",
+        => builder.ExternCall(UdonAbiKey.Method("SystemString", "op_Addition", new[] { "SystemString", "SystemString" }, "SystemString"),
             new List<CLeaf> { a, b }, StorageTypes.String);
 
     public static void FlattenInitializer(IArrayInitializerOperation init, List<IOperation> outLeaves)

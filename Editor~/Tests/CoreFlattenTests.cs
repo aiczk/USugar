@@ -101,7 +101,7 @@ public class CoreFlattenTests
         foreach (var block in function.FlatBlocks)
         foreach (var statement in block.Stmts)
             if (statement is CExprStmt expr && expr.Expr is CExternCall call
-                && call.Sig.Text == ExternResolver.EventReceiverGetProgramVariable)
+                && call.Sig.Key == ExternResolver.EventReceiverGetProgramVariable)
                 resultCall = call;
         Assert.NotNull(resultCall);
         Assert.Equal(value.SlotId, resultCall.DestSlot);
@@ -128,7 +128,7 @@ public class CoreFlattenTests
         foreach (var block in function.FlatBlocks)
         foreach (var statement in block.Stmts)
             if (statement is CExprStmt expr && expr.Expr is CExternCall call
-                && call.Sig.Text == ExternResolver.EventReceiverGetProgramVariable)
+                && call.Sig.Key == ExternResolver.EventReceiverGetProgramVariable)
                 resultTypes.Add(call.Type);
         Assert.Equal(new[] { StorageTypes.Int32, StorageTypes.String }, resultTypes);
     }
@@ -152,9 +152,9 @@ public class CoreFlattenTests
             if (statement is CExprStmt expression && expression.Expr is CExternCall call)
                 calls.Add(call);
         Assert.Equal(2, calls.Count);
-        Assert.Equal(ExternResolver.EventReceiverGetProgramVariable, calls[0].Sig.Text);
+        Assert.Equal(ExternResolver.EventReceiverGetProgramVariable, calls[0].Sig.Key);
         Assert.Equal(StorageTypes.Int32, calls[0].Type);
-        Assert.Equal(ExternResolver.EventReceiverSetProgramVariable, calls[1].Sig.Text);
+        Assert.Equal(ExternResolver.EventReceiverSetProgramVariable, calls[1].Sig.Key);
         Assert.Equal(StorageTypes.Int32, calls[1].Args[2].Type);
     }
 
@@ -177,7 +177,7 @@ public class CoreFlattenTests
         foreach (var block in function.FlatBlocks)
         foreach (var statement in block.Stmts)
             if (statement is CExprStmt expression && expression.Expr is CExternCall call
-                && call.Sig.Text == ExternResolver.EventReceiverSendCustomEvent)
+                && call.Sig.Key == ExternResolver.EventReceiverSendCustomEvent)
                 dispatch = call;
         Assert.NotNull(dispatch);
         var eventName = Assert.IsType<CSlotRef>(dispatch.Args[1]);

@@ -167,7 +167,7 @@ public static class DelegateAbi
     public static CLeaf EmitBundleMint(CoreBuilder builder, Func<CLeaf> targetFn,
         CLeaf methodNameLeaf, CLeaf addrLeaf, CLeaf envLeaf)
     {
-        var bundle = builder.ExternCall(ExternResolver.BuildArrayCtorSignature(BundleType),
+        var bundle = builder.ExternCall(UdonAbi.ArrayConstructor(BundleType),
             new List<CLeaf> { builder.Const(BundleSize, StorageTypes.Int32) }, new StorageType(BundleType));
         EmitBundleSlotWrites(builder, bundle, targetFn, methodNameLeaf, addrLeaf, envLeaf);
         return bundle;
@@ -180,7 +180,7 @@ public static class DelegateAbi
         CLeaf methodNameLeaf, CLeaf addrLeaf, CLeaf envLeaf)
     {
         builder.EmitAssign(bundleSlot, builder.ExternCall(
-            ExternResolver.BuildArrayCtorSignature(BundleType),
+            UdonAbi.ArrayConstructor(BundleType),
             new List<CLeaf> { builder.Const(BundleSize, StorageTypes.Int32) },
             new StorageType(BundleType)));
         var bundle = builder.SlotRef(bundleSlot);
@@ -191,7 +191,7 @@ public static class DelegateAbi
     static void EmitBundleSlotWrites(CoreBuilder builder, CLeaf bundle, Func<CLeaf> targetFn,
         CLeaf methodNameLeaf, CLeaf addrLeaf, CLeaf envLeaf)
     {
-        var setSig = ExternResolver.BuildArraySetSignature(BundleType, SlotType);
+        var setSig = UdonAbi.ArraySet(BundleType, SlotType);
         var target = targetFn();
         builder.EmitExternVoid(setSig, new List<CLeaf> { bundle, builder.Const(Kind, StorageTypes.Int32), builder.Const(KindTag, StorageTypes.String) });
         builder.EmitExternVoid(setSig, new List<CLeaf> { bundle, builder.Const(Target, StorageTypes.Int32), target });
@@ -204,7 +204,7 @@ public static class DelegateAbi
     /// so slot numbers stay ABI-owned rather than being re-open-coded at dispatch/equality sites.</summary>
     public static CLeaf ReadSlot(CoreBuilder builder, CLeaf bundle, int slot, string udonType)
         => builder.ExternCall(
-            ExternResolver.BuildArrayGetSignature(BundleType, SlotType),
+            UdonAbi.ArrayGet(BundleType, SlotType),
             new List<CLeaf> { bundle, builder.Const(slot, StorageTypes.Int32) },
             new StorageType(udonType));
 
@@ -214,8 +214,8 @@ public static class DelegateAbi
     public static CLeaf CompareToNull(CoreBuilder builder, CLeaf bundle, bool isNotEquals)
     {
         var signature = isNotEquals
-            ? "SystemObject.__op_Inequality__SystemObject_SystemObject__SystemBoolean"
-            : "SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean";
+            ? UdonAbi.ObjectInequality
+            : UdonAbi.ObjectEquality;
         return builder.ExternCall(signature,
             new List<CLeaf> { bundle, builder.Const(null, StorageTypes.Object) }, StorageTypes.Boolean);
     }
@@ -223,24 +223,24 @@ public static class DelegateAbi
     public static CLeaf IsTaggedBundle(CoreBuilder builder, CLeaf bundle)
     {
         var kind = ReadSlot(builder, bundle, Kind, "SystemString");
-        return builder.ExternCall("SystemString.__op_Equality__SystemString_SystemString__SystemBoolean",
+        return builder.ExternCall(UdonAbi.StringEquality,
             new List<CLeaf> { kind, builder.Const(KindTag, StorageTypes.String) }, StorageTypes.Boolean);
     }
 
     public static CLeaf HasTarget(CoreBuilder builder, CLeaf target)
-        => builder.ExternCall("UnityEngineObject.__op_Inequality__UnityEngineObject_UnityEngineObject__SystemBoolean",
+        => builder.ExternCall(UdonAbiKey.Method("UnityEngineObject", "op_Inequality", new[] { "UnityEngineObject", "UnityEngineObject" }, "SystemBoolean"),
             new List<CLeaf> { target, builder.Const(null, StorageTypes.Object) }, StorageTypes.Boolean);
 
     public static CLeaf HasMethod(CoreBuilder builder, CLeaf methodName)
-        => builder.ExternCall("SystemObject.__op_Inequality__SystemObject_SystemObject__SystemBoolean",
+        => builder.ExternCall(UdonAbi.ObjectInequality,
             new List<CLeaf> { methodName, builder.Const(null, StorageTypes.Object) }, StorageTypes.Boolean);
 
     public static CLeaf HasAddress(CoreBuilder builder, CLeaf address)
-        => builder.ExternCall("SystemUInt32.__op_Inequality__SystemUInt32_SystemUInt32__SystemBoolean",
+        => builder.ExternCall(UdonAbiKey.Method("SystemUInt32", "op_Inequality", new[] { "SystemUInt32", "SystemUInt32" }, "SystemBoolean"),
             new List<CLeaf> { address, builder.Const(0u, StorageTypes.UInt32) }, StorageTypes.Boolean);
 
     public static void EmitNullInvokeLog(CoreBuilder builder, string className, string receiverDescription)
-        => builder.EmitExternVoid("UnityEngineDebug.__LogError__SystemObject__SystemVoid",
+        => builder.EmitExternVoid(UdonAbi.DebugLogError,
             new List<CLeaf>
             {
                 builder.Const(
@@ -249,7 +249,7 @@ public static class DelegateAbi
             });
 
     public static void EmitInvalidBundleLog(CoreBuilder builder, string className, string receiverDescription)
-        => builder.EmitExternVoid("UnityEngineDebug.__LogError__SystemObject__SystemVoid",
+        => builder.EmitExternVoid(UdonAbi.DebugLogError,
             new List<CLeaf>
             {
                 builder.Const(
@@ -261,19 +261,19 @@ public static class DelegateAbi
     {
         var nullValue = builder.Const(null, StorageTypes.Object);
         var leftNull = builder.ExternCall(
-            "SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean",
+            UdonAbi.ObjectEquality,
             new List<CLeaf> { left, nullValue }, StorageTypes.Boolean);
         var rightNull = builder.ExternCall(
-            "SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean",
+            UdonAbi.ObjectEquality,
             new List<CLeaf> { right, nullValue }, StorageTypes.Boolean);
         var anyNull = builder.ExternCall(
-            "SystemBoolean.__op_LogicalOr__SystemBoolean_SystemBoolean__SystemBoolean",
+            UdonAbi.BooleanLogicalOr,
             new List<CLeaf> { leftNull, rightNull }, StorageTypes.Boolean);
 
         var resultSlot = builder.AllocScratch(StorageTypes.Boolean);
         builder.EmitIf(anyNull,
             _ => builder.EmitAssign(resultSlot, builder.ExternCall(
-                "SystemBoolean.__op_Equality__SystemBoolean_SystemBoolean__SystemBoolean",
+                UdonAbiKey.Method("SystemBoolean", "op_Equality", new[] { "SystemBoolean", "SystemBoolean" }, "SystemBoolean"),
                 new List<CLeaf> { leftNull, rightNull }, StorageTypes.Boolean)),
             _ =>
             {
@@ -285,7 +285,7 @@ public static class DelegateAbi
                 var leftTagged = IsTaggedBundle(builder, left);
                 var rightTagged = IsTaggedBundle(builder, right);
                 var bothTagged = builder.ExternCall(
-                    "SystemBoolean.__op_LogicalAnd__SystemBoolean_SystemBoolean__SystemBoolean",
+                    UdonAbi.BooleanLogicalAnd,
                     new List<CLeaf> { leftTagged, rightTagged }, StorageTypes.Boolean);
                 builder.EmitIf(bothTagged,
                     _ =>
@@ -293,37 +293,37 @@ public static class DelegateAbi
                         var leftTarget = ReadSlot(builder, left, Target, "SystemObject");
                         var rightTarget = ReadSlot(builder, right, Target, "SystemObject");
                         var targetEq = builder.ExternCall(
-                            "SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean",
+                            UdonAbi.ObjectEquality,
                             new List<CLeaf> { leftTarget, rightTarget }, StorageTypes.Boolean);
 
                         var leftMethod = ReadSlot(builder, left, Method, "SystemString");
                         var rightMethod = ReadSlot(builder, right, Method, "SystemString");
                         var methodEq = builder.ExternCall(
-                            "SystemString.__op_Equality__SystemString_SystemString__SystemBoolean",
+                            UdonAbi.StringEquality,
                             new List<CLeaf> { leftMethod, rightMethod }, StorageTypes.Boolean);
 
                         var leftEnv = ReadSlot(builder, left, Env, "SystemObject");
                         var rightEnv = ReadSlot(builder, right, Env, "SystemObject");
                         var envEq = builder.ExternCall(
-                            "SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean",
+                            UdonAbi.ObjectEquality,
                             new List<CLeaf> { leftEnv, rightEnv }, StorageTypes.Boolean);
 
                         var targetMethodEq = builder.ExternCall(
-                            "SystemBoolean.__op_LogicalAnd__SystemBoolean_SystemBoolean__SystemBoolean",
+                            UdonAbi.BooleanLogicalAnd,
                             new List<CLeaf> { targetEq, methodEq }, StorageTypes.Boolean);
                         builder.EmitAssign(resultSlot, builder.ExternCall(
-                            "SystemBoolean.__op_LogicalAnd__SystemBoolean_SystemBoolean__SystemBoolean",
+                            UdonAbi.BooleanLogicalAnd,
                             new List<CLeaf> { targetMethodEq, envEq }, StorageTypes.Boolean));
                     },
                     _ => builder.EmitAssign(resultSlot, builder.ExternCall(
-                        "SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean",
+                        UdonAbi.ObjectEquality,
                         new List<CLeaf> { left, right }, StorageTypes.Boolean)));
             });
 
         CLeaf result = builder.SlotRef(resultSlot);
         if (isNotEquals)
             result = builder.ExternCall(
-                "SystemBoolean.__op_UnaryNegation__SystemBoolean__SystemBoolean",
+                UdonAbi.BooleanNot,
                 new List<CLeaf> { result }, StorageTypes.Boolean);
         return result;
     }

@@ -62,14 +62,14 @@ public partial class InvocationHandler
                     handler.EmitGetComponentGeneric(operation, target)),
         });
 
-    const string InstantiateGameObjectExtern =
-        "VRCInstantiate.__Instantiate__UnityEngineGameObject__UnityEngineGameObject";
-    const string GameObjectTransformGetter =
-        "UnityEngineGameObject.__get_transform__UnityEngineTransform";
-    const string TransformSetParent =
-        "UnityEngineTransform.__SetParent__UnityEngineTransform_SystemBoolean__SystemVoid";
-    const string TransformSetPositionAndRotation =
-        "UnityEngineTransform.__SetPositionAndRotation__UnityEngineVector3_UnityEngineQuaternion__SystemVoid";
+    static readonly UdonAbiKey InstantiateGameObjectExtern =
+        UdonAbiKey.Method("VRCInstantiate", "Instantiate", new[] { "UnityEngineGameObject" }, "UnityEngineGameObject");
+    static readonly UdonAbiKey GameObjectTransformGetter =
+        UdonAbiKey.Method("UnityEngineGameObject", "get_transform", "UnityEngineTransform");
+    static readonly UdonAbiKey TransformSetParent =
+        UdonAbiKey.Method("UnityEngineTransform", "SetParent", new[] { "UnityEngineTransform", "SystemBoolean" }, "SystemVoid");
+    static readonly UdonAbiKey TransformSetPositionAndRotation =
+        UdonAbiKey.Method("UnityEngineTransform", "SetPositionAndRotation", new[] { "UnityEngineVector3", "UnityEngineQuaternion" }, "SystemVoid");
 
     /// <summary>
     /// C# APIs whose Udon implementation is a sequence rather than one extern.

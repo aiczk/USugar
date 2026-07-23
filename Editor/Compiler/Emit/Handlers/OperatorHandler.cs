@@ -180,7 +180,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
                 var r = VisitExpression(rOp);
                 l = ConvertConcatOperand(l, lOp);
                 r = ConvertConcatOperand(r, rOp);
-                return ExternCall("SystemString.__Concat__SystemObject_SystemObject__SystemString",
+                return ExternCall(UdonAbi.StringConcatObjects,
                     new List<CLeaf> { l, r }, StorageTypes.String);
             }
             ClassAbi.RejectImplicitToString(lOp.Type);
@@ -191,7 +191,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
                 l = ConvertConcatOperand(l, lOp);
                 var r = VisitExpression(rOp);
                 r = ConvertConcatOperand(r, rOp);
-                return ExternCall("SystemString.__Concat__SystemObject_SystemObject__SystemString",
+                return ExternCall(UdonAbi.StringConcatObjects,
                     new List<CLeaf> { l, r }, StorageTypes.String);
             }
         }
@@ -376,7 +376,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
 
         var sig = op.OperatorMethod != null && !ExternResolver.IsNumericType(op.Operand.Type)
             ? _ctx.Abi.BindOperator(op.OperatorMethod, type => GetStorageTypeName(type))
-            : _ctx.Abi.BindExact(BuildBuiltinUnarySignature(op));
+            : _ctx.Abi.BindExact(BuildBuiltinUnaryKey(op));
 
         return ExternCall(sig, new List<CLeaf> { operandVal }, new StorageType(resultType));
     }
@@ -434,7 +434,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
             or SpecialType.System_Int16 or SpecialType.System_UInt16)
         {
             var asInt = operandType == "SystemInt32" ? operandVal : EmitNarrowingConvert(operandVal, operandType, "SystemInt32");
-            var xored = ExternCall("SystemInt32.__op_LogicalXor__SystemInt32_SystemInt32__SystemInt32",
+            var xored = ExternCall(UdonAbiKey.Method("SystemInt32", "op_LogicalXor", new[] { "SystemInt32", "SystemInt32" }, "SystemInt32"),
                 new List<CLeaf> { asInt, Const(-1, StorageTypes.Int32) }, StorageTypes.Int32);
             return resultType == "SystemInt32" ? xored : EmitNarrowingConvert(xored, "SystemInt32", resultType);
         }
@@ -495,7 +495,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
             {
                 var innerVal = EmitPatternCheckImpl(valueVal, valueType, negated.Pattern);
                 return ExternCall(
-                    "SystemBoolean.__op_UnaryNegation__SystemBoolean__SystemBoolean",
+                    UdonAbi.BooleanNot,
                     new List<CLeaf> { innerVal },
                     StorageTypes.Boolean);
             }
@@ -541,15 +541,15 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
                 }
                 var opName = relPat.OperatorKind switch
                 {
-                    BinaryOperatorKind.LessThan => "__op_LessThan",
-                    BinaryOperatorKind.LessThanOrEqual => "__op_LessThanOrEqual",
-                    BinaryOperatorKind.GreaterThan => "__op_GreaterThan",
-                    BinaryOperatorKind.GreaterThanOrEqual => "__op_GreaterThanOrEqual",
+                    BinaryOperatorKind.LessThan => "op_LessThan",
+                    BinaryOperatorKind.LessThanOrEqual => "op_LessThanOrEqual",
+                    BinaryOperatorKind.GreaterThan => "op_GreaterThan",
+                    BinaryOperatorKind.GreaterThanOrEqual => "op_GreaterThanOrEqual",
                     _ => throw new System.NotSupportedException(
                         $"Unsupported relational operator: {relPat.OperatorKind}")
                 };
                 return ExternCall(
-                    ExternResolver.BuildMethodSignature(
+                    UdonAbiKey.Method(
                         valType, opName, new[] { valType, valType }, "SystemBoolean"),
                     new List<CLeaf> { scrut, constVal },
                     StorageTypes.Boolean);
@@ -580,8 +580,8 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
                 var leftVal = EmitPatternCheckImpl(valueVal, valueType, binPat.LeftPattern);
                 var rightVal = EmitPatternCheckImpl(valueVal, valueType, binPat.RightPattern);
                 var opName = binPat.OperatorKind == BinaryOperatorKind.And
-                    ? "SystemBoolean.__op_ConditionalAnd__SystemBoolean_SystemBoolean__SystemBoolean"
-                    : "SystemBoolean.__op_ConditionalOr__SystemBoolean_SystemBoolean__SystemBoolean";
+                    ? UdonAbi.BooleanConditionalAnd
+                    : UdonAbi.BooleanConditionalOr;
                 return ExternCall(opName, new List<CLeaf> { leftVal, rightVal }, StorageTypes.Boolean);
             }
 
@@ -606,7 +606,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
             guard = EmitTypeCheck(valueVal, rec.MatchedType);
         else if (!valueType.IsValueType)
             guard = ExternCall(
-                "SystemObject.__op_Inequality__SystemObject_SystemObject__SystemBoolean",
+                UdonAbi.ObjectInequality,
                 new List<CLeaf> { valueVal, Const(null, StorageTypes.Object) }, StorageTypes.Boolean);
         else
             guard = Const(true, StorageTypes.Boolean);
@@ -756,7 +756,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
 
     CLeaf CombinePatternChecks(CLeaf left, CLeaf right) =>
         ExternCall(
-            "SystemBoolean.__op_ConditionalAnd__SystemBoolean_SystemBoolean__SystemBoolean",
+            UdonAbi.BooleanConditionalAnd,
             new List<CLeaf> { left, right }, StorageTypes.Boolean);
 
     void BindPatternLocal(ILocalSymbol local, CLeaf value)
@@ -815,7 +815,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
             // exceptions. Match the null-invoke deviation (§8-8): loud LogError at runtime, then keep
             // the default(T) the result slot was seeded with — never a silent wrong value.
             tail = _ =>
-                EmitExternVoid("UnityEngineDebug.__LogError__SystemObject__SystemVoid",
+                EmitExternVoid(UdonAbi.DebugLogError,
                     new List<CLeaf> { Const(
                         $"USugar: SwitchExpressionException — no arm matched in switch expression ({_classSymbol.Name})",
                         StorageTypes.String) });
@@ -881,7 +881,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
         [UnaryOperatorKind.Not] = "op_UnaryNegation",
     };
 
-    string BuildBuiltinUnarySignature(IUnaryOperation op)
+    UdonAbiKey BuildBuiltinUnaryKey(IUnaryOperation op)
     {
         var operandType = GetStorageTypeName(op.Operand.Type);
         var returnType = GetStorageTypeName(op.Type);
@@ -891,7 +891,8 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
         // Decimal uses C# method name: op_UnaryNegation (not op_UnaryMinus)
         if (operandType == "SystemDecimal" && op.OperatorKind == UnaryOperatorKind.Minus)
             opName = "op_UnaryNegation";
-        return ExternResolver.BuildMethodSignature(operandType, $"__{opName}", new[] { operandType }, returnType);
+        return UdonAbiKey.Method(operandType, opName,
+            new[] { operandType }, returnType);
     }
 
     static string GetDefaultConstValue(string udonType) => udonType switch
@@ -924,7 +925,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
     {
         var result = EmitAggregateElementsEqual(leftArr, rightArr, aggType);
         if (isNotEquals)
-            result = ExternCall("SystemBoolean.__op_UnaryNegation__SystemBoolean__SystemBoolean",
+            result = ExternCall(UdonAbi.BooleanNot,
                 new List<CLeaf> { result }, StorageTypes.Boolean);
         return result;
     }
@@ -947,10 +948,10 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
 
             CLeaf elemEq = layout.Fields[i].Type is INamedTypeSymbol nested && nested.IsTupleType
                 ? EmitAggregateElementsEqual(leftElem, rightElem, nested) // nested tuple → recurse
-                : ExternCall("SystemObject.__Equals__SystemObject_SystemObject__SystemBoolean",
+                : ExternCall(UdonAbi.ObjectEquals,
                     new List<CLeaf> { leftElem, rightElem }, StorageTypes.Boolean);
 
-            result = ExternCall("SystemBoolean.__op_LogicalAnd__SystemBoolean_SystemBoolean__SystemBoolean",
+            result = ExternCall(UdonAbi.BooleanLogicalAnd,
                 new List<CLeaf> { result, elemEq }, StorageTypes.Boolean);
         }
         return result;

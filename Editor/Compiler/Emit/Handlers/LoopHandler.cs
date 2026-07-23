@@ -167,7 +167,7 @@ public class LoopHandler : HandlerBase, IOperationHandler
 
         // Cache array length before the loop
         var lenSlot = _ctx.Builder.AllocScratch(StorageTypes.Int32);
-        EmitAssign(lenSlot, ExternCall("SystemArray.__get_Length__SystemInt32",
+        EmitAssign(lenSlot, ExternCall(UdonAbi.SystemArrayLength,
             new List<CLeaf> { collVal }, StorageTypes.Int32));
 
         _builder.EmitFor(
@@ -179,14 +179,14 @@ public class LoopHandler : HandlerBase, IOperationHandler
             // Condition: idx < cachedLen — built via a factory so A-normal form re-materializes it inside the
             // loop's cond block (re-evaluated each iteration), not bound once before the loop.
             () => ExternCall(
-                "SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean",
+                UdonAbi.Int32LessThan,
                 new List<CLeaf> { SlotRef(idxSlot), SlotRef(lenSlot) },
                 StorageTypes.Boolean),
             _ =>
             {
                 // Update: idx++
                 var nextIdx = ExternCall(
-                    "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32",
+                    UdonAbi.Int32Add,
                     new List<CLeaf> { SlotRef(idxSlot), Const(1, StorageTypes.Int32) },
                     StorageTypes.Int32);
                 EmitAssign(idxSlot, nextIdx);
@@ -198,7 +198,7 @@ public class LoopHandler : HandlerBase, IOperationHandler
                 EnvEmit.Alloc(_builder, _ctx, _ctx.Closures.CaptureScope?.ScopeFor(op, CaptureScopeKind.Iteration));
                 // Body: loopVar = arr[idx]; <body>
                 CLeaf elemVal = ExternCall(
-                    ExternResolver.BuildArrayGetSignature(arrayType, elemAccessorType),
+                    UdonAbi.ArrayGet(arrayType, elemAccessorType),
                     new List<CLeaf> { collVal, SlotRef(idxSlot) },
                     new StorageType(elemType));
                 // foreach yields a by-value COPY of the element. For an aggregate (struct/tuple) element the

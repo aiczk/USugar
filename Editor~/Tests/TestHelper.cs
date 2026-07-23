@@ -11,7 +11,45 @@ public static class TestHelper
         = UdonAbiCatalog.FromNamesForTests(ExternRegistry.All);
 
     public static BoundExtern BindExtern(string signature)
-        => UdonAbiCatalog.FromNamesForTests(new[] { signature }).Require(signature);
+        => UdonAbiCatalog.FromNamesForTests(new[] { signature }).Require(AbiKey(signature));
+
+    /// <summary>
+    /// Test fixtures intentionally start from flat registry names. Production
+    /// never performs this reverse parse; its authority is UdonNodeDefinition.
+    /// </summary>
+    public static UdonAbiKey AbiKey(string signature)
+    {
+        var ownerEnd = signature.IndexOf(".__", System.StringComparison.Ordinal);
+        if (ownerEnd <= 0)
+            throw new System.ArgumentException("Invalid test extern name.", nameof(signature));
+        var owner = signature.Substring(0, ownerEnd);
+        var segments = signature.Substring(ownerEnd + 3)
+            .Split(new[] { "__" }, System.StringSplitOptions.None);
+        if (segments.Length == 2)
+        {
+            if (segments[0].StartsWith("set_", System.StringComparison.Ordinal))
+                return UdonAbiKey.OmittedResult(owner, segments[0], segments[1]);
+            return UdonAbiKey.Method(owner, segments[0], segments[1]);
+        }
+        if (segments.Length == 3 && segments[0] == "ctor")
+            return UdonAbiKey.Constructor(owner,
+                segments[1].Length == 0
+                    ? System.Array.Empty<string>()
+                    : segments[1].Split('_'),
+                segments[2]);
+        if (segments.Length == 3)
+            return UdonAbiKey.Method(owner, segments[0],
+                segments[1].Split('_'), segments[2]);
+        throw new System.ArgumentException("Invalid test extern name.", nameof(signature));
+    }
+
+    public static string RegistryOwner(string signature)
+    {
+        var separator = signature.IndexOf('.');
+        return separator > 0
+            ? signature.Substring(0, separator)
+            : signature;
+    }
 
     public static string StubSource => Stubs;
 

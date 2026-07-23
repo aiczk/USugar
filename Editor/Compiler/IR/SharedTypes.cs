@@ -62,29 +62,6 @@ public static class StorageTypes
     public static readonly StorageType UdonEventReceiver = new StorageType("VRCUdonCommonInterfacesIUdonEventReceiver");
 }
 
-/// <summary>An Udon VM extern signature. Kept distinct from storage type names so IR APIs cannot
-/// accidentally accept one protocol in place of the other.</summary>
-public readonly struct ExternSignature : IEquatable<ExternSignature>
-{
-    public readonly string Text;
-
-    public ExternSignature(string text)
-        => Text = !string.IsNullOrEmpty(text)
-            ? text
-            : throw new ArgumentException("An extern signature is required.", nameof(text));
-
-    public bool Equals(ExternSignature other)
-        => string.Equals(Text, other.Text, StringComparison.Ordinal);
-    public override bool Equals(object obj) => obj is ExternSignature other && Equals(other);
-    public override int GetHashCode() => StringComparer.Ordinal.GetHashCode(Text ?? "");
-    public override string ToString() => Text;
-
-    public static implicit operator ExternSignature(string text) => new ExternSignature(text);
-    public static explicit operator string(ExternSignature signature) => signature.Text;
-    public static bool operator ==(ExternSignature left, ExternSignature right) => left.Equals(right);
-    public static bool operator !=(ExternSignature left, ExternSignature right) => !left.Equals(right);
-}
-
 /// <summary>A closed C# runtime type identity. It must be lowered explicitly before entering Udon
 /// storage because that lowering is non-injective for aggregates, delegates, nullable values, and
 /// user classes.</summary>

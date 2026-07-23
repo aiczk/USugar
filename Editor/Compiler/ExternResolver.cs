@@ -6,15 +6,6 @@ using Microsoft.CodeAnalysis.Operations;
 
 public static class ExternResolver
 {
-    /// <summary>The udon TYPE-name prefix of an extern full name ("SystemInt32.__op_Addition__…" → "SystemInt32").
-    /// Sanitized Udon type names carry no '.', so the first '.' is always the type/member boundary.</summary>
-    public static string ExternTypePrefix(string externFullName)
-    {
-        if (string.IsNullOrEmpty(externFullName)) return externFullName;
-        int i = externFullName.IndexOf('.');
-        return i < 0 ? externFullName : externFullName.Substring(0, i);
-    }
-
     /// <summary>A source-defined class whose shape is outside class ABI v1.</summary>
     public static bool IsUnsupportedUserClass(ITypeSymbol type)
     {
@@ -448,47 +439,15 @@ public static class ExternResolver
     // SetProgramVariable / SendCustomEvent / GetProgramVariable signatures shared by every copy-in / dispatch
     // producer (CoreFlatten + the handlers) and the FlatVerify recognizer, which formerly substring-matched
     // the literal and would silently stop matching if the format drifted.
-    public const string EventReceiverSetProgramVariable =
-        "VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid";
-    public const string EventReceiverSendCustomEvent =
-        "VRCUdonCommonInterfacesIUdonEventReceiver.__SendCustomEvent__SystemString__SystemVoid";
-    public const string EventReceiverGetProgramVariable =
-        "VRCUdonCommonInterfacesIUdonEventReceiver.__GetProgramVariable__SystemString__SystemObject";
-
-    // The signature builders route the receiver type through the SAME remap table as GetUdonTypeName
-    // (RemapUdonType). A private 1-arm twin (RemapExternType) used to live here carrying only the
-    // VRCUdonUdonBehaviour→IUdonEventReceiver arm; callers that pass GetUdonTypeName output arrive
-    // already remapped, so the fold is a no-op there, and a raw display name now gets the full table.
-    public static string BuildMethodSignature(string containingType, string methodName, string[] paramTypes, string returnType)
-    {
-        var sanitizedType = RemapExternOwnerType(SanitizeTypeName(containingType));
-        var sanitizedParams = string.Join("_", paramTypes.Select(SanitizeTypeName));
-        var sanitizedReturn = SanitizeTypeName(returnType);
-        var paramPart = paramTypes.Length > 0 ? $"__{sanitizedParams}" : "";
-        return $"{sanitizedType}.{methodName}{paramPart}__{sanitizedReturn}";
-    }
-
-    public static string BuildConvertSignature(string fromType, string toType)
-    {
-        // e.g. SystemConvert.__ToByte__SystemInt32__SystemByte
-        var shortName = toType.StartsWith("System") ? toType.Substring(6) : toType;
-        return $"SystemConvert.__To{shortName}__{fromType}__{toType}";
-    }
-
-    public static string BuildArrayGetSignature(string arrayType, string elemType)
-    {
-        return $"{arrayType}.__Get__SystemInt32__{elemType}";
-    }
-
-    public static string BuildArraySetSignature(string arrayType, string elemType)
-    {
-        return $"{arrayType}.__Set__SystemInt32_{elemType}__SystemVoid";
-    }
-
-    public static string BuildArrayCtorSignature(string arrayType)
-    {
-        return $"{arrayType}.__ctor__SystemInt32__{arrayType}";
-    }
+    public static readonly UdonAbiKey EventReceiverSetProgramVariable =
+        UdonAbiKey.VoidMethod("VRCUdonCommonInterfacesIUdonEventReceiver",
+            "SetProgramVariable", "SystemString", "SystemObject");
+    public static readonly UdonAbiKey EventReceiverSendCustomEvent =
+        UdonAbiKey.VoidMethod("VRCUdonCommonInterfacesIUdonEventReceiver",
+            "SendCustomEvent", "SystemString");
+    public static readonly UdonAbiKey EventReceiverGetProgramVariable =
+        UdonAbiKey.Method("VRCUdonCommonInterfacesIUdonEventReceiver",
+            "GetProgramVariable", new[] { "SystemString" }, "SystemObject");
 
     public static string GetArrayAccessorType(IArrayTypeSymbol arrayType)
     {
@@ -500,11 +459,6 @@ public static class ExternResolver
         // Derive element type from array type name: "FooArray" → "Foo"
         var arrTypeName = GetArrayAccessorType(arrayType);
         return arrTypeName.Substring(0, arrTypeName.Length - "Array".Length);
-    }
-
-    public static string GetOperatorExternName(string csharpOperatorName)
-    {
-        return $"__{csharpOperatorName}";
     }
 
     static readonly HashSet<SpecialType> NumericSpecialTypes = new()
@@ -607,7 +561,7 @@ public static class ExternResolver
         [BinaryOperatorKind.RightShift] = "op_RightShift",
     };
 
-    public static string ResolveBuiltInBinaryExtern(
+    public static UdonAbiKey ResolveBuiltInBinaryExtern(
         BinaryOperatorKind operatorKind,
         ITypeSymbol leftType, ITypeSymbol rightType, ITypeSymbol resultType)
     {
@@ -619,7 +573,8 @@ public static class ExternResolver
         if (operatorKind == BinaryOperatorKind.Add
             && (result == "SystemString" || left == "SystemString" || right == "SystemString")
             && !(left == "SystemString" && right == "SystemString"))
-            return "SystemString.__Concat__SystemObject_SystemObject__SystemString";
+            return UdonAbiKey.Method("SystemString", "Concat",
+                new[] { "SystemObject", "SystemObject" }, "SystemString");
 
         // Enum operations → use underlying type (Udon VM has no enum-typed operators). Covers equality,
         // bitwise (&/|/^) AND relational (< > <= >=) — SDK enums keep their type name otherwise, so
@@ -643,7 +598,8 @@ public static class ExternResolver
             // Bitwise ops on enums return the enum type in C#, but Udon uses the underlying type
             var resultUnderlying = resultType?.TypeKind == TypeKind.Enum
                 ? underlying : result;
-            return BuildMethodSignature(underlying, $"__{opName2}", new[] { underlying, underlying }, resultUnderlying);
+            return UdonAbiKey.Method(underlying, opName2,
+                new[] { underlying, underlying }, resultUnderlying);
         }
 
         // Small integer types: Udon VM has no byte/sbyte/short/ushort operators;
@@ -671,7 +627,7 @@ public static class ExternResolver
                 BinaryOperatorKind.Remainder => "op_Modulus",
                 _ => opName
             };
-        return BuildMethodSignature(left, $"__{opName}", new[] { left, right }, result);
+        return UdonAbiKey.Method(left, opName, new[] { left, right }, result);
     }
 
     /// <summary>Integer type facts — the SINGLE SOURCE OF TRUTH for Udon integer classification: bit rank and

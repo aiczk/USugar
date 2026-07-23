@@ -62,7 +62,7 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
                 or SpecialType.System_ValueType or SpecialType.System_Enum
             && ResolveType(op.Instance.Type) is INamedTypeSymbol sdkEnumRecv
             && sdkEnumRecv.TypeKind == TypeKind.Enum && !ExternResolver.IsUserEnum(sdkEnumRecv))
-            return ExternCall("SystemObject.__Equals__SystemObject_SystemObject__SystemBoolean",
+            return ExternCall(UdonAbi.ObjectEquals,
                 new List<CLeaf> { VisitExpression(op.Instance), VisitExpression(op.Arguments[0].Value) },
                 StorageTypes.Boolean);
 
@@ -121,15 +121,15 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
                             present => TryEmitEnumToString(RetagSmallNullablePresent(present, nulUnder), nulUnder));
                     return NullableAbi.EmitGetValueOrDefault(_builder, nulBox, StorageTypes.String,
                         Const("", StorageTypes.String),
-                        present => ExternCall("SystemObject.__ToString__SystemString",
+                        present => ExternCall(UdonAbiKey.Method("SystemObject", "ToString", "SystemString"),
                             new List<CLeaf> { present }, StorageTypes.String));
                 case "GetHashCode":
                     return NullableAbi.EmitGetValueOrDefault(_builder, nulBox, StorageTypes.Int32,
                         Const(0, StorageTypes.Int32),
-                        present => ExternCall("SystemObject.__GetHashCode__SystemInt32",
+                        present => ExternCall(UdonAbiKey.Method("SystemObject", "GetHashCode", "SystemInt32"),
                             new List<CLeaf> { present }, StorageTypes.Int32));
                 default: // Equals(object)
-                    return ExternCall("SystemObject.__Equals__SystemObject_SystemObject__SystemBoolean",
+                    return ExternCall(UdonAbi.ObjectEquals,
                         new List<CLeaf> { nulBox, VisitExpression(op.Arguments[0].Value) }, StorageTypes.Boolean);
             }
         }
@@ -474,7 +474,7 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
 
         foreach (var t in targets)
         {
-            var eq = ExternCall("SystemString.__op_Equality__SystemString_SystemString__SystemBoolean",
+            var eq = ExternCall(UdonAbi.StringEquality,
                 new List<CLeaf> { SlotRef(typeObjSlot), LoadField(t.TypeObjVar, StorageTypes.String) }, StorageTypes.Boolean);
             var callArgs = new List<CLeaf> { SlotRef(recvSlot) };
             callArgs.AddRange(argRefs);
@@ -489,10 +489,10 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
             }, null);
         }
 
-        var noMatch = ExternCall("SystemBoolean.__op_UnaryNegation__SystemBoolean__SystemBoolean",
+        var noMatch = ExternCall(UdonAbi.BooleanNot,
             new List<CLeaf> { SlotRef(matched) }, StorageTypes.Boolean);
         _builder.EmitIf(noMatch, _ =>
-            EmitExternVoid("UnityEngineDebug.__LogError__SystemObject__SystemVoid",
+            EmitExternVoid(UdonAbi.DebugLogError,
                 new List<CLeaf> { Const(
                     $"USugar: NullReferenceException — virtual call '{op.TargetMethod.ContainingType.Name}.{op.TargetMethod.Name}' on a null or non-class receiver ({_classSymbol.Name}). Returning default.",
                     StorageTypes.String) }), null);
@@ -514,7 +514,7 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
             var s = _ctx.Builder.AllocScratch(GetStorageType(a.Value.Type));
             EmitAssign(s, VisitExpression(a.Value));
         }
-        EmitExternVoid("UnityEngineDebug.__LogError__SystemObject__SystemVoid",
+        EmitExternVoid(UdonAbi.DebugLogError,
             new List<CLeaf> { Const(
                 $"USugar: NullReferenceException — virtual call '{recvTy.Name}.{target.Name}' has no minted implementor, so the receiver must be null ({_classSymbol.Name}). Returning default.",
                 StorageTypes.String) });

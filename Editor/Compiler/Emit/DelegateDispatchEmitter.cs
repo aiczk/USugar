@@ -18,9 +18,9 @@ public sealed class DelegateDispatchEmitter
     CSlotRef LoadField(string name, StorageType type) => _builder.LoadField(name, type);
     void EmitAssign(int slot, CValue value) => _builder.EmitAssign(slot, value);
     void EmitStoreField(string name, CLeaf value) => _builder.EmitStoreField(name, value);
-    CSlotRef ExternCall(ExternSignature signature, List<CLeaf> args, StorageType returnType)
+    CSlotRef ExternCall(UdonAbiKey signature, List<CLeaf> args, StorageType returnType)
         => _builder.ExternCall(signature, args, returnType);
-    void EmitExternVoid(ExternSignature signature, List<CLeaf> args, bool reentrant = false)
+    void EmitExternVoid(UdonAbiKey signature, List<CLeaf> args, bool reentrant = false)
         => _builder.EmitExternVoid(signature, args, reentrant);
     void EmitInternalVoid(string name, List<CLeaf> args, bool reentrant = false)
         => _builder.EmitInternalVoid(name, args, reentrant);
@@ -89,10 +89,10 @@ public sealed class DelegateDispatchEmitter
                     // Self/cross is decided by TARGET IDENTITY only (P6) — addr≠0 merely qualifies the
                     // fast path (addr is meaningless across program boundaries; 0-addr JUMP_INDIRECT would
                     // silently jump to bytecode 0, P5d — addr is only ever read inside this guard).
-                    var isSelf = ExternCall("UnityEngineObject.__op_Equality__UnityEngineObject_UnityEngineObject__SystemBoolean",
+                    var isSelf = ExternCall(UdonAbiKey.Method("UnityEngineObject", "op_Equality", new[] { "UnityEngineObject", "UnityEngineObject" }, "SystemBoolean"),
                         new List<CLeaf> { tgt, thisRef }, StorageTypes.Boolean);
                     var hasAddr = DelegateAbi.HasAddress(_builder, adr);
-                    var selfFast = ExternCall("SystemBoolean.__op_LogicalAnd__SystemBoolean_SystemBoolean__SystemBoolean",
+                    var selfFast = ExternCall(UdonAbi.BooleanLogicalAnd,
                         new List<CLeaf> { isSelf, hasAddr }, StorageTypes.Boolean);
                     _builder.EmitIf(selfFast,
                         _ =>

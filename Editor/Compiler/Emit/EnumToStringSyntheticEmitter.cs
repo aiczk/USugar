@@ -37,7 +37,8 @@ public sealed class EnumToStringSyntheticEmitter
             builder.SetFunction(function);
             var value = _bridge.Load(vId, underlyingType);
             var typeName = underlyingType.Name;
-            var equality = $"{typeName}.__op_Equality__{typeName}_{typeName}__SystemBoolean";
+            var equality = UdonAbiKey.Binary(typeName, "op_Equality",
+                typeName, typeName, "SystemBoolean");
             foreach (var member in enumType.GetMembers().OfType<IFieldSymbol>())
             {
                 if (!member.HasConstantValue) continue;
@@ -50,7 +51,7 @@ public sealed class EnumToStringSyntheticEmitter
             }
 
             builder.EmitReturn(_bridge.CallExtern(StorageTypes.String,
-                $"{typeName}.__ToString__SystemString", value));
+                UdonAbiKey.Method(typeName, "ToString", "SystemString"), value));
             if (previousFunction != null) builder.SetFunction(previousFunction);
         }
     }

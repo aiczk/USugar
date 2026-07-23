@@ -88,10 +88,10 @@ public sealed class SyntheticBridgeBuilder
         }
     }
 
-    public CLeaf CallExtern(StorageType returnType, ExternSignature signature, params CLeaf[] args)
+    public CLeaf CallExtern(StorageType returnType, UdonAbiKey signature, params CLeaf[] args)
         => _builder.ExternCall(signature, new List<CLeaf>(args), returnType);
 
-    public void CallExternVoid(ExternSignature signature, params CLeaf[] args)
+    public void CallExternVoid(UdonAbiKey signature, params CLeaf[] args)
         => _builder.EmitExternVoid(signature, new List<CLeaf>(args));
 
     public CLeaf CallInternal(CFunction function, params CLeaf[] args)

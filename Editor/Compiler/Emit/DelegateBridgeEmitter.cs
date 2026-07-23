@@ -125,16 +125,16 @@ public sealed class DelegateBridgeEmitter
         arguments.Add(environment);
 
         var environmentPresent = _bridge.CallExtern(StorageTypes.Boolean,
-            "SystemObject.__op_Inequality__SystemObject_SystemObject__SystemBoolean",
+            UdonAbi.ObjectInequality,
             environment, builder.Const(null, StorageTypes.Object));
         builder.EmitIf(environmentPresent,
             _ =>
             {
                 var kind = _bridge.CallExtern(StorageTypes.String,
-                    ExternResolver.BuildArrayGetSignature("SystemObjectArray", "SystemObject"),
+                    UdonAbi.ArrayGet("SystemObjectArray", "SystemObject"),
                     environment, builder.Const(EnvAbi.Kind, StorageTypes.Int32));
                 var kindValid = _bridge.CallExtern(StorageTypes.Boolean,
-                    "SystemString.__op_Equality__SystemString_SystemString__SystemBoolean",
+                    UdonAbi.StringEquality,
                     kind, builder.Const(EnvAbi.KindTag, StorageTypes.String));
                 builder.EmitIf(kindValid, _ => emitCall(),
                     _ => EmitInvalidEnvironment(closureMethod, conventionReturn, returnType));
@@ -158,7 +158,7 @@ public sealed class DelegateBridgeEmitter
 
     void EmitEnvironmentError(string message, string conventionReturn, StorageType? returnType)
     {
-        _bridge.CallExternVoid("UnityEngineDebug.__LogError__SystemObject__SystemVoid",
+        _bridge.CallExternVoid(UdonAbi.DebugLogError,
             _context.Builder.Const(message, StorageTypes.String));
         if (conventionReturn != null && returnType != null)
             _bridge.Store(conventionReturn,

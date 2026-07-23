@@ -148,7 +148,7 @@ public abstract partial class HandlerBase
         EmitAssign(totalSlot, totalSize);
 
         var backingSlot = _ctx.Builder.AllocScratch(new StorageType(backingUdonType));
-        EmitAssign(backingSlot, ExternCall(ExternResolver.BuildArrayCtorSignature(backingUdonType),
+        EmitAssign(backingSlot, ExternCall(UdonAbi.ArrayConstructor(backingUdonType),
             new List<CLeaf> { SlotRef(totalSlot) }, new StorageType(backingUdonType)));
 
         var bundleSlot = _ctx.Builder.AllocScratch(new StorageType(NdimArrayAbi.BundleUdonType));
@@ -159,7 +159,7 @@ public abstract partial class HandlerBase
             var leaves = new List<IOperation>();
             NdimArrayAbi.FlattenInitializer(op.Initializer, leaves);
             for (int i = 0; i < leaves.Count; i++)
-                EmitExternVoid(ExternResolver.BuildArraySetSignature(backingUdonType, elemUdonType),
+                EmitExternVoid(UdonAbi.ArraySet(backingUdonType, elemUdonType),
                     new List<CLeaf> { SlotRef(backingSlot), Const(i, StorageTypes.Int32), VisitExpression(leaves[i]) });
         }
         else if (aggElem)
@@ -169,15 +169,15 @@ public abstract partial class HandlerBase
             var iSlot = _ctx.Builder.AllocScratch(StorageTypes.Int32);
             EmitAssign(iSlot, Const(0, StorageTypes.Int32));
             _builder.EmitWhile(
-                () => ExternCall("SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean",
+                () => ExternCall(UdonAbi.Int32LessThan,
                     new List<CLeaf> { SlotRef(iSlot), SlotRef(totalSlot) }, StorageTypes.Boolean),
                 _ =>
                 {
-                    EmitExternVoid(ExternResolver.BuildArraySetSignature(backingUdonType, elemUdonType),
+                    EmitExternVoid(UdonAbi.ArraySet(backingUdonType, elemUdonType),
                         new List<CLeaf> { SlotRef(backingSlot), SlotRef(iSlot),
                             AggregateAbi.MintDefault(_builder, _ctx.Aggregates.GetLayout((INamedTypeSymbol)elemSym),
                                 _ctx.Aggregates.GetLayout, GetStorageTypeName) });
-                    EmitAssign(iSlot, ExternCall("SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32",
+                    EmitAssign(iSlot, ExternCall(UdonAbi.Int32Add,
                         new List<CLeaf> { SlotRef(iSlot), Const(1, StorageTypes.Int32) }, StorageTypes.Int32));
                 });
         }
@@ -194,7 +194,7 @@ public abstract partial class HandlerBase
     protected CLeaf EmitNdimLength(CLeaf bundleVal, IArrayTypeSymbol ndimType)
     {
         var backing = EmitNdimGetBacking(bundleVal, NdimArrayAbi.BackingType(_compilation, ndimType));
-        return ExternCall("SystemArray.__get_Length__SystemInt32", new List<CLeaf> { backing }, StorageTypes.Int32);
+        return ExternCall(UdonAbi.SystemArrayLength, new List<CLeaf> { backing }, StorageTypes.Int32);
     }
 
     /// <summary>`ndimArr.GetLength(d)` — bundle[1+d] unboxed. <paramref name="dimArg"/> need not be a

@@ -367,19 +367,21 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
             if (!isDecimal && sourceType.SpecialType == SpecialType.System_Single)
             {
                 sourceValue = ExternCall(
-                    "SystemConvert.__ToDouble__SystemSingle__SystemDouble",
+                    UdonAbiKey.Method("SystemConvert", "ToDouble", new[] { "SystemSingle" }, "SystemDouble"),
                     new List<CLeaf> { sourceValue },
                     StorageTypes.Double);
             }
 
             sourceValue = ExternCall(
-                $"SystemMath.__Truncate__{truncType}__{truncType}",
+                UdonAbiKey.Method("SystemMath", "Truncate",
+                    new[] { truncType }, truncType),
                 new List<CLeaf> { sourceValue },
                 new StorageType(truncType));
 
             var destinationStorage = GetStorageTypeName(destinationType);
             return ExternCall(
-                $"SystemConvert.__{methodName}__{truncType}__{destinationStorage}",
+                UdonAbiKey.Method("SystemConvert", methodName,
+                    new[] { truncType }, destinationStorage),
                 new List<CLeaf> { sourceValue },
                 new StorageType(destinationStorage));
         }
@@ -453,7 +455,8 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
                 && ExternResolver.GetConvertMethodName(closedDestination) is { } enumConvert)
             {
                 result = ExternCall(
-                    $"SystemConvert.__{enumConvert}__SystemObject__{destinationStorage.Name}",
+                    UdonAbiKey.Method("SystemConvert", enumConvert,
+                        new[] { "SystemObject" }, destinationStorage.Name),
                     new List<CLeaf> { srcVal },
                     destinationStorage);
                 return true;
@@ -479,7 +482,8 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
             && ExternResolver.GetConvertMethodName(closedDestination) is { } objectConvert)
         {
             result = ExternCall(
-                $"SystemConvert.__{objectConvert}__SystemObject__{destinationStorage.Name}",
+                UdonAbiKey.Method("SystemConvert", objectConvert,
+                    new[] { "SystemObject" }, destinationStorage.Name),
                 new List<CLeaf> { srcVal }, destinationStorage);
             return true;
         }
@@ -615,7 +619,7 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
                 // a plain unwrapped null. Guarded at RUNTIME (not just the statically-known-null case
                 // below): srcVal may be a variable whose null-ness is unknown at compile time.
                 var wrapResultSlot = _ctx.Builder.AllocScratch(new StorageType(DelegateAbi.BundleType));
-                var srcNotNull = ExternCall("SystemObject.__op_Inequality__SystemObject_SystemObject__SystemBoolean",
+                var srcNotNull = ExternCall(UdonAbi.ObjectInequality,
                     new List<CLeaf> { srcVal, Const(null, StorageTypes.Object) }, StorageTypes.Boolean);
                 _builder.EmitIf(srcNotNull,
                     _ =>
@@ -849,7 +853,7 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
                     _ => EmitAssign(castSlot, srcVal),
                     _ =>
                     {
-                        EmitExternVoid("UnityEngineDebug.__LogError__SystemObject__SystemVoid",
+                        EmitExternVoid(UdonAbi.DebugLogError,
                             new List<CLeaf> { Const(
                                 $"USugar: InvalidCastException — cast to '{castDst.Name}' on a value that is not a '{castDst.Name}' ({_classSymbol.Name}). Returning null.",
                                 StorageTypes.String) });

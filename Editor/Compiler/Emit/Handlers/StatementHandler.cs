@@ -452,14 +452,15 @@ public class StatementHandler : HandlerBase, IOperationHandler
         }
 
         void EmitCall()
-            => EmitExternVoid($"{GetStorageTypeName(resolvedType)}.__Dispose__SystemVoid",
+            => EmitExternVoid(UdonAbiKey.Method(GetStorageTypeName(resolvedType),
+                    "Dispose", "SystemVoid"),
                 new List<CLeaf> { val });
 
         if (resolvedType?.IsReferenceType == true
             || resolvedType?.TypeKind == TypeKind.TypeParameter)
         {
             var present = ExternCall(
-                "SystemObject.__op_Inequality__SystemObject_SystemObject__SystemBoolean",
+                UdonAbi.ObjectInequality,
                 new List<CLeaf> { val, Const(null, StorageTypes.Object) }, StorageTypes.Boolean);
             _builder.EmitIf(present, _ => EmitCall());
             return;
