@@ -423,4 +423,19 @@ public class CoreVerifyTests
         var ex = Assert.Throws<VerificationException>(() => CoreVerify.Verify(module));
         Assert.Contains("CCrossCall event name", ex.Message);
     }
+
+    [Fact]
+    public void Verifier_ProgramVariableReceiverMustBeProgram_Throws()
+    {
+        var module = new CModule();
+        var func = module.AddFunction("test");
+        func.Body.Stmts.Add(new CProgramVariableStore(
+            new CConst(1, StorageTypes.Int32),
+            new CConst("value", StorageTypes.String),
+            StorageTypes.Int32,
+            new CConst(2, StorageTypes.Int32)));
+
+        var ex = Assert.Throws<VerificationException>(() => CoreVerify.Verify(module));
+        Assert.Contains("CProgramVariableStore receiver", ex.Message);
+    }
 }

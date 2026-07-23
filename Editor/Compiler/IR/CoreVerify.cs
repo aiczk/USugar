@@ -116,7 +116,7 @@ public static class CoreVerify
                 break;
 
             case CProgramVariableStore store:
-                VerifyExpr(store.Instance, ctx);
+                VerifyProgramReceiver(store.Instance, ctx, "CProgramVariableStore receiver");
                 VerifyExpr(store.VariableName, ctx);
                 VerifyExpr(store.Value, ctx);
                 ctx.AssertType(StorageTypes.String, store.VariableName.Type,
@@ -280,7 +280,7 @@ public static class CoreVerify
                 break;
 
             case CProgramVariableLoad load:
-                VerifyExpr(load.Instance, ctx);
+                VerifyProgramReceiver(load.Instance, ctx, "CProgramVariableLoad receiver");
                 VerifyExpr(load.VariableName, ctx);
                 ctx.AssertType(StorageTypes.String, load.VariableName.Type,
                     "CProgramVariableLoad variable name");
@@ -314,7 +314,7 @@ public static class CoreVerify
                 break;
 
             case CCrossCall cc:
-                VerifyExpr(cc.Instance, ctx); // SetProgramVariable receiver/values — addresses rejected
+                VerifyProgramReceiver(cc.Instance, ctx, "CCrossCall receiver");
                 VerifyExpr(cc.EventName, ctx);
                 ctx.AssertType(StorageTypes.String, cc.EventName.Type, "CCrossCall event name");
                 if (cc.EventName is CConst { Value: string eventName }
@@ -363,6 +363,20 @@ public static class CoreVerify
             default:
                 throw new VerificationException($"Unknown CValue type: {expr.GetType().Name}");
         }
+    }
+
+    static void VerifyProgramReceiver(CLeaf instance, VerifyContext ctx, string context)
+    {
+        VerifyExpr(instance, ctx);
+        // Delegate bundles deliberately erase their target to SystemObject. Interface/GetComponent
+        // paths may carry a behaviour through the Component tag until the extern consumes it.
+        if (instance.Type != StorageTypes.UdonEventReceiver
+            && instance.Type != StorageTypes.UdonBehaviour
+            && instance.Type != StorageTypes.Component
+            && instance.Type != StorageTypes.Object)
+            throw new VerificationException(
+                $"{context} has non-program type '{instance.Type}' "
+                + $"(function '{ctx.Func.Name}')");
     }
 }
 
