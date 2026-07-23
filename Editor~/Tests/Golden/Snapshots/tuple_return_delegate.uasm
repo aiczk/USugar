@@ -47,14 +47,15 @@
     __intnl_SystemBoolean_c1: %SystemBoolean, null
     __intnl_SystemBoolean_c2: %SystemBoolean, null
     __intnl_SystemInt32_c2: %SystemInt32, null
+    __intnl_SystemInt32_c3: %SystemInt32, null
     __const_SystemString_14: %SystemString, null
     __const_SystemString_15: %SystemString, null
     __const_SystemString_16: %SystemString, null
     __const_SystemString_17: %SystemString, null
-    __intnl_SystemObject_c1: %SystemObject, null
     __intnl_dlgptr_SystemUInt32_c0: %SystemUInt32, null
-    __intnl_SystemInt32_c3: %SystemInt32, null
+    __intnl_SystemObject_c1: %SystemObject, null
     __intnl_SystemInt32_c4: %SystemInt32, null
+    __intnl_SystemInt32_c5: %SystemInt32, null
     __intnl_SystemObjectArray_c4: %SystemObjectArray, null
     __const_retaddr_SystemUInt32_0: %SystemUInt32, null
     __const_retaddr_SystemUInt32_1: %SystemUInt32, null
@@ -239,20 +240,20 @@
         PUSH, __dlgc_SystemInt32_SystemInt32__SystemObjectArray__a0
         PUSH, __intnl_SystemInt32_c2
         COPY
+        PUSH, __dlgc_SystemInt32_SystemInt32__SystemObjectArray__a1
+        PUSH, __intnl_SystemInt32_c3
+        COPY
+        PUSH, __dlgc_SystemInt32_SystemInt32__SystemObjectArray__env
+        PUSH, __intnl_SystemObjectArray_c1
+        COPY
         PUSH, __intnl_SystemObject_c0
         PUSH, __const_SystemString_14
         PUSH, __intnl_SystemInt32_c2
         EXTERN, "VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid"
-        PUSH, __dlgc_SystemInt32_SystemInt32__SystemObjectArray__a1
-        PUSH, __intnl_SystemInt32_c2
-        COPY
         PUSH, __intnl_SystemObject_c0
         PUSH, __const_SystemString_15
-        PUSH, __intnl_SystemInt32_c2
+        PUSH, __intnl_SystemInt32_c3
         EXTERN, "VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid"
-        PUSH, __dlgc_SystemInt32_SystemInt32__SystemObjectArray__env
-        PUSH, __intnl_SystemObjectArray_c1
-        COPY
         PUSH, __intnl_SystemObject_c0
         PUSH, __const_SystemString_16
         PUSH, __intnl_SystemObjectArray_c1
@@ -262,9 +263,9 @@
         EXTERN, "VRCUdonCommonInterfacesIUdonEventReceiver.__SendCustomEvent__SystemString__SystemVoid"
         PUSH, __intnl_SystemObject_c0
         PUSH, __const_SystemString_17
-        PUSH, __intnl_SystemObject_c1
+        PUSH, __intnl_SystemObjectArray_c1
         EXTERN, "VRCUdonCommonInterfacesIUdonEventReceiver.__GetProgramVariable__SystemString__SystemObject"
-        PUSH, __intnl_SystemObject_c1
+        PUSH, __intnl_SystemObjectArray_c1
         PUSH, __intnl_SystemObjectArray_c2
         COPY
     ___start_bb16:
@@ -323,15 +324,15 @@
         PUSH, __const_SystemUInt32_sentinel
     __dlg___0_Callee__body:
         PUSH, __dlgc_SystemInt32_SystemInt32__SystemObjectArray__a0
-        PUSH, __intnl_SystemInt32_c3
+        PUSH, __intnl_SystemInt32_c4
         COPY
         PUSH, __dlgc_SystemInt32_SystemInt32__SystemObjectArray__a1
-        PUSH, __intnl_SystemInt32_c4
+        PUSH, __intnl_SystemInt32_c5
         COPY
-        PUSH, __intnl_SystemInt32_c3
+        PUSH, __intnl_SystemInt32_c4
         PUSH, __0_p__param
         COPY
-        PUSH, __intnl_SystemInt32_c4
+        PUSH, __intnl_SystemInt32_c5
         PUSH, __0_q__param
         COPY
         PUSH, __const_retaddr_SystemUInt32_1

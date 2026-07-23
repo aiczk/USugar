@@ -298,13 +298,13 @@
         PUSH, __dlgc_SystemInt32__Void__a0
         PUSH, __intnl_SystemInt32_c0
         COPY
+        PUSH, __dlgc_SystemInt32__Void__env
+        PUSH, __intnl_SystemObjectArray_c0
+        COPY
         PUSH, __intnl_SystemObject_c0
         PUSH, __const_SystemString_13
         PUSH, __intnl_SystemInt32_c0
         EXTERN, "VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid"
-        PUSH, __dlgc_SystemInt32__Void__env
-        PUSH, __intnl_SystemObjectArray_c0
-        COPY
         PUSH, __intnl_SystemObject_c0
         PUSH, __const_SystemString_14
         PUSH, __intnl_SystemObjectArray_c0
@@ -904,17 +904,9 @@
         PUSH, __dlgc_SystemInt32__Void__a0
         PUSH, __intnl_SystemInt32_c17
         COPY
-        PUSH, __intnl_SystemObject_c2
-        PUSH, __const_SystemString_13
-        PUSH, __intnl_SystemInt32_c17
-        EXTERN, "VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid"
         PUSH, __dlgc_SystemInt32__Void__env
         PUSH, __intnl_SystemObjectArray_c10
         COPY
-        PUSH, __intnl_SystemObject_c2
-        PUSH, __const_SystemString_14
-        PUSH, __intnl_SystemObjectArray_c10
-        EXTERN, "VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid"
         PUSH, __recurStack
         PUSH, __intnl_SystemObjectArray_c13
         COPY
@@ -995,6 +987,14 @@
         PUSH, __intnl_SystemInt32_c19
         PUSH, __recurSp
         COPY
+        PUSH, __intnl_SystemObject_c2
+        PUSH, __const_SystemString_13
+        PUSH, __intnl_SystemInt32_c17
+        EXTERN, "VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid"
+        PUSH, __intnl_SystemObject_c2
+        PUSH, __const_SystemString_14
+        PUSH, __intnl_SystemObjectArray_c10
+        EXTERN, "VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid"
         PUSH, __intnl_SystemObject_c2
         PUSH, __intnl_SystemString_c2
         EXTERN, "VRCUdonCommonInterfacesIUdonEventReceiver.__SendCustomEvent__SystemString__SystemVoid"

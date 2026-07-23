@@ -616,10 +616,8 @@ public partial class InvocationHandler
                     StorageTypes.Component);
 
                 // idValue = behaviour.GetProgramVariable("__refl_typeid" or "__refl_typeids")
-                var idValueVal = ExternCall(
-                    ExternResolver.EventReceiverGetProgramVariable,
-                    new List<CLeaf> { elementVal, reflKeyConst },
-                    StorageTypes.Object);
+                var idValueVal = LoadProgramVariable(
+                    elementVal, reflKeyConst, StorageTypes.Object);
 
                 // Null check: if (idValue != null)
                 var nullConst = Const(null, StorageTypes.Object);
@@ -724,10 +722,8 @@ public partial class InvocationHandler
                     StorageTypes.Component);
 
                 // Type check
-                var idValueVal = ExternCall(
-                    ExternResolver.EventReceiverGetProgramVariable,
-                    new List<CLeaf> { elementVal, reflKeyConst },
-                    StorageTypes.Object);
+                var idValueVal = LoadProgramVariable(
+                    elementVal, reflKeyConst, StorageTypes.Object);
 
                 var nullConst = Const(null, StorageTypes.Object);
                 var notNullVal = ExternCall(
@@ -815,10 +811,8 @@ public partial class InvocationHandler
             StorageTypes.Component);
 
         // idValue = behaviour.GetProgramVariable(reflKey)
-        var idValueVal = ExternCall(
-            ExternResolver.EventReceiverGetProgramVariable,
-            new List<CLeaf> { elementVal, reflKeyConst },
-            StorageTypes.Object);
+        var idValueVal = LoadProgramVariable(
+            elementVal, reflKeyConst, StorageTypes.Object);
 
         // Null check
         var nullConst = Const(null, StorageTypes.Object);
@@ -1135,13 +1129,11 @@ public partial class InvocationHandler
                 var instSlot = _ctx.Builder.AllocScratch(GetStorageType(behField.Instance.Type));
                 EmitAssign(instSlot, instanceVal);
                 var instRef = SlotRef(instSlot);
-                var nameConst = Const(behField.Field.Name, StorageTypes.String);
-                return (() => ExternCall(
-                    ExternResolver.EventReceiverGetProgramVariable,
-                    new List<CLeaf> { instRef, nameConst }, StorageTypes.Object),
-                    v => EmitExternVoid(
-                        ExternResolver.EventReceiverSetProgramVariable,
-                        new List<CLeaf> { instRef, nameConst, v }));
+                var fieldType = GetStorageType(behField.Field.Type);
+                return (() => LoadProgramVariable(
+                        instRef, behField.Field.Name, fieldType),
+                    v => StoreProgramVariable(
+                        instRef, behField.Field.Name, fieldType, v));
             }
             // Captured local/parameter: no flat heap address (Stage 2 §4.1 — ResolveOutRefFieldName
             // returns null for these), so the direct-FieldAddr fast path above can't take them. A bare

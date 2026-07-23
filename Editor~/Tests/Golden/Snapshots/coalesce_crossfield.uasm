@@ -8,8 +8,8 @@
     __const_SystemUInt32_sentinel: %SystemUInt32, null
     __intnl_VRCUdonCommonInterfacesIUdonEventReceiver_c0: %VRCUdonCommonInterfacesIUdonEventReceiver, null
     __const_SystemString_0: %SystemString, null
-    __intnl_SystemObject_c0: %SystemObject, null
     __intnl_SystemString_c0: %SystemString, null
+    __intnl_SystemString_c1: %SystemString, null
     __const_SystemObject_1: %SystemObject, null
     __intnl_SystemBoolean_c0: %SystemBoolean, null
     __const_SystemString_2: %SystemString, null
@@ -24,12 +24,12 @@
         COPY
         PUSH, __intnl_VRCUdonCommonInterfacesIUdonEventReceiver_c0
         PUSH, __const_SystemString_0
-        PUSH, __intnl_SystemObject_c0
+        PUSH, __intnl_SystemString_c0
         EXTERN, "VRCUdonCommonInterfacesIUdonEventReceiver.__GetProgramVariable__SystemString__SystemObject"
-        PUSH, __intnl_SystemObject_c0
         PUSH, __intnl_SystemString_c0
+        PUSH, __intnl_SystemString_c1
         COPY
-        PUSH, __intnl_SystemString_c0
+        PUSH, __intnl_SystemString_c1
         PUSH, __const_SystemObject_1
         PUSH, __intnl_SystemBoolean_c0
         EXTERN, "SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean"
@@ -40,7 +40,7 @@
         JUMP, 0x000000c4
     ___start_bb2:
         PUSH, __const_SystemString_2
-        PUSH, __intnl_SystemString_c0
+        PUSH, __intnl_SystemString_c1
         COPY
         PUSH, __intnl_VRCUdonCommonInterfacesIUdonEventReceiver_c0
         PUSH, __const_SystemString_0

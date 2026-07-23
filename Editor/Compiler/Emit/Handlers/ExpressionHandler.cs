@@ -231,11 +231,8 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
         {
             RejectProgramLocalCrossBehaviourFieldRead(fieldRef.Field);
             var instanceVal = VisitExpression(fieldRef.Instance);
-            var nameConst = Const(fieldRef.Field.Name, StorageTypes.String);
-            return ExternCall(
-                ExternResolver.EventReceiverGetProgramVariable,
-                new List<CLeaf> { instanceVal, nameConst },
-                StorageTypes.Object);
+            return LoadProgramVariable(
+                instanceVal, fieldRef.Field.Name, GetStorageType(fieldRef.Field.Type));
         }
         // other.field → extern getter (same pattern as VisitPropertyReference)
         {

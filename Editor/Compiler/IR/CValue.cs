@@ -193,17 +193,33 @@ public sealed class CrossCallParameter
 }
 
 /// <summary>
+/// Typed read from another Udon program's heap. Producer (not a leaf); CoreFlatten lowers it to
+/// GetProgramVariable only after CoreVerify has checked the receiver/name operands.
+/// </summary>
+public sealed class CProgramVariableLoad : CValue
+{
+    public readonly CLeaf Instance;
+    public readonly CLeaf VariableName;
+
+    public CProgramVariableLoad(CLeaf instance, CLeaf variableName, StorageType type) : base(type)
+    {
+        Instance = instance ?? throw new ArgumentNullException(nameof(instance));
+        VariableName = variableName ?? throw new ArgumentNullException(nameof(variableName));
+    }
+}
+
+/// <summary>
 /// Complete typed heap/event transport ABI for one cross-program call. Keeping this plan in Core
 /// IR lets verification prove copy-in/copy-out types before lowering erases the target signature.
 /// </summary>
 public sealed class CrossCallTransportPlan
 {
-    public readonly string EventName;
+    public readonly CLeaf EventName;
     public readonly IReadOnlyList<CrossCallParameter> Parameters;
     public readonly IReadOnlyList<ReturnSlot> Returns;
     public readonly StorageType ResultType;
 
-    public CrossCallTransportPlan(string eventName, IReadOnlyList<CrossCallParameter> parameters,
+    public CrossCallTransportPlan(CLeaf eventName, IReadOnlyList<CrossCallParameter> parameters,
         IReadOnlyList<ReturnSlot> returns, StorageType resultType)
     {
         EventName = eventName ?? throw new ArgumentNullException(nameof(eventName));
@@ -221,7 +237,7 @@ public sealed class CCrossCall : CValue
 {
     public readonly CLeaf Instance;
     public readonly CrossCallTransportPlan Transport;
-    public string EventName => Transport.EventName;
+    public CLeaf EventName => Transport.EventName;
     public IReadOnlyList<CrossCallParameter> Params => Transport.Parameters;
     public IReadOnlyList<ReturnSlot> Returns => Transport.Returns;
     /// <summary>Wave-12 r2 [V1]: this cross dispatch can land back on THIS program's own recursion

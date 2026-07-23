@@ -286,6 +286,27 @@ public sealed class CModule
     }
 }
 
+/// <summary>
+/// Typed write to another Udon program's heap. This remains semantic Core IR until flattening so
+/// the verifier can check the source value against the remote variable's declared storage type.
+/// </summary>
+public sealed class CProgramVariableStore : CStmt
+{
+    public readonly CLeaf Instance;
+    public readonly CLeaf VariableName;
+    public readonly StorageType VariableType;
+    public readonly CLeaf Value;
+
+    public CProgramVariableStore(CLeaf instance, CLeaf variableName,
+        StorageType variableType, CLeaf value)
+    {
+        Instance = instance ?? throw new ArgumentNullException(nameof(instance));
+        VariableName = variableName ?? throw new ArgumentNullException(nameof(variableName));
+        VariableType = variableType;
+        Value = value ?? throw new ArgumentNullException(nameof(value));
+    }
+}
+
 /// <summary>Canonical traversal order for reachable blocks in flat Core IR.</summary>
 public static class FlatCfgOrder
 {

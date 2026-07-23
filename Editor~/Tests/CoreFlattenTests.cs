@@ -87,7 +87,7 @@ public class CoreFlattenTests
         var value = builder.CrossCall(
             builder.Const(null, StorageTypes.UdonEventReceiver),
             new CrossCallTransportPlan(
-                "Call",
+                builder.Const("Call", StorageTypes.String),
                 System.Array.Empty<CrossCallParameter>(),
                 new[] { new ReturnSlot("result", StorageTypes.Int32) },
                 StorageTypes.Int32));
@@ -113,7 +113,7 @@ public class CoreFlattenTests
         builder.CrossCall(
             builder.Const(null, StorageTypes.UdonEventReceiver),
             new CrossCallTransportPlan(
-                "Call",
+                builder.Const("Call", StorageTypes.String),
                 System.Array.Empty<CrossCallParameter>(),
                 new[] {
                     new ReturnSlot("number", StorageTypes.Int32),
@@ -130,6 +130,57 @@ public class CoreFlattenTests
                 && call.Sig == ExternResolver.EventReceiverGetProgramVariable)
                 resultTypes.Add(call.Type);
         Assert.Equal(new[] { StorageTypes.Int32, StorageTypes.String }, resultTypes);
+    }
+
+    [Fact]
+    public void ProgramVariableLoadAndStore_LowerThroughTypedTransport()
+    {
+        var builder = Begin(out var function);
+        var receiver = builder.Const(null, StorageTypes.UdonEventReceiver);
+        var name = builder.Const("value", StorageTypes.String);
+        var value = builder.LoadProgramVariable(receiver, name, StorageTypes.Int32);
+        builder.EmitProgramVariableStore(receiver, name, StorageTypes.Int32, value);
+        var slotCount = function.Slots.Count;
+
+        CoreFlatten.Lower(function);
+
+        Assert.Equal(slotCount, function.Slots.Count);
+        var calls = new List<CExternCall>();
+        foreach (var block in function.FlatBlocks)
+        foreach (var statement in block.Stmts)
+            if (statement is CExprStmt expression && expression.Expr is CExternCall call)
+                calls.Add(call);
+        Assert.Equal(2, calls.Count);
+        Assert.Equal(ExternResolver.EventReceiverGetProgramVariable, calls[0].Sig);
+        Assert.Equal(StorageTypes.Int32, calls[0].Type);
+        Assert.Equal(ExternResolver.EventReceiverSetProgramVariable, calls[1].Sig);
+        Assert.Equal(StorageTypes.Int32, calls[1].Args[2].Type);
+    }
+
+    [Fact]
+    public void CrossCall_PreservesDynamicEventName()
+    {
+        var builder = Begin(out var function);
+        var eventNameSlot = builder.AllocFrame(StorageTypes.String);
+        builder.CrossCall(
+            builder.Const(null, StorageTypes.UdonEventReceiver),
+            new CrossCallTransportPlan(
+                builder.SlotRef(eventNameSlot),
+                System.Array.Empty<CrossCallParameter>(),
+                System.Array.Empty<ReturnSlot>(),
+                StorageTypes.Void));
+
+        CoreFlatten.Lower(function);
+
+        CExternCall dispatch = null;
+        foreach (var block in function.FlatBlocks)
+        foreach (var statement in block.Stmts)
+            if (statement is CExprStmt expression && expression.Expr is CExternCall call
+                && call.Sig == ExternResolver.EventReceiverSendCustomEvent)
+                dispatch = call;
+        Assert.NotNull(dispatch);
+        var eventName = Assert.IsType<CSlotRef>(dispatch.Args[1]);
+        Assert.Equal(eventNameSlot, eventName.SlotId);
     }
 
     static int CountAssignmentsTo(CFunction function, int slot)

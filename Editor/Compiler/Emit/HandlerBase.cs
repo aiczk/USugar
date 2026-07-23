@@ -408,8 +408,29 @@ public abstract partial class HandlerBase
     protected CSlotRef CrossCall(CLeaf instance, string eventName,
         IReadOnlyList<CrossCallParameter> parameters, IReadOnlyList<ReturnSlot> returns, StorageType retType,
         bool reentrant = false)
+        => CrossCall(instance, Const(eventName, StorageTypes.String),
+            parameters, returns, retType, reentrant);
+
+    protected CSlotRef CrossCall(CLeaf instance, CLeaf eventName,
+        IReadOnlyList<CrossCallParameter> parameters, IReadOnlyList<ReturnSlot> returns, StorageType retType,
+        bool reentrant = false)
         => _builder.CrossCall(instance,
             new CrossCallTransportPlan(eventName, parameters, returns, retType), reentrant);
+
+    protected CSlotRef LoadProgramVariable(CLeaf instance, string variableName, StorageType type)
+        => _builder.LoadProgramVariable(instance, Const(variableName, StorageTypes.String), type);
+
+    protected CSlotRef LoadProgramVariable(CLeaf instance, CLeaf variableName, StorageType type)
+        => _builder.LoadProgramVariable(instance, variableName, type);
+
+    protected void StoreProgramVariable(CLeaf instance, string variableName,
+        StorageType variableType, CLeaf value)
+        => _builder.EmitProgramVariableStore(
+            instance, Const(variableName, StorageTypes.String), variableType, value);
+
+    protected void StoreProgramVariable(CLeaf instance, CLeaf variableName,
+        StorageType variableType, CLeaf value)
+        => _builder.EmitProgramVariableStore(instance, variableName, variableType, value);
 
     /// <summary>Create a select (ternary) expression.</summary>
     protected CSlotRef Select(CLeaf cond, CLeaf trueVal, CLeaf falseVal, StorageType type)
@@ -1187,10 +1208,7 @@ public abstract partial class HandlerBase
     protected void EmitCrossBehaviourFieldSet(IFieldSymbol field, CLeaf instanceVal, CLeaf value)
     {
         RejectProgramLocalCrossBehaviourFieldWrite(field);
-        var nameConst = Const(field.Name, StorageTypes.String);
-        EmitExternVoid(
-            ExternResolver.EventReceiverSetProgramVariable,
-            new List<CLeaf> { instanceVal, nameConst, value });
+        StoreProgramVariable(instanceVal, field.Name, GetStorageType(field.Type), value);
     }
 
     /// <summary>CW27: the one aggregate object-initializer entry — every mint site routes through
@@ -1412,14 +1430,12 @@ public abstract partial class HandlerBase
                 {
                     GuardInterfaceDispatchRepresentation(propRef.Property.ContainingType, propRef.Property.Name);
                     RejectProgramLocalCrossBehaviourPropertyWrite(propRef.Property); // CW22
-                    // Wave-12 r2 [V1]: a reentrant setter dispatch pulls its value copy-in inside the
-                    // spill window (preSpillStmts: 1 — the SetProgramVariable emitted just above).
+                    // A typed cross-call keeps the value copy-in inside the reentrant spill window.
                     bool ifaceSetReentrant = TryMarkReentrantCrossDispatch(propRef, ifaceSetter);
-                    var paramNameConst = Const(ifaceSetterMl.ParamIds[0], StorageTypes.String);
-                    EmitExternVoid(ExternResolver.EventReceiverSetProgramVariable, new List<CLeaf> { instanceVal, paramNameConst, srcVal });
-                    EmitExternVoid(ExternResolver.EventReceiverSendCustomEvent,
-                        new List<CLeaf> { instanceVal, Const(LayoutPlanner.InterfaceDispatchName(ifaceSetter, ifaceSetterMl), StorageTypes.String) },
-                        ifaceSetReentrant, ifaceSetReentrant ? 1 : 0);
+                    CrossCall(instanceVal,
+                        LayoutPlanner.InterfaceDispatchName(ifaceSetter, ifaceSetterMl),
+                        CrossCallParameters(ifaceSetter, ifaceSetterMl.ParamIds, new[] { srcVal }),
+                        System.Array.Empty<ReturnSlot>(), StorageTypes.Void, ifaceSetReentrant);
                 }
                 else if (ExternResolver.IsUdonSharpBehaviour(propRef.Property.ContainingType) && propRef.Instance is not IInstanceReferenceOperation)
                 {
@@ -1437,8 +1453,8 @@ public abstract partial class HandlerBase
                     if (isAutoSet)
                     {
                         // Auto-property or read-only: direct SetProgramVariable("PropertyName")
-                        var nameConst = Const(propRef.Property.Name, StorageTypes.String);
-                        EmitExternVoid(ExternResolver.EventReceiverSetProgramVariable, new List<CLeaf> { instanceVal, nameConst, srcVal });
+                        StoreProgramVariable(instanceVal, propRef.Property.Name,
+                            GetStorageType(propRef.Property.Type), srcVal);
                     }
                     else
                     {
@@ -1446,15 +1462,9 @@ public abstract partial class HandlerBase
                         // Wave-12 r2 [V1]: reentrant setter — value copy-in inside the spill window.
                         bool setReentrant = TryMarkReentrantCrossDispatch(propRef, propRef.Property.SetMethod);
                         var (exportName, setParamIds, _) = GetCalleeLayout(propRef.Property.SetMethod);
-
-                        // SetProgramVariable for the value parameter
-                        var paramNameConst = Const(setParamIds[0], StorageTypes.String);
-                        EmitExternVoid(ExternResolver.EventReceiverSetProgramVariable, new List<CLeaf> { instanceVal, paramNameConst, srcVal });
-
-                        // SendCustomEvent to invoke setter
-                        var eventConst = Const(exportName, StorageTypes.String);
-                        EmitExternVoid(ExternResolver.EventReceiverSendCustomEvent, new List<CLeaf> { instanceVal, eventConst },
-                            setReentrant, setReentrant ? 1 : 0);
+                        CrossCall(instanceVal, exportName,
+                            CrossCallParameters(propRef.Property.SetMethod, setParamIds, new[] { srcVal }),
+                            System.Array.Empty<ReturnSlot>(), StorageTypes.Void, setReentrant);
                     }
                 }
                 else

@@ -115,6 +115,7 @@ public static class CoreFlatten
             case CBlock blk: LowerBlock(blk, ctx); break;
             case CAssign a: LowerAssign(a, ctx); break;
             case CStoreField sf: LowerStoreField(sf, ctx); break;
+            case CProgramVariableStore store: LowerProgramVariableStore(store, ctx); break;
             case CExprStmt es: LowerExpr(es.Expr, ctx); break;
             case CReturn r: LowerReturn(r, ctx); break;
             case CIf cif: LowerIf(cif, ctx); break;
@@ -138,6 +139,9 @@ public static class CoreFlatten
             case CFieldLoad fl:
                 ctx.Current.Stmts.Add(new CLoadField(a.DestSlot, fl.FieldName, fl.Type));
                 return;
+            case CProgramVariableLoad load:
+                LowerProgramVariableLoad(load, ctx, a.DestSlot);
+                return;
             case CExternCall ec:
                 ctx.Current.Stmts.Add(new CExprStmt(ec.With(new List<CLeaf>(ec.Args), a.DestSlot)));
                 return;
@@ -160,6 +164,14 @@ public static class CoreFlatten
     {
         // sf.Value is a CLeaf (operand-leaf under ANF) — already a flat leaf, no lowering needed.
         ctx.Current.Stmts.Add(new CStoreField(sf.FieldName, sf.Value));
+    }
+
+    static void LowerProgramVariableStore(CProgramVariableStore store, Ctx ctx)
+    {
+        ctx.Current.Stmts.Add(new CExprStmt(new CExternCall(
+            ExternResolver.EventReceiverSetProgramVariable,
+            new List<CLeaf> { store.Instance, store.VariableName, store.Value },
+            StorageTypes.Void, null)));
     }
 
     static void LowerReturn(CReturn r, Ctx ctx)
@@ -305,6 +317,9 @@ public static class CoreFlatten
                 return new CSlotRef(dest, fl.Type);
             }
 
+            case CProgramVariableLoad load:
+                return LowerProgramVariableLoad(load, ctx, null);
+
             case CExternCall ec:
             {
                 // ec.Args are CLeaf operands (ANF) — already flat leaves, no per-arg lowering needed.
@@ -355,7 +370,7 @@ public static class CoreFlatten
         // flat block, so the count is exact by construction.
         ctx.Current.Stmts.Add(new CExprStmt(new CExternCall(
             ExternResolver.EventReceiverSendCustomEvent,
-            new List<CLeaf> { inst, new CConst(cc.EventName, StorageTypes.String) }, StorageTypes.Void, null,
+            new List<CLeaf> { inst, cc.EventName }, StorageTypes.Void, null,
             cc.Reentrant, cc.Reentrant ? cc.Params.Count : 0)));
 
         if (cc.Returns.Count == 1)
@@ -381,6 +396,15 @@ public static class CoreFlatten
         }
 
         return new CConst(null, StorageTypes.Void);
+    }
+
+    static CLeaf LowerProgramVariableLoad(CProgramVariableLoad load, Ctx ctx, int? destination)
+    {
+        var dest = destination ?? ctx.AllocScratch(load.Type);
+        ctx.Current.Stmts.Add(new CExprStmt(new CExternCall(
+            ExternResolver.EventReceiverGetProgramVariable,
+            new List<CLeaf> { load.Instance, load.VariableName }, load.Type, dest)));
+        return new CSlotRef(dest, load.Type);
     }
 
     static CLeaf LowerSelect(CSelect sel, Ctx ctx, int? destination)

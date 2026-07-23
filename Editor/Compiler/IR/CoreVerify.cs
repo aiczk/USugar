@@ -115,6 +115,16 @@ public static class CoreVerify
                 ctx.AssertField(store.FieldName, store.Value.Type, "CStoreField");
                 break;
 
+            case CProgramVariableStore store:
+                VerifyExpr(store.Instance, ctx);
+                VerifyExpr(store.VariableName, ctx);
+                VerifyExpr(store.Value, ctx);
+                ctx.AssertType(StorageTypes.String, store.VariableName.Type,
+                    "CProgramVariableStore variable name");
+                ctx.AssertType(store.VariableType, store.Value.Type,
+                    "CProgramVariableStore value");
+                break;
+
             case CIf ifStmt:
                 VerifyExpr(ifStmt.Cond, ctx);
                 ctx.AssertType(StorageTypes.Boolean, ifStmt.Cond.Type, "CIf condition");
@@ -269,6 +279,13 @@ public static class CoreVerify
                 ctx.AssertField(fieldLoad.FieldName, fieldLoad.Type, "CFieldLoad");
                 break;
 
+            case CProgramVariableLoad load:
+                VerifyExpr(load.Instance, ctx);
+                VerifyExpr(load.VariableName, ctx);
+                ctx.AssertType(StorageTypes.String, load.VariableName.Type,
+                    "CProgramVariableLoad variable name");
+                break;
+
             case CFieldAddr fa:
                 ctx.AssertField(fa.FieldName, fa.Type, "CFieldAddr");
                 if (!allowAddr)
@@ -298,7 +315,10 @@ public static class CoreVerify
 
             case CCrossCall cc:
                 VerifyExpr(cc.Instance, ctx); // SetProgramVariable receiver/values — addresses rejected
-                if (string.IsNullOrEmpty(cc.EventName))
+                VerifyExpr(cc.EventName, ctx);
+                ctx.AssertType(StorageTypes.String, cc.EventName.Type, "CCrossCall event name");
+                if (cc.EventName is CConst { Value: string eventName }
+                    && string.IsNullOrEmpty(eventName))
                     throw new VerificationException(
                         $"CCrossCall has an empty event name (function '{ctx.Func.Name}')");
                 var parameterIds = new HashSet<string>(StringComparer.Ordinal);

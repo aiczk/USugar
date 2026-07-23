@@ -39,9 +39,8 @@
     __intnl_SystemBoolean_c2: %SystemBoolean, null
     __const_SystemString_11: %SystemString, null
     __const_SystemString_12: %SystemString, null
-    __intnl_SystemObject_c1: %SystemObject, null
-    __intnl_dlgptr_SystemUInt32_c0: %SystemUInt32, null
     __intnl_SystemInt32_c1: %SystemInt32, null
+    __intnl_dlgptr_SystemUInt32_c0: %SystemUInt32, null
     __intnl_dlgptr_SystemUInt32_c1: %SystemUInt32, null
     __const_SystemInt32_13: %SystemInt32, null
     __const_SystemInt32_14: %SystemInt32, null
@@ -211,9 +210,9 @@
         EXTERN, "VRCUdonCommonInterfacesIUdonEventReceiver.__SendCustomEvent__SystemString__SystemVoid"
         PUSH, __intnl_SystemObject_c0
         PUSH, __const_SystemString_12
-        PUSH, __intnl_SystemObject_c1
+        PUSH, __intnl_SystemInt32_c1
         EXTERN, "VRCUdonCommonInterfacesIUdonEventReceiver.__GetProgramVariable__SystemString__SystemObject"
-        PUSH, __intnl_SystemObject_c1
+        PUSH, __intnl_SystemInt32_c1
         PUSH, __intnl_SystemInt32_c0
         COPY
     ___start_bb20:
@@ -350,9 +349,9 @@
         EXTERN, "VRCUdonCommonInterfacesIUdonEventReceiver.__SendCustomEvent__SystemString__SystemVoid"
         PUSH, __intnl_SystemObject_c0
         PUSH, __const_SystemString_12
-        PUSH, __intnl_SystemObject_c1
+        PUSH, __intnl_SystemInt32_c1
         EXTERN, "VRCUdonCommonInterfacesIUdonEventReceiver.__GetProgramVariable__SystemString__SystemObject"
-        PUSH, __intnl_SystemObject_c1
+        PUSH, __intnl_SystemInt32_c1
         PUSH, __intnl_SystemInt32_c0
         COPY
     ___start_bb35:

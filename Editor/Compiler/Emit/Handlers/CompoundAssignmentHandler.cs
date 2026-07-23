@@ -277,10 +277,8 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
         if (crossBehaviour)
         {
             eventReceiver = VisitExpression(evtRef.Instance);
-            currentVal = ExternCall(
-                ExternResolver.EventReceiverGetProgramVariable,
-                new List<CLeaf> { eventReceiver, Const(storageName, StorageTypes.String) },
-                StorageTypes.Object);
+            currentVal = LoadProgramVariable(
+                eventReceiver, storageName, new StorageType(DelegateAbi.BundleType));
         }
         else
         {
@@ -301,9 +299,8 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
 
         var resultVal = _builder.InternalCall(helperName, new List<CLeaf> { currentVal, handlerVal }, new StorageType(DelegateAbi.BundleType));
         if (crossBehaviour)
-            EmitExternVoid(
-                ExternResolver.EventReceiverSetProgramVariable,
-                new List<CLeaf> { eventReceiver, Const(storageName, StorageTypes.String), resultVal });
+            StoreProgramVariable(eventReceiver, storageName,
+                new StorageType(DelegateAbi.BundleType), resultVal);
         else
             EmitStoreField(storageName, resultVal);
         return null; // event add/remove is a void-shaped statement expression

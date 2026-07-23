@@ -73,6 +73,9 @@ public sealed class CoreBuilder
 
     public void EmitAssign(int destSlot, CValue value) => Emit(new CAssign(destSlot, value));
     public void EmitStoreField(string fieldName, CLeaf value) => Emit(new CStoreField(fieldName, value));
+    public void EmitProgramVariableStore(CLeaf instance, CLeaf variableName,
+        StorageType variableType, CLeaf value)
+        => Emit(new CProgramVariableStore(instance, variableName, variableType, value));
     public void EmitReturn(CLeaf value = null) => Emit(new CReturn(value));
     public void EmitBreak() => Emit(new CBreak());
     public void EmitContinue() => Emit(new CContinue());
@@ -186,6 +189,8 @@ public sealed class CoreBuilder
     }
 
     public CSlotRef LoadField(string fieldName, StorageType type) => Bind(new CFieldLoad(fieldName, type), type);
+    public CSlotRef LoadProgramVariable(CLeaf instance, CLeaf variableName, StorageType type)
+        => Bind(new CProgramVariableLoad(instance, variableName, type), type);
     public CSlotRef Select(CLeaf cond, CLeaf trueVal, CLeaf falseVal, StorageType type)
         => Bind(new CSelect(cond, trueVal, falseVal, type), type);
 
@@ -220,8 +225,8 @@ public sealed class CoreBuilder
 
     // The reentrant flag (design §4.3) marks a delegate-dispatch arm that can re-enter the containing
     // function; the count increment here is the single creation choke point FlatVerify's conservation
-    // check is balanced against. preSpillStmts (wave-12 r2 [V1]): see CExternCall.PreSpillStmts — used
-    // by the raw cross property-setter pairs whose SetProgramVariable copy-in must sit inside the wrap.
+    // check is balanced against. preSpillStmts remains the generic extern form.
+    // Cross-program dispatch uses CCrossCall so CoreFlatten counts its typed copy-ins directly.
     public void EmitExternVoid(ExternSignature sig, List<CLeaf> args, bool reentrant = false, int preSpillStmts = 0)
     {
         if (reentrant) CurrentFunction.ReentrantSiteCount++;

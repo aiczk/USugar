@@ -118,26 +118,29 @@ public sealed class DelegateDispatchEmitter
                             var mOk = DelegateAbi.HasMethod(_builder, mtd);
                             _builder.EmitIf(mOk, _ =>
                             {
+                                var parameters = new List<CrossCallParameter>(convArgs.Length + 1);
                                 for (int i = 0; i < convArgs.Length; i++)
                                 {
                                     var argType = _ctx.ResolveStorageType(
                                         invoke.Parameters[i].Type, typeParamMap);
-                                    EmitExternVoid(
-                                        ExternResolver.EventReceiverSetProgramVariable,
-                                        new List<CLeaf> { tgt, Const(convArgs[i], StorageTypes.String), LoadField(convArgs[i], argType) });
+                                    parameters.Add(new CrossCallParameter(
+                                        i, convArgs[i], argType, LoadField(convArgs[i], argType)));
                                 }
                                 // Forward the staged env alongside the convention arguments. Every bridge-bearing
                                 // receiver declares this field, including capture-free receivers.
-                                EmitExternVoid(
-                                    ExternResolver.EventReceiverSetProgramVariable,
-                                    new List<CLeaf> { tgt, Const(convEnv, StorageTypes.String), LoadField(convEnv, new StorageType(EnvEmit.EnvType)) });
-                                EmitExternVoid(
-                                    ExternResolver.EventReceiverSendCustomEvent,
-                                    new List<CLeaf> { tgt, mtd }, reentrant);
+                                var envType = new StorageType(EnvEmit.EnvType);
+                                parameters.Add(new CrossCallParameter(
+                                    parameters.Count, convEnv, envType, LoadField(convEnv, envType)));
+                                var returns = retType != null
+                                    ? new[] { new ReturnSlot(convRet, retType.Value) }
+                                    : System.Array.Empty<ReturnSlot>();
+                                var crossResult = _builder.CrossCall(
+                                    tgt,
+                                    new CrossCallTransportPlan(
+                                        mtd, parameters, returns, retType ?? StorageTypes.Void),
+                                    reentrant);
                                 if (retType != null)
-                                    EmitAssign(retSlot, ExternCall(
-                                        ExternResolver.EventReceiverGetProgramVariable,
-                                        new List<CLeaf> { tgt, Const(convRet, StorageTypes.String) }, StorageTypes.Object));
+                                    EmitAssign(retSlot, crossResult);
                             }, failArm);
                         });
                 }, failArm);

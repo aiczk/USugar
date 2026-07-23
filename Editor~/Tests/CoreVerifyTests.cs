@@ -323,7 +323,7 @@ public class CoreVerifyTests
         var module = new CModule();
         var func = module.AddFunction("test");
         var transport = new CrossCallTransportPlan(
-            "Call",
+            new CConst("Call", StorageTypes.String),
             new[] {
                 new CrossCallParameter(
                     0, "value", StorageTypes.Int32, new CConst("bad", StorageTypes.String))
@@ -343,7 +343,7 @@ public class CoreVerifyTests
         var module = new CModule();
         var func = module.AddFunction("test");
         var transport = new CrossCallTransportPlan(
-            "Call",
+            new CConst("Call", StorageTypes.String),
             new[] {
                 new CrossCallParameter(
                     0, "value", StorageTypes.Int32, new CConst(42, StorageTypes.Int32))
@@ -363,7 +363,7 @@ public class CoreVerifyTests
         var module = new CModule();
         var func = module.AddFunction("test");
         var transport = new CrossCallTransportPlan(
-            "Call",
+            new CConst("Call", StorageTypes.String),
             new[] {
                 new CrossCallParameter(
                     1, "value", StorageTypes.Int32, new CConst(42, StorageTypes.Int32))
@@ -375,5 +375,52 @@ public class CoreVerifyTests
 
         var ex = Assert.Throws<VerificationException>(() => CoreVerify.Verify(module));
         Assert.Contains("expected canonical ordinal 0", ex.Message);
+    }
+
+    [Fact]
+    public void Verifier_ProgramVariableStoreTypeMismatch_Throws()
+    {
+        var module = new CModule();
+        var func = module.AddFunction("test");
+        func.Body.Stmts.Add(new CProgramVariableStore(
+            new CConst(null, StorageTypes.UdonEventReceiver),
+            new CConst("value", StorageTypes.String),
+            StorageTypes.Int32,
+            new CConst("bad", StorageTypes.String)));
+
+        var ex = Assert.Throws<VerificationException>(() => CoreVerify.Verify(module));
+        Assert.Contains("CProgramVariableStore value", ex.Message);
+    }
+
+    [Fact]
+    public void Verifier_ProgramVariableNameMustBeString_Throws()
+    {
+        var module = new CModule();
+        var func = module.AddFunction("test");
+        func.Body.Stmts.Add(new CProgramVariableStore(
+            new CConst(null, StorageTypes.UdonEventReceiver),
+            new CConst(1, StorageTypes.Int32),
+            StorageTypes.Int32,
+            new CConst(2, StorageTypes.Int32)));
+
+        var ex = Assert.Throws<VerificationException>(() => CoreVerify.Verify(module));
+        Assert.Contains("CProgramVariableStore variable name", ex.Message);
+    }
+
+    [Fact]
+    public void Verifier_CrossCallEventNameMustBeString_Throws()
+    {
+        var module = new CModule();
+        var func = module.AddFunction("test");
+        var transport = new CrossCallTransportPlan(
+            new CConst(1, StorageTypes.Int32),
+            System.Array.Empty<CrossCallParameter>(),
+            System.Array.Empty<ReturnSlot>(),
+            StorageTypes.Void);
+        func.Body.Stmts.Add(new CExprStmt(new CCrossCall(
+            new CConst(null, StorageTypes.UdonEventReceiver), transport)));
+
+        var ex = Assert.Throws<VerificationException>(() => CoreVerify.Verify(module));
+        Assert.Contains("CCrossCall event name", ex.Message);
     }
 }

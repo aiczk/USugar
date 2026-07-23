@@ -183,8 +183,7 @@ public class DeconstructionAssignmentHandler : AssignmentHandlerBase, IOperation
 
             if (isCrossBehaviour || isInterface)
             {
-                // Cross-behaviour or interface tuple call:
-                // Emit the protocol manually and read back each element via GetProgramVariable
+                // Cross-behaviour or interface tuple call uses the shared typed transport plan.
                 EmitCrossBehaviourTupleDeconstruction(invocation, callTarget, targetTuple, isCrossBehaviour, prepared);
             }
             else
@@ -317,7 +316,7 @@ public class DeconstructionAssignmentHandler : AssignmentHandlerBase, IOperation
 
     /// <summary>
     /// Handle tuple deconstruction from a cross-behaviour or interface method call.
-    /// Emits SetProgramVariable for params, SendCustomEvent, then GetProgramVariable for each element.
+    /// Builds one typed transport plan for the arguments, event, and tuple return slots.
     /// Target legs arrive pre-evaluated in <paramref name="prepared"/> (wave-9 round-6 [X3]/[X4]).
     /// </summary>
     void EmitCrossBehaviourTupleDeconstruction(IInvocationOperation invocation, IMethodSymbol callTarget,
@@ -355,31 +354,18 @@ public class DeconstructionAssignmentHandler : AssignmentHandlerBase, IOperation
 
         var instanceVal = VisitExpression(invocation.Instance);
 
-        // SetProgramVariable for each param — by parameter ordinal, textual evaluation order
-        // (wave-9 round-3 [W4]: named/reordered args used to bind positionally on this path too).
-        foreach (var parameter in CrossCallArguments(invocation.Arguments, callTarget, paramIds))
-        {
-            var nameConst = Const(parameter.Id, StorageTypes.String);
-            EmitExternVoid(
-                ExternResolver.EventReceiverSetProgramVariable,
-                new List<CLeaf> { instanceVal, nameConst, parameter.Value });
-        }
-
-        // SendCustomEvent
-        var eventConst = Const(exportName, StorageTypes.String);
-        EmitExternVoid(
-            ExternResolver.EventReceiverSendCustomEvent,
-            new List<CLeaf> { instanceVal, eventConst });
-
-        // GetProgramVariable for return value and deconstruct
+        // Execute the call once, then deconstruct its typed return transport.
         if (callReturns.Length == 1 && callReturns[0].StorageType.Name == AggregateAbi.ArrayType)
         {
-            // Single SystemObjectArray return: get the array, then index into it
-            var retNameConst = Const(callReturns[0].Id, StorageTypes.String);
-            var arrVal = ExternCall(
-                ExternResolver.EventReceiverGetProgramVariable,
-                new List<CLeaf> { instanceVal, retNameConst },
-                new StorageType(AggregateAbi.ArrayType));
+            // Single SystemObjectArray return: execute the same typed transport used by ordinary
+            // cross calls, then index into the returned aggregate.
+            var arrVal = CrossCall(
+                instanceVal,
+                exportName,
+                CrossCallArguments(invocation.Arguments, callTarget, paramIds),
+                callReturns,
+                new StorageType(AggregateAbi.ArrayType),
+                TryMarkReentrantCrossDispatch(invocation, callTarget));
             for (int i = 0; i < targetTuple.Elements.Length; i++)
             {
                 // CW29: same clone rule as the sibling arms (see the same-class call arm).

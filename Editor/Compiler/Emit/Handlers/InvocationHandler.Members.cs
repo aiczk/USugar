@@ -181,11 +181,8 @@ public partial class InvocationHandler
             if (isAuto)
             {
                 // Auto-property: direct GetProgramVariable("PropertyName")
-                var nameConst = Const(op.Property.Name, StorageTypes.String);
-                return ExternCall(
-                    ExternResolver.EventReceiverGetProgramVariable,
-                    new List<CLeaf> { instanceVal, nameConst },
-                    new StorageType(returnType));
+                return LoadProgramVariable(
+                    instanceVal, op.Property.Name, new StorageType(returnType));
             }
             else
             {

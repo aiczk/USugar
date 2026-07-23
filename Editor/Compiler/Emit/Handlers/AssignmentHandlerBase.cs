@@ -195,11 +195,8 @@ public abstract class AssignmentHandlerBase : HandlerBase
             {
                 var instanceVal = VisitExpression(fieldRef.Instance);
                 // Read via GetProgramVariable
-                var nameConst = Const(fieldRef.Field.Name, StorageTypes.String);
-                var valResult = ExternCall(
-                    ExternResolver.EventReceiverGetProgramVariable,
-                    new List<CLeaf> { instanceVal, nameConst },
-                    StorageTypes.Object);
+                var valResult = LoadProgramVariable(
+                    instanceVal, fieldRef.Field.Name, GetStorageType(fieldRef.Field.Type));
                 return new LValuePlan { Value = valResult, InstanceVal = instanceVal };
             }
             case IFieldReferenceOperation { Instance: not null and not IInstanceReferenceOperation } fieldRef2
@@ -364,19 +361,17 @@ public abstract class AssignmentHandlerBase : HandlerBase
                     || IsNonPublicAutoCrossProperty(propRef.Property.SetMethod, propRef.Property);
                 if (isAutoSet)
                 {
-                    var nameConst = Const(propRef.Property.Name, StorageTypes.String);
-                    EmitExternVoid(ExternResolver.EventReceiverSetProgramVariable, new List<CLeaf> { instanceVal, nameConst, valueVal });
+                    StoreProgramVariable(instanceVal, propRef.Property.Name,
+                        GetStorageType(propRef.Property.Type), valueVal);
                 }
                 else
                 {
                     // Wave-12 r2 [V1]: reentrant setter — value copy-in inside the spill window.
                     bool wbReentrant = TryMarkReentrantCrossDispatch(propRef, propRef.Property.SetMethod);
                     var (exportName, setParamIds, _) = GetCalleeLayout(propRef.Property.SetMethod);
-                    var paramNameConst = Const(setParamIds[0], StorageTypes.String);
-                    EmitExternVoid(ExternResolver.EventReceiverSetProgramVariable, new List<CLeaf> { instanceVal, paramNameConst, valueVal });
-                    var eventConst = Const(exportName, StorageTypes.String);
-                    EmitExternVoid(ExternResolver.EventReceiverSendCustomEvent, new List<CLeaf> { instanceVal, eventConst },
-                        wbReentrant, wbReentrant ? 1 : 0);
+                    CrossCall(instanceVal, exportName,
+                        CrossCallParameters(propRef.Property.SetMethod, setParamIds, new[] { valueVal }),
+                        System.Array.Empty<ReturnSlot>(), StorageTypes.Void, wbReentrant);
                 }
                 return;
             }
