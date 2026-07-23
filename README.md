@@ -86,7 +86,6 @@ USugar reports a compile error when the Udon VM cannot preserve the source progr
 - User classes can cross program boundaries through typed fields, methods, and interfaces, but erasure to `object`, network sync, and `[NetworkCallable]` are restricted.
 - Delegates whose signatures contain user classes are limited to private, same-program use.
 - Mutable static state belongs to each generated Udon program rather than a global runtime.
-- `UdonSharpBehaviour` scripts must belong to `Assembly-CSharp`; helper asmdefs may be referenced as metadata.
 
 ## Compiler design
 
@@ -98,6 +97,9 @@ C# source
   -> flat Core IR
   -> UASM
 ```
+
+Each runtime Unity assembly is compiled independently with its own asmdef references and
+preprocessor symbols.
 
 USugar first builds one per-behaviour compilation plan.
 The plan records reachable bodies, callable definitions, generic specializations, user-class type objects, and field initializers.

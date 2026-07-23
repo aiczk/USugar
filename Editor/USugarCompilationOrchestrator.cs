@@ -27,7 +27,19 @@ static class USugarCompilationOrchestrator
 
     const string FingerprintKey = "USugar_LastFingerprint";
     const string AppliedKey = "USugar_LastApplied";
-    const string TargetAssemblyName = "Assembly-CSharp";
+    internal sealed class CompilationUnit
+    {
+        public UnityCompilationAssembly UnityAssembly { get; }
+        public IReadOnlyList<string> SourcePaths { get; }
+        public CSharpCompilation Compilation { get; set; }
+        public LayoutPlanner Planner { get; set; }
+
+        public CompilationUnit(UnityCompilationAssembly unityAssembly, IReadOnlyList<string> sourcePaths)
+        {
+            UnityAssembly = unityAssembly;
+            SourcePaths = sourcePaths;
+        }
+    }
 
     internal struct EmitResult
     {
@@ -38,24 +50,26 @@ static class USugarCompilationOrchestrator
         public uint HeapSize;
         public IReadOnlyList<EmitDiagnostic> EmitterDiagnostics;
         public List<(string file, int line, int character, string message, string severity)> ErrorDiagnostics;
+        public LayoutPlanner Planner;
         public bool IsError;
 
         public EmitResult(INamedTypeSymbol symbol, SyntaxTree tree, string uasm,
             List<(string Id, string UdonType, object Value)> constants, uint heapSize,
-            IReadOnlyList<EmitDiagnostic> diagnostics)
+            IReadOnlyList<EmitDiagnostic> diagnostics, LayoutPlanner planner)
         {
             Symbol = symbol; Tree = tree; Uasm = uasm;
             Constants = constants; HeapSize = heapSize;
             EmitterDiagnostics = diagnostics;
+            Planner = planner;
             ErrorDiagnostics = null; IsError = false;
         }
 
-        public static EmitResult Error(INamedTypeSymbol symbol, SyntaxTree tree,
+        public static EmitResult Error(INamedTypeSymbol symbol, SyntaxTree tree, LayoutPlanner planner,
             string file, int line, int character, string message)
         {
             return new EmitResult
             {
-                Symbol = symbol, Tree = tree, IsError = true,
+                Symbol = symbol, Tree = tree, Planner = planner, IsError = true,
                 ErrorDiagnostics = new() { (file, line, character, message, "Error") }
             };
         }
@@ -115,16 +129,16 @@ static class USugarCompilationOrchestrator
         try
         {
             // ── Phase 1: Serial preparation ──
-            var sourcePaths = CollectSourcePaths();
+            var compilationUnits = CollectCompilationUnits();
             Mark("collect-sources");
-            if (sourcePaths.Count == 0)
+            if (compilationUnits.Count == 0)
             {
                 USugarLog.Warn("No UdonSharpBehaviour sources found");
                 LastCompileHadErrors = false;
                 return;
             }
 
-            fingerprint = ComputeFingerprint(sourcePaths);
+            fingerprint = ComputeFingerprint(compilationUnits);
             Mark("fingerprint");
             var lastFp = SessionState.GetString(FingerprintKey, "");
             var lastApplied = SessionState.GetBool(AppliedKey, false);
@@ -149,13 +163,16 @@ static class USugarCompilationOrchestrator
             using var externScope = ExternResolver.UseRegistry(externRegistry);
             Mark("extern-set");
 
-            var compilation = BuildCompilation(sourcePaths);
+            foreach (var unit in compilationUnits)
+                unit.Compilation = BuildCompilation(unit);
+            PruneTreeCache(compilationUnits.SelectMany(unit => unit.SourcePaths));
             Mark("build-compilation");
 
             // A Roslyn Compilation is the unit of correctness. Checking only the representative
             // declaration tree of each behaviour misses errors in helper files and in the other parts
             // of a partial class. Reject the whole run before layout planning or asset mutation.
-            var compilationErrors = compilation.GetDiagnostics()
+            var compilationErrors = compilationUnits
+                .SelectMany(unit => unit.Compilation.GetDiagnostics())
                 .Where(d => d.Severity == DiagnosticSeverity.Error)
                 .ToArray();
             Mark("get-diagnostics");
@@ -198,28 +215,32 @@ static class USugarCompilationOrchestrator
             Mark("program-asset-lookup");
 
             // Collect all UdonSharpBehaviour classes
-            var classList = new List<(INamedTypeSymbol symbol, SyntaxTree tree)>();
+            var classList = new List<(INamedTypeSymbol symbol, SyntaxTree tree,
+                CSharpCompilation compilation, LayoutPlanner planner)>();
             // A partial class has one declaration node per part but ONE symbol — emit it once, not once per part.
-            var seenClassSymbols = new HashSet<INamedTypeSymbol>(SymbolEqualityComparer.Default);
-            foreach (var tree in compilation.SyntaxTrees)
+            foreach (var unit in compilationUnits)
             {
-                var model = compilation.GetSemanticModel(tree);
-                foreach (var classDecl in tree.GetRoot().DescendantNodes()
-                    .OfType<Microsoft.CodeAnalysis.CSharp.Syntax.ClassDeclarationSyntax>())
+                unit.Planner = new LayoutPlanner(unit.Compilation);
+                unit.Planner.PrepareCompilation();
+                var seenClassSymbols = new HashSet<INamedTypeSymbol>(SymbolEqualityComparer.Default);
+                foreach (var tree in unit.Compilation.SyntaxTrees)
                 {
-                    var symbol = model.GetDeclaredSymbol(classDecl) as INamedTypeSymbol;
-                    if (symbol == null) continue;
-                    var isBehaviour = IsUdonSharpBehaviour(symbol);
-                    if (!isBehaviour) continue;
-                    if (!seenClassSymbols.Add(symbol)) continue;
-                    classList.Add((symbol, tree));
+                    var model = unit.Compilation.GetSemanticModel(tree);
+                    foreach (var classDecl in tree.GetRoot().DescendantNodes()
+                        .OfType<Microsoft.CodeAnalysis.CSharp.Syntax.ClassDeclarationSyntax>())
+                    {
+                        var symbol = model.GetDeclaredSymbol(classDecl) as INamedTypeSymbol;
+                        if (symbol == null) continue;
+                        var isBehaviour = IsUdonSharpBehaviour(symbol);
+                        if (!isBehaviour) continue;
+                        if (!seenClassSymbols.Add(symbol)) continue;
+                        classList.Add((symbol, tree, unit.Compilation, unit.Planner));
+                    }
                 }
             }
             Mark("semantic-models");
 
             // Pre-plan all layouts (serial, populates cache)
-            var planner = new LayoutPlanner(compilation);
-            planner.PrepareCompilation();
             Mark("layout-plan");
 
             // Registry hooks MUST be wired before parallel emit — the class-support (B79) and extern-validity
@@ -229,7 +250,7 @@ static class USugarCompilationOrchestrator
             var emitResults = new System.Collections.Concurrent.ConcurrentBag<EmitResult>();
             System.Threading.Tasks.Parallel.ForEach(classList, classInfo =>
             {
-                var (symbol, tree) = classInfo;
+                var (symbol, tree, compilation, planner) = classInfo;
                 var classSw = System.Diagnostics.Stopwatch.StartNew();
                 try
                 {
@@ -239,7 +260,7 @@ static class USugarCompilationOrchestrator
                     // extern becomes a named USugar diagnostic here instead of an opaque SDK assembler error.
                     ExternResolver.AssertEmittedExternsValid(uasm);
                     emitResults.Add(new EmitResult(symbol, tree, uasm,
-                        emitter.CodeGenResult.Constants, emitter.GetHeapSize(), emitter.Diagnostics));
+                        emitter.CodeGenResult.Constants, emitter.GetHeapSize(), emitter.Diagnostics, planner));
                 }
                 catch (Exception ex)
                 {
@@ -256,7 +277,7 @@ static class USugarCompilationOrchestrator
                         line = span.StartLinePosition.Line + 1;
                         character = span.StartLinePosition.Character + 1;
                     }
-                    emitResults.Add(EmitResult.Error(symbol, tree, className, line, character,
+                    emitResults.Add(EmitResult.Error(symbol, tree, planner, className, line, character,
                         $"Failed to compile {symbol.Name}: {inner.Message}"));
                 }
                 finally
@@ -269,7 +290,9 @@ static class USugarCompilationOrchestrator
             // ── Phase 3: Serial apply ──
             // OrderBy class name for deterministic output order (ConcurrentBag yields in arbitrary order).
             int count = 0, failures = 0;
-            foreach (var result in emitResults.OrderBy(r => r.Symbol.Name).ThenBy(r => r.Symbol.ToDisplayString()))
+            foreach (var result in emitResults
+                .OrderBy(r => r.Symbol.ContainingAssembly.Identity.Name, StringComparer.Ordinal)
+                .ThenBy(r => r.Symbol.ToDisplayString(), StringComparer.Ordinal))
             {
                 if (result.IsError)
                 {
@@ -332,7 +355,7 @@ static class USugarCompilationOrchestrator
                         programAsset.fieldDefinitions = USugarTypeCacheManager.BuildFieldDefinitions(result.Symbol);
                         // [NetworkCallable] entry-point metadata — required for SendCustomNetworkEvent with
                         // parameters (the runtime looks up the event + its param types via this metadata).
-                        var netMeta = BuildNetworkCallingMetadata(result.Symbol, planner);
+                        var netMeta = BuildNetworkCallingMetadata(result.Symbol, result.Planner);
                         if (netMeta.Length > 0)
                         {
                             programAsset.SetNetworkCallingMetadata(netMeta);
@@ -535,43 +558,48 @@ static class USugarCompilationOrchestrator
 
     // ── Helpers ──
 
-    static string ComputeFingerprint(List<string> sourcePaths)
+    static string ComputeFingerprint(IReadOnlyList<CompilationUnit> compilationUnits)
     {
-        using var md5 = MD5.Create();
+        using var sha256 = SHA256.Create();
         using var ms = new MemoryStream();
-        using var writer = new StreamWriter(ms);
-        // Sort (ordinal, locale-independent) so a permuted-but-identical source set hashes the same —
-        // AssetDatabase.FindAssets ordering is not contractually stable, and an unsorted hash would otherwise
-        // produce a false cache miss (redundant recompile).
-        foreach (var p in sourcePaths.OrderBy(s => s, StringComparer.Ordinal))
+        using var writer = new BinaryWriter(ms);
+        var referenceIdentities = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var unit in compilationUnits.OrderBy(
+            unit => unit.UnityAssembly.name, StringComparer.Ordinal))
         {
-            writer.Write(p);
-            // Hash file CONTENT, not last-write-time. A git checkout / branch-switch / external tool can change a
-            // file's TEXT while preserving (or rolling back) its mtime; an mtime fingerprint misses that and skips
-            // a needed recompile, stranding a stale asset. Content is the only sound change signal. (SessionState
-            // survives domain reloads, so no on-disk cache is needed; an Editor restart correctly recompiles.)
-            try { writer.Write(File.ReadAllText(p)); }
-            catch { writer.Write(File.GetLastWriteTimeUtc(p).Ticks); } // unreadable file → fall back to mtime
-        }
-        // Fold the active preprocessor defines in: a platform/SDK switch changes which #if branches compile
-        // without touching any source file, and a content-only hash would skip the needed recompile, shipping a
-        // program built against stale defines. Sorted so a benign reorder is not a false cache miss.
-        foreach (var d in BuildPreprocessorDefines().OrderBy(s => s, StringComparer.Ordinal))
-            writer.Write(d);
-        // A referenced asmdef can change the semantic model without touching Assembly-CSharp sources.
-        // Fold the exact Unity reference graph and each output identity into the fingerprint so a helper
-        // assembly rebuild cannot reuse programs compiled against stale metadata.
-        foreach (var referencePath in GetMetadataReferencePaths(GetTargetCompilationAssembly()))
-        {
-            writer.Write(referencePath);
-            var file = new FileInfo(referencePath);
-            writer.Write(file.Length);
-            writer.Write(file.LastWriteTimeUtc.Ticks);
+            writer.Write(unit.UnityAssembly.name);
+            foreach (var p in unit.SourcePaths.OrderBy(s => s, StringComparer.Ordinal))
+            {
+                writer.Write(p);
+                writer.Write(ComputeFileContentHash(p));
+            }
+            foreach (var d in BuildPreprocessorDefines(unit.UnityAssembly)
+                .OrderBy(s => s, StringComparer.Ordinal))
+                writer.Write(d);
+            foreach (var referencePath in GetMetadataReferencePaths(unit.UnityAssembly))
+            {
+                writer.Write(referencePath);
+                if (!referenceIdentities.TryGetValue(referencePath, out var identity))
+                {
+                    identity = ComputeFileContentHash(referencePath);
+                    referenceIdentities.Add(referencePath, identity);
+                }
+                writer.Write(identity);
+            }
         }
         writer.Flush();
         ms.Position = 0;
-        var hash = md5.ComputeHash(ms);
+        var hash = sha256.ComputeHash(ms);
         return BitConverter.ToString(hash);
+    }
+
+    static string ComputeFileContentHash(string path)
+    {
+        // Byte identity is stronger than size + mtime and covers managed producers that do not
+        // guarantee a content-derived module MVID.
+        using var sha256 = SHA256.Create();
+        using var stream = File.OpenRead(path);
+        return BitConverter.ToString(sha256.ComputeHash(stream));
     }
 
     internal static bool IsUdonSharpBehaviour(INamedTypeSymbol symbol)
@@ -585,15 +613,48 @@ static class USugarCompilationOrchestrator
         return false;
     }
 
-    internal static List<string> CollectSourcePaths()
+    internal static List<CompilationUnit> CollectCompilationUnits()
     {
-        var target = GetTargetCompilationAssembly();
-        RejectUnsupportedBehaviourAssemblies(target);
-        return target.sourceFiles
-            .Where(path => path.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
-            .Where(IsAssetPath)
-            .Select(Path.GetFullPath)
-            .OrderBy(path => path, StringComparer.Ordinal)
+        var playerAssemblies = CompilationPipeline.GetAssemblies(AssembliesType.Player);
+        var behaviourAssemblyNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var loadedAssemblies = AppDomain.CurrentDomain.GetAssemblies()
+            .Where(assembly => !assembly.IsDynamic)
+            .GroupBy(assembly => assembly.GetName().Name, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
+
+        foreach (var unityAssembly in playerAssemblies)
+        {
+            if (!loadedAssemblies.TryGetValue(unityAssembly.name, out var loadedAssembly))
+                continue;
+            if (GetLoadableTypes(loadedAssembly).Any(type =>
+                type != null && type != typeof(UdonSharpBehaviour)
+                && typeof(UdonSharpBehaviour).IsAssignableFrom(type)))
+                behaviourAssemblyNames.Add(unityAssembly.name);
+        }
+
+        // Program assets are also authoritative. This covers an assembly whose behaviour type has
+        // not yet been reflected into the current domain but whose MonoScript is already imported.
+        foreach (var guid in AssetDatabase.FindAssets("t:UdonSharpProgramAsset"))
+        {
+            var assetPath = AssetDatabase.GUIDToAssetPath(guid);
+            var asset = AssetDatabase.LoadAssetAtPath<UdonSharpProgramAsset>(assetPath);
+            if (asset?.sourceCsScript == null) continue;
+            var scriptPath = AssetDatabase.GetAssetPath(asset.sourceCsScript);
+            var assemblyName = CompilationPipeline.GetAssemblyNameFromScriptPath(scriptPath);
+            if (!string.IsNullOrEmpty(assemblyName))
+                behaviourAssemblyNames.Add(Path.GetFileNameWithoutExtension(assemblyName));
+        }
+
+        return playerAssemblies
+            .Where(assembly => behaviourAssemblyNames.Contains(assembly.name))
+            .Select(assembly => new CompilationUnit(assembly, assembly.sourceFiles
+                .Where(path => path.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
+                .Where(IsAssetPath)
+                .Select(Path.GetFullPath)
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToArray()))
+            .Where(unit => unit.SourcePaths.Count > 0)
+            .OrderBy(unit => unit.UnityAssembly.name, StringComparer.Ordinal)
             .ToList();
     }
 
@@ -604,11 +665,10 @@ static class USugarCompilationOrchestrator
     // scripting defines but drop UNITY_EDITOR* (editor-only branches must not leak into the shipped program).
     // USugar's own markers are always defined. Hardcoding only the two markers (the prior behavior) silently
     // compiled the WRONG #if branch for any platform/SDK/custom-symbol guard the user wrote.
-    static string[] BuildPreprocessorDefines()
+    static string[] BuildPreprocessorDefines(UnityCompilationAssembly assembly)
     {
-        var target = GetTargetCompilationAssembly();
         var defines = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var d in target.defines)
+        foreach (var d in assembly.defines)
             if (!d.StartsWith("UNITY_EDITOR"))
                 defines.Add(d);
         defines.Add("COMPILER_UDONSHARP");
@@ -616,17 +676,18 @@ static class USugarCompilationOrchestrator
         return defines.ToArray();
     }
 
-    internal static CSharpCompilation BuildCompilation(List<string> sourcePaths)
+    internal static CSharpCompilation BuildCompilation(CompilationUnit unit)
     {
-        var defines = BuildPreprocessorDefines();
-        var defineKey = string.Join("\n", defines.OrderBy(d => d, StringComparer.Ordinal));
+        var defines = BuildPreprocessorDefines(unit.UnityAssembly);
+        var defineKey = unit.UnityAssembly.name + "\n"
+            + string.Join("\n", defines.OrderBy(d => d, StringComparer.Ordinal));
         var parseOptions = new CSharpParseOptions(LanguageVersion.Latest)
             .WithPreprocessorSymbols(defines);
 
-        var trees = new SyntaxTree[sourcePaths.Count];
-        for (int i = 0; i < sourcePaths.Count; i++)
+        var trees = new SyntaxTree[unit.SourcePaths.Count];
+        for (int i = 0; i < unit.SourcePaths.Count; i++)
         {
-            var path = sourcePaths[i];
+            var path = unit.SourcePaths[i];
             var sourceText = File.ReadAllText(path);
             if (_treeCache.TryGetValue(path, out var cached)
                 && cached.defineKey == defineKey
@@ -641,20 +702,22 @@ static class USugarCompilationOrchestrator
             }
         }
 
-        var pathSet = new HashSet<string>(sourcePaths);
-        foreach (var key in _treeCache.Keys.ToArray())
-            if (!pathSet.Contains(key))
-                _treeCache.Remove(key);
-
-        var target = GetTargetCompilationAssembly();
-        var referencePaths = GetMetadataReferencePaths(target);
+        var referencePaths = GetMetadataReferencePaths(unit.UnityAssembly);
         var metadataReferences = referencePaths
             .Select(path => MetadataReference.CreateFromFile(path))
             .Cast<MetadataReference>()
             .ToArray();
 
-        return CSharpCompilation.Create("USugarCompilation", trees, metadataReferences,
+        return CSharpCompilation.Create(unit.UnityAssembly.name, trees, metadataReferences,
             new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+    }
+
+    static void PruneTreeCache(IEnumerable<string> activeSourcePaths)
+    {
+        var pathSet = new HashSet<string>(activeSourcePaths, StringComparer.OrdinalIgnoreCase);
+        foreach (var key in _treeCache.Keys.ToArray())
+            if (!pathSet.Contains(key))
+                _treeCache.Remove(key);
     }
 
     static string[] GetMetadataReferencePaths(UnityCompilationAssembly assembly)
@@ -667,17 +730,6 @@ static class USugarCompilationOrchestrator
             .OrderBy(path => path, StringComparer.Ordinal)
             .ToArray();
 
-    static UnityCompilationAssembly GetTargetCompilationAssembly()
-    {
-        var assembly = CompilationPipeline.GetAssemblies(AssembliesType.Player)
-            .FirstOrDefault(candidate => candidate.name == TargetAssemblyName);
-        if (assembly == null)
-            throw new InvalidOperationException(
-                $"Unity player assembly '{TargetAssemblyName}' was not found. "
-                + "USugar compilation requires at least one runtime script outside an asmdef.");
-        return assembly;
-    }
-
     static bool IsAssetPath(string path)
     {
         if (string.IsNullOrEmpty(path)) return false;
@@ -688,34 +740,6 @@ static class USugarCompilationOrchestrator
         return fullPath.StartsWith(
             assetsRoot + Path.DirectorySeparatorChar,
             StringComparison.OrdinalIgnoreCase);
-    }
-
-    static void RejectUnsupportedBehaviourAssemblies(UnityCompilationAssembly target)
-    {
-        var loadedAssemblies = AppDomain.CurrentDomain.GetAssemblies()
-            .Where(assembly => !assembly.IsDynamic)
-            .GroupBy(assembly => assembly.GetName().Name, StringComparer.OrdinalIgnoreCase)
-            .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
-        var unsupported = new List<string>();
-
-        foreach (var assembly in CompilationPipeline.GetAssemblies(AssembliesType.Player))
-        {
-            if (assembly.name == target.name || !assembly.sourceFiles.Any(IsAssetPath))
-                continue;
-            if (!loadedAssemblies.TryGetValue(assembly.name, out var loaded))
-                continue;
-
-            foreach (var type in GetLoadableTypes(loaded))
-                if (type != null && type != typeof(UdonSharpBehaviour)
-                    && typeof(UdonSharpBehaviour).IsAssignableFrom(type))
-                    unsupported.Add($"{type.FullName} ({assembly.name})");
-        }
-
-        if (unsupported.Count > 0)
-            throw new NotSupportedException(
-                "UdonSharpBehaviour types in custom asmdefs are not supported by USugar's "
-                + $"single-assembly planner: {string.Join(", ", unsupported.OrderBy(x => x, StringComparer.Ordinal))}. "
-                + $"Move these behaviours to {TargetAssemblyName}; referenced helper asmdefs remain supported as metadata.");
     }
 
     static IEnumerable<Type> GetLoadableTypes(System.Reflection.Assembly assembly)

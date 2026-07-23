@@ -5,6 +5,8 @@ using Xunit;
 
 namespace USugar.Tests;
 
+public sealed class SourceAssemblyProbe { }
+
 public class ClrTypeResolverTests
 {
     public sealed class Outer<TOuter>
@@ -72,5 +74,22 @@ public class ClrTypeResolverTests
 
         Assert.Equal(typeof(System.Collections.Generic.List<string>[,]),
             ClrTypeResolver.Resolve(array));
+    }
+
+    [Fact]
+    public void ResolvesSourceSymbolFromMatchingClrAssembly()
+    {
+        var assemblyName = typeof(SourceAssemblyProbe).Assembly.GetName().Name;
+        var tree = CSharpSyntaxTree.ParseText(
+            "namespace USugar.Tests { public sealed class SourceAssemblyProbe { } }");
+        var compilation = CSharpCompilation.Create(
+            assemblyName,
+            new[] { tree },
+            TestHelper.StandardRefs,
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+        var symbol = compilation.GetTypeByMetadataName("USugar.Tests.SourceAssemblyProbe");
+
+        Assert.Equal(assemblyName, symbol.ContainingAssembly.Identity.Name);
+        Assert.Equal(typeof(SourceAssemblyProbe), ClrTypeResolver.Resolve(symbol));
     }
 }
