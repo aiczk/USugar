@@ -195,6 +195,7 @@ public partial class UasmEmitter
         _ctx.ClassTypes.Seed(plan.Reach.MintedClasses
             .OrderBy(StableOrdinalKey, StringComparer.Ordinal)
             .ThenBy(ClassTypeObjectContext.SpecKey, StringComparer.Ordinal));
+        DeclareTypeObjectConstants();
         _ctx.VirtualDispatch = new VirtualDispatch(_ctx.ClassTypes); // CA-v2b-2: virtual-call lowering
         plan.Callables.FreezeSpecializations(Array.Empty<IMethodSymbol>());
         var bodyGraph = new RecursionNodeWalk(
@@ -1293,7 +1294,7 @@ public partial class UasmEmitter
         // barrier and later prepend it to every export; tying these operations to _start leaves a
         // receiver observably half-constructed during cross-behaviour startup calls.
         bool hasProgramInitializers = _fieldInitOps.Count > 0 || _fieldChangeCallbacks.Count > 0
-            || _ctx.Aggregates.FieldDefaults.Count > 0 || _ctx.ClassTypes.MintedClasses.Count > 0;
+            || _ctx.Aggregates.FieldDefaults.Count > 0;
         if (hasProgramInitializers)
         {
             var initialization = new ProgramInitializationEmitter(_ctx);
@@ -1649,6 +1650,18 @@ public partial class UasmEmitter
 
     // ── Field Initializers ──
 
+    void DeclareTypeObjectConstants()
+    {
+        // Type identities are immutable compile-time strings, not construction work. Giving their
+        // heap variables defaults makes class minting safe before Start without forcing every program
+        // that merely uses a user class through the runtime initialization barrier.
+        foreach (var type in _ctx.ClassTypes.MintedClasses)
+            _ctx.Storage.DeclareGeneratedField(
+                _ctx.ClassTypes.TryGetTypeObjVar(type),
+                StorageTypes.String,
+                ClassTypeObjectContext.RuntimeTypeId(type));
+    }
+
     void EmitFieldInitializers()
     {
         // 2026-07-11 audit: field-initializer expressions belong to the CLASS context — never to
@@ -1657,13 +1670,6 @@ public partial class UasmEmitter
         // registers against this clean ambient.
         _ctx.Methods.CurrentClosureSpec = null;
         _ctx.Methods.CurrentOwnerSpecs = System.Collections.Immutable.ImmutableArray<IMethodSymbol>.Empty;
-        // Stable wire type ids are initialized before any instance mint.
-        foreach (var mc in _ctx.ClassTypes.MintedClasses)
-        {
-            var tv = _ctx.ClassTypes.TryGetTypeObjVar(mc);
-            _ctx.Storage.TryDeclareVar(tv, StorageTypes.String);
-            _bridge.Store(tv, _builder.Const(ClassTypeObjectContext.RuntimeTypeId(mc), StorageTypes.String));
-        }
         // Default-init aggregate (struct/tuple) fields with no explicit initializer FIRST, so any explicit
         // initializer that references one sees a non-null backing array (C# default-then-initializer order).
         foreach (var (fieldId, aggType) in _ctx.Aggregates.FieldDefaults)

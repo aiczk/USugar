@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using Xunit;
 
 namespace USugar.Tests;
@@ -262,22 +263,27 @@ public class SR_Mutable : UdonSharpBehaviour {
     [Fact]
     public void InstanceFieldInitializedFromStaticReadonly_CompilesAndOrdersStaticTierFirst()
     {
-        var uasm = TestHelper.CompileToUasm(@"
+        TestHelper.CompileToUasm(@"
 using UdonSharp;
 public class SR_InitOrder : UdonSharpBehaviour {
     static readonly int[] Table = { 10, 20, 30 };
     public int fromTable = Table[1];
-}", "SR_InitOrder");
-        Assert.Contains("Table", uasm);
-        Assert.Contains("fromTable", uasm);
+}", "SR_InitOrder", out var emitter);
 
-        // Static tier must run before instance tier in the synthesized _start body — the static Table
-        // array's construction/population code must appear before the SET that stores into fromTable.
-        int startIdx = uasm.IndexOf("_start:", StringComparison.Ordinal);
-        Assert.True(startIdx >= 0, "no _start label found");
-        int tableCodeIdx = uasm.IndexOf("Table", startIdx, StringComparison.Ordinal);
-        int fromTableSetIdx = uasm.IndexOf("fromTable", startIdx, StringComparison.Ordinal);
-        Assert.True(tableCodeIdx >= 0 && fromTableSetIdx >= 0 && tableCodeIdx < fromTableSetIdx,
-            $"expected Table's static-tier init before fromTable's instance-tier init in _start (Table@{tableCodeIdx}, fromTable@{fromTableSetIdx})");
+        // The one-shot construction function, rather than _start specifically, owns both tiers.
+        // Static Table must be stored before the instance initializer reads it into fromTable.
+        var initialization = Assert.Single(emitter.Module.Functions
+            .Where(function => function.Name == ProgramInitializationEmitter.FunctionName));
+        var stores = initialization.FlatBlocks.SelectMany(block => block.Stmts)
+            .OfType<CStoreField>().Select(store => store.FieldName).ToArray();
+        int tableStore = Array.IndexOf(stores, "Table");
+        int instanceStore = Array.IndexOf(stores, "fromTable");
+        var table = Assert.Single(emitter.Module.Fields.Where(field => field.Name == "Table"));
+        bool tableIsHeapDefault = table.DefaultValue is int[] { Length: 3 } values
+                                  && values.SequenceEqual(new[] { 10, 20, 30 });
+        Assert.True(instanceStore >= 0
+                    && (tableIsHeapDefault || tableStore >= 0 && tableStore < instanceStore),
+            $"expected Table to be a heap default or a static-tier store before fromTable "
+            + $"(heapDefault={tableIsHeapDefault}, Table@{tableStore}, fromTable@{instanceStore})");
     }
 }

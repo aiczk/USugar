@@ -57,4 +57,24 @@ public class InitOnce : UdonSharpBehaviour
             .Where(call => call.Sig.Text.Contains(".__ctor__", StringComparison.Ordinal)));
     }
 
+    [Fact]
+    public void ClassTypeIdentity_IsAHeapConstant_NotRuntimeConstruction()
+    {
+        TestHelper.CompileToUasm(@"
+using UdonSharp;
+public class Payload { public int Value; }
+public class TypeObjectHost : UdonSharpBehaviour
+{
+    void Start() { var payload = new Payload(); }
+}", "TypeObjectHost", out var emitter);
+
+        var typeObject = Assert.Single(emitter.Module.Fields
+            .Where(field => field.Name.StartsWith("__typeobj_", StringComparison.Ordinal)));
+        var payloadType = emitter.Compilation.GetTypeByMetadataName("Payload");
+        Assert.Equal(StorageTypes.String, typeObject.Type);
+        Assert.Equal(ClassTypeObjectContext.RuntimeTypeId(payloadType), typeObject.DefaultValue);
+        Assert.DoesNotContain(emitter.Module.Functions,
+            function => function.Name == ProgramInitializationEmitter.FunctionName);
+    }
+
 }
