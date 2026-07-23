@@ -93,8 +93,12 @@ internal sealed class GenericTypeSpecCensus
             : "");
         if (!_seenMethods.Add(key)) return;
         var hasEmittableBody = _bodyOf(closed.OriginalDefinition) != null;
-        if (!closed.IsDefinition
-            && !closureKind && hasEmittableBody)
+        // Keep every discovered named callable, not only constructed generic methods. The reach
+        // pass cannot resolve dispatch against a class type that is minted later in this census.
+        // In that case a non-generic definition (for example a base virtual implementation) is just
+        // as much a late registration as a generic specialization. CompilationPlanner removes the
+        // already-eagerly-registered methods before this projection is frozen.
+        if (!closureKind && hasEmittableBody)
             _specializations.Add(key, closed);
         if (closureKind)
             _closures.Add(key, new ClosureSpecializationCandidate(closed, TraceMethods(parent)));

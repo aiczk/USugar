@@ -354,6 +354,40 @@ public class CwCtorChain : UdonSharpBehaviour {
     }
 
     [Fact]
+    public void ClassCtor_VirtualSpawnRecursion_PreplansAllDispatchTargets()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public class Rb {
+    public int computed;
+    public Rb(int depth) { computed = Compute(depth); }
+    public virtual int Compute(int depth) {
+        if (depth <= 0) return Base();
+        Rb child = Spawn(depth - 1);
+        return Base() * 10 + child.computed;
+    }
+    public virtual int Base() { return 1; }
+    public virtual Rb Spawn(int depth) { return new Rb(depth); }
+}
+public class Rd : Rb {
+    public int tag;
+    public Rd(int depth, int value) : base(depth) { tag = value; }
+    public override int Base() { return 2 + tag; }
+    public override Rb Spawn(int depth) { return new Rd(depth, 99); }
+}
+public class CwCtorVirtualRecursion : UdonSharpBehaviour {
+    public int seed;
+    public int result;
+    void Start() {
+        Rd root = new Rd(3, seed);
+        result = root.computed * 1000 + root.Compute(1) + seed;
+    }
+}", "CwCtorVirtualRecursion");
+
+        Assert.Contains("__recurStack", uasm);
+    }
+
+    [Fact]
     public void StructCtor_NamedArgs_BindByParameterOrdinal()  // CW4 user-struct leg
     {
         var (uasm, consts) = TestHelper.CompileWithConsts(@"
