@@ -10,8 +10,7 @@ namespace USugar.Tests;
 /// <summary>
 /// Totality census for the extern layer's value/branch-producing silent defaults (hand-enumeration
 /// audit 2026-07-17, Tier-1 item ②). Three hand-kept enumerations produce a VALUE (or license a
-/// BRANCH) on a miss instead of failing, and none of them mints an extern name — so the
-/// AssertEmittedExternsValid backstop never sees a miss:
+/// BRANCH) on a miss instead of failing. These do not pass through the mandatory ABI catalog:
 ///
 ///  1. EmitPolicy.ParseConstValue — the default arm's long/ulong TryParse-fail path returned null
 ///     silently (the be04dd6 SystemDecimal archetype's surviving sibling: a null constant reads as 0

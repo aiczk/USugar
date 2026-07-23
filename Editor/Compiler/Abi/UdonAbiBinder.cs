@@ -210,6 +210,40 @@ public sealed class UdonAbiBinder
             $"property getter '{owner}.{propertyName}'", candidates);
     }
 
+    public BoundExtern BindIndexerGetter(string owner, string propertyName,
+        IReadOnlyList<string> indexTypes, string returnType, bool hasReceiver = true)
+    {
+        if (indexTypes == null) throw new ArgumentNullException(nameof(indexTypes));
+        var mappedOwner = ExternResolver.RemapExternOwnerType(
+            ExternResolver.SanitizeTypeName(owner));
+        var parameters = string.Join("_", indexTypes.Select(ExternResolver.SanitizeTypeName));
+        var suffix = $".__get_{propertyName}__{parameters}__"
+                     + ExternResolver.SanitizeTypeName(returnType);
+        var candidates = new List<string> { mappedOwner + suffix };
+        AddUnityOwnerFallbacks(candidates, mappedOwner, suffix, hasReceiver, preferPlain: true);
+        return BindFirst(
+            $"indexer getter '{owner}.{propertyName}'",
+            candidates.Select(candidate => (ExternSignature)candidate));
+    }
+
+    public BoundExtern BindIndexerSetter(string owner, string propertyName,
+        IReadOnlyList<string> indexTypes, string valueType, bool hasReceiver = true)
+    {
+        if (indexTypes == null) throw new ArgumentNullException(nameof(indexTypes));
+        var mappedOwner = ExternResolver.RemapExternOwnerType(
+            ExternResolver.SanitizeTypeName(owner));
+        var parameters = indexTypes
+            .Select(ExternResolver.SanitizeTypeName)
+            .Concat(new[] { ExternResolver.SanitizeTypeName(valueType) });
+        var suffix = $".__set_{propertyName}__{string.Join("_", parameters)}";
+        var prefix = mappedOwner + suffix;
+        var candidates = new List<string> { prefix + "__SystemVoid", prefix };
+        AddUnityOwnerFallbacks(candidates, mappedOwner, suffix, hasReceiver, preferPlain: false);
+        return BindFirst(
+            $"indexer setter '{owner}.{propertyName}'",
+            candidates.Select(candidate => (ExternSignature)candidate));
+    }
+
     static void AddUnityOwnerFallbacks(List<string> candidates, string mappedOwner,
         string suffix, bool hasReceiver, bool preferPlain)
     {

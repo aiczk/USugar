@@ -19,9 +19,9 @@ public sealed class DelegateDispatchEmitter
     void EmitAssign(int slot, CValue value) => _builder.EmitAssign(slot, value);
     void EmitStoreField(string name, CLeaf value) => _builder.EmitStoreField(name, value);
     CSlotRef ExternCall(ExternSignature signature, List<CLeaf> args, StorageType returnType)
-        => _builder.ExternCall(HandlerBase.ResolveExtern(signature), args, returnType);
+        => _builder.ExternCall(signature, args, returnType);
     void EmitExternVoid(ExternSignature signature, List<CLeaf> args, bool reentrant = false)
-        => _builder.EmitExternVoid(HandlerBase.ResolveExtern(signature), args, reentrant);
+        => _builder.EmitExternVoid(signature, args, reentrant);
     void EmitInternalVoid(string name, List<CLeaf> args, bool reentrant = false)
         => _builder.EmitInternalVoid(name, args, reentrant);
     StorageType GetStorageType(ITypeSymbol type)

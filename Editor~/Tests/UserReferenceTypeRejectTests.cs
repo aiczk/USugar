@@ -4,21 +4,10 @@ using Xunit;
 namespace USugar.Tests;
 
 /// <summary>
-/// Layer-3 diagnostic quick-win: a plain user-defined REFERENCE type (class / record class) instantiated
-/// with `new` and used as a VALUE has no object[] emulation to fall back to (unlike a user struct) and, if
-/// its ctor has no registered extern, reaches ExternCall and crashes opaquely ("Unknown extern:
-/// Foo__ctor__..."). Closed at the `new` call site (InvocationHandler.Members.cs VisitObjectCreation) by
-/// checking IsExternValid against the exact ctor candidate BEFORE emitting it.
-///
-/// Scope note: a genuine foreign/SDK class (VRCUrl, DataList, the TestStubs.DisposableResource fixture used
-/// throughout EmitterTests/Wave9Round2RegressionTests `using` coverage) shares this same TypeKind/namespace
-/// shape but HAS a real registered ctor extern, so it is NOT rejected — IsExternValid is what tells the two
-/// apart, not the type shape alone. A type-lowering-level guard (rejecting by shape at
-/// ExternResolver.GetUdonTypeName, so field/local/param/return of such a type reject too) was tried first
-/// and reverted: it cannot see per-call-site extern validity, so it rejected DisposableResource identically
-/// to a genuinely unsupported class and broke 14 existing `using`-disposal tests. Consequence: a field or
-/// local of a plain user class that is NEVER constructed with `new` anywhere in the compiled class does NOT
-/// reject here (known residual gap, accepted per the task's own fallback guidance).
+/// User reference-type boundary coverage. Class ABI v1 source classes lower to object[] bundles,
+/// while foreign/SDK classes must bind their constructors through the mandatory Udon ABI catalog.
+/// Records and unsupported inheritance remain loud rejects because the v1 layout cannot represent
+/// their semantics.
 /// </summary>
 public class UserReferenceTypeRejectTests
 {

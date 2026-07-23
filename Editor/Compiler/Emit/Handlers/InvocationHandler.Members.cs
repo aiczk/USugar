@@ -364,7 +364,8 @@ public partial class InvocationHandler
         // Use the indexer's metadata name, not a hardcoded "Item": most indexers are "Item", but a type with
         // [IndexerName(...)] differs (e.g. StringBuilder's indexer is "Chars" → __get_Chars__, not __get_Item__).
         return ExternCall(
-            $"{cType}.__get_{op.Property.MetadataName}__{string.Join("_", idxTypes)}__{rType}",
+            _ctx.Abi.BindIndexerGetter(
+                cType, op.Property.MetadataName, idxTypes, rType),
             externArgs,
             new StorageType(rType));
     }
@@ -851,9 +852,9 @@ public partial class InvocationHandler
                     indexTypes.Add(GetStorageTypeName(arg.Value.Type));
                 }
                 externArgs.Add(valueVal);
-                var indexParamStr = string.Join("_", indexTypes);
                 // Indexer metadata name, not a hardcoded "Item" ([IndexerName] e.g. StringBuilder → "Chars").
-                EmitExternVoid($"{containingType}.__set_{propRef.Property.MetadataName}__{indexParamStr}_{valueType}__SystemVoid",
+                EmitExternVoid(_ctx.Abi.BindIndexerSetter(
+                        containingType, propRef.Property.MetadataName, indexTypes, valueType),
                     externArgs);
             }
             else

@@ -8,7 +8,7 @@ namespace USugar.Tests;
 /// C04: compound bitwise assignment on a small-int-backed enum fabricated a nonexistent
 /// SystemByte/SystemInt16 op extern with a small result width — the registry's value-producing small-int
 /// ops all return SystemInt32, and every caller computes small ops in promoted Int32 slots, so the
-/// ResolveBinaryExtern enum arm must promote the underlying for And/Or/Xor.
+/// Built-in ABI resolution must promote enum underlyings for And/Or/Xor.
 /// D02: an object[]-emulated value type (user struct / tuple / anonymous type) in an implicit stringify
 /// surface (interpolation hole, string concat operand, compound `s += x`) silently printed
 /// "System.Object[]" — RejectImplicitToString gains an aggregate arm and the compound-concat surface

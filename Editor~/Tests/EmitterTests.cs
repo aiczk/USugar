@@ -5176,7 +5176,7 @@ public class ShortAddTest : UdonSharpBehaviour {
     void Start() { _s += 5; }
 }
 ");
-        // Should use Int32 operators (ResolveBinaryExtern promotes)
+        // Should use Int32 operators (built-in ABI resolution promotes)
         Assert.Contains("SystemInt32", uasm);
         // Should narrow back to Int16
         Assert.Contains("SystemConvert.__ToInt16__SystemInt32__SystemInt16", uasm);

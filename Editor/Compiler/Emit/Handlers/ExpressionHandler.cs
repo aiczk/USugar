@@ -772,7 +772,7 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
         if (conv.OperatorMethod != null && conv.Operand.Type != null && conv.Type != null && !SymbolEqualityComparer.Default.Equals(conv.Operand.Type, conv.Type))
         {
             // A user STRUCT conversion operator is an emitted method, not an extern: route to it (its containing
-            // type is SystemObjectArray-backed, so ResolveConversionExtern would build a non-existent extern).
+            // type is SystemObjectArray-backed, so it has no SDK conversion extern).
             if (conv.OperatorMethod.ContainingType is INamedTypeSymbol convOpCt && TypeClassifier.IsObjectArrayEmulated(convOpCt))
                 return EmitCallToMethod(ResolveStructMember(conv.OperatorMethod), new List<CLeaf> { srcVal });
 

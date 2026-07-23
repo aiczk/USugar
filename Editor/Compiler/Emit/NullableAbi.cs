@@ -240,7 +240,7 @@ public static class NullableAbi
                     "Nullable operator lowering requires a Udon ABI catalog."));
             var bound = operatorMethod != null
                 ? abi.BindOperator(operatorMethod, getUdonType)
-                : abi.BindExact(ExternResolver.ResolveBinaryExtern(opKind, null,
+                : abi.BindExact(ExternResolver.ResolveBuiltInBinaryExtern(opKind,
                     resolveType(leftEffective), resolveType(rightEffective), resolveType(resultEffective)));
             var raw = builder.ExternCall(
                 bound,

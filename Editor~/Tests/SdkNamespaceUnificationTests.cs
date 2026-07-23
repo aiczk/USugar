@@ -120,7 +120,7 @@ public class NsBoundaryCarrier
     // already did for EmitPolicy's): it keeps its registered-style tag "UnityUEnum" instead of
     // folding to the underlying int, gets NO B67 name synthesis, and an is-test against it is
     // licensed (unique tag). If no such tag exists in the Udon registry, the miss surfaces LOUDLY
-    // at extern/type validation (AssertEmittedExternsValid / per-call-site IsExternValid), never
+    // at mandatory UdonAbiCatalog binding, never
     // silently — the cost of claiming an SDK root namespace as your own.
     [Fact]
     public void UnityNamespaceEnum_ClassifiesSdkTagged_NotUserEnum()

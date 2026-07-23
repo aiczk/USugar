@@ -60,7 +60,7 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
         var rightVal = VisitExpression(op.Value);
 
         // User-defined struct operator (s += t uses the struct's operator +): static method call, then write
-        // back. The struct's Udon type is SystemObjectArray, so ResolveBinaryExtern would build a bogus extern.
+        // back. The struct's Udon type is SystemObjectArray, so built-in ABI resolution would be invalid.
         if (op.OperatorMethod is { MethodKind: MethodKind.UserDefinedOperator } cuOpM
             && cuOpM.ContainingType is INamedTypeSymbol cuOpCt && TypeClassifier.IsObjectArrayEmulated(cuOpCt))
         {
@@ -109,8 +109,8 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
 
         var sig = op.OperatorMethod != null
             ? _ctx.Abi.BindOperator(op.OperatorMethod, type => GetStorageTypeName(type))
-            : _ctx.Abi.BindExact(ExternResolver.ResolveBinaryExtern(
-                op.OperatorKind, null,
+            : _ctx.Abi.BindExact(ExternResolver.ResolveBuiltInBinaryExtern(
+                op.OperatorKind,
                 ResolveType(op.Target.Type), ResolveType(op.Value.Type), ResolveType(op.Type)));
         CLeaf resultVal = ExternCall(sig, new List<CLeaf> { leftVal, rightVal }, new StorageType(opResultType));
 

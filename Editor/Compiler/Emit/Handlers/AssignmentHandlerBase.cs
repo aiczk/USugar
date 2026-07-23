@@ -476,9 +476,14 @@ public abstract class AssignmentHandlerBase : HandlerBase
                         indexTypes.Add(GetStorageTypeName(arg.Value.Type));
                     }
                     indexArgs.Add(valueVal);
-                    var indexParamStr = string.Join("_", indexTypes);
                     // Indexer metadata name, not a hardcoded "Item" ([IndexerName] e.g. StringBuilder → "Chars").
-                    EmitExternVoid($"{containingType}.__set_{propRef.Property.MetadataName}__{indexParamStr}_{propValueType}__SystemVoid", indexArgs);
+                    EmitExternVoid(
+                        _ctx.Abi.BindIndexerSetter(
+                            containingType,
+                            propRef.Property.MetadataName,
+                            indexTypes,
+                            propValueType),
+                        indexArgs);
                 }
                 else
                 {

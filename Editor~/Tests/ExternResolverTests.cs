@@ -47,14 +47,6 @@ public class ExternResolverTests
         Assert.Equal("UnityEngineGameObject.__SetActive__SystemBoolean__SystemVoid", sig);
     }
 
-    [Fact]
-    public void BuildPropertySignature_Getter()
-    {
-        var sig = ExternResolver.BuildPropertyGetSignature(
-            "UnityEngine.Transform", "position", "UnityEngine.Vector3");
-        Assert.Equal("UnityEngineTransform.__get_position__UnityEngineVector3", sig);
-    }
-
     // The signature builders route the receiver through the single RemapUdonType table (the former
     // private 1-arm RemapExternType twin carried only this arm — pin that the fold kept its semantics).
     [Fact]
@@ -77,12 +69,12 @@ public class ExternResolverTests
     [InlineData(BinaryOperatorKind.ObjectValueNotEquals)]
     [InlineData(BinaryOperatorKind.ConditionalAnd)]
     [InlineData(BinaryOperatorKind.ConditionalOr)]
-    public void ResolveBinaryExtern_UnmappedOperatorKind_ThrowsNamingTheKind(BinaryOperatorKind kind)
+    public void ResolveBuiltInBinaryExtern_UnmappedOperatorKind_ThrowsNamingTheKind(BinaryOperatorKind kind)
     {
         var comp = CSharpCompilation.Create("OpKindCensus", references: TestHelper.StandardRefs);
         var int32 = comp.GetSpecialType(SpecialType.System_Int32);
         var ex = Assert.Throws<System.NotSupportedException>(
-            () => ExternResolver.ResolveBinaryExtern(kind, null, int32, int32, int32));
+            () => ExternResolver.ResolveBuiltInBinaryExtern(kind, int32, int32, int32));
         Assert.Contains(kind.ToString(), ex.Message);
     }
 

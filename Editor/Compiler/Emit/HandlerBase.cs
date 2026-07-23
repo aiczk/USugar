@@ -211,7 +211,7 @@ public abstract partial class HandlerBase
 
     /// <summary>Emit an extern call, materialized to a scratch slot (returns the leaf; null for void).</summary>
     protected CSlotRef ExternCall(ExternSignature sig, List<CLeaf> args, StorageType retType)
-        => _builder.ExternCall(ResolveExtern(sig), args, retType);
+        => _builder.ExternCall(sig, args, retType);
 
     protected CSlotRef ExternCall(BoundExtern bound, List<CLeaf> args, StorageType retType)
         => _builder.ExternCall(bound, args, retType);
@@ -418,7 +418,7 @@ public abstract partial class HandlerBase
     /// delegate-dispatch arm that can re-enter the containing function (design §4.3). preSpillStmts:
     /// wave-12 r2 [V1], see CExternCall.PreSpillStmts (cross setter copy-ins inside the wrap).</summary>
     protected void EmitExternVoid(ExternSignature sig, List<CLeaf> args, bool reentrant = false, int preSpillStmts = 0)
-        => _builder.EmitExternVoid(ResolveExtern(sig), args, reentrant, preSpillStmts);
+        => _builder.EmitExternVoid(sig, args, reentrant, preSpillStmts);
 
     protected void EmitExternVoid(BoundExtern bound, List<CLeaf> args, bool reentrant = false, int preSpillStmts = 0)
         => _builder.EmitExternVoid(bound, args, reentrant, preSpillStmts);
@@ -503,46 +503,6 @@ public abstract partial class HandlerBase
             (boxed, underlying) => NullableAbi.PromoteBoxedToInt32(_builder, boxed, underlying,
                 _compilation.GetSpecialType(SpecialType.System_Int32), GetStorageTypeName),
             EmitNarrowingConvert);
-
-    // ── Extern resolution ──
-
-    static readonly string[] UnityEngineComponentBaseTypes = new[]
-    {
-        "UnityEngineComponent", "UnityEngineBehaviour",
-        "UnityEngineMonoBehaviour", "UnityEngineObject",
-    };
-
-    internal static ExternSignature ResolveExtern(ExternSignature signature)
-    {
-        var externSig = signature.Text;
-        var isValid = ExternResolver.IsExternValid;
-        if (isValid == null || isValid(externSig))
-            return externSig;
-        var dotIdx = externSig.IndexOf(".__");
-        if (dotIdx < 0) return externSig;
-        var containingType = externSig.Substring(0, dotIdx);
-        // Wave-12 [V3]: the owner fallback exists for Component-hierarchy receivers whose leaf type
-        // lacks a direct extern (Udon registers e.g. __GetComponent on UnityEngineComponent only). A
-        // System.* receiver can never be Component-derived, so substituting one of these base types
-        // mechanically laundered an invalid System-typed signature into an unrelated Component extern
-        // (VM-proven: boxed value-type Equals/GetHashCode/ToString adopted UnityEngineComponent.__*).
-        // Non-UnityEngine/non-UdonBehaviour owners are equally ineligible; let the invalid signature
-        // through unchanged so the validator rejects it loudly instead of adopting an unrelated
-        // Component extern. UdonSharpBehaviour instances map to IUdonEventReceiver but still inherit
-        // UnityEngine.Object members such as name.
-        if (!containingType.StartsWith("UnityEngine", System.StringComparison.Ordinal)
-            && containingType != "VRCUdonCommonInterfacesIUdonEventReceiver")
-            return externSig;
-        var rest = externSig.Substring(dotIdx);
-        foreach (var baseType in UnityEngineComponentBaseTypes)
-        {
-            if (baseType == containingType) continue;
-            var alt = baseType + rest;
-            if (isValid(alt))
-                return alt;
-        }
-        return externSig;
-    }
 
     protected static IOperation UnwrapConversions(IOperation op)
     {
@@ -1420,12 +1380,17 @@ public abstract partial class HandlerBase
                 indexArgs.Add(VisitExpression(arg.Value));
                 indexTypes.Add(GetStorageTypeName(arg.Value.Type));
             }
-            var indexParamStr = string.Join("_", indexTypes);
             return externIdxVal =>
             {
                 indexArgs.Add(externIdxVal);
                 // Indexer metadata name, not a hardcoded "Item" ([IndexerName] e.g. StringBuilder → "Chars").
-                EmitExternVoid($"{containingType}.__set_{propRef.Property.MetadataName}__{indexParamStr}_{valueType}__SystemVoid", indexArgs);
+                EmitExternVoid(
+                    _ctx.Abi.BindIndexerSetter(
+                        containingType,
+                        propRef.Property.MetadataName,
+                        indexTypes,
+                        valueType),
+                    indexArgs);
             };
         }
 
@@ -2840,8 +2805,7 @@ public abstract partial class HandlerBase
 
     /// <summary>Loud-fail armor for the struct-member-REACHABILITY side of walk-scope drift — the
     /// analogue of <see cref="ClosureEnvLeaf"/> on the delegate-capture side. A user-struct member
-    /// only reaches generic extern-signature construction (<c>BuildExternCallSignature</c> for a
-    /// call, <c>BuildPropertyGetSignature</c> for an accessor) when it has NO registered CFunction —
+    /// only reaches generic SDK ABI binding (a method or accessor path) when it has NO registered CFunction —
     /// i.e. a Phase-1 collector (CollectStructMethodsInOperation / CollectForeignStaticCallsInOperation)
     /// or an on-demand ResolveStructMember arm did not cover this member/reach shape. Historically that
     /// silently minted a bogus <c>SystemObjectArray.__&lt;Name&gt;__…</c> extern that only UasmValidator

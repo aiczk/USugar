@@ -6,25 +6,6 @@ namespace USugar.Tests;
 // Generics mini-fuzz wave-15 round-3 batch — tracked pins. See docs/roadmap.md (production gate + B61-B65).
 public class GenericsMiniFuzzWave15Round3Tests
 {
-    // ── Item 0: production extern-validation gate — a bogus extern is a named diagnostic, not opaque ──
-
-    [Fact]
-    public void ProductionExternGate_RejectsBogusExtern()
-    {
-        var bogus = ".code_start\n        EXTERN, \"SystemEnum.__Equals__SystemObject__SystemBoolean\"\n.code_end";
-        using var scope = ExternResolver.UseRegistry(TestHelper.RegistryFacts);
-        var ex = Assert.Throws<NotSupportedException>(() => ExternResolver.AssertEmittedExternsValid(bogus));
-        Assert.Contains("SystemEnum.__Equals", ex.Message);
-    }
-
-    [Fact]
-    public void ProductionExternGate_AcceptsValidExtern()
-    {
-        var valid = ".code_start\n        EXTERN, \"SystemInt32.__Equals__SystemObject__SystemBoolean\"\n.code_end";
-        using var scope = ExternResolver.UseRegistry(TestHelper.RegistryFacts);
-        ExternResolver.AssertEmittedExternsValid(valid); // must not throw
-    }
-
     // ── B61: enum→object boxing must not hijack the enum↔underlying arm (bogus SystemConvert.__ToObject__) ──
 
     [Theory]

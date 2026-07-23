@@ -222,7 +222,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
             var ri = rightU == "SystemInt32" ? rightVal : EmitNarrowingConvert(rightVal, rightU, "SystemInt32");
             var int32 = _compilation.GetSpecialType(SpecialType.System_Int32);
             var raw = ExternCall(
-                ExternResolver.ResolveBinaryExtern(op.OperatorKind, op.OperatorMethod,
+                ExternResolver.ResolveBuiltInBinaryExtern(op.OperatorKind,
                     ResolveType(int32), ResolveType(int32), ResolveType(int32)),
                 new List<CLeaf> { li, ri }, StorageTypes.Int32);
             return EmitNarrowingConvert(raw, "SystemInt32", resultType);
@@ -230,8 +230,8 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
 
         var sig = op.OperatorMethod != null
             ? _ctx.Abi.BindOperator(op.OperatorMethod, type => GetStorageTypeName(type))
-            : _ctx.Abi.BindExact(ExternResolver.ResolveBinaryExtern(
-                op.OperatorKind, null,
+            : _ctx.Abi.BindExact(ExternResolver.ResolveBuiltInBinaryExtern(
+                op.OperatorKind,
                 ResolveType(op.LeftOperand.Type), ResolveType(op.RightOperand.Type), ResolveType(op.Type)));
 
         // UnityEngineObject equality/inequality: cast operands to UnityEngineObject temps
@@ -451,8 +451,8 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
         var allBitsConst = Const(allBitsValue, new StorageType(operandType));
 
         return ExternCall(
-            ExternResolver.ResolveBinaryExtern(
-                BinaryOperatorKind.ExclusiveOr, null,
+            ExternResolver.ResolveBuiltInBinaryExtern(
+                BinaryOperatorKind.ExclusiveOr,
                 ResolveType(op.Operand.Type), ResolveType(op.Operand.Type), ResolveType(op.Type)),
             new List<CLeaf> { operandVal, allBitsConst },
             new StorageType(resultType));

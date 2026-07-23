@@ -11,14 +11,11 @@ public static class ExternResolver
     // EmitContext exists. Emission itself receives the same catalog explicitly and is fail-closed.
     static readonly AsyncLocal<UdonAbiCatalog> CatalogScope = new();
     public static UdonAbiCatalog Catalog => CatalogScope.Value;
-    public static Func<string, bool> IsExternValid
-        => Catalog == null ? null : new Func<string, bool>(Catalog.Contains);
 
     // CA-M0 B79 (registry-truth): does the Udon extern registry hold ANY extern under a given udon TYPE name?
     // "Supported class type" has always meant "Udon has externs for it" — VRCUrl/DataList are exactly
     // source-shaped classes whose support comes from the registry, indistinguishable from a genuinely
-    // unsupported user class by symbol shape alone. Wired alongside IsExternValid (orchestrator + TestHelper);
-    // null (unwired) is permissive, mirroring the IsExternValid convention.
+    // unsupported user class by symbol shape alone. Null is permissive during catalog-free analysis.
     public static Func<string, bool> HasAnyExternForType
         => Catalog == null ? null : new Func<string, bool>(Catalog.HasAnyExternForType);
 
@@ -69,7 +66,7 @@ public static class ExternResolver
     /// <summary>CA-M0 B79: a plain user class the Udon VM cannot represent in class-ABI v1 — a source-defined
     /// non-behaviour class (<see cref="IsPlainUserClass"/>) with NO registered externs. A foreign type modelled
     /// as a source stub (registered externs) is supported and returns false; unwired registry stays permissive
-    /// (false), mirroring the new-reject's IsExternValid convention.</summary>
+    /// (false), preserving catalog-free analysis.</summary>
     public static bool IsUnsupportedUserClass(ITypeSymbol type)
     {
         if (!IsPlainUserClass(type)) return false;
@@ -106,31 +103,6 @@ public static class ExternResolver
             + "type), or reference a UdonSharpBehaviour through a scene object.");
     }
 
-    // Round-3 item 0 (production validation gate): the orchestrator assembles emitted UASM directly with
-    // no hard validation — so a bogus extern that slips past the per-call-site IsExternValid selection
-    // reaches the SDK assembler as an OPAQUE error in the real Unity Editor (the class 12b5215/32fcae3
-    // killed elsewhere), while the test harness catches it loudly via UasmValidator. This sweeps every
-    // emitted EXTERN against the wired registry and throws a NAMED diagnostic, per class, before assembly —
-    // giving production the same loud surface the harness has. No-op when the registry is not wired.
-    public static void AssertEmittedExternsValid(string uasm)
-    {
-        var isValid = IsExternValid;
-        if (isValid == null || uasm == null) return;
-        const string prefix = "EXTERN, \"";
-        List<string> bad = null;
-        foreach (var line in uasm.Split('\n'))
-        {
-            var t = line.Trim();
-            if (!t.StartsWith(prefix, StringComparison.Ordinal)) continue;
-            var name = t.Substring(prefix.Length).TrimEnd('"');
-            if (!isValid(name)) (bad ??= new List<string>()).Add(name);
-        }
-        if (bad != null)
-            throw new NotSupportedException(
-                "Emitted unregistered Udon extern(s) — these would fail opaquely in the SDK assembler: "
-                + string.Join(", ", bad.Distinct()));
-    }
-
     // Rank>1 array type (int[,], …) has no native Udon representation — it is emulated as an
     // object[1+r] bundle: [0] = typed flat backing (T[], row-major), [1..r] = boxed dimension
     // lengths (N-dim array design, 2026-07-04 §0). GetUdonTypeName folds it to the SAME
@@ -147,7 +119,7 @@ public static class ExternResolver
     /// in this compilation, not an SDK/Unity/System stand-in, and not a UdonSharpBehaviour. Distinct from a
     /// genuine foreign/SDK class (VRCUrl, DataList, …), which routes through the SAME extern-name-based
     /// method/ctor dispatch but has REAL registered externs — that distinction can only be checked at a
-    /// specific call site (via IsExternValid against the exact candidate name), not from the type alone, so
+    /// specific call site (via UdonAbiBinder against the exact candidate name), not from the type alone, so
     /// this predicate only narrows the shape; the caller decides whether a matching extern exists.</summary>
     public static bool IsPlainUserClass(ITypeSymbol type)
     {
@@ -541,43 +513,6 @@ public static class ExternResolver
         return $"{sanitizedType}.{methodName}{paramPart}__{sanitizedReturn}";
     }
 
-    public static string BuildPropertyGetSignature(string containingType, string propertyName, string returnType)
-    {
-        return $"{RemapExternOwnerType(SanitizeTypeName(containingType))}.__get_{propertyName}__{SanitizeTypeName(returnType)}";
-    }
-
-    public static string BuildPropertySetSignature(string containingType, string propertyName, string valueType)
-    {
-        var prefix = $"{RemapExternOwnerType(SanitizeTypeName(containingType))}"
-                     + $".__set_{propertyName}__{SanitizeTypeName(valueType)}";
-        var withVoid = prefix + "__SystemVoid";
-        var isValid = IsExternValid;
-        if (isValid != null && !isValid(withVoid) && isValid(prefix))
-            return prefix;
-        return withVoid;
-    }
-
-    public static string BuildFieldSetSignature(
-        string containingType, string fieldName, string valueType, bool isValueType = true)
-    {
-        // The SDK exposes both shapes. Native value-type fields normally omit the CLR-style void
-        // suffix, while most reference-type members include it; VRCPickup's public fields are a
-        // notable suffix-less reference-type case. Prefer the registered node definition and retain
-        // the historical owner-kind rule only as a fallback when no registry is installed.
-        var prefix = $"{RemapExternOwnerType(SanitizeTypeName(containingType))}"
-                     + $".__set_{fieldName}__{SanitizeTypeName(valueType)}";
-        var withVoid = prefix + "__SystemVoid";
-        var isValid = IsExternValid;
-        if (isValid != null)
-        {
-            var plainValid = isValid(prefix);
-            var voidValid = isValid(withVoid);
-            if (plainValid != voidValid)
-                return plainValid ? prefix : withVoid;
-        }
-        return isValueType ? prefix : withVoid;
-    }
-
     public static string BuildConvertSignature(string fromType, string toType)
     {
         // e.g. SystemConvert.__ToByte__SystemInt32__SystemByte
@@ -695,31 +630,6 @@ public static class ExternResolver
     public static string GetConvertMethodName(ITypeSymbol targetType)
         => ConvertMethodNames.TryGetValue(targetType.SpecialType, out var name) ? name : null;
 
-    // Resolve the extern name for user-defined implicit/explicit conversion operators.
-    // Udon's extern registration may place the operator under a different containing type
-    // than C#'s OperatorMethod.ContainingType (e.g. Vector2→Vector3 is under Vector2, not Vector3).
-    public static string ResolveConversionExtern(IMethodSymbol operatorMethod, ITypeSymbol srcType, ITypeSymbol dstType)
-    {
-        var srcUdon = GetUdonTypeName(srcType);
-        var dstUdon = GetUdonTypeName(dstType);
-        var opName = operatorMethod.Name; // op_Implicit or op_Explicit
-        var containingUdon = GetUdonTypeName(operatorMethod.ContainingType);
-
-        // Try ContainingType first, then source type, then destination type
-        var isValid = IsExternValid;
-        var seen = new HashSet<string>();
-        foreach (var candidate in new[] { containingUdon, srcUdon, dstUdon })
-        {
-            if (!seen.Add(candidate)) continue;
-            var externName = $"{candidate}.__{opName}__{srcUdon}__{dstUdon}";
-            if (isValid == null || isValid(externName))
-                return externName;
-        }
-
-        // Deterministic default when the registry probe cannot validate any candidate.
-        return $"{containingUdon}.__{opName}__{srcUdon}__{dstUdon}";
-    }
-
     // ── Binary operator extern resolution ──
 
     static readonly Dictionary<BinaryOperatorKind, string> BinaryOperatorNames = new()
@@ -742,8 +652,8 @@ public static class ExternResolver
         [BinaryOperatorKind.RightShift] = "op_RightShift",
     };
 
-    public static string ResolveBinaryExtern(
-        BinaryOperatorKind operatorKind, IMethodSymbol operatorMethod,
+    public static string ResolveBuiltInBinaryExtern(
+        BinaryOperatorKind operatorKind,
         ITypeSymbol leftType, ITypeSymbol rightType, ITypeSymbol resultType)
     {
         var left = GetUdonTypeName(leftType);
@@ -755,16 +665,6 @@ public static class ExternResolver
             && (result == "SystemString" || left == "SystemString" || right == "SystemString")
             && !(left == "SystemString" && right == "SystemString"))
             return "SystemString.__Concat__SystemObject_SystemObject__SystemString";
-
-        // Custom operator method
-        if (operatorMethod != null)
-        {
-            var containingType = GetUdonTypeName(operatorMethod.ContainingType);
-            var methodName = GetOperatorExternName(operatorMethod.Name);
-            var paramTypes = operatorMethod.Parameters.Select(p => GetUdonTypeName(p.Type)).ToArray();
-            var retType = GetUdonTypeName(operatorMethod.ReturnType);
-            return BuildMethodSignature(containingType, methodName, paramTypes, retType);
-        }
 
         // Enum operations → use underlying type (Udon VM has no enum-typed operators). Covers equality,
         // bitwise (&/|/^) AND relational (< > <= >=) — SDK enums keep their type name otherwise, so
