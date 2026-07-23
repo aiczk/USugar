@@ -7,8 +7,11 @@ namespace USugar.Tests;
 
 public static class TestHelper
 {
-    public static readonly ExternRegistryFacts RegistryFacts
-        = new(ExternRegistry.IsValid, ExternRegistry.HasExternForType);
+    public static readonly UdonAbiCatalog RegistryFacts
+        = new(ExternRegistry.All);
+
+    public static BoundExtern BindExtern(string signature)
+        => new UdonAbiCatalog(new[] { signature }).Require(signature);
 
     public static string StubSource => Stubs;
 

@@ -71,7 +71,7 @@ public class FlatTypeVerifyTests
         // Structured verification intentionally permits inheritance-compatible CSelect arms. Once
         // lowered to concrete COPY edges, the shared declared-relaxation rule can decide each arm.
         CoreVerify.Verify(module);
-        CoreFlatten.Lower(function);
+        CoreFlatten.Lower(function, TestHelper.RegistryFacts);
 
         var ex = Assert.Throws<VerificationException>(() => FlatVerify.Verify(module));
         Assert.Contains("CAssign", ex.Message);

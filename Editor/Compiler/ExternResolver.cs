@@ -5,50 +5,41 @@ using System.Threading;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.Operations;
 
-public sealed class ExternRegistryFacts
-{
-    public readonly Func<string, bool> IsExternValid;
-    public readonly Func<string, bool> HasAnyExternForType;
-
-    public ExternRegistryFacts(Func<string, bool> isExternValid, Func<string, bool> hasAnyExternForType)
-    {
-        IsExternValid = isExternValid ?? throw new ArgumentNullException(nameof(isExternValid));
-        HasAnyExternForType = hasAnyExternForType ?? throw new ArgumentNullException(nameof(hasAnyExternForType));
-    }
-}
-
 public static class ExternResolver
 {
-    // Optional extern existence check (set by test harness or Unity editor).
-    // Used to resolve ambiguous containing types for conversion operators.
-    static readonly AsyncLocal<ExternRegistryFacts> RegistryScope = new();
-    public static Func<string, bool> IsExternValid => RegistryScope.Value?.IsExternValid;
+    // Planning still uses a short-lived ambient scope because type classification runs before
+    // EmitContext exists. Emission itself receives the same catalog explicitly and is fail-closed.
+    static readonly AsyncLocal<UdonAbiCatalog> CatalogScope = new();
+    public static UdonAbiCatalog Catalog => CatalogScope.Value;
+    public static Func<string, bool> IsExternValid
+        => Catalog == null ? null : new Func<string, bool>(Catalog.Contains);
 
     // CA-M0 B79 (registry-truth): does the Udon extern registry hold ANY extern under a given udon TYPE name?
     // "Supported class type" has always meant "Udon has externs for it" — VRCUrl/DataList are exactly
     // source-shaped classes whose support comes from the registry, indistinguishable from a genuinely
     // unsupported user class by symbol shape alone. Wired alongside IsExternValid (orchestrator + TestHelper);
     // null (unwired) is permissive, mirroring the IsExternValid convention.
-    public static Func<string, bool> HasAnyExternForType => RegistryScope.Value?.HasAnyExternForType;
+    public static Func<string, bool> HasAnyExternForType
+        => Catalog == null ? null : new Func<string, bool>(Catalog.HasAnyExternForType);
 
-    public static IDisposable UseRegistry(ExternRegistryFacts facts)
+    public static IDisposable UseRegistry(UdonAbiCatalog catalog)
     {
-        if (facts == null) throw new ArgumentNullException(nameof(facts));
-        var previous = RegistryScope.Value;
-        RegistryScope.Value = facts;
+        if (catalog == null) throw new ArgumentNullException(nameof(catalog));
+        var previous = CatalogScope.Value;
+        CatalogScope.Value = catalog;
         return new RegistryToken(previous);
     }
 
     sealed class RegistryToken : IDisposable
     {
-        readonly ExternRegistryFacts _previous;
+        readonly UdonAbiCatalog _previous;
         bool _disposed;
-        public RegistryToken(ExternRegistryFacts previous) => _previous = previous;
+        public RegistryToken(UdonAbiCatalog previous) => _previous = previous;
         public void Dispose()
         {
             if (_disposed) throw new InvalidOperationException("Extern registry scope disposed twice.");
             _disposed = true;
-            RegistryScope.Value = _previous;
+            CatalogScope.Value = _previous;
         }
     }
 

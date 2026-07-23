@@ -1,3 +1,5 @@
+using System;
+
 /// <summary>
 /// Core IR compilation pipeline. There is ONE IR (CModule: structured, then flat); HIR/LIR no longer exist,
 /// and there is NO structured-optimization pass.
@@ -22,8 +24,11 @@ public static class IrPipeline
         CoreVerify.Verify(coreModule);
 
         // Structured → flat (in place): CoreFlatten + FlatVerify post-condition.
+        var abiCatalog = coreModule.AbiCatalog
+            ?? throw new InvalidOperationException(
+                "Core IR generation requires a Udon ABI catalog.");
         foreach (var cf in coreModule.Functions)
-            CoreFlatten.Lower(cf);
+            CoreFlatten.Lower(cf, abiCatalog);
         FlatVerify.Verify(coreModule);
 
         // Slot coalescing is the only optimization retained: measurement showed it delivers the entire

@@ -39,8 +39,11 @@ public static class CoreFlatOptimizer
     /// </summary>
     public static void InsertRecursionSpills(CModule module)
     {
+        var abiCatalog = module.AbiCatalog
+            ?? throw new InvalidOperationException(
+                "Recursion spill lowering requires a Udon ABI catalog.");
         foreach (var func in module.Functions)
-            InsertRecursionSpillsFunc(func);
+            InsertRecursionSpillsFunc(func, abiCatalog);
     }
 
     // Wave-9 round-5 [X4]: spill-temp coalesce trigger. Spill/reload wraps allocate ~10 fresh
@@ -52,7 +55,7 @@ public static class CoreFlatOptimizer
     // __intnl_ vars in total).
     const int SpillTempCoalesceThreshold = 64;
 
-    static void InsertRecursionSpillsFunc(CFunction func)
+    static void InsertRecursionSpillsFunc(CFunction func, UdonAbiCatalog abiCatalog)
     {
         // Spill work exists when the function has named recursive callees OR Reentrant-flagged
         // delegate-dispatch sites (design §4.3 — flag count is tracked on the function).
@@ -99,13 +102,13 @@ public static class CoreFlatOptimizer
                     if (preWindow > 0)
                     {
                         var saveStmts = new List<CStmt>();
-                        EmitSpill(func, saveStmts, func.RecursionSpillFields, liveSlots);
+                        EmitSpill(func, saveStmts, func.RecursionSpillFields, liveSlots, abiCatalog);
                         newStmts.InsertRange(Math.Max(newStmts.Count - preWindow, 0), saveStmts);
                     }
                     else
-                        EmitSpill(func, newStmts, func.RecursionSpillFields, liveSlots);
+                        EmitSpill(func, newStmts, func.RecursionSpillFields, liveSlots, abiCatalog);
                     newStmts.Add(inst);
-                    EmitReload(func, newStmts, func.RecursionSpillFields, liveSlots);
+                    EmitReload(func, newStmts, func.RecursionSpillFields, liveSlots, abiCatalog);
                 }
                 else
                 {
@@ -238,27 +241,32 @@ public static class CoreFlatOptimizer
     };
 
     // Push order: fields then slots (reload pops in reverse → LIFO balanced).
-    static void EmitSpill(CFunction func, List<CStmt> output, List<(string Name, StorageType Type)> fields, List<SlotDecl> slots)
+    static void EmitSpill(CFunction func, List<CStmt> output,
+        List<(string Name, StorageType Type)> fields, List<SlotDecl> slots,
+        UdonAbiCatalog abiCatalog)
     {
         foreach (var f in fields)
         {
             var t = func.NewSlot(f.Type, SlotClass.Scratch);
             output.Add(new CLoadField(t, f.Name, f.Type));
-            SpillValue(func, output, new CSlotRef(t, f.Type));
+            SpillValue(func, output, new CSlotRef(t, f.Type), abiCatalog);
         }
         foreach (var slot in slots)
-            SpillValue(func, output, new CSlotRef(slot.Id, slot.Type));
+            SpillValue(func, output, new CSlotRef(slot.Id, slot.Type), abiCatalog);
     }
 
-    static void EmitReload(CFunction func, List<CStmt> output, List<(string Name, StorageType Type)> fields, List<SlotDecl> slots)
+    static void EmitReload(CFunction func, List<CStmt> output,
+        List<(string Name, StorageType Type)> fields, List<SlotDecl> slots,
+        UdonAbiCatalog abiCatalog)
     {
         for (int i = slots.Count - 1; i >= 0; i--)
-            ReloadValue(func, output, slots[i].Id, slots[i].Type, null);
+            ReloadValue(func, output, slots[i].Id, slots[i].Type, null, abiCatalog);
         for (int i = fields.Count - 1; i >= 0; i--)
-            ReloadValue(func, output, -1, fields[i].Type, fields[i].Name);
+            ReloadValue(func, output, -1, fields[i].Type, fields[i].Name, abiCatalog);
     }
 
-    static void SpillValue(CFunction func, List<CStmt> output, CLeaf valueLeaf)
+    static void SpillValue(CFunction func, List<CStmt> output, CLeaf valueLeaf,
+        UdonAbiCatalog abiCatalog)
     {
         // __recurStack[__recurSp] = value (Udon boxes the typed value into the object[] element); __recurSp++
         var tStack = func.NewSlot(StorageTypes.ObjectArray, SlotClass.Scratch);
@@ -266,23 +274,24 @@ public static class CoreFlatOptimizer
         var tSp = func.NewSlot(StorageTypes.Int32, SlotClass.Scratch);
         output.Add(new CLoadField(tSp, RecurSpId, StorageTypes.Int32));
         output.Add(new CExprStmt(new CExternCall(
-            ExternResolver.BuildArraySetSignature("SystemObjectArray", "SystemObject"),
+            abiCatalog.Require(ExternResolver.BuildArraySetSignature("SystemObjectArray", "SystemObject")),
             new List<CLeaf> { new CSlotRef(tStack, StorageTypes.ObjectArray), new CSlotRef(tSp, StorageTypes.Int32), valueLeaf },
             StorageTypes.Void)));
-        SpDelta(func, output, +1);
+        SpDelta(func, output, +1, abiCatalog);
     }
 
-    static void ReloadValue(CFunction func, List<CStmt> output, int slotId, StorageType type, string fieldName)
+    static void ReloadValue(CFunction func, List<CStmt> output, int slotId,
+        StorageType type, string fieldName, UdonAbiCatalog abiCatalog)
     {
         // __recurSp--; value = __recurStack[__recurSp]  (Udon unboxes the object[] element on typed COPY)
-        SpDelta(func, output, -1);
+        SpDelta(func, output, -1, abiCatalog);
         var tStack = func.NewSlot(StorageTypes.ObjectArray, SlotClass.Scratch);
         output.Add(new CLoadField(tStack, RecurStackId, StorageTypes.ObjectArray));
         var tSp = func.NewSlot(StorageTypes.Int32, SlotClass.Scratch);
         output.Add(new CLoadField(tSp, RecurSpId, StorageTypes.Int32));
         var tGet = func.NewSlot(StorageTypes.Object, SlotClass.Scratch);
         output.Add(new CExprStmt(new CExternCall(
-            ExternResolver.BuildArrayGetSignature("SystemObjectArray", "SystemObject"),
+            abiCatalog.Require(ExternResolver.BuildArrayGetSignature("SystemObjectArray", "SystemObject")),
             new List<CLeaf> { new CSlotRef(tStack, StorageTypes.ObjectArray), new CSlotRef(tSp, StorageTypes.Int32) },
             StorageTypes.Object, tGet)));
         if (fieldName != null)
@@ -291,7 +300,8 @@ public static class CoreFlatOptimizer
             output.Add(new CAssign(slotId, new CSlotRef(tGet, StorageTypes.Object)));
     }
 
-    static void SpDelta(CFunction func, List<CStmt> output, int delta)
+    static void SpDelta(CFunction func, List<CStmt> output, int delta,
+        UdonAbiCatalog abiCatalog)
     {
         var tSp = func.NewSlot(StorageTypes.Int32, SlotClass.Scratch);
         output.Add(new CLoadField(tSp, RecurSpId, StorageTypes.Int32));
@@ -299,7 +309,7 @@ public static class CoreFlatOptimizer
         var sig = delta >= 0
             ? "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
             : "SystemInt32.__op_Subtraction__SystemInt32_SystemInt32__SystemInt32";
-        output.Add(new CExprStmt(new CExternCall(sig,
+        output.Add(new CExprStmt(new CExternCall(abiCatalog.Require(sig),
             new List<CLeaf> { new CSlotRef(tSp, StorageTypes.Int32), new CConst(System.Math.Abs(delta), StorageTypes.Int32) },
             StorageTypes.Int32, tNew)));
         output.Add(new CStoreField(RecurSpId, new CSlotRef(tNew, StorageTypes.Int32)));

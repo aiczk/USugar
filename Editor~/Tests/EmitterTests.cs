@@ -5122,7 +5122,8 @@ public class MetaDerived : ExternalLib.UserBaseClass {
         Assert.Empty(baseType.DeclaringSyntaxReferences);
 
         // Verify: UasmEmitter includes inherited fields from metadata-only base
-        var uasmEmitter = new UasmEmitter(comp2, classSymbol);
+        var uasmEmitter = new UasmEmitter(
+            comp2, classSymbol, externRegistry: TestHelper.RegistryFacts);
         var uasm = uasmEmitter.Emit();
         Assert.Contains("flagField", uasm);
         Assert.Contains("countField", uasm);

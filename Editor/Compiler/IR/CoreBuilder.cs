@@ -197,8 +197,9 @@ public sealed class CoreBuilder
 
     public CSlotRef ExternCall(ExternSignature sig, List<CLeaf> args, StorageType retType)
     {
-        if (retType == StorageTypes.Void) { Emit(new CExprStmt(new CExternCall(sig, args, retType))); return null; }
-        return Bind(new CExternCall(sig, args, retType), retType);
+        var bound = RequireExtern(sig);
+        if (retType == StorageTypes.Void) { Emit(new CExprStmt(new CExternCall(bound, args, retType))); return null; }
+        return Bind(new CExternCall(bound, args, retType), retType);
     }
 
     public CSlotRef InternalCall(string funcName, List<CLeaf> args, StorageType retType, bool tailSpared = false)
@@ -231,8 +232,15 @@ public sealed class CoreBuilder
     public void EmitExternVoid(ExternSignature sig, List<CLeaf> args, bool reentrant = false, int preSpillStmts = 0)
     {
         if (reentrant) CurrentFunction.ReentrantSiteCount++;
-        Emit(new CExprStmt(new CExternCall(sig, args, StorageTypes.Void, null, reentrant, preSpillStmts)));
+        Emit(new CExprStmt(new CExternCall(
+            RequireExtern(sig), args, StorageTypes.Void, null, reentrant, preSpillStmts)));
     }
+
+    BoundExtern RequireExtern(ExternSignature signature)
+        => (_module.AbiCatalog
+            ?? throw new InvalidOperationException(
+                "CoreBuilder cannot emit an extern without a Udon ABI catalog."))
+            .Require(signature);
 
     public void EmitInternalVoid(string funcName, List<CLeaf> args, bool reentrant = false)
     {

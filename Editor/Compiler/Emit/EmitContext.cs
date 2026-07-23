@@ -9,6 +9,7 @@ public class EmitContext
     // Core dependencies
     public readonly Compilation Compilation;
     public readonly INamedTypeSymbol ClassSymbol;
+    public readonly UdonAbiCatalog AbiCatalog;
     public readonly CModule Module;
     public readonly CoreBuilder Builder;
     public readonly LayoutPlanner Planner;
@@ -169,11 +170,13 @@ public class EmitContext
         _emitPatternCheck = emitPattern ?? throw new ArgumentNullException(nameof(emitPattern));
     }
 
-    public EmitContext(Compilation compilation, INamedTypeSymbol classSymbol, LayoutPlanner planner)
+    public EmitContext(Compilation compilation, INamedTypeSymbol classSymbol, LayoutPlanner planner,
+        UdonAbiCatalog abiCatalog)
     {
         Compilation = compilation;
         ClassSymbol = classSymbol;
-        Module = new CModule(planner.TypeFacts) { ClassName = classSymbol.ToDisplayString() };
+        AbiCatalog = abiCatalog ?? throw new ArgumentNullException(nameof(abiCatalog));
+        Module = new CModule(planner.TypeFacts, abiCatalog) { ClassName = classSymbol.ToDisplayString() };
         Builder = new CoreBuilder(Module);
         Planner = planner;
         Storage = new StorageContext(Module);

@@ -8,7 +8,7 @@ using Microsoft.CodeAnalysis.Operations;
 public partial class UasmEmitter
 {
     readonly EmitContext _ctx;
-    readonly ExternRegistryFacts _externRegistry;
+    readonly UdonAbiCatalog _abiCatalog;
     readonly Dictionary<OperationKind, IOperationHandler> _stmtDispatch;
     readonly Dictionary<OperationKind, IExpressionHandler> _exprDispatch;
     readonly SyntheticBridgeBuilder _bridge;
@@ -49,11 +49,14 @@ public partial class UasmEmitter
     readonly bool _ownsPlanner;
 
     public UasmEmitter(Compilation compilation, INamedTypeSymbol classSymbol, LayoutPlanner planner = null,
-        ExternRegistryFacts externRegistry = null)
+        UdonAbiCatalog externRegistry = null)
     {
-        _externRegistry = externRegistry;
+        _abiCatalog = externRegistry
+            ?? throw new ArgumentNullException(nameof(externRegistry),
+                "UasmEmitter requires the installed SDK's Udon ABI catalog.");
         _ownsPlanner = planner == null;
-        _ctx = new EmitContext(compilation, classSymbol, planner ?? new LayoutPlanner(compilation));
+        _ctx = new EmitContext(
+            compilation, classSymbol, planner ?? new LayoutPlanner(compilation), _abiCatalog);
         _bridge = new SyntheticBridgeBuilder(_ctx.Builder);
         _delegateConvention = new DelegateConventionStorage(_ctx);
 
@@ -145,7 +148,7 @@ public partial class UasmEmitter
 
     public string Emit()
     {
-        using var externScope = _externRegistry == null ? null : ExternResolver.UseRegistry(_externRegistry);
+        using var externScope = ExternResolver.UseRegistry(_abiCatalog);
         using var typeFactScope = UdonTypeFacts.RecordInto(_module.TypeFacts);
         // Record types cannot work in Udon: no heap allocation for user types, no inheritance from UdonSharpBehaviour
         if (_classSymbol.IsRecord)

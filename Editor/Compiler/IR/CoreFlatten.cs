@@ -10,9 +10,10 @@ using System.Collections.Generic;
 
 public static class CoreFlatten
 {
-    public static void Lower(CFunction f)
+    public static void Lower(CFunction f, UdonAbiCatalog abiCatalog)
     {
-        var ctx = new Ctx(f);
+        if (abiCatalog == null) throw new ArgumentNullException(nameof(abiCatalog));
+        var ctx = new Ctx(f, abiCatalog);
         ctx.Current = ctx.NewBlock();
 
         PreScanLabels(f.Body, ctx);
@@ -169,7 +170,7 @@ public static class CoreFlatten
     static void LowerProgramVariableStore(CProgramVariableStore store, Ctx ctx)
     {
         ctx.Current.Stmts.Add(new CExprStmt(new CExternCall(
-            ExternResolver.EventReceiverSetProgramVariable,
+            ctx.Bind(ExternResolver.EventReceiverSetProgramVariable),
             new List<CLeaf> { store.Instance, store.VariableName, store.Value },
             StorageTypes.Void, null)));
     }
@@ -355,7 +356,7 @@ public static class CoreFlatten
         foreach (var parameter in cc.Params)
         {
             ctx.Current.Stmts.Add(new CExprStmt(new CExternCall(
-                ExternResolver.EventReceiverSetProgramVariable,
+                ctx.Bind(ExternResolver.EventReceiverSetProgramVariable),
                 new List<CLeaf> {
                     inst,
                     new CConst(parameter.Id, StorageTypes.String),
@@ -369,7 +370,7 @@ public static class CoreFlatten
         // would be captured post-clobber). The copy-ins above are emitted back-to-back into the same
         // flat block, so the count is exact by construction.
         ctx.Current.Stmts.Add(new CExprStmt(new CExternCall(
-            ExternResolver.EventReceiverSendCustomEvent,
+            ctx.Bind(ExternResolver.EventReceiverSendCustomEvent),
             new List<CLeaf> { inst, cc.EventName }, StorageTypes.Void, null,
             cc.Reentrant, cc.Reentrant ? cc.Params.Count : 0)));
 
@@ -378,7 +379,7 @@ public static class CoreFlatten
             var ret = cc.Returns[0];
             var dest = destination ?? ctx.AllocScratch(cc.Type);
             ctx.Current.Stmts.Add(new CExprStmt(new CExternCall(
-                ExternResolver.EventReceiverGetProgramVariable,
+                ctx.Bind(ExternResolver.EventReceiverGetProgramVariable),
                 new List<CLeaf> { inst, new CConst(ret.Id, StorageTypes.String) }, cc.Type, dest)));
             return new CSlotRef(dest, cc.Type);
         }
@@ -389,7 +390,7 @@ public static class CoreFlatten
             {
                 var dest = ctx.AllocScratch(ret.StorageType);
                 ctx.Current.Stmts.Add(new CExprStmt(new CExternCall(
-                    ExternResolver.EventReceiverGetProgramVariable,
+                    ctx.Bind(ExternResolver.EventReceiverGetProgramVariable),
                     new List<CLeaf> { inst, new CConst(ret.Id, StorageTypes.String) },
                     ret.StorageType, dest)));
             }
@@ -402,7 +403,7 @@ public static class CoreFlatten
     {
         var dest = destination ?? ctx.AllocScratch(load.Type);
         ctx.Current.Stmts.Add(new CExprStmt(new CExternCall(
-            ExternResolver.EventReceiverGetProgramVariable,
+            ctx.Bind(ExternResolver.EventReceiverGetProgramVariable),
             new List<CLeaf> { load.Instance, load.VariableName }, load.Type, dest)));
         return new CSlotRef(dest, load.Type);
     }
@@ -435,12 +436,19 @@ public static class CoreFlatten
     sealed class Ctx
     {
         public readonly CFunction Func;
+        public readonly UdonAbiCatalog AbiCatalog;
         public readonly Stack<(CBlock Exit, CBlock Continue)> LoopStack = new Stack<(CBlock, CBlock)>();
         public readonly Dictionary<string, CBlock> LabelBlocks = new Dictionary<string, CBlock>();
         public CBlock Current;
         int _nextBlockId;
 
-        public Ctx(CFunction f) => Func = f;
+        public Ctx(CFunction f, UdonAbiCatalog abiCatalog)
+        {
+            Func = f;
+            AbiCatalog = abiCatalog;
+        }
+
+        public BoundExtern Bind(ExternSignature signature) => AbiCatalog.Require(signature);
 
         public CBlock NewBlock()
         {

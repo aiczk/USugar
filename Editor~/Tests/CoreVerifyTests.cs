@@ -105,7 +105,7 @@ public class CoreVerifyTests
         builder.EmitAssign(slot, builder.Const(42, StorageTypes.Int32));
         builder.EmitReturn(builder.SlotRef(slot));
 
-        CoreFlatten.Lower(func); // sets Shape = Flat; func.Body is now stale
+        CoreFlatten.Lower(func, TestHelper.RegistryFacts); // sets Shape = Flat; func.Body is now stale
 
         Assert.Throws<VerificationException>(() => CoreVerify.Verify(module));
     }
@@ -338,7 +338,7 @@ public class CoreVerifyTests
         var func = module.AddFunction("test");
         // SomeType.TryGet(out y) — a CFieldAddr IS valid as an out/ref extern argument
         func.Body.Stmts.Add(new CExprStmt(new CExternCall(
-            "SomeType.__TryGet__SystemInt32Ref__SystemVoid",
+            TestHelper.BindExtern("SomeType.__TryGet__SystemInt32Ref__SystemVoid"),
             new List<CLeaf> { new CFieldAddr("y", StorageTypes.Int32) }, StorageTypes.Void)));
 
         CoreVerify.Verify(module); // should not throw

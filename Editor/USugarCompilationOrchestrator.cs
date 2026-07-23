@@ -237,8 +237,7 @@ static class USugarCompilationOrchestrator
                     .Select(d => d.fullName)
                     .Where(n => !string.IsNullOrEmpty(n)));
             // CA-M0 B79: registry-truth for class support — the set of udon type names that carry any extern.
-            var externTypePrefixes = new HashSet<string>(validExterns.Select(ExternResolver.ExternTypePrefix));
-            var externRegistry = new ExternRegistryFacts(validExterns.Contains, externTypePrefixes.Contains);
+            var externRegistry = new UdonAbiCatalog(validExterns);
             using var externScope = ExternResolver.UseRegistry(externRegistry);
             Mark("extern-set");
 

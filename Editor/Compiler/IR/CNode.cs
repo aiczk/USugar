@@ -271,11 +271,13 @@ public sealed class CModule
     public readonly List<CFunction> Functions = new List<CFunction>();
     public readonly List<FieldDecl> Fields = new List<FieldDecl>();
     public readonly UdonTypeFactRegistry TypeFacts;
+    public readonly UdonAbiCatalog AbiCatalog;
     public string ClassName;
 
-    public CModule(UdonTypeFactRegistry typeFacts = null)
+    public CModule(UdonTypeFactRegistry typeFacts = null, UdonAbiCatalog abiCatalog = null)
     {
         TypeFacts = typeFacts ?? new UdonTypeFactRegistry();
+        AbiCatalog = abiCatalog;
     }
 
     public CFunction AddFunction(string name, string exportName = null)

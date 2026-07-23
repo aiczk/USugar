@@ -115,7 +115,8 @@ public class FlatVerifyTests
                 new CExprStmt(new CInternalCall("__indirect",
                     new List<CLeaf> { new CSlotRef(0, StorageTypes.UInt32) }, StorageTypes.Void, null, reentrant: true)),
                 new CExprStmt(new CExternCall(
-                    "VRCUdonCommonInterfacesIUdonEventReceiver.__SendCustomEvent__SystemString__SystemVoid",
+                    TestHelper.RegistryFacts.Require(
+                        "VRCUdonCommonInterfacesIUdonEventReceiver.__SendCustomEvent__SystemString__SystemVoid"),
                     new List<CLeaf> { new CSlotRef(1, StorageTypes.Object), new CSlotRef(2, StorageTypes.String) },
                     StorageTypes.Void, null, reentrant: true)),
             },
@@ -131,12 +132,14 @@ public class FlatVerifyTests
     // before; these pin the checker against the exact violations a rebuild-pass regression would cause.
 
     static CExprStmt SetVar(int recvSlot, int strSlot) => new(new CExternCall(
-        "VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid",
+        TestHelper.RegistryFacts.Require(
+            "VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid"),
         new List<CLeaf> { new CSlotRef(recvSlot, StorageTypes.Object), new CConst("p", StorageTypes.String), new CSlotRef(strSlot, StorageTypes.Object) },
         StorageTypes.Void));
 
     static CExprStmt SendEvent(int recvSlot, int nameSlot, int preSpillStmts) => new(new CExternCall(
-        "VRCUdonCommonInterfacesIUdonEventReceiver.__SendCustomEvent__SystemString__SystemVoid",
+        TestHelper.RegistryFacts.Require(
+            "VRCUdonCommonInterfacesIUdonEventReceiver.__SendCustomEvent__SystemString__SystemVoid"),
         new List<CLeaf> { new CSlotRef(recvSlot, StorageTypes.Object), new CSlotRef(nameSlot, StorageTypes.String) },
         StorageTypes.Void, null, reentrant: true, preSpillStmts: preSpillStmts));
 
@@ -177,7 +180,8 @@ public class FlatVerifyTests
             new List<CStmt>
             {
                 new CExprStmt(new CExternCall(
-                    "VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid",
+                    TestHelper.RegistryFacts.Require(
+                        "VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid"),
                     new List<CLeaf> { new CSlotRef(0, StorageTypes.Object), new CConst("p", StorageTypes.String), new CSlotRef(1, StorageTypes.Object) },
                     StorageTypes.Void, destSlot: 5)),
                 SendEvent(0, 1, preSpillStmts: 1),

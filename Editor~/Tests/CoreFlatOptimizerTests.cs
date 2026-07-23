@@ -23,7 +23,8 @@ public class CoreFlatOptimizerTests
     static CFunction MakeFunc(string name = "test") => new(name) { Shape = Shape.Flat };
 
     static CExprStmt Call(int? dest, string sig, List<CLeaf> args, string retType) =>
-        new(new CExternCall(sig, args, new StorageType(retType), dest));
+        new(new CExternCall(
+            TestHelper.BindExtern(sig), args, new StorageType(retType), dest));
 
     // ========================================================================
     // Slot Coalescing

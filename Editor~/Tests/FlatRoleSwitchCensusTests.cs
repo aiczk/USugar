@@ -52,9 +52,9 @@ public class FlatRoleSwitchCensusTests
         yield return new CAssign(0, new CSlotRef(1, StorageTypes.Int32));
         yield return new CStoreField("f", new CSlotRef(0, StorageTypes.Int32));
         yield return new CLoadField(0, "f", StorageTypes.Int32);
-        yield return new CExprStmt(new CExternCall("Foo.__Bar__SystemVoid",
+        yield return new CExprStmt(new CExternCall(TestHelper.BindExtern("Foo.__Bar__SystemVoid"),
             new List<CLeaf> { new CSlotRef(0, StorageTypes.Int32) }, StorageTypes.Void));
-        yield return new CExprStmt(new CExternCall("Foo.__Baz__SystemInt32",
+        yield return new CExprStmt(new CExternCall(TestHelper.BindExtern("Foo.__Baz__SystemInt32"),
             new List<CLeaf> { new CSlotRef(0, StorageTypes.Int32) }, StorageTypes.Int32, 1));
         yield return new CExprStmt(new CInternalCall("bar",
             new List<CLeaf> { new CSlotRef(0, StorageTypes.Int32) }, StorageTypes.Void));

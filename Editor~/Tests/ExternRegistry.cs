@@ -18,6 +18,7 @@ public static class ExternRegistry
     }
 
     public static bool IsValid(string externName) => ValidExterns.Contains(externName);
+    public static IReadOnlyCollection<string> All => ValidExterns;
 
     // CA-M0 B79: registry-truth — does any extern live under this udon type name?
     public static bool HasExternForType(string typeName) => ValidTypePrefixes.Contains(typeName);

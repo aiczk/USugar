@@ -93,7 +93,7 @@ public sealed class CFuncRef : CLeaf
 ///</summary>
 public sealed class CExternCall : CValue
 {
-    public readonly ExternSignature Sig;
+    public readonly BoundExtern Sig;
     public readonly List<CLeaf> Args;
     public readonly int? DestSlot; // null in tree role; set in flat (instruction) role
     /// <summary>Design §4.3: this call is a delegate-dispatch site that can re-enter its containing
@@ -111,9 +111,9 @@ public sealed class CExternCall : CValue
     /// CCrossCall / cross setter pair; copied by the same rebuild sites as <see cref="Reentrant"/>.</summary>
     public readonly int PreSpillStmts;
 
-    public CExternCall(ExternSignature sig, List<CLeaf> args, StorageType retType, int? destSlot = null, bool reentrant = false, int preSpillStmts = 0) : base(retType)
+    public CExternCall(BoundExtern sig, List<CLeaf> args, StorageType retType, int? destSlot = null, bool reentrant = false, int preSpillStmts = 0) : base(retType)
     {
-        Sig = sig;
+        Sig = sig ?? throw new ArgumentNullException(nameof(sig));
         Args = args ?? new List<CLeaf>();
         DestSlot = destSlot;
         Reentrant = reentrant;
