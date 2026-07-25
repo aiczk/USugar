@@ -76,4 +76,24 @@ class C
         Assert.Equal(method, Assert.Single(plan.CaptureRoots));
         Assert.Empty(plan.Callables.Specializations);
     }
+
+    [Fact]
+    public void SyntheticDemandPlan_RejectsDemandDiscoveredDuringLowering()
+    {
+        var tree = CSharpSyntaxTree.ParseText("enum Planned { A } enum Late { B }");
+        var compilation = CSharpCompilation.Create("SyntheticPlan", new[] { tree },
+            TestHelper.StandardRefs,
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+        var planned = compilation.GetTypeByMetadataName("Planned");
+        var late = compilation.GetTypeByMetadataName("Late");
+        var context = new SyntheticContext();
+        context.SetExpectedDelegateSites(Array.Empty<string>());
+        context.RegisterEnumToString(planned);
+
+        var plan = context.PublishPlan();
+
+        Assert.Equal(planned, Assert.Single(plan.EnumToStringTypes));
+        Assert.Throws<InvalidOperationException>(() => context.RegisterEnumToString(late));
+        context.VerifyEmissionComplete();
+    }
 }

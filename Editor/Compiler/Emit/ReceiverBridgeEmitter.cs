@@ -7,18 +7,20 @@ public sealed class ReceiverBridgeEmitter
     readonly EmitContext _context;
     readonly SyntheticBridgeBuilder _bridge;
     readonly DelegateConventionStorage _convention;
+    readonly SyntheticDemandPlan _demands;
 
-    public ReceiverBridgeEmitter(EmitContext context, SyntheticBridgeBuilder bridge,
-        DelegateConventionStorage convention)
+    internal ReceiverBridgeEmitter(EmitContext context, SyntheticBridgeBuilder bridge,
+        DelegateConventionStorage convention, SyntheticDemandPlan demands)
     {
         _context = context;
         _bridge = bridge;
         _convention = convention;
+        _demands = demands;
     }
 
     public void EmitPending()
     {
-        foreach (var demand in _context.Synthetics.ReceiverBridges)
+        foreach (var demand in _demands.ReceiverBridges)
         {
             var member = demand.Binding.TargetMethod;
             var bridgeName = demand.Binding.BridgeName;

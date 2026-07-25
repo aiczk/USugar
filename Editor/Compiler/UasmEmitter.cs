@@ -1045,7 +1045,7 @@ public partial class UasmEmitter
         _ctx.Synthetics.SetExpectedDelegateSites(DelegateDemandCensus.Collect(
             _ctx.Methods.RegisteredBodies, GetMethodBodyOperation, plan.FieldInitOps));
         PlanSyntheticDemands(plan);
-        _ctx.Synthetics.SealDemands();
+        plan = plan.WithSyntheticDemands(_ctx.Synthetics.PublishPlan());
         BuildRecursionInfo(bodyGraph);
         _ctx.Generics.BeginBodyEmission();
         EmitRegisteredBodies(plan);
@@ -1316,36 +1316,43 @@ public partial class UasmEmitter
         new InterfaceBridgeEmitter(_ctx, _bridge).Emit();
 
         // Emit delegate bridge exports
-        new DelegateBridgeEmitter(_ctx, _bridge, _delegateConvention).EmitLayoutBridges();
+        new DelegateBridgeEmitter(
+            _ctx, _bridge, _delegateConvention, plan.SyntheticDemands).EmitLayoutBridges();
 
-        // Emit pending local functions and generic specializations (may chain)
-        while (_pendingCallableBodies.Count > 0)
-        {
-            var batch = _pendingCallableBodies.ToList();
-            _pendingCallableBodies.Clear();
-            foreach (var (method, spec) in batch)
-                EmitMethod(method, spec);
-        }
+        // Every additional body was registered by the closed-world plan before lowering began.
+        // Consume one fixed batch; body emission is forbidden from extending it.
+        var additionalBodies = _pendingCallableBodies.ToArray();
+        _pendingCallableBodies.Clear();
+        foreach (var (method, spec) in additionalBodies)
+            EmitMethod(method, spec);
+        if (_pendingCallableBodies.Count != 0)
+            throw new InvalidOperationException(
+                "Body lowering discovered callable bodies absent from ProgramPlan.");
 
-        _ctx.Synthetics.Freeze();
+        _ctx.Synthetics.VerifyEmissionComplete();
 
         // Emit pending delegate bridges for hoisted lambdas/local functions
-        new DelegateBridgeEmitter(_ctx, _bridge, _delegateConvention).EmitPending();
-        new ReceiverBridgeEmitter(_ctx, _bridge, _delegateConvention).EmitPending();
+        new DelegateBridgeEmitter(
+            _ctx, _bridge, _delegateConvention, plan.SyntheticDemands).EmitPending();
+        new ReceiverBridgeEmitter(
+            _ctx, _bridge, _delegateConvention, plan.SyntheticDemands).EmitPending();
 
         // Variance design (2026-07-04 §2.2/§2.3) T-M2: sig adapters (B-1) + wrapper-with-payload
         // bridges (B-2), for every variant method-group binding / third-party-variant hinge / variant
         // delegate-value conversion registered in this class. A class with no variance emits neither —
         // single-cast golden untouched (§5 gate).
-        new WrapperBridgeEmitter(_ctx, _bridge, _delegateConvention).EmitPending();
+        new WrapperBridgeEmitter(
+            _ctx, _bridge, _delegateConvention, plan.SyntheticDemands).EmitPending();
 
         // Multicast design (2026-07-03 §1) A-M1: per-sig synthetic combine/remove helpers + fan-out
         // bridge, for every sig a `+=`/`-=` site registered in this class (RegisterMulticastSig). A
         // class with no delegate compound assignment emits none of this — single-cast golden is
         // untouched (§6 gate). Reentrancy graph-node registration for the fan-out is A-M3 scope (§1.6),
         // deliberately not wired here.
-        new MulticastDelegateEmitter(_ctx, _bridge, _delegateConvention).EmitPending();
-        new EnumToStringSyntheticEmitter(_ctx, _bridge).Emit();
+        new MulticastDelegateEmitter(
+            _ctx, _bridge, _delegateConvention, plan.SyntheticDemands).EmitPending();
+        new EnumToStringSyntheticEmitter(
+            _ctx, _bridge, plan.SyntheticDemands).Emit();
 
         if (hasProgramInitializers)
             new ProgramInitializationEmitter(_ctx).GuardEveryExport();

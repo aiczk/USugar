@@ -6,17 +6,20 @@ public sealed class EnumToStringSyntheticEmitter
 {
     readonly EmitContext _context;
     readonly SyntheticBridgeBuilder _bridge;
+    readonly SyntheticDemandPlan _demands;
 
-    public EnumToStringSyntheticEmitter(EmitContext context, SyntheticBridgeBuilder bridge)
+    internal EnumToStringSyntheticEmitter(EmitContext context, SyntheticBridgeBuilder bridge,
+        SyntheticDemandPlan demands)
     {
         _context = context;
         _bridge = bridge;
+        _demands = demands;
     }
 
     public void Emit()
     {
         var builder = _context.Builder;
-        foreach (var enumType in _context.Synthetics.EnumToString)
+        foreach (var enumType in _demands.EnumToStringTypes)
         {
             var helperName = HandlerBase.EnumToStringHelperName(enumType);
             var underlyingType = _context.ResolveStorageType(enumType.EnumUnderlyingType);

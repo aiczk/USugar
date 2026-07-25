@@ -7,18 +7,20 @@ public sealed class WrapperBridgeEmitter
     readonly EmitContext _context;
     readonly SyntheticBridgeBuilder _bridge;
     readonly DelegateConventionStorage _convention;
+    readonly SyntheticDemandPlan _demands;
 
-    public WrapperBridgeEmitter(EmitContext context, SyntheticBridgeBuilder bridge,
-        DelegateConventionStorage convention)
+    internal WrapperBridgeEmitter(EmitContext context, SyntheticBridgeBuilder bridge,
+        DelegateConventionStorage convention, SyntheticDemandPlan demands)
     {
         _context = context;
         _bridge = bridge;
         _convention = convention;
+        _demands = demands;
     }
 
     public void EmitPending()
     {
-        foreach (var demand in _context.Synthetics.WrapperSigs.Values)
+        foreach (var demand in _demands.WrapperSignatures.Values)
             Emit(demand.Binding.BridgeName, demand.OuterInvoke, demand.InnerInvoke,
                 demand.TypeParameterMap);
     }

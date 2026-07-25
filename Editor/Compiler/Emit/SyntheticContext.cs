@@ -40,44 +40,37 @@ public sealed class SyntheticContext
     // per-spec CFunction. The pending-bridge drain resolves closure targets here (a bare
     // definition-symbol lookup cannot distinguish specs).
     readonly Dictionary<string, CFunction> _closureBridgeFuncs = new();
-    public IReadOnlyDictionary<string, CFunction> ClosureBridgeFuncs => _closureBridgeFuncs;
 
     // MG auto-wrap (design 2026-07-11 v2): pending receiver-bridges — a class/struct instance method
     // group's bridge re-dispatches DelegateAbi.Env as the member's param0 (CA-M1 receiver ABI).
     readonly Dictionary<string, DelegateBridgeDemand> _receiverBridges = new();
-    public IReadOnlyCollection<DelegateBridgeDemand> ReceiverBridges => _receiverBridges.Values;
 
     // Pending delegate bridges for dynamically hoisted lambdas/local functions. The carried map is
     // the creating method's immutable TypeParamMap by REFERENCE (per-EmitMethod fresh, never mutated,
     // so no snapshot copy is needed even though the drain runs after emission when the ambient map
     // is null).
     readonly Dictionary<string, DelegateBridgeDemand> _delegateBridges = new();
-    public IReadOnlyCollection<DelegateBridgeDemand> DelegateBridges => _delegateBridges.Values;
 
     // Multicast: sig-part -> signature plus the exact combine/remove operations used by this class.
     // Sites sharing a signature merge their flags; the drain emits one fan-out and only the helpers
     // actually referenced by lowering.
     readonly Dictionary<string, MulticastSigPlan> _multicastSigs = new();
-    public IReadOnlyDictionary<string, MulticastSigPlan> MulticastSigs => _multicastSigs;
 
     // B67: user enums whose ToString()/concat/interpolation needs the synthesized __enumstr_ helper.
     readonly HashSet<INamedTypeSymbol> _enumToString = new(SymbolEqualityComparer.Default);
-    public IReadOnlyCollection<INamedTypeSymbol> EnumToString => _enumToString;
 
     // Variance (2026-07-04 design 2.2, B-1): per-(target, sig-S) sig adapter bridges. DelegateInvoke
     // is the DESTINATION delegate's own Invoke (conv-var declarations), distinct from TargetMethod
     // (the real callee, InternalCall only). Dedup-by-name at emission.
     readonly Dictionary<string, DelegateBridgeDemand> _sigAdapterBridges = new();
-    public IReadOnlyCollection<DelegateBridgeDemand> SigAdapterBridges => _sigAdapterBridges.Values;
 
     // Variance (2026-07-04 design 2.3, B-2): wrapper name -> (outer sig-S Invoke, inner sig-T
     // Invoke-or-method, resolved map). Keyed by WRAPPER NAME (unique per (outer,inner) sig pair) -
     // a wrapper's inner dispatch speaks the INNER bundle's own protocol.
     readonly Dictionary<string, DelegateWrapperDemand> _wrapperSigs = new();
-    public IReadOnlyDictionary<string, DelegateWrapperDemand> WrapperSigs => _wrapperSigs;
 
-    public bool IsFrozen { get; private set; }
-    public bool DemandsSealed { get; private set; }
+    bool _emissionVerified;
+    bool _demandsPublished;
     HashSet<string> _expectedDelegateSites;
     readonly Dictionary<string, DelegateBindingPlan> _plannedDelegateSites = new(StringComparer.Ordinal);
     readonly HashSet<string> _emittedDelegateSites = new(StringComparer.Ordinal);
@@ -121,27 +114,38 @@ public sealed class SyntheticContext
         _emittedDelegateSites.Add(key);
     }
 
-    public void SealDemands()
+    internal SyntheticDemandPlan PublishPlan()
     {
         RequireMutable();
-        if (DemandsSealed)
-            throw new InvalidOperationException("Synthetic demand plan was sealed twice.");
+        if (_demandsPublished)
+            throw new InvalidOperationException("Synthetic demand plan was published twice.");
+        if (_expectedDelegateSites == null)
+            throw new InvalidOperationException("Synthetic demand plan has no delegate-site census.");
         foreach (var site in _expectedDelegateSites)
             if (!_plannedDelegateSites.ContainsKey(site))
                 throw new InvalidOperationException(
                     $"Delegate site '{site}' was not bound during synthetic demand planning.");
-        DemandsSealed = true;
+        _demandsPublished = true;
+        return new SyntheticDemandPlan(
+            _closureBridgeFuncs,
+            _receiverBridges.Values,
+            _delegateBridges.Values,
+            _multicastSigs,
+            _enumToString,
+            _sigAdapterBridges.Values,
+            _wrapperSigs);
     }
 
     void RequireMutable()
     {
-        if (IsFrozen) throw new InvalidOperationException("Synthetic demand plan is frozen.");
+        if (_emissionVerified)
+            throw new InvalidOperationException("Synthetic demand emission was already verified.");
     }
 
     public void RegisterClosureBridge(string name, CFunction function)
     {
         RequireMutable();
-        if (DemandsSealed && !_closureBridgeFuncs.ContainsKey(name))
+        if (_demandsPublished && !_closureBridgeFuncs.ContainsKey(name))
             throw new InvalidOperationException(
                 $"Closure bridge '{name}' was first discovered during body emission.");
         _closureBridgeFuncs[name] = function;
@@ -182,7 +186,7 @@ public sealed class SyntheticContext
         MulticastOperations operation)
     {
         RequireMutable();
-        if (DemandsSealed
+        if (_demandsPublished
             && (!_multicastSigs.TryGetValue(signature, out var planned)
                 || (planned.Operations & operation) != operation))
             throw new InvalidOperationException(
@@ -195,7 +199,7 @@ public sealed class SyntheticContext
     public void RegisterEnumToString(INamedTypeSymbol enumType)
     {
         RequireMutable();
-        if (DemandsSealed && !_enumToString.Contains(enumType))
+        if (_demandsPublished && !_enumToString.Contains(enumType))
             throw new InvalidOperationException(
                 $"Enum ToString helper for '{enumType}' was first discovered during body emission.");
         _enumToString.Add(enumType);
@@ -208,7 +212,7 @@ public sealed class SyntheticContext
         RequireMutable();
         if (binding.Kind != DelegateBindingKind.Wrapper)
             throw new ArgumentException("Wrapper demand requires a wrapper binding.", nameof(binding));
-        if (DemandsSealed && !_wrapperSigs.ContainsKey(binding.BridgeName))
+        if (_demandsPublished && !_wrapperSigs.ContainsKey(binding.BridgeName))
             throw new InvalidOperationException(
                 $"Delegate wrapper '{binding.BridgeName}' was first discovered during body emission.");
         if (!_wrapperSigs.ContainsKey(binding.BridgeName))
@@ -217,16 +221,17 @@ public sealed class SyntheticContext
                 outerInvoke, innerInvoke, typeParamMap));
     }
 
-    public void Freeze()
+    public void VerifyEmissionComplete()
     {
-        if (IsFrozen) throw new InvalidOperationException("Synthetic demand plan was frozen twice.");
+        if (_emissionVerified)
+            throw new InvalidOperationException("Synthetic demand emission was verified twice.");
         if (_expectedDelegateSites == null)
             throw new InvalidOperationException("Synthetic demand plan has no delegate-site census.");
         foreach (var site in _expectedDelegateSites)
             if (!_emittedDelegateSites.Contains(site))
                 throw new InvalidOperationException(
                     $"Planned delegate site '{site}' was not emitted during body emission.");
-        IsFrozen = true;
+        _emissionVerified = true;
     }
 
     void RegisterUnique(Dictionary<string, DelegateBridgeDemand> demands,
@@ -235,7 +240,7 @@ public sealed class SyntheticContext
         var name = demand.Binding.BridgeName;
         if (!demands.TryGetValue(name, out var existing))
         {
-            if (DemandsSealed)
+            if (_demandsPublished)
                 throw new InvalidOperationException(
                     $"Synthetic {category} '{name}' was first discovered during body emission.");
             demands.Add(name, demand);

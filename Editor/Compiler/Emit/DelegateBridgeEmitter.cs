@@ -7,13 +7,15 @@ public sealed class DelegateBridgeEmitter
     readonly EmitContext _context;
     readonly SyntheticBridgeBuilder _bridge;
     readonly DelegateConventionStorage _convention;
+    readonly SyntheticDemandPlan _demands;
 
-    public DelegateBridgeEmitter(EmitContext context, SyntheticBridgeBuilder bridge,
-        DelegateConventionStorage convention)
+    internal DelegateBridgeEmitter(EmitContext context, SyntheticBridgeBuilder bridge,
+        DelegateConventionStorage convention, SyntheticDemandPlan demands)
     {
         _context = context;
         _bridge = bridge;
         _convention = convention;
+        _demands = demands;
     }
 
     public void EmitPending()
@@ -46,7 +48,7 @@ public sealed class DelegateBridgeEmitter
 
     void EmitPlainBridges()
     {
-        foreach (var demand in _context.Synthetics.DelegateBridges)
+        foreach (var demand in _demands.DelegateBridges)
         {
             var method = demand.Binding.TargetMethod;
             var bridgeName = demand.Binding.BridgeName;
@@ -58,7 +60,7 @@ public sealed class DelegateBridgeEmitter
 
     void EmitSignatureAdapters()
     {
-        foreach (var demand in _context.Synthetics.SigAdapterBridges)
+        foreach (var demand in _demands.SignatureAdapterBridges)
         {
             var targetMethod = demand.Binding.TargetMethod;
             var adapterName = demand.Binding.BridgeName;
@@ -69,7 +71,7 @@ public sealed class DelegateBridgeEmitter
     }
 
     bool TryResolveTarget(IMethodSymbol method, string bridgeName, out CFunction target)
-        => _context.Synthetics.TryGetClosureBridge(bridgeName, out target)
+        => _demands.TryGetClosureBridge(bridgeName, out target)
             || _context.Methods.Functions.TryGetValue(method, out target);
 
     void EmitBody(string bridgeName, IMethodSymbol signatureMethod,

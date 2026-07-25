@@ -11,9 +11,10 @@ public sealed class MulticastDelegateEmitter
     readonly SyntheticBridgeBuilder _bridge;
     readonly DelegateConventionStorage _delegateConvention;
     readonly INamedTypeSymbol _classSymbol;
+    readonly SyntheticDemandPlan _demands;
 
-    public MulticastDelegateEmitter(EmitContext context, SyntheticBridgeBuilder bridge,
-        DelegateConventionStorage convention)
+    internal MulticastDelegateEmitter(EmitContext context, SyntheticBridgeBuilder bridge,
+        DelegateConventionStorage convention, SyntheticDemandPlan demands)
     {
         _ctx = context;
         _builder = context.Builder;
@@ -21,6 +22,7 @@ public sealed class MulticastDelegateEmitter
         _bridge = bridge;
         _delegateConvention = convention;
         _classSymbol = context.ClassSymbol;
+        _demands = demands;
     }
 
     static readonly UdonAbiKey MulticastArrGet = UdonAbi.ArrayGet("SystemObjectArray", "SystemObject");
@@ -54,7 +56,7 @@ public sealed class MulticastDelegateEmitter
 
     public void EmitPending()
     {
-        foreach (var (sigPart, plan) in _ctx.Synthetics.MulticastSigs)
+        foreach (var (sigPart, plan) in _demands.MulticastSignatures)
         {
             if ((plan.Operations & MulticastOperations.Combine) != 0)
                 EmitMulticastCombineHelper(sigPart, plan.Invoke);
