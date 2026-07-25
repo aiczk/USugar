@@ -14,11 +14,11 @@ public sealed class LoweringEnvironment
     public readonly INamedTypeSymbol ClassSymbol;
     public readonly UdonAbiCatalog AbiCatalog;
     public readonly UdonAbiBinder Abi;
-    public readonly LayoutPlanner Planner;
+    public readonly FrozenLayoutPlan Planner;
     public readonly MethodAnalysisCache MethodAnalyses;
 
     public LoweringEnvironment(CompilationSession session, INamedTypeSymbol classSymbol,
-        LayoutPlanner planner)
+        FrozenLayoutPlan planner)
     {
         Session = session ?? throw new ArgumentNullException(nameof(session));
         Compilation = session.Compilation;
@@ -28,7 +28,7 @@ public sealed class LoweringEnvironment
         Planner = planner ?? throw new ArgumentNullException(nameof(planner));
         if (!ReferenceEquals(planner.TypeFacts, session.TypeFacts))
             throw new InvalidOperationException(
-                "LayoutPlanner and lowering environment must share one compilation session's type facts.");
+                "Frozen layout plan and lowering environment must share one compilation session's type facts.");
         MethodAnalyses = new MethodAnalysisCache(Compilation);
     }
 

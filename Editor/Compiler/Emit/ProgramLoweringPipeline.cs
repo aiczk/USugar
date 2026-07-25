@@ -21,7 +21,7 @@ internal partial class ProgramLoweringPipeline
     INamedTypeSymbol _classSymbol => _state.ClassSymbol;
     StructuredModule _module => _state.Module;
     CoreBuilder _builder => _state.Builder;
-    LayoutPlanner _planner => _state.Planner;
+    FrozenLayoutPlan _planner => _state.Planner;
     IReadOnlyDictionary<IMethodSymbol, StructuredFunction> _methodFunctions => _state.Methods.Functions;
     IReadOnlyDictionary<IMethodSymbol, MethodSlot> _methodSlots => _state.Methods.Slots;
     IReadOnlyDictionary<IMethodSymbol, ReturnSlot[]> _methodReturns => _state.Methods.Returns;
@@ -46,26 +46,21 @@ internal partial class ProgramLoweringPipeline
     internal IEnumerable<OperationKind> HandledOperationKinds
         => _stmtDispatch.Keys.Concat(_exprDispatch.Keys).Distinct();
 
-    static Dictionary<string, string> UdonEventNames => LayoutPlanner.UdonEventNames;
+    static Dictionary<string, string> UdonEventNames => LayoutPlanBuilder.UdonEventNames;
 
-    // F2: true when this emitter created its OWN private planner (no shared planner was passed). A private
-    // planner is safe to lazily Plan()+Freeze() in EnsurePlannerReady on any thread (nothing else reads it);
-    // a SHARED planner reaching EnsurePlannerReady unfrozen is the parallel-emit race the guard rejects.
-    readonly bool _ownsPlanner;
-
-    internal ProgramLoweringPipeline(Compilation compilation, INamedTypeSymbol classSymbol, LayoutPlanner planner = null,
+    internal ProgramLoweringPipeline(Compilation compilation, INamedTypeSymbol classSymbol,
+        FrozenLayoutPlan planner = null,
         UdonAbiCatalog externRegistry = null)
         : this(CreateSession(compilation, planner, externRegistry), classSymbol, planner)
     {
     }
 
     internal ProgramLoweringPipeline(CompilationSession session, INamedTypeSymbol classSymbol,
-        LayoutPlanner planner = null)
+        FrozenLayoutPlan planner = null)
     {
         if (session == null) throw new ArgumentNullException(nameof(session));
-        _ownsPlanner = planner == null;
         _environment = new LoweringEnvironment(
-            session, classSymbol, planner ?? new LayoutPlanner(session));
+            session, classSymbol, planner ?? new LayoutPlanBuilder(session).Build());
         _state = new LoweringState(_environment);
         _lowering = new LoweringServices(_state);
         _bridge = new SyntheticBridgeBuilder(_state.Builder);
@@ -95,7 +90,7 @@ internal partial class ProgramLoweringPipeline
             operatorHandler.EmitPatternCheckImpl);
     }
 
-    static CompilationSession CreateSession(Compilation compilation, LayoutPlanner planner,
+    static CompilationSession CreateSession(Compilation compilation, FrozenLayoutPlan planner,
         UdonAbiCatalog externRegistry)
     {
         if (compilation == null) throw new ArgumentNullException(nameof(compilation));
@@ -164,7 +159,7 @@ internal partial class ProgramLoweringPipeline
     // seeds them at the compile-plan build — the resolver fails loud on a pre-seed CallEdge call).
     internal VirtualDispatch VirtualDispatchInstance => _state.VirtualDispatch;
     internal ClassTypeObjectContext ClassTypes => _state.ClassTypes;
-    internal LayoutPlanner Planner => _planner;
+    internal FrozenLayoutPlan Planner => _planner;
 
     // CA call-graph rewrite (M5b prerequisite): test-only accessor exposing the populated RecursionInfo
     // (all six facets: RecursionGraphNodes, per-node RecursiveCallees/CycleCallees edge sets,
@@ -183,7 +178,6 @@ internal partial class ProgramLoweringPipeline
                 $"Record type '{_classSymbol.Name}' is not supported in UdonSharp. " +
                 "Udon VM cannot allocate user-defined types. Use a regular class inheriting from UdonSharpBehaviour instead.");
 
-        EnsurePlannerReady();
         EmitFields();
         SetReflectionValues();
         var plan = BuildProgramPlan();
@@ -259,37 +253,6 @@ internal partial class ProgramLoweringPipeline
 
     internal static long ComputeTypeId(string typeName)
         => UdonBehaviourTypeMetadata.TypeId(typeName);
-
-    /// <summary>
-    /// Ensure the LayoutPlanner is planned and frozen before emission begins.
-    ///
-    /// IMPORTANT: During parallel emit (Phase 2 of USugarCompilationOrchestrator),
-    /// the caller MUST pass a pre-frozen planner. This lazy path is only safe for
-    /// single-threaded use (e.g., tests, standalone compilation). If an unfrozen
-    /// planner is detected, it is planned and frozen here — but this is NOT
-    /// thread-safe if the same planner instance is shared across threads.
-    /// </summary>
-    void EnsurePlannerReady()
-    {
-        if (_planner.IsFrozen) return;
-
-        // F2: Phase-2 emit runs in parallel (USugarCompilationOrchestrator's Parallel.ForEach) over a
-        // SHARED planner that Phase-1 must have Plan()'d and Freeze()'d (orchestrator freezes at line ~212
-        // before the ForEach at ~227). A SHARED planner reaching here UNFROZEN means that freeze contract
-        // was violated — lazily planning it now would MUTATE a planner other emitter threads read
-        // concurrently. Fail loudly instead of racing. (The discriminator is planner OWNERSHIP, not thread
-        // type: xUnit runs tests on background thread-pool threads, so a thread check would reject the
-        // legitimate test/standalone path. A PRIVATE planner is unshared and safe to plan lazily anywhere.)
-        if (!_ownsPlanner)
-            throw new System.InvalidOperationException(
-                "EnsurePlannerReady: a SHARED LayoutPlanner reached emit unfrozen. Phase-1 must "
-              + "Plan() and Freeze() every layout before Phase-2's Parallel.ForEach — mutating a shared "
-              + "planner during parallel emit would race concurrent emitters. Pass a pre-frozen planner, "
-              + "or omit the planner argument to use a private one (the test/standalone lazy path).");
-
-        // Private (emitter-owned) planner, unfrozen: the documented test/standalone path — plan, then freeze.
-        _planner.PrepareCompilation();
-    }
 
     // ── EmitFields ──
 
@@ -992,7 +955,7 @@ internal partial class ProgramLoweringPipeline
     /// explicit-interface / generic-mix stress shapes.
     ///
     /// Sets <see cref="_inheritedMethods"/> (the inherited subset = planned methods NOT declared on this
-    /// class). Runs after EnsurePlannerReady, so the planner is frozen and this class is planned.</summary>
+    /// class). The pipeline accepts only a frozen layout plan, so this class is already planned.</summary>
     IMethodSymbol[] ComputeMethods()
     {
         var planned = _planner.GetLayout(_classSymbol).Methods.Keys.ToArray();

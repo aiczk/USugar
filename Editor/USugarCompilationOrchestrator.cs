@@ -44,7 +44,7 @@ static class USugarCompilationOrchestrator
         public IReadOnlyList<string> SourcePaths { get; }
         public CSharpCompilation Compilation { get; set; }
         public CompilationSession Session { get; set; }
-        public LayoutPlanner Planner { get; set; }
+        public FrozenLayoutPlan Planner { get; set; }
         public IReadOnlyList<(INamedTypeSymbol symbol, SyntaxTree tree)> Behaviours { get; set; }
 
         public CompilationUnit(UnityCompilationAssembly unityAssembly, IReadOnlyList<string> sourcePaths)
@@ -63,12 +63,12 @@ static class USugarCompilationOrchestrator
         public uint HeapSize;
         public IReadOnlyList<EmitDiagnostic> EmitterDiagnostics;
         public List<(string file, int line, int character, string message, string severity)> ErrorDiagnostics;
-        public LayoutPlanner Planner;
+        public FrozenLayoutPlan Planner;
         public bool IsError;
 
         public EmitResult(INamedTypeSymbol symbol, SyntaxTree tree, string uasm,
             List<(string Id, string UdonType, object Value)> constants, uint heapSize,
-            IReadOnlyList<EmitDiagnostic> diagnostics, LayoutPlanner planner)
+            IReadOnlyList<EmitDiagnostic> diagnostics, FrozenLayoutPlan planner)
         {
             Symbol = symbol; Tree = tree; Uasm = uasm;
             Constants = constants; HeapSize = heapSize;
@@ -77,7 +77,7 @@ static class USugarCompilationOrchestrator
             ErrorDiagnostics = null; IsError = false;
         }
 
-        public static EmitResult Error(INamedTypeSymbol symbol, SyntaxTree tree, LayoutPlanner planner,
+        public static EmitResult Error(INamedTypeSymbol symbol, SyntaxTree tree, FrozenLayoutPlan planner,
             string file, int line, int character, string message)
         {
             return new EmitResult
@@ -314,7 +314,7 @@ static class USugarCompilationOrchestrator
 
             // Collect all UdonSharpBehaviour classes
             var classList = new List<(INamedTypeSymbol symbol, SyntaxTree tree,
-                CompilationSession session, LayoutPlanner planner)>();
+                CompilationSession session, FrozenLayoutPlan planner)>();
             var selectedProgramAssets = applyToAssets
                 ? new Dictionary<INamedTypeSymbol, ProgramAssetBinding>(
                     SymbolEqualityComparer.Default)
@@ -329,8 +329,7 @@ static class USugarCompilationOrchestrator
             // A partial class has one declaration node per part but ONE symbol — emit it once, not once per part.
             foreach (var unit in compilationUnits)
             {
-                unit.Planner = new LayoutPlanner(unit.Session);
-                unit.Planner.PrepareCompilation();
+                unit.Planner = new LayoutPlanBuilder(unit.Session).Build();
                 foreach (var (symbol, tree) in unit.Behaviours)
                 {
                     if (applyToAssets)
@@ -771,7 +770,8 @@ static class USugarCompilationOrchestrator
     // Build the [NetworkCallable] entry-point metadata for a class: for each tagged method, its (unmangled)
     // export name + per-parameter (mangled export name, CLR type). The runtime/ClientSim uses this to resolve
     // a SendCustomNetworkEvent-with-parameters call to the receiver method and marshal its arguments.
-    static NetworkCallingEntrypointMetadata[] BuildNetworkCallingMetadata(INamedTypeSymbol classSymbol, LayoutPlanner planner)
+    static NetworkCallingEntrypointMetadata[] BuildNetworkCallingMetadata(
+        INamedTypeSymbol classSymbol, FrozenLayoutPlan planner)
     {
         var layout = planner.GetLayout(classSymbol);
         if (layout == null) return Array.Empty<NetworkCallingEntrypointMetadata>();

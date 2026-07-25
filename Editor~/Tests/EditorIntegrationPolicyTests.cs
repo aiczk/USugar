@@ -173,8 +173,7 @@ public class MetadataBase : UdonSharpBehaviour
 }
 public class MetadataDerived : MetadataBase { }
 ", "MetadataDerived", out var derived);
-        var planner = new LayoutPlanner(compilation);
-        planner.PrepareCompilation();
+        var planner = new LayoutPlanBuilder(compilation).Build();
 
         var callable = Assert.Single(
             USugarNetworkMetadataPolicy.GetCallableMethods(planner.GetLayout(derived)));

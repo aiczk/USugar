@@ -82,7 +82,7 @@ public static class EmitPolicy
     /// hits it exactly once per method.</summary>
     public static void RejectNetworkCallableDelegates(IMethodSymbol method)
     {
-        if (!LayoutPlanner.IsNetworkCallable(method)) return;
+        if (!LayoutPlanBuilder.IsNetworkCallable(method)) return;
         foreach (var p in method.Parameters)
         {
             if (TypeClassifier.ShapeOf(

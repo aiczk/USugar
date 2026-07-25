@@ -218,7 +218,7 @@ static class USugarNetworkMetadataPolicy
     {
         if (layout == null) throw new ArgumentNullException(nameof(layout));
         return layout.Methods
-            .Where(pair => LayoutPlanner.IsNetworkCallable(pair.Key))
+            .Where(pair => LayoutPlanBuilder.IsNetworkCallable(pair.Key))
             .OrderBy(pair => pair.Value.ExportName, StringComparer.Ordinal)
             .ThenBy(
                 pair => pair.Key.ToDisplayString(),

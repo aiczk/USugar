@@ -7,7 +7,7 @@ using Xunit;
 namespace USugar.Tests;
 
 /// <summary>
-/// Hand-enumeration audit item ⑤ (2026-07-17): LayoutPlanner's two hand-maintained event tables
+/// Hand-enumeration audit item ⑤ (2026-07-17): LayoutPlanBuilder's two hand-maintained event tables
 /// (UdonEventNames, UdonEventParamNames) are pinned BIDIRECTIONALLY against the SDK event node
 /// registry census in Fixtures/udon_event_registry.txt. A missing UdonEventNames row silently
 /// compiles a new SDK event as an inert ordinary method; a wrong/missing UdonEventParamNames row
@@ -80,10 +80,10 @@ public class EventRegistryCensusTests
     public void EveryRegistryEvent_HasAnEventNameRow_WithTheDerivedExport()
     {
         var bad = Registry
-            .Where(ev => !LayoutPlanner.UdonEventNames.TryGetValue(ev.MethodName, out var export)
+            .Where(ev => !LayoutPlanBuilder.UdonEventNames.TryGetValue(ev.MethodName, out var export)
                          || export != ev.ExportName)
             .Select(ev => $"{ev.MethodName} (expected {ev.ExportName}, "
-                          + $"got {(LayoutPlanner.UdonEventNames.TryGetValue(ev.MethodName, out var g) ? g : "<missing — event compiles as an inert ordinary method>")})")
+                          + $"got {(LayoutPlanBuilder.UdonEventNames.TryGetValue(ev.MethodName, out var g) ? g : "<missing — event compiles as an inert ordinary method>")})")
             .ToList();
         Assert.True(bad.Count == 0, "UdonEventNames drift vs SDK registry:\n" + string.Join("\n", bad));
     }
@@ -94,7 +94,7 @@ public class EventRegistryCensusTests
         var bad = new List<string>();
         foreach (var ev in Registry.Where(e => e.ParamVars.Length > 0))
         {
-            if (!LayoutPlanner.UdonEventParamNames.TryGetValue(ev.MethodName, out var actual))
+            if (!LayoutPlanBuilder.UdonEventParamNames.TryGetValue(ev.MethodName, out var actual))
                 bad.Add($"{ev.MethodName}: row MISSING (params silently unbound); expected [{string.Join(", ", ev.ParamVars)}]");
             else if (!actual.SequenceEqual(ev.ParamVars, StringComparer.Ordinal))
                 bad.Add($"{ev.MethodName}: expected [{string.Join(", ", ev.ParamVars)}], got [{string.Join(", ", actual)}]");
@@ -106,7 +106,7 @@ public class EventRegistryCensusTests
     public void ParamlessRegistryEvents_HaveNoParamRow()
     {
         var bad = Registry
-            .Where(ev => ev.ParamVars.Length == 0 && LayoutPlanner.UdonEventParamNames.ContainsKey(ev.MethodName))
+            .Where(ev => ev.ParamVars.Length == 0 && LayoutPlanBuilder.UdonEventParamNames.ContainsKey(ev.MethodName))
             .Select(ev => ev.MethodName)
             .ToList();
         Assert.True(bad.Count == 0, "param rows for param-less events (stale data): " + string.Join(", ", bad));
@@ -118,7 +118,7 @@ public class EventRegistryCensusTests
     public void EveryEventNameRow_ExistsInRegistry_OrIsExplicitlyExempt()
     {
         var registryNames = new HashSet<string>(Registry.Select(e => e.MethodName), StringComparer.Ordinal);
-        var stale = LayoutPlanner.UdonEventNames.Keys
+        var stale = LayoutPlanBuilder.UdonEventNames.Keys
             .Where(k => !registryNames.Contains(k) && !RegistryLessEvents.ContainsKey(k))
             .ToList();
         Assert.True(stale.Count == 0,
@@ -129,7 +129,7 @@ public class EventRegistryCensusTests
     public void EveryParamRow_KeyExistsInRegistry()
     {
         var registryNames = new HashSet<string>(Registry.Select(e => e.MethodName), StringComparer.Ordinal);
-        var stale = LayoutPlanner.UdonEventParamNames.Keys.Where(k => !registryNames.Contains(k)).ToList();
+        var stale = LayoutPlanBuilder.UdonEventParamNames.Keys.Where(k => !registryNames.Contains(k)).ToList();
         Assert.True(stale.Count == 0, "UdonEventParamNames rows with no SDK registry node: " + string.Join(", ", stale));
     }
 
@@ -141,9 +141,9 @@ public class EventRegistryCensusTests
         {
             Assert.False(registryNames.Contains(name),
                 $"'{name}' is exempt as registry-less but the SDK registry now defines it — delete the exemption");
-            Assert.True(LayoutPlanner.UdonEventNames.TryGetValue(name, out var actual) && actual == export,
+            Assert.True(LayoutPlanBuilder.UdonEventNames.TryGetValue(name, out var actual) && actual == export,
                 $"exempt event '{name}' must exist in UdonEventNames as {export}");
-            Assert.False(LayoutPlanner.UdonEventParamNames.ContainsKey(name),
+            Assert.False(LayoutPlanBuilder.UdonEventParamNames.ContainsKey(name),
                 $"exempt event '{name}' is documented param-less but has a param row");
         }
     }
@@ -155,8 +155,8 @@ public class EventRegistryCensusTests
     {
         // Audit hazard #2: a param row whose event row was dropped/renamed is dead data — and the
         // event, if still compiled, binds nothing.
-        var orphans = LayoutPlanner.UdonEventParamNames.Keys
-            .Where(k => !LayoutPlanner.UdonEventNames.ContainsKey(k))
+        var orphans = LayoutPlanBuilder.UdonEventParamNames.Keys
+            .Where(k => !LayoutPlanBuilder.UdonEventNames.ContainsKey(k))
             .ToList();
         Assert.True(orphans.Count == 0, "UdonEventParamNames keys missing from UdonEventNames: " + string.Join(", ", orphans));
     }
@@ -165,7 +165,7 @@ public class EventRegistryCensusTests
     public void EveryExportName_FollowsTheUnderscoreLowerFirstRule()
     {
         // No irregulars exist today; a genuine irregular would need its own exempt list with a reason.
-        var bad = LayoutPlanner.UdonEventNames
+        var bad = LayoutPlanBuilder.UdonEventNames
             .Where(kv => kv.Value != "_" + char.ToLowerInvariant(kv.Key[0]) + kv.Key[1..])
             .Select(kv => $"{kv.Key} → {kv.Value}")
             .ToList();
@@ -178,7 +178,7 @@ public class EventRegistryCensusTests
         // Documented shape {lowerEventNoUnderscore}{UpperParam}: prefix is the lowered event name and
         // the remainder starts uppercase. (Which param name is correct is the fixture tests' job.)
         var bad = new List<string>();
-        foreach (var (evt, vars) in LayoutPlanner.UdonEventParamNames)
+        foreach (var (evt, vars) in LayoutPlanBuilder.UdonEventParamNames)
         {
             var lowered = char.ToLowerInvariant(evt[0]) + evt[1..];
             foreach (var v in vars)
@@ -193,6 +193,6 @@ public class EventRegistryCensusTests
     [Fact]
     public void ExportNameCache_IsExactlyTheEventNameValues()
     {
-        Assert.True(LayoutPlanner.UdonEventExportNames.SetEquals(LayoutPlanner.UdonEventNames.Values));
+        Assert.True(LayoutPlanBuilder.UdonEventExportNames.SetEquals(LayoutPlanBuilder.UdonEventNames.Values));
     }
 }

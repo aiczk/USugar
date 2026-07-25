@@ -44,7 +44,7 @@ public class CompilationPlanningContractTests
         Assert.DoesNotContain(stateFields, field =>
             field.FieldType == typeof(CompilationSession)
             || field.FieldType == typeof(Compilation)
-            || field.FieldType == typeof(LayoutPlanner)
+            || field.FieldType == typeof(LayoutPlanBuilder)
             || field.FieldType == typeof(UdonAbiCatalog));
     }
 

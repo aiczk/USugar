@@ -41,7 +41,7 @@ public sealed class DelegateBridgeEmitter
                 || !_context.Methods.Functions.TryGetValue(implementationMethod, out var target))
                 continue;
             var bridgeName = DelegateAbi.BridgeName(
-                LayoutPlanner.InterfaceDispatchName(interfaceMethod, interfaceLayout));
+                LayoutPlanBuilder.InterfaceDispatchName(interfaceMethod, interfaceLayout));
             EmitBody(bridgeName, interfaceMethod, null, target, implementationMethod);
         }
     }

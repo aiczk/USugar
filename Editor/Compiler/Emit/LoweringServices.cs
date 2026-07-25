@@ -19,7 +19,7 @@ public sealed partial class LoweringServices
     internal Compilation Compilation => _compilation;
     internal INamedTypeSymbol ClassSymbol => _classSymbol;
     internal CoreBuilder Builder => _builder;
-    internal LayoutPlanner Planner => _planner;
+    internal FrozenLayoutPlan Planner => _planner;
     internal IReadOnlyDictionary<IMethodSymbol, StructuredFunction> MethodFunctions => _methodFunctions;
     internal IReadOnlyDictionary<IMethodSymbol, ReturnSlot[]> MethodReturns => _methodReturns;
     internal IReadOnlyDictionary<IMethodSymbol, string[]> MethodParamVarIds => _methodParamVarIds;
@@ -39,7 +39,7 @@ public sealed partial class LoweringServices
     internal INamedTypeSymbol _classSymbol => _state.ClassSymbol;
     internal StructuredModule _module => _state.Module;
     internal CoreBuilder _builder => _state.Builder;
-    internal LayoutPlanner _planner => _state.Planner;
+    internal FrozenLayoutPlan _planner => _state.Planner;
     internal IReadOnlyDictionary<IMethodSymbol, StructuredFunction> _methodFunctions => _state.Methods.Functions;
     internal IReadOnlyDictionary<IMethodSymbol, MethodSlot> _methodSlots => _state.Methods.Slots;
     internal IReadOnlyDictionary<IMethodSymbol, ReturnSlot[]> _methodReturns => _state.Methods.Returns;
@@ -1479,7 +1479,7 @@ public sealed partial class LoweringServices
                     // A typed cross-call keeps the value copy-in inside the reentrant spill window.
                     bool ifaceSetReentrant = TryMarkReentrantCrossDispatch(propRef, ifaceSetter);
                     CrossCall(instanceVal,
-                        LayoutPlanner.InterfaceDispatchName(ifaceSetter, ifaceSetterMl),
+                        LayoutPlanBuilder.InterfaceDispatchName(ifaceSetter, ifaceSetterMl),
                         CrossCallParameters(ifaceSetter, ifaceSetterMl.ParamIds, new[] { srcVal }),
                         System.Array.Empty<ReturnSlot>(), StorageTypes.Void, ifaceSetReentrant);
                 }
@@ -2029,7 +2029,7 @@ public sealed partial class LoweringServices
                     $"Interface method group '{localIface.Name}.{targetMethod.Name}' has no receiver.");
             var interfaceLayout = _planner.GetLayout(localIface).Methods[targetMethod];
             var localBridge = DelegateAbi.BridgeName(
-                LayoutPlanner.InterfaceDispatchName(targetMethod, interfaceLayout));
+                LayoutPlanBuilder.InterfaceDispatchName(targetMethod, interfaceLayout));
             var binding = new DelegateBindingPlan(DelegateBindingKind.Receiver, targetMethod, localBridge);
             _state.Synthetics.RegisterReceiverBridge(binding);
             return new MaterializedDelegateBinding(
@@ -2044,7 +2044,7 @@ public sealed partial class LoweringServices
                     $"Interface method group '{iface.Name}.{targetMethod.Name}' has no receiver.");
             var interfaceLayout = _planner.GetLayout(iface).Methods[targetMethod];
             var bridgeName = DelegateAbi.BridgeName(
-                LayoutPlanner.InterfaceDispatchName(targetMethod, interfaceLayout));
+                LayoutPlanBuilder.InterfaceDispatchName(targetMethod, interfaceLayout));
             return new MaterializedDelegateBinding(
                 new DelegateBindingPlan(DelegateBindingKind.CrossProgram, targetMethod, bridgeName),
                 Const(0u, StorageTypes.UInt32), targetInstance, Const(null, StorageTypes.Object));
@@ -2154,7 +2154,7 @@ public sealed partial class LoweringServices
             targetMethod = constructed;
         }
         // wave-13 staticro lens (2026-07-04): a static method on a plain (non-UdonSharpBehaviour)
-        // helper class is never pre-planned by LayoutPlanner (Phase 1 only discovers
+        // helper class is never pre-planned by LayoutPlanBuilder (Phase 1 only discovers
         // UdonSharpBehaviour classes) — GetDelegateBridgeLayout's Plan() call would throw on the
         // frozen planner. A plain (non-delegate) call to the same method already works via
         // CollectForeignStaticCallsInOperation's per-program inlining into _methodFunctions; route
@@ -2167,7 +2167,7 @@ public sealed partial class LoweringServices
             RegisterDelegateDemand(targetMethod, bridgeExportName, _state.Generics.TypeParamMap);
         }
         // R-M2 (design §2): a method-group binding of a THIS-CLASS private / private-internal method. The
-        // planner no longer plans a speculative bridge for it (LayoutPlanner.IsExcludedFromSpeculativeBridge),
+        // planner no longer plans a speculative bridge for it (LayoutPlanBuilder.IsExcludedFromSpeculativeBridge),
         // so GetDelegateBridgeLayout below would throw — register the bridge on demand via
         // PendingDelegateBridges, exactly like the lambda/local-function/generic/foreign-static arms. The
         // binding itself is what makes the bridge needed, so this arm fires for the actual binding (the
@@ -2182,7 +2182,7 @@ public sealed partial class LoweringServices
         // A cross-CLASS private binding is not expressible in C# (CS0122), so the target is always this class.
         else if (!baseReceiver
                  && _methodFunctions.TryGetValue(targetMethod, out var privFunc)
-                 && LayoutPlanner.IsExcludedFromSpeculativeBridge(targetMethod)
+                 && LayoutPlanBuilder.IsExcludedFromSpeculativeBridge(targetMethod)
                  && SymbolEqualityComparer.Default.Equals(targetMethod.ContainingType, _classSymbol))
         {
             bridgeExportName = DelegateAbi.BridgeName(privFunc.Name);
@@ -2702,7 +2702,7 @@ public sealed partial class LoweringServices
         var rets = ml.Returns.ToArray();
         if (rets.Length > 1)
             return CrossCall(instanceVal, ml.ExportName, parameters, rets, StorageTypes.Void, reentrant);
-        var dispatchName = LayoutPlanner.InterfaceDispatchName(accessor, ml);
+        var dispatchName = LayoutPlanBuilder.InterfaceDispatchName(accessor, ml);
         var retType = accessor.ReturnsVoid ? "SystemVoid" : GetStorageTypeName(accessor.ReturnType);
         return CrossCall(instanceVal, dispatchName, parameters,
             accessor.ReturnsVoid ? System.Array.Empty<ReturnSlot>() : rets, new StorageType(retType), reentrant);

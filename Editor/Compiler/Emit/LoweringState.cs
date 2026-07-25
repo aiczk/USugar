@@ -11,7 +11,7 @@ public sealed class LoweringState
     public INamedTypeSymbol ClassSymbol => Environment.ClassSymbol;
     public UdonAbiCatalog AbiCatalog => Environment.AbiCatalog;
     public UdonAbiBinder Abi => Environment.Abi;
-    public LayoutPlanner Planner => Environment.Planner;
+    public FrozenLayoutPlan Planner => Environment.Planner;
     public MethodAnalysisCache MethodAnalyses => Environment.MethodAnalyses;
 
     // Mutable output and lowering state.

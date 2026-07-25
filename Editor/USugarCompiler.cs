@@ -54,7 +54,7 @@ public static class USugarCompiler
         USugarCompilationOrchestrator.CompileSynchronously(force: true);
 
     // Regenerates the tracked Event_* snapshot exclusively from the public SDK editor registry.
-    // EventRegistryCensusTests validates LayoutPlanner's event tables bidirectionally against it.
+    // EventRegistryCensusTests validates LayoutPlanBuilder's event tables bidirectionally against it.
 
     public static void DumpEventRegistry()
     {
@@ -65,7 +65,7 @@ public static class USugarCompiler
             "# UdonSharpBehaviour events (custom events are user-named; OnVariableChange binds via FieldChangeCallback).",
             "# Format: Event_Name|outParam:TypeFullName,... — RAW registry truth. Export names (_lowerFirst) and",
             "# param heap-var names ({lowerEvent}{UpperParam}) are DERIVED from these rows exactly like stock",
-            "# UdonSharp's CompilerUdonInterface.CacheInit; EventRegistryCensusTests pins LayoutPlanner's tables",
+            "# UdonSharp's CompilerUdonInterface.CacheInit; EventRegistryCensusTests pins LayoutPlanBuilder's tables",
             "# bidirectionally against this file.",
             "# Source: UdonEditorManager.Instance.GetNodeDefinitions() — regenerate via USugarCompiler.DumpEventRegistry.",
         };

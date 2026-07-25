@@ -211,7 +211,7 @@ public partial class InvocationHandler
             _lowering.GuardInterfaceDispatchRepresentation(op.Property.ContainingType, op.Property.Name);
             _lowering.RejectProgramLocalCrossBehaviourPropertyRead(op.Property); // CW22
             var ifaceInst = _lowering.VisitExpression(op.Instance);
-            return _lowering.CrossCall(ifaceInst, LayoutPlanner.InterfaceDispatchName(ifaceGetter, ifaceGetterMl),
+            return _lowering.CrossCall(ifaceInst, LayoutPlanBuilder.InterfaceDispatchName(ifaceGetter, ifaceGetterMl),
                 System.Array.Empty<CrossCallParameter>(), ifaceGetterMl.Returns.ToArray(),
                 new StorageType(returnType),
                 _lowering.TryMarkReentrantCrossDispatch(op, ifaceGetter)); // wave-12 r2 [V1]

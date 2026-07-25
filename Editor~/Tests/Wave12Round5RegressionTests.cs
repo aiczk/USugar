@@ -29,7 +29,7 @@ namespace USugar.Tests;
 ///      `new`-hidden method instead of the statically bound base method (VM-proven 162 where C#
 ///      gives 2): cross-program dispatch is name-keyed via Plan(Base)'s plain export, but the
 ///      derived program's plain export was owned by the NEW method — the planner collision-renamed
-///      the INHERITED member. LayoutPlanner now mangles the SHADOWING `new` declaration instead
+///      the INHERITED member. LayoutPlanBuilder now mangles the SHADOWING `new` declaration instead
 ///      (parameterless non-event non-[NetworkCallable] methods; parameterized ones were already
 ///      consistent through counter inheritance), so the statically bound chain keeps its plain
 ///      export name in every descendant program.
@@ -283,7 +283,7 @@ public class ShadowBase : UdonSharp.UdonSharpBehaviour {
 public class ShadowDrv : ShadowBase {
     public new int Get() { return 9; }
 }", "ShadowDrv");
-        var planner = new LayoutPlanner(comp);
+        var planner = new LayoutPlanBuilder(comp);
         var layout = planner.Plan(drv);
         var baseGet = (IMethodSymbol)drv.BaseType.GetMembers("Get")[0];
         var newGet = (IMethodSymbol)drv.GetMembers("Get")[0];
@@ -305,7 +305,7 @@ public class PlainBase : UdonSharp.UdonSharpBehaviour {
 public class PlainDrv : PlainBase {
     public int Other() { return 2; }
 }", "PlainDrv");
-        var planner = new LayoutPlanner(comp);
+        var planner = new LayoutPlanBuilder(comp);
         var layout = planner.Plan(drv);
         var baseGet = (IMethodSymbol)drv.BaseType.GetMembers("Get")[0];
         var own = (IMethodSymbol)drv.GetMembers("Other")[0];

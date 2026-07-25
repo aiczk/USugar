@@ -940,7 +940,7 @@ public partial class InvocationHandler
 
     CLeaf EmitInterfaceCall(IInvocationOperation op, IMethodSymbol target)
     {
-        // Use LayoutPlanner to get the interface's canonical naming
+        // Use LayoutPlanBuilder to get the interface's canonical naming
         var ifaceType = target.ContainingType as INamedTypeSymbol;
         MethodLayout ifaceMl = null;
         if (ifaceType != null)
@@ -979,7 +979,7 @@ public partial class InvocationHandler
 
         // Non-tuple: dispatch the canonical interface-qualified bridge name (matches the emitted bridge export
         // and stays collision-free across overloads / multiple interfaces / explicit impls).
-        var dispatchName = LayoutPlanner.InterfaceDispatchName(target, ifaceMl);
+        var dispatchName = LayoutPlanBuilder.InterfaceDispatchName(target, ifaceMl);
         var returnType = target.ReturnsVoid ? "SystemVoid" : _lowering.GetStorageTypeName(target.ReturnType);
         return _lowering.CrossCall(instanceVal, dispatchName, paramPairs,
             target.ReturnsVoid ? System.Array.Empty<ReturnSlot>() : ifaceReturns, new StorageType(returnType), ifaceReentrant);

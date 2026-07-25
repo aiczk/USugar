@@ -12,14 +12,14 @@ public sealed class UasmEmitter
     readonly ProgramLoweringPipeline _pipeline;
 
     public UasmEmitter(Compilation compilation, INamedTypeSymbol classSymbol,
-        LayoutPlanner planner = null, UdonAbiCatalog externRegistry = null)
+        FrozenLayoutPlan planner = null, UdonAbiCatalog externRegistry = null)
     {
         _pipeline = new ProgramLoweringPipeline(
             compilation, classSymbol, planner, externRegistry);
     }
 
     public UasmEmitter(CompilationSession session, INamedTypeSymbol classSymbol,
-        LayoutPlanner planner = null)
+        FrozenLayoutPlan planner = null)
     {
         _pipeline = new ProgramLoweringPipeline(session, classSymbol, planner);
     }
@@ -36,7 +36,7 @@ public sealed class UasmEmitter
     public INamedTypeSymbol ClassSymbol => _pipeline.ClassSymbol;
 
     internal CompilationSession Session => _pipeline.Session;
-    internal LayoutPlanner Planner => _pipeline.Planner;
+    internal FrozenLayoutPlan Planner => _pipeline.Planner;
     internal ResolvedEdgeResolver EdgeResolver => _pipeline.EdgeResolver;
     internal VirtualDispatch VirtualDispatchInstance => _pipeline.VirtualDispatchInstance;
     internal ClassTypeObjectContext ClassTypes => _pipeline.ClassTypes;

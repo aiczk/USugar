@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.ObjectModel;
 using System.Linq;
 using Microsoft.CodeAnalysis;
 
@@ -25,8 +26,8 @@ public class MethodLayout
     {
         ExportName = exportName;
         BodyLabel = bodyLabel;
-        ParamIds = paramIds;
-        Returns = returns ?? Array.Empty<ReturnSlot>();
+        ParamIds = Array.AsReadOnly((paramIds ?? Array.Empty<string>()).ToArray());
+        Returns = Array.AsReadOnly((returns ?? Array.Empty<ReturnSlot>()).ToArray());
     }
 
     // ── Convenience accessors (eases migration of downstream consumers) ──
@@ -77,11 +78,22 @@ public class TypeLayout
         IReadOnlyDictionary<string, int> symbolCounters = null,
         Dictionary<IMethodSymbol, DelegateBridgeLayout> delegateBridges = null)
     {
-        Methods = methods;
-        Fields = fields;
-        SymbolCounters = symbolCounters ?? new Dictionary<string, int>();
-        DelegateBridges = delegateBridges
-            ?? new Dictionary<IMethodSymbol, DelegateBridgeLayout>(SymbolEqualityComparer.Default);
+        Methods = new ReadOnlyDictionary<IMethodSymbol, MethodLayout>(
+            new Dictionary<IMethodSymbol, MethodLayout>(
+                methods, SymbolEqualityComparer.Default));
+        Fields = new ReadOnlyDictionary<IFieldSymbol, FieldLayout>(
+            new Dictionary<IFieldSymbol, FieldLayout>(
+                fields, SymbolEqualityComparer.Default));
+        SymbolCounters = new ReadOnlyDictionary<string, int>(
+            symbolCounters == null
+                ? new Dictionary<string, int>()
+                : new Dictionary<string, int>(symbolCounters));
+        DelegateBridges = new ReadOnlyDictionary<IMethodSymbol, DelegateBridgeLayout>(
+            delegateBridges == null
+                ? new Dictionary<IMethodSymbol, DelegateBridgeLayout>(
+                    SymbolEqualityComparer.Default)
+                : new Dictionary<IMethodSymbol, DelegateBridgeLayout>(
+                    delegateBridges, SymbolEqualityComparer.Default));
     }
 }
 
@@ -90,16 +102,15 @@ public class TypeLayout
 /// Computes TypeLayout once per type (cached). All consumers
 /// (Emitter, cross-class calls) get consistent names.
 /// </summary>
-public class LayoutPlanner
+public sealed class LayoutPlanBuilder
 {
     readonly Compilation _compilation;
     public CompilationTypeCensus Census { get; }
     readonly Dictionary<INamedTypeSymbol, TypeLayout> _cache = new(SymbolEqualityComparer.Default);
-    bool _frozen;
 
     // Wave-14 r3: interfaces implemented by at least one user STRUCT, populated (serially, Phase 1) by
     // every caller that walks StructDeclarationSyntax alongside the existing class-interface walk — see
-    // USugarCompilationOrchestrator and UasmEmitter.EnsurePlannerReady. Struct methods never get an
+    // USugarCompilationOrchestrator. Struct methods never get an
     // interface bridge (ComputeBridges only bridges the CLASS's own interface implementations), so an
     // interface-typed receiver that actually holds struct data dispatches SendCustomEvent to a bridge name
     // that is exported by NO program — VM-proven infinite self re-entry / stack overflow
@@ -113,7 +124,6 @@ public class LayoutPlanner
 
     public void RegisterStructImplementedInterface(INamedTypeSymbol iface)
     {
-        ThrowIfFrozen(nameof(RegisterStructImplementedInterface));
         _interfacesWithStructImplementor.Add(iface);
     }
 
@@ -125,16 +135,8 @@ public class LayoutPlanner
 
     public void RegisterClassImplementedInterface(INamedTypeSymbol iface, bool isBehaviour)
     {
-        ThrowIfFrozen(nameof(RegisterClassImplementedInterface));
         if (isBehaviour) _interfacesWithBehaviourImplementor.Add(iface);
         else _interfacesWithUserClassImplementor.Add(iface);
-    }
-
-    void ThrowIfFrozen(string operation)
-    {
-        if (_frozen)
-            throw new System.InvalidOperationException(
-                $"LayoutPlanner is frozen; '{operation}' cannot mutate interface implementation facts.");
     }
 
     public bool InterfaceIsLocalUserClassOnly(INamedTypeSymbol iface)
@@ -400,12 +402,12 @@ public class LayoutPlanner
 
     public CompilationSession Session { get; }
 
-    public LayoutPlanner(Compilation compilation)
+    public LayoutPlanBuilder(Compilation compilation)
         : this(new CompilationSession(compilation, UdonAbiCatalog.Empty))
     {
     }
 
-    public LayoutPlanner(CompilationSession session)
+    public LayoutPlanBuilder(CompilationSession session)
     {
         Session = session ?? throw new System.ArgumentNullException(nameof(session));
         _compilation = session.Compilation;
@@ -418,13 +420,10 @@ public class LayoutPlanner
     /// Compute or retrieve cached TypeLayout for the given type.
     /// This is the ONLY place naming decisions are made.
     /// </summary>
-    public bool IsFrozen => _frozen;
     public IReadOnlyDictionary<INamedTypeSymbol, TypeLayout> AllLayouts => _cache;
-    public void Freeze() => _frozen = true;
 
-    public void PrepareCompilation()
+    public FrozenLayoutPlan Build()
     {
-        if (_frozen) return;
         foreach (var type in Census.Classes)
         {
             var isBehaviour = ExternResolver.IsUdonSharpBehaviour(type);
@@ -438,16 +437,19 @@ public class LayoutPlanner
         foreach (var type in Census.Structs)
             foreach (var iface in type.AllInterfaces)
                 RegisterStructImplementedInterface(iface);
-        Freeze();
+        return new FrozenLayoutPlan(
+            Session,
+            Census,
+            _cache,
+            _interfacesWithStructImplementor,
+            _interfacesWithUserClassImplementor,
+            _interfacesWithBehaviourImplementor);
     }
 
     public TypeLayout Plan(INamedTypeSymbol type)
     {
         if (_cache.TryGetValue(type, out var cached))
             return cached;
-        if (_frozen)
-            throw new System.InvalidOperationException(
-                $"LayoutPlanner is frozen but type '{type.Name}' was not pre-planned");
 
         TypeLayout layout;
         if (type.TypeKind == TypeKind.Interface)
@@ -459,15 +461,9 @@ public class LayoutPlanner
         return layout;
     }
 
-    /// <summary>
-    /// Retrieve a pre-planned TypeLayout. Only valid after Freeze().
-    /// Throws if the planner is not frozen or the type was not pre-planned.
-    /// </summary>
+    /// <summary>Retrieve a layout already materialized by this builder.</summary>
     public TypeLayout GetLayout(INamedTypeSymbol type)
     {
-        if (!_frozen)
-            throw new System.InvalidOperationException(
-                "LayoutPlanner must be frozen before accessing layouts via GetLayout().");
         if (!_cache.TryGetValue(type, out var layout))
             throw new System.InvalidOperationException(
                 $"Type '{type.Name}' was not pre-planned.");

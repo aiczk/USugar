@@ -6,7 +6,7 @@ using Microsoft.CodeAnalysis.CSharp;
 
 namespace USugar.Tests;
 
-public class LayoutPlannerTests
+public class LayoutPlanBuilderTests
 {
     static readonly string StubSource = @"
 namespace UdonSharp
@@ -48,7 +48,7 @@ namespace UnityEngine
 public class Simple : UdonSharp.UdonSharpBehaviour {
     public void DoThing() { }
 }", "Simple");
-        var planner = new LayoutPlanner(comp);
+        var planner = new LayoutPlanBuilder(comp);
         var layout = planner.Plan(sym);
         var method = sym.GetMembers("DoThing")[0] as IMethodSymbol;
         Assert.True(layout.Methods.TryGetValue(method, out var ml));
@@ -64,7 +64,7 @@ public class Simple : UdonSharp.UdonSharpBehaviour {
 public class WithParams : UdonSharp.UdonSharpBehaviour {
     public void Send(int type, int arg) { }
 }", "WithParams");
-        var planner = new LayoutPlanner(comp);
+        var planner = new LayoutPlanBuilder(comp);
         var layout = planner.Plan(sym);
         var method = sym.GetMembers("Send")[0] as IMethodSymbol;
         Assert.True(layout.Methods.TryGetValue(method, out var ml));
@@ -81,7 +81,7 @@ public class WithParams : UdonSharp.UdonSharpBehaviour {
 public class WithReturn : UdonSharp.UdonSharpBehaviour {
     public int GetValue() { return 0; }
 }", "WithReturn");
-        var planner = new LayoutPlanner(comp);
+        var planner = new LayoutPlanBuilder(comp);
         var layout = planner.Plan(sym);
         var method = sym.GetMembers("GetValue")[0] as IMethodSymbol;
         Assert.True(layout.Methods.TryGetValue(method, out var ml));
@@ -97,7 +97,7 @@ public class WithReturn : UdonSharp.UdonSharpBehaviour {
 public class WithStart : UdonSharp.UdonSharpBehaviour {
     void Start() { }
 }", "WithStart");
-        var planner = new LayoutPlanner(comp);
+        var planner = new LayoutPlanBuilder(comp);
         var layout = planner.Plan(sym);
         var method = sym.GetMembers("Start")[0] as IMethodSymbol;
         Assert.True(layout.Methods.TryGetValue(method, out var ml));
@@ -113,7 +113,7 @@ public class WithStart : UdonSharp.UdonSharpBehaviour {
 public class WithPrivate : UdonSharp.UdonSharpBehaviour {
     void DoSecret() { }
 }", "WithPrivate");
-        var planner = new LayoutPlanner(comp);
+        var planner = new LayoutPlanBuilder(comp);
         var layout = planner.Plan(sym);
         var method = sym.GetMembers("DoSecret")[0] as IMethodSymbol;
         Assert.True(layout.Methods.ContainsKey(method));
@@ -127,7 +127,7 @@ public class WithPrivate : UdonSharp.UdonSharpBehaviour {
 public class Cached : UdonSharp.UdonSharpBehaviour {
     public void Foo() { }
 }", "Cached");
-        var planner = new LayoutPlanner(comp);
+        var planner = new LayoutPlanBuilder(comp);
         var layout1 = planner.Plan(sym);
         var layout2 = planner.Plan(sym);
         Assert.Same(layout1, layout2);
@@ -144,7 +144,7 @@ public class Multi : UdonSharp.UdonSharpBehaviour {
     public void Second(int x) { }
     public void Third(int x) { }
 }", "Multi");
-        var planner = new LayoutPlanner(comp);
+        var planner = new LayoutPlanBuilder(comp);
         var layout = planner.Plan(sym);
 
         var first = sym.GetMembers("First")[0] as IMethodSymbol;
@@ -165,7 +165,7 @@ public class WithFields : UdonSharp.UdonSharpBehaviour {
     public int score;
     [UdonSharp.UdonSynced] int syncedVal;
 }", "WithFields");
-        var planner = new LayoutPlanner(comp);
+        var planner = new LayoutPlanBuilder(comp);
         var layout = planner.Plan(sym);
 
         var scoreField = sym.GetMembers("score")[0] as IFieldSymbol;
@@ -190,7 +190,7 @@ public class Base1 : UdonSharp.UdonSharpBehaviour {
 public class Derived1 : Base1 {
     public void Recv(int x) { }
 }", "Derived1");
-        var planner = new LayoutPlanner(comp);
+        var planner = new LayoutPlanBuilder(comp);
         var baseSym = comp.GetTypeByMetadataName("Base1");
 
         var baseLayout = planner.Plan(baseSym);
@@ -212,7 +212,7 @@ public class Derived1 : Base1 {
 public class WithPrivateReturn : UdonSharp.UdonSharpBehaviour {
     int GetSecret() { return 42; }
 }", "WithPrivateReturn");
-        var planner = new LayoutPlanner(comp);
+        var planner = new LayoutPlanBuilder(comp);
         var layout = planner.Plan(sym);
         var method = sym.GetMembers("GetSecret")[0] as IMethodSymbol;
         Assert.Single(layout.Methods[method].Returns);
@@ -229,7 +229,7 @@ namespace VRC.SDKBase { public class VRCPlayerApi { } }
 public class WithEvent : UdonSharp.UdonSharpBehaviour {
     public override void OnPlayerJoined(VRC.SDKBase.VRCPlayerApi player) { }
 }", "WithEvent");
-        var planner = new LayoutPlanner(comp);
+        var planner = new LayoutPlanBuilder(comp);
         var layout = planner.Plan(sym);
         var method = sym.GetMembers("OnPlayerJoined")[0] as IMethodSymbol;
         Assert.True(layout.Methods.ContainsKey(method));
@@ -249,7 +249,7 @@ public class EventAndMethod : UdonSharp.UdonSharpBehaviour {
     public override void OnPlayerJoined(VRC.SDKBase.VRCPlayerApi player) { }
     public void DoStuff(int player) { }
 }", "EventAndMethod");
-        var planner = new LayoutPlanner(comp);
+        var planner = new LayoutPlanBuilder(comp);
         var layout = planner.Plan(sym);
 
         var doStuff = sym.GetMembers("DoStuff")[0] as IMethodSymbol;
@@ -264,13 +264,13 @@ public class EventAndMethod : UdonSharp.UdonSharpBehaviour {
 public class WithCounters : UdonSharp.UdonSharpBehaviour {
     public void Send(int x) { }
 }", "WithCounters");
-        var planner = new LayoutPlanner(comp);
+        var planner = new LayoutPlanBuilder(comp);
         var layout = planner.Plan(sym);
         Assert.NotNull(layout.SymbolCounters);
         Assert.True(layout.SymbolCounters.ContainsKey("x__param"));
     }
 
-    // --- Parity tests: LayoutPlanner must produce the same names as existing UasmEmitter ---
+    // --- Parity tests: LayoutPlanBuilder must produce the same names as existing UasmEmitter ---
 
     [Theory]
     [InlineData("public class PT1 : UdonSharp.UdonSharpBehaviour { public void Foo() {} public int Bar(int x) { return x; } }",
@@ -288,7 +288,7 @@ public class WithCounters : UdonSharp.UdonSharpBehaviour {
         var fullSource = "using UdonSharp;\n" + source;
         var uasm = TestHelper.CompileToUasm(fullSource, className);
 
-        // Get layout from LayoutPlanner (uses lightweight stubs)
+        // Get layout from LayoutPlanBuilder (uses lightweight stubs)
         var tree = CSharpSyntaxTree.ParseText(StubSource + source);
         var refs = new[] {
             MetadataReference.CreateFromFile(typeof(object).Assembly.Location),
@@ -301,7 +301,7 @@ public class WithCounters : UdonSharp.UdonSharpBehaviour {
             new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
 
         var sym = comp.GetTypeByMetadataName(className);
-        var planner = new LayoutPlanner(comp);
+        var planner = new LayoutPlanBuilder(comp);
         var layout = planner.Plan(sym);
 
         // Verify each method's export name appears in the UASM
@@ -328,7 +328,7 @@ public class WithCounters : UdonSharp.UdonSharpBehaviour {
     public void Plan_CrossClassCall_ProducesSameNamesAsEmitter()
     {
         // This test compiles two classes and verifies that
-        // LayoutPlanner produces the same cross-class names that
+        // LayoutPlanBuilder produces the same cross-class names that
         // the existing emitter uses for SetProgramVariable/SendCustomEvent
         var source = @"
 using UdonSharp;
@@ -342,7 +342,7 @@ public class Target : UdonSharpBehaviour {
         var exports = Regex.Matches(uasm, @"\.export (\S+)")
             .Cast<Match>().Select(m => m.Groups[1].Value).ToHashSet();
 
-        // Get LayoutPlanner layout
+        // Get LayoutPlanBuilder layout
         var tree = CSharpSyntaxTree.ParseText(StubSource + @"
 public class Target : UdonSharp.UdonSharpBehaviour {
     public void SendAction(int type, int arg) { }
@@ -358,7 +358,7 @@ public class Target : UdonSharp.UdonSharpBehaviour {
         var comp = CSharpCompilation.Create("Test", new[] { tree }, refs,
             new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
         var sym = comp.GetTypeByMetadataName("Target");
-        var planner = new LayoutPlanner(comp);
+        var planner = new LayoutPlanBuilder(comp);
         var layout = planner.Plan(sym);
 
         // SendAction has params → indexed name
@@ -371,7 +371,7 @@ public class Target : UdonSharp.UdonSharpBehaviour {
     }
 
     [Fact]
-    public void Freeze_BlocksNewPlanning()
+    public void Build_PublishesEveryCompilationLayout()
     {
         var source = @"
 public class A : UdonSharp.UdonSharpBehaviour { public void Foo() {} }
@@ -387,20 +387,18 @@ public class B : UdonSharp.UdonSharpBehaviour { public void Bar() {} }
         };
         var comp = CSharpCompilation.Create("Test", new[] { tree }, refs,
             new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
-        var planner = new LayoutPlanner(comp);
+        var planner = new LayoutPlanBuilder(comp);
         var typeA = comp.GetTypeByMetadataName("A");
         var typeB = comp.GetTypeByMetadataName("B");
-        planner.Plan(typeA);
-        planner.Freeze();
-        // A is cached, should work
-        var layoutA = planner.Plan(typeA);
-        Assert.NotNull(layoutA);
-        // B was not planned, should throw
-        Assert.Throws<System.InvalidOperationException>(() => planner.Plan(typeB));
+        var frozen = planner.Build();
+
+        Assert.NotNull(frozen.GetLayout(typeA));
+        Assert.NotNull(frozen.GetLayout(typeB));
+        Assert.Null(typeof(FrozenLayoutPlan).GetMethod(nameof(LayoutPlanBuilder.Plan)));
     }
 
     [Fact]
-    public void Freeze_InterfacesPrePlanned_AllowsComputeBridges()
+    public void Build_InterfacesPrePlanned_AllowsComputeBridges()
     {
         var source = @"
 public interface IDoable { void Do(); }
@@ -416,15 +414,10 @@ public class Impl : UdonSharp.UdonSharpBehaviour, IDoable { public void Do() {} 
         };
         var comp = CSharpCompilation.Create("Test", new[] { tree }, refs,
             new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
-        var planner = new LayoutPlanner(comp);
+        var planner = new LayoutPlanBuilder(comp);
         var implType = comp.GetTypeByMetadataName("Impl");
-        // Pre-plan class AND its interfaces (matching USugarCompiler Phase 1)
-        planner.Plan(implType);
-        foreach (var iface in implType.AllInterfaces)
-            planner.Plan(iface);
-        planner.Freeze();
-        // ComputeBridges should work without throwing
-        var bridges = planner.ComputeBridges(implType);
+        var frozen = planner.Build();
+        var bridges = frozen.ComputeBridges(implType);
         Assert.NotNull(bridges);
     }
 }

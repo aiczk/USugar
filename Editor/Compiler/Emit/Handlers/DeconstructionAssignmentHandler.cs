@@ -88,7 +88,7 @@ public class DeconstructionAssignmentHandler : AssignmentHandlerBase, IOperation
             // ladder, self/cross routing) — VisitExpression already returns the dispatched conv-ret,
             // which for a tuple-return delegate IS the packed SystemObjectArray aggregate (Stage 1.75
             // design 2026-07-04 §1) — deconstruct it like any other aggregate value. A delegate's
-            // ContainingType is a BCL Func/Action, never planned by LayoutPlanner, so this must be
+            // ContainingType is a BCL Func/Action, never planned by LayoutPlanBuilder, so this must be
             // checked BEFORE the same-class/cross-behaviour method-call arms below.
             if (callValue is IInvocationOperation dlgInvocation
                 && dlgInvocation.TargetMethod.MethodKind == MethodKind.DelegateInvoke)

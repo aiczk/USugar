@@ -32,7 +32,7 @@ public class ClosedMapHost : UdonSharpBehaviour {
     }
 
     [Fact]
-    public void FrozenSharedPlanner_ParallelEmitDoesNotRegisterLayouts()
+    public void FrozenSharedPlan_ParallelEmitDoesNotRegisterLayouts()
     {
         var tree = CSharpSyntaxTree.ParseText(TestHelper.StubSource + @"
 public interface IPlanned { int Read(); }
@@ -48,8 +48,7 @@ public class PlannedB : UdonSharp.UdonSharpBehaviour, IPlanned { public int Read
             .Where(t => t != null && t.Name.StartsWith("Planned", StringComparison.Ordinal)
                 && ExternResolver.IsUdonSharpBehaviour(t))
             .ToArray();
-        var planner = new LayoutPlanner(compilation);
-        planner.PrepareCompilation();
+        var planner = new LayoutPlanBuilder(compilation).Build();
         var plannedCount = planner.AllLayouts.Count;
 
         var outputs = new ConcurrentBag<string>();
@@ -58,31 +57,24 @@ public class PlannedB : UdonSharp.UdonSharpBehaviour, IPlanned { public int Read
 
         Assert.Equal(classes.Length, outputs.Count);
         Assert.Equal(plannedCount, planner.AllLayouts.Count);
-        Assert.True(planner.IsFrozen);
     }
 
     [Fact]
-    public void FrozenPlanner_RejectsEveryInterfaceFactWriter()
+    public void FrozenPlan_HasNoPlanningOrFactMutationSurface()
     {
-        var tree = CSharpSyntaxTree.ParseText(TestHelper.StubSource + @"
-public interface IFrozenFact { }
-");
-        var compilation = CSharpCompilation.Create("PlannerFreezeWriters", new[] { tree },
-            TestHelper.StandardRefs,
-            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
-        var iface = compilation.GetTypeByMetadataName("IFrozenFact");
-        var planner = new LayoutPlanner(compilation);
-        planner.Freeze();
+        var publicMethods = typeof(FrozenLayoutPlan).GetMethods()
+            .Select(method => method.Name)
+            .ToHashSet(StringComparer.Ordinal);
 
-        var structError = Assert.Throws<InvalidOperationException>(
-            () => planner.RegisterStructImplementedInterface(iface));
-        var classError = Assert.Throws<InvalidOperationException>(
-            () => planner.RegisterClassImplementedInterface(iface, isBehaviour: false));
-        var behaviourError = Assert.Throws<InvalidOperationException>(
-            () => planner.RegisterClassImplementedInterface(iface, isBehaviour: true));
-
-        Assert.Contains("frozen", structError.Message);
-        Assert.Contains("frozen", classError.Message);
-        Assert.Contains("frozen", behaviourError.Message);
+        Assert.DoesNotContain(nameof(LayoutPlanBuilder.Plan), publicMethods);
+        Assert.DoesNotContain(nameof(LayoutPlanBuilder.Build), publicMethods);
+        Assert.DoesNotContain(nameof(LayoutPlanBuilder.RegisterStructImplementedInterface), publicMethods);
+        Assert.DoesNotContain(nameof(LayoutPlanBuilder.RegisterClassImplementedInterface), publicMethods);
+        Assert.DoesNotContain(
+            typeof(FrozenLayoutPlan).GetFields(
+                System.Reflection.BindingFlags.Instance
+                | System.Reflection.BindingFlags.Public
+                | System.Reflection.BindingFlags.NonPublic),
+            field => field.FieldType == typeof(LayoutPlanBuilder));
     }
 }

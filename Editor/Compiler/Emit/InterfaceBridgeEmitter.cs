@@ -31,7 +31,7 @@ public sealed class InterfaceBridgeEmitter
                 _context.Storage.TryDeclareVar(interfaceLayout.ReturnId,
                     _context.ResolveStorageType(interfaceMethod.ReturnType));
 
-            var exportName = LayoutPlanner.InterfaceDispatchName(interfaceMethod, interfaceLayout);
+            var exportName = LayoutPlanBuilder.InterfaceDispatchName(interfaceMethod, interfaceLayout);
             if (implementationMethod == null
                 || !_context.Methods.Functions.TryGetValue(implementationMethod, out var implementation))
                 throw new InvalidOperationException(
