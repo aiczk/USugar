@@ -22,7 +22,7 @@ public class CompilationSessionTests
     }
 
     [Fact]
-    public void PureTypeNameResolutionDoesNotMutateSessionFacts()
+    public void CanonicalTypeIdentityDoesNotMutateSessionFacts()
     {
         var compilation = CreateCompilation(
             "namespace VRC.Sample { public class ForeignResource { } }");
@@ -30,7 +30,7 @@ public class CompilationSessionTests
         var session = new CompilationSession(compilation, TestHelper.RegistryFacts);
 
         Assert.Equal("VRCSampleForeignResource",
-            ExternResolver.GetUdonTypeName(type));
+            UdonTypeIdentity.From(type).Name);
         Assert.Null(session.TypeFacts.IsReferenceFact("VRCSampleForeignResource"));
 
         Assert.Equal("VRCSampleForeignResource",

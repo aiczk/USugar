@@ -98,7 +98,8 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
             var combineLeftVal = VisitExpression(op.LeftOperand);
             var combineRightVal = VisitExpression(op.RightOperand);
 
-            var sigPart = DelegateAbi.BuildSigPart(invoke, _ctx.Generics.TypeParamMap);
+            var sigPart = DelegateAbi.BuildSigPart(
+                invoke, _ctx.Session.Types, _ctx.Generics.TypeParamMap);
             RegisterMulticastSig(sigPart, invoke,
                 op.OperatorKind == BinaryOperatorKind.Add
                     ? MulticastOperations.Combine
@@ -185,7 +186,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
             }
             ClassAbi.RejectImplicitToString(lOp.Type);
             ClassAbi.RejectImplicitToString(rOp.Type);
-            if (IsUserEnum(ResolveType(lOp.Type)) || IsUserEnum(ResolveType(rOp.Type)))
+            if (IsFoldedEnum(ResolveType(lOp.Type)) || IsFoldedEnum(ResolveType(rOp.Type)))
             {
                 var l = VisitExpression(lOp);
                 l = ConvertConcatOperand(l, lOp);
@@ -223,7 +224,8 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
             var int32 = _compilation.GetSpecialType(SpecialType.System_Int32);
             var raw = ExternCall(
                 ExternResolver.ResolveBuiltInBinaryExtern(op.OperatorKind,
-                    ResolveType(int32), ResolveType(int32), ResolveType(int32)),
+                    ResolveType(int32), ResolveType(int32),
+                    ResolveType(int32), GetStorageTypeName),
                 new List<CLeaf> { li, ri }, StorageTypes.Int32);
             return EmitNarrowingConvert(raw, "SystemInt32", resultType);
         }
@@ -232,7 +234,9 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
             ? _ctx.Abi.BindOperator(op.OperatorMethod, type => GetStorageTypeName(type))
             : _ctx.Abi.BindExact(ExternResolver.ResolveBuiltInBinaryExtern(
                 op.OperatorKind,
-                ResolveType(op.LeftOperand.Type), ResolveType(op.RightOperand.Type), ResolveType(op.Type)));
+                ResolveType(op.LeftOperand.Type),
+                ResolveType(op.RightOperand.Type),
+                ResolveType(op.Type), GetStorageTypeName));
 
         // UnityEngineObject equality/inequality: cast operands to UnityEngineObject temps
         if (op.OperatorMethod != null
@@ -453,7 +457,8 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
         return ExternCall(
             ExternResolver.ResolveBuiltInBinaryExtern(
                 BinaryOperatorKind.ExclusiveOr,
-                ResolveType(op.Operand.Type), ResolveType(op.Operand.Type), ResolveType(op.Type)),
+                ResolveType(op.Operand.Type), ResolveType(op.Operand.Type),
+                ResolveType(op.Type), GetStorageTypeName),
             new List<CLeaf> { operandVal, allBitsConst },
             new StorageType(resultType));
     }

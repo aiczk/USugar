@@ -45,12 +45,17 @@ public class C {
     static IMethodSymbol MethodOf(CSharpCompilation c, string name) =>
         c.GetTypeByMetadataName("C").GetMembers(name).OfType<IMethodSymbol>().Single();
 
+    static UdonTypeSystem Types(CSharpCompilation compilation)
+        => new CompilationSession(
+            compilation, TestHelper.RegistryFacts).Types;
+
     [Fact]
     public void BuildSigPart_FuncIntInt_UsesUdonTypeNames()
     {
         var c = AbiCompile(AbiSrc);
         Assert.Equal("SystemInt32__SystemInt32",
-            DelegateAbi.BuildSigPart(DelegateOf(c, "F").DelegateInvokeMethod));
+            DelegateAbi.BuildSigPart(
+                DelegateOf(c, "F").DelegateInvokeMethod, Types(c)));
     }
 
     [Fact]
@@ -58,7 +63,8 @@ public class C {
     {
         var c = AbiCompile(AbiSrc);
         Assert.Equal("Void__Void",
-            DelegateAbi.BuildSigPart(DelegateOf(c, "A").DelegateInvokeMethod));
+            DelegateAbi.BuildSigPart(
+                DelegateOf(c, "A").DelegateInvokeMethod, Types(c)));
     }
 
     [Fact]
@@ -68,7 +74,8 @@ public class C {
         // builder identity: every consumer (caller convention, bridge, conv-var decl) shares this output.
         var c = AbiCompile(AbiSrc);
         Assert.Equal("SystemObjectArray__SystemInt32",
-            DelegateAbi.BuildSigPart(DelegateOf(c, "G").DelegateInvokeMethod));
+            DelegateAbi.BuildSigPart(
+                DelegateOf(c, "G").DelegateInvokeMethod, Types(c)));
     }
 
     [Fact]
@@ -77,9 +84,41 @@ public class C {
         // Caller derives the __dlgc_ name from the delegate type, the bridge from the target method —
         // for an exact (non-variant) binding the two derivations must be byte-identical.
         var c = AbiCompile(AbiSrc);
+        var types = Types(c);
         Assert.Equal(
-            DelegateAbi.BuildSigPart(DelegateOf(c, "F").DelegateInvokeMethod),
-            DelegateAbi.BuildSigPart(MethodOf(c, "M")));
+            DelegateAbi.BuildSigPart(
+                DelegateOf(c, "F").DelegateInvokeMethod, types),
+            DelegateAbi.BuildSigPart(MethodOf(c, "M"), types));
+    }
+
+    [Fact]
+    public void BuildSigPartUsesTheSessionEnumAuthority()
+    {
+        var compilation = TestHelper.BuildCompilation(@"
+using UdonSharp;
+using VRC.SDKBase;
+public delegate void FoldedEnumDelegate(UnityEngine.HideFlags value);
+public delegate void RegisteredEnumDelegate(
+    VRC_EventHandler.VrcBroadcastType value);
+public class DelegateEnumCarrier : UdonSharpBehaviour
+{
+    public FoldedEnumDelegate folded;
+    public RegisteredEnumDelegate registered;
+}", "DelegateEnumCarrier", out var carrier);
+        var fields = carrier.GetMembers().OfType<IFieldSymbol>()
+            .ToDictionary(field => field.Name);
+        var types = new CompilationSession(
+            compilation, TestHelper.RegistryFacts).Types;
+
+        Assert.Equal("SystemInt32__Void",
+            DelegateAbi.BuildSigPart(
+                ((INamedTypeSymbol)fields["folded"].Type)
+                .DelegateInvokeMethod, types));
+        Assert.Equal(
+            "VRCSDKBaseVRC_EventHandlerVrcBroadcastType__Void",
+            DelegateAbi.BuildSigPart(
+                ((INamedTypeSymbol)fields["registered"].Type)
+                .DelegateInvokeMethod, types));
     }
 
     // ── ValidateDelegateBinding unit tests ──
@@ -89,7 +128,8 @@ public class C {
     {
         var c = AbiCompile(AbiSrc);
         var ex = Assert.Throws<NotSupportedException>(
-            () => DelegateAbi.ValidateDelegateBinding(DelegateOf(c, "R"), null));
+            () => DelegateAbi.ValidateDelegateBinding(
+                DelegateOf(c, "R"), null, Types(c)));
         Assert.Contains("ref/out", ex.Message);
     }
 
@@ -100,7 +140,8 @@ public class C {
         // aggregate slot (same representation as a user-struct return) — no adapter needed, so binding
         // a tuple-return delegate type is not rejected.
         var c = AbiCompile(AbiSrc);
-        DelegateAbi.ValidateDelegateBinding(DelegateOf(c, "T"), null);
+        DelegateAbi.ValidateDelegateBinding(
+            DelegateOf(c, "T"), null, Types(c));
     }
 
     [Fact]
@@ -109,7 +150,8 @@ public class C {
         // Func<object> bound to a string-returning method: legal C#, but the __dlgc_ names diverge.
         var c = AbiCompile(AbiSrc);
         var ex = Assert.Throws<NotSupportedException>(
-            () => DelegateAbi.ValidateDelegateBinding(DelegateOf(c, "O"), MethodOf(c, "GetStr")));
+            () => DelegateAbi.ValidateDelegateBinding(
+                DelegateOf(c, "O"), MethodOf(c, "GetStr"), Types(c)));
         Assert.Contains("Variant method-group", ex.Message);
     }
 
@@ -117,7 +159,8 @@ public class C {
     public void ValidateDelegateBinding_ExactMethodGroup_Passes()
     {
         var c = AbiCompile(AbiSrc);
-        DelegateAbi.ValidateDelegateBinding(DelegateOf(c, "F"), MethodOf(c, "M"));
+        DelegateAbi.ValidateDelegateBinding(
+            DelegateOf(c, "F"), MethodOf(c, "M"), Types(c));
     }
 
     // ── End-to-end reject pins ──

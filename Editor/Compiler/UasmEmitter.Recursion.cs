@@ -327,8 +327,10 @@ public partial class UasmEmitter
     // signature is CONCRETE. When it involves a type parameter (own generic method, or a param/return
     // referencing an enclosing generic's T), it has no analysis-time concrete form — return WILDCARD
     // (null) so it conservatively matches every dispatch (pre-widening connect-all for generics).
-    static string DispatchSigOrWildcard(IMethodSymbol m)
-        => SigInvolvesTypeParam(m) ? null : DelegateAbi.BuildSigPart(m);
+    string DispatchSigOrWildcard(IMethodSymbol m)
+        => SigInvolvesTypeParam(m)
+            ? null
+            : DelegateAbi.BuildSigPart(m, _session.Types);
 
     // Two signatures match if equal, or either is WILDCARD (a type-param-involving sig matches anything).
     static bool SigsMatch(string a, string b) => a == null || b == null || a == b;

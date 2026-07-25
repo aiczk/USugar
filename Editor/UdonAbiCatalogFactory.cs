@@ -84,5 +84,5 @@ static class UdonAbiCatalogFactory
     }
 
     static string ToAbiTypeName(Type type)
-        => ExternResolver.GetUdonTypeName(type);
+        => UdonTypeIdentity.From(type).Name;
 }

@@ -242,7 +242,8 @@ public static class NullableAbi
             var bound = operatorMethod != null
                 ? abi.BindOperator(operatorMethod, getUdonType)
                 : abi.BindExact(ExternResolver.ResolveBuiltInBinaryExtern(opKind,
-                    resolveType(leftEffective), resolveType(rightEffective), resolveType(resultEffective)));
+                    resolveType(leftEffective), resolveType(rightEffective),
+                    resolveType(resultEffective), getUdonType));
             var raw = builder.ExternCall(
                 bound,
                 new List<CLeaf> { leftOperand, rightOperand }, new StorageType(getUdonType(resultEffective)));

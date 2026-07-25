@@ -67,13 +67,15 @@ public class GenericBehaviourHost : UdonSharpBehaviour
         var fieldType = ((IFieldSymbol)host.GetMembers("Values")[0]).Type;
         var emptyMap = new Dictionary<ITypeParameterSymbol, ITypeSymbol>(
             SymbolEqualityComparer.Default);
+        var types = new CompilationSession(
+            compilation, TestHelper.RegistryFacts).Types;
 
         Assert.Equal(
             "VRCUdonCommonInterfacesIUdonEventReceiver",
-            ExternResolver.GetUdonTypeName(fieldType));
+            types.GetUdonTypeName(fieldType));
         Assert.Equal(
             "VRCUdonCommonInterfacesIUdonEventReceiver",
-            ExternResolver.GetUdonTypeName(fieldType, emptyMap));
+            types.GetUdonTypeName(fieldType, emptyMap));
 
         TestHelper.CompileToUasm(@"
 using UdonSharp;

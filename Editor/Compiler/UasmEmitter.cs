@@ -41,6 +41,7 @@ public partial class UasmEmitter
 
     public IReadOnlyList<EmitDiagnostic> Diagnostics => _diagnostics;
     public CodeGenResult CodeGenResult => _codeGenResult;
+    internal CompilationSession Session => _session;
 
     static Dictionary<string, string> UdonEventNames => LayoutPlanner.UdonEventNames;
 
@@ -850,7 +851,8 @@ public partial class UasmEmitter
         // A delegate field alone does not expose a callable bridge, so its declaration only needs
         // argument/return convention storage. DelegateConventionStorage declares the complete surface,
         // including env, when an actual bridge is emitted.
-        var (convArgs, convRet, _) = HandlerBase.GetConventionFieldNames(delegateType);
+        var (convArgs, convRet, _) = HandlerBase.GetConventionFieldNames(
+            delegateType, _session.Types);
         for (int ci = 0; ci < convArgs.Length; ci++)
             _ctx.Storage.TryDeclareVar(convArgs[ci],
                 _session.Types.GetStorageType(invoke.Parameters[ci].Type, _typeParamMap));
@@ -1190,9 +1192,12 @@ public partial class UasmEmitter
             string typeArgSuffix = "";
             if (sm.ContainingType.IsGenericType)
             {
-                var containingArgPart = string.Join("_", sm.ContainingType.TypeArguments.Select(ExternResolver.GetUdonTypeName));
+                var containingArgPart = string.Join("_",
+                    sm.ContainingType.TypeArguments.Select(
+                        type => _session.Types.GetUdonTypeName(type)));
                 var methodArgPart = sm.IsGenericMethod
-                    ? "_" + string.Join("_", sm.TypeArguments.Select(ExternResolver.GetUdonTypeName))
+                    ? "_" + string.Join("_", sm.TypeArguments.Select(
+                        type => _session.Types.GetUdonTypeName(type)))
                     : "";
                 typeArgSuffix = $"_{containingArgPart}{methodArgPart}";
             }

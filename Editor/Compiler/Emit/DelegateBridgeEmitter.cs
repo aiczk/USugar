@@ -77,7 +77,8 @@ public sealed class DelegateBridgeEmitter
         CFunction target, IMethodSymbol closureCheckMethod)
     {
         var builder = _context.Builder;
-        var signaturePart = DelegateAbi.BuildSigPart(signatureMethod, typeParameterMap);
+        var signaturePart = DelegateAbi.BuildSigPart(
+            signatureMethod, _context.Session.Types, typeParameterMap);
         var returnType = _convention.Declare(signaturePart, signatureMethod, typeParameterMap);
         var targetReturnType = closureCheckMethod.ReturnsVoid
             ? StorageTypes.Void

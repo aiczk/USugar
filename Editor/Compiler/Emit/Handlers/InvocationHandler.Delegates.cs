@@ -103,7 +103,8 @@ public partial class InvocationHandler
         // elsewhere (param/field/cast-back) never went through this class's creation-site validation,
         // and a copy-in-only conv protocol would silently drop ref/out write-backs.
         DelegateAbi.ValidateNoRefOutParams(invoke);
-        var (convArgs, convRet, convEnv) = GetConventionFieldNames(delegateType, _typeParamMap);
+        var (convArgs, convRet, convEnv) = GetConventionFieldNames(
+            delegateType, _ctx.Session.Types, _typeParamMap);
 
         // The __dlgc_ conv vars are a signature-keyed cross-program byte contract (§3.2). Bridges declare
         // the same names for their own sigs; the dispatch site declares-on-first-use for foreign sigs.
@@ -170,7 +171,8 @@ public partial class InvocationHandler
         // third-party-hinge inner bundle is a PLAIN method (e.g. GetStr), never itself a genuine
         // delegate Invoke method. Byte-identical for the pre-existing fan-out caller (invoke there
         // already IS the delegate's own Invoke method, so the old round-trip was a no-op derivation).
-        var (convArgs, convRet, convEnv) = GetConventionFieldNames(invoke, typeParamMap);
+        var (convArgs, convRet, convEnv) = GetConventionFieldNames(
+            invoke, _ctx.Session.Types, typeParamMap);
         StorageType? retType = invoke.ReturnsVoid
             ? null
             : _ctx.ResolveStorageType(invoke.ReturnType, typeParamMap);

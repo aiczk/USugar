@@ -33,7 +33,8 @@ public sealed class ReceiverBridgeEmitter
     void EmitInterfaceBody(string bridgeName, IMethodSymbol member)
     {
         var builder = _context.Builder;
-        var signaturePart = DelegateAbi.BuildSigPart(member, null);
+        var signaturePart = DelegateAbi.BuildSigPart(
+            member, _context.Session.Types);
         var returnType = _convention.Declare(signaturePart, member, null);
         var targetReturnType = member.ReturnsVoid
             ? StorageTypes.Void
@@ -93,7 +94,8 @@ public sealed class ReceiverBridgeEmitter
     void EmitBody(string bridgeName, Microsoft.CodeAnalysis.IMethodSymbol member, CFunction targetFunction)
     {
         var builder = _context.Builder;
-        var signaturePart = DelegateAbi.BuildSigPart(member, null);
+        var signaturePart = DelegateAbi.BuildSigPart(
+            member, _context.Session.Types);
         var returnType = _convention.Declare(signaturePart, member, null);
         var targetReturnType = member.ReturnsVoid
             ? StorageTypes.Void

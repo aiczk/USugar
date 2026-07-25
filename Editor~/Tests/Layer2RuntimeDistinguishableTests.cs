@@ -5,13 +5,13 @@ namespace USugar.Tests;
 /// <summary>
 /// Layer-2 structural fix — the runtime-type-tag-collapse unsoundness class closed BY CONSTRUCTION.
 ///
-/// ExternResolver.GetUdonTypeName is non-injective: it folds many distinct CLR types onto one Udon
+/// UdonTypeSystem lowering is non-injective: it folds many distinct CLR types onto one Udon
 /// runtime tag (every delegate/user-struct/tuple/array-of-those + object[] → SystemObjectArray;
 /// UdonSharpBehaviour + every derived type + UdonBehaviour + every user interface → IUdonEventReceiver;
 /// arrays of those → ComponentArray; a user enum → its underlying int; Nullable&lt;T&gt; → a box). A runtime
 /// type test (SystemType.__IsInstanceOfType) against such a type CANNOT discriminate it — it matches ANY
-/// same-tag value and silently takes the wrong branch. ExternResolver.IsRuntimeDistinguishable is the
-/// single predicate; both runtime-type-test sites (OperatorHandler.EmitTypeCheck for type patterns AND
+/// same-tag value and silently takes the wrong branch. UdonTypeLowering.RuntimeTypeTest is the
+/// single decision; both runtime-type-test sites (OperatorHandler.EmitTypeCheck for type patterns AND
 /// VisitIsType for a bare `x is T`) route through it, so no reachable path emits IsInstanceOfType without
 /// the guard.
 ///
@@ -160,6 +160,22 @@ public class L2REnum : UdonSharpBehaviour {
     object boxed;
     void Start() { boxed = L2E.A; result = boxed is L2E ? 1 : 0; }
 }", "L2REnum"));
+        Assert.Contains("Runtime type test against", ex.Message);
+    }
+
+    [Fact]
+    public void IsFoldedEnumArray_Throws()
+    {
+        var ex = Assert.Throws<System.NotSupportedException>(() => TestHelper.CompileToUasm(@"
+using UdonSharp;
+public enum L2ArrayEnum { A, B }
+public class L2REnumArray : UdonSharpBehaviour {
+    object boxed;
+    void Start() {
+        boxed = new L2ArrayEnum[1];
+        if (boxed is L2ArrayEnum[]) { }
+    }
+}", "L2REnumArray"));
         Assert.Contains("Runtime type test against", ex.Message);
     }
 

@@ -81,8 +81,8 @@ public abstract partial class HandlerBase
     protected TypeClassifierContext TypeCtx => new TypeClassifierContext(_ctx.Generics.TypeParamMap);
     protected ITypeSymbol ResolveType(ITypeSymbol type)
         => TypeEnvironment.CloseType(_compilation, type, _ctx.Generics.TypeParamMap);
-    protected bool IsUserEnum(ITypeSymbol type)
-        => _ctx.Session.Types.IsUserEnum(type);
+    protected bool IsFoldedEnum(ITypeSymbol type)
+        => _ctx.Session.Types.IsFoldedEnum(type);
     protected string GetArrayType(IArrayTypeSymbol arrType) => GetStorageTypeName(arrType);
     protected string GetArrayElemType(IArrayTypeSymbol arrType)
     {
@@ -117,8 +117,8 @@ public abstract partial class HandlerBase
         return recv;
     }
 
-    // Layer-2 runtime-type-test choke point (is / switch / as). ExternResolver.GetUdonTypeName is
-    // non-injective: it folds many distinct CLR types onto one Udon runtime tag (every delegate/struct/
+    // Layer-2 runtime-type-test choke point (is / switch / as). Session lowering is non-injective:
+    // it folds many distinct CLR types onto one Udon runtime tag (every delegate/struct/
     // tuple/array-of-those + object[] → SystemObjectArray; UdonSharpBehaviour + every derived type + every
     // user interface → IUdonEventReceiver; a user enum → its underlying int; Nullable<T> → a box). A
     // runtime type test against such a type CANNOT discriminate it — it matches ANY same-tag value and
@@ -1568,9 +1568,11 @@ public abstract partial class HandlerBase
     /// <summary>Compute signature-based convention field names for a delegate type
     /// (sig key via the unified DelegateAbi.BuildSigPart — design §3.2). Pass the type-param map when
     /// resolving inside a generic-spec body so e.g. Func&lt;T&gt; keys on the substituted type.</summary>
-    internal static (string[] argNames, string retName, string envName) GetConventionFieldNames(INamedTypeSymbol delegateType,
+    internal static (string[] argNames, string retName, string envName) GetConventionFieldNames(
+        INamedTypeSymbol delegateType, UdonTypeSystem types,
         IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeParamMap = null)
-        => GetConventionFieldNames(delegateType.DelegateInvokeMethod, typeParamMap);
+        => GetConventionFieldNames(
+            delegateType.DelegateInvokeMethod, types, typeParamMap);
 
     /// <summary>Overload taking the Invoke (or Invoke-shaped) method directly — the delegate-type
     /// overload above just re-derives this from delegateType.DelegateInvokeMethod, so a caller that
@@ -1578,10 +1580,12 @@ public abstract partial class HandlerBase
     /// native protocol is a PLAIN method's own signature, never itself a delegate's Invoke method) skips
     /// the round-trip. BuildSigPart only reads Parameters/ReturnsVoid/ReturnType, so any IMethodSymbol
     /// is a valid "invoke" here, not only a genuine DelegateInvokeMethod.</summary>
-    internal static (string[] argNames, string retName, string envName) GetConventionFieldNames(IMethodSymbol invoke,
+    internal static (string[] argNames, string retName, string envName) GetConventionFieldNames(
+        IMethodSymbol invoke, UdonTypeSystem types,
         IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeParamMap = null)
     {
-        var sigPart = DelegateAbi.BuildSigPart(invoke, typeParamMap);
+        var sigPart = DelegateAbi.BuildSigPart(
+            invoke, types, typeParamMap);
 
         var argNames = new string[invoke.Parameters.Length];
         for (int i = 0; i < invoke.Parameters.Length; i++)
@@ -1643,7 +1647,7 @@ public abstract partial class HandlerBase
     protected INamedTypeSymbol RegisterEnumToStringDemand(ITypeSymbol type, bool rejectFlags = true)
     {
         var resolved = ResolveType(type);
-        if (!IsUserEnum(resolved) || resolved is not INamedTypeSymbol e)
+        if (!IsFoldedEnum(resolved) || resolved is not INamedTypeSymbol e)
             return null;
         if (e.GetAttributes().Any(a => a.AttributeClass?.Name == "FlagsAttribute"))
         {
@@ -1666,7 +1670,10 @@ public abstract partial class HandlerBase
         IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeParamMap)
     {
         var wrapperName = DelegateAbi.WrapperName(
-            DelegateAbi.BuildSigPart(outerInvoke, typeParamMap), DelegateAbi.BuildSigPart(innerInvoke, typeParamMap));
+            DelegateAbi.BuildSigPart(
+                outerInvoke, _ctx.Session.Types, typeParamMap),
+            DelegateAbi.BuildSigPart(
+                innerInvoke, _ctx.Session.Types, typeParamMap));
         _ctx.Synthetics.RegisterWrapper(
             new DelegateBindingPlan(DelegateBindingKind.Wrapper, innerInvoke, wrapperName),
             outerInvoke, innerInvoke, typeParamMap);
@@ -1796,7 +1803,8 @@ public abstract partial class HandlerBase
         // First-wins spec record (feeds ComposeClosureKeyArgs' owner fallback). The former [X6]/[Y2]
         // second-instantiation rejects are retired: closures duplicate per spec.
 
-        var typeArgPart = string.Join("_", constructed.TypeArguments.Select(ExternResolver.GetUdonTypeName));
+        var typeArgPart = string.Join("_", constructed.TypeArguments.Select(
+            type => _ctx.Session.Types.GetUdonTypeName(type)));
         var parameters = constructed.Parameters.Select(parameter => new CallableParameterPlan(
             index => NameAllocator.ParamId(parameter.Name, index), GetStorageType(parameter.Type))).ToArray();
         var returns = constructed.ReturnsVoid ? Array.Empty<CallableReturnPlan>() : new[]
@@ -1819,7 +1827,8 @@ public abstract partial class HandlerBase
 
     void RegisterNamedSpecialization(IMethodSymbol method)
     {
-        var typeArgPart = string.Join("_", method.TypeArguments.Select(ExternResolver.GetUdonTypeName));
+        var typeArgPart = string.Join("_", method.TypeArguments.Select(
+            type => _ctx.Session.Types.GetUdonTypeName(type)));
         var receiver = !method.IsStatic
             && method.ContainingType is INamedTypeSymbol receiverType
             && TypeClassifier.IsObjectArrayEmulated(receiverType)
@@ -2176,8 +2185,12 @@ public abstract partial class HandlerBase
         if (op.Target is IMethodReferenceOperation
             && op.Type is INamedTypeSymbol delegateType && delegateType.DelegateInvokeMethod is { } delegateInvoke)
         {
-            var sigS = DelegateAbi.BuildSigPart(delegateInvoke, _ctx.Generics.TypeParamMap);
-            if (sigS != DelegateAbi.BuildSigPart(targetMethod, _ctx.Generics.TypeParamMap))
+            var sigS = DelegateAbi.BuildSigPart(
+                delegateInvoke, _ctx.Session.Types,
+                _ctx.Generics.TypeParamMap);
+            if (sigS != DelegateAbi.BuildSigPart(
+                    targetMethod, _ctx.Session.Types,
+                    _ctx.Generics.TypeParamMap))
             {
                 if (targetInstance == null)
                 {

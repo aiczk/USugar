@@ -112,7 +112,7 @@ public class NsBoundaryCarrier
             var exactName = ExternResolver.GetExactUdonTypeName(type);
             Assert.False(session.Types.IsRegisteredUdonTypeName(exactName),
                 $"test marker unexpectedly entered the Udon registry: namespace '{ns}', type '{exactName}'");
-            Assert.True(session.Types.IsUserEnum(type),
+            Assert.True(session.Types.IsFoldedEnum(type),
                 $"unregistered enum did not fold: namespace '{ns}', type '{exactName}'");
             Assert.Equal("SystemInt32", session.Types.GetUdonTypeName(type));
             Assert.False(session.Types.IsRuntimeDistinguishable(type));
@@ -124,7 +124,7 @@ public class NsBoundaryCarrier
     {
         var (types, session) = BuildBoundary();
         Assert.True(session.Types.IsRegisteredUdonTypeName("UnityEngineKeyCode"));
-        Assert.False(session.Types.IsUserEnum(types["fKeyCode"]));
+        Assert.False(session.Types.IsFoldedEnum(types["fKeyCode"]));
         Assert.Equal("UnityEngineKeyCode", session.Types.GetUdonTypeName(types["fKeyCode"]));
         Assert.True(session.Types.IsRuntimeDistinguishable(types["fKeyCode"]));
         Assert.False(TypeClassifier.IsUserStruct((INamedTypeSymbol)types["fVector3"]));
@@ -137,7 +137,7 @@ public class NsBoundaryCarrier
         var (types, session) = BuildBoundary();
         var t = types["eUnity"];
         Assert.False(session.Types.IsRegisteredUdonTypeName("UnityUEnum"));
-        Assert.True(session.Types.IsUserEnum(t));
+        Assert.True(session.Types.IsFoldedEnum(t));
         Assert.Equal("SystemInt32", session.Types.GetUdonTypeName(t));
         Assert.False(session.Types.IsRuntimeDistinguishable(t));
     }
@@ -147,7 +147,7 @@ public class NsBoundaryCarrier
     {
         var (types, session) = BuildBoundary();
         var t = types["eSysFoo"];
-        Assert.True(session.Types.IsUserEnum(t));
+        Assert.True(session.Types.IsFoldedEnum(t));
         Assert.Equal("SystemInt32", session.Types.GetUdonTypeName(t));
         Assert.False(session.Types.IsRuntimeDistinguishable(t));
     }

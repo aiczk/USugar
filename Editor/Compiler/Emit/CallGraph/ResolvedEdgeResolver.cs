@@ -193,10 +193,14 @@ public sealed class ResolvedEdgeResolver
             && variantDc.Type is INamedTypeSymbol vDlgType && vDlgType.DelegateInvokeMethod is { } vInvoke)
         {
             var t = mrOp.Method.OriginalDefinition;
-            var sigS = DelegateAbi.BuildSigPart(vInvoke);
-            if (sigS != DelegateAbi.BuildSigPart(t))
+            var sigS = DelegateAbi.BuildSigPart(
+                vInvoke, _emitter.Session.Types);
+            if (sigS != DelegateAbi.BuildSigPart(
+                    t, _emitter.Session.Types))
                 yield return (t, sigS);
-            if (LeafMethodRefTarget(mrOp) is { } leafT && sigS != DelegateAbi.BuildSigPart(leafT))
+            if (LeafMethodRefTarget(mrOp) is { } leafT
+                && sigS != DelegateAbi.BuildSigPart(
+                    leafT, _emitter.Session.Types))
                 yield return (leafT, sigS);
         }
     }

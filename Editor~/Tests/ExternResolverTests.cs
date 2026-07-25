@@ -79,8 +79,12 @@ public class ExternResolverTests
     {
         var comp = CSharpCompilation.Create("OpKindCensus", references: TestHelper.StandardRefs);
         var int32 = comp.GetSpecialType(SpecialType.System_Int32);
+        var types = new CompilationSession(
+            comp, TestHelper.RegistryFacts).Types;
         var ex = Assert.Throws<System.NotSupportedException>(
-            () => ExternResolver.ResolveBuiltInBinaryExtern(kind, int32, int32, int32));
+            () => ExternResolver.ResolveBuiltInBinaryExtern(
+                kind, int32, int32, int32,
+                type => types.GetUdonTypeName(type)));
         Assert.Contains(kind.ToString(), ex.Message);
     }
 
@@ -145,7 +149,8 @@ public class C { public List<int> field; }");
             new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
         var type = comp.GetTypeByMetadataName("C");
         var field = type.GetMembers("field")[0] as IFieldSymbol;
-        Assert.Equal("SystemCollectionsGenericListSystemInt32", ExternResolver.GetUdonTypeName(field.Type));
+        Assert.Equal("SystemCollectionsGenericListSystemInt32",
+            UdonTypeIdentity.From(field.Type).Name);
     }
 
     [Fact]
@@ -166,7 +171,7 @@ public class C { public Dictionary<string, int> field; }");
         var type = comp.GetTypeByMetadataName("C");
         var field = type.GetMembers("field")[0] as IFieldSymbol;
         Assert.Equal("SystemCollectionsGenericDictionarySystemStringSystemInt32",
-            ExternResolver.GetUdonTypeName(field.Type));
+            UdonTypeIdentity.From(field.Type).Name);
     }
 
     [Fact]
@@ -189,7 +194,9 @@ public class C : UdonSharp.UdonSharpBehaviour { G<int> g; }
         {
             [tp] = intType
         };
-        var result = ExternResolver.GetUdonTypeName(tp, map);
+        var result = new CompilationSession(
+            compilation, TestHelper.RegistryFacts)
+            .Types.GetUdonTypeName(tp, map);
         Assert.Equal("SystemInt32", result);
     }
 
@@ -235,6 +242,6 @@ public class C { public List<int>[] field; }");
         var type = comp.GetTypeByMetadataName("C");
         var field = type.GetMembers("field")[0] as IFieldSymbol;
         Assert.Equal("SystemCollectionsGenericListSystemInt32Array",
-            ExternResolver.GetUdonTypeName(field.Type));
+            UdonTypeIdentity.From(field.Type).Name);
     }
 }

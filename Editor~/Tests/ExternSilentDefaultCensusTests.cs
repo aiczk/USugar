@@ -19,10 +19,9 @@ namespace USugar.Tests;
 ///  2. ExternResolver.ConvertMethodNames returns null out-of-domain while callers gate on
 ///     IsConvertibleNumericType — two hand-synced copies of one domain. The census asserts domain
 ///     EQUALITY in both directions (the null return itself stays: callers legitimately probe).
-///  3. ExternResolver.IsRuntimeDistinguishable's three collapse tags are hand-synced to
-///     GetUdonTypeName's fold outputs; an unknown fold tag would default to silent TRUE and license
-///     a dishonest is-test. The census recomputes the fold's non-injective tags from a representative
-///     battery and pins them against the predicate's knowledge.
+///  3. Runtime type-test capability and storage used to be separate producers. The census now
+///     consumes one UdonTypeLowering per family, recomputes non-injective storage tags, and pins
+///     both the representation and the verdict carried by that same decision.
 /// </summary>
 public class ExternSilentDefaultCensusTests
 {
@@ -233,6 +232,7 @@ public class ExternSilentDefaultCensusTests
         // yet `v is object` is the one universally answerable test, so the predicate says TRUE.
         ("bare-object",       "fObj",       "SystemObject", true),
         ("user-enum",         "fEnum",      "SystemInt32", false),
+        ("user-enum-array",   "fEnumArr",   "SystemInt32Array", false),
         // int is the user-enum fold TARGET: the predicate accepts it (an erased enum value matching
         // `is int` is the accepted erasure asymmetry; rejecting int would reject every honest use).
         ("sdk-int",           "fInt",       "SystemInt32", true),
@@ -273,6 +273,7 @@ public class CensusCarrier
     public int? fNullable;
     public object fObj;
     public CensusEnum fEnum;
+    public CensusEnum[] fEnumArr;
     public int fInt;
     public string fStr;
     public UnityEngine.Vector3 fVec;
@@ -281,24 +282,30 @@ public class CensusCarrier
     public int[] fIntArr;
 }";
 
-    static Dictionary<string, ITypeSymbol> BuildFoldBatteryTypes()
+    static (Dictionary<string, ITypeSymbol> Types,
+        CompilationSession Session) BuildFoldBattery()
     {
-        TestHelper.BuildCompilation(FoldCarrierSource, "CensusCarrier", out var carrier);
-        return carrier.GetMembers().OfType<IFieldSymbol>()
+        var compilation = TestHelper.BuildCompilation(
+            FoldCarrierSource, "CensusCarrier", out var carrier);
+        var types = carrier.GetMembers().OfType<IFieldSymbol>()
             .ToDictionary(f => f.Name, f => f.Type);
+        return (types,
+            new CompilationSession(compilation, TestHelper.RegistryFacts));
     }
 
     [Fact]
     public void FoldCensus_EveryBatteryRow_MatchesPinnedTagAndVerdict()
     {
-        var types = BuildFoldBatteryTypes();
+        var (types, session) = BuildFoldBattery();
         foreach (var (family, field, tag, distinguishable) in FoldBattery)
         {
-            var type = types[field];
-            Assert.True(tag == ExternResolver.GetUdonTypeName(type),
-                $"fold drift: family '{family}' now folds to '{ExternResolver.GetUdonTypeName(type)}', pinned '{tag}'");
-            Assert.True(distinguishable == ExternResolver.IsRuntimeDistinguishable(type, null),
-                $"predicate drift: IsRuntimeDistinguishable({family}) != {distinguishable}");
+            var lowering = session.Types.Describe(types[field]);
+            Assert.True(tag == lowering.Storage.Name,
+                $"fold drift: family '{family}' now folds to "
+                + $"'{lowering.Storage}', pinned '{tag}'");
+            Assert.True(distinguishable == lowering.IsRuntimeDistinguishable,
+                $"runtime identity drift: family '{family}' produced "
+                + $"'{lowering.RuntimeTypeTest}'");
         }
     }
 
@@ -307,14 +314,14 @@ public class CensusCarrier
     {
         // Recompute non-injectivity from the battery itself (not from the pinned Tag column): a tag
         // produced by 2+ distinct input families is a runtime collapse the predicate MUST know.
-        // A new fold output added to GetUdonTypeName that lands on a battery family shows up here
-        // as an unexpected non-injective tag and fails BEFORE the silent-TRUE default can license
-        // a dishonest is-test at compile time.
-        var types = BuildFoldBatteryTypes();
+        // A new fold output that lands on a battery family shows up here as an unexpected
+        // non-injective tag. Its runtime verdict comes from the same lowering object, so there is
+        // no separate predicate list to keep synchronized.
+        var (types, session) = BuildFoldBattery();
         var familiesByTag = new Dictionary<string, HashSet<string>>();
         foreach (var (family, field, _, _) in FoldBattery)
         {
-            var tag = ExternResolver.GetUdonTypeName(types[field]);
+            var tag = session.Types.Describe(types[field]).Storage.Name;
             if (!familiesByTag.TryGetValue(tag, out var set))
                 familiesByTag[tag] = set = new HashSet<string>();
             set.Add(family);
@@ -323,15 +330,16 @@ public class CensusCarrier
         var nonInjective = familiesByTag.Where(kv => kv.Value.Count >= 2)
             .Select(kv => kv.Key).OrderBy(t => t).ToList();
 
-        // The predicate's complete collapse knowledge:
-        //  - the three hand-listed tags (ExternResolver.IsRuntimeDistinguishable's tag check),
-        //  - SystemObject (the Nullable<T> branch + the bare-object TRUE special case),
-        //  - SystemInt32 (the user-enum branch: source enum folds to its underlying int tag).
-        var predicateKnown = new List<string>
+        var expectedNonInjective = new List<string>
         {
-            ObjArrayTag, EventReceiverTag, ComponentArrayTag, "SystemObject", "SystemInt32",
+            ObjArrayTag,
+            EventReceiverTag,
+            ComponentArrayTag,
+            "SystemObject",
+            "SystemInt32",
+            "SystemInt32Array",
         }.OrderBy(t => t).ToList();
 
-        Assert.Equal(predicateKnown, nonInjective);
+        Assert.Equal(expectedNonInjective, nonInjective);
     }
 }

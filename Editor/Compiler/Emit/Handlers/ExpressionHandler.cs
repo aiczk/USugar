@@ -323,7 +323,7 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
         return false;
     }
 
-    static bool ContainsVariantDelegateConversion(ITypeSymbol src, ITypeSymbol dst,
+    bool ContainsVariantDelegateConversion(ITypeSymbol src, ITypeSymbol dst,
         IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeParamMap)
     {
         // Resolve each end through the type-param map at EVERY recursion level: a generic method whose
@@ -347,8 +347,10 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
         return src is INamedTypeSymbol srcDlg && srcDlg.DelegateInvokeMethod is { } srcInvoke
             && dst is INamedTypeSymbol dstDlg && dstDlg.DelegateInvokeMethod is { } dstInvoke
             && !SymbolEqualityComparer.Default.Equals(srcDlg, dstDlg)
-            && DelegateAbi.BuildSigPart(srcInvoke, typeParamMap)
-               != DelegateAbi.BuildSigPart(dstInvoke, typeParamMap);
+            && DelegateAbi.BuildSigPart(
+                   srcInvoke, _ctx.Session.Types, typeParamMap)
+               != DelegateAbi.BuildSigPart(
+                   dstInvoke, _ctx.Session.Types, typeParamMap);
     }
 
     CLeaf EmitNumericConversion(CLeaf sourceValue, ITypeSymbol sourceType, ITypeSymbol destinationType)
@@ -450,7 +452,7 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
                 destinationEnum = null;
 
             if (sourceEnum != null
-                && !IsUserEnum(sourceEnum)
+                && !IsFoldedEnum(sourceEnum)
                 && ExternResolver.IsConvertibleNumericType(closedDestination)
                 && ExternResolver.GetConvertMethodName(closedDestination) is { } enumConvert)
             {
@@ -464,7 +466,7 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
 
             var numericSource = sourceEnum?.EnumUnderlyingType ?? effectiveSource;
             var numericDestination = destinationEnum?.EnumUnderlyingType ?? closedDestination;
-            if ((destinationEnum == null || IsUserEnum(destinationEnum))
+            if ((destinationEnum == null || IsFoldedEnum(destinationEnum))
                 && ExternResolver.IsConvertibleNumericType(numericSource)
                 && ExternResolver.IsConvertibleNumericType(numericDestination))
             {
@@ -606,7 +608,8 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
             // rejected form, since the wrapper's own dispatch site is unconditionally Reentrant like the
             // fan-out, sidestepping the sig-filter question entirely for this arm).
             if (DelegateDemandPolicy.TryGetVariantConversion(
-                    _compilation, conv, _ctx.Generics.TypeParamMap,
+                    _compilation, conv, _ctx.Session.Types,
+                    _ctx.Generics.TypeParamMap,
                     out var vDstInvoke, out var vSrcInvoke))
             {
                 // The wrapper's INNER dispatch must speak srcVal's OWN native protocol — vSrc's Invoke
@@ -659,8 +662,12 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
                 // safe roundtrip — its channels agree (resolve through the type-param map so a generic
                 // operand whose spec is a same-sig delegate still qualifies).
                 var safeRoundtrip = ResolveType(stripped?.Type) is INamedTypeSymbol sDlg && sDlg.DelegateInvokeMethod is { } sInvoke
-                    && DelegateAbi.BuildSigPart(sInvoke, _ctx.Generics.TypeParamMap)
-                       == DelegateAbi.BuildSigPart(lInvoke, _ctx.Generics.TypeParamMap);
+                    && DelegateAbi.BuildSigPart(
+                           sInvoke, _ctx.Session.Types,
+                           _ctx.Generics.TypeParamMap)
+                       == DelegateAbi.BuildSigPart(
+                           lInvoke, _ctx.Session.Types,
+                           _ctx.Generics.TypeParamMap);
                 if (!isNull && !safeRoundtrip)
                     throw new System.NotSupportedException(
                         $"Cast from '{(convSrcType ?? conv.Operand.Type)?.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat) ?? "object"}' "
@@ -697,7 +704,7 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
         // HeapTypeMismatch-fault the VM. SDK enums keep their own registered Udon tag and stay on the
         // enum↔numeric arm below.
         ITypeSymbol NumericFacet(ITypeSymbol t)
-            => t is INamedTypeSymbol en && IsUserEnum(en) ? en.EnumUnderlyingType : t;
+            => t is INamedTypeSymbol en && IsFoldedEnum(en) ? en.EnumUnderlyingType : t;
         var liftedDstU = EmitPolicy.IsNullableT(conv.Type, out var dstNblU) ? dstNblU : conv.Type;
         var liftedDstN = liftedDstU == null ? null : NumericFacet(liftedDstU);
         if (conv.Conversion.IsNullable
@@ -812,7 +819,7 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
                 return Const(constVal.Value, new StorageType(dstType));
 
             // Enum ↔ underlying is a pure re-typing between each side's effective underlying udon type (an enum
-            // is STORED as its underlying type — see ExternResolver.GetUdonTypeName, so dstType for an enum
+            // is STORED as its underlying type — see UdonTypeSystem.Describe, so dstType for an enum
             // target is already its underlying). The former int→enum path indexed a per-enum lookup array, but
             // enumArr[v - min] == v — an identity over the underlying value — so it added nothing except a VM
             // fault on out-of-range casts ((E)999 is legal C# and must round-trip). A direct convert is correct
@@ -1037,10 +1044,15 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
         var targetMethodForValidation = (op.Target as IMethodReferenceOperation)?.Method;
         bool varianceResolved = targetMethodForValidation != null
             && op.Type is INamedTypeSymbol vDelegateType && vDelegateType.DelegateInvokeMethod is { } vInvoke
-            && DelegateAbi.BuildSigPart(vInvoke, _ctx.Generics.TypeParamMap)
-               != DelegateAbi.BuildSigPart(targetMethodForValidation, _ctx.Generics.TypeParamMap);
+            && DelegateAbi.BuildSigPart(
+                   vInvoke, _ctx.Session.Types,
+                   _ctx.Generics.TypeParamMap)
+               != DelegateAbi.BuildSigPart(
+                   targetMethodForValidation, _ctx.Session.Types,
+                   _ctx.Generics.TypeParamMap);
         DelegateAbi.ValidateDelegateBinding(op.Type as INamedTypeSymbol,
-            targetMethodForValidation, _ctx.Generics.TypeParamMap, varianceResolved);
+            targetMethodForValidation, _ctx.Session.Types,
+            _ctx.Generics.TypeParamMap, varianceResolved);
 
         var thisType = GetStorageTypeName(_classSymbol);
         // Addr discipline (§1.3): the only sources for DelegateAbi.Addr are the back-patched funcaddr const

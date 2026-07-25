@@ -13,26 +13,30 @@ public class ClrStorageTypePolicyTests
     interface IUserContract { }
     delegate int UserDelegate(int value);
 
-    static bool Registered(string udonTypeName)
-        => udonTypeName == "SystemInt32"
-           || udonTypeName == "SystemInt16"
-           || udonTypeName == "SystemDayOfWeek"
-           || udonTypeName == "SystemString"
-           || udonTypeName == "SystemCollectionsGenericListSystemInt32"
-           || udonTypeName == "SystemCollectionsGenericIListSystemInt32";
+    static UdonTypeSystem RegistryTypes()
+    {
+        var compilation = CSharpCompilation.Create(
+            "ClrStoragePolicy",
+            references: TestHelper.StandardRefs,
+            options: new CSharpCompilationOptions(
+                OutputKind.DynamicallyLinkedLibrary));
+        return new CompilationSession(
+            compilation, TestHelper.RegistryFacts).Types;
+    }
 
     [Fact]
     public void ConstructedGenericClrNamesMatchTheRegistrySpelling()
     {
         Assert.Equal("SystemCollectionsGenericListSystemInt32",
-            ExternResolver.GetUdonTypeName(typeof(List<int>)));
+            UdonTypeIdentity.From(typeof(List<int>)).Name);
         Assert.Equal("SystemCollectionsGenericIListSystemInt32",
-            ExternResolver.GetUdonTypeName(typeof(IList<int>)));
+            UdonTypeIdentity.From(typeof(IList<int>)).Name);
 
+        var types = RegistryTypes();
         Assert.Equal("SystemCollectionsGenericListSystemInt32",
-            ExternResolver.GetUdonStorageTypeName(typeof(List<int>), Registered));
+            types.GetUdonTypeName(typeof(List<int>)));
         Assert.Equal("SystemCollectionsGenericIListSystemInt32",
-            ExternResolver.GetUdonStorageTypeName(typeof(IList<int>), Registered));
+            types.GetUdonTypeName(typeof(IList<int>)));
     }
 
     [Fact]
@@ -49,47 +53,50 @@ public class GenericNameCarrier
             .ToDictionary(field => field.Name);
         var session = new CompilationSession(compilation, TestHelper.RegistryFacts);
 
-        Assert.Equal(ExternResolver.GetUdonTypeName(typeof(List<int>)),
+        Assert.Equal(UdonTypeIdentity.From(typeof(List<int>)).Name,
             session.Types.GetUdonTypeName(fields["list"].Type));
-        Assert.Equal(ExternResolver.GetUdonTypeName(typeof(IList<int>)),
+        Assert.Equal(UdonTypeIdentity.From(typeof(IList<int>)).Name,
             session.Types.GetUdonTypeName(fields["listInterface"].Type));
     }
 
     [Fact]
     public void RegisteredSdkEnumKeepsItsUdonIdentity()
         => Assert.Equal("SystemDayOfWeek",
-            ExternResolver.GetUdonStorageTypeName(typeof(DayOfWeek), Registered));
+            RegistryTypes().GetUdonTypeName(typeof(DayOfWeek)));
 
     [Fact]
     public void UnregisteredUserEnumUsesItsUnderlyingStorage()
         => Assert.Equal("SystemInt16",
-            ExternResolver.GetUdonStorageTypeName(typeof(UserMode), Registered));
+            RegistryTypes().GetUdonTypeName(typeof(UserMode)));
 
     [Fact]
     public void UserInterfaceAndItsArrayUseBehaviourStorage()
     {
+        var types = RegistryTypes();
         Assert.Equal("VRCUdonCommonInterfacesIUdonEventReceiver",
-            ExternResolver.GetUdonStorageTypeName(typeof(IUserContract), Registered));
+            types.GetUdonTypeName(typeof(IUserContract)));
         Assert.Equal("UnityEngineComponentArray",
-            ExternResolver.GetUdonStorageTypeName(typeof(IUserContract[]), Registered));
+            types.GetUdonTypeName(typeof(IUserContract[])));
     }
 
     [Fact]
     public void DelegateAndDelegateArrayUseObjectArrayBundles()
     {
+        var types = RegistryTypes();
         Assert.Equal("SystemObjectArray",
-            ExternResolver.GetUdonStorageTypeName(typeof(UserDelegate), Registered));
+            types.GetUdonTypeName(typeof(UserDelegate)));
         Assert.Equal("SystemObjectArray",
-            ExternResolver.GetUdonStorageTypeName(typeof(UserDelegate[]), Registered));
+            types.GetUdonTypeName(typeof(UserDelegate[])));
     }
 
     [Fact]
     public void NullableAndMultiDimensionalArraysUseTheirFoldedStorage()
     {
+        var types = RegistryTypes();
         Assert.Equal("SystemObject",
-            ExternResolver.GetUdonStorageTypeName(typeof(int?), Registered));
+            types.GetUdonTypeName(typeof(int?)));
         Assert.Equal("SystemObjectArray",
-            ExternResolver.GetUdonStorageTypeName(typeof(int[,]), Registered));
+            types.GetUdonTypeName(typeof(int[,])));
     }
 
     [Fact]
@@ -121,8 +128,7 @@ public class GenericNameCarrier
                 : symbol;
 
             var fromSymbol = session.Types.GetUdonTypeName(storageSymbol);
-            var fromClr = ExternResolver.GetUdonStorageTypeName(
-                type, session.Types.IsRegisteredUdonTypeName);
+            var fromClr = session.Types.GetUdonTypeName(type);
 
             Assert.Equal(fromClr, fromSymbol);
         }
@@ -150,7 +156,7 @@ public class EnumAuthorityProbe : UdonSharpBehaviour { }
             Assert.Null(session.TypeFacts.IsEnumFact(exactName));
 
             Assert.Equal(exactName, session.Types.GetUdonTypeName(symbol));
-            Assert.False(session.Types.IsUserEnum(symbol));
+            Assert.False(session.Types.IsFoldedEnum(symbol));
             Assert.True(session.Types.IsRuntimeDistinguishable(symbol));
             Assert.True(session.TypeFacts.IsEnumFact(exactName));
         }
@@ -161,7 +167,7 @@ public class EnumAuthorityProbe : UdonSharpBehaviour { }
             ExternResolver.GetExactUdonTypeName(unregistered)));
         Assert.Equal(StorageTypes.Int32.Name,
             session.Types.GetUdonTypeName(unregistered));
-        Assert.True(session.Types.IsUserEnum(unregistered));
+        Assert.True(session.Types.IsFoldedEnum(unregistered));
         Assert.False(session.Types.IsRuntimeDistinguishable(unregistered));
     }
 
@@ -186,6 +192,79 @@ public class RegisteredEnumFields : UdonSharpBehaviour
         Assert.Contains(
             "probe: %UnityEngineRenderingReflectionProbeType", uasm);
         Assert.Contains("unregistered: %SystemInt32", uasm);
+    }
+
+    [Fact]
+    public void LoweringDecisionCarriesStorageRepresentationAndRuntimeIdentity()
+    {
+        var compilation = TestHelper.BuildCompilation(@"
+using System.Collections.Generic;
+using UdonSharp;
+using VRC.SDKBase;
+public enum SourceMode { A, B }
+public struct SourcePair { public int value; }
+public class LoweringDecisionProbe : UdonSharpBehaviour
+{
+    public VRC_EventHandler.VrcBroadcastType registeredEnum;
+    public UnityEngine.HideFlags foldedSdkEnum;
+    public SourceMode foldedSourceEnum;
+    public SourceMode[] foldedEnumArray;
+    public int[] exactArray;
+    public object[] collapsedArray;
+    public SourcePair aggregate;
+    public List<int> registeredGeneric;
+    public object universalObject;
+}", "LoweringDecisionProbe", out var carrier);
+        var fields = carrier.GetMembers().OfType<IFieldSymbol>()
+            .ToDictionary(field => field.Name, field => field.Type);
+        var session = new CompilationSession(compilation, TestHelper.RegistryFacts);
+
+        var registered = session.Types.Describe(fields["registeredEnum"]);
+        Assert.Equal(UdonRepresentationKind.Exact, registered.Representation);
+        Assert.Equal(
+            "VRCSDKBaseVRC_EventHandlerVrcBroadcastType",
+            registered.Storage.Name);
+        Assert.True(registered.HasRegisteredTypeNode);
+        Assert.Equal(UdonRuntimeTypeTest.Exact, registered.RuntimeTypeTest);
+
+        foreach (var field in new[] { "foldedSdkEnum", "foldedSourceEnum" })
+        {
+            var folded = session.Types.Describe(fields[field]);
+            Assert.Equal(
+                UdonRepresentationKind.FoldedEnum, folded.Representation);
+            Assert.Equal(StorageTypes.Int32, folded.Storage);
+            Assert.False(folded.HasRegisteredTypeNode);
+            Assert.Equal(
+                UdonRuntimeTypeTest.Unsupported, folded.RuntimeTypeTest);
+        }
+
+        var foldedArray = session.Types.Describe(fields["foldedEnumArray"]);
+        Assert.Equal(
+            UdonRepresentationKind.NativeArray, foldedArray.Representation);
+        Assert.Equal("SystemInt32Array", foldedArray.Storage.Name);
+        Assert.Equal(
+            UdonRuntimeTypeTest.Unsupported, foldedArray.RuntimeTypeTest);
+
+        var exactArray = session.Types.Describe(fields["exactArray"]);
+        Assert.Equal(UdonRuntimeTypeTest.Exact, exactArray.RuntimeTypeTest);
+        var collapsedArray = session.Types.Describe(fields["collapsedArray"]);
+        Assert.Equal(
+            UdonRuntimeTypeTest.Unsupported, collapsedArray.RuntimeTypeTest);
+
+        var aggregate = session.Types.Describe(fields["aggregate"]);
+        Assert.Equal(
+            UdonRepresentationKind.ObjectArrayBundle,
+            aggregate.Representation);
+        Assert.Equal(StorageTypes.ObjectArray, aggregate.Storage);
+
+        var generic = session.Types.Describe(fields["registeredGeneric"]);
+        Assert.Equal(UdonRepresentationKind.Exact, generic.Representation);
+        Assert.True(generic.HasRegisteredTypeNode);
+
+        var universal = session.Types.Describe(fields["universalObject"]);
+        Assert.Equal(
+            UdonRuntimeTypeTest.UniversalObject,
+            universal.RuntimeTypeTest);
     }
 
     [Fact]

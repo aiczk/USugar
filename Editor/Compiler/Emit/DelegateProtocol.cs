@@ -37,13 +37,18 @@ public static class DelegateAbi
     /// params map to SystemObjectArray (bundle references) via the ExternResolver delegate arm.
     /// </summary>
     public static string BuildSigPart(IMethodSymbol invokeOrTarget,
+        UdonTypeSystem types,
         IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeParamMap = null)
     {
+        if (invokeOrTarget == null)
+            throw new ArgumentNullException(nameof(invokeOrTarget));
+        if (types == null) throw new ArgumentNullException(nameof(types));
         var paramParts = invokeOrTarget.Parameters
-            .Select(p => ExternResolver.GetUdonTypeName(p.Type, typeParamMap));
+            .Select(p => types.GetUdonTypeName(p.Type, typeParamMap));
         var retPart = invokeOrTarget.ReturnsVoid
             ? "Void"
-            : ExternResolver.GetUdonTypeName(invokeOrTarget.ReturnType, typeParamMap);
+            : types.GetUdonTypeName(
+                invokeOrTarget.ReturnType, typeParamMap);
         var paramStr = string.Join("_", paramParts);
         if (paramStr == "") paramStr = "Void";
         return $"{paramStr}__{retPart}";
@@ -70,16 +75,20 @@ public static class DelegateAbi
     /// <paramref name="targetMethod"/> is the bound method for method-group bindings, null for lambdas
     /// (a lambda's signature is inferred from the delegate type, so it can never be variant).
     /// </summary>
-    public static void ValidateDelegateBinding(INamedTypeSymbol delegateType, IMethodSymbol targetMethod,
-        IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeParamMap = null, bool varianceResolved = false)
+    public static void ValidateDelegateBinding(INamedTypeSymbol delegateType,
+        IMethodSymbol targetMethod, UdonTypeSystem types,
+        IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeParamMap = null,
+        bool varianceResolved = false)
     {
+        if (types == null) throw new ArgumentNullException(nameof(types));
         var invoke = delegateType?.DelegateInvokeMethod;
         if (invoke == null) return;
 
         ValidateNoRefOutParams(invoke);
 
         if (!varianceResolved && targetMethod != null
-            && BuildSigPart(invoke, typeParamMap) != BuildSigPart(targetMethod, typeParamMap))
+            && BuildSigPart(invoke, types, typeParamMap)
+               != BuildSigPart(targetMethod, types, typeParamMap))
             throw new System.NotSupportedException(
                 "Variant method-group conversion to a delegate is not supported "
               + "(parameter/return types must match the delegate signature exactly under Udon type mapping).");

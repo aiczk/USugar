@@ -94,65 +94,6 @@ public static class ExternResolver
             : runtimeType;
     }
 
-    /// <summary>CLR counterpart of the Roslyn storage-name minting path. Installed-SDK ABI
-    /// collection and directed extern assignability facts must erase a CLR type identically.</summary>
-    internal static string GetUdonTypeName(Type type)
-        => UdonTypeIdentity.From(type).Name;
-
-    /// <summary>
-    /// CLR-reflection counterpart of <see cref="GetUdonTypeName(ITypeSymbol)"/> for fields that have no
-    /// Roslyn symbol. The installed SDK registry is the authority for native CLR types; every remaining
-    /// CLR shape is folded through the same representation families as source symbols.
-    /// </summary>
-    internal static string GetUdonStorageTypeName(Type type,
-        Func<string, bool> isRegisteredUdonTypeName)
-    {
-        if (type == null) throw new ArgumentNullException(nameof(type));
-        if (isRegisteredUdonTypeName == null)
-            throw new ArgumentNullException(nameof(isRegisteredUdonTypeName));
-        if (type.IsByRef)
-            return GetUdonStorageTypeName(type.GetElementType(), isRegisteredUdonTypeName);
-        if (type == typeof(void)) return StorageTypes.Void.Name;
-
-        if (type.IsArray)
-        {
-            if (type.GetArrayRank() > 1) return "SystemObjectArray";
-            var element = type.GetElementType();
-            if (element == null || element.IsArray
-                || typeof(Delegate).IsAssignableFrom(element))
-                return "SystemObjectArray";
-            var elementName = GetUdonStorageTypeName(element, isRegisteredUdonTypeName);
-            if (elementName == "VRCUdonCommonInterfacesIUdonEventReceiver")
-                return "UnityEngineComponentArray";
-            if (elementName == "SystemObjectArray")
-                return "SystemObjectArray";
-            return elementName + "Array";
-        }
-
-        if (typeof(Delegate).IsAssignableFrom(type))
-            return "SystemObjectArray";
-        if (type.IsGenericType
-            && type.GetGenericTypeDefinition() == typeof(Nullable<>))
-            return "SystemObject";
-        var exactTypeName = GetUdonTypeName(type);
-        if (isRegisteredUdonTypeName(exactTypeName))
-            return exactTypeName;
-        if (type.IsEnum)
-            return GetUdonStorageTypeName(
-                Enum.GetUnderlyingType(type), isRegisteredUdonTypeName);
-        if (IsUdonSharpBehaviour(type) || type.IsInterface)
-            return "VRCUdonCommonInterfacesIUdonEventReceiver";
-        return "SystemObjectArray";
-    }
-
-    static bool IsUdonSharpBehaviour(Type type)
-    {
-        for (var current = type; current != null; current = current.BaseType)
-            if (current.Name == "UdonSharpBehaviour")
-                return true;
-        return false;
-    }
-
     public static bool IsUdonSharpBehaviour(ITypeSymbol type)
     {
         if (type is not INamedTypeSymbol namedType) return false;
@@ -165,20 +106,16 @@ public static class ExternResolver
         return false;
     }
 
-    public static string GetUdonTypeName(ITypeSymbol type,
-        IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeParamMap)
-        => GetUdonTypeName(type, typeParamMap, null, null);
-
-    public static string GetUdonTypeName(ITypeSymbol type,
-        IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeParamMap,
-        UdonTypeFactRegistry typeFacts)
-        => GetUdonTypeName(type, typeParamMap, typeFacts, null);
-
     internal static string GetUdonTypeName(ITypeSymbol type,
         IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeParamMap,
         UdonTypeFactRegistry typeFacts,
         Func<string, bool> isRegisteredUdonTypeName)
     {
+        if (type == null) throw new ArgumentNullException(nameof(type));
+        if (typeFacts == null)
+            throw new ArgumentNullException(nameof(typeFacts));
+        if (isRegisteredUdonTypeName == null)
+            throw new ArgumentNullException(nameof(isRegisteredUdonTypeName));
         if (type is ITypeParameterSymbol tp && typeParamMap != null
             && typeParamMap.TryGetValue(tp, out var resolved))
         {
@@ -276,92 +213,6 @@ public static class ExternResolver
         return IsUdonSharpBehaviour(type);
     }
 
-    // Layer-2 choke point: can a RUNTIME type test (SystemType.__IsInstanceOfType) against `target`
-    // honestly discriminate it? GetUdonTypeName is NON-INJECTIVE — it folds many distinct CLR types onto
-    // one Udon runtime tag, so a type test against a folded type matches ANY same-tag value and silently
-    // takes the wrong branch. Return FALSE (test cannot be honest → the caller MUST reject) for every type
-    // in a collapse set; TRUE only for a type whose Udon tag uniquely identifies it. This is the single
-    // predicate every runtime-type-test site routes through, so the unsoundness is closed by construction
-    // rather than by per-node guards. Resolve `target` through the type-param map first (a generic T
-    // monomorphizing to e.g. Func<object>[] must be classified as the concrete type it becomes).
-    public static bool IsRuntimeDistinguishable(ITypeSymbol target,
-        IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeParamMap)
-        => IsRuntimeDistinguishable(target, typeParamMap, null);
-
-    internal static bool IsRuntimeDistinguishable(ITypeSymbol target,
-        IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeParamMap,
-        Func<string, bool> isRegisteredUdonTypeName)
-    {
-        while (target is ITypeParameterSymbol tp && typeParamMap != null
-            && typeParamMap.TryGetValue(tp, out var resolved))
-            target = resolved;
-
-        if (target == null) return false;
-
-        // CA-M0 B79 (face 1): a plain user class the VM cannot represent (no registered externs) has no
-        // runtime type identity in class-ABI v1 — an is/as/switch test against it would bake an unresolvable
-        // "Foo" SystemType token. Route it through the same choke as every collapse tag (caller MUST reject);
-        // a foreign stub WITH externs (real tag) stays distinguishable and its is-test stays legal.
-        if (IsUnsupportedUserClass(target)) return false;
-
-        // Bare object: IsInstanceOfType(typeof(object), v) == `v is object` exactly for every value —
-        // the one universally answerable test, even though its tag "SystemObject" is otherwise shared.
-        if (target.SpecialType == SpecialType.System_Object) return true;
-
-        // Nullable<T> → boxed SystemObject: a runtime test cannot see through the box (any box matches).
-        if (target is INamedTypeSymbol nt && nt.OriginalDefinition.SpecialType == SpecialType.System_Nullable_T)
-            return false;
-
-        // Delegate / user struct / tuple: all fold to SystemObjectArray, sharing that tag with each other,
-        // with arrays of those, and with object[] itself. (IsAggregateValue deliberately excludes delegates,
-        // so the delegate is tested on its own.)
-        if (target is INamedTypeSymbol dlg && dlg.DelegateInvokeMethod != null) return false;
-        if (TypeClassifier.IsAggregateValue(target)) return false;
-
-        // User-defined enum → its underlying int tag (indistinguishable from int or a sibling enum). SDK
-        // enums keep a uniquely registered tag, so they stay distinguishable — mirror GetUdonTypeName's
-        // exact enum classification (source syntax refs AND non-SDK namespace).
-        if (target.TypeKind == TypeKind.Enum
-            && (isRegisteredUdonTypeName != null
-                ? !isRegisteredUdonTypeName(GetExactUdonTypeName(target))
-                : !target.DeclaringSyntaxReferences.IsEmpty
-                  && !IsSdkNamespace(target.ContainingNamespace)))
-            return false;
-
-        // The collapsing runtime tags themselves: SystemObjectArray (delegate/struct/tuple/array-of-those +
-        // object[]), IUdonEventReceiver (UdonSharpBehaviour + every derived type + UdonBehaviour + every
-        // user-defined interface), ComponentArray (arrays of the IUdonEventReceiver set).
-        var tag = GetUdonTypeName(
-            target, typeParamMap, null, isRegisteredUdonTypeName);
-        if (tag == "SystemObjectArray"
-            || tag == "VRCUdonCommonInterfacesIUdonEventReceiver"
-            || tag == "UnityEngineComponentArray")
-            return false;
-
-        return true;
-    }
-
-    /// <summary>A user-defined enum (source-declared, non-SDK namespace) — the ones whose Udon tag is the
-    /// bare underlying integer, so ToString/name lookup must be synthesized (B67). Mirrors the enum branch
-    /// of <see cref="IsRuntimeDistinguishable"/>; SDK enums keep their own registered tag and externs.</summary>
-    public static bool IsUserEnum(ITypeSymbol type) =>
-        type is INamedTypeSymbol e && e.TypeKind == TypeKind.Enum
-        && !e.DeclaringSyntaxReferences.IsEmpty
-        && !IsSdkNamespace(e.ContainingNamespace);
-
-    internal static bool IsUserEnum(ITypeSymbol type,
-        Func<string, bool> isRegisteredUdonTypeName)
-    {
-        if (isRegisteredUdonTypeName == null)
-            throw new ArgumentNullException(nameof(isRegisteredUdonTypeName));
-        return type is INamedTypeSymbol e
-               && e.TypeKind == TypeKind.Enum
-               && !isRegisteredUdonTypeName(GetExactUdonTypeName(e));
-    }
-
-    public static string GetUdonTypeName(ITypeSymbol type)
-        => GetUdonTypeNameAndRecord(type, null, null);
-
     internal static string GetExactUdonTypeName(ITypeSymbol type)
         => UdonTypeIdentity.From(type).Name;
 
@@ -372,9 +223,7 @@ public static class ExternResolver
         var name = ComputeUdonTypeName(
             type, typeFacts, isRegisteredUdonTypeName);
         RejectIfUnsupportedUserClass(type, name);
-        // Session-bound callers provide their fact registry explicitly. Editor reflection helpers
-        // call the pure overload and therefore cannot mutate compiler verification state.
-        typeFacts?.Record(name, type);
+        typeFacts.Record(name, type);
         return name;
     }
 
@@ -431,17 +280,11 @@ public static class ExternResolver
         if (TypeClassifier.IsObjectArrayEmulated(type))
             return "SystemObjectArray";
 
-        // Enum storage is a registry question, not a source-origin question. A session starts with the
-        // installed ABI facts, so an enum keeps its own tag only when that tag is registered. The pure
-        // helper retains the source/SDK classification for analysis callers that have no ABI authority.
+        // Enum storage is a registry question, not a source-origin question.
         if (type.TypeKind == TypeKind.Enum && type is INamedTypeSymbol enumType)
         {
             var exactEnumName = GetExactUdonTypeName(type);
-            var foldToUnderlying = isRegisteredUdonTypeName != null
-                ? !isRegisteredUdonTypeName(exactEnumName)
-                : !type.DeclaringSyntaxReferences.IsEmpty
-                  && !IsSdkNamespace(type.ContainingNamespace);
-            if (foldToUnderlying)
+            if (!isRegisteredUdonTypeName(exactEnumName))
                 return GetUdonTypeNameAndRecord(
                     enumType.EnumUnderlyingType, typeFacts, isRegisteredUdonTypeName);
         }
@@ -543,18 +386,6 @@ public static class ExternResolver
     public static readonly UdonAbiKey EventReceiverGetProgramVariable =
         UdonAbiKey.Method("VRCUdonCommonInterfacesIUdonEventReceiver",
             "GetProgramVariable", new[] { "SystemString" }, "SystemObject");
-
-    public static string GetArrayAccessorType(IArrayTypeSymbol arrayType)
-    {
-        return GetUdonTypeName(arrayType);
-    }
-
-    public static string GetArrayElementAccessorType(IArrayTypeSymbol arrayType)
-    {
-        // Derive element type from array type name: "FooArray" → "Foo"
-        var arrTypeName = GetArrayAccessorType(arrayType);
-        return arrTypeName.Substring(0, arrTypeName.Length - "Array".Length);
-    }
 
     static readonly HashSet<SpecialType> NumericSpecialTypes = new()
     {
@@ -658,11 +489,14 @@ public static class ExternResolver
 
     public static UdonAbiKey ResolveBuiltInBinaryExtern(
         BinaryOperatorKind operatorKind,
-        ITypeSymbol leftType, ITypeSymbol rightType, ITypeSymbol resultType)
+        ITypeSymbol leftType, ITypeSymbol rightType, ITypeSymbol resultType,
+        Func<ITypeSymbol, string> getUdonType)
     {
-        var left = GetUdonTypeName(leftType);
-        var right = GetUdonTypeName(rightType);
-        var result = GetUdonTypeName(resultType);
+        if (getUdonType == null)
+            throw new ArgumentNullException(nameof(getUdonType));
+        var left = getUdonType(leftType);
+        var right = getUdonType(rightType);
+        var result = getUdonType(resultType);
 
         // String concat: mixed-type addition → Concat(object, object)
         if (operatorKind == BinaryOperatorKind.Add
@@ -683,7 +517,8 @@ public static class ExternResolver
                 || operatorKind == BinaryOperatorKind.LessThan || operatorKind == BinaryOperatorKind.GreaterThan
                 || operatorKind == BinaryOperatorKind.LessThanOrEqual || operatorKind == BinaryOperatorKind.GreaterThanOrEqual))
         {
-            var underlying = GetUdonTypeName(((INamedTypeSymbol)leftType).EnumUnderlyingType);
+            var underlying = getUdonType(
+                ((INamedTypeSymbol)leftType).EnumUnderlyingType);
             var opName2 = BinaryOperatorNames[operatorKind];
             // Every value-producing operation promotes a small underlying through Int32. Udon has no
             // byte/sbyte/short/ushort value operators, and the emitter computes their arithmetic and

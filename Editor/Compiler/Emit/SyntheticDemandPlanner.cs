@@ -18,7 +18,8 @@ internal sealed class SyntheticDemandPlanner : HandlerBase
         }
         if (operation is IConversionOperation conversion
             && DelegateDemandPolicy.TryGetVariantConversion(
-                _compilation, conversion, _ctx.Generics.TypeParamMap,
+                _compilation, conversion, _ctx.Session.Types,
+                _ctx.Generics.TypeParamMap,
                 out var outerInvoke, out var innerInvoke))
         {
             RegisterWrapperSig(outerInvoke, innerInvoke, _ctx.Generics.TypeParamMap);
@@ -29,7 +30,8 @@ internal sealed class SyntheticDemandPlanner : HandlerBase
             && ResolveType(compound.Type) is INamedTypeSymbol delegateType
             && delegateType.DelegateInvokeMethod is { } invoke)
         {
-            var signature = DelegateAbi.BuildSigPart(invoke, _ctx.Generics.TypeParamMap);
+            var signature = DelegateAbi.BuildSigPart(
+                invoke, _ctx.Session.Types, _ctx.Generics.TypeParamMap);
             RegisterMulticastSig(signature, invoke,
                 compound.OperatorKind == BinaryOperatorKind.Add
                     ? MulticastOperations.Combine : MulticastOperations.Remove);
@@ -41,7 +43,9 @@ internal sealed class SyntheticDemandPlanner : HandlerBase
             && binaryDelegate.DelegateInvokeMethod is { } binaryInvoke)
         {
             RegisterMulticastSig(
-                DelegateAbi.BuildSigPart(binaryInvoke, _ctx.Generics.TypeParamMap), binaryInvoke,
+                DelegateAbi.BuildSigPart(
+                    binaryInvoke, _ctx.Session.Types,
+                    _ctx.Generics.TypeParamMap), binaryInvoke,
                 binary.OperatorKind == BinaryOperatorKind.Add
                     ? MulticastOperations.Combine : MulticastOperations.Remove);
             return;
@@ -53,7 +57,9 @@ internal sealed class SyntheticDemandPlanner : HandlerBase
             && eventDelegate.DelegateInvokeMethod is { } eventInvoke)
         {
             RegisterMulticastSig(
-                DelegateAbi.BuildSigPart(eventInvoke, _ctx.Generics.TypeParamMap), eventInvoke,
+                DelegateAbi.BuildSigPart(
+                    eventInvoke, _ctx.Session.Types,
+                    _ctx.Generics.TypeParamMap), eventInvoke,
                 eventAssignment.Adds ? MulticastOperations.Combine : MulticastOperations.Remove);
             return;
         }
@@ -85,10 +91,12 @@ internal sealed class SyntheticDemandPlanner : HandlerBase
 
 internal static class DelegateDemandPolicy
 {
-    public static bool TryGetVariantConversion(Compilation compilation, IConversionOperation conversion,
+    public static bool TryGetVariantConversion(Compilation compilation,
+        IConversionOperation conversion, UdonTypeSystem types,
         System.Collections.Generic.IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeParameterMap,
         out IMethodSymbol outerInvoke, out IMethodSymbol innerInvoke)
     {
+        if (types == null) throw new System.ArgumentNullException(nameof(types));
         outerInvoke = null;
         innerInvoke = null;
         var destination = TypeEnvironment.CloseType(compilation, conversion.Type, typeParameterMap)
@@ -98,8 +106,10 @@ internal static class DelegateDemandPolicy
         if (destination?.DelegateInvokeMethod is not { } destinationInvoke
             || source?.DelegateInvokeMethod is not { } sourceInvoke
             || SymbolEqualityComparer.Default.Equals(destination, source)
-            || DelegateAbi.BuildSigPart(destinationInvoke, typeParameterMap)
-               == DelegateAbi.BuildSigPart(sourceInvoke, typeParameterMap))
+            || DelegateAbi.BuildSigPart(
+                   destinationInvoke, types, typeParameterMap)
+               == DelegateAbi.BuildSigPart(
+                   sourceInvoke, types, typeParameterMap))
             return false;
         outerInvoke = destinationInvoke;
         innerInvoke = sourceInvoke;

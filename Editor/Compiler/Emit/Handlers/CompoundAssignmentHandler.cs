@@ -47,7 +47,7 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
             // value-type operand (user struct / tuple / anonymous type) would launder to "System.Object[]".
             ClassAbi.RejectImplicitToString(vOp.Type);
             if (ResolveType(vOp.Type) is INamedTypeSymbol vt
-                && (TypeClassifier.IsUserClass(vt) || IsUserEnum(vt)))
+                && (TypeClassifier.IsUserClass(vt) || IsFoldedEnum(vt)))
             {
                 var converted = ConvertConcatOperand(VisitExpression(vOp), vOp);
                 var concat = ExternCall(UdonAbi.StringConcatObjects,
@@ -111,7 +111,8 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
             ? _ctx.Abi.BindOperator(op.OperatorMethod, type => GetStorageTypeName(type))
             : _ctx.Abi.BindExact(ExternResolver.ResolveBuiltInBinaryExtern(
                 op.OperatorKind,
-                ResolveType(op.Target.Type), ResolveType(op.Value.Type), ResolveType(op.Type)));
+                ResolveType(op.Target.Type), ResolveType(op.Value.Type),
+                ResolveType(op.Type), GetStorageTypeName));
         CLeaf resultVal = ExternCall(sig, new List<CLeaf> { leftVal, rightVal }, new StorageType(opResultType));
 
         // Narrow back to original type if promoted (C#-unchecked wrap, not checked Convert)
@@ -147,7 +148,8 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
             RejectUnsafeCrossProgramDelegateWrite(op.Target, right.Info);
         var rightVal = right.Leaf;
 
-        var sigPart = DelegateAbi.BuildSigPart(invoke, _ctx.Generics.TypeParamMap);
+        var sigPart = DelegateAbi.BuildSigPart(
+            invoke, _ctx.Session.Types, _ctx.Generics.TypeParamMap);
         RegisterMulticastSig(sigPart, invoke,
             op.OperatorKind == BinaryOperatorKind.Add
                 ? MulticastOperations.Combine
@@ -291,7 +293,8 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
             RejectUnsafeCrossProgramEventHandler(evt, handler.Info);
         var handlerVal = handler.Leaf;
 
-        var sigPart = DelegateAbi.BuildSigPart(invoke, _ctx.Generics.TypeParamMap);
+        var sigPart = DelegateAbi.BuildSigPart(
+            invoke, _ctx.Session.Types, _ctx.Generics.TypeParamMap);
         RegisterMulticastSig(sigPart, invoke,
             op.Adds ? MulticastOperations.Combine : MulticastOperations.Remove);
 

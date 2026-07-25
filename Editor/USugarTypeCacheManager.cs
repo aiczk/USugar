@@ -242,8 +242,7 @@ static class USugarTypeCacheManager
                     .FirstOrDefault();
                 var systemType = fieldSymbol != null
                     ? ResolveUdonType(types.GetUdonTypeName(fieldSymbol.Type))
-                    : ResolveUdonType(ExternResolver.GetUdonStorageTypeName(
-                        userType, types.IsRegisteredUdonTypeName));
+                    : ResolveUdonType(types.GetUdonTypeName(userType));
                 if (systemType == null)
                     throw new InvalidOperationException(
                         $"Could not resolve Udon storage type for CLR field "
