@@ -150,7 +150,7 @@ public class C { public List<int> field; }");
         var type = comp.GetTypeByMetadataName("C");
         var field = type.GetMembers("field")[0] as IFieldSymbol;
         Assert.Equal("SystemCollectionsGenericListSystemInt32",
-            UdonTypeIdentity.From(field.Type).Name);
+            UdonTypeIdentity.FromStorage(field.Type).Name);
     }
 
     [Fact]
@@ -171,7 +171,7 @@ public class C { public Dictionary<string, int> field; }");
         var type = comp.GetTypeByMetadataName("C");
         var field = type.GetMembers("field")[0] as IFieldSymbol;
         Assert.Equal("SystemCollectionsGenericDictionarySystemStringSystemInt32",
-            UdonTypeIdentity.From(field.Type).Name);
+            UdonTypeIdentity.FromStorage(field.Type).Name);
     }
 
     [Fact]
@@ -242,6 +242,6 @@ public class C { public List<int>[] field; }");
         var type = comp.GetTypeByMetadataName("C");
         var field = type.GetMembers("field")[0] as IFieldSymbol;
         Assert.Equal("SystemCollectionsGenericListSystemInt32Array",
-            UdonTypeIdentity.From(field.Type).Name);
+            UdonTypeIdentity.FromStorage(field.Type).Name);
     }
 }

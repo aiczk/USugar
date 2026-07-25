@@ -3,8 +3,9 @@ using System.Linq;
 using Microsoft.CodeAnalysis;
 
 /// <summary>
-/// Canonical identity of one Udon type name. Strings enter this domain only
-/// through <see cref="UdonTypeIdentity"/> or an installed-SDK snapshot.
+/// Canonical identity of one Udon storage type after Udon remapping. Strings
+/// enter this domain only through <see cref="UdonTypeIdentity"/> or an
+/// installed-SDK snapshot.
 /// </summary>
 public readonly struct UdonTypeId : IEquatable<UdonTypeId>
 {
@@ -37,19 +38,63 @@ public readonly struct UdonTypeId : IEquatable<UdonTypeId>
 }
 
 /// <summary>
-/// The sole canonical spelling producer for CLR and Roslyn type identities.
-/// Each frontend first builds the same small structural shape; formatting and
-/// Udon remapping happen once after that boundary.
+/// Canonical spelling of an exact CLR <see cref="Type"/> token before Udon
+/// storage remapping. Storage identity is many-to-one (for example,
+/// UdonSharpBehaviour and UdonBehaviour both lower to IUdonEventReceiver);
+/// runtime SystemType lookup must retain this distinct identity.
+/// </summary>
+public readonly struct UdonClrTypeId : IEquatable<UdonClrTypeId>
+{
+    public string Name { get; }
+
+    internal UdonClrTypeId(string canonicalName)
+    {
+        if (string.IsNullOrWhiteSpace(canonicalName))
+            throw new ArgumentException(
+                "A canonical CLR type-token name is required.",
+                nameof(canonicalName));
+        Name = canonicalName;
+    }
+
+    public bool Equals(UdonClrTypeId other)
+        => string.Equals(Name, other.Name, StringComparison.Ordinal);
+
+    public override bool Equals(object obj)
+        => obj is UdonClrTypeId other && Equals(other);
+
+    public override int GetHashCode()
+        => StringComparer.Ordinal.GetHashCode(Name ?? "");
+
+    public override string ToString() => Name ?? "";
+
+    public static bool operator ==(UdonClrTypeId left, UdonClrTypeId right)
+        => left.Equals(right);
+
+    public static bool operator !=(UdonClrTypeId left, UdonClrTypeId right)
+        => !left.Equals(right);
+}
+
+/// <summary>
+/// The sole structural spelling producer for storage identities and CLR
+/// SystemType tokens. Both frontends build the same shape; the caller must
+/// choose explicitly whether Udon storage remapping is applied.
 /// </summary>
 internal static class UdonTypeIdentity
 {
-    public static UdonTypeId From(Type type)
-        => Shape.From(type).ToId();
+    public static UdonTypeId FromStorage(Type type)
+        => Shape.From(type).ToStorageId();
 
-    public static UdonTypeId From(ITypeSymbol type)
-        => Shape.From(type).ToId();
+    public static UdonTypeId FromStorage(ITypeSymbol type)
+        => Shape.From(type).ToStorageId();
 
-    public static UdonTypeId FromCanonicalName(string canonicalName)
+    public static UdonTypeId FromCanonicalStorageName(string canonicalName)
+        => new(canonicalName);
+
+    public static UdonClrTypeId FromClrToken(Type type)
+        => Shape.From(type).ToClrTypeId();
+
+    public static UdonClrTypeId FromCanonicalClrTokenName(
+        string canonicalName)
         => new(canonicalName);
 
     sealed class Shape
@@ -129,7 +174,13 @@ internal static class UdonTypeIdentity
             return new Shape(ShapeKind.Raw, fullName);
         }
 
-        public UdonTypeId ToId()
+        public UdonTypeId ToStorageId()
+            => new(ToCanonicalName(applyStorageRemap: true));
+
+        public UdonClrTypeId ToClrTypeId()
+            => new(ToCanonicalName(applyStorageRemap: false));
+
+        string ToCanonicalName(bool applyStorageRemap)
         {
             string canonicalName;
             switch (_kind)
@@ -138,19 +189,22 @@ internal static class UdonTypeIdentity
                     canonicalName = ExternResolver.SanitizeTypeName(_baseName);
                     break;
                 case ShapeKind.Array:
-                    canonicalName = _element.ToId().Name + "Array";
+                    canonicalName = _element.ToCanonicalName(
+                        applyStorageRemap) + "Array";
                     break;
                 case ShapeKind.Generic:
                     canonicalName = ExternResolver.SanitizeTypeName(_baseName);
                     foreach (var argument in _arguments)
-                        canonicalName += argument.ToId().Name;
+                        canonicalName += argument.ToCanonicalName(
+                            applyStorageRemap);
                     break;
                 default:
                     throw new InvalidOperationException(
                         $"Unknown Udon type shape '{_kind}'.");
             }
-            return new UdonTypeId(
-                ExternResolver.RemapUdonType(canonicalName));
+            return applyStorageRemap
+                ? ExternResolver.RemapUdonType(canonicalName)
+                : canonicalName;
         }
 
         static string QualifiedDefinitionName(

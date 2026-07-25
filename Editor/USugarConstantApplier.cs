@@ -38,7 +38,8 @@ static class USugarConstantApplier
                     $"Assembled program has no symbol for constant '{id}'.");
             if (udonType == "SystemType" && constValue is string udonTypeName)
             {
-                var clrType = USugarTypeCacheManager.ResolveUdonType(udonTypeName)
+                var clrType = USugarTypeCacheManager.ResolveClrTypeToken(
+                    udonTypeName)
                     ?? throw new InvalidOperationException(
                         $"Could not resolve CLR type token '{udonTypeName}' "
                         + $"for constant '{id}'.");
@@ -47,7 +48,8 @@ static class USugarConstantApplier
             else
             {
                 var value = constValue;
-                var clrType = USugarTypeCacheManager.ResolveUdonType(udonType)
+                var clrType = USugarTypeCacheManager.ResolveClrTypeToken(
+                    udonType)
                     ?? throw new InvalidOperationException(
                         $"Could not resolve heap type '{udonType}' for constant '{id}'.");
                 if (value != null && !clrType.IsInstanceOfType(value))

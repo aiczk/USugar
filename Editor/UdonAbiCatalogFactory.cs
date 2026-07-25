@@ -84,5 +84,5 @@ static class UdonAbiCatalogFactory
     }
 
     static string ToAbiTypeName(Type type)
-        => UdonTypeIdentity.From(type).Name;
+        => UdonTypeIdentity.FromStorage(type).Name;
 }

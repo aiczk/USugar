@@ -183,7 +183,7 @@ public sealed class UdonAbiCatalog
             UdonTypeFactRegistry.TypeFact? fact = null)
         {
             if (string.IsNullOrWhiteSpace(typeName)) return;
-            var id = UdonTypeIdentity.FromCanonicalName(typeName);
+            var id = UdonTypeIdentity.FromCanonicalStorageName(typeName);
             if (!evidence.TryGetValue(id, out var existing))
             {
                 evidence.Add(id, (capabilities, fact));
@@ -265,7 +265,7 @@ public sealed class UdonAbiCatalog
     public bool IsRegisteredType(string udonTypeName)
         => !string.IsNullOrWhiteSpace(udonTypeName)
            && IsRegisteredType(
-               UdonTypeIdentity.FromCanonicalName(udonTypeName));
+               UdonTypeIdentity.FromCanonicalStorageName(udonTypeName));
     public bool IsRegisteredType(UdonTypeId id)
         => _types.TryGetValue(id, out var descriptor)
            && descriptor.HasTypeNode;

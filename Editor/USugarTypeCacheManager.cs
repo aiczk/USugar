@@ -13,79 +13,122 @@ using UnityEngine;
 /// </summary>
 static class USugarTypeCacheManager
 {
-    // Cached reverse lookup: SanitizeTypeName(FullName) → CLR Type (built once per domain)
-    static Dictionary<string, Type> _udonTypeCache;
-    static Dictionary<string, List<Type>> _udonTypeConflicts;
+    // Cached reverse lookup: exact, non-remapped SystemType token -> CLR Type.
+    static Dictionary<UdonClrTypeId, Type> _udonTypeCache;
+    static Dictionary<UdonClrTypeId, List<Type>> _udonTypeConflicts;
     // Cached CLR type lookups (persists across compiles, assemblies don't change in-session)
     static readonly Dictionary<string, Type> _clrTypeCache = new();
 
     // ── Udon type resolution ──
 
-    internal static Type ResolveUdonType(string udonTypeName)
+    internal static Type ResolveClrTypeToken(string clrTypeTokenName)
     {
-        if (_udonTypeCache == null)
+        if (string.IsNullOrWhiteSpace(clrTypeTokenName)) return null;
+        return ResolveClrTypeToken(
+            UdonTypeIdentity.FromCanonicalClrTokenName(clrTypeTokenName));
+    }
+
+    internal static Type ResolveStorageClrType(UdonTypeId storageType,
+        Type exactSourceType = null)
+    {
+        // Constructed generic types and arrays are not returned by
+        // Assembly.GetExportedTypes(). Use the source CLR type only when its
+        // non-remapped SystemType token exactly equals the storage identity.
+        // A remapped match is insufficient: UdonSharpBehaviour,
+        // UdonBehaviour, and IUdonEventReceiver share one storage identity.
+        if (exactSourceType != null)
         {
-            _udonTypeCache = new Dictionary<string, Type>();
-            _udonTypeConflicts = new Dictionary<string, List<Type>>();
-            foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
+            var exactToken = UdonTypeIdentity.FromClrToken(exactSourceType);
+            if (string.Equals(
+                    exactToken.Name, storageType.Name,
+                    StringComparison.Ordinal))
             {
-                if (asm.IsDynamic) continue;
-                foreach (var type in GetLoadableExportedTypes(asm))
-                {
-                    if (type.FullName == null) continue;
-                    var key = ExternResolver.SanitizeTypeName(type.FullName);
-                    if (!_udonTypeCache.TryGetValue(key, out var existing))
-                    {
-                        _udonTypeCache.Add(key, type);
-                        continue;
-                    }
-                    if (existing == type) continue;
-                    if (!_udonTypeConflicts.TryGetValue(key, out var conflicts))
-                    {
-                        conflicts = new List<Type> { existing };
-                        _udonTypeConflicts.Add(key, conflicts);
-                    }
-                    if (!conflicts.Contains(type))
-                        conflicts.Add(type);
-                }
+                EnsureUdonTypeCache();
+                AddUdonTypeCandidate(exactToken, exactSourceType);
+                return exactSourceType;
             }
         }
-        if (_udonTypeConflicts.TryGetValue(udonTypeName, out var ambiguous))
+        return ResolveClrTypeToken(
+            UdonTypeIdentity.FromCanonicalClrTokenName(storageType.Name));
+    }
+
+    static Type ResolveClrTypeToken(UdonClrTypeId typeToken)
+    {
+        EnsureUdonTypeCache();
+
+        if (_udonTypeConflicts.TryGetValue(typeToken, out var ambiguous))
         {
             var registered = ambiguous.Where(IsRegisteredUdonType).ToArray();
             if (registered.Length == 1)
             {
-                _udonTypeCache[udonTypeName] = registered[0];
-                _udonTypeConflicts.Remove(udonTypeName);
+                _udonTypeCache[typeToken] = registered[0];
+                _udonTypeConflicts.Remove(typeToken);
                 return registered[0];
             }
             IEnumerable<Type> candidates = registered.Length > 0
                 ? registered
                 : ambiguous;
             throw new InvalidOperationException(
-                $"Udon type name '{udonTypeName}' maps to multiple "
+                $"Udon CLR type token '{typeToken}' maps to multiple "
                 + $"{(registered.Length > 1 ? "registered " : "")}CLR types: "
                 + string.Join(", ", candidates
                     .Select(type => type.AssemblyQualifiedName)
                     .OrderBy(name => name, StringComparer.Ordinal)));
         }
-        if (_udonTypeCache.TryGetValue(udonTypeName, out var t))
+        if (_udonTypeCache.TryGetValue(typeToken, out var t))
             return t;
 
         // Array types are constructed types not returned by GetExportedTypes().
         // Resolve by stripping "Array" suffix and constructing the array type.
-        if (udonTypeName.EndsWith("Array"))
+        if (typeToken.Name.EndsWith("Array"))
         {
-            var elemType = ResolveUdonType(udonTypeName.Substring(0, udonTypeName.Length - 5));
+            var elemType = ResolveClrTypeToken(
+                UdonTypeIdentity.FromCanonicalClrTokenName(
+                    typeToken.Name.Substring(
+                        0, typeToken.Name.Length - 5)));
             if (elemType != null)
             {
                 var arrayType = elemType.MakeArrayType();
-                _udonTypeCache[udonTypeName] = arrayType;
+                _udonTypeCache[typeToken] = arrayType;
                 return arrayType;
             }
         }
 
         return null;
+    }
+
+    static void EnsureUdonTypeCache()
+    {
+        if (_udonTypeCache != null) return;
+        _udonTypeCache = new Dictionary<UdonClrTypeId, Type>();
+        _udonTypeConflicts = new Dictionary<UdonClrTypeId, List<Type>>();
+        foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
+        {
+            if (asm.IsDynamic) continue;
+            foreach (var type in GetLoadableExportedTypes(asm))
+            {
+                if (type.FullName == null) continue;
+                AddUdonTypeCandidate(
+                    UdonTypeIdentity.FromClrToken(type), type);
+            }
+        }
+    }
+
+    static void AddUdonTypeCandidate(UdonClrTypeId key, Type type)
+    {
+        if (!_udonTypeCache.TryGetValue(key, out var existing))
+        {
+            _udonTypeCache.Add(key, type);
+            return;
+        }
+        if (existing == type) return;
+        if (!_udonTypeConflicts.TryGetValue(key, out var conflicts))
+        {
+            conflicts = new List<Type> { existing };
+            _udonTypeConflicts.Add(key, conflicts);
+        }
+        if (!conflicts.Contains(type))
+            conflicts.Add(type);
     }
 
     // ── CLR type resolution ──
@@ -163,7 +206,9 @@ static class USugarTypeCacheManager
         var userType = ResolveClrType(field.Type)
             ?? throw new InvalidOperationException(
                 $"Could not resolve CLR type for field '{field.ToDisplayString()}'.");
-        var systemType = ResolveUdonType(types.GetUdonTypeName(field.Type))
+        var lowering = types.Describe(field.Type);
+        var systemType = ResolveStorageClrType(
+            lowering.Storage.Id, userType)
             ?? throw new InvalidOperationException(
                 $"Could not resolve Udon storage type for field "
                 + $"'{field.ToDisplayString()}'.");
@@ -184,7 +229,9 @@ static class USugarTypeCacheManager
         var userType = ResolveClrType(property.Type)
             ?? throw new InvalidOperationException(
                 $"Could not resolve CLR type for property '{property.ToDisplayString()}'.");
-        var systemType = ResolveUdonType(types.GetUdonTypeName(property.Type))
+        var lowering = types.Describe(property.Type);
+        var systemType = ResolveStorageClrType(
+            lowering.Storage.Id, userType)
             ?? throw new InvalidOperationException(
                 $"Could not resolve Udon storage type for property "
                 + $"'{property.ToDisplayString()}'.");
@@ -240,9 +287,11 @@ static class USugarTypeCacheManager
                 var fieldSymbol = ownerSymbol?.GetMembers(field.Name)
                     .OfType<IFieldSymbol>()
                     .FirstOrDefault();
-                var systemType = fieldSymbol != null
-                    ? ResolveUdonType(types.GetUdonTypeName(fieldSymbol.Type))
-                    : ResolveUdonType(types.GetUdonTypeName(userType));
+                var lowering = fieldSymbol != null
+                    ? types.Describe(fieldSymbol.Type)
+                    : types.Describe(userType);
+                var systemType = ResolveStorageClrType(
+                    lowering.Storage.Id, userType);
                 if (systemType == null)
                     throw new InvalidOperationException(
                         $"Could not resolve Udon storage type for CLR field "

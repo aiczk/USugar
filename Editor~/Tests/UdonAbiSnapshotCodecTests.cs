@@ -51,14 +51,14 @@ public class UdonAbiSnapshotCodecTests
         Assert.False(decoded.IsRegisteredType("Missing"));
 
         Assert.True(decoded.TryGetType(
-            UdonTypeIdentity.FromCanonicalName("Fixture"), out var fixture));
+            UdonTypeIdentity.FromCanonicalStorageName("Fixture"), out var fixture));
         Assert.True(fixture.HasTypeNode);
         Assert.True(fixture.AppearsAsExternOwner);
         Assert.False(fixture.AppearsAsExternOperand);
         Assert.False(fixture.IsValueType);
 
         Assert.True(decoded.TryGetType(
-            UdonTypeIdentity.FromCanonicalName("SystemInt32"), out var int32));
+            UdonTypeIdentity.FromCanonicalStorageName("SystemInt32"), out var int32));
         Assert.True(int32.HasTypeNode);
         Assert.True(int32.AppearsAsExternOperand);
     }

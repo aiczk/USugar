@@ -28,9 +28,9 @@ public class ClrStorageTypePolicyTests
     public void ConstructedGenericClrNamesMatchTheRegistrySpelling()
     {
         Assert.Equal("SystemCollectionsGenericListSystemInt32",
-            UdonTypeIdentity.From(typeof(List<int>)).Name);
+            UdonTypeIdentity.FromStorage(typeof(List<int>)).Name);
         Assert.Equal("SystemCollectionsGenericIListSystemInt32",
-            UdonTypeIdentity.From(typeof(IList<int>)).Name);
+            UdonTypeIdentity.FromStorage(typeof(IList<int>)).Name);
 
         var types = RegistryTypes();
         Assert.Equal("SystemCollectionsGenericListSystemInt32",
@@ -53,9 +53,9 @@ public class GenericNameCarrier
             .ToDictionary(field => field.Name);
         var session = new CompilationSession(compilation, TestHelper.RegistryFacts);
 
-        Assert.Equal(UdonTypeIdentity.From(typeof(List<int>)).Name,
+        Assert.Equal(UdonTypeIdentity.FromStorage(typeof(List<int>)).Name,
             session.Types.GetUdonTypeName(fields["list"].Type));
-        Assert.Equal(UdonTypeIdentity.From(typeof(IList<int>)).Name,
+        Assert.Equal(UdonTypeIdentity.FromStorage(typeof(IList<int>)).Name,
             session.Types.GetUdonTypeName(fields["listInterface"].Type));
     }
 
@@ -151,20 +151,20 @@ public class EnumAuthorityProbe : UdonSharpBehaviour { }
         {
             var symbol = compilation.GetTypeByMetadataName(metadataName);
             Assert.NotNull(symbol);
-            var exactName = ExternResolver.GetExactUdonTypeName(symbol);
-            Assert.True(session.Types.IsRegisteredUdonTypeName(exactName));
-            Assert.Null(session.TypeFacts.IsEnumFact(exactName));
+            var exactType = UdonTypeIdentity.FromStorage(symbol);
+            Assert.True(session.Types.IsRegisteredUdonType(exactType));
+            Assert.Null(session.TypeFacts.IsEnumFact(exactType));
 
-            Assert.Equal(exactName, session.Types.GetUdonTypeName(symbol));
+            Assert.Equal(exactType.Name, session.Types.GetUdonTypeName(symbol));
             Assert.False(session.Types.IsFoldedEnum(symbol));
             Assert.True(session.Types.IsRuntimeDistinguishable(symbol));
-            Assert.True(session.TypeFacts.IsEnumFact(exactName));
+            Assert.True(session.TypeFacts.IsEnumFact(exactType));
         }
 
         var unregistered = compilation.GetTypeByMetadataName("UnityEngine.HideFlags");
         Assert.NotNull(unregistered);
-        Assert.False(session.Types.IsRegisteredUdonTypeName(
-            ExternResolver.GetExactUdonTypeName(unregistered)));
+        Assert.False(session.Types.IsRegisteredUdonType(
+            UdonTypeIdentity.FromStorage(unregistered)));
         Assert.Equal(StorageTypes.Int32.Name,
             session.Types.GetUdonTypeName(unregistered));
         Assert.True(session.Types.IsFoldedEnum(unregistered));

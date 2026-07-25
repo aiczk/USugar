@@ -106,16 +106,13 @@ public static class ExternResolver
         return false;
     }
 
-    internal static string GetUdonTypeName(ITypeSymbol type,
+    internal static string LowerUdonStorageName(ITypeSymbol type,
         IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeParamMap,
-        UdonTypeFactRegistry typeFacts,
-        Func<string, bool> isRegisteredUdonTypeName)
+        Func<UdonTypeId, bool> isRegisteredUdonType)
     {
         if (type == null) throw new ArgumentNullException(nameof(type));
-        if (typeFacts == null)
-            throw new ArgumentNullException(nameof(typeFacts));
-        if (isRegisteredUdonTypeName == null)
-            throw new ArgumentNullException(nameof(isRegisteredUdonTypeName));
+        if (isRegisteredUdonType == null)
+            throw new ArgumentNullException(nameof(isRegisteredUdonType));
         if (type is ITypeParameterSymbol tp && typeParamMap != null
             && typeParamMap.TryGetValue(tp, out var resolved))
         {
@@ -128,8 +125,8 @@ public static class ExternResolver
                     $"Type parameter '{tp.Name}' resolves to itself in the monomorphization map — a "
                     + "self-referential binding from an unclosed containing-type specialization. The generic "
                     + "was not fully monomorphized to a concrete type at this emit site.");
-            return GetUdonTypeName(
-                resolved, typeParamMap, typeFacts, isRegisteredUdonTypeName);
+            return LowerUdonStorageName(
+                resolved, typeParamMap, isRegisteredUdonType);
         }
 
         if (type is IArrayTypeSymbol arrayType)
@@ -159,8 +156,8 @@ public static class ExternResolver
             // struct[] / tuple[] / class[] → object[] of boxed object[] elements (no SystemObjectArrayArray).
             if (TypeClassifier.IsObjectArrayEmulated(elementType))
                 return "SystemObjectArray";
-            var elemTypeName = GetUdonTypeName(
-                elementType, typeParamMap, typeFacts, isRegisteredUdonTypeName);
+            var elemTypeName = LowerUdonStorageName(
+                elementType, typeParamMap, isRegisteredUdonType);
             if (elemTypeName == "VRCUdonCommonInterfacesIUdonEventReceiver")
                 return "UnityEngineComponentArray";
             return RemapUdonType(elemTypeName) + "Array";
@@ -193,15 +190,14 @@ public static class ExternResolver
             var ns = def.ContainingNamespace?.ToDisplayString();
             var baseName = SanitizeTypeName(string.IsNullOrEmpty(ns) ? def.Name : $"{ns}.{def.Name}");
             foreach (var arg in named.TypeArguments)
-                baseName += GetUdonTypeName(
-                    arg, typeParamMap, typeFacts, isRegisteredUdonTypeName);
+                baseName += LowerUdonStorageName(
+                    arg, typeParamMap, isRegisteredUdonType);
             var genericName = RemapUdonType(baseName);
             RejectIfUnsupportedUserClass(type, genericName); // a generic user class (Node<int>) has no externs
             return genericName;
         }
 
-        return GetUdonTypeNameAndRecord(
-            type, typeFacts, isRegisteredUdonTypeName);
+        return LowerUdonStorageName(type, isRegisteredUdonType);
     }
 
     public static bool IsUdonSharpBehaviour(ITypeSymbol type,
@@ -213,23 +209,17 @@ public static class ExternResolver
         return IsUdonSharpBehaviour(type);
     }
 
-    internal static string GetExactUdonTypeName(ITypeSymbol type)
-        => UdonTypeIdentity.From(type).Name;
-
-    static string GetUdonTypeNameAndRecord(ITypeSymbol type,
-        UdonTypeFactRegistry typeFacts,
-        Func<string, bool> isRegisteredUdonTypeName)
+    static string LowerUdonStorageName(ITypeSymbol type,
+        Func<UdonTypeId, bool> isRegisteredUdonType)
     {
         var name = ComputeUdonTypeName(
-            type, typeFacts, isRegisteredUdonTypeName);
+            type, isRegisteredUdonType);
         RejectIfUnsupportedUserClass(type, name);
-        typeFacts.Record(name, type);
         return name;
     }
 
     static string ComputeUdonTypeName(ITypeSymbol type,
-        UdonTypeFactRegistry typeFacts,
-        Func<string, bool> isRegisteredUdonTypeName)
+        Func<UdonTypeId, bool> isRegisteredUdonType)
     {
         // Array types
         if (type is IArrayTypeSymbol arrayType)
@@ -249,8 +239,8 @@ public static class ExternResolver
                 return "SystemObjectArray";
             // All types that resolve to IUdonEventReceiver use ComponentArray at runtime:
             // UdonSharpBehaviour[], derived[], UdonBehaviour[], user-interface[]
-            var elemTypeName = GetUdonTypeNameAndRecord(
-                arrayType.ElementType, typeFacts, isRegisteredUdonTypeName);
+            var elemTypeName = LowerUdonStorageName(
+                arrayType.ElementType, isRegisteredUdonType);
             if (elemTypeName == "VRCUdonCommonInterfacesIUdonEventReceiver")
                 return "UnityEngineComponentArray";
             return RemapUdonType(elemTypeName) + "Array";
@@ -283,10 +273,10 @@ public static class ExternResolver
         // Enum storage is a registry question, not a source-origin question.
         if (type.TypeKind == TypeKind.Enum && type is INamedTypeSymbol enumType)
         {
-            var exactEnumName = GetExactUdonTypeName(type);
-            if (!isRegisteredUdonTypeName(exactEnumName))
-                return GetUdonTypeNameAndRecord(
-                    enumType.EnumUnderlyingType, typeFacts, isRegisteredUdonTypeName);
+            var exactEnumType = UdonTypeIdentity.FromStorage(type);
+            if (!isRegisteredUdonType(exactEnumType))
+                return LowerUdonStorageName(
+                    enumType.EnumUnderlyingType, isRegisteredUdonType);
         }
 
         // Generic types: recursively process type arguments
@@ -297,8 +287,8 @@ public static class ExternResolver
             var baseName = string.IsNullOrEmpty(ns) ? def.Name : $"{ns}.{def.Name}";
             baseName = SanitizeTypeName(baseName);
             foreach (var arg in named.TypeArguments)
-                baseName += GetUdonTypeNameAndRecord(
-                    arg, typeFacts, isRegisteredUdonTypeName);
+                baseName += LowerUdonStorageName(
+                    arg, isRegisteredUdonType);
             return RemapUdonType(baseName);
         }
 

@@ -798,9 +798,13 @@ static class USugarCompilationOrchestrator
             var pmeta = new NetworkCallingParameterMetadata[method.Parameters.Length];
             for (int i = 0; i < method.Parameters.Length; i++)
             {
+                var sourceType = USugarTypeCacheManager.ResolveClrType(
+                    method.Parameters[i].Type);
+                var lowering = planner.Session.Types.Describe(
+                    method.Parameters[i].Type);
                 var parameterType =
-                    USugarTypeCacheManager.ResolveUdonType(
-                        planner.Session.Types.GetUdonTypeName(method.Parameters[i].Type))
+                    USugarTypeCacheManager.ResolveStorageClrType(
+                        lowering.Storage.Id, sourceType)
                     ?? throw new InvalidOperationException(
                         $"Could not resolve Udon storage type for [NetworkCallable] parameter "
                         + $"'{method.Parameters[i].Name}' on '{method.ToDisplayString()}'.");

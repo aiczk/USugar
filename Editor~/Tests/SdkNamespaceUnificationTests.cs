@@ -109,11 +109,11 @@ public class NsBoundaryCarrier
         foreach (var (ns, enumField, _, _) in BoundaryBattery)
         {
             var type = types[enumField];
-            var exactName = ExternResolver.GetExactUdonTypeName(type);
-            Assert.False(session.Types.IsRegisteredUdonTypeName(exactName),
-                $"test marker unexpectedly entered the Udon registry: namespace '{ns}', type '{exactName}'");
+            var exactType = UdonTypeIdentity.FromStorage(type);
+            Assert.False(session.Types.IsRegisteredUdonType(exactType),
+                $"test marker unexpectedly entered the Udon registry: namespace '{ns}', type '{exactType}'");
             Assert.True(session.Types.IsFoldedEnum(type),
-                $"unregistered enum did not fold: namespace '{ns}', type '{exactName}'");
+                $"unregistered enum did not fold: namespace '{ns}', type '{exactType}'");
             Assert.Equal("SystemInt32", session.Types.GetUdonTypeName(type));
             Assert.False(session.Types.IsRuntimeDistinguishable(type));
         }
@@ -123,7 +123,8 @@ public class NsBoundaryCarrier
     public void RegisteredSdkControlsKeepTheirNativeClassification()
     {
         var (types, session) = BuildBoundary();
-        Assert.True(session.Types.IsRegisteredUdonTypeName("UnityEngineKeyCode"));
+        Assert.True(session.Types.IsRegisteredUdonType(
+            UdonTypeIdentity.FromCanonicalStorageName("UnityEngineKeyCode")));
         Assert.False(session.Types.IsFoldedEnum(types["fKeyCode"]));
         Assert.Equal("UnityEngineKeyCode", session.Types.GetUdonTypeName(types["fKeyCode"]));
         Assert.True(session.Types.IsRuntimeDistinguishable(types["fKeyCode"]));
@@ -136,7 +137,8 @@ public class NsBoundaryCarrier
     {
         var (types, session) = BuildBoundary();
         var t = types["eUnity"];
-        Assert.False(session.Types.IsRegisteredUdonTypeName("UnityUEnum"));
+        Assert.False(session.Types.IsRegisteredUdonType(
+            UdonTypeIdentity.FromCanonicalStorageName("UnityUEnum")));
         Assert.True(session.Types.IsFoldedEnum(t));
         Assert.Equal("SystemInt32", session.Types.GetUdonTypeName(t));
         Assert.False(session.Types.IsRuntimeDistinguishable(t));

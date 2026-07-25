@@ -17,7 +17,7 @@ public readonly struct StorageType : IEquatable<StorageType>
     public string Name => Id.Name;
 
     public StorageType(string name)
-        : this(UdonTypeIdentity.FromCanonicalName(name))
+        : this(UdonTypeIdentity.FromCanonicalStorageName(name))
     {
     }
 

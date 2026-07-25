@@ -8,7 +8,7 @@ namespace USugar.Tests;
 /// WaveJoint round-3 regression pins (2026-07-17).
 /// A11: an inline-cast enum concat operand (`s += (E)(intExpr)`, `"" + (E)(intExpr)`) printed the
 /// underlying number — UnwrapConversions stripped the user's enum cast along with the compiler's
-/// boxing conversion, so the IsUserEnum/class checks saw the cast's INPUT type. The concat surfaces
+/// boxing conversion, so the folded-enum/class checks saw the cast's INPUT type. The concat surfaces
 /// now use UnwrapConcatOperand, which strips only value-preserving conversions (identity / boxing /
 /// reference) and stops at value conversions — fixing the mirror direction too (`"" + (int)e`
 /// name-stringified where C# prints the number).

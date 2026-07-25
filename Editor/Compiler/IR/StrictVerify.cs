@@ -23,7 +23,7 @@ public sealed class UdonTypeFactRegistry
 
     // Values are deterministic per name (Udon storage name ↔ representation category is 1:1), so
     // installed-SDK seeding and concurrent source-minting races during Phase-2 emit are benign.
-    readonly ConcurrentDictionary<string, TypeFact> _facts = new(StringComparer.Ordinal);
+    readonly ConcurrentDictionary<UdonTypeId, TypeFact> _facts = new();
 
     /// <summary>Record the minted name's facts. Names covered by a STRUCTURAL rule (primitives, arrays,
     /// the fold tags) are skipped: a folded name's runtime representation is fixed by the fold itself,
@@ -32,7 +32,20 @@ public sealed class UdonTypeFactRegistry
     public void Record(string udonName, ITypeSymbol symbol)
     {
         if (string.IsNullOrEmpty(udonName) || symbol == null) return;
-        Record(udonName,
+        RecordSourceLowering(
+            UdonTypeIdentity.FromCanonicalStorageName(udonName), symbol);
+    }
+
+    /// <summary>
+    /// Commit the representation evidence produced by one source lowering.
+    /// The lowering step supplies an already-canonical storage identity; this
+    /// registry never mints or reinterprets names.
+    /// </summary>
+    internal void RecordSourceLowering(UdonTypeId storageType,
+        ITypeSymbol symbol)
+    {
+        if (symbol == null) return;
+        Record(storageType,
             new TypeFact(symbol.TypeKind == TypeKind.Enum, symbol.IsValueType),
             symbol.ToDisplayString());
     }
@@ -46,7 +59,7 @@ public sealed class UdonTypeFactRegistry
         if (string.IsNullOrEmpty(udonName) || type == null) return;
         if (type.IsByRef) type = type.GetElementType();
         if (type == null || type.IsGenericParameter) return;
-        Record(udonName,
+        Record(UdonTypeIdentity.FromCanonicalStorageName(udonName),
             new TypeFact(type.IsEnum, type.IsValueType),
             type.FullName ?? type.Name);
     }
@@ -55,42 +68,56 @@ public sealed class UdonTypeFactRegistry
     {
         if (facts == null) return;
         foreach (var pair in facts)
-            Record(pair.Key, pair.Value, source);
+        {
+            if (string.IsNullOrEmpty(pair.Key)) continue;
+            Record(UdonTypeIdentity.FromCanonicalStorageName(pair.Key),
+                pair.Value, source);
+        }
     }
 
     internal KeyValuePair<string, TypeFact>[] Snapshot()
-        => _facts.ToArray();
+        => _facts
+            .Select(pair => new KeyValuePair<string, TypeFact>(
+                pair.Key.Name, pair.Value))
+            .ToArray();
 
-    void Record(string udonName, TypeFact requested, string source)
+    void Record(UdonTypeId type, TypeFact requested, string source)
     {
-        if (string.IsNullOrEmpty(udonName)) return;
-        if (StructuralIsReference(udonName) != null) return;
+        if (StructuralIsReference(type.Name) != null) return;
         while (true)
         {
-            if (_facts.TryGetValue(udonName, out var existing))
+            if (_facts.TryGetValue(type, out var existing))
             {
                 if (!existing.Equals(requested))
                     throw new InvalidOperationException(
-                        $"Udon type name '{udonName}' has conflicting facts: existing "
+                        $"Udon type name '{type}' has conflicting facts: existing "
                         + $"enum={existing.IsEnum}, valueType={existing.IsValueType}; requested "
                         + $"enum={requested.IsEnum}, valueType={requested.IsValueType} for "
                         + $"'{source}'.");
                 return;
             }
-            if (_facts.TryAdd(udonName, requested)) return;
+            if (_facts.TryAdd(type, requested)) return;
         }
     }
 
     internal void RecordForTest(string udonName, bool isEnum, bool isValueType)
-        => _facts[udonName] = new TypeFact(isEnum, isValueType);
+        => _facts[UdonTypeIdentity.FromCanonicalStorageName(udonName)]
+            = new TypeFact(isEnum, isValueType);
 
     /// <summary>FACT: is the name an enum tag (Int32-compatible)? true/false when known, null when the
     /// neither authoritative boundary supplied it — an unknown name is exactly what the relaxed check
     /// would otherwise have to guess about.</summary>
     public bool? IsEnumFact(string udonName)
     {
-        if (StructuralIsReference(udonName) != null) return false; // primitives/arrays/fold tags are never enums
-        return _facts.TryGetValue(udonName, out var f) ? f.IsEnum : (bool?)null;
+        if (string.IsNullOrEmpty(udonName)) return null;
+        return IsEnumFact(
+            UdonTypeIdentity.FromCanonicalStorageName(udonName));
+    }
+
+    public bool? IsEnumFact(UdonTypeId type)
+    {
+        if (StructuralIsReference(type.Name) != null) return false; // primitives/arrays/fold tags are never enums
+        return _facts.TryGetValue(type, out var f) ? f.IsEnum : (bool?)null;
     }
 
     /// <summary>FACT: is the name's runtime representation a reference? Structural rules first (an Udon
@@ -99,9 +126,18 @@ public sealed class UdonTypeFactRegistry
     /// prefix-list heuristic calls it a reference).</summary>
     public bool? IsReferenceFact(string udonName)
     {
-        var structural = StructuralIsReference(udonName);
+        if (string.IsNullOrEmpty(udonName)) return null;
+        return IsReferenceFact(
+            UdonTypeIdentity.FromCanonicalStorageName(udonName));
+    }
+
+    public bool? IsReferenceFact(UdonTypeId type)
+    {
+        var structural = StructuralIsReference(type.Name);
         if (structural != null) return structural;
-        return _facts.TryGetValue(udonName, out var f) ? !f.IsValueType : (bool?)null;
+        return _facts.TryGetValue(type, out var f)
+            ? !f.IsValueType
+            : (bool?)null;
     }
 
 

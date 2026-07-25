@@ -150,7 +150,7 @@ public class L2RTuple : UdonSharpBehaviour {
     }
 
     [Fact]
-    public void IsUserEnum_Throws()
+    public void IsFoldedEnum_Throws()
     {
         var ex = Assert.Throws<System.NotSupportedException>(() => TestHelper.CompileToUasm(@"
 using UdonSharp;

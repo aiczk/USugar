@@ -30,7 +30,7 @@ public class CompilationSessionTests
         var session = new CompilationSession(compilation, TestHelper.RegistryFacts);
 
         Assert.Equal("VRCSampleForeignResource",
-            UdonTypeIdentity.From(type).Name);
+            UdonTypeIdentity.FromStorage(type).Name);
         Assert.Null(session.TypeFacts.IsReferenceFact("VRCSampleForeignResource"));
 
         Assert.Equal("VRCSampleForeignResource",
