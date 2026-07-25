@@ -3,11 +3,8 @@ using Microsoft.CodeAnalysis.Operations;
 
 public enum ValueKind
 {
-    Unknown,
+    Other,
     Null,
-    Native,
-    Aggregate,
-    ObjectArray,
     Delegate,
 }
 
@@ -28,7 +25,6 @@ public enum ValueProvenance
 public readonly struct ValueInfo
 {
     public readonly IOperation Operation;
-    public readonly ITypeSymbol StaticType;
     public readonly ValueKind Kind;
     public readonly ValueProvenance Provenance;
     public readonly bool DelegateCapturesProgramLocalPayload;
@@ -40,7 +36,6 @@ public readonly struct ValueInfo
 
     public ValueInfo(
         IOperation operation,
-        ITypeSymbol staticType,
         ValueKind kind,
         ValueProvenance provenance,
         bool delegateCapturesProgramLocalPayload,
@@ -48,7 +43,6 @@ public readonly struct ValueInfo
         bool isDirectDelegateValue)
     {
         Operation = operation;
-        StaticType = staticType;
         Kind = kind;
         Provenance = provenance;
         DelegateCapturesProgramLocalPayload = delegateCapturesProgramLocalPayload;
@@ -67,17 +61,16 @@ public static class ValueClassifier
         var unwrapped = UnwrapConversions(value);
         var staticType = unwrapped?.Type ?? value?.Type;
         if (unwrapped == null)
-            return Create(null, staticType, ValueKind.Unknown, ValueProvenance.Unknown, false, false, false);
+            return Create(null, ValueKind.Other, ValueProvenance.Unknown, false, false, false);
 
         if (unwrapped.ConstantValue.HasValue && unwrapped.ConstantValue.Value == null)
-            return Create(unwrapped, staticType, ValueKind.Null, ValueProvenance.LiteralNull, false, false, false);
+            return Create(unwrapped, ValueKind.Null, ValueProvenance.LiteralNull, false, false, false);
 
         if (TryGetDelegateTarget(unwrapped, out var target, out var provenance))
         {
             var (capturesPayload, capturesUnclassifiable) = DelegateTargetCaptureFlags(target, captureScope, typeCtx);
             return Create(
                 unwrapped,
-                staticType,
                 ValueKind.Delegate,
                 provenance,
                 capturesPayload,
@@ -86,24 +79,9 @@ public static class ValueClassifier
         }
 
         if (IsDelegateType(staticType))
-            return Create(
-                unwrapped,
-                staticType,
-                ValueKind.Delegate,
-                ProvenanceOf(unwrapped),
-                false,
-                false,
-                false);
+            return Create(unwrapped, ValueKind.Delegate, ProvenanceOf(unwrapped), false, false, false);
 
-        if (staticType == null)
-            return Create(unwrapped, staticType, ValueKind.Unknown, ProvenanceOf(unwrapped), false, false, false);
-        var shape = TypeClassifier.ShapeOf(staticType, typeCtx);
-        if (shape.Bundle == RuntimeBundleKind.Aggregate)
-            return Create(unwrapped, staticType, ValueKind.Aggregate, ProvenanceOf(unwrapped), false, false, false);
-        if (shape.IsBundle)
-            return Create(unwrapped, staticType, ValueKind.ObjectArray, ProvenanceOf(unwrapped), false, false, false);
-
-        return Create(unwrapped, staticType, ValueKind.Native, ProvenanceOf(unwrapped), false, false, false);
+        return Create(unwrapped, ValueKind.Other, ProvenanceOf(unwrapped), false, false, false);
     }
 
     public static bool IsDirectProgramLocalSafeDelegate(ValueInfo info)
@@ -123,7 +101,6 @@ public static class ValueClassifier
 
     static ValueInfo Create(
         IOperation operation,
-        ITypeSymbol staticType,
         ValueKind kind,
         ValueProvenance provenance,
         bool delegateCapturesProgramLocalPayload,
@@ -131,7 +108,6 @@ public static class ValueClassifier
         bool isDirectDelegateValue)
         => new ValueInfo(
             operation,
-            staticType,
             kind,
             provenance,
             delegateCapturesProgramLocalPayload,
