@@ -21,7 +21,7 @@ public sealed class LoweringState
     public readonly StorageContext Storage;
     public readonly BoundaryChecker Boundary;
     public readonly ConversionLowerer Conversions;
-    public readonly LoweringDispatch Dispatch = new LoweringDispatch();
+    internal OperationLowerer Operations { get; private set; }
     public readonly GenericContext Generics = new GenericContext();
     public readonly RecursionContext RecursionContext = new RecursionContext();
     public readonly ClosureContext Closures = new ClosureContext();
@@ -36,6 +36,13 @@ public sealed class LoweringState
     public readonly InitializationContext Initializers = new InitializationContext();
     public readonly DiagnosticContext DiagnosticState = new DiagnosticContext();
     public readonly MethodContext Methods = new MethodContext();
+
+    internal void SetOperationLowerer(OperationLowerer operations)
+    {
+        if (Operations != null)
+            throw new InvalidOperationException("Operation lowerer was set twice.");
+        Operations = operations ?? throw new ArgumentNullException(nameof(operations));
+    }
 
     internal void PublishBoundProgram(BoundProgram program)
     {

@@ -57,13 +57,13 @@ public sealed partial class LoweringServices
     internal List<EmitDiagnostic> _diagnostics => _state.DiagnosticState.Diagnostics;
     internal bool IsRecursiveEdge(IMethodSymbol caller, IMethodSymbol callee) => _state.RecursionContext.IsRecursiveEdge(caller, callee);
 
-    // Recursive descent through the separately wired lowering dispatch.
-    internal void VisitOperation(IOperation op) => _state.Dispatch.VisitOperation(op);
-    internal CLeaf VisitExpression(IOperation op) => _state.Dispatch.VisitExpression(op);
+    // Recursive descent has one concrete owner.
+    internal void VisitOperation(IOperation op) => _state.Operations.VisitOperation(op);
+    internal CLeaf VisitExpression(IOperation op) => _state.Operations.VisitExpression(op);
     internal LoweredValue VisitLoweredExpression(IOperation op)
-        => _state.Dispatch.VisitLoweredExpression(op);
+        => _state.Operations.VisitLoweredExpression(op);
     internal CLeaf EmitPatternCheck(CLeaf value, ITypeSymbol valueType, IPatternOperation pattern)
-        => _state.Dispatch.EmitPatternCheck(value, valueType, pattern);
+        => _state.Operations.EmitPatternCheck(value, valueType, pattern);
 
     /// <summary>
     /// Udon array constructors consume an Int32 length even though C# accepts every integral array

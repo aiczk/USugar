@@ -23,10 +23,11 @@ public class CompilationPlanningContractTests
     }
 
     [Fact]
-    public void LoweringState_DoesNotOwnCompilationServicesOrDispatchDelegates()
+    public void OperationLowerer_OwnsRecursiveDispatchWithoutCallbacks()
     {
         var assembly = typeof(UasmEmitter).Assembly;
         Assert.Null(assembly.GetType("EmitContext"));
+        Assert.Null(assembly.GetType("LoweringDispatch"));
 
         var environmentFields = typeof(LoweringEnvironment).GetFields(
             BindingFlags.Instance | BindingFlags.Public | BindingFlags.DeclaredOnly);
@@ -38,9 +39,14 @@ public class CompilationPlanningContractTests
         Assert.Contains(stateFields,
             field => field.Name == nameof(LoweringState.Environment)
                      && field.FieldType == typeof(LoweringEnvironment));
-        Assert.Contains(stateFields,
-            field => field.Name == nameof(LoweringState.Dispatch)
-                     && field.FieldType == typeof(LoweringDispatch));
+        var operations = typeof(LoweringState).GetProperty(
+            "Operations", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(operations);
+        Assert.Equal(typeof(OperationLowerer), operations.PropertyType);
+        Assert.DoesNotContain(
+            typeof(OperationLowerer).GetFields(
+                BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic),
+            field => typeof(Delegate).IsAssignableFrom(field.FieldType));
         Assert.DoesNotContain(stateFields, field =>
             field.FieldType == typeof(CompilationSession)
             || field.FieldType == typeof(Compilation)

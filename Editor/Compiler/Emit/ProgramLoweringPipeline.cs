@@ -9,8 +9,7 @@ internal partial class ProgramLoweringPipeline
 {
     readonly LoweringEnvironment _environment;
     readonly LoweringState _state;
-    readonly Dictionary<OperationKind, IOperationHandler> _stmtDispatch;
-    readonly Dictionary<OperationKind, IExpressionHandler> _exprDispatch;
+    readonly OperationLowerer _operations;
     readonly SyntheticBridgeBuilder _bridge;
     readonly DelegateConventionStorage _delegateConvention;
     readonly LoweringServices _lowering;
@@ -45,7 +44,7 @@ internal partial class ProgramLoweringPipeline
     public CodeGenResult CodeGenResult => _codeGenResult;
     internal CompilationSession Session => _environment.Session;
     internal IEnumerable<OperationKind> HandledOperationKinds
-        => _stmtDispatch.Keys.Concat(_exprDispatch.Keys).Distinct();
+        => _operations.HandledOperationKinds;
 
     static Dictionary<string, string> UdonEventNames => LayoutPlanBuilder.UdonEventNames;
 
@@ -63,32 +62,10 @@ internal partial class ProgramLoweringPipeline
         _environment = new LoweringEnvironment(
             session, classSymbol, planner ?? new LayoutPlanBuilder(session).Build());
         _state = new LoweringState(_environment);
-        _lowering = new LoweringServices(_state);
+        _operations = new OperationLowerer(_state);
+        _lowering = _operations.Services;
         _bridge = new SyntheticBridgeBuilder(_state.Builder);
         _delegateConvention = new DelegateConventionStorage(_state);
-
-        var stmtHandler = new StatementHandler(_lowering);
-        var loopHandler = new LoopHandler(_lowering);
-        var switchHandler = new SwitchHandler(_lowering);
-        var deconstructHandler = new DeconstructionAssignmentHandler(_lowering);
-        var simpleAssignHandler = new SimpleAssignmentHandler(_lowering);
-        var compoundAssignHandler = new CompoundAssignmentHandler(_lowering);
-        var operatorHandler = new OperatorHandler(_lowering);
-
-        _stmtDispatch = BuildDispatch<IOperationHandler>(
-            stmtHandler, loopHandler, switchHandler, deconstructHandler);
-        _exprDispatch = BuildDispatch<IExpressionHandler>(
-            new ExpressionHandler(_lowering),
-            simpleAssignHandler,
-            compoundAssignHandler,
-            operatorHandler,
-            new InvocationHandler(_lowering),
-            new ArrayHandler(_lowering),
-            new NullableHandler(_lowering));
-
-        _state.Dispatch.Initialize(
-            VisitOperation, VisitExpression, VisitLoweredExpression,
-            operatorHandler.EmitPatternCheckImpl);
     }
 
     static CompilationSession CreateSession(Compilation compilation, FrozenLayoutPlan planner,
@@ -103,22 +80,6 @@ internal partial class ProgramLoweringPipeline
                 ? planner.Session
                 : new CompilationSession(compilation, externRegistry, planner.TypeFacts);
         return new CompilationSession(compilation, externRegistry);
-    }
-
-    // Build one kind→handler table from each handler's declared HandledKinds. A kind claimed by two
-    // handlers in the same table is a construction-time bug (throws), not a silent first-wins tie-break.
-    static Dictionary<OperationKind, T> BuildDispatch<T>(params T[] handlers) where T : IHandler
-    {
-        var table = new Dictionary<OperationKind, T>();
-        foreach (var h in handlers)
-            foreach (var kind in h.HandledKinds)
-            {
-                if (table.TryGetValue(kind, out var existing))
-                    throw new InvalidOperationException(
-                        $"Duplicate handler for OperationKind.{kind}: {existing.GetType().Name} and {h.GetType().Name}");
-                table[kind] = h;
-            }
-        return table;
     }
 
     // Type name resolution helper
@@ -1605,8 +1566,6 @@ internal partial class ProgramLoweringPipeline
             // and open no scope. A closure/spec emitted later recomposes its own map at its own entry.
             using var _typeScope = typeMap != null ? _state.EnterTypeParamScope(typeMap) : null;
 
-            PreScanGotoLabels(bodyOp);
-
             // Emit tail-call optimization label at function entry (jump target for TCO goto)
             _builder.EmitLabel($"__tco_{func.Name}");
 
@@ -1648,14 +1607,14 @@ internal partial class ProgramLoweringPipeline
             if (bodyOp is IMethodBodyOperation methodBody)
             {
                 if (methodBody.BlockBody != null)
-                    VisitOperation(methodBody.BlockBody);
+                    _operations.VisitOperation(methodBody.BlockBody);
                 else if (methodBody.ExpressionBody != null)
-                    VisitOperation(methodBody.ExpressionBody);
+                    _operations.VisitOperation(methodBody.ExpressionBody);
             }
             else if (bodyOp is ILocalFunctionOperation localFuncOp)
             {
                 if (localFuncOp.Body != null)
-                    VisitOperation(localFuncOp.Body);
+                    _operations.VisitOperation(localFuncOp.Body);
             }
             else if (bodyOp is IConstructorBodyOperation ctorBodyOp)
             {
@@ -1667,25 +1626,25 @@ internal partial class ProgramLoweringPipeline
                     new InvocationHandler(_lowering).EmitClassCtorPrologue(method, ctorBodyOp,
                         _state.Methods.CurrentStructReceiverParamId);
                 if (ctorBodyOp.BlockBody != null)
-                    VisitOperation(ctorBodyOp.BlockBody);
+                    _operations.VisitOperation(ctorBodyOp.BlockBody);
             }
             else if (bodyOp is IAnonymousFunctionOperation anonFunc)
             {
                 if (anonFunc.Body is IBlockOperation anonBlock)
-                    VisitOperation(anonBlock);
+                    _operations.VisitOperation(anonBlock);
                 else if (anonFunc.Body != null)
                 {
                     var lambdaRets = closureSpec?.ReturnSlots;
                     if (lambdaRets == null) _methodReturns.TryGetValue(method, out lambdaRets);
                     if (lambdaRets is { Length: 1 })
                     {
-                        var resultVal = VisitExpression(anonFunc.Body);
+                        var resultVal = _operations.VisitExpression(anonFunc.Body);
                         _bridge.Store(lambdaRets[0].Id, resultVal);
                     }
                 }
             }
             else if (bodyOp is IBlockOperation block)
-                VisitOperation(block);
+                _operations.VisitOperation(block);
             // Expression-bodied property: int X => expr;
             else if (syntax is PropertyDeclarationSyntax propDecl
                      && propDecl.ExpressionBody != null)
@@ -1693,7 +1652,7 @@ internal partial class ProgramLoweringPipeline
                 var exprOp = model.GetOperation(propDecl.ExpressionBody.Expression);
                 if (exprOp != null && _methodReturns.TryGetValue(method, out var propRets) && propRets.Length == 1)
                 {
-                    var resultVal = VisitExpression(exprOp);
+                    var resultVal = _operations.VisitExpression(exprOp);
                     _bridge.Store(propRets[0].Id, resultVal);
                 }
             }
@@ -1725,12 +1684,12 @@ internal partial class ProgramLoweringPipeline
                     if (accessorOp is IMethodBodyOperation accessorBody)
                     {
                         if (accessorBody.BlockBody != null)
-                            VisitOperation(accessorBody.BlockBody);
+                            _operations.VisitOperation(accessorBody.BlockBody);
                         else if (accessorBody.ExpressionBody != null)
-                            VisitOperation(accessorBody.ExpressionBody);
+                            _operations.VisitOperation(accessorBody.ExpressionBody);
                     }
                     else if (accessorOp is IBlockOperation accessorBlock)
-                        VisitOperation(accessorBlock);
+                        _operations.VisitOperation(accessorBlock);
                 }
             }
         }
@@ -1791,7 +1750,7 @@ internal partial class ProgramLoweringPipeline
                     _bridge.Store(fieldId, arrVal);
                     for (int i = 0; i < arrayInit.ElementValues.Length; i++)
                     {
-                        var elemVal = VisitExpression(arrayInit.ElementValues[i]);
+                        var elemVal = _operations.VisitExpression(arrayInit.ElementValues[i]);
                         var idxConst = _bridge.ConstInt(i);
                         var arrLoad = _bridge.Load(fieldId, new StorageType(arrayType));
                         _bridge.CallExternVoid(
@@ -1801,7 +1760,7 @@ internal partial class ProgramLoweringPipeline
                     continue;
                 }
 
-                var valueVal = VisitExpression(initOp);
+                var valueVal = _operations.VisitExpression(initOp);
 
                 // Type conversion for numeric type mismatch (e.g. int literal 0 → float field)
                 if (initOp.Type != null && fieldType != null
@@ -1843,61 +1802,6 @@ internal partial class ProgramLoweringPipeline
                 _bridge.Store($"__old_{kvp.Key}", fieldVal);
             }
         }
-    }
-
-    // ── IOperation visitor (facade — delegates to handlers) ──
-
-    void VisitOperation(IOperation op)
-    {
-        if (op == null)
-            throw new NotSupportedException("VisitOperation called with null operation");
-        // Unwrap parenthesized expressions in statement context
-        while (op is IParenthesizedOperation paren) op = paren.Operand;
-        if (_stmtDispatch.TryGetValue(op.Kind, out var h))
-            try { h.Handle(op); return; } catch (System.Exception ex) { throw TagLocation(ex, op); }
-        throw new NotSupportedException($"Unsupported operation: {op.Kind} ({op.GetType().Name})");
-    }
-
-    void PreScanGotoLabels(IOperation op)
-    {
-        // No-op: the Core IR uses string-based CGoto/CLabel instead of IrBlock targets.
-    }
-
-    // ── Expression visitor (facade — delegates to handlers) ──
-
-    CLeaf VisitExpression(IOperation op)
-        => VisitLoweredExpression(op).Leaf;
-
-    LoweredValue VisitLoweredExpression(IOperation op)
-    {
-        if (op == null)
-            throw new NotSupportedException("VisitExpression called with null operation");
-        // Unwrap parenthesized expressions (transparent wrapper)
-        while (op is IParenthesizedOperation paren) op = paren.Operand;
-        if (_exprDispatch.TryGetValue(op.Kind, out var h))
-            try
-            {
-                return LoweredValue.Create(_state, op, h.Handle(op));
-            }
-            catch (System.Exception ex) { throw TagLocation(ex, op); }
-        throw new NotSupportedException(
-            $"Unsupported expression: {op.Kind} ({op.GetType().Name})");
-    }
-
-    // Augment an emit-time exception with the source location + a snippet of the OFFENDING operation, so a
-    // failure deep in a child (e.g. "VisitExpression called with null operation") is reported at the nearest
-    // enclosing construct that has syntax, not at the context-free throw site. Tags only once (innermost frame)
-    // via Exception.Data so outer dispatch frames re-throw the located exception unchanged.
-    static System.Exception TagLocation(System.Exception ex, IOperation op)
-    {
-        if (ex.Data.Contains("usugar_located") || op?.Syntax == null) return ex;
-        var span = op.Syntax.GetLocation().GetLineSpan();
-        var where = $"{span.StartLinePosition.Line + 1},{span.StartLinePosition.Character + 1}";
-        var snippet = op.Syntax.ToString().Replace("\r", " ").Replace("\n", " ");
-        if (snippet.Length > 100) snippet = snippet.Substring(0, 100) + "…";
-        var wrapped = new NotSupportedException($"{ex.Message}  [at ({where}) {op.Kind}: `{snippet}`]", ex);
-        wrapped.Data["usugar_located"] = true;
-        return wrapped;
     }
 
     // ── Static collection helpers ──
