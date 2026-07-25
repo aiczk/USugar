@@ -354,17 +354,18 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
         if (ExternResolver.IsSmallIntOrChar(opType))
             opType = "SystemInt32";
 
-        var oneConst = Const(1, new StorageType(opType));
+        var operandType = ResolveType(op.Type);
+        var sig = ExternResolver.ResolveBuiltInBinaryExtern(
+            op.Kind == OperationKind.Increment
+                ? BinaryOperatorKind.Add
+                : BinaryOperatorKind.Subtract,
+            operandType, operandType, operandType, GetStorageTypeName);
+
+        var oneConst = Const(1, new StorageType(sig.ParameterTypes[1]));
 
         // Explicit operand promotion to match the int extern signature.
         if (ExternResolver.IsSmallIntOrChar(udonType))
             targetVal = PromoteToInt32(targetVal, udonType);
-
-        var isIncrement = op.Kind == OperationKind.Increment;
-        var externName = isIncrement ? "op_Addition" : "op_Subtraction";
-        var sig = UdonAbiKey.Method(
-            opType, externName,
-            new[] { opType, opType }, opType);
 
         CLeaf resultVal = ExternCall(sig, new List<CLeaf> { targetVal, oneConst }, new StorageType(opType));
 
