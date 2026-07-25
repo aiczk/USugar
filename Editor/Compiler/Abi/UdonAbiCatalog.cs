@@ -10,6 +10,61 @@ public enum UdonAbiParameterMode
     InOut,
 }
 
+/// <summary>
+/// Independent evidence supplied by the installed SDK for one Udon type.
+/// These capabilities are deliberately not collapsed into "registered":
+/// Type_* nodes, extern owners, and extern operands are different sets.
+/// </summary>
+[Flags]
+public enum UdonTypeCapabilities
+{
+    None = 0,
+    TypeNode = 1 << 0,
+    ExternOwner = 1 << 1,
+    ExternOperand = 1 << 2,
+}
+
+/// <summary>
+/// Immutable installed-SDK evidence for one canonical Udon type identity.
+/// Representation facts are optional because the public node registry does
+/// not expose a CLR type for every Type_* entry.
+/// </summary>
+public sealed class UdonTypeDescriptor
+{
+    readonly UdonTypeFactRegistry.TypeFact? _fact;
+
+    public UdonTypeId Id { get; }
+    public UdonTypeCapabilities Capabilities { get; }
+    public bool HasTypeNode
+        => (Capabilities & UdonTypeCapabilities.TypeNode) != 0;
+    public bool AppearsAsExternOwner
+        => (Capabilities & UdonTypeCapabilities.ExternOwner) != 0;
+    public bool AppearsAsExternOperand
+        => (Capabilities & UdonTypeCapabilities.ExternOperand) != 0;
+    public bool? IsEnum => _fact?.IsEnum;
+    public bool? IsValueType => _fact?.IsValueType;
+
+    internal UdonTypeDescriptor(UdonTypeId id,
+        UdonTypeCapabilities capabilities,
+        UdonTypeFactRegistry.TypeFact? fact)
+    {
+        Id = id;
+        Capabilities = capabilities;
+        _fact = fact;
+    }
+
+    internal bool TryGetFact(out UdonTypeFactRegistry.TypeFact fact)
+    {
+        if (_fact.HasValue)
+        {
+            fact = _fact.Value;
+            return true;
+        }
+        fact = default;
+        return false;
+    }
+}
+
 /// <summary>Exact Udon storage type supplied by the installed SDK for one extern stack operand.</summary>
 public sealed class UdonAbiType
 {
@@ -93,8 +148,7 @@ public sealed class UdonAbiCatalog
         = new(Array.Empty<UdonExternPrototype>());
 
     readonly Dictionary<string, UdonExternPrototype> _externs;
-    readonly KeyValuePair<string, UdonTypeFactRegistry.TypeFact>[] _typeFacts;
-    readonly HashSet<string> _registeredTypes;
+    readonly Dictionary<UdonTypeId, UdonTypeDescriptor> _types;
 
     public UdonAbiCatalog(IEnumerable<UdonExternPrototype> prototypes)
         : this(prototypes, null, null)
@@ -120,12 +174,54 @@ public sealed class UdonAbiCatalog
                 throw new InvalidOperationException(
                     $"Duplicate Udon extern prototype '{prototype.RegisteredName}'.");
         }
-        _typeFacts = typeFacts?.ToArray()
-            ?? Array.Empty<KeyValuePair<string, UdonTypeFactRegistry.TypeFact>>();
-        _registeredTypes = new HashSet<string>(
-            registeredTypes?.Where(name => !string.IsNullOrWhiteSpace(name))
-            ?? Array.Empty<string>(),
-            StringComparer.Ordinal);
+
+        var evidence = new Dictionary<UdonTypeId,
+            (UdonTypeCapabilities Capabilities,
+                UdonTypeFactRegistry.TypeFact? Fact)>();
+
+        void Merge(string typeName, UdonTypeCapabilities capabilities,
+            UdonTypeFactRegistry.TypeFact? fact = null)
+        {
+            if (string.IsNullOrWhiteSpace(typeName)) return;
+            var id = UdonTypeIdentity.FromCanonicalName(typeName);
+            if (!evidence.TryGetValue(id, out var existing))
+            {
+                evidence.Add(id, (capabilities, fact));
+                return;
+            }
+            if (existing.Fact.HasValue && fact.HasValue
+                && !existing.Fact.Value.Equals(fact.Value))
+                throw new InvalidOperationException(
+                    $"Udon type '{id}' has conflicting installed-SDK facts.");
+            evidence[id] = (
+                existing.Capabilities | capabilities,
+                existing.Fact ?? fact);
+        }
+
+        if (registeredTypes != null)
+            foreach (var registeredType in registeredTypes)
+                Merge(registeredType, UdonTypeCapabilities.TypeNode);
+
+        if (typeFacts != null)
+            foreach (var pair in typeFacts)
+                Merge(pair.Key, UdonTypeCapabilities.None, pair.Value);
+
+        foreach (var prototype in _externs.Values)
+        {
+            var ownerBoundary = prototype.RegisteredName.IndexOf(
+                ".__", StringComparison.Ordinal);
+            if (ownerBoundary > 0)
+                Merge(prototype.RegisteredName.Substring(0, ownerBoundary),
+                    UdonTypeCapabilities.ExternOwner);
+            foreach (var parameter in prototype.Parameters)
+                Merge(parameter.Type.ExactType.Name,
+                    UdonTypeCapabilities.ExternOperand);
+        }
+
+        _types = evidence.ToDictionary(
+            pair => pair.Key,
+            pair => new UdonTypeDescriptor(
+                pair.Key, pair.Value.Capabilities, pair.Value.Fact));
     }
 
     internal static UdonAbiCatalog FromNamesForTests(IEnumerable<string> externNames)
@@ -141,7 +237,7 @@ public sealed class UdonAbiCatalog
             .Where(prototype => prototype != null)
             .Where(prototype => !_externs.ContainsKey(prototype.RegisteredName));
         return new UdonAbiCatalog(
-            _externs.Values.Concat(additions), _typeFacts, _registeredTypes);
+            _externs.Values.Concat(additions), TypeFacts, RegisteredTypes);
     }
 
     internal static bool IsExternRegistryName(string registeredName)
@@ -167,18 +263,40 @@ public sealed class UdonAbiCatalog
 
     public IReadOnlyCollection<string> ExternNames => _externs.Keys;
     public bool IsRegisteredType(string udonTypeName)
-        => udonTypeName != null && _registeredTypes.Contains(udonTypeName);
+        => !string.IsNullOrWhiteSpace(udonTypeName)
+           && IsRegisteredType(
+               UdonTypeIdentity.FromCanonicalName(udonTypeName));
+    public bool IsRegisteredType(UdonTypeId id)
+        => _types.TryGetValue(id, out var descriptor)
+           && descriptor.HasTypeNode;
+    public bool TryGetType(UdonTypeId id,
+        out UdonTypeDescriptor descriptor)
+        => _types.TryGetValue(id, out descriptor);
     internal IReadOnlyCollection<UdonExternPrototype> Prototypes => _externs.Values;
     internal IReadOnlyList<KeyValuePair<string, UdonTypeFactRegistry.TypeFact>> TypeFacts
-        => _typeFacts;
-    internal IReadOnlyCollection<string> RegisteredTypes => _registeredTypes;
+        => _types.Values
+            .Where(descriptor => descriptor.TryGetFact(out _))
+            .Select(descriptor =>
+            {
+                descriptor.TryGetFact(out var fact);
+                return new KeyValuePair<string,
+                    UdonTypeFactRegistry.TypeFact>(
+                    descriptor.Id.Name, fact);
+            })
+            .ToArray();
+    internal IReadOnlyCollection<string> RegisteredTypes
+        => _types.Values
+            .Where(descriptor => descriptor.HasTypeNode)
+            .Select(descriptor => descriptor.Id.Name)
+            .ToArray();
+    public IReadOnlyCollection<UdonTypeDescriptor> Types => _types.Values;
 
     /// <summary>Seed one compilation's mutable registry from the immutable SDK ABI snapshot. Source
     /// lowering then appends Roslyn facts to the same session-owned registry.</summary>
     internal void SeedTypeFacts(UdonTypeFactRegistry target)
     {
         if (target == null) throw new ArgumentNullException(nameof(target));
-        target.Import(_typeFacts, "installed SDK ABI catalog");
+        target.Import(TypeFacts, "installed SDK ABI catalog");
     }
 }
 

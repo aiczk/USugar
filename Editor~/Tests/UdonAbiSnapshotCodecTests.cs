@@ -49,6 +49,18 @@ public class UdonAbiSnapshotCodecTests
         Assert.True(decoded.IsRegisteredType("Fixture"));
         Assert.True(decoded.IsRegisteredType("SystemInt32"));
         Assert.False(decoded.IsRegisteredType("Missing"));
+
+        Assert.True(decoded.TryGetType(
+            UdonTypeIdentity.FromCanonicalName("Fixture"), out var fixture));
+        Assert.True(fixture.HasTypeNode);
+        Assert.True(fixture.AppearsAsExternOwner);
+        Assert.False(fixture.AppearsAsExternOperand);
+        Assert.False(fixture.IsValueType);
+
+        Assert.True(decoded.TryGetType(
+            UdonTypeIdentity.FromCanonicalName("SystemInt32"), out var int32));
+        Assert.True(int32.HasTypeNode);
+        Assert.True(int32.AppearsAsExternOperand);
     }
 
     [Fact]
@@ -107,5 +119,21 @@ public class UdonAbiSnapshotCodecTests
         Assert.Empty(merged.ExternNames.Except(flatExterns));
         Assert.All(merged.Prototypes,
             prototype => Assert.True(prototype.HasTypedParameters));
+    }
+
+    [Fact]
+    public void SdkTypeCapabilitiesDoNotConflateTypeNodesAndExternOperands()
+    {
+        var catalog = ExternRegistry.LoadSdkTypedCatalog();
+        var operandOnly = catalog.Types
+            .Where(type => type.AppearsAsExternOperand && !type.HasTypeNode)
+            .Select(type => type.Id.Name)
+            .OrderBy(name => name, StringComparer.Ordinal)
+            .ToArray();
+
+        Assert.NotEmpty(operandOnly);
+        Assert.All(operandOnly,
+            name => Assert.False(catalog.IsRegisteredType(name)));
+        Assert.Contains("SystemConvert", operandOnly);
     }
 }
