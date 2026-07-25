@@ -1,9 +1,16 @@
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.Operations;
 
-public class NullableHandler : AssignmentHandlerBase, IExpressionHandler
+public sealed class NullableHandler : IExpressionHandler
 {
-    public NullableHandler(LoweringServices lowering) : base(lowering) { }
+    readonly LoweringServices _lowering;
+    readonly LValueLowerer _lvalues;
+
+    public NullableHandler(LoweringServices lowering)
+    {
+        _lowering = lowering;
+        _lvalues = new LValueLowerer(lowering);
+    }
 
     public OperationKind[] HandledKinds { get; } = new[]
     {
@@ -84,7 +91,7 @@ public class NullableHandler : AssignmentHandlerBase, IExpressionHandler
         // lvalue form. The old inline if/else-if chain silently dropped cross-behaviour field/property and
         // aggregate-member (tuple/struct) write-backs and built a bogus __set_X extern for user auto-properties.
         _lowering.RejectUnsafeCrossProgramDelegateWrite(op.Target, _lowering.State.Boundary.ClassifyValue(op.Value));
-        var lv = PrepareLValue(op.Target);
+        var lv = _lvalues.PrepareLValue(op.Target);
         var targetType = _lowering.GetStorageTypeName(op.Target.Type);
         return NullableAbi.EmitCoalesceAssignment(_lowering.Builder, lv.Value, new StorageType(targetType),
             () => _lowering.VisitExpression(op.Value),

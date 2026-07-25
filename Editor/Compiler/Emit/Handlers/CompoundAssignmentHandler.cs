@@ -3,9 +3,16 @@ using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.Operations;
 
 /// <summary>Handles `a += b`, `a -= b`, `a++`, `++a`, etc.</summary>
-public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandler
+public sealed class CompoundAssignmentHandler : IExpressionHandler
 {
-    public CompoundAssignmentHandler(LoweringServices lowering) : base(lowering) { }
+    readonly LoweringServices _lowering;
+    readonly LValueLowerer _lvalues;
+
+    public CompoundAssignmentHandler(LoweringServices lowering)
+    {
+        _lowering = lowering;
+        _lvalues = new LValueLowerer(lowering);
+    }
 
     // IIncrementOrDecrementOperation spans BOTH Increment and Decrement — a single kind would drop `x--`.
     public OperationKind[] HandledKinds { get; } = new[]
@@ -30,7 +37,7 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
             return VisitDelegateCompoundAssignment(op, nt);
 
         // Capture lvalue sub-expressions once to avoid double evaluation
-        var lv = PrepareLValue(op.Target);
+        var lv = _lvalues.PrepareLValue(op.Target);
         var leftVal = lv.Value;
 
         // B67/M4b parity (found by the M4b DiffFuzz sweep): `s += x` is string.Concat one surface over —
@@ -141,7 +148,7 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
         // a delegate value from a foreign source never passed creation-site validation.
         DelegateAbi.ValidateNoRefOutParams(invoke);
 
-        var lv = PrepareLValue(op.Target);
+        var lv = _lvalues.PrepareLValue(op.Target);
         var leftVal = lv.Value;
         var right = _lowering.VisitLoweredExpression(op.Value);
         if (op.OperatorKind == BinaryOperatorKind.Add)
@@ -319,7 +326,7 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
     CLeaf VisitIncrementDecrement(IIncrementOrDecrementOperation op)
     {
         // Capture lvalue sub-expressions once to avoid double evaluation
-        var lv = PrepareLValue(op.Target);
+        var lv = _lvalues.PrepareLValue(op.Target);
         var targetVal = lv.Value;
 
         // User-defined struct operator ++/-- (a single-operand static method returning the new struct), then

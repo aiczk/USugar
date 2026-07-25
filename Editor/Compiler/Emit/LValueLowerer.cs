@@ -13,16 +13,17 @@ using Microsoft.CodeAnalysis.Operations;
 /// shared with LoweringServices's single-write path (PrepareArrayElementSet / TryPrepareFieldSet) so the
 /// two mechanisms can't drift on the emitted extern.
 /// </summary>
-public abstract class AssignmentHandlerBase
+public sealed class LValueLowerer
 {
-    protected readonly LoweringServices _lowering;
-    protected AssignmentHandlerBase(LoweringServices lowering) => _lowering = lowering;
+    readonly LoweringServices _lowering;
+    public LValueLowerer(LoweringServices lowering)
+        => _lowering = lowering ?? throw new System.ArgumentNullException(nameof(lowering));
 
     // ── LValue Capture ──
     // Evaluates and caches sub-expressions of an l-value (array ref, index, instance)
     // to avoid re-evaluating side-effecting expressions during write-back.
 
-    protected LoweringServices.LValuePlan PrepareLValue(IOperation target)
+    public LoweringServices.LValuePlan PrepareLValue(IOperation target)
     {
         var plan = CaptureLValue(target);
         var captured = plan;
@@ -523,7 +524,7 @@ public abstract class AssignmentHandlerBase
     /// Resolve the field name (lvalue) for a simple assignment target.
     /// Used by direct local/this-field store paths in SimpleAssignmentHandler / CompoundAssignmentHandler.
     /// </summary>
-    protected string GetAssignTargetFieldName(IOperation target)
+    public string GetAssignTargetFieldName(IOperation target)
     {
         switch (target)
         {

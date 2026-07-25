@@ -55,6 +55,33 @@ public class CompilationPlanningContractTests
     }
 
     [Fact]
+    public void AssignmentHandlers_ComposeTheSingleLValueCapability()
+    {
+        var assembly = typeof(UasmEmitter).Assembly;
+        Assert.Null(assembly.GetType("AssignmentHandlerBase"));
+
+        var handlers = new[]
+        {
+            typeof(SimpleAssignmentHandler),
+            typeof(CompoundAssignmentHandler),
+            typeof(NullableHandler),
+            typeof(DeconstructionAssignmentHandler),
+        };
+        Assert.All(handlers, handler => Assert.Equal(typeof(object), handler.BaseType));
+
+        foreach (var handler in handlers.Take(3))
+        {
+            Assert.Contains(
+                handler.GetFields(BindingFlags.Instance | BindingFlags.NonPublic),
+                field => field.FieldType == typeof(LValueLowerer));
+        }
+        Assert.DoesNotContain(
+            typeof(DeconstructionAssignmentHandler).GetFields(
+                BindingFlags.Instance | BindingFlags.NonPublic),
+            field => field.FieldType == typeof(LValueLowerer));
+    }
+
+    [Fact]
     public void FieldDiscoveryPlan_IsSemanticAndIrFree()
     {
         var planFields = typeof(FieldDiscoveryPlan).GetFields(

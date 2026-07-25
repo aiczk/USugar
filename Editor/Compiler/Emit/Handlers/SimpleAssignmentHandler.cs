@@ -4,9 +4,16 @@ using Microsoft.CodeAnalysis.Operations;
 
 /// <summary>Handles `a = b` simple assignments across all lvalue targets
 /// (locals, fields, array elements, properties, cross-behaviour, delegates, struct fields).</summary>
-public class SimpleAssignmentHandler : AssignmentHandlerBase, IExpressionHandler
+public sealed class SimpleAssignmentHandler : IExpressionHandler
 {
-    public SimpleAssignmentHandler(LoweringServices lowering) : base(lowering) { }
+    readonly LoweringServices _lowering;
+    readonly LValueLowerer _lvalues;
+
+    public SimpleAssignmentHandler(LoweringServices lowering)
+    {
+        _lowering = lowering;
+        _lvalues = new LValueLowerer(lowering);
+    }
 
     public OperationKind[] HandledKinds { get; } = new[] { OperationKind.SimpleAssignment };
 
@@ -66,7 +73,7 @@ public class SimpleAssignmentHandler : AssignmentHandlerBase, IExpressionHandler
             return assign.Target.Type is INamedTypeSymbol eAgg && TypeClassifier.IsAggregateValue(eAgg)
                 ? AggregateAbi.DeepClone(_lowering.Builder, envLoaded, eAgg, _lowering.State.Aggregates.GetLayout) : envLoaded;
         }
-        var targetFieldName = GetAssignTargetFieldName(assign.Target);
+        var targetFieldName = _lvalues.GetAssignTargetFieldName(assign.Target);
         _lowering.EmitStoreField(targetFieldName, srcLeaf);
         // The assignment's VALUE is the stored value. Return a fresh read of the target rather than the
         // RHS expression tree: re-emitting the tree (when the assignment is used as an expression, e.g.

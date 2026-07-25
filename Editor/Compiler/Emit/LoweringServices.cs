@@ -863,7 +863,7 @@ public sealed partial class LoweringServices
         // LoadInstanceRaw dispatch site), but this method was written before feature N and always used
         // Indices[0] alone against the BUNDLE array directly — every OTHER array-index site
         // (ArrayHandler.VisitArrayElementReference, LoweringServices.PrepareArrayElementSet,
-        // AssignmentHandlerBase's capture/write-back arms, InvocationHandler.Extern's ref/out prepare)
+        // LValueLowerer's capture/write-back arms, InvocationHandler.Extern's ref/out prepare)
         // already special-cases Indices.Length>1 via PrepareNdimAccess; this receiver-access path was the
         // one gap. Pre-fix, a single stray index read bundle[idx] directly (the bundle's OWN 1+r slots —
         // flat backing at [0], boxed dim lengths at [1..r] — not the logical element), corrupting the
@@ -2295,7 +2295,7 @@ public sealed partial class LoweringServices
     // inline typeobj-ReferenceEquals chain / devirtualized direct access / empty-set null lowering.
     // Lives in LoweringServices because four emission surfaces share it: the property/indexer READ arms
     // (InvocationHandler.Members), the SET path (PreparePropertySet), the compound read/write-back
-    // (AssignmentHandlerBase.CaptureLValue/EmitWriteBack), and the property-subpattern read
+    // (LValueLowerer.CaptureLValue/EmitWriteBack), and the property-subpattern read
     // (OperatorHandler's pattern lowering).
 
     /// <summary>Phase-A armor: virtual dispatch answers through runtime type identity (typeobj) or the
