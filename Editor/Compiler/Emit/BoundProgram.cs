@@ -16,6 +16,7 @@ internal sealed class BoundProgram
     public readonly RecursionInfo Recursion;
     public readonly SyntheticDemandPlan SyntheticDemands;
     public readonly BoundCallSiteTable CallSites;
+    public readonly BoundAbiPlan Abi;
 
     public CallableDefinitionPlan Callables => Discovery.Callables;
     public ReachabilityPlan Reach => Discovery.Reach;
@@ -30,7 +31,8 @@ internal sealed class BoundProgram
         CallableBodyGraph bodies,
         RecursionInfo recursion,
         SyntheticDemandPlan syntheticDemands,
-        BoundCallSiteTable callSites)
+        BoundCallSiteTable callSites,
+        BoundAbiPlan abi)
     {
         Discovery = discovery ?? throw new ArgumentNullException(nameof(discovery));
         ClosureIdentities = closureIdentities
@@ -41,5 +43,6 @@ internal sealed class BoundProgram
         SyntheticDemands = syntheticDemands
             ?? throw new ArgumentNullException(nameof(syntheticDemands));
         CallSites = callSites ?? throw new ArgumentNullException(nameof(callSites));
+        Abi = abi ?? throw new ArgumentNullException(nameof(abi));
     }
 }

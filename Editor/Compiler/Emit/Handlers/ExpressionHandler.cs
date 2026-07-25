@@ -191,7 +191,7 @@ public class ExpressionHandler : IExpressionHandler
             var fldType = _lowering.GetStorageTypeName(fieldRef.Field.Type);
             var containingType = _lowering.GetStorageTypeName(fieldRef.Field.ContainingType);
             return _lowering.ExternCall(
-                _lowering.State.Abi.BindPropertyGetter(
+                _lowering.State.BoundAbi.RequirePropertyGetter(
                     containingType, fieldRef.Field.Name, fldType, hasReceiver: false),
                 new List<CLeaf>(),
                 new StorageType(fldType));
@@ -244,7 +244,7 @@ public class ExpressionHandler : IExpressionHandler
             var containingType = _lowering.GetStorageTypeName(_lowering.ResolveExternOwnerType(fieldRef.Field.ContainingType, fieldRef.Instance?.Type, fieldRef.Field.Name));
             var instanceVal = _lowering.VisitExpression(fieldRef.Instance);
             return _lowering.ExternCall(
-                _lowering.State.Abi.BindPropertyGetter(
+                _lowering.State.BoundAbi.RequirePropertyGetter(
                     containingType, fieldRef.Field.Name, fldType),
                 new List<CLeaf> { instanceVal },
                 new StorageType(fldType));
@@ -428,7 +428,7 @@ public class ExpressionHandler : IExpressionHandler
                 return true;
             }
 
-            var conversionExtern = _lowering.State.Abi.BindConversion(
+            var conversionExtern = _lowering.State.BoundAbi.RequireConversion(
                 conversionMethod, effectiveSource, closedDestination,
                 type => _lowering.GetStorageTypeName(type));
             result = _lowering.ExternCall(
@@ -789,7 +789,7 @@ public class ExpressionHandler : IExpressionHandler
                 return _lowering.EmitCallToMethod(_lowering.ResolveStructMember(conv.OperatorMethod), new List<CLeaf> { srcVal });
 
             var dstType = _lowering.GetStorageTypeName(conv.Type);
-            var conversionExtern = _lowering.State.Abi.BindConversion(
+            var conversionExtern = _lowering.State.BoundAbi.RequireConversion(
                 conv.OperatorMethod, _lowering.ResolveType(conv.Operand.Type), _lowering.ResolveType(conv.Type),
                 type => _lowering.GetStorageTypeName(type));
             return _lowering.ExternCall(

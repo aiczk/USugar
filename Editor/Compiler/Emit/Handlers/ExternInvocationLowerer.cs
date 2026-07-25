@@ -435,7 +435,7 @@ internal sealed class ExternInvocationLowerer
         // registered under VRCPickup). That remap is about calling members ON a receiver and says
         // nothing about the token's runtime identity, so if it rewrote the name the catalog would
         // answer about a different type than the one being baked. Treat any divergence as "not a key".
-        return key.Owner == tokenUdonType && _lowering.State.AbiCatalog.Contains(key);
+        return key.Owner == tokenUdonType && _lowering.State.BoundAbi.ContainsExact(key);
     }
 
     // ── GetComponent<T> where T is not a legal generic-dispatch key ──
@@ -1547,13 +1547,13 @@ internal sealed class ExternInvocationLowerer
             paramTypeOverride = nonGenericPts;
         }
 
-        if (_lowering.State.Abi.TryBindMethod(
+        if (_lowering.State.BoundAbi.TryGetMethod(
                 method, containingType, type => _lowering.GetStorageTypeName(type),
                 paramTypeOverride, out var bound))
             return bound;
         if (allowMissing)
             return null;
-        return _lowering.State.Abi.BindMethod(
+        return _lowering.State.BoundAbi.RequireMethod(
             method, containingType, type => _lowering.GetStorageTypeName(type), paramTypeOverride);
     }
 }

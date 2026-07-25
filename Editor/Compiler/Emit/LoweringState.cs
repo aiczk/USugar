@@ -9,8 +9,9 @@ public sealed class LoweringState
     public CompilationSession Session => Environment.Session;
     public Compilation Compilation => Environment.Compilation;
     public INamedTypeSymbol ClassSymbol => Environment.ClassSymbol;
-    public UdonAbiCatalog AbiCatalog => Environment.AbiCatalog;
-    public UdonAbiBinder Abi => Environment.Abi;
+    internal BoundAbiPlan BoundAbi => Program?.Abi
+        ?? throw new InvalidOperationException(
+            "ABI decisions are unavailable before the bound program is published.");
     public FrozenLayoutPlan Planner => Environment.Planner;
     public MethodAnalysisCache MethodAnalyses => Environment.MethodAnalyses;
     internal BoundProgram Program { get; private set; }
@@ -143,7 +144,7 @@ public sealed class LoweringState
     public LoweringState(LoweringEnvironment environment)
     {
         Environment = environment ?? throw new ArgumentNullException(nameof(environment));
-        Module = new StructuredModule(Session.TypeFacts, AbiCatalog)
+        Module = new StructuredModule(Session.TypeFacts, Environment.AbiCatalog)
             { ClassName = ClassSymbol.ToDisplayString() };
         Builder = new CoreBuilder(Module);
         Storage = new StorageContext(Module);

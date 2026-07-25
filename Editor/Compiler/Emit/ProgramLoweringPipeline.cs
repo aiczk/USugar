@@ -1041,7 +1041,8 @@ internal sealed class ProgramLoweringPipeline
             bodyGraph,
             recursion,
             syntheticDemands,
-            callSites);
+            callSites,
+            new BoundAbiPlan(_environment.AbiCatalog));
         _state.PublishBoundProgram(program);
         _state.BeginBodyEmission();
         EmitRegisteredBodies(program);

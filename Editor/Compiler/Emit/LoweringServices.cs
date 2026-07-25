@@ -551,7 +551,7 @@ public sealed class LoweringServices
         CValue leftVal, bool leftNullable, ITypeSymbol ltUnderlying,
         CValue rightVal, bool rightNullable, ITypeSymbol rtUnderlying,
         Microsoft.CodeAnalysis.Operations.BinaryOperatorKind kind, IMethodSymbol operatorMethod, ITypeSymbol resultType)
-        => NullableAbi.EmitLiftedBinaryCore(_builder,
+        => NullableAbi.EmitLiftedBinaryCore(_builder, _state.BoundAbi,
             leftVal, leftNullable, ltUnderlying,
             rightVal, rightNullable, rtUnderlying,
             kind, operatorMethod, resultType, _compilation.GetSpecialType(SpecialType.System_Int32),
@@ -1202,7 +1202,7 @@ public sealed class LoweringServices
             var vtInstanceVal = plan.Value.Instance is IInstanceReferenceOperation
                 ? LoadField(_state.Storage.DeclareThisOnce(new StorageType(vtContainingType)), new StorageType(vtContainingType))
                 : VisitExpression(plan.Value.Instance);
-            var vtSig = _state.Abi.BindFieldSetter(
+            var vtSig = _state.BoundAbi.RequireFieldSetter(
                 vtContainingType, fieldRef.Field.Name, GetStorageTypeName(fieldRef.Field.Type));
             return value => EmitExternVoid(vtSig, new List<CLeaf> { vtInstanceVal, value });
         }
@@ -1211,7 +1211,7 @@ public sealed class LoweringServices
         if (plan.Value.Kind == FieldSetKind.ExternReferenceType)
         {
             var refInstanceVal = VisitExpression(plan.Value.Instance);
-            var refSig = _state.Abi.BindFieldSetter(
+            var refSig = _state.BoundAbi.RequireFieldSetter(
                 GetStorageTypeName(fieldRef.Field.ContainingType), fieldRef.Field.Name,
                 GetStorageTypeName(fieldRef.Field.Type), isValueType: false);
             return value => EmitExternVoid(refSig, new List<CLeaf> { refInstanceVal, value });
@@ -1388,7 +1388,7 @@ public sealed class LoweringServices
                     EmitCallToMethod(resolvedSetter, new List<CLeaf> { staticVal }));
             }
             var staticValType = GetStorageTypeName(propRef.Property.Type);
-            var staticSetter = _state.Abi.BindPropertySetter(
+            var staticSetter = _state.BoundAbi.RequirePropertySetter(
                 propContainingUdon, propRef.Property.Name, staticValType,
                 hasReceiver: false);
             return staticVal => EmitExternVoid(
@@ -1443,7 +1443,7 @@ public sealed class LoweringServices
                 indexArgs.Add(externIdxVal);
                 // Indexer metadata name, not a hardcoded "Item" ([IndexerName] e.g. StringBuilder → "Chars").
                 EmitExternVoid(
-                    _state.Abi.BindIndexerSetter(
+                    _state.BoundAbi.RequireIndexerSetter(
                         containingType,
                         propRef.Property.MetadataName,
                         indexTypes,
@@ -1520,7 +1520,7 @@ public sealed class LoweringServices
                 else
                 {
                     EmitExternVoid(
-                        _state.Abi.BindPropertySetter(
+                        _state.BoundAbi.RequirePropertySetter(
                             containingType, propRef.Property.Name, valueType),
                         new List<CLeaf> { instanceVal, srcVal });
                 }

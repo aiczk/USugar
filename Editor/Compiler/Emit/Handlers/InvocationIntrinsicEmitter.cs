@@ -143,14 +143,14 @@ internal sealed class InvocationIntrinsicEmitter
                 + $"'{target.Parameters[0].Type.ToDisplayString()}' lowers to '{arguments[0].Type}'.");
 
         var instantiated = _lowering.ExternCall(
-            _lowering.State.Abi.BindExact(InstantiateGameObjectExtern),
+            _lowering.State.BoundAbi.RequireExact(InstantiateGameObjectExtern),
             new List<CLeaf> { arguments[0] },
             StorageTypes.GameObject);
 
         if (arguments.Count > 1)
         {
             var transform = _lowering.ExternCall(
-                _lowering.State.Abi.BindExact(GameObjectTransformGetter),
+                _lowering.State.BoundAbi.RequireExact(GameObjectTransformGetter),
                 new List<CLeaf> { instantiated },
                 StorageTypes.Transform);
 
@@ -188,11 +188,11 @@ internal sealed class InvocationIntrinsicEmitter
 
     void EmitSetParent(CLeaf transform, CLeaf parent, CLeaf worldPositionStays)
         => _lowering.EmitExternVoid(
-            _lowering.State.Abi.BindExact(TransformSetParent),
+            _lowering.State.BoundAbi.RequireExact(TransformSetParent),
             new List<CLeaf> { transform, parent, worldPositionStays });
 
     void EmitSetPositionAndRotation(CLeaf transform, CLeaf position, CLeaf rotation)
         => _lowering.EmitExternVoid(
-            _lowering.State.Abi.BindExact(TransformSetPositionAndRotation),
+            _lowering.State.BoundAbi.RequireExact(TransformSetPositionAndRotation),
             new List<CLeaf> { transform, position, rotation });
 }

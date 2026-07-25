@@ -59,6 +59,34 @@ public class EditorSyntaxGuardTests
             + string.Join("\n", failures));
     }
 
+    [Fact]
+    public void BodyLoweringCannotReachTheAbiCatalogBinder()
+    {
+        var packageRoot = FindPackageRoot();
+        var emitRoot = Path.Combine(packageRoot, "Editor", "Compiler", "Emit");
+        var failures = Directory.GetFiles(emitRoot, "*.cs", SearchOption.AllDirectories)
+            .Where(path => !string.Equals(
+                Path.GetFileName(path), "BoundAbiPlan.cs",
+                StringComparison.Ordinal))
+            .OrderBy(path => path, StringComparer.Ordinal)
+            .SelectMany(path => File.ReadLines(path)
+                .Select((line, index) => (line, index))
+                .Where(item =>
+                    item.line.Contains("UdonAbiBinder", StringComparison.Ordinal)
+                    || item.line.Contains(".Abi.Bind", StringComparison.Ordinal)
+                    || item.line.Contains(".Abi.TryBind", StringComparison.Ordinal)
+                    || item.line.Contains(".AbiCatalog.", StringComparison.Ordinal))
+                .Select(item =>
+                    $"{Path.GetRelativePath(packageRoot, path)}:{item.index + 1}: "
+                    + item.line.Trim()))
+            .ToArray();
+
+        Assert.True(failures.Length == 0,
+            "Body lowering must consume BoundProgram.Abi; only BoundAbiPlan may reach the "
+            + "catalog binder or probe catalog membership.\n"
+            + string.Join("\n", failures));
+    }
+
     static string FindPackageRoot()
     {
         for (var current = new DirectoryInfo(AppContext.BaseDirectory);

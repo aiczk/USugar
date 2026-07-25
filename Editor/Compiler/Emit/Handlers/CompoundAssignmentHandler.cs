@@ -115,8 +115,8 @@ public sealed class CompoundAssignmentHandler : IExpressionHandler
             rightVal = PromoteToInt32(rightVal, rightType);
 
         var sig = op.OperatorMethod != null
-            ? _lowering.State.Abi.BindOperator(op.OperatorMethod, type => _lowering.GetStorageTypeName(type))
-            : _lowering.State.Abi.BindExact(ExternResolver.ResolveBuiltInBinaryExtern(
+            ? _lowering.State.BoundAbi.RequireOperator(op.OperatorMethod, type => _lowering.GetStorageTypeName(type))
+            : _lowering.State.BoundAbi.RequireExact(ExternResolver.ResolveBuiltInBinaryExtern(
                 op.OperatorKind,
                 _lowering.ResolveType(op.Target.Type), _lowering.ResolveType(op.Value.Type),
                 _lowering.ResolveType(op.Type), _lowering.GetStorageTypeName));

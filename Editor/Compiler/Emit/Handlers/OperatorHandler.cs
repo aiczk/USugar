@@ -232,8 +232,8 @@ public class OperatorHandler : IExpressionHandler
         }
 
         var sig = op.OperatorMethod != null
-            ? _lowering.State.Abi.BindOperator(op.OperatorMethod, type => _lowering.GetStorageTypeName(type))
-            : _lowering.State.Abi.BindExact(ExternResolver.ResolveBuiltInBinaryExtern(
+            ? _lowering.State.BoundAbi.RequireOperator(op.OperatorMethod, type => _lowering.GetStorageTypeName(type))
+            : _lowering.State.BoundAbi.RequireExact(ExternResolver.ResolveBuiltInBinaryExtern(
                 op.OperatorKind,
                 _lowering.ResolveType(op.LeftOperand.Type),
                 _lowering.ResolveType(op.RightOperand.Type),
@@ -380,8 +380,8 @@ public class OperatorHandler : IExpressionHandler
         var resultType = _lowering.GetStorageTypeName(op.Type);
 
         var sig = op.OperatorMethod != null && !ExternResolver.IsNumericType(op.Operand.Type)
-            ? _lowering.State.Abi.BindOperator(op.OperatorMethod, type => _lowering.GetStorageTypeName(type))
-            : _lowering.State.Abi.BindExact(BuildBuiltinUnaryKey(op));
+            ? _lowering.State.BoundAbi.RequireOperator(op.OperatorMethod, type => _lowering.GetStorageTypeName(type))
+            : _lowering.State.BoundAbi.RequireExact(BuildBuiltinUnaryKey(op));
 
         return _lowering.ExternCall(sig, new List<CLeaf> { operandVal }, new StorageType(resultType));
     }
@@ -749,7 +749,7 @@ public class OperatorHandler : IExpressionHandler
                 var memberOwner = _lowering.GetStorageTypeName(
                     _lowering.ResolveExternOwnerType(memberContainingType, matchType, memberName));
                 memberVal = _lowering.ExternCall(
-                    _lowering.State.Abi.BindPropertyGetter(
+                    _lowering.State.BoundAbi.RequirePropertyGetter(
                         memberOwner, memberName, _lowering.GetStorageTypeName(memberType)),
                     new List<CLeaf> { valueVal }, _lowering.GetStorageType(memberType));
             }

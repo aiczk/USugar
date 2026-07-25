@@ -8,18 +8,16 @@ using Microsoft.CodeAnalysis;
 /// the installed Udon SDK. Candidate construction and registry selection live
 /// here; emit handlers never probe or repair signature strings themselves.
 /// </summary>
-public sealed class UdonAbiBinder
+internal sealed class UdonAbiBinder
 {
     readonly UdonAbiCatalog _catalog;
 
-    public UdonAbiBinder(UdonAbiCatalog catalog)
+    internal UdonAbiBinder(UdonAbiCatalog catalog)
         => _catalog = catalog ?? throw new ArgumentNullException(nameof(catalog));
 
-    public UdonAbiCatalog Catalog => _catalog;
+    internal BoundExtern BindExact(UdonAbiKey key) => _catalog.Require(key);
 
-    public BoundExtern BindExact(UdonAbiKey key) => _catalog.Require(key);
-
-    public BoundExtern BindFirst(string operation, IEnumerable<UdonAbiKey> candidates)
+    BoundExtern BindFirst(string operation, IEnumerable<UdonAbiKey> candidates)
     {
         if (candidates == null) throw new ArgumentNullException(nameof(candidates));
         var attempted = new List<string>();
@@ -134,7 +132,7 @@ public sealed class UdonAbiBinder
     /// from the operator declaration, never from the expression's storage type.
     /// The latter may have been erased or remapped by generic specialization.
     /// </summary>
-    public BoundExtern BindConversion(IMethodSymbol method,
+    internal BoundExtern BindConversion(IMethodSymbol method,
         ITypeSymbol expressionSource, ITypeSymbol expressionDestination,
         Func<ITypeSymbol, string> getUdonType)
     {
@@ -160,7 +158,7 @@ public sealed class UdonAbiBinder
     /// Bind a user-declared operator using its declared ref modes. The SDK uses
     /// a Ref suffix for ref/out/in/read-only-ref parameters.
     /// </summary>
-    public BoundExtern BindOperator(IMethodSymbol method,
+    internal BoundExtern BindOperator(IMethodSymbol method,
         Func<ITypeSymbol, string> getUdonType)
     {
         if (method == null) throw new ArgumentNullException(nameof(method));
@@ -175,7 +173,7 @@ public sealed class UdonAbiBinder
             new[] { signature });
     }
 
-    public BoundExtern BindMethod(IMethodSymbol method, string owner,
+    internal BoundExtern BindMethod(IMethodSymbol method, string owner,
         Func<ITypeSymbol, string> getUdonType, string[] parameterOverride = null)
     {
         if (TryBindMethod(
@@ -187,7 +185,7 @@ public sealed class UdonAbiBinder
             + $"for ABI owner '{owner}'.");
     }
 
-    public bool TryBindMethod(IMethodSymbol method, string owner,
+    internal bool TryBindMethod(IMethodSymbol method, string owner,
         Func<ITypeSymbol, string> getUdonType, string[] parameterOverride,
         out BoundExtern bound)
     {
@@ -258,7 +256,7 @@ public sealed class UdonAbiBinder
             out _);
     }
 
-    public BoundExtern BindFieldSetter(string owner, string fieldName,
+    internal BoundExtern BindFieldSetter(string owner, string fieldName,
         string valueType, bool isValueType = true, bool hasReceiver = true)
     {
         var mappedOwner = ExternResolver.RemapExternOwnerType(
@@ -285,7 +283,7 @@ public sealed class UdonAbiBinder
             });
     }
 
-    public BoundExtern BindPropertySetter(string owner, string propertyName,
+    internal BoundExtern BindPropertySetter(string owner, string propertyName,
         string valueType, bool hasReceiver = true)
     {
         var mappedOwner = ExternResolver.RemapExternOwnerType(
@@ -310,7 +308,7 @@ public sealed class UdonAbiBinder
             });
     }
 
-    public BoundExtern BindPropertyGetter(string owner, string propertyName,
+    internal BoundExtern BindPropertyGetter(string owner, string propertyName,
         string returnType, bool hasReceiver = true)
     {
         var mappedOwner = ExternResolver.RemapExternOwnerType(
@@ -331,7 +329,7 @@ public sealed class UdonAbiBinder
             });
     }
 
-    public BoundExtern BindIndexerGetter(string owner, string propertyName,
+    internal BoundExtern BindIndexerGetter(string owner, string propertyName,
         IReadOnlyList<string> indexTypes, string returnType, bool hasReceiver = true)
     {
         if (indexTypes == null) throw new ArgumentNullException(nameof(indexTypes));
@@ -354,7 +352,7 @@ public sealed class UdonAbiBinder
             });
     }
 
-    public BoundExtern BindIndexerSetter(string owner, string propertyName,
+    internal BoundExtern BindIndexerSetter(string owner, string propertyName,
         IReadOnlyList<string> indexTypes, string valueType, bool hasReceiver = true)
     {
         if (indexTypes == null) throw new ArgumentNullException(nameof(indexTypes));

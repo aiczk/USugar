@@ -114,7 +114,7 @@ internal sealed class MemberInvocationLowerer
             var cType = _lowering.GetStorageTypeName(_lowering.ResolveExternOwnerType(op.Property.ContainingType, op.Instance?.Type, op.Property.Name));
             var rType = _lowering.GetStorageTypeName(op.Property.Type);
             return _lowering.ExternCall(
-                _lowering.State.Abi.BindPropertyGetter(cType, propName, rType),
+                _lowering.State.BoundAbi.RequirePropertyGetter(cType, propName, rType),
                 new List<CLeaf> { thisVal },
                 new StorageType(rType));
         }
@@ -170,7 +170,7 @@ internal sealed class MemberInvocationLowerer
             _lowering.GuardUserStructMemberReachedExtern(op.Property.ContainingType, op.Property.Name);
 
             return _lowering.ExternCall(
-                _lowering.State.Abi.BindPropertyGetter(
+                _lowering.State.BoundAbi.RequirePropertyGetter(
                     containingType, op.Property.Name, returnType, hasReceiver: false),
                 new List<CLeaf>(),
                 new StorageType(returnType));
@@ -255,7 +255,7 @@ internal sealed class MemberInvocationLowerer
         // Array receivers keep the fixup above (SystemArray for .Length, element-typed otherwise).
         else if (op.Instance.Type is not IArrayTypeSymbol)
             containingType = _lowering.GetStorageTypeName(_lowering.ResolveExternOwnerType(op.Property.ContainingType, op.Instance.Type, op.Property.Name));
-        var sig = _lowering.State.Abi.BindPropertyGetter(
+        var sig = _lowering.State.BoundAbi.RequirePropertyGetter(
             containingType, op.Property.Name, returnType);
         return _lowering.ExternCall(sig, new List<CLeaf> { instVal }, new StorageType(returnType));
     }
@@ -371,7 +371,7 @@ internal sealed class MemberInvocationLowerer
         // Use the indexer's metadata name, not a hardcoded "Item": most indexers are "Item", but a type with
         // [IndexerName(...)] differs (e.g. StringBuilder's indexer is "Chars" → __get_Chars__, not __get_Item__).
         return _lowering.ExternCall(
-            _lowering.State.Abi.BindIndexerGetter(
+            _lowering.State.BoundAbi.RequireIndexerGetter(
                 cType, op.Property.MetadataName, idxTypes, rType),
             externArgs,
             new StorageType(rType));
@@ -841,7 +841,7 @@ internal sealed class MemberInvocationLowerer
         {
             var containingType = _lowering.GetStorageTypeName(_lowering.ResolveExternOwnerType(fieldRef.Field.ContainingType, fieldRef.Instance?.Type, fieldRef.Field.Name));
             var valueType = _lowering.GetStorageTypeName(fieldRef.Field.Type);
-            var sig = _lowering.State.Abi.BindFieldSetter(
+            var sig = _lowering.State.BoundAbi.RequireFieldSetter(
                 containingType, fieldRef.Field.Name, valueType);
             _lowering.EmitExternVoid(sig, new List<CLeaf> { instanceVal, valueVal });
         }
@@ -861,14 +861,14 @@ internal sealed class MemberInvocationLowerer
                 }
                 externArgs.Add(valueVal);
                 // Indexer metadata name, not a hardcoded "Item" ([IndexerName] e.g. StringBuilder → "Chars").
-                _lowering.EmitExternVoid(_lowering.State.Abi.BindIndexerSetter(
+                _lowering.EmitExternVoid(_lowering.State.BoundAbi.RequireIndexerSetter(
                         containingType, propRef.Property.MetadataName, indexTypes, valueType),
                     externArgs);
             }
             else
             {
                 _lowering.EmitExternVoid(
-                    _lowering.State.Abi.BindPropertySetter(
+                    _lowering.State.BoundAbi.RequirePropertySetter(
                         containingType, propRef.Property.Name, valueType),
                     new List<CLeaf> { instanceVal, valueVal });
             }

@@ -134,6 +134,7 @@ public class CompilationPlanningContractTests
         Assert.Contains(fields, field => field.FieldType == typeof(RecursionInfo));
         Assert.Contains(fields, field => field.FieldType == typeof(SyntheticDemandPlan));
         Assert.Contains(fields, field => field.FieldType == typeof(BoundCallSiteTable));
+        Assert.Contains(fields, field => field.FieldType == typeof(BoundAbiPlan));
         Assert.DoesNotContain(
             typeof(BoundProgram).GetMethods(
                 BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic),
@@ -143,6 +144,16 @@ public class CompilationPlanningContractTests
         Assert.All(
             typeof(RecursionInfo).GetProperties(),
             property => Assert.Null(property.SetMethod));
+
+        Assert.Null(typeof(LoweringState).GetProperty("Abi"));
+        Assert.DoesNotContain(
+            typeof(LoweringEnvironment).GetFields(
+                BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic),
+            field => field.FieldType == typeof(UdonAbiBinder));
+        Assert.All(
+            typeof(BoundAbiPlan).GetFields(
+                BindingFlags.Instance | BindingFlags.NonPublic),
+            field => Assert.True(field.IsInitOnly, field.Name));
     }
 
     [Fact]

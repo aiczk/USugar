@@ -205,7 +205,7 @@ public static class NullableAbi
         return builder.SlotRef(resultSlot);
     }
 
-    public static CLeaf EmitLiftedBinaryCore(CoreBuilder builder,
+    internal static CLeaf EmitLiftedBinaryCore(CoreBuilder builder, BoundAbiPlan abi,
         CValue leftValue, bool leftNullable, ITypeSymbol leftUnderlying,
         CValue rightValue, bool rightNullable, ITypeSymbol rightUnderlying,
         BinaryOperatorKind kind, IMethodSymbol operatorMethod, ITypeSymbol resultType, ITypeSymbol int32Type,
@@ -236,12 +236,9 @@ public static class NullableAbi
             var (rightOperand, rightEffective) = promoteBoxed(builder.SlotRef(bSlot), rightUnderlying);
             bool resultPromotes = ExternResolver.IsSmallIntOrChar(getUdonType(resultUnder));
             var resultEffective = resultPromotes ? int32Type : resultUnder;
-            var abi = new UdonAbiBinder(builder.Module.AbiCatalog
-                ?? throw new InvalidOperationException(
-                    "Nullable operator lowering requires a Udon ABI catalog."));
             var bound = operatorMethod != null
-                ? abi.BindOperator(operatorMethod, getUdonType)
-                : abi.BindExact(ExternResolver.ResolveBuiltInBinaryExtern(opKind,
+                ? abi.RequireOperator(operatorMethod, getUdonType)
+                : abi.RequireExact(ExternResolver.ResolveBuiltInBinaryExtern(opKind,
                     resolveType(leftEffective), resolveType(rightEffective),
                     resolveType(resultEffective), getUdonType));
             var raw = builder.ExternCall(

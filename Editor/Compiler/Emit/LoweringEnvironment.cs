@@ -13,7 +13,6 @@ public sealed class LoweringEnvironment
     public readonly Compilation Compilation;
     public readonly INamedTypeSymbol ClassSymbol;
     public readonly UdonAbiCatalog AbiCatalog;
-    public readonly UdonAbiBinder Abi;
     public readonly FrozenLayoutPlan Planner;
     public readonly MethodAnalysisCache MethodAnalyses;
 
@@ -24,7 +23,6 @@ public sealed class LoweringEnvironment
         Compilation = session.Compilation;
         ClassSymbol = classSymbol ?? throw new ArgumentNullException(nameof(classSymbol));
         AbiCatalog = session.AbiCatalog;
-        Abi = new UdonAbiBinder(AbiCatalog);
         Planner = planner ?? throw new ArgumentNullException(nameof(planner));
         if (!ReferenceEquals(planner.TypeFacts, session.TypeFacts))
             throw new InvalidOperationException(
