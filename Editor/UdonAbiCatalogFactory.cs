@@ -29,7 +29,7 @@ static class UdonAbiCatalogFactory
     static UdonExternPrototype CreatePrototype(UdonNodeDefinition definition,
         UdonTypeFactRegistry typeFacts)
     {
-        var owner = ToAbiTypeNameAndRecord(definition.type, typeFacts);
+        _ = ToAbiTypeNameAndRecord(definition.type, typeFacts);
         var parameters = definition.parameters.Select(parameter =>
             new UdonAbiParameter(
                 parameter.name,
@@ -45,8 +45,7 @@ static class UdonAbiCatalogFactory
                         $"Unknown SDK parameter mode '{parameter.parameterType}' "
                         + $"on extern '{definition.fullName}'."),
                 }));
-        return new UdonExternPrototype(
-            definition.fullName, owner, definition.name, parameters);
+        return new UdonExternPrototype(definition.fullName, parameters);
     }
 
     static UdonAbiType ToAbiTypePattern(Type type,

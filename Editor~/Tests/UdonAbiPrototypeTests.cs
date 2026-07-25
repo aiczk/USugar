@@ -93,7 +93,7 @@ public class UdonAbiPrototypeTests
     public void GenericSdkPrototypeUnifiesArrayElementAndReturn()
     {
         const string signature = "ExampleArray.__First__TArray__T";
-        var prototype = new UdonExternPrototype(signature, "ExampleArray", "First", new[]
+        var prototype = new UdonExternPrototype(signature, new[]
         {
             new UdonAbiParameter("values", UdonAbiType.Array(UdonAbiType.Generic("T")),
                 UdonAbiParameterMode.In),
@@ -130,7 +130,7 @@ public class UdonAbiPrototypeTests
         sdkFacts.RecordForTest(expected, isEnum: false, isValueType: false);
         var catalog = new UdonAbiCatalog(new[]
         {
-            new UdonExternPrototype(signature, "Example", "Accept", new[]
+            new UdonExternPrototype(signature, new[]
             {
                 Param("value", expected, UdonAbiParameterMode.In),
             }),
@@ -167,8 +167,7 @@ public class UdonAbiPrototypeTests
     static UdonAbiCatalog Catalog(string signature, params UdonAbiParameter[] parameters)
         => new(new[]
         {
-            new UdonExternPrototype(signature, TestHelper.RegistryOwner(signature),
-                "test", parameters),
+            new UdonExternPrototype(signature, parameters),
         });
 
     static UdonAbiParameter Param(string name, string type, UdonAbiParameterMode mode)

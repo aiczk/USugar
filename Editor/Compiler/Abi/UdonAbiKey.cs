@@ -180,9 +180,6 @@ public static class UdonAbi
         BooleanBinary("op_ConditionalAnd");
     public static readonly UdonAbiKey BooleanConditionalOr =
         BooleanBinary("op_ConditionalOr");
-    public static readonly UdonAbiKey UnityObjectInequality =
-        UdonAbiKey.Binary("UnityEngineObject", "op_Inequality",
-            "UnityEngineObject", "UnityEngineObject", "SystemBoolean");
     public static readonly UdonAbiKey DebugLogError =
         UdonAbiKey.VoidMethod("UnityEngineDebug", "LogError", "SystemObject");
     public static readonly UdonAbiKey SystemArrayLength =

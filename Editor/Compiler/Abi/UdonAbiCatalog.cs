@@ -15,7 +15,7 @@ public enum UdonAbiParameterMode
 /// are exact storage types; generic node definitions retain their placeholder
 /// identity instead of erasing it to SystemObject.
 /// </summary>
-public sealed class UdonAbiType : IEquatable<UdonAbiType>
+public sealed class UdonAbiType
 {
     public enum PatternKind
     {
@@ -101,27 +101,6 @@ public sealed class UdonAbiType : IEquatable<UdonAbiType>
         }
     }
 
-    public bool Equals(UdonAbiType other)
-        => other != null
-           && Kind == other.Kind
-           && ExactType == other.ExactType
-           && string.Equals(GenericName, other.GenericName, StringComparison.Ordinal)
-           && Equals(ElementType, other.ElementType);
-
-    public override bool Equals(object obj) => Equals(obj as UdonAbiType);
-
-    public override int GetHashCode()
-    {
-        unchecked
-        {
-            var hash = (int)Kind;
-            hash = hash * 397 ^ ExactType.GetHashCode();
-            hash = hash * 397 ^ StringComparer.Ordinal.GetHashCode(GenericName ?? "");
-            hash = hash * 397 ^ (ElementType?.GetHashCode() ?? 0);
-            return hash;
-        }
-    }
-
     public override string ToString() => Kind switch
     {
         PatternKind.Exact => ExactType.Name,
@@ -154,25 +133,20 @@ public sealed class UdonAbiParameter
 public sealed class UdonExternPrototype
 {
     public string RegisteredName { get; }
-    public string Owner { get; }
-    public string Member { get; }
     public IReadOnlyList<UdonAbiParameter> Parameters { get; }
     public bool HasTypedParameters { get; }
 
-    public UdonExternPrototype(string registeredName, string owner, string member,
-        IEnumerable<UdonAbiParameter> parameters)
-        : this(registeredName, owner, member, parameters, hasTypedParameters: true)
+    public UdonExternPrototype(string registeredName, IEnumerable<UdonAbiParameter> parameters)
+        : this(registeredName, parameters, hasTypedParameters: true)
     {
     }
 
-    UdonExternPrototype(string registeredName, string owner, string member,
-        IEnumerable<UdonAbiParameter> parameters, bool hasTypedParameters)
+    UdonExternPrototype(string registeredName, IEnumerable<UdonAbiParameter> parameters,
+        bool hasTypedParameters)
     {
         RegisteredName = !string.IsNullOrEmpty(registeredName)
             ? registeredName
             : throw new ArgumentException("An extern registry name is required.", nameof(registeredName));
-        Owner = owner ?? "";
-        Member = member ?? "";
         Parameters = (parameters ?? throw new ArgumentNullException(nameof(parameters))).ToArray();
         HasTypedParameters = hasTypedParameters;
     }
@@ -183,16 +157,7 @@ public sealed class UdonExternPrototype
     /// prototypes from UdonNodeDefinition and is always typed.
     /// </summary>
     internal static UdonExternPrototype UntypedFixture(string registeredName)
-        => new(registeredName, RegistryOwner(registeredName), "",
-            Array.Empty<UdonAbiParameter>(), hasTypedParameters: false);
-
-    static string RegistryOwner(string registeredName)
-    {
-        var separator = registeredName.IndexOf('.');
-        return separator > 0
-            ? registeredName.Substring(0, separator)
-            : registeredName;
-    }
+        => new(registeredName, Array.Empty<UdonAbiParameter>(), hasTypedParameters: false);
 }
 
 /// <summary>
@@ -256,7 +221,6 @@ public sealed class UdonAbiCatalog
     }
 
     public IReadOnlyCollection<string> ExternNames => _externs.Keys;
-    public IReadOnlyCollection<UdonExternPrototype> Prototypes => _externs.Values;
 
     /// <summary>Seed one compilation's mutable registry from the immutable SDK ABI snapshot. Source
     /// lowering then appends Roslyn facts to the same session-owned registry.</summary>
@@ -268,7 +232,7 @@ public sealed class UdonAbiCatalog
 }
 
 /// <summary>An exact extern proven to exist in a typed SDK ABI catalog.</summary>
-public sealed class BoundExtern : IEquatable<BoundExtern>
+public sealed class BoundExtern
 {
     public UdonAbiKey Key { get; }
     public UdonExternPrototype Prototype { get; }
@@ -283,13 +247,5 @@ public sealed class BoundExtern : IEquatable<BoundExtern>
         Prototype = prototype ?? throw new ArgumentNullException(nameof(prototype));
     }
 
-    public bool Equals(BoundExtern other)
-        => other != null && string.Equals(Text, other.Text, StringComparison.Ordinal);
-    public override bool Equals(object obj) => Equals(obj as BoundExtern);
-    public override int GetHashCode() => StringComparer.Ordinal.GetHashCode(Text);
     public override string ToString() => Text;
-
-    public static bool operator ==(BoundExtern left, BoundExtern right)
-        => ReferenceEquals(left, right) || left?.Equals(right) == true;
-    public static bool operator !=(BoundExtern left, BoundExtern right) => !(left == right);
 }
