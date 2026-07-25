@@ -13,19 +13,15 @@ public readonly struct LoweredValue
     public readonly ValueInfo Info;
     public readonly ITypeSymbol SemanticType;
     public readonly ITypeSymbol CarrierType;
-    public readonly RuntimeShape Shape;
 
     public LoweredValue(CLeaf leaf, ValueInfo info,
-        ITypeSymbol semanticType, ITypeSymbol carrierType, RuntimeShape shape)
+        ITypeSymbol semanticType, ITypeSymbol carrierType)
     {
         Leaf = leaf;
         Info = info;
         SemanticType = semanticType;
         CarrierType = carrierType;
-        Shape = shape;
     }
-
-    public ITypeSymbol StaticType => SemanticType ?? Info.StaticType;
 
     public static LoweredValue Create(EmitContext context, IOperation operation, CLeaf leaf)
     {
@@ -37,14 +33,9 @@ public readonly struct LoweredValue
         var carrierType = TypeEnvironment.CloseType(
             context.Compilation, carrierOperation?.Type ?? operation.Type,
             context.Generics.TypeParamMap);
-        var shapeType = semanticType ?? carrierType;
-        var shape = shapeType == null
-            ? RuntimeShape.Native(false)
-            : TypeClassifier.ShapeOf(
-                shapeType, new TypeClassifierContext(context.Generics.TypeParamMap));
         return new LoweredValue(
             leaf, context.Boundary.ClassifyValue(operation),
-            semanticType, carrierType, shape);
+            semanticType, carrierType);
     }
 
     static IOperation FindCarrier(IOperation operation, EmitContext context)

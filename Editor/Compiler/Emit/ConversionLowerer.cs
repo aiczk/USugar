@@ -23,16 +23,13 @@ public readonly struct ClosedConversionPlan
 {
     public readonly ClosedConversionKind Kind;
     public readonly ITypeSymbol SourceType;
-    public readonly ITypeSymbol DestinationType;
     public readonly IMethodSymbol OperatorMethod;
 
     public ClosedConversionPlan(ClosedConversionKind kind,
-        ITypeSymbol sourceType, ITypeSymbol destinationType,
-        IMethodSymbol operatorMethod = null)
+        ITypeSymbol sourceType, IMethodSymbol operatorMethod = null)
     {
         Kind = kind;
         SourceType = sourceType;
-        DestinationType = destinationType;
         OperatorMethod = operatorMethod;
     }
 }
@@ -67,33 +64,28 @@ public sealed class ConversionLowerer
         var destinationStorage = _context.ResolveStorageType(closedDestination);
         if (source.Leaf.Type == destinationStorage)
             return new ClosedConversionPlan(
-                ClosedConversionKind.Identity, effectiveSource, closedDestination);
+                ClosedConversionKind.Identity, effectiveSource);
 
         var classified = (_context.Compilation as CSharpCompilation)
             ?.ClassifyConversion(effectiveSource, closedDestination);
         if (classified is { IsUserDefined: true, MethodSymbol: { } method })
             return new ClosedConversionPlan(
-                ClosedConversionKind.UserOperator,
-                effectiveSource, closedDestination, method);
+                ClosedConversionKind.UserOperator, effectiveSource, method);
         if (classified is { IsEnumeration: true })
             return new ClosedConversionPlan(
-                ClosedConversionKind.Enumeration,
-                effectiveSource, closedDestination);
+                ClosedConversionKind.Enumeration, effectiveSource);
 
         if (ExternResolver.IsConvertibleNumericType(closedDestination))
         {
             if (effectiveSource.SpecialType == SpecialType.System_Object)
                 return new ClosedConversionPlan(
-                    ClosedConversionKind.ObjectNumeric,
-                    effectiveSource, closedDestination);
+                    ClosedConversionKind.ObjectNumeric, effectiveSource);
             if (ExternResolver.IsConvertibleNumericType(effectiveSource))
                 return new ClosedConversionPlan(
-                    ClosedConversionKind.Numeric,
-                    effectiveSource, closedDestination);
+                    ClosedConversionKind.Numeric, effectiveSource);
         }
 
         return new ClosedConversionPlan(
-            ClosedConversionKind.Representation,
-            effectiveSource, closedDestination);
+            ClosedConversionKind.Representation, effectiveSource);
     }
 }
