@@ -42,7 +42,8 @@ public sealed class LValueLowerer
             && _lowering.IsAccessorDispatchSite(vCapRef, vCapGetter, out var vCapRecvTy))
         {
             var (vCapRecv, vCapIdx) = _lowering.StageAccessorDispatchLegs(vCapRef);
-            var current = _lowering.EmitAccessorDispatch(vCapRef.Property, vCapRecvTy, vCapGetter, vCapRecv, vCapIdx, null);
+            var current = _lowering.EmitAccessorDispatch(
+                vCapRef, vCapRecvTy, vCapGetter, vCapRecv, vCapIdx, null);
             return new LoweringServices.LValuePlan { Value = current, ArrayVal = vCapRecv, IndexArgs = vCapIdx };
         }
 
@@ -237,7 +238,7 @@ public sealed class LValueLowerer
                 (vWbRecv, vWbIdx) = _lowering.StageAccessorDispatchLegs(vWbRef);
             var vWbSlot = _lowering.State.Builder.AllocScratch(_lowering.GetStorageType(vWbRef.Property.Type));
             _lowering.EmitAssign(vWbSlot, valueVal);
-            _lowering.EmitAccessorDispatch(vWbRef.Property, vWbRecvTy, vWbSetter, vWbRecv,
+            _lowering.EmitAccessorDispatch(vWbRef, vWbRecvTy, vWbSetter, vWbRecv,
                 vWbIdx ?? new List<CLeaf>(), _lowering.SlotRef(vWbSlot));
             return;
         }

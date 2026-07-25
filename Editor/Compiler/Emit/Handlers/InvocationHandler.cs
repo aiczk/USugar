@@ -74,6 +74,9 @@ public sealed class InvocationHandler : IExpressionHandler
 
         // Resolve type parameters in generic method type arguments (e.g., Min<T> → Min<int>)
         var target = _lowering.SubstituteMethodTypeArgs(op.TargetMethod);
+        var boundSite = _lowering.RequireBoundCallSite(
+            op, CallableSiteKind.Method, target);
+        target = boundSite.Callable.Site.Target;
 
         // B67: user-enum.ToString() → synthesized value→name helper (the inherited Enum.ToString would
         // resolve to the underlying integer's ToString and print the number). Flags enums reject inside.
@@ -259,8 +262,7 @@ public sealed class InvocationHandler : IExpressionHandler
             if (_lowering.ResolveType(op.Instance?.Type) is INamedTypeSymbol recvTy
                 && VirtualDispatch.IsDispatchSite(target, op.Instance, recvTy))
             {
-                var site = CallableSites.Require(op, target);
-                var targets = _lowering.State.VirtualDispatch.Resolve(site, recvTy).RuntimeTargets;
+                var targets = boundSite.RequireDispatch().RuntimeTargets;
                 _lowering.AssertClosedVirtualDispatch(recvTy, targets, target);
                 if (!recvTy.IsSealed && targets.Count >= 2)
                     return EmitVirtualChain(op, targets);
@@ -441,8 +443,7 @@ public sealed class InvocationHandler : IExpressionHandler
         if (target.ContainingType is INamedTypeSymbol { TypeKind: TypeKind.Interface } localInterface
             && _lowering.Planner.InterfaceIsLocalUserClassOnly(localInterface))
         {
-            var site = CallableSites.Require(op, target);
-            var targets = _lowering.State.VirtualDispatch.Resolve(site, localInterface).RuntimeTargets;
+            var targets = boundSite.RequireDispatch().RuntimeTargets;
             if (targets.Count >= 2)
                 return EmitVirtualChain(op, targets);
             if (targets.Count == 1)

@@ -505,6 +505,11 @@ public class ExpressionHandler : IExpressionHandler
 
     CLeaf VisitConversion(IConversionOperation conv)
     {
+        var operatorMethod = conv.OperatorMethod;
+        if (operatorMethod != null)
+            operatorMethod = _lowering.RequireBoundCallSite(
+                conv, CallableSiteKind.Conversion, operatorMethod).Callable.Site.Target;
+
         LoweringServices.RejectChecked(conv.IsChecked);
 
         // B82 (wave-16, ruling Option A): reject a user-level conversion that ERASES a v1 class to a non-class
@@ -520,8 +525,8 @@ public class ExpressionHandler : IExpressionHandler
         // CA-v2 M3: a USER conversion operator on a v1 class consumes the class value through the
         // operator (C# forbids user conversions to object/a base type, so the destination is always a
         // concrete non-erasing type) — it is a real value conversion, not a laundering erasure.
-        bool userClassConversion = conv.OperatorMethod is { MethodKind: MethodKind.Conversion }
-            && conv.OperatorMethod.ContainingType is INamedTypeSymbol ucct && TypeClassifier.IsObjectArrayEmulated(ucct);
+        bool userClassConversion = operatorMethod is { MethodKind: MethodKind.Conversion }
+            && operatorMethod.ContainingType is INamedTypeSymbol ucct && TypeClassifier.IsObjectArrayEmulated(ucct);
         if (!userClassConversion
             && _lowering.ResolveType(conv.Operand.Type) is { } b82Src && _lowering.ResolveType(conv.Type) is { } b82Dst)
             _lowering.RejectProgramLocalErasure(conv, b82Src, b82Dst);
@@ -752,7 +757,7 @@ public class ExpressionHandler : IExpressionHandler
         // strict accessors. Mirror the as-form's polarity: loud reject. A statically-null operand stays
         // a passthrough (C#: unboxing null into T? is legal and yields null), and a user conversion
         // operator is a real value conversion, not an unbox.
-        if (conv.OperatorMethod == null
+        if (operatorMethod == null
             && EmitPolicy.IsNullableT(convDstType, out _)
             && convSrcType is { IsValueType: false })
         {
@@ -781,21 +786,21 @@ public class ExpressionHandler : IExpressionHandler
         }
 
         // User-defined implicit/explicit conversions (e.g. Vector2→Vector3)
-        if (conv.OperatorMethod != null && conv.Operand.Type != null && conv.Type != null && !SymbolEqualityComparer.Default.Equals(conv.Operand.Type, conv.Type))
+        if (operatorMethod != null && conv.Operand.Type != null && conv.Type != null && !SymbolEqualityComparer.Default.Equals(conv.Operand.Type, conv.Type))
         {
             // A user STRUCT conversion operator is an emitted method, not an extern: route to it (its containing
             // type is SystemObjectArray-backed, so it has no SDK conversion extern).
-            if (conv.OperatorMethod.ContainingType is INamedTypeSymbol convOpCt && TypeClassifier.IsObjectArrayEmulated(convOpCt))
-                return _lowering.EmitCallToMethod(_lowering.ResolveStructMember(conv.OperatorMethod), new List<CLeaf> { srcVal });
+            if (operatorMethod.ContainingType is INamedTypeSymbol convOpCt && TypeClassifier.IsObjectArrayEmulated(convOpCt))
+                return _lowering.EmitCallToMethod(_lowering.ResolveStructMember(operatorMethod), new List<CLeaf> { srcVal });
 
             var dstType = _lowering.GetStorageTypeName(conv.Type);
             var conversionExtern = _lowering.State.BoundAbi.RequireConversion(
-                conv.OperatorMethod, _lowering.ResolveType(conv.Operand.Type), _lowering.ResolveType(conv.Type),
+                operatorMethod, _lowering.ResolveType(conv.Operand.Type), _lowering.ResolveType(conv.Type),
                 type => _lowering.GetStorageTypeName(type));
             return _lowering.ExternCall(
                 conversionExtern,
                 new List<CLeaf> {
-                    _lowering.AdaptExternArgument(srcVal, conv.OperatorMethod.Parameters[0].Type)
+                    _lowering.AdaptExternArgument(srcVal, operatorMethod.Parameters[0].Type)
                 },
                 new StorageType(dstType));
         }

@@ -69,6 +69,39 @@ public sealed class LoweringServices
     internal CLeaf EmitPatternCheck(CLeaf value, ITypeSymbol valueType, IPatternOperation pattern)
         => _state.Operations.EmitPatternCheck(value, valueType, pattern);
 
+    internal BoundCallSite RequireBoundCallSite(
+        IOperation operation,
+        CallableSiteKind kind,
+        IMethodSymbol target)
+    {
+        if (operation == null) throw new ArgumentNullException(nameof(operation));
+        if (target == null) throw new ArgumentNullException(nameof(target));
+        CallSiteBindingScope? scope = null;
+        var lexical = _compilation.GetSemanticModel(operation.Syntax.SyntaxTree)
+            .GetEnclosingSymbol(operation.Syntax.SpanStart);
+        IMethodSymbol lexicalMethod = null;
+        for (var symbol = lexical; symbol != null; symbol = symbol.ContainingSymbol)
+            if (symbol is IMethodSymbol method)
+            {
+                lexicalMethod = method;
+                break;
+            }
+        if (_state.Methods.CurrentMethod != null && lexicalMethod != null)
+        {
+            var methodKey = _state.Methods.CurrentClosureSpec != null
+                ? new SpecializationKey(
+                    _state.Methods.CurrentMethod,
+                    _state.Methods.CurrentClosureSpec.KeyArgs)
+                : SpecializationKey.ForMethod(_state.Methods.CurrentMethod);
+            scope = CallSiteBindingScope.ForMethod(methodKey);
+        }
+        else
+            scope = CallSiteBindingScope.ForLexicalType(
+                _compilation, operation, _state.Generics.TypeParamMap);
+        return _state.Program.CallSites.Require(
+            operation.Syntax, kind, target, scope);
+    }
+
     /// <summary>
     /// Udon array constructors consume an Int32 length even though C# accepts every integral array
     /// dimension type. Normalize at the allocation choke so UInt32/Int64/etc. never reach the wrapper
@@ -1290,6 +1323,12 @@ public sealed class LoweringServices
     /// order and landed writes in the wrong cell when the legs read state the RHS mutates).</summary>
     internal System.Action<CLeaf> PreparePropertySet(IPropertyReferenceOperation propRef)
     {
+        var boundSetter = RequireBoundCallSite(
+            propRef,
+            CallableSiteKind.PropertySet,
+            VirtualDispatch.FindAccessor(propRef.Property, getter: false)
+            ?? throw new System.NotSupportedException(
+                $"Property '{propRef.Property.Name}' has no setter."));
         // CW1 lift: a runtime-polymorphic property/indexer WRITE on a v1-class receiver dispatches the
         // setter through the typeobj machinery — legs staged NOW (C# order: receiver, index args), the
         // value staged inside the deferred store (it arrives later, and the chain consumes it once per
@@ -1302,7 +1341,8 @@ public sealed class LoweringServices
             {
                 var vSlot = _state.Builder.AllocScratch(GetStorageType(propRef.Property.Type));
                 EmitAssign(vSlot, vsVal);
-                EmitAccessorDispatch(propRef.Property, vsRecvTy, vsSetter, vsRecv, vsIdx, SlotRef(vSlot));
+                EmitAccessorDispatch(
+                    propRef, vsRecvTy, vsSetter, vsRecv, vsIdx, SlotRef(vSlot), boundSetter);
             };
         }
 
@@ -1992,6 +2032,11 @@ public sealed class LoweringServices
         }
         if (targetMethod == null)
             throw new System.NotSupportedException($"Unsupported delegate target: {op.Target.GetType().Name}");
+        if (!planning && op.Target is IMethodReferenceOperation methodReference)
+            targetMethod = RequireBoundCallSite(
+                methodReference,
+                CallableSiteKind.Method,
+                targetMethod).Callable.Site.Target;
 
         // MG auto-wrap (design 2026-07-11 v2, replacing the B54 struct reject and the v1 class MG
         // reject): a class/struct INSTANCE method group binds via a RECEIVER-BRIDGE — the receiver
@@ -2366,13 +2411,17 @@ public sealed class LoweringServices
     /// means the receiver must be null; CLR NREs — §2.6 polarity, legs already evaluated for
     /// side-effect parity). <paramref name="setValue"/> null ⇒ GET (returns the value leaf); non-null ⇒
     /// SET (returns null). Legs arrive STAGED (<see cref="StageAccessorDispatchLegs"/>).</summary>
-    internal CLeaf EmitAccessorDispatch(IPropertySymbol prop, INamedTypeSymbol recvTy,
-        IMethodSymbol accessor, CLeaf recv, List<CLeaf> indexArgs, CLeaf setValue)
+    internal CLeaf EmitAccessorDispatch(IPropertyReferenceOperation operation, INamedTypeSymbol recvTy,
+        IMethodSymbol accessor, CLeaf recv, List<CLeaf> indexArgs, CLeaf setValue,
+        BoundCallSite boundSite = null)
     {
+        var prop = operation.Property;
         var interfaceDispatch = recvTy.TypeKind == TypeKind.Interface;
-        var site = CallableSites.Synthetic(
-            setValue == null ? CallableSiteKind.PropertyGet : CallableSiteKind.PropertySet, accessor);
-        var targets = _state.VirtualDispatch.Resolve(site, recvTy).RuntimeTargets;
+        boundSite ??= RequireBoundCallSite(
+            operation,
+            setValue == null ? CallableSiteKind.PropertyGet : CallableSiteKind.PropertySet,
+            accessor);
+        var targets = boundSite.RequireDispatch().RuntimeTargets;
         if (!interfaceDispatch) AssertClosedVirtualDispatch(recvTy, targets, accessor);
         bool isSet = setValue != null;
         string memberKind = prop.IsIndexer ? "indexer" : "property";
@@ -2921,9 +2970,8 @@ public sealed class LoweringServices
     {
         if (_currentMethod == null) return false;
         var callableSite = CallableSites.Require(site, staticCallee);
-        var receiver = ResolveType(callableSite.Receiver?.Type) as INamedTypeSymbol
-            ?? staticCallee.ContainingType;
-        var landing = _state.VirtualDispatch.Resolve(callableSite, receiver, _classSymbol).Cross;
+        var landing = RequireBoundCallSite(
+            site, callableSite.Kind, staticCallee).RequireDispatch().Cross;
         var recursive = landing.HasLocalTarget
             && _state.RecursionContext.IsRecursiveEdge(_currentMethod, landing.LocalTarget);
         var plan = CallableSitePlan.Cross(staticCallee, landing, site?.Syntax, recursive,

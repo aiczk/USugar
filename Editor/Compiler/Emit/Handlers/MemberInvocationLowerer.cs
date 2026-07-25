@@ -19,6 +19,11 @@ internal sealed class MemberInvocationLowerer
 
     internal CLeaf VisitPropertyReference(IPropertyReferenceOperation op)
     {
+        var boundGetter = VirtualDispatch.FindAccessor(op.Property, getter: true);
+        if (boundGetter != null && !op.Property.ContainingType.IsAnonymousType)
+            _lowering.RequireBoundCallSite(
+                op, CallableSiteKind.PropertyGet, boundGetter);
+
         // Indexer access: Type.__get_Item__IndexTypes__ReturnType
         if (op.Property.IsIndexer)
             return VisitIndexerGet(op);
@@ -46,7 +51,8 @@ internal sealed class MemberInvocationLowerer
             && _lowering.IsAccessorDispatchSite(op, vpGetter, out var vpRecvTy))
         {
             var (vpRecv, vpIdx) = _lowering.StageAccessorDispatchLegs(op);
-            return _lowering.EmitAccessorDispatch(op.Property, vpRecvTy, vpGetter, vpRecv, vpIdx, null);
+            return _lowering.EmitAccessorDispatch(
+                op, vpRecvTy, vpGetter, vpRecv, vpIdx, null);
         }
 
         // Auto-property on an aggregate (struct/tuple) OR v1 class → object[] element (the backing field's
@@ -271,7 +277,8 @@ internal sealed class MemberInvocationLowerer
             && _lowering.IsAccessorDispatchSite(op, viGetter, out var viRecvTy))
         {
             var (viRecv, viIdx) = _lowering.StageAccessorDispatchLegs(op);
-            return _lowering.EmitAccessorDispatch(op.Property, viRecvTy, viGetter, viRecv, viIdx, null);
+            return _lowering.EmitAccessorDispatch(
+                op, viRecvTy, viGetter, viRecv, viIdx, null);
         }
 
         // User-defined indexer on this/base BEHAVIOUR → internal getter call (`this[i]` reads this-fields
@@ -600,7 +607,10 @@ internal sealed class MemberInvocationLowerer
         using (_lowering.State.Generics.EnterOverlayScope(overlay)) return _lowering.VisitExpression(value);
     }
 
-    CLeaf EmitClassInstanceMint(IObjectCreationOperation op, INamedTypeSymbol classTy)
+    CLeaf EmitClassInstanceMint(
+        IObjectCreationOperation op,
+        INamedTypeSymbol classTy,
+        IMethodSymbol constructor)
     {
         var layout = _lowering.State.Aggregates.GetLayout(classTy);
         return ClassAbi.EmitMint(
@@ -611,7 +621,7 @@ internal sealed class MemberInvocationLowerer
                 // CA-v2 M1: an explicit ctor runs the full chain (field inits + base call + body) inside
                 // its own function; a class with no explicit ctor runs the implicit chain (field inits
                 // derived->base) inline here.
-                if (op.Constructor == null || op.Constructor.IsImplicitlyDeclared)
+                if (constructor == null || constructor.IsImplicitlyDeclared)
                 {
                     ClassAbi.EmitImplicitCtorChain(_lowering.Builder, _lowering.Compilation, instance, classTy,
                         _lowering.State.Aggregates.GetLayout, value => VisitClassInitializerExpression(value, classTy), CallBaseCtor);
@@ -623,11 +633,12 @@ internal sealed class MemberInvocationLowerer
                 // by-ordinal + guard + copy-back discipline as EmitUserMethodCall; the substituted symbol
                 // equals ResolveStructMember's result minus its on-demand registration side effect, which
                 // stays at the call (after argument evaluation, as before).
-                var ctor = _lowering.SubstituteMethodTypeArgs(op.Constructor);
+                var ctor = constructor;
         _owner.Externs.GuardRefOutArguments(op.Arguments, ctor);
                 var ctorArgs = new List<CLeaf> { instance };
         var ctorPrepared = _owner.Externs.MarshalArgumentsByOrdinal(op.Arguments, ctor, ctorArgs);
-                _lowering.EmitExprStmt(_lowering.EmitCallToMethod(_lowering.ResolveStructMember(op.Constructor), ctorArgs));
+                _lowering.EmitExprStmt(_lowering.EmitCallToMethod(
+                    _lowering.ResolveStructMember(constructor), ctorArgs));
         _owner.Externs.EmitRefOutCopyBack(op.Arguments, ctor, 0, ctorPrepared);
             },
             instance => _lowering.EmitAggregateObjectInitializer(instance, layout, op.Initializer),
@@ -700,6 +711,11 @@ internal sealed class MemberInvocationLowerer
 
     internal CLeaf VisitObjectCreation(IObjectCreationOperation op)
     {
+        var constructor = op.Constructor;
+        if (constructor != null)
+            constructor = _lowering.RequireBoundCallSite(
+                op, CallableSiteKind.Constructor, constructor).Callable.Site.Target;
+
         var resultType = _lowering.GetStorageTypeName(op.Type);
         var concreteType = _lowering.ResolveType(op.Type);
 
@@ -729,7 +745,7 @@ internal sealed class MemberInvocationLowerer
         // unsupported class (record / non-Object base / extern-backed foreign) already threw at the resultType
         // GetStorageTypeName above (B79); nothing unsupported lands here.
         if (concreteType is INamedTypeSymbol classTy && TypeClassifier.IsUserClass(classTy))
-            return EmitClassInstanceMint(op, classTy);
+            return EmitClassInstanceMint(op, classTy, constructor);
 
         // Parameterless struct ctor. A user struct used AS A VALUE (e.g. `_field = new V()`, `Foo(new V())`)
         // must allocate + default-init a fresh object[]; the local-declaration path already does this, but
@@ -756,18 +772,19 @@ internal sealed class MemberInvocationLowerer
         // would emit a bogus SystemObjectArray.__ctor__<args>__ extern that the validator rejects. (diff-fuzz w3)
         if (op.Type.IsValueType && op.Arguments.Length > 0
             && op.Type is INamedTypeSymbol userStruct && TypeClassifier.IsUserStruct(userStruct)
-            && op.Constructor != null)
+            && constructor != null)
         {
             var layout = _lowering.State.Aggregates.GetLayout(userStruct);
             var slot = _lowering.State.Builder.AllocScratch(new StorageType(AggregateAbi.ArrayType));
             _lowering.EmitAssign(slot, AggregateAbi.Allocate(_lowering.Builder, layout.Count));
             AggregateAbi.DefaultInitialize(_lowering.Builder, _lowering.SlotRef(slot), layout, _lowering.State.Aggregates.GetLayout, _lowering.GetStorageTypeName);
             // CW4: same by-ordinal + ref/out discipline as the class mint arm (EmitClassInstanceMint).
-            var structCtor = _lowering.SubstituteMethodTypeArgs(op.Constructor);
+            var structCtor = constructor;
             _owner.Externs.GuardRefOutArguments(op.Arguments, structCtor);
             var ctorArgs = new List<CLeaf> { _lowering.SlotRef(slot) };
             var ctorPrepared = _owner.Externs.MarshalArgumentsByOrdinal(op.Arguments, structCtor, ctorArgs);
-            _lowering.EmitExprStmt(_lowering.EmitCallToMethod(_lowering.ResolveStructMember(op.Constructor), ctorArgs));
+            _lowering.EmitExprStmt(_lowering.EmitCallToMethod(
+                _lowering.ResolveStructMember(constructor), ctorArgs));
             _owner.Externs.EmitRefOutCopyBack(op.Arguments, structCtor, 0, ctorPrepared);
             // ctor + object-initializer combo (`new V(1,2) { Y = 3 }`): apply the initializer AFTER the
             // ctor runs, same order C# gives the fields (roadmap B41 (d)).

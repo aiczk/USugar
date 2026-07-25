@@ -30,6 +30,11 @@ public sealed class CompoundAssignmentHandler : IExpressionHandler
 
     CLeaf VisitCompoundAssignment(ICompoundAssignmentOperation op)
     {
+        var operatorMethod = op.OperatorMethod;
+        if (operatorMethod != null)
+            operatorMethod = _lowering.RequireBoundCallSite(
+                op, CallableSiteKind.Operator, operatorMethod).Callable.Site.Target;
+
         // Multicast design (2026-07-03 §1.4/§7 A-M1): `+=`/`-=` on ANY delegate-typed target (field,
         // local, param, property, array element, …) lowers to the sig's synthetic combine/remove helper
         // instead of rejecting. Predicate unchanged from the former reject arm (widened per Stage-1 §5.2).
@@ -68,7 +73,7 @@ public sealed class CompoundAssignmentHandler : IExpressionHandler
 
         // User-defined struct operator (s += t uses the struct's operator +): static method call, then write
         // back. The struct's Udon type is SystemObjectArray, so built-in ABI resolution would be invalid.
-        if (op.OperatorMethod is { MethodKind: MethodKind.UserDefinedOperator } cuOpM
+        if (operatorMethod is { MethodKind: MethodKind.UserDefinedOperator } cuOpM
             && cuOpM.ContainingType is INamedTypeSymbol cuOpCt && TypeClassifier.IsObjectArrayEmulated(cuOpCt))
         {
             var res = _lowering.EmitCallToMethod(_lowering.ResolveStructMember(cuOpM), new List<CLeaf> { leftVal, rightVal });
@@ -83,7 +88,7 @@ public sealed class CompoundAssignmentHandler : IExpressionHandler
             var lifted = _lowering.EmitLiftedBinaryCore(
                 leftVal, true, tUnderlying,
                 rightVal, rNullable, rNullable ? vUnderlying : op.Value.Type,
-                op.OperatorKind, op.OperatorMethod, op.Type);
+                op.OperatorKind, operatorMethod, op.Type);
             lv.Write(lifted);
             return lifted;
         }
@@ -114,8 +119,8 @@ public sealed class CompoundAssignmentHandler : IExpressionHandler
         if (ExternResolver.IsSmallIntOrChar(rightType))
             rightVal = PromoteToInt32(rightVal, rightType);
 
-        var sig = op.OperatorMethod != null
-            ? _lowering.State.BoundAbi.RequireOperator(op.OperatorMethod, type => _lowering.GetStorageTypeName(type))
+        var sig = operatorMethod != null
+            ? _lowering.State.BoundAbi.RequireOperator(operatorMethod, type => _lowering.GetStorageTypeName(type))
             : _lowering.State.BoundAbi.RequireExact(ExternResolver.ResolveBuiltInBinaryExtern(
                 op.OperatorKind,
                 _lowering.ResolveType(op.Target.Type), _lowering.ResolveType(op.Value.Type),
@@ -184,6 +189,14 @@ public sealed class CompoundAssignmentHandler : IExpressionHandler
         if (op.EventReference is not IEventReferenceOperation evtRef)
             throw new System.NotSupportedException("Unsupported event assignment target.");
         var evt = evtRef.Event;
+        var accessor = op.Adds ? evt.AddMethod : evt.RemoveMethod;
+        if (accessor == null)
+            throw new System.NotSupportedException($"Event '{evt.Name}' has no accessor.");
+        var boundSite = _lowering.RequireBoundCallSite(
+            op,
+            op.Adds ? CallableSiteKind.EventAdd : CallableSiteKind.EventRemove,
+            accessor);
+        accessor = boundSite.Callable.Site.Target;
         var storageName = evt.IsStatic
             ? StaticOwnerAbi.EventName(evt,
                 _lowering.ResolveType(evt.ContainingType) as INamedTypeSymbol ?? evt.ContainingType)
@@ -192,15 +205,11 @@ public sealed class CompoundAssignmentHandler : IExpressionHandler
         if (evt.ContainingType is INamedTypeSymbol { TypeKind: TypeKind.Interface } localInterface
             && _lowering.Planner.InterfaceIsLocalUserClassOnly(localInterface))
         {
-            var accessor = op.Adds ? evt.AddMethod : evt.RemoveMethod;
-            if (accessor == null)
-                throw new System.NotSupportedException($"Event '{evt.Name}' has no accessor.");
             var recvSlot = _lowering.Builder.AllocScratch(new StorageType(AggregateAbi.ArrayType));
             _lowering.EmitAssign(recvSlot, _lowering.LoadInstanceRaw(evtRef.Instance));
             var handlerSlot = _lowering.Builder.AllocScratch(_lowering.GetStorageType(evt.Type));
             _lowering.EmitAssign(handlerSlot, _lowering.VisitExpression(op.HandlerValue));
-            var site = CallableSites.Require(op, accessor);
-            var targets = _lowering.State.VirtualDispatch.Resolve(site, localInterface).RuntimeTargets;
+            var targets = boundSite.RequireDispatch().RuntimeTargets;
             if (targets.Count == 0)
                 throw new System.NotSupportedException(
                     $"Interface event '{localInterface.Name}.{evt.Name}' has no minted implementation.");
@@ -228,9 +237,6 @@ public sealed class CompoundAssignmentHandler : IExpressionHandler
         if (evt.AddMethod == null || !evt.AddMethod.IsImplicitlyDeclared
             || evt.RemoveMethod == null || !evt.RemoveMethod.IsImplicitlyDeclared)
         {
-            var accessor = op.Adds ? evt.AddMethod : evt.RemoveMethod;
-            if (accessor == null)
-                throw new System.NotSupportedException($"Event '{evt.Name}' has no accessor.");
             var objectArrayOwner = evt.ContainingType is INamedTypeSymbol owner
                 && TypeClassifier.IsObjectArrayEmulated(owner);
             var crossBehaviourCustom = !evt.IsStatic
@@ -325,6 +331,11 @@ public sealed class CompoundAssignmentHandler : IExpressionHandler
 
     CLeaf VisitIncrementDecrement(IIncrementOrDecrementOperation op)
     {
+        var operatorMethod = op.OperatorMethod;
+        if (operatorMethod != null)
+            operatorMethod = _lowering.RequireBoundCallSite(
+                op, CallableSiteKind.Operator, operatorMethod).Callable.Site.Target;
+
         // Capture lvalue sub-expressions once to avoid double evaluation
         var lv = _lvalues.PrepareLValue(op.Target);
         var targetVal = lv.Value;
@@ -332,7 +343,7 @@ public sealed class CompoundAssignmentHandler : IExpressionHandler
         // User-defined struct operator ++/-- (a single-operand static method returning the new struct), then
         // write back. Postfix returns the captured OLD value; the built-in op_Addition path below would build
         // a bogus extern on the struct's SystemObjectArray type and use the wrong (value, 1) shape.
-        if (op.OperatorMethod is { MethodKind: MethodKind.UserDefinedOperator } iuOpM
+        if (operatorMethod is { MethodKind: MethodKind.UserDefinedOperator } iuOpM
             && iuOpM.ContainingType is INamedTypeSymbol iuOpCt && TypeClassifier.IsObjectArrayEmulated(iuOpCt))
         {
             var res = _lowering.EmitCallToMethod(_lowering.ResolveStructMember(iuOpM), new List<CLeaf> { targetVal });

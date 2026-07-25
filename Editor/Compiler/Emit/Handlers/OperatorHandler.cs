@@ -31,6 +31,11 @@ public class OperatorHandler : IExpressionHandler
 
     CLeaf VisitBinary(IBinaryOperation op)
     {
+        var operatorMethod = op.OperatorMethod;
+        if (operatorMethod != null)
+            operatorMethod = _lowering.RequireBoundCallSite(
+                op, CallableSiteKind.Operator, operatorMethod).Callable.Site.Target;
+
         LoweringServices.RejectChecked(op.IsChecked);
 
         // Short-circuit evaluation for && and ||
@@ -45,7 +50,7 @@ public class OperatorHandler : IExpressionHandler
         RejectTypeofTokenEquality(op);
 
         // ── User-defined struct operator: v1 + v2 → static operator method call ──
-        if (op.OperatorMethod is { MethodKind: MethodKind.UserDefinedOperator } binOpM
+        if (operatorMethod is { MethodKind: MethodKind.UserDefinedOperator } binOpM
             && binOpM.ContainingType is INamedTypeSymbol binOpCt && TypeClassifier.IsObjectArrayEmulated(binOpCt))
         {
             var lhs = _lowering.VisitExpression(op.LeftOperand);
@@ -139,7 +144,7 @@ public class OperatorHandler : IExpressionHandler
         if (op.IsLifted
             && (EmitPolicy.IsNullableT(op.LeftOperand.Type, out _) || EmitPolicy.IsNullableT(op.RightOperand.Type, out _)))
         {
-            return EmitLiftedBinary(op);
+            return EmitLiftedBinary(op, operatorMethod);
         }
 
         // ── Aggregate (tuple) structural equality ──
@@ -231,8 +236,8 @@ public class OperatorHandler : IExpressionHandler
             return _lowering.EmitNarrowingConvert(raw, "SystemInt32", resultType);
         }
 
-        var sig = op.OperatorMethod != null
-            ? _lowering.State.BoundAbi.RequireOperator(op.OperatorMethod, type => _lowering.GetStorageTypeName(type))
+        var sig = operatorMethod != null
+            ? _lowering.State.BoundAbi.RequireOperator(operatorMethod, type => _lowering.GetStorageTypeName(type))
             : _lowering.State.BoundAbi.RequireExact(ExternResolver.ResolveBuiltInBinaryExtern(
                 op.OperatorKind,
                 _lowering.ResolveType(op.LeftOperand.Type),
@@ -240,8 +245,8 @@ public class OperatorHandler : IExpressionHandler
                 _lowering.ResolveType(op.Type), _lowering.GetStorageTypeName));
 
         // UnityEngineObject equality/inequality: cast operands to UnityEngineObject temps
-        if (op.OperatorMethod != null
-            && _lowering.GetStorageTypeName(op.OperatorMethod.ContainingType) == "UnityEngineObject"
+        if (operatorMethod != null
+            && _lowering.GetStorageTypeName(operatorMethod.ContainingType) == "UnityEngineObject"
             && (op.OperatorKind == BinaryOperatorKind.Equals
                 || op.OperatorKind == BinaryOperatorKind.NotEquals))
         {
@@ -294,7 +299,7 @@ public class OperatorHandler : IExpressionHandler
             op.OperatorKind);
 
     // Lifted binary operator on Nullable<T> (null propagation) — see LoweringServices.EmitLiftedBinaryCore.
-    CLeaf EmitLiftedBinary(IBinaryOperation op)
+    CLeaf EmitLiftedBinary(IBinaryOperation op, IMethodSymbol operatorMethod)
     {
         var leftNullable = EmitPolicy.IsNullableT(op.LeftOperand.Type, out var lu);
         var rightNullable = EmitPolicy.IsNullableT(op.RightOperand.Type, out var ru);
@@ -303,7 +308,7 @@ public class OperatorHandler : IExpressionHandler
         return _lowering.EmitLiftedBinaryCore(
             leftVal, leftNullable, leftNullable ? lu : op.LeftOperand.Type,
             rightVal, rightNullable, rightNullable ? ru : op.RightOperand.Type,
-            op.OperatorKind, op.OperatorMethod, op.Type);
+            op.OperatorKind, operatorMethod, op.Type);
     }
 
     CLeaf VisitConditionalAnd(IBinaryOperation op)
@@ -341,13 +346,18 @@ public class OperatorHandler : IExpressionHandler
 
     CLeaf VisitUnary(IUnaryOperation op)
     {
+        var operatorMethod = op.OperatorMethod;
+        if (operatorMethod != null)
+            operatorMethod = _lowering.RequireBoundCallSite(
+                op, CallableSiteKind.Operator, operatorMethod).Callable.Site.Target;
+
         LoweringServices.RejectChecked(op.IsChecked);
 
         // ── User-defined struct operator (ANY unary kind, incl. ~): static operator method call. MUST come
         // before the built-in ~ branch below — that branch builds an extern on the struct's SystemObjectArray
         // type and throws "Bitwise NOT not supported on SystemObjectArray". Only fires for a user operator
         // (a built-in lifted ~ has OperatorMethod null → falls through to the BitwiseNegation handling). ──
-        if (op.OperatorMethod is { MethodKind: MethodKind.UserDefinedOperator } unOpM
+        if (operatorMethod is { MethodKind: MethodKind.UserDefinedOperator } unOpM
             && unOpM.ContainingType is INamedTypeSymbol unOpCt && TypeClassifier.IsObjectArrayEmulated(unOpCt))
         {
             var operand = _lowering.VisitExpression(op.Operand);
@@ -379,8 +389,8 @@ public class OperatorHandler : IExpressionHandler
         var operandVal = _lowering.VisitExpression(op.Operand);
         var resultType = _lowering.GetStorageTypeName(op.Type);
 
-        var sig = op.OperatorMethod != null && !ExternResolver.IsNumericType(op.Operand.Type)
-            ? _lowering.State.BoundAbi.RequireOperator(op.OperatorMethod, type => _lowering.GetStorageTypeName(type))
+        var sig = operatorMethod != null && !ExternResolver.IsNumericType(op.Operand.Type)
+            ? _lowering.State.BoundAbi.RequireOperator(operatorMethod, type => _lowering.GetStorageTypeName(type))
             : _lowering.State.BoundAbi.RequireExact(BuildBuiltinUnaryKey(op));
 
         return _lowering.ExternCall(sig, new List<CLeaf> { operandVal }, new StorageType(resultType));
@@ -724,7 +734,7 @@ public class OperatorHandler : IExpressionHandler
                 && VirtualDispatch.FindAccessor(vSubRef.Property, getter: true) is { } vSubGetter
                 && VirtualDispatch.IsVirtualCall(vSubGetter))
             {
-                var dispatched = _lowering.EmitAccessorDispatch(vSubRef.Property, aggMatchType, vSubGetter,
+                var dispatched = _lowering.EmitAccessorDispatch(vSubRef, aggMatchType, vSubGetter,
                     valueVal, new List<CLeaf>(), null);
                 var vSubSlot = _lowering.State.Builder.AllocScratch(_lowering.GetStorageType(memberType));
                 _lowering.EmitAssign(vSubSlot, dispatched);

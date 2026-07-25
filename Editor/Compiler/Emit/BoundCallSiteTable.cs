@@ -1,21 +1,80 @@
 using System;
 using System.Collections.Generic;
-using System.Collections.Immutable;
 using System.Collections.ObjectModel;
 using Microsoft.CodeAnalysis;
+
+internal readonly struct CallSiteBindingScope : IEquatable<CallSiteBindingScope>
+{
+    readonly SpecializationKey? _method;
+    readonly INamedTypeSymbol _type;
+
+    CallSiteBindingScope(SpecializationKey method)
+    {
+        _method = method;
+        _type = null;
+    }
+
+    CallSiteBindingScope(INamedTypeSymbol type)
+    {
+        _method = null;
+        _type = type ?? throw new ArgumentNullException(nameof(type));
+    }
+
+    public static CallSiteBindingScope ForMethod(SpecializationKey method)
+        => new CallSiteBindingScope(method);
+
+    public static CallSiteBindingScope ForType(INamedTypeSymbol type)
+        => new CallSiteBindingScope(type);
+
+    public static CallSiteBindingScope ForLexicalType(
+        Compilation compilation,
+        IOperation operation,
+        IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeMap)
+    {
+        if (compilation == null) throw new ArgumentNullException(nameof(compilation));
+        if (operation == null) throw new ArgumentNullException(nameof(operation));
+        var lexical = compilation.GetSemanticModel(operation.Syntax.SyntaxTree)
+            .GetEnclosingSymbol(operation.Syntax.SpanStart);
+        var lexicalType = lexical as INamedTypeSymbol ?? lexical?.ContainingType;
+        if (lexicalType == null)
+            throw new InvalidOperationException(
+                $"Callable site '{operation.Syntax}' has no lexical containing type.");
+        var closedType = TypeEnvironment.CloseType(
+            compilation, lexicalType, typeMap) as INamedTypeSymbol;
+        return ForType(closedType ?? lexicalType);
+    }
+
+    public bool Equals(CallSiteBindingScope other)
+        => Nullable.Equals(_method, other._method)
+           && SymbolEqualityComparer.Default.Equals(_type, other._type);
+
+    public override bool Equals(object obj)
+        => obj is CallSiteBindingScope other && Equals(other);
+
+    public override int GetHashCode()
+    {
+        unchecked
+        {
+            return (_method?.GetHashCode() ?? 0) * 31
+                   + (_type == null
+                       ? 0
+                       : SymbolEqualityComparer.Default.GetHashCode(_type));
+        }
+    }
+}
 
 internal readonly struct BoundCallSiteKey : IEquatable<BoundCallSiteKey>
 {
     public readonly SyntaxNode Syntax;
     public readonly CallableSiteKind Kind;
     public readonly IMethodSymbol TargetDefinition;
-    public readonly SpecializationKey? Scope;
+    public readonly CallSiteBindingScope? Scope;
 
     public BoundCallSiteKey(
         SyntaxNode syntax,
         CallableSiteKind kind,
         IMethodSymbol target,
-        SpecializationKey? scope)
+        CallSiteBindingScope? scope)
     {
         Syntax = syntax ?? throw new ArgumentNullException(nameof(syntax));
         Kind = kind;
@@ -58,6 +117,10 @@ internal sealed class BoundCallSite
         Callable = callable ?? throw new ArgumentNullException(nameof(callable));
         Dispatch = dispatch;
     }
+
+    public DispatchPlan RequireDispatch()
+        => Dispatch ?? throw new InvalidOperationException(
+            $"Instance callable site '{Callable.Site.Target}' has no bound dispatch plan.");
 }
 
 /// <summary>
@@ -77,7 +140,7 @@ internal sealed class BoundCallSiteTable
         SyntaxNode syntax,
         CallableSiteKind kind,
         IMethodSymbol target,
-        SpecializationKey? scope)
+        CallSiteBindingScope? scope)
     {
         var key = new BoundCallSiteKey(syntax, kind, target, scope);
         if (_sites.TryGetValue(key, out var site)) return site;

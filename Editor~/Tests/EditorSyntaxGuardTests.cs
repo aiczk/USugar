@@ -87,6 +87,36 @@ public class EditorSyntaxGuardTests
             + string.Join("\n", failures));
     }
 
+    [Fact]
+    public void BodyHandlersCannotRecomputeSourceDispatch()
+    {
+        var packageRoot = FindPackageRoot();
+        var emitRoot = Path.Combine(packageRoot, "Editor", "Compiler", "Emit");
+        var roots = new[]
+        {
+            Path.Combine(emitRoot, "Handlers"),
+            Path.Combine(emitRoot, "LValueLowerer.cs"),
+        };
+        var files = roots.SelectMany(path => Directory.Exists(path)
+                ? Directory.GetFiles(path, "*.cs", SearchOption.AllDirectories)
+                : new[] { path })
+            .OrderBy(path => path, StringComparer.Ordinal);
+        var failures = files.SelectMany(path => File.ReadLines(path)
+                .Select((line, index) => (line, index))
+                .Where(item =>
+                    item.line.Contains("VirtualDispatch.Resolve", StringComparison.Ordinal)
+                    || item.line.Contains("EdgeResolver.ResolveCallableSite", StringComparison.Ordinal))
+                .Select(item =>
+                    $"{Path.GetRelativePath(packageRoot, path)}:{item.index + 1}: "
+                    + item.line.Trim()))
+            .ToArray();
+
+        Assert.True(failures.Length == 0,
+            "Body handlers must consume BoundProgram.CallSites; source dispatch is resolved only "
+            + "while constructing the bound program.\n"
+            + string.Join("\n", failures));
+    }
+
     static string FindPackageRoot()
     {
         for (var current = new DirectoryInfo(AppContext.BaseDirectory);

@@ -1056,7 +1056,7 @@ internal sealed class ProgramLoweringPipeline
         void BindTree(
             IOperation operation,
             IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeMap,
-            SpecializationKey? scope,
+            CallSiteBindingScope? scope,
             bool root)
         {
             if (operation == null) return;
@@ -1090,9 +1090,10 @@ internal sealed class ProgramLoweringPipeline
 
         foreach (var body in _state.Methods.RegisteredBodies)
         {
-            var scope = body.Closure != null
+            var methodKey = body.Closure != null
                 ? new SpecializationKey(body.Method, body.Closure.KeyArgs)
                 : SpecializationKey.ForMethod(body.Method);
+            var scope = CallSiteBindingScope.ForMethod(methodKey);
             BindTree(
                 GetMethodBodyOperation(body.Method.OriginalDefinition),
                 body.TypeParameterMap,
@@ -1101,7 +1102,27 @@ internal sealed class ProgramLoweringPipeline
         }
 
         foreach (var initializer in discovery.FieldInitOps)
-            BindTree(initializer, null, null, true);
+            BindTree(
+                initializer,
+                null,
+                CallSiteBindingScope.ForLexicalType(
+                    _compilation, initializer, null),
+                true);
+
+        // User-class instance initializers execute when a class bundle is minted, even though they
+        // are not fields of the compiled behaviour. They are therefore body-emission inputs and
+        // must be bound under the minted class's closed containing-type map as well.
+        foreach (var mintedClass in discovery.Reach.MintedClasses)
+        {
+            var typeMap = TypeEnvironment.ForContainingType(mintedClass, null);
+            foreach (var initializer in EnumerateClassFieldInitOps(mintedClass))
+                BindTree(
+                    initializer,
+                    typeMap,
+                    CallSiteBindingScope.ForLexicalType(
+                        _compilation, initializer, typeMap),
+                    true);
+        }
 
         return new BoundCallSiteTable(sites);
     }
