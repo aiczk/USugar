@@ -315,16 +315,6 @@ public static class CoreFlatten
             case CLeaf leaf: // CConst / CSlotRef / CFuncRef / CFieldAddr — already a flat leaf
                 return leaf;
 
-            case CFieldLoad fl:
-            {
-                var dest = ctx.AllocScratch(fl.Type);
-                ctx.Current.Stmts.Add(new CLoadField(dest, fl.FieldName, fl.Type));
-                return new CSlotRef(dest, fl.Type);
-            }
-
-            case CProgramVariableLoad load:
-                return LowerProgramVariableLoad(load, ctx, null);
-
             case CExternCall ec:
             {
                 // ec.Args are CLeaf operands (ANF) — already flat leaves, no per-arg lowering needed.
@@ -345,7 +335,6 @@ public static class CoreFlatten
             }
 
             case CCrossCall cc: return LowerCrossCall(cc, ctx, null);
-            case CSelect sel: return LowerSelect(sel, ctx, null);
 
             default:
                 throw new InvalidOperationException($"Unknown CValue: {expr.GetType().Name}");
@@ -403,18 +392,13 @@ public static class CoreFlatten
         return new CConst(null, StorageTypes.Void);
     }
 
-    static CLeaf LowerProgramVariableLoad(CProgramVariableLoad load, Ctx ctx, int? destination)
-    {
-        var dest = destination ?? ctx.AllocScratch(load.Type);
-        ctx.Current.Stmts.Add(new CExprStmt(new CExternCall(
+    static void LowerProgramVariableLoad(CProgramVariableLoad load, Ctx ctx, int destination)
+        => ctx.Current.Stmts.Add(new CExprStmt(new CExternCall(
             ctx.Bind(ExternResolver.EventReceiverGetProgramVariable),
-            new List<CLeaf> { load.Instance, load.VariableName }, load.Type, dest)));
-        return new CSlotRef(dest, load.Type);
-    }
+            new List<CLeaf> { load.Instance, load.VariableName }, load.Type, destination)));
 
-    static CLeaf LowerSelect(CSelect sel, Ctx ctx, int? destination)
+    static void LowerSelect(CSelect sel, Ctx ctx, int destination)
     {
-        var resultSlot = destination ?? ctx.AllocScratch(sel.Type);
         // Cond/TrueVal/FalseVal are CLeaf operands (ANF) bound before the select — already flat. CSelect is
         // used only for PURE branches, so eagerly assigning the pre-bound branch leaf in each arm is correct.
         var trueBlock = ctx.NewBlock();
@@ -424,15 +408,14 @@ public static class CoreFlatten
         ctx.Current.Terminator = new CBranch(sel.Cond, trueBlock.Id, falseBlock.Id);
 
         ctx.Current = trueBlock;
-        ctx.Current.Stmts.Add(new CAssign(resultSlot, sel.TrueVal));
+        ctx.Current.Stmts.Add(new CAssign(destination, sel.TrueVal));
         ctx.Current.Terminator = new CJump(mergeBlock.Id);
 
         ctx.Current = falseBlock;
-        ctx.Current.Stmts.Add(new CAssign(resultSlot, sel.FalseVal));
+        ctx.Current.Stmts.Add(new CAssign(destination, sel.FalseVal));
         ctx.Current.Terminator = new CJump(mergeBlock.Id);
 
         ctx.Current = mergeBlock;
-        return new CSlotRef(resultSlot, sel.Type);
     }
 
     // ── Lowering context ──
