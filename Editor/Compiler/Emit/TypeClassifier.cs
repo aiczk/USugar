@@ -14,19 +14,14 @@ public readonly struct TypeClassifierContext
         => TypeParamMap = typeParamMap;
 }
 
-public enum RuntimeStorageKind { Native, ObjectArrayBundle }
 public enum RuntimeBundleKind { None, Class, Aggregate, Delegate, MultiDimensionalArray }
-public enum RuntimeIdentityKind { Value, Reference }
-public enum RuntimeTypeIdentityKind { Exact, Tagged, Collapsed }
 
 [System.Flags]
 public enum TransportCapabilities
 {
     None = 0,
     TypedProgramChannel = 1 << 0,
-    ObjectErasure = 1 << 1,
     ExternCall = 1 << 2,
-    Network = 1 << 3,
     DelegateEnvironment = 1 << 4,
 }
 
@@ -35,56 +30,43 @@ public enum TransportCapabilities
 /// the emitted Udon type name.</summary>
 public readonly struct RuntimeShape
 {
-    public readonly RuntimeStorageKind Storage;
     public readonly RuntimeBundleKind Bundle;
-    public readonly RuntimeIdentityKind Identity;
-    public readonly RuntimeTypeIdentityKind RuntimeTypeIdentity;
     public readonly TransportCapabilities Transport;
     public readonly bool ContainsUserClassPayload;
 
-    RuntimeShape(RuntimeStorageKind storage, RuntimeBundleKind bundle, RuntimeIdentityKind identity,
-        RuntimeTypeIdentityKind runtimeTypeIdentity, TransportCapabilities transport,
+    RuntimeShape(RuntimeBundleKind bundle, TransportCapabilities transport,
         bool containsUserClassPayload)
     {
-        Storage = storage;
         Bundle = bundle;
-        Identity = identity;
-        RuntimeTypeIdentity = runtimeTypeIdentity;
         Transport = transport;
         ContainsUserClassPayload = containsUserClassPayload;
     }
 
-    public bool IsBundle => Storage == RuntimeStorageKind.ObjectArrayBundle;
+    public bool IsBundle => Bundle != RuntimeBundleKind.None;
     public bool Supports(TransportCapabilities capability) => (Transport & capability) == capability;
 
     public static RuntimeShape Class(bool containsPayload = true)
-        => new(RuntimeStorageKind.ObjectArrayBundle, RuntimeBundleKind.Class, RuntimeIdentityKind.Reference,
-            RuntimeTypeIdentityKind.Tagged,
+        => new(RuntimeBundleKind.Class,
             TransportCapabilities.TypedProgramChannel | TransportCapabilities.DelegateEnvironment,
             containsPayload);
     public static RuntimeShape Aggregate(bool containsPayload)
-        => new(RuntimeStorageKind.ObjectArrayBundle, RuntimeBundleKind.Aggregate, RuntimeIdentityKind.Value,
-            RuntimeTypeIdentityKind.Collapsed,
+        => new(RuntimeBundleKind.Aggregate,
             TransportCapabilities.TypedProgramChannel | TransportCapabilities.DelegateEnvironment,
             containsPayload);
     public static RuntimeShape Delegate(bool containsPayload)
-        => new(RuntimeStorageKind.ObjectArrayBundle, RuntimeBundleKind.Delegate, RuntimeIdentityKind.Reference,
-            RuntimeTypeIdentityKind.Collapsed,
+        => new(RuntimeBundleKind.Delegate,
             (containsPayload ? TransportCapabilities.None : TransportCapabilities.TypedProgramChannel)
             | TransportCapabilities.DelegateEnvironment,
             containsPayload);
     public static RuntimeShape MultiDimensionalArray(bool containsPayload)
-        => new(RuntimeStorageKind.ObjectArrayBundle, RuntimeBundleKind.MultiDimensionalArray,
-            RuntimeIdentityKind.Reference, RuntimeTypeIdentityKind.Collapsed,
+        => new(RuntimeBundleKind.MultiDimensionalArray,
             TransportCapabilities.TypedProgramChannel | TransportCapabilities.DelegateEnvironment,
             containsPayload);
     public static RuntimeShape Native(bool containsPayload)
-        => new(RuntimeStorageKind.Native, RuntimeBundleKind.None, RuntimeIdentityKind.Value,
-            RuntimeTypeIdentityKind.Exact,
+        => new(RuntimeBundleKind.None,
             containsPayload
                 ? TransportCapabilities.ExternCall | TransportCapabilities.DelegateEnvironment
-                : TransportCapabilities.TypedProgramChannel | TransportCapabilities.ObjectErasure
-                  | TransportCapabilities.ExternCall | TransportCapabilities.Network
+                : TransportCapabilities.TypedProgramChannel | TransportCapabilities.ExternCall
                   | TransportCapabilities.DelegateEnvironment,
             containsPayload);
 }
@@ -103,7 +85,7 @@ public static class TypeClassifier
     }
 
     public static bool ContainsUserClassPayload(ITypeSymbol type, TypeClassifierContext ctx)
-        => ShapeOf(type, ctx).ContainsUserClassPayload;
+        => EmitPolicy.ContainsUserClassType(Resolve(type, ctx), ctx.TypeParamMap);
 
     public static bool IsUserClass(ITypeSymbol type)
         => ShapeOf(type, new TypeClassifierContext(null)).Bundle == RuntimeBundleKind.Class;
