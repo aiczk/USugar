@@ -13,7 +13,6 @@ public static class UdonAbiVerifier
         var prototype = call.Sig.Prototype
             ?? throw new VerificationException(
                 $"Extern '{call.Sig}' has no SDK ABI prototype (function '{functionName}').");
-        VerifyResultEvidence(call, functionName);
 
         // Name-only registry fixtures are deliberately confined to the test
         // assembly. Production prototypes are always typed.
@@ -56,50 +55,12 @@ public static class UdonAbiVerifier
                 + $"'{StorageTypes.Transform}' strongbox, got '{actual}' "
                 + $"(function '{functionName}').");
 
-        // GetProgramVariable is an intentionally type-erased VM channel. Its SDK ABI output is
-        // object, while CProgramVariableLoad/CrossCall carry the statically known remote field or
-        // return-slot type through flattening. The wrapper writes the dynamic value without a CLR
-        // conversion; preserving that producer-owned schema is the one legitimate object->T result
-        // exception. Ordinary object-returning externs remain directional and cannot claim T.
-        if (IsTypedProgramVariableResult(call, parameter, stackIndex))
-            return;
-
-        if (parameter.Type.TryMatch(
-                actual, parameter.Mode, genericBindings, typeFacts, out var reason))
+        if (parameter.Type.TryMatch(actual, genericBindings, typeFacts, out var reason))
             return;
         throw new VerificationException(
             $"Extern '{call.Sig}' stack operand {stackIndex} ('{parameter.Name}', "
             + $"{parameter.Mode}) expects ABI type '{parameter.Type}', got '{actual}': "
             + $"{reason} (function '{functionName}').");
-    }
-
-    static bool IsTypedProgramVariableResult(CExternCall call,
-        UdonAbiParameter parameter, int stackIndex)
-        => call.ResultEvidence == ExternResultEvidence.TypedProgramVariableSchema
-           && stackIndex == call.Args.Count
-           && parameter.Mode == UdonAbiParameterMode.Out
-           && parameter.Type.Kind == UdonAbiType.PatternKind.Exact
-           && parameter.Type.ExactType == StorageTypes.Object
-           && call.Sig.Key == ExternResolver.EventReceiverGetProgramVariable;
-
-    static void VerifyResultEvidence(CExternCall call, string functionName)
-    {
-        switch (call.ResultEvidence)
-        {
-            case ExternResultEvidence.None:
-                return;
-            case ExternResultEvidence.TypedProgramVariableSchema:
-                if (call.Sig.Key == ExternResolver.EventReceiverGetProgramVariable
-                    && call.Type != StorageTypes.Void)
-                    return;
-                throw new VerificationException(
-                    $"Extern result evidence '{call.ResultEvidence}' is invalid for "
-                    + $"'{call.Sig}' returning '{call.Type}' (function '{functionName}').");
-            default:
-                throw new VerificationException(
-                    $"Unknown extern result evidence '{call.ResultEvidence}' "
-                    + $"(function '{functionName}').");
-        }
     }
 
     /// <summary>The SDK's generic component-query wrapper does not merely call

@@ -152,37 +152,69 @@ public class UdonAbiPrototypeTests
         UdonAbiVerifier.VerifyInvocation(call, session.TypeFacts, "reference_operand");
     }
 
+    /// <summary>UdonHeap.SetHeapVariable re-boxes its destination and GetHeapVariable falls back to
+    /// an `is T` test on the stored value, so a declared operand type is not a necessary condition in
+    /// either direction. These four shapes all appear in real projects; requiring declared-type
+    /// assignability rejected every one of them.</summary>
     [Fact]
-    public void ExternInputRejectsUnrelatedReferenceTypes()
+    public void OperandCheckDoesNotRequireDeclaredTypeAssignability()
     {
         var facts = new UdonTypeFactRegistry();
-        facts.RecordForTest("ExpectedReference", isEnum: false, isValueType: false);
-        facts.RecordForTest("UnrelatedReference", isEnum: false, isValueType: false);
+        foreach (var name in new[]
+                 {
+                     "UnityEngineObject", "UnityEngineComponent", "UnityEngineTransform",
+                     "UnityEngineCanvasGroup",
+                 })
+            facts.RecordForTest(name, isEnum: false, isValueType: false);
 
-        var reason = ExternOperandCompatibility.WhyIncompatible(
-            "ExpectedReference", "UnrelatedReference",
-            UdonAbiParameterMode.In, facts);
+        AcceptsOperands(facts,
+            "UnityEngineComponent.__GetComponent__T",
+            new[] { ("instance", "UnityEngineComponent"), ("type", "SystemType") },
+            "UnityEngineObject",
+            new[] { StorageTypes.Transform, StorageTypes.Type },
+            new StorageType("UnityEngineCanvasGroup"));
 
-        Assert.Contains(
-            "no directed assignability fact from 'UnrelatedReference' to 'ExpectedReference'",
-            reason);
-        Assert.Null(RawCopyCompatibility.WhyIncompatible(
-            "ExpectedReference", "UnrelatedReference", facts));
+        AcceptsOperands(facts,
+            "UnityEngineComponentArray.__Get__SystemInt32__UnityEngineComponent",
+            new[] { ("instance", "UnityEngineComponentArray"), ("index", "SystemInt32") },
+            "UnityEngineComponent",
+            new[] { StorageTypes.ComponentArray, StorageTypes.Int32 },
+            StorageTypes.UdonEventReceiver);
+
+        AcceptsOperands(facts,
+            "SystemObjectArray.__Get__SystemInt32__SystemObject",
+            new[] { ("instance", "SystemObjectArray"), ("index", "SystemInt32") },
+            "SystemObject",
+            new[] { StorageTypes.ObjectArray, StorageTypes.Int32 },
+            new StorageType("SystemInt32Array"));
+
+        AcceptsOperands(facts,
+            "SystemString.__op_Inequality__SystemString_SystemString__SystemBoolean",
+            new[] { ("left", "SystemString"), ("right", "SystemString") },
+            "SystemBoolean",
+            new[] { StorageTypes.Object, StorageTypes.String },
+            StorageTypes.Boolean);
     }
 
-    [Fact]
-    public void ExternObjectWildcardIsDirectional()
+    static void AcceptsOperands(UdonTypeFactRegistry facts, string signature,
+        (string Name, string Type)[] inputs, string resultType,
+        StorageType[] actualArgs, StorageType actualResult)
     {
-        var facts = new UdonTypeFactRegistry();
+        var parameters = new List<UdonAbiParameter>();
+        foreach (var (name, type) in inputs)
+            parameters.Add(Param(name, type, UdonAbiParameterMode.In));
+        parameters.Add(Param("result", resultType, UdonAbiParameterMode.Out));
+        var bound = new UdonAbiCatalog(new[]
+            {
+                new UdonExternPrototype(signature, parameters),
+            })
+            .Require(TestHelper.AbiKey(signature));
 
-        Assert.Null(ExternOperandCompatibility.WhyIncompatible(
-            "SystemObject", "SystemString", UdonAbiParameterMode.In, facts));
-        Assert.NotNull(ExternOperandCompatibility.WhyIncompatible(
-            "SystemString", "SystemObject", UdonAbiParameterMode.In, facts));
-        Assert.Null(ExternOperandCompatibility.WhyIncompatible(
-            "SystemString", "SystemObject", UdonAbiParameterMode.Out, facts));
-        Assert.NotNull(ExternOperandCompatibility.WhyIncompatible(
-            "SystemObject", "SystemString", UdonAbiParameterMode.Out, facts));
+        var args = new List<CLeaf>();
+        foreach (var arg in actualArgs)
+            args.Add(new CConst(null, arg));
+        UdonAbiVerifier.VerifyInvocation(
+            new CExternCall(bound, args, actualResult), facts, signature);
     }
 
     [Fact]
@@ -334,9 +366,11 @@ public class UdonAbiPrototypeTests
         {
             new CConst(null, StorageTypes.UdonEventReceiver),
         }, StorageTypes.Transform);
+        var facts = new UdonTypeFactRegistry();
+        facts.RecordForTest("UnityEngineComponent", isEnum: false, isValueType: false);
+        facts.RecordForTest("UnityEngineTransform", isEnum: false, isValueType: false);
 
-        UdonAbiVerifier.VerifyInvocation(
-            call, new UdonTypeFactRegistry(), "component_transform");
+        UdonAbiVerifier.VerifyInvocation(call, facts, "component_transform");
     }
 
     [Fact]
@@ -356,65 +390,6 @@ public class UdonAbiPrototypeTests
         Assert.Null(facts.IsAssignableFact(
             "VRCUdonCommonInterfacesIUdonEventReceiver",
             "UnrelatedSourceInterface"));
-    }
-
-    [Fact]
-    public void ProgramVariableResultIsTheOnlyTypedObjectOutput()
-    {
-        const string signature =
-            "VRCUdonCommonInterfacesIUdonEventReceiver.__GetProgramVariable__SystemString__SystemObject";
-        var bound = Catalog(signature,
-            Param("instance", "VRCUdonCommonInterfacesIUdonEventReceiver",
-                UdonAbiParameterMode.In),
-            Param("name", "SystemString", UdonAbiParameterMode.In),
-            Param("result", "SystemObject", UdonAbiParameterMode.Out))
-            .Require(TestHelper.AbiKey(signature));
-        var args = new List<CLeaf>
-        {
-            new CConst(null, StorageTypes.UdonEventReceiver),
-            new CConst("score", StorageTypes.String),
-        };
-        var unproven = new CExternCall(bound, args, StorageTypes.Int32);
-        var unprovenError = Assert.Throws<VerificationException>(
-            () => UdonAbiVerifier.VerifyInvocation(
-                unproven, new UdonTypeFactRegistry(), "unproven_program_variable"));
-        Assert.Contains(
-            "'SystemObject' does not prove a value readable as 'SystemInt32'",
-            unprovenError.Message);
-
-        var call = new CExternCall(
-            bound, args, StorageTypes.Int32,
-            resultEvidence: ExternResultEvidence.TypedProgramVariableSchema);
-
-        UdonAbiVerifier.VerifyInvocation(
-            call, new UdonTypeFactRegistry(), "typed_program_variable");
-        Assert.Equal(
-            ExternResultEvidence.TypedProgramVariableSchema,
-            call.With(new List<CLeaf>(call.Args), 0).ResultEvidence);
-
-        const string unrelated = "Example.__GetObject__SystemObject";
-        var unrelatedCall = new CExternCall(
-            Catalog(unrelated,
-                    Param("result", "SystemObject", UdonAbiParameterMode.Out))
-                .Require(TestHelper.AbiKey(unrelated)),
-            new List<CLeaf>(),
-            StorageTypes.Int32);
-        var error = Assert.Throws<VerificationException>(
-            () => UdonAbiVerifier.VerifyInvocation(
-                unrelatedCall, new UdonTypeFactRegistry(), "unrelated_object"));
-        Assert.Contains(
-            "'SystemObject' does not prove a value readable as 'SystemInt32'",
-            error.Message);
-
-        var forgedEvidence = new CExternCall(
-            unrelatedCall.Sig, new List<CLeaf>(), StorageTypes.Int32,
-            resultEvidence: ExternResultEvidence.TypedProgramVariableSchema);
-        var forgedError = Assert.Throws<VerificationException>(
-            () => UdonAbiVerifier.VerifyInvocation(
-                forgedEvidence, new UdonTypeFactRegistry(), "forged_evidence"));
-        Assert.Contains(
-            "result evidence 'TypedProgramVariableSchema' is invalid",
-            forgedError.Message);
     }
 
     [Fact]

@@ -11,71 +11,6 @@ public enum UdonAbiParameterMode
 }
 
 /// <summary>
-/// Directional compatibility between an SDK extern operand and the Core-IR storage supplied for
-/// it. This is intentionally separate from <see cref="RawCopyCompatibility"/>: Udon COPY may move
-/// any reference strongbox, while a wrapper input must be able to read the value as its declared
-/// CLR type and a wrapper output must produce a value valid for the destination representation.
-/// </summary>
-public static class ExternOperandCompatibility
-{
-    public static string WhyIncompatible(string abiType, string storageType,
-        UdonAbiParameterMode mode, UdonTypeFactRegistry facts)
-    {
-        if (facts == null) throw new ArgumentNullException(nameof(facts));
-        switch (mode)
-        {
-            case UdonAbiParameterMode.In:
-                return WhyNotAssignable(storageType, abiType, facts);
-            case UdonAbiParameterMode.Out:
-                return WhyNotAssignable(abiType, storageType, facts);
-            case UdonAbiParameterMode.InOut:
-            {
-                var input = WhyNotAssignable(storageType, abiType, facts);
-                if (input != null) return "input direction: " + input;
-                var output = WhyNotAssignable(abiType, storageType, facts);
-                return output == null ? null : "output direction: " + output;
-            }
-            default:
-                throw new InvalidOperationException($"Unknown ABI parameter mode: {mode}");
-        }
-    }
-
-    static string WhyNotAssignable(string from, string to, UdonTypeFactRegistry facts)
-    {
-        if (from == to) return null;
-
-        // These are representation identities, not CLR conversions. User enums lower to Int32 and
-        // Nullable<T> is erased to its bare/object representation before reaching the wrapper.
-        if (IsNullableErasure(from, to) || IsNullableErasure(to, from)) return null;
-        if (to == "SystemInt32" && facts.IsEnumFact(from) == true) return null;
-        if (from == "SystemInt32" && facts.IsEnumFact(to) == true) return null;
-
-        // object is a top type only in this direction. A statically-object value contains no proof
-        // that a typed wrapper can retrieve it as an arbitrary T.
-        if (to == "SystemObject") return null;
-        if (from == "SystemObject")
-            return $"'SystemObject' does not prove a value readable as '{to}'";
-
-        var assignable = facts.IsAssignableFact(from, to);
-        if (assignable == true) return null;
-        if (assignable == null)
-        {
-            if (facts.IsReferenceFact(from) == null) return NoFact(from);
-            if (facts.IsReferenceFact(to) == null) return NoFact(to);
-        }
-        return $"no directed assignability fact from '{from}' to '{to}'";
-    }
-
-    static bool IsNullableErasure(string boxed, string bare) =>
-        boxed.StartsWith("SystemNullable", StringComparison.Ordinal)
-        && boxed.Substring("SystemNullable".Length) == bare;
-
-    static string NoFact(string name) =>
-        $"no fact recorded for '{name}' (neither source type minting nor the installed SDK ABI "
-        + "snapshot classified it)";
-}
-
-/// <summary>
 /// Type pattern supplied by the SDK for one extern stack operand. Most operands
 /// are exact storage types; generic node definitions retain their placeholder
 /// identity instead of erasing it to SystemObject.
@@ -122,7 +57,7 @@ public sealed class UdonAbiType
     /// placeholders unify within one invocation, so T/TArray relationships are
     /// checked rather than treated as independent wildcards.
     /// </summary>
-    public bool TryMatch(StorageType actual, UdonAbiParameterMode mode,
+    public bool TryMatch(StorageType actual,
         IDictionary<string, StorageType> genericBindings,
         UdonTypeFactRegistry typeFacts, out string reason)
     {
@@ -132,8 +67,8 @@ public sealed class UdonAbiType
         switch (Kind)
         {
             case PatternKind.Exact:
-                reason = ExternOperandCompatibility.WhyIncompatible(
-                    ExactType.Name, actual.Name, mode, typeFacts);
+                reason = RawCopyCompatibility.WhyIncompatible(
+                    ExactType.Name, actual.Name, typeFacts);
                 return reason == null;
 
             case PatternKind.GenericParameter:
@@ -160,7 +95,7 @@ public sealed class UdonAbiType
                 var element = new StorageType(
                     actual.Name.Substring(0, actual.Name.Length - suffix.Length));
                 return ElementType.TryMatch(
-                    element, mode, genericBindings, typeFacts, out reason);
+                    element, genericBindings, typeFacts, out reason);
 
             default:
                 throw new InvalidOperationException($"Unknown ABI type pattern kind: {Kind}");
