@@ -4,8 +4,28 @@ using System.Linq;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.Operations;
 
-internal partial class ProgramLoweringPipeline
+/// <summary>Derives the immutable recursion facts consumed by body lowering.</summary>
+internal sealed class RecursionAnalysisPass
 {
+    readonly LoweringEnvironment _environment;
+    readonly LoweringState _state;
+    readonly FrozenLayoutPlan _planner;
+    readonly INamedTypeSymbol _classSymbol;
+    readonly ResolvedEdgeResolver _edgeResolver;
+
+    internal RecursionAnalysisPass(
+        LoweringEnvironment environment,
+        LoweringState state,
+        FrozenLayoutPlan planner,
+        ResolvedEdgeResolver edgeResolver)
+    {
+        _environment = environment ?? throw new ArgumentNullException(nameof(environment));
+        _state = state ?? throw new ArgumentNullException(nameof(state));
+        _planner = planner ?? throw new ArgumentNullException(nameof(planner));
+        _edgeResolver = edgeResolver ?? throw new ArgumentNullException(nameof(edgeResolver));
+        _classSymbol = state.ClassSymbol;
+    }
+
     // ── Recursion-cycle analysis ──
 
     // Build the internal-call graph over all registered methods and mark, for each method, the callees
@@ -19,7 +39,7 @@ internal partial class ProgramLoweringPipeline
     // (an indirect dispatch can start any escaped function). Cycle members' NON-TAIL dispatch sites are
     // recorded syntax-keyed in LoweringState.Recursion.ReentrantDispatchSites for the §4.3 Reentrant-flag marking;
     // tail dispatch sites are spared so bundle-driven deep tail recursion never spills (§4.4).
-    RecursionInfo BuildRecursionInfo(CallableBodyGraph bodyGraph)
+    internal RecursionInfo Analyze(CallableBodyGraph bodyGraph)
     {
         // M5b: consume the resolver-driven callable graph frozen before emission. Capture analysis
         // consumes the same bodies; this phase only derives recursion-specific facets.
@@ -256,7 +276,7 @@ internal partial class ProgramLoweringPipeline
                         if (site.Syntax == null) continue;
                         bool toRecursiveCallee = false;
                         foreach (var c in inScc)
-                            if (EdgeResolver.IsInternalCallTo(site, c, out var matched) && ReferenceEquals(matched, site))
+                            if (_edgeResolver.IsInternalCallTo(site, c, out var matched) && ReferenceEquals(matched, site))
                             { toRecursiveCallee = true; break; }
                         if (toRecursiveCallee && !EmitPolicy.IsNonTailDispatchSite(callerBody, site))
                             tailSparedSites.Add(site.Syntax);
@@ -310,7 +330,7 @@ internal partial class ProgramLoweringPipeline
     // silently-unprotected. Non-capturing bridges (named methods, capture-free lambdas) carry no env and
     // are intentionally skipped — they have no reentrancy-sensitive frame state to lose.
     // The callable-body graph cannot discharge this check: synthetic targets are registered later.
-    void VerifyBridgeTargetsAreNodes()
+    internal void VerifyBridgeTargetsAreNodes()
     {
         if (_state.Closures.CaptureScope == null || _state.RecursionContext.Info.RecursionGraphNodes == null) return;
         foreach (var callable in _state.Methods.SyntheticCallables.Values)
@@ -397,7 +417,7 @@ internal partial class ProgramLoweringPipeline
                     found.Add(af.Symbol);
                     return true;
                 case IMethodReferenceOperation mr when mr.Method != null:
-                    foreach (var escapeTarget in EdgeResolver.EscapeTargetsOf(mr))
+                    foreach (var escapeTarget in _edgeResolver.EscapeTargetsOf(mr))
                         found.Add(escapeTarget);
                     return true;
                 default:
@@ -489,8 +509,8 @@ internal partial class ProgramLoweringPipeline
     // those two differences from the dispatch-site classifier actually are).
     bool HasNonTailCallTo(IOperation op, IMethodSymbol callee)
         => TailCallAnalysis.HasNonTailCall(op,
-            (IOperation o, out IOperation matched) => EdgeResolver.IsInternalCallTo(o, callee, out matched),
-            (pr, getter) => EdgeResolver.PropertyAccessorMatches(pr, callee, getter),
+            (IOperation o, out IOperation matched) => _edgeResolver.IsInternalCallTo(o, callee, out matched),
+            (pr, getter) => _edgeResolver.PropertyAccessorMatches(pr, callee, getter),
             checkReturnInstanceLeg: true,
             ternaryPreciseReturn: false);
 
@@ -551,7 +571,7 @@ internal partial class ProgramLoweringPipeline
         return sccs;
     }
 
-    void VerifyRegisteredCallablesAreNodes(CallableBodyGraph graph)
+    internal void VerifyRegisteredCallablesAreNodes(CallableBodyGraph graph)
     {
         foreach (var callable in _state.Methods.Callables.Values.Concat<MethodContext.RegisteredCallable>(
                      _state.Methods.ClosureSpecs))

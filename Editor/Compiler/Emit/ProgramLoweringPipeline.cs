@@ -5,7 +5,7 @@ using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.Operations;
 
-internal partial class ProgramLoweringPipeline
+internal sealed class ProgramLoweringPipeline
 {
     readonly LoweringEnvironment _environment;
     readonly LoweringState _state;
@@ -14,6 +14,7 @@ internal partial class ProgramLoweringPipeline
     readonly DelegateConventionStorage _delegateConvention;
     readonly LoweringServices _lowering;
     FieldDiscoveryPlanBuilder _fieldDiscovery;
+    RecursionAnalysisPass _recursionAnalysis;
 
 
     // Phase-local projections; immutable services remain on _environment.
@@ -115,6 +116,8 @@ internal partial class ProgramLoweringPipeline
     // walk, tail matchers, legacy oracle, tests) shares it.
     ResolvedEdgeResolver _edgeResolver;
     internal ResolvedEdgeResolver EdgeResolver => _edgeResolver ??= new ResolvedEdgeResolver(this);
+    RecursionAnalysisPass RecursionAnalysis => _recursionAnalysis ??=
+        new RecursionAnalysisPass(_environment, _state, _planner, EdgeResolver);
     internal ResolvedEdgeResolver DebugBuildResolver() => EdgeResolver; // test entry (post-Emit state)
 
     // C4: the seeded-context reads the relocated CallEdge classifier consumes (null/empty before Emit
@@ -1029,7 +1032,7 @@ internal partial class ProgramLoweringPipeline
         PlanSyntheticDemands(discovery);
         var syntheticDemands = _state.Synthetics.PublishPlan();
         var callSites = BindCallSites(discovery);
-        var recursion = BuildRecursionInfo(bodyGraph);
+        var recursion = RecursionAnalysis.Analyze(bodyGraph);
         _state.RecursionContext.SetPlan(recursion);
         var program = new BoundProgram(
             discovery,
@@ -1042,7 +1045,7 @@ internal partial class ProgramLoweringPipeline
         _state.PublishBoundProgram(program);
         _state.BeginBodyEmission();
         EmitRegisteredBodies(program);
-        VerifyRegisteredCallablesAreNodes(bodyGraph);
+        RecursionAnalysis.VerifyRegisteredCallablesAreNodes(bodyGraph);
     }
 
     BoundCallSiteTable BindCallSites(ProgramDiscovery discovery)
@@ -1408,7 +1411,7 @@ internal partial class ProgramLoweringPipeline
             new ProgramInitializationEmitter(_state).GuardEveryExport();
 
         // §5.5 (graft #2): now that every capturing bridge is registered, assert each has a graph node.
-        VerifyBridgeTargetsAreNodes();
+        RecursionAnalysis.VerifyBridgeTargetsAreNodes();
     }
 
     static string SanitizeId(string name) => NameAllocator.Sanitize(name);
