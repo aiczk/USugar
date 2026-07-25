@@ -46,12 +46,12 @@ internal sealed class GenericTypeSpecCensus
         _dispatchTypes.Add(rootType);
     }
 
-    public Result Build(ClassCompilePlan plan)
+    public Result Build(ProgramPlanSeed plan)
     {
-        foreach (var m in plan.Callables.ProgramMethods) EnqueueIfClosed(m, null, null);
-        foreach (var m in plan.Callables.ForeignStatics) EnqueueIfClosed(m, null, null);
-        foreach (var m in plan.Callables.StructMethods) EnqueueIfClosed(m, null, null);
-        foreach (var m in plan.Callables.BaseInstanceMethods) EnqueueIfClosed(m, null, null);
+        foreach (var m in plan.ProgramMethods) EnqueueIfClosed(m, null, null);
+        foreach (var m in plan.ForeignStatics) EnqueueIfClosed(m, null, null);
+        foreach (var m in plan.StructMethods) EnqueueIfClosed(m, null, null);
+        foreach (var m in plan.BaseInstanceMethods) EnqueueIfClosed(m, null, null);
         foreach (var op in plan.FieldInitOps) Walk(op, null, null, null);
 
         while (_queue.Count > 0 || _fieldQueue.Count > 0)

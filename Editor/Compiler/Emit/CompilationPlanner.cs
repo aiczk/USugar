@@ -34,28 +34,35 @@ internal sealed class CompilationPlanner
         _rootType = rootType;
     }
 
-    public ClassCompilePlan Build()
+    public ProgramPlan Build()
     {
-        var plan = new ClassCompilePlanBuilder(
+        var seed = new ProgramPlanSeedBuilder(
             _methods, _reach, _fieldInits, _additionalCallableDefinitions).Build();
         var specializationCensus = new GenericTypeSpecCensus(
-            _compilation, _bodyOf, _classFieldInits, _rootType).Build(plan);
+            _compilation, _bodyOf, _classFieldInits, _rootType).Build(seed);
         var definitions = new HashSet<IMethodSymbol>(
-            plan.Callables.Definitions, SymbolEqualityComparer.Default);
+            seed.Definitions, SymbolEqualityComparer.Default);
         var eagerlyRegistered = new HashSet<IMethodSymbol>(
-            plan.Callables.ProgramMethods.Where(method => !method.IsGenericMethod)
-                .Concat(plan.Callables.ForeignStatics)
-                .Concat(plan.Callables.StructMethods)
-                .Concat(plan.Callables.BaseInstanceMethods),
+            seed.ProgramMethods.Where(method => !method.IsGenericMethod)
+                .Concat(seed.ForeignStatics)
+                .Concat(seed.StructMethods)
+                .Concat(seed.BaseInstanceMethods),
             SymbolEqualityComparer.Default);
-        plan.Callables.AddSpecializationCandidates(specializationCensus.MethodSpecializations
+        var specializations = specializationCensus.MethodSpecializations
             .Where(method => definitions.Contains(method.OriginalDefinition)
-                && !eagerlyRegistered.Contains(method)));
-        plan.Callables.SetClosureSpecializations(specializationCensus.ClosureSpecializations);
+                && !eagerlyRegistered.Contains(method))
+            .ToArray();
+        var callables = new CallableDefinitionPlan(
+            seed.ProgramMethods,
+            seed.ForeignStatics,
+            seed.StructMethods,
+            seed.BaseInstanceMethods,
+            seed.Definitions,
+            specializations,
+            specializationCensus.ClosureSpecializations);
         // Keep portable non-generic classes seeded by reach: they may enter from another Udon program
         // without a local mint. The census contributes closed generic instantiations on top.
-        plan.Reach.MintedClasses.RemoveWhere(ClassTypeObjectContext.ContainsTypeParameter);
-        plan.Reach.MintedClasses.UnionWith(specializationCensus.MintedClasses);
-        return plan;
+        var reach = seed.Reach.Freeze(specializationCensus.MintedClasses);
+        return new ProgramPlan(callables, reach, seed.CaptureRoots, seed.FieldInitOps);
     }
 }

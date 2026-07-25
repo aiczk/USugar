@@ -1,6 +1,9 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.ObjectModel;
+using System.Linq;
 using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.Operations;
 
 /// <summary>Design §1: the single per-class reach fixpoint's first-class result. Every reachable method
 /// DEFINITION's body is fetched EXACTLY ONCE (during the walk) and retained in <see cref="BodyByDef"/>;
@@ -39,4 +42,62 @@ sealed class ReachableBodies
 
     /// <summary>Registration-free definitions whose bodies remain roots for capture and recursion analysis.</summary>
     public readonly HashSet<IMethodSymbol> OpenGenericBaseRoots = new(SymbolEqualityComparer.Default);
+
+    public ReachabilityPlan Freeze(IEnumerable<INamedTypeSymbol> additionalMintedClasses)
+    {
+        var minted = new HashSet<INamedTypeSymbol>(
+            MintedClasses.Where(type => !ClassTypeObjectContext.ContainsTypeParameter(type)),
+            SymbolEqualityComparer.Default);
+        minted.UnionWith(additionalMintedClasses);
+        return new ReachabilityPlan(
+            BodyByDef,
+            GenericForeignStaticBodies,
+            ForeignStatics,
+            StructMembers,
+            BaseCopies,
+            StructMemberDefs,
+            minted,
+            OpenGenericBaseRoots);
+    }
+}
+
+/// <summary>
+/// Read-only snapshot of the single reachability fixpoint. Lowering receives this type, never the
+/// mutable worklist product used to build it.
+/// </summary>
+sealed class ReachabilityPlan
+{
+    public readonly IReadOnlyDictionary<IMethodSymbol, IOperation> BodyByDef;
+    public readonly IReadOnlyDictionary<IMethodSymbol, IOperation> GenericForeignStaticBodies;
+    public readonly IReadOnlyList<IMethodSymbol> ForeignStatics;
+    public readonly IReadOnlyList<IMethodSymbol> StructMembers;
+    public readonly IReadOnlyList<IMethodSymbol> BaseCopies;
+    public readonly IReadOnlyCollection<IMethodSymbol> StructMemberDefs;
+    public readonly IReadOnlyCollection<INamedTypeSymbol> MintedClasses;
+    public readonly IReadOnlyCollection<IMethodSymbol> OpenGenericBaseRoots;
+
+    public ReachabilityPlan(
+        IDictionary<IMethodSymbol, IOperation> bodyByDef,
+        IDictionary<IMethodSymbol, IOperation> genericForeignStaticBodies,
+        IEnumerable<IMethodSymbol> foreignStatics,
+        IEnumerable<IMethodSymbol> structMembers,
+        IEnumerable<IMethodSymbol> baseCopies,
+        IEnumerable<IMethodSymbol> structMemberDefs,
+        IEnumerable<INamedTypeSymbol> mintedClasses,
+        IEnumerable<IMethodSymbol> openGenericBaseRoots)
+    {
+        BodyByDef = CopyMap(bodyByDef);
+        GenericForeignStaticBodies = CopyMap(genericForeignStaticBodies);
+        ForeignStatics = Array.AsReadOnly(foreignStatics.ToArray());
+        StructMembers = Array.AsReadOnly(structMembers.ToArray());
+        BaseCopies = Array.AsReadOnly(baseCopies.ToArray());
+        StructMemberDefs = Array.AsReadOnly(structMemberDefs.ToArray());
+        MintedClasses = Array.AsReadOnly(mintedClasses.ToArray());
+        OpenGenericBaseRoots = Array.AsReadOnly(openGenericBaseRoots.ToArray());
+    }
+
+    static IReadOnlyDictionary<IMethodSymbol, IOperation> CopyMap(
+        IDictionary<IMethodSymbol, IOperation> source)
+        => new ReadOnlyDictionary<IMethodSymbol, IOperation>(
+            new Dictionary<IMethodSymbol, IOperation>(source, SymbolEqualityComparer.Default));
 }

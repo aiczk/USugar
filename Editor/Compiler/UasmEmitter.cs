@@ -180,9 +180,7 @@ public partial class UasmEmitter
         EnsurePlannerReady();
         EmitFields();
         SetReflectionValues();
-        var plan = BuildClassCompilePlan();
-        _plan = plan;
-        _reach = plan.Reach;
+        var plan = BuildProgramPlan();
         // Stage 2: closure-scope analysis feeding real codegen — EnvEmit's alloc/read/write and every
         // IsCapturingClosure call site (HandlerBase, InvocationHandler.Extern, this file) key off it.
         // Its roots are the reach definition projection (ComputeCaptureRoots); root bodies come from the
@@ -198,7 +196,6 @@ public partial class UasmEmitter
             .ThenBy(ClassTypeObjectContext.SpecKey, StringComparer.Ordinal));
         DeclareTypeObjectConstants();
         _ctx.VirtualDispatch = new VirtualDispatch(_ctx.ClassTypes); // CA-v2b-2: virtual-call lowering
-        plan.Callables.FreezeSpecializations(Array.Empty<IMethodSymbol>());
         var bodyGraph = new RecursionNodeWalk(
             EdgeResolver, plan.Reach, plan.FieldInitOps, plan.Callables.Definitions).Run();
         _ctx.Closures.SetIdentityPlan(ClosureIdentityPlan.Build(bodyGraph.AllNodes));
@@ -213,7 +210,7 @@ public partial class UasmEmitter
 
     public uint GetHeapSize() => _codeGenResult.HeapSize;
 
-    ClassCompilePlan BuildClassCompilePlan()
+    ProgramPlan BuildProgramPlan()
     {
         // Design §1: build the single ReachableBodies fixpoint ONCE here — after EmitFields (field
         // initializers are seeds) and before its consumers. Its projections feed Phase-1 registration,
@@ -1028,7 +1025,7 @@ public partial class UasmEmitter
            && m.MethodKind is MethodKind.Ordinary or MethodKind.ExplicitInterfaceImplementation
               or MethodKind.PropertyGet or MethodKind.PropertySet;
 
-    void EmitMethods(ClassCompilePlan plan, CallableBodyGraph bodyGraph)
+    void EmitMethods(ProgramPlan plan, CallableBodyGraph bodyGraph)
     {
         RegisterProgram(plan);
         _ctx.Generics.SetPlannedSpecializations(plan.Callables.Specializations);
@@ -1055,7 +1052,7 @@ public partial class UasmEmitter
         VerifyRegisteredCallablesAreNodes(bodyGraph);
     }
 
-    void PlanSyntheticDemands(ClassCompilePlan plan)
+    void PlanSyntheticDemands(ProgramPlan plan)
     {
         var planner = new SyntheticDemandPlanner(_ctx);
         foreach (var body in _ctx.Methods.RegisteredBodies.ToArray())
@@ -1088,7 +1085,7 @@ public partial class UasmEmitter
         foreach (var child in operation.ChildOps()) PlanSyntheticDemands(child, false, planner);
     }
 
-    void RegisterProgram(ClassCompilePlan plan)
+    void RegisterProgram(ProgramPlan plan)
     {
         var methods = plan.Callables.ProgramMethods;
         var typeLayout = _planner.GetLayout(_classSymbol);
@@ -1243,7 +1240,7 @@ public partial class UasmEmitter
             returns: returns));
     }
 
-    static HashSet<IMethodSymbol> CollectCrossDispatchExports(ClassCompilePlan plan)
+    static HashSet<IMethodSymbol> CollectCrossDispatchExports(ProgramPlan plan)
     {
         var exports = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
         foreach (var root in plan.Reach.BodyByDef.Values.Concat(plan.FieldInitOps))
@@ -1269,7 +1266,7 @@ public partial class UasmEmitter
         return false;
     }
 
-    void EmitRegisteredBodies(ClassCompilePlan plan)
+    void EmitRegisteredBodies(ProgramPlan plan)
     {
         var methods = plan.Callables.ProgramMethods;
         var foreignStatics = plan.Callables.ForeignStatics;
@@ -1919,8 +1916,6 @@ public partial class UasmEmitter
     /// <summary>The single ReachableBodies fixpoint result (design §1), built once in Emit() before
     /// CaptureScopeAnalysis and consumed by the Phase-1 registration regimes, BuildRecursionInfo roots,
     /// and CaptureScope roots. Carries each reachable DEFINITION's body fetched EXACTLY ONCE.</summary>
-    ClassCompilePlan _plan;
-    ReachableBodies _reach = new();
 
     IOperation GetMethodBodyOperation(IMethodSymbol method)
     {

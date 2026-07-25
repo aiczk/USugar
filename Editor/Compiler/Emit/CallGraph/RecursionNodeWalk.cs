@@ -55,11 +55,11 @@ internal sealed class CallableBodyGraph
 internal sealed class RecursionNodeWalk
 {
     readonly ResolvedEdgeResolver _resolver;
-    readonly ReachableBodies _reach;
+    readonly ReachabilityPlan _reach;
     readonly IEnumerable<IOperation> _fieldInitOps;
     readonly IEnumerable<IMethodSymbol> _plannedCallables;
 
-    public RecursionNodeWalk(ResolvedEdgeResolver resolver, ReachableBodies reach,
+    public RecursionNodeWalk(ResolvedEdgeResolver resolver, ReachabilityPlan reach,
         IEnumerable<IOperation> fieldInitOps, IEnumerable<IMethodSymbol> plannedCallables)
     {
         _resolver = resolver;
