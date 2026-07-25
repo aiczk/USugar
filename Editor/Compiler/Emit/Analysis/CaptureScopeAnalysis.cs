@@ -184,7 +184,7 @@ public sealed class CaptureScopeAnalysis
     /// When injected it is AUTHORITATIVE — a root absent from it throws (invariant violation); only the
     /// analysis-only null path (no reach fixpoint, unit tests) self-fetches root bodies.</param>
     /// <param name="fieldInits">C1: the field-initializer operations this class emits (own + BASE +
-    /// auto-property + static, as collected + base-first spliced by EmitFields). REQUIRED — there is no
+    /// auto-property + static, as collected + base-first spliced by field discovery). REQUIRED — there is no
     /// null fallback: the former own-class-instance-only re-collection silently dropped base and
     /// auto-property initializer closures (B50), so any caller that omitted the list would silently
     /// reproduce that miscompile. Callers with no emitter pass an explicit list (empty when the class has

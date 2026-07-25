@@ -11,14 +11,14 @@ internal sealed class CompilationPlanner
     readonly Compilation _compilation;
     readonly Func<IMethodSymbol[]> _methods;
     readonly Func<IMethodSymbol[], ReachableBodies> _reach;
-    readonly Func<IEnumerable<IOperation>> _fieldInits;
+    readonly FieldDiscoveryPlan _fields;
     readonly Func<IMethodSymbol, IOperation> _bodyOf;
     readonly Func<INamedTypeSymbol, IEnumerable<IOperation>> _classFieldInits;
     readonly Func<IEnumerable<IMethodSymbol>> _additionalCallableDefinitions;
     readonly INamedTypeSymbol _rootType;
 
     public CompilationPlanner(Compilation compilation, Func<IMethodSymbol[]> methods,
-        Func<IMethodSymbol[], ReachableBodies> reach, Func<IEnumerable<IOperation>> fieldInits,
+        Func<IMethodSymbol[], ReachableBodies> reach, FieldDiscoveryPlan fields,
         Func<IMethodSymbol, IOperation> bodyOf,
         Func<INamedTypeSymbol, IEnumerable<IOperation>> classFieldInits,
         Func<IEnumerable<IMethodSymbol>> additionalCallableDefinitions,
@@ -27,7 +27,7 @@ internal sealed class CompilationPlanner
         _compilation = compilation;
         _methods = methods;
         _reach = reach;
-        _fieldInits = fieldInits;
+        _fields = fields ?? throw new ArgumentNullException(nameof(fields));
         _bodyOf = bodyOf;
         _classFieldInits = classFieldInits;
         _additionalCallableDefinitions = additionalCallableDefinitions;
@@ -37,7 +37,8 @@ internal sealed class CompilationPlanner
     public ProgramPlan Build()
     {
         var seed = new ProgramPlanSeedBuilder(
-            _methods, _reach, _fieldInits, _additionalCallableDefinitions).Build();
+            _methods, _reach, () => _fields.InitializerOperations,
+            _additionalCallableDefinitions).Build();
         var specializationCensus = new GenericTypeSpecCensus(
             _compilation, _bodyOf, _classFieldInits, _rootType).Build(seed);
         var definitions = new HashSet<IMethodSymbol>(
@@ -63,6 +64,7 @@ internal sealed class CompilationPlanner
         // Keep portable non-generic classes seeded by reach: they may enter from another Udon program
         // without a local mint. The census contributes closed generic instantiations on top.
         var reach = seed.Reach.Freeze(specializationCensus.MintedClasses);
-        return new ProgramPlan(callables, reach, seed.CaptureRoots, seed.FieldInitOps);
+        return new ProgramPlan(
+            callables, reach, seed.CaptureRoots, seed.FieldInitOps, _fields);
     }
 }

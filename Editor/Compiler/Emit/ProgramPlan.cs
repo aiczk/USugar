@@ -14,6 +14,7 @@ sealed class ProgramPlan
     public readonly ReachabilityPlan Reach;
     public readonly IReadOnlyList<IMethodSymbol> CaptureRoots;
     public readonly IReadOnlyList<IOperation> FieldInitOps;
+    public readonly FieldDiscoveryPlan Fields;
     public readonly SyntheticDemandPlan SyntheticDemands;
 
     public ProgramPlan(
@@ -21,12 +22,14 @@ sealed class ProgramPlan
         ReachabilityPlan reach,
         IEnumerable<IMethodSymbol> captureRoots,
         IEnumerable<IOperation> fieldInitOps,
+        FieldDiscoveryPlan fields,
         SyntheticDemandPlan syntheticDemands = null)
     {
         Callables = callables ?? throw new ArgumentNullException(nameof(callables));
         Reach = reach ?? throw new ArgumentNullException(nameof(reach));
         CaptureRoots = Array.AsReadOnly(captureRoots.ToArray());
         FieldInitOps = Array.AsReadOnly(fieldInitOps.ToArray());
+        Fields = fields ?? throw new ArgumentNullException(nameof(fields));
         SyntheticDemands = syntheticDemands;
     }
 
@@ -34,7 +37,7 @@ sealed class ProgramPlan
     {
         if (SyntheticDemands != null)
             throw new InvalidOperationException("Synthetic demand plan was published twice.");
-        return new ProgramPlan(Callables, Reach, CaptureRoots, FieldInitOps,
+        return new ProgramPlan(Callables, Reach, CaptureRoots, FieldInitOps, Fields,
             syntheticDemands ?? throw new ArgumentNullException(nameof(syntheticDemands)));
     }
 }

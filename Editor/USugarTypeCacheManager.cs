@@ -160,7 +160,7 @@ static class USugarTypeCacheManager
             defs[member.Name] = CreateFieldDefinition(member, session.Types);
         }
 
-        // Auto-properties and public properties (mirroring UasmEmitter.EmitFields)
+        // Auto-properties and public properties (mirroring field discovery)
         foreach (var prop in symbol.GetMembers().OfType<IPropertySymbol>())
         {
             if (prop.IsStatic || prop.IsImplicitlyDeclared) continue;

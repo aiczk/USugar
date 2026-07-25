@@ -14,6 +14,7 @@ internal partial class ProgramLoweringPipeline
     readonly SyntheticBridgeBuilder _bridge;
     readonly DelegateConventionStorage _delegateConvention;
     readonly LoweringServices _lowering;
+    FieldDiscoveryPlanBuilder _fieldDiscovery;
 
 
     // Phase-local projections; immutable services remain on _environment.
@@ -178,15 +179,16 @@ internal partial class ProgramLoweringPipeline
                 $"Record type '{_classSymbol.Name}' is not supported in UdonSharp. " +
                 "Udon VM cannot allocate user-defined types. Use a regular class inheriting from UdonSharpBehaviour instead.");
 
-        EmitFields();
+        var fields = DiscoverFields();
+        var plan = BuildProgramPlan(fields);
+        FieldPlanEmitter.Emit(plan.Fields, _state);
         SetReflectionValues();
-        var plan = BuildProgramPlan();
         // Stage 2: closure-scope analysis feeding real codegen — EnvEmit's alloc/read/write and every
         // IsCapturingClosure call site (LoweringServices, InvocationHandler.Extern, this file) key off it.
         // Its roots are the reach definition projection (ComputeCaptureRoots); root bodies come from the
         // shared pre-emission callable graph — no re-fetch or second body walk (F1).
         // C1 fix: roots = the FULL reach artifact (all provenances); field inits = the emitter's own
-        // _fieldInitOps (own + base + auto-property + static, already collected + spliced by EmitFields),
+        // plan.FieldInitOps (own + base + auto-property + static, already discovered and ordered),
         // NOT CaptureScopeAnalysis's own own-class-instance-only re-collection which missed base field and
         // auto-property initializers.
         // CA rewrite (M4): seed the typeobj registry in stable-key order (not mint-walk discovery order),
@@ -211,14 +213,21 @@ internal partial class ProgramLoweringPipeline
 
     public uint GetHeapSize() => _codeGenResult.HeapSize;
 
-    ProgramPlan BuildProgramPlan()
+    ProgramPlan BuildProgramPlan(FieldDiscoveryPlan fields)
     {
-        // Design §1: build the single ReachableBodies fixpoint ONCE here — after EmitFields (field
-        // initializers are seeds) and before its consumers. Its projections feed Phase-1 registration,
+        // Build the single ReachableBodies fixpoint once after field discovery, but before any field
+        // declaration reaches Structured IR. Initializers are semantic roots for the plan.
         // BuildRecursionInfo roots, and CaptureScope roots (all in EmitMethods / injected below).
-        return new CompilationPlanner(_compilation, ComputeMethods, BuildReachableBodiesViaResolver,
-            () => _fieldInitOps.Select(fi => fi.initOp), GetMethodBodyOperation, EnumerateClassFieldInitOps,
-            EnumerateAdditionalCallableDefinitions, _classSymbol).Build();
+        var initializerArray = fields.InitializerOperations.ToArray();
+        return new CompilationPlanner(
+            _compilation,
+            ComputeMethods,
+            methods => BuildReachableBodiesViaResolver(methods, initializerArray),
+            fields,
+            GetMethodBodyOperation,
+            EnumerateClassFieldInitOps,
+            EnumerateAdditionalCallableDefinitions,
+            _classSymbol).Build();
     }
 
     IEnumerable<IMethodSymbol> EnumerateAdditionalCallableDefinitions()
@@ -232,9 +241,10 @@ internal partial class ProgramLoweringPipeline
     // ReachableBodies facet (proven by golden + DiffFuzz). The open-base-generic defs ride the reach result
     // (ReachableBodies.OpenGenericBaseRoots) and reach the recursion graph through BodyByDef, so the former
     // legacy _openGenericBaseDefs side-effect field is gone — the recursion node source is the reach result.
-    ReachableBodies BuildReachableBodiesViaResolver(IMethodSymbol[] methods)
+    ReachableBodies BuildReachableBodiesViaResolver(
+        IMethodSymbol[] methods, IReadOnlyList<IOperation> fieldInitializers)
         => new ResolverDrivenReach(EdgeResolver, GetMethodBodyOperation,
-            () => _fieldInitOps.Select(fi => fi.initOp), IsCollectibleStructMember, StableOrdinalKey).Build(methods);
+            () => fieldInitializers, IsCollectibleStructMember, StableOrdinalKey).Build(methods);
 
     void SetReflectionValues()
     {
@@ -254,10 +264,13 @@ internal partial class ProgramLoweringPipeline
     internal static long ComputeTypeId(string typeName)
         => UdonBehaviourTypeMetadata.TypeId(typeName);
 
-    // ── EmitFields ──
+    // ── Field discovery ──
 
-    void EmitFields()
+    FieldDiscoveryPlan DiscoverFields()
     {
+        if (_fieldDiscovery != null)
+            throw new InvalidOperationException("Field discovery is already active.");
+        _fieldDiscovery = new FieldDiscoveryPlanBuilder();
         foreach (var member in _classSymbol.GetMembers().OfType<IFieldSymbol>())
         {
             if (member.IsImplicitlyDeclared) continue;
@@ -319,11 +332,13 @@ internal partial class ProgramLoweringPipeline
                     {
                         constValue = TryEvaluateFieldInitForHeap(initOp, member.Type);
                         if (constValue == null)
-                            _fieldInitOps.Add((member.Name, initOp, member.Type));
+                            _fieldDiscovery.InstanceInitializers.Add(
+                                new FieldInitializerPlan(member.Name, initOp, member.Type));
                     }
                 }
             }
-            _state.Storage.DeclareField(member.Name, new StorageType(udonType), flags, constValue, syncMode);
+            _fieldDiscovery.DeclareField(
+                member.Name, new StorageType(udonType), flags, constValue, syncMode);
 
             // Aggregate (struct/tuple) field with NO explicit initializer → C# default-initializes it to a
             // zeroed struct. In the object[] emulation that requires a fresh default array; without it the heap
@@ -331,7 +346,7 @@ internal partial class ProgramLoweringPipeline
             if (syntaxRef?.GetSyntax() is not VariableDeclaratorSyntax { Initializer: not null }
                 && member.Type is INamedTypeSymbol aggFieldType && TypeClassifier.IsAggregateValue(aggFieldType))
             {
-                _state.Aggregates.FieldDefaults.Add((member.Name, aggFieldType));
+                _fieldDiscovery.AggregateDefaults.Add((member.Name, aggFieldType));
             }
 
             // Detect [FieldChangeCallback("PropertyName")]
@@ -340,8 +355,9 @@ internal partial class ProgramLoweringPipeline
             if (fcbAttr != null && fcbAttr.ConstructorArguments.Length > 0
                 && fcbAttr.ConstructorArguments[0].Value is string propName)
             {
-                _fieldChangeCallbacks[member.Name] = propName;
-                _state.Storage.DeclareGeneratedField($"__old_{member.Name}", new StorageType(udonType));
+                _fieldDiscovery.FieldChangeCallbacks[member.Name] = propName;
+                _fieldDiscovery.DeclareGeneratedField(
+                    $"__old_{member.Name}", new StorageType(udonType));
             }
         }
 
@@ -373,14 +389,14 @@ internal partial class ProgramLoweringPipeline
             var flags = FieldFlags.None;
             if (prop.DeclaredAccessibility == Accessibility.Public) flags |= FieldFlags.Export;
             var storageName = _state.SourceStorageName(prop);
-            _state.Storage.DeclareField(storageName, new StorageType(udonType), flags,
+            _fieldDiscovery.DeclareField(storageName, new StorageType(udonType), flags,
                 isAuto ? ResolveAutoPropInitializer(storageName, prop) : null);
         }
 
         // Record count of derived-class field init ops; base class init ops added below
         // must be reordered to come first (C# spec: base → derived initializer order).
-        int derivedFieldInitCount = _fieldInitOps.Count;
-        int derivedStaticFieldInitCount = _staticFieldInitOps.Count; // §3.6: static tier gets the same treatment
+        int derivedFieldInitCount = _fieldDiscovery.InstanceInitializers.Count;
+        int derivedStaticFieldInitCount = _fieldDiscovery.StaticInitializers.Count;
         var baseClassInitBoundaries = new List<int>(); // track boundaries per base class
         var baseStaticInitBoundaries = new List<int>();
 
@@ -408,8 +424,8 @@ internal partial class ProgramLoweringPipeline
         while (baseType != null)
         {
             if (USugarCompilerHelper.IsFrameworkNamespace(baseType.ContainingNamespace) || baseType.Name == "UdonSharpBehaviour") break;
-            baseClassInitBoundaries.Add(_fieldInitOps.Count);
-            baseStaticInitBoundaries.Add(_staticFieldInitOps.Count);
+            baseClassInitBoundaries.Add(_fieldDiscovery.InstanceInitializers.Count);
+            baseStaticInitBoundaries.Add(_fieldDiscovery.StaticInitializers.Count);
             foreach (var member in baseType.GetMembers().OfType<IFieldSymbol>())
             {
                 if (member.IsImplicitlyDeclared) continue;
@@ -459,7 +475,8 @@ internal partial class ProgramLoweringPipeline
                         {
                             constValue = TryEvaluateFieldInitForHeap(initOp, member.Type);
                             if (constValue == null)
-                                _fieldInitOps.Add((_state.SourceStorageName(member), initOp, member.Type));
+                                _fieldDiscovery.InstanceInitializers.Add(new FieldInitializerPlan(
+                                    _state.SourceStorageName(member), initOp, member.Type));
                         }
                     }
                 }
@@ -474,15 +491,21 @@ internal partial class ProgramLoweringPipeline
                 var baseSyncMode = ReadFieldSyncMode(member, udonType, ref baseFlags);
 
                 var memberStorageName = _state.SourceStorageName(member);
-                _state.Storage.DeclareField(memberStorageName, new StorageType(udonType), baseFlags, constValue, baseSyncMode);
+                _fieldDiscovery.DeclareField(
+                    memberStorageName,
+                    new StorageType(udonType),
+                    baseFlags,
+                    constValue,
+                    baseSyncMode);
 
                 var baseFcbAttr = member.GetAttributes()
                     .FirstOrDefault(a => a.AttributeClass?.Name == "FieldChangeCallbackAttribute");
                 if (baseFcbAttr != null && baseFcbAttr.ConstructorArguments.Length > 0
                     && baseFcbAttr.ConstructorArguments[0].Value is string basePropName)
                 {
-                    _fieldChangeCallbacks[memberStorageName] = basePropName;
-                    _state.Storage.DeclareGeneratedField($"__old_{memberStorageName}", new StorageType(udonType));
+                    _fieldDiscovery.FieldChangeCallbacks[memberStorageName] = basePropName;
+                    _fieldDiscovery.DeclareGeneratedField(
+                        $"__old_{memberStorageName}", new StorageType(udonType));
                 }
             }
             // Field-like events inherited from a user base class (design §2.1, A-M2) — same
@@ -516,7 +539,8 @@ internal partial class ProgramLoweringPipeline
                         // Round-8 [R2]: C# runs the BASE declaration's initializer into THIS backing
                         // (the leaf's stays default — DiffFuzz: base.P*10+P ref=50).
                         if (isAuto)
-                            _state.Storage.DeclareGeneratedField(BaseAutoPropBackingName(prop), GetStorageType(prop.Type),
+                            _fieldDiscovery.DeclareGeneratedField(
+                                BaseAutoPropBackingName(prop), GetStorageType(prop.Type),
                                 ResolveAutoPropInitializer(BaseAutoPropBackingName(prop), prop));
                         continue;
                     }
@@ -525,7 +549,8 @@ internal partial class ProgramLoweringPipeline
                     // accessors are real functions; the planner already disambiguates their export
                     // names on collision), so `new`-shadowing it stays legal (wave-7 pinned).
                     if (isAuto)
-                        _state.Storage.DeclareGeneratedField(_state.SourceStorageName(prop), GetStorageType(prop.Type),
+                        _fieldDiscovery.DeclareGeneratedField(
+                            _state.SourceStorageName(prop), GetStorageType(prop.Type),
                             ResolveAutoPropInitializer(_state.SourceStorageName(prop), prop));
                     continue;
                 }
@@ -535,7 +560,7 @@ internal partial class ProgramLoweringPipeline
                 if (prop.DeclaredAccessibility == Accessibility.Public) flags |= FieldFlags.Export;
                 declaredMemberSyms[prop.Name] = prop;
                 var storageName = _state.SourceStorageName(prop);
-                _state.Storage.DeclareField(storageName, new StorageType(udonType), flags,
+                _fieldDiscovery.DeclareField(storageName, new StorageType(udonType), flags,
                     isAuto ? ResolveAutoPropInitializer(storageName, prop) : null);
             }
             baseType = baseType.BaseType;
@@ -544,15 +569,25 @@ internal partial class ProgramLoweringPipeline
         // Reorder field init ops: base class initializers must run before derived (C# spec).
         // Base classes were walked nearest-parent-first, so reverse class-level order
         // while preserving field order within each class.
-        ReorderBaseFirst(_fieldInitOps, baseClassInitBoundaries, derivedFieldInitCount);
+        ReorderBaseFirst(
+            _fieldDiscovery.InstanceInitializers, baseClassInitBoundaries, derivedFieldInitCount);
 
         // §3.6 (feature B): the static TIER gets the identical base-first reorder, independently of
         // the instance tier above (they were collected into separate lists), then splices in FRONT of
         // it — base static → derived static → base instance → derived instance.
-        ReorderBaseFirst(_staticFieldInitOps, baseStaticInitBoundaries, derivedStaticFieldInitCount);
-        StaticInitializationPlan.ValidateCycles(_compilation, _staticFieldInitOps, GetMethodBodyOperation);
-        if (_staticFieldInitOps.Count > 0)
-            _fieldInitOps.InsertRange(0, _staticFieldInitOps);
+        ReorderBaseFirst(
+            _fieldDiscovery.StaticInitializers, baseStaticInitBoundaries, derivedStaticFieldInitCount);
+        StaticInitializationPlan.ValidateCycles(
+            _compilation,
+            _fieldDiscovery.StaticInitializers.Select(initializer =>
+                (initializer.FieldName, initializer.Operation, initializer.FieldType)).ToList(),
+            GetMethodBodyOperation);
+        if (_fieldDiscovery.StaticInitializers.Count > 0)
+            _fieldDiscovery.InstanceInitializers.InsertRange(
+                0, _fieldDiscovery.StaticInitializers);
+        var result = _fieldDiscovery.Build();
+        _fieldDiscovery = null;
+        return result;
     }
 
     /// <summary>Base-first reorder shared by the instance and static field-initializer tiers (§3.6):
@@ -671,12 +706,14 @@ internal partial class ProgramLoweringPipeline
         {
             constValue = TryEvaluateFieldInitForHeap(initOp, member.Type);
             if (constValue == null)
-                _staticFieldInitOps.Add((member.Name, initOp, member.Type)); // static tier — §3.6
+                _fieldDiscovery.StaticInitializers.Add(
+                    new FieldInitializerPlan(member.Name, initOp, member.Type));
         }
-        _state.Storage.DeclareField(member.Name, new StorageType(udonType), FieldFlags.None, constValue);
+        _fieldDiscovery.DeclareField(
+            member.Name, new StorageType(udonType), FieldFlags.None, constValue);
 
         if (initOp == null && member.Type is INamedTypeSymbol aggFieldType && TypeClassifier.IsAggregateValue(aggFieldType))
-            _state.Aggregates.FieldDefaults.Add((member.Name, aggFieldType));
+            _fieldDiscovery.AggregateDefaults.Add((member.Name, aggFieldType));
 
         return true;
     }
@@ -742,16 +779,17 @@ internal partial class ProgramLoweringPipeline
     void EmitStaticOwnerProperty(IPropertySymbol property)
     {
         var id = StaticOwnerAbi.PropertyName(property, property.ContainingType);
-        _state.Storage.DeclareGeneratedField(id, GetStorageType(property.Type));
+        _fieldDiscovery.DeclareGeneratedField(id, GetStorageType(property.Type));
         if (property.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
             is PropertyDeclarationSyntax { Initializer: not null } declaration)
         {
             var model = _compilation.GetSemanticModel(declaration.SyntaxTree);
             if (model.GetOperation(declaration.Initializer.Value) is { } init)
-                _staticFieldInitOps.Add((id, init, property.Type));
+                _fieldDiscovery.StaticInitializers.Add(
+                    new FieldInitializerPlan(id, init, property.Type));
         }
         else if (property.Type is INamedTypeSymbol aggregate && TypeClassifier.IsAggregateValue(aggregate))
-            _state.Aggregates.FieldDefaults.Add((id, aggregate));
+            _fieldDiscovery.AggregateDefaults.Add((id, aggregate));
     }
 
     void EmitStaticOwnerField(IFieldSymbol field)
@@ -767,16 +805,17 @@ internal partial class ProgramLoweringPipeline
             return;
         }
         var storageType = GetStorageType(field.Type);
-        _state.Storage.DeclareGeneratedField(id, storageType);
+        _fieldDiscovery.DeclareGeneratedField(id, storageType);
         var syntax = field.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax();
         if (syntax is VariableDeclaratorSyntax { Initializer: not null } declarator)
         {
             var model = _compilation.GetSemanticModel(declarator.SyntaxTree);
             if (model.GetOperation(declarator.Initializer.Value) is { } init)
-                _staticFieldInitOps.Add((id, init, field.Type));
+                _fieldDiscovery.StaticInitializers.Add(
+                    new FieldInitializerPlan(id, init, field.Type));
         }
         else if (field.Type is INamedTypeSymbol aggregate && TypeClassifier.IsAggregateValue(aggregate))
-            _state.Aggregates.FieldDefaults.Add((id, aggregate));
+            _fieldDiscovery.AggregateDefaults.Add((id, aggregate));
     }
 
     /// <summary>
@@ -814,8 +853,8 @@ internal partial class ProgramLoweringPipeline
         DelegateAbi.ValidateNoRefOutParams(delegateType.DelegateInvokeMethod);
         _state.Boundary.RequireCanDeclareDelegateSurface(member, delegateType);
 
-        _state.Storage.DeclareField(storageName, StorageTypes.ObjectArray, FieldFlags.None);
-        _state.Synthetics.DelegateFields.Add(storageName);
+        _fieldDiscovery.DeclareField(storageName, StorageTypes.ObjectArray, FieldFlags.None);
+        _fieldDiscovery.DelegateFields.Add(storageName);
 
         // Declare the signature-keyed __dlgc_ convention vars for this delegate signature (§3.2).
         var invoke = delegateType.DelegateInvokeMethod;
@@ -825,10 +864,10 @@ internal partial class ProgramLoweringPipeline
         var (convArgs, convRet, _) = LoweringServices.GetConventionFieldNames(
             delegateType, _environment.Session.Types);
         for (int ci = 0; ci < convArgs.Length; ci++)
-            _state.Storage.TryDeclareVar(convArgs[ci],
+            _fieldDiscovery.TryDeclareVar(convArgs[ci],
                 _environment.Session.Types.GetStorageType(invoke.Parameters[ci].Type, _typeParamMap));
         if (convRet != null)
-            _state.Storage.TryDeclareVar(convRet,
+            _fieldDiscovery.TryDeclareVar(convRet,
                 _environment.Session.Types.GetStorageType(invoke.ReturnType, _typeParamMap));
 
         if (member.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
@@ -843,7 +882,8 @@ internal partial class ProgramLoweringPipeline
             var initOp = (model.GetOperation(dlgDeclarator.Initializer) as ISymbolInitializerOperation)?.Value
                          ?? model.GetOperation(dlgDeclarator.Initializer.Value);
             if (initOp != null)
-                _fieldInitOps.Add((storageName, initOp, delegateType)); // delegateType == member.Type (caller-supplied)
+                _fieldDiscovery.InstanceInitializers.Add(
+                    new FieldInitializerPlan(storageName, initOp, delegateType));
         }
     }
 
@@ -924,7 +964,8 @@ internal partial class ProgramLoweringPipeline
         if (constVal.HasValue && constVal.Value != null) return constVal.Value;
         var heapVal = TryEvaluateFieldInitForHeap(initOp, prop.Type);
         if (heapVal != null) return heapVal;
-        _fieldInitOps.Add((backingVar, initOp, prop.Type));
+        _fieldDiscovery.InstanceInitializers.Add(
+            new FieldInitializerPlan(backingVar, initOp, prop.Type));
         return null;
     }
 

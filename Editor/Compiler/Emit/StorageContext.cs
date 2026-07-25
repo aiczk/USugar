@@ -116,6 +116,9 @@ public sealed class StorageContext
 
     public bool IsFieldDeclared(string name) => _declarations.ContainsKey(name);
 
+    internal void DeclarePlannedField(FieldDecl declaration)
+        => Declare(declaration ?? throw new ArgumentNullException(nameof(declaration)));
+
     public string DeclareStructConst(StorageType type, object value)
     {
         var key = $"{type.Name}_{value}";

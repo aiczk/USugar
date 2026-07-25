@@ -49,6 +49,27 @@ public class CompilationPlanningContractTests
     }
 
     [Fact]
+    public void FieldDiscoveryPlan_IsSemanticAndIrFree()
+    {
+        var planFields = typeof(FieldDiscoveryPlan).GetFields(
+            BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+        Assert.DoesNotContain(planFields, field =>
+            field.FieldType == typeof(LoweringState)
+            || field.FieldType == typeof(StructuredModule)
+            || field.FieldType == typeof(StorageContext));
+        Assert.DoesNotContain(
+            typeof(FieldDiscoveryPlan).GetMethods(
+                BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic),
+            method => method.GetParameters().Any(parameter =>
+                parameter.ParameterType == typeof(LoweringState)
+                || parameter.ParameterType == typeof(StructuredModule)));
+
+        var fieldsMember = typeof(ProgramPlan).GetField(nameof(ProgramPlan.Fields));
+        Assert.NotNull(fieldsMember);
+        Assert.Equal(typeof(FieldDiscoveryPlan), fieldsMember.FieldType);
+    }
+
+    [Fact]
     public void Builder_FreezesRegistrationGatesOnce()
     {
         var tree = CSharpSyntaxTree.ParseText(@"
@@ -105,7 +126,8 @@ class C
             callables,
             new ReachableBodies().Freeze(Array.Empty<INamedTypeSymbol>()),
             sourceRoots,
-            Array.Empty<IOperation>());
+            Array.Empty<IOperation>(),
+            new FieldDiscoveryPlanBuilder().Build());
 
         sourceMethods.Clear();
         sourceRoots.Clear();
