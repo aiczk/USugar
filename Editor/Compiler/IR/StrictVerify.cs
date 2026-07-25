@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
-using System.IO;
 using Microsoft.CodeAnalysis;
 
 /// <summary>Type FACTS recorded at the two authoritative boundaries where Udon type names enter a
@@ -185,38 +184,3 @@ public static class DeclaredRelaxations
         $"'{name}' is a fact {(isRef == true ? "reference" : "value type")}";
 }
 
-/// <summary>Append-only ledger of guess-dependent relaxed-check passes. In-memory always (drainable by
-/// tests); mirrored to a file when <c>USUGAR_STRICT_SHADOW</c> names a path. The Phase-D flip deleted
-/// its CoreVerify audit hooks (the arms now enforce via <see cref="DeclaredRelaxations"/>); the ledger
-/// stays as the shared instrument for future relaxed-arm measurements. Never throws, never alters
-/// compilation.</summary>
-public static class StrictVerifyLedger
-{
-    static readonly ConcurrentQueue<string> _entries = new();
-    static readonly object _flushLock = new();
-    static readonly string _filePath = Environment.GetEnvironmentVariable("USUGAR_STRICT_SHADOW");
-
-    /// <summary>Func-name prefix reserved for the shadow's own self-checks (StrictVerifyShadowTests):
-    /// they prove the logging path via the in-memory queue, so mirroring them would put permanent
-    /// non-measurement noise in a measurement window whose goal state is zero entries.</summary>
-    internal const string SelfTestFuncPrefix = "ssv_";
-
-    public static void RecordGuess(string arm, string expected, string actual, string context,
-        string funcName, string reason)
-    {
-        var line = "{\"arm\":\"" + arm + "\",\"expected\":\"" + expected + "\",\"actual\":\"" + actual
-            + "\",\"context\":\"" + context + "\",\"func\":\"" + funcName + "\",\"reason\":\"" + reason + "\"}";
-        _entries.Enqueue(line);
-        if (string.IsNullOrEmpty(_filePath)
-            || funcName?.StartsWith(SelfTestFuncPrefix, StringComparison.Ordinal) == true) return;
-        try { lock (_flushLock) File.AppendAllText(_filePath, line + "\n"); }
-        catch (IOException) { /* measurement must never break a compile */ }
-    }
-
-    internal static string[] DrainForTest()
-    {
-        var outp = new System.Collections.Generic.List<string>();
-        while (_entries.TryDequeue(out var e)) outp.Add(e);
-        return outp.ToArray();
-    }
-}

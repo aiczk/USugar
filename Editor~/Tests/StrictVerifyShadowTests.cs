@@ -1,4 +1,3 @@
-using System.Linq;
 using Xunit;
 
 namespace USugar.Tests;
@@ -7,11 +6,10 @@ namespace USugar.Tests;
 // a slot/value type pair may differ only under DeclaredRelaxations (SystemObject wildcard, Nullable
 // erasure, fact-enum↔Int32, both-fact-reference COPY). These tests pin the flipped polarity: fact-backed
 // pairs still pass (accept controls), while no-fact and fact-contradicted pairs throw loudly, naming the
-// missing fact. The kept ledger infrastructure retains one smoke test; its SelfTestFuncPrefix keeps that
-// deliberate entry out of any USUGAR_STRICT_SHADOW mirror window.
+// missing fact.
 public class StrictVerifyShadowTests
 {
-    static string Fn(string name) => StrictVerifyLedger.SelfTestFuncPrefix + name;
+    static string Fn(string name) => "ssv_" + name;
 
     static CFunction VerifyAssign(string funcName, string slotType, CValue value,
         UdonTypeFactRegistry typeFacts = null)
@@ -63,12 +61,4 @@ public class StrictVerifyShadowTests
             new CConst(null, new StorageType("SsvFakeCollider")), facts); // no throw
     }
 
-    [Fact]
-    public void Ledger_RecordGuess_StaysDrainable() // kept infrastructure (future verifiers) must not rot
-    {
-        StrictVerifyLedger.RecordGuess("smoke", "A", "B", "ctx", Fn("ledger_smoke"), "kept-infrastructure");
-        var mine = StrictVerifyLedger.DrainForTest()
-            .Where(e => e.Contains("\"func\":\"" + Fn("ledger_smoke") + "\"")).ToArray();
-        Assert.Contains(mine, e => e.Contains("\"arm\":\"smoke\""));
-    }
 }
