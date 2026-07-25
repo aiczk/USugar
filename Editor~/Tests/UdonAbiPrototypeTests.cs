@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
@@ -249,6 +250,75 @@ public class UdonAbiPrototypeTests
             new CConst(null, StorageTypes.Type),
         }, new StorageType("UnityEngineRigidbody"));
         UdonAbiVerifier.VerifyInvocation(safeCall, facts, "safe_query");
+    }
+
+    [Theory]
+    [InlineData("UnityEngineRenderer")]
+    [InlineData("UnityEngineTransform")]
+    [InlineData("UnityEngineGameObject")]
+    public void StrongboxContractIsIndependentOfTheGetterOwner(string owner)
+        => AssertStrongboxContract(owner, "GetComponent", "T");
+
+    [Fact]
+    public void EveryRegisteredGenericGetterMemberRequiresTransformStrongbox()
+    {
+        var members = new SortedSet<string>(StringComparer.Ordinal);
+        foreach (var name in ExternRegistry.All)
+        {
+            var ownerEnd = name.IndexOf(".__", StringComparison.Ordinal);
+            if (ownerEnd <= 0) continue;
+            var rest = name.Substring(ownerEnd + 3);
+            string result = null;
+            if (rest.EndsWith("__TArray", StringComparison.Ordinal)) result = "TArray";
+            else if (rest.EndsWith("__T", StringComparison.Ordinal)) result = "T";
+            if (result == null) continue;
+            var head = rest.Substring(0, rest.Length - result.Length - 2);
+            var paramStart = head.IndexOf("__", StringComparison.Ordinal);
+            members.Add(paramStart < 0 ? head : head.Substring(0, paramStart));
+        }
+
+        Assert.Equal(
+            new[]
+            {
+                "GetComponent", "GetComponentInChildren", "GetComponentInParent",
+                "GetComponents", "GetComponentsInChildren", "GetComponentsInParent",
+            },
+            members);
+
+        foreach (var member in members)
+            AssertStrongboxContract("UnityEngineComponent", member,
+                member.StartsWith("GetComponents", StringComparison.Ordinal) ? "TArray" : "T");
+    }
+
+    static void AssertStrongboxContract(string owner, string member, string resultType)
+    {
+        var signature = $"{owner}.__{member}__{resultType}";
+        var prototype = new UdonExternPrototype(signature, new[]
+        {
+            Param("instance", owner, UdonAbiParameterMode.In),
+            Param("type", "SystemType", UdonAbiParameterMode.In),
+            new UdonAbiParameter("result",
+                resultType == "TArray"
+                    ? UdonAbiType.Array(UdonAbiType.Generic("T"))
+                    : UdonAbiType.Generic("T"),
+                UdonAbiParameterMode.Out),
+        });
+        var bound = new UdonAbiCatalog(new[] { prototype })
+            .Require(TestHelper.AbiKey(signature));
+        var facts = new UdonTypeFactRegistry();
+        facts.RecordForTest(owner, isEnum: false, isValueType: false);
+        facts.RecordForTest("UnityEngineTransform", isEnum: false, isValueType: false);
+
+        var unsafeCall = new CExternCall(bound, new List<CLeaf>
+        {
+            new CConst(null, StorageTypes.UdonEventReceiver),
+            new CConst(null, StorageTypes.Type),
+        }, resultType == "TArray"
+            ? new StorageType("UnityEngineRigidbodyArray")
+            : new StorageType("UnityEngineRigidbody"));
+        var error = Assert.Throws<VerificationException>(
+            () => UdonAbiVerifier.VerifyInvocation(unsafeCall, facts, $"unsafe_{member}"));
+        Assert.Contains("must be backed by a 'UnityEngineTransform' strongbox", error.Message);
     }
 
     [Fact]

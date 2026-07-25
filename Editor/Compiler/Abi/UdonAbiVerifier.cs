@@ -109,7 +109,6 @@ public static class UdonAbiVerifier
     static bool RequiresTransformStrongbox(UdonAbiKey key, int stackIndex)
     {
         if (stackIndex != 0
-            || key.Owner != "UnityEngineComponent"
             || (key.ResultType != "T" && key.ResultType != "TArray"))
             return false;
         switch (key.Member)
