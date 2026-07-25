@@ -397,7 +397,123 @@ public partial class InvocationHandler
                 $"GetComponent<{ResolveType(typeArg).ToDisplayString()}> is invalid: this type is used "
                 + "as a legacy object[] nominal alias in the same compilation and therefore has "
                 + "SystemObjectArray storage, not a scene-component representation.");
-        return ExternResolver.IsUdonSharpBehaviour(typeArg) ? EmitGetComponentShim(op, target) : EmitGetComponentExtern(op, target);
+        if (ExternResolver.IsUdonSharpBehaviour(typeArg))
+            return EmitGetComponentShim(op, target);
+        return IsGenericComponentGetterKey(target, TypeTokenName(typeArg))
+            ? EmitGetComponentExtern(op, target)
+            : EmitGetComponentErasedQuery(op, target);
+    }
+
+    /// <summary>
+    /// The generic component-query node OWNED BY the type token, i.e. the registration that makes the
+    /// token a legal runtime dispatch key. `UnityEngineComponent.__GetComponent__T` forwards to
+    /// `UdonWrapper.GetComponent__T`, which reads the token off the heap and indexes
+    /// `_componentGetterModules[token]` with a BARE indexer — a miss is a KeyNotFoundException thrown
+    /// out of the EXTERN, which halts the behaviour. The dictionary is populated from every wrapper
+    /// module implementing IUdonComponentGetterModule, and that same interface is what registers the
+    /// module's own `__GetComponent*__T` node under its own type name. So the token is a legal key
+    /// exactly when this key resolves — one interface causing both facts, not a numeric coincidence.
+    /// Asking <see cref="UdonAbiCatalog"/> keeps the answer on the installed SDK's own registry, the
+    /// single ground truth every other extern USugar emits is already trusted against.
+    /// </summary>
+    bool IsGenericComponentGetterKey(IMethodSymbol target, string tokenUdonType)
+    {
+        var parameterTypes = target.OriginalDefinition.Parameters
+            .Select(parameter => GetStorageTypeName(parameter.Type))
+            .ToArray();
+        var key = UdonAbiKey.Method(tokenUdonType, target.Name, parameterTypes,
+            target.Name.StartsWith("GetComponents") ? "TArray" : "T");
+
+        // UdonAbiKey normalizes its owner through the extern-OWNERSHIP remap (VRC_Pickup's members are
+        // registered under VRCPickup). That remap is about calling members ON a receiver and says
+        // nothing about the token's runtime identity, so if it rewrote the name the catalog would
+        // answer about a different type than the one being baked. Treat any divergence as "not a key".
+        return key.Owner == tokenUdonType && _ctx.AbiCatalog.Contains(key);
+    }
+
+    // ── GetComponent<T> where T is not a legal generic-dispatch key ──
+    // Route through the non-generic `GetComponent(System.Type)` family, whose wrapper does not index
+    // any per-T dictionary: it calls the erased UnityEngine overload and writes a Component. The
+    // token is still baked, but as an ordinary argument the SDK filters on, never as a dispatch key.
+    CLeaf EmitGetComponentErasedQuery(IInvocationOperation op, IMethodSymbol target)
+    {
+        var typeArg = target.TypeArguments[0];
+        var typeArgUdon = GetStorageTypeName(typeArg);
+        var isPlural = target.Name.StartsWith("GetComponents");
+
+        // The plural erased extern returns UnityEngineComponentArray. That IS the destination for an
+        // UdonBehaviour element type (GetStorageTypeName collapses it), so no conversion is needed.
+        // For any other element type the destination is `{T}Array`, and narrowing a Component[] to it
+        // would need a real materialization whose `{T}Array.__ctor` the SDK does not register for
+        // exactly these type arguments. Reject loudly rather than emit an unassemblable array slot.
+        if (isPlural && typeArgUdon != "VRCUdonCommonInterfacesIUdonEventReceiver")
+            throw new System.NotSupportedException(
+                $"{target.Name}<{ResolveType(typeArg).ToDisplayString()}> cannot be lowered: the SDK "
+                + $"registers no generic component getter for '{TypeTokenName(typeArg)}', so the query "
+                + "must use the erased Component[] overload, and narrowing that to "
+                + $"'{typeArgUdon}Array' has no registered array constructor.");
+
+        CLeaf instanceVal = null;
+        if (op.Instance is IInstanceReferenceOperation)
+            instanceVal = LoadField(_ctx.Storage.DeclareThisOnce(StorageTypes.Transform), StorageTypes.Transform);
+        else if (op.Instance != null)
+            instanceVal = VisitExpression(op.Instance);
+
+        var argVals = new List<CLeaf>();
+        for (int i = 0; i < op.Arguments.Length; i++)
+            argVals.Add(VisitExpression(op.Arguments[i].Value));
+
+        instanceVal = EnsureComponentInstance(target, op.Instance, instanceVal);
+
+        // Erased operand order is (instance, SystemType, bool?) — the token precedes the bool, the
+        // opposite of the __T forms. ResolveErasedQueryExtern names the parameters in the same order.
+        var externArgs = new List<CLeaf>();
+        if (instanceVal != null)
+            externArgs.Add(instanceVal);
+        externArgs.Add(ConstTypeToken(typeArg));
+        externArgs.AddRange(argVals);
+
+        var erasedResult = isPlural ? StorageTypes.ComponentArray : StorageTypes.Component;
+        var fetched = ExternCall(
+            ResolveErasedQueryExtern(target.Name, op.Arguments.Length > 0), externArgs, erasedResult);
+
+        if (isPlural)
+            return fetched;
+        if (typeArgUdon == "VRCUdonCommonInterfacesIUdonEventReceiver")
+            return AsUdonBehaviour(fetched);
+        if (typeArgUdon == "UnityEngineComponent")
+            return fetched;
+        return RepresentationCast(fetched, new StorageType(typeArgUdon),
+            RepresentationCastKind.ErasedComponentQueryResult);
+    }
+
+    /// <summary>The non-generic component-query extern for one query name. Shares its shape with
+    /// <see cref="ResolveShimFetchExtern"/> but keeps the query's own arity: the USB shim must widen
+    /// singular→plural to scan every behaviour, an erased query must not.</summary>
+    static UdonAbiKey ResolveErasedQueryExtern(string methodName, bool hasBoolArg)
+    {
+        string resultType;
+        switch (methodName)
+        {
+            case "GetComponent":
+            case "GetComponentInChildren":
+            case "GetComponentInParent":
+                resultType = "UnityEngineComponent";
+                break;
+            case "GetComponents":
+            case "GetComponentsInChildren":
+            case "GetComponentsInParent":
+                resultType = "UnityEngineComponentArray";
+                break;
+            default:
+                throw new System.NotSupportedException(
+                    $"'{methodName}' is not a component query, so it has no erased overload.");
+        }
+
+        var parameterTypes = hasBoolArg
+            ? new[] { "SystemType", "SystemBoolean" }
+            : new[] { "SystemType" };
+        return UdonAbiKey.Method("UnityEngineComponent", methodName, parameterTypes, resultType);
     }
 
     // Existing logic for Unity Component types (Transform, Collider, etc.)

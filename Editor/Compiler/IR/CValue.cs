@@ -51,6 +51,11 @@ public enum RepresentationCastKind
     ClosedGenericObjectCast,
     EnumRepresentation,
     VerifiedUdonBehaviourComponent,
+
+    /// <summary>An SDK component query answered through its erased `(System.Type)` overload, whose
+    /// registered return is the `Component` base. The baked type token IS the narrowing proof: the
+    /// SDK getter filters on it, so the returned instance is that type or null.</summary>
+    ErasedComponentQueryResult,
 }
 
 /// <summary>

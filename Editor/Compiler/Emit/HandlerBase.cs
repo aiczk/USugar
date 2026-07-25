@@ -156,6 +156,12 @@ public abstract partial class HandlerBase
     // runtime (B51 silent class) — reject loudly instead. The IUdonEventReceiver collapse tag is not
     // VM-resolvable as a token; the concrete UdonBehaviour type is (GetComponent<T>'s prior remap).
     protected CLeaf ConstTypeToken(ITypeSymbol typeSymbol)
+        => Const(TypeTokenName(typeSymbol), StorageTypes.Type);
+
+    /// <summary>The Udon type name a <see cref="ConstTypeToken"/> bakes. Split out so a caller that
+    /// must reason about the token's runtime identity — a generic extern whose dispatch keys on it —
+    /// asks the same producer instead of recomputing the collapse un-fold.</summary>
+    protected string TypeTokenName(ITypeSymbol typeSymbol)
     {
         if (ResolveType(typeSymbol) is ITypeParameterSymbol unresolvedTp)
             throw new NotSupportedException(
@@ -163,8 +169,7 @@ public abstract partial class HandlerBase
                 + "its type argument did not reach this emit site (a generic-instantiation map gap). The token "
                 + "would bake a null System.Type constant and fault at runtime.");
         var name = GetStorageTypeName(typeSymbol);
-        if (name == "VRCUdonCommonInterfacesIUdonEventReceiver") name = "VRCUdonUdonBehaviour";
-        return Const(name, StorageTypes.Type);
+        return name == "VRCUdonCommonInterfacesIUdonEventReceiver" ? "VRCUdonUdonBehaviour" : name;
     }
 
     // ── Core IR convenience methods ──
