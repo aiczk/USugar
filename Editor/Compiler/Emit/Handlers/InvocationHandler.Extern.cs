@@ -416,8 +416,6 @@ public partial class InvocationHandler
         for (int i = 0; i < op.Arguments.Length; i++)
             argVals.Add(VisitExpression(op.Arguments[i].Value));
 
-        // __T externs use UnityEngineComponent as containing type.
-        // If instance is a GameObject (not a Component), get .transform first.
         instanceVal = EnsureComponentInstance(op.Instance, instanceVal);
 
         // Build extern args: instance + explicit args + typeof(T)
@@ -473,7 +471,6 @@ public partial class InvocationHandler
         for (int i = 0; i < op.Arguments.Length; i++)
             argVals.Add(VisitExpression(op.Arguments[i].Value));
 
-        // If instance is a GameObject, get .transform for Component-typed extern
         instanceVal = EnsureComponentInstance(op.Instance, instanceVal);
 
         // Determine which non-generic GetComponents extern to call
@@ -509,22 +506,41 @@ public partial class InvocationHandler
     }
 
     /// <summary>
-    /// If the instance is a GameObject, emit .transform to get a Component-typed instance.
-    /// GetComponent __T externs and shim GetComponents externs use UnityEngineComponent
-    /// as containing type, which requires the instance to be Component-typed in the heap.
+    /// Routes an explicit component-query receiver through .transform, exactly as stock UdonSharp
+    /// does (BoundInvocationExpression.TryCreateGetComponentInvocation, tagged "udon-workaround"):
+    /// the SDK's component getters select how to fetch operand 0 from the slot's DECLARED type, so
+    /// an already-Component-typed slot is not proof and the hop is unconditional. Implicit `this` is
+    /// exempt because StorageContext mints it as a Transform slot.
     /// </summary>
     CLeaf EnsureComponentInstance(IOperation instanceOp, CLeaf instanceVal)
     {
-        if (instanceVal == null || instanceOp == null)
+        if (instanceOp == null || instanceVal == null)
+            throw new System.InvalidOperationException(
+                "A component query has no receiver to normalize.");
+        if (instanceOp is IInstanceReferenceOperation)
             return instanceVal;
-        var instanceUdon = GetStorageTypeName(instanceOp.Type);
-        if (instanceUdon != "UnityEngineGameObject")
-            return instanceVal;
-        return ExternCall(
-            UdonAbiKey.Method("UnityEngineGameObject", "get_transform", "UnityEngineTransform"),
+
+        var receiver = ResolveType(instanceOp.Type)
+            ?? throw new System.NotSupportedException(
+                "A component query receiver has no resolved type.");
+        if (Displays(receiver, "UnityEngine.GameObject"))
+            return TransformOf("UnityEngineGameObject", instanceVal);
+        for (var t = receiver; t != null; t = t.BaseType)
+            if (Displays(t, "UnityEngine.Component"))
+                return TransformOf("UnityEngineComponent", instanceVal);
+        throw new System.NotSupportedException(
+            $"A component query receiver of type '{receiver.ToDisplayString()}' cannot be proven to "
+            + "be a UnityEngine.Component, so it cannot be lowered to a Transform-typed operand.");
+    }
+
+    static bool Displays(ITypeSymbol type, string fullName)
+        => type.ToDisplayString(SymbolDisplayFormat.CSharpErrorMessageFormat) == fullName;
+
+    CLeaf TransformOf(string owner, CLeaf instanceVal)
+        => ExternCall(
+            UdonAbiKey.Method(owner, "get_transform", "UnityEngineTransform"),
             new List<CLeaf> { instanceVal },
             StorageTypes.Transform);
-    }
 
     static UdonAbiKey ResolveShimFetchExtern(string methodName, bool hasBoolArg)
     {

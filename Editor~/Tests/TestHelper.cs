@@ -137,6 +137,10 @@ namespace UnityEngine
         public T GetComponentInChildren<T>(bool includeInactive) => default;
         public T[] GetComponentsInChildren<T>() => default;
         public T[] GetComponentsInChildren<T>(bool includeInactive) => default;
+        public T GetComponentInParent<T>() => default;
+        public T GetComponentInParent<T>(bool includeInactive) => default;
+        public T[] GetComponentsInParent<T>() => default;
+        public T[] GetComponentsInParent<T>(bool includeInactive) => default;
         public T[] GetComponents<T>() => default;
         public Component[] GetComponents(System.Type type) => default;
     }

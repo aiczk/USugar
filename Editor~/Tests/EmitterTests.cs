@@ -2253,6 +2253,78 @@ public class DirectTest : UdonSharpBehaviour {
         Assert.DoesNotContain("GetProgramVariable", uasm);
     }
 
+    /// <summary>The SDK's component getters choose how to fetch operand 0 from the receiver slot's
+    /// DECLARED type, so every explicit receiver must reach the extern as a Transform-typed operand —
+    /// a USB-derived receiver is stored as IUdonEventReceiver and would otherwise be fetched as a
+    /// GameObject. Covers the whole query family and both the direct and shim strategies.</summary>
+    [Fact]
+    public void ComponentQuery_EveryExplicitReceiverIsNormalizedToTransform()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+using UnityEngine;
+using UnityEngine.UI;
+public interface IQThing { void Ping(); }
+public class QRecv : UdonSharpBehaviour, IQThing { public void Ping() { } }
+public class QMatrix : UdonSharpBehaviour {
+    public QRecv usb;
+    public UdonSharpBehaviour usbBase;
+    public GameObject go;
+    public Transform tf;
+    public Image img;
+    public QRecv[] usbArray;
+    void Start() {
+        var a = usb.GetComponent<MeshRenderer>();
+        var b = usbBase.GetComponent<MeshRenderer>();
+        var c = go.GetComponent<MeshRenderer>();
+        var d = tf.GetComponent<MeshRenderer>();
+        var e = img.GetComponent<MeshRenderer>();
+        var f = usbArray[0].GetComponent<MeshRenderer>();
+        var g = usb.GetComponentInChildren<MeshRenderer>(true);
+        var h = usb.GetComponentsInChildren<MeshRenderer>();
+        var i = usb.GetComponentInParent<MeshRenderer>();
+        var j = usb.GetComponentInParent<MeshRenderer>(true);
+        var k = usb.GetComponentsInParent<MeshRenderer>();
+        var l = usb.GetComponentsInParent<MeshRenderer>(true);
+        var m = usb.GetComponents<MeshRenderer>();
+        var n = usb.GetComponent<QRecv>();
+        IQThing t = usb;
+        var o = ((QRecv)t).GetComponent<MeshRenderer>();
+    }
+}
+", "QMatrix", out var emitter);
+
+        // Both lowering strategies must be exercised: the generic __T extern and the USB shim.
+        Assert.Contains("UnityEngineComponent.__GetComponent__T", uasm);
+        Assert.Contains("UnityEngineComponent.__GetComponents__SystemType__UnityEngineComponentArray", uasm);
+
+        var queries = emitter.Module.Functions.SelectMany(function => function.FlatBlocks)
+            .SelectMany(block => block.Stmts)
+            .OfType<CExprStmt>()
+            .Select(statement => statement.Expr)
+            .OfType<CExternCall>()
+            .Where(call => call.Sig.Text.Contains("__GetComponent", StringComparison.Ordinal))
+            .ToArray();
+
+        Assert.NotEmpty(queries);
+        Assert.All(queries, call => Assert.Equal(StorageTypes.Transform, call.Args[0].Type));
+    }
+
+    [Fact]
+    public void ComponentQuery_ImplicitThisNeedsNoTransformHop()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+using UnityEngine;
+public class QThis : UdonSharpBehaviour {
+    void Start() { var r = GetComponent<MeshRenderer>(); }
+}
+", "QThis");
+
+        Assert.Contains("UnityEngineComponent.__GetComponent__T", uasm);
+        Assert.DoesNotContain("__get_transform__", uasm);
+    }
+
     [Fact]
     public void GetComponents_UsbType_EmitsTwoPassShim()
     {
