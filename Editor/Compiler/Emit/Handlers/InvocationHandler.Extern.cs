@@ -1178,7 +1178,7 @@ public partial class InvocationHandler
             // PrepareNdimRefOutArg evaluates every index once and caches the bounds/backing/flat-index
             // plan, mirroring the single-index arm's (arrayVal, indexVal) caching.
             case IArrayElementReferenceOperation ndimArrayElem when ndimArrayElem.Indices.Length > 1:
-                return _lowering.PrepareNdimRefOutArg(ndimArrayElem);
+                return _lowering.Ndim.PrepareNdimRefOutArg(ndimArrayElem);
             case IArrayElementReferenceOperation arrayElem
                 when arrayElem.Indices.Length == 1
                      && arrayElem.Indices[0] is not IRangeOperation:

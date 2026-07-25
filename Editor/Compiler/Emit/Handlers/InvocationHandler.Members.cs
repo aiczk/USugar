@@ -232,8 +232,8 @@ public partial class InvocationHandler
             }
             switch (propertyKind)
             {
-                case NdimArrayAbi.PropertyKind.Length: return _lowering.EmitNdimLength(_lowering.VisitExpression(op.Instance), ndimPropType);
-                case NdimArrayAbi.PropertyKind.Rank: return _lowering.EmitNdimRank(ndimPropType);
+                case NdimArrayAbi.PropertyKind.Length: return _lowering.Ndim.EmitNdimLength(_lowering.VisitExpression(op.Instance), ndimPropType);
+                case NdimArrayAbi.PropertyKind.Rank: return _lowering.Ndim.EmitNdimRank(ndimPropType);
                 default: throw new System.InvalidOperationException($"Unknown N-dim array property kind: {propertyKind}");
             }
         }

@@ -166,8 +166,8 @@ public sealed class LValueLowerer
                 LoweringServices.RejectStaticReadonlyWriteThrough(ndimCapElem.ArrayReference); // §3.3, R5 (compound/inc-dec write-back)
                 var ndimType = (IArrayTypeSymbol)ndimCapElem.ArrayReference.Type;
                 var elemUdonType = _lowering.GetStorageTypeName(ndimType.ElementType);
-                var plan = _lowering.PrepareNdimAccess(ndimCapElem.ArrayReference, ndimCapElem.Indices, ndimType);
-                var ndimCurrentVal = _lowering.EmitNdimReadFromPlan(ndimCapElem, plan, elemUdonType);
+                var plan = _lowering.Ndim.PrepareNdimAccess(ndimCapElem.ArrayReference, ndimCapElem.Indices, ndimType);
+                var ndimCurrentVal = _lowering.Ndim.EmitNdimReadFromPlan(ndimCapElem, plan, elemUdonType);
                 return new LoweringServices.LValuePlan { Value = ndimCurrentVal, NdimPlan = plan };
             }
             case IArrayElementReferenceOperation arrayElem:
@@ -265,8 +265,8 @@ public sealed class LValueLowerer
                 // Reuse CaptureLValue's plan when available (avoid re-evaluating indices/bundle);
                 // the uncached path is defensive (mirrors the rank-1 arm's ?? default).
                 var plan = lv.NdimPlan
-                    ?? _lowering.PrepareNdimAccess(ndimWbElem.ArrayReference, ndimWbElem.Indices, (IArrayTypeSymbol)ndimWbElem.ArrayReference.Type);
-                _lowering.EmitNdimWriteFromPlan(ndimWbElem, plan, valueVal);
+                    ?? _lowering.Ndim.PrepareNdimAccess(ndimWbElem.ArrayReference, ndimWbElem.Indices, (IArrayTypeSymbol)ndimWbElem.ArrayReference.Type);
+                _lowering.Ndim.EmitNdimWriteFromPlan(ndimWbElem, plan, valueVal);
                 break;
             }
             case IArrayElementReferenceOperation arrayElem:

@@ -10,8 +10,30 @@ using Microsoft.CodeAnalysis.Operations;
 /// the flat backing. §1: bounds are checked per-dimension; a violation LogErrors and reads
 /// default(T) / skips the write (D-N1 deviation — C# throws per-dimension, Udon has no exceptions).
 /// </summary>
-public sealed partial class LoweringServices
+/// <summary>Owns all lowering for the object-array-backed multidimensional array ABI.</summary>
+internal sealed class NdimArrayLowerer
 {
+    readonly LoweringServices _lowering;
+
+    internal NdimArrayLowerer(LoweringServices lowering)
+        => _lowering = lowering ?? throw new System.ArgumentNullException(nameof(lowering));
+
+    CoreBuilder _builder => _lowering.Builder;
+    Compilation _compilation => _lowering.Compilation;
+    LoweringState _state => _lowering.State;
+    string GetArrayType(IArrayTypeSymbol type) => _lowering.GetArrayType(type);
+    string GetArrayElemType(IArrayTypeSymbol type) => _lowering.GetArrayElemType(type);
+    string GetStorageTypeName(ITypeSymbol type) => _lowering.GetStorageTypeName(type);
+    CLeaf VisitExpression(IOperation operation) => _lowering.VisitExpression(operation);
+    CLeaf EmitArrayDimension(IOperation operation) => _lowering.EmitArrayDimension(operation);
+    void EmitAssign(int slot, CValue value) => _lowering.EmitAssign(slot, value);
+    CSlotRef SlotRef(int slot) => _lowering.SlotRef(slot);
+    CConst Const(object value, StorageType type) => _lowering.Const(value, type);
+    CSlotRef ExternCall(UdonAbiKey key, List<CLeaf> args, StorageType type)
+        => _lowering.ExternCall(key, args, type);
+    void EmitExternVoid(UdonAbiKey key, List<CLeaf> args)
+        => _lowering.EmitExternVoid(key, args);
+
     /// <summary>Fetch bundle[0] (the flat backing) as a value of its real rank-1 array type. The
     /// bundle stores it boxed as SystemObject; Udon unboxes on the typed COPY into a backing-typed
     /// scratch slot (same mechanism as the recursion-stack reload, CoreFlatOptimizer.ReloadValue).

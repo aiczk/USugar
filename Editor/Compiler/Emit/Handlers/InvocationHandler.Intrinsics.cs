@@ -86,8 +86,8 @@ public partial class InvocationHandler
         var dimension = _lowering.VisitExpression(operation.Arguments[0].Value);
         return methodKind switch
         {
-            NdimArrayAbi.MethodKind.GetLength => _lowering.EmitNdimGetLength(bundle, dimension),
-            NdimArrayAbi.MethodKind.GetUpperBound => _lowering.EmitNdimGetUpperBound(bundle, dimension),
+            NdimArrayAbi.MethodKind.GetLength => _lowering.Ndim.EmitNdimGetLength(bundle, dimension),
+            NdimArrayAbi.MethodKind.GetUpperBound => _lowering.Ndim.EmitNdimGetUpperBound(bundle, dimension),
             _ => throw new System.InvalidOperationException(
                 $"Unknown N-dim array method kind: {methodKind}"),
         };

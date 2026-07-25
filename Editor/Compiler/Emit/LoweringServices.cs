@@ -5,12 +5,15 @@ using System.Linq;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.Operations;
 
-public sealed partial class LoweringServices
+public sealed class LoweringServices
 {
     internal readonly LoweringState _state;
 
     public LoweringServices(LoweringState state)
-        => _state = state ?? throw new ArgumentNullException(nameof(state));
+    {
+        _state = state ?? throw new ArgumentNullException(nameof(state));
+        Ndim = new NdimArrayLowerer(this);
+    }
 
     // Explicit handler-facing dependencies. The underscored shims below remain private to the
     // lowering implementation while it is split into narrower services; handlers must not couple
@@ -33,6 +36,7 @@ public sealed partial class LoweringServices
     internal Stack<CLeaf> ConditionalAccessStack => _conditionalAccessStack;
     internal Stack<List<(CLeaf val, ITypeSymbol type)>> UsingDisposableStack => _usingDisposableStack;
     internal List<EmitDiagnostic> Diagnostics => _diagnostics;
+    internal NdimArrayLowerer Ndim { get; }
 
     // Internal projections used across the lowering concern files.
     internal Compilation _compilation => _state.Compilation;
@@ -872,8 +876,8 @@ public sealed partial class LoweringServices
         if (ae.Indices.Length > 1)
         {
             var ndimType = (IArrayTypeSymbol)ae.ArrayReference.Type;
-            var plan = PrepareNdimAccess(ae.ArrayReference, ae.Indices, ndimType);
-            return EmitNdimReadFromPlan(ae, plan, GetStorageTypeName(ndimType.ElementType));
+            var plan = Ndim.PrepareNdimAccess(ae.ArrayReference, ae.Indices, ndimType);
+            return Ndim.EmitNdimReadFromPlan(ae, plan, GetStorageTypeName(ndimType.ElementType));
         }
         var arrayVal = VisitExpression(ae.ArrayReference);
         var arrSym = ae.ArrayReference.Type as IArrayTypeSymbol;
@@ -1221,7 +1225,7 @@ public sealed partial class LoweringServices
     internal System.Action<CLeaf> PrepareArrayElementSet(IArrayElementReferenceOperation arrayElem)
     {
         RejectStaticReadonlyWriteThrough(arrayElem.ArrayReference); // §3.3, R5
-        if (arrayElem.Indices.Length > 1) return PrepareNdimElementSet(arrayElem);
+        if (arrayElem.Indices.Length > 1) return Ndim.PrepareNdimElementSet(arrayElem);
         var arrayVal = VisitExpression(arrayElem.ArrayReference);
         var arrSym = arrayElem.ArrayReference.Type as IArrayTypeSymbol;
         var indexVal = ResolveArrayIndex(arrayVal, GetArrayType(arrSym), arrayElem.Indices[0]);

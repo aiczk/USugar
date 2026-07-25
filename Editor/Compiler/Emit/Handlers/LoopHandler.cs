@@ -143,7 +143,7 @@ public class LoopHandler : IOperationHandler
         // collVal is a single-assignment scratch leaf under ANF — the collection reference is loop-invariant
         // and stable, so it can be re-read directly in the length read and the body without a snapshot slot.
         var collVal = _lowering.VisitExpression(collectionOp);
-        if (isNdim) collVal = _lowering.EmitNdimGetBacking(collVal, backingTypeSymbol);
+        if (isNdim) collVal = _lowering.Ndim.EmitNdimGetBacking(collVal, backingTypeSymbol);
 
         // Declare loop variable
         var loopLocal = op.Locals.FirstOrDefault()
