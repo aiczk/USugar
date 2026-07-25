@@ -198,17 +198,6 @@ public static class ExternResolver
         return GetUdonTypeNameAndRecord(type, typeFacts);
     }
 
-    /// <summary>Explicitly lower a closed C# runtime identity to its Udon storage representation.
-    /// This conversion is intentionally named because it is non-injective.</summary>
-    public static StorageType GetStorageType(RuntimeType runtimeType,
-        IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeParamMap = null)
-        => new StorageType(GetUdonTypeName(runtimeType.Symbol, typeParamMap, null));
-
-    public static StorageType GetStorageType(RuntimeType runtimeType,
-        IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeParamMap,
-        UdonTypeFactRegistry typeFacts)
-        => new StorageType(GetUdonTypeName(runtimeType.Symbol, typeParamMap, typeFacts));
-
     public static bool IsUdonSharpBehaviour(ITypeSymbol type,
         IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeParamMap)
     {

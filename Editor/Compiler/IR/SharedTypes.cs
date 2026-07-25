@@ -62,26 +62,6 @@ public static class StorageTypes
     public static readonly StorageType UdonEventReceiver = new StorageType("VRCUdonCommonInterfacesIUdonEventReceiver");
 }
 
-/// <summary>A closed C# runtime type identity. It must be lowered explicitly before entering Udon
-/// storage because that lowering is non-injective for aggregates, delegates, nullable values, and
-/// user classes.</summary>
-public readonly struct RuntimeType : IEquatable<RuntimeType>
-{
-    public readonly ITypeSymbol Symbol;
-
-    public RuntimeType(ITypeSymbol symbol)
-        => Symbol = symbol ?? throw new ArgumentNullException(nameof(symbol));
-
-    public bool Equals(RuntimeType other)
-        => SymbolEqualityComparer.Default.Equals(Symbol, other.Symbol);
-    public override bool Equals(object obj) => obj is RuntimeType other && Equals(other);
-    public override int GetHashCode()
-        => Symbol == null ? 0 : SymbolEqualityComparer.Default.GetHashCode(Symbol);
-    public override string ToString() => Symbol?.ToDisplayString() ?? "<default>";
-    public static bool operator ==(RuntimeType left, RuntimeType right) => left.Equals(right);
-    public static bool operator !=(RuntimeType left, RuntimeType right) => !left.Equals(right);
-}
-
 /// <summary>
 /// Slot classification for variable lifetime management.
 /// Pinned slots have fixed UASM names; Frame/Scratch are virtual and coalesced later.
