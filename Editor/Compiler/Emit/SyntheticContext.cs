@@ -37,9 +37,9 @@ public sealed class SyntheticContext
     public readonly HashSet<string> DelegateFields = new();
 
     // Per-spec closure bridges (design 2026-07-10 v3 SS2B): bridgeExportName -> the closure's
-    // per-spec CFunction. The pending-bridge drain resolves closure targets here (a bare
+    // per-spec StructuredFunction. The pending-bridge drain resolves closure targets here (a bare
     // definition-symbol lookup cannot distinguish specs).
-    readonly Dictionary<string, CFunction> _closureBridgeFuncs = new();
+    readonly Dictionary<string, StructuredFunction> _closureBridgeFuncs = new();
 
     // MG auto-wrap (design 2026-07-11 v2): pending receiver-bridges — a class/struct instance method
     // group's bridge re-dispatches DelegateAbi.Env as the member's param0 (CA-M1 receiver ABI).
@@ -142,7 +142,7 @@ public sealed class SyntheticContext
             throw new InvalidOperationException("Synthetic demand emission was already verified.");
     }
 
-    public void RegisterClosureBridge(string name, CFunction function)
+    public void RegisterClosureBridge(string name, StructuredFunction function)
     {
         RequireMutable();
         if (_demandsPublished && !_closureBridgeFuncs.ContainsKey(name))
@@ -151,7 +151,7 @@ public sealed class SyntheticContext
         _closureBridgeFuncs[name] = function;
     }
 
-    public bool TryGetClosureBridge(string name, out CFunction function)
+    public bool TryGetClosureBridge(string name, out StructuredFunction function)
         => _closureBridgeFuncs.TryGetValue(name, out function);
 
     public void RegisterReceiverBridge(DelegateBindingPlan binding)

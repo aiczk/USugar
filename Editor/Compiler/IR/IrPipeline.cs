@@ -1,49 +1,41 @@
 using System;
 
+/// <summary>The typed result of the Core IR pipeline.</summary>
+public sealed class IrPipelineResult
+{
+    public readonly FlatModule FlatModule;
+    public readonly CodeGenResult CodeGen;
+
+    public IrPipelineResult(FlatModule flatModule, CodeGenResult codeGen)
+    {
+        FlatModule = flatModule ?? throw new ArgumentNullException(nameof(flatModule));
+        CodeGen = codeGen;
+    }
+}
+
 /// <summary>
-/// Core IR compilation pipeline. There is ONE IR (CModule: structured, then flat); HIR/LIR no longer exist,
-/// and there is NO structured-optimization pass.
-///
-/// Pipeline: Handlers/CoreBuilder build the structured CModule →
-///           CoreVerify →
-///           CoreFlatten (structured → flat, in place) + FlatVerify →
-///           CoalesceSlots (the sole optimizer — slot allocation) →
-///           InsertRecursionSpills + FlatVerify →
-///           CoreToUasm → UASM
+/// One-way Core IR pipeline:
+/// StructuredModule -> verify -> FlatModule -> verify -> allocate/spill -> verify -> UASM.
 /// </summary>
 public static class IrPipeline
 {
-    /// <summary>
-    /// Generate UASM from a Core IR module. Handlers build the structured Core directly; the module
-    /// is verified and optimized in structured form, flattened in place by CoreFlatten (the one
-    /// structured→flat gate, asserted by FlatVerify), then run through the flat optimizer and the
-    /// Core code generator. HIR and LIR no longer exist on the live path.
-    /// </summary>
-    public static CodeGenResult GenerateUasmFromCore(CModule coreModule)
+    public static IrPipelineResult Run(StructuredModule structuredModule)
     {
-        CoreVerify.Verify(coreModule);
+        if (structuredModule == null) throw new ArgumentNullException(nameof(structuredModule));
+        CoreVerify.Verify(structuredModule);
 
-        // Structured → flat (in place): CoreFlatten + FlatVerify post-condition.
-        var abiCatalog = coreModule.AbiCatalog
-            ?? throw new InvalidOperationException(
-                "Core IR generation requires a Udon ABI catalog.");
-        foreach (var cf in coreModule.Functions)
-            CoreFlatten.Lower(cf, abiCatalog);
-        FlatVerify.Verify(coreModule);
+        // CoreFlatten creates a distinct graph. The verified structured graph is never repurposed.
+        var flatModule = CoreFlatten.Lower(structuredModule);
+        FlatVerify.Verify(flatModule);
 
-        // Slot coalescing is the only optimization retained: measurement showed it delivers the entire
-        // heap-variable reduction (~30–100% fewer vars → smaller serialized program), while the former
-        // constant-fold / DCE / copy-propagation / CFG-simplify passes changed neither EXTERN count nor
-        // runtime cost on real (field-driven) code — Udon is EXTERN-bound, so they earned their complexity
-        // and correctness risk for nothing. Value-equivalence (opt vs no-opt heap results) was verified.
-        CoreFlatOptimizer.CoalesceSlots(coreModule);
+        // Slot coalescing is the sole retained flat optimization. Measurements showed that the
+        // removed CFG/value rewrites changed neither EXTERN count nor runtime cost.
+        CoreFlatOptimizer.CoalesceSlots(flatModule);
 
-        // Recursion frame spill/reload: wraps each recursive call with a spill/reload of the frame fields +
-        // the slots LIVE ACROSS the call (using post-coalesce liveness — the physical slot set is small, so the
-        // software stack stays bounded). Runs after coalescing; re-verify the flat shape after the rewrite.
-        CoreFlatOptimizer.InsertRecursionSpills(coreModule);
-        FlatVerify.Verify(coreModule);
+        // Recursion spill insertion allocates flat-only scratch slots after coalescing.
+        CoreFlatOptimizer.InsertRecursionSpills(flatModule);
+        FlatVerify.Verify(flatModule);
 
-        return CoreToUasm.Generate(coreModule);
+        return new IrPipelineResult(flatModule, CoreToUasm.Generate(flatModule));
     }
 }

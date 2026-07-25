@@ -271,7 +271,7 @@ public partial class InvocationHandler
         // directly, no receiver param). ResolveDispatchProperty (round 7): `this[i]` inside an inherited
         // base body binds the BASE indexer — dispatch the chain-leaf override; `base[i]` keeps the static
         // binding. B48/WjR3: an object[]-emulated containing type (user struct OR v1 class) must NOT take
-        // this behaviour-only arm — its accessor is a CFunction expecting the receiver object[] as param0,
+        // this behaviour-only arm — its accessor is a StructuredFunction expecting the receiver object[] as param0,
         // and calling it with only the index args skews the arity (`base[i]` / non-virtual `this[i]` in a
         // v1-class body hit the CInternalCall arity gate on legal C#). It falls through to the
         // object[]-emulated arm below, which passes LoadInstanceRaw(this/base) = the receiver param —
@@ -489,7 +489,7 @@ public partial class InvocationHandler
     /// reference-semantics object[1+F] bundle (slot 0 reserved for the future type-object reference). Kept in
     /// one place (the DelegateAbi.EmitBundleMint analogue) so the future slot-0 flip is a one-line change here.
     /// Order (C# semantics): allocate object[SlotCount] → default-init fields (slot 0 stays the ctor's null) →
-    /// run instance field initializers in declaration order → run the ctor body (ctor-as-CFunction, receiver =
+    /// run instance field initializers in declaration order → run the ctor body (ctor-as-StructuredFunction, receiver =
     /// param0) → apply any object-initializer. NO defensive copies — the same bundle reference flows through.</summary>
     /// <summary>CA-v2 M1 ctor prologue (charter #6): before a v1 class ctor's body runs, either
     /// redirect to a `: this(...)` target (suppressing own field inits) or run own field inits then the

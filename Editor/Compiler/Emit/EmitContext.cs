@@ -12,7 +12,7 @@ public class EmitContext
     public readonly INamedTypeSymbol ClassSymbol;
     public readonly UdonAbiCatalog AbiCatalog;
     public readonly UdonAbiBinder Abi;
-    public readonly CModule Module;
+    public readonly StructuredModule Module;
     public readonly CoreBuilder Builder;
     public readonly LayoutPlanner Planner;
     public readonly StorageContext Storage;
@@ -191,7 +191,7 @@ public class EmitContext
         if (!ReferenceEquals(planner.TypeFacts, session.TypeFacts))
             throw new InvalidOperationException(
                 "LayoutPlanner and EmitContext must share one compilation session's type facts.");
-        Module = new CModule(session.TypeFacts, AbiCatalog) { ClassName = classSymbol.ToDisplayString() };
+        Module = new StructuredModule(session.TypeFacts, AbiCatalog) { ClassName = classSymbol.ToDisplayString() };
         Builder = new CoreBuilder(Module);
         Planner = planner;
         Storage = new StorageContext(Module);

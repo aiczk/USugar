@@ -120,7 +120,7 @@ public sealed class CExternCall : CValue
     /// function (the cross-arm SendCustomEvent of a marked dispatch). InsertRecursionSpills wraps
     /// flagged instructions with the __recurStack frame spill/reload. The flag MUST be copied by every
     /// site that reconstructs the instruction (CoreFlatten.LowerExpr, CoreFlatOptimizer.RemapInst) —
-    /// FlatVerify checks conservation against CFunction.ReentrantSiteCount.</summary>
+    /// FlatVerify checks conservation against StructuredFunction.ReentrantSiteCount.</summary>
     public readonly bool Reentrant;
     /// <summary>Wave-12 r2 [V1]: number of IMMEDIATELY-PRECEDING statements (the cross-call
     /// convention's SetProgramVariable copy-ins, same flat block by construction) that must sit
@@ -283,7 +283,7 @@ public sealed class CCrossCall : CValue
     /// cycle (same-typed / base-typed / interface-typed variable receiver holding `this` at runtime)
     /// — LowerCrossCall marks the SendCustomEvent Reentrant (with the param copy-ins inside the
     /// spill window via <see cref="CExternCall.PreSpillStmts"/>). Counted into
-    /// CFunction.ReentrantSiteCount at the CoreBuilder.CrossCall creation choke point.</summary>
+    /// StructuredFunction.ReentrantSiteCount at the CoreBuilder.CrossCall creation choke point.</summary>
     public readonly bool Reentrant;
 
     public CCrossCall(CLeaf instance, CrossCallTransportPlan transport,

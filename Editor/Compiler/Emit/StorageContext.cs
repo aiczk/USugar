@@ -8,7 +8,7 @@ using Microsoft.CodeAnalysis;
 /// </summary>
 public sealed class StorageContext
 {
-    readonly CModule _module;
+    readonly StructuredModule _module;
     readonly Dictionary<string, int> _counters = new();
     readonly Dictionary<string, FieldDecl> _declarations = new(StringComparer.Ordinal);
     readonly Dictionary<StorageType, string> _thisVars = new();
@@ -17,7 +17,7 @@ public sealed class StorageContext
 
     public readonly Dictionary<ILocalSymbol, EmitContext.LocalBinding> LocalBindings = new(SymbolEqualityComparer.Default);
 
-    public StorageContext(CModule module) => _module = module;
+    public StorageContext(StructuredModule module) => _module = module;
 
     int NextIndex(string key)
     {

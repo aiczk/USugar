@@ -8,7 +8,7 @@ public class StorageIdentityTests
     [Fact]
     public void UserAndGeneratedStorageWithSameNameAndType_Reject()
     {
-        var storage = new StorageContext(new CModule());
+        var storage = new StorageContext(new StructuredModule());
         storage.DeclareField("collision", StorageTypes.Int32);
 
         var error = Assert.Throws<InvalidOperationException>(
@@ -21,7 +21,7 @@ public class StorageIdentityTests
     [Fact]
     public void RepeatedGeneratedAbiDeclaration_IsIdempotent()
     {
-        var module = new CModule();
+        var module = new StructuredModule();
         var storage = new StorageContext(module);
 
         Assert.True(storage.TryDeclareVar("__abi_value", StorageTypes.Int32));
@@ -62,7 +62,7 @@ public class StorageTypeObjectCollision : UdonSharpBehaviour
     [Fact]
     public void PinnedSlotRequiresDeclaredHeapStorage()
     {
-        var module = new CModule();
+        var module = new StructuredModule();
         var builder = new CoreBuilder(module);
         builder.BeginFunction("missing_pinned");
         builder.AllocPinned(StorageTypes.Int32, "missing");
@@ -74,7 +74,7 @@ public class StorageTypeObjectCollision : UdonSharpBehaviour
     [Fact]
     public void PinnedSlotMustMatchHeapStorageType()
     {
-        var module = new CModule();
+        var module = new StructuredModule();
         module.Fields.Add(new FieldDecl("pinned", StorageTypes.String));
         var builder = new CoreBuilder(module);
         builder.BeginFunction("mismatched_pinned");

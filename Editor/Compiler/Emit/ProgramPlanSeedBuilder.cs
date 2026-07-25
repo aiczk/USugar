@@ -35,7 +35,7 @@ sealed class ProgramPlanSeedBuilder
         var methodSet = new HashSet<IMethodSymbol>(methods, SymbolEqualityComparer.Default);
         var baseInstanceMethods = reach.BaseCopies.Where(bm => !methodSet.Contains(bm)).ToArray();
         // Local functions register at their declaration/forward-reference site. Keeping them in the
-        // eager foreign-static projection used to create a dead duplicate CFunction.
+        // eager foreign-static projection used to create a dead duplicate StructuredFunction.
         var foreignStatics = reach.ForeignStatics
             .Where(fm => fm.MethodKind != MethodKind.LocalFunction).ToArray();
         var definitions = methods.Concat(foreignStatics).Concat(reach.StructMembers)

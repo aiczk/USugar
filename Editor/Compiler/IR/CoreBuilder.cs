@@ -3,26 +3,26 @@ using System.Collections.Generic;
 
 // ============================================================================
 // CoreBuilder — the Core IR construction API targeted by the emit handlers. Builds the structured
-// CModule/CFunction/CStmt/CValue tree and manages the current function, the insertion point
+// StructuredModule/StructuredFunction/CStmt/CValue tree and manages the current function, the insertion point
 // (statement-list stack), slot allocation, and constant deduplication.
 // ============================================================================
 
 public sealed class CoreBuilder
 {
-    readonly CModule _module;
-    CFunction _currentFunc;
+    readonly StructuredModule _module;
+    StructuredFunction _currentFunc;
     readonly Stack<List<CStmt>> _stmtStack = new Stack<List<CStmt>>();
     readonly Dictionary<ConstKey, CConst> _constPool = new Dictionary<ConstKey, CConst>();
 
-    public CoreBuilder(CModule module)
+    public CoreBuilder(StructuredModule module)
         => _module = module ?? throw new ArgumentNullException(nameof(module));
 
-    public CModule Module => _module;
-    public CFunction CurrentFunction => _currentFunc;
+    public StructuredModule Module => _module;
+    public StructuredFunction CurrentFunction => _currentFunc;
 
     // ── Function management ──
 
-    public CFunction BeginFunction(string name, string exportName = null)
+    public StructuredFunction BeginFunction(string name, string exportName = null)
     {
         _currentFunc = _module.AddFunction(name, exportName);
         _stmtStack.Clear();
@@ -30,7 +30,7 @@ public sealed class CoreBuilder
         return _currentFunc;
     }
 
-    public void SetFunction(CFunction func)
+    public void SetFunction(StructuredFunction func)
     {
         _currentFunc = func ?? throw new ArgumentNullException(nameof(func));
         _stmtStack.Clear();
@@ -93,8 +93,8 @@ public sealed class CoreBuilder
 
     public void EmitIf(CLeaf cond, Action<CoreBuilder> thenBuilder, Action<CoreBuilder> elseBuilder = null)
     {
-        var thenBlock = new CBlock();
-        var elseBlock = new CBlock();
+        var thenBlock = new StructuredBlock();
+        var elseBlock = new StructuredBlock();
 
         if (thenBuilder != null)
         {
@@ -115,12 +115,12 @@ public sealed class CoreBuilder
 
     public void EmitWhile(Func<CLeaf> condFactory, Action<CoreBuilder> bodyBuilder, bool isDoWhile = false)
     {
-        var condBlock = new CBlock();
+        var condBlock = new StructuredBlock();
         _stmtStack.Push(condBlock.Stmts);
         var cond = condFactory();
         _stmtStack.Pop();
 
-        var body = new CBlock();
+        var body = new StructuredBlock();
         _stmtStack.Push(body.Stmts);
         bodyBuilder(this);
         _stmtStack.Pop();
@@ -131,10 +131,10 @@ public sealed class CoreBuilder
     public void EmitFor(Action<CoreBuilder> initBuilder, Func<CLeaf> condFactory,
         Action<CoreBuilder> updateBuilder, Action<CoreBuilder> bodyBuilder)
     {
-        var init = new CBlock();
-        var condBlock = new CBlock();
-        var update = new CBlock();
-        var body = new CBlock();
+        var init = new StructuredBlock();
+        var condBlock = new StructuredBlock();
+        var update = new StructuredBlock();
+        var body = new StructuredBlock();
 
         _stmtStack.Push(init.Stmts);
         initBuilder(this);
@@ -155,9 +155,9 @@ public sealed class CoreBuilder
         Emit(new CFor(init, cond, update, body, condBlock));
     }
 
-    public CBlock BeginBlock()
+    public StructuredBlock BeginBlock()
     {
-        var block = new CBlock();
+        var block = new StructuredBlock();
         _stmtStack.Push(block.Stmts);
         return block;
     }

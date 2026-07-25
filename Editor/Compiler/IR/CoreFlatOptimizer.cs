@@ -17,7 +17,7 @@ public static class CoreFlatOptimizer
     /// Merge Scratch/Frame slots with non-overlapping lifetimes into fewer physical slots.
     /// Reduces the number of __intnl_* UASM variables.
     /// </summary>
-    public static void CoalesceSlots(CModule module)
+    public static void CoalesceSlots(FlatModule module)
     {
         foreach (var func in module.Functions)
             CoalesceSlotsFunc(func);
@@ -37,7 +37,7 @@ public static class CoreFlatOptimizer
     /// liveness here). Run AFTER CoalesceSlots so the slot set is the small physical set — under A-normal form
     /// an emit-time total-spill of every (numerous) logical slot overflows the 8192-entry recursion stack.
     /// </summary>
-    public static void InsertRecursionSpills(CModule module)
+    public static void InsertRecursionSpills(FlatModule module)
     {
         var abiCatalog = module.AbiCatalog
             ?? throw new InvalidOperationException(
@@ -55,11 +55,11 @@ public static class CoreFlatOptimizer
     // __intnl_ vars in total).
     const int SpillTempCoalesceThreshold = 64;
 
-    static void InsertRecursionSpillsFunc(CFunction func, UdonAbiCatalog abiCatalog)
+    static void InsertRecursionSpillsFunc(FlatFunction func, UdonAbiCatalog abiCatalog)
     {
         // Spill work exists when the function has named recursive callees OR Reentrant-flagged
         // delegate-dispatch sites (design §4.3 — flag count is tracked on the function).
-        if ((func.RecursiveCalleeNames.Count == 0 && func.ReentrantSiteCount == 0) || func.FlatBlocks.Count == 0) return;
+        if ((func.RecursiveCalleeNames.Count == 0 && func.ReentrantSiteCount == 0) || func.Blocks.Count == 0) return;
 
         var firstSpillSlot = func.Slots.Count; // [X4] every slot from here on is a fresh spill temp
 
@@ -69,10 +69,10 @@ public static class CoreFlatOptimizer
         // actually DEAD (its old value consumed, a new value written after). Live-out captures the gap.
         var liveOut = ComputeLiveOutPerInstruction(func);
 
-        foreach (var block in func.FlatBlocks)
+        foreach (var block in func.Blocks)
         {
-            var newStmts = new List<CStmt>(block.Stmts.Count + 8);
-            foreach (var inst in block.Stmts)
+            var newStmts = new List<IFlatInstruction>(block.Instructions.Count + 8);
+            foreach (var inst in block.Instructions)
             {
                 if (IsSpillSite(inst, func.RecursiveCalleeNames))
                 {
@@ -101,7 +101,7 @@ public static class CoreFlatOptimizer
                     int preWindow = PreSpillStmtCount(inst);
                     if (preWindow > 0)
                     {
-                        var saveStmts = new List<CStmt>();
+                        var saveStmts = new List<IFlatInstruction>();
                         EmitSpill(func, saveStmts, func.RecursionSpillFields, liveSlots, abiCatalog);
                         newStmts.InsertRange(Math.Max(newStmts.Count - preWindow, 0), saveStmts);
                     }
@@ -115,8 +115,8 @@ public static class CoreFlatOptimizer
                     newStmts.Add(inst);
                 }
             }
-            block.Stmts.Clear();
-            block.Stmts.AddRange(newStmts);
+            block.Instructions.Clear();
+            block.Instructions.AddRange(newStmts);
         }
 
         // [X4]: coalesce the fresh spill temps among themselves when their count crosses the
@@ -129,7 +129,7 @@ public static class CoreFlatOptimizer
     /// <summary>Live-out of a block: the union of its successors' live-in, plus the terminator's own reads.
     /// Shared by <see cref="ComputeBlockLiveIn"/> (fixpoint) and <see cref="ComputeLiveOutPerInstruction"/>
     /// (one more pass over the converged result).</summary>
-    static HashSet<int> BlockOut(CBlock b, Dictionary<int, HashSet<int>> blockLiveIn)
+    static HashSet<int> BlockOut(FlatBlock b, Dictionary<int, HashSet<int>> blockLiveIn)
     {
         var outSet = new HashSet<int>();
         if (b.Terminator != null)
@@ -146,24 +146,24 @@ public static class CoreFlatOptimizer
     /// shared by <see cref="ComputeLivenessIntervals"/> (interval derivation) and
     /// <see cref="VerifyNoInterference"/> (the checker), and recomputed independently by
     /// <see cref="InsertRecursionSpillsFunc"/> in its later post-coalesce phase.</summary>
-    static Dictionary<int, HashSet<int>> ComputeBlockLiveIn(CFunction func)
+    static Dictionary<int, HashSet<int>> ComputeBlockLiveIn(FlatFunction func)
     {
         var blockLiveIn = new Dictionary<int, HashSet<int>>();
-        foreach (var b in func.FlatBlocks) blockLiveIn[b.Id] = new HashSet<int>();
+        foreach (var b in func.Blocks) blockLiveIn[b.Id] = new HashSet<int>();
 
         bool changed = true;
         while (changed)
         {
             changed = false;
-            for (int bi = func.FlatBlocks.Count - 1; bi >= 0; bi--) // reverse order speeds convergence
+            for (int bi = func.Blocks.Count - 1; bi >= 0; bi--) // reverse order speeds convergence
             {
-                var b = func.FlatBlocks[bi];
+                var b = func.Blocks[bi];
                 var live = BlockOut(b, blockLiveIn);
-                for (int i = b.Stmts.Count - 1; i >= 0; i--)
+                for (int i = b.Instructions.Count - 1; i >= 0; i--)
                 {
-                    var d = GetWrittenSlot(b.Stmts[i]);
+                    var d = GetWrittenSlot(b.Instructions[i]);
                     if (d.HasValue) live.Remove(d.Value);
-                    foreach (var r in GetReadSlotsInst(b.Stmts[i])) live.Add(r);
+                    foreach (var r in GetReadSlotsInst(b.Instructions[i])) live.Add(r);
                 }
                 if (!blockLiveIn[b.Id].SetEquals(live)) { blockLiveIn[b.Id] = live; changed = true; }
             }
@@ -173,20 +173,20 @@ public static class CoreFlatOptimizer
 
     /// <summary>Per-instruction live-out (slots whose post-instruction value is read before being overwritten),
     /// via standard backward dataflow over the flat CFG to a fixpoint.</summary>
-    static Dictionary<CStmt, HashSet<int>> ComputeLiveOutPerInstruction(CFunction func, Dictionary<int, HashSet<int>> blockLiveIn = null)
+    static Dictionary<IFlatInstruction, HashSet<int>> ComputeLiveOutPerInstruction(FlatFunction func, Dictionary<int, HashSet<int>> blockLiveIn = null)
     {
         blockLiveIn ??= ComputeBlockLiveIn(func);
 
-        var result = new Dictionary<CStmt, HashSet<int>>();
-        foreach (var b in func.FlatBlocks)
+        var result = new Dictionary<IFlatInstruction, HashSet<int>>();
+        foreach (var b in func.Blocks)
         {
             var live = BlockOut(b, blockLiveIn);
-            for (int i = b.Stmts.Count - 1; i >= 0; i--)
+            for (int i = b.Instructions.Count - 1; i >= 0; i--)
             {
-                result[b.Stmts[i]] = new HashSet<int>(live); // live-out of instruction i
-                var d = GetWrittenSlot(b.Stmts[i]);
+                result[b.Instructions[i]] = new HashSet<int>(live); // live-out of instruction i
+                var d = GetWrittenSlot(b.Instructions[i]);
                 if (d.HasValue) live.Remove(d.Value);
-                foreach (var r in GetReadSlotsInst(b.Stmts[i])) live.Add(r);
+                foreach (var r in GetReadSlotsInst(b.Instructions[i])) live.Add(r);
             }
         }
         return result;
@@ -195,14 +195,14 @@ public static class CoreFlatOptimizer
     // A spill site is a named recursive-edge internal call OR a Reentrant-flagged delegate-dispatch
     // arm (__indirect / SendCustomEvent — design §4.3): both can re-enter the containing function and
     // clobber its frame, so both get the same spill/reload wrap.
-    static bool IsSpillSite(CStmt inst, HashSet<string> names)
+    static bool IsSpillSite(IFlatInstruction inst, HashSet<string> names)
         => IsRecursiveCall(inst, names) || IsReentrantFlagged(inst);
 
     // Round-9 [Y3]: a TailSpared instruction is a recursive-edge call SITE in tail position — the
     // frame reads nothing after it, so it is exempt from the per-callee-name wrap (one non-tail
     // site used to make every site of that callee spill, overflowing the stack on deep mixed
     // tail/non-tail recursion; the dispatch arm has always been per-site via Reentrant).
-    internal static bool IsRecursiveCall(CStmt inst, HashSet<string> names) => inst switch
+    internal static bool IsRecursiveCall(IFlatInstruction inst, HashSet<string> names) => inst switch
     {
         CExprStmt { Expr: CInternalCall ic } => !ic.TailSpared && names.Contains(ic.FuncName),
         CAssign { Value: CInternalCall ic } => !ic.TailSpared && names.Contains(ic.FuncName),
@@ -212,10 +212,10 @@ public static class CoreFlatOptimizer
         CStoreField => false,
         CLoadField => false,
         _ => throw new VerificationException(
-            $"Unknown flat CStmt kind in CoreFlatOptimizer.IsRecursiveCall: {StmtKind(inst)}"),
+            $"Unknown flat IFlatInstruction kind in CoreFlatOptimizer.IsRecursiveCall: {StmtKind(inst)}"),
     };
 
-    internal static bool IsReentrantFlagged(CStmt inst) => inst switch
+    internal static bool IsReentrantFlagged(IFlatInstruction inst) => inst switch
     {
         CExprStmt { Expr: CInternalCall ic } => ic.Reentrant,
         CExprStmt { Expr: CExternCall ec } => ec.Reentrant,
@@ -226,12 +226,12 @@ public static class CoreFlatOptimizer
         CStoreField => false,
         CLoadField => false,
         _ => throw new VerificationException(
-            $"Unknown flat CStmt kind in CoreFlatOptimizer.IsReentrantFlagged: {StmtKind(inst)}"),
+            $"Unknown flat IFlatInstruction kind in CoreFlatOptimizer.IsReentrantFlagged: {StmtKind(inst)}"),
     };
 
     // Wave-12 r2 [V1]: statements to pull inside the spill window ahead of a flagged cross-dispatch
     // SendCustomEvent (its SetProgramVariable copy-ins — see CExternCall.PreSpillStmts).
-    internal static int PreSpillStmtCount(CStmt inst) => inst switch
+    internal static int PreSpillStmtCount(IFlatInstruction inst) => inst switch
     {
         CExprStmt { Expr: CExternCall ec } => ec.PreSpillStmts,
         CExprStmt { Expr: CInternalCall } => 0, // pre-spill window is a cross-dispatch extern concept
@@ -240,11 +240,11 @@ public static class CoreFlatOptimizer
         CStoreField => 0,
         CLoadField => 0,
         _ => throw new VerificationException(
-            $"Unknown flat CStmt kind in CoreFlatOptimizer.PreSpillStmtCount: {StmtKind(inst)}"),
+            $"Unknown flat IFlatInstruction kind in CoreFlatOptimizer.PreSpillStmtCount: {StmtKind(inst)}"),
     };
 
     // Push order: fields then slots (reload pops in reverse → LIFO balanced).
-    static void EmitSpill(CFunction func, List<CStmt> output,
+    static void EmitSpill(FlatFunction func, List<IFlatInstruction> output,
         List<(string Name, StorageType Type)> fields, List<SlotDecl> slots,
         UdonAbiCatalog abiCatalog)
     {
@@ -258,7 +258,7 @@ public static class CoreFlatOptimizer
             SpillValue(func, output, new CSlotRef(slot.Id, slot.Type), abiCatalog);
     }
 
-    static void EmitReload(CFunction func, List<CStmt> output,
+    static void EmitReload(FlatFunction func, List<IFlatInstruction> output,
         List<(string Name, StorageType Type)> fields, List<SlotDecl> slots,
         UdonAbiCatalog abiCatalog)
     {
@@ -268,7 +268,7 @@ public static class CoreFlatOptimizer
             ReloadValue(func, output, -1, fields[i].Type, fields[i].Name, abiCatalog);
     }
 
-    static void SpillValue(CFunction func, List<CStmt> output, CLeaf valueLeaf,
+    static void SpillValue(FlatFunction func, List<IFlatInstruction> output, CLeaf valueLeaf,
         UdonAbiCatalog abiCatalog)
     {
         // __recurStack[__recurSp] = value (Udon boxes the typed value into the object[] element); __recurSp++
@@ -283,7 +283,7 @@ public static class CoreFlatOptimizer
         SpDelta(func, output, +1, abiCatalog);
     }
 
-    static void ReloadValue(CFunction func, List<CStmt> output, int slotId,
+    static void ReloadValue(FlatFunction func, List<IFlatInstruction> output, int slotId,
         StorageType type, string fieldName, UdonAbiCatalog abiCatalog)
     {
         // __recurSp--; value = __recurStack[__recurSp]  (Udon unboxes the object[] element on typed COPY)
@@ -303,7 +303,7 @@ public static class CoreFlatOptimizer
             output.Add(new CAssign(slotId, new CSlotRef(tGet, StorageTypes.Object)));
     }
 
-    static void SpDelta(CFunction func, List<CStmt> output, int delta,
+    static void SpDelta(FlatFunction func, List<IFlatInstruction> output, int delta,
         UdonAbiCatalog abiCatalog)
     {
         var tSp = func.NewSlot(StorageTypes.Int32, SlotClass.Scratch);
@@ -321,9 +321,9 @@ public static class CoreFlatOptimizer
     /// <summary>Interval-coalesce a function's slots. <paramref name="minSlotId"/> restricts the
     /// pass to slots with Id ≥ minSlotId ([X4]: the post-spill run merges only the fresh spill
     /// temps among themselves; the default 0 is the full pre-spill pass).</summary>
-    static void CoalesceSlotsFunc(CFunction func, int minSlotId = 0)
+    static void CoalesceSlotsFunc(FlatFunction func, int minSlotId = 0)
     {
-        if (func.FlatBlocks.Count == 0 || func.Slots.Count == 0) return;
+        if (func.Blocks.Count == 0 || func.Slots.Count == 0) return;
 
         // Step 1: exact per-block liveness (fixpoint) — computed ONCE and shared by both the interval
         // derivation below and the independent VerifyNoInterference checker (both consume the same
@@ -418,18 +418,18 @@ public static class CoreFlatOptimizer
         // Step 4: Rewrite all instructions and terminators. Drop self-copies (CAssign s = s) that arise when
         // a copy's source and destination coalesce to the same physical slot — A-normal form's binding temps
         // (t = producer; slot = t) become slot = slot once t≡slot, a no-op that must be removed.
-        foreach (var block in func.FlatBlocks)
+        foreach (var block in func.Blocks)
         {
-            var rewritten = new List<CStmt>(block.Stmts.Count);
-            foreach (var stmt in block.Stmts)
+            var rewritten = new List<IFlatInstruction>(block.Instructions.Count);
+            foreach (var stmt in block.Instructions)
             {
                 var r = RemapInst(stmt, mapping);
                 if (r is CAssign ca && ca.Value is CSlotRef csr && csr.SlotId == ca.DestSlot)
                     continue; // self-copy after coalescing — drop
                 rewritten.Add(r);
             }
-            block.Stmts.Clear();
-            block.Stmts.AddRange(rewritten);
+            block.Instructions.Clear();
+            block.Instructions.AddRange(rewritten);
 
             block.Terminator = RemapTerminator(block.Terminator, mapping);
         }
@@ -456,7 +456,7 @@ public static class CoreFlatOptimizer
     /// a new flat kind read/wrote nothing, the intervals shrank, and the checker agreed. Those switches
     /// now throw <see cref="VerificationException"/> on any unknown kind (pinned by
     /// FlatRoleSwitchCensusTests), so the shared-enumeration gap is loud before either side can be wrong.</summary>
-    internal static void VerifyNoInterference(CFunction func, Dictionary<int, int> mapping, Dictionary<int, HashSet<int>> blockLiveIn = null)
+    internal static void VerifyNoInterference(FlatFunction func, Dictionary<int, int> mapping, Dictionary<int, HashSet<int>> blockLiveIn = null)
     {
         if (mapping.Count == 0) return;
 
@@ -493,7 +493,7 @@ public static class CoreFlatOptimizer
     /// intervals are a strict superset of the per-instruction live sets <see cref="VerifyNoInterference"/>
     /// checks — that checker can therefore never fire on a map built from these intervals.</summary>
     static (Dictionary<int, int> Written, Dictionary<int, int> LastUsed) ComputeLivenessIntervals(
-        CFunction func, Dictionary<int, HashSet<int>> blockLiveIn)
+        FlatFunction func, Dictionary<int, HashSet<int>> blockLiveIn)
     {
         var rpo = FlatCfgOrder.ComputeRpo(func);
 
@@ -504,7 +504,7 @@ public static class CoreFlatOptimizer
         foreach (var block in rpo)
         {
             blockStartPos[block.Id] = p;
-            p += block.Stmts.Count + 1;
+            p += block.Instructions.Count + 1;
         }
 
         var start = new Dictionary<int, int>();
@@ -518,7 +518,7 @@ public static class CoreFlatOptimizer
         foreach (var block in rpo)
         {
             int basePos = blockStartPos[block.Id];
-            int termPos = basePos + block.Stmts.Count;
+            int termPos = basePos + block.Instructions.Count;
 
             // live-out of the terminator = union of successor block live-ins.
             var live = new HashSet<int>();
@@ -534,13 +534,13 @@ public static class CoreFlatOptimizer
             }
             // live is now live-in of the terminator = live-out of the last statement.
 
-            for (int i = block.Stmts.Count - 1; i >= 0; i--)
+            for (int i = block.Instructions.Count - 1; i >= 0; i--)
             {
                 int pos = basePos + i;
                 foreach (var slot in live) Mark(slot, pos);        // slot live-OUT of statement i
-                var d = GetWrittenSlot(block.Stmts[i]);
+                var d = GetWrittenSlot(block.Instructions[i]);
                 if (d.HasValue) { Mark(d.Value, pos); live.Remove(d.Value); }
-                foreach (var r in GetReadSlotsInst(block.Stmts[i])) { Mark(r, pos); live.Add(r); }
+                foreach (var r in GetReadSlotsInst(block.Instructions[i])) { Mark(r, pos); live.Add(r); }
             }
         }
 
@@ -552,7 +552,7 @@ public static class CoreFlatOptimizer
     // explicit arms, and the default throws — a silently-defaulting arm here corrupts liveness, and
     // VerifyNoInterference (derived from these same functions) would stay green while it happened.
 
-    internal static int? GetWrittenSlot(CStmt inst) => inst switch
+    internal static int? GetWrittenSlot(IFlatInstruction inst) => inst switch
     {
         CAssign m => m.DestSlot,
         CRepresentationCopy copy => copy.DestSlot,
@@ -561,10 +561,10 @@ public static class CoreFlatOptimizer
         CExprStmt { Expr: CExternCall ce } => ce.DestSlot,
         CExprStmt { Expr: CInternalCall ci } => ci.DestSlot,
         _ => throw new VerificationException(
-            $"Unknown flat CStmt kind in CoreFlatOptimizer.GetWrittenSlot: {StmtKind(inst)}"),
+            $"Unknown flat IFlatInstruction kind in CoreFlatOptimizer.GetWrittenSlot: {StmtKind(inst)}"),
     };
 
-    internal static IEnumerable<int> GetReadSlotsInst(CStmt inst)
+    internal static IEnumerable<int> GetReadSlotsInst(IFlatInstruction inst)
     {
         switch (inst)
         {
@@ -590,7 +590,7 @@ public static class CoreFlatOptimizer
                 break;
             default:
                 throw new VerificationException(
-                    $"Unknown flat CStmt kind in CoreFlatOptimizer.GetReadSlotsInst: {StmtKind(inst)}");
+                    $"Unknown flat IFlatInstruction kind in CoreFlatOptimizer.GetReadSlotsInst: {StmtKind(inst)}");
         }
     }
 
@@ -658,7 +658,7 @@ public static class CoreFlatOptimizer
         return result;
     }
 
-    internal static CStmt RemapInst(CStmt inst, Dictionary<int, int> mapping) => inst switch
+    internal static IFlatInstruction RemapInst(IFlatInstruction inst, Dictionary<int, int> mapping) => inst switch
     {
         CAssign m => new CAssign(RemapSlotId(m.DestSlot, mapping), RemapOperand(m.Value, mapping)),
         CRepresentationCopy copy => new CRepresentationCopy(
@@ -674,7 +674,7 @@ public static class CoreFlatOptimizer
         CExprStmt { Expr: CExternCall ce } => new CExprStmt(ce.With(RemapArgs(ce.Args, mapping), RemapSlotIdNullable(ce.DestSlot, mapping))),
         CExprStmt { Expr: CInternalCall ci } => new CExprStmt(ci.With(RemapArgs(ci.Args, mapping), RemapSlotIdNullable(ci.DestSlot, mapping))),
         _ => throw new VerificationException(
-            $"Unknown flat CStmt kind in CoreFlatOptimizer.RemapInst: {StmtKind(inst)}"),
+            $"Unknown flat IFlatInstruction kind in CoreFlatOptimizer.RemapInst: {StmtKind(inst)}"),
     };
 
     internal static CTerminator RemapTerminator(CTerminator term, Dictionary<int, int> mapping) => term switch
@@ -687,9 +687,9 @@ public static class CoreFlatOptimizer
             $"Unknown CTerminator kind in CoreFlatOptimizer.RemapTerminator: {TermKind(term)}"),
     };
 
-    // Kind naming for the loud defaults above (mirrors CoreVerify's "Unknown CStmt type" voice; a
+    // Kind naming for the loud defaults above (mirrors CoreVerify's "Unknown IFlatInstruction type" voice; a
     // CExprStmt names its payload too, since the flat arms discriminate on it).
-    static string StmtKind(CStmt inst) => inst switch
+    static string StmtKind(IFlatInstruction inst) => inst switch
     {
         null => "null",
         CExprStmt es => $"CExprStmt({es.Expr.GetType().Name})",

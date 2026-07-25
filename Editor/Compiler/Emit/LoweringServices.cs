@@ -19,7 +19,7 @@ public sealed partial class LoweringServices
     internal INamedTypeSymbol ClassSymbol => _classSymbol;
     internal CoreBuilder Builder => _builder;
     internal LayoutPlanner Planner => _planner;
-    internal IReadOnlyDictionary<IMethodSymbol, CFunction> MethodFunctions => _methodFunctions;
+    internal IReadOnlyDictionary<IMethodSymbol, StructuredFunction> MethodFunctions => _methodFunctions;
     internal IReadOnlyDictionary<IMethodSymbol, ReturnSlot[]> MethodReturns => _methodReturns;
     internal IReadOnlyDictionary<IMethodSymbol, string[]> MethodParamVarIds => _methodParamVarIds;
     internal IMethodSymbol CurrentMethod
@@ -36,10 +36,10 @@ public sealed partial class LoweringServices
     // ── Property shims to EmitContext ──
     internal Compilation _compilation => _ctx.Compilation;
     internal INamedTypeSymbol _classSymbol => _ctx.ClassSymbol;
-    internal CModule _module => _ctx.Module;
+    internal StructuredModule _module => _ctx.Module;
     internal CoreBuilder _builder => _ctx.Builder;
     internal LayoutPlanner _planner => _ctx.Planner;
-    internal IReadOnlyDictionary<IMethodSymbol, CFunction> _methodFunctions => _ctx.Methods.Functions;
+    internal IReadOnlyDictionary<IMethodSymbol, StructuredFunction> _methodFunctions => _ctx.Methods.Functions;
     internal IReadOnlyDictionary<IMethodSymbol, EmitContext.MethodSlot> _methodSlots => _ctx.Methods.Slots;
     internal IReadOnlyDictionary<IMethodSymbol, ReturnSlot[]> _methodReturns => _ctx.Methods.Returns;
     internal IReadOnlyDictionary<IMethodSymbol, string[]> _methodParamVarIds => _ctx.Methods.ParamVarIds;
@@ -1782,7 +1782,7 @@ public sealed partial class LoweringServices
     internal IMethodSymbol SubstituteMethodTypeArgs(IMethodSymbol target)
         => TypeEnvironment.CloseMethod(_compilation, target, _typeParamMap);
 
-    /// <summary>Register a monomorphized generic specialization: CFunction + ordinal param vars +
+    /// <summary>Register a monomorphized generic specialization: StructuredFunction + ordinal param vars +
     /// return slot, queued on PendingGenericSpecs for the post-body emission drain. Idempotent per
     /// constructed symbol. (Moved from InvocationHandler when [W7] gave the delegate-creation path a
     /// second caller — one registration knowledge source.)</summary>
@@ -1880,10 +1880,10 @@ public sealed partial class LoweringServices
     /// (VisitInvocation). Every OTHER struct-member call site instead depended solely on
     /// CollectStructMethodsInOperation's pre-pass, which deliberately SKIPS this same open-form
     /// self-reference (IsCollectibleStructMember's feature-G comment — collecting it registers a dead
-    /// second CFunction that corrupted definition-keyed recursion bookkeeping). So a member reached
+    /// second StructuredFunction that corrupted definition-keyed recursion bookkeeping). So a member reached
     /// ONLY via internal self/sibling reference — e.g. a computed property read by a sibling method, an
     /// indexer used from within another instance method, a ctor called from a same-struct helper, or an
-    /// operator/conversion invoked from another operator's body — never got a CFunction and fell through
+    /// operator/conversion invoked from another operator's body — never got a StructuredFunction and fell through
     /// to a bogus SystemObjectArray extern (VM-proven: DiffFuzz wave-14 8/10 UsugarRejected). Substitute
     /// through the live type-param map, then register on demand exactly like a plain self-recursive
     /// call — both operations are idempotent, so this is a no-op for non-generic structs and for members
@@ -2418,7 +2418,7 @@ public sealed partial class LoweringServices
         return isSet ? null : SlotRef(destSlot);
     }
 
-    /// <summary>One dispatch arm's impl access. A COMPUTED accessor impl is a direct CFunction call
+    /// <summary>One dispatch arm's impl access. A COMPUTED accessor impl is a direct StructuredFunction call
     /// (receiver + index args [+ value] — the same convention as the static arms); an AUTO accessor
     /// impl has no body, so it lowers to a layout-slot read/write against the CONCRETE target's layout
     /// (an auto OVERRIDE's backing slot exists only in the concrete layout; a base auto slot keeps its
@@ -2837,13 +2837,13 @@ public sealed partial class LoweringServices
     /// </summary>
     internal CLeaf EmitCallToMethod(IMethodSymbol target, List<CLeaf> args, SyntaxNode callSite = null)
     {
-        CFunction func;
+        StructuredFunction func;
         // SS2B: non-generic hoisted closures resolve per-spec (ambient args) with throw-on-miss —
         // a bare-symbol fallback here would silently call another spec's copy.
         if (target.MethodKind is MethodKind.LambdaMethod or MethodKind.LocalFunction)
             func = _ctx.Methods.GetClosureSpec(target, _ctx.ComposeClosureKeyArgs(target)).Function;
         else if (!_methodFunctions.TryGetValue(target, out func))
-            throw new InvalidOperationException($"No CFunction registered for method '{target.Name}'");
+            throw new InvalidOperationException($"No StructuredFunction registered for method '{target.Name}'");
         var retType = func.ReturnType ?? StorageTypes.Void;
 
         // Recursion-cycle edge: the callee can re-enter the current method and clobber its param/local fields
@@ -2871,7 +2871,7 @@ public sealed partial class LoweringServices
 
     /// <summary>Loud-fail armor for the struct-member-REACHABILITY side of walk-scope drift — the
     /// analogue of <see cref="ClosureEnvLeaf"/> on the delegate-capture side. A user-struct member
-    /// only reaches generic SDK ABI binding (a method or accessor path) when it has NO registered CFunction —
+    /// only reaches generic SDK ABI binding (a method or accessor path) when it has NO registered StructuredFunction —
     /// i.e. a Phase-1 collector (CollectStructMethodsInOperation / CollectForeignStaticCallsInOperation)
     /// or an on-demand ResolveStructMember arm did not cover this member/reach shape. Historically that
     /// silently minted a bogus <c>SystemObjectArray.__&lt;Name&gt;__…</c> extern that only UasmValidator
@@ -2883,12 +2883,12 @@ public sealed partial class LoweringServices
     internal void GuardUserStructMemberReachedExtern(ITypeSymbol containingType, string memberName)
     {
         // CA-M1: the same armor covers a v1 class member (object[]-emulated) — a class instance member
-        // that reached the extern path was not routed to its CFunction (collector-scope drift), which
+        // that reached the extern path was not routed to its StructuredFunction (collector-scope drift), which
         // would otherwise mint a bogus SystemObjectArray.__<Name>__ extern.
         if (containingType is INamedTypeSymbol ct && TypeClassifier.IsObjectArrayEmulated(ct))
             throw new InvalidOperationException(
                 $"user struct/class member '{ct.Name}.{memberName}' reached emission without a registered "
-                + "CFunction — a Phase-1 collector or on-demand registration arm does not cover this "
+                + "StructuredFunction — a Phase-1 collector or on-demand registration arm does not cover this "
                 + "member/reach shape (collector-scope drift; see roadmap B46/B47 family).");
     }
 
@@ -2937,7 +2937,7 @@ public sealed partial class LoweringServices
     /// <summary>Accumulate the UNION of in-scope frame fields across every spill site: a later site has
     /// more locals in scope than an earlier one, and the post-pass uses a single field set for all sites.
     /// Over-spilling a not-yet-assigned local at an earlier site is inert (its garbage is saved/restored).</summary>
-    void AccumulateRecursionSpillFields(CFunction cf)
+    void AccumulateRecursionSpillFields(StructuredFunction cf)
     {
         foreach (var f in CollectRecursionSpillFields())
         {

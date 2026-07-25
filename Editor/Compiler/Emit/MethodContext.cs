@@ -15,7 +15,7 @@ public sealed class MethodContext
     public class RegisteredCallable
     {
         public readonly IMethodSymbol Definition;
-        public readonly CFunction Function;
+        public readonly StructuredFunction Function;
         public readonly EmitContext.MethodSlot Slot;
         public readonly string[] ParamVarIds;
         public readonly ReturnSlot[] ReturnSlots;
@@ -25,7 +25,7 @@ public sealed class MethodContext
         public readonly string Name;
         public readonly IMethodSymbol TargetDefinition;
 
-        public RegisteredCallable(IMethodSymbol definition, CFunction function,
+        public RegisteredCallable(IMethodSymbol definition, StructuredFunction function,
             EmitContext.MethodSlot slot, string[] paramVarIds, ReturnSlot[] returnSlots,
             ReceiverAbi receiver, CallableKind kind, string name,
             MethodLayout layout = null, IMethodSymbol targetDefinition = null)
@@ -48,14 +48,14 @@ public sealed class MethodContext
     readonly Dictionary<string, RegisteredCallable> _syntheticCallables = new(StringComparer.Ordinal);
     public IReadOnlyDictionary<IMethodSymbol, RegisteredCallable> Callables => _callables;
     public IReadOnlyDictionary<string, RegisteredCallable> SyntheticCallables => _syntheticCallables;
-    public IReadOnlyDictionary<IMethodSymbol, CFunction> Functions { get; }
+    public IReadOnlyDictionary<IMethodSymbol, StructuredFunction> Functions { get; }
     public IReadOnlyDictionary<IMethodSymbol, EmitContext.MethodSlot> Slots { get; }
     public IReadOnlyDictionary<IMethodSymbol, ReturnSlot[]> Returns { get; }
     public IReadOnlyDictionary<IMethodSymbol, string[]> ParamVarIds { get; }
 
     public MethodContext()
     {
-        Functions = new CallableProjection<CFunction>(_callables, c => c.Function);
+        Functions = new CallableProjection<StructuredFunction>(_callables, c => c.Function);
         Slots = new CallableProjection<EmitContext.MethodSlot>(_callables, c => c.Slot);
         Returns = new CallableProjection<ReturnSlot[]>(_callables, c => c.ReturnSlots,
             c => c.ReturnSlots.Length > 0);
@@ -76,7 +76,7 @@ public sealed class MethodContext
         return new EmitContext.MethodSlot(idx, prefixFactory(idx));
     }
 
-    public RegisteredCallable AddCallable(IMethodSymbol method, CFunction function,
+    public RegisteredCallable AddCallable(IMethodSymbol method, StructuredFunction function,
         EmitContext.MethodSlot slot, string[] paramVarIds, ReturnSlot[] returnSlots,
         ReceiverAbi receiver = ReceiverAbi.None, MethodLayout layout = null)
     {
@@ -137,7 +137,7 @@ public sealed class MethodContext
     // ── Per-spec hoisted closures (design 2026-07-10 v3 §2B, B64/B70 root fix) ──
     //
     // A lambda / non-generic local function's IMethodSymbol is DEFINITION-EQUAL across the enclosing
-    // generic's instantiations ([Y8]), so a bare symbol key shares ONE hoisted CFunction across specs —
+    // generic's instantiations ([Y8]), so a bare symbol key shares ONE hoisted StructuredFunction across specs —
     // the closure body is then baked with the first spec's type arguments and its flat bookkeeping
     // aliases (VM-proven B64/B70/B89). Every hoisted closure therefore registers under a composite
     // (definition, enclosing-spec type-args) key. The args component uses CLR SYMBOL identity
@@ -146,7 +146,7 @@ public sealed class MethodContext
     // A closure in a non-generic context has an EMPTY args vector — the key degenerates 1:1 to the
     // definition and behavior is byte-identical to the old symbol keying.
 
-    /// <summary>Everything a per-spec hoisted closure owns: its CFunction, flat param/return field
+    /// <summary>Everything a per-spec hoisted closure owns: its StructuredFunction, flat param/return field
     /// ids, its hidden __envp field id (null for capture-free), the enclosing constructed specs it
     /// was registered under (drives the type-param compose at its own emission — replacing the
     /// fallback lookup), and the composite key args.</summary>
@@ -156,7 +156,7 @@ public sealed class MethodContext
         public readonly ImmutableArray<IMethodSymbol> OwnerSpecs;
         public readonly string EnvpFieldId;
 
-        public ClosureSpec(IMethodSymbol definition, CFunction function, EmitContext.MethodSlot slot,
+        public ClosureSpec(IMethodSymbol definition, StructuredFunction function, EmitContext.MethodSlot slot,
             string[] paramVarIds, ReturnSlot[] returnSlots, ImmutableArray<ITypeSymbol> keyArgs,
             ImmutableArray<IMethodSymbol> ownerSpecs, string envpFieldId)
             : base(definition, function, slot, paramVarIds, returnSlots, ReceiverAbi.None,
@@ -328,7 +328,7 @@ public sealed class MethodContext
 
     public ClosureSpec AddClosureCallable(IMethodSymbol definition,
         ImmutableArray<ITypeSymbol> keyArgs, ImmutableArray<IMethodSymbol> ownerSpecs,
-        CFunction function, EmitContext.MethodSlot slot, string[] paramVarIds,
+        StructuredFunction function, EmitContext.MethodSlot slot, string[] paramVarIds,
         ReturnSlot[] returnSlots, string envpFieldId)
     {
         if (definition == null || function == null || paramVarIds == null || returnSlots == null)
@@ -340,7 +340,7 @@ public sealed class MethodContext
         return spec;
     }
 
-    public RegisteredCallable AddSyntheticCallable(string name, CFunction function,
+    public RegisteredCallable AddSyntheticCallable(string name, StructuredFunction function,
         IMethodSymbol signatureMethod, IMethodSymbol targetMethod, CallableKind kind,
         string[] paramVarIds = null, ReturnSlot[] returnSlots = null)
     {

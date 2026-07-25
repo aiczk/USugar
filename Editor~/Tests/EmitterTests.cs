@@ -2217,14 +2217,14 @@ public class ShimTest : UdonSharpBehaviour {
         // Must NOT use the generic __GetComponent__T extern (that's for Unity types only)
         Assert.DoesNotContain("__GetComponent__T", uasm);
         Assert.Contains(
-            emitter.Module.Functions.SelectMany(function => function.FlatBlocks)
-                .SelectMany(block => block.Stmts),
+            emitter.FlatModule.Functions.SelectMany(function => function.Blocks)
+                .SelectMany(block => block.Instructions),
             statement => statement is CRepresentationCopy
             {
                 Kind: RepresentationCastKind.VerifiedUdonBehaviourComponent,
             });
-        var metadataLoads = emitter.Module.Functions.SelectMany(function => function.FlatBlocks)
-            .SelectMany(block => block.Stmts)
+        var metadataLoads = emitter.FlatModule.Functions.SelectMany(function => function.Blocks)
+            .SelectMany(block => block.Instructions)
             .OfType<CExprStmt>()
             .Select(statement => statement.Expr)
             .OfType<CExternCall>()
@@ -2298,8 +2298,8 @@ public class QMatrix : UdonSharpBehaviour {
         Assert.Contains("UnityEngineComponent.__GetComponent__T", uasm);
         Assert.Contains("UnityEngineComponent.__GetComponents__SystemType__UnityEngineComponentArray", uasm);
 
-        var queries = emitter.Module.Functions.SelectMany(function => function.FlatBlocks)
-            .SelectMany(block => block.Stmts)
+        var queries = emitter.FlatModule.Functions.SelectMany(function => function.Blocks)
+            .SelectMany(block => block.Instructions)
             .OfType<CExprStmt>()
             .Select(statement => statement.Expr)
             .OfType<CExternCall>()

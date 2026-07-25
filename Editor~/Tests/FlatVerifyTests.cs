@@ -8,42 +8,41 @@ namespace USugar.Tests;
 /// structural violations it can still be handed at runtime. With operand positions retyped to
 /// CLeaf (re-arming the guarantee LIR's separate LOperand type gave for free), a nested call in a
 /// call argument and a CFieldLoad in a CStoreField value are now compile-time-prevented — they can
-/// no longer be constructed, so their former negative tests are gone. The remaining violations
-/// (missing/dangling terminators, a CFieldAddr in a CAssign value, a structured statement leaking
-/// into a flat block, a non-flat shape) flow through CValue positions and stay runtime-checked.
+/// no longer be constructed, so their former negative tests are gone. Missing/dangling terminators
+/// and invalid leaf uses remain runtime-checked; phase mixing is rejected by the type system.
 /// The positive case (well-formed CoreFlatten output passes) has no dedicated unit-test file —
 /// it is exercised by every compiling test, since IrPipeline runs FlatVerify on each compile.
 /// </summary>
 public class FlatVerifyTests
 {
-    static CFunction Flat(params CBlock[] blocks)
+    static FlatFunction Flat(params FlatBlock[] blocks)
     {
-        var f = new CFunction("f", "_f") { Shape = Shape.Flat };
-        foreach (var b in blocks) f.FlatBlocks.Add(b);
+        var f = new FlatFunction("f", "_f");
+        foreach (var b in blocks) f.Blocks.Add(b);
         return f;
     }
 
-    static CBlock Block(int id, List<CStmt> insts, CTerminator term)
-        => new CBlock(insts) { Id = id, Terminator = term };
+    static FlatBlock Block(int id, List<IFlatInstruction> insts, CTerminator term)
+        => new FlatBlock(id, insts, term);
 
     [Fact]
     public void WellFormed_Passes()
     {
-        var f = Flat(Block(0, new List<CStmt> { new CAssign(0, new CConst(1, StorageTypes.Int32)) }, new CRet()));
+        var f = Flat(Block(0, new List<IFlatInstruction> { new CAssign(0, new CConst(1, StorageTypes.Int32)) }, new CRet()));
         FlatVerify.Verify(f); // no throw
     }
 
     [Fact]
     public void MissingTerminator_Throws()
     {
-        var b = new CBlock(new List<CStmt>()) { Id = 0 }; // Terminator left null
+        var b = new FlatBlock(0); // Terminator left null
         Assert.ThrowsAny<System.Exception>(() => FlatVerify.Verify(Flat(b)));
     }
 
     [Fact]
     public void DanglingJumpTarget_Throws()
     {
-        var f = Flat(Block(0, new List<CStmt>(), new CJump(99)));
+        var f = Flat(Block(0, new List<IFlatInstruction>(), new CJump(99)));
         Assert.ThrowsAny<System.Exception>(() => FlatVerify.Verify(f));
     }
 
@@ -55,29 +54,27 @@ public class FlatVerifyTests
     public void AddrFieldRef_AsAssignValue_Throws_OnlyValidAsCallArg()
     {
         var f = Flat(Block(0,
-            new List<CStmt> { new CAssign(0, new CFieldAddr("y", StorageTypes.Int32)) },
+            new List<IFlatInstruction> { new CAssign(0, new CFieldAddr("y", StorageTypes.Int32)) },
             new CRet()));
         Assert.ThrowsAny<System.Exception>(() => FlatVerify.Verify(f));
     }
 
     [Fact]
-    public void StructuredStatementInFlatBlock_Throws()
+    public void StructuredControlFlowCannotEnterFlatInstructionList()
     {
-        var leaked = new CIf(new CSlotRef(0, StorageTypes.Boolean), new CBlock(), new CBlock());
-        var f = Flat(Block(0, new List<CStmt> { leaked }, new CRet()));
-        Assert.ThrowsAny<System.Exception>(() => FlatVerify.Verify(f));
+        Assert.False(typeof(IFlatInstruction).IsAssignableFrom(typeof(CIf)));
     }
 
     [Fact]
-    public void NonFlatShape_Throws()
+    public void StructuredAndFlatFunctionsAreDifferentPhaseTypes()
     {
-        Assert.ThrowsAny<System.Exception>(() => FlatVerify.Verify(new CFunction("f"))); // Shape defaults to Structured
+        Assert.False(typeof(FlatFunction).IsAssignableFrom(typeof(StructuredFunction)));
     }
 
     // ── Reentrant-flag conservation (design §4.3) ──
     // CoreFlatten and CoalesceSlots/RemapInst REBUILD call instructions; a rebuild that drops the
     // Reentrant flag silently loses the dispatch-site recursion spill. FlatVerify must catch the
-    // imbalance structurally: flat flag count must equal CFunction.ReentrantSiteCount.
+    // imbalance structurally: flat flag count must equal FlatFunction.ReentrantSiteCount.
 
     [Fact]
     public void ReentrantFlagLost_Throws()
@@ -85,7 +82,7 @@ public class FlatVerifyTests
         // The function claims one Reentrant dispatch arm, but the flat stream carries none —
         // the signature of a rebuild pass that forgot to copy the flag.
         var f = Flat(Block(0,
-            new List<CStmt> { new CExprStmt(new CInternalCall("__indirect",
+            new List<IFlatInstruction> { new CExprStmt(new CInternalCall("__indirect",
                 new List<CLeaf> { new CSlotRef(0, StorageTypes.UInt32) }, StorageTypes.Void)) },
             new CRet()));
         f.ReentrantSiteCount = 1;
@@ -98,7 +95,7 @@ public class FlatVerifyTests
     {
         // The inverse imbalance (more flags than registered sites) is equally a verifier error.
         var f = Flat(Block(0,
-            new List<CStmt> { new CExprStmt(new CInternalCall("__indirect",
+            new List<IFlatInstruction> { new CExprStmt(new CInternalCall("__indirect",
                 new List<CLeaf> { new CSlotRef(0, StorageTypes.UInt32) }, StorageTypes.Void, null, reentrant: true)) },
             new CRet()));
         f.ReentrantSiteCount = 0;
@@ -110,7 +107,7 @@ public class FlatVerifyTests
     {
         // Balanced internal-call (self arm) + extern-call (cross arm) flags verify clean.
         var f = Flat(Block(0,
-            new List<CStmt>
+            new List<IFlatInstruction>
             {
                 new CExprStmt(new CInternalCall("__indirect",
                     new List<CLeaf> { new CSlotRef(0, StorageTypes.UInt32) }, StorageTypes.Void, null, reentrant: true)),
@@ -147,7 +144,7 @@ public class FlatVerifyTests
     public void PreSpillStmts_ExceedsAvailablePrecedingStatements_Throws()
     {
         // PreSpillStmts=1 claims one preceding copy-in, but this is the first instruction in the block.
-        var f = Flat(Block(0, new List<CStmt> { SendEvent(0, 1, preSpillStmts: 1) }, new CRet()));
+        var f = Flat(Block(0, new List<IFlatInstruction> { SendEvent(0, 1, preSpillStmts: 1) }, new CRet()));
         f.ReentrantSiteCount = 1;
         var ex = Assert.ThrowsAny<System.Exception>(() => FlatVerify.Verify(f));
         Assert.Contains("PreSpillStmts", ex.Message);
@@ -160,7 +157,7 @@ public class FlatVerifyTests
         // SetProgramVariable copy-in — exactly what a future edit inserting a statement between a
         // hand-emitted copy-in/dispatch pair (LoweringServices's interface-setter dispatch) would produce.
         var f = Flat(Block(0,
-            new List<CStmt>
+            new List<IFlatInstruction>
             {
                 new CAssign(2, new CConst(1, StorageTypes.Int32)),
                 SendEvent(0, 1, preSpillStmts: 1),
@@ -177,7 +174,7 @@ public class FlatVerifyTests
         // A copy-in-shaped call that (incorrectly) binds a result slot is not a void self-effecting
         // SetProgramVariable — the spill window's "no value survives this call" assumption would be wrong.
         var f = Flat(Block(0,
-            new List<CStmt>
+            new List<IFlatInstruction>
             {
                 new CExprStmt(new CExternCall(
                     TestHelper.BindExtern(
@@ -195,7 +192,7 @@ public class FlatVerifyTests
     public void PreSpillStmts_CorrectShape_Passes()
     {
         var f = Flat(Block(0,
-            new List<CStmt> { SetVar(0, 1), SendEvent(0, 2, preSpillStmts: 1) },
+            new List<IFlatInstruction> { SetVar(0, 1), SendEvent(0, 2, preSpillStmts: 1) },
             new CRet()));
         f.ReentrantSiteCount = 1;
         FlatVerify.Verify(f); // no throw
@@ -206,7 +203,7 @@ public class FlatVerifyTests
     {
         // Mirrors LowerCrossCall: N SetProgramVariable copy-ins back-to-back, then the flagged dispatch.
         var f = Flat(Block(0,
-            new List<CStmt> { SetVar(0, 1), SetVar(0, 2), SetVar(0, 3), SendEvent(0, 4, preSpillStmts: 3) },
+            new List<IFlatInstruction> { SetVar(0, 1), SetVar(0, 2), SetVar(0, 3), SendEvent(0, 4, preSpillStmts: 3) },
             new CRet()));
         f.ReentrantSiteCount = 1;
         FlatVerify.Verify(f); // no throw

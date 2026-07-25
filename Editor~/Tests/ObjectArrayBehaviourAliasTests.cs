@@ -84,8 +84,8 @@ public class AliasHost : UdonSharpBehaviour
         TestHelper.CompileToUasm(Source, "AliasHost", out var emitter);
 
         Assert.DoesNotContain(
-            emitter.Module.Functions.SelectMany(function => function.FlatBlocks)
-                .SelectMany(block => block.Stmts),
+            emitter.FlatModule.Functions.SelectMany(function => function.Blocks)
+                .SelectMany(block => block.Instructions),
             statement => statement is CRepresentationCopy
             {
                 Kind: RepresentationCastKind.ClosedGenericObjectCast,

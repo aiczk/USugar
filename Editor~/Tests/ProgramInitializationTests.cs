@@ -49,8 +49,8 @@ public class InitOnce : UdonSharpBehaviour
                      && field.Type == StorageTypes.Boolean
                      && field.DefaultValue is false);
         var initializer = Assert.Single(
-            emitter.Module.Functions.Where(f => f.Name == ProgramInitializationEmitter.FunctionName));
-        Assert.Single(initializer.FlatBlocks.SelectMany(block => block.Stmts)
+            emitter.FlatModule.Functions.Where(f => f.Name == ProgramInitializationEmitter.FunctionName));
+        Assert.Single(initializer.Blocks.SelectMany(block => block.Instructions)
             .OfType<CExprStmt>()
             .Select(statement => statement.Expr)
             .OfType<CExternCall>()

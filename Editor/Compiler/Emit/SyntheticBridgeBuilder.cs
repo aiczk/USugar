@@ -94,7 +94,7 @@ public sealed class SyntheticBridgeBuilder
     public void CallExternVoid(UdonAbiKey signature, params CLeaf[] args)
         => _builder.EmitExternVoid(signature, new List<CLeaf>(args));
 
-    public CLeaf CallInternal(CFunction function, params CLeaf[] args)
+    public CLeaf CallInternal(StructuredFunction function, params CLeaf[] args)
     {
         var returnType = function.ReturnType ?? StorageTypes.Void;
         var call = _builder.InternalCall(function.Name, new List<CLeaf>(args), returnType);

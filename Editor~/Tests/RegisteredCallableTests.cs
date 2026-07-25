@@ -21,7 +21,7 @@ public class RegisteredCallableTests
             tree.GetRoot().DescendantNodes().OfType<MethodDeclarationSyntax>().Single());
         var context = new MethodContext();
         var slot = context.Reserve(i => "m" + i);
-        var function = new CFunction("M");
+        var function = new StructuredFunction("M");
         var parameters = new[] { "value" };
         var returns = new[] { new ReturnSlot("result", StorageTypes.Int32) };
 
@@ -42,7 +42,7 @@ public class RegisteredCallableTests
     public void AddSyntheticCallable_UsesSharedCallableRecord()
     {
         var context = new MethodContext();
-        var function = new CFunction("__bridge_M");
+        var function = new StructuredFunction("__bridge_M");
 
         var callable = context.AddSyntheticCallable("__bridge_M", function, null, null,
             MethodContext.CallableKind.Bridge);

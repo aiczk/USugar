@@ -18,7 +18,7 @@ namespace USugar.Tests;
 /// </summary>
 public class FlatRoleSwitchCensusTests
 {
-    sealed class FakeStmt : CStmt { }
+    sealed class FakeStmt : IFlatInstruction { }
     sealed class FakeTerminator : CTerminator { }
 
     static readonly Dictionary<int, int> EmptyMap = new();
@@ -42,11 +42,11 @@ public class FlatRoleSwitchCensusTests
         yield return TermProbe("GetSuccessors", t => CTerminator.GetSuccessors(t));
     }
 
-    static object[] Probe(string name, Action<CStmt> f) => new object[] { name, f };
+    static object[] Probe(string name, Action<IFlatInstruction> f) => new object[] { name, f };
     static object[] TermProbe(string name, Action<CTerminator> f) => new object[] { name, f };
 
-    // The flat-role CStmt domain — FlatVerify.VerifyInstruction's arms, one instance per shape.
-    static IEnumerable<CStmt> KnownFlatStmts()
+    // The flat-role IFlatInstruction domain — FlatVerify.VerifyInstruction's arms, one instance per shape.
+    static IEnumerable<IFlatInstruction> KnownFlatStmts()
     {
         yield return new CAssign(0, new CConst(1, StorageTypes.Int32));
         yield return new CAssign(0, new CSlotRef(1, StorageTypes.Int32));
@@ -78,7 +78,7 @@ public class FlatRoleSwitchCensusTests
 
     [Theory]
     [MemberData(nameof(StmtSwitches))]
-    public void UnknownFlatStmtKind_ThrowsNamingSwitchAndKind(string switchName, Action<CStmt> probe)
+    public void UnknownFlatStmtKind_ThrowsNamingSwitchAndKind(string switchName, Action<IFlatInstruction> probe)
     {
         var ex = Assert.Throws<VerificationException>(() => probe(new FakeStmt()));
         Assert.Contains(switchName, ex.Message);
@@ -96,7 +96,7 @@ public class FlatRoleSwitchCensusTests
 
     [Theory]
     [MemberData(nameof(StmtSwitches))]
-    public void EveryKnownFlatStmtKind_IsHandledExplicitly(string switchName, Action<CStmt> probe)
+    public void EveryKnownFlatStmtKind_IsHandledExplicitly(string switchName, Action<IFlatInstruction> probe)
     {
         Assert.NotNull(switchName);
         foreach (var stmt in KnownFlatStmts())

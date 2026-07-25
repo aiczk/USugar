@@ -272,9 +272,9 @@ public class SR_InitOrder : UdonSharpBehaviour {
 
         // The one-shot construction function, rather than _start specifically, owns both tiers.
         // Static Table must be stored before the instance initializer reads it into fromTable.
-        var initialization = Assert.Single(emitter.Module.Functions
+        var initialization = Assert.Single(emitter.FlatModule.Functions
             .Where(function => function.Name == ProgramInitializationEmitter.FunctionName));
-        var stores = initialization.FlatBlocks.SelectMany(block => block.Stmts)
+        var stores = initialization.Blocks.SelectMany(block => block.Instructions)
             .OfType<CStoreField>().Select(store => store.FieldName).ToArray();
         int tableStore = Array.IndexOf(stores, "Table");
         int instanceStore = Array.IndexOf(stores, "fromTable");

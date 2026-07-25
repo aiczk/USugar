@@ -10,7 +10,7 @@ using Microsoft.CodeAnalysis;
 /// </summary>
 internal sealed class SyntheticDemandPlan
 {
-    readonly IReadOnlyDictionary<string, CFunction> _closureBridgeFunctions;
+    readonly IReadOnlyDictionary<string, StructuredFunction> _closureBridgeFunctions;
 
     public readonly IReadOnlyCollection<DelegateBridgeDemand> ReceiverBridges;
     public readonly IReadOnlyCollection<DelegateBridgeDemand> DelegateBridges;
@@ -20,7 +20,7 @@ internal sealed class SyntheticDemandPlan
     public readonly IReadOnlyDictionary<string, DelegateWrapperDemand> WrapperSignatures;
 
     public SyntheticDemandPlan(
-        IDictionary<string, CFunction> closureBridgeFunctions,
+        IDictionary<string, StructuredFunction> closureBridgeFunctions,
         IEnumerable<DelegateBridgeDemand> receiverBridges,
         IEnumerable<DelegateBridgeDemand> delegateBridges,
         IDictionary<string, MulticastSigPlan> multicastSignatures,
@@ -37,7 +37,7 @@ internal sealed class SyntheticDemandPlan
         WrapperSignatures = CopyMap(wrapperSignatures);
     }
 
-    public bool TryGetClosureBridge(string name, out CFunction function)
+    public bool TryGetClosureBridge(string name, out StructuredFunction function)
         => _closureBridgeFunctions.TryGetValue(name, out function);
 
     static IReadOnlyDictionary<string, TValue> CopyMap<TValue>(

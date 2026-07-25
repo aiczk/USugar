@@ -5,23 +5,22 @@ namespace USugar.Tests;
 
 public class FlatTypeVerifyTests
 {
-    static CBlock Block(int id, List<CStmt> instructions, CTerminator terminator) =>
-        new CBlock(instructions) { Id = id, Terminator = terminator };
+    static FlatBlock Block(int id, List<IFlatInstruction> instructions, CTerminator terminator) =>
+        new FlatBlock(id, instructions, terminator);
 
-    static void MakeFlat(CFunction function, params CBlock[] blocks)
+    static void MakeFlat(FlatFunction function, params FlatBlock[] blocks)
     {
-        function.Shape = Shape.Flat;
-        foreach (var block in blocks) function.FlatBlocks.Add(block);
+        foreach (var block in blocks) function.Blocks.Add(block);
     }
 
     [Fact]
     public void ModuleVerifier_RejectsCopyIntoIncompatibleSlot()
     {
-        var module = new CModule();
+        var module = new FlatModule();
         var function = module.AddFunction("caller");
         function.NewSlot(StorageTypes.Int32, SlotClass.Scratch);
         MakeFlat(function, Block(0,
-            new List<CStmt> { new CAssign(0, new CConst("bad", StorageTypes.String)) },
+            new List<IFlatInstruction> { new CAssign(0, new CConst("bad", StorageTypes.String)) },
             new CRet()));
 
         var ex = Assert.Throws<VerificationException>(() => FlatVerify.Verify(module));
@@ -31,18 +30,18 @@ public class FlatTypeVerifyTests
     [Fact]
     public void ModuleVerifier_RejectsInternalCallArgumentTypeMismatch()
     {
-        var module = new CModule();
+        var module = new FlatModule();
         module.Fields.Add(new FieldDecl("__callee_arg", StorageTypes.Int32));
 
         var callee = module.AddFunction("callee");
         callee.ParamFieldNames.Add("__callee_arg");
         callee.ReturnType = StorageTypes.Void;
-        MakeFlat(callee, Block(0, new List<CStmt>(), new CRet()));
+        MakeFlat(callee, Block(0, new List<IFlatInstruction>(), new CRet()));
 
         var caller = module.AddFunction("caller");
         caller.ReturnType = StorageTypes.Void;
         MakeFlat(caller, Block(0,
-            new List<CStmt>
+            new List<IFlatInstruction>
             {
                 new CExprStmt(new CInternalCall("callee",
                     new List<CLeaf> { new CConst("bad", StorageTypes.String) },
@@ -57,7 +56,7 @@ public class FlatTypeVerifyTests
     [Fact]
     public void ModuleVerifier_RejectsSelectArmMismatchAfterFlattening()
     {
-        var module = new CModule();
+        var module = new StructuredModule(abiCatalog: TestHelper.RegistryFacts);
         var builder = new CoreBuilder(module);
         var function = builder.BeginFunction("select");
         var condition = builder.AllocScratch(StorageTypes.Boolean);
@@ -71,20 +70,20 @@ public class FlatTypeVerifyTests
         // Structured verification intentionally permits inheritance-compatible CSelect arms. Once
         // lowered to concrete COPY edges, the shared declared-relaxation rule can decide each arm.
         CoreVerify.Verify(module);
-        CoreFlatten.Lower(function, TestHelper.RegistryFacts);
+        var flatModule = CoreFlatten.Lower(module);
 
-        var ex = Assert.Throws<VerificationException>(() => FlatVerify.Verify(module));
+        var ex = Assert.Throws<VerificationException>(() => FlatVerify.Verify(flatModule));
         Assert.Contains("CAssign", ex.Message);
     }
 
     [Fact]
     public void ModuleVerifier_AllowsDeclaredObjectUnboxingCopy()
     {
-        var module = new CModule();
+        var module = new FlatModule();
         var function = module.AddFunction("spill_reload");
         function.NewSlot(StorageTypes.Int32, SlotClass.Scratch);
         MakeFlat(function, Block(0,
-            new List<CStmt> { new CAssign(0, new CConst(null, StorageTypes.Object)) },
+            new List<IFlatInstruction> { new CAssign(0, new CConst(null, StorageTypes.Object)) },
             new CRet()));
 
         FlatVerify.Verify(module);

@@ -20,10 +20,10 @@ public partial class UasmEmitter
     // Property shims → EmitContext
     Compilation _compilation => _ctx.Compilation;
     INamedTypeSymbol _classSymbol => _ctx.ClassSymbol;
-    CModule _module => _ctx.Module;
+    StructuredModule _module => _ctx.Module;
     CoreBuilder _builder => _ctx.Builder;
     LayoutPlanner _planner => _ctx.Planner;
-    IReadOnlyDictionary<IMethodSymbol, CFunction> _methodFunctions => _ctx.Methods.Functions;
+    IReadOnlyDictionary<IMethodSymbol, StructuredFunction> _methodFunctions => _ctx.Methods.Functions;
     IReadOnlyDictionary<IMethodSymbol, EmitContext.MethodSlot> _methodSlots => _ctx.Methods.Slots;
     IReadOnlyDictionary<IMethodSymbol, ReturnSlot[]> _methodReturns => _ctx.Methods.Returns;
     IReadOnlyDictionary<IMethodSymbol, string[]> _methodParamVarIds => _ctx.Methods.ParamVarIds;
@@ -39,6 +39,7 @@ public partial class UasmEmitter
     List<EmitDiagnostic> _diagnostics => _ctx.DiagnosticState.Diagnostics;
 
     CodeGenResult _codeGenResult;
+    FlatModule _flatModule;
 
     public IReadOnlyList<EmitDiagnostic> Diagnostics => _diagnostics;
     public CodeGenResult CodeGenResult => _codeGenResult;
@@ -141,7 +142,9 @@ public partial class UasmEmitter
     // ── Emit ──
 
     /// <summary>Access to the Core IR module for debugging and testing.</summary>
-    public CModule Module => _module;
+    public StructuredModule Module => _module;
+    /// <summary>Access to the most recently lowered flat IR module.</summary>
+    public FlatModule FlatModule => _flatModule;
 
     /// <summary>Test/tooling accessors for the Stage 2 M1 CaptureScopeAnalysis (built in <see cref="Emit"/>,
     /// consumed by nothing yet — see EmitContext.CaptureScope).</summary>
@@ -205,9 +208,10 @@ public partial class UasmEmitter
             plan.CaptureRoots, bodyGraph.Bodies, plan.FieldInitOps));
         EmitMethods(plan, bodyGraph);
         // Handlers build Core IR; the pipeline (verify/optimize/flatten) runs on Core directly.
-        var result = IrPipeline.GenerateUasmFromCore(_module);
-        _codeGenResult = result;
-        return result.Uasm;
+        var result = IrPipeline.Run(_module);
+        _flatModule = result.FlatModule;
+        _codeGenResult = result.CodeGen;
+        return result.CodeGen.Uasm;
     }
 
     public uint GetHeapSize() => _codeGenResult.HeapSize;
@@ -1848,7 +1852,7 @@ public partial class UasmEmitter
 
     // B46 (wave-14 r4): a foreign-static call whose containing type still carries an OPEN type
     // parameter (Helper<U>.Boost seen in the SHARED body of a generic struct/method, U unbound) has
-    // no single monomorphization here — collecting it would register a phantom open CFunction, exactly
+    // no single monomorphization here — collecting it would register a phantom open StructuredFunction, exactly
     // the shape IsCollectibleStructMember skips. It is registered on demand at its closed call site
     // (InvocationHandler's foreign-static-on-generic arm). Genuinely closed foreign statics (incl.
     // non-generic Helper.Boost, or Helper<int>.Boost from a concretely-typed context) are collected.
@@ -1867,7 +1871,7 @@ public partial class UasmEmitter
     // one struct member calling a sibling) to the RAW OPEN containing type (Box<T> where T is the
     // struct's own type parameter), never to any concrete spec. Collecting this phantom open-form
     // entry registers a SECOND, dead (never actually dispatched — SubstituteMethodTypeArgs always
-    // re-closes real call sites to the live spec) CFunction that corrupts the definition-keyed
+    // re-closes real call sites to the live spec) StructuredFunction that corrupts the definition-keyed
     // recursion/spill bookkeeping (VM-proven: a self-recursive generic struct method returned 0
     // instead of the CLR's 6). Skip collecting through the open form; the real call sites (outer
     // construction/invocation, always concretely typed) already reach every instantiation this
@@ -1886,7 +1890,7 @@ public partial class UasmEmitter
     // fix targeted (VM-proven: BoxMutualRecurse Ping(5)+Ping(3) returned 8 instead of the CLR's 21).
     // B70 root 2 (A11): a recursive generic LF / struct method's self-call `Lf<T>(n-1)` is an open generic-
     // METHOD form (its OWN type argument is still the open T), the method-dimension twin of the open-
-    // containing-type shape above. Left collectible it registers a dead second CFunction whose body is
+    // containing-type shape above. Left collectible it registers a dead second StructuredFunction whose body is
     // emitted mapless (no isSpec map) → `new T[]` → bogus `TArray` (the closed Lf<int> spec is registered
     // separately via SubstituteMethodTypeArgs + on-demand RegisterGenericSpecialization). Reject it too.
     internal static bool IsCollectibleStructMember(IMethodSymbol m)

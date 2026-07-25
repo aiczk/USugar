@@ -35,7 +35,7 @@ public class UdonAbiPrototypeTests
             Param("right", "SystemInt32", UdonAbiParameterMode.In),
             Param("result", "SystemInt32", UdonAbiParameterMode.Out))
             .Require(TestHelper.AbiKey(signature));
-        var module = new CModule();
+        var module = new StructuredModule();
         var builder = new CoreBuilder(module);
         builder.BeginFunction("test");
         var destination = builder.AllocFrame(StorageTypes.Int32);
@@ -57,7 +57,7 @@ public class UdonAbiPrototypeTests
             Param("right", "SystemInt32", UdonAbiParameterMode.In),
             Param("result", "SystemInt32", UdonAbiParameterMode.Out))
             .Require(TestHelper.AbiKey(signature));
-        var module = new CModule();
+        var module = new StructuredModule();
         var builder = new CoreBuilder(module);
         builder.BeginFunction("test");
         var destination = builder.AllocFrame(StorageTypes.Int32);
@@ -78,7 +78,7 @@ public class UdonAbiPrototypeTests
             Param("value", "SystemInt32", UdonAbiParameterMode.In),
             Param("result", "SystemInt32", UdonAbiParameterMode.Out))
             .Require(TestHelper.AbiKey(signature));
-        var module = new CModule();
+        var module = new StructuredModule();
         var builder = new CoreBuilder(module);
         builder.BeginFunction("test");
         var destination = builder.AllocFrame(StorageTypes.Int32);

@@ -8,17 +8,17 @@ public enum BridgeReturnKind { None, Convention, Field }
 public sealed class BridgeDispatchAdapter
 {
     public BridgeDispatchKind Kind { get; }
-    public CFunction DirectTarget { get; }
+    public StructuredFunction DirectTarget { get; }
     public StorageType ReturnType { get; }
 
-    BridgeDispatchAdapter(BridgeDispatchKind kind, CFunction directTarget, StorageType returnType)
+    BridgeDispatchAdapter(BridgeDispatchKind kind, StructuredFunction directTarget, StorageType returnType)
     {
         Kind = kind;
         DirectTarget = directTarget;
         ReturnType = returnType;
     }
 
-    public static BridgeDispatchAdapter Direct(CFunction target, StorageType returnType)
+    public static BridgeDispatchAdapter Direct(StructuredFunction target, StorageType returnType)
         => new BridgeDispatchAdapter(BridgeDispatchKind.Direct,
             target ?? throw new ArgumentNullException(nameof(target)), returnType);
 

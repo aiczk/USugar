@@ -6,6 +6,33 @@ namespace USugar.Tests;
 public class CoreFlattenTests
 {
     [Fact]
+    public void ModuleLowering_DoesNotRepurposeStructuredContainers()
+    {
+        var module = new StructuredModule(abiCatalog: TestHelper.RegistryFacts)
+        {
+            ClassName = "PhaseBoundary",
+        };
+        var field = new FieldDecl("value", StorageTypes.Int32)
+        {
+            DefaultValue = 1,
+            Flags = FieldFlags.Export,
+        };
+        module.Fields.Add(field);
+        var function = module.AddFunction("test");
+        function.ReturnType = StorageTypes.Void;
+
+        var flat = CoreFlatten.Lower(module);
+
+        Assert.NotSame(module.Functions, (object)flat.Functions);
+        Assert.NotSame(function, (object)Assert.Single(flat.Functions));
+        var flatField = Assert.Single(flat.Fields);
+        Assert.NotSame(field, flatField);
+        flatField.Flags = FieldFlags.None;
+        Assert.Equal(FieldFlags.Export, field.Flags);
+        CoreVerify.Verify(module);
+    }
+
+    [Fact]
     public void BoundFieldLoad_WritesItsExistingSlotDirectly()
     {
         var builder = Begin(out var function);
@@ -13,10 +40,10 @@ public class CoreFlattenTests
         builder.EmitReturn(value);
         var slotCount = function.Slots.Count;
 
-        CoreFlatten.Lower(function, TestHelper.RegistryFacts);
+        var flat = CoreFlatten.Lower(function, TestHelper.RegistryFacts);
 
-        Assert.Equal(slotCount, function.Slots.Count);
-        var load = Assert.IsType<CLoadField>(Assert.Single(function.Entry.Stmts));
+        Assert.Equal(slotCount, flat.Slots.Count);
+        var load = Assert.IsType<CLoadField>(Assert.Single(flat.Entry.Instructions));
         Assert.Equal(value.SlotId, load.DestSlot);
     }
 
@@ -33,10 +60,10 @@ public class CoreFlattenTests
             StorageTypes.Int32, reentrant: true, preSpillStmts: 2));
         var slotCount = function.Slots.Count;
 
-        CoreFlatten.Lower(function, TestHelper.RegistryFacts);
+        var flat = CoreFlatten.Lower(function, TestHelper.RegistryFacts);
 
-        Assert.Equal(slotCount, function.Slots.Count);
-        var stmt = Assert.IsType<CExprStmt>(Assert.Single(function.Entry.Stmts));
+        Assert.Equal(slotCount, flat.Slots.Count);
+        var stmt = Assert.IsType<CExprStmt>(Assert.Single(flat.Entry.Instructions));
         var call = Assert.IsType<CExternCall>(stmt.Expr);
         Assert.Equal(destination, call.DestSlot);
         Assert.True(call.Reentrant);
@@ -54,10 +81,10 @@ public class CoreFlattenTests
             reentrant: true, tailSpared: true));
         var slotCount = function.Slots.Count;
 
-        CoreFlatten.Lower(function, TestHelper.RegistryFacts);
+        var flat = CoreFlatten.Lower(function, TestHelper.RegistryFacts);
 
-        Assert.Equal(slotCount, function.Slots.Count);
-        var stmt = Assert.IsType<CExprStmt>(Assert.Single(function.Entry.Stmts));
+        Assert.Equal(slotCount, flat.Slots.Count);
+        var stmt = Assert.IsType<CExprStmt>(Assert.Single(flat.Entry.Instructions));
         var call = Assert.IsType<CInternalCall>(stmt.Expr);
         Assert.Equal(destination, call.DestSlot);
         Assert.True(call.Reentrant);
@@ -75,10 +102,10 @@ public class CoreFlattenTests
             StorageTypes.Int32);
         var slotCount = function.Slots.Count;
 
-        CoreFlatten.Lower(function, TestHelper.RegistryFacts);
+        var flat = CoreFlatten.Lower(function, TestHelper.RegistryFacts);
 
-        Assert.Equal(slotCount, function.Slots.Count);
-        Assert.Equal(2, CountAssignmentsTo(function, value.SlotId));
+        Assert.Equal(slotCount, flat.Slots.Count);
+        Assert.Equal(2, CountAssignmentsTo(flat, value.SlotId));
     }
 
     [Fact]
@@ -94,12 +121,12 @@ public class CoreFlattenTests
                 StorageTypes.Int32));
         var slotCount = function.Slots.Count;
 
-        CoreFlatten.Lower(function, TestHelper.RegistryFacts);
+        var flat = CoreFlatten.Lower(function, TestHelper.RegistryFacts);
 
-        Assert.Equal(slotCount, function.Slots.Count);
+        Assert.Equal(slotCount, flat.Slots.Count);
         CExternCall resultCall = null;
-        foreach (var block in function.FlatBlocks)
-        foreach (var statement in block.Stmts)
+        foreach (var block in flat.Blocks)
+        foreach (var statement in block.Instructions)
             if (statement is CExprStmt expr && expr.Expr is CExternCall call
                 && call.Sig.Key == ExternResolver.EventReceiverGetProgramVariable)
                 resultCall = call;
@@ -122,11 +149,11 @@ public class CoreFlattenTests
                 },
                 StorageTypes.Void));
 
-        CoreFlatten.Lower(function, TestHelper.RegistryFacts);
+        var flat = CoreFlatten.Lower(function, TestHelper.RegistryFacts);
 
         var resultTypes = new List<StorageType>();
-        foreach (var block in function.FlatBlocks)
-        foreach (var statement in block.Stmts)
+        foreach (var block in flat.Blocks)
+        foreach (var statement in block.Instructions)
             if (statement is CExprStmt expr && expr.Expr is CExternCall call
                 && call.Sig.Key == ExternResolver.EventReceiverGetProgramVariable)
             {
@@ -145,12 +172,12 @@ public class CoreFlattenTests
         builder.EmitProgramVariableStore(receiver, name, StorageTypes.Int32, value);
         var slotCount = function.Slots.Count;
 
-        CoreFlatten.Lower(function, TestHelper.RegistryFacts);
+        var flat = CoreFlatten.Lower(function, TestHelper.RegistryFacts);
 
-        Assert.Equal(slotCount, function.Slots.Count);
+        Assert.Equal(slotCount, flat.Slots.Count);
         var calls = new List<CExternCall>();
-        foreach (var block in function.FlatBlocks)
-        foreach (var statement in block.Stmts)
+        foreach (var block in flat.Blocks)
+        foreach (var statement in block.Instructions)
             if (statement is CExprStmt expression && expression.Expr is CExternCall call)
                 calls.Add(call);
         Assert.Equal(2, calls.Count);
@@ -173,11 +200,11 @@ public class CoreFlattenTests
                 System.Array.Empty<ReturnSlot>(),
                 StorageTypes.Void));
 
-        CoreFlatten.Lower(function, TestHelper.RegistryFacts);
+        var flat = CoreFlatten.Lower(function, TestHelper.RegistryFacts);
 
         CExternCall dispatch = null;
-        foreach (var block in function.FlatBlocks)
-        foreach (var statement in block.Stmts)
+        foreach (var block in flat.Blocks)
+        foreach (var statement in block.Instructions)
             if (statement is CExprStmt expression && expression.Expr is CExternCall call
                 && call.Sig.Key == ExternResolver.EventReceiverSendCustomEvent)
                 dispatch = call;
@@ -186,19 +213,19 @@ public class CoreFlattenTests
         Assert.Equal(eventNameSlot, eventName.SlotId);
     }
 
-    static int CountAssignmentsTo(CFunction function, int slot)
+    static int CountAssignmentsTo(FlatFunction function, int slot)
     {
         var count = 0;
-        foreach (var block in function.FlatBlocks)
-        foreach (var statement in block.Stmts)
+        foreach (var block in function.Blocks)
+        foreach (var statement in block.Instructions)
             if (statement is CAssign assign && assign.DestSlot == slot)
                 count++;
         return count;
     }
 
-    static CoreBuilder Begin(out CFunction function)
+    static CoreBuilder Begin(out StructuredFunction function)
     {
-        var builder = new CoreBuilder(new CModule(abiCatalog: TestHelper.RegistryFacts));
+        var builder = new CoreBuilder(new StructuredModule(abiCatalog: TestHelper.RegistryFacts));
         function = builder.BeginFunction("test");
         function.ReturnType = StorageTypes.Void;
         return builder;

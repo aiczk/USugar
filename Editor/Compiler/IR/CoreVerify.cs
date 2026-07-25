@@ -7,7 +7,7 @@ using System.Collections.Generic;
 /// </summary>
 public static class CoreVerify
 {
-    public static void Verify(CModule module)
+    public static void Verify(StructuredModule module)
     {
         var fields = BuildFieldIndex(module);
         foreach (var func in module.Functions)
@@ -17,29 +17,40 @@ public static class CoreVerify
     /// <summary>Build the module's one declared-field index for both structured and flat verification.
     /// Return slots share the Udon heap namespace with ordinary fields, so a conflicting declaration
     /// is a verifier error rather than a codegen-order accident.</summary>
-    internal static Dictionary<string, StorageType> BuildFieldIndex(CModule module)
+    internal static Dictionary<string, StorageType> BuildFieldIndex(StructuredModule module)
+        => BuildFieldIndex(module.Fields, module.Functions);
+
+    internal static Dictionary<string, StorageType> BuildFieldIndex(FlatModule module)
+        => BuildFieldIndex(module.Fields, module.Functions);
+
+    static Dictionary<string, StorageType> BuildFieldIndex<TFunction>(
+        IEnumerable<FieldDecl> declarations, IEnumerable<TFunction> functions)
     {
         var fields = new Dictionary<string, StorageType>(StringComparer.Ordinal);
-        foreach (var field in module.Fields)
+        foreach (var field in declarations)
             if (!fields.TryAdd(field.Name, field.Type))
                 throw new VerificationException($"Duplicate field declaration '{field.Name}'");
-        foreach (var function in module.Functions)
-            foreach (var returnSlot in function.ReturnSlots)
+        foreach (var function in functions)
+        {
+            IEnumerable<ReturnSlot> returnSlots = function switch
+            {
+                StructuredFunction structured => structured.ReturnSlots,
+                FlatFunction flat => flat.ReturnSlots,
+                _ => throw new InvalidOperationException(
+                    $"Unsupported function declaration type '{typeof(TFunction).Name}'."),
+            };
+            foreach (var returnSlot in returnSlots)
                 if (!fields.TryAdd(returnSlot.Id, returnSlot.StorageType)
                     && fields[returnSlot.Id] != returnSlot.StorageType)
                     throw new VerificationException(
                         $"Return field '{returnSlot.Id}' has conflicting types '{fields[returnSlot.Id]}' and '{returnSlot.StorageType}'");
+        }
         return fields;
     }
 
-    public static void VerifyFunction(CFunction func, UdonTypeFactRegistry typeFacts = null,
+    public static void VerifyFunction(StructuredFunction func, UdonTypeFactRegistry typeFacts = null,
         IReadOnlyDictionary<string, StorageType> fields = null)
     {
-        if (func.Shape != Shape.Structured)
-            throw new VerificationException(
-                $"CoreVerify requires Shape=Structured, got {func.Shape} for function '{func.Name}' " +
-                "(func.Body is stale after CoreFlatten — verify before flattening, or use FlatVerify after)");
-
         var ctx = new VerifyContext(func, typeFacts ?? new UdonTypeFactRegistry(),
             fields ?? new Dictionary<string, StorageType>());
         foreach (var slot in func.Slots)
@@ -56,13 +67,13 @@ public static class CoreVerify
 
     sealed class VerifyContext
     {
-        public readonly CFunction Func;
+        public readonly StructuredFunction Func;
         public readonly UdonTypeFactRegistry TypeFacts;
         public readonly IReadOnlyDictionary<string, StorageType> Fields;
         public readonly HashSet<int> DeclaredSlots = new();
         public int LoopDepth;
 
-        public VerifyContext(CFunction func, UdonTypeFactRegistry typeFacts,
+        public VerifyContext(StructuredFunction func, UdonTypeFactRegistry typeFacts,
             IReadOnlyDictionary<string, StorageType> fields)
         {
             Func = func;
@@ -101,7 +112,7 @@ public static class CoreVerify
         }
     }
 
-    static void VerifyBlock(CBlock block, VerifyContext ctx)
+    static void VerifyBlock(StructuredBlock block, VerifyContext ctx)
     {
         foreach (var stmt in block.Stmts)
             VerifyStmt(stmt, ctx);
@@ -199,7 +210,7 @@ public static class CoreVerify
                 // since CoreVerify currently only throws exceptions.
                 break;
 
-            case CBlock block:
+            case StructuredBlock block:
                 VerifyBlock(block, ctx);
                 break;
 
@@ -213,7 +224,7 @@ public static class CoreVerify
     }
 
     /// <summary>Verify that every CGoto target has a corresponding CLabel in the same function.</summary>
-    static void VerifyGotoLabels(CFunction func)
+    static void VerifyGotoLabels(StructuredFunction func)
     {
         var labels = new HashSet<string>();
         var gotos = new HashSet<string>();
@@ -227,7 +238,7 @@ public static class CoreVerify
         }
     }
 
-    static void CollectLabelsAndGotos(CBlock block, HashSet<string> labels, HashSet<string> gotos)
+    static void CollectLabelsAndGotos(StructuredBlock block, HashSet<string> labels, HashSet<string> gotos)
     {
         foreach (var stmt in block.Stmts)
             CollectLabelsAndGotosStmt(stmt, labels, gotos);
@@ -245,7 +256,7 @@ public static class CoreVerify
             case CGoto gt:
                 gotos.Add(gt.Label);
                 break;
-            case CBlock blk:
+            case StructuredBlock blk:
                 CollectLabelsAndGotos(blk, labels, gotos);
                 break;
             case CIf hif:

@@ -3,14 +3,14 @@ using System.Collections.Generic;
 using System.Text;
 
 /// <summary>
-/// Generates UASM assembly text from a flattened CModule.
+/// Generates UASM assembly text from a flattened FlatModule.
 /// Two-pass approach:
 ///   Pass 1: Collect instructions into intermediate representation, compute label addresses.
 ///   Pass 2: Render UASM text with resolved numeric addresses.
 /// </summary>
 public static class CoreToUasm
 {
-    public static CodeGenResult Generate(CModule module)
+    public static CodeGenResult Generate(FlatModule module)
     {
         var gen = new Generator(module);
         return gen.Run();
@@ -56,12 +56,12 @@ public static class CoreToUasm
 
     sealed class Generator
     {
-        readonly CModule _module;
+        readonly FlatModule _module;
         readonly List<VarDecl> _vars = new();
         readonly Dictionary<string, VarDescriptor> _declaredVars = new();
         readonly HashSet<string> _externs = new();
         readonly Dictionary<ConstKey, string> _constPool = new();
-        readonly Dictionary<string, CFunction> _funcByName = new();
+        readonly Dictionary<string, FlatFunction> _funcByName = new();
 
         // Slot → UASM variable name: keyed by (funcIndex, slotId) for global uniqueness.
         readonly Dictionary<(int funcIdx, int slotId), string> _slotVars = new();
@@ -115,7 +115,7 @@ public static class CoreToUasm
                     && Equals(ConstValue, other.ConstValue) && Purpose == other.Purpose;
         }
 
-        public Generator(CModule module)
+        public Generator(FlatModule module)
         {
             _module = module;
             foreach (var func in module.Functions)
@@ -125,7 +125,7 @@ public static class CoreToUasm
                 // the wrong function — loud beats a silent miscompile.
                 if (!_funcByName.TryAdd(func.Name, func))
                     throw new InvalidOperationException(
-                        $"CModule contains two functions named '{func.Name}' — function names must be "
+                        $"FlatModule contains two functions named '{func.Name}' — function names must be "
                         + "module-unique (emit-side index allocation bug).");
             }
         }
@@ -257,7 +257,7 @@ public static class CoreToUasm
 
         // ── Slot → variable name mapping ──
 
-        string GetSlotVar(int funcIdx, int slotId, CFunction func)
+        string GetSlotVar(int funcIdx, int slotId, FlatFunction func)
         {
             var key = (funcIdx, slotId);
             if (_slotVars.TryGetValue(key, out var existing))
@@ -287,7 +287,7 @@ public static class CoreToUasm
 
         // ── Operand resolution ──
 
-        string ResolveOperand(CValue op, int funcIdx, CFunction func)
+        string ResolveOperand(CValue op, int funcIdx, FlatFunction func)
         {
             return op switch
             {
@@ -331,7 +331,7 @@ public static class CoreToUasm
             return varName;
         }
 
-        int FindFuncIndex(CFunction func)
+        int FindFuncIndex(FlatFunction func)
         {
             for (int i = 0; i < _module.Functions.Count; i++)
                 if (_module.Functions[i] == func) return i;
@@ -340,10 +340,10 @@ public static class CoreToUasm
 
         // ── Function preparation ──
 
-        void PrepareFunction(int funcIdx, CFunction func)
+        void PrepareFunction(int funcIdx, FlatFunction func)
         {
             // Assign block labels
-            foreach (var block in func.FlatBlocks)
+            foreach (var block in func.Blocks)
             {
                 string labelName;
                 if (block == func.Entry)
@@ -418,7 +418,7 @@ public static class CoreToUasm
 
         // ── Function emission ──
 
-        void EmitFunction(int funcIdx, CFunction func)
+        void EmitFunction(int funcIdx, FlatFunction func)
         {
             var rpo = FlatCfgOrder.ComputeRpo(func);
 
@@ -446,7 +446,7 @@ public static class CoreToUasm
                 if (block != func.Entry)
                     AddLabel(_blockLabels[(funcIdx, block.Id)]);
 
-                foreach (var inst in block.Stmts)
+                foreach (var inst in block.Instructions)
                     EmitInst(inst, funcIdx, func);
 
                 if (block.Terminator != null)
@@ -454,7 +454,7 @@ public static class CoreToUasm
             }
         }
 
-        void EmitInst(CStmt inst, int funcIdx, CFunction func)
+        void EmitInst(IFlatInstruction inst, int funcIdx, FlatFunction func)
         {
             switch (inst)
             {
@@ -488,18 +488,18 @@ public static class CoreToUasm
                     break;
 
                 default:
-                    throw new InvalidOperationException($"Unknown CStmt type: {inst.GetType().Name}");
+                    throw new InvalidOperationException($"Unknown IFlatInstruction type: {inst.GetType().Name}");
             }
         }
 
-        void EmitMove(CAssign move, int funcIdx, CFunction func)
+        void EmitMove(CAssign move, int funcIdx, FlatFunction func)
         {
             var src = ResolveOperand(move.Value, funcIdx, func);
             var dst = GetSlotVar(funcIdx, move.DestSlot, func);
             AddCopyPair(src, dst);
         }
 
-        void EmitCallExtern(CExternCall call, int funcIdx, CFunction func)
+        void EmitCallExtern(CExternCall call, int funcIdx, FlatFunction func)
         {
             foreach (var arg in call.Args)
                 AddPush(ResolveOperand(arg, funcIdx, func));
@@ -508,7 +508,7 @@ public static class CoreToUasm
             AddExtern(call.Sig.Text);
         }
 
-        void EmitCallInternal(CInternalCall call, int funcIdx, CFunction func)
+        void EmitCallInternal(CInternalCall call, int funcIdx, FlatFunction func)
         {
             // __indirect is a special marker for delegate invocation via JUMP_INDIRECT.
             // Args have been stored to convention fields by the handler; the single
@@ -559,7 +559,7 @@ public static class CoreToUasm
                 AddCopyPair(target.ReturnFieldName, GetSlotVar(funcIdx, call.DestSlot.Value, func));
         }
 
-        void EmitCallIndirect(CInternalCall call, int funcIdx, CFunction func)
+        void EmitCallIndirect(CInternalCall call, int funcIdx, FlatFunction func)
         {
             // The single arg is the method pointer
             if (call.Args.Count < 1)
@@ -586,7 +586,7 @@ public static class CoreToUasm
             // No return value copy — the handler reads it via LoadField from convention fields
         }
 
-        void EmitTerminator(CTerminator term, int funcIdx, CFunction func, CBlock nextBlock)
+        void EmitTerminator(CTerminator term, int funcIdx, FlatFunction func, FlatBlock nextBlock)
         {
             switch (term)
             {
@@ -608,7 +608,7 @@ public static class CoreToUasm
             }
         }
 
-        void EmitBranch(CBranch branch, int funcIdx, CFunction func, CBlock nextBlock)
+        void EmitBranch(CBranch branch, int funcIdx, FlatFunction func, FlatBlock nextBlock)
         {
             AddPush(ResolveOperand(branch.Cond, funcIdx, func));
 
@@ -627,7 +627,7 @@ public static class CoreToUasm
             }
         }
 
-        void EmitReturn(CRet ret, int funcIdx, CFunction func)
+        void EmitReturn(CRet ret, int funcIdx, FlatFunction func)
         {
             if (ret.Value != null && func.ReturnFieldName != null)
                 AddCopyPair(

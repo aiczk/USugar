@@ -18,12 +18,12 @@ public static class FlatVerify
     /// <summary>Production flat-IR verification. The function-only overload checks shape; this
     /// module-aware entry also proves every COPY-equivalent edge against the authoritative slot,
     /// field, and callee declarations after flattening/coalescing/spill insertion.</summary>
-    public static void Verify(CModule module)
+    public static void Verify(FlatModule module)
     {
         if (module == null) throw new ArgumentNullException(nameof(module));
 
         var fields = CoreVerify.BuildFieldIndex(module);
-        var functions = new Dictionary<string, CFunction>(StringComparer.Ordinal);
+        var functions = new Dictionary<string, FlatFunction>(StringComparer.Ordinal);
         foreach (var function in module.Functions)
             if (!functions.TryAdd(function.Name, function))
                 throw new VerificationException(
@@ -36,24 +36,21 @@ public static class FlatVerify
         }
     }
 
-    public static void Verify(CFunction f)
+    public static void Verify(FlatFunction f)
     {
-        if (f.Shape != Shape.Flat)
-            throw new InvalidOperationException($"FlatVerify requires Shape=Flat, got {f.Shape} for {f.Name}");
-
         var blockIds = new HashSet<int>();
-        foreach (var b in f.FlatBlocks)
+        foreach (var b in f.Blocks)
         {
             if (!blockIds.Add(b.Id))
                 throw new InvalidOperationException($"Duplicate flat block id {b.Id} in {f.Name}");
         }
 
-        foreach (var b in f.FlatBlocks)
+        foreach (var b in f.Blocks)
         {
             if (b.Terminator == null)
                 throw new InvalidOperationException($"Flat block {b.Id} in {f.Name} has no terminator");
 
-            foreach (var inst in b.Stmts)
+            foreach (var inst in b.Instructions)
                 VerifyInstruction(inst, f.Name);
 
             VerifyTerminator(b.Terminator, blockIds, f.Name);
@@ -65,14 +62,14 @@ public static class FlatVerify
 
     sealed class TypeContext
     {
-        public readonly CFunction Function;
+        public readonly FlatFunction Function;
         public readonly UdonTypeFactRegistry TypeFacts;
         public readonly IReadOnlyDictionary<string, StorageType> Fields;
-        public readonly IReadOnlyDictionary<string, CFunction> Functions;
+        public readonly IReadOnlyDictionary<string, FlatFunction> Functions;
 
-        public TypeContext(CFunction function, UdonTypeFactRegistry typeFacts,
+        public TypeContext(FlatFunction function, UdonTypeFactRegistry typeFacts,
             IReadOnlyDictionary<string, StorageType> fields,
-            IReadOnlyDictionary<string, CFunction> functions)
+            IReadOnlyDictionary<string, FlatFunction> functions)
         {
             Function = function;
             TypeFacts = typeFacts;
@@ -106,9 +103,9 @@ public static class FlatVerify
         }
     }
 
-    static void VerifyTypes(CFunction function, UdonTypeFactRegistry typeFacts,
+    static void VerifyTypes(FlatFunction function, UdonTypeFactRegistry typeFacts,
         IReadOnlyDictionary<string, StorageType> fields,
-        IReadOnlyDictionary<string, CFunction> functions)
+        IReadOnlyDictionary<string, FlatFunction> functions)
     {
         var ctx = new TypeContext(function, typeFacts, fields, functions);
         for (int i = 0; i < function.Slots.Count; i++)
@@ -126,15 +123,15 @@ public static class FlatVerify
             }
         }
 
-        foreach (var block in function.FlatBlocks)
+        foreach (var block in function.Blocks)
         {
-            foreach (var instruction in block.Stmts)
+            foreach (var instruction in block.Instructions)
                 VerifyInstructionTypes(instruction, ctx);
             VerifyTerminatorTypes(block.Terminator, ctx);
         }
     }
 
-    static void VerifyInstructionTypes(CStmt instruction, TypeContext ctx)
+    static void VerifyInstructionTypes(IFlatInstruction instruction, TypeContext ctx)
     {
         switch (instruction)
         {
@@ -322,13 +319,13 @@ public static class FlatVerify
     /// LoweringServices's interface-setter dispatch) would silently desync the count from reality. Checked
     /// structurally rather than trusting the producer, mirroring VerifyReentrantConservation's stance on
     /// the sibling Reentrant flag.</summary>
-    static void VerifyPreSpillStmtsShape(CFunction f)
+    static void VerifyPreSpillStmtsShape(FlatFunction f)
     {
-        foreach (var b in f.FlatBlocks)
+        foreach (var b in f.Blocks)
         {
-            for (int i = 0; i < b.Stmts.Count; i++)
+            for (int i = 0; i < b.Instructions.Count; i++)
             {
-                if (b.Stmts[i] is not CExprStmt { Expr: CExternCall { PreSpillStmts: > 0 } ec }) continue;
+                if (b.Instructions[i] is not CExprStmt { Expr: CExternCall { PreSpillStmts: > 0 } ec }) continue;
                 int n = ec.PreSpillStmts;
                 if (n > i)
                     throw new InvalidOperationException(
@@ -337,17 +334,17 @@ public static class FlatVerify
 
                 for (int k = i - n; k < i; k++)
                 {
-                    if (!IsVoidSetProgramVariableCopyIn(b.Stmts[k]))
+                    if (!IsVoidSetProgramVariableCopyIn(b.Instructions[k]))
                         throw new InvalidOperationException(
                             $"{f.Name}: block {b.Id} instruction {i}: PreSpillStmts={n} expects a void " +
-                            $"SetProgramVariable copy-in at index {k}, found {b.Stmts[k]?.GetType().Name} " +
+                            $"SetProgramVariable copy-in at index {k}, found {b.Instructions[k]?.GetType().Name} " +
                             "(the spill window would capture the wrong statements)");
                 }
             }
         }
     }
 
-    static bool IsVoidSetProgramVariableCopyIn(CStmt stmt)
+    static bool IsVoidSetProgramVariableCopyIn(IFlatInstruction stmt)
         => stmt is CExprStmt { Expr: CExternCall { DestSlot: null } call }
            && call.Type.Name == "SystemVoid"
            && call.Sig.Key == ExternResolver.EventReceiverSetProgramVariable;
@@ -355,13 +352,13 @@ public static class FlatVerify
     /// <summary>Reentrant-flag conservation (design §4.3): CoreFlatten and CoalesceSlots/RemapInst both
     /// REBUILD call instructions, so a rebuild that forgets to copy the flag silently loses the
     /// dispatch-site recursion spill — exactly the failure object-identity marking died of. The flat
-    /// instruction stream must carry exactly CFunction.ReentrantSiteCount flags (creation-counted by
+    /// instruction stream must carry exactly FlatFunction.ReentrantSiteCount flags (creation-counted by
     /// CoreBuilder, dead-code-adjusted by CoreFlatten).</summary>
-    static void VerifyReentrantConservation(CFunction f)
+    static void VerifyReentrantConservation(FlatFunction f)
     {
         int flagged = 0;
-        foreach (var b in f.FlatBlocks)
-            foreach (var inst in b.Stmts)
+        foreach (var b in f.Blocks)
+            foreach (var inst in b.Instructions)
                 if (inst is CExprStmt es
                     && (es.Expr is CExternCall { Reentrant: true } || es.Expr is CInternalCall { Reentrant: true }))
                     flagged++;
@@ -370,7 +367,7 @@ public static class FlatVerify
                 $"{f.Name}: Reentrant dispatch-site flag conservation violated — expected {f.ReentrantSiteCount} flagged call(s), found {flagged} (a rebuild pass dropped or duplicated the flag)");
     }
 
-    static void VerifyInstruction(CStmt inst, string fn)
+    static void VerifyInstruction(IFlatInstruction inst, string fn)
     {
         switch (inst)
         {

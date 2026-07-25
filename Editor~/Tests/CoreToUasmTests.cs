@@ -12,8 +12,8 @@ public class CoreToUasmTests
     public void CoreToUasm_UnusedSlot_NotDeclaredInUasm()
     {
         // Slot that is never referenced should not appear as a UASM variable.
-        var module = new CModule { ClassName = "Test" };
-        var func = new CFunction("test", "_test") { Shape = Shape.Flat };
+        var module = new FlatModule(className: "Test");
+        var func = new FlatFunction("test", "_test");
         module.Functions.Add(func);
 
         // slot0 is used, slot1 is unused (coalesced away)
@@ -22,7 +22,7 @@ public class CoreToUasmTests
 
         var block = func.NewBlock();
         // Only reference slot0
-        block.Stmts.Add(new CAssign(0, new CConst(42, StorageTypes.Int32)));
+        block.Instructions.Add(new CAssign(0, new CConst(42, StorageTypes.Int32)));
         block.Terminator = new CRet(new CSlotRef(0, StorageTypes.Int32));
         func.ReturnSlots.Add(new ReturnSlot("__retval", StorageTypes.Int32));
         func.ReturnType = StorageTypes.Int32;
@@ -73,7 +73,7 @@ public class CoreToUasmTests
     [Fact]
     public void CoreBuilder_DoesNotDeduplicateCollidingObjectRenderings()
     {
-        var builder = new CoreBuilder(new CModule { ClassName = "ConstCollision" });
+        var builder = new CoreBuilder(new StructuredModule { ClassName = "ConstCollision" });
         var nullValue = builder.Const(null, StorageTypes.Object);
         var nullString = builder.Const("null", StorageTypes.Object);
         var boxedOne = builder.Const(1, StorageTypes.Object);

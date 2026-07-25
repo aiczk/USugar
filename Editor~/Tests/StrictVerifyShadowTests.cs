@@ -11,10 +11,10 @@ public class StrictVerifyShadowTests
 {
     static string Fn(string name) => "ssv_" + name;
 
-    static CFunction VerifyAssign(string funcName, string slotType, CValue value,
+    static StructuredFunction VerifyAssign(string funcName, string slotType, CValue value,
         UdonTypeFactRegistry typeFacts = null)
     {
-        var func = new CFunction(funcName);
+        var func = new StructuredFunction(funcName);
         func.Slots.Add(new SlotDecl(0, new StorageType(slotType), SlotClass.Frame));
         func.Body.Stmts.Add(new CAssign(0, value));
         CoreVerify.VerifyFunction(func, typeFacts);

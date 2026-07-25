@@ -2,37 +2,32 @@ using System;
 using System.Collections.Generic;
 
 // ============================================================================
-// Core IR statement vocabulary (structured form) + flat-block form + Shape invariant.
-// Structured statements are the authored form over CValue; the flat role (CBlock.Terminator + Id,
-// CTerminator) is the lowered form populated by CoreFlatten. The Shape enum makes the no-Phi
-// structured-vs-flat boundary machine-checkable.
+// Structured Core IR statement vocabulary. Flat containers live in FlatIr.cs; CoreFlatten is the
+// only conversion between the two phase-specific type families.
 // Global namespace, C# 9.0-compatible (Unity compiles Editor/ at C# 9.0 LCD).
 // ============================================================================
 
-/// <summary>Authoritative form of a function body: Structured (pre-flatten) or Flat (post-flatten).
-/// Flatten is the one one-way gate that sets Flat; every pass asserts its required Shape.</summary>
-public enum Shape { Structured, Flat }
 
 // ── Structured statements (12 kinds) ──
 
 /// <summary>Base for Core IR structured statements.</summary>
 public abstract class CStmt { }
 
-/// <summary>Sequence of statements (structured role) OR a flat basic block (flat role:
-/// Terminator + Id set, Stmts holds flat instructions only). Role governed by CFunction.Shape.</summary>
-public sealed class CBlock : CStmt
+/// <summary>Sequence of structured statements.</summary>
+public sealed class StructuredBlock : CStmt
 {
     public readonly List<CStmt> Stmts = new List<CStmt>();
-    public CTerminator Terminator; // null in structured role; set in flat role
-    public int Id;             // basic-block id in flat role
-    public string Hint;            // optional label-name hint for codegen (flat role)
 
-    public CBlock() { }
-    public CBlock(List<CStmt> stmts) => Stmts = stmts ?? new List<CStmt>();
+    public StructuredBlock() { }
+    public StructuredBlock(List<CStmt> stmts) => Stmts = stmts ?? new List<CStmt>();
 }
 
+/// <summary>Marker for the closed flat-instruction vocabulary accepted by <see cref="FlatBlock"/>.
+/// Structured control-flow statements do not implement it and cannot enter a flat block.</summary>
+public interface IFlatInstruction { }
+
 /// <summary>Assign value to a slot: slot = value.</summary>
-public sealed class CAssign : CStmt
+public sealed class CAssign : CStmt, IFlatInstruction
 {
     public readonly int DestSlot;
     public readonly CValue Value;
@@ -48,7 +43,7 @@ public sealed class CAssign : CStmt
 /// an ordinary assignment: source and destination storage types may differ, and this node is the
 /// sole structural proof that the mismatch came from an approved representation-preserving cast.
 /// </summary>
-public sealed class CRepresentationCopy : CStmt
+public sealed class CRepresentationCopy : IFlatInstruction
 {
     public readonly int DestSlot;
     public readonly CLeaf Source;
@@ -66,7 +61,7 @@ public sealed class CRepresentationCopy : CStmt
 }
 
 /// <summary>Store value to a heap field.</summary>
-public sealed class CStoreField : CStmt
+public sealed class CStoreField : CStmt, IFlatInstruction
 {
     public readonly string FieldName;
     public readonly CLeaf Value;
@@ -81,28 +76,28 @@ public sealed class CStoreField : CStmt
 public sealed class CIf : CStmt
 {
     public readonly CLeaf Cond;
-    public readonly CBlock Then;
-    public readonly CBlock Else;
-    public CIf(CLeaf cond, CBlock thenBlock, CBlock elseBlock = null)
+    public readonly StructuredBlock Then;
+    public readonly StructuredBlock Else;
+    public CIf(CLeaf cond, StructuredBlock thenBlock, StructuredBlock elseBlock = null)
     {
         Cond = cond ?? throw new ArgumentNullException(nameof(cond));
-        Then = thenBlock ?? new CBlock();
-        Else = elseBlock ?? new CBlock();
+        Then = thenBlock ?? new StructuredBlock();
+        Else = elseBlock ?? new StructuredBlock();
     }
 }
 
 /// <summary>Structured while / do-while. CondBlock runs each iteration before Cond.</summary>
 public sealed class CWhile : CStmt
 {
-    public readonly CBlock CondBlock;
+    public readonly StructuredBlock CondBlock;
     public readonly CLeaf Cond;
-    public readonly CBlock Body;
+    public readonly StructuredBlock Body;
     public readonly bool IsDoWhile;
-    public CWhile(CLeaf cond, CBlock body, bool isDoWhile = false, CBlock condBlock = null)
+    public CWhile(CLeaf cond, StructuredBlock body, bool isDoWhile = false, StructuredBlock condBlock = null)
     {
-        CondBlock = condBlock ?? new CBlock();
+        CondBlock = condBlock ?? new StructuredBlock();
         Cond = cond ?? throw new ArgumentNullException(nameof(cond));
-        Body = body ?? new CBlock();
+        Body = body ?? new StructuredBlock();
         IsDoWhile = isDoWhile;
     }
 }
@@ -110,18 +105,18 @@ public sealed class CWhile : CStmt
 /// <summary>Structured for loop. Cond null = infinite.</summary>
 public sealed class CFor : CStmt
 {
-    public readonly CBlock Init;
-    public readonly CBlock CondBlock;
+    public readonly StructuredBlock Init;
+    public readonly StructuredBlock CondBlock;
     public readonly CLeaf Cond; // null = infinite
-    public readonly CBlock Update;
-    public readonly CBlock Body;
-    public CFor(CBlock init, CLeaf cond, CBlock update, CBlock body, CBlock condBlock = null)
+    public readonly StructuredBlock Update;
+    public readonly StructuredBlock Body;
+    public CFor(StructuredBlock init, CLeaf cond, StructuredBlock update, StructuredBlock body, StructuredBlock condBlock = null)
     {
-        Init = init ?? new CBlock();
-        CondBlock = condBlock ?? new CBlock();
+        Init = init ?? new StructuredBlock();
+        CondBlock = condBlock ?? new StructuredBlock();
         Cond = cond;
-        Update = update ?? new CBlock();
-        Body = body ?? new CBlock();
+        Update = update ?? new StructuredBlock();
+        Body = body ?? new StructuredBlock();
     }
 }
 
@@ -153,7 +148,7 @@ public sealed class CReturn : CStmt
 }
 
 /// <summary>Expression used as a statement (side-effecting call etc.).</summary>
-public sealed class CExprStmt : CStmt
+public sealed class CExprStmt : CStmt, IFlatInstruction
 {
     public readonly CValue Expr;
     public CExprStmt(CValue expr) => Expr = expr ?? throw new ArgumentNullException(nameof(expr));
@@ -161,7 +156,7 @@ public sealed class CExprStmt : CStmt
 
 /// <summary>Flat instruction (flat role only): load a heap field into a slot. In structured
 /// form a field read is a CFieldRef(Load) value; CoreFlatten materializes it into this.</summary>
-public sealed class CLoadField : CStmt
+public sealed class CLoadField : IFlatInstruction
 {
     public readonly int DestSlot;
     public readonly string FieldName;
@@ -221,22 +216,18 @@ public sealed class CRet : CTerminator
     public CRet(CLeaf value = null) => Value = value;
 }
 
-// ── Function (unified) ──
+// Structured function and module
 
-/// <summary>A function in the unified Core IR. Structured <see cref="Body"/> is authoritative
-/// when Shape=Structured; <see cref="FlatBlocks"/> when Shape=Flat. CoreFlatten sets FlatBlocks,
-/// appends scratch to Slots, and sets Shape=Flat.</summary>
-public sealed class CFunction
+/// <summary>A function before CFG flattening.</summary>
+public sealed class StructuredFunction
 {
     public readonly string Name;
     public readonly string ExportName;
-    public CBlock Body = new CBlock();                            // structured form
-    public readonly List<CBlock> FlatBlocks = new List<CBlock>(); // flat form (post-flatten)
+    public StructuredBlock Body = new StructuredBlock();
     public readonly List<SlotDecl> Slots = new List<SlotDecl>();
     public StorageType? ReturnType;
     public readonly List<string> ParamFieldNames = new List<string>();
     public readonly List<ReturnSlot> ReturnSlots = new List<ReturnSlot>();
-    public Shape Shape = Shape.Structured;
 
     // Recursion frame-stack metadata (set during emit; consumed by the post-coalesce InsertRecursionSpills
     // pass). RecursiveCalleeNames = internal-call target names that are recursive edges FROM this function
@@ -255,7 +246,7 @@ public sealed class CFunction
     /// silently lose the recursion spill.</summary>
     public int ReentrantSiteCount;
 
-    public CFunction(string name, string exportName = null)
+    public StructuredFunction(string name, string exportName = null)
     {
         Name = name ?? throw new ArgumentNullException(nameof(name));
         ExportName = exportName;
@@ -269,42 +260,28 @@ public sealed class CFunction
         return id;
     }
 
-    int _nextBlockId;
-
-    /// <summary>Allocate a fresh flat block with the next sequential id and append it to
-    /// <see cref="FlatBlocks"/>. The flat-role counterpart of slot allocation.</summary>
-    public CBlock NewBlock()
-    {
-        var block = new CBlock { Id = _nextBlockId++ };
-        FlatBlocks.Add(block);
-        return block;
-    }
-
-    /// <summary>First flat block (flat role).</summary>
-    public CBlock Entry => FlatBlocks.Count > 0 ? FlatBlocks[0] : null;
-
     /// <summary>UASM field name for the single return value (N=1 only).</summary>
     public string ReturnFieldName => ReturnSlots.Count == 1 ? ReturnSlots[0].Id : null;
 }
 
 /// <summary>Top-level Core IR module.</summary>
-public sealed class CModule
+public sealed class StructuredModule
 {
-    public readonly List<CFunction> Functions = new List<CFunction>();
+    public readonly List<StructuredFunction> Functions = new List<StructuredFunction>();
     public readonly List<FieldDecl> Fields = new List<FieldDecl>();
     public readonly UdonTypeFactRegistry TypeFacts;
     public readonly UdonAbiCatalog AbiCatalog;
     public string ClassName;
 
-    public CModule(UdonTypeFactRegistry typeFacts = null, UdonAbiCatalog abiCatalog = null)
+    public StructuredModule(UdonTypeFactRegistry typeFacts = null, UdonAbiCatalog abiCatalog = null)
     {
         TypeFacts = typeFacts ?? new UdonTypeFactRegistry();
         AbiCatalog = abiCatalog;
     }
 
-    public CFunction AddFunction(string name, string exportName = null)
+    public StructuredFunction AddFunction(string name, string exportName = null)
     {
-        var func = new CFunction(name, exportName);
+        var func = new StructuredFunction(name, exportName);
         Functions.Add(func);
         return func;
     }
@@ -328,30 +305,5 @@ public sealed class CProgramVariableStore : CStmt
         VariableName = variableName ?? throw new ArgumentNullException(nameof(variableName));
         VariableType = variableType;
         Value = value ?? throw new ArgumentNullException(nameof(value));
-    }
-}
-
-/// <summary>Canonical traversal order for reachable blocks in flat Core IR.</summary>
-public static class FlatCfgOrder
-{
-    public static List<CBlock> ComputeRpo(CFunction function)
-    {
-        var blocks = new Dictionary<int, CBlock>();
-        foreach (var block in function.FlatBlocks) blocks[block.Id] = block;
-
-        var visited = new HashSet<int>();
-        var postorder = new List<CBlock>();
-        void Visit(CBlock block)
-        {
-            if (block == null || !visited.Add(block.Id)) return;
-            if (block.Terminator != null)
-                foreach (var successor in CTerminator.GetSuccessors(block.Terminator))
-                    if (blocks.TryGetValue(successor, out var next)) Visit(next);
-            postorder.Add(block);
-        }
-
-        Visit(function.Entry);
-        postorder.Reverse();
-        return postorder;
     }
 }

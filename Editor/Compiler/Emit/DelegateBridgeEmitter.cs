@@ -70,13 +70,13 @@ public sealed class DelegateBridgeEmitter
         }
     }
 
-    bool TryResolveTarget(IMethodSymbol method, string bridgeName, out CFunction target)
+    bool TryResolveTarget(IMethodSymbol method, string bridgeName, out StructuredFunction target)
         => _demands.TryGetClosureBridge(bridgeName, out target)
             || _context.Methods.Functions.TryGetValue(method, out target);
 
     void EmitBody(string bridgeName, IMethodSymbol signatureMethod,
         IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeParameterMap,
-        CFunction target, IMethodSymbol closureCheckMethod)
+        StructuredFunction target, IMethodSymbol closureCheckMethod)
     {
         var builder = _context.Builder;
         var signaturePart = DelegateAbi.BuildSigPart(

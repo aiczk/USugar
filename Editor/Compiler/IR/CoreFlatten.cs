@@ -2,18 +2,30 @@ using System;
 using System.Collections.Generic;
 
 // ============================================================================
-// CoreFlatten — the one structured->flat transform of the Core IR. Lowers the structured CStmt tree
-// into flat CBlocks (each with a Terminator and Id), allocating scratch slots, and mutates the
-// CFunction in place: sets FlatBlocks, appends scratch to Slots, and sets Shape=Flat. Control-flow
-// semantics (CondBlock re-evaluation, select dual-arm, cross-call expansion) are realized here.
+// CoreFlatten is the one structured-to-flat transform of Core IR. It returns a distinct
+// FlatModule/FlatFunction graph and allocates flat-only scratch slots on the output.
+// The structured input remains valid and unchanged.
 // ============================================================================
 
 public static class CoreFlatten
 {
-    public static void Lower(CFunction f, UdonAbiCatalog abiCatalog)
+    public static FlatModule Lower(StructuredModule module)
     {
+        if (module == null) throw new ArgumentNullException(nameof(module));
+        var abiCatalog = module.AbiCatalog
+            ?? throw new InvalidOperationException("Core flattening requires a Udon ABI catalog.");
+        var result = new FlatModule(module);
+        foreach (var function in module.Functions)
+            result.Functions.Add(Lower(function, abiCatalog));
+        return result;
+    }
+
+    public static FlatFunction Lower(StructuredFunction f, UdonAbiCatalog abiCatalog)
+    {
+        if (f == null) throw new ArgumentNullException(nameof(f));
         if (abiCatalog == null) throw new ArgumentNullException(nameof(abiCatalog));
-        var ctx = new Ctx(f, abiCatalog);
+        var output = new FlatFunction(f);
+        var ctx = new Ctx(output, abiCatalog);
         ctx.Current = ctx.NewBlock();
 
         PreScanLabels(f.Body, ctx);
@@ -22,12 +34,12 @@ public static class CoreFlatten
         if (ctx.Current.Terminator == null)
             ctx.Current.Terminator = new CRet();
 
-        f.Shape = Shape.Flat;
+        return output;
     }
 
     // ── Label pre-scan ──
 
-    static void PreScanLabels(CBlock block, Ctx ctx)
+    static void PreScanLabels(StructuredBlock block, Ctx ctx)
     {
         foreach (var stmt in block.Stmts)
             PreScanLabelsStmt(stmt, ctx);
@@ -45,7 +57,7 @@ public static class CoreFlatten
                     ctx.LabelBlocks[lbl.Label] = labelBlock;
                 }
                 break;
-            case CBlock blk: PreScanLabels(blk, ctx); break;
+            case StructuredBlock blk: PreScanLabels(blk, ctx); break;
             case CIf cif: PreScanLabels(cif.Then, ctx); PreScanLabels(cif.Else, ctx); break;
             case CWhile cw: PreScanLabels(cw.CondBlock, ctx); PreScanLabels(cw.Body, ctx); break;
             case CFor cf:
@@ -57,7 +69,7 @@ public static class CoreFlatten
 
     // ── Statement lowering ──
 
-    static void LowerBlock(CBlock block, Ctx ctx)
+    static void LowerBlock(StructuredBlock block, Ctx ctx)
     {
         foreach (var stmt in block.Stmts)
         {
@@ -84,7 +96,7 @@ public static class CoreFlatten
         {
             case CExprStmt es: return CountReentrantValue(es.Expr);
             case CAssign a: return CountReentrantValue(a.Value);
-            case CBlock b:
+            case StructuredBlock b:
             {
                 int n = 0;
                 foreach (var s in b.Stmts) n += CountReentrant(s);
@@ -113,7 +125,7 @@ public static class CoreFlatten
     {
         switch (stmt)
         {
-            case CBlock blk: LowerBlock(blk, ctx); break;
+            case StructuredBlock blk: LowerBlock(blk, ctx); break;
             case CAssign a: LowerAssign(a, ctx); break;
             case CStoreField sf: LowerStoreField(sf, ctx); break;
             case CProgramVariableStore store: LowerProgramVariableStore(store, ctx); break;
@@ -138,20 +150,20 @@ public static class CoreFlatten
         switch (a.Value)
         {
             case CRepresentationCast cast:
-                ctx.Current.Stmts.Add(new CRepresentationCopy(
+                ctx.Current.Instructions.Add(new CRepresentationCopy(
                     a.DestSlot, cast.Source, cast.Type, cast.Kind));
                 return;
             case CFieldLoad fl:
-                ctx.Current.Stmts.Add(new CLoadField(a.DestSlot, fl.FieldName, fl.Type));
+                ctx.Current.Instructions.Add(new CLoadField(a.DestSlot, fl.FieldName, fl.Type));
                 return;
             case CProgramVariableLoad load:
                 LowerProgramVariableLoad(load, ctx, a.DestSlot);
                 return;
             case CExternCall ec:
-                ctx.Current.Stmts.Add(new CExprStmt(ec.With(new List<CLeaf>(ec.Args), a.DestSlot)));
+                ctx.Current.Instructions.Add(new CExprStmt(ec.With(new List<CLeaf>(ec.Args), a.DestSlot)));
                 return;
             case CInternalCall ic:
-                ctx.Current.Stmts.Add(new CExprStmt(ic.With(new List<CLeaf>(ic.Args), a.DestSlot)));
+                ctx.Current.Instructions.Add(new CExprStmt(ic.With(new List<CLeaf>(ic.Args), a.DestSlot)));
                 return;
             case CCrossCall cc when cc.Returns.Count == 1:
                 LowerCrossCall(cc, ctx, a.DestSlot);
@@ -162,18 +174,18 @@ public static class CoreFlatten
         }
 
         var src = LowerExpr(a.Value, ctx);
-        ctx.Current.Stmts.Add(new CAssign(a.DestSlot, src));
+        ctx.Current.Instructions.Add(new CAssign(a.DestSlot, src));
     }
 
     static void LowerStoreField(CStoreField sf, Ctx ctx)
     {
         // sf.Value is a CLeaf (operand-leaf under ANF) — already a flat leaf, no lowering needed.
-        ctx.Current.Stmts.Add(new CStoreField(sf.FieldName, sf.Value));
+        ctx.Current.Instructions.Add(new CStoreField(sf.FieldName, sf.Value));
     }
 
     static void LowerProgramVariableStore(CProgramVariableStore store, Ctx ctx)
     {
-        ctx.Current.Stmts.Add(new CExprStmt(new CExternCall(
+        ctx.Current.Instructions.Add(new CExprStmt(new CExternCall(
             ctx.Bind(ExternResolver.EventReceiverSetProgramVariable),
             new List<CLeaf> { store.Instance, store.VariableName, store.Value },
             StorageTypes.Void, null)));
@@ -321,7 +333,7 @@ public static class CoreFlatten
                 // Reentrant MUST be copied: this rebuild is one of the two sites (with RemapInst) where
                 // object-identity marking would silently die (design §4.3) — FlatVerify checks conservation.
                 int? dest = ec.Type != StorageTypes.Void ? ctx.AllocScratch(ec.Type) : (int?)null;
-                ctx.Current.Stmts.Add(new CExprStmt(ec.With(new List<CLeaf>(ec.Args), dest)));
+                ctx.Current.Instructions.Add(new CExprStmt(ec.With(new List<CLeaf>(ec.Args), dest)));
                 return dest.HasValue ? new CSlotRef(dest.Value, ec.Type) : new CConst(null, StorageTypes.Void);
             }
 
@@ -330,7 +342,7 @@ public static class CoreFlatten
                 // Reentrant AND TailSpared MUST be copied (see the CExternCall note above; TailSpared
                 // is the round-9 [Y3] per-site spill exemption).
                 int? dest = ic.Type != StorageTypes.Void ? ctx.AllocScratch(ic.Type) : (int?)null;
-                ctx.Current.Stmts.Add(new CExprStmt(ic.With(new List<CLeaf>(ic.Args), dest)));
+                ctx.Current.Instructions.Add(new CExprStmt(ic.With(new List<CLeaf>(ic.Args), dest)));
                 return dest.HasValue ? new CSlotRef(dest.Value, ic.Type) : new CConst(null, StorageTypes.Void);
             }
 
@@ -348,7 +360,7 @@ public static class CoreFlatten
 
         foreach (var parameter in cc.Params)
         {
-            ctx.Current.Stmts.Add(new CExprStmt(new CExternCall(
+            ctx.Current.Instructions.Add(new CExprStmt(new CExternCall(
                 ctx.Bind(ExternResolver.EventReceiverSetProgramVariable),
                 new List<CLeaf> {
                     inst,
@@ -362,7 +374,7 @@ public static class CoreFlatten
         // reentrant callee shares the caller's param heap vars, so a copy-in that preceded the save
         // would be captured post-clobber). The copy-ins above are emitted back-to-back into the same
         // flat block, so the count is exact by construction.
-        ctx.Current.Stmts.Add(new CExprStmt(new CExternCall(
+        ctx.Current.Instructions.Add(new CExprStmt(new CExternCall(
             ctx.Bind(ExternResolver.EventReceiverSendCustomEvent),
             new List<CLeaf> { inst, cc.EventName }, StorageTypes.Void, null,
             cc.Reentrant, cc.Reentrant ? cc.Params.Count : 0)));
@@ -371,7 +383,7 @@ public static class CoreFlatten
         {
             var ret = cc.Returns[0];
             var dest = destination ?? ctx.AllocScratch(cc.Type);
-            ctx.Current.Stmts.Add(new CExprStmt(new CExternCall(
+            ctx.Current.Instructions.Add(new CExprStmt(new CExternCall(
                 ctx.Bind(ExternResolver.EventReceiverGetProgramVariable),
                 new List<CLeaf> { inst, new CConst(ret.Id, StorageTypes.String) }, cc.Type, dest)));
             return new CSlotRef(dest, cc.Type);
@@ -382,7 +394,7 @@ public static class CoreFlatten
             foreach (var ret in cc.Returns)
             {
                 var dest = ctx.AllocScratch(ret.StorageType);
-                ctx.Current.Stmts.Add(new CExprStmt(new CExternCall(
+                ctx.Current.Instructions.Add(new CExprStmt(new CExternCall(
                     ctx.Bind(ExternResolver.EventReceiverGetProgramVariable),
                     new List<CLeaf> { inst, new CConst(ret.Id, StorageTypes.String) },
                     ret.StorageType, dest)));
@@ -393,7 +405,7 @@ public static class CoreFlatten
     }
 
     static void LowerProgramVariableLoad(CProgramVariableLoad load, Ctx ctx, int destination)
-        => ctx.Current.Stmts.Add(new CExprStmt(new CExternCall(
+        => ctx.Current.Instructions.Add(new CExprStmt(new CExternCall(
             ctx.Bind(ExternResolver.EventReceiverGetProgramVariable),
             new List<CLeaf> { load.Instance, load.VariableName }, load.Type, destination)));
 
@@ -408,11 +420,11 @@ public static class CoreFlatten
         ctx.Current.Terminator = new CBranch(sel.Cond, trueBlock.Id, falseBlock.Id);
 
         ctx.Current = trueBlock;
-        ctx.Current.Stmts.Add(new CAssign(destination, sel.TrueVal));
+        ctx.Current.Instructions.Add(new CAssign(destination, sel.TrueVal));
         ctx.Current.Terminator = new CJump(mergeBlock.Id);
 
         ctx.Current = falseBlock;
-        ctx.Current.Stmts.Add(new CAssign(destination, sel.FalseVal));
+        ctx.Current.Instructions.Add(new CAssign(destination, sel.FalseVal));
         ctx.Current.Terminator = new CJump(mergeBlock.Id);
 
         ctx.Current = mergeBlock;
@@ -422,14 +434,15 @@ public static class CoreFlatten
 
     sealed class Ctx
     {
-        public readonly CFunction Func;
+        public readonly FlatFunction Func;
         public readonly UdonAbiCatalog AbiCatalog;
-        public readonly Stack<(CBlock Exit, CBlock Continue)> LoopStack = new Stack<(CBlock, CBlock)>();
-        public readonly Dictionary<string, CBlock> LabelBlocks = new Dictionary<string, CBlock>();
-        public CBlock Current;
-        int _nextBlockId;
+        public readonly Stack<(FlatBlock Exit, FlatBlock Continue)> LoopStack =
+            new Stack<(FlatBlock, FlatBlock)>();
+        public readonly Dictionary<string, FlatBlock> LabelBlocks =
+            new Dictionary<string, FlatBlock>();
+        public FlatBlock Current;
 
-        public Ctx(CFunction f, UdonAbiCatalog abiCatalog)
+        public Ctx(FlatFunction f, UdonAbiCatalog abiCatalog)
         {
             Func = f;
             AbiCatalog = abiCatalog;
@@ -437,12 +450,7 @@ public static class CoreFlatten
 
         public BoundExtern Bind(UdonAbiKey signature) => AbiCatalog.Require(signature);
 
-        public CBlock NewBlock()
-        {
-            var b = new CBlock { Id = _nextBlockId++ };
-            Func.FlatBlocks.Add(b);
-            return b;
-        }
+        public FlatBlock NewBlock() => Func.NewBlock();
 
         public int AllocScratch(StorageType type)
         {

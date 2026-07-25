@@ -7,7 +7,7 @@ namespace USugar.Tests;
 /// <summary>
 /// Structured Core IR verifier tests: CoreVerify must reject malformed IR (undeclared slots, type
 /// mismatches, non-boolean conditions, break outside a loop, return-type mismatches) and accept
-/// valid IR. Ported from the HirVerifier tests when HIR was absorbed into the unified Core IR. These
+/// valid structured IR. These
 /// cover the verifier's negative paths, which the snapshot oracle (valid programs only) cannot.
 /// </summary>
 public class CoreVerifyTests
@@ -15,7 +15,7 @@ public class CoreVerifyTests
     [Fact]
     public void Verifier_ValidFunction_Passes()
     {
-        var module = new CModule();
+        var module = new StructuredModule();
         var builder = new CoreBuilder(module);
         var func = builder.BeginFunction("test");
         func.ReturnType = StorageTypes.Int32;
@@ -30,7 +30,7 @@ public class CoreVerifyTests
     [Fact]
     public void Verifier_UndeclaredSlot_Throws()
     {
-        var module = new CModule();
+        var module = new StructuredModule();
         var func = module.AddFunction("test");
         func.Body.Stmts.Add(new CAssign(99, new CConst(0, StorageTypes.Int32)));
 
@@ -40,7 +40,7 @@ public class CoreVerifyTests
     [Fact]
     public void Verifier_TypeMismatch_Throws()
     {
-        var module = new CModule();
+        var module = new StructuredModule();
         var builder = new CoreBuilder(module);
         builder.BeginFunction("test");
         var slot = builder.AllocFrame(StorageTypes.Single);
@@ -53,14 +53,14 @@ public class CoreVerifyTests
     [Fact]
     public void Verifier_IfCondNotBoolean_Throws()
     {
-        var module = new CModule();
+        var module = new StructuredModule();
         var func = module.AddFunction("test");
         func.NewSlot(StorageTypes.Int32, SlotClass.Frame);
         // if (intValue) — condition must be boolean
         func.Body.Stmts.Add(new CIf(
             new CSlotRef(0, StorageTypes.Int32),
-            new CBlock(),
-            new CBlock()));
+            new StructuredBlock(),
+            new StructuredBlock()));
 
         Assert.Throws<VerificationException>(() => CoreVerify.Verify(module));
     }
@@ -68,7 +68,7 @@ public class CoreVerifyTests
     [Fact]
     public void Verifier_BreakOutsideLoop_Throws()
     {
-        var module = new CModule();
+        var module = new StructuredModule();
         var func = module.AddFunction("test");
         func.Body.Stmts.Add(new CBreak());
 
@@ -78,26 +78,23 @@ public class CoreVerifyTests
     [Fact]
     public void Verifier_BreakInsideLoop_Passes()
     {
-        var module = new CModule();
+        var module = new StructuredModule();
         var func = module.AddFunction("test");
         func.NewSlot(StorageTypes.Boolean, SlotClass.Scratch);
 
-        var body = new CBlock();
+        var body = new StructuredBlock();
         body.Stmts.Add(new CBreak());
         func.Body.Stmts.Add(new CWhile(new CSlotRef(0, StorageTypes.Boolean), body));
 
         CoreVerify.Verify(module); // should not throw
     }
 
-    // ── Shape guard (mirrors FlatVerify.Verify's `f.Shape != Flat` check) ──
-    // CoreVerify.VerifyFunction walks the STRUCTURED func.Body; CoreFlatten leaves that tree stale
-    // once it sets Shape=Flat and populates FlatBlocks instead. Without a guard, re-running CoreVerify
-    // on an already-flattened function silently "passes" by re-validating the frozen pre-flatten tree.
+    // Flattening returns a separate phase type; the source tree remains a valid structured artifact.
 
     [Fact]
-    public void Verifier_FlattenedFunction_Throws()
+    public void Flattening_DoesNotInvalidateStructuredInput()
     {
-        var module = new CModule();
+        var module = new StructuredModule(abiCatalog: TestHelper.RegistryFacts);
         var builder = new CoreBuilder(module);
         var func = builder.BeginFunction("test");
         func.ReturnType = StorageTypes.Int32;
@@ -105,15 +102,17 @@ public class CoreVerifyTests
         builder.EmitAssign(slot, builder.Const(42, StorageTypes.Int32));
         builder.EmitReturn(builder.SlotRef(slot));
 
-        CoreFlatten.Lower(func, TestHelper.RegistryFacts); // sets Shape = Flat; func.Body is now stale
+        var flat = CoreFlatten.Lower(func, TestHelper.RegistryFacts);
 
-        Assert.Throws<VerificationException>(() => CoreVerify.Verify(module));
+        CoreVerify.Verify(module);
+        Assert.NotSame(func, (object)flat);
+        Assert.NotEmpty(flat.Blocks);
     }
 
     [Fact]
     public void Verifier_ReturnTypeMismatch_Throws()
     {
-        var module = new CModule();
+        var module = new StructuredModule();
         var func = module.AddFunction("test");
         func.ReturnType = StorageTypes.Single;
         func.Body.Stmts.Add(new CReturn(new CConst("hello", StorageTypes.String)));
@@ -124,7 +123,7 @@ public class CoreVerifyTests
     [Fact]
     public void Verifier_ExplicitRepresentationCastReturn_Passes()
     {
-        var module = new CModule();
+        var module = new StructuredModule(abiCatalog: TestHelper.RegistryFacts);
         var builder = new CoreBuilder(module);
         var func = builder.BeginFunction("test");
         func.ReturnType = StorageTypes.Single;
@@ -139,7 +138,7 @@ public class CoreVerifyTests
     [Fact]
     public void Verifier_RepresentationCastStillVerifiesUnderlyingLeaf()
     {
-        var module = new CModule();
+        var module = new StructuredModule();
         var func = module.AddFunction("test");
         func.ReturnType = StorageTypes.Single;
         func.Slots.Add(new SlotDecl(0, StorageTypes.Single, SlotClass.Scratch));
@@ -155,7 +154,7 @@ public class CoreVerifyTests
     [Fact]
     public void Verifier_NonVoidReturnWithoutValue_Throws()
     {
-        var module = new CModule();
+        var module = new StructuredModule();
         var func = module.AddFunction("test");
         func.ReturnType = StorageTypes.Int32;
         func.Body.Stmts.Add(new CReturn());
@@ -166,7 +165,7 @@ public class CoreVerifyTests
     [Fact]
     public void Verifier_VoidReturnWithValue_Throws()
     {
-        var module = new CModule();
+        var module = new StructuredModule();
         var func = module.AddFunction("test");
         func.ReturnType = StorageTypes.Void;
         func.Body.Stmts.Add(new CReturn(new CConst(1, StorageTypes.Int32)));
@@ -177,7 +176,7 @@ public class CoreVerifyTests
     [Fact]
     public void Verifier_UndeclaredFieldLoad_Throws()
     {
-        var module = new CModule();
+        var module = new StructuredModule();
         var builder = new CoreBuilder(module);
         builder.BeginFunction("test");
         var slot = builder.AllocFrame(StorageTypes.Int32);
@@ -189,7 +188,7 @@ public class CoreVerifyTests
     [Fact]
     public void Verifier_FieldStoreTypeMismatch_Throws()
     {
-        var module = new CModule();
+        var module = new StructuredModule();
         module.Fields.Add(new FieldDecl("value", StorageTypes.Single));
         var builder = new CoreBuilder(module);
         builder.BeginFunction("test");
@@ -201,7 +200,7 @@ public class CoreVerifyTests
     [Fact]
     public void Verifier_DuplicateLabel_Throws()
     {
-        var module = new CModule();
+        var module = new StructuredModule();
         var func = module.AddFunction("test");
         func.Body.Stmts.Add(new CLabel("same"));
         func.Body.Stmts.Add(new CLabel("same"));
@@ -215,7 +214,7 @@ public class CoreVerifyTests
         // Enum slots interop with Int32 (Udon stores enums as their underlying type). Fact-backed like
         // every production slot type: only SDK enums keep their tag past the GetUdonTypeName minting
         // choke (user enums fold to the underlying type), and the choke records them as enum facts.
-        var module = new CModule();
+        var module = new StructuredModule();
         module.TypeFacts.RecordForTest("CvFakeSdkEnum", isEnum: true, isValueType: true);
         var builder = new CoreBuilder(module);
         builder.BeginFunction("test");
@@ -228,7 +227,7 @@ public class CoreVerifyTests
     [Fact]
     public void Verifier_TypeFactsDoNotLeakBetweenModules()
     {
-        var first = new CModule();
+        var first = new StructuredModule();
         first.TypeFacts.RecordForTest("CvCompilationLocalEnum", isEnum: true, isValueType: true);
         var firstBuilder = new CoreBuilder(first);
         firstBuilder.BeginFunction("first");
@@ -236,7 +235,7 @@ public class CoreVerifyTests
             firstBuilder.Const(1, StorageTypes.Int32));
         CoreVerify.Verify(first);
 
-        var second = new CModule();
+        var second = new StructuredModule();
         var secondBuilder = new CoreBuilder(second);
         secondBuilder.BeginFunction("second");
         secondBuilder.EmitAssign(secondBuilder.AllocFrame(new StorageType("CvCompilationLocalEnum")),
@@ -267,7 +266,7 @@ public class CoreVerifyTests
     public void Verifier_Int32ToSingle_Throws()
     {
         // Single ← Int32 is not valid (was previously allowed by blanket Int32 check)
-        var module = new CModule();
+        var module = new StructuredModule();
         var builder = new CoreBuilder(module);
         builder.BeginFunction("test");
         var slot = builder.AllocFrame(StorageTypes.Single);
@@ -280,7 +279,7 @@ public class CoreVerifyTests
     public void Verifier_Int32ToDouble_Throws()
     {
         // Double ← Int32 is not valid
-        var module = new CModule();
+        var module = new StructuredModule();
         var builder = new CoreBuilder(module);
         builder.BeginFunction("test");
         var slot = builder.AllocFrame(StorageTypes.Double);
@@ -295,7 +294,7 @@ public class CoreVerifyTests
     [Fact]
     public void Verifier_FieldAddrAsStoreValue_Throws()
     {
-        var module = new CModule();
+        var module = new StructuredModule();
         module.Fields.Add(new FieldDecl("x", StorageTypes.Int32));
         module.Fields.Add(new FieldDecl("y", StorageTypes.Int32));
         var func = module.AddFunction("test");
@@ -308,7 +307,7 @@ public class CoreVerifyTests
     [Fact]
     public void Verifier_FieldAddrAsReturnValue_Throws()
     {
-        var module = new CModule();
+        var module = new StructuredModule();
         module.Fields.Add(new FieldDecl("y", StorageTypes.Int32));
         var func = module.AddFunction("test");
         func.ReturnType = StorageTypes.Int32;
@@ -320,7 +319,7 @@ public class CoreVerifyTests
     [Fact]
     public void Verifier_FieldAddrInSelectArm_Throws()
     {
-        var module = new CModule();
+        var module = new StructuredModule();
         module.Fields.Add(new FieldDecl("y", StorageTypes.Int32));
         var builder = new CoreBuilder(module);
         builder.BeginFunction("test");
@@ -337,7 +336,7 @@ public class CoreVerifyTests
     [Fact]
     public void Verifier_FieldAddrAsExternArg_Passes()
     {
-        var module = new CModule();
+        var module = new StructuredModule();
         module.Fields.Add(new FieldDecl("y", StorageTypes.Int32));
         var func = module.AddFunction("test");
         // SomeType.TryGet(out y) — a CFieldAddr IS valid as an out/ref extern argument
@@ -362,7 +361,7 @@ public class CoreVerifyTests
     [Fact]
     public void Verifier_CrossCallParameterTypeMismatch_Throws()
     {
-        var module = new CModule();
+        var module = new StructuredModule();
         var func = module.AddFunction("test");
         var transport = new CrossCallTransportPlan(
             new CConst("Call", StorageTypes.String),
@@ -382,7 +381,7 @@ public class CoreVerifyTests
     [Fact]
     public void Verifier_CrossCallWithTypedTransport_Passes()
     {
-        var module = new CModule();
+        var module = new StructuredModule();
         var func = module.AddFunction("test");
         var transport = new CrossCallTransportPlan(
             new CConst("Call", StorageTypes.String),
@@ -402,7 +401,7 @@ public class CoreVerifyTests
     [Fact]
     public void Verifier_CrossCallNonCanonicalOrdinal_Throws()
     {
-        var module = new CModule();
+        var module = new StructuredModule();
         var func = module.AddFunction("test");
         var transport = new CrossCallTransportPlan(
             new CConst("Call", StorageTypes.String),
@@ -422,7 +421,7 @@ public class CoreVerifyTests
     [Fact]
     public void Verifier_ProgramVariableStoreTypeMismatch_Throws()
     {
-        var module = new CModule();
+        var module = new StructuredModule();
         var func = module.AddFunction("test");
         func.Body.Stmts.Add(new CProgramVariableStore(
             new CConst(null, StorageTypes.UdonEventReceiver),
@@ -437,7 +436,7 @@ public class CoreVerifyTests
     [Fact]
     public void Verifier_ProgramVariableNameMustBeString_Throws()
     {
-        var module = new CModule();
+        var module = new StructuredModule();
         var func = module.AddFunction("test");
         func.Body.Stmts.Add(new CProgramVariableStore(
             new CConst(null, StorageTypes.UdonEventReceiver),
@@ -452,7 +451,7 @@ public class CoreVerifyTests
     [Fact]
     public void Verifier_CrossCallEventNameMustBeString_Throws()
     {
-        var module = new CModule();
+        var module = new StructuredModule();
         var func = module.AddFunction("test");
         var transport = new CrossCallTransportPlan(
             new CConst(1, StorageTypes.Int32),
@@ -469,7 +468,7 @@ public class CoreVerifyTests
     [Fact]
     public void Verifier_ProgramVariableReceiverMustBeProgram_Throws()
     {
-        var module = new CModule();
+        var module = new StructuredModule();
         var func = module.AddFunction("test");
         func.Body.Stmts.Add(new CProgramVariableStore(
             new CConst(1, StorageTypes.Int32),
