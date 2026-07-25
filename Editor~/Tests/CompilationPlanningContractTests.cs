@@ -64,9 +64,67 @@ public class CompilationPlanningContractTests
                 parameter.ParameterType == typeof(LoweringState)
                 || parameter.ParameterType == typeof(StructuredModule)));
 
-        var fieldsMember = typeof(ProgramPlan).GetField(nameof(ProgramPlan.Fields));
+        var fieldsMember = typeof(ProgramDiscovery).GetField(nameof(ProgramDiscovery.Fields));
         Assert.NotNull(fieldsMember);
         Assert.Equal(typeof(FieldDiscoveryPlan), fieldsMember.FieldType);
+    }
+
+    [Fact]
+    public void BoundProgram_IsTheCompleteImmutableLoweringInput()
+    {
+        var fields = typeof(BoundProgram).GetFields(
+            BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+        Assert.NotEmpty(fields);
+        Assert.All(fields, field => Assert.True(field.IsInitOnly, field.Name));
+        Assert.Contains(fields, field => field.FieldType == typeof(ProgramDiscovery));
+        Assert.Contains(fields, field => field.FieldType == typeof(ClosureIdentityPlan));
+        Assert.Contains(fields, field => field.FieldType == typeof(CaptureScopeAnalysis));
+        Assert.Contains(fields, field => field.FieldType == typeof(CallableBodyGraph));
+        Assert.Contains(fields, field => field.FieldType == typeof(RecursionInfo));
+        Assert.Contains(fields, field => field.FieldType == typeof(SyntheticDemandPlan));
+        Assert.Contains(fields, field => field.FieldType == typeof(BoundCallSiteTable));
+        Assert.DoesNotContain(
+            typeof(BoundProgram).GetMethods(
+                BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic),
+            method => method.Name.StartsWith("With", StringComparison.Ordinal));
+
+        Assert.Null(typeof(RecursionInfo).GetMethod("Populate"));
+        Assert.All(
+            typeof(RecursionInfo).GetProperties(),
+            property => Assert.Null(property.SetMethod));
+    }
+
+    [Fact]
+    public void CallableSpecializations_AreKeyedByExactClrSymbols()
+    {
+        var compilation = TestHelper.BuildCompilation(@"
+using UdonSharp;
+public class KeyedSpecs : UdonSharpBehaviour
+{
+    T Id<T>(T value) => value;
+}
+", "KeyedSpecs", out var type);
+        var definition = type.GetMembers("Id").OfType<IMethodSymbol>().Single();
+        var intSpec = definition.Construct(compilation.GetSpecialType(SpecialType.System_Int32));
+        var stringSpec = definition.Construct(compilation.GetSpecialType(SpecialType.System_String));
+        var callables = new CallableDefinitionPlan(
+            Array.Empty<IMethodSymbol>(),
+            Array.Empty<IMethodSymbol>(),
+            Array.Empty<IMethodSymbol>(),
+            Array.Empty<IMethodSymbol>(),
+            new[] { definition },
+            new[] { intSpec, stringSpec },
+            Array.Empty<ClosureSpecializationCandidate>());
+
+        Assert.Equal(2, callables.SpecializationsByKey.Count);
+        Assert.Equal(
+            intSpec,
+            callables.SpecializationsByKey[SpecializationKey.ForMethod(intSpec)],
+            SymbolEqualityComparer.Default);
+        Assert.Equal(
+            stringSpec,
+            callables.SpecializationsByKey[SpecializationKey.ForMethod(stringSpec)],
+            SymbolEqualityComparer.Default);
     }
 
     [Fact]
@@ -94,7 +152,7 @@ class C
             StructMembers = new[] { methods["StructMember"] },
             BaseCopies = new[] { methods["Own"], methods["BaseCopy"] },
         };
-        var builder = new ProgramPlanSeedBuilder(
+        var builder = new ProgramDiscoverySeedBuilder(
             () => new[] { methods["Own"] }, _ => reach,
             () => Array.Empty<IOperation>(),
             () => new[] { local });
@@ -122,7 +180,7 @@ class C
             sourceMethods, Array.Empty<IMethodSymbol>(), Array.Empty<IMethodSymbol>(),
             Array.Empty<IMethodSymbol>(), sourceMethods, Array.Empty<IMethodSymbol>(),
             Array.Empty<ClosureSpecializationCandidate>());
-        var plan = new ProgramPlan(
+        var plan = new ProgramDiscovery(
             callables,
             new ReachableBodies().Freeze(Array.Empty<INamedTypeSymbol>()),
             sourceRoots,

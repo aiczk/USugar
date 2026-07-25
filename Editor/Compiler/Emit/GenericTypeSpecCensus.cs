@@ -46,7 +46,7 @@ internal sealed class GenericTypeSpecCensus
         _dispatchTypes.Add(rootType);
     }
 
-    public Result Build(ProgramPlanSeed plan)
+    public Result Build(ProgramDiscoverySeed plan)
     {
         foreach (var m in plan.ProgramMethods) EnqueueIfClosed(m, null, null);
         foreach (var m in plan.ForeignStatics) EnqueueIfClosed(m, null, null);

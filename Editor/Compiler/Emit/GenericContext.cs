@@ -22,7 +22,7 @@ public sealed class GenericContext
     public bool IsPlannedSpecialization(IMethodSymbol method)
         => _plannedSpecializations.Contains(method);
 
-    public void BeginBodyEmission() => BodyEmissionStarted = true;
+    internal void BeginBodyEmission() => BodyEmissionStarted = true;
 
     public IDisposable EnterScope(IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> map,
         IMethodSymbol currentMethod)

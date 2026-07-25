@@ -7,16 +7,16 @@ using Microsoft.CodeAnalysis.Operations;
 /// <summary>
 /// Materializes the source-level inputs used by the closed-world planner. This mutable seed never
 /// crosses the planning/lowering boundary; <see cref="CompilationPlanner"/> publishes a
-/// <see cref="ProgramPlan"/> instead.
+/// <see cref="ProgramDiscovery"/> instead.
 /// </summary>
-sealed class ProgramPlanSeedBuilder
+sealed class ProgramDiscoverySeedBuilder
 {
     readonly Func<IMethodSymbol[]> _computeMethods;
     readonly Func<IMethodSymbol[], ReachableBodies> _buildReachableBodies;
     readonly Func<IEnumerable<IOperation>> _fieldInitOps;
     readonly Func<IEnumerable<IMethodSymbol>> _additionalCallableDefinitions;
 
-    public ProgramPlanSeedBuilder(
+    public ProgramDiscoverySeedBuilder(
         Func<IMethodSymbol[]> computeMethods,
         Func<IMethodSymbol[], ReachableBodies> buildReachableBodies,
         Func<IEnumerable<IOperation>> fieldInitOps,
@@ -28,7 +28,7 @@ sealed class ProgramPlanSeedBuilder
         _additionalCallableDefinitions = additionalCallableDefinitions;
     }
 
-    public ProgramPlanSeed Build()
+    public ProgramDiscoverySeed Build()
     {
         var methods = _computeMethods();
         var reach = _buildReachableBodies(methods);
@@ -50,13 +50,13 @@ sealed class ProgramPlanSeedBuilder
         // root set; their bodies ride reach.GenericForeignStaticBodies into the Build call.
         captureRoots.AddRange(reach.GenericForeignStaticBodies.Keys
             .Where(m => m.DeclaringSyntaxReferences.Length > 0 && !reach.BodyByDef.ContainsKey(m)));
-        return new ProgramPlanSeed(methods, foreignStatics, reach.StructMembers, baseInstanceMethods,
+        return new ProgramDiscoverySeed(methods, foreignStatics, reach.StructMembers, baseInstanceMethods,
             definitions, reach, captureRoots, _fieldInitOps());
     }
 }
 
 /// <summary>Transient builder product. It exists only while closed-world censuses are running.</summary>
-sealed class ProgramPlanSeed
+sealed class ProgramDiscoverySeed
 {
     public readonly IMethodSymbol[] ProgramMethods;
     public readonly IMethodSymbol[] ForeignStatics;
@@ -67,7 +67,7 @@ sealed class ProgramPlanSeed
     public readonly IReadOnlyList<IMethodSymbol> CaptureRoots;
     public readonly IReadOnlyList<IOperation> FieldInitOps;
 
-    public ProgramPlanSeed(IEnumerable<IMethodSymbol> programMethods,
+    public ProgramDiscoverySeed(IEnumerable<IMethodSymbol> programMethods,
         IEnumerable<IMethodSymbol> foreignStatics,
         IEnumerable<IMethodSymbol> structMethods,
         IEnumerable<IMethodSymbol> baseInstanceMethods,

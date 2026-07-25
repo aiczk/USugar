@@ -34,9 +34,9 @@ internal sealed class CompilationPlanner
         _rootType = rootType;
     }
 
-    public ProgramPlan Build()
+    public ProgramDiscovery Build()
     {
-        var seed = new ProgramPlanSeedBuilder(
+        var seed = new ProgramDiscoverySeedBuilder(
             _methods, _reach, () => _fields.InitializerOperations,
             _additionalCallableDefinitions).Build();
         var specializationCensus = new GenericTypeSpecCensus(
@@ -64,7 +64,7 @@ internal sealed class CompilationPlanner
         // Keep portable non-generic classes seeded by reach: they may enter from another Udon program
         // without a local mint. The census contributes closed generic instantiations on top.
         var reach = seed.Reach.Freeze(specializationCensus.MintedClasses);
-        return new ProgramPlan(
+        return new ProgramDiscovery(
             callables, reach, seed.CaptureRoots, seed.FieldInitOps, _fields);
     }
 }

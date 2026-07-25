@@ -49,15 +49,16 @@ internal readonly struct DispatchPlan
         CrossDispatchPlan cross, DispatchPrecision precision)
     {
         Site = site;
-        RuntimeTargets = runtimeTargets;
+        RuntimeTargets = (runtimeTargets ?? System.Array.Empty<VDispatchTarget>())
+            .ToList().AsReadOnly();
         Cross = cross;
         Precision = precision;
-        LocalTargets = runtimeTargets.Select(target => target.Impl.OriginalDefinition)
+        LocalTargets = RuntimeTargets.Select(target => target.Impl.OriginalDefinition)
             .Concat(cross.HasLocalTarget
                 ? new[] { cross.LocalTargetDefinition }
                 : System.Array.Empty<IMethodSymbol>())
             .Distinct<IMethodSymbol>(SymbolEqualityComparer.Default)
-            .ToArray();
+            .ToList().AsReadOnly();
     }
 }
 

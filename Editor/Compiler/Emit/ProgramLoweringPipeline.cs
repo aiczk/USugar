@@ -180,7 +180,7 @@ internal partial class ProgramLoweringPipeline
                 "Udon VM cannot allocate user-defined types. Use a regular class inheriting from UdonSharpBehaviour instead.");
 
         var fields = DiscoverFields();
-        var plan = BuildProgramPlan(fields);
+        var plan = BuildProgramDiscovery(fields);
         FieldPlanEmitter.Emit(plan.Fields, _state);
         SetReflectionValues();
         // Stage 2: closure-scope analysis feeding real codegen — EnvEmit's alloc/read/write and every
@@ -200,10 +200,12 @@ internal partial class ProgramLoweringPipeline
         _state.VirtualDispatch = new VirtualDispatch(_state.ClassTypes); // CA-v2b-2: virtual-call lowering
         var bodyGraph = new RecursionNodeWalk(
             EdgeResolver, plan.Reach, plan.FieldInitOps, plan.Callables.Definitions).Run();
-        _state.Closures.SetIdentityPlan(ClosureIdentityPlan.Build(bodyGraph.AllNodes));
-        _state.Closures.SetCaptureScope(CaptureScopeAnalysis.Build(_compilation, _classSymbol,
-            plan.CaptureRoots, bodyGraph.Bodies, plan.FieldInitOps));
-        EmitMethods(plan, bodyGraph);
+        var closureIdentities = ClosureIdentityPlan.Build(bodyGraph.AllNodes);
+        var captures = CaptureScopeAnalysis.Build(
+            _compilation, _classSymbol, plan.CaptureRoots, bodyGraph.Bodies, plan.FieldInitOps);
+        _state.Closures.SetIdentityPlan(closureIdentities);
+        _state.Closures.SetCaptureScope(captures);
+        BindAndEmitMethods(plan, bodyGraph, closureIdentities, captures);
         // Handlers build Core IR; the pipeline (verify/optimize/flatten) runs on Core directly.
         var result = IrPipeline.Run(_module);
         _flatModule = result.FlatModule;
@@ -213,7 +215,7 @@ internal partial class ProgramLoweringPipeline
 
     public uint GetHeapSize() => _codeGenResult.HeapSize;
 
-    ProgramPlan BuildProgramPlan(FieldDiscoveryPlan fields)
+    ProgramDiscovery BuildProgramDiscovery(FieldDiscoveryPlan fields)
     {
         // Build the single ReachableBodies fixpoint once after field discovery, but before any field
         // declaration reaches Structured IR. Initializers are semantic roots for the plan.
@@ -1040,14 +1042,18 @@ internal partial class ProgramLoweringPipeline
            && m.MethodKind is MethodKind.Ordinary or MethodKind.ExplicitInterfaceImplementation
               or MethodKind.PropertyGet or MethodKind.PropertySet;
 
-    void EmitMethods(ProgramPlan plan, CallableBodyGraph bodyGraph)
+    void BindAndEmitMethods(
+        ProgramDiscovery discovery,
+        CallableBodyGraph bodyGraph,
+        ClosureIdentityPlan closureIdentities,
+        CaptureScopeAnalysis captures)
     {
-        RegisterProgram(plan);
-        _state.Generics.SetPlannedSpecializations(plan.Callables.Specializations);
+        RegisterProgram(discovery);
+        _state.Generics.SetPlannedSpecializations(discovery.Callables.Specializations);
         var specializationRegistrar = new SpecializationRegistrar(_lowering);
-        foreach (var specialization in plan.Callables.Specializations)
+        foreach (var specialization in discovery.Callables.SpecializationsByKey.Values)
             specializationRegistrar.Register(specialization);
-        foreach (var closure in plan.Callables.ClosureSpecializations)
+        foreach (var closure in discovery.Callables.ClosureSpecializations)
         {
             var definition = _state.Closures.IdentityPlan.CanonicalDefinition(closure.Method);
             var method = closure.Method.IsGenericMethod
@@ -1058,16 +1064,84 @@ internal partial class ProgramLoweringPipeline
                 new ClosureSpecializationCandidate(method, closure.OwnerSpecs));
         }
         _state.Synthetics.SetExpectedDelegateSites(DelegateDemandCensus.Collect(
-            _state.Methods.RegisteredBodies, GetMethodBodyOperation, plan.FieldInitOps));
-        PlanSyntheticDemands(plan);
-        plan = plan.WithSyntheticDemands(_state.Synthetics.PublishPlan());
-        BuildRecursionInfo(bodyGraph);
-        _state.Generics.BeginBodyEmission();
-        EmitRegisteredBodies(plan);
+            _state.Methods.RegisteredBodies, GetMethodBodyOperation, discovery.FieldInitOps));
+        PlanSyntheticDemands(discovery);
+        var syntheticDemands = _state.Synthetics.PublishPlan();
+        var callSites = BindCallSites(discovery);
+        var recursion = BuildRecursionInfo(bodyGraph);
+        _state.RecursionContext.SetPlan(recursion);
+        var program = new BoundProgram(
+            discovery,
+            closureIdentities,
+            captures,
+            bodyGraph,
+            recursion,
+            syntheticDemands,
+            callSites);
+        _state.PublishBoundProgram(program);
+        _state.BeginBodyEmission();
+        EmitRegisteredBodies(program);
         VerifyRegisteredCallablesAreNodes(bodyGraph);
     }
 
-    void PlanSyntheticDemands(ProgramPlan plan)
+    BoundCallSiteTable BindCallSites(ProgramDiscovery discovery)
+    {
+        var sites = new Dictionary<BoundCallSiteKey, BoundCallSite>();
+
+        void BindTree(
+            IOperation operation,
+            IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeMap,
+            SpecializationKey? scope,
+            bool root)
+        {
+            if (operation == null) return;
+            if (!root && operation is ILocalFunctionOperation or IAnonymousFunctionOperation)
+                return;
+            foreach (var rawSite in CallableSites.FromOperation(operation))
+            {
+                var target = TypeEnvironment.CloseMethod(
+                    _compilation, rawSite.Target, typeMap);
+                var site = new CallableSite(
+                    rawSite.Kind, target, rawSite.Operation, rawSite.Receiver);
+                var resolved = EdgeResolver.ResolveCallableSite(site);
+                DispatchPlan? dispatch = null;
+                if (!target.IsStatic)
+                {
+                    var receiver = TypeEnvironment.CloseType(
+                            _compilation, rawSite.Receiver?.Type, typeMap)
+                        as INamedTypeSymbol ?? target.ContainingType;
+                    dispatch = _state.VirtualDispatch.Resolve(
+                        site, receiver, _classSymbol);
+                }
+                var key = new BoundCallSiteKey(
+                    operation.Syntax, rawSite.Kind, target, scope);
+                if (!sites.TryAdd(key, new BoundCallSite(resolved, dispatch)))
+                    throw new InvalidOperationException(
+                        $"Callable site '{operation.Syntax}' was bound twice in one specialization.");
+            }
+            foreach (var child in operation.ChildOps())
+                BindTree(child, typeMap, scope, false);
+        }
+
+        foreach (var body in _state.Methods.RegisteredBodies)
+        {
+            var scope = body.Closure != null
+                ? new SpecializationKey(body.Method, body.Closure.KeyArgs)
+                : SpecializationKey.ForMethod(body.Method);
+            BindTree(
+                GetMethodBodyOperation(body.Method.OriginalDefinition),
+                body.TypeParameterMap,
+                scope,
+                true);
+        }
+
+        foreach (var initializer in discovery.FieldInitOps)
+            BindTree(initializer, null, null, true);
+
+        return new BoundCallSiteTable(sites);
+    }
+
+    void PlanSyntheticDemands(ProgramDiscovery plan)
     {
         var planner = new SyntheticDemandPlanner(_lowering);
         foreach (var body in _state.Methods.RegisteredBodies.ToArray())
@@ -1100,7 +1174,7 @@ internal partial class ProgramLoweringPipeline
         foreach (var child in operation.ChildOps()) PlanSyntheticDemands(child, false, planner);
     }
 
-    void RegisterProgram(ProgramPlan plan)
+    void RegisterProgram(ProgramDiscovery plan)
     {
         var methods = plan.Callables.ProgramMethods;
         var typeLayout = _planner.GetLayout(_classSymbol);
@@ -1255,7 +1329,7 @@ internal partial class ProgramLoweringPipeline
             returns: returns));
     }
 
-    static HashSet<IMethodSymbol> CollectCrossDispatchExports(ProgramPlan plan)
+    static HashSet<IMethodSymbol> CollectCrossDispatchExports(ProgramDiscovery plan)
     {
         var exports = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
         foreach (var root in plan.Reach.BodyByDef.Values.Concat(plan.FieldInitOps))
@@ -1281,7 +1355,7 @@ internal partial class ProgramLoweringPipeline
         return false;
     }
 
-    void EmitRegisteredBodies(ProgramPlan plan)
+    void EmitRegisteredBodies(BoundProgram plan)
     {
         var methods = plan.Callables.ProgramMethods;
         var foreignStatics = plan.Callables.ForeignStatics;
@@ -1342,7 +1416,7 @@ internal partial class ProgramLoweringPipeline
             EmitMethod(method, spec);
         if (_pendingCallableBodies.Count != 0)
             throw new InvalidOperationException(
-                "Body lowering discovered callable bodies absent from ProgramPlan.");
+                "Body lowering discovered callable bodies absent from ProgramDiscovery.");
 
         _state.Synthetics.VerifyEmissionComplete();
 

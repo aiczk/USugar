@@ -89,14 +89,16 @@ public class TpCls : UdonSharpBehaviour {
         var runIntTwin = runDef.Construct(intType);
         var runStr = runDef.Construct(strType);
 
-        var keyInt = new MethodContext.SpecKey(runInt, runInt.TypeArguments.CastArray<ITypeSymbol>());
-        var keyIntTwin = new MethodContext.SpecKey(runIntTwin, runIntTwin.TypeArguments.CastArray<ITypeSymbol>());
-        var keyStr = new MethodContext.SpecKey(runStr, runStr.TypeArguments.CastArray<ITypeSymbol>());
+        var keyInt = new SpecializationKey(runInt, runInt.TypeArguments.CastArray<ITypeSymbol>());
+        var keyIntTwin = new SpecializationKey(
+            runIntTwin, runIntTwin.TypeArguments.CastArray<ITypeSymbol>());
+        var keyStr = new SpecializationKey(runStr, runStr.TypeArguments.CastArray<ITypeSymbol>());
 
         Assert.Equal(keyInt, keyIntTwin);                       // symbol-equal ⟹ SpecKey-equal
         Assert.Equal(keyInt.GetHashCode(), keyIntTwin.GetHashCode());
         Assert.NotEqual(keyInt, keyStr);                        // same def, different args ⟹ unequal
-        Assert.True(SymbolEqualityComparer.Default.Equals(keyInt.Def, keyStr.Def)); // …despite one def
+        Assert.True(SymbolEqualityComparer.Default.Equals(
+            keyInt.Definition, keyStr.Definition)); // …despite one definition
     }
 
     // Registry loud-polarity: registering the same (def, args) twice must throw, not last-writer-win.

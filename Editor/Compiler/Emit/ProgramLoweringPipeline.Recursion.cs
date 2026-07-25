@@ -19,7 +19,7 @@ internal partial class ProgramLoweringPipeline
     // (an indirect dispatch can start any escaped function). Cycle members' NON-TAIL dispatch sites are
     // recorded syntax-keyed in LoweringState.Recursion.ReentrantDispatchSites for the §4.3 Reentrant-flag marking;
     // tail dispatch sites are spared so bundle-driven deep tail recursion never spills (§4.4).
-    void BuildRecursionInfo(CallableBodyGraph bodyGraph)
+    RecursionInfo BuildRecursionInfo(CallableBodyGraph bodyGraph)
     {
         // M5b: consume the resolver-driven callable graph frozen before emission. Capture analysis
         // consumes the same bodies; this phase only derives recursion-specific facets.
@@ -28,9 +28,13 @@ internal partial class ProgramLoweringPipeline
         // census fixtures (RecursionFacetEquivalenceTests, Golden/FacetCensus) are the permanent
         // oracle; the legacy private walks they were diffed against were deleted at C4 retirement.
         var facets = AssembleRecursionFacets(bodyGraph);
-        // Write-once populate of every analysis artifact.
-        _state.RecursionContext.Info.Populate(facets.Recursive, facets.CycleEdges, facets.ThisTouches,
-            facets.ReentrantSites, facets.TailSparedSites, facets.Nodes);
+        return new RecursionInfo(
+            facets.Recursive,
+            facets.CycleEdges,
+            facets.ThisTouches,
+            facets.ReentrantSites,
+            facets.TailSparedSites,
+            facets.Nodes);
     }
 
     // The walk-independent back half: escape sets, synthetic dispatch edges, the this-field-touch

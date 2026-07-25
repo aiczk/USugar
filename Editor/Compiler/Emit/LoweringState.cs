@@ -13,6 +13,7 @@ public sealed class LoweringState
     public UdonAbiBinder Abi => Environment.Abi;
     public FrozenLayoutPlan Planner => Environment.Planner;
     public MethodAnalysisCache MethodAnalyses => Environment.MethodAnalyses;
+    internal BoundProgram Program { get; private set; }
 
     // Mutable output and lowering state.
     public readonly StructuredModule Module;
@@ -35,6 +36,27 @@ public sealed class LoweringState
     public readonly InitializationContext Initializers = new InitializationContext();
     public readonly DiagnosticContext DiagnosticState = new DiagnosticContext();
     public readonly MethodContext Methods = new MethodContext();
+
+    internal void PublishBoundProgram(BoundProgram program)
+    {
+        if (Program != null)
+            throw new InvalidOperationException("Bound program was published twice.");
+        if (program == null) throw new ArgumentNullException(nameof(program));
+        if (!ReferenceEquals(Closures.IdentityPlan, program.ClosureIdentities)
+            || !ReferenceEquals(Closures.CaptureScope, program.Captures)
+            || !ReferenceEquals(RecursionContext.Info, program.Recursion))
+            throw new InvalidOperationException(
+                "Lowering contexts do not match the bound program's analysis artifacts.");
+        Program = program;
+    }
+
+    internal void BeginBodyEmission()
+    {
+        if (Program == null)
+            throw new InvalidOperationException(
+                "Body emission cannot start before a BoundProgram is published.");
+        Generics.BeginBodyEmission();
+    }
 
     // Depth-1 type-param scope. EmitMethod is a non-recursive serial drain, so exactly one map is
     // active at a time; a nested Enter means a prior scope leaked (a compiler bug) and throws loudly

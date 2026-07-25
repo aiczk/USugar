@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.ObjectModel;
 using System.Linq;
 using Microsoft.CodeAnalysis;
 
@@ -15,6 +16,7 @@ internal sealed class CallableDefinitionPlan
     public readonly IReadOnlyList<IMethodSymbol> BaseInstanceMethods;
     public readonly IReadOnlyList<IMethodSymbol> Definitions;
     public readonly IReadOnlyList<IMethodSymbol> Specializations;
+    public readonly IReadOnlyDictionary<SpecializationKey, IMethodSymbol> SpecializationsByKey;
     public readonly IReadOnlyList<ClosureSpecializationCandidate> ClosureSpecializations;
 
     public CallableDefinitionPlan(IEnumerable<IMethodSymbol> programMethods,
@@ -31,6 +33,18 @@ internal sealed class CallableDefinitionPlan
         BaseInstanceMethods = Copy(baseInstanceMethods);
         Definitions = Copy(definitions);
         Specializations = Copy(specializations);
+        var keyed = new Dictionary<SpecializationKey, IMethodSymbol>();
+        foreach (var specialization in Specializations)
+        {
+            var key = SpecializationKey.ForMethod(specialization);
+            if (keyed.TryGetValue(key, out var existing)
+                && !SymbolEqualityComparer.Default.Equals(existing, specialization))
+                throw new InvalidOperationException(
+                    $"Conflicting callable specializations for '{specialization.ToDisplayString()}'.");
+            keyed[key] = specialization;
+        }
+        SpecializationsByKey =
+            new ReadOnlyDictionary<SpecializationKey, IMethodSymbol>(keyed);
         ClosureSpecializations = Array.AsReadOnly(
             (closureSpecializations ?? Array.Empty<ClosureSpecializationCandidate>()).ToArray());
     }

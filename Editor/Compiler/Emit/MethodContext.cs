@@ -213,38 +213,7 @@ public sealed class MethodContext
     /// definition key — the B89 first-wins class — no longer type-checks. Args compare element-wise
     /// by CLR symbol identity (absorbs the former ArgsEqual; Udon type-name strings stay banned,
     /// B66/B76).</summary>
-    public readonly struct SpecKey : IEquatable<SpecKey>
-    {
-        public readonly IMethodSymbol Def;                // OriginalDefinition
-        public readonly ImmutableArray<ITypeSymbol> Args; // own args ⊕ ambient enclosing args
-
-        public SpecKey(IMethodSymbol def, ImmutableArray<ITypeSymbol> args)
-        { Def = def?.OriginalDefinition; Args = args; }
-
-        public bool Equals(SpecKey other)
-        {
-            if (!SymbolEqualityComparer.Default.Equals(Def, other.Def)) return false;
-            if (Args.Length != other.Args.Length) return false;
-            for (int i = 0; i < Args.Length; i++)
-                if (!SymbolEqualityComparer.Default.Equals(Args[i], other.Args[i])) return false;
-            return true;
-        }
-
-        public override bool Equals(object obj) => obj is SpecKey other && Equals(other);
-
-        public override int GetHashCode()
-        {
-            unchecked
-            {
-                int h = Def != null ? SymbolEqualityComparer.Default.GetHashCode(Def) : 0;
-                foreach (var a in Args)
-                    h = h * 31 + (a != null ? SymbolEqualityComparer.Default.GetHashCode(a) : 0);
-                return h;
-            }
-        }
-    }
-
-    readonly Dictionary<SpecKey, ClosureSpec> _closureSpecs = new();
+    readonly Dictionary<SpecializationKey, ClosureSpec> _closureSpecs = new();
 
     public readonly List<(IMethodSymbol Method, ClosureSpec Spec)> PendingBodies = new();
 
@@ -303,7 +272,7 @@ public sealed class MethodContext
     {
         spec = null;
         if (def == null) return false;
-        if (_closureSpecs.TryGetValue(new SpecKey(def, keyArgs), out spec)) return true;
+        if (_closureSpecs.TryGetValue(new SpecializationKey(def, keyArgs), out spec)) return true;
 
         // Roslyn can materialize a different local-function/lambda symbol when the same source body is
         // obtained through a constructed containing type. Pre-emission planning stores the body-graph's
@@ -312,11 +281,11 @@ public sealed class MethodContext
         // secondary definition comparison. The specialization arguments remain exact.
         foreach (var pair in _closureSpecs)
         {
-            if (!ClosureIdentityPlan.SameSourceDefinition(pair.Key.Def, def)
-                || pair.Key.Args.Length != keyArgs.Length) continue;
+            if (!ClosureIdentityPlan.SameSourceDefinition(pair.Key.Definition, def)
+                || pair.Key.Arguments.Length != keyArgs.Length) continue;
             var sameArgs = true;
             for (var i = 0; i < keyArgs.Length; i++)
-                if (!SymbolEqualityComparer.Default.Equals(pair.Key.Args[i], keyArgs[i]))
+                if (!SymbolEqualityComparer.Default.Equals(pair.Key.Arguments[i], keyArgs[i]))
                 {
                     sameArgs = false;
                     break;
@@ -348,7 +317,7 @@ public sealed class MethodContext
                 "A registered closure requires method, function, params, and returns.");
         var spec = new ClosureSpec(definition, function, slot, paramVarIds, returnSlots,
             keyArgs, ownerSpecs, envpFieldId);
-        _closureSpecs.Add(new SpecKey(definition, keyArgs), spec);
+        _closureSpecs.Add(new SpecializationKey(definition, keyArgs), spec);
         return spec;
     }
 
@@ -367,7 +336,7 @@ public sealed class MethodContext
 
     /// <summary>Census surface (read-only): every registered per-spec closure key. Harness
     /// instrumentation only — emission never enumerates the registry.</summary>
-    public IEnumerable<SpecKey> ClosureSpecKeys => _closureSpecs.Keys;
+    public IEnumerable<SpecializationKey> ClosureSpecKeys => _closureSpecs.Keys;
     /// <summary>Read-only callable records used to validate the frozen pre-emission definition set.</summary>
     public IEnumerable<ClosureSpec> ClosureSpecs => _closureSpecs.Values;
 

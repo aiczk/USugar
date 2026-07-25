@@ -90,7 +90,8 @@ public class RecursionFacetEquivalenceTests
         return sb.ToString();
     }
 
-    static IEnumerable<string> EdgeLines(Dictionary<IMethodSymbol, HashSet<IMethodSymbol>> edges)
+    static IEnumerable<string> EdgeLines(
+        IReadOnlyDictionary<IMethodSymbol, FrozenSet<IMethodSymbol>> edges)
         => edges.SelectMany(kv => kv.Value.Select(callee => MethodKey(kv.Key) + " -> " + MethodKey(callee)));
 
     static void Section(StringBuilder sb, string title, IEnumerable<string> lines)

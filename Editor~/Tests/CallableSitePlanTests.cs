@@ -58,14 +58,12 @@ public class CallableSitePlanTests
 
     static RecursionInfo Recursion(SyntaxNode reentrant = null, SyntaxNode tailSpared = null)
     {
-        var info = new RecursionInfo();
-        info.Populate(
+        return new RecursionInfo(
             new Dictionary<IMethodSymbol, HashSet<IMethodSymbol>>(SymbolEqualityComparer.Default),
             new Dictionary<IMethodSymbol, HashSet<IMethodSymbol>>(SymbolEqualityComparer.Default),
             new Dictionary<IMethodSymbol, HashSet<IFieldSymbol>>(SymbolEqualityComparer.Default),
             reentrant == null ? new HashSet<SyntaxNode>() : new HashSet<SyntaxNode> { reentrant },
             tailSpared == null ? new HashSet<SyntaxNode>() : new HashSet<SyntaxNode> { tailSpared },
             new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default));
-        return info;
     }
 }
