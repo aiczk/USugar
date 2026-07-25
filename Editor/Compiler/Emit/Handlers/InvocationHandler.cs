@@ -3,10 +3,46 @@ using System.Linq;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.Operations;
 
-public partial class InvocationHandler : IExpressionHandler
+public sealed class InvocationHandler : IExpressionHandler
 {
     readonly LoweringServices _lowering;
-    public InvocationHandler(LoweringServices lowering) => _lowering = lowering;
+    readonly DelegateInvocationLowerer _delegates;
+    readonly ExternInvocationLowerer _externs;
+    readonly InvocationIntrinsicEmitter _intrinsics;
+    readonly MemberInvocationLowerer _members;
+
+    public InvocationHandler(LoweringServices lowering)
+    {
+        _lowering = lowering ?? throw new System.ArgumentNullException(nameof(lowering));
+        _delegates = new DelegateInvocationLowerer(this);
+        _externs = new ExternInvocationLowerer(this);
+        _intrinsics = new InvocationIntrinsicEmitter(this);
+        _members = new MemberInvocationLowerer(this);
+    }
+
+    internal LoweringServices Lowering => _lowering;
+    internal DelegateInvocationLowerer Delegates => _delegates;
+    internal ExternInvocationLowerer Externs => _externs;
+    internal InvocationIntrinsicEmitter Intrinsics => _intrinsics;
+
+    public void EmitClassCtorPrologue(
+        IMethodSymbol ctor,
+        IConstructorBodyOperation body,
+        string receiverParamId)
+        => _members.EmitClassCtorPrologue(ctor, body, receiverParamId);
+
+    internal CLeaf EmitFanoutElementDispatch(
+        CLeaf bundle,
+        IMethodSymbol invoke,
+        IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeParamMap,
+        CLeaf[] argLeaves)
+        => _delegates.EmitFanoutElementDispatch(bundle, invoke, typeParamMap, argLeaves);
+
+    internal CLeaf EmitDelegateElementEquals(CLeaf left, CLeaf right)
+        => _delegates.EmitDelegateElementEquals(left, right);
+
+    internal static CConst DefaultConst(CoreBuilder builder, StorageType type)
+        => DelegateInvocationLowerer.DefaultConst(builder, type);
 
     public OperationKind[] HandledKinds { get; } = new[]
     {
@@ -17,11 +53,11 @@ public partial class InvocationHandler : IExpressionHandler
     public CLeaf Handle(IOperation expression) => expression switch
     {
         IInvocationOperation op => VisitInvocation(op),
-        IObjectCreationOperation op => VisitObjectCreation(op),
-        IPropertyReferenceOperation op => VisitPropertyReference(op),
-        IInterpolatedStringOperation op => VisitInterpolatedString(op),
-        ITypeParameterObjectCreationOperation op => VisitTypeParameterObjectCreation(op),
-        IAnonymousObjectCreationOperation op => VisitAnonymousObjectCreation(op),
+        IObjectCreationOperation op => _members.VisitObjectCreation(op),
+        IPropertyReferenceOperation op => _members.VisitPropertyReference(op),
+        IInterpolatedStringOperation op => _members.VisitInterpolatedString(op),
+        ITypeParameterObjectCreationOperation op => _members.VisitTypeParameterObjectCreation(op),
+        IAnonymousObjectCreationOperation op => _members.VisitAnonymousObjectCreation(op),
         _ => throw new System.NotSupportedException(expression.GetType().Name),
     };
 
@@ -33,7 +69,7 @@ public partial class InvocationHandler : IExpressionHandler
         // guard — the operands are consumed HERE by the value comparison, never laundered through
         // Equals' erasing System.Object parameter, but the guard saw that parameter first and
         // loud-rejected a legal comparison whose argument was a delegate-typed PARAM.
-        if (TryEmitDelegateEquals(op, out var dlgEqResult))
+        if (_delegates.TryEmitDelegateEquals(op, out var dlgEqResult))
             return dlgEqResult;
 
         // Resolve type parameters in generic method type arguments (e.g., Min<T> → Min<int>)
@@ -151,12 +187,12 @@ public partial class InvocationHandler : IExpressionHandler
         {
             // Delegate invocation: a() where a is Action/Func
             case MethodKind.DelegateInvoke:
-                return VisitDelegateInvocation(op);
+                return _delegates.VisitDelegateInvocation(op);
             // Local function call. Recursion (including captured-by-reference outer locals, which stay
             // shared per C# closure semantics) is handled by EmitCallToMethod's software-stack spill/reload.
             case MethodKind.LocalFunction
                 when _lowering.MethodFunctions.ContainsKey(target):
-                return EmitUserMethodCall(op, target);
+                return _externs.EmitUserMethodCall(op, target);
             // Round-9 [Y9]: non-generic local function called BEFORE its declaration statement
             // (C# allows forward references within the enclosing body, but registration used to
             // happen only when StatementHandler reached the ILocalFunctionOperation — the earlier
@@ -166,7 +202,7 @@ public partial class InvocationHandler : IExpressionHandler
             case MethodKind.LocalFunction
                 when !target.IsGenericMethod:
                 _lowering.RegisterLocalFunction(target);
-                return EmitUserMethodCall(op, target);
+                return _externs.EmitUserMethodCall(op, target);
             // B68/B69: a GENERIC local function is monomorphized per call site regardless of its HOST —
             // the compiled behaviour, a foreign static helper class, or a user struct. The generic
             // monomorphization arm further below is gated on the container being _classSymbol (own members),
@@ -176,7 +212,7 @@ public partial class InvocationHandler : IExpressionHandler
             // agnostic and idempotent, so the behaviour-host path stays byte-identical.
             case MethodKind.LocalFunction:
                 _lowering.RegisterGenericSpecialization(target);
-                return EmitUserMethodCall(op, target);
+                return _externs.EmitUserMethodCall(op, target);
         }
 
         // M4b: a direct .ToString() rooted at the System.Object slot on a v1 class receiver — the third
@@ -287,7 +323,7 @@ public partial class InvocationHandler : IExpressionHandler
                     $"Instance method '{target.Name}' of the compiled class family is called through a "
                     + "non-this receiver, which dispatches cross-program (SetProgramVariable + "
                     + "SendCustomEvent) and so needs a non-generic target without ref/out parameters.");
-            return EmitCrossClassCall(op, target);
+            return _externs.EmitCrossClassCall(op, target);
 
         }
 
@@ -295,18 +331,18 @@ public partial class InvocationHandler : IExpressionHandler
         if (target.IsGenericMethod && SymbolEqualityComparer.Default.Equals(target.OriginalDefinition.ContainingType, _lowering.ClassSymbol))
         {
             _lowering.RegisterGenericSpecialization(target);
-            return EmitUserMethodCall(op, target);
+            return _externs.EmitUserMethodCall(op, target);
         }
 
         // User-defined method in the same class
         if (SymbolEqualityComparer.Default.Equals(target.ContainingType, _lowering.ClassSymbol) && _lowering.MethodFunctions.ContainsKey(target))
         {
-            return EmitUserMethodCall(op, target);
+            return _externs.EmitUserMethodCall(op, target);
         }
 
         // Base class instance method (emitted locally)
         if (_lowering.MethodFunctions.ContainsKey(target) && UasmEmitter.IsBaseInstanceMethod(target, _lowering.ClassSymbol))
-            return EmitUserMethodCall(op, target);
+            return _externs.EmitUserMethodCall(op, target);
 
         // Wave-9 round-8 [Y11]: INHERITED generic callee whose call site carries OPEN type args
         // (`P2<T>(x)` inside the derived class's own generic body). The phase-1 base-copy collector
@@ -320,13 +356,13 @@ public partial class InvocationHandler : IExpressionHandler
             && UasmEmitter.IsBaseInstanceMethod(target, _lowering.ClassSymbol))
         {
             _lowering.RegisterGenericSpecialization(target);
-            return EmitUserMethodCall(op, target);
+                return _externs.EmitUserMethodCall(op, target);
         }
 
         // Generic foreign static method → monomorphize and emit as internal call
         if (target.IsGenericMethod && UasmEmitter.IsForeignStatic(target, _lowering.ClassSymbol))
         {
-            GuardRefOutArguments(op, target); // round-8 [R6]: Q2/Q5/R4 parity
+            _externs.GuardRefOutArguments(op, target); // round-8 [R6]: Q2/Q5/R4 parity
             var constructed = target.ReducedFrom != null
                 ? target.ReducedFrom.OriginalDefinition.Construct(target.TypeArguments.ToArray())
                 : target.OriginalDefinition.Construct(target.TypeArguments.ToArray());
@@ -336,11 +372,11 @@ public partial class InvocationHandler : IExpressionHandler
             {
                 args.Add(_lowering.VisitExpression(op.Instance));
             }
-            var genPrepared = MarshalArguments(op, args);
+            var genPrepared = _externs.MarshalArguments(op, args);
             var genResult = _lowering.EmitCallToMethod(constructed, args);
             // Round-8 [R6]: this arm used to drop the ref/out copy-back (DiffFuzz: ref=9 vs VM 1).
             // Reduced-extension argument ordinals shift by 1 onto the original's params (this=0).
-            EmitRefOutCopyBack(op, constructed,
+            _externs.EmitRefOutCopyBack(op, constructed,
                 target.ReducedFrom != null && op.Instance != null ? 1 : 0, genPrepared);
             return genResult;
         }
@@ -350,17 +386,17 @@ public partial class InvocationHandler : IExpressionHandler
             var original = target.ReducedFrom ?? target;
             if (UasmEmitter.IsForeignStatic(target, _lowering.ClassSymbol) && _lowering.MethodFunctions.ContainsKey(original))
             {
-                GuardRefOutArguments(op, target); // round-8 [R6]: Q2/Q5/R4 parity
+                _externs.GuardRefOutArguments(op, target); // round-8 [R6]: Q2/Q5/R4 parity
                 var args = new List<CLeaf>();
                 // Extension method: instance is the first (this) parameter
                 if (target.ReducedFrom != null && op.Instance != null)
                 {
                     args.Add(_lowering.VisitExpression(op.Instance));
                 }
-                var fsPrepared = MarshalArguments(op, args);
+                var fsPrepared = _externs.MarshalArguments(op, args);
                 var fsResult = _lowering.EmitCallToMethod(original, args);
                 // Round-8 [R6]: this arm used to drop the ref/out copy-back (DiffFuzz: ref=6 vs VM 1).
-                EmitRefOutCopyBack(op, original,
+                _externs.EmitRefOutCopyBack(op, original,
                     target.ReducedFrom != null && op.Instance != null ? 1 : 0, fsPrepared);
                 return fsResult;
             }
@@ -380,12 +416,12 @@ public partial class InvocationHandler : IExpressionHandler
             && target.ContainingType is INamedTypeSymbol fsGenCt && fsGenCt.IsGenericType
             && !fsGenCt.TypeArguments.Any(ta => ta is ITypeParameterSymbol))
         {
-            GuardRefOutArguments(op, target);
+            _externs.GuardRefOutArguments(op, target);
             _lowering.RegisterGenericSpecialization(target);
             var args = new List<CLeaf>();
-            var gsPrepared = MarshalArguments(op, args);
+            var gsPrepared = _externs.MarshalArguments(op, args);
             var gsResult = _lowering.EmitCallToMethod(target, args);
-            EmitRefOutCopyBack(op, target, 0, gsPrepared);
+            _externs.EmitRefOutCopyBack(op, target, 0, gsPrepared);
             return gsResult;
         }
 
@@ -397,7 +433,7 @@ public partial class InvocationHandler : IExpressionHandler
             && !target.IsStatic
             && op.Instance is not IInstanceReferenceOperation
             && target.ContainingType.Name != "UdonSharpBehaviour")
-            return EmitCrossClassCall(op, target);
+                return _externs.EmitCrossClassCall(op, target);
 
         // Interface method call → SendCustomEvent dispatch
         // Skip when instance is a type parameter resolved to a concrete non-UdonBehaviour type
@@ -417,7 +453,7 @@ public partial class InvocationHandler : IExpressionHandler
         if (ExternResolver.IsUserInterface(target.ContainingType)
             && op.Instance != null
             && !_lowering.IsResolvedConcreteNonBehaviour(op.Instance?.Type))
-            return EmitInterfaceCall(op, target);
+            return _externs.EmitInterfaceCall(op, target);
 
         // Virtual methods on UdonSharpBehaviour (OnDeserialization, Interact, etc.)
         // have no Udon VM implementation. base.X() or direct calls should be no-op.
@@ -426,7 +462,7 @@ public partial class InvocationHandler : IExpressionHandler
             return null;
 
         // Extern method call
-        return EmitExternMethodCall(op, target);
+        return _externs.EmitExternMethodCall(op, target);
     }
 
     // ResolveMostDerivedOverride moved to LoweringServices (round-9: StatementHandler's TCO gate needs
@@ -449,13 +485,13 @@ public partial class InvocationHandler : IExpressionHandler
         // Pure analysis (throws only): the substituted symbol equals ResolveStructMember's result minus
         // its on-demand registration side effect, which stays inside the arms (registration order intact).
         foreach (var t in targets)
-            GuardRefOutArguments(op.Arguments, _lowering.SubstituteMethodTypeArgs(t.Impl));
+            _externs.GuardRefOutArguments(op.Arguments, _lowering.SubstituteMethodTypeArgs(t.Impl));
 
         var recvSlot = _lowering.State.Builder.AllocScratch(new StorageType(AggregateAbi.ArrayType));
         _lowering.EmitAssign(recvSlot, _lowering.LoadInstanceRaw(op.Instance));
 
         var argRefs = new List<CLeaf>();
-        var chainPrepared = MarshalArgumentsByOrdinal(op.Arguments, op.TargetMethod, argRefs, (val, arg) =>
+        var chainPrepared = _externs.MarshalArgumentsByOrdinal(op.Arguments, op.TargetMethod, argRefs, (val, arg) =>
         {
             var s = _lowering.State.Builder.AllocScratch(_lowering.GetStorageType(arg.Value.Type));
             _lowering.EmitAssign(s, val);
@@ -486,7 +522,7 @@ public partial class InvocationHandler : IExpressionHandler
                 var call = _lowering.EmitCallToMethod(impl, callArgs);
                 if (isVoid) _lowering.EmitExprStmt(call);
                 else _lowering.EmitAssign(destSlot, call);
-                EmitRefOutCopyBack(op.Arguments, impl, 0, chainPrepared);
+                _externs.EmitRefOutCopyBack(op.Arguments, impl, 0, chainPrepared);
             }, null);
         }
 
@@ -526,7 +562,7 @@ public partial class InvocationHandler : IExpressionHandler
 
     CLeaf EmitStructInstanceCall(IInvocationOperation op, IMethodSymbol target)
     {
-        GuardRefOutArguments(op, target); // round-8 [R5]: Q2/Q5/R4 parity with EmitUserMethodCall
+        _externs.GuardRefOutArguments(op, target); // round-8 [R5]: Q2/Q5/R4 parity with EmitUserMethodCall
 
         // Recursion (including the receiver) is handled by EmitCallToMethod's software-stack spill/reload.
         var recv = _lowering.LoadInstanceRaw(op.Instance);
@@ -541,11 +577,11 @@ public partial class InvocationHandler : IExpressionHandler
             && op.Instance?.Type is INamedTypeSymbol recvAgg && TypeClassifier.IsAggregateValue(recvAgg))
             recv = AggregateAbi.DeepClone(_lowering.Builder, recv, recvAgg, _lowering.State.Aggregates.GetLayout);
         var args = new List<CLeaf> { recv };
-        var structPrepared = MarshalArguments(op, args);
+        var structPrepared = _externs.MarshalArguments(op, args);
         var result = _lowering.EmitCallToMethod(target, args);
         // Round-8 [R5]: this path used to drop the ref/out copy-back entirely (DiffFuzz: ref-arg
         // ref=136 vs VM 106, out-arg ref=10 vs 0). Param ids are ordinal-indexed (receiver separate).
-        EmitRefOutCopyBack(op, target, 0, structPrepared);
+        _externs.EmitRefOutCopyBack(op, target, 0, structPrepared);
         return result;
     }
 

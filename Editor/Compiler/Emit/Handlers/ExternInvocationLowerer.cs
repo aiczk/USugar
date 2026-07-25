@@ -3,13 +3,20 @@ using System.Linq;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.Operations;
 
-public partial class InvocationHandler
+/// <summary>Owns ABI, cross-program, interface, and internal-call invocation lowering.</summary>
+internal sealed class ExternInvocationLowerer
 {
+    readonly InvocationHandler _owner;
+    LoweringServices _lowering => _owner.Lowering;
+
+    internal ExternInvocationLowerer(InvocationHandler owner)
+        => _owner = owner ?? throw new System.ArgumentNullException(nameof(owner));
+
     // ── Extern Method Call ──
 
-    CLeaf EmitExternMethodCall(IInvocationOperation op, IMethodSymbol target)
+    internal CLeaf EmitExternMethodCall(IInvocationOperation op, IMethodSymbol target)
     {
-        if (TryEmitInvocationIntrinsic(op, target, out var intrinsicResult))
+        if (_owner.Intrinsics.TryEmitInvocationIntrinsic(op, target, out var intrinsicResult))
             return intrinsicResult;
 
         // Supported N-dim members were consumed by the intrinsic registry.
@@ -211,7 +218,7 @@ public partial class InvocationHandler
     /// <summary>Rank-1 array whose element is a value-semantic aggregate (user struct / tuple), else null.
     /// N-dim arrays never get here (the Rank>1 intercept runs first); class/scalar elements return null so
     /// their shallow externs stay untouched (shallow IS C# semantics for them).</summary>
-    INamedTypeSymbol AggregateArrayElement(ITypeSymbol type)
+    internal INamedTypeSymbol AggregateArrayElement(ITypeSymbol type)
         => type is IArrayTypeSymbol { Rank: 1 } arr
            && _lowering.ResolveType(arr.ElementType) is INamedTypeSymbol elem && TypeClassifier.IsAggregateValue(elem)
             ? elem : null;
@@ -238,7 +245,7 @@ public partial class InvocationHandler
                     + "Use typed indexing or Array.Copy, which has dedicated lowering.");
     }
 
-    bool TryEmitAggregateArrayCopyMember(IInvocationOperation op, IMethodSymbol target, out CLeaf result)
+    internal bool TryEmitAggregateArrayCopyMember(IInvocationOperation op, IMethodSymbol target, out CLeaf result)
     {
         result = null;
         if (!target.IsStatic && op.Instance != null
@@ -389,7 +396,7 @@ public partial class InvocationHandler
 
     // ── GetComponent<T> ──
 
-    CLeaf EmitGetComponentGeneric(IInvocationOperation op, IMethodSymbol target)
+    internal CLeaf EmitGetComponentGeneric(IInvocationOperation op, IMethodSymbol target)
     {
         var typeArg = target.TypeArguments[0];
         if (_lowering.State.Session.ObjectArrayBehaviourAliases.IsAlias(typeArg, _lowering.TypeParamMap))
@@ -938,7 +945,7 @@ public partial class InvocationHandler
 
     // ── Interface Call ──
 
-    CLeaf EmitInterfaceCall(IInvocationOperation op, IMethodSymbol target)
+    internal CLeaf EmitInterfaceCall(IInvocationOperation op, IMethodSymbol target)
     {
         // Use LayoutPlanBuilder to get the interface's canonical naming
         var ifaceType = target.ContainingType as INamedTypeSymbol;
@@ -987,7 +994,7 @@ public partial class InvocationHandler
 
     // ── Cross-Class Call ──
 
-    CLeaf EmitCrossClassCall(IInvocationOperation op, IMethodSymbol target)
+    internal CLeaf EmitCrossClassCall(IInvocationOperation op, IMethodSymbol target)
     {
         var (exportName, paramIds, _) = _lowering.GetCalleeLayout(target);
         var instanceVal = _lowering.VisitExpression(op.Instance);
@@ -1016,12 +1023,12 @@ public partial class InvocationHandler
 
     /// <summary>Round-7 [Q2]/[Q5] + round-8 [R4] ref/out ARGUMENT guards, shared by the user-method,
     /// struct-instance ([R5]) and foreign-static ([R6]) call paths. Runs BEFORE argument evaluation.</summary>
-    void GuardRefOutArguments(IInvocationOperation op, IMethodSymbol target)
+    internal void GuardRefOutArguments(IInvocationOperation op, IMethodSymbol target)
         => GuardRefOutArguments(op.Arguments, target);
 
     // CW3/CW4: argument-list form — ctor sites (IObjectCreationOperation, `: base/this(...)` chain
     // initializers) and the virtual chain share the same guards as ordinary calls.
-    void GuardRefOutArguments(IReadOnlyList<IArgumentOperation> arguments, IMethodSymbol target)
+    internal void GuardRefOutArguments(IReadOnlyList<IArgumentOperation> arguments, IMethodSymbol target)
     {
         // Round-7 follow-up [Q2]: ref/out params are deliberately EXCLUDED from the recursion spill
         // set (a recursive call THREADING ITS OWN ref/out param must keep its mutations across the
@@ -1109,12 +1116,12 @@ public partial class InvocationHandler
     /// DiffFuzz: struct ref ref=136 vs VM 106 / out ref=10 vs 0; foreign static plain ref=6 vs 1,
     /// generic ref=9 vs 1). <paramref name="ordinalOffset"/> maps reduced-extension argument
     /// ordinals onto the original definition's params (the receiver occupies ordinal 0).</summary>
-    void EmitRefOutCopyBack(IInvocationOperation op, IMethodSymbol target, int ordinalOffset = 0,
+    internal void EmitRefOutCopyBack(IInvocationOperation op, IMethodSymbol target, int ordinalOffset = 0,
         Dictionary<int, System.Action<CLeaf>> preparedStores = null)
         => EmitRefOutCopyBack(op.Arguments, target, ordinalOffset, preparedStores);
 
     // CW3/CW4: argument-list form — shared with the ctor arms and the virtual chain's per-arm copy-back.
-    void EmitRefOutCopyBack(IReadOnlyList<IArgumentOperation> arguments, IMethodSymbol target,
+    internal void EmitRefOutCopyBack(IReadOnlyList<IArgumentOperation> arguments, IMethodSymbol target,
         int ordinalOffset = 0, Dictionary<int, System.Action<CLeaf>> preparedStores = null)
     {
         for (int i = 0; i < arguments.Count; i++)
@@ -1305,7 +1312,7 @@ public partial class InvocationHandler
     /// every positional internal-call arm — formerly copy-pasted 4x, and a past copy dropped the copy-back
     /// (DiffFuzz ref=9 vs VM 1; ref=136 vs 106). The named/reordered path (MarshalArgumentsByOrdinal) is a
     /// distinct parameter-ORDINAL placement and is deliberately not folded in here.</summary>
-    Dictionary<int, System.Action<CLeaf>> MarshalArguments(IInvocationOperation op, List<CLeaf> args)
+    internal Dictionary<int, System.Action<CLeaf>> MarshalArguments(IInvocationOperation op, List<CLeaf> args)
     {
         Dictionary<int, System.Action<CLeaf>> prepared = null;
         List<(int slot, System.Func<CLeaf> read)> deferred = null;
@@ -1356,7 +1363,7 @@ public partial class InvocationHandler
     /// no per-call-site convention rebinding) and aggregates clone on read. Returns the prepared ref/out
     /// stores (keyed by argument index) for EmitRefOutCopyBack. <paramref name="stage"/> materializes each
     /// value as it lands — the virtual chain stages to scratch so every dispatch arm re-reads one slot.</summary>
-    Dictionary<int, System.Action<CLeaf>> MarshalArgumentsByOrdinal(
+    internal Dictionary<int, System.Action<CLeaf>> MarshalArgumentsByOrdinal(
         IReadOnlyList<IArgumentOperation> arguments, IMethodSymbol target, List<CLeaf> args,
         System.Func<CLeaf, IArgumentOperation, CLeaf> stage = null)
     {
@@ -1386,7 +1393,7 @@ public partial class InvocationHandler
         return prepared;
     }
 
-    CLeaf EmitUserMethodCall(IInvocationOperation op, IMethodSymbol target)
+    internal CLeaf EmitUserMethodCall(IInvocationOperation op, IMethodSymbol target)
     {
         GuardRefOutArguments(op, target);
 

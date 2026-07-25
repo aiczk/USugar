@@ -82,6 +82,24 @@ public class CompilationPlanningContractTests
     }
 
     [Fact]
+    public void InvocationHandler_IsACompositionRootForNarrowCapabilities()
+    {
+        var fields = typeof(InvocationHandler).GetFields(
+            BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.DeclaredOnly);
+
+        Assert.Contains(fields, field => field.FieldType == typeof(DelegateInvocationLowerer));
+        Assert.Contains(fields, field => field.FieldType == typeof(ExternInvocationLowerer));
+        Assert.Contains(fields, field => field.FieldType == typeof(InvocationIntrinsicEmitter));
+        Assert.Contains(fields, field => field.FieldType == typeof(MemberInvocationLowerer));
+        Assert.DoesNotContain(fields, field => typeof(Delegate).IsAssignableFrom(field.FieldType));
+
+        Assert.Equal(
+            typeof(NdimArrayLowerer),
+            typeof(LoweringServices).GetProperty(
+                "Ndim", BindingFlags.Instance | BindingFlags.NonPublic)?.PropertyType);
+    }
+
+    [Fact]
     public void FieldDiscoveryPlan_IsSemanticAndIrFree()
     {
         var planFields = typeof(FieldDiscoveryPlan).GetFields(

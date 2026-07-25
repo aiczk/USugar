@@ -2,8 +2,15 @@ using System.Collections.Generic;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.Operations;
 
-public partial class InvocationHandler
+/// <summary>Matches and emits the closed set of sequence-based invocation intrinsics.</summary>
+internal sealed class InvocationIntrinsicEmitter
 {
+    readonly InvocationHandler _owner;
+    LoweringServices _lowering => _owner.Lowering;
+
+    internal InvocationIntrinsicEmitter(InvocationHandler owner)
+        => _owner = owner ?? throw new System.ArgumentNullException(nameof(owner));
+
     static readonly InvocationIntrinsicRegistry InvocationIntrinsics
         = new(new[]
         {
@@ -15,7 +22,7 @@ public partial class InvocationHandler
                     genericArity: -1,
                     minimumParameters: 1, maximumParameters: 4),
                 (handler, operation, target) =>
-                    handler.EmitInstantiateIntrinsic(operation, target)),
+                    handler.Intrinsics.EmitInstantiateIntrinsic(operation, target)),
             new InvocationIntrinsicRule(
                 "multidimensional-array-shape",
                 new IntrinsicKey(
@@ -25,7 +32,7 @@ public partial class InvocationHandler
                     minimumParameters: 1, maximumParameters: 1,
                     constrainedOrdinal: 0, constrainedTypeName: "System.Int32"),
                 (handler, operation, target) =>
-                    handler.EmitNdimArrayIntrinsic(operation, target),
+                    handler.Intrinsics.EmitNdimArrayIntrinsic(operation, target),
                 (handler, operation, target) =>
                     operation.Instance != null
                     && NdimArrayAbi.IsNdimArray(operation.Instance.Type)),
@@ -37,9 +44,9 @@ public partial class InvocationHandler
                     genericArity: 0,
                     minimumParameters: 0, maximumParameters: 5),
                 (handler, operation, target) =>
-                    handler.EmitAggregateArrayCopyIntrinsic(operation, target),
+                    handler.Intrinsics.EmitAggregateArrayCopyIntrinsic(operation, target),
                 (handler, operation, target) =>
-                    handler.IsAggregateArrayCopyIntrinsic(operation, target)),
+                    handler.Intrinsics.IsAggregateArrayCopyIntrinsic(operation, target)),
             new InvocationIntrinsicRule(
                 "generic-component-query",
                 new IntrinsicKey(
@@ -57,7 +64,7 @@ public partial class InvocationHandler
                     minimumParameters: 0, maximumParameters: 1,
                     constrainedOrdinal: 0, constrainedTypeName: "System.Boolean"),
                 (handler, operation, target) =>
-                    handler.EmitGetComponentGeneric(operation, target)),
+                    handler.Externs.EmitGetComponentGeneric(operation, target)),
         });
 
     static readonly UdonAbiKey InstantiateGameObjectExtern =
@@ -73,11 +80,11 @@ public partial class InvocationHandler
     /// C# APIs whose Udon implementation is a sequence rather than one extern.
     /// They are intercepted before ordinary ABI binding.
     /// </summary>
-    bool TryEmitInvocationIntrinsic(IInvocationOperation operation,
+    internal bool TryEmitInvocationIntrinsic(IInvocationOperation operation,
         IMethodSymbol target, out CLeaf result)
-        => InvocationIntrinsics.TryLower(this, operation, target, out result);
+        => InvocationIntrinsics.TryLower(_owner, operation, target, out result);
 
-    CLeaf EmitNdimArrayIntrinsic(IInvocationOperation operation, IMethodSymbol target)
+    internal CLeaf EmitNdimArrayIntrinsic(IInvocationOperation operation, IMethodSymbol target)
     {
         var bundle = _lowering.VisitExpression(operation.Instance);
         if (!NdimArrayAbi.TryGetMethod(target.Name, out var methodKind))
@@ -93,11 +100,11 @@ public partial class InvocationHandler
         };
     }
 
-    bool IsAggregateArrayCopyIntrinsic(
+    internal bool IsAggregateArrayCopyIntrinsic(
         IInvocationOperation operation, IMethodSymbol target)
     {
         if (!target.IsStatic && operation.Instance != null
-            && AggregateArrayElement(operation.Instance.Type) != null)
+            && _owner.Externs.AggregateArrayElement(operation.Instance.Type) != null)
             return target.Name == "Clone" && target.Parameters.Length == 0
                    || target.Name == "CopyTo";
         if (!target.IsStatic
@@ -105,21 +112,21 @@ public partial class InvocationHandler
             || target.Name is not ("Copy" or "ConstrainedCopy"))
             return false;
         foreach (var argument in operation.Arguments)
-            if (AggregateArrayElement(LoweringServices.UnwrapConversions(argument.Value).Type) != null)
+            if (_owner.Externs.AggregateArrayElement(LoweringServices.UnwrapConversions(argument.Value).Type) != null)
                 return true;
         return false;
     }
 
-    CLeaf EmitAggregateArrayCopyIntrinsic(
+    internal CLeaf EmitAggregateArrayCopyIntrinsic(
         IInvocationOperation operation, IMethodSymbol target)
     {
-        if (TryEmitAggregateArrayCopyMember(operation, target, out var result))
+        if (_owner.Externs.TryEmitAggregateArrayCopyMember(operation, target, out var result))
             return result;
         throw new System.InvalidOperationException(
             $"Intrinsic registry admitted non-aggregate Array.{target.Name}.");
     }
 
-    CLeaf EmitInstantiateIntrinsic(IInvocationOperation operation, IMethodSymbol target)
+    internal CLeaf EmitInstantiateIntrinsic(IInvocationOperation operation, IMethodSymbol target)
     {
         if (operation.Arguments.Length < 1 || operation.Arguments.Length > 4)
             throw new System.NotSupportedException(

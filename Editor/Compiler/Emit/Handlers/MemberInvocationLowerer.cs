@@ -6,11 +6,18 @@ using System.Reflection;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.Operations;
 
-public partial class InvocationHandler
+/// <summary>Owns property, constructor, interpolation, and anonymous-object lowering.</summary>
+internal sealed class MemberInvocationLowerer
 {
+    readonly InvocationHandler _owner;
+    LoweringServices _lowering => _owner.Lowering;
+
+    internal MemberInvocationLowerer(InvocationHandler owner)
+        => _owner = owner ?? throw new ArgumentNullException(nameof(owner));
+
     // ── Property Reference ──
 
-    CLeaf VisitPropertyReference(IPropertyReferenceOperation op)
+    internal CLeaf VisitPropertyReference(IPropertyReferenceOperation op)
     {
         // Indexer access: Type.__get_Item__IndexTypes__ReturnType
         if (op.Property.IsIndexer)
@@ -372,7 +379,7 @@ public partial class InvocationHandler
 
     // ── Interpolated String ──
 
-    CLeaf VisitInterpolatedString(IInterpolatedStringOperation op)
+    internal CLeaf VisitInterpolatedString(IInterpolatedStringOperation op)
     {
         var formatParts = new List<string>();
         var argVals = new List<CLeaf>();
@@ -553,11 +560,11 @@ public partial class InvocationHandler
             {
                 // CW4: same by-ordinal + ref/out discipline as the mint arm (EmitClassInstanceMint).
                 var chainCtor = _lowering.SubstituteMethodTypeArgs(target);
-                GuardRefOutArguments(init.Arguments, chainCtor);
+            _owner.Externs.GuardRefOutArguments(init.Arguments, chainCtor);
                 var chainArgs = new List<CLeaf> { inst };
-                var chainPrepared = MarshalArgumentsByOrdinal(init.Arguments, chainCtor, chainArgs);
+            var chainPrepared = _owner.Externs.MarshalArgumentsByOrdinal(init.Arguments, chainCtor, chainArgs);
                 _lowering.EmitExprStmt(_lowering.EmitCallToMethod(_lowering.ResolveStructMember(target), chainArgs));
-                EmitRefOutCopyBack(init.Arguments, chainCtor, 0, chainPrepared);
+            _owner.Externs.EmitRefOutCopyBack(init.Arguments, chainCtor, 0, chainPrepared);
             }
             return;
         }
@@ -617,11 +624,11 @@ public partial class InvocationHandler
                 // equals ResolveStructMember's result minus its on-demand registration side effect, which
                 // stays at the call (after argument evaluation, as before).
                 var ctor = _lowering.SubstituteMethodTypeArgs(op.Constructor);
-                GuardRefOutArguments(op.Arguments, ctor);
+        _owner.Externs.GuardRefOutArguments(op.Arguments, ctor);
                 var ctorArgs = new List<CLeaf> { instance };
-                var ctorPrepared = MarshalArgumentsByOrdinal(op.Arguments, ctor, ctorArgs);
+        var ctorPrepared = _owner.Externs.MarshalArgumentsByOrdinal(op.Arguments, ctor, ctorArgs);
                 _lowering.EmitExprStmt(_lowering.EmitCallToMethod(_lowering.ResolveStructMember(op.Constructor), ctorArgs));
-                EmitRefOutCopyBack(op.Arguments, ctor, 0, ctorPrepared);
+        _owner.Externs.EmitRefOutCopyBack(op.Arguments, ctor, 0, ctorPrepared);
             },
             instance => _lowering.EmitAggregateObjectInitializer(instance, layout, op.Initializer),
             TypeObjWrite(classTy));
@@ -648,7 +655,7 @@ public partial class InvocationHandler
     /// concrete type in the type-param map, so this mints exactly as `new ConcreteType()` would — a v1
     /// class bundle (implicit parameterless ctor chain), a default-initialized struct aggregate, or a
     /// primitive/SDK default. `new()` is always parameterless; only an object initializer can follow.</summary>
-    CLeaf VisitTypeParameterObjectCreation(ITypeParameterObjectCreationOperation op)
+    internal CLeaf VisitTypeParameterObjectCreation(ITypeParameterObjectCreationOperation op)
     {
         var concrete = _lowering.ResolveType(op.Type);
         var udon = _lowering.GetStorageTypeName(concrete);
@@ -670,14 +677,14 @@ public partial class InvocationHandler
             return inst;
         }
         // Primitive / SDK value type: `new T()` is the type's default value.
-        return DefaultConst(udon);
+        return DelegateInvocationLowerer.DefaultConst(_lowering.Builder, new StorageType(udon));
     }
 
     /// <summary>`new { X = a, Y = b }` (kind-level census gap, 2026-07-11): an anonymous type is an
     /// immutable value-shaped aggregate — allocate the object[] and write each initializer value to its
     /// property's slot (declaration order = layout order). Member reads route through the ordinary
     /// aggregate property path once IsAggregateValue admits anonymous types.</summary>
-    CLeaf VisitAnonymousObjectCreation(IAnonymousObjectCreationOperation op)
+    internal CLeaf VisitAnonymousObjectCreation(IAnonymousObjectCreationOperation op)
     {
         var anonTy = (INamedTypeSymbol)op.Type;
         var layout = _lowering.State.Aggregates.GetLayout(anonTy);
@@ -691,7 +698,7 @@ public partial class InvocationHandler
         return inst;
     }
 
-    CLeaf VisitObjectCreation(IObjectCreationOperation op)
+    internal CLeaf VisitObjectCreation(IObjectCreationOperation op)
     {
         var resultType = _lowering.GetStorageTypeName(op.Type);
         var concreteType = _lowering.ResolveType(op.Type);
@@ -757,11 +764,11 @@ public partial class InvocationHandler
             AggregateAbi.DefaultInitialize(_lowering.Builder, _lowering.SlotRef(slot), layout, _lowering.State.Aggregates.GetLayout, _lowering.GetStorageTypeName);
             // CW4: same by-ordinal + ref/out discipline as the class mint arm (EmitClassInstanceMint).
             var structCtor = _lowering.SubstituteMethodTypeArgs(op.Constructor);
-            GuardRefOutArguments(op.Arguments, structCtor);
+            _owner.Externs.GuardRefOutArguments(op.Arguments, structCtor);
             var ctorArgs = new List<CLeaf> { _lowering.SlotRef(slot) };
-            var ctorPrepared = MarshalArgumentsByOrdinal(op.Arguments, structCtor, ctorArgs);
+            var ctorPrepared = _owner.Externs.MarshalArgumentsByOrdinal(op.Arguments, structCtor, ctorArgs);
             _lowering.EmitExprStmt(_lowering.EmitCallToMethod(_lowering.ResolveStructMember(op.Constructor), ctorArgs));
-            EmitRefOutCopyBack(op.Arguments, structCtor, 0, ctorPrepared);
+            _owner.Externs.EmitRefOutCopyBack(op.Arguments, structCtor, 0, ctorPrepared);
             // ctor + object-initializer combo (`new V(1,2) { Y = 3 }`): apply the initializer AFTER the
             // ctor runs, same order C# gives the fields (roadmap B41 (d)).
             _lowering.EmitAggregateObjectInitializer(_lowering.SlotRef(slot), layout, op.Initializer);

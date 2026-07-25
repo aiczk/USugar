@@ -2,8 +2,15 @@ using System.Collections.Generic;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.Operations;
 
-public partial class InvocationHandler
+/// <summary>Owns delegate equality and invocation protocol lowering.</summary>
+internal sealed class DelegateInvocationLowerer
 {
+    readonly InvocationHandler _owner;
+    LoweringServices _lowering => _owner.Lowering;
+
+    internal DelegateInvocationLowerer(InvocationHandler owner)
+        => _owner = owner ?? throw new System.ArgumentNullException(nameof(owner));
+
     /// <summary>Wave-9 round-4 [X1] + round-5 [X8]/[X12]: delegate value equality through .Equals.
     /// Instance a.Equals(b) and static object.Equals(a, b) on delegate bundles are VALUE equality in
     /// the CLR — route both through the same (target, method) element comparison as the `==` operator
@@ -12,7 +19,7 @@ public partial class InvocationHandler
     /// Mixed delegate/non-delegate operands stay loud (§8-3). [X12]: the static form previously fell
     /// through to an object.Equals extern comparing the two bundle object[] REFERENCES — reference
     /// inequality where the CLR sees value equality.</summary>
-    bool TryEmitDelegateEquals(IInvocationOperation op, out CLeaf result)
+    internal bool TryEmitDelegateEquals(IInvocationOperation op, out CLeaf result)
     {
         result = null;
         var target = op.TargetMethod;
@@ -71,7 +78,7 @@ public partial class InvocationHandler
 
     // ── Delegate Invocation (design §2.6: single unified dispatch for ALL invoke shapes) ──
 
-    CLeaf VisitDelegateInvocation(IInvocationOperation op)
+    internal CLeaf VisitDelegateInvocation(IInvocationOperation op)
     {
         var delegateType = op.TargetMethod.ContainingType as INamedTypeSymbol;
 
