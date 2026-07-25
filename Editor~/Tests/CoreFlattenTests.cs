@@ -105,6 +105,9 @@ public class CoreFlattenTests
                 resultCall = call;
         Assert.NotNull(resultCall);
         Assert.Equal(value.SlotId, resultCall.DestSlot);
+        Assert.Equal(
+            ExternResultEvidence.TypedProgramVariableSchema,
+            resultCall.ResultEvidence);
     }
 
     [Fact]
@@ -129,7 +132,12 @@ public class CoreFlattenTests
         foreach (var statement in block.Stmts)
             if (statement is CExprStmt expr && expr.Expr is CExternCall call
                 && call.Sig.Key == ExternResolver.EventReceiverGetProgramVariable)
+            {
                 resultTypes.Add(call.Type);
+                Assert.Equal(
+                    ExternResultEvidence.TypedProgramVariableSchema,
+                    call.ResultEvidence);
+            }
         Assert.Equal(new[] { StorageTypes.Int32, StorageTypes.String }, resultTypes);
     }
 
@@ -154,6 +162,9 @@ public class CoreFlattenTests
         Assert.Equal(2, calls.Count);
         Assert.Equal(ExternResolver.EventReceiverGetProgramVariable, calls[0].Sig.Key);
         Assert.Equal(StorageTypes.Int32, calls[0].Type);
+        Assert.Equal(
+            ExternResultEvidence.TypedProgramVariableSchema,
+            calls[0].ResultEvidence);
         Assert.Equal(ExternResolver.EventReceiverSetProgramVariable, calls[1].Sig.Key);
         Assert.Equal(StorageTypes.Int32, calls[1].Args[2].Type);
     }

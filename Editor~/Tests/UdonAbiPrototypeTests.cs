@@ -270,6 +270,25 @@ public class UdonAbiPrototypeTests
     }
 
     [Fact]
+    public void FoldedUdonBehaviourUsesOnlyItsRepresentationHierarchy()
+    {
+        var facts = new UdonTypeFactRegistry();
+
+        Assert.True(facts.IsAssignableFact(
+            "VRCUdonUdonBehaviour",
+            "VRCUdonCommonInterfacesIUdonEventReceiver"));
+        Assert.True(facts.IsAssignableFact(
+            "VRCUdonCommonInterfacesIUdonEventReceiver",
+            "VRCUdonCommonInterfacesIUdonProgramVariableAccessTarget"));
+        Assert.True(facts.IsAssignableFact(
+            "VRCUdonCommonInterfacesIUdonEventReceiver",
+            "UnityEngineComponent"));
+        Assert.Null(facts.IsAssignableFact(
+            "VRCUdonCommonInterfacesIUdonEventReceiver",
+            "UnrelatedSourceInterface"));
+    }
+
+    [Fact]
     public void ProgramVariableResultIsTheOnlyTypedObjectOutput()
     {
         const string signature =
@@ -280,14 +299,28 @@ public class UdonAbiPrototypeTests
             Param("name", "SystemString", UdonAbiParameterMode.In),
             Param("result", "SystemObject", UdonAbiParameterMode.Out))
             .Require(TestHelper.AbiKey(signature));
-        var call = new CExternCall(bound, new List<CLeaf>
+        var args = new List<CLeaf>
         {
             new CConst(null, StorageTypes.UdonEventReceiver),
             new CConst("score", StorageTypes.String),
-        }, StorageTypes.Int32);
+        };
+        var unproven = new CExternCall(bound, args, StorageTypes.Int32);
+        var unprovenError = Assert.Throws<VerificationException>(
+            () => UdonAbiVerifier.VerifyInvocation(
+                unproven, new UdonTypeFactRegistry(), "unproven_program_variable"));
+        Assert.Contains(
+            "'SystemObject' does not prove a value readable as 'SystemInt32'",
+            unprovenError.Message);
+
+        var call = new CExternCall(
+            bound, args, StorageTypes.Int32,
+            resultEvidence: ExternResultEvidence.TypedProgramVariableSchema);
 
         UdonAbiVerifier.VerifyInvocation(
             call, new UdonTypeFactRegistry(), "typed_program_variable");
+        Assert.Equal(
+            ExternResultEvidence.TypedProgramVariableSchema,
+            call.With(new List<CLeaf>(call.Args), 0).ResultEvidence);
 
         const string unrelated = "Example.__GetObject__SystemObject";
         var unrelatedCall = new CExternCall(
@@ -302,6 +335,16 @@ public class UdonAbiPrototypeTests
         Assert.Contains(
             "'SystemObject' does not prove a value readable as 'SystemInt32'",
             error.Message);
+
+        var forgedEvidence = new CExternCall(
+            unrelatedCall.Sig, new List<CLeaf>(), StorageTypes.Int32,
+            resultEvidence: ExternResultEvidence.TypedProgramVariableSchema);
+        var forgedError = Assert.Throws<VerificationException>(
+            () => UdonAbiVerifier.VerifyInvocation(
+                forgedEvidence, new UdonTypeFactRegistry(), "forged_evidence"));
+        Assert.Contains(
+            "result evidence 'TypedProgramVariableSchema' is invalid",
+            forgedError.Message);
     }
 
     [Fact]
@@ -327,6 +370,34 @@ public class UdonAbiPrototypeTests
 
         Assert.True(facts.IsAssignableFact("SystemIOFileStream", "SystemIOStream"));
         Assert.False(facts.IsAssignableFact("SystemIOStream", "SystemIOFileStream"));
+    }
+
+    [Fact]
+    public void FoldedSourceTypeDoesNotLeakItsSourceInterfaces()
+    {
+        var tree = CSharpSyntaxTree.ParseText(@"
+interface IFolded { }
+struct Folded : IFolded { }");
+        var compilation = CSharpCompilation.Create(
+            "FoldedFacts",
+            new[] { tree },
+            new[] { MetadataReference.CreateFromFile(typeof(object).Assembly.Location) },
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+        var folded = compilation.GetTypeByMetadataName("Folded");
+        var foldedInterface = compilation.GetTypeByMetadataName("IFolded");
+        var foldedTag = ExternResolver.GetUdonTypeName(folded);
+        var interfaceTag = ExternResolver.GetUdonTypeName(foldedInterface);
+        var facts = new UdonTypeFactRegistry();
+
+        facts.Record(foldedTag, folded);
+
+        Assert.Equal("SystemObjectArray", foldedTag);
+        Assert.Equal("VRCUdonCommonInterfacesIUdonEventReceiver", interfaceTag);
+        Assert.False(facts.IsAssignableFact(foldedTag, interfaceTag));
+        Assert.True(facts.IsAssignableFact(foldedTag, "SystemArray"));
+        Assert.DoesNotContain(
+            facts.AssignabilitySnapshot(),
+            relation => relation.From == foldedTag && relation.To == interfaceTag);
     }
 
     static UdonAbiCatalog Catalog(string signature, params UdonAbiParameter[] parameters)

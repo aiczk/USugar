@@ -373,7 +373,8 @@ public static class CoreFlatten
             var dest = destination ?? ctx.AllocScratch(cc.Type);
             ctx.Current.Stmts.Add(new CExprStmt(new CExternCall(
                 ctx.Bind(ExternResolver.EventReceiverGetProgramVariable),
-                new List<CLeaf> { inst, new CConst(ret.Id, StorageTypes.String) }, cc.Type, dest)));
+                new List<CLeaf> { inst, new CConst(ret.Id, StorageTypes.String) }, cc.Type, dest,
+                resultEvidence: ExternResultEvidence.TypedProgramVariableSchema)));
             return new CSlotRef(dest, cc.Type);
         }
 
@@ -385,7 +386,8 @@ public static class CoreFlatten
                 ctx.Current.Stmts.Add(new CExprStmt(new CExternCall(
                     ctx.Bind(ExternResolver.EventReceiverGetProgramVariable),
                     new List<CLeaf> { inst, new CConst(ret.Id, StorageTypes.String) },
-                    ret.StorageType, dest)));
+                    ret.StorageType, dest,
+                    resultEvidence: ExternResultEvidence.TypedProgramVariableSchema)));
             }
         }
 
@@ -395,7 +397,8 @@ public static class CoreFlatten
     static void LowerProgramVariableLoad(CProgramVariableLoad load, Ctx ctx, int destination)
         => ctx.Current.Stmts.Add(new CExprStmt(new CExternCall(
             ctx.Bind(ExternResolver.EventReceiverGetProgramVariable),
-            new List<CLeaf> { load.Instance, load.VariableName }, load.Type, destination)));
+            new List<CLeaf> { load.Instance, load.VariableName }, load.Type, destination,
+            resultEvidence: ExternResultEvidence.TypedProgramVariableSchema)));
 
     static void LowerSelect(CSelect sel, Ctx ctx, int destination)
     {

@@ -13,6 +13,7 @@ public static class UdonAbiVerifier
         var prototype = call.Sig.Prototype
             ?? throw new VerificationException(
                 $"Extern '{call.Sig}' has no SDK ABI prototype (function '{functionName}').");
+        VerifyResultEvidence(call, functionName);
 
         // Name-only registry fixtures are deliberately confined to the test
         // assembly. Production prototypes are always typed.
@@ -74,11 +75,32 @@ public static class UdonAbiVerifier
 
     static bool IsTypedProgramVariableResult(CExternCall call,
         UdonAbiParameter parameter, int stackIndex)
-        => stackIndex == call.Args.Count
+        => call.ResultEvidence == ExternResultEvidence.TypedProgramVariableSchema
+           && stackIndex == call.Args.Count
            && parameter.Mode == UdonAbiParameterMode.Out
            && parameter.Type.Kind == UdonAbiType.PatternKind.Exact
            && parameter.Type.ExactType == StorageTypes.Object
            && call.Sig.Key == ExternResolver.EventReceiverGetProgramVariable;
+
+    static void VerifyResultEvidence(CExternCall call, string functionName)
+    {
+        switch (call.ResultEvidence)
+        {
+            case ExternResultEvidence.None:
+                return;
+            case ExternResultEvidence.TypedProgramVariableSchema:
+                if (call.Sig.Key == ExternResolver.EventReceiverGetProgramVariable
+                    && call.Type != StorageTypes.Void)
+                    return;
+                throw new VerificationException(
+                    $"Extern result evidence '{call.ResultEvidence}' is invalid for "
+                    + $"'{call.Sig}' returning '{call.Type}' (function '{functionName}').");
+            default:
+                throw new VerificationException(
+                    $"Unknown extern result evidence '{call.ResultEvidence}' "
+                    + $"(function '{functionName}').");
+        }
+    }
 
     /// <summary>The SDK's generic component-query wrapper does not merely call
     /// GetHeapVariable&lt;Component&gt;: it branches on the receiver strongbox's declared CLR type.

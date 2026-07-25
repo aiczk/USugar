@@ -108,6 +108,15 @@ public sealed class CFuncRef : CLeaf
     public override string ToString() => $"funcref({FuncName})";
 }
 
+public enum ExternResultEvidence
+{
+    None,
+
+    /// <summary>The SDK returns SystemObject, but CProgramVariableLoad/CrossCall owns the remote
+    /// field/return schema and proves the dynamic result's storage type.</summary>
+    TypedProgramVariableSchema,
+}
+
 /// <summary>Call an extern (Udon VM native) function. Value-producing op: may nest in args
 /// (tree role, DestSlot null) or write a scratch slot (flat role, DestSlot set).
 ///</summary>
@@ -130,20 +139,26 @@ public sealed class CExternCall : CValue
     /// clobbered value. Only ever non-zero on a Reentrant SendCustomEvent lowered from a reentrant
     /// CCrossCall / cross setter pair; copied by the same rebuild sites as <see cref="Reentrant"/>.</summary>
     public readonly int PreSpillStmts;
+    public readonly ExternResultEvidence ResultEvidence;
 
-    public CExternCall(BoundExtern sig, List<CLeaf> args, StorageType retType, int? destSlot = null, bool reentrant = false, int preSpillStmts = 0) : base(retType)
+    public CExternCall(BoundExtern sig, List<CLeaf> args, StorageType retType,
+        int? destSlot = null, bool reentrant = false, int preSpillStmts = 0,
+        ExternResultEvidence resultEvidence = ExternResultEvidence.None) : base(retType)
     {
         Sig = sig ?? throw new ArgumentNullException(nameof(sig));
         Args = args ?? new List<CLeaf>();
         DestSlot = destSlot;
         Reentrant = reentrant;
         PreSpillStmts = preSpillStmts;
+        ResultEvidence = resultEvidence;
     }
 
     /// <summary>Clone with new args/destSlot, copying Sig/Type/Reentrant/PreSpillStmts by construction —
     /// the two call-rebuild sites (CoreFlatten.LowerExpr, CoreFlatOptimizer.RemapInst) route through this
     /// instead of hand-copying the constructor argument list, so a new field can never drift out of sync.</summary>
-    public CExternCall With(List<CLeaf> args, int? destSlot) => new CExternCall(Sig, args, Type, destSlot, Reentrant, PreSpillStmts);
+    public CExternCall With(List<CLeaf> args, int? destSlot)
+        => new CExternCall(
+            Sig, args, Type, destSlot, Reentrant, PreSpillStmts, ResultEvidence);
 
     public override string ToString()
     {

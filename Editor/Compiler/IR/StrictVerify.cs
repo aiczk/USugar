@@ -148,12 +148,12 @@ public sealed class UdonTypeFactRegistry
 
     /// <summary>FACT: can a value represented by <paramref name="from"/> be read as
     /// <paramref name="to"/> by an ordinary typed extern wrapper? Unlike raw Udon COPY
-    /// compatibility this relation is directional. It is collected from CLR and Roslyn
-    /// inheritance at the same two minting boundaries as the category facts.</summary>
+    /// compatibility this relation is directional. Source inheritance is retained only while the
+    /// Udon tag preserves CLR identity; folded tags use representation-specific relations below.</summary>
     public bool? IsAssignableFact(string from, string to)
     {
         if (from == to) return true;
-        if (IsKnownUdonBehaviourBase(from, to)) return true;
+        if (IsRepresentationAssignable(from, to)) return true;
         if (_assignability.ContainsKey(new AssignabilityFact(from, to))) return true;
 
         var fromReference = IsReferenceFact(from);
@@ -164,6 +164,10 @@ public sealed class UdonTypeFactRegistry
 
     void RecordAssignability(string from, ITypeSymbol type)
     {
+        // A user aggregate/delegate/nullable/enum/behaviour can retain source inheritance while its
+        // runtime value has become object[], object, Int32, or UdonBehaviour. Recording that source
+        // graph against the folded tag would union false capabilities into every value sharing it.
+        if (!ExternResolver.IsRuntimeDistinguishable(type, null)) return;
         if (!_recordedSymbolHierarchy.TryAdd(type, 0)) return;
         for (var current = type.BaseType; current != null; current = current.BaseType)
             RecordAssignable(from, ExternResolver.GetUdonTypeName(current));
@@ -173,6 +177,10 @@ public sealed class UdonTypeFactRegistry
 
     void RecordAssignability(string from, Type type)
     {
+        // SDK CLR types are normally identity-preserving. The few compiler/SDK fold tags are
+        // representation authorities instead and must not inherit capabilities from whichever CLR
+        // type happened to mint the shared name first.
+        if (UsesFoldedRepresentation(from)) return;
         if (!_recordedClrHierarchy.TryAdd(type, 0)) return;
         for (var current = type.BaseType; current != null; current = current.BaseType)
             RecordAssignable(from, ExternResolver.GetUdonTypeName(current));
@@ -186,21 +194,40 @@ public sealed class UdonTypeFactRegistry
         _assignability.TryAdd(new AssignabilityFact(from, to), 0);
     }
 
-    static bool IsKnownUdonBehaviourBase(string from, string to)
+    static bool UsesFoldedRepresentation(string name)
+        => name == "SystemObject"
+           || name == "SystemObjectArray"
+           || name == "UnityEngineComponentArray"
+           || name == "VRCUdonCommonInterfacesIUdonEventReceiver"
+           || name == "VRCUdonUdonBehaviour";
+
+    static bool IsRepresentationAssignable(string from, string to)
     {
-        if (from != "VRCUdonCommonInterfacesIUdonEventReceiver"
-            && from != "VRCUdonUdonBehaviour")
-            return false;
-        switch (to)
+        if (from == "VRCUdonUdonBehaviour"
+            && to == "VRCUdonCommonInterfacesIUdonEventReceiver")
+            return true;
+
+        if (from == "VRCUdonCommonInterfacesIUdonEventReceiver"
+            || from == "VRCUdonUdonBehaviour")
         {
-            case "UnityEngineMonoBehaviour":
-            case "UnityEngineBehaviour":
-            case "UnityEngineComponent":
-            case "UnityEngineObject":
-                return true;
-            default:
-                return false;
+            switch (to)
+            {
+                // IUdonEventReceiver inherits this interface. The SDK's
+                // Get/SetProgramVariable wrappers read their receiver through it.
+                case "VRCUdonCommonInterfacesIUdonProgramVariableAccessTarget":
+                case "UnityEngineMonoBehaviour":
+                case "UnityEngineBehaviour":
+                case "UnityEngineComponent":
+                case "UnityEngineObject":
+                    return true;
+            }
         }
+
+        // Every emitted "...Array" value is a real CLR array even when many source types fold onto
+        // one tag (object[] aggregate/delegate bundles and Component[] behaviour arrays included).
+        return from != null
+               && from.EndsWith("Array", StringComparison.Ordinal)
+               && to == "SystemArray";
     }
 
     static bool? StructuralIsReference(string name)
