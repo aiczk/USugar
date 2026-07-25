@@ -97,37 +97,7 @@ public static class ExternResolver
     /// <summary>CLR counterpart of the Roslyn storage-name minting path. Installed-SDK ABI
     /// collection and directed extern assignability facts must erase a CLR type identically.</summary>
     internal static string GetUdonTypeName(Type type)
-    {
-        if (type == null) return "";
-        if (type == typeof(void)) return StorageTypes.Void.Name;
-        if (type.IsByRef) type = type.GetElementType();
-        if (type == null) return "";
-        if (type.IsArray)
-            return GetUdonTypeName(type.GetElementType()) + "Array";
-        if (type.IsGenericParameter) return type.Name;
-        if (type.IsGenericType)
-        {
-            // Reflection's FullName uses the CLR assembly-qualified spelling for constructed
-            // generics (List`1[[System.Int32, ...]]). Roslyn's producer deliberately mints the
-            // Udon registry spelling from namespace + arity-free definition name + argument
-            // names (SystemCollectionsGenericListSystemInt32). Keep both producers identical:
-            // registry membership is a name lookup, so merely sanitizing FullName silently
-            // classifies registered generic SDK types as unregistered.
-            var definition = type.GetGenericTypeDefinition();
-            var definitionName = definition.Name;
-            var arityMarker = definitionName.IndexOf('`');
-            if (arityMarker >= 0)
-                definitionName = definitionName.Substring(0, arityMarker);
-            var qualifiedDefinitionName = string.IsNullOrEmpty(definition.Namespace)
-                ? definitionName
-                : definition.Namespace + "." + definitionName;
-            var genericName = SanitizeTypeName(qualifiedDefinitionName);
-            foreach (var argument in type.GetGenericArguments())
-                genericName += GetUdonTypeName(argument);
-            return RemapUdonType(genericName);
-        }
-        return RemapUdonType(SanitizeTypeName(type.FullName ?? type.Name));
-    }
+        => UdonTypeIdentity.From(type).Name;
 
     /// <summary>
     /// CLR-reflection counterpart of <see cref="GetUdonTypeName(ITypeSymbol)"/> for fields that have no
@@ -393,8 +363,7 @@ public static class ExternResolver
         => GetUdonTypeNameAndRecord(type, null, null);
 
     internal static string GetExactUdonTypeName(ITypeSymbol type)
-        => RemapUdonType(SanitizeTypeName(
-            type.ToDisplayString(SymbolDisplayFormat.CSharpErrorMessageFormat)));
+        => UdonTypeIdentity.From(type).Name;
 
     static string GetUdonTypeNameAndRecord(ITypeSymbol type,
         UdonTypeFactRegistry typeFacts,

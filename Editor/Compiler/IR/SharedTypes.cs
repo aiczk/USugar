@@ -13,17 +13,26 @@ using Microsoft.CodeAnalysis;
 /// runtime type: several C# types may share one storage representation.</summary>
 public readonly struct StorageType : IEquatable<StorageType>
 {
-    public readonly string Name;
+    public readonly UdonTypeId Id;
+    public string Name => Id.Name;
 
     public StorageType(string name)
-        => Name = !string.IsNullOrEmpty(name)
-            ? name
-            : throw new ArgumentException("A storage type name is required.", nameof(name));
+        : this(UdonTypeIdentity.FromCanonicalName(name))
+    {
+    }
+
+    internal StorageType(UdonTypeId id)
+    {
+        if (string.IsNullOrEmpty(id.Name))
+            throw new ArgumentException(
+                "A storage type identity is required.", nameof(id));
+        Id = id;
+    }
 
     public bool Equals(StorageType other)
-        => string.Equals(Name, other.Name, StringComparison.Ordinal);
+        => Id.Equals(other.Id);
     public override bool Equals(object obj) => obj is StorageType other && Equals(other);
-    public override int GetHashCode() => StringComparer.Ordinal.GetHashCode(Name ?? "");
+    public override int GetHashCode() => Id.GetHashCode();
     public override string ToString() => Name;
 
     // UASM signatures and serializers are string protocols, so leaving the storage domain is safe;
