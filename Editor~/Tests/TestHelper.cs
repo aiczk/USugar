@@ -147,6 +147,11 @@ namespace UnityEngine
     }
     public class Behaviour : Component { public bool enabled { get; set; } }
     public class MonoBehaviour : Behaviour { }
+    public class Shader : Object { }
+    public class Material : Object
+    {
+        public Shader shader { get; set; }
+    }
     public class GameObject : Object
     {
         public bool activeSelf { get; }

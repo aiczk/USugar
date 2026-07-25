@@ -11,8 +11,9 @@ using System.Linq;
 public static class UdonAbiSnapshotCodec
 {
     const string Header =
-        "# USugar typed Udon ABI snapshot v2: R<TAB>registeredType; "
+        "# USugar typed Udon ABI snapshot v3: R<TAB>registeredType; "
         + "T<TAB>name<TAB>enum<TAB>value; "
+        + "A<TAB>actualType<TAB>expectedBaseType; "
         + "E<TAB>registeredName<TAB>count<TAB>(name<TAB>mode<TAB>E:type)*";
     const string SourceHeader =
         "# Source: UdonEditorManager.Instance.GetNodeDefinitions(); "
@@ -36,6 +37,23 @@ public static class UdonAbiSnapshotCodec
                 pair.Key,
                 pair.Value.IsEnum ? "1" : "0",
                 pair.Value.IsValueType ? "1" : "0"));
+        }
+        foreach (var relation in catalog.AssignabilityFacts
+                     .Where(relation =>
+                         relation.Actual != relation.Expected)
+                     .OrderBy(relation => relation.Actual.Name,
+                         StringComparer.Ordinal)
+                     .ThenBy(relation => relation.Expected.Name,
+                         StringComparer.Ordinal))
+        {
+            ValidateCell(relation.Actual.Name,
+                "assignable actual type name");
+            ValidateCell(relation.Expected.Name,
+                "assignable expected type name");
+            lines.Add(string.Join("\t",
+                "A",
+                relation.Actual.Name,
+                relation.Expected.Name));
         }
 
         foreach (var prototype in catalog.Prototypes
@@ -68,6 +86,8 @@ public static class UdonAbiSnapshotCodec
         if (lines == null) throw new ArgumentNullException(nameof(lines));
         var prototypes = new List<UdonExternPrototype>();
         var facts = new Dictionary<string, UdonTypeFactRegistry.TypeFact>(StringComparer.Ordinal);
+        var assignability =
+            new HashSet<UdonTypeFactRegistry.AssignabilityFact>();
         var registeredTypes = new HashSet<string>(StringComparer.Ordinal);
         var lineNumber = 0;
         foreach (var raw in lines)
@@ -98,6 +118,24 @@ public static class UdonAbiSnapshotCodec
                         throw InvalidLine(lineNumber, $"duplicate type fact '{fields[1]}'");
                     break;
 
+                case "A":
+                    if (fields.Length != 3
+                        || string.IsNullOrWhiteSpace(fields[1])
+                        || string.IsNullOrWhiteSpace(fields[2]))
+                        throw InvalidLine(lineNumber,
+                            "assignability fact must contain actual and expected type names");
+                    var relation =
+                        new UdonTypeFactRegistry.AssignabilityFact(
+                            UdonTypeIdentity.FromCanonicalStorageName(
+                                fields[1]),
+                            UdonTypeIdentity.FromCanonicalStorageName(
+                                fields[2]));
+                    if (!assignability.Add(relation))
+                        throw InvalidLine(lineNumber,
+                            $"duplicate assignability fact "
+                            + $"'{fields[1]}' -> '{fields[2]}'");
+                    break;
+
                 case "E":
                     if (fields.Length < 3
                         || !int.TryParse(fields[2], NumberStyles.None,
@@ -125,7 +163,8 @@ public static class UdonAbiSnapshotCodec
                     throw InvalidLine(lineNumber, $"unknown row kind '{fields[0]}'");
             }
         }
-        return new UdonAbiCatalog(prototypes, facts, registeredTypes);
+        return new UdonAbiCatalog(
+            prototypes, facts, registeredTypes, assignability);
     }
 
     static UdonAbiType DecodeType(string encoded, int lineNumber)

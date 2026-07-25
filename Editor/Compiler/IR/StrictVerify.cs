@@ -10,6 +10,28 @@ using Microsoft.CodeAnalysis;
 /// classified by naming heuristics.</summary>
 public sealed class UdonTypeFactRegistry
 {
+    public readonly struct AssignabilityFact
+        : IEquatable<AssignabilityFact>
+    {
+        public readonly UdonTypeId Actual;
+        public readonly UdonTypeId Expected;
+
+        public AssignabilityFact(UdonTypeId actual, UdonTypeId expected)
+        {
+            Actual = actual;
+            Expected = expected;
+        }
+
+        public bool Equals(AssignabilityFact other)
+            => Actual == other.Actual && Expected == other.Expected;
+
+        public override bool Equals(object obj)
+            => obj is AssignabilityFact other && Equals(other);
+
+        public override int GetHashCode()
+            => (Actual.GetHashCode() * 397) ^ Expected.GetHashCode();
+    }
+
     public readonly struct TypeFact : IEquatable<TypeFact>
     {
         public readonly bool IsEnum;
@@ -24,6 +46,8 @@ public sealed class UdonTypeFactRegistry
     // Values are deterministic per name (Udon storage name ↔ representation category is 1:1), so
     // installed-SDK seeding and concurrent source-minting races during Phase-2 emit are benign.
     readonly ConcurrentDictionary<UdonTypeId, TypeFact> _facts = new();
+    readonly ConcurrentDictionary<AssignabilityFact, byte> _assignability
+        = new();
 
     /// <summary>Record the minted name's facts. Names covered by a STRUCTURAL rule (primitives, arrays,
     /// the fold tags) are skipped: a folded name's runtime representation is fixed by the fold itself,
@@ -45,6 +69,7 @@ public sealed class UdonTypeFactRegistry
         ITypeSymbol symbol)
     {
         if (symbol == null) return;
+        RecordHierarchy(storageType, symbol);
         Record(storageType,
             new TypeFact(symbol.TypeKind == TypeKind.Enum, symbol.IsValueType),
             symbol.ToDisplayString());
@@ -59,7 +84,10 @@ public sealed class UdonTypeFactRegistry
         if (string.IsNullOrEmpty(udonName) || type == null) return;
         if (type.IsByRef) type = type.GetElementType();
         if (type == null || type.IsGenericParameter) return;
-        Record(UdonTypeIdentity.FromCanonicalStorageName(udonName),
+        var storageType =
+            UdonTypeIdentity.FromCanonicalStorageName(udonName);
+        RecordHierarchy(storageType, type);
+        Record(storageType,
             new TypeFact(type.IsEnum, type.IsValueType),
             type.FullName ?? type.Name);
     }
@@ -75,11 +103,43 @@ public sealed class UdonTypeFactRegistry
         }
     }
 
+    internal void ImportAssignability(
+        IEnumerable<AssignabilityFact> facts)
+    {
+        if (facts == null) return;
+        foreach (var fact in facts)
+            _assignability.TryAdd(fact, 0);
+    }
+
     internal KeyValuePair<string, TypeFact>[] Snapshot()
         => _facts
             .Select(pair => new KeyValuePair<string, TypeFact>(
                 pair.Key.Name, pair.Value))
             .ToArray();
+
+    internal AssignabilityFact[] AssignabilitySnapshot()
+        => _assignability.Keys.ToArray();
+
+    public bool IsAssignableTo(string actual, string expected)
+    {
+        if (string.IsNullOrWhiteSpace(actual)
+            || string.IsNullOrWhiteSpace(expected))
+            return false;
+        return IsAssignableTo(
+            UdonTypeIdentity.FromCanonicalStorageName(actual),
+            UdonTypeIdentity.FromCanonicalStorageName(expected));
+    }
+
+    public bool IsAssignableTo(UdonTypeId actual, UdonTypeId expected)
+        => actual == expected
+           || _assignability.ContainsKey(
+               new AssignabilityFact(actual, expected));
+
+    internal void RecordAssignableForTest(
+        string actual, string expected)
+        => RecordAssignable(
+            UdonTypeIdentity.FromCanonicalStorageName(actual),
+            UdonTypeIdentity.FromCanonicalStorageName(expected));
 
     void Record(UdonTypeId type, TypeFact requested, string source)
     {
@@ -99,6 +159,59 @@ public sealed class UdonTypeFactRegistry
             if (_facts.TryAdd(type, requested)) return;
         }
     }
+
+    void RecordHierarchy(UdonTypeId actual, Type type)
+    {
+        RecordAssignable(actual, actual);
+        if (type.IsArray)
+        {
+            RecordAssignable(actual,
+                UdonTypeIdentity.FromCanonicalStorageName(
+                    "SystemArray"));
+            RecordAssignable(actual,
+                UdonTypeIdentity.FromCanonicalStorageName(
+                    "SystemObject"));
+            return;
+        }
+
+        for (var current = type.BaseType;
+             current != null;
+             current = current.BaseType)
+            RecordAssignable(actual,
+                UdonTypeIdentity.FromStorage(current));
+        foreach (var implemented in type.GetInterfaces())
+            RecordAssignable(actual,
+                UdonTypeIdentity.FromStorage(implemented));
+    }
+
+    void RecordHierarchy(UdonTypeId actual, ITypeSymbol symbol)
+    {
+        RecordAssignable(actual, actual);
+        if (symbol is IArrayTypeSymbol)
+        {
+            RecordAssignable(actual,
+                UdonTypeIdentity.FromCanonicalStorageName(
+                    "SystemArray"));
+            RecordAssignable(actual,
+                UdonTypeIdentity.FromCanonicalStorageName(
+                    "SystemObject"));
+            return;
+        }
+
+        if (symbol is not INamedTypeSymbol named) return;
+        for (var current = named.BaseType;
+             current != null;
+             current = current.BaseType)
+            RecordAssignable(actual,
+                UdonTypeIdentity.FromStorage(current));
+        foreach (var implemented in named.AllInterfaces)
+            RecordAssignable(actual,
+                UdonTypeIdentity.FromStorage(implemented));
+    }
+
+    void RecordAssignable(UdonTypeId actual, UdonTypeId expected)
+        => _assignability.TryAdd(
+            new AssignabilityFact(actual, expected), 0);
 
     internal void RecordForTest(string udonName, bool isEnum, bool isValueType)
         => _facts[UdonTypeIdentity.FromCanonicalStorageName(udonName)]

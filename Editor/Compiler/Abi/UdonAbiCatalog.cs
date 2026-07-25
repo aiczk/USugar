@@ -150,6 +150,8 @@ public sealed class UdonAbiCatalog
 
     readonly Dictionary<string, UdonExternPrototype> _externs;
     readonly Dictionary<UdonTypeId, UdonTypeDescriptor> _types;
+    readonly HashSet<UdonTypeFactRegistry.AssignabilityFact>
+        _assignability;
 
     public UdonAbiCatalog(IEnumerable<UdonExternPrototype> prototypes)
         : this(prototypes, null, null)
@@ -164,9 +166,15 @@ public sealed class UdonAbiCatalog
 
     internal UdonAbiCatalog(IEnumerable<UdonExternPrototype> prototypes,
         IEnumerable<KeyValuePair<string, UdonTypeFactRegistry.TypeFact>> typeFacts,
-        IEnumerable<string> registeredTypes)
+        IEnumerable<string> registeredTypes,
+        IEnumerable<UdonTypeFactRegistry.AssignabilityFact>
+            assignability = null)
     {
         if (prototypes == null) throw new ArgumentNullException(nameof(prototypes));
+        _assignability = new HashSet<
+            UdonTypeFactRegistry.AssignabilityFact>(
+            assignability
+            ?? Array.Empty<UdonTypeFactRegistry.AssignabilityFact>());
         _externs = new Dictionary<string, UdonExternPrototype>(StringComparer.Ordinal);
         foreach (var prototype in prototypes)
         {
@@ -238,7 +246,8 @@ public sealed class UdonAbiCatalog
             .Where(prototype => prototype != null)
             .Where(prototype => !_externs.ContainsKey(prototype.RegisteredName));
         return new UdonAbiCatalog(
-            _externs.Values.Concat(additions), TypeFacts, RegisteredTypes);
+            _externs.Values.Concat(additions), TypeFacts, RegisteredTypes,
+            AssignabilityFacts);
     }
 
     internal static bool IsExternRegistryName(string registeredName)
@@ -290,7 +299,42 @@ public sealed class UdonAbiCatalog
             .Where(descriptor => descriptor.HasTypeNode)
             .Select(descriptor => descriptor.Id.Name)
             .ToArray();
+    internal IReadOnlyCollection<
+        UdonTypeFactRegistry.AssignabilityFact> AssignabilityFacts
+        => _assignability;
     public IReadOnlyCollection<UdonTypeDescriptor> Types => _types.Values;
+
+    internal IReadOnlyCollection<string> GetAssignableOwners(
+        string actualOwner)
+    {
+        if (string.IsNullOrWhiteSpace(actualOwner))
+            return Array.Empty<string>();
+        var actual = UdonTypeIdentity.FromCanonicalStorageName(
+            actualOwner);
+        return _assignability
+            .Where(fact => fact.Actual == actual)
+            .Select(fact => fact.Expected.Name)
+            .Append(actualOwner)
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(owner => owner, StringComparer.Ordinal)
+            .ToArray();
+    }
+
+    internal bool IsAssignableOwner(
+        string actualOwner, string expectedOwner)
+    {
+        if (string.IsNullOrWhiteSpace(actualOwner)
+            || string.IsNullOrWhiteSpace(expectedOwner))
+            return false;
+        var actual = UdonTypeIdentity.FromCanonicalStorageName(
+            actualOwner);
+        var expected = UdonTypeIdentity.FromCanonicalStorageName(
+            expectedOwner);
+        return actual == expected
+               || _assignability.Contains(
+                   new UdonTypeFactRegistry.AssignabilityFact(
+                       actual, expected));
+    }
 
     /// <summary>Seed one compilation's mutable registry from the immutable SDK ABI snapshot. Source
     /// lowering then appends Roslyn facts to the same session-owned registry.</summary>
@@ -298,6 +342,7 @@ public sealed class UdonAbiCatalog
     {
         if (target == null) throw new ArgumentNullException(nameof(target));
         target.Import(TypeFacts, "installed SDK ABI catalog");
+        target.ImportAssignability(AssignabilityFacts);
     }
 }
 

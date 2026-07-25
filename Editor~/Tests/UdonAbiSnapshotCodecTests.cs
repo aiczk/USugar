@@ -30,7 +30,13 @@ public class UdonAbiSnapshotCodecTests
                     "result", UdonAbiType.Exact("SystemInt32Array"),
                     UdonAbiParameterMode.Out),
             }),
-        }, facts, new[] { "Fixture", "SystemInt32", "SystemInt32Array" });
+        }, facts, new[] { "Fixture", "SystemInt32", "SystemInt32Array" },
+            new[]
+            {
+                new UdonTypeFactRegistry.AssignabilityFact(
+                    UdonTypeIdentity.FromCanonicalStorageName("Fixture"),
+                    UdonTypeIdentity.FromCanonicalStorageName("SystemObject")),
+            });
 
         var decoded = UdonAbiSnapshotCodec.Decode(
             UdonAbiSnapshotCodec.Encode(catalog));
@@ -49,6 +55,8 @@ public class UdonAbiSnapshotCodecTests
         Assert.True(decoded.IsRegisteredType("Fixture"));
         Assert.True(decoded.IsRegisteredType("SystemInt32"));
         Assert.False(decoded.IsRegisteredType("Missing"));
+        Assert.True(decoded.IsAssignableOwner(
+            "Fixture", "SystemObject"));
 
         Assert.True(decoded.TryGetType(
             UdonTypeIdentity.FromCanonicalStorageName("Fixture"), out var fixture));
@@ -81,6 +89,7 @@ public class UdonAbiSnapshotCodecTests
     [InlineData("X\tbad")]
     [InlineData("R\t")]
     [InlineData("T\tName\t2\t0")]
+    [InlineData("A\tOnlyActual")]
     [InlineData("E\tFixture.__Read__SystemInt32\t1\tvalue\tSideways\tE:SystemInt32")]
     [InlineData("E\tFixture.__Read__SystemInt32\t1\tvalue\tIn\tG:T")]
     [InlineData("E\tFixture.__Read__SystemInt32\t1\tvalue\tIn\tA:E:SystemInt32")]

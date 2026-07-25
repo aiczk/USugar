@@ -32,8 +32,18 @@ static class UdonAbiCatalogFactory
             .Select(definition => definition.fullName.Substring("Type_".Length))
             .Distinct(StringComparer.Ordinal)
             .ToArray();
+        // Source UdonSharpBehaviour values use the IUdonEventReceiver storage
+        // tag, but the runtime object is VRC.Udon.UdonBehaviour. Record that
+        // concrete representation once so inherited Unity members resolve
+        // through its real CLR base chain instead of a hard-coded owner list.
+        typeFacts.Record(
+            "VRCUdonCommonInterfacesIUdonEventReceiver",
+            typeof(VRC.Udon.UdonBehaviour));
         return new UdonAbiCatalog(
-            prototypes, typeFacts.Snapshot(), registeredTypes);
+            prototypes,
+            typeFacts.Snapshot(),
+            registeredTypes,
+            typeFacts.AssignabilitySnapshot());
     }
 
     static UdonExternPrototype CreatePrototype(UdonNodeDefinition definition,

@@ -94,4 +94,26 @@ public class UdonAbiBinderTests
 
         Assert.Contains("not registered", error.Message);
     }
+
+    [Fact]
+    public void InheritedObjectMethodUsesTheReceiverHierarchy()
+    {
+        const string source = @"
+using UdonSharp;
+using UnityEngine;
+public class AbiOwnerHierarchy : UdonSharpBehaviour
+{
+    public Material material;
+    public string result;
+    void Start() { result = material.shader.ToString(); }
+}";
+
+        var uasm = TestHelper.CompileToUasm(
+            source, "AbiOwnerHierarchy");
+
+        Assert.Contains(
+            "UnityEngineObject.__ToString__SystemString", uasm);
+        Assert.DoesNotContain(
+            "UnityEngineComponent.__ToString__SystemString", uasm);
+    }
 }
