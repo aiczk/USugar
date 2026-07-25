@@ -94,6 +94,20 @@ public static class ExternResolver
             : runtimeType;
     }
 
+    /// <summary>CLR counterpart of the Roslyn storage-name minting path. Installed-SDK ABI
+    /// collection and directed extern assignability facts must erase a CLR type identically.</summary>
+    internal static string GetUdonTypeName(Type type)
+    {
+        if (type == null) return "";
+        if (type == typeof(void)) return StorageTypes.Void.Name;
+        if (type.IsByRef) type = type.GetElementType();
+        if (type == null) return "";
+        if (type.IsArray)
+            return GetUdonTypeName(type.GetElementType()) + "Array";
+        if (type.IsGenericParameter) return type.Name;
+        return RemapUdonType(SanitizeTypeName(type.FullName ?? type.Name));
+    }
+
     public static bool IsUdonSharpBehaviour(ITypeSymbol type)
     {
         if (type is not INamedTypeSymbol namedType) return false;

@@ -47,11 +47,60 @@ public static class UdonAbiVerifier
         IDictionary<string, StorageType> genericBindings,
         UdonTypeFactRegistry typeFacts, string functionName)
     {
-        if (parameter.Type.TryMatch(actual, genericBindings, typeFacts, out var reason))
+        if (RequiresTransformStrongbox(call.Sig.Key, stackIndex)
+            && actual != StorageTypes.Transform)
+            throw new VerificationException(
+                $"Extern '{call.Sig}' stack operand 0 ('{parameter.Name}', {parameter.Mode}) "
+                + "is a generic component-query receiver and must be backed by a "
+                + $"'{StorageTypes.Transform}' strongbox, got '{actual}' "
+                + $"(function '{functionName}').");
+
+        // GetProgramVariable is an intentionally type-erased VM channel. Its SDK ABI output is
+        // object, while CProgramVariableLoad/CrossCall carry the statically known remote field or
+        // return-slot type through flattening. The wrapper writes the dynamic value without a CLR
+        // conversion; preserving that producer-owned schema is the one legitimate object->T result
+        // exception. Ordinary object-returning externs remain directional and cannot claim T.
+        if (IsTypedProgramVariableResult(call, parameter, stackIndex))
+            return;
+
+        if (parameter.Type.TryMatch(
+                actual, parameter.Mode, genericBindings, typeFacts, out var reason))
             return;
         throw new VerificationException(
             $"Extern '{call.Sig}' stack operand {stackIndex} ('{parameter.Name}', "
             + $"{parameter.Mode}) expects ABI type '{parameter.Type}', got '{actual}': "
             + $"{reason} (function '{functionName}').");
+    }
+
+    static bool IsTypedProgramVariableResult(CExternCall call,
+        UdonAbiParameter parameter, int stackIndex)
+        => stackIndex == call.Args.Count
+           && parameter.Mode == UdonAbiParameterMode.Out
+           && parameter.Type.Kind == UdonAbiType.PatternKind.Exact
+           && parameter.Type.ExactType == StorageTypes.Object
+           && call.Sig.Key == ExternResolver.EventReceiverGetProgramVariable;
+
+    /// <summary>The SDK's generic component-query wrapper does not merely call
+    /// GetHeapVariable&lt;Component&gt;: it branches on the receiver strongbox's declared CLR type.
+    /// Lowering therefore normalizes every explicit receiver through .transform. Pin that execution
+    /// contract here so a future removal of the normalization is rejected before UASM emission.</summary>
+    static bool RequiresTransformStrongbox(UdonAbiKey key, int stackIndex)
+    {
+        if (stackIndex != 0
+            || key.Owner != "UnityEngineComponent"
+            || (key.ResultType != "T" && key.ResultType != "TArray"))
+            return false;
+        switch (key.Member)
+        {
+            case "GetComponent":
+            case "GetComponentInChildren":
+            case "GetComponentInParent":
+            case "GetComponents":
+            case "GetComponentsInChildren":
+            case "GetComponentsInParent":
+                return true;
+            default:
+                return false;
+        }
     }
 }

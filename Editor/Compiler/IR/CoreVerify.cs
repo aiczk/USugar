@@ -80,13 +80,13 @@ public static class CoreVerify
         }
 
         // Phase-D flip (2026-07-16): the reference-prefix-list and unknown-means-enum heuristics are
-        // deleted. Two types may differ only under DeclaredRelaxations (exact / SystemObject wildcard /
+        // deleted. Two types may differ only under RawCopyCompatibility (exact / SystemObject wildcard /
         // Nullable erasure / fact-enum↔Int32 / both-fact-reference COPY) — anything else, including a
         // name with no minted fact, throws with the reason. The relaxations are position-independent VM
         // representation truths, so the former CAssign-only enum arm now applies to every check site.
         public void AssertType(StorageType expected, StorageType actual, string context)
         {
-            var why = DeclaredRelaxations.WhyIncompatible(expected.Name, actual.Name, TypeFacts);
+            var why = RawCopyCompatibility.WhyIncompatible(expected.Name, actual.Name, TypeFacts);
             if (why == null) return;
             throw new VerificationException(
                 $"Type mismatch in {context}: expected '{expected}', got '{actual}' — {why} (function '{Func.Name}')");

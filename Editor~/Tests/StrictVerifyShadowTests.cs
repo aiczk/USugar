@@ -3,7 +3,7 @@ using Xunit;
 namespace USugar.Tests;
 
 // Phase-D enforcement pins (the Phase-B shadow's successor): CoreVerify's relaxed-arm GUESSES are gone —
-// a slot/value type pair may differ only under DeclaredRelaxations (SystemObject wildcard, Nullable
+// a slot/value type pair may differ only under RawCopyCompatibility (SystemObject wildcard, Nullable
 // erasure, fact-enum↔Int32, both-fact-reference COPY). These tests pin the flipped polarity: fact-backed
 // pairs still pass (accept controls), while no-fact and fact-contradicted pairs throw loudly, naming the
 // missing fact.

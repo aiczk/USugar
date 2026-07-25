@@ -10,7 +10,7 @@ using System.Collections.Generic;
 // appears as a flat operand (must be materialized via CLoadField); (5) CFieldRef(Addr) appears
 // only as a direct extern/internal-call argument; (6) no structured statement leaked into a flat block;
 // (7, module overload) every slot/field COPY and internal-call boundary is type-compatible under
-// DeclaredRelaxations. The module overload is the production entry point.
+// RawCopyCompatibility. The module overload is the production entry point.
 // ============================================================================
 
 public static class FlatVerify
@@ -90,7 +90,7 @@ public static class FlatVerify
 
         public void AssertType(StorageType expected, StorageType actual, string context)
         {
-            var why = DeclaredRelaxations.WhyIncompatible(expected.Name, actual.Name, TypeFacts);
+            var why = RawCopyCompatibility.WhyIncompatible(expected.Name, actual.Name, TypeFacts);
             if (why == null) return;
             throw new VerificationException(
                 $"Flat type mismatch in {context}: expected '{expected}', got '{actual}' - {why} "

@@ -378,7 +378,7 @@ public static class UasmValidator
 
     // COPY/slot declared-type consistency (B72 axis): a 2-push COPY moves src's heap value into dst
     // verbatim (conversions go through externs), so the two declared types must be compatible under the
-    // SAME DeclaredRelaxations predicate CoreVerify/FlatVerify enforce on IR slots — one shared rule
+    // SAME RawCopyCompatibility predicate CoreVerify/FlatVerify enforce on IR slots — one shared rule
     // table, no duplicate. The cross-boundary return-pattern COPY (1 local push; src is the caller's pushed return
     // address) has no declared src var and is skipped, as stack-balance already pins its shape.
     static void ValidateCopyTypes(string uasm, Dictionary<string, string> varTypes,
@@ -446,7 +446,7 @@ public static class UasmValidator
                         }
                         else
                         {
-                            var why = DeclaredRelaxations.WhyIncompatible(dstType, srcType, typeFacts);
+                            var why = RawCopyCompatibility.WhyIncompatible(dstType, srcType, typeFacts);
                             if (why != null)
                                 errors.Add($"Line {i + 1}: COPY {src} (%{srcType}) -> {dst} (%{dstType}): {why}");
                         }

@@ -200,7 +200,7 @@ public class UasmValidatorTests
 
     // ── COPY declared-type consistency (B72 axis) ──
     // Every 2-push COPY between vars with declared UASM types must be compatible under the SAME
-    // DeclaredRelaxations predicate CoreVerify enforces — the table exists once, not twice.
+    // RawCopyCompatibility predicate CoreVerify enforces — the table exists once, not twice.
 
     [Fact]
     public void CopyBetweenIncompatibleDeclaredTypes_Throws()

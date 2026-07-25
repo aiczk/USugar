@@ -23,7 +23,8 @@ static class UdonAbiCatalogFactory
                                      definition.fullName))
             .Select(definition => CreatePrototype(definition, typeFacts))
             .ToArray();
-        return new UdonAbiCatalog(prototypes, typeFacts.Snapshot());
+        return new UdonAbiCatalog(
+            prototypes, typeFacts.Snapshot(), typeFacts.AssignabilitySnapshot());
     }
 
     static UdonExternPrototype CreatePrototype(UdonNodeDefinition definition,
@@ -75,14 +76,5 @@ static class UdonAbiCatalogFactory
     }
 
     static string ToAbiTypeName(Type type)
-    {
-        if (type == null) return "";
-        if (type == typeof(void)) return StorageTypes.Void.Name;
-        if (type.IsByRef) type = type.GetElementType();
-        if (type.IsArray)
-            return ToAbiTypeName(type.GetElementType()) + "Array";
-        if (type.IsGenericParameter) return type.Name;
-        return ExternResolver.RemapUdonType(
-            ExternResolver.SanitizeTypeName(type.FullName ?? type.Name));
-    }
+        => ExternResolver.GetUdonTypeName(type);
 }

@@ -1,18 +1,14 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Linq;
 using Microsoft.CodeAnalysis;
 
-/// <summary>Type FACTS recorded at the two authoritative boundaries where Udon type names enter a
-/// compilation: source symbols through ExternResolver.GetUdonTypeName, and installed-SDK CLR operand
-/// types through UdonAbiCatalogFactory. Structural rules cover names whose runtime representation is
-/// fixed by construction. History: Phase-B (2026-07-14) collected these as a measurement shadow of
-/// CoreVerify's two relaxed-arm GUESSES ("unknown name may be an enum", "non-primitive name is a
-/// reference"); Phase-D stage 1 (2026-07-16) measured ZERO production-path guess-dependent passes across
-/// the full suite plus the full local harness; Phase-D stage 2 (2026-07-16) ENFORCED the flip — the
-/// heuristics are deleted and <see cref="DeclaredRelaxations"/>, backed by these facts, is now the only
-/// way two slot/COPY types may legally differ (CoreVerify, production FlatVerify, and the independent
-/// test-side UasmValidator COPY check).</summary>
+/// <summary>Representation categories and directed assignability facts recorded at the two
+/// authoritative boundaries where Udon type names enter a compilation: Roslyn source symbols and
+/// installed-SDK CLR operand types. <see cref="RawCopyCompatibility"/> uses the category facts;
+/// extern operand verification uses the inheritance facts. Unknown names are rejected rather than
+/// classified by naming heuristics.</summary>
 public sealed class UdonTypeFactRegistry
 {
     public readonly struct TypeFact : IEquatable<TypeFact>
@@ -25,9 +21,39 @@ public sealed class UdonTypeFactRegistry
         public override int GetHashCode() => (IsEnum ? 1 : 0) | (IsValueType ? 2 : 0);
     }
 
+    public readonly struct AssignabilityFact : IEquatable<AssignabilityFact>
+    {
+        public readonly string From;
+        public readonly string To;
+
+        public AssignabilityFact(string from, string to)
+        {
+            From = from ?? throw new ArgumentNullException(nameof(from));
+            To = to ?? throw new ArgumentNullException(nameof(to));
+        }
+
+        public bool Equals(AssignabilityFact other)
+            => string.Equals(From, other.From, StringComparison.Ordinal)
+               && string.Equals(To, other.To, StringComparison.Ordinal);
+        public override bool Equals(object obj)
+            => obj is AssignabilityFact other && Equals(other);
+        public override int GetHashCode()
+        {
+            unchecked
+            {
+                return StringComparer.Ordinal.GetHashCode(From) * 397
+                       ^ StringComparer.Ordinal.GetHashCode(To);
+            }
+        }
+    }
+
     // Values are deterministic per name (Udon storage name ↔ representation category is 1:1), so
     // installed-SDK seeding and concurrent source-minting races during Phase-2 emit are benign.
     readonly ConcurrentDictionary<string, TypeFact> _facts = new(StringComparer.Ordinal);
+    readonly ConcurrentDictionary<AssignabilityFact, byte> _assignability = new();
+    readonly ConcurrentDictionary<Type, byte> _recordedClrHierarchy = new();
+    readonly ConcurrentDictionary<ITypeSymbol, byte> _recordedSymbolHierarchy
+        = new(SymbolEqualityComparer.Default);
 
     /// <summary>Record the minted name's facts. Names covered by a STRUCTURAL rule (primitives, arrays,
     /// the fold tags) are skipped: a folded name's runtime representation is fixed by the fold itself,
@@ -39,10 +65,11 @@ public sealed class UdonTypeFactRegistry
         Record(udonName,
             new TypeFact(symbol.TypeKind == TypeKind.Enum, symbol.IsValueType),
             symbol.ToDisplayString());
+        RecordAssignability(udonName, symbol);
     }
 
     /// <summary>Record an installed-SDK CLR type before the editor boundary erases it to an Udon
-    /// storage name. SDK ABI operands are verifier authorities too: without this symmetric source of
+    /// storage name. SDK ABI operands are verifier authorities too: without this source of
     /// facts, a legal derived reference passed to an SDK base-reference operand is rejected merely
     /// because the expected name did not originate in Roslyn source.</summary>
     internal void Record(string udonName, Type type)
@@ -53,17 +80,25 @@ public sealed class UdonTypeFactRegistry
         Record(udonName,
             new TypeFact(type.IsEnum, type.IsValueType),
             type.FullName ?? type.Name);
+        RecordAssignability(udonName, type);
     }
 
-    internal void Import(IEnumerable<KeyValuePair<string, TypeFact>> facts, string source)
+    internal void Import(IEnumerable<KeyValuePair<string, TypeFact>> facts,
+        IEnumerable<AssignabilityFact> assignability, string source)
     {
-        if (facts == null) return;
-        foreach (var pair in facts)
-            Record(pair.Key, pair.Value, source);
+        if (facts != null)
+            foreach (var pair in facts)
+                Record(pair.Key, pair.Value, source);
+        if (assignability != null)
+            foreach (var relation in assignability)
+                RecordAssignable(relation.From, relation.To);
     }
 
     internal KeyValuePair<string, TypeFact>[] Snapshot()
         => _facts.ToArray();
+
+    internal AssignabilityFact[] AssignabilitySnapshot()
+        => _assignability.Keys.ToArray();
 
     void Record(string udonName, TypeFact requested, string source)
     {
@@ -88,6 +123,9 @@ public sealed class UdonTypeFactRegistry
     internal void RecordForTest(string udonName, bool isEnum, bool isValueType)
         => _facts[udonName] = new TypeFact(isEnum, isValueType);
 
+    internal void RecordAssignableForTest(string from, string to)
+        => RecordAssignable(from, to);
+
     /// <summary>FACT: is the name an enum tag (Int32-compatible)? true/false when known, null when the
     /// neither authoritative boundary supplied it — an unknown name is exactly what the relaxed check
     /// would otherwise have to guess about.</summary>
@@ -106,6 +144,63 @@ public sealed class UdonTypeFactRegistry
         var structural = StructuralIsReference(udonName);
         if (structural != null) return structural;
         return _facts.TryGetValue(udonName, out var f) ? !f.IsValueType : (bool?)null;
+    }
+
+    /// <summary>FACT: can a value represented by <paramref name="from"/> be read as
+    /// <paramref name="to"/> by an ordinary typed extern wrapper? Unlike raw Udon COPY
+    /// compatibility this relation is directional. It is collected from CLR and Roslyn
+    /// inheritance at the same two minting boundaries as the category facts.</summary>
+    public bool? IsAssignableFact(string from, string to)
+    {
+        if (from == to) return true;
+        if (IsKnownUdonBehaviourBase(from, to)) return true;
+        if (_assignability.ContainsKey(new AssignabilityFact(from, to))) return true;
+
+        var fromReference = IsReferenceFact(from);
+        var toReference = IsReferenceFact(to);
+        if (fromReference == null || toReference == null) return null;
+        return false;
+    }
+
+    void RecordAssignability(string from, ITypeSymbol type)
+    {
+        if (!_recordedSymbolHierarchy.TryAdd(type, 0)) return;
+        for (var current = type.BaseType; current != null; current = current.BaseType)
+            RecordAssignable(from, ExternResolver.GetUdonTypeName(current));
+        foreach (var implemented in type.AllInterfaces)
+            RecordAssignable(from, ExternResolver.GetUdonTypeName(implemented));
+    }
+
+    void RecordAssignability(string from, Type type)
+    {
+        if (!_recordedClrHierarchy.TryAdd(type, 0)) return;
+        for (var current = type.BaseType; current != null; current = current.BaseType)
+            RecordAssignable(from, ExternResolver.GetUdonTypeName(current));
+        foreach (var implemented in type.GetInterfaces())
+            RecordAssignable(from, ExternResolver.GetUdonTypeName(implemented));
+    }
+
+    void RecordAssignable(string from, string to)
+    {
+        if (string.IsNullOrEmpty(from) || string.IsNullOrEmpty(to) || from == to) return;
+        _assignability.TryAdd(new AssignabilityFact(from, to), 0);
+    }
+
+    static bool IsKnownUdonBehaviourBase(string from, string to)
+    {
+        if (from != "VRCUdonCommonInterfacesIUdonEventReceiver"
+            && from != "VRCUdonUdonBehaviour")
+            return false;
+        switch (to)
+        {
+            case "UnityEngineMonoBehaviour":
+            case "UnityEngineBehaviour":
+            case "UnityEngineComponent":
+            case "UnityEngineObject":
+                return true;
+            default:
+                return false;
+        }
     }
 
     static bool? StructuralIsReference(string name)
@@ -142,16 +237,12 @@ public sealed class UdonTypeFactRegistry
     }
 }
 
-/// <summary>Phase-D declared-relaxation rules: the single predicate deciding when two Udon slot/COPY
-/// types may legally differ — shared by CoreVerify (structured IR), FlatVerify (production flat IR),
-/// and the test-side UasmValidator COPY check (B72 axis), so the relaxation table exists exactly once. Declared:
-/// (1) SystemObject wildcard — Udon heap slots are dynamically typed; (2) Nullable erasure — NullableAbi
-/// boxes Nullable&lt;T&gt; as object-or-boxed-T; (3) enum↔Int32 — ONLY for names with a recorded enum
-/// fact (Udon stores enums as their underlying Int32); (4) reference COPY — ONLY when BOTH names are
-/// fact references (a reference COPY copies a heap address; the VM enforces no type tag). Stage-1
-/// measured the remaining declared table EMPTY (zero production guess-dependent passes), so anything
-/// else — including a name with no minted fact — is incompatible, loudly.</summary>
-public static class DeclaredRelaxations
+/// <summary>Raw VM COPY compatibility shared by structured IR verification, flat IR verification,
+/// and the independent UASM validator. Legal mismatches are SystemObject, Nullable erasure,
+/// fact-backed enum/Int32 representation, and two fact-backed reference types. The final rule is
+/// valid only for COPY: it moves a reference strongbox without enforcing an extern's CLR operand
+/// type.</summary>
+public static class RawCopyCompatibility
 {
     /// <summary>Null when the pair is compatible; otherwise the reason, naming the missing fact when
     /// the failure is an unknown name (a no-fact name at verify time came from neither source minting
