@@ -10,7 +10,7 @@ namespace USugar.Tests;
 ///
 /// [X1]  STATEMENT-form tail calls (a void call as the LAST statement executed before the implicit
 ///       return — direct named call, delegate dispatch, or property-setter write) were classified
-///       NON-tail by both tail classifiers (EmitContext.HasNonTailSelfCall recognized only
+///       NON-tail by both tail classifiers (LoweringState.HasNonTailSelfCall recognized only
 ///       IReturnOperation tails, and so did the duplicated UasmEmitter.HasNonTailCallTo), so every
 ///       frame spilled and deep legal recursion overflowed the 512-entry __recurStack
 ///       (compile-clean VmFault at depth &gt;512 self / &gt;~256 mutual; ref completes on the CLR).

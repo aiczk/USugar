@@ -65,7 +65,7 @@ public sealed class LambdaCaptureAnalyzer
     // and out-var/deconstruction declaration expressions — else a closure whose only "capture" is its
     // own pattern variable is misclassified as capturing and ClosureEnvLeaf throws 'no binding scope'.
     // B73: the ONE place a pattern operation is decomposed for both concerns that read patterns — its matched
-    // TYPE (type-parameter-usage walks, EmitContext.CollectOperationTypeParams) and its declared DESIGNATOR
+    // TYPE (type-parameter-usage walks, LoweringState.CollectOperationTypeParams) and its declared DESIGNATOR
     // symbol (capture / inside-symbol walks here). A var pattern (`o is var x`) is an IDeclarationPatternOperation
     // with a null MatchedType, so its designator is still collected; a bare type pattern (`case T:`) has a
     // matched type but no designator. Returns (null, null) for a non-pattern op.
@@ -77,7 +77,7 @@ public sealed class LambdaCaptureAnalyzer
         _ => (null, null),
     };
 
-    // Exposed so EmitContext's def-scope-capture pin walks the SAME self-declaration set (B78: its former
+    // Exposed so LoweringState's def-scope-capture pin walks the SAME self-declaration set (B78: its former
     // hand-rolled twin missed out-var/deconstruction declarations, false-rejecting a static generic whose
     // closure used only its own out-var locals). Seed params separately, exactly as GetCaptures does.
     internal static void CollectInsideSymbols(IOperation body, HashSet<ISymbol> inside)

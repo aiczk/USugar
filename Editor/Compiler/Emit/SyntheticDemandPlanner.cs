@@ -19,11 +19,11 @@ internal sealed class SyntheticDemandPlanner
         }
         if (operation is IConversionOperation conversion
             && DelegateDemandPolicy.TryGetVariantConversion(
-                _lowering.Compilation, conversion, _lowering.Context.Session.Types,
-                _lowering.Context.Generics.TypeParamMap,
+                _lowering.Compilation, conversion, _lowering.State.Session.Types,
+                _lowering.State.Generics.TypeParamMap,
                 out var outerInvoke, out var innerInvoke))
         {
-            _lowering.RegisterWrapperSig(outerInvoke, innerInvoke, _lowering.Context.Generics.TypeParamMap);
+            _lowering.RegisterWrapperSig(outerInvoke, innerInvoke, _lowering.State.Generics.TypeParamMap);
             return;
         }
         if (operation is ICompoundAssignmentOperation compound
@@ -32,7 +32,7 @@ internal sealed class SyntheticDemandPlanner
             && delegateType.DelegateInvokeMethod is { } invoke)
         {
             var signature = DelegateAbi.BuildSigPart(
-                invoke, _lowering.Context.Session.Types, _lowering.Context.Generics.TypeParamMap);
+                invoke, _lowering.State.Session.Types, _lowering.State.Generics.TypeParamMap);
             _lowering.RegisterMulticastSig(signature, invoke,
                 compound.OperatorKind == BinaryOperatorKind.Add
                     ? MulticastOperations.Combine : MulticastOperations.Remove);
@@ -45,8 +45,8 @@ internal sealed class SyntheticDemandPlanner
         {
             _lowering.RegisterMulticastSig(
                 DelegateAbi.BuildSigPart(
-                    binaryInvoke, _lowering.Context.Session.Types,
-                    _lowering.Context.Generics.TypeParamMap), binaryInvoke,
+                    binaryInvoke, _lowering.State.Session.Types,
+                    _lowering.State.Generics.TypeParamMap), binaryInvoke,
                 binary.OperatorKind == BinaryOperatorKind.Add
                     ? MulticastOperations.Combine : MulticastOperations.Remove);
             return;
@@ -59,8 +59,8 @@ internal sealed class SyntheticDemandPlanner
         {
             _lowering.RegisterMulticastSig(
                 DelegateAbi.BuildSigPart(
-                    eventInvoke, _lowering.Context.Session.Types,
-                    _lowering.Context.Generics.TypeParamMap), eventInvoke,
+                    eventInvoke, _lowering.State.Session.Types,
+                    _lowering.State.Generics.TypeParamMap), eventInvoke,
                 eventAssignment.Adds ? MulticastOperations.Combine : MulticastOperations.Remove);
             return;
         }

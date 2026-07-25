@@ -7,9 +7,8 @@ using Microsoft.CodeAnalysis.Operations;
 
 internal partial class ProgramLoweringPipeline
 {
-    readonly EmitContext _ctx;
-    readonly CompilationSession _session;
-    readonly UdonAbiCatalog _abiCatalog;
+    readonly LoweringEnvironment _environment;
+    readonly LoweringState _state;
     readonly Dictionary<OperationKind, IOperationHandler> _stmtDispatch;
     readonly Dictionary<OperationKind, IExpressionHandler> _exprDispatch;
     readonly SyntheticBridgeBuilder _bridge;
@@ -17,33 +16,33 @@ internal partial class ProgramLoweringPipeline
     readonly LoweringServices _lowering;
 
 
-    // Property shims → EmitContext
-    Compilation _compilation => _ctx.Compilation;
-    INamedTypeSymbol _classSymbol => _ctx.ClassSymbol;
-    StructuredModule _module => _ctx.Module;
-    CoreBuilder _builder => _ctx.Builder;
-    LayoutPlanner _planner => _ctx.Planner;
-    IReadOnlyDictionary<IMethodSymbol, StructuredFunction> _methodFunctions => _ctx.Methods.Functions;
-    IReadOnlyDictionary<IMethodSymbol, EmitContext.MethodSlot> _methodSlots => _ctx.Methods.Slots;
-    IReadOnlyDictionary<IMethodSymbol, ReturnSlot[]> _methodReturns => _ctx.Methods.Returns;
-    IReadOnlyDictionary<IMethodSymbol, string[]> _methodParamVarIds => _ctx.Methods.ParamVarIds;
-    IMethodSymbol _currentMethod { get => _ctx.Methods.CurrentMethod; set => _ctx.Methods.CurrentMethod = value; }
+    // Phase-local projections; immutable services remain on _environment.
+    Compilation _compilation => _state.Compilation;
+    INamedTypeSymbol _classSymbol => _state.ClassSymbol;
+    StructuredModule _module => _state.Module;
+    CoreBuilder _builder => _state.Builder;
+    LayoutPlanner _planner => _state.Planner;
+    IReadOnlyDictionary<IMethodSymbol, StructuredFunction> _methodFunctions => _state.Methods.Functions;
+    IReadOnlyDictionary<IMethodSymbol, MethodSlot> _methodSlots => _state.Methods.Slots;
+    IReadOnlyDictionary<IMethodSymbol, ReturnSlot[]> _methodReturns => _state.Methods.Returns;
+    IReadOnlyDictionary<IMethodSymbol, string[]> _methodParamVarIds => _state.Methods.ParamVarIds;
+    IMethodSymbol _currentMethod { get => _state.Methods.CurrentMethod; set => _state.Methods.CurrentMethod = value; }
     List<(IMethodSymbol Method, MethodContext.ClosureSpec Spec)> _pendingCallableBodies
-        => _ctx.Methods.PendingBodies;
-    IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> _typeParamMap => _ctx.Generics.TypeParamMap;
+        => _state.Methods.PendingBodies;
+    IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> _typeParamMap => _state.Generics.TypeParamMap;
     HashSet<IMethodSymbol> _inheritedMethods = new(SymbolEqualityComparer.Default);
     HashSet<IMethodSymbol> _userClassDefaultMethods = new(SymbolEqualityComparer.Default);
-    List<(string fieldName, IOperation initOp, ITypeSymbol fieldType)> _fieldInitOps => _ctx.Initializers.FieldInitOps;
-    List<(string fieldName, IOperation initOp, ITypeSymbol fieldType)> _staticFieldInitOps => _ctx.Initializers.StaticFieldInitOps;
-    Dictionary<string, string> _fieldChangeCallbacks => _ctx.Initializers.FieldChangeCallbacks;
-    List<EmitDiagnostic> _diagnostics => _ctx.DiagnosticState.Diagnostics;
+    List<(string fieldName, IOperation initOp, ITypeSymbol fieldType)> _fieldInitOps => _state.Initializers.FieldInitOps;
+    List<(string fieldName, IOperation initOp, ITypeSymbol fieldType)> _staticFieldInitOps => _state.Initializers.StaticFieldInitOps;
+    Dictionary<string, string> _fieldChangeCallbacks => _state.Initializers.FieldChangeCallbacks;
+    List<EmitDiagnostic> _diagnostics => _state.DiagnosticState.Diagnostics;
 
     CodeGenResult _codeGenResult;
     FlatModule _flatModule;
 
     public IReadOnlyList<EmitDiagnostic> Diagnostics => _diagnostics;
     public CodeGenResult CodeGenResult => _codeGenResult;
-    internal CompilationSession Session => _session;
+    internal CompilationSession Session => _environment.Session;
     internal IEnumerable<OperationKind> HandledOperationKinds
         => _stmtDispatch.Keys.Concat(_exprDispatch.Keys).Distinct();
 
@@ -63,14 +62,14 @@ internal partial class ProgramLoweringPipeline
     internal ProgramLoweringPipeline(CompilationSession session, INamedTypeSymbol classSymbol,
         LayoutPlanner planner = null)
     {
-        _session = session ?? throw new ArgumentNullException(nameof(session));
-        _abiCatalog = session.AbiCatalog;
+        if (session == null) throw new ArgumentNullException(nameof(session));
         _ownsPlanner = planner == null;
-        _ctx = new EmitContext(
+        _environment = new LoweringEnvironment(
             session, classSymbol, planner ?? new LayoutPlanner(session));
-        _lowering = new LoweringServices(_ctx);
-        _bridge = new SyntheticBridgeBuilder(_ctx.Builder);
-        _delegateConvention = new DelegateConventionStorage(_ctx);
+        _state = new LoweringState(_environment);
+        _lowering = new LoweringServices(_state);
+        _bridge = new SyntheticBridgeBuilder(_state.Builder);
+        _delegateConvention = new DelegateConventionStorage(_state);
 
         var stmtHandler = new StatementHandler(_lowering);
         var loopHandler = new LoopHandler(_lowering);
@@ -91,7 +90,7 @@ internal partial class ProgramLoweringPipeline
             new ArrayHandler(_lowering),
             new NullableHandler(_lowering));
 
-        _ctx.InitializeDispatchers(
+        _state.Dispatch.Initialize(
             VisitOperation, VisitExpression, VisitLoweredExpression,
             operatorHandler.EmitPatternCheckImpl);
     }
@@ -128,7 +127,7 @@ internal partial class ProgramLoweringPipeline
 
     // Type name resolution helper
     StorageType GetStorageType(ITypeSymbol type)
-        => _ctx.ResolveStorageType(type);
+        => _state.ResolveStorageType(type);
     ITypeSymbol ResolveTypeForStorage(ITypeSymbol type)
         => TypeEnvironment.CloseType(_compilation, type, _typeParamMap);
     string GetStorageTypeName(ITypeSymbol type) => GetStorageType(type).Name;
@@ -149,10 +148,10 @@ internal partial class ProgramLoweringPipeline
     public FlatModule FlatModule => _flatModule;
 
     /// <summary>Test/tooling accessors for the Stage 2 M1 CaptureScopeAnalysis (built in <see cref="Emit"/>,
-    /// consumed by nothing yet — see EmitContext.CaptureScope).</summary>
-    public CaptureScopeAnalysis CaptureScope => _ctx.Closures.CaptureScope;
-    public Compilation Compilation => _ctx.Compilation;
-    public INamedTypeSymbol ClassSymbol => _ctx.ClassSymbol;
+    /// consumed by nothing yet — see LoweringState.CaptureScope).</summary>
+    public CaptureScopeAnalysis CaptureScope => _state.Closures.CaptureScope;
+    public Compilation Compilation => _state.Compilation;
+    public INamedTypeSymbol ClassSymbol => _state.ClassSymbol;
 
     // C4 (M5d): the one per-class ResolvedEdgeResolver instance — the relocated classifier core plus
     // the reach cores; stateless beyond this emitter, so every consumer (reach worklist, recursion
@@ -163,8 +162,8 @@ internal partial class ProgramLoweringPipeline
 
     // C4: the seeded-context reads the relocated CallEdge classifier consumes (null/empty before Emit
     // seeds them at the compile-plan build — the resolver fails loud on a pre-seed CallEdge call).
-    internal VirtualDispatch VirtualDispatchInstance => _ctx.VirtualDispatch;
-    internal ClassTypeObjectContext ClassTypes => _ctx.ClassTypes;
+    internal VirtualDispatch VirtualDispatchInstance => _state.VirtualDispatch;
+    internal ClassTypeObjectContext ClassTypes => _state.ClassTypes;
     internal LayoutPlanner Planner => _planner;
 
     // CA call-graph rewrite (M5b prerequisite): test-only accessor exposing the populated RecursionInfo
@@ -172,7 +171,7 @@ internal partial class ProgramLoweringPipeline
     // ThisFieldTouches, ReentrantDispatchSites, TailSparedDirectCallSites) post-Emit, so
     // RecursionFacetEquivalenceTests can census the legacy BuildRecursionInfo product and diff it
     // against the worklist-produced facets before the M5b swap. Unused by production emission.
-    internal RecursionInfo DebugRecursionInfo => _ctx.RecursionContext.Info;
+    internal RecursionInfo DebugRecursionInfo => _state.RecursionContext.Info;
     internal IReadOnlyList<string> DebugStaticInitializerOrder
         => _staticFieldInitOps.Select(x => x.fieldName).ToArray();
 
@@ -198,15 +197,15 @@ internal partial class ProgramLoweringPipeline
         // auto-property initializers.
         // CA rewrite (M4): seed the typeobj registry in stable-key order (not mint-walk discovery order),
         // so typeobj alloc / is-chain / virtual-dispatch-chain byte order is traversal-independent.
-        _ctx.ClassTypes.Seed(plan.Reach.MintedClasses
+        _state.ClassTypes.Seed(plan.Reach.MintedClasses
             .OrderBy(StableOrdinalKey, StringComparer.Ordinal)
             .ThenBy(ClassTypeObjectContext.SpecKey, StringComparer.Ordinal));
         DeclareTypeObjectConstants();
-        _ctx.VirtualDispatch = new VirtualDispatch(_ctx.ClassTypes); // CA-v2b-2: virtual-call lowering
+        _state.VirtualDispatch = new VirtualDispatch(_state.ClassTypes); // CA-v2b-2: virtual-call lowering
         var bodyGraph = new RecursionNodeWalk(
             EdgeResolver, plan.Reach, plan.FieldInitOps, plan.Callables.Definitions).Run();
-        _ctx.Closures.SetIdentityPlan(ClosureIdentityPlan.Build(bodyGraph.AllNodes));
-        _ctx.Closures.SetCaptureScope(CaptureScopeAnalysis.Build(_compilation, _classSymbol,
+        _state.Closures.SetIdentityPlan(ClosureIdentityPlan.Build(bodyGraph.AllNodes));
+        _state.Closures.SetCaptureScope(CaptureScopeAnalysis.Build(_compilation, _classSymbol,
             plan.CaptureRoots, bodyGraph.Bodies, plan.FieldInitOps));
         EmitMethods(plan, bodyGraph);
         // Handlers build Core IR; the pipeline (verify/optimize/flatten) runs on Core directly.
@@ -247,12 +246,15 @@ internal partial class ProgramLoweringPipeline
     {
         var typeName = UdonBehaviourTypeMetadata.TypeName(_classSymbol);
         long typeId = UdonBehaviourTypeMetadata.TypeId(typeName);
-        _ctx.Storage.DeclareGeneratedField(EmitContext.ReflTypeIdField, StorageTypes.Int64, typeId);
-        _ctx.Storage.DeclareGeneratedField(EmitContext.ReflTypeNameField, StorageTypes.String, typeName);
+        _state.Storage.DeclareGeneratedField(RuntimeReflectionFields.TypeId, StorageTypes.Int64, typeId);
+        _state.Storage.DeclareGeneratedField(RuntimeReflectionFields.TypeName, StorageTypes.String, typeName);
 
         var ancestorIds = UdonBehaviourTypeMetadata.AssignableTypeIds(_classSymbol);
         if (UdonBehaviourTypeMetadata.ProgramRequiresAssignableIds(_classSymbol, _planner.Census))
-            _ctx.DeclareReflTypeIds(ancestorIds);
+            _state.Storage.DeclareField(
+                RuntimeReflectionFields.AssignableTypeIds,
+                StorageTypes.Int64Array,
+                defaultValue: ancestorIds);
     }
 
     internal static long ComputeTypeId(string typeName)
@@ -358,7 +360,7 @@ internal partial class ProgramLoweringPipeline
                     }
                 }
             }
-            _ctx.Storage.DeclareField(member.Name, new StorageType(udonType), flags, constValue, syncMode);
+            _state.Storage.DeclareField(member.Name, new StorageType(udonType), flags, constValue, syncMode);
 
             // Aggregate (struct/tuple) field with NO explicit initializer → C# default-initializes it to a
             // zeroed struct. In the object[] emulation that requires a fresh default array; without it the heap
@@ -366,7 +368,7 @@ internal partial class ProgramLoweringPipeline
             if (syntaxRef?.GetSyntax() is not VariableDeclaratorSyntax { Initializer: not null }
                 && member.Type is INamedTypeSymbol aggFieldType && TypeClassifier.IsAggregateValue(aggFieldType))
             {
-                _ctx.Aggregates.FieldDefaults.Add((member.Name, aggFieldType));
+                _state.Aggregates.FieldDefaults.Add((member.Name, aggFieldType));
             }
 
             // Detect [FieldChangeCallback("PropertyName")]
@@ -376,7 +378,7 @@ internal partial class ProgramLoweringPipeline
                 && fcbAttr.ConstructorArguments[0].Value is string propName)
             {
                 _fieldChangeCallbacks[member.Name] = propName;
-                _ctx.Storage.DeclareGeneratedField($"__old_{member.Name}", new StorageType(udonType));
+                _state.Storage.DeclareGeneratedField($"__old_{member.Name}", new StorageType(udonType));
             }
         }
 
@@ -403,12 +405,12 @@ internal partial class ProgramLoweringPipeline
             if (!isAuto && prop.DeclaredAccessibility != Accessibility.Public) continue;
             if (prop.Type is INamedTypeSymbol propertyDelegate
                 && propertyDelegate.DelegateInvokeMethod != null)
-                _ctx.Boundary.RequireCanDeclareDelegateSurface(prop, propertyDelegate);
+                _state.Boundary.RequireCanDeclareDelegateSurface(prop, propertyDelegate);
             var udonType = GetStorageTypeName(prop.Type);
             var flags = FieldFlags.None;
             if (prop.DeclaredAccessibility == Accessibility.Public) flags |= FieldFlags.Export;
-            var storageName = _ctx.SourceStorageName(prop);
-            _ctx.Storage.DeclareField(storageName, new StorageType(udonType), flags,
+            var storageName = _state.SourceStorageName(prop);
+            _state.Storage.DeclareField(storageName, new StorageType(udonType), flags,
                 isAuto ? ResolveAutoPropInitializer(storageName, prop) : null);
         }
 
@@ -494,7 +496,7 @@ internal partial class ProgramLoweringPipeline
                         {
                             constValue = TryEvaluateFieldInitForHeap(initOp, member.Type);
                             if (constValue == null)
-                                _fieldInitOps.Add((_ctx.SourceStorageName(member), initOp, member.Type));
+                                _fieldInitOps.Add((_state.SourceStorageName(member), initOp, member.Type));
                         }
                     }
                 }
@@ -508,8 +510,8 @@ internal partial class ProgramLoweringPipeline
                 // the field compiled clean but shipped unsynced (networking silently dead on device).
                 var baseSyncMode = ReadFieldSyncMode(member, udonType, ref baseFlags);
 
-                var memberStorageName = _ctx.SourceStorageName(member);
-                _ctx.Storage.DeclareField(memberStorageName, new StorageType(udonType), baseFlags, constValue, baseSyncMode);
+                var memberStorageName = _state.SourceStorageName(member);
+                _state.Storage.DeclareField(memberStorageName, new StorageType(udonType), baseFlags, constValue, baseSyncMode);
 
                 var baseFcbAttr = member.GetAttributes()
                     .FirstOrDefault(a => a.AttributeClass?.Name == "FieldChangeCallbackAttribute");
@@ -517,7 +519,7 @@ internal partial class ProgramLoweringPipeline
                     && baseFcbAttr.ConstructorArguments[0].Value is string basePropName)
                 {
                     _fieldChangeCallbacks[memberStorageName] = basePropName;
-                    _ctx.Storage.DeclareGeneratedField($"__old_{memberStorageName}", new StorageType(udonType));
+                    _state.Storage.DeclareGeneratedField($"__old_{memberStorageName}", new StorageType(udonType));
                 }
             }
             // Field-like events inherited from a user base class (design §2.1, A-M2) — same
@@ -551,7 +553,7 @@ internal partial class ProgramLoweringPipeline
                         // Round-8 [R2]: C# runs the BASE declaration's initializer into THIS backing
                         // (the leaf's stays default — DiffFuzz: base.P*10+P ref=50).
                         if (isAuto)
-                            _ctx.Storage.DeclareGeneratedField(BaseAutoPropBackingName(prop), GetStorageType(prop.Type),
+                            _state.Storage.DeclareGeneratedField(BaseAutoPropBackingName(prop), GetStorageType(prop.Type),
                                 ResolveAutoPropInitializer(BaseAutoPropBackingName(prop), prop));
                         continue;
                     }
@@ -560,8 +562,8 @@ internal partial class ProgramLoweringPipeline
                     // accessors are real functions; the planner already disambiguates their export
                     // names on collision), so `new`-shadowing it stays legal (wave-7 pinned).
                     if (isAuto)
-                        _ctx.Storage.DeclareGeneratedField(_ctx.SourceStorageName(prop), GetStorageType(prop.Type),
-                            ResolveAutoPropInitializer(_ctx.SourceStorageName(prop), prop));
+                        _state.Storage.DeclareGeneratedField(_state.SourceStorageName(prop), GetStorageType(prop.Type),
+                            ResolveAutoPropInitializer(_state.SourceStorageName(prop), prop));
                     continue;
                 }
                 if (!isAuto && prop.DeclaredAccessibility != Accessibility.Public) continue;
@@ -569,8 +571,8 @@ internal partial class ProgramLoweringPipeline
                 var flags = FieldFlags.None;
                 if (prop.DeclaredAccessibility == Accessibility.Public) flags |= FieldFlags.Export;
                 declaredMemberSyms[prop.Name] = prop;
-                var storageName = _ctx.SourceStorageName(prop);
-                _ctx.Storage.DeclareField(storageName, new StorageType(udonType), flags,
+                var storageName = _state.SourceStorageName(prop);
+                _state.Storage.DeclareField(storageName, new StorageType(udonType), flags,
                     isAuto ? ResolveAutoPropInitializer(storageName, prop) : null);
             }
             baseType = baseType.BaseType;
@@ -708,10 +710,10 @@ internal partial class ProgramLoweringPipeline
             if (constValue == null)
                 _staticFieldInitOps.Add((member.Name, initOp, member.Type)); // static tier — §3.6
         }
-        _ctx.Storage.DeclareField(member.Name, new StorageType(udonType), FieldFlags.None, constValue);
+        _state.Storage.DeclareField(member.Name, new StorageType(udonType), FieldFlags.None, constValue);
 
         if (initOp == null && member.Type is INamedTypeSymbol aggFieldType && TypeClassifier.IsAggregateValue(aggFieldType))
-            _ctx.Aggregates.FieldDefaults.Add((member.Name, aggFieldType));
+            _state.Aggregates.FieldDefaults.Add((member.Name, aggFieldType));
 
         return true;
     }
@@ -777,7 +779,7 @@ internal partial class ProgramLoweringPipeline
     void EmitStaticOwnerProperty(IPropertySymbol property)
     {
         var id = StaticOwnerAbi.PropertyName(property, property.ContainingType);
-        _ctx.Storage.DeclareGeneratedField(id, GetStorageType(property.Type));
+        _state.Storage.DeclareGeneratedField(id, GetStorageType(property.Type));
         if (property.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
             is PropertyDeclarationSyntax { Initializer: not null } declaration)
         {
@@ -786,7 +788,7 @@ internal partial class ProgramLoweringPipeline
                 _staticFieldInitOps.Add((id, init, property.Type));
         }
         else if (property.Type is INamedTypeSymbol aggregate && TypeClassifier.IsAggregateValue(aggregate))
-            _ctx.Aggregates.FieldDefaults.Add((id, aggregate));
+            _state.Aggregates.FieldDefaults.Add((id, aggregate));
     }
 
     void EmitStaticOwnerField(IFieldSymbol field)
@@ -802,7 +804,7 @@ internal partial class ProgramLoweringPipeline
             return;
         }
         var storageType = GetStorageType(field.Type);
-        _ctx.Storage.DeclareGeneratedField(id, storageType);
+        _state.Storage.DeclareGeneratedField(id, storageType);
         var syntax = field.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax();
         if (syntax is VariableDeclaratorSyntax { Initializer: not null } declarator)
         {
@@ -811,7 +813,7 @@ internal partial class ProgramLoweringPipeline
                 _staticFieldInitOps.Add((id, init, field.Type));
         }
         else if (field.Type is INamedTypeSymbol aggregate && TypeClassifier.IsAggregateValue(aggregate))
-            _ctx.Aggregates.FieldDefaults.Add((id, aggregate));
+            _state.Aggregates.FieldDefaults.Add((id, aggregate));
     }
 
     /// <summary>
@@ -847,10 +849,10 @@ internal partial class ProgramLoweringPipeline
                 + "method as a remotely-invokable entry point, which does not apply to a delegate value.");
         // §3.4-1: ref/out delegate signatures are rejected at the convention-var declaration side too.
         DelegateAbi.ValidateNoRefOutParams(delegateType.DelegateInvokeMethod);
-        _ctx.Boundary.RequireCanDeclareDelegateSurface(member, delegateType);
+        _state.Boundary.RequireCanDeclareDelegateSurface(member, delegateType);
 
-        _ctx.Storage.DeclareField(storageName, StorageTypes.ObjectArray, FieldFlags.None);
-        _ctx.Synthetics.DelegateFields.Add(storageName);
+        _state.Storage.DeclareField(storageName, StorageTypes.ObjectArray, FieldFlags.None);
+        _state.Synthetics.DelegateFields.Add(storageName);
 
         // Declare the signature-keyed __dlgc_ convention vars for this delegate signature (§3.2).
         var invoke = delegateType.DelegateInvokeMethod;
@@ -858,13 +860,13 @@ internal partial class ProgramLoweringPipeline
         // argument/return convention storage. DelegateConventionStorage declares the complete surface,
         // including env, when an actual bridge is emitted.
         var (convArgs, convRet, _) = LoweringServices.GetConventionFieldNames(
-            delegateType, _session.Types);
+            delegateType, _environment.Session.Types);
         for (int ci = 0; ci < convArgs.Length; ci++)
-            _ctx.Storage.TryDeclareVar(convArgs[ci],
-                _session.Types.GetStorageType(invoke.Parameters[ci].Type, _typeParamMap));
+            _state.Storage.TryDeclareVar(convArgs[ci],
+                _environment.Session.Types.GetStorageType(invoke.Parameters[ci].Type, _typeParamMap));
         if (convRet != null)
-            _ctx.Storage.TryDeclareVar(convRet,
-                _session.Types.GetStorageType(invoke.ReturnType, _typeParamMap));
+            _state.Storage.TryDeclareVar(convRet,
+                _environment.Session.Types.GetStorageType(invoke.ReturnType, _typeParamMap));
 
         if (member.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
             is VariableDeclaratorSyntax { Initializer: not null } dlgDeclarator)
@@ -934,7 +936,7 @@ internal partial class ProgramLoweringPipeline
             foreach (var p in t.GetMembers(autoProp.Name).OfType<IPropertySymbol>())
                 if (IsOverrideChainAncestor(p, autoProp))
                     return BaseAutoPropBackingName(autoProp);
-        return _ctx.SourceStorageName(autoProp);
+        return _state.SourceStorageName(autoProp);
     }
 
     /// <summary>Round-8 [R2]: auto-property initializers (IPropertyInitializerOperation) were
@@ -1037,13 +1039,13 @@ internal partial class ProgramLoweringPipeline
     void EmitMethods(ProgramPlan plan, CallableBodyGraph bodyGraph)
     {
         RegisterProgram(plan);
-        _ctx.Generics.SetPlannedSpecializations(plan.Callables.Specializations);
+        _state.Generics.SetPlannedSpecializations(plan.Callables.Specializations);
         var specializationRegistrar = new SpecializationRegistrar(_lowering);
         foreach (var specialization in plan.Callables.Specializations)
             specializationRegistrar.Register(specialization);
         foreach (var closure in plan.Callables.ClosureSpecializations)
         {
-            var definition = _ctx.Closures.IdentityPlan.CanonicalDefinition(closure.Method);
+            var definition = _state.Closures.IdentityPlan.CanonicalDefinition(closure.Method);
             var method = closure.Method.IsGenericMethod
                 && !closure.Method.TypeArguments.Any(ClassTypeObjectContext.ContainsTypeParameter)
                 ? definition.Construct(closure.Method.TypeArguments.ToArray())
@@ -1051,12 +1053,12 @@ internal partial class ProgramLoweringPipeline
             specializationRegistrar.Register(
                 new ClosureSpecializationCandidate(method, closure.OwnerSpecs));
         }
-        _ctx.Synthetics.SetExpectedDelegateSites(DelegateDemandCensus.Collect(
-            _ctx.Methods.RegisteredBodies, GetMethodBodyOperation, plan.FieldInitOps));
+        _state.Synthetics.SetExpectedDelegateSites(DelegateDemandCensus.Collect(
+            _state.Methods.RegisteredBodies, GetMethodBodyOperation, plan.FieldInitOps));
         PlanSyntheticDemands(plan);
-        plan = plan.WithSyntheticDemands(_ctx.Synthetics.PublishPlan());
+        plan = plan.WithSyntheticDemands(_state.Synthetics.PublishPlan());
         BuildRecursionInfo(bodyGraph);
-        _ctx.Generics.BeginBodyEmission();
+        _state.Generics.BeginBodyEmission();
         EmitRegisteredBodies(plan);
         VerifyRegisteredCallablesAreNodes(bodyGraph);
     }
@@ -1064,7 +1066,7 @@ internal partial class ProgramLoweringPipeline
     void PlanSyntheticDemands(ProgramPlan plan)
     {
         var planner = new SyntheticDemandPlanner(_lowering);
-        foreach (var body in _ctx.Methods.RegisteredBodies.ToArray())
+        foreach (var body in _state.Methods.RegisteredBodies.ToArray())
         {
             var method = body.Method;
             var receiverId = body.Closure == null
@@ -1074,13 +1076,13 @@ internal partial class ProgramLoweringPipeline
                 && method.MethodKind is not (MethodKind.LambdaMethod or MethodKind.LocalFunction)
                     ? body.Callable.Function.ParamFieldNames[0]
                     : null;
-            using var methodScope = _ctx.Methods.EnterEmission(
+            using var methodScope = _state.Methods.EnterEmission(
                 method, body.Closure, receiverId, body.OwnerSpecs);
-            using var genericScope = _ctx.Generics.EnterOverlayScope(body.TypeParameterMap);
+            using var genericScope = _state.Generics.EnterOverlayScope(body.TypeParameterMap);
             PlanSyntheticDemands(GetMethodBodyOperation(method.OriginalDefinition), true, planner);
         }
 
-        using var fieldMethodScope = _ctx.Methods.EnterEmission(
+        using var fieldMethodScope = _state.Methods.EnterEmission(
             null, null, null, System.Collections.Immutable.ImmutableArray<IMethodSymbol>.Empty);
         foreach (var initializer in plan.FieldInitOps)
             PlanSyntheticDemands(initializer, true, planner);
@@ -1101,7 +1103,7 @@ internal partial class ProgramLoweringPipeline
         var crossDispatchExports = CollectCrossDispatchExports(plan);
 
         // First pass: create IrFunctions, assign params, return vars (skip generic definitions)
-        _ctx.Methods.NextMethodIndex = 0;
+        _state.Methods.NextMethodIndex = 0;
         foreach (var method in methods)
         {
             EmitPolicy.RejectInParameters(method); // round-7 follow-up [Q3], declaration-side
@@ -1135,7 +1137,7 @@ internal partial class ProgramLoweringPipeline
                 new CallableParameterPlan(_ => ml.ParamIds[index], GetStorageType(parameter.Type))).ToArray();
             var returns = ml.Returns.Select(result =>
                 new CallableReturnPlan(_ => result.Id, result.StorageType)).ToArray();
-            new CallableRegistrar(_ctx).Register(new CallableLayoutPlan(
+            new CallableRegistrar(_state).Register(new CallableLayoutPlan(
                 method, _ => exportName,
                 exportName: shouldExport ? exportName : null,
                 slotPrefix: _ => exportName,
@@ -1200,10 +1202,10 @@ internal partial class ProgramLoweringPipeline
             {
                 var containingArgPart = string.Join("_",
                     sm.ContainingType.TypeArguments.Select(
-                        type => _session.Types.GetUdonTypeName(type)));
+                        type => _environment.Session.Types.GetUdonTypeName(type)));
                 var methodArgPart = sm.IsGenericMethod
                     ? "_" + string.Join("_", sm.TypeArguments.Select(
-                        type => _session.Types.GetUdonTypeName(type)))
+                        type => _environment.Session.Types.GetUdonTypeName(type)))
                     : "";
                 typeArgSuffix = $"_{containingArgPart}{methodArgPart}";
             }
@@ -1240,7 +1242,7 @@ internal partial class ProgramLoweringPipeline
             new CallableReturnPlan(index => NameAllocator.RetId(SanitizeId(method.Name), index),
                 new StorageType(GetStorageTypeName(method.ReturnType)))
         };
-        return new CallableRegistrar(_ctx).Register(new CallableLayoutPlan(
+        return new CallableRegistrar(_state).Register(new CallableLayoutPlan(
             method, functionName,
             receiver: receiver,
             receiverId: receiver == MethodContext.ReceiverAbi.ObjectArray
@@ -1305,10 +1307,10 @@ internal partial class ProgramLoweringPipeline
         // barrier and later prepend it to every export; tying these operations to _start leaves a
         // receiver observably half-constructed during cross-behaviour startup calls.
         bool hasProgramInitializers = _fieldInitOps.Count > 0 || _fieldChangeCallbacks.Count > 0
-            || _ctx.Aggregates.FieldDefaults.Count > 0;
+            || _state.Aggregates.FieldDefaults.Count > 0;
         if (hasProgramInitializers)
         {
-            var initialization = new ProgramInitializationEmitter(_ctx);
+            var initialization = new ProgramInitializationEmitter(_state);
             initialization.Emit(EmitFieldInitializers);
 
             // Keep the ordinary Udon lifecycle hook so construction still happens eagerly in the
@@ -1322,11 +1324,11 @@ internal partial class ProgramLoweringPipeline
         }
 
         // Emit interface bridge exports
-        new InterfaceBridgeEmitter(_ctx, _bridge).Emit();
+        new InterfaceBridgeEmitter(_state, _bridge).Emit();
 
         // Emit delegate bridge exports
         new DelegateBridgeEmitter(
-            _ctx, _bridge, _delegateConvention, plan.SyntheticDemands).EmitLayoutBridges();
+            _state, _bridge, _delegateConvention, plan.SyntheticDemands).EmitLayoutBridges();
 
         // Every additional body was registered by the closed-world plan before lowering began.
         // Consume one fixed batch; body emission is forbidden from extending it.
@@ -1338,20 +1340,20 @@ internal partial class ProgramLoweringPipeline
             throw new InvalidOperationException(
                 "Body lowering discovered callable bodies absent from ProgramPlan.");
 
-        _ctx.Synthetics.VerifyEmissionComplete();
+        _state.Synthetics.VerifyEmissionComplete();
 
         // Emit pending delegate bridges for hoisted lambdas/local functions
         new DelegateBridgeEmitter(
-            _ctx, _bridge, _delegateConvention, plan.SyntheticDemands).EmitPending();
+            _state, _bridge, _delegateConvention, plan.SyntheticDemands).EmitPending();
         new ReceiverBridgeEmitter(
-            _ctx, _bridge, _delegateConvention, plan.SyntheticDemands).EmitPending();
+            _state, _bridge, _delegateConvention, plan.SyntheticDemands).EmitPending();
 
         // Variance design (2026-07-04 §2.2/§2.3) T-M2: sig adapters (B-1) + wrapper-with-payload
         // bridges (B-2), for every variant method-group binding / third-party-variant hinge / variant
         // delegate-value conversion registered in this class. A class with no variance emits neither —
         // single-cast golden untouched (§5 gate).
         new WrapperBridgeEmitter(
-            _ctx, _bridge, _delegateConvention, plan.SyntheticDemands).EmitPending();
+            _state, _bridge, _delegateConvention, plan.SyntheticDemands).EmitPending();
 
         // Multicast design (2026-07-03 §1) A-M1: per-sig synthetic combine/remove helpers + fan-out
         // bridge, for every sig a `+=`/`-=` site registered in this class (RegisterMulticastSig). A
@@ -1359,12 +1361,12 @@ internal partial class ProgramLoweringPipeline
         // untouched (§6 gate). Reentrancy graph-node registration for the fan-out is A-M3 scope (§1.6),
         // deliberately not wired here.
         new MulticastDelegateEmitter(
-            _ctx, _bridge, _delegateConvention, plan.SyntheticDemands).EmitPending();
+            _state, _bridge, _delegateConvention, plan.SyntheticDemands).EmitPending();
         new EnumToStringSyntheticEmitter(
-            _ctx, _bridge, plan.SyntheticDemands).Emit();
+            _state, _bridge, plan.SyntheticDemands).Emit();
 
         if (hasProgramInitializers)
-            new ProgramInitializationEmitter(_ctx).GuardEveryExport();
+            new ProgramInitializationEmitter(_state).GuardEveryExport();
 
         // §5.5 (graft #2): now that every capturing bridge is registered, assert each has a graph node.
         VerifyBridgeTargetsAreNodes();
@@ -1406,7 +1408,7 @@ internal partial class ProgramLoweringPipeline
         var ownerSpecs = closureSpec?.OwnerSpecs
             ?? (isSpec ? System.Collections.Immutable.ImmutableArray.Create(method)
                        : System.Collections.Immutable.ImmutableArray<IMethodSymbol>.Empty);
-        using var _methodScope = _ctx.Methods.EnterEmission(
+        using var _methodScope = _state.Methods.EnterEmission(
             method, closureSpec, receiverParamId, ownerSpecs);
 
         // FieldChangeCallback: check if this setter has an associated callback field
@@ -1523,7 +1525,7 @@ internal partial class ProgramLoweringPipeline
             // Open the depth-1 scope now that the map is fully composed; Dispose (at block end) is the
             // sole clear, running even if body emission throws. Non-generic methods carry a null map
             // and open no scope. A closure/spec emitted later recomposes its own map at its own entry.
-            using var _typeScope = typeMap != null ? _ctx.EnterTypeParamScope(typeMap) : null;
+            using var _typeScope = typeMap != null ? _state.EnterTypeParamScope(typeMap) : null;
 
             PreScanGotoLabels(bodyOp);
 
@@ -1536,34 +1538,34 @@ internal partial class ProgramLoweringPipeline
             // Node is the lambda/LF body, not this bodyOp); a root method via ScopeFor(bodyOp).
             // No-ops on a null / non-capture-bearing scope, so the call is unconditional.
             CaptureScope entryScope = null;
-            if (_ctx.Closures.CaptureScope != null)
+            if (_state.Closures.CaptureScope != null)
             {
                 if (IsHoistedClosureMethod(method))
-                    _ctx.Closures.CaptureScope.ClosureScopes.TryGetValue(method.OriginalDefinition, out entryScope);
+                    _state.Closures.CaptureScope.ClosureScopes.TryGetValue(method.OriginalDefinition, out entryScope);
                 else
-                    entryScope = _ctx.Closures.CaptureScope.ScopeFor(bodyOp, CaptureScopeKind.MethodEntry);
+                    entryScope = _state.Closures.CaptureScope.ScopeFor(bodyOp, CaptureScopeKind.MethodEntry);
             }
-            EnvEmit.Alloc(_builder, _ctx, entryScope);
+            EnvEmit.Alloc(_builder, _state, entryScope);
 
             // Consume every captured PARAMETER of this method out of its flat param field into its env
             // cell (the arg arrived positionally in the flat field; all body reads route through env).
             var entryParamIds = closureSpec?.ParamVarIds;
             if (entryParamIds == null) _methodParamVarIds.TryGetValue(method, out entryParamIds);
-            if (_ctx.Closures.CaptureScope != null && entryParamIds != null)
+            if (_state.Closures.CaptureScope != null && entryParamIds != null)
                 foreach (var p in method.Parameters)
-                    if (p.Ordinal < entryParamIds.Length && _ctx.Closures.TryGetEnvBinding(p, out _))
-                        EnvEmit.Write(_builder, _ctx, p,
+                    if (p.Ordinal < entryParamIds.Length && _state.Closures.TryGetEnvBinding(p, out _))
+                        EnvEmit.Write(_builder, _state, p,
                             _bridge.Load(entryParamIds[p.Ordinal], GetStorageType(p.Type)));
 
             // Class receiver capture (design 2026-07-10 v2 §1.3): consume the receiver param0 into its
             // env cell exactly like a captured parameter — after __tco_ + EnvAlloc, so a self-tail
             // loopback re-seeds each logical activation's fresh env. Null CurrentStructReceiverParamId
             // (behaviour methods, hoisted closures) and an uncaptured receiver both skip.
-            if (_ctx.Closures.CaptureScope != null
-                && _ctx.Methods.CurrentStructReceiverParamId is { } rcvParamId
+            if (_state.Closures.CaptureScope != null
+                && _state.Methods.CurrentStructReceiverParamId is { } rcvParamId
                 && LambdaCaptureAnalyzer.ReceiverCaptureKey(method) is { } rcvKey
-                && _ctx.Closures.TryGetEnvBinding(rcvKey, out _))
-                EnvEmit.Write(_builder, _ctx, rcvKey, _bridge.Load(rcvParamId, new StorageType(AggregateAbi.ArrayType)));
+                && _state.Closures.TryGetEnvBinding(rcvKey, out _))
+                EnvEmit.Write(_builder, _state, rcvKey, _bridge.Load(rcvParamId, new StorageType(AggregateAbi.ArrayType)));
 
             if (bodyOp is IMethodBodyOperation methodBody)
             {
@@ -1583,9 +1585,9 @@ internal partial class ProgramLoweringPipeline
                 // call, in InvocationHandler which owns EmitCallToMethod/ResolveStructMember). A STRUCT
                 // ctor has no base — just its body.
                 if (method.ContainingType is INamedTypeSymbol cctClass && TypeClassifier.IsUserClass(cctClass)
-                    && _ctx.Methods.CurrentStructReceiverParamId != null)
+                    && _state.Methods.CurrentStructReceiverParamId != null)
                     new InvocationHandler(_lowering).EmitClassCtorPrologue(method, ctorBodyOp,
-                        _ctx.Methods.CurrentStructReceiverParamId);
+                        _state.Methods.CurrentStructReceiverParamId);
                 if (ctorBodyOp.BlockBody != null)
                     VisitOperation(ctorBodyOp.BlockBody);
             }
@@ -1673,9 +1675,9 @@ internal partial class ProgramLoweringPipeline
         // Type identities are immutable compile-time strings, not construction work. Giving their
         // heap variables defaults makes class minting safe before Start without forcing every program
         // that merely uses a user class through the runtime initialization barrier.
-        foreach (var type in _ctx.ClassTypes.MintedClasses)
-            _ctx.Storage.DeclareGeneratedField(
-                _ctx.ClassTypes.TryGetTypeObjVar(type),
+        foreach (var type in _state.ClassTypes.MintedClasses)
+            _state.Storage.DeclareGeneratedField(
+                _state.ClassTypes.TryGetTypeObjVar(type),
                 StorageTypes.String,
                 ClassTypeObjectContext.RuntimeTypeId(type));
     }
@@ -1686,13 +1688,13 @@ internal partial class ProgramLoweringPipeline
         // whatever spec/closure happened to emit last (the synthesized-_start path runs outside any
         // EmitMethod, so the ambient would otherwise be stale). A delegate-field initializer lambda
         // registers against this clean ambient.
-        _ctx.Methods.CurrentClosureSpec = null;
-        _ctx.Methods.CurrentOwnerSpecs = System.Collections.Immutable.ImmutableArray<IMethodSymbol>.Empty;
+        _state.Methods.CurrentClosureSpec = null;
+        _state.Methods.CurrentOwnerSpecs = System.Collections.Immutable.ImmutableArray<IMethodSymbol>.Empty;
         // Default-init aggregate (struct/tuple) fields with no explicit initializer FIRST, so any explicit
         // initializer that references one sees a non-null backing array (C# default-then-initializer order).
-        foreach (var (fieldId, aggType) in _ctx.Aggregates.FieldDefaults)
-            _bridge.Store(fieldId, AggregateAbi.MintDefault(_builder, _ctx.Aggregates.GetLayout(aggType),
-                _ctx.Aggregates.GetLayout, GetStorageTypeName));
+        foreach (var (fieldId, aggType) in _state.Aggregates.FieldDefaults)
+            _bridge.Store(fieldId, AggregateAbi.MintDefault(_builder, _state.Aggregates.GetLayout(aggType),
+                _state.Aggregates.GetLayout, GetStorageTypeName));
 
         foreach (var (fieldId, initOp, fieldType) in _fieldInitOps)
         {
@@ -1756,7 +1758,7 @@ internal partial class ProgramLoweringPipeline
         // Initialize _old_ variables for FieldChangeCallback fields
         foreach (var kvp in _fieldChangeCallbacks)
         {
-            var fcbType = _ctx.Storage.GetFieldType(kvp.Key);
+            var fcbType = _state.Storage.GetFieldType(kvp.Key);
             if (fcbType != null)
             {
                 var fieldVal = _bridge.Load(kvp.Key, fcbType.Value);
@@ -1797,7 +1799,7 @@ internal partial class ProgramLoweringPipeline
         if (_exprDispatch.TryGetValue(op.Kind, out var h))
             try
             {
-                return LoweredValue.Create(_ctx, op, h.Handle(op));
+                return LoweredValue.Create(_state, op, h.Handle(op));
             }
             catch (System.Exception ex) { throw TagLocation(ex, op); }
         throw new NotSupportedException(

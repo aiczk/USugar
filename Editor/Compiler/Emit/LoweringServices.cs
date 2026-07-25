@@ -7,14 +7,15 @@ using Microsoft.CodeAnalysis.Operations;
 
 public sealed partial class LoweringServices
 {
-    internal readonly EmitContext _ctx;
+    internal readonly LoweringState _state;
 
-    public LoweringServices(EmitContext ctx) => _ctx = ctx;
+    public LoweringServices(LoweringState state)
+        => _state = state ?? throw new ArgumentNullException(nameof(state));
 
     // Explicit handler-facing dependencies. The underscored shims below remain private to the
     // lowering implementation while it is split into narrower services; handlers must not couple
     // themselves to that implementation detail.
-    internal EmitContext Context => _ctx;
+    internal LoweringState State => _state;
     internal Compilation Compilation => _compilation;
     internal INamedTypeSymbol ClassSymbol => _classSymbol;
     internal CoreBuilder Builder => _builder;
@@ -28,41 +29,41 @@ public sealed partial class LoweringServices
         set => _currentMethod = value;
     }
     internal IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> TypeParamMap => _typeParamMap;
-    internal Dictionary<ILocalSymbol, EmitContext.LocalBinding> LocalBindings => _localBindings;
+    internal Dictionary<ILocalSymbol, LocalBinding> LocalBindings => _localBindings;
     internal Stack<CLeaf> ConditionalAccessStack => _conditionalAccessStack;
     internal Stack<List<(CLeaf val, ITypeSymbol type)>> UsingDisposableStack => _usingDisposableStack;
     internal List<EmitDiagnostic> Diagnostics => _diagnostics;
 
-    // ── Property shims to EmitContext ──
-    internal Compilation _compilation => _ctx.Compilation;
-    internal INamedTypeSymbol _classSymbol => _ctx.ClassSymbol;
-    internal StructuredModule _module => _ctx.Module;
-    internal CoreBuilder _builder => _ctx.Builder;
-    internal LayoutPlanner _planner => _ctx.Planner;
-    internal IReadOnlyDictionary<IMethodSymbol, StructuredFunction> _methodFunctions => _ctx.Methods.Functions;
-    internal IReadOnlyDictionary<IMethodSymbol, EmitContext.MethodSlot> _methodSlots => _ctx.Methods.Slots;
-    internal IReadOnlyDictionary<IMethodSymbol, ReturnSlot[]> _methodReturns => _ctx.Methods.Returns;
-    internal IReadOnlyDictionary<IMethodSymbol, string[]> _methodParamVarIds => _ctx.Methods.ParamVarIds;
-    internal IMethodSymbol _currentMethod { get => _ctx.Methods.CurrentMethod; set => _ctx.Methods.CurrentMethod = value; }
+    // Internal projections used across the lowering concern files.
+    internal Compilation _compilation => _state.Compilation;
+    internal INamedTypeSymbol _classSymbol => _state.ClassSymbol;
+    internal StructuredModule _module => _state.Module;
+    internal CoreBuilder _builder => _state.Builder;
+    internal LayoutPlanner _planner => _state.Planner;
+    internal IReadOnlyDictionary<IMethodSymbol, StructuredFunction> _methodFunctions => _state.Methods.Functions;
+    internal IReadOnlyDictionary<IMethodSymbol, MethodSlot> _methodSlots => _state.Methods.Slots;
+    internal IReadOnlyDictionary<IMethodSymbol, ReturnSlot[]> _methodReturns => _state.Methods.Returns;
+    internal IReadOnlyDictionary<IMethodSymbol, string[]> _methodParamVarIds => _state.Methods.ParamVarIds;
+    internal IMethodSymbol _currentMethod { get => _state.Methods.CurrentMethod; set => _state.Methods.CurrentMethod = value; }
     internal List<(IMethodSymbol Method, MethodContext.ClosureSpec Spec)> _pendingCallableBodies
-        => _ctx.Methods.PendingBodies;
-    internal IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> _typeParamMap => _ctx.Generics.TypeParamMap;
-    internal Dictionary<ILocalSymbol, EmitContext.LocalBinding> _localBindings => _ctx.Storage.LocalBindings;
-    internal List<(string fieldName, IOperation initOp, ITypeSymbol fieldType)> _fieldInitOps => _ctx.Initializers.FieldInitOps;
-    internal Dictionary<string, string> _fieldChangeCallbacks => _ctx.Initializers.FieldChangeCallbacks;
-    internal Stack<CLeaf> _conditionalAccessStack => _ctx.ControlFlow.ConditionalAccessStack;
-    internal Stack<List<(CLeaf val, ITypeSymbol type)>> _usingDisposableStack => _ctx.ControlFlow.UsingDisposableStack;
-    internal HashSet<string> _delegateFields => _ctx.Synthetics.DelegateFields;
-    internal List<EmitDiagnostic> _diagnostics => _ctx.DiagnosticState.Diagnostics;
-    internal bool IsRecursiveEdge(IMethodSymbol caller, IMethodSymbol callee) => _ctx.RecursionContext.IsRecursiveEdge(caller, callee);
+        => _state.Methods.PendingBodies;
+    internal IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> _typeParamMap => _state.Generics.TypeParamMap;
+    internal Dictionary<ILocalSymbol, LocalBinding> _localBindings => _state.Storage.LocalBindings;
+    internal List<(string fieldName, IOperation initOp, ITypeSymbol fieldType)> _fieldInitOps => _state.Initializers.FieldInitOps;
+    internal Dictionary<string, string> _fieldChangeCallbacks => _state.Initializers.FieldChangeCallbacks;
+    internal Stack<CLeaf> _conditionalAccessStack => _state.ControlFlow.ConditionalAccessStack;
+    internal Stack<List<(CLeaf val, ITypeSymbol type)>> _usingDisposableStack => _state.ControlFlow.UsingDisposableStack;
+    internal HashSet<string> _delegateFields => _state.Synthetics.DelegateFields;
+    internal List<EmitDiagnostic> _diagnostics => _state.DiagnosticState.Diagnostics;
+    internal bool IsRecursiveEdge(IMethodSymbol caller, IMethodSymbol callee) => _state.RecursionContext.IsRecursiveEdge(caller, callee);
 
-    // ── Dispatch (recursive descent into other handlers via UasmEmitter facade) ──
-    internal void VisitOperation(IOperation op) => _ctx.VisitOperation(op);
-    internal CLeaf VisitExpression(IOperation op) => _ctx.VisitExpression(op);
+    // Recursive descent through the separately wired lowering dispatch.
+    internal void VisitOperation(IOperation op) => _state.Dispatch.VisitOperation(op);
+    internal CLeaf VisitExpression(IOperation op) => _state.Dispatch.VisitExpression(op);
     internal LoweredValue VisitLoweredExpression(IOperation op)
-        => _ctx.VisitLoweredExpression(op);
+        => _state.Dispatch.VisitLoweredExpression(op);
     internal CLeaf EmitPatternCheck(CLeaf value, ITypeSymbol valueType, IPatternOperation pattern)
-        => _ctx.EmitPatternCheck(value, valueType, pattern);
+        => _state.Dispatch.EmitPatternCheck(value, valueType, pattern);
 
     /// <summary>
     /// Udon array constructors consume an Int32 length even though C# accepts every integral array
@@ -98,13 +99,13 @@ public sealed partial class LoweringServices
 
     // ── Type resolution ──
     internal StorageType GetStorageType(ITypeSymbol type)
-        => _ctx.ResolveStorageType(type);
+        => _state.ResolveStorageType(type);
     internal string GetStorageTypeName(ITypeSymbol type) => GetStorageType(type).Name;
-    internal TypeClassifierContext TypeCtx => new TypeClassifierContext(_ctx.Generics.TypeParamMap);
+    internal TypeClassifierContext TypeCtx => new TypeClassifierContext(_state.Generics.TypeParamMap);
     internal ITypeSymbol ResolveType(ITypeSymbol type)
-        => TypeEnvironment.CloseType(_compilation, type, _ctx.Generics.TypeParamMap);
+        => TypeEnvironment.CloseType(_compilation, type, _state.Generics.TypeParamMap);
     internal bool IsFoldedEnum(ITypeSymbol type)
-        => _ctx.Session.Types.IsFoldedEnum(type);
+        => _state.Session.Types.IsFoldedEnum(type);
     internal string GetArrayType(IArrayTypeSymbol arrType) => GetStorageTypeName(arrType);
     internal string GetArrayElemType(IArrayTypeSymbol arrType)
     {
@@ -156,7 +157,7 @@ public sealed partial class LoweringServices
         if (ResolveType(targetType) is INamedTypeSymbol targetClass && TypeClassifier.IsUserClass(targetClass))
         {
             ClassAbiPolicy.AssertClosed(targetClass, "runtime type test");
-            var vars = _ctx.ClassTypes.TypeObjVarsAssignableTo(targetClass).ToList();
+            var vars = _state.ClassTypes.TypeObjVarsAssignableTo(targetClass).ToList();
             if (vars.Count == 0) return Const(false, StorageTypes.Boolean); // no minted class satisfies it
             // Charter #7 soundness: read bundle[0] ONLY when the value is actually a SystemObjectArray
             // (a class bundle — also structs/tuples/delegates/env/Foo[], whose [0] is never a family
@@ -166,7 +167,7 @@ public sealed partial class LoweringServices
             var isBundle = ExternCall(UdonAbiKey.Method("SystemType", "IsInstanceOfType", new[] { "SystemObject" }, "SystemBoolean"),
                 new List<CLeaf> { ConstTypeToken(_compilation.CreateArrayTypeSymbol(
                     _compilation.GetSpecialType(SpecialType.System_Object))), valueVal }, StorageTypes.Boolean);
-            var guarded = _ctx.Builder.AllocScratch(StorageTypes.Boolean);
+            var guarded = _state.Builder.AllocScratch(StorageTypes.Boolean);
             EmitAssign(guarded, Const(false, StorageTypes.Boolean));
             _builder.EmitIf(isBundle, _ =>
             {
@@ -185,7 +186,7 @@ public sealed partial class LoweringServices
             return SlotRef(guarded);
         }
         ClassAbiPolicy.ValidateRuntimeTypeTest(
-            ResolveType(targetType), _ctx.Generics.TypeParamMap, _ctx.Session.Types);
+            ResolveType(targetType), _state.Generics.TypeParamMap, _state.Session.Types);
         // The type token is baked through the shared choke point (B51 silent-class armor: an unresolved
         // type parameter would bake a null System.Type constant no validator catches → loud reject there).
         return ExternCall(
@@ -588,7 +589,7 @@ public sealed partial class LoweringServices
     internal string GetParamVarId(IParameterSymbol param)
     {
         // SS2B: a closure's own parameter lives in its per-spec record, not the definition-keyed map.
-        if (_ctx.Methods.CurrentClosureSpec is { } pcs
+        if (_state.Methods.CurrentClosureSpec is { } pcs
             && param.ContainingSymbol is IMethodSymbol pcm
             && SymbolEqualityComparer.Default.Equals(pcm.OriginalDefinition, pcs.Definition.OriginalDefinition)
             && param.Ordinal < pcs.ParamVarIds.Length)
@@ -656,19 +657,19 @@ public sealed partial class LoweringServices
         {
             // Stage 2 §4.1: captured locals/params live in env records — raw (no-clone) loads read
             // the env cell directly so mutation hits the live storage.
-            ILocalReferenceOperation lr when _ctx.Closures.TryGetEnvBinding(lr.Local, out _)
-                => EnvEmit.Read(_builder, _ctx, lr.Local,
+            ILocalReferenceOperation lr when _state.Closures.TryGetEnvBinding(lr.Local, out _)
+                => EnvEmit.Read(_builder, _state, lr.Local,
                        new StorageType(TypeClassifier.IsAggregateValue(lr.Type) ? "SystemObjectArray" : GetStorageTypeName(lr.Type))),
             ILocalReferenceOperation lr when _localBindings.TryGetValue(lr.Local, out var b)
                 => LoadField(b.Id, new StorageType(TypeClassifier.IsAggregateValue(lr.Type) ? "SystemObjectArray" : GetStorageTypeName(lr.Type))),
-            IParameterReferenceOperation pr when _ctx.Closures.TryGetEnvBinding(pr.Parameter, out _)
-                => EnvEmit.Read(_builder, _ctx, pr.Parameter,
+            IParameterReferenceOperation pr when _state.Closures.TryGetEnvBinding(pr.Parameter, out _)
+                => EnvEmit.Read(_builder, _state, pr.Parameter,
                        new StorageType(TypeClassifier.IsAggregateValue(pr.Type) ? "SystemObjectArray" : GetStorageTypeName(pr.Type))),
             IParameterReferenceOperation pr
                 => LoadParam(pr.Parameter),
             // Inside a struct method/ctor, `this` is the receiver object[] param, not the Behaviour.
-            IInstanceReferenceOperation when _ctx.Methods.CurrentStructReceiverParamId != null
-                => LoadField(_ctx.Methods.CurrentStructReceiverParamId, StorageTypes.ObjectArray),
+            IInstanceReferenceOperation when _state.Methods.CurrentStructReceiverParamId != null
+                => LoadField(_state.Methods.CurrentStructReceiverParamId, StorageTypes.ObjectArray),
             // Aggregate field as a RECEIVER (e.g. `o.inner.x`, `this.structField.x`) must NOT be cloned —
             // the access/mutation has to hit the live storage. (Value reads clone in VisitFieldReference.)
             IFieldReferenceOperation fr when TypeClassifier.IsAggregateValue(fr.Type)
@@ -688,13 +689,13 @@ public sealed partial class LoweringServices
     /// in <paramref name="flatId"/>).</summary>
     internal bool BindLocal(ILocalSymbol local, string udonType, out string flatId)
     {
-        if (_ctx.Closures.TryGetEnvBinding(local, out _))
+        if (_state.Closures.TryGetEnvBinding(local, out _))
         {
             flatId = null;
             return false;
         }
-        flatId = _ctx.Storage.DeclareLocal(local.Name, new StorageType(udonType));
-        _localBindings[local] = new EmitContext.LocalBinding(flatId);
+        flatId = _state.Storage.DeclareLocal(local.Name, new StorageType(udonType));
+        _localBindings[local] = new LocalBinding(flatId);
         return true;
     }
 
@@ -710,8 +711,8 @@ public sealed partial class LoweringServices
             IParameterReferenceOperation pr => pr.Parameter,
             _ => null,
         };
-        if (sym == null || !_ctx.Closures.TryGetEnvBinding(sym, out _)) return false;
-        EnvEmit.Write(_builder, _ctx, sym, value);
+        if (sym == null || !_state.Closures.TryGetEnvBinding(sym, out _)) return false;
+        EnvEmit.Write(_builder, _state, sym, value);
         return true;
     }
 
@@ -841,7 +842,7 @@ public sealed partial class LoweringServices
                 case IConversionOperation c:
                     op = c.Operand; continue;
                 case ILocalReferenceOperation lr:
-                    return sawValueFieldLink && _ctx.ForeachIterationLocals.Contains(lr.Local);
+                    return sawValueFieldLink && _state.ForeachIterationLocals.Contains(lr.Local);
                 case IFieldReferenceOperation fr when fr.Field.IsReadOnly:
                     return true; // [R7] readonly field link → the access chain is a value
                 case IFieldReferenceOperation fr when fr.Instance != null
@@ -915,10 +916,10 @@ public sealed partial class LoweringServices
         // chained write lands in the class's storage, not a discarded copy. Gated on IsObjectArrayEmulated
         // (Category-A: object[] slot resolution); the caller only asks for a raw receiver, never a value read.
         if (fr.Instance != null && fr.Instance.Type is INamedTypeSymbol cont && TypeClassifier.IsObjectArrayEmulated(cont)
-            && _ctx.Aggregates.GetLayout(cont).TryGetIndex(fr.Field, out var idx))
+            && _state.Aggregates.GetLayout(cont).TryGetIndex(fr.Field, out var idx))
             return AggregateAbi.ReadSlot(_builder, LoadInstanceRaw(fr.Instance), idx, StorageTypes.Object);
         if (fr.Instance is IInstanceReferenceOperation)
-            return LoadField(_ctx.SourceStorageName(fr.Field), StorageTypes.ObjectArray);
+            return LoadField(_state.SourceStorageName(fr.Field), StorageTypes.ObjectArray);
         return VisitExpression(fr); // cross-behaviour aggregate field etc. — rare
     }
 
@@ -938,14 +939,14 @@ public sealed partial class LoweringServices
                 if (declExpr.Expression is ILocalReferenceOperation localRef)
                 {
                     // Stage 2 §4.1: captured declaration target → env cell, no flat field.
-                    if (_ctx.Closures.TryGetEnvBinding(localRef.Local, out _))
+                    if (_state.Closures.TryGetEnvBinding(localRef.Local, out _))
                     {
-                        EnvEmit.Write(_builder, _ctx, localRef.Local, value);
+                        EnvEmit.Write(_builder, _state, localRef.Local, value);
                         break;
                     }
                     var udonType = GetStorageTypeName(localRef.Type);
-                    var localId = _ctx.Storage.DeclareLocal(localRef.Local.Name, new StorageType(udonType));
-                    _localBindings[localRef.Local] = new EmitContext.LocalBinding(localId);
+                    var localId = _state.Storage.DeclareLocal(localRef.Local.Name, new StorageType(udonType));
+                    _localBindings[localRef.Local] = new LocalBinding(localId);
                     EmitStoreField(localId, value);
                 }
                 else if (declExpr.Expression is ITupleOperation declTuple)
@@ -971,8 +972,8 @@ public sealed partial class LoweringServices
                 else
                 {
                     var udonType = GetStorageTypeName(existingLocal.Type);
-                    var newId = _ctx.Storage.DeclareLocal(existingLocal.Local.Name, new StorageType(udonType));
-                    _localBindings[existingLocal.Local] = new EmitContext.LocalBinding(newId);
+                    var newId = _state.Storage.DeclareLocal(existingLocal.Local.Name, new StorageType(udonType));
+                    _localBindings[existingLocal.Local] = new LocalBinding(newId);
                     EmitStoreField(newId, value);
                 }
                 break;
@@ -996,7 +997,7 @@ public sealed partial class LoweringServices
 
             // Behaviour this-field (no legs; TryPrepareFieldSet returns null for it).
             case IFieldReferenceOperation { Instance: IInstanceReferenceOperation } fieldRef:
-                EmitStoreField(_ctx.SourceStorageName(fieldRef.Field), value);
+                EmitStoreField(_state.SourceStorageName(fieldRef.Field), value);
                 break;
 
             case IParameterReferenceOperation paramRef:
@@ -1048,7 +1049,7 @@ public sealed partial class LoweringServices
         {
             var elemVal = AggregateAbi.ReadSlot(_builder, arrValue, i, StorageTypes.Object);
             var toAssign = AggregateAbi.CloneIfAggregate(_builder, elemVal,
-                ResolveType(tuple.Elements[i].Type), _ctx.Aggregates.GetLayout);
+                ResolveType(tuple.Elements[i].Type), _state.Aggregates.GetLayout);
             AssignToLValue(tuple.Elements[i], toAssign, preparedStores);
         }
     }
@@ -1151,7 +1152,7 @@ public sealed partial class LoweringServices
         if (AggregateAbi.TryGetMemberTarget(fieldRef, out var instance, out var member)
             && ResolveType(instance.Type) is INamedTypeSymbol aggregateType
             && TypeClassifier.IsObjectArrayEmulated(aggregateType)
-            && _ctx.Aggregates.GetLayout(aggregateType).TryGetIndex(member, out var fieldIndex))
+            && _state.Aggregates.GetLayout(aggregateType).TryGetIndex(member, out var fieldIndex))
             return new FieldSetPlan(FieldSetKind.AggregateSlot, instance, fieldIndex);
         if (fieldRef.Instance is IInstanceReferenceOperation)
             return fieldRef.Field.ContainingType.IsValueType
@@ -1195,9 +1196,9 @@ public sealed partial class LoweringServices
         {
             var vtContainingType = GetStorageTypeName(fieldRef.Field.ContainingType);
             var vtInstanceVal = plan.Value.Instance is IInstanceReferenceOperation
-                ? LoadField(_ctx.Storage.DeclareThisOnce(new StorageType(vtContainingType)), new StorageType(vtContainingType))
+                ? LoadField(_state.Storage.DeclareThisOnce(new StorageType(vtContainingType)), new StorageType(vtContainingType))
                 : VisitExpression(plan.Value.Instance);
-            var vtSig = _ctx.Abi.BindFieldSetter(
+            var vtSig = _state.Abi.BindFieldSetter(
                 vtContainingType, fieldRef.Field.Name, GetStorageTypeName(fieldRef.Field.Type));
             return value => EmitExternVoid(vtSig, new List<CLeaf> { vtInstanceVal, value });
         }
@@ -1206,7 +1207,7 @@ public sealed partial class LoweringServices
         if (plan.Value.Kind == FieldSetKind.ExternReferenceType)
         {
             var refInstanceVal = VisitExpression(plan.Value.Instance);
-            var refSig = _ctx.Abi.BindFieldSetter(
+            var refSig = _state.Abi.BindFieldSetter(
                 GetStorageTypeName(fieldRef.Field.ContainingType), fieldRef.Field.Name,
                 GetStorageTypeName(fieldRef.Field.Type), isValueType: false);
             return value => EmitExternVoid(refSig, new List<CLeaf> { refInstanceVal, value });
@@ -1255,7 +1256,7 @@ public sealed partial class LoweringServices
     internal void EmitAggregateObjectInitializer(CLeaf instance, AggregateLayout layout,
         IObjectOrCollectionInitializerOperation initializer)
         => AggregateAbi.EmitObjectInitializer(_builder, instance, layout, initializer, VisitExpression,
-            _ctx.Aggregates.GetLayout, EmitInitializerSetterAssignment);
+            _state.Aggregates.GetLayout, EmitInitializerSetterAssignment);
 
     /// <summary>CW27: computed-property / indexer member in an aggregate object initializer — call
     /// the user setter with the fresh instance as synthetic param0 (index args by ordinal, then the
@@ -1295,7 +1296,7 @@ public sealed partial class LoweringServices
             var (vsRecv, vsIdx) = StageAccessorDispatchLegs(propRef);
             return vsVal =>
             {
-                var vSlot = _ctx.Builder.AllocScratch(GetStorageType(propRef.Property.Type));
+                var vSlot = _state.Builder.AllocScratch(GetStorageType(propRef.Property.Type));
                 EmitAssign(vSlot, vsVal);
                 EmitAccessorDispatch(propRef.Property, vsRecvTy, vsSetter, vsRecv, vsIdx, SlotRef(vSlot));
             };
@@ -1304,7 +1305,7 @@ public sealed partial class LoweringServices
         // Aggregate (struct/tuple) OR v1-class auto-property → layout slot write on the backing object[].
         if (propRef.Instance is { Type: INamedTypeSymbol aggContaining } aggInst
             && TypeClassifier.IsObjectArrayEmulated(aggContaining)
-            && _ctx.Aggregates.GetLayout(aggContaining).TryGetIndex(propRef.Property, out var aggSlotIndex))
+            && _state.Aggregates.GetLayout(aggContaining).TryGetIndex(propRef.Property, out var aggSlotIndex))
         {
             var arrExpr = LoadInstanceRaw(aggInst);
             return aggVal => AggregateAbi.WriteSlot(_builder, arrExpr, aggSlotIndex, aggVal);
@@ -1383,7 +1384,7 @@ public sealed partial class LoweringServices
                     EmitCallToMethod(resolvedSetter, new List<CLeaf> { staticVal }));
             }
             var staticValType = GetStorageTypeName(propRef.Property.Type);
-            var staticSetter = _ctx.Abi.BindPropertySetter(
+            var staticSetter = _state.Abi.BindPropertySetter(
                 propContainingUdon, propRef.Property.Name, staticValType,
                 hasReceiver: false);
             return staticVal => EmitExternVoid(
@@ -1392,7 +1393,7 @@ public sealed partial class LoweringServices
         }
 
         var instanceVal = propRef.Instance is IInstanceReferenceOperation
-            ? LoadField(_ctx.Storage.DeclareThisOnce(new StorageType(propContainingUdon)), new StorageType(propContainingUdon))
+            ? LoadField(_state.Storage.DeclareThisOnce(new StorageType(propContainingUdon)), new StorageType(propContainingUdon))
             : VisitExpression(propRef.Instance);
         var containingType = propContainingUdon;
         var valueType = GetStorageTypeName(propRef.Property.Type);
@@ -1438,7 +1439,7 @@ public sealed partial class LoweringServices
                 indexArgs.Add(externIdxVal);
                 // Indexer metadata name, not a hardcoded "Item" ([IndexerName] e.g. StringBuilder → "Chars").
                 EmitExternVoid(
-                    _ctx.Abi.BindIndexerSetter(
+                    _state.Abi.BindIndexerSetter(
                         containingType,
                         propRef.Property.MetadataName,
                         indexTypes,
@@ -1515,7 +1516,7 @@ public sealed partial class LoweringServices
                 else
                 {
                     EmitExternVoid(
-                        _ctx.Abi.BindPropertySetter(
+                        _state.Abi.BindPropertySetter(
                             containingType, propRef.Property.Name, valueType),
                         new List<CLeaf> { instanceVal, srcVal });
                 }
@@ -1535,10 +1536,10 @@ public sealed partial class LoweringServices
         // (_methodFunctions/_methodSlots/_methodParamVarIds/_methodReturns/envp) are deliberately NOT
         // written for closures: any stale bare-symbol read then fails loud instead of silently using
         // another spec's function (the pre-fix failure mode).
-        var identity = _ctx.ResolveClosureIdentity(localFunc);
+        var identity = _state.ResolveClosureIdentity(localFunc);
         var keyArgs = identity.KeyArgs;
-        if (_ctx.Methods.TryGetClosureSpec(localFunc, keyArgs, out _)) return;
-        if (_ctx.Generics.BodyEmissionStarted)
+        if (_state.Methods.TryGetClosureSpec(localFunc, keyArgs, out _)) return;
+        if (_state.Generics.BodyEmissionStarted)
             throw new InvalidOperationException(
                 $"USugar internal error: closure '{localFunc}' was first discovered during body emission "
                 + $"(key: {string.Join(",", keyArgs.Select(ClassTypeObjectContext.SpecKey))}; "
@@ -1552,9 +1553,9 @@ public sealed partial class LoweringServices
             new CallableReturnPlan(index => NameAllocator.RetId(funcName, index),
                 new StorageType(GetStorageTypeName(localFunc.ReturnType)))
         };
-        var capturing = _ctx.Closures.CaptureScope != null
-            && _ctx.Closures.CaptureScope.IsCapturingClosure(localFunc);
-        var record = (MethodContext.ClosureSpec)new CallableRegistrar(_ctx).Register(
+        var capturing = _state.Closures.CaptureScope != null
+            && _state.Closures.CaptureScope.IsCapturingClosure(localFunc);
+        var record = (MethodContext.ClosureSpec)new CallableRegistrar(_state).Register(
             new CallableLayoutPlan(localFunc, index => $"__{index}_{funcName}",
                 slotPrefix: index => $"__{index}_{funcName}",
                 parameters: parameters, returns: returns,
@@ -1568,7 +1569,7 @@ public sealed partial class LoweringServices
     /// resolved PER-ACTIVATION through the Stage-2 closure environment records (design §3/§4): the
     /// capture analysis (<see cref="CaptureScopeAnalysis"/>) assigns each captured symbol an env-record
     /// slot and all access routes through <see cref="EnvEmit"/> __Get/__Set on the owning scope's env —
-    /// never the flat <see cref="EmitContext.LocalBindings"/> slot. This holds for closures hoisted from
+    /// never the flat <see cref="LocalBindings"/> slot. This holds for closures hoisted from
     /// user-STRUCT member bodies too (roadmap B45): CaptureScopeAnalysis.Build walks struct members
     /// transitively, so a struct-method closure joins the same env chain rather than aliasing a shared
     /// module field.
@@ -1580,7 +1581,7 @@ public sealed partial class LoweringServices
     internal IMethodSymbol HoistLambdaToMethod(IAnonymousFunctionOperation lambda)
     {
         var symbol = lambda.Symbol;
-        if (_ctx.Methods.TryGetClosureSpec(symbol, _ctx.ComposeClosureKeyArgs(symbol), out _)) return symbol;
+        if (_state.Methods.TryGetClosureSpec(symbol, _state.ComposeClosureKeyArgs(symbol), out _)) return symbol;
         RegisterLocalFunction(symbol);
         return symbol;
     }
@@ -1633,8 +1634,8 @@ public sealed partial class LoweringServices
     /// ambient map may already be cleared.</summary>
     internal void RegisterMulticastSig(string sigPart, IMethodSymbol invoke, MulticastOperations operation)
     {
-        _ctx.Synthetics.RegisterMulticast(
-            sigPart, invoke, _ctx.Generics.TypeParamMap, operation);
+        _state.Synthetics.RegisterMulticast(
+            sigPart, invoke, _state.Generics.TypeParamMap, operation);
     }
 
     // B67: the synthesized value→name helper's name for a user enum (one per enum, drained in UasmEmitter).
@@ -1679,7 +1680,7 @@ public sealed partial class LoweringServices
                 + "synthesize the comma-separated flag decomposition. Format the individual flag bits manually "
                 + "(e.g. compare against each flag and build the string yourself).");
         }
-        _ctx.Synthetics.RegisterEnumToString(e);
+        _state.Synthetics.RegisterEnumToString(e);
         return e;
     }
 
@@ -1693,10 +1694,10 @@ public sealed partial class LoweringServices
     {
         var wrapperName = DelegateAbi.WrapperName(
             DelegateAbi.BuildSigPart(
-                outerInvoke, _ctx.Session.Types, typeParamMap),
+                outerInvoke, _state.Session.Types, typeParamMap),
             DelegateAbi.BuildSigPart(
-                innerInvoke, _ctx.Session.Types, typeParamMap));
-        _ctx.Synthetics.RegisterWrapper(
+                innerInvoke, _state.Session.Types, typeParamMap));
+        _state.Synthetics.RegisterWrapper(
             new DelegateBindingPlan(DelegateBindingKind.Wrapper, innerInvoke, wrapperName),
             outerInvoke, innerInvoke, typeParamMap);
         return wrapperName;
@@ -1708,7 +1709,7 @@ public sealed partial class LoweringServices
         var kind = method.MethodKind is MethodKind.LambdaMethod or MethodKind.LocalFunction
             ? DelegateBindingKind.Closure : DelegateBindingKind.Direct;
         var binding = new DelegateBindingPlan(kind, method, bridgeName);
-        _ctx.Synthetics.RegisterDelegateBridge(binding, typeParamMap);
+        _state.Synthetics.RegisterDelegateBridge(binding, typeParamMap);
         return binding;
     }
 
@@ -1799,18 +1800,18 @@ public sealed partial class LoweringServices
         // share one body across enclosing specs (the B64 first-spec-T bake / capture aliasing, one
         // level down). Named generic specs keep their constructed-symbol maps.
         bool closureKind = constructed.MethodKind is MethodKind.LambdaMethod or MethodKind.LocalFunction;
-        var closureIdentity = closureKind ? _ctx.ResolveClosureIdentity(constructed) : default;
+        var closureIdentity = closureKind ? _state.ResolveClosureIdentity(constructed) : default;
         var closureKeyArgs = closureKind
             ? closureIdentity.KeyArgs : System.Collections.Immutable.ImmutableArray<ITypeSymbol>.Empty;
-        if (closureKind ? _ctx.Methods.TryGetClosureSpec(constructed, closureKeyArgs, out _)
+        if (closureKind ? _state.Methods.TryGetClosureSpec(constructed, closureKeyArgs, out _)
                         : _methodFunctions.ContainsKey(constructed)) return;
-        if (closureKind && _ctx.Generics.BodyEmissionStarted)
+        if (closureKind && _state.Generics.BodyEmissionStarted)
             throw new InvalidOperationException(
                 $"USugar internal error: closure specialization '{constructed}' was first discovered "
                 + $"during body emission (key: {string.Join(",", closureKeyArgs.Select(ClassTypeObjectContext.SpecKey))}; "
                 + $"owners: {string.Join(" > ", closureIdentity.OwnerSpecs.Select(m => m.ToDisplayString()))}).");
-        if (!closureKind && _ctx.Generics.BodyEmissionStarted
-            && !_ctx.Generics.IsPlannedSpecialization(constructed))
+        if (!closureKind && _state.Generics.BodyEmissionStarted
+            && !_state.Generics.IsPlannedSpecialization(constructed))
             throw new InvalidOperationException(
                 $"USugar internal error: specialization '{constructed}' was first discovered during "
                 + "body emission and is absent from CallableDefinitionPlan.Specializations.");
@@ -1826,7 +1827,7 @@ public sealed partial class LoweringServices
         // second-instantiation rejects are retired: closures duplicate per spec.
 
         var typeArgPart = string.Join("_", constructed.TypeArguments.Select(
-            type => _ctx.Session.Types.GetUdonTypeName(type)));
+            type => _state.Session.Types.GetUdonTypeName(type)));
         var parameters = constructed.Parameters.Select(parameter => new CallableParameterPlan(
             index => NameAllocator.ParamId(parameter.Name, index), GetStorageType(parameter.Type))).ToArray();
         var returns = constructed.ReturnsVoid ? Array.Empty<CallableReturnPlan>() : new[]
@@ -1834,9 +1835,9 @@ public sealed partial class LoweringServices
             new CallableReturnPlan(index => NameAllocator.RetId(SanitizeId(constructed.Name), index),
                 new StorageType(GetStorageTypeName(constructed.ReturnType)))
         };
-        var capturing = _ctx.Closures.CaptureScope != null
-            && _ctx.Closures.CaptureScope.IsCapturingClosure(constructed);
-        var record = (MethodContext.ClosureSpec)new CallableRegistrar(_ctx).Register(
+        var capturing = _state.Closures.CaptureScope != null
+            && _state.Closures.CaptureScope.IsCapturingClosure(constructed);
+        var record = (MethodContext.ClosureSpec)new CallableRegistrar(_state).Register(
             new CallableLayoutPlan(constructed,
                 index => $"__{index}_{SanitizeId(constructed.Name)}_{typeArgPart}",
                 parameters: parameters, returns: returns,
@@ -1850,7 +1851,7 @@ public sealed partial class LoweringServices
     void RegisterNamedSpecialization(IMethodSymbol method)
     {
         var typeArgPart = string.Join("_", method.TypeArguments.Select(
-            type => _ctx.Session.Types.GetUdonTypeName(type)));
+            type => _state.Session.Types.GetUdonTypeName(type)));
         var receiver = !method.IsStatic
             && method.ContainingType is INamedTypeSymbol receiverType
             && TypeClassifier.IsObjectArrayEmulated(receiverType)
@@ -1862,7 +1863,7 @@ public sealed partial class LoweringServices
             new CallableReturnPlan(index => NameAllocator.RetId(SanitizeId(method.Name), index),
                 new StorageType(GetStorageTypeName(method.ReturnType)))
         };
-        new CallableRegistrar(_ctx).Register(new CallableLayoutPlan(method,
+        new CallableRegistrar(_state).Register(new CallableLayoutPlan(method,
             index => $"__{index}_{SanitizeId(method.Name)}_{typeArgPart}",
             receiver: receiver,
             receiverId: receiver == MethodContext.ReceiverAbi.ObjectArray
@@ -1908,60 +1909,60 @@ public sealed partial class LoweringServices
     /// closure must have a BindingScope lexically enclosing this creation site.</summary>
     internal CLeaf ClosureEnvLeaf(IMethodSymbol targetMethod)
     {
-        if (targetMethod == null || _ctx.Closures.CaptureScope == null
-            || !_ctx.Closures.CaptureScope.IsCapturingClosure(targetMethod.OriginalDefinition))
+        if (targetMethod == null || _state.Closures.CaptureScope == null
+            || !_state.Closures.CaptureScope.IsCapturingClosure(targetMethod.OriginalDefinition))
             return Const(null, StorageTypes.Object);
-        if (!_ctx.Closures.CaptureScope.ClosureScopes.TryGetValue(targetMethod.OriginalDefinition, out var closureScope)
+        if (!_state.Closures.CaptureScope.ClosureScopes.TryGetValue(targetMethod.OriginalDefinition, out var closureScope)
             || closureScope.BindingScope == null)
             throw new System.InvalidOperationException(
                 $"Capturing closure '{targetMethod.Name}' has no binding scope enclosing its creation site.");
-        return EnvEmit.Leaf(_builder, _ctx, closureScope.BindingScope);
+        return EnvEmit.Leaf(_builder, _state, closureScope.BindingScope);
     }
 
     internal void RejectUnsafeCrossProgramDelegateWrite(IOperation target, ValueInfo value)
-        => _ctx.Boundary.RequireCanStoreCrossProgramDelegate(target, value);
+        => _state.Boundary.RequireCanStoreCrossProgramDelegate(target, value);
 
     internal void RejectUnsafeCrossProgramEventHandler(IEventSymbol evt, ValueInfo value)
-        => _ctx.Boundary.RequireCanStorePublicEventHandler(evt, value);
+        => _state.Boundary.RequireCanStorePublicEventHandler(evt, value);
 
     internal void RejectProgramLocalCrossBehaviourFieldWrite(IFieldSymbol field)
-        => _ctx.Boundary.RequireCanWriteCrossBehaviourField(field);
+        => _state.Boundary.RequireCanWriteCrossBehaviourField(field);
 
     internal void RejectProgramLocalCrossBehaviourFieldRead(IFieldSymbol field)
-        => _ctx.Boundary.RequireCanReadCrossBehaviourField(field);
+        => _state.Boundary.RequireCanReadCrossBehaviourField(field);
 
     internal void RejectProgramLocalCrossBehaviourArgument(ITypeSymbol argType)
-        => _ctx.Boundary.RequireCanPassCrossBehaviourArgument(argType);
+        => _state.Boundary.RequireCanPassCrossBehaviourArgument(argType);
 
     internal void RejectProgramLocalCrossBehaviourPropertyWrite(IPropertySymbol prop)
-        => _ctx.Boundary.RequireCanWriteCrossBehaviourProperty(prop);
+        => _state.Boundary.RequireCanWriteCrossBehaviourProperty(prop);
 
     internal void RejectProgramLocalCrossBehaviourPropertyRead(IPropertySymbol prop)
-        => _ctx.Boundary.RequireCanReadCrossBehaviourProperty(prop);
+        => _state.Boundary.RequireCanReadCrossBehaviourProperty(prop);
 
     internal void RejectProgramLocalCrossBehaviourAccessor(IMethodSymbol accessor)
-        => _ctx.Boundary.RequireCanDispatchCrossBehaviourAccessor(accessor);
+        => _state.Boundary.RequireCanDispatchCrossBehaviourAccessor(accessor);
 
     internal void RejectUnsafeCrossProgramDelegateArgument(IArgumentOperation arg)
-        => _ctx.Boundary.RequireCanPassCrossProgramDelegateArgument(arg);
+        => _state.Boundary.RequireCanPassCrossProgramDelegateArgument(arg);
 
     internal void RejectProgramLocalErasure(IConversionOperation conversion,
         ITypeSymbol sourceType, ITypeSymbol destinationType)
-        => _ctx.Boundary.RequireCanEraseProgramLocalPayload(conversion, sourceType, destinationType);
+        => _state.Boundary.RequireCanEraseProgramLocalPayload(conversion, sourceType, destinationType);
 
     internal MaterializedDelegateBinding ResolveDelegateBridge(IDelegateCreationOperation op)
     {
         var binding = ResolveDelegateBridgeCore(op, false);
-        _ctx.Synthetics.RecordDelegateBinding(
-            DelegateDemandCensus.SiteKey(op.Syntax, _ctx.Methods.CurrentOwnerSpecs), binding.Plan);
+        _state.Synthetics.RecordDelegateBinding(
+            DelegateDemandCensus.SiteKey(op.Syntax, _state.Methods.CurrentOwnerSpecs), binding.Plan);
         return binding;
     }
 
     internal DelegateBindingPlan PlanDelegateBridge(IDelegateCreationOperation op)
     {
         var binding = ResolveDelegateBridgeCore(op, true).Plan;
-        _ctx.Synthetics.PlanDelegateBinding(
-            DelegateDemandCensus.SiteKey(op.Syntax, _ctx.Methods.CurrentOwnerSpecs), binding);
+        _state.Synthetics.PlanDelegateBinding(
+            DelegateDemandCensus.SiteKey(op.Syntax, _state.Methods.CurrentOwnerSpecs), binding);
         return binding;
     }
 
@@ -2004,15 +2005,15 @@ public sealed partial class LoweringServices
             var member = ResolveStructMember(targetMethod); // ensure-registered (a MG may be the member's only reference)
             var memberFunc = _methodFunctions[member];
             var recvLeaf = planning ? Const(null, StorageTypes.ObjectArray) : targetInstance
-                ?? (_ctx.Methods.CurrentStructReceiverParamId is { } rid
+                ?? (_state.Methods.CurrentStructReceiverParamId is { } rid
                     ? LoadField(rid, new StorageType(AggregateAbi.ArrayType))
                     : throw new System.NotSupportedException(
                         $"Method group '{targetMethod.Name}' has no receiver in this context."));
             if (!planning && member.ContainingType is INamedTypeSymbol cloneCt && TypeClassifier.IsUserStruct(cloneCt))
-                recvLeaf = AggregateAbi.DeepClone(_builder, recvLeaf, cloneCt, _ctx.Aggregates.GetLayout);
+                recvLeaf = AggregateAbi.DeepClone(_builder, recvLeaf, cloneCt, _state.Aggregates.GetLayout);
             var recvBridgeName = DelegateAbi.BridgeName(memberFunc.Name) + "_rcv";
             var binding = new DelegateBindingPlan(DelegateBindingKind.Receiver, member, recvBridgeName);
-            _ctx.Synthetics.RegisterReceiverBridge(binding);
+            _state.Synthetics.RegisterReceiverBridge(binding);
             return new MaterializedDelegateBinding(
                 binding,
                 FuncRef(recvBridgeName), null, recvLeaf);
@@ -2030,7 +2031,7 @@ public sealed partial class LoweringServices
             var localBridge = DelegateAbi.BridgeName(
                 LayoutPlanner.InterfaceDispatchName(targetMethod, interfaceLayout));
             var binding = new DelegateBindingPlan(DelegateBindingKind.Receiver, targetMethod, localBridge);
-            _ctx.Synthetics.RegisterReceiverBridge(binding);
+            _state.Synthetics.RegisterReceiverBridge(binding);
             return new MaterializedDelegateBinding(
                 binding,
                 FuncRef(localBridge), null, targetInstance);
@@ -2065,7 +2066,7 @@ public sealed partial class LoweringServices
             && baseCopy.ExportName == null)
         {
             bridgeExportName = DelegateAbi.BridgeName(baseCopy.Name);
-            RegisterDelegateDemand(targetMethod, bridgeExportName, _ctx.Generics.TypeParamMap);
+            RegisterDelegateDemand(targetMethod, bridgeExportName, _state.Generics.TypeParamMap);
         }
         // For hoisted lambdas/local functions, create a pending bridge dynamically
         // since they aren't part of the TypeLayout's pre-computed bridges.
@@ -2091,17 +2092,17 @@ public sealed partial class LoweringServices
             // enclosing-spec args identify WHICH copy this creation site binds); generic LFs keep their
             // constructed-symbol registration above.
             MethodContext.ClosureSpec bridgeClosure = null;
-            EmitContext.MethodSlot targetSlot;
-            if (_ctx.Methods.TryGetClosureSpec(targetMethod, _ctx.ComposeClosureKeyArgs(targetMethod), out bridgeClosure))
+            MethodSlot targetSlot;
+            if (_state.Methods.TryGetClosureSpec(targetMethod, _state.ComposeClosureKeyArgs(targetMethod), out bridgeClosure))
                 targetSlot = bridgeClosure.Slot;
             else if (!_methodSlots.TryGetValue(targetMethod, out targetSlot))
                 throw new System.InvalidOperationException($"Lambda/local function '{targetMethod.Name}' not registered.");
             bridgeExportName = DelegateAbi.BridgeName(targetSlot.VarPrefix);
             if (bridgeClosure != null)
-                _ctx.Synthetics.RegisterClosureBridge(bridgeExportName, bridgeClosure.Function);
+                _state.Synthetics.RegisterClosureBridge(bridgeExportName, bridgeClosure.Function);
             // Carry the current type-param map by reference — it is immutable and per-EmitMethod fresh, so
             // it stays valid for the drain (which runs after generic-method emit clears the ambient map).
-            RegisterDelegateDemand(targetMethod, bridgeExportName, _ctx.Generics.TypeParamMap);
+            RegisterDelegateDemand(targetMethod, bridgeExportName, _state.Generics.TypeParamMap);
         }
         else if (targetMethod.IsGenericMethod)
         {
@@ -2145,7 +2146,7 @@ public sealed partial class LoweringServices
                     + "(the specialization's bridge must live in this program).");
             RegisterGenericSpecialization(constructed);
             bridgeExportName = DelegateAbi.BridgeName(_methodFunctions[constructed].Name);
-            RegisterDelegateDemand(constructed, bridgeExportName, _ctx.Generics.TypeParamMap);
+            RegisterDelegateDemand(constructed, bridgeExportName, _state.Generics.TypeParamMap);
             // B52: advance targetMethod to the registered specialization (mirroring the local-function
             // arm) so the variance/adapter block below enqueues the ADAPTER against the spec that is
             // actually emitted — otherwise the adapter names the raw generic definition, EmitPending-
@@ -2163,7 +2164,7 @@ public sealed partial class LoweringServices
             && !ExternResolver.IsUdonSharpBehaviour(targetMethod.ContainingType))
         {
             bridgeExportName = DelegateAbi.BridgeName(foreignFunc.Name);
-            RegisterDelegateDemand(targetMethod, bridgeExportName, _ctx.Generics.TypeParamMap);
+            RegisterDelegateDemand(targetMethod, bridgeExportName, _state.Generics.TypeParamMap);
         }
         // R-M2 (design §2): a method-group binding of a THIS-CLASS private / private-internal method. The
         // planner no longer plans a speculative bridge for it (LayoutPlanner.IsExcludedFromSpeculativeBridge),
@@ -2185,7 +2186,7 @@ public sealed partial class LoweringServices
                  && SymbolEqualityComparer.Default.Equals(targetMethod.ContainingType, _classSymbol))
         {
             bridgeExportName = DelegateAbi.BridgeName(privFunc.Name);
-            RegisterDelegateDemand(targetMethod, bridgeExportName, _ctx.Generics.TypeParamMap);
+            RegisterDelegateDemand(targetMethod, bridgeExportName, _state.Generics.TypeParamMap);
         }
         else
         {
@@ -2208,11 +2209,11 @@ public sealed partial class LoweringServices
             && op.Type is INamedTypeSymbol delegateType && delegateType.DelegateInvokeMethod is { } delegateInvoke)
         {
             var sigS = DelegateAbi.BuildSigPart(
-                delegateInvoke, _ctx.Session.Types,
-                _ctx.Generics.TypeParamMap);
+                delegateInvoke, _state.Session.Types,
+                _state.Generics.TypeParamMap);
             if (sigS != DelegateAbi.BuildSigPart(
-                    targetMethod, _ctx.Session.Types,
-                    _ctx.Generics.TypeParamMap))
+                    targetMethod, _state.Session.Types,
+                    _state.Generics.TypeParamMap))
             {
                 if (targetInstance == null)
                 {
@@ -2220,8 +2221,8 @@ public sealed partial class LoweringServices
                     var adapterName = DelegateAbi.SigAdapterName(targetKey, sigS);
                     // SS2B: a closure target's func was registered under the plain bridge name above;
                     // the adapter drain resolves by name, so alias it under the adapter name too.
-                    if (_ctx.Synthetics.TryGetClosureBridge(bridgeExportName, out var closureTargetFunc))
-                        _ctx.Synthetics.RegisterClosureBridge(adapterName, closureTargetFunc);
+                    if (_state.Synthetics.TryGetClosureBridge(bridgeExportName, out var closureTargetFunc))
+                        _state.Synthetics.RegisterClosureBridge(adapterName, closureTargetFunc);
                     // [X1] leaf mapping, adapter flavor (C3 stage 2): a this-receiver VIRTUAL method
                     // group statically binds the BASE declaration, but the adapter's InternalCall must
                     // run the most-derived override visible from the compiled class — exactly like the
@@ -2235,8 +2236,8 @@ public sealed partial class LoweringServices
                         ? ResolveMostDerivedOverride(targetMethod) : targetMethod;
                     var adapterBinding = new DelegateBindingPlan(
                         DelegateBindingKind.SignatureAdapter, adapterTarget, adapterName);
-                    _ctx.Synthetics.RegisterSigAdapter(
-                        adapterBinding, delegateInvoke, _ctx.Generics.TypeParamMap);
+                    _state.Synthetics.RegisterSigAdapter(
+                        adapterBinding, delegateInvoke, _state.Generics.TypeParamMap);
                     return new MaterializedDelegateBinding(
                         adapterBinding,
                         FuncRef(adapterName), targetInstance, envLeaf);
@@ -2252,7 +2253,7 @@ public sealed partial class LoweringServices
                 // targetMethod's OWN plain bridge (bridgeExportName, planned unconditionally on the
                 // FOREIGN class per its speculative-bridge policy), which reads/writes sig-T's conv
                 // vars — staging under sig-S would silently drop values across the dispatch.
-                var wrapperName = RegisterWrapperSig(delegateInvoke, targetMethod, _ctx.Generics.TypeParamMap);
+                var wrapperName = RegisterWrapperSig(delegateInvoke, targetMethod, _state.Generics.TypeParamMap);
                 return new MaterializedDelegateBinding(
                     new DelegateBindingPlan(DelegateBindingKind.Wrapper, targetMethod, wrapperName),
                     FuncRef(wrapperName), null, innerBundle);
@@ -2336,7 +2337,7 @@ public sealed partial class LoweringServices
     /// so no copy-back protocol exists here).</summary>
     internal (CLeaf Recv, List<CLeaf> IndexArgs) StageAccessorDispatchLegs(IPropertyReferenceOperation op)
     {
-        var recvSlot = _ctx.Builder.AllocScratch(new StorageType(AggregateAbi.ArrayType));
+        var recvSlot = _state.Builder.AllocScratch(new StorageType(AggregateAbi.ArrayType));
         EmitAssign(recvSlot, LoadInstanceRaw(op.Instance));
         var staged = new List<CLeaf>();
         if (op.Property.IsIndexer)
@@ -2346,7 +2347,7 @@ public sealed partial class LoweringServices
             {
                 var argType = i < op.Property.Parameters.Length
                     ? GetStorageTypeName(op.Property.Parameters[i].Type) : "SystemObject";
-                var s = _ctx.Builder.AllocScratch(new StorageType(argType));
+                var s = _state.Builder.AllocScratch(new StorageType(argType));
                 EmitAssign(s, ordered[i]);
                 staged.Add(SlotRef(s));
             }
@@ -2367,7 +2368,7 @@ public sealed partial class LoweringServices
         var interfaceDispatch = recvTy.TypeKind == TypeKind.Interface;
         var site = CallableSites.Synthetic(
             setValue == null ? CallableSiteKind.PropertyGet : CallableSiteKind.PropertySet, accessor);
-        var targets = _ctx.VirtualDispatch.Resolve(site, recvTy).RuntimeTargets;
+        var targets = _state.VirtualDispatch.Resolve(site, recvTy).RuntimeTargets;
         if (!interfaceDispatch) AssertClosedVirtualDispatch(recvTy, targets, accessor);
         bool isSet = setValue != null;
         string memberKind = prop.IsIndexer ? "indexer" : "property";
@@ -2379,19 +2380,19 @@ public sealed partial class LoweringServices
                     $"USugar: NullReferenceException — virtual {memberKind} '{prop.ContainingType.Name}.{prop.Name}' has no minted implementor, so the receiver must be null ({_classSymbol.Name}). "
                     + (isSet ? "Skipping the write." : "Returning default."),
                     StorageTypes.String) });
-            return isSet ? null : SlotRef(_ctx.Builder.AllocScratch(GetStorageType(prop.Type)));
+            return isSet ? null : SlotRef(_state.Builder.AllocScratch(GetStorageType(prop.Type)));
         }
 
         if (recvTy.IsSealed || targets.Count == 1)
             return EmitAccessorImplAccess(targets[0], prop, recv, indexArgs, setValue);
 
-        var typeObjSlot = _ctx.Builder.AllocScratch(StorageTypes.String);
+        var typeObjSlot = _state.Builder.AllocScratch(StorageTypes.String);
         EmitAssign(typeObjSlot, AggregateAbi.ReadSlot(_builder, recv, 0, StorageTypes.String));
-        int destSlot = isSet ? -1 : _ctx.Builder.AllocScratch(GetStorageType(prop.Type));
+        int destSlot = isSet ? -1 : _state.Builder.AllocScratch(GetStorageType(prop.Type));
 
         // Phase-A armor: a null receiver or a laundered non-bundle value matches no arm — LogError +
         // default(read)/skip(write), never silent (mirrors EmitVirtualChain's matched flag).
-        var matched = _ctx.Builder.AllocScratch(StorageTypes.Boolean);
+        var matched = _state.Builder.AllocScratch(StorageTypes.Boolean);
         EmitAssign(matched, Const(false, StorageTypes.Boolean));
 
         foreach (var t in targets)
@@ -2428,7 +2429,7 @@ public sealed partial class LoweringServices
     {
         if (t.Impl.AssociatedSymbol is IPropertySymbol implProp && !UasmEmitter.IsComputedProperty(implProp))
         {
-            var layout = _ctx.Aggregates.GetLayout(t.Concrete);
+            var layout = _state.Aggregates.GetLayout(t.Concrete);
             if (!layout.TryGetIndex(implProp, out var slotIdx))
                 throw new InvalidOperationException(
                     $"Auto-property '{implProp.ContainingType.Name}.{implProp.Name}' has no layout slot on '{t.Concrete.Name}'.");
@@ -2439,7 +2440,7 @@ public sealed partial class LoweringServices
             }
             var slotVal = AggregateAbi.ReadSlot(_builder, recv, slotIdx, StorageTypes.Object);
             return prop.Type is INamedTypeSymbol slotAgg && TypeClassifier.IsAggregateValue(slotAgg)
-                ? AggregateAbi.DeepClone(_builder, slotVal, slotAgg, _ctx.Aggregates.GetLayout) : slotVal;
+                ? AggregateAbi.DeepClone(_builder, slotVal, slotAgg, _state.Aggregates.GetLayout) : slotVal;
         }
         var args = new List<CLeaf> { recv };
         args.AddRange(indexArgs);
@@ -2451,7 +2452,7 @@ public sealed partial class LoweringServices
         }
         var ret = EmitCallToMethod(ResolveStructMember(t.Impl), args);
         return prop.Type is INamedTypeSymbol retAgg && TypeClassifier.IsAggregateValue(retAgg)
-            ? AggregateAbi.DeepClone(_builder, ret, retAgg, _ctx.Aggregates.GetLayout) : ret;
+            ? AggregateAbi.DeepClone(_builder, ret, retAgg, _state.Aggregates.GetLayout) : ret;
     }
 
     // ── M4b: ToString dispatch on v1-class receivers (the object.ToString slot) ──
@@ -2496,12 +2497,12 @@ public sealed partial class LoweringServices
     {
         var slot = ObjectToStringSlot();
         var site = CallableSites.Synthetic(CallableSiteKind.Method, slot);
-        var targets = _ctx.VirtualDispatch.Resolve(site, recvTy).RuntimeTargets;
+        var targets = _state.VirtualDispatch.Resolve(site, recvTy).RuntimeTargets;
         AssertClosedVirtualDispatch(recvTy, targets, slot);
 
-        var recvSlot = _ctx.Builder.AllocScratch(new StorageType(AggregateAbi.ArrayType));
+        var recvSlot = _state.Builder.AllocScratch(new StorageType(AggregateAbi.ArrayType));
         EmitAssign(recvSlot, recv);
-        var destSlot = _ctx.Builder.AllocScratch(StorageTypes.String);
+        var destSlot = _state.Builder.AllocScratch(StorageTypes.String);
 
         void EmitNoMatch()
         {
@@ -2537,9 +2538,9 @@ public sealed partial class LoweringServices
                 return;
             }
 
-            var typeObjSlot = _ctx.Builder.AllocScratch(StorageTypes.String);
+            var typeObjSlot = _state.Builder.AllocScratch(StorageTypes.String);
             EmitAssign(typeObjSlot, AggregateAbi.ReadSlot(_builder, SlotRef(recvSlot), 0, StorageTypes.String));
-            var matched = _ctx.Builder.AllocScratch(StorageTypes.Boolean);
+            var matched = _state.Builder.AllocScratch(StorageTypes.Boolean);
             EmitAssign(matched, Const(false, StorageTypes.Boolean));
 
             foreach (var t in targets)
@@ -2662,7 +2663,7 @@ public sealed partial class LoweringServices
     /// gate that currently reads `!IsResolvedConcreteNonBehaviour(...)` to route to interface dispatch.
     /// </summary>
     internal void GuardInterfaceDispatchRepresentation(INamedTypeSymbol ifaceType, string memberName)
-        => _ctx.Boundary.RequireInterfaceDispatchRepresentation(ifaceType, memberName);
+        => _state.Boundary.RequireInterfaceDispatchRepresentation(ifaceType, memberName);
 
     /// <summary>Wave-9 round-4 [X4]/[X5]/[X9]: gate + layout lookup for a USER-INTERFACE property or
     /// indexer accessor reached through an interface-typed receiver. The [W6] cross-indexer gate
@@ -2774,7 +2775,7 @@ public sealed partial class LoweringServices
     {
         // SS2B: a hoisted closure callee (generic LF specs included) resolves through the registry.
         if (target.MethodKind is MethodKind.LambdaMethod or MethodKind.LocalFunction
-            && _ctx.Methods.TryGetClosureSpec(target, _ctx.ComposeClosureKeyArgs(target), out var calleeClosure))
+            && _state.Methods.TryGetClosureSpec(target, _state.ComposeClosureKeyArgs(target), out var calleeClosure))
             return (calleeClosure.Slot.VarPrefix, calleeClosure.ParamVarIds,
                 calleeClosure.ReturnSlots is { Length: 1 } ? calleeClosure.ReturnSlots[0].Id : null);
         if (_methodParamVarIds.TryGetValue(target, out var localParamIds))
@@ -2813,7 +2814,7 @@ public sealed partial class LoweringServices
     {
         // SS2B: a hoisted closure callee (generic LF specs included) resolves through the registry.
         if (target.MethodKind is MethodKind.LambdaMethod or MethodKind.LocalFunction
-            && _ctx.Methods.TryGetClosureSpec(target, _ctx.ComposeClosureKeyArgs(target), out var retClosure))
+            && _state.Methods.TryGetClosureSpec(target, _state.ComposeClosureKeyArgs(target), out var retClosure))
             return retClosure.ReturnSlots;
         if (_methodReturns.TryGetValue(target, out var slots))
         {
@@ -2841,7 +2842,7 @@ public sealed partial class LoweringServices
         // SS2B: non-generic hoisted closures resolve per-spec (ambient args) with throw-on-miss —
         // a bare-symbol fallback here would silently call another spec's copy.
         if (target.MethodKind is MethodKind.LambdaMethod or MethodKind.LocalFunction)
-            func = _ctx.Methods.GetClosureSpec(target, _ctx.ComposeClosureKeyArgs(target)).Function;
+            func = _state.Methods.GetClosureSpec(target, _state.ComposeClosureKeyArgs(target)).Function;
         else if (!_methodFunctions.TryGetValue(target, out func))
             throw new InvalidOperationException($"No StructuredFunction registered for method '{target.Name}'");
         var retType = func.ReturnType ?? StorageTypes.Void;
@@ -2857,7 +2858,7 @@ public sealed partial class LoweringServices
         // make EVERY site of the callee spill and deep mixed tail/non-tail recursion overflowed the
         // 8192-entry __recurStack (compile-clean VmFault on legal C#).
         var sitePlan = CallableSitePlan.Direct(target, callSite,
-            IsRecursiveEdge(_currentMethod, target), _ctx.RecursionContext.Info);
+            IsRecursiveEdge(_currentMethod, target), _state.RecursionContext.Info);
         if (sitePlan.RecursiveEdge)
         {
             if (sitePlan.TailSpared)
@@ -2899,7 +2900,7 @@ public sealed partial class LoweringServices
     /// so InsertRecursionSpills wraps the flagged dispatch arms with the spill/reload.</summary>
     internal bool MarkReentrantDispatch(IOperation dispatchOp)
     {
-        var plan = CallableSitePlan.Delegate(dispatchOp?.Syntax, _ctx.RecursionContext.Info);
+        var plan = CallableSitePlan.Delegate(dispatchOp?.Syntax, _state.RecursionContext.Info);
         RegisterCallableSiteSpill(plan);
         return plan.Reentrant;
     }
@@ -2918,11 +2919,11 @@ public sealed partial class LoweringServices
         var callableSite = CallableSites.Require(site, staticCallee);
         var receiver = ResolveType(callableSite.Receiver?.Type) as INamedTypeSymbol
             ?? staticCallee.ContainingType;
-        var landing = _ctx.VirtualDispatch.Resolve(callableSite, receiver, _classSymbol).Cross;
+        var landing = _state.VirtualDispatch.Resolve(callableSite, receiver, _classSymbol).Cross;
         var recursive = landing.HasLocalTarget
-            && _ctx.RecursionContext.IsRecursiveEdge(_currentMethod, landing.LocalTarget);
+            && _state.RecursionContext.IsRecursiveEdge(_currentMethod, landing.LocalTarget);
         var plan = CallableSitePlan.Cross(staticCallee, landing, site?.Syntax, recursive,
-            _ctx.RecursionContext.Info);
+            _state.RecursionContext.Info);
         RegisterCallableSiteSpill(plan);
         return plan.Reentrant;
     }
@@ -2930,7 +2931,7 @@ public sealed partial class LoweringServices
     void RegisterCallableSiteSpill(CallableSitePlan plan)
     {
         if (!plan.RequiresFrameSpill) return;
-        _ctx.Storage.EnsureRecursionStack();
+        _state.Storage.EnsureRecursionStack();
         AccumulateRecursionSpillFields(_builder.CurrentFunction);
     }
 
@@ -2961,10 +2962,10 @@ public sealed partial class LoweringServices
         void AddField(string id)
         {
             if (id == null || !seen.Add(id)) return;
-            var t = _ctx.Storage.GetFieldType(id);
+            var t = _state.Storage.GetFieldType(id);
             if (t.HasValue) fields.Add((id, t.Value));
         }
-        var pids = _ctx.Methods.CurrentClosureSpec?.ParamVarIds;
+        var pids = _state.Methods.CurrentClosureSpec?.ParamVarIds;
         if (pids == null && _currentMethod != null) _methodParamVarIds.TryGetValue(_currentMethod, out pids);
         if (_currentMethod != null && pids != null)
             for (int i = 0; i < pids.Length; i++)
@@ -2984,12 +2985,12 @@ public sealed partial class LoweringServices
                     // local / bundle) is what the existing spill preserves. Spilling the dead field is
                     // the wastefully-conservative over-spill the entry criteria forbid. Definition-keyed
                     // via TryGetEnvBinding (constructed specs re-key through OriginalDefinition, §2 rule 2).
-                    if (_ctx.Closures.TryGetEnvBinding(param, out _))
+                    if (_state.Closures.TryGetEnvBinding(param, out _))
                         continue;
                 }
                 AddField(pids[i]);
             }
-        AddField(_ctx.Methods.CurrentStructReceiverParamId);
+        AddField(_state.Methods.CurrentStructReceiverParamId);
         // Only the CURRENT method's own locals are frame-local and need spilling. LocalBindings is a
         // persistent class-wide map (survives scope pop for capture resolution), so before wave-9
         // round-8 [Y9] a non-hoisted method spilled every local of every PREVIOUSLY EMITTED method

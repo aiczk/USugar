@@ -242,7 +242,7 @@ public static class ConstFormat
 }
 
 /// <summary>Software-recursion-stack field names/size, shared by the IR (CoreFlatOptimizer spill/reload)
-/// and Emit (EmitContext.EnsureRecursionStack) layers so both sides name the same heap fields.</summary>
+/// and Emit (LoweringState.EnsureRecursionStack) layers so both sides name the same heap fields.</summary>
 public static class RecurStack
 {
     public const string StackId = "__recurStack";

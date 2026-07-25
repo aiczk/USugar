@@ -33,21 +33,21 @@ public sealed partial class LoweringServices
         int rank = ndimType.Rank;
         var backingType = NdimArrayAbi.BackingType(_compilation, ndimType);
 
-        var bundleSlot = _ctx.Builder.AllocScratch(new StorageType(NdimArrayAbi.BundleUdonType));
+        var bundleSlot = _state.Builder.AllocScratch(new StorageType(NdimArrayAbi.BundleUdonType));
         EmitAssign(bundleSlot, VisitExpression(arrayRefOp));
         var bundleVal = SlotRef(bundleSlot);
 
         var idxSlots = new int[rank];
         for (int d = 0; d < rank; d++)
         {
-            idxSlots[d] = _ctx.Builder.AllocScratch(StorageTypes.Int32);
+            idxSlots[d] = _state.Builder.AllocScratch(StorageTypes.Int32);
             EmitAssign(idxSlots[d], VisitExpression(indexOps[d]));
         }
 
         var dimSlots = new int[rank];
         for (int d = 0; d < rank; d++)
         {
-            dimSlots[d] = _ctx.Builder.AllocScratch(StorageTypes.Int32);
+            dimSlots[d] = _state.Builder.AllocScratch(StorageTypes.Int32);
             EmitAssign(dimSlots[d], NdimArrayAbi.ReadDimLength(_builder, bundleVal,
                 Const(NdimArrayAbi.DimSlotIndex(d), StorageTypes.Int32)));
         }
@@ -93,7 +93,7 @@ public sealed partial class LoweringServices
         var plan = PrepareNdimAccess(ae.ArrayReference, ae.Indices, ndimType);
         var resultLeaf = EmitNdimReadFromPlan(ae, plan, elemUdonType);
         return ndimType.ElementType is INamedTypeSymbol elemAggT && TypeClassifier.IsAggregateValue(elemAggT)
-            ? AggregateAbi.DeepClone(_builder, resultLeaf, elemAggT, _ctx.Aggregates.GetLayout) : resultLeaf;
+            ? AggregateAbi.DeepClone(_builder, resultLeaf, elemAggT, _state.Aggregates.GetLayout) : resultLeaf;
     }
 
     /// <summary>N-dim element WRITE prepare (mirrors LoweringServices.PrepareArrayElementSet's rank-1
@@ -139,19 +139,19 @@ public sealed partial class LoweringServices
         var dimSlots = new int[rank];
         for (int d = 0; d < rank; d++)
         {
-            dimSlots[d] = _ctx.Builder.AllocScratch(StorageTypes.Int32);
+            dimSlots[d] = _state.Builder.AllocScratch(StorageTypes.Int32);
             EmitAssign(dimSlots[d], EmitArrayDimension(op.DimensionSizes[d]));
         }
 
         var totalSize = NdimArrayAbi.BuildTotalElementCount(_builder, dimSlots);
-        var totalSlot = _ctx.Builder.AllocScratch(StorageTypes.Int32);
+        var totalSlot = _state.Builder.AllocScratch(StorageTypes.Int32);
         EmitAssign(totalSlot, totalSize);
 
-        var backingSlot = _ctx.Builder.AllocScratch(new StorageType(backingUdonType));
+        var backingSlot = _state.Builder.AllocScratch(new StorageType(backingUdonType));
         EmitAssign(backingSlot, ExternCall(UdonAbi.ArrayConstructor(backingUdonType),
             new List<CLeaf> { SlotRef(totalSlot) }, new StorageType(backingUdonType)));
 
-        var bundleSlot = _ctx.Builder.AllocScratch(new StorageType(NdimArrayAbi.BundleUdonType));
+        var bundleSlot = _state.Builder.AllocScratch(new StorageType(NdimArrayAbi.BundleUdonType));
         NdimArrayAbi.MintBundleToSlot(_builder, bundleSlot, backingSlot, dimSlots);
 
         if (op.Initializer != null)
@@ -166,7 +166,7 @@ public sealed partial class LoweringServices
         {
             // struct[]/tuple[] zero-init: each flat slot gets a fresh default struct (mirrors the rank-1 path
             // in ArrayHandler.VisitArrayCreation — `arr[i,j].field = x` must work on a freshly allocated array).
-            var iSlot = _ctx.Builder.AllocScratch(StorageTypes.Int32);
+            var iSlot = _state.Builder.AllocScratch(StorageTypes.Int32);
             EmitAssign(iSlot, Const(0, StorageTypes.Int32));
             _builder.EmitWhile(
                 () => ExternCall(UdonAbi.Int32LessThan,
@@ -175,8 +175,8 @@ public sealed partial class LoweringServices
                 {
                     EmitExternVoid(UdonAbi.ArraySet(backingUdonType, elemUdonType),
                         new List<CLeaf> { SlotRef(backingSlot), SlotRef(iSlot),
-                            AggregateAbi.MintDefault(_builder, _ctx.Aggregates.GetLayout((INamedTypeSymbol)elemSym),
-                                _ctx.Aggregates.GetLayout, GetStorageTypeName) });
+                            AggregateAbi.MintDefault(_builder, _state.Aggregates.GetLayout((INamedTypeSymbol)elemSym),
+                                _state.Aggregates.GetLayout, GetStorageTypeName) });
                     EmitAssign(iSlot, ExternCall(UdonAbi.Int32Add,
                         new List<CLeaf> { SlotRef(iSlot), Const(1, StorageTypes.Int32) }, StorageTypes.Int32));
                 });

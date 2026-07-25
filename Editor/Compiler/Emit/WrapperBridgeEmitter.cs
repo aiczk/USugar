@@ -4,12 +4,12 @@ using Microsoft.CodeAnalysis;
 /// <summary>Emits variance wrappers that dispatch a delegate bundle stored as payload.</summary>
 public sealed class WrapperBridgeEmitter
 {
-    readonly EmitContext _context;
+    readonly LoweringState _context;
     readonly SyntheticBridgeBuilder _bridge;
     readonly DelegateConventionStorage _convention;
     readonly SyntheticDemandPlan _demands;
 
-    internal WrapperBridgeEmitter(EmitContext context, SyntheticBridgeBuilder bridge,
+    internal WrapperBridgeEmitter(LoweringState context, SyntheticBridgeBuilder bridge,
         DelegateConventionStorage convention, SyntheticDemandPlan demands)
     {
         _context = context;

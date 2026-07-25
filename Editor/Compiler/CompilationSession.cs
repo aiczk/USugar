@@ -3,7 +3,7 @@ using Microsoft.CodeAnalysis;
 
 /// <summary>
 /// Explicit shared authority for one Roslyn compilation. Immutable compiler
-/// services live here; mutable per-class emission state remains in EmitContext
+/// services live here; mutable per-class emission state remains in LoweringState
 /// so parallel behaviour emission cannot leak state between classes.
 /// </summary>
 public sealed class CompilationSession

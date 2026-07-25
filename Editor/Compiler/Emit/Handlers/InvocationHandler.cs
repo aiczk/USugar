@@ -81,11 +81,11 @@ public partial class InvocationHandler : IExpressionHandler
             var fallback = op.Arguments.Length > 0
                 ? _lowering.VisitExpression(op.Arguments[0].Value)
                 : (aggResult
-                    ? AggregateAbi.MintDefault(_lowering.Builder, _lowering.Context.Aggregates.GetLayout(aggType), _lowering.Context.Aggregates.GetLayout, _lowering.GetStorageTypeName)
+                    ? AggregateAbi.MintDefault(_lowering.Builder, _lowering.State.Aggregates.GetLayout(aggType), _lowering.State.Aggregates.GetLayout, _lowering.GetStorageTypeName)
                     : _lowering.EmitValueTypeDefault(uType));
             return NullableAbi.EmitGetValueOrDefault(_lowering.Builder, nv, new StorageType(uType), fallback,
                 present => aggResult
-                    ? AggregateAbi.DeepClone(_lowering.Builder, present, aggType, _lowering.Context.Aggregates.GetLayout)
+                    ? AggregateAbi.DeepClone(_lowering.Builder, present, aggType, _lowering.State.Aggregates.GetLayout)
                     // CW18: the present box may carry a plain-int tag (small-underlying drift) — a raw
                     // copy into the strict uType slot faults the next typed read; re-tag tolerantly.
                     : _lowering.RetagSmallNullablePresent(present, govUnderlying));
@@ -224,7 +224,7 @@ public partial class InvocationHandler : IExpressionHandler
                 && VirtualDispatch.IsDispatchSite(target, op.Instance, recvTy))
             {
                 var site = CallableSites.Require(op, target);
-                var targets = _lowering.Context.VirtualDispatch.Resolve(site, recvTy).RuntimeTargets;
+                var targets = _lowering.State.VirtualDispatch.Resolve(site, recvTy).RuntimeTargets;
                 _lowering.AssertClosedVirtualDispatch(recvTy, targets, target);
                 if (!recvTy.IsSealed && targets.Count >= 2)
                     return EmitVirtualChain(op, targets);
@@ -406,7 +406,7 @@ public partial class InvocationHandler : IExpressionHandler
             && _lowering.Planner.InterfaceIsLocalUserClassOnly(localInterface))
         {
             var site = CallableSites.Require(op, target);
-            var targets = _lowering.Context.VirtualDispatch.Resolve(site, localInterface).RuntimeTargets;
+            var targets = _lowering.State.VirtualDispatch.Resolve(site, localInterface).RuntimeTargets;
             if (targets.Count >= 2)
                 return EmitVirtualChain(op, targets);
             if (targets.Count == 1)
@@ -451,26 +451,26 @@ public partial class InvocationHandler : IExpressionHandler
         foreach (var t in targets)
             GuardRefOutArguments(op.Arguments, _lowering.SubstituteMethodTypeArgs(t.Impl));
 
-        var recvSlot = _lowering.Context.Builder.AllocScratch(new StorageType(AggregateAbi.ArrayType));
+        var recvSlot = _lowering.State.Builder.AllocScratch(new StorageType(AggregateAbi.ArrayType));
         _lowering.EmitAssign(recvSlot, _lowering.LoadInstanceRaw(op.Instance));
 
         var argRefs = new List<CLeaf>();
         var chainPrepared = MarshalArgumentsByOrdinal(op.Arguments, op.TargetMethod, argRefs, (val, arg) =>
         {
-            var s = _lowering.Context.Builder.AllocScratch(_lowering.GetStorageType(arg.Value.Type));
+            var s = _lowering.State.Builder.AllocScratch(_lowering.GetStorageType(arg.Value.Type));
             _lowering.EmitAssign(s, val);
             return _lowering.SlotRef(s);
         });
 
-        var typeObjSlot = _lowering.Context.Builder.AllocScratch(StorageTypes.String);
+        var typeObjSlot = _lowering.State.Builder.AllocScratch(StorageTypes.String);
         _lowering.EmitAssign(typeObjSlot, AggregateAbi.ReadSlot(_lowering.Builder, _lowering.SlotRef(recvSlot), 0, StorageTypes.String));
 
         bool isVoid = op.Type == null || op.Type.SpecialType == SpecialType.System_Void;
-        int destSlot = isVoid ? -1 : _lowering.Context.Builder.AllocScratch(_lowering.GetStorageType(op.Type));
+        int destSlot = isVoid ? -1 : _lowering.State.Builder.AllocScratch(_lowering.GetStorageType(op.Type));
 
         // Phase-A armor: a null receiver or a laundered non-bundle value matches no arm. is/cast guards
         // that case to `false`; the chain must be equally loud — LogError + default, never silent.
-        var matched = _lowering.Context.Builder.AllocScratch(StorageTypes.Boolean);
+        var matched = _lowering.State.Builder.AllocScratch(StorageTypes.Boolean);
         _lowering.EmitAssign(matched, _lowering.Const(false, StorageTypes.Boolean));
 
         foreach (var t in targets)
@@ -508,11 +508,11 @@ public partial class InvocationHandler : IExpressionHandler
     /// parity (CLR evaluates them before the NRE), then LogError + default (§2.6 null-invoke polarity).</summary>
     CLeaf EmitUnreachableVirtualCall(IInvocationOperation op, INamedTypeSymbol recvTy, IMethodSymbol target)
     {
-        var recvSlot = _lowering.Context.Builder.AllocScratch(new StorageType(AggregateAbi.ArrayType));
+        var recvSlot = _lowering.State.Builder.AllocScratch(new StorageType(AggregateAbi.ArrayType));
         _lowering.EmitAssign(recvSlot, _lowering.LoadInstanceRaw(op.Instance));
         foreach (var a in op.Arguments)
         {
-            var s = _lowering.Context.Builder.AllocScratch(_lowering.GetStorageType(a.Value.Type));
+            var s = _lowering.State.Builder.AllocScratch(_lowering.GetStorageType(a.Value.Type));
             _lowering.EmitAssign(s, _lowering.VisitExpression(a.Value));
         }
         _lowering.EmitExternVoid(UdonAbi.DebugLogError,
@@ -521,7 +521,7 @@ public partial class InvocationHandler : IExpressionHandler
                 StorageTypes.String) });
         bool isVoid = op.Type == null || op.Type.SpecialType == SpecialType.System_Void;
         if (isVoid) return _lowering.Const(null, StorageTypes.Object);
-        return _lowering.SlotRef(_lowering.Context.Builder.AllocScratch(_lowering.GetStorageType(op.Type)));
+        return _lowering.SlotRef(_lowering.State.Builder.AllocScratch(_lowering.GetStorageType(op.Type)));
     }
 
     CLeaf EmitStructInstanceCall(IInvocationOperation op, IMethodSymbol target)
@@ -539,7 +539,7 @@ public partial class InvocationHandler : IExpressionHandler
         // elements keep live storage (the helper stops there, reference semantics, CLR-equal).
         if (!target.IsReadOnly && _lowering.ReceiverNeedsDefensiveCopy(op.Instance)
             && op.Instance?.Type is INamedTypeSymbol recvAgg && TypeClassifier.IsAggregateValue(recvAgg))
-            recv = AggregateAbi.DeepClone(_lowering.Builder, recv, recvAgg, _lowering.Context.Aggregates.GetLayout);
+            recv = AggregateAbi.DeepClone(_lowering.Builder, recv, recvAgg, _lowering.State.Aggregates.GetLayout);
         var args = new List<CLeaf> { recv };
         var structPrepared = MarshalArguments(op, args);
         var result = _lowering.EmitCallToMethod(target, args);

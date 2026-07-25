@@ -73,9 +73,9 @@ internal sealed class CallableLayoutPlan
 /// <summary>Single authority for slot allocation, storage declaration, function ABI, and record creation.</summary>
 internal sealed class CallableRegistrar
 {
-    readonly EmitContext _context;
+    readonly LoweringState _context;
 
-    public CallableRegistrar(EmitContext context) => _context = context;
+    public CallableRegistrar(LoweringState context) => _context = context;
 
     public MethodContext.RegisteredCallable Register(CallableLayoutPlan plan)
     {

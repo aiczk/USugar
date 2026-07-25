@@ -3,7 +3,7 @@ using Xunit;
 namespace USugar.Tests;
 
 /// <summary>
-/// Pre-wave-12 comprehension refactor (item 2): EmitContext.HasNonTailSelfCall (delegate-dispatch-site
+/// Pre-wave-12 comprehension refactor (item 2): LoweringState.HasNonTailSelfCall (delegate-dispatch-site
 /// tail classification, via IsNonTailDispatchSite) and UasmEmitter.HasNonTailCallTo (named-callee
 /// recursion-spill tail classification) used to be two hand-copied walkers; both now delegate to the
 /// single shared <c>TailCallAnalysis</c>. These are consolidated battery pins proving the unification

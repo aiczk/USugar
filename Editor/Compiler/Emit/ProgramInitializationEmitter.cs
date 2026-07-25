@@ -15,10 +15,10 @@ internal sealed class ProgramInitializationEmitter
     internal const string FunctionName = "__usugar_initialize";
     internal const string StateField = "__usugar_initialized";
 
-    readonly EmitContext _context;
+    readonly LoweringState _context;
     readonly CoreBuilder _builder;
 
-    public ProgramInitializationEmitter(EmitContext context)
+    public ProgramInitializationEmitter(LoweringState context)
     {
         _context = context ?? throw new ArgumentNullException(nameof(context));
         _builder = context.Builder;

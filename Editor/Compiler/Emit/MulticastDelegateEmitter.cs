@@ -5,7 +5,7 @@ using Microsoft.CodeAnalysis;
 /// <summary>Emits multicast delegate combine, remove, and fan-out synthetic functions.</summary>
 public sealed class MulticastDelegateEmitter
 {
-    readonly EmitContext _ctx;
+    readonly LoweringState _ctx;
     readonly CoreBuilder _builder;
     readonly StructuredModule _module;
     readonly SyntheticBridgeBuilder _bridge;
@@ -13,7 +13,7 @@ public sealed class MulticastDelegateEmitter
     readonly INamedTypeSymbol _classSymbol;
     readonly SyntheticDemandPlan _demands;
 
-    internal MulticastDelegateEmitter(EmitContext context, SyntheticBridgeBuilder bridge,
+    internal MulticastDelegateEmitter(LoweringState context, SyntheticBridgeBuilder bridge,
         DelegateConventionStorage convention, SyntheticDemandPlan demands)
     {
         _ctx = context;

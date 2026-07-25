@@ -13,7 +13,7 @@ using Microsoft.CodeAnalysis;
 // - Read/Write: captured-variable access through SystemObjectArray __Get/__Set on the owning
 //   scope's env. The supported value-type matrix is pinned by the typed __Get runtime probe: each
 //   boxed value can be read into its matching typed destination.
-// Static + stateless: all state lives on EmitContext, so composed lowering handlers and
+// Static + stateless: all state lives on LoweringState, so composed lowering handlers and
 // UasmEmitter's method-entry hook share one implementation.
 // (C# 9.0 only — Unity compiles Editor/ at the 2022.3 language level.)
 // ============================================================================
@@ -26,7 +26,7 @@ static class EnvEmit
 
     /// <summary>The hoisted closure whose body is being emitted right now, or null when emission is
     /// inside an ordinary method / field initializer (then every env scope must be frame-local).</summary>
-    static IMethodSymbol CurrentClosure(EmitContext ctx)
+    static IMethodSymbol CurrentClosure(LoweringState ctx)
         => ctx.Methods.CurrentMethod is IMethodSymbol m
            && ctx.Closures.CaptureScope != null
            && ctx.Closures.CaptureScope.ClosureScopes.ContainsKey(m.OriginalDefinition)
@@ -36,7 +36,7 @@ static class EnvEmit
     /// its frame slot. Slot 0 is the env ABI tag and slot 1 is always the EffectiveParent scope's
     /// live env (null when the scope has no capture-bearing ancestor). No-op for null /
     /// non-capture-bearing scopes.</summary>
-    public static void Alloc(CoreBuilder b, EmitContext ctx, CaptureScope scope)
+    public static void Alloc(CoreBuilder b, LoweringState ctx, CaptureScope scope)
     {
         if (scope == null || !scope.IsCaptureBearing) return;
         var env = b.ExternCall(CtorSig,
@@ -53,7 +53,7 @@ static class EnvEmit
     /// <summary>The live env-record reference for <paramref name="scope"/> at the current emission
     /// point: the frame slot when this function allocated it, else a chain walk from the current
     /// closure's __envp (hop 0 = the closure's BindingScope, each hop = one parent __Get).</summary>
-    public static CLeaf Leaf(CoreBuilder b, EmitContext ctx, CaptureScope scope)
+    public static CLeaf Leaf(CoreBuilder b, LoweringState ctx, CaptureScope scope)
     {
         if (ctx.Closures.ScopeEnvSlots.TryGetValue((b.CurrentFunction, scope.Id), out var slotId))
             return new CSlotRef(slotId, new StorageType(EnvType));
@@ -83,7 +83,7 @@ static class EnvEmit
     }
 
     /// <summary>Read a captured variable out of its owning scope's env record into a typed slot.</summary>
-    public static CLeaf Read(CoreBuilder b, EmitContext ctx, ISymbol symbol, StorageType udonType)
+    public static CLeaf Read(CoreBuilder b, LoweringState ctx, ISymbol symbol, StorageType udonType)
     {
         if (!ctx.Closures.TryGetEnvBinding(symbol, out var binding))
             throw new InvalidOperationException($"'{symbol.Name}' has no env binding.");
@@ -93,7 +93,7 @@ static class EnvEmit
     }
 
     /// <summary>Write a value into a captured variable's env cell.</summary>
-    public static void Write(CoreBuilder b, EmitContext ctx, ISymbol symbol, CLeaf value)
+    public static void Write(CoreBuilder b, LoweringState ctx, ISymbol symbol, CLeaf value)
     {
         if (!ctx.Closures.TryGetEnvBinding(symbol, out var binding))
             throw new InvalidOperationException($"'{symbol.Name}' has no env binding.");

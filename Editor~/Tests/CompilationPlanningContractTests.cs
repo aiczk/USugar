@@ -23,6 +23,32 @@ public class CompilationPlanningContractTests
     }
 
     [Fact]
+    public void LoweringState_DoesNotOwnCompilationServicesOrDispatchDelegates()
+    {
+        var assembly = typeof(UasmEmitter).Assembly;
+        Assert.Null(assembly.GetType("EmitContext"));
+
+        var environmentFields = typeof(LoweringEnvironment).GetFields(
+            BindingFlags.Instance | BindingFlags.Public | BindingFlags.DeclaredOnly);
+        Assert.NotEmpty(environmentFields);
+        Assert.All(environmentFields, field => Assert.True(field.IsInitOnly, field.Name));
+
+        var stateFields = typeof(LoweringState).GetFields(
+            BindingFlags.Instance | BindingFlags.Public | BindingFlags.DeclaredOnly);
+        Assert.Contains(stateFields,
+            field => field.Name == nameof(LoweringState.Environment)
+                     && field.FieldType == typeof(LoweringEnvironment));
+        Assert.Contains(stateFields,
+            field => field.Name == nameof(LoweringState.Dispatch)
+                     && field.FieldType == typeof(LoweringDispatch));
+        Assert.DoesNotContain(stateFields, field =>
+            field.FieldType == typeof(CompilationSession)
+            || field.FieldType == typeof(Compilation)
+            || field.FieldType == typeof(LayoutPlanner)
+            || field.FieldType == typeof(UdonAbiCatalog));
+    }
+
+    [Fact]
     public void Builder_FreezesRegistrationGatesOnce()
     {
         var tree = CSharpSyntaxTree.ParseText(@"

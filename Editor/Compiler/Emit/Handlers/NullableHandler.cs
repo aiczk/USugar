@@ -60,7 +60,7 @@ public class NullableHandler : AssignmentHandlerBase, IExpressionHandler
         var leftVal = _lowering.VisitExpression(op.Value);
         System.Func<CLeaf, CLeaf> presentValue = null;
         if (aggResult)
-            presentValue = present => AggregateAbi.DeepClone(_lowering.Builder, present, aggType, _lowering.Context.Aggregates.GetLayout);
+            presentValue = present => AggregateAbi.DeepClone(_lowering.Builder, present, aggType, _lowering.State.Aggregates.GetLayout);
         // CW18: a small-underlying nullable left coalescing into a strict underlying-typed slot — the
         // present box may carry a plain-int tag (the drift the lifted-operator/pattern consumers already
         // tolerate), and the raw copy left a mistyped value that faults the next strict extern read.
@@ -70,7 +70,7 @@ public class NullableHandler : AssignmentHandlerBase, IExpressionHandler
             () =>
             {
                 var rightVal = _lowering.VisitExpression(op.WhenNull);
-                return aggResult ? AggregateAbi.DeepClone(_lowering.Builder, rightVal, aggType, _lowering.Context.Aggregates.GetLayout) : rightVal;
+                return aggResult ? AggregateAbi.DeepClone(_lowering.Builder, rightVal, aggType, _lowering.State.Aggregates.GetLayout) : rightVal;
             },
             presentValue);
     }
@@ -83,7 +83,7 @@ public class NullableHandler : AssignmentHandlerBase, IExpressionHandler
         // once — re-used for the null check — and EmitWriteBack stores exactly like a plain `x = expr` for every
         // lvalue form. The old inline if/else-if chain silently dropped cross-behaviour field/property and
         // aggregate-member (tuple/struct) write-backs and built a bogus __set_X extern for user auto-properties.
-        _lowering.RejectUnsafeCrossProgramDelegateWrite(op.Target, _lowering.Context.Boundary.ClassifyValue(op.Value));
+        _lowering.RejectUnsafeCrossProgramDelegateWrite(op.Target, _lowering.State.Boundary.ClassifyValue(op.Value));
         var lv = PrepareLValue(op.Target);
         var targetType = _lowering.GetStorageTypeName(op.Target.Type);
         return NullableAbi.EmitCoalesceAssignment(_lowering.Builder, lv.Value, new StorageType(targetType),

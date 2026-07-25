@@ -100,7 +100,7 @@ public class OperatorHandler : IExpressionHandler
             var combineRightVal = _lowering.VisitExpression(op.RightOperand);
 
             var sigPart = DelegateAbi.BuildSigPart(
-                invoke, _lowering.Context.Session.Types, _lowering.Context.Generics.TypeParamMap);
+                invoke, _lowering.State.Session.Types, _lowering.State.Generics.TypeParamMap);
             _lowering.RegisterMulticastSig(sigPart, invoke,
                 op.OperatorKind == BinaryOperatorKind.Add
                     ? MulticastOperations.Combine
@@ -232,8 +232,8 @@ public class OperatorHandler : IExpressionHandler
         }
 
         var sig = op.OperatorMethod != null
-            ? _lowering.Context.Abi.BindOperator(op.OperatorMethod, type => _lowering.GetStorageTypeName(type))
-            : _lowering.Context.Abi.BindExact(ExternResolver.ResolveBuiltInBinaryExtern(
+            ? _lowering.State.Abi.BindOperator(op.OperatorMethod, type => _lowering.GetStorageTypeName(type))
+            : _lowering.State.Abi.BindExact(ExternResolver.ResolveBuiltInBinaryExtern(
                 op.OperatorKind,
                 _lowering.ResolveType(op.LeftOperand.Type),
                 _lowering.ResolveType(op.RightOperand.Type),
@@ -245,9 +245,9 @@ public class OperatorHandler : IExpressionHandler
             && (op.OperatorKind == BinaryOperatorKind.Equals
                 || op.OperatorKind == BinaryOperatorKind.NotEquals))
         {
-            var objLeftSlot = _lowering.Context.Builder.AllocScratch(StorageTypes.UnityObject);
+            var objLeftSlot = _lowering.State.Builder.AllocScratch(StorageTypes.UnityObject);
             _lowering.EmitAssign(objLeftSlot, leftVal);
-            var objRightSlot = _lowering.Context.Builder.AllocScratch(StorageTypes.UnityObject);
+            var objRightSlot = _lowering.State.Builder.AllocScratch(StorageTypes.UnityObject);
             _lowering.EmitAssign(objRightSlot, rightVal);
             return _lowering.ExternCall(sig, new List<CLeaf> { _lowering.SlotRef(objLeftSlot), _lowering.SlotRef(objRightSlot) }, new StorageType(resultType));
         }
@@ -313,7 +313,7 @@ public class OperatorHandler : IExpressionHandler
         // enum conversions, UnityEngineObject casts). Those statements must live inside
         // the conditional branch so they don't execute unconditionally.
         var leftVal = _lowering.VisitExpression(op.LeftOperand);
-        var resultSlot = _lowering.Context.Builder.AllocScratch(StorageTypes.Boolean);
+        var resultSlot = _lowering.State.Builder.AllocScratch(StorageTypes.Boolean);
         _lowering.EmitAssign(resultSlot, _lowering.Const(false, StorageTypes.Boolean));
         _lowering.Builder.EmitIf(leftVal, _ =>
         {
@@ -327,7 +327,7 @@ public class OperatorHandler : IExpressionHandler
     {
         // a || b: evaluate b only when a is false (short-circuit).
         var leftVal = _lowering.VisitExpression(op.LeftOperand);
-        var resultSlot = _lowering.Context.Builder.AllocScratch(StorageTypes.Boolean);
+        var resultSlot = _lowering.State.Builder.AllocScratch(StorageTypes.Boolean);
         _lowering.EmitAssign(resultSlot, _lowering.Const(true, StorageTypes.Boolean));
         _lowering.Builder.EmitIf(leftVal, null, _ =>
         {
@@ -380,8 +380,8 @@ public class OperatorHandler : IExpressionHandler
         var resultType = _lowering.GetStorageTypeName(op.Type);
 
         var sig = op.OperatorMethod != null && !ExternResolver.IsNumericType(op.Operand.Type)
-            ? _lowering.Context.Abi.BindOperator(op.OperatorMethod, type => _lowering.GetStorageTypeName(type))
-            : _lowering.Context.Abi.BindExact(BuildBuiltinUnaryKey(op));
+            ? _lowering.State.Abi.BindOperator(op.OperatorMethod, type => _lowering.GetStorageTypeName(type))
+            : _lowering.State.Abi.BindExact(BuildBuiltinUnaryKey(op));
 
         return _lowering.ExternCall(sig, new List<CLeaf> { operandVal }, new StorageType(resultType));
     }
@@ -480,7 +480,7 @@ public class OperatorHandler : IExpressionHandler
         return EmitPatternCheckImpl(valueVal, op.Value.Type, op.Pattern);
     }
 
-    // ── Pattern matching (public — called from LoopHandler via EmitContext dispatch) ──
+    // ── Pattern matching (public — called from LoopHandler via LoweringState dispatch) ──
 
     public CLeaf EmitPatternCheckImpl(CLeaf valueVal, ITypeSymbol valueType, IPatternOperation pattern)
     {
@@ -572,12 +572,12 @@ public class OperatorHandler : IExpressionHandler
                     && binPat.LeftPattern.NarrowedType is { } narrowedType
                     && !SymbolEqualityComparer.Default.Equals(narrowedType, valueType))
                 {
-                    var resultSlot = _lowering.Context.Builder.AllocScratch(StorageTypes.Boolean);
+                    var resultSlot = _lowering.State.Builder.AllocScratch(StorageTypes.Boolean);
                     _lowering.EmitAssign(resultSlot, _lowering.Const(false, StorageTypes.Boolean));
                     var matched = EmitPatternCheckImpl(valueVal, valueType, binPat.LeftPattern);
                     _lowering.Builder.EmitIf(matched, b =>
                     {
-                        var nt = _lowering.Context.Builder.AllocScratch(_lowering.GetStorageType(narrowedType));
+                        var nt = _lowering.State.Builder.AllocScratch(_lowering.GetStorageType(narrowedType));
                         _lowering.EmitAssign(nt, valueVal);
                         _lowering.EmitAssign(resultSlot, EmitPatternCheckImpl(_lowering.SlotRef(nt), narrowedType, binPat.RightPattern));
                     });
@@ -604,7 +604,7 @@ public class OperatorHandler : IExpressionHandler
         // One guarded lowering owns every recursive-pattern facet. Splitting positional and property
         // forms into competing switch arms made the first arm silently drop the second facet, the
         // matched-type/null guard, and the designator for `T(...) { P: ... } v`.
-        var resultSlot = _lowering.Context.Builder.AllocScratch(StorageTypes.Boolean);
+        var resultSlot = _lowering.State.Builder.AllocScratch(StorageTypes.Boolean);
         _lowering.EmitAssign(resultSlot, _lowering.Const(false, StorageTypes.Boolean));
 
         CLeaf guard;
@@ -620,7 +620,7 @@ public class OperatorHandler : IExpressionHandler
         _lowering.Builder.EmitIf(guard, _ =>
         {
             var matchType = rec.MatchedType ?? valueType;
-            var valSlot = _lowering.Context.Builder.AllocScratch(_lowering.GetStorageType(matchType));
+            var valSlot = _lowering.State.Builder.AllocScratch(_lowering.GetStorageType(matchType));
             _lowering.EmitAssign(valSlot, valueVal);
 
             var acc = EmitRecursivePositionalChecks(_lowering.SlotRef(valSlot), matchType, rec);
@@ -673,7 +673,7 @@ public class OperatorHandler : IExpressionHandler
             return deconstructResult;
         }
 
-        var layout = _lowering.Context.Aggregates.GetLayout(aggType);
+        var layout = _lowering.State.Aggregates.GetLayout(aggType);
         if (rec.DeconstructionSubpatterns.Length != layout.Count)
             throw new System.NotSupportedException(
                 $"Positional pattern element count ({rec.DeconstructionSubpatterns.Length}) "
@@ -686,7 +686,7 @@ public class OperatorHandler : IExpressionHandler
             var elemRaw = AggregateAbi.ReadSlot(_lowering.Builder, valueVal, i, StorageTypes.Object);
             // Materialize into a typed temp (Udon COPY unboxes) so the sub-pattern compares with
             // the correct type tag.
-            var elemSlot = _lowering.Context.Builder.AllocScratch(_lowering.GetStorageType(elemType));
+            var elemSlot = _lowering.State.Builder.AllocScratch(_lowering.GetStorageType(elemType));
             _lowering.EmitAssign(elemSlot, elemRaw);
             var subResult = EmitPatternCheckImpl(_lowering.SlotRef(elemSlot), elemType,
                 rec.DeconstructionSubpatterns[i]);
@@ -726,15 +726,15 @@ public class OperatorHandler : IExpressionHandler
             {
                 var dispatched = _lowering.EmitAccessorDispatch(vSubRef.Property, aggMatchType, vSubGetter,
                     valueVal, new List<CLeaf>(), null);
-                var vSubSlot = _lowering.Context.Builder.AllocScratch(_lowering.GetStorageType(memberType));
+                var vSubSlot = _lowering.State.Builder.AllocScratch(_lowering.GetStorageType(memberType));
                 _lowering.EmitAssign(vSubSlot, dispatched);
                 memberVal = _lowering.SlotRef(vSubSlot);
             }
             else if (isAgg
-                     && _lowering.Context.Aggregates.GetLayout(aggMatchType).TryGetIndex(memberName, out var aggMemberIdx))
+                     && _lowering.State.Aggregates.GetLayout(aggMatchType).TryGetIndex(memberName, out var aggMemberIdx))
             {
                 var rawMember = AggregateAbi.ReadSlot(_lowering.Builder, valueVal, aggMemberIdx, StorageTypes.Object);
-                var memberSlot = _lowering.Context.Builder.AllocScratch(_lowering.GetStorageType(memberType));
+                var memberSlot = _lowering.State.Builder.AllocScratch(_lowering.GetStorageType(memberType));
                 _lowering.EmitAssign(memberSlot, rawMember);
                 memberVal = _lowering.SlotRef(memberSlot);
             }
@@ -749,7 +749,7 @@ public class OperatorHandler : IExpressionHandler
                 var memberOwner = _lowering.GetStorageTypeName(
                     _lowering.ResolveExternOwnerType(memberContainingType, matchType, memberName));
                 memberVal = _lowering.ExternCall(
-                    _lowering.Context.Abi.BindPropertyGetter(
+                    _lowering.State.Abi.BindPropertyGetter(
                         memberOwner, memberName, _lowering.GetStorageTypeName(memberType)),
                     new List<CLeaf> { valueVal }, _lowering.GetStorageType(memberType));
             }
@@ -769,14 +769,14 @@ public class OperatorHandler : IExpressionHandler
     {
         // Stage 2 §4.1: captured pattern variable → env cell (its owning scope's env is live at
         // every point a condition/section hosting this pattern executes).
-        if (_lowering.Context.Closures.TryGetEnvBinding(local, out _))
+        if (_lowering.State.Closures.TryGetEnvBinding(local, out _))
         {
-            EnvEmit.Write(_lowering.Builder, _lowering.Context, local, value);
+            EnvEmit.Write(_lowering.Builder, _lowering.State, local, value);
             return;
         }
 
-        var localId = _lowering.Context.Storage.DeclareLocal(local.Name, _lowering.GetStorageType(local.Type));
-        _lowering.LocalBindings[local] = new EmitContext.LocalBinding(localId);
+        var localId = _lowering.State.Storage.DeclareLocal(local.Name, _lowering.GetStorageType(local.Type));
+        _lowering.LocalBindings[local] = new LocalBinding(localId);
         _lowering.EmitStoreField(localId, value);
     }
 
@@ -785,7 +785,7 @@ public class OperatorHandler : IExpressionHandler
     CLeaf VisitSwitchExpression(ISwitchExpressionOperation op)
     {
         var resultType = _lowering.GetStorageTypeName(op.Type);
-        var resultSlot = _lowering.Context.Builder.AllocScratch(new StorageType(resultType));
+        var resultSlot = _lowering.State.Builder.AllocScratch(new StorageType(resultType));
         // Initialize result to default in case no arm matches (non-exhaustive)
         _lowering.EmitAssign(resultSlot, _lowering.Const(
             EmitPolicy.ParseConstValue(resultType, GetDefaultConstValue(resultType)), new StorageType(resultType)));
@@ -872,7 +872,7 @@ public class OperatorHandler : IExpressionHandler
         // cond ? a : b: evaluate branches only on the taken path.
         var condVal = _lowering.VisitExpression(op.Condition);
         var resultType = _lowering.GetStorageTypeName(op.Type);
-        var resultSlot = _lowering.Context.Builder.AllocScratch(new StorageType(resultType));
+        var resultSlot = _lowering.State.Builder.AllocScratch(new StorageType(resultType));
         _lowering.Builder.EmitIf(condVal,
             _ => _lowering.EmitAssign(resultSlot, _lowering.VisitExpression(op.WhenTrue)),
             _ => _lowering.EmitAssign(resultSlot, _lowering.VisitExpression(op.WhenFalse)));
@@ -942,9 +942,9 @@ public class OperatorHandler : IExpressionHandler
     // is reference equality). Caveat: float NaN compares equal under object.Equals.
     CLeaf EmitAggregateElementsEqual(CValue leftArr, CValue rightArr, INamedTypeSymbol aggType)
     {
-        var layout = _lowering.Context.Aggregates.GetLayout(aggType);
-        var leftSlot = _lowering.Context.Builder.AllocScratch(new StorageType(AggregateAbi.ArrayType)); _lowering.EmitAssign(leftSlot, leftArr);
-        var rightSlot = _lowering.Context.Builder.AllocScratch(new StorageType(AggregateAbi.ArrayType)); _lowering.EmitAssign(rightSlot, rightArr);
+        var layout = _lowering.State.Aggregates.GetLayout(aggType);
+        var leftSlot = _lowering.State.Builder.AllocScratch(new StorageType(AggregateAbi.ArrayType)); _lowering.EmitAssign(leftSlot, leftArr);
+        var rightSlot = _lowering.State.Builder.AllocScratch(new StorageType(AggregateAbi.ArrayType)); _lowering.EmitAssign(rightSlot, rightArr);
 
         CLeaf result = _lowering.Const(true, StorageTypes.Boolean);
         for (int i = 0; i < layout.Count; i++)

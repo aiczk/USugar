@@ -24,10 +24,10 @@ public partial class InvocationHandler
         // intrinsic registry; reject every remaining alias-producing member.
         RejectUnsafeAggregateArrayExtern(op, target);
         if (!target.IsStatic && op.Instance?.Type != null)
-            _lowering.Context.Boundary.RequireCanPassExternArgument(op.Instance.Type,
+            _lowering.State.Boundary.RequireCanPassExternArgument(op.Instance.Type,
                 $"receiver of {target.Name}", deferAggregateReceiverPolicy: true);
         if (!target.ReturnsVoid)
-            _lowering.Context.Boundary.RequireCanReturnFromExtern(target.ReturnType, target.Name);
+            _lowering.State.Boundary.RequireCanReturnFromExtern(target.ReturnType, target.Name);
         var objectIdentityExtern = target.Name == nameof(object.Equals)
             && target.ContainingType.SpecialType == SpecialType.System_Object;
         var objectMemberExtern = target.ContainingType.SpecialType
@@ -37,12 +37,12 @@ public partial class InvocationHandler
         if (!target.IsStatic)
         {
             if (op.Instance is IInstanceReferenceOperation)
-                instanceVal = _lowering.LoadField(_lowering.Context.Storage.DeclareThisOnce(_lowering.GetStorageType(target.ContainingType)), _lowering.GetStorageType(target.ContainingType));
+                instanceVal = _lowering.LoadField(_lowering.State.Storage.DeclareThisOnce(_lowering.GetStorageType(target.ContainingType)), _lowering.GetStorageType(target.ContainingType));
             else if (op.Instance is IFieldReferenceOperation { Instance: IInstanceReferenceOperation } fieldRef
                      && fieldRef.Field.Type.IsValueType && !fieldRef.Field.IsStatic)
             {
                 // Value-type field on this: pass heap address directly so extern can modify in-place
-                instanceVal = _lowering.FieldAddr(_lowering.Context.SourceStorageName(fieldRef.Field), _lowering.GetStorageType(fieldRef.Field.Type));
+                instanceVal = _lowering.FieldAddr(_lowering.State.SourceStorageName(fieldRef.Field), _lowering.GetStorageType(fieldRef.Field.Type));
             }
             // Local variable — value type: pass heap address directly so extern can modify in-place
             else if (op.Instance is ILocalReferenceOperation localRef
@@ -116,7 +116,7 @@ public partial class InvocationHandler
             var argumentType = LoweringServices.UnwrapConversions(op.Arguments[i].Value).Type
                 ?? op.Arguments[i].Parameter?.Type;
             if (argumentType != null)
-                _lowering.Context.Boundary.RequireCanPassExternArgument(argumentType,
+                _lowering.State.Boundary.RequireCanPassExternArgument(argumentType,
                     op.Arguments[i].Parameter?.Name ?? $"argument {i}", objectIdentityExtern,
                     deferAggregateReceiverPolicy: objectMemberExtern);
 
@@ -133,7 +133,7 @@ public partial class InvocationHandler
                     if (NdimArrayAbi.IsNdimArray(LoweringServices.UnwrapConversions(elem).Type))
                         throw new System.NotSupportedException(ExternResolver.MultidimExternArgMessage);
                     if (LoweringServices.UnwrapConversions(elem).Type is { } elementType)
-                        _lowering.Context.Boundary.RequireCanPassExternArgument(elementType,
+                        _lowering.State.Boundary.RequireCanPassExternArgument(elementType,
                             $"element of {param.Name}");
                     argVals.Add(_lowering.VisitExpression(elem));
                 }
@@ -155,7 +155,7 @@ public partial class InvocationHandler
                 // member, cross-behaviour field, captured env local/param) — anything it declines
                 // is loud-rejected below instead of falling through a second, un-audited path.
                 var paramType = _lowering.GetStorageTypeName(param.Type);
-                var tempField = _lowering.Context.Storage.DeclareLocal("outref", new StorageType(paramType));
+                var tempField = _lowering.State.Storage.DeclareLocal("outref", new StorageType(paramType));
                 var prepared = TryPrepareRefOutArg(op.Arguments[i]) ?? throw new System.NotSupportedException(
                     $"'{(param.RefKind == RefKind.Ref ? "ref" : "out")} {param.Name}' of '{target.Name}' cannot "
                     + $"bind to '{op.Arguments[i].Value.Syntax}' ({op.Arguments[i].Value.Kind}): this l-value "
@@ -345,7 +345,7 @@ public partial class InvocationHandler
             {
                 var elemVal = _lowering.ExternCall(getSig, new List<CLeaf> { srcVal, OffsetIndex(srcStartVal, iVal) }, new StorageType(AggregateAbi.ArrayType));
                 _lowering.EmitExternVoid(setSig, new List<CLeaf>
-                    { tempVal, iVal, AggregateAbi.DeepClone(_lowering.Builder, elemVal, elemAgg, _lowering.Context.Aggregates.GetLayout) });
+                    { tempVal, iVal, AggregateAbi.DeepClone(_lowering.Builder, elemVal, elemAgg, _lowering.State.Aggregates.GetLayout) });
             });
             EmitIndexedLoop(lenVal, iVal =>
             {
@@ -359,14 +359,14 @@ public partial class InvocationHandler
             {
                 var elemVal = _lowering.ExternCall(getSig, new List<CLeaf> { srcVal, OffsetIndex(srcStartVal, iVal) }, new StorageType(AggregateAbi.ArrayType));
                 _lowering.EmitExternVoid(setSig, new List<CLeaf>
-                    { dstVal, OffsetIndex(dstStartVal, iVal), AggregateAbi.DeepClone(_lowering.Builder, elemVal, elemAgg, _lowering.Context.Aggregates.GetLayout) });
+                    { dstVal, OffsetIndex(dstStartVal, iVal), AggregateAbi.DeepClone(_lowering.Builder, elemVal, elemAgg, _lowering.State.Aggregates.GetLayout) });
             });
         }
     }
 
     void EmitIndexedLoop(CLeaf lenVal, System.Action<CLeaf> body)
     {
-        var iSlot = _lowering.Context.Builder.AllocScratch(StorageTypes.Int32);
+        var iSlot = _lowering.State.Builder.AllocScratch(StorageTypes.Int32);
         _lowering.Builder.EmitFor(
             b => { _lowering.EmitAssign(iSlot, _lowering.Const(0, StorageTypes.Int32)); },
             // cond MUST be the Func overload so it re-evaluates each iteration (the CLeaf overload
@@ -392,7 +392,7 @@ public partial class InvocationHandler
     CLeaf EmitGetComponentGeneric(IInvocationOperation op, IMethodSymbol target)
     {
         var typeArg = target.TypeArguments[0];
-        if (_lowering.Context.Session.ObjectArrayBehaviourAliases.IsAlias(typeArg, _lowering.TypeParamMap))
+        if (_lowering.State.Session.ObjectArrayBehaviourAliases.IsAlias(typeArg, _lowering.TypeParamMap))
             throw new System.NotSupportedException(
                 $"GetComponent<{_lowering.ResolveType(typeArg).ToDisplayString()}> is invalid: this type is used "
                 + "as a legacy object[] nominal alias in the same compilation and therefore has "
@@ -428,7 +428,7 @@ public partial class InvocationHandler
         // registered under VRCPickup). That remap is about calling members ON a receiver and says
         // nothing about the token's runtime identity, so if it rewrote the name the catalog would
         // answer about a different type than the one being baked. Treat any divergence as "not a key".
-        return key.Owner == tokenUdonType && _lowering.Context.AbiCatalog.Contains(key);
+        return key.Owner == tokenUdonType && _lowering.State.AbiCatalog.Contains(key);
     }
 
     // ── GetComponent<T> where T is not a legal generic-dispatch key ──
@@ -455,7 +455,7 @@ public partial class InvocationHandler
 
         CLeaf instanceVal = null;
         if (op.Instance is IInstanceReferenceOperation)
-            instanceVal = _lowering.LoadField(_lowering.Context.Storage.DeclareThisOnce(StorageTypes.Transform), StorageTypes.Transform);
+            instanceVal = _lowering.LoadField(_lowering.State.Storage.DeclareThisOnce(StorageTypes.Transform), StorageTypes.Transform);
         else if (op.Instance != null)
             instanceVal = _lowering.VisitExpression(op.Instance);
 
@@ -523,7 +523,7 @@ public partial class InvocationHandler
         // Evaluate instance and arguments first
         CLeaf instanceVal = null;
         if (op.Instance is IInstanceReferenceOperation)
-            instanceVal = _lowering.LoadField(_lowering.Context.Storage.DeclareThisOnce(StorageTypes.Transform), StorageTypes.Transform);
+            instanceVal = _lowering.LoadField(_lowering.State.Storage.DeclareThisOnce(StorageTypes.Transform), StorageTypes.Transform);
         else if (op.Instance != null)
             instanceVal = _lowering.VisitExpression(op.Instance);
 
@@ -578,7 +578,7 @@ public partial class InvocationHandler
         // Evaluate instance
         CLeaf instanceVal = null;
         if (op.Instance is IInstanceReferenceOperation)
-            instanceVal = _lowering.LoadField(_lowering.Context.Storage.DeclareThisOnce(StorageTypes.Transform), StorageTypes.Transform);
+            instanceVal = _lowering.LoadField(_lowering.State.Storage.DeclareThisOnce(StorageTypes.Transform), StorageTypes.Transform);
         else if (op.Instance != null)
             instanceVal = _lowering.VisitExpression(op.Instance);
 
@@ -601,7 +601,7 @@ public partial class InvocationHandler
         fetchArgs.AddRange(argVals);
 
         // Call GetComponents → ComponentArray (store to slot so it's evaluated once)
-        var allComponentsSlot = _lowering.Context.Builder.AllocScratch(StorageTypes.ComponentArray);
+        var allComponentsSlot = _lowering.State.Builder.AllocScratch(StorageTypes.ComponentArray);
         _lowering.EmitAssign(allComponentsSlot, _lowering.ExternCall(fetchExtern, fetchArgs, StorageTypes.ComponentArray));
         var allComponents = _lowering.SlotRef(allComponentsSlot);
 
@@ -613,8 +613,8 @@ public partial class InvocationHandler
         bool useTypeIds = UdonBehaviourTypeMetadata.LookupRequiresAssignableIds(
             target.TypeArguments[0], _lowering.Planner.Census);
         var reflKeyConst = useTypeIds
-            ? _lowering.Const(EmitContext.ReflTypeIdsField, StorageTypes.String)
-            : _lowering.Const(EmitContext.ReflTypeIdField, StorageTypes.String);
+            ? _lowering.Const(RuntimeReflectionFields.AssignableTypeIds, StorageTypes.String)
+            : _lowering.Const(RuntimeReflectionFields.TypeId, StorageTypes.String);
 
         return isSingular
             ? EmitShimSingular(allComponents, targetIdConst, reflKeyConst, useTypeIds)
@@ -681,17 +681,17 @@ public partial class InvocationHandler
     CLeaf EmitShimSingular(CLeaf allComponents, CLeaf targetIdConst, CLeaf reflKeyConst, bool useTypeIds)
     {
         // Get array length (store to slot so it's not re-evaluated each iteration)
-        var lenSlot = _lowering.Context.Builder.AllocScratch(StorageTypes.Int32);
+        var lenSlot = _lowering.State.Builder.AllocScratch(StorageTypes.Int32);
         _lowering.EmitAssign(lenSlot, _lowering.ExternCall(
             UdonAbiKey.Method("UnityEngineComponentArray", "get_Length", "SystemInt32"),
             new List<CLeaf> { allComponents }, StorageTypes.Int32));
 
         // Loop index (mutable across control flow)
-        var idxSlot = _lowering.Context.Builder.AllocScratch(StorageTypes.Int32);
+        var idxSlot = _lowering.State.Builder.AllocScratch(StorageTypes.Int32);
         _lowering.EmitAssign(idxSlot, _lowering.Const(0, StorageTypes.Int32));
 
         // Result slot (null initially — returns null if no match found)
-        var resultSlot = _lowering.Context.Builder.AllocScratch(StorageTypes.UdonEventReceiver);
+        var resultSlot = _lowering.State.Builder.AllocScratch(StorageTypes.UdonEventReceiver);
 
         // while (idx < len) — Func overload so the counter-dependent condition re-evaluates each iteration.
         // The CLeaf overload evaluates it ONCE (idx still 0), so the loop never advances / never runs.
@@ -750,7 +750,7 @@ public partial class InvocationHandler
     CLeaf EmitShimPlural(CLeaf allComponents, CLeaf targetIdConst, CLeaf reflKeyConst, bool useTypeIds)
     {
         // Get array length (store to slot so it's not re-evaluated each iteration)
-        var lenSlot = _lowering.Context.Builder.AllocScratch(StorageTypes.Int32);
+        var lenSlot = _lowering.State.Builder.AllocScratch(StorageTypes.Int32);
         _lowering.EmitAssign(lenSlot, _lowering.ExternCall(
             UdonAbiKey.Method("UnityEngineComponentArray", "get_Length", "SystemInt32"),
             new List<CLeaf> { allComponents }, StorageTypes.Int32));
@@ -759,9 +759,9 @@ public partial class InvocationHandler
         var oneConst = _lowering.Const(1, StorageTypes.Int32);
 
         // === Pass 1: Count matches ===
-        var countSlot = _lowering.Context.Builder.AllocScratch(StorageTypes.Int32);
+        var countSlot = _lowering.State.Builder.AllocScratch(StorageTypes.Int32);
         _lowering.EmitAssign(countSlot, zeroConst);
-        var idx1Slot = _lowering.Context.Builder.AllocScratch(StorageTypes.Int32);
+        var idx1Slot = _lowering.State.Builder.AllocScratch(StorageTypes.Int32);
         _lowering.EmitAssign(idx1Slot, zeroConst);
 
         // while (idx1 < len) — Func overload (re-evaluate each iteration); CLeaf would evaluate idx1<len once.
@@ -798,9 +798,9 @@ public partial class InvocationHandler
             StorageTypes.ComponentArray);
 
         // === Pass 2: Fill result array ===
-        var idx2Slot = _lowering.Context.Builder.AllocScratch(StorageTypes.Int32);
+        var idx2Slot = _lowering.State.Builder.AllocScratch(StorageTypes.Int32);
         _lowering.EmitAssign(idx2Slot, zeroConst);
-        var writeIdxSlot = _lowering.Context.Builder.AllocScratch(StorageTypes.Int32);
+        var writeIdxSlot = _lowering.State.Builder.AllocScratch(StorageTypes.Int32);
         _lowering.EmitAssign(writeIdxSlot, zeroConst);
 
         // while (idx2 < len) — Func overload (re-evaluate each iteration); CLeaf would evaluate idx2<len once.
@@ -1034,7 +1034,7 @@ public partial class InvocationHandler
         // (`return M(m-1, ref w);` — a tail call) bypassed the reject and silently corrupted the
         // outer frame's copy-back (VM-proven 21021 vs CLR 9021). Self-threading stays legal and
         // tail (no new spills).
-        bool recursiveEdge = _lowering.Context.RecursionContext.IsCycleEdge(_lowering.CurrentMethod, target);
+        bool recursiveEdge = _lowering.State.RecursionContext.IsCycleEdge(_lowering.CurrentMethod, target);
         List<ISymbol> refRoots = null;
         for (int i = 0; i < arguments.Count; i++)
         {
@@ -1076,7 +1076,7 @@ public partial class InvocationHandler
             // reverts the callee's direct field writes (VM-proven 19 vs CLR 59 / 1 vs 5). Loud per
             // §8-3. Callees that never touch the field keep the pinned convention (Inc/Swap).
             var aliasedField = LoweringServices.TryGetThisRootedRefStorage(a);
-            if (aliasedField != null && _lowering.Context.RecursionContext.CalleeTouchesThisField(target, aliasedField))
+            if (aliasedField != null && _lowering.State.RecursionContext.CalleeTouchesThisField(target, aliasedField))
                 throw new System.NotSupportedException(
                     $"'{p.RefKind.ToString().ToLowerInvariant()} {p.Name}' of '{target.Name}' is passed "
                     + $"this-field '{aliasedField.Name}', which the callee (or a method it calls) also "
@@ -1127,13 +1127,13 @@ public partial class InvocationHandler
             // GetCalleeLayout/EmitCallToMethod — the definition-keyed map no longer holds closures).
             string[] paramIds;
             if (target.MethodKind is MethodKind.LambdaMethod or MethodKind.LocalFunction
-                && _lowering.Context.Methods.TryGetClosureSpec(target, _lowering.Context.ComposeClosureKeyArgs(target), out var refClosure))
+                && _lowering.State.Methods.TryGetClosureSpec(target, _lowering.State.ComposeClosureKeyArgs(target), out var refClosure))
                 paramIds = refClosure.ParamVarIds;
             else
                 paramIds = _lowering.MethodParamVarIds[target]; // loud (KeyNotFound) if unregistered
             var argTarget = arguments[i].Value;
             var paramId = paramIds[param.Ordinal + ordinalOffset];
-            var paramType = _lowering.Context.Storage.GetFieldType(paramId);
+            var paramType = _lowering.State.Storage.GetFieldType(paramId);
             var paramVal = _lowering.LoadField(paramId, paramType.Value);
             // Wave-9 round-8 [Y12]: a copy-back whose lvalue legs were evaluated at copy-in
             // (TryPrepareRefOutArg) stores through those SAME legs — AssignToTarget would
@@ -1173,7 +1173,7 @@ public partial class InvocationHandler
             // the callee's param field (a null CValue is a CoreVerify ICE — M4 wave L1s_r2_c11), and
             // the callee overwrites an out param before any read, so a fresh scratch is sound.
             case IDiscardOperation discard:
-                return (() => _lowering.SlotRef(_lowering.Context.Builder.AllocScratch(_lowering.GetStorageType(discard.Type))), _ => { });
+                return (() => _lowering.SlotRef(_lowering.State.Builder.AllocScratch(_lowering.GetStorageType(discard.Type))), _ => { });
             // N-dim array element (design 2026-07-04 §2): lift the single-index exclusion below —
             // PrepareNdimRefOutArg evaluates every index once and caches the bounds/backing/flat-index
             // plan, mirroring the single-index arm's (arrayVal, indexVal) caching.
@@ -1196,7 +1196,7 @@ public partial class InvocationHandler
                     CLeaf elemVal = _lowering.ExternCall(UdonAbi.ArrayGet(arrayType, elementType),
                         new List<CLeaf> { arrayVal, indexVal }, _lowering.GetStorageType(arrayElem.Type));
                     if (arrayElem.Type is INamedTypeSymbol elemAgg && TypeClassifier.IsAggregateValue(elemAgg))
-                        elemVal = AggregateAbi.DeepClone(_lowering.Builder, elemVal, elemAgg, _lowering.Context.Aggregates.GetLayout);
+                        elemVal = AggregateAbi.DeepClone(_lowering.Builder, elemVal, elemAgg, _lowering.State.Aggregates.GetLayout);
                     return elemVal;
                 }, v => _lowering.EmitExternVoid(
                     UdonAbi.ArraySet(arrayType, elementType),
@@ -1206,14 +1206,14 @@ public partial class InvocationHandler
                 when AggregateAbi.TryGetMemberTarget(fieldRef, out var aggInstance, out var aggMember)
                      && aggInstance.Type is INamedTypeSymbol aggContaining
                      && TypeClassifier.IsAggregateValue(aggContaining)
-                     && _lowering.Context.Aggregates.GetLayout(aggContaining).TryGetIndex(aggMember, out var memberIndex):
+                     && _lowering.State.Aggregates.GetLayout(aggContaining).TryGetIndex(aggMember, out var memberIndex):
             {
                 var arrExpr = _lowering.LoadInstanceRaw(aggInstance);
                 return (() =>
                 {
                     CLeaf memberVal = AggregateAbi.ReadSlot(_lowering.Builder, arrExpr, memberIndex, StorageTypes.Object);
                     if (fieldRef.Field.Type is INamedTypeSymbol memberAgg && TypeClassifier.IsAggregateValue(memberAgg))
-                        memberVal = AggregateAbi.DeepClone(_lowering.Builder, memberVal, memberAgg, _lowering.Context.Aggregates.GetLayout);
+                        memberVal = AggregateAbi.DeepClone(_lowering.Builder, memberVal, memberAgg, _lowering.State.Aggregates.GetLayout);
                     return memberVal;
                 }, v => AggregateAbi.WriteSlot(_lowering.Builder, arrExpr, memberIndex, v));
             }
@@ -1230,7 +1230,7 @@ public partial class InvocationHandler
                      && ExternResolver.IsUdonSharpBehaviour(behField.Field.ContainingType):
             {
                 var instanceVal = _lowering.VisitExpression(behField.Instance);
-                var instSlot = _lowering.Context.Builder.AllocScratch(_lowering.GetStorageType(behField.Instance.Type));
+                var instSlot = _lowering.State.Builder.AllocScratch(_lowering.GetStorageType(behField.Instance.Type));
                 _lowering.EmitAssign(instSlot, instanceVal);
                 var instRef = _lowering.SlotRef(instSlot);
                 var fieldType = _lowering.GetStorageType(behField.Field.Type);
@@ -1244,27 +1244,27 @@ public partial class InvocationHandler
             // variable reference has no side-effecting legs to double-evaluate; route through the same
             // env cell EnvEmit.Read/Write use elsewhere so this shape shares the ONE prepared mechanism
             // instead of a second read-then-AssignToLValue path.
-            case ILocalReferenceOperation envLocalRef when _lowering.Context.Closures.TryGetEnvBinding(envLocalRef.Local, out _):
+            case ILocalReferenceOperation envLocalRef when _lowering.State.Closures.TryGetEnvBinding(envLocalRef.Local, out _):
             {
                 var envType = _lowering.GetStorageTypeName(envLocalRef.Type);
-                return (() => EnvEmit.Read(_lowering.Builder, _lowering.Context, envLocalRef.Local, new StorageType(envType)),
-                    v => EnvEmit.Write(_lowering.Builder, _lowering.Context, envLocalRef.Local, v));
+                return (() => EnvEmit.Read(_lowering.Builder, _lowering.State, envLocalRef.Local, new StorageType(envType)),
+                    v => EnvEmit.Write(_lowering.Builder, _lowering.State, envLocalRef.Local, v));
             }
-            case IParameterReferenceOperation envParamRef when _lowering.Context.Closures.TryGetEnvBinding(envParamRef.Parameter, out _):
+            case IParameterReferenceOperation envParamRef when _lowering.State.Closures.TryGetEnvBinding(envParamRef.Parameter, out _):
             {
                 var envType = _lowering.GetStorageTypeName(envParamRef.Type);
-                return (() => EnvEmit.Read(_lowering.Builder, _lowering.Context, envParamRef.Parameter, new StorageType(envType)),
-                    v => EnvEmit.Write(_lowering.Builder, _lowering.Context, envParamRef.Parameter, v));
+                return (() => EnvEmit.Read(_lowering.Builder, _lowering.State, envParamRef.Parameter, new StorageType(envType)),
+                    v => EnvEmit.Write(_lowering.Builder, _lowering.State, envParamRef.Parameter, v));
             }
             // `out var x` declaring a captured local: same env-cell routing (the read side is never
             // invoked for an Out param, kept for symmetry with the Ref cases above).
             case IDeclarationExpressionOperation declExpr
                 when declExpr.Expression is ILocalReferenceOperation declLocal
-                     && _lowering.Context.Closures.TryGetEnvBinding(declLocal.Local, out _):
+                     && _lowering.State.Closures.TryGetEnvBinding(declLocal.Local, out _):
             {
                 var envType = _lowering.GetStorageTypeName(declLocal.Type);
-                return (() => EnvEmit.Read(_lowering.Builder, _lowering.Context, declLocal.Local, new StorageType(envType)),
-                    v => EnvEmit.Write(_lowering.Builder, _lowering.Context, declLocal.Local, v));
+                return (() => EnvEmit.Read(_lowering.Builder, _lowering.State, declLocal.Local, new StorageType(envType)),
+                    v => EnvEmit.Write(_lowering.Builder, _lowering.State, declLocal.Local, v));
             }
         }
         return null;
@@ -1399,7 +1399,7 @@ public partial class InvocationHandler
         // trailing REAL argument (positional copy-in binds it to the callee's __envp param field) —
         // env resolved in the caller's frame via the binding-scope chain. Tail/spill classification
         // treats it like any argument (no new statement-form tail shape).
-        if (_lowering.Context.Closures.CaptureScope != null && _lowering.Context.Closures.CaptureScope.IsCapturingClosure(target.OriginalDefinition))
+        if (_lowering.State.Closures.CaptureScope != null && _lowering.State.Closures.CaptureScope.IsCapturingClosure(target.OriginalDefinition))
             args.Add(_lowering.ClosureEnvLeaf(target));
 
         // Under A-normal form EmitCallToMethod already materialized the call (a non-void call returns a CSlotRef
@@ -1439,20 +1439,20 @@ public partial class InvocationHandler
             // the caller's generic path stages a temp and copies back through the lvalue-store arms
             // (which route captured symbols into their env cells).
             case ILocalReferenceOperation localRef:
-                if (_lowering.Context.Closures.TryGetEnvBinding(localRef.Local, out _)) return null;
+                if (_lowering.State.Closures.TryGetEnvBinding(localRef.Local, out _)) return null;
                 return _lowering.LocalBindings.TryGetValue(localRef.Local, out var rb) ? rb.Id : null;
             case IFieldReferenceOperation { Instance: IInstanceReferenceOperation } fieldRef:
-                return _lowering.Context.SourceStorageName(fieldRef.Field);
+                return _lowering.State.SourceStorageName(fieldRef.Field);
             case IParameterReferenceOperation paramRef:
-                if (_lowering.Context.Closures.TryGetEnvBinding(paramRef.Parameter, out _)) return null;
+                if (_lowering.State.Closures.TryGetEnvBinding(paramRef.Parameter, out _)) return null;
                 return _lowering.GetParamVarId(paramRef.Parameter);
             case IDeclarationExpressionOperation declExpr:
                 if (declExpr.Expression is ILocalReferenceOperation declLocal)
                 {
-                    if (_lowering.Context.Closures.TryGetEnvBinding(declLocal.Local, out _)) return null;
+                    if (_lowering.State.Closures.TryGetEnvBinding(declLocal.Local, out _)) return null;
                     var type = _lowering.GetStorageTypeName(declLocal.Type);
-                    var localId = _lowering.Context.Storage.DeclareLocal(declLocal.Local.Name, new StorageType(type));
-                    _lowering.LocalBindings[declLocal.Local] = new EmitContext.LocalBinding(localId);
+                    var localId = _lowering.State.Storage.DeclareLocal(declLocal.Local.Name, new StorageType(type));
+                    _lowering.LocalBindings[declLocal.Local] = new LocalBinding(localId);
                     return localId;
                 }
                 return null;
@@ -1540,13 +1540,13 @@ public partial class InvocationHandler
             paramTypeOverride = nonGenericPts;
         }
 
-        if (_lowering.Context.Abi.TryBindMethod(
+        if (_lowering.State.Abi.TryBindMethod(
                 method, containingType, type => _lowering.GetStorageTypeName(type),
                 paramTypeOverride, out var bound))
             return bound;
         if (allowMissing)
             return null;
-        return _lowering.Context.Abi.BindMethod(
+        return _lowering.State.Abi.BindMethod(
             method, containingType, type => _lowering.GetStorageTypeName(type), paramTypeOverride);
     }
 }

@@ -4,6 +4,18 @@ using System.Collections.Immutable;
 using System.Linq;
 using Microsoft.CodeAnalysis;
 
+public readonly struct MethodSlot
+{
+    public readonly int Index;
+    public readonly string VarPrefix;
+
+    public MethodSlot(int index, string varPrefix)
+    {
+        Index = index;
+        VarPrefix = varPrefix;
+    }
+}
+
 /// <summary>
 /// Owns per-method emission bookkeeping for one class emission.
 /// </summary>
@@ -16,7 +28,7 @@ public sealed class MethodContext
     {
         public readonly IMethodSymbol Definition;
         public readonly StructuredFunction Function;
-        public readonly EmitContext.MethodSlot Slot;
+        public readonly MethodSlot Slot;
         public readonly string[] ParamVarIds;
         public readonly ReturnSlot[] ReturnSlots;
         public readonly MethodLayout Layout;
@@ -26,7 +38,7 @@ public sealed class MethodContext
         public readonly IMethodSymbol TargetDefinition;
 
         public RegisteredCallable(IMethodSymbol definition, StructuredFunction function,
-            EmitContext.MethodSlot slot, string[] paramVarIds, ReturnSlot[] returnSlots,
+            MethodSlot slot, string[] paramVarIds, ReturnSlot[] returnSlots,
             ReceiverAbi receiver, CallableKind kind, string name,
             MethodLayout layout = null, IMethodSymbol targetDefinition = null)
         {
@@ -49,14 +61,14 @@ public sealed class MethodContext
     public IReadOnlyDictionary<IMethodSymbol, RegisteredCallable> Callables => _callables;
     public IReadOnlyDictionary<string, RegisteredCallable> SyntheticCallables => _syntheticCallables;
     public IReadOnlyDictionary<IMethodSymbol, StructuredFunction> Functions { get; }
-    public IReadOnlyDictionary<IMethodSymbol, EmitContext.MethodSlot> Slots { get; }
+    public IReadOnlyDictionary<IMethodSymbol, MethodSlot> Slots { get; }
     public IReadOnlyDictionary<IMethodSymbol, ReturnSlot[]> Returns { get; }
     public IReadOnlyDictionary<IMethodSymbol, string[]> ParamVarIds { get; }
 
     public MethodContext()
     {
         Functions = new CallableProjection<StructuredFunction>(_callables, c => c.Function);
-        Slots = new CallableProjection<EmitContext.MethodSlot>(_callables, c => c.Slot);
+        Slots = new CallableProjection<MethodSlot>(_callables, c => c.Slot);
         Returns = new CallableProjection<ReturnSlot[]>(_callables, c => c.ReturnSlots,
             c => c.ReturnSlots.Length > 0);
         ParamVarIds = new CallableProjection<string[]>(_callables, c => c.ParamVarIds);
@@ -70,14 +82,14 @@ public sealed class MethodContext
 
     public int NextMethodIndex;
 
-    public EmitContext.MethodSlot Reserve(Func<int, string> prefixFactory)
+    public MethodSlot Reserve(Func<int, string> prefixFactory)
     {
         var idx = NextMethodIndex++;
-        return new EmitContext.MethodSlot(idx, prefixFactory(idx));
+        return new MethodSlot(idx, prefixFactory(idx));
     }
 
     public RegisteredCallable AddCallable(IMethodSymbol method, StructuredFunction function,
-        EmitContext.MethodSlot slot, string[] paramVarIds, ReturnSlot[] returnSlots,
+        MethodSlot slot, string[] paramVarIds, ReturnSlot[] returnSlots,
         ReceiverAbi receiver = ReceiverAbi.None, MethodLayout layout = null)
     {
         if (method == null || function == null || paramVarIds == null || returnSlots == null)
@@ -156,7 +168,7 @@ public sealed class MethodContext
         public readonly ImmutableArray<IMethodSymbol> OwnerSpecs;
         public readonly string EnvpFieldId;
 
-        public ClosureSpec(IMethodSymbol definition, StructuredFunction function, EmitContext.MethodSlot slot,
+        public ClosureSpec(IMethodSymbol definition, StructuredFunction function, MethodSlot slot,
             string[] paramVarIds, ReturnSlot[] returnSlots, ImmutableArray<ITypeSymbol> keyArgs,
             ImmutableArray<IMethodSymbol> ownerSpecs, string envpFieldId)
             : base(definition, function, slot, paramVarIds, returnSlots, ReceiverAbi.None,
@@ -328,7 +340,7 @@ public sealed class MethodContext
 
     public ClosureSpec AddClosureCallable(IMethodSymbol definition,
         ImmutableArray<ITypeSymbol> keyArgs, ImmutableArray<IMethodSymbol> ownerSpecs,
-        StructuredFunction function, EmitContext.MethodSlot slot, string[] paramVarIds,
+        StructuredFunction function, MethodSlot slot, string[] paramVarIds,
         ReturnSlot[] returnSlots, string envpFieldId)
     {
         if (definition == null || function == null || paramVarIds == null || returnSlots == null)

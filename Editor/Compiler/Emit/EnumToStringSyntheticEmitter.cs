@@ -4,11 +4,11 @@ using Microsoft.CodeAnalysis;
 /// <summary>Emits value-to-name helpers for reached user-enum ToString operations.</summary>
 public sealed class EnumToStringSyntheticEmitter
 {
-    readonly EmitContext _context;
+    readonly LoweringState _context;
     readonly SyntheticBridgeBuilder _bridge;
     readonly SyntheticDemandPlan _demands;
 
-    internal EnumToStringSyntheticEmitter(EmitContext context, SyntheticBridgeBuilder bridge,
+    internal EnumToStringSyntheticEmitter(LoweringState context, SyntheticBridgeBuilder bridge,
         SyntheticDemandPlan demands)
     {
         _context = context;

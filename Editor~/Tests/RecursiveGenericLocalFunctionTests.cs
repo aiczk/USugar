@@ -6,7 +6,7 @@ namespace USugar.Tests;
 // the REGISTRAR own spec dimension, so a self-/mutually-recursive generic local function re-composed
 // its own args on every hop -- every lookup missed, the pending drain re-registered forever, and the
 // compile HUNG (empirically reproduced). Fixed by deriving key args from the closure LEXICAL
-// enclosing chain (EmitContext.ComposeClosureKeyArgs); these pins hold the door shut.
+// enclosing chain (LoweringState.ComposeClosureKeyArgs); these pins hold the door shut.
 public class RecursiveGenericLocalFunctionTests
 {
     [Fact]

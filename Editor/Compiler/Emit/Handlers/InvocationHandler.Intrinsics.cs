@@ -136,14 +136,14 @@ public partial class InvocationHandler
                 + $"'{target.Parameters[0].Type.ToDisplayString()}' lowers to '{arguments[0].Type}'.");
 
         var instantiated = _lowering.ExternCall(
-            _lowering.Context.Abi.BindExact(InstantiateGameObjectExtern),
+            _lowering.State.Abi.BindExact(InstantiateGameObjectExtern),
             new List<CLeaf> { arguments[0] },
             StorageTypes.GameObject);
 
         if (arguments.Count > 1)
         {
             var transform = _lowering.ExternCall(
-                _lowering.Context.Abi.BindExact(GameObjectTransformGetter),
+                _lowering.State.Abi.BindExact(GameObjectTransformGetter),
                 new List<CLeaf> { instantiated },
                 StorageTypes.Transform);
 
@@ -181,11 +181,11 @@ public partial class InvocationHandler
 
     void EmitSetParent(CLeaf transform, CLeaf parent, CLeaf worldPositionStays)
         => _lowering.EmitExternVoid(
-            _lowering.Context.Abi.BindExact(TransformSetParent),
+            _lowering.State.Abi.BindExact(TransformSetParent),
             new List<CLeaf> { transform, parent, worldPositionStays });
 
     void EmitSetPositionAndRotation(CLeaf transform, CLeaf position, CLeaf rotation)
         => _lowering.EmitExternVoid(
-            _lowering.Context.Abi.BindExact(TransformSetPositionAndRotation),
+            _lowering.State.Abi.BindExact(TransformSetPositionAndRotation),
             new List<CLeaf> { transform, position, rotation });
 }

@@ -34,11 +34,11 @@ public class SwitchHandler : IOperationHandler
         // Stage 2 §3: one Switch env per switch (shared by all sections), allocated before any case
         // pattern/section local is written — a case-label pattern var is bound while the case
         // CONDITION is built (below), so the env cell must already exist.
-        EnvEmit.Alloc(_lowering.Builder, _lowering.Context, _lowering.Context.Closures.CaptureScope?.ScopeFor(op, CaptureScopeKind.Switch));
+        EnvEmit.Alloc(_lowering.Builder, _lowering.State, _lowering.State.Closures.CaptureScope?.ScopeFor(op, CaptureScopeKind.Switch));
 
-        var endLabel = _lowering.Context.ControlFlow.NextSwitchEndLabel();
-        _lowering.Context.ControlFlow.SwitchBreakLabels.Push(endLabel);
-        _lowering.Context.ControlFlow.LoopUsingDepthStack.Push(_lowering.UsingDisposableStack.Count);
+        var endLabel = _lowering.State.ControlFlow.NextSwitchEndLabel();
+        _lowering.State.ControlFlow.SwitchBreakLabels.Push(endLabel);
+        _lowering.State.ControlFlow.LoopUsingDepthStack.Push(_lowering.UsingDisposableStack.Count);
         // Build a per-switch map: Roslyn goto-case/-default target name → sanitized UASM landing label. Only
         // targeted cases get a label (a switch with no goto-case keeps byte-identical UASM). Sorted for
         // determinism; labels derive from this switch's unique end-label counter.
@@ -49,7 +49,7 @@ public class SwitchHandler : IOperationHandler
         int gi = 0;
         foreach (var name in gotoTargets.OrderBy(n => n, System.StringComparer.Ordinal))
             labelMap[name] = $"{labelBase}_{gi++}";
-        _lowering.Context.ControlFlow.GotoCaseLabels.Push(labelMap);
+        _lowering.State.ControlFlow.GotoCaseLabels.Push(labelMap);
         try
         {
             // Pre-convert enum switch value once (Udon VM has no enum-typed operators)
@@ -66,9 +66,9 @@ public class SwitchHandler : IOperationHandler
         }
         finally
         {
-            _lowering.Context.ControlFlow.GotoCaseLabels.Pop();
-            _lowering.Context.ControlFlow.LoopUsingDepthStack.Pop();
-            _lowering.Context.ControlFlow.SwitchBreakLabels.Pop();
+            _lowering.State.ControlFlow.GotoCaseLabels.Pop();
+            _lowering.State.ControlFlow.LoopUsingDepthStack.Pop();
+            _lowering.State.ControlFlow.SwitchBreakLabels.Pop();
         }
         _lowering.Builder.EmitLabel(endLabel);
     }
@@ -200,7 +200,7 @@ public class SwitchHandler : IOperationHandler
                     // guard even when the pattern did not match, and the guard reads the pattern-bound
                     // variable (e.g. `d.id` where `d` is only validly bound on a match) → a null-bundle
                     // read → VmFault. Evaluate the guard ONLY inside the matched branch.
-                    var guarded = _lowering.Context.Builder.AllocScratch(StorageTypes.Boolean);
+                    var guarded = _lowering.State.Builder.AllocScratch(StorageTypes.Boolean);
                     _lowering.EmitAssign(guarded, _lowering.Const(false, StorageTypes.Boolean));
                     _lowering.Builder.EmitIf(cond, _ => _lowering.EmitAssign(guarded, _lowering.VisitExpression(patternCase.Guard)));
                     cond = _lowering.SlotRef(guarded);
@@ -218,9 +218,9 @@ public class SwitchHandler : IOperationHandler
         // landing label before the body; StatementHandler.VisitBranch resolves the goto through the same map.
         // Only emitted when targeted, so a switch without goto-case is unchanged. Roslyn names the targets
         // "case <const>:" and "default".
-        if (_lowering.Context.ControlFlow.GotoCaseLabels.Count > 0 && _lowering.Context.ControlFlow.GotoCaseLabels.Peek().Count > 0)
+        if (_lowering.State.ControlFlow.GotoCaseLabels.Count > 0 && _lowering.State.ControlFlow.GotoCaseLabels.Peek().Count > 0)
         {
-            var map = _lowering.Context.ControlFlow.GotoCaseLabels.Peek();
+            var map = _lowering.State.ControlFlow.GotoCaseLabels.Peek();
             foreach (var clause in caseSection.Clauses)
             {
                 string roslynName = clause switch

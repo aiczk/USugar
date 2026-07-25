@@ -4,12 +4,12 @@ using Microsoft.CodeAnalysis;
 /// <summary>Emits plain delegate bridges and variance signature adapters.</summary>
 public sealed class DelegateBridgeEmitter
 {
-    readonly EmitContext _context;
+    readonly LoweringState _context;
     readonly SyntheticBridgeBuilder _bridge;
     readonly DelegateConventionStorage _convention;
     readonly SyntheticDemandPlan _demands;
 
-    internal DelegateBridgeEmitter(EmitContext context, SyntheticBridgeBuilder bridge,
+    internal DelegateBridgeEmitter(LoweringState context, SyntheticBridgeBuilder bridge,
         DelegateConventionStorage convention, SyntheticDemandPlan demands)
     {
         _context = context;

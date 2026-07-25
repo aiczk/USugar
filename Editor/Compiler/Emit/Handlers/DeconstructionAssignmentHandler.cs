@@ -99,7 +99,7 @@ public class DeconstructionAssignmentHandler : AssignmentHandlerBase, IOperation
                 {
                     var raw = AggregateAbi.ReadSlot(_lowering.Builder, dlgResult, i, StorageTypes.Object);
                     dlgSnaps.Add(AggregateAbi.CloneIfAggregate(_lowering.Builder, raw,
-                        _lowering.ResolveType(targetTuple.Elements[i].Type), _lowering.Context.Aggregates.GetLayout));
+                        _lowering.ResolveType(targetTuple.Elements[i].Type), _lowering.State.Aggregates.GetLayout));
                 }
                 for (int i = 0; i < targetTuple.Elements.Length; i++)
                     _lowering.AssignToLValue(targetTuple.Elements[i], dlgSnaps[i], prepared);
@@ -119,7 +119,7 @@ public class DeconstructionAssignmentHandler : AssignmentHandlerBase, IOperation
                 {
                     var raw = AggregateAbi.ReadSlot(_lowering.Builder, arrVal, i, StorageTypes.Object);
                     snaps.Add(AggregateAbi.CloneIfAggregate(_lowering.Builder, raw,
-                        _lowering.ResolveType(targetTuple.Elements[i].Type), _lowering.Context.Aggregates.GetLayout));
+                        _lowering.ResolveType(targetTuple.Elements[i].Type), _lowering.State.Aggregates.GetLayout));
                 }
                 for (int i = 0; i < targetTuple.Elements.Length; i++)
                     _lowering.AssignToLValue(targetTuple.Elements[i], snaps[i], prepared);
@@ -213,7 +213,7 @@ public class DeconstructionAssignmentHandler : AssignmentHandlerBase, IOperation
                         // return-site materialization being fresh, an invariant enforced nowhere.
                         var elemVal = AggregateAbi.CloneIfAggregate(_lowering.Builder,
                             AggregateAbi.ReadSlot(_lowering.Builder, arrExpr, i, StorageTypes.Object),
-                            _lowering.ResolveType(targetTuple.Elements[i].Type), _lowering.Context.Aggregates.GetLayout);
+                            _lowering.ResolveType(targetTuple.Elements[i].Type), _lowering.State.Aggregates.GetLayout);
                         _lowering.AssignToLValue(targetTuple.Elements[i], elemVal, prepared);
                     }
                 }
@@ -308,7 +308,7 @@ public class DeconstructionAssignmentHandler : AssignmentHandlerBase, IOperation
             else
             {
                 _lowering.RejectUnsafeCrossProgramDelegateWrite(
-                    UnwrapDeclaration(targets.Elements[i]), _lowering.Context.Boundary.ClassifyValue(component));
+                    UnwrapDeclaration(targets.Elements[i]), _lowering.State.Boundary.ClassifyValue(component));
                 _lowering.AssignToLValue(targets.Elements[i], snapshots[component], prepared);
             }
         }
@@ -371,7 +371,7 @@ public class DeconstructionAssignmentHandler : AssignmentHandlerBase, IOperation
                 // CW29: same clone rule as the sibling arms (see the same-class call arm).
                 var elemVal = AggregateAbi.CloneIfAggregate(_lowering.Builder,
                     AggregateAbi.ReadSlot(_lowering.Builder, arrVal, i, StorageTypes.Object),
-                    _lowering.ResolveType(targetTuple.Elements[i].Type), _lowering.Context.Aggregates.GetLayout);
+                    _lowering.ResolveType(targetTuple.Elements[i].Type), _lowering.State.Aggregates.GetLayout);
                 _lowering.AssignToLValue(targetTuple.Elements[i], elemVal, prepared);
             }
         }

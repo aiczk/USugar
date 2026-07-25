@@ -8,7 +8,7 @@ public sealed class SyntheticBridgeBuilder
 
     public SyntheticBridgeBuilder(CoreBuilder builder) => _builder = builder;
 
-    public void Emit(EmitContext context, BridgePlan plan, Action body)
+    public void Emit(LoweringState context, BridgePlan plan, Action body)
     {
         if (context == null) throw new ArgumentNullException(nameof(context));
         if (plan == null) throw new ArgumentNullException(nameof(plan));

@@ -31,20 +31,20 @@ public class LoopHandler : IOperationHandler
             // so a captured out-var/pattern in the condition writes into a live per-iteration env.
             _lowering.Builder.EmitWhile(() =>
             {
-                EnvEmit.Alloc(_lowering.Builder, _lowering.Context, _lowering.Context.Closures.CaptureScope?.ScopeFor(op, CaptureScopeKind.Iteration));
+                EnvEmit.Alloc(_lowering.Builder, _lowering.State, _lowering.State.Closures.CaptureScope?.ScopeFor(op, CaptureScopeKind.Iteration));
                 return _lowering.VisitExpression(op.Condition);
             }, _ =>
             {
-                _lowering.Context.ControlFlow.SwitchBreakLabels.Push(null); // sentinel: loop break should not target switch
+                _lowering.State.ControlFlow.SwitchBreakLabels.Push(null); // sentinel: loop break should not target switch
                 try
                 {
-                    _lowering.Context.ControlFlow.LoopUsingDepthStack.Push(_lowering.UsingDisposableStack.Count);
+                    _lowering.State.ControlFlow.LoopUsingDepthStack.Push(_lowering.UsingDisposableStack.Count);
                     _lowering.VisitOperation(op.Body);
-                    _lowering.Context.ControlFlow.LoopUsingDepthStack.Pop();
+                    _lowering.State.ControlFlow.LoopUsingDepthStack.Pop();
                 }
                 finally
                 {
-                    _lowering.Context.ControlFlow.SwitchBreakLabels.Pop();
+                    _lowering.State.ControlFlow.SwitchBreakLabels.Pop();
                 }
             });
         }
@@ -55,17 +55,17 @@ public class LoopHandler : IOperationHandler
             // captures and any closure the (later) condition creates over an Iteration-scoped var.
             _lowering.Builder.EmitWhile(() => _lowering.VisitExpression(op.Condition), _ =>
             {
-                EnvEmit.Alloc(_lowering.Builder, _lowering.Context, _lowering.Context.Closures.CaptureScope?.ScopeFor(op, CaptureScopeKind.Iteration));
-                _lowering.Context.ControlFlow.SwitchBreakLabels.Push(null); // sentinel: loop break should not target switch
+                EnvEmit.Alloc(_lowering.Builder, _lowering.State, _lowering.State.Closures.CaptureScope?.ScopeFor(op, CaptureScopeKind.Iteration));
+                _lowering.State.ControlFlow.SwitchBreakLabels.Push(null); // sentinel: loop break should not target switch
                 try
                 {
-                    _lowering.Context.ControlFlow.LoopUsingDepthStack.Push(_lowering.UsingDisposableStack.Count);
+                    _lowering.State.ControlFlow.LoopUsingDepthStack.Push(_lowering.UsingDisposableStack.Count);
                     _lowering.VisitOperation(op.Body);
-                    _lowering.Context.ControlFlow.LoopUsingDepthStack.Pop();
+                    _lowering.State.ControlFlow.LoopUsingDepthStack.Pop();
                 }
                 finally
                 {
-                    _lowering.Context.ControlFlow.SwitchBreakLabels.Pop();
+                    _lowering.State.ControlFlow.SwitchBreakLabels.Pop();
                 }
             }, isDoWhile: true);
         }
@@ -80,7 +80,7 @@ public class LoopHandler : IOperationHandler
                 // init-clause declarations write their captured loop vars into it. A captured
                 // `for (int i…)` variable therefore shares ONE cell across all iterations — the
                 // classic C# for-loop capture semantics (every lambda sees the final i).
-                EnvEmit.Alloc(_lowering.Builder, _lowering.Context, _lowering.Context.Closures.CaptureScope?.ScopeFor(op, CaptureScopeKind.ForInit));
+                EnvEmit.Alloc(_lowering.Builder, _lowering.State, _lowering.State.Closures.CaptureScope?.ScopeFor(op, CaptureScopeKind.ForInit));
                 // Init: variable declarations register locals in _localBindings
                 foreach (var init in op.Before)
                     _lowering.VisitOperation(init);
@@ -92,7 +92,7 @@ public class LoopHandler : IOperationHandler
             // body-declared captured local still gets its per-iteration freshness.
             () =>
             {
-                EnvEmit.Alloc(_lowering.Builder, _lowering.Context, _lowering.Context.Closures.CaptureScope?.ScopeFor(op, CaptureScopeKind.Iteration));
+                EnvEmit.Alloc(_lowering.Builder, _lowering.State, _lowering.State.Closures.CaptureScope?.ScopeFor(op, CaptureScopeKind.Iteration));
                 return op.Condition != null ? _lowering.VisitExpression(op.Condition) : null;
             },
             _ =>
@@ -104,16 +104,16 @@ public class LoopHandler : IOperationHandler
             _ =>
             {
                 // Body
-                _lowering.Context.ControlFlow.SwitchBreakLabels.Push(null); // sentinel: loop break should not target switch
+                _lowering.State.ControlFlow.SwitchBreakLabels.Push(null); // sentinel: loop break should not target switch
                 try
                 {
-                    _lowering.Context.ControlFlow.LoopUsingDepthStack.Push(_lowering.UsingDisposableStack.Count);
+                    _lowering.State.ControlFlow.LoopUsingDepthStack.Push(_lowering.UsingDisposableStack.Count);
                     _lowering.VisitOperation(op.Body);
-                    _lowering.Context.ControlFlow.LoopUsingDepthStack.Pop();
+                    _lowering.State.ControlFlow.LoopUsingDepthStack.Pop();
                 }
                 finally
                 {
-                    _lowering.Context.ControlFlow.SwitchBreakLabels.Pop();
+                    _lowering.State.ControlFlow.SwitchBreakLabels.Pop();
                 }
             });
     }
@@ -151,23 +151,23 @@ public class LoopHandler : IOperationHandler
         // Stage 2 §3: a CAPTURED foreach control var has no flat slot — it is owned by the Iteration
         // scope (fresh per iteration in C#), so its element value is written into the per-iteration
         // env cell at body top (below), not a flat field. Skip the flat bind entirely for it.
-        bool loopVarCaptured = _lowering.Context.Closures.TryGetEnvBinding(loopLocal, out _);
+        bool loopVarCaptured = _lowering.State.Closures.TryGetEnvBinding(loopLocal, out _);
         string loopVarId = null;
         if (!loopVarCaptured)
         {
-            loopVarId = _lowering.Context.Storage.DeclareLocal(loopLocal.Name, new StorageType(elemType));
-            _lowering.LocalBindings[loopLocal] = new EmitContext.LocalBinding(loopVarId);
+            loopVarId = _lowering.State.Storage.DeclareLocal(loopLocal.Name, new StorageType(elemType));
+            _lowering.LocalBindings[loopLocal] = new LocalBinding(loopVarId);
         }
         // [Q4]/[R1] the iteration variable is READONLY in C# — struct method receivers reaching it
         // through a value-typed FIELD link get a defensive clone (EmitStructInstanceCall); a DIRECT
         // method call on the loop local mutates it (Roslyn ldloca — readonly only forbids assignment).
-        _lowering.Context.ForeachIterationLocals.Add(loopLocal);
+        _lowering.State.ForeachIterationLocals.Add(loopLocal);
 
         // Index variable
-        var idxSlot = _lowering.Context.Builder.AllocScratch(StorageTypes.Int32);
+        var idxSlot = _lowering.State.Builder.AllocScratch(StorageTypes.Int32);
 
         // Cache array length before the loop
-        var lenSlot = _lowering.Context.Builder.AllocScratch(StorageTypes.Int32);
+        var lenSlot = _lowering.State.Builder.AllocScratch(StorageTypes.Int32);
         _lowering.EmitAssign(lenSlot, _lowering.ExternCall(UdonAbi.SystemArrayLength,
             new List<CLeaf> { collVal }, StorageTypes.Int32));
 
@@ -196,7 +196,7 @@ public class LoopHandler : IOperationHandler
             {
                 // Stage 2 §3 INV-1: fresh per-iteration Iteration env at body top, BEFORE the control
                 // var's element value is written into its (now-live) env cell.
-                EnvEmit.Alloc(_lowering.Builder, _lowering.Context, _lowering.Context.Closures.CaptureScope?.ScopeFor(op, CaptureScopeKind.Iteration));
+                EnvEmit.Alloc(_lowering.Builder, _lowering.State, _lowering.State.Closures.CaptureScope?.ScopeFor(op, CaptureScopeKind.Iteration));
                 // Body: loopVar = arr[idx]; <body>
                 CLeaf elemVal = _lowering.ExternCall(
                     UdonAbi.ArrayGet(arrayType, elemAccessorType),
@@ -206,22 +206,22 @@ public class LoopHandler : IOperationHandler
                 // raw __Get__ returns the LIVE backing object[]; deep-clone it so mutating the loop variable
                 // does not write through to the array (C# value-copy semantics; mirrors VisitArrayElementReference).
                 if (arrayTypeSymbol.ElementType is INamedTypeSymbol elemAgg && TypeClassifier.IsAggregateValue(elemAgg))
-                    elemVal = AggregateAbi.DeepClone(_lowering.Builder, elemVal, elemAgg, _lowering.Context.Aggregates.GetLayout);
+                    elemVal = AggregateAbi.DeepClone(_lowering.Builder, elemVal, elemAgg, _lowering.State.Aggregates.GetLayout);
                 if (loopVarCaptured)
-                    EnvEmit.Write(_lowering.Builder, _lowering.Context, loopLocal, elemVal);
+                    EnvEmit.Write(_lowering.Builder, _lowering.State, loopLocal, elemVal);
                 else
                     _lowering.EmitStoreField(loopVarId, elemVal);
 
-                _lowering.Context.ControlFlow.SwitchBreakLabels.Push(null); // sentinel: loop break should not target switch
+                _lowering.State.ControlFlow.SwitchBreakLabels.Push(null); // sentinel: loop break should not target switch
                 try
                 {
-                    _lowering.Context.ControlFlow.LoopUsingDepthStack.Push(_lowering.UsingDisposableStack.Count);
+                    _lowering.State.ControlFlow.LoopUsingDepthStack.Push(_lowering.UsingDisposableStack.Count);
                     _lowering.VisitOperation(op.Body);
-                    _lowering.Context.ControlFlow.LoopUsingDepthStack.Pop();
+                    _lowering.State.ControlFlow.LoopUsingDepthStack.Pop();
                 }
                 finally
                 {
-                    _lowering.Context.ControlFlow.SwitchBreakLabels.Pop();
+                    _lowering.State.ControlFlow.SwitchBreakLabels.Pop();
                 }
             });
     }

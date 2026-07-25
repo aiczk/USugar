@@ -17,7 +17,7 @@ namespace USugar.Tests;
 ///      dispatch inside the lambda body saw the inner activation's re-seeded flat slot
 ///      (DiffFuzz ref=60 vs VM 50). The hoisted node's dispatch-site spill set then included its
 ///      READ-ONLY capture cells whose declaring function shares the node's SCC via
-///      EmitContext.HoistedCaptureSpillCells (retired Stage 2 M2 — captures now live in
+///      LoweringState.HoistedCaptureSpillCells (retired Stage 2 M2 — captures now live in
 ///      per-scope env records; reentrant safety comes from the env-ref/`__envp` spill instead,
 ///      see design §6.1/§6.3).
 /// [X3] Same root, capturing LOCAL FUNCTION flavor (direct-invoked; ref=60 vs 50).

@@ -4,10 +4,10 @@ using Microsoft.CodeAnalysis;
 /// <summary>Emits the guarded self/cross-program delegate dispatch ladder.</summary>
 public sealed class DelegateDispatchEmitter
 {
-    readonly EmitContext _ctx;
+    readonly LoweringState _ctx;
     readonly CoreBuilder _builder;
 
-    public DelegateDispatchEmitter(EmitContext context)
+    public DelegateDispatchEmitter(LoweringState context)
     {
         _ctx = context;
         _builder = context.Builder;

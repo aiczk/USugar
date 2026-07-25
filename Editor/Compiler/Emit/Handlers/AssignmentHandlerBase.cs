@@ -126,12 +126,12 @@ public abstract class AssignmentHandlerBase
                 when aggCapPropRef.Instance?.Type is INamedTypeSymbol aggCapPropType
                 && TypeClassifier.IsObjectArrayEmulated(aggCapPropType):
             {
-                if (_lowering.Context.Aggregates.GetLayout(aggCapPropType).TryGetIndex(aggCapPropRef.Property, out var capSlotIdx))
+                if (_lowering.State.Aggregates.GetLayout(aggCapPropType).TryGetIndex(aggCapPropRef.Property, out var capSlotIdx))
                 {
                     var recv = _lowering.LoadInstanceRaw(aggCapPropRef.Instance);
                     CLeaf slotVal = AggregateAbi.ReadSlot(_lowering.Builder, recv, capSlotIdx, StorageTypes.Object);
                     if (aggCapPropRef.Property.Type is INamedTypeSymbol capSlotAgg && TypeClassifier.IsAggregateValue(capSlotAgg))
-                        slotVal = AggregateAbi.DeepClone(_lowering.Builder, slotVal, capSlotAgg, _lowering.Context.Aggregates.GetLayout);
+                        slotVal = AggregateAbi.DeepClone(_lowering.Builder, slotVal, capSlotAgg, _lowering.State.Aggregates.GetLayout);
                     return new LoweringServices.LValuePlan { Value = slotVal, ArrayVal = recv, IndexVal = _lowering.Const(capSlotIdx, StorageTypes.Int32) };
                 }
                 if (aggCapPropRef.Property.GetMethod is { } capGetterRaw)
@@ -139,7 +139,7 @@ public abstract class AssignmentHandlerBase
                     var recv = _lowering.LoadInstanceRaw(aggCapPropRef.Instance);
                     CLeaf getVal = _lowering.EmitCallToMethod(_lowering.ResolveStructMember(capGetterRaw), new List<CLeaf> { recv });
                     if (aggCapPropRef.Property.Type is INamedTypeSymbol capGetAgg && TypeClassifier.IsAggregateValue(capGetAgg))
-                        getVal = AggregateAbi.DeepClone(_lowering.Builder, getVal, capGetAgg, _lowering.Context.Aggregates.GetLayout);
+                        getVal = AggregateAbi.DeepClone(_lowering.Builder, getVal, capGetAgg, _lowering.State.Aggregates.GetLayout);
                     return new LoweringServices.LValuePlan { Value = getVal, ArrayVal = recv };
                 }
                 goto default;
@@ -149,7 +149,7 @@ public abstract class AssignmentHandlerBase
                 && _lowering.ResolveType(aggFieldRef.Instance.Type) is INamedTypeSymbol aggCapType
                 && TypeClassifier.IsObjectArrayEmulated(aggCapType):
             {
-                var layout = _lowering.Context.Aggregates.GetLayout(aggCapType);
+                var layout = _lowering.State.Aggregates.GetLayout(aggCapType);
                 if (layout.TryGetIndex(aggFieldRef.Field, out var elemIdx))
                 {
                     LoweringServices.RejectStaticReadonlyWriteThrough(aggFieldRef.Instance); // §3.3, R5 (compound/inc-dec write-back)
@@ -206,7 +206,7 @@ public abstract class AssignmentHandlerBase
                 var instanceVal = _lowering.VisitExpression(fieldRef2.Instance);
                 var containingType = _lowering.GetStorageTypeName(_lowering.ResolveExternOwnerType(fieldRef2.Field.ContainingType, fieldRef2.Instance?.Type, fieldRef2.Field.Name));
                 var valueType = _lowering.GetStorageTypeName(fieldRef2.Field.Type);
-                var sig = _lowering.Context.Abi.BindPropertyGetter(
+                var sig = _lowering.State.Abi.BindPropertyGetter(
                     containingType, fieldRef2.Field.Name, valueType);
                 var valResult = _lowering.ExternCall(sig, new List<CLeaf> { instanceVal }, new StorageType(valueType));
                 return new LoweringServices.LValuePlan { Value = valResult, InstanceVal = instanceVal };
@@ -234,7 +234,7 @@ public abstract class AssignmentHandlerBase
             var vWbIdx = lv.IndexArgs;
             if (vWbRecv == null)
                 (vWbRecv, vWbIdx) = _lowering.StageAccessorDispatchLegs(vWbRef);
-            var vWbSlot = _lowering.Context.Builder.AllocScratch(_lowering.GetStorageType(vWbRef.Property.Type));
+            var vWbSlot = _lowering.State.Builder.AllocScratch(_lowering.GetStorageType(vWbRef.Property.Type));
             _lowering.EmitAssign(vWbSlot, valueVal);
             _lowering.EmitAccessorDispatch(vWbRef.Property, vWbRecvTy, vWbSetter, vWbRecv,
                 vWbIdx ?? new List<CLeaf>(), _lowering.SlotRef(vWbSlot));
@@ -248,7 +248,7 @@ public abstract class AssignmentHandlerBase
                 && _lowering.ResolveType(aggFieldRef.Instance.Type) is INamedTypeSymbol aggWbType
                 && TypeClassifier.IsObjectArrayEmulated(aggWbType):
             {
-                var layout = _lowering.Context.Aggregates.GetLayout(aggWbType);
+                var layout = _lowering.State.Aggregates.GetLayout(aggWbType);
                 if (layout.TryGetIndex(aggFieldRef.Field, out var elemIdx))
                 {
                     var arrVal = lv.ArrayVal ?? _lowering.VisitExpression(aggFieldRef.Instance);
@@ -389,7 +389,7 @@ public abstract class AssignmentHandlerBase
             case IPropertyReferenceOperation { Property: { IsIndexer: false } } aggPropRef
                 when aggPropRef.Instance?.Type is INamedTypeSymbol aggPropType && TypeClassifier.IsObjectArrayEmulated(aggPropType):
             {
-                if (_lowering.Context.Aggregates.GetLayout(aggPropType).TryGetIndex(aggPropRef.Property, out var propIdx))
+                if (_lowering.State.Aggregates.GetLayout(aggPropType).TryGetIndex(aggPropRef.Property, out var propIdx))
                 {
                     var arrVal = lv.ArrayVal ?? _lowering.LoadInstanceRaw(aggPropRef.Instance);
                     AggregateAbi.WriteSlot(_lowering.Builder, arrVal, propIdx, valueVal);
@@ -451,7 +451,7 @@ public abstract class AssignmentHandlerBase
 
                 CLeaf wbInstanceVal;
                 if (propRef.Instance is IInstanceReferenceOperation)
-                    wbInstanceVal = _lowering.LoadField(_lowering.Context.Storage.DeclareThisOnce(new StorageType(containingType)), new StorageType(containingType));
+                    wbInstanceVal = _lowering.LoadField(_lowering.State.Storage.DeclareThisOnce(new StorageType(containingType)), new StorageType(containingType));
                 else if (propRef.Instance != null)
                     wbInstanceVal = _lowering.VisitExpression(propRef.Instance);
                 else
@@ -459,7 +459,7 @@ public abstract class AssignmentHandlerBase
                     // Static property: no instance
                     var valueType = _lowering.GetStorageTypeName(propRef.Property.Type);
                     _lowering.EmitExternVoid(
-                        _lowering.Context.Abi.BindPropertySetter(
+                        _lowering.State.Abi.BindPropertySetter(
                             containingType, propRef.Property.Name, valueType,
                             hasReceiver: false),
                         new List<CLeaf> { valueVal });
@@ -479,7 +479,7 @@ public abstract class AssignmentHandlerBase
                     indexArgs.Add(valueVal);
                     // Indexer metadata name, not a hardcoded "Item" ([IndexerName] e.g. StringBuilder → "Chars").
                     _lowering.EmitExternVoid(
-                        _lowering.Context.Abi.BindIndexerSetter(
+                        _lowering.State.Abi.BindIndexerSetter(
                             containingType,
                             propRef.Property.MetadataName,
                             indexTypes,
@@ -489,7 +489,7 @@ public abstract class AssignmentHandlerBase
                 else
                 {
                     _lowering.EmitExternVoid(
-                        _lowering.Context.Abi.BindPropertySetter(
+                        _lowering.State.Abi.BindPropertySetter(
                             containingType, propRef.Property.Name, propValueType),
                         new List<CLeaf> { wbInstanceVal, valueVal });
                 }
@@ -502,7 +502,7 @@ public abstract class AssignmentHandlerBase
                 var instanceVal = lv.InstanceVal ?? _lowering.VisitExpression(fieldRef2.Instance);
                 var containingType = _lowering.GetStorageTypeName(_lowering.ResolveExternOwnerType(fieldRef2.Field.ContainingType, fieldRef2.Instance?.Type, fieldRef2.Field.Name));
                 var valueType = _lowering.GetStorageTypeName(fieldRef2.Field.Type);
-                var sig = _lowering.Context.Abi.BindFieldSetter(
+                var sig = _lowering.State.Abi.BindFieldSetter(
                     containingType, fieldRef2.Field.Name, valueType);
                 _lowering.EmitExternVoid(sig, new List<CLeaf> { instanceVal, valueVal });
                 break;
@@ -533,7 +533,7 @@ public abstract class AssignmentHandlerBase
                 throw new System.InvalidOperationException(
                     $"Cannot resolve local variable '{localRef.Local.Name}' for assignment.");
             case IFieldReferenceOperation { Instance: IInstanceReferenceOperation } fieldRef:
-                return _lowering.Context.SourceStorageName(fieldRef.Field);
+                return _lowering.State.SourceStorageName(fieldRef.Field);
             case IFieldReferenceOperation { Instance: null } staticField
                 when StaticOwnerAbi.IsSourceStatic(staticField.Field) && !staticField.Field.IsReadOnly:
                 return StaticOwnerAbi.FieldName(staticField.Field,

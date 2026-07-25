@@ -21,9 +21,9 @@ public enum BoundarySite
 /// </summary>
 public sealed class BoundaryChecker
 {
-    readonly EmitContext _ctx;
+    readonly LoweringState _ctx;
 
-    public BoundaryChecker(EmitContext ctx) => _ctx = ctx ?? throw new ArgumentNullException(nameof(ctx));
+    public BoundaryChecker(LoweringState ctx) => _ctx = ctx ?? throw new ArgumentNullException(nameof(ctx));
 
     TypeClassifierContext TypeCtx => new TypeClassifierContext(_ctx.Generics.TypeParamMap);
     RuntimeShape ShapeOf(ITypeSymbol type)

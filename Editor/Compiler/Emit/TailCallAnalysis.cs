@@ -4,7 +4,7 @@ using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.Operations;
 
 // ============================================================================
-// Pre-wave-12 dedup: EmitContext.HasNonTailSelfCall (self-recursion / delegate-dispatch-site tail
+// Pre-wave-12 dedup: LoweringState.HasNonTailSelfCall (self-recursion / delegate-dispatch-site tail
 // classification) and UasmEmitter.HasNonTailCallTo (named-callee recursion-spill tail classification)
 // used to be two hand-copied ~200-line walkers with an identical shape for every statement-tail
 // position (block-last-statement, if/else, switch arm, labeled statement, expression statement) —
@@ -12,14 +12,14 @@ using Microsoft.CodeAnalysis.Operations;
 // spill site. This file is the ONE walk both callers now delegate to.
 //
 // The two callers differ in two genuine ways, both expressed as parameters rather than forked code:
-//   - MATCHER SHAPE: EmitContext's delegate-dispatch-site matcher only ever matches a specific
+//   - MATCHER SHAPE: LoweringState's delegate-dispatch-site matcher only ever matches a specific
 //     IInvocationOperation by reference equality; UasmEmitter's named-callee matcher
 //     (ResolvedEdgeResolver.IsInternalCallTo, C4) can also match a constructor call or a this-property
 //     accessor, and needs getter/setter disambiguation for the compound-assignment / inc-dec statement
 //     forms (ResolvedEdgeResolver.PropertyAccessorMatches).
 //     A matcher that structurally cannot produce a property-shaped match (the dispatch-site one) just
 //     leaves those arms permanently inert — same effect as never having had them.
-//   - RETURN-POSITION PRECISION: EmitContext's classifier always resolves `return expr;` through a
+//   - RETURN-POSITION PRECISION: LoweringState's classifier always resolves `return expr;` through a
 //     dedicated ternary-aware sub-walk (a `cond ? a : b` return value keeps both branches in tail
 //     position). UasmEmitter's never had that — a ternary return value that doesn't ITSELF directly
 //     match the callee falls through to the generic non-tail walk instead. In practice this rarely

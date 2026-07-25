@@ -3,6 +3,13 @@ using System.Collections.Generic;
 using System.Linq;
 using Microsoft.CodeAnalysis;
 
+/// <summary>Persistent non-captured local symbol to generated field identity.</summary>
+public readonly struct LocalBinding
+{
+    public readonly string Id;
+    public LocalBinding(string id) => Id = id;
+}
+
 /// <summary>
 /// Owns emitted field declarations, generated storage names, and flat local bindings.
 /// </summary>
@@ -15,7 +22,7 @@ public sealed class StorageContext
     readonly Dictionary<string, string> _structConstIds = new();
     bool _recurStackDeclared;
 
-    public readonly Dictionary<ILocalSymbol, EmitContext.LocalBinding> LocalBindings = new(SymbolEqualityComparer.Default);
+    public readonly Dictionary<ILocalSymbol, LocalBinding> LocalBindings = new(SymbolEqualityComparer.Default);
 
     public StorageContext(StructuredModule module) => _module = module;
 
@@ -95,9 +102,9 @@ public sealed class StorageContext
     {
         if (_recurStackDeclared) return;
         _recurStackDeclared = true;
-        Declare(new FieldDecl(EmitContext.RecurStackId, StorageTypes.ObjectArray, StorageDomain.Generated)
-            { DefaultValue = new object[EmitContext.RecurStackSize] });
-        Declare(new FieldDecl(EmitContext.RecurSpId, StorageTypes.Int32, StorageDomain.Generated)
+        Declare(new FieldDecl(RecurStack.StackId, StorageTypes.ObjectArray, StorageDomain.Generated)
+            { DefaultValue = new object[RecurStack.Size] });
+        Declare(new FieldDecl(RecurStack.SpId, StorageTypes.Int32, StorageDomain.Generated)
             { DefaultValue = 0 });
     }
 

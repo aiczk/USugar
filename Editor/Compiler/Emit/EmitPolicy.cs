@@ -5,9 +5,9 @@ using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.Operations;
 
 /// <summary>Stateless C#-shape policy and type-fact checks shared across handlers/emitter — no
-/// EmitContext instance state, only Compilation/symbol/operation inputs. Split out of EmitContext
+/// LoweringState instance state, only Compilation/symbol/operation inputs. Split out of LoweringState
 /// (which otherwise mixed this with per-class emission state) so a fact/policy lookup never implies
-/// an EmitContext instance is needed.</summary>
+/// an LoweringState instance is needed.</summary>
 public static class EmitPolicy
 {
     /// <summary>True if <paramref name="t"/> is <c>Nullable&lt;T&gt;</c>; yields the underlying T.

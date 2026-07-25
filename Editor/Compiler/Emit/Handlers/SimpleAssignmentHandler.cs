@@ -62,9 +62,9 @@ public class SimpleAssignmentHandler : AssignmentHandlerBase, IExpressionHandler
             ISymbol envSym = assign.Target is ILocalReferenceOperation elr
                 ? elr.Local
                 : ((IParameterReferenceOperation)assign.Target).Parameter;
-            var envLoaded = EnvEmit.Read(_lowering.Builder, _lowering.Context, envSym, _lowering.GetStorageType(assign.Target.Type));
+            var envLoaded = EnvEmit.Read(_lowering.Builder, _lowering.State, envSym, _lowering.GetStorageType(assign.Target.Type));
             return assign.Target.Type is INamedTypeSymbol eAgg && TypeClassifier.IsAggregateValue(eAgg)
-                ? AggregateAbi.DeepClone(_lowering.Builder, envLoaded, eAgg, _lowering.Context.Aggregates.GetLayout) : envLoaded;
+                ? AggregateAbi.DeepClone(_lowering.Builder, envLoaded, eAgg, _lowering.State.Aggregates.GetLayout) : envLoaded;
         }
         var targetFieldName = GetAssignTargetFieldName(assign.Target);
         _lowering.EmitStoreField(targetFieldName, srcLeaf);
@@ -72,14 +72,14 @@ public class SimpleAssignmentHandler : AssignmentHandlerBase, IExpressionHandler
         // RHS expression tree: re-emitting the tree (when the assignment is used as an expression, e.g.
         // `G(n = n - 1)`) would re-evaluate it after the store already mutated its inputs. A dead read in
         // statement form is harmless and simply remains (the optimizer has no DCE pass).
-        var targetFieldType = _lowering.Context.Storage.GetFieldType(targetFieldName);
+        var targetFieldType = _lowering.State.Storage.GetFieldType(targetFieldName);
         if (targetFieldType == null) return srcLeaf;
         var loaded = _lowering.LoadField(targetFieldName, targetFieldType.Value);
         // When the assignment is USED AS A VALUE (e.g. chained `z = y = x`) and the target is an aggregate,
         // that value must be an independent COPY (struct value semantics) — otherwise z aliases y. (diff-fuzz w4)
         return assign.Parent is not IExpressionStatementOperation
                && assign.Target.Type is INamedTypeSymbol tAgg && TypeClassifier.IsAggregateValue(tAgg)
-            ? AggregateAbi.DeepClone(_lowering.Builder, loaded, tAgg, _lowering.Context.Aggregates.GetLayout) : loaded;
+            ? AggregateAbi.DeepClone(_lowering.Builder, loaded, tAgg, _lowering.State.Aggregates.GetLayout) : loaded;
     }
 
 }

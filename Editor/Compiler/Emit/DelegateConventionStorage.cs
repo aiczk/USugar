@@ -4,10 +4,10 @@ using Microsoft.CodeAnalysis;
 /// <summary>Declares the complete signature-keyed delegate convention surface.</summary>
 public sealed class DelegateConventionStorage
 {
-    readonly EmitContext _context;
+    readonly LoweringState _context;
     StorageContext Storage => _context.Storage;
 
-    public DelegateConventionStorage(EmitContext context) => _context = context;
+    public DelegateConventionStorage(LoweringState context) => _context = context;
 
     public StorageType? Declare(string signaturePart, IMethodSymbol invoke,
         IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeParameterMap)

@@ -4,12 +4,12 @@ using Microsoft.CodeAnalysis;
 /// <summary>Emits method-group bridges whose receiver is staged through delegate environment storage.</summary>
 public sealed class ReceiverBridgeEmitter
 {
-    readonly EmitContext _context;
+    readonly LoweringState _context;
     readonly SyntheticBridgeBuilder _bridge;
     readonly DelegateConventionStorage _convention;
     readonly SyntheticDemandPlan _demands;
 
-    internal ReceiverBridgeEmitter(EmitContext context, SyntheticBridgeBuilder bridge,
+    internal ReceiverBridgeEmitter(LoweringState context, SyntheticBridgeBuilder bridge,
         DelegateConventionStorage convention, SyntheticDemandPlan demands)
     {
         _context = context;

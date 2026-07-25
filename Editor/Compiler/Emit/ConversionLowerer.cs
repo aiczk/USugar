@@ -36,9 +36,9 @@ public readonly struct ClosedConversionPlan
 
 public sealed class ConversionLowerer
 {
-    readonly EmitContext _context;
+    readonly LoweringState _context;
 
-    public ConversionLowerer(EmitContext context)
+    public ConversionLowerer(LoweringState context)
         => _context = context ?? throw new ArgumentNullException(nameof(context));
 
     public ClosedConversionPlan ClassifyClosedObjectCast(

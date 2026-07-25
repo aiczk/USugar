@@ -108,8 +108,8 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
             rightVal = PromoteToInt32(rightVal, rightType);
 
         var sig = op.OperatorMethod != null
-            ? _lowering.Context.Abi.BindOperator(op.OperatorMethod, type => _lowering.GetStorageTypeName(type))
-            : _lowering.Context.Abi.BindExact(ExternResolver.ResolveBuiltInBinaryExtern(
+            ? _lowering.State.Abi.BindOperator(op.OperatorMethod, type => _lowering.GetStorageTypeName(type))
+            : _lowering.State.Abi.BindExact(ExternResolver.ResolveBuiltInBinaryExtern(
                 op.OperatorKind,
                 _lowering.ResolveType(op.Target.Type), _lowering.ResolveType(op.Value.Type),
                 _lowering.ResolveType(op.Type), _lowering.GetStorageTypeName));
@@ -149,7 +149,7 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
         var rightVal = right.Leaf;
 
         var sigPart = DelegateAbi.BuildSigPart(
-            invoke, _lowering.Context.Session.Types, _lowering.Context.Generics.TypeParamMap);
+            invoke, _lowering.State.Session.Types, _lowering.State.Generics.TypeParamMap);
         _lowering.RegisterMulticastSig(sigPart, invoke,
             op.OperatorKind == BinaryOperatorKind.Add
                 ? MulticastOperations.Combine
@@ -193,7 +193,7 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
             var handlerSlot = _lowering.Builder.AllocScratch(_lowering.GetStorageType(evt.Type));
             _lowering.EmitAssign(handlerSlot, _lowering.VisitExpression(op.HandlerValue));
             var site = CallableSites.Require(op, accessor);
-            var targets = _lowering.Context.VirtualDispatch.Resolve(site, localInterface).RuntimeTargets;
+            var targets = _lowering.State.VirtualDispatch.Resolve(site, localInterface).RuntimeTargets;
             if (targets.Count == 0)
                 throw new System.NotSupportedException(
                     $"Interface event '{localInterface.Name}.{evt.Name}' has no minted implementation.");
@@ -244,7 +244,7 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
                     return null;
                 }
                 var receiver = evtRef.Instance is IInstanceReferenceOperation
-                    ? (_lowering.Context.Methods.CurrentStructReceiverParamId is { } receiverId
+                    ? (_lowering.State.Methods.CurrentStructReceiverParamId is { } receiverId
                         ? _lowering.LoadField(receiverId, new StorageType(AggregateAbi.ArrayType))
                         : throw new System.NotSupportedException(
                             $"Custom event '{evt.Name}' has no class receiver in this context."))
@@ -294,7 +294,7 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
         var handlerVal = handler.Leaf;
 
         var sigPart = DelegateAbi.BuildSigPart(
-            invoke, _lowering.Context.Session.Types, _lowering.Context.Generics.TypeParamMap);
+            invoke, _lowering.State.Session.Types, _lowering.State.Generics.TypeParamMap);
         _lowering.RegisterMulticastSig(sigPart, invoke,
             op.Adds ? MulticastOperations.Combine : MulticastOperations.Remove);
 

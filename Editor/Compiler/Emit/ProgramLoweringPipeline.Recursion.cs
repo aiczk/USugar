@@ -17,7 +17,7 @@ internal partial class ProgramLoweringPipeline
     // every function whose bridge address can be minted into a bundle (same-class method groups, local
     // functions, lambdas); every function containing a delegate dispatch gets synthetic edges m→E
     // (an indirect dispatch can start any escaped function). Cycle members' NON-TAIL dispatch sites are
-    // recorded syntax-keyed in EmitContext.Recursion.ReentrantDispatchSites for the §4.3 Reentrant-flag marking;
+    // recorded syntax-keyed in LoweringState.Recursion.ReentrantDispatchSites for the §4.3 Reentrant-flag marking;
     // tail dispatch sites are spared so bundle-driven deep tail recursion never spills (§4.4).
     void BuildRecursionInfo(CallableBodyGraph bodyGraph)
     {
@@ -29,7 +29,7 @@ internal partial class ProgramLoweringPipeline
         // oracle; the legacy private walks they were diffed against were deleted at C4 retirement.
         var facets = AssembleRecursionFacets(bodyGraph);
         // Write-once populate of every analysis artifact.
-        _ctx.RecursionContext.Info.Populate(facets.Recursive, facets.CycleEdges, facets.ThisTouches,
+        _state.RecursionContext.Info.Populate(facets.Recursive, facets.CycleEdges, facets.ThisTouches,
             facets.ReentrantSites, facets.TailSparedSites, facets.Nodes);
     }
 
@@ -146,7 +146,7 @@ internal partial class ProgramLoweringPipeline
         // Round-7 follow-up [Q5]: close the per-node DIRECT this-field touch sets (collected by the
         // walk — this-property references add accessor edges: a callee reading a manual property whose
         // getter touches the field is the same alias one hop deeper) transitively for the ref/out-
-        // argument alias guard (see EmitContext.Recursion.ThisFieldTouches). The closure runs over the
+        // argument alias guard (see LoweringState.Recursion.ThisFieldTouches). The closure runs over the
         // same `edges` graph — synthetic dispatch edges included, conservative per §8-3.
         bool touchChanged = true;
         while (touchChanged)
@@ -308,13 +308,13 @@ internal partial class ProgramLoweringPipeline
     // The callable-body graph cannot discharge this check: synthetic targets are registered later.
     void VerifyBridgeTargetsAreNodes()
     {
-        if (_ctx.Closures.CaptureScope == null || _ctx.RecursionContext.Info.RecursionGraphNodes == null) return;
-        foreach (var callable in _ctx.Methods.SyntheticCallables.Values)
+        if (_state.Closures.CaptureScope == null || _state.RecursionContext.Info.RecursionGraphNodes == null) return;
+        foreach (var callable in _state.Methods.SyntheticCallables.Values)
         {
             var def = callable.TargetDefinition;
             if (def == null) continue;
-            if (!_ctx.Closures.CaptureScope.IsCapturingClosure(def)) continue;
-            if (!_ctx.RecursionContext.Info.RecursionGraphNodes.Contains(def))
+            if (!_state.Closures.CaptureScope.IsCapturingClosure(def)) continue;
+            if (!_state.RecursionContext.Info.RecursionGraphNodes.Contains(def))
                 throw new InvalidOperationException(
                     $"USugar internal error (§5.5 bridge-target armor): capturing delegate bridge "
                   + $"'{callable.Name}' targets '{def}', which has no recursion-graph node — its "
@@ -330,7 +330,7 @@ internal partial class ProgramLoweringPipeline
     string DispatchSigOrWildcard(IMethodSymbol m)
         => SigInvolvesTypeParam(m)
             ? null
-            : DelegateAbi.BuildSigPart(m, _session.Types);
+            : DelegateAbi.BuildSigPart(m, _environment.Session.Types);
 
     // Two signatures match if equal, or either is WILDCARD (a type-param-involving sig matches anything).
     static bool SigsMatch(string a, string b) => a == null || b == null || a == b;
@@ -549,8 +549,8 @@ internal partial class ProgramLoweringPipeline
 
     void VerifyRegisteredCallablesAreNodes(CallableBodyGraph graph)
     {
-        foreach (var callable in _ctx.Methods.Callables.Values.Concat<MethodContext.RegisteredCallable>(
-                     _ctx.Methods.ClosureSpecs))
+        foreach (var callable in _state.Methods.Callables.Values.Concat<MethodContext.RegisteredCallable>(
+                     _state.Methods.ClosureSpecs))
             if (!graph.CallableDefinitions.Contains(callable.Definition.OriginalDefinition))
                 throw new InvalidOperationException(
                     $"USugar internal error: callable '{callable.Definition}' was registered during "

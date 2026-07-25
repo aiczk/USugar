@@ -26,7 +26,7 @@ public class ArrayHandler : IExpressionHandler
         bool aggElem = elemSym is INamedTypeSymbol && TypeClassifier.IsAggregateValue(elemSym);
 
         var sizeVal = _lowering.EmitArrayDimension(op.DimensionSizes[0]);
-        var arrSlot = _lowering.Context.Builder.AllocScratch(new StorageType(arrayType));
+        var arrSlot = _lowering.State.Builder.AllocScratch(new StorageType(arrayType));
         _lowering.EmitAssign(arrSlot, _lowering.ExternCall(UdonAbi.ArrayConstructor(arrayType),
             new List<CLeaf> { sizeVal }, new StorageType(arrayType)));
 
@@ -42,7 +42,7 @@ public class ArrayHandler : IExpressionHandler
         {
             // struct[]/tuple[]: C# zero-init means each element is a fresh default struct (not a null slot),
             // so `arr[i].field = x` works on a freshly allocated array. Fill via a runtime loop.
-            var iSlot = _lowering.Context.Builder.AllocScratch(StorageTypes.Int32);
+            var iSlot = _lowering.State.Builder.AllocScratch(StorageTypes.Int32);
             _lowering.EmitAssign(iSlot, _lowering.Const(0, StorageTypes.Int32));
             _lowering.Builder.EmitWhile(
                 () => _lowering.ExternCall(UdonAbi.Int32LessThan,
@@ -51,8 +51,8 @@ public class ArrayHandler : IExpressionHandler
                 {
                     _lowering.EmitExternVoid(UdonAbi.ArraySet(arrayType, elementType),
                         new List<CLeaf> { _lowering.SlotRef(arrSlot), _lowering.SlotRef(iSlot),
-                            AggregateAbi.MintDefault(_lowering.Builder, _lowering.Context.Aggregates.GetLayout((INamedTypeSymbol)elemSym),
-                                _lowering.Context.Aggregates.GetLayout, _lowering.GetStorageTypeName) });
+                            AggregateAbi.MintDefault(_lowering.Builder, _lowering.State.Aggregates.GetLayout((INamedTypeSymbol)elemSym),
+                                _lowering.State.Aggregates.GetLayout, _lowering.GetStorageTypeName) });
                     _lowering.EmitAssign(iSlot, _lowering.ExternCall(UdonAbi.Int32Add,
                         new List<CLeaf> { _lowering.SlotRef(iSlot), _lowering.Const(1, StorageTypes.Int32) }, StorageTypes.Int32));
                 });
@@ -83,7 +83,7 @@ public class ArrayHandler : IExpressionHandler
         // A struct/tuple element read AS A VALUE is copied (value semantics). Receiver access (arr[i].x =)
         // goes through LoadInstanceRaw → ReadArrayElementRaw, which does NOT clone.
         return op.Type is INamedTypeSymbol elemAggT && TypeClassifier.IsAggregateValue(elemAggT)
-            ? AggregateAbi.DeepClone(_lowering.Builder, resultVal, elemAggT, _lowering.Context.Aggregates.GetLayout) : resultVal;
+            ? AggregateAbi.DeepClone(_lowering.Builder, resultVal, elemAggT, _lowering.State.Aggregates.GetLayout) : resultVal;
     }
 
     CLeaf ResolveRangeOperand(CLeaf arrayVal, string arrayType, IOperation operand, bool isEnd)
@@ -130,7 +130,7 @@ public class ArrayHandler : IExpressionHandler
             new List<CLeaf> { lenVal }, new StorageType(udonArrType));
 
         // for (i = 0; i < len; i++) result[i] = arr[start + i]
-        var iSlot = _lowering.Context.Builder.AllocScratch(StorageTypes.Int32);
+        var iSlot = _lowering.State.Builder.AllocScratch(StorageTypes.Int32);
 
         _lowering.Builder.EmitFor(
             // init: i = 0
@@ -162,7 +162,7 @@ public class ArrayHandler : IExpressionHandler
                 // copy in C# (GetSubArray copies element values) — clone the bundle exactly like the
                 // single-element read above, or the slice's elements alias the source array's.
                 if (_lowering.ResolveType(arrSymbol.ElementType) is INamedTypeSymbol sliceElemAggT && TypeClassifier.IsAggregateValue(sliceElemAggT))
-                    valVal = AggregateAbi.DeepClone(_lowering.Builder, valVal, sliceElemAggT, _lowering.Context.Aggregates.GetLayout);
+                    valVal = AggregateAbi.DeepClone(_lowering.Builder, valVal, sliceElemAggT, _lowering.State.Aggregates.GetLayout);
 
                 // result[i] = val
                 _lowering.EmitExternVoid(UdonAbi.ArraySet(arrayType, elementType),

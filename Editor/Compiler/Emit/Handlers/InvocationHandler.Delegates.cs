@@ -104,22 +104,22 @@ public partial class InvocationHandler
         // and a copy-in-only conv protocol would silently drop ref/out write-backs.
         DelegateAbi.ValidateNoRefOutParams(invoke);
         var (convArgs, convRet, convEnv) = LoweringServices.GetConventionFieldNames(
-            delegateType, _lowering.Context.Session.Types, _lowering.TypeParamMap);
+            delegateType, _lowering.State.Session.Types, _lowering.TypeParamMap);
 
         // The __dlgc_ conv vars are a signature-keyed cross-program byte contract (§3.2). Bridges declare
         // the same names for their own sigs; the dispatch site declares-on-first-use for foreign sigs.
         for (int i = 0; i < convArgs.Length; i++)
-            _lowering.Context.Storage.TryDeclareVar(convArgs[i], _lowering.GetStorageType(invoke.Parameters[i].Type));
+            _lowering.State.Storage.TryDeclareVar(convArgs[i], _lowering.GetStorageType(invoke.Parameters[i].Type));
         StorageType? retType = null;
         if (!invoke.ReturnsVoid)
         {
             retType = _lowering.GetStorageType(invoke.ReturnType);
-            _lowering.Context.Storage.TryDeclareVar(convRet, retType.Value);
+            _lowering.State.Storage.TryDeclareVar(convRet, retType.Value);
         }
         // Stage 2 §5.1: every dispatch site unconditionally stages DelegateAbi.Env → __dlgc_{sig}__env, so
         // declare it on first use here (a capture-free target sends null; the bridge's null guard is
         // the backstop). Declared at the dispatch site only — never in a capture-free bridge (§1.3).
-        _lowering.Context.Storage.TryDeclareVar(convEnv, new StorageType(EnvEmit.EnvType));
+        _lowering.State.Storage.TryDeclareVar(convEnv, new StorageType(EnvEmit.EnvType));
 
         // C# evaluation order: a plain d(args) runs the argument side effects even when d is null (the
         // NRE follows them). For ?.Invoke this whole sequence sits inside NullableHandler's non-null
@@ -144,7 +144,7 @@ public partial class InvocationHandler
         // stay unflagged so bundle-driven deep tail recursion never spills (§4.4).
         bool reentrant = _lowering.MarkReentrantDispatch(op);
 
-        return new DelegateDispatchEmitter(_lowering.Context).Emit(bundle, invoke, convArgs, convRet, convEnv, retType, _lowering.TypeParamMap,
+        return new DelegateDispatchEmitter(_lowering.State).Emit(bundle, invoke, convArgs, convRet, convEnv, retType, _lowering.TypeParamMap,
             argExprs, isConditional, reentrant, DescribeDelegateReceiver(op.Instance));
     }
 
@@ -172,11 +172,11 @@ public partial class InvocationHandler
         // delegate Invoke method. Byte-identical for the pre-existing fan-out caller (invoke there
         // already IS the delegate's own Invoke method, so the old round-trip was a no-op derivation).
         var (convArgs, convRet, convEnv) = LoweringServices.GetConventionFieldNames(
-            invoke, _lowering.Context.Session.Types, typeParamMap);
+            invoke, _lowering.State.Session.Types, typeParamMap);
         StorageType? retType = invoke.ReturnsVoid
             ? null
-            : _lowering.Context.ResolveStorageType(invoke.ReturnType, typeParamMap);
-        return new DelegateDispatchEmitter(_lowering.Context).Emit(bundle, invoke, convArgs, convRet, convEnv, retType, typeParamMap,
+            : _lowering.State.ResolveStorageType(invoke.ReturnType, typeParamMap);
+        return new DelegateDispatchEmitter(_lowering.State).Emit(bundle, invoke, convArgs, convRet, convEnv, retType, typeParamMap,
             argExprsByOrdinal, isConditional: false, reentrant: true, receiverDescription: "multicast fan-out");
     }
 

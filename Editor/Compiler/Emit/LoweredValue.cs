@@ -23,7 +23,7 @@ public readonly struct LoweredValue
         CarrierType = carrierType;
     }
 
-    public static LoweredValue Create(EmitContext context, IOperation operation, CLeaf leaf)
+    public static LoweredValue Create(LoweringState context, IOperation operation, CLeaf leaf)
     {
         if (context == null) throw new System.ArgumentNullException(nameof(context));
         if (operation == null) throw new System.ArgumentNullException(nameof(operation));
@@ -38,7 +38,7 @@ public readonly struct LoweredValue
             semanticType, carrierType);
     }
 
-    static IOperation FindCarrier(IOperation operation, EmitContext context)
+    static IOperation FindCarrier(IOperation operation, LoweringState context)
     {
         while (operation is IConversionOperation conversion
                && conversion.OperatorMethod == null)

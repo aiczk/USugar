@@ -5,7 +5,7 @@ using Microsoft.CodeAnalysis;
 /// <summary>Recursion/reentrancy analysis results for one class, populated once (before body
 /// emission) by <c>UasmEmitter.BuildRecursionInfo</c> and consulted throughout emit. Each field is
 /// null until BuildRecursionInfo runs; callers check for null exactly as they did when these lived
-/// directly on EmitContext (grouped here purely to give the concept its own name/home — no field was
+/// directly on LoweringState (grouped here purely to give the concept its own name/home — no field was
 /// renamed or re-typed). WRITE-ONCE: the properties are externally read-only and set only by the
 /// single <see cref="Populate"/> call at BuildRecursionInfo's tail, which throws on a second call — so
 /// a future emit-restructure cannot silently mutate a frozen analysis artifact.</summary>

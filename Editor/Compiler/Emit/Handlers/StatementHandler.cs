@@ -24,7 +24,7 @@ public class StatementHandler : IOperationHandler
             case IBlockOperation op: HandleBlock(op); break;
             case IExpressionStatementOperation exprStmt
                 when exprStmt.Operation is IDeconstructionAssignmentOperation deconExpr:
-                _lowering.Context.VisitOperation(deconExpr);
+                _lowering.VisitOperation(deconExpr);
                 break;
             case IExpressionStatementOperation exprStmt:
             {
@@ -81,8 +81,8 @@ public class StatementHandler : IOperationHandler
                         var localType = _lowering.GetStorageTypeName(declarator.Symbol.Type);
                         // Stage 2 §4.1: captured using-local → read the disposable ref from its env
                         // cell (using-locals are readonly, so the read-now leaf stays valid).
-                        var dispRef = _lowering.Context.Closures.TryGetEnvBinding(declarator.Symbol, out _)
-                            ? EnvEmit.Read(_lowering.Builder, _lowering.Context, declarator.Symbol, new StorageType(localType))
+                        var dispRef = _lowering.State.Closures.TryGetEnvBinding(declarator.Symbol, out _)
+                            ? EnvEmit.Read(_lowering.Builder, _lowering.State, declarator.Symbol, new StorageType(localType))
                             : _lowering.LoadField(_lowering.LocalBindings.TryGetValue(declarator.Symbol, out var ub) ? ub.Id : declarator.Symbol.Name, new StorageType(localType));
                         _lowering.UsingDisposableStack.Peek().Add((dispRef, declarator.Symbol.Type));
                     }
@@ -98,7 +98,7 @@ public class StatementHandler : IOperationHandler
         // scope; re-entering it re-allocates the env (per-iteration freshness inside loops). The
         // method's OWN outer block is NOT a recorded Block scope (its statements live in MethodEntry),
         // so ScopeFor returns null there and Alloc no-ops.
-        EnvEmit.Alloc(_lowering.Builder, _lowering.Context, _lowering.Context.Closures.CaptureScope?.ScopeFor(block, CaptureScopeKind.Block));
+        EnvEmit.Alloc(_lowering.Builder, _lowering.State, _lowering.State.Closures.CaptureScope?.ScopeFor(block, CaptureScopeKind.Block));
         _lowering.UsingDisposableStack.Push(new List<(CLeaf, ITypeSymbol)>());
         foreach (var stmt in block.Operations)
             _lowering.VisitOperation(stmt);
@@ -187,7 +187,7 @@ public class StatementHandler : IOperationHandler
             return;
         }
 
-        var curRets = _lowering.Context.Methods.CurrentClosureSpec?.ReturnSlots;
+        var curRets = _lowering.State.Methods.CurrentClosureSpec?.ReturnSlots;
         if (curRets == null && _lowering.CurrentMethod != null) _lowering.MethodReturns.TryGetValue(_lowering.CurrentMethod, out curRets);
         if (op.ReturnedValue != null && curRets is { Length: > 0 })
         {
@@ -195,7 +195,7 @@ public class StatementHandler : IOperationHandler
             var srcVal = _lowering.VisitExpression(op.ReturnedValue);
             if (_lowering.CurrentMethod.Name == "OnOwnershipRequest")
             {
-                _lowering.Context.Storage.TryDeclareVar("__returnValue", StorageTypes.Boolean);
+                _lowering.State.Storage.TryDeclareVar("__returnValue", StorageTypes.Boolean);
                 _lowering.EmitStoreField("__returnValue", srcVal);
             }
             EmitPendingDispose();
@@ -228,7 +228,7 @@ public class StatementHandler : IOperationHandler
 
     void EmitTailCall(IInvocationOperation tailCall)
     {
-        var paramIds = _lowering.Context.Methods.CurrentClosureSpec?.ParamVarIds ?? _lowering.MethodParamVarIds[_lowering.CurrentMethod];
+        var paramIds = _lowering.State.Methods.CurrentClosureSpec?.ParamVarIds ?? _lowering.MethodParamVarIds[_lowering.CurrentMethod];
 
         // Snapshot every arg into a temp BEFORE overwriting any param. VisitExpression returns a lazy expr
         // that reads its operand slots when lowered, not a materialized value — so storing param i first
@@ -238,7 +238,7 @@ public class StatementHandler : IOperationHandler
         for (int i = 0; i < tailCall.Arguments.Length; i++)
         {
             var argVal = _lowering.VisitExpression(tailCall.Arguments[i].Value);
-            var slot = _lowering.Context.Builder.AllocScratch(_lowering.GetStorageType(tailCall.Arguments[i].Value.Type));
+            var slot = _lowering.State.Builder.AllocScratch(_lowering.GetStorageType(tailCall.Arguments[i].Value.Type));
             _lowering.EmitAssign(slot, argVal);
             argSlots[i] = slot;
         }
@@ -251,12 +251,12 @@ public class StatementHandler : IOperationHandler
         // the hidden __envp. A self-tail-recursive capturing closure passes its OWN env forward, so
         // rebind __envp from itself — identity here, but the wiring is not elided (the MethodEntry
         // EnvAlloc after the __tco_ label re-runs per logical activation for freshness).
-        var tcoEnvp = _lowering.Context.Methods.CurrentClosureSpec?.EnvpFieldId;
+        var tcoEnvp = _lowering.State.Methods.CurrentClosureSpec?.EnvpFieldId;
         if (tcoEnvp != null)
             _lowering.EmitStoreField(tcoEnvp, _lowering.LoadField(tcoEnvp, new StorageType(EnvEmit.EnvType)));
 
         // Jump back to method entry via goto label
-        var func = _lowering.Context.Methods.CurrentClosureSpec?.Function ?? _lowering.MethodFunctions[_lowering.CurrentMethod];
+        var func = _lowering.State.Methods.CurrentClosureSpec?.Function ?? _lowering.MethodFunctions[_lowering.CurrentMethod];
         _lowering.Builder.EmitGoto($"__tco_{func.Name}");
     }
 
@@ -266,8 +266,8 @@ public class StatementHandler : IOperationHandler
         {
             EmitPendingDisposeForBreakContinue();
             // Switch breaks use goto to end label; loop breaks use structured CBreak
-            if (_lowering.Context.ControlFlow.SwitchBreakLabels.Count > 0 && _lowering.Context.ControlFlow.SwitchBreakLabels.Peek() != null)
-                _lowering.Builder.EmitGoto(_lowering.Context.ControlFlow.SwitchBreakLabels.Peek());
+            if (_lowering.State.ControlFlow.SwitchBreakLabels.Count > 0 && _lowering.State.ControlFlow.SwitchBreakLabels.Peek() != null)
+                _lowering.Builder.EmitGoto(_lowering.State.ControlFlow.SwitchBreakLabels.Peek());
             else
                 _lowering.Builder.EmitBreak();
         }
@@ -286,7 +286,7 @@ public class StatementHandler : IOperationHandler
             // goto case <const>; / goto default; target a Roslyn label ("case 2:", "default") that is not a
             // valid UASM token — the enclosing switch maps it to a sanitized landing label. A plain user goto
             // (its label is emitted verbatim by ILabeledOperation) is not in the map and uses its own name.
-            var target = _lowering.Context.ControlFlow.GotoCaseLabels.Count > 0 && _lowering.Context.ControlFlow.GotoCaseLabels.Peek().TryGetValue(op.Target.Name, out var mapped)
+            var target = _lowering.State.ControlFlow.GotoCaseLabels.Count > 0 && _lowering.State.ControlFlow.GotoCaseLabels.Peek().TryGetValue(op.Target.Name, out var mapped)
                 ? mapped : op.Target.Name;
             _lowering.Builder.EmitGoto(target);
         }
@@ -321,8 +321,8 @@ public class StatementHandler : IOperationHandler
     /// </summary>
     void EmitPendingDisposeForBreakContinue()
     {
-        var loopDepth = _lowering.Context.ControlFlow.LoopUsingDepthStack.Count > 0
-            ? _lowering.Context.ControlFlow.LoopUsingDepthStack.Peek()
+        var loopDepth = _lowering.State.ControlFlow.LoopUsingDepthStack.Count > 0
+            ? _lowering.State.ControlFlow.LoopUsingDepthStack.Peek()
             : 0;
         var currentDepth = _lowering.UsingDisposableStack.Count;
         var scopesToDispose = currentDepth - loopDepth;
@@ -410,8 +410,8 @@ public class StatementHandler : IOperationHandler
                 {
                     var localType = _lowering.GetStorageTypeName(declarator.Symbol.Type);
                     // Stage 2 §4.1: captured using-statement local → env cell read (readonly, so safe).
-                    var dispRef2 = _lowering.Context.Closures.TryGetEnvBinding(declarator.Symbol, out _)
-                        ? EnvEmit.Read(_lowering.Builder, _lowering.Context, declarator.Symbol, new StorageType(localType))
+                    var dispRef2 = _lowering.State.Closures.TryGetEnvBinding(declarator.Symbol, out _)
+                        ? EnvEmit.Read(_lowering.Builder, _lowering.State, declarator.Symbol, new StorageType(localType))
                         : _lowering.LoadField(_lowering.LocalBindings.TryGetValue(declarator.Symbol, out var ub2) ? ub2.Id : declarator.Symbol.Name, new StorageType(localType));
                     disposableVars.Add((dispRef2, declarator.Symbol.Type));
                 }
@@ -491,18 +491,18 @@ public class StatementHandler : IOperationHandler
             // already clones aggregate values, so value semantics are preserved); an uninitialized
             // aggregate pre-allocates its default object[] (incl. nested sub-arrays) like the flat
             // path, since C# definite assignment permits field writes before any whole-value read.
-            if (_lowering.Context.Closures.TryGetEnvBinding(local, out _))
+            if (_lowering.State.Closures.TryGetEnvBinding(local, out _))
             {
                 var envInit = declarator.Initializer;
                 if (envInit != null)
                 {
-                    EnvEmit.Write(_lowering.Builder, _lowering.Context, local, _lowering.VisitExpression(envInit.Value));
+                    EnvEmit.Write(_lowering.Builder, _lowering.State, local, _lowering.VisitExpression(envInit.Value));
                 }
                 else if (local.Type is INamedTypeSymbol envAggT && TypeClassifier.IsAggregateValue(envAggT))
                 {
-                    var envAggLayout = _lowering.Context.Aggregates.GetLayout(envAggT);
-                    EnvEmit.Write(_lowering.Builder, _lowering.Context, local,
-                        AggregateAbi.MintDefault(_lowering.Builder, envAggLayout, _lowering.Context.Aggregates.GetLayout, _lowering.GetStorageTypeName));
+                    var envAggLayout = _lowering.State.Aggregates.GetLayout(envAggT);
+                    EnvEmit.Write(_lowering.Builder, _lowering.State, local,
+                        AggregateAbi.MintDefault(_lowering.Builder, envAggLayout, _lowering.State.Aggregates.GetLayout, _lowering.GetStorageTypeName));
                 }
                 continue;
             }
@@ -517,8 +517,8 @@ public class StatementHandler : IOperationHandler
             // Delegate-typed locals are SystemObjectArray bundle references via the type-map delegate arm
             // (design §2.1); the initializer's VisitDelegateCreation hoists any lambda and builds the bundle.
             var udonType = _lowering.GetStorageTypeName(local.Type);
-            var id = _lowering.Context.Storage.DeclareLocal(local.Name, new StorageType(udonType));
-            _lowering.LocalBindings[local] = new EmitContext.LocalBinding(id);
+            var id = _lowering.State.Storage.DeclareLocal(local.Name, new StorageType(udonType));
+            _lowering.LocalBindings[local] = new LocalBinding(id);
 
             var init = declarator.Initializer;
             if (init != null)
@@ -532,7 +532,7 @@ public class StatementHandler : IOperationHandler
     void VisitAggregateLocalDeclaration(ILocalSymbol local, INamedTypeSymbol aggregateType,
         IVariableInitializerOperation init)
     {
-        var layout = _lowering.Context.Aggregates.GetLayout(aggregateType);
+        var layout = _lowering.State.Aggregates.GetLayout(aggregateType);
 
         // Declare as SystemObjectArray. Always REdeclare + REallocate, mirroring the scalar path:
         // _localBindings is keyed by ILocalSymbol and shared across generic-spec emissions of the
@@ -540,8 +540,8 @@ public class StatementHandler : IOperationHandler
         // declaration and the object[] ctor — every spec-2 activation then aliased spec-1's one
         // array and per-frame struct locals broke under recursion (wave-9 round-5 [X7], VM-proven
         // 183 vs 126 in the second instantiation).
-        var id = _lowering.Context.Storage.DeclareLocal(local.Name, new StorageType(AggregateAbi.ArrayType));
-        _lowering.LocalBindings[local] = new EmitContext.LocalBinding(id);
+        var id = _lowering.State.Storage.DeclareLocal(local.Name, new StorageType(AggregateAbi.ArrayType));
+        _lowering.LocalBindings[local] = new LocalBinding(id);
 
         // Create object[] of correct size
         AggregateAbi.AllocateField(_lowering.Builder, id, layout);
@@ -553,7 +553,7 @@ public class StatementHandler : IOperationHandler
             // The flat array allocated above is NOT enough for a NESTED struct — its inner struct-typed
             // fields must be recursively allocated (exactly like default(T)/new T()), or a write to a
             // nested field (`n.inner.x = …`) hits a null sub-array and faults the real VM. (diff-fuzz w2)
-            AggregateAbi.DefaultInitializeField(_lowering.Builder, localId, layout, _lowering.Context.Aggregates.GetLayout, _lowering.GetStorageTypeName);
+            AggregateAbi.DefaultInitializeField(_lowering.Builder, localId, layout, _lowering.State.Aggregates.GetLayout, _lowering.GetStorageTypeName);
             return;
         }
 
@@ -570,7 +570,7 @@ public class StatementHandler : IOperationHandler
         }
         else if (value is IDefaultValueOperation)
         {
-            AggregateAbi.DefaultInitializeField(_lowering.Builder, localId, layout, _lowering.Context.Aggregates.GetLayout, _lowering.GetStorageTypeName);
+            AggregateAbi.DefaultInitializeField(_lowering.Builder, localId, layout, _lowering.State.Aggregates.GetLayout, _lowering.GetStorageTypeName);
         }
         // CW27: `new V(args) { … }` must NOT take this arm — it never applied op.Initializer, silently
         // dropping the member writes; the generic arm's VisitObjectCreation applies it after the ctor.
@@ -582,7 +582,7 @@ public class StatementHandler : IOperationHandler
         {
             // new V(args): default-init the already-allocated array, then run the registered ctor
             // (receiver = this array, mutated in place via this.field = … in the ctor body).
-            AggregateAbi.DefaultInitializeField(_lowering.Builder, localId, layout, _lowering.Context.Aggregates.GetLayout, _lowering.GetStorageTypeName);
+            AggregateAbi.DefaultInitializeField(_lowering.Builder, localId, layout, _lowering.State.Aggregates.GetLayout, _lowering.GetStorageTypeName);
             var ctorArgs = new List<CLeaf> { _lowering.LoadField(localId, new StorageType(AggregateAbi.ArrayType)) };
             foreach (var arg in ocCtor.Arguments)
                 ctorArgs.Add(_lowering.VisitExpression(arg.Value));
@@ -593,7 +593,7 @@ public class StatementHandler : IOperationHandler
             // new V() / new V { field = ... }: the array is already allocated above; value-type
             // fields need 0/false/etc., then apply any object-initializer assignments. (A parameterless
             // struct ctor's VisitObjectCreation returns a null placeholder, so handle creation here.)
-            AggregateAbi.DefaultInitializeField(_lowering.Builder, localId, layout, _lowering.Context.Aggregates.GetLayout, _lowering.GetStorageTypeName);
+            AggregateAbi.DefaultInitializeField(_lowering.Builder, localId, layout, _lowering.State.Aggregates.GetLayout, _lowering.GetStorageTypeName);
             if (oc.Initializer != null)
                 _lowering.EmitAggregateObjectInitializer(_lowering.LoadField(localId, new StorageType(AggregateAbi.ArrayType)), layout, oc.Initializer);
         }
