@@ -3,9 +3,10 @@ using System.Linq;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.Operations;
 
-public class StatementHandler : HandlerBase, IOperationHandler
+public class StatementHandler : IOperationHandler
 {
-    public StatementHandler(EmitContext ctx) : base(ctx) { }
+    readonly LoweringServices _lowering;
+    public StatementHandler(LoweringServices lowering) => _lowering = lowering;
 
     // IReturnOperation spans Return/YieldReturn/YieldBreak; all three route here as under `is IReturnOperation`.
     public OperationKind[] HandledKinds { get; } = new[]
@@ -23,7 +24,7 @@ public class StatementHandler : HandlerBase, IOperationHandler
             case IBlockOperation op: HandleBlock(op); break;
             case IExpressionStatementOperation exprStmt
                 when exprStmt.Operation is IDeconstructionAssignmentOperation deconExpr:
-                _ctx.VisitOperation(deconExpr);
+                _lowering.Context.VisitOperation(deconExpr);
                 break;
             case IExpressionStatementOperation exprStmt:
             {
@@ -36,13 +37,13 @@ public class StatementHandler : HandlerBase, IOperationHandler
                     or ICoalesceAssignmentOperation
                     or IDeconstructionAssignmentOperation)
                 {
-                    VisitExpression(innerOp);
+                    _lowering.VisitExpression(innerOp);
                 }
                 else
                 {
-                    var expr = VisitExpression(innerOp);
+                    var expr = _lowering.VisitExpression(innerOp);
                     if (expr != null)
-                        EmitExprStmt(expr);
+                        _lowering.EmitExprStmt(expr);
                 }
                 break;
             }
@@ -61,12 +62,12 @@ public class StatementHandler : HandlerBase, IOperationHandler
             // declaration so declaration-first shapes keep their index allocation order.
             case ILocalFunctionOperation op:
                 if (!op.Symbol.IsGenericMethod)
-                    RegisterLocalFunction(op.Symbol);
+                    _lowering.RegisterLocalFunction(op.Symbol);
                 break;
             case ILabeledOperation labeled:
-                _builder.EmitLabel(labeled.Label.Name);
+                _lowering.Builder.EmitLabel(labeled.Label.Name);
                 if (labeled.Operation != null)
-                    VisitOperation(labeled.Operation);
+                    _lowering.VisitOperation(labeled.Operation);
                 break;
             // An empty statement (`;`), e.g. a labeled empty target `Outer:;` used as a goto landing pad — no-op.
             case IEmptyOperation: break;
@@ -77,13 +78,13 @@ public class StatementHandler : HandlerBase, IOperationHandler
                     VisitVariableDeclaration(decl);
                     foreach (var declarator in decl.Declarators)
                     {
-                        var localType = GetStorageTypeName(declarator.Symbol.Type);
+                        var localType = _lowering.GetStorageTypeName(declarator.Symbol.Type);
                         // Stage 2 §4.1: captured using-local → read the disposable ref from its env
                         // cell (using-locals are readonly, so the read-now leaf stays valid).
-                        var dispRef = _ctx.Closures.TryGetEnvBinding(declarator.Symbol, out _)
-                            ? EnvEmit.Read(_builder, _ctx, declarator.Symbol, new StorageType(localType))
-                            : LoadField(_localBindings.TryGetValue(declarator.Symbol, out var ub) ? ub.Id : declarator.Symbol.Name, new StorageType(localType));
-                        _usingDisposableStack.Peek().Add((dispRef, declarator.Symbol.Type));
+                        var dispRef = _lowering.Context.Closures.TryGetEnvBinding(declarator.Symbol, out _)
+                            ? EnvEmit.Read(_lowering.Builder, _lowering.Context, declarator.Symbol, new StorageType(localType))
+                            : _lowering.LoadField(_lowering.LocalBindings.TryGetValue(declarator.Symbol, out var ub) ? ub.Id : declarator.Symbol.Name, new StorageType(localType));
+                        _lowering.UsingDisposableStack.Peek().Add((dispRef, declarator.Symbol.Type));
                     }
                 }
                 break;
@@ -97,11 +98,11 @@ public class StatementHandler : HandlerBase, IOperationHandler
         // scope; re-entering it re-allocates the env (per-iteration freshness inside loops). The
         // method's OWN outer block is NOT a recorded Block scope (its statements live in MethodEntry),
         // so ScopeFor returns null there and Alloc no-ops.
-        EnvEmit.Alloc(_builder, _ctx, _ctx.Closures.CaptureScope?.ScopeFor(block, CaptureScopeKind.Block));
-        _usingDisposableStack.Push(new List<(CLeaf, ITypeSymbol)>());
+        EnvEmit.Alloc(_lowering.Builder, _lowering.Context, _lowering.Context.Closures.CaptureScope?.ScopeFor(block, CaptureScopeKind.Block));
+        _lowering.UsingDisposableStack.Push(new List<(CLeaf, ITypeSymbol)>());
         foreach (var stmt in block.Operations)
-            VisitOperation(stmt);
-        var disposables = _usingDisposableStack.Pop();
+            _lowering.VisitOperation(stmt);
+        var disposables = _lowering.UsingDisposableStack.Pop();
         for (int i = disposables.Count - 1; i >= 0; i--)
         {
             var (val, type) = disposables[i];
@@ -114,37 +115,37 @@ public class StatementHandler : HandlerBase, IOperationHandler
         // Optimization: if (!cond) → invert branches to avoid negation extern
         if (op.Condition is IUnaryOperation { OperatorKind: UnaryOperatorKind.Not } unary)
         {
-            var condVal = VisitExpression(unary.Operand);
+            var condVal = _lowering.VisitExpression(unary.Operand);
 
             if (op.WhenFalse != null)
             {
                 // if (!c) A else B → if (c) B else A
-                _builder.EmitIf(condVal,
-                    _ => VisitOperation(op.WhenFalse),
-                    _ => VisitOperation(op.WhenTrue));
+                _lowering.Builder.EmitIf(condVal,
+                    _ => _lowering.VisitOperation(op.WhenFalse),
+                    _ => _lowering.VisitOperation(op.WhenTrue));
             }
             else
             {
                 // if (!c) A → if (c) {} else A
-                _builder.EmitIf(condVal,
+                _lowering.Builder.EmitIf(condVal,
                     _ => { },
-                    _ => VisitOperation(op.WhenTrue));
+                    _ => _lowering.VisitOperation(op.WhenTrue));
             }
             return;
         }
 
-        var condVal2 = VisitExpression(op.Condition);
+        var condVal2 = _lowering.VisitExpression(op.Condition);
 
         if (op.WhenFalse != null)
         {
-            _builder.EmitIf(condVal2,
-                _ => VisitOperation(op.WhenTrue),
-                _ => VisitOperation(op.WhenFalse));
+            _lowering.Builder.EmitIf(condVal2,
+                _ => _lowering.VisitOperation(op.WhenTrue),
+                _ => _lowering.VisitOperation(op.WhenFalse));
         }
         else
         {
-            _builder.EmitIf(condVal2,
-                _ => VisitOperation(op.WhenTrue));
+            _lowering.Builder.EmitIf(condVal2,
+                _ => _lowering.VisitOperation(op.WhenTrue));
         }
     }
 
@@ -165,8 +166,8 @@ public class StatementHandler : HandlerBase, IOperationHandler
         // shape compile). The leaf's own self-call resolves to itself, keeping TCO byte-identical
         // for every non-base-copy shape.
         if (op.ReturnedValue is IInvocationOperation tailCall
-            && _currentMethod != null
-            && SymbolEqualityComparer.Default.Equals(tailCall.TargetMethod, _currentMethod)
+            && _lowering.CurrentMethod != null
+            && SymbolEqualityComparer.Default.Equals(tailCall.TargetMethod, _lowering.CurrentMethod)
             // CA-v2b-2: TCO rebinds only the explicit params, NOT the receiver (param0), so the receiver must
             // be unchanged — either a static self-call (no receiver) or a `this`/base receiver. A non-`this`
             // instance receiver (`return other.Self(args)`, e.g. a polymorphic tail recursion
@@ -179,32 +180,32 @@ public class StatementHandler : HandlerBase, IOperationHandler
                 || !(tailCall.TargetMethod.IsVirtual || tailCall.TargetMethod.IsOverride
                      || tailCall.TargetMethod.IsAbstract)
                 || SymbolEqualityComparer.Default.Equals(
-                    ResolveMostDerivedOverride(tailCall.TargetMethod), _currentMethod))
+                    _lowering.ResolveMostDerivedOverride(tailCall.TargetMethod), _lowering.CurrentMethod))
             && TailCallRefArgsSelfThreaded(tailCall))
         {
             EmitTailCall(tailCall);
             return;
         }
 
-        var curRets = _ctx.Methods.CurrentClosureSpec?.ReturnSlots;
-        if (curRets == null && _currentMethod != null) _methodReturns.TryGetValue(_currentMethod, out curRets);
+        var curRets = _lowering.Context.Methods.CurrentClosureSpec?.ReturnSlots;
+        if (curRets == null && _lowering.CurrentMethod != null) _lowering.MethodReturns.TryGetValue(_lowering.CurrentMethod, out curRets);
         if (op.ReturnedValue != null && curRets is { Length: > 0 })
         {
             // All returns are single-value (aggregates are SystemObjectArray)
-            var srcVal = VisitExpression(op.ReturnedValue);
-            if (_currentMethod.Name == "OnOwnershipRequest")
+            var srcVal = _lowering.VisitExpression(op.ReturnedValue);
+            if (_lowering.CurrentMethod.Name == "OnOwnershipRequest")
             {
-                _ctx.Storage.TryDeclareVar("__returnValue", StorageTypes.Boolean);
-                EmitStoreField("__returnValue", srcVal);
+                _lowering.Context.Storage.TryDeclareVar("__returnValue", StorageTypes.Boolean);
+                _lowering.EmitStoreField("__returnValue", srcVal);
             }
             EmitPendingDispose();
-            EmitReturn(srcVal);
+            _lowering.EmitReturn(srcVal);
             return;
         }
         else
         {
             EmitPendingDispose();
-            EmitReturn();
+            _lowering.EmitReturn();
         }
     }
 
@@ -217,7 +218,7 @@ public class StatementHandler : HandlerBase, IOperationHandler
         {
             var p = arg.Parameter;
             if (p == null || (p.RefKind != RefKind.Ref && p.RefKind != RefKind.Out)) continue;
-            if (UnwrapConversions(arg.Value) is not IParameterReferenceOperation apr
+            if (LoweringServices.UnwrapConversions(arg.Value) is not IParameterReferenceOperation apr
                 || !SymbolEqualityComparer.Default.Equals(
                     apr.Parameter.OriginalDefinition, p.OriginalDefinition))
                 return false;
@@ -227,7 +228,7 @@ public class StatementHandler : HandlerBase, IOperationHandler
 
     void EmitTailCall(IInvocationOperation tailCall)
     {
-        var paramIds = _ctx.Methods.CurrentClosureSpec?.ParamVarIds ?? _methodParamVarIds[_currentMethod];
+        var paramIds = _lowering.Context.Methods.CurrentClosureSpec?.ParamVarIds ?? _lowering.MethodParamVarIds[_lowering.CurrentMethod];
 
         // Snapshot every arg into a temp BEFORE overwriting any param. VisitExpression returns a lazy expr
         // that reads its operand slots when lowered, not a materialized value — so storing param i first
@@ -236,27 +237,27 @@ public class StatementHandler : HandlerBase, IOperationHandler
         var argSlots = new int[tailCall.Arguments.Length];
         for (int i = 0; i < tailCall.Arguments.Length; i++)
         {
-            var argVal = VisitExpression(tailCall.Arguments[i].Value);
-            var slot = _ctx.Builder.AllocScratch(GetStorageType(tailCall.Arguments[i].Value.Type));
-            EmitAssign(slot, argVal);
+            var argVal = _lowering.VisitExpression(tailCall.Arguments[i].Value);
+            var slot = _lowering.Context.Builder.AllocScratch(_lowering.GetStorageType(tailCall.Arguments[i].Value.Type));
+            _lowering.EmitAssign(slot, argVal);
             argSlots[i] = slot;
         }
 
         // Overwrite param vars from the snapshots
         for (int i = 0; i < tailCall.Arguments.Length; i++)
-            EmitStoreField(paramIds[i], SlotRef(argSlots[i]));
+            _lowering.EmitStoreField(paramIds[i], _lowering.SlotRef(argSlots[i]));
 
         // Stage 2 §3.0 INV-2 / §5.6: the snapshot loop is Arguments.Length-bounded and so EXCLUDES
         // the hidden __envp. A self-tail-recursive capturing closure passes its OWN env forward, so
         // rebind __envp from itself — identity here, but the wiring is not elided (the MethodEntry
         // EnvAlloc after the __tco_ label re-runs per logical activation for freshness).
-        var tcoEnvp = _ctx.Methods.CurrentClosureSpec?.EnvpFieldId;
+        var tcoEnvp = _lowering.Context.Methods.CurrentClosureSpec?.EnvpFieldId;
         if (tcoEnvp != null)
-            EmitStoreField(tcoEnvp, LoadField(tcoEnvp, new StorageType(EnvEmit.EnvType)));
+            _lowering.EmitStoreField(tcoEnvp, _lowering.LoadField(tcoEnvp, new StorageType(EnvEmit.EnvType)));
 
         // Jump back to method entry via goto label
-        var func = _ctx.Methods.CurrentClosureSpec?.Function ?? _methodFunctions[_currentMethod];
-        _builder.EmitGoto($"__tco_{func.Name}");
+        var func = _lowering.Context.Methods.CurrentClosureSpec?.Function ?? _lowering.MethodFunctions[_lowering.CurrentMethod];
+        _lowering.Builder.EmitGoto($"__tco_{func.Name}");
     }
 
     void VisitBranch(IBranchOperation op)
@@ -265,15 +266,15 @@ public class StatementHandler : HandlerBase, IOperationHandler
         {
             EmitPendingDisposeForBreakContinue();
             // Switch breaks use goto to end label; loop breaks use structured CBreak
-            if (_ctx.ControlFlow.SwitchBreakLabels.Count > 0 && _ctx.ControlFlow.SwitchBreakLabels.Peek() != null)
-                _builder.EmitGoto(_ctx.ControlFlow.SwitchBreakLabels.Peek());
+            if (_lowering.Context.ControlFlow.SwitchBreakLabels.Count > 0 && _lowering.Context.ControlFlow.SwitchBreakLabels.Peek() != null)
+                _lowering.Builder.EmitGoto(_lowering.Context.ControlFlow.SwitchBreakLabels.Peek());
             else
-                _builder.EmitBreak();
+                _lowering.Builder.EmitBreak();
         }
         else if (op.BranchKind == BranchKind.Continue)
         {
             EmitPendingDisposeForBreakContinue();
-            _builder.EmitContinue();
+            _lowering.Builder.EmitContinue();
         }
         else if (op.BranchKind == BranchKind.GoTo)
         {
@@ -285,9 +286,9 @@ public class StatementHandler : HandlerBase, IOperationHandler
             // goto case <const>; / goto default; target a Roslyn label ("case 2:", "default") that is not a
             // valid UASM token — the enclosing switch maps it to a sanitized landing label. A plain user goto
             // (its label is emitted verbatim by ILabeledOperation) is not in the map and uses its own name.
-            var target = _ctx.ControlFlow.GotoCaseLabels.Count > 0 && _ctx.ControlFlow.GotoCaseLabels.Peek().TryGetValue(op.Target.Name, out var mapped)
+            var target = _lowering.Context.ControlFlow.GotoCaseLabels.Count > 0 && _lowering.Context.ControlFlow.GotoCaseLabels.Peek().TryGetValue(op.Target.Name, out var mapped)
                 ? mapped : op.Target.Name;
-            _builder.EmitGoto(target);
+            _lowering.Builder.EmitGoto(target);
         }
         else
         {
@@ -304,7 +305,7 @@ public class StatementHandler : HandlerBase, IOperationHandler
     /// </summary>
     void EmitPendingDispose()
     {
-        foreach (var scope in _usingDisposableStack)
+        foreach (var scope in _lowering.UsingDisposableStack)
         {
             for (int i = scope.Count - 1; i >= 0; i--)
             {
@@ -320,15 +321,15 @@ public class StatementHandler : HandlerBase, IOperationHandler
     /// </summary>
     void EmitPendingDisposeForBreakContinue()
     {
-        var loopDepth = _ctx.ControlFlow.LoopUsingDepthStack.Count > 0
-            ? _ctx.ControlFlow.LoopUsingDepthStack.Peek()
+        var loopDepth = _lowering.Context.ControlFlow.LoopUsingDepthStack.Count > 0
+            ? _lowering.Context.ControlFlow.LoopUsingDepthStack.Peek()
             : 0;
-        var currentDepth = _usingDisposableStack.Count;
+        var currentDepth = _lowering.UsingDisposableStack.Count;
         var scopesToDispose = currentDepth - loopDepth;
         if (scopesToDispose <= 0) return;
 
         int count = 0;
-        foreach (var scope in _usingDisposableStack)
+        foreach (var scope in _lowering.UsingDisposableStack)
         {
             if (count >= scopesToDispose) break;
             for (int i = scope.Count - 1; i >= 0; i--)
@@ -384,7 +385,7 @@ public class StatementHandler : HandlerBase, IOperationHandler
         if (!found || scopesToDispose <= 0) return;
 
         int count = 0;
-        foreach (var scope in _usingDisposableStack)
+        foreach (var scope in _lowering.UsingDisposableStack)
         {
             if (count >= scopesToDispose) break;
             for (int i = scope.Count - 1; i >= 0; i--)
@@ -407,28 +408,28 @@ public class StatementHandler : HandlerBase, IOperationHandler
                 VisitVariableDeclaration(decl);
                 foreach (var declarator in decl.Declarators)
                 {
-                    var localType = GetStorageTypeName(declarator.Symbol.Type);
+                    var localType = _lowering.GetStorageTypeName(declarator.Symbol.Type);
                     // Stage 2 §4.1: captured using-statement local → env cell read (readonly, so safe).
-                    var dispRef2 = _ctx.Closures.TryGetEnvBinding(declarator.Symbol, out _)
-                        ? EnvEmit.Read(_builder, _ctx, declarator.Symbol, new StorageType(localType))
-                        : LoadField(_localBindings.TryGetValue(declarator.Symbol, out var ub2) ? ub2.Id : declarator.Symbol.Name, new StorageType(localType));
+                    var dispRef2 = _lowering.Context.Closures.TryGetEnvBinding(declarator.Symbol, out _)
+                        ? EnvEmit.Read(_lowering.Builder, _lowering.Context, declarator.Symbol, new StorageType(localType))
+                        : _lowering.LoadField(_lowering.LocalBindings.TryGetValue(declarator.Symbol, out var ub2) ? ub2.Id : declarator.Symbol.Name, new StorageType(localType));
                     disposableVars.Add((dispRef2, declarator.Symbol.Type));
                 }
             }
         }
         else if (op.Resources != null)
         {
-            var resourceVal = VisitExpression(op.Resources);
+            var resourceVal = _lowering.VisitExpression(op.Resources);
             disposableVars.Add((resourceVal, op.Resources.Type));
         }
 
         // Push onto using stack so early exit (return/break/continue) can emit Dispose
-        _usingDisposableStack.Push(disposableVars);
+        _lowering.UsingDisposableStack.Push(disposableVars);
 
         if (op.Body != null)
-            VisitOperation(op.Body);
+            _lowering.VisitOperation(op.Body);
 
-        _usingDisposableStack.Pop();
+        _lowering.UsingDisposableStack.Pop();
 
         // Emit Dispose() in reverse declaration order (no try/finally in Udon)
         for (int i = disposableVars.Count - 1; i >= 0; i--)
@@ -443,26 +444,26 @@ public class StatementHandler : HandlerBase, IOperationHandler
     /// Dispose method (collected in CollectStructMethodsInOperation). Real Udon disposables keep the extern.</summary>
     void EmitDispose(CLeaf val, ITypeSymbol type)
     {
-        var resolvedType = ResolveType(type);
+        var resolvedType = _lowering.ResolveType(type);
         if (resolvedType is INamedTypeSymbol nt && TypeClassifier.IsUserStruct(nt)
             && EmitPolicy.FindStructDisposeMethod(nt) is { } dispose)
         {
-            EmitCallToMethod(ResolveStructMember(dispose), new List<CLeaf> { val });
+            _lowering.EmitCallToMethod(_lowering.ResolveStructMember(dispose), new List<CLeaf> { val });
             return;
         }
 
         void EmitCall()
-            => EmitExternVoid(UdonAbiKey.Method(GetStorageTypeName(resolvedType),
+            => _lowering.EmitExternVoid(UdonAbiKey.Method(_lowering.GetStorageTypeName(resolvedType),
                     "Dispose", "SystemVoid"),
                 new List<CLeaf> { val });
 
         if (resolvedType?.IsReferenceType == true
             || resolvedType?.TypeKind == TypeKind.TypeParameter)
         {
-            var present = ExternCall(
+            var present = _lowering.ExternCall(
                 UdonAbi.ObjectInequality,
-                new List<CLeaf> { val, Const(null, StorageTypes.Object) }, StorageTypes.Boolean);
-            _builder.EmitIf(present, _ => EmitCall());
+                new List<CLeaf> { val, _lowering.Const(null, StorageTypes.Object) }, StorageTypes.Boolean);
+            _lowering.Builder.EmitIf(present, _ => EmitCall());
             return;
         }
         EmitCall();
@@ -490,18 +491,18 @@ public class StatementHandler : HandlerBase, IOperationHandler
             // already clones aggregate values, so value semantics are preserved); an uninitialized
             // aggregate pre-allocates its default object[] (incl. nested sub-arrays) like the flat
             // path, since C# definite assignment permits field writes before any whole-value read.
-            if (_ctx.Closures.TryGetEnvBinding(local, out _))
+            if (_lowering.Context.Closures.TryGetEnvBinding(local, out _))
             {
                 var envInit = declarator.Initializer;
                 if (envInit != null)
                 {
-                    EnvEmit.Write(_builder, _ctx, local, VisitExpression(envInit.Value));
+                    EnvEmit.Write(_lowering.Builder, _lowering.Context, local, _lowering.VisitExpression(envInit.Value));
                 }
                 else if (local.Type is INamedTypeSymbol envAggT && TypeClassifier.IsAggregateValue(envAggT))
                 {
-                    var envAggLayout = _ctx.Aggregates.GetLayout(envAggT);
-                    EnvEmit.Write(_builder, _ctx, local,
-                        AggregateAbi.MintDefault(_builder, envAggLayout, _ctx.Aggregates.GetLayout, GetStorageTypeName));
+                    var envAggLayout = _lowering.Context.Aggregates.GetLayout(envAggT);
+                    EnvEmit.Write(_lowering.Builder, _lowering.Context, local,
+                        AggregateAbi.MintDefault(_lowering.Builder, envAggLayout, _lowering.Context.Aggregates.GetLayout, _lowering.GetStorageTypeName));
                 }
                 continue;
             }
@@ -515,15 +516,15 @@ public class StatementHandler : HandlerBase, IOperationHandler
 
             // Delegate-typed locals are SystemObjectArray bundle references via the type-map delegate arm
             // (design §2.1); the initializer's VisitDelegateCreation hoists any lambda and builds the bundle.
-            var udonType = GetStorageTypeName(local.Type);
-            var id = _ctx.Storage.DeclareLocal(local.Name, new StorageType(udonType));
-            _localBindings[local] = new EmitContext.LocalBinding(id);
+            var udonType = _lowering.GetStorageTypeName(local.Type);
+            var id = _lowering.Context.Storage.DeclareLocal(local.Name, new StorageType(udonType));
+            _lowering.LocalBindings[local] = new EmitContext.LocalBinding(id);
 
             var init = declarator.Initializer;
             if (init != null)
             {
-                var srcVal = VisitExpression(init.Value);
-                EmitStoreField(id, srcVal);
+                var srcVal = _lowering.VisitExpression(init.Value);
+                _lowering.EmitStoreField(id, srcVal);
             }
         }
     }
@@ -531,7 +532,7 @@ public class StatementHandler : HandlerBase, IOperationHandler
     void VisitAggregateLocalDeclaration(ILocalSymbol local, INamedTypeSymbol aggregateType,
         IVariableInitializerOperation init)
     {
-        var layout = _ctx.Aggregates.GetLayout(aggregateType);
+        var layout = _lowering.Context.Aggregates.GetLayout(aggregateType);
 
         // Declare as SystemObjectArray. Always REdeclare + REallocate, mirroring the scalar path:
         // _localBindings is keyed by ILocalSymbol and shared across generic-spec emissions of the
@@ -539,11 +540,11 @@ public class StatementHandler : HandlerBase, IOperationHandler
         // declaration and the object[] ctor — every spec-2 activation then aliased spec-1's one
         // array and per-frame struct locals broke under recursion (wave-9 round-5 [X7], VM-proven
         // 183 vs 126 in the second instantiation).
-        var id = _ctx.Storage.DeclareLocal(local.Name, new StorageType(AggregateAbi.ArrayType));
-        _localBindings[local] = new EmitContext.LocalBinding(id);
+        var id = _lowering.Context.Storage.DeclareLocal(local.Name, new StorageType(AggregateAbi.ArrayType));
+        _lowering.LocalBindings[local] = new EmitContext.LocalBinding(id);
 
         // Create object[] of correct size
-        AggregateAbi.AllocateField(_builder, id, layout);
+        AggregateAbi.AllocateField(_lowering.Builder, id, layout);
 
         var localId = id;
         if (init == null)
@@ -552,56 +553,56 @@ public class StatementHandler : HandlerBase, IOperationHandler
             // The flat array allocated above is NOT enough for a NESTED struct — its inner struct-typed
             // fields must be recursively allocated (exactly like default(T)/new T()), or a write to a
             // nested field (`n.inner.x = …`) hits a null sub-array and faults the real VM. (diff-fuzz w2)
-            AggregateAbi.DefaultInitializeField(_builder, localId, layout, _ctx.Aggregates.GetLayout, GetStorageTypeName);
+            AggregateAbi.DefaultInitializeField(_lowering.Builder, localId, layout, _lowering.Context.Aggregates.GetLayout, _lowering.GetStorageTypeName);
             return;
         }
 
-        var value = UnwrapConversions(init.Value);
+        var value = LoweringServices.UnwrapConversions(init.Value);
 
         if (value is ITupleOperation tupleLit)
         {
             // Tuple literal: set each element via __Set__
             for (int i = 0; i < tupleLit.Elements.Length && i < layout.Count; i++)
             {
-                AggregateAbi.WriteSlot(_builder, LoadField(localId, new StorageType(AggregateAbi.ArrayType)),
-                    i, VisitExpression(tupleLit.Elements[i]));
+                AggregateAbi.WriteSlot(_lowering.Builder, _lowering.LoadField(localId, new StorageType(AggregateAbi.ArrayType)),
+                    i, _lowering.VisitExpression(tupleLit.Elements[i]));
             }
         }
         else if (value is IDefaultValueOperation)
         {
-            AggregateAbi.DefaultInitializeField(_builder, localId, layout, _ctx.Aggregates.GetLayout, GetStorageTypeName);
+            AggregateAbi.DefaultInitializeField(_lowering.Builder, localId, layout, _lowering.Context.Aggregates.GetLayout, _lowering.GetStorageTypeName);
         }
         // CW27: `new V(args) { … }` must NOT take this arm — it never applied op.Initializer, silently
         // dropping the member writes; the generic arm's VisitObjectCreation applies it after the ctor.
         else if (value is IObjectCreationOperation ocCtor && ocCtor.Arguments.Length > 0
                  && ocCtor.Initializer == null
                  && TypeClassifier.IsUserStruct(aggregateType) && ocCtor.Constructor != null
-                 && _methodFunctions.ContainsKey(ocCtor.Constructor)
+                 && _lowering.MethodFunctions.ContainsKey(ocCtor.Constructor)
                  && CtorArgsArePositionalByValue(ocCtor))
         {
             // new V(args): default-init the already-allocated array, then run the registered ctor
             // (receiver = this array, mutated in place via this.field = … in the ctor body).
-            AggregateAbi.DefaultInitializeField(_builder, localId, layout, _ctx.Aggregates.GetLayout, GetStorageTypeName);
-            var ctorArgs = new List<CLeaf> { LoadField(localId, new StorageType(AggregateAbi.ArrayType)) };
+            AggregateAbi.DefaultInitializeField(_lowering.Builder, localId, layout, _lowering.Context.Aggregates.GetLayout, _lowering.GetStorageTypeName);
+            var ctorArgs = new List<CLeaf> { _lowering.LoadField(localId, new StorageType(AggregateAbi.ArrayType)) };
             foreach (var arg in ocCtor.Arguments)
-                ctorArgs.Add(VisitExpression(arg.Value));
-            EmitExprStmt(EmitCallToMethod(ocCtor.Constructor, ctorArgs));
+                ctorArgs.Add(_lowering.VisitExpression(arg.Value));
+            _lowering.EmitExprStmt(_lowering.EmitCallToMethod(ocCtor.Constructor, ctorArgs));
         }
         else if (value is IObjectCreationOperation oc && oc.Arguments.Length == 0)
         {
             // new V() / new V { field = ... }: the array is already allocated above; value-type
             // fields need 0/false/etc., then apply any object-initializer assignments. (A parameterless
             // struct ctor's VisitObjectCreation returns a null placeholder, so handle creation here.)
-            AggregateAbi.DefaultInitializeField(_builder, localId, layout, _ctx.Aggregates.GetLayout, GetStorageTypeName);
+            AggregateAbi.DefaultInitializeField(_lowering.Builder, localId, layout, _lowering.Context.Aggregates.GetLayout, _lowering.GetStorageTypeName);
             if (oc.Initializer != null)
-                EmitAggregateObjectInitializer(LoadField(localId, new StorageType(AggregateAbi.ArrayType)), layout, oc.Initializer);
+                _lowering.EmitAggregateObjectInitializer(_lowering.LoadField(localId, new StorageType(AggregateAbi.ArrayType)), layout, oc.Initializer);
         }
         else
         {
             // Method return, other local, etc.
             // VisitExpression clones aggregate locals/params automatically (Clone-on-read).
-            var srcVal = VisitExpression(init.Value);
-            EmitStoreField(localId, srcVal);
+            var srcVal = _lowering.VisitExpression(init.Value);
+            _lowering.EmitStoreField(localId, srcVal);
         }
     }
 

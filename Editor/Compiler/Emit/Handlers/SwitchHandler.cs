@@ -9,9 +9,10 @@ using Microsoft.CodeAnalysis.Operations;
 /// 140-line lowering deserves its own home. Pattern matching (IPatternCaseClauseOperation)
 /// and enum-typed switch values (with EmitEnumToUnderlying conversion) are supported.
 /// </summary>
-public class SwitchHandler : HandlerBase, IOperationHandler
+public class SwitchHandler : IOperationHandler
 {
-    public SwitchHandler(EmitContext ctx) : base(ctx) { }
+    readonly LoweringServices _lowering;
+    public SwitchHandler(LoweringServices lowering) => _lowering = lowering;
 
     public OperationKind[] HandledKinds { get; } = new[] { OperationKind.Switch };
 
@@ -25,19 +26,19 @@ public class SwitchHandler : HandlerBase, IOperationHandler
 
     void VisitSwitch(ISwitchOperation op)
     {
-        var valueType = GetStorageTypeName(op.Value.Type);
+        var valueType = _lowering.GetStorageTypeName(op.Value.Type);
         // Under ANF VisitExpression binds a side-effecting governor (`switch(Next())`) to a fresh scratch
         // exactly once, so the resulting leaf can be re-read across every case arm with no re-evaluation.
-        var valueVal = VisitExpression(op.Value);
+        var valueVal = _lowering.VisitExpression(op.Value);
 
         // Stage 2 §3: one Switch env per switch (shared by all sections), allocated before any case
         // pattern/section local is written — a case-label pattern var is bound while the case
         // CONDITION is built (below), so the env cell must already exist.
-        EnvEmit.Alloc(_builder, _ctx, _ctx.Closures.CaptureScope?.ScopeFor(op, CaptureScopeKind.Switch));
+        EnvEmit.Alloc(_lowering.Builder, _lowering.Context, _lowering.Context.Closures.CaptureScope?.ScopeFor(op, CaptureScopeKind.Switch));
 
-        var endLabel = _ctx.ControlFlow.NextSwitchEndLabel();
-        _ctx.ControlFlow.SwitchBreakLabels.Push(endLabel);
-        _ctx.ControlFlow.LoopUsingDepthStack.Push(_usingDisposableStack.Count);
+        var endLabel = _lowering.Context.ControlFlow.NextSwitchEndLabel();
+        _lowering.Context.ControlFlow.SwitchBreakLabels.Push(endLabel);
+        _lowering.Context.ControlFlow.LoopUsingDepthStack.Push(_lowering.UsingDisposableStack.Count);
         // Build a per-switch map: Roslyn goto-case/-default target name → sanitized UASM landing label. Only
         // targeted cases get a label (a switch with no goto-case keeps byte-identical UASM). Sorted for
         // determinism; labels derive from this switch's unique end-label counter.
@@ -48,11 +49,11 @@ public class SwitchHandler : HandlerBase, IOperationHandler
         int gi = 0;
         foreach (var name in gotoTargets.OrderBy(n => n, System.StringComparer.Ordinal))
             labelMap[name] = $"{labelBase}_{gi++}";
-        _ctx.ControlFlow.GotoCaseLabels.Push(labelMap);
+        _lowering.Context.ControlFlow.GotoCaseLabels.Push(labelMap);
         try
         {
             // Pre-convert enum switch value once (Udon VM has no enum-typed operators)
-            var convertedValueVal = EmitEnumToUnderlying(valueVal, op.Value.Type);
+            var convertedValueVal = _lowering.EmitEnumToUnderlying(valueVal, op.Value.Type);
 
             // convertedValueVal (enum→underlying) and valueVal are single-assignment governor leaves under
             // ANF — stable and re-readable across every case condition without a snapshot slot.
@@ -65,11 +66,11 @@ public class SwitchHandler : HandlerBase, IOperationHandler
         }
         finally
         {
-            _ctx.ControlFlow.GotoCaseLabels.Pop();
-            _ctx.ControlFlow.LoopUsingDepthStack.Pop();
-            _ctx.ControlFlow.SwitchBreakLabels.Pop();
+            _lowering.Context.ControlFlow.GotoCaseLabels.Pop();
+            _lowering.Context.ControlFlow.LoopUsingDepthStack.Pop();
+            _lowering.Context.ControlFlow.SwitchBreakLabels.Pop();
         }
-        _builder.EmitLabel(endLabel);
+        _lowering.Builder.EmitLabel(endLabel);
     }
 
     // Collect the label names of goto-case / goto-default branches inside THIS switch (a `goto case 2;` targets
@@ -113,7 +114,7 @@ public class SwitchHandler : HandlerBase, IOperationHandler
 
         if (caseCond != null)
         {
-            _builder.EmitIf(caseCond,
+            _lowering.Builder.EmitIf(caseCond,
                 _ => EmitCaseBody(op.Cases[caseIdx]),
                 _ => EmitSwitchCases(op, convertedValueVal, origValueVal, valueType, defaultIndex, caseIdx + 1));
         }
@@ -136,7 +137,7 @@ public class SwitchHandler : HandlerBase, IOperationHandler
             if (clauseCond == null) continue;
             caseCond = caseCond == null
                 ? clauseCond
-                : ExternCall(
+                : _lowering.ExternCall(
                     UdonAbi.BooleanConditionalOr,
                     new List<CLeaf> { caseCond, clauseCond },
                     StorageTypes.Boolean);
@@ -160,49 +161,49 @@ public class SwitchHandler : HandlerBase, IOperationHandler
                 if (EmitPolicy.IsNullableT(switchValueType, out var nblUnderlying))
                 {
                     if (singleValue.Value.ConstantValue is { HasValue: true, Value: null })
-                        return NullableAbi.IsNull(_builder, origValueVal);
-                    return NullableAbi.EmitNullGatedMatch(_builder, origValueVal, false,
-                        boxed => EmitConstantEquality(boxed, nblUnderlying,
-                            VisitExpression(singleValue.Value), false));
+                        return NullableAbi.IsNull(_lowering.Builder, origValueVal);
+                    return NullableAbi.EmitNullGatedMatch(_lowering.Builder, origValueVal, false,
+                        boxed => _lowering.EmitConstantEquality(boxed, nblUnderlying,
+                            _lowering.VisitExpression(singleValue.Value), false));
                 }
 
                 var eqType = valueType;
                 if (switchValueType is INamedTypeSymbol named && named.TypeKind == TypeKind.Enum)
-                    eqType = GetStorageTypeName(named.EnumUnderlyingType);
+                    eqType = _lowering.GetStorageTypeName(named.EnumUnderlyingType);
 
                 CLeaf caseValueVal;
                 // Compile-time fold for enum / numeric constant case labels.
                 // Avoids runtime SystemConvert.__ToInt32__SystemObject__SystemInt32 per case.
                 if (singleValue.Value.ConstantValue.HasValue)
                 {
-                    caseValueVal = Const(singleValue.Value.ConstantValue.Value, new StorageType(eqType));
+                    caseValueVal = _lowering.Const(singleValue.Value.ConstantValue.Value, new StorageType(eqType));
                 }
                 else
                 {
-                    caseValueVal = VisitExpression(singleValue.Value);
-                    caseValueVal = EmitEnumToUnderlying(caseValueVal, switchValueType);
+                    caseValueVal = _lowering.VisitExpression(singleValue.Value);
+                    caseValueVal = _lowering.EmitEnumToUnderlying(caseValueVal, switchValueType);
                 }
 
                 var eqSig = UdonAbiKey.Method(
                     eqType, "op_Equality", new[] { eqType, eqType }, "SystemBoolean");
 
                 var lhs = convertedValueVal;
-                return ExternCall(eqSig, new List<CLeaf> { lhs, caseValueVal }, StorageTypes.Boolean);
+                return _lowering.ExternCall(eqSig, new List<CLeaf> { lhs, caseValueVal }, StorageTypes.Boolean);
             }
             case IPatternCaseClauseOperation patternCase:
             {
                 var patValue = origValueVal;
-                var cond = EmitPatternCheck(patValue, switchValueType, patternCase.Pattern);
+                var cond = _lowering.EmitPatternCheck(patValue, switchValueType, patternCase.Pattern);
                 if (patternCase.Guard != null)
                 {
                     // `when` short-circuits on the type check: a strict AND extern would evaluate the
                     // guard even when the pattern did not match, and the guard reads the pattern-bound
                     // variable (e.g. `d.id` where `d` is only validly bound on a match) → a null-bundle
                     // read → VmFault. Evaluate the guard ONLY inside the matched branch.
-                    var guarded = _ctx.Builder.AllocScratch(StorageTypes.Boolean);
-                    EmitAssign(guarded, Const(false, StorageTypes.Boolean));
-                    _builder.EmitIf(cond, _ => EmitAssign(guarded, VisitExpression(patternCase.Guard)));
-                    cond = SlotRef(guarded);
+                    var guarded = _lowering.Context.Builder.AllocScratch(StorageTypes.Boolean);
+                    _lowering.EmitAssign(guarded, _lowering.Const(false, StorageTypes.Boolean));
+                    _lowering.Builder.EmitIf(cond, _ => _lowering.EmitAssign(guarded, _lowering.VisitExpression(patternCase.Guard)));
+                    cond = _lowering.SlotRef(guarded);
                 }
                 return cond;
             }
@@ -217,23 +218,23 @@ public class SwitchHandler : HandlerBase, IOperationHandler
         // landing label before the body; StatementHandler.VisitBranch resolves the goto through the same map.
         // Only emitted when targeted, so a switch without goto-case is unchanged. Roslyn names the targets
         // "case <const>:" and "default".
-        if (_ctx.ControlFlow.GotoCaseLabels.Count > 0 && _ctx.ControlFlow.GotoCaseLabels.Peek().Count > 0)
+        if (_lowering.Context.ControlFlow.GotoCaseLabels.Count > 0 && _lowering.Context.ControlFlow.GotoCaseLabels.Peek().Count > 0)
         {
-            var map = _ctx.ControlFlow.GotoCaseLabels.Peek();
+            var map = _lowering.Context.ControlFlow.GotoCaseLabels.Peek();
             foreach (var clause in caseSection.Clauses)
             {
                 string roslynName = clause switch
                 {
                     IDefaultCaseClauseOperation => "default",
                     ISingleValueCaseClauseOperation { Value: { ConstantValue: { HasValue: true, Value: { } cv } } }
-                        => "case " + ToInvariantString(cv) + ":",
+                        => "case " + LoweringServices.ToInvariantString(cv) + ":",
                     _ => null,
                 };
                 if (roslynName != null && map.TryGetValue(roslynName, out var uasmLabel))
-                    _builder.EmitLabel(uasmLabel);
+                    _lowering.Builder.EmitLabel(uasmLabel);
             }
         }
         foreach (var stmt in caseSection.Body)
-            VisitOperation(stmt);
+            _lowering.VisitOperation(stmt);
     }
 }

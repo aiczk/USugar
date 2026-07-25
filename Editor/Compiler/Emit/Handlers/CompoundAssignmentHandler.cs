@@ -5,7 +5,7 @@ using Microsoft.CodeAnalysis.Operations;
 /// <summary>Handles `a += b`, `a -= b`, `a++`, `++a`, etc.</summary>
 public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandler
 {
-    public CompoundAssignmentHandler(EmitContext ctx) : base(ctx) { }
+    public CompoundAssignmentHandler(LoweringServices lowering) : base(lowering) { }
 
     // IIncrementOrDecrementOperation spans BOTH Increment and Decrement — a single kind would drop `x--`.
     public OperationKind[] HandledKinds { get; } = new[]
@@ -40,31 +40,31 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
         // wrapped visit — but only through the value-preserving conversions (WjR3 A11: the full strip ate
         // the user's inline `(Suit)(k % 4)` cast and Concat'd the raw number). Plain operands fall
         // through untouched (byte-neutral for every prior shape).
-        if (op.OperatorKind == BinaryOperatorKind.Add && GetStorageTypeName(op.Type) == "SystemString")
+        if (op.OperatorKind == BinaryOperatorKind.Add && _lowering.GetStorageTypeName(op.Type) == "SystemString")
         {
-            var vOp = UnwrapConcatOperand(op.Value);
+            var vOp = LoweringServices.UnwrapConcatOperand(op.Value);
             // Same choke as the binary-concat and interpolation surfaces: an ndim or object[]-emulated
             // value-type operand (user struct / tuple / anonymous type) would launder to "System.Object[]".
             ClassAbi.RejectImplicitToString(vOp.Type);
-            if (ResolveType(vOp.Type) is INamedTypeSymbol vt
-                && (TypeClassifier.IsUserClass(vt) || IsFoldedEnum(vt)))
+            if (_lowering.ResolveType(vOp.Type) is INamedTypeSymbol vt
+                && (TypeClassifier.IsUserClass(vt) || _lowering.IsFoldedEnum(vt)))
             {
-                var converted = ConvertConcatOperand(VisitExpression(vOp), vOp);
-                var concat = ExternCall(UdonAbi.StringConcatObjects,
+                var converted = _lowering.ConvertConcatOperand(_lowering.VisitExpression(vOp), vOp);
+                var concat = _lowering.ExternCall(UdonAbi.StringConcatObjects,
                     new List<CLeaf> { leftVal, converted }, StorageTypes.String);
                 lv.Write(concat);
                 return concat;
             }
         }
 
-        var rightVal = VisitExpression(op.Value);
+        var rightVal = _lowering.VisitExpression(op.Value);
 
         // User-defined struct operator (s += t uses the struct's operator +): static method call, then write
         // back. The struct's Udon type is SystemObjectArray, so built-in ABI resolution would be invalid.
         if (op.OperatorMethod is { MethodKind: MethodKind.UserDefinedOperator } cuOpM
             && cuOpM.ContainingType is INamedTypeSymbol cuOpCt && TypeClassifier.IsObjectArrayEmulated(cuOpCt))
         {
-            var res = EmitCallToMethod(ResolveStructMember(cuOpM), new List<CLeaf> { leftVal, rightVal });
+            var res = _lowering.EmitCallToMethod(_lowering.ResolveStructMember(cuOpM), new List<CLeaf> { leftVal, rightVal });
             lv.Write(res);
             return res;
         }
@@ -73,7 +73,7 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
         if (EmitPolicy.IsNullableT(op.Target.Type, out var tUnderlying))
         {
             var rNullable = EmitPolicy.IsNullableT(op.Value.Type, out var vUnderlying);
-            var lifted = EmitLiftedBinaryCore(
+            var lifted = _lowering.EmitLiftedBinaryCore(
                 leftVal, true, tUnderlying,
                 rightVal, rNullable, rNullable ? vUnderlying : op.Value.Type,
                 op.OperatorKind, op.OperatorMethod, op.Type);
@@ -81,12 +81,12 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
             return lifted;
         }
 
-        var resultType = GetStorageTypeName(op.Type);
+        var resultType = _lowering.GetStorageTypeName(op.Type);
 
         // long/ulong/uint %= : no Udon op_Remainder extern; polyfill a - (a/b)*b (shared with the binary path).
-        if (op.OperatorKind == BinaryOperatorKind.Remainder && RemainderNeedsPolyfill(resultType))
+        if (op.OperatorKind == BinaryOperatorKind.Remainder && LoweringServices.RemainderNeedsPolyfill(resultType))
         {
-            var rem = EmitRemainderViaDivision(leftVal, rightVal, resultType);
+            var rem = _lowering.EmitRemainderViaDivision(leftVal, rightVal, resultType);
             lv.Write(rem);
             return rem;
         }
@@ -100,24 +100,24 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
         // Explicit operand promotion: byte slot pushed to int extern requires ToInt32 conversion
         // (matches ExpressionHandler.VisitConversion behaviour for byte+byte). Without this we
         // rely on Udon VM's implicit boxed-value coercion, which is fragile across SDK updates.
-        var leftType = GetStorageTypeName(op.Target.Type);
+        var leftType = _lowering.GetStorageTypeName(op.Target.Type);
         if (ExternResolver.IsSmallIntOrChar(leftType))
             leftVal = PromoteToInt32(leftVal, leftType);
-        var rightType = GetStorageTypeName(op.Value.Type);
+        var rightType = _lowering.GetStorageTypeName(op.Value.Type);
         if (ExternResolver.IsSmallIntOrChar(rightType))
             rightVal = PromoteToInt32(rightVal, rightType);
 
         var sig = op.OperatorMethod != null
-            ? _ctx.Abi.BindOperator(op.OperatorMethod, type => GetStorageTypeName(type))
-            : _ctx.Abi.BindExact(ExternResolver.ResolveBuiltInBinaryExtern(
+            ? _lowering.Context.Abi.BindOperator(op.OperatorMethod, type => _lowering.GetStorageTypeName(type))
+            : _lowering.Context.Abi.BindExact(ExternResolver.ResolveBuiltInBinaryExtern(
                 op.OperatorKind,
-                ResolveType(op.Target.Type), ResolveType(op.Value.Type),
-                ResolveType(op.Type), GetStorageTypeName));
-        CLeaf resultVal = ExternCall(sig, new List<CLeaf> { leftVal, rightVal }, new StorageType(opResultType));
+                _lowering.ResolveType(op.Target.Type), _lowering.ResolveType(op.Value.Type),
+                _lowering.ResolveType(op.Type), _lowering.GetStorageTypeName));
+        CLeaf resultVal = _lowering.ExternCall(sig, new List<CLeaf> { leftVal, rightVal }, new StorageType(opResultType));
 
         // Narrow back to original type if promoted (C#-unchecked wrap, not checked Convert)
         if (opResultType != resultType)
-            resultVal = EmitNarrowingConvert(resultVal, opResultType, resultType);
+            resultVal = _lowering.EmitNarrowingConvert(resultVal, opResultType, resultType);
 
         lv.Write(resultVal);
         return resultVal;
@@ -143,14 +143,14 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
 
         var lv = PrepareLValue(op.Target);
         var leftVal = lv.Value;
-        var right = VisitLoweredExpression(op.Value);
+        var right = _lowering.VisitLoweredExpression(op.Value);
         if (op.OperatorKind == BinaryOperatorKind.Add)
-            RejectUnsafeCrossProgramDelegateWrite(op.Target, right.Info);
+            _lowering.RejectUnsafeCrossProgramDelegateWrite(op.Target, right.Info);
         var rightVal = right.Leaf;
 
         var sigPart = DelegateAbi.BuildSigPart(
-            invoke, _ctx.Session.Types, _ctx.Generics.TypeParamMap);
-        RegisterMulticastSig(sigPart, invoke,
+            invoke, _lowering.Context.Session.Types, _lowering.Context.Generics.TypeParamMap);
+        _lowering.RegisterMulticastSig(sigPart, invoke,
             op.OperatorKind == BinaryOperatorKind.Add
                 ? MulticastOperations.Combine
                 : MulticastOperations.Remove);
@@ -159,7 +159,7 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
             ? DelegateAbi.MulticastCombineName(sigPart)
             : DelegateAbi.MulticastRemoveName(sigPart);
 
-        var resultVal = _builder.InternalCall(helperName, new List<CLeaf> { leftVal, rightVal }, new StorageType(DelegateAbi.BundleType));
+        var resultVal = _lowering.Builder.InternalCall(helperName, new List<CLeaf> { leftVal, rightVal }, new StorageType(DelegateAbi.BundleType));
         lv.Write(resultVal);
         return resultVal;
     }
@@ -179,40 +179,40 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
         var evt = evtRef.Event;
         var storageName = evt.IsStatic
             ? StaticOwnerAbi.EventName(evt,
-                ResolveType(evt.ContainingType) as INamedTypeSymbol ?? evt.ContainingType)
+                _lowering.ResolveType(evt.ContainingType) as INamedTypeSymbol ?? evt.ContainingType)
             : evt.Name;
 
         if (evt.ContainingType is INamedTypeSymbol { TypeKind: TypeKind.Interface } localInterface
-            && _planner.InterfaceIsLocalUserClassOnly(localInterface))
+            && _lowering.Planner.InterfaceIsLocalUserClassOnly(localInterface))
         {
             var accessor = op.Adds ? evt.AddMethod : evt.RemoveMethod;
             if (accessor == null)
                 throw new System.NotSupportedException($"Event '{evt.Name}' has no accessor.");
-            var recvSlot = _builder.AllocScratch(new StorageType(AggregateAbi.ArrayType));
-            EmitAssign(recvSlot, LoadInstanceRaw(evtRef.Instance));
-            var handlerSlot = _builder.AllocScratch(GetStorageType(evt.Type));
-            EmitAssign(handlerSlot, VisitExpression(op.HandlerValue));
+            var recvSlot = _lowering.Builder.AllocScratch(new StorageType(AggregateAbi.ArrayType));
+            _lowering.EmitAssign(recvSlot, _lowering.LoadInstanceRaw(evtRef.Instance));
+            var handlerSlot = _lowering.Builder.AllocScratch(_lowering.GetStorageType(evt.Type));
+            _lowering.EmitAssign(handlerSlot, _lowering.VisitExpression(op.HandlerValue));
             var site = CallableSites.Require(op, accessor);
-            var targets = _ctx.VirtualDispatch.Resolve(site, localInterface).RuntimeTargets;
+            var targets = _lowering.Context.VirtualDispatch.Resolve(site, localInterface).RuntimeTargets;
             if (targets.Count == 0)
                 throw new System.NotSupportedException(
                     $"Interface event '{localInterface.Name}.{evt.Name}' has no minted implementation.");
             if (targets.Count == 1)
             {
-                EmitExprStmt(EmitCallToMethod(ResolveStructMember(targets[0].Impl),
-                    new List<CLeaf> { SlotRef(recvSlot), SlotRef(handlerSlot) }, op.Syntax));
+                _lowering.EmitExprStmt(_lowering.EmitCallToMethod(_lowering.ResolveStructMember(targets[0].Impl),
+                    new List<CLeaf> { _lowering.SlotRef(recvSlot), _lowering.SlotRef(handlerSlot) }, op.Syntax));
                 return null;
             }
-            var typeObj = AggregateAbi.ReadSlot(_builder, SlotRef(recvSlot), 0, StorageTypes.String);
+            var typeObj = AggregateAbi.ReadSlot(_lowering.Builder, _lowering.SlotRef(recvSlot), 0, StorageTypes.String);
             foreach (var target in targets)
             {
-                var match = ExternCall(
+                var match = _lowering.ExternCall(
                     UdonAbi.StringEquality,
-                    new List<CLeaf> { typeObj, LoadField(target.TypeObjVar, StorageTypes.String) },
+                    new List<CLeaf> { typeObj, _lowering.LoadField(target.TypeObjVar, StorageTypes.String) },
                     StorageTypes.Boolean);
-                _builder.EmitIf(match, _ => EmitExprStmt(EmitCallToMethod(
-                    ResolveStructMember(target.Impl),
-                    new List<CLeaf> { SlotRef(recvSlot), SlotRef(handlerSlot) }, op.Syntax)), null);
+                _lowering.Builder.EmitIf(match, _ => _lowering.EmitExprStmt(_lowering.EmitCallToMethod(
+                    _lowering.ResolveStructMember(target.Impl),
+                    new List<CLeaf> { _lowering.SlotRef(recvSlot), _lowering.SlotRef(handlerSlot) }, op.Syntax)), null);
             }
             return null;
         }
@@ -231,42 +231,42 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
             CLeaf stagedReceiver = null;
             if (crossBehaviourCustom)
                 stagedReceiver = objectArrayOwner
-                    ? LoadInstanceRaw(evtRef.Instance)
-                    : VisitExpression(evtRef.Instance);
-            var emittedHandler = VisitLoweredExpression(op.HandlerValue);
+                    ? _lowering.LoadInstanceRaw(evtRef.Instance)
+                    : _lowering.VisitExpression(evtRef.Instance);
+            var emittedHandler = _lowering.VisitLoweredExpression(op.HandlerValue);
             var handlerValue = emittedHandler.Leaf;
             if (objectArrayOwner)
             {
                 if (accessor.IsStatic)
                 {
-                    EmitExprStmt(EmitCallToMethod(ResolveStructMember(accessor),
+                    _lowering.EmitExprStmt(_lowering.EmitCallToMethod(_lowering.ResolveStructMember(accessor),
                         new List<CLeaf> { handlerValue }, op.Syntax));
                     return null;
                 }
                 var receiver = evtRef.Instance is IInstanceReferenceOperation
-                    ? (_ctx.Methods.CurrentStructReceiverParamId is { } receiverId
-                        ? LoadField(receiverId, new StorageType(AggregateAbi.ArrayType))
+                    ? (_lowering.Context.Methods.CurrentStructReceiverParamId is { } receiverId
+                        ? _lowering.LoadField(receiverId, new StorageType(AggregateAbi.ArrayType))
                         : throw new System.NotSupportedException(
                             $"Custom event '{evt.Name}' has no class receiver in this context."))
                     : stagedReceiver;
-                EmitExprStmt(EmitCallToMethod(ResolveStructMember(accessor),
+                _lowering.EmitExprStmt(_lowering.EmitCallToMethod(_lowering.ResolveStructMember(accessor),
                     new List<CLeaf> { receiver, handlerValue }, op.Syntax));
                 return null;
             }
             if (crossBehaviourCustom)
             {
-                RejectUnsafeCrossProgramEventHandler(evt, emittedHandler.Info);
-                var (exportName, paramIds, _) = GetCalleeLayout(accessor);
+                _lowering.RejectUnsafeCrossProgramEventHandler(evt, emittedHandler.Info);
+                var (exportName, paramIds, _) = _lowering.GetCalleeLayout(accessor);
                 if (paramIds.Length != 1)
                     throw new System.InvalidOperationException(
                         $"Event accessor '{accessor.Name}' has {paramIds.Length} parameters; expected one.");
-                CrossCall(stagedReceiver, exportName,
-                    CrossCallParameters(accessor, paramIds, new[] { handlerValue }),
+                _lowering.CrossCall(stagedReceiver, exportName,
+                    _lowering.CrossCallParameters(accessor, paramIds, new[] { handlerValue }),
                     System.Array.Empty<ReturnSlot>(), StorageTypes.Void,
-                    TryMarkReentrantCrossDispatch(op, accessor));
+                    _lowering.TryMarkReentrantCrossDispatch(op, accessor));
                 return null;
             }
-            EmitExprStmt(EmitCallToMethod(accessor, new List<CLeaf> { handlerValue }, op.Syntax));
+            _lowering.EmitExprStmt(_lowering.EmitCallToMethod(accessor, new List<CLeaf> { handlerValue }, op.Syntax));
             return null;
         }
 
@@ -280,39 +280,39 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
         CLeaf currentVal;
         if (crossBehaviour)
         {
-            eventReceiver = VisitExpression(evtRef.Instance);
-            currentVal = LoadProgramVariable(
+            eventReceiver = _lowering.VisitExpression(evtRef.Instance);
+            currentVal = _lowering.LoadProgramVariable(
                 eventReceiver, storageName, new StorageType(DelegateAbi.BundleType));
         }
         else
         {
-            currentVal = LoadField(storageName, new StorageType(DelegateAbi.BundleType));
+            currentVal = _lowering.LoadField(storageName, new StorageType(DelegateAbi.BundleType));
         }
-        var handler = VisitLoweredExpression(op.HandlerValue);
+        var handler = _lowering.VisitLoweredExpression(op.HandlerValue);
         if (op.Adds)
-            RejectUnsafeCrossProgramEventHandler(evt, handler.Info);
+            _lowering.RejectUnsafeCrossProgramEventHandler(evt, handler.Info);
         var handlerVal = handler.Leaf;
 
         var sigPart = DelegateAbi.BuildSigPart(
-            invoke, _ctx.Session.Types, _ctx.Generics.TypeParamMap);
-        RegisterMulticastSig(sigPart, invoke,
+            invoke, _lowering.Context.Session.Types, _lowering.Context.Generics.TypeParamMap);
+        _lowering.RegisterMulticastSig(sigPart, invoke,
             op.Adds ? MulticastOperations.Combine : MulticastOperations.Remove);
 
         var helperName = op.Adds
             ? DelegateAbi.MulticastCombineName(sigPart)
             : DelegateAbi.MulticastRemoveName(sigPart);
 
-        var resultVal = _builder.InternalCall(helperName, new List<CLeaf> { currentVal, handlerVal }, new StorageType(DelegateAbi.BundleType));
+        var resultVal = _lowering.Builder.InternalCall(helperName, new List<CLeaf> { currentVal, handlerVal }, new StorageType(DelegateAbi.BundleType));
         if (crossBehaviour)
-            StoreProgramVariable(eventReceiver, storageName,
+            _lowering.StoreProgramVariable(eventReceiver, storageName,
                 new StorageType(DelegateAbi.BundleType), resultVal);
         else
-            EmitStoreField(storageName, resultVal);
+            _lowering.EmitStoreField(storageName, resultVal);
         return null; // event add/remove is a void-shaped statement expression
     }
 
     CLeaf PromoteToInt32(CLeaf value, string srcUdonType)
-        => ExternCall(UdonAbiKey.Method("SystemConvert", "ToInt32",
+        => _lowering.ExternCall(UdonAbiKey.Method("SystemConvert", "ToInt32",
                 new[] { srcUdonType }, "SystemInt32"),
             new List<CLeaf> { value }, StorageTypes.Int32);
 
@@ -328,7 +328,7 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
         if (op.OperatorMethod is { MethodKind: MethodKind.UserDefinedOperator } iuOpM
             && iuOpM.ContainingType is INamedTypeSymbol iuOpCt && TypeClassifier.IsObjectArrayEmulated(iuOpCt))
         {
-            var res = EmitCallToMethod(ResolveStructMember(iuOpM), new List<CLeaf> { targetVal });
+            var res = _lowering.EmitCallToMethod(_lowering.ResolveStructMember(iuOpM), new List<CLeaf> { targetVal });
             lv.Write(res);
             return op.IsPostfix ? lv.Value : res;
         }
@@ -337,9 +337,9 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
         if (EmitPolicy.IsNullableT(op.Type, out var incUnderlying))
         {
             var kind = op.Kind == OperationKind.Increment ? BinaryOperatorKind.Add : BinaryOperatorKind.Subtract;
-            var lifted = EmitLiftedBinaryCore(
+            var lifted = _lowering.EmitLiftedBinaryCore(
                 targetVal, true, incUnderlying,
-                Const(1, GetStorageType(incUnderlying)), false, incUnderlying,
+                _lowering.Const(1, _lowering.GetStorageType(incUnderlying)), false, incUnderlying,
                 kind, null, op.Type);
             lv.Write(lifted);
             // Postfix returns the OLD value: targetVal (= lv.Value) is a single-assignment scratch leaf bound
@@ -347,31 +347,31 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
             return op.IsPostfix ? targetVal : lifted;
         }
 
-        var udonType = GetStorageTypeName(op.Type);
+        var udonType = _lowering.GetStorageTypeName(op.Type);
 
         // Promote small integers: Udon VM has no byte/sbyte/short/ushort operators
         var opType = udonType;
         if (ExternResolver.IsSmallIntOrChar(opType))
             opType = "SystemInt32";
 
-        var operandType = ResolveType(op.Type);
+        var operandType = _lowering.ResolveType(op.Type);
         var sig = ExternResolver.ResolveBuiltInBinaryExtern(
             op.Kind == OperationKind.Increment
                 ? BinaryOperatorKind.Add
                 : BinaryOperatorKind.Subtract,
-            operandType, operandType, operandType, GetStorageTypeName);
+            operandType, operandType, operandType, _lowering.GetStorageTypeName);
 
-        var oneConst = Const(1, new StorageType(sig.ParameterTypes[1]));
+        var oneConst = _lowering.Const(1, new StorageType(sig.ParameterTypes[1]));
 
         // Explicit operand promotion to match the int extern signature.
         if (ExternResolver.IsSmallIntOrChar(udonType))
             targetVal = PromoteToInt32(targetVal, udonType);
 
-        CLeaf resultVal = ExternCall(sig, new List<CLeaf> { targetVal, oneConst }, new StorageType(opType));
+        CLeaf resultVal = _lowering.ExternCall(sig, new List<CLeaf> { targetVal, oneConst }, new StorageType(opType));
 
         // Narrow back to original type if promoted (C#-unchecked wrap, not checked Convert)
         if (opType != udonType)
-            resultVal = EmitNarrowingConvert(resultVal, opType, udonType);
+            resultVal = _lowering.EmitNarrowingConvert(resultVal, opType, udonType);
 
         lv.Write(resultVal);
 

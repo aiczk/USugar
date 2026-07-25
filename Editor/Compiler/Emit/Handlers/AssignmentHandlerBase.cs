@@ -9,19 +9,20 @@ using Microsoft.CodeAnalysis.Operations;
 /// compound, coalesce, and deconstruction assignment.
 /// GetAssignTargetFieldName is used by SimpleAssignmentHandler. EmitWriteBack's array-element and
 /// cross-behaviour-field arms reuse CaptureLValue's cached receiver/index legs
-/// ones) — the actual Set emission is HandlerBase.EmitArrayElementSet / EmitCrossBehaviourFieldSet,
-/// shared with HandlerBase's single-write path (PrepareArrayElementSet / TryPrepareFieldSet) so the
+/// ones) — the actual Set emission is LoweringServices.EmitArrayElementSet / EmitCrossBehaviourFieldSet,
+/// shared with LoweringServices's single-write path (PrepareArrayElementSet / TryPrepareFieldSet) so the
 /// two mechanisms can't drift on the emitted extern.
 /// </summary>
-public abstract class AssignmentHandlerBase : HandlerBase
+public abstract class AssignmentHandlerBase
 {
-    protected AssignmentHandlerBase(EmitContext ctx) : base(ctx) { }
+    protected readonly LoweringServices _lowering;
+    protected AssignmentHandlerBase(LoweringServices lowering) => _lowering = lowering;
 
     // ── LValue Capture ──
     // Evaluates and caches sub-expressions of an l-value (array ref, index, instance)
     // to avoid re-evaluating side-effecting expressions during write-back.
 
-    protected LValuePlan PrepareLValue(IOperation target)
+    protected LoweringServices.LValuePlan PrepareLValue(IOperation target)
     {
         var plan = CaptureLValue(target);
         var captured = plan;
@@ -29,7 +30,7 @@ public abstract class AssignmentHandlerBase : HandlerBase
         return plan;
     }
 
-    LValuePlan CaptureLValue(IOperation target)
+    LoweringServices.LValuePlan CaptureLValue(IOperation target)
     {
         // CW1 lift: compound/inc-dec READ of a runtime-polymorphic accessor on a v1-class receiver —
         // dispatch the getter through the typeobj machinery and cache the STAGED legs so
@@ -37,11 +38,11 @@ public abstract class AssignmentHandlerBase : HandlerBase
         // exactly once). The static arms below bind the receiver's STATIC accessor.
         if (target is IPropertyReferenceOperation vCapRef
             && VirtualDispatch.FindAccessor(vCapRef.Property, getter: true) is { } vCapGetter
-            && IsAccessorDispatchSite(vCapRef, vCapGetter, out var vCapRecvTy))
+            && _lowering.IsAccessorDispatchSite(vCapRef, vCapGetter, out var vCapRecvTy))
         {
-            var (vCapRecv, vCapIdx) = StageAccessorDispatchLegs(vCapRef);
-            var current = EmitAccessorDispatch(vCapRef.Property, vCapRecvTy, vCapGetter, vCapRecv, vCapIdx, null);
-            return new LValuePlan { Value = current, ArrayVal = vCapRecv, IndexArgs = vCapIdx };
+            var (vCapRecv, vCapIdx) = _lowering.StageAccessorDispatchLegs(vCapRef);
+            var current = _lowering.EmitAccessorDispatch(vCapRef.Property, vCapRecvTy, vCapGetter, vCapRecv, vCapIdx, null);
+            return new LoweringServices.LValuePlan { Value = current, ArrayVal = vCapRecv, IndexArgs = vCapIdx };
         }
 
         switch (target)
@@ -55,16 +56,16 @@ public abstract class AssignmentHandlerBase : HandlerBase
             // param0 (CInternalCall arity skew); it falls through to the receiver-as-param0 arm below.
             case IPropertyReferenceOperation { Instance: IInstanceReferenceOperation, Property: { IsIndexer: true } } idxRef
                 when !TypeClassifier.IsObjectArrayEmulated(idxRef.Property.ContainingType)
-                && ResolveDispatchProperty(idxRef).GetMethod is { } idxDispatchGetter
-                && _methodFunctions.ContainsKey(idxDispatchGetter):
+                && _lowering.ResolveDispatchProperty(idxRef).GetMethod is { } idxDispatchGetter
+                && _lowering.MethodFunctions.ContainsKey(idxDispatchGetter):
             {
                 // Each VisitExpression(arg) is bound to a scratch leaf once under ANF — the index side effect
                 // runs exactly once and the SAME leaf is reused by the getter here and the setter in
                 // EmitWriteBack (via IndexArgs), so the cache itself is load-bearing but needs no extra copy.
                 // Wave-9 round-4: slotted by parameter ordinal (named/reordered index args bind by name).
-                var cachedArgs = EvaluateIndexerArgs(idxRef);
-                var currentVal = EmitCallToMethod(idxDispatchGetter, new List<CLeaf>(cachedArgs));
-                return new LValuePlan { Value = currentVal, IndexArgs = cachedArgs };
+                var cachedArgs = _lowering.EvaluateIndexerArgs(idxRef);
+                var currentVal = _lowering.EmitCallToMethod(idxDispatchGetter, new List<CLeaf>(cachedArgs));
+                return new LoweringServices.LValuePlan { Value = currentVal, IndexArgs = cachedArgs };
             }
             // User-defined indexer on an object[]-emulated instance (`s[i] += x`, and this/base inside a
             // struct or v1-class body): cache the receiver and the (possibly side-effecting) index args
@@ -75,25 +76,25 @@ public abstract class AssignmentHandlerBase : HandlerBase
                 when sIdxRef.Instance?.Type is INamedTypeSymbol sIdxType && TypeClassifier.IsObjectArrayEmulated(sIdxType)
                 && sIdxRef.Property.GetMethod is { } sIdxGetterRaw:
             {
-                var recv = LoadInstanceRaw(sIdxRef.Instance);
-                var cachedArgs = EvaluateIndexerArgs(sIdxRef); // wave-9 r4: named index args bind by ordinal
+                var recv = _lowering.LoadInstanceRaw(sIdxRef.Instance);
+                var cachedArgs = _lowering.EvaluateIndexerArgs(sIdxRef); // wave-9 r4: named index args bind by ordinal
                 var getterArgs = new List<CLeaf> { recv };
                 getterArgs.AddRange(cachedArgs);
-                var currentVal = EmitCallToMethod(ResolveStructMember(sIdxGetterRaw), getterArgs);
-                return new LValuePlan { Value = currentVal, ArrayVal = recv, IndexArgs = cachedArgs };
+                var currentVal = _lowering.EmitCallToMethod(_lowering.ResolveStructMember(sIdxGetterRaw), getterArgs);
+                return new LoweringServices.LValuePlan { Value = currentVal, ArrayVal = recv, IndexArgs = cachedArgs };
             }
             // Wave-9 round-2 [W6]: user indexer COMPOUND assignment through a VARIABLE receiver
             // (`s[i] += x` where s is an own-typed copy / base-typed ref / another behaviour): read via
             // the cross-program getter; the receiver and the ordinal-ordered index args are cached so
             // EmitWriteBack's setter dispatch reuses them (index side effects run exactly once).
             case IPropertyReferenceOperation vIdxRef
-                when IsVariableReceiverBehaviourIndexer(vIdxRef) && vIdxRef.Property.GetMethod is { } vIdxGetter:
+                when LoweringServices.IsVariableReceiverBehaviourIndexer(vIdxRef) && vIdxRef.Property.GetMethod is { } vIdxGetter:
             {
-                var recvVal = VisitExpression(vIdxRef.Instance);
-                var cachedArgs = EvaluateIndexerArgs(vIdxRef);
-                var currentVal = EmitCrossIndexerCall(vIdxGetter, recvVal, cachedArgs,
-                    TryMarkReentrantCrossDispatch(vIdxRef, vIdxGetter)); // wave-12 r2 [V1]
-                return new LValuePlan { Value = currentVal, InstanceVal = recvVal, IndexArgs = cachedArgs };
+                var recvVal = _lowering.VisitExpression(vIdxRef.Instance);
+                var cachedArgs = _lowering.EvaluateIndexerArgs(vIdxRef);
+                var currentVal = _lowering.EmitCrossIndexerCall(vIdxGetter, recvVal, cachedArgs,
+                    _lowering.TryMarkReentrantCrossDispatch(vIdxRef, vIdxGetter)); // wave-12 r2 [V1]
+                return new LoweringServices.LValuePlan { Value = currentVal, InstanceVal = recvVal, IndexArgs = cachedArgs };
             }
             // Wave-9 round-4 [X4]: user indexer COMPOUND assignment (and inc-dec) through an
             // INTERFACE-typed receiver: read via the interface getter bridge; the receiver and the
@@ -102,13 +103,13 @@ public abstract class AssignmentHandlerBase : HandlerBase
             // and emitted nonexistent IUdonEventReceiver.__get_Item/__set_Item externs.
             case IPropertyReferenceOperation iIdxRef
                 when iIdxRef.Property.IsIndexer
-                && TryGetInterfaceAccessorLayout(iIdxRef, iIdxRef.Property.GetMethod, out var iIdxGetMl):
+                && _lowering.TryGetInterfaceAccessorLayout(iIdxRef, iIdxRef.Property.GetMethod, out var iIdxGetMl):
             {
-                var recvVal = VisitExpression(iIdxRef.Instance);
-                var cachedArgs = EvaluateIndexerArgs(iIdxRef);
-                var currentVal = EmitInterfaceAccessorCall(iIdxRef.Property.GetMethod, iIdxGetMl, recvVal, cachedArgs,
-                    TryMarkReentrantCrossDispatch(iIdxRef, iIdxRef.Property.GetMethod)); // wave-12 r2 [V1]
-                return new LValuePlan { Value = currentVal, InstanceVal = recvVal, IndexArgs = cachedArgs };
+                var recvVal = _lowering.VisitExpression(iIdxRef.Instance);
+                var cachedArgs = _lowering.EvaluateIndexerArgs(iIdxRef);
+                var currentVal = _lowering.EmitInterfaceAccessorCall(iIdxRef.Property.GetMethod, iIdxGetMl, recvVal, cachedArgs,
+                    _lowering.TryMarkReentrantCrossDispatch(iIdxRef, iIdxRef.Property.GetMethod)); // wave-12 r2 [V1]
+                return new LoweringServices.LValuePlan { Value = currentVal, InstanceVal = recvVal, IndexArgs = cachedArgs };
             }
             // Wave-11 round-11 [Z1]: NON-indexer property on an aggregate (struct/tuple) receiver —
             // compound assignment and inc-dec (`ss[Ix()].P += Mut()`, `arr[i].X++`). Evaluate the
@@ -125,94 +126,94 @@ public abstract class AssignmentHandlerBase : HandlerBase
                 when aggCapPropRef.Instance?.Type is INamedTypeSymbol aggCapPropType
                 && TypeClassifier.IsObjectArrayEmulated(aggCapPropType):
             {
-                if (_ctx.Aggregates.GetLayout(aggCapPropType).TryGetIndex(aggCapPropRef.Property, out var capSlotIdx))
+                if (_lowering.Context.Aggregates.GetLayout(aggCapPropType).TryGetIndex(aggCapPropRef.Property, out var capSlotIdx))
                 {
-                    var recv = LoadInstanceRaw(aggCapPropRef.Instance);
-                    CLeaf slotVal = AggregateAbi.ReadSlot(_builder, recv, capSlotIdx, StorageTypes.Object);
+                    var recv = _lowering.LoadInstanceRaw(aggCapPropRef.Instance);
+                    CLeaf slotVal = AggregateAbi.ReadSlot(_lowering.Builder, recv, capSlotIdx, StorageTypes.Object);
                     if (aggCapPropRef.Property.Type is INamedTypeSymbol capSlotAgg && TypeClassifier.IsAggregateValue(capSlotAgg))
-                        slotVal = AggregateAbi.DeepClone(_builder, slotVal, capSlotAgg, _ctx.Aggregates.GetLayout);
-                    return new LValuePlan { Value = slotVal, ArrayVal = recv, IndexVal = Const(capSlotIdx, StorageTypes.Int32) };
+                        slotVal = AggregateAbi.DeepClone(_lowering.Builder, slotVal, capSlotAgg, _lowering.Context.Aggregates.GetLayout);
+                    return new LoweringServices.LValuePlan { Value = slotVal, ArrayVal = recv, IndexVal = _lowering.Const(capSlotIdx, StorageTypes.Int32) };
                 }
                 if (aggCapPropRef.Property.GetMethod is { } capGetterRaw)
                 {
-                    var recv = LoadInstanceRaw(aggCapPropRef.Instance);
-                    CLeaf getVal = EmitCallToMethod(ResolveStructMember(capGetterRaw), new List<CLeaf> { recv });
+                    var recv = _lowering.LoadInstanceRaw(aggCapPropRef.Instance);
+                    CLeaf getVal = _lowering.EmitCallToMethod(_lowering.ResolveStructMember(capGetterRaw), new List<CLeaf> { recv });
                     if (aggCapPropRef.Property.Type is INamedTypeSymbol capGetAgg && TypeClassifier.IsAggregateValue(capGetAgg))
-                        getVal = AggregateAbi.DeepClone(_builder, getVal, capGetAgg, _ctx.Aggregates.GetLayout);
-                    return new LValuePlan { Value = getVal, ArrayVal = recv };
+                        getVal = AggregateAbi.DeepClone(_lowering.Builder, getVal, capGetAgg, _lowering.Context.Aggregates.GetLayout);
+                    return new LoweringServices.LValuePlan { Value = getVal, ArrayVal = recv };
                 }
                 goto default;
             }
             case IFieldReferenceOperation aggFieldRef
                 when aggFieldRef.Instance != null
-                && ResolveType(aggFieldRef.Instance.Type) is INamedTypeSymbol aggCapType
+                && _lowering.ResolveType(aggFieldRef.Instance.Type) is INamedTypeSymbol aggCapType
                 && TypeClassifier.IsObjectArrayEmulated(aggCapType):
             {
-                var layout = _ctx.Aggregates.GetLayout(aggCapType);
+                var layout = _lowering.Context.Aggregates.GetLayout(aggCapType);
                 if (layout.TryGetIndex(aggFieldRef.Field, out var elemIdx))
                 {
-                    RejectStaticReadonlyWriteThrough(aggFieldRef.Instance); // §3.3, R5 (compound/inc-dec write-back)
-                    var arrVal = LoadInstanceRaw(aggFieldRef.Instance);
-                    var idxVal = Const(elemIdx, StorageTypes.Int32);
-                    var currentVal = AggregateAbi.ReadSlot(_builder, arrVal, elemIdx, StorageTypes.Object);
-                    return new LValuePlan { Value = currentVal, ArrayVal = arrVal, IndexVal = idxVal };
+                    LoweringServices.RejectStaticReadonlyWriteThrough(aggFieldRef.Instance); // §3.3, R5 (compound/inc-dec write-back)
+                    var arrVal = _lowering.LoadInstanceRaw(aggFieldRef.Instance);
+                    var idxVal = _lowering.Const(elemIdx, StorageTypes.Int32);
+                    var currentVal = AggregateAbi.ReadSlot(_lowering.Builder, arrVal, elemIdx, StorageTypes.Object);
+                    return new LoweringServices.LValuePlan { Value = currentVal, ArrayVal = arrVal, IndexVal = idxVal };
                 }
                 goto default;
             }
             case IArrayElementReferenceOperation ndimCapElem when ndimCapElem.Indices.Length > 1:
             {
-                RejectStaticReadonlyWriteThrough(ndimCapElem.ArrayReference); // §3.3, R5 (compound/inc-dec write-back)
+                LoweringServices.RejectStaticReadonlyWriteThrough(ndimCapElem.ArrayReference); // §3.3, R5 (compound/inc-dec write-back)
                 var ndimType = (IArrayTypeSymbol)ndimCapElem.ArrayReference.Type;
-                var elemUdonType = GetStorageTypeName(ndimType.ElementType);
-                var plan = PrepareNdimAccess(ndimCapElem.ArrayReference, ndimCapElem.Indices, ndimType);
-                var ndimCurrentVal = EmitNdimReadFromPlan(ndimCapElem, plan, elemUdonType);
-                return new LValuePlan { Value = ndimCurrentVal, NdimPlan = plan };
+                var elemUdonType = _lowering.GetStorageTypeName(ndimType.ElementType);
+                var plan = _lowering.PrepareNdimAccess(ndimCapElem.ArrayReference, ndimCapElem.Indices, ndimType);
+                var ndimCurrentVal = _lowering.EmitNdimReadFromPlan(ndimCapElem, plan, elemUdonType);
+                return new LoweringServices.LValuePlan { Value = ndimCurrentVal, NdimPlan = plan };
             }
             case IArrayElementReferenceOperation arrayElem:
             {
-                RejectStaticReadonlyWriteThrough(arrayElem.ArrayReference); // §3.3, R5 (compound/inc-dec write-back)
+                LoweringServices.RejectStaticReadonlyWriteThrough(arrayElem.ArrayReference); // §3.3, R5 (compound/inc-dec write-back)
                 var arrSymbol = arrayElem.ArrayReference.Type as IArrayTypeSymbol;
-                var arrayType = GetArrayType(arrSymbol);
-                var elemAccessorType = GetArrayElemType(arrSymbol);
+                var arrayType = _lowering.GetArrayType(arrSymbol);
+                var elemAccessorType = _lowering.GetArrayElemType(arrSymbol);
 
                 // Evaluate the array ref and index ONCE; the resulting scratch leaves are reused by
                 // EmitWriteBack (compound RMW) via ArrayVal/IndexVal so a side-effecting index (`arr[Next()]
                 // += v`) runs once with the read Get and the write Set targeting the SAME element. Under ANF
                 // VisitExpression already binds each to a single-assignment scratch, so the capture needs no
                 // extra copy slot — storing the leaves directly preserves the read↔writeback sharing.
-                var arrayVal = VisitExpression(arrayElem.ArrayReference);
-                var indexVal = ResolveArrayIndex(arrayVal, arrayType, arrayElem.Indices[0]);
+                var arrayVal = _lowering.VisitExpression(arrayElem.ArrayReference);
+                var indexVal = _lowering.ResolveArrayIndex(arrayVal, arrayType, arrayElem.Indices[0]);
 
                 // Read current value: arr[idx]
-                var valResult = ExternCall(
+                var valResult = _lowering.ExternCall(
                     UdonAbi.ArrayGet(arrayType, elemAccessorType),
                     new List<CLeaf> { arrayVal, indexVal },
-                    GetStorageType(arrayElem.Type));
-                return new LValuePlan { Value = valResult, ArrayVal = arrayVal, IndexVal = indexVal };
+                    _lowering.GetStorageType(arrayElem.Type));
+                return new LoweringServices.LValuePlan { Value = valResult, ArrayVal = arrayVal, IndexVal = indexVal };
             }
             case IFieldReferenceOperation { Instance: not null and not IInstanceReferenceOperation } fieldRef
                 when ExternResolver.IsUdonSharpBehaviour(fieldRef.Field.ContainingType):
             {
-                var instanceVal = VisitExpression(fieldRef.Instance);
+                var instanceVal = _lowering.VisitExpression(fieldRef.Instance);
                 // Read via GetProgramVariable
-                var valResult = LoadProgramVariable(
-                    instanceVal, fieldRef.Field.Name, GetStorageType(fieldRef.Field.Type));
-                return new LValuePlan { Value = valResult, InstanceVal = instanceVal };
+                var valResult = _lowering.LoadProgramVariable(
+                    instanceVal, fieldRef.Field.Name, _lowering.GetStorageType(fieldRef.Field.Type));
+                return new LoweringServices.LValuePlan { Value = valResult, InstanceVal = instanceVal };
             }
             case IFieldReferenceOperation { Instance: not null and not IInstanceReferenceOperation } fieldRef2
                 when fieldRef2.Field.ContainingType.IsValueType:
             {
-                var instanceVal = VisitExpression(fieldRef2.Instance);
-                var containingType = GetStorageTypeName(ResolveExternOwnerType(fieldRef2.Field.ContainingType, fieldRef2.Instance?.Type, fieldRef2.Field.Name));
-                var valueType = GetStorageTypeName(fieldRef2.Field.Type);
-                var sig = _ctx.Abi.BindPropertyGetter(
+                var instanceVal = _lowering.VisitExpression(fieldRef2.Instance);
+                var containingType = _lowering.GetStorageTypeName(_lowering.ResolveExternOwnerType(fieldRef2.Field.ContainingType, fieldRef2.Instance?.Type, fieldRef2.Field.Name));
+                var valueType = _lowering.GetStorageTypeName(fieldRef2.Field.Type);
+                var sig = _lowering.Context.Abi.BindPropertyGetter(
                     containingType, fieldRef2.Field.Name, valueType);
-                var valResult = ExternCall(sig, new List<CLeaf> { instanceVal }, new StorageType(valueType));
-                return new LValuePlan { Value = valResult, InstanceVal = instanceVal };
+                var valResult = _lowering.ExternCall(sig, new List<CLeaf> { instanceVal }, new StorageType(valueType));
+                return new LoweringServices.LValuePlan { Value = valResult, InstanceVal = instanceVal };
             }
             default:
                 // Simple l-value (local, field on this): just evaluate normally
-                return new LValuePlan { Value = VisitExpression(target) };
+                return new LoweringServices.LValuePlan { Value = _lowering.VisitExpression(target) };
         }
     }
 
@@ -220,23 +221,23 @@ public abstract class AssignmentHandlerBase : HandlerBase
     // Write back a computed value to non-trivial l-value targets (array elements, properties).
     // For local/field variables, also writes back via EmitStoreField.
 
-    void EmitWriteBack(IOperation target, CLeaf valueVal, LValuePlan lv)
+    void EmitWriteBack(IOperation target, CLeaf valueVal, LoweringServices.LValuePlan lv)
     {
         // CW1 lift: compound/inc-dec WRITE-BACK of a runtime-polymorphic accessor on a v1-class
         // receiver — dispatch the setter, reusing the legs CaptureLValue's dispatch twin staged
         // (fresh legs only on the capture-less paths, mirroring the static arms' `??` fallbacks).
         if (target is IPropertyReferenceOperation vWbRef
             && VirtualDispatch.FindAccessor(vWbRef.Property, getter: false) is { } vWbSetter
-            && IsAccessorDispatchSite(vWbRef, vWbSetter, out var vWbRecvTy))
+            && _lowering.IsAccessorDispatchSite(vWbRef, vWbSetter, out var vWbRecvTy))
         {
             var vWbRecv = lv.ArrayVal;
             var vWbIdx = lv.IndexArgs;
             if (vWbRecv == null)
-                (vWbRecv, vWbIdx) = StageAccessorDispatchLegs(vWbRef);
-            var vWbSlot = _ctx.Builder.AllocScratch(GetStorageType(vWbRef.Property.Type));
-            EmitAssign(vWbSlot, valueVal);
-            EmitAccessorDispatch(vWbRef.Property, vWbRecvTy, vWbSetter, vWbRecv,
-                vWbIdx ?? new List<CLeaf>(), SlotRef(vWbSlot));
+                (vWbRecv, vWbIdx) = _lowering.StageAccessorDispatchLegs(vWbRef);
+            var vWbSlot = _lowering.Context.Builder.AllocScratch(_lowering.GetStorageType(vWbRef.Property.Type));
+            _lowering.EmitAssign(vWbSlot, valueVal);
+            _lowering.EmitAccessorDispatch(vWbRef.Property, vWbRecvTy, vWbSetter, vWbRecv,
+                vWbIdx ?? new List<CLeaf>(), _lowering.SlotRef(vWbSlot));
             return;
         }
 
@@ -244,14 +245,14 @@ public abstract class AssignmentHandlerBase : HandlerBase
         {
             case IFieldReferenceOperation aggFieldRef
                 when aggFieldRef.Instance != null
-                && ResolveType(aggFieldRef.Instance.Type) is INamedTypeSymbol aggWbType
+                && _lowering.ResolveType(aggFieldRef.Instance.Type) is INamedTypeSymbol aggWbType
                 && TypeClassifier.IsObjectArrayEmulated(aggWbType):
             {
-                var layout = _ctx.Aggregates.GetLayout(aggWbType);
+                var layout = _lowering.Context.Aggregates.GetLayout(aggWbType);
                 if (layout.TryGetIndex(aggFieldRef.Field, out var elemIdx))
                 {
-                    var arrVal = lv.ArrayVal ?? VisitExpression(aggFieldRef.Instance);
-                    AggregateAbi.WriteSlot(_builder, arrVal, elemIdx, valueVal);
+                    var arrVal = lv.ArrayVal ?? _lowering.VisitExpression(aggFieldRef.Instance);
+                    AggregateAbi.WriteSlot(_lowering.Builder, arrVal, elemIdx, valueVal);
                     return;
                 }
                 throw new System.InvalidOperationException(
@@ -263,25 +264,25 @@ public abstract class AssignmentHandlerBase : HandlerBase
                 // Reuse CaptureLValue's plan when available (avoid re-evaluating indices/bundle);
                 // the uncached path is defensive (mirrors the rank-1 arm's ?? default).
                 var plan = lv.NdimPlan
-                    ?? PrepareNdimAccess(ndimWbElem.ArrayReference, ndimWbElem.Indices, (IArrayTypeSymbol)ndimWbElem.ArrayReference.Type);
-                EmitNdimWriteFromPlan(ndimWbElem, plan, valueVal);
+                    ?? _lowering.PrepareNdimAccess(ndimWbElem.ArrayReference, ndimWbElem.Indices, (IArrayTypeSymbol)ndimWbElem.ArrayReference.Type);
+                _lowering.EmitNdimWriteFromPlan(ndimWbElem, plan, valueVal);
                 break;
             }
             case IArrayElementReferenceOperation arrayElem:
             {
                 // Use captured array/index if available (avoid double evaluation)
-                var arrayVal = lv.ArrayVal ?? VisitExpression(arrayElem.ArrayReference);
-                var indexVal = lv.IndexVal ?? VisitExpression(arrayElem.Indices[0]);
+                var arrayVal = lv.ArrayVal ?? _lowering.VisitExpression(arrayElem.ArrayReference);
+                var indexVal = lv.IndexVal ?? _lowering.VisitExpression(arrayElem.Indices[0]);
                 var arrSymbol = arrayElem.ArrayReference.Type as IArrayTypeSymbol;
-                EmitArrayElementSet(arrSymbol, arrayVal, indexVal, valueVal);
+                _lowering.EmitArrayElementSet(arrSymbol, arrayVal, indexVal, valueVal);
                 break;
             }
             case IFieldReferenceOperation { Instance: not null and not IInstanceReferenceOperation } fieldRef
                 when ExternResolver.IsUdonSharpBehaviour(fieldRef.Field.ContainingType):
             {
                 // Cross-behaviour field write-back → SetProgramVariable
-                var instanceVal = lv.InstanceVal ?? VisitExpression(fieldRef.Instance);
-                EmitCrossBehaviourFieldSet(fieldRef.Field, instanceVal, valueVal);
+                var instanceVal = lv.InstanceVal ?? _lowering.VisitExpression(fieldRef.Instance);
+                _lowering.EmitCrossBehaviourFieldSet(fieldRef.Field, instanceVal, valueVal);
                 break;
             }
             // Auto-property on this → backing field already handled by write-back to field (user-defined
@@ -289,7 +290,7 @@ public abstract class AssignmentHandlerBase : HandlerBase
             // BASE accessor — all three this-path cases below dispatch the chain-leaf override instead;
             // `base.P` keeps the static binding (its base-instance copy accessors).
             case IPropertyReferenceOperation { Instance: IInstanceReferenceOperation } propRef
-                when ResolveDispatchProperty(propRef) is { } autoDispatchProp
+                when _lowering.ResolveDispatchProperty(propRef) is { } autoDispatchProp
                 && autoDispatchProp.GetMethod?.DeclaringSyntaxReferences.IsEmpty == true
                 && ExternResolver.IsUdonSharpBehaviour(autoDispatchProp.ContainingType)
                 && autoDispatchProp.ContainingType.Name != "UdonSharpBehaviour":
@@ -301,13 +302,13 @@ public abstract class AssignmentHandlerBase : HandlerBase
             // object[]-emulated indexer arm below.
             case IPropertyReferenceOperation { Instance: IInstanceReferenceOperation, Property: { IsIndexer: true } } idxRef
                 when !TypeClassifier.IsObjectArrayEmulated(idxRef.Property.ContainingType)
-                && ResolveDispatchProperty(idxRef).SetMethod is { } idxDispatchSetter
-                && _methodFunctions.TryGetValue(idxDispatchSetter, out _):
+                && _lowering.ResolveDispatchProperty(idxRef).SetMethod is { } idxDispatchSetter
+                && _lowering.MethodFunctions.TryGetValue(idxDispatchSetter, out _):
             {
                 // Wave-9 round-4: the uncached path slots by parameter ordinal too (named args).
-                var setterArgs = lv.IndexArgs != null ? new List<CLeaf>(lv.IndexArgs) : EvaluateIndexerArgs(idxRef);
+                var setterArgs = lv.IndexArgs != null ? new List<CLeaf>(lv.IndexArgs) : _lowering.EvaluateIndexerArgs(idxRef);
                 setterArgs.Add(valueVal);
-                EmitExprStmt(EmitCallToMethod(idxDispatchSetter, setterArgs));
+                _lowering.EmitExprStmt(_lowering.EmitCallToMethod(idxDispatchSetter, setterArgs));
                 return;
             }
             // User-defined property on this/base BEHAVIOUR → call setter (value only, no receiver
@@ -318,22 +319,22 @@ public abstract class AssignmentHandlerBase : HandlerBase
             // the indexer arms above/below.
             case IPropertyReferenceOperation { Instance: IInstanceReferenceOperation, Property: { IsIndexer: false } } propRef
                 when !TypeClassifier.IsObjectArrayEmulated(propRef.Property.ContainingType)
-                && ResolveDispatchProperty(propRef).SetMethod is { } dispatchSetter
-                && _methodFunctions.TryGetValue(dispatchSetter, out _):
-                EmitExprStmt(EmitCallToMethod(dispatchSetter, new List<CLeaf> { valueVal }));
+                && _lowering.ResolveDispatchProperty(propRef).SetMethod is { } dispatchSetter
+                && _lowering.MethodFunctions.TryGetValue(dispatchSetter, out _):
+                _lowering.EmitExprStmt(_lowering.EmitCallToMethod(dispatchSetter, new List<CLeaf> { valueVal }));
                 return;
             // Wave-9 round-2 [W6]: user indexer write-back through a VARIABLE receiver → cross-program
             // setter dispatch, reusing the receiver/index leaves cached by CaptureLValue. MUST sit
             // before the generic cross-behaviour property arm below, which would SetProgramVariable
             // only the setter's FIRST param (an index) and drop the value.
             case IPropertyReferenceOperation vIdxRef
-                when IsVariableReceiverBehaviourIndexer(vIdxRef) && vIdxRef.Property.SetMethod is { } vIdxSetter:
+                when LoweringServices.IsVariableReceiverBehaviourIndexer(vIdxRef) && vIdxRef.Property.SetMethod is { } vIdxSetter:
             {
-                var recvVal = lv.InstanceVal ?? VisitExpression(vIdxRef.Instance);
-                var ordered = lv.IndexArgs != null ? new List<CLeaf>(lv.IndexArgs) : EvaluateIndexerArgs(vIdxRef);
+                var recvVal = lv.InstanceVal ?? _lowering.VisitExpression(vIdxRef.Instance);
+                var ordered = lv.IndexArgs != null ? new List<CLeaf>(lv.IndexArgs) : _lowering.EvaluateIndexerArgs(vIdxRef);
                 ordered.Add(valueVal);
-                EmitCrossIndexerCall(vIdxSetter, recvVal, ordered,
-                    TryMarkReentrantCrossDispatch(vIdxRef, vIdxSetter)); // wave-12 r2 [V1]; void: self-emitting
+                _lowering.EmitCrossIndexerCall(vIdxSetter, recvVal, ordered,
+                    _lowering.TryMarkReentrantCrossDispatch(vIdxRef, vIdxSetter)); // wave-12 r2 [V1]; void: self-emitting
                 return;
             }
             // Wave-9 round-4 [X4]/[X5]: property/indexer COMPOUND (and inc-dec) write-back through an
@@ -342,38 +343,38 @@ public abstract class AssignmentHandlerBase : HandlerBase
             // the bridge; only this write-back arm fell to the generic property case below and emitted a
             // nonexistent IUdonEventReceiver.__set_P / __set_Item (loud validator crash on legal C#).
             case IPropertyReferenceOperation ifaceWbRef
-                when TryGetInterfaceAccessorLayout(ifaceWbRef, ifaceWbRef.Property.SetMethod, out var ifaceWbMl):
+                when _lowering.TryGetInterfaceAccessorLayout(ifaceWbRef, ifaceWbRef.Property.SetMethod, out var ifaceWbMl):
             {
-                var recvVal = lv.InstanceVal ?? VisitExpression(ifaceWbRef.Instance);
+                var recvVal = lv.InstanceVal ?? _lowering.VisitExpression(ifaceWbRef.Instance);
                 var ordered = ifaceWbRef.Property.IsIndexer
-                    ? (lv.IndexArgs != null ? new List<CLeaf>(lv.IndexArgs) : EvaluateIndexerArgs(ifaceWbRef))
+                    ? (lv.IndexArgs != null ? new List<CLeaf>(lv.IndexArgs) : _lowering.EvaluateIndexerArgs(ifaceWbRef))
                     : new List<CLeaf>();
                 ordered.Add(valueVal);
-                EmitInterfaceAccessorCall(ifaceWbRef.Property.SetMethod, ifaceWbMl, recvVal, ordered,
-                    TryMarkReentrantCrossDispatch(ifaceWbRef, ifaceWbRef.Property.SetMethod)); // wave-12 r2 [V1]; void: self-emitting
+                _lowering.EmitInterfaceAccessorCall(ifaceWbRef.Property.SetMethod, ifaceWbMl, recvVal, ordered,
+                    _lowering.TryMarkReentrantCrossDispatch(ifaceWbRef, ifaceWbRef.Property.SetMethod)); // wave-12 r2 [V1]; void: self-emitting
                 return;
             }
             // Cross-behaviour UdonSharpBehaviour property → SetProgramVariable / SendCustomEvent
             case IPropertyReferenceOperation propRef when ExternResolver.IsUdonSharpBehaviour(propRef.Property.ContainingType) && propRef.Instance is not IInstanceReferenceOperation:
             {
-                RejectProgramLocalCrossBehaviourPropertyWrite(propRef.Property); // CW22 (compound/`??=` leg)
-                var instanceVal = VisitExpression(propRef.Instance);
+                _lowering.RejectProgramLocalCrossBehaviourPropertyWrite(propRef.Property); // CW22 (compound/`??=` leg)
+                var instanceVal = _lowering.VisitExpression(propRef.Instance);
                 // Wave-12 [V2]: non-public autos write the declared backing symbol directly (their
                 // accessors are never exported); see IsNonPublicAutoCrossProperty.
                 var isAutoSet = propRef.Property.SetMethod == null
-                    || IsNonPublicAutoCrossProperty(propRef.Property.SetMethod, propRef.Property);
+                    || LoweringServices.IsNonPublicAutoCrossProperty(propRef.Property.SetMethod, propRef.Property);
                 if (isAutoSet)
                 {
-                    StoreProgramVariable(instanceVal, propRef.Property.Name,
-                        GetStorageType(propRef.Property.Type), valueVal);
+                    _lowering.StoreProgramVariable(instanceVal, propRef.Property.Name,
+                        _lowering.GetStorageType(propRef.Property.Type), valueVal);
                 }
                 else
                 {
                     // Wave-12 r2 [V1]: reentrant setter — value copy-in inside the spill window.
-                    bool wbReentrant = TryMarkReentrantCrossDispatch(propRef, propRef.Property.SetMethod);
-                    var (exportName, setParamIds, _) = GetCalleeLayout(propRef.Property.SetMethod);
-                    CrossCall(instanceVal, exportName,
-                        CrossCallParameters(propRef.Property.SetMethod, setParamIds, new[] { valueVal }),
+                    bool wbReentrant = _lowering.TryMarkReentrantCrossDispatch(propRef, propRef.Property.SetMethod);
+                    var (exportName, setParamIds, _) = _lowering.GetCalleeLayout(propRef.Property.SetMethod);
+                    _lowering.CrossCall(instanceVal, exportName,
+                        _lowering.CrossCallParameters(propRef.Property.SetMethod, setParamIds, new[] { valueVal }),
                         System.Array.Empty<ReturnSlot>(), StorageTypes.Void, wbReentrant);
                 }
                 return;
@@ -388,18 +389,18 @@ public abstract class AssignmentHandlerBase : HandlerBase
             case IPropertyReferenceOperation { Property: { IsIndexer: false } } aggPropRef
                 when aggPropRef.Instance?.Type is INamedTypeSymbol aggPropType && TypeClassifier.IsObjectArrayEmulated(aggPropType):
             {
-                if (_ctx.Aggregates.GetLayout(aggPropType).TryGetIndex(aggPropRef.Property, out var propIdx))
+                if (_lowering.Context.Aggregates.GetLayout(aggPropType).TryGetIndex(aggPropRef.Property, out var propIdx))
                 {
-                    var arrVal = lv.ArrayVal ?? LoadInstanceRaw(aggPropRef.Instance);
-                    AggregateAbi.WriteSlot(_builder, arrVal, propIdx, valueVal);
+                    var arrVal = lv.ArrayVal ?? _lowering.LoadInstanceRaw(aggPropRef.Instance);
+                    AggregateAbi.WriteSlot(_lowering.Builder, arrVal, propIdx, valueVal);
                     return;
                 }
-                if (aggPropRef.Property.SetMethod is { } aggSetter && _methodFunctions.ContainsKey(aggSetter))
+                if (aggPropRef.Property.SetMethod is { } aggSetter && _lowering.MethodFunctions.ContainsKey(aggSetter))
                 {
                     // Wave-11 round-11 [Z1]: reuse the receiver cached by CaptureLValue — the
                     // unconditional LoadInstanceRaw here re-ran side-effecting legs at store time.
-                    EmitExprStmt(EmitCallToMethod(aggSetter,
-                        new List<CLeaf> { lv.ArrayVal ?? LoadInstanceRaw(aggPropRef.Instance), valueVal }));
+                    _lowering.EmitExprStmt(_lowering.EmitCallToMethod(aggSetter,
+                        new List<CLeaf> { lv.ArrayVal ?? _lowering.LoadInstanceRaw(aggPropRef.Instance), valueVal }));
                     return;
                 }
                 throw new System.InvalidOperationException(
@@ -412,13 +413,13 @@ public abstract class AssignmentHandlerBase : HandlerBase
             // __set_Item extern. CW6: IsObjectArrayEmulated so class receivers ride the same arm.
             case IPropertyReferenceOperation { Property: { IsIndexer: true, SetMethod: { } aggIdxSetter } } aggIdxRef
                 when aggIdxRef.Instance?.Type is INamedTypeSymbol aggIdxType && TypeClassifier.IsObjectArrayEmulated(aggIdxType)
-                && _methodFunctions.ContainsKey(aggIdxSetter):
+                && _lowering.MethodFunctions.ContainsKey(aggIdxSetter):
             {
-                var setterArgs = new List<CLeaf> { lv.ArrayVal ?? LoadInstanceRaw(aggIdxRef.Instance) };
+                var setterArgs = new List<CLeaf> { lv.ArrayVal ?? _lowering.LoadInstanceRaw(aggIdxRef.Instance) };
                 // Wave-9 round-4: the uncached path slots by parameter ordinal too (named args).
-                setterArgs.AddRange(lv.IndexArgs ?? EvaluateIndexerArgs(aggIdxRef));
+                setterArgs.AddRange(lv.IndexArgs ?? _lowering.EvaluateIndexerArgs(aggIdxRef));
                 setterArgs.Add(valueVal);
-                EmitExprStmt(EmitCallToMethod(aggIdxSetter, setterArgs));
+                _lowering.EmitExprStmt(_lowering.EmitCallToMethod(aggIdxSetter, setterArgs));
                 return;
             }
             // Resolve containing type and instance
@@ -430,55 +431,55 @@ public abstract class AssignmentHandlerBase : HandlerBase
                 {
                     if (!UasmEmitter.IsComputedProperty(propRef.Property))
                     {
-                        var owner = ResolveType(propRef.Property.ContainingType) as INamedTypeSymbol
+                        var owner = _lowering.ResolveType(propRef.Property.ContainingType) as INamedTypeSymbol
                                     ?? propRef.Property.ContainingType;
-                        EmitStoreField(StaticOwnerAbi.PropertyName(propRef.Property, owner), valueVal);
+                        _lowering.EmitStoreField(StaticOwnerAbi.PropertyName(propRef.Property, owner), valueVal);
                         return;
                     }
-                    var setter = ResolveStructMember(propRef.Property.SetMethod);
-                    EmitExprStmt(EmitCallToMethod(setter, new List<CLeaf> { valueVal }));
+                    var setter = _lowering.ResolveStructMember(propRef.Property.SetMethod);
+                    _lowering.EmitExprStmt(_lowering.EmitCallToMethod(setter, new List<CLeaf> { valueVal }));
                     return;
                 }
                 // CW6 armor: a user-struct/class property whose write-back reaches this generic extern
                 // arm was not routed by the object[]-emulated arms above — fail with the collector-drift
                 // diagnosis instead of minting a bogus SystemObjectArray.__set_<Name>__ extern.
-                GuardUserStructMemberReachedExtern(propRef.Property.ContainingType, propRef.Property.Name);
+                _lowering.GuardUserStructMemberReachedExtern(propRef.Property.ContainingType, propRef.Property.Name);
                 // B55 setter door: the property-SET write-back resolves its extern owner through the same
                 // inherited-member choke point as the getter (subsumes the former Behaviour fixup). Static
                 // (Instance null) → declaring type; inherited instance member → receiver's static type.
-                var containingType = GetStorageTypeName(ResolveExternOwnerType(propRef.Property.ContainingType, propRef.Instance?.Type, propRef.Property.Name));
+                var containingType = _lowering.GetStorageTypeName(_lowering.ResolveExternOwnerType(propRef.Property.ContainingType, propRef.Instance?.Type, propRef.Property.Name));
 
                 CLeaf wbInstanceVal;
                 if (propRef.Instance is IInstanceReferenceOperation)
-                    wbInstanceVal = LoadField(_ctx.Storage.DeclareThisOnce(new StorageType(containingType)), new StorageType(containingType));
+                    wbInstanceVal = _lowering.LoadField(_lowering.Context.Storage.DeclareThisOnce(new StorageType(containingType)), new StorageType(containingType));
                 else if (propRef.Instance != null)
-                    wbInstanceVal = VisitExpression(propRef.Instance);
+                    wbInstanceVal = _lowering.VisitExpression(propRef.Instance);
                 else
                 {
                     // Static property: no instance
-                    var valueType = GetStorageTypeName(propRef.Property.Type);
-                    EmitExternVoid(
-                        _ctx.Abi.BindPropertySetter(
+                    var valueType = _lowering.GetStorageTypeName(propRef.Property.Type);
+                    _lowering.EmitExternVoid(
+                        _lowering.Context.Abi.BindPropertySetter(
                             containingType, propRef.Property.Name, valueType,
                             hasReceiver: false),
                         new List<CLeaf> { valueVal });
                     return;
                 }
 
-                var propValueType = GetStorageTypeName(propRef.Property.Type);
+                var propValueType = _lowering.GetStorageTypeName(propRef.Property.Type);
                 if (propRef.Property.IsIndexer)
                 {
                     var indexArgs = new List<CLeaf> { wbInstanceVal };
                     var indexTypes = new List<string>();
                     foreach (var arg in propRef.Arguments)
                     {
-                        indexArgs.Add(VisitExpression(arg.Value));
-                        indexTypes.Add(GetStorageTypeName(arg.Value.Type));
+                        indexArgs.Add(_lowering.VisitExpression(arg.Value));
+                        indexTypes.Add(_lowering.GetStorageTypeName(arg.Value.Type));
                     }
                     indexArgs.Add(valueVal);
                     // Indexer metadata name, not a hardcoded "Item" ([IndexerName] e.g. StringBuilder → "Chars").
-                    EmitExternVoid(
-                        _ctx.Abi.BindIndexerSetter(
+                    _lowering.EmitExternVoid(
+                        _lowering.Context.Abi.BindIndexerSetter(
                             containingType,
                             propRef.Property.MetadataName,
                             indexTypes,
@@ -487,8 +488,8 @@ public abstract class AssignmentHandlerBase : HandlerBase
                 }
                 else
                 {
-                    EmitExternVoid(
-                        _ctx.Abi.BindPropertySetter(
+                    _lowering.EmitExternVoid(
+                        _lowering.Context.Abi.BindPropertySetter(
                             containingType, propRef.Property.Name, propValueType),
                         new List<CLeaf> { wbInstanceVal, valueVal });
                 }
@@ -498,21 +499,21 @@ public abstract class AssignmentHandlerBase : HandlerBase
                 when fieldRef2.Field.ContainingType.IsValueType:
             {
                 // Struct field setter (e.g., vec.y += 3f where vec is an array element)
-                var instanceVal = lv.InstanceVal ?? VisitExpression(fieldRef2.Instance);
-                var containingType = GetStorageTypeName(ResolveExternOwnerType(fieldRef2.Field.ContainingType, fieldRef2.Instance?.Type, fieldRef2.Field.Name));
-                var valueType = GetStorageTypeName(fieldRef2.Field.Type);
-                var sig = _ctx.Abi.BindFieldSetter(
+                var instanceVal = lv.InstanceVal ?? _lowering.VisitExpression(fieldRef2.Instance);
+                var containingType = _lowering.GetStorageTypeName(_lowering.ResolveExternOwnerType(fieldRef2.Field.ContainingType, fieldRef2.Instance?.Type, fieldRef2.Field.Name));
+                var valueType = _lowering.GetStorageTypeName(fieldRef2.Field.Type);
+                var sig = _lowering.Context.Abi.BindFieldSetter(
                     containingType, fieldRef2.Field.Name, valueType);
-                EmitExternVoid(sig, new List<CLeaf> { instanceVal, valueVal });
+                _lowering.EmitExternVoid(sig, new List<CLeaf> { instanceVal, valueVal });
                 break;
             }
             default:
             {
                 // Stage 2 §4.1: captured local/param → env cell write-back.
-                if (TryEmitEnvStore(target, valueVal)) break;
+                if (_lowering.TryEmitEnvStore(target, valueVal)) break;
                 // Simple l-value (local, field on this): write back via EmitStoreField
                 var fieldName = GetAssignTargetFieldName(target);
-                EmitStoreField(fieldName, valueVal);
+                _lowering.EmitStoreField(fieldName, valueVal);
                 break;
             }
         }
@@ -527,19 +528,19 @@ public abstract class AssignmentHandlerBase : HandlerBase
         switch (target)
         {
             case ILocalReferenceOperation localRef:
-                if (_localBindings.TryGetValue(localRef.Local, out var lb))
+                if (_lowering.LocalBindings.TryGetValue(localRef.Local, out var lb))
                     return lb.Id;
                 throw new System.InvalidOperationException(
                     $"Cannot resolve local variable '{localRef.Local.Name}' for assignment.");
             case IFieldReferenceOperation { Instance: IInstanceReferenceOperation } fieldRef:
-                return _ctx.SourceStorageName(fieldRef.Field);
+                return _lowering.Context.SourceStorageName(fieldRef.Field);
             case IFieldReferenceOperation { Instance: null } staticField
                 when StaticOwnerAbi.IsSourceStatic(staticField.Field) && !staticField.Field.IsReadOnly:
                 return StaticOwnerAbi.FieldName(staticField.Field,
-                    ResolveType(staticField.Field.ContainingType) as INamedTypeSymbol
+                    _lowering.ResolveType(staticField.Field.ContainingType) as INamedTypeSymbol
                     ?? staticField.Field.ContainingType);
             case IParameterReferenceOperation paramRef:
-                return GetParamVarId(paramRef.Parameter);
+                return _lowering.GetParamVarId(paramRef.Parameter);
             default:
                 throw new System.NotSupportedException(
                     $"Unsupported simple assignment target: {target.GetType().Name}");

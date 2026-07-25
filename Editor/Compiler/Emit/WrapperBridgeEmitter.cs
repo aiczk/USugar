@@ -64,7 +64,7 @@ public sealed class WrapperBridgeEmitter
             DelegateAbi.ConvEnvName(innerSignature), new StorageType(EnvEmit.EnvType));
 
         var result = _bridge.Dispatch(plan, new List<CLeaf>(arguments), delegatePayload: () =>
-            new InvocationHandler(_context).EmitFanoutElementDispatch(
+            new InvocationHandler(new LoweringServices(_context)).EmitFanoutElementDispatch(
                 builder.SlotRef(innerSlot), innerInvoke, typeParameterMap, arguments));
         _bridge.StoreReturn(plan, result);
 

@@ -27,7 +27,7 @@ using Microsoft.CodeAnalysis.Operations;
 //     gates whether a callee is registered as a possible recursion edge at all — the per-SITE decision
 //     of whether that specific call is actually wrapped with spill/reload always re-runs through
 //     EmitPolicy.IsNonTailDispatchSite (ternary-precise, and reused for named call sites too, not
-//     just delegate dispatch — see HandlerBase.EmitCallToMethod's TailSparedDirectCallSites check), so
+//     just delegate dispatch — see LoweringServices.EmitCallToMethod's TailSparedDirectCallSites check), so
 //     an all-tail ternary return still ends up spill-free either way (verified: a same-UASM
 //     differential across baseline vs. this dedup for `return cond ? Rec(a) : Rec(b);` and deeper
 //     nested/mixed variants — see PreWave12TailDedupTests). `ternaryPreciseReturn` still exists to

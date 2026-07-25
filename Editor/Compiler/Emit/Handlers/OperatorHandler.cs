@@ -3,9 +3,10 @@ using System.Linq;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.Operations;
 
-public class OperatorHandler : HandlerBase, IExpressionHandler
+public class OperatorHandler : IExpressionHandler
 {
-    public OperatorHandler(EmitContext ctx) : base(ctx) { }
+    readonly LoweringServices _lowering;
+    public OperatorHandler(LoweringServices lowering) => _lowering = lowering;
 
     // OperationKind.Conditional also appears in the statement table (StatementHandler) — the ternary lives here.
     public OperationKind[] HandledKinds { get; } = new[]
@@ -30,7 +31,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
 
     CLeaf VisitBinary(IBinaryOperation op)
     {
-        RejectChecked(op.IsChecked);
+        LoweringServices.RejectChecked(op.IsChecked);
 
         // Short-circuit evaluation for && and ||
         if (op.OperatorKind == BinaryOperatorKind.ConditionalAnd)
@@ -47,17 +48,17 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
         if (op.OperatorMethod is { MethodKind: MethodKind.UserDefinedOperator } binOpM
             && binOpM.ContainingType is INamedTypeSymbol binOpCt && TypeClassifier.IsObjectArrayEmulated(binOpCt))
         {
-            var lhs = VisitExpression(op.LeftOperand);
-            var rhs = VisitExpression(op.RightOperand);
-            return EmitCallToMethod(ResolveStructMember(binOpM), new List<CLeaf> { lhs, rhs });
+            var lhs = _lowering.VisitExpression(op.LeftOperand);
+            var rhs = _lowering.VisitExpression(op.RightOperand);
+            return _lowering.EmitCallToMethod(_lowering.ResolveStructMember(binOpM), new List<CLeaf> { lhs, rhs });
         }
 
 
         // ── User class (v1) reference equality: c1 == c2 / c == null → reference compare on the object[]
         // bundle (the bundle reference IS the identity; an unoverridden Equals/== is reference equality). ──
         if (ClassAbi.IsReferenceEquality(op.OperatorKind, op.LeftOperand.Type, op.RightOperand.Type))
-            return ClassAbi.EmitReferenceEquality(_builder, op.OperatorKind,
-                VisitExpression(op.LeftOperand), VisitExpression(op.RightOperand));
+            return ClassAbi.EmitReferenceEquality(_lowering.Builder, op.OperatorKind,
+                _lowering.VisitExpression(op.LeftOperand), _lowering.VisitExpression(op.RightOperand));
 
         // ── Delegate null check / equality (design §2.5 — TYPE-routed, so fields, locals, params,
         // array elements, properties, and expression results all land here; the dispatch stays gated
@@ -72,14 +73,14 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
             // d == null / d != null → reference null check on the BUNDLE itself (P4: delegate-null is
             // the bundle reference being null; [0] being null is a different condition).
             if (rightIsNull)
-                return DelegateAbi.CompareToNull(_builder, VisitExpression(op.LeftOperand), isNotEquals);
+                return DelegateAbi.CompareToNull(_lowering.Builder, _lowering.VisitExpression(op.LeftOperand), isNotEquals);
             if (leftIsNull)
-                return DelegateAbi.CompareToNull(_builder, VisitExpression(op.RightOperand), isNotEquals);
+                return DelegateAbi.CompareToNull(_lowering.Builder, _lowering.VisitExpression(op.RightOperand), isNotEquals);
 
             // d1 == d2 → element-wise (target, method) value equality with null legs (fcd07).
             if (DelegateAbi.IsDelegateType(op.LeftOperand.Type) && DelegateAbi.IsDelegateType(op.RightOperand.Type))
-                return DelegateAbi.CompareDelegates(_builder,
-                    VisitExpression(op.LeftOperand), VisitExpression(op.RightOperand), isNotEquals);
+                return DelegateAbi.CompareDelegates(_lowering.Builder,
+                    _lowering.VisitExpression(op.LeftOperand), _lowering.VisitExpression(op.RightOperand), isNotEquals);
         }
 
         // wave-13 multishapes lens (2026-07-04): a PLAIN `d1 + d2` / `d1 - d2` on delegate-typed VALUES
@@ -95,12 +96,12 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
             var invoke = delegateType.DelegateInvokeMethod;
             DelegateAbi.ValidateNoRefOutParams(invoke);
 
-            var combineLeftVal = VisitExpression(op.LeftOperand);
-            var combineRightVal = VisitExpression(op.RightOperand);
+            var combineLeftVal = _lowering.VisitExpression(op.LeftOperand);
+            var combineRightVal = _lowering.VisitExpression(op.RightOperand);
 
             var sigPart = DelegateAbi.BuildSigPart(
-                invoke, _ctx.Session.Types, _ctx.Generics.TypeParamMap);
-            RegisterMulticastSig(sigPart, invoke,
+                invoke, _lowering.Context.Session.Types, _lowering.Context.Generics.TypeParamMap);
+            _lowering.RegisterMulticastSig(sigPart, invoke,
                 op.OperatorKind == BinaryOperatorKind.Add
                     ? MulticastOperations.Combine
                     : MulticastOperations.Remove);
@@ -108,7 +109,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
             var helperName = op.OperatorKind == BinaryOperatorKind.Add
                 ? DelegateAbi.MulticastCombineName(sigPart)
                 : DelegateAbi.MulticastRemoveName(sigPart);
-            return _builder.InternalCall(helperName, new List<CLeaf> { combineLeftVal, combineRightVal }, new StorageType(DelegateAbi.BundleType));
+            return _lowering.Builder.InternalCall(helperName, new List<CLeaf> { combineLeftVal, combineRightVal }, new StorageType(DelegateAbi.BundleType));
         }
 
         // ── Nullable (boxed object) compared to null literal → object reference null check ──
@@ -120,10 +121,10 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
             bool rightNull = IsNullLiteral(op.RightOperand);
             if ((leftNullable && rightNull) || (rightNullable && leftNull))
             {
-                var nv = VisitExpression(leftNullable ? op.LeftOperand : op.RightOperand);
+                var nv = _lowering.VisitExpression(leftNullable ? op.LeftOperand : op.RightOperand);
                 if (op.OperatorKind == BinaryOperatorKind.NotEquals)
-                    return NullableAbi.HasValue(_builder, nv); // != null  ⇔  HasValue
-                return NullableAbi.IsNull(_builder, nv);
+                    return NullableAbi.HasValue(_lowering.Builder, nv); // != null  ⇔  HasValue
+                return NullableAbi.IsNull(_lowering.Builder, nv);
             }
         }
 
@@ -152,8 +153,8 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
         // Constant folding: compile-time evaluable binary expressions
         if (op.ConstantValue.HasValue)
         {
-            var constType = GetStorageTypeName(op.Type);
-            return Const(EmitPolicy.ParseConstValue(constType, ToInvariantString(op.ConstantValue.Value)), new StorageType(constType));
+            var constType = _lowering.GetStorageTypeName(op.Type);
+            return _lowering.Const(EmitPolicy.ParseConstValue(constType, LoweringServices.ToInvariantString(op.ConstantValue.Value)), new StorageType(constType));
         }
 
         // B67: string concat with a user enum operand. C# boxes each operand to object for
@@ -163,53 +164,53 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
         // Concat-ToString'd to its underlying number, so convert that operand to the C#-correct name string
         // first and emit the object/object concat directly (routing it back through the generic path would
         // re-select the extern by the now-string operand types).
-        if (op.OperatorKind == BinaryOperatorKind.Add && GetStorageTypeName(op.Type) == "SystemString")
+        if (op.OperatorKind == BinaryOperatorKind.Add && _lowering.GetStorageTypeName(op.Type) == "SystemString")
         {
-            var lOp = UnwrapConcatOperand(op.LeftOperand);
-            var rOp = UnwrapConcatOperand(op.RightOperand);
+            var lOp = LoweringServices.UnwrapConcatOperand(op.LeftOperand);
+            var rOp = LoweringServices.UnwrapConcatOperand(op.RightOperand);
             // M4b: a v1 class operand stringifies through the object.ToString dispatch slot (same
             // lowering as an interpolation hole; the M3 sealed-only fast path dissolved into the
             // helper's devirt arm). Both operand VALUES evaluate first — C# order: Concat's operands
             // are fully evaluated before either ToString runs — then each class operand dispatches.
-            var lCls = ResolveType(lOp.Type) as INamedTypeSymbol;
-            var rCls = ResolveType(rOp.Type) as INamedTypeSymbol;
+            var lCls = _lowering.ResolveType(lOp.Type) as INamedTypeSymbol;
+            var rCls = _lowering.ResolveType(rOp.Type) as INamedTypeSymbol;
             bool lIsClass = lCls != null && TypeClassifier.IsUserClass(lCls);
             bool rIsClass = rCls != null && TypeClassifier.IsUserClass(rCls);
             if (lIsClass || rIsClass)
             {
-                var l = VisitExpression(lOp);
-                var r = VisitExpression(rOp);
-                l = ConvertConcatOperand(l, lOp);
-                r = ConvertConcatOperand(r, rOp);
-                return ExternCall(UdonAbi.StringConcatObjects,
+                var l = _lowering.VisitExpression(lOp);
+                var r = _lowering.VisitExpression(rOp);
+                l = _lowering.ConvertConcatOperand(l, lOp);
+                r = _lowering.ConvertConcatOperand(r, rOp);
+                return _lowering.ExternCall(UdonAbi.StringConcatObjects,
                     new List<CLeaf> { l, r }, StorageTypes.String);
             }
             ClassAbi.RejectImplicitToString(lOp.Type);
             ClassAbi.RejectImplicitToString(rOp.Type);
-            if (IsFoldedEnum(ResolveType(lOp.Type)) || IsFoldedEnum(ResolveType(rOp.Type)))
+            if (_lowering.IsFoldedEnum(_lowering.ResolveType(lOp.Type)) || _lowering.IsFoldedEnum(_lowering.ResolveType(rOp.Type)))
             {
-                var l = VisitExpression(lOp);
-                l = ConvertConcatOperand(l, lOp);
-                var r = VisitExpression(rOp);
-                r = ConvertConcatOperand(r, rOp);
-                return ExternCall(UdonAbi.StringConcatObjects,
+                var l = _lowering.VisitExpression(lOp);
+                l = _lowering.ConvertConcatOperand(l, lOp);
+                var r = _lowering.VisitExpression(rOp);
+                r = _lowering.ConvertConcatOperand(r, rOp);
+                return _lowering.ExternCall(UdonAbi.StringConcatObjects,
                     new List<CLeaf> { l, r }, StorageTypes.String);
             }
         }
 
-        var leftVal = VisitExpression(op.LeftOperand);
-        var rightVal = VisitExpression(op.RightOperand);
+        var leftVal = _lowering.VisitExpression(op.LeftOperand);
+        var rightVal = _lowering.VisitExpression(op.RightOperand);
 
         // Enum operands → convert to underlying type before comparison
-        leftVal = EmitEnumToUnderlying(leftVal, op.LeftOperand.Type);
-        rightVal = EmitEnumToUnderlying(rightVal, op.RightOperand.Type);
+        leftVal = _lowering.EmitEnumToUnderlying(leftVal, op.LeftOperand.Type);
+        rightVal = _lowering.EmitEnumToUnderlying(rightVal, op.RightOperand.Type);
 
-        var resultType = GetStorageTypeName(op.Type);
+        var resultType = _lowering.GetStorageTypeName(op.Type);
 
         // long/ulong/uint % : Udon has no op_Remainder extern for these; lower to a - (a / b) * b via the
         // shared polyfill (uint included — it has Division/Multiplication/Subtraction but no Remainder).
-        if (op.OperatorKind == BinaryOperatorKind.Remainder && RemainderNeedsPolyfill(resultType))
-            return EmitRemainderViaDivision(leftVal, rightVal, resultType);
+        if (op.OperatorKind == BinaryOperatorKind.Remainder && LoweringServices.RemainderNeedsPolyfill(resultType))
+            return _lowering.EmitRemainderViaDivision(leftVal, rightVal, resultType);
 
         // Udon has no byte/sbyte/short/ushort operators. C# promotes a plain small int to int before the op, but
         // a small-int-backed ENUM keeps its underlying width (enum|enum stays enum, etc.), so the result type is
@@ -219,45 +220,45 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
         {
             var leftU = UnderlyingUdon(op.LeftOperand.Type);
             var rightU = UnderlyingUdon(op.RightOperand.Type);
-            var li = leftU == "SystemInt32" ? leftVal : EmitNarrowingConvert(leftVal, leftU, "SystemInt32");
-            var ri = rightU == "SystemInt32" ? rightVal : EmitNarrowingConvert(rightVal, rightU, "SystemInt32");
-            var int32 = _compilation.GetSpecialType(SpecialType.System_Int32);
-            var raw = ExternCall(
+            var li = leftU == "SystemInt32" ? leftVal : _lowering.EmitNarrowingConvert(leftVal, leftU, "SystemInt32");
+            var ri = rightU == "SystemInt32" ? rightVal : _lowering.EmitNarrowingConvert(rightVal, rightU, "SystemInt32");
+            var int32 = _lowering.Compilation.GetSpecialType(SpecialType.System_Int32);
+            var raw = _lowering.ExternCall(
                 ExternResolver.ResolveBuiltInBinaryExtern(op.OperatorKind,
-                    ResolveType(int32), ResolveType(int32),
-                    ResolveType(int32), GetStorageTypeName),
+                    _lowering.ResolveType(int32), _lowering.ResolveType(int32),
+                    _lowering.ResolveType(int32), _lowering.GetStorageTypeName),
                 new List<CLeaf> { li, ri }, StorageTypes.Int32);
-            return EmitNarrowingConvert(raw, "SystemInt32", resultType);
+            return _lowering.EmitNarrowingConvert(raw, "SystemInt32", resultType);
         }
 
         var sig = op.OperatorMethod != null
-            ? _ctx.Abi.BindOperator(op.OperatorMethod, type => GetStorageTypeName(type))
-            : _ctx.Abi.BindExact(ExternResolver.ResolveBuiltInBinaryExtern(
+            ? _lowering.Context.Abi.BindOperator(op.OperatorMethod, type => _lowering.GetStorageTypeName(type))
+            : _lowering.Context.Abi.BindExact(ExternResolver.ResolveBuiltInBinaryExtern(
                 op.OperatorKind,
-                ResolveType(op.LeftOperand.Type),
-                ResolveType(op.RightOperand.Type),
-                ResolveType(op.Type), GetStorageTypeName));
+                _lowering.ResolveType(op.LeftOperand.Type),
+                _lowering.ResolveType(op.RightOperand.Type),
+                _lowering.ResolveType(op.Type), _lowering.GetStorageTypeName));
 
         // UnityEngineObject equality/inequality: cast operands to UnityEngineObject temps
         if (op.OperatorMethod != null
-            && GetStorageTypeName(op.OperatorMethod.ContainingType) == "UnityEngineObject"
+            && _lowering.GetStorageTypeName(op.OperatorMethod.ContainingType) == "UnityEngineObject"
             && (op.OperatorKind == BinaryOperatorKind.Equals
                 || op.OperatorKind == BinaryOperatorKind.NotEquals))
         {
-            var objLeftSlot = _ctx.Builder.AllocScratch(StorageTypes.UnityObject);
-            EmitAssign(objLeftSlot, leftVal);
-            var objRightSlot = _ctx.Builder.AllocScratch(StorageTypes.UnityObject);
-            EmitAssign(objRightSlot, rightVal);
-            return ExternCall(sig, new List<CLeaf> { SlotRef(objLeftSlot), SlotRef(objRightSlot) }, new StorageType(resultType));
+            var objLeftSlot = _lowering.Context.Builder.AllocScratch(StorageTypes.UnityObject);
+            _lowering.EmitAssign(objLeftSlot, leftVal);
+            var objRightSlot = _lowering.Context.Builder.AllocScratch(StorageTypes.UnityObject);
+            _lowering.EmitAssign(objRightSlot, rightVal);
+            return _lowering.ExternCall(sig, new List<CLeaf> { _lowering.SlotRef(objLeftSlot), _lowering.SlotRef(objRightSlot) }, new StorageType(resultType));
         }
 
-        return ExternCall(sig, new List<CLeaf> { leftVal, rightVal }, new StorageType(resultType));
+        return _lowering.ExternCall(sig, new List<CLeaf> { leftVal, rightVal }, new StorageType(resultType));
     }
 
     // The effective Udon storage type of an operand: an enum is stored as (and operates on) its underlying type.
     string UnderlyingUdon(ITypeSymbol t) =>
         t is INamedTypeSymbol n && n.TypeKind == TypeKind.Enum
-            ? GetStorageTypeName(n.EnumUnderlyingType) : GetStorageTypeName(t);
+            ? _lowering.GetStorageTypeName(n.EnumUnderlyingType) : _lowering.GetStorageTypeName(t);
 
     // B63 redundant armor: reject a direct `typeof(A) ==/!= typeof(B)` where A,B are distinct C# types that
     // fold onto one Udon tag (the mint-site immediate-use gate already catches this — kept as defence-in-depth).
@@ -269,37 +270,37 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
         var b = AsTypeofOperand(op.RightOperand);
         if (a == null || b == null || SymbolEqualityComparer.Default.Equals(a, b))
             return;
-        if (GetStorageTypeName(a) != GetStorageTypeName(b))
+        if (_lowering.GetStorageTypeName(a) != _lowering.GetStorageTypeName(b))
             return;
         throw new System.NotSupportedException(
-            $"typeof('{(ResolveType(a) ?? a).ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}') "
-            + $"==/!= typeof('{(ResolveType(b) ?? b).ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}') "
+            $"typeof('{(_lowering.ResolveType(a) ?? a).ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}') "
+            + $"==/!= typeof('{(_lowering.ResolveType(b) ?? b).ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}') "
             + "is unsound: these are distinct C# types but Udon folds both onto one runtime type tag "
-            + $"('{GetStorageTypeName(a)}'), so the comparison is silently true where C# says false.");
+            + $"('{_lowering.GetStorageTypeName(a)}'), so the comparison is silently true where C# says false.");
     }
 
     // The type operand of a typeof, seeing through an identity/boxing conversion wrapper; null if not a typeof.
     static ITypeSymbol AsTypeofOperand(IOperation op)
     {
-        op = UnwrapConversions(op);
+        op = LoweringServices.UnwrapConversions(op);
         return op is ITypeOfOperation t ? t.TypeOperand : null;
     }
 
     // Nullable bool `&` / `|` with C# three-valued logic: a known false dominates `&` (false & null = false)
     // and a known true dominates `|` (true | null = true), regardless of the other operand being null.
     CLeaf EmitLiftedBoolLogic(IBinaryOperation op)
-        => NullableAbi.EmitLiftedBoolLogic(_builder,
-            VisitExpression(op.LeftOperand), VisitExpression(op.RightOperand),
+        => NullableAbi.EmitLiftedBoolLogic(_lowering.Builder,
+            _lowering.VisitExpression(op.LeftOperand), _lowering.VisitExpression(op.RightOperand),
             op.OperatorKind);
 
-    // Lifted binary operator on Nullable<T> (null propagation) — see HandlerBase.EmitLiftedBinaryCore.
+    // Lifted binary operator on Nullable<T> (null propagation) — see LoweringServices.EmitLiftedBinaryCore.
     CLeaf EmitLiftedBinary(IBinaryOperation op)
     {
         var leftNullable = EmitPolicy.IsNullableT(op.LeftOperand.Type, out var lu);
         var rightNullable = EmitPolicy.IsNullableT(op.RightOperand.Type, out var ru);
-        var leftVal = VisitExpression(op.LeftOperand);
-        var rightVal = VisitExpression(op.RightOperand);
-        return EmitLiftedBinaryCore(
+        var leftVal = _lowering.VisitExpression(op.LeftOperand);
+        var rightVal = _lowering.VisitExpression(op.RightOperand);
+        return _lowering.EmitLiftedBinaryCore(
             leftVal, leftNullable, leftNullable ? lu : op.LeftOperand.Type,
             rightVal, rightNullable, rightNullable ? ru : op.RightOperand.Type,
             op.OperatorKind, op.OperatorMethod, op.Type);
@@ -311,36 +312,36 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
         // VisitExpression on operands may emit Core IR statements (e.g. temp stores for
         // enum conversions, UnityEngineObject casts). Those statements must live inside
         // the conditional branch so they don't execute unconditionally.
-        var leftVal = VisitExpression(op.LeftOperand);
-        var resultSlot = _ctx.Builder.AllocScratch(StorageTypes.Boolean);
-        EmitAssign(resultSlot, Const(false, StorageTypes.Boolean));
-        _builder.EmitIf(leftVal, _ =>
+        var leftVal = _lowering.VisitExpression(op.LeftOperand);
+        var resultSlot = _lowering.Context.Builder.AllocScratch(StorageTypes.Boolean);
+        _lowering.EmitAssign(resultSlot, _lowering.Const(false, StorageTypes.Boolean));
+        _lowering.Builder.EmitIf(leftVal, _ =>
         {
-            var rightVal = VisitExpression(op.RightOperand);
-            EmitAssign(resultSlot, rightVal);
+            var rightVal = _lowering.VisitExpression(op.RightOperand);
+            _lowering.EmitAssign(resultSlot, rightVal);
         });
-        return SlotRef(resultSlot);
+        return _lowering.SlotRef(resultSlot);
     }
 
     CLeaf VisitConditionalOr(IBinaryOperation op)
     {
         // a || b: evaluate b only when a is false (short-circuit).
-        var leftVal = VisitExpression(op.LeftOperand);
-        var resultSlot = _ctx.Builder.AllocScratch(StorageTypes.Boolean);
-        EmitAssign(resultSlot, Const(true, StorageTypes.Boolean));
-        _builder.EmitIf(leftVal, null, _ =>
+        var leftVal = _lowering.VisitExpression(op.LeftOperand);
+        var resultSlot = _lowering.Context.Builder.AllocScratch(StorageTypes.Boolean);
+        _lowering.EmitAssign(resultSlot, _lowering.Const(true, StorageTypes.Boolean));
+        _lowering.Builder.EmitIf(leftVal, null, _ =>
         {
-            var rightVal = VisitExpression(op.RightOperand);
-            EmitAssign(resultSlot, rightVal);
+            var rightVal = _lowering.VisitExpression(op.RightOperand);
+            _lowering.EmitAssign(resultSlot, rightVal);
         });
-        return SlotRef(resultSlot);
+        return _lowering.SlotRef(resultSlot);
     }
 
     // ── Unary ──
 
     CLeaf VisitUnary(IUnaryOperation op)
     {
-        RejectChecked(op.IsChecked);
+        LoweringServices.RejectChecked(op.IsChecked);
 
         // ── User-defined struct operator (ANY unary kind, incl. ~): static operator method call. MUST come
         // before the built-in ~ branch below — that branch builds an extern on the struct's SystemObjectArray
@@ -349,8 +350,8 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
         if (op.OperatorMethod is { MethodKind: MethodKind.UserDefinedOperator } unOpM
             && unOpM.ContainingType is INamedTypeSymbol unOpCt && TypeClassifier.IsObjectArrayEmulated(unOpCt))
         {
-            var operand = VisitExpression(op.Operand);
-            return EmitCallToMethod(ResolveStructMember(unOpM), new List<CLeaf> { operand });
+            var operand = _lowering.VisitExpression(op.Operand);
+            return _lowering.EmitCallToMethod(_lowering.ResolveStructMember(unOpM), new List<CLeaf> { operand });
         }
 
         // Bitwise NOT (~): Udon VM has no unary complement extern → synthesize as XOR with all-bits-set
@@ -366,8 +367,8 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
         // Constant folding: compile-time evaluable unary expressions (e.g., -5)
         if (op.ConstantValue.HasValue)
         {
-            var constType = GetStorageTypeName(op.Type);
-            return Const(EmitPolicy.ParseConstValue(constType, ToInvariantString(op.ConstantValue.Value)), new StorageType(constType));
+            var constType = _lowering.GetStorageTypeName(op.Type);
+            return _lowering.Const(EmitPolicy.ParseConstValue(constType, LoweringServices.ToInvariantString(op.ConstantValue.Value)), new StorageType(constType));
         }
 
         // Lifted unary on Nullable<T> (null propagation): null stays null, else apply the op to the unwrapped
@@ -375,14 +376,14 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
         if (op.IsLifted && EmitPolicy.IsNullableT(op.Type, out var unaryResU))
             return EmitLiftedUnary(op, unaryResU);
 
-        var operandVal = VisitExpression(op.Operand);
-        var resultType = GetStorageTypeName(op.Type);
+        var operandVal = _lowering.VisitExpression(op.Operand);
+        var resultType = _lowering.GetStorageTypeName(op.Type);
 
         var sig = op.OperatorMethod != null && !ExternResolver.IsNumericType(op.Operand.Type)
-            ? _ctx.Abi.BindOperator(op.OperatorMethod, type => GetStorageTypeName(type))
-            : _ctx.Abi.BindExact(BuildBuiltinUnaryKey(op));
+            ? _lowering.Context.Abi.BindOperator(op.OperatorMethod, type => _lowering.GetStorageTypeName(type))
+            : _lowering.Context.Abi.BindExact(BuildBuiltinUnaryKey(op));
 
-        return ExternCall(sig, new List<CLeaf> { operandVal }, new StorageType(resultType));
+        return _lowering.ExternCall(sig, new List<CLeaf> { operandVal }, new StorageType(resultType));
     }
 
     // Lifted unary minus / logical-not on Nullable<T>: null-preserving. A small-int operand is promoted to
@@ -391,7 +392,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
     CLeaf EmitLiftedUnary(IUnaryOperation op, ITypeSymbol resUnderlying)
     {
         EmitPolicy.IsNullableT(op.Operand.Type, out var opUnderlying);
-        var resU = GetStorageTypeName(resUnderlying);
+        var resU = _lowering.GetStorageTypeName(resUnderlying);
 
         // Lifted bitwise NOT: ~x ≡ x ^ allBits — reuse the lifted-binary machinery (promotion / narrowing /
         // null-propagation). ~ promotes a small int to int, so allBits is built in the RESULT underlying domain.
@@ -407,23 +408,23 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
                 SpecialType.System_Byte => byte.MaxValue,
                 _ => throw new System.NotSupportedException($"Lifted bitwise NOT (~) is not supported on {resU}")
             };
-            return EmitLiftedBinaryCore(
-                VisitExpression(op.Operand), true, opUnderlying,
-                Const(allBitsValue, new StorageType(resU)), false, resUnderlying,
+            return _lowering.EmitLiftedBinaryCore(
+                _lowering.VisitExpression(op.Operand), true, opUnderlying,
+                _lowering.Const(allBitsValue, new StorageType(resU)), false, resUnderlying,
                 BinaryOperatorKind.ExclusiveOr, null, op.Type);
         }
 
-        return NullableAbi.EmitLiftedUnary(_builder, VisitExpression(op.Operand),
-            opUnderlying, resUnderlying, op.OperatorKind, GetStorageTypeName,
-            (boxed, underlying) => NullableAbi.PromoteBoxedToInt32(_builder, boxed, underlying,
-                _compilation.GetSpecialType(SpecialType.System_Int32), GetStorageTypeName));
+        return NullableAbi.EmitLiftedUnary(_lowering.Builder, _lowering.VisitExpression(op.Operand),
+            opUnderlying, resUnderlying, op.OperatorKind, _lowering.GetStorageTypeName,
+            (boxed, underlying) => NullableAbi.PromoteBoxedToInt32(_lowering.Builder, boxed, underlying,
+                _lowering.Compilation.GetSpecialType(SpecialType.System_Int32), _lowering.GetStorageTypeName));
     }
 
     CLeaf VisitBitwiseNot(IUnaryOperation op)
     {
-        var operandVal = VisitExpression(op.Operand);
-        var operandType = GetStorageTypeName(op.Operand.Type);
-        var resultType = GetStorageTypeName(op.Type);
+        var operandVal = _lowering.VisitExpression(op.Operand);
+        var operandType = _lowering.GetStorageTypeName(op.Operand.Type);
+        var resultType = _lowering.GetStorageTypeName(op.Type);
 
         // An enum operand has SpecialType None; ~ operates on (and narrows back to) the underlying type, so key
         // off the underlying. operandType/resultType already resolve to it via GetStorageTypeName.
@@ -437,10 +438,10 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
         if (effSpecial is SpecialType.System_Byte or SpecialType.System_SByte
             or SpecialType.System_Int16 or SpecialType.System_UInt16)
         {
-            var asInt = operandType == "SystemInt32" ? operandVal : EmitNarrowingConvert(operandVal, operandType, "SystemInt32");
-            var xored = ExternCall(UdonAbiKey.Method("SystemInt32", "op_LogicalXor", new[] { "SystemInt32", "SystemInt32" }, "SystemInt32"),
-                new List<CLeaf> { asInt, Const(-1, StorageTypes.Int32) }, StorageTypes.Int32);
-            return resultType == "SystemInt32" ? xored : EmitNarrowingConvert(xored, "SystemInt32", resultType);
+            var asInt = operandType == "SystemInt32" ? operandVal : _lowering.EmitNarrowingConvert(operandVal, operandType, "SystemInt32");
+            var xored = _lowering.ExternCall(UdonAbiKey.Method("SystemInt32", "op_LogicalXor", new[] { "SystemInt32", "SystemInt32" }, "SystemInt32"),
+                new List<CLeaf> { asInt, _lowering.Const(-1, StorageTypes.Int32) }, StorageTypes.Int32);
+            return resultType == "SystemInt32" ? xored : _lowering.EmitNarrowingConvert(xored, "SystemInt32", resultType);
         }
 
         // int/uint/long/ulong have native ops: ~x ≡ x ^ allBits (signed: -1 = all bits set, unsigned: MaxValue).
@@ -452,13 +453,13 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
             _ => throw new System.NotSupportedException(
                 $"Bitwise NOT (~) is not supported on type {operandType}")
         };
-        var allBitsConst = Const(allBitsValue, new StorageType(operandType));
+        var allBitsConst = _lowering.Const(allBitsValue, new StorageType(operandType));
 
-        return ExternCall(
+        return _lowering.ExternCall(
             ExternResolver.ResolveBuiltInBinaryExtern(
                 BinaryOperatorKind.ExclusiveOr,
-                ResolveType(op.Operand.Type), ResolveType(op.Operand.Type),
-                ResolveType(op.Type), GetStorageTypeName),
+                _lowering.ResolveType(op.Operand.Type), _lowering.ResolveType(op.Operand.Type),
+                _lowering.ResolveType(op.Type), _lowering.GetStorageTypeName),
             new List<CLeaf> { operandVal, allBitsConst },
             new StorageType(resultType));
     }
@@ -470,12 +471,12 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
         // A bare `x is T` (no binding) is exactly a type pattern without a variable — route it through the
         // single guarded EmitTypeCheck so NO reachable path emits IsInstanceOfType without the layer-2
         // distinguishability guard.
-        return EmitTypeCheck(VisitExpression(op.ValueOperand), op.TypeOperand);
+        return _lowering.EmitTypeCheck(_lowering.VisitExpression(op.ValueOperand), op.TypeOperand);
     }
 
     CLeaf VisitIsPattern(IIsPatternOperation op)
     {
-        var valueVal = VisitExpression(op.Value);
+        var valueVal = _lowering.VisitExpression(op.Value);
         return EmitPatternCheckImpl(valueVal, op.Value.Type, op.Pattern);
     }
 
@@ -486,7 +487,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
         // Nullable<T> scrutinee (boxed object): `x is null` is an object null check; any other pattern
         // requires HasValue, then matches against the unboxed underlying value (Udon unboxes transparently).
         if (EmitPolicy.IsNullableT(valueType, out var patUnderlying))
-            return NullableAbi.EmitPatternCheck(_builder, valueVal, patUnderlying, pattern,
+            return NullableAbi.EmitPatternCheck(_lowering.Builder, valueVal, patUnderlying, pattern,
                 EmitPatternCheckImpl);
 
         switch (pattern)
@@ -494,54 +495,54 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
             case IConstantPatternOperation constPat:
                 // Shared with the nullable switch single-value clause (CW19) — enum-underlying
                 // conversion, null → SystemObject equality, small-int/char two-sided int32 promotion.
-                return EmitConstantEquality(valueVal, valueType, VisitExpression(constPat.Value),
+                return _lowering.EmitConstantEquality(valueVal, valueType, _lowering.VisitExpression(constPat.Value),
                     constPat.Value.ConstantValue is { HasValue: true, Value: null });
             case INegatedPatternOperation negated:
             {
                 var innerVal = EmitPatternCheckImpl(valueVal, valueType, negated.Pattern);
-                return ExternCall(
+                return _lowering.ExternCall(
                     UdonAbi.BooleanNot,
                     new List<CLeaf> { innerVal },
                     StorageTypes.Boolean);
             }
             case ITypePatternOperation typePat:
-                return EmitTypeCheck(valueVal, typePat.MatchedType);
+                return _lowering.EmitTypeCheck(valueVal, typePat.MatchedType);
 
             case IDeclarationPatternOperation declPat:
             {
                 // `var x` (no explicit MatchedType / MatchesNull) matches any value — no type check.
                 var isVar = declPat.MatchedType == null || declPat.MatchesNull;
-                var checkVal = isVar ? (CLeaf)Const(true, StorageTypes.Boolean) : EmitTypeCheck(valueVal, declPat.MatchedType);
+                var checkVal = isVar ? (CLeaf)_lowering.Const(true, StorageTypes.Boolean) : _lowering.EmitTypeCheck(valueVal, declPat.MatchedType);
                 if (declPat.DeclaredSymbol is ILocalSymbol local)
                 {
                     if (isVar)
                         BindPatternLocal(local, valueVal); // always matches → bind unconditionally
                     else
                         // Only assign when the type check succeeds — avoid invalid type COPY on mismatch
-                        _builder.EmitIf(checkVal, _ => BindPatternLocal(local, valueVal));
+                        _lowering.Builder.EmitIf(checkVal, _ => BindPatternLocal(local, valueVal));
                 }
                 return checkVal;
             }
             case IDiscardPatternOperation:
-                return Const(true, StorageTypes.Boolean);
+                return _lowering.Const(true, StorageTypes.Boolean);
 
             case IRelationalPatternOperation relPat:
             {
-                var constVal = VisitExpression(relPat.Value);
+                var constVal = _lowering.VisitExpression(relPat.Value);
                 // Enum scrutinee → compare on the underlying type (mirrors the constant-pattern arm).
-                var scrut = EmitEnumToUnderlying(valueVal, valueType);
-                constVal = EmitEnumToUnderlying(constVal, valueType);
+                var scrut = _lowering.EmitEnumToUnderlying(valueVal, valueType);
+                constVal = _lowering.EmitEnumToUnderlying(constVal, valueType);
                 var underlyingSym = valueType is INamedTypeSymbol relEnum && relEnum.TypeKind == TypeKind.Enum
                     ? relEnum.EnumUnderlyingType : valueType;
-                var valType = GetStorageTypeName(underlyingSym);
+                var valType = _lowering.GetStorageTypeName(underlyingSym);
                 if (ExternResolver.IsSmallIntOrChar(valType))
                 {
                     // A nullable small-int/char (or small-underlying enum) scrutinee may be boxed as a plain int;
                     // promote both sides to int32 so the strict small-int extern's box-tag fetch cannot InvalidCast.
-                    scrut = NullableAbi.PromoteBoxedToInt32(_builder, scrut, underlyingSym,
-                        _compilation.GetSpecialType(SpecialType.System_Int32), GetStorageTypeName).Value;
-                    constVal = NullableAbi.PromoteBoxedToInt32(_builder, constVal, underlyingSym,
-                        _compilation.GetSpecialType(SpecialType.System_Int32), GetStorageTypeName).Value;
+                    scrut = NullableAbi.PromoteBoxedToInt32(_lowering.Builder, scrut, underlyingSym,
+                        _lowering.Compilation.GetSpecialType(SpecialType.System_Int32), _lowering.GetStorageTypeName).Value;
+                    constVal = NullableAbi.PromoteBoxedToInt32(_lowering.Builder, constVal, underlyingSym,
+                        _lowering.Compilation.GetSpecialType(SpecialType.System_Int32), _lowering.GetStorageTypeName).Value;
                     valType = "SystemInt32";
                 }
                 var opName = relPat.OperatorKind switch
@@ -553,7 +554,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
                     _ => throw new System.NotSupportedException(
                         $"Unsupported relational operator: {relPat.OperatorKind}")
                 };
-                return ExternCall(
+                return _lowering.ExternCall(
                     UdonAbiKey.Method(
                         valType, opName, new[] { valType, valType }, "SystemBoolean"),
                     new List<CLeaf> { scrut, constVal },
@@ -571,23 +572,23 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
                     && binPat.LeftPattern.NarrowedType is { } narrowedType
                     && !SymbolEqualityComparer.Default.Equals(narrowedType, valueType))
                 {
-                    var resultSlot = _ctx.Builder.AllocScratch(StorageTypes.Boolean);
-                    EmitAssign(resultSlot, Const(false, StorageTypes.Boolean));
+                    var resultSlot = _lowering.Context.Builder.AllocScratch(StorageTypes.Boolean);
+                    _lowering.EmitAssign(resultSlot, _lowering.Const(false, StorageTypes.Boolean));
                     var matched = EmitPatternCheckImpl(valueVal, valueType, binPat.LeftPattern);
-                    _builder.EmitIf(matched, b =>
+                    _lowering.Builder.EmitIf(matched, b =>
                     {
-                        var nt = _ctx.Builder.AllocScratch(GetStorageType(narrowedType));
-                        EmitAssign(nt, valueVal);
-                        EmitAssign(resultSlot, EmitPatternCheckImpl(SlotRef(nt), narrowedType, binPat.RightPattern));
+                        var nt = _lowering.Context.Builder.AllocScratch(_lowering.GetStorageType(narrowedType));
+                        _lowering.EmitAssign(nt, valueVal);
+                        _lowering.EmitAssign(resultSlot, EmitPatternCheckImpl(_lowering.SlotRef(nt), narrowedType, binPat.RightPattern));
                     });
-                    return SlotRef(resultSlot);
+                    return _lowering.SlotRef(resultSlot);
                 }
                 var leftVal = EmitPatternCheckImpl(valueVal, valueType, binPat.LeftPattern);
                 var rightVal = EmitPatternCheckImpl(valueVal, valueType, binPat.RightPattern);
                 var opName = binPat.OperatorKind == BinaryOperatorKind.And
                     ? UdonAbi.BooleanConditionalAnd
                     : UdonAbi.BooleanConditionalOr;
-                return ExternCall(opName, new List<CLeaf> { leftVal, rightVal }, StorageTypes.Boolean);
+                return _lowering.ExternCall(opName, new List<CLeaf> { leftVal, rightVal }, StorageTypes.Boolean);
             }
 
             case IRecursivePatternOperation rec:
@@ -603,50 +604,50 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
         // One guarded lowering owns every recursive-pattern facet. Splitting positional and property
         // forms into competing switch arms made the first arm silently drop the second facet, the
         // matched-type/null guard, and the designator for `T(...) { P: ... } v`.
-        var resultSlot = _ctx.Builder.AllocScratch(StorageTypes.Boolean);
-        EmitAssign(resultSlot, Const(false, StorageTypes.Boolean));
+        var resultSlot = _lowering.Context.Builder.AllocScratch(StorageTypes.Boolean);
+        _lowering.EmitAssign(resultSlot, _lowering.Const(false, StorageTypes.Boolean));
 
         CLeaf guard;
         if (rec.MatchedType != null && !SymbolEqualityComparer.Default.Equals(rec.MatchedType, valueType))
-            guard = EmitTypeCheck(valueVal, rec.MatchedType);
+            guard = _lowering.EmitTypeCheck(valueVal, rec.MatchedType);
         else if (!valueType.IsValueType)
-            guard = ExternCall(
+            guard = _lowering.ExternCall(
                 UdonAbi.ObjectInequality,
-                new List<CLeaf> { valueVal, Const(null, StorageTypes.Object) }, StorageTypes.Boolean);
+                new List<CLeaf> { valueVal, _lowering.Const(null, StorageTypes.Object) }, StorageTypes.Boolean);
         else
-            guard = Const(true, StorageTypes.Boolean);
+            guard = _lowering.Const(true, StorageTypes.Boolean);
 
-        _builder.EmitIf(guard, _ =>
+        _lowering.Builder.EmitIf(guard, _ =>
         {
             var matchType = rec.MatchedType ?? valueType;
-            var valSlot = _ctx.Builder.AllocScratch(GetStorageType(matchType));
-            EmitAssign(valSlot, valueVal);
+            var valSlot = _lowering.Context.Builder.AllocScratch(_lowering.GetStorageType(matchType));
+            _lowering.EmitAssign(valSlot, valueVal);
 
-            var acc = EmitRecursivePositionalChecks(SlotRef(valSlot), matchType, rec);
-            acc = EmitRecursivePropertyChecks(SlotRef(valSlot), matchType, rec, acc);
-            EmitAssign(resultSlot, acc);
+            var acc = EmitRecursivePositionalChecks(_lowering.SlotRef(valSlot), matchType, rec);
+            acc = EmitRecursivePropertyChecks(_lowering.SlotRef(valSlot), matchType, rec, acc);
+            _lowering.EmitAssign(resultSlot, acc);
 
             // A recursive-pattern designator is assigned only when every positional/property facet
             // matched. Keeping the write under the final result also avoids publishing a stale
             // environment value from a failed pattern.
             if (rec.DeclaredSymbol is ILocalSymbol bound)
-                _builder.EmitIf(acc, __ => BindPatternLocal(bound, SlotRef(valSlot)));
+                _lowering.Builder.EmitIf(acc, __ => BindPatternLocal(bound, _lowering.SlotRef(valSlot)));
         });
-        return SlotRef(resultSlot);
+        return _lowering.SlotRef(resultSlot);
     }
 
     CLeaf EmitRecursivePositionalChecks(CLeaf valueVal, ITypeSymbol matchType,
         IRecursivePatternOperation rec)
     {
         if (rec.DeconstructionSubpatterns.Length == 0)
-            return Const(true, StorageTypes.Boolean);
+            return _lowering.Const(true, StorageTypes.Boolean);
 
         // Tuple/user-struct positional patterns read their aggregate slots directly. Other supported
         // types call the registered user Deconstruct(out ...) method.
         if (matchType is not INamedTypeSymbol aggType || !TypeClassifier.IsAggregateValue(matchType))
         {
             var deconstruct = rec.DeconstructSymbol is not IMethodSymbol deconstructMethod
-                ? null : ResolveStructMember(SubstituteMethodTypeArgs(deconstructMethod));
+                ? null : _lowering.ResolveStructMember(_lowering.SubstituteMethodTypeArgs(deconstructMethod));
             if (deconstruct == null
                 || deconstruct.Parameters.Length != rec.DeconstructionSubpatterns.Length
                 || deconstruct.Parameters.Any(p => p.RefKind != RefKind.Out))
@@ -655,39 +656,39 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
 
             var args = new List<CLeaf> { valueVal };
             foreach (var parameter in deconstruct.Parameters)
-                args.Add(SlotRef(_builder.AllocScratch(GetStorageType(parameter.Type))));
-            EmitExprStmt(EmitCallToMethod(deconstruct, args, rec.Syntax));
-            if (!_methodParamVarIds.TryGetValue(deconstruct, out var paramIds))
+                args.Add(_lowering.SlotRef(_lowering.Builder.AllocScratch(_lowering.GetStorageType(parameter.Type))));
+            _lowering.EmitExprStmt(_lowering.EmitCallToMethod(deconstruct, args, rec.Syntax));
+            if (!_lowering.MethodParamVarIds.TryGetValue(deconstruct, out var paramIds))
                 throw new System.InvalidOperationException(
                     $"Deconstruct method '{deconstruct.ToDisplayString()}' was not registered.");
 
-            CLeaf deconstructResult = Const(true, StorageTypes.Boolean);
+            CLeaf deconstructResult = _lowering.Const(true, StorageTypes.Boolean);
             for (int i = 0; i < rec.DeconstructionSubpatterns.Length; i++)
             {
                 var elemType = deconstruct.Parameters[i].Type;
-                var elem = LoadField(paramIds[i], GetStorageType(elemType));
+                var elem = _lowering.LoadField(paramIds[i], _lowering.GetStorageType(elemType));
                 var subResult = EmitPatternCheckImpl(elem, elemType, rec.DeconstructionSubpatterns[i]);
                 deconstructResult = CombinePatternChecks(deconstructResult, subResult);
             }
             return deconstructResult;
         }
 
-        var layout = _ctx.Aggregates.GetLayout(aggType);
+        var layout = _lowering.Context.Aggregates.GetLayout(aggType);
         if (rec.DeconstructionSubpatterns.Length != layout.Count)
             throw new System.NotSupportedException(
                 $"Positional pattern element count ({rec.DeconstructionSubpatterns.Length}) "
                 + $"does not match tuple arity ({layout.Count}).");
 
-        CLeaf result = Const(true, StorageTypes.Boolean);
+        CLeaf result = _lowering.Const(true, StorageTypes.Boolean);
         for (int i = 0; i < rec.DeconstructionSubpatterns.Length; i++)
         {
             var elemType = layout.Fields[i].Type;
-            var elemRaw = AggregateAbi.ReadSlot(_builder, valueVal, i, StorageTypes.Object);
+            var elemRaw = AggregateAbi.ReadSlot(_lowering.Builder, valueVal, i, StorageTypes.Object);
             // Materialize into a typed temp (Udon COPY unboxes) so the sub-pattern compares with
             // the correct type tag.
-            var elemSlot = _ctx.Builder.AllocScratch(GetStorageType(elemType));
-            EmitAssign(elemSlot, elemRaw);
-            var subResult = EmitPatternCheckImpl(SlotRef(elemSlot), elemType,
+            var elemSlot = _lowering.Context.Builder.AllocScratch(_lowering.GetStorageType(elemType));
+            _lowering.EmitAssign(elemSlot, elemRaw);
+            var subResult = EmitPatternCheckImpl(_lowering.SlotRef(elemSlot), elemType,
                 rec.DeconstructionSubpatterns[i]);
             result = CombinePatternChecks(result, subResult);
         }
@@ -723,34 +724,34 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
                 && VirtualDispatch.FindAccessor(vSubRef.Property, getter: true) is { } vSubGetter
                 && VirtualDispatch.IsVirtualCall(vSubGetter))
             {
-                var dispatched = EmitAccessorDispatch(vSubRef.Property, aggMatchType, vSubGetter,
+                var dispatched = _lowering.EmitAccessorDispatch(vSubRef.Property, aggMatchType, vSubGetter,
                     valueVal, new List<CLeaf>(), null);
-                var vSubSlot = _ctx.Builder.AllocScratch(GetStorageType(memberType));
-                EmitAssign(vSubSlot, dispatched);
-                memberVal = SlotRef(vSubSlot);
+                var vSubSlot = _lowering.Context.Builder.AllocScratch(_lowering.GetStorageType(memberType));
+                _lowering.EmitAssign(vSubSlot, dispatched);
+                memberVal = _lowering.SlotRef(vSubSlot);
             }
             else if (isAgg
-                     && _ctx.Aggregates.GetLayout(aggMatchType).TryGetIndex(memberName, out var aggMemberIdx))
+                     && _lowering.Context.Aggregates.GetLayout(aggMatchType).TryGetIndex(memberName, out var aggMemberIdx))
             {
-                var rawMember = AggregateAbi.ReadSlot(_builder, valueVal, aggMemberIdx, StorageTypes.Object);
-                var memberSlot = _ctx.Builder.AllocScratch(GetStorageType(memberType));
-                EmitAssign(memberSlot, rawMember);
-                memberVal = SlotRef(memberSlot);
+                var rawMember = AggregateAbi.ReadSlot(_lowering.Builder, valueVal, aggMemberIdx, StorageTypes.Object);
+                var memberSlot = _lowering.Context.Builder.AllocScratch(_lowering.GetStorageType(memberType));
+                _lowering.EmitAssign(memberSlot, rawMember);
+                memberVal = _lowering.SlotRef(memberSlot);
             }
             else if (isAgg && sub.Member is IPropertyReferenceOperation cpr
                      && cpr.Property.GetMethod is { } cgetter)
             {
-                memberVal = EmitCallToMethod(ResolveStructMember(cgetter),
+                memberVal = _lowering.EmitCallToMethod(_lowering.ResolveStructMember(cgetter),
                     new List<CLeaf> { valueVal });
             }
             else
             {
-                var memberOwner = GetStorageTypeName(
-                    ResolveExternOwnerType(memberContainingType, matchType, memberName));
-                memberVal = ExternCall(
-                    _ctx.Abi.BindPropertyGetter(
-                        memberOwner, memberName, GetStorageTypeName(memberType)),
-                    new List<CLeaf> { valueVal }, GetStorageType(memberType));
+                var memberOwner = _lowering.GetStorageTypeName(
+                    _lowering.ResolveExternOwnerType(memberContainingType, matchType, memberName));
+                memberVal = _lowering.ExternCall(
+                    _lowering.Context.Abi.BindPropertyGetter(
+                        memberOwner, memberName, _lowering.GetStorageTypeName(memberType)),
+                    new List<CLeaf> { valueVal }, _lowering.GetStorageType(memberType));
             }
 
             var subResult = EmitPatternCheckImpl(memberVal, memberType, sub.Pattern);
@@ -760,7 +761,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
     }
 
     CLeaf CombinePatternChecks(CLeaf left, CLeaf right) =>
-        ExternCall(
+        _lowering.ExternCall(
             UdonAbi.BooleanConditionalAnd,
             new List<CLeaf> { left, right }, StorageTypes.Boolean);
 
@@ -768,27 +769,27 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
     {
         // Stage 2 §4.1: captured pattern variable → env cell (its owning scope's env is live at
         // every point a condition/section hosting this pattern executes).
-        if (_ctx.Closures.TryGetEnvBinding(local, out _))
+        if (_lowering.Context.Closures.TryGetEnvBinding(local, out _))
         {
-            EnvEmit.Write(_builder, _ctx, local, value);
+            EnvEmit.Write(_lowering.Builder, _lowering.Context, local, value);
             return;
         }
 
-        var localId = _ctx.Storage.DeclareLocal(local.Name, GetStorageType(local.Type));
-        _localBindings[local] = new EmitContext.LocalBinding(localId);
-        EmitStoreField(localId, value);
+        var localId = _lowering.Context.Storage.DeclareLocal(local.Name, _lowering.GetStorageType(local.Type));
+        _lowering.LocalBindings[local] = new EmitContext.LocalBinding(localId);
+        _lowering.EmitStoreField(localId, value);
     }
 
     // ── Switch expression ──
 
     CLeaf VisitSwitchExpression(ISwitchExpressionOperation op)
     {
-        var resultType = GetStorageTypeName(op.Type);
-        var resultSlot = _ctx.Builder.AllocScratch(new StorageType(resultType));
+        var resultType = _lowering.GetStorageTypeName(op.Type);
+        var resultSlot = _lowering.Context.Builder.AllocScratch(new StorageType(resultType));
         // Initialize result to default in case no arm matches (non-exhaustive)
-        EmitAssign(resultSlot, Const(
+        _lowering.EmitAssign(resultSlot, _lowering.Const(
             EmitPolicy.ParseConstValue(resultType, GetDefaultConstValue(resultType)), new StorageType(resultType)));
-        var valueVal = VisitExpression(op.Value);
+        var valueVal = _lowering.VisitExpression(op.Value);
 
         // Separate default arm from pattern arms to build proper if/else-if/else chain
         var patternArms = new List<ISwitchExpressionArmOperation>();
@@ -810,8 +811,8 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
             var defArm = defaultArm;
             tail = _ =>
             {
-                var armVal = VisitExpression(defArm.Value);
-                EmitAssign(resultSlot, armVal);
+                var armVal = _lowering.VisitExpression(defArm.Value);
+                _lowering.EmitAssign(resultSlot, armVal);
             };
         }
         else
@@ -820,9 +821,9 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
             // exceptions. Match the null-invoke deviation (§8-8): loud LogError at runtime, then keep
             // the default(T) the result slot was seeded with — never a silent wrong value.
             tail = _ =>
-                EmitExternVoid(UdonAbi.DebugLogError,
-                    new List<CLeaf> { Const(
-                        $"USugar: SwitchExpressionException — no arm matched in switch expression ({_classSymbol.Name})",
+                _lowering.EmitExternVoid(UdonAbi.DebugLogError,
+                    new List<CLeaf> { _lowering.Const(
+                        $"USugar: SwitchExpressionException — no arm matched in switch expression ({_lowering.ClassSymbol.Name})",
                         StorageTypes.String) });
         }
 
@@ -837,22 +838,22 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
                 if (arm.Guard != null)
                 {
                     // Pattern match + guard: combine with &&
-                    _builder.EmitIf(checkVal, __ =>
+                    _lowering.Builder.EmitIf(checkVal, __ =>
                     {
-                        var guardVal = VisitExpression(arm.Guard);
-                        _builder.EmitIf(guardVal, ___ =>
+                        var guardVal = _lowering.VisitExpression(arm.Guard);
+                        _lowering.Builder.EmitIf(guardVal, ___ =>
                         {
-                            var armVal = VisitExpression(arm.Value);
-                            EmitAssign(resultSlot, armVal);
+                            var armVal = _lowering.VisitExpression(arm.Value);
+                            _lowering.EmitAssign(resultSlot, armVal);
                         }, elseBranch);
                     }, elseBranch);
                 }
                 else
                 {
-                    _builder.EmitIf(checkVal, __ =>
+                    _lowering.Builder.EmitIf(checkVal, __ =>
                     {
-                        var armVal = VisitExpression(arm.Value);
-                        EmitAssign(resultSlot, armVal);
+                        var armVal = _lowering.VisitExpression(arm.Value);
+                        _lowering.EmitAssign(resultSlot, armVal);
                     }, elseBranch);
                 }
             };
@@ -861,7 +862,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
         // Emit the chain
         tail?.Invoke(null);
 
-        return SlotRef(resultSlot);
+        return _lowering.SlotRef(resultSlot);
     }
 
     // ── Conditional (ternary) expression ──
@@ -869,13 +870,13 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
     CLeaf VisitConditionalExpression(IConditionalOperation op)
     {
         // cond ? a : b: evaluate branches only on the taken path.
-        var condVal = VisitExpression(op.Condition);
-        var resultType = GetStorageTypeName(op.Type);
-        var resultSlot = _ctx.Builder.AllocScratch(new StorageType(resultType));
-        _builder.EmitIf(condVal,
-            _ => EmitAssign(resultSlot, VisitExpression(op.WhenTrue)),
-            _ => EmitAssign(resultSlot, VisitExpression(op.WhenFalse)));
-        return SlotRef(resultSlot);
+        var condVal = _lowering.VisitExpression(op.Condition);
+        var resultType = _lowering.GetStorageTypeName(op.Type);
+        var resultSlot = _lowering.Context.Builder.AllocScratch(new StorageType(resultType));
+        _lowering.Builder.EmitIf(condVal,
+            _ => _lowering.EmitAssign(resultSlot, _lowering.VisitExpression(op.WhenTrue)),
+            _ => _lowering.EmitAssign(resultSlot, _lowering.VisitExpression(op.WhenFalse)));
+        return _lowering.SlotRef(resultSlot);
     }
 
     // ── Extern signature helpers ──
@@ -888,11 +889,11 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
 
     UdonAbiKey BuildBuiltinUnaryKey(IUnaryOperation op)
     {
-        var operandType = GetStorageTypeName(op.Operand.Type);
-        var returnType = GetStorageTypeName(op.Type);
+        var operandType = _lowering.GetStorageTypeName(op.Operand.Type);
+        var returnType = _lowering.GetStorageTypeName(op.Type);
         if (!UnaryOpNames.TryGetValue(op.OperatorKind, out var opName))
             throw new System.NotSupportedException(
-                $"Unsupported unary operator: {op.OperatorKind} on type {GetStorageTypeName(op.Operand.Type)}");
+                $"Unsupported unary operator: {op.OperatorKind} on type {_lowering.GetStorageTypeName(op.Operand.Type)}");
         // Decimal uses C# method name: op_UnaryNegation (not op_UnaryMinus)
         if (operandType == "SystemDecimal" && op.OperatorKind == UnaryOperatorKind.Minus)
             opName = "op_UnaryNegation";
@@ -915,7 +916,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
             throw new System.NotSupportedException(
                 $"Tuple binary operation on non-tuple type: {op.LeftOperand.Type}");
         return EmitTupleStructuralEquality(
-            VisitExpression(op.LeftOperand), VisitExpression(op.RightOperand), aggType,
+            _lowering.VisitExpression(op.LeftOperand), _lowering.VisitExpression(op.RightOperand), aggType,
             op.OperatorKind == BinaryOperatorKind.NotEquals);
     }
 
@@ -923,14 +924,14 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
 
     CLeaf EmitAggregateEquality(IBinaryOperation op, INamedTypeSymbol aggType)
         => EmitTupleStructuralEquality(
-            VisitExpression(op.LeftOperand), VisitExpression(op.RightOperand), aggType,
+            _lowering.VisitExpression(op.LeftOperand), _lowering.VisitExpression(op.RightOperand), aggType,
             op.OperatorKind == BinaryOperatorKind.NotEquals);
 
     CLeaf EmitTupleStructuralEquality(CValue leftArr, CValue rightArr, INamedTypeSymbol aggType, bool isNotEquals)
     {
         var result = EmitAggregateElementsEqual(leftArr, rightArr, aggType);
         if (isNotEquals)
-            result = ExternCall(UdonAbi.BooleanNot,
+            result = _lowering.ExternCall(UdonAbi.BooleanNot,
                 new List<CLeaf> { result }, StorageTypes.Boolean);
         return result;
     }
@@ -941,22 +942,22 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
     // is reference equality). Caveat: float NaN compares equal under object.Equals.
     CLeaf EmitAggregateElementsEqual(CValue leftArr, CValue rightArr, INamedTypeSymbol aggType)
     {
-        var layout = _ctx.Aggregates.GetLayout(aggType);
-        var leftSlot = _ctx.Builder.AllocScratch(new StorageType(AggregateAbi.ArrayType)); EmitAssign(leftSlot, leftArr);
-        var rightSlot = _ctx.Builder.AllocScratch(new StorageType(AggregateAbi.ArrayType)); EmitAssign(rightSlot, rightArr);
+        var layout = _lowering.Context.Aggregates.GetLayout(aggType);
+        var leftSlot = _lowering.Context.Builder.AllocScratch(new StorageType(AggregateAbi.ArrayType)); _lowering.EmitAssign(leftSlot, leftArr);
+        var rightSlot = _lowering.Context.Builder.AllocScratch(new StorageType(AggregateAbi.ArrayType)); _lowering.EmitAssign(rightSlot, rightArr);
 
-        CLeaf result = Const(true, StorageTypes.Boolean);
+        CLeaf result = _lowering.Const(true, StorageTypes.Boolean);
         for (int i = 0; i < layout.Count; i++)
         {
-            var leftElem = AggregateAbi.ReadSlot(_builder, SlotRef(leftSlot), i, StorageTypes.Object);
-            var rightElem = AggregateAbi.ReadSlot(_builder, SlotRef(rightSlot), i, StorageTypes.Object);
+            var leftElem = AggregateAbi.ReadSlot(_lowering.Builder, _lowering.SlotRef(leftSlot), i, StorageTypes.Object);
+            var rightElem = AggregateAbi.ReadSlot(_lowering.Builder, _lowering.SlotRef(rightSlot), i, StorageTypes.Object);
 
             CLeaf elemEq = layout.Fields[i].Type is INamedTypeSymbol nested && nested.IsTupleType
                 ? EmitAggregateElementsEqual(leftElem, rightElem, nested) // nested tuple → recurse
-                : ExternCall(UdonAbi.ObjectEquals,
+                : _lowering.ExternCall(UdonAbi.ObjectEquals,
                     new List<CLeaf> { leftElem, rightElem }, StorageTypes.Boolean);
 
-            result = ExternCall(UdonAbi.BooleanLogicalAnd,
+            result = _lowering.ExternCall(UdonAbi.BooleanLogicalAnd,
                 new List<CLeaf> { result, elemEq }, StorageTypes.Boolean);
         }
         return result;

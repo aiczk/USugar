@@ -3,12 +3,13 @@ using System.Collections.Immutable;
 using Microsoft.CodeAnalysis;
 
 /// <summary>Registers the planner's closed named-method specializations before any body is emitted.</summary>
-internal sealed class SpecializationRegistrar : HandlerBase
+internal sealed class SpecializationRegistrar
 {
-    public SpecializationRegistrar(EmitContext context) : base(context) { }
+    readonly LoweringServices _lowering;
+    public SpecializationRegistrar(LoweringServices lowering) => _lowering = lowering;
 
     public void Register(IMethodSymbol specialization)
-        => RegisterGenericSpecialization(specialization);
+        => _lowering.RegisterGenericSpecialization(specialization);
 
     public void Register(ClosureSpecializationCandidate candidate)
     {
@@ -16,13 +17,13 @@ internal sealed class SpecializationRegistrar : HandlerBase
         for (var i = candidate.OwnerSpecs.Length - 1; i >= 0; i--)
             map = TypeEnvironment.ForMethod(candidate.OwnerSpecs[i], map);
         map = TypeEnvironment.ForMethod(candidate.Method, map);
-        using var genericScope = _ctx.Generics.EnterOverlayScope(map);
-        using var methodScope = _ctx.Methods.EnterEmission(
+        using var genericScope = _lowering.Context.Generics.EnterOverlayScope(map);
+        using var methodScope = _lowering.Context.Methods.EnterEmission(
             candidate.OwnerSpecs.Length > 0 ? candidate.OwnerSpecs[0] : null,
             null, null, candidate.OwnerSpecs);
         if (candidate.Method.IsGenericMethod)
-            RegisterGenericSpecialization(candidate.Method);
+            _lowering.RegisterGenericSpecialization(candidate.Method);
         else
-            RegisterLocalFunction(candidate.Method);
+            _lowering.RegisterLocalFunction(candidate.Method);
     }
 }

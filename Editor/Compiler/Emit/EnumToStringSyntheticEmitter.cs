@@ -21,7 +21,7 @@ public sealed class EnumToStringSyntheticEmitter
         var builder = _context.Builder;
         foreach (var enumType in _demands.EnumToStringTypes)
         {
-            var helperName = HandlerBase.EnumToStringHelperName(enumType);
+            var helperName = LoweringServices.EnumToStringHelperName(enumType);
             var underlyingType = _context.ResolveStorageType(enumType.EnumUnderlyingType);
             var vId = $"{helperName}__v";
             var retId = NameAllocator.RetKey(helperName);

@@ -114,7 +114,7 @@ public sealed class VirtualDispatch
             localTarget = target;
         }
 
-        var leaf = HandlerBase.FindOverrideMethodInChain(
+        var leaf = LoweringServices.FindOverrideMethodInChain(
             compiledClass, localTarget.OriginalDefinition, localTarget.Name) ?? localTarget;
         if (target.IsGenericMethod && leaf.IsGenericMethod)
             leaf = leaf.OriginalDefinition.Construct(target.TypeArguments.ToArray());

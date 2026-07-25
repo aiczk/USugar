@@ -10,13 +10,13 @@ using Microsoft.CodeAnalysis.Operations;
 /// the flat backing. §1: bounds are checked per-dimension; a violation LogErrors and reads
 /// default(T) / skips the write (D-N1 deviation — C# throws per-dimension, Udon has no exceptions).
 /// </summary>
-public abstract partial class HandlerBase
+public sealed partial class LoweringServices
 {
     /// <summary>Fetch bundle[0] (the flat backing) as a value of its real rank-1 array type. The
     /// bundle stores it boxed as SystemObject; Udon unboxes on the typed COPY into a backing-typed
     /// scratch slot (same mechanism as the recursion-stack reload, CoreFlatOptimizer.ReloadValue).
     /// <paramref name="bundleVal"/> must already be a stable (single-assignment or slot-ref) leaf.</summary>
-    protected CLeaf EmitNdimGetBacking(CLeaf bundleVal, IArrayTypeSymbol backingType)
+    internal CLeaf EmitNdimGetBacking(CLeaf bundleVal, IArrayTypeSymbol backingType)
     {
         var backingUdonType = GetArrayType(backingType);
         return NdimArrayAbi.ReadBacking(_builder, bundleVal, new StorageType(backingUdonType));
@@ -28,7 +28,7 @@ public abstract partial class HandlerBase
     /// the Horner-flattened index (computed unconditionally — cheap arithmetic, only USED when
     /// in-bounds). Shared verbatim by read, write, and the ref/out prepare leg so a violation is
     /// detected identically regardless of access shape.</summary>
-    protected NdimArrayAbi.AccessPlan PrepareNdimAccess(IOperation arrayRefOp, IReadOnlyList<IOperation> indexOps, IArrayTypeSymbol ndimType)
+    internal NdimArrayAbi.AccessPlan PrepareNdimAccess(IOperation arrayRefOp, IReadOnlyList<IOperation> indexOps, IArrayTypeSymbol ndimType)
     {
         int rank = ndimType.Rank;
         var backingType = NdimArrayAbi.BackingType(_compilation, ndimType);
@@ -65,7 +65,7 @@ public abstract partial class HandlerBase
     /// branch does the real Horner-flattened Get on the flat backing (the EXISTING 1-D Get choke
     /// point); else branch LogErrors (D-N1). Used by both the plain element read and the ref/out
     /// read leg so a violation is reported identically either way.</summary>
-    protected CLeaf EmitNdimReadFromPlan(IArrayElementReferenceOperation ae, NdimArrayAbi.AccessPlan plan, string elemUdonType)
+    internal CLeaf EmitNdimReadFromPlan(IArrayElementReferenceOperation ae, NdimArrayAbi.AccessPlan plan, string elemUdonType)
     {
         var backingUdonType = GetArrayType(plan.BackingType);
         var backingElemUdonType = GetArrayElemType(plan.BackingType);
@@ -76,7 +76,7 @@ public abstract partial class HandlerBase
     /// <summary>Shared in-bounds Set from an already-prepared plan: in-bounds branch Sets on the flat
     /// backing (the EXISTING 1-D Set choke point); else branch LogErrors and SKIPS the write (D-N1 —
     /// no partial state, the write either fully happens or not at all).</summary>
-    protected void EmitNdimWriteFromPlan(IArrayElementReferenceOperation ae, NdimArrayAbi.AccessPlan plan, CLeaf value)
+    internal void EmitNdimWriteFromPlan(IArrayElementReferenceOperation ae, NdimArrayAbi.AccessPlan plan, CLeaf value)
     {
         var backingUdonType = GetArrayType(plan.BackingType);
         var backingElemUdonType = GetArrayElemType(plan.BackingType);
@@ -86,7 +86,7 @@ public abstract partial class HandlerBase
 
     /// <summary>N-dim element READ (§1/§2). Struct/tuple elements are deep-cloned on the way out,
     /// mirroring ArrayHandler.VisitArrayElementReference's rank-1 value-copy semantics.</summary>
-    protected CLeaf EmitNdimElementRead(IArrayElementReferenceOperation ae)
+    internal CLeaf EmitNdimElementRead(IArrayElementReferenceOperation ae)
     {
         var ndimType = (IArrayTypeSymbol)ae.ArrayReference.Type;
         var elemUdonType = GetStorageTypeName(ndimType.ElementType);
@@ -96,12 +96,12 @@ public abstract partial class HandlerBase
             ? AggregateAbi.DeepClone(_builder, resultLeaf, elemAggT, _ctx.Aggregates.GetLayout) : resultLeaf;
     }
 
-    /// <summary>N-dim element WRITE prepare (mirrors HandlerBase.PrepareArrayElementSet's rank-1
+    /// <summary>N-dim element WRITE prepare (mirrors LoweringServices.PrepareArrayElementSet's rank-1
     /// legs-now/value-later split): the array reference and every index are evaluated NOW (C#
     /// evaluates an lvalue's component expressions before the RHS), the store itself deferred to the
     /// returned closure so callers control exactly when the value is materialized relative to other
     /// evaluation (matches the existing array-element write-site ordering).</summary>
-    protected System.Action<CLeaf> PrepareNdimElementSet(IArrayElementReferenceOperation ae)
+    internal System.Action<CLeaf> PrepareNdimElementSet(IArrayElementReferenceOperation ae)
     {
         var ndimType = (IArrayTypeSymbol)ae.ArrayReference.Type;
         var plan = PrepareNdimAccess(ae.ArrayReference, ae.Indices, ndimType);
@@ -111,7 +111,7 @@ public abstract partial class HandlerBase
     /// <summary>N-dim ref/out prepare leg (lifts TryPrepareRefOutArg's multi-index exclusion): the
     /// read/store closures share ONE NdimAccessPlan (indices/dims/bounds/backing evaluated once),
     /// mirroring the rank-1 array-element arm's (arrayVal, indexVal) caching.</summary>
-    protected (System.Func<CLeaf> read, System.Action<CLeaf> store) PrepareNdimRefOutArg(IArrayElementReferenceOperation ae)
+    internal (System.Func<CLeaf> read, System.Action<CLeaf> store) PrepareNdimRefOutArg(IArrayElementReferenceOperation ae)
     {
         var ndimType = (IArrayTypeSymbol)ae.ArrayReference.Type;
         var elemUdonType = GetStorageTypeName(ndimType.ElementType);
@@ -126,7 +126,7 @@ public abstract partial class HandlerBase
     /// initializer is recursively flattened to one row-major leaf list and written sequentially onto
     /// the flat backing (Horner order falls out of Roslyn's own nesting order — no flattening math
     /// needed here, unlike element access).</summary>
-    protected CLeaf EmitNdimArrayCreation(IArrayCreationOperation op)
+    internal CLeaf EmitNdimArrayCreation(IArrayCreationOperation op)
     {
         var ndimType = (IArrayTypeSymbol)op.Type;
         int rank = ndimType.Rank;
@@ -191,7 +191,7 @@ public abstract partial class HandlerBase
     /// wrapper's own length (1+r). Must be intercepted before the generic property-getter extern
     /// path: SystemObjectArray.__get_Length__SystemInt32 is a REAL, valid extern (the bundle IS a
     /// real object[]), so without this it would silently return 1+r instead of Πdᵢ.</summary>
-    protected CLeaf EmitNdimLength(CLeaf bundleVal, IArrayTypeSymbol ndimType)
+    internal CLeaf EmitNdimLength(CLeaf bundleVal, IArrayTypeSymbol ndimType)
     {
         var backing = EmitNdimGetBacking(bundleVal, NdimArrayAbi.BackingType(_compilation, ndimType));
         return ExternCall(UdonAbi.SystemArrayLength, new List<CLeaf> { backing }, StorageTypes.Int32);
@@ -201,7 +201,7 @@ public abstract partial class HandlerBase
     /// compile-time constant (design §2 allows an expression); when it is a Roslyn constant we still
     /// go through the same runtime bundle-index math (no special-cased fast path — a compile-time
     /// bounds proof / constant-fold optimization is explicitly out of scope, §1).</summary>
-    protected CLeaf EmitNdimGetLength(CLeaf bundleVal, CLeaf dimArg)
+    internal CLeaf EmitNdimGetLength(CLeaf bundleVal, CLeaf dimArg)
     {
         var plusOne = NdimArrayAbi.BuildRuntimeDimSlotIndex(_builder, dimArg);
         return NdimArrayAbi.ReadDimLength(_builder, bundleVal, plusOne);
@@ -209,10 +209,10 @@ public abstract partial class HandlerBase
 
     /// <summary>`ndimArr.Rank` — the static rank is known at compile time from the declared type; no
     /// runtime code at all.</summary>
-    protected CLeaf EmitNdimRank(IArrayTypeSymbol ndimType) => Const(ndimType.Rank, StorageTypes.Int32);
+    internal CLeaf EmitNdimRank(IArrayTypeSymbol ndimType) => Const(ndimType.Rank, StorageTypes.Int32);
 
     /// <summary>`ndimArr.GetUpperBound(d)` = `GetLength(d) - 1`.</summary>
-    protected CLeaf EmitNdimGetUpperBound(CLeaf bundleVal, CLeaf dimArg)
+    internal CLeaf EmitNdimGetUpperBound(CLeaf bundleVal, CLeaf dimArg)
     {
         var len = EmitNdimGetLength(bundleVal, dimArg);
         return NdimArrayAbi.BuildUpperBound(_builder, len);

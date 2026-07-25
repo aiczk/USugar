@@ -158,7 +158,7 @@ public class FlatVerifyTests
     {
         // The statement right before the flagged dispatch is an ordinary CAssign, not a void
         // SetProgramVariable copy-in — exactly what a future edit inserting a statement between a
-        // hand-emitted copy-in/dispatch pair (HandlerBase's interface-setter dispatch) would produce.
+        // hand-emitted copy-in/dispatch pair (LoweringServices's interface-setter dispatch) would produce.
         var f = Flat(Block(0,
             new List<CStmt>
             {

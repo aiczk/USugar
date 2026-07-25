@@ -19,7 +19,7 @@ namespace USugar.Tests;
 ///      analysis — UasmEmitter.CrossDispatchLocalTarget adds edges for the LOCAL method a cross
 ///      dispatch can land on (most-derived override / interface implementation), mirrored in
 ///      IsInternalCallTo / PropertyAccessorMatches so tail classification sees the sites;
-///      emission — HandlerBase.TryMarkReentrantCrossDispatch flags the CCrossCall (methods,
+///      emission — LoweringServices.TryMarkReentrantCrossDispatch flags the CCrossCall (methods,
 ///      property/indexer accessors, interface bridges) so InsertRecursionSpills wraps the
 ///      SendCustomEvent, WITH the SetProgramVariable copy-ins INSIDE the window
 ///      (CExternCall.PreSpillStmts): a self-recursive callee shares the caller's own param heap

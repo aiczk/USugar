@@ -6,7 +6,7 @@ using Microsoft.CodeAnalysis.Operations;
 /// (locals, fields, array elements, properties, cross-behaviour, delegates, struct fields).</summary>
 public class SimpleAssignmentHandler : AssignmentHandlerBase, IExpressionHandler
 {
-    public SimpleAssignmentHandler(EmitContext ctx) : base(ctx) { }
+    public SimpleAssignmentHandler(LoweringServices lowering) : base(lowering) { }
 
     public OperationKind[] HandledKinds { get; } = new[] { OperationKind.SimpleAssignment };
 
@@ -29,7 +29,7 @@ public class SimpleAssignmentHandler : AssignmentHandlerBase, IExpressionHandler
         // side effects and drop the value. A discard has no storage and can never be read back, so
         // no escape channel opens (the guards below are storage guards).
         if (assign.Target is IDiscardOperation)
-            return VisitExpression(assign.Value);
+            return _lowering.VisitExpression(assign.Value);
 
         // Field lvalue with receiver legs (aggregate member `point.x` / `arr[i].v`, cross-behaviour
         // field, extern value-type / reference-type field) — the shared legs-now/store-later path,
@@ -37,10 +37,10 @@ public class SimpleAssignmentHandler : AssignmentHandlerBase, IExpressionHandler
         // target's component expressions BEFORE the RHS; the old arms evaluated the RHS first, so
         // `arr[idx].v = Mut()` with Mut() bumping idx wrote the WRONG element (VM-proven ref=701
         // vs 71). Behaviour this-fields ride the fallback below (no receiver legs).
-        if (TryPrepareWriteLValue(assign.Target) is { } writePlan)
+        if (_lowering.TryPrepareWriteLValue(assign.Target) is { } writePlan)
         {
-            var srcValue = VisitLoweredExpression(assign.Value);
-            RejectUnsafeCrossProgramDelegateWrite(assign.Target, srcValue.Info);
+            var srcValue = _lowering.VisitLoweredExpression(assign.Value);
+            _lowering.RejectUnsafeCrossProgramDelegateWrite(assign.Target, srcValue.Info);
             writePlan.Write(srcValue.Leaf);
             return srcValue.Leaf;
         }
@@ -50,36 +50,36 @@ public class SimpleAssignmentHandler : AssignmentHandlerBase, IExpressionHandler
         // bundle reference (or null const) and the store is a single reference copy (design §2.3).
 
         // VisitExpression clones aggregate locals/params automatically (Clone-on-read).
-        var directValue = VisitLoweredExpression(assign.Value);
+        var directValue = _lowering.VisitLoweredExpression(assign.Value);
         if (assign.Target is IFieldReferenceOperation dlgFieldTarget)
-            RejectUnsafeCrossProgramDelegateWrite(dlgFieldTarget, directValue.Info);
+            _lowering.RejectUnsafeCrossProgramDelegateWrite(dlgFieldTarget, directValue.Info);
         var srcLeaf = directValue.Leaf;
         // Stage 2 §4.1: captured local/param target → env cell store (value read-back contract kept:
         // re-read the cell, clone aggregates when the assignment is used as a value).
-        if (TryEmitEnvStore(assign.Target, srcLeaf))
+        if (_lowering.TryEmitEnvStore(assign.Target, srcLeaf))
         {
             if (assign.Parent is IExpressionStatementOperation) return srcLeaf;
             ISymbol envSym = assign.Target is ILocalReferenceOperation elr
                 ? elr.Local
                 : ((IParameterReferenceOperation)assign.Target).Parameter;
-            var envLoaded = EnvEmit.Read(_builder, _ctx, envSym, GetStorageType(assign.Target.Type));
+            var envLoaded = EnvEmit.Read(_lowering.Builder, _lowering.Context, envSym, _lowering.GetStorageType(assign.Target.Type));
             return assign.Target.Type is INamedTypeSymbol eAgg && TypeClassifier.IsAggregateValue(eAgg)
-                ? AggregateAbi.DeepClone(_builder, envLoaded, eAgg, _ctx.Aggregates.GetLayout) : envLoaded;
+                ? AggregateAbi.DeepClone(_lowering.Builder, envLoaded, eAgg, _lowering.Context.Aggregates.GetLayout) : envLoaded;
         }
         var targetFieldName = GetAssignTargetFieldName(assign.Target);
-        EmitStoreField(targetFieldName, srcLeaf);
+        _lowering.EmitStoreField(targetFieldName, srcLeaf);
         // The assignment's VALUE is the stored value. Return a fresh read of the target rather than the
         // RHS expression tree: re-emitting the tree (when the assignment is used as an expression, e.g.
         // `G(n = n - 1)`) would re-evaluate it after the store already mutated its inputs. A dead read in
         // statement form is harmless and simply remains (the optimizer has no DCE pass).
-        var targetFieldType = _ctx.Storage.GetFieldType(targetFieldName);
+        var targetFieldType = _lowering.Context.Storage.GetFieldType(targetFieldName);
         if (targetFieldType == null) return srcLeaf;
-        var loaded = LoadField(targetFieldName, targetFieldType.Value);
+        var loaded = _lowering.LoadField(targetFieldName, targetFieldType.Value);
         // When the assignment is USED AS A VALUE (e.g. chained `z = y = x`) and the target is an aggregate,
         // that value must be an independent COPY (struct value semantics) — otherwise z aliases y. (diff-fuzz w4)
         return assign.Parent is not IExpressionStatementOperation
                && assign.Target.Type is INamedTypeSymbol tAgg && TypeClassifier.IsAggregateValue(tAgg)
-            ? AggregateAbi.DeepClone(_builder, loaded, tAgg, _ctx.Aggregates.GetLayout) : loaded;
+            ? AggregateAbi.DeepClone(_lowering.Builder, loaded, tAgg, _lowering.Context.Aggregates.GetLayout) : loaded;
     }
 
 }

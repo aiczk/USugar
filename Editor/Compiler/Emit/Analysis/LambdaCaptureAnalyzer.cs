@@ -12,7 +12,7 @@ using Microsoft.CodeAnalysis.Operations;
 /// enclosing method, not just this lambda. The manual walker scopes captures correctly
 /// to the specific IAnonymousFunctionOperation.
 ///
-/// Replaces HandlerBase.HasCaptures (pre-v2.2) with a Symbol-returning analyzer; the
+/// Replaces LoweringServices.HasCaptures (pre-v2.2) with a Symbol-returning analyzer; the
 /// per-symbol capture sets feed CaptureScopeAnalysis' env records (the former emit-time
 /// aliasing detection is retired — capture sharing is supported via env records).
 /// </summary>

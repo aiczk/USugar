@@ -12,7 +12,7 @@ namespace USugar.Tests;
 /// [X1] Delegate .Equals() method call emitted a nonexistent
 ///      UnityEngineComponent.__Equals__SystemObject__SystemBoolean extern (loud crash on legal
 ///      C#; ref eq1=1). Now routed through the same (target, method) value comparison as `==`
-///      (CompareDelegates, moved to HandlerBase — one knowledge source).
+///      (CompareDelegates, moved to LoweringServices — one knowledge source).
 /// [X2] Capturing LAMBDA as recursion-cycle member: a captured local read AFTER the reentrant
 ///      dispatch inside the lambda body saw the inner activation's re-seeded flat slot
 ///      (DiffFuzz ref=60 vs VM 50). The hoisted node's dispatch-site spill set then included its

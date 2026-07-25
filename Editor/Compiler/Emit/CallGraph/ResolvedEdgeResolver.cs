@@ -682,8 +682,8 @@ public sealed class ResolvedEdgeResolver
 
     // ── Wave-9 round-3 [W1]/[W2]/[W3]: emission-faithful leaf-override resolution for the graph ──
     // Emission resolves a this-receiver virtual call to the most-derived override visible from the
-    // compiled class (HandlerBase.ResolveMostDerivedOverride / ResolveDispatchProperty, sharing
-    // HandlerBase.FindOverrideMethodInChain/FindOverridePropertyInChain walkers), but the
+    // compiled class (LoweringServices.ResolveMostDerivedOverride / ResolveDispatchProperty, sharing
+    // LoweringServices.FindOverrideMethodInChain/FindOverridePropertyInChain walkers), but the
     // recursion graph recorded only the STATIC binding — so a runtime cycle closed through an
     // override (base body's virtual call/property read dispatching the leaf, or an override calling
     // base.M whose body virtual-calls back) had no static counterpart and its frames were never spilled
@@ -726,16 +726,16 @@ public sealed class ResolvedEdgeResolver
         if (pr.Instance is not IInstanceReferenceOperation iref
             || iref.Syntax is BaseExpressionSyntax) return null;
         var def = p.OriginalDefinition;
-        var cand = HandlerBase.FindOverridePropertyInChain(_emitter.ClassSymbol, def, p.Name);
+        var cand = LoweringServices.FindOverridePropertyInChain(_emitter.ClassSymbol, def, p.Name);
         if (cand == null) return null;
         return SymbolEqualityComparer.Default.Equals(cand.OriginalDefinition, def) ? null : cand.OriginalDefinition;
     }
 
-    // Definition-keyed twin of HandlerBase.ResolveMostDerivedOverride, sharing its
+    // Definition-keyed twin of LoweringServices.ResolveMostDerivedOverride, sharing its
     // FindOverrideMethodInChain walker: the graph is keyed by OriginalDefinition, so unlike the emission
     // side there is no generic re-Construct here — just normalize the found override to its definition.
     IMethodSymbol ResolveLeafOverrideDef(IMethodSymbol def)
-        => HandlerBase.FindOverrideMethodInChain(_emitter.ClassSymbol, def, def.Name)?.OriginalDefinition ?? def;
+        => LoweringServices.FindOverrideMethodInChain(_emitter.ClassSymbol, def, def.Name)?.OriginalDefinition ?? def;
 
     // ── Wave-12 r2 [V1]: cross-dispatch landing target for the recursion graph ──
     // A method/accessor dispatched through a VARIABLE receiver (same-typed field/local, base-typed

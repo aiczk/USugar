@@ -14,6 +14,7 @@ public partial class UasmEmitter
     readonly Dictionary<OperationKind, IExpressionHandler> _exprDispatch;
     readonly SyntheticBridgeBuilder _bridge;
     readonly DelegateConventionStorage _delegateConvention;
+    readonly LoweringServices _lowering;
 
 
     // Property shims → EmitContext
@@ -64,27 +65,28 @@ public partial class UasmEmitter
         _ownsPlanner = planner == null;
         _ctx = new EmitContext(
             session, classSymbol, planner ?? new LayoutPlanner(session));
+        _lowering = new LoweringServices(_ctx);
         _bridge = new SyntheticBridgeBuilder(_ctx.Builder);
         _delegateConvention = new DelegateConventionStorage(_ctx);
 
-        var stmtHandler = new StatementHandler(_ctx);
-        var loopHandler = new LoopHandler(_ctx);
-        var switchHandler = new SwitchHandler(_ctx);
-        var deconstructHandler = new DeconstructionAssignmentHandler(_ctx);
-        var simpleAssignHandler = new SimpleAssignmentHandler(_ctx);
-        var compoundAssignHandler = new CompoundAssignmentHandler(_ctx);
-        var operatorHandler = new OperatorHandler(_ctx);
+        var stmtHandler = new StatementHandler(_lowering);
+        var loopHandler = new LoopHandler(_lowering);
+        var switchHandler = new SwitchHandler(_lowering);
+        var deconstructHandler = new DeconstructionAssignmentHandler(_lowering);
+        var simpleAssignHandler = new SimpleAssignmentHandler(_lowering);
+        var compoundAssignHandler = new CompoundAssignmentHandler(_lowering);
+        var operatorHandler = new OperatorHandler(_lowering);
 
         _stmtDispatch = BuildDispatch<IOperationHandler>(
             stmtHandler, loopHandler, switchHandler, deconstructHandler);
         _exprDispatch = BuildDispatch<IExpressionHandler>(
-            new ExpressionHandler(_ctx),
+            new ExpressionHandler(_lowering),
             simpleAssignHandler,
             compoundAssignHandler,
             operatorHandler,
-            new InvocationHandler(_ctx),
-            new ArrayHandler(_ctx),
-            new NullableHandler(_ctx));
+            new InvocationHandler(_lowering),
+            new ArrayHandler(_lowering),
+            new NullableHandler(_lowering));
 
         _ctx.InitializeDispatchers(
             VisitOperation, VisitExpression, VisitLoweredExpression,
@@ -182,7 +184,7 @@ public partial class UasmEmitter
         SetReflectionValues();
         var plan = BuildProgramPlan();
         // Stage 2: closure-scope analysis feeding real codegen — EnvEmit's alloc/read/write and every
-        // IsCapturingClosure call site (HandlerBase, InvocationHandler.Extern, this file) key off it.
+        // IsCapturingClosure call site (LoweringServices, InvocationHandler.Extern, this file) key off it.
         // Its roots are the reach definition projection (ComputeCaptureRoots); root bodies come from the
         // shared pre-emission callable graph — no re-fetch or second body walk (F1).
         // C1 fix: roots = the FULL reach artifact (all provenances); field inits = the emitter's own
@@ -849,7 +851,7 @@ public partial class UasmEmitter
         // A delegate field alone does not expose a callable bridge, so its declaration only needs
         // argument/return convention storage. DelegateConventionStorage declares the complete surface,
         // including env, when an actual bridge is emitted.
-        var (convArgs, convRet, _) = HandlerBase.GetConventionFieldNames(
+        var (convArgs, convRet, _) = LoweringServices.GetConventionFieldNames(
             delegateType, _session.Types);
         for (int ci = 0; ci < convArgs.Length; ci++)
             _ctx.Storage.TryDeclareVar(convArgs[ci],
@@ -1030,7 +1032,7 @@ public partial class UasmEmitter
     {
         RegisterProgram(plan);
         _ctx.Generics.SetPlannedSpecializations(plan.Callables.Specializations);
-        var specializationRegistrar = new SpecializationRegistrar(_ctx);
+        var specializationRegistrar = new SpecializationRegistrar(_lowering);
         foreach (var specialization in plan.Callables.Specializations)
             specializationRegistrar.Register(specialization);
         foreach (var closure in plan.Callables.ClosureSpecializations)
@@ -1055,7 +1057,7 @@ public partial class UasmEmitter
 
     void PlanSyntheticDemands(ProgramPlan plan)
     {
-        var planner = new SyntheticDemandPlanner(_ctx);
+        var planner = new SyntheticDemandPlanner(_lowering);
         foreach (var body in _ctx.Methods.RegisteredBodies.ToArray())
         {
             var method = body.Method;
@@ -1576,7 +1578,7 @@ public partial class UasmEmitter
                 // ctor has no base — just its body.
                 if (method.ContainingType is INamedTypeSymbol cctClass && TypeClassifier.IsUserClass(cctClass)
                     && _ctx.Methods.CurrentStructReceiverParamId != null)
-                    new InvocationHandler(_ctx).EmitClassCtorPrologue(method, ctorBodyOp,
+                    new InvocationHandler(_lowering).EmitClassCtorPrologue(method, ctorBodyOp,
                         _ctx.Methods.CurrentStructReceiverParamId);
                 if (ctorBodyOp.BlockBody != null)
                     VisitOperation(ctorBodyOp.BlockBody);
@@ -1822,7 +1824,7 @@ public partial class UasmEmitter
         => s.OriginalDefinition.GetDocumentationCommentId() ?? s.OriginalDefinition.ToDisplayString();
 
     /// <summary>B81: the instance field-/auto-property-INITIALIZER value operations of a v1 class, in
-    /// declaration order — the reach-side twin of HandlerBase.EmitInstanceFieldInitializers (which emits
+    /// declaration order — the reach-side twin of LoweringServices.EmitInstanceFieldInitializers (which emits
     /// them at mint). Static/const fields are excluded (const folds; statics reject). Used to Phase-1-walk
     /// a minted class's initializer expressions for foreign-static / struct-member collection.</summary>
     internal IEnumerable<IOperation> EnumerateClassFieldInitOps(INamedTypeSymbol classTy)
@@ -1870,7 +1872,7 @@ public partial class UasmEmitter
     // instead of the CLR's 6). Skip collecting through the open form; the real call sites (outer
     // construction/invocation, always concretely typed) already reach every instantiation this
     // collector needs (an internal-only self/sibling reference is instead resolved on demand via
-    // HandlerBase.ResolveStructMember, wave-14).
+    // LoweringServices.ResolveStructMember, wave-14).
     //
     // Wave-14 widening: the original check (ContainingType.IsDefinition) only catches a struct
     // referencing ITSELF. A CROSS-type reference — APart<T>'s own body doing `new BPart<T>()` /

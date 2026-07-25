@@ -33,7 +33,7 @@ public static class DelegateAbi
     /// <summary>
     /// Canonical signature key for the global __dlgc_{sig}__a{i} / __dlgc_{sig}__ret convention vars — a
     /// cross-program byte contract (§3.2). Single source of truth (replaces the former
-    /// HandlerBase.BuildConventionSigPart / UasmEmitter.BuildBridgeSigPart duplicates). Delegate-typed
+    /// LoweringServices.BuildConventionSigPart / UasmEmitter.BuildBridgeSigPart duplicates). Delegate-typed
     /// params map to SystemObjectArray (bundle references) via the ExternResolver delegate arm.
     /// </summary>
     public static string BuildSigPart(IMethodSymbol invokeOrTarget,
@@ -66,7 +66,7 @@ public static class DelegateAbi
     /// 2026-07-04 §1): a tuple return is already a single SystemObjectArray aggregate slot (same
     /// representation as a user-struct return), so the delegate conv-ret and the target method's own
     /// return slot agree with zero adapter code. Variant method-group conversions are SUPPORTED too
-    /// (Stage 1.75 §2): the caller (<see cref="HandlerBase.ResolveDelegateBridge"/>) mints a sig adapter
+    /// (Stage 1.75 §2): the caller (<see cref="LoweringServices.ResolveDelegateBridge"/>) mints a sig adapter
     /// (same-program target, §2.2) or a wrapper (third-party target, §2.2's hinge) BEFORE this runs, so
     /// <paramref name="varianceResolved"/> tells this call the mismatch it's about to see was already
     /// handled — the throw below is armor for a mismatch reaching here UNRESOLVED (should be

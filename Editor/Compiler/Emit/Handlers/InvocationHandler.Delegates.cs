@@ -24,20 +24,20 @@ public partial class InvocationHandler
         if (op.Instance != null && !target.IsStatic
             && op.Arguments.Length == 1 && DelegateAbi.IsDelegateType(op.Instance.Type))
         {
-            var eqArg = UnwrapConversions(op.Arguments[0].Value);
+            var eqArg = LoweringServices.UnwrapConversions(op.Arguments[0].Value);
             if (!DelegateAbi.IsDelegateType(eqArg.Type))
                 throw new System.NotSupportedException(
                     "Delegate .Equals(...) with a non-delegate argument is not supported. "
                     + "Compare two delegate values (or use ==).");
             if (!SymbolEqualityComparer.Default.Equals(op.Instance.Type, eqArg.Type))
             {
-                VisitExpression(op.Instance);
-                VisitExpression(eqArg);
-                result = Const(false, StorageTypes.Boolean);
+                _lowering.VisitExpression(op.Instance);
+                _lowering.VisitExpression(eqArg);
+                result = _lowering.Const(false, StorageTypes.Boolean);
                 return true;
             }
-            result = DelegateAbi.CompareDelegates(_builder,
-                VisitExpression(op.Instance), VisitExpression(eqArg), isNotEquals: false);
+            result = DelegateAbi.CompareDelegates(_lowering.Builder,
+                _lowering.VisitExpression(op.Instance), _lowering.VisitExpression(eqArg), isNotEquals: false);
             return true;
         }
 
@@ -45,8 +45,8 @@ public partial class InvocationHandler
         if (target.IsStatic && target.ContainingType.SpecialType == SpecialType.System_Object
             && op.Arguments.Length == 2)
         {
-            var lhs = UnwrapConversions(op.Arguments[0].Value);
-            var rhs = UnwrapConversions(op.Arguments[1].Value);
+            var lhs = LoweringServices.UnwrapConversions(op.Arguments[0].Value);
+            var rhs = LoweringServices.UnwrapConversions(op.Arguments[1].Value);
             var lhsDlg = DelegateAbi.IsDelegateType(lhs.Type);
             var rhsDlg = DelegateAbi.IsDelegateType(rhs.Type);
             if (!lhsDlg && !rhsDlg) return false; // not a delegate comparison — existing extern path
@@ -56,13 +56,13 @@ public partial class InvocationHandler
                     + "Compare two delegate values (or use ==).");
             if (!SymbolEqualityComparer.Default.Equals(lhs.Type, rhs.Type))
             {
-                VisitExpression(lhs);
-                VisitExpression(rhs);
-                result = Const(false, StorageTypes.Boolean);
+                _lowering.VisitExpression(lhs);
+                _lowering.VisitExpression(rhs);
+                result = _lowering.Const(false, StorageTypes.Boolean);
                 return true;
             }
-            result = DelegateAbi.CompareDelegates(_builder,
-                VisitExpression(lhs), VisitExpression(rhs), isNotEquals: false);
+            result = DelegateAbi.CompareDelegates(_lowering.Builder,
+                _lowering.VisitExpression(lhs), _lowering.VisitExpression(rhs), isNotEquals: false);
             return true;
         }
 
@@ -78,12 +78,12 @@ public partial class InvocationHandler
         // ?.Invoke: NullableHandler already evaluated the receiver to the BUNDLE leaf, guarded
         // bundle-null (C#-strict silent skip — args are NOT evaluated on null, fcd06), and pushed the
         // leaf; dispatch runs inside its non-null branch with silent guard-failure arms.
-        if (op.Instance is IConditionalAccessInstanceOperation && _conditionalAccessStack.Count > 0)
-            return EmitDelegateDispatch(_conditionalAccessStack.Peek(), delegateType, op, isConditional: true);
+        if (op.Instance is IConditionalAccessInstanceOperation && _lowering.ConditionalAccessStack.Count > 0)
+            return EmitDelegateDispatch(_lowering.ConditionalAccessStack.Peek(), delegateType, op, isConditional: true);
 
         // Every other shape — field / local / param / array element / property / struct member /
         // call result / object[] cast-back — yields the bundle reference through the generic visit.
-        return EmitDelegateDispatch(VisitExpression(op.Instance), delegateType, op, isConditional: false);
+        return EmitDelegateDispatch(_lowering.VisitExpression(op.Instance), delegateType, op, isConditional: false);
     }
 
     /// <summary>
@@ -103,23 +103,23 @@ public partial class InvocationHandler
         // elsewhere (param/field/cast-back) never went through this class's creation-site validation,
         // and a copy-in-only conv protocol would silently drop ref/out write-backs.
         DelegateAbi.ValidateNoRefOutParams(invoke);
-        var (convArgs, convRet, convEnv) = GetConventionFieldNames(
-            delegateType, _ctx.Session.Types, _typeParamMap);
+        var (convArgs, convRet, convEnv) = LoweringServices.GetConventionFieldNames(
+            delegateType, _lowering.Context.Session.Types, _lowering.TypeParamMap);
 
         // The __dlgc_ conv vars are a signature-keyed cross-program byte contract (§3.2). Bridges declare
         // the same names for their own sigs; the dispatch site declares-on-first-use for foreign sigs.
         for (int i = 0; i < convArgs.Length; i++)
-            _ctx.Storage.TryDeclareVar(convArgs[i], GetStorageType(invoke.Parameters[i].Type));
+            _lowering.Context.Storage.TryDeclareVar(convArgs[i], _lowering.GetStorageType(invoke.Parameters[i].Type));
         StorageType? retType = null;
         if (!invoke.ReturnsVoid)
         {
-            retType = GetStorageType(invoke.ReturnType);
-            _ctx.Storage.TryDeclareVar(convRet, retType.Value);
+            retType = _lowering.GetStorageType(invoke.ReturnType);
+            _lowering.Context.Storage.TryDeclareVar(convRet, retType.Value);
         }
         // Stage 2 §5.1: every dispatch site unconditionally stages DelegateAbi.Env → __dlgc_{sig}__env, so
         // declare it on first use here (a capture-free target sends null; the bridge's null guard is
         // the backstop). Declared at the dispatch site only — never in a capture-free bridge (§1.3).
-        _ctx.Storage.TryDeclareVar(convEnv, new StorageType(EnvEmit.EnvType));
+        _lowering.Context.Storage.TryDeclareVar(convEnv, new StorageType(EnvEmit.EnvType));
 
         // C# evaluation order: a plain d(args) runs the argument side effects even when d is null (the
         // NRE follows them). For ?.Invoke this whole sequence sits inside NullableHandler's non-null
@@ -134,7 +134,7 @@ public partial class InvocationHandler
         {
             var argParam = op.Arguments[i].Parameter;
             var ordinal = argParam != null && argParam.Ordinal >= 0 ? argParam.Ordinal : i;
-            var val = VisitExpression(op.Arguments[i].Value);
+            var val = _lowering.VisitExpression(op.Arguments[i].Value);
             if (ordinal < argExprs.Length) argExprs[ordinal] = val;
         }
 
@@ -142,9 +142,9 @@ public partial class InvocationHandler
         // non-tail site — pre-computed by BuildRecursionInfo). Flag BOTH dispatch arms Reentrant so
         // InsertRecursionSpills wraps them with the __recurStack frame spill/reload; tail dispatches
         // stay unflagged so bundle-driven deep tail recursion never spills (§4.4).
-        bool reentrant = MarkReentrantDispatch(op);
+        bool reentrant = _lowering.MarkReentrantDispatch(op);
 
-        return new DelegateDispatchEmitter(_ctx).Emit(bundle, invoke, convArgs, convRet, convEnv, retType, _typeParamMap,
+        return new DelegateDispatchEmitter(_lowering.Context).Emit(bundle, invoke, convArgs, convRet, convEnv, retType, _lowering.TypeParamMap,
             argExprs, isConditional, reentrant, DescribeDelegateReceiver(op.Instance));
     }
 
@@ -171,12 +171,12 @@ public partial class InvocationHandler
         // third-party-hinge inner bundle is a PLAIN method (e.g. GetStr), never itself a genuine
         // delegate Invoke method. Byte-identical for the pre-existing fan-out caller (invoke there
         // already IS the delegate's own Invoke method, so the old round-trip was a no-op derivation).
-        var (convArgs, convRet, convEnv) = GetConventionFieldNames(
-            invoke, _ctx.Session.Types, typeParamMap);
+        var (convArgs, convRet, convEnv) = LoweringServices.GetConventionFieldNames(
+            invoke, _lowering.Context.Session.Types, typeParamMap);
         StorageType? retType = invoke.ReturnsVoid
             ? null
-            : _ctx.ResolveStorageType(invoke.ReturnType, typeParamMap);
-        return new DelegateDispatchEmitter(_ctx).Emit(bundle, invoke, convArgs, convRet, convEnv, retType, typeParamMap,
+            : _lowering.Context.ResolveStorageType(invoke.ReturnType, typeParamMap);
+        return new DelegateDispatchEmitter(_lowering.Context).Emit(bundle, invoke, convArgs, convRet, convEnv, retType, typeParamMap,
             argExprsByOrdinal, isConditional: false, reentrant: true, receiverDescription: "multicast fan-out");
     }
 
@@ -184,12 +184,12 @@ public partial class InvocationHandler
     /// §2.5) for the synthetic combine/remove helpers' LastContiguousMatch search — reused verbatim,
     /// never re-derived, so the `-=` removal semantics can never drift from `==`'s element leg.</summary>
     internal CLeaf EmitDelegateElementEquals(CLeaf a, CLeaf b)
-        => DelegateAbi.CompareDelegates(_builder, a, b, isNotEquals: false);
+        => DelegateAbi.CompareDelegates(_lowering.Builder, a, b, isNotEquals: false);
 
     /// <summary>default(T) constant for the dispatch retSlot pre-init (§2.6). Non-primitive Udon types
     /// (objects, arrays, bundles, SDK structs) approximate with null — only observable on the
     /// null-invoke deviation path, which is already a documented deviation (§8-8).</summary>
-    CConst DefaultConst(string udonType) => DefaultConst(_builder, new StorageType(udonType));
+    CConst DefaultConst(string udonType) => DefaultConst(_lowering.Builder, new StorageType(udonType));
 
     /// <summary>Shared default(T) const builder (dispatch retSlot pre-init + Stage 2 §5.1 bridge
     /// null-env arm). Static so UasmEmitter's bridge emission reuses the same mapping.</summary>
@@ -214,7 +214,7 @@ public partial class InvocationHandler
     /// <summary>Best-effort member name for the null-invoke LogError message ({Class}.{member}).</summary>
     static string DescribeDelegateReceiver(IOperation instance)
     {
-        var i = instance != null ? UnwrapConversions(instance) : null;
+        var i = instance != null ? LoweringServices.UnwrapConversions(instance) : null;
         return i switch
         {
             IFieldReferenceOperation f => f.Field.Name,

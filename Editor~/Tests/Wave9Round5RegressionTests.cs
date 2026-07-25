@@ -14,7 +14,7 @@ namespace USugar.Tests;
 ///       vs 6). The escape collection (ResolvedEdgeResolver's EscapeTarget arm) now adds the leaf
 ///       override definition (LeafMethodRefTarget, gated like LeafCallTarget).
 /// [X2]  User indexer SET evaluated the RHS BEFORE the receiver/index args (C#: receiver → args →
-///       value). The whole property/indexer SET path is factored into HandlerBase.EmitPropertySet
+///       value). The whole property/indexer SET path is factored into LoweringServices.EmitPropertySet
 ///       with the C# order; the value arrives through a Func factory.
 /// [X3]/[X10]/[X11] A capture cell WRITTEN by a hoisted recursion-cycle member kept flat sharing
 ///       across live re-entry (ref=51 vs 21 / 126 vs 101) — now a loud reject (per-activation

@@ -319,7 +319,7 @@ public static class FlatVerify
     /// same flat block are its own param copy-ins — void SetProgramVariable extern calls — so
     /// InsertRecursionSpillsFunc can pull them inside the spill window. Nothing else confirmed that shape
     /// before; a future edit inserting a statement between a hand-emitted copy-in/dispatch pair (e.g.
-    /// HandlerBase's interface-setter dispatch) would silently desync the count from reality. Checked
+    /// LoweringServices's interface-setter dispatch) would silently desync the count from reality. Checked
     /// structurally rather than trusting the producer, mirroring VerifyReentrantConservation's stance on
     /// the sibling Reentrant flag.</summary>
     static void VerifyPreSpillStmtsShape(CFunction f)

@@ -6,7 +6,7 @@ using Xunit;
 namespace USugar.Tests;
 
 // Phase-A closed-world armor (2026-07-14): the class-ABI perimeter enforced its closed-world assumptions
-// asymmetrically — is/cast rejected open-generic families (HandlerBase.EmitTypeCheck) and guarded laundered
+// asymmetrically — is/cast rejected open-generic families (LoweringServices.EmitTypeCheck) and guarded laundered
 // values, while the sibling dispatch/mint sites silently fell through. Four guards, one polarity:
 //   1. Virtual dispatch whose receiver/target family involves an open construction site (or a receiver whose
 //      static type still carries a type parameter) → compile-time loud reject. Was: exact-symbol assignability

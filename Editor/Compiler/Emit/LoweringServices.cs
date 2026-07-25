@@ -5,41 +5,63 @@ using System.Linq;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.Operations;
 
-public abstract partial class HandlerBase
+public sealed partial class LoweringServices
 {
-    protected readonly EmitContext _ctx;
+    internal readonly EmitContext _ctx;
 
-    protected HandlerBase(EmitContext ctx) => _ctx = ctx;
+    public LoweringServices(EmitContext ctx) => _ctx = ctx;
+
+    // Explicit handler-facing dependencies. The underscored shims below remain private to the
+    // lowering implementation while it is split into narrower services; handlers must not couple
+    // themselves to that implementation detail.
+    internal EmitContext Context => _ctx;
+    internal Compilation Compilation => _compilation;
+    internal INamedTypeSymbol ClassSymbol => _classSymbol;
+    internal CoreBuilder Builder => _builder;
+    internal LayoutPlanner Planner => _planner;
+    internal IReadOnlyDictionary<IMethodSymbol, CFunction> MethodFunctions => _methodFunctions;
+    internal IReadOnlyDictionary<IMethodSymbol, ReturnSlot[]> MethodReturns => _methodReturns;
+    internal IReadOnlyDictionary<IMethodSymbol, string[]> MethodParamVarIds => _methodParamVarIds;
+    internal IMethodSymbol CurrentMethod
+    {
+        get => _currentMethod;
+        set => _currentMethod = value;
+    }
+    internal IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> TypeParamMap => _typeParamMap;
+    internal Dictionary<ILocalSymbol, EmitContext.LocalBinding> LocalBindings => _localBindings;
+    internal Stack<CLeaf> ConditionalAccessStack => _conditionalAccessStack;
+    internal Stack<List<(CLeaf val, ITypeSymbol type)>> UsingDisposableStack => _usingDisposableStack;
+    internal List<EmitDiagnostic> Diagnostics => _diagnostics;
 
     // ── Property shims to EmitContext ──
-    protected Compilation _compilation => _ctx.Compilation;
-    protected INamedTypeSymbol _classSymbol => _ctx.ClassSymbol;
-    protected CModule _module => _ctx.Module;
-    protected CoreBuilder _builder => _ctx.Builder;
-    protected LayoutPlanner _planner => _ctx.Planner;
-    protected IReadOnlyDictionary<IMethodSymbol, CFunction> _methodFunctions => _ctx.Methods.Functions;
-    protected IReadOnlyDictionary<IMethodSymbol, EmitContext.MethodSlot> _methodSlots => _ctx.Methods.Slots;
-    protected IReadOnlyDictionary<IMethodSymbol, ReturnSlot[]> _methodReturns => _ctx.Methods.Returns;
-    protected IReadOnlyDictionary<IMethodSymbol, string[]> _methodParamVarIds => _ctx.Methods.ParamVarIds;
-    protected IMethodSymbol _currentMethod { get => _ctx.Methods.CurrentMethod; set => _ctx.Methods.CurrentMethod = value; }
-    protected List<(IMethodSymbol Method, MethodContext.ClosureSpec Spec)> _pendingCallableBodies
+    internal Compilation _compilation => _ctx.Compilation;
+    internal INamedTypeSymbol _classSymbol => _ctx.ClassSymbol;
+    internal CModule _module => _ctx.Module;
+    internal CoreBuilder _builder => _ctx.Builder;
+    internal LayoutPlanner _planner => _ctx.Planner;
+    internal IReadOnlyDictionary<IMethodSymbol, CFunction> _methodFunctions => _ctx.Methods.Functions;
+    internal IReadOnlyDictionary<IMethodSymbol, EmitContext.MethodSlot> _methodSlots => _ctx.Methods.Slots;
+    internal IReadOnlyDictionary<IMethodSymbol, ReturnSlot[]> _methodReturns => _ctx.Methods.Returns;
+    internal IReadOnlyDictionary<IMethodSymbol, string[]> _methodParamVarIds => _ctx.Methods.ParamVarIds;
+    internal IMethodSymbol _currentMethod { get => _ctx.Methods.CurrentMethod; set => _ctx.Methods.CurrentMethod = value; }
+    internal List<(IMethodSymbol Method, MethodContext.ClosureSpec Spec)> _pendingCallableBodies
         => _ctx.Methods.PendingBodies;
-    protected IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> _typeParamMap => _ctx.Generics.TypeParamMap;
-    protected Dictionary<ILocalSymbol, EmitContext.LocalBinding> _localBindings => _ctx.Storage.LocalBindings;
-    protected List<(string fieldName, IOperation initOp, ITypeSymbol fieldType)> _fieldInitOps => _ctx.Initializers.FieldInitOps;
-    protected Dictionary<string, string> _fieldChangeCallbacks => _ctx.Initializers.FieldChangeCallbacks;
-    protected Stack<CLeaf> _conditionalAccessStack => _ctx.ControlFlow.ConditionalAccessStack;
-    protected Stack<List<(CLeaf val, ITypeSymbol type)>> _usingDisposableStack => _ctx.ControlFlow.UsingDisposableStack;
-    protected HashSet<string> _delegateFields => _ctx.Synthetics.DelegateFields;
-    protected List<EmitDiagnostic> _diagnostics => _ctx.DiagnosticState.Diagnostics;
-    protected bool IsRecursiveEdge(IMethodSymbol caller, IMethodSymbol callee) => _ctx.RecursionContext.IsRecursiveEdge(caller, callee);
+    internal IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> _typeParamMap => _ctx.Generics.TypeParamMap;
+    internal Dictionary<ILocalSymbol, EmitContext.LocalBinding> _localBindings => _ctx.Storage.LocalBindings;
+    internal List<(string fieldName, IOperation initOp, ITypeSymbol fieldType)> _fieldInitOps => _ctx.Initializers.FieldInitOps;
+    internal Dictionary<string, string> _fieldChangeCallbacks => _ctx.Initializers.FieldChangeCallbacks;
+    internal Stack<CLeaf> _conditionalAccessStack => _ctx.ControlFlow.ConditionalAccessStack;
+    internal Stack<List<(CLeaf val, ITypeSymbol type)>> _usingDisposableStack => _ctx.ControlFlow.UsingDisposableStack;
+    internal HashSet<string> _delegateFields => _ctx.Synthetics.DelegateFields;
+    internal List<EmitDiagnostic> _diagnostics => _ctx.DiagnosticState.Diagnostics;
+    internal bool IsRecursiveEdge(IMethodSymbol caller, IMethodSymbol callee) => _ctx.RecursionContext.IsRecursiveEdge(caller, callee);
 
     // ── Dispatch (recursive descent into other handlers via UasmEmitter facade) ──
-    protected void VisitOperation(IOperation op) => _ctx.VisitOperation(op);
-    protected CLeaf VisitExpression(IOperation op) => _ctx.VisitExpression(op);
-    protected LoweredValue VisitLoweredExpression(IOperation op)
+    internal void VisitOperation(IOperation op) => _ctx.VisitOperation(op);
+    internal CLeaf VisitExpression(IOperation op) => _ctx.VisitExpression(op);
+    internal LoweredValue VisitLoweredExpression(IOperation op)
         => _ctx.VisitLoweredExpression(op);
-    protected CLeaf EmitPatternCheck(CLeaf value, ITypeSymbol valueType, IPatternOperation pattern)
+    internal CLeaf EmitPatternCheck(CLeaf value, ITypeSymbol valueType, IPatternOperation pattern)
         => _ctx.EmitPatternCheck(value, valueType, pattern);
 
     /// <summary>
@@ -47,7 +69,7 @@ public abstract partial class HandlerBase
     /// dimension type. Normalize at the allocation choke so UInt32/Int64/etc. never reach the wrapper
     /// in a differently typed strongbox.
     /// </summary>
-    protected CLeaf EmitArrayDimension(IOperation dimension)
+    internal CLeaf EmitArrayDimension(IOperation dimension)
     {
         var value = VisitExpression(dimension);
         var sourceType = value.Type.Name;
@@ -64,7 +86,7 @@ public abstract partial class HandlerBase
     // A `checked` context asks the runtime to trap integer overflow, but the Udon VM has no overflow
     // trap — the arithmetic silently wraps where C# would throw OverflowException. `unchecked`/default
     // wrapping IS USugar's behavior (C#-correct), so only an explicit `checked` (IsChecked==true) rejects.
-    protected static void RejectChecked(bool isChecked)
+    internal static void RejectChecked(bool isChecked)
     {
         if (isChecked)
             throw new NotSupportedException(
@@ -75,16 +97,16 @@ public abstract partial class HandlerBase
 
 
     // ── Type resolution ──
-    protected StorageType GetStorageType(ITypeSymbol type)
+    internal StorageType GetStorageType(ITypeSymbol type)
         => _ctx.ResolveStorageType(type);
-    protected string GetStorageTypeName(ITypeSymbol type) => GetStorageType(type).Name;
-    protected TypeClassifierContext TypeCtx => new TypeClassifierContext(_ctx.Generics.TypeParamMap);
-    protected ITypeSymbol ResolveType(ITypeSymbol type)
+    internal string GetStorageTypeName(ITypeSymbol type) => GetStorageType(type).Name;
+    internal TypeClassifierContext TypeCtx => new TypeClassifierContext(_ctx.Generics.TypeParamMap);
+    internal ITypeSymbol ResolveType(ITypeSymbol type)
         => TypeEnvironment.CloseType(_compilation, type, _ctx.Generics.TypeParamMap);
-    protected bool IsFoldedEnum(ITypeSymbol type)
+    internal bool IsFoldedEnum(ITypeSymbol type)
         => _ctx.Session.Types.IsFoldedEnum(type);
-    protected string GetArrayType(IArrayTypeSymbol arrType) => GetStorageTypeName(arrType);
-    protected string GetArrayElemType(IArrayTypeSymbol arrType)
+    internal string GetArrayType(IArrayTypeSymbol arrType) => GetStorageTypeName(arrType);
+    internal string GetArrayElemType(IArrayTypeSymbol arrType)
     {
         var t = GetArrayType(arrType);
         return t.Substring(0, t.Length - "Array".Length);
@@ -98,7 +120,7 @@ public abstract partial class HandlerBase
     // .Length, element-typed array otherwise). A user-struct (object[]-emulated) receiver of an inherited
     // Object/ValueType member has no extern and ValueType semantics cannot be emulated → the designed loud
     // reject (B60), matching the type-parameter case.
-    protected ITypeSymbol ResolveExternOwnerType(ITypeSymbol memberContainingType, ITypeSymbol receiverType, string memberName)
+    internal ITypeSymbol ResolveExternOwnerType(ITypeSymbol memberContainingType, ITypeSymbol receiverType, string memberName)
     {
         // B65: a type-parameter receiver (T : SomeBase, e.g. `where T : Behaviour`) carries an inherited
         // member's extern under its CONCRETE leaf — Udon registers `.enabled` per concrete type, never under
@@ -124,7 +146,7 @@ public abstract partial class HandlerBase
     // runtime type test against such a type CANNOT discriminate it — it matches ANY same-tag value and
     // silently takes the wrong branch. Reject loudly (design §8-3); bare `object` and uniquely-tagged
     // SDK/native types stay distinguishable and compile.
-    protected CLeaf EmitTypeCheck(CLeaf valueVal, ITypeSymbol targetType)
+    internal CLeaf EmitTypeCheck(CLeaf valueVal, ITypeSymbol targetType)
     {
         // CA-v2b-1 (charter #2): a runtime type test against a v1 user-class FAMILY is answered by
         // hop-zero ReferenceEquals of the value's bundle[0] against the compile-time-enumerated typeobjs
@@ -177,13 +199,13 @@ public abstract partial class HandlerBase
     // checks, so an UNRESOLVED type parameter would silently resolve to a null System.Type and NRE at
     // runtime (B51 silent class) — reject loudly instead. The IUdonEventReceiver collapse tag is not
     // VM-resolvable as a token; the concrete UdonBehaviour type is (GetComponent<T>'s prior remap).
-    protected CLeaf ConstTypeToken(ITypeSymbol typeSymbol)
+    internal CLeaf ConstTypeToken(ITypeSymbol typeSymbol)
         => Const(TypeTokenName(typeSymbol), StorageTypes.Type);
 
     /// <summary>The Udon type name a <see cref="ConstTypeToken"/> bakes. Split out so a caller that
     /// must reason about the token's runtime identity — a generic extern whose dispatch keys on it —
     /// asks the same producer instead of recomputing the collapse un-fold.</summary>
-    protected string TypeTokenName(ITypeSymbol typeSymbol)
+    internal string TypeTokenName(ITypeSymbol typeSymbol)
     {
         if (ResolveType(typeSymbol) is ITypeParameterSymbol unresolvedTp)
             throw new NotSupportedException(
@@ -197,28 +219,28 @@ public abstract partial class HandlerBase
     // ── Core IR convenience methods ──
 
     /// <summary>Emit: slot = expr</summary>
-    protected void EmitAssign(int destSlot, CValue value) => _builder.EmitAssign(destSlot, value);
+    internal void EmitAssign(int destSlot, CValue value) => _builder.EmitAssign(destSlot, value);
 
     /// <summary>Emit: fieldName = expr</summary>
-    protected void EmitStoreField(string fieldName, CLeaf value) => _builder.EmitStoreField(fieldName, value);
+    internal void EmitStoreField(string fieldName, CLeaf value) => _builder.EmitStoreField(fieldName, value);
 
     /// <summary>Emit: return [value]</summary>
-    protected void EmitReturn(CLeaf value = null) => _builder.EmitReturn(value);
+    internal void EmitReturn(CLeaf value = null) => _builder.EmitReturn(value);
 
     /// <summary>Create a constant.</summary>
-    protected CConst Const(object value, StorageType type) => _builder.Const(value, type);
+    internal CConst Const(object value, StorageType type) => _builder.Const(value, type);
 
     /// <summary>Create a slot reference expression.</summary>
-    protected CSlotRef SlotRef(int slotId) => _builder.SlotRef(slotId);
+    internal CSlotRef SlotRef(int slotId) => _builder.SlotRef(slotId);
 
     /// <summary>Read a field's value — materialized to a scratch slot (A-normal form), returns the leaf.</summary>
-    protected CSlotRef LoadField(string fieldName, StorageType type) => _builder.LoadField(fieldName, type);
+    internal CSlotRef LoadField(string fieldName, StorageType type) => _builder.LoadField(fieldName, type);
 
     /// <summary>Create a field address reference (for extern out/ref).</summary>
-    protected CFieldAddr FieldAddr(string fieldName, StorageType type) => _builder.FieldAddr(fieldName, type);
+    internal CFieldAddr FieldAddr(string fieldName, StorageType type) => _builder.FieldAddr(fieldName, type);
 
     /// <summary>Create an explicit codegen-free destination-typed view of a materialized value.</summary>
-    protected CLeaf RepresentationCast(CLeaf source, StorageType type, RepresentationCastKind kind)
+    internal CLeaf RepresentationCast(CLeaf source, StorageType type, RepresentationCastKind kind)
         => _builder.RepresentationCast(source, type, kind);
 
     /// <summary>
@@ -227,7 +249,7 @@ public abstract partial class HandlerBase
     /// separate concerns: generic erasure may change the expression storage,
     /// but it must never change the ABI prototype.
     /// </summary>
-    protected CLeaf AdaptExternArgument(CLeaf value, ITypeSymbol declaredType)
+    internal CLeaf AdaptExternArgument(CLeaf value, ITypeSymbol declaredType)
     {
         var expected = GetStorageType(declaredType);
         if (value.Type == expected) return value;
@@ -237,10 +259,10 @@ public abstract partial class HandlerBase
     }
 
     /// <summary>Emit an extern call, materialized to a scratch slot (returns the leaf; null for void).</summary>
-    protected CSlotRef ExternCall(UdonAbiKey sig, List<CLeaf> args, StorageType retType)
+    internal CSlotRef ExternCall(UdonAbiKey sig, List<CLeaf> args, StorageType retType)
         => _builder.ExternCall(sig, args, retType);
 
-    protected CSlotRef ExternCall(BoundExtern bound, List<CLeaf> args, StorageType retType)
+    internal CSlotRef ExternCall(BoundExtern bound, List<CLeaf> args, StorageType retType)
         => _builder.ExternCall(bound, args, retType);
 
     /// <summary>
@@ -250,7 +272,7 @@ public abstract partial class HandlerBase
     /// Lossless widenings (and non-integer conversions) use the plain convert extern directly. The 64-bit
     /// unsigned cases require unchecked 64-bit ops Udon does not expose and fall back to the checked convert.
     /// </summary>
-    protected CLeaf EmitNarrowingConvert(CLeaf value, string fromUdonType, string toUdonType)
+    internal CLeaf EmitNarrowingConvert(CLeaf value, string fromUdonType, string toUdonType)
     {
         if (fromUdonType == toUdonType)
             return value;
@@ -310,7 +332,7 @@ public abstract partial class HandlerBase
     /// Promote with the same ToInt32(SystemObject) tolerance, then narrow back to the underlying tag (a
     /// null box keeps the B18 deviation: Convert.ToInt32(null) is 0 → default). Non-small underlyings
     /// return the box untouched.</summary>
-    protected CLeaf RetagSmallNullablePresent(CLeaf boxedValue, ITypeSymbol underlying)
+    internal CLeaf RetagSmallNullablePresent(CLeaf boxedValue, ITypeSymbol underlying)
     {
         var uType = GetStorageTypeName(underlying);
         if (!ExternResolver.IsSmallIntOrChar(uType))
@@ -326,7 +348,7 @@ public abstract partial class HandlerBase
     /// promotes BOTH sides to int32 — the scrutinee box may carry a boxed plain int rather than the
     /// strict small-int tag, and ToInt32(SystemObject) tolerates any boxed numeric — then compares
     /// with the int32 extern, like the binary path.</summary>
-    protected CLeaf EmitConstantEquality(CLeaf valueVal, ITypeSymbol valueType, CLeaf constVal, bool constIsNull)
+    internal CLeaf EmitConstantEquality(CLeaf valueVal, ITypeSymbol valueType, CLeaf constVal, bool constIsNull)
     {
         var convertedValueVal = EmitEnumToUnderlying(valueVal, valueType);
         constVal = EmitEnumToUnderlying(constVal, valueType);
@@ -424,14 +446,14 @@ public abstract partial class HandlerBase
 
     /// <summary>True for the integer Udon types whose op_Remainder extern does not exist (Int64/UInt64, and
     /// also UInt32 — Udon ships uint Division/Multiplication/Subtraction but no uint Remainder).</summary>
-    protected static bool RemainderNeedsPolyfill(string udonType)
+    internal static bool RemainderNeedsPolyfill(string udonType)
         => udonType is "SystemInt64" or "SystemUInt64" or "SystemUInt32";
 
     /// <summary>Remainder polyfill for types lacking an op_Remainder extern (see RemainderNeedsPolyfill): lower
     /// `a % b` to `a - (a / b) * b` using the matching signed/unsigned Division/Multiplication/Subtraction.
     /// Truncate-toward-zero (signed) / floor (unsigned) division makes this exact for every case, including
     /// unsigned dividends above int.MaxValue. Shared by the binary and compound paths.</summary>
-    protected CLeaf EmitRemainderViaDivision(CLeaf left, CLeaf right, string t)
+    internal CLeaf EmitRemainderViaDivision(CLeaf left, CLeaf right, string t)
     {
         // left/right are CLeaf params — stable single-assignment leaves under ANF; the intermediate
         // ExternCall results each bind their own fresh scratch, so neither operand is mutated here.
@@ -446,60 +468,60 @@ public abstract partial class HandlerBase
     /// <summary>Emit a void extern call as a statement. <paramref name="reentrant"/> marks a
     /// delegate-dispatch arm that can re-enter the containing function (design §4.3). preSpillStmts:
     /// wave-12 r2 [V1], see CExternCall.PreSpillStmts (cross setter copy-ins inside the wrap).</summary>
-    protected void EmitExternVoid(UdonAbiKey sig, List<CLeaf> args, bool reentrant = false, int preSpillStmts = 0)
+    internal void EmitExternVoid(UdonAbiKey sig, List<CLeaf> args, bool reentrant = false, int preSpillStmts = 0)
         => _builder.EmitExternVoid(sig, args, reentrant, preSpillStmts);
 
-    protected void EmitExternVoid(BoundExtern bound, List<CLeaf> args, bool reentrant = false, int preSpillStmts = 0)
+    internal void EmitExternVoid(BoundExtern bound, List<CLeaf> args, bool reentrant = false, int preSpillStmts = 0)
         => _builder.EmitExternVoid(bound, args, reentrant, preSpillStmts);
 
     /// <summary>Create an internal call expression.</summary>
-    protected CSlotRef InternalCall(string funcName, List<CLeaf> args, StorageType retType, bool tailSpared = false)
+    internal CSlotRef InternalCall(string funcName, List<CLeaf> args, StorageType retType, bool tailSpared = false)
         => _builder.InternalCall(funcName, args, retType, tailSpared);
 
     /// <summary>Emit a cross-behaviour call. Single-return → materialized to a scratch slot (returns the
     /// leaf); void or multi-return → side-effecting statement (returns null). reentrant: wave-12 r2
     /// [V1] — this dispatch can re-enter the containing function (see TryMarkReentrantCrossDispatch).</summary>
-    protected CSlotRef CrossCall(CLeaf instance, string eventName,
+    internal CSlotRef CrossCall(CLeaf instance, string eventName,
         IReadOnlyList<CrossCallParameter> parameters, IReadOnlyList<ReturnSlot> returns, StorageType retType,
         bool reentrant = false)
         => CrossCall(instance, Const(eventName, StorageTypes.String),
             parameters, returns, retType, reentrant);
 
-    protected CSlotRef CrossCall(CLeaf instance, CLeaf eventName,
+    internal CSlotRef CrossCall(CLeaf instance, CLeaf eventName,
         IReadOnlyList<CrossCallParameter> parameters, IReadOnlyList<ReturnSlot> returns, StorageType retType,
         bool reentrant = false)
         => _builder.CrossCall(instance,
             new CrossCallTransportPlan(eventName, parameters, returns, retType), reentrant);
 
-    protected CSlotRef LoadProgramVariable(CLeaf instance, string variableName, StorageType type)
+    internal CSlotRef LoadProgramVariable(CLeaf instance, string variableName, StorageType type)
         => _builder.LoadProgramVariable(instance, Const(variableName, StorageTypes.String), type);
 
-    protected CSlotRef LoadProgramVariable(CLeaf instance, CLeaf variableName, StorageType type)
+    internal CSlotRef LoadProgramVariable(CLeaf instance, CLeaf variableName, StorageType type)
         => _builder.LoadProgramVariable(instance, variableName, type);
 
-    protected void StoreProgramVariable(CLeaf instance, string variableName,
+    internal void StoreProgramVariable(CLeaf instance, string variableName,
         StorageType variableType, CLeaf value)
         => _builder.EmitProgramVariableStore(
             instance, Const(variableName, StorageTypes.String), variableType, value);
 
-    protected void StoreProgramVariable(CLeaf instance, CLeaf variableName,
+    internal void StoreProgramVariable(CLeaf instance, CLeaf variableName,
         StorageType variableType, CLeaf value)
         => _builder.EmitProgramVariableStore(instance, variableName, variableType, value);
 
     /// <summary>Create a select (ternary) expression.</summary>
-    protected CSlotRef Select(CLeaf cond, CLeaf trueVal, CLeaf falseVal, StorageType type)
+    internal CSlotRef Select(CLeaf cond, CLeaf trueVal, CLeaf falseVal, StorageType type)
         => _builder.Select(cond, trueVal, falseVal, type);
 
     /// <summary>Create a function reference (for delegate/JUMP_INDIRECT).</summary>
-    protected CFuncRef FuncRef(string funcName) => _builder.FuncRef(funcName);
+    internal CFuncRef FuncRef(string funcName) => _builder.FuncRef(funcName);
 
     /// <summary>Emit a statement.</summary>
-    protected void Emit(CStmt stmt) => _builder.Emit(stmt);
+    internal void Emit(CStmt stmt) => _builder.Emit(stmt);
 
     /// <summary>Emit an expression as a statement (side-effecting call). Under A-normal form a value-producing
     /// call is already materialized at construction, so a leaf or null reaching here has no remaining side
     /// effect — skip it. Only an unbound producer (void call) needs emitting as a statement.</summary>
-    protected void EmitExprStmt(CValue expr)
+    internal void EmitExprStmt(CValue expr)
     {
         if (expr == null || expr is CLeaf) return;
         _builder.EmitExprStmt(expr);
@@ -508,19 +530,19 @@ public abstract partial class HandlerBase
     /// <summary>Emit a void internal call as a side-effecting statement (not materialized to a slot).
     /// <paramref name="reentrant"/> marks a delegate-dispatch arm that can re-enter the containing
     /// function (design §4.3).</summary>
-    protected void EmitInternalVoid(string funcName, List<CLeaf> args, bool reentrant = false)
+    internal void EmitInternalVoid(string funcName, List<CLeaf> args, bool reentrant = false)
         => _builder.EmitInternalVoid(funcName, args, reentrant);
 
     // ── Nullable<T> (boxed-object emulation) helpers ──
 
     /// <summary>Default value for a Udon value type (0 / false). Used for `default(T)`-style fills.</summary>
-    protected CLeaf EmitValueTypeDefault(string udonType)
+    internal CLeaf EmitValueTypeDefault(string udonType)
         => Const(EmitPolicy.ParseConstValue(udonType, udonType == "SystemBoolean" ? "False" : "0"), new StorageType(udonType));
 
     /// <summary>Lifted binary operator on Nullable&lt;T&gt; (null propagation), from already-evaluated operand
     /// values. Arithmetic yields T? (null unless both present); relational yields bool (false if either null);
     /// equality yields bool (both-null is equal). Shared by <c>OperatorHandler</c> and compound assignment.</summary>
-    protected CLeaf EmitLiftedBinaryCore(
+    internal CLeaf EmitLiftedBinaryCore(
         CValue leftVal, bool leftNullable, ITypeSymbol ltUnderlying,
         CValue rightVal, bool rightNullable, ITypeSymbol rtUnderlying,
         Microsoft.CodeAnalysis.Operations.BinaryOperatorKind kind, IMethodSymbol operatorMethod, ITypeSymbol resultType)
@@ -533,7 +555,7 @@ public abstract partial class HandlerBase
                 _compilation.GetSpecialType(SpecialType.System_Int32), GetStorageTypeName),
             EmitNarrowingConvert);
 
-    protected static IOperation UnwrapConversions(IOperation op)
+    internal static IOperation UnwrapConversions(IOperation op)
     {
         while (op is IConversionOperation conv) op = conv.Operand;
         return op;
@@ -545,7 +567,7 @@ public abstract partial class HandlerBase
     /// the operand's concat type (WjR3 A11): the full UnwrapConversions strip landed
     /// `s += (Suit)(k % 4)` on the int and Concat'd the raw number, and landed `"" + (int)e` on the
     /// enum and name-stringified where C# prints the number.</summary>
-    protected static IOperation UnwrapConcatOperand(IOperation op)
+    internal static IOperation UnwrapConcatOperand(IOperation op)
     {
         while (op is IConversionOperation conv)
         {
@@ -556,14 +578,14 @@ public abstract partial class HandlerBase
         return op;
     }
 
-    protected static string SanitizeId(string name) => NameAllocator.Sanitize(name);
-    protected static string ToInvariantString(object value)
+    internal static string SanitizeId(string name) => NameAllocator.Sanitize(name);
+    internal static string ToInvariantString(object value)
         => value is IFormattable fmt ? fmt.ToString(null, CultureInfo.InvariantCulture)
          : value?.ToString() ?? "null";
 
     // ── Shared helpers (used by multiple handlers) ──
 
-    protected string GetParamVarId(IParameterSymbol param)
+    internal string GetParamVarId(IParameterSymbol param)
     {
         // SS2B: a closure's own parameter lives in its per-spec record, not the definition-keyed map.
         if (_ctx.Methods.CurrentClosureSpec is { } pcs
@@ -598,13 +620,13 @@ public abstract partial class HandlerBase
 
     /// <summary>Read a parameter value as a CLeaf (field load). A delegate-typed parameter is a
     /// SystemObjectArray bundle reference via the type-map delegate arm (design §2.1).</summary>
-    protected CLeaf LoadParam(IParameterSymbol param)
+    internal CLeaf LoadParam(IParameterSymbol param)
     {
         var fieldName = GetParamVarId(param);
         return LoadField(fieldName, GetStorageType(param.Type));
     }
 
-    protected CLeaf EmitEnumToUnderlying(CLeaf operand, ITypeSymbol type)
+    internal CLeaf EmitEnumToUnderlying(CLeaf operand, ITypeSymbol type)
     {
         if (type is not INamedTypeSymbol named || named.TypeKind != TypeKind.Enum)
             return operand;
@@ -628,7 +650,7 @@ public abstract partial class HandlerBase
     /// VisitExpression() clones aggregate locals/params by default for value semantics,
     /// but field access operates on the original array.
     /// </summary>
-    protected CLeaf LoadInstanceRaw(IOperation instance)
+    internal CLeaf LoadInstanceRaw(IOperation instance)
     {
         return instance switch
         {
@@ -664,7 +686,7 @@ public abstract partial class HandlerBase
     /// caller must route the initial value through <see cref="EnvEmit.Write"/> (returns false);
     /// ordinary locals get their flat field + LocalBindings entry as before (returns true, flat id
     /// in <paramref name="flatId"/>).</summary>
-    protected bool BindLocal(ILocalSymbol local, string udonType, out string flatId)
+    internal bool BindLocal(ILocalSymbol local, string udonType, out string flatId)
     {
         if (_ctx.Closures.TryGetEnvBinding(local, out _))
         {
@@ -680,7 +702,7 @@ public abstract partial class HandlerBase
     /// local/param, store the value into its env cell and return true; false = caller proceeds with
     /// its flat-field path. Aggregate value semantics are the CALLER's job (pass an already-cloned
     /// value where the flat path would clone).</summary>
-    protected bool TryEmitEnvStore(IOperation target, CLeaf value)
+    internal bool TryEmitEnvStore(IOperation target, CLeaf value)
     {
         ISymbol sym = target switch
         {
@@ -698,7 +720,7 @@ public abstract partial class HandlerBase
     /// other-behaviour members, fresh values). Walks struct member chains and array-element links to
     /// the root: `ref f`, `ref s.v` (s a this-field struct), and `ref arr[0]` (arr a this-field) all
     /// resolve to the root field — the storage the callee can also reach directly through this.</summary>
-    protected static IFieldSymbol TryGetThisRootedRefStorage(IOperation arg)
+    internal static IFieldSymbol TryGetThisRootedRefStorage(IOperation arg)
     {
         var op = arg;
         while (true)
@@ -726,7 +748,7 @@ public abstract partial class HandlerBase
     /// independent heap vars under the copy-in/copy-back convention: the callee never observes the
     /// alias and the last copy-back silently wins (DiffFuzz: M(ref a, ref a) with x=x+1;y=y+3
     /// ref=5 vs VM 4, local and this-field flavors). Null = cross-behaviour member / fresh value.</summary>
-    protected static ISymbol TryGetRefStorageRoot(IOperation arg)
+    internal static ISymbol TryGetRefStorageRoot(IOperation arg)
     {
         var op = arg;
         while (true)
@@ -762,7 +784,7 @@ public abstract partial class HandlerBase
     /// being shared as C# expects (the readonly-ness only forbids reassigning the FIELD itself; its
     /// referenced contents are still mutable in real C#). Any other root (local/param/this-field/
     /// cross-behaviour/fresh value) returns null — no hazard.</summary>
-    protected static IFieldSymbol TryGetStaticReadonlyWriteThroughRoot(IOperation target)
+    internal static IFieldSymbol TryGetStaticReadonlyWriteThroughRoot(IOperation target)
     {
         var op = target;
         while (true)
@@ -786,7 +808,7 @@ public abstract partial class HandlerBase
 
     /// <summary>Loud reject for a write-through mutation rooted at a static readonly field (§3.3, R5).
     /// A no-op when <paramref name="target"/> isn't rooted there.</summary>
-    protected static void RejectStaticReadonlyWriteThrough(IOperation target)
+    internal static void RejectStaticReadonlyWriteThrough(IOperation target)
     {
         if (TryGetStaticReadonlyWriteThroughRoot(target) is not { } root) return;
         throw new NotSupportedException(
@@ -808,7 +830,7 @@ public abstract partial class HandlerBase
     /// loop local, a readonly FIELD defensive-copies even on direct invocation (ldfld is a value).
     /// A chain that passes through an ARRAY ELEMENT stops in both flavors (arrays are
     /// reference-typed: the CLR mutates through them even from a readonly variable).</summary>
-    protected bool ReceiverNeedsDefensiveCopy(IOperation instance)
+    internal bool ReceiverNeedsDefensiveCopy(IOperation instance)
     {
         var op = instance;
         bool sawValueFieldLink = false;
@@ -833,13 +855,13 @@ public abstract partial class HandlerBase
     }
 
     /// <summary>Read an aggregate array element as the raw stored object[] (no clone), for receiver access.</summary>
-    protected CLeaf ReadArrayElementRaw(IArrayElementReferenceOperation ae)
+    internal CLeaf ReadArrayElementRaw(IArrayElementReferenceOperation ae)
     {
         // Wave-14 ndimaccess lens: an N-dim aggregate-array element used as a RECEIVER (`arr[i,j].X += 1`,
         // `arr[i,j].Item1`) reaches this method (TypeClassifier.IsAggregateValue(ae.Type) at the
         // LoadInstanceRaw dispatch site), but this method was written before feature N and always used
         // Indices[0] alone against the BUNDLE array directly — every OTHER array-index site
-        // (ArrayHandler.VisitArrayElementReference, HandlerBase.PrepareArrayElementSet,
+        // (ArrayHandler.VisitArrayElementReference, LoweringServices.PrepareArrayElementSet,
         // AssignmentHandlerBase's capture/write-back arms, InvocationHandler.Extern's ref/out prepare)
         // already special-cases Indices.Length>1 via PrepareNdimAccess; this receiver-access path was the
         // one gap. Pre-fix, a single stray index read bundle[idx] directly (the bundle's OWN 1+r slots —
@@ -869,14 +891,14 @@ public abstract partial class HandlerBase
     /// arm, TryPrepareRefOutArg's array-element ref/out leg) — so read and write can't drift on
     /// which Index shapes are supported (B40: the write paths used to call VisitExpression
     /// directly, which cannot lower `^k` and threw an unrelated "Unsupported unary operator: Hat").</summary>
-    protected CLeaf ResolveArrayIndex(CLeaf arrayVal, string arrayType, IOperation indexOp)
+    internal CLeaf ResolveArrayIndex(CLeaf arrayVal, string arrayType, IOperation indexOp)
         => indexOp is IUnaryOperation { Type: { Name: "Index" } } fromEnd
             ? EmitIndexFromEnd(arrayVal, arrayType, fromEnd.Operand)
             : VisitExpression(indexOp);
 
     /// <summary>`arr[^k]` → `arr.Length - k`. <paramref name="arrayVal"/> must already be a
     /// single-assignment scratch leaf (read once here); <paramref name="operand"/> is the `k` in `^k`.</summary>
-    protected CLeaf EmitIndexFromEnd(CLeaf arrayVal, string arrayType, IOperation operand)
+    internal CLeaf EmitIndexFromEnd(CLeaf arrayVal, string arrayType, IOperation operand)
     {
         var lenVal = ExternCall(UdonAbi.ArrayLength(arrayType),
             new List<CLeaf> { arrayVal }, StorageTypes.Int32);
@@ -886,7 +908,7 @@ public abstract partial class HandlerBase
 
     /// <summary>Read an aggregate-typed field as the raw stored object[] (no clone): a nested element via
     /// __Get__, or a this.field directly. Used for receiver access; value reads add a clone on top.</summary>
-    protected CLeaf ReadAggregateFieldRaw(IFieldReferenceOperation fr)
+    internal CLeaf ReadAggregateFieldRaw(IFieldReferenceOperation fr)
     {
         // B80: the container may be a v1 CLASS too (a struct field on a class — `w.P.Ref = x`). Reading the
         // struct-field slot RAW yields the LIVE nested object[] stored in the class bundle (no clone), so a
@@ -907,7 +929,7 @@ public abstract partial class HandlerBase
     /// Callers with specialized targets (array elements, cross-behaviour fields) should handle those
     /// first, then delegate to this method for the common cases.
     /// </summary>
-    protected void AssignToLValue(IOperation target, CLeaf value,
+    internal void AssignToLValue(IOperation target, CLeaf value,
         Dictionary<IOperation, LValuePlan> preparedStores = null)
     {
         switch (target)
@@ -1037,7 +1059,7 @@ public abstract partial class HandlerBase
     /// expressions left-to-right, then the RHS, then the stores left-to-right". Returns a deferred store
     /// per prepared target (keyed by the target operation, consumed by AssignToLValue), or null when no
     /// target carries legs (plain locals/fields/discards — byte-identical to the pre-round-6 emission).</summary>
-    protected Dictionary<IOperation, LValuePlan> PrepareDeconstructionTargets(ITupleOperation targetTuple)
+    internal Dictionary<IOperation, LValuePlan> PrepareDeconstructionTargets(ITupleOperation targetTuple)
     {
         Dictionary<IOperation, LValuePlan> prepared = null;
         void Walk(IOperation element)
@@ -1081,7 +1103,7 @@ public abstract partial class HandlerBase
     /// TryPrepareFieldSet would return a store (aggregate member slot, cross-behaviour field,
     /// extern value-type / reference-type field), false for behaviour this-fields and static
     /// fields. Lets callers decide evaluation ORDER before any legs are emitted.</summary>
-    protected struct LValuePlan
+    public struct LValuePlan
     {
         System.Action<CLeaf> _write;
         public CLeaf Value;
@@ -1100,7 +1122,7 @@ public abstract partial class HandlerBase
         public void Write(CLeaf value) => _write(value);
     }
 
-    protected LValuePlan? TryPrepareWriteLValue(IOperation target)
+    internal LValuePlan? TryPrepareWriteLValue(IOperation target)
     {
         System.Action<CLeaf> write = target switch
         {
@@ -1148,7 +1170,7 @@ public abstract partial class HandlerBase
     /// slot → cross-behaviour SetProgramVariable → extern value-type field → extern reference-type
     /// field. Returns null for behaviour this-fields and static fields (no legs) — callers keep
     /// their direct-store path. DescribeFieldSet is the single dispatch table for these cases.</summary>
-    protected System.Action<CLeaf> TryPrepareFieldSet(IFieldReferenceOperation fieldRef)
+    internal System.Action<CLeaf> TryPrepareFieldSet(IFieldReferenceOperation fieldRef)
     {
         var plan = DescribeFieldSet(fieldRef);
         if (!plan.HasValue) return null;
@@ -1195,7 +1217,7 @@ public abstract partial class HandlerBase
 
     /// <summary>Evaluate an array-element lvalue's array/index legs NOW and return the deferred
     /// element store (wave-9 round-6 [X6]; the legs/value split twin of PreparePropertySet).</summary>
-    protected System.Action<CLeaf> PrepareArrayElementSet(IArrayElementReferenceOperation arrayElem)
+    internal System.Action<CLeaf> PrepareArrayElementSet(IArrayElementReferenceOperation arrayElem)
     {
         RejectStaticReadonlyWriteThrough(arrayElem.ArrayReference); // §3.3, R5
         if (arrayElem.Indices.Length > 1) return PrepareNdimElementSet(arrayElem);
@@ -1209,7 +1231,7 @@ public abstract partial class HandlerBase
     /// Shared by PrepareArrayElementSet (single write) and the read-modify-write lvalue plan's
     /// array arm (which reuses the plan's cached array/index leaves instead
     /// of re-evaluating them).</summary>
-    protected void EmitArrayElementSet(IArrayTypeSymbol arrSymbol, CLeaf arrayVal, CLeaf indexVal, CLeaf value)
+    internal void EmitArrayElementSet(IArrayTypeSymbol arrSymbol, CLeaf arrayVal, CLeaf indexVal, CLeaf value)
     {
         var arrayType = GetArrayType(arrSymbol);
         var elementType = GetArrayElemType(arrSymbol);
@@ -1221,7 +1243,7 @@ public abstract partial class HandlerBase
     /// instance leaf. Shared by TryPrepareFieldSet (single write) and the read-modify-write lvalue plan's
     /// field arm (which reuses the plan's cached instance leaf instead of
     /// re-evaluating it).</summary>
-    protected void EmitCrossBehaviourFieldSet(IFieldSymbol field, CLeaf instanceVal, CLeaf value)
+    internal void EmitCrossBehaviourFieldSet(IFieldSymbol field, CLeaf instanceVal, CLeaf value)
     {
         RejectProgramLocalCrossBehaviourFieldWrite(field);
         StoreProgramVariable(instanceVal, field.Name, GetStorageType(field.Type), value);
@@ -1230,7 +1252,7 @@ public abstract partial class HandlerBase
     /// <summary>CW27: the one aggregate object-initializer entry — every mint site routes through
     /// this wrapper so AggregateAbi.EmitObjectInitializer gets the layout recursion and the
     /// computed/indexer setter-call capability (and can therefore be loud about anything else).</summary>
-    protected void EmitAggregateObjectInitializer(CLeaf instance, AggregateLayout layout,
+    internal void EmitAggregateObjectInitializer(CLeaf instance, AggregateLayout layout,
         IObjectOrCollectionInitializerOperation initializer)
         => AggregateAbi.EmitObjectInitializer(_builder, instance, layout, initializer, VisitExpression,
             _ctx.Aggregates.GetLayout, EmitInitializerSetterAssignment);
@@ -1261,7 +1283,7 @@ public abstract partial class HandlerBase
     /// byte-identical to the pre-split emission; the deconstruction path runs ALL targets' legs, then
     /// the RHS, then the stores (wave-9 round-6 [X2]-[X5] — store-time leg evaluation inverted the C#
     /// order and landed writes in the wrong cell when the legs read state the RHS mutates).</summary>
-    protected System.Action<CLeaf> PreparePropertySet(IPropertyReferenceOperation propRef)
+    internal System.Action<CLeaf> PreparePropertySet(IPropertyReferenceOperation propRef)
     {
         // CW1 lift: a runtime-polymorphic property/indexer WRITE on a v1-class receiver dispatches the
         // setter through the typeobj machinery — legs staged NOW (C# order: receiver, index args), the
@@ -1506,7 +1528,7 @@ public abstract partial class HandlerBase
 
     // ── Lambda / Local Function Helpers ──
 
-    protected void RegisterLocalFunction(IMethodSymbol localFunc)
+    internal void RegisterLocalFunction(IMethodSymbol localFunc)
     {
         // Design 2026-07-10 v3 SS2B (B64/B70 root fix): hoisted closures register under a composite
         // (definition, enclosing-spec type-args) key — the WRITE choke. All the definition-keyed maps
@@ -1555,7 +1577,7 @@ public abstract partial class HandlerBase
     /// only for sequential non-escaping single-activation use — retired. VM-proven multi-activation
     /// clobber for the struct-hosted case: roadmap B45 M0 shapes (c)/(d).)
     /// </summary>
-    protected IMethodSymbol HoistLambdaToMethod(IAnonymousFunctionOperation lambda)
+    internal IMethodSymbol HoistLambdaToMethod(IAnonymousFunctionOperation lambda)
     {
         var symbol = lambda.Symbol;
         if (_ctx.Methods.TryGetClosureSpec(symbol, _ctx.ComposeClosureKeyArgs(symbol), out _)) return symbol;
@@ -1609,7 +1631,7 @@ public abstract partial class HandlerBase
     /// DelegateBridgeEmitter's emitted-name set. Snapshots the type-param map for the same reason
     /// ResolveDelegateBridge does (§7 A-M1): synthetic emission runs after body emission, when the
     /// ambient map may already be cleared.</summary>
-    protected void RegisterMulticastSig(string sigPart, IMethodSymbol invoke, MulticastOperations operation)
+    internal void RegisterMulticastSig(string sigPart, IMethodSymbol invoke, MulticastOperations operation)
     {
         _ctx.Synthetics.RegisterMulticast(
             sigPart, invoke, _ctx.Generics.TypeParamMap, operation);
@@ -1637,14 +1659,14 @@ public abstract partial class HandlerBase
     /// <paramref name="value"/> to the C#-correct NAME string via the synthesized per-enum helper and return
     /// that string leaf; otherwise return null so the caller emits the value as-is. A [Flags] enum rejects
     /// (Udon cannot synthesize the comma-separated decomposition — that is gold-plating).</summary>
-    protected CLeaf TryEmitEnumToString(CLeaf value, ITypeSymbol type)
+    internal CLeaf TryEmitEnumToString(CLeaf value, ITypeSymbol type)
     {
         if (RegisterEnumToStringDemand(type) is not { } e)
             return null;
         return InternalCall(EnumToStringHelperName(e), new List<CLeaf> { value }, StorageTypes.String);
     }
 
-    protected INamedTypeSymbol RegisterEnumToStringDemand(ITypeSymbol type, bool rejectFlags = true)
+    internal INamedTypeSymbol RegisterEnumToStringDemand(ITypeSymbol type, bool rejectFlags = true)
     {
         var resolved = ResolveType(type);
         if (!IsFoldedEnum(resolved) || resolved is not INamedTypeSymbol e)
@@ -1666,7 +1688,7 @@ public abstract partial class HandlerBase
     /// <see cref="RegisterMulticastSig"/> (first registration wins; a second site needing the same
     /// (outer,inner) wrapper is a no-op here) — keyed by the wrapper's own name since that's already the
     /// unique key for this pair.</summary>
-    protected string RegisterWrapperSig(IMethodSymbol outerInvoke, IMethodSymbol innerInvoke,
+    internal string RegisterWrapperSig(IMethodSymbol outerInvoke, IMethodSymbol innerInvoke,
         IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeParamMap)
     {
         var wrapperName = DelegateAbi.WrapperName(
@@ -1733,7 +1755,7 @@ public abstract partial class HandlerBase
     /// definition — the SDK assembler then ICEd with TypeResolverException 'T' (even same-class).
     /// Re-construct the resolved member with the original call's type arguments. (Moved from
     /// InvocationHandler in round 9 — StatementHandler's TCO gate shares it.)</summary>
-    protected IMethodSymbol ResolveMostDerivedOverride(IMethodSymbol baseMethod)
+    internal IMethodSymbol ResolveMostDerivedOverride(IMethodSymbol baseMethod)
     {
         var def = baseMethod.OriginalDefinition;
         var m = FindOverrideMethodInChain(_classSymbol, def, baseMethod.Name);
@@ -1757,7 +1779,7 @@ public abstract partial class HandlerBase
     /// through the ambient map when it carries an open type parameter, re-locating the member on the
     /// closed containing type before (if the method is itself ALSO generic) re-applying the method's
     /// own type-arg substitution on top — the two dimensions are independent and compose.</summary>
-    protected IMethodSymbol SubstituteMethodTypeArgs(IMethodSymbol target)
+    internal IMethodSymbol SubstituteMethodTypeArgs(IMethodSymbol target)
         => TypeEnvironment.CloseMethod(_compilation, target, _typeParamMap);
 
     /// <summary>Register a monomorphized generic specialization: CFunction + ordinal param vars +
@@ -1769,7 +1791,7 @@ public abstract partial class HandlerBase
     // multi-instantiation pin). Struct-hosted generic methods route through EmitStructInstanceCall, which
     // registers the spec itself but NOT through RegisterGenericSpecialization — so this must run there too
     // (B56), else a nested LF referencing the method's T finds no owner and CoreVerify ICEs on raw 'T'.
-    protected void RegisterGenericSpecialization(IMethodSymbol constructed)
+    internal void RegisterGenericSpecialization(IMethodSymbol constructed)
     {
         // SS2B (M2b): a GENERIC local function is a hoisted closure and registers in the per-spec
         // registry under (own type args + ambient enclosing-spec args) — its constructed symbol is
@@ -1866,7 +1888,7 @@ public abstract partial class HandlerBase
     /// through the live type-param map, then register on demand exactly like a plain self-recursive
     /// call — both operations are idempotent, so this is a no-op for non-generic structs and for members
     /// already reached by an external concretely-typed call site.</summary>
-    protected IMethodSymbol ResolveStructMember(IMethodSymbol member)
+    internal IMethodSymbol ResolveStructMember(IMethodSymbol member)
     {
         var resolved = SubstituteMethodTypeArgs(member);
         if (!_methodFunctions.ContainsKey(resolved))
@@ -1884,7 +1906,7 @@ public abstract partial class HandlerBase
     /// env of a CAPTURING closure (resolved statically from the current frame, §4.1), or a null const
     /// for a capture-free closure / named method (byte-invariant). Emit-time armor: a capturing
     /// closure must have a BindingScope lexically enclosing this creation site.</summary>
-    protected CLeaf ClosureEnvLeaf(IMethodSymbol targetMethod)
+    internal CLeaf ClosureEnvLeaf(IMethodSymbol targetMethod)
     {
         if (targetMethod == null || _ctx.Closures.CaptureScope == null
             || !_ctx.Closures.CaptureScope.IsCapturingClosure(targetMethod.OriginalDefinition))
@@ -1896,38 +1918,38 @@ public abstract partial class HandlerBase
         return EnvEmit.Leaf(_builder, _ctx, closureScope.BindingScope);
     }
 
-    protected void RejectUnsafeCrossProgramDelegateWrite(IOperation target, ValueInfo value)
+    internal void RejectUnsafeCrossProgramDelegateWrite(IOperation target, ValueInfo value)
         => _ctx.Boundary.RequireCanStoreCrossProgramDelegate(target, value);
 
-    protected void RejectUnsafeCrossProgramEventHandler(IEventSymbol evt, ValueInfo value)
+    internal void RejectUnsafeCrossProgramEventHandler(IEventSymbol evt, ValueInfo value)
         => _ctx.Boundary.RequireCanStorePublicEventHandler(evt, value);
 
-    protected void RejectProgramLocalCrossBehaviourFieldWrite(IFieldSymbol field)
+    internal void RejectProgramLocalCrossBehaviourFieldWrite(IFieldSymbol field)
         => _ctx.Boundary.RequireCanWriteCrossBehaviourField(field);
 
-    protected void RejectProgramLocalCrossBehaviourFieldRead(IFieldSymbol field)
+    internal void RejectProgramLocalCrossBehaviourFieldRead(IFieldSymbol field)
         => _ctx.Boundary.RequireCanReadCrossBehaviourField(field);
 
-    protected void RejectProgramLocalCrossBehaviourArgument(ITypeSymbol argType)
+    internal void RejectProgramLocalCrossBehaviourArgument(ITypeSymbol argType)
         => _ctx.Boundary.RequireCanPassCrossBehaviourArgument(argType);
 
-    protected void RejectProgramLocalCrossBehaviourPropertyWrite(IPropertySymbol prop)
+    internal void RejectProgramLocalCrossBehaviourPropertyWrite(IPropertySymbol prop)
         => _ctx.Boundary.RequireCanWriteCrossBehaviourProperty(prop);
 
-    protected void RejectProgramLocalCrossBehaviourPropertyRead(IPropertySymbol prop)
+    internal void RejectProgramLocalCrossBehaviourPropertyRead(IPropertySymbol prop)
         => _ctx.Boundary.RequireCanReadCrossBehaviourProperty(prop);
 
-    protected void RejectProgramLocalCrossBehaviourAccessor(IMethodSymbol accessor)
+    internal void RejectProgramLocalCrossBehaviourAccessor(IMethodSymbol accessor)
         => _ctx.Boundary.RequireCanDispatchCrossBehaviourAccessor(accessor);
 
-    protected void RejectUnsafeCrossProgramDelegateArgument(IArgumentOperation arg)
+    internal void RejectUnsafeCrossProgramDelegateArgument(IArgumentOperation arg)
         => _ctx.Boundary.RequireCanPassCrossProgramDelegateArgument(arg);
 
-    protected void RejectProgramLocalErasure(IConversionOperation conversion,
+    internal void RejectProgramLocalErasure(IConversionOperation conversion,
         ITypeSymbol sourceType, ITypeSymbol destinationType)
         => _ctx.Boundary.RequireCanEraseProgramLocalPayload(conversion, sourceType, destinationType);
 
-    protected MaterializedDelegateBinding ResolveDelegateBridge(IDelegateCreationOperation op)
+    internal MaterializedDelegateBinding ResolveDelegateBridge(IDelegateCreationOperation op)
     {
         var binding = ResolveDelegateBridgeCore(op, false);
         _ctx.Synthetics.RecordDelegateBinding(
@@ -1935,7 +1957,7 @@ public abstract partial class HandlerBase
         return binding;
     }
 
-    protected DelegateBindingPlan PlanDelegateBridge(IDelegateCreationOperation op)
+    internal DelegateBindingPlan PlanDelegateBridge(IDelegateCreationOperation op)
     {
         var binding = ResolveDelegateBridgeCore(op, true).Plan;
         _ctx.Synthetics.PlanDelegateBinding(
@@ -2143,7 +2165,7 @@ public abstract partial class HandlerBase
             bridgeExportName = DelegateAbi.BridgeName(foreignFunc.Name);
             RegisterDelegateDemand(targetMethod, bridgeExportName, _ctx.Generics.TypeParamMap);
         }
-        // R-M2 (design §2): a method-group binding of a THIS-CLASS private / private-protected method. The
+        // R-M2 (design §2): a method-group binding of a THIS-CLASS private / private-internal method. The
         // planner no longer plans a speculative bridge for it (LayoutPlanner.IsExcludedFromSpeculativeBridge),
         // so GetDelegateBridgeLayout below would throw — register the bridge on demand via
         // PendingDelegateBridges, exactly like the lambda/local-function/generic/foreign-static arms. The
@@ -2255,7 +2277,7 @@ public abstract partial class HandlerBase
     /// or reads the base declaration's per-declaration `__basebk` storage (auto-props, post-917d99c).
     /// `base.P` keeps the static binding (the single non-virtual property access in C#), as does every
     /// non-this receiver (cross dispatch is receiver-correct via the planner chain-root layout).</summary>
-    protected IPropertySymbol ResolveDispatchProperty(IPropertyReferenceOperation op)
+    internal IPropertySymbol ResolveDispatchProperty(IPropertyReferenceOperation op)
     {
         var prop = op.Property;
         if (!(prop.IsVirtual || prop.IsOverride || prop.IsAbstract)) return prop;
@@ -2270,7 +2292,7 @@ public abstract partial class HandlerBase
     // (IsDispatchSite gate shared with the recursion enumerator, ResolveTargets closed-world set,
     // closed-typeobj invariant) lowers a virtual/override/abstract accessor reference to an
     // inline typeobj-ReferenceEquals chain / devirtualized direct access / empty-set null lowering.
-    // Lives in HandlerBase because four emission surfaces share it: the property/indexer READ arms
+    // Lives in LoweringServices because four emission surfaces share it: the property/indexer READ arms
     // (InvocationHandler.Members), the SET path (PreparePropertySet), the compound read/write-back
     // (AssignmentHandlerBase.CaptureLValue/EmitWriteBack), and the property-subpattern read
     // (OperatorHandler's pattern lowering).
@@ -2281,7 +2303,7 @@ public abstract partial class HandlerBase
     /// there shares one typeobj, and cross-context mints are invisible to exact-symbol assignability.
     /// Same choke-point polarity as EmitTypeCheck's family reject: loud over a silent
     /// base-impl call / cross-spec dispatch.</summary>
-    protected void AssertClosedVirtualDispatch(INamedTypeSymbol recvTy, IReadOnlyList<VDispatchTarget> targets, IMethodSymbol target)
+    internal void AssertClosedVirtualDispatch(INamedTypeSymbol recvTy, IReadOnlyList<VDispatchTarget> targets, IMethodSymbol target)
     {
         ClassAbiPolicy.AssertClosed(recvTy, $"virtual call '{target.Name}' receiver");
         foreach (var dispatchTarget in targets)
@@ -2293,7 +2315,7 @@ public abstract partial class HandlerBase
     /// type resolves through the monomorphization map, mirroring the method arm; the predicate itself
     /// is VirtualDispatch.IsDispatchSite — shared with the recursion enumerator, so the two can never
     /// drift (`base.P` and non-user-class receivers stay statically bound).</summary>
-    protected bool IsAccessorDispatchSite(IPropertyReferenceOperation op, IMethodSymbol accessor, out INamedTypeSymbol recvTy)
+    internal bool IsAccessorDispatchSite(IPropertyReferenceOperation op, IMethodSymbol accessor, out INamedTypeSymbol recvTy)
     {
         recvTy = null;
         if (accessor == null || op.Instance == null) return false;
@@ -2312,7 +2334,7 @@ public abstract partial class HandlerBase
     /// args — into scratch slots: the typeobj chain consumes each leg once per arm, so raw leaves must
     /// be materialized (mirrors EmitVirtualChain's staging; indexer parameters can never be ref/out,
     /// so no copy-back protocol exists here).</summary>
-    protected (CLeaf Recv, List<CLeaf> IndexArgs) StageAccessorDispatchLegs(IPropertyReferenceOperation op)
+    internal (CLeaf Recv, List<CLeaf> IndexArgs) StageAccessorDispatchLegs(IPropertyReferenceOperation op)
     {
         var recvSlot = _ctx.Builder.AllocScratch(new StorageType(AggregateAbi.ArrayType));
         EmitAssign(recvSlot, LoadInstanceRaw(op.Instance));
@@ -2339,7 +2361,7 @@ public abstract partial class HandlerBase
     /// means the receiver must be null; CLR NREs — §2.6 polarity, legs already evaluated for
     /// side-effect parity). <paramref name="setValue"/> null ⇒ GET (returns the value leaf); non-null ⇒
     /// SET (returns null). Legs arrive STAGED (<see cref="StageAccessorDispatchLegs"/>).</summary>
-    protected CLeaf EmitAccessorDispatch(IPropertySymbol prop, INamedTypeSymbol recvTy,
+    internal CLeaf EmitAccessorDispatch(IPropertySymbol prop, INamedTypeSymbol recvTy,
         IMethodSymbol accessor, CLeaf recv, List<CLeaf> indexArgs, CLeaf setValue)
     {
         var interfaceDispatch = recvTy.TypeKind == TypeKind.Interface;
@@ -2447,7 +2469,7 @@ public abstract partial class HandlerBase
     /// binary concat arms (OperatorHandler) and the compound `s += x` arm (CompoundAssignmentHandler)
     /// so the three conversions cannot drift per surface — and so an ndim operand rejects even when it
     /// sits beside a class operand (the pre-share class arm returned before the reject ran).</summary>
-    protected CLeaf ConvertConcatOperand(CLeaf value, IOperation unwrapped)
+    internal CLeaf ConvertConcatOperand(CLeaf value, IOperation unwrapped)
     {
         if (ResolveType(unwrapped.Type) is INamedTypeSymbol cls && TypeClassifier.IsUserClass(cls))
             return EmitClassToStringDispatch(cls, value, nullIsError: false, useOverrides: true);
@@ -2469,7 +2491,7 @@ public abstract partial class HandlerBase
     /// direct null.ToString() would NRE (the established null-invoke deviation: LogError + "",
     /// <paramref name="nullIsError"/> true). A NON-null no-match (laundered value) is always
     /// LogError + "" (the chain-armor polarity).</summary>
-    protected CLeaf EmitClassToStringDispatch(INamedTypeSymbol recvTy, CLeaf recv,
+    internal CLeaf EmitClassToStringDispatch(INamedTypeSymbol recvTy, CLeaf recv,
         bool nullIsError, bool useOverrides)
     {
         var slot = ObjectToStringSlot();
@@ -2557,7 +2579,7 @@ public abstract partial class HandlerBase
     /// pass documents), so the SetProgramVariable/GetProgramVariable direct arms were dead and every
     /// cross property access dispatched accessor functions. Non-public autos take the cheaper
     /// direct-symbol arm because their backing symbol is present on the receiver heap.</summary>
-    protected static bool IsNonPublicAutoCrossProperty(IMethodSymbol accessor, IPropertySymbol prop)
+    internal static bool IsNonPublicAutoCrossProperty(IMethodSymbol accessor, IPropertySymbol prop)
         => accessor != null
            && accessor.DeclaredAccessibility != Accessibility.Public
            && prop.ContainingType.GetMembers().OfType<IFieldSymbol>()
@@ -2572,7 +2594,7 @@ public abstract partial class HandlerBase
     /// setter — its LAST parameter) + SendCustomEvent the chain-ROOT export (GetCalleeLayout
     /// normalization), which runs the receiver program's most-derived override. Reachable non-public
     /// accessors use an internal entry point registered with the program.</summary>
-    protected CLeaf EmitCrossIndexerCall(IMethodSymbol accessor, CLeaf instanceVal, List<CLeaf> orderedArgs,
+    internal CLeaf EmitCrossIndexerCall(IMethodSymbol accessor, CLeaf instanceVal, List<CLeaf> orderedArgs,
         bool reentrant = false)
     {
         RejectProgramLocalCrossBehaviourAccessor(accessor); // CW22
@@ -2585,7 +2607,7 @@ public abstract partial class HandlerBase
 
     /// <summary>[W6] gate shared by the read/write/compound indexer sites: a user-behaviour indexer
     /// reference through a non-this receiver (the struct/extern receivers keep their own arms).</summary>
-    protected static bool IsVariableReceiverBehaviourIndexer(IPropertyReferenceOperation op)
+    internal static bool IsVariableReceiverBehaviourIndexer(IPropertyReferenceOperation op)
         => op.Property.IsIndexer
            && op.Instance != null && op.Instance is not IInstanceReferenceOperation
            && ExternResolver.IsUdonSharpBehaviour(op.Property.ContainingType)
@@ -2593,7 +2615,7 @@ public abstract partial class HandlerBase
 
     /// <summary>[W6] index arguments evaluated in source order, slotted by parameter ordinal
     /// (named/reordered index args bind by name, mirroring the [W1] convention).</summary>
-    protected List<CLeaf> EvaluateIndexerArgs(IPropertyReferenceOperation op)
+    internal List<CLeaf> EvaluateIndexerArgs(IPropertyReferenceOperation op)
     {
         var ordered = new CLeaf[op.Arguments.Length];
         for (int i = 0; i < op.Arguments.Length; i++)
@@ -2608,7 +2630,7 @@ public abstract partial class HandlerBase
     /// <summary>True when the type is NOT a behaviour after resolving type parameters — an interface
     /// call/accessor on such a receiver must use externs, not SendCustomEvent dispatch (e.g.
     /// IComparable&lt;T&gt;.CompareTo with T=int). Interface-typed receivers stay undetermined (false).</summary>
-    protected bool IsResolvedConcreteNonBehaviour(ITypeSymbol type)
+    internal bool IsResolvedConcreteNonBehaviour(ITypeSymbol type)
     {
         switch (type)
         {
@@ -2639,7 +2661,7 @@ public abstract partial class HandlerBase
     /// rejectable just because no class implementor happens to be visible here). Call this from every
     /// gate that currently reads `!IsResolvedConcreteNonBehaviour(...)` to route to interface dispatch.
     /// </summary>
-    protected void GuardInterfaceDispatchRepresentation(INamedTypeSymbol ifaceType, string memberName)
+    internal void GuardInterfaceDispatchRepresentation(INamedTypeSymbol ifaceType, string memberName)
         => _ctx.Boundary.RequireInterfaceDispatchRepresentation(ifaceType, memberName);
 
     /// <summary>Wave-9 round-4 [X4]/[X5]/[X9]: gate + layout lookup for a USER-INTERFACE property or
@@ -2650,7 +2672,7 @@ public abstract partial class HandlerBase
     /// externs (UasmValidationException on legal C#). Mirrors the gates of the existing interface
     /// property get/set arms: user interface (SpecialType None), variable receiver, not a resolved
     /// concrete non-behaviour, and the accessor present in the planned interface layout.</summary>
-    protected bool TryGetInterfaceAccessorLayout(IPropertyReferenceOperation op, IMethodSymbol accessor,
+    internal bool TryGetInterfaceAccessorLayout(IPropertyReferenceOperation op, IMethodSymbol accessor,
         out MethodLayout ml)
     {
         ml = null;
@@ -2671,7 +2693,7 @@ public abstract partial class HandlerBase
     /// setter), SendCustomEvent the bridge, GetProgramVariable the return. Tuple-returning accessors
     /// dispatch the bare export (no bridge), mirroring EmitInterfaceCall. Void accessors self-emit
     /// and return null — never wrap in EmitExprStmt.</summary>
-    protected CLeaf EmitInterfaceAccessorCall(IMethodSymbol accessor, MethodLayout ml, CLeaf instanceVal,
+    internal CLeaf EmitInterfaceAccessorCall(IMethodSymbol accessor, MethodLayout ml, CLeaf instanceVal,
         List<CLeaf> orderedArgs, bool reentrant = false)
     {
         RejectProgramLocalCrossBehaviourAccessor(accessor); // CW22
@@ -2695,7 +2717,7 @@ public abstract partial class HandlerBase
     /// its declaration-order twin). IInvocationOperation.Arguments is call-site-ordered for
     /// named args — pairing by textual index bound names positionally on every cross-dispatch
     /// path (VM-proven ref=54 vs usugar=45). Positional calls are unchanged (textual == ordinal).</summary>
-    protected List<CrossCallParameter> CrossCallArguments(
+    internal List<CrossCallParameter> CrossCallArguments(
         System.Collections.Immutable.ImmutableArray<IArgumentOperation> args, IMethodSymbol target,
         IReadOnlyList<string> paramIds)
     {
@@ -2730,7 +2752,7 @@ public abstract partial class HandlerBase
         return parameters;
     }
 
-    protected List<CrossCallParameter> CrossCallParameters(IMethodSymbol target,
+    internal List<CrossCallParameter> CrossCallParameters(IMethodSymbol target,
         IReadOnlyList<string> paramIds, IReadOnlyList<CLeaf> orderedArguments)
     {
         if (target == null) throw new ArgumentNullException(nameof(target));
@@ -2748,7 +2770,7 @@ public abstract partial class HandlerBase
         return parameters;
     }
 
-    protected (string exportName, string[] paramIds, string retId) GetCalleeLayout(IMethodSymbol target)
+    internal (string exportName, string[] paramIds, string retId) GetCalleeLayout(IMethodSymbol target)
     {
         // SS2B: a hoisted closure callee (generic LF specs included) resolves through the registry.
         if (target.MethodKind is MethodKind.LambdaMethod or MethodKind.LocalFunction
@@ -2787,7 +2809,7 @@ public abstract partial class HandlerBase
     }
 
     /// <summary>Get return slots for a callee method.</summary>
-    protected ReturnSlot[] GetCalleeReturns(IMethodSymbol target)
+    internal ReturnSlot[] GetCalleeReturns(IMethodSymbol target)
     {
         // SS2B: a hoisted closure callee (generic LF specs included) resolves through the registry.
         if (target.MethodKind is MethodKind.LambdaMethod or MethodKind.LocalFunction
@@ -2813,7 +2835,7 @@ public abstract partial class HandlerBase
     /// Returns the result CValue — this is an expression only, NOT emitted to the IR.
     /// For void calls (e.g. property setters), wrap with <c>EmitExprStmt()</c> to add to the IR.
     /// </summary>
-    protected CLeaf EmitCallToMethod(IMethodSymbol target, List<CLeaf> args, SyntaxNode callSite = null)
+    internal CLeaf EmitCallToMethod(IMethodSymbol target, List<CLeaf> args, SyntaxNode callSite = null)
     {
         CFunction func;
         // SS2B: non-generic hoisted closures resolve per-spec (ambient args) with throw-on-miss —
@@ -2858,7 +2880,7 @@ public abstract partial class HandlerBase
     /// Sound: <see cref="TypeClassifier.IsUserStruct"/> is false for every SDK/native/BCL type, so this can
     /// never fire on a legitimate extern call. The source location and operation kind are appended
     /// automatically by UasmEmitter.TagLocation (the statement/expression dispatch wraps every handler).</summary>
-    protected void GuardUserStructMemberReachedExtern(ITypeSymbol containingType, string memberName)
+    internal void GuardUserStructMemberReachedExtern(ITypeSymbol containingType, string memberName)
     {
         // CA-M1: the same armor covers a v1 class member (object[]-emulated) — a class instance member
         // that reached the extern path was not routed to its CFunction (collector-scope drift), which
@@ -2875,7 +2897,7 @@ public abstract partial class HandlerBase
     /// AND the dispatch is non-tail — pre-computed syntax-keyed by BuildRecursionInfo). When true,
     /// also registers the frame: ensures the recursion stack and accumulates the named frame fields,
     /// so InsertRecursionSpills wraps the flagged dispatch arms with the spill/reload.</summary>
-    protected bool MarkReentrantDispatch(IOperation dispatchOp)
+    internal bool MarkReentrantDispatch(IOperation dispatchOp)
     {
         var plan = CallableSitePlan.Delegate(dispatchOp?.Syntax, _ctx.RecursionContext.Info);
         RegisterCallableSiteSpill(plan);
@@ -2890,7 +2912,7 @@ public abstract partial class HandlerBase
     /// wraps the flagged SendCustomEvent — with the param copy-ins inside the window
     /// (CExternCall.PreSpillStmts), because a same-program reentrant callee shares the caller's param
     /// heap vars and a copy-in preceding the save would be captured post-clobber.</summary>
-    protected bool TryMarkReentrantCrossDispatch(IOperation site, IMethodSymbol staticCallee)
+    internal bool TryMarkReentrantCrossDispatch(IOperation site, IMethodSymbol staticCallee)
     {
         if (_currentMethod == null) return false;
         var callableSite = CallableSites.Require(site, staticCallee);

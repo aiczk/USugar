@@ -481,7 +481,7 @@ public class LayoutPlanner
     /// third-party program can bind it (C# accessibility) — private and private protected
     /// (<see cref="Accessibility.ProtectedAndInternal"/>). protected is NOT excluded (a derived class in
     /// another program can bind it). The single predicate shared by the planner's bridge loop and
-    /// HandlerBase.ResolveDelegateBridge's on-demand private arm so the two can never drift.</summary>
+    /// LoweringServices.ResolveDelegateBridge's on-demand private arm so the two can never drift.</summary>
     public static bool IsExcludedFromSpeculativeBridge(IMethodSymbol method)
         => method.DeclaredAccessibility is Accessibility.Private or Accessibility.ProtectedAndInternal;
 
@@ -729,7 +729,7 @@ public class LayoutPlanner
         // as a delegate). R-M2 (design §2): a private / private-protected method cannot be bound by a
         // third party (C# accessibility), so its speculative bridge has no reason to exist — exclude it.
         // A SAME-program private method-group binding registers its bridge on demand instead
-        // (HandlerBase.ResolveDelegateBridge's private arm). protected is kept (derived-class edges).
+        // (LoweringServices.ResolveDelegateBridge's private arm). protected is kept (derived-class edges).
         var delegateBridges = new Dictionary<IMethodSymbol, DelegateBridgeLayout>(SymbolEqualityComparer.Default);
         foreach (var (method, ml) in methods)
         {

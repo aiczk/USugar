@@ -223,7 +223,7 @@ public sealed class MulticastDelegateEmitter
         EmitMulticastFlattenOperand(xLeaf, fanoutName, out var lxSlot, out var lenLxSlot);
         EmitMulticastFlattenOperand(yLeaf, fanoutName, out var lySlot, out var lenLySlot);
 
-        var elementEquals = new InvocationHandler(_ctx);
+        var elementEquals = new InvocationHandler(new LoweringServices(_ctx));
 
         // LastContiguousMatch: search the candidate start index DOWNWARD from (lenLx-lenLy) to 0 — the
         // first full match found this way is the RIGHTMOST (= last) one, per Delegate.Remove semantics.
@@ -382,7 +382,7 @@ public sealed class MulticastDelegateEmitter
             _builder.EmitAssign(retSlot, InvocationHandler.DefaultConst(_builder, retType.Value));
         }
 
-        var dispatch = new InvocationHandler(_ctx);
+        var dispatch = new InvocationHandler(new LoweringServices(_ctx));
 
         // CW9/CW21 (2026-07-15): this is an EXPORTED entry — a direct SendCustomEvent (foreign
         // program or by-name) reaches it with the env global at its initial null, and the doc

@@ -3,7 +3,7 @@ using Microsoft.CodeAnalysis.Operations;
 
 public class NullableHandler : AssignmentHandlerBase, IExpressionHandler
 {
-    public NullableHandler(EmitContext ctx) : base(ctx) { }
+    public NullableHandler(LoweringServices lowering) : base(lowering) { }
 
     public OperationKind[] HandledKinds { get; } = new[]
     {
@@ -14,7 +14,7 @@ public class NullableHandler : AssignmentHandlerBase, IExpressionHandler
     {
         IConditionalAccessOperation op => VisitConditionalAccess(op),
         ICoalesceOperation op => VisitCoalesce(op),
-        IConditionalAccessInstanceOperation => _conditionalAccessStack.Peek(),
+        IConditionalAccessInstanceOperation => _lowering.ConditionalAccessStack.Peek(),
         ICoalesceAssignmentOperation op => VisitCoalesceAssignment(op),
         _ => throw new System.NotSupportedException(expression.GetType().Name),
     };
@@ -28,21 +28,21 @@ public class NullableHandler : AssignmentHandlerBase, IExpressionHandler
         // reference (design §2.6: `d?.Invoke()` null-guards the bundle leaf itself, so any
         // delegate-valued expression — field, local, param, element, call result — is a legal receiver).
         // The null check is type-agnostic (SystemObject), so no retype is needed.
-        CLeaf targetVal = VisitExpression(op.Operation);
+        CLeaf targetVal = _lowering.VisitExpression(op.Operation);
 
-        return NullableAbi.EmitConditionalAccess(_builder, targetVal, isVoid,
-            isVoid ? (StorageType?)null : GetStorageType(op.Type),
+        return NullableAbi.EmitConditionalAccess(_lowering.Builder, targetVal, isVoid,
+            isVoid ? (StorageType?)null : _lowering.GetStorageType(op.Type),
             target =>
         {
             // target is not null → evaluate WhenNotNull with target as the instance
-            _conditionalAccessStack.Push(target);
+            _lowering.ConditionalAccessStack.Push(target);
             try
             {
-                return VisitExpression(op.WhenNotNull);
+                return _lowering.VisitExpression(op.WhenNotNull);
             }
             finally
             {
-                _conditionalAccessStack.Pop();
+                _lowering.ConditionalAccessStack.Pop();
             }
         });
     }
@@ -50,27 +50,27 @@ public class NullableHandler : AssignmentHandlerBase, IExpressionHandler
     CLeaf VisitCoalesce(ICoalesceOperation op)
     {
         // a ?? b → var r = a; if (r == null) r = b;
-        var resultType = GetStorageTypeName(op.Type);
+        var resultType = _lowering.GetStorageTypeName(op.Type);
         // For an aggregate (struct/tuple) result both branches yield a boxed object[] that aliases the
         // nullable's internal storage; deep-clone so the copied-out value has independent value semantics.
         // When op.Type is the aggregate, the right side has the non-nullable aggregate type → always non-null,
         // and the non-null left is cloned in the else branch, so AggregateAbi.DeepClone never sees null.
-        var aggType = ResolveType(op.Type) as INamedTypeSymbol;
+        var aggType = _lowering.ResolveType(op.Type) as INamedTypeSymbol;
         bool aggResult = aggType != null && TypeClassifier.IsAggregateValue(aggType);
-        var leftVal = VisitExpression(op.Value);
+        var leftVal = _lowering.VisitExpression(op.Value);
         System.Func<CLeaf, CLeaf> presentValue = null;
         if (aggResult)
-            presentValue = present => AggregateAbi.DeepClone(_builder, present, aggType, _ctx.Aggregates.GetLayout);
+            presentValue = present => AggregateAbi.DeepClone(_lowering.Builder, present, aggType, _lowering.Context.Aggregates.GetLayout);
         // CW18: a small-underlying nullable left coalescing into a strict underlying-typed slot — the
         // present box may carry a plain-int tag (the drift the lifted-operator/pattern consumers already
         // tolerate), and the raw copy left a mistyped value that faults the next strict extern read.
         else if (EmitPolicy.IsNullableT(op.Value.Type, out _) && ExternResolver.IsSmallIntOrChar(resultType))
-            presentValue = present => RetagSmallNullablePresent(present, op.Type);
-        return NullableAbi.EmitCoalesce(_builder, leftVal, new StorageType(resultType),
+            presentValue = present => _lowering.RetagSmallNullablePresent(present, op.Type);
+        return NullableAbi.EmitCoalesce(_lowering.Builder, leftVal, new StorageType(resultType),
             () =>
             {
-                var rightVal = VisitExpression(op.WhenNull);
-                return aggResult ? AggregateAbi.DeepClone(_builder, rightVal, aggType, _ctx.Aggregates.GetLayout) : rightVal;
+                var rightVal = _lowering.VisitExpression(op.WhenNull);
+                return aggResult ? AggregateAbi.DeepClone(_lowering.Builder, rightVal, aggType, _lowering.Context.Aggregates.GetLayout) : rightVal;
             },
             presentValue);
     }
@@ -83,11 +83,11 @@ public class NullableHandler : AssignmentHandlerBase, IExpressionHandler
         // once — re-used for the null check — and EmitWriteBack stores exactly like a plain `x = expr` for every
         // lvalue form. The old inline if/else-if chain silently dropped cross-behaviour field/property and
         // aggregate-member (tuple/struct) write-backs and built a bogus __set_X extern for user auto-properties.
-        RejectUnsafeCrossProgramDelegateWrite(op.Target, _ctx.Boundary.ClassifyValue(op.Value));
+        _lowering.RejectUnsafeCrossProgramDelegateWrite(op.Target, _lowering.Context.Boundary.ClassifyValue(op.Value));
         var lv = PrepareLValue(op.Target);
-        var targetType = GetStorageTypeName(op.Target.Type);
-        return NullableAbi.EmitCoalesceAssignment(_builder, lv.Value, new StorageType(targetType),
-            () => VisitExpression(op.Value),
+        var targetType = _lowering.GetStorageTypeName(op.Target.Type);
+        return NullableAbi.EmitCoalesceAssignment(_lowering.Builder, lv.Value, new StorageType(targetType),
+            () => _lowering.VisitExpression(op.Value),
             rightVal => lv.Write(rightVal));
     }
 }

@@ -13,7 +13,7 @@ using Microsoft.CodeAnalysis;
 // - Read/Write: captured-variable access through SystemObjectArray __Get/__Set on the owning
 //   scope's env. The supported value-type matrix is pinned by the typed __Get runtime probe: each
 //   boxed value can be read into its matching typed destination.
-// Static + stateless: all state lives on EmitContext, so HandlerBase-derived handlers and
+// Static + stateless: all state lives on EmitContext, so composed lowering handlers and
 // UasmEmitter's method-entry hook share one implementation.
 // (C# 9.0 only — Unity compiles Editor/ at the 2022.3 language level.)
 // ============================================================================
