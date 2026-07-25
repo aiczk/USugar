@@ -24,7 +24,7 @@ static class UdonAbiCatalogFactory
             .Select(definition => CreatePrototype(definition, typeFacts))
             .ToArray();
         return new UdonAbiCatalog(
-            prototypes, typeFacts.Snapshot(), typeFacts.AssignabilitySnapshot());
+            prototypes, typeFacts.Snapshot());
     }
 
     static UdonExternPrototype CreatePrototype(UdonNodeDefinition definition,

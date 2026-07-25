@@ -173,7 +173,6 @@ public sealed class UdonAbiCatalog
 
     readonly Dictionary<string, UdonExternPrototype> _externs;
     readonly KeyValuePair<string, UdonTypeFactRegistry.TypeFact>[] _typeFacts;
-    readonly UdonTypeFactRegistry.AssignabilityFact[] _assignabilityFacts;
 
     public UdonAbiCatalog(IEnumerable<UdonExternPrototype> prototypes)
         : this(prototypes, null)
@@ -181,8 +180,7 @@ public sealed class UdonAbiCatalog
     }
 
     internal UdonAbiCatalog(IEnumerable<UdonExternPrototype> prototypes,
-        IEnumerable<KeyValuePair<string, UdonTypeFactRegistry.TypeFact>> typeFacts,
-        IEnumerable<UdonTypeFactRegistry.AssignabilityFact> assignabilityFacts = null)
+        IEnumerable<KeyValuePair<string, UdonTypeFactRegistry.TypeFact>> typeFacts)
     {
         if (prototypes == null) throw new ArgumentNullException(nameof(prototypes));
         _externs = new Dictionary<string, UdonExternPrototype>(StringComparer.Ordinal);
@@ -195,8 +193,6 @@ public sealed class UdonAbiCatalog
         }
         _typeFacts = typeFacts?.ToArray()
             ?? Array.Empty<KeyValuePair<string, UdonTypeFactRegistry.TypeFact>>();
-        _assignabilityFacts = assignabilityFacts?.ToArray()
-            ?? Array.Empty<UdonTypeFactRegistry.AssignabilityFact>();
     }
 
     internal static UdonAbiCatalog FromNamesForTests(IEnumerable<string> externNames)
@@ -232,8 +228,7 @@ public sealed class UdonAbiCatalog
     internal void SeedTypeFacts(UdonTypeFactRegistry target)
     {
         if (target == null) throw new ArgumentNullException(nameof(target));
-        target.Import(
-            _typeFacts, _assignabilityFacts, "installed SDK ABI catalog");
+        target.Import(_typeFacts, "installed SDK ABI catalog");
     }
 }
 

@@ -4,10 +4,9 @@ using System.Collections.Generic;
 using System.Linq;
 using Microsoft.CodeAnalysis;
 
-/// <summary>Representation categories and directed assignability facts recorded at the two
-/// authoritative boundaries where Udon type names enter a compilation: Roslyn source symbols and
-/// installed-SDK CLR operand types. <see cref="RawCopyCompatibility"/> uses the category facts;
-/// extern operand verification uses the inheritance facts. Unknown names are rejected rather than
+/// <summary>Representation categories recorded at the two authoritative boundaries where Udon type
+/// names enter a compilation: Roslyn source symbols and installed-SDK CLR operand types.
+/// <see cref="RawCopyCompatibility"/> consumes them. Unknown names are rejected rather than
 /// classified by naming heuristics.</summary>
 public sealed class UdonTypeFactRegistry
 {
@@ -21,39 +20,10 @@ public sealed class UdonTypeFactRegistry
         public override int GetHashCode() => (IsEnum ? 1 : 0) | (IsValueType ? 2 : 0);
     }
 
-    public readonly struct AssignabilityFact : IEquatable<AssignabilityFact>
-    {
-        public readonly string From;
-        public readonly string To;
-
-        public AssignabilityFact(string from, string to)
-        {
-            From = from ?? throw new ArgumentNullException(nameof(from));
-            To = to ?? throw new ArgumentNullException(nameof(to));
-        }
-
-        public bool Equals(AssignabilityFact other)
-            => string.Equals(From, other.From, StringComparison.Ordinal)
-               && string.Equals(To, other.To, StringComparison.Ordinal);
-        public override bool Equals(object obj)
-            => obj is AssignabilityFact other && Equals(other);
-        public override int GetHashCode()
-        {
-            unchecked
-            {
-                return StringComparer.Ordinal.GetHashCode(From) * 397
-                       ^ StringComparer.Ordinal.GetHashCode(To);
-            }
-        }
-    }
 
     // Values are deterministic per name (Udon storage name ↔ representation category is 1:1), so
     // installed-SDK seeding and concurrent source-minting races during Phase-2 emit are benign.
     readonly ConcurrentDictionary<string, TypeFact> _facts = new(StringComparer.Ordinal);
-    readonly ConcurrentDictionary<AssignabilityFact, byte> _assignability = new();
-    readonly ConcurrentDictionary<Type, byte> _recordedClrHierarchy = new();
-    readonly ConcurrentDictionary<ITypeSymbol, byte> _recordedSymbolHierarchy
-        = new(SymbolEqualityComparer.Default);
 
     /// <summary>Record the minted name's facts. Names covered by a STRUCTURAL rule (primitives, arrays,
     /// the fold tags) are skipped: a folded name's runtime representation is fixed by the fold itself,
@@ -65,7 +35,6 @@ public sealed class UdonTypeFactRegistry
         Record(udonName,
             new TypeFact(symbol.TypeKind == TypeKind.Enum, symbol.IsValueType),
             symbol.ToDisplayString());
-        RecordAssignability(udonName, symbol);
     }
 
     /// <summary>Record an installed-SDK CLR type before the editor boundary erases it to an Udon
@@ -80,25 +49,17 @@ public sealed class UdonTypeFactRegistry
         Record(udonName,
             new TypeFact(type.IsEnum, type.IsValueType),
             type.FullName ?? type.Name);
-        RecordAssignability(udonName, type);
     }
 
-    internal void Import(IEnumerable<KeyValuePair<string, TypeFact>> facts,
-        IEnumerable<AssignabilityFact> assignability, string source)
+    internal void Import(IEnumerable<KeyValuePair<string, TypeFact>> facts, string source)
     {
-        if (facts != null)
-            foreach (var pair in facts)
-                Record(pair.Key, pair.Value, source);
-        if (assignability != null)
-            foreach (var relation in assignability)
-                RecordAssignable(relation.From, relation.To);
+        if (facts == null) return;
+        foreach (var pair in facts)
+            Record(pair.Key, pair.Value, source);
     }
 
     internal KeyValuePair<string, TypeFact>[] Snapshot()
         => _facts.ToArray();
-
-    internal AssignabilityFact[] AssignabilitySnapshot()
-        => _assignability.Keys.ToArray();
 
     void Record(string udonName, TypeFact requested, string source)
     {
@@ -123,9 +84,6 @@ public sealed class UdonTypeFactRegistry
     internal void RecordForTest(string udonName, bool isEnum, bool isValueType)
         => _facts[udonName] = new TypeFact(isEnum, isValueType);
 
-    internal void RecordAssignableForTest(string from, string to)
-        => RecordAssignable(from, to);
-
     /// <summary>FACT: is the name an enum tag (Int32-compatible)? true/false when known, null when the
     /// neither authoritative boundary supplied it — an unknown name is exactly what the relaxed check
     /// would otherwise have to guess about.</summary>
@@ -146,89 +104,11 @@ public sealed class UdonTypeFactRegistry
         return _facts.TryGetValue(udonName, out var f) ? !f.IsValueType : (bool?)null;
     }
 
-    /// <summary>FACT: can a value represented by <paramref name="from"/> be read as
-    /// <paramref name="to"/> by an ordinary typed extern wrapper? Unlike raw Udon COPY
-    /// compatibility this relation is directional. Source inheritance is retained only while the
-    /// Udon tag preserves CLR identity; folded tags use representation-specific relations below.</summary>
-    public bool? IsAssignableFact(string from, string to)
-    {
-        if (from == to) return true;
-        if (IsRepresentationAssignable(from, to)) return true;
-        if (_assignability.ContainsKey(new AssignabilityFact(from, to))) return true;
 
-        var fromReference = IsReferenceFact(from);
-        var toReference = IsReferenceFact(to);
-        if (fromReference == null || toReference == null) return null;
-        return false;
-    }
 
-    void RecordAssignability(string from, ITypeSymbol type)
-    {
-        // A user aggregate/delegate/nullable/enum/behaviour can retain source inheritance while its
-        // runtime value has become object[], object, Int32, or UdonBehaviour. Recording that source
-        // graph against the folded tag would union false capabilities into every value sharing it.
-        if (!ExternResolver.IsRuntimeDistinguishable(type, null)) return;
-        if (!_recordedSymbolHierarchy.TryAdd(type, 0)) return;
-        for (var current = type.BaseType; current != null; current = current.BaseType)
-            RecordAssignable(from, ExternResolver.GetUdonTypeName(current));
-        foreach (var implemented in type.AllInterfaces)
-            RecordAssignable(from, ExternResolver.GetUdonTypeName(implemented));
-    }
 
-    void RecordAssignability(string from, Type type)
-    {
-        // SDK CLR types are normally identity-preserving. The few compiler/SDK fold tags are
-        // representation authorities instead and must not inherit capabilities from whichever CLR
-        // type happened to mint the shared name first.
-        if (UsesFoldedRepresentation(from)) return;
-        if (!_recordedClrHierarchy.TryAdd(type, 0)) return;
-        for (var current = type.BaseType; current != null; current = current.BaseType)
-            RecordAssignable(from, ExternResolver.GetUdonTypeName(current));
-        foreach (var implemented in type.GetInterfaces())
-            RecordAssignable(from, ExternResolver.GetUdonTypeName(implemented));
-    }
 
-    void RecordAssignable(string from, string to)
-    {
-        if (string.IsNullOrEmpty(from) || string.IsNullOrEmpty(to) || from == to) return;
-        _assignability.TryAdd(new AssignabilityFact(from, to), 0);
-    }
 
-    static bool UsesFoldedRepresentation(string name)
-        => name == "SystemObject"
-           || name == "SystemObjectArray"
-           || name == "UnityEngineComponentArray"
-           || name == "VRCUdonCommonInterfacesIUdonEventReceiver"
-           || name == "VRCUdonUdonBehaviour";
-
-    static bool IsRepresentationAssignable(string from, string to)
-    {
-        if (from == "VRCUdonUdonBehaviour"
-            && to == "VRCUdonCommonInterfacesIUdonEventReceiver")
-            return true;
-
-        if (from == "VRCUdonCommonInterfacesIUdonEventReceiver"
-            || from == "VRCUdonUdonBehaviour")
-        {
-            switch (to)
-            {
-                // IUdonEventReceiver inherits this interface. The SDK's
-                // Get/SetProgramVariable wrappers read their receiver through it.
-                case "VRCUdonCommonInterfacesIUdonProgramVariableAccessTarget":
-                case "UnityEngineMonoBehaviour":
-                case "UnityEngineBehaviour":
-                case "UnityEngineComponent":
-                case "UnityEngineObject":
-                    return true;
-            }
-        }
-
-        // Every emitted "...Array" value is a real CLR array even when many source types fold onto
-        // one tag (object[] aggregate/delegate bundles and Component[] behaviour arrays included).
-        return from != null
-               && from.EndsWith("Array", StringComparison.Ordinal)
-               && to == "SystemArray";
-    }
 
     static bool? StructuralIsReference(string name)
     {

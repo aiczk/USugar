@@ -119,39 +119,6 @@ public class UdonAbiPrototypeTests
         Assert.Contains("already bound to 'SystemInt32'", error.Message);
     }
 
-    [Theory]
-    [InlineData("UnityEngineComponent", "UnityEngineUIImage")]
-    [InlineData("UnityEngineComponent", "UnityEngineTransform")]
-    [InlineData("UnityEngineObject", "VRCUdonCommonInterfacesIUdonEventReceiver")]
-    public void CompilationSessionSeedsSdkDirectedAssignabilityForExternOperands(
-        string expected, string actual)
-    {
-        var signature = $"Example.__Accept__{expected}__SystemVoid";
-        var sdkFacts = new UdonTypeFactRegistry();
-        sdkFacts.RecordForTest(expected, isEnum: false, isValueType: false);
-        sdkFacts.RecordAssignableForTest(actual, expected);
-        var catalog = new UdonAbiCatalog(new[]
-        {
-            new UdonExternPrototype(signature, new[]
-            {
-                Param("value", expected, UdonAbiParameterMode.In),
-            }),
-        }, sdkFacts.Snapshot(), sdkFacts.AssignabilitySnapshot());
-        var compilation = CSharpCompilation.Create(
-            "SdkFactSeed",
-            options: new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
-        var session = new CompilationSession(compilation, catalog);
-        session.TypeFacts.RecordForTest(actual, isEnum: false, isValueType: false);
-        var call = new CExternCall(
-            catalog.Require(UdonAbiKey.Method(
-                "Example", "Accept", new[] { expected }, "SystemVoid")),
-            new List<CLeaf> { new CConst(null, new StorageType(actual)) },
-            StorageTypes.Void);
-
-        Assert.True(session.TypeFacts.IsReferenceFact(expected));
-        UdonAbiVerifier.VerifyInvocation(call, session.TypeFacts, "reference_operand");
-    }
-
     /// <summary>UdonHeap.SetHeapVariable re-boxes its destination and GetHeapVariable falls back to
     /// an `is T` test on the stored value, so a declared operand type is not a necessary condition in
     /// either direction. These four shapes all appear in real projects; requiring declared-type
@@ -240,7 +207,6 @@ public class UdonAbiPrototypeTests
         var facts = new UdonTypeFactRegistry();
         facts.RecordForTest("DerivedReference", isEnum: false, isValueType: false);
         facts.RecordForTest("BaseReference", isEnum: false, isValueType: false);
-        facts.RecordAssignableForTest("DerivedReference", "BaseReference");
 
         var error = Assert.Throws<VerificationException>(
             () => UdonAbiVerifier.VerifyInvocation(call, facts, "generic_pair"));
@@ -265,7 +231,6 @@ public class UdonAbiPrototypeTests
         var facts = new UdonTypeFactRegistry();
         facts.RecordForTest("UnityEngineComponent", isEnum: false, isValueType: false);
         facts.RecordForTest("UnityEngineTransform", isEnum: false, isValueType: false);
-        facts.RecordAssignableForTest("UnityEngineTransform", "UnityEngineComponent");
 
         var unsafeCall = new CExternCall(bound, new List<CLeaf>
         {
@@ -374,25 +339,6 @@ public class UdonAbiPrototypeTests
     }
 
     [Fact]
-    public void FoldedUdonBehaviourUsesOnlyItsRepresentationHierarchy()
-    {
-        var facts = new UdonTypeFactRegistry();
-
-        Assert.True(facts.IsAssignableFact(
-            "VRCUdonUdonBehaviour",
-            "VRCUdonCommonInterfacesIUdonEventReceiver"));
-        Assert.True(facts.IsAssignableFact(
-            "VRCUdonCommonInterfacesIUdonEventReceiver",
-            "VRCUdonCommonInterfacesIUdonProgramVariableAccessTarget"));
-        Assert.True(facts.IsAssignableFact(
-            "VRCUdonCommonInterfacesIUdonEventReceiver",
-            "UnityEngineComponent"));
-        Assert.Null(facts.IsAssignableFact(
-            "VRCUdonCommonInterfacesIUdonEventReceiver",
-            "UnrelatedSourceInterface"));
-    }
-
-    [Fact]
     public void ClrSdkFactsPreserveReferenceValueAndEnumCategories()
     {
         var facts = new UdonTypeFactRegistry();
@@ -404,45 +350,6 @@ public class UdonAbiPrototypeTests
         Assert.True(facts.IsReferenceFact("SdkReference"));
         Assert.False(facts.IsReferenceFact("SdkValue"));
         Assert.True(facts.IsEnumFact("SdkEnum"));
-    }
-
-    [Fact]
-    public void ClrSdkFactsPreserveDirectedInheritance()
-    {
-        var facts = new UdonTypeFactRegistry();
-        facts.Record("SystemIOFileStream", typeof(System.IO.FileStream));
-        facts.Record("SystemIOStream", typeof(System.IO.Stream));
-
-        Assert.True(facts.IsAssignableFact("SystemIOFileStream", "SystemIOStream"));
-        Assert.False(facts.IsAssignableFact("SystemIOStream", "SystemIOFileStream"));
-    }
-
-    [Fact]
-    public void FoldedSourceTypeDoesNotLeakItsSourceInterfaces()
-    {
-        var tree = CSharpSyntaxTree.ParseText(@"
-interface IFolded { }
-struct Folded : IFolded { }");
-        var compilation = CSharpCompilation.Create(
-            "FoldedFacts",
-            new[] { tree },
-            new[] { MetadataReference.CreateFromFile(typeof(object).Assembly.Location) },
-            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
-        var folded = compilation.GetTypeByMetadataName("Folded");
-        var foldedInterface = compilation.GetTypeByMetadataName("IFolded");
-        var foldedTag = ExternResolver.GetUdonTypeName(folded);
-        var interfaceTag = ExternResolver.GetUdonTypeName(foldedInterface);
-        var facts = new UdonTypeFactRegistry();
-
-        facts.Record(foldedTag, folded);
-
-        Assert.Equal("SystemObjectArray", foldedTag);
-        Assert.Equal("VRCUdonCommonInterfacesIUdonEventReceiver", interfaceTag);
-        Assert.False(facts.IsAssignableFact(foldedTag, interfaceTag));
-        Assert.True(facts.IsAssignableFact(foldedTag, "SystemArray"));
-        Assert.DoesNotContain(
-            facts.AssignabilitySnapshot(),
-            relation => relation.From == foldedTag && relation.To == interfaceTag);
     }
 
     static UdonAbiCatalog Catalog(string signature, params UdonAbiParameter[] parameters)
