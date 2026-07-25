@@ -13,10 +13,6 @@ public static class UdonAbiVerifier
         var prototype = call.Sig.Prototype
             ?? throw new VerificationException(
                 $"Extern '{call.Sig}' has no SDK ABI prototype (function '{functionName}').");
-        if (!string.Equals(prototype.RegisteredName, call.Sig.Text, StringComparison.Ordinal))
-            throw new VerificationException(
-                $"Bound extern name '{call.Sig}' disagrees with prototype "
-                + $"'{prototype.RegisteredName}' (function '{functionName}').");
 
         // Name-only registry fixtures are deliberately confined to the test
         // assembly. Production prototypes are always typed.

@@ -244,15 +244,15 @@ public sealed class UdonAbiCatalog
     }
 
     public bool Contains(UdonAbiKey key)
-        => _externs.ContainsKey(UdonAbiNameSerializer.Serialize(key).Text);
+        => _externs.ContainsKey(key.ToRegistryName());
 
     public BoundExtern Require(UdonAbiKey key)
     {
-        var signature = UdonAbiNameSerializer.Serialize(key);
-        if (!_externs.TryGetValue(signature.Text, out var prototype))
+        var registryName = key.ToRegistryName();
+        if (!_externs.TryGetValue(registryName, out var prototype))
             throw new NotSupportedException(
-                $"Udon extern '{signature.Text}' is not registered by the installed SDK.");
-        return new BoundExtern(key, signature, prototype);
+                $"Udon extern '{registryName}' is not registered by the installed SDK.");
+        return new BoundExtern(key, prototype);
     }
 
     public IReadOnlyCollection<string> ExternNames => _externs.Keys;
@@ -271,22 +271,22 @@ public sealed class UdonAbiCatalog
 public sealed class BoundExtern : IEquatable<BoundExtern>
 {
     public UdonAbiKey Key { get; }
-    public ExternSignature Signature { get; }
     public UdonExternPrototype Prototype { get; }
-    public string Text => Signature.Text;
 
-    internal BoundExtern(UdonAbiKey key, ExternSignature signature,
-        UdonExternPrototype prototype)
+    /// <summary>The serialized registry name, which is the prototype's own: the catalog
+    /// dictionary is keyed on it, so it is the string that matched this key.</summary>
+    public string Text => Prototype.RegisteredName;
+
+    internal BoundExtern(UdonAbiKey key, UdonExternPrototype prototype)
     {
         Key = key;
-        Signature = signature;
         Prototype = prototype ?? throw new ArgumentNullException(nameof(prototype));
     }
 
     public bool Equals(BoundExtern other)
-        => other != null && Signature.Equals(other.Signature);
+        => other != null && string.Equals(Text, other.Text, StringComparison.Ordinal);
     public override bool Equals(object obj) => Equals(obj as BoundExtern);
-    public override int GetHashCode() => Signature.GetHashCode();
+    public override int GetHashCode() => StringComparer.Ordinal.GetHashCode(Text);
     public override string ToString() => Text;
 
     public static bool operator ==(BoundExtern left, BoundExtern right)

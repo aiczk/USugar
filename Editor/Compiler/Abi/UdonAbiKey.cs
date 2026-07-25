@@ -3,37 +3,10 @@ using System.Collections.Generic;
 using System.Linq;
 
 /// <summary>
-/// Serialized SDK registry name carried only after a semantic
-/// <see cref="UdonAbiKey"/> has been bound against the installed ABI.
-/// </summary>
-public readonly struct ExternSignature : IEquatable<ExternSignature>
-{
-    public readonly string Text;
-
-    internal ExternSignature(string text)
-        => Text = !string.IsNullOrEmpty(text)
-            ? text
-            : throw new ArgumentException(
-                "An extern signature is required.", nameof(text));
-
-    public bool Equals(ExternSignature other)
-        => string.Equals(Text, other.Text, StringComparison.Ordinal);
-    public override bool Equals(object obj)
-        => obj is ExternSignature other && Equals(other);
-    public override int GetHashCode()
-        => StringComparer.Ordinal.GetHashCode(Text ?? "");
-    public override string ToString() => Text;
-
-    public static bool operator ==(ExternSignature left, ExternSignature right)
-        => left.Equals(right);
-    public static bool operator !=(ExternSignature left, ExternSignature right)
-        => !left.Equals(right);
-}
-
-/// <summary>
 /// Semantic identity of one Udon extern. Compiler code constructs keys from an
-/// owner, member, ordered parameter types, and optional result type; it never
-/// assembles the SDK's punctuation-based registry protocol itself.
+/// owner, member, ordered parameter types, and optional result type; the SDK's
+/// punctuation-based registry protocol is assembled only by
+/// <see cref="ToRegistryName"/>.
 /// </summary>
 public readonly struct UdonAbiKey : IEquatable<UdonAbiKey>
 {
@@ -142,29 +115,24 @@ public readonly struct UdonAbiKey : IEquatable<UdonAbiKey>
         }
     }
 
-    public override string ToString() => UdonAbiNameSerializer.Serialize(this).Text;
+    /// <summary>The sole encoder for the SDK extern registry-name protocol.</summary>
+    internal string ToRegistryName()
+    {
+        if (string.IsNullOrEmpty(Owner) || string.IsNullOrEmpty(Member))
+            throw new InvalidOperationException(
+                "A default UdonAbiKey cannot be serialized.");
+        var text = Owner + ".__" + Member;
+        if (ParameterTypes.Count > 0 || HasExplicitParameterList)
+            text += "__" + string.Join("_", ParameterTypes);
+        if (HasResult)
+            text += "__" + ResultType;
+        return text;
+    }
+
+    public override string ToString() => ToRegistryName();
 
     public static bool operator ==(UdonAbiKey left, UdonAbiKey right) => left.Equals(right);
     public static bool operator !=(UdonAbiKey left, UdonAbiKey right) => !left.Equals(right);
-}
-
-/// <summary>
-/// The sole encoder for the SDK extern registry-name protocol.
-/// </summary>
-internal static class UdonAbiNameSerializer
-{
-    public static ExternSignature Serialize(UdonAbiKey key)
-    {
-        if (string.IsNullOrEmpty(key.Owner) || string.IsNullOrEmpty(key.Member))
-            throw new InvalidOperationException(
-                "A default UdonAbiKey cannot be serialized.");
-        var text = key.Owner + ".__" + key.Member;
-        if (key.ParameterTypes.Count > 0 || key.HasExplicitParameterList)
-            text += "__" + string.Join("_", key.ParameterTypes);
-        if (key.HasResult)
-            text += "__" + key.ResultType;
-        return new ExternSignature(text);
-    }
 }
 
 /// <summary>Common VM primitives used by lowering and IR normalization.</summary>
