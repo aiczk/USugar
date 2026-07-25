@@ -13,9 +13,11 @@ internal static class ClassAbiPolicy
     }
 
     public static void ValidateRuntimeTypeTest(ITypeSymbol resolvedTarget,
-        IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> map)
+        IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> map,
+        UdonTypeSystem types)
     {
-        if (ExternResolver.IsRuntimeDistinguishable(resolvedTarget, map)) return;
+        if (types == null) throw new ArgumentNullException(nameof(types));
+        if (types.IsRuntimeDistinguishable(resolvedTarget, map)) return;
         ClassAbi.RejectRuntimeTypeTest(resolvedTarget);
         var display = resolvedTarget.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat);
         var hint = resolvedTarget is INamedTypeSymbol named && named.DelegateInvokeMethod != null

@@ -42,6 +42,25 @@ public abstract partial class HandlerBase
     protected CLeaf EmitPatternCheck(CLeaf value, ITypeSymbol valueType, IPatternOperation pattern)
         => _ctx.EmitPatternCheck(value, valueType, pattern);
 
+    /// <summary>
+    /// Udon array constructors consume an Int32 length even though C# accepts every integral array
+    /// dimension type. Normalize at the allocation choke so UInt32/Int64/etc. never reach the wrapper
+    /// in a differently typed strongbox.
+    /// </summary>
+    protected CLeaf EmitArrayDimension(IOperation dimension)
+    {
+        var value = VisitExpression(dimension);
+        var sourceType = value.Type.Name;
+        if (sourceType == StorageTypes.Int32.Name) return value;
+        if (ExternResolver.IntInfo(sourceType).rank == 0)
+            throw new NotSupportedException(
+                $"Array dimension type '{sourceType}' has no integral Udon representation.");
+        return ExternCall(
+            UdonAbi.Convert(sourceType, StorageTypes.Int32.Name),
+            new List<CLeaf> { value },
+            StorageTypes.Int32);
+    }
+
     // A `checked` context asks the runtime to trap integer overflow, but the Udon VM has no overflow
     // trap — the arithmetic silently wraps where C# would throw OverflowException. `unchecked`/default
     // wrapping IS USugar's behavior (C#-correct), so only an explicit `checked` (IsChecked==true) rejects.
@@ -62,6 +81,8 @@ public abstract partial class HandlerBase
     protected TypeClassifierContext TypeCtx => new TypeClassifierContext(_ctx.Generics.TypeParamMap);
     protected ITypeSymbol ResolveType(ITypeSymbol type)
         => TypeEnvironment.CloseType(_compilation, type, _ctx.Generics.TypeParamMap);
+    protected bool IsUserEnum(ITypeSymbol type)
+        => _ctx.Session.Types.IsUserEnum(type);
     protected string GetArrayType(IArrayTypeSymbol arrType) => GetStorageTypeName(arrType);
     protected string GetArrayElemType(IArrayTypeSymbol arrType)
     {
@@ -141,7 +162,8 @@ public abstract partial class HandlerBase
             }, null);
             return SlotRef(guarded);
         }
-        ClassAbiPolicy.ValidateRuntimeTypeTest(ResolveType(targetType), _ctx.Generics.TypeParamMap);
+        ClassAbiPolicy.ValidateRuntimeTypeTest(
+            ResolveType(targetType), _ctx.Generics.TypeParamMap, _ctx.Session.Types);
         // The type token is baked through the shared choke point (B51 silent-class armor: an unresolved
         // type parameter would bake a null System.Type constant no validator catches → loud reject there).
         return ExternCall(
@@ -1621,7 +1643,7 @@ public abstract partial class HandlerBase
     protected INamedTypeSymbol RegisterEnumToStringDemand(ITypeSymbol type, bool rejectFlags = true)
     {
         var resolved = ResolveType(type);
-        if (!ExternResolver.IsUserEnum(resolved) || resolved is not INamedTypeSymbol e)
+        if (!IsUserEnum(resolved) || resolved is not INamedTypeSymbol e)
             return null;
         if (e.GetAttributes().Any(a => a.AttributeClass?.Name == "FlagsAttribute"))
         {

@@ -85,4 +85,19 @@ public static class USugarCompiler
         File.WriteAllLines(outputPath, header.Concat(rows));
         USugarLog.Info($"Dumped {rows.Length} event node definitions → {outputPath}");
     }
+
+    [MenuItem("USugar/Diagnostics/Dump SDK ABI Registry")]
+    public static void DumpAbiRegistry()
+    {
+        var catalog = UdonAbiCatalogFactory.Create(
+            UdonEditorManager.Instance.GetNodeDefinitions());
+        var lines = UdonAbiSnapshotCodec.Encode(catalog);
+        var outputPath =
+            "Assets/USugar/Editor~/Tests/Fixtures/udon_abi_registry.tsv";
+        Directory.CreateDirectory(Path.GetDirectoryName(outputPath));
+        File.WriteAllLines(outputPath, lines);
+        AssetDatabase.Refresh();
+        USugarLog.Info(
+            $"Dumped {catalog.ExternNames.Count} typed extern node definitions to {outputPath}");
+    }
 }

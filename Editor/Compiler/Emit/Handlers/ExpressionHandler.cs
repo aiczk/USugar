@@ -450,7 +450,7 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
                 destinationEnum = null;
 
             if (sourceEnum != null
-                && !ExternResolver.IsUserEnum(sourceEnum)
+                && !IsUserEnum(sourceEnum)
                 && ExternResolver.IsConvertibleNumericType(closedDestination)
                 && ExternResolver.GetConvertMethodName(closedDestination) is { } enumConvert)
             {
@@ -464,7 +464,7 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
 
             var numericSource = sourceEnum?.EnumUnderlyingType ?? effectiveSource;
             var numericDestination = destinationEnum?.EnumUnderlyingType ?? closedDestination;
-            if ((destinationEnum == null || ExternResolver.IsUserEnum(destinationEnum))
+            if ((destinationEnum == null || IsUserEnum(destinationEnum))
                 && ExternResolver.IsConvertibleNumericType(numericSource)
                 && ExternResolver.IsConvertibleNumericType(numericDestination))
             {
@@ -696,8 +696,8 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
         // plain-int-tagged box inside a small-underlying E? — the drifted box whose strict accessor reads
         // HeapTypeMismatch-fault the VM. SDK enums keep their own registered Udon tag and stay on the
         // enum↔numeric arm below.
-        static ITypeSymbol NumericFacet(ITypeSymbol t)
-            => t is INamedTypeSymbol en && ExternResolver.IsUserEnum(en) ? en.EnumUnderlyingType : t;
+        ITypeSymbol NumericFacet(ITypeSymbol t)
+            => t is INamedTypeSymbol en && IsUserEnum(en) ? en.EnumUnderlyingType : t;
         var liftedDstU = EmitPolicy.IsNullableT(conv.Type, out var dstNblU) ? dstNblU : conv.Type;
         var liftedDstN = liftedDstU == null ? null : NumericFacet(liftedDstU);
         if (conv.Conversion.IsNullable
@@ -897,7 +897,8 @@ public class ExpressionHandler : HandlerBase, IExpressionHandler
             && arr.Rank == 1
             && arr.ElementType.SpecialType == SpecialType.System_Object;
         if (!stockObjectArray
-            && !ExternResolver.IsRuntimeDistinguishable(operand, _ctx.Generics.TypeParamMap)
+            && !_ctx.Session.Types.IsRuntimeDistinguishable(
+                operand, _ctx.Generics.TypeParamMap)
             && !IsDirectComponentQueryArgument(typeOf))
             throw new NotSupportedException(
                 $"typeof('{(ResolveType(operand) ?? operand).ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}') "

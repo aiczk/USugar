@@ -60,4 +60,29 @@ public class PlannedB : UdonSharp.UdonSharpBehaviour, IPlanned { public int Read
         Assert.Equal(plannedCount, planner.AllLayouts.Count);
         Assert.True(planner.IsFrozen);
     }
+
+    [Fact]
+    public void FrozenPlanner_RejectsEveryInterfaceFactWriter()
+    {
+        var tree = CSharpSyntaxTree.ParseText(TestHelper.StubSource + @"
+public interface IFrozenFact { }
+");
+        var compilation = CSharpCompilation.Create("PlannerFreezeWriters", new[] { tree },
+            TestHelper.StandardRefs,
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+        var iface = compilation.GetTypeByMetadataName("IFrozenFact");
+        var planner = new LayoutPlanner(compilation);
+        planner.Freeze();
+
+        var structError = Assert.Throws<InvalidOperationException>(
+            () => planner.RegisterStructImplementedInterface(iface));
+        var classError = Assert.Throws<InvalidOperationException>(
+            () => planner.RegisterClassImplementedInterface(iface, isBehaviour: false));
+        var behaviourError = Assert.Throws<InvalidOperationException>(
+            () => planner.RegisterClassImplementedInterface(iface, isBehaviour: true));
+
+        Assert.Contains("frozen", structError.Message);
+        Assert.Contains("frozen", classError.Message);
+        Assert.Contains("frozen", behaviourError.Message);
+    }
 }

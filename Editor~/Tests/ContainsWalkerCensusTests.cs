@@ -184,14 +184,12 @@ public class WalkerCensusCarrier
         Assert.Equal(RuntimeBundleKind.Class, cls.Bundle);
         Assert.True(cls.IsBundle);
         Assert.True(cls.Supports(TransportCapabilities.TypedProgramChannel));
-        Assert.True(cls.Supports(TransportCapabilities.DelegateEnvironment));
         Assert.False(cls.Supports(TransportCapabilities.ExternCall));
         Assert.True(cls.ContainsUserClassPayload);
 
         var aggregate = TypeClassifier.ShapeOf(types["cTup"], ctx);
         Assert.Equal(RuntimeBundleKind.Aggregate, aggregate.Bundle);
         Assert.True(aggregate.IsBundle);
-        Assert.True(aggregate.Supports(TransportCapabilities.DelegateEnvironment));
         Assert.False(aggregate.Supports(TransportCapabilities.ExternCall));
 
         var dlg = TypeClassifier.ShapeOf(types["dDel"], ctx);
@@ -201,7 +199,6 @@ public class WalkerCensusCarrier
         var ndim = TypeClassifier.ShapeOf(types["cNdim"], ctx);
         Assert.Equal(RuntimeBundleKind.MultiDimensionalArray, ndim.Bundle);
         Assert.True(ndim.IsBundle);
-        Assert.True(ndim.Supports(TransportCapabilities.DelegateEnvironment));
         Assert.False(ndim.Supports(TransportCapabilities.ExternCall));
 
         var native = TypeClassifier.ShapeOf(types["cIntArr"], ctx);
@@ -215,7 +212,6 @@ public class WalkerCensusCarrier
         Assert.False(classArray.IsBundle);
         Assert.True(classArray.ContainsUserClassPayload);
         Assert.True(classArray.Supports(TransportCapabilities.ExternCall));
-        Assert.True(classArray.Supports(TransportCapabilities.DelegateEnvironment));
         Assert.False(classArray.Supports(TransportCapabilities.TypedProgramChannel));
     }
 }

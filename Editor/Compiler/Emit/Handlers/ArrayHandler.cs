@@ -24,7 +24,7 @@ public class ArrayHandler : HandlerBase, IExpressionHandler
         var elemSym = ((IArrayTypeSymbol)op.Type).ElementType;
         bool aggElem = elemSym is INamedTypeSymbol && TypeClassifier.IsAggregateValue(elemSym);
 
-        var sizeVal = VisitExpression(op.DimensionSizes[0]);
+        var sizeVal = EmitArrayDimension(op.DimensionSizes[0]);
         var arrSlot = _ctx.Builder.AllocScratch(new StorageType(arrayType));
         EmitAssign(arrSlot, ExternCall(UdonAbi.ArrayConstructor(arrayType),
             new List<CLeaf> { sizeVal }, new StorageType(arrayType)));

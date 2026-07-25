@@ -9,10 +9,10 @@ namespace USugar.Tests;
 /// semantics — ExternResolver used display-string StartsWith over {UnityEngine, VRC, TMPro, System}
 /// (so a namespace literally named "SystemFoo" or "VRChat" was mis-classified SDK), while EmitPolicy
 /// chain-walked EXACT segment names over {System, UnityEngine, VRC, Cinemachine, TMPro, Unity,
-/// Microsoft} — so enum classification (ExternResolver.IsUserEnum / GetUdonTypeName's enum fold) and
-/// struct classification (TypeClassifier.IsUserStruct) disagreed at the SDK boundary. Owner ruling:
-/// ONE predicate, chain-walk exact-name semantics over the union list, homed in ExternResolver;
-/// EmitPolicy delegates. These tests pin the unified boundary through the public consumer surfaces.
+/// Microsoft}. The unified namespace predicate remains the authority for source aggregate
+/// classification. Enum storage has a stronger authority: membership in the installed Udon type
+/// registry. These tests keep those two contracts separate so a namespace heuristic cannot again
+/// masquerade as evidence that an enum has a runtime tag.
 /// </summary>
 public class SdkNamespaceUnificationTests
 {
@@ -54,17 +54,16 @@ public class NsBoundaryCarrier
     public GlobalEnum eGlobal;             public GlobalStruct sGlobal;
 }";
 
-    // ns label, enum field, struct field, SDK verdict. The enum verdict is pinned through
-    // ExternResolver.IsUserEnum, the struct verdict through TypeClassifier.IsUserStruct — the two
-    // consumers that formerly sat on the two diverging copies. isSdk == !isUser on both.
-    static readonly (string Ns, string EnumField, string StructField, bool Sdk)[] BoundaryBattery =
+    // Namespace classification still governs source structs. Every marker enum in this battery is
+    // deliberately absent from the Udon type registry and therefore folds independently of this
+    // namespace verdict.
+    static readonly (string Ns, string EnumField, string StructField, bool StructSdk)[] BoundaryBattery =
     {
         // Unchanged SDK controls (in both old lists).
         ("System",            "eSys",    "sSys",    true),
         ("TMPro",             "eTmp",    "sTmp",    true),
         ("VRC.UsgProbe",      "eVrc",    "sVrc",    true),  // nested under VRC — chain-walk hits "VRC"
-        // Union-list members ExternResolver's old copy was missing (accepted-boundary delta: these
-        // source enums/classes are now SDK-tagged for ALL consumers, matching EmitPolicy's verdict).
+        // Union-list members ExternResolver's old copy was missing.
         ("Unity",             "eUnity",  "sUnity",  true),
         ("Cinemachine",       "eCm",     "sCm",     true),
         ("Microsoft",         "eMs",     "sMs",     true),
@@ -74,94 +73,102 @@ public class NsBoundaryCarrier
         ("TMProX",            "eTmpX",   "sTmpX",   false),
         ("UnityEngineX",      "eUeX",    "sUeX",    false),
         // Chain-walk semantics: ANY segment named after an SDK root marks the chain SDK (this was
-        // always EmitPolicy's verdict; ExternResolver's prefix test said user — unified onto SDK).
+        // always EmitPolicy's verdict; ExternResolver's prefix test said user).
         ("Outer.System.Inner", "eNested", "sNested", true),
         // User controls (unchanged on both sides).
         ("PlainUser",         "ePlain",  "sPlain",  false),
         ("<global>",          "eGlobal", "sGlobal", false),
     };
 
-    static System.Collections.Generic.Dictionary<string, ITypeSymbol> BuildBoundaryTypes()
+    static (System.Collections.Generic.Dictionary<string, ITypeSymbol> Types,
+        CompilationSession Session) BuildBoundary()
     {
-        TestHelper.BuildCompilation(BoundarySource, "NsBoundaryCarrier", out var carrier);
-        return carrier.GetMembers().OfType<IFieldSymbol>()
+        var compilation = TestHelper.BuildCompilation(
+            BoundarySource, "NsBoundaryCarrier", out var carrier);
+        var types = carrier.GetMembers().OfType<IFieldSymbol>()
             .ToDictionary(f => f.Name, f => f.Type);
+        return (types, new CompilationSession(compilation, TestHelper.RegistryFacts));
     }
 
     [Fact]
-    public void EnumAndStructClassification_AgreeAtEveryBoundaryRow()
+    public void StructClassificationUsesTheExactSegmentNamespaceBoundary()
     {
-        var types = BuildBoundaryTypes();
-        foreach (var (ns, enumField, structField, sdk) in BoundaryBattery)
+        var (types, _) = BuildBoundary();
+        foreach (var (ns, _, structField, sdk) in BoundaryBattery)
         {
-            var isUserEnum = ExternResolver.IsUserEnum(types[enumField]);
             var isUserStruct = TypeClassifier.IsUserStruct((INamedTypeSymbol)types[structField]);
-            Assert.True(isUserEnum == !sdk,
-                $"enum boundary drift: namespace '{ns}' pinned {(sdk ? "SDK" : "USER")} but IsUserEnum == {isUserEnum}");
             Assert.True(isUserStruct == !sdk,
                 $"struct boundary drift: namespace '{ns}' pinned {(sdk ? "SDK" : "USER")} but IsUserStruct == {isUserStruct}");
         }
     }
 
     [Fact]
-    public void SdkControls_KeepTheirNativeClassification()
+    public void SourceEnumsWithoutRegisteredTagsFoldRegardlessOfNamespace()
     {
-        // Real stub SDK types (compiled-in stand-ins for registered Udon types) must stay SDK on
-        // both surfaces — the union predicate must not over-reject the genuine registry.
-        var types = BuildBoundaryTypes();
-        Assert.False(ExternResolver.IsUserEnum(types["fKeyCode"]));
-        Assert.Equal("UnityEngineKeyCode", ExternResolver.GetUdonTypeName(types["fKeyCode"]));
+        var (types, session) = BuildBoundary();
+        foreach (var (ns, enumField, _, _) in BoundaryBattery)
+        {
+            var type = types[enumField];
+            var exactName = ExternResolver.GetExactUdonTypeName(type);
+            Assert.False(session.Types.IsRegisteredUdonTypeName(exactName),
+                $"test marker unexpectedly entered the Udon registry: namespace '{ns}', type '{exactName}'");
+            Assert.True(session.Types.IsUserEnum(type),
+                $"unregistered enum did not fold: namespace '{ns}', type '{exactName}'");
+            Assert.Equal("SystemInt32", session.Types.GetUdonTypeName(type));
+            Assert.False(session.Types.IsRuntimeDistinguishable(type));
+        }
+    }
+
+    [Fact]
+    public void RegisteredSdkControlsKeepTheirNativeClassification()
+    {
+        var (types, session) = BuildBoundary();
+        Assert.True(session.Types.IsRegisteredUdonTypeName("UnityEngineKeyCode"));
+        Assert.False(session.Types.IsUserEnum(types["fKeyCode"]));
+        Assert.Equal("UnityEngineKeyCode", session.Types.GetUdonTypeName(types["fKeyCode"]));
+        Assert.True(session.Types.IsRuntimeDistinguishable(types["fKeyCode"]));
         Assert.False(TypeClassifier.IsUserStruct((INamedTypeSymbol)types["fVector3"]));
-        Assert.Equal("UnityEngineVector3", ExternResolver.GetUdonTypeName(types["fVector3"]));
+        Assert.Equal("UnityEngineVector3", session.Types.GetUdonTypeName(types["fVector3"]));
     }
 
-    // Shape (a), ACCEPTED BOUNDARY (owner ruling 2026-07-17): a source-declared enum in a namespace
-    // literally named 'Unity' now classifies as SDK-tagged for ExternResolver's consumers too (it
-    // already did for EmitPolicy's): it keeps its registered-style tag "UnityUEnum" instead of
-    // folding to the underlying int, gets NO B67 name synthesis, and an is-test against it is
-    // licensed (unique tag). If no such tag exists in the Udon registry, the miss surfaces LOUDLY
-    // at mandatory UdonAbiCatalog binding, never
-    // silently — the cost of claiming an SDK root namespace as your own.
     [Fact]
-    public void UnityNamespaceEnum_ClassifiesSdkTagged_NotUserEnum()
+    public void UnityNamespaceAloneDoesNotGrantAnEnumRuntimeIdentity()
     {
-        var types = BuildBoundaryTypes();
+        var (types, session) = BuildBoundary();
         var t = types["eUnity"];
-        Assert.False(ExternResolver.IsUserEnum(t));
-        Assert.Equal("UnityUEnum", ExternResolver.GetUdonTypeName(t));
-        Assert.True(ExternResolver.IsRuntimeDistinguishable(t, null));
+        Assert.False(session.Types.IsRegisteredUdonTypeName("UnityUEnum"));
+        Assert.True(session.Types.IsUserEnum(t));
+        Assert.Equal("SystemInt32", session.Types.GetUdonTypeName(t));
+        Assert.False(session.Types.IsRuntimeDistinguishable(t));
     }
 
-    // Shape (b), FIX: a source enum in a namespace named 'SystemFoo' was mis-classified SDK by the
-    // old StartsWith("System") test — GetUdonTypeName kept a bogus unregistered "SystemFooSfEnum"
-    // tag and IsRuntimeDistinguishable dishonestly said true (the runtime value is a bare int).
-    // It now classifies USER: folds to the underlying int tag, is-tests reject honestly, and B67
-    // ToString name synthesis applies.
     [Fact]
-    public void SystemFooNamespaceEnum_ClassifiesUserEnum_FoldsToUnderlyingInt()
+    public void PrefixExtendedNamespaceEnumAlsoUsesRegistryAuthority()
     {
-        var types = BuildBoundaryTypes();
+        var (types, session) = BuildBoundary();
         var t = types["eSysFoo"];
-        Assert.True(ExternResolver.IsUserEnum(t));
-        Assert.Equal("SystemInt32", ExternResolver.GetUdonTypeName(t));
-        Assert.False(ExternResolver.IsRuntimeDistinguishable(t, null));
+        Assert.True(session.Types.IsUserEnum(t));
+        Assert.Equal("SystemInt32", session.Types.GetUdonTypeName(t));
+        Assert.False(session.Types.IsRuntimeDistinguishable(t));
     }
 
-    // Shape (b) end-to-end: the SystemFoo enum compiles through the full emitter as a user enum —
-    // the field's heap slot is the underlying SystemInt32 (never the unregistered "SystemFooMode"
-    // type the old classification minted) and ToString routes through the synthesized B67 helper.
     [Fact]
-    public void SystemFooEnum_EndToEnd_EmitsUnderlyingIntAndSynthesizedToString()
+    public void UnregisteredEnumsInSdkAndPrefixLikeNamespacesFoldEndToEnd()
     {
         var uasm = TestHelper.CompileToUasm(@"
+namespace Unity { public enum Mode { Off, On } }
 namespace SystemFoo { public enum Mode { Off, On } }
 public class NsFixBehaviour : UdonSharp.UdonSharpBehaviour
 {
-    public SystemFoo.Mode mode;
-    public string Show() { return mode.ToString(); }
+    public Unity.Mode unityMode;
+    public SystemFoo.Mode prefixMode;
+    public string Show() { return unityMode.ToString() + prefixMode.ToString(); }
 }", "NsFixBehaviour");
+        Assert.DoesNotContain("UnityMode", uasm);
         Assert.DoesNotContain("SystemFooMode", uasm);
-        Assert.Contains("mode: %SystemInt32", uasm);
+        Assert.Contains("unityMode: %SystemInt32", uasm);
+        Assert.Contains("prefixMode: %SystemInt32", uasm);
+        Assert.Contains("__enumstr_NUnity_TMode", uasm);
         Assert.Contains("__enumstr_NSystemFoo_TMode", uasm);
     }
 }

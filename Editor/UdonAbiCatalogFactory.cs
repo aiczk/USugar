@@ -13,8 +13,9 @@ static class UdonAbiCatalogFactory
     public static UdonAbiCatalog Create(IEnumerable<UdonNodeDefinition> definitions)
     {
         if (definitions == null) throw new ArgumentNullException(nameof(definitions));
+        var nodes = definitions.Where(definition => definition != null).ToArray();
         var typeFacts = new UdonTypeFactRegistry();
-        var prototypes = definitions
+        var prototypes = nodes
             // GetNodeDefinitions also returns graph-control, event, variable,
             // and constant nodes. Those are not CALL_EXTERN targets and may
             // intentionally carry typeless ports.
@@ -23,8 +24,16 @@ static class UdonAbiCatalogFactory
                                      definition.fullName))
             .Select(definition => CreatePrototype(definition, typeFacts))
             .ToArray();
+        var registeredTypes = nodes
+            .Where(definition => definition.fullName != null
+                                 && definition.fullName.StartsWith(
+                                     "Type_", StringComparison.Ordinal)
+                                 && definition.fullName.Length > "Type_".Length)
+            .Select(definition => definition.fullName.Substring("Type_".Length))
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
         return new UdonAbiCatalog(
-            prototypes, typeFacts.Snapshot());
+            prototypes, typeFacts.Snapshot(), registeredTypes);
     }
 
     static UdonExternPrototype CreatePrototype(UdonNodeDefinition definition,
@@ -34,7 +43,7 @@ static class UdonAbiCatalogFactory
         var parameters = definition.parameters.Select(parameter =>
             new UdonAbiParameter(
                 parameter.name,
-                ToAbiTypePattern(
+                ToAbiType(
                     parameter.type, definition.fullName, parameter.name,
                     typeFacts),
                 parameter.parameterType switch
@@ -49,7 +58,7 @@ static class UdonAbiCatalogFactory
         return new UdonExternPrototype(definition.fullName, parameters);
     }
 
-    static UdonAbiType ToAbiTypePattern(Type type,
+    static UdonAbiType ToAbiType(Type type,
         string registeredName, string parameterName,
         UdonTypeFactRegistry typeFacts)
     {
@@ -58,12 +67,11 @@ static class UdonAbiCatalogFactory
                 $"Installed SDK extern '{registeredName}' parameter "
                 + $"'{parameterName}' has no CLR type.");
         if (type.IsByRef) type = type.GetElementType();
-        if (type.IsArray)
-            return UdonAbiType.Array(ToAbiTypePattern(
-                type.GetElementType(), registeredName, parameterName,
-                typeFacts));
-        if (type.IsGenericParameter)
-            return UdonAbiType.Generic(type.Name);
+        if (type == null || type.ContainsGenericParameters)
+            throw new InvalidOperationException(
+                $"Installed SDK extern '{registeredName}' parameter "
+                + $"'{parameterName}' has open generic CLR type '{type}'. "
+                + "The installed ABI snapshot supports only concrete operand types.");
         return UdonAbiType.Exact(ToAbiTypeNameAndRecord(type, typeFacts));
     }
 

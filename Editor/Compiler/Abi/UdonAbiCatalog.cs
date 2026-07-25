@@ -10,105 +10,26 @@ public enum UdonAbiParameterMode
     InOut,
 }
 
-/// <summary>
-/// Type pattern supplied by the SDK for one extern stack operand. Most operands
-/// are exact storage types; generic node definitions retain their placeholder
-/// identity instead of erasing it to SystemObject.
-/// </summary>
+/// <summary>Exact Udon storage type supplied by the installed SDK for one extern stack operand.</summary>
 public sealed class UdonAbiType
 {
-    public enum PatternKind
-    {
-        Exact,
-        GenericParameter,
-        Array,
-    }
-
-    public PatternKind Kind { get; }
     public StorageType ExactType { get; }
-    public string GenericName { get; }
-    public UdonAbiType ElementType { get; }
 
-    UdonAbiType(PatternKind kind, StorageType exactType, string genericName,
-        UdonAbiType elementType)
-    {
-        Kind = kind;
-        ExactType = exactType;
-        GenericName = genericName;
-        ElementType = elementType;
-    }
+    UdonAbiType(StorageType exactType) => ExactType = exactType;
 
     public static UdonAbiType Exact(string storageType)
-        => new(PatternKind.Exact, new StorageType(storageType), null, null);
+        => new(new StorageType(storageType));
 
-    public static UdonAbiType Generic(string name)
-        => new(PatternKind.GenericParameter, default,
-            !string.IsNullOrEmpty(name)
-                ? name
-                : throw new ArgumentException("A generic ABI placeholder name is required.", nameof(name)),
-            null);
-
-    public static UdonAbiType Array(UdonAbiType elementType)
-        => new(PatternKind.Array, default, null,
-            elementType ?? throw new ArgumentNullException(nameof(elementType)));
-
-    /// <summary>
-    /// Match a concrete Core-IR storage type against this SDK pattern. Generic
-    /// placeholders unify within one invocation, so T/TArray relationships are
-    /// checked rather than treated as independent wildcards.
-    /// </summary>
-    public bool TryMatch(StorageType actual,
-        IDictionary<string, StorageType> genericBindings,
-        UdonTypeFactRegistry typeFacts, out string reason)
+    public bool TryMatch(StorageType actual, UdonTypeFactRegistry typeFacts,
+        out string reason)
     {
-        if (genericBindings == null) throw new ArgumentNullException(nameof(genericBindings));
         if (typeFacts == null) throw new ArgumentNullException(nameof(typeFacts));
-
-        switch (Kind)
-        {
-            case PatternKind.Exact:
-                reason = RawCopyCompatibility.WhyIncompatible(
-                    ExactType.Name, actual.Name, typeFacts);
-                return reason == null;
-
-            case PatternKind.GenericParameter:
-                if (genericBindings.TryGetValue(GenericName, out var bound))
-                {
-                    if (bound.Name != actual.Name)
-                        reason = $"generic ABI placeholder '{GenericName}' was already bound to "
-                                 + $"'{bound}', but received '{actual}'";
-                    else
-                        reason = null;
-                    return bound.Name == actual.Name;
-                }
-                genericBindings.Add(GenericName, actual);
-                reason = null;
-                return true;
-
-            case PatternKind.Array:
-                const string suffix = "Array";
-                if (!actual.Name.EndsWith(suffix, StringComparison.Ordinal))
-                {
-                    reason = $"expected an array matching '{this}', got '{actual}'";
-                    return false;
-                }
-                var element = new StorageType(
-                    actual.Name.Substring(0, actual.Name.Length - suffix.Length));
-                return ElementType.TryMatch(
-                    element, genericBindings, typeFacts, out reason);
-
-            default:
-                throw new InvalidOperationException($"Unknown ABI type pattern kind: {Kind}");
-        }
+        reason = RawCopyCompatibility.WhyIncompatible(
+            ExactType.Name, actual.Name, typeFacts);
+        return reason == null;
     }
 
-    public override string ToString() => Kind switch
-    {
-        PatternKind.Exact => ExactType.Name,
-        PatternKind.GenericParameter => GenericName,
-        PatternKind.Array => ElementType + "[]",
-        _ => throw new InvalidOperationException($"Unknown ABI type pattern kind: {Kind}"),
-    };
+    public override string ToString() => ExactType.Name;
 }
 
 /// <summary>One ordered stack operand in an SDK extern node definition.</summary>
@@ -173,14 +94,22 @@ public sealed class UdonAbiCatalog
 
     readonly Dictionary<string, UdonExternPrototype> _externs;
     readonly KeyValuePair<string, UdonTypeFactRegistry.TypeFact>[] _typeFacts;
+    readonly HashSet<string> _registeredTypes;
 
     public UdonAbiCatalog(IEnumerable<UdonExternPrototype> prototypes)
-        : this(prototypes, null)
+        : this(prototypes, null, null)
     {
     }
 
     internal UdonAbiCatalog(IEnumerable<UdonExternPrototype> prototypes,
         IEnumerable<KeyValuePair<string, UdonTypeFactRegistry.TypeFact>> typeFacts)
+        : this(prototypes, typeFacts, null)
+    {
+    }
+
+    internal UdonAbiCatalog(IEnumerable<UdonExternPrototype> prototypes,
+        IEnumerable<KeyValuePair<string, UdonTypeFactRegistry.TypeFact>> typeFacts,
+        IEnumerable<string> registeredTypes)
     {
         if (prototypes == null) throw new ArgumentNullException(nameof(prototypes));
         _externs = new Dictionary<string, UdonExternPrototype>(StringComparer.Ordinal);
@@ -193,12 +122,27 @@ public sealed class UdonAbiCatalog
         }
         _typeFacts = typeFacts?.ToArray()
             ?? Array.Empty<KeyValuePair<string, UdonTypeFactRegistry.TypeFact>>();
+        _registeredTypes = new HashSet<string>(
+            registeredTypes?.Where(name => !string.IsNullOrWhiteSpace(name))
+            ?? Array.Empty<string>(),
+            StringComparer.Ordinal);
     }
 
     internal static UdonAbiCatalog FromNamesForTests(IEnumerable<string> externNames)
         => new((externNames ?? throw new ArgumentNullException(nameof(externNames)))
             .Where(IsExternRegistryName)
             .Select(UdonExternPrototype.UntypedFixture));
+
+    internal UdonAbiCatalog WithTestPrototypes(
+        IEnumerable<UdonExternPrototype> prototypes)
+    {
+        if (prototypes == null) throw new ArgumentNullException(nameof(prototypes));
+        var additions = prototypes
+            .Where(prototype => prototype != null)
+            .Where(prototype => !_externs.ContainsKey(prototype.RegisteredName));
+        return new UdonAbiCatalog(
+            _externs.Values.Concat(additions), _typeFacts, _registeredTypes);
+    }
 
     internal static bool IsExternRegistryName(string registeredName)
     {
@@ -222,6 +166,12 @@ public sealed class UdonAbiCatalog
     }
 
     public IReadOnlyCollection<string> ExternNames => _externs.Keys;
+    public bool IsRegisteredType(string udonTypeName)
+        => udonTypeName != null && _registeredTypes.Contains(udonTypeName);
+    internal IReadOnlyCollection<UdonExternPrototype> Prototypes => _externs.Values;
+    internal IReadOnlyList<KeyValuePair<string, UdonTypeFactRegistry.TypeFact>> TypeFacts
+        => _typeFacts;
+    internal IReadOnlyCollection<string> RegisteredTypes => _registeredTypes;
 
     /// <summary>Seed one compilation's mutable registry from the immutable SDK ABI snapshot. Source
     /// lowering then appends Roslyn facts to the same session-owned registry.</summary>

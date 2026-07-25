@@ -140,7 +140,7 @@ public abstract partial class HandlerBase
         for (int d = 0; d < rank; d++)
         {
             dimSlots[d] = _ctx.Builder.AllocScratch(StorageTypes.Int32);
-            EmitAssign(dimSlots[d], VisitExpression(op.DimensionSizes[d]));
+            EmitAssign(dimSlots[d], EmitArrayDimension(op.DimensionSizes[d]));
         }
 
         var totalSize = NdimArrayAbi.BuildTotalElementCount(_builder, dimSlots);

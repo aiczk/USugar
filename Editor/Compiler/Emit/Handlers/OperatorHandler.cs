@@ -185,7 +185,7 @@ public class OperatorHandler : HandlerBase, IExpressionHandler
             }
             ClassAbi.RejectImplicitToString(lOp.Type);
             ClassAbi.RejectImplicitToString(rOp.Type);
-            if (ExternResolver.IsUserEnum(ResolveType(lOp.Type)) || ExternResolver.IsUserEnum(ResolveType(rOp.Type)))
+            if (IsUserEnum(ResolveType(lOp.Type)) || IsUserEnum(ResolveType(rOp.Type)))
             {
                 var l = VisitExpression(lOp);
                 l = ConvertConcatOperand(l, lOp);

@@ -21,8 +21,7 @@ public enum TransportCapabilities
 {
     None = 0,
     TypedProgramChannel = 1 << 0,
-    ExternCall = 1 << 2,
-    DelegateEnvironment = 1 << 4,
+    ExternCall = 1 << 1,
 }
 
 /// <summary>Compiler-side description of a value's Udon representation. Several source types erase to
@@ -47,27 +46,25 @@ public readonly struct RuntimeShape
 
     public static RuntimeShape Class(bool containsPayload = true)
         => new(RuntimeBundleKind.Class,
-            TransportCapabilities.TypedProgramChannel | TransportCapabilities.DelegateEnvironment,
+            TransportCapabilities.TypedProgramChannel,
             containsPayload);
     public static RuntimeShape Aggregate(bool containsPayload)
         => new(RuntimeBundleKind.Aggregate,
-            TransportCapabilities.TypedProgramChannel | TransportCapabilities.DelegateEnvironment,
+            TransportCapabilities.TypedProgramChannel,
             containsPayload);
     public static RuntimeShape Delegate(bool containsPayload)
         => new(RuntimeBundleKind.Delegate,
-            (containsPayload ? TransportCapabilities.None : TransportCapabilities.TypedProgramChannel)
-            | TransportCapabilities.DelegateEnvironment,
+            containsPayload ? TransportCapabilities.None : TransportCapabilities.TypedProgramChannel,
             containsPayload);
     public static RuntimeShape MultiDimensionalArray(bool containsPayload)
         => new(RuntimeBundleKind.MultiDimensionalArray,
-            TransportCapabilities.TypedProgramChannel | TransportCapabilities.DelegateEnvironment,
+            TransportCapabilities.TypedProgramChannel,
             containsPayload);
     public static RuntimeShape Native(bool containsPayload)
         => new(RuntimeBundleKind.None,
             containsPayload
-                ? TransportCapabilities.ExternCall | TransportCapabilities.DelegateEnvironment
-                : TransportCapabilities.TypedProgramChannel | TransportCapabilities.ExternCall
-                  | TransportCapabilities.DelegateEnvironment,
+                ? TransportCapabilities.ExternCall
+                : TransportCapabilities.TypedProgramChannel | TransportCapabilities.ExternCall,
             containsPayload);
 }
 

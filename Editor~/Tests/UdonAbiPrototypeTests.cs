@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Xunit;
@@ -91,32 +92,20 @@ public class UdonAbiPrototypeTests
     }
 
     [Fact]
-    public void GenericSdkPrototypeUnifiesArrayElementAndReturn()
+    public void NameOnlyPrototypeCannotBypassOperandVerification()
     {
-        const string signature = "ExampleArray.__First__TArray__T";
-        var prototype = new UdonExternPrototype(signature, new[]
-        {
-            new UdonAbiParameter("values", UdonAbiType.Array(UdonAbiType.Generic("T")),
-                UdonAbiParameterMode.In),
-            new UdonAbiParameter("result", UdonAbiType.Generic("T"),
-                UdonAbiParameterMode.Out),
-        });
-        var bound = new UdonAbiCatalog(new[] { prototype })
+        const string signature = "Example.__Touch__SystemInt32__SystemVoid";
+        var bound = UdonAbiCatalog.FromNamesForTests(new[] { signature })
             .Require(TestHelper.AbiKey(signature));
-        var facts = new UdonTypeFactRegistry();
-        var good = new CExternCall(bound, new List<CLeaf>
+        var call = new CExternCall(bound, new List<CLeaf>
         {
-            new CConst(null, new StorageType("SystemInt32Array")),
-        }, StorageTypes.Int32);
-        UdonAbiVerifier.VerifyInvocation(good, facts, "good");
+            new CConst(null, StorageTypes.Int32),
+        }, StorageTypes.Void);
 
-        var bad = new CExternCall(bound, new List<CLeaf>
-        {
-            new CConst(null, new StorageType("SystemInt32Array")),
-        }, StorageTypes.String);
         var error = Assert.Throws<VerificationException>(
-            () => UdonAbiVerifier.VerifyInvocation(bad, facts, "bad"));
-        Assert.Contains("already bound to 'SystemInt32'", error.Message);
+            () => UdonAbiVerifier.VerifyInvocation(
+                call, new UdonTypeFactRegistry(), "name_only"));
+        Assert.Contains("name-only ABI fixture", error.Message);
     }
 
     /// <summary>UdonHeap.SetHeapVariable re-boxes its destination and GetHeapVariable falls back to
@@ -179,40 +168,11 @@ public class UdonAbiPrototypeTests
 
         var args = new List<CLeaf>();
         foreach (var arg in actualArgs)
-            args.Add(new CConst(null, arg));
+            args.Add(new CConst(
+                arg == StorageTypes.Type ? actualResult.Name : null,
+                arg));
         UdonAbiVerifier.VerifyInvocation(
             new CExternCall(bound, args, actualResult), facts, signature);
-    }
-
-    [Fact]
-    public void GenericPlaceholderUnificationDoesNotUseReferenceAssignability()
-    {
-        const string signature = "Example.__Pair__T_T__SystemVoid";
-        var prototype = new UdonExternPrototype(signature, new[]
-        {
-            new UdonAbiParameter(
-                "first", UdonAbiType.Generic("T"), UdonAbiParameterMode.In),
-            new UdonAbiParameter(
-                "second", UdonAbiType.Generic("T"), UdonAbiParameterMode.In),
-        });
-        var call = new CExternCall(
-            new UdonAbiCatalog(new[] { prototype })
-                .Require(TestHelper.AbiKey(signature)),
-            new List<CLeaf>
-            {
-                new CConst(null, new StorageType("DerivedReference")),
-                new CConst(null, new StorageType("BaseReference")),
-            },
-            StorageTypes.Void);
-        var facts = new UdonTypeFactRegistry();
-        facts.RecordForTest("DerivedReference", isEnum: false, isValueType: false);
-        facts.RecordForTest("BaseReference", isEnum: false, isValueType: false);
-
-        var error = Assert.Throws<VerificationException>(
-            () => UdonAbiVerifier.VerifyInvocation(call, facts, "generic_pair"));
-        Assert.Contains(
-            "placeholder 'T' was already bound to 'DerivedReference', but received 'BaseReference'",
-            error.Message);
     }
 
     [Fact]
@@ -223,8 +183,7 @@ public class UdonAbiPrototypeTests
         {
             Param("instance", "UnityEngineComponent", UdonAbiParameterMode.In),
             Param("type", "SystemType", UdonAbiParameterMode.In),
-            new UdonAbiParameter(
-                "result", UdonAbiType.Generic("T"), UdonAbiParameterMode.Out),
+            Param("result", "UnityEngineObject", UdonAbiParameterMode.Out),
         });
         var bound = new UdonAbiCatalog(new[] { prototype })
             .Require(TestHelper.AbiKey(signature));
@@ -244,9 +203,41 @@ public class UdonAbiPrototypeTests
         var safeCall = new CExternCall(bound, new List<CLeaf>
         {
             new CConst(null, StorageTypes.Transform),
-            new CConst(null, StorageTypes.Type),
-        }, new StorageType("UnityEngineRigidbody"));
+            new CConst("UnityEngineObject", StorageTypes.Type),
+        }, new StorageType("UnityEngineObject"));
         UdonAbiVerifier.VerifyInvocation(safeCall, facts, "safe_query");
+    }
+
+    [Fact]
+    public void GenericComponentResultMustMatchItsTypeToken()
+    {
+        const string signature = "UnityEngineComponent.__GetComponent__T";
+        var prototype = new UdonExternPrototype(signature, new[]
+        {
+            Param("instance", "UnityEngineComponent", UdonAbiParameterMode.In),
+            Param("type", "SystemType", UdonAbiParameterMode.In),
+            Param("result", "UnityEngineObject", UdonAbiParameterMode.Out),
+        });
+        var bound = new UdonAbiCatalog(new[] { prototype })
+            .Require(TestHelper.AbiKey(signature));
+        var facts = new UdonTypeFactRegistry();
+        foreach (var name in new[]
+                 {
+                     "UnityEngineComponent", "UnityEngineTransform",
+                     "UnityEngineRigidbody", "UnityEngineCanvasGroup",
+                 })
+            facts.RecordForTest(name, isEnum: false, isValueType: false);
+
+        var call = new CExternCall(bound, new List<CLeaf>
+        {
+            new CConst(null, StorageTypes.Transform),
+            new CConst("UnityEngineRigidbody", StorageTypes.Type),
+        }, new StorageType("UnityEngineCanvasGroup"));
+
+        var error = Assert.Throws<VerificationException>(
+            () => UdonAbiVerifier.VerifyInvocation(call, facts, "mismatched_query"));
+        Assert.Contains(
+            "binds generic result 'T' to 'UnityEngineRigidbody'", error.Message);
     }
 
     [Theory]
@@ -287,6 +278,46 @@ public class UdonAbiPrototypeTests
                 member.StartsWith("GetComponents", StringComparison.Ordinal) ? "TArray" : "T");
     }
 
+    [Fact]
+    public void EveryRegisteredGenericListComponentQueryRequiresTransformStrongbox()
+    {
+        var signatures = ExternRegistry.All
+            .Where(name => name.StartsWith(
+                "UnityEngineComponent.__GetComponents", StringComparison.Ordinal)
+                && name.Contains("ListT"))
+            .OrderBy(name => name, StringComparer.Ordinal)
+            .ToArray();
+        Assert.Equal(new[]
+        {
+            "UnityEngineComponent.__GetComponentsInChildren__ListT__SystemVoid",
+            "UnityEngineComponent.__GetComponentsInChildren__SystemBoolean_ListT__SystemVoid",
+            "UnityEngineComponent.__GetComponentsInParent__SystemBoolean_ListT__SystemVoid",
+            "UnityEngineComponent.__GetComponents__ListT__SystemVoid",
+        }, signatures);
+        var facts = new UdonTypeFactRegistry();
+        facts.RecordForTest("UnityEngineComponent", isEnum: false, isValueType: false);
+        facts.RecordForTest("UnityEngineTransform", isEnum: false, isValueType: false);
+
+        foreach (var signature in signatures)
+        {
+            var bound = TestHelper.RegistryFacts.Require(TestHelper.AbiKey(signature));
+            var args = Enumerable.Range(0, bound.Prototype.Parameters.Count)
+                .Select(index => index == 0
+                    ? (CLeaf)new CConst(null, StorageTypes.UdonEventReceiver)
+                    : new CConst(null, StorageTypes.Object))
+                .ToList();
+            var unsafeCall = new CExternCall(bound, args, StorageTypes.Void);
+
+            var error = Assert.Throws<VerificationException>(
+                () => UdonAbiVerifier.VerifyInvocation(
+                    unsafeCall, facts, "unsafe_list_query"));
+
+            Assert.Contains(
+                "must be backed by a 'UnityEngineTransform' strongbox",
+                error.Message);
+        }
+    }
+
     static void AssertStrongboxContract(string owner, string member, string resultType)
     {
         var signature = $"{owner}.__{member}__{resultType}";
@@ -294,10 +325,10 @@ public class UdonAbiPrototypeTests
         {
             Param("instance", owner, UdonAbiParameterMode.In),
             Param("type", "SystemType", UdonAbiParameterMode.In),
-            new UdonAbiParameter("result",
+            Param("result",
                 resultType == "TArray"
-                    ? UdonAbiType.Array(UdonAbiType.Generic("T"))
-                    : UdonAbiType.Generic("T"),
+                    ? "UnityEngineObjectArray"
+                    : "UnityEngineObject",
                 UdonAbiParameterMode.Out),
         });
         var bound = new UdonAbiCatalog(new[] { prototype })

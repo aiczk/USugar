@@ -341,8 +341,19 @@ public class CoreVerifyTests
         module.Fields.Add(new FieldDecl("y", StorageTypes.Int32));
         var func = module.AddFunction("test");
         // SomeType.TryGet(out y) — a CFieldAddr IS valid as an out/ref extern argument
+        const string signature = "SomeType.__TryGet__SystemInt32Ref__SystemVoid";
+        var bound = new UdonAbiCatalog(new[]
+            {
+                new UdonExternPrototype(signature, new[]
+                {
+                    new UdonAbiParameter(
+                        "value", UdonAbiType.Exact("SystemInt32"),
+                        UdonAbiParameterMode.Out),
+                }),
+            })
+            .Require(TestHelper.AbiKey(signature));
         func.Body.Stmts.Add(new CExprStmt(new CExternCall(
-            TestHelper.BindExtern("SomeType.__TryGet__SystemInt32Ref__SystemVoid"),
+            bound,
             new List<CLeaf> { new CFieldAddr("y", StorageTypes.Int32) }, StorageTypes.Void)));
 
         CoreVerify.Verify(module); // should not throw

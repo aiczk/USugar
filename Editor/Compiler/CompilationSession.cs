@@ -29,7 +29,8 @@ public sealed class CompilationSession
         TypeFacts = typeFacts ?? throw new ArgumentNullException(nameof(typeFacts));
         AbiCatalog.SeedTypeFacts(TypeFacts);
         ObjectArrayBehaviourAliases = ObjectArrayBehaviourAliasCensus.For(Compilation);
-        Types = new UdonTypeSystem(TypeFacts, ObjectArrayBehaviourAliases);
+        Types = new UdonTypeSystem(
+            TypeFacts, ObjectArrayBehaviourAliases, AbiCatalog);
     }
 }
 
@@ -43,20 +44,35 @@ public sealed class UdonTypeSystem
 {
     readonly UdonTypeFactRegistry _facts;
     readonly ObjectArrayBehaviourAliasCensus _objectArrayBehaviourAliases;
+    readonly UdonAbiCatalog _abiCatalog;
 
     internal UdonTypeSystem(UdonTypeFactRegistry facts,
-        ObjectArrayBehaviourAliasCensus objectArrayBehaviourAliases)
+        ObjectArrayBehaviourAliasCensus objectArrayBehaviourAliases,
+        UdonAbiCatalog abiCatalog)
     {
         _facts = facts ?? throw new ArgumentNullException(nameof(facts));
         _objectArrayBehaviourAliases = objectArrayBehaviourAliases
             ?? throw new ArgumentNullException(nameof(objectArrayBehaviourAliases));
+        _abiCatalog = abiCatalog ?? throw new ArgumentNullException(nameof(abiCatalog));
     }
+
+    public bool IsRegisteredUdonTypeName(string udonTypeName)
+        => _abiCatalog.IsRegisteredType(udonTypeName);
+
+    public bool IsUserEnum(ITypeSymbol type)
+        => ExternResolver.IsUserEnum(type, IsRegisteredUdonTypeName);
+
+    public bool IsRuntimeDistinguishable(ITypeSymbol type,
+        IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeParameterMap = null)
+        => ExternResolver.IsRuntimeDistinguishable(
+            type, typeParameterMap, IsRegisteredUdonTypeName);
 
     public string GetUdonTypeName(ITypeSymbol type,
         IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeParameterMap = null)
         => _objectArrayBehaviourAliases.UsesObjectArrayStorage(type, typeParameterMap)
             ? StorageTypes.ObjectArray.Name
-            : ExternResolver.GetUdonTypeName(type, typeParameterMap, _facts);
+            : ExternResolver.GetUdonTypeName(
+                type, typeParameterMap, _facts, IsRegisteredUdonTypeName);
 
     public StorageType GetStorageType(ITypeSymbol type,
         IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeParameterMap = null)

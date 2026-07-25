@@ -10,29 +10,32 @@ public class CompilationSessionTests
     public void TypeFactsAreOwnedByOneExplicitSession()
     {
         var compilation = CreateCompilation(
-            "namespace VRC.Sample { public enum ForeignMode { A, B } }");
-        var mode = compilation.GetTypeByMetadataName("VRC.Sample.ForeignMode");
+            "namespace VRC.Sample { public class ForeignResource { } }");
+        var resource = compilation.GetTypeByMetadataName("VRC.Sample.ForeignResource");
         var first = new CompilationSession(compilation, TestHelper.RegistryFacts);
         var second = new CompilationSession(compilation, TestHelper.RegistryFacts);
 
-        Assert.Equal("VRCSampleForeignMode", first.Types.GetUdonTypeName(mode));
-        Assert.True(first.TypeFacts.IsEnumFact("VRCSampleForeignMode"));
-        Assert.Null(second.TypeFacts.IsEnumFact("VRCSampleForeignMode"));
+        Assert.Equal("VRCSampleForeignResource",
+            first.Types.GetUdonTypeName(resource));
+        Assert.True(first.TypeFacts.IsReferenceFact("VRCSampleForeignResource"));
+        Assert.Null(second.TypeFacts.IsReferenceFact("VRCSampleForeignResource"));
     }
 
     [Fact]
     public void PureTypeNameResolutionDoesNotMutateSessionFacts()
     {
         var compilation = CreateCompilation(
-            "namespace VRC.Sample { public enum ForeignMode { A, B } }");
-        var type = compilation.GetTypeByMetadataName("VRC.Sample.ForeignMode");
+            "namespace VRC.Sample { public class ForeignResource { } }");
+        var type = compilation.GetTypeByMetadataName("VRC.Sample.ForeignResource");
         var session = new CompilationSession(compilation, TestHelper.RegistryFacts);
 
-        Assert.Equal("VRCSampleForeignMode", ExternResolver.GetUdonTypeName(type));
-        Assert.Null(session.TypeFacts.IsEnumFact("VRCSampleForeignMode"));
+        Assert.Equal("VRCSampleForeignResource",
+            ExternResolver.GetUdonTypeName(type));
+        Assert.Null(session.TypeFacts.IsReferenceFact("VRCSampleForeignResource"));
 
-        Assert.Equal("VRCSampleForeignMode", session.Types.GetUdonTypeName(type));
-        Assert.True(session.TypeFacts.IsEnumFact("VRCSampleForeignMode"));
+        Assert.Equal("VRCSampleForeignResource",
+            session.Types.GetUdonTypeName(type));
+        Assert.True(session.TypeFacts.IsReferenceFact("VRCSampleForeignResource"));
     }
 
     [Fact]

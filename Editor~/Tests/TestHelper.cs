@@ -8,7 +8,7 @@ namespace USugar.Tests;
 public static class TestHelper
 {
     public static readonly UdonAbiCatalog RegistryFacts
-        = UdonAbiCatalog.FromNamesForTests(ExternRegistry.All);
+        = ExternRegistry.LoadTypedCatalog();
 
     public static BoundExtern BindExtern(string signature)
         => UdonAbiCatalog.FromNamesForTests(new[] { signature }).Require(AbiKey(signature));
@@ -114,6 +114,7 @@ namespace UdonSharp.Tests
 }
 namespace UnityEngine
 {
+    public enum HideFlags { None, HideInHierarchy }
     public class Object
     {
         public string name { get; set; }
@@ -268,7 +269,7 @@ namespace UnityEngine
     public static class Time { public static int frameCount => 0; public static float fixedDeltaTime { get; set; } }
     public static class Random { public static void InitState(int s) { } public static int Range(int a, int b) => 0; }
     public static class Debug { public static void Log(object msg) { } public static void LogWarning(object msg) { } public static void LogError(object msg) { } }
-    public static class Mathf {
+    public struct Mathf {
         public static int Max(int a, int b) => a;
         public static int Min(int a, int b) => a;
         public static float Max(float a, float b) => a;
@@ -308,7 +309,10 @@ namespace UnityEngine
     public class RangeAttribute : System.Attribute { public RangeAttribute(float min, float max) { } }
     public class TextAreaAttribute : System.Attribute { public TextAreaAttribute() { } public TextAreaAttribute(int a, int b) { } }
 }
-namespace UnityEngine.Rendering { public struct SphericalHarmonicsL2 { public float this[int i, int c] { get => 0; set { } } } }
+namespace UnityEngine.Rendering {
+    public enum ReflectionProbeType { Cube, Card }
+    public struct SphericalHarmonicsL2 { public float this[int i, int c] { get => 0; set { } } }
+}
 namespace VRC.SDKBase {
     public static class VRCShader { public static int PropertyToID(string name) => 0; }
 }
@@ -327,6 +331,9 @@ namespace UnityEngine.UI {
 }
 namespace VRC.SDKBase
 {
+    public class VRC_EventHandler {
+        public enum VrcBroadcastType { Always, Never }
+    }
     public static class Networking {
         public static bool IsOwner(UnityEngine.GameObject obj) => false;
         public static void SetOwner(VRCPlayerApi player, UnityEngine.GameObject obj) { }
@@ -365,7 +372,7 @@ namespace VRC.SDKBase
         public string UseText;
         public void Drop() { }
     }
-    public struct VRCUrl { public string Get() => null; }
+    public class VRCUrl { public string Get() => null; }
     public class VRCStation : UnityEngine.Component { }
     public static class Utilities { public static bool IsValid(UnityEngine.Object obj) => obj != null; }
 }

@@ -47,7 +47,7 @@ public class CompoundAssignmentHandler : AssignmentHandlerBase, IExpressionHandl
             // value-type operand (user struct / tuple / anonymous type) would launder to "System.Object[]".
             ClassAbi.RejectImplicitToString(vOp.Type);
             if (ResolveType(vOp.Type) is INamedTypeSymbol vt
-                && (TypeClassifier.IsUserClass(vt) || ExternResolver.IsUserEnum(vt)))
+                && (TypeClassifier.IsUserClass(vt) || IsUserEnum(vt)))
             {
                 var converted = ConvertConcatOperand(VisitExpression(vOp), vOp);
                 var concat = ExternCall(UdonAbi.StringConcatObjects,

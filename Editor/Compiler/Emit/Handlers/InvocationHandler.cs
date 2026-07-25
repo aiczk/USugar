@@ -41,7 +41,7 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
         // B67: user-enum.ToString() → synthesized value→name helper (the inherited Enum.ToString would
         // resolve to the underlying integer's ToString and print the number). Flags enums reject inside.
         if (target.Name == "ToString" && target.Parameters.Length == 0 && op.Instance != null
-            && ExternResolver.IsUserEnum(ResolveType(op.Instance.Type)))
+            && IsUserEnum(ResolveType(op.Instance.Type)))
             return TryEmitEnumToString(VisitExpression(op.Instance), op.Instance.Type);
 
         // Tier-2 equality cell (audit 2026-07-17): SDK-enum instance .Equals(object). The inherited
@@ -61,7 +61,7 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
             && target.ContainingType.SpecialType is SpecialType.System_Object
                 or SpecialType.System_ValueType or SpecialType.System_Enum
             && ResolveType(op.Instance.Type) is INamedTypeSymbol sdkEnumRecv
-            && sdkEnumRecv.TypeKind == TypeKind.Enum && !ExternResolver.IsUserEnum(sdkEnumRecv))
+            && sdkEnumRecv.TypeKind == TypeKind.Enum && !IsUserEnum(sdkEnumRecv))
             return ExternCall(UdonAbi.ObjectEquals,
                 new List<CLeaf> { VisitExpression(op.Instance), VisitExpression(op.Arguments[0].Value) },
                 StorageTypes.Boolean);
@@ -115,7 +115,7 @@ public partial class InvocationHandler : HandlerBase, IExpressionHandler
                 case "ToString":
                     // A user enum prints its member NAME (B67) — route the present value through the same
                     // synthesized helper as the bare receiver (re-tagged: the helper's param is strict-typed).
-                    if (ExternResolver.IsUserEnum(ResolveType(nulUnder)))
+                    if (IsUserEnum(ResolveType(nulUnder)))
                         return NullableAbi.EmitGetValueOrDefault(_builder, nulBox, StorageTypes.String,
                             Const("", StorageTypes.String),
                             present => TryEmitEnumToString(RetagSmallNullablePresent(present, nulUnder), nulUnder));

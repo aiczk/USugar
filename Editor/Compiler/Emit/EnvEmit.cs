@@ -85,7 +85,6 @@ static class EnvEmit
     /// <summary>Read a captured variable out of its owning scope's env record into a typed slot.</summary>
     public static CLeaf Read(CoreBuilder b, EmitContext ctx, ISymbol symbol, StorageType udonType)
     {
-        ctx.Boundary.RequireCanStoreDelegateEnvironment(SymbolType(symbol), symbol.Name);
         if (!ctx.Closures.TryGetEnvBinding(symbol, out var binding))
             throw new InvalidOperationException($"'{symbol.Name}' has no env binding.");
         var env = Leaf(b, ctx, binding.Scope);
@@ -96,7 +95,6 @@ static class EnvEmit
     /// <summary>Write a value into a captured variable's env cell.</summary>
     public static void Write(CoreBuilder b, EmitContext ctx, ISymbol symbol, CLeaf value)
     {
-        ctx.Boundary.RequireCanStoreDelegateEnvironment(SymbolType(symbol), symbol.Name);
         if (!ctx.Closures.TryGetEnvBinding(symbol, out var binding))
             throw new InvalidOperationException($"'{symbol.Name}' has no env binding.");
         var env = Leaf(b, ctx, binding.Scope);
@@ -104,17 +102,6 @@ static class EnvEmit
             new List<CLeaf> { env, new CConst(EnvAbi.CaptureSlot(binding.Slot), StorageTypes.Int32), value });
     }
 
-    static ITypeSymbol SymbolType(ISymbol symbol)
-        => symbol switch
-        {
-            ILocalSymbol local => local.Type,
-            IParameterSymbol parameter => parameter.Type,
-            IFieldSymbol field => field.Type,
-            IPropertySymbol property => property.Type,
-            IMethodSymbol method when !method.IsStatic => method.ContainingType,
-            _ => throw new InvalidOperationException(
-                $"Captured symbol '{symbol?.Name}' has no value type ({symbol?.Kind})."),
-        };
 }
 
 static class EnvAbi

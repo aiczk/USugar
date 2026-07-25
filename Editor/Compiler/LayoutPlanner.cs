@@ -112,7 +112,10 @@ public class LayoutPlanner
     readonly HashSet<INamedTypeSymbol> _interfacesWithBehaviourImplementor = new(SymbolEqualityComparer.Default);
 
     public void RegisterStructImplementedInterface(INamedTypeSymbol iface)
-        => _interfacesWithStructImplementor.Add(iface);
+    {
+        ThrowIfFrozen(nameof(RegisterStructImplementedInterface));
+        _interfacesWithStructImplementor.Add(iface);
+    }
 
     /// <summary>True if some user struct in this compilation implements `iface`. Dispatching a call/
     /// accessor through an `iface`-typed receiver can then never soundly resolve (see field comment
@@ -122,8 +125,16 @@ public class LayoutPlanner
 
     public void RegisterClassImplementedInterface(INamedTypeSymbol iface, bool isBehaviour)
     {
+        ThrowIfFrozen(nameof(RegisterClassImplementedInterface));
         if (isBehaviour) _interfacesWithBehaviourImplementor.Add(iface);
         else _interfacesWithUserClassImplementor.Add(iface);
+    }
+
+    void ThrowIfFrozen(string operation)
+    {
+        if (_frozen)
+            throw new System.InvalidOperationException(
+                $"LayoutPlanner is frozen; '{operation}' cannot mutate interface implementation facts.");
     }
 
     public bool InterfaceIsLocalUserClassOnly(INamedTypeSymbol iface)

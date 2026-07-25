@@ -411,9 +411,8 @@ static class USugarCompilationOrchestrator
             // Pre-plan all layouts (serial, populates cache)
             Mark("layout-plan");
 
-            // Registry hooks MUST be wired before parallel emit — the class-support (B79) and extern-validity
-            // gates both read them off the ambient ExternResolver, and a future embedding that forgets to wire
-            // one would silently fall to the permissive arm. Fail loud here instead (armor; unreachable today).
+            // The immutable SDK ABI catalog and type facts are already bound to each CompilationSession.
+            // Phase 2 consumes only that session-owned authority; no ambient registry hook exists.
             // ── Phase 2: Parallel emit ──
             var emitResults = new System.Collections.Concurrent.ConcurrentBag<EmitResult>();
             System.Threading.Tasks.Parallel.ForEach(classList, classInfo =>
@@ -524,7 +523,8 @@ static class USugarCompilationOrchestrator
                     {
                         USugarConstantApplier.ApplyConstantValues(program, result.Constants);
                         var fieldDefinitions =
-                            USugarTypeCacheManager.BuildFieldDefinitions(result.Symbol);
+                            USugarTypeCacheManager.BuildFieldDefinitions(
+                                result.Symbol, result.Planner.Session);
                         // [NetworkCallable] entry-point metadata — required for SendCustomNetworkEvent with
                         // parameters (the runtime looks up the event + its param types via this metadata).
                         var netMeta = BuildNetworkCallingMetadata(result.Symbol, result.Planner);
@@ -800,7 +800,7 @@ static class USugarCompilationOrchestrator
             {
                 var parameterType =
                     USugarTypeCacheManager.ResolveUdonType(
-                        ExternResolver.GetUdonTypeName(method.Parameters[i].Type))
+                        planner.Session.Types.GetUdonTypeName(method.Parameters[i].Type))
                     ?? throw new InvalidOperationException(
                         $"Could not resolve Udon storage type for [NetworkCallable] parameter "
                         + $"'{method.Parameters[i].Name}' on '{method.ToDisplayString()}'.");
