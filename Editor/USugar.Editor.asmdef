@@ -17,6 +17,7 @@
         "Microsoft.CodeAnalysis.dll",
         "Microsoft.CodeAnalysis.CSharp.dll",
         "System.Collections.Immutable.dll",
+        "System.Reflection.Metadata.dll",
         "VRC.Udon.Common.dll",
         "VRC.Udon.Graph.dll",
         "0Harmony.dll",
