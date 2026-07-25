@@ -13,7 +13,7 @@ public partial class InvocationHandler
                     new[] { "UnityEngine.Object" },
                     new[] { "Instantiate" },
                     genericArity: -1,
-                    new IntrinsicParameterShape(1, 4)),
+                    minimumParameters: 1, maximumParameters: 4),
                 (handler, operation, target) =>
                     handler.EmitInstantiateIntrinsic(operation, target)),
             new InvocationIntrinsicRule(
@@ -22,9 +22,8 @@ public partial class InvocationHandler
                     new[] { "System.Array" },
                     new[] { "GetLength", "GetUpperBound" },
                     genericArity: 0,
-                    new IntrinsicParameterShape(
-                        1, 1,
-                        new IntrinsicParameterConstraint(0, "System.Int32"))),
+                    minimumParameters: 1, maximumParameters: 1,
+                    constrainedOrdinal: 0, constrainedTypeName: "System.Int32"),
                 (handler, operation, target) =>
                     handler.EmitNdimArrayIntrinsic(operation, target),
                 (handler, operation, target) =>
@@ -36,7 +35,7 @@ public partial class InvocationHandler
                     new[] { "System.Array" },
                     new[] { "Clone", "CopyTo", "Copy", "ConstrainedCopy" },
                     genericArity: 0,
-                    new IntrinsicParameterShape(0, 5)),
+                    minimumParameters: 0, maximumParameters: 5),
                 (handler, operation, target) =>
                     handler.EmitAggregateArrayCopyIntrinsic(operation, target),
                 (handler, operation, target) =>
@@ -55,9 +54,8 @@ public partial class InvocationHandler
                         "GetComponentsInParent",
                     },
                     genericArity: 1,
-                    new IntrinsicParameterShape(
-                        0, 1,
-                        new IntrinsicParameterConstraint(0, "System.Boolean"))),
+                    minimumParameters: 0, maximumParameters: 1,
+                    constrainedOrdinal: 0, constrainedTypeName: "System.Boolean"),
                 (handler, operation, target) =>
                     handler.EmitGetComponentGeneric(operation, target)),
         });

@@ -4,80 +4,29 @@ using System.Linq;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.Operations;
 
-/// <summary>One exact parameter constraint within an intrinsic overload family.</summary>
-public readonly struct IntrinsicParameterConstraint
-{
-    public int Ordinal { get; }
-    public string TypeName { get; }
-
-    public IntrinsicParameterConstraint(int ordinal, string typeName)
-    {
-        if (ordinal < 0) throw new ArgumentOutOfRangeException(nameof(ordinal));
-        Ordinal = ordinal;
-        TypeName = !string.IsNullOrEmpty(typeName)
-            ? typeName
-            : throw new ArgumentException("A parameter type name is required.", nameof(typeName));
-    }
-}
-
-/// <summary>
-/// Declarative shape of an intrinsic overload family. Constraints apply when
-/// their ordinal is present, allowing one key to describe optional SDK
-/// parameters such as includeInactive.
-/// </summary>
-public sealed class IntrinsicParameterShape
-{
-    readonly IReadOnlyList<IntrinsicParameterConstraint> _constraints;
-
-    public int MinimumCount { get; }
-    public int MaximumCount { get; }
-
-    public IntrinsicParameterShape(int minimumCount, int maximumCount,
-        params IntrinsicParameterConstraint[] constraints)
-    {
-        if (minimumCount < 0 || maximumCount < minimumCount)
-            throw new ArgumentOutOfRangeException(nameof(minimumCount));
-        MinimumCount = minimumCount;
-        MaximumCount = maximumCount;
-        _constraints = constraints ?? Array.Empty<IntrinsicParameterConstraint>();
-    }
-
-    public bool Matches(IMethodSymbol method)
-    {
-        var parameters = method.OriginalDefinition.Parameters;
-        if (parameters.Length < MinimumCount || parameters.Length > MaximumCount)
-            return false;
-        foreach (var constraint in _constraints)
-        {
-            if (constraint.Ordinal >= parameters.Length) continue;
-            var parameterType = parameters[constraint.Ordinal].Type;
-            var actual = parameterType.SpecialType == SpecialType.None
-                ? parameterType.ToDisplayString(
-                    SymbolDisplayFormat.CSharpErrorMessageFormat)
-                : ExternResolver.GetSpecialTypeName(parameterType.SpecialType);
-            if (!string.Equals(actual, constraint.TypeName, StringComparison.Ordinal))
-                return false;
-        }
-        return true;
-    }
-}
-
 /// <summary>
 /// Stable semantic lookup key for an invocation intrinsic. Matching uses
-/// Roslyn symbols only; emitted extern names are not part of the key.
+/// Roslyn symbols only; emitted extern names are not part of the key. The
+/// parameter constraint applies only when its ordinal is present, so one key
+/// describes an overload family with optional SDK parameters such as
+/// includeInactive.
 /// </summary>
 public sealed class IntrinsicKey
 {
     readonly HashSet<string> _containingTypes;
     readonly HashSet<string> _methods;
-    readonly IReadOnlyList<IntrinsicParameterShape> _parameterShapes;
+    readonly int _minimumParameters;
+    readonly int _maximumParameters;
+    readonly int _constrainedOrdinal;
+    readonly string _constrainedTypeName;
 
     /// <summary>-1 means any generic arity.</summary>
     public int GenericArity { get; }
 
     public IntrinsicKey(IEnumerable<string> containingTypes,
         IEnumerable<string> methods, int genericArity,
-        params IntrinsicParameterShape[] parameterShapes)
+        int minimumParameters, int maximumParameters,
+        int constrainedOrdinal = -1, string constrainedTypeName = null)
     {
         _containingTypes = new HashSet<string>(
             containingTypes ?? throw new ArgumentNullException(nameof(containingTypes)),
@@ -89,10 +38,18 @@ public sealed class IntrinsicKey
             throw new ArgumentException(
                 "An intrinsic key requires at least one containing type and method.");
         if (genericArity < -1) throw new ArgumentOutOfRangeException(nameof(genericArity));
+        if (minimumParameters < 0 || maximumParameters < minimumParameters)
+            throw new ArgumentOutOfRangeException(nameof(minimumParameters));
+        if (constrainedOrdinal < -1)
+            throw new ArgumentOutOfRangeException(nameof(constrainedOrdinal));
+        if (constrainedOrdinal >= 0 == string.IsNullOrEmpty(constrainedTypeName))
+            throw new ArgumentException(
+                "A parameter constraint requires both an ordinal and a type name.");
         GenericArity = genericArity;
-        _parameterShapes = parameterShapes == null || parameterShapes.Length == 0
-            ? new[] { new IntrinsicParameterShape(0, int.MaxValue) }
-            : parameterShapes;
+        _minimumParameters = minimumParameters;
+        _maximumParameters = maximumParameters;
+        _constrainedOrdinal = constrainedOrdinal;
+        _constrainedTypeName = constrainedTypeName;
     }
 
     public bool Matches(IMethodSymbol method)
@@ -104,7 +61,23 @@ public sealed class IntrinsicKey
                && _containingTypes.Contains(containingType)
                && _methods.Contains(method.Name)
                && (GenericArity < 0 || method.Arity == GenericArity)
-               && _parameterShapes.Any(shape => shape.Matches(method));
+               && MatchesParameters(method);
+    }
+
+    bool MatchesParameters(IMethodSymbol method)
+    {
+        var parameters = method.OriginalDefinition.Parameters;
+        if (parameters.Length < _minimumParameters
+            || parameters.Length > _maximumParameters)
+            return false;
+        if (_constrainedOrdinal < 0 || _constrainedOrdinal >= parameters.Length)
+            return true;
+        var parameterType = parameters[_constrainedOrdinal].Type;
+        var actual = parameterType.SpecialType == SpecialType.None
+            ? parameterType.ToDisplayString(
+                SymbolDisplayFormat.CSharpErrorMessageFormat)
+            : ExternResolver.GetSpecialTypeName(parameterType.SpecialType);
+        return string.Equals(actual, _constrainedTypeName, StringComparison.Ordinal);
     }
 }
 
