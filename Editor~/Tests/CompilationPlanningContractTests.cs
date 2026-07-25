@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reflection;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
@@ -10,6 +11,17 @@ namespace USugar.Tests;
 
 public class CompilationPlanningContractTests
 {
+    [Fact]
+    public void UasmEmitter_IsAThinPipelineFacade()
+    {
+        var fields = typeof(UasmEmitter).GetFields(
+            BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.DeclaredOnly);
+
+        var pipeline = Assert.Single(fields);
+        Assert.Equal("_pipeline", pipeline.Name);
+        Assert.Equal(typeof(ProgramLoweringPipeline), pipeline.FieldType);
+    }
+
     [Fact]
     public void Builder_FreezesRegistrationGatesOnce()
     {

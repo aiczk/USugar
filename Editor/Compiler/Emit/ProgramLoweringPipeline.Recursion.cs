@@ -4,7 +4,7 @@ using System.Linq;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.Operations;
 
-public partial class UasmEmitter
+internal partial class ProgramLoweringPipeline
 {
     // ── Recursion-cycle analysis ──
 

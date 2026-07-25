@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Reflection;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.Operations;
 using Xunit;
@@ -10,7 +9,7 @@ namespace USugar.Tests;
 
 // Language-surface census (2026-07-11, owner-ordered): makes the claim "everything outside VM
 // constraints is writable" MACHINE-CHECKABLE. Every Roslyn OperationKind must land in exactly one
-// bucket: HANDLED (dispatch tables, reflected from the live emitter, plus the internal-arm list),
+// bucket: HANDLED (the live pipeline's declared operation kinds, plus the internal-arm list),
 // VM_FUNDAMENTAL (documented loud reject rooted in a missing VM capability), OUT_OF_SCOPE (VB-only,
 // CFG-lowered-only, above the C# 9 Unity LCD, or metadata-only), DOCUMENTED_REJECT (designed
 // non-VM boundary with a loud message), or KNOWN_GAP (the honest to-do list). "Complete" is then
@@ -110,14 +109,7 @@ public class LanguageSurfaceTests
         TestHelper.CompileToUasm(@"using UdonSharp;
 public class Cen : UdonSharpBehaviour { public int result; void Start(){ result = 1; } }", "Cen", out var emitter);
 
-        var handled = new HashSet<OperationKind>();
-        foreach (var fieldName in new[] { "_stmtDispatch", "_exprDispatch" })
-        {
-            var f = typeof(UasmEmitter).GetField(fieldName, BindingFlags.NonPublic | BindingFlags.Instance)
-                ?? throw new InvalidOperationException($"UasmEmitter.{fieldName} not found (refactor drift)");
-            var dict = (System.Collections.IDictionary)f.GetValue(emitter);
-            foreach (var k in dict.Keys) handled.Add((OperationKind)k);
-        }
+        var handled = new HashSet<OperationKind>(emitter.HandledOperationKinds);
         foreach (var k in HandledInternal) handled.Add(k);
 
         var buckets = new Dictionary<OperationKind, string>();
