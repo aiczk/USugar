@@ -416,7 +416,7 @@ public partial class InvocationHandler
         for (int i = 0; i < op.Arguments.Length; i++)
             argVals.Add(VisitExpression(op.Arguments[i].Value));
 
-        instanceVal = EnsureComponentInstance(op.Instance, instanceVal);
+        instanceVal = EnsureComponentInstance(target, op.Instance, instanceVal);
 
         // Build extern args: instance + explicit args + typeof(T)
         var externArgs = new List<CLeaf>();
@@ -471,7 +471,7 @@ public partial class InvocationHandler
         for (int i = 0; i < op.Arguments.Length; i++)
             argVals.Add(VisitExpression(op.Arguments[i].Value));
 
-        instanceVal = EnsureComponentInstance(op.Instance, instanceVal);
+        instanceVal = EnsureComponentInstance(target, op.Instance, instanceVal);
 
         // Determine which non-generic GetComponents extern to call
         var fetchExtern = ResolveShimFetchExtern(target.Name, op.Arguments.Length > 0);
@@ -512,7 +512,7 @@ public partial class InvocationHandler
     /// an already-Component-typed slot is not proof and the hop is unconditional. Implicit `this` is
     /// exempt because StorageContext mints it as a Transform slot.
     /// </summary>
-    CLeaf EnsureComponentInstance(IOperation instanceOp, CLeaf instanceVal)
+    CLeaf EnsureComponentInstance(IMethodSymbol target, IOperation instanceOp, CLeaf instanceVal)
     {
         if (instanceOp == null || instanceVal == null)
             throw new System.InvalidOperationException(
@@ -520,21 +520,23 @@ public partial class InvocationHandler
         if (instanceOp is IInstanceReferenceOperation)
             return instanceVal;
 
-        var receiver = ResolveType(instanceOp.Type)
-            ?? throw new System.NotSupportedException(
-                "A component query receiver has no resolved type.");
-        if (Displays(receiver, "UnityEngine.GameObject"))
-            return TransformOf("UnityEngineGameObject", instanceVal);
-        for (var t = receiver; t != null; t = t.BaseType)
-            if (Displays(t, "UnityEngine.Component"))
+        // The intrinsic key admitted this call by its declaring type, so the same symbol decides
+        // which transform getter applies — asking the receiver expression instead would be a second
+        // producer of the classification that already let the call in.
+        var declaring = target.ContainingType?.ToDisplayString(
+            SymbolDisplayFormat.CSharpErrorMessageFormat);
+        switch (declaring)
+        {
+            case "UnityEngine.GameObject":
+                return TransformOf("UnityEngineGameObject", instanceVal);
+            case "UnityEngine.Component":
                 return TransformOf("UnityEngineComponent", instanceVal);
-        throw new System.NotSupportedException(
-            $"A component query receiver of type '{receiver.ToDisplayString()}' cannot be proven to "
-            + "be a UnityEngine.Component, so it cannot be lowered to a Transform-typed operand.");
+            default:
+                throw new System.NotSupportedException(
+                    $"A component query declared on '{declaring ?? "(unknown)"}' has no receiver "
+                    + "normalization, so its operand cannot be proven Component-typed.");
+        }
     }
-
-    static bool Displays(ITypeSymbol type, string fullName)
-        => type.ToDisplayString(SymbolDisplayFormat.CSharpErrorMessageFormat) == fullName;
 
     CLeaf TransformOf(string owner, CLeaf instanceVal)
         => ExternCall(
