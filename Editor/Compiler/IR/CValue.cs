@@ -114,7 +114,7 @@ public sealed class CFuncRef : CLeaf
 public sealed class CExternCall : CValue
 {
     public readonly BoundExtern Sig;
-    public readonly List<CLeaf> Args;
+    public readonly IReadOnlyList<CLeaf> Args;
     public readonly int? DestSlot; // null in tree role; set in flat (instruction) role
     /// <summary>Design §4.3: this call is a delegate-dispatch site that can re-enter its containing
     /// function (the cross-arm SendCustomEvent of a marked dispatch). InsertRecursionSpills wraps
@@ -135,7 +135,7 @@ public sealed class CExternCall : CValue
         int? destSlot = null, bool reentrant = false, int preSpillStmts = 0) : base(retType)
     {
         Sig = sig ?? throw new ArgumentNullException(nameof(sig));
-        Args = args ?? new List<CLeaf>();
+        Args = (args ?? new List<CLeaf>()).AsReadOnly();
         DestSlot = destSlot;
         Reentrant = reentrant;
         PreSpillStmts = preSpillStmts;
@@ -158,7 +158,7 @@ public sealed class CExternCall : CValue
 public sealed class CInternalCall : CValue
 {
     public readonly string FuncName;
-    public readonly List<CLeaf> Args;
+    public readonly IReadOnlyList<CLeaf> Args;
     public readonly int? DestSlot;
     /// <summary>Design §4.3: this call is a delegate-dispatch site that can re-enter its containing
     /// function (the self-arm __indirect of a marked dispatch). See <see cref="CExternCall.Reentrant"/>.</summary>
@@ -175,7 +175,7 @@ public sealed class CInternalCall : CValue
         bool reentrant = false, bool tailSpared = false) : base(retType)
     {
         FuncName = funcName ?? throw new ArgumentNullException(nameof(funcName));
-        Args = args ?? new List<CLeaf>();
+        Args = (args ?? new List<CLeaf>()).AsReadOnly();
         DestSlot = destSlot;
         Reentrant = reentrant;
         TailSpared = tailSpared;

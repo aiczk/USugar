@@ -30,7 +30,7 @@ public sealed class UasmEmitter
     public IReadOnlyList<EmitDiagnostic> Diagnostics => _pipeline.Diagnostics;
     public CodeGenResult CodeGenResult => _pipeline.CodeGenResult;
     public StructuredModule Module => _pipeline.Module;
-    public FlatModule FlatModule => _pipeline.FlatModule;
+    public VerifiedFlatModule FlatModule => _pipeline.FlatModule;
     public CaptureScopeAnalysis CaptureScope => _pipeline.CaptureScope;
     public Compilation Compilation => _pipeline.Compilation;
     public INamedTypeSymbol ClassSymbol => _pipeline.ClassSymbol;

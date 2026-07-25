@@ -1,3 +1,5 @@
+using System;
+using System.Reflection;
 using Xunit;
 
 namespace USugar.Tests;
@@ -8,6 +10,46 @@ namespace USugar.Tests;
 /// </summary>
 public class CoreToUasmTests
 {
+    [Fact]
+    public void CoreToUasm_AcceptsOnlyVerifiedFlatModules()
+    {
+        var generate = Assert.Single(typeof(CoreToUasm).GetMethods(
+            BindingFlags.Public | BindingFlags.Static));
+        Assert.Equal(nameof(CoreToUasm.Generate), generate.Name);
+        Assert.Equal(
+            typeof(VerifiedFlatModule),
+            Assert.Single(generate.GetParameters()).ParameterType);
+    }
+
+    [Fact]
+    public void VerifiedFlatModule_SnapshotsMutableCfgCollectionsAndEdges()
+    {
+        var module = new FlatModule(className: "Freeze");
+        var function = module.AddFunction("freeze");
+        function.Slots.Add(new SlotDecl(0, StorageTypes.Int32, SlotClass.Scratch));
+        var entry = function.NewBlock();
+        entry.Instructions.Add(new CAssign(
+            0, new CConst(7, StorageTypes.Int32)));
+        var exit = function.NewBlock();
+        entry.Terminator = new CJump(exit.Id);
+        exit.Terminator = new CRet();
+
+        var verified = VerifiedFlatModule.VerifyAndFreeze(module);
+
+        entry.Instructions.Clear();
+        entry.Terminator = new CJump(entry.Id);
+        function.Blocks.Clear();
+        module.Functions.Clear();
+
+        var frozenFunction = Assert.Single(verified.Functions);
+        Assert.Equal(2, frozenFunction.Blocks.Count);
+        Assert.Single(frozenFunction.Entry.Instructions);
+        Assert.Equal(exit.Id, Assert.IsType<CJump>(
+            frozenFunction.Entry.Terminator).TargetBlockId);
+        Assert.Null(typeof(VerifiedFlatFunction).GetMethod("NewSlot"));
+        Assert.Null(typeof(VerifiedFlatFunction).GetMethod("NewBlock"));
+    }
+
     [Fact]
     public void CoreToUasm_UnusedSlot_NotDeclaredInUasm()
     {
@@ -27,7 +69,8 @@ public class CoreToUasmTests
         func.ReturnSlots.Add(new ReturnSlot("__retval", StorageTypes.Int32));
         func.ReturnType = StorageTypes.Int32;
 
-        var result = CoreToUasm.Generate(module);
+        var result = CoreToUasm.Generate(
+            VerifiedFlatModule.VerifyAndFreeze(module));
         var uasm = result.Uasm;
 
         // slot0 should be declared (it's referenced)

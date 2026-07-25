@@ -39,7 +39,7 @@ internal sealed class ProgramLoweringPipeline
     List<EmitDiagnostic> _diagnostics => _state.DiagnosticState.Diagnostics;
 
     CodeGenResult _codeGenResult;
-    FlatModule _flatModule;
+    VerifiedFlatModule _flatModule;
 
     public IReadOnlyList<EmitDiagnostic> Diagnostics => _diagnostics;
     public CodeGenResult CodeGenResult => _codeGenResult;
@@ -103,7 +103,7 @@ internal sealed class ProgramLoweringPipeline
     /// <summary>Access to the Core IR module for debugging and testing.</summary>
     public StructuredModule Module => _module;
     /// <summary>Access to the most recently lowered flat IR module.</summary>
-    public FlatModule FlatModule => _flatModule;
+    public VerifiedFlatModule FlatModule => _flatModule;
 
     /// <summary>Test/tooling accessors for the Stage 2 M1 CaptureScopeAnalysis (built in <see cref="Emit"/>,
     /// consumed by nothing yet — see LoweringState.CaptureScope).</summary>

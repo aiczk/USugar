@@ -3,10 +3,10 @@ using System;
 /// <summary>The typed result of the Core IR pipeline.</summary>
 public sealed class IrPipelineResult
 {
-    public readonly FlatModule FlatModule;
+    public readonly VerifiedFlatModule FlatModule;
     public readonly CodeGenResult CodeGen;
 
-    public IrPipelineResult(FlatModule flatModule, CodeGenResult codeGen)
+    public IrPipelineResult(VerifiedFlatModule flatModule, CodeGenResult codeGen)
     {
         FlatModule = flatModule ?? throw new ArgumentNullException(nameof(flatModule));
         CodeGen = codeGen;
@@ -34,8 +34,9 @@ public static class IrPipeline
 
         // Recursion spill insertion allocates flat-only scratch slots after coalescing.
         CoreFlatOptimizer.InsertRecursionSpills(flatModule);
-        FlatVerify.Verify(flatModule);
-
-        return new IrPipelineResult(flatModule, CoreToUasm.Generate(flatModule));
+        var verifiedModule = VerifiedFlatModule.VerifyAndFreeze(flatModule);
+        return new IrPipelineResult(
+            verifiedModule,
+            CoreToUasm.Generate(verifiedModule));
     }
 }

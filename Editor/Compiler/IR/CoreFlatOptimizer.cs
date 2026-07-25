@@ -650,7 +650,7 @@ public static class CoreFlatOptimizer
     static int? RemapSlotIdNullable(int? slotId, Dictionary<int, int> mapping)
         => slotId.HasValue ? RemapSlotId(slotId.Value, mapping) : null;
 
-    static List<CLeaf> RemapArgs(List<CLeaf> args, Dictionary<int, int> mapping)
+    static List<CLeaf> RemapArgs(IReadOnlyList<CLeaf> args, Dictionary<int, int> mapping)
     {
         var result = new List<CLeaf>(args.Count);
         foreach (var arg in args)

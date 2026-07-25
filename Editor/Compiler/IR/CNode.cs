@@ -191,7 +191,7 @@ public abstract class CTerminator
 /// <summary>Unconditional jump.</summary>
 public sealed class CJump : CTerminator
 {
-    public int TargetBlockId;
+    public readonly int TargetBlockId;
     public CJump(int targetBlockId) => TargetBlockId = targetBlockId;
 }
 
@@ -199,8 +199,8 @@ public sealed class CJump : CTerminator
 public sealed class CBranch : CTerminator
 {
     public readonly CLeaf Cond;
-    public int TrueBlockId;
-    public int FalseBlockId;
+    public readonly int TrueBlockId;
+    public readonly int FalseBlockId;
     public CBranch(CLeaf cond, int trueBlockId, int falseBlockId)
     {
         Cond = cond ?? throw new ArgumentNullException(nameof(cond));

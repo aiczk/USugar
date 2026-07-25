@@ -3,14 +3,14 @@ using System.Collections.Generic;
 using System.Text;
 
 /// <summary>
-/// Generates UASM assembly text from a flattened FlatModule.
+/// Generates UASM assembly text from an immutable, verified flat module.
 /// Two-pass approach:
 ///   Pass 1: Collect instructions into intermediate representation, compute label addresses.
 ///   Pass 2: Render UASM text with resolved numeric addresses.
 /// </summary>
 public static class CoreToUasm
 {
-    public static CodeGenResult Generate(FlatModule module)
+    public static CodeGenResult Generate(VerifiedFlatModule module)
     {
         var gen = new Generator(module);
         return gen.Run();
@@ -56,12 +56,12 @@ public static class CoreToUasm
 
     sealed class Generator
     {
-        readonly FlatModule _module;
+        readonly VerifiedFlatModule _module;
         readonly List<VarDecl> _vars = new();
         readonly Dictionary<string, VarDescriptor> _declaredVars = new();
         readonly HashSet<string> _externs = new();
         readonly Dictionary<ConstKey, string> _constPool = new();
-        readonly Dictionary<string, FlatFunction> _funcByName = new();
+        readonly Dictionary<string, VerifiedFlatFunction> _funcByName = new();
 
         // Slot → UASM variable name: keyed by (funcIndex, slotId) for global uniqueness.
         readonly Dictionary<(int funcIdx, int slotId), string> _slotVars = new();
@@ -115,7 +115,7 @@ public static class CoreToUasm
                     && Equals(ConstValue, other.ConstValue) && Purpose == other.Purpose;
         }
 
-        public Generator(FlatModule module)
+        public Generator(VerifiedFlatModule module)
         {
             _module = module;
             foreach (var func in module.Functions)
@@ -198,7 +198,7 @@ public static class CoreToUasm
 
         // ── Variable declarations ──
 
-        void DeclareField(FieldDecl field)
+        void DeclareField(VerifiedFieldDecl field)
         {
             var flags = FieldFlags.None;
             if ((field.Flags & FieldFlags.Export) != 0) flags |= FieldFlags.Export;
@@ -257,7 +257,7 @@ public static class CoreToUasm
 
         // ── Slot → variable name mapping ──
 
-        string GetSlotVar(int funcIdx, int slotId, FlatFunction func)
+        string GetSlotVar(int funcIdx, int slotId, VerifiedFlatFunction func)
         {
             var key = (funcIdx, slotId);
             if (_slotVars.TryGetValue(key, out var existing))
@@ -287,7 +287,7 @@ public static class CoreToUasm
 
         // ── Operand resolution ──
 
-        string ResolveOperand(CValue op, int funcIdx, FlatFunction func)
+        string ResolveOperand(CValue op, int funcIdx, VerifiedFlatFunction func)
         {
             return op switch
             {
@@ -331,7 +331,7 @@ public static class CoreToUasm
             return varName;
         }
 
-        int FindFuncIndex(FlatFunction func)
+        int FindFuncIndex(VerifiedFlatFunction func)
         {
             for (int i = 0; i < _module.Functions.Count; i++)
                 if (_module.Functions[i] == func) return i;
@@ -340,7 +340,7 @@ public static class CoreToUasm
 
         // ── Function preparation ──
 
-        void PrepareFunction(int funcIdx, FlatFunction func)
+        void PrepareFunction(int funcIdx, VerifiedFlatFunction func)
         {
             // Assign block labels
             foreach (var block in func.Blocks)
@@ -418,7 +418,7 @@ public static class CoreToUasm
 
         // ── Function emission ──
 
-        void EmitFunction(int funcIdx, FlatFunction func)
+        void EmitFunction(int funcIdx, VerifiedFlatFunction func)
         {
             var rpo = FlatCfgOrder.ComputeRpo(func);
 
@@ -454,7 +454,7 @@ public static class CoreToUasm
             }
         }
 
-        void EmitInst(IFlatInstruction inst, int funcIdx, FlatFunction func)
+        void EmitInst(IFlatInstruction inst, int funcIdx, VerifiedFlatFunction func)
         {
             switch (inst)
             {
@@ -492,14 +492,14 @@ public static class CoreToUasm
             }
         }
 
-        void EmitMove(CAssign move, int funcIdx, FlatFunction func)
+        void EmitMove(CAssign move, int funcIdx, VerifiedFlatFunction func)
         {
             var src = ResolveOperand(move.Value, funcIdx, func);
             var dst = GetSlotVar(funcIdx, move.DestSlot, func);
             AddCopyPair(src, dst);
         }
 
-        void EmitCallExtern(CExternCall call, int funcIdx, FlatFunction func)
+        void EmitCallExtern(CExternCall call, int funcIdx, VerifiedFlatFunction func)
         {
             foreach (var arg in call.Args)
                 AddPush(ResolveOperand(arg, funcIdx, func));
@@ -508,7 +508,7 @@ public static class CoreToUasm
             AddExtern(call.Sig.Text);
         }
 
-        void EmitCallInternal(CInternalCall call, int funcIdx, FlatFunction func)
+        void EmitCallInternal(CInternalCall call, int funcIdx, VerifiedFlatFunction func)
         {
             // __indirect is a special marker for delegate invocation via JUMP_INDIRECT.
             // Args have been stored to convention fields by the handler; the single
@@ -559,7 +559,7 @@ public static class CoreToUasm
                 AddCopyPair(target.ReturnFieldName, GetSlotVar(funcIdx, call.DestSlot.Value, func));
         }
 
-        void EmitCallIndirect(CInternalCall call, int funcIdx, FlatFunction func)
+        void EmitCallIndirect(CInternalCall call, int funcIdx, VerifiedFlatFunction func)
         {
             // The single arg is the method pointer
             if (call.Args.Count < 1)
@@ -586,7 +586,7 @@ public static class CoreToUasm
             // No return value copy — the handler reads it via LoadField from convention fields
         }
 
-        void EmitTerminator(CTerminator term, int funcIdx, FlatFunction func, FlatBlock nextBlock)
+        void EmitTerminator(CTerminator term, int funcIdx, VerifiedFlatFunction func, VerifiedFlatBlock nextBlock)
         {
             switch (term)
             {
@@ -608,7 +608,7 @@ public static class CoreToUasm
             }
         }
 
-        void EmitBranch(CBranch branch, int funcIdx, FlatFunction func, FlatBlock nextBlock)
+        void EmitBranch(CBranch branch, int funcIdx, VerifiedFlatFunction func, VerifiedFlatBlock nextBlock)
         {
             AddPush(ResolveOperand(branch.Cond, funcIdx, func));
 
@@ -627,7 +627,7 @@ public static class CoreToUasm
             }
         }
 
-        void EmitReturn(CRet ret, int funcIdx, FlatFunction func)
+        void EmitReturn(CRet ret, int funcIdx, VerifiedFlatFunction func)
         {
             if (ret.Value != null && func.ReturnFieldName != null)
                 AddCopyPair(
