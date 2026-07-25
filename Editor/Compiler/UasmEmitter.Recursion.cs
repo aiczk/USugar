@@ -365,8 +365,9 @@ public partial class UasmEmitter
     // DECLARATOR is inside this node's own body (a local declared in an enclosing method and
     // dispatched inside a hoisted closure keeps the blanket treatment — its defs live outside this
     // tree); no ref/out use, no compound/increment/deconstruction target anywhere; at least one
-    // write exists; and every write's RHS resolves to a delegate creation (or null). Targets mirror
-    // the resolver's EscapeTarget mapping (OriginalDefinition + the [X1] leaf override).
+    // write exists; and every write's RHS resolves to a delegate creation (or null). Targets come from
+    // the resolver's own EscapeTargetsOf — a precise site skips the blanket sig match, so re-deriving
+    // the mapping here would make a missing arm a missing Reentrant mark.
     bool TryResolvePreciseDispatchTargets(IOperation callerBody, IInvocationOperation site,
         out HashSet<IMethodSymbol> targets)
     {
@@ -390,8 +391,8 @@ public partial class UasmEmitter
                     found.Add(af.Symbol);
                     return true;
                 case IMethodReferenceOperation mr when mr.Method != null:
-                    found.Add(mr.Method.OriginalDefinition);
-                    if (EdgeResolver.LeafMethodRefTarget(mr) is { } leafT) found.Add(leafT);
+                    foreach (var escapeTarget in EdgeResolver.EscapeTargetsOf(mr))
+                        found.Add(escapeTarget);
                     return true;
                 default:
                     // null / default contribute no callee; anything else breaks provenance.

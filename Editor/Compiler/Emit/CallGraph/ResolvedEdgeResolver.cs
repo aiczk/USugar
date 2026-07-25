@@ -80,22 +80,31 @@ public sealed class ResolvedEdgeResolver
         if (op is IDelegateCreationOperation dc)
         {
             if (dc.Target is IMethodReferenceOperation mr && mr.Method != null)
-            {
-                yield return new ResolvedTarget(mr.Method.OriginalDefinition, TargetRole.EscapeTarget);
-                if (mr.Method.ContainingType is INamedTypeSymbol { TypeKind: TypeKind.Interface } escapeIface
-                    && _emitter.Planner.InterfaceIsLocalUserClassOnly(escapeIface))
-                    foreach (var vt in _emitter.VirtualDispatchInstance.Resolve(
-                        CallableSites.Require(mr, mr.Method),
-                        escapeIface).RuntimeTargets)
-                        yield return new ResolvedTarget(vt.Impl.OriginalDefinition, TargetRole.EscapeTarget);
-                if (LeafMethodRefTarget(mr) is { } leafT)
-                    yield return new ResolvedTarget(leafT, TargetRole.EscapeTarget);
-            }
+                foreach (var t in EscapeTargetsOf(mr))
+                    yield return new ResolvedTarget(t, TargetRole.EscapeTarget);
             else if (dc.Target is IAnonymousFunctionOperation af && af.Symbol != null)
                 yield return new ResolvedTarget(af.Symbol, TargetRole.EscapeTarget);
         }
         foreach (var t in ResolveReachEdges(op))
             yield return t;
+    }
+
+    /// <summary>The three EscapeTarget mappings for ONE method-group delegate creation. SINGLE PRODUCER:
+    /// the reentrancy analysis's per-site provenance (UasmEmitter.Recursion's TryResolvePreciseDispatchTargets)
+    /// enumerates through here too, because a precise site uses ONLY its own callee set and skips the
+    /// blanket signature match — so a target this omits is a missing Reentrant mark and an unspilled frame.</summary>
+    public IEnumerable<IMethodSymbol> EscapeTargetsOf(IMethodReferenceOperation mr)
+    {
+        if (mr?.Method == null) yield break;
+        yield return mr.Method.OriginalDefinition;
+        if (mr.Method.ContainingType is INamedTypeSymbol { TypeKind: TypeKind.Interface } escapeIface
+            && _emitter.Planner.InterfaceIsLocalUserClassOnly(escapeIface))
+            foreach (var vt in _emitter.VirtualDispatchInstance.Resolve(
+                CallableSites.Require(mr, mr.Method),
+                escapeIface).RuntimeTargets)
+                yield return vt.Impl.OriginalDefinition;
+        if (LeafMethodRefTarget(mr) is { } leafT)
+            yield return leafT;
     }
 
     /// <summary>The reach-role targets only (no CallEdge). The reach worklist runs in Phase-1, BEFORE the
