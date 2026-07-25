@@ -182,6 +182,7 @@ public static class ExternResolver
         if (typeParamMap != null && type is INamedTypeSymbol named && named.IsGenericType
             && named.OriginalDefinition.SpecialType != SpecialType.System_Nullable_T
             && type.TypeKind != TypeKind.Enum
+            && !IsUserInterface(type)
             && !TypeClassifier.IsObjectArrayEmulated(type))
         {
             var def = named.ConstructedFrom;
