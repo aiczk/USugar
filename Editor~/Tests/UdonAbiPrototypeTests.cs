@@ -92,6 +92,41 @@ public class UdonAbiPrototypeTests
     }
 
     [Fact]
+    public void ExternOperandPolicyIsIndependentFromRawCopyPolicy()
+    {
+        var facts = new UdonTypeFactRegistry();
+        facts.RecordForTest(
+            "FixtureReferenceA", isEnum: false, isValueType: false);
+        facts.RecordForTest(
+            "FixtureReferenceB", isEnum: false, isValueType: false);
+
+        Assert.Null(ExternOperandCompatibility.WhyIncompatible(
+            "FixtureReferenceA",
+            "FixtureReferenceB",
+            UdonAbiParameterMode.In,
+            facts));
+        Assert.Null(RawCopyCompatibility.WhyIncompatible(
+            "FixtureReferenceA",
+            "FixtureReferenceB",
+            facts));
+
+        var externReason = ExternOperandCompatibility.WhyIncompatible(
+            "SystemInt32",
+            "SystemString",
+            UdonAbiParameterMode.Out,
+            facts);
+        var copyReason = RawCopyCompatibility.WhyIncompatible(
+            "SystemInt32",
+            "SystemString",
+            facts);
+
+        Assert.NotNull(externReason);
+        Assert.NotNull(copyReason);
+        Assert.Contains("extern Out operand", externReason);
+        Assert.DoesNotContain("extern Out operand", copyReason);
+    }
+
+    [Fact]
     public void NameOnlyPrototypeCannotBypassOperandVerification()
     {
         const string signature = "Example.__Touch__SystemInt32__SystemVoid";

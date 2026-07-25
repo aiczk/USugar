@@ -75,12 +75,13 @@ public sealed class UdonAbiType
     public static UdonAbiType Exact(string storageType)
         => new(new StorageType(storageType));
 
-    public bool TryMatch(StorageType actual, UdonTypeFactRegistry typeFacts,
+    public bool TryMatch(StorageType actual, UdonAbiParameterMode mode,
+        UdonTypeFactRegistry typeFacts,
         out string reason)
     {
         if (typeFacts == null) throw new ArgumentNullException(nameof(typeFacts));
-        reason = RawCopyCompatibility.WhyIncompatible(
-            ExactType.Name, actual.Name, typeFacts);
+        reason = ExternOperandCompatibility.WhyIncompatible(
+            ExactType.Name, actual.Name, mode, typeFacts);
         return reason == null;
     }
 

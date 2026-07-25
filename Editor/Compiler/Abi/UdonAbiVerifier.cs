@@ -55,7 +55,8 @@ public static class UdonAbiVerifier
                 + $"'{StorageTypes.Transform}' strongbox, got '{actual}' "
                 + $"(function '{functionName}').");
 
-        if (parameter.Type.TryMatch(actual, typeFacts, out var reason))
+        if (parameter.Type.TryMatch(
+                actual, parameter.Mode, typeFacts, out var reason))
             return;
         throw new VerificationException(
             $"Extern '{call.Sig}' stack operand {stackIndex} ('{parameter.Name}', "
