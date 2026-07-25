@@ -85,26 +85,30 @@ public static class EmitPolicy
         if (!LayoutPlanner.IsNetworkCallable(method)) return;
         foreach (var p in method.Parameters)
         {
-            if (ContainsDelegateType(p.Type))
+            if (TypeClassifier.ShapeOf(
+                    p.Type, new TypeClassifierContext(null)).ContainsDelegate)
                 throw new System.NotSupportedException(
                     $"[NetworkCallable] method '{method.Name}' cannot take delegate-typed parameter "
                     + $"'{p.Name}': a delegate value is a program-local object[] bundle and cannot "
                     + "cross a network call. Pass plain data instead and re-create the delegate "
                     + "locally on the receiving side.");
             // CA-M1 §2-1: a v1 class parameter is the same program-local object[] bundle — cannot cross.
-            if (ContainsUserClassType(p.Type))
+            if (TypeClassifier.ShapeOf(
+                    p.Type, new TypeClassifierContext(null)).ContainsUserClassPayload)
                 throw new System.NotSupportedException(
                     $"[NetworkCallable] method '{method.Name}' cannot take v1-class-typed parameter "
                     + $"'{p.Name}': a class value is a program-local object[] bundle and cannot cross a "
                     + "network call. Pass plain data instead and rebuild the object on the receiving side.");
         }
-        if (ContainsDelegateType(method.ReturnType))
+        if (TypeClassifier.ShapeOf(
+                method.ReturnType, new TypeClassifierContext(null)).ContainsDelegate)
             throw new System.NotSupportedException(
                 $"[NetworkCallable] method '{method.Name}' cannot return a delegate-typed value: "
                 + "a delegate value is a program-local object[] bundle and cannot cross a network "
                 + "call. Return plain data instead and re-create the delegate locally on the "
                 + "receiving side.");
-        if (ContainsUserClassType(method.ReturnType))
+        if (TypeClassifier.ShapeOf(
+                method.ReturnType, new TypeClassifierContext(null)).ContainsUserClassPayload)
             throw new System.NotSupportedException(
                 $"[NetworkCallable] method '{method.Name}' cannot return a v1-class-typed value: a class "
                 + "value is a program-local object[] bundle and cannot cross a network call.");
@@ -127,86 +131,6 @@ public static class EmitPolicy
             throw new NotSupportedException(
                 $"Public method '{method.Name}' cannot expose a delegate return with a user-class "
                 + "signature because it is valid only inside this Udon program.");
-    }
-
-    // ── Contains* walker family (hand-enumeration audit 2026-07-17, Tier-2 / Matrix 3) ──
-    // ONE descent body behind the three "does this type transitively contain X?" predicates; only the
-    // leaf test varies. The former three hand-copied walkers had diverging descent (the delegate and
-    // opaque-object twins were missing the generic-type-argument and delegate-signature arms the
-    // user-class walker had), the same per-copy missing-arm family as f6ebdae/8cb0962 — a single
-    // parameterized body makes reintroducing a hole per-walker impossible. All consumers of the
-    // delegate/opaque predicates are reject-polarity gates, so the descent widening can only add
-    // rejects (behavior-neutral on the tracked suite; the census pin lives in
-    // ContainsWalkerCensusTests). NOTE: ExpressionHandler.StructurallyContainsDelegate deliberately
-    // stays a NARROW mirror — its source-side consumer has ACCEPT polarity (srcCarriesDelegate=true
-    // allows the cast), so widening it would flip rejects to accepts.
-
-    /// <summary>Delegate proper, or one reachable through the shared descent
-    /// (<see cref="ContainsMatchingType"/>). A delegate smuggled inside a struct/tuple/generic wrapper
-    /// is the same program-local object[] bundle and equally cannot cross the network. Still NARROW on
-    /// object / bare type params: [NetworkCallable] methods with plain object params stay outside this
-    /// policy.</summary>
-    public static bool ContainsDelegateType(ITypeSymbol type)
-        => ContainsMatchingType(type, DelegateLeaf, null, NewVisitedSet());
-
-    /// <summary>CW28: System.Object proper, or one reachable through the shared descent
-    /// (<see cref="ContainsMatchingType"/>). The SS2(a) carrier gate must see a LAUNDERED carrier
-    /// too — `struct Box { object o; }` hides the same arbitrary payload its raw `object` twin
-    /// declares.</summary>
-    public static bool ContainsOpaqueObjectType(ITypeSymbol type)
-        => ContainsMatchingType(type, OpaqueObjectLeaf, null, NewVisitedSet());
-
-    /// <summary>CA-M1 §2-1: a v1 user class proper, or one reachable through the shared descent
-    /// (<see cref="ContainsMatchingType"/>). A class value has a portable tagged object[] ABI, but this
-    /// predicate remains relevant to object erasure, delegate signatures, and unsupported sync surfaces.</summary>
-    public static bool ContainsUserClassType(ITypeSymbol type)
-        => ContainsUserClassType(type, null);
-
-    public static bool ContainsUserClassType(ITypeSymbol type,
-        IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeParamMap)
-        => ContainsMatchingType(type, UserClassLeaf, typeParamMap, NewVisitedSet());
-
-    static readonly Func<ITypeSymbol, bool> DelegateLeaf =
-        t => t is INamedTypeSymbol n && n.DelegateInvokeMethod != null;
-    static readonly Func<ITypeSymbol, bool> OpaqueObjectLeaf =
-        t => t.SpecialType == SpecialType.System_Object;
-    static readonly Func<ITypeSymbol, bool> UserClassLeaf = TypeClassifier.IsUserClassLeaf;
-
-    static HashSet<ITypeSymbol> NewVisitedSet() => new HashSet<ITypeSymbol>(SymbolEqualityComparer.Default);
-
-    /// <summary>The shared descent: type-param substitution, then the leaf test, then array elements,
-    /// a delegate's parameter/return signature (a payload smuggled through Action&lt;Foo&gt; across
-    /// the __dlgc_ byte contract), aggregate (struct/tuple/anonymous-type) instance fields, and a
-    /// constructed generic's type arguments (tuple elements, Nullable&lt;T&gt;, any generic wrapper).
-    /// The visited set on named types guards self-referential shapes (e.g. a Node with a Node[] field).
-    /// A v1 class's OWN fields are deliberately not descended: the class is itself the user-class leaf,
-    /// and for the other predicates its fields are program-local bundle slots, not part of the
-    /// crossing type's surface.</summary>
-    static bool ContainsMatchingType(ITypeSymbol type, Func<ITypeSymbol, bool> isLeaf,
-        IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeParamMap,
-        HashSet<ITypeSymbol> visited)
-    {
-        if (type is ITypeParameterSymbol tp && typeParamMap != null
-            && typeParamMap.TryGetValue(tp, out var resolved))
-            type = resolved;
-        if (type == null) return false;
-        if (isLeaf(type)) return true;
-        if (type is IArrayTypeSymbol a) return ContainsMatchingType(a.ElementType, isLeaf, typeParamMap, visited);
-        if (type is not INamedTypeSymbol n || !visited.Add(n)) return false;
-        if (n.DelegateInvokeMethod is { } inv)
-        {
-            foreach (var p in inv.Parameters)
-                if (ContainsMatchingType(p.Type, isLeaf, typeParamMap, visited)) return true;
-            if (ContainsMatchingType(inv.ReturnType, isLeaf, typeParamMap, visited)) return true;
-        }
-        if (TypeClassifier.IsAggregateValueLeaf(n))
-            foreach (var m in n.GetMembers())
-                if (m is IFieldSymbol { IsStatic: false } f
-                    && ContainsMatchingType(f.Type, isLeaf, typeParamMap, visited))
-                    return true;
-        foreach (var ta in n.TypeArguments)
-            if (ContainsMatchingType(ta, isLeaf, typeParamMap, visited)) return true;
-        return false;
     }
 
     /// <summary>Evaluates a field's initializer syntax to a compile-time constant (primitives/enums/

@@ -24,48 +24,40 @@ public enum TransportCapabilities
     ExternCall = 1 << 1,
 }
 
-/// <summary>Compiler-side description of a value's Udon representation. Several source types erase to
-/// SystemObjectArray, so policy must consume these semantic facts rather than rediscovering meaning from
-/// the emitted Udon type name.</summary>
+[System.Flags]
+public enum TypeContents
+{
+    None = 0,
+    UserClass = 1 << 0,
+    Delegate = 1 << 1,
+    OpaqueObject = 1 << 2,
+}
+
+/// <summary>
+/// Authoritative compiler-side description of a source type. Several source types erase to
+/// SystemObjectArray, so storage, boundary, capture, and lowering policy consume these facts rather
+/// than independently walking the symbol or rediscovering meaning from the emitted Udon type name.
+/// </summary>
 public readonly struct RuntimeShape
 {
     public readonly RuntimeBundleKind Bundle;
     public readonly TransportCapabilities Transport;
-    public readonly bool ContainsUserClassPayload;
+    public readonly TypeContents Contents;
 
-    RuntimeShape(RuntimeBundleKind bundle, TransportCapabilities transport,
-        bool containsUserClassPayload)
+    internal RuntimeShape(RuntimeBundleKind bundle, TransportCapabilities transport,
+        TypeContents contents)
     {
         Bundle = bundle;
         Transport = transport;
-        ContainsUserClassPayload = containsUserClassPayload;
+        Contents = contents;
     }
 
     public bool IsBundle => Bundle != RuntimeBundleKind.None;
+    public bool ContainsUserClassPayload => Contains(TypeContents.UserClass);
+    public bool ContainsDelegate => Contains(TypeContents.Delegate);
+    public bool ContainsOpaqueObject => Contains(TypeContents.OpaqueObject);
+    public bool Contains(TypeContents contents) => (Contents & contents) == contents;
     public bool Supports(TransportCapabilities capability) => (Transport & capability) == capability;
-
-    public static RuntimeShape Class(bool containsPayload = true)
-        => new(RuntimeBundleKind.Class,
-            TransportCapabilities.TypedProgramChannel,
-            containsPayload);
-    public static RuntimeShape Aggregate(bool containsPayload)
-        => new(RuntimeBundleKind.Aggregate,
-            TransportCapabilities.TypedProgramChannel,
-            containsPayload);
-    public static RuntimeShape Delegate(bool containsPayload)
-        => new(RuntimeBundleKind.Delegate,
-            containsPayload ? TransportCapabilities.None : TransportCapabilities.TypedProgramChannel,
-            containsPayload);
-    public static RuntimeShape MultiDimensionalArray(bool containsPayload)
-        => new(RuntimeBundleKind.MultiDimensionalArray,
-            TransportCapabilities.TypedProgramChannel,
-            containsPayload);
-    public static RuntimeShape Native(bool containsPayload)
-        => new(RuntimeBundleKind.None,
-            containsPayload
-                ? TransportCapabilities.ExternCall
-                : TransportCapabilities.TypedProgramChannel | TransportCapabilities.ExternCall,
-            containsPayload);
 }
 
 public static class TypeClassifier
@@ -73,16 +65,43 @@ public static class TypeClassifier
     public static RuntimeShape ShapeOf(ITypeSymbol type, TypeClassifierContext ctx)
     {
         type = Resolve(type, ctx);
-        var containsPayload = EmitPolicy.ContainsUserClassType(type, ctx.TypeParamMap);
-        if (IsUserClassLeaf(type)) return RuntimeShape.Class();
-        if (NdimArrayAbi.IsNdimArray(type)) return RuntimeShape.MultiDimensionalArray(containsPayload);
-        if (type is INamedTypeSymbol { DelegateInvokeMethod: not null }) return RuntimeShape.Delegate(containsPayload);
-        if (IsAggregateValueLeaf(type)) return RuntimeShape.Aggregate(containsPayload);
-        return RuntimeShape.Native(containsPayload);
+        var contents = ContentsOf(type, ctx.TypeParamMap,
+            new HashSet<ITypeSymbol>(SymbolEqualityComparer.Default));
+        var bundle = IsUserClassLeaf(type)
+            ? RuntimeBundleKind.Class
+            : NdimArrayAbi.IsNdimArray(type)
+                ? RuntimeBundleKind.MultiDimensionalArray
+                : type is INamedTypeSymbol { DelegateInvokeMethod: not null }
+                    ? RuntimeBundleKind.Delegate
+                    : IsAggregateValueLeaf(type)
+                        ? RuntimeBundleKind.Aggregate
+                        : RuntimeBundleKind.None;
+        var containsUserClass = (contents & TypeContents.UserClass) != 0;
+        var transport = bundle switch
+        {
+            RuntimeBundleKind.Class
+                or RuntimeBundleKind.Aggregate
+                or RuntimeBundleKind.MultiDimensionalArray
+                => TransportCapabilities.TypedProgramChannel,
+            RuntimeBundleKind.Delegate
+                => containsUserClass
+                    ? TransportCapabilities.None
+                    : TransportCapabilities.TypedProgramChannel,
+            _ => containsUserClass
+                ? TransportCapabilities.ExternCall
+                : TransportCapabilities.TypedProgramChannel | TransportCapabilities.ExternCall,
+        };
+        return new RuntimeShape(bundle, transport, contents);
     }
 
     public static bool ContainsUserClassPayload(ITypeSymbol type, TypeClassifierContext ctx)
-        => EmitPolicy.ContainsUserClassType(Resolve(type, ctx), ctx.TypeParamMap);
+        => ShapeOf(type, ctx).ContainsUserClassPayload;
+
+    public static bool ContainsDelegate(ITypeSymbol type, TypeClassifierContext ctx)
+        => ShapeOf(type, ctx).ContainsDelegate;
+
+    public static bool ContainsOpaqueObject(ITypeSymbol type, TypeClassifierContext ctx)
+        => ShapeOf(type, ctx).ContainsOpaqueObject;
 
     public static bool IsUserClass(ITypeSymbol type)
         => ShapeOf(type, new TypeClassifierContext(null)).Bundle == RuntimeBundleKind.Class;
@@ -123,6 +142,44 @@ public static class TypeClassifier
     }
 
     static ITypeSymbol Resolve(ITypeSymbol type, TypeClassifierContext ctx)
-        => type is ITypeParameterSymbol tp && ctx.TypeParamMap != null
-            && ctx.TypeParamMap.TryGetValue(tp, out var resolved) ? resolved : type;
+    {
+        while (type is ITypeParameterSymbol parameter
+               && ctx.TypeParamMap != null
+               && ctx.TypeParamMap.TryGetValue(parameter, out var resolved))
+        {
+            if (SymbolEqualityComparer.Default.Equals(parameter, resolved)) break;
+            type = resolved;
+        }
+        return type;
+    }
+
+    static TypeContents ContentsOf(ITypeSymbol type,
+        IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeParameterMap,
+        HashSet<ITypeSymbol> visited)
+    {
+        type = Resolve(type, new TypeClassifierContext(typeParameterMap));
+        if (type == null) return TypeContents.None;
+
+        var contents = TypeContents.None;
+        if (IsUserClassLeaf(type)) contents |= TypeContents.UserClass;
+        if (type.SpecialType == SpecialType.System_Object) contents |= TypeContents.OpaqueObject;
+        if (type is IArrayTypeSymbol array)
+            return contents | ContentsOf(array.ElementType, typeParameterMap, visited);
+        if (type is not INamedTypeSymbol named || !visited.Add(named)) return contents;
+
+        if (named.DelegateInvokeMethod is { } invoke)
+        {
+            contents |= TypeContents.Delegate;
+            foreach (var parameter in invoke.Parameters)
+                contents |= ContentsOf(parameter.Type, typeParameterMap, visited);
+            contents |= ContentsOf(invoke.ReturnType, typeParameterMap, visited);
+        }
+        if (IsAggregateValueLeaf(named))
+            foreach (var member in named.GetMembers())
+                if (member is IFieldSymbol { IsStatic: false } field)
+                    contents |= ContentsOf(field.Type, typeParameterMap, visited);
+        foreach (var argument in named.TypeArguments)
+            contents |= ContentsOf(argument, typeParameterMap, visited);
+        return contents;
+    }
 }

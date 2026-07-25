@@ -107,8 +107,10 @@ public static class DelegateAbi
     /// may use the convention globals inside one program, but must never take the SPV/SCE cross-program
     /// dispatch arm.</summary>
     public static bool IsProgramLocalSignature(IMethodSymbol invoke)
-        => invoke.Parameters.Any(p => EmitPolicy.ContainsUserClassType(p.Type))
-           || EmitPolicy.ContainsUserClassType(invoke.ReturnType);
+        => invoke.Parameters.Any(p => TypeClassifier.ShapeOf(
+               p.Type, new TypeClassifierContext(null)).ContainsUserClassPayload)
+           || TypeClassifier.ShapeOf(
+               invoke.ReturnType, new TypeClassifierContext(null)).ContainsUserClassPayload;
 
     /// <summary>The bridge-name prefix owned by <see cref="BridgeName"/>/<see cref="BridgeTargetKey"/> —
     /// never re-spell it at a use site (census-pinned by NamingContractCensusTests).</summary>

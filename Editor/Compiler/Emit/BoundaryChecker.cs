@@ -26,6 +26,10 @@ public sealed class BoundaryChecker
     public BoundaryChecker(EmitContext ctx) => _ctx = ctx ?? throw new ArgumentNullException(nameof(ctx));
 
     TypeClassifierContext TypeCtx => new TypeClassifierContext(_ctx.Generics.TypeParamMap);
+    RuntimeShape ShapeOf(ITypeSymbol type)
+        => _ctx.Session.Types.Describe(type, _ctx.Generics.TypeParamMap).SourceShape
+           ?? throw new InvalidOperationException(
+               $"Source type '{type}' has no semantic runtime shape.");
 
     public ValueInfo ClassifyValue(IOperation value)
         => ClassifyValue(value, new HashSet<ISymbol>(SymbolEqualityComparer.Default));
@@ -113,7 +117,8 @@ public sealed class BoundaryChecker
     public void RequireCanPassCrossProgramDelegateArgument(IArgumentOperation arg)
     {
         var argType = arg.Value?.Type ?? arg.Parameter?.Type;
-        if (argType == null || !EmitPolicy.ContainsDelegateType(argType)) return;
+        if (argType == null
+            || !TypeClassifier.ShapeOf(argType, TypeCtx).ContainsDelegate) return;
         RequireDelegateValueSafeForCrossProgramStore(ClassifyValue(arg.Value),
             $"the cross-program argument '{arg.Parameter?.Name ?? "?"}'", "the call site",
             "Pass a direct class-free lambda/method group, or keep the call within this behaviour.");
@@ -171,8 +176,8 @@ public sealed class BoundaryChecker
     public void RequireCanEraseProgramLocalPayload(IConversionOperation conversion,
         ITypeSymbol sourceType, ITypeSymbol destinationType)
     {
-        var sourceShape = TypeClassifier.ShapeOf(sourceType, TypeCtx);
-        var destinationShape = TypeClassifier.ShapeOf(destinationType, TypeCtx);
+        var sourceShape = ShapeOf(sourceType);
+        var destinationShape = ShapeOf(destinationType);
         if (destinationType is INamedTypeSymbol { TypeKind: TypeKind.Interface } mixedInterface
             && _ctx.Planner.InterfaceHasMixedRuntimeRepresentations(mixedInterface))
             RequireInterfaceDispatchRepresentation(mixedInterface, "conversion");
@@ -397,7 +402,7 @@ public sealed class BoundaryChecker
     public void RequireCanPassExternArgument(ITypeSymbol type, string name,
         bool allowClassReferenceIdentity = false, bool deferAggregateReceiverPolicy = false)
     {
-        var shape = TypeClassifier.ShapeOf(type, TypeCtx);
+        var shape = ShapeOf(type);
         if (allowClassReferenceIdentity && shape.Bundle == RuntimeBundleKind.Class) return;
         if (deferAggregateReceiverPolicy && shape.Bundle == RuntimeBundleKind.Aggregate) return;
         RequireTransport(BoundarySite.ExternArgument, type, name,
@@ -444,7 +449,7 @@ public sealed class BoundaryChecker
     void RequireTransport(BoundarySite site, ITypeSymbol type, string memberName,
         TransportCapabilities capability)
     {
-        if (TypeClassifier.ShapeOf(type, TypeCtx).Supports(capability)) return;
+        if (ShapeOf(type).Supports(capability)) return;
         throw new NotSupportedException(UnsupportedTransportMessage(site, memberName));
     }
 

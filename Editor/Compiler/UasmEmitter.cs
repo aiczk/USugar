@@ -309,7 +309,8 @@ public partial class UasmEmitter
 
             // Class bundles have a stable cross-program ABI, but Udon network sync still cannot serialize
             // the object[] representation.
-            if (EmitPolicy.ContainsUserClassType(member.Type))
+            if (TypeClassifier.ShapeOf(
+                    member.Type, new TypeClassifierContext(null)).ContainsUserClassPayload)
             {
                 bool synced = member.GetAttributes().Any(a => a.AttributeClass?.Name == "UdonSyncedAttribute");
                 if (synced)

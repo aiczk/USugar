@@ -181,7 +181,10 @@ public static class ValueClassifier
     // legs tested only the capture's top-level type, so `struct Box { object o; }` laundered the same
     // payload its unwrapped `object` twin loudly trips on (probe-proven struct-wrapping smuggle).
     static bool IsUnclassifiableCarrierType(ITypeSymbol t)
-        => EmitPolicy.ContainsDelegateType(t) || EmitPolicy.ContainsOpaqueObjectType(t);
+    {
+        var shape = TypeClassifier.ShapeOf(t, new TypeClassifierContext(null));
+        return shape.ContainsDelegate || shape.ContainsOpaqueObject;
+    }
 
     static ITypeSymbol CapturedSymbolType(ISymbol symbol)
         => symbol switch

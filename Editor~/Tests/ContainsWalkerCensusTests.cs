@@ -6,12 +6,9 @@ namespace USugar.Tests;
 
 /// <summary>
 /// Hand-enumeration audit 2026-07-17, Tier-2 (cross-matrices, Matrix 3): the Contains* walker family.
-/// The three public predicates — EmitPolicy.ContainsUserClassType / ContainsDelegateType /
-/// ContainsOpaqueObjectType — were three hand-copied walkers with DIVERGING descent: the delegate and
-/// opaque-object twins were missing the generic-type-argument and delegate-signature arms the
-/// user-class walker had (the f6ebdae/8cb0962 per-copy missing-arm family). Owner ruling: one
-/// parameterized descent body (leaf predicate as the parameter), the three predicates as thin
-/// wrappers. This battery IS the descent-structure contract: every composite shape the shared walk
+/// The three content facts were once hand-copied walkers with DIVERGING descent. RuntimeShape now
+/// computes them together from one traversal. This battery IS the descent-structure contract: every
+/// composite shape the shared walk
 /// must reach (array element, jagged, tuple element, aggregate field, generic type argument,
 /// delegate parameter/return signature, Nullable wrapper, self-referential termination), each with
 /// a hand-computed verdict per predicate. A row flipping means the shared descent changed — that is
@@ -143,27 +140,27 @@ public class WalkerCensusCarrier
     }
 
     [Fact]
-    public void ThreePredicates_AgreeWithHandComputedVerdicts_OnEveryBatteryShape()
+    public void RuntimeShape_AgreesWithHandComputedContents_OnEveryBatteryShape()
     {
         var types = BuildCensusTypes();
         Assert.Equal(Battery.Length, types.Count); // every carrier field has a pinned row, and vice versa
         foreach (var (field, cls, del, obj, shape) in Battery)
         {
             var t = types[field];
-            Assert.True(EmitPolicy.ContainsUserClassType(t) == cls,
-                $"descent drift [{shape}]: ContainsUserClassType({field}) expected {cls}");
-            Assert.True(EmitPolicy.ContainsDelegateType(t) == del,
-                $"descent drift [{shape}]: ContainsDelegateType({field}) expected {del}");
-            Assert.True(EmitPolicy.ContainsOpaqueObjectType(t) == obj,
-                $"descent drift [{shape}]: ContainsOpaqueObjectType({field}) expected {obj}");
+            var runtimeShape = TypeClassifier.ShapeOf(t, new TypeClassifierContext(null));
+            Assert.True(runtimeShape.ContainsUserClassPayload == cls,
+                $"descent drift [{shape}]: user-class content of {field} expected {cls}");
+            Assert.True(runtimeShape.ContainsDelegate == del,
+                $"descent drift [{shape}]: delegate content of {field} expected {del}");
+            Assert.True(runtimeShape.ContainsOpaqueObject == obj,
+                $"descent drift [{shape}]: opaque-object content of {field} expected {obj}");
         }
     }
 
     [Fact]
-    public void TypeClassifierDelegation_MatchesUserClassWalker_OnEveryBatteryShape()
+    public void RuntimeShape_UserClassContentMatchesTheContractBattery()
     {
-        // RuntimeShape owns the public classification; pin that its recursive payload fact stays
-        // identical to the shared ContainsUserClassType walker.
+        // Pin both access paths to the same descriptor fact.
         var types = BuildCensusTypes();
         var ctx = new TypeClassifierContext(null);
         foreach (var (field, cls, _, _, shape) in Battery)

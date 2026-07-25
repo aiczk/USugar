@@ -37,6 +37,7 @@ public readonly struct UdonTypeLowering
     public UdonRepresentationKind Representation { get; }
     public UdonRuntimeTypeTest RuntimeTypeTest { get; }
     public UdonTypeDescriptor InstalledEvidence { get; }
+    public RuntimeShape? SourceShape { get; }
 
     public bool IsFoldedEnum
         => Representation == UdonRepresentationKind.FoldedEnum;
@@ -49,13 +50,15 @@ public readonly struct UdonTypeLowering
         StorageType storage,
         UdonRepresentationKind representation,
         UdonRuntimeTypeTest runtimeTypeTest,
-        UdonTypeDescriptor installedEvidence)
+        UdonTypeDescriptor installedEvidence,
+        RuntimeShape? sourceShape)
     {
         SourceType = sourceType;
         Storage = storage;
         Representation = representation;
         RuntimeTypeTest = runtimeTypeTest;
         InstalledEvidence = installedEvidence;
+        SourceShape = sourceShape;
     }
 }
 
@@ -90,6 +93,8 @@ public sealed class UdonTypeSystem
         if (type == null) throw new ArgumentNullException(nameof(type));
         var resolved = Resolve(type, typeParameterMap);
         var sourceType = UdonTypeIdentity.FromStorage(resolved);
+        var sourceShape = TypeClassifier.ShapeOf(
+            resolved, new TypeClassifierContext(typeParameterMap));
 
         if (_objectArrayBehaviourAliases.UsesObjectArrayStorage(
                 resolved, typeParameterMap))
@@ -97,7 +102,8 @@ public sealed class UdonTypeSystem
                 sourceType,
                 StorageTypes.ObjectArray,
                 UdonRepresentationKind.ObjectArrayBehaviourAlias,
-                UdonRuntimeTypeTest.Unsupported);
+                UdonRuntimeTypeTest.Unsupported,
+                sourceShape);
 
         var storage = new StorageType(ExternResolver.LowerUdonStorageName(
             resolved, typeParameterMap, _abiCatalog.IsRegisteredType));
@@ -109,7 +115,8 @@ public sealed class UdonTypeSystem
             storage,
             representation,
             RuntimeTestFor(resolved, typeParameterMap,
-                storage, representation));
+                storage, representation),
+            sourceShape);
     }
 
     public UdonTypeLowering Describe(Type type)
@@ -124,7 +131,8 @@ public sealed class UdonTypeSystem
         var representation = Classify(type, sourceType, storage);
         return Create(
             sourceType, storage, representation,
-            UdonRuntimeTypeTest.Unsupported);
+            UdonRuntimeTypeTest.Unsupported,
+            null);
     }
 
     public bool IsFoldedEnum(ITypeSymbol type)
@@ -156,11 +164,12 @@ public sealed class UdonTypeSystem
     UdonTypeLowering Create(UdonTypeId sourceType,
         StorageType storage,
         UdonRepresentationKind representation,
-        UdonRuntimeTypeTest runtimeTypeTest)
+        UdonRuntimeTypeTest runtimeTypeTest,
+        RuntimeShape? sourceShape)
     {
         _abiCatalog.TryGetType(sourceType, out var evidence);
         return new UdonTypeLowering(
-            sourceType, storage, representation, runtimeTypeTest, evidence);
+            sourceType, storage, representation, runtimeTypeTest, evidence, sourceShape);
     }
 
     UdonRepresentationKind Classify(ITypeSymbol type,
