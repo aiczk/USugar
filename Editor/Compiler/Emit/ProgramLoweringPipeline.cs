@@ -233,11 +233,14 @@ public sealed class UasmEmitter
             bodyGraph,
             closureIdentities,
             captures);
-        // Handlers build Core IR; the pipeline (verify/optimize/flatten) runs on Core directly.
-        var result = IrPipeline.Run(_module, _builder);
-        _flatModule = result.FlatModule;
-        _codeGenResult = result.CodeGen;
-        return result.CodeGen.Uasm;
+        _builder.Complete();
+        FlatVerify.Verify(_module);
+        CoreFlatOptimizer.CoalesceSlots(_module);
+        CoreFlatOptimizer.InsertRecursionSpills(_module);
+        _flatModule =
+            VerifiedFlatModule.VerifyAndFreeze(_module);
+        _codeGenResult = CoreToUasm.Generate(_flatModule);
+        return _codeGenResult.Uasm;
     }
 
     public uint GetHeapSize() => _codeGenResult.HeapSize;

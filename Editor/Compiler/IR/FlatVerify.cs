@@ -153,12 +153,8 @@ public static class FlatVerify
         switch (instruction)
         {
             case CAssign assign:
-                if (assign.Value is not CLeaf assignValue)
-                    throw new VerificationException(
-                        $"CAssign value is not a flat leaf: {assign.Value.GetType().Name} "
-                        + $"(function '{ctx.Function.Name}')");
-                VerifyTypedLeaf(assignValue, ctx, "CAssign value");
-                ctx.AssertType(ctx.SlotType(assign.DestSlot, "CAssign"), assignValue.Type,
+                VerifyTypedLeaf(assign.Value, ctx, "CAssign value");
+                ctx.AssertType(ctx.SlotType(assign.DestSlot, "CAssign"), assign.Value.Type,
                     $"CAssign to slot{assign.DestSlot}");
                 break;
 

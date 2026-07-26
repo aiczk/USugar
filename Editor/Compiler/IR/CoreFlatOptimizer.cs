@@ -124,7 +124,7 @@ public static class CoreFlatOptimizer
 
         // [X4]: coalesce the fresh spill temps among themselves when their count crosses the
         // threshold (the restricted pass never touches pre-existing slots — pre-spill code is
-        // byte-identical; FlatVerify still runs after, in IrPipeline).
+        // byte-identical; FlatVerify still runs after this pass).
         if (func.Slots.Count - firstSpillSlot > SpillTempCoalesceThreshold)
             CoalesceSlotsFunc(func, firstSpillSlot);
     }
@@ -211,7 +211,6 @@ public static class CoreFlatOptimizer
         IReadOnlyCollection<string> names) => inst switch
     {
         CExprStmt { Expr: CInternalCall ic } => !ic.TailSpared && names.Contains(ic.FuncName),
-        CAssign { Value: CInternalCall ic } => !ic.TailSpared && names.Contains(ic.FuncName),
         CExprStmt { Expr: CExternCall } => false, // extern call — never an internal recursive edge
         CAssign => false,                         // leaf-valued copy
         CRepresentationCopy => false,
@@ -225,8 +224,6 @@ public static class CoreFlatOptimizer
     {
         CExprStmt { Expr: CInternalCall ic } => ic.Reentrant,
         CExprStmt { Expr: CExternCall ec } => ec.Reentrant,
-        CAssign { Value: CInternalCall ic } => ic.Reentrant,
-        CAssign { Value: CExternCall ec } => ec.Reentrant,
         CAssign => false, // leaf-valued copy
         CRepresentationCopy => false,
         CStoreField => false,
@@ -576,8 +573,8 @@ public static class CoreFlatOptimizer
         switch (inst)
         {
             case CAssign m:
-                if (m.Value is CLeaf assignLeaf)
-                    foreach (var slot in GetReadSlotsLeaf(assignLeaf)) yield return slot;
+                foreach (var slot in GetReadSlotsLeaf(m.Value))
+                    yield return slot;
                 break;
             case CRepresentationCopy copy:
                 foreach (var slot in GetReadSlotsLeaf(copy.Source)) yield return slot;
@@ -618,12 +615,6 @@ public static class CoreFlatOptimizer
                 throw new VerificationException(
                     $"Unknown CTerminator kind in CoreFlatOptimizer.GetReadSlotsTerm: {TermKind(term)}");
         }
-    }
-
-    static CValue RemapOperand(CValue op, Dictionary<int, int> mapping)
-    {
-        if (op is CLeaf leaf) return RemapLeaf(leaf, mapping);
-        return op;
     }
 
     // Leaf-typed remap: a leaf remaps to a leaf (slot rename), preserving the CLeaf type for ANF operand positions.
@@ -667,7 +658,9 @@ public static class CoreFlatOptimizer
 
     internal static IFlatInstruction RemapInst(IFlatInstruction inst, Dictionary<int, int> mapping) => inst switch
     {
-        CAssign m => new CAssign(RemapSlotId(m.DestSlot, mapping), RemapOperand(m.Value, mapping)),
+        CAssign m => new CAssign(
+            RemapSlotId(m.DestSlot, mapping),
+            RemapLeaf(m.Value, mapping)),
         CRepresentationCopy copy => new CRepresentationCopy(
             RemapSlotId(copy.DestSlot, mapping),
             RemapLeaf(copy.Source, mapping),

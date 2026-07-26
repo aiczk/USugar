@@ -11,7 +11,7 @@ public class StrictVerifyShadowTests
 {
     static string Fn(string name) => "ssv_" + name;
 
-    static FlatFunction VerifyAssign(string funcName, string slotType, CValue value,
+    static FlatFunction VerifyAssign(string funcName, string slotType, CLeaf value,
         UdonTypeFactRegistry typeFacts = null)
     {
         var module = new FlatModule(typeFacts);

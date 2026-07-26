@@ -7,9 +7,9 @@ public interface IFlatInstruction { }
 public sealed class CAssign : IFlatInstruction
 {
     public readonly int DestSlot;
-    public readonly CValue Value;
+    public readonly CLeaf Value;
 
-    public CAssign(int destSlot, CValue value)
+    public CAssign(int destSlot, CLeaf value)
     {
         DestSlot = destSlot;
         Value = value ?? throw new ArgumentNullException(nameof(value));

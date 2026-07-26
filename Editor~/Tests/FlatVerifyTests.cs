@@ -11,7 +11,7 @@ namespace USugar.Tests;
 /// no longer be constructed, so their former negative tests are gone. Missing/dangling terminators
 /// and invalid leaf uses remain runtime-checked; phase mixing is rejected by the type system.
 /// The positive case (well-formed CoreBuilder output passes) has no dedicated unit-test file —
-/// it is exercised by every compiling test, since IrPipeline runs FlatVerify on each compile.
+/// it is exercised by every compiling test before code generation.
 /// </summary>
 public class FlatVerifyTests
 {
